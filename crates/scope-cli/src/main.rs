@@ -4,7 +4,9 @@ use scope_crypto::{ManifestMixedPolicy, PushManifest, sign_manifest};
 use scope_git::build_virtual_git_projection;
 use scope_policy::ScopePath;
 use scope_projection::project_graph;
-use scope_store::{DemoRepository, demo_repository};
+use scope_store::{
+    BOOTSTRAP_REPO_ID, BOOTSTRAP_REPO_NAME, BOOTSTRAP_REPO_OWNER, VerifiedEmail, app_catalog,
+};
 
 const MANIFEST_SIGNING_SECRET_ENV: &str = "SCOPE_MANIFEST_SIGNING_SECRET";
 
@@ -18,9 +20,9 @@ struct Cli {
 
 #[derive(Debug, Subcommand)]
 enum Command {
-    Demo {
+    Repo {
         #[command(subcommand)]
-        command: DemoCommand,
+        command: RepoCommand,
     },
     Manifest {
         #[command(subcommand)]
@@ -29,16 +31,28 @@ enum Command {
 }
 
 #[derive(Debug, Subcommand)]
-enum DemoCommand {
+enum RepoCommand {
     Projection {
-        #[arg(long, default_value = "public")]
-        principal: String,
+        #[arg(long, default_value = BOOTSTRAP_REPO_OWNER)]
+        owner: String,
+        #[arg(long, default_value = BOOTSTRAP_REPO_NAME)]
+        repo: String,
+        #[arg(long)]
+        email: Option<String>,
+        #[arg(long)]
+        verified: bool,
         #[arg(long)]
         git: bool,
     },
     Check {
+        #[arg(long, default_value = BOOTSTRAP_REPO_OWNER)]
+        owner: String,
+        #[arg(long, default_value = BOOTSTRAP_REPO_NAME)]
+        repo: String,
         #[arg(long)]
-        principal: String,
+        email: Option<String>,
+        #[arg(long)]
+        verified: bool,
         #[arg(long)]
         path: String,
         #[arg(long, default_value = "read")]
@@ -49,7 +63,7 @@ enum DemoCommand {
 #[derive(Debug, Subcommand)]
 enum ManifestCommand {
     Create {
-        #[arg(long, default_value = "scope-demo")]
+        #[arg(long, default_value = BOOTSTRAP_REPO_ID)]
         repo: String,
         #[arg(long)]
         principal: String,
@@ -79,17 +93,27 @@ enum CliMixedPolicy {
 fn main() -> anyhow::Result<()> {
     let cli = Cli::parse();
     match cli.command {
-        Command::Demo { command } => run_demo(command),
+        Command::Repo { command } => run_repo(command),
         Command::Manifest { command } => run_manifest(command),
     }
 }
 
-fn run_demo(command: DemoCommand) -> anyhow::Result<()> {
-    let demo = demo_repository();
+fn run_repo(command: RepoCommand) -> anyhow::Result<()> {
+    let catalog = app_catalog();
     match command {
-        DemoCommand::Projection { principal, git } => {
-            let principal = DemoRepository::projection_principal(&principal);
-            let projection = project_graph(&demo.policy, &demo.graph, &principal);
+        RepoCommand::Projection {
+            owner,
+            repo,
+            email,
+            verified,
+            git,
+        } => {
+            let repo = catalog
+                .repository(&owner, &repo)
+                .with_context(|| format!("repo {owner}/{repo} not found"))?;
+            let identity = email.map(|email| VerifiedEmail::new(email, verified));
+            let principal = catalog.principal_for_repo(repo, identity.as_ref());
+            let projection = project_graph(&repo.policy, &repo.graph, &principal);
             if git {
                 println!(
                     "{}",
@@ -99,16 +123,23 @@ fn run_demo(command: DemoCommand) -> anyhow::Result<()> {
                 println!("{}", serde_json::to_string_pretty(&projection)?);
             }
         }
-        DemoCommand::Check {
-            principal,
+        RepoCommand::Check {
+            owner,
+            repo,
+            email,
+            verified,
             path,
             operation,
         } => {
-            let principal = DemoRepository::projection_principal(&principal);
+            let repo = catalog
+                .repository(&owner, &repo)
+                .with_context(|| format!("repo {owner}/{repo} not found"))?;
+            let identity = email.map(|email| VerifiedEmail::new(email, verified));
+            let principal = catalog.principal_for_repo(repo, identity.as_ref());
             let path = ScopePath::parse(path).context("invalid scope path")?;
             let allowed = match operation {
-                Operation::Read => demo.policy.can_read(&principal, &path),
-                Operation::Write => demo.policy.can_write(&principal, &path),
+                Operation::Read => repo.policy.can_read(&principal, &path),
+                Operation::Write => repo.policy.can_write(&principal, &path),
             };
             println!(
                 "{}",

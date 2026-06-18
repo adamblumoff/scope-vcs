@@ -8,22 +8,24 @@ use axum::{
 };
 use scope_crypto::{ManifestMixedPolicy, PushManifest, SignedPushManifest, sign_manifest};
 use scope_git::{VirtualGitProjection, build_virtual_git_projection};
-use scope_policy::{Principal, PrincipalKind, ScopePath};
+use scope_policy::ScopePath;
 use scope_projection::{Projection, project_graph};
-use scope_store::{DemoRepository, demo_repository};
+use scope_store::{AppCatalog, StoredRepository, VerifiedEmail, app_catalog};
 use serde::{Deserialize, Serialize};
 use std::{collections::BTreeMap, net::SocketAddr, sync::Arc};
 use tower_http::{cors::CorsLayer, trace::TraceLayer};
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 
-const DEMO_AUTHORITY_HEADER: &str = "x-scope-demo-authority";
-const DEMO_AUTHORITY_ENV: &str = "SCOPE_DEMO_AUTHORITY";
+const USER_EMAIL_HEADER: &str = "x-scope-user-email";
+const USER_EMAIL_VERIFIED_HEADER: &str = "x-scope-user-email-verified";
+const TRUSTED_IDENTITY_SECRET_HEADER: &str = "x-scope-trusted-identity-secret";
+const TRUSTED_IDENTITY_SECRET_ENV: &str = "SCOPE_TRUSTED_IDENTITY_HEADER_SECRET";
 const MANIFEST_SIGNING_SECRET_ENV: &str = "SCOPE_MANIFEST_SIGNING_SECRET";
 
 #[derive(Clone)]
 struct AppState {
-    demo: Arc<DemoRepository>,
-    demo_authority_token: Option<String>,
+    catalog: Arc<AppCatalog>,
+    trusted_identity_secret: Option<String>,
     manifest_signing_secret: Option<Arc<[u8]>>,
 }
 
@@ -40,7 +42,6 @@ struct ErrorResponse {
 
 #[derive(Debug, Deserialize)]
 struct CreateManifestRequest {
-    principal_id: String,
     device_id: String,
     commit_graph_hash: String,
     changed_paths: Vec<String>,
@@ -91,15 +92,15 @@ async fn main() -> anyhow::Result<()> {
 fn router(state: AppState) -> Router {
     Router::new()
         .route("/healthz", get(healthz))
+        .route("/v1/repos/{owner}/{repo}/projections", get(get_projection))
         .route(
-            "/v1/repos/{repo_id}/projections/{principal_id}",
-            get(get_projection),
-        )
-        .route(
-            "/v1/repos/{repo_id}/git-projections/{principal_id}",
+            "/v1/repos/{owner}/{repo}/git-projections",
             get(get_git_projection),
         )
-        .route("/v1/repos/{repo_id}/push-manifests", post(create_manifest))
+        .route(
+            "/v1/repos/{owner}/{repo}/push-manifests",
+            post(create_manifest),
+        )
         .route("/git/{org}/{repo}/info/refs", get(git_info_refs))
         .with_state(state)
         .layer(CorsLayer::permissive())
@@ -116,40 +117,39 @@ async fn healthz() -> Json<HealthResponse> {
 async fn get_projection(
     State(state): State<AppState>,
     headers: HeaderMap,
-    Path((repo_id, principal_id)): Path<(String, String)>,
+    Path((owner, repo_name)): Path<(String, String)>,
 ) -> Result<Json<Projection>, ApiError> {
-    ensure_demo_repo(&repo_id)?;
-    let principal = authorized_http_principal(&state, &headers, &principal_id)?;
-    Ok(Json(project_graph(
-        &state.demo.policy,
-        &state.demo.graph,
-        &principal,
-    )))
+    let repo = find_repo(&state, &owner, &repo_name)?;
+    let identity = http_identity(&state, &headers)?;
+    let principal = state.catalog.principal_for_repo(repo, identity.as_ref());
+    Ok(Json(project_graph(&repo.policy, &repo.graph, &principal)))
 }
 
 async fn get_git_projection(
     State(state): State<AppState>,
     headers: HeaderMap,
-    Path((repo_id, principal_id)): Path<(String, String)>,
+    Path((owner, repo_name)): Path<(String, String)>,
 ) -> Result<Json<VirtualGitProjection>, ApiError> {
-    ensure_demo_repo(&repo_id)?;
-    let principal = authorized_http_principal(&state, &headers, &principal_id)?;
-    let projection = project_graph(&state.demo.policy, &state.demo.graph, &principal);
+    let repo = find_repo(&state, &owner, &repo_name)?;
+    let identity = http_identity(&state, &headers)?;
+    let principal = state.catalog.principal_for_repo(repo, identity.as_ref());
+    let projection = project_graph(&repo.policy, &repo.graph, &principal);
     Ok(Json(build_virtual_git_projection(&projection)))
 }
 
 async fn create_manifest(
     State(state): State<AppState>,
     headers: HeaderMap,
-    Path(repo_id): Path<String>,
+    Path((owner, repo_name)): Path<(String, String)>,
     Json(input): Json<CreateManifestRequest>,
 ) -> Result<Json<CreateManifestResponse>, ApiError> {
-    ensure_demo_repo(&repo_id)?;
-    let principal = authorized_http_principal(&state, &headers, &input.principal_id)?;
+    let repo = find_repo(&state, &owner, &repo_name)?;
+    let identity = http_identity(&state, &headers)?;
+    let principal = state.catalog.principal_for_repo(repo, identity.as_ref());
 
     for changed_path in &input.changed_paths {
         let path = ScopePath::parse(changed_path).map_err(ApiError::bad_request)?;
-        if !state.demo.policy.can_write(&principal, &path) {
+        if !repo.policy.can_write(&principal, &path) {
             return Err(ApiError::forbidden(format!(
                 "principal {} cannot write {}",
                 principal.id, path
@@ -163,8 +163,8 @@ async fn create_manifest(
     })?;
 
     let manifest = PushManifest::new(
-        repo_id,
-        input.principal_id,
+        repo.record.id.clone(),
+        principal.id,
         input.device_id,
         input.commit_graph_hash,
         input.changed_paths,
@@ -198,19 +198,22 @@ async fn git_info_refs(
         .into_response()
 }
 
-fn ensure_demo_repo(repo_id: &str) -> Result<(), ApiError> {
-    if repo_id == "scope-demo" {
-        Ok(())
-    } else {
-        Err(ApiError::not_found(format!("repo {repo_id} not found")))
-    }
+fn find_repo<'a>(
+    state: &'a AppState,
+    owner: &str,
+    name: &str,
+) -> Result<&'a StoredRepository, ApiError> {
+    state
+        .catalog
+        .repository(owner, name)
+        .ok_or_else(|| ApiError::not_found(format!("repo {owner}/{name} not found")))
 }
 
 impl AppState {
     fn from_env() -> Self {
         Self {
-            demo: Arc::new(demo_repository()),
-            demo_authority_token: non_empty_env(DEMO_AUTHORITY_ENV),
+            catalog: Arc::new(app_catalog()),
+            trusted_identity_secret: non_empty_env(TRUSTED_IDENTITY_SECRET_ENV),
             manifest_signing_secret: non_empty_env(MANIFEST_SIGNING_SECRET_ENV)
                 .map(|secret| Arc::<[u8]>::from(secret.into_bytes())),
         }
@@ -218,12 +221,12 @@ impl AppState {
 
     #[cfg(test)]
     fn test_state(
-        demo_authority_token: Option<&str>,
+        trusted_identity_secret: Option<&str>,
         manifest_signing_secret: Option<&str>,
     ) -> Self {
         Self {
-            demo: Arc::new(demo_repository()),
-            demo_authority_token: demo_authority_token.map(ToOwned::to_owned),
+            catalog: Arc::new(app_catalog()),
+            trusted_identity_secret: trusted_identity_secret.map(ToOwned::to_owned),
             manifest_signing_secret: manifest_signing_secret
                 .map(|secret| Arc::<[u8]>::from(secret.as_bytes())),
         }
@@ -234,43 +237,35 @@ fn non_empty_env(name: &str) -> Option<String> {
     std::env::var(name).ok().filter(|value| !value.is_empty())
 }
 
-fn authorized_http_principal(
-    state: &AppState,
-    headers: &HeaderMap,
-    requested_id: &str,
-) -> Result<Principal, ApiError> {
-    let principal = DemoRepository::projection_principal(requested_id);
-    if principal.kind == PrincipalKind::Public {
-        return Ok(principal);
-    }
-
-    ensure_demo_authority(state, headers)?;
-    Ok(principal)
-}
-
-fn ensure_demo_authority(state: &AppState, headers: &HeaderMap) -> Result<(), ApiError> {
-    let Some(expected) = state.demo_authority_token.as_deref() else {
-        return Err(ApiError::forbidden(format!(
-            "non-public demo principals require {DEMO_AUTHORITY_ENV} and {DEMO_AUTHORITY_HEADER}"
-        )));
-    };
-
-    let Some(actual) = headers
-        .get(DEMO_AUTHORITY_HEADER)
+fn http_identity(state: &AppState, headers: &HeaderMap) -> Result<Option<VerifiedEmail>, ApiError> {
+    let Some(email) = headers
+        .get(USER_EMAIL_HEADER)
         .and_then(|value| value.to_str().ok())
     else {
-        return Err(ApiError::forbidden(format!(
-            "missing {DEMO_AUTHORITY_HEADER} for non-public demo principal"
-        )));
+        return Ok(None);
     };
 
-    if actual == expected {
-        Ok(())
-    } else {
-        Err(ApiError::forbidden(format!(
-            "invalid {DEMO_AUTHORITY_HEADER} for non-public demo principal"
-        )))
+    let Some(expected_secret) = state.trusted_identity_secret.as_deref() else {
+        return Err(ApiError::forbidden(format!(
+            "trusted identity headers require {TRUSTED_IDENTITY_SECRET_ENV}"
+        )));
+    };
+    let actual_secret = headers
+        .get(TRUSTED_IDENTITY_SECRET_HEADER)
+        .and_then(|value| value.to_str().ok())
+        .ok_or_else(|| ApiError::forbidden(format!("missing {TRUSTED_IDENTITY_SECRET_HEADER}")))?;
+    if actual_secret != expected_secret {
+        return Err(ApiError::forbidden(format!(
+            "invalid {TRUSTED_IDENTITY_SECRET_HEADER}"
+        )));
     }
+
+    let verified = headers
+        .get(USER_EMAIL_VERIFIED_HEADER)
+        .and_then(|value| value.to_str().ok())
+        .is_some_and(|value| value.eq_ignore_ascii_case("true"));
+
+    Ok(Some(VerifiedEmail::new(email, verified)))
 }
 
 async fn shutdown_signal() {
@@ -355,56 +350,64 @@ impl IntoResponse for ApiError {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use scope_policy::{Principal, PrincipalKind};
+    use scope_store::{BOOTSTRAP_OWNER_USER_ID, BOOTSTRAP_REPO_NAME, BOOTSTRAP_REPO_OWNER};
 
-    fn headers_with_demo_authority(token: &str) -> HeaderMap {
+    fn headers_with_identity(email: &str, verified: bool, secret: &str) -> HeaderMap {
         let mut headers = HeaderMap::new();
-        headers.insert(DEMO_AUTHORITY_HEADER, token.parse().unwrap());
+        headers.insert(USER_EMAIL_HEADER, email.parse().unwrap());
+        headers.insert(
+            USER_EMAIL_VERIFIED_HEADER,
+            verified.to_string().parse().unwrap(),
+        );
+        headers.insert(TRUSTED_IDENTITY_SECRET_HEADER, secret.parse().unwrap());
         headers
     }
 
     #[test]
-    fn public_principal_does_not_need_demo_authority() {
+    fn anonymous_request_uses_public_principal() {
         let state = AppState::test_state(None, None);
-        let principal = authorized_http_principal(&state, &HeaderMap::new(), "public").unwrap();
+        let repo = find_repo(&state, BOOTSTRAP_REPO_OWNER, BOOTSTRAP_REPO_NAME).unwrap();
+        let principal = state.catalog.principal_for_repo(repo, None);
 
-        assert_eq!(principal.id, "public");
-        assert_eq!(principal.kind, PrincipalKind::Public);
+        assert_eq!(principal, Principal::public());
     }
 
     #[test]
-    fn non_public_principal_requires_configured_demo_authority() {
+    fn verified_bootstrap_email_uses_owner_principal() {
+        let state = AppState::test_state(Some("trusted"), None);
+        let repo = find_repo(&state, BOOTSTRAP_REPO_OWNER, BOOTSTRAP_REPO_NAME).unwrap();
+        let headers = headers_with_identity("adamblumoff@gmail.com", true, "trusted");
+        let identity = http_identity(&state, &headers).unwrap();
+        let principal = state.catalog.principal_for_repo(repo, identity.as_ref());
+
+        assert_eq!(principal.id, BOOTSTRAP_OWNER_USER_ID);
+        assert_eq!(principal.kind, PrincipalKind::User);
+    }
+
+    #[test]
+    fn unverified_bootstrap_email_uses_public_principal() {
+        let state = AppState::test_state(Some("trusted"), None);
+        let repo = find_repo(&state, BOOTSTRAP_REPO_OWNER, BOOTSTRAP_REPO_NAME).unwrap();
+        let headers = headers_with_identity("adamblumoff@gmail.com", false, "trusted");
+        let identity = http_identity(&state, &headers).unwrap();
+        let principal = state.catalog.principal_for_repo(repo, identity.as_ref());
+
+        assert_eq!(principal, Principal::public());
+    }
+
+    #[test]
+    fn claimed_identity_requires_trusted_handoff_secret() {
         let state = AppState::test_state(None, None);
-        let error = authorized_http_principal(&state, &HeaderMap::new(), "team-core").unwrap_err();
+        let headers = headers_with_identity("adamblumoff@gmail.com", true, "trusted");
+        let error = http_identity(&state, &headers).unwrap_err();
 
         assert_eq!(error.status, StatusCode::FORBIDDEN);
     }
 
     #[test]
-    fn non_public_principal_requires_matching_demo_authority_header() {
-        let state = AppState::test_state(Some("demo-token"), None);
-
-        assert!(authorized_http_principal(&state, &HeaderMap::new(), "team-core").is_err());
-        assert!(
-            authorized_http_principal(
-                &state,
-                &headers_with_demo_authority("wrong-token"),
-                "team-core",
-            )
-            .is_err()
-        );
-
-        let principal = authorized_http_principal(
-            &state,
-            &headers_with_demo_authority("demo-token"),
-            "team-core",
-        )
-        .unwrap();
-        assert_eq!(principal.id, "team-core");
-    }
-
-    #[test]
     fn manifest_signing_secret_is_absent_unless_explicitly_configured() {
-        let state = AppState::test_state(Some("demo-token"), None);
+        let state = AppState::test_state(None, None);
 
         assert!(state.manifest_signing_secret.is_none());
     }

@@ -41,7 +41,7 @@ import {
 } from 'lucide-react'
 import { useEffect, useMemo, useRef, useState } from 'react'
 
-type PrincipalId = 'public' | 'team-core' | 'owner'
+type PrincipalId = 'public'
 
 type ProjectedChange = {
   path: string
@@ -115,7 +115,9 @@ type ApiConnection = {
   url: string
 }
 
-const repoId = 'scope-demo'
+const repoOwner = 'adamblumoff'
+const repoName = 'scope-vcs'
+const repoId = `${repoOwner}/${repoName}`
 const localApiBase = 'http://localhost:8080'
 const productionApiBase = 'https://scope-api-production-0251.up.railway.app'
 const themeStorageKey = 'scope-theme'
@@ -125,16 +127,6 @@ const principals = [
     id: 'public',
     label: 'Public',
     description: 'A shareable clone surface with private details removed.',
-  },
-  {
-    id: 'team-core',
-    label: 'Team Core',
-    description: 'An internal view for authorized contributors.',
-  },
-  {
-    id: 'owner',
-    label: 'Owner',
-    description: 'The full audit view for policy and projection checks.',
   },
 ] satisfies Array<{
   id: PrincipalId
@@ -160,18 +152,6 @@ const principalCopy: Record<
     body: 'Useful repository content without private names, bytes, authors, counts, or cadence.',
     proof: 'Private work is collapsed into a synthetic public commit.',
     manifestHint: 'Public writes should be rejected by policy.',
-  },
-  'team-core': {
-    headline: 'Team Workspace',
-    body: 'Internal implementation files appear only for principals that are allowed to receive them.',
-    proof: 'The projected object set expands after the principal changes.',
-    manifestHint: 'Authorized writes should produce a signed manifest.',
-  },
-  owner: {
-    headline: 'Owner Audit',
-    body: 'The canonical view for checking policy, object output, and write authorization.',
-    proof: 'All demo policy outcomes are inspectable from this view.',
-    manifestHint: 'Owner writes should produce a signed manifest.',
   },
 }
 
@@ -254,22 +234,23 @@ function ScopeDashboard() {
     const controller = new AbortController()
     manifestAbortRef.current = controller
     setManifest({ data: null, error: null, loading: true })
-    const changed_paths =
-      principal === 'team-core' ? ['/internal/model.rs'] : ['/README.md']
+    const changed_paths = ['/README.md']
 
     try {
-      const response = await fetch(`${dashboard.api.url}/v1/repos/${repoId}/push-manifests`, {
-        method: 'POST',
-        headers: { 'content-type': 'application/json' },
-        signal: controller.signal,
-        body: JSON.stringify({
-          principal_id: principal,
-          device_id: 'web-demo',
-          commit_graph_hash: `${principal}-demo-graph`,
-          changed_paths,
-          mixed_policy: 'SyntheticPublicCommit',
-        }),
-      })
+      const response = await fetch(
+        `${dashboard.api.url}/v1/repos/${repoOwner}/${repoName}/push-manifests`,
+        {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          signal: controller.signal,
+          body: JSON.stringify({
+            device_id: 'web-console',
+            commit_graph_hash: `${principal}-scope-vcs-graph`,
+            changed_paths,
+            mixed_policy: 'SyntheticPublicCommit',
+          }),
+        },
+      )
       const payload = await response.json().catch(() => null)
 
       if (!response.ok) {
@@ -340,7 +321,7 @@ function ScopeDashboard() {
             onValueChange={selectPrincipal}
             value={principal}
           >
-            <TabsList className="grid h-10 w-full grid-cols-3 md:w-[360px]">
+            <TabsList className="grid h-10 w-full grid-cols-1 md:w-[160px]">
               {principals.map((item) => (
                 <TabsTrigger key={item.id} value={item.id}>
                   {item.label}
@@ -585,7 +566,7 @@ function WriteReadiness({
           ) : (
             <Upload className="size-4" />
           )}
-          {manifest.loading ? 'Creating...' : 'Create Demo Manifest'}
+          {manifest.loading ? 'Creating...' : 'Create Push Manifest'}
         </Button>
         <ManifestResult manifest={manifest} principal={principal} />
       </CardContent>
@@ -730,7 +711,7 @@ function ManifestResult({
   if (!manifest.data) {
     return (
       <p className="text-sm leading-5 text-muted-foreground">
-        Run a demo request to confirm the selected principal&apos;s write policy.
+        Run a request to confirm the selected principal&apos;s write policy.
       </p>
     )
   }
@@ -794,10 +775,10 @@ async function loadDashboard(principal: PrincipalId): Promise<DashboardData> {
   const api = getApiConnection()
   const [projection, gitProjection, gitBoundary] = await Promise.all([
     safeLoadJson<Projection>(
-      `${api.url}/v1/repos/${repoId}/projections/${principal}`,
+      `${api.url}/v1/repos/${repoOwner}/${repoName}/projections`,
     ),
     safeLoadJson<GitProjection>(
-      `${api.url}/v1/repos/${repoId}/git-projections/${principal}`,
+      `${api.url}/v1/repos/${repoOwner}/${repoName}/git-projections`,
     ),
     loadGitBoundary(api.url),
   ])
@@ -834,7 +815,7 @@ async function loadGitBoundary(
 ): Promise<GitBoundaryState> {
   try {
     const response = await fetch(
-      `${baseUrl}/git/acme/${repoId}/info/refs?service=git-upload-pack`,
+      `${baseUrl}/git/${repoOwner}/${repoName}/info/refs?service=git-upload-pack`,
     )
     const body = await response.json().catch(() => null)
 
