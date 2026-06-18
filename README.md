@@ -30,10 +30,12 @@ pnpm build
 
 Railway services:
 
-- `scope-api` runs `cargo run -p scope-server`.
-- `scope-worker` runs `cargo run -p scope-worker`.
-- `scope-web` runs the TanStack Start Node output.
+- `scope-api` is a Railpack Rust service. It builds the root `scope-vcs`
+  binary and starts `./bin/scope-vcs`.
+- `scope-web` is a Railpack Node service. Because the repo root is also a
+  Rust workspace, set `RAILPACK_CONFIG_FILE=railpack.web.json` on this
+  Railway service so Railpack uses the web-specific Node provider config.
+- `scope-worker` is not deployed for the first version.
 
 Railway Postgres stores canonical metadata. Railway Buckets store encrypted
 source blobs/chunks; app-layer encryption remains mandatory.
-
