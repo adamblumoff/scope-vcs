@@ -5,15 +5,6 @@ import {
 } from '@/components/ui/alert'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
-import {
-  Card,
-  CardAction,
-  CardContent,
-  CardDescription,
-  CardHeader,
-  CardTitle,
-} from '@/components/ui/card'
-import { Progress } from '@/components/ui/progress'
 import { Skeleton } from '@/components/ui/skeleton'
 import {
   Table,
@@ -24,24 +15,28 @@ import {
   TableRow,
 } from '@/components/ui/table'
 import { cn } from '@/lib/utils'
+import { useShooAuth } from '@shoojs/react'
 import { createFileRoute } from '@tanstack/react-router'
 import type { ErrorComponentProps } from '@tanstack/react-router'
-import { useShooAuth } from '@shoojs/react'
 import {
   AlertCircle,
   CheckCircle2,
-  KeyRound,
-  Layers3,
-  Lock,
+  GitBranch,
+  Globe2,
+  LogIn,
+  LogOut,
   Moon,
   RefreshCw,
   ShieldCheck,
   Sun,
   Upload,
+  UserPlus,
 } from 'lucide-react'
+import type { ReactNode } from 'react'
 import { useEffect, useMemo, useRef, useState } from 'react'
 
 type PrincipalId = string
+type RepoRole = 'Reader' | 'Writer' | 'Maintainer' | 'Owner'
 
 type ProjectedChange = {
   path: string
@@ -100,7 +95,7 @@ type GitBoundaryState = {
   detail: string
 }
 
-type DashboardData = {
+type WorkspaceData = {
   api: ApiConnection
   gitBoundary: GitBoundaryState
   gitProjection: LoadState<GitProjection>
@@ -116,7 +111,7 @@ type SessionResponse = {
   } | null
   repo: {
     id: string
-    role: 'Reader' | 'Writer' | 'Maintainer' | 'Owner' | null
+    role: RepoRole | null
   }
   principal_id: string
   capabilities: {
@@ -140,39 +135,23 @@ const localApiBase = 'http://localhost:8080'
 const productionApiBase = 'https://scope-api-production-0251.up.railway.app'
 const themeStorageKey = 'scope-theme'
 
-const principalCopy: Record<
-  'public' | 'authenticated',
-  {
-    headline: string
-    body: string
-    proof: string
-    manifestHint: string
-  }
-> = {
-  public: {
-    headline: 'Public Clone',
-    body: 'Useful repository content without private names, bytes, authors, counts, or cadence.',
-    proof: 'Private work is collapsed into a synthetic public commit.',
-    manifestHint: 'Public writes should be rejected by policy.',
-  },
-  authenticated: {
-    headline: 'Verified Repository Session',
-    body: 'Shoo verified this browser session before the API chose the repository principal.',
-    proof: 'Authorization uses the server-verified Shoo ID token.',
-    manifestHint: 'Writes are allowed only when repo capabilities include write.',
-  },
-}
-
 export const Route = createFileRoute('/')({
-  loader: () => loadDashboard(),
-  pendingComponent: DashboardPending,
-  errorComponent: DashboardError,
-  component: ScopeDashboard,
+  loader: () => loadWorkspace(),
+  pendingComponent: WorkspacePending,
+  errorComponent: WorkspaceError,
+  component: ScopeWorkspace,
 })
 
-function ScopeDashboard() {
-  const initialDashboard = Route.useLoaderData()
-  const [dashboard, setDashboard] = useState(initialDashboard)
+function ScopeWorkspace() {
+  const initialWorkspace = Route.useLoaderData()
+  const [workspace, setWorkspace] = useState(initialWorkspace)
+  const [refreshing, setRefreshing] = useState(false)
+  const [manifest, setManifest] = useState<LoadState<ManifestResponse>>({
+    data: null,
+    error: null,
+    loading: false,
+  })
+  const [theme, setTheme] = useState<ThemeMode>('dark')
   const auth = useShooAuth({
     shooBaseUrl: 'https://shoo.dev',
     callbackPath: '/',
@@ -180,17 +159,10 @@ function ScopeDashboard() {
     autoSessionMonitor: true,
     sessionMonitorIntervalMs: 60_000,
   })
-  const [manifest, setManifest] = useState<LoadState<ManifestResponse>>({
-    data: null,
-    error: null,
-    loading: false,
-  })
-  const [theme, setTheme] = useState<ThemeMode>('dark')
   const manifestAbortRef = useRef<AbortController | null>(null)
   const manifestRequestRef = useRef(0)
-  const sessionAbortRef = useRef<AbortController | null>(null)
+  const refreshAbortRef = useRef<AbortController | null>(null)
   const idToken = auth.identity.token
-  const principal = dashboard.session.data?.principal_id ?? 'public'
 
   useEffect(() => {
     const nextTheme = readStoredTheme()
@@ -201,7 +173,7 @@ function ScopeDashboard() {
   useEffect(
     () => () => {
       manifestAbortRef.current?.abort()
-      sessionAbortRef.current?.abort()
+      refreshAbortRef.current?.abort()
     },
     [],
   )
@@ -211,40 +183,49 @@ function ScopeDashboard() {
     manifestAbortRef.current?.abort()
     manifestAbortRef.current = null
     setManifest({ data: null, error: null, loading: false })
-  }, [idToken])
 
-  useEffect(() => {
-    sessionAbortRef.current?.abort()
     const controller = new AbortController()
-    sessionAbortRef.current = controller
+    refreshAbortRef.current?.abort()
+    refreshAbortRef.current = controller
+    setRefreshing(true)
 
-    loadDashboard(idToken, controller.signal)
-      .then((nextDashboard) => {
+    loadWorkspace(idToken, controller.signal)
+      .then((nextWorkspace) => {
         if (!controller.signal.aborted) {
-          setDashboard(nextDashboard)
+          setWorkspace(nextWorkspace)
         }
       })
       .catch(() => {
         if (!controller.signal.aborted) {
-          setDashboard(initialDashboard)
+          setWorkspace(initialWorkspace)
+        }
+      })
+      .finally(() => {
+        if (!controller.signal.aborted) {
+          setRefreshing(false)
+          refreshAbortRef.current = null
         }
       })
 
     return () => controller.abort()
-  }, [idToken, initialDashboard])
+  }, [idToken, initialWorkspace])
 
-  const isVerifiedSession = principal !== 'public'
-  const copy = principalCopy[isVerifiedSession ? 'authenticated' : 'public']
-  const selectedPrincipal = {
-    label: dashboard.session.data?.repo.role ?? 'Public',
-  }
+  const session = workspace.session.data
+  const projection = workspace.projection.data
+  const gitProjection = workspace.gitProjection.data
   const visiblePaths = useMemo(
-    () =>
-      dashboard.projection.data
-        ? visibleProjectionPaths(dashboard.projection.data)
-        : [],
-    [dashboard.projection.data],
+    () => (projection ? visibleProjectionPaths(projection) : []),
+    [projection],
   )
+  const commits = useMemo(
+    () => projection?.commits.slice().reverse() ?? [],
+    [projection],
+  )
+  const role = session?.repo.role ?? null
+  const roleLabel = role ?? 'Public'
+  const principal = session?.principal_id ?? 'public'
+  const canWrite = session?.capabilities.write ?? false
+  const signedIn = Boolean(idToken)
 
   function toggleTheme() {
     const nextTheme = theme === 'dark' ? 'light' : 'dark'
@@ -254,9 +235,28 @@ function ScopeDashboard() {
   }
 
   async function createManifest() {
-    const safetyError = getManifestSafetyError(dashboard.api)
+    const safetyError = getManifestSafetyError(workspace.api)
     if (safetyError) {
       setManifest({ data: null, error: safetyError, loading: false })
+      return
+    }
+
+    if (!canWrite) {
+      setManifest({
+        data: null,
+        error: 'This session cannot write to the repository.',
+        loading: false,
+      })
+      return
+    }
+
+    const commitGraphHash = gitProjection?.head_oid
+    if (!commitGraphHash) {
+      setManifest({
+        data: null,
+        error: 'No projected Git head is available for this session.',
+        loading: false,
+      })
       return
     }
 
@@ -266,22 +266,10 @@ function ScopeDashboard() {
     const controller = new AbortController()
     manifestAbortRef.current = controller
     setManifest({ data: null, error: null, loading: true })
-    const changed_paths = ['/README.md']
-    const commitGraphHash = dashboard.gitProjection.data?.head_oid
-
-    if (!commitGraphHash) {
-      setManifest({
-        data: null,
-        error: 'No projected Git head is available for this session.',
-        loading: false,
-      })
-      manifestAbortRef.current = null
-      return
-    }
 
     try {
       const response = await fetch(
-        `${dashboard.api.url}/v1/repos/${repoOwner}/${repoName}/push-manifests`,
+        `${workspace.api.url}/v1/repos/${repoOwner}/${repoName}/push-manifests`,
         {
           method: 'POST',
           headers: {
@@ -292,7 +280,7 @@ function ScopeDashboard() {
           body: JSON.stringify({
             device_id: 'web-console',
             commit_graph_hash: commitGraphHash,
-            changed_paths,
+            changed_paths: ['/README.md'],
             mixed_policy: 'SyntheticPublicCommit',
           }),
         },
@@ -335,121 +323,103 @@ function ScopeDashboard() {
 
   return (
     <main className="min-h-screen bg-background text-foreground">
-      <header className="border-b border-border bg-card">
-        <div className="mx-auto flex h-16 max-w-[1200px] items-center justify-between px-4 sm:px-6">
+      <header className="border-b border-border bg-background">
+        <div className="mx-auto flex min-h-16 max-w-[1180px] flex-wrap items-center justify-between gap-3 px-4 py-3 sm:px-6">
           <div className="flex min-w-0 items-center gap-3">
-            <div className="flex size-8 items-center justify-center rounded-md border border-border bg-card shadow-[0_2px_2px_rgba(0,0,0,0.04)]">
-              <Layers3 className="size-4" />
+            <div className="flex size-8 shrink-0 items-center justify-center rounded-md border border-border">
+              <GitBranch className="size-4" />
             </div>
             <div className="min-w-0">
               <div className="truncate text-sm font-semibold leading-5">Scope</div>
+              <div className="truncate font-mono text-xs leading-4 text-muted-foreground">
+                {repoId}
+              </div>
             </div>
           </div>
 
-          <div className="flex items-center gap-2">
-            <AuthControls auth={auth} session={dashboard.session.data} />
+          <div className="flex min-w-0 items-center gap-2">
+            <AuthControls
+              auth={auth}
+              session={session}
+              signedIn={signedIn}
+            />
             <ThemeToggle theme={theme} toggleTheme={toggleTheme} />
           </div>
         </div>
       </header>
 
-      <section className="mx-auto max-w-[1200px] px-4 py-8 sm:px-6 lg:py-10">
-        <div className="mb-8 flex flex-col gap-4 md:flex-row md:items-end md:justify-between">
-          <div className="max-w-2xl">
-            <h1 className="text-[32px] font-semibold leading-10 tracking-[-1.28px]">
-              Projection Dashboard
-            </h1>
-            <p className="mt-2 max-w-xl text-sm leading-5 text-muted-foreground">
-              See how one repository becomes different Git-safe views depending
-              on who is asking.
-            </p>
-          </div>
-
-          <StatusBadge
-            ready={!dashboard.session.error}
-            text={dashboard.session.data?.repo.role ?? 'Public'}
-          />
-        </div>
-
-        <div className="grid gap-4 lg:grid-cols-[1.45fr_0.85fr]">
-          <Card className="shadow-[var(--shadow-card)]">
-            <CardHeader className="border-b border-border pb-6">
-              <div>
-                <Badge className="mb-3" variant="outline">
-                  {selectedPrincipal.label}
+      <section className="mx-auto max-w-[1180px] px-4 py-7 sm:px-6 lg:py-9">
+        <div className="flex flex-col gap-5 border-b border-border pb-6 lg:flex-row lg:items-end lg:justify-between">
+          <div className="min-w-0">
+            <div className="mb-3 flex flex-wrap items-center gap-2">
+              <StatusBadge tone={workspace.session.error ? 'bad' : 'good'}>
+                {roleLabel}
+              </StatusBadge>
+              <StatusBadge tone={session?.capabilities.read ? 'good' : 'neutral'}>
+                {principal === 'public' ? 'Public view' : 'Verified session'}
+              </StatusBadge>
+              {refreshing ? (
+                <Badge variant="outline">
+                  <RefreshCw className="size-3 animate-spin" />
+                  Syncing
                 </Badge>
-                <CardTitle
-                  asChild
-                  className="text-2xl font-semibold leading-8 tracking-[-0.96px]"
-                >
-                  <h2>{copy.headline}</h2>
-                </CardTitle>
-                <CardDescription className="mt-2 max-w-2xl leading-5">
-                  {copy.body}
-                </CardDescription>
-              </div>
-              <CardAction>
-                <StatusBadge
-                  ready={!dashboard.projection.error}
-                  text={dashboard.projection.error ? 'Unavailable' : 'Ready'}
-                />
-              </CardAction>
-            </CardHeader>
-
-            <CardContent className="space-y-6">
-              {dashboard.projection.error ? (
-                <Alert variant="destructive">
-                  <AlertCircle className="size-4" />
-                  <AlertTitle>Projection Unavailable</AlertTitle>
-                  <AlertDescription>{dashboard.projection.error}</AlertDescription>
-                </Alert>
-              ) : (
-                <Alert className="border-green-400 bg-green-100 text-green-1000">
-                  <ShieldCheck className="size-4 text-green-900" />
-                  <AlertTitle>{copy.proof}</AlertTitle>
-                  <AlertDescription className="text-green-900">
-                    The route loader read the live projection API for this
-                    principal.
-                  </AlertDescription>
-                </Alert>
-              )}
-
-              <div className="grid grid-cols-3 divide-x divide-border overflow-hidden rounded-md border border-border">
-                <Metric label="Visible Paths" value={visiblePaths.length} />
-                <Metric
-                  label="Visible Commits"
-                  value={dashboard.projection.data?.commits.length ?? 0}
-                />
-                <Metric
-                  label="Virtual Blobs"
-                  value={dashboard.gitProjection.data?.blobs.length ?? 0}
-                />
-              </div>
-            </CardContent>
-          </Card>
-
-          <div className="space-y-4">
-            <WriteReadiness
-              createManifest={createManifest}
-              manifest={manifest}
-              manifestHint={copy.manifestHint}
-              principal={principal}
-              writeEnabled={dashboard.session.data?.capabilities.write ?? false}
-            />
-            <Guardrails
-              gitBoundary={dashboard.gitBoundary}
-              principal={principal}
-            />
+              ) : null}
+            </div>
+            <h1 className="truncate font-mono text-2xl font-semibold leading-8 sm:text-[32px] sm:leading-10">
+              {repoId}
+            </h1>
           </div>
+
+          <RepoActions
+            canWrite={canWrite}
+            createManifest={createManifest}
+            manifestLoading={manifest.loading}
+            manifestReady={Boolean(manifest.data)}
+            role={role}
+          />
         </div>
 
-        <div className="mt-4 grid gap-4 lg:grid-cols-[1.1fr_0.9fr]">
-          <ObjectSet
-            gitProjection={dashboard.gitProjection}
-            visiblePaths={visiblePaths}
-          />
-          <CommitHistory projection={dashboard.projection.data} />
+        <WorkspaceAlerts
+          gitBoundary={workspace.gitBoundary}
+          gitProjection={workspace.gitProjection}
+          projection={workspace.projection}
+          session={workspace.session}
+        />
+
+        <MetricStrip
+          blobs={gitProjection?.blobs.length ?? 0}
+          commits={projection?.commits.length ?? 0}
+          paths={visiblePaths.length}
+          writeEnabled={canWrite}
+        />
+
+        <div className="grid gap-8 pt-8 lg:grid-cols-[minmax(0,1fr)_340px]">
+          <section className="min-w-0">
+            <SectionTitle
+              action={<Badge variant="outline">{visiblePaths.length} paths</Badge>}
+              title="Repository Files"
+            />
+            <ObjectTable gitProjection={workspace.gitProjection} />
+          </section>
+
+          <aside className="min-w-0 space-y-8">
+            <SessionPanel
+              canWrite={canWrite}
+              principal={principal}
+              session={session}
+              signedIn={signedIn}
+            />
+            <ManifestPanel manifest={manifest} principal={principal} />
+          </aside>
         </div>
+
+        <section className="pt-9">
+          <SectionTitle
+            action={<Badge variant="outline">{commits.length} commits</Badge>}
+            title="Visible History"
+          />
+          <CommitList commits={commits} />
+        </section>
       </section>
     </main>
   )
@@ -466,10 +436,10 @@ function ThemeToggle({
 
   return (
     <Button
-      aria-label={`Switch to ${nextTheme} Mode`}
+      aria-label={`Switch to ${nextTheme} mode`}
       onClick={toggleTheme}
-      size="sm"
-      title={`Switch to ${nextTheme} Mode`}
+      size="icon-sm"
+      title={`Switch to ${nextTheme} mode`}
       variant="secondary"
     >
       {theme === 'dark' ? (
@@ -477,7 +447,6 @@ function ThemeToggle({
       ) : (
         <Moon className="size-3.5" />
       )}
-      <span className="hidden sm:inline">{nextTheme}</span>
     </Button>
   )
 }
@@ -485,14 +454,15 @@ function ThemeToggle({
 function AuthControls({
   auth,
   session,
+  signedIn,
 }: {
   auth: ReturnType<typeof useShooAuth>
   session: SessionResponse | null
+  signedIn: boolean
 }) {
-  const signedIn = Boolean(auth.identity.token)
-  const label = signedIn ? 'Sign Out' : 'Sign In'
+  const identity = session?.identity
   const title = signedIn
-    ? `Signed in as ${session?.identity?.email ?? session?.identity?.pairwise_sub ?? 'Shoo user'}`
+    ? `Signed in as ${identity?.email ?? identity?.pairwise_sub ?? 'Shoo user'}`
     : 'Sign in with Shoo'
 
   async function toggleAuth() {
@@ -513,37 +483,96 @@ function AuthControls({
       title={title}
       variant={signedIn ? 'secondary' : 'default'}
     >
-      <ShieldCheck className="size-3.5" />
+      {signedIn ? <LogOut className="size-3.5" /> : <LogIn className="size-3.5" />}
       <span className="hidden sm:inline">
-        {auth.loading ? 'Checking...' : label}
+        {auth.loading ? 'Checking' : signedIn ? 'Sign out' : 'Sign in'}
       </span>
     </Button>
   )
 }
 
-function DashboardPending() {
+function RepoActions({
+  canWrite,
+  createManifest,
+  manifestLoading,
+  manifestReady,
+  role,
+}: {
+  canWrite: boolean
+  createManifest: () => void
+  manifestLoading: boolean
+  manifestReady: boolean
+  role: RepoRole | null
+}) {
+  const owner = role === 'Owner'
+
+  return (
+    <div className="flex w-full flex-wrap gap-2 sm:w-auto sm:justify-end">
+      <Button
+        className="min-w-0 flex-1 sm:flex-none"
+        disabled={!canWrite || manifestLoading}
+        onClick={createManifest}
+        size="sm"
+        title={canWrite ? 'Create push manifest' : 'Write access required'}
+        variant={manifestReady ? 'secondary' : 'default'}
+      >
+        {manifestLoading ? (
+          <RefreshCw className="size-3.5 animate-spin" />
+        ) : manifestReady ? (
+          <CheckCircle2 className="size-3.5" />
+        ) : (
+          <Upload className="size-3.5" />
+        )}
+        <span>Manifest</span>
+      </Button>
+      <Button
+        className="min-w-0 flex-1 sm:flex-none"
+        disabled
+        size="sm"
+        title={owner ? 'Invitation endpoint is not available yet' : 'Owner role required'}
+        variant="secondary"
+      >
+        <UserPlus className="size-3.5" />
+        <span>Invite</span>
+      </Button>
+      <Button
+        className="min-w-0 flex-1 sm:flex-none"
+        disabled
+        size="sm"
+        title={owner ? 'Publish endpoint is not available yet' : 'Owner role required'}
+        variant="secondary"
+      >
+        <Globe2 className="size-3.5" />
+        <span>Publish</span>
+      </Button>
+    </div>
+  )
+}
+
+function WorkspacePending() {
   return (
     <main className="min-h-screen bg-background text-foreground">
-      <header className="border-b border-border bg-card">
-        <div className="mx-auto flex h-16 max-w-[1200px] items-center justify-between px-4 sm:px-6">
+      <header className="border-b border-border">
+        <div className="mx-auto flex min-h-16 max-w-[1180px] items-center justify-between px-4 py-3 sm:px-6">
           <div className="flex items-center gap-3">
             <Skeleton className="size-8 rounded-md" />
             <div className="space-y-1.5">
-              <Skeleton className="h-4 w-16" />
-              <Skeleton className="h-3 w-24" />
+              <Skeleton className="h-4 w-20" />
+              <Skeleton className="h-3 w-44" />
             </div>
           </div>
-          <Skeleton className="h-8 w-20 rounded-md" />
+          <Skeleton className="h-8 w-24 rounded-md" />
         </div>
       </header>
-      <section className="mx-auto max-w-[1200px] px-4 py-8 sm:px-6 lg:py-10">
-        <Skeleton className="h-[720px] w-full rounded-md" />
+      <section className="mx-auto max-w-[1180px] px-4 py-7 sm:px-6 lg:py-9">
+        <Skeleton className="h-28 w-full rounded-md" />
+        <Skeleton className="mt-8 h-[420px] w-full rounded-md" />
       </section>
     </main>
   )
 }
 
-function DashboardError({ error }: ErrorComponentProps) {
+function WorkspaceError({ error }: ErrorComponentProps) {
   const message = error instanceof Error ? error.message : 'Unexpected route error'
 
   return (
@@ -551,227 +580,169 @@ function DashboardError({ error }: ErrorComponentProps) {
       <div className="mx-auto max-w-[720px]">
         <Alert variant="destructive">
           <AlertCircle className="size-4" />
-          <AlertTitle>Dashboard Failed</AlertTitle>
-          <AlertDescription>
-            {message}. Reload the page and try again.
-          </AlertDescription>
+          <AlertTitle>Scope failed to load</AlertTitle>
+          <AlertDescription>{message}</AlertDescription>
         </Alert>
       </div>
     </main>
   )
 }
 
-function Guardrails({
+function WorkspaceAlerts({
   gitBoundary,
-  principal,
+  gitProjection,
+  projection,
+  session,
 }: {
   gitBoundary: GitBoundaryState
-  principal: PrincipalId
+  gitProjection: LoadState<GitProjection>
+  projection: LoadState<Projection>
+  session: LoadState<SessionResponse>
 }) {
-  const gitReady = gitBoundary.state === 'explicit'
+  const errors = [
+    session.error && `Session: ${session.error}`,
+    projection.error && `Projection: ${projection.error}`,
+    gitProjection.error && `Objects: ${gitProjection.error}`,
+    gitBoundary.state !== 'explicit' && `Git: ${gitBoundary.detail}`,
+  ].filter(Boolean)
+
+  if (errors.length === 0) {
+    return null
+  }
 
   return (
-    <Card>
-      <CardHeader>
-        <CardTitle asChild className="flex items-center gap-2">
-          <h2>
-            <Lock className="size-4 text-muted-foreground" />
-            Guardrails
-          </h2>
-        </CardTitle>
-        <CardDescription>
-          Policy checks run before a projected object is emitted.
-        </CardDescription>
-      </CardHeader>
-      <CardContent className="space-y-4">
-        <div className="space-y-3">
-          <GuardrailRow
-            ok
-            text={
-              principal === 'public'
-                ? 'Public output omits private structure.'
-                : 'Output is scoped to this principal.'
-            }
-          />
-          <GuardrailRow ok text="ACLs are checked before object projection." />
-          <GuardrailRow
-            ok={gitReady}
-            text={
-              gitReady
-                ? 'Git clone returns an explicit 501 until packfiles exist.'
-                : gitBoundary.detail
-            }
-          />
-        </div>
-        <Progress
-          className="[&_[data-slot=progress-indicator]]:bg-blue-700"
-          value={gitReady ? 100 : 55}
-        />
-      </CardContent>
-    </Card>
+    <Alert className="mt-6" variant="destructive">
+      <AlertCircle className="size-4" />
+      <AlertTitle>Repository state is incomplete</AlertTitle>
+      <AlertDescription>{errors.join(' ')}</AlertDescription>
+    </Alert>
   )
 }
 
-function WriteReadiness({
-  createManifest,
-  manifest,
-  manifestHint,
-  principal,
+function MetricStrip({
+  blobs,
+  commits,
+  paths,
   writeEnabled,
 }: {
-  createManifest: () => void
-  manifest: LoadState<ManifestResponse>
-  manifestHint: string
-  principal: PrincipalId
+  blobs: number
+  commits: number
+  paths: number
   writeEnabled: boolean
 }) {
   return (
-    <Card>
-      <CardHeader>
-        <CardTitle asChild className="flex items-center gap-2">
-          <h2>
-            <KeyRound className="size-4 text-muted-foreground" />
-            Write Readiness
-          </h2>
-        </CardTitle>
-        <CardDescription>{manifestHint}</CardDescription>
-      </CardHeader>
-      <CardContent className="space-y-4">
-        <Button
-          className="w-full"
-          disabled={manifest.loading || !writeEnabled}
-          onClick={createManifest}
-          variant="secondary"
-        >
-          {manifest.loading ? (
-            <RefreshCw className="size-4 animate-spin" />
-          ) : (
-            <Upload className="size-4" />
-          )}
-          {manifest.loading ? 'Creating...' : 'Create Push Manifest'}
-        </Button>
-        <ManifestResult manifest={manifest} principal={principal} />
-      </CardContent>
-    </Card>
+    <dl className="grid grid-cols-2 gap-px overflow-hidden border-y border-border bg-border sm:grid-cols-4">
+      <Metric label="Paths" value={paths} />
+      <Metric label="Commits" value={commits} />
+      <Metric label="Objects" value={blobs} />
+      <Metric label="Write" value={writeEnabled ? 'Allowed' : 'Blocked'} />
+    </dl>
   )
 }
 
-function ObjectSet({
+function Metric({ label, value }: { label: string; value: number | string }) {
+  return (
+    <div className="bg-background px-3 py-4">
+      <dt className="text-xs leading-4 text-muted-foreground">{label}</dt>
+      <dd className="mt-1 truncate text-lg font-semibold leading-7">{value}</dd>
+    </div>
+  )
+}
+
+function SectionTitle({
+  action,
+  title,
+}: {
+  action?: ReactNode
+  title: string
+}) {
+  return (
+    <div className="mb-3 flex min-h-8 items-center justify-between gap-3">
+      <h2 className="text-sm font-semibold leading-5">{title}</h2>
+      {action}
+    </div>
+  )
+}
+
+function ObjectTable({
   gitProjection,
-  visiblePaths,
 }: {
   gitProjection: LoadState<GitProjection>
-  visiblePaths: string[]
 }) {
   const blobs = gitProjection.data?.blobs ?? []
 
+  if (gitProjection.error) {
+    return (
+      <Alert variant="destructive">
+        <AlertCircle className="size-4" />
+        <AlertTitle>Objects unavailable</AlertTitle>
+        <AlertDescription>{gitProjection.error}</AlertDescription>
+      </Alert>
+    )
+  }
+
+  if (blobs.length === 0) {
+    return <EmptyState label="No files visible" />
+  }
+
   return (
-    <Card>
-      <CardHeader>
-        <div>
-          <CardTitle asChild>
-            <h2>Virtual Git Object Set</h2>
-          </CardTitle>
-          <CardDescription>
-            The blobs this principal can receive.
-          </CardDescription>
-        </div>
-        <CardAction>
-          <Badge variant="outline">{visiblePaths.length} paths</Badge>
-        </CardAction>
-      </CardHeader>
-      <CardContent>
-        {gitProjection.error ? (
-          <Alert variant="destructive">
-            <AlertCircle className="size-4" />
-            <AlertTitle>Objects Unavailable</AlertTitle>
-            <AlertDescription>{gitProjection.error}</AlertDescription>
-          </Alert>
-        ) : blobs.length > 0 ? (
-          <div className="overflow-hidden rounded-md border border-border">
-            <Table>
-              <TableHeader>
-                <TableRow>
-                  <TableHead>Path</TableHead>
-                  <TableHead className="w-36">Virtual OID</TableHead>
-                </TableRow>
-              </TableHeader>
-              <TableBody>
-                {blobs.map((blob) => (
-                  <TableRow key={`${blob.path}-${blob.oid}`}>
-                    <TableCell className="max-w-[260px] truncate font-mono text-xs">
-                      {blob.path}
-                    </TableCell>
-                    <TableCell className="font-mono text-xs text-muted-foreground">
-                      {blob.oid.slice(0, 12)}
-                    </TableCell>
-                  </TableRow>
-                ))}
-              </TableBody>
-            </Table>
-          </div>
-        ) : (
-          <p className="text-sm text-muted-foreground">
-            No virtual blobs are visible to this principal.
-          </p>
-        )}
-      </CardContent>
-    </Card>
+    <div className="overflow-hidden rounded-md border border-border">
+      <Table>
+        <TableHeader>
+          <TableRow>
+            <TableHead>Path</TableHead>
+            <TableHead className="w-32 sm:w-40">Object</TableHead>
+          </TableRow>
+        </TableHeader>
+        <TableBody>
+          {blobs.map((blob) => (
+            <TableRow key={`${blob.path}-${blob.oid}`}>
+              <TableCell className="max-w-[220px] truncate font-mono text-xs sm:max-w-[520px]">
+                {blob.path}
+              </TableCell>
+              <TableCell className="font-mono text-xs text-muted-foreground">
+                {shortOid(blob.oid)}
+              </TableCell>
+            </TableRow>
+          ))}
+        </TableBody>
+      </Table>
+    </div>
   )
 }
 
-function CommitHistory({ projection }: { projection: Projection | null }) {
-  const commits = projection?.commits.slice().reverse() ?? []
+function SessionPanel({
+  canWrite,
+  principal,
+  session,
+  signedIn,
+}: {
+  canWrite: boolean
+  principal: PrincipalId
+  session: SessionResponse | null
+  signedIn: boolean
+}) {
+  const identity = session?.identity
+  const access = session?.repo.role ?? 'Public'
+  const subject = identity?.email ?? identity?.pairwise_sub ?? 'Anonymous'
+  const verified = identity?.email_verified ?? false
 
   return (
-    <Card>
-      <CardHeader>
-        <div>
-          <CardTitle asChild>
-            <h2>Visible History</h2>
-          </CardTitle>
-          <CardDescription>Recent commits in the selected view.</CardDescription>
-        </div>
-        <CardAction>
-          <Badge variant="outline">{projection?.commits.length ?? 0} commits</Badge>
-        </CardAction>
-      </CardHeader>
-      <CardContent>
-        {commits.length > 0 ? (
-          <div className="divide-y divide-border">
-            {commits.map((commit) => (
-              <div
-                className="py-3 first:pt-0 last:pb-0"
-                key={commit.projected_id}
-              >
-                <div className="mb-2 flex items-center justify-between gap-3">
-                  <span className="min-w-0 truncate text-sm font-semibold leading-5">
-                    {commit.message}
-                  </span>
-                  <Badge variant={commit.synthetic ? 'secondary' : 'outline'}>
-                    {commit.synthetic ? 'Synthetic' : 'Canonical'}
-                  </Badge>
-                </div>
-                <div className="flex items-center justify-between gap-3 text-xs leading-4 text-muted-foreground">
-                  <span className="truncate">
-                    {commit.author ?? 'author hidden'}
-                  </span>
-                  <span>{commit.changes.length} changes</span>
-                </div>
-              </div>
-            ))}
-          </div>
-        ) : (
-          <p className="text-sm text-muted-foreground">
-            No commits are visible to this principal.
-          </p>
-        )}
-      </CardContent>
-    </Card>
+    <section className="border-t border-border pt-4">
+      <SectionTitle title="Session" />
+      <dl className="space-y-3 text-sm">
+        <KeyValue label="Subject" value={signedIn ? subject : 'Anonymous'} />
+        <KeyValue label="Principal" value={principal} />
+        <KeyValue label="Access" value={access} />
+        <KeyValue label="Email" value={verified ? 'Verified' : 'Not verified'} />
+        <KeyValue label="Read" value={session?.capabilities.read ? 'Allowed' : 'Blocked'} />
+        <KeyValue label="Write" value={canWrite ? 'Allowed' : 'Blocked'} />
+      </dl>
+    </section>
   )
 }
 
-function ManifestResult({
+function ManifestPanel({
   manifest,
   principal,
 }: {
@@ -782,7 +753,7 @@ function ManifestResult({
     return (
       <Alert variant="destructive">
         <AlertCircle className="size-4" />
-        <AlertTitle>Manifest Rejected</AlertTitle>
+        <AlertTitle>Manifest rejected</AlertTitle>
         <AlertDescription>
           {principal}: {manifest.error}
         </AlertDescription>
@@ -792,9 +763,10 @@ function ManifestResult({
 
   if (!manifest.data) {
     return (
-      <p className="text-sm leading-5 text-muted-foreground">
-        Run a request to confirm this session&apos;s write policy.
-      </p>
+      <section className="border-t border-border pt-4">
+        <SectionTitle title="Push Manifest" />
+        <EmptyState label="No manifest created" />
+      </section>
     )
   }
 
@@ -803,7 +775,7 @@ function ManifestResult({
   return (
     <Alert className="border-green-400 bg-green-100 text-green-1000" live="polite">
       <CheckCircle2 className="size-4 text-green-900" />
-      <AlertTitle>Signed Manifest Created</AlertTitle>
+      <AlertTitle>Manifest ready</AlertTitle>
       <AlertDescription className="space-y-1 text-green-900">
         <div className="truncate font-mono text-xs">{signed.manifest.id}</div>
         <div className="truncate font-mono text-xs">
@@ -814,49 +786,78 @@ function ManifestResult({
   )
 }
 
-function Metric({ label, value }: { label: string; value: number }) {
+function CommitList({ commits }: { commits: ProjectedCommit[] }) {
+  if (commits.length === 0) {
+    return <EmptyState label="No commits visible" />
+  }
+
   return (
-    <div className="p-3">
-      <div className="text-xs leading-4 text-muted-foreground">{label}</div>
-      <div className="mt-1 text-xl font-semibold leading-8 tracking-[-0.4px]">
-        {value}
-      </div>
+    <div className="divide-y divide-border border-y border-border">
+      {commits.map((commit) => (
+        <div
+          className="grid gap-2 py-3 sm:grid-cols-[minmax(0,1fr)_auto] sm:items-center"
+          key={commit.projected_id}
+        >
+          <div className="min-w-0">
+            <div className="truncate text-sm font-semibold leading-5">
+              {commit.message}
+            </div>
+            <div className="mt-1 flex min-w-0 flex-wrap gap-x-3 gap-y-1 text-xs leading-4 text-muted-foreground">
+              <span className="truncate">{commit.author ?? 'author hidden'}</span>
+              <span>{commit.changes.length} changes</span>
+              <span className="font-mono">{shortOid(commit.projected_id)}</span>
+            </div>
+          </div>
+          <Badge variant={commit.synthetic ? 'secondary' : 'outline'}>
+            {commit.synthetic ? 'Synthetic' : 'Canonical'}
+          </Badge>
+        </div>
+      ))}
     </div>
   )
 }
 
-function StatusBadge({ ready, text }: { ready: boolean; text: string }) {
+function KeyValue({ label, value }: { label: string; value: string }) {
+  return (
+    <div className="grid grid-cols-[84px_minmax(0,1fr)] gap-3">
+      <dt className="text-muted-foreground">{label}</dt>
+      <dd className="min-w-0 truncate font-medium">{value}</dd>
+    </div>
+  )
+}
+
+function EmptyState({ label }: { label: string }) {
+  return (
+    <div className="rounded-md border border-dashed border-border px-3 py-8 text-center text-sm text-muted-foreground">
+      {label}
+    </div>
+  )
+}
+
+function StatusBadge({
+  children,
+  tone,
+}: {
+  children: ReactNode
+  tone: 'good' | 'bad' | 'neutral'
+}) {
   return (
     <Badge
       className={cn(
-        ready
-          ? 'border-green-400 bg-green-100 text-green-900'
-          : 'border-red-400 bg-red-100 text-red-900',
+        tone === 'good' && 'border-green-400 bg-green-100 text-green-900',
+        tone === 'bad' && 'border-red-400 bg-red-100 text-red-900',
       )}
-      variant="outline"
+      variant={tone === 'neutral' ? 'outline' : 'default'}
     >
-      {text}
+      {children}
     </Badge>
   )
 }
 
-function GuardrailRow({ ok, text }: { ok: boolean; text: string }) {
-  return (
-    <div className="flex items-start gap-3 text-sm leading-5">
-      {ok ? (
-        <CheckCircle2 className="mt-0.5 size-4 shrink-0 text-green-900" />
-      ) : (
-        <AlertCircle className="mt-0.5 size-4 shrink-0 text-amber-900" />
-      )}
-      <span className="text-muted-foreground">{text}</span>
-    </div>
-  )
-}
-
-async function loadDashboard(
+async function loadWorkspace(
   idToken?: string,
   signal?: AbortSignal,
-): Promise<DashboardData> {
+): Promise<WorkspaceData> {
   const api = getApiConnection()
   const init = {
     headers: authHeaders(idToken),
@@ -964,6 +965,10 @@ function authHeaders(idToken?: string): HeadersInit {
   return idToken ? { authorization: `Bearer ${idToken}` } : {}
 }
 
+function shortOid(value: string) {
+  return value.slice(0, 12)
+}
+
 function readStoredTheme(): ThemeMode {
   if (typeof window === 'undefined') {
     return 'dark'
@@ -993,8 +998,6 @@ function getApiConnection(): ApiConnection {
     return { source: 'local-dev', url: localApiBase }
   }
 
-  // Railway production has a single web service and API service; keep the
-  // no-env fallback there, but block localhost mutations client-side.
   return { source: 'production-default', url: productionApiBase }
 }
 
