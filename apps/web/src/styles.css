@@ -9,7 +9,6 @@
 html {
   background: var(--background);
   color-scheme: light;
-  scrollbar-gutter: stable;
 }
 
 html.dark {
