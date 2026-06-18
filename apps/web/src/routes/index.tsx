@@ -75,11 +75,6 @@ type GitProjection = {
   head_oid: string | null
 }
 
-type HealthResponse = {
-  status: string
-  service: string
-}
-
 type ManifestResponse = {
   signed_manifest: {
     manifest: {
@@ -110,7 +105,6 @@ type DashboardData = {
   baseUrl: string
   gitBoundary: GitBoundaryState
   gitProjection: LoadState<GitProjection>
-  health: LoadState<HealthResponse>
   projection: LoadState<Projection>
 }
 
@@ -216,8 +210,6 @@ function ScopeDashboard() {
         : [],
     [dashboard.projection.data],
   )
-  const apiOnline = Boolean(dashboard.health.data && !dashboard.health.error)
-
   function selectPrincipal(nextPrincipal: string) {
     void navigate({
       search: { principal: parsePrincipal(nextPrincipal) },
@@ -284,17 +276,7 @@ function ScopeDashboard() {
             </div>
           </div>
 
-          <div className="flex items-center gap-2">
-            <div className="hidden items-center gap-2 min-[520px]:flex">
-              <ServiceBadge label="Web" ready />
-              <ServiceBadge label="API" ready={apiOnline} />
-              <ServiceBadge
-                label="Git"
-                ready={dashboard.gitBoundary.state === 'explicit'}
-              />
-            </div>
-            <ThemeToggle theme={theme} toggleTheme={toggleTheme} />
-          </div>
+          <ThemeToggle theme={theme} toggleTheme={toggleTheme} />
         </div>
       </header>
 
@@ -734,27 +716,6 @@ function Metric({ label, value }: { label: string; value: number }) {
   )
 }
 
-function ServiceBadge({ label, ready }: { label: string; ready: boolean }) {
-  return (
-    <Badge
-      className={cn(
-        'gap-1.5',
-        ready
-          ? 'border-green-400 bg-green-100 text-green-900'
-          : 'border-red-400 bg-red-100 text-red-900',
-      )}
-      variant="outline"
-    >
-      {ready ? (
-        <CheckCircle2 className="size-3" />
-      ) : (
-        <AlertCircle className="size-3" />
-      )}
-      {label}
-    </Badge>
-  )
-}
-
 function StatusBadge({ ready, text }: { ready: boolean; text: string }) {
   return (
     <Badge
@@ -785,14 +746,13 @@ function GuardrailRow({ ok, text }: { ok: boolean; text: string }) {
 
 async function loadDashboard(principal: PrincipalId): Promise<DashboardData> {
   const baseUrl = getStaticApiBase()
-  const [projection, gitProjection, health, gitBoundary] = await Promise.all([
+  const [projection, gitProjection, gitBoundary] = await Promise.all([
     safeLoadJson<Projection>(
       `${baseUrl}/v1/repos/${repoId}/projections/${principal}`,
     ),
     safeLoadJson<GitProjection>(
       `${baseUrl}/v1/repos/${repoId}/git-projections/${principal}`,
     ),
-    safeLoadJson<HealthResponse>(`${baseUrl}/healthz`),
     loadGitBoundary(baseUrl),
   ])
 
@@ -800,7 +760,6 @@ async function loadDashboard(principal: PrincipalId): Promise<DashboardData> {
     baseUrl,
     gitBoundary,
     gitProjection,
-    health,
     projection,
   }
 }
