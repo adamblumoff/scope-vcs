@@ -108,12 +108,15 @@ fn run_repo(command: RepoCommand) -> anyhow::Result<()> {
             verified,
             git,
         } => {
-            let repo = catalog
+            let repository = catalog
                 .repository(&owner, &repo)
                 .with_context(|| format!("repo {owner}/{repo} not found"))?;
             let identity = email.map(|email| VerifiedEmail::new(email, verified));
-            let principal = catalog.principal_for_repo(repo, identity.as_ref());
-            let projection = project_graph(&repo.policy, &repo.graph, &principal);
+            let principal = catalog.principal_for_repo(repository, identity.as_ref());
+            if !catalog.can_read_path(repository, &principal, &ScopePath::root()) {
+                bail!("repo {owner}/{repo} is not readable by {}", principal.id);
+            }
+            let projection = project_graph(&repository.policy, &repository.graph, &principal);
             if git {
                 println!(
                     "{}",
@@ -138,8 +141,8 @@ fn run_repo(command: RepoCommand) -> anyhow::Result<()> {
             let principal = catalog.principal_for_repo(repo, identity.as_ref());
             let path = ScopePath::parse(path).context("invalid scope path")?;
             let allowed = match operation {
-                Operation::Read => repo.policy.can_read(&principal, &path),
-                Operation::Write => repo.policy.can_write(&principal, &path),
+                Operation::Read => catalog.can_read_path(repo, &principal, &path),
+                Operation::Write => catalog.can_write_path(repo, &principal, &path),
             };
             println!(
                 "{}",

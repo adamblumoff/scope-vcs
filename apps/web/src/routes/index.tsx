@@ -267,6 +267,17 @@ function ScopeDashboard() {
     manifestAbortRef.current = controller
     setManifest({ data: null, error: null, loading: true })
     const changed_paths = ['/README.md']
+    const commitGraphHash = dashboard.gitProjection.data?.head_oid
+
+    if (!commitGraphHash) {
+      setManifest({
+        data: null,
+        error: 'No projected Git head is available for this session.',
+        loading: false,
+      })
+      manifestAbortRef.current = null
+      return
+    }
 
     try {
       const response = await fetch(
@@ -280,7 +291,7 @@ function ScopeDashboard() {
           signal: controller.signal,
           body: JSON.stringify({
             device_id: 'web-console',
-            commit_graph_hash: `${principal}-scope-vcs-graph`,
+            commit_graph_hash: commitGraphHash,
             changed_paths,
             mixed_policy: 'SyntheticPublicCommit',
           }),
