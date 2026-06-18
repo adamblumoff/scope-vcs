@@ -3,6 +3,7 @@
   "private": true,
   "sideEffects": false,
   "type": "module",
+  "packageManager": "pnpm@11.1.0",
   "scripts": {
     "dev": "vite dev",
     "build": "vite build && tsc --noEmit",
@@ -26,4 +27,3 @@
     "vite": "^8.0.14"
   }
 }
-
