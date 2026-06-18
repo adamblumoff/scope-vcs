@@ -5,7 +5,7 @@ import {
   createRootRoute,
 } from '@tanstack/react-router'
 import type { ReactNode } from 'react'
-import appCss from '../styles.css?url'
+import '../styles.css'
 
 const themeScript = `
   (() => {
@@ -36,7 +36,6 @@ export const Route = createRootRoute({
         content: 'Permissioned source-control projections.',
       },
     ],
-    links: [{ rel: 'stylesheet', href: appCss }],
   }),
   component: RootComponent,
 })

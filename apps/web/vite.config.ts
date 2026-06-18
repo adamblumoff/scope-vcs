@@ -14,5 +14,17 @@ export default defineConfig({
       '@': path.resolve(__dirname, './src'),
     },
   },
-  plugins: [tailwindcss(), tanstackStart({ srcDirectory: 'src' }), viteReact(), nitro()],
+  plugins: [
+    tailwindcss(),
+    tanstackStart({
+      srcDirectory: 'src',
+      server: {
+        build: {
+          inlineCss: true,
+        },
+      },
+    }),
+    viteReact(),
+    nitro(),
+  ],
 })

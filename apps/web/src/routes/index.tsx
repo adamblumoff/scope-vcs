@@ -5,7 +5,6 @@ import {
 } from '@/components/ui/alert'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
-import { Skeleton } from '@/components/ui/skeleton'
 import {
   Table,
   TableBody,
@@ -137,7 +136,6 @@ const themeStorageKey = 'scope-theme'
 
 export const Route = createFileRoute('/')({
   loader: () => loadWorkspace(),
-  pendingComponent: WorkspacePending,
   errorComponent: WorkspaceError,
   component: ScopeWorkspace,
 })
@@ -145,7 +143,6 @@ export const Route = createFileRoute('/')({
 function ScopeWorkspace() {
   const initialWorkspace = Route.useLoaderData()
   const [workspace, setWorkspace] = useState(initialWorkspace)
-  const [refreshing, setRefreshing] = useState(false)
   const [manifest, setManifest] = useState<LoadState<ManifestResponse>>({
     data: null,
     error: null,
@@ -184,10 +181,16 @@ function ScopeWorkspace() {
     manifestAbortRef.current = null
     setManifest({ data: null, error: null, loading: false })
 
-    const controller = new AbortController()
     refreshAbortRef.current?.abort()
+    refreshAbortRef.current = null
+
+    if (!idToken) {
+      setWorkspace(initialWorkspace)
+      return
+    }
+
+    const controller = new AbortController()
     refreshAbortRef.current = controller
-    setRefreshing(true)
 
     loadWorkspace(idToken, controller.signal)
       .then((nextWorkspace) => {
@@ -196,13 +199,12 @@ function ScopeWorkspace() {
         }
       })
       .catch(() => {
-        if (!controller.signal.aborted) {
-          setWorkspace(initialWorkspace)
-        }
+        // Per-request failures are represented inside WorkspaceData. This
+        // catches only unexpected top-level failures, so keep the last
+        // coherent workspace on screen.
       })
       .finally(() => {
         if (!controller.signal.aborted) {
-          setRefreshing(false)
           refreshAbortRef.current = null
         }
       })
@@ -358,12 +360,6 @@ function ScopeWorkspace() {
               <StatusBadge tone={session?.capabilities.read ? 'good' : 'neutral'}>
                 {principal === 'public' ? 'Public view' : 'Verified session'}
               </StatusBadge>
-              {refreshing ? (
-                <Badge variant="outline">
-                  <RefreshCw className="size-3 animate-spin" />
-                  Syncing
-                </Badge>
-              ) : null}
             </div>
             <h1 className="truncate font-mono text-2xl font-semibold leading-8 sm:text-[32px] sm:leading-10">
               {repoId}
@@ -546,29 +542,6 @@ function RepoActions({
         <span>Publish</span>
       </Button>
     </div>
-  )
-}
-
-function WorkspacePending() {
-  return (
-    <main className="min-h-screen bg-background text-foreground">
-      <header className="border-b border-border">
-        <div className="mx-auto flex min-h-16 max-w-[1180px] items-center justify-between px-4 py-3 sm:px-6">
-          <div className="flex items-center gap-3">
-            <Skeleton className="size-8 rounded-md" />
-            <div className="space-y-1.5">
-              <Skeleton className="h-4 w-20" />
-              <Skeleton className="h-3 w-44" />
-            </div>
-          </div>
-          <Skeleton className="h-8 w-24 rounded-md" />
-        </div>
-      </header>
-      <section className="mx-auto max-w-[1180px] px-4 py-7 sm:px-6 lg:py-9">
-        <Skeleton className="h-28 w-full rounded-md" />
-        <Skeleton className="mt-8 h-[420px] w-full rounded-md" />
-      </section>
-    </main>
   )
 }
 
