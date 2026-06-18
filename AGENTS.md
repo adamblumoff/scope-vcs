@@ -1,0 +1,1 @@
+For railway deployment stuff, if you cannot do it via the cli, do not add more configs, just tell me how to do it via the dashboard. 
