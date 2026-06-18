@@ -22,6 +22,7 @@ import {
   CheckCircle2,
   GitBranch,
   Globe2,
+  LoaderCircle,
   LogIn,
   LogOut,
   Moon,
@@ -39,7 +40,6 @@ type RepoRole = 'Reader' | 'Writer' | 'Maintainer' | 'Owner'
 
 type ProjectedChange = {
   path: string
-  new_content: string | null
 }
 
 type ProjectedCommit = {
@@ -63,7 +63,6 @@ type GitProjection = {
   blobs: Array<{
     path: string
     oid: string
-    content: string
   }>
   head_oid: string | null
 }
@@ -132,7 +131,6 @@ const repoName = 'scope-vcs'
 const repoId = `${repoOwner}/${repoName}`
 const localApiBase = 'http://localhost:8080'
 const productionApiBase = 'https://scope-api-production-0251.up.railway.app'
-const themeStorageKey = 'scope-theme'
 
 export const Route = createFileRoute('/')({
   loader: () => loadWorkspace(),
@@ -160,12 +158,6 @@ function ScopeWorkspace() {
   const manifestRequestRef = useRef(0)
   const refreshAbortRef = useRef<AbortController | null>(null)
   const idToken = auth.identity.token
-
-  useEffect(() => {
-    const nextTheme = readStoredTheme()
-    setTheme(nextTheme)
-    applyTheme(nextTheme)
-  }, [])
 
   useEffect(
     () => () => {
@@ -233,7 +225,6 @@ function ScopeWorkspace() {
     const nextTheme = theme === 'dark' ? 'light' : 'dark'
     setTheme(nextTheme)
     applyTheme(nextTheme)
-    window.localStorage.setItem(themeStorageKey, nextTheme)
   }
 
   async function createManifest() {
@@ -457,9 +448,11 @@ function AuthControls({
   signedIn: boolean
 }) {
   const identity = session?.identity
-  const title = signedIn
-    ? `Signed in as ${identity?.email ?? identity?.pairwise_sub ?? 'Shoo user'}`
-    : 'Sign in with Shoo'
+  const title = auth.loading
+    ? 'Loading session'
+    : signedIn
+      ? `Signed in as ${identity?.email ?? identity?.pairwise_sub ?? 'Shoo user'}`
+      : 'Sign in with Shoo'
 
   async function toggleAuth() {
     if (signedIn) {
@@ -479,10 +472,16 @@ function AuthControls({
       title={title}
       variant={signedIn ? 'secondary' : 'default'}
     >
-      {signedIn ? <LogOut className="size-3.5" /> : <LogIn className="size-3.5" />}
-      <span className="hidden sm:inline">
-        {auth.loading ? 'Checking' : signedIn ? 'Sign out' : 'Sign in'}
-      </span>
+      {auth.loading ? (
+        <LoaderCircle className="size-3.5 animate-spin" />
+      ) : signedIn ? (
+        <LogOut className="size-3.5" />
+      ) : (
+        <LogIn className="size-3.5" />
+      )}
+      {!auth.loading && (
+        <span className="hidden sm:inline">{signedIn ? 'Sign out' : 'Sign in'}</span>
+      )}
     </Button>
   )
 }
@@ -855,9 +854,44 @@ async function loadWorkspace(
   return {
     api,
     gitBoundary,
-    gitProjection,
-    projection,
+    gitProjection: stripGitProjectionContent(gitProjection),
+    projection: stripProjectionContent(projection),
     session,
+  }
+}
+
+function stripProjectionContent(
+  projection: LoadState<Projection>,
+): LoadState<Projection> {
+  if (!projection.data) {
+    return projection
+  }
+
+  return {
+    ...projection,
+    data: {
+      ...projection.data,
+      commits: projection.data.commits.map((commit) => ({
+        ...commit,
+        changes: commit.changes.map(({ path }) => ({ path })),
+      })),
+    },
+  }
+}
+
+function stripGitProjectionContent(
+  gitProjection: LoadState<GitProjection>,
+): LoadState<GitProjection> {
+  if (!gitProjection.data) {
+    return gitProjection
+  }
+
+  return {
+    ...gitProjection,
+    data: {
+      ...gitProjection.data,
+      blobs: gitProjection.data.blobs.map(({ oid, path }) => ({ oid, path })),
+    },
   }
 }
 
@@ -940,16 +974,6 @@ function authHeaders(idToken?: string): HeadersInit {
 
 function shortOid(value: string) {
   return value.slice(0, 12)
-}
-
-function readStoredTheme(): ThemeMode {
-  if (typeof window === 'undefined') {
-    return 'dark'
-  }
-
-  return window.localStorage.getItem(themeStorageKey) === 'light'
-    ? 'light'
-    : 'dark'
 }
 
 function applyTheme(theme: ThemeMode) {

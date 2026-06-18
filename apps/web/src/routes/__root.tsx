@@ -7,19 +7,6 @@ import {
 import type { ReactNode } from 'react'
 import '../styles.css'
 
-const themeScript = `
-  (() => {
-    try {
-      const theme = localStorage.getItem('scope-theme') === 'light' ? 'light' : 'dark';
-      document.documentElement.classList.toggle('dark', theme === 'dark');
-      document.documentElement.style.colorScheme = theme;
-    } catch {
-      document.documentElement.classList.add('dark');
-      document.documentElement.style.colorScheme = 'dark';
-    }
-  })();
-`
-
 export const Route = createRootRoute({
   head: () => ({
     meta: [
@@ -50,9 +37,8 @@ function RootComponent() {
 
 function RootDocument({ children }: { children: ReactNode }) {
   return (
-    <html className="dark" lang="en" suppressHydrationWarning>
+    <html className="dark" lang="en">
       <head>
-        <script dangerouslySetInnerHTML={{ __html: themeScript }} />
         <HeadContent />
       </head>
       <body>
