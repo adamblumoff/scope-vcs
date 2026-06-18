@@ -2,13 +2,13 @@ use anyhow::Context;
 use axum::{
     Json, Router,
     extract::{Path, Query, State},
-    http::StatusCode,
+    http::{HeaderMap, StatusCode},
     response::{IntoResponse, Response},
     routing::{get, post},
 };
 use scope_crypto::{ManifestMixedPolicy, PushManifest, SignedPushManifest, sign_manifest};
 use scope_git::{VirtualGitProjection, build_virtual_git_projection};
-use scope_policy::ScopePath;
+use scope_policy::{Principal, PrincipalKind, ScopePath};
 use scope_projection::{Projection, project_graph};
 use scope_store::{DemoRepository, demo_repository};
 use serde::{Deserialize, Serialize};
@@ -16,11 +16,15 @@ use std::{collections::BTreeMap, net::SocketAddr, sync::Arc};
 use tower_http::{cors::CorsLayer, trace::TraceLayer};
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 
-const DEV_DEVICE_SECRET: &[u8] = b"scope-dev-device-secret";
+const DEMO_AUTHORITY_HEADER: &str = "x-scope-demo-authority";
+const DEMO_AUTHORITY_ENV: &str = "SCOPE_DEMO_AUTHORITY";
+const MANIFEST_SIGNING_SECRET_ENV: &str = "SCOPE_MANIFEST_SIGNING_SECRET";
 
 #[derive(Clone)]
 struct AppState {
     demo: Arc<DemoRepository>,
+    demo_authority_token: Option<String>,
+    manifest_signing_secret: Option<Arc<[u8]>>,
 }
 
 #[derive(Debug, Serialize)]
@@ -68,9 +72,7 @@ async fn main() -> anyhow::Result<()> {
         .and_then(|value| value.parse::<u16>().ok())
         .unwrap_or(8080);
     let addr = SocketAddr::from(([0, 0, 0, 0], port));
-    let state = AppState {
-        demo: Arc::new(demo_repository()),
-    };
+    let state = AppState::from_env();
 
     let app = router(state);
     tracing::info!(%addr, "starting scope server");
@@ -113,10 +115,11 @@ async fn healthz() -> Json<HealthResponse> {
 
 async fn get_projection(
     State(state): State<AppState>,
+    headers: HeaderMap,
     Path((repo_id, principal_id)): Path<(String, String)>,
 ) -> Result<Json<Projection>, ApiError> {
     ensure_demo_repo(&repo_id)?;
-    let principal = DemoRepository::projection_principal(&principal_id);
+    let principal = authorized_http_principal(&state, &headers, &principal_id)?;
     Ok(Json(project_graph(
         &state.demo.policy,
         &state.demo.graph,
@@ -126,21 +129,23 @@ async fn get_projection(
 
 async fn get_git_projection(
     State(state): State<AppState>,
+    headers: HeaderMap,
     Path((repo_id, principal_id)): Path<(String, String)>,
 ) -> Result<Json<VirtualGitProjection>, ApiError> {
     ensure_demo_repo(&repo_id)?;
-    let principal = DemoRepository::projection_principal(&principal_id);
+    let principal = authorized_http_principal(&state, &headers, &principal_id)?;
     let projection = project_graph(&state.demo.policy, &state.demo.graph, &principal);
     Ok(Json(build_virtual_git_projection(&projection)))
 }
 
 async fn create_manifest(
     State(state): State<AppState>,
+    headers: HeaderMap,
     Path(repo_id): Path<String>,
     Json(input): Json<CreateManifestRequest>,
 ) -> Result<Json<CreateManifestResponse>, ApiError> {
     ensure_demo_repo(&repo_id)?;
-    let principal = DemoRepository::projection_principal(&input.principal_id);
+    let principal = authorized_http_principal(&state, &headers, &input.principal_id)?;
 
     for changed_path in &input.changed_paths {
         let path = ScopePath::parse(changed_path).map_err(ApiError::bad_request)?;
@@ -151,6 +156,11 @@ async fn create_manifest(
             )));
         }
     }
+    let signing_secret = state.manifest_signing_secret.as_deref().ok_or_else(|| {
+        ApiError::service_unavailable(format!(
+            "manifest signing is disabled; set {MANIFEST_SIGNING_SECRET_ENV}"
+        ))
+    })?;
 
     let manifest = PushManifest::new(
         repo_id,
@@ -160,7 +170,7 @@ async fn create_manifest(
         input.changed_paths,
         input.mixed_policy,
     );
-    let signed_manifest = sign_manifest(manifest, DEV_DEVICE_SECRET).map_err(ApiError::internal)?;
+    let signed_manifest = sign_manifest(manifest, signing_secret).map_err(ApiError::internal)?;
 
     Ok(Json(CreateManifestResponse { signed_manifest }))
 }
@@ -193,6 +203,73 @@ fn ensure_demo_repo(repo_id: &str) -> Result<(), ApiError> {
         Ok(())
     } else {
         Err(ApiError::not_found(format!("repo {repo_id} not found")))
+    }
+}
+
+impl AppState {
+    fn from_env() -> Self {
+        Self {
+            demo: Arc::new(demo_repository()),
+            demo_authority_token: non_empty_env(DEMO_AUTHORITY_ENV),
+            manifest_signing_secret: non_empty_env(MANIFEST_SIGNING_SECRET_ENV)
+                .map(|secret| Arc::<[u8]>::from(secret.into_bytes())),
+        }
+    }
+
+    #[cfg(test)]
+    fn test_state(
+        demo_authority_token: Option<&str>,
+        manifest_signing_secret: Option<&str>,
+    ) -> Self {
+        Self {
+            demo: Arc::new(demo_repository()),
+            demo_authority_token: demo_authority_token.map(ToOwned::to_owned),
+            manifest_signing_secret: manifest_signing_secret
+                .map(|secret| Arc::<[u8]>::from(secret.as_bytes())),
+        }
+    }
+}
+
+fn non_empty_env(name: &str) -> Option<String> {
+    std::env::var(name).ok().filter(|value| !value.is_empty())
+}
+
+fn authorized_http_principal(
+    state: &AppState,
+    headers: &HeaderMap,
+    requested_id: &str,
+) -> Result<Principal, ApiError> {
+    let principal = DemoRepository::projection_principal(requested_id);
+    if principal.kind == PrincipalKind::Public {
+        return Ok(principal);
+    }
+
+    ensure_demo_authority(state, headers)?;
+    Ok(principal)
+}
+
+fn ensure_demo_authority(state: &AppState, headers: &HeaderMap) -> Result<(), ApiError> {
+    let Some(expected) = state.demo_authority_token.as_deref() else {
+        return Err(ApiError::forbidden(format!(
+            "non-public demo principals require {DEMO_AUTHORITY_ENV} and {DEMO_AUTHORITY_HEADER}"
+        )));
+    };
+
+    let Some(actual) = headers
+        .get(DEMO_AUTHORITY_HEADER)
+        .and_then(|value| value.to_str().ok())
+    else {
+        return Err(ApiError::forbidden(format!(
+            "missing {DEMO_AUTHORITY_HEADER} for non-public demo principal"
+        )));
+    };
+
+    if actual == expected {
+        Ok(())
+    } else {
+        Err(ApiError::forbidden(format!(
+            "invalid {DEMO_AUTHORITY_HEADER} for non-public demo principal"
+        )))
     }
 }
 
@@ -254,6 +331,13 @@ impl ApiError {
             message: error.to_string(),
         }
     }
+
+    fn service_unavailable(message: impl Into<String>) -> Self {
+        Self {
+            status: StatusCode::SERVICE_UNAVAILABLE,
+            message: message.into(),
+        }
+    }
 }
 
 impl IntoResponse for ApiError {
@@ -265,5 +349,63 @@ impl IntoResponse for ApiError {
             }),
         )
             .into_response()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn headers_with_demo_authority(token: &str) -> HeaderMap {
+        let mut headers = HeaderMap::new();
+        headers.insert(DEMO_AUTHORITY_HEADER, token.parse().unwrap());
+        headers
+    }
+
+    #[test]
+    fn public_principal_does_not_need_demo_authority() {
+        let state = AppState::test_state(None, None);
+        let principal = authorized_http_principal(&state, &HeaderMap::new(), "public").unwrap();
+
+        assert_eq!(principal.id, "public");
+        assert_eq!(principal.kind, PrincipalKind::Public);
+    }
+
+    #[test]
+    fn non_public_principal_requires_configured_demo_authority() {
+        let state = AppState::test_state(None, None);
+        let error = authorized_http_principal(&state, &HeaderMap::new(), "team-core").unwrap_err();
+
+        assert_eq!(error.status, StatusCode::FORBIDDEN);
+    }
+
+    #[test]
+    fn non_public_principal_requires_matching_demo_authority_header() {
+        let state = AppState::test_state(Some("demo-token"), None);
+
+        assert!(authorized_http_principal(&state, &HeaderMap::new(), "team-core").is_err());
+        assert!(
+            authorized_http_principal(
+                &state,
+                &headers_with_demo_authority("wrong-token"),
+                "team-core",
+            )
+            .is_err()
+        );
+
+        let principal = authorized_http_principal(
+            &state,
+            &headers_with_demo_authority("demo-token"),
+            "team-core",
+        )
+        .unwrap();
+        assert_eq!(principal.id, "team-core");
+    }
+
+    #[test]
+    fn manifest_signing_secret_is_absent_unless_explicitly_configured() {
+        let state = AppState::test_state(Some("demo-token"), None);
+
+        assert!(state.manifest_signing_secret.is_none());
     }
 }

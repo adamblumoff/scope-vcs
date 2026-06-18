@@ -1,4 +1,4 @@
-use anyhow::Context;
+use anyhow::{Context, bail};
 use clap::{Parser, Subcommand, ValueEnum};
 use scope_crypto::{ManifestMixedPolicy, PushManifest, sign_manifest};
 use scope_git::build_virtual_git_projection;
@@ -6,7 +6,7 @@ use scope_policy::ScopePath;
 use scope_projection::project_graph;
 use scope_store::{DemoRepository, demo_repository};
 
-const DEV_DEVICE_SECRET: &[u8] = b"scope-dev-device-secret";
+const MANIFEST_SIGNING_SECRET_ENV: &str = "SCOPE_MANIFEST_SIGNING_SECRET";
 
 #[derive(Debug, Parser)]
 #[command(name = "sx")]
@@ -139,9 +139,20 @@ fn run_manifest(command: ManifestCommand) -> anyhow::Result<()> {
                 CliMixedPolicy::OmitFromPublic => ManifestMixedPolicy::OmitFromPublic,
             };
             let manifest = PushManifest::new(repo, principal, device, graph, paths, mixed_policy);
-            let signed = sign_manifest(manifest, DEV_DEVICE_SECRET)?;
+            let signing_secret = manifest_signing_secret()?;
+            let signed = sign_manifest(manifest, signing_secret.as_bytes())?;
             println!("{}", serde_json::to_string_pretty(&signed)?);
         }
     }
     Ok(())
+}
+
+fn manifest_signing_secret() -> anyhow::Result<String> {
+    let secret = std::env::var(MANIFEST_SIGNING_SECRET_ENV).with_context(|| {
+        format!("{MANIFEST_SIGNING_SECRET_ENV} is required for manifest signing")
+    })?;
+    if secret.is_empty() {
+        bail!("{MANIFEST_SIGNING_SECRET_ENV} cannot be empty");
+    }
+    Ok(secret)
 }

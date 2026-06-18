@@ -1,6 +1,7 @@
 use scope_projection::Projection;
 use serde::{Deserialize, Serialize};
 use sha1::{Digest, Sha1};
+use std::collections::BTreeMap;
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct VirtualGitBlob {
@@ -25,29 +26,42 @@ pub fn git_blob_oid(content: &str) -> String {
 }
 
 pub fn build_virtual_git_projection(projection: &Projection) -> VirtualGitProjection {
-    let mut blobs = projection
+    let mut tree = BTreeMap::new();
+    for change in projection
         .commits
         .iter()
         .flat_map(|commit| commit.changes.iter())
-        .filter_map(|change| {
-            change.new_content.as_ref().map(|content| VirtualGitBlob {
-                path: change.path.as_str().to_string(),
-                oid: git_blob_oid(content),
-                content: content.clone(),
-            })
-        })
-        .collect::<Vec<_>>();
+    {
+        let path = change.path.as_str().to_string();
+        match &change.new_content {
+            Some(content) => {
+                tree.insert(
+                    path.clone(),
+                    VirtualGitBlob {
+                        path,
+                        oid: git_blob_oid(content),
+                        content: content.clone(),
+                    },
+                );
+            }
+            None => {
+                tree.remove(&path);
+            }
+        }
+    }
 
-    blobs.sort_by(|left, right| left.path.cmp(&right.path));
-    blobs.dedup_by(|left, right| left.path == right.path && left.oid == right.oid);
+    let blobs = tree.into_values().collect::<Vec<_>>();
 
     let head_oid = projection.commits.last().map(|commit| {
         let mut hasher = Sha1::new();
+        let tree_payload = blobs
+            .iter()
+            .map(|blob| format!("100644 blob {}\t{}", blob.oid, blob.path))
+            .collect::<Vec<_>>()
+            .join("\n");
         let payload = format!(
-            "projection:{}:{}:{}",
-            projection.principal_id,
-            commit.projected_id,
-            blobs.len()
+            "projection:{}\nhead:{}\ntree:\n{}\n",
+            projection.principal_id, commit.projected_id, tree_payload
         );
         hasher.update(format!("commit {}\0", payload.len()).as_bytes());
         hasher.update(payload.as_bytes());
@@ -108,5 +122,86 @@ mod tests {
         assert!(serialized.contains("/README.md"));
         assert!(!serialized.contains("secret.env"));
         assert!(!serialized.contains("SCOPE_TOKEN"));
+    }
+
+    #[test]
+    fn projected_git_blobs_are_final_visible_tree() {
+        let policy = Policy::new(Visibility::Public, "owner");
+        let graph = SourceGraph {
+            repo_id: "scope".to_string(),
+            commits: vec![
+                LogicalCommit {
+                    id: "rv1".to_string(),
+                    parent_ids: vec![],
+                    author_id: "owner".to_string(),
+                    author_visibility: AuthorVisibility::Visible,
+                    message: "initial".to_string(),
+                    mixed_policy: MixedCommitPolicy::SyntheticPublicCommit,
+                    changes: vec![
+                        FileChange {
+                            path: ScopePath::parse("/README.md").unwrap(),
+                            old_content: None,
+                            new_content: Some("old".to_string()),
+                        },
+                        FileChange {
+                            path: ScopePath::parse("/deleted.txt").unwrap(),
+                            old_content: None,
+                            new_content: Some("remove me".to_string()),
+                        },
+                    ],
+                },
+                LogicalCommit {
+                    id: "rv2".to_string(),
+                    parent_ids: vec!["rv1".to_string()],
+                    author_id: "owner".to_string(),
+                    author_visibility: AuthorVisibility::Visible,
+                    message: "update".to_string(),
+                    mixed_policy: MixedCommitPolicy::SyntheticPublicCommit,
+                    changes: vec![
+                        FileChange {
+                            path: ScopePath::parse("/README.md").unwrap(),
+                            old_content: Some("old".to_string()),
+                            new_content: Some("new".to_string()),
+                        },
+                        FileChange {
+                            path: ScopePath::parse("/deleted.txt").unwrap(),
+                            old_content: Some("remove me".to_string()),
+                            new_content: None,
+                        },
+                    ],
+                },
+            ],
+        };
+        let projection = project_graph(&policy, &graph, &Principal::public());
+        let git = build_virtual_git_projection(&projection);
+
+        assert_eq!(git.blobs.len(), 1);
+        assert_eq!(git.blobs[0].path, "/README.md");
+        assert_eq!(git.blobs[0].content, "new");
+    }
+
+    #[test]
+    fn head_oid_changes_when_tree_content_changes_with_same_blob_count() {
+        let projection = |content: &str| Projection {
+            repo_id: "scope".to_string(),
+            principal_id: "public".to_string(),
+            commits: vec![scope_projection::ProjectedCommit {
+                projected_id: "pv_public_rv1_1".to_string(),
+                logical_commit_id: "rv1".to_string(),
+                parent_projected_id: None,
+                author: Some("owner".to_string()),
+                message: "commit".to_string(),
+                synthetic: false,
+                changes: vec![scope_projection::ProjectedChange {
+                    path: ScopePath::parse("/README.md").unwrap(),
+                    new_content: Some(content.to_string()),
+                }],
+            }],
+        };
+
+        let left = build_virtual_git_projection(&projection("left"));
+        let right = build_virtual_git_projection(&projection("right"));
+
+        assert_ne!(left.head_oid, right.head_oid);
     }
 }

@@ -39,7 +39,7 @@ import {
   Sun,
   Upload,
 } from 'lucide-react'
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 
 type PrincipalId = 'public' | 'team-core' | 'owner'
 
@@ -101,16 +101,23 @@ type GitBoundaryState = {
 }
 
 type DashboardData = {
-  baseUrl: string
+  api: ApiConnection
   gitBoundary: GitBoundaryState
   gitProjection: LoadState<GitProjection>
   projection: LoadState<Projection>
 }
 
 type ThemeMode = 'dark' | 'light'
+type ApiSource = 'env' | 'local-dev' | 'production-default'
+
+type ApiConnection = {
+  source: ApiSource
+  url: string
+}
 
 const repoId = 'scope-demo'
-const deployedApiBase = 'https://scope-api-production-0251.up.railway.app'
+const localApiBase = 'http://localhost:8080'
+const productionApiBase = 'https://scope-api-production-0251.up.railway.app'
 const themeStorageKey = 'scope-theme'
 
 const principals = [
@@ -189,6 +196,8 @@ function ScopeDashboard() {
     loading: false,
   })
   const [theme, setTheme] = useState<ThemeMode>('dark')
+  const manifestAbortRef = useRef<AbortController | null>(null)
+  const manifestRequestRef = useRef(0)
 
   useEffect(() => {
     const nextTheme = readStoredTheme()
@@ -196,7 +205,17 @@ function ScopeDashboard() {
     applyTheme(nextTheme)
   }, [])
 
+  useEffect(
+    () => () => {
+      manifestAbortRef.current?.abort()
+    },
+    [],
+  )
+
   useEffect(() => {
+    manifestRequestRef.current += 1
+    manifestAbortRef.current?.abort()
+    manifestAbortRef.current = null
     setManifest({ data: null, error: null, loading: false })
   }, [principal])
 
@@ -223,14 +242,26 @@ function ScopeDashboard() {
   }
 
   async function createManifest() {
+    const safetyError = getManifestSafetyError(dashboard.api)
+    if (safetyError) {
+      setManifest({ data: null, error: safetyError, loading: false })
+      return
+    }
+
+    manifestRequestRef.current += 1
+    const requestId = manifestRequestRef.current
+    manifestAbortRef.current?.abort()
+    const controller = new AbortController()
+    manifestAbortRef.current = controller
     setManifest({ data: null, error: null, loading: true })
     const changed_paths =
       principal === 'team-core' ? ['/internal/model.rs'] : ['/README.md']
 
     try {
-      const response = await fetch(`${dashboard.baseUrl}/v1/repos/${repoId}/push-manifests`, {
+      const response = await fetch(`${dashboard.api.url}/v1/repos/${repoId}/push-manifests`, {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
+        signal: controller.signal,
         body: JSON.stringify({
           principal_id: principal,
           device_id: 'web-demo',
@@ -245,17 +276,33 @@ function ScopeDashboard() {
         throw new Error(payload?.error ?? `request failed: ${response.status}`)
       }
 
+      if (manifestRequestRef.current !== requestId || controller.signal.aborted) {
+        return
+      }
+
       setManifest({
         data: payload as ManifestResponse,
         error: null,
         loading: false,
       })
     } catch (error) {
+      if (
+        manifestRequestRef.current !== requestId ||
+        controller.signal.aborted ||
+        isAbortError(error)
+      ) {
+        return
+      }
+
       setManifest({
         data: null,
         error: error instanceof Error ? error.message : 'manifest failed',
         loading: false,
       })
+    } finally {
+      if (manifestRequestRef.current === requestId) {
+        manifestAbortRef.current = null
+      }
     }
   }
 
@@ -310,8 +357,11 @@ function ScopeDashboard() {
                 <Badge className="mb-3" variant="outline">
                   {selectedPrincipal.label}
                 </Badge>
-                <CardTitle className="text-2xl font-semibold leading-8 tracking-[-0.96px]">
-                  {copy.headline}
+                <CardTitle
+                  asChild
+                  className="text-2xl font-semibold leading-8 tracking-[-0.96px]"
+                >
+                  <h2>{copy.headline}</h2>
                 </CardTitle>
                 <CardDescription className="mt-2 max-w-2xl leading-5">
                   {copy.body}
@@ -422,11 +472,7 @@ function DashboardPending() {
               <Skeleton className="h-3 w-24" />
             </div>
           </div>
-          <div className="flex gap-2">
-            <Skeleton className="h-5 w-12 rounded-full" />
-            <Skeleton className="h-5 w-12 rounded-full" />
-            <Skeleton className="h-5 w-12 rounded-full" />
-          </div>
+          <Skeleton className="h-8 w-20 rounded-md" />
         </div>
       </header>
       <section className="mx-auto max-w-[1200px] px-4 py-8 sm:px-6 lg:py-10">
@@ -466,9 +512,11 @@ function Guardrails({
   return (
     <Card>
       <CardHeader>
-        <CardTitle className="flex items-center gap-2">
-          <Lock className="size-4 text-muted-foreground" />
-          Guardrails
+        <CardTitle asChild className="flex items-center gap-2">
+          <h2>
+            <Lock className="size-4 text-muted-foreground" />
+            Guardrails
+          </h2>
         </CardTitle>
         <CardDescription>
           Policy checks run before a projected object is emitted.
@@ -517,9 +565,11 @@ function WriteReadiness({
   return (
     <Card>
       <CardHeader>
-        <CardTitle className="flex items-center gap-2">
-          <KeyRound className="size-4 text-muted-foreground" />
-          Write Readiness
+        <CardTitle asChild className="flex items-center gap-2">
+          <h2>
+            <KeyRound className="size-4 text-muted-foreground" />
+            Write Readiness
+          </h2>
         </CardTitle>
         <CardDescription>{manifestHint}</CardDescription>
       </CardHeader>
@@ -556,7 +606,9 @@ function ObjectSet({
     <Card>
       <CardHeader>
         <div>
-          <CardTitle>Virtual Git Object Set</CardTitle>
+          <CardTitle asChild>
+            <h2>Virtual Git Object Set</h2>
+          </CardTitle>
           <CardDescription>
             The blobs this principal can receive.
           </CardDescription>
@@ -612,7 +664,9 @@ function CommitHistory({ projection }: { projection: Projection | null }) {
     <Card>
       <CardHeader>
         <div>
-          <CardTitle>Visible History</CardTitle>
+          <CardTitle asChild>
+            <h2>Visible History</h2>
+          </CardTitle>
           <CardDescription>Recent commits in the selected view.</CardDescription>
         </div>
         <CardAction>
@@ -621,10 +675,10 @@ function CommitHistory({ projection }: { projection: Projection | null }) {
       </CardHeader>
       <CardContent>
         {commits.length > 0 ? (
-          <div className="space-y-3">
+          <div className="divide-y divide-border">
             {commits.map((commit) => (
               <div
-                className="rounded-md border border-border bg-card p-3"
+                className="py-3 first:pt-0 last:pb-0"
                 key={commit.projected_id}
               >
                 <div className="mb-2 flex items-center justify-between gap-3">
@@ -684,7 +738,7 @@ function ManifestResult({
   const signed = manifest.data.signed_manifest
 
   return (
-    <Alert className="border-green-400 bg-green-100 text-green-1000">
+    <Alert className="border-green-400 bg-green-100 text-green-1000" live="polite">
       <CheckCircle2 className="size-4 text-green-900" />
       <AlertTitle>Signed Manifest Created</AlertTitle>
       <AlertDescription className="space-y-1 text-green-900">
@@ -737,19 +791,19 @@ function GuardrailRow({ ok, text }: { ok: boolean; text: string }) {
 }
 
 async function loadDashboard(principal: PrincipalId): Promise<DashboardData> {
-  const baseUrl = getStaticApiBase()
+  const api = getApiConnection()
   const [projection, gitProjection, gitBoundary] = await Promise.all([
     safeLoadJson<Projection>(
-      `${baseUrl}/v1/repos/${repoId}/projections/${principal}`,
+      `${api.url}/v1/repos/${repoId}/projections/${principal}`,
     ),
     safeLoadJson<GitProjection>(
-      `${baseUrl}/v1/repos/${repoId}/git-projections/${principal}`,
+      `${api.url}/v1/repos/${repoId}/git-projections/${principal}`,
     ),
-    loadGitBoundary(baseUrl),
+    loadGitBoundary(api.url),
   ])
 
   return {
-    baseUrl,
+    api,
     gitBoundary,
     gitProjection,
     projection,
@@ -758,10 +812,11 @@ async function loadDashboard(principal: PrincipalId): Promise<DashboardData> {
 
 async function safeLoadJson<T>(
   url: string,
+  init?: RequestInit,
 ): Promise<LoadState<T>> {
   try {
     return {
-      data: await loadJson<T>(url),
+      data: await loadJson<T>(url, init),
       error: null,
       loading: false,
     }
@@ -811,8 +866,8 @@ function visibleProjectionPaths(projection: Projection) {
   return [...new Set(paths)].sort((left, right) => left.localeCompare(right))
 }
 
-async function loadJson<T>(url: string): Promise<T> {
-  const response = await fetch(url)
+async function loadJson<T>(url: string, init?: RequestInit): Promise<T> {
+  const response = await fetch(url, init)
   const payload = await response.json().catch(() => null)
 
   if (!response.ok) {
@@ -847,15 +902,46 @@ function applyTheme(theme: ThemeMode) {
   document.documentElement.style.colorScheme = theme
 }
 
-function getStaticApiBase() {
+function getApiConnection(): ApiConnection {
   const envBase = import.meta.env.VITE_SCOPE_API_URL as string | undefined
   if (envBase) {
-    return stripTrailingSlash(envBase)
+    return { source: 'env', url: stripTrailingSlash(envBase) }
   }
 
-  return deployedApiBase
+  if (import.meta.env.DEV) {
+    return { source: 'local-dev', url: localApiBase }
+  }
+
+  // Railway production has a single web service and API service; keep the
+  // no-env fallback there, but block localhost mutations client-side.
+  return { source: 'production-default', url: productionApiBase }
 }
 
 function stripTrailingSlash(value: string) {
   return value.replace(/\/+$/, '')
+}
+
+function getManifestSafetyError(api: ApiConnection) {
+  if (api.source !== 'production-default' || !isLocalBrowserHost()) {
+    return null
+  }
+
+  return 'Set VITE_SCOPE_API_URL before creating manifests from a local production preview.'
+}
+
+function isLocalBrowserHost() {
+  if (typeof window === 'undefined') {
+    return false
+  }
+
+  return isLoopbackHost(window.location.hostname)
+}
+
+function isLoopbackHost(hostname: string) {
+  const normalized = hostname.replace(/^\[|\]$/g, '')
+  return ['localhost', '127.0.0.1', '::1'].includes(normalized)
+}
+
+function isAbortError(error: unknown) {
+  return error instanceof DOMException && error.name === 'AbortError'
 }
