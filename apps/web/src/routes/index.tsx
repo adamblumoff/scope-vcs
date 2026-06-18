@@ -13,10 +13,11 @@ import {
   TableHeader,
   TableRow,
 } from '@/components/ui/table'
+import { authCookieName, createScopeShooAuth } from '@/lib/auth'
 import { cn } from '@/lib/utils'
-import { useShooAuth } from '@shoojs/react'
 import { createFileRoute } from '@tanstack/react-router'
 import type { ErrorComponentProps } from '@tanstack/react-router'
+import { createServerFn } from '@tanstack/react-start'
 import {
   AlertCircle,
   CheckCircle2,
@@ -27,13 +28,12 @@ import {
   LogOut,
   Moon,
   RefreshCw,
-  ShieldCheck,
   Sun,
   Upload,
   UserPlus,
 } from 'lucide-react'
 import type { ReactNode } from 'react'
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { useMemo, useRef, useState } from 'react'
 
 type PrincipalId = string
 type RepoRole = 'Reader' | 'Writer' | 'Maintainer' | 'Owner'
@@ -86,6 +86,7 @@ type LoadState<T> = {
   data: T | null
   error: string | null
   loading: boolean
+  status: number | null
 }
 
 type GitBoundaryState = {
@@ -132,77 +133,76 @@ const repoId = `${repoOwner}/${repoName}`
 const localApiBase = 'http://localhost:8080'
 const productionApiBase = 'https://scope-api-production-0251.up.railway.app'
 
+type CreateManifestInput = {
+  commitGraphHash: string
+}
+
+const loadWorkspaceForRequest = createServerFn({ method: 'GET' }).handler(
+  async () => {
+    const idToken = await readRequestAuthToken()
+    const workspace = await loadWorkspace(idToken)
+
+    if (idToken && workspace.session.status === 401) {
+      const { deleteCookie } = await import('@tanstack/react-start/server')
+      deleteCookie(authCookieName, { path: '/' })
+      return loadWorkspace()
+    }
+
+    return workspace
+  },
+)
+
+const createManifestForRequest = createServerFn({ method: 'POST' })
+  .validator(parseCreateManifestInput)
+  .handler(async ({ data }) => {
+    const idToken = await readRequestAuthToken()
+
+    if (!idToken) {
+      throw new Error('This session cannot write to the repository.')
+    }
+
+    const api = getApiConnection()
+    const response = await fetch(
+      `${api.url}/v1/repos/${repoOwner}/${repoName}/push-manifests`,
+      {
+        body: JSON.stringify({
+          changed_paths: ['/README.md'],
+          commit_graph_hash: data.commitGraphHash,
+          device_id: 'web-console',
+          mixed_policy: 'SyntheticPublicCommit',
+        }),
+        headers: {
+          ...authHeaders(idToken),
+          'content-type': 'application/json',
+        },
+        method: 'POST',
+      },
+    )
+    const payload = await response.json().catch(() => null)
+
+    if (!response.ok) {
+      throw new Error(payload?.error ?? `request failed: ${response.status}`)
+    }
+
+    return payload as ManifestResponse
+  })
+
 export const Route = createFileRoute('/')({
-  loader: () => loadWorkspace(),
+  loader: () => loadWorkspaceForRequest(),
   errorComponent: WorkspaceError,
   component: ScopeWorkspace,
 })
 
 function ScopeWorkspace() {
-  const initialWorkspace = Route.useLoaderData()
-  const [workspace, setWorkspace] = useState(initialWorkspace)
+  const workspace = Route.useLoaderData()
   const [manifest, setManifest] = useState<LoadState<ManifestResponse>>({
     data: null,
     error: null,
     loading: false,
+    status: null,
   })
   const [theme, setTheme] = useState<ThemeMode>('dark')
-  const auth = useShooAuth({
-    shooBaseUrl: 'https://shoo.dev',
-    callbackPath: '/',
-    requestPii: true,
-    autoSessionMonitor: true,
-    sessionMonitorIntervalMs: 60_000,
-  })
-  const manifestAbortRef = useRef<AbortController | null>(null)
   const manifestRequestRef = useRef(0)
-  const refreshAbortRef = useRef<AbortController | null>(null)
-  const idToken = auth.identity.token
-
-  useEffect(
-    () => () => {
-      manifestAbortRef.current?.abort()
-      refreshAbortRef.current?.abort()
-    },
-    [],
-  )
-
-  useEffect(() => {
-    manifestRequestRef.current += 1
-    manifestAbortRef.current?.abort()
-    manifestAbortRef.current = null
-    setManifest({ data: null, error: null, loading: false })
-
-    refreshAbortRef.current?.abort()
-    refreshAbortRef.current = null
-
-    if (!idToken) {
-      setWorkspace(initialWorkspace)
-      return
-    }
-
-    const controller = new AbortController()
-    refreshAbortRef.current = controller
-
-    loadWorkspace(idToken, controller.signal)
-      .then((nextWorkspace) => {
-        if (!controller.signal.aborted) {
-          setWorkspace(nextWorkspace)
-        }
-      })
-      .catch(() => {
-        // Per-request failures are represented inside WorkspaceData. This
-        // catches only unexpected top-level failures, so keep the last
-        // coherent workspace on screen.
-      })
-      .finally(() => {
-        if (!controller.signal.aborted) {
-          refreshAbortRef.current = null
-        }
-      })
-
-    return () => controller.abort()
-  }, [idToken, initialWorkspace])
 
   const session = workspace.session.data
   const projection = workspace.projection.data
@@ -219,7 +219,7 @@ function ScopeWorkspace() {
   const roleLabel = role ?? 'Public'
   const principal = session?.principal_id ?? 'public'
   const canWrite = session?.capabilities.write ?? false
-  const signedIn = Boolean(idToken)
+  const signedIn = Boolean(session?.identity)
 
   function toggleTheme() {
     const nextTheme = theme === 'dark' ? 'light' : 'dark'
@@ -230,7 +230,12 @@ function ScopeWorkspace() {
   async function createManifest() {
     const safetyError = getManifestSafetyError(workspace.api)
     if (safetyError) {
-      setManifest({ data: null, error: safetyError, loading: false })
+      setManifest({
+        data: null,
+        error: safetyError,
+        loading: false,
+        status: null,
+      })
       return
     }
 
@@ -239,6 +244,7 @@ function ScopeWorkspace() {
         data: null,
         error: 'This session cannot write to the repository.',
         loading: false,
+        status: null,
       })
       return
     }
@@ -249,56 +255,32 @@ function ScopeWorkspace() {
         data: null,
         error: 'No projected Git head is available for this session.',
         loading: false,
+        status: null,
       })
       return
     }
 
     manifestRequestRef.current += 1
     const requestId = manifestRequestRef.current
-    manifestAbortRef.current?.abort()
-    const controller = new AbortController()
-    manifestAbortRef.current = controller
-    setManifest({ data: null, error: null, loading: true })
+    setManifest({ data: null, error: null, loading: true, status: null })
 
     try {
-      const response = await fetch(
-        `${workspace.api.url}/v1/repos/${repoOwner}/${repoName}/push-manifests`,
-        {
-          method: 'POST',
-          headers: {
-            ...authHeaders(idToken),
-            'content-type': 'application/json',
-          },
-          signal: controller.signal,
-          body: JSON.stringify({
-            device_id: 'web-console',
-            commit_graph_hash: commitGraphHash,
-            changed_paths: ['/README.md'],
-            mixed_policy: 'SyntheticPublicCommit',
-          }),
-        },
-      )
-      const payload = await response.json().catch(() => null)
+      const payload = await createManifestForRequest({
+        data: { commitGraphHash },
+      })
 
-      if (!response.ok) {
-        throw new Error(payload?.error ?? `request failed: ${response.status}`)
-      }
-
-      if (manifestRequestRef.current !== requestId || controller.signal.aborted) {
+      if (manifestRequestRef.current !== requestId) {
         return
       }
 
       setManifest({
-        data: payload as ManifestResponse,
+        data: payload,
         error: null,
         loading: false,
+        status: 200,
       })
     } catch (error) {
-      if (
-        manifestRequestRef.current !== requestId ||
-        controller.signal.aborted ||
-        isAbortError(error)
-      ) {
+      if (manifestRequestRef.current !== requestId) {
         return
       }
 
@@ -306,11 +288,8 @@ function ScopeWorkspace() {
         data: null,
         error: error instanceof Error ? error.message : 'manifest failed',
         loading: false,
+        status: null,
       })
-    } finally {
-      if (manifestRequestRef.current === requestId) {
-        manifestAbortRef.current = null
-      }
     }
   }
 
@@ -332,7 +311,6 @@ function ScopeWorkspace() {
 
           <div className="flex min-w-0 items-center gap-2">
             <AuthControls
-              auth={auth}
               session={session}
               signedIn={signedIn}
             />
@@ -439,49 +417,52 @@ function ThemeToggle({
 }
 
 function AuthControls({
-  auth,
   session,
   signedIn,
 }: {
-  auth: ReturnType<typeof useShooAuth>
   session: SessionResponse | null
   signedIn: boolean
 }) {
+  const [busy, setBusy] = useState(false)
   const identity = session?.identity
-  const title = auth.loading
-    ? 'Loading session'
-    : signedIn
-      ? `Signed in as ${identity?.email ?? identity?.pairwise_sub ?? 'Shoo user'}`
-      : 'Sign in with Shoo'
+  const title = signedIn
+    ? `Signed in as ${identity?.email ?? identity?.pairwise_sub ?? 'Shoo user'}`
+    : 'Sign in with Shoo'
 
   async function toggleAuth() {
+    setBusy(true)
+
     if (signedIn) {
-      auth.clearIdentity()
+      createScopeShooAuth().clearIdentity()
+      await fetch('/auth/session', { method: 'DELETE' }).catch(() => undefined)
+      window.location.assign('/')
       return
     }
 
-    await auth.signIn({ requestPii: true })
+    try {
+      await createScopeShooAuth().startSignIn({ requestPii: true })
+    } catch {
+      setBusy(false)
+    }
   }
 
   return (
     <Button
       aria-label={title}
-      disabled={auth.loading}
+      disabled={busy}
       onClick={() => void toggleAuth()}
       size="sm"
       title={title}
       variant={signedIn ? 'secondary' : 'default'}
     >
-      {auth.loading ? (
+      {busy ? (
         <LoaderCircle className="size-3.5 animate-spin" />
       ) : signedIn ? (
         <LogOut className="size-3.5" />
       ) : (
         <LogIn className="size-3.5" />
       )}
-      {!auth.loading && (
-        <span className="hidden sm:inline">{signedIn ? 'Sign out' : 'Sign in'}</span>
-      )}
+      {!busy && <span className="hidden sm:inline">{signedIn ? 'Sign out' : 'Sign in'}</span>}
     </Button>
   )
 }
@@ -904,12 +885,14 @@ async function safeLoadJson<T>(
       data: await loadJson<T>(url, init),
       error: null,
       loading: false,
+      status: 200,
     }
   } catch (error) {
     return {
       data: null,
       error: error instanceof Error ? error.message : 'request failed',
       loading: false,
+      status: error instanceof HttpError ? error.status : null,
     }
   }
 }
@@ -950,6 +933,23 @@ async function loadGitBoundary(
   }
 }
 
+function parseCreateManifestInput(input: unknown): CreateManifestInput {
+  const data = input as Partial<CreateManifestInput> | null
+  const commitGraphHash =
+    typeof data?.commitGraphHash === 'string' ? data.commitGraphHash.trim() : ''
+
+  if (!commitGraphHash) {
+    throw new Error('No projected Git head is available for this session.')
+  }
+
+  return { commitGraphHash }
+}
+
+async function readRequestAuthToken() {
+  const { getCookie } = await import('@tanstack/react-start/server')
+  return getCookie(authCookieName)
+}
+
 function visibleProjectionPaths(projection: Projection) {
   const paths = projection.commits.flatMap((commit) =>
     commit.changes.map((change) => change.path),
@@ -962,10 +962,22 @@ async function loadJson<T>(url: string, init?: RequestInit): Promise<T> {
   const payload = await response.json().catch(() => null)
 
   if (!response.ok) {
-    throw new Error(payload?.error ?? `request failed: ${response.status}`)
+    throw new HttpError(
+      payload?.error ?? `request failed: ${response.status}`,
+      response.status,
+    )
   }
 
   return payload as T
+}
+
+class HttpError extends Error {
+  constructor(
+    message: string,
+    readonly status: number,
+  ) {
+    super(message)
+  }
 }
 
 function authHeaders(idToken?: string): HeadersInit {
@@ -1021,8 +1033,4 @@ function isLocalBrowserHost() {
 function isLoopbackHost(hostname: string) {
   const normalized = hostname.replace(/^\[|\]$/g, '')
   return ['localhost', '127.0.0.1', '::1'].includes(normalized)
-}
-
-function isAbortError(error: unknown) {
-  return error instanceof DOMException && error.name === 'AbortError'
 }

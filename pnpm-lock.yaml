@@ -13,9 +13,6 @@ importers:
       '@shoojs/auth':
         specifier: 0.2.2
         version: 0.2.2
-      '@shoojs/react':
-        specifier: 0.2.2
-        version: 0.2.2(react@19.2.7)
       '@tailwindcss/vite':
         specifier: ^4.3.1
         version: 4.3.1(vite@8.0.16(@types/node@22.19.21)(jiti@2.7.0))
@@ -1228,11 +1225,6 @@ packages:
 
   '@shoojs/auth@0.2.2':
     resolution: {integrity: sha512-9QRduq9jx8lplmMV5ZNnvZu3f4wrTSDKBcrFNPsj7iMW6W9dH0jjulKwo0vCSd8Tfpbq56vN1pyWnN6bCkWf9Q==}
-
-  '@shoojs/react@0.2.2':
-    resolution: {integrity: sha512-RUyjOi12B7CQaaXugPW7QY8Q2KyZqiTFAZV7EjYVYWcjvrO9Kg+TwDjr+Ym94P8mA/FpPRbHOd0uMROdQ5nlmw==}
-    peerDependencies:
-      react: '>=18'
 
   '@shoojs/types@0.2.2':
     resolution: {integrity: sha512-/3WxccmCRMy0HC03zvCCrQqUaAeDmArSCabQzveX2VHM0+S53tgDpp37z/YTHKuVsZN2rLggyuL11BjXD22WDg==}
@@ -4356,12 +4348,6 @@ snapshots:
   '@shoojs/auth@0.2.2':
     dependencies:
       '@shoojs/types': 0.2.2
-
-  '@shoojs/react@0.2.2(react@19.2.7)':
-    dependencies:
-      '@shoojs/auth': 0.2.2
-      '@shoojs/types': 0.2.2
-      react: 19.2.7
 
   '@shoojs/types@0.2.2': {}
 
