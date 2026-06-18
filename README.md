@@ -12,7 +12,7 @@ the canonical source of truth is a server-side source graph.
 - `crates/scope-projection` - canonical commits to per-principal projections.
 - `crates/scope-git` - projected Git object identity helpers.
 - `crates/scope-crypto` - signed push manifest primitives.
-- `crates/scope-store` - storage contracts, demo data, and colocated SQL schema.
+- `crates/scope-store` - app-domain storage contracts and colocated SQL schema.
 - `crates/scope-server` - Axum API and Git facade boundary.
 - `crates/scope-cli` - `sx` command-line prototype.
 - `crates/scope-worker` - background worker placeholder.

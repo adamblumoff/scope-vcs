@@ -240,19 +240,19 @@ mod tests {
         policy
             .add_rule(VisibilityRule::private(
                 ScopePath::parse("/internal").unwrap(),
-                ["team-core".to_string()],
+                ["user_collaborator".to_string()],
             ))
             .unwrap();
 
         let public = Principal::public();
-        let team = Principal {
-            id: "team-core".to_string(),
-            kind: PrincipalKind::Team,
+        let collaborator = Principal {
+            id: "user_collaborator".to_string(),
+            kind: PrincipalKind::User,
         };
         let path = ScopePath::parse("/internal/model.rs").unwrap();
 
         assert!(!policy.can_read(&public, &path));
-        assert!(policy.can_read(&team, &path));
+        assert!(policy.can_read(&collaborator, &path));
     }
 
     #[test]
@@ -261,7 +261,7 @@ mod tests {
         policy
             .add_rule(VisibilityRule::private(
                 ScopePath::parse("/internal").unwrap(),
-                ["team-core".to_string()],
+                ["user_collaborator".to_string()],
             ))
             .unwrap();
 

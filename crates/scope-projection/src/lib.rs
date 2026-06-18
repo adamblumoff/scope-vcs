@@ -144,7 +144,7 @@ mod tests {
         policy
             .add_rule(VisibilityRule::private(
                 ScopePath::parse("/internal").unwrap(),
-                ["owner".to_string(), "team-core".to_string()],
+                ["owner".to_string(), "user_collaborator".to_string()],
             ))
             .unwrap();
         policy
@@ -216,7 +216,7 @@ mod tests {
     }
 
     #[test]
-    fn authorized_team_sees_private_paths() {
+    fn authorized_collaborator_sees_private_paths() {
         let graph = SourceGraph {
             repo_id: "scope".to_string(),
             commits: vec![LogicalCommit {
@@ -234,11 +234,11 @@ mod tests {
             }],
         };
 
-        let team = Principal {
-            id: "team-core".to_string(),
-            kind: PrincipalKind::Team,
+        let collaborator = Principal {
+            id: "user_collaborator".to_string(),
+            kind: PrincipalKind::User,
         };
-        let projection = project_graph(&fixture_policy(), &graph, &team);
+        let projection = project_graph(&fixture_policy(), &graph, &collaborator);
 
         assert_eq!(projection.visible_paths(), vec!["/internal/model.rs"]);
     }
