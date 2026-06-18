@@ -1,0 +1,11 @@
+[package]
+name = "scope-projection"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+scope-policy.workspace = true
+serde.workspace = true
+

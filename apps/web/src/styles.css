@@ -1,0 +1,382 @@
+:root {
+  color-scheme: dark;
+  font-family:
+    Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI",
+    sans-serif;
+  background: #080b0e;
+  color: #edf7f7;
+  letter-spacing: 0;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  min-width: 320px;
+  background:
+    linear-gradient(135deg, rgba(44, 241, 214, 0.08), transparent 32rem),
+    radial-gradient(circle at 72% 8%, rgba(255, 255, 255, 0.08), transparent 22rem),
+    #080b0e;
+}
+
+button,
+a {
+  font: inherit;
+}
+
+.shell {
+  min-height: 100svh;
+}
+
+.hero {
+  min-height: 62svh;
+  display: grid;
+  grid-template-columns: minmax(0, 0.88fr) minmax(360px, 0.72fr);
+  gap: clamp(2rem, 5vw, 6rem);
+  align-items: center;
+  padding: clamp(1.25rem, 4vw, 4rem);
+  border-bottom: 1px solid rgba(237, 247, 247, 0.1);
+}
+
+.hero-copy {
+  max-width: 760px;
+  animation: rise 620ms ease-out both;
+}
+
+.eyebrow,
+.rail-label {
+  margin: 0 0 0.7rem;
+  color: #77f5df;
+  font-size: 0.76rem;
+  font-weight: 700;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+}
+
+h1,
+h2,
+p {
+  margin-top: 0;
+}
+
+h1 {
+  margin-bottom: 1rem;
+  font-size: clamp(4rem, 14vw, 11rem);
+  line-height: 0.82;
+  letter-spacing: 0;
+}
+
+h2 {
+  margin-bottom: 0;
+  font-size: clamp(1.5rem, 3vw, 2.5rem);
+}
+
+.lede {
+  max-width: 560px;
+  margin-bottom: 2rem;
+  color: #a9b8b8;
+  font-size: clamp(1.1rem, 2vw, 1.5rem);
+  line-height: 1.45;
+}
+
+.actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.75rem;
+}
+
+button {
+  display: inline-flex;
+  min-height: 44px;
+  align-items: center;
+  gap: 0.55rem;
+  border: 1px solid rgba(119, 245, 223, 0.55);
+  border-radius: 8px;
+  padding: 0.74rem 1rem;
+  background: #77f5df;
+  color: #06100f;
+  cursor: pointer;
+  transition:
+    transform 160ms ease,
+    background 160ms ease,
+    border-color 160ms ease;
+}
+
+button:hover {
+  transform: translateY(-1px);
+  background: #9dfbea;
+}
+
+button.secondary {
+  background: transparent;
+  color: #edf7f7;
+}
+
+.projection-plane {
+  min-height: 340px;
+  display: grid;
+  align-content: space-between;
+  border: 1px solid rgba(237, 247, 247, 0.14);
+  border-radius: 8px;
+  padding: clamp(1rem, 3vw, 1.6rem);
+  background:
+    linear-gradient(160deg, rgba(237, 247, 247, 0.08), transparent 52%),
+    rgba(12, 18, 21, 0.82);
+  box-shadow: 0 28px 80px rgba(0, 0, 0, 0.38);
+  animation: settle 760ms ease-out both;
+}
+
+.plane-header,
+.plane-footer,
+.graph-line,
+.section-heading,
+.path-row,
+.commit-row,
+.service-row {
+  display: flex;
+  align-items: center;
+}
+
+.plane-header,
+.section-heading {
+  justify-content: space-between;
+  gap: 1rem;
+}
+
+.plane-header {
+  color: #a9b8b8;
+  text-transform: uppercase;
+  font-size: 0.78rem;
+  font-weight: 700;
+  letter-spacing: 0.12em;
+}
+
+.graph-line {
+  min-height: 140px;
+  justify-content: space-between;
+  gap: 1rem;
+}
+
+.graph-line span {
+  display: grid;
+  width: clamp(4.3rem, 8vw, 6rem);
+  aspect-ratio: 1;
+  place-items: center;
+  border: 1px solid rgba(119, 245, 223, 0.54);
+  border-radius: 999px;
+  color: #77f5df;
+  font-weight: 800;
+}
+
+.graph-line span.muted {
+  border-color: rgba(237, 247, 247, 0.16);
+  color: #6f7e7d;
+}
+
+.plane-footer {
+  gap: 0.5rem;
+  color: #a9b8b8;
+  font-size: 0.92rem;
+}
+
+.workspace {
+  display: grid;
+  grid-template-columns: 240px minmax(0, 1fr);
+  gap: clamp(1rem, 3vw, 2rem);
+  padding: clamp(1rem, 4vw, 3rem);
+}
+
+.rail {
+  position: sticky;
+  top: 1rem;
+  height: max-content;
+  padding: 0.5rem 0;
+}
+
+.rail strong {
+  display: block;
+  margin-bottom: 2rem;
+  font-size: 1.3rem;
+}
+
+.rail nav {
+  display: grid;
+  gap: 0.35rem;
+}
+
+.rail a {
+  border-radius: 8px;
+  padding: 0.7rem 0.8rem;
+  color: #a9b8b8;
+  text-decoration: none;
+  transition:
+    background 160ms ease,
+    color 160ms ease;
+}
+
+.rail a:hover {
+  background: rgba(237, 247, 247, 0.07);
+  color: #edf7f7;
+}
+
+.surface {
+  display: grid;
+  gap: 1rem;
+}
+
+.band {
+  border-top: 1px solid rgba(237, 247, 247, 0.12);
+  padding: clamp(1.1rem, 3vw, 2rem) 0;
+}
+
+.badge {
+  border: 1px solid rgba(119, 245, 223, 0.3);
+  border-radius: 999px;
+  padding: 0.35rem 0.65rem;
+  color: #77f5df;
+  font-size: 0.8rem;
+}
+
+.path-list,
+.timeline,
+.service-grid {
+  display: grid;
+  gap: 0.45rem;
+  margin-top: 1.25rem;
+}
+
+.path-row,
+.commit-row,
+.service-row {
+  min-height: 54px;
+  gap: 1rem;
+  border-radius: 8px;
+  padding: 0.85rem 1rem;
+  background: rgba(237, 247, 247, 0.045);
+  transition:
+    background 160ms ease,
+    transform 160ms ease;
+}
+
+.path-row:hover,
+.commit-row:hover,
+.service-row:hover {
+  transform: translateX(2px);
+  background: rgba(237, 247, 247, 0.075);
+}
+
+.path-row {
+  grid-template-columns: auto minmax(190px, 1fr) 120px 110px;
+}
+
+.commit-row {
+  display: grid;
+  grid-template-columns: 90px minmax(180px, 1fr) 90px 90px;
+}
+
+.service-row {
+  display: grid;
+  grid-template-columns: auto 120px minmax(140px, 1fr) 100px;
+}
+
+code {
+  color: #edf7f7;
+  font-family: "SFMono-Regular", Consolas, "Liberation Mono", monospace;
+  font-size: 0.92rem;
+}
+
+em,
+.path-row span,
+.service-row span {
+  color: #a9b8b8;
+  font-style: normal;
+}
+
+.status-dot {
+  width: 0.7rem;
+  aspect-ratio: 1;
+  border-radius: 999px;
+}
+
+.status-dot.public {
+  background: #77f5df;
+}
+
+.status-dot.private {
+  background: #f0aa68;
+}
+
+@keyframes rise {
+  from {
+    opacity: 0;
+    transform: translateY(14px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@keyframes settle {
+  from {
+    opacity: 0;
+    transform: translateY(20px) scale(0.98);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+
+@media (max-width: 860px) {
+  .hero,
+  .workspace {
+    grid-template-columns: 1fr;
+  }
+
+  .hero {
+    min-height: auto;
+  }
+
+  .projection-plane {
+    min-height: 260px;
+  }
+
+  .rail {
+    position: static;
+  }
+
+  .rail strong {
+    margin-bottom: 1rem;
+  }
+
+  .rail nav {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+
+  .path-row,
+  .commit-row,
+  .service-row {
+    grid-template-columns: 1fr;
+    align-items: start;
+  }
+}
+
+@media (max-width: 520px) {
+  .actions,
+  .section-heading {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .rail nav {
+    grid-template-columns: 1fr;
+  }
+
+  .graph-line {
+    min-height: 110px;
+  }
+}
+
