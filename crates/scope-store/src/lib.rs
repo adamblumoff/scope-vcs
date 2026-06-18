@@ -120,8 +120,8 @@ impl AppCatalog {
         }
 
         UserAccount {
-            id: format!("public:{}", email.email),
-            email: email.email.clone(),
+            id: "public".to_string(),
+            email: String::new(),
             email_verified: email.verified,
             access: AccountAccess::Public,
         }
