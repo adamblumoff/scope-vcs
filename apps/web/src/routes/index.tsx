@@ -1,20 +1,44 @@
+import {
+  Alert,
+  AlertDescription,
+  AlertTitle,
+} from '@/components/ui/alert'
+import { Badge } from '@/components/ui/badge'
+import { Button } from '@/components/ui/button'
+import {
+  Card,
+  CardAction,
+  CardContent,
+  CardDescription,
+  CardHeader,
+  CardTitle,
+} from '@/components/ui/card'
+import { Progress } from '@/components/ui/progress'
+import { Skeleton } from '@/components/ui/skeleton'
+import {
+  Table,
+  TableBody,
+  TableCell,
+  TableHead,
+  TableHeader,
+  TableRow,
+} from '@/components/ui/table'
+import { Tabs, TabsList, TabsTrigger } from '@/components/ui/tabs'
+import { cn } from '@/lib/utils'
 import { createFileRoute } from '@tanstack/react-router'
+import type { ErrorComponentProps } from '@tanstack/react-router'
 import {
   AlertCircle,
   CheckCircle2,
-  GitBranch,
   KeyRound,
+  Layers3,
   Lock,
   RefreshCw,
   Server,
   ShieldCheck,
   Upload,
 } from 'lucide-react'
-import { useEffect, useState } from 'react'
-
-export const Route = createFileRoute('/')({
-  component: ScopeDashboard,
-})
+import { useEffect, useMemo, useState } from 'react'
 
 type PrincipalId = 'public' | 'team-core' | 'owner'
 
@@ -75,171 +99,118 @@ type LoadState<T> = {
   loading: boolean
 }
 
+type GitBoundaryState = {
+  state: 'explicit' | 'unexpected' | 'error'
+  detail: string
+}
+
+type DashboardData = {
+  baseUrl: string
+  gitBoundary: GitBoundaryState
+  gitProjection: LoadState<GitProjection>
+  health: LoadState<HealthResponse>
+  projection: LoadState<Projection>
+}
+
 const repoId = 'scope-demo'
 const deployedApiBase = 'https://scope-api-production-0251.up.railway.app'
 
-const principals: Array<{
-  id: PrincipalId
-  label: string
-  detail: string
-}> = [
+const principals = [
   {
     id: 'public',
     label: 'Public',
-    detail: 'No private names, bytes, authors, counts, or cadence.',
+    description: 'A shareable clone surface with private details removed.',
   },
   {
     id: 'team-core',
     label: 'Team Core',
-    detail: 'Authorized for the internal boundary.',
+    description: 'An internal view for authorized contributors.',
   },
   {
     id: 'owner',
     label: 'Owner',
-    detail: 'Full canonical view and write authority.',
+    description: 'The full audit view for policy and projection checks.',
   },
-]
+] satisfies Array<{
+  id: PrincipalId
+  label: string
+  description: string
+}>
 
-const ownerPolicyRows = [
+const principalById = Object.fromEntries(
+  principals.map((principal) => [principal.id, principal]),
+) as Record<PrincipalId, (typeof principals)[number]>
+
+const principalCopy: Record<
+  PrincipalId,
   {
-    path: '/',
-    visibility: 'public',
-    access: 'default',
-    note: 'Public objects are readable, not automatically writable.',
+    headline: string
+    body: string
+    proof: string
+    manifestHint: string
+  }
+> = {
+  public: {
+    headline: 'Public Clone',
+    body: 'Useful repository content without private names, bytes, authors, counts, or cadence.',
+    proof: 'Private work is collapsed into a synthetic public commit.',
+    manifestHint: 'Public writes should be rejected by policy.',
   },
-  {
-    path: '/internal',
-    visibility: 'private',
-    access: 'owner, team-core',
-    note: 'Top-down boundary; no public islands in v1.',
+  'team-core': {
+    headline: 'Team Workspace',
+    body: 'Internal implementation files appear only for principals that are allowed to receive them.',
+    proof: 'The projected object set expands after the principal changes.',
+    manifestHint: 'Authorized writes should produce a signed manifest.',
   },
-]
+  owner: {
+    headline: 'Owner Audit',
+    body: 'The canonical view for checking policy, object output, and write authorization.',
+    proof: 'All demo policy outcomes are inspectable from this view.',
+    manifestHint: 'Owner writes should produce a signed manifest.',
+  },
+}
+
+export const Route = createFileRoute('/')({
+  validateSearch: (search: Record<string, unknown>) => ({
+    principal: parsePrincipal(search.principal),
+  }),
+  loaderDeps: ({ search }) => ({ principal: search.principal }),
+  loader: ({ deps }) => loadDashboard(deps.principal),
+  pendingComponent: DashboardPending,
+  errorComponent: DashboardError,
+  component: ScopeDashboard,
+})
 
 function ScopeDashboard() {
-  const [principal, setPrincipal] = useState<PrincipalId>('public')
-  const [projection, setProjection] = useState<LoadState<Projection>>({
-    data: null,
-    error: null,
-    loading: true,
-  })
-  const [gitProjection, setGitProjection] = useState<LoadState<GitProjection>>({
-    data: null,
-    error: null,
-    loading: true,
-  })
-  const [health, setHealth] = useState<LoadState<HealthResponse>>({
-    data: null,
-    error: null,
-    loading: true,
-  })
+  const { principal } = Route.useSearch()
+  const navigate = Route.useNavigate()
+  const dashboard = Route.useLoaderData()
   const [manifest, setManifest] = useState<LoadState<ManifestResponse>>({
     data: null,
     error: null,
     loading: false,
   })
-  const [gitBoundary, setGitBoundary] = useState<{
-    state: 'checking' | 'explicit' | 'unexpected' | 'error'
-    detail: string
-  }>({
-    state: 'checking',
-    detail: 'checking smart HTTP boundary',
-  })
-
-  const [baseUrl, setBaseUrl] = useState(deployedApiBase)
 
   useEffect(() => {
-    setBaseUrl(getStaticApiBase())
-  }, [])
-
-  useEffect(() => {
-    const controller = new AbortController()
-    setProjection({ data: null, error: null, loading: true })
-    setGitProjection({ data: null, error: null, loading: true })
     setManifest({ data: null, error: null, loading: false })
+  }, [principal])
 
-    Promise.all([
-      loadJson<Projection>(
-        `${baseUrl}/v1/repos/${repoId}/projections/${principal}`,
-        controller.signal,
-      ),
-      loadJson<GitProjection>(
-        `${baseUrl}/v1/repos/${repoId}/git-projections/${principal}`,
-        controller.signal,
-      ),
-    ])
-      .then(([projectionData, gitData]) => {
-        setProjection({ data: projectionData, error: null, loading: false })
-        setGitProjection({ data: gitData, error: null, loading: false })
-      })
-      .catch((error: unknown) => {
-        if (controller.signal.aborted) {
-          return
-        }
-        const message = error instanceof Error ? error.message : 'request failed'
-        setProjection({ data: null, error: message, loading: false })
-        setGitProjection({ data: null, error: message, loading: false })
-      })
+  const copy = principalCopy[principal]
+  const selectedPrincipal = principalById[principal]
+  const visiblePaths = useMemo(
+    () =>
+      dashboard.projection.data
+        ? visibleProjectionPaths(dashboard.projection.data)
+        : [],
+    [dashboard.projection.data],
+  )
+  const apiOnline = Boolean(dashboard.health.data && !dashboard.health.error)
 
-    return () => controller.abort()
-  }, [baseUrl, principal])
-
-  useEffect(() => {
-    const controller = new AbortController()
-
-    loadJson<HealthResponse>(`${baseUrl}/healthz`, controller.signal)
-      .then((data) => setHealth({ data, error: null, loading: false }))
-      .catch((error: unknown) => {
-        if (controller.signal.aborted) {
-          return
-        }
-        setHealth({
-          data: null,
-          error: error instanceof Error ? error.message : 'health check failed',
-          loading: false,
-        })
-      })
-
-    fetch(
-      `${baseUrl}/git/acme/${repoId}/info/refs?service=git-upload-pack`,
-      { signal: controller.signal },
-    )
-      .then(async (response) => {
-        const body = await response.json().catch(() => null)
-        if (response.status === 501) {
-          setGitBoundary({
-            state: 'explicit',
-            detail:
-              body?.next ??
-              'Git clone is blocked until real packfile serving exists.',
-          })
-          return
-        }
-        setGitBoundary({
-          state: 'unexpected',
-          detail: `unexpected status ${response.status}`,
-        })
-      })
-      .catch((error: unknown) => {
-        if (controller.signal.aborted) {
-          return
-        }
-        setGitBoundary({
-          state: 'error',
-          detail:
-            error instanceof Error
-              ? error.message
-              : 'git boundary check failed',
-        })
-      })
-
-    return () => controller.abort()
-  }, [baseUrl])
-
-  const visiblePaths = projection.data
-    ? visibleProjectionPaths(projection.data)
-    : []
-  const selectedPrincipal = principals.find((item) => item.id === principal)
-  const omittedCount = principal === 'public' ? 1 : 0
+  function selectPrincipal(nextPrincipal: string) {
+    void navigate({
+      search: { principal: parsePrincipal(nextPrincipal) },
+    })
+  }
 
   async function createManifest() {
     setManifest({ data: null, error: null, loading: true })
@@ -247,20 +218,17 @@ function ScopeDashboard() {
       principal === 'team-core' ? ['/internal/model.rs'] : ['/README.md']
 
     try {
-      const response = await fetch(
-        `${baseUrl}/v1/repos/${repoId}/push-manifests`,
-        {
-          method: 'POST',
-          headers: { 'content-type': 'application/json' },
-          body: JSON.stringify({
-            principal_id: principal,
-            device_id: 'web-demo',
-            commit_graph_hash: `${principal}-demo-graph`,
-            changed_paths,
-            mixed_policy: 'SyntheticPublicCommit',
-          }),
-        },
-      )
+      const response = await fetch(`${dashboard.baseUrl}/v1/repos/${repoId}/push-manifests`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({
+          principal_id: principal,
+          device_id: 'web-demo',
+          commit_graph_hash: `${principal}-demo-graph`,
+          changed_paths,
+          mixed_policy: 'SyntheticPublicCommit',
+        }),
+      })
       const payload = await response.json().catch(() => null)
 
       if (!response.ok) {
@@ -282,320 +250,384 @@ function ScopeDashboard() {
   }
 
   return (
-    <main className="shell">
-      <section className="console" aria-labelledby="scope-title">
-        <div className="topbar">
-          <div>
-            <p className="eyebrow">scope-vcs</p>
-            <h1 id="scope-title">Scope</h1>
-          </div>
-          <ServiceStrip health={health} gitBoundary={gitBoundary} />
-        </div>
-
-        <div className="workspace-grid">
-          <aside className="principal-rail" aria-label="Projection principals">
-            <div className="repo-block">
-              <span>repo</span>
-              <strong>{repoId}</strong>
-              <small suppressHydrationWarning>
-                {baseUrl.replace(/^https?:\/\//, '')}
-              </small>
+    <main className="min-h-screen bg-background text-foreground">
+      <header className="border-b border-border bg-card">
+        <div className="mx-auto flex h-16 max-w-[1200px] items-center justify-between px-4 sm:px-6">
+          <div className="flex min-w-0 items-center gap-3">
+            <div className="flex size-8 items-center justify-center rounded-md border border-border bg-card shadow-[0_2px_2px_rgba(0,0,0,0.04)]">
+              <Layers3 className="size-4" />
             </div>
-
-            <div className="principal-list" role="tablist">
-              {principals.map((item) => (
-                <button
-                  aria-selected={principal === item.id}
-                  className="principal-button"
-                  key={item.id}
-                  onClick={() => setPrincipal(item.id)}
-                  role="tab"
-                  type="button"
-                >
-                  <span>{item.label}</span>
-                  <small>{item.detail}</small>
-                </button>
-              ))}
-            </div>
-
-            <div className="boundary-note">
-              <Lock size={16} />
-              <span>
-                Projection views never disclose private paths outside the
-                selected principal&apos;s scope.
-              </span>
-            </div>
-          </aside>
-
-          <section className="projection-stage" aria-live="polite">
-            <div className="stage-heading">
-              <div>
-                <p className="eyebrow">selected projection</p>
-                <h2>{selectedPrincipal?.label}</h2>
+            <div className="min-w-0">
+              <div className="truncate text-sm font-semibold leading-5">Scope</div>
+              <div className="truncate text-xs leading-4 text-muted-foreground">
+                {repoId}
               </div>
-              <StatusBadge
-                state={projection.loading ? 'loading' : projection.error ? 'bad' : 'good'}
-                text={
-                  projection.loading
-                    ? 'loading'
-                    : projection.error
-                      ? 'unavailable'
-                      : `${projection.data?.commits.length ?? 0} commits`
-                }
-              />
             </div>
-
-            <div className="projection-summary">
-              <Metric
-                label="visible paths"
-                value={projection.loading ? '...' : visiblePaths.length}
-              />
-              <Metric
-                label="virtual blobs"
-                value={
-                  gitProjection.loading
-                    ? '...'
-                    : gitProjection.data?.blobs.length ?? 0
-                }
-              />
-              <Metric
-                label="synthetic commits"
-                value={
-                  projection.loading
-                    ? '...'
-                    : projection.data?.commits.filter((commit) => commit.synthetic)
-                        .length ?? 0
-                }
-              />
-              <Metric label="omitted for public" value={omittedCount} />
-            </div>
-
-            {projection.error ? (
-              <Notice tone="bad" text={projection.error} />
-            ) : (
-              <CommitTimeline loading={projection.loading} projection={projection.data} />
-            )}
-          </section>
-        </div>
-      </section>
-
-      <section className="details-grid" aria-label="Scope control plane">
-        <section className="detail-band">
-          <div className="section-heading">
-            <div>
-              <p className="eyebrow">projection output</p>
-              <h2>Visible Object Set</h2>
-            </div>
-            <GitBranch size={20} />
           </div>
+
+          <div className="flex items-center gap-2">
+            <ServiceBadge label="Web" ready />
+            <ServiceBadge label="API" ready={apiOnline} />
+            <ServiceBadge
+              label="Git"
+              ready={dashboard.gitBoundary.state === 'explicit'}
+            />
+          </div>
+        </div>
+      </header>
+
+      <section className="mx-auto max-w-[1200px] px-4 py-8 sm:px-6 lg:py-10">
+        <div className="mb-8 flex flex-col gap-4 md:flex-row md:items-end md:justify-between">
+          <div className="max-w-2xl">
+            <div className="mb-2 flex items-center gap-2 text-xs leading-4 text-muted-foreground">
+              <Server className="size-3.5" />
+              <span>{dashboard.baseUrl.replace(/^https?:\/\//, '')}</span>
+            </div>
+            <h1 className="text-[32px] font-semibold leading-10 tracking-[-1.28px]">
+              Projection Dashboard
+            </h1>
+            <p className="mt-2 max-w-xl text-sm leading-5 text-muted-foreground">
+              See how one repository becomes different Git-safe views depending
+              on who is asking.
+            </p>
+          </div>
+
+          <Tabs
+            className="w-full md:w-auto"
+            onValueChange={selectPrincipal}
+            value={principal}
+          >
+            <TabsList className="grid h-10 w-full grid-cols-3 md:w-[360px]">
+              {principals.map((item) => (
+                <TabsTrigger key={item.id} value={item.id}>
+                  {item.label}
+                </TabsTrigger>
+              ))}
+            </TabsList>
+          </Tabs>
+        </div>
+
+        <div className="grid gap-4 lg:grid-cols-[1.45fr_0.85fr]">
+          <Card className="shadow-[0_2px_2px_rgba(0,0,0,0.04)]">
+            <CardHeader className="border-b border-border pb-6">
+              <div>
+                <Badge className="mb-3" variant="outline">
+                  {selectedPrincipal.label}
+                </Badge>
+                <CardTitle className="text-2xl font-semibold leading-8 tracking-[-0.96px]">
+                  {copy.headline}
+                </CardTitle>
+                <CardDescription className="mt-2 max-w-2xl leading-5">
+                  {copy.body}
+                </CardDescription>
+              </div>
+              <CardAction>
+                <StatusBadge
+                  ready={!dashboard.projection.error}
+                  text={dashboard.projection.error ? 'Unavailable' : 'Ready'}
+                />
+              </CardAction>
+            </CardHeader>
+
+            <CardContent className="space-y-6">
+              {dashboard.projection.error ? (
+                <Alert variant="destructive">
+                  <AlertCircle className="size-4" />
+                  <AlertTitle>Projection Unavailable</AlertTitle>
+                  <AlertDescription>{dashboard.projection.error}</AlertDescription>
+                </Alert>
+              ) : (
+                <Alert className="border-green-400 bg-green-100 text-green-1000">
+                  <ShieldCheck className="size-4 text-green-900" />
+                  <AlertTitle>{copy.proof}</AlertTitle>
+                  <AlertDescription className="text-green-900">
+                    The route loader read the live projection API for this
+                    principal.
+                  </AlertDescription>
+                </Alert>
+              )}
+
+              <div className="grid grid-cols-3 divide-x divide-border overflow-hidden rounded-md border border-border">
+                <Metric label="Visible Paths" value={visiblePaths.length} />
+                <Metric
+                  label="Visible Commits"
+                  value={dashboard.projection.data?.commits.length ?? 0}
+                />
+                <Metric
+                  label="Virtual Blobs"
+                  value={dashboard.gitProjection.data?.blobs.length ?? 0}
+                />
+              </div>
+            </CardContent>
+          </Card>
+
+          <div className="space-y-4">
+            <WriteReadiness
+              createManifest={createManifest}
+              manifest={manifest}
+              manifestHint={copy.manifestHint}
+              principal={principal}
+            />
+            <Guardrails
+              gitBoundary={dashboard.gitBoundary}
+              principal={principal}
+            />
+          </div>
+        </div>
+
+        <div className="mt-4 grid gap-4 lg:grid-cols-[1.1fr_0.9fr]">
           <ObjectSet
-            gitProjection={gitProjection}
-            principal={principal}
+            gitProjection={dashboard.gitProjection}
             visiblePaths={visiblePaths}
           />
-        </section>
-
-        <section className="detail-band">
-          <div className="section-heading">
-            <div>
-              <p className="eyebrow">admin-only</p>
-              <h2>Policy Boundary</h2>
-            </div>
-            <ShieldCheck size={20} />
-          </div>
-          <div className="policy-table">
-            {ownerPolicyRows.map((row) => (
-              <div className="policy-row" key={row.path}>
-                <code>{row.path}</code>
-                <strong data-visibility={row.visibility}>{row.visibility}</strong>
-                <span>{row.access}</span>
-                <small>{row.note}</small>
-              </div>
-            ))}
-          </div>
-        </section>
-
-        <section className="detail-band">
-          <div className="section-heading">
-            <div>
-              <p className="eyebrow">write path</p>
-              <h2>Push Manifest</h2>
-            </div>
-            <KeyRound size={20} />
-          </div>
-          <div className="manifest-panel">
-            <button
-              className="manifest-button"
-              disabled={manifest.loading}
-              onClick={createManifest}
-              type="button"
-            >
-              {manifest.loading ? <RefreshCw size={18} /> : <Upload size={18} />}
-              Create demo manifest
-            </button>
-            <ManifestResult manifest={manifest} principal={principal} />
-          </div>
-        </section>
-
-        <section className="detail-band">
-          <div className="section-heading">
-            <div>
-              <p className="eyebrow">compatibility</p>
-              <h2>Git Boundary</h2>
-            </div>
-            <Server size={20} />
-          </div>
-          <div className="git-boundary">
-            <StatusBadge
-              state={gitBoundary.state === 'explicit' ? 'good' : 'bad'}
-              text={
-                gitBoundary.state === 'explicit'
-                  ? 'honest 501'
-                  : gitBoundary.state
-              }
-            />
-            <p>{gitBoundary.detail}</p>
-          </div>
-        </section>
+          <CommitHistory projection={dashboard.projection.data} />
+        </div>
       </section>
     </main>
   )
 }
 
-function ServiceStrip({
-  health,
-  gitBoundary,
-}: {
-  health: LoadState<HealthResponse>
-  gitBoundary: { state: 'checking' | 'explicit' | 'unexpected' | 'error' }
-}) {
-  const apiGood = Boolean(health.data && !health.error)
-  const services = [
-    {
-      name: 'scope-web',
-      detail: 'page loaded',
-      state: 'online',
-      good: true,
-    },
-    {
-      name: 'scope-api',
-      detail: health.loading
-        ? 'checking'
-        : health.data?.service ?? health.error ?? 'offline',
-      state: apiGood ? 'online' : health.loading ? 'checking' : 'offline',
-      good: apiGood,
-    },
-    {
-      name: 'git facade',
-      detail: 'clone blocked until packs exist',
-      state: gitBoundary.state === 'explicit' ? 'guarded' : 'check',
-      good: gitBoundary.state === 'explicit',
-    },
-    {
-      name: 'postgres / bucket',
-      detail: 'Railway infrastructure',
-      state: 'private',
-      good: true,
-    },
-  ]
-
+function DashboardPending() {
   return (
-    <div className="service-strip" aria-label="Service status">
-      {services.map((service) => (
-        <div className="service-pill" data-good={service.good} key={service.name}>
-          {service.good ? <CheckCircle2 size={16} /> : <AlertCircle size={16} />}
-          <span>{service.name}</span>
-          <small>{service.state}</small>
+    <main className="min-h-screen bg-background text-foreground">
+      <header className="border-b border-border bg-card">
+        <div className="mx-auto flex h-16 max-w-[1200px] items-center justify-between px-4 sm:px-6">
+          <div className="flex items-center gap-3">
+            <Skeleton className="size-8 rounded-md" />
+            <div className="space-y-1.5">
+              <Skeleton className="h-4 w-16" />
+              <Skeleton className="h-3 w-24" />
+            </div>
+          </div>
+          <div className="flex gap-2">
+            <Skeleton className="h-5 w-12 rounded-full" />
+            <Skeleton className="h-5 w-12 rounded-full" />
+            <Skeleton className="h-5 w-12 rounded-full" />
+          </div>
         </div>
-      ))}
-    </div>
+      </header>
+      <section className="mx-auto max-w-[1200px] px-4 py-8 sm:px-6 lg:py-10">
+        <Skeleton className="h-[720px] w-full rounded-md" />
+      </section>
+    </main>
   )
 }
 
-function CommitTimeline({
-  loading,
-  projection,
-}: {
-  loading: boolean
-  projection: Projection | null
-}) {
-  if (loading) {
-    return (
-      <div className="timeline">
-        {['one', 'two', 'three'].map((item) => (
-          <div className="commit-row skeleton" key={item} />
-        ))}
-      </div>
-    )
-  }
-
-  if (!projection || projection.commits.length === 0) {
-    return <Notice tone="neutral" text="No commits are visible to this principal." />
-  }
+function DashboardError({ error }: ErrorComponentProps) {
+  const message = error instanceof Error ? error.message : 'Unexpected route error'
 
   return (
-    <div className="timeline">
-      {projection.commits.map((commit) => (
-        <div className="commit-row" data-synthetic={commit.synthetic} key={commit.projected_id}>
-          <span>{commit.logical_commit_id}</span>
-          <strong>{commit.message}</strong>
-          <em>{commit.synthetic ? 'synthetic' : 'canonical'}</em>
-          <code>{commit.projected_id}</code>
-          <small>
-            {commit.author ?? 'author hidden'} · {commit.changes.length} visible change
-            {commit.changes.length === 1 ? '' : 's'}
-          </small>
+    <main className="min-h-screen bg-background px-4 py-8 text-foreground sm:px-6">
+      <div className="mx-auto max-w-[720px]">
+        <Alert variant="destructive">
+          <AlertCircle className="size-4" />
+          <AlertTitle>Dashboard Failed</AlertTitle>
+          <AlertDescription>
+            {message}. Reload the page or switch principals and try again.
+          </AlertDescription>
+        </Alert>
+      </div>
+    </main>
+  )
+}
+
+function Guardrails({
+  gitBoundary,
+  principal,
+}: {
+  gitBoundary: GitBoundaryState
+  principal: PrincipalId
+}) {
+  const gitReady = gitBoundary.state === 'explicit'
+
+  return (
+    <Card>
+      <CardHeader>
+        <CardTitle className="flex items-center gap-2">
+          <Lock className="size-4 text-muted-foreground" />
+          Guardrails
+        </CardTitle>
+        <CardDescription>
+          Policy checks run before a projected object is emitted.
+        </CardDescription>
+      </CardHeader>
+      <CardContent className="space-y-4">
+        <div className="space-y-3">
+          <GuardrailRow
+            ok
+            text={
+              principal === 'public'
+                ? 'Public output omits private structure.'
+                : 'Output is scoped to this principal.'
+            }
+          />
+          <GuardrailRow ok text="ACLs are checked before object projection." />
+          <GuardrailRow
+            ok={gitReady}
+            text={
+              gitReady
+                ? 'Git clone returns an explicit 501 until packfiles exist.'
+                : gitBoundary.detail
+            }
+          />
         </div>
-      ))}
-    </div>
+        <Progress
+          className="[&_[data-slot=progress-indicator]]:bg-blue-700"
+          value={gitReady ? 100 : 55}
+        />
+      </CardContent>
+    </Card>
+  )
+}
+
+function WriteReadiness({
+  createManifest,
+  manifest,
+  manifestHint,
+  principal,
+}: {
+  createManifest: () => void
+  manifest: LoadState<ManifestResponse>
+  manifestHint: string
+  principal: PrincipalId
+}) {
+  return (
+    <Card>
+      <CardHeader>
+        <CardTitle className="flex items-center gap-2">
+          <KeyRound className="size-4 text-muted-foreground" />
+          Write Readiness
+        </CardTitle>
+        <CardDescription>{manifestHint}</CardDescription>
+      </CardHeader>
+      <CardContent className="space-y-4">
+        <Button
+          className="w-full"
+          disabled={manifest.loading}
+          onClick={createManifest}
+          variant="secondary"
+        >
+          {manifest.loading ? (
+            <RefreshCw className="size-4 animate-spin" />
+          ) : (
+            <Upload className="size-4" />
+          )}
+          {manifest.loading ? 'Creating...' : 'Create Demo Manifest'}
+        </Button>
+        <ManifestResult manifest={manifest} principal={principal} />
+      </CardContent>
+    </Card>
   )
 }
 
 function ObjectSet({
   gitProjection,
-  principal,
   visiblePaths,
 }: {
   gitProjection: LoadState<GitProjection>
-  principal: PrincipalId
   visiblePaths: string[]
 }) {
-  if (gitProjection.error) {
-    return <Notice tone="bad" text={gitProjection.error} />
-  }
-
   const blobs = gitProjection.data?.blobs ?? []
 
   return (
-    <div className="object-set">
-      <div className="path-column">
-        <span>visible paths</span>
-        {visiblePaths.length === 0 && !gitProjection.loading ? (
-          <p>No paths visible.</p>
+    <Card>
+      <CardHeader>
+        <div>
+          <CardTitle>Virtual Git Object Set</CardTitle>
+          <CardDescription>
+            The blobs this principal can receive.
+          </CardDescription>
+        </div>
+        <CardAction>
+          <Badge variant="outline">{visiblePaths.length} paths</Badge>
+        </CardAction>
+      </CardHeader>
+      <CardContent>
+        {gitProjection.error ? (
+          <Alert variant="destructive">
+            <AlertCircle className="size-4" />
+            <AlertTitle>Objects Unavailable</AlertTitle>
+            <AlertDescription>{gitProjection.error}</AlertDescription>
+          </Alert>
+        ) : blobs.length > 0 ? (
+          <div className="overflow-hidden rounded-md border border-border">
+            <Table>
+              <TableHeader>
+                <TableRow>
+                  <TableHead>Path</TableHead>
+                  <TableHead className="w-36">Virtual OID</TableHead>
+                </TableRow>
+              </TableHeader>
+              <TableBody>
+                {blobs.map((blob) => (
+                  <TableRow key={`${blob.path}-${blob.oid}`}>
+                    <TableCell className="max-w-[260px] truncate font-mono text-xs">
+                      {blob.path}
+                    </TableCell>
+                    <TableCell className="font-mono text-xs text-muted-foreground">
+                      {blob.oid.slice(0, 12)}
+                    </TableCell>
+                  </TableRow>
+                ))}
+              </TableBody>
+            </Table>
+          </div>
         ) : (
-          visiblePaths.map((path) => <code key={path}>{path}</code>)
+          <p className="text-sm text-muted-foreground">
+            No virtual blobs are visible to this principal.
+          </p>
         )}
-      </div>
-      <div className="blob-column">
-        <span>virtual Git blobs</span>
-        {gitProjection.loading ? (
-          <p>Loading object set...</p>
+      </CardContent>
+    </Card>
+  )
+}
+
+function CommitHistory({ projection }: { projection: Projection | null }) {
+  const commits = projection?.commits.slice().reverse() ?? []
+
+  return (
+    <Card>
+      <CardHeader>
+        <div>
+          <CardTitle>Visible History</CardTitle>
+          <CardDescription>Recent commits in the selected view.</CardDescription>
+        </div>
+        <CardAction>
+          <Badge variant="outline">{projection?.commits.length ?? 0} commits</Badge>
+        </CardAction>
+      </CardHeader>
+      <CardContent>
+        {commits.length > 0 ? (
+          <div className="space-y-3">
+            {commits.map((commit) => (
+              <div
+                className="rounded-md border border-border bg-card p-3"
+                key={commit.projected_id}
+              >
+                <div className="mb-2 flex items-center justify-between gap-3">
+                  <span className="min-w-0 truncate text-sm font-semibold leading-5">
+                    {commit.message}
+                  </span>
+                  <Badge variant={commit.synthetic ? 'secondary' : 'outline'}>
+                    {commit.synthetic ? 'Synthetic' : 'Canonical'}
+                  </Badge>
+                </div>
+                <div className="flex items-center justify-between gap-3 text-xs leading-4 text-muted-foreground">
+                  <span className="truncate">
+                    {commit.author ?? 'author hidden'}
+                  </span>
+                  <span>{commit.changes.length} changes</span>
+                </div>
+              </div>
+            ))}
+          </div>
         ) : (
-          blobs.map((blob) => (
-            <div className="blob-row" key={`${blob.path}-${blob.oid}`}>
-              <code>{blob.oid.slice(0, 12)}</code>
-              <span>{blob.path}</span>
-            </div>
-          ))
+          <p className="text-sm text-muted-foreground">
+            No commits are visible to this principal.
+          </p>
         )}
-      </div>
-      {principal === 'public' ? (
-        <Notice
-          tone="good"
-          text="The public object set contains no private path names or private bytes."
-        />
-      ) : null}
-    </div>
+      </CardContent>
+    </Card>
   )
 }
 
@@ -608,18 +640,20 @@ function ManifestResult({
 }) {
   if (manifest.error) {
     return (
-      <Notice
-        tone="bad"
-        text={`${principal} request rejected: ${manifest.error}`}
-      />
+      <Alert variant="destructive">
+        <AlertCircle className="size-4" />
+        <AlertTitle>Manifest Rejected</AlertTitle>
+        <AlertDescription>
+          {principal}: {manifest.error}
+        </AlertDescription>
+      </Alert>
     )
   }
 
   if (!manifest.data) {
     return (
-      <p className="manifest-empty">
-        Public principals should be rejected for writes. Authorized principals
-        receive a signed manifest before push.
+      <p className="text-sm leading-5 text-muted-foreground">
+        Run a demo request to confirm the selected principal&apos;s write policy.
       </p>
     )
   }
@@ -627,45 +661,147 @@ function ManifestResult({
   const signed = manifest.data.signed_manifest
 
   return (
-    <div className="manifest-result">
-      <span>signed manifest</span>
-      <code>{signed.manifest.id}</code>
-      <small>{signed.signature_hex.slice(0, 24)}...</small>
+    <Alert className="border-green-400 bg-green-100 text-green-1000">
+      <CheckCircle2 className="size-4 text-green-900" />
+      <AlertTitle>Signed Manifest Created</AlertTitle>
+      <AlertDescription className="space-y-1 text-green-900">
+        <div className="truncate font-mono text-xs">{signed.manifest.id}</div>
+        <div className="truncate font-mono text-xs">
+          {signed.signature_hex.slice(0, 32)}...
+        </div>
+      </AlertDescription>
+    </Alert>
+  )
+}
+
+function Metric({ label, value }: { label: string; value: number }) {
+  return (
+    <div className="p-3">
+      <div className="text-xs leading-4 text-muted-foreground">{label}</div>
+      <div className="mt-1 text-xl font-semibold leading-8 tracking-[-0.4px]">
+        {value}
+      </div>
     </div>
   )
 }
 
-function Metric({ label, value }: { label: string; value: number | string }) {
+function ServiceBadge({ label, ready }: { label: string; ready: boolean }) {
   return (
-    <div className="metric">
-      <strong>{value}</strong>
-      <span>{label}</span>
-    </div>
+    <Badge
+      className={cn(
+        'gap-1.5',
+        ready
+          ? 'border-green-400 bg-green-100 text-green-900'
+          : 'border-red-400 bg-red-100 text-red-900',
+      )}
+      variant="outline"
+    >
+      {ready ? (
+        <CheckCircle2 className="size-3" />
+      ) : (
+        <AlertCircle className="size-3" />
+      )}
+      {label}
+    </Badge>
   )
 }
 
-function StatusBadge({
-  state,
-  text,
-}: {
-  state: 'good' | 'bad' | 'loading'
-  text: string
-}) {
+function StatusBadge({ ready, text }: { ready: boolean; text: string }) {
   return (
-    <span className="status-badge" data-state={state}>
-      {state === 'good' ? <CheckCircle2 size={15} /> : <AlertCircle size={15} />}
+    <Badge
+      className={cn(
+        ready
+          ? 'border-green-400 bg-green-100 text-green-900'
+          : 'border-red-400 bg-red-100 text-red-900',
+      )}
+      variant="outline"
+    >
       {text}
-    </span>
+    </Badge>
   )
 }
 
-function Notice({ tone, text }: { tone: 'good' | 'bad' | 'neutral'; text: string }) {
+function GuardrailRow({ ok, text }: { ok: boolean; text: string }) {
   return (
-    <div className="notice" data-tone={tone}>
-      {tone === 'bad' ? <AlertCircle size={17} /> : <CheckCircle2 size={17} />}
-      <span>{text}</span>
+    <div className="flex items-start gap-3 text-sm leading-5">
+      {ok ? (
+        <CheckCircle2 className="mt-0.5 size-4 shrink-0 text-green-900" />
+      ) : (
+        <AlertCircle className="mt-0.5 size-4 shrink-0 text-amber-900" />
+      )}
+      <span className="text-muted-foreground">{text}</span>
     </div>
   )
+}
+
+async function loadDashboard(principal: PrincipalId): Promise<DashboardData> {
+  const baseUrl = getStaticApiBase()
+  const [projection, gitProjection, health, gitBoundary] = await Promise.all([
+    safeLoadJson<Projection>(
+      `${baseUrl}/v1/repos/${repoId}/projections/${principal}`,
+    ),
+    safeLoadJson<GitProjection>(
+      `${baseUrl}/v1/repos/${repoId}/git-projections/${principal}`,
+    ),
+    safeLoadJson<HealthResponse>(`${baseUrl}/healthz`),
+    loadGitBoundary(baseUrl),
+  ])
+
+  return {
+    baseUrl,
+    gitBoundary,
+    gitProjection,
+    health,
+    projection,
+  }
+}
+
+async function safeLoadJson<T>(
+  url: string,
+): Promise<LoadState<T>> {
+  try {
+    return {
+      data: await loadJson<T>(url),
+      error: null,
+      loading: false,
+    }
+  } catch (error) {
+    return {
+      data: null,
+      error: error instanceof Error ? error.message : 'request failed',
+      loading: false,
+    }
+  }
+}
+
+async function loadGitBoundary(
+  baseUrl: string,
+): Promise<GitBoundaryState> {
+  try {
+    const response = await fetch(
+      `${baseUrl}/git/acme/${repoId}/info/refs?service=git-upload-pack`,
+    )
+    const body = await response.json().catch(() => null)
+
+    if (response.status === 501) {
+      return {
+        state: 'explicit',
+        detail:
+          body?.next ?? 'Git clone is blocked until real packfile serving exists.',
+      }
+    }
+
+    return {
+      state: 'unexpected',
+      detail: `unexpected status ${response.status}`,
+    }
+  } catch (error) {
+    return {
+      state: 'error',
+      detail:
+        error instanceof Error ? error.message : 'git boundary check failed',
+    }
+  }
 }
 
 function visibleProjectionPaths(projection: Projection) {
@@ -675,8 +811,8 @@ function visibleProjectionPaths(projection: Projection) {
   return [...new Set(paths)].sort((left, right) => left.localeCompare(right))
 }
 
-async function loadJson<T>(url: string, signal: AbortSignal): Promise<T> {
-  const response = await fetch(url, { signal })
+async function loadJson<T>(url: string): Promise<T> {
+  const response = await fetch(url)
   const payload = await response.json().catch(() => null)
 
   if (!response.ok) {
@@ -684,6 +820,12 @@ async function loadJson<T>(url: string, signal: AbortSignal): Promise<T> {
   }
 
   return payload as T
+}
+
+function parsePrincipal(value: unknown): PrincipalId {
+  return principals.some((principal) => principal.id === value)
+    ? (value as PrincipalId)
+    : 'public'
 }
 
 function getStaticApiBase() {
