@@ -168,6 +168,7 @@ async fn get_projection(
     let repo = find_repo(&state, &owner, &repo_name)?;
     let identity = http_identity(&state, &headers).await?;
     let principal = principal_for_repo(&state, repo, identity.as_ref());
+    ensure_repo_read(&state, repo, &principal)?;
     Ok(Json(project_graph(&repo.policy, &repo.graph, &principal)))
 }
 
@@ -179,6 +180,7 @@ async fn get_git_projection(
     let repo = find_repo(&state, &owner, &repo_name)?;
     let identity = http_identity(&state, &headers).await?;
     let principal = principal_for_repo(&state, repo, identity.as_ref());
+    ensure_repo_read(&state, repo, &principal)?;
     let projection = project_graph(&repo.policy, &repo.graph, &principal);
     Ok(Json(build_virtual_git_projection(&projection)))
 }
@@ -191,17 +193,18 @@ async fn get_session(
     let repo = find_repo(&state, &owner, &repo_name)?;
     let identity = http_identity(&state, &headers).await?;
     let principal = principal_for_repo(&state, repo, identity.as_ref());
+    ensure_repo_read(&state, repo, &principal)?;
     let root = ScopePath::root();
 
     Ok(Json(SessionResponse {
         identity: identity.as_ref().map(SessionIdentity::from),
         repo: SessionRepo {
             id: repo.record.id.clone(),
-            role: repo_role(repo, &principal),
+            role: state.catalog.role_for_principal(repo, &principal),
         },
         capabilities: SessionCapabilities {
-            read: repo.policy.can_read(&principal, &root),
-            write: repo.policy.can_write(&principal, &root),
+            read: state.catalog.can_read_path(repo, &principal, &root),
+            write: state.catalog.can_write_path(repo, &principal, &root),
         },
         principal_id: principal.id,
     }))
@@ -216,10 +219,11 @@ async fn create_manifest(
     let repo = find_repo(&state, &owner, &repo_name)?;
     let identity = http_identity(&state, &headers).await?;
     let principal = principal_for_repo(&state, repo, identity.as_ref());
+    ensure_repo_read(&state, repo, &principal)?;
 
     for changed_path in &input.changed_paths {
         let path = ScopePath::parse(changed_path).map_err(ApiError::bad_request)?;
-        if !repo.policy.can_write(&principal, &path) {
+        if !state.catalog.can_write_path(repo, &principal, &path) {
             return Err(ApiError::forbidden(format!(
                 "principal {} cannot write {}",
                 principal.id, path
@@ -277,6 +281,24 @@ fn find_repo<'a>(
         .catalog
         .repository(owner, name)
         .ok_or_else(|| ApiError::not_found(format!("repo {owner}/{name} not found")))
+}
+
+fn ensure_repo_read(
+    state: &AppState,
+    repo: &StoredRepository,
+    principal: &Principal,
+) -> Result<(), ApiError> {
+    if state
+        .catalog
+        .can_read_path(repo, principal, &ScopePath::root())
+    {
+        Ok(())
+    } else {
+        Err(ApiError::not_found(format!(
+            "repo {} not found",
+            repo.record.id
+        )))
+    }
 }
 
 impl AppState {
@@ -509,13 +531,6 @@ fn principal_for_repo(
         .principal_for_repo(repo, verified_email.as_ref())
 }
 
-fn repo_role(repo: &StoredRepository, principal: &Principal) -> Option<RepoRole> {
-    repo.memberships
-        .iter()
-        .find(|membership| membership.user_id == principal.id)
-        .map(|membership| membership.role)
-}
-
 async fn shutdown_signal() {
     let ctrl_c = async {
         tokio::signal::ctrl_c()
@@ -720,6 +735,19 @@ kGxvBjzgF9RjXJoldYnFk7mJ5gLANHjaaad3qTQJ8DldKJoSqkEkm5gg
         let principal = principal_for_repo(&state, repo, Some(&identity));
 
         assert_eq!(principal, Principal::public());
+    }
+
+    #[test]
+    fn unreadable_repo_is_hidden_from_public_requests() {
+        let state = AppState::test_state(None);
+        let mut repo = find_repo(&state, BOOTSTRAP_REPO_OWNER, BOOTSTRAP_REPO_NAME)
+            .unwrap()
+            .clone();
+        repo.record.publication_state = scope_store::RepoPublicationState::Unpublished;
+
+        let error = ensure_repo_read(&state, &repo, &Principal::public()).unwrap_err();
+
+        assert_eq!(error.status, StatusCode::NOT_FOUND);
     }
 
     #[test]
