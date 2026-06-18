@@ -269,9 +269,6 @@ function ScopeDashboard() {
             </div>
             <div className="min-w-0">
               <div className="truncate text-sm font-semibold leading-5">Scope</div>
-              <div className="truncate text-xs leading-4 text-muted-foreground">
-                {repoId}
-              </div>
             </div>
           </div>
 
