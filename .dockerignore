@@ -1,9 +1,0 @@
-target
-node_modules
-apps/web/node_modules
-apps/web/.output
-.git
-.env
-.env.*
-*.log
-*.tsbuildinfo

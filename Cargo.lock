@@ -668,6 +668,27 @@ dependencies = [
 ]
 
 [[package]]
+name = "scope-vcs"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "axum",
+ "http",
+ "scope-audit",
+ "scope-crypto",
+ "scope-git",
+ "scope-policy",
+ "scope-projection",
+ "scope-store",
+ "serde",
+ "serde_json",
+ "tokio",
+ "tower-http",
+ "tracing",
+ "tracing-subscriber",
+]
+
+[[package]]
 name = "scope-worker"
 version = "0.1.0"
 dependencies = [
