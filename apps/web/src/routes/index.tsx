@@ -23,10 +23,10 @@ import {
   TableHeader,
   TableRow,
 } from '@/components/ui/table'
-import { Tabs, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { cn } from '@/lib/utils'
 import { createFileRoute } from '@tanstack/react-router'
 import type { ErrorComponentProps } from '@tanstack/react-router'
+import { useShooAuth } from '@shoojs/react'
 import {
   AlertCircle,
   CheckCircle2,
@@ -41,7 +41,7 @@ import {
 } from 'lucide-react'
 import { useEffect, useMemo, useRef, useState } from 'react'
 
-type PrincipalId = 'public'
+type PrincipalId = string
 
 type ProjectedChange = {
   path: string
@@ -105,6 +105,24 @@ type DashboardData = {
   gitBoundary: GitBoundaryState
   gitProjection: LoadState<GitProjection>
   projection: LoadState<Projection>
+  session: LoadState<SessionResponse>
+}
+
+type SessionResponse = {
+  identity: {
+    pairwise_sub: string
+    email: string | null
+    email_verified: boolean
+  } | null
+  repo: {
+    id: string
+    role: 'Reader' | 'Writer' | 'Maintainer' | 'Owner' | null
+  }
+  principal_id: string
+  capabilities: {
+    read: boolean
+    write: boolean
+  }
 }
 
 type ThemeMode = 'dark' | 'light'
@@ -122,24 +140,8 @@ const localApiBase = 'http://localhost:8080'
 const productionApiBase = 'https://scope-api-production-0251.up.railway.app'
 const themeStorageKey = 'scope-theme'
 
-const principals = [
-  {
-    id: 'public',
-    label: 'Public',
-    description: 'A shareable clone surface with private details removed.',
-  },
-] satisfies Array<{
-  id: PrincipalId
-  label: string
-  description: string
-}>
-
-const principalById = Object.fromEntries(
-  principals.map((principal) => [principal.id, principal]),
-) as Record<PrincipalId, (typeof principals)[number]>
-
 const principalCopy: Record<
-  PrincipalId,
+  'public' | 'authenticated',
   {
     headline: string
     body: string
@@ -153,23 +155,31 @@ const principalCopy: Record<
     proof: 'Private work is collapsed into a synthetic public commit.',
     manifestHint: 'Public writes should be rejected by policy.',
   },
+  authenticated: {
+    headline: 'Verified Repository Session',
+    body: 'Shoo verified this browser session before the API chose the repository principal.',
+    proof: 'Authorization uses the server-verified Shoo ID token.',
+    manifestHint: 'Writes are allowed only when repo capabilities include write.',
+  },
 }
 
 export const Route = createFileRoute('/')({
-  validateSearch: (search: Record<string, unknown>) => ({
-    principal: parsePrincipal(search.principal),
-  }),
-  loaderDeps: ({ search }) => ({ principal: search.principal }),
-  loader: ({ deps }) => loadDashboard(deps.principal),
+  loader: () => loadDashboard(),
   pendingComponent: DashboardPending,
   errorComponent: DashboardError,
   component: ScopeDashboard,
 })
 
 function ScopeDashboard() {
-  const { principal } = Route.useSearch()
-  const navigate = Route.useNavigate()
-  const dashboard = Route.useLoaderData()
+  const initialDashboard = Route.useLoaderData()
+  const [dashboard, setDashboard] = useState(initialDashboard)
+  const auth = useShooAuth({
+    shooBaseUrl: 'https://shoo.dev',
+    callbackPath: '/',
+    requestPii: true,
+    autoSessionMonitor: true,
+    sessionMonitorIntervalMs: 60_000,
+  })
   const [manifest, setManifest] = useState<LoadState<ManifestResponse>>({
     data: null,
     error: null,
@@ -178,6 +188,9 @@ function ScopeDashboard() {
   const [theme, setTheme] = useState<ThemeMode>('dark')
   const manifestAbortRef = useRef<AbortController | null>(null)
   const manifestRequestRef = useRef(0)
+  const sessionAbortRef = useRef<AbortController | null>(null)
+  const idToken = auth.identity.token
+  const principal = dashboard.session.data?.principal_id ?? 'public'
 
   useEffect(() => {
     const nextTheme = readStoredTheme()
@@ -188,6 +201,7 @@ function ScopeDashboard() {
   useEffect(
     () => () => {
       manifestAbortRef.current?.abort()
+      sessionAbortRef.current?.abort()
     },
     [],
   )
@@ -197,10 +211,33 @@ function ScopeDashboard() {
     manifestAbortRef.current?.abort()
     manifestAbortRef.current = null
     setManifest({ data: null, error: null, loading: false })
-  }, [principal])
+  }, [idToken])
 
-  const copy = principalCopy[principal]
-  const selectedPrincipal = principalById[principal]
+  useEffect(() => {
+    sessionAbortRef.current?.abort()
+    const controller = new AbortController()
+    sessionAbortRef.current = controller
+
+    loadDashboard(idToken, controller.signal)
+      .then((nextDashboard) => {
+        if (!controller.signal.aborted) {
+          setDashboard(nextDashboard)
+        }
+      })
+      .catch(() => {
+        if (!controller.signal.aborted) {
+          setDashboard(initialDashboard)
+        }
+      })
+
+    return () => controller.abort()
+  }, [idToken, initialDashboard])
+
+  const isVerifiedSession = principal !== 'public'
+  const copy = principalCopy[isVerifiedSession ? 'authenticated' : 'public']
+  const selectedPrincipal = {
+    label: dashboard.session.data?.repo.role ?? 'Public',
+  }
   const visiblePaths = useMemo(
     () =>
       dashboard.projection.data
@@ -208,11 +245,6 @@ function ScopeDashboard() {
         : [],
     [dashboard.projection.data],
   )
-  function selectPrincipal(nextPrincipal: string) {
-    void navigate({
-      search: { principal: parsePrincipal(nextPrincipal) },
-    })
-  }
 
   function toggleTheme() {
     const nextTheme = theme === 'dark' ? 'light' : 'dark'
@@ -241,7 +273,10 @@ function ScopeDashboard() {
         `${dashboard.api.url}/v1/repos/${repoOwner}/${repoName}/push-manifests`,
         {
           method: 'POST',
-          headers: { 'content-type': 'application/json' },
+          headers: {
+            ...authHeaders(idToken),
+            'content-type': 'application/json',
+          },
           signal: controller.signal,
           body: JSON.stringify({
             device_id: 'web-console',
@@ -300,7 +335,10 @@ function ScopeDashboard() {
             </div>
           </div>
 
-          <ThemeToggle theme={theme} toggleTheme={toggleTheme} />
+          <div className="flex items-center gap-2">
+            <AuthControls auth={auth} session={dashboard.session.data} />
+            <ThemeToggle theme={theme} toggleTheme={toggleTheme} />
+          </div>
         </div>
       </header>
 
@@ -316,19 +354,10 @@ function ScopeDashboard() {
             </p>
           </div>
 
-          <Tabs
-            className="w-full md:w-auto"
-            onValueChange={selectPrincipal}
-            value={principal}
-          >
-            <TabsList className="grid h-10 w-full grid-cols-1 md:w-[160px]">
-              {principals.map((item) => (
-                <TabsTrigger key={item.id} value={item.id}>
-                  {item.label}
-                </TabsTrigger>
-              ))}
-            </TabsList>
-          </Tabs>
+          <StatusBadge
+            ready={!dashboard.session.error}
+            text={dashboard.session.data?.repo.role ?? 'Public'}
+          />
         </div>
 
         <div className="grid gap-4 lg:grid-cols-[1.45fr_0.85fr]">
@@ -394,6 +423,7 @@ function ScopeDashboard() {
               manifest={manifest}
               manifestHint={copy.manifestHint}
               principal={principal}
+              writeEnabled={dashboard.session.data?.capabilities.write ?? false}
             />
             <Guardrails
               gitBoundary={dashboard.gitBoundary}
@@ -441,6 +471,45 @@ function ThemeToggle({
   )
 }
 
+function AuthControls({
+  auth,
+  session,
+}: {
+  auth: ReturnType<typeof useShooAuth>
+  session: SessionResponse | null
+}) {
+  const signedIn = Boolean(auth.identity.token)
+  const label = signedIn ? 'Sign Out' : 'Sign In'
+  const title = signedIn
+    ? `Signed in as ${session?.identity?.email ?? session?.identity?.pairwise_sub ?? 'Shoo user'}`
+    : 'Sign in with Shoo'
+
+  async function toggleAuth() {
+    if (signedIn) {
+      auth.clearIdentity()
+      return
+    }
+
+    await auth.signIn({ requestPii: true })
+  }
+
+  return (
+    <Button
+      aria-label={title}
+      disabled={auth.loading}
+      onClick={() => void toggleAuth()}
+      size="sm"
+      title={title}
+      variant={signedIn ? 'secondary' : 'default'}
+    >
+      <ShieldCheck className="size-3.5" />
+      <span className="hidden sm:inline">
+        {auth.loading ? 'Checking...' : label}
+      </span>
+    </Button>
+  )
+}
+
 function DashboardPending() {
   return (
     <main className="min-h-screen bg-background text-foreground">
@@ -473,7 +542,7 @@ function DashboardError({ error }: ErrorComponentProps) {
           <AlertCircle className="size-4" />
           <AlertTitle>Dashboard Failed</AlertTitle>
           <AlertDescription>
-            {message}. Reload the page or switch principals and try again.
+            {message}. Reload the page and try again.
           </AlertDescription>
         </Alert>
       </div>
@@ -537,11 +606,13 @@ function WriteReadiness({
   manifest,
   manifestHint,
   principal,
+  writeEnabled,
 }: {
   createManifest: () => void
   manifest: LoadState<ManifestResponse>
   manifestHint: string
   principal: PrincipalId
+  writeEnabled: boolean
 }) {
   return (
     <Card>
@@ -557,7 +628,7 @@ function WriteReadiness({
       <CardContent className="space-y-4">
         <Button
           className="w-full"
-          disabled={manifest.loading}
+          disabled={manifest.loading || !writeEnabled}
           onClick={createManifest}
           variant="secondary"
         >
@@ -711,7 +782,7 @@ function ManifestResult({
   if (!manifest.data) {
     return (
       <p className="text-sm leading-5 text-muted-foreground">
-        Run a request to confirm the selected principal&apos;s write policy.
+        Run a request to confirm this session&apos;s write policy.
       </p>
     )
   }
@@ -771,16 +842,29 @@ function GuardrailRow({ ok, text }: { ok: boolean; text: string }) {
   )
 }
 
-async function loadDashboard(principal: PrincipalId): Promise<DashboardData> {
+async function loadDashboard(
+  idToken?: string,
+  signal?: AbortSignal,
+): Promise<DashboardData> {
   const api = getApiConnection()
-  const [projection, gitProjection, gitBoundary] = await Promise.all([
+  const init = {
+    headers: authHeaders(idToken),
+    signal,
+  }
+  const [session, projection, gitProjection, gitBoundary] = await Promise.all([
+    safeLoadJson<SessionResponse>(
+      `${api.url}/v1/repos/${repoOwner}/${repoName}/session`,
+      init,
+    ),
     safeLoadJson<Projection>(
       `${api.url}/v1/repos/${repoOwner}/${repoName}/projections`,
+      init,
     ),
     safeLoadJson<GitProjection>(
       `${api.url}/v1/repos/${repoOwner}/${repoName}/git-projections`,
+      init,
     ),
-    loadGitBoundary(api.url),
+    loadGitBoundary(api.url, idToken, signal),
   ])
 
   return {
@@ -788,6 +872,7 @@ async function loadDashboard(principal: PrincipalId): Promise<DashboardData> {
     gitBoundary,
     gitProjection,
     projection,
+    session,
   }
 }
 
@@ -812,10 +897,16 @@ async function safeLoadJson<T>(
 
 async function loadGitBoundary(
   baseUrl: string,
+  idToken?: string,
+  signal?: AbortSignal,
 ): Promise<GitBoundaryState> {
   try {
     const response = await fetch(
       `${baseUrl}/git/${repoOwner}/${repoName}/info/refs?service=git-upload-pack`,
+      {
+        headers: authHeaders(idToken),
+        signal,
+      },
     )
     const body = await response.json().catch(() => null)
 
@@ -858,10 +949,8 @@ async function loadJson<T>(url: string, init?: RequestInit): Promise<T> {
   return payload as T
 }
 
-function parsePrincipal(value: unknown): PrincipalId {
-  return principals.some((principal) => principal.id === value)
-    ? (value as PrincipalId)
-    : 'public'
+function authHeaders(idToken?: string): HeadersInit {
+  return idToken ? { authorization: `Bearer ${idToken}` } : {}
 }
 
 function readStoredTheme(): ThemeMode {
