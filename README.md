@@ -12,10 +12,9 @@ the canonical source of truth is a server-side source graph.
 - `crates/scope-projection` - canonical commits to per-principal projections.
 - `crates/scope-git` - projected Git object identity helpers.
 - `crates/scope-crypto` - signed push manifest primitives.
-- `crates/scope-store` - app-domain storage contracts and colocated SQL schema.
+- `crates/scope-store` - app catalog, repository, membership, and invite domain.
 - `crates/scope-server` - Axum API and Git facade boundary.
 - `crates/scope-cli` - `sx` command-line prototype.
-- `crates/scope-worker` - background worker placeholder.
 - `apps/web` - TanStack Start control-plane UI.
 
 ## Local Checks
@@ -30,12 +29,11 @@ pnpm build
 
 Railway services:
 
-- `scope-api` is a Railpack Rust service. It builds the root `scope-vcs`
-  binary and starts `./bin/scope-vcs`.
+- `scope-api` is a Railpack Rust service. Build the `scope-server` package and
+  start its `scope-server` binary.
 - `scope-web` is a Railpack Node service. Because the repo root is also a
   Rust workspace, set `RAILPACK_CONFIG_FILE=railpack.web.json` on this
   Railway service so Railpack uses the web-specific Node provider config.
-- `scope-worker` is not deployed for the first version.
 
 Railway Postgres stores canonical metadata. Railway Buckets store encrypted
 source blobs/chunks; app-layer encryption remains mandatory.

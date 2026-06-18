@@ -5,8 +5,6 @@ use scope_projection::{
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 
-pub const POSTGRES_SCHEMA: &str = include_str!("schema.sql");
-
 pub const BOOTSTRAP_OWNER_EMAIL: &str = "adamblumoff@gmail.com";
 pub const BOOTSTRAP_OWNER_USER_ID: &str = "user_adamblumoff";
 pub const BOOTSTRAP_REPO_OWNER: &str = "adamblumoff";

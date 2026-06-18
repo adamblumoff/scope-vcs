@@ -1407,14 +1407,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "9774ba4a74de5f7b1c1451ed6cd5285a32eddb5cccb8cc655a4e50009e06477f"
 
 [[package]]
-name = "scope-audit"
-version = "0.1.0"
-dependencies = [
- "serde",
- "uuid",
-]
-
-[[package]]
 name = "scope-cli"
 version = "0.1.0"
 dependencies = [
@@ -1478,7 +1470,6 @@ dependencies = [
  "http",
  "jsonwebtoken",
  "reqwest",
- "scope-audit",
  "scope-crypto",
  "scope-git",
  "scope-policy",
@@ -1500,39 +1491,6 @@ dependencies = [
  "scope-projection",
  "serde",
  "thiserror",
-]
-
-[[package]]
-name = "scope-vcs"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "axum",
- "http",
- "jsonwebtoken",
- "reqwest",
- "scope-audit",
- "scope-crypto",
- "scope-git",
- "scope-policy",
- "scope-projection",
- "scope-store",
- "serde",
- "serde_json",
- "tokio",
- "tower-http",
- "tracing",
- "tracing-subscriber",
-]
-
-[[package]]
-name = "scope-worker"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "tokio",
- "tracing",
- "tracing-subscriber",
 ]
 
 [[package]]
