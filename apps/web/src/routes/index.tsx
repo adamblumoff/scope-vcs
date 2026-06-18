@@ -33,9 +33,11 @@ import {
   KeyRound,
   Layers3,
   Lock,
+  Moon,
   RefreshCw,
   Server,
   ShieldCheck,
+  Sun,
   Upload,
 } from 'lucide-react'
 import { useEffect, useMemo, useState } from 'react'
@@ -112,8 +114,11 @@ type DashboardData = {
   projection: LoadState<Projection>
 }
 
+type ThemeMode = 'dark' | 'light'
+
 const repoId = 'scope-demo'
 const deployedApiBase = 'https://scope-api-production-0251.up.railway.app'
+const themeStorageKey = 'scope-theme'
 
 const principals = [
   {
@@ -190,6 +195,13 @@ function ScopeDashboard() {
     error: null,
     loading: false,
   })
+  const [theme, setTheme] = useState<ThemeMode>('dark')
+
+  useEffect(() => {
+    const nextTheme = readStoredTheme()
+    setTheme(nextTheme)
+    applyTheme(nextTheme)
+  }, [])
 
   useEffect(() => {
     setManifest({ data: null, error: null, loading: false })
@@ -210,6 +222,13 @@ function ScopeDashboard() {
     void navigate({
       search: { principal: parsePrincipal(nextPrincipal) },
     })
+  }
+
+  function toggleTheme() {
+    const nextTheme = theme === 'dark' ? 'light' : 'dark'
+    setTheme(nextTheme)
+    applyTheme(nextTheme)
+    window.localStorage.setItem(themeStorageKey, nextTheme)
   }
 
   async function createManifest() {
@@ -266,12 +285,15 @@ function ScopeDashboard() {
           </div>
 
           <div className="flex items-center gap-2">
-            <ServiceBadge label="Web" ready />
-            <ServiceBadge label="API" ready={apiOnline} />
-            <ServiceBadge
-              label="Git"
-              ready={dashboard.gitBoundary.state === 'explicit'}
-            />
+            <div className="hidden items-center gap-2 min-[520px]:flex">
+              <ServiceBadge label="Web" ready />
+              <ServiceBadge label="API" ready={apiOnline} />
+              <ServiceBadge
+                label="Git"
+                ready={dashboard.gitBoundary.state === 'explicit'}
+              />
+            </div>
+            <ThemeToggle theme={theme} toggleTheme={toggleTheme} />
           </div>
         </div>
       </header>
@@ -308,7 +330,7 @@ function ScopeDashboard() {
         </div>
 
         <div className="grid gap-4 lg:grid-cols-[1.45fr_0.85fr]">
-          <Card className="shadow-[0_2px_2px_rgba(0,0,0,0.04)]">
+          <Card className="shadow-[var(--shadow-card)]">
             <CardHeader className="border-b border-border pb-6">
               <div>
                 <Badge className="mb-3" variant="outline">
@@ -384,6 +406,33 @@ function ScopeDashboard() {
         </div>
       </section>
     </main>
+  )
+}
+
+function ThemeToggle({
+  theme,
+  toggleTheme,
+}: {
+  theme: ThemeMode
+  toggleTheme: () => void
+}) {
+  const nextTheme = theme === 'dark' ? 'Light' : 'Dark'
+
+  return (
+    <Button
+      aria-label={`Switch to ${nextTheme} Mode`}
+      onClick={toggleTheme}
+      size="sm"
+      title={`Switch to ${nextTheme} Mode`}
+      variant="secondary"
+    >
+      {theme === 'dark' ? (
+        <Sun className="size-3.5" />
+      ) : (
+        <Moon className="size-3.5" />
+      )}
+      <span className="hidden sm:inline">{nextTheme}</span>
+    </Button>
   )
 }
 
@@ -826,6 +875,25 @@ function parsePrincipal(value: unknown): PrincipalId {
   return principals.some((principal) => principal.id === value)
     ? (value as PrincipalId)
     : 'public'
+}
+
+function readStoredTheme(): ThemeMode {
+  if (typeof window === 'undefined') {
+    return 'dark'
+  }
+
+  return window.localStorage.getItem(themeStorageKey) === 'light'
+    ? 'light'
+    : 'dark'
+}
+
+function applyTheme(theme: ThemeMode) {
+  if (typeof document === 'undefined') {
+    return
+  }
+
+  document.documentElement.classList.toggle('dark', theme === 'dark')
+  document.documentElement.style.colorScheme = theme
 }
 
 function getStaticApiBase() {
