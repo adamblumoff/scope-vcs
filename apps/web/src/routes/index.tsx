@@ -35,7 +35,6 @@ import {
   Lock,
   Moon,
   RefreshCw,
-  Server,
   ShieldCheck,
   Sun,
   Upload,
@@ -283,10 +282,6 @@ function ScopeDashboard() {
       <section className="mx-auto max-w-[1200px] px-4 py-8 sm:px-6 lg:py-10">
         <div className="mb-8 flex flex-col gap-4 md:flex-row md:items-end md:justify-between">
           <div className="max-w-2xl">
-            <div className="mb-2 flex items-center gap-2 text-xs leading-4 text-muted-foreground">
-              <Server className="size-3.5" />
-              <span>{dashboard.baseUrl.replace(/^https?:\/\//, '')}</span>
-            </div>
             <h1 className="text-[32px] font-semibold leading-10 tracking-[-1.28px]">
               Projection Dashboard
             </h1>
