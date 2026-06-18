@@ -162,6 +162,8 @@ function ScopeWorkspace() {
   const manifestAbortRef = useRef<AbortController | null>(null)
   const manifestRequestRef = useRef(0)
   const refreshAbortRef = useRef<AbortController | null>(null)
+  const tokenInitializedRef = useRef(false)
+  const lastTokenRef = useRef<string | undefined>(undefined)
   const idToken = auth.identity.token
 
   useEffect(() => {
@@ -179,6 +181,23 @@ function ScopeWorkspace() {
   )
 
   useEffect(() => {
+    if (auth.loading) {
+      return
+    }
+
+    const isInitialTokenResolution = !tokenInitializedRef.current
+    tokenInitializedRef.current = true
+
+    if (isInitialTokenResolution && !idToken) {
+      lastTokenRef.current = idToken
+      return
+    }
+
+    if (!isInitialTokenResolution && lastTokenRef.current === idToken) {
+      return
+    }
+
+    lastTokenRef.current = idToken
     manifestRequestRef.current += 1
     manifestAbortRef.current?.abort()
     manifestAbortRef.current = null
@@ -196,9 +215,8 @@ function ScopeWorkspace() {
         }
       })
       .catch(() => {
-        if (!controller.signal.aborted) {
-          setWorkspace(initialWorkspace)
-        }
+        // Keep the previous workspace visible. Per-request load states carry
+        // API failures, so this only covers an unexpected top-level failure.
       })
       .finally(() => {
         if (!controller.signal.aborted) {
@@ -208,11 +226,15 @@ function ScopeWorkspace() {
       })
 
     return () => controller.abort()
-  }, [idToken, initialWorkspace])
+  }, [auth.loading, idToken])
 
   const session = workspace.session.data
   const projection = workspace.projection.data
   const gitProjection = workspace.gitProjection.data
+  const signedIn = Boolean(idToken)
+  const sessionError = workspace.session.error
+  const sessionResolving =
+    auth.loading || (signedIn && !session?.identity && !sessionError)
   const visiblePaths = useMemo(
     () => (projection ? visibleProjectionPaths(projection) : []),
     [projection],
@@ -222,10 +244,17 @@ function ScopeWorkspace() {
     [projection],
   )
   const role = session?.repo.role ?? null
-  const roleLabel = role ?? 'Public'
-  const principal = session?.principal_id ?? 'public'
-  const canWrite = session?.capabilities.write ?? false
-  const signedIn = Boolean(idToken)
+  const roleLabel = sessionResolving ? 'Checking session' : role ?? 'Public'
+  const principal = sessionResolving ? 'pending' : session?.principal_id ?? 'public'
+  const canRead = !sessionResolving && (session?.capabilities.read ?? false)
+  const canWrite = !sessionResolving && (session?.capabilities.write ?? false)
+  const viewLabel = sessionResolving
+    ? signedIn
+      ? 'Verifying identity'
+      : 'Checking identity'
+    : principal === 'public'
+      ? 'Public view'
+      : 'Verified session'
 
   function toggleTheme() {
     const nextTheme = theme === 'dark' ? 'light' : 'dark'
@@ -341,6 +370,7 @@ function ScopeWorkspace() {
             <AuthControls
               auth={auth}
               session={session}
+              sessionResolving={sessionResolving}
               signedIn={signedIn}
             />
             <ThemeToggle theme={theme} toggleTheme={toggleTheme} />
@@ -352,13 +382,15 @@ function ScopeWorkspace() {
         <div className="flex flex-col gap-5 border-b border-border pb-6 lg:flex-row lg:items-end lg:justify-between">
           <div className="min-w-0">
             <div className="mb-3 flex flex-wrap items-center gap-2">
-              <StatusBadge tone={workspace.session.error ? 'bad' : 'good'}>
+              <StatusBadge
+                tone={sessionError ? 'bad' : sessionResolving ? 'neutral' : 'good'}
+              >
                 {roleLabel}
               </StatusBadge>
-              <StatusBadge tone={session?.capabilities.read ? 'good' : 'neutral'}>
-                {principal === 'public' ? 'Public view' : 'Verified session'}
+              <StatusBadge tone={canRead ? 'good' : 'neutral'}>
+                {viewLabel}
               </StatusBadge>
-              {refreshing ? (
+              {refreshing && !sessionResolving ? (
                 <Badge variant="outline">
                   <RefreshCw className="size-3 animate-spin" />
                   Syncing
@@ -376,6 +408,7 @@ function ScopeWorkspace() {
             manifestLoading={manifest.loading}
             manifestReady={Boolean(manifest.data)}
             role={role}
+            sessionResolving={sessionResolving}
           />
         </div>
 
@@ -390,7 +423,7 @@ function ScopeWorkspace() {
           blobs={gitProjection?.blobs.length ?? 0}
           commits={projection?.commits.length ?? 0}
           paths={visiblePaths.length}
-          writeEnabled={canWrite}
+          writeState={sessionResolving ? 'Checking' : canWrite ? 'Allowed' : 'Blocked'}
         />
 
         <div className="grid gap-8 pt-8 lg:grid-cols-[minmax(0,1fr)_340px]">
@@ -406,6 +439,7 @@ function ScopeWorkspace() {
             <SessionPanel
               canWrite={canWrite}
               principal={principal}
+              resolving={sessionResolving}
               session={session}
               signedIn={signedIn}
             />
@@ -454,16 +488,23 @@ function ThemeToggle({
 function AuthControls({
   auth,
   session,
+  sessionResolving,
   signedIn,
 }: {
   auth: ReturnType<typeof useShooAuth>
   session: SessionResponse | null
+  sessionResolving: boolean
   signedIn: boolean
 }) {
   const identity = session?.identity
-  const title = signedIn
-    ? `Signed in as ${identity?.email ?? identity?.pairwise_sub ?? 'Shoo user'}`
-    : 'Sign in with Shoo'
+  const title = auth.loading
+    ? 'Checking Shoo session'
+    : sessionResolving
+      ? 'Verifying signed-in session'
+      : signedIn
+        ? `Signed in as ${identity?.email ?? identity?.pairwise_sub ?? 'Shoo user'}`
+        : 'Sign in with Shoo'
+  const label = auth.loading ? 'Checking' : signedIn ? 'Sign out' : 'Sign in'
 
   async function toggleAuth() {
     if (signedIn) {
@@ -481,12 +522,11 @@ function AuthControls({
       onClick={() => void toggleAuth()}
       size="sm"
       title={title}
+      className="min-w-[92px]"
       variant={signedIn ? 'secondary' : 'default'}
     >
       {signedIn ? <LogOut className="size-3.5" /> : <LogIn className="size-3.5" />}
-      <span className="hidden sm:inline">
-        {auth.loading ? 'Checking' : signedIn ? 'Sign out' : 'Sign in'}
-      </span>
+      <span className="hidden sm:inline">{label}</span>
     </Button>
   )
 }
@@ -497,12 +537,14 @@ function RepoActions({
   manifestLoading,
   manifestReady,
   role,
+  sessionResolving,
 }: {
   canWrite: boolean
   createManifest: () => void
   manifestLoading: boolean
   manifestReady: boolean
   role: RepoRole | null
+  sessionResolving: boolean
 }) {
   const owner = role === 'Owner'
 
@@ -510,10 +552,16 @@ function RepoActions({
     <div className="flex w-full flex-wrap gap-2 sm:w-auto sm:justify-end">
       <Button
         className="min-w-0 flex-1 sm:flex-none"
-        disabled={!canWrite || manifestLoading}
+        disabled={sessionResolving || !canWrite || manifestLoading}
         onClick={createManifest}
         size="sm"
-        title={canWrite ? 'Create push manifest' : 'Write access required'}
+        title={
+          sessionResolving
+            ? 'Session verification in progress'
+            : canWrite
+              ? 'Create push manifest'
+              : 'Write access required'
+        }
         variant={manifestReady ? 'secondary' : 'default'}
       >
         {manifestLoading ? (
@@ -529,7 +577,13 @@ function RepoActions({
         className="min-w-0 flex-1 sm:flex-none"
         disabled
         size="sm"
-        title={owner ? 'Invitation endpoint is not available yet' : 'Owner role required'}
+        title={
+          sessionResolving
+            ? 'Session verification in progress'
+            : owner
+              ? 'Invitation endpoint is not available yet'
+              : 'Owner role required'
+        }
         variant="secondary"
       >
         <UserPlus className="size-3.5" />
@@ -539,7 +593,13 @@ function RepoActions({
         className="min-w-0 flex-1 sm:flex-none"
         disabled
         size="sm"
-        title={owner ? 'Publish endpoint is not available yet' : 'Owner role required'}
+        title={
+          sessionResolving
+            ? 'Session verification in progress'
+            : owner
+              ? 'Publish endpoint is not available yet'
+              : 'Owner role required'
+        }
         variant="secondary"
       >
         <Globe2 className="size-3.5" />
@@ -552,8 +612,8 @@ function RepoActions({
 function WorkspacePending() {
   return (
     <main className="min-h-screen bg-background text-foreground">
-      <header className="border-b border-border">
-        <div className="mx-auto flex min-h-16 max-w-[1180px] items-center justify-between px-4 py-3 sm:px-6">
+      <header className="border-b border-border bg-background">
+        <div className="mx-auto flex min-h-16 max-w-[1180px] items-center justify-between gap-3 px-4 py-3 sm:px-6">
           <div className="flex items-center gap-3">
             <Skeleton className="size-8 rounded-md" />
             <div className="space-y-1.5">
@@ -565,8 +625,67 @@ function WorkspacePending() {
         </div>
       </header>
       <section className="mx-auto max-w-[1180px] px-4 py-7 sm:px-6 lg:py-9">
-        <Skeleton className="h-28 w-full rounded-md" />
-        <Skeleton className="mt-8 h-[420px] w-full rounded-md" />
+        <div className="flex flex-col gap-5 border-b border-border pb-6 lg:flex-row lg:items-end lg:justify-between">
+          <div className="min-w-0">
+            <div className="mb-3 flex gap-2">
+              <Skeleton className="h-5 w-24 rounded-4xl" />
+              <Skeleton className="h-5 w-28 rounded-4xl" />
+            </div>
+            <Skeleton className="h-10 w-[min(420px,80vw)]" />
+          </div>
+          <div className="flex gap-2">
+            <Skeleton className="h-8 w-24 rounded-md" />
+            <Skeleton className="h-8 w-20 rounded-md" />
+            <Skeleton className="h-8 w-20 rounded-md" />
+          </div>
+        </div>
+        <dl className="grid grid-cols-2 gap-px border-y border-border bg-border sm:grid-cols-4">
+          {['Paths', 'Commits', 'Objects', 'Write'].map((label) => (
+            <div className="bg-background px-3 py-4" key={label}>
+              <Skeleton className="h-4 w-16" />
+              <Skeleton className="mt-2 h-7 w-12" />
+            </div>
+          ))}
+        </dl>
+        <div className="grid gap-8 pt-8 lg:grid-cols-[minmax(0,1fr)_340px]">
+          <section className="min-w-0">
+            <div className="mb-3 flex min-h-8 items-center justify-between gap-3">
+              <Skeleton className="h-5 w-32" />
+              <Skeleton className="h-5 w-16 rounded-4xl" />
+            </div>
+            <div className="border-y border-border">
+              {Array.from({ length: 5 }, (_, index) => (
+                <div
+                  className="grid grid-cols-[minmax(0,1fr)_160px] gap-4 border-b border-border px-2 py-3 last:border-b-0"
+                  key={index}
+                >
+                  <Skeleton className="h-4 w-full max-w-[520px]" />
+                  <Skeleton className="h-4 w-28" />
+                </div>
+              ))}
+            </div>
+          </section>
+          <aside className="min-w-0 space-y-8">
+            <section className="border-t border-border pt-4">
+              <Skeleton className="mb-5 h-5 w-20" />
+              <div className="space-y-3">
+                {Array.from({ length: 6 }, (_, index) => (
+                  <div
+                    className="grid grid-cols-[84px_minmax(0,1fr)] gap-3"
+                    key={index}
+                  >
+                    <Skeleton className="h-5 w-16" />
+                    <Skeleton className="h-5 w-28" />
+                  </div>
+                ))}
+              </div>
+            </section>
+            <section className="border-t border-border pt-4">
+              <Skeleton className="mb-5 h-5 w-28" />
+              <Skeleton className="h-[86px] w-full rounded-md" />
+            </section>
+          </aside>
+        </div>
       </section>
     </main>
   )
@@ -623,19 +742,19 @@ function MetricStrip({
   blobs,
   commits,
   paths,
-  writeEnabled,
+  writeState,
 }: {
   blobs: number
   commits: number
   paths: number
-  writeEnabled: boolean
+  writeState: string
 }) {
   return (
     <dl className="grid grid-cols-2 gap-px overflow-hidden border-y border-border bg-border sm:grid-cols-4">
       <Metric label="Paths" value={paths} />
       <Metric label="Commits" value={commits} />
       <Metric label="Objects" value={blobs} />
-      <Metric label="Write" value={writeEnabled ? 'Allowed' : 'Blocked'} />
+      <Metric label="Write" value={writeState} />
     </dl>
   )
 }
@@ -714,11 +833,13 @@ function ObjectTable({
 function SessionPanel({
   canWrite,
   principal,
+  resolving,
   session,
   signedIn,
 }: {
   canWrite: boolean
   principal: PrincipalId
+  resolving: boolean
   session: SessionResponse | null
   signedIn: boolean
 }) {
@@ -726,17 +847,36 @@ function SessionPanel({
   const access = session?.repo.role ?? 'Public'
   const subject = identity?.email ?? identity?.pairwise_sub ?? 'Anonymous'
   const verified = identity?.email_verified ?? false
+  const pendingValue = signedIn ? 'Verifying' : 'Checking'
 
   return (
     <section className="border-t border-border pt-4">
       <SectionTitle title="Session" />
       <dl className="space-y-3 text-sm">
-        <KeyValue label="Subject" value={signedIn ? subject : 'Anonymous'} />
-        <KeyValue label="Principal" value={principal} />
-        <KeyValue label="Access" value={access} />
-        <KeyValue label="Email" value={verified ? 'Verified' : 'Not verified'} />
-        <KeyValue label="Read" value={session?.capabilities.read ? 'Allowed' : 'Blocked'} />
-        <KeyValue label="Write" value={canWrite ? 'Allowed' : 'Blocked'} />
+        <KeyValue
+          label="Subject"
+          value={resolving ? pendingValue : signedIn ? subject : 'Anonymous'}
+        />
+        <KeyValue label="Principal" value={resolving ? pendingValue : principal} />
+        <KeyValue label="Access" value={resolving ? pendingValue : access} />
+        <KeyValue
+          label="Email"
+          value={resolving ? pendingValue : verified ? 'Verified' : 'Not verified'}
+        />
+        <KeyValue
+          label="Read"
+          value={
+            resolving
+              ? pendingValue
+              : session?.capabilities.read
+                ? 'Allowed'
+                : 'Blocked'
+          }
+        />
+        <KeyValue
+          label="Write"
+          value={resolving ? pendingValue : canWrite ? 'Allowed' : 'Blocked'}
+        />
       </dl>
     </section>
   )
