@@ -16,7 +16,7 @@ use jsonwebtoken::{
     jwk::{Jwk, JwkSet},
 };
 use scope_git::{VirtualGitProjection, build_virtual_git_projection, git_blob_oid};
-use scope_policy::{Policy, Principal, ScopePath, Visibility, VisibilityRule};
+use scope_policy::{Principal, ScopePath, Visibility, VisibilityRule};
 use scope_projection::{
     AuthorVisibility, FileChange, LogicalCommit, MixedCommitPolicy, Projection, project_graph,
 };
@@ -1429,6 +1429,7 @@ fn handle_git_receive_pack(
     Ok(cgi.into_response())
 }
 
+#[cfg(test)]
 fn first_push_token_from_headers(headers: &HeaderMap) -> Result<String, ApiError> {
     let Some(value) = headers.get(AUTHORIZATION) else {
         return Err(ApiError::unauthorized("first-push token required"));
@@ -1551,6 +1552,7 @@ fn basic_auth_secret(encoded: &str) -> Result<String, ApiError> {
     Ok(token.to_string())
 }
 
+#[cfg(test)]
 fn authorize_first_push(
     state: &AppState,
     owner: &str,
@@ -1567,6 +1569,7 @@ fn authorize_first_push(
     )
 }
 
+#[cfg(test)]
 fn authorize_initial_push(
     state: &AppState,
     owner: &str,
@@ -1698,10 +1701,12 @@ fn receive_pack_staging_repo_path(
         .parent()
         .map(PathBuf::from)
         .unwrap_or_else(std::env::temp_dir);
+    let repo_id = scope_store::repo_id(owner, repo_name);
+    let digest = Sha256::digest(repo_id.as_bytes());
+    let digest = hex::encode(digest);
     Ok(base_dir
-        .join("git-receive")
-        .join(safe_repo_key(owner, repo_name))
-        .join(format!("{}.git", hex::encode(bytes))))
+        .join("git-rx")
+        .join(format!("{}-{}.git", &digest[..16], hex::encode(bytes))))
 }
 
 fn owner_git_repo_path(state: &AppState, owner: &str, repo_name: &str) -> PathBuf {
@@ -2030,9 +2035,10 @@ fn find_header_end(bytes: &[u8]) -> Option<(usize, usize)> {
 fn pending_import_from_staging_repo(staging_repo: &FsPath) -> Result<PendingImport, ApiError> {
     let refs = git_refs(staging_repo)?;
     if refs.len() != 1 {
-        return Err(ApiError::bad_request(
-            "push must create exactly one branch and no tags",
-        ));
+        return Err(ApiError::bad_request(format!(
+            "push must create exactly one branch and no tags; found {}",
+            describe_refs(&refs)
+        )));
     }
     let (refname, head_oid) = refs.into_iter().next().expect("length checked");
     let Some(default_branch) = refname.strip_prefix("refs/heads/") else {
@@ -2066,9 +2072,10 @@ fn receive_pack_update_from_staging_repo(
 ) -> Result<ReceivePackUpdate, ApiError> {
     let refs = git_refs(staging_repo)?;
     if refs.len() != 1 {
-        return Err(ApiError::bad_request(
-            "push must update exactly one branch and no tags",
-        ));
+        return Err(ApiError::bad_request(format!(
+            "push must update exactly one branch and no tags; found {}",
+            describe_refs(&refs)
+        )));
     }
     let (branch, head_oid) = refs.into_iter().next().expect("length checked");
     ensure_default_branch(&branch)?;
@@ -2141,10 +2148,17 @@ fn git_refs(staging_repo: &FsPath) -> Result<Vec<(String, String)>, ApiError> {
         &[
             "for-each-ref",
             "--format=%(refname)%00%(objectname)",
-            "refs",
+            "refs/heads",
+            "refs/tags",
         ],
         "reading pushed refs",
     )?;
+    if !output.status.success() {
+        return Err(ApiError::service_unavailable(format!(
+            "reading pushed refs: {}",
+            String::from_utf8_lossy(&output.stderr).trim()
+        )));
+    }
     let text = String::from_utf8(output.stdout).map_err(ApiError::bad_request)?;
     text.lines()
         .map(|line| {
@@ -2154,6 +2168,17 @@ fn git_refs(staging_repo: &FsPath) -> Result<Vec<(String, String)>, ApiError> {
             Ok((refname.to_string(), oid.to_string()))
         })
         .collect()
+}
+
+fn describe_refs(refs: &[(String, String)]) -> String {
+    if refs.is_empty() {
+        return "none".to_string();
+    }
+
+    refs.iter()
+        .map(|(name, oid)| format!("{name}@{}", oid.get(..12).unwrap_or(oid)))
+        .collect::<Vec<_>>()
+        .join(", ")
 }
 
 fn git_tree_files(
@@ -3970,7 +3995,7 @@ mod tests {
         http::{Request, header::CONTENT_TYPE},
     };
     use jsonwebtoken::{EncodingKey, Header, encode};
-    use scope_policy::{Principal, PrincipalKind, VisibilityRule};
+    use scope_policy::{Policy, Principal, PrincipalKind, VisibilityRule};
     use scope_projection::SourceGraph;
     use scope_store::{
         AccountAccess, RepoMembership, RepoPublicationState, RepoRecord, StoredRepository,
@@ -5157,6 +5182,44 @@ kGxvBjzgF9RjXJoldYnFk7mJ5gLANHjaaad3qTQJ8DldKJoSqkEkm5gg
     }
 
     #[test]
+    fn git_refs_ignore_remote_tracking_refs() {
+        let repo = temp_git_repo("pushed-refs");
+        fs::write(repo.join("README.md"), "hello").unwrap();
+        run_git(Some(&repo), &["add", "README.md"], "add readme").unwrap();
+        commit_all(&repo, "initial");
+        let bare = std::env::temp_dir().join(format!(
+            "scope-vcs-pushed-refs-bare-{}-{}",
+            std::process::id(),
+            unix_now()
+        ));
+        let _ = fs::remove_dir_all(&bare);
+        run_git(
+            None,
+            &[
+                "clone",
+                "--bare",
+                repo.to_str().unwrap(),
+                bare.to_str().unwrap(),
+            ],
+            "clone pushed refs bare repo",
+        )
+        .unwrap();
+        run_git(
+            Some(&bare),
+            &["update-ref", "refs/remotes/origin/main", DEFAULT_GIT_BRANCH],
+            "create remote tracking ref",
+        )
+        .unwrap();
+
+        let refs = git_refs(&bare).unwrap();
+
+        assert_eq!(refs.len(), 1);
+        assert_eq!(refs[0].0, format!("refs/heads/{DEFAULT_GIT_BRANCH}"));
+        let _ = fs::remove_dir_all(&repo);
+        let _ = fs::remove_dir_all(&bare);
+    }
+
+    #[test]
     fn bearer_token_ignores_removed_trusted_identity_headers() {
         let mut headers = HeaderMap::new();
         headers.insert("x-scope-user-email", TEST_OWNER_EMAIL.parse().unwrap());
@@ -5648,6 +5711,16 @@ kGxvBjzgF9RjXJoldYnFk7mJ5gLANHjaaad3qTQJ8DldKJoSqkEkm5gg
 
         assert_ne!(first, second);
         assert_eq!(first.parent(), second.parent());
+        assert_eq!(
+            first.parent().and_then(|path| path.file_name()),
+            Some(std::ffi::OsStr::new("git-rx"))
+        );
+        assert!(
+            first
+                .file_name()
+                .and_then(|name| name.to_str())
+                .is_some_and(|name| name.len() <= 53)
+        );
     }
 
     #[test]
