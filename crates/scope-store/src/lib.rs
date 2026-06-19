@@ -77,6 +77,23 @@ impl FirstPushToken {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PendingImportFile {
+    pub path: String,
+    pub mode: String,
+    pub oid: String,
+    pub content_base64: String,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PendingImport {
+    pub default_branch: String,
+    pub head_oid: String,
+    pub tree_oid: String,
+    pub imported_at_unix: u64,
+    pub files: Vec<PendingImportFile>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct RepoRecord {
     pub id: String,
     pub owner_handle: String,
@@ -120,6 +137,7 @@ pub struct StoredRepository {
     pub record: RepoRecord,
     pub settings: RepoSettings,
     pub first_push_token: Option<FirstPushToken>,
+    pub pending_import: Option<PendingImport>,
     pub policy: Policy,
     pub graph: SourceGraph,
     pub memberships: Vec<RepoMembership>,
@@ -171,6 +189,7 @@ impl AppCatalog {
             },
             settings: RepoSettings::default(),
             first_push_token: None,
+            pending_import: None,
             policy: Policy::new(default_visibility, owner.id.clone()),
             graph: SourceGraph {
                 repo_id: id.clone(),
@@ -360,6 +379,7 @@ mod tests {
             },
             settings: RepoSettings::default(),
             first_push_token: None,
+            pending_import: None,
             policy: Policy::new(Visibility::Public, TEST_OWNER_ID),
             graph: SourceGraph {
                 repo_id: TEST_REPO_ID.to_string(),
