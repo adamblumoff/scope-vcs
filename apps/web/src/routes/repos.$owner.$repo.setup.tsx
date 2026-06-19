@@ -37,6 +37,11 @@ type FirstPushToken = {
   secret: string | null
 }
 
+type GitPushToken = {
+  created_at_unix: number
+  secret: string | null
+}
+
 type RepoSetup = {
   repo: RepoSummary
   git_remote_path: string
@@ -44,10 +49,15 @@ type RepoSetup = {
   push_branch: string
   push_enabled: boolean
   token: FirstPushToken | null
+  push_token: GitPushToken | null
 }
 
 type RepoSetupView = RepoSetup & {
   commands: string[]
+  git_remote_url: string
+}
+
+type RepoSetupCommandSource = RepoSetup & {
   git_remote_url: string
 }
 
@@ -113,14 +123,25 @@ function SetupPage() {
   const [tokenSecret, setTokenSecret] = useState<string | null>(
     initialSetup.token?.secret ?? null,
   )
+  const [pushTokenSecret, setPushTokenSecret] = useState<string | null>(
+    initialSetup.push_token?.secret ?? null,
+  )
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  const commands = setupCommands(setup)
 
   useEffect(() => {
     const stored = window.sessionStorage.getItem(setupSecretKey(setup.repo.id))
     if (stored) {
       setTokenSecret(stored)
       window.sessionStorage.removeItem(setupSecretKey(setup.repo.id))
+    }
+    const storedPush = window.sessionStorage.getItem(
+      setupPushSecretKey(setup.repo.id),
+    )
+    if (storedPush) {
+      setPushTokenSecret(storedPush)
+      window.sessionStorage.removeItem(setupPushSecretKey(setup.repo.id))
     }
   }, [setup.repo.id])
 
@@ -131,6 +152,7 @@ function SetupPage() {
       const next = await regenerateTokenForRequest({ data: params })
       setSetup(next)
       setTokenSecret(next.token?.secret ?? null)
+      setPushTokenSecret(next.push_token?.secret ?? null)
     } catch (tokenError) {
       setError(
         tokenError instanceof Error ? tokenError.message : 'token update failed',
@@ -226,6 +248,26 @@ function SetupPage() {
         <section className="border-b border-border">
           <div className="grid gap-4 py-5 md:grid-cols-[180px_minmax(0,1fr)]">
             <div className="flex items-center gap-2 text-sm font-semibold leading-5">
+              <KeyRound className="size-4" />
+              <span>Git push token</span>
+            </div>
+            <div className="min-w-0 space-y-3">
+              {pushTokenSecret ? (
+                <code className="block overflow-x-auto rounded-md border border-border bg-muted px-3 py-2 font-mono text-xs leading-5">
+                  {pushTokenSecret}
+                </code>
+              ) : (
+                <p className="text-sm leading-5 text-muted-foreground">
+                  Visible once when the repository is created.
+                </p>
+              )}
+            </div>
+          </div>
+        </section>
+
+        <section className="border-b border-border">
+          <div className="grid gap-4 py-5 md:grid-cols-[180px_minmax(0,1fr)]">
+            <div className="flex items-center gap-2 text-sm font-semibold leading-5">
               <Terminal className="size-4" />
               <span>Git setup</span>
             </div>
@@ -236,7 +278,7 @@ function SetupPage() {
                   commands are the intended remote and push shape.
                 </p>
               )}
-              {setup.commands.map((command) => (
+              {commands.map((command) => (
                 <code
                   className="block overflow-x-auto rounded-md border border-border bg-muted px-3 py-2 font-mono text-xs leading-5"
                   key={command}
@@ -310,12 +352,16 @@ function setupView(api: string, setup: RepoSetup): RepoSetupView {
 
   return {
     ...setup,
-    commands: [
-      `git remote add ${setup.remote_name} ${gitRemoteUrl}`,
-      `git push -u ${setup.remote_name} ${setup.push_branch}`,
-    ],
+    commands: setupCommands({ ...setup, git_remote_url: gitRemoteUrl }),
     git_remote_url: gitRemoteUrl,
   }
+}
+
+function setupCommands(setup: RepoSetupCommandSource) {
+  return [
+    `git remote add ${setup.remote_name} ${setup.git_remote_url}`,
+    `git push -u ${setup.remote_name} HEAD:${setup.push_branch}`,
+  ]
 }
 
 function authHeaders(idToken?: string): HeadersInit {
@@ -328,6 +374,10 @@ function formatUnix(value: number) {
 
 function setupSecretKey(repoId: string) {
   return `scope:first-push-token:${repoId}`
+}
+
+function setupPushSecretKey(repoId: string) {
+  return `scope:git-push-token:${repoId}`
 }
 
 function getApiConnection() {

@@ -23,11 +23,14 @@ import {
   LoaderCircle,
   Lock,
   Rocket,
+  X,
 } from 'lucide-react'
 import { useState } from 'react'
 
 type Visibility = 'Private' | 'Public'
 type RepoPublicationState = 'PendingFirstPush' | 'PendingPublish' | 'Published'
+type ReviewKind = 'PendingImport' | 'StagedUpdate'
+type StagedFileChangeKind = 'Added' | 'Modified' | 'Deleted'
 
 type RepoFile = {
   path: string
@@ -36,11 +39,44 @@ type RepoFile = {
   visibility: Visibility
 }
 
-type PendingImportReview = {
-  publication_state: RepoPublicationState
+type PendingImportPayload = {
+  publication_state: 'PendingPublish'
   default_visibility: Visibility
   files: RepoFile[]
 }
+
+type StagedFile = {
+  path: string
+  kind: StagedFileChangeKind
+  old_oid: string | null
+  new_oid: string | null
+  visibility: Visibility
+}
+
+type StagedUpdate = {
+  id: string
+  branch: string
+  base_live_commit_id: string | null
+  message: string
+  files: StagedFile[]
+}
+
+type PendingImportReview = PendingImportPayload & {
+  kind: 'PendingImport'
+}
+
+type StagedUpdateReview = {
+  kind: 'StagedUpdate'
+  publication_state: 'Published'
+  default_visibility: null
+  id: string | null
+  branch: string | null
+  base_live_commit_id: string | null
+  message: string | null
+  files: StagedFile[]
+}
+
+type RepoReview = PendingImportReview | StagedUpdateReview
 
 type ReviewParams = {
   owner: string
@@ -48,6 +84,7 @@ type ReviewParams = {
 }
 
 type SetFileVisibilityInput = ReviewParams & {
+  kind: ReviewKind
   path: string
   visibility: Visibility
 }
@@ -62,11 +99,7 @@ const loadReviewForRequest = createServerFn({ method: 'GET' })
       throw new Error('Sign in as the repo owner to review this import.')
     }
 
-    const api = getApiConnection()
-    return loadJson<PendingImportReview>(
-      `${api}/v1/repos/${data.owner}/${data.repo}/pending-import`,
-      { headers: authHeaders(idToken) },
-    )
+    return loadRepoReview(data, idToken)
   })
 
 const setFileVisibilityForRequest = createServerFn({ method: 'POST' })
@@ -77,27 +110,24 @@ const setFileVisibilityForRequest = createServerFn({ method: 'POST' })
       throw new Error('Sign in as the repo owner to update file visibility.')
     }
 
-    const response = await fetch(
-      `${getApiMutationConnection()}/v1/repos/${data.owner}/${data.repo}/files/visibility`,
-      {
-        body: JSON.stringify({
-          path: data.path,
-          visibility: data.visibility,
-        }),
-        headers: {
-          ...authHeaders(idToken),
-          'content-type': 'application/json',
-        },
-        method: 'PATCH',
+    const response = await fetch(reviewVisibilityUrl(data), {
+      body: JSON.stringify({
+        path: data.path,
+        visibility: data.visibility,
+      }),
+      headers: {
+        ...authHeaders(idToken),
+        'content-type': 'application/json',
       },
-    )
+      method: 'PATCH',
+    })
     const payload = await response.json().catch(() => null)
 
     if (!response.ok) {
       throw new Error(payload?.error ?? `request failed: ${response.status}`)
     }
 
-    return payload as RepoFile
+    return payload as RepoFile | StagedUpdate
   })
 
 const publishRepoForRequest = createServerFn({ method: 'POST' })
@@ -124,6 +154,75 @@ const publishRepoForRequest = createServerFn({ method: 'POST' })
     return payload as { id: string; publication_state: RepoPublicationState }
   })
 
+const applyStagedUpdateForRequest = createServerFn({ method: 'POST' })
+  .validator(parseReviewParams)
+  .handler(async ({ data }) => postStagedUpdateAction(data, 'apply'))
+
+const rejectStagedUpdateForRequest = createServerFn({ method: 'POST' })
+  .validator(parseReviewParams)
+  .handler(async ({ data }) => postStagedUpdateAction(data, 'reject'))
+
+async function loadRepoReview(
+  data: ReviewParams,
+  idToken: string,
+): Promise<RepoReview> {
+  const api = getApiConnection()
+  const init = { headers: authHeaders(idToken) }
+
+  try {
+    const pending = await loadJson<PendingImportPayload>(
+      `${api}/v1/repos/${data.owner}/${data.repo}/pending-import`,
+      init,
+    )
+    return { kind: 'PendingImport', ...pending }
+  } catch (error) {
+    if (!(error instanceof HttpError) || error.status !== 400) {
+      throw error
+    }
+  }
+
+  const staged = await loadJson<StagedUpdate | null>(
+    `${api}/v1/repos/${data.owner}/${data.repo}/staged-update`,
+    init,
+  )
+
+  return {
+    kind: 'StagedUpdate',
+    publication_state: 'Published',
+    default_visibility: null,
+    id: staged?.id ?? null,
+    branch: staged?.branch ?? null,
+    base_live_commit_id: staged?.base_live_commit_id ?? null,
+    message: staged?.message ?? null,
+    files: staged?.files ?? [],
+  }
+}
+
+async function postStagedUpdateAction(
+  data: ReviewParams,
+  action: 'apply' | 'reject',
+) {
+  const idToken = await readRequestAuthToken()
+  if (!idToken) {
+    throw new Error('Sign in as the repo owner to review this push.')
+  }
+
+  const response = await fetch(
+    `${getApiMutationConnection()}/v1/repos/${data.owner}/${data.repo}/staged-update/${action}`,
+    {
+      headers: authHeaders(idToken),
+      method: 'POST',
+    },
+  )
+  const payload = await response.json().catch(() => null)
+
+  if (!response.ok) {
+    throw new Error(payload?.error ?? `request failed: ${response.status}`)
+  }
+
+  return payload as StagedUpdate
+}
+
 export const Route = createFileRoute('/repos/$owner/$repo/review')({
   loader: ({ params }) => loadReviewForRequest({ data: params }),
   errorComponent: ReviewError,
@@ -134,24 +233,21 @@ function ReviewPage() {
   const initialReview = Route.useLoaderData()
   const params = Route.useParams()
   const navigate = useNavigate()
-  const [review, setReview] = useState<PendingImportReview>(initialReview)
+  const [review, setReview] = useState<RepoReview>(initialReview)
   const [pendingPath, setPendingPath] = useState<string | null>(null)
   const [publishing, setPublishing] = useState(false)
+  const [rejecting, setRejecting] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  const stagedReview = review.kind === 'StagedUpdate'
 
-  async function setVisibility(file: RepoFile, visibility: Visibility) {
+  async function setVisibility(file: RepoFile | StagedFile, visibility: Visibility) {
     setError(null)
     setPendingPath(file.path)
     try {
       const updated = await setFileVisibilityForRequest({
-        data: { ...params, path: file.path, visibility },
+        data: { ...params, kind: review.kind, path: file.path, visibility },
       })
-      setReview((current) => ({
-        ...current,
-        files: current.files.map((currentFile) =>
-          currentFile.path === updated.path ? updated : currentFile,
-        ),
-      }))
+      setReview((current) => updateReviewVisibility(current, updated))
     } catch (visibilityError) {
       setError(
         visibilityError instanceof Error
@@ -163,15 +259,33 @@ function ReviewPage() {
     }
   }
 
-  async function publishRepo() {
+  async function completeReview() {
     setPublishing(true)
     setError(null)
     try {
-      await publishRepoForRequest({ data: params })
+      if (review.kind === 'StagedUpdate') {
+        await applyStagedUpdateForRequest({ data: params })
+      } else {
+        await publishRepoForRequest({ data: params })
+      }
       await navigate({ to: '/' })
     } catch (publishError) {
-      setError(publishError instanceof Error ? publishError.message : 'publish failed')
+      setError(
+        publishError instanceof Error ? publishError.message : 'review action failed',
+      )
       setPublishing(false)
+    }
+  }
+
+  async function rejectStagedUpdate() {
+    setRejecting(true)
+    setError(null)
+    try {
+      await rejectStagedUpdateForRequest({ data: params })
+      await navigate({ to: '/' })
+    } catch (rejectError) {
+      setError(rejectError instanceof Error ? rejectError.message : 'reject failed')
+      setRejecting(false)
     }
   }
 
@@ -204,26 +318,59 @@ function ReviewPage() {
           <div className="min-w-0">
             <div className="mb-3 flex flex-wrap items-center gap-2">
               <Badge variant="outline">{review.publication_state}</Badge>
-              <VisibilityBadge visibility={review.default_visibility} />
+              {review.default_visibility && (
+                <VisibilityBadge visibility={review.default_visibility} />
+              )}
               <Badge variant="outline">{review.files.length} files</Badge>
+              {stagedReview && review.branch && (
+                <Badge variant="outline">{review.branch}</Badge>
+              )}
             </div>
             <h1 className="truncate font-mono text-2xl font-semibold leading-8 sm:text-[32px] sm:leading-10">
               {params.owner}/{params.repo}
             </h1>
           </div>
-          <Button
-            disabled={publishing}
-            onClick={() => void publishRepo()}
-            size="sm"
-            type="button"
-          >
-            {publishing ? (
-              <LoaderCircle className="size-3.5 animate-spin" />
-            ) : (
-              <Rocket className="size-3.5" />
+          <div className="flex items-center gap-2">
+            {stagedReview && (
+              <Button
+                disabled={publishing || rejecting || review.files.length === 0}
+                onClick={() => void rejectStagedUpdate()}
+                size="sm"
+                type="button"
+                variant="secondary"
+              >
+                {rejecting ? (
+                  <LoaderCircle className="size-3.5 animate-spin" />
+                ) : (
+                  <X className="size-3.5" />
+                )}
+                <span>{rejecting ? 'Rejecting' : 'Reject'}</span>
+              </Button>
             )}
-            <span>{publishing ? 'Publishing' : 'Publish'}</span>
-          </Button>
+            <Button
+              disabled={
+                publishing || rejecting || (stagedReview && review.files.length === 0)
+              }
+              onClick={() => void completeReview()}
+              size="sm"
+              type="button"
+            >
+              {publishing ? (
+                <LoaderCircle className="size-3.5 animate-spin" />
+              ) : (
+                <Rocket className="size-3.5" />
+              )}
+              <span>
+                {publishing
+                  ? stagedReview
+                    ? 'Applying'
+                    : 'Publishing'
+                  : stagedReview
+                    ? 'Apply'
+                    : 'Publish'}
+              </span>
+            </Button>
+          </div>
         </div>
 
         {error && (
@@ -243,7 +390,9 @@ function ReviewPage() {
               <div className="min-w-0">
                 <div className="text-sm font-medium leading-5">No files found</div>
                 <div className="mt-1 text-sm leading-5 text-muted-foreground">
-                  This repo can still be published.
+                  {stagedReview
+                    ? 'No staged push is waiting.'
+                    : 'This repo can still be published.'}
                 </div>
               </div>
             </div>
@@ -252,6 +401,7 @@ function ReviewPage() {
               <TableHeader>
                 <TableRow>
                   <TableHead>File</TableHead>
+                  {stagedReview && <TableHead className="w-[100px]">Change</TableHead>}
                   <TableHead className="w-[120px]">Visibility</TableHead>
                   <TableHead className="w-[120px] text-right">Change</TableHead>
                 </TableRow>
@@ -266,12 +416,19 @@ function ReviewPage() {
                       <TableCell className="max-w-[340px] truncate font-mono text-xs sm:max-w-[560px]">
                         {file.path}
                       </TableCell>
+                      {stagedReview && (
+                        <TableCell>
+                          <Badge variant="outline">
+                            {'kind' in file ? file.kind : 'Modified'}
+                          </Badge>
+                        </TableCell>
+                      )}
                       <TableCell>
                         <VisibilityBadge visibility={file.visibility} />
                       </TableCell>
                       <TableCell className="text-right">
                         <Button
-                          disabled={busy || publishing}
+                          disabled={busy || publishing || rejecting}
                           onClick={() => void setVisibility(file, nextVisibility)}
                           size="sm"
                           type="button"
@@ -295,6 +452,37 @@ function ReviewPage() {
       </section>
     </main>
   )
+}
+
+function updateReviewVisibility(
+  current: RepoReview,
+  updated: RepoFile | StagedUpdate,
+): RepoReview {
+  if (current.kind === 'StagedUpdate') {
+    if (!('files' in updated)) {
+      return current
+    }
+
+    return {
+      ...current,
+      id: updated.id,
+      branch: updated.branch,
+      base_live_commit_id: updated.base_live_commit_id,
+      message: updated.message,
+      files: updated.files,
+    }
+  }
+
+  if ('files' in updated) {
+    return current
+  }
+
+  return {
+    ...current,
+    files: current.files.map((currentFile) =>
+      currentFile.path === updated.path ? updated : currentFile,
+    ),
+  }
 }
 
 function VisibilityBadge({ visibility }: { visibility: Visibility }) {
@@ -359,6 +547,7 @@ function parseReviewParams(input: unknown): ReviewParams {
 function parseSetFileVisibilityInput(input: unknown): SetFileVisibilityInput {
   const data = input as Partial<SetFileVisibilityInput> | null
   const params = parseReviewParams(data)
+  const kind = data?.kind === 'StagedUpdate' ? 'StagedUpdate' : 'PendingImport'
   const path = typeof data?.path === 'string' ? data.path.trim() : ''
   const visibility = data?.visibility === 'Public' ? 'Public' : 'Private'
 
@@ -366,7 +555,7 @@ function parseSetFileVisibilityInput(input: unknown): SetFileVisibilityInput {
     throw new Error('File path is required.')
   }
 
-  return { ...params, path, visibility }
+  return { ...params, kind, path, visibility }
 }
 
 async function loadJson<T>(url: string, init?: RequestInit): Promise<T> {
@@ -374,10 +563,31 @@ async function loadJson<T>(url: string, init?: RequestInit): Promise<T> {
   const payload = await response.json().catch(() => null)
 
   if (!response.ok) {
-    throw new Error(payload?.error ?? `request failed: ${response.status}`)
+    throw new HttpError(
+      payload?.error ?? `request failed: ${response.status}`,
+      response.status,
+    )
   }
 
   return payload as T
+}
+
+class HttpError extends Error {
+  constructor(
+    message: string,
+    readonly status: number,
+  ) {
+    super(message)
+  }
+}
+
+function reviewVisibilityUrl(data: SetFileVisibilityInput) {
+  const endpoint =
+    data.kind === 'StagedUpdate'
+      ? 'staged-update/files/visibility'
+      : 'files/visibility'
+
+  return `${getApiMutationConnection()}/v1/repos/${data.owner}/${data.repo}/${endpoint}`
 }
 
 function authHeaders(idToken?: string): HeadersInit {

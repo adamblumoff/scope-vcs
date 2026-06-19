@@ -46,6 +46,7 @@ type RepoSummary = {
   lifecycle_state: RepoLifecycleState
   default_visibility: Visibility
   role: RepoRole
+  staged_update_pending: boolean
 }
 
 type FirstPushToken = {
@@ -56,12 +57,18 @@ type FirstPushToken = {
   secret: string | null
 }
 
+type GitPushToken = {
+  created_at_unix: number
+  secret: string | null
+}
+
 type RepoSetup = {
   repo: RepoSummary
   git_remote_path: string
   remote_name: string
   push_branch: string
   token: FirstPushToken | null
+  push_token: GitPushToken | null
 }
 
 type CreateRepoResponse = {
@@ -186,7 +193,13 @@ function ScopeHome() {
       const repo = created.repo
       setRepositories((current) => [repo, ...current])
       if (created.setup.token?.secret) {
-        storeSetupSecret(repo.id, created.setup.token.secret)
+        storeSetupSecret(setupSecretKey(repo.id), created.setup.token.secret)
+      }
+      if (created.setup.push_token?.secret) {
+        storeSetupSecret(
+          setupPushSecretKey(repo.id),
+          created.setup.push_token.secret,
+        )
       }
       await navigate({
         to: '/repos/$owner/$repo/setup',
@@ -407,7 +420,8 @@ function RepoList({
                 </Link>
               </Button>
             )}
-            {repo.lifecycle_state === 'PendingPublish' && (
+            {(repo.lifecycle_state === 'PendingPublish' ||
+              (repo.lifecycle_state === 'Published' && repo.staged_update_pending)) && (
               <Button asChild size="sm" variant="secondary">
                 <Link
                   params={{ owner: repo.owner_handle, repo: repo.name }}
@@ -580,16 +594,20 @@ function lifecycleLabel(state: RepoLifecycleState) {
   }
 }
 
-function storeSetupSecret(repoId: string, secret: string) {
+function storeSetupSecret(key: string, secret: string) {
   if (typeof window === 'undefined') {
     return
   }
 
-  window.sessionStorage.setItem(setupSecretKey(repoId), secret)
+  window.sessionStorage.setItem(key, secret)
 }
 
 export function setupSecretKey(repoId: string) {
   return `scope:first-push-token:${repoId}`
+}
+
+export function setupPushSecretKey(repoId: string) {
+  return `scope:git-push-token:${repoId}`
 }
 
 function applyTheme(theme: ThemeMode) {
