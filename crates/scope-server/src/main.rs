@@ -1,11 +1,16 @@
 use anyhow::Context;
 use axum::{
     Json, Router,
-    extract::{Path, Query, State},
-    http::{HeaderMap, StatusCode, header::AUTHORIZATION},
+    body::{Body, to_bytes},
+    extract::{Path, Query, Request, State},
+    http::{
+        HeaderMap, HeaderValue, StatusCode,
+        header::{AUTHORIZATION, CONTENT_TYPE, WWW_AUTHENTICATE},
+    },
     response::{IntoResponse, Response},
-    routing::{get, patch},
+    routing::{get, patch, post},
 };
+use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64};
 use jsonwebtoken::{
     Algorithm, DecodingKey, Validation, decode, decode_header,
     jwk::{Jwk, JwkSet},
@@ -14,8 +19,9 @@ use scope_git::{VirtualGitProjection, build_virtual_git_projection};
 use scope_policy::{Policy, Principal, ScopePath, Visibility, VisibilityRule};
 use scope_projection::{Projection, project_graph};
 use scope_store::{
-    AccountAccess, AppCatalog, CatalogError, FirstPushToken, FirstPushTokenStatus,
-    RepoPublicationState, RepoRole, RepoSettings, StoredRepository, UserAccount, app_catalog,
+    AccountAccess, AppCatalog, CatalogError, FirstPushToken, FirstPushTokenStatus, PendingImport,
+    PendingImportFile, RepoPublicationState, RepoRole, RepoSettings, StoredRepository, UserAccount,
+    app_catalog,
 };
 use serde::{Deserialize, Serialize};
 use sha1::Sha1;
@@ -26,7 +32,7 @@ use std::{
     io::Write,
     net::SocketAddr,
     path::{Path as FsPath, PathBuf},
-    process::Command,
+    process::{Command, Stdio},
     sync::{Arc, Mutex},
     time::Duration,
 };
@@ -41,6 +47,11 @@ const SHOO_ISSUER: &str = "https://shoo.dev";
 const LOCAL_APP_ORIGIN: &str = "http://localhost:3000";
 const FIRST_PUSH_TOKEN_BYTES: usize = 32;
 const FIRST_PUSH_TOKEN_TTL_SECS: u64 = 60 * 60 * 24;
+const EMPTY_GIT_OID: &str = "0000000000000000000000000000000000000000";
+const MAX_RECEIVE_PACK_BYTES: usize = 512 * 1024 * 1024;
+const MAX_PENDING_IMPORT_FILES: usize = 10_000;
+const MAX_PENDING_IMPORT_BLOB_BYTES: usize = 25 * 1024 * 1024;
+const MAX_PENDING_IMPORT_TOTAL_BYTES: usize = 100 * 1024 * 1024;
 
 #[derive(Clone)]
 struct AppState {
@@ -249,6 +260,7 @@ fn router(state: AppState) -> Router {
             get(get_git_projection),
         )
         .route("/git/{org}/{repo}/info/refs", get(git_info_refs))
+        .route("/git/{org}/{repo}/git-receive-pack", post(git_receive_pack))
         .with_state(state)
         .layer(CorsLayer::permissive())
         .layer(TraceLayer::new_for_http())
@@ -626,26 +638,663 @@ async fn update_settings(
 }
 
 async fn git_info_refs(
+    State(state): State<AppState>,
+    headers: HeaderMap,
     Path((org, repo)): Path<(String, String)>,
     Query(query): Query<GitInfoRefsQuery>,
 ) -> Response {
-    let mut details = BTreeMap::new();
-    details.insert("org", org);
-    details.insert("repo", repo);
-    details.insert(
-        "service",
-        query.service.unwrap_or_else(|| "unspecified".to_string()),
-    );
+    match query.service.as_deref() {
+        Some("git-receive-pack") => {
+            match handle_git_receive_pack(&state, &headers, &org, &repo, "GET", Vec::new(), None) {
+                Ok(response) => response,
+                Err(error) => git_error_response(error),
+            }
+        }
+        Some("git-upload-pack") => (
+            StatusCode::NOT_IMPLEMENTED,
+            Json(serde_json::json!({
+                "error": "git clone is blocked until publish creates a public Git projection"
+            })),
+        )
+            .into_response(),
+        Some(service) => (
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({
+                "error": format!("unsupported Git service {service}")
+            })),
+        )
+            .into_response(),
+        None => (
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({
+                "error": "missing Git service"
+            })),
+        )
+            .into_response(),
+    }
+}
 
-    (
-        StatusCode::NOT_IMPLEMENTED,
-        Json(serde_json::json!({
-            "error": "custom git upload-pack/receive-pack is not implemented yet",
-            "details": details,
-            "next": "scope-git already builds leak-checked virtual object sets; this endpoint must serve real packfiles before Git clone is enabled"
-        })),
+async fn git_receive_pack(
+    State(state): State<AppState>,
+    Path((org, repo)): Path<(String, String)>,
+    request: Request,
+) -> Response {
+    let headers = request.headers().clone();
+    let token_secret = match first_push_token_from_headers(&headers) {
+        Ok(token_secret) => token_secret,
+        Err(error) => return git_error_response(error),
+    };
+    if let Err(error) = authorize_first_push(&state, &org, &repo, &token_secret) {
+        return git_error_response(error);
+    }
+
+    let content_type = headers
+        .get(CONTENT_TYPE)
+        .and_then(|value| value.to_str().ok())
+        .map(str::to_string);
+    let body = match to_bytes(request.into_body(), MAX_RECEIVE_PACK_BYTES).await {
+        Ok(body) => body,
+        Err(error) => {
+            return (
+                StatusCode::PAYLOAD_TOO_LARGE,
+                Json(serde_json::json!({
+                    "error": format!("git receive-pack body is too large: {error}")
+                })),
+            )
+                .into_response();
+        }
+    };
+
+    match handle_git_receive_pack(
+        &state,
+        &headers,
+        &org,
+        &repo,
+        "POST",
+        body.to_vec(),
+        content_type,
+    ) {
+        Ok(response) => response,
+        Err(error) => git_error_response(error),
+    }
+}
+
+fn handle_git_receive_pack(
+    state: &AppState,
+    headers: &HeaderMap,
+    owner: &str,
+    repo_name: &str,
+    method: &str,
+    body: Vec<u8>,
+    content_type: Option<String>,
+) -> Result<Response, ApiError> {
+    let token_secret = first_push_token_from_headers(headers)?;
+    authorize_first_push(state, owner, repo_name, &token_secret)?;
+    let staging_repo = ensure_receive_pack_staging_repo(state, owner, repo_name)?;
+    let cgi = git_http_backend(
+        &staging_repo,
+        method,
+        if method == "GET" {
+            "info/refs"
+        } else {
+            "git-receive-pack"
+        },
+        if method == "GET" {
+            "service=git-receive-pack"
+        } else {
+            ""
+        },
+        body,
+        content_type,
+    )?;
+
+    if method == "POST" && cgi.status.is_success() {
+        let import = match pending_import_from_staging_repo(&staging_repo) {
+            Ok(import) => import,
+            Err(error) => {
+                let _ = fs::remove_dir_all(&staging_repo);
+                return Err(error);
+            }
+        };
+        if let Err(error) = persist_pending_import(state, owner, repo_name, &token_secret, import) {
+            let _ = fs::remove_dir_all(&staging_repo);
+            return Err(error);
+        }
+        let _ = fs::remove_dir_all(&staging_repo);
+    }
+
+    Ok(cgi.into_response())
+}
+
+fn first_push_token_from_headers(headers: &HeaderMap) -> Result<String, ApiError> {
+    let Some(value) = headers.get(AUTHORIZATION) else {
+        return Err(ApiError::unauthorized("first-push token required"));
+    };
+    let value = value
+        .to_str()
+        .map_err(|_| ApiError::unauthorized("invalid authorization header"))?;
+
+    if let Some(token) = value.strip_prefix("Bearer ") {
+        let token = token.trim();
+        if token.is_empty() {
+            return Err(ApiError::unauthorized("empty first-push token"));
+        }
+        return Ok(token.to_string());
+    }
+
+    if let Some(encoded) = value.strip_prefix("Basic ") {
+        let decoded = BASE64
+            .decode(encoded.trim())
+            .map_err(|_| ApiError::unauthorized("invalid basic authorization"))?;
+        let decoded = String::from_utf8(decoded)
+            .map_err(|_| ApiError::unauthorized("invalid basic authorization"))?;
+        let (username, password) = decoded.split_once(':').unwrap_or((decoded.as_str(), ""));
+        let token = if password.is_empty() {
+            username.trim()
+        } else {
+            password.trim()
+        };
+        if token.is_empty() {
+            return Err(ApiError::unauthorized("empty first-push token"));
+        }
+        return Ok(token.to_string());
+    }
+
+    Err(ApiError::unauthorized(
+        "expected Authorization: Basic or Bearer first-push token",
+    ))
+}
+
+fn authorize_first_push(
+    state: &AppState,
+    owner: &str,
+    repo_name: &str,
+    token_secret: &str,
+) -> Result<(), ApiError> {
+    let repo = find_repo(state, owner, repo_name)?;
+    if repo.record.publication_state != RepoPublicationState::PendingFirstPush {
+        return Err(ApiError::conflict(
+            "repo is not waiting for an initial Git push",
+        ));
+    }
+    if repo.pending_import.is_some() {
+        return Err(ApiError::conflict("repo already has a pending import"));
+    }
+
+    let now = unix_now()?;
+    let Some(token) = repo.first_push_token.as_ref() else {
+        return Err(ApiError::unauthorized("first-push token is not configured"));
+    };
+    if token.owner_user_id != repo.record.owner_user_id {
+        return Err(ApiError::forbidden(
+            "first-push token owner does not match repo owner",
+        ));
+    }
+    if token.status_at(now) != FirstPushTokenStatus::Active {
+        return Err(ApiError::unauthorized(
+            "first-push token is expired or used",
+        ));
+    }
+    if token.token_hash != first_push_token_hash(token_secret) {
+        return Err(ApiError::unauthorized("invalid first-push token"));
+    }
+
+    Ok(())
+}
+
+fn ensure_receive_pack_staging_repo(
+    state: &AppState,
+    owner: &str,
+    repo_name: &str,
+) -> Result<PathBuf, ApiError> {
+    let base_dir = state
+        .state_path
+        .parent()
+        .map(PathBuf::from)
+        .unwrap_or_else(std::env::temp_dir);
+    let repo_root = base_dir
+        .join("git-receive")
+        .join(format!("{}.git", safe_repo_key(owner, repo_name)));
+    if repo_root.join("HEAD").exists() {
+        match git_refs(&repo_root) {
+            Ok(refs) if !refs.is_empty() => {
+                fs::remove_dir_all(&repo_root).map_err(ApiError::internal)?;
+            }
+            Err(_) => {
+                fs::remove_dir_all(&repo_root).map_err(ApiError::internal)?;
+            }
+            _ => {}
+        }
+    }
+    if !repo_root.join("HEAD").exists() {
+        if let Some(parent) = repo_root.parent() {
+            fs::create_dir_all(parent).map_err(ApiError::internal)?;
+        }
+        run_git(
+            None,
+            &["init", "--bare", repo_root.to_string_lossy().as_ref()],
+            "initializing receive-pack staging repo",
+        )?;
+        run_git(
+            Some(&repo_root),
+            &["config", "http.receivepack", "true"],
+            "enabling receive-pack",
+        )?;
+        install_pre_receive_hook(&repo_root)?;
+    }
+    Ok(repo_root)
+}
+
+fn install_pre_receive_hook(repo_root: &FsPath) -> Result<(), ApiError> {
+    let hook = repo_root.join("hooks").join("pre-receive");
+    let script = format!(
+        "#!/bin/sh\ncount=0\nwhile read old new ref; do\n  count=$((count + 1))\n  case \"$ref\" in\n    refs/heads/*) ;;\n    *) echo \"Scope accepts only the first pushed branch in v0\" >&2; exit 1 ;;\n  esac\n  if [ \"$new\" = \"{EMPTY_GIT_OID}\" ]; then\n    echo \"Scope does not accept branch deletes in v0\" >&2\n    exit 1\n  fi\n  if [ \"$old\" != \"{EMPTY_GIT_OID}\" ]; then\n    echo \"Scope accepts only the initial branch push in v0\" >&2\n    exit 1\n  fi\ndone\nif [ \"$count\" -ne 1 ]; then\n  echo \"Scope accepts exactly one pushed branch in v0\" >&2\n  exit 1\nfi\n"
+    );
+    fs::write(&hook, script).map_err(ApiError::internal)?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let mut permissions = fs::metadata(&hook)
+            .map_err(ApiError::internal)?
+            .permissions();
+        permissions.set_mode(0o755);
+        fs::set_permissions(&hook, permissions).map_err(ApiError::internal)?;
+    }
+    Ok(())
+}
+
+fn git_http_backend(
+    staging_repo: &FsPath,
+    method: &str,
+    path_suffix: &str,
+    query_string: &str,
+    body: Vec<u8>,
+    content_type: Option<String>,
+) -> Result<CgiResponse, ApiError> {
+    let staging_parent = staging_repo
+        .parent()
+        .ok_or_else(|| ApiError::internal_message("staging repo is missing a parent"))?;
+    let repo_name = staging_repo
+        .file_name()
+        .and_then(|value| value.to_str())
+        .ok_or_else(|| ApiError::internal_message("staging repo has invalid path"))?;
+    let mut command = Command::new("git");
+    command
+        .arg("http-backend")
+        .env("GIT_PROJECT_ROOT", staging_parent)
+        .env("GIT_HTTP_EXPORT_ALL", "1")
+        .env("REQUEST_METHOD", method)
+        .env("PATH_INFO", format!("/{repo_name}/{path_suffix}"))
+        .env("QUERY_STRING", query_string)
+        .env("REMOTE_USER", "first-push-token")
+        .env("CONTENT_LENGTH", body.len().to_string())
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+    if let Some(content_type) = content_type {
+        command.env("CONTENT_TYPE", content_type);
+    }
+
+    let mut child = command.spawn().map_err(|error| {
+        ApiError::service_unavailable(format!("failed to start git http-backend: {error}"))
+    })?;
+    if let Some(stdin) = child.stdin.as_mut() {
+        stdin.write_all(&body).map_err(ApiError::internal)?;
+    }
+
+    let output = child.wait_with_output().map_err(ApiError::internal)?;
+    if !output.status.success() {
+        return Err(ApiError::service_unavailable(format!(
+            "git http-backend failed: {}",
+            String::from_utf8_lossy(&output.stderr).trim()
+        )));
+    }
+
+    CgiResponse::parse(output.stdout)
+}
+
+struct CgiResponse {
+    status: StatusCode,
+    headers: Vec<(String, String)>,
+    body: Vec<u8>,
+}
+
+impl CgiResponse {
+    fn parse(output: Vec<u8>) -> Result<Self, ApiError> {
+        let header_end = find_header_end(&output)
+            .ok_or_else(|| ApiError::service_unavailable("git http-backend returned no headers"))?;
+        let (headers, body) = output.split_at(header_end.0);
+        let headers = String::from_utf8_lossy(headers);
+        let mut status = StatusCode::OK;
+        let mut parsed_headers = Vec::new();
+
+        for line in headers
+            .lines()
+            .map(str::trim)
+            .filter(|line| !line.is_empty())
+        {
+            let Some((name, value)) = line.split_once(':') else {
+                continue;
+            };
+            if name.eq_ignore_ascii_case("Status") {
+                let code = value
+                    .trim()
+                    .split_whitespace()
+                    .next()
+                    .and_then(|code| code.parse::<u16>().ok())
+                    .ok_or_else(|| ApiError::service_unavailable("invalid git CGI status"))?;
+                status = StatusCode::from_u16(code).map_err(ApiError::internal)?;
+            } else {
+                parsed_headers.push((name.trim().to_string(), value.trim().to_string()));
+            }
+        }
+
+        Ok(Self {
+            status,
+            headers: parsed_headers,
+            body: body[header_end.1..].to_vec(),
+        })
+    }
+
+    fn into_response(self) -> Response {
+        let mut builder = Response::builder().status(self.status);
+        for (name, value) in self.headers {
+            builder = builder.header(name, value);
+        }
+        builder
+            .body(Body::from(self.body))
+            .expect("git CGI response headers should be valid")
+    }
+}
+
+fn find_header_end(bytes: &[u8]) -> Option<(usize, usize)> {
+    bytes
+        .windows(4)
+        .position(|window| window == b"\r\n\r\n")
+        .map(|index| (index, 4))
+        .or_else(|| {
+            bytes
+                .windows(2)
+                .position(|window| window == b"\n\n")
+                .map(|index| (index, 2))
+        })
+}
+
+fn pending_import_from_staging_repo(staging_repo: &FsPath) -> Result<PendingImport, ApiError> {
+    let refs = git_refs(staging_repo)?;
+    if refs.len() != 1 {
+        return Err(ApiError::bad_request(
+            "push must create exactly one branch and no tags",
+        ));
+    }
+    let (refname, head_oid) = refs.into_iter().next().expect("length checked");
+    let Some(default_branch) = refname.strip_prefix("refs/heads/") else {
+        return Err(ApiError::bad_request("only branch pushes are supported"));
+    };
+    validate_branch_name(default_branch)?;
+    let tree_oid = git_stdout_text(
+        staging_repo,
+        &["rev-parse", &format!("{head_oid}^{{tree}}")],
+        "reading pushed tree",
+    )?
+    .trim()
+    .to_string();
+    let files = git_tree_files(staging_repo, &head_oid)?;
+
+    Ok(PendingImport {
+        default_branch: default_branch.to_string(),
+        head_oid,
+        tree_oid,
+        imported_at_unix: unix_now()?,
+        files,
+    })
+}
+
+fn git_refs(staging_repo: &FsPath) -> Result<Vec<(String, String)>, ApiError> {
+    let output = run_git_output(
+        Some(staging_repo),
+        &[
+            "for-each-ref",
+            "--format=%(refname)%00%(objectname)",
+            "refs",
+        ],
+        "reading pushed refs",
+    )?;
+    let text = String::from_utf8(output.stdout).map_err(ApiError::bad_request)?;
+    text.lines()
+        .map(|line| {
+            let (refname, oid) = line
+                .split_once('\0')
+                .ok_or_else(|| ApiError::internal_message("invalid git ref listing"))?;
+            Ok((refname.to_string(), oid.to_string()))
+        })
+        .collect()
+}
+
+fn validate_branch_name(branch: &str) -> Result<(), ApiError> {
+    if branch.is_empty() || branch.starts_with('-') || branch.contains("..") {
+        return Err(ApiError::bad_request("invalid branch name"));
+    }
+    run_git(
+        None,
+        &["check-ref-format", &format!("refs/heads/{branch}")],
+        "validating branch name",
     )
-        .into_response()
+}
+
+fn git_tree_files(
+    staging_repo: &FsPath,
+    head_oid: &str,
+) -> Result<Vec<PendingImportFile>, ApiError> {
+    let output = run_git_output(
+        Some(staging_repo),
+        &["ls-tree", "-rz", "-r", head_oid],
+        "reading pushed tree",
+    )?;
+    let mut files = Vec::new();
+    let mut total_bytes = 0usize;
+    for raw in output.stdout.split(|byte| *byte == 0) {
+        if raw.is_empty() {
+            continue;
+        }
+        if files.len() >= MAX_PENDING_IMPORT_FILES {
+            return Err(ApiError::bad_request(format!(
+                "pending import exceeds {MAX_PENDING_IMPORT_FILES} files"
+            )));
+        }
+        let entry = std::str::from_utf8(raw).map_err(ApiError::bad_request)?;
+        let Some((metadata, path)) = entry.split_once('\t') else {
+            return Err(ApiError::internal_message("invalid git tree entry"));
+        };
+        let mut fields = metadata.split_whitespace();
+        let mode = fields
+            .next()
+            .ok_or_else(|| ApiError::internal_message("tree entry is missing mode"))?;
+        let kind = fields
+            .next()
+            .ok_or_else(|| ApiError::internal_message("tree entry is missing type"))?;
+        let oid = fields
+            .next()
+            .ok_or_else(|| ApiError::internal_message("tree entry is missing oid"))?;
+        if kind != "blob" {
+            return Err(ApiError::bad_request(format!(
+                "unsupported Git tree entry {path}: {kind}"
+            )));
+        }
+        validate_pushed_file_path(path)?;
+        if mode != "100644" {
+            return Err(ApiError::bad_request(format!(
+                "unsupported Git file mode {path}: {mode}"
+            )));
+        }
+        let blob_size = git_stdout_text(
+            staging_repo,
+            &["cat-file", "-s", oid],
+            "reading pushed blob size",
+        )?
+        .trim()
+        .parse::<usize>()
+        .map_err(|_| ApiError::internal_message("invalid Git blob size"))?;
+        if blob_size > MAX_PENDING_IMPORT_BLOB_BYTES {
+            return Err(ApiError::bad_request(format!(
+                "blob {path} is larger than {MAX_PENDING_IMPORT_BLOB_BYTES} bytes"
+            )));
+        }
+        total_bytes = total_bytes
+            .checked_add(blob_size)
+            .ok_or_else(|| ApiError::bad_request("pending import is too large"))?;
+        if total_bytes > MAX_PENDING_IMPORT_TOTAL_BYTES {
+            return Err(ApiError::bad_request(format!(
+                "pending import exceeds {MAX_PENDING_IMPORT_TOTAL_BYTES} bytes"
+            )));
+        }
+        let content = run_git_output(
+            Some(staging_repo),
+            &["cat-file", "blob", oid],
+            "reading pushed blob",
+        )?
+        .stdout;
+        std::str::from_utf8(&content)
+            .map_err(|_| ApiError::bad_request(format!("blob {path} must be valid UTF-8 text")))?;
+        files.push(PendingImportFile {
+            path: path.to_string(),
+            mode: mode.to_string(),
+            oid: oid.to_string(),
+            content_base64: BASE64.encode(content),
+        });
+    }
+    files.sort_by(|left, right| left.path.cmp(&right.path));
+    Ok(files)
+}
+
+fn validate_pushed_file_path(path: &str) -> Result<(), ApiError> {
+    if path.is_empty() || path.starts_with('/') || path.contains('\\') {
+        return Err(ApiError::bad_request(format!(
+            "unsupported Git file path {path:?}"
+        )));
+    }
+    if path.bytes().any(|byte| byte < 0x20 || byte == 0x7f) {
+        return Err(ApiError::bad_request(format!(
+            "unsupported Git file path {path:?}"
+        )));
+    }
+
+    let scope_path = ScopePath::parse(format!("/{path}")).map_err(ApiError::bad_request)?;
+    if scope_path.as_str() != format!("/{path}") {
+        return Err(ApiError::bad_request(format!(
+            "unsupported Git file path {path:?}"
+        )));
+    }
+
+    Ok(())
+}
+
+fn persist_pending_import(
+    state: &AppState,
+    owner: &str,
+    repo_name: &str,
+    token_secret: &str,
+    import: PendingImport,
+) -> Result<(), ApiError> {
+    let repo_id = scope_store::repo_id(owner, repo_name);
+    let now = unix_now()?;
+    let mut catalog = lock_catalog(state)?;
+    let mut staged = catalog.clone();
+    {
+        let repo = staged
+            .repositories
+            .get_mut(&repo_id)
+            .ok_or_else(|| ApiError::not_found(format!("repo {owner}/{repo_name} not found")))?;
+        if repo.record.publication_state != RepoPublicationState::PendingFirstPush {
+            return Err(ApiError::conflict(
+                "repo is not waiting for an initial Git push",
+            ));
+        }
+        if repo.pending_import.is_some() {
+            return Err(ApiError::conflict("repo already has a pending import"));
+        }
+        let Some(token) = repo.first_push_token.as_mut() else {
+            return Err(ApiError::unauthorized("first-push token is not configured"));
+        };
+        if token.status_at(now) != FirstPushTokenStatus::Active
+            || token.token_hash != first_push_token_hash(token_secret)
+        {
+            return Err(ApiError::unauthorized(
+                "first-push token is expired, used, or invalid",
+            ));
+        }
+        token.used_at_unix = Some(now);
+        repo.pending_import = Some(import);
+        repo.record.publication_state = RepoPublicationState::PendingPublish;
+    }
+
+    persist_catalog(state, &staged)?;
+    *catalog = staged;
+    Ok(())
+}
+
+fn run_git(repo: Option<&FsPath>, args: &[&str], action: &str) -> Result<(), ApiError> {
+    let output = run_git_output(repo, args, action)?;
+    if output.status.success() {
+        Ok(())
+    } else {
+        Err(ApiError::service_unavailable(format!(
+            "{action}: {}",
+            String::from_utf8_lossy(&output.stderr).trim()
+        )))
+    }
+}
+
+fn git_stdout_text(repo: &FsPath, args: &[&str], action: &str) -> Result<String, ApiError> {
+    let output = run_git_output(Some(repo), args, action)?;
+    if !output.status.success() {
+        return Err(ApiError::service_unavailable(format!(
+            "{action}: {}",
+            String::from_utf8_lossy(&output.stderr).trim()
+        )));
+    }
+    String::from_utf8(output.stdout).map_err(ApiError::bad_request)
+}
+
+fn run_git_output(
+    repo: Option<&FsPath>,
+    args: &[&str],
+    action: &str,
+) -> Result<std::process::Output, ApiError> {
+    let mut command = Command::new("git");
+    if let Some(repo) = repo {
+        command.arg("-C").arg(repo);
+    }
+    command
+        .args(args)
+        .output()
+        .map_err(|error| ApiError::service_unavailable(format!("failed {action}: {error}")))
+}
+
+fn safe_repo_key(owner: &str, repo_name: &str) -> String {
+    format!(
+        "{}-{}",
+        owner
+            .chars()
+            .map(|ch| if ch.is_ascii_alphanumeric() { ch } else { '-' })
+            .collect::<String>(),
+        repo_name
+            .chars()
+            .map(|ch| if ch.is_ascii_alphanumeric() { ch } else { '-' })
+            .collect::<String>()
+    )
+}
+
+fn git_error_response(error: ApiError) -> Response {
+    if error.status == StatusCode::UNAUTHORIZED {
+        let mut response = error.into_response();
+        response.headers_mut().insert(
+            WWW_AUTHENTICATE,
+            HeaderValue::from_static("Basic realm=\"Scope first push\""),
+        );
+        return response;
+    }
+    error.into_response()
 }
 
 fn find_repo(state: &AppState, owner: &str, name: &str) -> Result<StoredRepository, ApiError> {
@@ -1626,6 +2275,40 @@ kGxvBjzgF9RjXJoldYnFk7mJ5gLANHjaaad3qTQJ8DldKJoSqkEkm5gg
         serde_json::from_slice(&body).unwrap()
     }
 
+    fn temp_git_repo(label: &str) -> PathBuf {
+        let repo = std::env::temp_dir().join(format!(
+            "scope-vcs-{label}-{}-{}",
+            std::process::id(),
+            unix_now()
+        ));
+        let _ = fs::remove_dir_all(&repo);
+        fs::create_dir_all(&repo).unwrap();
+        run_git(
+            None,
+            &["init", "-b", "main", repo.to_str().unwrap()],
+            "init test repo",
+        )
+        .unwrap();
+        repo
+    }
+
+    fn commit_all(repo: &FsPath, message: &str) {
+        run_git(
+            Some(repo),
+            &[
+                "-c",
+                "user.name=Scope Test",
+                "-c",
+                "user.email=scope-test@example.test",
+                "commit",
+                "-m",
+                message,
+            ],
+            "commit test repo",
+        )
+        .unwrap();
+    }
+
     fn test_repo(owner_id: &str) -> StoredRepository {
         StoredRepository {
             record: RepoRecord {
@@ -1638,6 +2321,7 @@ kGxvBjzgF9RjXJoldYnFk7mJ5gLANHjaaad3qTQJ8DldKJoSqkEkm5gg
             },
             settings: RepoSettings::default(),
             first_push_token: None,
+            pending_import: None,
             policy: Policy::new(Visibility::Public, owner_id),
             graph: SourceGraph {
                 repo_id: TEST_REPO_ID.to_string(),
@@ -2015,6 +2699,143 @@ kGxvBjzgF9RjXJoldYnFk7mJ5gLANHjaaad3qTQJ8DldKJoSqkEkm5gg
         let error = bearer_token(&headers).unwrap_err();
 
         assert_eq!(error.status, StatusCode::UNAUTHORIZED);
+    }
+
+    #[test]
+    fn first_push_token_accepts_bearer_and_basic_password() {
+        let mut headers = HeaderMap::new();
+        headers.insert(AUTHORIZATION, "Bearer scope_fp_secret".parse().unwrap());
+        assert_eq!(
+            first_push_token_from_headers(&headers).unwrap(),
+            "scope_fp_secret"
+        );
+
+        let encoded = BASE64.encode("scope:scope_fp_secret");
+        headers.insert(AUTHORIZATION, format!("Basic {encoded}").parse().unwrap());
+        assert_eq!(
+            first_push_token_from_headers(&headers).unwrap(),
+            "scope_fp_secret"
+        );
+    }
+
+    #[test]
+    fn pending_import_marks_token_used_after_durable_state_update() {
+        let state = test_state_with_repo();
+        let secret = "scope_fp_test";
+        {
+            let mut catalog = lock_catalog(&state).unwrap();
+            let repo = catalog.repositories.get_mut(TEST_REPO_ID).unwrap();
+            repo.record.publication_state = RepoPublicationState::PendingFirstPush;
+            repo.first_push_token = Some(FirstPushToken {
+                token_hash: first_push_token_hash(secret),
+                owner_user_id: repo.record.owner_user_id.clone(),
+                created_at_unix: unix_now(),
+                expires_at_unix: unix_now() + FIRST_PUSH_TOKEN_TTL_SECS,
+                used_at_unix: None,
+            });
+            repo.pending_import = None;
+        }
+
+        let import = PendingImport {
+            default_branch: "main".to_string(),
+            head_oid: "1111111111111111111111111111111111111111".to_string(),
+            tree_oid: "2222222222222222222222222222222222222222".to_string(),
+            imported_at_unix: unix_now(),
+            files: Vec::new(),
+        };
+
+        persist_pending_import(&state, TEST_REPO_OWNER, TEST_REPO_NAME, secret, import).unwrap();
+
+        let repo = find_repo(&state, TEST_REPO_OWNER, TEST_REPO_NAME).unwrap();
+        assert_eq!(
+            repo.record.publication_state,
+            RepoPublicationState::PendingPublish
+        );
+        assert_eq!(repo.pending_import.as_ref().unwrap().default_branch, "main");
+        assert!(repo.first_push_token.unwrap().used_at_unix.is_some());
+
+        let error =
+            authorize_first_push(&state, TEST_REPO_OWNER, TEST_REPO_NAME, secret).unwrap_err();
+        assert_eq!(error.status, StatusCode::CONFLICT);
+    }
+
+    #[test]
+    fn pushed_tree_rejects_gitlinks_instead_of_dropping_them() {
+        let repo = temp_git_repo("gitlink-test");
+        fs::write(repo.join("README.md"), "hello").unwrap();
+        run_git(Some(&repo), &["add", "README.md"], "add readme").unwrap();
+        commit_all(&repo, "initial");
+        let commit = git_stdout_text(&repo, &["rev-parse", "HEAD"], "read head")
+            .unwrap()
+            .trim()
+            .to_string();
+        run_git(
+            Some(&repo),
+            &[
+                "update-index",
+                "--add",
+                "--cacheinfo",
+                &format!("160000,{commit},vendor/submodule"),
+            ],
+            "add gitlink",
+        )
+        .unwrap();
+        commit_all(&repo, "add gitlink");
+
+        let error = git_tree_files(&repo, "HEAD").unwrap_err();
+
+        assert_eq!(error.status, StatusCode::BAD_REQUEST);
+        assert!(error.message.contains("unsupported Git tree entry"));
+        let _ = fs::remove_dir_all(&repo);
+    }
+
+    #[test]
+    fn pushed_tree_rejects_non_utf8_blobs_before_pending_import() {
+        let repo = temp_git_repo("binary-test");
+        fs::write(repo.join("image.bin"), [0xff, 0x00, 0x61]).unwrap();
+        run_git(Some(&repo), &["add", "image.bin"], "add binary").unwrap();
+        commit_all(&repo, "binary");
+
+        let error = git_tree_files(&repo, "HEAD").unwrap_err();
+
+        assert_eq!(error.status, StatusCode::BAD_REQUEST);
+        assert!(error.message.contains("valid UTF-8 text"));
+        let _ = fs::remove_dir_all(&repo);
+    }
+
+    #[test]
+    fn pushed_tree_rejects_modes_that_projection_cannot_preserve() {
+        let repo = temp_git_repo("mode-test");
+        fs::write(repo.join("script.sh"), "#!/bin/sh\necho hi\n").unwrap();
+        run_git(Some(&repo), &["add", "script.sh"], "add script").unwrap();
+        run_git(
+            Some(&repo),
+            &["update-index", "--chmod=+x", "script.sh"],
+            "make script executable",
+        )
+        .unwrap();
+        commit_all(&repo, "executable");
+
+        let error = git_tree_files(&repo, "HEAD").unwrap_err();
+
+        assert_eq!(error.status, StatusCode::BAD_REQUEST);
+        assert!(error.message.contains("unsupported Git file mode"));
+        let _ = fs::remove_dir_all(&repo);
+    }
+
+    #[test]
+    fn pushed_tree_rejects_paths_scope_would_normalize_or_git_cannot_serve() {
+        validate_pushed_file_path("docs/read me.md").unwrap();
+        for path in [
+            "README.md ",
+            "dir\\file.txt",
+            "line\nbreak.txt",
+            "./README.md",
+            "docs/../README.md",
+        ] {
+            let error = validate_pushed_file_path(path).unwrap_err();
+            assert_eq!(error.status, StatusCode::BAD_REQUEST);
+        }
     }
 
     #[test]
