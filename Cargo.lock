@@ -1393,13 +1393,7 @@ checksum = "9774ba4a74de5f7b1c1451ed6cd5285a32eddb5cccb8cc655a4e50009e06477f"
 name = "scope-cli"
 version = "0.1.0"
 dependencies = [
- "anyhow",
  "clap",
- "scope-git",
- "scope-policy",
- "scope-projection",
- "scope-store",
- "serde_json",
 ]
 
 [[package]]
@@ -1455,11 +1449,9 @@ dependencies = [
 name = "scope-store"
 version = "0.1.0"
 dependencies = [
- "hex",
  "scope-policy",
  "scope-projection",
  "serde",
- "sha1",
  "thiserror",
 ]
 

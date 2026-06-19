@@ -12,12 +12,9 @@ use jsonwebtoken::{
 };
 use scope_git::{VirtualGitProjection, build_virtual_git_projection};
 use scope_policy::{Policy, Principal, ScopePath, Visibility, VisibilityRule};
-use scope_projection::{
-    AuthorVisibility, FileChange, LogicalCommit, MixedCommitPolicy, Projection, project_graph,
-};
+use scope_projection::{Projection, project_graph};
 use scope_store::{
-    AppCatalog, BOOTSTRAP_REPO_ID, RepoRole, RepoSettings, StoredRepository, VerifiedEmail,
-    app_catalog, bootstrap_path_is_public, build_repository_snapshot_changes,
+    AppCatalog, RepoRole, RepoSettings, StoredRepository, VerifiedEmail, app_catalog,
 };
 use serde::{Deserialize, Serialize};
 use std::{
@@ -287,15 +284,14 @@ async fn update_file_visibility(
         return Err(ApiError::forbidden("owner role required"));
     }
 
-    let (owner_files, owner_files_from_git) =
-        match git_files(&state.repo_root, &repo, &principal, Some(RepoRole::Owner)) {
-            Ok(files) => (files, true),
-            Err(error) if error.status == StatusCode::SERVICE_UNAVAILABLE => {
-                tracing::warn!(error = %error.message, "falling back to projected files");
-                (projected_files(&repo, &principal), false)
-            }
-            Err(error) => return Err(error),
-        };
+    let owner_files = match git_files(&state.repo_root, &repo, &principal, Some(RepoRole::Owner)) {
+        Ok(files) => files,
+        Err(error) if error.status == StatusCode::SERVICE_UNAVAILABLE => {
+            tracing::warn!(error = %error.message, "falling back to projected files");
+            projected_files(&repo, &principal)
+        }
+        Err(error) => return Err(error),
+    };
     let selected_file = owner_files
         .iter()
         .find(|file| file.path == path.as_str())
@@ -310,9 +306,6 @@ async fn update_file_visibility(
     let updated = {
         let mut catalog = lock_catalog(&state)?;
         let mut staged = catalog.clone();
-        if owner_files_from_git {
-            hydrate_catalog_from_git(&mut staged, state.repo_root.as_ref())?;
-        }
         let repo = staged
             .repositories
             .get(&repo_id)
@@ -491,7 +484,6 @@ impl AppState {
         let persisted_state = load_state(&state_path)?;
         let mut catalog = app_catalog();
         apply_persisted_state(&mut catalog, &persisted_state);
-        hydrate_catalog_from_sources(&mut catalog, &repo_root)?;
 
         Ok(Self {
             catalog: Arc::new(Mutex::new(catalog)),
@@ -849,126 +841,6 @@ fn git_repo_root() -> PathBuf {
     std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."))
 }
 
-fn hydrate_catalog_from_sources(
-    catalog: &mut AppCatalog,
-    repo_root: &FsPath,
-) -> anyhow::Result<()> {
-    match git_tracked_file_changes(repo_root) {
-        Ok(changes) if !changes.is_empty() => {
-            install_repository_changes(
-                catalog,
-                changes,
-                "rv_git_worktree_head".to_string(),
-                "Import tracked repository files".to_string(),
-            );
-            Ok(())
-        }
-        Ok(_) => {
-            hydrate_catalog_from_build_snapshot(catalog, "Git index did not contain tracked files")
-        }
-        Err(error) => hydrate_catalog_from_build_snapshot(catalog, &error.message),
-    }
-}
-
-fn hydrate_catalog_from_git(catalog: &mut AppCatalog, repo_root: &FsPath) -> Result<(), ApiError> {
-    let changes = git_tracked_file_changes(repo_root)?;
-    if changes.is_empty() {
-        return Err(ApiError::service_unavailable(
-            "Git index did not contain tracked files",
-        ));
-    }
-
-    install_repository_changes(
-        catalog,
-        changes,
-        "rv_git_worktree_head".to_string(),
-        "Import tracked repository files".to_string(),
-    );
-    Ok(())
-}
-
-fn hydrate_catalog_from_build_snapshot(
-    catalog: &mut AppCatalog,
-    reason: &str,
-) -> anyhow::Result<()> {
-    let changes = build_repository_snapshot_changes();
-    if changes.is_empty() {
-        anyhow::bail!(
-            "failed to hydrate repository from runtime Git ({reason}) and build snapshot is empty"
-        );
-    }
-
-    tracing::warn!(
-        reason = %reason,
-        file_count = changes.len(),
-        "using compiled repository snapshot because runtime Git is unavailable"
-    );
-    install_repository_changes(
-        catalog,
-        changes,
-        "rv_build_snapshot".to_string(),
-        "Import tracked repository files".to_string(),
-    );
-    Ok(())
-}
-
-fn install_repository_changes(
-    catalog: &mut AppCatalog,
-    changes: Vec<FileChange>,
-    id: String,
-    message: String,
-) {
-    let Some(repo) = catalog.repositories.get_mut(BOOTSTRAP_REPO_ID) else {
-        return;
-    };
-
-    let owner_ids = repo_owner_ids(repo);
-    for change in &changes {
-        if repo.policy.effective_rule(&change.path).is_some()
-            || bootstrap_path_is_public(&change.path)
-        {
-            continue;
-        }
-
-        if let Err(error) = repo.policy.add_rule(VisibilityRule::private(
-            change.path.clone(),
-            owner_ids.clone(),
-        )) {
-            tracing::warn!(%error, path = change.path.as_str(), "failed to privatize hydrated path");
-        }
-    }
-
-    repo.graph.commits = vec![LogicalCommit {
-        id,
-        parent_ids: Vec::new(),
-        author_id: repo.record.owner_user_id.clone(),
-        author_visibility: AuthorVisibility::Visible,
-        message,
-        mixed_policy: MixedCommitPolicy::SyntheticPublicCommit,
-        changes,
-    }];
-}
-
-fn git_tracked_file_changes(repo_root: &FsPath) -> Result<Vec<FileChange>, ApiError> {
-    let mut changes = Vec::new();
-
-    for (path, oid) in git_tracked_file_entries(repo_root)? {
-        if is_internal_scope_path(&path) {
-            continue;
-        }
-        let Some(content) = git_blob_content(repo_root, &oid, &path)? else {
-            continue;
-        };
-        changes.push(FileChange {
-            path: ScopePath::parse(format!("/{path}")).map_err(ApiError::bad_request)?,
-            old_content: None,
-            new_content: Some(content),
-        });
-    }
-
-    Ok(changes)
-}
-
 fn git_tracked_file_entries(repo_root: &FsPath) -> Result<Vec<(String, String)>, ApiError> {
     let output = Command::new("git")
         .arg("-C")
@@ -1004,31 +876,6 @@ fn git_tracked_file_entries(repo_root: &FsPath) -> Result<Vec<(String, String)>,
     }
 
     Ok(entries)
-}
-
-fn git_blob_content(repo_root: &FsPath, oid: &str, path: &str) -> Result<Option<String>, ApiError> {
-    let output = Command::new("git")
-        .arg("-C")
-        .arg(repo_root)
-        .args(["cat-file", "blob", oid])
-        .output()
-        .map_err(|error| {
-            ApiError::service_unavailable(format!("failed to read Git blob {oid}: {error}"))
-        })?;
-
-    if !output.status.success() {
-        return Err(ApiError::service_unavailable(
-            String::from_utf8_lossy(&output.stderr).trim().to_string(),
-        ));
-    }
-
-    match String::from_utf8(output.stdout) {
-        Ok(content) => Ok(Some(content)),
-        Err(_) => {
-            tracing::warn!(path, "skipping non-UTF-8 file during repository hydration");
-            Ok(None)
-        }
-    }
 }
 
 fn graph_has_file(repo: &StoredRepository, path: &ScopePath) -> bool {
@@ -1411,10 +1258,18 @@ mod tests {
     use super::*;
     use jsonwebtoken::{EncodingKey, Header, encode};
     use scope_policy::{Principal, PrincipalKind};
+    use scope_projection::SourceGraph;
     use scope_store::{
-        BOOTSTRAP_OWNER_EMAIL, BOOTSTRAP_OWNER_USER_ID, BOOTSTRAP_REPO_NAME, BOOTSTRAP_REPO_OWNER,
+        AccountAccess, RepoMembership, RepoPublicationState, RepoRecord, StoredRepository,
+        UserAccount,
     };
     use std::time::{SystemTime, UNIX_EPOCH};
+
+    const TEST_OWNER_ID: &str = "user_owner";
+    const TEST_OWNER_EMAIL: &str = "owner@example.com";
+    const TEST_REPO_OWNER: &str = "owner";
+    const TEST_REPO_NAME: &str = "repo";
+    const TEST_REPO_ID: &str = "owner/repo";
 
     const TEST_PRIVATE_KEY: &str = r#"-----BEGIN PRIVATE KEY-----
 MIGHAgEAMBMGByqGSM49AgEGCCqGSM49AwEHBG0wawIBAQQgj30p9gYDpHRqbshS
@@ -1443,7 +1298,7 @@ kGxvBjzgF9RjXJoldYnFk7mJ5gLANHjaaad3qTQJ8DldKJoSqkEkm5gg
         header.kid = Some("test-key".to_string());
         let claims = ShooClaims {
             pairwise_sub: pairwise_sub.to_string(),
-            email: Some(BOOTSTRAP_OWNER_EMAIL.to_string()),
+            email: Some(TEST_OWNER_EMAIL.to_string()),
             email_verified: Some(email_verified),
         };
         let claims = serde_json::json!({
@@ -1469,7 +1324,7 @@ kGxvBjzgF9RjXJoldYnFk7mJ5gLANHjaaad3qTQJ8DldKJoSqkEkm5gg
         let claims = serde_json::json!({
             "exp": unix_now() + 300,
             "pairwise_sub": "pairwise-owner",
-            "email": BOOTSTRAP_OWNER_EMAIL,
+            "email": TEST_OWNER_EMAIL,
             "email_verified": true,
         });
 
@@ -1488,37 +1343,94 @@ kGxvBjzgF9RjXJoldYnFk7mJ5gLANHjaaad3qTQJ8DldKJoSqkEkm5gg
             .as_secs()
     }
 
+    fn test_state_with_repo() -> AppState {
+        let owner = UserAccount {
+            id: TEST_OWNER_ID.to_string(),
+            email: TEST_OWNER_EMAIL.to_string(),
+            email_verified: true,
+            access: AccountAccess::Member,
+        };
+        let repo = test_repo();
+
+        AppState {
+            catalog: Arc::new(Mutex::new(AppCatalog {
+                users: BTreeMap::from([(owner.id.clone(), owner)]),
+                repositories: BTreeMap::from([(repo.record.id.clone(), repo)]),
+            })),
+            repo_root: Arc::new(git_repo_root()),
+            state_path: Arc::new(std::env::temp_dir().join("scope-vcs-test-state.json")),
+            shoo: ShooVerifier::new(
+                SHOO_ISSUER,
+                Some("origin:http://localhost:3000".to_string()),
+                "http://127.0.0.1/.well-known/jwks.json",
+            ),
+        }
+    }
+
+    fn test_repo() -> StoredRepository {
+        StoredRepository {
+            record: RepoRecord {
+                id: TEST_REPO_ID.to_string(),
+                owner_handle: TEST_REPO_OWNER.to_string(),
+                name: TEST_REPO_NAME.to_string(),
+                owner_user_id: TEST_OWNER_ID.to_string(),
+                publication_state: RepoPublicationState::Published,
+                default_visibility: Visibility::Public,
+            },
+            settings: RepoSettings::default(),
+            policy: Policy::new(Visibility::Public, TEST_OWNER_ID),
+            graph: SourceGraph {
+                repo_id: TEST_REPO_ID.to_string(),
+                commits: Vec::new(),
+            },
+            memberships: vec![RepoMembership {
+                repo_id: TEST_REPO_ID.to_string(),
+                user_id: TEST_OWNER_ID.to_string(),
+                role: RepoRole::Owner,
+            }],
+            invitations: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn test_state_starts_without_repositories() {
+        let state = AppState::test_state();
+        let error = find_repo(&state, TEST_REPO_OWNER, TEST_REPO_NAME).unwrap_err();
+
+        assert_eq!(error.status, StatusCode::NOT_FOUND);
+    }
+
     #[test]
     fn anonymous_request_uses_public_principal() {
-        let state = AppState::test_state();
-        let repo = find_repo(&state, BOOTSTRAP_REPO_OWNER, BOOTSTRAP_REPO_NAME).unwrap();
+        let state = test_state_with_repo();
+        let repo = find_repo(&state, TEST_REPO_OWNER, TEST_REPO_NAME).unwrap();
         let principal = principal_for_repo(&state, &repo, None).unwrap();
 
         assert_eq!(principal, Principal::public());
     }
 
     #[test]
-    fn verified_bootstrap_email_uses_owner_principal() {
-        let state = AppState::test_state();
-        let repo = find_repo(&state, BOOTSTRAP_REPO_OWNER, BOOTSTRAP_REPO_NAME).unwrap();
+    fn verified_member_email_uses_repo_principal() {
+        let state = test_state_with_repo();
+        let repo = find_repo(&state, TEST_REPO_OWNER, TEST_REPO_NAME).unwrap();
         let identity = ShooIdentity {
             pairwise_sub: "pairwise-owner".to_string(),
-            email: Some(BOOTSTRAP_OWNER_EMAIL.to_string()),
+            email: Some(TEST_OWNER_EMAIL.to_string()),
             email_verified: true,
         };
         let principal = principal_for_repo(&state, &repo, Some(&identity)).unwrap();
 
-        assert_eq!(principal.id, BOOTSTRAP_OWNER_USER_ID);
+        assert_eq!(principal.id, TEST_OWNER_ID);
         assert_eq!(principal.kind, PrincipalKind::User);
     }
 
     #[test]
-    fn unverified_bootstrap_email_uses_public_principal() {
-        let state = AppState::test_state();
-        let repo = find_repo(&state, BOOTSTRAP_REPO_OWNER, BOOTSTRAP_REPO_NAME).unwrap();
+    fn unverified_email_uses_public_principal() {
+        let state = test_state_with_repo();
+        let repo = find_repo(&state, TEST_REPO_OWNER, TEST_REPO_NAME).unwrap();
         let identity = ShooIdentity {
             pairwise_sub: "pairwise-owner".to_string(),
-            email: Some(BOOTSTRAP_OWNER_EMAIL.to_string()),
+            email: Some(TEST_OWNER_EMAIL.to_string()),
             email_verified: false,
         };
         let principal = principal_for_repo(&state, &repo, Some(&identity)).unwrap();
@@ -1528,11 +1440,11 @@ kGxvBjzgF9RjXJoldYnFk7mJ5gLANHjaaad3qTQJ8DldKJoSqkEkm5gg
 
     #[test]
     fn unreadable_repo_is_hidden_from_public_requests() {
-        let state = AppState::test_state();
-        let mut repo = find_repo(&state, BOOTSTRAP_REPO_OWNER, BOOTSTRAP_REPO_NAME)
+        let state = test_state_with_repo();
+        let mut repo = find_repo(&state, TEST_REPO_OWNER, TEST_REPO_NAME)
             .unwrap()
             .clone();
-        repo.record.publication_state = scope_store::RepoPublicationState::Unpublished;
+        repo.record.publication_state = RepoPublicationState::Unpublished;
 
         let error = ensure_repo_read(&state, &repo, &Principal::public()).unwrap_err();
 
@@ -1542,7 +1454,7 @@ kGxvBjzgF9RjXJoldYnFk7mJ5gLANHjaaad3qTQJ8DldKJoSqkEkm5gg
     #[test]
     fn bearer_token_ignores_removed_trusted_identity_headers() {
         let mut headers = HeaderMap::new();
-        headers.insert("x-scope-user-email", BOOTSTRAP_OWNER_EMAIL.parse().unwrap());
+        headers.insert("x-scope-user-email", TEST_OWNER_EMAIL.parse().unwrap());
         headers.insert("x-scope-user-email-verified", "true".parse().unwrap());
 
         assert_eq!(bearer_token(&headers).unwrap(), None);
@@ -1570,7 +1482,7 @@ kGxvBjzgF9RjXJoldYnFk7mJ5gLANHjaaad3qTQJ8DldKJoSqkEkm5gg
         .unwrap();
 
         assert_eq!(identity.pairwise_sub, "pairwise-owner");
-        assert_eq!(identity.email.as_deref(), Some(BOOTSTRAP_OWNER_EMAIL));
+        assert_eq!(identity.email.as_deref(), Some(TEST_OWNER_EMAIL));
         assert!(identity.email_verified);
     }
 

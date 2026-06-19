@@ -1,17 +1,7 @@
-use scope_policy::{Policy, Principal, PrincipalKind, ScopePath, Visibility, VisibilityRule};
-use scope_projection::{
-    AuthorVisibility, FileChange, LogicalCommit, MixedCommitPolicy, SourceGraph,
-};
+use scope_policy::{Policy, Principal, PrincipalKind, ScopePath, Visibility};
+use scope_projection::SourceGraph;
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
-
-pub const BOOTSTRAP_OWNER_EMAIL: &str = "adamblumoff@gmail.com";
-pub const BOOTSTRAP_OWNER_USER_ID: &str = "user_adamblumoff";
-pub const BOOTSTRAP_REPO_OWNER: &str = "adamblumoff";
-pub const BOOTSTRAP_REPO_NAME: &str = "scope-vcs";
-pub const BOOTSTRAP_REPO_ID: &str = "adamblumoff/scope-vcs";
-
-include!(concat!(env!("OUT_DIR"), "/repo_snapshot.rs"));
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct VerifiedEmail {
@@ -105,7 +95,7 @@ pub struct StoredRepository {
     pub invitations: Vec<RepoInvitation>,
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
 pub struct AppCatalog {
     pub users: BTreeMap<String, UserAccount>,
     pub repositories: BTreeMap<String, StoredRepository>,
@@ -189,141 +179,99 @@ impl AppCatalog {
 }
 
 pub fn app_catalog() -> AppCatalog {
-    let owner = UserAccount {
-        id: BOOTSTRAP_OWNER_USER_ID.to_string(),
-        email: BOOTSTRAP_OWNER_EMAIL.to_string(),
-        email_verified: true,
-        access: AccountAccess::Member,
-    };
-
-    let repo = canonical_repository();
-    AppCatalog {
-        users: BTreeMap::from([(owner.id.clone(), owner)]),
-        repositories: BTreeMap::from([(repo.record.id.clone(), repo)]),
-    }
+    AppCatalog::default()
 }
 
 pub fn repo_id(owner: &str, name: &str) -> String {
     format!("{}/{}", owner.trim(), name.trim())
 }
 
-fn canonical_repository() -> StoredRepository {
-    let changes = build_repository_snapshot_changes();
-    let mut policy = Policy::new(Visibility::Public, BOOTSTRAP_OWNER_USER_ID);
-    for change in &changes {
-        if bootstrap_path_is_public(&change.path) {
-            continue;
-        }
-
-        policy
-            .add_rule(VisibilityRule::private(
-                change.path.clone(),
-                [BOOTSTRAP_OWNER_USER_ID.to_string()],
-            ))
-            .unwrap();
-    }
-
-    let graph = SourceGraph {
-        repo_id: BOOTSTRAP_REPO_ID.to_string(),
-        commits: if changes.is_empty() {
-            Vec::new()
-        } else {
-            vec![LogicalCommit {
-                id: "rv_build_snapshot".to_string(),
-                parent_ids: vec![],
-                author_id: BOOTSTRAP_OWNER_USER_ID.to_string(),
-                author_visibility: AuthorVisibility::Visible,
-                message: "Import tracked repository files".to_string(),
-                mixed_policy: MixedCommitPolicy::SyntheticPublicCommit,
-                changes,
-            }]
-        },
-    };
-
-    StoredRepository {
-        record: RepoRecord {
-            id: BOOTSTRAP_REPO_ID.to_string(),
-            owner_handle: BOOTSTRAP_REPO_OWNER.to_string(),
-            name: BOOTSTRAP_REPO_NAME.to_string(),
-            owner_user_id: BOOTSTRAP_OWNER_USER_ID.to_string(),
-            publication_state: RepoPublicationState::Published,
-            default_visibility: Visibility::Public,
-        },
-        settings: RepoSettings::default(),
-        policy,
-        graph,
-        memberships: vec![RepoMembership {
-            repo_id: BOOTSTRAP_REPO_ID.to_string(),
-            user_id: BOOTSTRAP_OWNER_USER_ID.to_string(),
-            role: RepoRole::Owner,
-        }],
-        invitations: Vec::new(),
-    }
-}
-
-pub fn build_repository_snapshot_changes() -> Vec<FileChange> {
-    BUILD_REPO_SNAPSHOT
-        .iter()
-        .map(|file| repo_file(file.path, file.content))
-        .collect()
-}
-
-pub fn build_repository_snapshot_len() -> usize {
-    BUILD_REPO_SNAPSHOT.len()
-}
-
-pub fn bootstrap_path_is_public(path: &ScopePath) -> bool {
-    matches!(
-        path.as_str(),
-        "/README.md"
-            | "/apps/web/src/routes/index.tsx"
-            | "/crates/scope-policy/src/lib.rs"
-            | "/crates/scope-projection/src/lib.rs"
-    )
-}
-
 fn normalize_email(email: impl Into<String>) -> String {
     email.into().trim().to_ascii_lowercase()
-}
-
-fn repo_file(path: &str, content: &str) -> FileChange {
-    FileChange {
-        path: ScopePath::parse(path).unwrap(),
-        old_content: None,
-        new_content: Some(content.to_string()),
-    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use scope_policy::VisibilityRule;
 
-    #[test]
-    fn verified_bootstrap_email_becomes_repo_owner() {
-        let catalog = app_catalog();
-        let repo = catalog
-            .repository(BOOTSTRAP_REPO_OWNER, BOOTSTRAP_REPO_NAME)
-            .unwrap();
-        let identity = VerifiedEmail::new("AdamBlumoff@gmail.com", true);
+    const TEST_OWNER_ID: &str = "user_owner";
+    const TEST_OWNER_EMAIL: &str = "owner@example.com";
+    const TEST_REPO_OWNER: &str = "owner";
+    const TEST_REPO_NAME: &str = "repo";
+    const TEST_REPO_ID: &str = "owner/repo";
 
-        let principal = catalog.principal_for_repo(repo, Some(&identity));
+    fn catalog_with_test_repo() -> AppCatalog {
+        let owner = UserAccount {
+            id: TEST_OWNER_ID.to_string(),
+            email: TEST_OWNER_EMAIL.to_string(),
+            email_verified: true,
+            access: AccountAccess::Member,
+        };
+        let repo = test_repo();
 
-        assert_eq!(principal.id, BOOTSTRAP_OWNER_USER_ID);
-        assert_eq!(principal.kind, PrincipalKind::User);
-        assert!(catalog.can_write_path(
-            repo,
-            &principal,
-            &ScopePath::parse("/crates/scope-server/src/main.rs").unwrap(),
-        ));
+        AppCatalog {
+            users: BTreeMap::from([(owner.id.clone(), owner)]),
+            repositories: BTreeMap::from([(repo.record.id.clone(), repo)]),
+        }
+    }
+
+    fn test_repo() -> StoredRepository {
+        StoredRepository {
+            record: RepoRecord {
+                id: TEST_REPO_ID.to_string(),
+                owner_handle: TEST_REPO_OWNER.to_string(),
+                name: TEST_REPO_NAME.to_string(),
+                owner_user_id: TEST_OWNER_ID.to_string(),
+                publication_state: RepoPublicationState::Published,
+                default_visibility: Visibility::Public,
+            },
+            settings: RepoSettings::default(),
+            policy: Policy::new(Visibility::Public, TEST_OWNER_ID),
+            graph: SourceGraph {
+                repo_id: TEST_REPO_ID.to_string(),
+                commits: Vec::new(),
+            },
+            memberships: vec![RepoMembership {
+                repo_id: TEST_REPO_ID.to_string(),
+                user_id: TEST_OWNER_ID.to_string(),
+                role: RepoRole::Owner,
+            }],
+            invitations: Vec::new(),
+        }
     }
 
     #[test]
-    fn unverified_bootstrap_email_stays_public() {
+    fn app_catalog_starts_empty() {
         let catalog = app_catalog();
-        let repo = catalog
-            .repository(BOOTSTRAP_REPO_OWNER, BOOTSTRAP_REPO_NAME)
-            .unwrap();
-        let identity = VerifiedEmail::new(BOOTSTRAP_OWNER_EMAIL, false);
+
+        assert!(catalog.users.is_empty());
+        assert!(catalog.repositories.is_empty());
+        assert!(
+            catalog
+                .repository(TEST_REPO_OWNER, TEST_REPO_NAME)
+                .is_none()
+        );
+    }
+
+    #[test]
+    fn verified_member_email_becomes_repo_principal() {
+        let catalog = catalog_with_test_repo();
+        let repo = catalog.repository(TEST_REPO_OWNER, TEST_REPO_NAME).unwrap();
+        let identity = VerifiedEmail::new("Owner@Example.com", true);
+
+        let principal = catalog.principal_for_repo(repo, Some(&identity));
+
+        assert_eq!(principal.id, TEST_OWNER_ID);
+        assert_eq!(principal.kind, PrincipalKind::User);
+        assert!(catalog.can_write_path(repo, &principal, &ScopePath::root()));
+    }
+
+    #[test]
+    fn unverified_email_stays_public() {
+        let catalog = catalog_with_test_repo();
+        let repo = catalog.repository(TEST_REPO_OWNER, TEST_REPO_NAME).unwrap();
+        let identity = VerifiedEmail::new(TEST_OWNER_EMAIL, false);
 
         let principal = catalog.principal_for_repo(repo, Some(&identity));
 
@@ -332,10 +280,8 @@ mod tests {
 
     #[test]
     fn unknown_verified_user_defaults_to_public() {
-        let catalog = app_catalog();
-        let repo = catalog
-            .repository(BOOTSTRAP_REPO_OWNER, BOOTSTRAP_REPO_NAME)
-            .unwrap();
+        let catalog = catalog_with_test_repo();
+        let repo = catalog.repository(TEST_REPO_OWNER, TEST_REPO_NAME).unwrap();
         let identity = VerifiedEmail::new("someone@example.com", true);
 
         let principal = catalog.principal_for_repo(repo, Some(&identity));
@@ -345,23 +291,19 @@ mod tests {
 
     #[test]
     fn unpublished_repo_blocks_public_reads() {
-        let catalog = app_catalog();
+        let catalog = catalog_with_test_repo();
         let mut repo = catalog
-            .repository(BOOTSTRAP_REPO_OWNER, BOOTSTRAP_REPO_NAME)
+            .repository(TEST_REPO_OWNER, TEST_REPO_NAME)
             .unwrap()
             .clone();
         repo.record.publication_state = RepoPublicationState::Unpublished;
 
-        assert!(!catalog.can_read_path(
-            &repo,
-            &Principal::public(),
-            &ScopePath::parse("/README.md").unwrap(),
-        ));
+        assert!(!catalog.can_read_path(&repo, &Principal::public(), &ScopePath::root()));
     }
 
     #[test]
     fn pending_invite_does_not_grant_private_access() {
-        let mut catalog = app_catalog();
+        let mut catalog = catalog_with_test_repo();
         let invited = UserAccount {
             id: "user_invited".to_string(),
             email: "invited@example.com".to_string(),
@@ -369,27 +311,22 @@ mod tests {
             access: AccountAccess::Member,
         };
         catalog.users.insert(invited.id.clone(), invited);
-        let repo = catalog
-            .repositories
-            .get_mut(BOOTSTRAP_REPO_ID)
-            .expect("bootstrap repo exists");
+        let repo = catalog.repositories.get_mut(TEST_REPO_ID).unwrap();
         repo.policy
             .add_rule(VisibilityRule::private(
-                ScopePath::parse("/crates/scope-server/src/main.rs").unwrap(),
-                [BOOTSTRAP_OWNER_USER_ID.to_string()],
+                ScopePath::parse("/private.txt").unwrap(),
+                [TEST_OWNER_ID.to_string()],
             ))
             .unwrap();
         repo.invitations.push(RepoInvitation {
             id: "invite_pending".to_string(),
-            repo_id: BOOTSTRAP_REPO_ID.to_string(),
+            repo_id: TEST_REPO_ID.to_string(),
             invited_email: "invited@example.com".to_string(),
             role: RepoRole::Reader,
-            invited_by_user_id: BOOTSTRAP_OWNER_USER_ID.to_string(),
+            invited_by_user_id: TEST_OWNER_ID.to_string(),
             state: InvitationState::Pending,
         });
-        let repo = catalog
-            .repository(BOOTSTRAP_REPO_OWNER, BOOTSTRAP_REPO_NAME)
-            .unwrap();
+        let repo = catalog.repository(TEST_REPO_OWNER, TEST_REPO_NAME).unwrap();
         let identity = VerifiedEmail::new("invited@example.com", true);
 
         let principal = catalog.principal_for_repo(repo, Some(&identity));
@@ -398,43 +335,7 @@ mod tests {
         assert!(!catalog.can_read_path(
             repo,
             &principal,
-            &ScopePath::parse("/crates/scope-server/src/main.rs").unwrap(),
+            &ScopePath::parse("/private.txt").unwrap(),
         ));
-    }
-
-    #[test]
-    fn bootstrap_repo_uses_real_build_snapshot() {
-        let catalog = app_catalog();
-        let repo = catalog
-            .repository(BOOTSTRAP_REPO_OWNER, BOOTSTRAP_REPO_NAME)
-            .unwrap();
-        let paths = repo
-            .graph
-            .commits
-            .iter()
-            .flat_map(|commit| commit.changes.iter())
-            .map(|change| change.path.as_str().to_string())
-            .collect::<Vec<_>>();
-
-        assert!(build_repository_snapshot_len() > 5);
-        assert!(paths.contains(&"/Cargo.toml".to_string()));
-        assert!(paths.contains(&"/crates/scope-server/src/main.rs".to_string()));
-        assert!(catalog.can_read_path(
-            repo,
-            &Principal::public(),
-            &ScopePath::parse("/README.md").unwrap(),
-        ));
-        assert!(!catalog.can_read_path(
-            repo,
-            &Principal::public(),
-            &ScopePath::parse("/crates/scope-server/src/main.rs").unwrap(),
-        ));
-        assert!(
-            !repo
-                .graph
-                .commits
-                .iter()
-                .any(|commit| commit.message.contains("public workspace"))
-        );
     }
 }
