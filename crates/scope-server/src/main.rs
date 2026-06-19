@@ -17,7 +17,9 @@ use jsonwebtoken::{
 };
 use scope_git::{VirtualGitProjection, build_virtual_git_projection};
 use scope_policy::{Policy, Principal, ScopePath, Visibility, VisibilityRule};
-use scope_projection::{Projection, project_graph};
+use scope_projection::{
+    AuthorVisibility, FileChange, LogicalCommit, MixedCommitPolicy, Projection, project_graph,
+};
 use scope_store::{
     AccountAccess, AppCatalog, CatalogError, FirstPushToken, FirstPushTokenStatus, PendingImport,
     PendingImportFile, RepoPublicationState, RepoRole, RepoSettings, StoredRepository, UserAccount,
@@ -129,6 +131,7 @@ struct SessionIdentity {
 #[derive(Debug, Serialize)]
 struct SessionRepo {
     id: String,
+    publication_state: RepoPublicationState,
     role: Option<RepoRole>,
 }
 
@@ -179,6 +182,13 @@ struct RepoFileResponse {
     oid: String,
     tracked: bool,
     visibility: Visibility,
+}
+
+#[derive(Debug, Serialize)]
+struct PendingImportReviewResponse {
+    publication_state: RepoPublicationState,
+    default_visibility: Visibility,
+    files: Vec<RepoFileResponse>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -246,6 +256,11 @@ fn router(state: AppState) -> Router {
         )
         .route("/v1/repos/{owner}/{repo}/session", get(get_session))
         .route("/v1/repos/{owner}/{repo}/files", get(get_files))
+        .route(
+            "/v1/repos/{owner}/{repo}/pending-import",
+            get(get_pending_import_review),
+        )
+        .route("/v1/repos/{owner}/{repo}/publish", post(publish_repo))
         .route(
             "/v1/repos/{owner}/{repo}/files/visibility",
             patch(update_file_visibility),
@@ -461,6 +476,7 @@ async fn get_session(
         identity: identity.as_ref().map(SessionIdentity::from),
         repo: SessionRepo {
             id: repo.record.id.clone(),
+            publication_state: repo.record.publication_state,
             role,
         },
         capabilities: SessionCapabilities {
@@ -484,6 +500,81 @@ async fn get_files(
     Ok(Json(projected_files(&repo, &principal)))
 }
 
+async fn get_pending_import_review(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path((owner, repo_name)): Path<(String, String)>,
+) -> Result<Json<PendingImportReviewResponse>, ApiError> {
+    let repo = find_repo(&state, &owner, &repo_name)?;
+    let identity = http_identity(&state, &headers).await?;
+    let principal = principal_for_repo(&state, &repo, identity.as_ref())?;
+    ensure_repo_read(&state, &repo, &principal)?;
+    ensure_owner(&state, &repo, &principal)?;
+    ensure_pending_publish(&repo)?;
+
+    Ok(Json(PendingImportReviewResponse {
+        publication_state: repo.record.publication_state,
+        default_visibility: repo.record.default_visibility,
+        files: pending_import_files(&repo, &principal)?,
+    }))
+}
+
+async fn publish_repo(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path((owner, repo_name)): Path<(String, String)>,
+) -> Result<Json<SessionRepo>, ApiError> {
+    let identity = http_identity(&state, &headers).await?;
+    let repo_id = scope_store::repo_id(&owner, &repo_name);
+    let repo = find_repo(&state, &owner, &repo_name)?;
+    let principal = principal_for_repo(&state, &repo, identity.as_ref())?;
+    ensure_repo_read(&state, &repo, &principal)?;
+    ensure_owner(&state, &repo, &principal)?;
+    ensure_pending_publish(&repo)?;
+
+    let updated = {
+        let mut catalog = lock_catalog(&state)?;
+        let mut staged = catalog.clone();
+        let repo = staged
+            .repositories
+            .get(&repo_id)
+            .ok_or_else(|| ApiError::not_found(format!("repo {owner}/{repo_name} not found")))?;
+        let user_id = identity
+            .as_ref()
+            .map(identity_user_id)
+            .ok_or_else(|| ApiError::forbidden("owner role required"))?;
+        let principal = principal_for_user_id(repo, &user_id);
+        if staged.role_for_principal(repo, &principal) != Some(RepoRole::Owner) {
+            return Err(ApiError::forbidden("owner role required"));
+        }
+        ensure_pending_publish(repo)?;
+
+        {
+            let repo = staged
+                .repositories
+                .get_mut(&repo_id)
+                .expect("repo was already checked");
+            promote_pending_import(repo)?;
+        }
+
+        persist_catalog(&state, &staged)?;
+        let updated = staged
+            .repositories
+            .get(&repo_id)
+            .expect("repo was already checked")
+            .record
+            .clone();
+        *catalog = staged;
+        updated
+    };
+
+    Ok(Json(SessionRepo {
+        id: updated.id,
+        publication_state: updated.publication_state,
+        role: Some(RepoRole::Owner),
+    }))
+}
+
 async fn update_file_visibility(
     State(state): State<AppState>,
     headers: HeaderMap,
@@ -501,7 +592,7 @@ async fn update_file_visibility(
         return Err(ApiError::forbidden("owner role required"));
     }
 
-    let owner_files = projected_files(&repo, &principal);
+    let owner_files = files_for_visibility_update(&repo, &principal)?;
     let selected_file = owner_files
         .iter()
         .find(|file| file.path == path.as_str())
@@ -531,7 +622,7 @@ async fn update_file_visibility(
             return Err(ApiError::forbidden("owner role required"));
         }
 
-        if input.visibility == Visibility::Public && !graph_has_file(repo, &path) {
+        if input.visibility == Visibility::Public && !repo_has_file_for_review(repo, &path) {
             return Err(ApiError::bad_request(format!(
                 "file {} must be tracked by Git before it can be made public",
                 path.as_str()
@@ -564,7 +655,7 @@ async fn update_file_visibility(
         id: updated.record.owner_user_id.clone(),
         kind: scope_policy::PrincipalKind::User,
     };
-    let updated_files = projected_files(&updated, &principal);
+    let updated_files = files_for_visibility_update(&updated, &principal)?;
     let file = updated_files
         .into_iter()
         .find(|file| file.path == path.as_str())
@@ -1319,6 +1410,63 @@ fn ensure_repo_read(
     }
 }
 
+fn ensure_owner(
+    state: &AppState,
+    repo: &StoredRepository,
+    principal: &Principal,
+) -> Result<(), ApiError> {
+    if role_for_principal(state, repo, principal)? == Some(RepoRole::Owner) {
+        Ok(())
+    } else {
+        Err(ApiError::forbidden("owner role required"))
+    }
+}
+
+fn ensure_pending_publish(repo: &StoredRepository) -> Result<(), ApiError> {
+    if repo.record.publication_state != RepoPublicationState::PendingPublish {
+        return Err(ApiError::bad_request("repo is not pending publish"));
+    }
+    if repo.pending_import.is_none() {
+        return Err(ApiError::bad_request(
+            "repo has no pending import to publish",
+        ));
+    }
+    Ok(())
+}
+
+fn promote_pending_import(repo: &mut StoredRepository) -> Result<(), ApiError> {
+    ensure_pending_publish(repo)?;
+    let pending = repo
+        .pending_import
+        .take()
+        .ok_or_else(|| ApiError::bad_request("repo has no pending import to publish"))?;
+    let changes = pending_import_changes(&pending)?;
+    let parent_ids = repo
+        .graph
+        .commits
+        .last()
+        .map(|commit| vec![commit.id.clone()])
+        .unwrap_or_default();
+    let logical_id = format!(
+        "rv_git_{}",
+        pending
+            .head_oid
+            .get(..12)
+            .unwrap_or(pending.head_oid.as_str())
+    );
+    repo.graph.commits.push(LogicalCommit {
+        id: logical_id,
+        parent_ids,
+        author_id: repo.record.owner_user_id.clone(),
+        author_visibility: AuthorVisibility::Visible,
+        message: format!("Import pushed {}", pending.default_branch),
+        mixed_policy: MixedCommitPolicy::SyntheticPublicCommit,
+        changes,
+    });
+    repo.record.publication_state = RepoPublicationState::Published;
+    Ok(())
+}
+
 impl AppState {
     fn from_env() -> anyhow::Result<Self> {
         let repo_root = git_repo_root();
@@ -1955,6 +2103,24 @@ fn graph_has_file(repo: &StoredRepository, path: &ScopePath) -> bool {
     present
 }
 
+fn pending_import_has_file(repo: &StoredRepository, path: &ScopePath) -> bool {
+    repo.pending_import.as_ref().is_some_and(|pending| {
+        pending.files.iter().any(|file| {
+            pending_scope_path(&file.path)
+                .map(|pending_path| pending_path.as_str() == path.as_str())
+                .unwrap_or(false)
+        })
+    })
+}
+
+fn repo_has_file_for_review(repo: &StoredRepository, path: &ScopePath) -> bool {
+    if repo.record.publication_state == RepoPublicationState::PendingPublish {
+        pending_import_has_file(repo, path)
+    } else {
+        graph_has_file(repo, path)
+    }
+}
+
 fn repo_owner_ids(repo: &StoredRepository) -> Vec<String> {
     let mut owner_ids = repo
         .memberships
@@ -1989,6 +2155,68 @@ fn projected_files(repo: &StoredRepository, principal: &Principal) -> Vec<RepoFi
         .collect::<Vec<_>>();
     files.sort_by(|left, right| left.path.cmp(&right.path));
     files
+}
+
+fn pending_import_files(
+    repo: &StoredRepository,
+    principal: &Principal,
+) -> Result<Vec<RepoFileResponse>, ApiError> {
+    let Some(pending) = repo.pending_import.as_ref() else {
+        return Ok(Vec::new());
+    };
+    let mut files = Vec::new();
+    for file in &pending.files {
+        let path = pending_scope_path(&file.path)?;
+        if !repo.policy.can_read(principal, &path) {
+            continue;
+        }
+        files.push(RepoFileResponse {
+            path: path.as_str().to_string(),
+            oid: file.oid.clone(),
+            tracked: true,
+            visibility: repo.policy.effective_visibility(&path),
+        });
+    }
+    files.sort_by(|left, right| left.path.cmp(&right.path));
+    Ok(files)
+}
+
+fn files_for_visibility_update(
+    repo: &StoredRepository,
+    principal: &Principal,
+) -> Result<Vec<RepoFileResponse>, ApiError> {
+    if repo.record.publication_state == RepoPublicationState::PendingPublish {
+        pending_import_files(repo, principal)
+    } else {
+        Ok(projected_files(repo, principal))
+    }
+}
+
+fn pending_import_changes(pending: &PendingImport) -> Result<Vec<FileChange>, ApiError> {
+    pending
+        .files
+        .iter()
+        .map(|file| {
+            let content = BASE64
+                .decode(file.content_base64.as_bytes())
+                .map_err(ApiError::bad_request)?;
+            let content = String::from_utf8(content).map_err(ApiError::bad_request)?;
+            Ok(FileChange {
+                path: pending_scope_path(&file.path)?,
+                old_content: None,
+                new_content: Some(content),
+            })
+        })
+        .collect()
+}
+
+fn pending_scope_path(path: &str) -> Result<ScopePath, ApiError> {
+    let path = if path.starts_with('/') {
+        path.to_string()
+    } else {
+        format!("/{path}")
+    };
+    ScopePath::parse(path).map_err(ApiError::bad_request)
 }
 
 async fn shutdown_signal() {
@@ -2099,7 +2327,7 @@ mod tests {
         http::{Request, header::CONTENT_TYPE},
     };
     use jsonwebtoken::{EncodingKey, Header, encode};
-    use scope_policy::{Principal, PrincipalKind};
+    use scope_policy::{Principal, PrincipalKind, VisibilityRule};
     use scope_projection::SourceGraph;
     use scope_store::{
         AccountAccess, RepoMembership, RepoPublicationState, RepoRecord, StoredRepository,
@@ -2333,6 +2561,24 @@ kGxvBjzgF9RjXJoldYnFk7mJ5gLANHjaaad3qTQJ8DldKJoSqkEkm5gg
                 role: RepoRole::Owner,
             }],
             invitations: Vec::new(),
+        }
+    }
+
+    fn pending_import_fixture(files: Vec<(&str, &str)>) -> PendingImport {
+        PendingImport {
+            default_branch: "main".to_string(),
+            head_oid: "1111111111111111111111111111111111111111".to_string(),
+            tree_oid: "2222222222222222222222222222222222222222".to_string(),
+            imported_at_unix: unix_now(),
+            files: files
+                .into_iter()
+                .map(|(path, content)| PendingImportFile {
+                    path: path.to_string(),
+                    mode: "100644".to_string(),
+                    oid: format!("oid-{path}"),
+                    content_base64: BASE64.encode(content),
+                })
+                .collect(),
         }
     }
 
@@ -2680,6 +2926,82 @@ kGxvBjzgF9RjXJoldYnFk7mJ5gLANHjaaad3qTQJ8DldKJoSqkEkm5gg
         let error = ensure_repo_read(&state, &repo, &Principal::public()).unwrap_err();
 
         assert_eq!(error.status, StatusCode::NOT_FOUND);
+    }
+
+    #[test]
+    fn pending_import_review_uses_default_visibility() {
+        let mut repo = test_repo(&test_owner_id());
+        repo.record.publication_state = RepoPublicationState::PendingPublish;
+        repo.record.default_visibility = Visibility::Private;
+        repo.policy = Policy::new(Visibility::Private, repo.record.owner_user_id.clone());
+        repo.pending_import = Some(pending_import_fixture(vec![
+            ("README.md", "hello"),
+            ("src/main.rs", "fn main() {}"),
+        ]));
+        let owner = Principal {
+            id: repo.record.owner_user_id.clone(),
+            kind: PrincipalKind::User,
+        };
+
+        let files = pending_import_files(&repo, &owner).unwrap();
+
+        assert_eq!(files.len(), 2);
+        assert!(
+            files
+                .iter()
+                .all(|file| file.visibility == Visibility::Private)
+        );
+    }
+
+    #[test]
+    fn pending_visibility_toggles_apply_before_publish() {
+        let mut repo = test_repo(&test_owner_id());
+        repo.record.publication_state = RepoPublicationState::PendingPublish;
+        repo.pending_import = Some(pending_import_fixture(vec![("README.md", "hello")]));
+        let path = ScopePath::parse("/README.md").unwrap();
+        repo.policy
+            .add_rule(VisibilityRule::private(path.clone(), repo_owner_ids(&repo)))
+            .unwrap();
+        let owner = Principal {
+            id: repo.record.owner_user_id.clone(),
+            kind: PrincipalKind::User,
+        };
+
+        let private_files = files_for_visibility_update(&repo, &owner).unwrap();
+        assert_eq!(private_files[0].visibility, Visibility::Private);
+
+        repo.policy.add_rule(VisibilityRule::public(path)).unwrap();
+        let public_files = files_for_visibility_update(&repo, &owner).unwrap();
+        assert_eq!(public_files[0].visibility, Visibility::Public);
+    }
+
+    #[test]
+    fn zero_file_publish_promotes_pending_import() {
+        let mut repo = test_repo(&test_owner_id());
+        repo.record.publication_state = RepoPublicationState::PendingPublish;
+        repo.pending_import = Some(pending_import_fixture(Vec::new()));
+
+        promote_pending_import(&mut repo).unwrap();
+
+        assert_eq!(
+            repo.record.publication_state,
+            RepoPublicationState::Published
+        );
+        assert!(repo.pending_import.is_none());
+        assert_eq!(repo.graph.commits.len(), 1);
+        assert!(repo.graph.commits[0].changes.is_empty());
+    }
+
+    #[test]
+    fn publish_is_one_time() {
+        let mut repo = test_repo(&test_owner_id());
+        repo.record.publication_state = RepoPublicationState::PendingPublish;
+        repo.pending_import = Some(pending_import_fixture(vec![("README.md", "hello")]));
+
+        promote_pending_import(&mut repo).unwrap();
+        let error = promote_pending_import(&mut repo).unwrap_err();
+
+        assert_eq!(error.status, StatusCode::BAD_REQUEST);
     }
 
     #[test]

@@ -407,6 +407,17 @@ function RepoList({
                 </Link>
               </Button>
             )}
+            {repo.lifecycle_state === 'PendingPublish' && (
+              <Button asChild size="sm" variant="secondary">
+                <Link
+                  params={{ owner: repo.owner_handle, repo: repo.name }}
+                  to="/repos/$owner/$repo/review"
+                >
+                  <ArrowRight className="size-3.5" />
+                  <span>Review</span>
+                </Link>
+              </Button>
+            )}
           </div>
         </div>
       ))}
