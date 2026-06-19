@@ -27,6 +27,7 @@ pub enum AccountAccess {
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct UserAccount {
     pub id: String,
+    pub handle: String,
     pub email: String,
     pub email_verified: bool,
     pub access: AccountAccess,
@@ -42,7 +43,8 @@ pub enum RepoRole {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum RepoPublicationState {
-    Unpublished,
+    PendingFirstPush,
+    PendingPublish,
     Published,
 }
 
@@ -106,6 +108,55 @@ impl AppCatalog {
         self.repositories.get(&repo_id(owner, name))
     }
 
+    pub fn repositories_for_user(&self, user_id: &str) -> Vec<&StoredRepository> {
+        self.repositories
+            .values()
+            .filter(|repo| {
+                repo.memberships
+                    .iter()
+                    .any(|membership| membership.user_id == user_id)
+            })
+            .collect()
+    }
+
+    pub fn create_repository(
+        &mut self,
+        owner: &UserAccount,
+        name: &str,
+        default_visibility: Visibility,
+    ) -> Result<&StoredRepository, CatalogError> {
+        let name = validate_repo_name(name)?;
+        let id = repo_id(&owner.handle, &name);
+        if self.repositories.contains_key(&id) {
+            return Err(CatalogError::RepositoryExists(id));
+        }
+
+        let repository = StoredRepository {
+            record: RepoRecord {
+                id: id.clone(),
+                owner_handle: owner.handle.clone(),
+                name,
+                owner_user_id: owner.id.clone(),
+                publication_state: RepoPublicationState::PendingFirstPush,
+                default_visibility,
+            },
+            settings: RepoSettings::default(),
+            policy: Policy::new(default_visibility, owner.id.clone()),
+            graph: SourceGraph {
+                repo_id: id.clone(),
+                commits: Vec::new(),
+            },
+            memberships: vec![RepoMembership {
+                repo_id: id.clone(),
+                user_id: owner.id.clone(),
+                role: RepoRole::Owner,
+            }],
+            invitations: Vec::new(),
+        };
+        self.repositories.insert(id.clone(), repository);
+        Ok(self.repositories.get(&id).expect("repository was inserted"))
+    }
+
     pub fn verified_user_for_email(&self, email: &VerifiedEmail) -> Option<&UserAccount> {
         if !email.verified {
             return None;
@@ -163,7 +214,15 @@ impl AppCatalog {
                 && repo.policy.can_read(principal, path);
         }
 
-        self.role_for_principal(repo, principal).is_some() && repo.policy.can_read(principal, path)
+        let Some(role) = self.role_for_principal(repo, principal) else {
+            return false;
+        };
+
+        let lifecycle_allows_read = repo.record.publication_state
+            == RepoPublicationState::Published
+            || role == RepoRole::Owner;
+
+        lifecycle_allows_read && repo.policy.can_read(principal, path)
     }
 
     pub fn can_write_path(
@@ -183,11 +242,53 @@ pub fn app_catalog() -> AppCatalog {
 }
 
 pub fn repo_id(owner: &str, name: &str) -> String {
-    format!("{}/{}", owner.trim(), name.trim())
+    format!(
+        "{}/{}",
+        owner.trim().to_ascii_lowercase(),
+        name.trim().to_ascii_lowercase()
+    )
 }
 
 fn normalize_email(email: impl Into<String>) -> String {
     email.into().trim().to_ascii_lowercase()
+}
+
+fn validate_repo_name(name: &str) -> Result<String, CatalogError> {
+    let name = name.trim().to_ascii_lowercase();
+    if name.is_empty() {
+        return Err(CatalogError::InvalidRepositoryName(
+            "repository name is required".to_string(),
+        ));
+    }
+    if name == "." || name == ".." {
+        return Err(CatalogError::InvalidRepositoryName(
+            "repository name cannot be . or ..".to_string(),
+        ));
+    }
+    if name.len() > 80 {
+        return Err(CatalogError::InvalidRepositoryName(
+            "repository name must be 80 characters or fewer".to_string(),
+        ));
+    }
+    if !name
+        .bytes()
+        .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'-' | b'_'))
+    {
+        return Err(CatalogError::InvalidRepositoryName(
+            "repository name can only use letters, numbers, dots, dashes, or underscores"
+                .to_string(),
+        ));
+    }
+
+    Ok(name)
+}
+
+#[derive(Debug, thiserror::Error)]
+pub enum CatalogError {
+    #[error("{0}")]
+    InvalidRepositoryName(String),
+    #[error("repo {0} already exists")]
+    RepositoryExists(String),
 }
 
 #[cfg(test)]
@@ -204,6 +305,7 @@ mod tests {
     fn catalog_with_test_repo() -> AppCatalog {
         let owner = UserAccount {
             id: TEST_OWNER_ID.to_string(),
+            handle: TEST_REPO_OWNER.to_string(),
             email: TEST_OWNER_EMAIL.to_string(),
             email_verified: true,
             access: AccountAccess::Member,
@@ -268,6 +370,65 @@ mod tests {
     }
 
     #[test]
+    fn create_repository_makes_private_owner_repo_pending_first_push() {
+        let mut catalog = app_catalog();
+        let owner = UserAccount {
+            id: TEST_OWNER_ID.to_string(),
+            handle: TEST_REPO_OWNER.to_string(),
+            email: TEST_OWNER_EMAIL.to_string(),
+            email_verified: true,
+            access: AccountAccess::Member,
+        };
+        catalog.users.insert(owner.id.clone(), owner.clone());
+
+        let repo = catalog
+            .create_repository(&owner, "Draft.Repo", Visibility::Private)
+            .unwrap()
+            .clone();
+
+        assert_eq!(repo.record.id, "owner/draft.repo");
+        assert_eq!(
+            repo.record.publication_state,
+            RepoPublicationState::PendingFirstPush
+        );
+        assert_eq!(repo.record.default_visibility, Visibility::Private);
+        assert!(repo.graph.commits.is_empty());
+        assert_eq!(
+            repo.policy.effective_visibility(&ScopePath::root()),
+            Visibility::Private
+        );
+
+        let principal = Principal {
+            id: TEST_OWNER_ID.to_string(),
+            kind: PrincipalKind::User,
+        };
+        assert!(catalog.can_read_path(&repo, &principal, &ScopePath::root()));
+        assert!(catalog.can_write_path(&repo, &principal, &ScopePath::root()));
+        assert!(!catalog.can_read_path(&repo, &Principal::public(), &ScopePath::root()));
+    }
+
+    #[test]
+    fn duplicate_owner_repo_name_is_rejected() {
+        let mut catalog = app_catalog();
+        let owner = UserAccount {
+            id: TEST_OWNER_ID.to_string(),
+            handle: TEST_REPO_OWNER.to_string(),
+            email: TEST_OWNER_EMAIL.to_string(),
+            email_verified: true,
+            access: AccountAccess::Member,
+        };
+
+        catalog
+            .create_repository(&owner, "scope", Visibility::Private)
+            .unwrap();
+        let error = catalog
+            .create_repository(&owner, "SCOPE", Visibility::Private)
+            .unwrap_err();
+
+        assert!(matches!(error, CatalogError::RepositoryExists(id) if id == "owner/scope"));
+    }
+
+    #[test]
     fn unverified_email_stays_public() {
         let catalog = catalog_with_test_repo();
         let repo = catalog.repository(TEST_REPO_OWNER, TEST_REPO_NAME).unwrap();
@@ -296,8 +457,42 @@ mod tests {
             .repository(TEST_REPO_OWNER, TEST_REPO_NAME)
             .unwrap()
             .clone();
-        repo.record.publication_state = RepoPublicationState::Unpublished;
+        repo.record.publication_state = RepoPublicationState::PendingPublish;
 
+        assert!(!catalog.can_read_path(&repo, &Principal::public(), &ScopePath::root()));
+    }
+
+    #[test]
+    fn pending_publish_repo_is_owner_only_even_with_reader_membership() {
+        let mut catalog = catalog_with_test_repo();
+        let reader = UserAccount {
+            id: "user_reader".to_string(),
+            handle: "reader".to_string(),
+            email: "reader@example.com".to_string(),
+            email_verified: true,
+            access: AccountAccess::Member,
+        };
+        catalog.users.insert(reader.id.clone(), reader.clone());
+        let repo = catalog.repositories.get_mut(TEST_REPO_ID).unwrap();
+        repo.record.publication_state = RepoPublicationState::PendingPublish;
+        repo.memberships.push(RepoMembership {
+            repo_id: TEST_REPO_ID.to_string(),
+            user_id: reader.id.clone(),
+            role: RepoRole::Reader,
+        });
+        let repo = repo.clone();
+
+        let owner_principal = Principal {
+            id: TEST_OWNER_ID.to_string(),
+            kind: PrincipalKind::User,
+        };
+        let reader_principal = Principal {
+            id: reader.id,
+            kind: PrincipalKind::User,
+        };
+
+        assert!(catalog.can_read_path(&repo, &owner_principal, &ScopePath::root()));
+        assert!(!catalog.can_read_path(&repo, &reader_principal, &ScopePath::root()));
         assert!(!catalog.can_read_path(&repo, &Principal::public(), &ScopePath::root()));
     }
 
@@ -306,6 +501,7 @@ mod tests {
         let mut catalog = catalog_with_test_repo();
         let invited = UserAccount {
             id: "user_invited".to_string(),
+            handle: "invited".to_string(),
             email: "invited@example.com".to_string(),
             email_verified: true,
             access: AccountAccess::Member,

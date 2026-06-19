@@ -13,7 +13,6 @@ the canonical source of truth is a server-side source graph.
 - `crates/scope-git` - projected Git object identity helpers.
 - `crates/scope-store` - app catalog, repository, membership, and invite domain.
 - `crates/scope-server` - Axum API and Git facade boundary.
-- `crates/scope-cli` - `sx` command-line prototype.
 - `apps/web` - TanStack Start control-plane UI.
 
 ## Local Checks

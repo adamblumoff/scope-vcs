@@ -11,19 +11,21 @@ use jsonwebtoken::{
     jwk::{Jwk, JwkSet},
 };
 use scope_git::{VirtualGitProjection, build_virtual_git_projection};
-use scope_policy::{Policy, Principal, ScopePath, Visibility, VisibilityRule};
+use scope_policy::{Principal, ScopePath, Visibility, VisibilityRule};
 use scope_projection::{Projection, project_graph};
 use scope_store::{
-    AppCatalog, RepoRole, RepoSettings, StoredRepository, VerifiedEmail, app_catalog,
+    AccountAccess, AppCatalog, CatalogError, RepoPublicationState, RepoRole, RepoSettings,
+    StoredRepository, UserAccount, app_catalog,
 };
 use serde::{Deserialize, Serialize};
+use sha1::{Digest, Sha1};
 use std::{
     collections::BTreeMap,
     fs,
     io::Write,
     net::SocketAddr,
     path::{Path as FsPath, PathBuf},
-    process::{Command, Stdio},
+    process::Command,
     sync::{Arc, Mutex},
     time::Duration,
 };
@@ -36,25 +38,18 @@ const SCOPE_STATE_PATH_ENV: &str = "SCOPE_STATE_PATH";
 const SHOO_JWKS_URL: &str = "https://shoo.dev/.well-known/jwks.json";
 const SHOO_ISSUER: &str = "https://shoo.dev";
 const LOCAL_APP_ORIGIN: &str = "http://localhost:3000";
-const MAX_OWNER_FILE_PATHS: usize = 5_000;
 
 #[derive(Clone)]
 struct AppState {
     catalog: Arc<Mutex<AppCatalog>>,
-    repo_root: Arc<PathBuf>,
     state_path: Arc<PathBuf>,
     shoo: ShooVerifier,
 }
 
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
 struct PersistedState {
-    repositories: BTreeMap<String, PersistedRepositoryState>,
-}
-
-#[derive(Clone, Debug, Serialize, Deserialize)]
-struct PersistedRepositoryState {
-    settings: RepoSettings,
-    policy: Policy,
+    users: BTreeMap<String, UserAccount>,
+    repositories: BTreeMap<String, StoredRepository>,
 }
 
 #[derive(Clone)]
@@ -75,6 +70,31 @@ struct HealthResponse {
 #[derive(Debug, Serialize)]
 struct ErrorResponse {
     error: String,
+}
+
+#[derive(Debug, Serialize)]
+struct AccountSessionResponse {
+    identity: Option<SessionIdentity>,
+    user: Option<UserResponse>,
+}
+
+#[derive(Debug, Serialize)]
+struct UserResponse {
+    id: String,
+    handle: String,
+    email: String,
+    email_verified: bool,
+}
+
+impl From<UserAccount> for UserResponse {
+    fn from(user: UserAccount) -> Self {
+        Self {
+            id: user.id,
+            handle: user.handle,
+            email: user.email,
+            email_verified: user.email_verified,
+        }
+    }
 }
 
 #[derive(Debug, Serialize)]
@@ -105,6 +125,16 @@ struct SessionCapabilities {
 }
 
 #[derive(Debug, Serialize)]
+struct RepoSummaryResponse {
+    id: String,
+    owner_handle: String,
+    name: String,
+    lifecycle_state: RepoPublicationState,
+    default_visibility: Visibility,
+    role: RepoRole,
+}
+
+#[derive(Debug, Serialize)]
 struct RepoFileResponse {
     path: String,
     oid: String,
@@ -121,6 +151,12 @@ struct UpdateFileVisibilityRequest {
 #[derive(Debug, Deserialize)]
 struct UpdateRepoSettingsRequest {
     include_ignored_files: bool,
+}
+
+#[derive(Debug, Deserialize)]
+struct CreateRepoRequest {
+    name: String,
+    visibility: Option<Visibility>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -162,6 +198,8 @@ async fn main() -> anyhow::Result<()> {
 fn router(state: AppState) -> Router {
     Router::new()
         .route("/healthz", get(healthz))
+        .route("/v1/session", get(get_account_session))
+        .route("/v1/repos", get(list_repos).post(create_repo))
         .route("/v1/repos/{owner}/{repo}/session", get(get_session))
         .route("/v1/repos/{owner}/{repo}/files", get(get_files))
         .route(
@@ -188,6 +226,80 @@ async fn healthz() -> Json<HealthResponse> {
         status: "ok",
         service: "scope-server",
     })
+}
+
+async fn get_account_session(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> Result<Json<AccountSessionResponse>, ApiError> {
+    let identity = http_identity(&state, &headers).await?;
+    let user = match identity.as_ref() {
+        Some(identity) => Some(UserResponse::from(ensure_user_for_identity(
+            &state, identity,
+        )?)),
+        None => None,
+    };
+
+    Ok(Json(AccountSessionResponse {
+        identity: identity.as_ref().map(SessionIdentity::from),
+        user,
+    }))
+}
+
+async fn list_repos(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> Result<Json<Vec<RepoSummaryResponse>>, ApiError> {
+    let identity = require_identity(&state, &headers).await?;
+    let user = ensure_user_for_identity(&state, &identity)?;
+    let catalog = lock_catalog(&state)?;
+    let mut repositories = catalog
+        .repositories_for_user(&user.id)
+        .into_iter()
+        .filter_map(|repo| repo_summary(&catalog, repo, &user.id))
+        .collect::<Vec<_>>();
+    repositories.sort_by(|left, right| left.id.cmp(&right.id));
+
+    Ok(Json(repositories))
+}
+
+async fn create_repo(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(input): Json<CreateRepoRequest>,
+) -> Result<Json<RepoSummaryResponse>, ApiError> {
+    let identity = require_identity(&state, &headers).await?;
+    let user = ensure_user_for_identity(&state, &identity)?;
+    let default_visibility = input.visibility.unwrap_or(Visibility::Private);
+
+    let created = {
+        let mut catalog = lock_catalog(&state)?;
+        let mut staged = catalog.clone();
+        let user = staged
+            .users
+            .get(&user.id)
+            .cloned()
+            .ok_or_else(|| ApiError::internal_message("signed-in user was not persisted"))?;
+        let repo_id = staged
+            .create_repository(&user, &input.name, default_visibility)
+            .map_err(catalog_error)?
+            .record
+            .id
+            .clone();
+        let repo = staged
+            .repositories
+            .get(&repo_id)
+            .expect("created repository must exist");
+        let summary = repo_summary(&staged, repo, &user.id).ok_or_else(|| {
+            ApiError::internal_message("created repository is missing owner role")
+        })?;
+
+        persist_catalog(&state, &staged)?;
+        *catalog = staged;
+        summary
+    };
+
+    Ok(Json(created))
 }
 
 async fn get_projection(
@@ -250,18 +362,6 @@ async fn get_files(
     let identity = http_identity(&state, &headers).await?;
     let principal = principal_for_repo(&state, &repo, identity.as_ref())?;
     ensure_repo_read(&state, &repo, &principal)?;
-    let role = role_for_principal(&state, &repo, &principal)?;
-
-    if role == Some(RepoRole::Owner) {
-        return match git_files(&state.repo_root, &repo, &principal, role) {
-            Ok(files) => Ok(Json(files)),
-            Err(error) if error.status == StatusCode::SERVICE_UNAVAILABLE => {
-                tracing::warn!(error = %error.message, "falling back to projected files");
-                Ok(Json(projected_files(&repo, &principal)))
-            }
-            Err(error) => Err(error),
-        };
-    }
 
     Ok(Json(projected_files(&repo, &principal)))
 }
@@ -273,7 +373,6 @@ async fn update_file_visibility(
     Json(input): Json<UpdateFileVisibilityRequest>,
 ) -> Result<Json<RepoFileResponse>, ApiError> {
     let identity = http_identity(&state, &headers).await?;
-    let verified_email = identity.as_ref().and_then(ShooIdentity::verified_email);
     let path = ScopePath::parse(&input.path).map_err(ApiError::bad_request)?;
     let repo_id = scope_store::repo_id(&owner, &repo_name);
 
@@ -284,14 +383,7 @@ async fn update_file_visibility(
         return Err(ApiError::forbidden("owner role required"));
     }
 
-    let owner_files = match git_files(&state.repo_root, &repo, &principal, Some(RepoRole::Owner)) {
-        Ok(files) => files,
-        Err(error) if error.status == StatusCode::SERVICE_UNAVAILABLE => {
-            tracing::warn!(error = %error.message, "falling back to projected files");
-            projected_files(&repo, &principal)
-        }
-        Err(error) => return Err(error),
-    };
+    let owner_files = projected_files(&repo, &principal);
     let selected_file = owner_files
         .iter()
         .find(|file| file.path == path.as_str())
@@ -310,7 +402,11 @@ async fn update_file_visibility(
             .repositories
             .get(&repo_id)
             .ok_or_else(|| ApiError::not_found(format!("repo {owner}/{repo_name} not found")))?;
-        let principal = staged.principal_for_repo(repo, verified_email.as_ref());
+        let user_id = identity
+            .as_ref()
+            .map(identity_user_id)
+            .ok_or_else(|| ApiError::forbidden("owner role required"))?;
+        let principal = principal_for_user_id(repo, &user_id);
         let role = staged.role_for_principal(repo, &principal);
 
         if role != Some(RepoRole::Owner) {
@@ -350,19 +446,7 @@ async fn update_file_visibility(
         id: updated.record.owner_user_id.clone(),
         kind: scope_policy::PrincipalKind::User,
     };
-    let updated_files = match git_files(
-        &state.repo_root,
-        &updated,
-        &principal,
-        Some(RepoRole::Owner),
-    ) {
-        Ok(files) => files,
-        Err(error) if error.status == StatusCode::SERVICE_UNAVAILABLE => {
-            tracing::warn!(error = %error.message, "falling back to projected files");
-            projected_files(&updated, &principal)
-        }
-        Err(error) => return Err(error),
-    };
+    let updated_files = projected_files(&updated, &principal);
     let file = updated_files
         .into_iter()
         .find(|file| file.path == path.as_str())
@@ -395,7 +479,6 @@ async fn update_settings(
     Json(input): Json<UpdateRepoSettingsRequest>,
 ) -> Result<Json<RepoSettings>, ApiError> {
     let identity = http_identity(&state, &headers).await?;
-    let verified_email = identity.as_ref().and_then(ShooIdentity::verified_email);
     let repo_id = scope_store::repo_id(&owner, &repo_name);
     let repo = find_repo(&state, &owner, &repo_name)?;
     let principal = principal_for_repo(&state, &repo, identity.as_ref())?;
@@ -407,7 +490,11 @@ async fn update_settings(
         .repositories
         .get(&repo_id)
         .ok_or_else(|| ApiError::not_found(format!("repo {owner}/{repo_name} not found")))?;
-    let principal = staged.principal_for_repo(repo, verified_email.as_ref());
+    let user_id = identity
+        .as_ref()
+        .map(identity_user_id)
+        .ok_or_else(|| ApiError::forbidden("owner role required"))?;
+    let principal = principal_for_user_id(repo, &user_id);
 
     if staged.role_for_principal(repo, &principal) != Some(RepoRole::Owner) {
         return Err(ApiError::forbidden("owner role required"));
@@ -487,7 +574,6 @@ impl AppState {
 
         Ok(Self {
             catalog: Arc::new(Mutex::new(catalog)),
-            repo_root: Arc::new(repo_root),
             state_path: Arc::new(state_path),
             shoo: ShooVerifier::from_env(),
         })
@@ -497,8 +583,7 @@ impl AppState {
     fn test_state() -> Self {
         Self {
             catalog: Arc::new(Mutex::new(app_catalog())),
-            repo_root: Arc::new(git_repo_root()),
-            state_path: Arc::new(std::env::temp_dir().join("scope-vcs-test-state.json")),
+            state_path: Arc::new(test_state_path()),
             shoo: ShooVerifier::new(
                 SHOO_ISSUER,
                 Some("origin:http://localhost:3000".to_string()),
@@ -506,6 +591,18 @@ impl AppState {
             ),
         }
     }
+}
+
+#[cfg(test)]
+fn test_state_path() -> PathBuf {
+    let nanos = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .expect("test clock must be after UNIX epoch")
+        .as_nanos();
+    std::env::temp_dir().join(format!(
+        "scope-vcs-test-state-{}-{nanos}.json",
+        std::process::id()
+    ))
 }
 
 fn non_empty_env(name: &str) -> Option<String> {
@@ -563,31 +660,14 @@ fn persist_catalog(state: &AppState, catalog: &AppCatalog) -> Result<(), ApiErro
 }
 
 fn apply_persisted_state(catalog: &mut AppCatalog, state: &PersistedState) {
-    for (repo_id, persisted) in &state.repositories {
-        let Some(repo) = catalog.repositories.get_mut(repo_id) else {
-            continue;
-        };
-
-        repo.settings = persisted.settings;
-        repo.policy = persisted.policy.clone();
-    }
+    catalog.users = state.users.clone();
+    catalog.repositories = state.repositories.clone();
 }
 
 fn persisted_state_from_catalog(catalog: &AppCatalog) -> PersistedState {
     PersistedState {
-        repositories: catalog
-            .repositories
-            .iter()
-            .map(|(repo_id, repo)| {
-                (
-                    repo_id.clone(),
-                    PersistedRepositoryState {
-                        settings: repo.settings,
-                        policy: repo.policy.clone(),
-                    },
-                )
-            })
-            .collect(),
+        users: catalog.users.clone(),
+        repositories: catalog.repositories.clone(),
     }
 }
 
@@ -673,14 +753,6 @@ struct ShooIdentity {
     email_verified: bool,
 }
 
-impl ShooIdentity {
-    fn verified_email(&self) -> Option<VerifiedEmail> {
-        self.email
-            .as_ref()
-            .map(|email| VerifiedEmail::new(email, self.email_verified))
-    }
-}
-
 impl From<&ShooIdentity> for SessionIdentity {
     fn from(identity: &ShooIdentity) -> Self {
         Self {
@@ -762,6 +834,12 @@ async fn http_identity(
     state.shoo.verify(token).await.map(Some)
 }
 
+async fn require_identity(state: &AppState, headers: &HeaderMap) -> Result<ShooIdentity, ApiError> {
+    http_identity(state, headers)
+        .await?
+        .ok_or_else(|| ApiError::unauthorized("sign in required"))
+}
+
 fn bearer_token(headers: &HeaderMap) -> Result<Option<&str>, ApiError> {
     let Some(value) = headers.get(AUTHORIZATION) else {
         return Ok(None);
@@ -786,8 +864,175 @@ fn principal_for_repo(
     repo: &StoredRepository,
     identity: Option<&ShooIdentity>,
 ) -> Result<Principal, ApiError> {
-    let verified_email = identity.and_then(ShooIdentity::verified_email);
-    Ok(lock_catalog(state)?.principal_for_repo(repo, verified_email.as_ref()))
+    let Some(identity) = identity else {
+        return Ok(Principal::public());
+    };
+
+    let user = ensure_user_for_identity(state, identity)?;
+    Ok(principal_for_user_id(repo, &user.id))
+}
+
+fn ensure_user_for_identity(
+    state: &AppState,
+    identity: &ShooIdentity,
+) -> Result<UserAccount, ApiError> {
+    let user_id = identity_user_id(identity);
+    let email = identity
+        .email
+        .as_deref()
+        .map(normalize_email)
+        .unwrap_or_default();
+
+    let mut catalog = lock_catalog(state)?;
+    let mut staged = catalog.clone();
+    let user = match staged.users.get_mut(&user_id) {
+        Some(user) => {
+            user.email = email;
+            user.email_verified = identity.email_verified;
+            user.access = AccountAccess::Member;
+            user.clone()
+        }
+        None => {
+            let handle = unique_user_handle(&staged, &preferred_user_handle(identity), &user_id);
+            let user = UserAccount {
+                id: user_id.clone(),
+                handle,
+                email,
+                email_verified: identity.email_verified,
+                access: AccountAccess::Member,
+            };
+            staged.users.insert(user_id, user.clone());
+            user
+        }
+    };
+
+    persist_catalog(state, &staged)?;
+    *catalog = staged;
+    Ok(user)
+}
+
+fn principal_for_user_id(repo: &StoredRepository, user_id: &str) -> Principal {
+    if repo
+        .memberships
+        .iter()
+        .any(|membership| membership.user_id == user_id)
+    {
+        Principal {
+            id: user_id.to_string(),
+            kind: scope_policy::PrincipalKind::User,
+        }
+    } else {
+        Principal::public()
+    }
+}
+
+fn identity_user_id(identity: &ShooIdentity) -> String {
+    let digest = Sha1::digest(identity.pairwise_sub.as_bytes());
+    let hex = format!("{digest:x}");
+    format!("user_{}", &hex[..16])
+}
+
+fn preferred_user_handle(identity: &ShooIdentity) -> String {
+    let digest = Sha1::digest(identity.pairwise_sub.as_bytes());
+    let hex = format!("{digest:x}");
+    let fallback = format!("user-{}", &hex[..8]);
+    let raw = identity
+        .email
+        .as_deref()
+        .filter(|_| identity.email_verified)
+        .and_then(|email| email.split('@').next())
+        .filter(|local| !local.trim().is_empty())
+        .unwrap_or(&fallback);
+
+    normalize_handle(raw).unwrap_or(fallback)
+}
+
+fn unique_user_handle(catalog: &AppCatalog, preferred: &str, user_id: &str) -> String {
+    let base = normalize_handle(preferred).unwrap_or_else(|| "user".to_string());
+    if handle_is_available(catalog, &base, user_id) {
+        return base;
+    }
+
+    for suffix in 2.. {
+        let candidate = format!("{base}-{suffix}");
+        if handle_is_available(catalog, &candidate, user_id) {
+            return candidate;
+        }
+    }
+
+    unreachable!("infinite suffix search must find an available handle")
+}
+
+fn handle_is_available(catalog: &AppCatalog, handle: &str, user_id: &str) -> bool {
+    catalog
+        .users
+        .values()
+        .all(|user| user.id == user_id || user.handle != handle)
+}
+
+fn normalize_handle(value: &str) -> Option<String> {
+    let mut handle = String::new();
+    let mut last_was_separator = false;
+    for byte in value.trim().bytes() {
+        let next = if byte.is_ascii_alphanumeric() {
+            last_was_separator = false;
+            Some(byte.to_ascii_lowercase() as char)
+        } else if matches!(byte, b'-' | b'_') && !last_was_separator {
+            last_was_separator = true;
+            Some('-')
+        } else {
+            None
+        };
+
+        if let Some(next) = next {
+            handle.push(next);
+        }
+    }
+
+    let handle = handle.trim_matches('-').to_string();
+    if handle.is_empty() || handle.len() > 40 {
+        None
+    } else {
+        Some(handle)
+    }
+}
+
+fn normalize_email(email: &str) -> String {
+    email.trim().to_ascii_lowercase()
+}
+
+fn repo_summary(
+    catalog: &AppCatalog,
+    repo: &StoredRepository,
+    user_id: &str,
+) -> Option<RepoSummaryResponse> {
+    let principal = Principal {
+        id: user_id.to_string(),
+        kind: scope_policy::PrincipalKind::User,
+    };
+    if !catalog.can_read_path(repo, &principal, &ScopePath::root()) {
+        return None;
+    }
+
+    let role = catalog.role_for_principal(repo, &principal)?;
+
+    Some(RepoSummaryResponse {
+        id: repo.record.id.clone(),
+        owner_handle: repo.record.owner_handle.clone(),
+        name: repo.record.name.clone(),
+        lifecycle_state: repo.record.publication_state,
+        default_visibility: repo.record.default_visibility,
+        role,
+    })
+}
+
+fn catalog_error(error: CatalogError) -> ApiError {
+    match error {
+        CatalogError::InvalidRepositoryName(message) => ApiError::bad_request(message),
+        CatalogError::RepositoryExists(repo) => {
+            ApiError::conflict(format!("repo {repo} already exists"))
+        }
+    }
 }
 
 fn role_for_principal(
@@ -841,43 +1086,6 @@ fn git_repo_root() -> PathBuf {
     std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."))
 }
 
-fn git_tracked_file_entries(repo_root: &FsPath) -> Result<Vec<(String, String)>, ApiError> {
-    let output = Command::new("git")
-        .arg("-C")
-        .arg(repo_root)
-        .args(["ls-files", "-z", "-s"])
-        .output()
-        .map_err(|error| {
-            ApiError::service_unavailable(format!("failed to read Git index: {error}"))
-        })?;
-
-    if !output.status.success() {
-        return Err(ApiError::service_unavailable(
-            String::from_utf8_lossy(&output.stderr).trim().to_string(),
-        ));
-    }
-
-    let mut entries = Vec::new();
-    for raw in output.stdout.split(|byte| *byte == 0) {
-        if raw.is_empty() {
-            continue;
-        }
-        let entry = std::str::from_utf8(raw).map_err(ApiError::bad_request)?;
-        let Some((metadata, path)) = entry.split_once('\t') else {
-            return Err(ApiError::internal_message(format!(
-                "unexpected git ls-files entry: {entry}"
-            )));
-        };
-        let oid = metadata
-            .split_whitespace()
-            .nth(1)
-            .ok_or_else(|| ApiError::internal_message("git entry is missing an object id"))?;
-        entries.push((path.replace('\\', "/"), oid.to_string()));
-    }
-
-    Ok(entries)
-}
-
 fn graph_has_file(repo: &StoredRepository, path: &ScopePath) -> bool {
     let mut present = false;
     for change in repo.graph.commits.iter().flat_map(|commit| &commit.changes) {
@@ -904,10 +1112,6 @@ fn repo_owner_ids(repo: &StoredRepository) -> Vec<String> {
     owner_ids
 }
 
-fn is_internal_scope_path(path: &str) -> bool {
-    path == ".scope" || path.starts_with(".scope/")
-}
-
 fn projected_files(repo: &StoredRepository, principal: &Principal) -> Vec<RepoFileResponse> {
     let projection = project_graph(&repo.policy, &repo.graph, principal);
     let git = build_virtual_git_projection(&projection);
@@ -927,237 +1131,6 @@ fn projected_files(repo: &StoredRepository, principal: &Principal) -> Vec<RepoFi
         .collect::<Vec<_>>();
     files.sort_by(|left, right| left.path.cmp(&right.path));
     files
-}
-
-fn git_files(
-    repo_root: &FsPath,
-    repo: &StoredRepository,
-    principal: &Principal,
-    role: Option<RepoRole>,
-) -> Result<Vec<RepoFileResponse>, ApiError> {
-    let include_worktree_files = role == Some(RepoRole::Owner);
-    let entries = git_file_paths(
-        repo_root,
-        include_worktree_files,
-        include_worktree_files && repo.settings.include_ignored_files,
-    )?;
-    let worktree_paths = entries
-        .iter()
-        .filter(|entry| entry.oid.is_none())
-        .map(|entry| entry.path.clone())
-        .collect::<Vec<_>>();
-    let worktree_oid_by_path = git_blob_oids(repo_root, &worktree_paths)?;
-    let mut files = Vec::with_capacity(entries.len());
-
-    for entry in entries {
-        let scope_path =
-            ScopePath::parse(format!("/{}", entry.path)).map_err(ApiError::bad_request)?;
-
-        if !repo.policy.can_read(principal, &scope_path) {
-            continue;
-        }
-
-        let oid = entry
-            .oid
-            .as_ref()
-            .or_else(|| worktree_oid_by_path.get(&entry.path))
-            .ok_or_else(|| {
-                ApiError::internal_message(format!("missing Git object for {}", entry.path))
-            })?;
-
-        files.push(RepoFileResponse {
-            path: scope_path.as_str().to_string(),
-            oid: oid.clone(),
-            tracked: entry.tracked,
-            visibility: if entry.tracked && graph_has_file(repo, &scope_path) {
-                repo.policy.effective_visibility(&scope_path)
-            } else {
-                Visibility::Private
-            },
-        });
-    }
-
-    files.sort_by(|left, right| left.path.cmp(&right.path));
-    Ok(files)
-}
-
-#[derive(Debug)]
-struct GitFileEntry {
-    path: String,
-    oid: Option<String>,
-    tracked: bool,
-}
-
-fn git_file_paths(
-    repo_root: &FsPath,
-    include_worktree_files: bool,
-    include_ignored: bool,
-) -> Result<Vec<GitFileEntry>, ApiError> {
-    let mut path_status = git_tracked_file_entries(repo_root)?
-        .into_iter()
-        .map(|(path, oid)| {
-            (
-                path.clone(),
-                GitFileEntry {
-                    path,
-                    oid: Some(oid),
-                    tracked: true,
-                },
-            )
-        })
-        .collect::<BTreeMap<_, _>>();
-
-    if include_worktree_files {
-        for path in git_ls_files(
-            repo_root,
-            &["ls-files", "-z", "--others", "--exclude-standard"],
-        )? {
-            path_status.entry(path.clone()).or_insert(GitFileEntry {
-                path,
-                oid: None,
-                tracked: false,
-            });
-        }
-    }
-
-    if include_ignored {
-        for path in git_ls_files(
-            repo_root,
-            &[
-                "ls-files",
-                "-z",
-                "--others",
-                "--ignored",
-                "--exclude-standard",
-            ],
-        )? {
-            path_status.entry(path.clone()).or_insert(GitFileEntry {
-                path,
-                oid: None,
-                tracked: false,
-            });
-        }
-    }
-
-    let entries = path_status
-        .into_iter()
-        .map(|(_, entry)| entry)
-        .filter(|entry| {
-            !is_internal_scope_path(&entry.path)
-                && (entry.tracked || repo_root.join(&entry.path).is_file())
-        })
-        .collect::<Vec<_>>();
-    if entries.len() > MAX_OWNER_FILE_PATHS {
-        return Err(ApiError::bad_request(format!(
-            "file list has {} paths; narrow ignored files before listing more than {}",
-            entries.len(),
-            MAX_OWNER_FILE_PATHS
-        )));
-    }
-    Ok(entries)
-}
-
-fn git_ls_files(repo_root: &FsPath, args: &[&str]) -> Result<Vec<String>, ApiError> {
-    let output = Command::new("git")
-        .arg("-C")
-        .arg(repo_root)
-        .args(args)
-        .output()
-        .map_err(|error| {
-            ApiError::service_unavailable(format!("failed to read Git index: {error}"))
-        })?;
-
-    if !output.status.success() {
-        return Err(ApiError::service_unavailable(
-            String::from_utf8_lossy(&output.stderr).trim().to_string(),
-        ));
-    }
-
-    let mut paths = Vec::new();
-    for raw in output.stdout.split(|byte| *byte == 0) {
-        if raw.is_empty() {
-            continue;
-        }
-        paths.push(
-            std::str::from_utf8(raw)
-                .map_err(ApiError::bad_request)?
-                .replace('\\', "/"),
-        );
-    }
-
-    Ok(paths)
-}
-
-fn git_blob_oids(
-    repo_root: &FsPath,
-    paths: &[String],
-) -> Result<BTreeMap<String, String>, ApiError> {
-    if paths.is_empty() {
-        return Ok(BTreeMap::new());
-    }
-
-    let mut oid_by_path = BTreeMap::new();
-    for chunk in paths.chunks(64) {
-        oid_by_path.extend(git_blob_oids_chunk(repo_root, chunk)?);
-    }
-
-    Ok(oid_by_path)
-}
-
-fn git_blob_oids_chunk(
-    repo_root: &FsPath,
-    paths: &[String],
-) -> Result<BTreeMap<String, String>, ApiError> {
-    let mut child = Command::new("git")
-        .arg("-C")
-        .arg(repo_root)
-        .args(["hash-object", "--stdin-paths"])
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
-        .map_err(|error| {
-            ApiError::service_unavailable(format!("failed to hash Git files: {error}"))
-        })?;
-
-    {
-        let stdin = child
-            .stdin
-            .as_mut()
-            .ok_or_else(|| ApiError::internal_message("failed to open git hash-object stdin"))?;
-        for path in paths {
-            stdin
-                .write_all(path.as_bytes())
-                .map_err(ApiError::internal)?;
-            stdin.write_all(b"\n").map_err(ApiError::internal)?;
-        }
-    }
-
-    let output = child.wait_with_output().map_err(ApiError::internal)?;
-
-    if !output.status.success() {
-        return Err(ApiError::service_unavailable(
-            String::from_utf8_lossy(&output.stderr).trim().to_string(),
-        ));
-    }
-
-    let oids = String::from_utf8(output.stdout).map_err(ApiError::bad_request)?;
-    let oids = oids
-        .lines()
-        .map(str::trim)
-        .filter(|oid| !oid.is_empty())
-        .map(str::to_string)
-        .collect::<Vec<_>>();
-
-    if oids.len() != paths.len() {
-        return Err(ApiError::internal_message(format!(
-            "git hash-object returned {} objects for {} paths",
-            oids.len(),
-            paths.len()
-        )));
-    }
-
-    Ok(paths.iter().cloned().zip(oids).collect())
 }
 
 async fn shutdown_signal() {
@@ -1201,6 +1174,13 @@ impl ApiError {
     fn forbidden(message: impl Into<String>) -> Self {
         Self {
             status: StatusCode::FORBIDDEN,
+            message: message.into(),
+        }
+    }
+
+    fn conflict(message: impl Into<String>) -> Self {
+        Self {
+            status: StatusCode::CONFLICT,
             message: message.into(),
         }
     }
@@ -1256,16 +1236,21 @@ impl IntoResponse for ApiError {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use axum::{
+        body::{Body, to_bytes},
+        http::{Request, header::CONTENT_TYPE},
+    };
     use jsonwebtoken::{EncodingKey, Header, encode};
-    use scope_policy::{Principal, PrincipalKind};
+    use scope_policy::{Policy, Principal, PrincipalKind};
     use scope_projection::SourceGraph;
     use scope_store::{
         AccountAccess, RepoMembership, RepoPublicationState, RepoRecord, StoredRepository,
         UserAccount,
     };
     use std::time::{SystemTime, UNIX_EPOCH};
+    use tower::ServiceExt;
 
-    const TEST_OWNER_ID: &str = "user_owner";
+    const TEST_PAIRWISE_SUB: &str = "pairwise-owner";
     const TEST_OWNER_EMAIL: &str = "owner@example.com";
     const TEST_REPO_OWNER: &str = "owner";
     const TEST_REPO_NAME: &str = "repo";
@@ -1294,11 +1279,25 @@ kGxvBjzgF9RjXJoldYnFk7mJ5gLANHjaaad3qTQJ8DldKJoSqkEkm5gg
     }
 
     fn token(audience: &str, pairwise_sub: &str, email_verified: bool) -> String {
+        token_for(
+            audience,
+            pairwise_sub,
+            Some(TEST_OWNER_EMAIL.to_string()),
+            email_verified,
+        )
+    }
+
+    fn token_for(
+        audience: &str,
+        pairwise_sub: &str,
+        email: Option<String>,
+        email_verified: bool,
+    ) -> String {
         let mut header = Header::new(Algorithm::ES256);
         header.kid = Some("test-key".to_string());
         let claims = ShooClaims {
             pairwise_sub: pairwise_sub.to_string(),
-            email: Some(TEST_OWNER_EMAIL.to_string()),
+            email,
             email_verified: Some(email_verified),
         };
         let claims = serde_json::json!({
@@ -1343,22 +1342,35 @@ kGxvBjzgF9RjXJoldYnFk7mJ5gLANHjaaad3qTQJ8DldKJoSqkEkm5gg
             .as_secs()
     }
 
+    fn owner_identity(email_verified: bool) -> ShooIdentity {
+        ShooIdentity {
+            pairwise_sub: TEST_PAIRWISE_SUB.to_string(),
+            email: Some(TEST_OWNER_EMAIL.to_string()),
+            email_verified,
+        }
+    }
+
+    fn test_owner_id() -> String {
+        identity_user_id(&owner_identity(true))
+    }
+
     fn test_state_with_repo() -> AppState {
+        let owner_id = test_owner_id();
         let owner = UserAccount {
-            id: TEST_OWNER_ID.to_string(),
+            id: owner_id.clone(),
+            handle: TEST_REPO_OWNER.to_string(),
             email: TEST_OWNER_EMAIL.to_string(),
             email_verified: true,
             access: AccountAccess::Member,
         };
-        let repo = test_repo();
+        let repo = test_repo(&owner_id);
 
         AppState {
             catalog: Arc::new(Mutex::new(AppCatalog {
                 users: BTreeMap::from([(owner.id.clone(), owner)]),
                 repositories: BTreeMap::from([(repo.record.id.clone(), repo)]),
             })),
-            repo_root: Arc::new(git_repo_root()),
-            state_path: Arc::new(std::env::temp_dir().join("scope-vcs-test-state.json")),
+            state_path: Arc::new(test_state_path()),
             shoo: ShooVerifier::new(
                 SHOO_ISSUER,
                 Some("origin:http://localhost:3000".to_string()),
@@ -1367,25 +1379,63 @@ kGxvBjzgF9RjXJoldYnFk7mJ5gLANHjaaad3qTQJ8DldKJoSqkEkm5gg
         }
     }
 
-    fn test_repo() -> StoredRepository {
+    fn test_state_with_jwks() -> AppState {
+        let state = AppState::test_state();
+        cache_test_jwks(&state);
+        state
+    }
+
+    fn cache_test_jwks(state: &AppState) {
+        *state
+            .shoo
+            .jwks_cache
+            .lock()
+            .expect("test JWKS lock must not be poisoned") = Some(test_jwks());
+    }
+
+    fn bearer_header() -> String {
+        format!(
+            "Bearer {}",
+            token("origin:http://localhost:3000", TEST_PAIRWISE_SUB, true)
+        )
+    }
+
+    fn bearer_header_for(pairwise_sub: &str, email: &str) -> String {
+        format!(
+            "Bearer {}",
+            token_for(
+                "origin:http://localhost:3000",
+                pairwise_sub,
+                Some(email.to_string()),
+                true,
+            )
+        )
+    }
+
+    async fn response_json(response: Response) -> serde_json::Value {
+        let body = to_bytes(response.into_body(), 1024 * 1024).await.unwrap();
+        serde_json::from_slice(&body).unwrap()
+    }
+
+    fn test_repo(owner_id: &str) -> StoredRepository {
         StoredRepository {
             record: RepoRecord {
                 id: TEST_REPO_ID.to_string(),
                 owner_handle: TEST_REPO_OWNER.to_string(),
                 name: TEST_REPO_NAME.to_string(),
-                owner_user_id: TEST_OWNER_ID.to_string(),
+                owner_user_id: owner_id.to_string(),
                 publication_state: RepoPublicationState::Published,
                 default_visibility: Visibility::Public,
             },
             settings: RepoSettings::default(),
-            policy: Policy::new(Visibility::Public, TEST_OWNER_ID),
+            policy: Policy::new(Visibility::Public, owner_id),
             graph: SourceGraph {
                 repo_id: TEST_REPO_ID.to_string(),
                 commits: Vec::new(),
             },
             memberships: vec![RepoMembership {
                 repo_id: TEST_REPO_ID.to_string(),
-                user_id: TEST_OWNER_ID.to_string(),
+                user_id: owner_id.to_string(),
                 role: RepoRole::Owner,
             }],
             invitations: Vec::new(),
@@ -1398,6 +1448,164 @@ kGxvBjzgF9RjXJoldYnFk7mJ5gLANHjaaad3qTQJ8DldKJoSqkEkm5gg
         let error = find_repo(&state, TEST_REPO_OWNER, TEST_REPO_NAME).unwrap_err();
 
         assert_eq!(error.status, StatusCode::NOT_FOUND);
+    }
+
+    #[tokio::test]
+    async fn create_repo_route_creates_user_and_lists_repo() {
+        let state = test_state_with_jwks();
+        let app = router(state.clone());
+        let response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/v1/repos")
+                    .header(AUTHORIZATION, bearer_header())
+                    .header(CONTENT_TYPE, "application/json")
+                    .body(Body::from(r#"{"name":"Scope_App"}"#))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = response_json(response).await;
+        assert_eq!(body["id"], "owner/scope_app");
+        assert_eq!(body["owner_handle"], "owner");
+        assert_eq!(body["lifecycle_state"], "PendingFirstPush");
+        assert_eq!(body["default_visibility"], "Private");
+        assert_eq!(body["role"], "Owner");
+
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method("GET")
+                    .uri("/v1/repos")
+                    .header(AUTHORIZATION, bearer_header())
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = response_json(response).await;
+        assert_eq!(body.as_array().unwrap().len(), 1);
+        assert_eq!(body[0]["id"], "owner/scope_app");
+
+        let catalog = lock_catalog(&state).unwrap();
+        assert_eq!(catalog.users.len(), 1);
+        assert_eq!(catalog.repositories.len(), 1);
+    }
+
+    #[tokio::test]
+    async fn list_repos_route_requires_sign_in() {
+        let response = router(test_state_with_jwks())
+            .oneshot(
+                Request::builder()
+                    .method("GET")
+                    .uri("/v1/repos")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+    }
+
+    #[tokio::test]
+    async fn list_repos_route_hides_pending_repo_from_reader_member() {
+        let state = test_state_with_repo();
+        cache_test_jwks(&state);
+        let reader_identity = ShooIdentity {
+            pairwise_sub: "pairwise-reader".to_string(),
+            email: Some("reader@example.com".to_string()),
+            email_verified: true,
+        };
+        let reader_id = identity_user_id(&reader_identity);
+        {
+            let mut catalog = lock_catalog(&state).unwrap();
+            catalog.users.insert(
+                reader_id.clone(),
+                UserAccount {
+                    id: reader_id.clone(),
+                    handle: "reader".to_string(),
+                    email: "reader@example.com".to_string(),
+                    email_verified: true,
+                    access: AccountAccess::Member,
+                },
+            );
+            let repo = catalog.repositories.get_mut(TEST_REPO_ID).unwrap();
+            repo.record.publication_state = RepoPublicationState::PendingPublish;
+            repo.memberships.push(RepoMembership {
+                repo_id: TEST_REPO_ID.to_string(),
+                user_id: reader_id,
+                role: RepoRole::Reader,
+            });
+        }
+
+        let response = router(state)
+            .oneshot(
+                Request::builder()
+                    .method("GET")
+                    .uri("/v1/repos")
+                    .header(
+                        AUTHORIZATION,
+                        bearer_header_for("pairwise-reader", "reader@example.com"),
+                    )
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = response_json(response).await;
+        assert_eq!(body.as_array().unwrap().len(), 0);
+    }
+
+    #[tokio::test]
+    async fn pending_publish_repo_session_is_owner_only() {
+        let state = test_state_with_repo();
+        cache_test_jwks(&state);
+        {
+            let mut catalog = lock_catalog(&state).unwrap();
+            let repo = catalog.repositories.get_mut(TEST_REPO_ID).unwrap();
+            repo.record.publication_state = RepoPublicationState::PendingPublish;
+        }
+        let app = router(state);
+
+        let public_response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("GET")
+                    .uri("/v1/repos/owner/repo/session")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(public_response.status(), StatusCode::NOT_FOUND);
+
+        let owner_response = app
+            .oneshot(
+                Request::builder()
+                    .method("GET")
+                    .uri("/v1/repos/owner/repo/session")
+                    .header(AUTHORIZATION, bearer_header())
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(owner_response.status(), StatusCode::OK);
+        let body = response_json(owner_response).await;
+        assert_eq!(body["principal_id"], test_owner_id());
+        assert_eq!(body["capabilities"]["read"], true);
     }
 
     #[test]
@@ -1413,29 +1621,22 @@ kGxvBjzgF9RjXJoldYnFk7mJ5gLANHjaaad3qTQJ8DldKJoSqkEkm5gg
     fn verified_member_email_uses_repo_principal() {
         let state = test_state_with_repo();
         let repo = find_repo(&state, TEST_REPO_OWNER, TEST_REPO_NAME).unwrap();
-        let identity = ShooIdentity {
-            pairwise_sub: "pairwise-owner".to_string(),
-            email: Some(TEST_OWNER_EMAIL.to_string()),
-            email_verified: true,
-        };
+        let identity = owner_identity(true);
         let principal = principal_for_repo(&state, &repo, Some(&identity)).unwrap();
 
-        assert_eq!(principal.id, TEST_OWNER_ID);
+        assert_eq!(principal.id, test_owner_id());
         assert_eq!(principal.kind, PrincipalKind::User);
     }
 
     #[test]
-    fn unverified_email_uses_public_principal() {
+    fn unverified_email_still_uses_pairwise_user_principal() {
         let state = test_state_with_repo();
         let repo = find_repo(&state, TEST_REPO_OWNER, TEST_REPO_NAME).unwrap();
-        let identity = ShooIdentity {
-            pairwise_sub: "pairwise-owner".to_string(),
-            email: Some(TEST_OWNER_EMAIL.to_string()),
-            email_verified: false,
-        };
+        let identity = owner_identity(false);
         let principal = principal_for_repo(&state, &repo, Some(&identity)).unwrap();
 
-        assert_eq!(principal, Principal::public());
+        assert_eq!(principal.id, test_owner_id());
+        assert_eq!(principal.kind, PrincipalKind::User);
     }
 
     #[test]
@@ -1444,7 +1645,7 @@ kGxvBjzgF9RjXJoldYnFk7mJ5gLANHjaaad3qTQJ8DldKJoSqkEkm5gg
         let mut repo = find_repo(&state, TEST_REPO_OWNER, TEST_REPO_NAME)
             .unwrap()
             .clone();
-        repo.record.publication_state = RepoPublicationState::Unpublished;
+        repo.record.publication_state = RepoPublicationState::PendingPublish;
 
         let error = ensure_repo_read(&state, &repo, &Principal::public()).unwrap_err();
 
@@ -1472,7 +1673,7 @@ kGxvBjzgF9RjXJoldYnFk7mJ5gLANHjaaad3qTQJ8DldKJoSqkEkm5gg
 
     #[test]
     fn shoo_token_verifies_issuer_audience_signature_expiration_and_pairwise_sub() {
-        let jwt = token("origin:http://localhost:3000", "pairwise-owner", true);
+        let jwt = token("origin:http://localhost:3000", TEST_PAIRWISE_SUB, true);
         let identity = verify_shoo_token(
             &jwt,
             &test_jwks(),
@@ -1481,14 +1682,14 @@ kGxvBjzgF9RjXJoldYnFk7mJ5gLANHjaaad3qTQJ8DldKJoSqkEkm5gg
         )
         .unwrap();
 
-        assert_eq!(identity.pairwise_sub, "pairwise-owner");
+        assert_eq!(identity.pairwise_sub, TEST_PAIRWISE_SUB);
         assert_eq!(identity.email.as_deref(), Some(TEST_OWNER_EMAIL));
         assert!(identity.email_verified);
     }
 
     #[test]
     fn shoo_token_rejects_wrong_audience() {
-        let jwt = token("origin:https://other.example", "pairwise-owner", true);
+        let jwt = token("origin:https://other.example", TEST_PAIRWISE_SUB, true);
         let error = verify_shoo_token(
             &jwt,
             &test_jwks(),
@@ -1532,7 +1733,7 @@ kGxvBjzgF9RjXJoldYnFk7mJ5gLANHjaaad3qTQJ8DldKJoSqkEkm5gg
     async fn shoo_verifier_requires_configured_audience() {
         let verifier =
             ShooVerifier::new(SHOO_ISSUER, None, "http://127.0.0.1/.well-known/jwks.json");
-        let jwt = token("origin:http://localhost:3000", "pairwise-owner", true);
+        let jwt = token("origin:http://localhost:3000", TEST_PAIRWISE_SUB, true);
         let error = verifier.verify(&jwt).await.unwrap_err();
 
         assert_eq!(error.status, StatusCode::SERVICE_UNAVAILABLE);
