@@ -15,14 +15,15 @@ use jsonwebtoken::{
     Algorithm, DecodingKey, Validation, decode, decode_header,
     jwk::{Jwk, JwkSet},
 };
-use scope_git::{VirtualGitProjection, build_virtual_git_projection};
+use scope_git::{VirtualGitProjection, build_virtual_git_projection, git_blob_oid};
 use scope_policy::{Policy, Principal, ScopePath, Visibility, VisibilityRule};
 use scope_projection::{
     AuthorVisibility, FileChange, LogicalCommit, MixedCommitPolicy, Projection, project_graph,
 };
 use scope_store::{
-    AccountAccess, AppCatalog, CatalogError, FirstPushToken, FirstPushTokenStatus, PendingImport,
-    PendingImportFile, RepoPublicationState, RepoRole, RepoSettings, StoredRepository, UserAccount,
+    AccountAccess, AppCatalog, CatalogError, FirstPushToken, FirstPushTokenStatus, GitPushToken,
+    PendingImport, PendingImportFile, RepoPublicationState, RepoRole, RepoSettings,
+    StagedFileChange, StagedFileChangeKind, StagedRepoUpdate, StoredRepository, UserAccount,
     app_catalog,
 };
 use serde::{Deserialize, Serialize};
@@ -51,7 +52,10 @@ const SCOPE_STATE_PATH_ENV: &str = "SCOPE_STATE_PATH";
 const SHOO_JWKS_URL: &str = "https://shoo.dev/.well-known/jwks.json";
 const SHOO_ISSUER: &str = "https://shoo.dev";
 const LOCAL_APP_ORIGIN: &str = "http://localhost:3000";
+const FIRST_PUSH_TOKEN_PREFIX: &str = "scope_fp_";
+const GIT_PUSH_TOKEN_PREFIX: &str = "scope_git_";
 const FIRST_PUSH_TOKEN_BYTES: usize = 32;
+const RECEIVE_PACK_STAGING_BYTES: usize = 16;
 const FIRST_PUSH_TOKEN_TTL_SECS: u64 = 60 * 60 * 24;
 const EMPTY_GIT_OID: &str = "0000000000000000000000000000000000000000";
 const GIT_UPLOAD_PACK: &str = "git-upload-pack";
@@ -159,6 +163,7 @@ struct RepoSummaryResponse {
     lifecycle_state: RepoPublicationState,
     default_visibility: Visibility,
     role: RepoRole,
+    staged_update_pending: bool,
 }
 
 #[derive(Debug, Serialize)]
@@ -175,6 +180,7 @@ struct RepoSetupResponse {
     push_branch: &'static str,
     push_enabled: bool,
     token: Option<FirstPushTokenResponse>,
+    push_token: Option<GitPushTokenResponse>,
 }
 
 #[derive(Debug, Serialize)]
@@ -183,6 +189,12 @@ struct FirstPushTokenResponse {
     created_at_unix: u64,
     expires_at_unix: u64,
     used_at_unix: Option<u64>,
+    secret: Option<String>,
+}
+
+#[derive(Debug, Serialize)]
+struct GitPushTokenResponse {
+    created_at_unix: u64,
     secret: Option<String>,
 }
 
@@ -210,6 +222,31 @@ struct UpdateFileVisibilityRequest {
 #[derive(Debug, Deserialize)]
 struct UpdateRepoSettingsRequest {
     include_ignored_files: bool,
+    review_pushes_before_applying: bool,
+}
+
+#[derive(Debug, Deserialize)]
+struct UpdateStagedFileVisibilityRequest {
+    path: String,
+    visibility: Visibility,
+}
+
+#[derive(Debug, Serialize)]
+struct StagedUpdateResponse {
+    id: String,
+    branch: String,
+    base_live_commit_id: Option<String>,
+    message: String,
+    files: Vec<StagedFileResponse>,
+}
+
+#[derive(Debug, Serialize)]
+struct StagedFileResponse {
+    path: String,
+    kind: StagedFileChangeKind,
+    old_oid: Option<String>,
+    new_oid: Option<String>,
+    visibility: Visibility,
 }
 
 #[derive(Debug, Deserialize)]
@@ -221,6 +258,30 @@ struct CreateRepoRequest {
 #[derive(Debug, Deserialize)]
 struct GitInfoRefsQuery {
     service: Option<String>,
+}
+
+#[derive(Clone, Debug)]
+enum ReceivePackAccess {
+    FirstPush { credential: InitialPushCredential },
+    PublishedOwner { author_id: String },
+}
+
+#[derive(Clone, Debug)]
+enum InitialPushCredential {
+    FirstPushToken { secret: String },
+    GitPushToken { secret: String },
+}
+
+#[derive(Clone, Debug)]
+enum ReceivePackAuthorization {
+    ScopeToken { secret: String },
+    ShooIdentity(ShooIdentity),
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum PersistedReceivePackUpdate {
+    Staged,
+    Applied,
 }
 
 #[tokio::main]
@@ -278,6 +339,22 @@ fn router(state: AppState) -> Router {
         .route(
             "/v1/repos/{owner}/{repo}/settings",
             get(get_settings).patch(update_settings),
+        )
+        .route(
+            "/v1/repos/{owner}/{repo}/staged-update",
+            get(get_staged_update),
+        )
+        .route(
+            "/v1/repos/{owner}/{repo}/staged-update/files/visibility",
+            patch(update_staged_file_visibility),
+        )
+        .route(
+            "/v1/repos/{owner}/{repo}/staged-update/apply",
+            post(apply_staged_update),
+        )
+        .route(
+            "/v1/repos/{owner}/{repo}/staged-update/reject",
+            post(reject_staged_update),
         )
         .route("/v1/repos/{owner}/{repo}/projections", get(get_projection))
         .route(
@@ -361,6 +438,7 @@ async fn create_repo(
             .id
             .clone();
         let (secret, token) = generate_first_push_token(&user.id)?;
+        let (push_secret, push_token) = generate_git_push_token(&user.id)?;
         let now = unix_now()?;
         {
             let repo = staged
@@ -368,6 +446,7 @@ async fn create_repo(
                 .get_mut(&repo_id)
                 .expect("created repository must exist");
             repo.first_push_token = Some(token);
+            repo.git_push_token = Some(push_token);
         }
         let repo = staged
             .repositories
@@ -376,7 +455,14 @@ async fn create_repo(
         let summary = repo_summary(&staged, repo, &user.id).ok_or_else(|| {
             ApiError::internal_message("created repository is missing owner role")
         })?;
-        let setup = repo_setup_response(&staged, repo, &user.id, now, Some(secret))?;
+        let setup = repo_setup_response(
+            &staged,
+            repo,
+            &user.id,
+            now,
+            Some(secret),
+            Some(push_secret),
+        )?;
 
         persist_catalog(&state, &staged)?;
         *catalog = staged;
@@ -405,6 +491,7 @@ async fn get_repo_setup(
         &user.id,
         unix_now()?,
         None,
+        None,
     )?))
 }
 
@@ -428,18 +515,27 @@ async fn regenerate_first_push_token(
         ensure_owner_setup_access_in_catalog(&staged, repo, &user.id)?;
 
         let (secret, token) = generate_first_push_token(&user.id)?;
+        let (push_secret, push_token) = generate_git_push_token(&user.id)?;
         {
             let repo = staged
                 .repositories
                 .get_mut(&repo_id)
                 .expect("repo was already checked");
             repo.first_push_token = Some(token);
+            repo.git_push_token = Some(push_token);
         }
         let repo = staged
             .repositories
             .get(&repo_id)
             .expect("repo was already checked");
-        let setup = repo_setup_response(&staged, repo, &user.id, now, Some(secret))?;
+        let setup = repo_setup_response(
+            &staged,
+            repo,
+            &user.id,
+            now,
+            Some(secret),
+            Some(push_secret),
+        )?;
 
         persist_catalog(&state, &staged)?;
         *catalog = staged;
@@ -729,6 +825,7 @@ async fn update_settings(
             .get_mut(&repo_id)
             .expect("repo was already checked");
         repo.settings.include_ignored_files = input.include_ignored_files;
+        repo.settings.review_pushes_before_applying = input.review_pushes_before_applying;
     }
 
     persist_catalog(&state, &staged)?;
@@ -742,6 +839,315 @@ async fn update_settings(
     Ok(Json(settings))
 }
 
+async fn get_staged_update(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path((owner, repo_name)): Path<(String, String)>,
+) -> Result<Json<Option<StagedUpdateResponse>>, ApiError> {
+    let repo = find_repo(&state, &owner, &repo_name)?;
+    let identity = http_identity(&state, &headers).await?;
+    let principal = principal_for_repo(&state, &repo, identity.as_ref())?;
+    ensure_repo_read(&state, &repo, &principal)?;
+    ensure_owner(&state, &repo, &principal)?;
+
+    Ok(Json(
+        repo.staged_update.as_ref().map(staged_update_response),
+    ))
+}
+
+async fn update_staged_file_visibility(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path((owner, repo_name)): Path<(String, String)>,
+    Json(input): Json<UpdateStagedFileVisibilityRequest>,
+) -> Result<Json<StagedUpdateResponse>, ApiError> {
+    let repo = find_repo(&state, &owner, &repo_name)?;
+    let identity = http_identity(&state, &headers).await?;
+    let principal = principal_for_repo(&state, &repo, identity.as_ref())?;
+    ensure_repo_read(&state, &repo, &principal)?;
+    ensure_owner(&state, &repo, &principal)?;
+    let repo_id = scope_store::repo_id(&owner, &repo_name);
+    let path = pending_scope_path(&input.path)?;
+
+    let updated = {
+        let mut catalog = lock_catalog(&state)?;
+        let mut staged = catalog.clone();
+        let repo = staged
+            .repositories
+            .get_mut(&repo_id)
+            .ok_or_else(|| ApiError::not_found(format!("repo {owner}/{repo_name} not found")))?;
+        let mut staged_update = repo
+            .staged_update
+            .clone()
+            .ok_or_else(|| ApiError::not_found("no staged update pending"))?;
+        let file = staged_update
+            .changes
+            .iter_mut()
+            .find(|change| change.path == path)
+            .ok_or_else(|| ApiError::not_found(format!("staged file {} not found", path)))?;
+        file.visibility = input.visibility;
+        validate_staged_update_policy(repo, &staged_update)?;
+        let updated = staged_update_response(&staged_update);
+        repo.staged_update = Some(staged_update);
+
+        persist_catalog(&state, &staged)?;
+        *catalog = staged;
+        updated
+    };
+
+    Ok(Json(updated))
+}
+
+async fn apply_staged_update(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path((owner, repo_name)): Path<(String, String)>,
+) -> Result<Json<StagedUpdateResponse>, ApiError> {
+    let repo = find_repo(&state, &owner, &repo_name)?;
+    let identity = http_identity(&state, &headers).await?;
+    let principal = principal_for_repo(&state, &repo, identity.as_ref())?;
+    ensure_repo_read(&state, &repo, &principal)?;
+    ensure_owner(&state, &repo, &principal)?;
+    let staged_repo = staged_git_repo_path(&state, &owner, &repo_name);
+    let applied = if staged_repo.exists() {
+        replace_git_repo_and_then(
+            &staged_repo,
+            &owner_git_repo_path(&state, &owner, &repo_name),
+            || apply_staged_update_in_catalog(&state, &owner, &repo_name),
+        )?
+    } else {
+        apply_staged_update_in_catalog(&state, &owner, &repo_name)?
+    };
+
+    Ok(Json(applied))
+}
+
+async fn reject_staged_update(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path((owner, repo_name)): Path<(String, String)>,
+) -> Result<Json<StagedUpdateResponse>, ApiError> {
+    let repo = find_repo(&state, &owner, &repo_name)?;
+    let identity = http_identity(&state, &headers).await?;
+    let principal = principal_for_repo(&state, &repo, identity.as_ref())?;
+    ensure_repo_read(&state, &repo, &principal)?;
+    ensure_owner(&state, &repo, &principal)?;
+    let staged_repo = staged_git_repo_path(&state, &owner, &repo_name);
+    let rejected = if staged_repo.exists() {
+        remove_git_repo_and_then(&staged_repo, || {
+            reject_staged_update_in_catalog(&state, &owner, &repo_name)
+        })?
+    } else {
+        reject_staged_update_in_catalog(&state, &owner, &repo_name)?
+    };
+
+    Ok(Json(rejected))
+}
+
+fn apply_staged_update_in_catalog(
+    state: &AppState,
+    owner: &str,
+    repo_name: &str,
+) -> Result<StagedUpdateResponse, ApiError> {
+    let repo_id = scope_store::repo_id(owner, repo_name);
+    let mut catalog = lock_catalog(state)?;
+    let mut staged = catalog.clone();
+    let repo = staged
+        .repositories
+        .get_mut(&repo_id)
+        .ok_or_else(|| ApiError::not_found(format!("repo {owner}/{repo_name} not found")))?;
+    let staged_update = repo
+        .staged_update
+        .take()
+        .ok_or_else(|| ApiError::not_found("no staged update pending"))?;
+    let response = staged_update_response(&staged_update);
+    apply_receive_pack_update(repo, staged_update)?;
+
+    persist_catalog(state, &staged)?;
+    *catalog = staged;
+    Ok(response)
+}
+
+fn reject_staged_update_in_catalog(
+    state: &AppState,
+    owner: &str,
+    repo_name: &str,
+) -> Result<StagedUpdateResponse, ApiError> {
+    let repo_id = scope_store::repo_id(owner, repo_name);
+    let mut catalog = lock_catalog(state)?;
+    let mut staged = catalog.clone();
+    let repo = staged
+        .repositories
+        .get_mut(&repo_id)
+        .ok_or_else(|| ApiError::not_found(format!("repo {owner}/{repo_name} not found")))?;
+    let staged_update = repo
+        .staged_update
+        .take()
+        .ok_or_else(|| ApiError::not_found("no staged update pending"))?;
+    let response = staged_update_response(&staged_update);
+
+    persist_catalog(state, &staged)?;
+    *catalog = staged;
+    Ok(response)
+}
+
+#[derive(Clone, Debug)]
+#[allow(dead_code)]
+struct ReceivePackFileChange {
+    path: ScopePath,
+    content: Option<String>,
+}
+
+#[derive(Clone, Debug)]
+#[allow(dead_code)]
+struct ReceivePackUpdate {
+    branch: String,
+    author_id: String,
+    message: String,
+    changes: Vec<ReceivePackFileChange>,
+}
+
+// Handoff point for a real post-publish receive-pack parser. This stays
+// private so JSON never becomes the product push flow.
+#[allow(dead_code)]
+fn stage_receive_pack_update(
+    repo: &mut StoredRepository,
+    update: ReceivePackUpdate,
+) -> Result<Option<StagedRepoUpdate>, ApiError> {
+    ensure_default_branch(&update.branch)?;
+    if repo.record.publication_state != RepoPublicationState::Published {
+        return Err(ApiError::conflict("repo must be published before push"));
+    }
+    if update.changes.is_empty() {
+        return Err(ApiError::bad_request(
+            "receive-pack update must include file changes",
+        ));
+    }
+    if repo.staged_update.is_some() {
+        return Err(ApiError::conflict("a staged update is already pending"));
+    }
+
+    let staged_update = build_staged_receive_pack_update(repo, update)?;
+    if repo.settings.review_pushes_before_applying {
+        repo.staged_update = Some(staged_update.clone());
+        Ok(Some(staged_update))
+    } else {
+        apply_receive_pack_update(repo, staged_update)?;
+        Ok(None)
+    }
+}
+
+#[allow(dead_code)]
+fn build_staged_receive_pack_update(
+    repo: &StoredRepository,
+    update: ReceivePackUpdate,
+) -> Result<StagedRepoUpdate, ApiError> {
+    let live_tree = live_tree(repo);
+    let mut staged_changes = Vec::with_capacity(update.changes.len());
+
+    for change in update.changes {
+        let old_content = live_tree.get(&change.path).cloned();
+        if old_content == change.content {
+            continue;
+        }
+        let kind = match (&old_content, &change.content) {
+            (None, Some(_)) => StagedFileChangeKind::Added,
+            (Some(_), Some(_)) => StagedFileChangeKind::Modified,
+            (Some(_), None) => StagedFileChangeKind::Deleted,
+            (None, None) => continue,
+        };
+        let visibility = repo.policy.effective_visibility(&change.path);
+        staged_changes.push(StagedFileChange {
+            path: change.path,
+            old_content,
+            new_content: change.content,
+            visibility,
+            kind,
+        });
+    }
+
+    if staged_changes.is_empty() {
+        return Err(ApiError::bad_request(
+            "receive-pack update did not change the live tree",
+        ));
+    }
+
+    Ok(StagedRepoUpdate {
+        id: format!("staged_push_{}", repo.graph.commits.len() + 1),
+        branch: update.branch,
+        base_live_commit_id: repo.graph.commits.last().map(|commit| commit.id.clone()),
+        author_id: update.author_id,
+        message: update.message,
+        changes: staged_changes,
+    })
+}
+
+fn apply_receive_pack_update(
+    repo: &mut StoredRepository,
+    staged_update: StagedRepoUpdate,
+) -> Result<(), ApiError> {
+    validate_staged_update_policy(repo, &staged_update)?;
+    let owner_ids = repo_owner_ids(repo);
+    for change in &staged_update.changes {
+        if change.new_content.is_none() {
+            continue;
+        }
+
+        let rule = staged_visibility_rule(change, &owner_ids);
+        repo.policy.add_rule(rule).map_err(ApiError::bad_request)?;
+    }
+
+    let parent_ids = repo
+        .graph
+        .commits
+        .last()
+        .map(|commit| vec![commit.id.clone()])
+        .unwrap_or_default();
+    repo.graph.commits.push(LogicalCommit {
+        id: format!("rv_push_{}", repo.graph.commits.len() + 1),
+        parent_ids,
+        author_id: staged_update.author_id,
+        author_visibility: AuthorVisibility::Visible,
+        message: staged_update.message,
+        mixed_policy: MixedCommitPolicy::SyntheticPublicCommit,
+        changes: staged_update
+            .changes
+            .into_iter()
+            .map(|change| FileChange {
+                path: change.path,
+                old_content: change.old_content,
+                new_content: change.new_content,
+            })
+            .collect(),
+    });
+    Ok(())
+}
+
+fn validate_staged_update_policy(
+    repo: &StoredRepository,
+    staged_update: &StagedRepoUpdate,
+) -> Result<(), ApiError> {
+    let owner_ids = repo_owner_ids(repo);
+    let mut policy = repo.policy.clone();
+    for change in &staged_update.changes {
+        if change.new_content.is_none() {
+            continue;
+        }
+
+        let rule = staged_visibility_rule(change, &owner_ids);
+        policy.add_rule(rule).map_err(ApiError::bad_request)?;
+    }
+
+    Ok(())
+}
+
+fn staged_visibility_rule(change: &StagedFileChange, owner_ids: &[String]) -> VisibilityRule {
+    match change.visibility {
+        Visibility::Public => VisibilityRule::public(change.path.clone()),
+        Visibility::Private => VisibilityRule::private(change.path.clone(), owner_ids.to_vec()),
+    }
+}
+
 async fn git_info_refs(
     State(state): State<AppState>,
     headers: HeaderMap,
@@ -749,21 +1155,20 @@ async fn git_info_refs(
     Query(query): Query<GitInfoRefsQuery>,
 ) -> Response {
     match query.service.as_deref() {
-        Some(GIT_RECEIVE_PACK) => {
-            match handle_git_receive_pack(&state, &headers, &org, &repo, "GET", Vec::new(), None) {
-                Ok(response) => response,
-                Err(error) => git_error_response(error),
-            }
-        }
-        Some(GIT_UPLOAD_PACK) => {
-            match git_projection_for_request(&state, &headers, &org, &repo).await {
-                Ok(projection) => match state
-                    .git_cache_root()
-                    .and_then(|cache_root| projection_bare_repo(&cache_root, &projection))
+        Some(GIT_RECEIVE_PACK) => match receive_pack_access(&state, &headers, &org, &repo).await {
+            Ok(access) => {
+                match handle_git_receive_pack(&state, &org, &repo, "GET", Vec::new(), None, access)
                 {
-                    Ok(repo_path) => git_upload_pack_advertisement(&repo_path),
-                    Err(error) => git_advertisement_error(error.message),
-                },
+                    Ok(response) => response,
+                    Err(error) => git_error_response(error),
+                }
+            }
+            Err(error) => git_error_response(error),
+        },
+        Some(GIT_UPLOAD_PACK) => {
+            match git_upload_pack_repo_for_request(&state, &headers, &org, &repo).await {
+                Ok(repo_path) => git_upload_pack_advertisement(&repo_path),
+                Err(error) if error.status == StatusCode::UNAUTHORIZED => git_error_response(error),
                 Err(error) => git_advertisement_error(error.message),
             }
         }
@@ -790,13 +1195,10 @@ async fn git_receive_pack(
     request: Request,
 ) -> Response {
     let headers = request.headers().clone();
-    let token_secret = match first_push_token_from_headers(&headers) {
-        Ok(token_secret) => token_secret,
+    let access = match receive_pack_access(&state, &headers, &org, &repo).await {
+        Ok(access) => access,
         Err(error) => return git_error_response(error),
     };
-    if let Err(error) = authorize_first_push(&state, &org, &repo, &token_secret) {
-        return git_error_response(error);
-    }
 
     let content_type = headers
         .get(CONTENT_TYPE)
@@ -817,12 +1219,12 @@ async fn git_receive_pack(
 
     match handle_git_receive_pack(
         &state,
-        &headers,
         &org,
         &repo,
         "POST",
         body.to_vec(),
         content_type,
+        access,
     ) {
         Ok(response) => response,
         Err(error) => git_error_response(error),
@@ -835,13 +1237,7 @@ async fn git_upload_pack_rpc(
     Path((org, repo_name)): Path<(String, String)>,
     request: Request,
 ) -> Response {
-    let projection = match git_projection_for_request(&state, &headers, &org, &repo_name).await {
-        Ok(projection) => projection,
-        Err(error) => return git_upload_pack_error(error.message),
-    };
-    let repo_path = match state
-        .git_cache_root()
-        .and_then(|cache_root| projection_bare_repo(&cache_root, &projection))
+    let repo_path = match git_upload_pack_repo_for_request(&state, &headers, &org, &repo_name).await
     {
         Ok(repo_path) => repo_path,
         Err(error) => return git_upload_pack_error(error.message),
@@ -859,19 +1255,93 @@ async fn git_upload_pack_rpc(
     }
 }
 
-fn handle_git_receive_pack(
+async fn receive_pack_access(
     state: &AppState,
     headers: &HeaderMap,
+    owner: &str,
+    repo_name: &str,
+) -> Result<ReceivePackAccess, ApiError> {
+    let authorization = receive_pack_authorization(state, headers).await?;
+
+    match authorization {
+        ReceivePackAuthorization::ScopeToken { secret } => {
+            let repo = find_repo_after_git_scope_token(state, owner, repo_name)?;
+            let credential = if secret.starts_with(GIT_PUSH_TOKEN_PREFIX) {
+                InitialPushCredential::GitPushToken { secret }
+            } else {
+                InitialPushCredential::FirstPushToken { secret }
+            };
+
+            match repo.record.publication_state {
+                RepoPublicationState::PendingFirstPush => {
+                    authorize_initial_push_for_repo(&repo, &credential)
+                        .map_err(git_credential_error)?;
+                    Ok(ReceivePackAccess::FirstPush { credential })
+                }
+                RepoPublicationState::PendingPublish => {
+                    authorize_receive_pack_scope_token_for_repo(&repo, &credential)
+                        .map_err(git_credential_error)?;
+                    Err(ApiError::conflict(
+                        "repo is waiting for publish and cannot receive another push",
+                    ))
+                }
+                RepoPublicationState::Published => match credential {
+                    InitialPushCredential::GitPushToken { secret } => {
+                        let author_id = authorize_git_push_token_for_repo(&repo, &secret)
+                            .map_err(git_credential_error)?;
+                        Ok(ReceivePackAccess::PublishedOwner { author_id })
+                    }
+                    InitialPushCredential::FirstPushToken { .. } => Err(invalid_git_credentials()),
+                },
+            }
+        }
+        ReceivePackAuthorization::ShooIdentity(identity) => {
+            let repo = find_repo(state, owner, repo_name)?;
+            let user = ensure_user_for_identity(state, &identity)?;
+            let principal = principal_for_user_id(&repo, &user.id);
+            if role_for_principal(state, &repo, &principal)? != Some(RepoRole::Owner) {
+                return Err(ApiError::not_found(format!(
+                    "repo {owner}/{repo_name} not found"
+                )));
+            }
+
+            match repo.record.publication_state {
+                RepoPublicationState::PendingFirstPush => Err(ApiError::unauthorized(
+                    "first-push token or Git push token required",
+                )),
+                RepoPublicationState::PendingPublish => Err(ApiError::conflict(
+                    "repo is waiting for publish and cannot receive another push",
+                )),
+                RepoPublicationState::Published => {
+                    Ok(ReceivePackAccess::PublishedOwner { author_id: user.id })
+                }
+            }
+        }
+    }
+}
+
+fn handle_git_receive_pack(
+    state: &AppState,
     owner: &str,
     repo_name: &str,
     method: &str,
     body: Vec<u8>,
     content_type: Option<String>,
+    access: ReceivePackAccess,
 ) -> Result<Response, ApiError> {
-    let token_secret = first_push_token_from_headers(headers)?;
-    authorize_first_push(state, owner, repo_name, &token_secret)?;
-    let staging_repo = ensure_receive_pack_staging_repo(state, owner, repo_name)?;
-    let cgi = git_http_backend(
+    let staging_repo = match &access {
+        ReceivePackAccess::FirstPush { .. } => {
+            ensure_first_push_receive_pack_staging_repo(state, owner, repo_name)?
+        }
+        ReceivePackAccess::PublishedOwner { author_id } => {
+            ensure_published_receive_pack_staging_repo(state, owner, repo_name, author_id)?
+        }
+    };
+    let remote_user = match &access {
+        ReceivePackAccess::FirstPush { .. } => "first-push-token",
+        ReceivePackAccess::PublishedOwner { author_id } => author_id.as_str(),
+    };
+    let cgi = match git_http_backend(
         &staging_repo,
         method,
         if method == "GET" {
@@ -886,23 +1356,76 @@ fn handle_git_receive_pack(
         },
         body,
         content_type,
-    )?;
-
-    if method == "POST" && cgi.status.is_success() {
-        let import = match pending_import_from_staging_repo(&staging_repo) {
-            Ok(import) => import,
-            Err(error) => {
-                let _ = fs::remove_dir_all(&staging_repo);
-                return Err(error);
-            }
-        };
-        if let Err(error) = persist_pending_import(state, owner, repo_name, &token_secret, import) {
+        remote_user,
+    ) {
+        Ok(cgi) => cgi,
+        Err(error) => {
             let _ = fs::remove_dir_all(&staging_repo);
             return Err(error);
         }
-        let _ = fs::remove_dir_all(&staging_repo);
+    };
+
+    if method == "POST" && cgi.status.is_success() {
+        match access {
+            ReceivePackAccess::FirstPush { credential } => {
+                let import = match pending_import_from_staging_repo(&staging_repo) {
+                    Ok(import) => import,
+                    Err(error) => {
+                        let _ = fs::remove_dir_all(&staging_repo);
+                        return Err(error);
+                    }
+                };
+                if let Err(error) =
+                    persist_pending_import(state, owner, repo_name, &credential, import)
+                {
+                    let _ = fs::remove_dir_all(&staging_repo);
+                    return Err(error);
+                }
+                if let Err(error) =
+                    replace_git_repo(&staging_repo, &owner_git_repo_path(state, owner, repo_name))
+                {
+                    let _ = fs::remove_dir_all(&staging_repo);
+                    return Err(error);
+                }
+            }
+            ReceivePackAccess::PublishedOwner { author_id } => {
+                let update = match receive_pack_update_from_staging_repo(
+                    state,
+                    owner,
+                    repo_name,
+                    &staging_repo,
+                    &author_id,
+                ) {
+                    Ok(update) => update,
+                    Err(error) => {
+                        let _ = fs::remove_dir_all(&staging_repo);
+                        return Err(error);
+                    }
+                };
+                let persisted = match persist_receive_pack_update(state, owner, repo_name, update) {
+                    Ok(persisted) => persisted,
+                    Err(error) => {
+                        let _ = fs::remove_dir_all(&staging_repo);
+                        return Err(error);
+                    }
+                };
+                let target_repo = match persisted {
+                    PersistedReceivePackUpdate::Staged => {
+                        staged_git_repo_path(state, owner, repo_name)
+                    }
+                    PersistedReceivePackUpdate::Applied => {
+                        owner_git_repo_path(state, owner, repo_name)
+                    }
+                };
+                if let Err(error) = replace_git_repo(&staging_repo, &target_repo) {
+                    let _ = fs::remove_dir_all(&staging_repo);
+                    return Err(error);
+                }
+            }
+        }
     }
 
+    let _ = fs::remove_dir_all(&staging_repo);
     Ok(cgi.into_response())
 }
 
@@ -923,26 +1446,109 @@ fn first_push_token_from_headers(headers: &HeaderMap) -> Result<String, ApiError
     }
 
     if let Some(encoded) = value.strip_prefix("Basic ") {
-        let decoded = BASE64
-            .decode(encoded.trim())
-            .map_err(|_| ApiError::unauthorized("invalid basic authorization"))?;
-        let decoded = String::from_utf8(decoded)
-            .map_err(|_| ApiError::unauthorized("invalid basic authorization"))?;
-        let (username, password) = decoded.split_once(':').unwrap_or((decoded.as_str(), ""));
-        let token = if password.is_empty() {
-            username.trim()
-        } else {
-            password.trim()
-        };
+        let token = basic_auth_secret(encoded)?;
         if token.is_empty() {
             return Err(ApiError::unauthorized("empty first-push token"));
         }
-        return Ok(token.to_string());
+        return Ok(token);
     }
 
     Err(ApiError::unauthorized(
         "expected Authorization: Basic or Bearer first-push token",
     ))
+}
+
+async fn receive_pack_authorization(
+    state: &AppState,
+    headers: &HeaderMap,
+) -> Result<ReceivePackAuthorization, ApiError> {
+    let Some(value) = headers.get(AUTHORIZATION) else {
+        return Err(git_receive_pack_auth_required());
+    };
+    let value = value
+        .to_str()
+        .map_err(|_| ApiError::unauthorized("invalid authorization header"))?;
+
+    if let Some(encoded) = value.strip_prefix("Basic ") {
+        let secret = basic_auth_secret(encoded)?;
+        if secret.is_empty() {
+            return Err(ApiError::unauthorized("empty Git push token"));
+        }
+        return Ok(ReceivePackAuthorization::ScopeToken { secret });
+    }
+
+    if let Some(token) = value.strip_prefix("Bearer ") {
+        let token = token.trim();
+        if token.is_empty() {
+            return Err(ApiError::unauthorized("empty bearer token"));
+        }
+        if token.starts_with(FIRST_PUSH_TOKEN_PREFIX) || token.starts_with(GIT_PUSH_TOKEN_PREFIX) {
+            return Ok(ReceivePackAuthorization::ScopeToken {
+                secret: token.to_string(),
+            });
+        }
+
+        return require_identity(state, headers)
+            .await
+            .map(ReceivePackAuthorization::ShooIdentity);
+    }
+
+    Err(ApiError::unauthorized(
+        "expected Authorization: Basic or Bearer Git credentials",
+    ))
+}
+
+fn git_receive_pack_auth_required() -> ApiError {
+    ApiError::unauthorized("Git push credentials required")
+}
+
+fn git_push_token_from_headers(headers: &HeaderMap) -> Result<Option<String>, ApiError> {
+    let Some(value) = headers.get(AUTHORIZATION) else {
+        return Ok(None);
+    };
+    let value = value
+        .to_str()
+        .map_err(|_| ApiError::unauthorized("invalid authorization header"))?;
+
+    if let Some(token) = value.strip_prefix("Bearer ") {
+        let token = token.trim();
+        if token.is_empty() {
+            return Err(ApiError::unauthorized("empty bearer token"));
+        }
+        return if token.starts_with(GIT_PUSH_TOKEN_PREFIX) {
+            Ok(Some(token.to_string()))
+        } else {
+            Ok(None)
+        };
+    }
+
+    if let Some(encoded) = value.strip_prefix("Basic ") {
+        let token = basic_auth_secret(encoded)?;
+        if token.is_empty() {
+            return Err(ApiError::unauthorized("empty Git push token"));
+        }
+        return Ok(Some(token));
+    }
+
+    Err(ApiError::unauthorized(
+        "expected Authorization: Basic Git push token or Bearer token",
+    ))
+}
+
+fn basic_auth_secret(encoded: &str) -> Result<String, ApiError> {
+    let decoded = BASE64
+        .decode(encoded.trim())
+        .map_err(|_| ApiError::unauthorized("invalid basic authorization"))?;
+    let decoded = String::from_utf8(decoded)
+        .map_err(|_| ApiError::unauthorized("invalid basic authorization"))?;
+    let (username, password) = decoded.split_once(':').unwrap_or((decoded.as_str(), ""));
+    let token = if password.is_empty() {
+        username.trim()
+    } else {
+        password.trim()
+    };
+
+    Ok(token.to_string())
 }
 
 fn authorize_first_push(
@@ -951,7 +1557,30 @@ fn authorize_first_push(
     repo_name: &str,
     token_secret: &str,
 ) -> Result<(), ApiError> {
+    authorize_initial_push(
+        state,
+        owner,
+        repo_name,
+        &InitialPushCredential::FirstPushToken {
+            secret: token_secret.to_string(),
+        },
+    )
+}
+
+fn authorize_initial_push(
+    state: &AppState,
+    owner: &str,
+    repo_name: &str,
+    credential: &InitialPushCredential,
+) -> Result<(), ApiError> {
     let repo = find_repo(state, owner, repo_name)?;
+    authorize_initial_push_for_repo(&repo, credential)
+}
+
+fn authorize_initial_push_for_repo(
+    repo: &StoredRepository,
+    credential: &InitialPushCredential,
+) -> Result<(), ApiError> {
     if repo.record.publication_state != RepoPublicationState::PendingFirstPush {
         return Err(ApiError::conflict(
             "repo is not waiting for an initial Git push",
@@ -961,6 +1590,58 @@ fn authorize_first_push(
         return Err(ApiError::conflict("repo already has a pending import"));
     }
 
+    match credential {
+        InitialPushCredential::FirstPushToken { secret } => {
+            authorize_first_push_token_for_repo(repo, secret)
+        }
+        InitialPushCredential::GitPushToken { secret } => {
+            authorize_git_push_token_for_repo(repo, secret).map(|_| ())
+        }
+    }
+}
+
+fn authorize_receive_pack_scope_token_for_repo(
+    repo: &StoredRepository,
+    credential: &InitialPushCredential,
+) -> Result<(), ApiError> {
+    match credential {
+        InitialPushCredential::FirstPushToken { secret } => {
+            authorize_first_push_token_for_repo(repo, secret)
+        }
+        InitialPushCredential::GitPushToken { secret } => {
+            authorize_git_push_token_for_repo(repo, secret).map(|_| ())
+        }
+    }
+}
+
+fn find_repo_after_git_scope_token(
+    state: &AppState,
+    owner: &str,
+    repo_name: &str,
+) -> Result<StoredRepository, ApiError> {
+    match find_repo(state, owner, repo_name) {
+        Ok(repo) => Ok(repo),
+        Err(error) if error.status == StatusCode::NOT_FOUND => Err(invalid_git_credentials()),
+        Err(error) => Err(error),
+    }
+}
+
+fn invalid_git_credentials() -> ApiError {
+    ApiError::unauthorized("invalid Git credentials")
+}
+
+fn git_credential_error(error: ApiError) -> ApiError {
+    if error.status == StatusCode::UNAUTHORIZED {
+        invalid_git_credentials()
+    } else {
+        error
+    }
+}
+
+fn authorize_first_push_token_for_repo(
+    repo: &StoredRepository,
+    token_secret: &str,
+) -> Result<(), ApiError> {
     let now = unix_now()?;
     let Some(token) = repo.first_push_token.as_ref() else {
         return Err(ApiError::unauthorized("first-push token is not configured"));
@@ -982,54 +1663,239 @@ fn authorize_first_push(
     Ok(())
 }
 
-fn ensure_receive_pack_staging_repo(
+fn authorize_git_push_token_for_repo(
+    repo: &StoredRepository,
+    secret: &str,
+) -> Result<String, ApiError> {
+    let Some(token) = repo.git_push_token.as_ref() else {
+        return Err(ApiError::unauthorized("Git push token is not configured"));
+    };
+    if token.owner_user_id != repo.record.owner_user_id {
+        return Err(ApiError::forbidden(
+            "Git push token owner does not match repo owner",
+        ));
+    }
+    if token.token_hash != git_push_token_hash(secret) {
+        return Err(ApiError::unauthorized("invalid Git push token"));
+    }
+
+    Ok(token.owner_user_id.clone())
+}
+
+fn receive_pack_staging_repo_path(
     state: &AppState,
     owner: &str,
     repo_name: &str,
 ) -> Result<PathBuf, ApiError> {
+    let mut bytes = [0_u8; RECEIVE_PACK_STAGING_BYTES];
+    getrandom::fill(&mut bytes).map_err(|error| {
+        ApiError::internal_message(format!(
+            "failed to create receive-pack staging path: {error}"
+        ))
+    })?;
     let base_dir = state
         .state_path
         .parent()
         .map(PathBuf::from)
         .unwrap_or_else(std::env::temp_dir);
-    let repo_root = base_dir
+    Ok(base_dir
         .join("git-receive")
-        .join(format!("{}.git", safe_repo_key(owner, repo_name)));
-    if repo_root.join("HEAD").exists() {
-        match git_refs(&repo_root) {
-            Ok(refs) if !refs.is_empty() => {
-                fs::remove_dir_all(&repo_root).map_err(ApiError::internal)?;
+        .join(safe_repo_key(owner, repo_name))
+        .join(format!("{}.git", hex::encode(bytes))))
+}
+
+fn owner_git_repo_path(state: &AppState, owner: &str, repo_name: &str) -> PathBuf {
+    git_repo_storage_root(state)
+        .join("git-repos")
+        .join(format!("{}.git", safe_repo_key(owner, repo_name)))
+}
+
+fn staged_git_repo_path(state: &AppState, owner: &str, repo_name: &str) -> PathBuf {
+    git_repo_storage_root(state)
+        .join("git-staged")
+        .join(format!("{}.git", safe_repo_key(owner, repo_name)))
+}
+
+fn git_repo_storage_root(state: &AppState) -> PathBuf {
+    state
+        .state_path
+        .parent()
+        .map(PathBuf::from)
+        .unwrap_or_else(std::env::temp_dir)
+}
+
+fn replace_git_repo(src: &FsPath, dst: &FsPath) -> Result<(), ApiError> {
+    if let Some(parent) = dst.parent() {
+        fs::create_dir_all(parent).map_err(ApiError::internal)?;
+    }
+    if dst.exists() {
+        fs::remove_dir_all(dst).map_err(ApiError::internal)?;
+    }
+    fs::rename(src, dst).map_err(ApiError::internal)
+}
+
+fn replace_git_repo_and_then<T>(
+    src: &FsPath,
+    dst: &FsPath,
+    op: impl FnOnce() -> Result<T, ApiError>,
+) -> Result<T, ApiError> {
+    if let Some(parent) = dst.parent() {
+        fs::create_dir_all(parent).map_err(ApiError::internal)?;
+    }
+    let backup = unique_sibling_path(dst, "backup")?;
+    if backup.exists() {
+        fs::remove_dir_all(&backup).map_err(ApiError::internal)?;
+    }
+    if dst.exists() {
+        fs::rename(dst, &backup).map_err(ApiError::internal)?;
+    }
+    fs::rename(src, dst).map_err(|error| {
+        if backup.exists() {
+            let _ = fs::rename(&backup, dst);
+        }
+        ApiError::internal(error)
+    })?;
+
+    match op() {
+        Ok(value) => {
+            if backup.exists() {
+                fs::remove_dir_all(&backup).map_err(ApiError::internal)?;
             }
-            Err(_) => {
-                fs::remove_dir_all(&repo_root).map_err(ApiError::internal)?;
+            Ok(value)
+        }
+        Err(error) => {
+            let _ = fs::rename(dst, src);
+            if backup.exists() {
+                let _ = fs::rename(&backup, dst);
             }
-            _ => {}
+            Err(error)
         }
     }
-    if !repo_root.join("HEAD").exists() {
-        if let Some(parent) = repo_root.parent() {
-            fs::create_dir_all(parent).map_err(ApiError::internal)?;
+}
+
+fn remove_git_repo_and_then<T>(
+    path: &FsPath,
+    op: impl FnOnce() -> Result<T, ApiError>,
+) -> Result<T, ApiError> {
+    let backup = unique_sibling_path(path, "delete")?;
+    fs::rename(path, &backup).map_err(ApiError::internal)?;
+    match op() {
+        Ok(value) => {
+            fs::remove_dir_all(&backup).map_err(ApiError::internal)?;
+            Ok(value)
         }
-        run_git(
-            None,
-            &["init", "--bare", repo_root.to_string_lossy().as_ref()],
-            "initializing receive-pack staging repo",
-        )?;
-        run_git(
-            Some(&repo_root),
-            &["config", "http.receivepack", "true"],
-            "enabling receive-pack",
-        )?;
-        install_pre_receive_hook(&repo_root)?;
+        Err(error) => {
+            let _ = fs::rename(&backup, path);
+            Err(error)
+        }
     }
+}
+
+fn unique_sibling_path(path: &FsPath, label: &str) -> Result<PathBuf, ApiError> {
+    let parent = path
+        .parent()
+        .ok_or_else(|| ApiError::internal_message("git repo path is missing a parent"))?;
+    let name = path
+        .file_name()
+        .and_then(|value| value.to_str())
+        .ok_or_else(|| ApiError::internal_message("git repo path has invalid file name"))?;
+    let mut bytes = [0_u8; RECEIVE_PACK_STAGING_BYTES];
+    getrandom::fill(&mut bytes).map_err(|error| {
+        ApiError::internal_message(format!("failed to create git repo backup path: {error}"))
+    })?;
+    Ok(parent.join(format!("{name}.{label}.{}", hex::encode(bytes))))
+}
+
+fn ensure_first_push_receive_pack_staging_repo(
+    state: &AppState,
+    owner: &str,
+    repo_name: &str,
+) -> Result<PathBuf, ApiError> {
+    let repo_root = receive_pack_staging_repo_path(state, owner, repo_name)?;
+    if let Some(parent) = repo_root.parent() {
+        fs::create_dir_all(parent).map_err(ApiError::internal)?;
+    }
+    run_git(
+        None,
+        &["init", "--bare", repo_root.to_string_lossy().as_ref()],
+        "initializing receive-pack staging repo",
+    )?;
+    run_git(
+        Some(&repo_root),
+        &["config", "http.receivepack", "true"],
+        "enabling receive-pack",
+    )?;
+    run_git(
+        Some(&repo_root),
+        &[
+            "symbolic-ref",
+            "HEAD",
+            &format!("refs/heads/{DEFAULT_GIT_BRANCH}"),
+        ],
+        "setting receive-pack default branch",
+    )?;
+    install_first_push_pre_receive_hook(&repo_root)?;
     Ok(repo_root)
 }
 
-fn install_pre_receive_hook(repo_root: &FsPath) -> Result<(), ApiError> {
+fn ensure_published_receive_pack_staging_repo(
+    state: &AppState,
+    owner: &str,
+    repo_name: &str,
+    author_id: &str,
+) -> Result<PathBuf, ApiError> {
+    let repo = find_repo(state, owner, repo_name)?;
+    if repo.record.publication_state != RepoPublicationState::Published {
+        return Err(ApiError::conflict("repo must be published before push"));
+    }
+    let principal = Principal {
+        id: author_id.to_string(),
+        kind: scope_policy::PrincipalKind::User,
+    };
+    let owner_repo = owner_git_repo_path(state, owner, repo_name);
+    let seed_repo = if owner_repo.join("HEAD").exists() {
+        owner_repo
+    } else {
+        let projection = project_graph(&repo.policy, &repo.graph, &principal);
+        projection_bare_repo(&state.git_cache_root()?, &projection)?
+    };
+    let repo_root = receive_pack_staging_repo_path(state, owner, repo_name)?;
+    if let Some(parent) = repo_root.parent() {
+        fs::create_dir_all(parent).map_err(ApiError::internal)?;
+    }
+    let seed = seed_repo.to_string_lossy().to_string();
+    let target = repo_root.to_string_lossy().to_string();
+    run_git(
+        None,
+        &["clone", "--bare", "--no-hardlinks", &seed, &target],
+        "cloning receive-pack staging repo",
+    )?;
+    run_git(
+        Some(&repo_root),
+        &["config", "http.receivepack", "true"],
+        "enabling receive-pack",
+    )?;
+    install_published_pre_receive_hook(&repo_root)?;
+    Ok(repo_root)
+}
+
+fn install_first_push_pre_receive_hook(repo_root: &FsPath) -> Result<(), ApiError> {
     let hook = repo_root.join("hooks").join("pre-receive");
     let script = format!(
-        "#!/bin/sh\ncount=0\nwhile read old new ref; do\n  count=$((count + 1))\n  case \"$ref\" in\n    refs/heads/*) ;;\n    *) echo \"Scope accepts only the first pushed branch in v0\" >&2; exit 1 ;;\n  esac\n  if [ \"$new\" = \"{EMPTY_GIT_OID}\" ]; then\n    echo \"Scope does not accept branch deletes in v0\" >&2\n    exit 1\n  fi\n  if [ \"$old\" != \"{EMPTY_GIT_OID}\" ]; then\n    echo \"Scope accepts only the initial branch push in v0\" >&2\n    exit 1\n  fi\ndone\nif [ \"$count\" -ne 1 ]; then\n  echo \"Scope accepts exactly one pushed branch in v0\" >&2\n  exit 1\nfi\n"
+        "#!/bin/sh\ncount=0\nwhile read old new ref; do\n  count=$((count + 1))\n  if [ \"$ref\" != \"refs/heads/{DEFAULT_GIT_BRANCH}\" ]; then\n    echo \"Scope accepts pushes only to refs/heads/{DEFAULT_GIT_BRANCH}\" >&2\n    exit 1\n  fi\n  if [ \"$new\" = \"{EMPTY_GIT_OID}\" ]; then\n    echo \"Scope does not accept branch deletes in v0\" >&2\n    exit 1\n  fi\n  if [ \"$old\" != \"{EMPTY_GIT_OID}\" ]; then\n    echo \"Scope accepts only the initial branch push in v0\" >&2\n    exit 1\n  fi\ndone\nif [ \"$count\" -ne 1 ]; then\n  echo \"Scope accepts exactly one pushed branch in v0\" >&2\n  exit 1\nfi\n"
     );
+    write_receive_pack_hook(&hook, &script)
+}
+
+fn install_published_pre_receive_hook(repo_root: &FsPath) -> Result<(), ApiError> {
+    let hook = repo_root.join("hooks").join("pre-receive");
+    let script = format!(
+        "#!/bin/sh\ncount=0\nwhile read old new ref; do\n  count=$((count + 1))\n  if [ \"$ref\" != \"refs/heads/{DEFAULT_GIT_BRANCH}\" ]; then\n    echo \"Scope accepts pushes only to refs/heads/{DEFAULT_GIT_BRANCH}\" >&2\n    exit 1\n  fi\n  if [ \"$new\" = \"{EMPTY_GIT_OID}\" ]; then\n    echo \"Scope does not accept branch deletes in v0\" >&2\n    exit 1\n  fi\n  if [ \"$old\" = \"{EMPTY_GIT_OID}\" ]; then\n    echo \"Scope accepts only updates to refs/heads/{DEFAULT_GIT_BRANCH}\" >&2\n    exit 1\n  fi\ndone\nif [ \"$count\" -ne 1 ]; then\n  echo \"Scope accepts exactly one pushed branch in v0\" >&2\n  exit 1\nfi\n"
+    );
+    write_receive_pack_hook(&hook, &script)
+}
+
+fn write_receive_pack_hook(hook: &FsPath, script: &str) -> Result<(), ApiError> {
     fs::write(&hook, script).map_err(ApiError::internal)?;
     #[cfg(unix)]
     {
@@ -1050,6 +1916,7 @@ fn git_http_backend(
     query_string: &str,
     body: Vec<u8>,
     content_type: Option<String>,
+    remote_user: &str,
 ) -> Result<CgiResponse, ApiError> {
     let staging_parent = staging_repo
         .parent()
@@ -1066,7 +1933,7 @@ fn git_http_backend(
         .env("REQUEST_METHOD", method)
         .env("PATH_INFO", format!("/{repo_name}/{path_suffix}"))
         .env("QUERY_STRING", query_string)
-        .env("REMOTE_USER", "first-push-token")
+        .env("REMOTE_USER", remote_user)
         .env("CONTENT_LENGTH", body.len().to_string())
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
@@ -1171,7 +2038,7 @@ fn pending_import_from_staging_repo(staging_repo: &FsPath) -> Result<PendingImpo
     let Some(default_branch) = refname.strip_prefix("refs/heads/") else {
         return Err(ApiError::bad_request("only branch pushes are supported"));
     };
-    validate_branch_name(default_branch)?;
+    ensure_default_branch(default_branch)?;
     let tree_oid = git_stdout_text(
         staging_repo,
         &["rev-parse", &format!("{head_oid}^{{tree}}")],
@@ -1188,6 +2055,84 @@ fn pending_import_from_staging_repo(staging_repo: &FsPath) -> Result<PendingImpo
         imported_at_unix: unix_now()?,
         files,
     })
+}
+
+fn receive_pack_update_from_staging_repo(
+    state: &AppState,
+    owner: &str,
+    repo_name: &str,
+    staging_repo: &FsPath,
+    author_id: &str,
+) -> Result<ReceivePackUpdate, ApiError> {
+    let refs = git_refs(staging_repo)?;
+    if refs.len() != 1 {
+        return Err(ApiError::bad_request(
+            "push must update exactly one branch and no tags",
+        ));
+    }
+    let (branch, head_oid) = refs.into_iter().next().expect("length checked");
+    ensure_default_branch(&branch)?;
+    let pushed_tree = pushed_scope_tree(staging_repo, &head_oid)?;
+    let repo = find_repo(state, owner, repo_name)?;
+    if repo.record.publication_state != RepoPublicationState::Published {
+        return Err(ApiError::conflict("repo must be published before push"));
+    }
+    let live_tree = live_tree(&repo);
+    let mut changes = Vec::new();
+
+    for (path, new_content) in &pushed_tree {
+        if live_tree.get(path) != Some(new_content) {
+            changes.push(ReceivePackFileChange {
+                path: path.clone(),
+                content: Some(new_content.clone()),
+            });
+        }
+    }
+    for path in live_tree.keys() {
+        if !pushed_tree.contains_key(path) {
+            changes.push(ReceivePackFileChange {
+                path: path.clone(),
+                content: None,
+            });
+        }
+    }
+
+    let message = pushed_commit_message(staging_repo, &head_oid)?;
+    Ok(ReceivePackUpdate {
+        branch,
+        author_id: author_id.to_string(),
+        message,
+        changes,
+    })
+}
+
+fn pushed_scope_tree(
+    staging_repo: &FsPath,
+    head_oid: &str,
+) -> Result<BTreeMap<ScopePath, String>, ApiError> {
+    let mut tree = BTreeMap::new();
+    for file in git_tree_files(staging_repo, head_oid)? {
+        let content = BASE64
+            .decode(file.content_base64.as_bytes())
+            .map_err(ApiError::bad_request)?;
+        let content = String::from_utf8(content).map_err(ApiError::bad_request)?;
+        tree.insert(pending_scope_path(&file.path)?, content);
+    }
+    Ok(tree)
+}
+
+fn pushed_commit_message(staging_repo: &FsPath, head_oid: &str) -> Result<String, ApiError> {
+    let message = git_stdout_text(
+        staging_repo,
+        &["log", "-1", "--format=%B", head_oid],
+        "reading pushed commit message",
+    )?;
+    let message = message.trim_end_matches(&['\r', '\n'][..]).to_string();
+    if message.trim().is_empty() {
+        Ok(format!("Push to {DEFAULT_GIT_BRANCH}"))
+    } else {
+        Ok(message)
+    }
 }
 
 fn git_refs(staging_repo: &FsPath) -> Result<Vec<(String, String)>, ApiError> {
@@ -1209,17 +2154,6 @@ fn git_refs(staging_repo: &FsPath) -> Result<Vec<(String, String)>, ApiError> {
             Ok((refname.to_string(), oid.to_string()))
         })
         .collect()
-}
-
-fn validate_branch_name(branch: &str) -> Result<(), ApiError> {
-    if branch.is_empty() || branch.starts_with('-') || branch.contains("..") {
-        return Err(ApiError::bad_request("invalid branch name"));
-    }
-    run_git(
-        None,
-        &["check-ref-format", &format!("refs/heads/{branch}")],
-        "validating branch name",
-    )
 }
 
 fn git_tree_files(
@@ -1333,7 +2267,7 @@ fn persist_pending_import(
     state: &AppState,
     owner: &str,
     repo_name: &str,
-    token_secret: &str,
+    credential: &InitialPushCredential,
     import: PendingImport,
 ) -> Result<(), ApiError> {
     let repo_id = scope_store::repo_id(owner, repo_name);
@@ -1353,17 +2287,19 @@ fn persist_pending_import(
         if repo.pending_import.is_some() {
             return Err(ApiError::conflict("repo already has a pending import"));
         }
-        let Some(token) = repo.first_push_token.as_mut() else {
-            return Err(ApiError::unauthorized("first-push token is not configured"));
-        };
-        if token.status_at(now) != FirstPushTokenStatus::Active
-            || token.token_hash != first_push_token_hash(token_secret)
-        {
-            return Err(ApiError::unauthorized(
-                "first-push token is expired, used, or invalid",
-            ));
+        match credential {
+            InitialPushCredential::FirstPushToken { secret } => {
+                authorize_first_push_token_for_repo(repo, secret)?;
+            }
+            InitialPushCredential::GitPushToken { secret } => {
+                authorize_git_push_token_for_repo(repo, secret)?;
+            }
         }
-        token.used_at_unix = Some(now);
+        if let Some(token) = repo.first_push_token.as_mut() {
+            if token.status_at(now) == FirstPushTokenStatus::Active {
+                token.used_at_unix = Some(now);
+            }
+        }
         repo.pending_import = Some(import);
         repo.record.publication_state = RepoPublicationState::PendingPublish;
     }
@@ -1371,6 +2307,32 @@ fn persist_pending_import(
     persist_catalog(state, &staged)?;
     *catalog = staged;
     Ok(())
+}
+
+fn persist_receive_pack_update(
+    state: &AppState,
+    owner: &str,
+    repo_name: &str,
+    update: ReceivePackUpdate,
+) -> Result<PersistedReceivePackUpdate, ApiError> {
+    let repo_id = scope_store::repo_id(owner, repo_name);
+    let mut catalog = lock_catalog(state)?;
+    let mut staged = catalog.clone();
+    let persisted = {
+        let repo = staged
+            .repositories
+            .get_mut(&repo_id)
+            .ok_or_else(|| ApiError::not_found(format!("repo {owner}/{repo_name} not found")))?;
+        if stage_receive_pack_update(repo, update)?.is_some() {
+            PersistedReceivePackUpdate::Staged
+        } else {
+            PersistedReceivePackUpdate::Applied
+        }
+    };
+
+    persist_catalog(state, &staged)?;
+    *catalog = staged;
+    Ok(persisted)
 }
 
 fn run_git(repo: Option<&FsPath>, args: &[&str], action: &str) -> Result<(), ApiError> {
@@ -1412,17 +2374,9 @@ fn run_git_output(
 }
 
 fn safe_repo_key(owner: &str, repo_name: &str) -> String {
-    format!(
-        "{}-{}",
-        owner
-            .chars()
-            .map(|ch| if ch.is_ascii_alphanumeric() { ch } else { '-' })
-            .collect::<String>(),
-        repo_name
-            .chars()
-            .map(|ch| if ch.is_ascii_alphanumeric() { ch } else { '-' })
-            .collect::<String>()
-    )
+    let repo_id = scope_store::repo_id(owner, repo_name);
+    let digest = Sha256::digest(repo_id.as_bytes());
+    format!("repo-{digest:x}")
 }
 
 fn git_error_response(error: ApiError) -> Response {
@@ -1430,7 +2384,7 @@ fn git_error_response(error: ApiError) -> Response {
         let mut response = error.into_response();
         response.headers_mut().insert(
             WWW_AUTHENTICATE,
-            HeaderValue::from_static("Basic realm=\"Scope first push\""),
+            HeaderValue::from_static("Basic realm=\"Scope Git\""),
         );
         return response;
     }
@@ -1443,6 +2397,27 @@ async fn git_projection_for_request(
     owner: &str,
     repo_name: &str,
 ) -> Result<Projection, ApiError> {
+    if let Some(secret) = git_push_token_from_headers(headers)? {
+        let repo = find_repo_after_git_scope_token(state, owner, repo_name)?;
+        let author_id =
+            authorize_git_push_token_for_repo(&repo, &secret).map_err(git_credential_error)?;
+        let principal = Principal {
+            id: author_id,
+            kind: scope_policy::PrincipalKind::User,
+        };
+        if repo.record.publication_state != RepoPublicationState::Published {
+            return match role_for_principal(state, &repo, &principal)? {
+                Some(RepoRole::Owner) => Err(ApiError::forbidden(UNPUBLISHED_GIT_ERROR)),
+                _ => Err(ApiError::not_found(format!(
+                    "repo {owner}/{repo_name} not found"
+                ))),
+            };
+        }
+
+        ensure_repo_read(state, &repo, &principal)?;
+        return Ok(project_graph(&repo.policy, &repo.graph, &principal));
+    }
+
     let repo = find_repo(state, owner, repo_name)?;
     let identity = http_identity(state, headers).await?;
     let principal = principal_for_repo(state, &repo, identity.as_ref())?;
@@ -1457,6 +2432,80 @@ async fn git_projection_for_request(
 
     ensure_repo_read(state, &repo, &principal)?;
     Ok(project_graph(&repo.policy, &repo.graph, &principal))
+}
+
+async fn git_upload_pack_repo_for_request(
+    state: &AppState,
+    headers: &HeaderMap,
+    owner: &str,
+    repo_name: &str,
+) -> Result<PathBuf, ApiError> {
+    if headers.contains_key(AUTHORIZATION) {
+        if let Some(repo_path) =
+            owner_raw_git_repo_for_request(state, headers, owner, repo_name).await?
+        {
+            return Ok(repo_path);
+        }
+    }
+
+    let projection = match git_projection_for_request(state, headers, owner, repo_name).await {
+        Ok(projection) => projection,
+        Err(error)
+            if !headers.contains_key(AUTHORIZATION) && error.status == StatusCode::NOT_FOUND =>
+        {
+            return Err(git_upload_pack_auth_required());
+        }
+        Err(error) => return Err(error),
+    };
+    state
+        .git_cache_root()
+        .and_then(|cache_root| projection_bare_repo(&cache_root, &projection))
+}
+
+fn git_upload_pack_auth_required() -> ApiError {
+    ApiError::unauthorized("Git credentials required")
+}
+
+async fn owner_raw_git_repo_for_request(
+    state: &AppState,
+    headers: &HeaderMap,
+    owner: &str,
+    repo_name: &str,
+) -> Result<Option<PathBuf>, ApiError> {
+    if let Some(secret) = git_push_token_from_headers(headers)? {
+        let repo = find_repo_after_git_scope_token(state, owner, repo_name)?;
+        let author_id =
+            authorize_git_push_token_for_repo(&repo, &secret).map_err(git_credential_error)?;
+        let principal = Principal {
+            id: author_id,
+            kind: scope_policy::PrincipalKind::User,
+        };
+        if role_for_principal(state, &repo, &principal)? != Some(RepoRole::Owner) {
+            return Err(ApiError::not_found(format!(
+                "repo {owner}/{repo_name} not found"
+            )));
+        }
+        return Ok(owner_read_git_repo_path(state, owner, repo_name));
+    }
+
+    let repo = find_repo(state, owner, repo_name)?;
+    let identity = http_identity(state, headers).await?;
+    let principal = principal_for_repo(state, &repo, identity.as_ref())?;
+    if role_for_principal(state, &repo, &principal)? == Some(RepoRole::Owner) {
+        return Ok(owner_read_git_repo_path(state, owner, repo_name));
+    }
+
+    Ok(None)
+}
+
+fn owner_read_git_repo_path(state: &AppState, owner: &str, repo_name: &str) -> Option<PathBuf> {
+    let staged_repo = staged_git_repo_path(state, owner, repo_name);
+    if staged_repo.join("HEAD").exists() {
+        return Some(staged_repo);
+    }
+
+    let owner_repo = owner_git_repo_path(state, owner, repo_name);
+    owner_repo.join("HEAD").exists().then_some(owner_repo)
 }
 
 fn projection_bare_repo(cache_root: &FsPath, projection: &Projection) -> Result<PathBuf, ApiError> {
@@ -1870,7 +2919,10 @@ fn ensure_repo_read(
     repo: &StoredRepository,
     principal: &Principal,
 ) -> Result<(), ApiError> {
-    if can_read_path(state, repo, principal, &ScopePath::root())? {
+    if can_read_path(state, repo, principal, &ScopePath::root())?
+        || (repo.record.publication_state == RepoPublicationState::Published
+            && has_visible_projected_files(repo, principal))
+    {
         Ok(())
     } else {
         Err(ApiError::not_found(format!(
@@ -1878,6 +2930,11 @@ fn ensure_repo_read(
             repo.record.id
         )))
     }
+}
+
+fn has_visible_projected_files(repo: &StoredRepository, principal: &Principal) -> bool {
+    let projection = project_graph(&repo.policy, &repo.graph, principal);
+    build_virtual_git_projection(&projection).blobs.is_empty() == false
 }
 
 fn ensure_owner(
@@ -2020,7 +3077,7 @@ fn load_state(path: &FsPath) -> anyhow::Result<PersistedState> {
 
 fn persist_catalog(state: &AppState, catalog: &AppCatalog) -> Result<(), ApiError> {
     if let Some(parent) = state.state_path.parent() {
-        fs::create_dir_all(parent).map_err(ApiError::internal)?;
+        ensure_private_dir(parent)?;
     }
 
     let bytes = serde_json::to_vec_pretty(&persisted_state_from_catalog(catalog))
@@ -2030,6 +3087,7 @@ fn persist_catalog(state: &AppState, catalog: &AppCatalog) -> Result<(), ApiErro
         .with_extension(format!("json.{}.tmp", std::process::id()));
     {
         let mut file = fs::File::create(&temp_path).map_err(ApiError::internal)?;
+        ensure_private_file(&file)?;
         file.write_all(&bytes).map_err(ApiError::internal)?;
         file.sync_all().map_err(ApiError::internal)?;
     }
@@ -2038,6 +3096,21 @@ fn persist_catalog(state: &AppState, catalog: &AppCatalog) -> Result<(), ApiErro
         let _ = fs::remove_file(&temp_path);
         ApiError::internal(error)
     })?;
+
+    Ok(())
+}
+
+fn ensure_private_file(_file: &fs::File) -> Result<(), ApiError> {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+
+        let mut permissions = _file.metadata().map_err(ApiError::internal)?.permissions();
+        permissions.set_mode(0o600);
+        _file
+            .set_permissions(permissions)
+            .map_err(ApiError::internal)?;
+    }
 
     Ok(())
 }
@@ -2406,6 +3479,7 @@ fn repo_summary(
         lifecycle_state: repo.record.publication_state,
         default_visibility: repo.record.default_visibility,
         role,
+        staged_update_pending: repo.staged_update.is_some(),
     })
 }
 
@@ -2415,6 +3489,7 @@ fn repo_setup_response(
     user_id: &str,
     now_unix: u64,
     secret: Option<String>,
+    push_secret: Option<String>,
 ) -> Result<RepoSetupResponse, ApiError> {
     ensure_owner_setup_access_in_catalog(catalog, repo, user_id)?;
     let repo = repo_summary(catalog, repo, user_id)
@@ -2424,14 +3499,20 @@ fn repo_setup_response(
         .get(&repo.id)
         .and_then(|stored| stored.first_push_token.as_ref())
         .map(|stored_token| first_push_token_response(stored_token, now_unix, secret));
+    let push_token = catalog
+        .repositories
+        .get(&repo.id)
+        .and_then(|stored| stored.git_push_token.as_ref())
+        .map(|stored_token| git_push_token_response(stored_token, push_secret));
 
     Ok(RepoSetupResponse {
         git_remote_path: format!("/git/{}/{}", repo.owner_handle, repo.name),
         remote_name: "scope",
-        push_branch: "<branch>",
-        push_enabled: false,
+        push_branch: DEFAULT_GIT_BRANCH,
+        push_enabled: true,
         repo,
         token,
+        push_token,
     })
 }
 
@@ -2445,6 +3526,13 @@ fn first_push_token_response(
         created_at_unix: token.created_at_unix,
         expires_at_unix: token.expires_at_unix,
         used_at_unix: token.used_at_unix,
+        secret,
+    }
+}
+
+fn git_push_token_response(token: &GitPushToken, secret: Option<String>) -> GitPushTokenResponse {
+    GitPushTokenResponse {
+        created_at_unix: token.created_at_unix,
         secret,
     }
 }
@@ -2488,9 +3576,9 @@ fn generate_first_push_token(owner_user_id: &str) -> Result<(String, FirstPushTo
     getrandom::fill(&mut bytes).map_err(|error| {
         ApiError::internal_message(format!("failed to generate setup token: {error}"))
     })?;
-    let secret = format!("scope_fp_{}", hex::encode(bytes));
+    let secret = format!("{FIRST_PUSH_TOKEN_PREFIX}{}", hex::encode(bytes));
     let token = FirstPushToken {
-        token_hash: first_push_token_hash(&secret),
+        token_hash: token_hash(&secret),
         owner_user_id: owner_user_id.to_string(),
         created_at_unix: now,
         expires_at_unix: now + FIRST_PUSH_TOKEN_TTL_SECS,
@@ -2500,9 +3588,33 @@ fn generate_first_push_token(owner_user_id: &str) -> Result<(String, FirstPushTo
     Ok((secret, token))
 }
 
-fn first_push_token_hash(secret: &str) -> String {
+fn generate_git_push_token(owner_user_id: &str) -> Result<(String, GitPushToken), ApiError> {
+    let now = unix_now()?;
+    let mut bytes = [0_u8; FIRST_PUSH_TOKEN_BYTES];
+    getrandom::fill(&mut bytes).map_err(|error| {
+        ApiError::internal_message(format!("failed to generate Git push token: {error}"))
+    })?;
+    let secret = format!("{GIT_PUSH_TOKEN_PREFIX}{}", hex::encode(bytes));
+    let token = GitPushToken {
+        token_hash: token_hash(&secret),
+        owner_user_id: owner_user_id.to_string(),
+        created_at_unix: now,
+    };
+
+    Ok((secret, token))
+}
+
+fn token_hash(secret: &str) -> String {
     let digest = Sha256::digest(secret.as_bytes());
     format!("sha256:{digest:x}")
+}
+
+fn first_push_token_hash(secret: &str) -> String {
+    token_hash(secret)
+}
+
+fn git_push_token_hash(secret: &str) -> String {
+    token_hash(secret)
 }
 
 fn unix_now() -> Result<u64, ApiError> {
@@ -2581,6 +3693,57 @@ fn graph_has_file(repo: &StoredRepository, path: &ScopePath) -> bool {
     }
 
     present
+}
+
+#[allow(dead_code)]
+fn live_tree(repo: &StoredRepository) -> BTreeMap<ScopePath, String> {
+    let mut tree = BTreeMap::new();
+    for change in repo.graph.commits.iter().flat_map(|commit| &commit.changes) {
+        match &change.new_content {
+            Some(content) => {
+                tree.insert(change.path.clone(), content.clone());
+            }
+            None => {
+                tree.remove(&change.path);
+            }
+        }
+    }
+    tree
+}
+
+fn staged_update_response(update: &StagedRepoUpdate) -> StagedUpdateResponse {
+    StagedUpdateResponse {
+        id: update.id.clone(),
+        branch: update.branch.clone(),
+        base_live_commit_id: update.base_live_commit_id.clone(),
+        message: update.message.clone(),
+        files: update
+            .changes
+            .iter()
+            .map(|change| StagedFileResponse {
+                path: change.path.as_str().to_string(),
+                kind: change.kind,
+                old_oid: change.old_content.as_deref().map(git_blob_oid),
+                new_oid: change.new_content.as_deref().map(git_blob_oid),
+                visibility: change.visibility,
+            })
+            .collect(),
+    }
+}
+
+#[allow(dead_code)]
+fn ensure_default_branch(branch: &str) -> Result<(), ApiError> {
+    let branch = branch.trim();
+    match branch {
+        DEFAULT_GIT_BRANCH => Ok(()),
+        value if value == format!("refs/heads/{DEFAULT_GIT_BRANCH}") => Ok(()),
+        value if value.starts_with("refs/tags/") => Err(ApiError::bad_request(
+            "tags are not supported by Scope pushes",
+        )),
+        _ => Err(ApiError::bad_request(
+            "Scope accepts pushes only to the default branch refs/heads/main",
+        )),
+    }
 }
 
 fn pending_import_has_file(repo: &StoredRepository, path: &ScopePath) -> bool {
@@ -3029,12 +4192,14 @@ kGxvBjzgF9RjXJoldYnFk7mJ5gLANHjaaad3qTQJ8DldKJoSqkEkm5gg
             },
             settings: RepoSettings::default(),
             first_push_token: None,
+            git_push_token: None,
             pending_import: None,
             policy: Policy::new(Visibility::Public, owner_id),
             graph: SourceGraph {
                 repo_id: TEST_REPO_ID.to_string(),
                 commits: Vec::new(),
             },
+            staged_update: None,
             memberships: vec![RepoMembership {
                 repo_id: TEST_REPO_ID.to_string(),
                 user_id: owner_id.to_string(),
@@ -3057,6 +4222,39 @@ kGxvBjzgF9RjXJoldYnFk7mJ5gLANHjaaad3qTQJ8DldKJoSqkEkm5gg
                     mode: "100644".to_string(),
                     oid: format!("oid-{path}"),
                     content_base64: BASE64.encode(content),
+                })
+                .collect(),
+        }
+    }
+
+    fn repo_with_readme() -> StoredRepository {
+        let mut repo = test_repo(&test_owner_id());
+        repo.graph.commits.push(LogicalCommit {
+            id: "rv1".to_string(),
+            parent_ids: Vec::new(),
+            author_id: repo.record.owner_user_id.clone(),
+            author_visibility: AuthorVisibility::Visible,
+            message: "initial".to_string(),
+            mixed_policy: MixedCommitPolicy::SyntheticPublicCommit,
+            changes: vec![FileChange {
+                path: ScopePath::parse("/README.md").unwrap(),
+                old_content: None,
+                new_content: Some("hello".to_string()),
+            }],
+        });
+        repo
+    }
+
+    fn receive_pack_update(changes: Vec<(&str, Option<&str>)>) -> ReceivePackUpdate {
+        ReceivePackUpdate {
+            branch: format!("refs/heads/{DEFAULT_GIT_BRANCH}"),
+            author_id: test_owner_id(),
+            message: "owner push".to_string(),
+            changes: changes
+                .into_iter()
+                .map(|(path, content)| ReceivePackFileChange {
+                    path: pending_scope_path(path).unwrap(),
+                    content: content.map(str::to_string),
                 })
                 .collect(),
         }
@@ -3095,13 +4293,16 @@ kGxvBjzgF9RjXJoldYnFk7mJ5gLANHjaaad3qTQJ8DldKJoSqkEkm5gg
         assert_eq!(body["repo"]["lifecycle_state"], "PendingFirstPush");
         assert_eq!(body["repo"]["default_visibility"], "Private");
         assert_eq!(body["repo"]["role"], "Owner");
+        assert_eq!(body["repo"]["staged_update_pending"], false);
         assert_eq!(body["setup"]["git_remote_path"], "/git/owner/scope_app");
         assert_eq!(body["setup"]["remote_name"], "scope");
-        assert_eq!(body["setup"]["push_branch"], "<branch>");
-        assert_eq!(body["setup"]["push_enabled"], false);
+        assert_eq!(body["setup"]["push_branch"], DEFAULT_GIT_BRANCH);
+        assert_eq!(body["setup"]["push_enabled"], true);
         let secret = body["setup"]["token"]["secret"].as_str().unwrap();
         assert!(secret.starts_with("scope_fp_"));
         assert_eq!(body["setup"]["token"]["status"], "Active");
+        let push_secret = body["setup"]["push_token"]["secret"].as_str().unwrap();
+        assert!(push_secret.starts_with("scope_git_"));
 
         let response = app
             .oneshot(
@@ -3128,6 +4329,141 @@ kGxvBjzgF9RjXJoldYnFk7mJ5gLANHjaaad3qTQJ8DldKJoSqkEkm5gg
         assert_ne!(token.token_hash, secret);
         assert!(token.token_hash.starts_with("sha256:"));
         assert_eq!(token.owner_user_id, test_owner_id());
+        let push_token = repo.git_push_token.as_ref().unwrap();
+        assert_ne!(push_token.token_hash, push_secret);
+        assert!(push_token.token_hash.starts_with("sha256:"));
+        assert_eq!(push_token.owner_user_id, test_owner_id());
+    }
+
+    #[tokio::test]
+    async fn list_repos_marks_published_repo_with_staged_update() {
+        let state = test_state_with_repo();
+        cache_test_jwks(&state);
+        {
+            let mut repo = repo_with_readme();
+            stage_receive_pack_update(
+                &mut repo,
+                receive_pack_update(vec![("/README.md", Some("staged"))]),
+            )
+            .unwrap();
+
+            let mut catalog = lock_catalog(&state).unwrap();
+            catalog.repositories.insert(TEST_REPO_ID.to_string(), repo);
+        }
+
+        let app = router(state);
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method("GET")
+                    .uri("/v1/repos")
+                    .header(AUTHORIZATION, bearer_header())
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = response_json(response).await;
+        assert_eq!(body[0]["id"], TEST_REPO_ID);
+        assert_eq!(body[0]["lifecycle_state"], "Published");
+        assert_eq!(body[0]["staged_update_pending"], true);
+    }
+
+    #[tokio::test]
+    async fn published_default_private_repo_serves_public_file_subset() {
+        let state = test_state_with_repo();
+        {
+            let mut repo = test_repo(&test_owner_id());
+            repo.record.default_visibility = Visibility::Private;
+            repo.policy = Policy::new(Visibility::Private, &repo.record.owner_user_id);
+            repo.policy
+                .add_rule(VisibilityRule::public(
+                    ScopePath::parse("/README.md").unwrap(),
+                ))
+                .unwrap();
+            repo.graph.commits.push(LogicalCommit {
+                id: "rv1".to_string(),
+                parent_ids: Vec::new(),
+                author_id: repo.record.owner_user_id.clone(),
+                author_visibility: AuthorVisibility::Visible,
+                message: "initial".to_string(),
+                mixed_policy: MixedCommitPolicy::SyntheticPublicCommit,
+                changes: vec![
+                    FileChange {
+                        path: ScopePath::parse("/README.md").unwrap(),
+                        old_content: None,
+                        new_content: Some("hello".to_string()),
+                    },
+                    FileChange {
+                        path: ScopePath::parse("/secret.txt").unwrap(),
+                        old_content: None,
+                        new_content: Some("secret".to_string()),
+                    },
+                ],
+            });
+
+            let mut catalog = lock_catalog(&state).unwrap();
+            catalog.repositories.insert(TEST_REPO_ID.to_string(), repo);
+        }
+
+        let app = router(state);
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method("GET")
+                    .uri("/v1/repos/owner/repo/files")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = response_json(response).await;
+        assert_eq!(body.as_array().unwrap().len(), 1);
+        assert_eq!(body[0]["path"], "/README.md");
+    }
+
+    #[tokio::test]
+    async fn published_default_private_repo_without_public_files_stays_hidden() {
+        let state = test_state_with_repo();
+        {
+            let mut repo = test_repo(&test_owner_id());
+            repo.record.default_visibility = Visibility::Private;
+            repo.policy = Policy::new(Visibility::Private, &repo.record.owner_user_id);
+            repo.graph.commits.push(LogicalCommit {
+                id: "rv1".to_string(),
+                parent_ids: Vec::new(),
+                author_id: repo.record.owner_user_id.clone(),
+                author_visibility: AuthorVisibility::Visible,
+                message: "initial".to_string(),
+                mixed_policy: MixedCommitPolicy::SyntheticPublicCommit,
+                changes: vec![FileChange {
+                    path: ScopePath::parse("/secret.txt").unwrap(),
+                    old_content: None,
+                    new_content: Some("secret".to_string()),
+                }],
+            });
+
+            let mut catalog = lock_catalog(&state).unwrap();
+            catalog.repositories.insert(TEST_REPO_ID.to_string(), repo);
+        }
+
+        let app = router(state);
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method("GET")
+                    .uri("/v1/repos/owner/repo/files")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::NOT_FOUND);
     }
 
     #[tokio::test]
@@ -3215,14 +4551,17 @@ kGxvBjzgF9RjXJoldYnFk7mJ5gLANHjaaad3qTQJ8DldKJoSqkEkm5gg
     async fn setup_token_regeneration_rotates_hash_and_returns_new_secret() {
         let state = test_state_with_repo();
         cache_test_jwks(&state);
-        let old_hash = {
+        let (old_hash, old_push_hash) = {
             let mut catalog = lock_catalog(&state).unwrap();
             let repo = catalog.repositories.get_mut(TEST_REPO_ID).unwrap();
             let (_, token) = generate_first_push_token(&test_owner_id()).unwrap();
+            let (_, push_token) = generate_git_push_token(&test_owner_id()).unwrap();
             let old_hash = token.token_hash.clone();
+            let old_push_hash = push_token.token_hash.clone();
             repo.record.publication_state = RepoPublicationState::PendingFirstPush;
             repo.first_push_token = Some(token);
-            old_hash
+            repo.git_push_token = Some(push_token);
+            (old_hash, old_push_hash)
         };
 
         let response = router(state.clone())
@@ -3241,17 +4580,16 @@ kGxvBjzgF9RjXJoldYnFk7mJ5gLANHjaaad3qTQJ8DldKJoSqkEkm5gg
         let body = response_json(response).await;
         let secret = body["token"]["secret"].as_str().unwrap();
         assert!(secret.starts_with("scope_fp_"));
+        let push_secret = body["push_token"]["secret"].as_str().unwrap();
+        assert!(push_secret.starts_with("scope_git_"));
         let catalog = lock_catalog(&state).unwrap();
-        let new_hash = &catalog
-            .repositories
-            .get(TEST_REPO_ID)
-            .unwrap()
-            .first_push_token
-            .as_ref()
-            .unwrap()
-            .token_hash;
+        let repo = catalog.repositories.get(TEST_REPO_ID).unwrap();
+        let new_hash = &repo.first_push_token.as_ref().unwrap().token_hash;
+        let new_push_hash = &repo.git_push_token.as_ref().unwrap().token_hash;
         assert_ne!(new_hash, &old_hash);
         assert_ne!(new_hash, secret);
+        assert_ne!(new_push_hash, &old_push_hash);
+        assert_ne!(new_push_hash, push_secret);
     }
 
     #[tokio::test]
@@ -3540,6 +4878,285 @@ kGxvBjzgF9RjXJoldYnFk7mJ5gLANHjaaad3qTQJ8DldKJoSqkEkm5gg
     }
 
     #[test]
+    fn repo_settings_review_pushes_default_on() {
+        assert!(RepoSettings::default().review_pushes_before_applying);
+        assert!(!RepoSettings::default().include_ignored_files);
+    }
+
+    #[test]
+    fn receive_pack_stages_owner_update_without_changing_live_tree() {
+        let mut repo = repo_with_readme();
+        let staged = stage_receive_pack_update(
+            &mut repo,
+            receive_pack_update(vec![("/README.md", Some("staged readme"))]),
+        )
+        .unwrap()
+        .unwrap();
+
+        assert_eq!(staged.branch, format!("refs/heads/{DEFAULT_GIT_BRANCH}"));
+        assert!(repo.staged_update.is_some());
+        assert_eq!(
+            live_tree(&repo)
+                .get(&ScopePath::parse("/README.md").unwrap())
+                .map(String::as_str),
+            Some("hello")
+        );
+    }
+
+    #[test]
+    fn published_receive_pack_push_stages_from_seeded_git_repo() {
+        let state = test_state_with_repo();
+        {
+            let mut catalog = lock_catalog(&state).unwrap();
+            let mut staged = catalog.clone();
+            staged
+                .repositories
+                .insert(TEST_REPO_ID.to_string(), repo_with_readme());
+            *catalog = staged;
+        }
+        let staging_repo = ensure_published_receive_pack_staging_repo(
+            &state,
+            TEST_REPO_OWNER,
+            TEST_REPO_NAME,
+            &test_owner_id(),
+        )
+        .unwrap();
+        let clone = std::env::temp_dir().join(format!(
+            "scope-vcs-published-push-clone-{}-{}",
+            std::process::id(),
+            unix_now()
+        ));
+        let _ = fs::remove_dir_all(&clone);
+        run_git(
+            None,
+            &[
+                "clone",
+                staging_repo.to_str().unwrap(),
+                clone.to_str().unwrap(),
+            ],
+            "clone published staging repo",
+        )
+        .unwrap();
+        fs::write(clone.join("README.md"), "staged readme").unwrap();
+        fs::write(clone.join("notes.md"), "new notes").unwrap();
+        run_git(Some(&clone), &["add", "-A"], "stage clone changes").unwrap();
+        commit_all(&clone, "update from git");
+        run_git(
+            Some(&clone),
+            &["push", "origin", DEFAULT_GIT_BRANCH],
+            "push staged update",
+        )
+        .unwrap();
+
+        let update = receive_pack_update_from_staging_repo(
+            &state,
+            TEST_REPO_OWNER,
+            TEST_REPO_NAME,
+            &staging_repo,
+            &test_owner_id(),
+        )
+        .unwrap();
+
+        assert_eq!(update.branch, format!("refs/heads/{DEFAULT_GIT_BRANCH}"));
+        assert_eq!(update.message, "update from git");
+        assert_eq!(update.changes.len(), 2);
+        persist_receive_pack_update(&state, TEST_REPO_OWNER, TEST_REPO_NAME, update).unwrap();
+        let repo = find_repo(&state, TEST_REPO_OWNER, TEST_REPO_NAME).unwrap();
+        let staged_update = repo.staged_update.as_ref().unwrap();
+        assert_eq!(staged_update.changes.len(), 2);
+        assert_eq!(
+            live_tree(&repo)
+                .get(&ScopePath::parse("/README.md").unwrap())
+                .map(String::as_str),
+            Some("hello")
+        );
+
+        let _ = fs::remove_dir_all(&clone);
+        let _ = fs::remove_dir_all(&staging_repo);
+    }
+
+    #[test]
+    fn review_off_receive_pack_applies_immediately() {
+        let mut repo = repo_with_readme();
+        repo.settings.review_pushes_before_applying = false;
+
+        let staged = stage_receive_pack_update(
+            &mut repo,
+            receive_pack_update(vec![("/README.md", Some("live now"))]),
+        )
+        .unwrap();
+
+        assert!(staged.is_none());
+        assert!(repo.staged_update.is_none());
+        assert_eq!(
+            live_tree(&repo)
+                .get(&ScopePath::parse("/README.md").unwrap())
+                .map(String::as_str),
+            Some("live now")
+        );
+    }
+
+    #[test]
+    fn staged_new_private_file_stays_out_of_public_projection() {
+        let mut repo = repo_with_readme();
+        let mut staged = stage_receive_pack_update(
+            &mut repo,
+            receive_pack_update(vec![("/secret-plan.md", Some("private"))]),
+        )
+        .unwrap()
+        .unwrap();
+        staged.changes[0].visibility = Visibility::Private;
+
+        apply_receive_pack_update(&mut repo, staged).unwrap();
+
+        let public_projection = project_graph(&repo.policy, &repo.graph, &Principal::public());
+        let public_git = build_virtual_git_projection(&public_projection);
+        assert!(
+            !public_git
+                .blobs
+                .iter()
+                .any(|blob| blob.path == "/secret-plan.md")
+        );
+        let owner = Principal {
+            id: repo.record.owner_user_id.clone(),
+            kind: PrincipalKind::User,
+        };
+        let owner_projection = project_graph(&repo.policy, &repo.graph, &owner);
+        assert!(
+            build_virtual_git_projection(&owner_projection)
+                .blobs
+                .iter()
+                .any(|blob| blob.path == "/secret-plan.md")
+        );
+    }
+
+    #[test]
+    fn staged_new_file_inherits_private_parent_visibility() {
+        let mut repo = repo_with_readme();
+        repo.policy
+            .add_rule(VisibilityRule::private(
+                ScopePath::parse("/private").unwrap(),
+                [repo.record.owner_user_id.clone()],
+            ))
+            .unwrap();
+
+        let staged = stage_receive_pack_update(
+            &mut repo,
+            receive_pack_update(vec![("/private/new.txt", Some("private child"))]),
+        )
+        .unwrap()
+        .unwrap();
+
+        assert_eq!(staged.changes[0].visibility, Visibility::Private);
+        apply_receive_pack_update(&mut repo, staged).unwrap();
+        let public_projection = project_graph(&repo.policy, &repo.graph, &Principal::public());
+        let public_git = build_virtual_git_projection(&public_projection);
+        assert!(
+            !public_git
+                .blobs
+                .iter()
+                .any(|blob| blob.path == "/private/new.txt")
+        );
+    }
+
+    #[tokio::test]
+    async fn staged_visibility_route_rejects_public_child_under_private_parent() {
+        let state = test_state_with_repo();
+        cache_test_jwks(&state);
+        {
+            let mut repo = repo_with_readme();
+            repo.policy
+                .add_rule(VisibilityRule::private(
+                    ScopePath::parse("/private").unwrap(),
+                    [repo.record.owner_user_id.clone()],
+                ))
+                .unwrap();
+            stage_receive_pack_update(
+                &mut repo,
+                receive_pack_update(vec![("/private/new.txt", Some("private child"))]),
+            )
+            .unwrap();
+
+            let mut catalog = lock_catalog(&state).unwrap();
+            catalog.repositories.insert(TEST_REPO_ID.to_string(), repo);
+        }
+
+        let app = router(state.clone());
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method("PATCH")
+                    .uri("/v1/repos/owner/repo/staged-update/files/visibility")
+                    .header(AUTHORIZATION, bearer_header())
+                    .header(CONTENT_TYPE, "application/json")
+                    .body(Body::from(
+                        r#"{"path":"/private/new.txt","visibility":"Public"}"#,
+                    ))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+        let repo = find_repo(&state, TEST_REPO_OWNER, TEST_REPO_NAME).unwrap();
+        let staged_update = repo.staged_update.as_ref().unwrap();
+        assert_eq!(staged_update.changes[0].visibility, Visibility::Private);
+    }
+
+    #[test]
+    fn receive_pack_rejects_non_default_branches_and_tags() {
+        let mut repo = repo_with_readme();
+        let mut feature = receive_pack_update(vec![("/README.md", Some("feature"))]);
+        feature.branch = "refs/heads/feature".to_string();
+
+        let error = stage_receive_pack_update(&mut repo, feature).unwrap_err();
+        assert_eq!(error.status, StatusCode::BAD_REQUEST);
+
+        let mut tag = receive_pack_update(vec![("/README.md", Some("tag"))]);
+        tag.branch = "refs/tags/v1".to_string();
+
+        let error = stage_receive_pack_update(&mut repo, tag).unwrap_err();
+        assert_eq!(error.status, StatusCode::BAD_REQUEST);
+    }
+
+    #[test]
+    fn pending_import_rejects_non_default_first_push_branch() {
+        let repo = temp_git_repo("non-main-first-push");
+        fs::write(repo.join("README.md"), "hello").unwrap();
+        run_git(Some(&repo), &["add", "README.md"], "add readme").unwrap();
+        commit_all(&repo, "initial");
+        run_git(
+            Some(&repo),
+            &["branch", "-m", DEFAULT_GIT_BRANCH, "master"],
+            "rename first-push branch",
+        )
+        .unwrap();
+        let bare = std::env::temp_dir().join(format!(
+            "scope-vcs-non-main-first-push-bare-{}-{}",
+            std::process::id(),
+            unix_now()
+        ));
+        let _ = fs::remove_dir_all(&bare);
+        run_git(
+            None,
+            &[
+                "clone",
+                "--bare",
+                repo.to_str().unwrap(),
+                bare.to_str().unwrap(),
+            ],
+            "clone first push bare repo",
+        )
+        .unwrap();
+
+        let error = pending_import_from_staging_repo(&bare).unwrap_err();
+
+        assert_eq!(error.status, StatusCode::BAD_REQUEST);
+        let _ = fs::remove_dir_all(&repo);
+        let _ = fs::remove_dir_all(&bare);
+    }
+
+    #[test]
     fn bearer_token_ignores_removed_trusted_identity_headers() {
         let mut headers = HeaderMap::new();
         headers.insert("x-scope-user-email", TEST_OWNER_EMAIL.parse().unwrap());
@@ -3601,7 +5218,16 @@ kGxvBjzgF9RjXJoldYnFk7mJ5gLANHjaaad3qTQJ8DldKJoSqkEkm5gg
             files: Vec::new(),
         };
 
-        persist_pending_import(&state, TEST_REPO_OWNER, TEST_REPO_NAME, secret, import).unwrap();
+        persist_pending_import(
+            &state,
+            TEST_REPO_OWNER,
+            TEST_REPO_NAME,
+            &InitialPushCredential::FirstPushToken {
+                secret: secret.to_string(),
+            },
+            import,
+        )
+        .unwrap();
 
         let repo = find_repo(&state, TEST_REPO_OWNER, TEST_REPO_NAME).unwrap();
         assert_eq!(
@@ -3614,6 +5240,464 @@ kGxvBjzgF9RjXJoldYnFk7mJ5gLANHjaaad3qTQJ8DldKJoSqkEkm5gg
         let error =
             authorize_first_push(&state, TEST_REPO_OWNER, TEST_REPO_NAME, secret).unwrap_err();
         assert_eq!(error.status, StatusCode::CONFLICT);
+    }
+
+    #[test]
+    fn pending_import_with_git_token_marks_first_push_token_used() {
+        let state = test_state_with_repo();
+        let first_secret = "scope_fp_test";
+        let git_secret = "scope_git_test";
+        {
+            let mut catalog = lock_catalog(&state).unwrap();
+            let repo = catalog.repositories.get_mut(TEST_REPO_ID).unwrap();
+            repo.record.publication_state = RepoPublicationState::PendingFirstPush;
+            repo.first_push_token = Some(FirstPushToken {
+                token_hash: first_push_token_hash(first_secret),
+                owner_user_id: repo.record.owner_user_id.clone(),
+                created_at_unix: unix_now(),
+                expires_at_unix: unix_now() + FIRST_PUSH_TOKEN_TTL_SECS,
+                used_at_unix: None,
+            });
+            repo.git_push_token = Some(GitPushToken {
+                token_hash: git_push_token_hash(git_secret),
+                owner_user_id: repo.record.owner_user_id.clone(),
+                created_at_unix: unix_now(),
+            });
+            repo.pending_import = None;
+        }
+
+        persist_pending_import(
+            &state,
+            TEST_REPO_OWNER,
+            TEST_REPO_NAME,
+            &InitialPushCredential::GitPushToken {
+                secret: git_secret.to_string(),
+            },
+            pending_import_fixture(Vec::new()),
+        )
+        .unwrap();
+
+        let repo = find_repo(&state, TEST_REPO_OWNER, TEST_REPO_NAME).unwrap();
+        assert_eq!(
+            repo.record.publication_state,
+            RepoPublicationState::PendingPublish
+        );
+        assert!(repo.first_push_token.unwrap().used_at_unix.is_some());
+    }
+
+    #[tokio::test]
+    async fn published_receive_pack_accepts_basic_git_push_token() {
+        let state = test_state_with_repo();
+        let secret = "scope_git_test";
+        {
+            let mut catalog = lock_catalog(&state).unwrap();
+            let repo = catalog.repositories.get_mut(TEST_REPO_ID).unwrap();
+            repo.git_push_token = Some(GitPushToken {
+                token_hash: git_push_token_hash(secret),
+                owner_user_id: repo.record.owner_user_id.clone(),
+                created_at_unix: unix_now(),
+            });
+        }
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            AUTHORIZATION,
+            format!("Basic {}", BASE64.encode(format!("scope:{secret}")))
+                .parse()
+                .unwrap(),
+        );
+
+        let access = receive_pack_access(&state, &headers, TEST_REPO_OWNER, TEST_REPO_NAME)
+            .await
+            .unwrap();
+
+        assert!(matches!(
+            access,
+            ReceivePackAccess::PublishedOwner { author_id } if author_id == test_owner_id()
+        ));
+    }
+
+    #[tokio::test]
+    async fn receive_pack_requires_credentials_before_repo_state_is_revealed() {
+        let state = test_state_with_repo();
+        let app = router(state.clone());
+
+        let existing = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("GET")
+                    .uri("/git/owner/repo/info/refs?service=git-receive-pack")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        let missing = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("GET")
+                    .uri("/git/owner/missing/info/refs?service=git-receive-pack")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        {
+            let mut catalog = lock_catalog(&state).unwrap();
+            let repo = catalog.repositories.get_mut(TEST_REPO_ID).unwrap();
+            repo.record.publication_state = RepoPublicationState::PendingPublish;
+        }
+        let pending_publish = app
+            .oneshot(
+                Request::builder()
+                    .method("GET")
+                    .uri("/git/owner/repo/info/refs?service=git-receive-pack")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        for response in [existing, missing, pending_publish] {
+            assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+            assert!(response.headers().contains_key(WWW_AUTHENTICATE));
+        }
+    }
+
+    #[tokio::test]
+    async fn receive_pack_reports_pending_publish_only_after_owner_token_auth() {
+        let state = test_state_with_repo();
+        let secret = "scope_git_test";
+        {
+            let mut catalog = lock_catalog(&state).unwrap();
+            let repo = catalog.repositories.get_mut(TEST_REPO_ID).unwrap();
+            repo.record.publication_state = RepoPublicationState::PendingPublish;
+            repo.git_push_token = Some(GitPushToken {
+                token_hash: git_push_token_hash(secret),
+                owner_user_id: repo.record.owner_user_id.clone(),
+                created_at_unix: unix_now(),
+            });
+        }
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            AUTHORIZATION,
+            format!("Basic {}", BASE64.encode(format!("scope:{secret}")))
+                .parse()
+                .unwrap(),
+        );
+
+        let error = receive_pack_access(&state, &headers, TEST_REPO_OWNER, TEST_REPO_NAME)
+            .await
+            .unwrap_err();
+
+        assert_eq!(error.status, StatusCode::CONFLICT);
+    }
+
+    #[tokio::test]
+    async fn upload_pack_accepts_basic_git_push_token_for_owner_projection() {
+        let state = test_state_with_repo();
+        let secret = "scope_git_test";
+        {
+            let mut repo = repo_with_readme();
+            repo.git_push_token = Some(GitPushToken {
+                token_hash: git_push_token_hash(secret),
+                owner_user_id: repo.record.owner_user_id.clone(),
+                created_at_unix: unix_now(),
+            });
+            repo.policy
+                .add_rule(VisibilityRule::private(
+                    ScopePath::parse("/secret.txt").unwrap(),
+                    [repo.record.owner_user_id.clone()],
+                ))
+                .unwrap();
+            repo.graph.commits[0].changes.push(FileChange {
+                path: ScopePath::parse("/secret.txt").unwrap(),
+                old_content: None,
+                new_content: Some("owner only".to_string()),
+            });
+
+            let mut catalog = lock_catalog(&state).unwrap();
+            catalog.repositories.insert(TEST_REPO_ID.to_string(), repo);
+        }
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            AUTHORIZATION,
+            format!("Basic {}", BASE64.encode(format!("scope:{secret}")))
+                .parse()
+                .unwrap(),
+        );
+
+        let projection =
+            git_projection_for_request(&state, &headers, TEST_REPO_OWNER, TEST_REPO_NAME)
+                .await
+                .unwrap();
+        let git = build_virtual_git_projection(&projection);
+
+        assert!(git.blobs.iter().any(|blob| blob.path == "/secret.txt"));
+    }
+
+    #[tokio::test]
+    async fn upload_pack_uses_owner_raw_git_repo_when_present() {
+        let state = test_state_with_repo();
+        let secret = "scope_git_test";
+        {
+            let mut catalog = lock_catalog(&state).unwrap();
+            let repo = catalog.repositories.get_mut(TEST_REPO_ID).unwrap();
+            repo.git_push_token = Some(GitPushToken {
+                token_hash: git_push_token_hash(secret),
+                owner_user_id: repo.record.owner_user_id.clone(),
+                created_at_unix: unix_now(),
+            });
+        }
+        let source = temp_git_repo("owner-raw-upload-pack");
+        fs::write(source.join("README.md"), "raw owner").unwrap();
+        run_git(Some(&source), &["add", "README.md"], "add raw readme").unwrap();
+        commit_all(&source, "raw owner commit");
+        let bare = std::env::temp_dir().join(format!(
+            "scope-vcs-owner-raw-upload-pack-bare-{}-{}",
+            std::process::id(),
+            unix_now()
+        ));
+        let _ = fs::remove_dir_all(&bare);
+        run_git(
+            None,
+            &[
+                "clone",
+                "--bare",
+                source.to_str().unwrap(),
+                bare.to_str().unwrap(),
+            ],
+            "clone owner raw repo",
+        )
+        .unwrap();
+        let raw_repo = owner_git_repo_path(&state, TEST_REPO_OWNER, TEST_REPO_NAME);
+        replace_git_repo(&bare, &raw_repo).unwrap();
+        let expected =
+            git_stdout_text(&raw_repo, &["rev-parse", DEFAULT_GIT_BRANCH], "raw head").unwrap();
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            AUTHORIZATION,
+            format!("Basic {}", BASE64.encode(format!("scope:{secret}")))
+                .parse()
+                .unwrap(),
+        );
+
+        let repo_path =
+            git_upload_pack_repo_for_request(&state, &headers, TEST_REPO_OWNER, TEST_REPO_NAME)
+                .await
+                .unwrap();
+        let actual = git_stdout_text(
+            &repo_path,
+            &["rev-parse", DEFAULT_GIT_BRANCH],
+            "advertised owner raw head",
+        )
+        .unwrap();
+
+        assert_eq!(actual, expected);
+        let staged_source = temp_git_repo("owner-staged-upload-pack");
+        fs::write(staged_source.join("README.md"), "staged owner").unwrap();
+        run_git(
+            Some(&staged_source),
+            &["add", "README.md"],
+            "add staged readme",
+        )
+        .unwrap();
+        commit_all(&staged_source, "staged owner commit");
+        let staged_bare = std::env::temp_dir().join(format!(
+            "scope-vcs-owner-staged-upload-pack-bare-{}-{}",
+            std::process::id(),
+            unix_now()
+        ));
+        let _ = fs::remove_dir_all(&staged_bare);
+        run_git(
+            None,
+            &[
+                "clone",
+                "--bare",
+                staged_source.to_str().unwrap(),
+                staged_bare.to_str().unwrap(),
+            ],
+            "clone owner staged repo",
+        )
+        .unwrap();
+        let staged_repo = staged_git_repo_path(&state, TEST_REPO_OWNER, TEST_REPO_NAME);
+        replace_git_repo(&staged_bare, &staged_repo).unwrap();
+        let expected_staged = git_stdout_text(
+            &staged_repo,
+            &["rev-parse", DEFAULT_GIT_BRANCH],
+            "staged raw head",
+        )
+        .unwrap();
+
+        let repo_path =
+            git_upload_pack_repo_for_request(&state, &headers, TEST_REPO_OWNER, TEST_REPO_NAME)
+                .await
+                .unwrap();
+        let actual_staged = git_stdout_text(
+            &repo_path,
+            &["rev-parse", DEFAULT_GIT_BRANCH],
+            "advertised owner staged head",
+        )
+        .unwrap();
+
+        assert_eq!(actual_staged, expected_staged);
+        let _ = fs::remove_dir_all(&source);
+        let _ = fs::remove_dir_all(&staged_source);
+        let _ = fs::remove_dir_all(raw_repo);
+        let _ = fs::remove_dir_all(staged_repo);
+    }
+
+    #[tokio::test]
+    async fn upload_pack_wrong_basic_credentials_do_not_reveal_repo_existence() {
+        let state = test_state_with_repo();
+        cache_test_jwks(&state);
+        let app = router(state);
+        let wrong_basic = format!("Basic {}", BASE64.encode("scope:scope_git_wrong"));
+
+        let existing = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("GET")
+                    .uri("/git/owner/repo/info/refs?service=git-upload-pack")
+                    .header(AUTHORIZATION, wrong_basic.as_str())
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        let missing = app
+            .oneshot(
+                Request::builder()
+                    .method("GET")
+                    .uri("/git/owner/missing/info/refs?service=git-upload-pack")
+                    .header(AUTHORIZATION, wrong_basic)
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(existing.status(), StatusCode::UNAUTHORIZED);
+        assert_eq!(missing.status(), StatusCode::UNAUTHORIZED);
+        assert!(existing.headers().contains_key(WWW_AUTHENTICATE));
+        assert!(missing.headers().contains_key(WWW_AUTHENTICATE));
+        let existing_body = to_bytes(existing.into_body(), 1024 * 1024).await.unwrap();
+        let missing_body = to_bytes(missing.into_body(), 1024 * 1024).await.unwrap();
+
+        assert_eq!(existing_body, missing_body);
+        assert!(String::from_utf8_lossy(&existing_body).contains("invalid Git credentials"));
+        assert!(!String::from_utf8_lossy(&existing_body).contains("owner/repo"));
+    }
+
+    #[tokio::test]
+    async fn private_upload_pack_without_credentials_challenges_for_auth() {
+        let state = test_state_with_repo();
+        {
+            let mut repo = test_repo(&test_owner_id());
+            repo.record.default_visibility = Visibility::Private;
+            repo.policy = Policy::new(Visibility::Private, &repo.record.owner_user_id);
+            repo.graph.commits.push(LogicalCommit {
+                id: "rv1".to_string(),
+                parent_ids: Vec::new(),
+                author_id: repo.record.owner_user_id.clone(),
+                author_visibility: AuthorVisibility::Visible,
+                message: "initial".to_string(),
+                mixed_policy: MixedCommitPolicy::SyntheticPublicCommit,
+                changes: vec![FileChange {
+                    path: ScopePath::parse("/secret.txt").unwrap(),
+                    old_content: None,
+                    new_content: Some("secret".to_string()),
+                }],
+            });
+
+            let mut catalog = lock_catalog(&state).unwrap();
+            catalog.repositories.insert(TEST_REPO_ID.to_string(), repo);
+        }
+        let app = router(state);
+
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method("GET")
+                    .uri("/git/owner/repo/info/refs?service=git-upload-pack")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+        assert!(response.headers().contains_key(WWW_AUTHENTICATE));
+    }
+
+    #[test]
+    fn receive_pack_staging_key_does_not_collapse_valid_repo_names() {
+        assert_ne!(safe_repo_key("owner", "a-b"), safe_repo_key("owner", "a_b"));
+        assert_ne!(safe_repo_key("owner", "a_b"), safe_repo_key("owner", "a.b"));
+    }
+
+    #[test]
+    fn receive_pack_staging_repo_path_is_unique_per_request() {
+        let state = test_state_with_repo();
+        let first =
+            receive_pack_staging_repo_path(&state, TEST_REPO_OWNER, TEST_REPO_NAME).unwrap();
+        let second =
+            receive_pack_staging_repo_path(&state, TEST_REPO_OWNER, TEST_REPO_NAME).unwrap();
+
+        assert_ne!(first, second);
+        assert_eq!(first.parent(), second.parent());
+    }
+
+    #[test]
+    fn first_push_staging_repo_head_points_to_default_branch() {
+        let state = test_state_with_repo();
+        let staging_repo =
+            ensure_first_push_receive_pack_staging_repo(&state, TEST_REPO_OWNER, TEST_REPO_NAME)
+                .unwrap();
+        let head = git_stdout_text(
+            &staging_repo,
+            &["symbolic-ref", "HEAD"],
+            "read staging head",
+        )
+        .unwrap();
+
+        assert_eq!(head.trim(), format!("refs/heads/{DEFAULT_GIT_BRANCH}"));
+        let _ = fs::remove_dir_all(staging_repo);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn persist_catalog_writes_private_state_permissions() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let state_dir = std::env::temp_dir().join(format!(
+            "scope-vcs-private-state-{}-{}",
+            std::process::id(),
+            unix_now()
+        ));
+        let state = AppState {
+            catalog: Arc::new(Mutex::new(app_catalog())),
+            state_path: Arc::new(state_dir.join("state.json")),
+            shoo: ShooVerifier::new(
+                SHOO_ISSUER,
+                Some("origin:http://localhost:3000".to_string()),
+                "http://127.0.0.1/.well-known/jwks.json",
+            ),
+        };
+
+        persist_catalog(&state, &app_catalog()).unwrap();
+
+        let dir_mode = fs::metadata(&state_dir).unwrap().permissions().mode() & 0o777;
+        let file_mode = fs::metadata(state.state_path.as_ref())
+            .unwrap()
+            .permissions()
+            .mode()
+            & 0o777;
+        assert_eq!(dir_mode, 0o700);
+        assert_eq!(file_mode, 0o600);
+        let _ = fs::remove_dir_all(&state_dir);
     }
 
     #[test]

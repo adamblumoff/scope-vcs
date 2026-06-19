@@ -77,6 +77,13 @@ impl FirstPushToken {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct GitPushToken {
+    pub token_hash: String,
+    pub owner_user_id: String,
+    pub created_at_unix: u64,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PendingImportFile {
     pub path: String,
     pub mode: String,
@@ -103,9 +110,45 @@ pub struct RepoRecord {
     pub default_visibility: Visibility,
 }
 
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct RepoSettings {
     pub include_ignored_files: bool,
+    pub review_pushes_before_applying: bool,
+}
+
+impl Default for RepoSettings {
+    fn default() -> Self {
+        Self {
+            include_ignored_files: false,
+            review_pushes_before_applying: true,
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub enum StagedFileChangeKind {
+    Added,
+    Modified,
+    Deleted,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct StagedFileChange {
+    pub path: ScopePath,
+    pub old_content: Option<String>,
+    pub new_content: Option<String>,
+    pub visibility: Visibility,
+    pub kind: StagedFileChangeKind,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct StagedRepoUpdate {
+    pub id: String,
+    pub branch: String,
+    pub base_live_commit_id: Option<String>,
+    pub author_id: String,
+    pub message: String,
+    pub changes: Vec<StagedFileChange>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -137,9 +180,11 @@ pub struct StoredRepository {
     pub record: RepoRecord,
     pub settings: RepoSettings,
     pub first_push_token: Option<FirstPushToken>,
+    pub git_push_token: Option<GitPushToken>,
     pub pending_import: Option<PendingImport>,
     pub policy: Policy,
     pub graph: SourceGraph,
+    pub staged_update: Option<StagedRepoUpdate>,
     pub memberships: Vec<RepoMembership>,
     pub invitations: Vec<RepoInvitation>,
 }
@@ -189,12 +234,14 @@ impl AppCatalog {
             },
             settings: RepoSettings::default(),
             first_push_token: None,
+            git_push_token: None,
             pending_import: None,
             policy: Policy::new(default_visibility, owner.id.clone()),
             graph: SourceGraph {
                 repo_id: id.clone(),
                 commits: Vec::new(),
             },
+            staged_update: None,
             memberships: vec![RepoMembership {
                 repo_id: id.clone(),
                 user_id: owner.id.clone(),
@@ -379,12 +426,14 @@ mod tests {
             },
             settings: RepoSettings::default(),
             first_push_token: None,
+            git_push_token: None,
             pending_import: None,
             policy: Policy::new(Visibility::Public, TEST_OWNER_ID),
             graph: SourceGraph {
                 repo_id: TEST_REPO_ID.to_string(),
                 commits: Vec::new(),
             },
+            staged_update: None,
             memberships: vec![RepoMembership {
                 repo_id: TEST_REPO_ID.to_string(),
                 user_id: TEST_OWNER_ID.to_string(),
