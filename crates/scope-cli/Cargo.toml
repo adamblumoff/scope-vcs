@@ -10,10 +10,4 @@ name = "sx"
 path = "src/main.rs"
 
 [dependencies]
-anyhow.workspace = true
 clap.workspace = true
-scope-git.workspace = true
-scope-policy.workspace = true
-scope-projection.workspace = true
-scope-store.workspace = true
-serde_json.workspace = true
