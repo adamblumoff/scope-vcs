@@ -3,10 +3,11 @@ import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { authCookieName, createScopeShooAuth } from '@/lib/auth'
 import { cn } from '@/lib/utils'
-import { createFileRoute } from '@tanstack/react-router'
+import { Link, createFileRoute, useNavigate } from '@tanstack/react-router'
 import { createServerFn } from '@tanstack/react-start'
 import {
   AlertCircle,
+  ArrowRight,
   GitBranch,
   Globe2,
   LoaderCircle,
@@ -45,6 +46,27 @@ type RepoSummary = {
   lifecycle_state: RepoLifecycleState
   default_visibility: Visibility
   role: RepoRole
+}
+
+type FirstPushToken = {
+  status: 'Active' | 'Expired' | 'Used'
+  created_at_unix: number
+  expires_at_unix: number
+  used_at_unix: number | null
+  secret: string | null
+}
+
+type RepoSetup = {
+  repo: RepoSummary
+  git_remote_path: string
+  remote_name: string
+  push_branch: string
+  token: FirstPushToken | null
+}
+
+type CreateRepoResponse = {
+  repo: RepoSummary
+  setup: RepoSetup
 }
 
 type HomeState = {
@@ -133,7 +155,7 @@ const createRepoForRequest = createServerFn({ method: 'POST' })
       throw new Error(payload?.error ?? `request failed: ${response.status}`)
     }
 
-    return payload as RepoSummary
+    return payload as CreateRepoResponse
   })
 
 export const Route = createFileRoute('/')({
@@ -143,6 +165,7 @@ export const Route = createFileRoute('/')({
 
 function ScopeHome() {
   const home = Route.useLoaderData()
+  const navigate = useNavigate()
   const [account, setAccount] = useState(home.account)
   const [createError, setCreateError] = useState<string | null>(null)
   const [repositories, setRepositories] = useState(home.repositories)
@@ -159,8 +182,16 @@ function ScopeHome() {
   async function createRepository(input: CreateRepoInput) {
     setCreateError(null)
     try {
-      const repo = await createRepoForRequest({ data: input })
+      const created = await createRepoForRequest({ data: input })
+      const repo = created.repo
       setRepositories((current) => [repo, ...current])
+      if (created.setup.token?.secret) {
+        storeSetupSecret(repo.id, created.setup.token.secret)
+      }
+      await navigate({
+        to: '/repos/$owner/$repo/setup',
+        params: { owner: repo.owner_handle, repo: repo.name },
+      })
     } catch (error) {
       setCreateError(
         error instanceof Error ? error.message : 'repository creation failed',
@@ -179,8 +210,7 @@ function ScopeHome() {
     }
 
     if (!response.ok) {
-      const payload = await response.json().catch(() => null)
-      setSessionError(payload?.error ?? `sign out failed: ${response.status}`)
+      setSessionError(`sign out failed: ${response.status}`)
       return
     }
 
@@ -366,6 +396,17 @@ function RepoList({
           </div>
           <div className="flex items-center gap-2 sm:justify-end">
             <VisibilityBadge visibility={repo.default_visibility} />
+            {repo.lifecycle_state === 'PendingFirstPush' && (
+              <Button asChild size="sm" variant="secondary">
+                <Link
+                  params={{ owner: repo.owner_handle, repo: repo.name }}
+                  to="/repos/$owner/$repo/setup"
+                >
+                  <ArrowRight className="size-3.5" />
+                  <span>Setup</span>
+                </Link>
+              </Button>
+            )}
           </div>
         </div>
       ))}
@@ -526,6 +567,18 @@ function lifecycleLabel(state: RepoLifecycleState) {
     case 'Published':
       return 'Published'
   }
+}
+
+function storeSetupSecret(repoId: string, secret: string) {
+  if (typeof window === 'undefined') {
+    return
+  }
+
+  window.sessionStorage.setItem(setupSecretKey(repoId), secret)
+}
+
+export function setupSecretKey(repoId: string) {
+  return `scope:first-push-token:${repoId}`
 }
 
 function applyTheme(theme: ThemeMode) {

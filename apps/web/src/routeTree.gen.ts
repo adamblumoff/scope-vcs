@@ -12,6 +12,7 @@ import { Route as rootRouteImport } from './routes/__root'
 import { Route as IndexRouteImport } from './routes/index'
 import { Route as AuthSessionRouteImport } from './routes/auth.session'
 import { Route as AuthCallbackRouteImport } from './routes/auth.callback'
+import { Route as ReposOwnerRepoSetupRouteImport } from './routes/repos.$owner.$repo.setup'
 
 const IndexRoute = IndexRouteImport.update({
   id: '/',
@@ -28,35 +29,53 @@ const AuthCallbackRoute = AuthCallbackRouteImport.update({
   path: '/auth/callback',
   getParentRoute: () => rootRouteImport,
 } as any)
+const ReposOwnerRepoSetupRoute = ReposOwnerRepoSetupRouteImport.update({
+  id: '/repos/$owner/$repo/setup',
+  path: '/repos/$owner/$repo/setup',
+  getParentRoute: () => rootRouteImport,
+} as any)
 
 export interface FileRoutesByFullPath {
   '/': typeof IndexRoute
   '/auth/callback': typeof AuthCallbackRoute
   '/auth/session': typeof AuthSessionRoute
+  '/repos/$owner/$repo/setup': typeof ReposOwnerRepoSetupRoute
 }
 export interface FileRoutesByTo {
   '/': typeof IndexRoute
   '/auth/callback': typeof AuthCallbackRoute
   '/auth/session': typeof AuthSessionRoute
+  '/repos/$owner/$repo/setup': typeof ReposOwnerRepoSetupRoute
 }
 export interface FileRoutesById {
   __root__: typeof rootRouteImport
   '/': typeof IndexRoute
   '/auth/callback': typeof AuthCallbackRoute
   '/auth/session': typeof AuthSessionRoute
+  '/repos/$owner/$repo/setup': typeof ReposOwnerRepoSetupRoute
 }
 export interface FileRouteTypes {
   fileRoutesByFullPath: FileRoutesByFullPath
-  fullPaths: '/' | '/auth/callback' | '/auth/session'
+  fullPaths:
+    | '/'
+    | '/auth/callback'
+    | '/auth/session'
+    | '/repos/$owner/$repo/setup'
   fileRoutesByTo: FileRoutesByTo
-  to: '/' | '/auth/callback' | '/auth/session'
-  id: '__root__' | '/' | '/auth/callback' | '/auth/session'
+  to: '/' | '/auth/callback' | '/auth/session' | '/repos/$owner/$repo/setup'
+  id:
+    | '__root__'
+    | '/'
+    | '/auth/callback'
+    | '/auth/session'
+    | '/repos/$owner/$repo/setup'
   fileRoutesById: FileRoutesById
 }
 export interface RootRouteChildren {
   IndexRoute: typeof IndexRoute
   AuthCallbackRoute: typeof AuthCallbackRoute
   AuthSessionRoute: typeof AuthSessionRoute
+  ReposOwnerRepoSetupRoute: typeof ReposOwnerRepoSetupRoute
 }
 
 declare module '@tanstack/react-router' {
@@ -82,6 +101,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof AuthCallbackRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/repos/$owner/$repo/setup': {
+      id: '/repos/$owner/$repo/setup'
+      path: '/repos/$owner/$repo/setup'
+      fullPath: '/repos/$owner/$repo/setup'
+      preLoaderRoute: typeof ReposOwnerRepoSetupRouteImport
+      parentRoute: typeof rootRouteImport
+    }
   }
 }
 
@@ -89,6 +115,7 @@ const rootRouteChildren: RootRouteChildren = {
   IndexRoute: IndexRoute,
   AuthCallbackRoute: AuthCallbackRoute,
   AuthSessionRoute: AuthSessionRoute,
+  ReposOwnerRepoSetupRoute: ReposOwnerRepoSetupRoute,
 }
 export const routeTree = rootRouteImport
   ._addFileChildren(rootRouteChildren)

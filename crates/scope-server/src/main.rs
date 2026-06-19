@@ -11,14 +11,15 @@ use jsonwebtoken::{
     jwk::{Jwk, JwkSet},
 };
 use scope_git::{VirtualGitProjection, build_virtual_git_projection};
-use scope_policy::{Principal, ScopePath, Visibility, VisibilityRule};
+use scope_policy::{Policy, Principal, ScopePath, Visibility, VisibilityRule};
 use scope_projection::{Projection, project_graph};
 use scope_store::{
-    AccountAccess, AppCatalog, CatalogError, RepoPublicationState, RepoRole, RepoSettings,
-    StoredRepository, UserAccount, app_catalog,
+    AccountAccess, AppCatalog, CatalogError, FirstPushToken, FirstPushTokenStatus,
+    RepoPublicationState, RepoRole, RepoSettings, StoredRepository, UserAccount, app_catalog,
 };
 use serde::{Deserialize, Serialize};
-use sha1::{Digest, Sha1};
+use sha1::Sha1;
+use sha2::{Digest, Sha256};
 use std::{
     collections::BTreeMap,
     fs,
@@ -38,6 +39,8 @@ const SCOPE_STATE_PATH_ENV: &str = "SCOPE_STATE_PATH";
 const SHOO_JWKS_URL: &str = "https://shoo.dev/.well-known/jwks.json";
 const SHOO_ISSUER: &str = "https://shoo.dev";
 const LOCAL_APP_ORIGIN: &str = "http://localhost:3000";
+const FIRST_PUSH_TOKEN_BYTES: usize = 32;
+const FIRST_PUSH_TOKEN_TTL_SECS: u64 = 60 * 60 * 24;
 
 #[derive(Clone)]
 struct AppState {
@@ -135,6 +138,31 @@ struct RepoSummaryResponse {
 }
 
 #[derive(Debug, Serialize)]
+struct CreateRepoResponse {
+    repo: RepoSummaryResponse,
+    setup: RepoSetupResponse,
+}
+
+#[derive(Debug, Serialize)]
+struct RepoSetupResponse {
+    repo: RepoSummaryResponse,
+    git_remote_path: String,
+    remote_name: &'static str,
+    push_branch: &'static str,
+    push_enabled: bool,
+    token: Option<FirstPushTokenResponse>,
+}
+
+#[derive(Debug, Serialize)]
+struct FirstPushTokenResponse {
+    status: FirstPushTokenStatus,
+    created_at_unix: u64,
+    expires_at_unix: u64,
+    used_at_unix: Option<u64>,
+    secret: Option<String>,
+}
+
+#[derive(Debug, Serialize)]
 struct RepoFileResponse {
     path: String,
     oid: String,
@@ -200,6 +228,11 @@ fn router(state: AppState) -> Router {
         .route("/healthz", get(healthz))
         .route("/v1/session", get(get_account_session))
         .route("/v1/repos", get(list_repos).post(create_repo))
+        .route("/v1/repos/{owner}/{repo}/setup", get(get_repo_setup))
+        .route(
+            "/v1/repos/{owner}/{repo}/setup-token",
+            get(get_repo_setup).post(regenerate_first_push_token),
+        )
         .route("/v1/repos/{owner}/{repo}/session", get(get_session))
         .route("/v1/repos/{owner}/{repo}/files", get(get_files))
         .route(
@@ -267,7 +300,7 @@ async fn create_repo(
     State(state): State<AppState>,
     headers: HeaderMap,
     Json(input): Json<CreateRepoRequest>,
-) -> Result<Json<RepoSummaryResponse>, ApiError> {
+) -> Result<Json<CreateRepoResponse>, ApiError> {
     let identity = require_identity(&state, &headers).await?;
     let user = ensure_user_for_identity(&state, &identity)?;
     let default_visibility = input.visibility.unwrap_or(Visibility::Private);
@@ -286,6 +319,15 @@ async fn create_repo(
             .record
             .id
             .clone();
+        let (secret, token) = generate_first_push_token(&user.id)?;
+        let now = unix_now()?;
+        {
+            let repo = staged
+                .repositories
+                .get_mut(&repo_id)
+                .expect("created repository must exist");
+            repo.first_push_token = Some(token);
+        }
         let repo = staged
             .repositories
             .get(&repo_id)
@@ -293,13 +335,77 @@ async fn create_repo(
         let summary = repo_summary(&staged, repo, &user.id).ok_or_else(|| {
             ApiError::internal_message("created repository is missing owner role")
         })?;
+        let setup = repo_setup_response(&staged, repo, &user.id, now, Some(secret))?;
 
         persist_catalog(&state, &staged)?;
         *catalog = staged;
-        summary
+        CreateRepoResponse {
+            repo: summary,
+            setup,
+        }
     };
 
     Ok(Json(created))
+}
+
+async fn get_repo_setup(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path((owner, repo_name)): Path<(String, String)>,
+) -> Result<Json<RepoSetupResponse>, ApiError> {
+    let identity = require_identity(&state, &headers).await?;
+    let user = ensure_user_for_identity(&state, &identity)?;
+    let repo = find_repo(&state, &owner, &repo_name)?;
+    ensure_owner_setup_access(&state, &repo, &user.id)?;
+    let catalog = lock_catalog(&state)?;
+    Ok(Json(repo_setup_response(
+        &catalog,
+        &repo,
+        &user.id,
+        unix_now()?,
+        None,
+    )?))
+}
+
+async fn regenerate_first_push_token(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path((owner, repo_name)): Path<(String, String)>,
+) -> Result<Json<RepoSetupResponse>, ApiError> {
+    let identity = require_identity(&state, &headers).await?;
+    let user = ensure_user_for_identity(&state, &identity)?;
+    let repo_id = scope_store::repo_id(&owner, &repo_name);
+    let now = unix_now()?;
+
+    let setup = {
+        let mut catalog = lock_catalog(&state)?;
+        let mut staged = catalog.clone();
+        let repo = staged
+            .repositories
+            .get(&repo_id)
+            .ok_or_else(|| ApiError::not_found(format!("repo {owner}/{repo_name} not found")))?;
+        ensure_owner_setup_access_in_catalog(&staged, repo, &user.id)?;
+
+        let (secret, token) = generate_first_push_token(&user.id)?;
+        {
+            let repo = staged
+                .repositories
+                .get_mut(&repo_id)
+                .expect("repo was already checked");
+            repo.first_push_token = Some(token);
+        }
+        let repo = staged
+            .repositories
+            .get(&repo_id)
+            .expect("repo was already checked");
+        let setup = repo_setup_response(&staged, repo, &user.id, now, Some(secret))?;
+
+        persist_catalog(&state, &staged)?;
+        *catalog = staged;
+        setup
+    };
+
+    Ok(Json(setup))
 }
 
 async fn get_projection(
@@ -1026,6 +1132,109 @@ fn repo_summary(
     })
 }
 
+fn repo_setup_response(
+    catalog: &AppCatalog,
+    repo: &StoredRepository,
+    user_id: &str,
+    now_unix: u64,
+    secret: Option<String>,
+) -> Result<RepoSetupResponse, ApiError> {
+    ensure_owner_setup_access_in_catalog(catalog, repo, user_id)?;
+    let repo = repo_summary(catalog, repo, user_id)
+        .ok_or_else(|| ApiError::internal_message("setup repository is not readable"))?;
+    let token = catalog
+        .repositories
+        .get(&repo.id)
+        .and_then(|stored| stored.first_push_token.as_ref())
+        .map(|stored_token| first_push_token_response(stored_token, now_unix, secret));
+
+    Ok(RepoSetupResponse {
+        git_remote_path: format!("/git/{}/{}", repo.owner_handle, repo.name),
+        remote_name: "scope",
+        push_branch: "<branch>",
+        push_enabled: false,
+        repo,
+        token,
+    })
+}
+
+fn first_push_token_response(
+    token: &FirstPushToken,
+    now_unix: u64,
+    secret: Option<String>,
+) -> FirstPushTokenResponse {
+    FirstPushTokenResponse {
+        status: token.status_at(now_unix),
+        created_at_unix: token.created_at_unix,
+        expires_at_unix: token.expires_at_unix,
+        used_at_unix: token.used_at_unix,
+        secret,
+    }
+}
+
+fn ensure_owner_setup_access(
+    state: &AppState,
+    repo: &StoredRepository,
+    user_id: &str,
+) -> Result<(), ApiError> {
+    let catalog = lock_catalog(state)?;
+    ensure_owner_setup_access_in_catalog(&catalog, repo, user_id)
+}
+
+fn ensure_owner_setup_access_in_catalog(
+    catalog: &AppCatalog,
+    repo: &StoredRepository,
+    user_id: &str,
+) -> Result<(), ApiError> {
+    let principal = Principal {
+        id: user_id.to_string(),
+        kind: scope_policy::PrincipalKind::User,
+    };
+    if catalog.role_for_principal(repo, &principal) != Some(RepoRole::Owner) {
+        return Err(ApiError::not_found(format!(
+            "repo {} not found",
+            repo.record.id
+        )));
+    }
+    if repo.record.publication_state != RepoPublicationState::PendingFirstPush {
+        return Err(ApiError::conflict(
+            "setup token is only available before the first push",
+        ));
+    }
+
+    Ok(())
+}
+
+fn generate_first_push_token(owner_user_id: &str) -> Result<(String, FirstPushToken), ApiError> {
+    let now = unix_now()?;
+    let mut bytes = [0_u8; FIRST_PUSH_TOKEN_BYTES];
+    getrandom::fill(&mut bytes).map_err(|error| {
+        ApiError::internal_message(format!("failed to generate setup token: {error}"))
+    })?;
+    let secret = format!("scope_fp_{}", hex::encode(bytes));
+    let token = FirstPushToken {
+        token_hash: first_push_token_hash(&secret),
+        owner_user_id: owner_user_id.to_string(),
+        created_at_unix: now,
+        expires_at_unix: now + FIRST_PUSH_TOKEN_TTL_SECS,
+        used_at_unix: None,
+    };
+
+    Ok((secret, token))
+}
+
+fn first_push_token_hash(secret: &str) -> String {
+    let digest = Sha256::digest(secret.as_bytes());
+    format!("sha256:{digest:x}")
+}
+
+fn unix_now() -> Result<u64, ApiError> {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|duration| duration.as_secs())
+        .map_err(ApiError::internal)
+}
+
 fn catalog_error(error: CatalogError) -> ApiError {
     match error {
         CatalogError::InvalidRepositoryName(message) => ApiError::bad_request(message),
@@ -1241,7 +1450,7 @@ mod tests {
         http::{Request, header::CONTENT_TYPE},
     };
     use jsonwebtoken::{EncodingKey, Header, encode};
-    use scope_policy::{Policy, Principal, PrincipalKind};
+    use scope_policy::{Principal, PrincipalKind};
     use scope_projection::SourceGraph;
     use scope_store::{
         AccountAccess, RepoMembership, RepoPublicationState, RepoRecord, StoredRepository,
@@ -1428,6 +1637,7 @@ kGxvBjzgF9RjXJoldYnFk7mJ5gLANHjaaad3qTQJ8DldKJoSqkEkm5gg
                 default_visibility: Visibility::Public,
             },
             settings: RepoSettings::default(),
+            first_push_token: None,
             policy: Policy::new(Visibility::Public, owner_id),
             graph: SourceGraph {
                 repo_id: TEST_REPO_ID.to_string(),
@@ -1470,11 +1680,18 @@ kGxvBjzgF9RjXJoldYnFk7mJ5gLANHjaaad3qTQJ8DldKJoSqkEkm5gg
 
         assert_eq!(response.status(), StatusCode::OK);
         let body = response_json(response).await;
-        assert_eq!(body["id"], "owner/scope_app");
-        assert_eq!(body["owner_handle"], "owner");
-        assert_eq!(body["lifecycle_state"], "PendingFirstPush");
-        assert_eq!(body["default_visibility"], "Private");
-        assert_eq!(body["role"], "Owner");
+        assert_eq!(body["repo"]["id"], "owner/scope_app");
+        assert_eq!(body["repo"]["owner_handle"], "owner");
+        assert_eq!(body["repo"]["lifecycle_state"], "PendingFirstPush");
+        assert_eq!(body["repo"]["default_visibility"], "Private");
+        assert_eq!(body["repo"]["role"], "Owner");
+        assert_eq!(body["setup"]["git_remote_path"], "/git/owner/scope_app");
+        assert_eq!(body["setup"]["remote_name"], "scope");
+        assert_eq!(body["setup"]["push_branch"], "<branch>");
+        assert_eq!(body["setup"]["push_enabled"], false);
+        let secret = body["setup"]["token"]["secret"].as_str().unwrap();
+        assert!(secret.starts_with("scope_fp_"));
+        assert_eq!(body["setup"]["token"]["status"], "Active");
 
         let response = app
             .oneshot(
@@ -1496,6 +1713,135 @@ kGxvBjzgF9RjXJoldYnFk7mJ5gLANHjaaad3qTQJ8DldKJoSqkEkm5gg
         let catalog = lock_catalog(&state).unwrap();
         assert_eq!(catalog.users.len(), 1);
         assert_eq!(catalog.repositories.len(), 1);
+        let repo = catalog.repositories.get("owner/scope_app").unwrap();
+        let token = repo.first_push_token.as_ref().unwrap();
+        assert_ne!(token.token_hash, secret);
+        assert!(token.token_hash.starts_with("sha256:"));
+        assert_eq!(token.owner_user_id, test_owner_id());
+    }
+
+    #[tokio::test]
+    async fn setup_route_is_owner_only_and_does_not_return_secret() {
+        let state = test_state_with_repo();
+        cache_test_jwks(&state);
+        {
+            let mut catalog = lock_catalog(&state).unwrap();
+            let repo = catalog.repositories.get_mut(TEST_REPO_ID).unwrap();
+            let (_, token) = generate_first_push_token(&test_owner_id()).unwrap();
+            repo.record.publication_state = RepoPublicationState::PendingFirstPush;
+            repo.first_push_token = Some(token);
+        }
+        let app = router(state);
+
+        let public_response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("GET")
+                    .uri("/v1/repos/owner/repo/setup")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(public_response.status(), StatusCode::UNAUTHORIZED);
+
+        let non_owner_response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("GET")
+                    .uri("/v1/repos/owner/repo/setup")
+                    .header(
+                        AUTHORIZATION,
+                        bearer_header_for("pairwise-stranger", "stranger@example.com"),
+                    )
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(non_owner_response.status(), StatusCode::NOT_FOUND);
+
+        let non_owner_regenerate_response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/v1/repos/owner/repo/setup-token")
+                    .header(
+                        AUTHORIZATION,
+                        bearer_header_for("pairwise-stranger", "stranger@example.com"),
+                    )
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(
+            non_owner_regenerate_response.status(),
+            StatusCode::NOT_FOUND
+        );
+
+        let owner_response = app
+            .oneshot(
+                Request::builder()
+                    .method("GET")
+                    .uri("/v1/repos/owner/repo/setup")
+                    .header(AUTHORIZATION, bearer_header())
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(owner_response.status(), StatusCode::OK);
+        let body = response_json(owner_response).await;
+        assert_eq!(body["repo"]["id"], TEST_REPO_ID);
+        assert_eq!(body["token"]["status"], "Active");
+        assert!(body["token"]["secret"].is_null());
+    }
+
+    #[tokio::test]
+    async fn setup_token_regeneration_rotates_hash_and_returns_new_secret() {
+        let state = test_state_with_repo();
+        cache_test_jwks(&state);
+        let old_hash = {
+            let mut catalog = lock_catalog(&state).unwrap();
+            let repo = catalog.repositories.get_mut(TEST_REPO_ID).unwrap();
+            let (_, token) = generate_first_push_token(&test_owner_id()).unwrap();
+            let old_hash = token.token_hash.clone();
+            repo.record.publication_state = RepoPublicationState::PendingFirstPush;
+            repo.first_push_token = Some(token);
+            old_hash
+        };
+
+        let response = router(state.clone())
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/v1/repos/owner/repo/setup-token")
+                    .header(AUTHORIZATION, bearer_header())
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = response_json(response).await;
+        let secret = body["token"]["secret"].as_str().unwrap();
+        assert!(secret.starts_with("scope_fp_"));
+        let catalog = lock_catalog(&state).unwrap();
+        let new_hash = &catalog
+            .repositories
+            .get(TEST_REPO_ID)
+            .unwrap()
+            .first_push_token
+            .as_ref()
+            .unwrap()
+            .token_hash;
+        assert_ne!(new_hash, &old_hash);
+        assert_ne!(new_hash, secret);
     }
 
     #[tokio::test]
