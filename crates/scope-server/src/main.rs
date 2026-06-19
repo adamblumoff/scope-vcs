@@ -5,7 +5,7 @@ use axum::{
     extract::{Path, Query, Request, State},
     http::{
         HeaderMap, HeaderValue, StatusCode,
-        header::{AUTHORIZATION, CONTENT_TYPE, WWW_AUTHENTICATE},
+        header::{AUTHORIZATION, CACHE_CONTROL, CONTENT_TYPE, WWW_AUTHENTICATE},
     },
     response::{IntoResponse, Response},
     routing::{get, patch, post},
@@ -35,9 +35,13 @@ use std::{
     net::SocketAddr,
     path::{Path as FsPath, PathBuf},
     process::{Command, Stdio},
-    sync::{Arc, Mutex},
+    sync::{
+        Arc, Mutex,
+        atomic::{AtomicU64, Ordering},
+    },
     time::Duration,
 };
+use tokio::{io::AsyncWriteExt, process::Command as TokioCommand};
 use tower_http::{cors::CorsLayer, trace::TraceLayer};
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 
@@ -50,10 +54,16 @@ const LOCAL_APP_ORIGIN: &str = "http://localhost:3000";
 const FIRST_PUSH_TOKEN_BYTES: usize = 32;
 const FIRST_PUSH_TOKEN_TTL_SECS: u64 = 60 * 60 * 24;
 const EMPTY_GIT_OID: &str = "0000000000000000000000000000000000000000";
+const GIT_UPLOAD_PACK: &str = "git-upload-pack";
+const GIT_RECEIVE_PACK: &str = "git-receive-pack";
+const DEFAULT_GIT_BRANCH: &str = "main";
+const UNPUBLISHED_GIT_ERROR: &str = "repo is not published yet";
 const MAX_RECEIVE_PACK_BYTES: usize = 512 * 1024 * 1024;
+const MAX_UPLOAD_PACK_BYTES: usize = 64 * 1024 * 1024;
 const MAX_PENDING_IMPORT_FILES: usize = 10_000;
 const MAX_PENDING_IMPORT_BLOB_BYTES: usize = 25 * 1024 * 1024;
 const MAX_PENDING_IMPORT_TOTAL_BYTES: usize = 100 * 1024 * 1024;
+static GIT_CACHE_ATTEMPT: AtomicU64 = AtomicU64::new(1);
 
 #[derive(Clone)]
 struct AppState {
@@ -276,6 +286,10 @@ fn router(state: AppState) -> Router {
         )
         .route("/git/{org}/{repo}/info/refs", get(git_info_refs))
         .route("/git/{org}/{repo}/git-receive-pack", post(git_receive_pack))
+        .route(
+            "/git/{org}/{repo}/git-upload-pack",
+            post(git_upload_pack_rpc),
+        )
         .with_state(state)
         .layer(CorsLayer::permissive())
         .layer(TraceLayer::new_for_http())
@@ -735,19 +749,24 @@ async fn git_info_refs(
     Query(query): Query<GitInfoRefsQuery>,
 ) -> Response {
     match query.service.as_deref() {
-        Some("git-receive-pack") => {
+        Some(GIT_RECEIVE_PACK) => {
             match handle_git_receive_pack(&state, &headers, &org, &repo, "GET", Vec::new(), None) {
                 Ok(response) => response,
                 Err(error) => git_error_response(error),
             }
         }
-        Some("git-upload-pack") => (
-            StatusCode::NOT_IMPLEMENTED,
-            Json(serde_json::json!({
-                "error": "git clone is blocked until publish creates a public Git projection"
-            })),
-        )
-            .into_response(),
+        Some(GIT_UPLOAD_PACK) => {
+            match git_projection_for_request(&state, &headers, &org, &repo).await {
+                Ok(projection) => match state
+                    .git_cache_root()
+                    .and_then(|cache_root| projection_bare_repo(&cache_root, &projection))
+                {
+                    Ok(repo_path) => git_upload_pack_advertisement(&repo_path),
+                    Err(error) => git_advertisement_error(error.message),
+                },
+                Err(error) => git_advertisement_error(error.message),
+            }
+        }
         Some(service) => (
             StatusCode::BAD_REQUEST,
             Json(serde_json::json!({
@@ -807,6 +826,36 @@ async fn git_receive_pack(
     ) {
         Ok(response) => response,
         Err(error) => git_error_response(error),
+    }
+}
+
+async fn git_upload_pack_rpc(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path((org, repo_name)): Path<(String, String)>,
+    request: Request,
+) -> Response {
+    let projection = match git_projection_for_request(&state, &headers, &org, &repo_name).await {
+        Ok(projection) => projection,
+        Err(error) => return git_upload_pack_error(error.message),
+    };
+    let repo_path = match state
+        .git_cache_root()
+        .and_then(|cache_root| projection_bare_repo(&cache_root, &projection))
+    {
+        Ok(repo_path) => repo_path,
+        Err(error) => return git_upload_pack_error(error.message),
+    };
+    let body = match to_bytes(request.into_body(), MAX_UPLOAD_PACK_BYTES).await {
+        Ok(body) => body,
+        Err(error) => {
+            return git_upload_pack_error(format!("git upload-pack body is too large: {error}"));
+        }
+    };
+
+    match git_upload_pack_response(&repo_path, &body).await {
+        Ok(response) => response,
+        Err(error) => git_upload_pack_error(error.message),
     }
 }
 
@@ -1388,6 +1437,427 @@ fn git_error_response(error: ApiError) -> Response {
     error.into_response()
 }
 
+async fn git_projection_for_request(
+    state: &AppState,
+    headers: &HeaderMap,
+    owner: &str,
+    repo_name: &str,
+) -> Result<Projection, ApiError> {
+    let repo = find_repo(state, owner, repo_name)?;
+    let identity = http_identity(state, headers).await?;
+    let principal = principal_for_repo(state, &repo, identity.as_ref())?;
+    if repo.record.publication_state != RepoPublicationState::Published {
+        return match role_for_principal(state, &repo, &principal)? {
+            Some(RepoRole::Owner) => Err(ApiError::forbidden(UNPUBLISHED_GIT_ERROR)),
+            _ => Err(ApiError::not_found(format!(
+                "repo {owner}/{repo_name} not found"
+            ))),
+        };
+    }
+
+    ensure_repo_read(state, &repo, &principal)?;
+    Ok(project_graph(&repo.policy, &repo.graph, &principal))
+}
+
+fn projection_bare_repo(cache_root: &FsPath, projection: &Projection) -> Result<PathBuf, ApiError> {
+    let cache_key = projection_cache_key(projection);
+    let repo_path = cache_root.join(format!("{cache_key}.git"));
+    if repo_path
+        .join("refs")
+        .join("heads")
+        .join(DEFAULT_GIT_BRANCH)
+        .is_file()
+    {
+        return Ok(repo_path);
+    }
+
+    let attempt = GIT_CACHE_ATTEMPT.fetch_add(1, Ordering::Relaxed);
+    let temp_path = cache_root.join(format!(
+        "{cache_key}.{}.{}.tmp",
+        std::process::id(),
+        attempt
+    ));
+    if temp_path.exists() {
+        fs::remove_dir_all(&temp_path).map_err(ApiError::internal)?;
+    }
+
+    git_command_output(
+        Command::new("git")
+            .arg("init")
+            .arg("--bare")
+            .arg(&temp_path),
+        None,
+    )?;
+    git_command_output(
+        Command::new("git")
+            .arg("--git-dir")
+            .arg(&temp_path)
+            .arg("symbolic-ref")
+            .arg("HEAD")
+            .arg(format!("refs/heads/{DEFAULT_GIT_BRANCH}")),
+        None,
+    )?;
+
+    let index_path = cache_root.join(format!(
+        "{cache_key}.{}.{}.index",
+        std::process::id(),
+        attempt
+    ));
+    if index_path.exists() {
+        fs::remove_file(&index_path).map_err(ApiError::internal)?;
+    }
+
+    let mut visible_tree = BTreeMap::new();
+    let mut parent_commit: Option<String> = None;
+    if projection.commits.is_empty() {
+        let tree = write_projection_tree(&temp_path, &index_path, &visible_tree)?;
+        parent_commit = Some(git_commit_tree(
+            &temp_path,
+            &tree,
+            None,
+            "Empty Scope projection\n",
+        )?);
+    }
+
+    for projected in &projection.commits {
+        for change in &projected.changes {
+            let path = change.path.as_str().to_string();
+            match &change.new_content {
+                Some(content) => {
+                    visible_tree.insert(path, content.clone());
+                }
+                None => {
+                    visible_tree.remove(&path);
+                }
+            }
+        }
+        let tree = write_projection_tree(&temp_path, &index_path, &visible_tree)?;
+        let message = format!("{}\n", projected.message);
+        parent_commit = Some(git_commit_tree(
+            &temp_path,
+            &tree,
+            parent_commit.as_deref(),
+            &message,
+        )?);
+    }
+
+    let commit = parent_commit.ok_or_else(|| ApiError::internal_message("missing Git commit"))?;
+    git_command_output(
+        Command::new("git")
+            .arg("--git-dir")
+            .arg(&temp_path)
+            .arg("update-ref")
+            .arg(format!("refs/heads/{DEFAULT_GIT_BRANCH}"))
+            .arg(commit.trim()),
+        None,
+    )?;
+
+    let _ = fs::remove_file(&index_path);
+    match fs::rename(&temp_path, &repo_path) {
+        Ok(()) => Ok(repo_path),
+        Err(error) if repo_path.exists() => {
+            let _ = fs::remove_dir_all(&temp_path);
+            tracing::debug!(%error, path = %repo_path.display(), "using concurrently-created Git projection cache");
+            Ok(repo_path)
+        }
+        Err(error) => Err(ApiError::internal(error)),
+    }
+}
+
+fn ensure_private_dir(path: &FsPath) -> Result<(), ApiError> {
+    fs::create_dir_all(path).map_err(ApiError::internal)?;
+    let metadata = fs::symlink_metadata(path).map_err(ApiError::internal)?;
+    if !metadata.file_type().is_dir() {
+        return Err(ApiError::internal_message(format!(
+            "{} is not a directory",
+            path.display()
+        )));
+    }
+
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+
+        let mut permissions = metadata.permissions();
+        permissions.set_mode(0o700);
+        fs::set_permissions(path, permissions).map_err(ApiError::internal)?;
+        let mode = fs::symlink_metadata(path)
+            .map_err(ApiError::internal)?
+            .permissions()
+            .mode()
+            & 0o777;
+        if mode != 0o700 {
+            return Err(ApiError::internal_message(format!(
+                "{} must be private to serve Git projections",
+                path.display()
+            )));
+        }
+    }
+
+    Ok(())
+}
+
+fn projection_cache_key(projection: &Projection) -> String {
+    let mut hasher = Sha1::new();
+    hash_field(&mut hasher, b"repo", projection.repo_id.as_bytes());
+    hash_field(
+        &mut hasher,
+        b"principal",
+        projection.principal_id.as_bytes(),
+    );
+    for commit in &projection.commits {
+        hash_field(&mut hasher, b"commit", commit.projected_id.as_bytes());
+        hash_field(&mut hasher, b"logical", commit.logical_commit_id.as_bytes());
+        if let Some(parent) = &commit.parent_projected_id {
+            hash_field(&mut hasher, b"parent", parent.as_bytes());
+        }
+        hash_field(&mut hasher, b"message", commit.message.as_bytes());
+        for change in &commit.changes {
+            hash_field(&mut hasher, b"path", change.path.as_str().as_bytes());
+            match &change.new_content {
+                Some(content) => {
+                    hash_field(&mut hasher, b"write", content.as_bytes());
+                }
+                None => hash_field(&mut hasher, b"delete", b""),
+            }
+        }
+    }
+    hex::encode(hasher.finalize())
+}
+
+fn hash_field(hasher: &mut Sha1, label: &[u8], value: &[u8]) {
+    hasher.update((label.len() as u64).to_be_bytes());
+    hasher.update(label);
+    hasher.update((value.len() as u64).to_be_bytes());
+    hasher.update(value);
+}
+
+fn write_projection_tree(
+    repo_path: &FsPath,
+    index_path: &FsPath,
+    visible_tree: &BTreeMap<String, String>,
+) -> Result<String, ApiError> {
+    if index_path.exists() {
+        fs::remove_file(index_path).map_err(ApiError::internal)?;
+    }
+    git_index_command(
+        Command::new("git")
+            .arg("--git-dir")
+            .arg(repo_path)
+            .arg("read-tree")
+            .arg("--empty"),
+        index_path,
+        None,
+    )?;
+
+    let mut index_info = Vec::new();
+    for (path, content) in visible_tree {
+        let oid = git_command_output(
+            Command::new("git")
+                .arg("--git-dir")
+                .arg(repo_path)
+                .arg("hash-object")
+                .arg("-w")
+                .arg("--stdin"),
+            Some(content.as_bytes()),
+        )?;
+        let oid = String::from_utf8(oid).map_err(ApiError::bad_request)?;
+        let relative_path = git_relative_path(path)?;
+        index_info
+            .extend_from_slice(format!("100644 blob {}\t{relative_path}\n", oid.trim()).as_bytes());
+    }
+
+    if !index_info.is_empty() {
+        git_index_command(
+            Command::new("git")
+                .arg("--git-dir")
+                .arg(repo_path)
+                .arg("update-index")
+                .arg("--index-info"),
+            index_path,
+            Some(&index_info),
+        )?;
+    }
+    let tree = git_index_command(
+        Command::new("git")
+            .arg("--git-dir")
+            .arg(repo_path)
+            .arg("write-tree"),
+        index_path,
+        None,
+    )?;
+    let tree = String::from_utf8(tree).map_err(ApiError::bad_request)?;
+    Ok(tree.trim().to_string())
+}
+
+fn git_relative_path(path: &str) -> Result<String, ApiError> {
+    let Some(relative) = path.strip_prefix('/') else {
+        return Err(ApiError::internal_message(format!(
+            "projected Git path {path} is not absolute"
+        )));
+    };
+    if relative.is_empty()
+        || relative == "."
+        || relative == ".."
+        || relative.starts_with("../")
+        || relative.contains("/../")
+        || relative.contains('\\')
+        || relative.as_bytes().contains(&0)
+    {
+        return Err(ApiError::internal_message(format!(
+            "projected Git path {path} cannot be served"
+        )));
+    }
+    Ok(relative.to_string())
+}
+
+fn git_commit_tree(
+    repo_path: &FsPath,
+    tree: &str,
+    parent: Option<&str>,
+    message: &str,
+) -> Result<String, ApiError> {
+    let mut command = Command::new("git");
+    command
+        .arg("--git-dir")
+        .arg(repo_path)
+        .arg("commit-tree")
+        .arg(tree)
+        .env("GIT_AUTHOR_NAME", "Scope")
+        .env("GIT_AUTHOR_EMAIL", "scope@example.invalid")
+        .env("GIT_AUTHOR_DATE", "2000-01-01T00:00:00Z")
+        .env("GIT_COMMITTER_NAME", "Scope")
+        .env("GIT_COMMITTER_EMAIL", "scope@example.invalid")
+        .env("GIT_COMMITTER_DATE", "2000-01-01T00:00:00Z");
+    if let Some(parent) = parent {
+        command.arg("-p").arg(parent.trim());
+    }
+    let output = git_command_output(&mut command, Some(message.as_bytes()))?;
+    String::from_utf8(output).map_err(ApiError::bad_request)
+}
+
+fn git_index_command(
+    command: &mut Command,
+    index_path: &FsPath,
+    stdin: Option<&[u8]>,
+) -> Result<Vec<u8>, ApiError> {
+    command.env("GIT_INDEX_FILE", index_path);
+    git_command_output(command, stdin)
+}
+
+fn git_command_output(command: &mut Command, stdin: Option<&[u8]>) -> Result<Vec<u8>, ApiError> {
+    if stdin.is_some() {
+        command.stdin(Stdio::piped());
+    }
+    let mut child = command
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .map_err(|error| ApiError::service_unavailable(format!("failed to run Git: {error}")))?;
+    if let Some(input) = stdin {
+        let mut child_stdin = child
+            .stdin
+            .take()
+            .ok_or_else(|| ApiError::internal_message("failed to open Git stdin"))?;
+        child_stdin.write_all(input).map_err(ApiError::internal)?;
+    }
+    let output = child.wait_with_output().map_err(ApiError::internal)?;
+    if output.status.success() {
+        return Ok(output.stdout);
+    }
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    Err(ApiError::service_unavailable(stderr.trim()))
+}
+
+async fn git_upload_pack_response(
+    repo_path: &FsPath,
+    request: &[u8],
+) -> Result<Response, ApiError> {
+    let mut child = TokioCommand::new("git")
+        .arg("upload-pack")
+        .arg("--stateless-rpc")
+        .arg(repo_path)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .map_err(|error| ApiError::service_unavailable(format!("failed to run Git: {error}")))?;
+
+    let mut stdin = child
+        .stdin
+        .take()
+        .ok_or_else(|| ApiError::internal_message("failed to open Git stdin"))?;
+    stdin.write_all(request).await.map_err(ApiError::internal)?;
+    drop(stdin);
+
+    let output = child.wait_with_output().await.map_err(ApiError::internal)?;
+    if !output.status.success() {
+        return Err(ApiError::service_unavailable(format!(
+            "git upload-pack failed: {}",
+            String::from_utf8_lossy(&output.stderr).trim()
+        )));
+    }
+
+    Ok(git_response(
+        "application/x-git-upload-pack-result",
+        output.stdout,
+    ))
+}
+
+fn git_upload_pack_advertisement(repo_path: &FsPath) -> Response {
+    match git_command_output(
+        Command::new("git")
+            .arg("upload-pack")
+            .arg("--stateless-rpc")
+            .arg("--advertise-refs")
+            .arg(repo_path),
+        None,
+    ) {
+        Ok(advertisement) => {
+            let mut body = pkt_line(format!("# service={GIT_UPLOAD_PACK}\n").as_bytes());
+            body.extend_from_slice(b"0000");
+            body.extend(advertisement);
+            git_response("application/x-git-upload-pack-advertisement", body)
+        }
+        Err(error) => git_advertisement_error(error.message),
+    }
+}
+
+fn git_response(content_type: &'static str, body: Vec<u8>) -> Response {
+    (
+        StatusCode::OK,
+        [(CONTENT_TYPE, content_type), (CACHE_CONTROL, "no-cache")],
+        Body::from(body),
+    )
+        .into_response()
+}
+
+fn git_advertisement_error(message: impl AsRef<str>) -> Response {
+    git_response(
+        "application/x-git-upload-pack-advertisement",
+        git_error_body(message.as_ref()),
+    )
+}
+
+fn git_upload_pack_error(message: impl AsRef<str>) -> Response {
+    git_response(
+        "application/x-git-upload-pack-result",
+        git_error_body(message.as_ref()),
+    )
+}
+
+fn git_error_body(message: &str) -> Vec<u8> {
+    pkt_line(format!("ERR {message}\n").as_bytes())
+}
+
+fn pkt_line(payload: &[u8]) -> Vec<u8> {
+    let len = payload.len() + 4;
+    let mut line = format!("{len:04x}").into_bytes();
+    line.extend_from_slice(payload);
+    line
+}
+
 fn find_repo(state: &AppState, owner: &str, name: &str) -> Result<StoredRepository, ApiError> {
     lock_catalog(state)?
         .repository(owner, name)
@@ -1493,6 +1963,16 @@ impl AppState {
                 "http://127.0.0.1/.well-known/jwks.json",
             ),
         }
+    }
+
+    fn git_cache_root(&self) -> Result<PathBuf, ApiError> {
+        let state_dir = self
+            .state_path
+            .parent()
+            .ok_or_else(|| ApiError::internal_message("state path must have a parent directory"))?;
+        let cache_root = state_dir.join("git-cache");
+        ensure_private_dir(&cache_root)?;
+        Ok(cache_root)
     }
 }
 
@@ -3002,6 +3482,61 @@ kGxvBjzgF9RjXJoldYnFk7mJ5gLANHjaaad3qTQJ8DldKJoSqkEkm5gg
         let error = promote_pending_import(&mut repo).unwrap_err();
 
         assert_eq!(error.status, StatusCode::BAD_REQUEST);
+    }
+
+    #[test]
+    fn git_projection_cache_omits_private_files_for_public_clone() {
+        let owner_id = test_owner_id();
+        let mut policy = Policy::new(Visibility::Public, owner_id.clone());
+        policy
+            .add_rule(VisibilityRule::private(
+                ScopePath::parse("/secret.txt").unwrap(),
+                [owner_id.clone()],
+            ))
+            .unwrap();
+        let graph = SourceGraph {
+            repo_id: TEST_REPO_ID.to_string(),
+            commits: vec![LogicalCommit {
+                id: "rv1".to_string(),
+                parent_ids: Vec::new(),
+                author_id: owner_id,
+                author_visibility: AuthorVisibility::Visible,
+                message: "initial".to_string(),
+                mixed_policy: MixedCommitPolicy::SyntheticPublicCommit,
+                changes: vec![
+                    FileChange {
+                        path: ScopePath::parse("/README.md").unwrap(),
+                        old_content: None,
+                        new_content: Some("hello".to_string()),
+                    },
+                    FileChange {
+                        path: ScopePath::parse("/secret.txt").unwrap(),
+                        old_content: None,
+                        new_content: Some("nope".to_string()),
+                    },
+                ],
+            }],
+        };
+        let projection = project_graph(&policy, &graph, &Principal::public());
+        let cache_root = std::env::temp_dir().join(format!(
+            "scope-vcs-git-cache-test-{}-{}",
+            std::process::id(),
+            unix_now()
+        ));
+        let _ = fs::remove_dir_all(&cache_root);
+        ensure_private_dir(&cache_root).unwrap();
+
+        let repo_path = projection_bare_repo(&cache_root, &projection).unwrap();
+        let tree = git_stdout_text(
+            &repo_path,
+            &["ls-tree", "-r", "--name-only", DEFAULT_GIT_BRANCH],
+            "list cached projection",
+        )
+        .unwrap();
+
+        assert!(tree.contains("README.md"));
+        assert!(!tree.contains("secret.txt"));
+        let _ = fs::remove_dir_all(&cache_root);
     }
 
     #[test]
