@@ -48,6 +48,34 @@ pub enum RepoPublicationState {
     Published,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub enum FirstPushTokenStatus {
+    Active,
+    Expired,
+    Used,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct FirstPushToken {
+    pub token_hash: String,
+    pub owner_user_id: String,
+    pub created_at_unix: u64,
+    pub expires_at_unix: u64,
+    pub used_at_unix: Option<u64>,
+}
+
+impl FirstPushToken {
+    pub fn status_at(&self, now_unix: u64) -> FirstPushTokenStatus {
+        if self.used_at_unix.is_some() {
+            FirstPushTokenStatus::Used
+        } else if now_unix >= self.expires_at_unix {
+            FirstPushTokenStatus::Expired
+        } else {
+            FirstPushTokenStatus::Active
+        }
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct RepoRecord {
     pub id: String,
@@ -91,6 +119,7 @@ pub struct RepoInvitation {
 pub struct StoredRepository {
     pub record: RepoRecord,
     pub settings: RepoSettings,
+    pub first_push_token: Option<FirstPushToken>,
     pub policy: Policy,
     pub graph: SourceGraph,
     pub memberships: Vec<RepoMembership>,
@@ -141,6 +170,7 @@ impl AppCatalog {
                 default_visibility,
             },
             settings: RepoSettings::default(),
+            first_push_token: None,
             policy: Policy::new(default_visibility, owner.id.clone()),
             graph: SourceGraph {
                 repo_id: id.clone(),
@@ -329,6 +359,7 @@ mod tests {
                 default_visibility: Visibility::Public,
             },
             settings: RepoSettings::default(),
+            first_push_token: None,
             policy: Policy::new(Visibility::Public, TEST_OWNER_ID),
             graph: SourceGraph {
                 repo_id: TEST_REPO_ID.to_string(),
@@ -405,6 +436,23 @@ mod tests {
         assert!(catalog.can_read_path(&repo, &principal, &ScopePath::root()));
         assert!(catalog.can_write_path(&repo, &principal, &ScopePath::root()));
         assert!(!catalog.can_read_path(&repo, &Principal::public(), &ScopePath::root()));
+    }
+
+    #[test]
+    fn first_push_token_reports_active_expired_and_used_shape() {
+        let mut token = FirstPushToken {
+            token_hash: "sha256:test".to_string(),
+            owner_user_id: TEST_OWNER_ID.to_string(),
+            created_at_unix: 100,
+            expires_at_unix: 200,
+            used_at_unix: None,
+        };
+
+        assert_eq!(token.status_at(150), FirstPushTokenStatus::Active);
+        assert_eq!(token.status_at(200), FirstPushTokenStatus::Expired);
+
+        token.used_at_unix = Some(175);
+        assert_eq!(token.status_at(180), FirstPushTokenStatus::Used);
     }
 
     #[test]
