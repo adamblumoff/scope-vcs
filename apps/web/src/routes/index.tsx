@@ -15,25 +15,21 @@ import {
 } from '@/components/ui/table'
 import { authCookieName, createScopeShooAuth } from '@/lib/auth'
 import { cn } from '@/lib/utils'
-import { createFileRoute } from '@tanstack/react-router'
+import { Link, createFileRoute } from '@tanstack/react-router'
 import type { ErrorComponentProps } from '@tanstack/react-router'
 import { createServerFn } from '@tanstack/react-start'
 import {
   AlertCircle,
-  CheckCircle2,
   GitBranch,
-  Globe2,
   LoaderCircle,
   LogIn,
   LogOut,
   Moon,
-  RefreshCw,
+  Settings,
   Sun,
-  Upload,
-  UserPlus,
 } from 'lucide-react'
 import type { ReactNode } from 'react'
-import { useMemo, useRef, useState } from 'react'
+import { useMemo, useState } from 'react'
 
 type PrincipalId = string
 type RepoRole = 'Reader' | 'Writer' | 'Maintainer' | 'Owner'
@@ -67,19 +63,13 @@ type GitProjection = {
   head_oid: string | null
 }
 
-type ManifestResponse = {
-  signed_manifest: {
-    manifest: {
-      id: string
-      repo_id: string
-      principal_id: string
-      device_id: string
-      commit_graph_hash: string
-      changed_paths: string[]
-      mixed_policy: string
-    }
-    signature_hex: string
-  }
+type FileVisibility = 'Public' | 'Private'
+
+type RepoFile = {
+  path: string
+  oid: string
+  tracked: boolean
+  visibility: FileVisibility
 }
 
 type LoadState<T> = {
@@ -95,7 +85,7 @@ type GitBoundaryState = {
 }
 
 type WorkspaceData = {
-  api: ApiConnection
+  files: LoadState<RepoFile[]>
   gitBoundary: GitBoundaryState
   gitProjection: LoadState<GitProjection>
   projection: LoadState<Projection>
@@ -120,21 +110,20 @@ type SessionResponse = {
 }
 
 type ThemeMode = 'dark' | 'light'
-type ApiSource = 'env' | 'local-dev' | 'production-default'
-
-type ApiConnection = {
-  source: ApiSource
-  url: string
-}
 
 const repoOwner = 'adamblumoff'
 const repoName = 'scope-vcs'
 const repoId = `${repoOwner}/${repoName}`
 const localApiBase = 'http://localhost:8080'
-const productionApiBase = 'https://scope-api-production-0251.up.railway.app'
 
-type CreateManifestInput = {
-  commitGraphHash: string
+type SetFileVisibilityInput = {
+  path: string
+  visibility: FileVisibility
+}
+
+type PendingVisibilityChange = {
+  file: RepoFile
+  visibility: FileVisibility
 }
 
 const loadWorkspaceForRequest = createServerFn({ method: 'GET' }).handler(
@@ -152,30 +141,25 @@ const loadWorkspaceForRequest = createServerFn({ method: 'GET' }).handler(
   },
 )
 
-const createManifestForRequest = createServerFn({ method: 'POST' })
-  .validator(parseCreateManifestInput)
+const setFileVisibilityForRequest = createServerFn({ method: 'POST' })
+  .validator(parseSetFileVisibilityInput)
   .handler(async ({ data }) => {
     const idToken = await readRequestAuthToken()
 
     if (!idToken) {
-      throw new Error('This session cannot write to the repository.')
+      throw new Error('Sign in as the repo owner to change file visibility.')
     }
 
-    const api = getApiConnection()
+    const api = getApiMutationConnection()
     const response = await fetch(
-      `${api.url}/v1/repos/${repoOwner}/${repoName}/push-manifests`,
+      `${api}/v1/repos/${repoOwner}/${repoName}/files/visibility`,
       {
-        body: JSON.stringify({
-          changed_paths: ['/README.md'],
-          commit_graph_hash: data.commitGraphHash,
-          device_id: 'web-console',
-          mixed_policy: 'SyntheticPublicCommit',
-        }),
+        body: JSON.stringify(data),
         headers: {
           ...authHeaders(idToken),
           'content-type': 'application/json',
         },
-        method: 'POST',
+        method: 'PATCH',
       },
     )
     const payload = await response.json().catch(() => null)
@@ -184,7 +168,7 @@ const createManifestForRequest = createServerFn({ method: 'POST' })
       throw new Error(payload?.error ?? `request failed: ${response.status}`)
     }
 
-    return payload as ManifestResponse
+    return payload as RepoFile
   })
 
 export const Route = createFileRoute('/')({
@@ -195,22 +179,16 @@ export const Route = createFileRoute('/')({
 
 function ScopeWorkspace() {
   const workspace = Route.useLoaderData()
-  const [manifest, setManifest] = useState<LoadState<ManifestResponse>>({
-    data: null,
-    error: null,
-    loading: false,
-    status: null,
-  })
+  const [files, setFiles] = useState(workspace.files)
+  const [fileUpdateError, setFileUpdateError] = useState<string | null>(null)
+  const [pendingFile, setPendingFile] = useState<string | null>(null)
+  const [pendingVisibility, setPendingVisibility] =
+    useState<PendingVisibilityChange | null>(null)
   const [theme, setTheme] = useState<ThemeMode>('dark')
-  const manifestRequestRef = useRef(0)
 
   const session = workspace.session.data
   const projection = workspace.projection.data
-  const gitProjection = workspace.gitProjection.data
-  const visiblePaths = useMemo(
-    () => (projection ? visibleProjectionPaths(projection) : []),
-    [projection],
-  )
+  const repoFiles = files.data ?? []
   const commits = useMemo(
     () => projection?.commits.slice().reverse() ?? [],
     [projection],
@@ -219,6 +197,7 @@ function ScopeWorkspace() {
   const roleLabel = role ?? 'Public'
   const principal = session?.principal_id ?? 'public'
   const canWrite = session?.capabilities.write ?? false
+  const canManageFiles = role === 'Owner'
   const signedIn = Boolean(session?.identity)
 
   function toggleTheme() {
@@ -227,69 +206,42 @@ function ScopeWorkspace() {
     applyTheme(nextTheme)
   }
 
-  async function createManifest() {
-    const safetyError = getManifestSafetyError(workspace.api)
-    if (safetyError) {
-      setManifest({
-        data: null,
-        error: safetyError,
-        loading: false,
-        status: null,
-      })
+  function requestFileVisibility(file: RepoFile, visibility: FileVisibility) {
+    if (file.visibility === visibility) {
       return
     }
 
-    if (!canWrite) {
-      setManifest({
-        data: null,
-        error: 'This session cannot write to the repository.',
-        loading: false,
-        status: null,
-      })
+    setPendingVisibility({ file, visibility })
+  }
+
+  async function confirmFileVisibility() {
+    if (!pendingVisibility) {
       return
     }
 
-    const commitGraphHash = gitProjection?.head_oid
-    if (!commitGraphHash) {
-      setManifest({
-        data: null,
-        error: 'No projected Git head is available for this session.',
-        loading: false,
-        status: null,
-      })
-      return
-    }
+    const { file, visibility } = pendingVisibility
+    setPendingVisibility(null)
 
-    manifestRequestRef.current += 1
-    const requestId = manifestRequestRef.current
-    setManifest({ data: null, error: null, loading: true, status: null })
+    setPendingFile(file.path)
+    setFileUpdateError(null)
 
     try {
-      const payload = await createManifestForRequest({
-        data: { commitGraphHash },
+      const updated = await setFileVisibilityForRequest({
+        data: { path: file.path, visibility },
       })
-
-      if (manifestRequestRef.current !== requestId) {
-        return
-      }
-
-      setManifest({
-        data: payload,
-        error: null,
-        loading: false,
-        status: 200,
-      })
+      setFiles((current) => ({
+        ...current,
+        data:
+          current.data?.map((candidate) =>
+            candidate.path === updated.path ? updated : candidate,
+          ) ?? [updated],
+      }))
     } catch (error) {
-      if (manifestRequestRef.current !== requestId) {
-        return
-      }
-
-      setManifest({
-        data: null,
-        error: error instanceof Error ? error.message : 'manifest failed',
-        loading: false,
-        status: null,
-      })
+      setFileUpdateError(
+        error instanceof Error ? error.message : 'visibility update failed',
+      )
+    } finally {
+      setPendingFile(null)
     }
   }
 
@@ -336,35 +288,44 @@ function ScopeWorkspace() {
           </div>
 
           <RepoActions
-            canWrite={canWrite}
-            createManifest={createManifest}
-            manifestLoading={manifest.loading}
-            manifestReady={Boolean(manifest.data)}
             role={role}
           />
         </div>
 
         <WorkspaceAlerts
+          files={files}
           gitBoundary={workspace.gitBoundary}
           gitProjection={workspace.gitProjection}
           projection={workspace.projection}
           session={workspace.session}
         />
+        {fileUpdateError && (
+          <Alert className="mt-6" variant="destructive">
+            <AlertCircle className="size-4" />
+            <AlertTitle>Visibility update failed</AlertTitle>
+            <AlertDescription>{fileUpdateError}</AlertDescription>
+          </Alert>
+        )}
 
         <MetricStrip
-          blobs={gitProjection?.blobs.length ?? 0}
+          blobs={repoFiles.length}
           commits={projection?.commits.length ?? 0}
-          paths={visiblePaths.length}
+          paths={repoFiles.length}
           writeEnabled={canWrite}
         />
 
         <div className="grid gap-8 pt-8 lg:grid-cols-[minmax(0,1fr)_340px]">
           <section className="min-w-0">
             <SectionTitle
-              action={<Badge variant="outline">{visiblePaths.length} paths</Badge>}
-              title="Repository Files"
+              action={<Badge variant="outline">{repoFiles.length} files</Badge>}
+              title="Git Files"
             />
-            <ObjectTable gitProjection={workspace.gitProjection} />
+            <RepoFileTable
+              canManageFiles={canManageFiles}
+              files={files}
+              onSetVisibility={requestFileVisibility}
+              pendingFile={pendingFile}
+            />
           </section>
 
           <aside className="min-w-0 space-y-8">
@@ -374,7 +335,6 @@ function ScopeWorkspace() {
               session={session}
               signedIn={signedIn}
             />
-            <ManifestPanel manifest={manifest} principal={principal} />
           </aside>
         </div>
 
@@ -386,6 +346,12 @@ function ScopeWorkspace() {
           <CommitList commits={commits} />
         </section>
       </section>
+
+      <VisibilityConfirmDialog
+        confirmation={pendingVisibility}
+        onCancel={() => setPendingVisibility(null)}
+        onConfirm={() => void confirmFileVisibility()}
+      />
     </main>
   )
 }
@@ -468,16 +434,8 @@ function AuthControls({
 }
 
 function RepoActions({
-  canWrite,
-  createManifest,
-  manifestLoading,
-  manifestReady,
   role,
 }: {
-  canWrite: boolean
-  createManifest: () => void
-  manifestLoading: boolean
-  manifestReady: boolean
   role: RepoRole | null
 }) {
   const owner = role === 'Owner'
@@ -485,41 +443,24 @@ function RepoActions({
   return (
     <div className="flex w-full flex-wrap gap-2 sm:w-auto sm:justify-end">
       <Button
+        asChild={owner}
         className="min-w-0 flex-1 sm:flex-none"
-        disabled={!canWrite || manifestLoading}
-        onClick={createManifest}
+        disabled={!owner}
         size="sm"
-        title={canWrite ? 'Create push manifest' : 'Write access required'}
-        variant={manifestReady ? 'secondary' : 'default'}
+        title={owner ? 'Repository settings' : 'Owner role required'}
+        variant="secondary"
       >
-        {manifestLoading ? (
-          <RefreshCw className="size-3.5 animate-spin" />
-        ) : manifestReady ? (
-          <CheckCircle2 className="size-3.5" />
+        {owner ? (
+          <Link to="/settings">
+            <Settings className="size-3.5" />
+            <span>Settings</span>
+          </Link>
         ) : (
-          <Upload className="size-3.5" />
+          <>
+            <Settings className="size-3.5" />
+            <span>Settings</span>
+          </>
         )}
-        <span>Manifest</span>
-      </Button>
-      <Button
-        className="min-w-0 flex-1 sm:flex-none"
-        disabled
-        size="sm"
-        title={owner ? 'Invitation endpoint is not available yet' : 'Owner role required'}
-        variant="secondary"
-      >
-        <UserPlus className="size-3.5" />
-        <span>Invite</span>
-      </Button>
-      <Button
-        className="min-w-0 flex-1 sm:flex-none"
-        disabled
-        size="sm"
-        title={owner ? 'Publish endpoint is not available yet' : 'Owner role required'}
-        variant="secondary"
-      >
-        <Globe2 className="size-3.5" />
-        <span>Publish</span>
       </Button>
     </div>
   )
@@ -542,11 +483,13 @@ function WorkspaceError({ error }: ErrorComponentProps) {
 }
 
 function WorkspaceAlerts({
+  files,
   gitBoundary,
   gitProjection,
   projection,
   session,
 }: {
+  files: LoadState<RepoFile[]>
   gitBoundary: GitBoundaryState
   gitProjection: LoadState<GitProjection>
   projection: LoadState<Projection>
@@ -554,6 +497,7 @@ function WorkspaceAlerts({
 }) {
   const errors = [
     session.error && `Session: ${session.error}`,
+    files.error && `Files: ${files.error}`,
     projection.error && `Projection: ${projection.error}`,
     gitProjection.error && `Objects: ${gitProjection.error}`,
     gitBoundary.state !== 'explicit' && `Git: ${gitBoundary.detail}`,
@@ -617,24 +561,30 @@ function SectionTitle({
   )
 }
 
-function ObjectTable({
-  gitProjection,
+function RepoFileTable({
+  canManageFiles,
+  files,
+  onSetVisibility,
+  pendingFile,
 }: {
-  gitProjection: LoadState<GitProjection>
+  canManageFiles: boolean
+  files: LoadState<RepoFile[]>
+  onSetVisibility: (file: RepoFile, visibility: FileVisibility) => void
+  pendingFile: string | null
 }) {
-  const blobs = gitProjection.data?.blobs ?? []
+  const repoFiles = files.data ?? []
 
-  if (gitProjection.error) {
+  if (files.error) {
     return (
       <Alert variant="destructive">
         <AlertCircle className="size-4" />
-        <AlertTitle>Objects unavailable</AlertTitle>
-        <AlertDescription>{gitProjection.error}</AlertDescription>
+        <AlertTitle>Git files unavailable</AlertTitle>
+        <AlertDescription>{files.error}</AlertDescription>
       </Alert>
     )
   }
 
-  if (blobs.length === 0) {
+  if (repoFiles.length === 0) {
     return <EmptyState label="No files visible" />
   }
 
@@ -645,16 +595,28 @@ function ObjectTable({
           <TableRow>
             <TableHead>Path</TableHead>
             <TableHead className="w-32 sm:w-40">Object</TableHead>
+            <TableHead className="w-40 text-right">Visibility</TableHead>
           </TableRow>
         </TableHeader>
         <TableBody>
-          {blobs.map((blob) => (
-            <TableRow key={`${blob.path}-${blob.oid}`}>
+          {repoFiles.map((file) => (
+            <TableRow key={`${file.path}-${file.oid}`}>
               <TableCell className="max-w-[220px] truncate font-mono text-xs sm:max-w-[520px]">
-                {blob.path}
+                {file.path}
               </TableCell>
               <TableCell className="font-mono text-xs text-muted-foreground">
-                {shortOid(blob.oid)}
+                {shortOid(file.oid)}
+              </TableCell>
+              <TableCell className="text-right">
+                <VisibilityToggle
+                  disabledReason={visibilityDisabledReason(
+                    file,
+                    canManageFiles,
+                    pendingFile,
+                  )}
+                  file={file}
+                  onSetVisibility={onSetVisibility}
+                />
               </TableCell>
             </TableRow>
           ))}
@@ -662,6 +624,107 @@ function ObjectTable({
       </Table>
     </div>
   )
+}
+
+function VisibilityConfirmDialog({
+  confirmation,
+  onCancel,
+  onConfirm,
+}: {
+  confirmation: PendingVisibilityChange | null
+  onCancel: () => void
+  onConfirm: () => void
+}) {
+  if (!confirmation) {
+    return null
+  }
+
+  const { file, visibility } = confirmation
+
+  return (
+    <div
+      aria-labelledby="visibility-confirm-title"
+      aria-modal="true"
+      className="fixed inset-0 z-50 flex items-center justify-center bg-background/80 px-4 backdrop-blur-sm"
+      role="alertdialog"
+    >
+      <div className="w-full max-w-md rounded-md border border-border bg-background p-5 shadow-lg">
+        <h2
+          className="text-base font-semibold leading-6"
+          id="visibility-confirm-title"
+        >
+          Make file {visibility.toLowerCase()}?
+        </h2>
+        <p className="mt-2 break-words font-mono text-sm leading-6 text-muted-foreground">
+          {file.path}
+        </p>
+        <div className="mt-5 flex justify-end gap-2">
+          <Button
+            onClick={onCancel}
+            type="button"
+            variant="secondary"
+          >
+            Cancel
+          </Button>
+          <Button onClick={onConfirm} type="button">Confirm</Button>
+        </div>
+      </div>
+    </div>
+  )
+}
+
+function VisibilityToggle({
+  disabledReason,
+  file,
+  onSetVisibility,
+}: {
+  disabledReason: string | null
+  file: RepoFile
+  onSetVisibility: (file: RepoFile, visibility: FileVisibility) => void
+}) {
+  const isPublic = file.visibility === 'Public'
+  const nextVisibility = isPublic ? 'Private' : 'Public'
+  const disabled = Boolean(disabledReason)
+
+  return (
+    <button
+      aria-checked={isPublic}
+      aria-label={`Make ${file.path} ${nextVisibility.toLowerCase()}`}
+      className={cn(
+        'inline-flex h-7 w-[92px] items-center justify-between rounded-full border px-1 text-[11px] font-medium transition-colors',
+        isPublic
+          ? 'border-green-400 bg-green-100 text-green-900'
+          : 'border-border bg-muted text-muted-foreground',
+        disabled && 'cursor-not-allowed opacity-55',
+      )}
+      disabled={disabled}
+      onClick={() => onSetVisibility(file, nextVisibility)}
+      role="switch"
+      title={disabledReason ?? `Make ${file.path} ${nextVisibility.toLowerCase()}`}
+      type="button"
+    >
+      <span className={cn('px-2', !isPublic && 'order-2')}>{file.visibility}</span>
+      <span className="size-5 rounded-full bg-background shadow-sm" />
+    </button>
+  )
+}
+
+function visibilityDisabledReason(
+  file: RepoFile,
+  canManageFiles: boolean,
+  pendingFile: string | null,
+) {
+  if (!file.tracked) {
+    return 'Track this file in Git before changing visibility'
+  }
+  if (!canManageFiles) {
+    return 'Owner role required'
+  }
+  if (pendingFile === file.path) {
+    return 'Updating visibility'
+  }
+
+  return null
 }
 
 function SessionPanel({
@@ -692,50 +755,6 @@ function SessionPanel({
         <KeyValue label="Write" value={canWrite ? 'Allowed' : 'Blocked'} />
       </dl>
     </section>
-  )
-}
-
-function ManifestPanel({
-  manifest,
-  principal,
-}: {
-  manifest: LoadState<ManifestResponse>
-  principal: PrincipalId
-}) {
-  if (manifest.error) {
-    return (
-      <Alert variant="destructive">
-        <AlertCircle className="size-4" />
-        <AlertTitle>Manifest rejected</AlertTitle>
-        <AlertDescription>
-          {principal}: {manifest.error}
-        </AlertDescription>
-      </Alert>
-    )
-  }
-
-  if (!manifest.data) {
-    return (
-      <section className="border-t border-border pt-4">
-        <SectionTitle title="Push Manifest" />
-        <EmptyState label="No manifest created" />
-      </section>
-    )
-  }
-
-  const signed = manifest.data.signed_manifest
-
-  return (
-    <Alert className="border-green-400 bg-green-100 text-green-1000" live="polite">
-      <CheckCircle2 className="size-4 text-green-900" />
-      <AlertTitle>Manifest ready</AlertTitle>
-      <AlertDescription className="space-y-1 text-green-900">
-        <div className="truncate font-mono text-xs">{signed.manifest.id}</div>
-        <div className="truncate font-mono text-xs">
-          {signed.signature_hex.slice(0, 32)}...
-        </div>
-      </AlertDescription>
-    </Alert>
   )
 }
 
@@ -816,24 +835,28 @@ async function loadWorkspace(
     headers: authHeaders(idToken),
     signal,
   }
-  const [session, projection, gitProjection, gitBoundary] = await Promise.all([
+  const [session, files, projection, gitProjection, gitBoundary] = await Promise.all([
     safeLoadJson<SessionResponse>(
-      `${api.url}/v1/repos/${repoOwner}/${repoName}/session`,
+      `${api}/v1/repos/${repoOwner}/${repoName}/session`,
+      init,
+    ),
+    safeLoadJson<RepoFile[]>(
+      `${api}/v1/repos/${repoOwner}/${repoName}/files`,
       init,
     ),
     safeLoadJson<Projection>(
-      `${api.url}/v1/repos/${repoOwner}/${repoName}/projections`,
+      `${api}/v1/repos/${repoOwner}/${repoName}/projections`,
       init,
     ),
     safeLoadJson<GitProjection>(
-      `${api.url}/v1/repos/${repoOwner}/${repoName}/git-projections`,
+      `${api}/v1/repos/${repoOwner}/${repoName}/git-projections`,
       init,
     ),
-    loadGitBoundary(api.url, idToken, signal),
+    loadGitBoundary(api, idToken, signal),
   ])
 
   return {
-    api,
+    files,
     gitBoundary,
     gitProjection: stripGitProjectionContent(gitProjection),
     projection: stripProjectionContent(projection),
@@ -933,28 +956,25 @@ async function loadGitBoundary(
   }
 }
 
-function parseCreateManifestInput(input: unknown): CreateManifestInput {
-  const data = input as Partial<CreateManifestInput> | null
-  const commitGraphHash =
-    typeof data?.commitGraphHash === 'string' ? data.commitGraphHash.trim() : ''
-
-  if (!commitGraphHash) {
-    throw new Error('No projected Git head is available for this session.')
-  }
-
-  return { commitGraphHash }
-}
-
 async function readRequestAuthToken() {
   const { getCookie } = await import('@tanstack/react-start/server')
   return getCookie(authCookieName)
 }
 
-function visibleProjectionPaths(projection: Projection) {
-  const paths = projection.commits.flatMap((commit) =>
-    commit.changes.map((change) => change.path),
-  )
-  return [...new Set(paths)].sort((left, right) => left.localeCompare(right))
+function parseSetFileVisibilityInput(input: unknown): SetFileVisibilityInput {
+  const data = input as Partial<SetFileVisibilityInput> | null
+  const path = typeof data?.path === 'string' ? data.path.trim() : ''
+  const visibility = data?.visibility
+
+  if (!path.startsWith('/')) {
+    throw new Error('File path must be absolute.')
+  }
+
+  if (visibility !== 'Public' && visibility !== 'Private') {
+    throw new Error('Visibility must be Public or Private.')
+  }
+
+  return { path, visibility }
 }
 
 async function loadJson<T>(url: string, init?: RequestInit): Promise<T> {
@@ -997,40 +1017,32 @@ function applyTheme(theme: ThemeMode) {
   document.documentElement.style.colorScheme = theme
 }
 
-function getApiConnection(): ApiConnection {
+function getApiConnection() {
   const envBase = import.meta.env.VITE_SCOPE_API_URL as string | undefined
   if (envBase) {
-    return { source: 'env', url: stripTrailingSlash(envBase) }
+    return stripTrailingSlash(envBase)
   }
 
   if (import.meta.env.DEV) {
-    return { source: 'local-dev', url: localApiBase }
+    return localApiBase
   }
 
-  return { source: 'production-default', url: productionApiBase }
+  throw new Error('Set VITE_SCOPE_API_URL before loading repository state.')
+}
+
+function getApiMutationConnection() {
+  const envBase = import.meta.env.VITE_SCOPE_API_URL as string | undefined
+  if (envBase) {
+    return stripTrailingSlash(envBase)
+  }
+
+  if (import.meta.env.DEV) {
+    return localApiBase
+  }
+
+  throw new Error('Set VITE_SCOPE_API_URL before changing repository state.')
 }
 
 function stripTrailingSlash(value: string) {
   return value.replace(/\/+$/, '')
-}
-
-function getManifestSafetyError(api: ApiConnection) {
-  if (api.source !== 'production-default' || !isLocalBrowserHost()) {
-    return null
-  }
-
-  return 'Set VITE_SCOPE_API_URL before creating manifests from a local production preview.'
-}
-
-function isLocalBrowserHost() {
-  if (typeof window === 'undefined') {
-    return false
-  }
-
-  return isLoopbackHost(window.location.hostname)
-}
-
-function isLoopbackHost(hostname: string) {
-  const normalized = hostname.replace(/^\[|\]$/g, '')
-  return ['localhost', '127.0.0.1', '::1'].includes(normalized)
 }

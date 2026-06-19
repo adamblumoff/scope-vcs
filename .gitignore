@@ -3,9 +3,9 @@ node_modules/
 .turbo/
 .output/
 dist/
+.scope/
 .env
 .env.*
 !.env.example
 *.log
 *.tsbuildinfo
-

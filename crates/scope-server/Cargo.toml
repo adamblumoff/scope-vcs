@@ -11,7 +11,6 @@ axum.workspace = true
 http.workspace = true
 jsonwebtoken.workspace = true
 reqwest.workspace = true
-scope-crypto.workspace = true
 scope-git.workspace = true
 scope-policy.workspace = true
 scope-projection.workspace = true

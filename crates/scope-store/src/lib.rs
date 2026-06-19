@@ -64,6 +64,11 @@ pub struct RepoRecord {
     pub default_visibility: Visibility,
 }
 
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RepoSettings {
+    pub include_ignored_files: bool,
+}
+
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct RepoMembership {
     pub repo_id: String,
@@ -91,6 +96,7 @@ pub struct RepoInvitation {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct StoredRepository {
     pub record: RepoRecord,
+    pub settings: RepoSettings,
     pub policy: Policy,
     pub graph: SourceGraph,
     pub memberships: Vec<RepoMembership>,
@@ -203,7 +209,7 @@ fn canonical_repository() -> StoredRepository {
     let mut policy = Policy::new(Visibility::Public, BOOTSTRAP_OWNER_USER_ID);
     policy
         .add_rule(VisibilityRule::private(
-            ScopePath::parse("/crates/scope-server/src").unwrap(),
+            ScopePath::parse("/crates/scope-server/src/main.rs").unwrap(),
             [BOOTSTRAP_OWNER_USER_ID.to_string()],
         ))
         .unwrap();
@@ -258,6 +264,7 @@ fn canonical_repository() -> StoredRepository {
             publication_state: RepoPublicationState::Published,
             default_visibility: Visibility::Public,
         },
+        settings: RepoSettings::default(),
         policy,
         graph,
         memberships: vec![RepoMembership {
