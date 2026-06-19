@@ -1455,9 +1455,11 @@ dependencies = [
 name = "scope-store"
 version = "0.1.0"
 dependencies = [
+ "hex",
  "scope-policy",
  "scope-projection",
  "serde",
+ "sha1",
  "thiserror",
 ]
 

@@ -11,6 +11,8 @@ pub const BOOTSTRAP_REPO_OWNER: &str = "adamblumoff";
 pub const BOOTSTRAP_REPO_NAME: &str = "scope-vcs";
 pub const BOOTSTRAP_REPO_ID: &str = "adamblumoff/scope-vcs";
 
+include!(concat!(env!("OUT_DIR"), "/repo_snapshot.rs"));
+
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct VerifiedEmail {
     pub email: String,
@@ -206,53 +208,36 @@ pub fn repo_id(owner: &str, name: &str) -> String {
 }
 
 fn canonical_repository() -> StoredRepository {
+    let changes = build_repository_snapshot_changes();
     let mut policy = Policy::new(Visibility::Public, BOOTSTRAP_OWNER_USER_ID);
-    policy
-        .add_rule(VisibilityRule::private(
-            ScopePath::parse("/crates/scope-server/src/main.rs").unwrap(),
-            [BOOTSTRAP_OWNER_USER_ID.to_string()],
-        ))
-        .unwrap();
+    for change in &changes {
+        if bootstrap_path_is_public(&change.path) {
+            continue;
+        }
+
+        policy
+            .add_rule(VisibilityRule::private(
+                change.path.clone(),
+                [BOOTSTRAP_OWNER_USER_ID.to_string()],
+            ))
+            .unwrap();
+    }
 
     let graph = SourceGraph {
         repo_id: BOOTSTRAP_REPO_ID.to_string(),
-        commits: vec![
-            LogicalCommit {
-                id: "rv_bootstrap_001".to_string(),
+        commits: if changes.is_empty() {
+            Vec::new()
+        } else {
+            vec![LogicalCommit {
+                id: "rv_build_snapshot".to_string(),
                 parent_ids: vec![],
                 author_id: BOOTSTRAP_OWNER_USER_ID.to_string(),
                 author_visibility: AuthorVisibility::Visible,
-                message: "Import Scope VCS public workspace".to_string(),
+                message: "Import tracked repository files".to_string(),
                 mixed_policy: MixedCommitPolicy::SyntheticPublicCommit,
-                changes: vec![
-                    repo_file("/README.md", include_str!("../../../README.md")),
-                    repo_file(
-                        "/crates/scope-policy/src/lib.rs",
-                        include_str!("../../scope-policy/src/lib.rs"),
-                    ),
-                    repo_file(
-                        "/crates/scope-projection/src/lib.rs",
-                        include_str!("../../scope-projection/src/lib.rs"),
-                    ),
-                    repo_file(
-                        "/apps/web/src/routes/index.tsx",
-                        include_str!("../../../apps/web/src/routes/index.tsx"),
-                    ),
-                ],
-            },
-            LogicalCommit {
-                id: "rv_bootstrap_002".to_string(),
-                parent_ids: vec!["rv_bootstrap_001".to_string()],
-                author_id: BOOTSTRAP_OWNER_USER_ID.to_string(),
-                author_visibility: AuthorVisibility::Visible,
-                message: "Import private server implementation".to_string(),
-                mixed_policy: MixedCommitPolicy::SyntheticPublicCommit,
-                changes: vec![repo_file(
-                    "/crates/scope-server/src/main.rs",
-                    include_str!("../../scope-server/src/main.rs"),
-                )],
-            },
-        ],
+                changes,
+            }]
+        },
     };
 
     StoredRepository {
@@ -274,6 +259,27 @@ fn canonical_repository() -> StoredRepository {
         }],
         invitations: Vec::new(),
     }
+}
+
+pub fn build_repository_snapshot_changes() -> Vec<FileChange> {
+    BUILD_REPO_SNAPSHOT
+        .iter()
+        .map(|file| repo_file(file.path, file.content))
+        .collect()
+}
+
+pub fn build_repository_snapshot_len() -> usize {
+    BUILD_REPO_SNAPSHOT.len()
+}
+
+pub fn bootstrap_path_is_public(path: &ScopePath) -> bool {
+    matches!(
+        path.as_str(),
+        "/README.md"
+            | "/apps/web/src/routes/index.tsx"
+            | "/crates/scope-policy/src/lib.rs"
+            | "/crates/scope-projection/src/lib.rs"
+    )
 }
 
 fn normalize_email(email: impl Into<String>) -> String {
@@ -367,6 +373,12 @@ mod tests {
             .repositories
             .get_mut(BOOTSTRAP_REPO_ID)
             .expect("bootstrap repo exists");
+        repo.policy
+            .add_rule(VisibilityRule::private(
+                ScopePath::parse("/crates/scope-server/src/main.rs").unwrap(),
+                [BOOTSTRAP_OWNER_USER_ID.to_string()],
+            ))
+            .unwrap();
         repo.invitations.push(RepoInvitation {
             id: "invite_pending".to_string(),
             repo_id: BOOTSTRAP_REPO_ID.to_string(),
@@ -388,5 +400,41 @@ mod tests {
             &principal,
             &ScopePath::parse("/crates/scope-server/src/main.rs").unwrap(),
         ));
+    }
+
+    #[test]
+    fn bootstrap_repo_uses_real_build_snapshot() {
+        let catalog = app_catalog();
+        let repo = catalog
+            .repository(BOOTSTRAP_REPO_OWNER, BOOTSTRAP_REPO_NAME)
+            .unwrap();
+        let paths = repo
+            .graph
+            .commits
+            .iter()
+            .flat_map(|commit| commit.changes.iter())
+            .map(|change| change.path.as_str().to_string())
+            .collect::<Vec<_>>();
+
+        assert!(build_repository_snapshot_len() > 5);
+        assert!(paths.contains(&"/Cargo.toml".to_string()));
+        assert!(paths.contains(&"/crates/scope-server/src/main.rs".to_string()));
+        assert!(catalog.can_read_path(
+            repo,
+            &Principal::public(),
+            &ScopePath::parse("/README.md").unwrap(),
+        ));
+        assert!(!catalog.can_read_path(
+            repo,
+            &Principal::public(),
+            &ScopePath::parse("/crates/scope-server/src/main.rs").unwrap(),
+        ));
+        assert!(
+            !repo
+                .graph
+                .commits
+                .iter()
+                .any(|commit| commit.message.contains("public workspace"))
+        );
     }
 }

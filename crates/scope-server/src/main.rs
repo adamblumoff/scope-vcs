@@ -17,11 +17,11 @@ use scope_projection::{
 };
 use scope_store::{
     AppCatalog, BOOTSTRAP_REPO_ID, RepoRole, RepoSettings, StoredRepository, VerifiedEmail,
-    app_catalog,
+    app_catalog, bootstrap_path_is_public, build_repository_snapshot_changes,
 };
 use serde::{Deserialize, Serialize};
 use std::{
-    collections::{BTreeMap, BTreeSet},
+    collections::BTreeMap,
     fs,
     io::Write,
     net::SocketAddr,
@@ -311,7 +311,7 @@ async fn update_file_visibility(
         let mut catalog = lock_catalog(&state)?;
         let mut staged = catalog.clone();
         if owner_files_from_git {
-            hydrate_catalog_from_git(&mut staged, state.repo_root.as_ref());
+            hydrate_catalog_from_git(&mut staged, state.repo_root.as_ref())?;
         }
         let repo = staged
             .repositories
@@ -491,7 +491,7 @@ impl AppState {
         let persisted_state = load_state(&state_path)?;
         let mut catalog = app_catalog();
         apply_persisted_state(&mut catalog, &persisted_state);
-        hydrate_catalog_from_git(&mut catalog, &repo_root);
+        hydrate_catalog_from_sources(&mut catalog, &repo_root)?;
 
         Ok(Self {
             catalog: Arc::new(Mutex::new(catalog)),
@@ -849,45 +849,104 @@ fn git_repo_root() -> PathBuf {
     std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."))
 }
 
-fn hydrate_catalog_from_git(catalog: &mut AppCatalog, repo_root: &FsPath) {
+fn hydrate_catalog_from_sources(
+    catalog: &mut AppCatalog,
+    repo_root: &FsPath,
+) -> anyhow::Result<()> {
+    match git_tracked_file_changes(repo_root) {
+        Ok(changes) if !changes.is_empty() => {
+            install_repository_changes(
+                catalog,
+                changes,
+                "rv_git_worktree_head".to_string(),
+                "Import tracked repository files".to_string(),
+            );
+            Ok(())
+        }
+        Ok(_) => {
+            hydrate_catalog_from_build_snapshot(catalog, "Git index did not contain tracked files")
+        }
+        Err(error) => hydrate_catalog_from_build_snapshot(catalog, &error.message),
+    }
+}
+
+fn hydrate_catalog_from_git(catalog: &mut AppCatalog, repo_root: &FsPath) -> Result<(), ApiError> {
+    let changes = git_tracked_file_changes(repo_root)?;
+    if changes.is_empty() {
+        return Err(ApiError::service_unavailable(
+            "Git index did not contain tracked files",
+        ));
+    }
+
+    install_repository_changes(
+        catalog,
+        changes,
+        "rv_git_worktree_head".to_string(),
+        "Import tracked repository files".to_string(),
+    );
+    Ok(())
+}
+
+fn hydrate_catalog_from_build_snapshot(
+    catalog: &mut AppCatalog,
+    reason: &str,
+) -> anyhow::Result<()> {
+    let changes = build_repository_snapshot_changes();
+    if changes.is_empty() {
+        anyhow::bail!(
+            "failed to hydrate repository from runtime Git ({reason}) and build snapshot is empty"
+        );
+    }
+
+    tracing::warn!(
+        reason = %reason,
+        file_count = changes.len(),
+        "using compiled repository snapshot because runtime Git is unavailable"
+    );
+    install_repository_changes(
+        catalog,
+        changes,
+        "rv_build_snapshot".to_string(),
+        "Import tracked repository files".to_string(),
+    );
+    Ok(())
+}
+
+fn install_repository_changes(
+    catalog: &mut AppCatalog,
+    changes: Vec<FileChange>,
+    id: String,
+    message: String,
+) {
     let Some(repo) = catalog.repositories.get_mut(BOOTSTRAP_REPO_ID) else {
         return;
     };
 
-    match git_tracked_file_changes(repo_root) {
-        Ok(changes) if !changes.is_empty() => {
-            let previous_paths = graph_paths(repo);
-            let owner_ids = repo_owner_ids(repo);
-            for change in &changes {
-                if previous_paths.contains(change.path.as_str())
-                    || repo.policy.effective_rule(&change.path).is_some()
-                {
-                    continue;
-                }
-
-                if let Err(error) = repo.policy.add_rule(VisibilityRule::private(
-                    change.path.clone(),
-                    owner_ids.clone(),
-                )) {
-                    tracing::warn!(%error, path = change.path.as_str(), "failed to privatize hydrated path");
-                }
-            }
-
-            repo.graph.commits = vec![LogicalCommit {
-                id: "rv_git_worktree_head".to_string(),
-                parent_ids: Vec::new(),
-                author_id: repo.record.owner_user_id.clone(),
-                author_visibility: AuthorVisibility::Visible,
-                message: "Import tracked repository files".to_string(),
-                mixed_policy: MixedCommitPolicy::SyntheticPublicCommit,
-                changes,
-            }];
+    let owner_ids = repo_owner_ids(repo);
+    for change in &changes {
+        if repo.policy.effective_rule(&change.path).is_some()
+            || bootstrap_path_is_public(&change.path)
+        {
+            continue;
         }
-        Ok(_) => {}
-        Err(error) => {
-            tracing::warn!(error = %error.message, "failed to hydrate repository graph from Git");
+
+        if let Err(error) = repo.policy.add_rule(VisibilityRule::private(
+            change.path.clone(),
+            owner_ids.clone(),
+        )) {
+            tracing::warn!(%error, path = change.path.as_str(), "failed to privatize hydrated path");
         }
     }
+
+    repo.graph.commits = vec![LogicalCommit {
+        id,
+        parent_ids: Vec::new(),
+        author_id: repo.record.owner_user_id.clone(),
+        author_visibility: AuthorVisibility::Visible,
+        message,
+        mixed_policy: MixedCommitPolicy::SyntheticPublicCommit,
+        changes,
+    }];
 }
 
 fn git_tracked_file_changes(repo_root: &FsPath) -> Result<Vec<FileChange>, ApiError> {
@@ -981,18 +1040,6 @@ fn graph_has_file(repo: &StoredRepository, path: &ScopePath) -> bool {
     }
 
     present
-}
-
-fn graph_paths(repo: &StoredRepository) -> BTreeSet<String> {
-    let mut paths = BTreeSet::new();
-    for change in repo.graph.commits.iter().flat_map(|commit| &commit.changes) {
-        if change.new_content.is_some() {
-            paths.insert(change.path.as_str().to_string());
-        } else {
-            paths.remove(change.path.as_str());
-        }
-    }
-    paths
 }
 
 fn repo_owner_ids(repo: &StoredRepository) -> Vec<String> {

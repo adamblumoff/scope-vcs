@@ -11,3 +11,6 @@ scope-projection.workspace = true
 serde.workspace = true
 thiserror.workspace = true
 
+[build-dependencies]
+hex.workspace = true
+sha1.workspace = true
