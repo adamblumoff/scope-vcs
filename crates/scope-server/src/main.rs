@@ -162,7 +162,7 @@ struct RepoSummaryResponse {
     name: String,
     lifecycle_state: RepoPublicationState,
     default_visibility: Visibility,
-    role: RepoRole,
+    role: Option<RepoRole>,
     staged_update_pending: bool,
 }
 
@@ -490,12 +490,21 @@ async fn get_repo(
     headers: HeaderMap,
     Path((owner, repo_name)): Path<(String, String)>,
 ) -> Result<Json<RepoSummaryResponse>, ApiError> {
-    let identity = require_identity(&state, &headers).await?;
-    let user = ensure_user_for_identity(&state, &identity)?;
     let repo = find_repo(&state, &owner, &repo_name)?;
-    let catalog = lock_catalog(&state)?;
-    let summary = repo_summary(&catalog, &repo, &user.id)
-        .ok_or_else(|| ApiError::not_found(format!("repo {owner}/{repo_name} not found")))?;
+    let identity = http_identity(&state, &headers).await?;
+    let principal = principal_for_repo(&state, &repo, identity.as_ref())?;
+    ensure_repo_read(&state, &repo, &principal)?;
+    let role = role_for_principal(&state, &repo, &principal)?;
+    let staged_update_pending = role == Some(RepoRole::Owner) && repo.staged_update.is_some();
+    let summary = RepoSummaryResponse {
+        id: repo.record.id.clone(),
+        owner_handle: repo.record.owner_handle.clone(),
+        name: repo.record.name.clone(),
+        lifecycle_state: repo.record.publication_state,
+        default_visibility: repo.record.default_visibility,
+        role,
+        staged_update_pending,
+    };
 
     Ok(Json(summary))
 }
@@ -3157,10 +3166,12 @@ fn test_state_path() -> PathBuf {
         .duration_since(std::time::UNIX_EPOCH)
         .expect("test clock must be after UNIX epoch")
         .as_nanos();
-    std::env::temp_dir().join(format!(
-        "scope-vcs-test-state-{}-{nanos}.json",
-        std::process::id()
-    ))
+    std::env::temp_dir()
+        .join(format!(
+            "scope-vcs-test-state-{}-{nanos}",
+            std::process::id()
+        ))
+        .join("state.json")
 }
 
 fn non_empty_env(name: &str) -> Option<String> {
@@ -3596,8 +3607,8 @@ fn repo_summary(
         name: repo.record.name.clone(),
         lifecycle_state: repo.record.publication_state,
         default_visibility: repo.record.default_visibility,
-        role,
-        staged_update_pending: repo.staged_update.is_some(),
+        role: Some(role),
+        staged_update_pending: role == RepoRole::Owner && repo.staged_update.is_some(),
     })
 }
 
@@ -4498,6 +4509,23 @@ kGxvBjzgF9RjXJoldYnFk7mJ5gLANHjaaad3qTQJ8DldKJoSqkEkm5gg
         }
 
         let app = router(state);
+        let summary_response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("GET")
+                    .uri("/v1/repos/owner/repo")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(summary_response.status(), StatusCode::OK);
+        let summary_body = response_json(summary_response).await;
+        assert_eq!(summary_body["id"], TEST_REPO_ID);
+        assert_eq!(summary_body["role"], serde_json::Value::Null);
+
         let response = app
             .oneshot(
                 Request::builder()

@@ -33,7 +33,7 @@ type RepoSummary = {
   name: string
   lifecycle_state: RepoLifecycleState
   default_visibility: Visibility
-  role: RepoRole
+  role: RepoRole | null
   staged_update_pending: boolean
 }
 
@@ -50,12 +50,6 @@ type RepoDetail = {
   repo: RepoSummary
 }
 
-type RepoDetailState =
-  | RepoDetail
-  | {
-      kind: 'signedOut'
-    }
-
 type RepoParams = {
   owner: string
   repo: string
@@ -67,10 +61,6 @@ const loadRepoForRequest = createServerFn({ method: 'GET' })
   .validator(parseRepoParams)
   .handler(async ({ data }) => {
     const idToken = await readRequestAuthToken()
-    if (!idToken) {
-      return { kind: 'signedOut' } satisfies RepoDetailState
-    }
-
     const api = getApiConnection()
     const init = { headers: authHeaders(idToken) }
     const [repo, files] = await Promise.all([
@@ -78,7 +68,7 @@ const loadRepoForRequest = createServerFn({ method: 'GET' })
       loadJson<RepoFile[]>(`${api}/v1/repos/${data.owner}/${data.repo}/files`, init),
     ])
 
-    return { files, kind: 'repo', repo } satisfies RepoDetailState
+    return { files, kind: 'repo', repo } satisfies RepoDetail
   })
 
 export const Route = createFileRoute('/repos/$owner/$repo')({
@@ -93,15 +83,6 @@ function RepoDetailPage() {
 
   if (childMatches.length > 0) {
     return <Outlet />
-  }
-
-  if (detail.kind === 'signedOut') {
-    return (
-      <RepoDetailMessage
-        message="Sign in to view this repository."
-        title="Repository unavailable"
-      />
-    )
   }
 
   const { files, repo } = detail
@@ -135,7 +116,9 @@ function RepoDetailPage() {
           <div className="min-w-0">
             <div className="mb-3 flex flex-wrap items-center gap-2">
               <Badge variant="outline">{lifecycleLabel(repo.lifecycle_state)}</Badge>
-              <VisibilityBadge visibility={repo.default_visibility} />
+              {repo.role === 'Owner' && (
+                <VisibilityBadge visibility={repo.default_visibility} />
+              )}
               {repo.staged_update_pending && (
                 <Badge variant="outline">Staged update</Badge>
               )}
@@ -197,6 +180,10 @@ function RepoDetailPage() {
 }
 
 function RepoAction({ repo }: { repo: RepoSummary }) {
+  if (repo.role !== 'Owner') {
+    return null
+  }
+
   if (repo.lifecycle_state === 'PendingFirstPush') {
     return (
       <Button asChild size="sm">

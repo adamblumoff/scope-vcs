@@ -3,12 +3,13 @@ import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { authCookieName, createScopeShooAuth } from '@/lib/auth'
 import { cn } from '@/lib/utils'
-import { Link, createFileRoute, useNavigate } from '@tanstack/react-router'
+import { Link, createFileRoute, useNavigate, useRouter } from '@tanstack/react-router'
 import { createServerFn } from '@tanstack/react-start'
 import {
   AlertCircle,
   AlertTriangle,
   ArrowRight,
+  CheckCircle2,
   GitBranch,
   Globe2,
   LoaderCircle,
@@ -21,7 +22,7 @@ import {
   Trash2,
 } from 'lucide-react'
 import type { FormEvent } from 'react'
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 
 type Visibility = 'Private' | 'Public'
 type RepoRole = 'Reader' | 'Writer' | 'Maintainer' | 'Owner'
@@ -47,7 +48,7 @@ type RepoSummary = {
   name: string
   lifecycle_state: RepoLifecycleState
   default_visibility: Visibility
-  role: RepoRole
+  role: RepoRole | null
   staged_update_pending: boolean
 }
 
@@ -103,6 +104,7 @@ type DeleteRepoResponse = {
 type ThemeMode = 'dark' | 'light'
 
 const localApiBase = 'http://localhost:8080'
+const homeFlashKey = 'scope:home-flash'
 
 const loadHomeForRequest = createServerFn({ method: 'GET' }).handler(
   async (): Promise<HomeState> => {
@@ -209,14 +211,32 @@ export const Route = createFileRoute('/')({
 function ScopeHome() {
   const home = Route.useLoaderData()
   const navigate = useNavigate()
+  const router = useRouter()
   const [account, setAccount] = useState(home.account)
   const [createError, setCreateError] = useState<string | null>(null)
   const [deleteError, setDeleteError] = useState<string | null>(null)
   const [deleteTarget, setDeleteTarget] = useState<RepoSummary | null>(null)
+  const [flash, setFlash] = useState<string | null>(null)
   const [repositories, setRepositories] = useState(home.repositories)
   const [sessionError, setSessionError] = useState<string | null>(null)
   const [signedIn, setSignedIn] = useState(home.signedIn)
   const [theme, setTheme] = useState<ThemeMode>('dark')
+
+  useEffect(() => {
+    const message = window.sessionStorage.getItem(homeFlashKey)
+    if (!message) {
+      return
+    }
+
+    window.sessionStorage.removeItem(homeFlashKey)
+    setFlash(message)
+  }, [])
+
+  useEffect(() => {
+    setAccount(home.account)
+    setRepositories(home.repositories)
+    setSignedIn(home.signedIn)
+  }, [home.account, home.repositories, home.signedIn])
 
   function toggleTheme() {
     const nextTheme = theme === 'dark' ? 'light' : 'dark'
@@ -240,6 +260,7 @@ function ScopeHome() {
           created.setup.push_token.secret,
         )
       }
+      await router.invalidate()
       await navigate({
         to: '/repos/$owner/$repo/setup',
         params: { owner: repo.owner_handle, repo: repo.name },
@@ -259,6 +280,7 @@ function ScopeHome() {
     setRepositories((current) =>
       current.filter((candidate) => candidate.id !== deleted.id),
     )
+    await router.invalidate()
     setDeleteTarget(null)
   }
 
@@ -334,6 +356,14 @@ function ScopeHome() {
             <AlertCircle className="size-4" />
             <AlertTitle>Repository creation failed</AlertTitle>
             <AlertDescription>{createError}</AlertDescription>
+          </Alert>
+        )}
+
+        {flash && (
+          <Alert className="mt-6">
+            <CheckCircle2 className="size-4" />
+            <AlertTitle>Success</AlertTitle>
+            <AlertDescription>{flash}</AlertDescription>
           </Alert>
         )}
 
@@ -489,7 +519,7 @@ function RepoList({
             </Link>
             <div className="mt-1 flex flex-wrap gap-2 text-xs leading-4 text-muted-foreground">
               <span>{lifecycleLabel(repo.lifecycle_state)}</span>
-              <span>{repo.role}</span>
+              {repo.role && <span>{repo.role}</span>}
             </div>
           </div>
           <div className="flex items-center gap-2 sm:justify-end">

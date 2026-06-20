@@ -3,7 +3,13 @@ import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { authCookieName } from '@/lib/auth'
-import { Link, createFileRoute, redirect, useNavigate } from '@tanstack/react-router'
+import {
+  Link,
+  createFileRoute,
+  redirect,
+  useNavigate,
+  useRouter,
+} from '@tanstack/react-router'
 import { createServerFn } from '@tanstack/react-start'
 import {
   AlertCircle,
@@ -72,6 +78,8 @@ type SetupRouteState =
       kind: 'review'
     }
 
+type SetupProgressState = 'waiting' | 'opening-review' | 'published'
+
 type SetupParams = {
   owner: string
   repo: string
@@ -104,7 +112,7 @@ const loadSetupForRequest = createServerFn({ method: 'GET' })
     }
   })
 
-const pendingImportReadyForRequest = createServerFn({ method: 'GET' })
+const setupProgressForRequest = createServerFn({ method: 'POST' })
   .validator(parseSetupParams)
   .handler(async ({ data }) => {
     const idToken = await readRequestAuthToken()
@@ -112,21 +120,15 @@ const pendingImportReadyForRequest = createServerFn({ method: 'GET' })
       throw new Error('Sign in as the repo owner to check setup progress.')
     }
 
-    const response = await fetch(
-      `${getApiConnection()}/v1/repos/${data.owner}/${data.repo}/pending-import`,
-      { headers: authHeaders(idToken) },
+    const repo = await loadJson<RepoSummary>(
+      `${getApiConnection()}/v1/repos/${data.owner}/${data.repo}`,
+      {
+        cache: 'no-store',
+        headers: authHeaders(idToken),
+      },
     )
 
-    if (response.ok) {
-      return true
-    }
-
-    if (response.status === 400) {
-      return false
-    }
-
-    const payload = await response.json().catch(() => null)
-    throw new Error(payload?.error ?? `request failed: ${response.status}`)
+    return repo.lifecycle_state
   })
 
 const regenerateTokenForRequest = createServerFn({ method: 'POST' })
@@ -174,6 +176,7 @@ function SetupPage() {
   const initialSetup = Route.useLoaderData()
   const params = Route.useParams()
   const navigate = useNavigate()
+  const router = useRouter()
   const [setup, setSetup] = useState(initialSetup)
   const [tokenSecret, setTokenSecret] = useState<string | null>(
     initialSetup.token?.secret ?? null,
@@ -183,6 +186,9 @@ function SetupPage() {
   )
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  const [progressError, setProgressError] = useState<string | null>(null)
+  const [progressState, setProgressState] =
+    useState<SetupProgressState>('waiting')
   const commands = setupCommands(setup)
   const dualPushCommands = dualRemotePushCommands(setup)
   const credentialHost = gitCredentialHost(setup.git_remote_url)
@@ -213,27 +219,57 @@ function SetupPage() {
 
       inFlight = true
       try {
-        const ready = await pendingImportReadyForRequest({ data: params })
-        if (!cancelled && ready) {
+        const lifecycleState = await setupProgressForRequest({ data: params })
+        if (cancelled) {
+          return
+        }
+
+        setProgressError(null)
+        if (lifecycleState === 'PendingPublish') {
+          setProgressState('opening-review')
           await navigate({
             params,
+            replace: true,
             to: '/repos/$owner/$repo/review',
           })
+        } else if (lifecycleState === 'Published') {
+          setProgressState('published')
+          storeHomeFlash(`${params.owner}/${params.repo} is published.`)
+          await navigate({ replace: true, to: '/' })
+          await router.invalidate()
+        } else {
+          setProgressState('waiting')
         }
-      } catch {
-        // Keep the setup page usable; the next poll or a manual refresh can recover.
+      } catch (progressError) {
+        if (!cancelled) {
+          setProgressError(
+            progressError instanceof Error
+              ? progressError.message
+              : 'setup progress check failed',
+          )
+        }
       } finally {
         inFlight = false
       }
     }
 
-    const initialCheck = window.setTimeout(() => void checkProgress(), 1000)
-    const interval = window.setInterval(() => void checkProgress(), 2500)
+    const checkOnFocus = () => void checkProgress()
+    const checkOnVisibility = () => {
+      if (document.visibilityState === 'visible') {
+        void checkProgress()
+      }
+    }
+    const initialCheck = window.setTimeout(() => void checkProgress(), 250)
+    const interval = window.setInterval(() => void checkProgress(), 1000)
+    window.addEventListener('focus', checkOnFocus)
+    document.addEventListener('visibilitychange', checkOnVisibility)
 
     return () => {
       cancelled = true
       window.clearTimeout(initialCheck)
       window.clearInterval(interval)
+      window.removeEventListener('focus', checkOnFocus)
+      document.removeEventListener('visibilitychange', checkOnVisibility)
     }
   }, [navigate, params])
 
@@ -304,6 +340,14 @@ function SetupPage() {
           </Alert>
         )}
 
+        {progressError && (
+          <Alert className="mt-6" variant="destructive">
+            <AlertCircle className="size-4" />
+            <AlertTitle>Setup status failed</AlertTitle>
+            <AlertDescription>{progressError}</AlertDescription>
+          </Alert>
+        )}
+
         <section className="mt-8 border-y border-border">
           <div className="grid gap-4 py-5 md:grid-cols-[180px_minmax(0,1fr)]">
             <div className="flex items-center gap-2 text-sm font-semibold leading-5">
@@ -320,6 +364,10 @@ function SetupPage() {
               <p className="text-sm leading-5 text-muted-foreground">
                 Run these commands in the local repo you want to upload.
               </p>
+              <div className="flex items-center gap-2 text-sm leading-5 text-muted-foreground">
+                <LoaderCircle className="size-3.5 animate-spin" />
+                <span>{setupProgressLabel(progressState)}</span>
+              </div>
               <CopyableCodeBlock
                 copyLabel="Copy Git setup commands"
                 value={commands.join('\n')}
@@ -565,6 +613,25 @@ function setupSecretKey(repoId: string) {
 
 function setupPushSecretKey(repoId: string) {
   return `scope:git-push-token:${repoId}`
+}
+
+function setupProgressLabel(state: SetupProgressState) {
+  switch (state) {
+    case 'opening-review':
+      return 'Upload received. Opening review...'
+    case 'published':
+      return 'Repo published. Returning home...'
+    case 'waiting':
+      return 'Watching for your first Git push...'
+  }
+}
+
+function storeHomeFlash(message: string) {
+  if (typeof window === 'undefined') {
+    return
+  }
+
+  window.sessionStorage.setItem('scope:home-flash', message)
 }
 
 function getApiConnection() {

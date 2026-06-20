@@ -1,33 +1,38 @@
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
-import {
-  Table,
-  TableBody,
-  TableCell,
-  TableHead,
-  TableHeader,
-  TableRow,
-} from '@/components/ui/table'
 import { authCookieName } from '@/lib/auth'
 import { cn } from '@/lib/utils'
-import { Link, createFileRoute, useNavigate } from '@tanstack/react-router'
+import {
+  Link,
+  createFileRoute,
+  redirect,
+  useNavigate,
+  useRouter,
+} from '@tanstack/react-router'
 import { createServerFn } from '@tanstack/react-start'
 import {
   AlertCircle,
   ArrowLeft,
   Check,
+  ChevronDown,
+  ChevronRight,
+  File,
   FileSearch,
+  Folder,
+  FolderOpen,
   GitBranch,
   Globe2,
   LoaderCircle,
   Lock,
+  Minus,
   Rocket,
   X,
 } from 'lucide-react'
 import { useState } from 'react'
 
 type Visibility = 'Private' | 'Public'
+type VisibilityState = Visibility | 'Mixed'
 type RepoPublicationState = 'PendingFirstPush' | 'PendingPublish' | 'Published'
 type ReviewKind = 'PendingImport' | 'StagedUpdate'
 type StagedFileChangeKind = 'Added' | 'Modified' | 'Deleted'
@@ -78,18 +83,38 @@ type StagedUpdateReview = {
 
 type RepoReview = PendingImportReview | StagedUpdateReview
 
+type RepoReviewResult = RepoReview | { kind: 'NoReview' }
+
+type ReviewFile = RepoFile | StagedFile
+
 type ReviewParams = {
   owner: string
   repo: string
 }
 
-type SetFileVisibilityInput = ReviewParams & {
+type SetVisibilityInput = ReviewParams & {
   kind: ReviewKind
-  path: string
+  paths: string[]
   visibility: Visibility
 }
 
+type ReviewTreeNode = {
+  children: ReviewTreeNode[]
+  files: ReviewFile[]
+  key: string
+  name: string
+  path: string
+  type: 'folder'
+} | {
+  file: ReviewFile
+  key: string
+  name: string
+  path: string
+  type: 'file'
+}
+
 const localApiBase = 'http://localhost:8080'
+const homeFlashKey = 'scope:home-flash'
 
 const loadReviewForRequest = createServerFn({ method: 'GET' })
   .validator(parseReviewParams)
@@ -102,32 +127,39 @@ const loadReviewForRequest = createServerFn({ method: 'GET' })
     return loadRepoReview(data, idToken)
   })
 
-const setFileVisibilityForRequest = createServerFn({ method: 'POST' })
-  .validator(parseSetFileVisibilityInput)
+const setVisibilityForRequest = createServerFn({ method: 'POST' })
+  .validator(parseSetVisibilityInput)
   .handler(async ({ data }) => {
     const idToken = await readRequestAuthToken()
     if (!idToken) {
       throw new Error('Sign in as the repo owner to update file visibility.')
     }
 
-    const response = await fetch(reviewVisibilityUrl(data), {
-      body: JSON.stringify({
-        path: data.path,
-        visibility: data.visibility,
-      }),
-      headers: {
-        ...authHeaders(idToken),
-        'content-type': 'application/json',
-      },
-      method: 'PATCH',
-    })
-    const payload = await response.json().catch(() => null)
+    for (const path of data.paths) {
+      const response = await fetch(reviewVisibilityUrl(data), {
+        body: JSON.stringify({
+          path,
+          visibility: data.visibility,
+        }),
+        headers: {
+          ...authHeaders(idToken),
+          'content-type': 'application/json',
+        },
+        method: 'PATCH',
+      })
+      const payload = await response.json().catch(() => null)
 
-    if (!response.ok) {
-      throw new Error(payload?.error ?? `request failed: ${response.status}`)
+      if (!response.ok) {
+        throw new Error(payload?.error ?? `request failed: ${response.status}`)
+      }
     }
 
-    return payload as RepoFile | StagedUpdate
+    const updated = await loadRepoReview(data, idToken)
+    if (updated.kind === 'NoReview') {
+      throw new Error('No review is waiting for this repo.')
+    }
+
+    return updated
   })
 
 const publishRepoForRequest = createServerFn({ method: 'POST' })
@@ -165,7 +197,7 @@ const rejectStagedUpdateForRequest = createServerFn({ method: 'POST' })
 async function loadRepoReview(
   data: ReviewParams,
   idToken: string,
-): Promise<RepoReview> {
+): Promise<RepoReviewResult> {
   const api = getApiConnection()
   const init = { headers: authHeaders(idToken) }
 
@@ -186,15 +218,19 @@ async function loadRepoReview(
     init,
   )
 
+  if (!staged) {
+    return { kind: 'NoReview' }
+  }
+
   return {
     kind: 'StagedUpdate',
     publication_state: 'Published',
     default_visibility: null,
-    id: staged?.id ?? null,
-    branch: staged?.branch ?? null,
-    base_live_commit_id: staged?.base_live_commit_id ?? null,
-    message: staged?.message ?? null,
-    files: staged?.files ?? [],
+    id: staged.id,
+    branch: staged.branch,
+    base_live_commit_id: staged.base_live_commit_id,
+    message: staged.message,
+    files: staged.files,
   }
 }
 
@@ -224,7 +260,17 @@ async function postStagedUpdateAction(
 }
 
 export const Route = createFileRoute('/repos/$owner/$repo/review')({
-  loader: ({ params }) => loadReviewForRequest({ data: params }),
+  loader: async ({ params }) => {
+    const review = await loadReviewForRequest({ data: params })
+    if (review.kind === 'NoReview') {
+      throw redirect({
+        params,
+        to: '/repos/$owner/$repo',
+      })
+    }
+
+    return review
+  },
   errorComponent: ReviewError,
   component: ReviewPage,
 })
@@ -233,21 +279,31 @@ function ReviewPage() {
   const initialReview = Route.useLoaderData()
   const params = Route.useParams()
   const navigate = useNavigate()
+  const router = useRouter()
   const [review, setReview] = useState<RepoReview>(initialReview)
-  const [pendingPath, setPendingPath] = useState<string | null>(null)
+  const [pendingKey, setPendingKey] = useState<string | null>(null)
   const [publishing, setPublishing] = useState(false)
   const [rejecting, setRejecting] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const stagedReview = review.kind === 'StagedUpdate'
 
-  async function setVisibility(file: RepoFile | StagedFile, visibility: Visibility) {
+  async function setVisibility(
+    files: ReviewFile[],
+    visibility: Visibility,
+    pendingKey: string,
+  ) {
+    const paths = files.map((file) => file.path)
+    if (paths.length === 0) {
+      return
+    }
+
     setError(null)
-    setPendingPath(file.path)
+    setPendingKey(pendingKey)
     try {
-      const updated = await setFileVisibilityForRequest({
-        data: { ...params, kind: review.kind, path: file.path, visibility },
+      const updated = await setVisibilityForRequest({
+        data: { ...params, kind: review.kind, paths, visibility },
       })
-      setReview((current) => updateReviewVisibility(current, updated))
+      setReview(updated)
     } catch (visibilityError) {
       setError(
         visibilityError instanceof Error
@@ -255,7 +311,7 @@ function ReviewPage() {
           : 'visibility update failed',
       )
     } finally {
-      setPendingPath(null)
+      setPendingKey(null)
     }
   }
 
@@ -265,10 +321,13 @@ function ReviewPage() {
     try {
       if (review.kind === 'StagedUpdate') {
         await applyStagedUpdateForRequest({ data: params })
+        storeHomeFlash(`${params.owner}/${params.repo} update applied.`)
       } else {
         await publishRepoForRequest({ data: params })
+        storeHomeFlash(`${params.owner}/${params.repo} published.`)
       }
-      await navigate({ to: '/' })
+      await navigate({ replace: true, to: '/' })
+      await router.invalidate()
     } catch (publishError) {
       setError(
         publishError instanceof Error ? publishError.message : 'review action failed',
@@ -282,7 +341,9 @@ function ReviewPage() {
     setError(null)
     try {
       await rejectStagedUpdateForRequest({ data: params })
-      await navigate({ to: '/' })
+      storeHomeFlash(`${params.owner}/${params.repo} update rejected.`)
+      await navigate({ replace: true, to: '/' })
+      await router.invalidate()
     } catch (rejectError) {
       setError(rejectError instanceof Error ? rejectError.message : 'reject failed')
       setRejecting(false)
@@ -397,56 +458,15 @@ function ReviewPage() {
               </div>
             </div>
           ) : (
-            <Table>
-              <TableHeader>
-                <TableRow>
-                  <TableHead>File</TableHead>
-                  {stagedReview && <TableHead className="w-[100px]">Change</TableHead>}
-                  <TableHead className="w-[120px]">Visibility</TableHead>
-                  <TableHead className="w-[120px] text-right">Change</TableHead>
-                </TableRow>
-              </TableHeader>
-              <TableBody>
-                {review.files.map((file) => {
-                  const nextVisibility =
-                    file.visibility === 'Public' ? 'Private' : 'Public'
-                  const busy = pendingPath === file.path
-                  return (
-                    <TableRow key={file.path}>
-                      <TableCell className="max-w-[340px] truncate font-mono text-xs sm:max-w-[560px]">
-                        {file.path}
-                      </TableCell>
-                      {stagedReview && (
-                        <TableCell>
-                          <Badge variant="outline">
-                            {'kind' in file ? file.kind : 'Modified'}
-                          </Badge>
-                        </TableCell>
-                      )}
-                      <TableCell>
-                        <VisibilityBadge visibility={file.visibility} />
-                      </TableCell>
-                      <TableCell className="text-right">
-                        <Button
-                          disabled={busy || publishing || rejecting}
-                          onClick={() => void setVisibility(file, nextVisibility)}
-                          size="sm"
-                          type="button"
-                          variant="secondary"
-                        >
-                          {busy ? (
-                            <LoaderCircle className="size-3.5 animate-spin" />
-                          ) : (
-                            <Check className="size-3.5" />
-                          )}
-                          <span>{nextVisibility}</span>
-                        </Button>
-                      </TableCell>
-                    </TableRow>
-                  )
-                })}
-              </TableBody>
-            </Table>
+            <ReviewTree
+              disabled={publishing || rejecting}
+              files={review.files}
+              onSetVisibility={(files, visibility, key) =>
+                void setVisibility(files, visibility, key)
+              }
+              pendingKey={pendingKey}
+              stagedReview={stagedReview}
+            />
           )}
         </section>
       </section>
@@ -454,47 +474,313 @@ function ReviewPage() {
   )
 }
 
-function updateReviewVisibility(
-  current: RepoReview,
-  updated: RepoFile | StagedUpdate,
-): RepoReview {
-  if (current.kind === 'StagedUpdate') {
-    if (!('files' in updated)) {
-      return current
-    }
+function ReviewTree({
+  disabled,
+  files,
+  onSetVisibility,
+  pendingKey,
+  stagedReview,
+}: {
+  disabled: boolean
+  files: ReviewFile[]
+  onSetVisibility: (
+    files: ReviewFile[],
+    visibility: Visibility,
+    pendingKey: string,
+  ) => void
+  pendingKey: string | null
+  stagedReview: boolean
+}) {
+  const [collapsed, setCollapsed] = useState<Set<string>>(() => new Set())
+  const root = buildReviewTree(files)
 
-    return {
-      ...current,
-      id: updated.id,
-      branch: updated.branch,
-      base_live_commit_id: updated.base_live_commit_id,
-      message: updated.message,
-      files: updated.files,
+  function toggleFolder(key: string) {
+    setCollapsed((current) => {
+      const next = new Set(current)
+      if (next.has(key)) {
+        next.delete(key)
+      } else {
+        next.add(key)
+      }
+      return next
+    })
+  }
+
+  return (
+    <div className="divide-y divide-border">
+      <div className="hidden grid-cols-[minmax(0,1fr)_110px_120px_120px] gap-3 px-2 py-2 text-xs font-medium leading-4 text-muted-foreground sm:grid">
+        <div>Path</div>
+        <div>{stagedReview ? 'Change' : 'Scope'}</div>
+        <div>Visibility</div>
+        <div className="text-right">Set</div>
+      </div>
+      {root.children.map((node) => (
+        <ReviewTreeNodeRow
+          collapsed={collapsed}
+          depth={0}
+          disabled={disabled}
+          key={node.key}
+          node={node}
+          onSetVisibility={onSetVisibility}
+          onToggleFolder={toggleFolder}
+          pendingKey={pendingKey}
+          stagedReview={stagedReview}
+        />
+      ))}
+    </div>
+  )
+}
+
+function ReviewTreeNodeRow({
+  collapsed,
+  depth,
+  disabled,
+  node,
+  onSetVisibility,
+  onToggleFolder,
+  pendingKey,
+  stagedReview,
+}: {
+  collapsed: Set<string>
+  depth: number
+  disabled: boolean
+  node: ReviewTreeNode
+  onSetVisibility: (
+    files: ReviewFile[],
+    visibility: Visibility,
+    pendingKey: string,
+  ) => void
+  onToggleFolder: (key: string) => void
+  pendingKey: string | null
+  stagedReview: boolean
+}) {
+  if (node.type === 'file') {
+    const nextVisibility = node.file.visibility === 'Public' ? 'Private' : 'Public'
+    const busy = pendingKey === node.key
+    return (
+      <div className="grid gap-2 px-2 py-2.5 text-sm sm:grid-cols-[minmax(0,1fr)_110px_120px_120px] sm:items-center">
+        <div
+          className="flex min-w-0 items-center gap-2"
+          style={{ paddingLeft: `${depth * 18}px` }}
+        >
+          <span className="size-6 shrink-0" />
+          <File className="size-4 shrink-0 text-muted-foreground" />
+          <span className="min-w-0 truncate font-mono text-xs" title={node.path}>
+            {displayPath(node.path)}
+          </span>
+        </div>
+        <div>
+          {stagedReview && (
+            <Badge variant="outline">
+              {'kind' in node.file ? node.file.kind : 'Modified'}
+            </Badge>
+          )}
+        </div>
+        <div>
+          <VisibilityBadge visibility={node.file.visibility} />
+        </div>
+        <div className="flex justify-end">
+          <Button
+            aria-label={`Set ${displayPath(node.path)} ${nextVisibility.toLowerCase()}`}
+            disabled={disabled || busy || pendingKey !== null}
+            onClick={() => onSetVisibility([node.file], nextVisibility, node.key)}
+            size="sm"
+            type="button"
+            variant="secondary"
+          >
+            {busy ? (
+              <LoaderCircle className="size-3.5 animate-spin" />
+            ) : (
+              <Check className="size-3.5" />
+            )}
+            <span>{nextVisibility}</span>
+          </Button>
+        </div>
+      </div>
+    )
+  }
+
+  const isCollapsed = collapsed.has(node.key)
+  const visibility = folderVisibility(node.files)
+  const nextVisibility = visibility === 'Public' ? 'Private' : 'Public'
+  const busy = pendingKey === node.key
+
+  return (
+    <>
+      <div className="grid gap-2 bg-muted/20 px-2 py-2.5 text-sm sm:grid-cols-[minmax(0,1fr)_110px_120px_120px] sm:items-center">
+        <div
+          className="flex min-w-0 items-center gap-2"
+          style={{ paddingLeft: `${depth * 18}px` }}
+        >
+          <Button
+            aria-label={`${isCollapsed ? 'Expand' : 'Collapse'} ${node.name}`}
+            onClick={() => onToggleFolder(node.key)}
+            size="icon-xs"
+            type="button"
+            variant="secondary"
+          >
+            {isCollapsed ? (
+              <ChevronRight className="size-3" />
+            ) : (
+              <ChevronDown className="size-3" />
+            )}
+          </Button>
+          {isCollapsed ? (
+            <Folder className="size-4 shrink-0 text-muted-foreground" />
+          ) : (
+            <FolderOpen className="size-4 shrink-0 text-muted-foreground" />
+          )}
+          <span className="min-w-0 truncate font-mono text-xs" title={node.path}>
+            {node.name}
+          </span>
+        </div>
+        <div className="text-xs leading-4 text-muted-foreground">
+          {node.files.length} {node.files.length === 1 ? 'file' : 'files'}
+        </div>
+        <div>
+          <VisibilityBadge visibility={visibility} />
+        </div>
+        <div className="flex justify-end">
+          <Button
+            aria-label={`Set ${node.path} ${nextVisibility.toLowerCase()}`}
+            disabled={disabled || busy || pendingKey !== null}
+            onClick={() => onSetVisibility(node.files, nextVisibility, node.key)}
+            size="sm"
+            type="button"
+            variant="secondary"
+          >
+            {busy ? (
+              <LoaderCircle className="size-3.5 animate-spin" />
+            ) : (
+              <Check className="size-3.5" />
+            )}
+            <span>{nextVisibility}</span>
+          </Button>
+        </div>
+      </div>
+      {!isCollapsed &&
+        node.children.map((child) => (
+          <ReviewTreeNodeRow
+            collapsed={collapsed}
+            depth={depth + 1}
+            disabled={disabled}
+            key={child.key}
+            node={child}
+            onSetVisibility={onSetVisibility}
+            onToggleFolder={onToggleFolder}
+            pendingKey={pendingKey}
+            stagedReview={stagedReview}
+          />
+        ))}
+    </>
+  )
+}
+
+function buildReviewTree(files: ReviewFile[]) {
+  const root: Extract<ReviewTreeNode, { type: 'folder' }> = {
+    children: [],
+    files: [],
+    key: 'folder:/',
+    name: '',
+    path: '/',
+    type: 'folder',
+  }
+
+  for (const file of files) {
+    const parts = pathParts(file.path)
+    let current = root
+    for (let index = 0; index < parts.length; index += 1) {
+      const part = parts[index]
+      const path = `/${parts.slice(0, index + 1).join('/')}`
+      const last = index === parts.length - 1
+      if (last) {
+        current.children.push({
+          file,
+          key: `file:${file.path}`,
+          name: part,
+          path: file.path,
+          type: 'file',
+        })
+      } else {
+        let folder = current.children.find(
+          (child): child is Extract<ReviewTreeNode, { type: 'folder' }> =>
+            child.type === 'folder' && child.path === path,
+        )
+        if (!folder) {
+          folder = {
+            children: [],
+            files: [],
+            key: `folder:${path}`,
+            name: part,
+            path,
+            type: 'folder',
+          }
+          current.children.push(folder)
+        }
+        current = folder
+      }
     }
   }
 
-  if ('files' in updated) {
-    return current
-  }
+  sortReviewTree(root)
+  attachDescendantFiles(root)
+  return root
+}
 
-  return {
-    ...current,
-    files: current.files.map((currentFile) =>
-      currentFile.path === updated.path ? updated : currentFile,
-    ),
+function sortReviewTree(node: Extract<ReviewTreeNode, { type: 'folder' }>) {
+  node.children.sort((left, right) => {
+    if (left.type !== right.type) {
+      return left.type === 'folder' ? -1 : 1
+    }
+    return left.name.localeCompare(right.name)
+  })
+  for (const child of node.children) {
+    if (child.type === 'folder') {
+      sortReviewTree(child)
+    }
   }
 }
 
-function VisibilityBadge({ visibility }: { visibility: Visibility }) {
+function attachDescendantFiles(node: Extract<ReviewTreeNode, { type: 'folder' }>) {
+  node.files = node.children.flatMap((child) => {
+    if (child.type === 'file') {
+      return [child.file]
+    }
+    attachDescendantFiles(child)
+    return child.files
+  })
+}
+
+function folderVisibility(files: ReviewFile[]): VisibilityState {
+  const hasPublic = files.some((file) => file.visibility === 'Public')
+  const hasPrivate = files.some((file) => file.visibility === 'Private')
+  if (hasPublic && hasPrivate) {
+    return 'Mixed'
+  }
+  return hasPublic ? 'Public' : 'Private'
+}
+
+function pathParts(path: string) {
+  return path.replace(/^\/+/, '').split('/').filter(Boolean)
+}
+
+function displayPath(path: string) {
+  return path.replace(/^\/+/, '')
+}
+
+function VisibilityBadge({ visibility }: { visibility: VisibilityState }) {
   return (
     <Badge
       className={cn(
         visibility === 'Private' && 'border-amber-400 bg-amber-100 text-amber-900',
         visibility === 'Public' && 'border-green-400 bg-green-100 text-green-900',
+        visibility === 'Mixed' && 'border-blue-400 bg-blue-100 text-blue-900',
       )}
       variant="outline"
     >
-      {visibility === 'Private' ? (
+      {visibility === 'Mixed' ? (
+        <Minus className="size-3" />
+      ) : visibility === 'Private' ? (
         <Lock className="size-3" />
       ) : (
         <Globe2 className="size-3" />
@@ -544,18 +830,23 @@ function parseReviewParams(input: unknown): ReviewParams {
   return { owner, repo }
 }
 
-function parseSetFileVisibilityInput(input: unknown): SetFileVisibilityInput {
-  const data = input as Partial<SetFileVisibilityInput> | null
+function parseSetVisibilityInput(input: unknown): SetVisibilityInput {
+  const data = input as Partial<SetVisibilityInput> | null
   const params = parseReviewParams(data)
   const kind = data?.kind === 'StagedUpdate' ? 'StagedUpdate' : 'PendingImport'
-  const path = typeof data?.path === 'string' ? data.path.trim() : ''
+  const paths = Array.isArray(data?.paths)
+    ? data.paths
+        .filter((path): path is string => typeof path === 'string')
+        .map((path) => path.trim())
+        .filter(Boolean)
+    : []
   const visibility = data?.visibility === 'Public' ? 'Public' : 'Private'
 
-  if (!path) {
-    throw new Error('File path is required.')
+  if (paths.length === 0) {
+    throw new Error('At least one file path is required.')
   }
 
-  return { ...params, kind, path, visibility }
+  return { ...params, kind, paths, visibility }
 }
 
 async function loadJson<T>(url: string, init?: RequestInit): Promise<T> {
@@ -581,7 +872,7 @@ class HttpError extends Error {
   }
 }
 
-function reviewVisibilityUrl(data: SetFileVisibilityInput) {
+function reviewVisibilityUrl(data: SetVisibilityInput) {
   const endpoint =
     data.kind === 'StagedUpdate'
       ? 'staged-update/files/visibility'
@@ -592,6 +883,14 @@ function reviewVisibilityUrl(data: SetFileVisibilityInput) {
 
 function authHeaders(idToken?: string): HeadersInit {
   return idToken ? { authorization: `Bearer ${idToken}` } : {}
+}
+
+function storeHomeFlash(message: string) {
+  if (typeof window === 'undefined') {
+    return
+  }
+
+  window.sessionStorage.setItem(homeFlashKey, message)
 }
 
 function getApiConnection() {
