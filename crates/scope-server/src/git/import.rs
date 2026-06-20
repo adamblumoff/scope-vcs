@@ -13,6 +13,7 @@ use crate::{
     git::{
         InitialPushCredential, PersistedReceivePackUpdate, authorize_first_push_token_for_repo,
         authorize_git_push_token_for_repo,
+        storage::{owner_git_repo_path, replace_git_repo_and_then, staged_git_repo_path},
     },
     http::responses::{first_push_token_status_at, pending_scope_path, repo_owner_ids},
     persistence::{lock_catalog, persist_catalog, unix_now},
@@ -503,6 +504,7 @@ pub(crate) fn persist_pending_import(
     Ok(())
 }
 
+#[cfg(test)]
 pub(crate) fn persist_receive_pack_update(
     state: &AppState,
     owner: &str,
@@ -527,6 +529,39 @@ pub(crate) fn persist_receive_pack_update(
     persist_catalog(state, &staged)?;
     *catalog = staged;
     Ok(persisted)
+}
+
+pub(crate) fn persist_receive_pack_update_and_promote(
+    state: &AppState,
+    owner: &str,
+    repo_name: &str,
+    staging_repo: &FsPath,
+    update: ReceivePackUpdate,
+) -> Result<PersistedReceivePackUpdate, ApiError> {
+    let repo_id = crate::domain::store::repo_id(owner, repo_name);
+    let mut catalog = lock_catalog(state)?;
+    let mut staged = catalog.clone();
+    let persisted = {
+        let repo = staged
+            .repositories
+            .get_mut(&repo_id)
+            .ok_or_else(|| ApiError::not_found(format!("repo {owner}/{repo_name} not found")))?;
+        if stage_receive_pack_update(repo, update)?.is_some() {
+            PersistedReceivePackUpdate::Staged
+        } else {
+            PersistedReceivePackUpdate::Applied
+        }
+    };
+    let target_repo = match persisted {
+        PersistedReceivePackUpdate::Staged => staged_git_repo_path(state, owner, repo_name),
+        PersistedReceivePackUpdate::Applied => owner_git_repo_path(state, owner, repo_name),
+    };
+
+    replace_git_repo_and_then(staging_repo, &target_repo, || {
+        persist_catalog(state, &staged)?;
+        *catalog = staged;
+        Ok(persisted)
+    })
 }
 
 pub(crate) fn run_git(repo: Option<&FsPath>, args: &[&str], action: &str) -> Result<(), ApiError> {
