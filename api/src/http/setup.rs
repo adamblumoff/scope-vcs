@@ -8,7 +8,7 @@ use crate::{
     },
     error::ApiError,
     http::responses::{RepoSetupResponse, repo_setup_response},
-    persistence::{lock_catalog, persist_catalog, unix_now},
+    persistence::unix_now,
     state::{AppState, find_repo},
 };
 use axum::{
@@ -26,15 +26,13 @@ pub(crate) async fn get_repo_setup(
     let user = ensure_user_for_identity(&state, &identity)?;
     let repo = find_repo(&state, &owner, &repo_name)?;
     ensure_owner_setup_access(&state, &repo, &user.id)?;
-    let catalog = lock_catalog(&state)?;
-    Ok(Json(repo_setup_response(
-        &catalog,
-        &repo,
-        &user.id,
-        unix_now()?,
-        None,
-        None,
-    )?))
+    let repo = repo.clone();
+    let user_id = user.id.clone();
+    let now = unix_now()?;
+    let setup = state
+        .metadata
+        .read(move |catalog| repo_setup_response(catalog, &repo, &user_id, now, None, None))?;
+    Ok(Json(setup))
 }
 
 pub(crate) async fn regenerate_first_push_token(
@@ -47,18 +45,16 @@ pub(crate) async fn regenerate_first_push_token(
     let repo_id = crate::domain::store::repo_id(&owner, &repo_name);
     let now = unix_now()?;
 
-    let setup = {
-        let mut catalog = lock_catalog(&state)?;
-        let mut staged = catalog.clone();
-        let repo = staged
+    let setup = state.metadata.update(move |catalog| {
+        let repo = catalog
             .repositories
             .get(&repo_id)
             .ok_or_else(|| ApiError::not_found(format!("repo {owner}/{repo_name} not found")))?;
-        ensure_owner_setup_access_in_catalog(&staged, repo, &user.id)?;
+        ensure_owner_setup_access_in_catalog(catalog, repo, &user.id)?;
 
         let (secret, token) = generate_first_push_token(&user.id)?;
         {
-            let repo = staged
+            let repo = catalog
                 .repositories
                 .get_mut(&repo_id)
                 .expect("repo was already checked");
@@ -68,16 +64,14 @@ pub(crate) async fn regenerate_first_push_token(
                 repo.git_push_token = Some(push_token);
             }
         }
-        let repo = staged
+        let repo = catalog
             .repositories
             .get(&repo_id)
             .expect("repo was already checked");
-        let setup = repo_setup_response(&staged, repo, &user.id, now, Some(secret), None)?;
+        let setup = repo_setup_response(catalog, repo, &user.id, now, Some(secret), None)?;
 
-        persist_catalog(&state, &staged)?;
-        *catalog = staged;
-        setup
-    };
+        Ok(setup)
+    })?;
 
     Ok(Json(setup))
 }

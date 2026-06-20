@@ -8,7 +8,7 @@ use crate::{
         GIT_PUSH_TOKEN_PREFIX,
     },
     error::ApiError,
-    persistence::{lock_catalog, unix_now},
+    persistence::unix_now,
     state::AppState,
 };
 use sha2::{Digest, Sha256};
@@ -18,8 +18,11 @@ pub(crate) fn ensure_owner_setup_access(
     repo: &StoredRepository,
     user_id: &str,
 ) -> Result<(), ApiError> {
-    let catalog = lock_catalog(state)?;
-    ensure_owner_setup_access_in_catalog(&catalog, repo, user_id)
+    let repo = repo.clone();
+    let user_id = user_id.to_string();
+    state
+        .metadata
+        .read(move |catalog| ensure_owner_setup_access_in_catalog(catalog, &repo, &user_id))
 }
 
 pub(crate) fn ensure_owner_setup_access_in_catalog(

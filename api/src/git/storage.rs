@@ -6,6 +6,7 @@ use crate::{
     error::ApiError,
     git::import::{run_git, safe_repo_key},
     git::upload::projection_bare_repo,
+    persistence::ensure_private_dir,
     state::{AppState, find_repo},
 };
 use axum::{body::Body, http::StatusCode, response::Response};
@@ -28,14 +29,11 @@ pub(crate) fn receive_pack_staging_repo_path(
             "failed to create receive-pack staging path: {error}"
         ))
     })?;
-    let base_dir = state
-        .state_path
-        .parent()
-        .map(PathBuf::from)
-        .unwrap_or_else(std::env::temp_dir);
+    let base_dir = state.data_dir.as_ref().clone();
     let repo_id = crate::domain::store::repo_id(owner, repo_name);
     let digest = Sha256::digest(repo_id.as_bytes());
     let digest = hex::encode(digest);
+    ensure_private_dir(&base_dir)?;
     Ok(base_dir
         .join("git-rx")
         .join(format!("{}-{}.git", &digest[..16], hex::encode(bytes))))
@@ -61,11 +59,7 @@ pub(crate) fn staged_git_repo_path(state: &AppState, owner: &str, repo_name: &st
 }
 
 pub(crate) fn git_repo_storage_root(state: &AppState) -> PathBuf {
-    state
-        .state_path
-        .parent()
-        .map(PathBuf::from)
-        .unwrap_or_else(std::env::temp_dir)
+    state.data_dir.as_ref().clone()
 }
 
 pub(crate) fn delete_repo_storage(
@@ -105,7 +99,7 @@ pub(crate) fn remove_dir_if_exists(path: &FsPath) -> Result<(), ApiError> {
 #[cfg(test)]
 pub(crate) fn replace_git_repo(src: &FsPath, dst: &FsPath) -> Result<(), ApiError> {
     if let Some(parent) = dst.parent() {
-        fs::create_dir_all(parent).map_err(ApiError::internal)?;
+        ensure_private_dir(parent)?;
     }
     if dst.exists() {
         fs::remove_dir_all(dst).map_err(ApiError::internal)?;
@@ -118,8 +112,56 @@ pub(crate) fn replace_git_repo_and_then<T>(
     dst: &FsPath,
     op: impl FnOnce() -> Result<T, ApiError>,
 ) -> Result<T, ApiError> {
+    let replacement = begin_git_repo_replacement(src, dst)?;
+
+    match op() {
+        Ok(value) => {
+            replacement.commit()?;
+            Ok(value)
+        }
+        Err(error) => Err(error),
+    }
+}
+
+pub(crate) struct GitRepoReplacement {
+    src: PathBuf,
+    dst: PathBuf,
+    backup: PathBuf,
+    active: bool,
+}
+
+impl GitRepoReplacement {
+    pub(crate) fn commit(mut self) -> Result<(), ApiError> {
+        self.active = false;
+        if self.backup.exists() {
+            fs::remove_dir_all(&self.backup).map_err(ApiError::internal)?;
+        }
+        Ok(())
+    }
+
+    fn rollback(&mut self) {
+        let _ = fs::rename(&self.dst, &self.src);
+        if self.backup.exists() {
+            let _ = fs::rename(&self.backup, &self.dst);
+        }
+        self.active = false;
+    }
+}
+
+impl Drop for GitRepoReplacement {
+    fn drop(&mut self) {
+        if self.active {
+            self.rollback();
+        }
+    }
+}
+
+pub(crate) fn begin_git_repo_replacement(
+    src: &FsPath,
+    dst: &FsPath,
+) -> Result<GitRepoReplacement, ApiError> {
     if let Some(parent) = dst.parent() {
-        fs::create_dir_all(parent).map_err(ApiError::internal)?;
+        ensure_private_dir(parent)?;
     }
     let backup = unique_sibling_path(dst, "backup")?;
     if backup.exists() {
@@ -135,21 +177,12 @@ pub(crate) fn replace_git_repo_and_then<T>(
         ApiError::internal(error)
     })?;
 
-    match op() {
-        Ok(value) => {
-            if backup.exists() {
-                fs::remove_dir_all(&backup).map_err(ApiError::internal)?;
-            }
-            Ok(value)
-        }
-        Err(error) => {
-            let _ = fs::rename(dst, src);
-            if backup.exists() {
-                let _ = fs::rename(&backup, dst);
-            }
-            Err(error)
-        }
-    }
+    Ok(GitRepoReplacement {
+        src: src.to_path_buf(),
+        dst: dst.to_path_buf(),
+        backup,
+        active: true,
+    })
 }
 
 pub(crate) fn remove_git_repo_and_then<T>(
@@ -192,7 +225,7 @@ pub(crate) fn ensure_first_push_receive_pack_staging_repo(
 ) -> Result<PathBuf, ApiError> {
     let repo_root = receive_pack_staging_repo_path(state, owner, repo_name)?;
     if let Some(parent) = repo_root.parent() {
-        fs::create_dir_all(parent).map_err(ApiError::internal)?;
+        ensure_private_dir(parent)?;
     }
     run_git(
         None,
@@ -240,7 +273,7 @@ pub(crate) fn ensure_published_receive_pack_staging_repo(
     };
     let repo_root = receive_pack_staging_repo_path(state, owner, repo_name)?;
     if let Some(parent) = repo_root.parent() {
-        fs::create_dir_all(parent).map_err(ApiError::internal)?;
+        ensure_private_dir(parent)?;
     }
     let seed = seed_repo.to_string_lossy().to_string();
     let target = repo_root.to_string_lossy().to_string();
