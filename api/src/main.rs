@@ -18,7 +18,7 @@ async fn main() -> anyhow::Result<()> {
         .and_then(|value| value.parse::<u16>().ok())
         .unwrap_or(8080);
     let addr = SocketAddr::from(([0, 0, 0, 0], port));
-    let state = AppState::from_env()?;
+    let state = AppState::from_env().await?;
 
     let app = router(state);
     tracing::info!(%addr, "starting api");

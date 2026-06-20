@@ -4,6 +4,7 @@ pub mod state;
 
 pub(crate) mod auth;
 pub(crate) mod config;
+pub(crate) mod db;
 pub(crate) mod error;
 pub(crate) mod git;
 pub(crate) mod http;

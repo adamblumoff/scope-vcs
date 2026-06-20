@@ -454,6 +454,7 @@ fn persist_catalog_writes_private_state_permissions() {
     ));
     let state = AppState {
         catalog: Arc::new(Mutex::new(app_catalog())),
+        db: Arc::new(crate::db::mock_connection()),
         state_path: Arc::new(state_dir.join("state.json")),
         shoo: ShooVerifier::new(
             SHOO_ISSUER,
@@ -462,7 +463,7 @@ fn persist_catalog_writes_private_state_permissions() {
         ),
     };
 
-    persist_catalog(&state, &app_catalog()).unwrap();
+    persist_test_catalog(&state, &app_catalog()).unwrap();
 
     let dir_mode = fs::metadata(&state_dir).unwrap().permissions().mode() & 0o777;
     let file_mode = fs::metadata(state.state_path.as_ref())
