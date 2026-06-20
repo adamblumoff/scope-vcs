@@ -1,3 +1,11 @@
+use crate::domain::git_projection::build_virtual_git_projection;
+use crate::domain::policy::{Principal, ScopePath};
+use crate::domain::projection::{
+    AuthorVisibility, LogicalCommit, MixedCommitPolicy, project_graph,
+};
+use crate::domain::store::{
+    AppCatalog, RepoPublicationState, RepoRole, StoredRepository, app_catalog,
+};
 use crate::{
     auth::shoo::ShooVerifier,
     config::{git_repo_root, state_path},
@@ -5,10 +13,6 @@ use crate::{
     http::responses::pending_import_changes,
     persistence::{apply_persisted_state, ensure_private_dir, load_state, lock_catalog},
 };
-use scope_git::build_virtual_git_projection;
-use scope_policy::{Principal, ScopePath};
-use scope_projection::{AuthorVisibility, LogicalCommit, MixedCommitPolicy, project_graph};
-use scope_store::{AppCatalog, RepoPublicationState, RepoRole, StoredRepository, app_catalog};
 use std::{
     collections::BTreeMap,
     path::PathBuf,

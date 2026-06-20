@@ -44,7 +44,7 @@ pub(crate) async fn regenerate_first_push_token(
 ) -> Result<Json<RepoSetupResponse>, ApiError> {
     let identity = require_identity(&state, &headers).await?;
     let user = ensure_user_for_identity(&state, &identity)?;
-    let repo_id = scope_store::repo_id(&owner, &repo_name);
+    let repo_id = crate::domain::store::repo_id(&owner, &repo_name);
     let now = unix_now()?;
 
     let setup = {

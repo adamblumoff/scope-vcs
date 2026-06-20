@@ -1,3 +1,6 @@
+use crate::domain::policy::Principal;
+use crate::domain::projection::project_graph;
+use crate::domain::store::RepoPublicationState;
 use crate::{
     config::{DEFAULT_GIT_BRANCH, EMPTY_GIT_OID, RECEIVE_PACK_STAGING_BYTES},
     error::ApiError,
@@ -6,9 +9,6 @@ use crate::{
     state::{AppState, find_repo},
 };
 use axum::{body::Body, http::StatusCode, response::Response};
-use scope_policy::Principal;
-use scope_projection::project_graph;
-use scope_store::RepoPublicationState;
 use sha2::{Digest, Sha256};
 use std::{
     fs,
@@ -33,7 +33,7 @@ pub(crate) fn receive_pack_staging_repo_path(
         .parent()
         .map(PathBuf::from)
         .unwrap_or_else(std::env::temp_dir);
-    let repo_id = scope_store::repo_id(owner, repo_name);
+    let repo_id = crate::domain::store::repo_id(owner, repo_name);
     let digest = Sha256::digest(repo_id.as_bytes());
     let digest = hex::encode(digest);
     Ok(base_dir
@@ -42,7 +42,7 @@ pub(crate) fn receive_pack_staging_repo_path(
 }
 
 pub(crate) fn receive_pack_staging_repo_prefix(owner: &str, repo_name: &str) -> String {
-    let repo_id = scope_store::repo_id(owner, repo_name);
+    let repo_id = crate::domain::store::repo_id(owner, repo_name);
     let digest = Sha256::digest(repo_id.as_bytes());
     let digest = hex::encode(digest);
     digest[..16].to_string()
@@ -228,7 +228,7 @@ pub(crate) fn ensure_published_receive_pack_staging_repo(
     }
     let principal = Principal {
         id: author_id.to_string(),
-        kind: scope_policy::PrincipalKind::User,
+        kind: crate::domain::policy::PrincipalKind::User,
     };
     let owner_repo = owner_git_repo_path(state, owner, repo_name);
     let seed_repo = if owner_repo.join("HEAD").exists() {

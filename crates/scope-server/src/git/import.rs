@@ -1,3 +1,9 @@
+use crate::domain::policy::{ScopePath, Visibility, VisibilityRule};
+use crate::domain::projection::{AuthorVisibility, FileChange, LogicalCommit, MixedCommitPolicy};
+use crate::domain::store::{
+    FirstPushTokenStatus, PendingImport, PendingImportFile, RepoPublicationState, StagedFileChange,
+    StagedFileChangeKind, StagedRepoUpdate, StoredRepository,
+};
 use crate::{
     config::{
         DEFAULT_GIT_BRANCH, MAX_PENDING_IMPORT_BLOB_BYTES, MAX_PENDING_IMPORT_FILES,
@@ -14,12 +20,6 @@ use crate::{
     state::{find_repo, live_tree},
 };
 use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64};
-use scope_policy::{ScopePath, Visibility, VisibilityRule};
-use scope_projection::{AuthorVisibility, FileChange, LogicalCommit, MixedCommitPolicy};
-use scope_store::{
-    FirstPushTokenStatus, PendingImport, PendingImportFile, RepoPublicationState, StagedFileChange,
-    StagedFileChangeKind, StagedRepoUpdate, StoredRepository,
-};
 use sha2::{Digest, Sha256};
 use std::{collections::BTreeMap, path::Path as FsPath, process::Command};
 
@@ -464,7 +464,7 @@ pub(crate) fn persist_pending_import(
     credential: &InitialPushCredential,
     import: PendingImport,
 ) -> Result<(), ApiError> {
-    let repo_id = scope_store::repo_id(owner, repo_name);
+    let repo_id = crate::domain::store::repo_id(owner, repo_name);
     let now = unix_now()?;
     let mut catalog = lock_catalog(state)?;
     let mut staged = catalog.clone();
@@ -509,7 +509,7 @@ pub(crate) fn persist_receive_pack_update(
     repo_name: &str,
     update: ReceivePackUpdate,
 ) -> Result<PersistedReceivePackUpdate, ApiError> {
-    let repo_id = scope_store::repo_id(owner, repo_name);
+    let repo_id = crate::domain::store::repo_id(owner, repo_name);
     let mut catalog = lock_catalog(state)?;
     let mut staged = catalog.clone();
     let persisted = {
@@ -572,7 +572,7 @@ pub(crate) fn run_git_output(
 }
 
 pub(crate) fn safe_repo_key(owner: &str, repo_name: &str) -> String {
-    let repo_id = scope_store::repo_id(owner, repo_name);
+    let repo_id = crate::domain::store::repo_id(owner, repo_name);
     let digest = Sha256::digest(repo_id.as_bytes());
     format!("repo-{digest:x}")
 }

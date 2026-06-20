@@ -1,3 +1,11 @@
+use crate::domain::git_projection::{build_virtual_git_projection, git_blob_oid};
+use crate::domain::policy::{Principal, ScopePath, Visibility};
+use crate::domain::projection::{FileChange, project_graph};
+use crate::domain::store::{
+    AppCatalog, FirstPushToken, FirstPushTokenStatus, GitPushToken, PendingImport,
+    RepoPublicationState, RepoRole, StagedFileChangeKind, StagedRepoUpdate, StoredRepository,
+    UserAccount,
+};
 use crate::{
     auth::tokens::ensure_owner_setup_access_in_catalog,
     config::{DEFAULT_GIT_BRANCH, FIRST_PUSH_TOKEN_TTL_SECS},
@@ -5,14 +13,6 @@ use crate::{
     state::graph_has_file,
 };
 use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64};
-use scope_git::{build_virtual_git_projection, git_blob_oid};
-use scope_policy::{Principal, ScopePath, Visibility};
-use scope_projection::{FileChange, project_graph};
-use scope_store::{
-    AppCatalog, FirstPushToken, FirstPushTokenStatus, GitPushToken, PendingImport,
-    RepoPublicationState, RepoRole, StagedFileChangeKind, StagedRepoUpdate, StoredRepository,
-    UserAccount,
-};
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Serialize)]
@@ -187,7 +187,7 @@ pub(crate) fn repo_summary(
 ) -> Option<RepoSummaryResponse> {
     let principal = Principal {
         id: user_id.to_string(),
-        kind: scope_policy::PrincipalKind::User,
+        kind: crate::domain::policy::PrincipalKind::User,
     };
     if !catalog.can_read_path(repo, &principal, &ScopePath::root()) {
         return None;

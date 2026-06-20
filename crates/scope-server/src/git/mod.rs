@@ -2,6 +2,9 @@ pub(crate) mod import;
 pub(crate) mod storage;
 pub(crate) mod upload;
 
+use crate::domain::store::{
+    FirstPushTokenStatus, RepoPublicationState, RepoRole, StoredRepository,
+};
 use crate::{
     auth::{
         shoo::{ShooIdentity, ensure_user_for_identity, principal_for_user_id, require_identity},
@@ -33,7 +36,6 @@ use axum::{
     response::{IntoResponse, Response},
 };
 use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64};
-use scope_store::{FirstPushTokenStatus, RepoPublicationState, RepoRole, StoredRepository};
 use serde::Deserialize;
 use std::fs;
 

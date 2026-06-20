@@ -1,3 +1,7 @@
+use crate::domain::git_projection::{VirtualGitProjection, build_virtual_git_projection};
+use crate::domain::policy::{Principal, ScopePath, Visibility, VisibilityRule};
+use crate::domain::projection::{Projection, project_graph};
+use crate::domain::store::{RepoRole, RepoSettings};
 use crate::{
     auth::{
         shoo::{
@@ -18,10 +22,6 @@ use axum::{
     extract::{Path, State},
     http::HeaderMap,
 };
-use scope_git::{VirtualGitProjection, build_virtual_git_projection};
-use scope_policy::{Principal, ScopePath, Visibility, VisibilityRule};
-use scope_projection::{Projection, project_graph};
-use scope_store::{RepoRole, RepoSettings};
 
 pub(crate) async fn list_repos(
     State(state): State<AppState>,
@@ -132,7 +132,7 @@ pub(crate) async fn delete_repo(
 ) -> Result<Json<DeleteRepoResponse>, ApiError> {
     let identity = require_identity(&state, &headers).await?;
     let user = ensure_user_for_identity(&state, &identity)?;
-    let repo_id = scope_store::repo_id(&owner, &repo_name);
+    let repo_id = crate::domain::store::repo_id(&owner, &repo_name);
 
     {
         let mut catalog = lock_catalog(&state)?;
@@ -207,7 +207,7 @@ pub(crate) async fn update_file_visibility(
 ) -> Result<Json<RepoFileResponse>, ApiError> {
     let identity = http_identity(&state, &headers).await?;
     let path = ScopePath::parse(&input.path).map_err(ApiError::bad_request)?;
-    let repo_id = scope_store::repo_id(&owner, &repo_name);
+    let repo_id = crate::domain::store::repo_id(&owner, &repo_name);
 
     let repo = find_repo(&state, &owner, &repo_name)?;
     let principal = principal_for_repo(&state, &repo, identity.as_ref())?;
@@ -277,7 +277,7 @@ pub(crate) async fn update_file_visibility(
 
     let principal = Principal {
         id: updated.record.owner_user_id.clone(),
-        kind: scope_policy::PrincipalKind::User,
+        kind: crate::domain::policy::PrincipalKind::User,
     };
     let updated_files = files_for_visibility_update(&updated, &principal)?;
     let file = updated_files
@@ -312,7 +312,7 @@ pub(crate) async fn update_settings(
     Json(input): Json<UpdateRepoSettingsRequest>,
 ) -> Result<Json<RepoSettings>, ApiError> {
     let identity = http_identity(&state, &headers).await?;
-    let repo_id = scope_store::repo_id(&owner, &repo_name);
+    let repo_id = crate::domain::store::repo_id(&owner, &repo_name);
     let repo = find_repo(&state, &owner, &repo_name)?;
     let principal = principal_for_repo(&state, &repo, identity.as_ref())?;
     ensure_repo_read(&state, &repo, &principal)?;

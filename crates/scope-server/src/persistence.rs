@@ -1,6 +1,6 @@
+use crate::domain::store::{AppCatalog, CatalogError, StoredRepository, UserAccount};
 use crate::{error::ApiError, state::AppState};
 use anyhow::Context;
-use scope_store::{AppCatalog, CatalogError, StoredRepository, UserAccount};
 use serde::{Deserialize, Serialize};
 use std::{collections::BTreeMap, fs, io::Write, path::Path as FsPath};
 
