@@ -102,6 +102,7 @@ pub(crate) fn remove_dir_if_exists(path: &FsPath) -> Result<(), ApiError> {
     }
 }
 
+#[cfg(test)]
 pub(crate) fn replace_git_repo(src: &FsPath, dst: &FsPath) -> Result<(), ApiError> {
     if let Some(parent) = dst.parent() {
         fs::create_dir_all(parent).map_err(ApiError::internal)?;

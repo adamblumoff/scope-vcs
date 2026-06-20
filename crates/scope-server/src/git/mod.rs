@@ -12,8 +12,8 @@ use crate::{
     error::ApiError,
     git::{
         import::{
-            pending_import_from_staging_repo, persist_pending_import, persist_receive_pack_update,
-            receive_pack_update_from_staging_repo,
+            pending_import_from_staging_repo, persist_pending_import,
+            persist_receive_pack_update_and_promote, receive_pack_update_from_staging_repo,
         },
         storage::*,
         upload::*,
@@ -290,15 +290,11 @@ pub(crate) fn handle_git_receive_pack(
                         return Err(error);
                     }
                 };
-                if let Err(error) =
-                    persist_pending_import(state, owner, repo_name, &credential, import)
-                {
-                    let _ = fs::remove_dir_all(&staging_repo);
-                    return Err(error);
-                }
-                if let Err(error) =
-                    replace_git_repo(&staging_repo, &owner_git_repo_path(state, owner, repo_name))
-                {
+                if let Err(error) = replace_git_repo_and_then(
+                    &staging_repo,
+                    &owner_git_repo_path(state, owner, repo_name),
+                    || persist_pending_import(state, owner, repo_name, &credential, import),
+                ) {
                     let _ = fs::remove_dir_all(&staging_repo);
                     return Err(error);
                 }
@@ -317,22 +313,13 @@ pub(crate) fn handle_git_receive_pack(
                         return Err(error);
                     }
                 };
-                let persisted = match persist_receive_pack_update(state, owner, repo_name, update) {
-                    Ok(persisted) => persisted,
-                    Err(error) => {
-                        let _ = fs::remove_dir_all(&staging_repo);
-                        return Err(error);
-                    }
-                };
-                let target_repo = match persisted {
-                    PersistedReceivePackUpdate::Staged => {
-                        staged_git_repo_path(state, owner, repo_name)
-                    }
-                    PersistedReceivePackUpdate::Applied => {
-                        owner_git_repo_path(state, owner, repo_name)
-                    }
-                };
-                if let Err(error) = replace_git_repo(&staging_repo, &target_repo) {
+                if let Err(error) = persist_receive_pack_update_and_promote(
+                    state,
+                    owner,
+                    repo_name,
+                    &staging_repo,
+                    update,
+                ) {
                     let _ = fs::remove_dir_all(&staging_repo);
                     return Err(error);
                 }
