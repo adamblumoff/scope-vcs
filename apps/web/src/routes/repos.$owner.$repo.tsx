@@ -46,8 +46,15 @@ type RepoFile = {
 
 type RepoDetail = {
   files: RepoFile[]
+  kind: 'repo'
   repo: RepoSummary
 }
+
+type RepoDetailState =
+  | RepoDetail
+  | {
+      kind: 'signedOut'
+    }
 
 type RepoParams = {
   owner: string
@@ -61,7 +68,7 @@ const loadRepoForRequest = createServerFn({ method: 'GET' })
   .handler(async ({ data }) => {
     const idToken = await readRequestAuthToken()
     if (!idToken) {
-      throw new Error('Sign in to view this repository.')
+      return { kind: 'signedOut' } satisfies RepoDetailState
     }
 
     const api = getApiConnection()
@@ -71,7 +78,7 @@ const loadRepoForRequest = createServerFn({ method: 'GET' })
       loadJson<RepoFile[]>(`${api}/v1/repos/${data.owner}/${data.repo}/files`, init),
     ])
 
-    return { files, repo } satisfies RepoDetail
+    return { files, kind: 'repo', repo } satisfies RepoDetailState
   })
 
 export const Route = createFileRoute('/repos/$owner/$repo')({
@@ -81,7 +88,18 @@ export const Route = createFileRoute('/repos/$owner/$repo')({
 })
 
 function RepoDetailPage() {
-  const { files, repo } = Route.useLoaderData()
+  const detail = Route.useLoaderData()
+
+  if (detail.kind === 'signedOut') {
+    return (
+      <RepoDetailMessage
+        message="Sign in to view this repository."
+        title="Repository unavailable"
+      />
+    )
+  }
+
+  const { files, repo } = detail
 
   return (
     <main className="min-h-screen bg-background text-foreground">
@@ -229,11 +247,23 @@ function RepoDetailError({ error }: { error: unknown }) {
     error instanceof Error ? error.message : 'Unexpected repository error'
 
   return (
+    <RepoDetailMessage message={message} title="Repository unavailable" />
+  )
+}
+
+function RepoDetailMessage({
+  message,
+  title,
+}: {
+  message: string
+  title: string
+}) {
+  return (
     <main className="min-h-screen bg-background px-4 py-8 text-foreground sm:px-6">
       <div className="mx-auto max-w-[760px] border-y border-border py-6">
         <Alert variant="destructive">
           <AlertCircle className="size-4" />
-          <AlertTitle>Repository unavailable</AlertTitle>
+          <AlertTitle>{title}</AlertTitle>
           <AlertDescription>{message}</AlertDescription>
         </Alert>
         <Button asChild className="mt-5" size="sm" variant="secondary">
