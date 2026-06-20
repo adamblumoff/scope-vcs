@@ -1,3 +1,5 @@
+use crate::domain::policy::Principal;
+use crate::domain::store::{AccountAccess, AppCatalog, StoredRepository, UserAccount};
 use crate::{
     config::{LOCAL_APP_ORIGIN, SCOPE_APP_ORIGIN_ENV, SHOO_ISSUER, SHOO_JWKS_URL, non_empty_env},
     error::ApiError,
@@ -10,8 +12,6 @@ use jsonwebtoken::{
     Algorithm, DecodingKey, Validation, decode, decode_header,
     jwk::{Jwk, JwkSet},
 };
-use scope_policy::Principal;
-use scope_store::{AccountAccess, AppCatalog, StoredRepository, UserAccount};
 use serde::{Deserialize, Serialize};
 use sha1::{Digest, Sha1};
 use std::{
@@ -279,7 +279,7 @@ pub(crate) fn principal_for_user_id(repo: &StoredRepository, user_id: &str) -> P
     {
         Principal {
             id: user_id.to_string(),
-            kind: scope_policy::PrincipalKind::User,
+            kind: crate::domain::policy::PrincipalKind::User,
         }
     } else {
         Principal::public()

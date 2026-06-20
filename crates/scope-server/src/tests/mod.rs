@@ -1,3 +1,15 @@
+use crate::domain::git_projection::build_virtual_git_projection;
+use crate::domain::policy::{
+    Policy, Principal, PrincipalKind, ScopePath, Visibility, VisibilityRule,
+};
+use crate::domain::projection::{
+    AuthorVisibility, FileChange, LogicalCommit, MixedCommitPolicy, SourceGraph, project_graph,
+};
+use crate::domain::store::{
+    AccountAccess, AppCatalog, FirstPushToken, FirstPushTokenStatus, GitPushToken, PendingImport,
+    PendingImportFile, RepoMembership, RepoPublicationState, RepoRecord, RepoRole, RepoSettings,
+    StoredRepository, UserAccount,
+};
 use crate::{
     app::router,
     auth::{shoo::*, tokens::*},
@@ -17,16 +29,6 @@ use axum::{
 };
 use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64};
 use jsonwebtoken::{Algorithm, EncodingKey, Header, encode, jwk::JwkSet};
-use scope_git::build_virtual_git_projection;
-use scope_policy::{Policy, Principal, PrincipalKind, ScopePath, Visibility, VisibilityRule};
-use scope_projection::{
-    AuthorVisibility, FileChange, LogicalCommit, MixedCommitPolicy, SourceGraph, project_graph,
-};
-use scope_store::{
-    AccountAccess, AppCatalog, FirstPushToken, FirstPushTokenStatus, GitPushToken, PendingImport,
-    PendingImportFile, RepoMembership, RepoPublicationState, RepoRecord, RepoRole, RepoSettings,
-    StoredRepository, UserAccount,
-};
 use std::{
     collections::BTreeMap,
     fs,
@@ -36,10 +38,13 @@ use std::{
 };
 use tower::ServiceExt;
 
-mod api;
 mod auth;
 mod git_http;
 mod git_receive;
+mod repo_lifecycle;
+mod repo_visibility;
+mod review_publish;
+mod setup_tokens;
 
 const TEST_PAIRWISE_SUB: &str = "pairwise-owner";
 const TEST_OWNER_EMAIL: &str = "owner@example.com";

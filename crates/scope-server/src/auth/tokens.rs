@@ -1,3 +1,7 @@
+use crate::domain::policy::Principal;
+use crate::domain::store::{
+    AppCatalog, FirstPushToken, GitPushToken, RepoPublicationState, RepoRole, StoredRepository,
+};
 use crate::{
     config::{
         FIRST_PUSH_TOKEN_BYTES, FIRST_PUSH_TOKEN_PREFIX, FIRST_PUSH_TOKEN_TTL_SECS,
@@ -6,10 +10,6 @@ use crate::{
     error::ApiError,
     persistence::{lock_catalog, unix_now},
     state::AppState,
-};
-use scope_policy::Principal;
-use scope_store::{
-    AppCatalog, FirstPushToken, GitPushToken, RepoPublicationState, RepoRole, StoredRepository,
 };
 use sha2::{Digest, Sha256};
 
@@ -29,7 +29,7 @@ pub(crate) fn ensure_owner_setup_access_in_catalog(
 ) -> Result<(), ApiError> {
     let principal = Principal {
         id: user_id.to_string(),
-        kind: scope_policy::PrincipalKind::User,
+        kind: crate::domain::policy::PrincipalKind::User,
     };
     if catalog.role_for_principal(repo, &principal) != Some(RepoRole::Owner) {
         return Err(ApiError::not_found(format!(

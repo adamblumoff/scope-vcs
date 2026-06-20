@@ -1,3 +1,6 @@
+use crate::domain::policy::Principal;
+use crate::domain::projection::{Projection, project_graph};
+use crate::domain::store::{RepoPublicationState, RepoRole};
 use crate::{
     auth::shoo::{http_identity, principal_for_repo},
     config::{DEFAULT_GIT_BRANCH, GIT_UPLOAD_PACK, UNPUBLISHED_GIT_ERROR},
@@ -18,9 +21,6 @@ use axum::{
     },
     response::{IntoResponse, Response},
 };
-use scope_policy::Principal;
-use scope_projection::{Projection, project_graph};
-use scope_store::{RepoPublicationState, RepoRole};
 use sha1::{Digest, Sha1};
 use std::{
     collections::BTreeMap,
@@ -46,7 +46,7 @@ pub(crate) async fn git_projection_for_request(
             authorize_git_push_token_for_repo(&repo, &secret).map_err(git_credential_error)?;
         let principal = Principal {
             id: author_id,
-            kind: scope_policy::PrincipalKind::User,
+            kind: crate::domain::policy::PrincipalKind::User,
         };
         if repo.record.publication_state != RepoPublicationState::Published {
             return match role_for_principal(state, &repo, &principal)? {
@@ -121,7 +121,7 @@ pub(crate) async fn owner_raw_git_repo_for_request(
             authorize_git_push_token_for_repo(&repo, &secret).map_err(git_credential_error)?;
         let principal = Principal {
             id: author_id,
-            kind: scope_policy::PrincipalKind::User,
+            kind: crate::domain::policy::PrincipalKind::User,
         };
         if role_for_principal(state, &repo, &principal)? != Some(RepoRole::Owner) {
             return Err(ApiError::not_found(format!(

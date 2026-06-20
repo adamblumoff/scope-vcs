@@ -1,3 +1,4 @@
+use crate::domain::store::RepoRole;
 use crate::{
     auth::shoo::{http_identity, identity_user_id, principal_for_repo, principal_for_user_id},
     error::ApiError,
@@ -20,7 +21,6 @@ use axum::{
     extract::{Path, State},
     http::HeaderMap,
 };
-use scope_store::RepoRole;
 
 pub(crate) async fn get_pending_import_review(
     State(state): State<AppState>,
@@ -47,7 +47,7 @@ pub(crate) async fn publish_repo(
     Path((owner, repo_name)): Path<(String, String)>,
 ) -> Result<Json<SessionRepo>, ApiError> {
     let identity = http_identity(&state, &headers).await?;
-    let repo_id = scope_store::repo_id(&owner, &repo_name);
+    let repo_id = crate::domain::store::repo_id(&owner, &repo_name);
     let repo = find_repo(&state, &owner, &repo_name)?;
     let principal = principal_for_repo(&state, &repo, identity.as_ref())?;
     ensure_repo_read(&state, &repo, &principal)?;
@@ -124,7 +124,7 @@ pub(crate) async fn update_staged_file_visibility(
     let principal = principal_for_repo(&state, &repo, identity.as_ref())?;
     ensure_repo_read(&state, &repo, &principal)?;
     ensure_owner(&state, &repo, &principal)?;
-    let repo_id = scope_store::repo_id(&owner, &repo_name);
+    let repo_id = crate::domain::store::repo_id(&owner, &repo_name);
     let path = pending_scope_path(&input.path)?;
 
     let updated = {
@@ -207,7 +207,7 @@ pub(crate) fn apply_staged_update_in_catalog(
     owner: &str,
     repo_name: &str,
 ) -> Result<StagedUpdateResponse, ApiError> {
-    let repo_id = scope_store::repo_id(owner, repo_name);
+    let repo_id = crate::domain::store::repo_id(owner, repo_name);
     let mut catalog = lock_catalog(state)?;
     let mut staged = catalog.clone();
     let repo = staged
@@ -231,7 +231,7 @@ pub(crate) fn reject_staged_update_in_catalog(
     owner: &str,
     repo_name: &str,
 ) -> Result<StagedUpdateResponse, ApiError> {
-    let repo_id = scope_store::repo_id(owner, repo_name);
+    let repo_id = crate::domain::store::repo_id(owner, repo_name);
     let mut catalog = lock_catalog(state)?;
     let mut staged = catalog.clone();
     let repo = staged

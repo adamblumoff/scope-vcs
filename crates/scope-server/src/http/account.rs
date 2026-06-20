@@ -1,3 +1,4 @@
+use crate::domain::policy::ScopePath;
 use crate::{
     auth::shoo::{ensure_user_for_identity, http_identity, principal_for_repo},
     error::ApiError,
@@ -13,7 +14,6 @@ use axum::{
     extract::{Path, State},
     http::HeaderMap,
 };
-use scope_policy::ScopePath;
 
 pub(crate) async fn healthz() -> Json<HealthResponse> {
     Json(HealthResponse {
