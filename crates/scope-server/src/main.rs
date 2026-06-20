@@ -173,6 +173,12 @@ struct CreateRepoResponse {
 }
 
 #[derive(Debug, Serialize)]
+struct DeleteRepoResponse {
+    id: String,
+    deleted: bool,
+}
+
+#[derive(Debug, Serialize)]
 struct RepoSetupResponse {
     repo: RepoSummaryResponse,
     git_remote_path: String,
@@ -320,6 +326,10 @@ fn router(state: AppState) -> Router {
         .route("/healthz", get(healthz))
         .route("/v1/session", get(get_account_session))
         .route("/v1/repos", get(list_repos).post(create_repo))
+        .route(
+            "/v1/repos/{owner}/{repo}",
+            get(get_repo).delete(delete_repo),
+        )
         .route("/v1/repos/{owner}/{repo}/setup", get(get_repo_setup))
         .route(
             "/v1/repos/{owner}/{repo}/setup-token",
@@ -473,6 +483,57 @@ async fn create_repo(
     };
 
     Ok(Json(created))
+}
+
+async fn get_repo(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path((owner, repo_name)): Path<(String, String)>,
+) -> Result<Json<RepoSummaryResponse>, ApiError> {
+    let identity = require_identity(&state, &headers).await?;
+    let user = ensure_user_for_identity(&state, &identity)?;
+    let repo = find_repo(&state, &owner, &repo_name)?;
+    let catalog = lock_catalog(&state)?;
+    let summary = repo_summary(&catalog, &repo, &user.id)
+        .ok_or_else(|| ApiError::not_found(format!("repo {owner}/{repo_name} not found")))?;
+
+    Ok(Json(summary))
+}
+
+async fn delete_repo(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path((owner, repo_name)): Path<(String, String)>,
+) -> Result<Json<DeleteRepoResponse>, ApiError> {
+    let identity = require_identity(&state, &headers).await?;
+    let user = ensure_user_for_identity(&state, &identity)?;
+    let repo_id = scope_store::repo_id(&owner, &repo_name);
+
+    {
+        let mut catalog = lock_catalog(&state)?;
+        let mut staged = catalog.clone();
+        let repo = staged
+            .repositories
+            .get(&repo_id)
+            .ok_or_else(|| ApiError::not_found(format!("repo {owner}/{repo_name} not found")))?;
+        let principal = principal_for_user_id(repo, &user.id);
+        if staged.role_for_principal(repo, &principal) != Some(RepoRole::Owner) {
+            return Err(ApiError::not_found(format!(
+                "repo {owner}/{repo_name} not found"
+            )));
+        }
+
+        staged.repositories.remove(&repo_id);
+        persist_catalog(&state, &staged)?;
+        *catalog = staged;
+    }
+
+    delete_repo_storage(&state, &owner, &repo_name)?;
+
+    Ok(Json(DeleteRepoResponse {
+        id: repo_id,
+        deleted: true,
+    }))
 }
 
 async fn get_repo_setup(
@@ -1704,6 +1765,13 @@ fn receive_pack_staging_repo_path(
         .join(format!("{}-{}.git", &digest[..16], hex::encode(bytes))))
 }
 
+fn receive_pack_staging_repo_prefix(owner: &str, repo_name: &str) -> String {
+    let repo_id = scope_store::repo_id(owner, repo_name);
+    let digest = Sha256::digest(repo_id.as_bytes());
+    let digest = hex::encode(digest);
+    digest[..16].to_string()
+}
+
 fn owner_git_repo_path(state: &AppState, owner: &str, repo_name: &str) -> PathBuf {
     git_repo_storage_root(state)
         .join("git-repos")
@@ -1722,6 +1790,36 @@ fn git_repo_storage_root(state: &AppState) -> PathBuf {
         .parent()
         .map(PathBuf::from)
         .unwrap_or_else(std::env::temp_dir)
+}
+
+fn delete_repo_storage(state: &AppState, owner: &str, repo_name: &str) -> Result<(), ApiError> {
+    remove_dir_if_exists(&owner_git_repo_path(state, owner, repo_name))?;
+    remove_dir_if_exists(&staged_git_repo_path(state, owner, repo_name))?;
+
+    let rx_root = git_repo_storage_root(state).join("git-rx");
+    let prefix = receive_pack_staging_repo_prefix(owner, repo_name);
+    let entries = match fs::read_dir(&rx_root) {
+        Ok(entries) => entries,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+        Err(error) => return Err(ApiError::internal(error)),
+    };
+    for entry in entries {
+        let entry = entry.map_err(ApiError::internal)?;
+        let file_name = entry.file_name();
+        if file_name.to_string_lossy().starts_with(&prefix) {
+            remove_dir_if_exists(&entry.path())?;
+        }
+    }
+
+    Ok(())
+}
+
+fn remove_dir_if_exists(path: &FsPath) -> Result<(), ApiError> {
+    match fs::remove_dir_all(path) {
+        Ok(()) => Ok(()),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(error) => Err(ApiError::internal(error)),
+    }
 }
 
 fn replace_git_repo(src: &FsPath, dst: &FsPath) -> Result<(), ApiError> {
@@ -4417,6 +4515,84 @@ kGxvBjzgF9RjXJoldYnFk7mJ5gLANHjaaad3qTQJ8DldKJoSqkEkm5gg
         assert_eq!(body[0]["id"], TEST_REPO_ID);
         assert_eq!(body[0]["lifecycle_state"], "Published");
         assert_eq!(body[0]["staged_update_pending"], true);
+    }
+
+    #[tokio::test]
+    async fn get_repo_route_returns_owner_summary() {
+        let state = test_state_with_repo();
+        cache_test_jwks(&state);
+        let response = router(state)
+            .oneshot(
+                Request::builder()
+                    .method("GET")
+                    .uri("/v1/repos/owner/repo")
+                    .header(AUTHORIZATION, bearer_header())
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = response_json(response).await;
+        assert_eq!(body["id"], TEST_REPO_ID);
+        assert_eq!(body["owner_handle"], TEST_REPO_OWNER);
+        assert_eq!(body["name"], TEST_REPO_NAME);
+        assert_eq!(body["role"], "Owner");
+    }
+
+    #[tokio::test]
+    async fn delete_repo_route_requires_owner_and_removes_storage() {
+        let state = test_state_with_repo();
+        cache_test_jwks(&state);
+        let owner_repo = owner_git_repo_path(&state, TEST_REPO_OWNER, TEST_REPO_NAME);
+        let staged_repo = staged_git_repo_path(&state, TEST_REPO_OWNER, TEST_REPO_NAME);
+        let rx_repo = git_repo_storage_root(&state).join("git-rx").join(format!(
+            "{}-test.git",
+            receive_pack_staging_repo_prefix(TEST_REPO_OWNER, TEST_REPO_NAME)
+        ));
+        fs::create_dir_all(&owner_repo).unwrap();
+        fs::create_dir_all(&staged_repo).unwrap();
+        fs::create_dir_all(&rx_repo).unwrap();
+
+        let app = router(state.clone());
+        let non_owner = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("DELETE")
+                    .uri("/v1/repos/owner/repo")
+                    .header(
+                        AUTHORIZATION,
+                        bearer_header_for("pairwise-stranger", "stranger@example.com"),
+                    )
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(non_owner.status(), StatusCode::NOT_FOUND);
+
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method("DELETE")
+                    .uri("/v1/repos/owner/repo")
+                    .header(AUTHORIZATION, bearer_header())
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = response_json(response).await;
+        assert_eq!(body["id"], TEST_REPO_ID);
+        assert_eq!(body["deleted"], true);
+        assert!(find_repo(&state, TEST_REPO_OWNER, TEST_REPO_NAME).is_err());
+        assert!(!owner_repo.exists());
+        assert!(!staged_repo.exists());
+        assert!(!rx_repo.exists());
     }
 
     #[tokio::test]

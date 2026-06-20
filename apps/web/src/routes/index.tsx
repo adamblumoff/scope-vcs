@@ -7,6 +7,7 @@ import { Link, createFileRoute, useNavigate } from '@tanstack/react-router'
 import { createServerFn } from '@tanstack/react-start'
 import {
   AlertCircle,
+  AlertTriangle,
   ArrowRight,
   GitBranch,
   Globe2,
@@ -17,6 +18,7 @@ import {
   Moon,
   Plus,
   Sun,
+  Trash2,
 } from 'lucide-react'
 import type { FormEvent } from 'react'
 import { useState } from 'react'
@@ -86,6 +88,16 @@ type HomeState = {
 type CreateRepoInput = {
   name: string
   visibility: Visibility
+}
+
+type DeleteRepoInput = {
+  owner: string
+  repo: string
+}
+
+type DeleteRepoResponse = {
+  id: string
+  deleted: boolean
 }
 
 type ThemeMode = 'dark' | 'light'
@@ -165,6 +177,30 @@ const createRepoForRequest = createServerFn({ method: 'POST' })
     return payload as CreateRepoResponse
   })
 
+const deleteRepoForRequest = createServerFn({ method: 'POST' })
+  .validator(parseDeleteRepoInput)
+  .handler(async ({ data }) => {
+    const idToken = await readRequestAuthToken()
+    if (!idToken) {
+      throw new Error('Sign in to delete a repository.')
+    }
+
+    const response = await fetch(
+      `${getApiMutationConnection()}/v1/repos/${data.owner}/${data.repo}`,
+      {
+        headers: authHeaders(idToken),
+        method: 'DELETE',
+      },
+    )
+    const payload = await response.json().catch(() => null)
+
+    if (!response.ok) {
+      throw new Error(payload?.error ?? `request failed: ${response.status}`)
+    }
+
+    return payload as DeleteRepoResponse
+  })
+
 export const Route = createFileRoute('/')({
   loader: () => loadHomeForRequest(),
   component: ScopeHome,
@@ -175,6 +211,8 @@ function ScopeHome() {
   const navigate = useNavigate()
   const [account, setAccount] = useState(home.account)
   const [createError, setCreateError] = useState<string | null>(null)
+  const [deleteError, setDeleteError] = useState<string | null>(null)
+  const [deleteTarget, setDeleteTarget] = useState<RepoSummary | null>(null)
   const [repositories, setRepositories] = useState(home.repositories)
   const [sessionError, setSessionError] = useState<string | null>(null)
   const [signedIn, setSignedIn] = useState(home.signedIn)
@@ -188,6 +226,7 @@ function ScopeHome() {
 
   async function createRepository(input: CreateRepoInput) {
     setCreateError(null)
+    setDeleteError(null)
     try {
       const created = await createRepoForRequest({ data: input })
       const repo = created.repo
@@ -210,6 +249,17 @@ function ScopeHome() {
         error instanceof Error ? error.message : 'repository creation failed',
       )
     }
+  }
+
+  async function deleteRepository(repo: RepoSummary) {
+    setDeleteError(null)
+    const deleted = await deleteRepoForRequest({
+      data: { owner: repo.owner_handle, repo: repo.name },
+    })
+    setRepositories((current) =>
+      current.filter((candidate) => candidate.id !== deleted.id),
+    )
+    setDeleteTarget(null)
   }
 
   async function signOut() {
@@ -287,6 +337,14 @@ function ScopeHome() {
           </Alert>
         )}
 
+        {deleteError && (
+          <Alert className="mt-6" variant="destructive">
+            <AlertCircle className="size-4" />
+            <AlertTitle>Repository deletion failed</AlertTitle>
+            <AlertDescription>{deleteError}</AlertDescription>
+          </Alert>
+        )}
+
         {sessionError && (
           <Alert className="mt-6" variant="destructive">
             <AlertCircle className="size-4" />
@@ -295,8 +353,29 @@ function ScopeHome() {
           </Alert>
         )}
 
-        <RepoList repositories={repositories} signedIn={signedIn} />
+        <RepoList
+          onDelete={(repo) => setDeleteTarget(repo)}
+          repositories={repositories}
+          signedIn={signedIn}
+        />
       </section>
+
+      {deleteTarget && (
+        <DeleteRepositoryDialog
+          onCancel={() => setDeleteTarget(null)}
+          onConfirm={async (repo) => {
+            try {
+              await deleteRepository(repo)
+            } catch (error) {
+              setDeleteError(
+                error instanceof Error ? error.message : 'repository deletion failed',
+              )
+              throw error
+            }
+          }}
+          repo={deleteTarget}
+        />
+      )}
     </main>
   )
 }
@@ -362,9 +441,11 @@ function CreateRepoForm({
 }
 
 function RepoList({
+  onDelete,
   repositories,
   signedIn,
 }: {
+  onDelete: (repo: RepoSummary) => void
   repositories: RepoSummary[]
   signedIn: boolean
 }) {
@@ -399,9 +480,13 @@ function RepoList({
           key={repo.id}
         >
           <div className="min-w-0">
-            <div className="truncate font-mono text-sm font-semibold leading-5">
+            <Link
+              className="block truncate font-mono text-sm font-semibold leading-5 underline-offset-4 hover:underline"
+              params={{ owner: repo.owner_handle, repo: repo.name }}
+              to="/repos/$owner/$repo"
+            >
               {repo.id}
-            </div>
+            </Link>
             <div className="mt-1 flex flex-wrap gap-2 text-xs leading-4 text-muted-foreground">
               <span>{lifecycleLabel(repo.lifecycle_state)}</span>
               <span>{repo.role}</span>
@@ -409,6 +494,15 @@ function RepoList({
           </div>
           <div className="flex items-center gap-2 sm:justify-end">
             <VisibilityBadge visibility={repo.default_visibility} />
+            <Button asChild size="sm" variant="secondary">
+              <Link
+                params={{ owner: repo.owner_handle, repo: repo.name }}
+                to="/repos/$owner/$repo"
+              >
+                <ArrowRight className="size-3.5" />
+                <span>Open</span>
+              </Link>
+            </Button>
             {repo.lifecycle_state === 'PendingFirstPush' && (
               <Button asChild size="sm" variant="secondary">
                 <Link
@@ -432,9 +526,119 @@ function RepoList({
                 </Link>
               </Button>
             )}
+            {repo.role === 'Owner' && (
+              <Button
+                aria-label={`Delete ${repo.id}`}
+                onClick={() => onDelete(repo)}
+                size="icon-sm"
+                title={`Delete ${repo.id}`}
+                type="button"
+                variant="secondary"
+              >
+                <Trash2 className="size-3.5" />
+              </Button>
+            )}
           </div>
         </div>
       ))}
+    </div>
+  )
+}
+
+function DeleteRepositoryDialog({
+  onCancel,
+  onConfirm,
+  repo,
+}: {
+  onCancel: () => void
+  onConfirm: (repo: RepoSummary) => Promise<void>
+  repo: RepoSummary
+}) {
+  const [confirmed, setConfirmed] = useState(false)
+  const [typedName, setTypedName] = useState('')
+  const [busy, setBusy] = useState(false)
+  const canDelete = typedName === repo.name
+
+  async function submit(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault()
+    if (!confirmed || !canDelete || busy) {
+      return
+    }
+
+    setBusy(true)
+    try {
+      await onConfirm(repo)
+    } catch {
+      setBusy(false)
+    }
+  }
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-background/80 px-4 backdrop-blur-sm">
+      <div className="w-full max-w-[520px] rounded-md border border-border bg-background p-5 shadow-lg">
+        <div className="flex items-start gap-3">
+          <div className="flex size-9 shrink-0 items-center justify-center rounded-md border border-destructive/50 text-destructive">
+            <AlertTriangle className="size-4" />
+          </div>
+          <div className="min-w-0">
+            <div className="text-sm font-semibold leading-5">
+              Delete repository
+            </div>
+            <div className="mt-1 break-all font-mono text-xs leading-5 text-muted-foreground">
+              {repo.id}
+            </div>
+          </div>
+        </div>
+
+        {!confirmed ? (
+          <div className="mt-5 space-y-5">
+            <p className="text-sm leading-5 text-muted-foreground">
+              This permanently removes the repo, its pending review state, and
+              stored Git data from Scope.
+            </p>
+            <div className="flex justify-end gap-2">
+              <Button onClick={onCancel} size="sm" type="button" variant="secondary">
+                Cancel
+              </Button>
+              <Button onClick={() => setConfirmed(true)} size="sm" type="button">
+                Continue
+              </Button>
+            </div>
+          </div>
+        ) : (
+          <form className="mt-5 space-y-5" onSubmit={(event) => void submit(event)}>
+            <label className="block text-sm leading-5 text-muted-foreground">
+              Type <span className="font-mono text-foreground">{repo.name}</span> to
+              permanently delete this repository.
+            </label>
+            <input
+              autoFocus
+              className="h-9 w-full rounded-md border border-input bg-background px-3 font-mono text-sm outline-none focus-visible:ring-2 focus-visible:ring-ring"
+              onChange={(event) => setTypedName(event.target.value)}
+              value={typedName}
+            />
+            <div className="flex justify-end gap-2">
+              <Button
+                disabled={busy}
+                onClick={() => setConfirmed(false)}
+                size="sm"
+                type="button"
+                variant="secondary"
+              >
+                Back
+              </Button>
+              <Button disabled={!canDelete || busy} size="sm" type="submit">
+                {busy ? (
+                  <LoaderCircle className="size-3.5 animate-spin" />
+                ) : (
+                  <Trash2 className="size-3.5" />
+                )}
+                <span>Delete</span>
+              </Button>
+            </div>
+          </form>
+        )}
+      </div>
     </div>
   )
 }
@@ -554,6 +758,18 @@ function parseCreateRepoInput(input: unknown): CreateRepoInput {
   }
 
   return { name, visibility }
+}
+
+function parseDeleteRepoInput(input: unknown): DeleteRepoInput {
+  const data = input as Partial<DeleteRepoInput> | null
+  const owner = typeof data?.owner === 'string' ? data.owner.trim() : ''
+  const repo = typeof data?.repo === 'string' ? data.repo.trim() : ''
+
+  if (!owner || !repo) {
+    throw new Error('Repository delete route is incomplete.')
+  }
+
+  return { owner, repo }
 }
 
 async function loadJson<T>(url: string, init?: RequestInit): Promise<T> {
