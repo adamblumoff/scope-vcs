@@ -56,7 +56,7 @@ const FIRST_PUSH_TOKEN_PREFIX: &str = "scope_fp_";
 const GIT_PUSH_TOKEN_PREFIX: &str = "scope_git_";
 const FIRST_PUSH_TOKEN_BYTES: usize = 32;
 const RECEIVE_PACK_STAGING_BYTES: usize = 16;
-const FIRST_PUSH_TOKEN_TTL_SECS: u64 = 60 * 60 * 24;
+const FIRST_PUSH_TOKEN_TTL_SECS: u64 = 5 * 60;
 const EMPTY_GIT_OID: &str = "0000000000000000000000000000000000000000";
 const GIT_UPLOAD_PACK: &str = "git-upload-pack";
 const GIT_RECEIVE_PACK: &str = "git-receive-pack";
@@ -1654,7 +1654,7 @@ fn authorize_first_push_token_for_repo(
             "first-push token owner does not match repo owner",
         ));
     }
-    if token.status_at(now) != FirstPushTokenStatus::Active {
+    if first_push_token_status_at(token, now) != FirstPushTokenStatus::Active {
         return Err(ApiError::unauthorized(
             "first-push token is expired or used",
         ));
@@ -2321,7 +2321,7 @@ fn persist_pending_import(
             }
         }
         if let Some(token) = repo.first_push_token.as_mut() {
-            if token.status_at(now) == FirstPushTokenStatus::Active {
+            if first_push_token_status_at(token, now) == FirstPushTokenStatus::Active {
                 token.used_at_unix = Some(now);
             }
         }
@@ -3547,12 +3547,28 @@ fn first_push_token_response(
     secret: Option<String>,
 ) -> FirstPushTokenResponse {
     FirstPushTokenResponse {
-        status: token.status_at(now_unix),
+        status: first_push_token_status_at(token, now_unix),
         created_at_unix: token.created_at_unix,
-        expires_at_unix: token.expires_at_unix,
+        expires_at_unix: first_push_token_expires_at(token),
         used_at_unix: token.used_at_unix,
         secret,
     }
+}
+
+fn first_push_token_status_at(token: &FirstPushToken, now_unix: u64) -> FirstPushTokenStatus {
+    if token.used_at_unix.is_some() {
+        FirstPushTokenStatus::Used
+    } else if now_unix >= first_push_token_expires_at(token) {
+        FirstPushTokenStatus::Expired
+    } else {
+        FirstPushTokenStatus::Active
+    }
+}
+
+fn first_push_token_expires_at(token: &FirstPushToken) -> u64 {
+    token
+        .created_at_unix
+        .saturating_add(FIRST_PUSH_TOKEN_TTL_SECS)
 }
 
 fn git_push_token_response(token: &GitPushToken, secret: Option<String>) -> GitPushTokenResponse {
@@ -4354,6 +4370,10 @@ kGxvBjzgF9RjXJoldYnFk7mJ5gLANHjaaad3qTQJ8DldKJoSqkEkm5gg
         assert_ne!(token.token_hash, secret);
         assert!(token.token_hash.starts_with("sha256:"));
         assert_eq!(token.owner_user_id, test_owner_id());
+        assert_eq!(
+            token.expires_at_unix - token.created_at_unix,
+            FIRST_PUSH_TOKEN_TTL_SECS
+        );
         let push_token = repo.git_push_token.as_ref().unwrap();
         assert_ne!(push_token.token_hash, push_secret);
         assert!(push_token.token_hash.starts_with("sha256:"));
@@ -4615,6 +4635,24 @@ kGxvBjzgF9RjXJoldYnFk7mJ5gLANHjaaad3qTQJ8DldKJoSqkEkm5gg
         assert_ne!(new_hash, secret);
         assert_ne!(new_push_hash, &old_push_hash);
         assert_ne!(new_push_hash, push_secret);
+    }
+
+    #[test]
+    fn first_push_token_response_uses_current_ttl() {
+        let token = FirstPushToken {
+            token_hash: "sha256:test".to_string(),
+            owner_user_id: test_owner_id(),
+            created_at_unix: 1000,
+            expires_at_unix: 1000 + (60 * 60 * 24),
+            used_at_unix: None,
+        };
+
+        let active = first_push_token_response(&token, 1000, None);
+        assert_eq!(active.status, FirstPushTokenStatus::Active);
+        assert_eq!(active.expires_at_unix, 1000 + FIRST_PUSH_TOKEN_TTL_SECS);
+
+        let expired = first_push_token_response(&token, 1000 + FIRST_PUSH_TOKEN_TTL_SECS, None);
+        assert_eq!(expired.status, FirstPushTokenStatus::Expired);
     }
 
     #[tokio::test]

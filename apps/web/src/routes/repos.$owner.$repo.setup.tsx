@@ -1,3 +1,4 @@
+import { CopyableCodeBlock } from '@/components/copyable-code-block'
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
@@ -13,6 +14,7 @@ import {
   RefreshCw,
   Terminal,
 } from 'lucide-react'
+import type { ReactNode } from 'react'
 import { useEffect, useState } from 'react'
 
 type Visibility = 'Private' | 'Public'
@@ -231,9 +233,10 @@ function SetupPage() {
               </div>
               {tokenSecret ? (
                 <>
-                  <code className="block overflow-x-auto rounded-md border border-border bg-muted px-3 py-2 font-mono text-xs leading-5">
-                    {tokenSecret}
-                  </code>
+                  <CopyableCodeBlock
+                    copyLabel="Copy first-push token"
+                    value={tokenSecret}
+                  />
                   <p className="text-sm leading-5 text-muted-foreground">
                     Use this as the password for the first Git push. The
                     username can be <InlineCode>scope</InlineCode>; Scope ignores
@@ -268,9 +271,10 @@ function SetupPage() {
             <div className="min-w-0 space-y-3">
               {pushTokenSecret ? (
                 <>
-                  <code className="block overflow-x-auto rounded-md border border-border bg-muted px-3 py-2 font-mono text-xs leading-5">
-                    {pushTokenSecret}
-                  </code>
+                  <CopyableCodeBlock
+                    copyLabel="Copy Git push token"
+                    value={pushTokenSecret}
+                  />
                   <p className="text-sm leading-5 text-muted-foreground">
                     Use this for owner pushes and clones after the repo is
                     published. For the first upload, use the first-push token
@@ -302,14 +306,10 @@ function SetupPage() {
               <p className="text-sm leading-5 text-muted-foreground">
                 Run these commands in the local repo you want to upload.
               </p>
-              {commands.map((command) => (
-                <code
-                  className="block overflow-x-auto rounded-md border border-border bg-muted px-3 py-2 font-mono text-xs leading-5"
-                  key={command}
-                >
-                  {command}
-                </code>
-              ))}
+              <CopyableCodeBlock
+                copyLabel="Copy Git setup commands"
+                value={commands.join('\n')}
+              />
               <div className="border-t border-border pt-3 text-sm leading-5 text-muted-foreground">
                 When Git prompts, enter any username, for example{' '}
                 <InlineCode>scope</InlineCode>, and paste the{' '}
@@ -336,14 +336,10 @@ function SetupPage() {
                 push URLs to <InlineCode>origin</InlineCode>. Once push URLs are
                 configured, Git uses only that list.
               </p>
-              {dualPushCommands.map((command) => (
-                <code
-                  className="block overflow-x-auto rounded-md border border-border bg-muted px-3 py-2 font-mono text-xs leading-5"
-                  key={command}
-                >
-                  {command}
-                </code>
-              ))}
+              <CopyableCodeBlock
+                copyLabel="Copy GitHub and Scope commands"
+                value={dualPushCommands.join('\n')}
+              />
               <p className="text-sm leading-5 text-muted-foreground">
                 Fetch and pull still come from your normal GitHub URL. Scope
                 will prompt for the first-push token on the first upload and the
@@ -436,7 +432,7 @@ function dualRemotePushCommands(setup: RepoSetupCommandSource) {
   ]
 }
 
-function InlineCode({ children }: { children: React.ReactNode }) {
+function InlineCode({ children }: { children: ReactNode }) {
   return (
     <code className="rounded-sm border border-border bg-muted px-1 py-0.5 font-mono text-[0.8em] text-foreground">
       {children}
