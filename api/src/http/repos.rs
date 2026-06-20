@@ -1,6 +1,6 @@
 use crate::domain::git_projection::{VirtualGitProjection, build_virtual_git_projection};
 use crate::domain::policy::{Principal, ScopePath, Visibility, VisibilityRule};
-use crate::domain::projection::{Projection, project_graph};
+use crate::domain::projection::project_graph;
 use crate::domain::store::{RepoRole, RepoSettings};
 use crate::{
     auth::{
@@ -15,7 +15,10 @@ use crate::{
     http::responses::*,
     persistence::{catalog_error, unix_now},
     state::AppState,
-    state::{ensure_repo_read, find_repo, role_for_principal},
+    state::{
+        ensure_repo_read, find_repo, queue_source_blob_deletions, repo_source_blobs,
+        role_for_principal,
+    },
 };
 use axum::{
     Json,
@@ -136,6 +139,7 @@ pub(crate) async fn delete_repo(
     let delete_repo_id = repo_id.clone();
     let missing_owner = owner.clone();
     let missing_repo_name = repo_name.clone();
+    let cleanup_state = state.clone();
 
     state.metadata.update(move |catalog| {
         let repo = catalog.repositories.get(&delete_repo_id).ok_or_else(|| {
@@ -150,11 +154,17 @@ pub(crate) async fn delete_repo(
             )));
         }
 
-        catalog.repositories.remove(&delete_repo_id);
+        delete_repo_storage(&cleanup_state, &delete_owner, &delete_repo_name)?;
+        let repo = catalog
+            .repositories
+            .remove(&delete_repo_id)
+            .expect("repo was already checked");
+        let blobs = repo_source_blobs(&repo);
+        queue_source_blob_deletions(catalog, blobs);
         Ok(())
     })?;
 
-    delete_repo_storage(&state, &delete_owner, &delete_repo_name)?;
+    crate::state::best_effort_drain_pending_source_blob_deletions(&state);
 
     Ok(Json(DeleteRepoResponse {
         id: repo_id,
@@ -166,12 +176,16 @@ pub(crate) async fn get_projection(
     State(state): State<AppState>,
     headers: HeaderMap,
     Path((owner, repo_name)): Path<(String, String)>,
-) -> Result<Json<Projection>, ApiError> {
+) -> Result<Json<ProjectionResponse>, ApiError> {
     let repo = find_repo(&state, &owner, &repo_name)?;
     let identity = http_identity(&state, &headers).await?;
     let principal = principal_for_repo(&state, &repo, identity.as_ref())?;
     ensure_repo_read(&state, &repo, &principal)?;
-    Ok(Json(project_graph(&repo.policy, &repo.graph, &principal)))
+    let projection = project_graph(&repo.policy, &repo.graph, &principal);
+    Ok(Json(projection_response(
+        state.object_store.as_ref(),
+        projection,
+    )?))
 }
 
 pub(crate) async fn get_git_projection(
@@ -184,7 +198,10 @@ pub(crate) async fn get_git_projection(
     let principal = principal_for_repo(&state, &repo, identity.as_ref())?;
     ensure_repo_read(&state, &repo, &principal)?;
     let projection = project_graph(&repo.policy, &repo.graph, &principal);
-    Ok(Json(build_virtual_git_projection(&projection)))
+    Ok(Json(build_virtual_git_projection(
+        state.object_store.as_ref(),
+        &projection,
+    )?))
 }
 
 pub(crate) async fn get_files(
@@ -197,7 +214,11 @@ pub(crate) async fn get_files(
     let principal = principal_for_repo(&state, &repo, identity.as_ref())?;
     ensure_repo_read(&state, &repo, &principal)?;
 
-    Ok(Json(projected_files(&repo, &principal)))
+    Ok(Json(projected_files(
+        state.object_store.as_ref(),
+        &repo,
+        &principal,
+    )?))
 }
 
 pub(crate) async fn update_file_visibility(
@@ -217,7 +238,7 @@ pub(crate) async fn update_file_visibility(
         return Err(ApiError::forbidden("owner role required"));
     }
 
-    let owner_files = files_for_visibility_update(&repo, &principal)?;
+    let owner_files = files_for_visibility_update(state.object_store.as_ref(), &repo, &principal)?;
     let selected_file = owner_files
         .iter()
         .find(|file| file.path == path.as_str())
@@ -279,7 +300,8 @@ pub(crate) async fn update_file_visibility(
         id: updated.record.owner_user_id.clone(),
         kind: crate::domain::policy::PrincipalKind::User,
     };
-    let updated_files = files_for_visibility_update(&updated, &principal)?;
+    let updated_files =
+        files_for_visibility_update(state.object_store.as_ref(), &updated, &principal)?;
     let file = updated_files
         .into_iter()
         .find(|file| file.path == path.as_str())

@@ -1,4 +1,7 @@
-use super::policy::{Policy, Principal, ScopePath};
+use super::{
+    policy::{Policy, Principal, ScopePath},
+    store::SourceBlob,
+};
 use serde::{Deserialize, Serialize};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -16,8 +19,8 @@ pub enum AuthorVisibility {
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct FileChange {
     pub path: ScopePath,
-    pub old_content: Option<String>,
-    pub new_content: Option<String>,
+    pub old_content: Option<SourceBlob>,
+    pub new_content: Option<SourceBlob>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -40,7 +43,7 @@ pub struct SourceGraph {
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ProjectedChange {
     pub path: ScopePath,
-    pub new_content: Option<String>,
+    pub new_content: Option<SourceBlob>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]

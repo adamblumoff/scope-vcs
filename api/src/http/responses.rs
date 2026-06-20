@@ -1,6 +1,6 @@
-use crate::domain::git_projection::{build_virtual_git_projection, git_blob_oid};
+use crate::domain::git_projection::build_virtual_git_projection;
 use crate::domain::policy::{Principal, ScopePath, Visibility};
-use crate::domain::projection::{FileChange, project_graph};
+use crate::domain::projection::{FileChange, Projection, project_graph};
 use crate::domain::store::{
     AppCatalog, FirstPushToken, FirstPushTokenStatus, GitPushToken, PendingImport,
     RepoPublicationState, RepoRole, StagedFileChangeKind, StagedRepoUpdate, StoredRepository,
@@ -10,9 +10,9 @@ use crate::{
     auth::tokens::ensure_owner_setup_access_in_catalog,
     config::{DEFAULT_GIT_BRANCH, FIRST_PUSH_TOKEN_TTL_SECS},
     error::ApiError,
+    object_store::{ObjectStore, source_blob_text},
     state::graph_has_file,
 };
-use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64};
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Serialize)]
@@ -95,6 +95,30 @@ pub(crate) struct CreateRepoResponse {
 pub(crate) struct DeleteRepoResponse {
     pub(crate) id: String,
     pub(crate) deleted: bool,
+}
+
+#[derive(Debug, Serialize)]
+pub(crate) struct ProjectionResponse {
+    pub(crate) repo_id: String,
+    pub(crate) principal_id: String,
+    pub(crate) commits: Vec<ProjectedCommitResponse>,
+}
+
+#[derive(Debug, Serialize)]
+pub(crate) struct ProjectedCommitResponse {
+    pub(crate) projected_id: String,
+    pub(crate) logical_commit_id: String,
+    pub(crate) parent_projected_id: Option<String>,
+    pub(crate) author: Option<String>,
+    pub(crate) message: String,
+    pub(crate) synthetic: bool,
+    pub(crate) changes: Vec<ProjectedChangeResponse>,
+}
+
+#[derive(Debug, Serialize)]
+pub(crate) struct ProjectedChangeResponse {
+    pub(crate) path: ScopePath,
+    pub(crate) new_content: Option<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -301,8 +325,8 @@ pub(crate) fn staged_update_response(update: &StagedRepoUpdate) -> StagedUpdateR
             .map(|change| StagedFileResponse {
                 path: change.path.as_str().to_string(),
                 kind: change.kind,
-                old_oid: change.old_content.as_deref().map(git_blob_oid),
-                new_oid: change.new_content.as_deref().map(git_blob_oid),
+                old_oid: change.old_content.as_ref().map(|blob| blob.git_oid.clone()),
+                new_oid: change.new_content.as_ref().map(|blob| blob.git_oid.clone()),
                 visibility: change.visibility,
             })
             .collect(),
@@ -342,12 +366,52 @@ pub(crate) fn repo_owner_ids(repo: &StoredRepository) -> Vec<String> {
     owner_ids
 }
 
+pub(crate) fn projection_response(
+    store: &dyn ObjectStore,
+    projection: Projection,
+) -> Result<ProjectionResponse, ApiError> {
+    Ok(ProjectionResponse {
+        repo_id: projection.repo_id,
+        principal_id: projection.principal_id,
+        commits: projection
+            .commits
+            .into_iter()
+            .map(|commit| {
+                let changes = commit
+                    .changes
+                    .into_iter()
+                    .map(|change| {
+                        Ok(ProjectedChangeResponse {
+                            path: change.path,
+                            new_content: change
+                                .new_content
+                                .as_ref()
+                                .map(|blob| source_blob_text(store, blob))
+                                .transpose()?,
+                        })
+                    })
+                    .collect::<Result<Vec<_>, ApiError>>()?;
+                Ok(ProjectedCommitResponse {
+                    projected_id: commit.projected_id,
+                    logical_commit_id: commit.logical_commit_id,
+                    parent_projected_id: commit.parent_projected_id,
+                    author: commit.author,
+                    message: commit.message,
+                    synthetic: commit.synthetic,
+                    changes,
+                })
+            })
+            .collect::<Result<Vec<_>, ApiError>>()?,
+    })
+}
+
 pub(crate) fn projected_files(
+    store: &dyn ObjectStore,
     repo: &StoredRepository,
     principal: &Principal,
-) -> Vec<RepoFileResponse> {
+) -> Result<Vec<RepoFileResponse>, ApiError> {
     let projection = project_graph(&repo.policy, &repo.graph, principal);
-    let git = build_virtual_git_projection(&projection);
+    let git = build_virtual_git_projection(store, &projection)?;
     let mut files = git
         .blobs
         .into_iter()
@@ -363,7 +427,7 @@ pub(crate) fn projected_files(
         })
         .collect::<Vec<_>>();
     files.sort_by(|left, right| left.path.cmp(&right.path));
-    files
+    Ok(files)
 }
 
 pub(crate) fn pending_import_files(
@@ -391,30 +455,26 @@ pub(crate) fn pending_import_files(
 }
 
 pub(crate) fn files_for_visibility_update(
+    store: &dyn ObjectStore,
     repo: &StoredRepository,
     principal: &Principal,
 ) -> Result<Vec<RepoFileResponse>, ApiError> {
     if repo.record.publication_state == RepoPublicationState::PendingPublish {
         pending_import_files(repo, principal)
     } else {
-        Ok(projected_files(repo, principal))
+        projected_files(store, repo, principal)
     }
 }
 
-pub(crate) fn pending_import_changes(pending: &PendingImport) -> Result<Vec<FileChange>, ApiError> {
+pub(crate) fn pending_import_changes(pending: &PendingImport) -> Vec<FileChange> {
     pending
         .files
         .iter()
-        .map(|file| {
-            let content = BASE64
-                .decode(file.content_base64.as_bytes())
-                .map_err(ApiError::bad_request)?;
-            let content = String::from_utf8(content).map_err(ApiError::bad_request)?;
-            Ok(FileChange {
-                path: pending_scope_path(&file.path)?,
-                old_content: None,
-                new_content: Some(content),
-            })
+        .map(|file| FileChange {
+            path: pending_scope_path(&file.path)
+                .expect("pending import paths were validated before persistence"),
+            old_content: None,
+            new_content: Some(file.blob.clone()),
         })
         .collect()
 }

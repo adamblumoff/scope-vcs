@@ -15,9 +15,26 @@ fn receive_pack_stages_owner_update_without_changing_live_tree() {
     assert_eq!(
         live_tree(&repo)
             .get(&ScopePath::parse("/README.md").unwrap())
-            .map(String::as_str),
+            .map(blob_content)
+            .as_deref(),
         Some("hello")
     );
+}
+
+#[test]
+fn receive_pack_same_content_with_new_object_key_is_noop() {
+    let mut repo = repo_with_readme();
+    let readme = ScopePath::parse("/README.md").unwrap();
+    let live = live_tree(&repo);
+    let live_blob = live.get(&readme).unwrap();
+    let update = receive_pack_update(vec![("/README.md", Some("hello"))]);
+    let update_blob = update.changes[0].content.as_ref().unwrap();
+    assert_ne!(live_blob.object_key, update_blob.object_key);
+
+    let error = stage_receive_pack_update(&mut repo, update).unwrap_err();
+
+    assert_eq!(error.status, StatusCode::BAD_REQUEST);
+    assert!(error.message.contains("did not change"));
 }
 
 #[test]
@@ -84,7 +101,8 @@ fn published_receive_pack_push_stages_from_seeded_git_repo() {
     assert_eq!(
         live_tree(&repo)
             .get(&ScopePath::parse("/README.md").unwrap())
-            .map(String::as_str),
+            .map(blob_content)
+            .as_deref(),
         Some("hello")
     );
 
@@ -108,7 +126,8 @@ fn review_off_receive_pack_applies_immediately() {
     assert_eq!(
         live_tree(&repo)
             .get(&ScopePath::parse("/README.md").unwrap())
-            .map(String::as_str),
+            .map(blob_content)
+            .as_deref(),
         Some("live now")
     );
 }
@@ -127,7 +146,8 @@ fn staged_new_private_file_stays_out_of_public_projection() {
     apply_receive_pack_update(&mut repo, staged).unwrap();
 
     let public_projection = project_graph(&repo.policy, &repo.graph, &Principal::public());
-    let public_git = build_virtual_git_projection(&public_projection);
+    let public_git =
+        build_virtual_git_projection(&MemoryObjectStore::new(), &public_projection).unwrap();
     assert!(
         !public_git
             .blobs
@@ -140,7 +160,8 @@ fn staged_new_private_file_stays_out_of_public_projection() {
     };
     let owner_projection = project_graph(&repo.policy, &repo.graph, &owner);
     assert!(
-        build_virtual_git_projection(&owner_projection)
+        build_virtual_git_projection(&MemoryObjectStore::new(), &owner_projection)
+            .unwrap()
             .blobs
             .iter()
             .any(|blob| blob.path == "/secret-plan.md")
@@ -167,7 +188,8 @@ fn staged_new_file_inherits_private_parent_visibility() {
     assert_eq!(staged.changes[0].visibility, Visibility::Private);
     apply_receive_pack_update(&mut repo, staged).unwrap();
     let public_projection = project_graph(&repo.policy, &repo.graph, &Principal::public());
-    let public_git = build_virtual_git_projection(&public_projection);
+    let public_git =
+        build_virtual_git_projection(&MemoryObjectStore::new(), &public_projection).unwrap();
     assert!(
         !public_git
             .blobs
@@ -265,11 +287,96 @@ fn pending_import_rejects_non_default_first_push_branch() {
     )
     .unwrap();
 
-    let error = pending_import_from_staging_repo(&bare).unwrap_err();
+    let state = test_state_with_repo();
+    let error = pending_import_from_staging_repo(&state, TEST_REPO_OWNER, TEST_REPO_NAME, &bare)
+        .unwrap_err();
 
     assert_eq!(error.status, StatusCode::BAD_REQUEST);
     let _ = fs::remove_dir_all(&repo);
     let _ = fs::remove_dir_all(&bare);
+}
+
+#[test]
+fn published_receive_pack_staging_restores_accepted_git_head_from_bucket_snapshot() {
+    let state = test_state_with_repo();
+    let source = temp_git_repo("snapshot-first-push");
+    fs::write(source.join("README.md"), "hello from git").unwrap();
+    run_git(Some(&source), &["add", "README.md"], "add readme").unwrap();
+    commit_all(&source, "initial from git");
+    let bare = std::env::temp_dir().join(format!(
+        "scope-vcs-snapshot-first-push-bare-{}-{}",
+        std::process::id(),
+        unix_now()
+    ));
+    let _ = fs::remove_dir_all(&bare);
+    run_git(
+        None,
+        &[
+            "clone",
+            "--bare",
+            source.to_str().unwrap(),
+            bare.to_str().unwrap(),
+        ],
+        "clone first push bare repo",
+    )
+    .unwrap();
+    let expected_head =
+        git_stdout_text(&bare, &["rev-parse", DEFAULT_GIT_BRANCH], "first push head").unwrap();
+    let pending =
+        pending_import_from_staging_repo(&state, TEST_REPO_OWNER, TEST_REPO_NAME, &bare).unwrap();
+    {
+        let mut catalog = lock_catalog(&state).unwrap();
+        let mut staged = catalog.clone();
+        let repo = staged.repositories.get_mut(TEST_REPO_ID).unwrap();
+        repo.record.publication_state = RepoPublicationState::PendingPublish;
+        repo.pending_import = Some(pending);
+        promote_pending_import(repo).unwrap();
+        *catalog = staged;
+    }
+
+    let restored = ensure_published_receive_pack_staging_repo(
+        &state,
+        TEST_REPO_OWNER,
+        TEST_REPO_NAME,
+        &test_owner_id(),
+    )
+    .unwrap();
+    let actual_head = git_stdout_text(
+        &restored,
+        &["rev-parse", DEFAULT_GIT_BRANCH],
+        "restored head",
+    )
+    .unwrap();
+
+    assert_eq!(actual_head, expected_head);
+    let _ = fs::remove_dir_all(&source);
+    let _ = fs::remove_dir_all(&bare);
+    let _ = fs::remove_dir_all(&restored);
+}
+
+#[test]
+fn applying_push_deletes_replaced_git_snapshot_bundle() {
+    let state = test_state_with_repo();
+    let old_snapshot = source_blob("old live git snapshot");
+    let old_key = old_snapshot.object_key.clone();
+    let update = receive_pack_update(vec![("/README.md", Some("updated"))]);
+    let new_key = update.git_snapshot.object_key.clone();
+    {
+        let mut catalog = lock_catalog(&state).unwrap();
+        let mut repo = repo_with_readme();
+        repo.settings.review_pushes_before_applying = false;
+        repo.git_snapshot = Some(old_snapshot);
+        catalog.repositories.insert(TEST_REPO_ID.to_string(), repo);
+    }
+
+    let persisted =
+        persist_receive_pack_update_and_promote(&state, TEST_REPO_OWNER, TEST_REPO_NAME, update)
+            .unwrap();
+
+    assert_eq!(persisted, PersistedReceivePackUpdate::Applied);
+    let store = MemoryObjectStore::new();
+    assert!(!store.contains_key(&old_key));
+    assert!(store.contains_key(&new_key));
 }
 
 #[test]
@@ -370,6 +477,7 @@ fn pending_import_marks_token_used_after_durable_state_update() {
         head_oid: "1111111111111111111111111111111111111111".to_string(),
         tree_oid: "2222222222222222222222222222222222222222".to_string(),
         imported_at_unix: unix_now(),
+        git_snapshot: source_blob("manual pending git snapshot"),
         files: Vec::new(),
     };
 
@@ -438,4 +546,76 @@ fn pending_import_with_git_token_marks_first_push_token_used() {
         RepoPublicationState::PendingPublish
     );
     assert!(repo.first_push_token.unwrap().used_at_unix.is_some());
+}
+
+#[test]
+fn rollback_cleanup_keeps_blobs_still_referenced_by_catalog() {
+    let state = test_state_with_repo();
+    let live_blob = source_blob("hello");
+    let unreferenced_blob = source_blob("rollback-only-content");
+    {
+        let mut catalog = lock_catalog(&state).unwrap();
+        let mut repo = repo_with_readme();
+        repo.graph.commits[0].changes[0].new_content = Some(live_blob.clone());
+        catalog.repositories.insert(TEST_REPO_ID.to_string(), repo);
+    }
+
+    delete_unreferenced_source_blobs(&state, &[live_blob.clone(), unreferenced_blob.clone()])
+        .unwrap();
+
+    let store = MemoryObjectStore::new();
+    assert!(store.contains_key(&live_blob.object_key));
+    assert!(!store.contains_key(&unreferenced_blob.object_key));
+}
+
+#[test]
+fn applied_push_survives_obsolete_snapshot_cleanup_failure() {
+    let mut state = test_state_with_repo();
+    state.object_store = Arc::new(DeleteFailsObjectStore);
+    let old_snapshot = source_blob("old live git snapshot");
+    {
+        let mut catalog = lock_catalog(&state).unwrap();
+        let mut repo = repo_with_readme();
+        repo.settings.review_pushes_before_applying = false;
+        repo.git_snapshot = Some(old_snapshot);
+        catalog.repositories.insert(TEST_REPO_ID.to_string(), repo);
+    }
+
+    let persisted = persist_receive_pack_update_and_promote(
+        &state,
+        TEST_REPO_OWNER,
+        TEST_REPO_NAME,
+        receive_pack_update(vec![("/README.md", Some("cleanup failure still lands"))]),
+    )
+    .unwrap();
+
+    assert_eq!(persisted, PersistedReceivePackUpdate::Applied);
+    let repo = find_repo(&state, TEST_REPO_OWNER, TEST_REPO_NAME).unwrap();
+    let live = live_tree(&repo);
+    let readme = live.get(&ScopePath::parse("/README.md").unwrap()).unwrap();
+    assert_eq!(blob_content(readme), "cleanup failure still lands");
+    assert!(
+        !lock_catalog(&state)
+            .unwrap()
+            .pending_source_blob_deletions
+            .is_empty()
+    );
+}
+
+struct DeleteFailsObjectStore;
+
+impl crate::object_store::ObjectStore for DeleteFailsObjectStore {
+    fn put(&self, _key: &str, _bytes: &[u8]) -> Result<(), crate::error::ApiError> {
+        Ok(())
+    }
+
+    fn get(&self, key: &str) -> Result<Vec<u8>, crate::error::ApiError> {
+        Err(crate::error::ApiError::not_found(format!(
+            "object {key} not found"
+        )))
+    }
+
+    fn delete(&self, _key: &str) -> Result<(), crate::error::ApiError> {
+        Err(crate::error::ApiError::service_unavailable("delete failed"))
+    }
 }

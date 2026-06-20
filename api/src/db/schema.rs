@@ -14,9 +14,32 @@ pub(crate) async fn migrate_metadata_schema(db: &DatabaseConnection) -> Result<(
                         .not_null()
                         .primary_key(),
                 )
+                .col(
+                    ColumnDef::new(MetadataLocks::PendingSourceBlobDeletions)
+                        .json_binary()
+                        .not_null(),
+                )
                 .to_owned(),
         )
         .await?;
+    if !manager
+        .has_column("scope_metadata_locks", "pending_source_blob_deletions")
+        .await?
+    {
+        manager
+            .alter_table(
+                Table::alter()
+                    .table(MetadataLocks::Table)
+                    .add_column(
+                        ColumnDef::new(MetadataLocks::PendingSourceBlobDeletions)
+                            .json_binary()
+                            .not_null()
+                            .default("[]"),
+                    )
+                    .to_owned(),
+            )
+            .await?;
+    }
 
     manager
         .create_table(
@@ -83,6 +106,7 @@ pub(crate) async fn migrate_metadata_schema(db: &DatabaseConnection) -> Result<(
                         .not_null(),
                 )
                 .col(ColumnDef::new(Repositories::Graph).json_binary().not_null())
+                .col(ColumnDef::new(Repositories::GitSnapshot).json_binary())
                 .col(ColumnDef::new(Repositories::StagedUpdate).json_binary())
                 .col(
                     ColumnDef::new(Repositories::Invitations)
@@ -99,6 +123,19 @@ pub(crate) async fn migrate_metadata_schema(db: &DatabaseConnection) -> Result<(
                 .to_owned(),
         )
         .await?;
+    if !manager
+        .has_column("scope_repositories", "git_snapshot")
+        .await?
+    {
+        manager
+            .alter_table(
+                Table::alter()
+                    .table(Repositories::Table)
+                    .add_column(ColumnDef::new(Repositories::GitSnapshot).json_binary())
+                    .to_owned(),
+            )
+            .await?;
+    }
 
     manager
         .create_index(
@@ -206,6 +243,7 @@ enum Repositories {
     PendingImport,
     Policy,
     Graph,
+    GitSnapshot,
     StagedUpdate,
     Invitations,
 }
@@ -224,6 +262,7 @@ impl_iden!(Repositories {
     PendingImport => "pending_import",
     Policy => "policy",
     Graph => "graph",
+    GitSnapshot => "git_snapshot",
     StagedUpdate => "staged_update",
     Invitations => "invitations",
 });
@@ -247,9 +286,11 @@ impl_iden!(Memberships {
 enum MetadataLocks {
     Table,
     Key,
+    PendingSourceBlobDeletions,
 }
 
 impl_iden!(MetadataLocks {
     Table => "scope_metadata_locks",
     Key => "key",
+    PendingSourceBlobDeletions => "pending_source_blob_deletions",
 });

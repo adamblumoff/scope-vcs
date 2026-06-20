@@ -1,4 +1,5 @@
 use super::*;
+use crate::http::review::reject_staged_update_in_catalog;
 
 #[tokio::test]
 async fn pending_publish_repo_session_is_owner_only() {
@@ -82,11 +83,13 @@ fn pending_visibility_toggles_apply_before_publish() {
         kind: PrincipalKind::User,
     };
 
-    let private_files = files_for_visibility_update(&repo, &owner).unwrap();
+    let private_files =
+        files_for_visibility_update(&MemoryObjectStore::new(), &repo, &owner).unwrap();
     assert_eq!(private_files[0].visibility, Visibility::Private);
 
     repo.policy.add_rule(VisibilityRule::public(path)).unwrap();
-    let public_files = files_for_visibility_update(&repo, &owner).unwrap();
+    let public_files =
+        files_for_visibility_update(&MemoryObjectStore::new(), &repo, &owner).unwrap();
     assert_eq!(public_files[0].visibility, Visibility::Public);
 }
 
@@ -123,4 +126,35 @@ fn publish_is_one_time() {
 fn repo_settings_review_pushes_default_on() {
     assert!(RepoSettings::default().review_pushes_before_applying);
     assert!(!RepoSettings::default().include_ignored_files);
+}
+
+#[test]
+fn rejecting_staged_update_deletes_unreferenced_bucket_objects() {
+    let state = test_state_with_repo();
+    let rejected_blob = source_blob("rejected private content");
+    let rejected_key = rejected_blob.object_key.clone();
+    {
+        let mut repo = repo_with_readme();
+        repo.staged_update = Some(StagedRepoUpdate {
+            id: "staged_push_1".to_string(),
+            branch: format!("refs/heads/{DEFAULT_GIT_BRANCH}"),
+            base_live_commit_id: repo.graph.commits.last().map(|commit| commit.id.clone()),
+            author_id: repo.record.owner_user_id.clone(),
+            message: "reject me".to_string(),
+            git_snapshot: source_blob("rejected staged git snapshot"),
+            changes: vec![StagedFileChange {
+                path: ScopePath::parse("/private.txt").unwrap(),
+                old_content: None,
+                new_content: Some(rejected_blob),
+                visibility: Visibility::Private,
+                kind: StagedFileChangeKind::Added,
+            }],
+        });
+        let mut catalog = lock_catalog(&state).unwrap();
+        catalog.repositories.insert(TEST_REPO_ID.to_string(), repo);
+    }
+
+    reject_staged_update_in_catalog(&state, TEST_REPO_OWNER, TEST_REPO_NAME).unwrap();
+
+    assert!(!MemoryObjectStore::new().contains_key(&rejected_key));
 }

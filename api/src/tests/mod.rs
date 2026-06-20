@@ -8,7 +8,7 @@ use crate::domain::projection::{
 use crate::domain::store::{
     AccountAccess, AppCatalog, FirstPushToken, FirstPushTokenStatus, GitPushToken, PendingImport,
     PendingImportFile, RepoMembership, RepoPublicationState, RepoRecord, RepoRole, RepoSettings,
-    StoredRepository, UserAccount,
+    StagedFileChange, StagedFileChangeKind, StagedRepoUpdate, StoredRepository, UserAccount,
 };
 use crate::{
     app::router,
@@ -16,6 +16,7 @@ use crate::{
     config::*,
     git::{import::*, storage::*, upload::*, *},
     http::responses::*,
+    object_store::{MemoryObjectStore, put_source_blob, source_blob_text},
     persistence::*,
     state::*,
 };
@@ -165,6 +166,7 @@ fn test_state_with_repo() -> AppState {
         metadata: crate::db::MetadataStore::memory(AppCatalog {
             users: BTreeMap::from([(owner.id.clone(), owner)]),
             repositories: BTreeMap::from([(repo.record.id.clone(), repo)]),
+            pending_source_blob_deletions: Vec::new(),
         }),
         data_dir: Arc::new(test_data_dir()),
         shoo: ShooVerifier::new(
@@ -172,6 +174,7 @@ fn test_state_with_repo() -> AppState {
             Some("origin:http://localhost:3000".to_string()),
             "http://127.0.0.1/.well-known/jwks.json",
         ),
+        object_store: Arc::new(MemoryObjectStore::new()),
     }
 }
 
@@ -190,6 +193,7 @@ fn test_state_with_metadata(metadata: crate::db::MetadataStore) -> AppState {
             Some("origin:http://localhost:3000".to_string()),
             "http://127.0.0.1/.well-known/jwks.json",
         ),
+        object_store: Arc::new(MemoryObjectStore::new()),
     };
     cache_test_jwks(&state);
     state
@@ -280,6 +284,7 @@ fn test_repo(owner_id: &str) -> StoredRepository {
             repo_id: TEST_REPO_ID.to_string(),
             commits: Vec::new(),
         },
+        git_snapshot: None,
         staged_update: None,
         memberships: vec![RepoMembership {
             repo_id: TEST_REPO_ID.to_string(),
@@ -291,21 +296,36 @@ fn test_repo(owner_id: &str) -> StoredRepository {
 }
 
 fn pending_import_fixture(files: Vec<(&str, &str)>) -> PendingImport {
+    let store = MemoryObjectStore::new();
     PendingImport {
         default_branch: "main".to_string(),
         head_oid: "1111111111111111111111111111111111111111".to_string(),
         tree_oid: "2222222222222222222222222222222222222222".to_string(),
         imported_at_unix: unix_now(),
+        git_snapshot: source_blob("test git snapshot"),
         files: files
             .into_iter()
             .map(|(path, content)| PendingImportFile {
                 path: path.to_string(),
                 mode: "100644".to_string(),
                 oid: format!("oid-{path}"),
-                content_base64: BASE64.encode(content),
+                blob: put_source_blob(&store, TEST_REPO_ID, content.as_bytes()).unwrap(),
             })
             .collect(),
     }
+}
+
+fn source_blob(content: &str) -> crate::domain::store::SourceBlob {
+    put_source_blob(
+        AppState::test_state().object_store.as_ref(),
+        TEST_REPO_ID,
+        content.as_bytes(),
+    )
+    .unwrap()
+}
+
+fn blob_content(blob: &crate::domain::store::SourceBlob) -> String {
+    source_blob_text(&MemoryObjectStore::new(), blob).unwrap()
 }
 
 fn repo_with_readme() -> StoredRepository {
@@ -320,7 +340,7 @@ fn repo_with_readme() -> StoredRepository {
         changes: vec![FileChange {
             path: ScopePath::parse("/README.md").unwrap(),
             old_content: None,
-            new_content: Some("hello".to_string()),
+            new_content: Some(source_blob("hello")),
         }],
     });
     repo
@@ -331,11 +351,13 @@ fn receive_pack_update(changes: Vec<(&str, Option<&str>)>) -> ReceivePackUpdate 
         branch: format!("refs/heads/{DEFAULT_GIT_BRANCH}"),
         author_id: test_owner_id(),
         message: "owner push".to_string(),
+        git_snapshot: source_blob("test staged git snapshot"),
+        uploaded_blobs: Vec::new(),
         changes: changes
             .into_iter()
             .map(|(path, content)| ReceivePackFileChange {
                 path: pending_scope_path(path).unwrap(),
-                content: content.map(str::to_string),
+                content: content.map(source_blob),
             })
             .collect(),
     }

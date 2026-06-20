@@ -4,6 +4,11 @@ use api::domain::{
         AuthorVisibility, FileChange, LogicalCommit, MixedCommitPolicy, SourceGraph, project_graph,
     },
 };
+use api::object_store::{MemoryObjectStore, put_source_blob};
+
+fn blob(content: &str) -> api::domain::store::SourceBlob {
+    put_source_blob(&MemoryObjectStore::new(), "scope", content.as_bytes()).unwrap()
+}
 
 fn fixture_policy() -> Policy {
     let mut policy = Policy::new(Visibility::Public, "owner");
@@ -31,12 +36,12 @@ fn synthetic_commit_contains_only_visible_paths() {
                 FileChange {
                     path: ScopePath::parse("/README.md").unwrap(),
                     old_content: None,
-                    new_content: Some("hello".to_string()),
+                    new_content: Some(blob("hello")),
                 },
                 FileChange {
                     path: ScopePath::parse("/internal/model.rs").unwrap(),
                     old_content: None,
-                    new_content: Some("secret".to_string()),
+                    new_content: Some(blob("secret")),
                 },
             ],
         }],
@@ -65,12 +70,12 @@ fn omitted_mixed_commit_hides_public_changes_too() {
                 FileChange {
                     path: ScopePath::parse("/README.md").unwrap(),
                     old_content: None,
-                    new_content: Some("hello".to_string()),
+                    new_content: Some(blob("hello")),
                 },
                 FileChange {
                     path: ScopePath::parse("/internal/model.rs").unwrap(),
                     old_content: None,
-                    new_content: Some("secret".to_string()),
+                    new_content: Some(blob("secret")),
                 },
             ],
         }],
@@ -95,7 +100,7 @@ fn authorized_collaborator_sees_private_paths() {
             changes: vec![FileChange {
                 path: ScopePath::parse("/internal/model.rs").unwrap(),
                 old_content: None,
-                new_content: Some("secret".to_string()),
+                new_content: Some(blob("secret")),
             }],
         }],
     };

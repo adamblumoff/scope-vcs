@@ -8,6 +8,7 @@ pub(crate) mod db;
 pub(crate) mod error;
 pub(crate) mod git;
 pub(crate) mod http;
+pub mod object_store;
 pub(crate) mod persistence;
 
 #[cfg(test)]

@@ -1,8 +1,8 @@
 use crate::domain::policy::{ScopePath, Visibility, VisibilityRule};
 use crate::domain::projection::{AuthorVisibility, FileChange, LogicalCommit, MixedCommitPolicy};
 use crate::domain::store::{
-    FirstPushTokenStatus, PendingImport, PendingImportFile, RepoPublicationState, StagedFileChange,
-    StagedFileChangeKind, StagedRepoUpdate, StoredRepository,
+    FirstPushTokenStatus, PendingImport, PendingImportFile, RepoPublicationState, SourceBlob,
+    StagedFileChange, StagedFileChangeKind, StagedRepoUpdate, StoredRepository,
 };
 use crate::{
     config::{
@@ -13,21 +13,20 @@ use crate::{
     git::{
         InitialPushCredential, PersistedReceivePackUpdate, authorize_first_push_token_for_repo,
         authorize_git_push_token_for_repo,
-        storage::{begin_git_repo_replacement, owner_git_repo_path, staged_git_repo_path},
     },
     http::responses::{first_push_token_status_at, pending_scope_path, repo_owner_ids},
+    object_store::put_repo_object,
     persistence::unix_now,
     state::AppState,
     state::{find_repo, live_tree},
 };
-use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64};
 use sha2::{Digest, Sha256};
 use std::{collections::BTreeMap, path::Path as FsPath, process::Command};
 
 #[derive(Clone, Debug)]
 pub(crate) struct ReceivePackFileChange {
     pub(crate) path: ScopePath,
-    pub(crate) content: Option<String>,
+    pub(crate) content: Option<SourceBlob>,
 }
 
 #[allow(dead_code)]
@@ -51,6 +50,8 @@ pub(crate) struct ReceivePackUpdate {
     pub(crate) branch: String,
     pub(crate) author_id: String,
     pub(crate) message: String,
+    pub(crate) git_snapshot: SourceBlob,
+    pub(crate) uploaded_blobs: Vec<SourceBlob>,
     pub(crate) changes: Vec<ReceivePackFileChange>,
 }
 
@@ -94,7 +95,7 @@ pub(crate) fn build_staged_receive_pack_update(
 
     for change in update.changes {
         let old_content = live_tree.get(&change.path).cloned();
-        if old_content == change.content {
+        if source_content_matches(old_content.as_ref(), change.content.as_ref()) {
             continue;
         }
         let kind = match (&old_content, &change.content) {
@@ -125,8 +126,21 @@ pub(crate) fn build_staged_receive_pack_update(
         base_live_commit_id: repo.graph.commits.last().map(|commit| commit.id.clone()),
         author_id: update.author_id,
         message: update.message,
+        git_snapshot: update.git_snapshot,
         changes: staged_changes,
     })
+}
+
+fn source_content_matches(left: Option<&SourceBlob>, right: Option<&SourceBlob>) -> bool {
+    match (left, right) {
+        (Some(left), Some(right)) => {
+            left.sha256 == right.sha256
+                && left.git_oid == right.git_oid
+                && left.size_bytes == right.size_bytes
+        }
+        (None, None) => true,
+        _ => false,
+    }
 }
 
 pub(crate) fn apply_receive_pack_update(
@@ -167,6 +181,7 @@ pub(crate) fn apply_receive_pack_update(
             })
             .collect(),
     });
+    repo.git_snapshot = Some(staged_update.git_snapshot);
     Ok(())
 }
 
@@ -198,6 +213,9 @@ pub(crate) fn staged_visibility_rule(
     }
 }
 pub(crate) fn pending_import_from_staging_repo(
+    state: &AppState,
+    owner: &str,
+    repo_name: &str,
     staging_repo: &FsPath,
 ) -> Result<PendingImport, ApiError> {
     let refs = git_refs(staging_repo)?;
@@ -219,13 +237,27 @@ pub(crate) fn pending_import_from_staging_repo(
     )?
     .trim()
     .to_string();
-    let files = git_tree_files(staging_repo, &head_oid)?;
+    let imported_at_unix = unix_now()?;
+    let repo_id = crate::domain::store::repo_id(owner, repo_name);
+    let files = git_tree_files(state, &repo_id, staging_repo, &head_oid)?;
+    let uploaded_file_blobs = files
+        .iter()
+        .map(|file| file.blob.clone())
+        .collect::<Vec<_>>();
+    let git_snapshot = match git_snapshot_from_repo(state, &repo_id, staging_repo) {
+        Ok(snapshot) => snapshot,
+        Err(error) => {
+            crate::state::best_effort_cleanup_rollback_source_blobs(state, &uploaded_file_blobs);
+            return Err(error);
+        }
+    };
 
     Ok(PendingImport {
         default_branch: default_branch.to_string(),
         head_oid,
         tree_oid,
-        imported_at_unix: unix_now()?,
+        imported_at_unix,
+        git_snapshot,
         files,
     })
 }
@@ -246,11 +278,21 @@ pub(crate) fn receive_pack_update_from_staging_repo(
     }
     let (branch, head_oid) = refs.into_iter().next().expect("length checked");
     ensure_default_branch(&branch)?;
-    let pushed_tree = pushed_scope_tree(staging_repo, &head_oid)?;
     let repo = find_repo(state, owner, repo_name)?;
     if repo.record.publication_state != RepoPublicationState::Published {
         return Err(ApiError::conflict("repo must be published before push"));
     }
+    let repo_id = crate::domain::store::repo_id(owner, repo_name);
+    let message = pushed_commit_message(staging_repo, &head_oid)?;
+    let pushed_tree = pushed_scope_tree(state, &repo_id, staging_repo, &head_oid)?;
+    let uploaded_file_blobs = pushed_tree.values().cloned().collect::<Vec<_>>();
+    let git_snapshot = match git_snapshot_from_repo(state, &repo_id, staging_repo) {
+        Ok(snapshot) => snapshot,
+        Err(error) => {
+            crate::state::best_effort_cleanup_rollback_source_blobs(state, &uploaded_file_blobs);
+            return Err(error);
+        }
+    };
     let live_tree = live_tree(&repo);
     let mut changes = Vec::new();
 
@@ -271,26 +313,40 @@ pub(crate) fn receive_pack_update_from_staging_repo(
         }
     }
 
-    let message = pushed_commit_message(staging_repo, &head_oid)?;
     Ok(ReceivePackUpdate {
         branch,
         author_id: author_id.to_string(),
         message,
+        git_snapshot,
+        uploaded_blobs: pushed_tree.values().cloned().collect(),
         changes,
     })
 }
 
 pub(crate) fn pushed_scope_tree(
+    state: &AppState,
+    repo_id: &str,
     staging_repo: &FsPath,
     head_oid: &str,
-) -> Result<BTreeMap<ScopePath, String>, ApiError> {
+) -> Result<BTreeMap<ScopePath, SourceBlob>, ApiError> {
     let mut tree = BTreeMap::new();
-    for file in git_tree_files(staging_repo, head_oid)? {
-        let content = BASE64
-            .decode(file.content_base64.as_bytes())
-            .map_err(ApiError::bad_request)?;
-        let content = String::from_utf8(content).map_err(ApiError::bad_request)?;
-        tree.insert(pending_scope_path(&file.path)?, content);
+    let files = git_tree_files(state, repo_id, staging_repo, head_oid)?;
+    let uploaded_file_blobs = files
+        .iter()
+        .map(|file| file.blob.clone())
+        .collect::<Vec<_>>();
+    for file in files {
+        let path = match pending_scope_path(&file.path) {
+            Ok(path) => path,
+            Err(error) => {
+                crate::state::best_effort_cleanup_rollback_source_blobs(
+                    state,
+                    &uploaded_file_blobs,
+                );
+                return Err(error);
+            }
+        };
+        tree.insert(path, file.blob);
     }
     Ok(tree)
 }
@@ -352,6 +408,8 @@ pub(crate) fn describe_refs(refs: &[(String, String)]) -> String {
 }
 
 pub(crate) fn git_tree_files(
+    state: &AppState,
+    repo_id: &str,
     staging_repo: &FsPath,
     head_oid: &str,
 ) -> Result<Vec<PendingImportFile>, ApiError> {
@@ -360,13 +418,13 @@ pub(crate) fn git_tree_files(
         &["ls-tree", "-rz", "-r", head_oid],
         "reading pushed tree",
     )?;
-    let mut files = Vec::new();
+    let mut pending_files = Vec::new();
     let mut total_bytes = 0usize;
     for raw in output.stdout.split(|byte| *byte == 0) {
         if raw.is_empty() {
             continue;
         }
-        if files.len() >= MAX_PENDING_IMPORT_FILES {
+        if pending_files.len() >= MAX_PENDING_IMPORT_FILES {
             return Err(ApiError::bad_request(format!(
                 "pending import exceeds {MAX_PENDING_IMPORT_FILES} files"
             )));
@@ -425,15 +483,67 @@ pub(crate) fn git_tree_files(
         .stdout;
         std::str::from_utf8(&content)
             .map_err(|_| ApiError::bad_request(format!("blob {path} must be valid UTF-8 text")))?;
-        files.push(PendingImportFile {
+        pending_files.push(PendingGitTreeFile {
             path: path.to_string(),
             mode: mode.to_string(),
             oid: oid.to_string(),
-            content_base64: BASE64.encode(content),
+            content,
+        });
+    }
+
+    let mut files = Vec::with_capacity(pending_files.len());
+    let mut uploaded_blobs = Vec::with_capacity(pending_files.len());
+    for pending in pending_files {
+        let blob = match put_repo_object(
+            state.object_store.as_ref(),
+            repo_id,
+            "blobs",
+            &pending.content,
+        ) {
+            Ok(blob) => blob,
+            Err(error) => {
+                crate::state::best_effort_cleanup_rollback_source_blobs(state, &uploaded_blobs);
+                return Err(error);
+            }
+        };
+        uploaded_blobs.push(blob.clone());
+        files.push(PendingImportFile {
+            path: pending.path,
+            mode: pending.mode,
+            oid: pending.oid,
+            blob,
         });
     }
     files.sort_by(|left, right| left.path.cmp(&right.path));
     Ok(files)
+}
+
+pub(crate) fn git_snapshot_from_repo(
+    state: &AppState,
+    repo_id: &str,
+    repo: &FsPath,
+) -> Result<SourceBlob, ApiError> {
+    let bundle_path = repo.join(format!(
+        "scope-snapshot-{}-{}.bundle",
+        std::process::id(),
+        unix_now()?
+    ));
+    let bundle = bundle_path.to_string_lossy().to_string();
+    run_git(
+        Some(repo),
+        &["bundle", "create", &bundle, "--all"],
+        "creating Git snapshot bundle",
+    )?;
+    let bytes = std::fs::read(&bundle_path).map_err(ApiError::internal)?;
+    let _ = std::fs::remove_file(&bundle_path);
+    put_repo_object(state.object_store.as_ref(), repo_id, "git-bundles", &bytes)
+}
+
+struct PendingGitTreeFile {
+    path: String,
+    mode: String,
+    oid: String,
+    content: Vec<u8>,
 }
 
 pub(crate) fn validate_pushed_file_path(path: &str) -> Result<(), ApiError> {
@@ -529,34 +639,31 @@ pub(crate) fn persist_receive_pack_update_and_promote(
     state: &AppState,
     owner: &str,
     repo_name: &str,
-    staging_repo: &FsPath,
     update: ReceivePackUpdate,
 ) -> Result<PersistedReceivePackUpdate, ApiError> {
     let repo_id = crate::domain::store::repo_id(owner, repo_name);
     let owner = owner.to_string();
     let repo_name = repo_name.to_string();
-    let staging_repo = staging_repo.to_path_buf();
-    let staged_target = staged_git_repo_path(state, &owner, &repo_name);
-    let owner_target = owner_git_repo_path(state, &owner, &repo_name);
+    let uploaded_blobs = update.uploaded_blobs.clone();
 
-    let (persisted, replacement) = state.metadata.update(move |catalog| {
+    let persisted = state.metadata.update(move |catalog| {
         let repo = catalog
             .repositories
             .get_mut(&repo_id)
             .ok_or_else(|| ApiError::not_found(format!("repo {owner}/{repo_name} not found")))?;
+        let old_snapshot = repo.git_snapshot.clone();
         let persisted = if stage_receive_pack_update(repo, update)?.is_some() {
+            crate::state::queue_source_blob_deletions(catalog, uploaded_blobs);
             PersistedReceivePackUpdate::Staged
         } else {
+            let mut cleanup_blobs = uploaded_blobs;
+            cleanup_blobs.extend(old_snapshot);
+            crate::state::queue_source_blob_deletions(catalog, cleanup_blobs);
             PersistedReceivePackUpdate::Applied
         };
-        let target_repo = match persisted {
-            PersistedReceivePackUpdate::Staged => &staged_target,
-            PersistedReceivePackUpdate::Applied => &owner_target,
-        };
-        let replacement = begin_git_repo_replacement(&staging_repo, target_repo)?;
-        Ok((persisted, replacement))
+        Ok(persisted)
     })?;
-    replacement.commit()?;
+    crate::state::best_effort_drain_pending_source_blob_deletions(state);
     Ok(persisted)
 }
 

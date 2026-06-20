@@ -6,9 +6,15 @@ use api::domain::{
         ProjectedCommit, Projection, SourceGraph, project_graph,
     },
 };
+use api::object_store::{MemoryObjectStore, put_source_blob};
+
+fn blob(store: &MemoryObjectStore, content: &str) -> api::domain::store::SourceBlob {
+    put_source_blob(store, "scope", content.as_bytes()).unwrap()
+}
 
 #[test]
 fn projected_git_blobs_do_not_include_hidden_content() {
+    let store = MemoryObjectStore::new();
     let mut policy = Policy::new(Visibility::Public, "owner");
     policy
         .add_rule(VisibilityRule::private(
@@ -29,18 +35,18 @@ fn projected_git_blobs_do_not_include_hidden_content() {
                 FileChange {
                     path: ScopePath::parse("/README.md").unwrap(),
                     old_content: None,
-                    new_content: Some("public".to_string()),
+                    new_content: Some(blob(&store, "public")),
                 },
                 FileChange {
                     path: ScopePath::parse("/internal/secret.env").unwrap(),
                     old_content: None,
-                    new_content: Some("SCOPE_TOKEN=secret".to_string()),
+                    new_content: Some(blob(&store, "SCOPE_TOKEN=secret")),
                 },
             ],
         }],
     };
     let projection = project_graph(&policy, &graph, &Principal::public());
-    let git = build_virtual_git_projection(&projection);
+    let git = build_virtual_git_projection(&store, &projection).unwrap();
     let serialized = serde_json::to_string(&git).unwrap();
 
     assert!(serialized.contains("/README.md"));
@@ -50,6 +56,7 @@ fn projected_git_blobs_do_not_include_hidden_content() {
 
 #[test]
 fn projected_git_blobs_are_final_visible_tree() {
+    let store = MemoryObjectStore::new();
     let policy = Policy::new(Visibility::Public, "owner");
     let graph = SourceGraph {
         repo_id: "scope".to_string(),
@@ -65,12 +72,12 @@ fn projected_git_blobs_are_final_visible_tree() {
                     FileChange {
                         path: ScopePath::parse("/README.md").unwrap(),
                         old_content: None,
-                        new_content: Some("old".to_string()),
+                        new_content: Some(blob(&store, "old")),
                     },
                     FileChange {
                         path: ScopePath::parse("/deleted.txt").unwrap(),
                         old_content: None,
-                        new_content: Some("remove me".to_string()),
+                        new_content: Some(blob(&store, "remove me")),
                     },
                 ],
             },
@@ -84,12 +91,12 @@ fn projected_git_blobs_are_final_visible_tree() {
                 changes: vec![
                     FileChange {
                         path: ScopePath::parse("/README.md").unwrap(),
-                        old_content: Some("old".to_string()),
-                        new_content: Some("new".to_string()),
+                        old_content: Some(blob(&store, "old")),
+                        new_content: Some(blob(&store, "new")),
                     },
                     FileChange {
                         path: ScopePath::parse("/deleted.txt").unwrap(),
-                        old_content: Some("remove me".to_string()),
+                        old_content: Some(blob(&store, "remove me")),
                         new_content: None,
                     },
                 ],
@@ -97,7 +104,7 @@ fn projected_git_blobs_are_final_visible_tree() {
         ],
     };
     let projection = project_graph(&policy, &graph, &Principal::public());
-    let git = build_virtual_git_projection(&projection);
+    let git = build_virtual_git_projection(&store, &projection).unwrap();
 
     assert_eq!(git.blobs.len(), 1);
     assert_eq!(git.blobs[0].path, "/README.md");
@@ -106,6 +113,7 @@ fn projected_git_blobs_are_final_visible_tree() {
 
 #[test]
 fn head_oid_changes_when_tree_content_changes_with_same_blob_count() {
+    let store = MemoryObjectStore::new();
     let projection = |content: &str| Projection {
         repo_id: "scope".to_string(),
         principal_id: "public".to_string(),
@@ -118,13 +126,13 @@ fn head_oid_changes_when_tree_content_changes_with_same_blob_count() {
             synthetic: false,
             changes: vec![ProjectedChange {
                 path: ScopePath::parse("/README.md").unwrap(),
-                new_content: Some(content.to_string()),
+                new_content: Some(blob(&store, content)),
             }],
         }],
     };
 
-    let left = build_virtual_git_projection(&projection("left"));
-    let right = build_virtual_git_projection(&projection("right"));
+    let left = build_virtual_git_projection(&store, &projection("left")).unwrap();
+    let right = build_virtual_git_projection(&store, &projection("right")).unwrap();
 
     assert_ne!(left.head_oid, right.head_oid);
 }
