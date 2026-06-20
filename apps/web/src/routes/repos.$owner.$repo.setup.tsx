@@ -129,6 +129,8 @@ function SetupPage() {
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const commands = setupCommands(setup)
+  const dualPushCommands = dualRemotePushCommands(setup)
+  const credentialHost = gitCredentialHost(setup.git_remote_url)
 
   useEffect(() => {
     const stored = window.sessionStorage.getItem(setupSecretKey(setup.repo.id))
@@ -196,6 +198,11 @@ function SetupPage() {
             <h1 className="truncate font-mono text-2xl font-semibold leading-8 sm:text-[32px] sm:leading-10">
               {setup.repo.id}
             </h1>
+            <p className="mt-3 max-w-[640px] text-sm leading-5 text-muted-foreground">
+              Push from your local Git repo, then review file visibility before
+              the repo is published. When Git asks for credentials, use the
+              Scope token as the password.
+            </p>
           </div>
         </div>
 
@@ -223,9 +230,16 @@ function SetupPage() {
                 )}
               </div>
               {tokenSecret ? (
-                <code className="block overflow-x-auto rounded-md border border-border bg-muted px-3 py-2 font-mono text-xs leading-5">
-                  {tokenSecret}
-                </code>
+                <>
+                  <code className="block overflow-x-auto rounded-md border border-border bg-muted px-3 py-2 font-mono text-xs leading-5">
+                    {tokenSecret}
+                  </code>
+                  <p className="text-sm leading-5 text-muted-foreground">
+                    Use this as the password for the first Git push. The
+                    username can be <InlineCode>scope</InlineCode>; Scope ignores
+                    it.
+                  </p>
+                </>
               ) : (
                 <Button
                   disabled={busy}
@@ -253,9 +267,16 @@ function SetupPage() {
             </div>
             <div className="min-w-0 space-y-3">
               {pushTokenSecret ? (
-                <code className="block overflow-x-auto rounded-md border border-border bg-muted px-3 py-2 font-mono text-xs leading-5">
-                  {pushTokenSecret}
-                </code>
+                <>
+                  <code className="block overflow-x-auto rounded-md border border-border bg-muted px-3 py-2 font-mono text-xs leading-5">
+                    {pushTokenSecret}
+                  </code>
+                  <p className="text-sm leading-5 text-muted-foreground">
+                    Use this for owner pushes and clones after the repo is
+                    published. For the first upload, use the first-push token
+                    above.
+                  </p>
+                </>
               ) : (
                 <p className="text-sm leading-5 text-muted-foreground">
                   Visible once when the repository is created.
@@ -278,6 +299,9 @@ function SetupPage() {
                   commands are the intended remote and push shape.
                 </p>
               )}
+              <p className="text-sm leading-5 text-muted-foreground">
+                Run these commands in the local repo you want to upload.
+              </p>
               {commands.map((command) => (
                 <code
                   className="block overflow-x-auto rounded-md border border-border bg-muted px-3 py-2 font-mono text-xs leading-5"
@@ -286,6 +310,45 @@ function SetupPage() {
                   {command}
                 </code>
               ))}
+              <div className="border-t border-border pt-3 text-sm leading-5 text-muted-foreground">
+                When Git prompts, enter any username, for example{' '}
+                <InlineCode>scope</InlineCode>, and paste the{' '}
+                <InlineCode>first-push token</InlineCode> as the password. Do
+                not use your GitHub username or password. If a bad password was
+                saved, remove the credential for{' '}
+                <InlineCode>{credentialHost}</InlineCode> and retry.
+              </div>
+            </div>
+          </div>
+        </section>
+
+        <section className="border-b border-border">
+          <div className="grid gap-4 py-5 md:grid-cols-[180px_minmax(0,1fr)]">
+            <div className="flex items-center gap-2 text-sm font-semibold leading-5">
+              <GitBranch className="size-4" />
+              <span>GitHub + Scope</span>
+            </div>
+            <div className="min-w-0 space-y-2">
+              <p className="text-sm leading-5 text-muted-foreground">
+                You can keep GitHub as <InlineCode>origin</InlineCode> and add
+                Scope as the separate remote above. To make{' '}
+                <InlineCode>git push origin</InlineCode> send to both, add both
+                push URLs to <InlineCode>origin</InlineCode>. Once push URLs are
+                configured, Git uses only that list.
+              </p>
+              {dualPushCommands.map((command) => (
+                <code
+                  className="block overflow-x-auto rounded-md border border-border bg-muted px-3 py-2 font-mono text-xs leading-5"
+                  key={command}
+                >
+                  {command}
+                </code>
+              ))}
+              <p className="text-sm leading-5 text-muted-foreground">
+                Fetch and pull still come from your normal GitHub URL. Scope
+                will prompt for the first-push token on the first upload and the
+                Git push token after publish.
+              </p>
             </div>
           </div>
         </section>
@@ -364,6 +427,23 @@ function setupCommands(setup: RepoSetupCommandSource) {
   ]
 }
 
+function dualRemotePushCommands(setup: RepoSetupCommandSource) {
+  return [
+    'git remote get-url origin',
+    'git remote set-url --add --push origin <github-remote-url>',
+    `git remote set-url --add --push origin ${setup.git_remote_url}`,
+    `git push origin HEAD:${setup.push_branch}`,
+  ]
+}
+
+function InlineCode({ children }: { children: React.ReactNode }) {
+  return (
+    <code className="rounded-sm border border-border bg-muted px-1 py-0.5 font-mono text-[0.8em] text-foreground">
+      {children}
+    </code>
+  )
+}
+
 function authHeaders(idToken?: string): HeadersInit {
   return idToken ? { authorization: `Bearer ${idToken}` } : {}
 }
@@ -408,4 +488,12 @@ function getApiMutationConnection() {
 
 function stripTrailingSlash(value: string) {
   return value.replace(/\/+$/, '')
+}
+
+function gitCredentialHost(remoteUrl: string) {
+  try {
+    return new URL(remoteUrl).host
+  } catch {
+    return remoteUrl
+  }
 }
