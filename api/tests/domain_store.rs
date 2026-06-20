@@ -1,6 +1,6 @@
 use std::collections::BTreeMap;
 
-use scope_server::domain::{
+use api::domain::{
     policy::{Policy, Principal, PrincipalKind, ScopePath, Visibility, VisibilityRule},
     projection::SourceGraph,
     store::{

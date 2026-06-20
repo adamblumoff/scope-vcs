@@ -1,4 +1,4 @@
-use scope_server::domain::policy::{
+use api::domain::policy::{
     Policy, PolicyError, Principal, PrincipalKind, ScopePath, Visibility, VisibilityRule,
 };
 

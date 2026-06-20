@@ -1,5 +1,5 @@
 use anyhow::Context;
-use scope_server::{AppState, router};
+use api::{AppState, router};
 use std::net::SocketAddr;
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 
@@ -8,7 +8,7 @@ async fn main() -> anyhow::Result<()> {
     tracing_subscriber::registry()
         .with(
             tracing_subscriber::EnvFilter::try_from_default_env()
-                .unwrap_or_else(|_| "scope_server=info,tower_http=info".into()),
+                .unwrap_or_else(|_| "api=info,tower_http=info".into()),
         )
         .with(tracing_subscriber::fmt::layer())
         .init();
@@ -21,7 +21,7 @@ async fn main() -> anyhow::Result<()> {
     let state = AppState::from_env()?;
 
     let app = router(state);
-    tracing::info!(%addr, "starting scope server");
+    tracing::info!(%addr, "starting api");
 
     let listener = tokio::net::TcpListener::bind(addr)
         .await
@@ -29,7 +29,7 @@ async fn main() -> anyhow::Result<()> {
     axum::serve(listener, app)
         .with_graceful_shutdown(shutdown_signal())
         .await
-        .context("serving scope server")?;
+        .context("serving api")?;
 
     Ok(())
 }

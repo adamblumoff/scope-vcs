@@ -1,4 +1,4 @@
-use scope_server::domain::{
+use api::domain::{
     git_projection::build_virtual_git_projection,
     policy::{Policy, Principal, ScopePath, Visibility, VisibilityRule},
     projection::{

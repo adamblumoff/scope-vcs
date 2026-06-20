@@ -18,7 +18,7 @@ use axum::{
 pub(crate) async fn healthz() -> Json<HealthResponse> {
     Json(HealthResponse {
         status: "ok",
-        service: "scope-server",
+        service: "api",
     })
 }
 
