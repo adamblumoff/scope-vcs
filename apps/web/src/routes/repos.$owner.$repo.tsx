@@ -11,7 +11,7 @@ import {
 } from '@/components/ui/table'
 import { authCookieName } from '@/lib/auth'
 import { cn } from '@/lib/utils'
-import { Link, createFileRoute } from '@tanstack/react-router'
+import { Link, Outlet, createFileRoute, useChildMatches } from '@tanstack/react-router'
 import { createServerFn } from '@tanstack/react-start'
 import {
   AlertCircle,
@@ -89,6 +89,11 @@ export const Route = createFileRoute('/repos/$owner/$repo')({
 
 function RepoDetailPage() {
   const detail = Route.useLoaderData()
+  const childMatches = useChildMatches()
+
+  if (childMatches.length > 0) {
+    return <Outlet />
+  }
 
   if (detail.kind === 'signedOut') {
     return (
