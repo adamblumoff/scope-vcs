@@ -58,6 +58,7 @@ pub enum FirstPushTokenStatus {
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct FirstPushToken {
     pub token_hash: String,
+    pub secret: Option<String>,
     pub owner_user_id: String,
     pub created_at_unix: u64,
     pub expires_at_unix: u64,
@@ -511,6 +512,7 @@ mod tests {
     fn first_push_token_reports_active_expired_and_used_shape() {
         let mut token = FirstPushToken {
             token_hash: "sha256:test".to_string(),
+            secret: Some("scope_fp_test".to_string()),
             owner_user_id: TEST_OWNER_ID.to_string(),
             created_at_unix: 100,
             expires_at_unix: 200,

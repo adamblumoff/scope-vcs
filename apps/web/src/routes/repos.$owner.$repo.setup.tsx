@@ -219,6 +219,30 @@ function SetupPage() {
         <section className="mt-8 border-y border-border">
           <div className="grid gap-4 py-5 md:grid-cols-[180px_minmax(0,1fr)]">
             <div className="flex items-center gap-2 text-sm font-semibold leading-5">
+              <Terminal className="size-4" />
+              <span>Git setup</span>
+            </div>
+            <div className="min-w-0 space-y-2">
+              {!setup.push_enabled && (
+                <p className="text-sm leading-5 text-muted-foreground">
+                  First-push receive is not enabled in this build yet. These
+                  commands are the intended remote and push shape.
+                </p>
+              )}
+              <p className="text-sm leading-5 text-muted-foreground">
+                Run these commands in the local repo you want to upload.
+              </p>
+              <CopyableCodeBlock
+                copyLabel="Copy Git setup commands"
+                value={commands.join('\n')}
+              />
+            </div>
+          </div>
+        </section>
+
+        <section className="border-b border-border">
+          <div className="grid gap-4 py-5 md:grid-cols-[180px_minmax(0,1fr)]">
+            <div className="flex items-center gap-2 text-sm font-semibold leading-5">
               <KeyRound className="size-4" />
               <span>First-push token</span>
             </div>
@@ -293,31 +317,18 @@ function SetupPage() {
         <section className="border-b border-border">
           <div className="grid gap-4 py-5 md:grid-cols-[180px_minmax(0,1fr)]">
             <div className="flex items-center gap-2 text-sm font-semibold leading-5">
-              <Terminal className="size-4" />
-              <span>Git setup</span>
+              <KeyRound className="size-4" />
+              <span>Git credentials</span>
             </div>
             <div className="min-w-0 space-y-2">
-              {!setup.push_enabled && (
-                <p className="text-sm leading-5 text-muted-foreground">
-                  First-push receive is not enabled in this build yet. These
-                  commands are the intended remote and push shape.
-                </p>
-              )}
               <p className="text-sm leading-5 text-muted-foreground">
-                Run these commands in the local repo you want to upload.
-              </p>
-              <CopyableCodeBlock
-                copyLabel="Copy Git setup commands"
-                value={commands.join('\n')}
-              />
-              <div className="border-t border-border pt-3 text-sm leading-5 text-muted-foreground">
                 When Git prompts, enter any username, for example{' '}
                 <InlineCode>scope</InlineCode>, and paste the{' '}
                 <InlineCode>first-push token</InlineCode> as the password. Do
                 not use your GitHub username or password. If a bad password was
                 saved, remove the credential for{' '}
                 <InlineCode>{credentialHost}</InlineCode> and retry.
-              </div>
+              </p>
             </div>
           </div>
         </section>

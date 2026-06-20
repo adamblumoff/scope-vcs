@@ -515,27 +515,22 @@ async fn regenerate_first_push_token(
         ensure_owner_setup_access_in_catalog(&staged, repo, &user.id)?;
 
         let (secret, token) = generate_first_push_token(&user.id)?;
-        let (push_secret, push_token) = generate_git_push_token(&user.id)?;
         {
             let repo = staged
                 .repositories
                 .get_mut(&repo_id)
                 .expect("repo was already checked");
             repo.first_push_token = Some(token);
-            repo.git_push_token = Some(push_token);
+            if repo.git_push_token.is_none() {
+                let (_, push_token) = generate_git_push_token(&user.id)?;
+                repo.git_push_token = Some(push_token);
+            }
         }
         let repo = staged
             .repositories
             .get(&repo_id)
             .expect("repo was already checked");
-        let setup = repo_setup_response(
-            &staged,
-            repo,
-            &user.id,
-            now,
-            Some(secret),
-            Some(push_secret),
-        )?;
+        let setup = repo_setup_response(&staged, repo, &user.id, now, Some(secret), None)?;
 
         persist_catalog(&state, &staged)?;
         *catalog = staged;
@@ -3546,8 +3541,15 @@ fn first_push_token_response(
     now_unix: u64,
     secret: Option<String>,
 ) -> FirstPushTokenResponse {
+    let status = first_push_token_status_at(token, now_unix);
+    let secret = if status == FirstPushTokenStatus::Active {
+        secret.or_else(|| token.secret.clone())
+    } else {
+        None
+    };
+
     FirstPushTokenResponse {
-        status: first_push_token_status_at(token, now_unix),
+        status,
         created_at_unix: token.created_at_unix,
         expires_at_unix: first_push_token_expires_at(token),
         used_at_unix: token.used_at_unix,
@@ -3620,6 +3622,7 @@ fn generate_first_push_token(owner_user_id: &str) -> Result<(String, FirstPushTo
     let secret = format!("{FIRST_PUSH_TOKEN_PREFIX}{}", hex::encode(bytes));
     let token = FirstPushToken {
         token_hash: token_hash(&secret),
+        secret: Some(secret.clone()),
         owner_user_id: owner_user_id.to_string(),
         created_at_unix: now,
         expires_at_unix: now + FIRST_PUSH_TOKEN_TTL_SECS,
@@ -4512,16 +4515,17 @@ kGxvBjzgF9RjXJoldYnFk7mJ5gLANHjaaad3qTQJ8DldKJoSqkEkm5gg
     }
 
     #[tokio::test]
-    async fn setup_route_is_owner_only_and_does_not_return_secret() {
+    async fn setup_route_is_owner_only_and_returns_active_first_push_secret() {
         let state = test_state_with_repo();
         cache_test_jwks(&state);
-        {
+        let secret = {
             let mut catalog = lock_catalog(&state).unwrap();
             let repo = catalog.repositories.get_mut(TEST_REPO_ID).unwrap();
-            let (_, token) = generate_first_push_token(&test_owner_id()).unwrap();
+            let (secret, token) = generate_first_push_token(&test_owner_id()).unwrap();
             repo.record.publication_state = RepoPublicationState::PendingFirstPush;
             repo.first_push_token = Some(token);
-        }
+            secret
+        };
         let app = router(state);
 
         let public_response = app
@@ -4589,11 +4593,11 @@ kGxvBjzgF9RjXJoldYnFk7mJ5gLANHjaaad3qTQJ8DldKJoSqkEkm5gg
         let body = response_json(owner_response).await;
         assert_eq!(body["repo"]["id"], TEST_REPO_ID);
         assert_eq!(body["token"]["status"], "Active");
-        assert!(body["token"]["secret"].is_null());
+        assert_eq!(body["token"]["secret"], secret);
     }
 
     #[tokio::test]
-    async fn setup_token_regeneration_rotates_hash_and_returns_new_secret() {
+    async fn setup_token_regeneration_rotates_first_push_token_only() {
         let state = test_state_with_repo();
         cache_test_jwks(&state);
         let (old_hash, old_push_hash) = {
@@ -4625,22 +4629,21 @@ kGxvBjzgF9RjXJoldYnFk7mJ5gLANHjaaad3qTQJ8DldKJoSqkEkm5gg
         let body = response_json(response).await;
         let secret = body["token"]["secret"].as_str().unwrap();
         assert!(secret.starts_with("scope_fp_"));
-        let push_secret = body["push_token"]["secret"].as_str().unwrap();
-        assert!(push_secret.starts_with("scope_git_"));
+        assert!(body["push_token"]["secret"].is_null());
         let catalog = lock_catalog(&state).unwrap();
         let repo = catalog.repositories.get(TEST_REPO_ID).unwrap();
         let new_hash = &repo.first_push_token.as_ref().unwrap().token_hash;
         let new_push_hash = &repo.git_push_token.as_ref().unwrap().token_hash;
         assert_ne!(new_hash, &old_hash);
         assert_ne!(new_hash, secret);
-        assert_ne!(new_push_hash, &old_push_hash);
-        assert_ne!(new_push_hash, push_secret);
+        assert_eq!(new_push_hash, &old_push_hash);
     }
 
     #[test]
     fn first_push_token_response_uses_current_ttl() {
         let token = FirstPushToken {
             token_hash: "sha256:test".to_string(),
+            secret: Some("scope_fp_test".to_string()),
             owner_user_id: test_owner_id(),
             created_at_unix: 1000,
             expires_at_unix: 1000 + (60 * 60 * 24),
@@ -4650,9 +4653,11 @@ kGxvBjzgF9RjXJoldYnFk7mJ5gLANHjaaad3qTQJ8DldKJoSqkEkm5gg
         let active = first_push_token_response(&token, 1000, None);
         assert_eq!(active.status, FirstPushTokenStatus::Active);
         assert_eq!(active.expires_at_unix, 1000 + FIRST_PUSH_TOKEN_TTL_SECS);
+        assert_eq!(active.secret.as_deref(), Some("scope_fp_test"));
 
         let expired = first_push_token_response(&token, 1000 + FIRST_PUSH_TOKEN_TTL_SECS, None);
         assert_eq!(expired.status, FirstPushTokenStatus::Expired);
+        assert!(expired.secret.is_none());
     }
 
     #[tokio::test]
@@ -5303,6 +5308,7 @@ kGxvBjzgF9RjXJoldYnFk7mJ5gLANHjaaad3qTQJ8DldKJoSqkEkm5gg
             repo.record.publication_state = RepoPublicationState::PendingFirstPush;
             repo.first_push_token = Some(FirstPushToken {
                 token_hash: first_push_token_hash(secret),
+                secret: Some(secret.to_string()),
                 owner_user_id: repo.record.owner_user_id.clone(),
                 created_at_unix: unix_now(),
                 expires_at_unix: unix_now() + FIRST_PUSH_TOKEN_TTL_SECS,
@@ -5354,6 +5360,7 @@ kGxvBjzgF9RjXJoldYnFk7mJ5gLANHjaaad3qTQJ8DldKJoSqkEkm5gg
             repo.record.publication_state = RepoPublicationState::PendingFirstPush;
             repo.first_push_token = Some(FirstPushToken {
                 token_hash: first_push_token_hash(first_secret),
+                secret: Some(first_secret.to_string()),
                 owner_user_id: repo.record.owner_user_id.clone(),
                 created_at_unix: unix_now(),
                 expires_at_unix: unix_now() + FIRST_PUSH_TOKEN_TTL_SECS,
