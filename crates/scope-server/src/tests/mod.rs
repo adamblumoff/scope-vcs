@@ -1,0 +1,323 @@
+use crate::{
+    app::router,
+    auth::{shoo::*, tokens::*},
+    config::*,
+    git::{import::*, storage::*, upload::*, *},
+    http::responses::*,
+    persistence::*,
+    state::*,
+};
+use axum::{
+    body::{Body, to_bytes},
+    http::{
+        HeaderMap, Request, StatusCode,
+        header::{AUTHORIZATION, CONTENT_TYPE, WWW_AUTHENTICATE},
+    },
+    response::Response,
+};
+use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64};
+use jsonwebtoken::{Algorithm, EncodingKey, Header, encode, jwk::JwkSet};
+use scope_git::build_virtual_git_projection;
+use scope_policy::{Policy, Principal, PrincipalKind, ScopePath, Visibility, VisibilityRule};
+use scope_projection::{
+    AuthorVisibility, FileChange, LogicalCommit, MixedCommitPolicy, SourceGraph, project_graph,
+};
+use scope_store::{
+    AccountAccess, AppCatalog, FirstPushToken, FirstPushTokenStatus, GitPushToken, PendingImport,
+    PendingImportFile, RepoMembership, RepoPublicationState, RepoRecord, RepoRole, RepoSettings,
+    StoredRepository, UserAccount,
+};
+use std::{
+    collections::BTreeMap,
+    fs,
+    path::{Path as FsPath, PathBuf},
+    sync::{Arc, Mutex},
+    time::{SystemTime, UNIX_EPOCH},
+};
+use tower::ServiceExt;
+
+mod api;
+mod auth;
+mod git_http;
+mod git_receive;
+
+const TEST_PAIRWISE_SUB: &str = "pairwise-owner";
+const TEST_OWNER_EMAIL: &str = "owner@example.com";
+const TEST_REPO_OWNER: &str = "owner";
+const TEST_REPO_NAME: &str = "repo";
+const TEST_REPO_ID: &str = "owner/repo";
+
+const TEST_PRIVATE_KEY: &str = r#"-----BEGIN PRIVATE KEY-----
+MIGHAgEAMBMGByqGSM49AgEGCCqGSM49AwEHBG0wawIBAQQgj30p9gYDpHRqbshS
+LyBNueRnRb9WS031zFD7yuhqn/ChRANCAAR6wR8PANHsn10BAVi085aM8LBPL3Cj
+kGxvBjzgF9RjXJoldYnFk7mJ5gLANHjaaad3qTQJ8DldKJoSqkEkm5gg
+-----END PRIVATE KEY-----"#;
+
+const TEST_JWKS: &str = r#"{
+  "keys": [{
+    "kty": "EC",
+    "x": "esEfDwDR7J9dAQFYtPOWjPCwTy9wo5BsbwY84BfUY1w",
+    "y": "miV1icWTuYnmAsA0eNppp3epNAnwOV0omhKqQSSbmCA",
+    "crv": "P-256",
+    "kid": "test-key",
+    "use": "sig",
+    "alg": "ES256"
+  }]
+}"#;
+
+fn test_jwks() -> JwkSet {
+    serde_json::from_str(TEST_JWKS).unwrap()
+}
+
+fn token(audience: &str, pairwise_sub: &str, email_verified: bool) -> String {
+    token_for(
+        audience,
+        pairwise_sub,
+        Some(TEST_OWNER_EMAIL.to_string()),
+        email_verified,
+    )
+}
+
+fn token_for(
+    audience: &str,
+    pairwise_sub: &str,
+    email: Option<String>,
+    email_verified: bool,
+) -> String {
+    let mut header = Header::new(Algorithm::ES256);
+    header.kid = Some("test-key".to_string());
+    let claims = ShooClaims {
+        pairwise_sub: pairwise_sub.to_string(),
+        email,
+        email_verified: Some(email_verified),
+    };
+    let claims = serde_json::json!({
+        "iss": SHOO_ISSUER,
+        "aud": audience,
+        "exp": unix_now() + 300,
+        "pairwise_sub": claims.pairwise_sub,
+        "email": claims.email,
+        "email_verified": claims.email_verified,
+    });
+
+    encode(
+        &header,
+        &claims,
+        &EncodingKey::from_ec_pem(TEST_PRIVATE_KEY.as_bytes()).unwrap(),
+    )
+    .unwrap()
+}
+
+fn token_without_origin_claims() -> String {
+    let mut header = Header::new(Algorithm::ES256);
+    header.kid = Some("test-key".to_string());
+    let claims = serde_json::json!({
+        "exp": unix_now() + 300,
+        "pairwise_sub": "pairwise-owner",
+        "email": TEST_OWNER_EMAIL,
+        "email_verified": true,
+    });
+
+    encode(
+        &header,
+        &claims,
+        &EncodingKey::from_ec_pem(TEST_PRIVATE_KEY.as_bytes()).unwrap(),
+    )
+    .unwrap()
+}
+
+fn unix_now() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap()
+        .as_secs()
+}
+
+fn owner_identity(email_verified: bool) -> ShooIdentity {
+    ShooIdentity {
+        pairwise_sub: TEST_PAIRWISE_SUB.to_string(),
+        email: Some(TEST_OWNER_EMAIL.to_string()),
+        email_verified,
+    }
+}
+
+fn test_owner_id() -> String {
+    identity_user_id(&owner_identity(true))
+}
+
+fn test_state_with_repo() -> AppState {
+    let owner_id = test_owner_id();
+    let owner = UserAccount {
+        id: owner_id.clone(),
+        handle: TEST_REPO_OWNER.to_string(),
+        email: TEST_OWNER_EMAIL.to_string(),
+        email_verified: true,
+        access: AccountAccess::Member,
+    };
+    let repo = test_repo(&owner_id);
+
+    AppState {
+        catalog: Arc::new(Mutex::new(AppCatalog {
+            users: BTreeMap::from([(owner.id.clone(), owner)]),
+            repositories: BTreeMap::from([(repo.record.id.clone(), repo)]),
+        })),
+        state_path: Arc::new(test_state_path()),
+        shoo: ShooVerifier::new(
+            SHOO_ISSUER,
+            Some("origin:http://localhost:3000".to_string()),
+            "http://127.0.0.1/.well-known/jwks.json",
+        ),
+    }
+}
+
+fn test_state_with_jwks() -> AppState {
+    let state = AppState::test_state();
+    cache_test_jwks(&state);
+    state
+}
+
+fn cache_test_jwks(state: &AppState) {
+    *state
+        .shoo
+        .jwks_cache
+        .lock()
+        .expect("test JWKS lock must not be poisoned") = Some(test_jwks());
+}
+
+fn bearer_header() -> String {
+    format!(
+        "Bearer {}",
+        token("origin:http://localhost:3000", TEST_PAIRWISE_SUB, true)
+    )
+}
+
+fn bearer_header_for(pairwise_sub: &str, email: &str) -> String {
+    format!(
+        "Bearer {}",
+        token_for(
+            "origin:http://localhost:3000",
+            pairwise_sub,
+            Some(email.to_string()),
+            true,
+        )
+    )
+}
+
+async fn response_json(response: Response) -> serde_json::Value {
+    let body = to_bytes(response.into_body(), 1024 * 1024).await.unwrap();
+    serde_json::from_slice(&body).unwrap()
+}
+
+fn temp_git_repo(label: &str) -> PathBuf {
+    let repo = std::env::temp_dir().join(format!(
+        "scope-vcs-{label}-{}-{}",
+        std::process::id(),
+        unix_now()
+    ));
+    let _ = fs::remove_dir_all(&repo);
+    fs::create_dir_all(&repo).unwrap();
+    run_git(
+        None,
+        &["init", "-b", "main", repo.to_str().unwrap()],
+        "init test repo",
+    )
+    .unwrap();
+    repo
+}
+
+fn commit_all(repo: &FsPath, message: &str) {
+    run_git(
+        Some(repo),
+        &[
+            "-c",
+            "user.name=Scope Test",
+            "-c",
+            "user.email=scope-test@example.test",
+            "commit",
+            "-m",
+            message,
+        ],
+        "commit test repo",
+    )
+    .unwrap();
+}
+
+fn test_repo(owner_id: &str) -> StoredRepository {
+    StoredRepository {
+        record: RepoRecord {
+            id: TEST_REPO_ID.to_string(),
+            owner_handle: TEST_REPO_OWNER.to_string(),
+            name: TEST_REPO_NAME.to_string(),
+            owner_user_id: owner_id.to_string(),
+            publication_state: RepoPublicationState::Published,
+            default_visibility: Visibility::Public,
+        },
+        settings: RepoSettings::default(),
+        first_push_token: None,
+        git_push_token: None,
+        pending_import: None,
+        policy: Policy::new(Visibility::Public, owner_id),
+        graph: SourceGraph {
+            repo_id: TEST_REPO_ID.to_string(),
+            commits: Vec::new(),
+        },
+        staged_update: None,
+        memberships: vec![RepoMembership {
+            repo_id: TEST_REPO_ID.to_string(),
+            user_id: owner_id.to_string(),
+            role: RepoRole::Owner,
+        }],
+        invitations: Vec::new(),
+    }
+}
+
+fn pending_import_fixture(files: Vec<(&str, &str)>) -> PendingImport {
+    PendingImport {
+        default_branch: "main".to_string(),
+        head_oid: "1111111111111111111111111111111111111111".to_string(),
+        tree_oid: "2222222222222222222222222222222222222222".to_string(),
+        imported_at_unix: unix_now(),
+        files: files
+            .into_iter()
+            .map(|(path, content)| PendingImportFile {
+                path: path.to_string(),
+                mode: "100644".to_string(),
+                oid: format!("oid-{path}"),
+                content_base64: BASE64.encode(content),
+            })
+            .collect(),
+    }
+}
+
+fn repo_with_readme() -> StoredRepository {
+    let mut repo = test_repo(&test_owner_id());
+    repo.graph.commits.push(LogicalCommit {
+        id: "rv1".to_string(),
+        parent_ids: Vec::new(),
+        author_id: repo.record.owner_user_id.clone(),
+        author_visibility: AuthorVisibility::Visible,
+        message: "initial".to_string(),
+        mixed_policy: MixedCommitPolicy::SyntheticPublicCommit,
+        changes: vec![FileChange {
+            path: ScopePath::parse("/README.md").unwrap(),
+            old_content: None,
+            new_content: Some("hello".to_string()),
+        }],
+    });
+    repo
+}
+
+fn receive_pack_update(changes: Vec<(&str, Option<&str>)>) -> ReceivePackUpdate {
+    ReceivePackUpdate {
+        branch: format!("refs/heads/{DEFAULT_GIT_BRANCH}"),
+        author_id: test_owner_id(),
+        message: "owner push".to_string(),
+        changes: changes
+            .into_iter()
+            .map(|(path, content)| ReceivePackFileChange {
+                path: pending_scope_path(path).unwrap(),
+                content: content.map(str::to_string),
+            })
+            .collect(),
+    }
+}
