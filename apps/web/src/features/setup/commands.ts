@@ -1,4 +1,8 @@
-import type { RepoSetupCommandSource } from '@/api/types'
+export type RepoSetupCommandSource = {
+  git_remote_url: string
+  push_branch: string
+  remote_name: string
+}
 
 export function setupCommands(setup: RepoSetupCommandSource) {
   return [

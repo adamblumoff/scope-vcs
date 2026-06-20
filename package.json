@@ -7,7 +7,7 @@
     "dev": "pnpm --filter @scope/web dev",
     "build": "pnpm --filter @scope/web build",
     "typecheck": "pnpm --filter @scope/web typecheck",
-    "check": "pnpm typecheck",
+    "check": "pnpm typecheck && pnpm check:line-limit",
     "check:line-limit": "node scripts/check-line-limit.mjs",
     "test:web": "pnpm --filter @scope/web test"
   }

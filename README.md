@@ -23,10 +23,8 @@ pnpm check:line-limit
 ```
 
 `pnpm check:line-limit` fails any source file over 1,000 lines while ignoring
-generated files, lockfiles, dependencies, and build output. It is intentionally
-not part of `pnpm check` yet because current `main` still has the unsplit server
-entrypoint over the limit; wire it into the root check after the backend split
-lands.
+generated files, lockfiles, dependencies, and build output. The root
+`pnpm check` command runs it after the web typecheck.
 
 ## Deployment Shape
 

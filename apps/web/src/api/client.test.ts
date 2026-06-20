@@ -1,7 +1,7 @@
 import * as assert from 'node:assert/strict'
 import { afterEach, test } from 'node:test'
 
-import { HttpError, authHeaders, loadJson } from './client'
+import { HttpError, authHeaders, loadJson } from './http'
 
 const originalFetch = globalThis.fetch
 

@@ -23,4 +23,4 @@ test('setupView builds the Scope remote URL from API base and repo path', () => 
   })
 
   assert.equal(setup.git_remote_url, 'https://scope.example/git/adam/scope-vcs')
-}
+})

@@ -1,38 +1,13 @@
+export { HttpError, authHeaders, loadJson, stripTrailingSlash } from './http'
+import { stripTrailingSlash } from './http'
+
 const localApiBase = 'http://localhost:8080'
 export const homeFlashKey = 'scope:home-flash'
-
-export class HttpError extends Error {
-  constructor(
-    message: string,
-    readonly status: number,
-  ) {
-    super(message)
-    this.name = 'HttpError'
-  }
-}
 
 export async function readRequestAuthToken() {
   const { authCookieName } = await import('@/lib/auth')
   const { getCookie } = await import('@tanstack/react-start/server')
   return getCookie(authCookieName)
-}
-
-export async function loadJson<T>(url: string, init?: RequestInit): Promise<T> {
-  const response = await fetch(url, init)
-  const payload = await response.json().catch(() => null)
-
-  if (!response.ok) {
-    throw new HttpError(
-      payload?.error ?? `request failed: ${response.status}`,
-      response.status,
-    )
-  }
-
-  return payload as T
-}
-
-export function authHeaders(idToken?: string | null): HeadersInit {
-  return idToken ? { authorization: `Bearer ${idToken}` } : {}
 }
 
 export function getApiConnection(action = 'loading repositories') {
@@ -69,6 +44,3 @@ export function storeHomeFlash(message: string) {
   window.sessionStorage.setItem(homeFlashKey, message)
 }
 
-export function stripTrailingSlash(value: string) {
-  return value.replace(/\/+$/, '')
-}

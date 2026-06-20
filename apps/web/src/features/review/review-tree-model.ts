@@ -1,6 +1,11 @@
-import type { ReviewFile, VisibilityState } from '@/api/types'
+import type { ReviewFile, Visibility, VisibilityState } from '@/api/types'
 
-export type ReviewTreeNode<TFile extends ReviewFile = ReviewFile> =
+type ReviewTreeFileBase = {
+  path: string
+  visibility: Visibility
+}
+
+export type ReviewTreeNode<TFile extends ReviewTreeFileBase = ReviewFile> =
   | {
       children: ReviewTreeNode<TFile>[]
       files: TFile[]
@@ -17,7 +22,7 @@ export type ReviewTreeNode<TFile extends ReviewFile = ReviewFile> =
       type: 'file'
     }
 
-export function buildReviewTree<TFile extends ReviewFile>(files: TFile[]) {
+export function buildReviewTree<TFile extends ReviewTreeFileBase>(files: TFile[]) {
   const root: Extract<ReviewTreeNode<TFile>, { type: 'folder' }> = {
     children: [],
     files: [],
@@ -73,7 +78,7 @@ export function buildReviewTree<TFile extends ReviewFile>(files: TFile[]) {
   return root
 }
 
-export function folderVisibility(files: ReviewFile[]): VisibilityState {
+export function folderVisibility(files: ReviewTreeFileBase[]): VisibilityState {
   const hasPublic = files.some((file) => file.visibility === 'Public')
   const hasPrivate = files.some((file) => file.visibility === 'Private')
   if (hasPublic && hasPrivate) {
@@ -94,7 +99,7 @@ export function normalizeReviewPath(path: string) {
     .join('/')
 }
 
-function sortReviewTree<TFile extends ReviewFile>(
+function sortReviewTree<TFile extends ReviewTreeFileBase>(
   node: Extract<ReviewTreeNode<TFile>, { type: 'folder' }>,
 ) {
   node.children.sort((left, right) => {
@@ -110,7 +115,7 @@ function sortReviewTree<TFile extends ReviewFile>(
   }
 }
 
-function attachDescendantFiles<TFile extends ReviewFile>(
+function attachDescendantFiles<TFile extends ReviewTreeFileBase>(
   node: Extract<ReviewTreeNode<TFile>, { type: 'folder' }>,
 ) {
   node.files = node.children.flatMap((child) => {
