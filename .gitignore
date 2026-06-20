@@ -2,6 +2,7 @@ target/
 node_modules/
 .turbo/
 .output/
+.test-output/
 dist/
 .tmp/
 .agents/

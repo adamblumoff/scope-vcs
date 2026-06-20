@@ -1,5 +1,3 @@
-import { authCookieName } from '@/lib/auth'
-
 const localApiBase = 'http://localhost:8080'
 export const homeFlashKey = 'scope:home-flash'
 
@@ -9,10 +7,12 @@ export class HttpError extends Error {
     readonly status: number,
   ) {
     super(message)
+    this.name = 'HttpError'
   }
 }
 
 export async function readRequestAuthToken() {
+  const { authCookieName } = await import('@/lib/auth')
   const { getCookie } = await import('@tanstack/react-start/server')
   return getCookie(authCookieName)
 }
@@ -31,7 +31,7 @@ export async function loadJson<T>(url: string, init?: RequestInit): Promise<T> {
   return payload as T
 }
 
-export function authHeaders(idToken?: string): HeadersInit {
+export function authHeaders(idToken?: string | null): HeadersInit {
   return idToken ? { authorization: `Bearer ${idToken}` } : {}
 }
 
