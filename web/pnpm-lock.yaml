@@ -6,9 +6,8 @@ settings:
 
 importers:
 
-  .: {}
 
-  apps/web:
+  .:
     dependencies:
       '@radix-ui/react-slot':
         specifier: ^1.3.0

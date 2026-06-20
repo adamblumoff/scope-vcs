@@ -1,4 +1,4 @@
-use scope_server::domain::{
+use api::domain::{
     policy::{Policy, Principal, PrincipalKind, ScopePath, Visibility, VisibilityRule},
     projection::{
         AuthorVisibility, FileChange, LogicalCommit, MixedCommitPolicy, SourceGraph, project_graph,

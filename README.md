@@ -6,35 +6,33 @@ The v1 promise is narrow and testable: a principal only receives the paths,
 objects, metadata, and history they are authorized to see. Git is an adapter;
 the canonical source of truth is a server-side source graph.
 
-## Workspace
+## Layout
 
-- `crates/scope-server` - Axum API, Git facade boundary, and server-owned
-  domain modules for policy, projection, Git projection, and catalog state.
-- `apps/web` - TanStack Start control-plane UI.
+- `api` - Axum API, Git facade boundary, and API-owned domain modules for
+  policy, projection, Git projection, and catalog state.
+- `web` - TanStack Start control-plane UI.
 
 ## Local Checks
 
 ```bash
-cargo test --workspace
-pnpm install
-pnpm build
-pnpm test:web
-pnpm check:line-limit
+(cd api && cargo test)
+(cd web && pnpm install)
+(cd web && pnpm build)
+(cd web && pnpm test)
+(cd web && pnpm check:line-limit)
 ```
 
-`pnpm check:line-limit` fails any source file over 1,000 lines while ignoring
-generated files, lockfiles, dependencies, and build output. The root
-`pnpm check` command runs it after the web typecheck.
+`pnpm check:line-limit` runs from `web` because it uses Node, but it scans the
+whole repo and fails any source file over 1,000 lines while ignoring generated
+files, lockfiles, dependencies, and build output.
 
 ## Deployment Shape
 
 Railway services:
 
-- `scope-api` is a Railpack Rust service. Build the `scope-server` package and
-  start its `scope-server` binary.
-- `scope-web` is a Railpack Node service. Because the repo root is also a
-  Rust workspace, set `RAILPACK_CONFIG_FILE=railpack.web.json` on this
-  Railway service so Railpack uses the web-specific Node provider config.
+- `scope-api` is a Railpack Rust service rooted at `api`. Build and start the
+  `api` binary from that directory.
+- `scope-web` is a Railpack Node service rooted at `web`.
 - `scope-web` also requires `VITE_SCOPE_API_URL` to point at the deployed
   `scope-api` origin. The web app intentionally has no hard-coded production
   API fallback.
