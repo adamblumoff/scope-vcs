@@ -14,12 +14,16 @@ const sourceExtensions = new Set([
   '.tsx',
 ])
 const ignoredDirectories = new Set([
+  '.agents',
+  '.codex',
   '.codex-local',
   '.git',
   '.output',
+  '.railway',
   '.scope',
   '.test-output',
   '.turbo',
+  '.tmp',
   'dist',
   'node_modules',
   'target',
