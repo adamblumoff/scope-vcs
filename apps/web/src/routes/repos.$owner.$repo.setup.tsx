@@ -322,11 +322,11 @@ function SetupPage() {
             </div>
             <div className="min-w-0 space-y-2">
               <p className="text-sm leading-5 text-muted-foreground">
-                When Git prompts, enter any username, for example{' '}
-                <InlineCode>scope</InlineCode>, and paste the{' '}
-                <InlineCode>first-push token</InlineCode> as the password. Do
-                not use your GitHub username or password. If a bad password was
-                saved, remove the credential for{' '}
+                The remote URL includes <InlineCode>scope</InlineCode> as the
+                username. When Git prompts for a password, paste the{' '}
+                <InlineCode>first-push token</InlineCode>. Do not use your
+                GitHub username or password. If a bad password was saved, remove
+                the credential for{' '}
                 <InlineCode>{credentialHost}</InlineCode> and retry.
               </p>
             </div>
@@ -429,7 +429,7 @@ function setupView(api: string, setup: RepoSetup): RepoSetupView {
 
 function setupCommands(setup: RepoSetupCommandSource) {
   return [
-    `git remote add ${setup.remote_name} ${setup.git_remote_url}`,
+    `git remote add ${setup.remote_name} ${gitCredentialRemoteUrl(setup.git_remote_url)}`,
     `git push -u ${setup.remote_name} HEAD:${setup.push_branch}`,
   ]
 }
@@ -438,7 +438,7 @@ function dualRemotePushCommands(setup: RepoSetupCommandSource) {
   return [
     'git remote get-url origin',
     'git remote set-url --add --push origin <github-remote-url>',
-    `git remote set-url --add --push origin ${setup.git_remote_url}`,
+    `git remote set-url --add --push origin ${gitCredentialRemoteUrl(setup.git_remote_url)}`,
     `git push origin HEAD:${setup.push_branch}`,
   ]
 }
@@ -500,6 +500,16 @@ function stripTrailingSlash(value: string) {
 function gitCredentialHost(remoteUrl: string) {
   try {
     return new URL(remoteUrl).host
+  } catch {
+    return remoteUrl
+  }
+}
+
+function gitCredentialRemoteUrl(remoteUrl: string) {
+  try {
+    const url = new URL(remoteUrl)
+    url.username = 'scope'
+    return url.toString()
   } catch {
     return remoteUrl
   }

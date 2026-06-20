@@ -5785,6 +5785,60 @@ kGxvBjzgF9RjXJoldYnFk7mJ5gLANHjaaad3qTQJ8DldKJoSqkEkm5gg
         let _ = fs::remove_dir_all(staging_repo);
     }
 
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn real_git_first_push_over_http_creates_pending_import() {
+        let state = test_state_with_repo();
+        let (secret, state_for_server) = {
+            let (secret, token) = generate_first_push_token(&test_owner_id()).unwrap();
+            let mut catalog = lock_catalog(&state).unwrap();
+            let repo = catalog.repositories.get_mut(TEST_REPO_ID).unwrap();
+            repo.record.publication_state = RepoPublicationState::PendingFirstPush;
+            repo.first_push_token = Some(token);
+            (secret, state.clone())
+        };
+
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let server = tokio::spawn(async move {
+            axum::serve(listener, router(state_for_server))
+                .await
+                .unwrap();
+        });
+
+        let source = temp_git_repo("real-first-http-push");
+        fs::write(source.join("README.md"), "hello over http\n").unwrap();
+        run_git(Some(&source), &["add", "README.md"], "add readme").unwrap();
+        commit_all(&source, "initial");
+
+        let remote = format!("http://scope:{secret}@{addr}/git/{TEST_REPO_ID}");
+        run_git(
+            Some(&source),
+            &["remote", "add", "scope", &remote],
+            "add scope remote",
+        )
+        .unwrap();
+        run_git(
+            Some(&source),
+            &["push", "-u", "scope", "HEAD:main"],
+            "push first import over http",
+        )
+        .unwrap();
+
+        let repo = find_repo(&state, TEST_REPO_OWNER, TEST_REPO_NAME).unwrap();
+        assert_eq!(
+            repo.record.publication_state,
+            RepoPublicationState::PendingPublish
+        );
+        let pending = repo.pending_import.unwrap();
+        assert_eq!(pending.default_branch, DEFAULT_GIT_BRANCH);
+        assert_eq!(pending.files.len(), 1);
+        assert_eq!(pending.files[0].path, "README.md");
+        assert!(repo.first_push_token.unwrap().used_at_unix.is_some());
+
+        server.abort();
+        let _ = fs::remove_dir_all(source);
+    }
+
     #[cfg(unix)]
     #[test]
     fn persist_catalog_writes_private_state_permissions() {
