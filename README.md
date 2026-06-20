@@ -18,7 +18,13 @@ the canonical source of truth is a server-side source graph.
 cargo test --workspace
 pnpm install
 pnpm build
+pnpm test:web
+pnpm check:line-limit
 ```
+
+`pnpm check:line-limit` fails any source file over 1,000 lines while ignoring
+generated files, lockfiles, dependencies, and build output. The root
+`pnpm check` command runs it after the web typecheck.
 
 ## Deployment Shape
 

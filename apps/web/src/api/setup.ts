@@ -5,11 +5,10 @@ import {
   getApiMutationConnection,
   loadJson,
   readRequestAuthToken,
-  stripTrailingSlash,
 } from '@/api/client'
+import { setupView } from './setup-view'
 import type {
   RepoSetup,
-  RepoSetupView,
   RepoSummary,
   SetupRouteState,
 } from './types'
@@ -81,15 +80,6 @@ export async function regenerateTokenForRequest(data: {
   }
 
   return setupView(api, payload as RepoSetup)
-}
-
-export function setupView(api: string, setup: RepoSetup): RepoSetupView {
-  const gitRemoteUrl = `${stripTrailingSlash(api)}${setup.git_remote_path}`
-
-  return {
-    ...setup,
-    git_remote_url: gitRemoteUrl,
-  }
 }
 
 export function setupSecretKey(repoId: string) {

@@ -8,6 +8,7 @@
     "dev": "vite dev",
     "build": "vite build && tsc --noEmit",
     "start": "node .output/server/index.mjs",
+    "test": "node -e \"const fs=require('node:fs'); fs.rmSync('.test-output',{recursive:true,force:true}); fs.mkdirSync('.test-output',{recursive:true}); fs.writeFileSync('.test-output/package.json','{\\\"type\\\":\\\"commonjs\\\"}')\" && tsc -p tsconfig.test.json && node --test \".test-output/**/*.test.js\"",
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {

@@ -79,10 +79,6 @@ export type RepoSetupView = RepoSetup & {
   git_remote_url: string
 }
 
-export type RepoSetupCommandSource = RepoSetup & {
-  git_remote_url: string
-}
-
 export type SetupRouteState =
   | {
       kind: 'setup'

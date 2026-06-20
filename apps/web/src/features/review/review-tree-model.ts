@@ -1,24 +1,29 @@
-import type { ReviewFile, VisibilityState } from '@/api/types'
+import type { ReviewFile, Visibility, VisibilityState } from '@/api/types'
 
-export type ReviewTreeNode =
+type ReviewTreeFileBase = {
+  path: string
+  visibility: Visibility
+}
+
+export type ReviewTreeNode<TFile extends ReviewTreeFileBase = ReviewFile> =
   | {
-      children: ReviewTreeNode[]
-      files: ReviewFile[]
+      children: ReviewTreeNode<TFile>[]
+      files: TFile[]
       key: string
       name: string
       path: string
       type: 'folder'
     }
   | {
-      file: ReviewFile
+      file: TFile
       key: string
       name: string
       path: string
       type: 'file'
     }
 
-export function buildReviewTree(files: ReviewFile[]) {
-  const root: Extract<ReviewTreeNode, { type: 'folder' }> = {
+export function buildReviewTree<TFile extends ReviewTreeFileBase>(files: TFile[]) {
+  const root: Extract<ReviewTreeNode<TFile>, { type: 'folder' }> = {
     children: [],
     files: [],
     key: 'folder:/',
@@ -28,32 +33,37 @@ export function buildReviewTree(files: ReviewFile[]) {
   }
 
   for (const file of files) {
-    const parts = pathParts(file.path)
+    const path = normalizeReviewPath(file.path)
+    const parts = pathParts(path)
+    if (parts.length === 0) {
+      continue
+    }
+
     let current = root
     for (let index = 0; index < parts.length; index += 1) {
       const part = parts[index]
-      const path = `/${parts.slice(0, index + 1).join('/')}`
+      const folderPath = `/${parts.slice(0, index + 1).join('/')}`
       const last = index === parts.length - 1
       if (last) {
         current.children.push({
           file,
-          key: `file:${file.path}`,
+          key: `file:${path}`,
           name: part,
-          path: file.path,
+          path,
           type: 'file',
         })
       } else {
         let folder = current.children.find(
-          (child): child is Extract<ReviewTreeNode, { type: 'folder' }> =>
-            child.type === 'folder' && child.path === path,
+          (child): child is Extract<ReviewTreeNode<TFile>, { type: 'folder' }> =>
+            child.type === 'folder' && child.path === folderPath,
         )
         if (!folder) {
           folder = {
             children: [],
             files: [],
-            key: `folder:${path}`,
+            key: `folder:${folderPath}`,
             name: part,
-            path,
+            path: folderPath,
             type: 'folder',
           }
           current.children.push(folder)
@@ -68,7 +78,7 @@ export function buildReviewTree(files: ReviewFile[]) {
   return root
 }
 
-export function folderVisibility(files: ReviewFile[]): VisibilityState {
+export function folderVisibility(files: ReviewTreeFileBase[]): VisibilityState {
   const hasPublic = files.some((file) => file.visibility === 'Public')
   const hasPrivate = files.some((file) => file.visibility === 'Private')
   if (hasPublic && hasPrivate) {
@@ -78,10 +88,20 @@ export function folderVisibility(files: ReviewFile[]): VisibilityState {
 }
 
 export function displayPath(path: string) {
-  return path.replace(/^\/+/, '')
+  return normalizeReviewPath(path)
 }
 
-function sortReviewTree(node: Extract<ReviewTreeNode, { type: 'folder' }>) {
+export function normalizeReviewPath(path: string) {
+  return path
+    .replace(/\\/g, '/')
+    .split('/')
+    .filter((part) => part && part !== '.' && part !== '..')
+    .join('/')
+}
+
+function sortReviewTree<TFile extends ReviewTreeFileBase>(
+  node: Extract<ReviewTreeNode<TFile>, { type: 'folder' }>,
+) {
   node.children.sort((left, right) => {
     if (left.type !== right.type) {
       return left.type === 'folder' ? -1 : 1
@@ -95,7 +115,9 @@ function sortReviewTree(node: Extract<ReviewTreeNode, { type: 'folder' }>) {
   }
 }
 
-function attachDescendantFiles(node: Extract<ReviewTreeNode, { type: 'folder' }>) {
+function attachDescendantFiles<TFile extends ReviewTreeFileBase>(
+  node: Extract<ReviewTreeNode<TFile>, { type: 'folder' }>,
+) {
   node.files = node.children.flatMap((child) => {
     if (child.type === 'file') {
       return [child.file]
@@ -106,5 +128,5 @@ function attachDescendantFiles(node: Extract<ReviewTreeNode, { type: 'folder' }>
 }
 
 function pathParts(path: string) {
-  return path.replace(/^\/+/, '').split('/').filter(Boolean)
+  return path.split('/').filter(Boolean)
 }
