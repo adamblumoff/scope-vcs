@@ -3,7 +3,7 @@ import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { authCookieName } from '@/lib/auth'
-import { Link, createFileRoute } from '@tanstack/react-router'
+import { Link, createFileRoute, redirect, useNavigate } from '@tanstack/react-router'
 import { createServerFn } from '@tanstack/react-start'
 import {
   AlertCircle,
@@ -63,6 +63,15 @@ type RepoSetupCommandSource = RepoSetup & {
   git_remote_url: string
 }
 
+type SetupRouteState =
+  | {
+      kind: 'setup'
+      setup: RepoSetupView
+    }
+  | {
+      kind: 'review'
+    }
+
 type SetupParams = {
   owner: string
   repo: string
@@ -79,12 +88,45 @@ const loadSetupForRequest = createServerFn({ method: 'GET' })
     }
 
     const api = getApiConnection()
-    const setup = await loadJson<RepoSetup>(
-      `${api}/v1/repos/${data.owner}/${data.repo}/setup`,
+    try {
+      const setup = await loadJson<RepoSetup>(
+        `${api}/v1/repos/${data.owner}/${data.repo}/setup`,
+        { headers: authHeaders(idToken) },
+      )
+
+      return { kind: 'setup', setup: setupView(api, setup) } satisfies SetupRouteState
+    } catch (error) {
+      if (error instanceof HttpError && error.status === 409) {
+        return { kind: 'review' } satisfies SetupRouteState
+      }
+
+      throw error
+    }
+  })
+
+const pendingImportReadyForRequest = createServerFn({ method: 'GET' })
+  .validator(parseSetupParams)
+  .handler(async ({ data }) => {
+    const idToken = await readRequestAuthToken()
+    if (!idToken) {
+      throw new Error('Sign in as the repo owner to check setup progress.')
+    }
+
+    const response = await fetch(
+      `${getApiConnection()}/v1/repos/${data.owner}/${data.repo}/pending-import`,
       { headers: authHeaders(idToken) },
     )
 
-    return setupView(api, setup)
+    if (response.ok) {
+      return true
+    }
+
+    if (response.status === 400) {
+      return false
+    }
+
+    const payload = await response.json().catch(() => null)
+    throw new Error(payload?.error ?? `request failed: ${response.status}`)
   })
 
 const regenerateTokenForRequest = createServerFn({ method: 'POST' })
@@ -113,7 +155,17 @@ const regenerateTokenForRequest = createServerFn({ method: 'POST' })
   })
 
 export const Route = createFileRoute('/repos/$owner/$repo/setup')({
-  loader: ({ params }) => loadSetupForRequest({ data: params }),
+  loader: async ({ params }) => {
+    const state = await loadSetupForRequest({ data: params })
+    if (state.kind === 'review') {
+      throw redirect({
+        params,
+        to: '/repos/$owner/$repo/review',
+      })
+    }
+
+    return state.setup
+  },
   errorComponent: SetupError,
   component: SetupPage,
 })
@@ -121,6 +173,7 @@ export const Route = createFileRoute('/repos/$owner/$repo/setup')({
 function SetupPage() {
   const initialSetup = Route.useLoaderData()
   const params = Route.useParams()
+  const navigate = useNavigate()
   const [setup, setSetup] = useState(initialSetup)
   const [tokenSecret, setTokenSecret] = useState<string | null>(
     initialSetup.token?.secret ?? null,
@@ -148,6 +201,41 @@ function SetupPage() {
       window.sessionStorage.removeItem(setupPushSecretKey(setup.repo.id))
     }
   }, [setup.repo.id])
+
+  useEffect(() => {
+    let cancelled = false
+    let inFlight = false
+
+    async function checkProgress() {
+      if (inFlight) {
+        return
+      }
+
+      inFlight = true
+      try {
+        const ready = await pendingImportReadyForRequest({ data: params })
+        if (!cancelled && ready) {
+          await navigate({
+            params,
+            to: '/repos/$owner/$repo/review',
+          })
+        }
+      } catch {
+        // Keep the setup page usable; the next poll or a manual refresh can recover.
+      } finally {
+        inFlight = false
+      }
+    }
+
+    const initialCheck = window.setTimeout(() => void checkProgress(), 1000)
+    const interval = window.setInterval(() => void checkProgress(), 2500)
+
+    return () => {
+      cancelled = true
+      window.clearTimeout(initialCheck)
+      window.clearInterval(interval)
+    }
+  }, [navigate, params])
 
   async function regenerateToken() {
     setBusy(true)
@@ -411,10 +499,22 @@ async function loadJson<T>(url: string, init?: RequestInit): Promise<T> {
   const payload = await response.json().catch(() => null)
 
   if (!response.ok) {
-    throw new Error(payload?.error ?? `request failed: ${response.status}`)
+    throw new HttpError(
+      payload?.error ?? `request failed: ${response.status}`,
+      response.status,
+    )
   }
 
   return payload as T
+}
+
+class HttpError extends Error {
+  constructor(
+    message: string,
+    readonly status: number,
+  ) {
+    super(message)
+  }
 }
 
 function setupView(api: string, setup: RepoSetup): RepoSetupView {
