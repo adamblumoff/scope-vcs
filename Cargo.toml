@@ -1,11 +1,7 @@
 [workspace]
 resolver = "2"
 members = [
-  "crates/scope-git",
-  "crates/scope-policy",
-  "crates/scope-projection",
   "crates/scope-server",
-  "crates/scope-store",
 ]
 
 [workspace.package]
@@ -34,8 +30,3 @@ tower = { version = "0.5.3", features = ["util"] }
 tower-http = { version = "0.6.8", features = ["cors", "trace"] }
 tracing = "0.1.44"
 tracing-subscriber = { version = "0.3.22", features = ["env-filter", "fmt"] }
-
-scope-git = { path = "crates/scope-git" }
-scope-policy = { path = "crates/scope-policy" }
-scope-projection = { path = "crates/scope-projection" }
-scope-store = { path = "crates/scope-store" }

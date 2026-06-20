@@ -8,11 +8,8 @@ the canonical source of truth is a server-side source graph.
 
 ## Workspace
 
-- `crates/scope-policy` - top-down path visibility and authorization.
-- `crates/scope-projection` - canonical commits to per-principal projections.
-- `crates/scope-git` - projected Git object identity helpers.
-- `crates/scope-store` - app catalog, repository, membership, and invite domain.
-- `crates/scope-server` - Axum API and Git facade boundary.
+- `crates/scope-server` - Axum API, Git facade boundary, and server-owned
+  domain modules for policy, projection, Git projection, and catalog state.
 - `apps/web` - TanStack Start control-plane UI.
 
 ## Local Checks
