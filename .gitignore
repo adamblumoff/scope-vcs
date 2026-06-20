@@ -3,6 +3,10 @@ node_modules/
 .turbo/
 .output/
 dist/
+.tmp/
+.agents/
+.codex/
+.railway/
 .scope/
 .codex-local/
 .env
