@@ -127,7 +127,7 @@ async fn setup_token_regeneration_rotates_first_push_and_git_push_tokens() {
 }
 
 #[test]
-fn first_push_token_response_uses_current_ttl() {
+fn first_push_token_response_uses_persisted_expiry() {
     let token = FirstPushToken {
         token_hash: "sha256:test".to_string(),
         secret: Some("scope_fp_test".to_string()),
@@ -139,14 +139,14 @@ fn first_push_token_response_uses_current_ttl() {
 
     let active = first_push_token_response(&token, 1000, None);
     assert_eq!(active.status, FirstPushTokenStatus::Active);
-    assert_eq!(active.expires_at_unix, 1000 + FIRST_PUSH_TOKEN_TTL_SECS);
+    assert_eq!(active.expires_at_unix, token.expires_at_unix);
     assert_eq!(active.secret.as_deref(), None);
 
     let minted = first_push_token_response(&token, 1000, Some("scope_fp_new".to_string()));
     assert_eq!(minted.status, FirstPushTokenStatus::Active);
     assert_eq!(minted.secret.as_deref(), Some("scope_fp_new"));
 
-    let expired = first_push_token_response(&token, 1000 + FIRST_PUSH_TOKEN_TTL_SECS, None);
+    let expired = first_push_token_response(&token, token.expires_at_unix, None);
     assert_eq!(expired.status, FirstPushTokenStatus::Expired);
     assert!(expired.secret.is_none());
 }

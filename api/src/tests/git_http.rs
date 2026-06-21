@@ -1,7 +1,7 @@
 use super::*;
 
 #[tokio::test]
-async fn published_receive_pack_accepts_basic_git_push_token() {
+async fn published_receive_pack_rejects_git_push_token() {
     let state = test_state_with_repo();
     let secret = "scope_git_test";
     {
@@ -22,14 +22,11 @@ async fn published_receive_pack_accepts_basic_git_push_token() {
             .unwrap(),
     );
 
-    let access = receive_pack_access(&state, &headers, TEST_REPO_OWNER, TEST_REPO_NAME)
+    let error = receive_pack_access(&state, &headers, TEST_REPO_OWNER, TEST_REPO_NAME)
         .await
-        .unwrap();
+        .unwrap_err();
 
-    assert!(matches!(
-        access,
-        ReceivePackAccess::PublishedOwner { author_id } if author_id == test_owner_id()
-    ));
+    assert_eq!(error.status, StatusCode::UNAUTHORIZED);
 }
 
 #[tokio::test]
@@ -112,7 +109,7 @@ async fn receive_pack_reports_pending_publish_only_after_owner_token_auth() {
 }
 
 #[tokio::test]
-async fn upload_pack_accepts_basic_git_push_token_for_owner_projection() {
+async fn upload_pack_rejects_git_push_token_after_publish() {
     let state = test_state_with_repo();
     let secret = "scope_git_test";
     {
@@ -145,27 +142,22 @@ async fn upload_pack_accepts_basic_git_push_token_for_owner_projection() {
             .unwrap(),
     );
 
-    let projection = git_projection_for_request(&state, &headers, TEST_REPO_OWNER, TEST_REPO_NAME)
+    let error = git_projection_for_request(&state, &headers, TEST_REPO_OWNER, TEST_REPO_NAME)
         .await
-        .unwrap();
-    let git = build_virtual_git_projection(state.object_store.as_ref(), &projection).unwrap();
+        .unwrap_err();
 
-    assert!(git.blobs.iter().any(|blob| blob.path == "/secret.txt"));
+    assert_eq!(error.status, StatusCode::UNAUTHORIZED);
 }
 
 #[tokio::test]
 async fn upload_pack_ignores_stale_durable_git_repos() {
     let state = test_state_with_repo();
-    let secret = "scope_git_test";
+    cache_test_jwks(&state);
     {
         let mut catalog = lock_catalog(&state).unwrap();
-        let mut repo = repo_with_readme();
-        repo.git_push_token = Some(GitPushToken {
-            token_hash: git_push_token_hash(secret),
-            owner_user_id: repo.record.owner_user_id.clone(),
-            created_at_unix: unix_now(),
-        });
-        catalog.repositories.insert(TEST_REPO_ID.to_string(), repo);
+        catalog
+            .repositories
+            .insert(TEST_REPO_ID.to_string(), repo_with_readme());
     }
     let raw_repo = owner_git_repo_path(&state, TEST_REPO_OWNER, TEST_REPO_NAME);
     let staged_repo = staged_git_repo_path(&state, TEST_REPO_OWNER, TEST_REPO_NAME);
@@ -175,12 +167,7 @@ async fn upload_pack_ignores_stale_durable_git_repos() {
     fs::write(staged_repo.join("HEAD"), "not a real staged source").unwrap();
 
     let mut headers = HeaderMap::new();
-    headers.insert(
-        AUTHORIZATION,
-        format!("Basic {}", BASE64.encode(format!("scope:{secret}")))
-            .parse()
-            .unwrap(),
-    );
+    headers.insert(AUTHORIZATION, bearer_header().parse().unwrap());
 
     let repo_path =
         git_upload_pack_repo_for_request(&state, &headers, TEST_REPO_OWNER, TEST_REPO_NAME)
@@ -202,7 +189,6 @@ async fn upload_pack_ignores_stale_durable_git_repos() {
 async fn owner_upload_pack_serves_raw_bucket_snapshot_head() {
     let state = test_state_with_repo();
     cache_test_jwks(&state);
-    let secret = "scope_git_test";
     let source = temp_git_repo("owner-upload-snapshot");
     fs::write(source.join("README.md"), "raw snapshot").unwrap();
     run_git(Some(&source), &["add", "README.md"], "add readme").unwrap();
@@ -234,19 +220,9 @@ async fn owner_upload_pack_serves_raw_bucket_snapshot_head() {
         repo.record.publication_state = RepoPublicationState::PendingPublish;
         repo.pending_import = Some(pending);
         promote_pending_import(repo).unwrap();
-        repo.git_push_token = Some(GitPushToken {
-            token_hash: git_push_token_hash(secret),
-            owner_user_id: repo.record.owner_user_id.clone(),
-            created_at_unix: unix_now(),
-        });
     }
     let mut headers = HeaderMap::new();
-    headers.insert(
-        AUTHORIZATION,
-        format!("Basic {}", BASE64.encode(format!("scope:{secret}")))
-            .parse()
-            .unwrap(),
-    );
+    headers.insert(AUTHORIZATION, bearer_header().parse().unwrap());
 
     let repo_path =
         git_upload_pack_repo_for_request(&state, &headers, TEST_REPO_OWNER, TEST_REPO_NAME)
@@ -260,21 +236,6 @@ async fn owner_upload_pack_serves_raw_bucket_snapshot_head() {
     .unwrap();
 
     assert_eq!(actual_head, expected_head);
-
-    let mut shoo_headers = HeaderMap::new();
-    shoo_headers.insert(AUTHORIZATION, bearer_header().parse().unwrap());
-    let shoo_repo_path =
-        git_upload_pack_repo_for_request(&state, &shoo_headers, TEST_REPO_OWNER, TEST_REPO_NAME)
-            .await
-            .unwrap();
-    let shoo_head = git_stdout_text(
-        &shoo_repo_path,
-        &["rev-parse", DEFAULT_GIT_BRANCH],
-        "shoo head",
-    )
-    .unwrap();
-
-    assert_eq!(shoo_head, expected_head);
 
     fs::write(source.join("README.md"), "staged snapshot").unwrap();
     run_git(Some(&source), &["add", "README.md"], "add staged readme").unwrap();
@@ -337,7 +298,6 @@ async fn owner_upload_pack_serves_raw_bucket_snapshot_head() {
     let _ = fs::remove_dir_all(&bare);
     let _ = fs::remove_dir_all(&staged_bare);
     let _ = fs::remove_dir_all(&repo_path);
-    let _ = fs::remove_dir_all(&shoo_repo_path);
     let _ = fs::remove_dir_all(&staged_repo_path);
 }
 

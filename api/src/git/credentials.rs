@@ -6,7 +6,6 @@ use crate::{
     },
     config::{FIRST_PUSH_TOKEN_PREFIX, GIT_PUSH_TOKEN_PREFIX},
     error::ApiError,
-    http::responses::first_push_token_status_at,
     persistence::unix_now,
     state::{AppState, find_repo},
 };
@@ -250,7 +249,7 @@ pub(crate) fn authorize_first_push_token_for_repo(
             "first-push token owner does not match repo owner",
         ));
     }
-    if first_push_token_status_at(token, now) != FirstPushTokenStatus::Active {
+    if token.status_at(now) != FirstPushTokenStatus::Active {
         return Err(ApiError::unauthorized(
             "first-push token is expired or used",
         ));
@@ -266,6 +265,11 @@ pub(crate) fn authorize_git_push_token_for_repo(
     repo: &StoredRepository,
     secret: &str,
 ) -> Result<String, ApiError> {
+    if repo.record.publication_state == RepoPublicationState::Published {
+        return Err(ApiError::unauthorized(
+            "Git push token is no longer valid after publish",
+        ));
+    }
     let Some(token) = repo.git_push_token.as_ref() else {
         return Err(ApiError::unauthorized("Git push token is not configured"));
     };
