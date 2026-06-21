@@ -1,5 +1,5 @@
 use super::{
-    policy::{Policy, Principal, ScopePath},
+    policy::{Policy, Principal, PrincipalKind, ScopePath, Visibility},
     store::SourceBlob,
 };
 use serde::{Deserialize, Serialize};
@@ -21,6 +21,15 @@ pub struct FileChange {
     pub path: ScopePath,
     pub old_content: Option<SourceBlob>,
     pub new_content: Option<SourceBlob>,
+    pub visibility: Visibility,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct FileVisibilityChange {
+    pub path: ScopePath,
+    pub old_visibility: Visibility,
+    pub new_visibility: Visibility,
+    pub current_content: Option<SourceBlob>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -32,6 +41,7 @@ pub struct LogicalCommit {
     pub message: String,
     pub mixed_policy: MixedCommitPolicy,
     pub changes: Vec<FileChange>,
+    pub visibility_changes: Vec<FileVisibilityChange>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -81,23 +91,42 @@ impl Projection {
 pub fn project_graph(policy: &Policy, graph: &SourceGraph, principal: &Principal) -> Projection {
     let mut commits = Vec::new();
     let mut last_visible: Option<String> = None;
+    let owner_projection = policy.is_owner(principal);
 
     for logical in &graph.commits {
-        let visible_changes = logical
+        let mut visible_changes = logical
             .changes
             .iter()
-            .filter(|change| policy.can_read(principal, &change.path))
+            .filter(|change| {
+                owner_projection
+                    || can_read_historical_change(
+                        policy,
+                        principal,
+                        &change.path,
+                        change.visibility,
+                    )
+            })
             .map(|change| ProjectedChange {
                 path: change.path.clone(),
                 new_content: change.new_content.clone(),
             })
             .collect::<Vec<_>>();
+        let visible_content_count = visible_changes.len();
+
+        if !owner_projection {
+            visible_changes.extend(
+                logical
+                    .visibility_changes
+                    .iter()
+                    .filter_map(|change| project_visibility_change(policy, principal, change)),
+            );
+        }
 
         if visible_changes.is_empty() {
             continue;
         }
 
-        let hidden_count = logical.changes.len() - visible_changes.len();
+        let hidden_count = logical.changes.len() - visible_content_count;
         if hidden_count > 0 && logical.mixed_policy == MixedCommitPolicy::OmitFromPublic {
             continue;
         }
@@ -135,4 +164,52 @@ pub fn project_graph(policy: &Policy, graph: &SourceGraph, principal: &Principal
         principal_id: principal.id.clone(),
         commits,
     }
+}
+
+fn can_read_historical_change(
+    policy: &Policy,
+    principal: &Principal,
+    path: &ScopePath,
+    visibility: Visibility,
+) -> bool {
+    match visibility {
+        Visibility::Public => true,
+        Visibility::Private => {
+            principal.kind != PrincipalKind::Public
+                && policy.effective_visibility(path) == Visibility::Private
+                && policy.can_read(principal, path)
+        }
+    }
+}
+
+fn project_visibility_change(
+    policy: &Policy,
+    principal: &Principal,
+    change: &FileVisibilityChange,
+) -> Option<ProjectedChange> {
+    match (change.old_visibility, change.new_visibility) {
+        (Visibility::Private, Visibility::Public) => Some(ProjectedChange {
+            path: change.path.clone(),
+            new_content: change.current_content.clone(),
+        }),
+        (Visibility::Public, Visibility::Private)
+            if should_project_visibility_deletion(policy, principal, change) =>
+        {
+            Some(ProjectedChange {
+                path: change.path.clone(),
+                new_content: None,
+            })
+        }
+        _ => None,
+    }
+}
+
+fn should_project_visibility_deletion(
+    policy: &Policy,
+    principal: &Principal,
+    change: &FileVisibilityChange,
+) -> bool {
+    principal.kind == PrincipalKind::Public
+        || policy.effective_visibility(&change.path) != Visibility::Private
+        || !policy.can_read(principal, &change.path)
 }

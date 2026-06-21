@@ -144,7 +144,7 @@ pub(crate) fn promote_pending_import(repo: &mut StoredRepository) -> Result<(), 
         .pending_import
         .take()
         .ok_or_else(|| ApiError::bad_request("repo has no pending import to publish"))?;
-    let changes = pending_import_changes(&pending);
+    let changes = pending_import_changes(&repo.policy, &pending);
     let parent_ids = repo
         .graph
         .commits
@@ -166,6 +166,7 @@ pub(crate) fn promote_pending_import(repo: &mut StoredRepository) -> Result<(), 
         message: format!("Import pushed {}", pending.default_branch),
         mixed_policy: MixedCommitPolicy::SyntheticPublicCommit,
         changes,
+        visibility_changes: Vec::new(),
     });
     repo.git_snapshot = Some(pending.git_snapshot);
     repo.record.publication_state = RepoPublicationState::Published;

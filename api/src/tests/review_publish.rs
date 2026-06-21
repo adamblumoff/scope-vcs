@@ -91,6 +91,65 @@ fn pending_visibility_toggles_apply_before_publish() {
     assert_eq!(public_files[0].visibility, Visibility::Public);
 }
 
+#[tokio::test]
+async fn pending_visibility_toggle_does_not_create_public_projection_history() {
+    let state = test_state_with_repo();
+    cache_test_jwks(&state);
+    {
+        let mut catalog = lock_catalog(&state).unwrap();
+        let repo = catalog.repositories.get_mut(TEST_REPO_ID).unwrap();
+        repo.record.publication_state = RepoPublicationState::PendingPublish;
+        repo.record.default_visibility = Visibility::Public;
+        repo.policy = Policy::new(Visibility::Public, repo.record.owner_user_id.clone());
+        repo.graph.commits.clear();
+        repo.pending_import = Some(pending_import_fixture(vec![
+            ("README.md", "private before publish"),
+            ("public.md", "public before publish"),
+        ]));
+    }
+    let app = router(state.clone());
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("PATCH")
+                .uri("/v1/repos/owner/repo/files/visibility")
+                .header(AUTHORIZATION, bearer_header())
+                .header(CONTENT_TYPE, "application/json")
+                .body(Body::from(
+                    r#"{"paths":["/README.md"],"visibility":"Private"}"#,
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    {
+        let mut catalog = lock_catalog(&state).unwrap();
+        let repo = catalog.repositories.get_mut(TEST_REPO_ID).unwrap();
+        assert!(repo.graph.commits.is_empty());
+        promote_pending_import(repo).unwrap();
+    }
+    let repo = find_repo(&state, TEST_REPO_OWNER, TEST_REPO_NAME).unwrap();
+    let projection = project_graph(&repo.policy, &repo.graph, &Principal::public());
+
+    assert!(
+        projection
+            .commits
+            .iter()
+            .flat_map(|commit| commit.changes.iter())
+            .all(|change| change.path.as_str() != "/README.md")
+    );
+    assert!(
+        projection
+            .commits
+            .iter()
+            .flat_map(|commit| commit.changes.iter())
+            .any(|change| change.path.as_str() == "/public.md" && change.new_content.is_some())
+    );
+}
+
 #[test]
 fn zero_file_publish_promotes_pending_import() {
     let mut repo = test_repo(&test_owner_id());

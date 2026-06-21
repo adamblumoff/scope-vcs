@@ -179,7 +179,7 @@ impl Policy {
     }
 
     pub fn can_read(&self, principal: &Principal, path: &ScopePath) -> bool {
-        if principal.id == self.owner_id {
+        if self.is_owner(principal) {
             return true;
         }
 
@@ -200,6 +200,10 @@ impl Policy {
 
     pub fn rules(&self) -> &[VisibilityRule] {
         &self.rules
+    }
+
+    pub fn is_owner(&self, principal: &Principal) -> bool {
+        principal.id == self.owner_id
     }
 
     pub fn reassign_principal(&mut self, old_id: &str, new_id: &str) {

@@ -164,6 +164,7 @@ fn verified_email_sign_in_collapses_existing_duplicate_user() {
         message: "duplicate user commit".to_string(),
         mixed_policy: MixedCommitPolicy::SyntheticPublicCommit,
         changes: Vec::new(),
+        visibility_changes: Vec::new(),
     });
     let state = test_state_with_metadata(crate::db::MetadataStore::memory(AppCatalog {
         users: BTreeMap::from([

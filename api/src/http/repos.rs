@@ -1,7 +1,7 @@
 use crate::domain::git_projection::{VirtualGitProjection, build_virtual_git_projection};
 use crate::domain::policy::{Principal, ScopePath, Visibility, VisibilityRule};
-use crate::domain::projection::project_graph;
-use crate::domain::store::{RepoRole, RepoSettings, RepoStorageCleanup};
+use crate::domain::projection::{FileVisibilityChange, LogicalCommit, project_graph};
+use crate::domain::store::{RepoPublicationState, RepoRole, RepoSettings, RepoStorageCleanup};
 use crate::{
     auth::{
         shoo::{
@@ -15,7 +15,7 @@ use crate::{
     persistence::{catalog_error, unix_now},
     state::AppState,
     state::{
-        cleanup_pending_repo_storage_deletion_for_recreate, ensure_repo_read, find_repo,
+        cleanup_pending_repo_storage_deletion_for_recreate, ensure_repo_read, find_repo, live_tree,
         queue_repo_storage_deletion, queue_source_blob_deletions, repo_source_blobs,
         role_for_principal,
     },
@@ -303,7 +303,24 @@ pub(crate) async fn update_file_visibility(
                 .get_mut(&repo_id)
                 .expect("repo was already checked");
             let owner_ids = repo_owner_ids(repo);
+            let record_visibility_history =
+                repo.record.publication_state == RepoPublicationState::Published;
+            let live_tree = if record_visibility_history {
+                live_tree(repo)
+            } else {
+                Default::default()
+            };
+            let mut visibility_changes = Vec::new();
             for update_path in &update_paths {
+                let old_visibility = repo.policy.effective_visibility(update_path);
+                if record_visibility_history && old_visibility != visibility {
+                    visibility_changes.push(FileVisibilityChange {
+                        path: update_path.clone(),
+                        old_visibility,
+                        new_visibility: visibility,
+                        current_content: live_tree.get(update_path).cloned(),
+                    });
+                }
                 let rule = match visibility {
                     Visibility::Public => VisibilityRule::public(update_path.clone()),
                     Visibility::Private => {
@@ -311,6 +328,25 @@ pub(crate) async fn update_file_visibility(
                     }
                 };
                 repo.policy.add_rule(rule).map_err(ApiError::bad_request)?;
+            }
+            if !visibility_changes.is_empty() {
+                let parent_ids = repo
+                    .graph
+                    .commits
+                    .last()
+                    .map(|commit| vec![commit.id.clone()])
+                    .unwrap_or_default();
+                repo.graph.commits.push(LogicalCommit {
+                    id: format!("rv_visibility_{}", repo.graph.commits.len() + 1),
+                    parent_ids,
+                    author_id: user_id.clone(),
+                    author_visibility: crate::domain::projection::AuthorVisibility::Visible,
+                    message: "Update file visibility".to_string(),
+                    mixed_policy:
+                        crate::domain::projection::MixedCommitPolicy::SyntheticPublicCommit,
+                    changes: Vec::new(),
+                    visibility_changes,
+                });
             }
         }
 

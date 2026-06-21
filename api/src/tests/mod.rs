@@ -3,7 +3,8 @@ use crate::domain::policy::{
     Policy, Principal, PrincipalKind, ScopePath, Visibility, VisibilityRule,
 };
 use crate::domain::projection::{
-    AuthorVisibility, FileChange, LogicalCommit, MixedCommitPolicy, SourceGraph, project_graph,
+    AuthorVisibility, FileChange, FileVisibilityChange, LogicalCommit, MixedCommitPolicy,
+    SourceGraph, project_graph,
 };
 use crate::domain::store::{
     AccountAccess, AppCatalog, FirstPushToken, FirstPushTokenStatus, GitPushToken, PendingImport,
@@ -341,10 +342,12 @@ fn repo_with_readme() -> StoredRepository {
         message: "initial".to_string(),
         mixed_policy: MixedCommitPolicy::SyntheticPublicCommit,
         changes: vec![FileChange {
+            visibility: Visibility::Public,
             path: ScopePath::parse("/README.md").unwrap(),
             old_content: None,
             new_content: Some(source_blob("hello")),
         }],
+        visibility_changes: Vec::new(),
     });
     repo
 }
