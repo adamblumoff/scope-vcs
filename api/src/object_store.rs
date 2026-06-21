@@ -172,7 +172,7 @@ impl ObjectStore for EncryptedObjectStore {
 }
 
 pub(crate) struct S3ObjectStore {
-    client: Client,
+    client: Option<Client>,
     endpoint: String,
     bucket: String,
     region: String,
@@ -193,7 +193,7 @@ impl S3ObjectStore {
             .unwrap_or(false);
 
         Ok(Self {
-            client: Client::new(),
+            client: Some(Client::new()),
             endpoint: endpoint.trim_end_matches('/').to_string(),
             bucket,
             region,
@@ -279,10 +279,14 @@ impl S3ObjectStore {
 
     fn send(&self, method: &str, key: &str, payload: Vec<u8>) -> Result<Vec<u8>, ApiError> {
         let url = self.request_url(key);
+        let client = self
+            .client
+            .as_ref()
+            .ok_or_else(|| ApiError::internal_message("object store client is shut down"))?;
         let mut request = match method {
-            "GET" => self.client.get(&url),
-            "PUT" => self.client.put(&url).body(payload.clone()),
-            "DELETE" => self.client.delete(&url),
+            "GET" => client.get(&url),
+            "PUT" => client.put(&url).body(payload.clone()),
+            "DELETE" => client.delete(&url),
             _ => {
                 return Err(ApiError::internal_message(
                     "unsupported object store method",
@@ -292,27 +296,43 @@ impl S3ObjectStore {
         for (name, value) in self.signed_headers(method, key, &payload)? {
             request = request.header(name, value);
         }
-        let response = send_blocking_request(request)?;
-        if !response.status().is_success() {
+        send_blocking_request(method, key, request)
+    }
+}
+
+fn send_blocking_request(
+    method: &str,
+    key: &str,
+    request: reqwest::blocking::RequestBuilder,
+) -> Result<Vec<u8>, ApiError> {
+    let send = || {
+        let response = request.send().map_err(ApiError::internal)?;
+        let status = response.status();
+        if !status.is_success() {
             return Err(ApiError::service_unavailable(format!(
-                "object store {method} failed for {key}: {}",
-                response.status()
+                "object store {method} failed for {key}: {status}"
             )));
         }
         response
             .bytes()
             .map(|bytes| bytes.to_vec())
             .map_err(ApiError::internal)
+    };
+
+    if tokio::runtime::Handle::try_current().is_ok() {
+        tokio::task::block_in_place(send)
+    } else {
+        send()
     }
 }
 
-fn send_blocking_request(
-    request: reqwest::blocking::RequestBuilder,
-) -> Result<reqwest::blocking::Response, ApiError> {
-    if tokio::runtime::Handle::try_current().is_ok() {
-        tokio::task::block_in_place(|| request.send()).map_err(ApiError::internal)
-    } else {
-        request.send().map_err(ApiError::internal)
+impl Drop for S3ObjectStore {
+    fn drop(&mut self) {
+        if let Some(client) = self.client.take() {
+            // reqwest's blocking client owns runtime resources. This object is
+            // process-lifetime state, so avoid async-context shutdown panics.
+            std::mem::forget(client);
+        }
     }
 }
 

@@ -48,7 +48,9 @@ impl std::ops::Deref for DbRuntime {
 impl Drop for DbRuntime {
     fn drop(&mut self) {
         if let Some(runtime) = self.0.take() {
-            runtime.shutdown_background();
+            // This store is process-lifetime state. Dropping a Tokio runtime from
+            // inside the server runtime panics, so let the OS reclaim it on exit.
+            std::mem::forget(runtime);
         }
     }
 }

@@ -3,8 +3,7 @@ use api::{AppState, router};
 use std::net::SocketAddr;
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 
-#[tokio::main]
-async fn main() -> anyhow::Result<()> {
+fn main() -> anyhow::Result<()> {
     tracing_subscriber::registry()
         .with(
             tracing_subscriber::EnvFilter::try_from_default_env()
@@ -18,8 +17,14 @@ async fn main() -> anyhow::Result<()> {
         .and_then(|value| value.parse::<u16>().ok())
         .unwrap_or(8080);
     let addr = SocketAddr::from(([0, 0, 0, 0], port));
-    let state = AppState::from_env().await?;
+    let state = AppState::from_env()?;
 
+    tokio::runtime::Runtime::new()
+        .context("creating tokio runtime")?
+        .block_on(serve(addr, state))
+}
+
+async fn serve(addr: SocketAddr, state: AppState) -> anyhow::Result<()> {
     let app = router(state);
     tracing::info!(%addr, "starting api");
 

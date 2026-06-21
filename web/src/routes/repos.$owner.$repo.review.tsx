@@ -1,35 +1,12 @@
-import { parseRepoParams } from '@/api/repos'
 import {
-  loadReviewForRequest,
-  parseSetVisibilityInput,
-  postStagedUpdateAction,
-  publishRepoForRequest,
-  setVisibilityForRequest,
-} from '@/api/review'
-import type { RepoReview, ReviewFile, Visibility } from '@/api/types'
+  applyStagedUpdate,
+  loadReview,
+  publishRepo,
+  rejectStagedUpdate,
+  setReviewVisibility,
+} from '@/routes/-repo-review-actions'
 import { ReviewError, ReviewPage } from '@/features/review/review-page'
 import { createFileRoute, redirect } from '@tanstack/react-router'
-import { createServerFn } from '@tanstack/react-start'
-
-const loadReview = createServerFn({ method: 'GET' })
-  .validator(parseRepoParams)
-  .handler(({ data }) => loadReviewForRequest(data))
-
-const setVisibility = createServerFn({ method: 'POST' })
-  .validator(parseSetVisibilityInput)
-  .handler(({ data }) => setVisibilityForRequest(data))
-
-const publishRepo = createServerFn({ method: 'POST' })
-  .validator(parseRepoParams)
-  .handler(({ data }) => publishRepoForRequest(data))
-
-const applyStagedUpdate = createServerFn({ method: 'POST' })
-  .validator(parseRepoParams)
-  .handler(({ data }) => postStagedUpdateAction(data, 'apply'))
-
-const rejectStagedUpdate = createServerFn({ method: 'POST' })
-  .validator(parseRepoParams)
-  .handler(({ data }) => postStagedUpdateAction(data, 'reject'))
 
 export const Route = createFileRoute('/repos/$owner/$repo/review')({
   loader: async ({ params }) => {
@@ -60,20 +37,4 @@ function ReviewRoute() {
       setReviewVisibility={setReviewVisibility}
     />
   )
-}
-
-function setReviewVisibility(
-  params: { owner: string; repo: string },
-  review: RepoReview,
-  files: ReviewFile[],
-  visibility: Visibility,
-) {
-  return setVisibility({
-    data: {
-      ...params,
-      kind: review.kind,
-      paths: files.map((file) => file.path),
-      visibility,
-    },
-  })
 }

@@ -17,8 +17,13 @@ import type {
   RepoDetail,
   RepoFile,
   RepoParams,
+  RepoSession,
   RepoSummary,
+  SetRepoFileVisibilityInput,
 } from './types'
+import { loadReviewForRequest } from './review'
+
+export { parseSetRepoFileVisibilityInput } from './repo-inputs'
 
 export async function loadHomeForRequest(): Promise<HomeState> {
   const idToken = await readRequestAuthToken()
@@ -115,12 +120,81 @@ export async function loadRepoForRequest(data: RepoParams) {
   const idToken = await readRequestAuthToken()
   const api = getApiConnection()
   const init = { headers: authHeaders(idToken) }
-  const [repo, files] = await Promise.all([
+  const [repo, session] = await Promise.all([
     loadJson<RepoSummary>(`${api}/v1/repos/${data.owner}/${data.repo}`, init),
-    loadJson<RepoFile[]>(`${api}/v1/repos/${data.owner}/${data.repo}/files`, init),
+    loadJson<RepoSession>(
+      `${api}/v1/repos/${data.owner}/${data.repo}/session`,
+      init,
+    ),
   ])
+  const review = await loadOpenRepoReview(data, repo, idToken ?? null)
+  const files = review
+    ? []
+    : await loadJson<RepoFile[]>(
+        `${api}/v1/repos/${data.owner}/${data.repo}/files`,
+        init,
+      )
 
-  return { files, kind: 'repo', repo } satisfies RepoDetail
+  return {
+    capabilities: session.capabilities,
+    files,
+    kind: 'repo',
+    repo,
+    review,
+  } satisfies RepoDetail
+}
+
+async function loadOpenRepoReview(
+  data: RepoParams,
+  repo: RepoSummary,
+  idToken: string | null,
+) {
+  if (
+    !idToken ||
+    repo.role !== 'Owner' ||
+    (repo.lifecycle_state !== 'PendingPublish' && !repo.staged_update_pending)
+  ) {
+    return null
+  }
+
+  const review = await loadReviewForRequest(data)
+  return review.kind === 'NoReview' ? null : review
+}
+
+export async function setRepoFileVisibilityForRequest(
+  data: SetRepoFileVisibilityInput,
+) {
+  const idToken = await readRequestAuthToken()
+  if (!idToken) {
+    throw new Error('Sign in as the repo owner to update file visibility.')
+  }
+
+  for (const path of data.paths) {
+    const response = await fetch(
+      `${getApiMutationConnection()}/v1/repos/${data.owner}/${data.repo}/files/visibility`,
+      {
+        body: JSON.stringify({
+          path,
+          visibility: data.visibility,
+        }),
+        headers: {
+          ...authHeaders(idToken),
+          'content-type': 'application/json',
+        },
+        method: 'PATCH',
+      },
+    )
+    const payload = await response.json().catch(() => null)
+
+    if (!response.ok) {
+      throw new Error(payload?.error ?? `request failed: ${response.status}`)
+    }
+  }
+
+  return loadJson<RepoFile[]>(
+    `${getApiConnection()}/v1/repos/${data.owner}/${data.repo}/files`,
+    { headers: authHeaders(idToken) },
+  )
 }
 
 export function parseCreateRepoInput(input: unknown): CreateRepoInput {

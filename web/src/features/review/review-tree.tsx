@@ -2,6 +2,7 @@ import type { ReviewFile, Visibility } from '@/api/types'
 import { VisibilityBadge } from '@/components/visibility-badge'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
+import { cn } from '@/lib/utils'
 import {
   Check,
   ChevronDown,
@@ -21,23 +22,24 @@ import {
 } from './review-tree-model'
 
 export function ReviewTree({
-  disabled,
+  disabled = false,
   files,
   onSetVisibility,
-  pendingKey,
+  pendingKey = null,
   stagedReview,
 }: {
-  disabled: boolean
+  disabled?: boolean
   files: ReviewFile[]
-  onSetVisibility: (
+  onSetVisibility?: (
     files: ReviewFile[],
     visibility: Visibility,
     pendingKey: string,
   ) => void
-  pendingKey: string | null
+  pendingKey?: string | null
   stagedReview: boolean
 }) {
   const root = useMemo(() => buildReviewTree(files), [files])
+  const editable = Boolean(onSetVisibility)
   const [collapsed, setCollapsed] = useState<Set<string>>(
     () => new Set(folderCollapseKeys(root)),
   )
@@ -56,17 +58,25 @@ export function ReviewTree({
 
   return (
     <div className="divide-y divide-border">
-      <div className="hidden grid-cols-[minmax(0,1fr)_110px_120px_120px] gap-3 px-2 py-2 text-xs font-medium leading-4 text-muted-foreground sm:grid">
+      <div
+        className={cn(
+          'hidden gap-3 px-2 py-2 text-xs font-medium leading-4 text-muted-foreground sm:grid',
+          editable
+            ? 'sm:grid-cols-[minmax(0,1fr)_110px_120px_120px]'
+            : 'sm:grid-cols-[minmax(0,1fr)_110px_120px]',
+        )}
+      >
         <div>Path</div>
         <div>{stagedReview ? 'Change' : 'Scope'}</div>
         <div>Visibility</div>
-        <div className="text-right">Set</div>
+        {editable && <div className="text-right">Set</div>}
       </div>
       {root.children.map((node) => (
         <ReviewTreeNodeRow
           collapsed={collapsed}
           depth={0}
           disabled={disabled}
+          editable={editable}
           key={node.key}
           node={node}
           onSetVisibility={onSetVisibility}
@@ -83,6 +93,7 @@ function ReviewTreeNodeRow({
   collapsed,
   depth,
   disabled,
+  editable,
   node,
   onSetVisibility,
   onToggleFolder,
@@ -92,8 +103,9 @@ function ReviewTreeNodeRow({
   collapsed: Set<string>
   depth: number
   disabled: boolean
+  editable: boolean
   node: ReviewTreeNode
-  onSetVisibility: (
+  onSetVisibility?: (
     files: ReviewFile[],
     visibility: Visibility,
     pendingKey: string,
@@ -106,7 +118,14 @@ function ReviewTreeNodeRow({
     const nextVisibility = node.file.visibility === 'Public' ? 'Private' : 'Public'
     const busy = pendingKey === node.key
     return (
-      <div className="grid gap-2 px-2 py-2.5 text-sm sm:grid-cols-[minmax(0,1fr)_110px_120px_120px] sm:items-center">
+      <div
+        className={cn(
+          'grid gap-2 px-2 py-2.5 text-sm sm:items-center',
+          editable
+            ? 'sm:grid-cols-[minmax(0,1fr)_110px_120px_120px]'
+            : 'sm:grid-cols-[minmax(0,1fr)_110px_120px]',
+        )}
+      >
         <div
           className="flex min-w-0 items-center gap-2"
           style={{ paddingLeft: `${depth * 18}px` }}
@@ -127,23 +146,25 @@ function ReviewTreeNodeRow({
         <div>
           <VisibilityBadge visibility={node.file.visibility} />
         </div>
-        <div className="flex justify-end">
-          <Button
-            aria-label={`Set ${displayPath(node.path)} ${nextVisibility.toLowerCase()}`}
-            disabled={disabled || busy || pendingKey !== null}
-            onClick={() => onSetVisibility([node.file], nextVisibility, node.key)}
-            size="sm"
-            type="button"
-            variant="secondary"
-          >
-            {busy ? (
-              <LoaderCircle className="size-3.5 animate-spin" />
-            ) : (
-              <Check className="size-3.5" />
-            )}
-            <span>{nextVisibility}</span>
-          </Button>
-        </div>
+        {editable && onSetVisibility && (
+          <div className="flex justify-end">
+            <Button
+              aria-label={`Set ${displayPath(node.path)} ${nextVisibility.toLowerCase()}`}
+              disabled={disabled || busy || pendingKey !== null}
+              onClick={() => onSetVisibility([node.file], nextVisibility, node.key)}
+              size="sm"
+              type="button"
+              variant="secondary"
+            >
+              {busy ? (
+                <LoaderCircle className="size-3.5 animate-spin" />
+              ) : (
+                <Check className="size-3.5" />
+              )}
+              <span>{nextVisibility}</span>
+            </Button>
+          </div>
+        )}
       </div>
     )
   }
@@ -155,7 +176,14 @@ function ReviewTreeNodeRow({
 
   return (
     <>
-      <div className="grid gap-2 bg-muted/20 px-2 py-2.5 text-sm sm:grid-cols-[minmax(0,1fr)_110px_120px_120px] sm:items-center">
+      <div
+        className={cn(
+          'grid gap-2 bg-muted/20 px-2 py-2.5 text-sm sm:items-center',
+          editable
+            ? 'sm:grid-cols-[minmax(0,1fr)_110px_120px_120px]'
+            : 'sm:grid-cols-[minmax(0,1fr)_110px_120px]',
+        )}
+      >
         <div
           className="flex min-w-0 items-center gap-2"
           style={{ paddingLeft: `${depth * 18}px` }}
@@ -188,23 +216,25 @@ function ReviewTreeNodeRow({
         <div>
           <VisibilityBadge visibility={visibility} />
         </div>
-        <div className="flex justify-end">
-          <Button
-            aria-label={`Set ${node.path} ${nextVisibility.toLowerCase()}`}
-            disabled={disabled || busy || pendingKey !== null}
-            onClick={() => onSetVisibility(node.files, nextVisibility, node.key)}
-            size="sm"
-            type="button"
-            variant="secondary"
-          >
-            {busy ? (
-              <LoaderCircle className="size-3.5 animate-spin" />
-            ) : (
-              <Check className="size-3.5" />
-            )}
-            <span>{nextVisibility}</span>
-          </Button>
-        </div>
+        {editable && onSetVisibility && (
+          <div className="flex justify-end">
+            <Button
+              aria-label={`Set ${node.path} ${nextVisibility.toLowerCase()}`}
+              disabled={disabled || busy || pendingKey !== null}
+              onClick={() => onSetVisibility(node.files, nextVisibility, node.key)}
+              size="sm"
+              type="button"
+              variant="secondary"
+            >
+              {busy ? (
+                <LoaderCircle className="size-3.5 animate-spin" />
+              ) : (
+                <Check className="size-3.5" />
+              )}
+              <span>{nextVisibility}</span>
+            </Button>
+          </div>
+        )}
       </div>
       {!isCollapsed &&
         node.children.map((child) => (
@@ -212,6 +242,7 @@ function ReviewTreeNodeRow({
             collapsed={collapsed}
             depth={depth + 1}
             disabled={disabled}
+            editable={editable}
             key={child.key}
             node={child}
             onSetVisibility={onSetVisibility}

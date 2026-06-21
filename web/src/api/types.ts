@@ -41,10 +41,28 @@ export type RepoFile = {
   visibility: Visibility
 }
 
+export type RepoCapabilities = {
+  read: boolean
+  write: boolean
+}
+
+export type RepoSession = {
+  identity: AccountSession['identity']
+  repo: {
+    id: string
+    publication_state: RepoPublicationState
+    role: RepoRole | null
+  }
+  principal_id: string
+  capabilities: RepoCapabilities
+}
+
 export type RepoDetail = {
+  capabilities: RepoCapabilities
   files: RepoFile[]
   kind: 'repo'
   repo: RepoSummary
+  review: RepoReview | null
 }
 
 export type RepoParams = {
@@ -160,6 +178,11 @@ export type ReviewFile = RepoFile | StagedFile
 
 export type SetVisibilityInput = RepoParams & {
   kind: ReviewKind
+  paths: string[]
+  visibility: Visibility
+}
+
+export type SetRepoFileVisibilityInput = RepoParams & {
   paths: string[]
   visibility: Visibility
 }

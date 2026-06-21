@@ -25,7 +25,7 @@ pub struct AppState {
 }
 
 impl AppState {
-    pub async fn from_env() -> anyhow::Result<Self> {
+    pub fn from_env() -> anyhow::Result<Self> {
         let repo_root = git_repo_root();
         let data_dir = data_dir(&repo_root);
         ensure_private_dir(&data_dir).map_err(|error| anyhow::anyhow!(error.message))?;

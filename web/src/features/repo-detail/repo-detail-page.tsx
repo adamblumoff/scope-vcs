@@ -1,23 +1,70 @@
-import type { RepoDetail, RepoSummary } from '@/api/types'
+import type {
+  RepoDetail,
+  RepoFile,
+  RepoParams,
+  RepoSummary,
+  ReviewFile,
+  Visibility,
+} from '@/api/types'
 import { AppHeader } from '@/components/app-header'
-import { RepoStatusBadge } from '@/components/repo-status-badge'
 import { VisibilityBadge } from '@/components/visibility-badge'
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
-import {
-  Table,
-  TableBody,
-  TableCell,
-  TableHead,
-  TableHeader,
-  TableRow,
-} from '@/components/ui/table'
 import { Link } from '@tanstack/react-router'
 import { AlertCircle, ArrowLeft, ArrowRight, FileSearch } from 'lucide-react'
+import { useEffect, useState } from 'react'
+import { ReviewTree } from '../review/review-tree'
 
-export function RepoDetailPage({ detail }: { detail: RepoDetail }) {
-  const { files, repo } = detail
+export function RepoDetailPage({
+  detail,
+  params,
+  setFileVisibility,
+}: {
+  detail: RepoDetail
+  params: RepoParams
+  setFileVisibility: (
+    params: RepoParams,
+    files: ReviewFile[],
+    visibility: Visibility,
+  ) => Promise<RepoFile[]>
+}) {
+  const { repo } = detail
+  const [files, setFiles] = useState<RepoFile[]>(detail.files)
+  const [pendingKey, setPendingKey] = useState<string | null>(null)
+  const [error, setError] = useState<string | null>(null)
+  const canEditFiles = detail.capabilities.write && repo.role === 'Owner'
+
+  useEffect(() => {
+    setFiles(detail.files)
+    setPendingKey(null)
+    setError(null)
+  }, [detail.files])
+
+  async function setVisibility(
+    files: ReviewFile[],
+    visibility: Visibility,
+    pendingKey: string,
+  ) {
+    if (files.length === 0) {
+      return
+    }
+
+    setError(null)
+    setPendingKey(pendingKey)
+    try {
+      const updated = await setFileVisibility(params, files, visibility)
+      setFiles(updated)
+    } catch (visibilityError) {
+      setError(
+        visibilityError instanceof Error
+          ? visibilityError.message
+          : 'visibility update failed',
+      )
+    } finally {
+      setPendingKey(null)
+    }
+  }
 
   return (
     <main className="min-h-screen bg-background text-foreground">
@@ -27,10 +74,11 @@ export function RepoDetailPage({ detail }: { detail: RepoDetail }) {
         <div className="flex flex-col gap-4 border-b border-border pb-6 sm:flex-row sm:items-end sm:justify-between">
           <div className="min-w-0">
             <div className="mb-3 flex flex-wrap items-center gap-2">
-              <RepoStatusBadge state={repo.lifecycle_state} />
+              <Badge variant="outline">{repo.lifecycle_state}</Badge>
               {repo.role === 'Owner' && (
                 <VisibilityBadge visibility={repo.default_visibility} />
               )}
+              <Badge variant="outline">{files.length} files</Badge>
               {repo.staged_update_pending && (
                 <Badge variant="outline">Staged update</Badge>
               )}
@@ -41,6 +89,14 @@ export function RepoDetailPage({ detail }: { detail: RepoDetail }) {
           </div>
           <RepoAction repo={repo} />
         </div>
+
+        {error && (
+          <Alert className="mt-6" variant="destructive">
+            <AlertCircle className="size-4" />
+            <AlertTitle>Visibility update failed</AlertTitle>
+            <AlertDescription>{error}</AlertDescription>
+          </Alert>
+        )}
 
         <section className="mt-8 border-y border-border">
           {files.length === 0 ? (
@@ -58,32 +114,17 @@ export function RepoDetailPage({ detail }: { detail: RepoDetail }) {
               </div>
             </div>
           ) : (
-            <Table>
-              <TableHeader>
-                <TableRow>
-                  <TableHead>File</TableHead>
-                  <TableHead className="w-[120px]">Visibility</TableHead>
-                  <TableHead className="w-[90px]">Git</TableHead>
-                </TableRow>
-              </TableHeader>
-              <TableBody>
-                {files.map((file) => (
-                  <TableRow key={file.path}>
-                    <TableCell className="max-w-[460px] truncate font-mono text-xs sm:max-w-[700px]">
-                      {file.path}
-                    </TableCell>
-                    <TableCell>
-                      <VisibilityBadge visibility={file.visibility} />
-                    </TableCell>
-                    <TableCell>
-                      <Badge variant="outline">
-                        {file.tracked ? 'Tracked' : 'Untracked'}
-                      </Badge>
-                    </TableCell>
-                  </TableRow>
-                ))}
-              </TableBody>
-            </Table>
+            <ReviewTree
+              files={files}
+              onSetVisibility={
+                canEditFiles
+                  ? (files, visibility, key) =>
+                      void setVisibility(files, visibility, key)
+                  : undefined
+              }
+              pendingKey={pendingKey}
+              stagedReview={false}
+            />
           )}
         </section>
       </section>

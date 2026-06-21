@@ -1,4 +1,17 @@
-import { loadRepoForRequest, parseRepoParams } from '@/api/repos'
+import {
+  loadRepoForRequest,
+  parseRepoParams,
+  parseSetRepoFileVisibilityInput,
+  setRepoFileVisibilityForRequest,
+} from '@/api/repos'
+import type { RepoParams, ReviewFile, Visibility } from '@/api/types'
+import {
+  applyStagedUpdate,
+  publishRepo,
+  rejectStagedUpdate,
+  setReviewVisibility,
+} from '@/routes/-repo-review-actions'
+import { ReviewPage } from '@/features/review/review-page'
 import {
   RepoDetailError,
   RepoDetailPage,
@@ -9,6 +22,10 @@ import { createServerFn } from '@tanstack/react-start'
 const loadRepo = createServerFn({ method: 'GET' })
   .validator(parseRepoParams)
   .handler(({ data }) => loadRepoForRequest(data))
+
+const setRepoFileVisibility = createServerFn({ method: 'POST' })
+  .validator(parseSetRepoFileVisibilityInput)
+  .handler(({ data }) => setRepoFileVisibilityForRequest(data))
 
 export const Route = createFileRoute('/repos/$owner/$repo')({
   loader: ({ params }) => loadRepo({ data: params }),
@@ -22,5 +39,41 @@ function RepoDetailRoute() {
     return <Outlet />
   }
 
-  return <RepoDetailPage detail={Route.useLoaderData()} />
+  const detail = Route.useLoaderData()
+  const params = Route.useParams()
+
+  if (detail.review) {
+    return (
+      <ReviewPage
+        applyStagedUpdate={(data) => applyStagedUpdate({ data })}
+        initialReview={detail.review}
+        params={params}
+        publishRepo={(data) => publishRepo({ data })}
+        rejectStagedUpdate={(data) => rejectStagedUpdate({ data })}
+        setReviewVisibility={setReviewVisibility}
+      />
+    )
+  }
+
+  return (
+    <RepoDetailPage
+      detail={detail}
+      setFileVisibility={setLiveRepoFileVisibility}
+      params={params}
+    />
+  )
+}
+
+function setLiveRepoFileVisibility(
+  params: RepoParams,
+  files: ReviewFile[],
+  visibility: Visibility,
+) {
+  return setRepoFileVisibility({
+    data: {
+      ...params,
+      paths: files.map((file) => file.path),
+      visibility,
+    },
+  })
 }
