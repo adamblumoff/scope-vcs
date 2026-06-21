@@ -62,6 +62,7 @@ export function ReviewPage({
     try {
       const updated = await setReviewVisibility(params, review, files, visibility)
       setReview(updated)
+      await router.invalidate()
     } catch (visibilityError) {
       setError(
         visibilityError instanceof Error

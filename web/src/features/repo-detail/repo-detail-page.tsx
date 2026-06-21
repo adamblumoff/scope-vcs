@@ -11,7 +11,7 @@ import { VisibilityBadge } from '@/components/visibility-badge'
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
-import { Link } from '@tanstack/react-router'
+import { Link, useRouter } from '@tanstack/react-router'
 import { AlertCircle, ArrowLeft, ArrowRight, FileSearch } from 'lucide-react'
 import { useEffect, useState } from 'react'
 import { ReviewTree } from '../review/review-tree'
@@ -29,6 +29,7 @@ export function RepoDetailPage({
     visibility: Visibility,
   ) => Promise<RepoFile[]>
 }) {
+  const router = useRouter()
   const { repo } = detail
   const [files, setFiles] = useState<RepoFile[]>(detail.files)
   const [pendingKey, setPendingKey] = useState<string | null>(null)
@@ -55,6 +56,7 @@ export function RepoDetailPage({
     try {
       const updated = await setFileVisibility(params, files, visibility)
       setFiles(updated)
+      await router.invalidate()
     } catch (visibilityError) {
       setError(
         visibilityError instanceof Error
