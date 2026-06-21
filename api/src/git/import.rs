@@ -1,5 +1,7 @@
 use crate::domain::policy::{ScopePath, Visibility, VisibilityRule};
-use crate::domain::projection::{AuthorVisibility, FileChange, LogicalCommit, MixedCommitPolicy};
+use crate::domain::projection::{
+    AuthorVisibility, FileChange, FileVisibilityChange, LogicalCommit, MixedCommitPolicy,
+};
 use crate::domain::store::{
     FirstPushTokenStatus, PendingImport, PendingImportFile, RepoPublicationState, SourceBlob,
     StagedFileChange, StagedFileChangeKind, StagedRepoUpdate, StoredRepository,
@@ -149,6 +151,27 @@ pub(crate) fn apply_receive_pack_update(
 ) -> Result<(), ApiError> {
     validate_staged_update_policy(repo, &staged_update)?;
     let owner_ids = repo_owner_ids(repo);
+    let visibility_changes = staged_update
+        .changes
+        .iter()
+        .filter(|change| change.new_content.is_some())
+        .filter_map(|change| {
+            let old_visibility = repo.policy.effective_visibility(&change.path);
+            if old_visibility == Visibility::Public
+                && change.visibility == Visibility::Private
+                && change.old_content.is_some()
+            {
+                Some(FileVisibilityChange {
+                    path: change.path.clone(),
+                    old_visibility,
+                    new_visibility: change.visibility,
+                    current_content: change.new_content.clone(),
+                })
+            } else {
+                None
+            }
+        })
+        .collect::<Vec<_>>();
     for change in &staged_update.changes {
         if change.new_content.is_none() {
             continue;
@@ -175,14 +198,24 @@ pub(crate) fn apply_receive_pack_update(
             .changes
             .into_iter()
             .map(|change| FileChange {
+                visibility: applied_file_visibility(repo, &change),
                 path: change.path,
                 old_content: change.old_content,
                 new_content: change.new_content,
             })
             .collect(),
+        visibility_changes,
     });
     repo.git_snapshot = Some(staged_update.git_snapshot);
     Ok(())
+}
+
+fn applied_file_visibility(repo: &StoredRepository, change: &StagedFileChange) -> Visibility {
+    if change.new_content.is_none() {
+        repo.policy.effective_visibility(&change.path)
+    } else {
+        change.visibility
+    }
 }
 
 pub(crate) fn validate_staged_update_policy(

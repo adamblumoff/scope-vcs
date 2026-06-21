@@ -45,6 +45,7 @@ fn published_receive_pack_push_stages_from_seeded_git_repo() {
         let mut staged = catalog.clone();
         let mut repo = repo_with_readme();
         repo.graph.commits[0].changes.push(FileChange {
+            visibility: Visibility::Public,
             path: ScopePath::parse("/unchanged.md").unwrap(),
             old_content: None,
             new_content: Some(source_blob("already here")),
@@ -365,6 +366,79 @@ async fn staged_visibility_route_batches_multiple_paths() {
             .changes
             .iter()
             .all(|change| change.visibility == Visibility::Private)
+    );
+}
+
+#[test]
+fn applying_staged_public_to_private_update_removes_file_from_public_projection() {
+    let mut repo = repo_with_readme();
+    let mut staged = stage_receive_pack_update(
+        &mut repo,
+        receive_pack_update(vec![("/README.md", Some("private now"))]),
+    )
+    .unwrap()
+    .unwrap();
+    staged.changes[0].visibility = Visibility::Private;
+
+    apply_receive_pack_update(&mut repo, staged).unwrap();
+
+    let projection = project_graph(&repo.policy, &repo.graph, &Principal::public());
+    let last_commit = projection.commits.last().unwrap();
+    assert!(
+        last_commit
+            .changes
+            .iter()
+            .any(|change| { change.path.as_str() == "/README.md" && change.new_content.is_none() })
+    );
+}
+
+#[test]
+fn applying_staged_public_delete_marked_private_removes_file_from_public_projection() {
+    let mut repo = repo_with_readme();
+    let mut staged =
+        stage_receive_pack_update(&mut repo, receive_pack_update(vec![("/README.md", None)]))
+            .unwrap()
+            .unwrap();
+    staged.changes[0].visibility = Visibility::Private;
+
+    apply_receive_pack_update(&mut repo, staged).unwrap();
+
+    let projection = project_graph(&repo.policy, &repo.graph, &Principal::public());
+    let last_commit = projection.commits.last().unwrap();
+    assert!(
+        last_commit
+            .changes
+            .iter()
+            .any(|change| { change.path.as_str() == "/README.md" && change.new_content.is_none() })
+    );
+}
+
+#[test]
+fn applying_staged_private_delete_marked_public_stays_out_of_public_projection() {
+    let mut repo = repo_with_readme();
+    repo.graph.commits[0].changes[0].visibility = Visibility::Private;
+    let owner_ids = repo_owner_ids(&repo);
+    repo.policy
+        .add_rule(VisibilityRule::private(
+            ScopePath::parse("/README.md").unwrap(),
+            owner_ids,
+        ))
+        .unwrap();
+    let mut staged =
+        stage_receive_pack_update(&mut repo, receive_pack_update(vec![("/README.md", None)]))
+            .unwrap()
+            .unwrap();
+    staged.changes[0].visibility = Visibility::Public;
+
+    apply_receive_pack_update(&mut repo, staged).unwrap();
+
+    let projection = project_graph(&repo.policy, &repo.graph, &Principal::public());
+    assert!(
+        projection
+            .commits
+            .iter()
+            .flat_map(|commit| commit.changes.iter())
+            .all(|change| change.path.as_str() != "/README.md")
     );
 }
 

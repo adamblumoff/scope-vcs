@@ -33,16 +33,19 @@ fn projected_git_blobs_do_not_include_hidden_content() {
             mixed_policy: MixedCommitPolicy::SyntheticPublicCommit,
             changes: vec![
                 FileChange {
+                    visibility: Visibility::Public,
                     path: ScopePath::parse("/README.md").unwrap(),
                     old_content: None,
                     new_content: Some(blob(&store, "public")),
                 },
                 FileChange {
+                    visibility: Visibility::Private,
                     path: ScopePath::parse("/internal/secret.env").unwrap(),
                     old_content: None,
                     new_content: Some(blob(&store, "SCOPE_TOKEN=secret")),
                 },
             ],
+            visibility_changes: Vec::new(),
         }],
     };
     let projection = project_graph(&policy, &graph, &Principal::public());
@@ -70,16 +73,19 @@ fn projected_git_blobs_are_final_visible_tree() {
                 mixed_policy: MixedCommitPolicy::SyntheticPublicCommit,
                 changes: vec![
                     FileChange {
+                        visibility: Visibility::Public,
                         path: ScopePath::parse("/README.md").unwrap(),
                         old_content: None,
                         new_content: Some(blob(&store, "old")),
                     },
                     FileChange {
+                        visibility: Visibility::Public,
                         path: ScopePath::parse("/deleted.txt").unwrap(),
                         old_content: None,
                         new_content: Some(blob(&store, "remove me")),
                     },
                 ],
+                visibility_changes: Vec::new(),
             },
             LogicalCommit {
                 id: "rv2".to_string(),
@@ -90,16 +96,19 @@ fn projected_git_blobs_are_final_visible_tree() {
                 mixed_policy: MixedCommitPolicy::SyntheticPublicCommit,
                 changes: vec![
                     FileChange {
+                        visibility: Visibility::Public,
                         path: ScopePath::parse("/README.md").unwrap(),
                         old_content: Some(blob(&store, "old")),
                         new_content: Some(blob(&store, "new")),
                     },
                     FileChange {
+                        visibility: Visibility::Public,
                         path: ScopePath::parse("/deleted.txt").unwrap(),
                         old_content: Some(blob(&store, "remove me")),
                         new_content: None,
                     },
                 ],
+                visibility_changes: Vec::new(),
             },
         ],
     };

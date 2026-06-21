@@ -456,6 +456,7 @@ async fn visibility_update_batches_multiple_paths() {
     {
         let mut repo = repo_with_readme();
         repo.graph.commits[0].changes.push(FileChange {
+            visibility: Visibility::Public,
             path: ScopePath::parse("/src/app.ts").unwrap(),
             old_content: None,
             new_content: Some(source_blob("app")),
