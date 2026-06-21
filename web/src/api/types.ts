@@ -10,25 +10,29 @@ export type TokenStatus = 'Active' | 'Expired' | 'Used'
 export type ReviewKind = 'PendingImport' | 'StagedUpdate'
 export type StagedFileChangeKind = 'Added' | 'Modified' | 'Deleted'
 
+export type SessionIdentity = {
+  pairwise_sub: string
+  email: string | null
+  email_verified: boolean
+}
+
+export type User = {
+  id: string
+  handle: string
+  email: string
+  email_verified: boolean
+}
+
 export type AccountSession = {
-  identity: {
-    pairwise_sub: string
-    email: string | null
-    email_verified: boolean
-  } | null
-  user: {
-    id: string
-    handle: string
-    email: string
-    email_verified: boolean
-  } | null
+  identity: SessionIdentity | null
+  user: User | null
 }
 
 export type RepoSummary = {
   id: string
   owner_handle: string
   name: string
-  lifecycle_state: RepoLifecycleState
+  lifecycle_state: RepoPublicationState
   default_visibility: Visibility
   role: RepoRole | null
   staged_update_pending: boolean
@@ -46,13 +50,15 @@ export type RepoCapabilities = {
   write: boolean
 }
 
+export type SessionRepo = {
+  id: string
+  publication_state: RepoPublicationState
+  role: RepoRole | null
+}
+
 export type RepoSession = {
-  identity: AccountSession['identity']
-  repo: {
-    id: string
-    publication_state: RepoPublicationState
-    role: RepoRole | null
-  }
+  identity: SessionIdentity | null
+  repo: SessionRepo
   principal_id: string
   capabilities: RepoCapabilities
 }
@@ -136,7 +142,7 @@ export type DeleteRepoResponse = {
 }
 
 export type PendingImportPayload = {
-  publication_state: 'PendingPublish'
+  publication_state: RepoPublicationState
   default_visibility: Visibility
   files: RepoFile[]
 }
