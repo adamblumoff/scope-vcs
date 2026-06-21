@@ -19,17 +19,23 @@ use sha2::Sha256;
 use std::{
     collections::BTreeMap,
     sync::{Arc, Mutex, OnceLock},
+    time::Duration,
 };
 use time::OffsetDateTime;
 
 type HmacSha256 = Hmac<Sha256>;
 const ENCRYPTED_OBJECT_MAGIC: &[u8] = b"scope-vcs-object-v1\n";
 const ENCRYPTED_OBJECT_NONCE_BYTES: usize = 12;
+const S3_CONNECT_TIMEOUT: Duration = Duration::from_secs(3);
+const S3_REQUEST_TIMEOUT: Duration = Duration::from_secs(10);
 
 pub trait ObjectStore: Send + Sync {
     fn put(&self, key: &str, bytes: &[u8]) -> Result<(), ApiError>;
     fn get(&self, key: &str) -> Result<Vec<u8>, ApiError>;
     fn delete(&self, key: &str) -> Result<(), ApiError>;
+    fn readiness_check(&self) -> Result<(), ApiError> {
+        Ok(())
+    }
 }
 
 #[derive(Clone)]
@@ -169,6 +175,10 @@ impl ObjectStore for EncryptedObjectStore {
     fn delete(&self, key: &str) -> Result<(), ApiError> {
         self.inner.delete(key)
     }
+
+    fn readiness_check(&self) -> Result<(), ApiError> {
+        self.inner.readiness_check()
+    }
 }
 
 pub(crate) struct S3ObjectStore {
@@ -193,7 +203,12 @@ impl S3ObjectStore {
             .unwrap_or(false);
 
         Ok(Self {
-            client: Some(Client::new()),
+            client: Some(
+                Client::builder()
+                    .connect_timeout(S3_CONNECT_TIMEOUT)
+                    .build()
+                    .map_err(|error| anyhow::anyhow!("building object store client: {error}"))?,
+            ),
             endpoint: endpoint.trim_end_matches('/').to_string(),
             bucket,
             region,
@@ -201,6 +216,20 @@ impl S3ObjectStore {
             secret_access_key,
             force_path_style,
         })
+    }
+
+    fn bucket_url(&self) -> String {
+        if self.force_path_style {
+            format!("{}/{}", self.endpoint, self.bucket)
+        } else {
+            let scheme_end = self
+                .endpoint
+                .find("://")
+                .map(|index| index + 3)
+                .unwrap_or(0);
+            let (scheme, host) = self.endpoint.split_at(scheme_end);
+            format!("{scheme}{}.{}", self.bucket, host.trim_start_matches('/'))
+        }
     }
 
     fn request_url(&self, key: &str) -> String {
@@ -217,6 +246,14 @@ impl S3ObjectStore {
         }
     }
 
+    fn bucket_canonical_uri(&self) -> String {
+        if self.force_path_style {
+            format!("/{}", self.bucket)
+        } else {
+            "/".to_string()
+        }
+    }
+
     fn canonical_uri(&self, key: &str) -> String {
         if self.force_path_style {
             format!("/{}/{}", self.bucket, key)
@@ -228,7 +265,8 @@ impl S3ObjectStore {
     fn signed_headers(
         &self,
         method: &str,
-        key: &str,
+        canonical_uri: &str,
+        host: &str,
         payload: &[u8],
     ) -> Result<Vec<(String, String)>, ApiError> {
         let now = OffsetDateTime::now_utc();
@@ -243,19 +281,11 @@ impl S3ObjectStore {
         );
         let date_stamp = &amz_date[..8];
         let payload_hash = hex::encode(Sha256::digest(payload));
-        let host = self
-            .request_url(key)
-            .split("://")
-            .nth(1)
-            .and_then(|value| value.split('/').next())
-            .ok_or_else(|| ApiError::internal_message("invalid bucket endpoint"))?
-            .to_string();
         let canonical_headers =
             format!("host:{host}\nx-amz-content-sha256:{payload_hash}\nx-amz-date:{amz_date}\n");
         let signed_headers = "host;x-amz-content-sha256;x-amz-date";
         let canonical_request = format!(
-            "{method}\n{}\n\n{canonical_headers}\n{signed_headers}\n{payload_hash}",
-            self.canonical_uri(key)
+            "{method}\n{canonical_uri}\n\n{canonical_headers}\n{signed_headers}\n{payload_hash}"
         );
         let credential_scope = format!("{date_stamp}/{}/s3/aws4_request", self.region);
         let string_to_sign = format!(
@@ -271,14 +301,46 @@ impl S3ObjectStore {
 
         Ok(vec![
             ("authorization".to_string(), authorization),
-            ("host".to_string(), host),
+            ("host".to_string(), host.to_string()),
             ("x-amz-content-sha256".to_string(), payload_hash),
             ("x-amz-date".to_string(), amz_date),
         ])
     }
 
+    fn request_host(url: &str) -> Result<String, ApiError> {
+        url.split("://")
+            .nth(1)
+            .and_then(|value| value.split('/').next())
+            .map(ToString::to_string)
+            .ok_or_else(|| ApiError::internal_message("invalid bucket endpoint"))
+    }
+
+    fn send_bucket(&self, method: &str, payload: Vec<u8>) -> Result<Vec<u8>, ApiError> {
+        let url = self.bucket_url();
+        let host = Self::request_host(&url)?;
+        let canonical_uri = self.bucket_canonical_uri();
+        let client = self
+            .client
+            .as_ref()
+            .ok_or_else(|| ApiError::internal_message("object store client is shut down"))?;
+        let mut request = match method {
+            "HEAD" => client.head(&url).timeout(S3_REQUEST_TIMEOUT),
+            _ => {
+                return Err(ApiError::internal_message(
+                    "unsupported object store method",
+                ));
+            }
+        };
+        for (name, value) in self.signed_headers(method, &canonical_uri, &host, &payload)? {
+            request = request.header(name, value);
+        }
+        send_blocking_request(method, "bucket", request)
+    }
+
     fn send(&self, method: &str, key: &str, payload: Vec<u8>) -> Result<Vec<u8>, ApiError> {
         let url = self.request_url(key);
+        let host = Self::request_host(&url)?;
+        let canonical_uri = self.canonical_uri(key);
         let client = self
             .client
             .as_ref()
@@ -293,7 +355,7 @@ impl S3ObjectStore {
                 ));
             }
         };
-        for (name, value) in self.signed_headers(method, key, &payload)? {
+        for (name, value) in self.signed_headers(method, &canonical_uri, &host, &payload)? {
             request = request.header(name, value);
         }
         send_blocking_request(method, key, request)
@@ -347,6 +409,10 @@ impl ObjectStore for S3ObjectStore {
 
     fn delete(&self, key: &str) -> Result<(), ApiError> {
         self.send("DELETE", key, Vec::new()).map(|_| ())
+    }
+
+    fn readiness_check(&self) -> Result<(), ApiError> {
+        self.send_bucket("HEAD", Vec::new()).map(|_| ())
     }
 }
 
@@ -451,7 +517,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn encrypted_store_persists_ciphertext_and_returns_plaintext() {
+    fn encrypted_store_put_get_delete_round_trips_without_plaintext_storage() {
         let raw = Arc::new(MemoryObjectStore::new());
         let encrypted = EncryptedObjectStore::new(raw.clone(), [7_u8; 32]);
         let key = format!(
@@ -469,5 +535,201 @@ mod tests {
         assert_ne!(stored, b"private source");
         assert!(!String::from_utf8_lossy(&stored).contains("private source"));
         assert_eq!(encrypted.get(&key).unwrap(), b"private source");
+
+        encrypted.delete(&key).unwrap();
+        assert!(raw.get(&key).is_err());
+        assert!(encrypted.get(&key).is_err());
+    }
+
+    #[test]
+    fn s3_store_checks_bucket_with_signed_head_request() {
+        let server = TestS3Server::start(vec![TestS3Response::empty()]);
+        let store = test_s3_store(&server.endpoint);
+
+        store.readiness_check().unwrap();
+
+        let request = server.recv();
+        assert_eq!(request.method, "HEAD");
+        assert_eq!(request.path, "/scope-bucket");
+        assert_eq!(
+            request.headers.get("host").map(String::as_str),
+            Some(server.host.as_str())
+        );
+        assert_signed_s3_headers(&request);
+    }
+
+    #[test]
+    fn s3_store_put_get_delete_use_signed_local_s3_compatible_requests() {
+        let server = TestS3Server::start(vec![
+            TestS3Response::empty(),
+            TestS3Response::body(b"stored payload"),
+            TestS3Response::empty(),
+        ]);
+        let store = test_s3_store(&server.endpoint);
+        let key = "objects/blob-1";
+
+        store.put(key, b"stored payload").unwrap();
+        assert_eq!(store.get(key).unwrap(), b"stored payload");
+        store.delete(key).unwrap();
+
+        let put = server.recv();
+        assert_eq!(put.method, "PUT");
+        assert_eq!(put.path, "/scope-bucket/objects/blob-1");
+        assert_eq!(put.body, b"stored payload");
+        assert_signed_s3_headers(&put);
+
+        let get = server.recv();
+        assert_eq!(get.method, "GET");
+        assert_eq!(get.path, "/scope-bucket/objects/blob-1");
+        assert!(get.body.is_empty());
+        assert_signed_s3_headers(&get);
+
+        let delete = server.recv();
+        assert_eq!(delete.method, "DELETE");
+        assert_eq!(delete.path, "/scope-bucket/objects/blob-1");
+        assert!(delete.body.is_empty());
+        assert_signed_s3_headers(&delete);
+    }
+
+    fn test_s3_store(endpoint: &str) -> S3ObjectStore {
+        S3ObjectStore {
+            client: Some(
+                Client::builder()
+                    .connect_timeout(Duration::from_secs(1))
+                    .timeout(Duration::from_secs(1))
+                    .build()
+                    .unwrap(),
+            ),
+            endpoint: endpoint.to_string(),
+            bucket: "scope-bucket".to_string(),
+            region: "us-test-1".to_string(),
+            access_key_id: "test-access".to_string(),
+            secret_access_key: "test-secret".to_string(),
+            force_path_style: true,
+        }
+    }
+
+    fn assert_signed_s3_headers(request: &CapturedRequest) {
+        let authorization = request
+            .headers
+            .get("authorization")
+            .expect("authorization header");
+        assert!(authorization.starts_with("AWS4-HMAC-SHA256 Credential=test-access/"));
+        assert!(authorization.contains("SignedHeaders=host;x-amz-content-sha256;x-amz-date"));
+        assert!(!authorization.contains("test-secret"));
+        assert!(request.headers.contains_key("x-amz-content-sha256"));
+        assert!(request.headers.contains_key("x-amz-date"));
+    }
+
+    #[derive(Debug)]
+    struct CapturedRequest {
+        method: String,
+        path: String,
+        headers: BTreeMap<String, String>,
+        body: Vec<u8>,
+    }
+
+    struct TestS3Response {
+        body: Vec<u8>,
+    }
+
+    impl TestS3Response {
+        fn empty() -> Self {
+            Self { body: Vec::new() }
+        }
+
+        fn body(body: &[u8]) -> Self {
+            Self {
+                body: body.to_vec(),
+            }
+        }
+    }
+
+    struct TestS3Server {
+        endpoint: String,
+        host: String,
+        requests: std::sync::mpsc::Receiver<CapturedRequest>,
+    }
+
+    impl TestS3Server {
+        fn start(responses: Vec<TestS3Response>) -> Self {
+            let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+            let addr = listener.local_addr().unwrap();
+            let host = format!("127.0.0.1:{}", addr.port());
+            let endpoint = format!("http://{host}");
+            let (sender, requests) = std::sync::mpsc::channel();
+            std::thread::spawn(move || {
+                for response in responses {
+                    let (mut stream, _) = listener.accept().unwrap();
+                    let request = read_request(&mut stream);
+                    sender.send(request).unwrap();
+                    let headers = format!(
+                        "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+                        response.body.len()
+                    );
+                    use std::io::Write as _;
+                    stream.write_all(headers.as_bytes()).unwrap();
+                    stream.write_all(&response.body).unwrap();
+                }
+            });
+            Self {
+                endpoint,
+                host,
+                requests,
+            }
+        }
+
+        fn recv(&self) -> CapturedRequest {
+            self.requests
+                .recv_timeout(Duration::from_secs(2))
+                .expect("mock S3 request")
+        }
+    }
+
+    fn read_request(stream: &mut std::net::TcpStream) -> CapturedRequest {
+        use std::io::Read as _;
+
+        let mut received = Vec::new();
+        let mut buffer = [0_u8; 1024];
+        let header_end = loop {
+            let count = stream.read(&mut buffer).unwrap();
+            assert!(count > 0, "connection closed before headers");
+            received.extend_from_slice(&buffer[..count]);
+            if let Some(index) = received.windows(4).position(|window| window == b"\r\n\r\n") {
+                break index + 4;
+            }
+        };
+
+        let headers_text = String::from_utf8(received[..header_end].to_vec()).unwrap();
+        let mut lines = headers_text.split("\r\n");
+        let request_line = lines.next().unwrap();
+        let mut request_parts = request_line.split_whitespace();
+        let method = request_parts.next().unwrap().to_string();
+        let path = request_parts.next().unwrap().to_string();
+        let headers = lines
+            .filter(|line| !line.is_empty())
+            .map(|line| {
+                let (name, value) = line.split_once(':').unwrap();
+                (name.to_ascii_lowercase(), value.trim().to_string())
+            })
+            .collect::<BTreeMap<_, _>>();
+        let content_length = headers
+            .get("content-length")
+            .and_then(|value| value.parse::<usize>().ok())
+            .unwrap_or(0);
+        let mut body = received[header_end..].to_vec();
+        while body.len() < content_length {
+            let count = stream.read(&mut buffer).unwrap();
+            assert!(count > 0, "connection closed before body");
+            body.extend_from_slice(&buffer[..count]);
+        }
+        body.truncate(content_length);
+
+        CapturedRequest {
+            method,
+            path,
+            headers,
+            body,
+        }
     }
 }

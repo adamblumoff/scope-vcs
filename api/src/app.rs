@@ -8,6 +8,7 @@ use tower_http::{cors::CorsLayer, trace::TraceLayer};
 pub fn router(state: AppState) -> Router {
     Router::new()
         .route("/healthz", get(http::account::healthz))
+        .route("/readyz", get(http::account::readyz))
         .route("/v1/session", get(http::account::get_account_session))
         .route(
             "/v1/repos",

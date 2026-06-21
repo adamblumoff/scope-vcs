@@ -42,6 +42,7 @@ use tower::ServiceExt;
 mod auth;
 mod git_http;
 mod git_receive;
+mod readiness;
 mod repo_lifecycle;
 mod repo_visibility;
 mod review_publish;
