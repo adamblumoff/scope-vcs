@@ -116,6 +116,82 @@ fn published_receive_pack_push_stages_from_seeded_git_repo() {
 }
 
 #[test]
+fn published_receive_pack_rejects_non_fast_forward_push() {
+    let state = test_state_with_repo();
+    let staging_repo = ensure_published_receive_pack_staging_repo(
+        &state,
+        TEST_REPO_OWNER,
+        TEST_REPO_NAME,
+        &test_owner_id(),
+    )
+    .unwrap();
+    let clone = std::env::temp_dir().join(format!(
+        "scope-vcs-published-force-push-clone-{}-{}",
+        std::process::id(),
+        unix_now()
+    ));
+    let _ = fs::remove_dir_all(&clone);
+    run_git(
+        None,
+        &[
+            "clone",
+            staging_repo.to_str().unwrap(),
+            clone.to_str().unwrap(),
+        ],
+        "clone published staging repo",
+    )
+    .unwrap();
+
+    fs::write(clone.join("README.md"), "fast forward readme").unwrap();
+    run_git(Some(&clone), &["add", "-A"], "stage fast-forward change").unwrap();
+    commit_all(&clone, "fast-forward update");
+    run_git(
+        Some(&clone),
+        &["push", "origin", DEFAULT_GIT_BRANCH],
+        "push fast-forward update",
+    )
+    .unwrap();
+    let accepted_head = git_stdout_text(
+        &staging_repo,
+        &["rev-parse", DEFAULT_GIT_BRANCH],
+        "read accepted head",
+    )
+    .unwrap();
+
+    run_git(
+        Some(&clone),
+        &["reset", "--hard", "HEAD~1"],
+        "rewind clone before force push",
+    )
+    .unwrap();
+    fs::write(clone.join("README.md"), "rewritten readme").unwrap();
+    run_git(Some(&clone), &["add", "-A"], "stage rewritten change").unwrap();
+    commit_all(&clone, "rewritten update");
+    let output = run_git_output(
+        Some(&clone),
+        &["push", "--force", "origin", DEFAULT_GIT_BRANCH],
+        "force push rewritten update",
+    )
+    .unwrap();
+
+    assert!(!output.status.success());
+    assert!(
+        String::from_utf8_lossy(&output.stderr)
+            .contains("Scope rejects non-fast-forward pushes in v0")
+    );
+    let current_head = git_stdout_text(
+        &staging_repo,
+        &["rev-parse", DEFAULT_GIT_BRANCH],
+        "read current head",
+    )
+    .unwrap();
+    assert_eq!(current_head, accepted_head);
+
+    let _ = fs::remove_dir_all(&clone);
+    let _ = fs::remove_dir_all(&staging_repo);
+}
+
+#[test]
 fn review_off_receive_pack_applies_immediately() {
     let mut repo = repo_with_readme();
     repo.settings.review_pushes_before_applying = false;
