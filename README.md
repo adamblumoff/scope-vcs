@@ -17,14 +17,15 @@ the canonical source of truth is a server-side source graph.
 ```bash
 (cd api && cargo test)
 (cd web && pnpm install)
+(cd web && pnpm check)
 (cd web && pnpm build)
 (cd web && pnpm test)
-(cd web && pnpm check:line-limit)
 ```
 
-`pnpm check:line-limit` runs from `web` because it uses Node, but it scans the
-whole repo and fails any source file over 1,000 lines while ignoring generated
-files, lockfiles, dependencies, and build output.
+`pnpm check` runs from `web` because it uses Node. It typechecks the web app,
+checks the Rust/TypeScript API response contract, and scans the whole repo for
+source files over 1,000 lines while ignoring generated files, lockfiles,
+dependencies, and build output.
 
 ## Deployment Shape
 
@@ -33,9 +34,8 @@ Railway services:
 - `scope-api` is a Railpack Rust service rooted at `api`. Build and start the
   `api` binary from that directory. It requires `DATABASE_URL` from the
   Railway Postgres service and runs API-owned SeaORM migrations on startup.
-  Metadata write routes return `503` until the follow-up metadata PR moves
-  those writes onto the ORM-backed repositories. Keep the API service port
-  pinned to `8080` if `scope-web` uses the private URL example below.
+  Keep the API service port pinned to `8080` if `scope-web` uses the private
+  URL example below.
 - `scope-web` is a Railpack Node service rooted at `web`. It requires two API
   origin variables:
   - `SCOPE_API_INTERNAL_URL` is the server-to-server API origin used by
