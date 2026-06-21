@@ -43,9 +43,13 @@ fn published_receive_pack_push_stages_from_seeded_git_repo() {
     {
         let mut catalog = lock_catalog(&state).unwrap();
         let mut staged = catalog.clone();
-        staged
-            .repositories
-            .insert(TEST_REPO_ID.to_string(), repo_with_readme());
+        let mut repo = repo_with_readme();
+        repo.graph.commits[0].changes.push(FileChange {
+            path: ScopePath::parse("/unchanged.md").unwrap(),
+            old_content: None,
+            new_content: Some(source_blob("already here")),
+        });
+        staged.repositories.insert(TEST_REPO_ID.to_string(), repo);
         *catalog = staged;
     }
     let staging_repo = ensure_published_receive_pack_staging_repo(
@@ -94,6 +98,7 @@ fn published_receive_pack_push_stages_from_seeded_git_repo() {
     assert_eq!(update.branch, format!("refs/heads/{DEFAULT_GIT_BRANCH}"));
     assert_eq!(update.message, "update from git");
     assert_eq!(update.changes.len(), 2);
+    assert_eq!(update.uploaded_blobs.len(), 2);
     persist_receive_pack_update(&state, TEST_REPO_OWNER, TEST_REPO_NAME, update).unwrap();
     let repo = find_repo(&state, TEST_REPO_OWNER, TEST_REPO_NAME).unwrap();
     let staged_update = repo.staged_update.as_ref().unwrap();
@@ -228,7 +233,7 @@ async fn staged_visibility_route_rejects_public_child_under_private_parent() {
                 .header(AUTHORIZATION, bearer_header())
                 .header(CONTENT_TYPE, "application/json")
                 .body(Body::from(
-                    r#"{"path":"/private/new.txt","visibility":"Public"}"#,
+                    r#"{"paths":["/private/new.txt"],"visibility":"Public"}"#,
                 ))
                 .unwrap(),
         )
@@ -239,6 +244,52 @@ async fn staged_visibility_route_rejects_public_child_under_private_parent() {
     let repo = find_repo(&state, TEST_REPO_OWNER, TEST_REPO_NAME).unwrap();
     let staged_update = repo.staged_update.as_ref().unwrap();
     assert_eq!(staged_update.changes[0].visibility, Visibility::Private);
+}
+
+#[tokio::test]
+async fn staged_visibility_route_batches_multiple_paths() {
+    let state = test_state_with_repo();
+    cache_test_jwks(&state);
+    {
+        let mut repo = repo_with_readme();
+        stage_receive_pack_update(
+            &mut repo,
+            receive_pack_update(vec![
+                ("/README.md", Some("updated readme")),
+                ("/notes.md", Some("new notes")),
+            ]),
+        )
+        .unwrap();
+
+        let mut catalog = lock_catalog(&state).unwrap();
+        catalog.repositories.insert(TEST_REPO_ID.to_string(), repo);
+    }
+
+    let app = router(state.clone());
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("PATCH")
+                .uri("/v1/repos/owner/repo/staged-update/files/visibility")
+                .header(AUTHORIZATION, bearer_header())
+                .header(CONTENT_TYPE, "application/json")
+                .body(Body::from(
+                    r#"{"paths":["/README.md","/notes.md"],"visibility":"Private"}"#,
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let repo = find_repo(&state, TEST_REPO_OWNER, TEST_REPO_NAME).unwrap();
+    let staged_update = repo.staged_update.as_ref().unwrap();
+    assert!(
+        staged_update
+            .changes
+            .iter()
+            .all(|change| change.visibility == Visibility::Private)
+    );
 }
 
 #[test]

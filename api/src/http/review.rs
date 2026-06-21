@@ -124,7 +124,14 @@ pub(crate) async fn update_staged_file_visibility(
     ensure_repo_read(&state, &repo, &principal)?;
     ensure_owner(&state, &repo, &principal)?;
     let repo_id = crate::domain::store::repo_id(&owner, &repo_name);
-    let path = pending_scope_path(&input.path)?;
+    if input.paths.is_empty() {
+        return Err(ApiError::bad_request("at least one file path is required"));
+    }
+    let paths = input
+        .paths
+        .iter()
+        .map(|path| pending_scope_path(path))
+        .collect::<Result<Vec<_>, _>>()?;
 
     let updated = state.metadata.update(move |catalog| {
         let repo = catalog
@@ -135,12 +142,14 @@ pub(crate) async fn update_staged_file_visibility(
             .staged_update
             .clone()
             .ok_or_else(|| ApiError::not_found("no staged update pending"))?;
-        let file = staged_update
-            .changes
-            .iter_mut()
-            .find(|change| change.path == path)
-            .ok_or_else(|| ApiError::not_found(format!("staged file {} not found", path)))?;
-        file.visibility = input.visibility;
+        for path in &paths {
+            let file = staged_update
+                .changes
+                .iter_mut()
+                .find(|change| change.path == *path)
+                .ok_or_else(|| ApiError::not_found(format!("staged file {} not found", path)))?;
+            file.visibility = input.visibility;
+        }
         validate_staged_update_policy(repo, &staged_update)?;
         let updated = staged_update_response(&staged_update);
         repo.staged_update = Some(staged_update);

@@ -17,7 +17,10 @@ use std::{
     io::Write,
     path::{Path as FsPath, PathBuf},
     process::{Command, Stdio},
+    sync::atomic::{AtomicU64, Ordering},
 };
+
+static RAW_GIT_CACHE_ATTEMPT: AtomicU64 = AtomicU64::new(1);
 
 pub(crate) fn receive_pack_staging_repo_path(
     state: &AppState,
@@ -78,6 +81,40 @@ pub(crate) fn raw_git_snapshot_cache_path(
     Ok(state
         .git_cache_root()?
         .join(format!("raw-{}.git", raw_git_snapshot_cache_key(snapshot))))
+}
+
+pub(crate) fn cached_raw_git_snapshot_repo(
+    state: &AppState,
+    snapshot: &SourceBlob,
+) -> Result<PathBuf, ApiError> {
+    let repo_path = raw_git_snapshot_cache_path(state, snapshot)?;
+    if repo_path
+        .join("refs")
+        .join("heads")
+        .join(DEFAULT_GIT_BRANCH)
+        .is_file()
+    {
+        return Ok(repo_path);
+    }
+
+    let cache_root = state.git_cache_root()?;
+    let cache_key = raw_git_snapshot_cache_key(snapshot);
+    let attempt = RAW_GIT_CACHE_ATTEMPT.fetch_add(1, Ordering::Relaxed);
+    let temp_path = cache_root.join(format!(
+        "raw-{cache_key}.{}.{}.tmp",
+        std::process::id(),
+        attempt
+    ));
+    restore_git_snapshot(state, snapshot, &temp_path)?;
+    match fs::rename(&temp_path, &repo_path) {
+        Ok(()) => Ok(repo_path),
+        Err(error) if repo_path.exists() => {
+            let _ = fs::remove_dir_all(&temp_path);
+            tracing::debug!(%error, path = %repo_path.display(), "using concurrently-created raw Git snapshot cache");
+            Ok(repo_path)
+        }
+        Err(error) => Err(ApiError::internal(error)),
+    }
 }
 
 pub(crate) fn delete_raw_git_snapshot_cache(
@@ -187,7 +224,14 @@ pub(crate) fn ensure_published_receive_pack_staging_repo(
         ensure_private_dir(parent)?;
     }
     if let Some(snapshot) = repo.git_snapshot.as_ref() {
-        restore_git_snapshot(state, snapshot, &repo_root)?;
+        let seed_repo = cached_raw_git_snapshot_repo(state, snapshot)?;
+        let seed = seed_repo.to_string_lossy().to_string();
+        let target = repo_root.to_string_lossy().to_string();
+        run_git(
+            None,
+            &["clone", "--bare", "--no-hardlinks", &seed, &target],
+            "cloning receive-pack staging repo",
+        )?;
     } else {
         let projection = project_graph(&repo.policy, &repo.graph, &principal);
         let seed_repo = projection_bare_repo(

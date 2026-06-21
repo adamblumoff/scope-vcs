@@ -21,7 +21,7 @@ use crate::{
     state::{find_repo, live_tree},
 };
 use sha2::{Digest, Sha256};
-use std::{collections::BTreeMap, path::Path as FsPath, process::Command};
+use std::{collections::BTreeSet, path::Path as FsPath, process::Command};
 
 #[derive(Clone, Debug)]
 pub(crate) struct ReceivePackFileChange {
@@ -284,59 +284,14 @@ pub(crate) fn receive_pack_update_from_staging_repo(
     }
     let repo_id = crate::domain::store::repo_id(owner, repo_name);
     let message = pushed_commit_message(staging_repo, &head_oid)?;
-    let pushed_tree = pushed_scope_tree(state, &repo_id, staging_repo, &head_oid)?;
-    let uploaded_file_blobs = pushed_tree.values().cloned().collect::<Vec<_>>();
-    let git_snapshot = match git_snapshot_from_repo(state, &repo_id, staging_repo) {
-        Ok(snapshot) => snapshot,
-        Err(error) => {
-            crate::state::best_effort_cleanup_rollback_source_blobs(state, &uploaded_file_blobs);
-            return Err(error);
-        }
-    };
     let live_tree = live_tree(&repo);
+    let pushed_entries = git_tree_entries(staging_repo, &head_oid)?;
     let mut changes = Vec::new();
+    let mut uploaded_file_blobs = Vec::new();
+    let mut pushed_paths = BTreeSet::new();
 
-    for (path, new_content) in &pushed_tree {
-        if live_tree.get(path) != Some(new_content) {
-            changes.push(ReceivePackFileChange {
-                path: path.clone(),
-                content: Some(new_content.clone()),
-            });
-        }
-    }
-    for path in live_tree.keys() {
-        if !pushed_tree.contains_key(path) {
-            changes.push(ReceivePackFileChange {
-                path: path.clone(),
-                content: None,
-            });
-        }
-    }
-
-    Ok(ReceivePackUpdate {
-        branch,
-        author_id: author_id.to_string(),
-        message,
-        git_snapshot,
-        uploaded_blobs: pushed_tree.values().cloned().collect(),
-        changes,
-    })
-}
-
-pub(crate) fn pushed_scope_tree(
-    state: &AppState,
-    repo_id: &str,
-    staging_repo: &FsPath,
-    head_oid: &str,
-) -> Result<BTreeMap<ScopePath, SourceBlob>, ApiError> {
-    let mut tree = BTreeMap::new();
-    let files = git_tree_files(state, repo_id, staging_repo, head_oid)?;
-    let uploaded_file_blobs = files
-        .iter()
-        .map(|file| file.blob.clone())
-        .collect::<Vec<_>>();
-    for file in files {
-        let path = match pending_scope_path(&file.path) {
+    for entry in pushed_entries {
+        let path = match pending_scope_path(&entry.path) {
             Ok(path) => path,
             Err(error) => {
                 crate::state::best_effort_cleanup_rollback_source_blobs(
@@ -346,9 +301,72 @@ pub(crate) fn pushed_scope_tree(
                 return Err(error);
             }
         };
-        tree.insert(path, file.blob);
+        pushed_paths.insert(path.clone());
+        let live_content = live_tree.get(&path);
+        if live_content.is_some_and(|blob| {
+            blob.git_oid == entry.oid && blob.size_bytes == entry.size_bytes as u64
+        }) {
+            continue;
+        }
+
+        let content = match read_git_tree_blob(staging_repo, &entry.oid, &entry.path) {
+            Ok(content) => content,
+            Err(error) => {
+                crate::state::best_effort_cleanup_rollback_source_blobs(
+                    state,
+                    &uploaded_file_blobs,
+                );
+                return Err(error);
+            }
+        };
+        let new_content =
+            match put_repo_object(state.object_store.as_ref(), &repo_id, "blobs", &content) {
+                Ok(blob) => blob,
+                Err(error) => {
+                    crate::state::best_effort_cleanup_rollback_source_blobs(
+                        state,
+                        &uploaded_file_blobs,
+                    );
+                    return Err(error);
+                }
+            };
+        uploaded_file_blobs.push(new_content.clone());
+        if !source_content_matches(live_content, Some(&new_content)) {
+            changes.push(ReceivePackFileChange {
+                path,
+                content: Some(new_content),
+            });
+        }
     }
-    Ok(tree)
+    for path in live_tree.keys() {
+        if !pushed_paths.contains(path) {
+            changes.push(ReceivePackFileChange {
+                path: path.clone(),
+                content: None,
+            });
+        }
+    }
+    if changes.is_empty() {
+        return Err(ApiError::bad_request(
+            "receive-pack update did not change the live tree",
+        ));
+    }
+    let git_snapshot = match git_snapshot_from_repo(state, &repo_id, staging_repo) {
+        Ok(snapshot) => snapshot,
+        Err(error) => {
+            crate::state::best_effort_cleanup_rollback_source_blobs(state, &uploaded_file_blobs);
+            return Err(error);
+        }
+    };
+
+    Ok(ReceivePackUpdate {
+        branch,
+        author_id: author_id.to_string(),
+        message,
+        git_snapshot,
+        uploaded_blobs: uploaded_file_blobs,
+        changes,
+    })
 }
 
 pub(crate) fn pushed_commit_message(
@@ -413,9 +431,43 @@ pub(crate) fn git_tree_files(
     staging_repo: &FsPath,
     head_oid: &str,
 ) -> Result<Vec<PendingImportFile>, ApiError> {
+    let pending_files = git_tree_entries(staging_repo, head_oid)?;
+    let mut files = Vec::with_capacity(pending_files.len());
+    let mut uploaded_blobs = Vec::with_capacity(pending_files.len());
+    for pending in pending_files {
+        let content = match read_git_tree_blob(staging_repo, &pending.oid, &pending.path) {
+            Ok(content) => content,
+            Err(error) => {
+                crate::state::best_effort_cleanup_rollback_source_blobs(state, &uploaded_blobs);
+                return Err(error);
+            }
+        };
+        let blob = match put_repo_object(state.object_store.as_ref(), repo_id, "blobs", &content) {
+            Ok(blob) => blob,
+            Err(error) => {
+                crate::state::best_effort_cleanup_rollback_source_blobs(state, &uploaded_blobs);
+                return Err(error);
+            }
+        };
+        uploaded_blobs.push(blob.clone());
+        files.push(PendingImportFile {
+            path: pending.path,
+            mode: pending.mode,
+            oid: pending.oid,
+            blob,
+        });
+    }
+    files.sort_by(|left, right| left.path.cmp(&right.path));
+    Ok(files)
+}
+
+fn git_tree_entries(
+    staging_repo: &FsPath,
+    head_oid: &str,
+) -> Result<Vec<PendingGitTreeFile>, ApiError> {
     let output = run_git_output(
         Some(staging_repo),
-        &["ls-tree", "-rz", "-r", head_oid],
+        &["ls-tree", "-rz", "-r", "-l", head_oid],
         "reading pushed tree",
     )?;
     let mut pending_files = Vec::new();
@@ -448,20 +500,18 @@ pub(crate) fn git_tree_files(
                 "unsupported Git tree entry {path}: {kind}"
             )));
         }
+        let size = fields
+            .next()
+            .ok_or_else(|| ApiError::internal_message("tree entry is missing size"))?;
         validate_pushed_file_path(path)?;
         if mode != "100644" {
             return Err(ApiError::bad_request(format!(
                 "unsupported Git file mode {path}: {mode}"
             )));
         }
-        let blob_size = git_stdout_text(
-            staging_repo,
-            &["cat-file", "-s", oid],
-            "reading pushed blob size",
-        )?
-        .trim()
-        .parse::<usize>()
-        .map_err(|_| ApiError::internal_message("invalid Git blob size"))?;
+        let blob_size = size
+            .parse::<usize>()
+            .map_err(|_| ApiError::internal_message("invalid Git blob size"))?;
         if blob_size > MAX_PENDING_IMPORT_BLOB_BYTES {
             return Err(ApiError::bad_request(format!(
                 "blob {path} is larger than {MAX_PENDING_IMPORT_BLOB_BYTES} bytes"
@@ -475,47 +525,27 @@ pub(crate) fn git_tree_files(
                 "pending import exceeds {MAX_PENDING_IMPORT_TOTAL_BYTES} bytes"
             )));
         }
-        let content = run_git_output(
-            Some(staging_repo),
-            &["cat-file", "blob", oid],
-            "reading pushed blob",
-        )?
-        .stdout;
-        std::str::from_utf8(&content)
-            .map_err(|_| ApiError::bad_request(format!("blob {path} must be valid UTF-8 text")))?;
         pending_files.push(PendingGitTreeFile {
             path: path.to_string(),
             mode: mode.to_string(),
             oid: oid.to_string(),
-            content,
+            size_bytes: blob_size,
         });
     }
 
-    let mut files = Vec::with_capacity(pending_files.len());
-    let mut uploaded_blobs = Vec::with_capacity(pending_files.len());
-    for pending in pending_files {
-        let blob = match put_repo_object(
-            state.object_store.as_ref(),
-            repo_id,
-            "blobs",
-            &pending.content,
-        ) {
-            Ok(blob) => blob,
-            Err(error) => {
-                crate::state::best_effort_cleanup_rollback_source_blobs(state, &uploaded_blobs);
-                return Err(error);
-            }
-        };
-        uploaded_blobs.push(blob.clone());
-        files.push(PendingImportFile {
-            path: pending.path,
-            mode: pending.mode,
-            oid: pending.oid,
-            blob,
-        });
-    }
-    files.sort_by(|left, right| left.path.cmp(&right.path));
-    Ok(files)
+    Ok(pending_files)
+}
+
+fn read_git_tree_blob(staging_repo: &FsPath, oid: &str, path: &str) -> Result<Vec<u8>, ApiError> {
+    let content = run_git_output(
+        Some(staging_repo),
+        &["cat-file", "blob", oid],
+        "reading pushed blob",
+    )?
+    .stdout;
+    std::str::from_utf8(&content)
+        .map_err(|_| ApiError::bad_request(format!("blob {path} must be valid UTF-8 text")))?;
+    Ok(content)
 }
 
 pub(crate) fn git_snapshot_from_repo(
@@ -543,7 +573,7 @@ struct PendingGitTreeFile {
     path: String,
     mode: String,
     oid: String,
-    content: Vec<u8>,
+    size_bytes: usize,
 }
 
 pub(crate) fn validate_pushed_file_path(path: &str) -> Result<(), ApiError> {

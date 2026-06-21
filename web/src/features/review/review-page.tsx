@@ -45,6 +45,7 @@ export function ReviewPage({
   const [rejecting, setRejecting] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const stagedReview = review.kind === 'StagedUpdate'
+  const visibilityPending = pendingKey !== null
 
   async function setVisibility(
     files: ReviewFile[],
@@ -73,6 +74,9 @@ export function ReviewPage({
   }
 
   async function completeReview() {
+    if (visibilityPending) {
+      return
+    }
     setPublishing(true)
     setError(null)
     try {
@@ -94,6 +98,9 @@ export function ReviewPage({
   }
 
   async function rejectUpdate() {
+    if (visibilityPending) {
+      return
+    }
     setRejecting(true)
     setError(null)
     try {
@@ -131,7 +138,12 @@ export function ReviewPage({
           <div className="flex items-center gap-2">
             {stagedReview && (
               <Button
-                disabled={publishing || rejecting || review.files.length === 0}
+                disabled={
+                  publishing ||
+                  rejecting ||
+                  visibilityPending ||
+                  review.files.length === 0
+                }
                 onClick={() => void rejectUpdate()}
                 size="sm"
                 type="button"
@@ -147,7 +159,10 @@ export function ReviewPage({
             )}
             <Button
               disabled={
-                publishing || rejecting || (stagedReview && review.files.length === 0)
+                publishing ||
+                rejecting ||
+                visibilityPending ||
+                (stagedReview && review.files.length === 0)
               }
               onClick={() => void completeReview()}
               size="sm"
