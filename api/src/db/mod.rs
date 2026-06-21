@@ -5,7 +5,7 @@ use crate::domain::store::{AppCatalog, RepoMembership};
 use crate::error::ApiError;
 use sea_orm::{
     ActiveModelTrait, ColumnTrait, ConnectionTrait, Database, DatabaseConnection, EntityTrait,
-    IntoActiveModel, QueryFilter, QueryOrder, QuerySelect, Set, TransactionTrait,
+    IntoActiveModel, QueryFilter, QueryOrder, QuerySelect, Set, TransactionTrait, TryInsertResult,
     sea_query::{LockType, OnConflict},
 };
 use serde::{Serialize, de::DeserializeOwned};
@@ -306,7 +306,7 @@ where
 }
 
 async fn ensure_metadata_lock_row(db: &DatabaseConnection) -> Result<(), sea_orm::DbErr> {
-    entities::metadata_lock::Entity::insert(entities::metadata_lock::ActiveModel {
+    match entities::metadata_lock::Entity::insert(entities::metadata_lock::ActiveModel {
         key: Set(METADATA_LOCK_KEY.to_string()),
         pending_source_blob_deletions: Set(serde_json::Value::Array(Vec::new())),
     })
@@ -315,8 +315,12 @@ async fn ensure_metadata_lock_row(db: &DatabaseConnection) -> Result<(), sea_orm
             .do_nothing()
             .to_owned(),
     )
+    .do_nothing()
     .exec(db)
-    .await?;
+    .await?
+    {
+        TryInsertResult::Empty | TryInsertResult::Conflicted | TryInsertResult::Inserted(_) => {}
+    }
     Ok(())
 }
 
