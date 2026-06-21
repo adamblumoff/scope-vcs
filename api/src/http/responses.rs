@@ -22,6 +22,19 @@ pub(crate) struct HealthResponse {
 }
 
 #[derive(Debug, Serialize)]
+pub(crate) struct ReadinessResponse {
+    pub(crate) status: &'static str,
+    pub(crate) service: &'static str,
+    pub(crate) checks: Vec<ReadinessCheckResponse>,
+}
+
+#[derive(Debug, Serialize)]
+pub(crate) struct ReadinessCheckResponse {
+    pub(crate) name: &'static str,
+    pub(crate) status: &'static str,
+}
+
+#[derive(Debug, Serialize)]
 pub(crate) struct AccountSessionResponse {
     pub(crate) identity: Option<SessionIdentity>,
     pub(crate) user: Option<UserResponse>,

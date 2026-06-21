@@ -5,7 +5,8 @@ use crate::domain::store::{AppCatalog, RepoMembership};
 use crate::error::ApiError;
 use sea_orm::{
     ActiveModelTrait, ColumnTrait, ConnectionTrait, Database, DatabaseConnection, EntityTrait,
-    IntoActiveModel, QueryFilter, QueryOrder, QuerySelect, Set, TransactionTrait, TryInsertResult,
+    IntoActiveModel, QueryFilter, QueryOrder, QuerySelect, Set, Statement, TransactionTrait,
+    TryInsertResult,
     sea_query::{LockType, OnConflict},
 };
 use serde::{Serialize, de::DeserializeOwned};
@@ -111,6 +112,32 @@ impl MetadataStore {
                     .lock()
                     .map_err(|_| ApiError::internal_message("catalog lock is poisoned"))?;
                 op(&mut catalog)
+            }
+        }
+    }
+
+    pub(crate) fn readiness_check(&self) -> Result<(), ApiError> {
+        match self.inner.as_ref() {
+            MetadataStoreInner::Postgres { db, runtime } => {
+                let db = Arc::clone(db);
+                run_api_db_on(runtime, async move {
+                    db.query_one(Statement::from_string(
+                        db.get_database_backend(),
+                        "SELECT 1".to_string(),
+                    ))
+                    .await
+                    .map_err(ApiError::internal)?;
+                    Ok(())
+                })
+            }
+            #[cfg(test)]
+            MetadataStoreInner::Memory(catalog) => {
+                drop(
+                    catalog
+                        .lock()
+                        .map_err(|_| ApiError::internal_message("catalog lock is poisoned"))?,
+                );
+                Ok(())
             }
         }
     }

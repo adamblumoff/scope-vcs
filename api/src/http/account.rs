@@ -3,8 +3,8 @@ use crate::{
     auth::shoo::{ensure_user_for_identity, http_identity, principal_for_repo},
     error::ApiError,
     http::responses::{
-        AccountSessionResponse, HealthResponse, SessionCapabilities, SessionIdentity, SessionRepo,
-        SessionResponse, UserResponse,
+        AccountSessionResponse, HealthResponse, ReadinessCheckResponse, ReadinessResponse,
+        SessionCapabilities, SessionIdentity, SessionRepo, SessionResponse, UserResponse,
     },
     state::AppState,
     state::{can_read_path, can_write_path, ensure_repo_read, find_repo, role_for_principal},
@@ -12,7 +12,7 @@ use crate::{
 use axum::{
     Json,
     extract::{Path, State},
-    http::HeaderMap,
+    http::{HeaderMap, StatusCode},
 };
 
 pub(crate) async fn healthz() -> Json<HealthResponse> {
@@ -20,6 +20,38 @@ pub(crate) async fn healthz() -> Json<HealthResponse> {
         status: "ok",
         service: "api",
     })
+}
+
+pub(crate) async fn readyz(State(state): State<AppState>) -> (StatusCode, Json<ReadinessResponse>) {
+    let database_ready = state.metadata.readiness_check().is_ok();
+    let object_store_ready = state.object_store.readiness_check().is_ok();
+    let ready = database_ready && object_store_ready;
+
+    (
+        if ready {
+            StatusCode::OK
+        } else {
+            StatusCode::SERVICE_UNAVAILABLE
+        },
+        Json(ReadinessResponse {
+            status: if ready { "ok" } else { "unavailable" },
+            service: "api",
+            checks: vec![
+                ReadinessCheckResponse {
+                    name: "database",
+                    status: if database_ready { "ok" } else { "unavailable" },
+                },
+                ReadinessCheckResponse {
+                    name: "object_store",
+                    status: if object_store_ready {
+                        "ok"
+                    } else {
+                        "unavailable"
+                    },
+                },
+            ],
+        }),
+    )
 }
 
 pub(crate) async fn get_account_session(
