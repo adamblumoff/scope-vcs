@@ -1,4 +1,5 @@
-use super::projection::Projection;
+use super::{projection::Projection, store::SourceBlob};
+use crate::{error::ApiError, object_store::ObjectStore};
 use serde::{Deserialize, Serialize};
 use sha1::{Digest, Sha1};
 use std::collections::BTreeMap;
@@ -18,14 +19,20 @@ pub struct VirtualGitProjection {
 }
 
 pub fn git_blob_oid(content: &str) -> String {
-    let bytes = content.as_bytes();
+    git_blob_oid_bytes(content.as_bytes())
+}
+
+pub fn git_blob_oid_bytes(bytes: &[u8]) -> String {
     let mut hasher = Sha1::new();
     hasher.update(format!("blob {}\0", bytes.len()).as_bytes());
     hasher.update(bytes);
     hex::encode(hasher.finalize())
 }
 
-pub fn build_virtual_git_projection(projection: &Projection) -> VirtualGitProjection {
+pub fn build_virtual_git_projection(
+    store: &dyn ObjectStore,
+    projection: &Projection,
+) -> Result<VirtualGitProjection, ApiError> {
     let mut tree = BTreeMap::new();
     for change in projection
         .commits
@@ -34,13 +41,14 @@ pub fn build_virtual_git_projection(projection: &Projection) -> VirtualGitProjec
     {
         let path = change.path.as_str().to_string();
         match &change.new_content {
-            Some(content) => {
+            Some(blob) => {
+                let content = projection_blob_text(store, blob)?;
                 tree.insert(
                     path.clone(),
                     VirtualGitBlob {
                         path,
-                        oid: git_blob_oid(content),
-                        content: content.clone(),
+                        oid: blob.git_oid.clone(),
+                        content,
                     },
                 );
             }
@@ -68,9 +76,16 @@ pub fn build_virtual_git_projection(projection: &Projection) -> VirtualGitProjec
         hex::encode(hasher.finalize())
     });
 
-    VirtualGitProjection {
+    Ok(VirtualGitProjection {
         principal_id: projection.principal_id.clone(),
         blobs,
         head_oid,
-    }
+    })
+}
+
+pub(crate) fn projection_blob_text(
+    store: &dyn ObjectStore,
+    blob: &SourceBlob,
+) -> Result<String, ApiError> {
+    crate::object_store::source_blob_text(store, blob)
 }

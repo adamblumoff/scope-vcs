@@ -1,3 +1,4 @@
+use crate::domain::git_projection::projection_blob_text;
 use crate::domain::policy::Principal;
 use crate::domain::projection::{Projection, project_graph};
 use crate::domain::store::{RepoPublicationState, RepoRole};
@@ -8,7 +9,7 @@ use crate::{
     git::{
         authorize_git_push_token_for_repo, find_repo_after_git_scope_token, git_credential_error,
         git_push_token_from_headers,
-        storage::{owner_git_repo_path, staged_git_repo_path},
+        storage::{raw_git_snapshot_cache_key, raw_git_snapshot_cache_path, restore_git_snapshot},
     },
     state::AppState,
     state::{ensure_repo_read, find_repo, role_for_principal},
@@ -83,12 +84,11 @@ pub(crate) async fn git_upload_pack_repo_for_request(
     owner: &str,
     repo_name: &str,
 ) -> Result<PathBuf, ApiError> {
-    if headers.contains_key(AUTHORIZATION) {
-        if let Some(repo_path) =
-            owner_raw_git_repo_for_request(state, headers, owner, repo_name).await?
-        {
-            return Ok(repo_path);
-        }
+    if headers.contains_key(AUTHORIZATION)
+        && let Some(repo_path) =
+            owner_snapshot_repo_for_request(state, headers, owner, repo_name).await?
+    {
+        return Ok(repo_path);
     }
 
     let projection = match git_projection_for_request(state, headers, owner, repo_name).await {
@@ -100,62 +100,84 @@ pub(crate) async fn git_upload_pack_repo_for_request(
         }
         Err(error) => return Err(error),
     };
-    state
-        .git_cache_root()
-        .and_then(|cache_root| projection_bare_repo(&cache_root, &projection))
+    state.git_cache_root().and_then(|cache_root| {
+        projection_bare_repo(state.object_store.as_ref(), &cache_root, &projection)
+    })
 }
 
 pub(crate) fn git_upload_pack_auth_required() -> ApiError {
     ApiError::unauthorized("Git credentials required")
 }
 
-pub(crate) async fn owner_raw_git_repo_for_request(
+pub(crate) async fn owner_snapshot_repo_for_request(
     state: &AppState,
     headers: &HeaderMap,
     owner: &str,
     repo_name: &str,
 ) -> Result<Option<PathBuf>, ApiError> {
-    if let Some(secret) = git_push_token_from_headers(headers)? {
+    let (repo, principal) = if let Some(secret) = git_push_token_from_headers(headers)? {
         let repo = find_repo_after_git_scope_token(state, owner, repo_name)?;
         let author_id =
             authorize_git_push_token_for_repo(&repo, &secret).map_err(git_credential_error)?;
-        let principal = Principal {
-            id: author_id,
-            kind: crate::domain::policy::PrincipalKind::User,
-        };
-        if role_for_principal(state, &repo, &principal)? != Some(RepoRole::Owner) {
-            return Err(ApiError::not_found(format!(
-                "repo {owner}/{repo_name} not found"
-            )));
+        (
+            repo,
+            Principal {
+                id: author_id,
+                kind: crate::domain::policy::PrincipalKind::User,
+            },
+        )
+    } else {
+        let repo = find_repo(state, owner, repo_name)?;
+        let identity = http_identity(state, headers).await?;
+        let principal = principal_for_repo(state, &repo, identity.as_ref())?;
+        (repo, principal)
+    };
+    if role_for_principal(state, &repo, &principal)? != Some(RepoRole::Owner) {
+        return Ok(None);
+    }
+    if repo.record.publication_state != RepoPublicationState::Published {
+        return Err(ApiError::forbidden(UNPUBLISHED_GIT_ERROR));
+    }
+    let Some(snapshot) = repo
+        .staged_update
+        .as_ref()
+        .map(|update| &update.git_snapshot)
+        .or(repo.git_snapshot.as_ref())
+    else {
+        return Ok(None);
+    };
+    let cache_root = state.git_cache_root()?;
+    let cache_key = raw_git_snapshot_cache_key(snapshot);
+    let repo_path = raw_git_snapshot_cache_path(state, snapshot)?;
+    if repo_path
+        .join("refs")
+        .join("heads")
+        .join(DEFAULT_GIT_BRANCH)
+        .is_file()
+    {
+        return Ok(Some(repo_path));
+    }
+
+    let attempt = GIT_CACHE_ATTEMPT.fetch_add(1, Ordering::Relaxed);
+    let temp_path = cache_root.join(format!(
+        "raw-{cache_key}.{}.{}.tmp",
+        std::process::id(),
+        attempt
+    ));
+    restore_git_snapshot(state, snapshot, &temp_path)?;
+    match fs::rename(&temp_path, &repo_path) {
+        Ok(()) => Ok(Some(repo_path)),
+        Err(error) if repo_path.exists() => {
+            let _ = fs::remove_dir_all(&temp_path);
+            tracing::debug!(%error, path = %repo_path.display(), "using concurrently-created raw Git snapshot cache");
+            Ok(Some(repo_path))
         }
-        return Ok(owner_read_git_repo_path(state, owner, repo_name));
+        Err(error) => Err(ApiError::internal(error)),
     }
-
-    let repo = find_repo(state, owner, repo_name)?;
-    let identity = http_identity(state, headers).await?;
-    let principal = principal_for_repo(state, &repo, identity.as_ref())?;
-    if role_for_principal(state, &repo, &principal)? == Some(RepoRole::Owner) {
-        return Ok(owner_read_git_repo_path(state, owner, repo_name));
-    }
-
-    Ok(None)
-}
-
-pub(crate) fn owner_read_git_repo_path(
-    state: &AppState,
-    owner: &str,
-    repo_name: &str,
-) -> Option<PathBuf> {
-    let staged_repo = staged_git_repo_path(state, owner, repo_name);
-    if staged_repo.join("HEAD").exists() {
-        return Some(staged_repo);
-    }
-
-    let owner_repo = owner_git_repo_path(state, owner, repo_name);
-    owner_repo.join("HEAD").exists().then_some(owner_repo)
 }
 
 pub(crate) fn projection_bare_repo(
+    store: &dyn crate::object_store::ObjectStore,
     cache_root: &FsPath,
     projection: &Projection,
 ) -> Result<PathBuf, ApiError> {
@@ -222,8 +244,8 @@ pub(crate) fn projection_bare_repo(
         for change in &projected.changes {
             let path = change.path.as_str().to_string();
             match &change.new_content {
-                Some(content) => {
-                    visible_tree.insert(path, content.clone());
+                Some(blob) => {
+                    visible_tree.insert(path, projection_blob_text(store, blob)?);
                 }
                 None => {
                     visible_tree.remove(&path);
@@ -281,8 +303,10 @@ pub(crate) fn projection_cache_key(projection: &Projection) -> String {
         for change in &commit.changes {
             hash_field(&mut hasher, b"path", change.path.as_str().as_bytes());
             match &change.new_content {
-                Some(content) => {
-                    hash_field(&mut hasher, b"write", content.as_bytes());
+                Some(blob) => {
+                    hash_field(&mut hasher, b"sha256", blob.sha256.as_bytes());
+                    hash_field(&mut hasher, b"git_oid", blob.git_oid.as_bytes());
+                    hash_field(&mut hasher, b"size", blob.size_bytes.to_string().as_bytes());
                 }
                 None => hash_field(&mut hasher, b"delete", b""),
             }

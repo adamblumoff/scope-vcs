@@ -283,18 +283,28 @@ pub(crate) fn handle_git_receive_pack(
     if method == "POST" && cgi.status.is_success() {
         match access {
             ReceivePackAccess::FirstPush { credential } => {
-                let import = match pending_import_from_staging_repo(&staging_repo) {
+                let import = match pending_import_from_staging_repo(
+                    state,
+                    owner,
+                    repo_name,
+                    &staging_repo,
+                ) {
                     Ok(import) => import,
                     Err(error) => {
                         let _ = fs::remove_dir_all(&staging_repo);
                         return Err(error);
                     }
                 };
-                if let Err(error) = replace_git_repo_and_then(
-                    &staging_repo,
-                    &owner_git_repo_path(state, owner, repo_name),
-                    || persist_pending_import(state, owner, repo_name, &credential, import),
-                ) {
+                let uploaded_blobs = import
+                    .files
+                    .iter()
+                    .map(|file| file.blob.clone())
+                    .chain(std::iter::once(import.git_snapshot.clone()))
+                    .collect::<Vec<_>>();
+                if let Err(error) =
+                    persist_pending_import(state, owner, repo_name, &credential, import)
+                {
+                    crate::state::best_effort_cleanup_rollback_source_blobs(state, &uploaded_blobs);
                     let _ = fs::remove_dir_all(&staging_repo);
                     return Err(error);
                 }
@@ -313,13 +323,16 @@ pub(crate) fn handle_git_receive_pack(
                         return Err(error);
                     }
                 };
-                if let Err(error) = persist_receive_pack_update_and_promote(
-                    state,
-                    owner,
-                    repo_name,
-                    &staging_repo,
-                    update,
-                ) {
+                let uploaded_blobs = update
+                    .uploaded_blobs
+                    .iter()
+                    .cloned()
+                    .chain(std::iter::once(update.git_snapshot.clone()))
+                    .collect::<Vec<_>>();
+                if let Err(error) =
+                    persist_receive_pack_update_and_promote(state, owner, repo_name, update)
+                {
+                    crate::state::best_effort_cleanup_rollback_source_blobs(state, &uploaded_blobs);
                     let _ = fs::remove_dir_all(&staging_repo);
                     return Err(error);
                 }

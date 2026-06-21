@@ -2,17 +2,12 @@ use crate::domain::store::RepoRole;
 use crate::{
     auth::shoo::{http_identity, identity_user_id, principal_for_repo, principal_for_user_id},
     error::ApiError,
-    git::{
-        import::{apply_receive_pack_update, validate_staged_update_policy},
-        storage::{
-            owner_git_repo_path, remove_git_repo_and_then, replace_git_repo_and_then,
-            staged_git_repo_path,
-        },
-    },
+    git::import::{apply_receive_pack_update, validate_staged_update_policy},
     http::responses::*,
     state::AppState,
     state::{
-        ensure_owner, ensure_pending_publish, ensure_repo_read, find_repo, promote_pending_import,
+        best_effort_drain_pending_source_blob_deletions, ensure_owner, ensure_pending_publish,
+        ensure_repo_read, find_repo, promote_pending_import, queue_source_blob_deletions,
     },
 };
 use axum::{
@@ -157,16 +152,7 @@ pub(crate) async fn apply_staged_update(
     let principal = principal_for_repo(&state, &repo, identity.as_ref())?;
     ensure_repo_read(&state, &repo, &principal)?;
     ensure_owner(&state, &repo, &principal)?;
-    let staged_repo = staged_git_repo_path(&state, &owner, &repo_name);
-    let applied = if staged_repo.exists() {
-        replace_git_repo_and_then(
-            &staged_repo,
-            &owner_git_repo_path(&state, &owner, &repo_name),
-            || apply_staged_update_in_catalog(&state, &owner, &repo_name),
-        )?
-    } else {
-        apply_staged_update_in_catalog(&state, &owner, &repo_name)?
-    };
+    let applied = apply_staged_update_in_catalog(&state, &owner, &repo_name)?;
 
     Ok(Json(applied))
 }
@@ -181,14 +167,7 @@ pub(crate) async fn reject_staged_update(
     let principal = principal_for_repo(&state, &repo, identity.as_ref())?;
     ensure_repo_read(&state, &repo, &principal)?;
     ensure_owner(&state, &repo, &principal)?;
-    let staged_repo = staged_git_repo_path(&state, &owner, &repo_name);
-    let rejected = if staged_repo.exists() {
-        remove_git_repo_and_then(&staged_repo, || {
-            reject_staged_update_in_catalog(&state, &owner, &repo_name)
-        })?
-    } else {
-        reject_staged_update_in_catalog(&state, &owner, &repo_name)?
-    };
+    let rejected = reject_staged_update_in_catalog(&state, &owner, &repo_name)?;
 
     Ok(Json(rejected))
 }
@@ -201,19 +180,23 @@ pub(crate) fn apply_staged_update_in_catalog(
     let repo_id = crate::domain::store::repo_id(owner, repo_name);
     let owner = owner.to_string();
     let repo_name = repo_name.to_string();
-    state.metadata.update(move |catalog| {
+    let response = state.metadata.update(move |catalog| {
         let repo = catalog
             .repositories
             .get_mut(&repo_id)
             .ok_or_else(|| ApiError::not_found(format!("repo {owner}/{repo_name} not found")))?;
+        let old_snapshot = repo.git_snapshot.clone();
         let staged_update = repo
             .staged_update
             .take()
             .ok_or_else(|| ApiError::not_found("no staged update pending"))?;
         let response = staged_update_response(&staged_update);
         apply_receive_pack_update(repo, staged_update)?;
+        queue_source_blob_deletions(catalog, old_snapshot);
         Ok(response)
-    })
+    })?;
+    best_effort_drain_pending_source_blob_deletions(state);
+    Ok(response)
 }
 
 pub(crate) fn reject_staged_update_in_catalog(
@@ -224,7 +207,7 @@ pub(crate) fn reject_staged_update_in_catalog(
     let repo_id = crate::domain::store::repo_id(owner, repo_name);
     let owner = owner.to_string();
     let repo_name = repo_name.to_string();
-    state.metadata.update(move |catalog| {
+    let response = state.metadata.update(move |catalog| {
         let repo = catalog
             .repositories
             .get_mut(&repo_id)
@@ -234,6 +217,17 @@ pub(crate) fn reject_staged_update_in_catalog(
             .take()
             .ok_or_else(|| ApiError::not_found("no staged update pending"))?;
         let response = staged_update_response(&staged_update);
+        let rejected_blobs = std::iter::once(staged_update.git_snapshot.clone())
+            .chain(
+                staged_update
+                    .changes
+                    .iter()
+                    .filter_map(|change| change.new_content.clone()),
+            )
+            .collect::<Vec<_>>();
+        queue_source_blob_deletions(catalog, rejected_blobs);
         Ok(response)
-    })
+    })?;
+    best_effort_drain_pending_source_blob_deletions(state);
+    Ok(response)
 }

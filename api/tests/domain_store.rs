@@ -29,6 +29,7 @@ fn catalog_with_test_repo() -> AppCatalog {
     AppCatalog {
         users: BTreeMap::from([(owner.id.clone(), owner)]),
         repositories: BTreeMap::from([(repo.record.id.clone(), repo)]),
+        pending_source_blob_deletions: Vec::new(),
     }
 }
 
@@ -51,6 +52,7 @@ fn test_repo() -> StoredRepository {
             repo_id: TEST_REPO_ID.to_string(),
             commits: Vec::new(),
         },
+        git_snapshot: None,
         staged_update: None,
         memberships: vec![RepoMembership {
             repo_id: TEST_REPO_ID.to_string(),
@@ -67,6 +69,7 @@ fn app_catalog_starts_empty() {
 
     assert!(catalog.users.is_empty());
     assert!(catalog.repositories.is_empty());
+    assert!(catalog.pending_source_blob_deletions.is_empty());
     assert!(
         catalog
             .repository(TEST_REPO_OWNER, TEST_REPO_NAME)

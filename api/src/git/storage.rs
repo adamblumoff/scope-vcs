@@ -1,11 +1,12 @@
 use crate::domain::policy::Principal;
 use crate::domain::projection::project_graph;
-use crate::domain::store::RepoPublicationState;
+use crate::domain::store::{RepoPublicationState, SourceBlob};
 use crate::{
     config::{DEFAULT_GIT_BRANCH, EMPTY_GIT_OID, RECEIVE_PACK_STAGING_BYTES},
     error::ApiError,
     git::import::{run_git, safe_repo_key},
     git::upload::projection_bare_repo,
+    object_store::source_blob_bytes,
     persistence::ensure_private_dir,
     state::{AppState, find_repo},
 };
@@ -62,6 +63,45 @@ pub(crate) fn git_repo_storage_root(state: &AppState) -> PathBuf {
     state.data_dir.as_ref().clone()
 }
 
+pub(crate) fn raw_git_snapshot_cache_key(snapshot: &SourceBlob) -> String {
+    snapshot
+        .sha256
+        .get(..16)
+        .unwrap_or(snapshot.sha256.as_str())
+        .to_string()
+}
+
+pub(crate) fn raw_git_snapshot_cache_path(
+    state: &AppState,
+    snapshot: &SourceBlob,
+) -> Result<PathBuf, ApiError> {
+    Ok(state
+        .git_cache_root()?
+        .join(format!("raw-{}.git", raw_git_snapshot_cache_key(snapshot))))
+}
+
+pub(crate) fn delete_raw_git_snapshot_cache(
+    state: &AppState,
+    snapshot: &SourceBlob,
+) -> Result<(), ApiError> {
+    let cache_root = state.git_cache_root()?;
+    let cache_key = raw_git_snapshot_cache_key(snapshot);
+    remove_dir_if_exists(&cache_root.join(format!("raw-{cache_key}.git")))?;
+
+    let entries = fs::read_dir(&cache_root).map_err(ApiError::internal)?;
+    let temp_prefix = format!("raw-{cache_key}.");
+    for entry in entries {
+        let entry = entry.map_err(ApiError::internal)?;
+        let file_name = entry.file_name();
+        let file_name = file_name.to_string_lossy();
+        if file_name.starts_with(&temp_prefix) && file_name.ends_with(".tmp") {
+            remove_dir_if_exists(&entry.path())?;
+        }
+    }
+
+    Ok(())
+}
+
 pub(crate) fn delete_repo_storage(
     state: &AppState,
     owner: &str,
@@ -94,128 +134,6 @@ pub(crate) fn remove_dir_if_exists(path: &FsPath) -> Result<(), ApiError> {
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
         Err(error) => Err(ApiError::internal(error)),
     }
-}
-
-#[cfg(test)]
-pub(crate) fn replace_git_repo(src: &FsPath, dst: &FsPath) -> Result<(), ApiError> {
-    if let Some(parent) = dst.parent() {
-        ensure_private_dir(parent)?;
-    }
-    if dst.exists() {
-        fs::remove_dir_all(dst).map_err(ApiError::internal)?;
-    }
-    fs::rename(src, dst).map_err(ApiError::internal)
-}
-
-pub(crate) fn replace_git_repo_and_then<T>(
-    src: &FsPath,
-    dst: &FsPath,
-    op: impl FnOnce() -> Result<T, ApiError>,
-) -> Result<T, ApiError> {
-    let replacement = begin_git_repo_replacement(src, dst)?;
-
-    match op() {
-        Ok(value) => {
-            replacement.commit()?;
-            Ok(value)
-        }
-        Err(error) => Err(error),
-    }
-}
-
-pub(crate) struct GitRepoReplacement {
-    src: PathBuf,
-    dst: PathBuf,
-    backup: PathBuf,
-    active: bool,
-}
-
-impl GitRepoReplacement {
-    pub(crate) fn commit(mut self) -> Result<(), ApiError> {
-        self.active = false;
-        if self.backup.exists() {
-            fs::remove_dir_all(&self.backup).map_err(ApiError::internal)?;
-        }
-        Ok(())
-    }
-
-    fn rollback(&mut self) {
-        let _ = fs::rename(&self.dst, &self.src);
-        if self.backup.exists() {
-            let _ = fs::rename(&self.backup, &self.dst);
-        }
-        self.active = false;
-    }
-}
-
-impl Drop for GitRepoReplacement {
-    fn drop(&mut self) {
-        if self.active {
-            self.rollback();
-        }
-    }
-}
-
-pub(crate) fn begin_git_repo_replacement(
-    src: &FsPath,
-    dst: &FsPath,
-) -> Result<GitRepoReplacement, ApiError> {
-    if let Some(parent) = dst.parent() {
-        ensure_private_dir(parent)?;
-    }
-    let backup = unique_sibling_path(dst, "backup")?;
-    if backup.exists() {
-        fs::remove_dir_all(&backup).map_err(ApiError::internal)?;
-    }
-    if dst.exists() {
-        fs::rename(dst, &backup).map_err(ApiError::internal)?;
-    }
-    fs::rename(src, dst).map_err(|error| {
-        if backup.exists() {
-            let _ = fs::rename(&backup, dst);
-        }
-        ApiError::internal(error)
-    })?;
-
-    Ok(GitRepoReplacement {
-        src: src.to_path_buf(),
-        dst: dst.to_path_buf(),
-        backup,
-        active: true,
-    })
-}
-
-pub(crate) fn remove_git_repo_and_then<T>(
-    path: &FsPath,
-    op: impl FnOnce() -> Result<T, ApiError>,
-) -> Result<T, ApiError> {
-    let backup = unique_sibling_path(path, "delete")?;
-    fs::rename(path, &backup).map_err(ApiError::internal)?;
-    match op() {
-        Ok(value) => {
-            fs::remove_dir_all(&backup).map_err(ApiError::internal)?;
-            Ok(value)
-        }
-        Err(error) => {
-            let _ = fs::rename(&backup, path);
-            Err(error)
-        }
-    }
-}
-
-pub(crate) fn unique_sibling_path(path: &FsPath, label: &str) -> Result<PathBuf, ApiError> {
-    let parent = path
-        .parent()
-        .ok_or_else(|| ApiError::internal_message("git repo path is missing a parent"))?;
-    let name = path
-        .file_name()
-        .and_then(|value| value.to_str())
-        .ok_or_else(|| ApiError::internal_message("git repo path has invalid file name"))?;
-    let mut bytes = [0_u8; RECEIVE_PACK_STAGING_BYTES];
-    getrandom::fill(&mut bytes).map_err(|error| {
-        ApiError::internal_message(format!("failed to create git repo backup path: {error}"))
-    })?;
-    Ok(parent.join(format!("{name}.{label}.{}", hex::encode(bytes))))
 }
 
 pub(crate) fn ensure_first_push_receive_pack_staging_repo(
@@ -264,24 +182,27 @@ pub(crate) fn ensure_published_receive_pack_staging_repo(
         id: author_id.to_string(),
         kind: crate::domain::policy::PrincipalKind::User,
     };
-    let owner_repo = owner_git_repo_path(state, owner, repo_name);
-    let seed_repo = if owner_repo.join("HEAD").exists() {
-        owner_repo
-    } else {
-        let projection = project_graph(&repo.policy, &repo.graph, &principal);
-        projection_bare_repo(&state.git_cache_root()?, &projection)?
-    };
     let repo_root = receive_pack_staging_repo_path(state, owner, repo_name)?;
     if let Some(parent) = repo_root.parent() {
         ensure_private_dir(parent)?;
     }
-    let seed = seed_repo.to_string_lossy().to_string();
-    let target = repo_root.to_string_lossy().to_string();
-    run_git(
-        None,
-        &["clone", "--bare", "--no-hardlinks", &seed, &target],
-        "cloning receive-pack staging repo",
-    )?;
+    if let Some(snapshot) = repo.git_snapshot.as_ref() {
+        restore_git_snapshot(state, snapshot, &repo_root)?;
+    } else {
+        let projection = project_graph(&repo.policy, &repo.graph, &principal);
+        let seed_repo = projection_bare_repo(
+            state.object_store.as_ref(),
+            &state.git_cache_root()?,
+            &projection,
+        )?;
+        let seed = seed_repo.to_string_lossy().to_string();
+        let target = repo_root.to_string_lossy().to_string();
+        run_git(
+            None,
+            &["clone", "--bare", "--no-hardlinks", &seed, &target],
+            "cloning receive-pack staging repo",
+        )?;
+    }
     run_git(
         Some(&repo_root),
         &["config", "http.receivepack", "true"],
@@ -289,6 +210,48 @@ pub(crate) fn ensure_published_receive_pack_staging_repo(
     )?;
     install_published_pre_receive_hook(&repo_root)?;
     Ok(repo_root)
+}
+
+pub(crate) fn restore_git_snapshot(
+    state: &AppState,
+    snapshot: &crate::domain::store::SourceBlob,
+    repo_root: &FsPath,
+) -> Result<(), ApiError> {
+    if repo_root.exists() {
+        fs::remove_dir_all(repo_root).map_err(ApiError::internal)?;
+    }
+    run_git(
+        None,
+        &["init", "--bare", repo_root.to_string_lossy().as_ref()],
+        "initializing Git snapshot repo",
+    )?;
+    let bundle_path = repo_root.with_extension(format!(
+        "bundle.{}.tmp",
+        hex::encode(&snapshot.sha256.as_bytes()[..8])
+    ));
+    let bytes = source_blob_bytes(state.object_store.as_ref(), snapshot)?;
+    fs::write(&bundle_path, bytes).map_err(ApiError::internal)?;
+    let bundle = bundle_path.to_string_lossy().to_string();
+    run_git(
+        Some(repo_root),
+        &[
+            "fetch",
+            &bundle,
+            &format!("refs/heads/{DEFAULT_GIT_BRANCH}:refs/heads/{DEFAULT_GIT_BRANCH}"),
+        ],
+        "restoring Git snapshot",
+    )?;
+    let _ = fs::remove_file(&bundle_path);
+    run_git(
+        Some(repo_root),
+        &[
+            "symbolic-ref",
+            "HEAD",
+            &format!("refs/heads/{DEFAULT_GIT_BRANCH}"),
+        ],
+        "setting restored Git snapshot head",
+    )?;
+    Ok(())
 }
 
 pub(crate) fn install_first_push_pre_receive_hook(repo_root: &FsPath) -> Result<(), ApiError> {

@@ -87,11 +87,19 @@ pub struct GitPushToken {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SourceBlob {
+    pub object_key: String,
+    pub sha256: String,
+    pub git_oid: String,
+    pub size_bytes: u64,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PendingImportFile {
     pub path: String,
     pub mode: String,
     pub oid: String,
-    pub content_base64: String,
+    pub blob: SourceBlob,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -100,6 +108,7 @@ pub struct PendingImport {
     pub head_oid: String,
     pub tree_oid: String,
     pub imported_at_unix: u64,
+    pub git_snapshot: SourceBlob,
     pub files: Vec<PendingImportFile>,
 }
 
@@ -138,8 +147,8 @@ pub enum StagedFileChangeKind {
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct StagedFileChange {
     pub path: ScopePath,
-    pub old_content: Option<String>,
-    pub new_content: Option<String>,
+    pub old_content: Option<SourceBlob>,
+    pub new_content: Option<SourceBlob>,
     pub visibility: Visibility,
     pub kind: StagedFileChangeKind,
 }
@@ -151,6 +160,7 @@ pub struct StagedRepoUpdate {
     pub base_live_commit_id: Option<String>,
     pub author_id: String,
     pub message: String,
+    pub git_snapshot: SourceBlob,
     pub changes: Vec<StagedFileChange>,
 }
 
@@ -187,6 +197,7 @@ pub struct StoredRepository {
     pub pending_import: Option<PendingImport>,
     pub policy: Policy,
     pub graph: SourceGraph,
+    pub git_snapshot: Option<SourceBlob>,
     pub staged_update: Option<StagedRepoUpdate>,
     pub memberships: Vec<RepoMembership>,
     pub invitations: Vec<RepoInvitation>,
@@ -196,6 +207,7 @@ pub struct StoredRepository {
 pub struct AppCatalog {
     pub users: BTreeMap<String, UserAccount>,
     pub repositories: BTreeMap<String, StoredRepository>,
+    pub pending_source_blob_deletions: Vec<SourceBlob>,
 }
 
 impl AppCatalog {
@@ -244,6 +256,7 @@ impl AppCatalog {
                 repo_id: id.clone(),
                 commits: Vec::new(),
             },
+            git_snapshot: None,
             staged_update: None,
             memberships: vec![RepoMembership {
                 repo_id: id.clone(),

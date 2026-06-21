@@ -41,4 +41,19 @@ Railway services:
   API fallback.
 
 Railway Postgres stores canonical metadata. Railway Buckets store encrypted
-source blobs/chunks; app-layer encryption remains mandatory.
+source blobs and Git bundle snapshots.
+
+`scope-api` bucket variables:
+
+- `SCOPE_BUCKET_ENDPOINT` - Railway bucket `ENDPOINT`, for example
+  `https://storage.railway.app`.
+- `SCOPE_BUCKET_NAME` - Railway bucket `BUCKET`.
+- `SCOPE_BUCKET_REGION` - Railway bucket `REGION`, commonly `auto`.
+- `SCOPE_BUCKET_ACCESS_KEY_ID` - Railway bucket `ACCESS_KEY_ID`.
+- `SCOPE_BUCKET_SECRET_ACCESS_KEY` - Railway bucket `SECRET_ACCESS_KEY`.
+- `SCOPE_BUCKET_FORCE_PATH_STYLE` - optional. Leave unset for current Railway
+  virtual-hosted-style buckets. Set to `true` only when the bucket credentials
+  tab says the bucket needs path-style URLs.
+- `SCOPE_OBJECT_ENCRYPTION_KEY` - required app-layer encryption key for bucket
+  objects. Generate 32 random bytes and store them as base64, for example with
+  `openssl rand -base64 32`.

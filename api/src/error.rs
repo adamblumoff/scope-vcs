@@ -11,9 +11,9 @@ pub(crate) struct ErrorResponse {
 }
 
 #[derive(Debug)]
-pub(crate) struct ApiError {
-    pub(crate) status: StatusCode,
-    pub(crate) message: String,
+pub struct ApiError {
+    pub status: StatusCode,
+    pub message: String,
 }
 
 impl ApiError {

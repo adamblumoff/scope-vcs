@@ -4,8 +4,8 @@ mod schema;
 use crate::domain::store::{AppCatalog, RepoMembership};
 use crate::error::ApiError;
 use sea_orm::{
-    ActiveModelTrait, ConnectionTrait, Database, DatabaseConnection, EntityTrait, IntoActiveModel,
-    QueryOrder, QuerySelect, Set, TransactionTrait,
+    ActiveModelTrait, ColumnTrait, ConnectionTrait, Database, DatabaseConnection, EntityTrait,
+    IntoActiveModel, QueryFilter, QueryOrder, QuerySelect, Set, TransactionTrait,
     sea_query::{LockType, OnConflict},
 };
 use serde::{Serialize, de::DeserializeOwned};
@@ -55,7 +55,7 @@ impl Drop for DbRuntime {
 
 impl MetadataStore {
     pub(crate) fn connect_from_env() -> anyhow::Result<Self> {
-        let database_url = std::env::var("DATABASE_URL")
+        let database_url = std::env::var(crate::config::DATABASE_URL_ENV)
             .map_err(|_| anyhow::anyhow!("DATABASE_URL is required for Scope metadata storage"))?;
         connect_postgres_store(database_url)
     }
@@ -198,6 +198,11 @@ where
         .all(conn)
         .await
         .map_err(ApiError::internal)?;
+    let metadata_lock = entities::metadata_lock::Entity::find_by_id(METADATA_LOCK_KEY.to_string())
+        .one(conn)
+        .await
+        .map_err(ApiError::internal)?
+        .ok_or_else(|| ApiError::internal_message("metadata lock row is missing"))?;
 
     let users = users
         .into_iter()
@@ -229,6 +234,7 @@ where
     Ok(AppCatalog {
         users,
         repositories,
+        pending_source_blob_deletions: decode_json(metadata_lock.pending_source_blob_deletions)?,
     })
 }
 
@@ -286,6 +292,15 @@ where
             .await
             .map_err(ApiError::internal)?;
     }
+    entities::metadata_lock::Entity::update_many()
+        .filter(entities::metadata_lock::Column::Key.eq(METADATA_LOCK_KEY))
+        .col_expr(
+            entities::metadata_lock::Column::PendingSourceBlobDeletions,
+            sea_orm::sea_query::Expr::value(encode_json(&catalog.pending_source_blob_deletions)?),
+        )
+        .exec(conn)
+        .await
+        .map_err(ApiError::internal)?;
 
     Ok(())
 }
@@ -293,6 +308,7 @@ where
 async fn ensure_metadata_lock_row(db: &DatabaseConnection) -> Result<(), sea_orm::DbErr> {
     entities::metadata_lock::Entity::insert(entities::metadata_lock::ActiveModel {
         key: Set(METADATA_LOCK_KEY.to_string()),
+        pending_source_blob_deletions: Set(serde_json::Value::Array(Vec::new())),
     })
     .on_conflict(
         OnConflict::column(entities::metadata_lock::Column::Key)

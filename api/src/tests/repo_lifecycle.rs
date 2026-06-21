@@ -212,9 +212,50 @@ async fn get_repo_route_returns_owner_summary() {
 }
 
 #[tokio::test]
+async fn projection_route_returns_content_not_blob_metadata() {
+    let state = test_state_with_repo();
+    cache_test_jwks(&state);
+    {
+        let mut catalog = lock_catalog(&state).unwrap();
+        catalog
+            .repositories
+            .insert(TEST_REPO_ID.to_string(), repo_with_readme());
+    }
+
+    let response = router(state)
+        .oneshot(
+            Request::builder()
+                .method("GET")
+                .uri("/v1/repos/owner/repo/projections")
+                .header(AUTHORIZATION, bearer_header())
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = response_json(response).await;
+    let content = &body["commits"][0]["changes"][0]["new_content"];
+    assert_eq!(content, "hello");
+    assert!(content["object_key"].is_null());
+}
+
+#[tokio::test]
 async fn delete_repo_route_requires_owner_and_removes_storage() {
     let state = test_state_with_repo();
     cache_test_jwks(&state);
+    {
+        let mut catalog = lock_catalog(&state).unwrap();
+        let mut repo = repo_with_readme();
+        repo.graph.commits[0].changes[0].new_content = Some(source_blob("delete route readme"));
+        catalog.repositories.insert(TEST_REPO_ID.to_string(), repo);
+    }
+    let source_keys =
+        repo_source_blobs(&find_repo(&state, TEST_REPO_OWNER, TEST_REPO_NAME).unwrap())
+            .into_iter()
+            .map(|blob| blob.object_key)
+            .collect::<Vec<_>>();
     let owner_repo = owner_git_repo_path(&state, TEST_REPO_OWNER, TEST_REPO_NAME);
     let staged_repo = staged_git_repo_path(&state, TEST_REPO_OWNER, TEST_REPO_NAME);
     let rx_repo = git_repo_storage_root(&state).join("git-rx").join(format!(
@@ -260,9 +301,77 @@ async fn delete_repo_route_requires_owner_and_removes_storage() {
     assert_eq!(body["id"], TEST_REPO_ID);
     assert_eq!(body["deleted"], true);
     assert!(find_repo(&state, TEST_REPO_OWNER, TEST_REPO_NAME).is_err());
+    for key in source_keys {
+        assert!(!MemoryObjectStore::new().contains_key(&key));
+    }
     assert!(!owner_repo.exists());
     assert!(!staged_repo.exists());
     assert!(!rx_repo.exists());
+}
+
+#[tokio::test]
+async fn delete_repo_route_records_pending_cleanup_when_bucket_delete_fails() {
+    let mut state = test_state_with_repo();
+    cache_test_jwks(&state);
+    {
+        let mut catalog = lock_catalog(&state).unwrap();
+        catalog
+            .repositories
+            .insert(TEST_REPO_ID.to_string(), repo_with_readme());
+    }
+    state.object_store = Arc::new(DeleteFailsObjectStore);
+    let owner_repo = owner_git_repo_path(&state, TEST_REPO_OWNER, TEST_REPO_NAME);
+    let staged_repo = staged_git_repo_path(&state, TEST_REPO_OWNER, TEST_REPO_NAME);
+    let rx_repo = git_repo_storage_root(&state).join("git-rx").join(format!(
+        "{}-delete-fails.git",
+        receive_pack_staging_repo_prefix(TEST_REPO_OWNER, TEST_REPO_NAME)
+    ));
+    fs::create_dir_all(&owner_repo).unwrap();
+    fs::create_dir_all(&staged_repo).unwrap();
+    fs::create_dir_all(&rx_repo).unwrap();
+    let app = router(state.clone());
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("DELETE")
+                .uri("/v1/repos/owner/repo")
+                .header(AUTHORIZATION, bearer_header())
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    assert!(find_repo(&state, TEST_REPO_OWNER, TEST_REPO_NAME).is_err());
+    assert!(
+        !lock_catalog(&state)
+            .unwrap()
+            .pending_source_blob_deletions
+            .is_empty()
+    );
+    assert!(!owner_repo.exists());
+    assert!(!staged_repo.exists());
+    assert!(!rx_repo.exists());
+}
+
+struct DeleteFailsObjectStore;
+
+impl crate::object_store::ObjectStore for DeleteFailsObjectStore {
+    fn put(&self, _key: &str, _bytes: &[u8]) -> Result<(), crate::error::ApiError> {
+        Ok(())
+    }
+
+    fn get(&self, key: &str) -> Result<Vec<u8>, crate::error::ApiError> {
+        Err(crate::error::ApiError::not_found(format!(
+            "object {key} not found"
+        )))
+    }
+
+    fn delete(&self, _key: &str) -> Result<(), crate::error::ApiError> {
+        Err(crate::error::ApiError::service_unavailable("delete failed"))
+    }
 }
 
 #[tokio::test]

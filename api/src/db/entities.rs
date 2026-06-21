@@ -3,8 +3,8 @@ use crate::domain::policy::{Policy, Visibility};
 use crate::domain::projection::SourceGraph;
 use crate::domain::store::{
     AccountAccess, FirstPushToken, GitPushToken, InvitationState, PendingImport, RepoInvitation,
-    RepoMembership, RepoPublicationState, RepoRecord, RepoRole, RepoSettings, StagedRepoUpdate,
-    StoredRepository, UserAccount,
+    RepoMembership, RepoPublicationState, RepoRecord, RepoRole, RepoSettings, SourceBlob,
+    StagedRepoUpdate, StoredRepository, UserAccount,
 };
 use crate::error::ApiError;
 use sea_orm::entity::prelude::*;
@@ -145,6 +145,7 @@ pub(crate) mod repository {
         pub pending_import: Option<Json>,
         pub policy: Json,
         pub graph: Json,
+        pub git_snapshot: Option<Json>,
         pub staged_update: Option<Json>,
         pub invitations: Json,
     }
@@ -174,6 +175,7 @@ pub(crate) mod repository {
                 pending_import: repo.pending_import.as_ref().map(encode_json).transpose()?,
                 policy: encode_json(&repo.policy)?,
                 graph: encode_json(&repo.graph)?,
+                git_snapshot: repo.git_snapshot.as_ref().map(encode_json).transpose()?,
                 staged_update: repo.staged_update.as_ref().map(encode_json).transpose()?,
                 invitations: encode_json(&repo.invitations)?,
             })
@@ -210,6 +212,10 @@ pub(crate) mod repository {
                     .transpose()?,
                 policy: decode_json::<Policy>(self.policy)?,
                 graph: decode_json::<SourceGraph>(self.graph)?,
+                git_snapshot: self
+                    .git_snapshot
+                    .map(decode_json::<SourceBlob>)
+                    .transpose()?,
                 staged_update: self
                     .staged_update
                     .map(decode_json::<StagedRepoUpdate>)
@@ -266,6 +272,7 @@ pub(crate) mod metadata_lock {
     pub struct Model {
         #[sea_orm(primary_key, auto_increment = false)]
         pub key: String,
+        pub pending_source_blob_deletions: Json,
     }
 
     #[derive(Copy, Clone, Debug, EnumIter, DeriveRelation)]
