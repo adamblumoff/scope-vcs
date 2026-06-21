@@ -167,6 +167,8 @@ pub(crate) fn promote_pending_import(repo: &mut StoredRepository) -> Result<(), 
     });
     repo.git_snapshot = Some(pending.git_snapshot);
     repo.record.publication_state = RepoPublicationState::Published;
+    repo.first_push_token = None;
+    repo.git_push_token = None;
     Ok(())
 }
 

@@ -7,7 +7,7 @@ use crate::domain::store::{
 };
 use crate::{
     auth::tokens::ensure_owner_setup_access_in_catalog,
-    config::{DEFAULT_GIT_BRANCH, FIRST_PUSH_TOKEN_TTL_SECS},
+    config::DEFAULT_GIT_BRANCH,
     error::ApiError,
     object_store::{ObjectStore, source_blob_text},
     state::graph_has_file,
@@ -268,7 +268,7 @@ pub(crate) fn first_push_token_response(
     now_unix: u64,
     secret: Option<String>,
 ) -> FirstPushTokenResponse {
-    let status = first_push_token_status_at(token, now_unix);
+    let status = token.status_at(now_unix);
     let secret = if status == FirstPushTokenStatus::Active {
         secret
     } else {
@@ -278,29 +278,10 @@ pub(crate) fn first_push_token_response(
     FirstPushTokenResponse {
         status,
         created_at_unix: token.created_at_unix,
-        expires_at_unix: first_push_token_expires_at(token),
+        expires_at_unix: token.expires_at_unix,
         used_at_unix: token.used_at_unix,
         secret,
     }
-}
-
-pub(crate) fn first_push_token_status_at(
-    token: &FirstPushToken,
-    now_unix: u64,
-) -> FirstPushTokenStatus {
-    if token.used_at_unix.is_some() {
-        FirstPushTokenStatus::Used
-    } else if now_unix >= first_push_token_expires_at(token) {
-        FirstPushTokenStatus::Expired
-    } else {
-        FirstPushTokenStatus::Active
-    }
-}
-
-pub(crate) fn first_push_token_expires_at(token: &FirstPushToken) -> u64 {
-    token
-        .created_at_unix
-        .saturating_add(FIRST_PUSH_TOKEN_TTL_SECS)
 }
 
 pub(crate) fn git_push_token_response(

@@ -96,6 +96,19 @@ fn zero_file_publish_promotes_pending_import() {
     let mut repo = test_repo(&test_owner_id());
     repo.record.publication_state = RepoPublicationState::PendingPublish;
     repo.pending_import = Some(pending_import_fixture(Vec::new()));
+    repo.first_push_token = Some(FirstPushToken {
+        token_hash: first_push_token_hash("scope_fp_test"),
+        secret: Some("scope_fp_test".to_string()),
+        owner_user_id: repo.record.owner_user_id.clone(),
+        created_at_unix: unix_now(),
+        expires_at_unix: unix_now() + FIRST_PUSH_TOKEN_TTL_SECS,
+        used_at_unix: Some(unix_now()),
+    });
+    repo.git_push_token = Some(GitPushToken {
+        token_hash: git_push_token_hash("scope_git_test"),
+        owner_user_id: repo.record.owner_user_id.clone(),
+        created_at_unix: unix_now(),
+    });
 
     promote_pending_import(&mut repo).unwrap();
 
@@ -104,6 +117,8 @@ fn zero_file_publish_promotes_pending_import() {
         RepoPublicationState::Published
     );
     assert!(repo.pending_import.is_none());
+    assert!(repo.first_push_token.is_none());
+    assert!(repo.git_push_token.is_none());
     assert_eq!(repo.graph.commits.len(), 1);
     assert!(repo.graph.commits[0].changes.is_empty());
 }

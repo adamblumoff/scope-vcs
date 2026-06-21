@@ -14,7 +14,7 @@ use crate::{
         InitialPushCredential, PersistedReceivePackUpdate, authorize_first_push_token_for_repo,
         authorize_git_push_token_for_repo,
     },
-    http::responses::{first_push_token_status_at, pending_scope_path, repo_owner_ids},
+    http::responses::{pending_scope_path, repo_owner_ids},
     object_store::put_repo_object,
     persistence::unix_now,
     state::AppState,
@@ -632,7 +632,7 @@ pub(crate) fn persist_pending_import(
             }
         }
         if let Some(token) = repo.first_push_token.as_mut() {
-            if first_push_token_status_at(token, now) == FirstPushTokenStatus::Active {
+            if token.status_at(now) == FirstPushTokenStatus::Active {
                 token.used_at_unix = Some(now);
             }
         }
