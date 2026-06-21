@@ -8,7 +8,8 @@ use crate::domain::projection::{
 use crate::domain::store::{
     AccountAccess, AppCatalog, FirstPushToken, FirstPushTokenStatus, GitPushToken, PendingImport,
     PendingImportFile, RepoMembership, RepoPublicationState, RepoRecord, RepoRole, RepoSettings,
-    StagedFileChange, StagedFileChangeKind, StagedRepoUpdate, StoredRepository, UserAccount,
+    RepoStorageCleanup, StagedFileChange, StagedFileChangeKind, StagedRepoUpdate, StoredRepository,
+    UserAccount,
 };
 use crate::{
     app::router,
@@ -167,6 +168,7 @@ fn test_state_with_repo() -> AppState {
         metadata: crate::db::MetadataStore::memory(AppCatalog {
             users: BTreeMap::from([(owner.id.clone(), owner)]),
             repositories: BTreeMap::from([(repo.record.id.clone(), repo)]),
+            pending_repo_storage_deletions: Vec::new(),
             pending_source_blob_deletions: Vec::new(),
         }),
         data_dir: Arc::new(test_data_dir()),

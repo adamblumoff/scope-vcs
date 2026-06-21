@@ -3,7 +3,8 @@ use crate::domain::projection::{
     AuthorVisibility, LogicalCommit, MixedCommitPolicy, project_graph,
 };
 use crate::domain::store::{
-    AppCatalog, RepoPublicationState, RepoRole, SourceBlob, StoredRepository,
+    AppCatalog, RepoPublicationState, RepoRole, RepoStorageCleanup, SourceBlob, StoredRepository,
+    repo_id,
 };
 use crate::{
     auth::shoo::ShooVerifier,
@@ -38,6 +39,7 @@ impl AppState {
                 S3ObjectStore::from_env()?,
             ))?),
         };
+        best_effort_drain_pending_repo_storage_deletions(&state);
         best_effort_drain_pending_source_blob_deletions(&state);
         Ok(state)
     }
@@ -248,18 +250,18 @@ pub(crate) fn delete_unreferenced_source_blobs(
     state: &AppState,
     blobs: &[SourceBlob],
 ) -> Result<(), ApiError> {
-    let cleanup_state = state.clone();
     let blobs = blobs.to_vec();
-    state.metadata.update(move |catalog| {
-        delete_unreferenced_source_blobs_against_catalog(&cleanup_state, catalog, &blobs)
-    })
+    let blobs = state
+        .metadata
+        .read(move |catalog| Ok(unreferenced_source_blobs(catalog, &blobs)))?;
+    let (_, error) = delete_source_blob_storage(state, &blobs);
+    match error {
+        Some(error) => Err(error),
+        None => Ok(()),
+    }
 }
 
-pub(crate) fn delete_unreferenced_source_blobs_against_catalog(
-    state: &AppState,
-    catalog: &AppCatalog,
-    blobs: &[SourceBlob],
-) -> Result<(), ApiError> {
+fn unreferenced_source_blobs(catalog: &AppCatalog, blobs: &[SourceBlob]) -> Vec<SourceBlob> {
     let referenced = catalog
         .repositories
         .values()
@@ -272,11 +274,38 @@ pub(crate) fn delete_unreferenced_source_blobs_against_catalog(
             unreferenced.entry(blob.object_key.as_str()).or_insert(blob);
         }
     }
-    for blob in unreferenced.values() {
-        crate::git::storage::delete_raw_git_snapshot_cache(state, blob)?;
-        state.object_store.delete(&blob.object_key)?;
+    unreferenced.values().cloned().cloned().collect()
+}
+
+fn delete_source_blob_storage(
+    state: &AppState,
+    blobs: &[SourceBlob],
+) -> (std::collections::BTreeSet<String>, Option<ApiError>) {
+    let mut deleted = std::collections::BTreeSet::new();
+    let mut first_error = None;
+    for blob in blobs {
+        match delete_source_blob_storage_entry(state, blob) {
+            Ok(()) => {
+                deleted.insert(blob.object_key.clone());
+            }
+            Err(error) => {
+                tracing::warn!(
+                    ?error,
+                    object_key = %blob.object_key,
+                    "failed to clean source blob storage"
+                );
+                if first_error.is_none() {
+                    first_error = Some(error);
+                }
+            }
+        }
     }
-    Ok(())
+    (deleted, first_error)
+}
+
+fn delete_source_blob_storage_entry(state: &AppState, blob: &SourceBlob) -> Result<(), ApiError> {
+    crate::git::storage::delete_raw_git_snapshot_cache(state, blob)?;
+    state.object_store.delete(&blob.object_key)
 }
 
 pub(crate) fn queue_source_blob_deletions(
@@ -292,6 +321,94 @@ pub(crate) fn queue_source_blob_deletions(
         if queued.insert(blob.object_key.clone()) {
             catalog.pending_source_blob_deletions.push(blob);
         }
+    }
+}
+
+pub(crate) fn queue_repo_storage_deletion(catalog: &mut AppCatalog, cleanup: RepoStorageCleanup) {
+    let cleanup_repo_id = repo_id(&cleanup.owner_handle, &cleanup.repo_name);
+    let already_queued = catalog
+        .pending_repo_storage_deletions
+        .iter()
+        .any(|pending| repo_id(&pending.owner_handle, &pending.repo_name) == cleanup_repo_id);
+    if !already_queued {
+        catalog.pending_repo_storage_deletions.push(cleanup);
+    }
+}
+
+pub(crate) fn cleanup_pending_repo_storage_deletion_for_recreate(
+    state: &AppState,
+    catalog: &mut AppCatalog,
+    owner_handle: &str,
+    repo_name: &str,
+) -> Result<(), ApiError> {
+    let cleanup_repo_id = repo_id(owner_handle, repo_name);
+    if catalog.repositories.contains_key(&cleanup_repo_id) {
+        return Ok(());
+    }
+
+    let has_pending_cleanup = catalog
+        .pending_repo_storage_deletions
+        .iter()
+        .any(|cleanup| repo_id(&cleanup.owner_handle, &cleanup.repo_name) == cleanup_repo_id);
+    if !has_pending_cleanup {
+        return Ok(());
+    }
+
+    crate::git::storage::delete_repo_storage(state, owner_handle, repo_name)?;
+    catalog
+        .pending_repo_storage_deletions
+        .retain(|cleanup| repo_id(&cleanup.owner_handle, &cleanup.repo_name) != cleanup_repo_id);
+    Ok(())
+}
+
+pub(crate) fn drain_pending_repo_storage_deletions(state: &AppState) -> Result<(), ApiError> {
+    let metadata = state.metadata.clone();
+    let state = state.clone();
+    let first_error = metadata.update(move |catalog| {
+        let mut retained = Vec::new();
+        let mut first_error = None;
+        for cleanup in std::mem::take(&mut catalog.pending_repo_storage_deletions) {
+            if catalog
+                .repositories
+                .contains_key(&repo_id(&cleanup.owner_handle, &cleanup.repo_name))
+            {
+                retained.push(cleanup);
+                continue;
+            }
+
+            match crate::git::storage::delete_repo_storage(
+                &state,
+                &cleanup.owner_handle,
+                &cleanup.repo_name,
+            ) {
+                Ok(()) => {}
+                Err(error) => {
+                    tracing::warn!(
+                        ?error,
+                        owner = %cleanup.owner_handle,
+                        repo = %cleanup.repo_name,
+                        "failed to clean deleted repo filesystem storage"
+                    );
+                    if first_error.is_none() {
+                        first_error = Some(error);
+                    }
+                    retained.push(cleanup);
+                }
+            }
+        }
+        catalog.pending_repo_storage_deletions = retained;
+        Ok(first_error)
+    })?;
+
+    match first_error {
+        Some(error) => Err(error),
+        None => Ok(()),
+    }
+}
+
+pub(crate) fn best_effort_drain_pending_repo_storage_deletions(state: &AppState) {
+    if let Err(error) = drain_pending_repo_storage_deletions(state) {
+        tracing::warn!(?error, "failed to drain pending repo storage deletions");
     }
 }
 
@@ -328,24 +445,27 @@ pub(crate) fn best_effort_cleanup_rollback_source_blobs(state: &AppState, blobs:
 }
 
 pub(crate) fn drain_pending_source_blob_deletions(state: &AppState) -> Result<(), ApiError> {
-    let cleanup_state = state.clone();
-    state.metadata.update(move |catalog| {
-        let pending = catalog.pending_source_blob_deletions.clone();
+    let metadata = state.metadata.clone();
+    let state = state.clone();
+    let delete_error = metadata.update(move |catalog| {
+        let pending = std::mem::take(&mut catalog.pending_source_blob_deletions);
         if pending.is_empty() {
-            return Ok(());
+            return Ok(None);
         }
 
-        delete_unreferenced_source_blobs_against_catalog(&cleanup_state, catalog, &pending)?;
+        let unreferenced = unreferenced_source_blobs(catalog, &pending);
+        let (deleted_keys, delete_error) = delete_source_blob_storage(&state, &unreferenced);
+        catalog.pending_source_blob_deletions = unreferenced
+            .into_iter()
+            .filter(|blob| !deleted_keys.contains(&blob.object_key))
+            .collect();
+        Ok(delete_error)
+    })?;
 
-        let deleted_keys = pending
-            .iter()
-            .map(|blob| blob.object_key.clone())
-            .collect::<std::collections::BTreeSet<_>>();
-        catalog
-            .pending_source_blob_deletions
-            .retain(|blob| !deleted_keys.contains(&blob.object_key));
-        Ok(())
-    })
+    match delete_error {
+        Some(error) => Err(error),
+        None => Ok(()),
+    }
 }
 
 pub(crate) fn best_effort_drain_pending_source_blob_deletions(state: &AppState) {

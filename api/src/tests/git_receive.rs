@@ -696,6 +696,31 @@ fn rollback_cleanup_keeps_blobs_still_referenced_by_catalog() {
 }
 
 #[test]
+fn pending_source_blob_cleanup_drops_referenced_entries_after_scan() {
+    let state = test_state_with_repo();
+    let live_blob = source_blob("referenced pending content");
+    {
+        let mut catalog = lock_catalog(&state).unwrap();
+        let mut repo = repo_with_readme();
+        repo.graph.commits[0].changes[0].new_content = Some(live_blob.clone());
+        catalog.repositories.insert(TEST_REPO_ID.to_string(), repo);
+        catalog
+            .pending_source_blob_deletions
+            .push(live_blob.clone());
+    }
+
+    drain_pending_source_blob_deletions(&state).unwrap();
+
+    assert!(MemoryObjectStore::new().contains_key(&live_blob.object_key));
+    assert!(
+        lock_catalog(&state)
+            .unwrap()
+            .pending_source_blob_deletions
+            .is_empty()
+    );
+}
+
+#[test]
 fn applied_push_survives_obsolete_snapshot_cleanup_failure() {
     let mut state = test_state_with_repo();
     state.object_store = Arc::new(DeleteFailsObjectStore);

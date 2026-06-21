@@ -272,6 +272,7 @@ pub(crate) mod metadata_lock {
     pub struct Model {
         #[sea_orm(primary_key, auto_increment = false)]
         pub key: String,
+        pub pending_repo_storage_deletions: Json,
         pub pending_source_blob_deletions: Json,
     }
 

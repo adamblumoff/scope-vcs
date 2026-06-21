@@ -171,6 +171,7 @@ fn verified_email_sign_in_collapses_existing_duplicate_user() {
             (duplicate_id.clone(), duplicate),
         ]),
         repositories: BTreeMap::from([(repo.record.id.clone(), repo)]),
+        pending_repo_storage_deletions: Vec::new(),
         pending_source_blob_deletions: Vec::new(),
     }));
 
