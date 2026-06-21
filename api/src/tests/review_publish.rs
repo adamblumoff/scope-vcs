@@ -110,6 +110,47 @@ fn zero_file_publish_promotes_pending_import() {
     assert!(repo.graph.commits[0].changes.is_empty());
 }
 
+#[tokio::test]
+async fn publish_uses_verified_email_canonical_owner() {
+    let state = test_state_with_repo();
+    cache_test_jwks(&state);
+    {
+        let mut catalog = lock_catalog(&state).unwrap();
+        let repo = catalog.repositories.get_mut(TEST_REPO_ID).unwrap();
+        repo.record.publication_state = RepoPublicationState::PendingPublish;
+        repo.pending_import = Some(pending_import_fixture(vec![("README.md", "hello")]));
+    }
+
+    let response = router(state.clone())
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/v1/repos/owner/repo/publish")
+                .header(
+                    AUTHORIZATION,
+                    bearer_header_for("rotated-pairwise-owner", TEST_OWNER_EMAIL),
+                )
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = response_json(response).await;
+    assert_eq!(body["publication_state"], "Published");
+    assert_eq!(body["role"], "Owner");
+
+    let catalog = lock_catalog(&state).unwrap();
+    assert_eq!(catalog.users.len(), 1);
+    let repo = catalog.repositories.get(TEST_REPO_ID).unwrap();
+    assert_eq!(
+        repo.record.publication_state,
+        RepoPublicationState::Published
+    );
+    assert!(repo.pending_import.is_none());
+}
+
 #[test]
 fn publish_is_one_time() {
     let mut repo = test_repo(&test_owner_id());

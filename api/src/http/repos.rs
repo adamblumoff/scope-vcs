@@ -5,8 +5,8 @@ use crate::domain::store::{RepoRole, RepoSettings};
 use crate::{
     auth::{
         shoo::{
-            ensure_user_for_identity, http_identity, identity_user_id, principal_for_repo,
-            principal_for_user_id, require_identity,
+            ensure_user_for_identity, http_identity, principal_for_repo, principal_for_user_id,
+            require_identity,
         },
         tokens::{generate_first_push_token, generate_git_push_token},
     },
@@ -228,11 +228,18 @@ pub(crate) async fn update_file_visibility(
     Json(input): Json<UpdateFileVisibilityRequest>,
 ) -> Result<Json<RepoFileResponse>, ApiError> {
     let identity = http_identity(&state, &headers).await?;
+    let user = identity
+        .as_ref()
+        .map(|identity| ensure_user_for_identity(&state, identity))
+        .transpose()?;
     let path = ScopePath::parse(&input.path).map_err(ApiError::bad_request)?;
     let repo_id = crate::domain::store::repo_id(&owner, &repo_name);
 
     let repo = find_repo(&state, &owner, &repo_name)?;
-    let principal = principal_for_repo(&state, &repo, identity.as_ref())?;
+    let principal = user
+        .as_ref()
+        .map(|user| principal_for_user_id(&repo, &user.id))
+        .unwrap_or_else(Principal::public);
     ensure_repo_read(&state, &repo, &principal)?;
     if role_for_principal(&state, &repo, &principal)? != Some(RepoRole::Owner) {
         return Err(ApiError::forbidden("owner role required"));
@@ -251,15 +258,15 @@ pub(crate) async fn update_file_visibility(
     }
 
     let update_path = path.clone();
+    let user_id = user
+        .as_ref()
+        .map(|user| user.id.clone())
+        .ok_or_else(|| ApiError::forbidden("owner role required"))?;
     let updated = state.metadata.update(move |catalog| {
         let repo = catalog
             .repositories
             .get(&repo_id)
             .ok_or_else(|| ApiError::not_found(format!("repo {owner}/{repo_name} not found")))?;
-        let user_id = identity
-            .as_ref()
-            .map(identity_user_id)
-            .ok_or_else(|| ApiError::forbidden("owner role required"))?;
         let principal = principal_for_user_id(repo, &user_id);
         let role = catalog.role_for_principal(repo, &principal);
 
@@ -334,14 +341,21 @@ pub(crate) async fn update_settings(
     Json(input): Json<UpdateRepoSettingsRequest>,
 ) -> Result<Json<RepoSettings>, ApiError> {
     let identity = http_identity(&state, &headers).await?;
+    let user = identity
+        .as_ref()
+        .map(|identity| ensure_user_for_identity(&state, identity))
+        .transpose()?;
     let repo_id = crate::domain::store::repo_id(&owner, &repo_name);
     let repo = find_repo(&state, &owner, &repo_name)?;
-    let principal = principal_for_repo(&state, &repo, identity.as_ref())?;
+    let principal = user
+        .as_ref()
+        .map(|user| principal_for_user_id(&repo, &user.id))
+        .unwrap_or_else(Principal::public);
     ensure_repo_read(&state, &repo, &principal)?;
 
-    let user_id = identity
+    let user_id = user
         .as_ref()
-        .map(identity_user_id)
+        .map(|user| user.id.clone())
         .ok_or_else(|| ApiError::forbidden("owner role required"))?;
     let settings = state.metadata.update(move |catalog| {
         let repo = catalog

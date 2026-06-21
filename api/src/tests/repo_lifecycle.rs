@@ -242,6 +242,82 @@ async fn projection_route_returns_content_not_blob_metadata() {
 }
 
 #[tokio::test]
+async fn visibility_update_uses_verified_email_canonical_owner() {
+    let state = test_state_with_repo();
+    cache_test_jwks(&state);
+    {
+        let mut catalog = lock_catalog(&state).unwrap();
+        catalog
+            .repositories
+            .insert(TEST_REPO_ID.to_string(), repo_with_readme());
+    }
+
+    let response = router(state.clone())
+        .oneshot(
+            Request::builder()
+                .method("PATCH")
+                .uri("/v1/repos/owner/repo/files/visibility")
+                .header(
+                    AUTHORIZATION,
+                    bearer_header_for("rotated-pairwise-owner", TEST_OWNER_EMAIL),
+                )
+                .header(CONTENT_TYPE, "application/json")
+                .body(Body::from(
+                    r#"{"path":"/README.md","visibility":"Private"}"#,
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = response_json(response).await;
+    assert_eq!(body["path"], "/README.md");
+    assert_eq!(body["visibility"], "Private");
+
+    let catalog = lock_catalog(&state).unwrap();
+    assert_eq!(catalog.users.len(), 1);
+    let repo = catalog.repositories.get(TEST_REPO_ID).unwrap();
+    let path = ScopePath::parse("/README.md").unwrap();
+    assert_eq!(repo.policy.effective_visibility(&path), Visibility::Private);
+}
+
+#[tokio::test]
+async fn settings_update_uses_verified_email_canonical_owner() {
+    let state = test_state_with_repo();
+    cache_test_jwks(&state);
+
+    let response = router(state.clone())
+        .oneshot(
+            Request::builder()
+                .method("PATCH")
+                .uri("/v1/repos/owner/repo/settings")
+                .header(
+                    AUTHORIZATION,
+                    bearer_header_for("rotated-pairwise-owner", TEST_OWNER_EMAIL),
+                )
+                .header(CONTENT_TYPE, "application/json")
+                .body(Body::from(
+                    r#"{"include_ignored_files":true,"review_pushes_before_applying":false}"#,
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = response_json(response).await;
+    assert_eq!(body["include_ignored_files"], true);
+    assert_eq!(body["review_pushes_before_applying"], false);
+
+    let catalog = lock_catalog(&state).unwrap();
+    assert_eq!(catalog.users.len(), 1);
+    let repo = catalog.repositories.get(TEST_REPO_ID).unwrap();
+    assert!(repo.settings.include_ignored_files);
+    assert!(!repo.settings.review_pushes_before_applying);
+}
+
+#[tokio::test]
 async fn delete_repo_route_requires_owner_and_removes_storage() {
     let state = test_state_with_repo();
     cache_test_jwks(&state);

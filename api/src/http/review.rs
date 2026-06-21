@@ -1,6 +1,8 @@
 use crate::domain::store::RepoRole;
 use crate::{
-    auth::shoo::{http_identity, identity_user_id, principal_for_repo, principal_for_user_id},
+    auth::shoo::{
+        ensure_user_for_identity, http_identity, principal_for_repo, principal_for_user_id,
+    },
     error::ApiError,
     git::import::{apply_receive_pack_update, validate_staged_update_policy},
     http::responses::*,
@@ -41,22 +43,29 @@ pub(crate) async fn publish_repo(
     Path((owner, repo_name)): Path<(String, String)>,
 ) -> Result<Json<SessionRepo>, ApiError> {
     let identity = http_identity(&state, &headers).await?;
+    let user = identity
+        .as_ref()
+        .map(|identity| ensure_user_for_identity(&state, identity))
+        .transpose()?;
     let repo_id = crate::domain::store::repo_id(&owner, &repo_name);
     let repo = find_repo(&state, &owner, &repo_name)?;
-    let principal = principal_for_repo(&state, &repo, identity.as_ref())?;
+    let principal = user
+        .as_ref()
+        .map(|user| principal_for_user_id(&repo, &user.id))
+        .unwrap_or_else(crate::domain::policy::Principal::public);
     ensure_repo_read(&state, &repo, &principal)?;
     ensure_owner(&state, &repo, &principal)?;
     ensure_pending_publish(&repo)?;
 
+    let user_id = user
+        .as_ref()
+        .map(|user| user.id.clone())
+        .ok_or_else(|| ApiError::forbidden("owner role required"))?;
     let updated = state.metadata.update(move |catalog| {
         let repo = catalog
             .repositories
             .get(&repo_id)
             .ok_or_else(|| ApiError::not_found(format!("repo {owner}/{repo_name} not found")))?;
-        let user_id = identity
-            .as_ref()
-            .map(identity_user_id)
-            .ok_or_else(|| ApiError::forbidden("owner role required"))?;
         let principal = principal_for_user_id(repo, &user_id);
         if catalog.role_for_principal(repo, &principal) != Some(RepoRole::Owner) {
             return Err(ApiError::forbidden("owner role required"));
