@@ -8,8 +8,7 @@ use crate::{
     error::ApiError,
     git::{
         authorize_git_push_token_for_repo, find_repo_after_git_scope_token, git_credential_error,
-        git_push_token_from_headers,
-        storage::{raw_git_snapshot_cache_key, raw_git_snapshot_cache_path, restore_git_snapshot},
+        git_push_token_from_headers, storage::cached_raw_git_snapshot_repo,
     },
     state::AppState,
     state::{ensure_repo_read, find_repo, role_for_principal},
@@ -146,34 +145,7 @@ pub(crate) async fn owner_snapshot_repo_for_request(
     else {
         return Ok(None);
     };
-    let cache_root = state.git_cache_root()?;
-    let cache_key = raw_git_snapshot_cache_key(snapshot);
-    let repo_path = raw_git_snapshot_cache_path(state, snapshot)?;
-    if repo_path
-        .join("refs")
-        .join("heads")
-        .join(DEFAULT_GIT_BRANCH)
-        .is_file()
-    {
-        return Ok(Some(repo_path));
-    }
-
-    let attempt = GIT_CACHE_ATTEMPT.fetch_add(1, Ordering::Relaxed);
-    let temp_path = cache_root.join(format!(
-        "raw-{cache_key}.{}.{}.tmp",
-        std::process::id(),
-        attempt
-    ));
-    restore_git_snapshot(state, snapshot, &temp_path)?;
-    match fs::rename(&temp_path, &repo_path) {
-        Ok(()) => Ok(Some(repo_path)),
-        Err(error) if repo_path.exists() => {
-            let _ = fs::remove_dir_all(&temp_path);
-            tracing::debug!(%error, path = %repo_path.display(), "using concurrently-created raw Git snapshot cache");
-            Ok(Some(repo_path))
-        }
-        Err(error) => Err(ApiError::internal(error)),
-    }
+    cached_raw_git_snapshot_repo(state, snapshot).map(Some)
 }
 
 pub(crate) fn projection_bare_repo(

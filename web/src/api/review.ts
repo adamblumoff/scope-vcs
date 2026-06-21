@@ -31,12 +31,10 @@ export async function setVisibilityForRequest(data: SetVisibilityInput) {
   }
 
   if (data.kind === 'StagedUpdate') {
-    for (const path of data.paths) {
-      await updateVisibility(idToken, reviewVisibilityUrl(data), {
-        path,
-        visibility: data.visibility,
-      })
-    }
+    await updateVisibility(idToken, reviewVisibilityUrl(data), {
+      paths: data.paths,
+      visibility: data.visibility,
+    })
   } else {
     await updateVisibility(idToken, reviewVisibilityUrl(data), {
       paths: data.paths,

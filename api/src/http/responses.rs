@@ -176,7 +176,7 @@ pub(crate) struct UpdateRepoSettingsRequest {
 
 #[derive(Debug, Deserialize)]
 pub(crate) struct UpdateStagedFileVisibilityRequest {
-    pub(crate) path: String,
+    pub(crate) paths: Vec<String>,
     pub(crate) visibility: Visibility,
 }
 

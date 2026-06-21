@@ -582,6 +582,28 @@ fn pushed_tree_rejects_non_utf8_blobs_before_pending_import() {
 }
 
 #[test]
+fn pushed_tree_cleans_uploaded_blobs_when_later_blob_is_invalid() {
+    let repo = temp_git_repo("binary-cleanup-test");
+    let valid = format!(
+        "valid before binary cleanup {} {}",
+        std::process::id(),
+        unix_now()
+    );
+    fs::write(repo.join("a.txt"), &valid).unwrap();
+    fs::write(repo.join("image.bin"), [0xff, 0x00, 0x61]).unwrap();
+    run_git(Some(&repo), &["add", "-A"], "add mixed blobs").unwrap();
+    commit_all(&repo, "mixed blobs");
+
+    let state = test_state_with_repo();
+    let error = git_tree_files(&state, TEST_REPO_ID, &repo, "HEAD").unwrap_err();
+
+    assert_eq!(error.status, StatusCode::BAD_REQUEST);
+    assert!(error.message.contains("valid UTF-8 text"));
+    assert!(!MemoryObjectStore::new().contains_bytes(valid.as_bytes()));
+    let _ = fs::remove_dir_all(&repo);
+}
+
+#[test]
 fn pushed_tree_rejects_modes_that_projection_cannot_preserve() {
     let repo = temp_git_repo("mode-test");
     fs::write(repo.join("script.sh"), "#!/bin/sh\necho hi\n").unwrap();
