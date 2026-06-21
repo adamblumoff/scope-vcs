@@ -1,8 +1,19 @@
+use sea_orm::{ConnectionTrait, Statement};
 use sea_orm::{DatabaseConnection, DbErr};
 use sea_orm_migration::{manager::SchemaManager, prelude::*};
 
 pub(crate) async fn migrate_metadata_schema(db: &DatabaseConnection) -> Result<(), DbErr> {
     let manager = SchemaManager::new(db);
+    if let Some(drift) = metadata_schema_drift(&manager).await? {
+        if !metadata_schema_has_catalog_rows(db, &manager).await? {
+            reset_metadata_schema(db).await?;
+        } else {
+            return Err(DbErr::Custom(format!(
+                "Scope metadata schema drift detected: {drift}; reset the metadata schema explicitly before starting this pre-alpha server"
+            )));
+        }
+    }
+
     manager
         .create_table(
             Table::create()
@@ -27,42 +38,6 @@ pub(crate) async fn migrate_metadata_schema(db: &DatabaseConnection) -> Result<(
                 .to_owned(),
         )
         .await?;
-    if !manager
-        .has_column("scope_metadata_locks", "pending_source_blob_deletions")
-        .await?
-    {
-        manager
-            .alter_table(
-                Table::alter()
-                    .table(MetadataLocks::Table)
-                    .add_column(
-                        ColumnDef::new(MetadataLocks::PendingSourceBlobDeletions)
-                            .json_binary()
-                            .not_null()
-                            .default("[]"),
-                    )
-                    .to_owned(),
-            )
-            .await?;
-    }
-    if !manager
-        .has_column("scope_metadata_locks", "pending_repo_storage_deletions")
-        .await?
-    {
-        manager
-            .alter_table(
-                Table::alter()
-                    .table(MetadataLocks::Table)
-                    .add_column(
-                        ColumnDef::new(MetadataLocks::PendingRepoStorageDeletions)
-                            .json_binary()
-                            .not_null()
-                            .default("[]"),
-                    )
-                    .to_owned(),
-            )
-            .await?;
-    }
 
     manager
         .create_table(
@@ -146,19 +121,6 @@ pub(crate) async fn migrate_metadata_schema(db: &DatabaseConnection) -> Result<(
                 .to_owned(),
         )
         .await?;
-    if !manager
-        .has_column("scope_repositories", "git_snapshot")
-        .await?
-    {
-        manager
-            .alter_table(
-                Table::alter()
-                    .table(Repositories::Table)
-                    .add_column(ColumnDef::new(Repositories::GitSnapshot).json_binary())
-                    .to_owned(),
-            )
-            .await?;
-    }
 
     manager
         .create_index(
@@ -217,6 +179,125 @@ pub(crate) async fn migrate_metadata_schema(db: &DatabaseConnection) -> Result<(
         .await?;
 
     Ok(())
+}
+
+pub(crate) async fn reset_metadata_schema(db: &DatabaseConnection) -> Result<(), DbErr> {
+    let backend = db.get_database_backend();
+    db.execute(Statement::from_string(
+        backend,
+        [
+            "DROP TABLE IF EXISTS",
+            "scope_repo_memberships,",
+            "scope_repositories,",
+            "scope_users,",
+            "scope_metadata_locks",
+            "CASCADE",
+        ]
+        .join(" "),
+    ))
+    .await?;
+    Ok(())
+}
+
+async fn metadata_schema_has_catalog_rows(
+    db: &DatabaseConnection,
+    manager: &SchemaManager<'_>,
+) -> Result<bool, DbErr> {
+    let backend = db.get_database_backend();
+    for table in [
+        "scope_users",
+        "scope_repositories",
+        "scope_repo_memberships",
+    ] {
+        if !manager.has_table(table).await? {
+            continue;
+        }
+        let row = db
+            .query_one(Statement::from_string(
+                backend,
+                format!("SELECT 1 FROM {table} LIMIT 1"),
+            ))
+            .await?;
+        if row.is_some() {
+            return Ok(true);
+        }
+    }
+
+    if manager.has_table("scope_metadata_locks").await? {
+        for column in [
+            "pending_repo_storage_deletions",
+            "pending_source_blob_deletions",
+        ] {
+            if !manager.has_column("scope_metadata_locks", column).await? {
+                continue;
+            }
+            let row = db
+                .query_one(Statement::from_string(
+                    backend,
+                    format!(
+                        "SELECT 1 FROM scope_metadata_locks WHERE jsonb_array_length({column}) > 0 LIMIT 1"
+                    ),
+                ))
+                .await?;
+            if row.is_some() {
+                return Ok(true);
+            }
+        }
+    }
+    Ok(false)
+}
+
+async fn metadata_schema_drift(manager: &SchemaManager<'_>) -> Result<Option<String>, DbErr> {
+    let tables = [
+        (
+            "scope_metadata_locks",
+            &[
+                "key",
+                "pending_repo_storage_deletions",
+                "pending_source_blob_deletions",
+            ][..],
+        ),
+        (
+            "scope_users",
+            &["id", "handle", "email", "email_verified", "access"][..],
+        ),
+        (
+            "scope_repositories",
+            &[
+                "id",
+                "owner_handle",
+                "name",
+                "owner_user_id",
+                "publication_state",
+                "default_visibility",
+                "settings",
+                "first_push_token",
+                "git_push_token",
+                "pending_import",
+                "policy",
+                "graph",
+                "git_snapshot",
+                "staged_update",
+                "invitations",
+            ][..],
+        ),
+        (
+            "scope_repo_memberships",
+            &["repo_id", "user_id", "role"][..],
+        ),
+    ];
+
+    for (table, columns) in tables {
+        if !manager.has_table(table).await? {
+            continue;
+        }
+        for column in columns {
+            if !manager.has_column(table, column).await? {
+                return Ok(Some(format!("missing column {table}.{column}")));
+            }
+        }
+    }
+    Ok(None)
 }
 
 macro_rules! impl_iden {

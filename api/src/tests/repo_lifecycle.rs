@@ -180,21 +180,11 @@ async fn duplicate_create_does_not_run_pending_filesystem_cleanup_for_live_repo(
 
 #[tokio::test]
 async fn db_metadata_route_round_trips_from_clean_database() {
-    let Some(database_url) = std::env::var("SCOPE_TEST_DATABASE_URL")
-        .ok()
-        .filter(|value| !value.trim().is_empty())
-    else {
+    let Some(test_db) = crate::db::TestDatabaseTarget::from_env().unwrap() else {
         eprintln!("skipping DB metadata route test; SCOPE_TEST_DATABASE_URL is not set");
         return;
     };
-    let metadata = crate::db::MetadataStore::connect_for_tests(database_url.clone()).unwrap();
-    metadata
-        .update(|catalog| {
-            catalog.users.clear();
-            catalog.repositories.clear();
-            Ok(())
-        })
-        .unwrap();
+    let metadata = crate::db::MetadataStore::connect_fresh_for_tests(&test_db).unwrap();
 
     let app = router(test_state_with_metadata(metadata));
     let response = app
@@ -214,7 +204,7 @@ async fn db_metadata_route_round_trips_from_clean_database() {
     let body = response_json(response).await;
     assert_eq!(body["repo"]["id"], "owner/db-backed");
 
-    let fresh_metadata = crate::db::MetadataStore::connect_for_tests(database_url).unwrap();
+    let fresh_metadata = crate::db::MetadataStore::connect_for_tests(&test_db).unwrap();
     let response = router(test_state_with_metadata(fresh_metadata))
         .oneshot(
             Request::builder()
@@ -231,6 +221,83 @@ async fn db_metadata_route_round_trips_from_clean_database() {
     let body = response_json(response).await;
     assert_eq!(body.as_array().unwrap().len(), 1);
     assert_eq!(body[0]["id"], "owner/db-backed");
+}
+
+#[test]
+fn db_metadata_store_round_trips_repo_metadata() {
+    let Some(test_db) = crate::db::TestDatabaseTarget::from_env().unwrap() else {
+        eprintln!("skipping DB metadata store test; SCOPE_TEST_DATABASE_URL is not set");
+        return;
+    };
+    let owner_id = test_owner_id();
+    let owner = UserAccount {
+        id: owner_id.clone(),
+        handle: TEST_REPO_OWNER.to_string(),
+        email: TEST_OWNER_EMAIL.to_string(),
+        email_verified: true,
+        access: AccountAccess::Member,
+    };
+    let mut repo = repo_with_readme();
+    let private_path = ScopePath::parse("/secret.txt").unwrap();
+    repo.policy
+        .add_rule(VisibilityRule::private(
+            private_path.clone(),
+            vec![owner_id.clone()],
+        ))
+        .unwrap();
+    repo.pending_import = Some(pending_import_fixture(vec![("imported.txt", "imported")]));
+    repo.git_snapshot = Some(source_blob("live git snapshot"));
+    repo.staged_update = Some(StagedRepoUpdate {
+        id: "stage-1".to_string(),
+        branch: "refs/heads/main".to_string(),
+        base_live_commit_id: Some("rv1".to_string()),
+        author_id: owner_id.clone(),
+        message: "stage update".to_string(),
+        git_snapshot: source_blob("staged git snapshot"),
+        changes: vec![StagedFileChange {
+            path: ScopePath::parse("/README.md").unwrap(),
+            old_content: repo.graph.commits[0].changes[0].new_content.clone(),
+            new_content: Some(source_blob("staged readme")),
+            visibility: Visibility::Public,
+            kind: StagedFileChangeKind::Modified,
+        }],
+    });
+    let pending_deletions = vec![source_blob("delete after retry")];
+    let expected_pending_import = repo.pending_import.clone();
+    let expected_git_snapshot = repo.git_snapshot.clone();
+    let expected_staged_update = repo.staged_update.clone();
+    let expected_graph = repo.graph.clone();
+    let expected_pending_deletions = pending_deletions.clone();
+
+    let metadata = crate::db::MetadataStore::connect_fresh_for_tests(&test_db).unwrap();
+    metadata
+        .update(move |catalog| {
+            catalog.users.insert(owner.id.clone(), owner);
+            catalog.repositories.insert(repo.record.id.clone(), repo);
+            catalog.pending_source_blob_deletions = pending_deletions;
+            Ok(())
+        })
+        .unwrap();
+
+    let fresh_metadata = crate::db::MetadataStore::connect_for_tests(&test_db).unwrap();
+    fresh_metadata
+        .read(move |catalog| {
+            let repo = catalog.repositories.get(TEST_REPO_ID).unwrap();
+            assert_eq!(repo.graph, expected_graph);
+            assert_eq!(
+                repo.policy.effective_visibility(&private_path),
+                Visibility::Private
+            );
+            assert_eq!(repo.pending_import, expected_pending_import);
+            assert_eq!(repo.git_snapshot, expected_git_snapshot);
+            assert_eq!(repo.staged_update, expected_staged_update);
+            assert_eq!(
+                catalog.pending_source_blob_deletions,
+                expected_pending_deletions
+            );
+            Ok(())
+        })
+        .unwrap();
 }
 
 #[tokio::test]
