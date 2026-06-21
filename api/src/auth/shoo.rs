@@ -1,5 +1,7 @@
 use crate::domain::policy::Principal;
-use crate::domain::store::{AccountAccess, AppCatalog, StoredRepository, UserAccount};
+use crate::domain::store::{
+    AccountAccess, AppCatalog, RepoMembership, StoredRepository, UserAccount,
+};
 use crate::{
     config::{LOCAL_APP_ORIGIN, SCOPE_APP_ORIGIN_ENV, SHOO_ISSUER, SHOO_JWKS_URL, non_empty_env},
     error::ApiError,
@@ -245,7 +247,10 @@ pub(crate) fn ensure_user_for_identity(
     let preferred_handle = preferred_user_handle(identity);
     let email_verified = identity.email_verified;
     state.metadata.update(move |catalog| {
-        let user = match catalog.users.get_mut(&user_id) {
+        let account_id = verified_email_account_id(catalog, &email, email_verified)
+            .unwrap_or_else(|| user_id.clone());
+
+        let user = match catalog.users.get_mut(&account_id) {
             Some(user) => {
                 user.email = email;
                 user.email_verified = email_verified;
@@ -253,21 +258,159 @@ pub(crate) fn ensure_user_for_identity(
                 user.clone()
             }
             None => {
-                let handle = unique_user_handle(catalog, &preferred_handle, &user_id);
+                let handle = unique_user_handle(catalog, &preferred_handle, &account_id);
                 let user = UserAccount {
-                    id: user_id.clone(),
+                    id: account_id.clone(),
                     handle,
                     email,
                     email_verified,
                     access: AccountAccess::Member,
                 };
-                catalog.users.insert(user_id, user.clone());
+                catalog.users.insert(account_id.clone(), user.clone());
                 user
             }
         };
 
+        if email_verified && !user.email.is_empty() {
+            if user_id != user.id && catalog.users.contains_key(&user_id) {
+                reassign_user_references(catalog, &user_id, &user.id);
+                catalog.users.remove(&user_id);
+            }
+            merge_verified_email_duplicates(catalog, &user.id, &user.email);
+        }
+
         Ok(user)
     })
+}
+
+fn verified_email_account_id(
+    catalog: &AppCatalog,
+    email: &str,
+    email_verified: bool,
+) -> Option<String> {
+    if !email_verified || email.is_empty() {
+        return None;
+    }
+
+    let mut candidates = catalog
+        .users
+        .values()
+        .filter(|user| user.email_verified && user.email == email)
+        .map(|user| user.id.clone())
+        .collect::<Vec<_>>();
+    if candidates.is_empty() {
+        return None;
+    }
+
+    candidates.sort_by(|left, right| {
+        user_canonical_rank(catalog, right)
+            .cmp(&user_canonical_rank(catalog, left))
+            .then_with(|| left.cmp(right))
+    });
+
+    candidates.into_iter().next()
+}
+
+fn merge_verified_email_duplicates(catalog: &mut AppCatalog, canonical_id: &str, email: &str) {
+    let duplicate_ids = catalog
+        .users
+        .values()
+        .filter(|user| user.id != canonical_id && user.email_verified && user.email == email)
+        .map(|user| user.id.clone())
+        .collect::<Vec<_>>();
+
+    for duplicate_id in duplicate_ids {
+        reassign_user_references(catalog, &duplicate_id, canonical_id);
+        catalog.users.remove(&duplicate_id);
+    }
+}
+
+fn reassign_user_references(catalog: &mut AppCatalog, old_id: &str, new_id: &str) {
+    for repo in catalog.repositories.values_mut() {
+        if repo.record.owner_user_id == old_id {
+            repo.record.owner_user_id = new_id.to_string();
+        }
+        if let Some(token) = repo.first_push_token.as_mut()
+            && token.owner_user_id == old_id
+        {
+            token.owner_user_id = new_id.to_string();
+        }
+        if let Some(token) = repo.git_push_token.as_mut()
+            && token.owner_user_id == old_id
+        {
+            token.owner_user_id = new_id.to_string();
+        }
+        if let Some(update) = repo.staged_update.as_mut()
+            && update.author_id == old_id
+        {
+            update.author_id = new_id.to_string();
+        }
+
+        repo.policy.reassign_principal(old_id, new_id);
+        for commit in &mut repo.graph.commits {
+            if commit.author_id == old_id {
+                commit.author_id = new_id.to_string();
+            }
+        }
+        for invitation in &mut repo.invitations {
+            if invitation.invited_by_user_id == old_id {
+                invitation.invited_by_user_id = new_id.to_string();
+            }
+        }
+        for membership in &mut repo.memberships {
+            if membership.user_id == old_id {
+                membership.user_id = new_id.to_string();
+            }
+        }
+        dedupe_memberships(&mut repo.memberships);
+    }
+}
+
+fn dedupe_memberships(memberships: &mut Vec<RepoMembership>) {
+    let mut by_user = std::collections::BTreeMap::<String, RepoMembership>::new();
+    for membership in memberships.drain(..) {
+        by_user
+            .entry(membership.user_id.clone())
+            .and_modify(|existing| {
+                if existing.role < membership.role {
+                    existing.role = membership.role;
+                }
+            })
+            .or_insert(membership);
+    }
+    memberships.extend(by_user.into_values());
+}
+
+fn user_reference_count(catalog: &AppCatalog, user_id: &str) -> usize {
+    catalog
+        .repositories
+        .values()
+        .map(|repo| {
+            usize::from(repo.record.owner_user_id == user_id)
+                + repo
+                    .memberships
+                    .iter()
+                    .filter(|membership| membership.user_id == user_id)
+                    .count()
+        })
+        .sum()
+}
+
+fn user_canonical_rank(catalog: &AppCatalog, user_id: &str) -> (usize, usize) {
+    (
+        user_reference_count(catalog, user_id),
+        catalog
+            .users
+            .get(user_id)
+            .map(|user| usize::from(!has_numeric_handle_suffix(&user.handle)))
+            .unwrap_or_default(),
+    )
+}
+
+fn has_numeric_handle_suffix(handle: &str) -> bool {
+    handle
+        .rsplit_once('-')
+        .is_some_and(|(_, suffix)| suffix.parse::<u64>().is_ok())
 }
 
 pub(crate) fn principal_for_user_id(repo: &StoredRepository, user_id: &str) -> Principal {

@@ -274,7 +274,9 @@ impl AppCatalog {
             return None;
         }
 
-        self.users.values().find(|user| user.email == email.email)
+        self.users
+            .values()
+            .find(|user| user.email_verified && user.email == email.email)
     }
 
     pub fn principal_for_repo(

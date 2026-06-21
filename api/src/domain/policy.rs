@@ -202,6 +202,18 @@ impl Policy {
         &self.rules
     }
 
+    pub fn reassign_principal(&mut self, old_id: &str, new_id: &str) {
+        if self.owner_id == old_id {
+            self.owner_id = new_id.to_string();
+        }
+
+        for rule in &mut self.rules {
+            if rule.allowed_principals.remove(old_id) {
+                rule.allowed_principals.insert(new_id.to_string());
+            }
+        }
+    }
+
     fn private_ancestor_for(&self, path: &ScopePath) -> Option<ScopePath> {
         self.rules
             .iter()
