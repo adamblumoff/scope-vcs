@@ -169,32 +169,27 @@ export async function setRepoFileVisibilityForRequest(
     throw new Error('Sign in as the repo owner to update file visibility.')
   }
 
-  for (const path of data.paths) {
-    const response = await fetch(
-      `${getApiMutationConnection()}/v1/repos/${data.owner}/${data.repo}/files/visibility`,
-      {
-        body: JSON.stringify({
-          path,
-          visibility: data.visibility,
-        }),
-        headers: {
-          ...authHeaders(idToken),
-          'content-type': 'application/json',
-        },
-        method: 'PATCH',
+  const response = await fetch(
+    `${getApiMutationConnection()}/v1/repos/${data.owner}/${data.repo}/files/visibility`,
+    {
+      body: JSON.stringify({
+        paths: data.paths,
+        visibility: data.visibility,
+      }),
+      headers: {
+        ...authHeaders(idToken),
+        'content-type': 'application/json',
       },
-    )
-    const payload = await response.json().catch(() => null)
+      method: 'PATCH',
+    },
+  )
+  const payload = await response.json().catch(() => null)
 
-    if (!response.ok) {
-      throw new Error(payload?.error ?? `request failed: ${response.status}`)
-    }
+  if (!response.ok) {
+    throw new Error(payload?.error ?? `request failed: ${response.status}`)
   }
 
-  return loadJson<RepoFile[]>(
-    `${getApiConnection()}/v1/repos/${data.owner}/${data.repo}/files`,
-    { headers: authHeaders(idToken) },
-  )
+  return payload as RepoFile[]
 }
 
 export function parseCreateRepoInput(input: unknown): CreateRepoInput {

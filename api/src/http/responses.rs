@@ -1,4 +1,3 @@
-use crate::domain::git_projection::build_virtual_git_projection;
 use crate::domain::policy::{Principal, ScopePath, Visibility};
 use crate::domain::projection::{FileChange, Projection, project_graph};
 use crate::domain::store::{
@@ -14,6 +13,7 @@ use crate::{
     state::graph_has_file,
 };
 use serde::{Deserialize, Serialize};
+use std::collections::BTreeMap;
 
 #[derive(Debug, Serialize)]
 pub(crate) struct HealthResponse {
@@ -164,7 +164,7 @@ pub(crate) struct PendingImportReviewResponse {
 
 #[derive(Debug, Deserialize)]
 pub(crate) struct UpdateFileVisibilityRequest {
-    pub(crate) path: String,
+    pub(crate) paths: Vec<String>,
     pub(crate) visibility: Visibility,
 }
 
@@ -406,28 +406,35 @@ pub(crate) fn projection_response(
 }
 
 pub(crate) fn projected_files(
-    store: &dyn ObjectStore,
     repo: &StoredRepository,
     principal: &Principal,
 ) -> Result<Vec<RepoFileResponse>, ApiError> {
     let projection = project_graph(&repo.policy, &repo.graph, principal);
-    let git = build_virtual_git_projection(store, &projection)?;
-    let mut files = git
-        .blobs
-        .into_iter()
-        .map(|blob| {
-            let scope_path =
-                ScopePath::parse(&blob.path).expect("projected Git blob paths are absolute");
-            RepoFileResponse {
-                path: blob.path,
-                oid: blob.oid,
-                tracked: true,
-                visibility: repo.policy.effective_visibility(&scope_path),
+    let mut tree = BTreeMap::new();
+    for change in projection
+        .commits
+        .iter()
+        .flat_map(|commit| commit.changes.iter())
+    {
+        match &change.new_content {
+            Some(blob) => {
+                tree.insert(change.path.clone(), blob.git_oid.clone());
             }
+            None => {
+                tree.remove(&change.path);
+            }
+        }
+    }
+
+    Ok(tree
+        .into_iter()
+        .map(|(path, oid)| RepoFileResponse {
+            visibility: repo.policy.effective_visibility(&path),
+            path: path.as_str().to_string(),
+            oid,
+            tracked: true,
         })
-        .collect::<Vec<_>>();
-    files.sort_by(|left, right| left.path.cmp(&right.path));
-    Ok(files)
+        .collect())
 }
 
 pub(crate) fn pending_import_files(
@@ -455,14 +462,13 @@ pub(crate) fn pending_import_files(
 }
 
 pub(crate) fn files_for_visibility_update(
-    store: &dyn ObjectStore,
     repo: &StoredRepository,
     principal: &Principal,
 ) -> Result<Vec<RepoFileResponse>, ApiError> {
     if repo.record.publication_state == RepoPublicationState::PendingPublish {
         pending_import_files(repo, principal)
     } else {
-        projected_files(store, repo, principal)
+        projected_files(repo, principal)
     }
 }
 

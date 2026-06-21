@@ -83,13 +83,11 @@ fn pending_visibility_toggles_apply_before_publish() {
         kind: PrincipalKind::User,
     };
 
-    let private_files =
-        files_for_visibility_update(&MemoryObjectStore::new(), &repo, &owner).unwrap();
+    let private_files = files_for_visibility_update(&repo, &owner).unwrap();
     assert_eq!(private_files[0].visibility, Visibility::Private);
 
     repo.policy.add_rule(VisibilityRule::public(path)).unwrap();
-    let public_files =
-        files_for_visibility_update(&MemoryObjectStore::new(), &repo, &owner).unwrap();
+    let public_files = files_for_visibility_update(&repo, &owner).unwrap();
     assert_eq!(public_files[0].visibility, Visibility::Public);
 }
 

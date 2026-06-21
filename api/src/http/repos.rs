@@ -25,6 +25,7 @@ use axum::{
     extract::{Path, State},
     http::HeaderMap,
 };
+use std::collections::BTreeSet;
 
 pub(crate) async fn list_repos(
     State(state): State<AppState>,
@@ -214,11 +215,7 @@ pub(crate) async fn get_files(
     let principal = principal_for_repo(&state, &repo, identity.as_ref())?;
     ensure_repo_read(&state, &repo, &principal)?;
 
-    Ok(Json(projected_files(
-        state.object_store.as_ref(),
-        &repo,
-        &principal,
-    )?))
+    Ok(Json(projected_files(&repo, &principal)?))
 }
 
 pub(crate) async fn update_file_visibility(
@@ -226,13 +223,14 @@ pub(crate) async fn update_file_visibility(
     headers: HeaderMap,
     Path((owner, repo_name)): Path<(String, String)>,
     Json(input): Json<UpdateFileVisibilityRequest>,
-) -> Result<Json<RepoFileResponse>, ApiError> {
+) -> Result<Json<Vec<RepoFileResponse>>, ApiError> {
     let identity = http_identity(&state, &headers).await?;
     let user = identity
         .as_ref()
         .map(|identity| ensure_user_for_identity(&state, identity))
         .transpose()?;
-    let path = ScopePath::parse(&input.path).map_err(ApiError::bad_request)?;
+    let update_paths = parse_visibility_paths(&input.paths)?;
+    let visibility = input.visibility;
     let repo_id = crate::domain::store::repo_id(&owner, &repo_name);
 
     let repo = find_repo(&state, &owner, &repo_name)?;
@@ -245,19 +243,20 @@ pub(crate) async fn update_file_visibility(
         return Err(ApiError::forbidden("owner role required"));
     }
 
-    let owner_files = files_for_visibility_update(state.object_store.as_ref(), &repo, &principal)?;
-    let selected_file = owner_files
-        .iter()
-        .find(|file| file.path == path.as_str())
-        .ok_or_else(|| ApiError::not_found(format!("file {} not found", path.as_str())))?;
-    if input.visibility == Visibility::Public && !selected_file.tracked {
-        return Err(ApiError::bad_request(format!(
-            "file {} must be tracked by Git before it can be made public",
-            path.as_str()
-        )));
+    let owner_files = files_for_visibility_update(&repo, &principal)?;
+    for path in &update_paths {
+        let selected_file = owner_files
+            .iter()
+            .find(|file| file.path == path.as_str())
+            .ok_or_else(|| ApiError::not_found(format!("file {} not found", path.as_str())))?;
+        if visibility == Visibility::Public && !selected_file.tracked {
+            return Err(ApiError::bad_request(format!(
+                "file {} must be tracked by Git before it can be made public",
+                path.as_str()
+            )));
+        }
     }
 
-    let update_path = path.clone();
     let user_id = user
         .as_ref()
         .map(|user| user.id.clone())
@@ -274,11 +273,15 @@ pub(crate) async fn update_file_visibility(
             return Err(ApiError::forbidden("owner role required"));
         }
 
-        if input.visibility == Visibility::Public && !repo_has_file_for_review(repo, &update_path) {
-            return Err(ApiError::bad_request(format!(
-                "file {} must be tracked by Git before it can be made public",
-                update_path.as_str()
-            )));
+        if visibility == Visibility::Public {
+            for update_path in &update_paths {
+                if !repo_has_file_for_review(repo, update_path) {
+                    return Err(ApiError::bad_request(format!(
+                        "file {} must be tracked by Git before it can be made public",
+                        update_path.as_str()
+                    )));
+                }
+            }
         }
 
         {
@@ -286,13 +289,16 @@ pub(crate) async fn update_file_visibility(
                 .repositories
                 .get_mut(&repo_id)
                 .expect("repo was already checked");
-            let rule = match input.visibility {
-                Visibility::Public => VisibilityRule::public(update_path.clone()),
-                Visibility::Private => {
-                    VisibilityRule::private(update_path.clone(), repo_owner_ids(repo))
-                }
-            };
-            repo.policy.add_rule(rule).map_err(ApiError::bad_request)?;
+            let owner_ids = repo_owner_ids(repo);
+            for update_path in &update_paths {
+                let rule = match visibility {
+                    Visibility::Public => VisibilityRule::public(update_path.clone()),
+                    Visibility::Private => {
+                        VisibilityRule::private(update_path.clone(), owner_ids.clone())
+                    }
+                };
+                repo.policy.add_rule(rule).map_err(ApiError::bad_request)?;
+            }
         }
 
         let updated = catalog
@@ -307,14 +313,22 @@ pub(crate) async fn update_file_visibility(
         id: updated.record.owner_user_id.clone(),
         kind: crate::domain::policy::PrincipalKind::User,
     };
-    let updated_files =
-        files_for_visibility_update(state.object_store.as_ref(), &updated, &principal)?;
-    let file = updated_files
-        .into_iter()
-        .find(|file| file.path == path.as_str())
-        .ok_or_else(|| ApiError::not_found(format!("file {} not found", path.as_str())))?;
+    let updated_files = files_for_visibility_update(&updated, &principal)?;
 
-    Ok(Json(file))
+    Ok(Json(updated_files))
+}
+
+fn parse_visibility_paths(paths: &[String]) -> Result<Vec<ScopePath>, ApiError> {
+    if paths.is_empty() {
+        return Err(ApiError::bad_request("at least one file path is required"));
+    }
+
+    let mut parsed = BTreeSet::new();
+    for path in paths {
+        parsed.insert(ScopePath::parse(path).map_err(ApiError::bad_request)?);
+    }
+
+    Ok(parsed.into_iter().collect())
 }
 
 pub(crate) async fn get_settings(

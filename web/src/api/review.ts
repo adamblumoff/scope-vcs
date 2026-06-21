@@ -30,23 +30,18 @@ export async function setVisibilityForRequest(data: SetVisibilityInput) {
     throw new Error('Sign in as the repo owner to update file visibility.')
   }
 
-  for (const path of data.paths) {
-    const response = await fetch(reviewVisibilityUrl(data), {
-      body: JSON.stringify({
+  if (data.kind === 'StagedUpdate') {
+    for (const path of data.paths) {
+      await updateVisibility(idToken, reviewVisibilityUrl(data), {
         path,
         visibility: data.visibility,
-      }),
-      headers: {
-        ...authHeaders(idToken),
-        'content-type': 'application/json',
-      },
-      method: 'PATCH',
-    })
-    const payload = await response.json().catch(() => null)
-
-    if (!response.ok) {
-      throw new Error(payload?.error ?? `request failed: ${response.status}`)
+      })
     }
+  } else {
+    await updateVisibility(idToken, reviewVisibilityUrl(data), {
+      paths: data.paths,
+      visibility: data.visibility,
+    })
   }
 
   const updated = await loadRepoReview(data, idToken)
@@ -55,6 +50,26 @@ export async function setVisibilityForRequest(data: SetVisibilityInput) {
   }
 
   return updated
+}
+
+async function updateVisibility(
+  idToken: string,
+  url: string,
+  body: Record<string, unknown>,
+) {
+  const response = await fetch(url, {
+    body: JSON.stringify(body),
+    headers: {
+      ...authHeaders(idToken),
+      'content-type': 'application/json',
+    },
+    method: 'PATCH',
+  })
+  const payload = await response.json().catch(() => null)
+
+  if (!response.ok) {
+    throw new Error(payload?.error ?? `request failed: ${response.status}`)
+  }
 }
 
 export async function publishRepoForRequest(data: RepoParams) {

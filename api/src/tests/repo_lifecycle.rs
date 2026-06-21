@@ -263,7 +263,7 @@ async fn visibility_update_uses_verified_email_canonical_owner() {
                 )
                 .header(CONTENT_TYPE, "application/json")
                 .body(Body::from(
-                    r#"{"path":"/README.md","visibility":"Private"}"#,
+                    r#"{"paths":["/README.md"],"visibility":"Private"}"#,
                 ))
                 .unwrap(),
         )
@@ -272,14 +272,69 @@ async fn visibility_update_uses_verified_email_canonical_owner() {
 
     assert_eq!(response.status(), StatusCode::OK);
     let body = response_json(response).await;
-    assert_eq!(body["path"], "/README.md");
-    assert_eq!(body["visibility"], "Private");
+    assert_eq!(body.as_array().unwrap().len(), 1);
+    assert_eq!(body[0]["path"], "/README.md");
+    assert_eq!(body[0]["visibility"], "Private");
 
     let catalog = lock_catalog(&state).unwrap();
     assert_eq!(catalog.users.len(), 1);
     let repo = catalog.repositories.get(TEST_REPO_ID).unwrap();
     let path = ScopePath::parse("/README.md").unwrap();
     assert_eq!(repo.policy.effective_visibility(&path), Visibility::Private);
+}
+
+#[tokio::test]
+async fn visibility_update_batches_multiple_paths() {
+    let state = test_state_with_repo();
+    cache_test_jwks(&state);
+    {
+        let mut repo = repo_with_readme();
+        repo.graph.commits[0].changes.push(FileChange {
+            path: ScopePath::parse("/src/app.ts").unwrap(),
+            old_content: None,
+            new_content: Some(source_blob("app")),
+        });
+        let mut catalog = lock_catalog(&state).unwrap();
+        catalog.repositories.insert(TEST_REPO_ID.to_string(), repo);
+    }
+
+    let response = router(state.clone())
+        .oneshot(
+            Request::builder()
+                .method("PATCH")
+                .uri("/v1/repos/owner/repo/files/visibility")
+                .header(AUTHORIZATION, bearer_header())
+                .header(CONTENT_TYPE, "application/json")
+                .body(Body::from(
+                    r#"{"paths":["/README.md","/src/app.ts"],"visibility":"Private"}"#,
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = response_json(response).await;
+    assert_eq!(body.as_array().unwrap().len(), 2);
+    assert!(
+        body.as_array()
+            .unwrap()
+            .iter()
+            .all(|file| file["visibility"] == "Private")
+    );
+
+    let catalog = lock_catalog(&state).unwrap();
+    let repo = catalog.repositories.get(TEST_REPO_ID).unwrap();
+    assert_eq!(
+        repo.policy
+            .effective_visibility(&ScopePath::parse("/README.md").unwrap()),
+        Visibility::Private
+    );
+    assert_eq!(
+        repo.policy
+            .effective_visibility(&ScopePath::parse("/src/app.ts").unwrap()),
+        Visibility::Private
+    );
 }
 
 #[tokio::test]
