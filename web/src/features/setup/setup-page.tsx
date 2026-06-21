@@ -200,10 +200,19 @@ export function SetupPage({
                 <span>{setupProgressLabel(progressState)}</span>
               </div>
               {setupCommandText ? (
-                <CopyableCodeBlock
-                  copyLabel="Copy setup command"
-                  value={setupCommandText}
-                />
+                <>
+                  <CopyableCodeBlock
+                    copyLabel="Copy setup command"
+                    value={setupCommandText}
+                  />
+                  <p className="text-sm leading-5 text-muted-foreground">
+                    This stores your Scope push token in Git credentials,
+                    replaces the local <InlineCode>scope</InlineCode> remote,
+                    and pushes your current <InlineCode>HEAD</InlineCode> into
+                    review. Your <InlineCode>origin</InlineCode> remote stays
+                    untouched.
+                  </p>
+                </>
               ) : (
                 <div className="space-y-3">
                   <p className="text-sm leading-5 text-muted-foreground">

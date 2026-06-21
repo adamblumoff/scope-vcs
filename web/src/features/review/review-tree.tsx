@@ -11,10 +11,11 @@ import {
   FolderOpen,
   LoaderCircle,
 } from 'lucide-react'
-import { useState } from 'react'
+import { useMemo, useState } from 'react'
 import {
   buildReviewTree,
   displayPath,
+  folderCollapseKeys,
   folderVisibility,
   type ReviewTreeNode,
 } from './review-tree-model'
@@ -36,8 +37,10 @@ export function ReviewTree({
   pendingKey: string | null
   stagedReview: boolean
 }) {
-  const [collapsed, setCollapsed] = useState<Set<string>>(() => new Set())
-  const root = buildReviewTree(files)
+  const root = useMemo(() => buildReviewTree(files), [files])
+  const [collapsed, setCollapsed] = useState<Set<string>>(
+    () => new Set(folderCollapseKeys(root)),
+  )
 
   function toggleFolder(key: string) {
     setCollapsed((current) => {

@@ -87,6 +87,17 @@ export function folderVisibility(files: ReviewTreeFileBase[]): VisibilityState {
   return hasPublic ? 'Public' : 'Private'
 }
 
+export function folderCollapseKeys<TFile extends ReviewTreeFileBase>(
+  node: Extract<ReviewTreeNode<TFile>, { type: 'folder' }>,
+): string[] {
+  return node.children.flatMap((child) => {
+    if (child.type === 'file') {
+      return []
+    }
+    return [child.key, ...folderCollapseKeys(child)]
+  })
+}
+
 export function displayPath(path: string) {
   return normalizeReviewPath(path)
 }

@@ -4,6 +4,7 @@ import { test } from 'node:test'
 import {
   buildReviewTree,
   displayPath,
+  folderCollapseKeys,
   folderVisibility,
   normalizeReviewPath,
 } from './review-tree-model'
@@ -65,6 +66,23 @@ test('folderVisibility reports Public, Private, and Mixed states', () => {
     ]),
     'Mixed',
   )
+})
+
+test('folderCollapseKeys returns every folder key for collapsed review landing', () => {
+  const tree = buildReviewTree<TestFile>([
+    { path: 'api/src/main.rs', visibility: 'Private' },
+    { path: 'api/tests/http.rs', visibility: 'Private' },
+    { path: 'web/src/App.tsx', visibility: 'Public' },
+    { path: 'README.md', visibility: 'Public' },
+  ])
+
+  assert.deepEqual(folderCollapseKeys(tree), [
+    'folder:/api',
+    'folder:/api/src',
+    'folder:/api/tests',
+    'folder:/web',
+    'folder:/web/src',
+  ])
 })
 
 test('path helpers normalize leading slashes, backslashes, dot segments, and empty parts', () => {
