@@ -15,6 +15,11 @@ pub(crate) async fn migrate_metadata_schema(db: &DatabaseConnection) -> Result<(
                         .primary_key(),
                 )
                 .col(
+                    ColumnDef::new(MetadataLocks::PendingRepoStorageDeletions)
+                        .json_binary()
+                        .not_null(),
+                )
+                .col(
                     ColumnDef::new(MetadataLocks::PendingSourceBlobDeletions)
                         .json_binary()
                         .not_null(),
@@ -32,6 +37,24 @@ pub(crate) async fn migrate_metadata_schema(db: &DatabaseConnection) -> Result<(
                     .table(MetadataLocks::Table)
                     .add_column(
                         ColumnDef::new(MetadataLocks::PendingSourceBlobDeletions)
+                            .json_binary()
+                            .not_null()
+                            .default("[]"),
+                    )
+                    .to_owned(),
+            )
+            .await?;
+    }
+    if !manager
+        .has_column("scope_metadata_locks", "pending_repo_storage_deletions")
+        .await?
+    {
+        manager
+            .alter_table(
+                Table::alter()
+                    .table(MetadataLocks::Table)
+                    .add_column(
+                        ColumnDef::new(MetadataLocks::PendingRepoStorageDeletions)
                             .json_binary()
                             .not_null()
                             .default("[]"),
@@ -286,11 +309,13 @@ impl_iden!(Memberships {
 enum MetadataLocks {
     Table,
     Key,
+    PendingRepoStorageDeletions,
     PendingSourceBlobDeletions,
 }
 
 impl_iden!(MetadataLocks {
     Table => "scope_metadata_locks",
     Key => "key",
+    PendingRepoStorageDeletions => "pending_repo_storage_deletions",
     PendingSourceBlobDeletions => "pending_source_blob_deletions",
 });

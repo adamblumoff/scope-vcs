@@ -212,3 +212,103 @@ fn rejecting_staged_update_deletes_unreferenced_bucket_objects() {
 
     assert!(!MemoryObjectStore::new().contains_key(&rejected_key));
 }
+
+#[test]
+fn rejecting_staged_update_records_pending_cleanup_when_bucket_delete_fails() {
+    let mut state = test_state_with_repo();
+    state.object_store = Arc::new(DeleteFailsObjectStore);
+    let rejected_blob = source_blob("rejected cleanup failure content");
+    let rejected_key = rejected_blob.object_key.clone();
+    {
+        let mut repo = repo_with_readme();
+        repo.staged_update = Some(StagedRepoUpdate {
+            id: "staged_push_1".to_string(),
+            branch: format!("refs/heads/{DEFAULT_GIT_BRANCH}"),
+            base_live_commit_id: repo.graph.commits.last().map(|commit| commit.id.clone()),
+            author_id: repo.record.owner_user_id.clone(),
+            message: "reject me".to_string(),
+            git_snapshot: source_blob("rejected cleanup failure git snapshot"),
+            changes: vec![StagedFileChange {
+                path: ScopePath::parse("/private.txt").unwrap(),
+                old_content: None,
+                new_content: Some(rejected_blob),
+                visibility: Visibility::Private,
+                kind: StagedFileChangeKind::Added,
+            }],
+        });
+        let mut catalog = lock_catalog(&state).unwrap();
+        catalog.repositories.insert(TEST_REPO_ID.to_string(), repo);
+    }
+
+    reject_staged_update_in_catalog(&state, TEST_REPO_OWNER, TEST_REPO_NAME).unwrap();
+
+    let repo = find_repo(&state, TEST_REPO_OWNER, TEST_REPO_NAME).unwrap();
+    assert!(repo.staged_update.is_none());
+    assert!(MemoryObjectStore::new().contains_key(&rejected_key));
+    assert!(
+        !lock_catalog(&state)
+            .unwrap()
+            .pending_source_blob_deletions
+            .is_empty()
+    );
+}
+
+#[test]
+fn rejecting_staged_update_does_not_cleanup_when_metadata_persist_fails() {
+    let state = test_state_with_repo();
+    let rejected_blob = source_blob("rejected persist failure content");
+    let rejected_key = rejected_blob.object_key.clone();
+    {
+        let mut repo = repo_with_readme();
+        repo.staged_update = Some(StagedRepoUpdate {
+            id: "staged_push_1".to_string(),
+            branch: format!("refs/heads/{DEFAULT_GIT_BRANCH}"),
+            base_live_commit_id: repo.graph.commits.last().map(|commit| commit.id.clone()),
+            author_id: repo.record.owner_user_id.clone(),
+            message: "reject me".to_string(),
+            git_snapshot: source_blob("rejected persist failure git snapshot"),
+            changes: vec![StagedFileChange {
+                path: ScopePath::parse("/private.txt").unwrap(),
+                old_content: None,
+                new_content: Some(rejected_blob),
+                visibility: Visibility::Private,
+                kind: StagedFileChangeKind::Added,
+            }],
+        });
+        let mut catalog = lock_catalog(&state).unwrap();
+        catalog.repositories.insert(TEST_REPO_ID.to_string(), repo);
+    }
+    state.metadata.fail_next_persist_for_tests().unwrap();
+
+    let error =
+        reject_staged_update_in_catalog(&state, TEST_REPO_OWNER, TEST_REPO_NAME).unwrap_err();
+
+    assert_eq!(error.status, StatusCode::INTERNAL_SERVER_ERROR);
+    let repo = find_repo(&state, TEST_REPO_OWNER, TEST_REPO_NAME).unwrap();
+    assert!(repo.staged_update.is_some());
+    assert!(MemoryObjectStore::new().contains_key(&rejected_key));
+    assert!(
+        lock_catalog(&state)
+            .unwrap()
+            .pending_source_blob_deletions
+            .is_empty()
+    );
+}
+
+struct DeleteFailsObjectStore;
+
+impl crate::object_store::ObjectStore for DeleteFailsObjectStore {
+    fn put(&self, _key: &str, _bytes: &[u8]) -> Result<(), crate::error::ApiError> {
+        Ok(())
+    }
+
+    fn get(&self, key: &str) -> Result<Vec<u8>, crate::error::ApiError> {
+        Err(crate::error::ApiError::not_found(format!(
+            "object {key} not found"
+        )))
+    }
+
+    fn delete(&self, _key: &str) -> Result<(), crate::error::ApiError> {
+        Err(crate::error::ApiError::service_unavailable("delete failed"))
+    }
+}

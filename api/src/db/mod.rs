@@ -11,6 +11,8 @@ use sea_orm::{
 };
 use serde::{Serialize, de::DeserializeOwned};
 use std::sync::Arc;
+#[cfg(test)]
+use std::sync::atomic::{AtomicBool, Ordering};
 
 const METADATA_LOCK_KEY: &str = "catalog";
 
@@ -25,7 +27,13 @@ enum MetadataStoreInner {
         runtime: DbRuntime,
     },
     #[cfg(test)]
-    Memory(std::sync::Arc<std::sync::Mutex<AppCatalog>>),
+    Memory(Arc<MemoryMetadataStore>),
+}
+
+#[cfg(test)]
+struct MemoryMetadataStore {
+    catalog: std::sync::Mutex<AppCatalog>,
+    fail_next_persist: AtomicBool,
 }
 
 struct DbRuntime(Option<tokio::runtime::Runtime>);
@@ -66,9 +74,10 @@ impl MetadataStore {
     #[cfg(test)]
     pub(crate) fn memory(catalog: AppCatalog) -> Self {
         Self {
-            inner: Arc::new(MetadataStoreInner::Memory(Arc::new(std::sync::Mutex::new(
-                catalog,
-            )))),
+            inner: Arc::new(MetadataStoreInner::Memory(Arc::new(MemoryMetadataStore {
+                catalog: std::sync::Mutex::new(catalog),
+                fail_next_persist: AtomicBool::new(false),
+            }))),
         }
     }
 
@@ -92,6 +101,7 @@ impl MetadataStore {
             #[cfg(test)]
             MetadataStoreInner::Memory(catalog) => {
                 let catalog = catalog
+                    .catalog
                     .lock()
                     .map_err(|_| ApiError::internal_message("catalog lock is poisoned"))?;
                 op(&catalog)
@@ -107,11 +117,18 @@ impl MetadataStore {
         match self.inner.as_ref() {
             MetadataStoreInner::Postgres { db, runtime } => update_catalog(runtime, db, op),
             #[cfg(test)]
-            MetadataStoreInner::Memory(catalog) => {
-                let mut catalog = catalog
+            MetadataStoreInner::Memory(memory) => {
+                let mut catalog = memory
+                    .catalog
                     .lock()
                     .map_err(|_| ApiError::internal_message("catalog lock is poisoned"))?;
-                op(&mut catalog)
+                let mut draft = catalog.clone();
+                let result = op(&mut draft)?;
+                if memory.fail_next_persist.swap(false, Ordering::SeqCst) {
+                    return Err(ApiError::internal_message("test metadata persist failure"));
+                }
+                *catalog = draft;
+                Ok(result)
             }
         }
     }
@@ -134,6 +151,7 @@ impl MetadataStore {
             MetadataStoreInner::Memory(catalog) => {
                 drop(
                     catalog
+                        .catalog
                         .lock()
                         .map_err(|_| ApiError::internal_message("catalog lock is poisoned"))?,
                 );
@@ -146,10 +164,24 @@ impl MetadataStore {
     pub(crate) fn test_catalog(&self) -> Result<std::sync::MutexGuard<'_, AppCatalog>, ApiError> {
         match self.inner.as_ref() {
             MetadataStoreInner::Memory(catalog) => catalog
+                .catalog
                 .lock()
                 .map_err(|_| ApiError::internal_message("catalog lock is poisoned")),
             MetadataStoreInner::Postgres { .. } => Err(ApiError::internal_message(
                 "test catalog access is only available for memory metadata stores",
+            )),
+        }
+    }
+
+    #[cfg(test)]
+    pub(crate) fn fail_next_persist_for_tests(&self) -> Result<(), ApiError> {
+        match self.inner.as_ref() {
+            MetadataStoreInner::Memory(catalog) => {
+                catalog.fail_next_persist.store(true, Ordering::SeqCst);
+                Ok(())
+            }
+            MetadataStoreInner::Postgres { .. } => Err(ApiError::internal_message(
+                "test persist failure is only available for memory metadata stores",
             )),
         }
     }
@@ -263,6 +295,7 @@ where
     Ok(AppCatalog {
         users,
         repositories,
+        pending_repo_storage_deletions: decode_json(metadata_lock.pending_repo_storage_deletions)?,
         pending_source_blob_deletions: decode_json(metadata_lock.pending_source_blob_deletions)?,
     })
 }
@@ -324,6 +357,10 @@ where
     entities::metadata_lock::Entity::update_many()
         .filter(entities::metadata_lock::Column::Key.eq(METADATA_LOCK_KEY))
         .col_expr(
+            entities::metadata_lock::Column::PendingRepoStorageDeletions,
+            sea_orm::sea_query::Expr::value(encode_json(&catalog.pending_repo_storage_deletions)?),
+        )
+        .col_expr(
             entities::metadata_lock::Column::PendingSourceBlobDeletions,
             sea_orm::sea_query::Expr::value(encode_json(&catalog.pending_source_blob_deletions)?),
         )
@@ -337,6 +374,7 @@ where
 async fn ensure_metadata_lock_row(db: &DatabaseConnection) -> Result<(), sea_orm::DbErr> {
     match entities::metadata_lock::Entity::insert(entities::metadata_lock::ActiveModel {
         key: Set(METADATA_LOCK_KEY.to_string()),
+        pending_repo_storage_deletions: Set(serde_json::Value::Array(Vec::new())),
         pending_source_blob_deletions: Set(serde_json::Value::Array(Vec::new())),
     })
     .on_conflict(

@@ -1,7 +1,7 @@
 use crate::domain::git_projection::{VirtualGitProjection, build_virtual_git_projection};
 use crate::domain::policy::{Principal, ScopePath, Visibility, VisibilityRule};
 use crate::domain::projection::project_graph;
-use crate::domain::store::{RepoRole, RepoSettings};
+use crate::domain::store::{RepoRole, RepoSettings, RepoStorageCleanup};
 use crate::{
     auth::{
         shoo::{
@@ -11,12 +11,12 @@ use crate::{
         tokens::{generate_first_push_token, generate_git_push_token},
     },
     error::ApiError,
-    git::storage::delete_repo_storage,
     http::responses::*,
     persistence::{catalog_error, unix_now},
     state::AppState,
     state::{
-        ensure_repo_read, find_repo, queue_source_blob_deletions, repo_source_blobs,
+        cleanup_pending_repo_storage_deletion_for_recreate, ensure_repo_read, find_repo,
+        queue_repo_storage_deletion, queue_source_blob_deletions, repo_source_blobs,
         role_for_principal,
     },
 };
@@ -54,6 +54,7 @@ pub(crate) async fn create_repo(
     let identity = require_identity(&state, &headers).await?;
     let user = ensure_user_for_identity(&state, &identity)?;
     let default_visibility = input.visibility.unwrap_or(Visibility::Private);
+    let cleanup_state = state.clone();
 
     let created = state.metadata.update(move |catalog| {
         let user = catalog
@@ -61,6 +62,12 @@ pub(crate) async fn create_repo(
             .get(&user.id)
             .cloned()
             .ok_or_else(|| ApiError::internal_message("signed-in user was not persisted"))?;
+        cleanup_pending_repo_storage_deletion_for_recreate(
+            &cleanup_state,
+            catalog,
+            &user.handle,
+            &input.name,
+        )?;
         let repo_id = catalog
             .create_repository(&user, &input.name, default_visibility)
             .map_err(catalog_error)?
@@ -140,7 +147,6 @@ pub(crate) async fn delete_repo(
     let delete_repo_id = repo_id.clone();
     let missing_owner = owner.clone();
     let missing_repo_name = repo_name.clone();
-    let cleanup_state = state.clone();
 
     state.metadata.update(move |catalog| {
         let repo = catalog.repositories.get(&delete_repo_id).ok_or_else(|| {
@@ -155,16 +161,23 @@ pub(crate) async fn delete_repo(
             )));
         }
 
-        delete_repo_storage(&cleanup_state, &delete_owner, &delete_repo_name)?;
         let repo = catalog
             .repositories
             .remove(&delete_repo_id)
             .expect("repo was already checked");
+        queue_repo_storage_deletion(
+            catalog,
+            RepoStorageCleanup {
+                owner_handle: delete_owner,
+                repo_name: delete_repo_name,
+            },
+        );
         let blobs = repo_source_blobs(&repo);
         queue_source_blob_deletions(catalog, blobs);
         Ok(())
     })?;
 
+    crate::state::best_effort_drain_pending_repo_storage_deletions(&state);
     crate::state::best_effort_drain_pending_source_blob_deletions(&state);
 
     Ok(Json(DeleteRepoResponse {

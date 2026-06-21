@@ -95,6 +95,12 @@ pub struct SourceBlob {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RepoStorageCleanup {
+    pub owner_handle: String,
+    pub repo_name: String,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PendingImportFile {
     pub path: String,
     pub mode: String,
@@ -207,6 +213,7 @@ pub struct StoredRepository {
 pub struct AppCatalog {
     pub users: BTreeMap<String, UserAccount>,
     pub repositories: BTreeMap<String, StoredRepository>,
+    pub pending_repo_storage_deletions: Vec<RepoStorageCleanup>,
     pub pending_source_blob_deletions: Vec<SourceBlob>,
 }
 
