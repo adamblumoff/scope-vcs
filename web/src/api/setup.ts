@@ -3,6 +3,7 @@ import {
   authHeaders,
   getApiConnection,
   getApiMutationConnection,
+  getPublicApiConnection,
   loadJson,
   readRequestAuthToken,
 } from '@/api/client'
@@ -26,7 +27,13 @@ export async function loadSetupForRequest(data: { owner: string; repo: string })
       { headers: authHeaders(idToken) },
     )
 
-    return { kind: 'setup', setup: setupView(api, setup) } satisfies SetupRouteState
+    return {
+      kind: 'setup',
+      setup: setupView(
+        getPublicApiConnection('building repository setup command'),
+        setup,
+      ),
+    } satisfies SetupRouteState
   } catch (error) {
     if (error instanceof HttpError && error.status === 409) {
       return { kind: 'review' } satisfies SetupRouteState
@@ -79,7 +86,10 @@ export async function regenerateTokenForRequest(data: {
     throw new Error(payload?.error ?? `request failed: ${response.status}`)
   }
 
-  return setupView(api, payload as RepoSetup)
+  return setupView(
+    getPublicApiConnection('building repository setup command'),
+    payload as RepoSetup,
+  )
 }
 
 export function setupPushSecretKey(repoId: string) {

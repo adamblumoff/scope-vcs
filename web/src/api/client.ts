@@ -2,6 +2,8 @@ export { HttpError, authHeaders, loadJson, stripTrailingSlash } from './http'
 import { stripTrailingSlash } from './http'
 
 const localApiBase = 'http://localhost:8080'
+const internalApiUrlEnv = 'SCOPE_API_INTERNAL_URL'
+const publicApiUrlEnv = 'SCOPE_API_PUBLIC_URL'
 export const homeFlashKey = 'scope:home-flash'
 
 export async function readRequestAuthToken() {
@@ -11,20 +13,19 @@ export async function readRequestAuthToken() {
 }
 
 export function getApiConnection(action = 'loading repositories') {
-  const envBase = import.meta.env.VITE_SCOPE_API_URL as string | undefined
-  if (envBase) {
-    return stripTrailingSlash(envBase)
-  }
-
-  if (import.meta.env.DEV) {
-    return localApiBase
-  }
-
-  throw new Error(`Set VITE_SCOPE_API_URL before ${action}.`)
+  return configuredApiConnection(internalApiUrlEnv, action)
 }
 
 export function getApiMutationConnection(action = 'changing repository state') {
-  const envBase = import.meta.env.VITE_SCOPE_API_URL as string | undefined
+  return configuredApiConnection(internalApiUrlEnv, action)
+}
+
+export function getPublicApiConnection(action = 'building repository setup') {
+  return configuredApiConnection(publicApiUrlEnv, action)
+}
+
+function configuredApiConnection(envName: string, action: string) {
+  const envBase = runtimeEnv(envName)
   if (envBase) {
     return stripTrailingSlash(envBase)
   }
@@ -33,7 +34,15 @@ export function getApiMutationConnection(action = 'changing repository state') {
     return localApiBase
   }
 
-  throw new Error(`Set VITE_SCOPE_API_URL before ${action}.`)
+  throw new Error(`Set ${envName} before ${action}.`)
+}
+
+function runtimeEnv(name: string) {
+  if (typeof process === 'undefined') {
+    return undefined
+  }
+
+  return process.env[name]?.trim()
 }
 
 export function storeHomeFlash(message: string) {

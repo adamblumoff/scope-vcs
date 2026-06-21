@@ -1,6 +1,6 @@
 use anyhow::Context;
 use api::{AppState, router};
-use std::net::SocketAddr;
+use std::net::{Ipv6Addr, SocketAddr};
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 
 fn main() -> anyhow::Result<()> {
@@ -16,7 +16,7 @@ fn main() -> anyhow::Result<()> {
         .ok()
         .and_then(|value| value.parse::<u16>().ok())
         .unwrap_or(8080);
-    let addr = SocketAddr::from(([0, 0, 0, 0], port));
+    let addr = SocketAddr::from((Ipv6Addr::UNSPECIFIED, port));
     let state = AppState::from_env()?;
 
     tokio::runtime::Runtime::new()

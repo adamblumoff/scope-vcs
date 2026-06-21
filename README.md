@@ -34,11 +34,19 @@ Railway services:
   `api` binary from that directory. It requires `DATABASE_URL` from the
   Railway Postgres service and runs API-owned SeaORM migrations on startup.
   Metadata write routes return `503` until the follow-up metadata PR moves
-  those writes onto the ORM-backed repositories.
-- `scope-web` is a Railpack Node service rooted at `web`.
-- `scope-web` also requires `VITE_SCOPE_API_URL` to point at the deployed
-  `scope-api` origin. The web app intentionally has no hard-coded production
-  API fallback.
+  those writes onto the ORM-backed repositories. Keep the API service port
+  pinned to `8080` if `scope-web` uses the private URL example below.
+- `scope-web` is a Railpack Node service rooted at `web`. It requires two API
+  origin variables:
+  - `SCOPE_API_INTERNAL_URL` is the server-to-server API origin used by
+    TanStack Start server functions. On Railway, point it at the API private
+    domain with the API port, for example
+    `http://${{scope-api.RAILWAY_PRIVATE_DOMAIN}}:8080`.
+  - `SCOPE_API_PUBLIC_URL` is the public API origin shown in Git remote/setup
+    commands, for example `https://scope-api-production-0251.up.railway.app`.
+    Do not point this at a `railway.internal` host; browsers and local Git
+    clients cannot reach Railway's private network.
+  The web app intentionally has no hard-coded production API fallback.
 
 Railway Postgres stores canonical metadata. Railway Buckets store encrypted
 source blobs and Git bundle snapshots.
