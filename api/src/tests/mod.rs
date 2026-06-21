@@ -33,13 +33,12 @@ use std::{
     collections::BTreeMap,
     fs,
     path::{Path as FsPath, PathBuf},
-    sync::{Arc, Mutex},
+    sync::Arc,
     time::{SystemTime, UNIX_EPOCH},
 };
 use tower::ServiceExt;
 
 mod auth;
-mod db_foundation;
 mod git_http;
 mod git_receive;
 mod repo_lifecycle;
@@ -163,12 +162,11 @@ fn test_state_with_repo() -> AppState {
     let repo = test_repo(&owner_id);
 
     AppState {
-        catalog: Arc::new(Mutex::new(AppCatalog {
+        metadata: crate::db::MetadataStore::memory(AppCatalog {
             users: BTreeMap::from([(owner.id.clone(), owner)]),
             repositories: BTreeMap::from([(repo.record.id.clone(), repo)]),
-        })),
-        db: Arc::new(crate::db::mock_connection()),
-        state_path: Arc::new(test_state_path()),
+        }),
+        data_dir: Arc::new(test_data_dir()),
         shoo: ShooVerifier::new(
             SHOO_ISSUER,
             Some("origin:http://localhost:3000".to_string()),
@@ -179,6 +177,20 @@ fn test_state_with_repo() -> AppState {
 
 fn test_state_with_jwks() -> AppState {
     let state = AppState::test_state();
+    cache_test_jwks(&state);
+    state
+}
+
+fn test_state_with_metadata(metadata: crate::db::MetadataStore) -> AppState {
+    let state = AppState {
+        metadata,
+        data_dir: Arc::new(test_data_dir()),
+        shoo: ShooVerifier::new(
+            SHOO_ISSUER,
+            Some("origin:http://localhost:3000".to_string()),
+            "http://127.0.0.1/.well-known/jwks.json",
+        ),
+    };
     cache_test_jwks(&state);
     state
 }

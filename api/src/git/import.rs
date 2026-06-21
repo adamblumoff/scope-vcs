@@ -13,10 +13,10 @@ use crate::{
     git::{
         InitialPushCredential, PersistedReceivePackUpdate, authorize_first_push_token_for_repo,
         authorize_git_push_token_for_repo,
-        storage::{owner_git_repo_path, replace_git_repo_and_then, staged_git_repo_path},
+        storage::{begin_git_repo_replacement, owner_git_repo_path, staged_git_repo_path},
     },
     http::responses::{first_push_token_status_at, pending_scope_path, repo_owner_ids},
-    persistence::{lock_catalog, persist_catalog, unix_now},
+    persistence::unix_now,
     state::AppState,
     state::{find_repo, live_tree},
 };
@@ -467,10 +467,11 @@ pub(crate) fn persist_pending_import(
 ) -> Result<(), ApiError> {
     let repo_id = crate::domain::store::repo_id(owner, repo_name);
     let now = unix_now()?;
-    let mut catalog = lock_catalog(state)?;
-    let mut staged = catalog.clone();
-    {
-        let repo = staged
+    let owner = owner.to_string();
+    let repo_name = repo_name.to_string();
+    let credential = credential.clone();
+    state.metadata.update(move |catalog| {
+        let repo = catalog
             .repositories
             .get_mut(&repo_id)
             .ok_or_else(|| ApiError::not_found(format!("repo {owner}/{repo_name} not found")))?;
@@ -484,10 +485,10 @@ pub(crate) fn persist_pending_import(
         }
         match credential {
             InitialPushCredential::FirstPushToken { secret } => {
-                authorize_first_push_token_for_repo(repo, secret)?;
+                authorize_first_push_token_for_repo(repo, &secret)?;
             }
             InitialPushCredential::GitPushToken { secret } => {
-                authorize_git_push_token_for_repo(repo, secret)?;
+                authorize_git_push_token_for_repo(repo, &secret)?;
             }
         }
         if let Some(token) = repo.first_push_token.as_mut() {
@@ -497,11 +498,8 @@ pub(crate) fn persist_pending_import(
         }
         repo.pending_import = Some(import);
         repo.record.publication_state = RepoPublicationState::PendingPublish;
-    }
-
-    persist_catalog(state, &staged)?;
-    *catalog = staged;
-    Ok(())
+        Ok(())
+    })
 }
 
 #[cfg(test)]
@@ -512,23 +510,19 @@ pub(crate) fn persist_receive_pack_update(
     update: ReceivePackUpdate,
 ) -> Result<PersistedReceivePackUpdate, ApiError> {
     let repo_id = crate::domain::store::repo_id(owner, repo_name);
-    let mut catalog = lock_catalog(state)?;
-    let mut staged = catalog.clone();
-    let persisted = {
-        let repo = staged
+    let owner = owner.to_string();
+    let repo_name = repo_name.to_string();
+    state.metadata.update(move |catalog| {
+        let repo = catalog
             .repositories
             .get_mut(&repo_id)
             .ok_or_else(|| ApiError::not_found(format!("repo {owner}/{repo_name} not found")))?;
         if stage_receive_pack_update(repo, update)?.is_some() {
-            PersistedReceivePackUpdate::Staged
+            Ok(PersistedReceivePackUpdate::Staged)
         } else {
-            PersistedReceivePackUpdate::Applied
+            Ok(PersistedReceivePackUpdate::Applied)
         }
-    };
-
-    persist_catalog(state, &staged)?;
-    *catalog = staged;
-    Ok(persisted)
+    })
 }
 
 pub(crate) fn persist_receive_pack_update_and_promote(
@@ -539,29 +533,31 @@ pub(crate) fn persist_receive_pack_update_and_promote(
     update: ReceivePackUpdate,
 ) -> Result<PersistedReceivePackUpdate, ApiError> {
     let repo_id = crate::domain::store::repo_id(owner, repo_name);
-    let mut catalog = lock_catalog(state)?;
-    let mut staged = catalog.clone();
-    let persisted = {
-        let repo = staged
+    let owner = owner.to_string();
+    let repo_name = repo_name.to_string();
+    let staging_repo = staging_repo.to_path_buf();
+    let staged_target = staged_git_repo_path(state, &owner, &repo_name);
+    let owner_target = owner_git_repo_path(state, &owner, &repo_name);
+
+    let (persisted, replacement) = state.metadata.update(move |catalog| {
+        let repo = catalog
             .repositories
             .get_mut(&repo_id)
             .ok_or_else(|| ApiError::not_found(format!("repo {owner}/{repo_name} not found")))?;
-        if stage_receive_pack_update(repo, update)?.is_some() {
+        let persisted = if stage_receive_pack_update(repo, update)?.is_some() {
             PersistedReceivePackUpdate::Staged
         } else {
             PersistedReceivePackUpdate::Applied
-        }
-    };
-    let target_repo = match persisted {
-        PersistedReceivePackUpdate::Staged => staged_git_repo_path(state, owner, repo_name),
-        PersistedReceivePackUpdate::Applied => owner_git_repo_path(state, owner, repo_name),
-    };
-
-    replace_git_repo_and_then(staging_repo, &target_repo, || {
-        persist_catalog(state, &staged)?;
-        *catalog = staged;
-        Ok(persisted)
-    })
+        };
+        let target_repo = match persisted {
+            PersistedReceivePackUpdate::Staged => &staged_target,
+            PersistedReceivePackUpdate::Applied => &owner_target,
+        };
+        let replacement = begin_git_repo_replacement(&staging_repo, target_repo)?;
+        Ok((persisted, replacement))
+    })?;
+    replacement.commit()?;
+    Ok(persisted)
 }
 
 pub(crate) fn run_git(repo: Option<&FsPath>, args: &[&str], action: &str) -> Result<(), ApiError> {

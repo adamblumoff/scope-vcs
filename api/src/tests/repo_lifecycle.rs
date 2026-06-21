@@ -80,6 +80,61 @@ async fn create_repo_route_creates_user_and_lists_repo() {
 }
 
 #[tokio::test]
+async fn db_metadata_route_round_trips_from_clean_database() {
+    let Some(database_url) = std::env::var("SCOPE_TEST_DATABASE_URL")
+        .ok()
+        .filter(|value| !value.trim().is_empty())
+    else {
+        eprintln!("skipping DB metadata route test; SCOPE_TEST_DATABASE_URL is not set");
+        return;
+    };
+    let metadata = crate::db::MetadataStore::connect_for_tests(database_url.clone()).unwrap();
+    metadata
+        .update(|catalog| {
+            catalog.users.clear();
+            catalog.repositories.clear();
+            Ok(())
+        })
+        .unwrap();
+
+    let app = router(test_state_with_metadata(metadata));
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/v1/repos")
+                .header(AUTHORIZATION, bearer_header())
+                .header(CONTENT_TYPE, "application/json")
+                .body(Body::from(r#"{"name":"db-backed"}"#))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = response_json(response).await;
+    assert_eq!(body["repo"]["id"], "owner/db-backed");
+
+    let fresh_metadata = crate::db::MetadataStore::connect_for_tests(database_url).unwrap();
+    let response = router(test_state_with_metadata(fresh_metadata))
+        .oneshot(
+            Request::builder()
+                .method("GET")
+                .uri("/v1/repos")
+                .header(AUTHORIZATION, bearer_header())
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = response_json(response).await;
+    assert_eq!(body.as_array().unwrap().len(), 1);
+    assert_eq!(body[0]["id"], "owner/db-backed");
+}
+
+#[tokio::test]
 async fn list_repos_marks_published_repo_with_staged_update() {
     let state = test_state_with_repo();
     cache_test_jwks(&state);

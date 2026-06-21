@@ -13,7 +13,7 @@ use crate::{
     error::ApiError,
     git::storage::delete_repo_storage,
     http::responses::*,
-    persistence::{catalog_error, lock_catalog, persist_catalog, unix_now},
+    persistence::{catalog_error, unix_now},
     state::AppState,
     state::{ensure_repo_read, find_repo, role_for_principal},
 };
@@ -29,12 +29,14 @@ pub(crate) async fn list_repos(
 ) -> Result<Json<Vec<RepoSummaryResponse>>, ApiError> {
     let identity = require_identity(&state, &headers).await?;
     let user = ensure_user_for_identity(&state, &identity)?;
-    let catalog = lock_catalog(&state)?;
-    let mut repositories = catalog
-        .repositories_for_user(&user.id)
-        .into_iter()
-        .filter_map(|repo| repo_summary(&catalog, repo, &user.id))
-        .collect::<Vec<_>>();
+    let user_id = user.id.clone();
+    let mut repositories = state.metadata.read(move |catalog| {
+        Ok(catalog
+            .repositories_for_user(&user_id)
+            .into_iter()
+            .filter_map(|repo| repo_summary(catalog, repo, &user_id))
+            .collect::<Vec<_>>())
+    })?;
     repositories.sort_by(|left, right| left.id.cmp(&right.id));
 
     Ok(Json(repositories))
@@ -49,15 +51,13 @@ pub(crate) async fn create_repo(
     let user = ensure_user_for_identity(&state, &identity)?;
     let default_visibility = input.visibility.unwrap_or(Visibility::Private);
 
-    let created = {
-        let mut catalog = lock_catalog(&state)?;
-        let mut staged = catalog.clone();
-        let user = staged
+    let created = state.metadata.update(move |catalog| {
+        let user = catalog
             .users
             .get(&user.id)
             .cloned()
             .ok_or_else(|| ApiError::internal_message("signed-in user was not persisted"))?;
-        let repo_id = staged
+        let repo_id = catalog
             .create_repository(&user, &input.name, default_visibility)
             .map_err(catalog_error)?
             .record
@@ -67,22 +67,22 @@ pub(crate) async fn create_repo(
         let (push_secret, push_token) = generate_git_push_token(&user.id)?;
         let now = unix_now()?;
         {
-            let repo = staged
+            let repo = catalog
                 .repositories
                 .get_mut(&repo_id)
                 .expect("created repository must exist");
             repo.first_push_token = Some(token);
             repo.git_push_token = Some(push_token);
         }
-        let repo = staged
+        let repo = catalog
             .repositories
             .get(&repo_id)
             .expect("created repository must exist");
-        let summary = repo_summary(&staged, repo, &user.id).ok_or_else(|| {
+        let summary = repo_summary(catalog, repo, &user.id).ok_or_else(|| {
             ApiError::internal_message("created repository is missing owner role")
         })?;
         let setup = repo_setup_response(
-            &staged,
+            catalog,
             repo,
             &user.id,
             now,
@@ -90,13 +90,11 @@ pub(crate) async fn create_repo(
             Some(push_secret),
         )?;
 
-        persist_catalog(&state, &staged)?;
-        *catalog = staged;
-        CreateRepoResponse {
+        Ok(CreateRepoResponse {
             repo: summary,
             setup,
-        }
-    };
+        })
+    })?;
 
     Ok(Json(created))
 }
@@ -133,27 +131,30 @@ pub(crate) async fn delete_repo(
     let identity = require_identity(&state, &headers).await?;
     let user = ensure_user_for_identity(&state, &identity)?;
     let repo_id = crate::domain::store::repo_id(&owner, &repo_name);
+    let delete_owner = owner.clone();
+    let delete_repo_name = repo_name.clone();
+    let delete_repo_id = repo_id.clone();
+    let missing_owner = owner.clone();
+    let missing_repo_name = repo_name.clone();
 
-    {
-        let mut catalog = lock_catalog(&state)?;
-        let mut staged = catalog.clone();
-        let repo = staged
-            .repositories
-            .get(&repo_id)
-            .ok_or_else(|| ApiError::not_found(format!("repo {owner}/{repo_name} not found")))?;
+    state.metadata.update(move |catalog| {
+        let repo = catalog.repositories.get(&delete_repo_id).ok_or_else(|| {
+            ApiError::not_found(format!(
+                "repo {missing_owner}/{missing_repo_name} not found"
+            ))
+        })?;
         let principal = principal_for_user_id(repo, &user.id);
-        if staged.role_for_principal(repo, &principal) != Some(RepoRole::Owner) {
+        if catalog.role_for_principal(repo, &principal) != Some(RepoRole::Owner) {
             return Err(ApiError::not_found(format!(
-                "repo {owner}/{repo_name} not found"
+                "repo {missing_owner}/{missing_repo_name} not found"
             )));
         }
 
-        staged.repositories.remove(&repo_id);
-        persist_catalog(&state, &staged)?;
-        *catalog = staged;
-    }
+        catalog.repositories.remove(&delete_repo_id);
+        Ok(())
+    })?;
 
-    delete_repo_storage(&state, &owner, &repo_name)?;
+    delete_repo_storage(&state, &delete_owner, &delete_repo_name)?;
 
     Ok(Json(DeleteRepoResponse {
         id: repo_id,
@@ -228,10 +229,9 @@ pub(crate) async fn update_file_visibility(
         )));
     }
 
-    let updated = {
-        let mut catalog = lock_catalog(&state)?;
-        let mut staged = catalog.clone();
-        let repo = staged
+    let update_path = path.clone();
+    let updated = state.metadata.update(move |catalog| {
+        let repo = catalog
             .repositories
             .get(&repo_id)
             .ok_or_else(|| ApiError::not_found(format!("repo {owner}/{repo_name} not found")))?;
@@ -240,40 +240,40 @@ pub(crate) async fn update_file_visibility(
             .map(identity_user_id)
             .ok_or_else(|| ApiError::forbidden("owner role required"))?;
         let principal = principal_for_user_id(repo, &user_id);
-        let role = staged.role_for_principal(repo, &principal);
+        let role = catalog.role_for_principal(repo, &principal);
 
         if role != Some(RepoRole::Owner) {
             return Err(ApiError::forbidden("owner role required"));
         }
 
-        if input.visibility == Visibility::Public && !repo_has_file_for_review(repo, &path) {
+        if input.visibility == Visibility::Public && !repo_has_file_for_review(repo, &update_path) {
             return Err(ApiError::bad_request(format!(
                 "file {} must be tracked by Git before it can be made public",
-                path.as_str()
+                update_path.as_str()
             )));
         }
 
         {
-            let repo = staged
+            let repo = catalog
                 .repositories
                 .get_mut(&repo_id)
                 .expect("repo was already checked");
             let rule = match input.visibility {
-                Visibility::Public => VisibilityRule::public(path.clone()),
-                Visibility::Private => VisibilityRule::private(path.clone(), repo_owner_ids(repo)),
+                Visibility::Public => VisibilityRule::public(update_path.clone()),
+                Visibility::Private => {
+                    VisibilityRule::private(update_path.clone(), repo_owner_ids(repo))
+                }
             };
             repo.policy.add_rule(rule).map_err(ApiError::bad_request)?;
         }
 
-        persist_catalog(&state, &staged)?;
-        let updated = staged
+        let updated = catalog
             .repositories
             .get(&repo_id)
             .expect("repo was already checked")
             .clone();
-        *catalog = staged;
-        updated
-    };
+        Ok(updated)
+    })?;
 
     let principal = Principal {
         id: updated.record.owner_user_id.clone(),
@@ -317,38 +317,29 @@ pub(crate) async fn update_settings(
     let principal = principal_for_repo(&state, &repo, identity.as_ref())?;
     ensure_repo_read(&state, &repo, &principal)?;
 
-    let mut catalog = lock_catalog(&state)?;
-    let mut staged = catalog.clone();
-    let repo = staged
-        .repositories
-        .get(&repo_id)
-        .ok_or_else(|| ApiError::not_found(format!("repo {owner}/{repo_name} not found")))?;
     let user_id = identity
         .as_ref()
         .map(identity_user_id)
         .ok_or_else(|| ApiError::forbidden("owner role required"))?;
-    let principal = principal_for_user_id(repo, &user_id);
+    let settings = state.metadata.update(move |catalog| {
+        let repo = catalog
+            .repositories
+            .get(&repo_id)
+            .ok_or_else(|| ApiError::not_found(format!("repo {owner}/{repo_name} not found")))?;
+        let principal = principal_for_user_id(repo, &user_id);
 
-    if staged.role_for_principal(repo, &principal) != Some(RepoRole::Owner) {
-        return Err(ApiError::forbidden("owner role required"));
-    }
+        if catalog.role_for_principal(repo, &principal) != Some(RepoRole::Owner) {
+            return Err(ApiError::forbidden("owner role required"));
+        }
 
-    {
-        let repo = staged
+        let repo = catalog
             .repositories
             .get_mut(&repo_id)
             .expect("repo was already checked");
         repo.settings.include_ignored_files = input.include_ignored_files;
         repo.settings.review_pushes_before_applying = input.review_pushes_before_applying;
-    }
-
-    persist_catalog(&state, &staged)?;
-    let settings = staged
-        .repositories
-        .get(&repo_id)
-        .expect("repo was already checked")
-        .settings;
-    *catalog = staged;
+        Ok(repo.settings)
+    })?;
 
     Ok(Json(settings))
 }

@@ -3,59 +3,44 @@ use crate::domain::policy::{Principal, ScopePath};
 use crate::domain::projection::{
     AuthorVisibility, LogicalCommit, MixedCommitPolicy, project_graph,
 };
-use crate::domain::store::{
-    AppCatalog, RepoPublicationState, RepoRole, StoredRepository, app_catalog,
-};
+use crate::domain::store::{RepoPublicationState, RepoRole, StoredRepository};
 use crate::{
     auth::shoo::ShooVerifier,
-    config::{DATABASE_URL_ENV, git_repo_root, non_empty_env, state_path},
-    db,
+    config::{data_dir, git_repo_root},
+    db::MetadataStore,
     error::ApiError,
     http::responses::pending_import_changes,
-    persistence::{ensure_private_dir, lock_catalog},
+    persistence::ensure_private_dir,
 };
-use anyhow::Context;
-use sea_orm::DatabaseConnection;
-use std::{
-    collections::BTreeMap,
-    path::PathBuf,
-    sync::{Arc, Mutex},
-};
+use std::{collections::BTreeMap, path::PathBuf, sync::Arc};
 
 #[derive(Clone)]
 pub struct AppState {
-    pub(crate) catalog: Arc<Mutex<AppCatalog>>,
-    #[allow(dead_code)]
-    pub(crate) db: Arc<DatabaseConnection>,
-    pub(crate) state_path: Arc<PathBuf>,
+    pub(crate) metadata: MetadataStore,
+    pub(crate) data_dir: Arc<PathBuf>,
     pub(crate) shoo: ShooVerifier,
 }
 
 impl AppState {
     pub async fn from_env() -> anyhow::Result<Self> {
         let repo_root = git_repo_root();
-        let state_path = state_path(&repo_root);
-        let database_url = non_empty_env(DATABASE_URL_ENV)
-            .with_context(|| format!("{DATABASE_URL_ENV} is required for Scope API metadata"))?;
-        let db = db::connect(&database_url).await?;
-        db::migrate(&db).await?;
+        let data_dir = data_dir(&repo_root);
+        ensure_private_dir(&data_dir).map_err(|error| anyhow::anyhow!(error.message))?;
 
         Ok(Self {
-            catalog: Arc::new(Mutex::new(app_catalog())),
-            db: Arc::new(db),
-            state_path: Arc::new(state_path),
+            metadata: MetadataStore::connect_from_env()?,
+            data_dir: Arc::new(data_dir),
             shoo: ShooVerifier::from_env(),
         })
     }
 
     #[cfg(test)]
     pub(crate) fn test_state() -> Self {
-        use crate::{config::SHOO_ISSUER, persistence::test_state_path};
+        use crate::{config::SHOO_ISSUER, domain::store::app_catalog, persistence::test_data_dir};
 
         Self {
-            catalog: Arc::new(Mutex::new(app_catalog())),
-            db: Arc::new(crate::db::mock_connection()),
-            state_path: Arc::new(test_state_path()),
+            metadata: MetadataStore::memory(app_catalog()),
+            data_dir: Arc::new(test_data_dir()),
             shoo: ShooVerifier::new(
                 SHOO_ISSUER,
                 Some("origin:http://localhost:3000".to_string()),
@@ -65,11 +50,8 @@ impl AppState {
     }
 
     pub(crate) fn git_cache_root(&self) -> Result<PathBuf, ApiError> {
-        let state_dir = self
-            .state_path
-            .parent()
-            .ok_or_else(|| ApiError::internal_message("state path must have a parent directory"))?;
-        let cache_root = state_dir.join("git-cache");
+        ensure_private_dir(&self.data_dir)?;
+        let cache_root = self.data_dir.join("git-cache");
         ensure_private_dir(&cache_root)?;
         Ok(cache_root)
     }
@@ -80,10 +62,14 @@ pub(crate) fn find_repo(
     owner: &str,
     name: &str,
 ) -> Result<StoredRepository, ApiError> {
-    lock_catalog(state)?
-        .repository(owner, name)
-        .cloned()
-        .ok_or_else(|| ApiError::not_found(format!("repo {owner}/{name} not found")))
+    let owner = owner.to_string();
+    let name = name.to_string();
+    state.metadata.read(move |catalog| {
+        catalog
+            .repository(&owner, &name)
+            .cloned()
+            .ok_or_else(|| ApiError::not_found(format!("repo {owner}/{name} not found")))
+    })
 }
 
 pub(crate) fn ensure_repo_read(
@@ -171,7 +157,11 @@ pub(crate) fn role_for_principal(
     repo: &StoredRepository,
     principal: &Principal,
 ) -> Result<Option<RepoRole>, ApiError> {
-    Ok(lock_catalog(state)?.role_for_principal(repo, principal))
+    let repo = repo.clone();
+    let principal = principal.clone();
+    state
+        .metadata
+        .read(move |catalog| Ok(catalog.role_for_principal(&repo, &principal)))
 }
 
 pub(crate) fn can_read_path(
@@ -180,7 +170,12 @@ pub(crate) fn can_read_path(
     principal: &Principal,
     path: &ScopePath,
 ) -> Result<bool, ApiError> {
-    Ok(lock_catalog(state)?.can_read_path(repo, principal, path))
+    let repo = repo.clone();
+    let principal = principal.clone();
+    let path = path.clone();
+    state
+        .metadata
+        .read(move |catalog| Ok(catalog.can_read_path(&repo, &principal, &path)))
 }
 
 pub(crate) fn can_write_path(
@@ -189,7 +184,12 @@ pub(crate) fn can_write_path(
     principal: &Principal,
     path: &ScopePath,
 ) -> Result<bool, ApiError> {
-    Ok(lock_catalog(state)?.can_write_path(repo, principal, path))
+    let repo = repo.clone();
+    let principal = principal.clone();
+    let path = path.clone();
+    state
+        .metadata
+        .read(move |catalog| Ok(catalog.can_write_path(&repo, &principal, &path)))
 }
 
 pub(crate) fn graph_has_file(repo: &StoredRepository, path: &ScopePath) -> bool {

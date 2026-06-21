@@ -442,40 +442,6 @@ async fn real_git_first_push_over_http_creates_pending_import() {
     let _ = fs::remove_dir_all(source);
 }
 
-#[cfg(unix)]
-#[test]
-fn persist_catalog_writes_private_state_permissions() {
-    use std::os::unix::fs::PermissionsExt;
-
-    let state_dir = std::env::temp_dir().join(format!(
-        "scope-vcs-private-state-{}-{}",
-        std::process::id(),
-        unix_now()
-    ));
-    let state = AppState {
-        catalog: Arc::new(Mutex::new(app_catalog())),
-        db: Arc::new(crate::db::mock_connection()),
-        state_path: Arc::new(state_dir.join("state.json")),
-        shoo: ShooVerifier::new(
-            SHOO_ISSUER,
-            Some("origin:http://localhost:3000".to_string()),
-            "http://127.0.0.1/.well-known/jwks.json",
-        ),
-    };
-
-    persist_test_catalog(&state, &app_catalog()).unwrap();
-
-    let dir_mode = fs::metadata(&state_dir).unwrap().permissions().mode() & 0o777;
-    let file_mode = fs::metadata(state.state_path.as_ref())
-        .unwrap()
-        .permissions()
-        .mode()
-        & 0o777;
-    assert_eq!(dir_mode, 0o700);
-    assert_eq!(file_mode, 0o600);
-    let _ = fs::remove_dir_all(&state_dir);
-}
-
 #[test]
 fn pushed_tree_rejects_gitlinks_instead_of_dropping_them() {
     let repo = temp_git_repo("gitlink-test");

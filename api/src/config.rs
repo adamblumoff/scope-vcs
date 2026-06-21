@@ -6,7 +6,7 @@ use std::{
 pub(crate) const SCOPE_APP_ORIGIN_ENV: &str = "SCOPE_APP_ORIGIN";
 pub(crate) const DATABASE_URL_ENV: &str = "DATABASE_URL";
 pub(crate) const SCOPE_REPO_ROOT_ENV: &str = "SCOPE_REPO_ROOT";
-pub(crate) const SCOPE_STATE_PATH_ENV: &str = "SCOPE_STATE_PATH";
+pub(crate) const SCOPE_DATA_DIR_ENV: &str = "SCOPE_DATA_DIR";
 pub(crate) const SHOO_JWKS_URL: &str = "https://shoo.dev/.well-known/jwks.json";
 pub(crate) const SHOO_ISSUER: &str = "https://shoo.dev";
 pub(crate) const LOCAL_APP_ORIGIN: &str = "http://localhost:3000";
@@ -30,8 +30,8 @@ pub(crate) fn non_empty_env(name: &str) -> Option<String> {
     std::env::var(name).ok().filter(|value| !value.is_empty())
 }
 
-pub(crate) fn state_path(repo_root: &FsPath) -> PathBuf {
-    non_empty_env(SCOPE_STATE_PATH_ENV)
+pub(crate) fn data_dir(repo_root: &FsPath) -> PathBuf {
+    non_empty_env(SCOPE_DATA_DIR_ENV)
         .map(|value| {
             let path = PathBuf::from(value);
             if path.is_absolute() {
@@ -40,7 +40,7 @@ pub(crate) fn state_path(repo_root: &FsPath) -> PathBuf {
                 repo_root.join(path)
             }
         })
-        .unwrap_or_else(|| repo_root.join(".scope").join("state.json"))
+        .unwrap_or_else(|| repo_root.join(".scope"))
 }
 
 pub(crate) fn git_repo_root() -> PathBuf {

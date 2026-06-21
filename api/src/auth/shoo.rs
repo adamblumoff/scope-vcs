@@ -4,7 +4,6 @@ use crate::{
     config::{LOCAL_APP_ORIGIN, SCOPE_APP_ORIGIN_ENV, SHOO_ISSUER, SHOO_JWKS_URL, non_empty_env},
     error::ApiError,
     http::responses::SessionIdentity,
-    persistence::lock_catalog,
     state::AppState,
 };
 use axum::http::{HeaderMap, header::AUTHORIZATION};
@@ -243,31 +242,32 @@ pub(crate) fn ensure_user_for_identity(
         .map(normalize_email)
         .unwrap_or_default();
 
-    let mut catalog = lock_catalog(state)?;
-    let mut staged = catalog.clone();
-    let user = match staged.users.get_mut(&user_id) {
-        Some(user) => {
-            user.email = email;
-            user.email_verified = identity.email_verified;
-            user.access = AccountAccess::Member;
-            user.clone()
-        }
-        None => {
-            let handle = unique_user_handle(&staged, &preferred_user_handle(identity), &user_id);
-            let user = UserAccount {
-                id: user_id.clone(),
-                handle,
-                email,
-                email_verified: identity.email_verified,
-                access: AccountAccess::Member,
-            };
-            staged.users.insert(user_id, user.clone());
-            user
-        }
-    };
+    let preferred_handle = preferred_user_handle(identity);
+    let email_verified = identity.email_verified;
+    state.metadata.update(move |catalog| {
+        let user = match catalog.users.get_mut(&user_id) {
+            Some(user) => {
+                user.email = email;
+                user.email_verified = email_verified;
+                user.access = AccountAccess::Member;
+                user.clone()
+            }
+            None => {
+                let handle = unique_user_handle(catalog, &preferred_handle, &user_id);
+                let user = UserAccount {
+                    id: user_id.clone(),
+                    handle,
+                    email,
+                    email_verified,
+                    access: AccountAccess::Member,
+                };
+                catalog.users.insert(user_id, user.clone());
+                user
+            }
+        };
 
-    *catalog = staged;
-    Ok(user)
+        Ok(user)
+    })
 }
 
 pub(crate) fn principal_for_user_id(repo: &StoredRepository, user_id: &str) -> Principal {
