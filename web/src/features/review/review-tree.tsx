@@ -21,6 +21,8 @@ import {
   type ReviewTreeNode,
 } from './review-tree-model'
 
+const REVIEW_TREE_COLUMNS = 'sm:grid-cols-[minmax(0,1fr)_110px_120px_120px]'
+
 export function ReviewTree({
   disabled = false,
   files,
@@ -61,15 +63,13 @@ export function ReviewTree({
       <div
         className={cn(
           'hidden gap-3 px-2 py-2 text-xs font-medium leading-4 text-muted-foreground sm:grid',
-          editable
-            ? 'sm:grid-cols-[minmax(0,1fr)_110px_120px_120px]'
-            : 'sm:grid-cols-[minmax(0,1fr)_110px_120px]',
+          REVIEW_TREE_COLUMNS,
         )}
       >
         <div>Path</div>
         <div>{stagedReview ? 'Change' : 'Scope'}</div>
         <div>Visibility</div>
-        {editable && <div className="text-right">Set</div>}
+        <div className="text-right">{editable ? 'Set' : null}</div>
       </div>
       {root.children.map((node) => (
         <ReviewTreeNodeRow
@@ -121,9 +121,7 @@ function ReviewTreeNodeRow({
       <div
         className={cn(
           'grid gap-2 px-2 py-2.5 text-sm sm:items-center',
-          editable
-            ? 'sm:grid-cols-[minmax(0,1fr)_110px_120px_120px]'
-            : 'sm:grid-cols-[minmax(0,1fr)_110px_120px]',
+          REVIEW_TREE_COLUMNS,
         )}
       >
         <div
@@ -146,7 +144,7 @@ function ReviewTreeNodeRow({
         <div>
           <VisibilityBadge visibility={node.file.visibility} />
         </div>
-        {editable && onSetVisibility && (
+        {editable && onSetVisibility ? (
           <div className="flex justify-end">
             <Button
               aria-label={`Set ${displayPath(node.path)} ${nextVisibility.toLowerCase()}`}
@@ -164,6 +162,8 @@ function ReviewTreeNodeRow({
               <span>{nextVisibility}</span>
             </Button>
           </div>
+        ) : (
+          <div className="hidden sm:block" />
         )}
       </div>
     )
@@ -179,9 +179,7 @@ function ReviewTreeNodeRow({
       <div
         className={cn(
           'grid gap-2 bg-muted/20 px-2 py-2.5 text-sm sm:items-center',
-          editable
-            ? 'sm:grid-cols-[minmax(0,1fr)_110px_120px_120px]'
-            : 'sm:grid-cols-[minmax(0,1fr)_110px_120px]',
+          REVIEW_TREE_COLUMNS,
         )}
       >
         <div
@@ -216,7 +214,7 @@ function ReviewTreeNodeRow({
         <div>
           <VisibilityBadge visibility={visibility} />
         </div>
-        {editable && onSetVisibility && (
+        {editable && onSetVisibility ? (
           <div className="flex justify-end">
             <Button
               aria-label={`Set ${node.path} ${nextVisibility.toLowerCase()}`}
@@ -234,6 +232,8 @@ function ReviewTreeNodeRow({
               <span>{nextVisibility}</span>
             </Button>
           </div>
+        ) : (
+          <div className="hidden sm:block" />
         )}
       </div>
       {!isCollapsed &&
