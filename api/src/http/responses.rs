@@ -270,7 +270,7 @@ pub(crate) fn first_push_token_response(
 ) -> FirstPushTokenResponse {
     let status = first_push_token_status_at(token, now_unix);
     let secret = if status == FirstPushTokenStatus::Active {
-        secret.or_else(|| token.secret.clone())
+        secret
     } else {
         None
     };

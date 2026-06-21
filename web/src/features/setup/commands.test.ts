@@ -1,47 +1,33 @@
 import * as assert from 'node:assert/strict'
 import { test } from 'node:test'
 
-import {
-  dualRemotePushCommands,
-  gitCredentialHost,
-  setupCommands,
-} from './commands'
+import { setupCommand } from './commands'
 
-test('setupCommands replaces any URL username with the Scope credential user', () => {
-  assert.deepEqual(
-    setupCommands({
-      git_remote_url: 'https://old-user@scope.example/git/adam/scope-vcs',
-      push_branch: 'trunk',
-      remote_name: 'scope',
-    }),
-    [
-      'git remote add scope https://scope@scope.example/git/adam/scope-vcs',
-      'git push -u scope HEAD:trunk',
-    ],
-  )
-})
-
-test('dualRemotePushCommands keeps GitHub fetches and adds GitHub plus Scope push URLs', () => {
-  assert.deepEqual(
-    dualRemotePushCommands({
-      git_remote_url: 'https://scope.example/git/adam/scope-vcs',
-      push_branch: 'main',
-      remote_name: 'scope',
-    }),
-    [
-      'git remote get-url origin',
-      'git remote set-url --add --push origin <github-remote-url>',
-      'git remote set-url --add --push origin https://scope@scope.example/git/adam/scope-vcs',
-      'git push origin HEAD:main',
-    ],
-  )
-})
-
-test('gitCredentialHost reports the credential host shown in setup help', () => {
+test('setupCommand stores the Scope credential, resets the remote, and pushes', () => {
   assert.equal(
-    gitCredentialHost('https://scope@scope.example/git/adam/scope-vcs'),
-    'scope.example',
+    setupCommand(
+      {
+        git_remote_url: 'https://old-user@scope.example/git/adam/scope-vcs',
+        push_branch: 'trunk',
+        remote_name: 'scope',
+      },
+      'scope_git_secret',
+    ),
+    '"protocol=https`nhost=scope.example`nusername=scope`npassword=scope_git_secret`n`n" | git credential approve; git remote remove scope 2>$null; git remote add scope https://scope@scope.example/git/adam/scope-vcs; git push scope HEAD:trunk',
   )
-  assert.equal(gitCredentialHost('not a url'), 'not a url')
+})
+
+test('setupCommand escapes PowerShell credential values', () => {
+  assert.equal(
+    setupCommand(
+      {
+        git_remote_url: 'https://old-user@scope.example/git/adam/scope-vcs',
+        push_branch: 'trunk',
+        remote_name: 'scope',
+      },
+      'scope_git_$"tick`',
+    ),
+    '"protocol=https`nhost=scope.example`nusername=scope`npassword=scope_git_`$`"tick```n`n" | git credential approve; git remote remove scope 2>$null; git remote add scope https://scope@scope.example/git/adam/scope-vcs; git push scope HEAD:trunk',
+  )
 })
 

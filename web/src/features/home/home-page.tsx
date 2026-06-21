@@ -1,5 +1,5 @@
 import { homeFlashKey } from '@/api/client'
-import { setupPushSecretKey, setupSecretKey } from '@/api/setup'
+import { setupPushSecretKey } from '@/api/setup'
 import type {
   CreateRepoInput,
   CreateRepoResponse,
@@ -79,9 +79,6 @@ export function HomePage({
       const created = await createRepo(input)
       const repo = created.repo
       setRepositories((current) => [repo, ...current])
-      if (created.setup.token?.secret) {
-        storeSetupSecret(setupSecretKey(repo.id), created.setup.token.secret)
-      }
       if (created.setup.push_token?.secret) {
         storeSetupSecret(
           setupPushSecretKey(repo.id),

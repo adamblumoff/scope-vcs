@@ -1,4 +1,4 @@
-import { setupPushSecretKey, setupSecretKey } from '@/api/setup'
+import { setupPushSecretKey } from '@/api/setup'
 import type {
   RepoLifecycleState,
   RepoParams,
@@ -15,19 +15,13 @@ import { Link, useNavigate, useRouter } from '@tanstack/react-router'
 import {
   AlertCircle,
   ArrowLeft,
-  GitBranch,
-  KeyRound,
   LoaderCircle,
   RefreshCw,
   Terminal,
 } from 'lucide-react'
 import type { ReactNode } from 'react'
 import { useEffect, useState } from 'react'
-import {
-  dualRemotePushCommands,
-  gitCredentialHost,
-  setupCommands,
-} from './commands'
+import { setupCommand } from './commands'
 
 export function SetupPage({
   initialSetup,
@@ -43,9 +37,6 @@ export function SetupPage({
   const navigate = useNavigate()
   const router = useRouter()
   const [setup, setSetup] = useState(initialSetup)
-  const [tokenSecret, setTokenSecret] = useState<string | null>(
-    initialSetup.token?.secret ?? null,
-  )
   const [pushTokenSecret, setPushTokenSecret] = useState<string | null>(
     initialSetup.push_token?.secret ?? null,
   )
@@ -54,16 +45,11 @@ export function SetupPage({
   const [progressError, setProgressError] = useState<string | null>(null)
   const [progressState, setProgressState] =
     useState<SetupProgressState>('waiting')
-  const commands = setupCommands(setup)
-  const dualPushCommands = dualRemotePushCommands(setup)
-  const credentialHost = gitCredentialHost(setup.git_remote_url)
+  const setupCommandText = pushTokenSecret
+    ? setupCommand(setup, pushTokenSecret)
+    : null
 
   useEffect(() => {
-    const stored = window.sessionStorage.getItem(setupSecretKey(setup.repo.id))
-    if (stored) {
-      setTokenSecret(stored)
-      window.sessionStorage.removeItem(setupSecretKey(setup.repo.id))
-    }
     const storedPush = window.sessionStorage.getItem(
       setupPushSecretKey(setup.repo.id),
     )
@@ -147,11 +133,12 @@ export function SetupPage({
     try {
       const next = await regenerateToken(params)
       setSetup(next)
-      setTokenSecret(next.token?.secret ?? null)
       setPushTokenSecret(next.push_token?.secret ?? null)
     } catch (tokenError) {
       setError(
-        tokenError instanceof Error ? tokenError.message : 'token update failed',
+        tokenError instanceof Error
+          ? tokenError.message
+          : 'setup command update failed',
       )
     } finally {
       setBusy(false)
@@ -173,9 +160,9 @@ export function SetupPage({
               {setup.repo.id}
             </h1>
             <p className="mt-3 max-w-[640px] text-sm leading-5 text-muted-foreground">
-              Push from your local Git repo, then review file visibility before
-              publishing. When Git asks for credentials, use the Scope token as
-              the password.
+              Run the setup command from your local Git repo. It saves the
+              Scope credential, sets the <InlineCode>scope</InlineCode> remote,
+              and pushes into review.
             </p>
           </div>
         </div>
@@ -183,7 +170,7 @@ export function SetupPage({
         {error && (
           <Alert className="mt-6" variant="destructive">
             <AlertCircle className="size-4" />
-            <AlertTitle>Token update failed</AlertTitle>
+            <AlertTitle>Setup command update failed</AlertTitle>
             <AlertDescription>{error}</AlertDescription>
           </Alert>
         )}
@@ -199,7 +186,7 @@ export function SetupPage({
         <section className="mt-8 border-y border-border">
           <div className="grid gap-4 py-5 md:grid-cols-[180px_minmax(0,1fr)]">
             <SectionLabel icon={<Terminal className="size-4" />}>
-              Git setup
+              Setup command
             </SectionLabel>
             <div className="min-w-0 space-y-2">
               {!setup.push_enabled && (
@@ -212,116 +199,32 @@ export function SetupPage({
                 <LoaderCircle className="size-3.5 animate-spin" />
                 <span>{setupProgressLabel(progressState)}</span>
               </div>
-              <CopyableCodeBlock
-                copyLabel="Copy Git setup commands"
-                value={commands.join('\n')}
-              />
-            </div>
-          </div>
-        </section>
-
-        <section className="border-b border-border">
-          <div className="grid gap-4 py-5 md:grid-cols-[180px_minmax(0,1fr)]">
-            <SectionLabel icon={<KeyRound className="size-4" />}>
-              First-push token
-            </SectionLabel>
-            <div className="min-w-0 space-y-3">
-              <div className="flex flex-wrap items-center gap-2">
-                <Badge variant="outline">{setup.token?.status ?? 'Missing'}</Badge>
-                {setup.token && (
-                  <span className="text-xs leading-4 text-muted-foreground">
-                    Expires {formatUnix(setup.token.expires_at_unix)}
-                  </span>
-                )}
-              </div>
-              {tokenSecret ? (
-                <>
-                  <CopyableCodeBlock
-                    copyLabel="Copy first-push token"
-                    value={tokenSecret}
-                  />
-                  <p className="text-sm leading-5 text-muted-foreground">
-                    Use this as the password for the first Git push. The
-                    username can be <InlineCode>scope</InlineCode>; Scope ignores
-                    it.
-                  </p>
-                </>
+              {setupCommandText ? (
+                <CopyableCodeBlock
+                  copyLabel="Copy setup command"
+                  value={setupCommandText}
+                />
               ) : (
-                <Button
-                  disabled={busy}
-                  onClick={() => void updateToken()}
-                  size="sm"
-                  type="button"
-                >
-                  {busy ? (
-                    <LoaderCircle className="size-3.5 animate-spin" />
-                  ) : (
-                    <RefreshCw className="size-3.5" />
-                  )}
-                  <span>Generate token</span>
-                </Button>
-              )}
-            </div>
-          </div>
-        </section>
-
-        <section className="border-b border-border">
-          <div className="grid gap-4 py-5 md:grid-cols-[180px_minmax(0,1fr)]">
-            <SectionLabel icon={<KeyRound className="size-4" />}>
-              Git push token
-            </SectionLabel>
-            <div className="min-w-0 space-y-3">
-              {pushTokenSecret ? (
-                <>
-                  <CopyableCodeBlock
-                    copyLabel="Copy Git push token"
-                    value={pushTokenSecret}
-                  />
+                <div className="space-y-3">
                   <p className="text-sm leading-5 text-muted-foreground">
-                    Use this for owner pushes and clones after the repo is
-                    published. For the first upload, use the first-push token
-                    above.
+                    Generate a fresh command if the original one was lost or the
+                    saved credential expired.
                   </p>
-                </>
-              ) : (
-                <p className="text-sm leading-5 text-muted-foreground">
-                  Visible once when the repository is created.
-                </p>
+                  <Button
+                    disabled={busy}
+                    onClick={() => void updateToken()}
+                    size="sm"
+                    type="button"
+                  >
+                    {busy ? (
+                      <LoaderCircle className="size-3.5 animate-spin" />
+                    ) : (
+                      <RefreshCw className="size-3.5" />
+                    )}
+                    <span>Generate setup command</span>
+                  </Button>
+                </div>
               )}
-            </div>
-          </div>
-        </section>
-
-        <section className="border-b border-border">
-          <div className="grid gap-4 py-5 md:grid-cols-[180px_minmax(0,1fr)]">
-            <SectionLabel icon={<KeyRound className="size-4" />}>
-              Git credentials
-            </SectionLabel>
-            <p className="min-w-0 text-sm leading-5 text-muted-foreground">
-              The remote URL includes <InlineCode>scope</InlineCode> as the
-              username. When Git prompts for a password, paste the{' '}
-              <InlineCode>first-push token</InlineCode>. If a bad password was
-              saved, remove the credential for{' '}
-              <InlineCode>{credentialHost}</InlineCode> and retry.
-            </p>
-          </div>
-        </section>
-
-        <section className="border-b border-border">
-          <div className="grid gap-4 py-5 md:grid-cols-[180px_minmax(0,1fr)]">
-            <SectionLabel icon={<GitBranch className="size-4" />}>
-              GitHub + Scope
-            </SectionLabel>
-            <div className="min-w-0 space-y-2">
-              <p className="text-sm leading-5 text-muted-foreground">
-                Keep GitHub as <InlineCode>origin</InlineCode> and add Scope as a
-                separate remote. To make <InlineCode>git push origin</InlineCode>{' '}
-                send to both, add both push URLs to <InlineCode>origin</InlineCode>.
-              </p>
-              <CopyableCodeBlock
-                copyLabel="Copy GitHub and Scope commands"
-                value={dualPushCommands.join('\n')}
-              />
             </div>
           </div>
         </section>
@@ -376,10 +279,6 @@ function InlineCode({ children }: { children: ReactNode }) {
       {children}
     </code>
   )
-}
-
-function formatUnix(value: number) {
-  return new Date(value * 1000).toLocaleString()
 }
 
 function setupProgressLabel(state: SetupProgressState) {

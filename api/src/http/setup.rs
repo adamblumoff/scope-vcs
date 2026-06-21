@@ -53,22 +53,27 @@ pub(crate) async fn regenerate_first_push_token(
         ensure_owner_setup_access_in_catalog(catalog, repo, &user.id)?;
 
         let (secret, token) = generate_first_push_token(&user.id)?;
+        let (push_secret, push_token) = generate_git_push_token(&user.id)?;
         {
             let repo = catalog
                 .repositories
                 .get_mut(&repo_id)
                 .expect("repo was already checked");
             repo.first_push_token = Some(token);
-            if repo.git_push_token.is_none() {
-                let (_, push_token) = generate_git_push_token(&user.id)?;
-                repo.git_push_token = Some(push_token);
-            }
+            repo.git_push_token = Some(push_token);
         }
         let repo = catalog
             .repositories
             .get(&repo_id)
             .expect("repo was already checked");
-        let setup = repo_setup_response(catalog, repo, &user.id, now, Some(secret), None)?;
+        let setup = repo_setup_response(
+            catalog,
+            repo,
+            &user.id,
+            now,
+            Some(secret),
+            Some(push_secret),
+        )?;
 
         Ok(setup)
     })?;

@@ -1,16 +1,15 @@
 use super::*;
 
 #[tokio::test]
-async fn setup_route_is_owner_only_and_returns_active_first_push_secret() {
+async fn setup_route_is_owner_only_and_hides_stored_first_push_secret() {
     let state = test_state_with_repo();
     cache_test_jwks(&state);
-    let secret = {
+    {
         let mut catalog = lock_catalog(&state).unwrap();
         let repo = catalog.repositories.get_mut(TEST_REPO_ID).unwrap();
-        let (secret, token) = generate_first_push_token(&test_owner_id()).unwrap();
+        let (_, token) = generate_first_push_token(&test_owner_id()).unwrap();
         repo.record.publication_state = RepoPublicationState::PendingFirstPush;
         repo.first_push_token = Some(token);
-        secret
     };
     let app = router(state);
 
@@ -79,11 +78,11 @@ async fn setup_route_is_owner_only_and_returns_active_first_push_secret() {
     let body = response_json(owner_response).await;
     assert_eq!(body["repo"]["id"], TEST_REPO_ID);
     assert_eq!(body["token"]["status"], "Active");
-    assert_eq!(body["token"]["secret"], secret);
+    assert!(body["token"]["secret"].is_null());
 }
 
 #[tokio::test]
-async fn setup_token_regeneration_rotates_first_push_token_only() {
+async fn setup_token_regeneration_rotates_first_push_and_git_push_tokens() {
     let state = test_state_with_repo();
     cache_test_jwks(&state);
     let (old_hash, old_push_hash) = {
@@ -115,14 +114,16 @@ async fn setup_token_regeneration_rotates_first_push_token_only() {
     let body = response_json(response).await;
     let secret = body["token"]["secret"].as_str().unwrap();
     assert!(secret.starts_with("scope_fp_"));
-    assert!(body["push_token"]["secret"].is_null());
+    let push_secret = body["push_token"]["secret"].as_str().unwrap();
+    assert!(push_secret.starts_with("scope_git_"));
     let catalog = lock_catalog(&state).unwrap();
     let repo = catalog.repositories.get(TEST_REPO_ID).unwrap();
     let new_hash = &repo.first_push_token.as_ref().unwrap().token_hash;
     let new_push_hash = &repo.git_push_token.as_ref().unwrap().token_hash;
     assert_ne!(new_hash, &old_hash);
     assert_ne!(new_hash, secret);
-    assert_eq!(new_push_hash, &old_push_hash);
+    assert_ne!(new_push_hash, &old_push_hash);
+    assert_ne!(new_push_hash, push_secret);
 }
 
 #[test]
@@ -139,7 +140,11 @@ fn first_push_token_response_uses_current_ttl() {
     let active = first_push_token_response(&token, 1000, None);
     assert_eq!(active.status, FirstPushTokenStatus::Active);
     assert_eq!(active.expires_at_unix, 1000 + FIRST_PUSH_TOKEN_TTL_SECS);
-    assert_eq!(active.secret.as_deref(), Some("scope_fp_test"));
+    assert_eq!(active.secret.as_deref(), None);
+
+    let minted = first_push_token_response(&token, 1000, Some("scope_fp_new".to_string()));
+    assert_eq!(minted.status, FirstPushTokenStatus::Active);
+    assert_eq!(minted.secret.as_deref(), Some("scope_fp_new"));
 
     let expired = first_push_token_response(&token, 1000 + FIRST_PUSH_TOKEN_TTL_SECS, None);
     assert_eq!(expired.status, FirstPushTokenStatus::Expired);

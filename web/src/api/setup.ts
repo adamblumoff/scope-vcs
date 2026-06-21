@@ -62,7 +62,7 @@ export async function regenerateTokenForRequest(data: {
 }) {
   const idToken = await readRequestAuthToken()
   if (!idToken) {
-    throw new Error('Sign in as the repo owner to regenerate setup token.')
+    throw new Error('Sign in as the repo owner to regenerate setup command.')
   }
 
   const api = getApiMutationConnection('changing repository setup')
@@ -80,10 +80,6 @@ export async function regenerateTokenForRequest(data: {
   }
 
   return setupView(api, payload as RepoSetup)
-}
-
-export function setupSecretKey(repoId: string) {
-  return `scope:first-push-token:${repoId}`
 }
 
 export function setupPushSecretKey(repoId: string) {
