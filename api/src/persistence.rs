@@ -1,14 +1,8 @@
-use crate::domain::store::{AppCatalog, CatalogError, StoredRepository, UserAccount};
+use crate::domain::store::{AppCatalog, CatalogError};
 use crate::{error::ApiError, state::AppState};
-use anyhow::Context;
-use serde::{Deserialize, Serialize};
-use std::{collections::BTreeMap, fs, io::Write, path::Path as FsPath};
-
-#[derive(Clone, Debug, Default, Serialize, Deserialize)]
-pub(crate) struct PersistedState {
-    pub(crate) users: BTreeMap<String, UserAccount>,
-    pub(crate) repositories: BTreeMap<String, StoredRepository>,
-}
+#[cfg(test)]
+use std::io::Write;
+use std::{fs, path::Path as FsPath};
 
 #[cfg(test)]
 pub(crate) fn test_state_path() -> std::path::PathBuf {
@@ -24,26 +18,26 @@ pub(crate) fn test_state_path() -> std::path::PathBuf {
         .join("state.json")
 }
 
-pub(crate) fn load_state(path: &FsPath) -> anyhow::Result<PersistedState> {
-    let bytes = match fs::read(path) {
-        Ok(bytes) => bytes,
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
-            return Ok(PersistedState::default());
-        }
-        Err(error) => {
-            return Err(error).with_context(|| format!("reading {}", path.display()));
-        }
-    };
-    serde_json::from_slice(&bytes).with_context(|| format!("parsing {}", path.display()))
+#[cfg(not(test))]
+pub(crate) fn persist_catalog(_state: &AppState, _catalog: &AppCatalog) -> Result<(), ApiError> {
+    Err(ApiError::service_unavailable(
+        "metadata writes require ORM repositories",
+    ))
 }
 
-pub(crate) fn persist_catalog(state: &AppState, catalog: &AppCatalog) -> Result<(), ApiError> {
+#[cfg(test)]
+pub(crate) fn persist_catalog(_state: &AppState, _catalog: &AppCatalog) -> Result<(), ApiError> {
+    Ok(())
+}
+
+#[cfg(test)]
+#[allow(dead_code)]
+pub(crate) fn persist_test_catalog(state: &AppState, catalog: &AppCatalog) -> Result<(), ApiError> {
     if let Some(parent) = state.state_path.parent() {
         ensure_private_dir(parent)?;
     }
 
-    let bytes = serde_json::to_vec_pretty(&persisted_state_from_catalog(catalog))
-        .map_err(ApiError::internal)?;
+    let bytes = serde_json::to_vec_pretty(catalog).map_err(ApiError::internal)?;
     let temp_path = state
         .state_path
         .with_extension(format!("json.{}.tmp", std::process::id()));
@@ -62,6 +56,8 @@ pub(crate) fn persist_catalog(state: &AppState, catalog: &AppCatalog) -> Result<
     Ok(())
 }
 
+#[cfg(test)]
+#[allow(dead_code)]
 fn ensure_private_file(_file: &fs::File) -> Result<(), ApiError> {
     #[cfg(unix)]
     {
@@ -77,17 +73,6 @@ fn ensure_private_file(_file: &fs::File) -> Result<(), ApiError> {
     Ok(())
 }
 
-pub(crate) fn apply_persisted_state(catalog: &mut AppCatalog, state: &PersistedState) {
-    catalog.users = state.users.clone();
-    catalog.repositories = state.repositories.clone();
-}
-
-fn persisted_state_from_catalog(catalog: &AppCatalog) -> PersistedState {
-    PersistedState {
-        users: catalog.users.clone(),
-        repositories: catalog.repositories.clone(),
-    }
-}
 pub(crate) fn ensure_private_dir(path: &FsPath) -> Result<(), ApiError> {
     fs::create_dir_all(path).map_err(ApiError::internal)?;
     let metadata = fs::symlink_metadata(path).map_err(ApiError::internal)?;

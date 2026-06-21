@@ -39,6 +39,7 @@ use std::{
 use tower::ServiceExt;
 
 mod auth;
+mod db_foundation;
 mod git_http;
 mod git_receive;
 mod repo_lifecycle;
@@ -166,6 +167,7 @@ fn test_state_with_repo() -> AppState {
             users: BTreeMap::from([(owner.id.clone(), owner)]),
             repositories: BTreeMap::from([(repo.record.id.clone(), repo)]),
         })),
+        db: Arc::new(crate::db::mock_connection()),
         state_path: Arc::new(test_state_path()),
         shoo: ShooVerifier::new(
             SHOO_ISSUER,

@@ -4,6 +4,7 @@ use std::{
 };
 
 pub(crate) const SCOPE_APP_ORIGIN_ENV: &str = "SCOPE_APP_ORIGIN";
+pub(crate) const DATABASE_URL_ENV: &str = "DATABASE_URL";
 pub(crate) const SCOPE_REPO_ROOT_ENV: &str = "SCOPE_REPO_ROOT";
 pub(crate) const SCOPE_STATE_PATH_ENV: &str = "SCOPE_STATE_PATH";
 pub(crate) const SHOO_JWKS_URL: &str = "https://shoo.dev/.well-known/jwks.json";

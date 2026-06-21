@@ -31,7 +31,10 @@ files, lockfiles, dependencies, and build output.
 Railway services:
 
 - `scope-api` is a Railpack Rust service rooted at `api`. Build and start the
-  `api` binary from that directory.
+  `api` binary from that directory. It requires `DATABASE_URL` from the
+  Railway Postgres service and runs API-owned SeaORM migrations on startup.
+  Metadata write routes return `503` until the follow-up metadata PR moves
+  those writes onto the ORM-backed repositories.
 - `scope-web` is a Railpack Node service rooted at `web`.
 - `scope-web` also requires `VITE_SCOPE_API_URL` to point at the deployed
   `scope-api` origin. The web app intentionally has no hard-coded production

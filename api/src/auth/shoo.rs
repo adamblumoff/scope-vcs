@@ -4,7 +4,7 @@ use crate::{
     config::{LOCAL_APP_ORIGIN, SCOPE_APP_ORIGIN_ENV, SHOO_ISSUER, SHOO_JWKS_URL, non_empty_env},
     error::ApiError,
     http::responses::SessionIdentity,
-    persistence::{lock_catalog, persist_catalog},
+    persistence::lock_catalog,
     state::AppState,
 };
 use axum::http::{HeaderMap, header::AUTHORIZATION};
@@ -266,7 +266,6 @@ pub(crate) fn ensure_user_for_identity(
         }
     };
 
-    persist_catalog(state, &staged)?;
     *catalog = staged;
     Ok(user)
 }

@@ -8,11 +8,14 @@ use crate::domain::store::{
 };
 use crate::{
     auth::shoo::ShooVerifier,
-    config::{git_repo_root, state_path},
+    config::{DATABASE_URL_ENV, git_repo_root, non_empty_env, state_path},
+    db,
     error::ApiError,
     http::responses::pending_import_changes,
-    persistence::{apply_persisted_state, ensure_private_dir, load_state, lock_catalog},
+    persistence::{ensure_private_dir, lock_catalog},
 };
+use anyhow::Context;
+use sea_orm::DatabaseConnection;
 use std::{
     collections::BTreeMap,
     path::PathBuf,
@@ -22,20 +25,24 @@ use std::{
 #[derive(Clone)]
 pub struct AppState {
     pub(crate) catalog: Arc<Mutex<AppCatalog>>,
+    #[allow(dead_code)]
+    pub(crate) db: Arc<DatabaseConnection>,
     pub(crate) state_path: Arc<PathBuf>,
     pub(crate) shoo: ShooVerifier,
 }
 
 impl AppState {
-    pub fn from_env() -> anyhow::Result<Self> {
+    pub async fn from_env() -> anyhow::Result<Self> {
         let repo_root = git_repo_root();
         let state_path = state_path(&repo_root);
-        let persisted_state = load_state(&state_path)?;
-        let mut catalog = app_catalog();
-        apply_persisted_state(&mut catalog, &persisted_state);
+        let database_url = non_empty_env(DATABASE_URL_ENV)
+            .with_context(|| format!("{DATABASE_URL_ENV} is required for Scope API metadata"))?;
+        let db = db::connect(&database_url).await?;
+        db::migrate(&db).await?;
 
         Ok(Self {
-            catalog: Arc::new(Mutex::new(catalog)),
+            catalog: Arc::new(Mutex::new(app_catalog())),
+            db: Arc::new(db),
             state_path: Arc::new(state_path),
             shoo: ShooVerifier::from_env(),
         })
@@ -47,6 +54,7 @@ impl AppState {
 
         Self {
             catalog: Arc::new(Mutex::new(app_catalog())),
+            db: Arc::new(crate::db::mock_connection()),
             state_path: Arc::new(test_state_path()),
             shoo: ShooVerifier::new(
                 SHOO_ISSUER,
