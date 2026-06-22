@@ -291,8 +291,7 @@ async fn owner_upload_pack_serves_raw_bucket_snapshot_head() {
     assert_eq!(actual_staged_head, expected_staged_head);
     assert!(staged_repo_path.exists());
 
-    crate::http::review::reject_staged_update_in_catalog(&state, TEST_REPO_OWNER, TEST_REPO_NAME)
-        .unwrap();
+    reject_staged_update_as_owner(&state).unwrap();
     assert!(!staged_repo_path.exists());
 
     let _ = fs::remove_dir_all(&source);

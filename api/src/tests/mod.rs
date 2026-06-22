@@ -57,6 +57,17 @@ const TEST_REPO_OWNER: &str = "owner";
 const TEST_REPO_NAME: &str = "repo";
 const TEST_REPO_ID: &str = "owner/repo";
 
+fn reject_staged_update_as_owner(
+    state: &AppState,
+) -> Result<StagedRepoUpdate, crate::error::ApiError> {
+    let rejected =
+        state
+            .metadata
+            .reject_staged_update(TEST_REPO_OWNER, TEST_REPO_NAME, &test_owner_id())?;
+    best_effort_drain_pending_source_blob_deletions(state);
+    Ok(rejected)
+}
+
 const TEST_PRIVATE_KEY: &str = r#"-----BEGIN PRIVATE KEY-----
 MIGHAgEAMBMGByqGSM49AgEGCCqGSM49AwEHBG0wawIBAQQgj30p9gYDpHRqbshS
 LyBNueRnRb9WS031zFD7yuhqn/ChRANCAAR6wR8PANHsn10BAVi085aM8LBPL3Cj

@@ -7,13 +7,13 @@ use crate::domain::{
     projection::{AuthorVisibility, FileVisibilityChange, LogicalCommit, MixedCommitPolicy},
     store::{
         CatalogError, FirstPushToken, GitPushToken, RepoPublicationState, RepoRecord, RepoRole,
-        RepoSettings, RepoStorageCleanup, StoredRepository, repo_id,
+        RepoSettings, RepoStorageCleanup, SourceBlob, StagedRepoUpdate, StoredRepository, repo_id,
     },
 };
 use crate::error::ApiError;
 use sea_orm::{
-    ActiveModelTrait, ColumnTrait, EntityTrait, IntoActiveModel, QueryFilter, TransactionTrait,
-    sea_query::Expr,
+    ActiveModelTrait, ColumnTrait, ConnectionTrait, EntityTrait, IntoActiveModel, QueryFilter,
+    TransactionTrait, sea_query::Expr,
 };
 use std::sync::Arc;
 
@@ -357,11 +357,7 @@ impl MetadataStore {
                     crate::state::promote_pending_import(&mut repo)?;
 
                     let record = repo.record.clone();
-                    entities::repository::Model::from_domain(&repo)?
-                        .into_active_model()
-                        .update(&tx)
-                        .await
-                        .map_err(ApiError::internal)?;
+                    save_repository_row(&tx, &repo).await?;
                     tx.commit().await.map_err(ApiError::internal)?;
                     Ok(record)
                 })
@@ -383,6 +379,166 @@ impl MetadataStore {
             }),
         }
     }
+
+    pub(crate) fn update_staged_file_visibility(
+        &self,
+        owner: &str,
+        name: &str,
+        user_id: &str,
+        update_paths: Vec<ScopePath>,
+        visibility: Visibility,
+    ) -> Result<StagedRepoUpdate, ApiError> {
+        let repo_id = repo_id(owner, name);
+        let owner = owner.to_string();
+        let name = name.to_string();
+        let user_id = user_id.to_string();
+        match self.inner.as_ref() {
+            MetadataStoreInner::Postgres { db, runtime } => {
+                let db = Arc::clone(db);
+                run_api_db_on(runtime, async move {
+                    let tx = db.as_ref().begin().await.map_err(ApiError::internal)?;
+                    acquire_metadata_write_lock(&tx).await?;
+                    let repo = entities::repository::Entity::find_by_id(repo_id)
+                        .one(&tx)
+                        .await
+                        .map_err(ApiError::internal)?
+                        .ok_or_else(|| {
+                            ApiError::not_found(format!("repo {owner}/{name} not found"))
+                        })?;
+                    let mut repo = repository_from_model(&tx, repo).await?;
+                    let updated = update_staged_file_visibility_for_repo(
+                        &mut repo,
+                        &user_id,
+                        &update_paths,
+                        visibility,
+                    )?;
+
+                    save_repository_row(&tx, &repo).await?;
+                    tx.commit().await.map_err(ApiError::internal)?;
+                    Ok(updated)
+                })
+            }
+            #[cfg(test)]
+            MetadataStoreInner::Memory(_) => self.update(move |catalog| {
+                let repo = catalog
+                    .repositories
+                    .get_mut(&repo_id)
+                    .ok_or_else(|| ApiError::not_found(format!("repo {owner}/{name} not found")))?;
+                update_staged_file_visibility_for_repo(repo, &user_id, &update_paths, visibility)
+            }),
+        }
+    }
+
+    pub(crate) fn apply_staged_update(
+        &self,
+        owner: &str,
+        name: &str,
+        user_id: &str,
+    ) -> Result<StagedRepoUpdate, ApiError> {
+        let repo_id = repo_id(owner, name);
+        let owner = owner.to_string();
+        let name = name.to_string();
+        let user_id = user_id.to_string();
+        match self.inner.as_ref() {
+            MetadataStoreInner::Postgres { db, runtime } => {
+                let db = Arc::clone(db);
+                run_api_db_on(runtime, async move {
+                    let tx = db.as_ref().begin().await.map_err(ApiError::internal)?;
+                    acquire_metadata_write_lock(&tx).await?;
+                    let repo = entities::repository::Entity::find_by_id(repo_id)
+                        .one(&tx)
+                        .await
+                        .map_err(ApiError::internal)?
+                        .ok_or_else(|| {
+                            ApiError::not_found(format!("repo {owner}/{name} not found"))
+                        })?;
+                    let mut repo = repository_from_model(&tx, repo).await?;
+                    let old_snapshot = repo.git_snapshot.clone();
+                    let applied = apply_staged_update_for_repo(&mut repo, &user_id)?;
+                    let mut pending_source_blob_deletions =
+                        load_pending_source_blob_deletions(&tx).await?;
+                    queue_pending_source_blob_deletions(
+                        &mut pending_source_blob_deletions,
+                        old_snapshot,
+                    );
+
+                    save_repository_row(&tx, &repo).await?;
+                    save_pending_source_blob_deletions(&tx, &pending_source_blob_deletions).await?;
+                    tx.commit().await.map_err(ApiError::internal)?;
+                    Ok(applied)
+                })
+            }
+            #[cfg(test)]
+            MetadataStoreInner::Memory(_) => self.update(move |catalog| {
+                let repo = catalog
+                    .repositories
+                    .get_mut(&repo_id)
+                    .ok_or_else(|| ApiError::not_found(format!("repo {owner}/{name} not found")))?;
+                let old_snapshot = repo.git_snapshot.clone();
+                let applied = apply_staged_update_for_repo(repo, &user_id)?;
+                queue_pending_source_blob_deletions(
+                    &mut catalog.pending_source_blob_deletions,
+                    old_snapshot,
+                );
+                Ok(applied)
+            }),
+        }
+    }
+
+    pub(crate) fn reject_staged_update(
+        &self,
+        owner: &str,
+        name: &str,
+        user_id: &str,
+    ) -> Result<StagedRepoUpdate, ApiError> {
+        let repo_id = repo_id(owner, name);
+        let owner = owner.to_string();
+        let name = name.to_string();
+        let user_id = user_id.to_string();
+        match self.inner.as_ref() {
+            MetadataStoreInner::Postgres { db, runtime } => {
+                let db = Arc::clone(db);
+                run_api_db_on(runtime, async move {
+                    let tx = db.as_ref().begin().await.map_err(ApiError::internal)?;
+                    acquire_metadata_write_lock(&tx).await?;
+                    let repo = entities::repository::Entity::find_by_id(repo_id)
+                        .one(&tx)
+                        .await
+                        .map_err(ApiError::internal)?
+                        .ok_or_else(|| {
+                            ApiError::not_found(format!("repo {owner}/{name} not found"))
+                        })?;
+                    let mut repo = repository_from_model(&tx, repo).await?;
+                    let rejected = reject_staged_update_for_repo(&mut repo, &user_id)?;
+                    let rejected_blobs = rejected_staged_update_blobs(&rejected);
+                    let mut pending_source_blob_deletions =
+                        load_pending_source_blob_deletions(&tx).await?;
+                    queue_pending_source_blob_deletions(
+                        &mut pending_source_blob_deletions,
+                        rejected_blobs,
+                    );
+
+                    save_repository_row(&tx, &repo).await?;
+                    save_pending_source_blob_deletions(&tx, &pending_source_blob_deletions).await?;
+                    tx.commit().await.map_err(ApiError::internal)?;
+                    Ok(rejected)
+                })
+            }
+            #[cfg(test)]
+            MetadataStoreInner::Memory(_) => self.update(move |catalog| {
+                let repo = catalog
+                    .repositories
+                    .get_mut(&repo_id)
+                    .ok_or_else(|| ApiError::not_found(format!("repo {owner}/{name} not found")))?;
+                let rejected = reject_staged_update_for_repo(repo, &user_id)?;
+                queue_pending_source_blob_deletions(
+                    &mut catalog.pending_source_blob_deletions,
+                    rejected_staged_update_blobs(&rejected),
+                );
+                Ok(rejected)
+            }),
+        }
+    }
 }
 
 fn ensure_repo_owner(repo: &StoredRepository, user_id: &str) -> Result<(), ApiError> {
@@ -394,6 +550,127 @@ fn ensure_repo_owner(repo: &StoredRepository, user_id: &str) -> Result<(), ApiEr
     if role != Some(RepoRole::Owner) {
         return Err(ApiError::forbidden("owner role required"));
     }
+    Ok(())
+}
+
+fn update_staged_file_visibility_for_repo(
+    repo: &mut StoredRepository,
+    user_id: &str,
+    update_paths: &[ScopePath],
+    visibility: Visibility,
+) -> Result<StagedRepoUpdate, ApiError> {
+    if update_paths.is_empty() {
+        return Err(ApiError::bad_request("at least one file path is required"));
+    }
+    ensure_repo_owner(repo, user_id)?;
+
+    let mut staged_update = repo
+        .staged_update
+        .clone()
+        .ok_or_else(|| ApiError::not_found("no staged update pending"))?;
+    for path in update_paths {
+        let file = staged_update
+            .changes
+            .iter_mut()
+            .find(|change| change.path == *path)
+            .ok_or_else(|| ApiError::not_found(format!("staged file {} not found", path)))?;
+        file.visibility = visibility;
+    }
+    crate::git::import::validate_staged_update_policy(repo, &staged_update)?;
+    repo.staged_update = Some(staged_update.clone());
+    Ok(staged_update)
+}
+
+fn apply_staged_update_for_repo(
+    repo: &mut StoredRepository,
+    user_id: &str,
+) -> Result<StagedRepoUpdate, ApiError> {
+    ensure_repo_owner(repo, user_id)?;
+    let staged_update = repo
+        .staged_update
+        .take()
+        .ok_or_else(|| ApiError::not_found("no staged update pending"))?;
+    let applied = staged_update.clone();
+    crate::git::import::apply_receive_pack_update(repo, staged_update)?;
+    Ok(applied)
+}
+
+fn reject_staged_update_for_repo(
+    repo: &mut StoredRepository,
+    user_id: &str,
+) -> Result<StagedRepoUpdate, ApiError> {
+    ensure_repo_owner(repo, user_id)?;
+    repo.staged_update
+        .take()
+        .ok_or_else(|| ApiError::not_found("no staged update pending"))
+}
+
+fn rejected_staged_update_blobs(staged_update: &StagedRepoUpdate) -> Vec<SourceBlob> {
+    std::iter::once(staged_update.git_snapshot.clone())
+        .chain(
+            staged_update
+                .changes
+                .iter()
+                .filter_map(|change| change.new_content.clone()),
+        )
+        .collect()
+}
+
+fn queue_pending_source_blob_deletions(
+    pending: &mut Vec<SourceBlob>,
+    blobs: impl IntoIterator<Item = SourceBlob>,
+) {
+    let mut queued = pending
+        .iter()
+        .map(|blob| blob.object_key.clone())
+        .collect::<std::collections::BTreeSet<_>>();
+    for blob in blobs {
+        if queued.insert(blob.object_key.clone()) {
+            pending.push(blob);
+        }
+    }
+}
+
+async fn load_pending_source_blob_deletions<C>(conn: &C) -> Result<Vec<SourceBlob>, ApiError>
+where
+    C: ConnectionTrait,
+{
+    let metadata_lock = entities::metadata_lock::Entity::find_by_id(METADATA_LOCK_KEY.to_string())
+        .one(conn)
+        .await
+        .map_err(ApiError::internal)?
+        .ok_or_else(|| ApiError::internal_message("metadata lock row is missing"))?;
+    decode_json::<Vec<SourceBlob>>(metadata_lock.pending_source_blob_deletions)
+}
+
+async fn save_pending_source_blob_deletions<C>(
+    conn: &C,
+    pending_source_blob_deletions: &[SourceBlob],
+) -> Result<(), ApiError>
+where
+    C: ConnectionTrait,
+{
+    entities::metadata_lock::Entity::update_many()
+        .filter(entities::metadata_lock::Column::Key.eq(METADATA_LOCK_KEY))
+        .col_expr(
+            entities::metadata_lock::Column::PendingSourceBlobDeletions,
+            Expr::value(encode_json(&pending_source_blob_deletions)?),
+        )
+        .exec(conn)
+        .await
+        .map_err(ApiError::internal)?;
+    Ok(())
+}
+
+async fn save_repository_row<C>(conn: &C, repo: &StoredRepository) -> Result<(), ApiError>
+where
+    C: ConnectionTrait,
+{
+    entities::repository::Model::from_domain(repo)?
+        .into_active_model()
+        .update(conn)
+        .await
+        .map_err(ApiError::internal)?;
     Ok(())
 }
 
