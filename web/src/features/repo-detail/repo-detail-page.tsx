@@ -13,8 +13,23 @@ import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Link, useRouter } from '@tanstack/react-router'
 import { AlertCircle, ArrowLeft, ArrowRight, FileSearch } from 'lucide-react'
-import { useEffect, useState } from 'react'
+import { useState } from 'react'
 import { ReviewTree } from '../review/review-tree'
+
+type FilesOverride = {
+  baseFiles: RepoFile[]
+  files: RepoFile[]
+}
+
+type PendingVisibility = {
+  baseFiles: RepoFile[]
+  key: string
+}
+
+type VisibilityError = {
+  baseFiles: RepoFile[]
+  message: string
+}
 
 export function RepoDetailPage({
   detail,
@@ -31,16 +46,26 @@ export function RepoDetailPage({
 }) {
   const router = useRouter()
   const { repo } = detail
-  const [files, setFiles] = useState<RepoFile[]>(detail.files)
-  const [pendingKey, setPendingKey] = useState<string | null>(null)
-  const [error, setError] = useState<string | null>(null)
+  const [filesOverride, setFilesOverride] = useState<FilesOverride | null>(
+    null,
+  )
+  const [pendingVisibility, setPendingVisibility] =
+    useState<PendingVisibility | null>(null)
+  const [visibilityError, setVisibilityError] =
+    useState<VisibilityError | null>(null)
+  const files =
+    filesOverride?.baseFiles === detail.files
+      ? filesOverride.files
+      : detail.files
+  const pendingKey =
+    pendingVisibility?.baseFiles === detail.files
+      ? pendingVisibility.key
+      : null
+  const error =
+    visibilityError?.baseFiles === detail.files
+      ? visibilityError.message
+      : null
   const canEditFiles = detail.capabilities.write && repo.role === 'Owner'
-
-  useEffect(() => {
-    setFiles(detail.files)
-    setPendingKey(null)
-    setError(null)
-  }, [detail.files])
 
   async function setVisibility(
     files: ReviewFile[],
@@ -51,20 +76,22 @@ export function RepoDetailPage({
       return
     }
 
-    setError(null)
-    setPendingKey(pendingKey)
+    setVisibilityError(null)
+    setPendingVisibility({ baseFiles: detail.files, key: pendingKey })
     try {
       const updated = await setFileVisibility(params, files, visibility)
-      setFiles(updated)
+      setFilesOverride({ baseFiles: detail.files, files: updated })
       await router.invalidate()
     } catch (visibilityError) {
-      setError(
-        visibilityError instanceof Error
-          ? visibilityError.message
-          : 'visibility update failed',
-      )
+      setVisibilityError({
+        baseFiles: detail.files,
+        message:
+          visibilityError instanceof Error
+            ? visibilityError.message
+            : 'visibility update failed',
+      })
     } finally {
-      setPendingKey(null)
+      setPendingVisibility(null)
     }
   }
 
