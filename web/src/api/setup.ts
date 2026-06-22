@@ -14,6 +14,8 @@ import type {
   SetupRouteState,
 } from './types'
 
+export { setupPushSecretKey } from './setup-token-key'
+
 export async function loadSetupForRequest(data: { owner: string; repo: string }) {
   const idToken = await readRequestAuthToken()
   if (!idToken) {
@@ -90,8 +92,4 @@ export async function regenerateTokenForRequest(data: {
     getPublicApiConnection('building repository setup command'),
     payload as RepoSetup,
   )
-}
-
-export function setupPushSecretKey(repoId: string) {
-  return `scope:git-push-token:${repoId}`
 }

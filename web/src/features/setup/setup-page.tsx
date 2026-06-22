@@ -1,4 +1,3 @@
-import { setupPushSecretKey } from '@/api/setup'
 import type {
   RepoLifecycleState,
   RepoParams,
@@ -22,6 +21,10 @@ import {
 import type { ReactNode } from 'react'
 import { useEffect, useReducer, useSyncExternalStore } from 'react'
 import { setupCommand } from './commands'
+import {
+  rememberSetupPushSecret,
+  setupPushSecretSnapshot,
+} from './setup-token-cache'
 
 type SetupOverride = {
   baseSetup: RepoSetupView
@@ -170,9 +173,11 @@ export function SetupPage({
     dispatch({ type: 'tokenStarted' })
     try {
       const next = await regenerateToken(params)
+      const pushTokenSecret = next.push_token?.secret ?? null
+      rememberSetupPushSecret(next.repo.id, pushTokenSecret)
       dispatch({
         baseSetup: initialSetup,
-        pushTokenSecret: next.push_token?.secret ?? null,
+        pushTokenSecret,
         setup: next,
         type: 'tokenSucceeded',
       })
@@ -314,36 +319,16 @@ function setupPageReducer(
   }
 }
 
-const setupPushSecretsByRepo = new Map<string, string | null>()
-
 function useSetupPushSecret(repoId: string) {
   return useSyncExternalStore(
     subscribeSetupPushSecret,
-    () => getSetupPushSecretSnapshot(repoId),
+    () => setupPushSecretSnapshot(repoId),
     getServerSetupPushSecretSnapshot,
   )
 }
 
 function subscribeSetupPushSecret() {
   return () => {}
-}
-
-function getSetupPushSecretSnapshot(repoId: string) {
-  if (setupPushSecretsByRepo.has(repoId)) {
-    return setupPushSecretsByRepo.get(repoId) ?? null
-  }
-
-  if (typeof window === 'undefined') {
-    return null
-  }
-
-  const key = setupPushSecretKey(repoId)
-  const secret = window.sessionStorage.getItem(key)
-  if (secret) {
-    window.sessionStorage.removeItem(key)
-  }
-  setupPushSecretsByRepo.set(repoId, secret)
-  return secret
 }
 
 function getServerSetupPushSecretSnapshot() {
