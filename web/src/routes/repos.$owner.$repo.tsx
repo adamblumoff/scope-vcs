@@ -5,14 +5,8 @@ import {
   regenerateGitCredentialForRequest,
   setRepoFileVisibilityForRequest,
 } from '@/api/repos'
-import type { RepoParams, ReviewFile, Visibility } from '@/api/types'
-import {
-  applyStagedUpdate,
-  publishRepo,
-  rejectStagedUpdate,
-  setReviewVisibility,
-} from '@/routes/-repo-review-actions'
-import { ReviewPage } from '@/features/review/review-page'
+import type { RepoDetail, RepoParams, ReviewFile, Visibility } from '@/api/types'
+import { setReviewVisibility } from '@/routes/-repo-review-actions'
 import {
   RepoDetailError,
   RepoDetailPage,
@@ -47,30 +41,32 @@ function RepoDetailRoute() {
     return <Outlet />
   }
 
-  if (detail.review) {
-    return (
-      <ReviewPage
-        applyStagedUpdate={(data) => applyStagedUpdate({ data })}
-        initialReview={detail.review}
-        params={params}
-        projectionPreviews={detail.projection_previews}
-        publishRepo={(data) => publishRepo({ data })}
-        rejectStagedUpdate={(data) => rejectStagedUpdate({ data })}
-        setReviewVisibility={setReviewVisibility}
-      />
-    )
-  }
-
   return (
     <RepoDetailPage
       detail={detail}
       regenerateGitCredential={(params) =>
         regenerateGitCredential({ data: params })
       }
-      setFileVisibility={setLiveRepoFileVisibility}
+      setFileVisibility={(params, files, visibility) =>
+        setRepoDetailVisibility(params, detail, files, visibility)
+      }
       params={params}
     />
   )
+}
+
+async function setRepoDetailVisibility(
+  params: RepoParams,
+  detail: RepoDetail,
+  files: ReviewFile[],
+  visibility: Visibility,
+) {
+  if (detail.review) {
+    const review = await setReviewVisibility(params, detail.review, files, visibility)
+    return review.files
+  }
+
+  return setLiveRepoFileVisibility(params, files, visibility)
 }
 
 function setLiveRepoFileVisibility(

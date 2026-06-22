@@ -240,12 +240,13 @@ export function ReviewPage({
 
         <ReviewVisibilityPanel
           disabled={publishing || rejecting}
+          files={review.files}
           onSetVisibility={(files, visibility, key) =>
             void setVisibility(files, visibility, key)
           }
           pendingKey={pendingKey}
           previews={projectionPreviews}
-          review={review}
+          stagedReview={stagedReview}
         />
       </section>
     </main>

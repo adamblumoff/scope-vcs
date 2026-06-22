@@ -13,32 +13,57 @@ import { VisibilityBadge } from '@/components/visibility-badge'
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
-import { ProjectionPreviewPanel } from '@/features/projection-preview/projection-preview-panel'
 import { Link, useRouter } from '@tanstack/react-router'
 import {
   AlertCircle,
   ArrowLeft,
   ArrowRight,
-  FileSearch,
   RefreshCw,
 } from 'lucide-react'
-import { useState } from 'react'
-import { ReviewTree } from '../review/review-tree'
+import { useReducer } from 'react'
+import { ReviewVisibilityPanel } from '../review/review-visibility-panel'
 import { gitCredentialApproveCommand } from '../setup/commands'
 
 type FilesOverride = {
-  baseFiles: RepoFile[]
-  files: RepoFile[]
+  baseFiles: ReviewFile[]
+  files: ReviewFile[]
 }
 
 type PendingVisibility = {
-  baseFiles: RepoFile[]
+  baseFiles: ReviewFile[]
   key: string
 }
 
 type VisibilityError = {
-  baseFiles: RepoFile[]
+  baseFiles: ReviewFile[]
   message: string
+}
+
+type RepoDetailPageState = {
+  filesOverride: FilesOverride | null
+  gitCredential: RepoGitCredentialView | null
+  gitCredentialError: string | null
+  gitCredentialPending: boolean
+  pendingVisibility: PendingVisibility | null
+  visibilityError: VisibilityError | null
+}
+
+type RepoDetailPageAction =
+  | { baseFiles: ReviewFile[]; key: string; type: 'visibilityStarted' }
+  | { baseFiles: ReviewFile[]; files: ReviewFile[]; type: 'visibilitySucceeded' }
+  | { baseFiles: ReviewFile[]; message: string; type: 'visibilityFailed' }
+  | { type: 'visibilityFinished' }
+  | { type: 'gitCredentialStarted' }
+  | { credential: RepoGitCredentialView; type: 'gitCredentialSucceeded' }
+  | { message: string; type: 'gitCredentialFailed' }
+
+const initialRepoDetailPageState: RepoDetailPageState = {
+  filesOverride: null,
+  gitCredential: null,
+  gitCredentialError: null,
+  gitCredentialPending: false,
+  pendingVisibility: null,
+  visibilityError: null,
 }
 
 export function RepoDetailPage({
@@ -54,36 +79,38 @@ export function RepoDetailPage({
     params: RepoParams,
     files: ReviewFile[],
     visibility: Visibility,
-  ) => Promise<RepoFile[]>
+  ) => Promise<ReviewFile[]>
 }) {
   const router = useRouter()
   const { repo } = detail
-  const [filesOverride, setFilesOverride] = useState<FilesOverride | null>(
-    null,
+  const [state, dispatch] = useReducer(
+    repoDetailPageReducer,
+    initialRepoDetailPageState,
   )
-  const [pendingVisibility, setPendingVisibility] =
-    useState<PendingVisibility | null>(null)
-  const [visibilityError, setVisibilityError] =
-    useState<VisibilityError | null>(null)
-  const [gitCredential, setGitCredential] =
-    useState<RepoGitCredentialView | null>(null)
-  const [gitCredentialPending, setGitCredentialPending] = useState(false)
-  const [gitCredentialError, setGitCredentialError] = useState<string | null>(
-    null,
-  )
+  const {
+    filesOverride,
+    gitCredential,
+    gitCredentialError,
+    gitCredentialPending,
+    pendingVisibility,
+    visibilityError,
+  } = state
+  const baseFiles = detail.review?.files ?? detail.files
   const files =
-    filesOverride?.baseFiles === detail.files
+    filesOverride?.baseFiles === baseFiles
       ? filesOverride.files
-      : detail.files
+      : baseFiles
   const pendingKey =
-    pendingVisibility?.baseFiles === detail.files
+    pendingVisibility?.baseFiles === baseFiles
       ? pendingVisibility.key
       : null
   const error =
-    visibilityError?.baseFiles === detail.files
+    visibilityError?.baseFiles === baseFiles
       ? visibilityError.message
       : null
   const canEditFiles = detail.capabilities.write && repo.role === 'Owner'
+  const publicOnlyView = repo.role === null
+  const stagedReview = detail.review?.kind === 'StagedUpdate'
 
   async function setVisibility(
     files: ReviewFile[],
@@ -94,37 +121,40 @@ export function RepoDetailPage({
       return
     }
 
-    setVisibilityError(null)
-    setPendingVisibility({ baseFiles: detail.files, key: pendingKey })
+    dispatch({ baseFiles, key: pendingKey, type: 'visibilityStarted' })
     try {
       const updated = await setFileVisibility(params, files, visibility)
-      setFilesOverride({ baseFiles: detail.files, files: updated })
+      dispatch({
+        baseFiles,
+        files: updated,
+        type: 'visibilitySucceeded',
+      })
       await router.invalidate()
     } catch (visibilityError) {
-      setVisibilityError({
-        baseFiles: detail.files,
+      dispatch({
+        baseFiles,
         message:
           visibilityError instanceof Error
             ? visibilityError.message
             : 'visibility update failed',
+        type: 'visibilityFailed',
       })
     } finally {
-      setPendingVisibility(null)
+      dispatch({ type: 'visibilityFinished' })
     }
   }
 
   async function resetGitCredential() {
-    setGitCredentialError(null)
-    setGitCredentialPending(true)
+    dispatch({ type: 'gitCredentialStarted' })
     try {
       const updated = await regenerateGitCredential(params)
-      setGitCredential(updated)
+      dispatch({ credential: updated, type: 'gitCredentialSucceeded' })
     } catch (error) {
-      setGitCredentialError(
-        error instanceof Error ? error.message : 'Git credential reset failed',
-      )
-    } finally {
-      setGitCredentialPending(false)
+      dispatch({
+        message:
+          error instanceof Error ? error.message : 'Git credential reset failed',
+        type: 'gitCredentialFailed',
+      })
     }
   }
 
@@ -206,48 +236,92 @@ export function RepoDetailPage({
           </section>
         )}
 
-        <section className="mt-8 border-y border-border">
-          <div className="border-b border-border py-4">
-            <h2 className="text-sm font-semibold leading-5">Repo files</h2>
-            <p className="mt-1 max-w-[660px] text-sm leading-5 text-muted-foreground">
-              {canEditFiles
-                ? 'Set each file to Private or Public here. The preview below shows the result for each audience.'
-                : 'Files visible to your current session.'}
-            </p>
-          </div>
-          {files.length === 0 ? (
-            <div className="flex items-center gap-3 py-10">
-              <div className="flex size-10 shrink-0 items-center justify-center rounded-md border border-border">
-                <FileSearch className="size-5 text-muted-foreground" />
-              </div>
-              <div className="min-w-0">
-                <div className="text-sm font-medium leading-5">No live files</div>
-                <div className="mt-1 text-sm leading-5 text-muted-foreground">
-                  {repo.lifecycle_state === 'PendingPublish'
-                    ? 'Review the pending import before publishing.'
-                    : 'Files will appear here after the repo has published content.'}
-                </div>
-              </div>
-            </div>
-          ) : (
-            <ReviewTree
-              files={files}
-              onSetVisibility={
-                canEditFiles
-                  ? (files, visibility, key) =>
-                      void setVisibility(files, visibility, key)
-                  : undefined
-              }
-              pendingKey={pendingKey}
-              stagedReview={false}
-            />
-          )}
-        </section>
-
-        <ProjectionPreviewPanel previews={detail.projection_previews} />
+        <ReviewVisibilityPanel
+          description={
+            publicOnlyView
+              ? 'Public files and history available to signed-out readers.'
+              : canEditFiles
+                ? 'Set public or private access in the tree. Switch views to see which rows that audience receives.'
+                : 'Files and history visible to your current session.'
+          }
+          emptyDescription={
+            publicOnlyView
+              ? 'This repo does not expose any public files yet.'
+              : repo.lifecycle_state === 'PendingPublish'
+                ? 'Review the pending import before publishing.'
+                : 'Files will appear here after the repo has published content.'
+          }
+          emptyTitle={publicOnlyView ? 'No public files' : 'No live files'}
+          files={files}
+          onSetVisibility={
+            canEditFiles
+              ? (files, visibility, key) =>
+                  void setVisibility(files, visibility, key)
+              : undefined
+          }
+          pendingKey={pendingKey}
+          previews={detail.projection_previews}
+          showPrivateCounts={canEditFiles}
+          stagedReview={stagedReview}
+          title={publicOnlyView ? 'Public files' : 'Visibility'}
+          treeVariant={publicOnlyView ? 'public' : 'workflow'}
+        />
       </section>
     </main>
   )
+}
+
+function repoDetailPageReducer(
+  state: RepoDetailPageState,
+  action: RepoDetailPageAction,
+): RepoDetailPageState {
+  switch (action.type) {
+    case 'visibilityStarted':
+      return {
+        ...state,
+        pendingVisibility: {
+          baseFiles: action.baseFiles,
+          key: action.key,
+        },
+        visibilityError: null,
+      }
+    case 'visibilitySucceeded':
+      return {
+        ...state,
+        filesOverride: {
+          baseFiles: action.baseFiles,
+          files: action.files,
+        },
+      }
+    case 'visibilityFailed':
+      return {
+        ...state,
+        visibilityError: {
+          baseFiles: action.baseFiles,
+          message: action.message,
+        },
+      }
+    case 'visibilityFinished':
+      return { ...state, pendingVisibility: null }
+    case 'gitCredentialStarted':
+      return {
+        ...state,
+        gitCredentialError: null,
+        gitCredentialPending: true,
+      }
+    case 'gitCredentialSucceeded':
+      return {
+        ...state,
+        gitCredential: action.credential,
+        gitCredentialPending: false,
+      }
+    case 'gitCredentialFailed':
+      return {
+        ...state,
+        gitCredentialError: action.message,
+        gitCredentialPending: false,
+      }
+  }
 }
 
 function RepoAction({ repo }: { repo: RepoSummary }) {
@@ -269,7 +343,7 @@ function RepoAction({ repo }: { repo: RepoSummary }) {
     )
   }
 
-  if (repo.lifecycle_state === 'PendingPublish' || repo.staged_update_pending) {
+  if (repo.staged_update_pending) {
     return (
       <Button asChild size="sm">
         <Link

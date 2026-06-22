@@ -11,7 +11,15 @@ import { createFileRoute, redirect } from '@tanstack/react-router'
 
 export const Route = createFileRoute('/repos/$owner/$repo/review')({
   loader: async ({ params }) => {
-    const review = await loadReview({ data: params })
+    const [review, projectionPreviewsResult] = await Promise.all([
+      loadReview({ data: params }),
+      loadReviewProjectionPreviews({ data: params }).then(
+        (projectionPreviews) =>
+          ({ projectionPreviews, status: 'fulfilled' }) as const,
+        (error) => ({ error, status: 'rejected' }) as const,
+      ),
+    ])
+
     if (review.kind === 'NoReview') {
       throw redirect({
         params,
@@ -19,7 +27,11 @@ export const Route = createFileRoute('/repos/$owner/$repo/review')({
       })
     }
 
-    const projectionPreviews = await loadReviewProjectionPreviews({ data: params })
+    if (projectionPreviewsResult.status === 'rejected') {
+      throw projectionPreviewsResult.error
+    }
+
+    const { projectionPreviews } = projectionPreviewsResult
     return { projectionPreviews, review }
   },
   errorComponent: ReviewError,

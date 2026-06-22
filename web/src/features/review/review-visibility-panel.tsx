@@ -4,7 +4,6 @@ import type {
   ProjectionPreviewCommit,
   ProjectionPreviewSource,
   ProjectionPreviews,
-  RepoReview,
   ReviewFile,
   Visibility,
 } from '@/api/types'
@@ -20,27 +19,40 @@ import {
   UserRound,
 } from 'lucide-react'
 import { useMemo, useState } from 'react'
-import { ReviewTree } from './review-tree'
+import { ReviewTree, type ReviewTreeVariant } from './review-tree'
 import { displayPath } from './review-tree-model'
 
 export function ReviewVisibilityPanel({
+  description = 'Set public or private access in the tree. Switch views to see which rows that audience receives.',
   disabled = false,
+  emptyDescription,
+  emptyTitle = 'No files found',
+  files,
   onSetVisibility,
   pendingKey,
   previews,
-  review,
+  showPrivateCounts = Boolean(previews.owner),
+  stagedReview = false,
+  title = 'Visibility',
+  treeVariant = 'workflow',
 }: {
+  description?: string
   disabled?: boolean
-  onSetVisibility: (
+  emptyDescription?: string
+  emptyTitle?: string
+  files: ReviewFile[]
+  onSetVisibility?: (
     files: ReviewFile[],
     visibility: Visibility,
     pendingKey: string,
   ) => void
   pendingKey: string | null
   previews: ProjectionPreviews
-  review: RepoReview
+  showPrivateCounts?: boolean
+  stagedReview?: boolean
+  title?: string
+  treeVariant?: ReviewTreeVariant
 }) {
-  const stagedReview = review.kind === 'StagedUpdate'
   const [preferredAudience, setPreferredAudience] =
     useState<ProjectionPreviewAudience>('public')
   const availableAudiences = useMemo(
@@ -69,12 +81,11 @@ export function ReviewVisibilityPanel({
       <div className="flex flex-col gap-3 border-b border-border py-4 sm:flex-row sm:items-center sm:justify-between">
         <div className="min-w-0">
           <div className="flex flex-wrap items-center gap-2">
-            <h2 className="text-sm font-semibold leading-5">Visibility</h2>
+            <h2 className="text-sm font-semibold leading-5">{title}</h2>
             <Badge variant="outline">{sourceLabel(previews.source)}</Badge>
           </div>
           <p className="mt-1 max-w-[720px] text-sm leading-5 text-muted-foreground">
-            Set public or private access in the tree. Switch views to see which
-            rows that audience receives.
+            {description}
           </p>
         </div>
         {availableAudiences.length > 1 && (
@@ -87,23 +98,38 @@ export function ReviewVisibilityPanel({
       </div>
 
       <div className="border-b border-border py-4">
-        <PreviewMetrics preview={preview} />
-        {review.files.length === 0 ? (
-          <EmptyFiles stagedReview={stagedReview} />
+        <PreviewMetrics
+          preview={preview}
+          showPrivateCounts={showPrivateCounts}
+        />
+        {files.length === 0 ? (
+          <EmptyFiles
+            description={
+              emptyDescription ??
+              (stagedReview
+                ? 'No staged push is waiting.'
+                : 'This repo can still be published.')
+            }
+            title={emptyTitle}
+          />
         ) : (
           <ReviewTree
             audience={preview.audience}
             disabled={disabled}
-            files={review.files}
+            files={files}
             onSetVisibility={onSetVisibility}
             pendingKey={pendingKey}
             stagedReview={stagedReview}
             visiblePaths={visiblePaths}
+            variant={treeVariant}
           />
         )}
       </div>
 
-      <ProjectionHistory preview={preview} />
+      <ProjectionHistory
+        preview={preview}
+        showPrivateCounts={showPrivateCounts}
+      />
     </section>
   )
 }
@@ -162,14 +188,20 @@ function AudienceButton({
   )
 }
 
-function PreviewMetrics({ preview }: { preview: ProjectionPreview }) {
+function PreviewMetrics({
+  preview,
+  showPrivateCounts,
+}: {
+  preview: ProjectionPreview
+  showPrivateCounts: boolean
+}) {
   return (
     <div className="mb-3 flex flex-wrap gap-x-6 gap-y-2 border-y border-border py-3 text-sm">
       <Metric
         label="Visible"
         value={fileCountLabel(preview.summary.visible_files)}
       />
-      {preview.audience === 'public' && (
+      {preview.audience === 'public' && showPrivateCounts && (
         <Metric
           label="Private left out"
           value={fileCountLabel(preview.summary.hidden_files)}
@@ -183,7 +215,13 @@ function PreviewMetrics({ preview }: { preview: ProjectionPreview }) {
   )
 }
 
-function ProjectionHistory({ preview }: { preview: ProjectionPreview }) {
+function ProjectionHistory({
+  preview,
+  showPrivateCounts,
+}: {
+  preview: ProjectionPreview
+  showPrivateCounts: boolean
+}) {
   const [expanded, setExpanded] = useState(false)
   const commits = [...preview.commits].reverse()
   const visibleCommits = expanded ? commits : commits.slice(0, 2)
@@ -201,7 +239,7 @@ function ProjectionHistory({ preview }: { preview: ProjectionPreview }) {
             {expanded
               ? `Showing all ${commitCountLabel(commits.length)}.`
               : `Showing latest ${Math.min(2, commits.length)} of ${commitCountLabel(commits.length)}.`}
-            {preview.summary.hidden_commits > 0
+            {showPrivateCounts && preview.summary.hidden_commits > 0
               ? ` ${commitCountLabel(preview.summary.hidden_commits)} left out of this view.`
               : ''}
           </p>
@@ -215,7 +253,11 @@ function ProjectionHistory({ preview }: { preview: ProjectionPreview }) {
       ) : (
         <div className="divide-y divide-border border-y border-border">
           {visibleCommits.map((commit) => (
-            <HistoryCommitRow commit={commit} key={commit.projected_id} />
+            <HistoryCommitRow
+              commit={commit}
+              key={commit.projected_id}
+              showSyntheticBadge={showPrivateCounts}
+            />
           ))}
         </div>
       )}
@@ -248,7 +290,13 @@ function ProjectionHistory({ preview }: { preview: ProjectionPreview }) {
   )
 }
 
-function HistoryCommitRow({ commit }: { commit: ProjectionPreviewCommit }) {
+function HistoryCommitRow({
+  commit,
+  showSyntheticBadge,
+}: {
+  commit: ProjectionPreviewCommit
+  showSyntheticBadge: boolean
+}) {
   return (
     <div className="grid gap-2 py-3 text-sm sm:grid-cols-[minmax(0,1fr)_auto]">
       <div className="min-w-0">
@@ -260,7 +308,7 @@ function HistoryCommitRow({ commit }: { commit: ProjectionPreviewCommit }) {
           {commit.author && <span>{commit.author}</span>}
         </div>
       </div>
-      {commit.synthetic && (
+      {commit.synthetic && showSyntheticBadge && (
         <div className="sm:text-right">
           <Badge variant="outline">Public-only commit</Badge>
         </div>
@@ -269,18 +317,22 @@ function HistoryCommitRow({ commit }: { commit: ProjectionPreviewCommit }) {
   )
 }
 
-function EmptyFiles({ stagedReview }: { stagedReview: boolean }) {
+function EmptyFiles({
+  description,
+  title,
+}: {
+  description: string
+  title: string
+}) {
   return (
     <div className="flex items-center gap-3 py-8">
       <div className="flex size-10 shrink-0 items-center justify-center rounded-md border border-border">
         <FileSearch className="size-5 text-muted-foreground" />
       </div>
       <div className="min-w-0 text-sm">
-        <div className="font-medium leading-5">No files found</div>
+        <div className="font-medium leading-5">{title}</div>
         <div className="mt-1 leading-5 text-muted-foreground">
-          {stagedReview
-            ? 'No staged push is waiting.'
-            : 'This repo can still be published.'}
+          {description}
         </div>
       </div>
     </div>
