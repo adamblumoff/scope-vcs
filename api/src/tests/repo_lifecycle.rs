@@ -324,6 +324,37 @@ fn db_metadata_store_round_trips_repo_metadata() {
             Ok(())
         })
         .unwrap();
+
+    let readme_path = ScopePath::parse("/README.md").unwrap();
+    let updated_repo = fresh_metadata
+        .update_repo_file_visibility(
+            TEST_REPO_OWNER,
+            TEST_REPO_NAME,
+            &owner_id,
+            vec![readme_path.clone()],
+            Visibility::Private,
+        )
+        .unwrap();
+    assert_eq!(
+        updated_repo.policy.effective_visibility(&readme_path),
+        Visibility::Private
+    );
+    assert!(
+        updated_repo
+            .graph
+            .commits
+            .iter()
+            .any(|commit| commit.id.starts_with("rv_visibility_"))
+    );
+    let row_repo = fresh_metadata
+        .repository(TEST_REPO_OWNER, TEST_REPO_NAME)
+        .unwrap()
+        .expect("row repo loads after visibility update");
+    assert_eq!(
+        row_repo.policy.effective_visibility(&readme_path),
+        Visibility::Private
+    );
+    assert_eq!(row_repo.graph, updated_repo.graph);
 }
 
 #[tokio::test]

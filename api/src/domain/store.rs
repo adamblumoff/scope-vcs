@@ -1,5 +1,5 @@
 use super::{
-    policy::{Policy, Principal, PrincipalKind, ScopePath, Visibility},
+    policy::{Policy, PolicyError, Principal, PrincipalKind, ScopePath, Visibility},
     projection::SourceGraph,
 };
 use serde::{Deserialize, Serialize};
@@ -209,6 +209,66 @@ pub struct StoredRepository {
     pub invitations: Vec<RepoInvitation>,
 }
 
+impl StoredRepository {
+    pub fn owner_ids(&self) -> Vec<String> {
+        let mut owner_ids = self
+            .memberships
+            .iter()
+            .filter(|membership| membership.role == RepoRole::Owner)
+            .map(|membership| membership.user_id.clone())
+            .collect::<Vec<_>>();
+        if !owner_ids.contains(&self.record.owner_user_id) {
+            owner_ids.push(self.record.owner_user_id.clone());
+        }
+        owner_ids.sort();
+        owner_ids.dedup();
+        owner_ids
+    }
+
+    pub fn graph_has_file(&self, path: &ScopePath) -> bool {
+        let mut present = false;
+        for change in self.graph.commits.iter().flat_map(|commit| &commit.changes) {
+            if change.path.as_str() == path.as_str() {
+                present = change.new_content.is_some();
+            }
+        }
+        present
+    }
+
+    pub fn live_tree(&self) -> BTreeMap<ScopePath, SourceBlob> {
+        let mut tree = BTreeMap::new();
+        for change in self.graph.commits.iter().flat_map(|commit| &commit.changes) {
+            match &change.new_content {
+                Some(blob) => {
+                    tree.insert(change.path.clone(), blob.clone());
+                }
+                None => {
+                    tree.remove(&change.path);
+                }
+            }
+        }
+        tree
+    }
+
+    pub fn has_file_for_visibility_update(&self, path: &ScopePath) -> bool {
+        if self.record.publication_state == RepoPublicationState::PendingPublish {
+            self.pending_import_has_file(path)
+        } else {
+            self.graph_has_file(path)
+        }
+    }
+
+    fn pending_import_has_file(&self, path: &ScopePath) -> bool {
+        self.pending_import.as_ref().is_some_and(|pending| {
+            pending.files.iter().any(|file| {
+                pending_import_scope_path(&file.path)
+                    .map(|pending_path| pending_path.as_str() == path.as_str())
+                    .unwrap_or(false)
+            })
+        })
+    }
+}
+
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
 pub struct AppCatalog {
     pub users: BTreeMap<String, UserAccount>,
@@ -368,6 +428,15 @@ pub fn repo_id(owner: &str, name: &str) -> String {
         owner.trim().to_ascii_lowercase(),
         name.trim().to_ascii_lowercase()
     )
+}
+
+pub fn pending_import_scope_path(path: &str) -> Result<ScopePath, PolicyError> {
+    let path = if path.starts_with('/') {
+        path.to_string()
+    } else {
+        format!("/{path}")
+    };
+    ScopePath::parse(path)
 }
 
 fn normalize_email(email: impl Into<String>) -> String {

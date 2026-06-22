@@ -3,14 +3,13 @@ use crate::domain::projection::{FileChange, Projection, project_graph};
 use crate::domain::store::{
     AppCatalog, FirstPushToken, FirstPushTokenStatus, GitPushToken, PendingImport,
     RepoPublicationState, RepoRole, StagedFileChangeKind, StagedRepoUpdate, StoredRepository,
-    UserAccount,
+    UserAccount, pending_import_scope_path,
 };
 use crate::{
     auth::tokens::ensure_owner_setup_access_in_catalog,
     config::DEFAULT_GIT_BRANCH,
     error::ApiError,
     object_store::{ObjectStore, source_blob_text},
-    state::graph_has_file,
 };
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
@@ -345,37 +344,8 @@ pub(crate) fn staged_update_response(update: &StagedRepoUpdate) -> StagedUpdateR
     }
 }
 
-pub(crate) fn pending_import_has_file(repo: &StoredRepository, path: &ScopePath) -> bool {
-    repo.pending_import.as_ref().is_some_and(|pending| {
-        pending.files.iter().any(|file| {
-            pending_scope_path(&file.path)
-                .map(|pending_path| pending_path.as_str() == path.as_str())
-                .unwrap_or(false)
-        })
-    })
-}
-
-pub(crate) fn repo_has_file_for_review(repo: &StoredRepository, path: &ScopePath) -> bool {
-    if repo.record.publication_state == RepoPublicationState::PendingPublish {
-        pending_import_has_file(repo, path)
-    } else {
-        graph_has_file(repo, path)
-    }
-}
-
 pub(crate) fn repo_owner_ids(repo: &StoredRepository) -> Vec<String> {
-    let mut owner_ids = repo
-        .memberships
-        .iter()
-        .filter(|membership| membership.role == RepoRole::Owner)
-        .map(|membership| membership.user_id.clone())
-        .collect::<Vec<_>>();
-    if !owner_ids.contains(&repo.record.owner_user_id) {
-        owner_ids.push(repo.record.owner_user_id.clone());
-    }
-    owner_ids.sort();
-    owner_ids.dedup();
-    owner_ids
+    repo.owner_ids()
 }
 
 pub(crate) fn projection_response(
@@ -502,10 +472,5 @@ pub(crate) fn pending_import_changes(policy: &Policy, pending: &PendingImport) -
 }
 
 pub(crate) fn pending_scope_path(path: &str) -> Result<ScopePath, ApiError> {
-    let path = if path.starts_with('/') {
-        path.to_string()
-    } else {
-        format!("/{path}")
-    };
-    ScopePath::parse(path).map_err(ApiError::bad_request)
+    pending_import_scope_path(path).map_err(ApiError::bad_request)
 }
