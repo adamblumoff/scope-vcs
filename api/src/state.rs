@@ -167,14 +167,10 @@ pub(crate) fn find_repo(
     owner: &str,
     name: &str,
 ) -> Result<StoredRepository, ApiError> {
-    let owner = owner.to_string();
-    let name = name.to_string();
-    state.metadata.read(move |catalog| {
-        catalog
-            .repository(&owner, &name)
-            .cloned()
-            .ok_or_else(|| ApiError::not_found(format!("repo {owner}/{name} not found")))
-    })
+    state
+        .metadata
+        .repository(owner, name)?
+        .ok_or_else(|| ApiError::not_found(format!("repo {owner}/{name} not found")))
 }
 
 pub(crate) fn ensure_repo_read(
@@ -270,43 +266,58 @@ pub(crate) fn promote_pending_import(repo: &mut StoredRepository) -> Result<(), 
 }
 
 pub(crate) fn role_for_principal(
-    state: &AppState,
+    _state: &AppState,
     repo: &StoredRepository,
     principal: &Principal,
 ) -> Result<Option<RepoRole>, ApiError> {
-    let repo = repo.clone();
-    let principal = principal.clone();
-    state
-        .metadata
-        .read(move |catalog| Ok(catalog.role_for_principal(&repo, &principal)))
+    Ok(repo
+        .memberships
+        .iter()
+        .find(|membership| membership.user_id == principal.id)
+        .map(|membership| membership.role))
 }
 
 pub(crate) fn can_read_path(
-    state: &AppState,
+    _state: &AppState,
     repo: &StoredRepository,
     principal: &Principal,
     path: &ScopePath,
 ) -> Result<bool, ApiError> {
-    let repo = repo.clone();
-    let principal = principal.clone();
-    let path = path.clone();
-    state
-        .metadata
-        .read(move |catalog| Ok(catalog.can_read_path(&repo, &principal, &path)))
+    if principal.kind == crate::domain::policy::PrincipalKind::Public {
+        return Ok(
+            repo.record.publication_state == RepoPublicationState::Published
+                && repo.policy.can_read(principal, path),
+        );
+    }
+
+    let Some(role) = repo
+        .memberships
+        .iter()
+        .find(|membership| membership.user_id == principal.id)
+        .map(|membership| membership.role)
+    else {
+        return Ok(false);
+    };
+
+    let lifecycle_allows_read =
+        repo.record.publication_state == RepoPublicationState::Published || role == RepoRole::Owner;
+
+    Ok(lifecycle_allows_read && repo.policy.can_read(principal, path))
 }
 
 pub(crate) fn can_write_path(
-    state: &AppState,
+    _state: &AppState,
     repo: &StoredRepository,
     principal: &Principal,
     path: &ScopePath,
 ) -> Result<bool, ApiError> {
-    let repo = repo.clone();
-    let principal = principal.clone();
-    let path = path.clone();
-    state
-        .metadata
-        .read(move |catalog| Ok(catalog.can_write_path(&repo, &principal, &path)))
+    let can_write = repo
+        .memberships
+        .iter()
+        .find(|membership| membership.user_id == principal.id)
+        .is_some_and(|membership| membership.role >= RepoRole::Writer)
+        && can_read_path(_state, repo, principal, path)?;
+    Ok(can_write)
 }
 
 pub(crate) fn graph_has_file(repo: &StoredRepository, path: &ScopePath) -> bool {

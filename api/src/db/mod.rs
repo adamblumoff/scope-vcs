@@ -1,7 +1,7 @@
 mod entities;
 mod schema;
 
-use crate::domain::store::{AppCatalog, RepoMembership};
+use crate::domain::store::{AppCatalog, RepoMembership, StoredRepository, repo_id};
 use crate::error::ApiError;
 #[cfg(test)]
 use sea_orm::ConnectOptions;
@@ -152,6 +152,92 @@ impl MetadataStore {
                 }
                 *catalog = draft;
                 Ok(result)
+            }
+        }
+    }
+
+    pub(crate) fn repository(
+        &self,
+        owner: &str,
+        name: &str,
+    ) -> Result<Option<StoredRepository>, ApiError> {
+        let id = repo_id(owner, name);
+        match self.inner.as_ref() {
+            MetadataStoreInner::Postgres { db, runtime } => {
+                let db = Arc::clone(db);
+                run_api_db_on(runtime, async move {
+                    let tx = db.as_ref().begin().await.map_err(ApiError::internal)?;
+                    acquire_metadata_read_lock(&tx).await?;
+                    let repo = match entities::repository::Entity::find_by_id(id)
+                        .one(&tx)
+                        .await
+                        .map_err(ApiError::internal)?
+                    {
+                        Some(repo) => Some(repository_from_model(&tx, repo).await?),
+                        None => None,
+                    };
+                    tx.commit().await.map_err(ApiError::internal)?;
+                    Ok(repo)
+                })
+            }
+            #[cfg(test)]
+            MetadataStoreInner::Memory(catalog) => {
+                let catalog = catalog
+                    .catalog
+                    .lock()
+                    .map_err(|_| ApiError::internal_message("catalog lock is poisoned"))?;
+                Ok(catalog.repositories.get(&id).cloned())
+            }
+        }
+    }
+
+    pub(crate) fn repositories_for_user(
+        &self,
+        user_id: &str,
+    ) -> Result<Vec<StoredRepository>, ApiError> {
+        let user_id = user_id.to_string();
+        match self.inner.as_ref() {
+            MetadataStoreInner::Postgres { db, runtime } => {
+                let db = Arc::clone(db);
+                run_api_db_on(runtime, async move {
+                    let tx = db.as_ref().begin().await.map_err(ApiError::internal)?;
+                    acquire_metadata_read_lock(&tx).await?;
+                    let memberships = entities::membership::Entity::find()
+                        .filter(entities::membership::Column::UserId.eq(user_id))
+                        .order_by_asc(entities::membership::Column::RepoId)
+                        .all(&tx)
+                        .await
+                        .map_err(ApiError::internal)?;
+                    let repo_ids = memberships
+                        .into_iter()
+                        .map(|membership| membership.repo_id)
+                        .collect::<Vec<_>>();
+                    if repo_ids.is_empty() {
+                        tx.commit().await.map_err(ApiError::internal)?;
+                        return Ok(Vec::new());
+                    }
+                    let repositories = entities::repository::Entity::find()
+                        .filter(entities::repository::Column::Id.is_in(repo_ids))
+                        .order_by_asc(entities::repository::Column::Id)
+                        .all(&tx)
+                        .await
+                        .map_err(ApiError::internal)?;
+                    let repositories = repositories_from_models(&tx, repositories).await?;
+                    tx.commit().await.map_err(ApiError::internal)?;
+                    Ok(repositories)
+                })
+            }
+            #[cfg(test)]
+            MetadataStoreInner::Memory(catalog) => {
+                let catalog = catalog
+                    .catalog
+                    .lock()
+                    .map_err(|_| ApiError::internal_message("catalog lock is poisoned"))?;
+                Ok(catalog
+                    .repositories_for_user(&user_id)
+                    .into_iter()
+                    .cloned()
+                    .collect())
             }
         }
     }
@@ -534,6 +620,66 @@ where
         pending_repo_storage_deletions: decode_json(metadata_lock.pending_repo_storage_deletions)?,
         pending_source_blob_deletions: decode_json(metadata_lock.pending_source_blob_deletions)?,
     })
+}
+
+async fn repositories_from_models<C>(
+    conn: &C,
+    repositories: Vec<entities::repository::Model>,
+) -> Result<Vec<StoredRepository>, ApiError>
+where
+    C: ConnectionTrait,
+{
+    let repo_ids = repositories
+        .iter()
+        .map(|repo| repo.id.clone())
+        .collect::<Vec<_>>();
+    let memberships = if repo_ids.is_empty() {
+        Vec::new()
+    } else {
+        entities::membership::Entity::find()
+            .filter(entities::membership::Column::RepoId.is_in(repo_ids))
+            .order_by_asc(entities::membership::Column::RepoId)
+            .order_by_asc(entities::membership::Column::UserId)
+            .all(conn)
+            .await
+            .map_err(ApiError::internal)?
+    };
+    let memberships_by_repo = memberships.into_iter().try_fold(
+        std::collections::BTreeMap::<String, Vec<RepoMembership>>::new(),
+        |mut by_repo, membership| {
+            let repo_id = membership.repo_id.clone();
+            by_repo
+                .entry(repo_id)
+                .or_default()
+                .push(membership.try_into_domain()?);
+            Ok::<_, ApiError>(by_repo)
+        },
+    )?;
+
+    repositories
+        .into_iter()
+        .map(|repo| {
+            let memberships = memberships_by_repo
+                .get(&repo.id)
+                .cloned()
+                .unwrap_or_default();
+            repo.try_into_domain(memberships)
+        })
+        .collect()
+}
+
+async fn repository_from_model<C>(
+    conn: &C,
+    repository: entities::repository::Model,
+) -> Result<StoredRepository, ApiError>
+where
+    C: ConnectionTrait,
+{
+    repositories_from_models(conn, vec![repository])
+        .await?
+        .into_iter()
+        .next()
+        .ok_or_else(|| ApiError::internal_message("repository row disappeared while loading"))
 }
 
 async fn save_catalog_async<C>(conn: &C, catalog: &AppCatalog) -> Result<(), ApiError>
