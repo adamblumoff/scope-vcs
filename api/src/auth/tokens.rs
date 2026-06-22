@@ -1,7 +1,4 @@
-use crate::domain::policy::Principal;
-use crate::domain::store::{
-    AppCatalog, FirstPushToken, GitPushToken, RepoPublicationState, RepoRole, StoredRepository,
-};
+use crate::domain::store::{FirstPushToken, GitPushToken};
 use crate::{
     config::{
         FIRST_PUSH_TOKEN_BYTES, FIRST_PUSH_TOKEN_PREFIX, FIRST_PUSH_TOKEN_TTL_SECS,
@@ -9,45 +6,8 @@ use crate::{
     },
     error::ApiError,
     persistence::unix_now,
-    state::AppState,
 };
 use sha2::{Digest, Sha256};
-
-pub(crate) fn ensure_owner_setup_access(
-    state: &AppState,
-    repo: &StoredRepository,
-    user_id: &str,
-) -> Result<(), ApiError> {
-    let repo = repo.clone();
-    let user_id = user_id.to_string();
-    state
-        .metadata
-        .read(move |catalog| ensure_owner_setup_access_in_catalog(catalog, &repo, &user_id))
-}
-
-pub(crate) fn ensure_owner_setup_access_in_catalog(
-    catalog: &AppCatalog,
-    repo: &StoredRepository,
-    user_id: &str,
-) -> Result<(), ApiError> {
-    let principal = Principal {
-        id: user_id.to_string(),
-        kind: crate::domain::policy::PrincipalKind::User,
-    };
-    if catalog.role_for_principal(repo, &principal) != Some(RepoRole::Owner) {
-        return Err(ApiError::not_found(format!(
-            "repo {} not found",
-            repo.record.id
-        )));
-    }
-    if repo.record.publication_state != RepoPublicationState::PendingFirstPush {
-        return Err(ApiError::conflict(
-            "setup token is only available before the first push",
-        ));
-    }
-
-    Ok(())
-}
 
 pub(crate) fn generate_first_push_token(
     owner_user_id: &str,

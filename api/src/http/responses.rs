@@ -1,12 +1,11 @@
 use crate::domain::policy::{Policy, Principal, ScopePath, Visibility};
 use crate::domain::projection::{FileChange, Projection, project_graph};
 use crate::domain::store::{
-    AppCatalog, FirstPushToken, FirstPushTokenStatus, GitPushToken, PendingImport,
-    RepoPublicationState, RepoRole, StagedFileChangeKind, StagedRepoUpdate, StoredRepository,
-    UserAccount, pending_import_scope_path,
+    FirstPushToken, FirstPushTokenStatus, GitPushToken, PendingImport, RepoPublicationState,
+    RepoRole, StagedFileChangeKind, StagedRepoUpdate, StoredRepository, UserAccount,
+    pending_import_scope_path,
 };
 use crate::{
-    auth::tokens::ensure_owner_setup_access_in_catalog,
     config::DEFAULT_GIT_BRANCH,
     error::ApiError,
     object_store::{ObjectStore, source_blob_text},
@@ -216,20 +215,6 @@ pub(crate) struct CreateRepoRequest {
     pub(crate) visibility: Option<Visibility>,
 }
 
-pub(crate) fn repo_summary(
-    catalog: &AppCatalog,
-    repo: &StoredRepository,
-    user_id: &str,
-) -> Option<RepoSummaryResponse> {
-    repo_summary_for_user(repo, user_id).filter(|_| {
-        let principal = Principal {
-            id: user_id.to_string(),
-            kind: crate::domain::policy::PrincipalKind::User,
-        };
-        catalog.can_read_path(repo, &principal, &ScopePath::root())
-    })
-}
-
 pub(crate) fn repo_summary_for_user(
     repo: &StoredRepository,
     user_id: &str,
@@ -261,15 +246,14 @@ pub(crate) fn repo_summary_for_user(
 }
 
 pub(crate) fn repo_setup_response(
-    catalog: &AppCatalog,
     repo: &StoredRepository,
     user_id: &str,
     now_unix: u64,
     secret: Option<String>,
     push_secret: Option<String>,
 ) -> Result<RepoSetupResponse, ApiError> {
-    ensure_owner_setup_access_in_catalog(catalog, repo, user_id)?;
-    let repo_summary = repo_summary(catalog, repo, user_id)
+    ensure_repo_setup_access(repo, user_id)?;
+    let repo_summary = repo_summary_for_user(repo, user_id)
         .ok_or_else(|| ApiError::internal_message("setup repository is not readable"))?;
     let token = repo
         .first_push_token
@@ -289,6 +273,26 @@ pub(crate) fn repo_setup_response(
         token,
         push_token,
     })
+}
+
+fn ensure_repo_setup_access(repo: &StoredRepository, user_id: &str) -> Result<(), ApiError> {
+    let role = repo
+        .memberships
+        .iter()
+        .find(|membership| membership.user_id == user_id)
+        .map(|membership| membership.role);
+    if role != Some(RepoRole::Owner) {
+        return Err(ApiError::not_found(format!(
+            "repo {} not found",
+            repo.record.id
+        )));
+    }
+    if repo.record.publication_state != RepoPublicationState::PendingFirstPush {
+        return Err(ApiError::conflict(
+            "setup token is only available before the first push",
+        ));
+    }
+    Ok(())
 }
 
 pub(crate) fn first_push_token_response(

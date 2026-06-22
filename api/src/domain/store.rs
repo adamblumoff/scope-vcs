@@ -210,6 +210,42 @@ pub struct StoredRepository {
 }
 
 impl StoredRepository {
+    pub fn new(
+        owner: &UserAccount,
+        name: &str,
+        default_visibility: Visibility,
+    ) -> Result<Self, CatalogError> {
+        let name = validate_repo_name(name)?;
+        let id = repo_id(&owner.handle, &name);
+        Ok(Self {
+            record: RepoRecord {
+                id: id.clone(),
+                owner_handle: owner.handle.clone(),
+                name,
+                owner_user_id: owner.id.clone(),
+                publication_state: RepoPublicationState::PendingFirstPush,
+                default_visibility,
+            },
+            settings: RepoSettings::default(),
+            first_push_token: None,
+            git_push_token: None,
+            pending_import: None,
+            policy: Policy::new(default_visibility, owner.id.clone()),
+            graph: SourceGraph {
+                repo_id: id.clone(),
+                commits: Vec::new(),
+            },
+            git_snapshot: None,
+            staged_update: None,
+            memberships: vec![RepoMembership {
+                repo_id: id,
+                user_id: owner.id.clone(),
+                role: RepoRole::Owner,
+            }],
+            invitations: Vec::new(),
+        })
+    }
+
     pub fn owner_ids(&self) -> Vec<String> {
         let mut owner_ids = self
             .memberships
@@ -299,39 +335,11 @@ impl AppCatalog {
         name: &str,
         default_visibility: Visibility,
     ) -> Result<&StoredRepository, CatalogError> {
-        let name = validate_repo_name(name)?;
-        let id = repo_id(&owner.handle, &name);
+        let repository = StoredRepository::new(owner, name, default_visibility)?;
+        let id = repository.record.id.clone();
         if self.repositories.contains_key(&id) {
             return Err(CatalogError::RepositoryExists(id));
         }
-
-        let repository = StoredRepository {
-            record: RepoRecord {
-                id: id.clone(),
-                owner_handle: owner.handle.clone(),
-                name,
-                owner_user_id: owner.id.clone(),
-                publication_state: RepoPublicationState::PendingFirstPush,
-                default_visibility,
-            },
-            settings: RepoSettings::default(),
-            first_push_token: None,
-            git_push_token: None,
-            pending_import: None,
-            policy: Policy::new(default_visibility, owner.id.clone()),
-            graph: SourceGraph {
-                repo_id: id.clone(),
-                commits: Vec::new(),
-            },
-            git_snapshot: None,
-            staged_update: None,
-            memberships: vec![RepoMembership {
-                repo_id: id.clone(),
-                user_id: owner.id.clone(),
-                role: RepoRole::Owner,
-            }],
-            invitations: Vec::new(),
-        };
         self.repositories.insert(id.clone(), repository);
         Ok(self.repositories.get(&id).expect("repository was inserted"))
     }

@@ -12,12 +12,11 @@ use crate::{
     },
     error::ApiError,
     http::responses::*,
-    persistence::{catalog_error, unix_now},
+    persistence::unix_now,
     state::AppState,
     state::{
-        cleanup_pending_repo_storage_deletion_for_recreate, ensure_repo_read, find_repo,
-        queue_repo_storage_deletion, queue_source_blob_deletions, repo_source_blobs,
-        role_for_principal,
+        ensure_repo_read, find_repo, queue_repo_storage_deletion, queue_source_blob_deletions,
+        repo_source_blobs, role_for_principal,
     },
 };
 use axum::{
@@ -54,57 +53,30 @@ pub(crate) async fn create_repo(
     let user = ensure_user_for_identity(&state, &identity)?;
     let default_visibility = input.visibility.unwrap_or(Visibility::Private);
     let cleanup_state = state.clone();
+    let (secret, token) = generate_first_push_token(&user.id)?;
+    let (push_secret, push_token) = generate_git_push_token(&user.id)?;
+    let now = unix_now()?;
 
-    let created = state.metadata.update(move |catalog| {
-        let user = catalog
-            .users
-            .get(&user.id)
-            .cloned()
-            .ok_or_else(|| ApiError::internal_message("signed-in user was not persisted"))?;
-        cleanup_pending_repo_storage_deletion_for_recreate(
-            &cleanup_state,
-            catalog,
-            &user.handle,
-            &input.name,
-        )?;
-        let repo_id = catalog
-            .create_repository(&user, &input.name, default_visibility)
-            .map_err(catalog_error)?
-            .record
-            .id
-            .clone();
-        let (secret, token) = generate_first_push_token(&user.id)?;
-        let (push_secret, push_token) = generate_git_push_token(&user.id)?;
-        let now = unix_now()?;
-        {
-            let repo = catalog
-                .repositories
-                .get_mut(&repo_id)
-                .expect("created repository must exist");
-            repo.first_push_token = Some(token);
-            repo.git_push_token = Some(push_token);
-        }
-        let repo = catalog
-            .repositories
-            .get(&repo_id)
-            .expect("created repository must exist");
-        let summary = repo_summary(catalog, repo, &user.id).ok_or_else(|| {
-            ApiError::internal_message("created repository is missing owner role")
-        })?;
-        let setup = repo_setup_response(
-            catalog,
-            repo,
-            &user.id,
-            now,
-            Some(secret),
-            Some(push_secret),
-        )?;
+    let repo = state.metadata.create_repo_with_setup_tokens(
+        &user.id,
+        &input.name,
+        default_visibility,
+        token,
+        push_token,
+        move |owner_handle, repo_name| {
+            crate::git::storage::delete_repo_storage(&cleanup_state, owner_handle, repo_name)
+        },
+    )?;
 
-        Ok(CreateRepoResponse {
-            repo: summary,
-            setup,
-        })
-    })?;
+    let user_id = user.id.clone();
+    let summary = repo_summary_for_user(&repo, &user_id)
+        .ok_or_else(|| ApiError::internal_message("created repository is missing owner role"))?;
+    let setup = repo_setup_response(&repo, &user_id, now, Some(secret), Some(push_secret))?;
+
+    let created = CreateRepoResponse {
+        repo: summary,
+        setup,
+    };
 
     Ok(Json(created))
 }

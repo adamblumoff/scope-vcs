@@ -429,32 +429,6 @@ pub(crate) fn queue_repo_storage_deletion(catalog: &mut AppCatalog, cleanup: Rep
     }
 }
 
-pub(crate) fn cleanup_pending_repo_storage_deletion_for_recreate(
-    state: &AppState,
-    catalog: &mut AppCatalog,
-    owner_handle: &str,
-    repo_name: &str,
-) -> Result<(), ApiError> {
-    let cleanup_repo_id = repo_id(owner_handle, repo_name);
-    if catalog.repositories.contains_key(&cleanup_repo_id) {
-        return Ok(());
-    }
-
-    let has_pending_cleanup = catalog
-        .pending_repo_storage_deletions
-        .iter()
-        .any(|cleanup| repo_id(&cleanup.owner_handle, &cleanup.repo_name) == cleanup_repo_id);
-    if !has_pending_cleanup {
-        return Ok(());
-    }
-
-    crate::git::storage::delete_repo_storage(state, owner_handle, repo_name)?;
-    catalog
-        .pending_repo_storage_deletions
-        .retain(|cleanup| repo_id(&cleanup.owner_handle, &cleanup.repo_name) != cleanup_repo_id);
-    Ok(())
-}
-
 pub(crate) fn drain_pending_cleanup(state: &AppState) -> Result<CleanupDrainReport, ApiError> {
     Ok(CleanupDrainReport {
         repo_storage: drain_pending_repo_storage_deletions_report(state)?,

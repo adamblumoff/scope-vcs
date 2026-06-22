@@ -1,4 +1,3 @@
-use crate::domain::store::CatalogError;
 use crate::error::ApiError;
 use std::{fs, path::Path as FsPath};
 
@@ -53,14 +52,6 @@ pub(crate) fn unix_now() -> Result<u64, ApiError> {
         .map_err(ApiError::internal)
 }
 
-pub(crate) fn catalog_error(error: CatalogError) -> ApiError {
-    match error {
-        CatalogError::InvalidRepositoryName(message) => ApiError::bad_request(message),
-        CatalogError::RepositoryExists(repo) => {
-            ApiError::conflict(format!("repo {repo} already exists"))
-        }
-    }
-}
 #[cfg(test)]
 pub(crate) fn lock_catalog(
     state: &crate::state::AppState,
