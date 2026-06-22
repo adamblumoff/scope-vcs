@@ -290,6 +290,22 @@ fn db_metadata_store_round_trips_repo_metadata() {
     assert_eq!(row_repos.len(), 1);
     assert_eq!(row_repos[0].record.id, TEST_REPO_ID);
 
+    let updated_settings = RepoSettings {
+        include_ignored_files: true,
+        review_pushes_before_applying: false,
+    };
+    assert_eq!(
+        fresh_metadata
+            .update_repo_settings(TEST_REPO_OWNER, TEST_REPO_NAME, &owner_id, updated_settings)
+            .unwrap(),
+        updated_settings
+    );
+    let row_repo = fresh_metadata
+        .repository(TEST_REPO_OWNER, TEST_REPO_NAME)
+        .unwrap()
+        .expect("row repo loads after settings update");
+    assert_eq!(row_repo.settings, updated_settings);
+
     fresh_metadata
         .read(move |catalog| {
             let repo = catalog.repositories.get(TEST_REPO_ID).unwrap();

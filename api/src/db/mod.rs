@@ -1,10 +1,12 @@
 mod entities;
 mod schema;
-
-use crate::domain::store::{AppCatalog, RepoMembership, StoredRepository, repo_id};
-use crate::error::ApiError;
 #[cfg(test)]
-use sea_orm::ConnectOptions;
+mod test_support;
+
+use crate::domain::store::{
+    AppCatalog, RepoMembership, RepoRole, RepoSettings, StoredRepository, repo_id,
+};
+use crate::error::ApiError;
 use sea_orm::{
     ActiveModelTrait, ColumnTrait, ConnectionTrait, Database, DatabaseConnection, EntityTrait,
     IntoActiveModel, QueryFilter, QueryOrder, QuerySelect, Set, Statement, TransactionTrait,
@@ -18,6 +20,8 @@ use std::sync::{
     Arc,
     atomic::{AtomicU64, Ordering},
 };
+#[cfg(test)]
+pub(crate) use test_support::TestDatabaseTarget;
 
 const METADATA_LOCK_KEY: &str = "catalog";
 const OPERATOR_RESET_TRIGGER: &str = "operator";
@@ -101,12 +105,12 @@ impl MetadataStore {
 
     #[cfg(test)]
     pub(crate) fn connect_for_tests(target: &TestDatabaseTarget) -> anyhow::Result<Self> {
-        connect_postgres_test_store(target, false)
+        test_support::connect_postgres_test_store(target, false)
     }
 
     #[cfg(test)]
     pub(crate) fn connect_fresh_for_tests(target: &TestDatabaseTarget) -> anyhow::Result<Self> {
-        connect_postgres_test_store(target, true)
+        test_support::connect_postgres_test_store(target, true)
     }
 
     pub(crate) fn read<R>(
@@ -242,6 +246,85 @@ impl MetadataStore {
         }
     }
 
+    pub(crate) fn update_repo_settings(
+        &self,
+        owner: &str,
+        name: &str,
+        user_id: &str,
+        settings: RepoSettings,
+    ) -> Result<RepoSettings, ApiError> {
+        let repo_id = repo_id(owner, name);
+        let owner = owner.to_string();
+        let name = name.to_string();
+        let user_id = user_id.to_string();
+        match self.inner.as_ref() {
+            MetadataStoreInner::Postgres { db, runtime } => {
+                let db = Arc::clone(db);
+                run_api_db_on(runtime, async move {
+                    let tx = db.as_ref().begin().await.map_err(ApiError::internal)?;
+                    acquire_metadata_write_lock(&tx).await?;
+                    if entities::repository::Entity::find_by_id(repo_id.clone())
+                        .one(&tx)
+                        .await
+                        .map_err(ApiError::internal)?
+                        .is_none()
+                    {
+                        return Err(ApiError::not_found(format!(
+                            "repo {owner}/{name} not found"
+                        )));
+                    }
+
+                    let role = entities::membership::Entity::find()
+                        .filter(entities::membership::Column::RepoId.eq(repo_id.clone()))
+                        .filter(entities::membership::Column::UserId.eq(user_id))
+                        .one(&tx)
+                        .await
+                        .map_err(ApiError::internal)?
+                        .map(|membership| membership.try_into_domain())
+                        .transpose()?
+                        .map(|membership| membership.role);
+                    if role != Some(RepoRole::Owner) {
+                        return Err(ApiError::forbidden("owner role required"));
+                    }
+
+                    entities::repository::Entity::update_many()
+                        .filter(entities::repository::Column::Id.eq(repo_id))
+                        .col_expr(
+                            entities::repository::Column::Settings,
+                            sea_orm::sea_query::Expr::value(encode_json(&settings)?),
+                        )
+                        .exec(&tx)
+                        .await
+                        .map_err(ApiError::internal)?;
+                    tx.commit().await.map_err(ApiError::internal)?;
+                    Ok(settings)
+                })
+            }
+            #[cfg(test)]
+            MetadataStoreInner::Memory(_) => self.update(move |catalog| {
+                let repo = catalog
+                    .repositories
+                    .get(&repo_id)
+                    .ok_or_else(|| ApiError::not_found(format!("repo {owner}/{name} not found")))?;
+                let role = repo
+                    .memberships
+                    .iter()
+                    .find(|membership| membership.user_id == user_id)
+                    .map(|membership| membership.role);
+                if role != Some(RepoRole::Owner) {
+                    return Err(ApiError::forbidden("owner role required"));
+                }
+
+                let repo = catalog
+                    .repositories
+                    .get_mut(&repo_id)
+                    .expect("repo was already checked");
+                repo.settings = settings;
+                Ok(settings)
+            }),
+        }
+    }
+
     pub(crate) fn readiness_check(&self) -> Result<(), ApiError> {
         match self.inner.as_ref() {
             MetadataStoreInner::Postgres { db, runtime } => {
@@ -370,30 +453,6 @@ impl MetadataStore {
     }
 }
 
-#[cfg(test)]
-#[derive(Clone, Debug)]
-pub(crate) struct TestDatabaseTarget {
-    database_url: String,
-    schema_name: String,
-}
-
-#[cfg(test)]
-impl TestDatabaseTarget {
-    pub(crate) fn from_env() -> anyhow::Result<Option<Self>> {
-        let Some(database_url) = std::env::var("SCOPE_TEST_DATABASE_URL")
-            .ok()
-            .filter(|value| !value.trim().is_empty())
-        else {
-            return Ok(None);
-        };
-        validate_test_database_url(&database_url)?;
-        Ok(Some(Self {
-            database_url,
-            schema_name: unique_test_schema_name(),
-        }))
-    }
-}
-
 fn connect_postgres_store(database_url: String) -> anyhow::Result<MetadataStore> {
     let runtime = DbRuntime::new()?;
     let db = run_db_on(&runtime, async move {
@@ -410,120 +469,6 @@ fn connect_postgres_store(database_url: String) -> anyhow::Result<MetadataStore>
             runtime,
         }),
     })
-}
-
-#[cfg(test)]
-fn connect_postgres_test_store(
-    target: &TestDatabaseTarget,
-    reset_schema: bool,
-) -> anyhow::Result<MetadataStore> {
-    let runtime = DbRuntime::new()?;
-    let database_url = target.database_url.clone();
-    let schema_name = target.schema_name.clone();
-    let db = run_db_on(&runtime, async move {
-        let admin = Database::connect(&database_url).await?;
-        admin
-            .execute(Statement::from_string(
-                admin.get_database_backend(),
-                format!(
-                    "CREATE SCHEMA IF NOT EXISTS {}",
-                    quote_pg_ident(&schema_name)
-                ),
-            ))
-            .await?;
-
-        let mut options = ConnectOptions::new(database_url);
-        options.max_connections(1).min_connections(1);
-        let db = Database::connect(options).await?;
-        db.execute(Statement::from_string(
-            db.get_database_backend(),
-            format!("SET search_path TO {}", quote_pg_ident(&schema_name)),
-        ))
-        .await?;
-        if reset_schema {
-            schema::reset_metadata_schema(&db).await?;
-        }
-        schema::migrate_metadata_schema(&db).await?;
-        ensure_metadata_lock_row(&db).await?;
-        Ok::<_, sea_orm::DbErr>(db)
-    })?;
-
-    Ok(MetadataStore {
-        inner: Arc::new(MetadataStoreInner::Postgres {
-            db: Arc::new(db),
-            runtime,
-        }),
-    })
-}
-
-#[cfg(test)]
-fn validate_test_database_url(database_url: &str) -> anyhow::Result<()> {
-    let lower = database_url.trim().to_ascii_lowercase();
-    if !(lower.starts_with("postgres://") || lower.starts_with("postgresql://")) {
-        anyhow::bail!("SCOPE_TEST_DATABASE_URL must be a postgres:// or postgresql:// URL");
-    }
-
-    let after_scheme = lower
-        .split_once("://")
-        .map(|(_, rest)| rest)
-        .unwrap_or_default();
-    let database_and_query = after_scheme
-        .split_once('/')
-        .map(|(_, path)| path)
-        .unwrap_or_default();
-    let database_name = database_and_query
-        .split(['?', '#'])
-        .next()
-        .unwrap_or_default();
-    let query = database_and_query
-        .split_once('?')
-        .map(|(_, query)| query.split('#').next().unwrap_or_default())
-        .unwrap_or_default();
-    let query_has_schema_marker = query
-        .split('&')
-        .filter_map(|part| part.split_once('='))
-        .any(|(key, value)| {
-            matches!(
-                key,
-                "search_path" | "schema" | "current_schema" | "currentschema"
-            ) && has_scope_test_marker(value)
-        });
-    let has_test_marker = has_scope_test_marker(database_name) || query_has_schema_marker;
-
-    if !has_test_marker {
-        anyhow::bail!(
-            "SCOPE_TEST_DATABASE_URL must visibly target a Scope test database or schema; include scope_test, scope-test, scope_vcs_test, or scope-vcs-test in the database name or search_path/schema query"
-        );
-    }
-    Ok(())
-}
-
-#[cfg(test)]
-fn has_scope_test_marker(value: &str) -> bool {
-    value.contains("scope_test")
-        || value.contains("scope-test")
-        || value.contains("scope_vcs_test")
-        || value.contains("scope-vcs-test")
-}
-
-#[cfg(test)]
-fn unique_test_schema_name() -> String {
-    let nanos = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .expect("system clock should be after UNIX epoch")
-        .as_nanos();
-    format!("scope_test_{}_{}", std::process::id(), nanos)
-}
-
-#[cfg(test)]
-fn quote_pg_ident(identifier: &str) -> String {
-    assert!(
-        identifier
-            .bytes()
-            .all(|byte| byte.is_ascii_alphanumeric() || byte == b'_'),
-        "generated test schema identifiers only use postgres-safe characters"
-    );
-    format!("\"{}\"", identifier.replace('"', "\"\""))
 }
 
 fn load_catalog(
@@ -930,47 +875,6 @@ fn decode_json<T: DeserializeOwned>(value: serde_json::Value) -> Result<T, ApiEr
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn test_database_url_requires_scope_test_marker() {
-        let error = validate_test_database_url("postgres://localhost/scope_staging").unwrap_err();
-        assert!(
-            error
-                .to_string()
-                .contains("must visibly target a Scope test database or schema")
-        );
-
-        validate_test_database_url("postgres://localhost/scope_test").unwrap();
-        validate_test_database_url("postgres://localhost/scope-vcs-test").unwrap();
-        validate_test_database_url("postgres://localhost/postgres?search_path=scope_test_run")
-            .unwrap();
-
-        let error =
-            validate_test_database_url("postgres://localhost/prod?application_name=scope_test")
-                .unwrap_err();
-        assert!(
-            error
-                .to_string()
-                .contains("must visibly target a Scope test database or schema")
-        );
-        let error =
-            validate_test_database_url("postgres://localhost/prod?foo=scope_test").unwrap_err();
-        assert!(
-            error
-                .to_string()
-                .contains("must visibly target a Scope test database or schema")
-        );
-    }
-
-    #[test]
-    fn test_database_url_must_be_postgres() {
-        let error = validate_test_database_url("sqlite://scope_test").unwrap_err();
-        assert!(
-            error
-                .to_string()
-                .contains("must be a postgres:// or postgresql:// URL")
-        );
-    }
 
     #[test]
     fn stale_pre_alpha_reset_is_limited_to_known_visibility_shape_error() {
