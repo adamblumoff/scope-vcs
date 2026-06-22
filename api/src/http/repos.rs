@@ -14,11 +14,13 @@ use crate::{
     http::responses::*,
     persistence::unix_now,
     state::AppState,
-    state::{ensure_repo_read, find_repo, role_for_principal},
+    state::{
+        ensure_owner, ensure_repo_read, find_repo, promote_pending_import, role_for_principal,
+    },
 };
 use axum::{
     Json,
-    extract::{Path, State},
+    extract::{Path, Query, State},
     http::HeaderMap,
 };
 use std::collections::BTreeSet;
@@ -150,6 +152,77 @@ pub(crate) async fn get_git_projection(
         state.object_store.as_ref(),
         &projection,
     )?))
+}
+
+pub(crate) async fn get_projection_preview(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path((owner, repo_name)): Path<(String, String)>,
+    Query(input): Query<ProjectionPreviewRequest>,
+) -> Result<Json<ProjectionPreviewResponse>, ApiError> {
+    let repo = find_repo(&state, &owner, &repo_name)?;
+    let source = input.source.unwrap_or(ProjectionPreviewSource::Live);
+    let identity = http_identity(&state, &headers).await?;
+    let requester = principal_for_repo(&state, &repo, identity.as_ref())?;
+    ensure_projection_preview_access(&state, &repo, &requester, input.audience, source)?;
+    let include_private_counts =
+        role_for_principal(&state, &repo, &requester)? == Some(RepoRole::Owner);
+    let preview_repo = projection_preview_repo(&repo, source)?;
+
+    Ok(Json(projection_preview_response(
+        &preview_repo,
+        input.audience,
+        source,
+        include_private_counts,
+    )?))
+}
+
+fn ensure_projection_preview_access(
+    state: &AppState,
+    repo: &crate::domain::store::StoredRepository,
+    requester: &Principal,
+    audience: ProjectionPreviewAudience,
+    source: ProjectionPreviewSource,
+) -> Result<(), ApiError> {
+    match (audience, source) {
+        (ProjectionPreviewAudience::Owner, _) => {
+            ensure_repo_read(state, repo, requester)?;
+            ensure_owner(state, repo, requester)
+        }
+        (ProjectionPreviewAudience::Public, ProjectionPreviewSource::Review) => {
+            ensure_repo_read(state, repo, requester)?;
+            ensure_owner(state, repo, requester)
+        }
+        (ProjectionPreviewAudience::Public, ProjectionPreviewSource::Live) => {
+            if role_for_principal(state, repo, requester)? == Some(RepoRole::Owner) {
+                ensure_repo_read(state, repo, requester)
+            } else {
+                ensure_repo_read(state, repo, &Principal::public())
+            }
+        }
+    }
+}
+
+fn projection_preview_repo(
+    repo: &crate::domain::store::StoredRepository,
+    source: ProjectionPreviewSource,
+) -> Result<crate::domain::store::StoredRepository, ApiError> {
+    let mut preview = repo.clone();
+    match source {
+        ProjectionPreviewSource::Live => Ok(preview),
+        ProjectionPreviewSource::Review => {
+            if preview.record.publication_state
+                == crate::domain::store::RepoPublicationState::PendingPublish
+            {
+                promote_pending_import(&mut preview)?;
+            } else if let Some(staged_update) = preview.staged_update.clone() {
+                crate::git::import::apply_receive_pack_update(&mut preview, staged_update)?;
+            } else {
+                return Err(ApiError::bad_request("repo has no pending review"));
+            }
+            Ok(preview)
+        }
+    }
 }
 
 pub(crate) async fn get_files(

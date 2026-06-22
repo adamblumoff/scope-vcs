@@ -7,6 +7,8 @@ import {
   folderCollapseKeys,
   folderVisibility,
   normalizeReviewPath,
+  visibleFileCountInProjectionPreview,
+  visibleInProjectionPreview,
 } from './review-tree-model'
 
 type TestFile = {
@@ -91,5 +93,31 @@ test('path helpers normalize leading slashes, backslashes, dot segments, and emp
     'src/components/Button.tsx',
   )
   assert.equal(displayPath('/docs//guide.md'), 'docs/guide.md')
+})
+
+test('projection preview visibility uses the preview path set for owner and public views', () => {
+  const visiblePaths = new Set(['README.md'])
+  const files: TestFile[] = [
+    { path: '/README.md', visibility: 'Public' },
+    { path: '/deleted.txt', visibility: 'Private' },
+  ]
+
+  assert.equal(
+    visibleInProjectionPreview('/README.md', 'owner', visiblePaths),
+    true,
+  )
+  assert.equal(
+    visibleInProjectionPreview('/deleted.txt', 'owner', visiblePaths),
+    false,
+  )
+  assert.equal(
+    visibleInProjectionPreview('/deleted.txt', 'public', visiblePaths),
+    false,
+  )
+  assert.equal(
+    visibleInProjectionPreview('/deleted.txt', undefined, visiblePaths),
+    true,
+  )
+  assert.equal(visibleFileCountInProjectionPreview(files, 'owner', visiblePaths), 1)
 })
 

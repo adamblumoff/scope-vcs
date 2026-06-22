@@ -9,6 +9,8 @@ export type RepoPublicationState = RepoLifecycleState
 export type TokenStatus = 'Active' | 'Expired' | 'Used'
 export type ReviewKind = 'PendingImport' | 'StagedUpdate'
 export type StagedFileChangeKind = 'Added' | 'Modified' | 'Deleted'
+export type ProjectionPreviewAudience = 'owner' | 'public'
+export type ProjectionPreviewSource = 'live' | 'review'
 
 export type SessionIdentity = {
   pairwise_sub: string
@@ -67,6 +69,7 @@ export type RepoDetail = {
   capabilities: RepoCapabilities
   files: RepoFile[]
   kind: 'repo'
+  projection_previews: ProjectionPreviews
   repo: RepoSummary
   review: RepoReview | null
 }
@@ -181,6 +184,52 @@ export type StagedUpdateReview = {
 export type RepoReview = PendingImportReview | StagedUpdateReview
 export type RepoReviewResult = RepoReview | { kind: 'NoReview' }
 export type ReviewFile = RepoFile | StagedFile
+
+export type ProjectionPreviewFile = {
+  path: string
+  oid: string
+  visibility: Visibility
+}
+
+export type ProjectionPreviewCommit = {
+  projected_id: string
+  logical_commit_id: string
+  parent_projected_id: string | null
+  author: string | null
+  message: string
+  synthetic: boolean
+  change_count: number
+}
+
+export type ProjectionPreviewSummary = {
+  visible_files: number
+  hidden_files: number
+  visible_commits: number
+  hidden_commits: number
+  synthetic_commits: number
+}
+
+export type ProjectionPreview = {
+  audience: ProjectionPreviewAudience
+  source: ProjectionPreviewSource
+  repo_id: string
+  principal_id: string
+  head_oid: string | null
+  files: ProjectionPreviewFile[]
+  commits: ProjectionPreviewCommit[]
+  summary: ProjectionPreviewSummary
+}
+
+export type ProjectionPreviews = {
+  source: ProjectionPreviewSource
+  owner: ProjectionPreview | null
+  public: ProjectionPreview | null
+}
+
+export type ProjectionPreviewInput = RepoParams & {
+  audience: ProjectionPreviewAudience
+  source: ProjectionPreviewSource
+}
 
 export type SetVisibilityInput = RepoParams & {
   kind: ReviewKind

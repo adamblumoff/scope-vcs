@@ -11,6 +11,7 @@ import { VisibilityBadge } from '@/components/visibility-badge'
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
+import { ProjectionPreviewPanel } from '@/features/projection-preview/projection-preview-panel'
 import { Link, useRouter } from '@tanstack/react-router'
 import { AlertCircle, ArrowLeft, ArrowRight, FileSearch } from 'lucide-react'
 import { useState } from 'react'
@@ -128,6 +129,14 @@ export function RepoDetailPage({
         )}
 
         <section className="mt-8 border-y border-border">
+          <div className="border-b border-border py-4">
+            <h2 className="text-sm font-semibold leading-5">Repo files</h2>
+            <p className="mt-1 max-w-[660px] text-sm leading-5 text-muted-foreground">
+              {canEditFiles
+                ? 'Set each file to Private or Public here. The preview below shows the result for each audience.'
+                : 'Files visible to your current session.'}
+            </p>
+          </div>
           {files.length === 0 ? (
             <div className="flex items-center gap-3 py-10">
               <div className="flex size-10 shrink-0 items-center justify-center rounded-md border border-border">
@@ -156,6 +165,8 @@ export function RepoDetailPage({
             />
           )}
         </section>
+
+        <ProjectionPreviewPanel previews={detail.projection_previews} />
       </section>
     </main>
   )

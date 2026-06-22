@@ -21,6 +21,7 @@ import type {
   RepoSummary,
   SetRepoFileVisibilityInput,
 } from './types'
+import { loadProjectionPreviewsForRequest } from './projection-preview'
 import { loadReviewForRequest } from './review'
 
 export { parseSetRepoFileVisibilityInput } from './repo-inputs'
@@ -128,17 +129,23 @@ export async function loadRepoForRequest(data: RepoParams) {
     ),
   ])
   const review = await loadOpenRepoReview(data, repo, idToken ?? null)
-  const files = review
-    ? []
-    : await loadJson<RepoFile[]>(
-        `${api}/v1/repos/${data.owner}/${data.repo}/files`,
-        init,
-      )
+  const [files, projectionPreviews] = await Promise.all([
+    review
+      ? Promise.resolve([])
+      : loadJson<RepoFile[]>(
+          `${api}/v1/repos/${data.owner}/${data.repo}/files`,
+          init,
+        ),
+    loadProjectionPreviewsForRequest(data, review ? 'review' : 'live', {
+      includeOwner: repo.role === 'Owner',
+    }),
+  ])
 
   return {
     capabilities: session.capabilities,
     files,
     kind: 'repo',
+    projection_previews: projectionPreviews,
     repo,
     review,
   } satisfies RepoDetail

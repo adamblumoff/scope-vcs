@@ -80,6 +80,10 @@ pub fn router(state: AppState) -> Router {
             "/v1/repos/{owner}/{repo}/git-projections",
             get(http::repos::get_git_projection),
         )
+        .route(
+            "/v1/repos/{owner}/{repo}/projection-preview",
+            get(http::repos::get_projection_preview),
+        )
         .route("/git/{org}/{repo}/info/refs", get(git::git_info_refs))
         .route(
             "/git/{org}/{repo}/git-receive-pack",

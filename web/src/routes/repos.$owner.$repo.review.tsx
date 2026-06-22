@@ -1,5 +1,6 @@
 import {
   applyStagedUpdate,
+  loadReviewProjectionPreviews,
   loadReview,
   publishRepo,
   rejectStagedUpdate,
@@ -18,7 +19,8 @@ export const Route = createFileRoute('/repos/$owner/$repo/review')({
       })
     }
 
-    return review
+    const projectionPreviews = await loadReviewProjectionPreviews({ data: params })
+    return { projectionPreviews, review }
   },
   errorComponent: ReviewError,
   component: ReviewRoute,
@@ -26,12 +28,14 @@ export const Route = createFileRoute('/repos/$owner/$repo/review')({
 
 function ReviewRoute() {
   const params = Route.useParams()
+  const { projectionPreviews, review } = Route.useLoaderData()
 
   return (
     <ReviewPage
       applyStagedUpdate={(data) => applyStagedUpdate({ data })}
-      initialReview={Route.useLoaderData()}
+      initialReview={review}
       params={params}
+      projectionPreviews={projectionPreviews}
       publishRepo={(data) => publishRepo({ data })}
       rejectStagedUpdate={(data) => rejectStagedUpdate({ data })}
       setReviewVisibility={setReviewVisibility}
