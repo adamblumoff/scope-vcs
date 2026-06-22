@@ -7,10 +7,14 @@ export function parseSetRepoFileVisibilityInput(
   const owner = typeof data?.owner === 'string' ? data.owner.trim() : ''
   const repo = typeof data?.repo === 'string' ? data.repo.trim() : ''
   const paths = Array.isArray(data?.paths)
-    ? data.paths
-        .filter((path): path is string => typeof path === 'string')
-        .map((path) => path.trim())
-        .filter(Boolean)
+    ? data.paths.flatMap((path) => {
+        if (typeof path !== 'string') {
+          return []
+        }
+
+        const trimmed = path.trim()
+        return trimmed ? [trimmed] : []
+      })
     : []
   const visibility = data?.visibility === 'Public' ? 'Public' : 'Private'
 

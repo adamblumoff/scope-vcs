@@ -14,8 +14,36 @@ import {
   Rocket,
   X,
 } from 'lucide-react'
-import { useState } from 'react'
+import { useReducer } from 'react'
 import { ReviewTree } from './review-tree'
+
+type ReviewOverride = {
+  baseReview: RepoReview
+  review: RepoReview
+}
+
+type ReviewPageState = {
+  error: string | null
+  pendingKey: string | null
+  reviewOverride: ReviewOverride | null
+  runningAction: 'publish' | 'reject' | null
+}
+
+type ReviewPageAction =
+  | { type: 'actionFailed'; message: string }
+  | { type: 'publishStarted' }
+  | { type: 'rejectStarted' }
+  | { type: 'visibilityFailed'; message: string }
+  | { type: 'visibilityFinished' }
+  | { type: 'visibilityStarted'; pendingKey: string }
+  | { baseReview: RepoReview; review: RepoReview; type: 'visibilitySucceeded' }
+
+const initialReviewPageState: ReviewPageState = {
+  error: null,
+  pendingKey: null,
+  reviewOverride: null,
+  runningAction: null,
+}
 
 export function ReviewPage({
   applyStagedUpdate,
@@ -39,11 +67,17 @@ export function ReviewPage({
 }) {
   const navigate = useNavigate()
   const router = useRouter()
-  const [review, setReview] = useState<RepoReview>(initialReview)
-  const [pendingKey, setPendingKey] = useState<string | null>(null)
-  const [publishing, setPublishing] = useState(false)
-  const [rejecting, setRejecting] = useState(false)
-  const [error, setError] = useState<string | null>(null)
+  const [state, dispatch] = useReducer(
+    reviewPageReducer,
+    initialReviewPageState,
+  )
+  const review =
+    state.reviewOverride?.baseReview === initialReview
+      ? state.reviewOverride.review
+      : initialReview
+  const { error, pendingKey } = state
+  const publishing = state.runningAction === 'publish'
+  const rejecting = state.runningAction === 'reject'
   const stagedReview = review.kind === 'StagedUpdate'
   const visibilityPending = pendingKey !== null
 
@@ -57,20 +91,25 @@ export function ReviewPage({
       return
     }
 
-    setError(null)
-    setPendingKey(pendingKey)
+    dispatch({ pendingKey, type: 'visibilityStarted' })
     try {
       const updated = await setReviewVisibility(params, review, files, visibility)
-      setReview(updated)
+      dispatch({
+        baseReview: initialReview,
+        review: updated,
+        type: 'visibilitySucceeded',
+      })
       await router.invalidate()
     } catch (visibilityError) {
-      setError(
-        visibilityError instanceof Error
-          ? visibilityError.message
-          : 'visibility update failed',
-      )
+      dispatch({
+        message:
+          visibilityError instanceof Error
+            ? visibilityError.message
+            : 'visibility update failed',
+        type: 'visibilityFailed',
+      })
     } finally {
-      setPendingKey(null)
+      dispatch({ type: 'visibilityFinished' })
     }
   }
 
@@ -78,8 +117,7 @@ export function ReviewPage({
     if (visibilityPending) {
       return
     }
-    setPublishing(true)
-    setError(null)
+    dispatch({ type: 'publishStarted' })
     try {
       if (review.kind === 'StagedUpdate') {
         await applyStagedUpdate(params)
@@ -91,10 +129,13 @@ export function ReviewPage({
       await navigate({ replace: true, to: '/' })
       await router.invalidate()
     } catch (publishError) {
-      setError(
-        publishError instanceof Error ? publishError.message : 'review action failed',
-      )
-      setPublishing(false)
+      dispatch({
+        message:
+          publishError instanceof Error
+            ? publishError.message
+            : 'review action failed',
+        type: 'actionFailed',
+      })
     }
   }
 
@@ -102,16 +143,17 @@ export function ReviewPage({
     if (visibilityPending) {
       return
     }
-    setRejecting(true)
-    setError(null)
+    dispatch({ type: 'rejectStarted' })
     try {
       await rejectStagedUpdate(params)
       storeHomeFlash(`${params.owner}/${params.repo} update rejected.`)
       await navigate({ replace: true, to: '/' })
       await router.invalidate()
     } catch (rejectError) {
-      setError(rejectError instanceof Error ? rejectError.message : 'reject failed')
-      setRejecting(false)
+      dispatch({
+        message: rejectError instanceof Error ? rejectError.message : 'reject failed',
+        type: 'actionFailed',
+      })
     }
   }
 
@@ -225,6 +267,34 @@ export function ReviewPage({
       </section>
     </main>
   )
+}
+
+function reviewPageReducer(
+  state: ReviewPageState,
+  action: ReviewPageAction,
+): ReviewPageState {
+  switch (action.type) {
+    case 'actionFailed':
+      return { ...state, error: action.message, runningAction: null }
+    case 'publishStarted':
+      return { ...state, error: null, runningAction: 'publish' }
+    case 'rejectStarted':
+      return { ...state, error: null, runningAction: 'reject' }
+    case 'visibilityFailed':
+      return { ...state, error: action.message }
+    case 'visibilityFinished':
+      return { ...state, pendingKey: null }
+    case 'visibilityStarted':
+      return { ...state, error: null, pendingKey: action.pendingKey }
+    case 'visibilitySucceeded':
+      return {
+        ...state,
+        reviewOverride: {
+          baseReview: action.baseReview,
+          review: action.review,
+        },
+      }
+  }
 }
 
 export function ReviewError({ error }: { error: unknown }) {

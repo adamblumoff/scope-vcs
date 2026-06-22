@@ -31,6 +31,7 @@ export function buildReviewTree<TFile extends ReviewTreeFileBase>(files: TFile[]
     path: '/',
     type: 'folder',
   }
+  const foldersByPath = new Map<string, typeof root>([[root.path, root]])
 
   for (const file of files) {
     const path = normalizeReviewPath(file.path)
@@ -53,10 +54,7 @@ export function buildReviewTree<TFile extends ReviewTreeFileBase>(files: TFile[]
           type: 'file',
         })
       } else {
-        let folder = current.children.find(
-          (child): child is Extract<ReviewTreeNode<TFile>, { type: 'folder' }> =>
-            child.type === 'folder' && child.path === folderPath,
-        )
+        let folder = foldersByPath.get(folderPath)
         if (!folder) {
           folder = {
             children: [],
@@ -67,6 +65,7 @@ export function buildReviewTree<TFile extends ReviewTreeFileBase>(files: TFile[]
             type: 'folder',
           }
           current.children.push(folder)
+          foldersByPath.set(folderPath, folder)
         }
         current = folder
       }
