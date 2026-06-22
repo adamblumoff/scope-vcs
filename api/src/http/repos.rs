@@ -34,13 +34,12 @@ pub(crate) async fn list_repos(
     let identity = require_identity(&state, &headers).await?;
     let user = ensure_user_for_identity(&state, &identity)?;
     let user_id = user.id.clone();
-    let mut repositories = state.metadata.read(move |catalog| {
-        Ok(catalog
-            .repositories_for_user(&user_id)
-            .into_iter()
-            .filter_map(|repo| repo_summary(catalog, repo, &user_id))
-            .collect::<Vec<_>>())
-    })?;
+    let mut repositories = state
+        .metadata
+        .repositories_for_user(&user_id)?
+        .into_iter()
+        .filter_map(|repo| repo_summary_for_user(&repo, &user_id))
+        .collect::<Vec<_>>();
     repositories.sort_by(|left, right| left.id.cmp(&right.id));
 
     Ok(Json(repositories))

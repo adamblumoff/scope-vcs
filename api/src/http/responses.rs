@@ -222,15 +222,33 @@ pub(crate) fn repo_summary(
     repo: &StoredRepository,
     user_id: &str,
 ) -> Option<RepoSummaryResponse> {
+    repo_summary_for_user(repo, user_id).filter(|_| {
+        let principal = Principal {
+            id: user_id.to_string(),
+            kind: crate::domain::policy::PrincipalKind::User,
+        };
+        catalog.can_read_path(repo, &principal, &ScopePath::root())
+    })
+}
+
+pub(crate) fn repo_summary_for_user(
+    repo: &StoredRepository,
+    user_id: &str,
+) -> Option<RepoSummaryResponse> {
     let principal = Principal {
         id: user_id.to_string(),
         kind: crate::domain::policy::PrincipalKind::User,
     };
-    if !catalog.can_read_path(repo, &principal, &ScopePath::root()) {
+    let role = repo
+        .memberships
+        .iter()
+        .find(|membership| membership.user_id == user_id)
+        .map(|membership| membership.role)?;
+    let lifecycle_allows_read =
+        repo.record.publication_state == RepoPublicationState::Published || role == RepoRole::Owner;
+    if !lifecycle_allows_read || !repo.policy.can_read(&principal, &ScopePath::root()) {
         return None;
     }
-
-    let role = catalog.role_for_principal(repo, &principal)?;
 
     Some(RepoSummaryResponse {
         id: repo.record.id.clone(),

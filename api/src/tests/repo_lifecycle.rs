@@ -280,6 +280,16 @@ fn db_metadata_store_round_trips_repo_metadata() {
         .unwrap();
 
     let fresh_metadata = crate::db::MetadataStore::connect_for_tests(&test_db).unwrap();
+    let row_repo = fresh_metadata
+        .repository(TEST_REPO_OWNER, TEST_REPO_NAME)
+        .unwrap()
+        .expect("row repo loads");
+    assert_eq!(row_repo.graph, expected_graph);
+    assert_eq!(row_repo.pending_import, expected_pending_import);
+    let row_repos = fresh_metadata.repositories_for_user(&owner_id).unwrap();
+    assert_eq!(row_repos.len(), 1);
+    assert_eq!(row_repos[0].record.id, TEST_REPO_ID);
+
     fresh_metadata
         .read(move |catalog| {
             let repo = catalog.repositories.get(TEST_REPO_ID).unwrap();
