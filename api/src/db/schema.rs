@@ -4,9 +4,11 @@ use sea_orm_migration::{manager::SchemaManager, prelude::*};
 
 pub(crate) async fn migrate_metadata_schema(db: &DatabaseConnection) -> Result<(), DbErr> {
     let manager = SchemaManager::new(db);
+    ensure_metadata_reset_events_table(&manager).await?;
     if let Some(drift) = metadata_schema_drift(&manager).await? {
         if !metadata_schema_has_catalog_rows(db, &manager).await? {
             reset_metadata_schema(db).await?;
+            ensure_metadata_reset_events_table(&manager).await?;
         } else {
             return Err(DbErr::Custom(format!(
                 "Scope metadata schema drift detected: {drift}; reset the metadata schema explicitly before starting this pre-alpha server"
@@ -179,6 +181,38 @@ pub(crate) async fn migrate_metadata_schema(db: &DatabaseConnection) -> Result<(
         .await?;
 
     Ok(())
+}
+
+async fn ensure_metadata_reset_events_table(manager: &SchemaManager<'_>) -> Result<(), DbErr> {
+    manager
+        .create_table(
+            Table::create()
+                .table(MetadataResetEvents::Table)
+                .if_not_exists()
+                .col(
+                    ColumnDef::new(MetadataResetEvents::Id)
+                        .string()
+                        .not_null()
+                        .primary_key(),
+                )
+                .col(
+                    ColumnDef::new(MetadataResetEvents::ResetAtUnix)
+                        .big_integer()
+                        .not_null(),
+                )
+                .col(
+                    ColumnDef::new(MetadataResetEvents::Trigger)
+                        .string()
+                        .not_null(),
+                )
+                .col(
+                    ColumnDef::new(MetadataResetEvents::Reason)
+                        .text()
+                        .not_null(),
+                )
+                .to_owned(),
+        )
+        .await
 }
 
 pub(crate) async fn reset_metadata_schema(db: &DatabaseConnection) -> Result<(), DbErr> {
@@ -399,4 +433,21 @@ impl_iden!(MetadataLocks {
     Key => "key",
     PendingRepoStorageDeletions => "pending_repo_storage_deletions",
     PendingSourceBlobDeletions => "pending_source_blob_deletions",
+});
+
+#[derive(Copy, Clone)]
+enum MetadataResetEvents {
+    Table,
+    Id,
+    ResetAtUnix,
+    Trigger,
+    Reason,
+}
+
+impl_iden!(MetadataResetEvents {
+    Table => "scope_metadata_reset_events",
+    Id => "id",
+    ResetAtUnix => "reset_at_unix",
+    Trigger => "trigger",
+    Reason => "reason",
 });

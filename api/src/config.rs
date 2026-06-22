@@ -14,6 +14,7 @@ pub(crate) const SCOPE_BUCKET_ACCESS_KEY_ID_ENV: &str = "SCOPE_BUCKET_ACCESS_KEY
 pub(crate) const SCOPE_BUCKET_SECRET_ACCESS_KEY_ENV: &str = "SCOPE_BUCKET_SECRET_ACCESS_KEY";
 pub(crate) const SCOPE_BUCKET_FORCE_PATH_STYLE_ENV: &str = "SCOPE_BUCKET_FORCE_PATH_STYLE";
 pub(crate) const SCOPE_OBJECT_ENCRYPTION_KEY_ENV: &str = "SCOPE_OBJECT_ENCRYPTION_KEY";
+pub(crate) const SCOPE_OPERATOR_TOKEN_ENV: &str = "SCOPE_OPERATOR_TOKEN";
 pub(crate) const SHOO_JWKS_URL: &str = "https://shoo.dev/.well-known/jwks.json";
 pub(crate) const SHOO_ISSUER: &str = "https://shoo.dev";
 pub(crate) const LOCAL_APP_ORIGIN: &str = "http://localhost:3000";

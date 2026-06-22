@@ -41,6 +41,7 @@ use std::{
 };
 use tower::ServiceExt;
 
+mod admin;
 mod auth;
 mod git_http;
 mod git_receive;
@@ -179,6 +180,7 @@ fn test_state_with_repo() -> AppState {
             "http://127.0.0.1/.well-known/jwks.json",
         ),
         object_store: Arc::new(MemoryObjectStore::new()),
+        operator_token: None,
     }
 }
 
@@ -198,6 +200,7 @@ fn test_state_with_metadata(metadata: crate::db::MetadataStore) -> AppState {
             "http://127.0.0.1/.well-known/jwks.json",
         ),
         object_store: Arc::new(MemoryObjectStore::new()),
+        operator_token: None,
     };
     cache_test_jwks(&state);
     state
