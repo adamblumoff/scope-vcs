@@ -1,12 +1,29 @@
-import type { RepoSetup, RepoSetupView } from './types'
+import type {
+  RepoGitCredential,
+  RepoGitCredentialView,
+  RepoSetup,
+  RepoSetupView,
+} from './types'
 
 export function setupView(api: string, setup: RepoSetup): RepoSetupView {
-  const gitRemoteUrl = `${stripTrailingSlash(api)}${setup.git_remote_path}`
-
   return {
     ...setup,
-    git_remote_url: gitRemoteUrl,
+    git_remote_url: gitRemoteUrl(api, setup.git_remote_path),
   }
+}
+
+export function repoGitCredentialView(
+  api: string,
+  credential: RepoGitCredential,
+): RepoGitCredentialView {
+  return {
+    ...credential,
+    git_remote_url: gitRemoteUrl(api, credential.git_remote_path),
+  }
+}
+
+function gitRemoteUrl(api: string, path: string) {
+  return `${stripTrailingSlash(api)}${path}`
 }
 
 function stripTrailingSlash(value: string) {

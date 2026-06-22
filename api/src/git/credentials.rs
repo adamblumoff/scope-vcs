@@ -265,11 +265,6 @@ pub(crate) fn authorize_git_push_token_for_repo(
     repo: &StoredRepository,
     secret: &str,
 ) -> Result<String, ApiError> {
-    if repo.record.publication_state == RepoPublicationState::Published {
-        return Err(ApiError::unauthorized(
-            "Git push token is no longer valid after publish",
-        ));
-    }
     let Some(token) = repo.git_push_token.as_ref() else {
         return Err(ApiError::unauthorized("Git push token is not configured"));
     };

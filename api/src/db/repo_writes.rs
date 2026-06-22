@@ -627,7 +627,7 @@ impl MetadataStore {
     }
 }
 
-fn ensure_repo_owner(repo: &StoredRepository, user_id: &str) -> Result<(), ApiError> {
+pub(super) fn ensure_repo_owner(repo: &StoredRepository, user_id: &str) -> Result<(), ApiError> {
     let role = repo
         .memberships
         .iter()

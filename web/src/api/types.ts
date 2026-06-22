@@ -103,6 +103,16 @@ export type RepoSetupView = RepoSetup & {
   git_remote_url: string
 }
 
+export type RepoGitCredential = {
+  git_remote_path: string
+  remote_name: string
+  push_token: GitPushToken
+}
+
+export type RepoGitCredentialView = RepoGitCredential & {
+  git_remote_url: string
+}
+
 export type SetupRouteState =
   | {
       kind: 'setup'

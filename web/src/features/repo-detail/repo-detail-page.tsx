@@ -1,20 +1,29 @@
 import type {
   RepoDetail,
   RepoFile,
+  RepoGitCredentialView,
   RepoParams,
   RepoSummary,
   ReviewFile,
   Visibility,
 } from '@/api/types'
 import { AppHeader } from '@/components/app-header'
+import { CopyableCodeBlock } from '@/components/copyable-code-block'
 import { VisibilityBadge } from '@/components/visibility-badge'
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Link, useRouter } from '@tanstack/react-router'
-import { AlertCircle, ArrowLeft, ArrowRight, FileSearch } from 'lucide-react'
+import {
+  AlertCircle,
+  ArrowLeft,
+  ArrowRight,
+  FileSearch,
+  RefreshCw,
+} from 'lucide-react'
 import { useState } from 'react'
 import { ReviewTree } from '../review/review-tree'
+import { gitCredentialApproveCommand } from '../setup/commands'
 
 type FilesOverride = {
   baseFiles: RepoFile[]
@@ -34,10 +43,12 @@ type VisibilityError = {
 export function RepoDetailPage({
   detail,
   params,
+  regenerateGitCredential,
   setFileVisibility,
 }: {
   detail: RepoDetail
   params: RepoParams
+  regenerateGitCredential: (params: RepoParams) => Promise<RepoGitCredentialView>
   setFileVisibility: (
     params: RepoParams,
     files: ReviewFile[],
@@ -53,6 +64,12 @@ export function RepoDetailPage({
     useState<PendingVisibility | null>(null)
   const [visibilityError, setVisibilityError] =
     useState<VisibilityError | null>(null)
+  const [gitCredential, setGitCredential] =
+    useState<RepoGitCredentialView | null>(null)
+  const [gitCredentialPending, setGitCredentialPending] = useState(false)
+  const [gitCredentialError, setGitCredentialError] = useState<string | null>(
+    null,
+  )
   const files =
     filesOverride?.baseFiles === detail.files
       ? filesOverride.files
@@ -95,6 +112,21 @@ export function RepoDetailPage({
     }
   }
 
+  async function resetGitCredential() {
+    setGitCredentialError(null)
+    setGitCredentialPending(true)
+    try {
+      const updated = await regenerateGitCredential(params)
+      setGitCredential(updated)
+    } catch (error) {
+      setGitCredentialError(
+        error instanceof Error ? error.message : 'Git credential reset failed',
+      )
+    } finally {
+      setGitCredentialPending(false)
+    }
+  }
+
   return (
     <main className="min-h-screen bg-background text-foreground">
       <AppHeader subtitle={repo.id} subtitleClassName="font-mono" />
@@ -116,7 +148,23 @@ export function RepoDetailPage({
               {repo.id}
             </h1>
           </div>
-          <RepoAction repo={repo} />
+          <div className="flex shrink-0 flex-wrap items-center gap-2">
+            <RepoAction repo={repo} />
+            {repo.role === 'Owner' && repo.lifecycle_state === 'Published' && (
+              <Button
+                disabled={gitCredentialPending}
+                onClick={() => void resetGitCredential()}
+                size="sm"
+                type="button"
+                variant="secondary"
+              >
+                <RefreshCw className="size-3.5" />
+                <span>
+                  {gitCredentialPending ? 'Resetting' : 'Reset Git credential'}
+                </span>
+              </Button>
+            )}
+          </div>
         </div>
 
         {error && (
@@ -125,6 +173,36 @@ export function RepoDetailPage({
             <AlertTitle>Visibility update failed</AlertTitle>
             <AlertDescription>{error}</AlertDescription>
           </Alert>
+        )}
+
+        {gitCredentialError && (
+          <Alert className="mt-6" variant="destructive">
+            <AlertCircle className="size-4" />
+            <AlertTitle>Git credential reset failed</AlertTitle>
+            <AlertDescription>{gitCredentialError}</AlertDescription>
+          </Alert>
+        )}
+
+        {gitCredential?.push_token.secret && (
+          <section className="mt-6 border-y border-border py-4">
+            <div className="mb-3 flex flex-col gap-1 sm:flex-row sm:items-end sm:justify-between">
+              <div>
+                <h2 className="text-sm font-semibold leading-5">
+                  Git credential
+                </h2>
+                <p className="text-sm leading-5 text-muted-foreground">
+                  Run this once in your local repo to refresh pushes to{' '}
+                  {gitCredential.remote_name}.
+                </p>
+              </div>
+            </div>
+            <CopyableCodeBlock
+              value={gitCredentialApproveCommand(
+                gitCredential,
+                gitCredential.push_token.secret,
+              )}
+            />
+          </section>
         )}
 
         <section className="mt-8 border-y border-border">
