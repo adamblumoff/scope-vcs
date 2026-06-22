@@ -67,6 +67,7 @@ async fn create_repo_route_creates_user_and_lists_repo() {
     let repo = catalog.repositories.get("owner/scope_app").unwrap();
     let token = repo.first_push_token.as_ref().unwrap();
     assert_ne!(token.token_hash, secret);
+    assert!(token.secret.is_none());
     assert!(token.token_hash.starts_with("sha256:"));
     assert_eq!(token.owner_user_id, test_owner_id());
     assert_eq!(
@@ -203,8 +204,20 @@ async fn db_metadata_route_round_trips_from_clean_database() {
     assert_eq!(response.status(), StatusCode::OK);
     let body = response_json(response).await;
     assert_eq!(body["repo"]["id"], "owner/db-backed");
+    let secret = body["setup"]["token"]["secret"].as_str().unwrap();
+    let push_secret = body["setup"]["push_token"]["secret"].as_str().unwrap();
 
     let fresh_metadata = crate::db::MetadataStore::connect_for_tests(&test_db).unwrap();
+    let row_repo = fresh_metadata
+        .repository(TEST_REPO_OWNER, "db-backed")
+        .unwrap()
+        .expect("created repo loads from row store");
+    let token = row_repo.first_push_token.as_ref().unwrap();
+    assert_ne!(token.token_hash, secret);
+    assert!(token.secret.is_none());
+    let push_token = row_repo.git_push_token.as_ref().unwrap();
+    assert_ne!(push_token.token_hash, push_secret);
+
     let response = router(test_state_with_metadata(fresh_metadata))
         .oneshot(
             Request::builder()

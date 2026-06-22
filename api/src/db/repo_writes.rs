@@ -1,20 +1,143 @@
 use super::{
-    MetadataStore, MetadataStoreInner, acquire_metadata_write_lock, encode_json, entities,
-    repository_from_model, run_api_db_on,
+    METADATA_LOCK_KEY, MetadataStore, MetadataStoreInner, acquire_metadata_write_lock, decode_json,
+    encode_json, entities, repository_from_model, run_api_db_on,
 };
 use crate::domain::{
     policy::{ScopePath, Visibility, VisibilityRule},
     projection::{AuthorVisibility, FileVisibilityChange, LogicalCommit, MixedCommitPolicy},
     store::{
-        FirstPushToken, GitPushToken, RepoPublicationState, RepoRole, RepoSettings,
-        StoredRepository, repo_id,
+        CatalogError, FirstPushToken, GitPushToken, RepoPublicationState, RepoRole, RepoSettings,
+        RepoStorageCleanup, StoredRepository, repo_id,
     },
 };
 use crate::error::ApiError;
-use sea_orm::{ColumnTrait, EntityTrait, QueryFilter, TransactionTrait, sea_query::Expr};
+use sea_orm::{
+    ActiveModelTrait, ColumnTrait, EntityTrait, IntoActiveModel, QueryFilter, TransactionTrait,
+    sea_query::Expr,
+};
 use std::sync::Arc;
 
 impl MetadataStore {
+    pub(crate) fn create_repo_with_setup_tokens<F>(
+        &self,
+        owner_user_id: &str,
+        name: &str,
+        default_visibility: Visibility,
+        first_push_token: FirstPushToken,
+        git_push_token: GitPushToken,
+        cleanup_pending_storage: F,
+    ) -> Result<StoredRepository, ApiError>
+    where
+        F: FnOnce(&str, &str) -> Result<(), ApiError> + Send + 'static,
+    {
+        let owner_user_id = owner_user_id.to_string();
+        let name = name.to_string();
+        match self.inner.as_ref() {
+            MetadataStoreInner::Postgres { db, runtime } => {
+                let db = Arc::clone(db);
+                run_api_db_on(runtime, async move {
+                    let tx = db.as_ref().begin().await.map_err(ApiError::internal)?;
+                    acquire_metadata_write_lock(&tx).await?;
+                    let owner = entities::user::Entity::find_by_id(owner_user_id)
+                        .one(&tx)
+                        .await
+                        .map_err(ApiError::internal)?
+                        .ok_or_else(|| {
+                            ApiError::internal_message("signed-in user was not persisted")
+                        })?
+                        .try_into_domain()?;
+                    let mut repo = StoredRepository::new(&owner, &name, default_visibility)
+                        .map_err(catalog_error)?;
+                    if entities::repository::Entity::find_by_id(repo.record.id.clone())
+                        .one(&tx)
+                        .await
+                        .map_err(ApiError::internal)?
+                        .is_some()
+                    {
+                        return Err(ApiError::conflict(format!(
+                            "repo {} already exists",
+                            repo.record.id
+                        )));
+                    }
+
+                    let metadata_lock =
+                        entities::metadata_lock::Entity::find_by_id(METADATA_LOCK_KEY.to_string())
+                            .one(&tx)
+                            .await
+                            .map_err(ApiError::internal)?
+                            .ok_or_else(|| {
+                                ApiError::internal_message("metadata lock row is missing")
+                            })?;
+                    let mut pending_repo_storage_deletions = decode_json::<Vec<RepoStorageCleanup>>(
+                        metadata_lock.pending_repo_storage_deletions,
+                    )?;
+                    let had_pending_cleanup = remove_matching_pending_repo_storage_cleanup(
+                        &mut pending_repo_storage_deletions,
+                        &repo.record.id,
+                    );
+                    if had_pending_cleanup {
+                        cleanup_pending_storage(&repo.record.owner_handle, &repo.record.name)?;
+                        entities::metadata_lock::Entity::update_many()
+                            .filter(entities::metadata_lock::Column::Key.eq(METADATA_LOCK_KEY))
+                            .col_expr(
+                                entities::metadata_lock::Column::PendingRepoStorageDeletions,
+                                Expr::value(encode_json(&pending_repo_storage_deletions)?),
+                            )
+                            .exec(&tx)
+                            .await
+                            .map_err(ApiError::internal)?;
+                    }
+
+                    repo.first_push_token = Some(secretless_first_push_token(first_push_token));
+                    repo.git_push_token = Some(git_push_token);
+                    entities::repository::Model::from_domain(&repo)?
+                        .into_active_model()
+                        .insert(&tx)
+                        .await
+                        .map_err(ApiError::internal)?;
+                    for membership in &repo.memberships {
+                        entities::membership::Model::from_domain(membership)
+                            .into_active_model()
+                            .insert(&tx)
+                            .await
+                            .map_err(ApiError::internal)?;
+                    }
+                    tx.commit().await.map_err(ApiError::internal)?;
+                    Ok(repo)
+                })
+            }
+            #[cfg(test)]
+            MetadataStoreInner::Memory(_) => self.update(move |catalog| {
+                let owner = catalog.users.get(&owner_user_id).cloned().ok_or_else(|| {
+                    ApiError::internal_message("signed-in user was not persisted")
+                })?;
+                let mut repo = StoredRepository::new(&owner, &name, default_visibility)
+                    .map_err(catalog_error)?;
+                if catalog.repositories.contains_key(&repo.record.id) {
+                    return Err(ApiError::conflict(format!(
+                        "repo {} already exists",
+                        repo.record.id
+                    )));
+                }
+
+                let had_pending_cleanup = remove_matching_pending_repo_storage_cleanup(
+                    &mut catalog.pending_repo_storage_deletions,
+                    &repo.record.id,
+                );
+                if had_pending_cleanup {
+                    cleanup_pending_storage(&repo.record.owner_handle, &repo.record.name)?;
+                }
+
+                repo.first_push_token = Some(secretless_first_push_token(first_push_token));
+                repo.git_push_token = Some(git_push_token);
+                catalog
+                    .repositories
+                    .insert(repo.record.id.clone(), repo.clone());
+                Ok(repo)
+            }),
+        }
+    }
+
     pub(crate) fn update_repo_settings(
         &self,
         owner: &str,
@@ -242,6 +365,25 @@ fn ensure_repo_setup_access(repo: &StoredRepository, user_id: &str) -> Result<()
 fn secretless_first_push_token(mut token: FirstPushToken) -> FirstPushToken {
     token.secret = None;
     token
+}
+
+fn remove_matching_pending_repo_storage_cleanup(
+    cleanups: &mut Vec<RepoStorageCleanup>,
+    cleanup_repo_id: &str,
+) -> bool {
+    let original_len = cleanups.len();
+    cleanups
+        .retain(|cleanup| repo_id(&cleanup.owner_handle, &cleanup.repo_name) != cleanup_repo_id);
+    cleanups.len() != original_len
+}
+
+fn catalog_error(error: CatalogError) -> ApiError {
+    match error {
+        CatalogError::InvalidRepositoryName(message) => ApiError::bad_request(message),
+        CatalogError::RepositoryExists(repo) => {
+            ApiError::conflict(format!("repo {repo} already exists"))
+        }
+    }
 }
 
 fn apply_repo_file_visibility(
