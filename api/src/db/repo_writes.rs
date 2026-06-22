@@ -5,7 +5,10 @@ use super::{
 use crate::domain::{
     policy::{ScopePath, Visibility, VisibilityRule},
     projection::{AuthorVisibility, FileVisibilityChange, LogicalCommit, MixedCommitPolicy},
-    store::{RepoPublicationState, RepoRole, RepoSettings, StoredRepository, repo_id},
+    store::{
+        FirstPushToken, GitPushToken, RepoPublicationState, RepoRole, RepoSettings,
+        StoredRepository, repo_id,
+    },
 };
 use crate::error::ApiError;
 use sea_orm::{ColumnTrait, EntityTrait, QueryFilter, TransactionTrait, sea_query::Expr};
@@ -140,6 +143,68 @@ impl MetadataStore {
             }),
         }
     }
+
+    pub(crate) fn regenerate_repo_setup_tokens(
+        &self,
+        owner: &str,
+        name: &str,
+        user_id: &str,
+        first_push_token: FirstPushToken,
+        git_push_token: GitPushToken,
+    ) -> Result<StoredRepository, ApiError> {
+        let repo_id = repo_id(owner, name);
+        let owner = owner.to_string();
+        let name = name.to_string();
+        let user_id = user_id.to_string();
+        match self.inner.as_ref() {
+            MetadataStoreInner::Postgres { db, runtime } => {
+                let db = Arc::clone(db);
+                run_api_db_on(runtime, async move {
+                    let tx = db.as_ref().begin().await.map_err(ApiError::internal)?;
+                    acquire_metadata_write_lock(&tx).await?;
+                    let repo = entities::repository::Entity::find_by_id(repo_id.clone())
+                        .one(&tx)
+                        .await
+                        .map_err(ApiError::internal)?
+                        .ok_or_else(|| {
+                            ApiError::not_found(format!("repo {owner}/{name} not found"))
+                        })?;
+                    let mut repo = repository_from_model(&tx, repo).await?;
+                    ensure_repo_setup_access(&repo, &user_id)?;
+
+                    entities::repository::Entity::update_many()
+                        .filter(entities::repository::Column::Id.eq(repo_id))
+                        .col_expr(
+                            entities::repository::Column::FirstPushToken,
+                            Expr::value(entities::encode_first_push_token(&first_push_token)?),
+                        )
+                        .col_expr(
+                            entities::repository::Column::GitPushToken,
+                            Expr::value(encode_json(&git_push_token)?),
+                        )
+                        .exec(&tx)
+                        .await
+                        .map_err(ApiError::internal)?;
+                    tx.commit().await.map_err(ApiError::internal)?;
+
+                    repo.first_push_token = Some(secretless_first_push_token(first_push_token));
+                    repo.git_push_token = Some(git_push_token);
+                    Ok(repo)
+                })
+            }
+            #[cfg(test)]
+            MetadataStoreInner::Memory(_) => self.update(move |catalog| {
+                let repo = catalog
+                    .repositories
+                    .get_mut(&repo_id)
+                    .ok_or_else(|| ApiError::not_found(format!("repo {owner}/{name} not found")))?;
+                ensure_repo_setup_access(repo, &user_id)?;
+                repo.first_push_token = Some(secretless_first_push_token(first_push_token));
+                repo.git_push_token = Some(git_push_token);
+                Ok(repo.clone())
+            }),
+        }
+    }
 }
 
 fn ensure_repo_owner(repo: &StoredRepository, user_id: &str) -> Result<(), ApiError> {
@@ -152,6 +217,31 @@ fn ensure_repo_owner(repo: &StoredRepository, user_id: &str) -> Result<(), ApiEr
         return Err(ApiError::forbidden("owner role required"));
     }
     Ok(())
+}
+
+fn ensure_repo_setup_access(repo: &StoredRepository, user_id: &str) -> Result<(), ApiError> {
+    let role = repo
+        .memberships
+        .iter()
+        .find(|membership| membership.user_id == user_id)
+        .map(|membership| membership.role);
+    if role != Some(RepoRole::Owner) {
+        return Err(ApiError::not_found(format!(
+            "repo {} not found",
+            repo.record.id
+        )));
+    }
+    if repo.record.publication_state != RepoPublicationState::PendingFirstPush {
+        return Err(ApiError::conflict(
+            "setup token is only available before the first push",
+        ));
+    }
+    Ok(())
+}
+
+fn secretless_first_push_token(mut token: FirstPushToken) -> FirstPushToken {
+    token.secret = None;
+    token
 }
 
 fn apply_repo_file_visibility(

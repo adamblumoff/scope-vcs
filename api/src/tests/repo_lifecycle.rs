@@ -230,6 +230,8 @@ fn db_metadata_store_round_trips_repo_metadata() {
         return;
     };
     let owner_id = test_owner_id();
+    let (_, first_push_token) = generate_first_push_token(&owner_id).unwrap();
+    let (_, git_push_token) = generate_git_push_token(&owner_id).unwrap();
     let owner = UserAccount {
         id: owner_id.clone(),
         handle: TEST_REPO_OWNER.to_string(),
@@ -239,6 +241,8 @@ fn db_metadata_store_round_trips_repo_metadata() {
     };
     let mut repo = repo_with_readme();
     let private_path = ScopePath::parse("/secret.txt").unwrap();
+    repo.first_push_token = Some(first_push_token);
+    repo.git_push_token = Some(git_push_token);
     repo.policy
         .add_rule(VisibilityRule::private(
             private_path.clone(),
@@ -355,6 +359,40 @@ fn db_metadata_store_round_trips_repo_metadata() {
         Visibility::Private
     );
     assert_eq!(row_repo.graph, updated_repo.graph);
+
+    fresh_metadata
+        .update(|catalog| {
+            let repo = catalog.repositories.get_mut(TEST_REPO_ID).unwrap();
+            repo.record.publication_state = RepoPublicationState::PendingFirstPush;
+            Ok(())
+        })
+        .unwrap();
+    let (_, regenerated_first_push_token) = generate_first_push_token(&owner_id).unwrap();
+    let (_, regenerated_git_push_token) = generate_git_push_token(&owner_id).unwrap();
+    let updated_repo = fresh_metadata
+        .regenerate_repo_setup_tokens(
+            TEST_REPO_OWNER,
+            TEST_REPO_NAME,
+            &owner_id,
+            regenerated_first_push_token.clone(),
+            regenerated_git_push_token.clone(),
+        )
+        .unwrap();
+    assert_eq!(
+        updated_repo.first_push_token.as_ref().unwrap().token_hash,
+        regenerated_first_push_token.token_hash
+    );
+    assert_eq!(updated_repo.first_push_token.as_ref().unwrap().secret, None);
+    assert_eq!(
+        updated_repo.git_push_token.as_ref().unwrap(),
+        &regenerated_git_push_token
+    );
+    let row_repo = fresh_metadata
+        .repository(TEST_REPO_OWNER, TEST_REPO_NAME)
+        .unwrap()
+        .expect("row repo loads after setup token update");
+    assert_eq!(row_repo.first_push_token, updated_repo.first_push_token);
+    assert_eq!(row_repo.git_push_token, updated_repo.git_push_token);
 }
 
 #[tokio::test]

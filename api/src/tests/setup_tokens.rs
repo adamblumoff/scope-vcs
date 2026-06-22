@@ -122,6 +122,7 @@ async fn setup_token_regeneration_rotates_first_push_and_git_push_tokens() {
     let new_push_hash = &repo.git_push_token.as_ref().unwrap().token_hash;
     assert_ne!(new_hash, &old_hash);
     assert_ne!(new_hash, secret);
+    assert!(repo.first_push_token.as_ref().unwrap().secret.is_none());
     assert_ne!(new_push_hash, &old_push_hash);
     assert_ne!(new_push_hash, push_secret);
 }
