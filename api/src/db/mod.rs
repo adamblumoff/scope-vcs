@@ -224,6 +224,7 @@ fn connect_postgres_store(database_url: String) -> anyhow::Result<MetadataStore>
         let db = Database::connect(&database_url).await?;
         schema::migrate_metadata_schema(&db).await?;
         ensure_metadata_lock_row(&db).await?;
+        reset_stale_pre_alpha_metadata(&db).await?;
         Ok::<_, sea_orm::DbErr>(db)
     })?;
 
@@ -536,6 +537,32 @@ async fn ensure_metadata_lock_row(db: &DatabaseConnection) -> Result<(), sea_orm
     Ok(())
 }
 
+async fn reset_stale_pre_alpha_metadata(db: &DatabaseConnection) -> Result<(), sea_orm::DbErr> {
+    match load_catalog_async(db).await {
+        Ok(_) => Ok(()),
+        Err(error) if is_stale_pre_alpha_metadata_error(&error) => {
+            eprintln!(
+                "resetting stale pre-alpha Scope metadata after incompatible persisted shape: {}",
+                error.message
+            );
+            schema::reset_metadata_schema(db).await?;
+            schema::migrate_metadata_schema(db).await?;
+            ensure_metadata_lock_row(db).await
+        }
+        Err(error) => Err(sea_orm::DbErr::Custom(format!(
+            "failed to load Scope metadata after migration: {}",
+            error.message
+        ))),
+    }
+}
+
+fn is_stale_pre_alpha_metadata_error(error: &ApiError) -> bool {
+    matches!(
+        error.message.as_str(),
+        "missing field `visibility`" | "missing field `visibility_changes`"
+    )
+}
+
 async fn acquire_metadata_read_lock<C>(conn: &C) -> Result<(), ApiError>
 where
     C: ConnectionTrait,
@@ -654,5 +681,21 @@ mod tests {
                 .to_string()
                 .contains("must be a postgres:// or postgresql:// URL")
         );
+    }
+
+    #[test]
+    fn stale_pre_alpha_reset_is_limited_to_known_visibility_shape_error() {
+        assert!(is_stale_pre_alpha_metadata_error(
+            &ApiError::internal_message("missing field `visibility`")
+        ));
+        assert!(is_stale_pre_alpha_metadata_error(
+            &ApiError::internal_message("missing field `visibility_changes`")
+        ));
+        assert!(!is_stale_pre_alpha_metadata_error(
+            &ApiError::internal_message("missing field `owner_user_id`")
+        ));
+        assert!(!is_stale_pre_alpha_metadata_error(
+            &ApiError::internal_message("database connection failed")
+        ));
     }
 }
