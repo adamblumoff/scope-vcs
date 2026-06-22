@@ -127,6 +127,72 @@ async fn setup_token_regeneration_rotates_first_push_and_git_push_tokens() {
     assert_ne!(new_push_hash, push_secret);
 }
 
+#[tokio::test]
+async fn git_credential_regeneration_is_owner_only_and_recreates_git_push_token() {
+    let state = test_state_with_repo();
+    cache_test_jwks(&state);
+    {
+        let mut catalog = lock_catalog(&state).unwrap();
+        let repo = catalog.repositories.get_mut(TEST_REPO_ID).unwrap();
+        repo.record.publication_state = RepoPublicationState::Published;
+        repo.git_push_token = None;
+    }
+    let app = router(state.clone());
+
+    let public_response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/v1/repos/owner/repo/git-credential")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(public_response.status(), StatusCode::UNAUTHORIZED);
+
+    let non_owner_response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/v1/repos/owner/repo/git-credential")
+                .header(
+                    AUTHORIZATION,
+                    bearer_header_for("pairwise-stranger", "stranger@example.com"),
+                )
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(non_owner_response.status(), StatusCode::FORBIDDEN);
+
+    let owner_response = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/v1/repos/owner/repo/git-credential")
+                .header(AUTHORIZATION, bearer_header())
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(owner_response.status(), StatusCode::OK);
+    let body = response_json(owner_response).await;
+    assert_eq!(body["git_remote_path"], "/git/owner/repo");
+    assert_eq!(body["remote_name"], "scope");
+    let secret = body["push_token"]["secret"].as_str().unwrap();
+    assert!(secret.starts_with("scope_git_"));
+    let catalog = lock_catalog(&state).unwrap();
+    let repo = catalog.repositories.get(TEST_REPO_ID).unwrap();
+    let new_hash = &repo.git_push_token.as_ref().unwrap().token_hash;
+    assert_ne!(new_hash, secret);
+}
+
 #[test]
 fn first_push_token_response_uses_persisted_expiry() {
     let token = FirstPushToken {

@@ -204,6 +204,13 @@ pub(crate) struct RepoSetupResponse {
 }
 
 #[derive(Debug, Serialize)]
+pub(crate) struct RepoGitCredentialResponse {
+    pub(crate) git_remote_path: String,
+    pub(crate) remote_name: &'static str,
+    pub(crate) push_token: GitPushTokenResponse,
+}
+
+#[derive(Debug, Serialize)]
 pub(crate) struct FirstPushTokenResponse {
     pub(crate) status: FirstPushTokenStatus,
     pub(crate) created_at_unix: u64,
@@ -383,6 +390,18 @@ pub(crate) fn git_push_token_response(
     GitPushTokenResponse {
         created_at_unix: token.created_at_unix,
         secret,
+    }
+}
+
+pub(crate) fn repo_git_credential_response(
+    repo: &StoredRepository,
+    token: &GitPushToken,
+    secret: Option<String>,
+) -> RepoGitCredentialResponse {
+    RepoGitCredentialResponse {
+        git_remote_path: format!("/git/{}/{}", repo.record.owner_handle, repo.record.name),
+        remote_name: "scope",
+        push_token: git_push_token_response(token, secret),
     }
 }
 

@@ -3,6 +3,7 @@ import {
   authHeaders,
   getApiConnection,
   getApiMutationConnection,
+  getPublicApiConnection,
   loadJson,
   readRequestAuthToken,
 } from '@/api/client'
@@ -14,6 +15,8 @@ import type {
   DeleteRepoInput,
   DeleteRepoResponse,
   HomeState,
+  RepoGitCredential,
+  RepoGitCredentialView,
   RepoDetail,
   RepoFile,
   RepoParams,
@@ -23,6 +26,7 @@ import type {
 } from './types'
 import { loadProjectionPreviewsForRequest } from './projection-preview'
 import { loadReviewForRequest } from './review'
+import { repoGitCredentialView } from './setup-view'
 
 export { parseSetRepoFileVisibilityInput } from './repo-inputs'
 
@@ -115,6 +119,33 @@ export async function deleteRepoForRequest(data: DeleteRepoInput) {
   }
 
   return payload as DeleteRepoResponse
+}
+
+export async function regenerateGitCredentialForRequest(
+  data: RepoParams,
+): Promise<RepoGitCredentialView> {
+  const idToken = await readRequestAuthToken()
+  if (!idToken) {
+    throw new Error('Sign in as the repo owner to reset Git credentials.')
+  }
+
+  const response = await fetch(
+    `${getApiMutationConnection()}/v1/repos/${data.owner}/${data.repo}/git-credential`,
+    {
+      headers: authHeaders(idToken),
+      method: 'POST',
+    },
+  )
+  const payload = await response.json().catch(() => null)
+
+  if (!response.ok) {
+    throw new Error(payload?.error ?? `request failed: ${response.status}`)
+  }
+
+  return repoGitCredentialView(
+    getPublicApiConnection('building Git credential command'),
+    payload as RepoGitCredential,
+  )
 }
 
 export async function loadRepoForRequest(data: RepoParams) {

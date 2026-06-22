@@ -319,7 +319,10 @@ fn zero_file_publish_promotes_pending_import() {
     );
     assert!(repo.pending_import.is_none());
     assert!(repo.first_push_token.is_none());
-    assert!(repo.git_push_token.is_none());
+    assert_eq!(
+        repo.git_push_token.as_ref().unwrap().token_hash,
+        git_push_token_hash("scope_git_test")
+    );
     assert_eq!(repo.graph.commits.len(), 1);
     assert!(repo.graph.commits[0].changes.is_empty());
 }

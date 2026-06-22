@@ -122,6 +122,30 @@ pub(crate) async fn delete_repo(
     }))
 }
 
+pub(crate) async fn regenerate_git_credential(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path((owner, repo_name)): Path<(String, String)>,
+) -> Result<Json<RepoGitCredentialResponse>, ApiError> {
+    let identity = require_identity(&state, &headers).await?;
+    let user = ensure_user_for_identity(&state, &identity)?;
+    let repo = find_repo(&state, &owner, &repo_name)?;
+    let principal = principal_for_user_id(&repo, &user.id);
+    ensure_repo_read(&state, &repo, &principal)?;
+    ensure_owner(&state, &repo, &principal)?;
+
+    let (push_secret, push_token) = generate_git_push_token(&user.id)?;
+    let push_token = state
+        .metadata
+        .regenerate_git_push_token(&owner, &repo_name, &user.id, push_token)?;
+
+    Ok(Json(repo_git_credential_response(
+        &repo,
+        &push_token,
+        Some(push_secret),
+    )))
+}
+
 pub(crate) async fn get_projection(
     State(state): State<AppState>,
     headers: HeaderMap,

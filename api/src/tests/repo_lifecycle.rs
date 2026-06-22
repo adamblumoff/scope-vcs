@@ -307,6 +307,25 @@ fn db_metadata_store_round_trips_repo_metadata() {
         .expect("row repo loads after setup token update");
     assert_eq!(row_repo.first_push_token, updated_repo.first_push_token);
     assert_eq!(row_repo.git_push_token, updated_repo.git_push_token);
+
+    let (_, regenerated_git_push_token) = generate_git_push_token(&owner_id).unwrap();
+    let updated_git_push_token = fresh_metadata
+        .regenerate_git_push_token(
+            TEST_REPO_OWNER,
+            TEST_REPO_NAME,
+            &owner_id,
+            regenerated_git_push_token.clone(),
+        )
+        .unwrap();
+    assert_eq!(updated_git_push_token, regenerated_git_push_token);
+    let row_repo = fresh_metadata
+        .repository(TEST_REPO_OWNER, TEST_REPO_NAME)
+        .unwrap()
+        .expect("row repo loads after Git credential update");
+    assert_eq!(
+        row_repo.git_push_token.as_ref(),
+        Some(&updated_git_push_token)
+    );
 }
 
 #[tokio::test]

@@ -26,6 +26,7 @@ const contracts = [
   ['CreateRepoResponse', 'CreateRepoResponse'],
   ['DeleteRepoResponse', 'DeleteRepoResponse'],
   ['RepoSetupResponse', 'RepoSetup'],
+  ['RepoGitCredentialResponse', 'RepoGitCredential'],
   ['FirstPushTokenResponse', 'FirstPushToken'],
   ['GitPushTokenResponse', 'GitPushToken'],
   ['RepoFileResponse', 'RepoFile'],

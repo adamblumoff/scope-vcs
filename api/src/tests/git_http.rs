@@ -1,7 +1,7 @@
 use super::*;
 
 #[tokio::test]
-async fn published_receive_pack_rejects_git_push_token() {
+async fn published_receive_pack_accepts_git_push_token() {
     let state = test_state_with_repo();
     let secret = "scope_git_test";
     {
@@ -22,11 +22,14 @@ async fn published_receive_pack_rejects_git_push_token() {
             .unwrap(),
     );
 
-    let error = receive_pack_access(&state, &headers, TEST_REPO_OWNER, TEST_REPO_NAME)
+    let access = receive_pack_access(&state, &headers, TEST_REPO_OWNER, TEST_REPO_NAME)
         .await
-        .unwrap_err();
+        .unwrap();
 
-    assert_eq!(error.status, StatusCode::UNAUTHORIZED);
+    assert!(matches!(
+        access,
+        ReceivePackAccess::PublishedOwner { author_id } if author_id == test_owner_id()
+    ));
 }
 
 #[tokio::test]
@@ -109,7 +112,7 @@ async fn receive_pack_reports_pending_publish_only_after_owner_token_auth() {
 }
 
 #[tokio::test]
-async fn upload_pack_rejects_git_push_token_after_publish() {
+async fn upload_pack_uses_git_push_token_for_owner_projection_after_publish() {
     let state = test_state_with_repo();
     let secret = "scope_git_test";
     {
@@ -143,11 +146,17 @@ async fn upload_pack_rejects_git_push_token_after_publish() {
             .unwrap(),
     );
 
-    let error = git_projection_for_request(&state, &headers, TEST_REPO_OWNER, TEST_REPO_NAME)
+    let projection = git_projection_for_request(&state, &headers, TEST_REPO_OWNER, TEST_REPO_NAME)
         .await
-        .unwrap_err();
+        .unwrap();
 
-    assert_eq!(error.status, StatusCode::UNAUTHORIZED);
+    assert!(
+        projection
+            .commits
+            .iter()
+            .flat_map(|commit| &commit.changes)
+            .any(|change| change.path.as_str() == "/secret.txt" && change.new_content.is_some())
+    );
 }
 
 #[tokio::test]

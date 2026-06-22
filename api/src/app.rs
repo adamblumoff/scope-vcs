@@ -25,6 +25,10 @@ pub fn router(state: AppState) -> Router {
             get(http::repos::get_repo).delete(http::repos::delete_repo),
         )
         .route(
+            "/v1/repos/{owner}/{repo}/git-credential",
+            post(http::repos::regenerate_git_credential),
+        )
+        .route(
             "/v1/repos/{owner}/{repo}/setup",
             get(http::setup::get_repo_setup),
         )
