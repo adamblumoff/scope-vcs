@@ -1,7 +1,7 @@
 use crate::domain::git_projection::{VirtualGitProjection, build_virtual_git_projection};
-use crate::domain::policy::{Principal, ScopePath, Visibility, VisibilityRule};
-use crate::domain::projection::{FileVisibilityChange, LogicalCommit, project_graph};
-use crate::domain::store::{RepoPublicationState, RepoRole, RepoSettings, RepoStorageCleanup};
+use crate::domain::policy::{Principal, ScopePath, Visibility};
+use crate::domain::projection::project_graph;
+use crate::domain::store::{RepoRole, RepoSettings, RepoStorageCleanup};
 use crate::{
     auth::{
         shoo::{
@@ -15,7 +15,7 @@ use crate::{
     persistence::{catalog_error, unix_now},
     state::AppState,
     state::{
-        cleanup_pending_repo_storage_deletion_for_recreate, ensure_repo_read, find_repo, live_tree,
+        cleanup_pending_repo_storage_deletion_for_recreate, ensure_repo_read, find_repo,
         queue_repo_storage_deletion, queue_source_blob_deletions, repo_source_blobs,
         role_for_principal,
     },
@@ -243,8 +243,6 @@ pub(crate) async fn update_file_visibility(
         .transpose()?;
     let update_paths = parse_visibility_paths(&input.paths)?;
     let visibility = input.visibility;
-    let repo_id = crate::domain::store::repo_id(&owner, &repo_name);
-
     let repo = find_repo(&state, &owner, &repo_name)?;
     let principal = user
         .as_ref()
@@ -273,89 +271,13 @@ pub(crate) async fn update_file_visibility(
         .as_ref()
         .map(|user| user.id.clone())
         .ok_or_else(|| ApiError::forbidden("owner role required"))?;
-    let updated = state.metadata.update(move |catalog| {
-        let repo = catalog
-            .repositories
-            .get(&repo_id)
-            .ok_or_else(|| ApiError::not_found(format!("repo {owner}/{repo_name} not found")))?;
-        let principal = principal_for_user_id(repo, &user_id);
-        let role = catalog.role_for_principal(repo, &principal);
-
-        if role != Some(RepoRole::Owner) {
-            return Err(ApiError::forbidden("owner role required"));
-        }
-
-        if visibility == Visibility::Public {
-            for update_path in &update_paths {
-                if !repo_has_file_for_review(repo, update_path) {
-                    return Err(ApiError::bad_request(format!(
-                        "file {} must be tracked by Git before it can be made public",
-                        update_path.as_str()
-                    )));
-                }
-            }
-        }
-
-        {
-            let repo = catalog
-                .repositories
-                .get_mut(&repo_id)
-                .expect("repo was already checked");
-            let owner_ids = repo_owner_ids(repo);
-            let record_visibility_history =
-                repo.record.publication_state == RepoPublicationState::Published;
-            let live_tree = if record_visibility_history {
-                live_tree(repo)
-            } else {
-                Default::default()
-            };
-            let mut visibility_changes = Vec::new();
-            for update_path in &update_paths {
-                let old_visibility = repo.policy.effective_visibility(update_path);
-                if record_visibility_history && old_visibility != visibility {
-                    visibility_changes.push(FileVisibilityChange {
-                        path: update_path.clone(),
-                        old_visibility,
-                        new_visibility: visibility,
-                        current_content: live_tree.get(update_path).cloned(),
-                    });
-                }
-                let rule = match visibility {
-                    Visibility::Public => VisibilityRule::public(update_path.clone()),
-                    Visibility::Private => {
-                        VisibilityRule::private(update_path.clone(), owner_ids.clone())
-                    }
-                };
-                repo.policy.add_rule(rule).map_err(ApiError::bad_request)?;
-            }
-            if !visibility_changes.is_empty() {
-                let parent_ids = repo
-                    .graph
-                    .commits
-                    .last()
-                    .map(|commit| vec![commit.id.clone()])
-                    .unwrap_or_default();
-                repo.graph.commits.push(LogicalCommit {
-                    id: format!("rv_visibility_{}", repo.graph.commits.len() + 1),
-                    parent_ids,
-                    author_id: user_id.clone(),
-                    author_visibility: crate::domain::projection::AuthorVisibility::Visible,
-                    message: "Update file visibility".to_string(),
-                    mixed_policy:
-                        crate::domain::projection::MixedCommitPolicy::SyntheticPublicCommit,
-                    changes: Vec::new(),
-                    visibility_changes,
-                });
-            }
-        }
-
-        let updated = catalog
-            .repositories
-            .get(&repo_id)
-            .expect("repo was already checked")
-            .clone();
-        Ok(updated)
-    })?;
+    let updated = state.metadata.update_repo_file_visibility(
+        &owner,
+        &repo_name,
+        &user_id,
+        update_paths,
+        visibility,
+    )?;
 
     let principal = Principal {
         id: updated.record.owner_user_id.clone(),

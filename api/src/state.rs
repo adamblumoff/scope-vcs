@@ -320,17 +320,6 @@ pub(crate) fn can_write_path(
     Ok(can_write)
 }
 
-pub(crate) fn graph_has_file(repo: &StoredRepository, path: &ScopePath) -> bool {
-    let mut present = false;
-    for change in repo.graph.commits.iter().flat_map(|commit| &commit.changes) {
-        if change.path.as_str() == path.as_str() {
-            present = change.new_content.is_some();
-        }
-    }
-
-    present
-}
-
 pub(crate) fn repo_source_blobs(repo: &StoredRepository) -> Vec<SourceBlob> {
     let mut blobs = Vec::new();
     if let Some(pending) = &repo.pending_import {
@@ -618,16 +607,5 @@ pub(crate) fn best_effort_drain_pending_source_blob_deletions(state: &AppState) 
 
 #[allow(dead_code)]
 pub(crate) fn live_tree(repo: &StoredRepository) -> BTreeMap<ScopePath, SourceBlob> {
-    let mut tree = BTreeMap::new();
-    for change in repo.graph.commits.iter().flat_map(|commit| &commit.changes) {
-        match &change.new_content {
-            Some(blob) => {
-                tree.insert(change.path.clone(), blob.clone());
-            }
-            None => {
-                tree.remove(&change.path);
-            }
-        }
-    }
-    tree
+    repo.live_tree()
 }
