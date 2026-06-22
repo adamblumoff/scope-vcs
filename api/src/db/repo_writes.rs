@@ -539,6 +539,92 @@ impl MetadataStore {
             }),
         }
     }
+
+    pub(crate) fn delete_repo(
+        &self,
+        owner: &str,
+        name: &str,
+        user_id: &str,
+    ) -> Result<String, ApiError> {
+        let repo_id = repo_id(owner, name);
+        let owner = owner.to_string();
+        let name = name.to_string();
+        let user_id = user_id.to_string();
+        match self.inner.as_ref() {
+            MetadataStoreInner::Postgres { db, runtime } => {
+                let db = Arc::clone(db);
+                run_api_db_on(runtime, async move {
+                    let tx = db.as_ref().begin().await.map_err(ApiError::internal)?;
+                    acquire_metadata_write_lock(&tx).await?;
+                    let repo = entities::repository::Entity::find_by_id(repo_id.clone())
+                        .one(&tx)
+                        .await
+                        .map_err(ApiError::internal)?
+                        .ok_or_else(|| hidden_repo_not_found(&owner, &name))?;
+                    let repo = repository_from_model(&tx, repo).await?;
+                    ensure_repo_delete_owner(&repo, &user_id, &owner, &name)?;
+                    let source_blobs = repo.source_blobs();
+                    let cleanup = RepoStorageCleanup {
+                        owner_handle: owner,
+                        repo_name: name,
+                    };
+
+                    entities::membership::Entity::delete_many()
+                        .filter(entities::membership::Column::RepoId.eq(repo_id.clone()))
+                        .exec(&tx)
+                        .await
+                        .map_err(ApiError::internal)?;
+                    entities::repository::Entity::delete_by_id(repo_id.clone())
+                        .exec(&tx)
+                        .await
+                        .map_err(ApiError::internal)?;
+
+                    let mut pending_repo_storage_deletions =
+                        load_pending_repo_storage_deletions(&tx).await?;
+                    queue_pending_repo_storage_deletion(
+                        &mut pending_repo_storage_deletions,
+                        cleanup,
+                    );
+                    let mut pending_source_blob_deletions =
+                        load_pending_source_blob_deletions(&tx).await?;
+                    queue_pending_source_blob_deletions(
+                        &mut pending_source_blob_deletions,
+                        source_blobs,
+                    );
+                    save_pending_repo_storage_deletions(&tx, &pending_repo_storage_deletions)
+                        .await?;
+                    save_pending_source_blob_deletions(&tx, &pending_source_blob_deletions).await?;
+                    tx.commit().await.map_err(ApiError::internal)?;
+                    Ok(repo_id)
+                })
+            }
+            #[cfg(test)]
+            MetadataStoreInner::Memory(_) => self.update(move |catalog| {
+                let repo = catalog
+                    .repositories
+                    .get(&repo_id)
+                    .ok_or_else(|| hidden_repo_not_found(&owner, &name))?;
+                ensure_repo_delete_owner(repo, &user_id, &owner, &name)?;
+
+                let repo = catalog
+                    .repositories
+                    .remove(&repo_id)
+                    .expect("repo was already checked");
+                queue_pending_repo_storage_deletion(
+                    &mut catalog.pending_repo_storage_deletions,
+                    RepoStorageCleanup {
+                        owner_handle: owner,
+                        repo_name: name,
+                    },
+                );
+                queue_pending_source_blob_deletions(
+                    &mut catalog.pending_source_blob_deletions,
+                    repo.source_blobs(),
+                );
+                Ok(repo_id)
+            }),
+        }
+    }
 }
 
 fn ensure_repo_owner(repo: &StoredRepository, user_id: &str) -> Result<(), ApiError> {
@@ -551,6 +637,22 @@ fn ensure_repo_owner(repo: &StoredRepository, user_id: &str) -> Result<(), ApiEr
         return Err(ApiError::forbidden("owner role required"));
     }
     Ok(())
+}
+
+fn ensure_repo_delete_owner(
+    repo: &StoredRepository,
+    user_id: &str,
+    owner: &str,
+    name: &str,
+) -> Result<(), ApiError> {
+    match ensure_repo_owner(repo, user_id) {
+        Ok(()) => Ok(()),
+        Err(_) => Err(hidden_repo_not_found(owner, name)),
+    }
+}
+
+fn hidden_repo_not_found(owner: &str, name: &str) -> ApiError {
+    ApiError::not_found(format!("repo {owner}/{name} not found"))
 }
 
 fn update_staged_file_visibility_for_repo(
@@ -629,6 +731,52 @@ fn queue_pending_source_blob_deletions(
             pending.push(blob);
         }
     }
+}
+
+fn queue_pending_repo_storage_deletion(
+    pending: &mut Vec<RepoStorageCleanup>,
+    cleanup: RepoStorageCleanup,
+) {
+    let cleanup_repo_id = repo_id(&cleanup.owner_handle, &cleanup.repo_name);
+    let already_queued = pending
+        .iter()
+        .any(|pending| repo_id(&pending.owner_handle, &pending.repo_name) == cleanup_repo_id);
+    if !already_queued {
+        pending.push(cleanup);
+    }
+}
+
+async fn load_pending_repo_storage_deletions<C>(
+    conn: &C,
+) -> Result<Vec<RepoStorageCleanup>, ApiError>
+where
+    C: ConnectionTrait,
+{
+    let metadata_lock = entities::metadata_lock::Entity::find_by_id(METADATA_LOCK_KEY.to_string())
+        .one(conn)
+        .await
+        .map_err(ApiError::internal)?
+        .ok_or_else(|| ApiError::internal_message("metadata lock row is missing"))?;
+    decode_json::<Vec<RepoStorageCleanup>>(metadata_lock.pending_repo_storage_deletions)
+}
+
+async fn save_pending_repo_storage_deletions<C>(
+    conn: &C,
+    pending_repo_storage_deletions: &[RepoStorageCleanup],
+) -> Result<(), ApiError>
+where
+    C: ConnectionTrait,
+{
+    entities::metadata_lock::Entity::update_many()
+        .filter(entities::metadata_lock::Column::Key.eq(METADATA_LOCK_KEY))
+        .col_expr(
+            entities::metadata_lock::Column::PendingRepoStorageDeletions,
+            Expr::value(encode_json(&pending_repo_storage_deletions)?),
+        )
+        .exec(conn)
+        .await
+        .map_err(ApiError::internal)?;
+    Ok(())
 }
 
 async fn load_pending_source_blob_deletions<C>(conn: &C) -> Result<Vec<SourceBlob>, ApiError>

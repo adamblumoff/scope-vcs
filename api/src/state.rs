@@ -3,8 +3,7 @@ use crate::domain::projection::{
     AuthorVisibility, LogicalCommit, MixedCommitPolicy, project_graph,
 };
 use crate::domain::store::{
-    AppCatalog, RepoPublicationState, RepoRole, RepoStorageCleanup, SourceBlob, StoredRepository,
-    repo_id,
+    AppCatalog, RepoPublicationState, RepoRole, SourceBlob, StoredRepository, repo_id,
 };
 use crate::{
     auth::shoo::ShooVerifier,
@@ -321,24 +320,7 @@ pub(crate) fn can_write_path(
 }
 
 pub(crate) fn repo_source_blobs(repo: &StoredRepository) -> Vec<SourceBlob> {
-    let mut blobs = Vec::new();
-    if let Some(pending) = &repo.pending_import {
-        blobs.push(pending.git_snapshot.clone());
-        blobs.extend(pending.files.iter().map(|file| file.blob.clone()));
-    }
-    blobs.extend(repo.git_snapshot.clone());
-    for change in repo.graph.commits.iter().flat_map(|commit| &commit.changes) {
-        blobs.extend(change.old_content.clone());
-        blobs.extend(change.new_content.clone());
-    }
-    if let Some(staged) = &repo.staged_update {
-        blobs.push(staged.git_snapshot.clone());
-        for change in &staged.changes {
-            blobs.extend(change.old_content.clone());
-            blobs.extend(change.new_content.clone());
-        }
-    }
-    blobs
+    repo.source_blobs()
 }
 
 pub(crate) fn delete_unreferenced_source_blobs(
@@ -415,17 +397,6 @@ pub(crate) fn queue_source_blob_deletions(
         if queued.insert(blob.object_key.clone()) {
             catalog.pending_source_blob_deletions.push(blob);
         }
-    }
-}
-
-pub(crate) fn queue_repo_storage_deletion(catalog: &mut AppCatalog, cleanup: RepoStorageCleanup) {
-    let cleanup_repo_id = repo_id(&cleanup.owner_handle, &cleanup.repo_name);
-    let already_queued = catalog
-        .pending_repo_storage_deletions
-        .iter()
-        .any(|pending| repo_id(&pending.owner_handle, &pending.repo_name) == cleanup_repo_id);
-    if !already_queued {
-        catalog.pending_repo_storage_deletions.push(cleanup);
     }
 }
 
