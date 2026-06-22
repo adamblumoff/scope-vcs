@@ -13,7 +13,7 @@ test('setupCommand stores the Scope credential, resets the remote, and pushes', 
       },
       'scope_git_secret',
     ),
-    'git config credential.useHttpPath true; "protocol=https`nhost=scope.example`npath=git/adam/scope-vcs`nusername=scope`npassword=scope_git_secret`n`n" | git credential approve; git remote remove scope 2>$null; git remote add scope https://scope@scope.example/git/adam/scope-vcs; git push scope HEAD:trunk',
+    'git config "credential.https://scope.example.useHttpPath" true; "protocol=https`nhost=scope.example`npath=git/adam/scope-vcs`nusername=scope`npassword=scope_git_secret`n`n" | git credential approve; git remote remove scope 2>$null; git remote add scope https://scope@scope.example/git/adam/scope-vcs; git push scope HEAD:trunk',
   )
 })
 
@@ -27,7 +27,7 @@ test('setupCommand escapes PowerShell credential values', () => {
       },
       'scope_git_$"tick`',
     ),
-    'git config credential.useHttpPath true; "protocol=https`nhost=scope.example`npath=git/adam/scope-vcs`nusername=scope`npassword=scope_git_`$`"tick```n`n" | git credential approve; git remote remove scope 2>$null; git remote add scope https://scope@scope.example/git/adam/scope-vcs; git push scope HEAD:trunk',
+    'git config "credential.https://scope.example.useHttpPath" true; "protocol=https`nhost=scope.example`npath=git/adam/scope-vcs`nusername=scope`npassword=scope_git_`$`"tick```n`n" | git credential approve; git remote remove scope 2>$null; git remote add scope https://scope@scope.example/git/adam/scope-vcs; git push scope HEAD:trunk',
   )
 })
 
@@ -39,7 +39,7 @@ test('gitCredentialApproveCommand stores only the Scope credential', () => {
       },
       'scope_git_secret',
     ),
-    'git config credential.useHttpPath true; "protocol=https`nhost=scope.example`npath=git/adam/scope-vcs`nusername=scope`npassword=scope_git_secret`n`n" | git credential approve',
+    'git config "credential.https://scope.example.useHttpPath" true; "protocol=https`nhost=scope.example`npath=git/adam/scope-vcs`nusername=scope`npassword=scope_git_secret`n`n" | git credential approve',
   )
 })
 

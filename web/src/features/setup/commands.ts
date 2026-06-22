@@ -18,7 +18,7 @@ export function gitCredentialApproveCommand(
 ) {
   const remoteUrl = gitCredentialRemoteUrl(setup.git_remote_url)
   const credential = gitCredentialFields(remoteUrl, gitPushTokenSecret)
-  return `git config credential.useHttpPath true; "${credential}" | git credential approve`
+  return `${gitCredentialUseHttpPathCommand(remoteUrl)}; "${credential}" | git credential approve`
 }
 
 function gitCredentialRemoteUrl(remoteUrl: string) {
@@ -44,6 +44,12 @@ function gitCredentialFields(remoteUrl: string, gitPushTokenSecret: string) {
     '',
   ]
   return fields.join('`n')
+}
+
+function gitCredentialUseHttpPathCommand(remoteUrl: string) {
+  const url = new URL(remoteUrl)
+  const credentialUrl = `${url.protocol}//${url.host}`
+  return `git config "credential.${powerShellDoubleQuoted(credentialUrl)}.useHttpPath" true`
 }
 
 function gitCredentialPath(url: URL) {
