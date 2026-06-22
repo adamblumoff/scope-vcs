@@ -12,11 +12,25 @@ use sea_orm::{
     sea_query::{LockType, OnConflict},
 };
 use serde::{Serialize, de::DeserializeOwned};
-use std::sync::Arc;
 #[cfg(test)]
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::AtomicBool;
+use std::sync::{
+    Arc,
+    atomic::{AtomicU64, Ordering},
+};
 
 const METADATA_LOCK_KEY: &str = "catalog";
+const OPERATOR_RESET_TRIGGER: &str = "operator";
+
+static RESET_EVENT_COUNTER: AtomicU64 = AtomicU64::new(0);
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+pub(crate) struct MetadataResetEvent {
+    pub(crate) id: String,
+    pub(crate) reset_at_unix: u64,
+    pub(crate) trigger: String,
+    pub(crate) reason: String,
+}
 
 #[derive(Clone)]
 pub(crate) struct MetadataStore {
@@ -35,6 +49,7 @@ enum MetadataStoreInner {
 #[cfg(test)]
 struct MemoryMetadataStore {
     catalog: std::sync::Mutex<AppCatalog>,
+    reset_events: std::sync::Mutex<Vec<MetadataResetEvent>>,
     fail_next_persist: AtomicBool,
 }
 
@@ -78,6 +93,7 @@ impl MetadataStore {
         Self {
             inner: Arc::new(MetadataStoreInner::Memory(Arc::new(MemoryMetadataStore {
                 catalog: std::sync::Mutex::new(catalog),
+                reset_events: std::sync::Mutex::new(Vec::new()),
                 fail_next_persist: AtomicBool::new(false),
             }))),
         }
@@ -165,6 +181,80 @@ impl MetadataStore {
                 Ok(())
             }
         }
+    }
+
+    pub(crate) fn metadata_reset_events(&self) -> Result<Vec<MetadataResetEvent>, ApiError> {
+        match self.inner.as_ref() {
+            MetadataStoreInner::Postgres { db, runtime } => {
+                let db = Arc::clone(db);
+                run_api_db_on(runtime, async move {
+                    let events = entities::metadata_reset_event::Entity::find()
+                        .order_by_desc(entities::metadata_reset_event::Column::ResetAtUnix)
+                        .order_by_desc(entities::metadata_reset_event::Column::Id)
+                        .all(db.as_ref())
+                        .await
+                        .map_err(ApiError::internal)?;
+                    Ok(events
+                        .into_iter()
+                        .map(metadata_reset_event_from_model)
+                        .collect())
+                })
+            }
+            #[cfg(test)]
+            MetadataStoreInner::Memory(memory) => {
+                let mut events = memory
+                    .reset_events
+                    .lock()
+                    .map_err(|_| ApiError::internal_message("reset event lock is poisoned"))?
+                    .clone();
+                events.sort_by(|left, right| {
+                    right
+                        .reset_at_unix
+                        .cmp(&left.reset_at_unix)
+                        .then_with(|| right.id.cmp(&left.id))
+                });
+                Ok(events)
+            }
+        }
+    }
+
+    pub(crate) fn reset_catalog(&self, reason: &str) -> Result<MetadataResetEvent, ApiError> {
+        let event = new_metadata_reset_event(OPERATOR_RESET_TRIGGER, reason);
+        match self.inner.as_ref() {
+            MetadataStoreInner::Postgres { db, runtime } => {
+                let db = Arc::clone(db);
+                let event_to_insert = event.clone();
+                run_api_db_on(runtime, async move {
+                    schema::reset_metadata_schema(db.as_ref())
+                        .await
+                        .map_err(ApiError::internal)?;
+                    schema::migrate_metadata_schema(db.as_ref())
+                        .await
+                        .map_err(ApiError::internal)?;
+                    ensure_metadata_lock_row(db.as_ref())
+                        .await
+                        .map_err(ApiError::internal)?;
+                    insert_metadata_reset_event(db.as_ref(), &event_to_insert)
+                        .await
+                        .map_err(ApiError::internal)?;
+                    Ok(())
+                })?;
+            }
+            #[cfg(test)]
+            MetadataStoreInner::Memory(memory) => {
+                *memory
+                    .catalog
+                    .lock()
+                    .map_err(|_| ApiError::internal_message("catalog lock is poisoned"))? =
+                    AppCatalog::default();
+                memory
+                    .reset_events
+                    .lock()
+                    .map_err(|_| ApiError::internal_message("reset event lock is poisoned"))?
+                    .push(event.clone());
+            }
+        }
+        Ok(event)
     }
 
     #[cfg(test)]
@@ -547,12 +637,65 @@ async fn reset_stale_pre_alpha_metadata(db: &DatabaseConnection) -> Result<(), s
             );
             schema::reset_metadata_schema(db).await?;
             schema::migrate_metadata_schema(db).await?;
-            ensure_metadata_lock_row(db).await
+            ensure_metadata_lock_row(db).await?;
+            let event = new_metadata_reset_event(
+                "startup_stale_pre_alpha",
+                format!("incompatible persisted shape: {}", error.message),
+            );
+            insert_metadata_reset_event(db, &event).await
         }
         Err(error) => Err(sea_orm::DbErr::Custom(format!(
             "failed to load Scope metadata after migration: {}",
             error.message
         ))),
+    }
+}
+
+async fn insert_metadata_reset_event(
+    db: &DatabaseConnection,
+    event: &MetadataResetEvent,
+) -> Result<(), sea_orm::DbErr> {
+    entities::metadata_reset_event::ActiveModel {
+        id: Set(event.id.clone()),
+        reset_at_unix: Set(event.reset_at_unix as i64),
+        trigger: Set(event.trigger.clone()),
+        reason: Set(event.reason.clone()),
+    }
+    .insert(db)
+    .await?;
+    Ok(())
+}
+
+fn metadata_reset_event_from_model(
+    model: entities::metadata_reset_event::Model,
+) -> MetadataResetEvent {
+    MetadataResetEvent {
+        id: model.id,
+        reset_at_unix: model.reset_at_unix.max(0) as u64,
+        trigger: model.trigger,
+        reason: model.reason,
+    }
+}
+
+fn new_metadata_reset_event(
+    trigger: impl Into<String>,
+    reason: impl Into<String>,
+) -> MetadataResetEvent {
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default();
+    let counter = RESET_EVENT_COUNTER.fetch_add(1, Ordering::Relaxed);
+    let reset_at_unix = now.as_secs();
+    MetadataResetEvent {
+        id: format!(
+            "reset-{}-{}-{}-{counter}",
+            reset_at_unix,
+            now.subsec_nanos(),
+            std::process::id()
+        ),
+        reset_at_unix,
+        trigger: trigger.into(),
+        reason: reason.into(),
     }
 }
 

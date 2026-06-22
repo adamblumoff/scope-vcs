@@ -9,6 +9,12 @@ pub fn router(state: AppState) -> Router {
     Router::new()
         .route("/healthz", get(http::account::healthz))
         .route("/readyz", get(http::account::readyz))
+        .route("/v1/admin/cleanup", get(http::admin::get_cleanup_status))
+        .route("/v1/admin/cleanup/drain", post(http::admin::drain_cleanup))
+        .route(
+            "/v1/admin/metadata/reset",
+            post(http::admin::reset_metadata),
+        )
         .route("/v1/session", get(http::account::get_account_session))
         .route(
             "/v1/repos",
