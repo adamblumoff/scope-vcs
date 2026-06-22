@@ -295,12 +295,15 @@ async function signIn() {
   await createScopeShooAuth().startSignIn({ requestPii: true })
 }
 
-let cachedHomeFlash: string | null | undefined
+type HomeFlashSnapshot = {
+  value: string | null | undefined
+}
 
 function useHomeFlash() {
+  const [snapshot] = useState<HomeFlashSnapshot>(() => ({ value: undefined }))
   return useSyncExternalStore(
     subscribeHomeFlash,
-    getHomeFlashSnapshot,
+    () => getHomeFlashSnapshot(snapshot),
     getServerHomeFlashSnapshot,
   )
 }
@@ -309,21 +312,21 @@ function subscribeHomeFlash() {
   return () => {}
 }
 
-function getHomeFlashSnapshot() {
-  if (cachedHomeFlash !== undefined) {
-    return cachedHomeFlash
+function getHomeFlashSnapshot(snapshot: HomeFlashSnapshot) {
+  if (snapshot.value !== undefined) {
+    return snapshot.value
   }
 
   if (typeof window === 'undefined') {
     return null
   }
 
-  cachedHomeFlash = window.sessionStorage.getItem(homeFlashKey)
-  if (cachedHomeFlash) {
+  snapshot.value = window.sessionStorage.getItem(homeFlashKey)
+  if (snapshot.value) {
     window.sessionStorage.removeItem(homeFlashKey)
   }
 
-  return cachedHomeFlash
+  return snapshot.value
 }
 
 function getServerHomeFlashSnapshot() {
