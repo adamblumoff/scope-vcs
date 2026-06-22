@@ -22,12 +22,43 @@ import {
   Moon,
   Sun,
 } from 'lucide-react'
-import { useEffect, useState } from 'react'
+import { useReducer, useState, useSyncExternalStore } from 'react'
 import { CreateRepoForm } from './create-repo-form'
 import { DeleteRepositoryDialog } from './delete-repository-dialog'
 import { RepoList } from './repo-list'
 
 type ThemeMode = 'dark' | 'light'
+
+type HomeOverride = {
+  account: HomeState['account']
+  baseHome: HomeState
+  repositories: RepoSummary[]
+  signedIn: boolean
+}
+
+type HomeUiState = {
+  createError: string | null
+  deleteError: string | null
+  deleteTarget: RepoSummary | null
+  sessionError: string | null
+}
+
+type HomeUiAction =
+  | { type: 'createFailed'; message: string }
+  | { type: 'createStarted' }
+  | { type: 'deleteFailed'; message: string }
+  | { type: 'deleteStarted' }
+  | { type: 'deleteSucceeded' }
+  | { type: 'deleteTargetChanged'; repo: RepoSummary | null }
+  | { type: 'sessionFailed'; message: string }
+  | { type: 'sessionStarted' }
+
+const initialHomeUiState: HomeUiState = {
+  createError: null,
+  deleteError: null,
+  deleteTarget: null,
+  sessionError: null,
+}
 
 export function HomePage({
   createRepo,
@@ -40,31 +71,16 @@ export function HomePage({
 }) {
   const navigate = useNavigate()
   const router = useRouter()
-  const [account, setAccount] = useState(home.account)
-  const [createError, setCreateError] = useState<string | null>(null)
-  const [deleteError, setDeleteError] = useState<string | null>(null)
-  const [deleteTarget, setDeleteTarget] = useState<RepoSummary | null>(null)
-  const [flash, setFlash] = useState<string | null>(null)
-  const [repositories, setRepositories] = useState(home.repositories)
-  const [sessionError, setSessionError] = useState<string | null>(null)
-  const [signedIn, setSignedIn] = useState(home.signedIn)
+  const [uiState, dispatchUi] = useReducer(
+    homeUiReducer,
+    initialHomeUiState,
+  )
+  const [homeOverride, setHomeOverride] = useState<HomeOverride | null>(null)
+  const flash = useHomeFlash()
   const [theme, setTheme] = useState<ThemeMode>('dark')
-
-  useEffect(() => {
-    const message = window.sessionStorage.getItem(homeFlashKey)
-    if (!message) {
-      return
-    }
-
-    window.sessionStorage.removeItem(homeFlashKey)
-    setFlash(message)
-  }, [])
-
-  useEffect(() => {
-    setAccount(home.account)
-    setRepositories(home.repositories)
-    setSignedIn(home.signedIn)
-  }, [home.account, home.repositories, home.signedIn])
+  const activeHome = homeOverride?.baseHome === home ? homeOverride : home
+  const { account, repositories, signedIn } = activeHome
+  const { createError, deleteError, deleteTarget, sessionError } = uiState
 
   function toggleTheme() {
     const nextTheme = theme === 'dark' ? 'light' : 'dark'
@@ -73,12 +89,16 @@ export function HomePage({
   }
 
   async function createRepository(input: CreateRepoInput) {
-    setCreateError(null)
-    setDeleteError(null)
+    dispatchUi({ type: 'createStarted' })
     try {
       const created = await createRepo(input)
       const repo = created.repo
-      setRepositories((current) => [repo, ...current])
+      setHomeOverride({
+        account,
+        baseHome: home,
+        repositories: [repo, ...repositories],
+        signedIn,
+      })
       if (created.setup.push_token?.secret) {
         storeSetupSecret(
           setupPushSecretKey(repo.id),
@@ -91,44 +111,59 @@ export function HomePage({
         params: { owner: repo.owner_handle, repo: repo.name },
       })
     } catch (error) {
-      setCreateError(
-        error instanceof Error ? error.message : 'repository creation failed',
-      )
+      dispatchUi({
+        message:
+          error instanceof Error ? error.message : 'repository creation failed',
+        type: 'createFailed',
+      })
     }
   }
 
   async function deleteRepository(repo: RepoSummary) {
-    setDeleteError(null)
+    dispatchUi({ type: 'deleteStarted' })
     const deleted = await deleteRepo({
       owner: repo.owner_handle,
       repo: repo.name,
     })
-    setRepositories((current) =>
-      current.filter((candidate) => candidate.id !== deleted.id),
-    )
+    setHomeOverride({
+      account,
+      baseHome: home,
+      repositories: repositories.filter((candidate) => candidate.id !== deleted.id),
+      signedIn,
+    })
     await router.invalidate()
-    setDeleteTarget(null)
+    dispatchUi({ type: 'deleteSucceeded' })
   }
 
   async function signOut() {
-    setSessionError(null)
+    dispatchUi({ type: 'sessionStarted' })
     let response: Response
     try {
       response = await fetch('/auth/session', { method: 'DELETE' })
     } catch (error) {
-      setSessionError(error instanceof Error ? error.message : 'sign out failed')
+      dispatchUi({
+        message: error instanceof Error ? error.message : 'sign out failed',
+        type: 'sessionFailed',
+      })
       return
     }
 
     if (!response.ok) {
-      setSessionError(`sign out failed: ${response.status}`)
+      dispatchUi({
+        message: `sign out failed: ${response.status}`,
+        type: 'sessionFailed',
+      })
       return
     }
 
     createScopeShooAuth().clearIdentity()
-    setAccount(null)
-    setRepositories([])
-    setSignedIn(false)
+    setHomeOverride({
+      account: null,
+      baseHome: home,
+      repositories: [],
+      signedIn: false,
+    })
+    await router.invalidate()
   }
 
   return (
@@ -200,7 +235,9 @@ export function HomePage({
         )}
 
         <RepoList
-          onDelete={(repo) => setDeleteTarget(repo)}
+          onDelete={(repo) =>
+            dispatchUi({ repo, type: 'deleteTargetChanged' })
+          }
           onSignIn={signIn}
           repositories={repositories}
           signedIn={signedIn}
@@ -209,14 +246,20 @@ export function HomePage({
 
       {deleteTarget && (
         <DeleteRepositoryDialog
-          onCancel={() => setDeleteTarget(null)}
+          onCancel={() =>
+            dispatchUi({ repo: null, type: 'deleteTargetChanged' })
+          }
           onConfirm={async (repo) => {
             try {
               await deleteRepository(repo)
             } catch (error) {
-              setDeleteError(
-                error instanceof Error ? error.message : 'repository deletion failed',
-              )
+              dispatchUi({
+                message:
+                  error instanceof Error
+                    ? error.message
+                    : 'repository deletion failed',
+                type: 'deleteFailed',
+              })
               throw error
             }
           }}
@@ -227,8 +270,67 @@ export function HomePage({
   )
 }
 
+function homeUiReducer(state: HomeUiState, action: HomeUiAction): HomeUiState {
+  switch (action.type) {
+    case 'createStarted':
+      return { ...state, createError: null, deleteError: null }
+    case 'createFailed':
+      return { ...state, createError: action.message }
+    case 'deleteStarted':
+      return { ...state, deleteError: null }
+    case 'deleteFailed':
+      return { ...state, deleteError: action.message }
+    case 'deleteSucceeded':
+      return { ...state, deleteTarget: null }
+    case 'deleteTargetChanged':
+      return { ...state, deleteTarget: action.repo }
+    case 'sessionStarted':
+      return { ...state, sessionError: null }
+    case 'sessionFailed':
+      return { ...state, sessionError: action.message }
+  }
+}
+
 async function signIn() {
   await createScopeShooAuth().startSignIn({ requestPii: true })
+}
+
+type HomeFlashSnapshot = {
+  value: string | null | undefined
+}
+
+function useHomeFlash() {
+  const [snapshot] = useState<HomeFlashSnapshot>(() => ({ value: undefined }))
+  return useSyncExternalStore(
+    subscribeHomeFlash,
+    () => getHomeFlashSnapshot(snapshot),
+    getServerHomeFlashSnapshot,
+  )
+}
+
+function subscribeHomeFlash() {
+  return () => {}
+}
+
+function getHomeFlashSnapshot(snapshot: HomeFlashSnapshot) {
+  if (snapshot.value !== undefined) {
+    return snapshot.value
+  }
+
+  if (typeof window === 'undefined') {
+    return null
+  }
+
+  snapshot.value = window.sessionStorage.getItem(homeFlashKey)
+  if (snapshot.value) {
+    window.sessionStorage.removeItem(homeFlashKey)
+  }
+
+  return snapshot.value
+}
+
+function getServerHomeFlashSnapshot() {
+  return null
 }
 
 function AuthControls({

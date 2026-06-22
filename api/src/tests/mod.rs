@@ -46,6 +46,7 @@ mod auth;
 mod git_http;
 mod git_receive;
 mod readiness;
+mod repo_cleanup;
 mod repo_lifecycle;
 mod repo_visibility;
 mod review_publish;
@@ -56,6 +57,17 @@ const TEST_OWNER_EMAIL: &str = "owner@example.com";
 const TEST_REPO_OWNER: &str = "owner";
 const TEST_REPO_NAME: &str = "repo";
 const TEST_REPO_ID: &str = "owner/repo";
+
+fn reject_staged_update_as_owner(
+    state: &AppState,
+) -> Result<StagedRepoUpdate, crate::error::ApiError> {
+    let rejected =
+        state
+            .metadata
+            .reject_staged_update(TEST_REPO_OWNER, TEST_REPO_NAME, &test_owner_id())?;
+    best_effort_drain_pending_source_blob_deletions(state);
+    Ok(rejected)
+}
 
 const TEST_PRIVATE_KEY: &str = r#"-----BEGIN PRIVATE KEY-----
 MIGHAgEAMBMGByqGSM49AgEGCCqGSM49AwEHBG0wawIBAQQgj30p9gYDpHRqbshS

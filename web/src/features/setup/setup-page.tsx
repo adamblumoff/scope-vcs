@@ -20,8 +20,42 @@ import {
   Terminal,
 } from 'lucide-react'
 import type { ReactNode } from 'react'
-import { useEffect, useState } from 'react'
+import { useEffect, useReducer, useSyncExternalStore } from 'react'
 import { setupCommand } from './commands'
+
+type SetupOverride = {
+  baseSetup: RepoSetupView
+  pushTokenSecret: string | null
+  setup: RepoSetupView
+}
+
+type SetupPageState = {
+  busy: boolean
+  error: string | null
+  progressError: string | null
+  progressState: SetupProgressState
+  setupOverride: SetupOverride | null
+}
+
+type SetupPageAction =
+  | { message: string; type: 'progressFailed' }
+  | { progressState: SetupProgressState; type: 'progressStateChanged' }
+  | { type: 'tokenFailed'; message: string }
+  | {
+      baseSetup: RepoSetupView
+      pushTokenSecret: string | null
+      setup: RepoSetupView
+      type: 'tokenSucceeded'
+    }
+  | { type: 'tokenStarted' }
+
+const initialSetupPageState: SetupPageState = {
+  busy: false,
+  error: null,
+  progressError: null,
+  progressState: 'waiting',
+  setupOverride: null,
+}
 
 export function SetupPage({
   initialSetup,
@@ -36,28 +70,23 @@ export function SetupPage({
 }) {
   const navigate = useNavigate()
   const router = useRouter()
-  const [setup, setSetup] = useState(initialSetup)
-  const [pushTokenSecret, setPushTokenSecret] = useState<string | null>(
-    initialSetup.push_token?.secret ?? null,
+  const [state, dispatch] = useReducer(
+    setupPageReducer,
+    initialSetupPageState,
   )
-  const [busy, setBusy] = useState(false)
-  const [error, setError] = useState<string | null>(null)
-  const [progressError, setProgressError] = useState<string | null>(null)
-  const [progressState, setProgressState] =
-    useState<SetupProgressState>('waiting')
+  const setupOverride =
+    state.setupOverride?.baseSetup === initialSetup
+      ? state.setupOverride
+      : null
+  const setup = setupOverride?.setup ?? initialSetup
+  const storedPushTokenSecret = useSetupPushSecret(setup.repo.id)
+  const pushTokenSecret = setupOverride
+    ? setupOverride.pushTokenSecret
+    : storedPushTokenSecret ?? setup.push_token?.secret ?? null
+  const { busy, error, progressError, progressState } = state
   const setupCommandText = pushTokenSecret
     ? setupCommand(setup, pushTokenSecret)
     : null
-
-  useEffect(() => {
-    const storedPush = window.sessionStorage.getItem(
-      setupPushSecretKey(setup.repo.id),
-    )
-    if (storedPush) {
-      setPushTokenSecret(storedPush)
-      window.sessionStorage.removeItem(setupPushSecretKey(setup.repo.id))
-    }
-  }, [setup.repo.id])
 
   useEffect(() => {
     let cancelled = false
@@ -75,16 +104,21 @@ export function SetupPage({
           return
         }
 
-        setProgressError(null)
         if (lifecycleState === 'PendingPublish') {
-          setProgressState('opening-review')
+          dispatch({
+            progressState: 'opening-review',
+            type: 'progressStateChanged',
+          })
           await navigate({
             params,
             replace: true,
             to: '/repos/$owner/$repo/review',
           })
         } else if (lifecycleState === 'Published') {
-          setProgressState('published')
+          dispatch({
+            progressState: 'published',
+            type: 'progressStateChanged',
+          })
           window.sessionStorage.setItem(
             'scope:home-flash',
             `${params.owner}/${params.repo} is published.`,
@@ -92,15 +126,20 @@ export function SetupPage({
           await navigate({ replace: true, to: '/' })
           await router.invalidate()
         } else {
-          setProgressState('waiting')
+          dispatch({
+            progressState: 'waiting',
+            type: 'progressStateChanged',
+          })
         }
       } catch (progressError) {
         if (!cancelled) {
-          setProgressError(
-            progressError instanceof Error
-              ? progressError.message
-              : 'setup progress check failed',
-          )
+          dispatch({
+            message:
+              progressError instanceof Error
+                ? progressError.message
+                : 'setup progress check failed',
+            type: 'progressFailed',
+          })
         }
       } finally {
         inFlight = false
@@ -128,20 +167,23 @@ export function SetupPage({
   }, [loadProgress, navigate, params, router])
 
   async function updateToken() {
-    setBusy(true)
-    setError(null)
+    dispatch({ type: 'tokenStarted' })
     try {
       const next = await regenerateToken(params)
-      setSetup(next)
-      setPushTokenSecret(next.push_token?.secret ?? null)
+      dispatch({
+        baseSetup: initialSetup,
+        pushTokenSecret: next.push_token?.secret ?? null,
+        setup: next,
+        type: 'tokenSucceeded',
+      })
     } catch (tokenError) {
-      setError(
-        tokenError instanceof Error
-          ? tokenError.message
-          : 'setup command update failed',
-      )
-    } finally {
-      setBusy(false)
+      dispatch({
+        message:
+          tokenError instanceof Error
+            ? tokenError.message
+            : 'setup command update failed',
+        type: 'tokenFailed',
+      })
     }
   }
 
@@ -240,6 +282,72 @@ export function SetupPage({
       </section>
     </main>
   )
+}
+
+function setupPageReducer(
+  state: SetupPageState,
+  action: SetupPageAction,
+): SetupPageState {
+  switch (action.type) {
+    case 'progressFailed':
+      return { ...state, progressError: action.message }
+    case 'progressStateChanged':
+      return {
+        ...state,
+        progressError: null,
+        progressState: action.progressState,
+      }
+    case 'tokenFailed':
+      return { ...state, busy: false, error: action.message }
+    case 'tokenStarted':
+      return { ...state, busy: true, error: null }
+    case 'tokenSucceeded':
+      return {
+        ...state,
+        busy: false,
+        setupOverride: {
+          baseSetup: action.baseSetup,
+          pushTokenSecret: action.pushTokenSecret,
+          setup: action.setup,
+        },
+      }
+  }
+}
+
+const setupPushSecretsByRepo = new Map<string, string | null>()
+
+function useSetupPushSecret(repoId: string) {
+  return useSyncExternalStore(
+    subscribeSetupPushSecret,
+    () => getSetupPushSecretSnapshot(repoId),
+    getServerSetupPushSecretSnapshot,
+  )
+}
+
+function subscribeSetupPushSecret() {
+  return () => {}
+}
+
+function getSetupPushSecretSnapshot(repoId: string) {
+  if (setupPushSecretsByRepo.has(repoId)) {
+    return setupPushSecretsByRepo.get(repoId) ?? null
+  }
+
+  if (typeof window === 'undefined') {
+    return null
+  }
+
+  const key = setupPushSecretKey(repoId)
+  const secret = window.sessionStorage.getItem(key)
+  if (secret) {
+    window.sessionStorage.removeItem(key)
+  }
+  setupPushSecretsByRepo.set(repoId, secret)
+  return secret
+}
+
+function getServerSetupPushSecretSnapshot() {
+  return null
 }
 
 export function SetupError({ error }: { error: unknown }) {

@@ -1,5 +1,4 @@
 use super::*;
-use crate::http::review::reject_staged_update_in_catalog;
 
 #[tokio::test]
 async fn pending_publish_repo_session_is_owner_only() {
@@ -267,7 +266,7 @@ fn rejecting_staged_update_deletes_unreferenced_bucket_objects() {
         catalog.repositories.insert(TEST_REPO_ID.to_string(), repo);
     }
 
-    reject_staged_update_in_catalog(&state, TEST_REPO_OWNER, TEST_REPO_NAME).unwrap();
+    reject_staged_update_as_owner(&state).unwrap();
 
     assert!(!MemoryObjectStore::new().contains_key(&rejected_key));
 }
@@ -299,7 +298,7 @@ fn rejecting_staged_update_records_pending_cleanup_when_bucket_delete_fails() {
         catalog.repositories.insert(TEST_REPO_ID.to_string(), repo);
     }
 
-    reject_staged_update_in_catalog(&state, TEST_REPO_OWNER, TEST_REPO_NAME).unwrap();
+    reject_staged_update_as_owner(&state).unwrap();
 
     let repo = find_repo(&state, TEST_REPO_OWNER, TEST_REPO_NAME).unwrap();
     assert!(repo.staged_update.is_none());
@@ -339,8 +338,7 @@ fn rejecting_staged_update_does_not_cleanup_when_metadata_persist_fails() {
     }
     state.metadata.fail_next_persist_for_tests().unwrap();
 
-    let error =
-        reject_staged_update_in_catalog(&state, TEST_REPO_OWNER, TEST_REPO_NAME).unwrap_err();
+    let error = reject_staged_update_as_owner(&state).unwrap_err();
 
     assert_eq!(error.status, StatusCode::INTERNAL_SERVER_ERROR);
     let repo = find_repo(&state, TEST_REPO_OWNER, TEST_REPO_NAME).unwrap();

@@ -7,8 +7,10 @@ const publicApiUrlEnv = 'SCOPE_API_PUBLIC_URL'
 export const homeFlashKey = 'scope:home-flash'
 
 export async function readRequestAuthToken() {
-  const { authCookieName } = await import('@/lib/auth')
-  const { getCookie } = await import('@tanstack/react-start/server')
+  const [{ authCookieName }, { getCookie }] = await Promise.all([
+    import('@/lib/auth'),
+    import('@tanstack/react-start/server'),
+  ])
   return getCookie(authCookieName)
 }
 

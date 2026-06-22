@@ -286,6 +286,27 @@ impl StoredRepository {
         tree
     }
 
+    pub fn source_blobs(&self) -> Vec<SourceBlob> {
+        let mut blobs = Vec::new();
+        if let Some(pending) = &self.pending_import {
+            blobs.push(pending.git_snapshot.clone());
+            blobs.extend(pending.files.iter().map(|file| file.blob.clone()));
+        }
+        blobs.extend(self.git_snapshot.clone());
+        for change in self.graph.commits.iter().flat_map(|commit| &commit.changes) {
+            blobs.extend(change.old_content.clone());
+            blobs.extend(change.new_content.clone());
+        }
+        if let Some(staged) = &self.staged_update {
+            blobs.push(staged.git_snapshot.clone());
+            for change in &staged.changes {
+                blobs.extend(change.old_content.clone());
+                blobs.extend(change.new_content.clone());
+            }
+        }
+        blobs
+    }
+
     pub fn has_file_for_visibility_update(&self, path: &ScopePath) -> bool {
         if self.record.publication_state == RepoPublicationState::PendingPublish {
             self.pending_import_has_file(path)

@@ -35,12 +35,12 @@ export const Route = createFileRoute('/repos/$owner/$repo')({
 
 function RepoDetailRoute() {
   const childMatches = useChildMatches()
+  const detail = Route.useLoaderData()
+  const params = Route.useParams()
+
   if (childMatches.length > 0) {
     return <Outlet />
   }
-
-  const detail = Route.useLoaderData()
-  const params = Route.useParams()
 
   if (detail.review) {
     return (

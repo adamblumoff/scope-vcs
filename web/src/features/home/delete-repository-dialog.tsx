@@ -2,7 +2,7 @@ import type { RepoSummary } from '@/api/types'
 import { Button } from '@/components/ui/button'
 import { AlertTriangle, LoaderCircle, Trash2 } from 'lucide-react'
 import type { FormEvent } from 'react'
-import { useState } from 'react'
+import { useId, useState } from 'react'
 
 export function DeleteRepositoryDialog({
   onCancel,
@@ -13,6 +13,7 @@ export function DeleteRepositoryDialog({
   onConfirm: (repo: RepoSummary) => Promise<void>
   repo: RepoSummary
 }) {
+  const inputId = useId()
   const [confirmed, setConfirmed] = useState(false)
   const [typedName, setTypedName] = useState('')
   const [busy, setBusy] = useState(false)
@@ -66,13 +67,16 @@ export function DeleteRepositoryDialog({
           </div>
         ) : (
           <form className="mt-5 space-y-5" onSubmit={(event) => void submit(event)}>
-            <label className="block text-sm leading-5 text-muted-foreground">
+            <label
+              className="block text-sm leading-5 text-muted-foreground"
+              htmlFor={inputId}
+            >
               Type <span className="font-mono text-foreground">{repo.name}</span> to
               permanently delete this repository.
             </label>
             <input
-              autoFocus
               className="h-9 w-full rounded-md border border-input bg-background px-3 font-mono text-sm outline-none focus-visible:ring-2 focus-visible:ring-ring"
+              id={inputId}
               onChange={(event) => setTypedName(event.target.value)}
               value={typedName}
             />

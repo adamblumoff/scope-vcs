@@ -1,5 +1,5 @@
 import type { RepoSummary } from '@/api/types'
-import { lifecycleLabel } from '@/components/repo-status-badge'
+import { lifecycleLabel } from '@/components/repo-lifecycle-label'
 import { VisibilityBadge } from '@/components/visibility-badge'
 import { Button } from '@/components/ui/button'
 import { Link } from '@tanstack/react-router'

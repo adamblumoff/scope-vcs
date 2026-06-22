@@ -172,10 +172,14 @@ export function parseSetVisibilityInput(input: unknown): SetVisibilityInput {
   const repo = typeof data?.repo === 'string' ? data.repo.trim() : ''
   const kind = data?.kind === 'StagedUpdate' ? 'StagedUpdate' : 'PendingImport'
   const paths = Array.isArray(data?.paths)
-    ? data.paths
-        .filter((path): path is string => typeof path === 'string')
-        .map((path) => path.trim())
-        .filter(Boolean)
+    ? data.paths.flatMap((path) => {
+        if (typeof path !== 'string') {
+          return []
+        }
+
+        const trimmed = path.trim()
+        return trimmed ? [trimmed] : []
+      })
     : []
   const visibility = data?.visibility === 'Public' ? 'Public' : 'Private'
 

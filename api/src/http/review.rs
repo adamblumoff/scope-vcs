@@ -4,12 +4,11 @@ use crate::{
         ensure_user_for_identity, http_identity, principal_for_repo, principal_for_user_id,
     },
     error::ApiError,
-    git::import::{apply_receive_pack_update, validate_staged_update_policy},
     http::responses::*,
     state::AppState,
     state::{
         best_effort_drain_pending_source_blob_deletions, ensure_owner, ensure_pending_publish,
-        ensure_repo_read, find_repo, promote_pending_import, queue_source_blob_deletions,
+        ensure_repo_read, find_repo,
     },
 };
 use axum::{
@@ -47,7 +46,6 @@ pub(crate) async fn publish_repo(
         .as_ref()
         .map(|identity| ensure_user_for_identity(&state, identity))
         .transpose()?;
-    let repo_id = crate::domain::store::repo_id(&owner, &repo_name);
     let repo = find_repo(&state, &owner, &repo_name)?;
     let principal = user
         .as_ref()
@@ -61,33 +59,9 @@ pub(crate) async fn publish_repo(
         .as_ref()
         .map(|user| user.id.clone())
         .ok_or_else(|| ApiError::forbidden("owner role required"))?;
-    let updated = state.metadata.update(move |catalog| {
-        let repo = catalog
-            .repositories
-            .get(&repo_id)
-            .ok_or_else(|| ApiError::not_found(format!("repo {owner}/{repo_name} not found")))?;
-        let principal = principal_for_user_id(repo, &user_id);
-        if catalog.role_for_principal(repo, &principal) != Some(RepoRole::Owner) {
-            return Err(ApiError::forbidden("owner role required"));
-        }
-        ensure_pending_publish(repo)?;
-
-        {
-            let repo = catalog
-                .repositories
-                .get_mut(&repo_id)
-                .expect("repo was already checked");
-            promote_pending_import(repo)?;
-        }
-
-        let updated = catalog
-            .repositories
-            .get(&repo_id)
-            .expect("repo was already checked")
-            .record
-            .clone();
-        Ok(updated)
-    })?;
+    let updated = state
+        .metadata
+        .publish_pending_import(&owner, &repo_name, &user_id)?;
 
     Ok(Json(SessionRepo {
         id: updated.id,
@@ -123,7 +97,6 @@ pub(crate) async fn update_staged_file_visibility(
     let principal = principal_for_repo(&state, &repo, identity.as_ref())?;
     ensure_repo_read(&state, &repo, &principal)?;
     ensure_owner(&state, &repo, &principal)?;
-    let repo_id = crate::domain::store::repo_id(&owner, &repo_name);
     if input.paths.is_empty() {
         return Err(ApiError::bad_request("at least one file path is required"));
     }
@@ -133,31 +106,15 @@ pub(crate) async fn update_staged_file_visibility(
         .map(|path| pending_scope_path(path))
         .collect::<Result<Vec<_>, _>>()?;
 
-    let updated = state.metadata.update(move |catalog| {
-        let repo = catalog
-            .repositories
-            .get_mut(&repo_id)
-            .ok_or_else(|| ApiError::not_found(format!("repo {owner}/{repo_name} not found")))?;
-        let mut staged_update = repo
-            .staged_update
-            .clone()
-            .ok_or_else(|| ApiError::not_found("no staged update pending"))?;
-        for path in &paths {
-            let file = staged_update
-                .changes
-                .iter_mut()
-                .find(|change| change.path == *path)
-                .ok_or_else(|| ApiError::not_found(format!("staged file {} not found", path)))?;
-            file.visibility = input.visibility;
-        }
-        validate_staged_update_policy(repo, &staged_update)?;
-        let updated = staged_update_response(&staged_update);
-        repo.staged_update = Some(staged_update);
+    let updated = state.metadata.update_staged_file_visibility(
+        &owner,
+        &repo_name,
+        &principal.id,
+        paths,
+        input.visibility,
+    )?;
 
-        Ok(updated)
-    })?;
-
-    Ok(Json(updated))
+    Ok(Json(staged_update_response(&updated)))
 }
 
 pub(crate) async fn apply_staged_update(
@@ -170,9 +127,12 @@ pub(crate) async fn apply_staged_update(
     let principal = principal_for_repo(&state, &repo, identity.as_ref())?;
     ensure_repo_read(&state, &repo, &principal)?;
     ensure_owner(&state, &repo, &principal)?;
-    let applied = apply_staged_update_in_catalog(&state, &owner, &repo_name)?;
+    let applied = state
+        .metadata
+        .apply_staged_update(&owner, &repo_name, &principal.id)?;
+    best_effort_drain_pending_source_blob_deletions(&state);
 
-    Ok(Json(applied))
+    Ok(Json(staged_update_response(&applied)))
 }
 
 pub(crate) async fn reject_staged_update(
@@ -185,67 +145,10 @@ pub(crate) async fn reject_staged_update(
     let principal = principal_for_repo(&state, &repo, identity.as_ref())?;
     ensure_repo_read(&state, &repo, &principal)?;
     ensure_owner(&state, &repo, &principal)?;
-    let rejected = reject_staged_update_in_catalog(&state, &owner, &repo_name)?;
+    let rejected = state
+        .metadata
+        .reject_staged_update(&owner, &repo_name, &principal.id)?;
+    best_effort_drain_pending_source_blob_deletions(&state);
 
-    Ok(Json(rejected))
-}
-
-pub(crate) fn apply_staged_update_in_catalog(
-    state: &AppState,
-    owner: &str,
-    repo_name: &str,
-) -> Result<StagedUpdateResponse, ApiError> {
-    let repo_id = crate::domain::store::repo_id(owner, repo_name);
-    let owner = owner.to_string();
-    let repo_name = repo_name.to_string();
-    let response = state.metadata.update(move |catalog| {
-        let repo = catalog
-            .repositories
-            .get_mut(&repo_id)
-            .ok_or_else(|| ApiError::not_found(format!("repo {owner}/{repo_name} not found")))?;
-        let old_snapshot = repo.git_snapshot.clone();
-        let staged_update = repo
-            .staged_update
-            .take()
-            .ok_or_else(|| ApiError::not_found("no staged update pending"))?;
-        let response = staged_update_response(&staged_update);
-        apply_receive_pack_update(repo, staged_update)?;
-        queue_source_blob_deletions(catalog, old_snapshot);
-        Ok(response)
-    })?;
-    best_effort_drain_pending_source_blob_deletions(state);
-    Ok(response)
-}
-
-pub(crate) fn reject_staged_update_in_catalog(
-    state: &AppState,
-    owner: &str,
-    repo_name: &str,
-) -> Result<StagedUpdateResponse, ApiError> {
-    let repo_id = crate::domain::store::repo_id(owner, repo_name);
-    let owner = owner.to_string();
-    let repo_name = repo_name.to_string();
-    let response = state.metadata.update(move |catalog| {
-        let repo = catalog
-            .repositories
-            .get_mut(&repo_id)
-            .ok_or_else(|| ApiError::not_found(format!("repo {owner}/{repo_name} not found")))?;
-        let staged_update = repo
-            .staged_update
-            .take()
-            .ok_or_else(|| ApiError::not_found("no staged update pending"))?;
-        let response = staged_update_response(&staged_update);
-        let rejected_blobs = std::iter::once(staged_update.git_snapshot.clone())
-            .chain(
-                staged_update
-                    .changes
-                    .iter()
-                    .filter_map(|change| change.new_content.clone()),
-            )
-            .collect::<Vec<_>>();
-        queue_source_blob_deletions(catalog, rejected_blobs);
-        Ok(response)
-    })?;
-    best_effort_drain_pending_source_blob_deletions(state);
-    Ok(response)
+    Ok(Json(staged_update_response(&rejected)))
 }

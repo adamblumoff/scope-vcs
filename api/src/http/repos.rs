@@ -1,7 +1,7 @@
 use crate::domain::git_projection::{VirtualGitProjection, build_virtual_git_projection};
 use crate::domain::policy::{Principal, ScopePath, Visibility};
 use crate::domain::projection::project_graph;
-use crate::domain::store::{RepoRole, RepoSettings, RepoStorageCleanup};
+use crate::domain::store::{RepoRole, RepoSettings};
 use crate::{
     auth::{
         shoo::{
@@ -14,10 +14,7 @@ use crate::{
     http::responses::*,
     persistence::unix_now,
     state::AppState,
-    state::{
-        ensure_repo_read, find_repo, queue_repo_storage_deletion, queue_source_blob_deletions,
-        repo_source_blobs, role_for_principal,
-    },
+    state::{ensure_repo_read, find_repo, role_for_principal},
 };
 use axum::{
     Json,
@@ -112,41 +109,7 @@ pub(crate) async fn delete_repo(
 ) -> Result<Json<DeleteRepoResponse>, ApiError> {
     let identity = require_identity(&state, &headers).await?;
     let user = ensure_user_for_identity(&state, &identity)?;
-    let repo_id = crate::domain::store::repo_id(&owner, &repo_name);
-    let delete_owner = owner.clone();
-    let delete_repo_name = repo_name.clone();
-    let delete_repo_id = repo_id.clone();
-    let missing_owner = owner.clone();
-    let missing_repo_name = repo_name.clone();
-
-    state.metadata.update(move |catalog| {
-        let repo = catalog.repositories.get(&delete_repo_id).ok_or_else(|| {
-            ApiError::not_found(format!(
-                "repo {missing_owner}/{missing_repo_name} not found"
-            ))
-        })?;
-        let principal = principal_for_user_id(repo, &user.id);
-        if catalog.role_for_principal(repo, &principal) != Some(RepoRole::Owner) {
-            return Err(ApiError::not_found(format!(
-                "repo {missing_owner}/{missing_repo_name} not found"
-            )));
-        }
-
-        let repo = catalog
-            .repositories
-            .remove(&delete_repo_id)
-            .expect("repo was already checked");
-        queue_repo_storage_deletion(
-            catalog,
-            RepoStorageCleanup {
-                owner_handle: delete_owner,
-                repo_name: delete_repo_name,
-            },
-        );
-        let blobs = repo_source_blobs(&repo);
-        queue_source_blob_deletions(catalog, blobs);
-        Ok(())
-    })?;
+    let repo_id = state.metadata.delete_repo(&owner, &repo_name, &user.id)?;
 
     crate::state::best_effort_drain_pending_repo_storage_deletions(&state);
     crate::state::best_effort_drain_pending_source_blob_deletions(&state);
