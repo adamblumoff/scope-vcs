@@ -1,4 +1,9 @@
-import type { ReviewFile, Visibility, VisibilityState } from '@/api/types'
+import type {
+  ProjectionPreviewAudience,
+  ReviewFile,
+  Visibility,
+  VisibilityState,
+} from '@/api/types'
 
 type ReviewTreeFileBase = {
   path: string
@@ -99,6 +104,30 @@ export function folderCollapseKeys<TFile extends ReviewTreeFileBase>(
 
 export function displayPath(path: string) {
   return normalizeReviewPath(path)
+}
+
+export function visibleInProjectionPreview(
+  path: string,
+  audience: ProjectionPreviewAudience | undefined,
+  visiblePaths: ReadonlySet<string> | undefined,
+) {
+  if (!audience) {
+    return true
+  }
+  return visiblePaths?.has(displayPath(path)) ?? false
+}
+
+export function visibleFileCountInProjectionPreview(
+  files: ReviewTreeFileBase[],
+  audience: ProjectionPreviewAudience | undefined,
+  visiblePaths: ReadonlySet<string> | undefined,
+) {
+  if (!audience) {
+    return files.length
+  }
+  return files.filter((file) =>
+    visibleInProjectionPreview(file.path, audience, visiblePaths),
+  ).length
 }
 
 export function normalizeReviewPath(path: string) {

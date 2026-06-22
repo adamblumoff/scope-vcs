@@ -1,0 +1,12 @@
+{
+  "$schema": "https://react.doctor/schema/config.json",
+  "ignore": {
+    "files": [".output/**", ".tanstack/**", ".test-output/**"],
+    "overrides": [
+      {
+        "files": ["src/routes/repos.$owner.$repo.review.tsx"],
+        "rules": ["react-doctor/tanstack-start-loader-parallel-fetch"]
+      }
+    ]
+  }
+}

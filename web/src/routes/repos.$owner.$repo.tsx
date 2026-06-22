@@ -53,6 +53,7 @@ function RepoDetailRoute() {
         applyStagedUpdate={(data) => applyStagedUpdate({ data })}
         initialReview={detail.review}
         params={params}
+        projectionPreviews={detail.projection_previews}
         publishRepo={(data) => publishRepo({ data })}
         rejectStagedUpdate={(data) => rejectStagedUpdate({ data })}
         setReviewVisibility={setReviewVisibility}

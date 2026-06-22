@@ -149,6 +149,149 @@ async fn pending_visibility_toggle_does_not_create_public_projection_history() {
     );
 }
 
+#[tokio::test]
+async fn owner_can_preview_pending_import_public_projection_before_publish() {
+    let state = test_state_with_repo();
+    cache_test_jwks(&state);
+    {
+        let mut catalog = lock_catalog(&state).unwrap();
+        let repo = catalog.repositories.get_mut(TEST_REPO_ID).unwrap();
+        repo.record.publication_state = RepoPublicationState::PendingPublish;
+        repo.record.default_visibility = Visibility::Public;
+        repo.policy = Policy::new(Visibility::Public, repo.record.owner_user_id.clone());
+        repo.policy
+            .add_rule(VisibilityRule::private(
+                ScopePath::parse("/secret.txt").unwrap(),
+                repo_owner_ids(repo),
+            ))
+            .unwrap();
+        repo.pending_import = Some(pending_import_fixture(vec![
+            ("README.md", "hello"),
+            ("secret.txt", "private"),
+        ]));
+    }
+
+    let response = router(state.clone())
+        .oneshot(
+            Request::builder()
+                .method("GET")
+                .uri("/v1/repos/owner/repo/projection-preview?audience=public&source=review")
+                .header(AUTHORIZATION, bearer_header())
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = response_json(response).await;
+    assert_eq!(body["audience"], "public");
+    assert_eq!(body["source"], "review");
+    assert_eq!(body["summary"]["visible_files"], 1);
+    assert_eq!(body["summary"]["hidden_files"], 1);
+    assert_eq!(body["summary"]["synthetic_commits"], 1);
+    assert_eq!(body["files"][0]["path"], "/README.md");
+    assert!(
+        body["files"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|file| file["path"] != "/secret.txt")
+    );
+
+    let repo = find_repo(&state, TEST_REPO_OWNER, TEST_REPO_NAME).unwrap();
+    assert_eq!(
+        repo.record.publication_state,
+        RepoPublicationState::PendingPublish
+    );
+    assert!(repo.pending_import.is_some());
+    assert!(repo.graph.commits.is_empty());
+}
+
+#[tokio::test]
+async fn public_cannot_preview_pending_import_review() {
+    let state = test_state_with_repo();
+    {
+        let mut catalog = lock_catalog(&state).unwrap();
+        let repo = catalog.repositories.get_mut(TEST_REPO_ID).unwrap();
+        repo.record.publication_state = RepoPublicationState::PendingPublish;
+        repo.pending_import = Some(pending_import_fixture(vec![("README.md", "hello")]));
+    }
+
+    let response = router(state)
+        .oneshot(
+            Request::builder()
+                .method("GET")
+                .uri("/v1/repos/owner/repo/projection-preview?audience=public&source=review")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::NOT_FOUND);
+}
+
+#[tokio::test]
+async fn owner_can_preview_staged_update_public_projection_before_apply() {
+    let state = test_state_with_repo();
+    cache_test_jwks(&state);
+    {
+        let mut catalog = lock_catalog(&state).unwrap();
+        let repo = repo_with_readme();
+        catalog.repositories.insert(TEST_REPO_ID.to_string(), repo);
+        let repo = catalog.repositories.get_mut(TEST_REPO_ID).unwrap();
+        repo.staged_update = Some(StagedRepoUpdate {
+            id: "staged_push_1".to_string(),
+            branch: format!("refs/heads/{DEFAULT_GIT_BRANCH}"),
+            base_live_commit_id: repo.graph.commits.last().map(|commit| commit.id.clone()),
+            author_id: repo.record.owner_user_id.clone(),
+            message: "preview staged update".to_string(),
+            git_snapshot: source_blob("preview staged git snapshot"),
+            changes: vec![
+                StagedFileChange {
+                    path: ScopePath::parse("/docs/guide.md").unwrap(),
+                    old_content: None,
+                    new_content: Some(source_blob("public docs")),
+                    visibility: Visibility::Public,
+                    kind: StagedFileChangeKind::Added,
+                },
+                StagedFileChange {
+                    path: ScopePath::parse("/secret.txt").unwrap(),
+                    old_content: None,
+                    new_content: Some(source_blob("private staged content")),
+                    visibility: Visibility::Private,
+                    kind: StagedFileChangeKind::Added,
+                },
+            ],
+        });
+    }
+
+    let response = router(state.clone())
+        .oneshot(
+            Request::builder()
+                .method("GET")
+                .uri("/v1/repos/owner/repo/projection-preview?audience=public&source=review")
+                .header(AUTHORIZATION, bearer_header())
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = response_json(response).await;
+    let files = body["files"].as_array().unwrap();
+    assert!(files.iter().any(|file| file["path"] == "/README.md"));
+    assert!(files.iter().any(|file| file["path"] == "/docs/guide.md"));
+    assert!(files.iter().all(|file| file["path"] != "/secret.txt"));
+    assert_eq!(body["summary"]["hidden_files"], 1);
+
+    let repo = find_repo(&state, TEST_REPO_OWNER, TEST_REPO_NAME).unwrap();
+    assert!(repo.staged_update.is_some());
+    assert_eq!(repo.graph.commits.len(), 1);
+}
+
 #[test]
 fn zero_file_publish_promotes_pending_import() {
     let mut repo = test_repo(&test_owner_id());

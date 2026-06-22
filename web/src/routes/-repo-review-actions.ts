@@ -1,4 +1,5 @@
 import { parseRepoParams } from '@/api/repos'
+import { loadProjectionPreviewsForRequest } from '@/api/projection-preview'
 import {
   loadReviewForRequest,
   parseSetVisibilityInput,
@@ -12,6 +13,10 @@ import { createServerFn } from '@tanstack/react-start'
 export const loadReview = createServerFn({ method: 'GET' })
   .validator(parseRepoParams)
   .handler(({ data }) => loadReviewForRequest(data))
+
+export const loadReviewProjectionPreviews = createServerFn({ method: 'GET' })
+  .validator(parseRepoParams)
+  .handler(({ data }) => loadProjectionPreviewsForRequest(data, 'review'))
 
 export const setVisibility = createServerFn({ method: 'POST' })
   .validator(parseSetVisibilityInput)

@@ -59,6 +59,169 @@ async fn published_default_private_repo_serves_public_file_subset() {
 }
 
 #[tokio::test]
+async fn published_repo_projection_preview_serves_public_file_subset() {
+    let state = test_state_with_repo();
+    {
+        let mut repo = test_repo(&test_owner_id());
+        repo.record.default_visibility = Visibility::Private;
+        repo.policy = Policy::new(Visibility::Private, &repo.record.owner_user_id);
+        repo.policy
+            .add_rule(VisibilityRule::public(
+                ScopePath::parse("/README.md").unwrap(),
+            ))
+            .unwrap();
+        repo.graph.commits.push(LogicalCommit {
+            id: "rv1".to_string(),
+            parent_ids: Vec::new(),
+            author_id: repo.record.owner_user_id.clone(),
+            author_visibility: AuthorVisibility::Visible,
+            message: "initial".to_string(),
+            mixed_policy: MixedCommitPolicy::SyntheticPublicCommit,
+            changes: vec![
+                FileChange {
+                    visibility: Visibility::Public,
+                    path: ScopePath::parse("/README.md").unwrap(),
+                    old_content: None,
+                    new_content: Some(source_blob("hello")),
+                },
+                FileChange {
+                    visibility: Visibility::Private,
+                    path: ScopePath::parse("/secret.txt").unwrap(),
+                    old_content: None,
+                    new_content: Some(source_blob("secret")),
+                },
+            ],
+            visibility_changes: Vec::new(),
+        });
+        repo.graph.commits.push(LogicalCommit {
+            id: "rv2".to_string(),
+            parent_ids: vec!["rv1".to_string()],
+            author_id: repo.record.owner_user_id.clone(),
+            author_visibility: AuthorVisibility::Visible,
+            message: "private notes".to_string(),
+            mixed_policy: MixedCommitPolicy::SyntheticPublicCommit,
+            changes: vec![FileChange {
+                visibility: Visibility::Private,
+                path: ScopePath::parse("/notes/private.md").unwrap(),
+                old_content: None,
+                new_content: Some(source_blob("private notes")),
+            }],
+            visibility_changes: Vec::new(),
+        });
+
+        let mut catalog = lock_catalog(&state).unwrap();
+        catalog.repositories.insert(TEST_REPO_ID.to_string(), repo);
+    }
+
+    cache_test_jwks(&state);
+    let public_response = router(state.clone())
+        .oneshot(
+            Request::builder()
+                .method("GET")
+                .uri("/v1/repos/owner/repo/projection-preview?audience=public")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(public_response.status(), StatusCode::OK);
+    let public_body = response_json(public_response).await;
+    assert_eq!(public_body["audience"], "public");
+    assert_eq!(public_body["source"], "live");
+    assert_eq!(public_body["summary"]["visible_files"], 1);
+    assert_eq!(public_body["summary"]["hidden_files"], 0);
+    assert_eq!(public_body["summary"]["hidden_commits"], 0);
+    assert_eq!(public_body["files"][0]["path"], "/README.md");
+
+    let owner_response = router(state)
+        .oneshot(
+            Request::builder()
+                .method("GET")
+                .uri("/v1/repos/owner/repo/projection-preview?audience=public")
+                .header(AUTHORIZATION, bearer_header())
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(owner_response.status(), StatusCode::OK);
+    let owner_body = response_json(owner_response).await;
+    assert_eq!(owner_body["summary"]["visible_files"], 1);
+    assert_eq!(owner_body["summary"]["hidden_files"], 2);
+    assert_eq!(owner_body["summary"]["hidden_commits"], 1);
+}
+
+#[tokio::test]
+async fn owner_public_projection_preview_counts_visibility_transition_hidden_commits() {
+    let state = test_state_with_repo();
+    cache_test_jwks(&state);
+    {
+        let mut repo = test_repo(&test_owner_id());
+        repo.record.default_visibility = Visibility::Private;
+        repo.policy = Policy::new(Visibility::Private, &repo.record.owner_user_id);
+        repo.policy
+            .add_rule(VisibilityRule::public(
+                ScopePath::parse("/notes.md").unwrap(),
+            ))
+            .unwrap();
+        let private_blob = source_blob("private draft");
+        repo.graph.commits.push(LogicalCommit {
+            id: "rv1".to_string(),
+            parent_ids: Vec::new(),
+            author_id: repo.record.owner_user_id.clone(),
+            author_visibility: AuthorVisibility::Visible,
+            message: "private draft".to_string(),
+            mixed_policy: MixedCommitPolicy::SyntheticPublicCommit,
+            changes: vec![FileChange {
+                visibility: Visibility::Private,
+                path: ScopePath::parse("/notes.md").unwrap(),
+                old_content: None,
+                new_content: Some(private_blob.clone()),
+            }],
+            visibility_changes: Vec::new(),
+        });
+        repo.graph.commits.push(LogicalCommit {
+            id: "rv2".to_string(),
+            parent_ids: vec!["rv1".to_string()],
+            author_id: repo.record.owner_user_id.clone(),
+            author_visibility: AuthorVisibility::Visible,
+            message: "publish notes".to_string(),
+            mixed_policy: MixedCommitPolicy::SyntheticPublicCommit,
+            changes: Vec::new(),
+            visibility_changes: vec![FileVisibilityChange {
+                path: ScopePath::parse("/notes.md").unwrap(),
+                old_visibility: Visibility::Private,
+                new_visibility: Visibility::Public,
+                current_content: Some(private_blob),
+            }],
+        });
+
+        let mut catalog = lock_catalog(&state).unwrap();
+        catalog.repositories.insert(TEST_REPO_ID.to_string(), repo);
+    }
+
+    let response = router(state)
+        .oneshot(
+            Request::builder()
+                .method("GET")
+                .uri("/v1/repos/owner/repo/projection-preview?audience=public")
+                .header(AUTHORIZATION, bearer_header())
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = response_json(response).await;
+    assert_eq!(body["summary"]["visible_commits"], 1);
+    assert_eq!(body["summary"]["hidden_commits"], 1);
+    assert_eq!(body["commits"][0]["logical_commit_id"], "rv2");
+}
+
+#[tokio::test]
 async fn published_default_private_repo_without_public_files_stays_hidden() {
     let state = test_state_with_repo();
     {

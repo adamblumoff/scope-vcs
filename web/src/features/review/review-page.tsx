@@ -1,21 +1,20 @@
 import { storeHomeFlash } from '@/api/client'
-import type { RepoParams, RepoReview, ReviewFile, Visibility } from '@/api/types'
+import type {
+  ProjectionPreviews,
+  RepoParams,
+  RepoReview,
+  ReviewFile,
+  Visibility,
+} from '@/api/types'
 import { AppHeader } from '@/components/app-header'
 import { VisibilityBadge } from '@/components/visibility-badge'
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Link, useNavigate, useRouter } from '@tanstack/react-router'
-import {
-  AlertCircle,
-  ArrowLeft,
-  FileSearch,
-  LoaderCircle,
-  Rocket,
-  X,
-} from 'lucide-react'
+import { AlertCircle, ArrowLeft, LoaderCircle, Rocket, X } from 'lucide-react'
 import { useReducer } from 'react'
-import { ReviewTree } from './review-tree'
+import { ReviewVisibilityPanel } from './review-visibility-panel'
 
 type ReviewOverride = {
   baseReview: RepoReview
@@ -49,6 +48,7 @@ export function ReviewPage({
   applyStagedUpdate,
   initialReview,
   params,
+  projectionPreviews,
   publishRepo,
   rejectStagedUpdate,
   setReviewVisibility,
@@ -56,6 +56,7 @@ export function ReviewPage({
   applyStagedUpdate: (params: RepoParams) => Promise<unknown>
   initialReview: RepoReview
   params: RepoParams
+  projectionPreviews: ProjectionPreviews
   publishRepo: (params: RepoParams) => Promise<unknown>
   rejectStagedUpdate: (params: RepoParams) => Promise<unknown>
   setReviewVisibility: (
@@ -237,33 +238,15 @@ export function ReviewPage({
           </Alert>
         )}
 
-        <section className="mt-8 border-y border-border">
-          {review.files.length === 0 ? (
-            <div className="flex items-center gap-3 py-10">
-              <div className="flex size-10 shrink-0 items-center justify-center rounded-md border border-border">
-                <FileSearch className="size-5 text-muted-foreground" />
-              </div>
-              <div className="min-w-0">
-                <div className="text-sm font-medium leading-5">No files found</div>
-                <div className="mt-1 text-sm leading-5 text-muted-foreground">
-                  {stagedReview
-                    ? 'No staged push is waiting.'
-                    : 'This repo can still be published.'}
-                </div>
-              </div>
-            </div>
-          ) : (
-            <ReviewTree
-              disabled={publishing || rejecting}
-              files={review.files}
-              onSetVisibility={(files, visibility, key) =>
-                void setVisibility(files, visibility, key)
-              }
-              pendingKey={pendingKey}
-              stagedReview={stagedReview}
-            />
-          )}
-        </section>
+        <ReviewVisibilityPanel
+          disabled={publishing || rejecting}
+          onSetVisibility={(files, visibility, key) =>
+            void setVisibility(files, visibility, key)
+          }
+          pendingKey={pendingKey}
+          previews={projectionPreviews}
+          review={review}
+        />
       </section>
     </main>
   )

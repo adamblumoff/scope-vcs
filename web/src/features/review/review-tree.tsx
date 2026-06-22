@@ -1,4 +1,4 @@
-import type { ReviewFile, Visibility } from '@/api/types'
+import type { ProjectionPreviewAudience, ReviewFile, Visibility } from '@/api/types'
 import { VisibilityBadge } from '@/components/visibility-badge'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
@@ -19,17 +19,22 @@ import {
   folderCollapseKeys,
   folderVisibility,
   type ReviewTreeNode,
+  visibleFileCountInProjectionPreview,
+  visibleInProjectionPreview,
 } from './review-tree-model'
 
 const REVIEW_TREE_COLUMNS = 'sm:grid-cols-[minmax(0,1fr)_110px_120px_120px]'
 
 export function ReviewTree({
+  audience,
   disabled = false,
   files,
   onSetVisibility,
   pendingKey = null,
+  visiblePaths,
   stagedReview,
 }: {
+  audience?: ProjectionPreviewAudience
   disabled?: boolean
   files: ReviewFile[]
   onSetVisibility?: (
@@ -38,6 +43,7 @@ export function ReviewTree({
     pendingKey: string,
   ) => void
   pendingKey?: string | null
+  visiblePaths?: ReadonlySet<string>
   stagedReview: boolean
 }) {
   const root = useMemo(() => buildReviewTree(files), [files])
@@ -67,7 +73,7 @@ export function ReviewTree({
         )}
       >
         <div>Path</div>
-        <div>{stagedReview ? 'Change' : 'Scope'}</div>
+        <div>{audience ? `${audienceLabel(audience)} view` : stagedReview ? 'Change' : 'Scope'}</div>
         <div>Visibility</div>
         <div className="text-right">{editable ? 'Set' : null}</div>
       </div>
@@ -83,6 +89,8 @@ export function ReviewTree({
           onToggleFolder={toggleFolder}
           pendingKey={pendingKey}
           stagedReview={stagedReview}
+          viewAudience={audience}
+          visiblePaths={visiblePaths}
         />
       ))}
     </div>
@@ -99,6 +107,8 @@ function ReviewTreeNodeRow({
   onToggleFolder,
   pendingKey,
   stagedReview,
+  viewAudience,
+  visiblePaths,
 }: {
   collapsed: Set<string>
   depth: number
@@ -113,14 +123,22 @@ function ReviewTreeNodeRow({
   onToggleFolder: (key: string) => void
   pendingKey: string | null
   stagedReview: boolean
+  viewAudience?: ProjectionPreviewAudience
+  visiblePaths?: ReadonlySet<string>
 }) {
   if (node.type === 'file') {
     const nextVisibility = node.file.visibility === 'Public' ? 'Private' : 'Public'
     const busy = pendingKey === node.key
+    const visibleInView = visibleInProjectionPreview(
+      node.path,
+      viewAudience,
+      visiblePaths,
+    )
     return (
       <div
         className={cn(
           'grid gap-2 px-2 py-2.5 text-sm sm:items-center',
+          viewAudience === 'public' && !visibleInView && 'text-muted-foreground',
           REVIEW_TREE_COLUMNS,
         )}
       >
@@ -134,7 +152,8 @@ function ReviewTreeNodeRow({
             {displayPath(node.path)}
           </span>
         </div>
-        <div>
+        <div className="flex flex-wrap gap-1.5 text-xs leading-4">
+          {viewAudience && <ViewState visible={visibleInView} />}
           {stagedReview && (
             <Badge variant="outline">
               {'kind' in node.file ? node.file.kind : 'Modified'}
@@ -173,6 +192,7 @@ function ReviewTreeNodeRow({
   const visibility = folderVisibility(node.files)
   const nextVisibility = visibility === 'Public' ? 'Private' : 'Public'
   const busy = pendingKey === node.key
+  const viewState = folderViewState(node.files, viewAudience, visiblePaths)
 
   return (
     <>
@@ -209,7 +229,21 @@ function ReviewTreeNodeRow({
           </span>
         </div>
         <div className="text-xs leading-4 text-muted-foreground">
-          {node.files.length} {node.files.length === 1 ? 'file' : 'files'}
+          {viewAudience ? (
+            <ViewState
+              partialLabel={
+                viewState.visibleCount > 0 &&
+                viewState.visibleCount < viewState.totalCount
+                  ? `${viewState.visibleCount}/${viewState.totalCount} shown`
+                  : undefined
+              }
+              visible={viewState.visibleCount > 0}
+            />
+          ) : (
+            <>
+              {node.files.length} {node.files.length === 1 ? 'file' : 'files'}
+            </>
+          )}
         </div>
         <div>
           <VisibilityBadge visibility={visibility} />
@@ -249,8 +283,42 @@ function ReviewTreeNodeRow({
             onToggleFolder={onToggleFolder}
             pendingKey={pendingKey}
             stagedReview={stagedReview}
+            viewAudience={viewAudience}
+            visiblePaths={visiblePaths}
           />
         ))}
     </>
   )
+}
+
+function folderViewState(
+  files: ReviewFile[],
+  audience: ProjectionPreviewAudience | undefined,
+  visiblePaths: ReadonlySet<string> | undefined,
+) {
+  const totalCount = files.length
+  const visibleCount = visibleFileCountInProjectionPreview(
+    files,
+    audience,
+    visiblePaths,
+  )
+  return { totalCount, visibleCount }
+}
+
+function ViewState({
+  partialLabel,
+  visible,
+}: {
+  partialLabel?: string
+  visible: boolean
+}) {
+  return (
+    <Badge variant="outline">
+      {partialLabel ?? (visible ? 'Shown' : 'Hidden')}
+    </Badge>
+  )
+}
+
+function audienceLabel(audience: ProjectionPreviewAudience) {
+  return audience === 'owner' ? 'Owner' : 'Public'
 }
