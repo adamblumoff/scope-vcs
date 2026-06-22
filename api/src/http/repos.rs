@@ -407,7 +407,6 @@ pub(crate) async fn update_settings(
         .as_ref()
         .map(|identity| ensure_user_for_identity(&state, identity))
         .transpose()?;
-    let repo_id = crate::domain::store::repo_id(&owner, &repo_name);
     let repo = find_repo(&state, &owner, &repo_name)?;
     let principal = user
         .as_ref()
@@ -419,25 +418,15 @@ pub(crate) async fn update_settings(
         .as_ref()
         .map(|user| user.id.clone())
         .ok_or_else(|| ApiError::forbidden("owner role required"))?;
-    let settings = state.metadata.update(move |catalog| {
-        let repo = catalog
-            .repositories
-            .get(&repo_id)
-            .ok_or_else(|| ApiError::not_found(format!("repo {owner}/{repo_name} not found")))?;
-        let principal = principal_for_user_id(repo, &user_id);
-
-        if catalog.role_for_principal(repo, &principal) != Some(RepoRole::Owner) {
-            return Err(ApiError::forbidden("owner role required"));
-        }
-
-        let repo = catalog
-            .repositories
-            .get_mut(&repo_id)
-            .expect("repo was already checked");
-        repo.settings.include_ignored_files = input.include_ignored_files;
-        repo.settings.review_pushes_before_applying = input.review_pushes_before_applying;
-        Ok(repo.settings)
-    })?;
+    let settings = state.metadata.update_repo_settings(
+        &owner,
+        &repo_name,
+        &user_id,
+        RepoSettings {
+            include_ignored_files: input.include_ignored_files,
+            review_pushes_before_applying: input.review_pushes_before_applying,
+        },
+    )?;
 
     Ok(Json(settings))
 }
