@@ -1,10 +1,7 @@
 use crate::{
     auth::{
         shoo::{ensure_user_for_identity, require_identity},
-        tokens::{
-            ensure_owner_setup_access, ensure_owner_setup_access_in_catalog,
-            generate_first_push_token, generate_git_push_token,
-        },
+        tokens::{ensure_owner_setup_access, generate_first_push_token, generate_git_push_token},
     },
     error::ApiError,
     http::responses::{RepoSetupResponse, repo_setup_response},
@@ -42,40 +39,24 @@ pub(crate) async fn regenerate_first_push_token(
 ) -> Result<Json<RepoSetupResponse>, ApiError> {
     let identity = require_identity(&state, &headers).await?;
     let user = ensure_user_for_identity(&state, &identity)?;
-    let repo_id = crate::domain::store::repo_id(&owner, &repo_name);
     let now = unix_now()?;
 
-    let setup = state.metadata.update(move |catalog| {
-        let repo = catalog
-            .repositories
-            .get(&repo_id)
-            .ok_or_else(|| ApiError::not_found(format!("repo {owner}/{repo_name} not found")))?;
-        ensure_owner_setup_access_in_catalog(catalog, repo, &user.id)?;
+    let (secret, token) = generate_first_push_token(&user.id)?;
+    let (push_secret, push_token) = generate_git_push_token(&user.id)?;
+    let repo = state
+        .metadata
+        .regenerate_repo_setup_tokens(&owner, &repo_name, &user.id, token, push_token)?;
 
-        let (secret, token) = generate_first_push_token(&user.id)?;
-        let (push_secret, push_token) = generate_git_push_token(&user.id)?;
-        {
-            let repo = catalog
-                .repositories
-                .get_mut(&repo_id)
-                .expect("repo was already checked");
-            repo.first_push_token = Some(token);
-            repo.git_push_token = Some(push_token);
-        }
-        let repo = catalog
-            .repositories
-            .get(&repo_id)
-            .expect("repo was already checked");
-        let setup = repo_setup_response(
+    let user_id = user.id.clone();
+    let setup = state.metadata.read(move |catalog| {
+        repo_setup_response(
             catalog,
-            repo,
-            &user.id,
+            &repo,
+            &user_id,
             now,
             Some(secret),
             Some(push_secret),
-        )?;
-
-        Ok(setup)
+        )
     })?;
 
     Ok(Json(setup))

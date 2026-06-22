@@ -57,6 +57,10 @@ impl From<PersistedFirstPushToken> for FirstPushToken {
     }
 }
 
+pub(crate) fn encode_first_push_token(token: &FirstPushToken) -> Result<Json, ApiError> {
+    encode_json(&PersistedFirstPushToken::from(token))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -168,8 +172,7 @@ pub(crate) mod repository {
                 first_push_token: repo
                     .first_push_token
                     .as_ref()
-                    .map(PersistedFirstPushToken::from)
-                    .map(|token| encode_json(&token))
+                    .map(encode_first_push_token)
                     .transpose()?,
                 git_push_token: repo.git_push_token.as_ref().map(encode_json).transpose()?,
                 pending_import: repo.pending_import.as_ref().map(encode_json).transpose()?,

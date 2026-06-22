@@ -269,25 +269,23 @@ pub(crate) fn repo_setup_response(
     push_secret: Option<String>,
 ) -> Result<RepoSetupResponse, ApiError> {
     ensure_owner_setup_access_in_catalog(catalog, repo, user_id)?;
-    let repo = repo_summary(catalog, repo, user_id)
+    let repo_summary = repo_summary(catalog, repo, user_id)
         .ok_or_else(|| ApiError::internal_message("setup repository is not readable"))?;
-    let token = catalog
-        .repositories
-        .get(&repo.id)
-        .and_then(|stored| stored.first_push_token.as_ref())
+    let token = repo
+        .first_push_token
+        .as_ref()
         .map(|stored_token| first_push_token_response(stored_token, now_unix, secret));
-    let push_token = catalog
-        .repositories
-        .get(&repo.id)
-        .and_then(|stored| stored.git_push_token.as_ref())
+    let push_token = repo
+        .git_push_token
+        .as_ref()
         .map(|stored_token| git_push_token_response(stored_token, push_secret));
 
     Ok(RepoSetupResponse {
-        git_remote_path: format!("/git/{}/{}", repo.owner_handle, repo.name),
+        git_remote_path: format!("/git/{}/{}", repo_summary.owner_handle, repo_summary.name),
         remote_name: "scope",
         push_branch: DEFAULT_GIT_BRANCH,
         push_enabled: true,
-        repo,
+        repo: repo_summary,
         token,
         push_token,
     })
