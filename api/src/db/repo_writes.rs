@@ -6,8 +6,8 @@ use crate::domain::{
     policy::{ScopePath, Visibility, VisibilityRule},
     projection::{AuthorVisibility, FileVisibilityChange, LogicalCommit, MixedCommitPolicy},
     store::{
-        CatalogError, FirstPushToken, GitPushToken, RepoPublicationState, RepoRole, RepoSettings,
-        RepoStorageCleanup, StoredRepository, repo_id,
+        CatalogError, FirstPushToken, GitPushToken, RepoPublicationState, RepoRecord, RepoRole,
+        RepoSettings, RepoStorageCleanup, StoredRepository, repo_id,
     },
 };
 use crate::error::ApiError;
@@ -325,6 +325,61 @@ impl MetadataStore {
                 repo.first_push_token = Some(secretless_first_push_token(first_push_token));
                 repo.git_push_token = Some(git_push_token);
                 Ok(repo.clone())
+            }),
+        }
+    }
+
+    pub(crate) fn publish_pending_import(
+        &self,
+        owner: &str,
+        name: &str,
+        user_id: &str,
+    ) -> Result<RepoRecord, ApiError> {
+        let repo_id = repo_id(owner, name);
+        let owner = owner.to_string();
+        let name = name.to_string();
+        let user_id = user_id.to_string();
+        match self.inner.as_ref() {
+            MetadataStoreInner::Postgres { db, runtime } => {
+                let db = Arc::clone(db);
+                run_api_db_on(runtime, async move {
+                    let tx = db.as_ref().begin().await.map_err(ApiError::internal)?;
+                    acquire_metadata_write_lock(&tx).await?;
+                    let repo = entities::repository::Entity::find_by_id(repo_id)
+                        .one(&tx)
+                        .await
+                        .map_err(ApiError::internal)?
+                        .ok_or_else(|| {
+                            ApiError::not_found(format!("repo {owner}/{name} not found"))
+                        })?;
+                    let mut repo = repository_from_model(&tx, repo).await?;
+                    ensure_repo_owner(&repo, &user_id)?;
+                    crate::state::promote_pending_import(&mut repo)?;
+
+                    let record = repo.record.clone();
+                    entities::repository::Model::from_domain(&repo)?
+                        .into_active_model()
+                        .update(&tx)
+                        .await
+                        .map_err(ApiError::internal)?;
+                    tx.commit().await.map_err(ApiError::internal)?;
+                    Ok(record)
+                })
+            }
+            #[cfg(test)]
+            MetadataStoreInner::Memory(_) => self.update(move |catalog| {
+                let repo = catalog
+                    .repositories
+                    .get(&repo_id)
+                    .ok_or_else(|| ApiError::not_found(format!("repo {owner}/{name} not found")))?;
+                ensure_repo_owner(repo, &user_id)?;
+
+                let repo = catalog
+                    .repositories
+                    .get_mut(&repo_id)
+                    .expect("repo was already checked");
+                crate::state::promote_pending_import(repo)?;
+                Ok(repo.record.clone())
             }),
         }
     }
