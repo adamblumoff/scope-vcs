@@ -14,6 +14,7 @@ import {
   Lock,
 } from 'lucide-react'
 import { useMemo, useState } from 'react'
+import { audienceLabel } from './review-labels'
 import {
   buildReviewTree,
   displayPath,
@@ -114,7 +115,6 @@ export function ReviewTree({
     </div>
   )
 }
-
 function ReviewTreeNodeRow({
   collapsed,
   depth,
@@ -332,7 +332,6 @@ function ReviewTreeNodeRow({
     </>
   )
 }
-
 function folderViewState(
   files: ReviewFile[],
   audience: ProjectionPreviewAudience | undefined,
@@ -359,8 +358,4 @@ function ViewState({
       {partialLabel ?? (visible ? 'Shown' : 'Hidden')}
     </Badge>
   )
-}
-
-function audienceLabel(audience: ProjectionPreviewAudience) {
-  return audience === 'owner' ? 'Owner' : 'Public'
 }

@@ -7,15 +7,15 @@ import type {
 import { AppHeader } from '@/components/app-header'
 import { CopyableCodeBlock } from '@/components/copyable-code-block'
 import { PageContent, PageHeader } from '@/components/page-header'
+import { RouteErrorPage } from '@/components/route-error-page'
 import { SectionRow, SectionRows } from '@/components/section-rows'
 import { VisibilityBadge } from '@/components/visibility-badge'
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
-import { Link, useNavigate, useRouter } from '@tanstack/react-router'
+import { useNavigate, useRouter } from '@tanstack/react-router'
 import {
   AlertCircle,
-  ArrowLeft,
   LoaderCircle,
   RefreshCw,
   Terminal,
@@ -340,27 +340,12 @@ function getServerSetupPushSecretSnapshot() {
 }
 
 export function SetupError({ error }: { error: unknown }) {
-  const message =
-    error instanceof Error ? error.message : 'Unexpected setup error'
-
   return (
-    <main className="min-h-screen bg-background px-4 py-8 text-foreground sm:px-6">
-      <div className="mx-auto max-w-[720px]">
-        <Alert variant="destructive">
-          <AlertCircle className="size-4" />
-          <AlertTitle>Setup failed to load</AlertTitle>
-          <AlertDescription className="space-y-4">
-            <p>{message}</p>
-            <Button asChild size="sm" variant="secondary">
-              <Link to="/">
-                <ArrowLeft className="size-3.5" />
-                <span>Repos</span>
-              </Link>
-            </Button>
-          </AlertDescription>
-        </Alert>
-      </div>
-    </main>
+    <RouteErrorPage
+      error={error}
+      fallbackMessage="Unexpected setup error"
+      title="Setup failed to load"
+    />
   )
 }
 

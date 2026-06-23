@@ -8,12 +8,13 @@ import type {
 } from '@/api/types'
 import { AppHeader } from '@/components/app-header'
 import { PageContent, PageHeader } from '@/components/page-header'
+import { RouteErrorPage } from '@/components/route-error-page'
 import { VisibilityBadge } from '@/components/visibility-badge'
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
-import { Link, useNavigate, useRouter } from '@tanstack/react-router'
-import { AlertCircle, ArrowLeft, LoaderCircle, Rocket, X } from 'lucide-react'
+import { useNavigate, useRouter } from '@tanstack/react-router'
+import { AlertCircle, LoaderCircle, Rocket, X } from 'lucide-react'
 import { useReducer } from 'react'
 import { ReviewVisibilityPanel } from './review-visibility-panel'
 
@@ -284,24 +285,11 @@ function reviewPageReducer(
 }
 
 export function ReviewError({ error }: { error: unknown }) {
-  const message =
-    error instanceof Error ? error.message : 'Unexpected review error'
-
   return (
-    <main className="min-h-screen bg-background px-4 py-8 text-foreground sm:px-6">
-      <div className="mx-auto max-w-[760px] border-y border-border py-6">
-        <Alert variant="destructive">
-          <AlertCircle className="size-4" />
-          <AlertTitle>Review unavailable</AlertTitle>
-          <AlertDescription>{message}</AlertDescription>
-        </Alert>
-        <Button asChild className="mt-5" size="sm" variant="secondary">
-          <Link to="/">
-            <ArrowLeft className="size-3.5" />
-            <span>Repos</span>
-          </Link>
-        </Button>
-      </div>
-    </main>
+    <RouteErrorPage
+      error={error}
+      fallbackMessage="Unexpected review error"
+      title="Review unavailable"
+    />
   )
 }

@@ -1,9 +1,10 @@
 import type { RepoSummary } from '@/api/types'
 import { lifecycleLabel } from '@/components/repo-lifecycle-label'
+import { RepoPrimaryActionButton } from '@/components/repo-primary-action'
 import { VisibilityBadge } from '@/components/visibility-badge'
 import { Button } from '@/components/ui/button'
 import { Link } from '@tanstack/react-router'
-import { ArrowRight, GitBranch, LogIn } from 'lucide-react'
+import { GitBranch, LogIn } from 'lucide-react'
 
 export function RepoList({
   onSignIn,
@@ -75,32 +76,10 @@ export function RepoList({
             <VisibilityBadge visibility={repo.default_visibility} />
           </div>
           <div className="flex items-center gap-2 lg:justify-end">
-            <RepoActions repo={repo} />
+            <RepoPrimaryActionButton repo={repo} />
           </div>
         </div>
       ))}
     </div>
-  )
-}
-
-function RepoActions({ repo }: { repo: RepoSummary }) {
-  const action =
-    repo.lifecycle_state === 'PendingFirstPush'
-      ? { label: 'Setup', to: '/repos/$owner/$repo/setup' as const }
-      : repo.lifecycle_state === 'PendingPublish' ||
-          (repo.lifecycle_state === 'Published' && repo.staged_update_pending)
-        ? { label: 'Review', to: '/repos/$owner/$repo/review' as const }
-        : { label: 'Open', to: '/repos/$owner/$repo' as const }
-
-  return (
-    <Button asChild size="sm" variant="secondary">
-      <Link
-        params={{ owner: repo.owner_handle, repo: repo.name }}
-        to={action.to}
-      >
-        <ArrowRight className="size-3.5" />
-        <span>{action.label}</span>
-      </Link>
-    </Button>
   )
 }
