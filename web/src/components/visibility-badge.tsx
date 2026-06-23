@@ -11,9 +11,9 @@ export function VisibilityBadge({
   return (
     <Badge
       className={cn(
-        visibility === 'Private' && 'border-amber-400 bg-amber-100 text-amber-900',
+        visibility === 'Private' && 'border-red-500/60 bg-red-500/15 text-red-300',
         visibility === 'Public' && 'border-green-400 bg-green-100 text-green-900',
-        visibility === 'Mixed' && 'border-blue-400 bg-blue-100 text-blue-900',
+        visibility === 'Mixed' && 'border-yellow-500/60 bg-yellow-500/15 text-yellow-300',
       )}
       variant="outline"
     >
