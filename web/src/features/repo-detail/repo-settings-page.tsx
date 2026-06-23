@@ -14,7 +14,7 @@ import { VisibilityBadge } from '@/components/visibility-badge'
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert'
 import { Badge } from '@/components/ui/badge'
 import { storeHomeFlash } from '@/lib/home-flash'
-import { useNavigate, useRouter } from '@tanstack/react-router'
+import { Link, useNavigate, useRouter } from '@tanstack/react-router'
 import { CheckCircle2 } from 'lucide-react'
 import { useReducer, useRef } from 'react'
 import { DeleteRepositoryDialog } from './delete-repository-dialog'
@@ -147,7 +147,15 @@ export function RepoSettingsPage({
               )}
             </>
           )}
-          description={() => <span className="font-mono">{repo.id}</span>}
+          description={() => (
+            <Link
+              className="font-mono underline underline-offset-4 hover:text-foreground"
+              params={{ owner: repo.owner_handle, repo: repo.name }}
+              to="/repos/$owner/$repo"
+            >
+              {repo.id}
+            </Link>
+          )}
           title="Settings"
         />
 
