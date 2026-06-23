@@ -22,10 +22,6 @@ const PIERRE_DIFF_OPTIONS = {
   themeType: 'dark',
 } as const
 
-const PIERRE_WORKER_URL = new URL(
-  '@pierre/diffs/worker/worker.js',
-  import.meta.url,
-)
 const PIERRE_WORKER_HIGHLIGHTER_OPTIONS = {} satisfies WorkerInitializationRenderOptions
 
 export function ReviewFileDiffDrawer({
@@ -147,7 +143,11 @@ function createPierreWorkerPoolOptions(): WorkerPoolOptions | null {
 
   return {
     poolSize: pierreWorkerPoolSize(),
-    workerFactory: () => new Worker(PIERRE_WORKER_URL, { type: 'module' }),
+    workerFactory: () =>
+      new Worker(
+        new URL('@pierre/diffs/worker/worker-portable.js', import.meta.url),
+        { type: 'module' },
+      ),
   }
 }
 
