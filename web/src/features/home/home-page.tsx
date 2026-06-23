@@ -8,12 +8,12 @@ import type {
 } from '@/api/types'
 import { AppHeader } from '@/components/app-header'
 import { PageContent, PageHeader } from '@/components/page-header'
+import { PageErrorAlert } from '@/components/page-error-alert'
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert'
 import { Button } from '@/components/ui/button'
 import { createScopeShooAuth } from '@/lib/auth'
 import { useNavigate, useRouter } from '@tanstack/react-router'
 import {
-  AlertCircle,
   CheckCircle2,
   LoaderCircle,
   LogOut,
@@ -162,19 +162,15 @@ export function HomePage({
         />
 
         {home.error && (
-          <Alert className="mt-6" variant="destructive">
-            <AlertCircle className="size-4" />
-            <AlertTitle>Repositories unavailable</AlertTitle>
-            <AlertDescription>{home.error}</AlertDescription>
-          </Alert>
+          <PageErrorAlert title="Repositories unavailable">
+            {home.error}
+          </PageErrorAlert>
         )}
 
         {createError && (
-          <Alert className="mt-6" variant="destructive">
-            <AlertCircle className="size-4" />
-            <AlertTitle>Repository creation failed</AlertTitle>
-            <AlertDescription>{createError}</AlertDescription>
-          </Alert>
+          <PageErrorAlert title="Repository creation failed">
+            {createError}
+          </PageErrorAlert>
         )}
 
         {flash && (
@@ -186,11 +182,9 @@ export function HomePage({
         )}
 
         {sessionError && (
-          <Alert className="mt-6" variant="destructive">
-            <AlertCircle className="size-4" />
-            <AlertTitle>Session update failed</AlertTitle>
-            <AlertDescription>{sessionError}</AlertDescription>
-          </Alert>
+          <PageErrorAlert title="Session update failed">
+            {sessionError}
+          </PageErrorAlert>
         )}
 
         <RepoList

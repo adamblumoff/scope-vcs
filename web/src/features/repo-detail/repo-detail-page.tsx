@@ -6,14 +6,14 @@ import type {
 } from '@/api/types'
 import { AppHeader } from '@/components/app-header'
 import { PageContent, PageHeader } from '@/components/page-header'
+import { PageErrorAlert } from '@/components/page-error-alert'
 import { RepoPrimaryActionButton } from '@/components/repo-primary-action'
 import { RouteErrorPage } from '@/components/route-error-page'
 import { VisibilityBadge } from '@/components/visibility-badge'
-import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Link, useRouter } from '@tanstack/react-router'
-import { AlertCircle, Settings } from 'lucide-react'
+import { Settings } from 'lucide-react'
 import { useReducer } from 'react'
 import { ReviewVisibilityPanel } from '../review/review-visibility-panel'
 import {
@@ -138,11 +138,9 @@ export function RepoDetailPage({
         />
 
         {error && (
-          <Alert className="mt-6" variant="destructive">
-            <AlertCircle className="size-4" />
-            <AlertTitle>Visibility update failed</AlertTitle>
-            <AlertDescription>{error}</AlertDescription>
-          </Alert>
+          <PageErrorAlert title="Visibility update failed">
+            {error}
+          </PageErrorAlert>
         )}
 
         <ReviewVisibilityPanel

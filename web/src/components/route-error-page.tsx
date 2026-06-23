@@ -1,7 +1,7 @@
-import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert'
+import { PageErrorAlert } from '@/components/page-error-alert'
 import { Button } from '@/components/ui/button'
 import { Link } from '@tanstack/react-router'
-import { AlertCircle, ArrowLeft } from 'lucide-react'
+import { ArrowLeft } from 'lucide-react'
 
 export function RouteErrorPage({
   error,
@@ -17,11 +17,9 @@ export function RouteErrorPage({
   return (
     <main className="min-h-screen bg-background px-4 py-8 text-foreground sm:px-6">
       <div className="mx-auto max-w-[760px] border-y border-border py-6">
-        <Alert variant="destructive">
-          <AlertCircle className="size-4" />
-          <AlertTitle>{title}</AlertTitle>
-          <AlertDescription>{message}</AlertDescription>
-        </Alert>
+        <PageErrorAlert className="mt-0" title={title}>
+          {message}
+        </PageErrorAlert>
         <Button asChild className="mt-5" size="sm" variant="secondary">
           <Link to="/">
             <ArrowLeft className="size-3.5" />

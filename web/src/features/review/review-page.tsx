@@ -8,43 +8,19 @@ import type {
 } from '@/api/types'
 import { AppHeader } from '@/components/app-header'
 import { PageContent, PageHeader } from '@/components/page-header'
+import { PageErrorAlert } from '@/components/page-error-alert'
 import { RouteErrorPage } from '@/components/route-error-page'
 import { VisibilityBadge } from '@/components/visibility-badge'
-import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { useNavigate, useRouter } from '@tanstack/react-router'
-import { AlertCircle, LoaderCircle, Rocket, X } from 'lucide-react'
+import { LoaderCircle, Rocket, X } from 'lucide-react'
 import { useReducer } from 'react'
+import {
+  initialReviewPageState,
+  reviewPageReducer,
+} from './review-page-state'
 import { ReviewVisibilityPanel } from './review-visibility-panel'
-
-type ReviewOverride = {
-  baseReview: RepoReview
-  review: RepoReview
-}
-
-type ReviewPageState = {
-  error: string | null
-  pendingKey: string | null
-  reviewOverride: ReviewOverride | null
-  runningAction: 'publish' | 'reject' | null
-}
-
-type ReviewPageAction =
-  | { type: 'actionFailed'; message: string }
-  | { type: 'publishStarted' }
-  | { type: 'rejectStarted' }
-  | { type: 'visibilityFailed'; message: string }
-  | { type: 'visibilityFinished' }
-  | { type: 'visibilityStarted'; pendingKey: string }
-  | { baseReview: RepoReview; review: RepoReview; type: 'visibilitySucceeded' }
-
-const initialReviewPageState: ReviewPageState = {
-  error: null,
-  pendingKey: null,
-  reviewOverride: null,
-  runningAction: null,
-}
 
 export function ReviewPage({
   applyStagedUpdate,
@@ -234,11 +210,9 @@ export function ReviewPage({
         />
 
         {error && (
-          <Alert className="mt-6" variant="destructive">
-            <AlertCircle className="size-4" />
-            <AlertTitle>Review update failed</AlertTitle>
-            <AlertDescription>{error}</AlertDescription>
-          </Alert>
+          <PageErrorAlert title="Review update failed">
+            {error}
+          </PageErrorAlert>
         )}
 
         <ReviewVisibilityPanel
@@ -254,34 +228,6 @@ export function ReviewPage({
       </PageContent>
     </main>
   )
-}
-
-function reviewPageReducer(
-  state: ReviewPageState,
-  action: ReviewPageAction,
-): ReviewPageState {
-  switch (action.type) {
-    case 'actionFailed':
-      return { ...state, error: action.message, runningAction: null }
-    case 'publishStarted':
-      return { ...state, error: null, runningAction: 'publish' }
-    case 'rejectStarted':
-      return { ...state, error: null, runningAction: 'reject' }
-    case 'visibilityFailed':
-      return { ...state, error: action.message }
-    case 'visibilityFinished':
-      return { ...state, pendingKey: null }
-    case 'visibilityStarted':
-      return { ...state, error: null, pendingKey: action.pendingKey }
-    case 'visibilitySucceeded':
-      return {
-        ...state,
-        reviewOverride: {
-          baseReview: action.baseReview,
-          review: action.review,
-        },
-      }
-  }
 }
 
 export function ReviewError({ error }: { error: unknown }) {

@@ -7,60 +7,23 @@ import type {
 import { AppHeader } from '@/components/app-header'
 import { CopyableCodeBlock } from '@/components/copyable-code-block'
 import { PageContent, PageHeader } from '@/components/page-header'
+import { PageErrorAlert } from '@/components/page-error-alert'
 import { RouteErrorPage } from '@/components/route-error-page'
 import { SectionRow, SectionRows } from '@/components/section-rows'
 import { VisibilityBadge } from '@/components/visibility-badge'
-import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { useNavigate, useRouter } from '@tanstack/react-router'
-import {
-  AlertCircle,
-  LoaderCircle,
-  RefreshCw,
-  Terminal,
-} from 'lucide-react'
+import { LoaderCircle, RefreshCw, Terminal } from 'lucide-react'
 import type { ReactNode } from 'react'
-import { useEffect, useReducer, useSyncExternalStore } from 'react'
+import { useCallback, useReducer } from 'react'
 import { setupCommand } from './commands'
 import {
-  rememberSetupPushSecret,
-  setupPushSecretSnapshot,
-} from './setup-token-cache'
-
-type SetupOverride = {
-  baseSetup: RepoSetupView
-  pushTokenSecret: string | null
-  setup: RepoSetupView
-}
-
-type SetupPageState = {
-  busy: boolean
-  error: string | null
-  progressError: string | null
-  progressState: SetupProgressState
-  setupOverride: SetupOverride | null
-}
-
-type SetupPageAction =
-  | { message: string; type: 'progressFailed' }
-  | { progressState: SetupProgressState; type: 'progressStateChanged' }
-  | { type: 'tokenFailed'; message: string }
-  | {
-      baseSetup: RepoSetupView
-      pushTokenSecret: string | null
-      setup: RepoSetupView
-      type: 'tokenSucceeded'
-    }
-  | { type: 'tokenStarted' }
-
-const initialSetupPageState: SetupPageState = {
-  busy: false,
-  error: null,
-  progressError: null,
-  progressState: 'waiting',
-  setupOverride: null,
-}
+  initialSetupPageState,
+  setupPageReducer,
+} from './setup-page-state'
+import { useSetupProgress } from './use-setup-progress'
+import { useRegenerateSetupToken, useSetupPushSecret } from './use-setup-token'
 
 export function SetupPage({
   initialSetup,
@@ -92,107 +55,50 @@ export function SetupPage({
   const setupCommandText = pushTokenSecret
     ? setupCommand(setup, pushTokenSecret)
     : null
-
-  useEffect(() => {
-    let cancelled = false
-    let inFlight = false
-
-    async function checkProgress() {
-      if (inFlight) {
-        return
-      }
-
-      inFlight = true
-      try {
-        const lifecycleState = await loadProgress(params)
-        if (cancelled) {
-          return
-        }
-
-        if (lifecycleState === 'PendingPublish') {
-          dispatch({
-            progressState: 'opening-review',
-            type: 'progressStateChanged',
-          })
-          await navigate({
-            params,
-            replace: true,
-            to: '/repos/$owner/$repo/review',
-          })
-        } else if (lifecycleState === 'Published') {
-          dispatch({
-            progressState: 'published',
-            type: 'progressStateChanged',
-          })
-          window.sessionStorage.setItem(
-            'scope:home-flash',
-            `${params.owner}/${params.repo} is published.`,
-          )
-          await navigate({ replace: true, to: '/' })
-          await router.invalidate()
-        } else {
-          dispatch({
-            progressState: 'waiting',
-            type: 'progressStateChanged',
-          })
-        }
-      } catch (progressError) {
-        if (!cancelled) {
-          dispatch({
-            message:
-              progressError instanceof Error
-                ? progressError.message
-                : 'setup progress check failed',
-            type: 'progressFailed',
-          })
-        }
-      } finally {
-        inFlight = false
-      }
-    }
-
-    const checkOnFocus = () => void checkProgress()
-    const checkOnVisibility = () => {
-      if (document.visibilityState === 'visible') {
-        void checkProgress()
-      }
-    }
-    const initialCheck = window.setTimeout(() => void checkProgress(), 250)
-    const interval = window.setInterval(() => void checkProgress(), 1000)
-    window.addEventListener('focus', checkOnFocus)
-    document.addEventListener('visibilitychange', checkOnVisibility)
-
-    return () => {
-      cancelled = true
-      window.clearTimeout(initialCheck)
-      window.clearInterval(interval)
-      window.removeEventListener('focus', checkOnFocus)
-      document.removeEventListener('visibilitychange', checkOnVisibility)
-    }
-  }, [loadProgress, navigate, params, router])
-
-  async function updateToken() {
-    dispatch({ type: 'tokenStarted' })
-    try {
-      const next = await regenerateToken(params)
-      const pushTokenSecret = next.push_token?.secret ?? null
-      rememberSetupPushSecret(next.repo.id, pushTokenSecret)
+  const updateToken = useRegenerateSetupToken({
+    dispatch,
+    initialSetup,
+    params,
+    regenerateToken,
+  })
+  const updateProgressState = useCallback(
+    (nextProgressState: SetupProgressState) =>
       dispatch({
-        baseSetup: initialSetup,
-        pushTokenSecret,
-        setup: next,
-        type: 'tokenSucceeded',
-      })
-    } catch (tokenError) {
-      dispatch({
-        message:
-          tokenError instanceof Error
-            ? tokenError.message
-            : 'setup command update failed',
-        type: 'tokenFailed',
-      })
-    }
-  }
+        progressState: nextProgressState,
+        type: 'progressStateChanged',
+      }),
+    [],
+  )
+  const updateProgressError = useCallback(
+    (message: string) => dispatch({ message, type: 'progressFailed' }),
+    [],
+  )
+  const openReview = useCallback(
+    () =>
+      navigate({
+        params,
+        replace: true,
+        to: '/repos/$owner/$repo/review',
+      }),
+    [navigate, params],
+  )
+  const returnHomeAfterPublish = useCallback(async () => {
+    window.sessionStorage.setItem(
+      'scope:home-flash',
+      `${params.owner}/${params.repo} is published.`,
+    )
+    await navigate({ replace: true, to: '/' })
+    await router.invalidate()
+  }, [navigate, params, router])
+
+  useSetupProgress({
+    loadProgress,
+    onProgressError: updateProgressError,
+    onProgressState: updateProgressState,
+    onPublished: returnHomeAfterPublish,
+    onReviewReady: openReview,
+    params,
+  })
 
   return (
     <main className="min-h-screen bg-background text-foreground">
@@ -218,19 +124,15 @@ export function SetupPage({
         />
 
         {error && (
-          <Alert className="mt-6" variant="destructive">
-            <AlertCircle className="size-4" />
-            <AlertTitle>Setup command update failed</AlertTitle>
-            <AlertDescription>{error}</AlertDescription>
-          </Alert>
+          <PageErrorAlert title="Setup command update failed">
+            {error}
+          </PageErrorAlert>
         )}
 
         {progressError && (
-          <Alert className="mt-6" variant="destructive">
-            <AlertCircle className="size-4" />
-            <AlertTitle>Setup status failed</AlertTitle>
-            <AlertDescription>{progressError}</AlertDescription>
-          </Alert>
+          <PageErrorAlert title="Setup status failed">
+            {progressError}
+          </PageErrorAlert>
         )}
 
         <SectionRows>
@@ -291,52 +193,6 @@ export function SetupPage({
       </PageContent>
     </main>
   )
-}
-
-function setupPageReducer(
-  state: SetupPageState,
-  action: SetupPageAction,
-): SetupPageState {
-  switch (action.type) {
-    case 'progressFailed':
-      return { ...state, progressError: action.message }
-    case 'progressStateChanged':
-      return {
-        ...state,
-        progressError: null,
-        progressState: action.progressState,
-      }
-    case 'tokenFailed':
-      return { ...state, busy: false, error: action.message }
-    case 'tokenStarted':
-      return { ...state, busy: true, error: null }
-    case 'tokenSucceeded':
-      return {
-        ...state,
-        busy: false,
-        setupOverride: {
-          baseSetup: action.baseSetup,
-          pushTokenSecret: action.pushTokenSecret,
-          setup: action.setup,
-        },
-      }
-  }
-}
-
-function useSetupPushSecret(repoId: string) {
-  return useSyncExternalStore(
-    subscribeSetupPushSecret,
-    () => setupPushSecretSnapshot(repoId),
-    getServerSetupPushSecretSnapshot,
-  )
-}
-
-function subscribeSetupPushSecret() {
-  return () => {}
-}
-
-function getServerSetupPushSecretSnapshot() {
-  return null
 }
 
 export function SetupError({ error }: { error: unknown }) {
