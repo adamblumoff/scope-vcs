@@ -214,8 +214,15 @@ fn db_metadata_store_round_trips_repo_metadata() {
     };
     assert_eq!(
         fresh_metadata
-            .update_repo_settings(TEST_REPO_OWNER, TEST_REPO_NAME, &owner_id, updated_settings)
-            .unwrap(),
+            .update_repo_settings(
+                TEST_REPO_OWNER,
+                TEST_REPO_NAME,
+                &owner_id,
+                updated_settings,
+                Visibility::Private,
+            )
+            .unwrap()
+            .settings,
         updated_settings
     );
     let row_repo = fresh_metadata
@@ -223,6 +230,19 @@ fn db_metadata_store_round_trips_repo_metadata() {
         .unwrap()
         .expect("row repo loads after settings update");
     assert_eq!(row_repo.settings, updated_settings);
+    assert_eq!(row_repo.record.default_visibility, Visibility::Private);
+    assert_eq!(
+        row_repo
+            .policy
+            .effective_visibility(&ScopePath::parse("/new.ts").unwrap()),
+        Visibility::Private
+    );
+    assert_eq!(
+        row_repo
+            .policy
+            .effective_visibility(&ScopePath::parse("/README.md").unwrap()),
+        Visibility::Public
+    );
 
     fresh_metadata
         .read(move |catalog| {
@@ -548,7 +568,7 @@ async fn settings_update_uses_verified_email_canonical_owner() {
                 )
                 .header(CONTENT_TYPE, "application/json")
                 .body(Body::from(
-                    r#"{"include_ignored_files":true,"review_pushes_before_applying":false}"#,
+                    r#"{"default_new_file_visibility":"Private","review_pushes_before_applying":false}"#,
                 ))
                 .unwrap(),
         )
@@ -557,14 +577,20 @@ async fn settings_update_uses_verified_email_canonical_owner() {
 
     assert_eq!(response.status(), StatusCode::OK);
     let body = response_json(response).await;
-    assert_eq!(body["include_ignored_files"], true);
+    assert_eq!(body["default_new_file_visibility"], "Private");
     assert_eq!(body["review_pushes_before_applying"], false);
 
     let catalog = lock_catalog(&state).unwrap();
     assert_eq!(catalog.users.len(), 1);
     let repo = catalog.repositories.get(TEST_REPO_ID).unwrap();
-    assert!(repo.settings.include_ignored_files);
+    assert!(!repo.settings.include_ignored_files);
     assert!(!repo.settings.review_pushes_before_applying);
+    assert_eq!(repo.record.default_visibility, Visibility::Private);
+    assert_eq!(
+        repo.policy
+            .effective_visibility(&ScopePath::parse("/new.ts").unwrap()),
+        Visibility::Private
+    );
 }
 
 #[tokio::test]

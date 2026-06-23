@@ -3,8 +3,6 @@ import { setupPushSecretKey } from '@/api/setup'
 import type {
   CreateRepoInput,
   CreateRepoResponse,
-  DeleteRepoInput,
-  DeleteRepoResponse,
   HomeState,
   RepoSummary,
 } from '@/api/types'
@@ -24,7 +22,6 @@ import {
 } from 'lucide-react'
 import { useReducer, useState, useSyncExternalStore } from 'react'
 import { CreateRepoForm } from './create-repo-form'
-import { DeleteRepositoryDialog } from './delete-repository-dialog'
 import { RepoList } from './repo-list'
 
 type ThemeMode = 'dark' | 'light'
@@ -38,35 +35,25 @@ type HomeOverride = {
 
 type HomeUiState = {
   createError: string | null
-  deleteError: string | null
-  deleteTarget: RepoSummary | null
   sessionError: string | null
 }
 
 type HomeUiAction =
   | { type: 'createFailed'; message: string }
   | { type: 'createStarted' }
-  | { type: 'deleteFailed'; message: string }
-  | { type: 'deleteStarted' }
-  | { type: 'deleteSucceeded' }
-  | { type: 'deleteTargetChanged'; repo: RepoSummary | null }
   | { type: 'sessionFailed'; message: string }
   | { type: 'sessionStarted' }
 
 const initialHomeUiState: HomeUiState = {
   createError: null,
-  deleteError: null,
-  deleteTarget: null,
   sessionError: null,
 }
 
 export function HomePage({
   createRepo,
-  deleteRepo,
   home,
 }: {
   createRepo: (input: CreateRepoInput) => Promise<CreateRepoResponse>
-  deleteRepo: (input: DeleteRepoInput) => Promise<DeleteRepoResponse>
   home: HomeState
 }) {
   const navigate = useNavigate()
@@ -80,7 +67,7 @@ export function HomePage({
   const [theme, setTheme] = useState<ThemeMode>('dark')
   const activeHome = homeOverride?.baseHome === home ? homeOverride : home
   const { account, repositories, signedIn } = activeHome
-  const { createError, deleteError, deleteTarget, sessionError } = uiState
+  const { createError, sessionError } = uiState
 
   function toggleTheme() {
     const nextTheme = theme === 'dark' ? 'light' : 'dark'
@@ -117,22 +104,6 @@ export function HomePage({
         type: 'createFailed',
       })
     }
-  }
-
-  async function deleteRepository(repo: RepoSummary) {
-    dispatchUi({ type: 'deleteStarted' })
-    const deleted = await deleteRepo({
-      owner: repo.owner_handle,
-      repo: repo.name,
-    })
-    setHomeOverride({
-      account,
-      baseHome: home,
-      repositories: repositories.filter((candidate) => candidate.id !== deleted.id),
-      signedIn,
-    })
-    await router.invalidate()
-    dispatchUi({ type: 'deleteSucceeded' })
   }
 
   async function signOut() {
@@ -218,14 +189,6 @@ export function HomePage({
           </Alert>
         )}
 
-        {deleteError && (
-          <Alert className="mt-6" variant="destructive">
-            <AlertCircle className="size-4" />
-            <AlertTitle>Repository deletion failed</AlertTitle>
-            <AlertDescription>{deleteError}</AlertDescription>
-          </Alert>
-        )}
-
         {sessionError && (
           <Alert className="mt-6" variant="destructive">
             <AlertCircle className="size-4" />
@@ -235,37 +198,11 @@ export function HomePage({
         )}
 
         <RepoList
-          onDelete={(repo) =>
-            dispatchUi({ repo, type: 'deleteTargetChanged' })
-          }
           onSignIn={signIn}
           repositories={repositories}
           signedIn={signedIn}
         />
       </section>
-
-      {deleteTarget && (
-        <DeleteRepositoryDialog
-          onCancel={() =>
-            dispatchUi({ repo: null, type: 'deleteTargetChanged' })
-          }
-          onConfirm={async (repo) => {
-            try {
-              await deleteRepository(repo)
-            } catch (error) {
-              dispatchUi({
-                message:
-                  error instanceof Error
-                    ? error.message
-                    : 'repository deletion failed',
-                type: 'deleteFailed',
-              })
-              throw error
-            }
-          }}
-          repo={deleteTarget}
-        />
-      )}
     </main>
   )
 }
@@ -273,17 +210,9 @@ export function HomePage({
 function homeUiReducer(state: HomeUiState, action: HomeUiAction): HomeUiState {
   switch (action.type) {
     case 'createStarted':
-      return { ...state, createError: null, deleteError: null }
+      return { ...state, createError: null }
     case 'createFailed':
       return { ...state, createError: action.message }
-    case 'deleteStarted':
-      return { ...state, deleteError: null }
-    case 'deleteFailed':
-      return { ...state, deleteError: action.message }
-    case 'deleteSucceeded':
-      return { ...state, deleteTarget: null }
-    case 'deleteTargetChanged':
-      return { ...state, deleteTarget: action.repo }
     case 'sessionStarted':
       return { ...state, sessionError: null }
     case 'sessionFailed':

@@ -2,7 +2,6 @@ import {
   loadRepoForRequest,
   parseRepoParams,
   parseSetRepoFileVisibilityInput,
-  regenerateGitCredentialForRequest,
   setRepoFileVisibilityForRequest,
 } from '@/api/repos'
 import type { RepoDetail, RepoParams, ReviewFile, Visibility } from '@/api/types'
@@ -22,10 +21,6 @@ const setRepoFileVisibility = createServerFn({ method: 'POST' })
   .validator(parseSetRepoFileVisibilityInput)
   .handler(({ data }) => setRepoFileVisibilityForRequest(data))
 
-const regenerateGitCredential = createServerFn({ method: 'POST' })
-  .validator(parseRepoParams)
-  .handler(({ data }) => regenerateGitCredentialForRequest(data))
-
 export const Route = createFileRoute('/repos/$owner/$repo')({
   loader: ({ params }) => loadRepo({ data: params }),
   errorComponent: RepoDetailError,
@@ -44,9 +39,6 @@ function RepoDetailRoute() {
   return (
     <RepoDetailPage
       detail={detail}
-      regenerateGitCredential={(params) =>
-        regenerateGitCredential({ data: params })
-      }
       setFileVisibility={(params, files, visibility) =>
         setRepoDetailVisibility(params, detail, files, visibility)
       }

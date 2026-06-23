@@ -3,15 +3,13 @@ import { lifecycleLabel } from '@/components/repo-lifecycle-label'
 import { VisibilityBadge } from '@/components/visibility-badge'
 import { Button } from '@/components/ui/button'
 import { Link } from '@tanstack/react-router'
-import { ArrowRight, LogIn, Trash2 } from 'lucide-react'
+import { ArrowRight, LogIn } from 'lucide-react'
 
 export function RepoList({
-  onDelete,
   onSignIn,
   repositories,
   signedIn,
 }: {
-  onDelete: (repo: RepoSummary) => void
   onSignIn: () => Promise<void>
   repositories: RepoSummary[]
   signedIn: boolean
@@ -91,18 +89,6 @@ export function RepoList({
                   <ArrowRight className="size-3.5" />
                   <span>Review</span>
                 </Link>
-              </Button>
-            )}
-            {repo.role === 'Owner' && (
-              <Button
-                aria-label={`Delete ${repo.id}`}
-                onClick={() => onDelete(repo)}
-                size="icon-sm"
-                title={`Delete ${repo.id}`}
-                type="button"
-                variant="secondary"
-              >
-                <Trash2 className="size-3.5" />
               </Button>
             )}
           </div>

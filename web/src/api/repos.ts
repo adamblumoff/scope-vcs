@@ -20,15 +20,20 @@ import type {
   RepoDetail,
   RepoFile,
   RepoParams,
+  RepoSettings,
   RepoSession,
   RepoSummary,
   SetRepoFileVisibilityInput,
+  UpdateRepoSettingsInput,
 } from './types'
 import { loadProjectionPreviewsForRequest } from './projection-preview'
 import { loadReviewForRequest } from './review'
 import { repoGitCredentialView } from './setup-view'
 
-export { parseSetRepoFileVisibilityInput } from './repo-inputs'
+export {
+  parseSetRepoFileVisibilityInput,
+  parseUpdateRepoSettingsInput,
+} from './repo-inputs'
 
 export async function loadHomeForRequest(): Promise<HomeState> {
   const idToken = await readRequestAuthToken()
@@ -148,6 +153,51 @@ export async function regenerateGitCredentialForRequest(
   )
 }
 
+export async function loadRepoSettingsForRequest(
+  data: RepoParams,
+): Promise<RepoSettings> {
+  const idToken = await readRequestAuthToken()
+  if (!idToken) {
+    throw new Error('Sign in as the repo owner to load repository settings.')
+  }
+
+  return loadJson<RepoSettings>(
+    `${getApiConnection()}/v1/repos/${data.owner}/${data.repo}/settings`,
+    { headers: authHeaders(idToken) },
+  )
+}
+
+export async function updateRepoSettingsForRequest(
+  data: UpdateRepoSettingsInput,
+): Promise<RepoSettings> {
+  const idToken = await readRequestAuthToken()
+  if (!idToken) {
+    throw new Error('Sign in as the repo owner to update repository settings.')
+  }
+
+  const response = await fetch(
+    `${getApiMutationConnection()}/v1/repos/${data.owner}/${data.repo}/settings`,
+    {
+      body: JSON.stringify({
+        default_new_file_visibility: data.default_new_file_visibility,
+        review_pushes_before_applying: data.review_pushes_before_applying,
+      }),
+      headers: {
+        ...authHeaders(idToken),
+        'content-type': 'application/json',
+      },
+      method: 'PATCH',
+    },
+  )
+  const payload = await response.json().catch(() => null)
+
+  if (!response.ok) {
+    throw new Error(payload?.error ?? `request failed: ${response.status}`)
+  }
+
+  return payload as RepoSettings
+}
+
 export async function loadRepoForRequest(data: RepoParams) {
   const idToken = await readRequestAuthToken()
   const api = getApiConnection()
@@ -240,11 +290,6 @@ export function parseCreateRepoInput(input: unknown): CreateRepoInput {
   }
 
   return { name, visibility }
-}
-
-export function parseDeleteRepoInput(input: unknown): DeleteRepoInput {
-  const params = parseRepoParams(input, 'Repository delete route is incomplete.')
-  return { owner: params.owner, repo: params.repo }
 }
 
 export function parseRepoParams(

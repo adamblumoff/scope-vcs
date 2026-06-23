@@ -43,7 +43,7 @@ export function CreateRepoForm({
         value={name}
       />
       <select
-        aria-label="Default visibility"
+        aria-label="Default new file visibility"
         className="h-9 rounded-md border border-input bg-background px-2 text-sm outline-none focus-visible:ring-2 focus-visible:ring-ring"
         disabled={busy}
         onChange={(event) => setVisibility(event.target.value as Visibility)}

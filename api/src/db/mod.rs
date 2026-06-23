@@ -1,4 +1,5 @@
 mod entities;
+mod repo_settings;
 mod repo_tokens;
 mod repo_writes;
 mod schema;

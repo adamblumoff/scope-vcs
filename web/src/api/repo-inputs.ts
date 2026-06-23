@@ -1,11 +1,10 @@
-import type { SetRepoFileVisibilityInput } from './types'
+import type { RepoParams, SetRepoFileVisibilityInput, UpdateRepoSettingsInput } from './types'
 
 export function parseSetRepoFileVisibilityInput(
   input: unknown,
 ): SetRepoFileVisibilityInput {
   const data = input as Partial<SetRepoFileVisibilityInput> | null
-  const owner = typeof data?.owner === 'string' ? data.owner.trim() : ''
-  const repo = typeof data?.repo === 'string' ? data.repo.trim() : ''
+  const { owner, repo } = parseRepoParamsInput(data)
   const paths = Array.isArray(data?.paths)
     ? data.paths.flatMap((path) => {
         if (typeof path !== 'string') {
@@ -27,4 +26,32 @@ export function parseSetRepoFileVisibilityInput(
   }
 
   return { owner, repo, paths, visibility }
+}
+
+export function parseUpdateRepoSettingsInput(
+  input: unknown,
+): UpdateRepoSettingsInput {
+  const data = input as Partial<UpdateRepoSettingsInput> | null
+  const { owner, repo } = parseRepoParamsInput(data)
+  const defaultNewFileVisibility =
+    data?.default_new_file_visibility === 'Public' ? 'Public' : 'Private'
+
+  if (!owner || !repo) {
+    throw new Error('Repository settings route is incomplete.')
+  }
+
+  return {
+    owner,
+    repo,
+    default_new_file_visibility: defaultNewFileVisibility,
+    review_pushes_before_applying:
+      data?.review_pushes_before_applying !== false,
+  }
+}
+
+function parseRepoParamsInput(input: Partial<RepoParams> | null) {
+  return {
+    owner: typeof input?.owner === 'string' ? input.owner.trim() : '',
+    repo: typeof input?.repo === 'string' ? input.repo.trim() : '',
+  }
 }
