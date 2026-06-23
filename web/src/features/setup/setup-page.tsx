@@ -7,6 +7,7 @@ import type {
 import { AppHeader } from '@/components/app-header'
 import { CopyableCodeBlock } from '@/components/copyable-code-block'
 import { PageContent, PageHeader } from '@/components/page-header'
+import { SectionRow, SectionRows } from '@/components/section-rows'
 import { VisibilityBadge } from '@/components/visibility-badge'
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert'
 import { Badge } from '@/components/ui/badge'
@@ -232,11 +233,12 @@ export function SetupPage({
           </Alert>
         )}
 
-        <section className="mt-8 border-y border-border">
-          <div className="grid gap-4 py-5 md:grid-cols-[180px_minmax(0,1fr)]">
-            <SectionLabel icon={<Terminal className="size-4" />}>
-              Setup command
-            </SectionLabel>
+        <SectionRows>
+          <SectionRow
+            columns="compact"
+            icon={<Terminal className="size-4" />}
+            title="Setup command"
+          >
             <div className="min-w-0 space-y-2">
               {!setup.push_enabled && (
                 <p className="text-sm leading-5 text-muted-foreground">
@@ -284,8 +286,8 @@ export function SetupPage({
                 </div>
               )}
             </div>
-          </div>
-        </section>
+          </SectionRow>
+        </SectionRows>
       </PageContent>
     </main>
   )
@@ -359,21 +361,6 @@ export function SetupError({ error }: { error: unknown }) {
         </Alert>
       </div>
     </main>
-  )
-}
-
-function SectionLabel({
-  children,
-  icon,
-}: {
-  children: ReactNode
-  icon: ReactNode
-}) {
-  return (
-    <div className="flex items-center gap-2 text-sm font-semibold leading-5">
-      {icon}
-      <span>{children}</span>
-    </div>
   )
 }
 

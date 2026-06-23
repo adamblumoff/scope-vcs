@@ -4,8 +4,8 @@ import type {
   Visibility,
 } from '@/api/types'
 import { CopyableCodeBlock } from '@/components/copyable-code-block'
+import { SectionRow, SectionRows } from '@/components/section-rows'
 import { Button } from '@/components/ui/button'
-import { Separator } from '@/components/ui/separator'
 import { Switch } from '@/components/ui/switch'
 import { ToggleGroup, ToggleGroupItem } from '@/components/ui/toggle-group'
 import {
@@ -18,7 +18,6 @@ import {
   RefreshCw,
   Trash2,
 } from 'lucide-react'
-import type { ReactNode } from 'react'
 import { gitCredentialApproveCommand } from '../setup/commands'
 import type { SettingKey } from './repo-settings-state'
 
@@ -44,8 +43,8 @@ export function SettingsSections({
   settingsSaving: boolean
 }) {
   return (
-    <div className="mt-8 border-y border-border">
-      <SettingsRow
+    <SectionRows>
+      <SectionRow
         description="Future Git pushes either stop in review or apply directly to the live repo."
         icon={<GitBranch className="size-4" />}
         title="Push workflow"
@@ -72,10 +71,9 @@ export function SettingsSections({
             <LoaderCircle className="size-3.5 animate-spin text-muted-foreground" />
           )}
         </div>
-      </SettingsRow>
-      <Separator />
+      </SectionRow>
 
-      <SettingsRow
+      <SectionRow
         description="New paths inherit this visibility unless you set a more specific file or folder rule."
         icon={<FilePlus2 className="size-4" />}
         title="Default new file visibility"
@@ -93,10 +91,9 @@ export function SettingsSections({
             )
           }
         />
-      </SettingsRow>
-      <Separator />
+      </SectionRow>
 
-      <SettingsRow
+      <SectionRow
         description="Refresh the credential your local Git client uses when pushing to the Scope remote."
         icon={<KeyRound className="size-4" />}
         title="Git credentials"
@@ -132,10 +129,9 @@ export function SettingsSections({
             />
           )}
         </div>
-      </SettingsRow>
-      <Separator />
+      </SectionRow>
 
-      <SettingsRow
+      <SectionRow
         description="Permanently removes repo metadata, pending review state, and stored Git data from Scope."
         icon={<Trash2 className="size-4" />}
         title="Danger zone"
@@ -149,35 +145,8 @@ export function SettingsSections({
           <Trash2 className="size-3.5" />
           <span>Delete repository</span>
         </Button>
-      </SettingsRow>
-    </div>
-  )
-}
-
-function SettingsRow({
-  children,
-  description,
-  icon,
-  title,
-}: {
-  children: ReactNode
-  description: string
-  icon: ReactNode
-  title: string
-}) {
-  return (
-    <section className="grid gap-4 py-5 md:grid-cols-[240px_minmax(0,1fr)]">
-      <div className="min-w-0">
-        <div className="flex items-center gap-2 text-sm font-semibold leading-5">
-          {icon}
-          <span>{title}</span>
-        </div>
-        <p className="mt-1 text-sm leading-5 text-muted-foreground">
-          {description}
-        </p>
-      </div>
-      <div className="min-w-0 md:pt-0.5">{children}</div>
-    </section>
+      </SectionRow>
+    </SectionRows>
   )
 }
 
