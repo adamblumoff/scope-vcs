@@ -2,6 +2,7 @@ mod entities;
 mod locks;
 mod metadata_reset;
 mod repo_cleanup;
+mod repo_effects;
 mod repo_settings;
 mod repo_tokens;
 mod repo_writes;

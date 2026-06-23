@@ -1,8 +1,6 @@
-use crate::domain::policy::{Policy, Principal, PrincipalKind, ScopePath, Visibility};
-use crate::domain::projection::{FileChange, Projection, project_graph};
-use crate::domain::store::{
-    PendingImport, RepoPublicationState, StoredRepository, pending_import_scope_path,
-};
+use crate::domain::policy::{Principal, PrincipalKind, ScopePath, Visibility};
+use crate::domain::projection::{Projection, project_graph};
+use crate::domain::store::{RepoPublicationState, StoredRepository, pending_import_scope_path};
 use crate::{
     error::ApiError,
     object_store::{ObjectStore, source_blob_text},
@@ -254,23 +252,6 @@ pub(crate) fn files_for_visibility_update(
     } else {
         projected_files(repo, principal)
     }
-}
-
-pub(crate) fn pending_import_changes(policy: &Policy, pending: &PendingImport) -> Vec<FileChange> {
-    pending
-        .files
-        .iter()
-        .map(|file| {
-            let path = pending_scope_path(&file.path)
-                .expect("pending import paths were validated before persistence");
-            FileChange {
-                visibility: policy.effective_visibility(&path),
-                path,
-                old_content: None,
-                new_content: Some(file.blob.clone()),
-            }
-        })
-        .collect()
 }
 
 pub(crate) fn pending_scope_path(path: &str) -> Result<ScopePath, ApiError> {

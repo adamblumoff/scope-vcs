@@ -1,7 +1,5 @@
 use crate::domain::policy::{Principal, ScopePath};
-use crate::domain::projection::{
-    AuthorVisibility, LogicalCommit, MixedCommitPolicy, project_graph,
-};
+use crate::domain::projection::project_graph;
 use crate::domain::store::{
     AppCatalog, RepoPublicationState, RepoRole, SourceBlob, StoredRepository, repo_id,
 };
@@ -10,7 +8,6 @@ use crate::{
     config::{SCOPE_OPERATOR_TOKEN_ENV, data_dir, git_repo_root, non_empty_env},
     db::MetadataStore,
     error::ApiError,
-    http::responses::pending_import_changes,
     object_store::{EncryptedObjectStore, ObjectStore, S3ObjectStore},
     persistence::ensure_private_dir,
 };
@@ -213,54 +210,6 @@ pub(crate) fn ensure_owner(
     } else {
         Err(ApiError::forbidden("owner role required"))
     }
-}
-
-pub(crate) fn ensure_pending_publish(repo: &StoredRepository) -> Result<(), ApiError> {
-    if repo.record.publication_state != RepoPublicationState::PendingPublish {
-        return Err(ApiError::bad_request("repo is not pending publish"));
-    }
-    if repo.pending_import.is_none() {
-        return Err(ApiError::bad_request(
-            "repo has no pending import to publish",
-        ));
-    }
-    Ok(())
-}
-
-pub(crate) fn promote_pending_import(repo: &mut StoredRepository) -> Result<(), ApiError> {
-    ensure_pending_publish(repo)?;
-    let pending = repo
-        .pending_import
-        .take()
-        .ok_or_else(|| ApiError::bad_request("repo has no pending import to publish"))?;
-    let changes = pending_import_changes(&repo.policy, &pending);
-    let parent_ids = repo
-        .graph
-        .commits
-        .last()
-        .map(|commit| vec![commit.id.clone()])
-        .unwrap_or_default();
-    let logical_id = format!(
-        "rv_git_{}",
-        pending
-            .head_oid
-            .get(..12)
-            .unwrap_or(pending.head_oid.as_str())
-    );
-    repo.graph.commits.push(LogicalCommit {
-        id: logical_id,
-        parent_ids,
-        author_id: repo.record.owner_user_id.clone(),
-        author_visibility: AuthorVisibility::Visible,
-        message: format!("Import pushed {}", pending.default_branch),
-        mixed_policy: MixedCommitPolicy::SyntheticPublicCommit,
-        changes,
-        visibility_changes: Vec::new(),
-    });
-    repo.git_snapshot = Some(pending.git_snapshot);
-    repo.record.publication_state = RepoPublicationState::Published;
-    repo.first_push_token = None;
-    Ok(())
 }
 
 pub(crate) fn role_for_principal(

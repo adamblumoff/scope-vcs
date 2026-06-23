@@ -1,12 +1,66 @@
 use super::{
     policy::{ScopePath, Visibility, VisibilityRule},
-    projection::{AuthorVisibility, FileVisibilityChange, LogicalCommit, MixedCommitPolicy},
+    projection::{
+        AuthorVisibility, FileChange, FileVisibilityChange, LogicalCommit, MixedCommitPolicy,
+    },
     store::{
-        CatalogError, FirstPushToken, RepoPublicationState, RepoRole, RepoSettings, SourceBlob,
-        StagedRepoUpdate, StoredRepository, pending_import_scope_path,
+        CatalogError, FirstPushToken, PendingImport, RepoPublicationState, RepoRecord, RepoRole,
+        RepoSettings, RepoStorageCleanup, SourceBlob, StagedRepoUpdate, StoredRepository,
+        pending_import_scope_path,
     },
 };
 use crate::error::ApiError;
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) enum RepoEffect {
+    DeleteRepoStorage(RepoStorageCleanup),
+    DeleteSourceBlobs(Vec<SourceBlob>),
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub(crate) struct RepoEffects {
+    effects: Vec<RepoEffect>,
+}
+
+impl RepoEffects {
+    pub(crate) fn is_empty(&self) -> bool {
+        self.effects.is_empty()
+    }
+
+    pub(crate) fn iter(&self) -> impl Iterator<Item = &RepoEffect> {
+        self.effects.iter()
+    }
+
+    fn delete_repo_storage(&mut self, cleanup: RepoStorageCleanup) {
+        self.effects.push(RepoEffect::DeleteRepoStorage(cleanup));
+    }
+
+    fn delete_source_blobs(&mut self, blobs: impl IntoIterator<Item = SourceBlob>) {
+        let blobs = blobs.into_iter().collect::<Vec<_>>();
+        if !blobs.is_empty() {
+            self.effects.push(RepoEffect::DeleteSourceBlobs(blobs));
+        }
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct RepoMutation<T> {
+    pub(crate) result: T,
+    pub(crate) effects: RepoEffects,
+}
+
+impl<T> RepoMutation<T> {
+    fn new(result: T) -> Self {
+        Self {
+            result,
+            effects: RepoEffects::default(),
+        }
+    }
+
+    fn with_effects(result: T, effects: RepoEffects) -> Self {
+        Self { result, effects }
+    }
+}
 
 pub(crate) fn ensure_repo_owner(repo: &StoredRepository, user_id: &str) -> Result<(), ApiError> {
     let role = repo
@@ -78,7 +132,7 @@ pub(crate) fn apply_repo_file_visibility(
     user_id: &str,
     update_paths: &[ScopePath],
     visibility: Visibility,
-) -> Result<(), ApiError> {
+) -> Result<RepoMutation<()>, ApiError> {
     if update_paths.is_empty() {
         return Err(ApiError::bad_request("at least one file path is required"));
     }
@@ -137,7 +191,7 @@ pub(crate) fn apply_repo_file_visibility(
             visibility_changes,
         });
     }
-    Ok(())
+    Ok(RepoMutation::new(()))
 }
 
 pub(crate) fn update_staged_file_visibility_for_repo(
@@ -145,7 +199,7 @@ pub(crate) fn update_staged_file_visibility_for_repo(
     user_id: &str,
     update_paths: &[ScopePath],
     visibility: Visibility,
-) -> Result<StagedRepoUpdate, ApiError> {
+) -> Result<RepoMutation<StagedRepoUpdate>, ApiError> {
     if update_paths.is_empty() {
         return Err(ApiError::bad_request("at least one file path is required"));
     }
@@ -165,34 +219,41 @@ pub(crate) fn update_staged_file_visibility_for_repo(
     }
     crate::git::import::validate_staged_update_policy(repo, &staged_update)?;
     repo.staged_update = Some(staged_update.clone());
-    Ok(staged_update)
+    Ok(RepoMutation::new(staged_update))
 }
 
 pub(crate) fn apply_staged_update_for_repo(
     repo: &mut StoredRepository,
     user_id: &str,
-) -> Result<StagedRepoUpdate, ApiError> {
+) -> Result<RepoMutation<StagedRepoUpdate>, ApiError> {
     ensure_repo_owner(repo, user_id)?;
+    let old_snapshot = repo.git_snapshot.clone();
     let staged_update = repo
         .staged_update
         .take()
         .ok_or_else(|| ApiError::not_found("no staged update pending"))?;
     let applied = staged_update.clone();
     crate::git::import::apply_receive_pack_update(repo, staged_update)?;
-    Ok(applied)
+    let mut effects = RepoEffects::default();
+    effects.delete_source_blobs(old_snapshot);
+    Ok(RepoMutation::with_effects(applied, effects))
 }
 
 pub(crate) fn reject_staged_update_for_repo(
     repo: &mut StoredRepository,
     user_id: &str,
-) -> Result<StagedRepoUpdate, ApiError> {
+) -> Result<RepoMutation<StagedRepoUpdate>, ApiError> {
     ensure_repo_owner(repo, user_id)?;
-    repo.staged_update
+    let rejected = repo
+        .staged_update
         .take()
-        .ok_or_else(|| ApiError::not_found("no staged update pending"))
+        .ok_or_else(|| ApiError::not_found("no staged update pending"))?;
+    let mut effects = RepoEffects::default();
+    effects.delete_source_blobs(staged_update_blobs(&rejected));
+    Ok(RepoMutation::with_effects(rejected, effects))
 }
 
-pub(crate) fn rejected_staged_update_blobs(staged_update: &StagedRepoUpdate) -> Vec<SourceBlob> {
+fn staged_update_blobs(staged_update: &StagedRepoUpdate) -> Vec<SourceBlob> {
     std::iter::once(staged_update.git_snapshot.clone())
         .chain(
             staged_update
@@ -208,14 +269,88 @@ pub(crate) fn apply_repo_settings(
     user_id: &str,
     settings: RepoSettings,
     default_visibility: Visibility,
-) -> Result<(), ApiError> {
+) -> Result<RepoMutation<()>, ApiError> {
     ensure_repo_owner(repo, user_id)?;
     repo.settings = settings;
     if repo.record.default_visibility != default_visibility {
         preserve_existing_visibility_for_new_default(repo, default_visibility)?;
     }
     repo.record.default_visibility = default_visibility;
+    Ok(RepoMutation::new(()))
+}
+
+pub(crate) fn publish_pending_import_for_repo(
+    repo: &mut StoredRepository,
+    user_id: &str,
+) -> Result<RepoMutation<RepoRecord>, ApiError> {
+    ensure_repo_owner(repo, user_id)?;
+    promote_pending_import(repo)
+}
+
+pub(crate) fn promote_pending_import(
+    repo: &mut StoredRepository,
+) -> Result<RepoMutation<RepoRecord>, ApiError> {
+    ensure_pending_publish(repo)?;
+    let pending = repo
+        .pending_import
+        .take()
+        .ok_or_else(|| ApiError::bad_request("repo has no pending import to publish"))?;
+    let changes = pending_import_changes(&repo.policy, &pending);
+    let parent_ids = repo
+        .graph
+        .commits
+        .last()
+        .map(|commit| vec![commit.id.clone()])
+        .unwrap_or_default();
+    let logical_id = format!(
+        "rv_git_{}",
+        pending
+            .head_oid
+            .get(..12)
+            .unwrap_or(pending.head_oid.as_str())
+    );
+    repo.graph.commits.push(LogicalCommit {
+        id: logical_id,
+        parent_ids,
+        author_id: repo.record.owner_user_id.clone(),
+        author_visibility: AuthorVisibility::Visible,
+        message: format!("Import pushed {}", pending.default_branch),
+        mixed_policy: MixedCommitPolicy::SyntheticPublicCommit,
+        changes,
+        visibility_changes: Vec::new(),
+    });
+    repo.git_snapshot = Some(pending.git_snapshot);
+    repo.record.publication_state = RepoPublicationState::Published;
+    repo.first_push_token = None;
+    Ok(RepoMutation::new(repo.record.clone()))
+}
+
+pub(crate) fn ensure_pending_publish(repo: &StoredRepository) -> Result<(), ApiError> {
+    if repo.record.publication_state != RepoPublicationState::PendingPublish {
+        return Err(ApiError::bad_request("repo is not pending publish"));
+    }
+    if repo.pending_import.is_none() {
+        return Err(ApiError::bad_request(
+            "repo has no pending import to publish",
+        ));
+    }
     Ok(())
+}
+
+pub(crate) fn delete_repo_for_repo(
+    repo: &StoredRepository,
+    user_id: &str,
+    owner: &str,
+    name: &str,
+) -> Result<RepoMutation<String>, ApiError> {
+    ensure_repo_delete_owner(repo, user_id, owner, name)?;
+    let mut effects = RepoEffects::default();
+    effects.delete_repo_storage(RepoStorageCleanup {
+        owner_handle: owner.to_string(),
+        repo_name: name.to_string(),
+    });
+    effects.delete_source_blobs(repo.source_blobs());
+    Ok(RepoMutation::with_effects(repo.record.id.clone(), effects))
 }
 
 fn preserve_existing_visibility_for_new_default(
@@ -259,4 +394,133 @@ fn existing_repo_paths(repo: &StoredRepository) -> Result<Vec<ScopePath>, ApiErr
     }
 
     Ok(repo.live_tree().into_keys().collect())
+}
+
+fn pending_import_changes(
+    policy: &super::policy::Policy,
+    pending: &PendingImport,
+) -> Vec<FileChange> {
+    pending
+        .files
+        .iter()
+        .map(|file| {
+            let path = pending_import_scope_path(&file.path)
+                .expect("pending import paths were validated before persistence");
+            FileChange {
+                visibility: policy.effective_visibility(&path),
+                path,
+                old_content: None,
+                new_content: Some(file.blob.clone()),
+            }
+        })
+        .collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::domain::{
+        policy::{ScopePath, Visibility},
+        store::{
+            AccountAccess, StagedFileChange, StagedFileChangeKind, StagedRepoUpdate, UserAccount,
+        },
+    };
+
+    #[test]
+    fn rejecting_staged_update_returns_source_blob_cleanup_effects() {
+        let owner = test_owner();
+        let mut repo = StoredRepository::new(&owner, "repo", Visibility::Private).unwrap();
+        let staged_snapshot = source_blob("staged-snapshot");
+        let staged_blob = source_blob("staged-file");
+        repo.staged_update = Some(StagedRepoUpdate {
+            id: "staged".to_string(),
+            branch: "main".to_string(),
+            base_live_commit_id: None,
+            author_id: owner.id.clone(),
+            message: "Push".to_string(),
+            git_snapshot: staged_snapshot.clone(),
+            changes: vec![StagedFileChange {
+                path: ScopePath::parse("/src/lib.rs").unwrap(),
+                old_content: None,
+                new_content: Some(staged_blob.clone()),
+                visibility: Visibility::Private,
+                kind: StagedFileChangeKind::Added,
+            }],
+        });
+
+        let mutation = reject_staged_update_for_repo(&mut repo, &owner.id).unwrap();
+
+        assert!(repo.staged_update.is_none());
+        assert_eq!(mutation.result.id, "staged");
+        assert_eq!(
+            source_blob_effect_keys(&mutation.effects),
+            vec![staged_snapshot.object_key, staged_blob.object_key]
+        );
+    }
+
+    #[test]
+    fn deleting_repo_returns_storage_and_source_blob_cleanup_effects() {
+        let owner = test_owner();
+        let mut repo = StoredRepository::new(&owner, "repo", Visibility::Private).unwrap();
+        let snapshot = source_blob("live-snapshot");
+        repo.git_snapshot = Some(snapshot.clone());
+
+        let mutation =
+            delete_repo_for_repo(&repo, &owner.id, &owner.handle, &repo.record.name).unwrap();
+
+        assert_eq!(mutation.result, repo.record.id);
+        assert_eq!(
+            repo_storage_effects(&mutation.effects),
+            vec![RepoStorageCleanup {
+                owner_handle: owner.handle,
+                repo_name: "repo".to_string(),
+            }]
+        );
+        assert_eq!(
+            source_blob_effect_keys(&mutation.effects),
+            vec![snapshot.object_key]
+        );
+    }
+
+    fn repo_storage_effects(effects: &RepoEffects) -> Vec<RepoStorageCleanup> {
+        effects
+            .iter()
+            .filter_map(|effect| match effect {
+                RepoEffect::DeleteRepoStorage(cleanup) => Some(cleanup.clone()),
+                RepoEffect::DeleteSourceBlobs(_) => None,
+            })
+            .collect()
+    }
+
+    fn source_blob_effect_keys(effects: &RepoEffects) -> Vec<String> {
+        effects
+            .iter()
+            .flat_map(|effect| match effect {
+                RepoEffect::DeleteRepoStorage(_) => Vec::new(),
+                RepoEffect::DeleteSourceBlobs(blobs) => blobs
+                    .iter()
+                    .map(|blob| blob.object_key.clone())
+                    .collect::<Vec<_>>(),
+            })
+            .collect()
+    }
+
+    fn test_owner() -> UserAccount {
+        UserAccount {
+            id: "owner-id".to_string(),
+            handle: "owner".to_string(),
+            email: "owner@example.com".to_string(),
+            email_verified: true,
+            access: AccountAccess::Member,
+        }
+    }
+
+    fn source_blob(label: &str) -> SourceBlob {
+        SourceBlob {
+            object_key: format!("objects/{label}"),
+            sha256: format!("sha256-{label}"),
+            git_oid: format!("oid-{label}"),
+            size_bytes: label.len() as u64,
+        }
+    }
 }

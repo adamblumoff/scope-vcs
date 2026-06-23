@@ -1,22 +1,18 @@
+#[cfg(test)]
+use super::repo_effects::apply_repo_effects;
 use super::{
     METADATA_LOCK_KEY, MetadataStore, MetadataStoreInner, acquire_metadata_write_lock, decode_json,
     encode_json, entities,
-    repo_cleanup::{
-        load_pending_repo_storage_deletions, load_pending_source_blob_deletions,
-        queue_pending_repo_storage_deletion, queue_pending_source_blob_deletions,
-        remove_matching_pending_repo_storage_cleanup, save_pending_repo_storage_deletions,
-        save_pending_source_blob_deletions,
-    },
-    repository_from_model,
-    repository_rows::save_repository_row,
-    run_api_db_on,
+    repo_cleanup::remove_matching_pending_repo_storage_cleanup,
+    repo_effects::{save_repo_effects, save_repo_mutation},
+    repository_from_model, run_api_db_on,
 };
 use crate::domain::{
     policy::{ScopePath, Visibility},
     repo_actions::{
         apply_repo_file_visibility, apply_staged_update_for_repo, catalog_error,
-        ensure_repo_delete_owner, ensure_repo_owner, ensure_repo_setup_access,
-        hidden_repo_not_found, reject_staged_update_for_repo, rejected_staged_update_blobs,
+        delete_repo_for_repo, ensure_repo_setup_access, hidden_repo_not_found,
+        publish_pending_import_for_repo, reject_staged_update_for_repo,
         secretless_first_push_token, update_staged_file_visibility_for_repo,
     },
     store::{
@@ -178,21 +174,9 @@ impl MetadataStore {
                             ApiError::not_found(format!("repo {owner}/{name} not found"))
                         })?;
                     let mut repo = repository_from_model(&tx, repo).await?;
-                    apply_repo_file_visibility(&mut repo, &user_id, &update_paths, visibility)?;
-
-                    entities::repository::Entity::update_many()
-                        .filter(entities::repository::Column::Id.eq(repo_id))
-                        .col_expr(
-                            entities::repository::Column::Policy,
-                            Expr::value(encode_json(&repo.policy)?),
-                        )
-                        .col_expr(
-                            entities::repository::Column::Graph,
-                            Expr::value(encode_json(&repo.graph)?),
-                        )
-                        .exec(&tx)
-                        .await
-                        .map_err(ApiError::internal)?;
+                    let mutation =
+                        apply_repo_file_visibility(&mut repo, &user_id, &update_paths, visibility)?;
+                    save_repo_mutation(&tx, &repo, &mutation.effects).await?;
                     tx.commit().await.map_err(ApiError::internal)?;
                     Ok(repo)
                 })
@@ -203,8 +187,11 @@ impl MetadataStore {
                     .repositories
                     .get_mut(&repo_id)
                     .ok_or_else(|| ApiError::not_found(format!("repo {owner}/{name} not found")))?;
-                apply_repo_file_visibility(repo, &user_id, &update_paths, visibility)?;
-                Ok(repo.clone())
+                let mutation =
+                    apply_repo_file_visibility(repo, &user_id, &update_paths, visibility)?;
+                let updated = repo.clone();
+                apply_repo_effects(catalog, mutation.effects);
+                Ok(updated)
             }),
         }
     }
@@ -295,29 +282,22 @@ impl MetadataStore {
                             ApiError::not_found(format!("repo {owner}/{name} not found"))
                         })?;
                     let mut repo = repository_from_model(&tx, repo).await?;
-                    ensure_repo_owner(&repo, &user_id)?;
-                    crate::state::promote_pending_import(&mut repo)?;
+                    let mutation = publish_pending_import_for_repo(&mut repo, &user_id)?;
 
-                    let record = repo.record.clone();
-                    save_repository_row(&tx, &repo).await?;
+                    save_repo_mutation(&tx, &repo, &mutation.effects).await?;
                     tx.commit().await.map_err(ApiError::internal)?;
-                    Ok(record)
+                    Ok(mutation.result)
                 })
             }
             #[cfg(test)]
             MetadataStoreInner::Memory(_) => self.update(move |catalog| {
                 let repo = catalog
                     .repositories
-                    .get(&repo_id)
-                    .ok_or_else(|| ApiError::not_found(format!("repo {owner}/{name} not found")))?;
-                ensure_repo_owner(repo, &user_id)?;
-
-                let repo = catalog
-                    .repositories
                     .get_mut(&repo_id)
-                    .expect("repo was already checked");
-                crate::state::promote_pending_import(repo)?;
-                Ok(repo.record.clone())
+                    .ok_or_else(|| ApiError::not_found(format!("repo {owner}/{name} not found")))?;
+                let mutation = publish_pending_import_for_repo(repo, &user_id)?;
+                apply_repo_effects(catalog, mutation.effects);
+                Ok(mutation.result)
             }),
         }
     }
@@ -348,16 +328,15 @@ impl MetadataStore {
                             ApiError::not_found(format!("repo {owner}/{name} not found"))
                         })?;
                     let mut repo = repository_from_model(&tx, repo).await?;
-                    let updated = update_staged_file_visibility_for_repo(
+                    let mutation = update_staged_file_visibility_for_repo(
                         &mut repo,
                         &user_id,
                         &update_paths,
                         visibility,
                     )?;
-
-                    save_repository_row(&tx, &repo).await?;
+                    save_repo_mutation(&tx, &repo, &mutation.effects).await?;
                     tx.commit().await.map_err(ApiError::internal)?;
-                    Ok(updated)
+                    Ok(mutation.result)
                 })
             }
             #[cfg(test)]
@@ -366,7 +345,14 @@ impl MetadataStore {
                     .repositories
                     .get_mut(&repo_id)
                     .ok_or_else(|| ApiError::not_found(format!("repo {owner}/{name} not found")))?;
-                update_staged_file_visibility_for_repo(repo, &user_id, &update_paths, visibility)
+                let mutation = update_staged_file_visibility_for_repo(
+                    repo,
+                    &user_id,
+                    &update_paths,
+                    visibility,
+                )?;
+                apply_repo_effects(catalog, mutation.effects);
+                Ok(mutation.result)
             }),
         }
     }
@@ -395,19 +381,10 @@ impl MetadataStore {
                             ApiError::not_found(format!("repo {owner}/{name} not found"))
                         })?;
                     let mut repo = repository_from_model(&tx, repo).await?;
-                    let old_snapshot = repo.git_snapshot.clone();
-                    let applied = apply_staged_update_for_repo(&mut repo, &user_id)?;
-                    let mut pending_source_blob_deletions =
-                        load_pending_source_blob_deletions(&tx).await?;
-                    queue_pending_source_blob_deletions(
-                        &mut pending_source_blob_deletions,
-                        old_snapshot,
-                    );
-
-                    save_repository_row(&tx, &repo).await?;
-                    save_pending_source_blob_deletions(&tx, &pending_source_blob_deletions).await?;
+                    let mutation = apply_staged_update_for_repo(&mut repo, &user_id)?;
+                    save_repo_mutation(&tx, &repo, &mutation.effects).await?;
                     tx.commit().await.map_err(ApiError::internal)?;
-                    Ok(applied)
+                    Ok(mutation.result)
                 })
             }
             #[cfg(test)]
@@ -416,13 +393,9 @@ impl MetadataStore {
                     .repositories
                     .get_mut(&repo_id)
                     .ok_or_else(|| ApiError::not_found(format!("repo {owner}/{name} not found")))?;
-                let old_snapshot = repo.git_snapshot.clone();
-                let applied = apply_staged_update_for_repo(repo, &user_id)?;
-                queue_pending_source_blob_deletions(
-                    &mut catalog.pending_source_blob_deletions,
-                    old_snapshot,
-                );
-                Ok(applied)
+                let mutation = apply_staged_update_for_repo(repo, &user_id)?;
+                apply_repo_effects(catalog, mutation.effects);
+                Ok(mutation.result)
             }),
         }
     }
@@ -451,19 +424,10 @@ impl MetadataStore {
                             ApiError::not_found(format!("repo {owner}/{name} not found"))
                         })?;
                     let mut repo = repository_from_model(&tx, repo).await?;
-                    let rejected = reject_staged_update_for_repo(&mut repo, &user_id)?;
-                    let rejected_blobs = rejected_staged_update_blobs(&rejected);
-                    let mut pending_source_blob_deletions =
-                        load_pending_source_blob_deletions(&tx).await?;
-                    queue_pending_source_blob_deletions(
-                        &mut pending_source_blob_deletions,
-                        rejected_blobs,
-                    );
-
-                    save_repository_row(&tx, &repo).await?;
-                    save_pending_source_blob_deletions(&tx, &pending_source_blob_deletions).await?;
+                    let mutation = reject_staged_update_for_repo(&mut repo, &user_id)?;
+                    save_repo_mutation(&tx, &repo, &mutation.effects).await?;
                     tx.commit().await.map_err(ApiError::internal)?;
-                    Ok(rejected)
+                    Ok(mutation.result)
                 })
             }
             #[cfg(test)]
@@ -472,12 +436,9 @@ impl MetadataStore {
                     .repositories
                     .get_mut(&repo_id)
                     .ok_or_else(|| ApiError::not_found(format!("repo {owner}/{name} not found")))?;
-                let rejected = reject_staged_update_for_repo(repo, &user_id)?;
-                queue_pending_source_blob_deletions(
-                    &mut catalog.pending_source_blob_deletions,
-                    rejected_staged_update_blobs(&rejected),
-                );
-                Ok(rejected)
+                let mutation = reject_staged_update_for_repo(repo, &user_id)?;
+                apply_repo_effects(catalog, mutation.effects);
+                Ok(mutation.result)
             }),
         }
     }
@@ -504,12 +465,7 @@ impl MetadataStore {
                         .map_err(ApiError::internal)?
                         .ok_or_else(|| hidden_repo_not_found(&owner, &name))?;
                     let repo = repository_from_model(&tx, repo).await?;
-                    ensure_repo_delete_owner(&repo, &user_id, &owner, &name)?;
-                    let source_blobs = repo.source_blobs();
-                    let cleanup = RepoStorageCleanup {
-                        owner_handle: owner,
-                        repo_name: name,
-                    };
+                    let mutation = delete_repo_for_repo(&repo, &user_id, &owner, &name)?;
 
                     entities::membership::Entity::delete_many()
                         .filter(entities::membership::Column::RepoId.eq(repo_id.clone()))
@@ -521,23 +477,9 @@ impl MetadataStore {
                         .await
                         .map_err(ApiError::internal)?;
 
-                    let mut pending_repo_storage_deletions =
-                        load_pending_repo_storage_deletions(&tx).await?;
-                    queue_pending_repo_storage_deletion(
-                        &mut pending_repo_storage_deletions,
-                        cleanup,
-                    );
-                    let mut pending_source_blob_deletions =
-                        load_pending_source_blob_deletions(&tx).await?;
-                    queue_pending_source_blob_deletions(
-                        &mut pending_source_blob_deletions,
-                        source_blobs,
-                    );
-                    save_pending_repo_storage_deletions(&tx, &pending_repo_storage_deletions)
-                        .await?;
-                    save_pending_source_blob_deletions(&tx, &pending_source_blob_deletions).await?;
+                    save_repo_effects(&tx, &mutation.effects).await?;
                     tx.commit().await.map_err(ApiError::internal)?;
-                    Ok(repo_id)
+                    Ok(mutation.result)
                 })
             }
             #[cfg(test)]
@@ -546,24 +488,14 @@ impl MetadataStore {
                     .repositories
                     .get(&repo_id)
                     .ok_or_else(|| hidden_repo_not_found(&owner, &name))?;
-                ensure_repo_delete_owner(repo, &user_id, &owner, &name)?;
+                let mutation = delete_repo_for_repo(repo, &user_id, &owner, &name)?;
 
-                let repo = catalog
+                catalog
                     .repositories
                     .remove(&repo_id)
                     .expect("repo was already checked");
-                queue_pending_repo_storage_deletion(
-                    &mut catalog.pending_repo_storage_deletions,
-                    RepoStorageCleanup {
-                        owner_handle: owner,
-                        repo_name: name,
-                    },
-                );
-                queue_pending_source_blob_deletions(
-                    &mut catalog.pending_source_blob_deletions,
-                    repo.source_blobs(),
-                );
-                Ok(repo_id)
+                apply_repo_effects(catalog, mutation.effects);
+                Ok(mutation.result)
             }),
         }
     }

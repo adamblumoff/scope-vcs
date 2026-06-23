@@ -1,11 +1,12 @@
 use crate::{
     domain::{
         policy::Principal,
+        repo_actions::promote_pending_import,
         store::{RepoPublicationState, RepoRole, StoredRepository},
     },
     error::ApiError,
     http::responses::{ProjectionPreviewAudience, ProjectionPreviewSource},
-    state::{AppState, ensure_owner, ensure_repo_read, promote_pending_import, role_for_principal},
+    state::{AppState, ensure_owner, ensure_repo_read, role_for_principal},
 };
 
 pub(crate) fn ensure_projection_preview_access(

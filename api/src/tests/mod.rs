@@ -6,6 +6,7 @@ use crate::domain::projection::{
     AuthorVisibility, FileChange, FileVisibilityChange, LogicalCommit, MixedCommitPolicy,
     SourceGraph, project_graph,
 };
+use crate::domain::repo_actions::promote_pending_import;
 use crate::domain::store::{
     AccountAccess, AppCatalog, FirstPushToken, FirstPushTokenStatus, GitPushToken, PendingImport,
     PendingImportFile, RepoMembership, RepoPublicationState, RepoRecord, RepoRole, RepoSettings,

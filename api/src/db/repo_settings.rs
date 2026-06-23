@@ -1,6 +1,8 @@
+#[cfg(test)]
+use super::repo_effects::apply_repo_effects;
 use super::{
     MetadataStore, MetadataStoreInner, acquire_metadata_write_lock, entities,
-    repository_from_model, repository_rows::save_repository_row, run_api_db_on,
+    repo_effects::save_repo_mutation, repository_from_model, run_api_db_on,
 };
 use crate::domain::store::{RepoSettings, StoredRepository, repo_id};
 use crate::domain::{policy::Visibility, repo_actions::apply_repo_settings};
@@ -36,8 +38,9 @@ impl MetadataStore {
                         })?;
                     let mut repo = repository_from_model(&tx, row).await?;
 
-                    apply_repo_settings(&mut repo, &user_id, settings, default_visibility)?;
-                    save_repository_row(&tx, &repo).await?;
+                    let mutation =
+                        apply_repo_settings(&mut repo, &user_id, settings, default_visibility)?;
+                    save_repo_mutation(&tx, &repo, &mutation.effects).await?;
                     tx.commit().await.map_err(ApiError::internal)?;
                     Ok(repo)
                 })
@@ -48,8 +51,10 @@ impl MetadataStore {
                     .repositories
                     .get_mut(&repo_id)
                     .ok_or_else(|| ApiError::not_found(format!("repo {owner}/{name} not found")))?;
-                apply_repo_settings(repo, &user_id, settings, default_visibility)?;
-                Ok(repo.clone())
+                let mutation = apply_repo_settings(repo, &user_id, settings, default_visibility)?;
+                let updated = repo.clone();
+                apply_repo_effects(catalog, mutation.effects);
+                Ok(updated)
             }),
         }
     }
