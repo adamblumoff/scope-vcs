@@ -14,6 +14,13 @@ type RepoPrimaryAction = {
   to: RepoActionRoute
 }
 
+export type RepoAttentionAction = {
+  icon: 'publish-review' | 'setup' | 'update-review'
+  label: string
+  primaryLabel: string
+  to: RepoActionRoute
+}
+
 type RepoPrimaryActionOptions = {
   includeOpen?: boolean
   requireOwner?: boolean
@@ -30,18 +37,48 @@ export function repoPrimaryAction(
     return null
   }
 
-  if (repo.lifecycle_state === 'PendingFirstPush') {
-    return { label: 'Setup', to: '/repos/$owner/$repo/setup' }
-  }
-
-  if (
-    repo.lifecycle_state === 'PendingPublish' ||
-    (repo.lifecycle_state === 'Published' && repo.staged_update_pending)
-  ) {
-    return { label: 'Review', to: '/repos/$owner/$repo/review' }
+  const attentionAction = repoAttentionAction(repo)
+  if (attentionAction) {
+    return {
+      label: attentionAction.primaryLabel,
+      to: attentionAction.to,
+    }
   }
 
   return includeOpen ? { label: 'Open', to: '/repos/$owner/$repo' } : null
+}
+
+export function repoAttentionAction(
+  repo: RepoSummary,
+): RepoAttentionAction | null {
+  if (repo.lifecycle_state === 'PendingFirstPush') {
+    return {
+      icon: 'setup',
+      label: 'Setup needed',
+      primaryLabel: 'Setup',
+      to: '/repos/$owner/$repo/setup',
+    }
+  }
+
+  if (repo.lifecycle_state === 'PendingPublish') {
+    return {
+      icon: 'publish-review',
+      label: 'Publish review needed',
+      primaryLabel: 'Review',
+      to: '/repos/$owner/$repo/review',
+    }
+  }
+
+  if (repo.lifecycle_state === 'Published' && repo.staged_update_pending) {
+    return {
+      icon: 'update-review',
+      label: 'Update review needed',
+      primaryLabel: 'Review',
+      to: '/repos/$owner/$repo/review',
+    }
+  }
+
+  return null
 }
 
 export function RepoPrimaryActionButton({
