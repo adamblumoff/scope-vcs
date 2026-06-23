@@ -16,7 +16,7 @@ export function RepoList({
 }) {
   if (repositories.length === 0) {
     return (
-      <div className="mt-6 border-y border-border py-9">
+      <div className="mt-6 border-t border-border py-9">
         <div className="mx-auto flex max-w-[520px] flex-col items-center gap-3 text-center text-sm">
           <div className="flex size-9 items-center justify-center rounded-md border border-border text-muted-foreground">
             <GitBranch className="size-4" />
@@ -39,8 +39,8 @@ export function RepoList({
   }
 
   return (
-    <div className="mt-6 divide-y divide-border border-y border-border">
-      <div className="hidden grid-cols-[minmax(0,1.4fr)_130px_110px_auto] gap-3 px-2 py-2 text-xs font-medium leading-4 text-muted-foreground lg:grid">
+    <div className="mt-6 border-t border-border">
+      <div className="hidden grid-cols-[minmax(0,1fr)_160px_120px_96px] items-center gap-4 border-b border-border px-2 py-2 text-xs font-medium leading-4 text-muted-foreground lg:grid">
         <div>Repository</div>
         <div>Status</div>
         <div>Visibility</div>
@@ -48,7 +48,7 @@ export function RepoList({
       </div>
       {repositories.map((repo) => (
         <div
-          className="grid gap-3 px-2 py-3 text-sm transition-colors hover:bg-muted/40 lg:grid-cols-[minmax(0,1.4fr)_130px_110px_auto] lg:items-center"
+          className="grid gap-3 border-b border-border px-2 py-3 text-sm transition-colors last:border-b-0 hover:bg-muted/40 lg:min-h-[60px] lg:grid-cols-[minmax(0,1fr)_160px_120px_96px] lg:items-center lg:gap-4"
           key={repo.id}
         >
           <div className="min-w-0">
@@ -68,10 +68,10 @@ export function RepoList({
               {repo.role && <span>{repo.role}</span>}
             </div>
           </div>
-          <div className="hidden text-xs leading-4 text-muted-foreground lg:block">
+          <div className="hidden min-h-8 items-center text-xs leading-4 text-muted-foreground lg:flex">
             {lifecycleLabel(repo.lifecycle_state)}
           </div>
-          <div className="hidden lg:block">
+          <div className="hidden min-h-8 items-center lg:flex">
             <VisibilityBadge visibility={repo.default_visibility} />
           </div>
           <div className="flex items-center gap-2 lg:justify-end">

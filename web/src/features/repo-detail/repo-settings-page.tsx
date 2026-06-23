@@ -13,9 +13,8 @@ import { PageContent, PageHeader } from '@/components/page-header'
 import { VisibilityBadge } from '@/components/visibility-badge'
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert'
 import { Badge } from '@/components/ui/badge'
-import { Button } from '@/components/ui/button'
-import { Link, useNavigate, useRouter } from '@tanstack/react-router'
-import { AlertCircle, ArrowLeft, CheckCircle2 } from 'lucide-react'
+import { useNavigate, useRouter } from '@tanstack/react-router'
+import { AlertCircle, CheckCircle2 } from 'lucide-react'
 import { useReducer, useRef } from 'react'
 import { DeleteRepositoryDialog } from './delete-repository-dialog'
 import { SettingsSections } from './repo-settings-sections'
@@ -140,14 +139,6 @@ export function RepoSettingsPage({
 
       <PageContent>
         <PageHeader
-          actions={() => (
-            <Button asChild size="sm" variant="secondary">
-              <Link params={params} to="/repos/$owner/$repo">
-                <ArrowLeft className="size-3.5" />
-                <span>Repo</span>
-              </Link>
-            </Button>
-          )}
           badges={() => (
             <>
               <Badge variant="outline">{repo.lifecycle_state}</Badge>

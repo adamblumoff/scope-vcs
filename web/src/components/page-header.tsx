@@ -37,7 +37,7 @@ export function PageHeader({
   const renderedDescription = renderSlot(description)
 
   return (
-    <div className="flex flex-col gap-4 border-b border-border pb-6 lg:flex-row lg:items-end lg:justify-between">
+    <div className="flex flex-col gap-4 lg:flex-row lg:items-end lg:justify-between">
       <div className="min-w-0">
         {badges && (
           <div className="mb-3 flex flex-wrap items-center gap-2">

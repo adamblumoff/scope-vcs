@@ -26,6 +26,7 @@ import {
 
 const REVIEW_TREE_COLUMNS = 'sm:grid-cols-[minmax(0,1fr)_110px_120px_120px]'
 const PUBLIC_TREE_COLUMNS = 'sm:grid-cols-[minmax(0,1fr)]'
+const VISIBILITY_ACTION_CLASS = 'w-[88px] justify-start'
 export type ReviewTreeVariant = 'workflow' | 'public'
 
 export function ReviewTree({
@@ -190,6 +191,7 @@ function ReviewTreeNodeRow({
               <div className="flex justify-end">
                 <Button
                   aria-label={`Set ${displayPath(node.path)} ${nextVisibility.toLowerCase()}`}
+                  className={VISIBILITY_ACTION_CLASS}
                   disabled={disabled || busy || pendingKey !== null}
                   onClick={() =>
                     onSetVisibility([node.file], nextVisibility, node.key)
@@ -284,6 +286,7 @@ function ReviewTreeNodeRow({
               <div className="flex justify-end">
                 <Button
                   aria-label={`Set ${node.path} ${nextVisibility.toLowerCase()}`}
+                  className={VISIBILITY_ACTION_CLASS}
                   disabled={disabled || busy || pendingKey !== null}
                   onClick={() =>
                     onSetVisibility(node.files, nextVisibility, node.key)

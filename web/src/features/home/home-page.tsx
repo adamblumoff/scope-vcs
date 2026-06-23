@@ -16,7 +16,6 @@ import {
   AlertCircle,
   CheckCircle2,
   LoaderCircle,
-  LogIn,
   LogOut,
   Moon,
   Sun,
@@ -143,7 +142,7 @@ export function HomePage({
       <AppHeader
         action={
           <div className="flex min-w-0 items-center gap-2">
-            <AuthControls signedIn={signedIn} signOut={signOut} />
+            {signedIn && <AuthControls signOut={signOut} />}
             <ThemeToggle theme={theme} toggleTheme={toggleTheme} />
           </div>
         }
@@ -260,27 +259,18 @@ function getServerHomeFlashSnapshot() {
 }
 
 function AuthControls({
-  signedIn,
   signOut,
 }: {
-  signedIn: boolean
   signOut: () => Promise<void>
 }) {
   const [busy, setBusy] = useState(false)
-  const title = signedIn ? 'Sign out' : 'Sign in with Shoo'
+  const title = 'Sign out'
 
-  async function toggleAuth() {
+  async function signOutUser() {
     setBusy(true)
-
-    if (signedIn) {
-      await signOut()
-      setBusy(false)
-      return
-    }
-
     try {
-      await signIn()
-    } catch {
+      await signOut()
+    } finally {
       setBusy(false)
     }
   }
@@ -289,22 +279,18 @@ function AuthControls({
     <Button
       aria-label={title}
       disabled={busy}
-      onClick={() => void toggleAuth()}
+      onClick={() => void signOutUser()}
       size="sm"
       title={title}
       type="button"
-      variant={signedIn ? 'secondary' : 'default'}
+      variant="secondary"
     >
       {busy ? (
         <LoaderCircle className="size-3.5 animate-spin" />
-      ) : signedIn ? (
-        <LogOut className="size-3.5" />
       ) : (
-        <LogIn className="size-3.5" />
+        <LogOut className="size-3.5" />
       )}
-      {!busy && (
-        <span className="hidden sm:inline">{signedIn ? 'Sign out' : 'Sign in'}</span>
-      )}
+      {!busy && <span className="hidden sm:inline">Sign out</span>}
     </Button>
   )
 }
