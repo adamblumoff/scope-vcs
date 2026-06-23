@@ -154,6 +154,13 @@ export type DeleteRepoResponse = {
   deleted: boolean
 }
 
+export type RepoSettings = {
+  default_new_file_visibility: Visibility
+  review_pushes_before_applying: boolean
+}
+
+export type UpdateRepoSettingsInput = RepoParams & RepoSettings
+
 export type PendingImportPayload = {
   publication_state: RepoPublicationState
   default_visibility: Visibility

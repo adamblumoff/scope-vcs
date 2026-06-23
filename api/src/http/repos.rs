@@ -337,7 +337,7 @@ pub(crate) async fn get_settings(
     State(state): State<AppState>,
     headers: HeaderMap,
     Path((owner, repo_name)): Path<(String, String)>,
-) -> Result<Json<RepoSettings>, ApiError> {
+) -> Result<Json<RepoSettingsResponse>, ApiError> {
     let repo = find_repo(&state, &owner, &repo_name)?;
     let identity = http_identity(&state, &headers).await?;
     let principal = principal_for_repo(&state, &repo, identity.as_ref())?;
@@ -347,7 +347,10 @@ pub(crate) async fn get_settings(
         return Err(ApiError::forbidden("owner role required"));
     }
 
-    Ok(Json(repo.settings))
+    Ok(Json(RepoSettingsResponse {
+        default_new_file_visibility: repo.record.default_visibility,
+        review_pushes_before_applying: repo.settings.review_pushes_before_applying,
+    }))
 }
 
 pub(crate) async fn update_settings(
@@ -355,7 +358,7 @@ pub(crate) async fn update_settings(
     headers: HeaderMap,
     Path((owner, repo_name)): Path<(String, String)>,
     Json(input): Json<UpdateRepoSettingsRequest>,
-) -> Result<Json<RepoSettings>, ApiError> {
+) -> Result<Json<RepoSettingsResponse>, ApiError> {
     let identity = http_identity(&state, &headers).await?;
     let user = identity
         .as_ref()
@@ -372,15 +375,19 @@ pub(crate) async fn update_settings(
         .as_ref()
         .map(|user| user.id.clone())
         .ok_or_else(|| ApiError::forbidden("owner role required"))?;
-    let settings = state.metadata.update_repo_settings(
+    let updated = state.metadata.update_repo_settings(
         &owner,
         &repo_name,
         &user_id,
         RepoSettings {
-            include_ignored_files: input.include_ignored_files,
+            include_ignored_files: repo.settings.include_ignored_files,
             review_pushes_before_applying: input.review_pushes_before_applying,
         },
+        input.default_new_file_visibility,
     )?;
 
-    Ok(Json(settings))
+    Ok(Json(RepoSettingsResponse {
+        default_new_file_visibility: updated.record.default_visibility,
+        review_pushes_before_applying: updated.settings.review_pushes_before_applying,
+    }))
 }

@@ -1,14 +1,12 @@
 import type {
   RepoDetail,
   RepoFile,
-  RepoGitCredentialView,
   RepoParams,
   RepoSummary,
   ReviewFile,
   Visibility,
 } from '@/api/types'
 import { AppHeader } from '@/components/app-header'
-import { CopyableCodeBlock } from '@/components/copyable-code-block'
 import { VisibilityBadge } from '@/components/visibility-badge'
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert'
 import { Badge } from '@/components/ui/badge'
@@ -18,11 +16,10 @@ import {
   AlertCircle,
   ArrowLeft,
   ArrowRight,
-  RefreshCw,
+  Settings,
 } from 'lucide-react'
 import { useReducer } from 'react'
 import { ReviewVisibilityPanel } from '../review/review-visibility-panel'
-import { gitCredentialApproveCommand } from '../setup/commands'
 
 type FilesOverride = {
   baseFiles: ReviewFile[]
@@ -41,9 +38,6 @@ type VisibilityError = {
 
 type RepoDetailPageState = {
   filesOverride: FilesOverride | null
-  gitCredential: RepoGitCredentialView | null
-  gitCredentialError: string | null
-  gitCredentialPending: boolean
   pendingVisibility: PendingVisibility | null
   visibilityError: VisibilityError | null
 }
@@ -53,15 +47,9 @@ type RepoDetailPageAction =
   | { baseFiles: ReviewFile[]; files: ReviewFile[]; type: 'visibilitySucceeded' }
   | { baseFiles: ReviewFile[]; message: string; type: 'visibilityFailed' }
   | { type: 'visibilityFinished' }
-  | { type: 'gitCredentialStarted' }
-  | { credential: RepoGitCredentialView; type: 'gitCredentialSucceeded' }
-  | { message: string; type: 'gitCredentialFailed' }
 
 const initialRepoDetailPageState: RepoDetailPageState = {
   filesOverride: null,
-  gitCredential: null,
-  gitCredentialError: null,
-  gitCredentialPending: false,
   pendingVisibility: null,
   visibilityError: null,
 }
@@ -69,12 +57,10 @@ const initialRepoDetailPageState: RepoDetailPageState = {
 export function RepoDetailPage({
   detail,
   params,
-  regenerateGitCredential,
   setFileVisibility,
 }: {
   detail: RepoDetail
   params: RepoParams
-  regenerateGitCredential: (params: RepoParams) => Promise<RepoGitCredentialView>
   setFileVisibility: (
     params: RepoParams,
     files: ReviewFile[],
@@ -89,9 +75,6 @@ export function RepoDetailPage({
   )
   const {
     filesOverride,
-    gitCredential,
-    gitCredentialError,
-    gitCredentialPending,
     pendingVisibility,
     visibilityError,
   } = state
@@ -144,20 +127,6 @@ export function RepoDetailPage({
     }
   }
 
-  async function resetGitCredential() {
-    dispatch({ type: 'gitCredentialStarted' })
-    try {
-      const updated = await regenerateGitCredential(params)
-      dispatch({ credential: updated, type: 'gitCredentialSucceeded' })
-    } catch (error) {
-      dispatch({
-        message:
-          error instanceof Error ? error.message : 'Git credential reset failed',
-        type: 'gitCredentialFailed',
-      })
-    }
-  }
-
   return (
     <main className="min-h-screen bg-background text-foreground">
       <AppHeader subtitle={repo.id} subtitleClassName="font-mono" />
@@ -181,18 +150,15 @@ export function RepoDetailPage({
           </div>
           <div className="flex shrink-0 flex-wrap items-center gap-2">
             <RepoAction repo={repo} />
-            {repo.role === 'Owner' && repo.lifecycle_state === 'Published' && (
-              <Button
-                disabled={gitCredentialPending}
-                onClick={() => void resetGitCredential()}
-                size="sm"
-                type="button"
-                variant="secondary"
-              >
-                <RefreshCw className="size-3.5" />
-                <span>
-                  {gitCredentialPending ? 'Resetting' : 'Reset Git credential'}
-                </span>
+            {repo.role === 'Owner' && (
+              <Button asChild size="sm" variant="secondary">
+                <Link
+                  params={{ owner: repo.owner_handle, repo: repo.name }}
+                  to="/repos/$owner/$repo/settings"
+                >
+                  <Settings className="size-3.5" />
+                  <span>Settings</span>
+                </Link>
               </Button>
             )}
           </div>
@@ -204,36 +170,6 @@ export function RepoDetailPage({
             <AlertTitle>Visibility update failed</AlertTitle>
             <AlertDescription>{error}</AlertDescription>
           </Alert>
-        )}
-
-        {gitCredentialError && (
-          <Alert className="mt-6" variant="destructive">
-            <AlertCircle className="size-4" />
-            <AlertTitle>Git credential reset failed</AlertTitle>
-            <AlertDescription>{gitCredentialError}</AlertDescription>
-          </Alert>
-        )}
-
-        {gitCredential?.push_token.secret && (
-          <section className="mt-6 border-y border-border py-4">
-            <div className="mb-3 flex flex-col gap-1 sm:flex-row sm:items-end sm:justify-between">
-              <div>
-                <h2 className="text-sm font-semibold leading-5">
-                  Git credential
-                </h2>
-                <p className="text-sm leading-5 text-muted-foreground">
-                  Run this once in your local repo to refresh pushes to{' '}
-                  {gitCredential.remote_name}.
-                </p>
-              </div>
-            </div>
-            <CopyableCodeBlock
-              value={gitCredentialApproveCommand(
-                gitCredential,
-                gitCredential.push_token.secret,
-              )}
-            />
-          </section>
         )}
 
         <ReviewVisibilityPanel
@@ -303,24 +239,6 @@ function repoDetailPageReducer(
       }
     case 'visibilityFinished':
       return { ...state, pendingVisibility: null }
-    case 'gitCredentialStarted':
-      return {
-        ...state,
-        gitCredentialError: null,
-        gitCredentialPending: true,
-      }
-    case 'gitCredentialSucceeded':
-      return {
-        ...state,
-        gitCredential: action.credential,
-        gitCredentialPending: false,
-      }
-    case 'gitCredentialFailed':
-      return {
-        ...state,
-        gitCredentialError: action.message,
-        gitCredentialPending: false,
-      }
   }
 }
 

@@ -7,7 +7,7 @@ use crate::domain::{
     projection::{AuthorVisibility, FileVisibilityChange, LogicalCommit, MixedCommitPolicy},
     store::{
         CatalogError, FirstPushToken, GitPushToken, RepoPublicationState, RepoRecord, RepoRole,
-        RepoSettings, RepoStorageCleanup, SourceBlob, StagedRepoUpdate, StoredRepository, repo_id,
+        RepoStorageCleanup, SourceBlob, StagedRepoUpdate, StoredRepository, repo_id,
     },
 };
 use crate::error::ApiError;
@@ -134,78 +134,6 @@ impl MetadataStore {
                     .repositories
                     .insert(repo.record.id.clone(), repo.clone());
                 Ok(repo)
-            }),
-        }
-    }
-
-    pub(crate) fn update_repo_settings(
-        &self,
-        owner: &str,
-        name: &str,
-        user_id: &str,
-        settings: RepoSettings,
-    ) -> Result<RepoSettings, ApiError> {
-        let repo_id = repo_id(owner, name);
-        let owner = owner.to_string();
-        let name = name.to_string();
-        let user_id = user_id.to_string();
-        match self.inner.as_ref() {
-            MetadataStoreInner::Postgres { db, runtime } => {
-                let db = Arc::clone(db);
-                run_api_db_on(runtime, async move {
-                    let tx = db.as_ref().begin().await.map_err(ApiError::internal)?;
-                    acquire_metadata_write_lock(&tx).await?;
-                    if entities::repository::Entity::find_by_id(repo_id.clone())
-                        .one(&tx)
-                        .await
-                        .map_err(ApiError::internal)?
-                        .is_none()
-                    {
-                        return Err(ApiError::not_found(format!(
-                            "repo {owner}/{name} not found"
-                        )));
-                    }
-
-                    let role = entities::membership::Entity::find()
-                        .filter(entities::membership::Column::RepoId.eq(repo_id.clone()))
-                        .filter(entities::membership::Column::UserId.eq(user_id))
-                        .one(&tx)
-                        .await
-                        .map_err(ApiError::internal)?
-                        .map(|membership| membership.try_into_domain())
-                        .transpose()?
-                        .map(|membership| membership.role);
-                    if role != Some(RepoRole::Owner) {
-                        return Err(ApiError::forbidden("owner role required"));
-                    }
-
-                    entities::repository::Entity::update_many()
-                        .filter(entities::repository::Column::Id.eq(repo_id))
-                        .col_expr(
-                            entities::repository::Column::Settings,
-                            Expr::value(encode_json(&settings)?),
-                        )
-                        .exec(&tx)
-                        .await
-                        .map_err(ApiError::internal)?;
-                    tx.commit().await.map_err(ApiError::internal)?;
-                    Ok(settings)
-                })
-            }
-            #[cfg(test)]
-            MetadataStoreInner::Memory(_) => self.update(move |catalog| {
-                let repo = catalog
-                    .repositories
-                    .get(&repo_id)
-                    .ok_or_else(|| ApiError::not_found(format!("repo {owner}/{name} not found")))?;
-                ensure_repo_owner(repo, &user_id)?;
-
-                let repo = catalog
-                    .repositories
-                    .get_mut(&repo_id)
-                    .expect("repo was already checked");
-                repo.settings = settings;
-                Ok(settings)
             }),
         }
     }
@@ -810,7 +738,10 @@ where
     Ok(())
 }
 
-async fn save_repository_row<C>(conn: &C, repo: &StoredRepository) -> Result<(), ApiError>
+pub(super) async fn save_repository_row<C>(
+    conn: &C,
+    repo: &StoredRepository,
+) -> Result<(), ApiError>
 where
     C: ConnectionTrait,
 {

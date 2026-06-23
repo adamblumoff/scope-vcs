@@ -246,9 +246,15 @@ pub(crate) struct UpdateFileVisibilityRequest {
     pub(crate) visibility: Visibility,
 }
 
+#[derive(Debug, Serialize)]
+pub(crate) struct RepoSettingsResponse {
+    pub(crate) default_new_file_visibility: Visibility,
+    pub(crate) review_pushes_before_applying: bool,
+}
+
 #[derive(Debug, Deserialize)]
 pub(crate) struct UpdateRepoSettingsRequest {
-    pub(crate) include_ignored_files: bool,
+    pub(crate) default_new_file_visibility: Visibility,
     pub(crate) review_pushes_before_applying: bool,
 }
 

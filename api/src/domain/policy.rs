@@ -178,6 +178,10 @@ impl Policy {
             .unwrap_or(self.default_visibility)
     }
 
+    pub fn set_default_visibility(&mut self, visibility: Visibility) {
+        self.default_visibility = visibility;
+    }
+
     pub fn can_read(&self, principal: &Principal, path: &ScopePath) -> bool {
         if self.is_owner(principal) {
             return true;

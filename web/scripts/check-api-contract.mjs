@@ -30,6 +30,7 @@ const contracts = [
   ['FirstPushTokenResponse', 'FirstPushToken'],
   ['GitPushTokenResponse', 'GitPushToken'],
   ['RepoFileResponse', 'RepoFile'],
+  ['RepoSettingsResponse', 'RepoSettings'],
   ['PendingImportReviewResponse', 'PendingImportPayload'],
   ['StagedUpdateResponse', 'StagedUpdate'],
   ['StagedFileResponse', 'StagedFile'],
