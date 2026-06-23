@@ -209,6 +209,40 @@ async fn owner_can_preview_pending_import_public_projection_before_publish() {
 }
 
 #[tokio::test]
+async fn owner_can_load_pending_import_file_diff() {
+    let state = test_state_with_repo();
+    cache_test_jwks(&state);
+    {
+        let mut catalog = lock_catalog(&state).unwrap();
+        let repo = catalog.repositories.get_mut(TEST_REPO_ID).unwrap();
+        repo.record.publication_state = RepoPublicationState::PendingPublish;
+        repo.pending_import = Some(pending_import_fixture(vec![
+            ("README.md", "hello from import"),
+            ("src/main.rs", "fn main() {}"),
+        ]));
+    }
+
+    let response = router(state)
+        .oneshot(
+            Request::builder()
+                .method("GET")
+                .uri("/v1/repos/owner/repo/review/file-diff?path=README.md")
+                .header(AUTHORIZATION, bearer_header())
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = response_json(response).await;
+    assert_eq!(body["path"], "/README.md");
+    assert_eq!(body["kind"], "Added");
+    assert_eq!(body["old_content"], serde_json::Value::Null);
+    assert_eq!(body["new_content"], "hello from import");
+}
+
+#[tokio::test]
 async fn public_cannot_preview_pending_import_review() {
     let state = test_state_with_repo();
     {
@@ -290,6 +324,42 @@ async fn owner_can_preview_staged_update_public_projection_before_apply() {
     let repo = find_repo(&state, TEST_REPO_OWNER, TEST_REPO_NAME).unwrap();
     assert!(repo.staged_update.is_some());
     assert_eq!(repo.graph.commits.len(), 1);
+}
+
+#[tokio::test]
+async fn owner_can_load_staged_update_file_diff() {
+    let state = test_state_with_repo();
+    cache_test_jwks(&state);
+    {
+        let mut repo = repo_with_readme();
+        stage_receive_pack_update(
+            &mut repo,
+            receive_pack_update(vec![("/README.md", Some("updated readme"))]),
+        )
+        .unwrap();
+
+        let mut catalog = lock_catalog(&state).unwrap();
+        catalog.repositories.insert(TEST_REPO_ID.to_string(), repo);
+    }
+
+    let response = router(state)
+        .oneshot(
+            Request::builder()
+                .method("GET")
+                .uri("/v1/repos/owner/repo/review/file-diff?path=/README.md")
+                .header(AUTHORIZATION, bearer_header())
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = response_json(response).await;
+    assert_eq!(body["path"], "/README.md");
+    assert_eq!(body["kind"], "Modified");
+    assert_eq!(body["old_content"], "hello");
+    assert_eq!(body["new_content"], "updated readme");
 }
 
 #[test]

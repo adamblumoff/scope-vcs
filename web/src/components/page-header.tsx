@@ -12,7 +12,7 @@ export function PageContent({
 }) {
   return (
     <section
-      className={cn('mx-auto max-w-[1040px] px-4 py-6 sm:px-6 lg:py-8', className)}
+      className={cn('mx-auto max-w-[1320px] px-4 py-6 sm:px-6 lg:py-8', className)}
     >
       {children}
     </section>

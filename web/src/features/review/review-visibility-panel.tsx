@@ -1,16 +1,24 @@
 import type {
   ProjectionPreviewAudience,
   ProjectionPreviews,
+  ReviewFileDiff,
   ReviewFile,
   Visibility,
 } from '@/api/types'
-import { useMemo, useState } from 'react'
+import { cn } from '@/lib/utils'
+import { lazy, Suspense, useMemo, useState } from 'react'
 import { ReviewEmptyFiles } from './review-empty-files'
 import { ReviewPreviewMetrics } from './review-preview-metrics'
 import { ReviewProjectionHistory } from './review-projection-history'
 import { ReviewTree, type ReviewTreeVariant } from './review-tree'
 import { displayPath } from './review-tree-model'
 import { ReviewVisibilityPanelHeader } from './review-visibility-panel-header'
+
+const ReviewFileDiffDrawer = lazy(() =>
+  import('./review-file-diff-drawer').then((module) => ({
+    default: module.ReviewFileDiffDrawer,
+  })),
+)
 
 export function ReviewVisibilityPanel({
   description = 'Set public or private access in the tree. Switch views to see which rows that audience receives.',
@@ -19,7 +27,13 @@ export function ReviewVisibilityPanel({
   emptyTitle = 'No files found',
   files,
   onSetVisibility,
+  onCloseFileDiff,
+  onSelectFile,
   pendingKey,
+  selectedFileDiff = null,
+  selectedFileDiffError = null,
+  selectedFileDiffLoading = false,
+  selectedFilePath = null,
   previews,
   showPrivateCounts = Boolean(previews.owner),
   stagedReview = false,
@@ -36,7 +50,13 @@ export function ReviewVisibilityPanel({
     visibility: Visibility,
     pendingKey: string,
   ) => void
+  onCloseFileDiff?: () => void
+  onSelectFile?: (file: ReviewFile) => void
   pendingKey: string | null
+  selectedFileDiff?: ReviewFileDiff | null
+  selectedFileDiffError?: string | null
+  selectedFileDiffLoading?: boolean
+  selectedFilePath?: string | null
   previews: ProjectionPreviews
   showPrivateCounts?: boolean
   stagedReview?: boolean
@@ -65,6 +85,7 @@ export function ReviewVisibilityPanel({
   if (!preview) {
     return null
   }
+  const diffOpen = selectedFilePath !== null
 
   return (
     <section className="mt-8 border-y border-border">
@@ -93,16 +114,53 @@ export function ReviewVisibilityPanel({
             title={emptyTitle}
           />
         ) : (
-          <ReviewTree
-            audience={preview.audience}
-            disabled={disabled}
-            files={files}
-            onSetVisibility={onSetVisibility}
-            pendingKey={pendingKey}
-            stagedReview={stagedReview}
-            visiblePaths={visiblePaths}
-            variant={treeVariant}
-          />
+          <div
+            className={cn(
+              'mt-4 grid grid-cols-1 transition-[grid-template-columns] duration-300 ease-out lg:mt-5',
+              diffOpen
+                ? 'lg:grid-cols-[minmax(0,0.95fr)_minmax(360px,1.05fr)]'
+                : 'lg:grid-cols-[minmax(0,1fr)_minmax(0,0fr)]',
+            )}
+          >
+            <div className="min-w-0">
+              <ReviewTree
+                audience={preview.audience}
+                disabled={disabled}
+                files={files}
+                onSelectFile={onSelectFile}
+                onSetVisibility={onSetVisibility}
+                pendingKey={pendingKey}
+                selectedFilePath={selectedFilePath}
+                stagedReview={stagedReview}
+                visiblePaths={visiblePaths}
+                variant={treeVariant}
+              />
+            </div>
+            <div
+              className={cn(
+                'min-w-0 overflow-hidden border-border transition-[max-height,opacity,transform,border-color] duration-300 ease-out lg:border-l',
+                diffOpen
+                  ? 'mt-4 max-h-[70vh] translate-y-0 opacity-100 lg:mt-0 lg:max-h-none lg:translate-x-0'
+                  : 'pointer-events-none max-h-0 -translate-y-1 border-transparent opacity-0 lg:translate-x-3',
+              )}
+            >
+              {diffOpen ? (
+                <Suspense
+                  fallback={
+                    <ReviewFileDiffLoadingShell selectedPath={selectedFilePath} />
+                  }
+                >
+                  <ReviewFileDiffDrawer
+                    diff={selectedFileDiff}
+                    error={selectedFileDiffError}
+                    loading={selectedFileDiffLoading}
+                    onClose={onCloseFileDiff ?? (() => undefined)}
+                    selectedPath={selectedFilePath}
+                  />
+                </Suspense>
+              ) : null}
+            </div>
+          </div>
         )}
       </div>
 
@@ -111,5 +169,29 @@ export function ReviewVisibilityPanel({
         showPrivateCounts={showPrivateCounts}
       />
     </section>
+  )
+}
+
+function ReviewFileDiffLoadingShell({
+  selectedPath,
+}: {
+  selectedPath: string | null
+}) {
+  return (
+    <div className="flex min-h-[320px] flex-col px-4 py-3 lg:px-5">
+      <div className="flex min-w-0 items-center justify-between gap-3 border-b border-border pb-3">
+        <div className="min-w-0">
+          <div className="truncate font-mono text-sm font-medium">
+            {selectedPath ?? 'Diff'}
+          </div>
+          <div className="mt-1 text-xs text-muted-foreground">
+            Preparing diff...
+          </div>
+        </div>
+      </div>
+      <div className="flex flex-1 items-center justify-center text-sm text-muted-foreground">
+        Loading renderer...
+      </div>
+    </div>
   )
 }

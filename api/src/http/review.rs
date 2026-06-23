@@ -1,10 +1,18 @@
-use crate::domain::{repo_actions::ensure_pending_publish, store::RepoRole};
+use crate::domain::{
+    policy::ScopePath,
+    repo_actions::ensure_pending_publish,
+    store::{
+        RepoPublicationState, RepoRole, SourceBlob, StagedFileChangeKind, StagedRepoUpdate,
+        StoredRepository,
+    },
+};
 use crate::{
     auth::shoo::{
         ensure_user_for_identity, http_identity, principal_for_repo, principal_for_user_id,
     },
     error::ApiError,
     http::responses::*,
+    object_store::{ObjectStore, source_blob_text},
     state::AppState,
     state::{
         best_effort_drain_pending_source_blob_deletions, ensure_owner, ensure_repo_read, find_repo,
@@ -12,7 +20,7 @@ use crate::{
 };
 use axum::{
     Json,
-    extract::{Path, State},
+    extract::{Path, Query, State},
     http::HeaderMap,
 };
 
@@ -33,6 +41,26 @@ pub(crate) async fn get_pending_import_review(
         default_visibility: repo.record.default_visibility,
         files: pending_import_files(&repo, &principal)?,
     }))
+}
+
+pub(crate) async fn get_review_file_diff(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path((owner, repo_name)): Path<(String, String)>,
+    Query(input): Query<ReviewFileDiffRequest>,
+) -> Result<Json<ReviewFileDiffResponse>, ApiError> {
+    let repo = find_repo(&state, &owner, &repo_name)?;
+    let identity = http_identity(&state, &headers).await?;
+    let principal = principal_for_repo(&state, &repo, identity.as_ref())?;
+    ensure_repo_read(&state, &repo, &principal)?;
+    ensure_owner(&state, &repo, &principal)?;
+
+    let path = pending_scope_path(&input.path)?;
+    Ok(Json(review_file_diff_response(
+        state.object_store.as_ref(),
+        &repo,
+        &path,
+    )?))
 }
 
 pub(crate) async fn publish_repo(
@@ -150,4 +178,74 @@ pub(crate) async fn reject_staged_update(
     best_effort_drain_pending_source_blob_deletions(&state);
 
     Ok(Json(staged_update_response(&rejected)))
+}
+
+fn review_file_diff_response(
+    store: &dyn ObjectStore,
+    repo: &StoredRepository,
+    path: &ScopePath,
+) -> Result<ReviewFileDiffResponse, ApiError> {
+    if repo.record.publication_state == RepoPublicationState::PendingPublish {
+        return pending_import_file_diff_response(store, repo, path);
+    }
+
+    let staged = repo
+        .staged_update
+        .as_ref()
+        .ok_or_else(|| ApiError::bad_request("repo has no pending review"))?;
+    staged_file_diff_response(store, staged, path)
+}
+
+fn pending_import_file_diff_response(
+    store: &dyn ObjectStore,
+    repo: &StoredRepository,
+    path: &ScopePath,
+) -> Result<ReviewFileDiffResponse, ApiError> {
+    let pending = repo
+        .pending_import
+        .as_ref()
+        .ok_or_else(|| ApiError::bad_request("repo has no pending import"))?;
+    let selected = pending.files.iter().find_map(|file| {
+        let file_path = pending_scope_path(&file.path).ok()?;
+        (file_path.as_str() == path.as_str()).then_some((file, file_path))
+    });
+    let Some((file, file_path)) = selected else {
+        return Err(ApiError::not_found(format!(
+            "file {} not found",
+            path.as_str()
+        )));
+    };
+
+    Ok(ReviewFileDiffResponse {
+        path: file_path.as_str().to_string(),
+        kind: StagedFileChangeKind::Added,
+        old_content: None,
+        new_content: Some(source_blob_text(store, &file.blob)?),
+    })
+}
+
+fn staged_file_diff_response(
+    store: &dyn ObjectStore,
+    staged: &StagedRepoUpdate,
+    path: &ScopePath,
+) -> Result<ReviewFileDiffResponse, ApiError> {
+    let change = staged
+        .changes
+        .iter()
+        .find(|change| change.path.as_str() == path.as_str())
+        .ok_or_else(|| ApiError::not_found(format!("file {} not found", path.as_str())))?;
+
+    Ok(ReviewFileDiffResponse {
+        path: change.path.as_str().to_string(),
+        kind: change.kind,
+        old_content: source_blob_text_opt(store, change.old_content.as_ref())?,
+        new_content: source_blob_text_opt(store, change.new_content.as_ref())?,
+    })
+}
+
+fn source_blob_text_opt(
+    store: &dyn ObjectStore,
+    blob: Option<&SourceBlob>,
+) -> Result<Option<String>, ApiError> {
+    blob.map(|blob| source_blob_text(store, blob)).transpose()
 }

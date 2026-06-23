@@ -2,6 +2,8 @@ import type {
   ProjectionPreviews,
   RepoParams,
   RepoReview,
+  ReviewFileDiff,
+  ReviewFileDiffInput,
   ReviewFile,
   Visibility,
 } from '@/api/types'
@@ -15,7 +17,7 @@ import { Button } from '@/components/ui/button'
 import { storeHomeFlash } from '@/lib/home-flash'
 import { useNavigate, useRouter } from '@tanstack/react-router'
 import { LoaderCircle, Rocket, X } from 'lucide-react'
-import { useReducer } from 'react'
+import { useEffect, useReducer, useState } from 'react'
 import {
   initialReviewPageState,
   reviewPageReducer,
@@ -29,10 +31,12 @@ export function ReviewPage({
   projectionPreviews,
   publishRepo,
   rejectStagedUpdate,
+  loadFileDiff,
   setReviewVisibility,
 }: {
   applyStagedUpdate: (params: RepoParams) => Promise<unknown>
   initialReview: RepoReview
+  loadFileDiff: (input: ReviewFileDiffInput) => Promise<ReviewFileDiff>
   params: RepoParams
   projectionPreviews: ProjectionPreviews
   publishRepo: (params: RepoParams) => Promise<unknown>
@@ -50,6 +54,9 @@ export function ReviewPage({
     reviewPageReducer,
     initialReviewPageState,
   )
+  const [selectedFilePath, setSelectedFilePath] = useState<string | null>(null)
+  const [fileDiffState, setFileDiffState] =
+    useState<ReviewFileDiffState>(emptyFileDiffState)
   const review =
     state.reviewOverride?.baseReview === initialReview
       ? state.reviewOverride.review
@@ -59,6 +66,40 @@ export function ReviewPage({
   const rejecting = state.runningAction === 'reject'
   const stagedReview = review.kind === 'StagedUpdate'
   const visibilityPending = pendingKey !== null
+
+  useEffect(() => {
+    if (!selectedFilePath) {
+      setFileDiffState(emptyFileDiffState)
+      return
+    }
+
+    let active = true
+    setFileDiffState({ diff: null, error: null, status: 'loading' })
+    loadFileDiff({
+      owner: params.owner,
+      path: selectedFilePath,
+      repo: params.repo,
+    }).then(
+      (diff) => {
+        if (active) {
+          setFileDiffState({ diff, error: null, status: 'loaded' })
+        }
+      },
+      (error) => {
+        if (active) {
+          setFileDiffState({
+            diff: null,
+            error: error instanceof Error ? error.message : 'diff load failed',
+            status: 'failed',
+          })
+        }
+      },
+    )
+
+    return () => {
+      active = false
+    }
+  }, [loadFileDiff, params.owner, params.repo, selectedFilePath])
 
   async function setVisibility(
     files: ReviewFile[],
@@ -218,16 +259,34 @@ export function ReviewPage({
         <ReviewVisibilityPanel
           disabled={publishing || rejecting}
           files={review.files}
+          onCloseFileDiff={() => setSelectedFilePath(null)}
+          onSelectFile={(file) => setSelectedFilePath(file.path)}
           onSetVisibility={(files, visibility, key) =>
             void setVisibility(files, visibility, key)
           }
           pendingKey={pendingKey}
           previews={projectionPreviews}
+          selectedFileDiff={fileDiffState.diff}
+          selectedFileDiffError={fileDiffState.error}
+          selectedFileDiffLoading={fileDiffState.status === 'loading'}
+          selectedFilePath={selectedFilePath}
           stagedReview={stagedReview}
         />
       </PageContent>
     </main>
   )
+}
+
+type ReviewFileDiffState =
+  | { diff: null; error: null; status: 'idle' }
+  | { diff: null; error: null; status: 'loading' }
+  | { diff: ReviewFileDiff; error: null; status: 'loaded' }
+  | { diff: null; error: string; status: 'failed' }
+
+const emptyFileDiffState: ReviewFileDiffState = {
+  diff: null,
+  error: null,
+  status: 'idle',
 }
 
 export function ReviewError({ error }: { error: unknown }) {
