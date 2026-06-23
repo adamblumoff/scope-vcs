@@ -1,10 +1,10 @@
 import type { RepoParams, RepoSetupView } from '@/api/types'
+import {
+  setupPushSecretSnapshot,
+  storeSetupPushSecret,
+} from '@/lib/setup-push-secret'
 import { useCallback, useSyncExternalStore } from 'react'
 import type { SetupPageAction } from './setup-page-state'
-import {
-  rememberSetupPushSecret,
-  setupPushSecretSnapshot,
-} from './setup-token-cache'
 
 export function useRegenerateSetupToken({
   dispatch,
@@ -22,7 +22,7 @@ export function useRegenerateSetupToken({
     try {
       const next = await regenerateToken(params)
       const pushTokenSecret = next.push_token?.secret ?? null
-      rememberSetupPushSecret(next.repo.id, pushTokenSecret)
+      storeSetupPushSecret(next.repo.id, pushTokenSecret)
       dispatch({
         baseSetup: initialSetup,
         pushTokenSecret,

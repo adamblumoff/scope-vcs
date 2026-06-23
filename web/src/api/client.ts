@@ -4,7 +4,6 @@ import { stripTrailingSlash } from './http'
 const localApiBase = 'http://localhost:8080'
 const internalApiUrlEnv = 'SCOPE_API_INTERNAL_URL'
 const publicApiUrlEnv = 'SCOPE_API_PUBLIC_URL'
-export const homeFlashKey = 'scope:home-flash'
 
 export async function readRequestAuthToken() {
   const [{ authCookieName }, { getCookie }] = await Promise.all([
@@ -45,13 +44,5 @@ function runtimeEnv(name: string) {
   }
 
   return process.env[name]?.trim()
-}
-
-export function storeHomeFlash(message: string) {
-  if (typeof window === 'undefined') {
-    return
-  }
-
-  window.sessionStorage.setItem(homeFlashKey, message)
 }
 

@@ -13,6 +13,7 @@ import { SectionRow, SectionRows } from '@/components/section-rows'
 import { VisibilityBadge } from '@/components/visibility-badge'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
+import { storeHomeFlash } from '@/lib/home-flash'
 import { useNavigate, useRouter } from '@tanstack/react-router'
 import { LoaderCircle, RefreshCw, Terminal } from 'lucide-react'
 import type { ReactNode } from 'react'
@@ -83,10 +84,7 @@ export function SetupPage({
     [navigate, params],
   )
   const returnHomeAfterPublish = useCallback(async () => {
-    window.sessionStorage.setItem(
-      'scope:home-flash',
-      `${params.owner}/${params.repo} is published.`,
-    )
+    storeHomeFlash(`${params.owner}/${params.repo} is published.`)
     await navigate({ replace: true, to: '/' })
     await router.invalidate()
   }, [navigate, params, router])

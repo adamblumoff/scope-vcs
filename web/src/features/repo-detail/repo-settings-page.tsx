@@ -7,13 +7,13 @@ import type {
   RepoSummary,
   UpdateRepoSettingsInput,
 } from '@/api/types'
-import { homeFlashKey } from '@/api/client'
 import { AppHeader } from '@/components/app-header'
 import { PageContent, PageHeader } from '@/components/page-header'
 import { PageErrorAlert } from '@/components/page-error-alert'
 import { VisibilityBadge } from '@/components/visibility-badge'
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert'
 import { Badge } from '@/components/ui/badge'
+import { storeHomeFlash } from '@/lib/home-flash'
 import { useNavigate, useRouter } from '@tanstack/react-router'
 import { CheckCircle2 } from 'lucide-react'
 import { useReducer, useRef } from 'react'
@@ -119,9 +119,7 @@ export function RepoSettingsPage({
         owner: target.owner_handle,
         repo: target.name,
       })
-      if (typeof window !== 'undefined') {
-        window.sessionStorage.setItem(homeFlashKey, `${target.id} deleted.`)
-      }
+      storeHomeFlash(`${target.id} deleted.`)
       await navigate({ to: '/' })
       void router.invalidate().catch(() => undefined)
     } catch (error) {

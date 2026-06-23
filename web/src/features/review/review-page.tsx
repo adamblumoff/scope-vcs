@@ -1,4 +1,3 @@
-import { storeHomeFlash } from '@/api/client'
 import type {
   ProjectionPreviews,
   RepoParams,
@@ -13,6 +12,7 @@ import { RouteErrorPage } from '@/components/route-error-page'
 import { VisibilityBadge } from '@/components/visibility-badge'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
+import { storeHomeFlash } from '@/lib/home-flash'
 import { useNavigate, useRouter } from '@tanstack/react-router'
 import { LoaderCircle, Rocket, X } from 'lucide-react'
 import { useReducer } from 'react'
