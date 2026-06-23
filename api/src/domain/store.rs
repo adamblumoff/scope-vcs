@@ -36,6 +36,7 @@ pub struct UserAccount {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[cfg_attr(test, derive(ts_rs::TS))]
 pub enum RepoRole {
     Reader,
     Writer,
@@ -44,6 +45,7 @@ pub enum RepoRole {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(test, derive(ts_rs::TS))]
 pub enum RepoPublicationState {
     PendingFirstPush,
     PendingPublish,
@@ -51,6 +53,7 @@ pub enum RepoPublicationState {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(test, derive(ts_rs::TS))]
 pub enum FirstPushTokenStatus {
     Active,
     Expired,
@@ -144,6 +147,7 @@ impl Default for RepoSettings {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(test, derive(ts_rs::TS))]
 pub enum StagedFileChangeKind {
     Added,
     Modified,

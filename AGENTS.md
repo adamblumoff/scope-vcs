@@ -1,10 +1,11 @@
-For railway deployment stuff, if you cannot do it via the cli, do not add more configs, just tell me how to do it via the dashboard. 
-
 This product is still in pre-alpha and we have zero users and zero valuable data. Every change should be destructive, no legacy or backwards compatible bullshit, this application has no users or releases, treat it as such. If you add backwards compatibility, I will go apeshit on your dumbass.
+
+We want the architecture centered around durable domain code: the layer that defines the core concepts, rules, allowed transitions, invariants, and required side effects independent of any delivery mechanism. Outer layers should stay thin and predictable: translate inputs and outputs, call domain behavior, persist or render results, and surface errors without inventing their own rules.
+
+Keep sources of truth singular, make side effects explicit, and prefer small behavior-owned modules over broad catch-all files. When ownership gets blurry, refactor toward clearer boundaries; when code exists only for speculation, compatibility, or half-owned future surfaces, delete it.
 
 Please don't use cards for ui, only use them if absolutely necessary.
 
 No file should be over 1000 lines of code, at that point do an audit of the file and modularize.
-
 
 Autoreview timeout should be set to 10 minutes

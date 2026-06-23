@@ -1,4 +1,4 @@
-use crate::domain::store::RepoRole;
+use crate::domain::{repo_actions::ensure_pending_publish, store::RepoRole};
 use crate::{
     auth::shoo::{
         ensure_user_for_identity, http_identity, principal_for_repo, principal_for_user_id,
@@ -7,8 +7,7 @@ use crate::{
     http::responses::*,
     state::AppState,
     state::{
-        best_effort_drain_pending_source_blob_deletions, ensure_owner, ensure_pending_publish,
-        ensure_repo_read, find_repo,
+        best_effort_drain_pending_source_blob_deletions, ensure_owner, ensure_repo_read, find_repo,
     },
 };
 use axum::{

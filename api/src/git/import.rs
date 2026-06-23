@@ -2,6 +2,7 @@ use crate::domain::policy::{ScopePath, Visibility, VisibilityRule};
 use crate::domain::projection::{
     AuthorVisibility, FileChange, FileVisibilityChange, LogicalCommit, MixedCommitPolicy,
 };
+use crate::domain::projection_views::pending_scope_path;
 use crate::domain::store::{
     FirstPushTokenStatus, PendingImport, PendingImportFile, RepoPublicationState, SourceBlob,
     StagedFileChange, StagedFileChangeKind, StagedRepoUpdate, StoredRepository,
@@ -16,7 +17,7 @@ use crate::{
         InitialPushCredential, PersistedReceivePackUpdate, authorize_first_push_token_for_repo,
         authorize_git_push_token_for_repo,
     },
-    http::responses::{pending_scope_path, repo_owner_ids},
+    http::responses::repo_owner_ids,
     object_store::put_repo_object,
     persistence::unix_now,
     state::AppState,

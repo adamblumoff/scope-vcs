@@ -1,41 +1,42 @@
+mod cleanup_queue;
 mod entities;
+mod locks;
+mod metadata_reset;
+mod publish_apply;
+mod push_staging;
+mod repo_effects;
+mod repo_lifecycle;
 mod repo_settings;
 mod repo_tokens;
-mod repo_writes;
+mod repository_rows;
+mod runtime;
 mod schema;
 #[cfg(test)]
 mod test_support;
+mod visibility_changes;
 
 use crate::domain::store::{AppCatalog, RepoMembership, StoredRepository, repo_id};
 use crate::error::ApiError;
+use locks::{acquire_metadata_read_lock, acquire_metadata_write_lock, ensure_metadata_lock_row};
+pub(crate) use metadata_reset::MetadataResetEvent;
+use metadata_reset::{
+    insert_metadata_reset_event, metadata_reset_event_from_model,
+    new_operator_metadata_reset_event, reset_stale_pre_alpha_metadata,
+};
+use runtime::DbRuntime;
+use runtime::{run_api_db_on, run_db_on};
 use sea_orm::{
     ActiveModelTrait, ColumnTrait, ConnectionTrait, Database, DatabaseConnection, EntityTrait,
-    IntoActiveModel, QueryFilter, QueryOrder, QuerySelect, Set, Statement, TransactionTrait,
-    TryInsertResult,
-    sea_query::{LockType, OnConflict},
+    IntoActiveModel, QueryFilter, QueryOrder, Statement, TransactionTrait,
 };
 use serde::{Serialize, de::DeserializeOwned};
+use std::sync::Arc;
 #[cfg(test)]
-use std::sync::atomic::AtomicBool;
-use std::sync::{
-    Arc,
-    atomic::{AtomicU64, Ordering},
-};
+use std::sync::atomic::{AtomicBool, Ordering};
 #[cfg(test)]
 pub(crate) use test_support::TestDatabaseTarget;
 
 const METADATA_LOCK_KEY: &str = "catalog";
-const OPERATOR_RESET_TRIGGER: &str = "operator";
-
-static RESET_EVENT_COUNTER: AtomicU64 = AtomicU64::new(0);
-
-#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
-pub(crate) struct MetadataResetEvent {
-    pub(crate) id: String,
-    pub(crate) reset_at_unix: u64,
-    pub(crate) trigger: String,
-    pub(crate) reason: String,
-}
 
 #[derive(Clone)]
 pub(crate) struct MetadataStore {
@@ -56,34 +57,6 @@ struct MemoryMetadataStore {
     catalog: std::sync::Mutex<AppCatalog>,
     reset_events: std::sync::Mutex<Vec<MetadataResetEvent>>,
     fail_next_persist: AtomicBool,
-}
-
-struct DbRuntime(Option<tokio::runtime::Runtime>);
-
-impl DbRuntime {
-    fn new() -> anyhow::Result<Self> {
-        Ok(Self(Some(tokio::runtime::Runtime::new()?)))
-    }
-}
-
-impl std::ops::Deref for DbRuntime {
-    type Target = tokio::runtime::Runtime;
-
-    fn deref(&self) -> &Self::Target {
-        self.0
-            .as_ref()
-            .expect("database runtime has already shut down")
-    }
-}
-
-impl Drop for DbRuntime {
-    fn drop(&mut self) {
-        if let Some(runtime) = self.0.take() {
-            // This store is process-lifetime state. Dropping a Tokio runtime from
-            // inside the server runtime panics, so let the OS reclaim it on exit.
-            std::mem::forget(runtime);
-        }
-    }
 }
 
 impl MetadataStore {
@@ -310,7 +283,7 @@ impl MetadataStore {
     }
 
     pub(crate) fn reset_catalog(&self, reason: &str) -> Result<MetadataResetEvent, ApiError> {
-        let event = new_metadata_reset_event(OPERATOR_RESET_TRIGGER, reason);
+        let event = new_operator_metadata_reset_event(reason);
         match self.inner.as_ref() {
             MetadataStoreInner::Postgres { db, runtime } => {
                 let db = Arc::clone(db);
@@ -620,197 +593,10 @@ where
     Ok(())
 }
 
-async fn ensure_metadata_lock_row(db: &DatabaseConnection) -> Result<(), sea_orm::DbErr> {
-    match entities::metadata_lock::Entity::insert(entities::metadata_lock::ActiveModel {
-        key: Set(METADATA_LOCK_KEY.to_string()),
-        pending_repo_storage_deletions: Set(serde_json::Value::Array(Vec::new())),
-        pending_source_blob_deletions: Set(serde_json::Value::Array(Vec::new())),
-    })
-    .on_conflict(
-        OnConflict::column(entities::metadata_lock::Column::Key)
-            .do_nothing()
-            .to_owned(),
-    )
-    .do_nothing()
-    .exec(db)
-    .await?
-    {
-        TryInsertResult::Empty | TryInsertResult::Conflicted | TryInsertResult::Inserted(_) => {}
-    }
-    Ok(())
-}
-
-async fn reset_stale_pre_alpha_metadata(db: &DatabaseConnection) -> Result<(), sea_orm::DbErr> {
-    match load_catalog_async(db).await {
-        Ok(_) => Ok(()),
-        Err(error) if is_stale_pre_alpha_metadata_error(&error) => {
-            eprintln!(
-                "resetting stale pre-alpha Scope metadata after incompatible persisted shape: {}",
-                error.message
-            );
-            schema::reset_metadata_schema(db).await?;
-            schema::migrate_metadata_schema(db).await?;
-            ensure_metadata_lock_row(db).await?;
-            let event = new_metadata_reset_event(
-                "startup_stale_pre_alpha",
-                format!("incompatible persisted shape: {}", error.message),
-            );
-            insert_metadata_reset_event(db, &event).await
-        }
-        Err(error) => Err(sea_orm::DbErr::Custom(format!(
-            "failed to load Scope metadata after migration: {}",
-            error.message
-        ))),
-    }
-}
-
-async fn insert_metadata_reset_event(
-    db: &DatabaseConnection,
-    event: &MetadataResetEvent,
-) -> Result<(), sea_orm::DbErr> {
-    entities::metadata_reset_event::ActiveModel {
-        id: Set(event.id.clone()),
-        reset_at_unix: Set(event.reset_at_unix as i64),
-        trigger: Set(event.trigger.clone()),
-        reason: Set(event.reason.clone()),
-    }
-    .insert(db)
-    .await?;
-    Ok(())
-}
-
-fn metadata_reset_event_from_model(
-    model: entities::metadata_reset_event::Model,
-) -> MetadataResetEvent {
-    MetadataResetEvent {
-        id: model.id,
-        reset_at_unix: model.reset_at_unix.max(0) as u64,
-        trigger: model.trigger,
-        reason: model.reason,
-    }
-}
-
-fn new_metadata_reset_event(
-    trigger: impl Into<String>,
-    reason: impl Into<String>,
-) -> MetadataResetEvent {
-    let now = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .unwrap_or_default();
-    let counter = RESET_EVENT_COUNTER.fetch_add(1, Ordering::Relaxed);
-    let reset_at_unix = now.as_secs();
-    MetadataResetEvent {
-        id: format!(
-            "reset-{}-{}-{}-{counter}",
-            reset_at_unix,
-            now.subsec_nanos(),
-            std::process::id()
-        ),
-        reset_at_unix,
-        trigger: trigger.into(),
-        reason: reason.into(),
-    }
-}
-
-fn is_stale_pre_alpha_metadata_error(error: &ApiError) -> bool {
-    matches!(
-        error.message.as_str(),
-        "missing field `visibility`" | "missing field `visibility_changes`"
-    )
-}
-
-async fn acquire_metadata_read_lock<C>(conn: &C) -> Result<(), ApiError>
-where
-    C: ConnectionTrait,
-{
-    acquire_metadata_lock(conn, LockType::Share).await
-}
-
-async fn acquire_metadata_write_lock<C>(conn: &C) -> Result<(), ApiError>
-where
-    C: ConnectionTrait,
-{
-    acquire_metadata_lock(conn, LockType::Update).await
-}
-
-async fn acquire_metadata_lock<C>(conn: &C, lock: LockType) -> Result<(), ApiError>
-where
-    C: ConnectionTrait,
-{
-    let row = entities::metadata_lock::Entity::find_by_id(METADATA_LOCK_KEY.to_string())
-        .lock(lock)
-        .one(conn)
-        .await
-        .map_err(ApiError::internal)?;
-    if row.is_none() {
-        return Err(ApiError::internal_message("metadata lock row is missing"));
-    }
-    Ok(())
-}
-
-fn run_api_db_on<R>(
-    runtime: &tokio::runtime::Runtime,
-    future: impl std::future::Future<Output = Result<R, ApiError>> + Send + 'static,
-) -> Result<R, ApiError>
-where
-    R: Send + 'static,
-{
-    run_on_runtime(runtime, future)
-        .map_err(|error| ApiError::internal_message(error.to_string()))?
-}
-
-fn run_db_on<R>(
-    runtime: &tokio::runtime::Runtime,
-    future: impl std::future::Future<Output = Result<R, sea_orm::DbErr>> + Send + 'static,
-) -> Result<R, sea_orm::DbErr>
-where
-    R: Send + 'static,
-{
-    run_on_runtime(runtime, future).map_err(|error| sea_orm::DbErr::Custom(error.to_string()))?
-}
-
-fn run_on_runtime<R, E>(
-    runtime: &tokio::runtime::Runtime,
-    future: impl std::future::Future<Output = Result<R, E>> + Send + 'static,
-) -> Result<Result<R, E>, anyhow::Error>
-where
-    R: Send + 'static,
-    E: Send + 'static,
-{
-    let (sender, receiver) = std::sync::mpsc::sync_channel(1);
-    runtime.spawn(async move {
-        let _ = sender.send(future.await);
-    });
-    receiver
-        .recv()
-        .map_err(|_| anyhow::anyhow!("database runtime task was cancelled"))
-}
-
 fn encode_json<T: Serialize>(value: &T) -> Result<serde_json::Value, ApiError> {
     serde_json::to_value(value).map_err(ApiError::internal)
 }
 
 fn decode_json<T: DeserializeOwned>(value: serde_json::Value) -> Result<T, ApiError> {
     serde_json::from_value(value).map_err(ApiError::internal)
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn stale_pre_alpha_reset_is_limited_to_known_visibility_shape_error() {
-        assert!(is_stale_pre_alpha_metadata_error(
-            &ApiError::internal_message("missing field `visibility`")
-        ));
-        assert!(is_stale_pre_alpha_metadata_error(
-            &ApiError::internal_message("missing field `visibility_changes`")
-        ));
-        assert!(!is_stale_pre_alpha_metadata_error(
-            &ApiError::internal_message("missing field `owner_user_id`")
-        ));
-        assert!(!is_stale_pre_alpha_metadata_error(
-            &ApiError::internal_message("database connection failed")
-        ));
-    }
 }
