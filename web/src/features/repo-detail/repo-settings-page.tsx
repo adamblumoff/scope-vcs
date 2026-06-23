@@ -9,6 +9,7 @@ import type {
 } from '@/api/types'
 import { homeFlashKey } from '@/api/client'
 import { AppHeader } from '@/components/app-header'
+import { PageContent, PageHeader } from '@/components/page-header'
 import { VisibilityBadge } from '@/components/visibility-badge'
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert'
 import { Badge } from '@/components/ui/badge'
@@ -137,30 +138,28 @@ export function RepoSettingsPage({
     <main className="min-h-screen bg-background text-foreground">
       <AppHeader subtitle={repo.id} subtitleClassName="font-mono" />
 
-      <section className="mx-auto max-w-[980px] px-4 py-7 sm:px-6 lg:py-9">
-        <div className="flex flex-col gap-4 border-b border-border pb-6 sm:flex-row sm:items-end sm:justify-between">
-          <div className="min-w-0">
-            <div className="mb-3 flex flex-wrap items-center gap-2">
+      <PageContent>
+        <PageHeader
+          actions={() => (
+            <Button asChild size="sm" variant="secondary">
+              <Link params={params} to="/repos/$owner/$repo">
+                <ArrowLeft className="size-3.5" />
+                <span>Repo</span>
+              </Link>
+            </Button>
+          )}
+          badges={() => (
+            <>
               <Badge variant="outline">{repo.lifecycle_state}</Badge>
               <VisibilityBadge visibility={settings.default_new_file_visibility} />
               {repo.staged_update_pending && (
                 <Badge variant="outline">Staged update</Badge>
               )}
-            </div>
-            <h1 className="truncate text-2xl font-semibold leading-8 sm:text-[32px] sm:leading-10">
-              Settings
-            </h1>
-            <p className="mt-2 truncate font-mono text-sm leading-5 text-muted-foreground">
-              {repo.id}
-            </p>
-          </div>
-          <Button asChild size="sm" variant="secondary">
-            <Link params={params} to="/repos/$owner/$repo">
-              <ArrowLeft className="size-3.5" />
-              <span>Repo</span>
-            </Link>
-          </Button>
-        </div>
+            </>
+          )}
+          description={() => <span className="font-mono">{repo.id}</span>}
+          title="Settings"
+        />
 
         {settingsError && (
           <Alert className="mt-6" variant="destructive">
@@ -211,7 +210,7 @@ export function RepoSettingsPage({
           settings={settings}
           settingsSaving={settingsSaving}
         />
-      </section>
+      </PageContent>
 
       {deleteTarget && (
         <DeleteRepositoryDialog

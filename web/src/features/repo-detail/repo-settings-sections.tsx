@@ -4,9 +4,7 @@ import type {
   Visibility,
 } from '@/api/types'
 import { CopyableCodeBlock } from '@/components/copyable-code-block'
-import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
-import { Checkbox } from '@/components/ui/checkbox'
 import { Separator } from '@/components/ui/separator'
 import { Switch } from '@/components/ui/switch'
 import { ToggleGroup, ToggleGroupItem } from '@/components/ui/toggle-group'
@@ -19,7 +17,6 @@ import {
   Lock,
   RefreshCw,
   Trash2,
-  Users,
 } from 'lucide-react'
 import type { ReactNode } from 'react'
 import { gitCredentialApproveCommand } from '../setup/commands'
@@ -134,19 +131,6 @@ export function SettingsSections({
               )}
             />
           )}
-        </div>
-      </SettingsRow>
-      <Separator />
-
-      <SettingsRow
-        description="Roles are already enforced internally, but member list and invite endpoints are not implemented yet."
-        icon={<Users className="size-4" />}
-        title="Members"
-      >
-        <div className="flex items-center gap-3 text-sm leading-5 text-muted-foreground">
-          <Checkbox aria-label="Member management" disabled />
-          <span>Member management</span>
-          <Badge variant="outline">Blocked by API</Badge>
         </div>
       </SettingsRow>
       <Separator />

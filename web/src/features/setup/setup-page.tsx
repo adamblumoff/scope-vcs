@@ -6,6 +6,7 @@ import type {
 } from '@/api/types'
 import { AppHeader } from '@/components/app-header'
 import { CopyableCodeBlock } from '@/components/copyable-code-block'
+import { PageContent, PageHeader } from '@/components/page-header'
 import { VisibilityBadge } from '@/components/visibility-badge'
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert'
 import { Badge } from '@/components/ui/badge'
@@ -196,23 +197,24 @@ export function SetupPage({
     <main className="min-h-screen bg-background text-foreground">
       <AppHeader subtitle={setup.repo.id} subtitleClassName="font-mono" />
 
-      <section className="mx-auto max-w-[980px] px-4 py-7 sm:px-6 lg:py-9">
-        <div className="flex flex-col gap-4 border-b border-border pb-6 sm:flex-row sm:items-end sm:justify-between">
-          <div className="min-w-0">
-            <div className="mb-3 flex flex-wrap items-center gap-2">
+      <PageContent>
+        <PageHeader
+          badges={() => (
+            <>
               <Badge variant="outline">{setup.repo.lifecycle_state}</Badge>
               <VisibilityBadge visibility={setup.repo.default_visibility} />
-            </div>
-            <h1 className="truncate font-mono text-2xl font-semibold leading-8 sm:text-[32px] sm:leading-10">
-              {setup.repo.id}
-            </h1>
-            <p className="mt-3 max-w-[640px] text-sm leading-5 text-muted-foreground">
+            </>
+          )}
+          description={() => (
+            <>
               Run the setup command from your local Git repo. It saves the
               Scope credential, sets the <InlineCode>scope</InlineCode> remote,
               and pushes into review.
-            </p>
-          </div>
-        </div>
+            </>
+          )}
+          title={setup.repo.id}
+          titleClassName="font-mono"
+        />
 
         {error && (
           <Alert className="mt-6" variant="destructive">
@@ -284,7 +286,7 @@ export function SetupPage({
             </div>
           </div>
         </section>
-      </section>
+      </PageContent>
     </main>
   )
 }

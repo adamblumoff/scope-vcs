@@ -4,13 +4,14 @@ import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { cn } from '@/lib/utils'
 import {
-  Check,
   ChevronDown,
   ChevronRight,
   File,
   Folder,
   FolderOpen,
+  Globe2,
   LoaderCircle,
+  Lock,
 } from 'lucide-react'
 import { useMemo, useState } from 'react'
 import {
@@ -199,8 +200,10 @@ function ReviewTreeNodeRow({
                 >
                   {busy ? (
                     <LoaderCircle className="size-3.5 animate-spin" />
+                  ) : nextVisibility === 'Public' ? (
+                    <Globe2 className="size-3.5" />
                   ) : (
-                    <Check className="size-3.5" />
+                    <Lock className="size-3.5" />
                   )}
                   <span>{nextVisibility}</span>
                 </Button>
@@ -291,8 +294,10 @@ function ReviewTreeNodeRow({
                 >
                   {busy ? (
                     <LoaderCircle className="size-3.5 animate-spin" />
+                  ) : nextVisibility === 'Public' ? (
+                    <Globe2 className="size-3.5" />
                   ) : (
-                    <Check className="size-3.5" />
+                    <Lock className="size-3.5" />
                   )}
                   <span>{nextVisibility}</span>
                 </Button>

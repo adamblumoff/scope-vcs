@@ -9,7 +9,6 @@ import type {
 } from '@/api/types'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
-import { Separator } from '@/components/ui/separator'
 import { ToggleGroup, ToggleGroupItem } from '@/components/ui/toggle-group'
 import {
   ChevronDown,
@@ -180,25 +179,26 @@ function PreviewMetrics({
   showPrivateCounts: boolean
 }) {
   return (
-    <div className="mb-3">
-      <Separator />
-      <div className="flex flex-wrap gap-x-6 gap-y-2 py-3 text-sm">
+    <div className="mb-4 grid gap-3 border-y border-border py-3 text-sm sm:grid-cols-3">
+      <Metric
+        label="Visible"
+        value={fileCountLabel(preview.summary.visible_files)}
+      />
+      {preview.audience === 'public' && showPrivateCounts ? (
         <Metric
-          label="Visible"
-          value={fileCountLabel(preview.summary.visible_files)}
+          label="Private left out"
+          value={fileCountLabel(preview.summary.hidden_files)}
         />
-        {preview.audience === 'public' && showPrivateCounts && (
-          <Metric
-            label="Private left out"
-            value={fileCountLabel(preview.summary.hidden_files)}
-          />
-        )}
+      ) : (
         <Metric
-          label="History"
-          value={commitCountLabel(preview.summary.visible_commits)}
+          label="Audience"
+          value={audienceLabel(preview.audience)}
         />
-      </div>
-      <Separator />
+      )}
+      <Metric
+        label="History"
+        value={commitCountLabel(preview.summary.visible_commits)}
+      />
     </div>
   )
 }

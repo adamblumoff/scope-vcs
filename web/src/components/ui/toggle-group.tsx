@@ -9,7 +9,7 @@ import { cn } from "@/lib/utils"
 
 function ToggleGroup({
   className,
-  variant = "outline",
+  variant = "ghost",
   size = "sm",
   children,
   ...props

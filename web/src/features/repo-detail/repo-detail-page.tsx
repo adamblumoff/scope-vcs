@@ -6,6 +6,7 @@ import type {
   Visibility,
 } from '@/api/types'
 import { AppHeader } from '@/components/app-header'
+import { PageContent, PageHeader } from '@/components/page-header'
 import { VisibilityBadge } from '@/components/visibility-badge'
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert'
 import { Badge } from '@/components/ui/badge'
@@ -101,10 +102,26 @@ export function RepoDetailPage({
     <main className="min-h-screen bg-background text-foreground">
       <AppHeader subtitle={repo.id} subtitleClassName="font-mono" />
 
-      <section className="mx-auto max-w-[980px] px-4 py-7 sm:px-6 lg:py-9">
-        <div className="flex flex-col gap-4 border-b border-border pb-6 sm:flex-row sm:items-end sm:justify-between">
-          <div className="min-w-0">
-            <div className="mb-3 flex flex-wrap items-center gap-2">
+      <PageContent>
+        <PageHeader
+          actions={() => (
+            <>
+              <RepoAction repo={repo} />
+              {repo.role === 'Owner' && (
+                <Button asChild size="sm" variant="secondary">
+                  <Link
+                    params={{ owner: repo.owner_handle, repo: repo.name }}
+                    to="/repos/$owner/$repo/settings"
+                  >
+                    <Settings className="size-3.5" />
+                    <span>Settings</span>
+                  </Link>
+                </Button>
+              )}
+            </>
+          )}
+          badges={() => (
+            <>
               <Badge variant="outline">{repo.lifecycle_state}</Badge>
               {repo.role === 'Owner' && (
                 <VisibilityBadge visibility={repo.default_visibility} />
@@ -113,26 +130,11 @@ export function RepoDetailPage({
               {repo.staged_update_pending && (
                 <Badge variant="outline">Staged update</Badge>
               )}
-            </div>
-            <h1 className="truncate font-mono text-2xl font-semibold leading-8 sm:text-[32px] sm:leading-10">
-              {repo.id}
-            </h1>
-          </div>
-          <div className="flex shrink-0 flex-wrap items-center gap-2">
-            <RepoAction repo={repo} />
-            {repo.role === 'Owner' && (
-              <Button asChild size="sm" variant="secondary">
-                <Link
-                  params={{ owner: repo.owner_handle, repo: repo.name }}
-                  to="/repos/$owner/$repo/settings"
-                >
-                  <Settings className="size-3.5" />
-                  <span>Settings</span>
-                </Link>
-              </Button>
-            )}
-          </div>
-        </div>
+            </>
+          )}
+          title={repo.id}
+          titleClassName="font-mono"
+        />
 
         {error && (
           <Alert className="mt-6" variant="destructive">
@@ -172,7 +174,7 @@ export function RepoDetailPage({
           title={publicOnlyView ? 'Public files' : 'Visibility'}
           treeVariant={publicOnlyView ? 'public' : 'workflow'}
         />
-      </section>
+      </PageContent>
     </main>
   )
 }

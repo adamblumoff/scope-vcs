@@ -7,6 +7,7 @@ import type {
   RepoSummary,
 } from '@/api/types'
 import { AppHeader } from '@/components/app-header'
+import { PageContent, PageHeader } from '@/components/page-header'
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert'
 import { Button } from '@/components/ui/button'
 import { createScopeShooAuth } from '@/lib/auth'
@@ -150,20 +151,16 @@ export function HomePage({
         subtitle={account?.user?.handle ?? 'Repositories'}
       />
 
-      <section className="mx-auto max-w-[980px] px-4 py-7 sm:px-6 lg:py-9">
-        <div className="flex flex-col gap-4 border-b border-border pb-6 sm:flex-row sm:items-end sm:justify-between">
-          <div className="min-w-0">
-            <h1 className="text-2xl font-semibold leading-8 sm:text-[32px] sm:leading-10">
-              Repositories
-            </h1>
-            {account?.identity && (
-              <div className="mt-2 truncate text-sm leading-5 text-muted-foreground">
-                {account.identity.email ?? account.identity.pairwise_sub}
-              </div>
-            )}
-          </div>
-          {signedIn && <CreateRepoForm onCreate={createRepository} />}
-        </div>
+      <PageContent>
+        <PageHeader
+          actions={
+            signedIn
+              ? () => <CreateRepoForm onCreate={createRepository} />
+              : undefined
+          }
+          description={account?.identity?.email ?? account?.identity?.pairwise_sub}
+          title="Repositories"
+        />
 
         {home.error && (
           <Alert className="mt-6" variant="destructive">
@@ -202,7 +199,7 @@ export function HomePage({
           repositories={repositories}
           signedIn={signedIn}
         />
-      </section>
+      </PageContent>
     </main>
   )
 }

@@ -7,6 +7,7 @@ import type {
   Visibility,
 } from '@/api/types'
 import { AppHeader } from '@/components/app-header'
+import { PageContent, PageHeader } from '@/components/page-header'
 import { VisibilityBadge } from '@/components/visibility-badge'
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert'
 import { Badge } from '@/components/ui/badge'
@@ -162,10 +163,61 @@ export function ReviewPage({
     <main className="min-h-screen bg-background text-foreground">
       <AppHeader subtitle={`${params.owner}/${params.repo}`} subtitleClassName="font-mono" />
 
-      <section className="mx-auto max-w-[980px] px-4 py-7 sm:px-6 lg:py-9">
-        <div className="flex flex-col gap-4 border-b border-border pb-6 sm:flex-row sm:items-end sm:justify-between">
-          <div className="min-w-0">
-            <div className="mb-3 flex flex-wrap items-center gap-2">
+      <PageContent>
+        <PageHeader
+          actions={() => (
+            <>
+              {stagedReview && (
+                <Button
+                  disabled={
+                    publishing ||
+                    rejecting ||
+                    visibilityPending ||
+                    review.files.length === 0
+                  }
+                  onClick={() => void rejectUpdate()}
+                  size="sm"
+                  type="button"
+                  variant="secondary"
+                >
+                  {rejecting ? (
+                    <LoaderCircle className="size-3.5 animate-spin" />
+                  ) : (
+                    <X className="size-3.5" />
+                  )}
+                  <span>{rejecting ? 'Rejecting' : 'Reject'}</span>
+                </Button>
+              )}
+              <Button
+                disabled={
+                  publishing ||
+                  rejecting ||
+                  visibilityPending ||
+                  (stagedReview && review.files.length === 0)
+                }
+                onClick={() => void completeReview()}
+                size="sm"
+                type="button"
+              >
+                {publishing ? (
+                  <LoaderCircle className="size-3.5 animate-spin" />
+                ) : (
+                  <Rocket className="size-3.5" />
+                )}
+                <span>
+                  {publishing
+                    ? stagedReview
+                      ? 'Applying'
+                      : 'Publishing'
+                    : stagedReview
+                      ? 'Apply'
+                      : 'Publish'}
+                </span>
+              </Button>
+            </>
+          )}
+          badges={() => (
+            <>
               <Badge variant="outline">{review.publication_state}</Badge>
               {review.default_visibility && (
                 <VisibilityBadge visibility={review.default_visibility} />
@@ -174,61 +226,11 @@ export function ReviewPage({
               {stagedReview && review.branch && (
                 <Badge variant="outline">{review.branch}</Badge>
               )}
-            </div>
-            <h1 className="truncate font-mono text-2xl font-semibold leading-8 sm:text-[32px] sm:leading-10">
-              {params.owner}/{params.repo}
-            </h1>
-          </div>
-          <div className="flex items-center gap-2">
-            {stagedReview && (
-              <Button
-                disabled={
-                  publishing ||
-                  rejecting ||
-                  visibilityPending ||
-                  review.files.length === 0
-                }
-                onClick={() => void rejectUpdate()}
-                size="sm"
-                type="button"
-                variant="secondary"
-              >
-                {rejecting ? (
-                  <LoaderCircle className="size-3.5 animate-spin" />
-                ) : (
-                  <X className="size-3.5" />
-                )}
-                <span>{rejecting ? 'Rejecting' : 'Reject'}</span>
-              </Button>
-            )}
-            <Button
-              disabled={
-                publishing ||
-                rejecting ||
-                visibilityPending ||
-                (stagedReview && review.files.length === 0)
-              }
-              onClick={() => void completeReview()}
-              size="sm"
-              type="button"
-            >
-              {publishing ? (
-                <LoaderCircle className="size-3.5 animate-spin" />
-              ) : (
-                <Rocket className="size-3.5" />
-              )}
-              <span>
-                {publishing
-                  ? stagedReview
-                    ? 'Applying'
-                    : 'Publishing'
-                  : stagedReview
-                    ? 'Apply'
-                    : 'Publish'}
-              </span>
-            </Button>
-          </div>
-        </div>
+            </>
+          )}
+          title={`${params.owner}/${params.repo}`}
+          titleClassName="font-mono"
+        />
 
         {error && (
           <Alert className="mt-6" variant="destructive">
@@ -248,7 +250,7 @@ export function ReviewPage({
           previews={projectionPreviews}
           stagedReview={stagedReview}
         />
-      </section>
+      </PageContent>
     </main>
   )
 }
