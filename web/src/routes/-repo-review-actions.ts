@@ -1,8 +1,10 @@
 import { parseRepoParams } from '@/api/repos'
 import { loadProjectionPreviewsForRequest } from '@/api/projection-preview'
 import {
+  loadReviewFileDiffForRequest,
   loadReviewForRequest,
   parseSetVisibilityInput,
+  parseReviewFileDiffInput,
   postStagedUpdateAction,
   publishRepoForRequest,
   setVisibilityForRequest,
@@ -17,6 +19,10 @@ export const loadReview = createServerFn({ method: 'GET' })
 export const loadReviewProjectionPreviews = createServerFn({ method: 'GET' })
   .validator(parseRepoParams)
   .handler(({ data }) => loadProjectionPreviewsForRequest(data, 'review'))
+
+export const loadReviewFileDiff = createServerFn({ method: 'GET' })
+  .validator(parseReviewFileDiffInput)
+  .handler(({ data }) => loadReviewFileDiffForRequest(data))
 
 export const setVisibility = createServerFn({ method: 'POST' })
   .validator(parseSetVisibilityInput)

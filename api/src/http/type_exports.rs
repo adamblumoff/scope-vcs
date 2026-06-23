@@ -42,6 +42,8 @@ fn export_api_types() {
         declaration::<UpdateRepoSettingsRequest>(&ts_config),
         declaration::<UpdateFileVisibilityRequest>(&ts_config),
         declaration::<UpdateStagedFileVisibilityRequest>(&ts_config),
+        declaration::<ReviewFileDiffRequest>(&ts_config),
+        declaration::<ReviewFileDiffResponse>(&ts_config),
         declaration::<PendingImportReviewResponse>(&ts_config),
         declaration::<StagedUpdateResponse>(&ts_config),
         declaration::<StagedFileResponse>(&ts_config),

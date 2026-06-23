@@ -10,10 +10,13 @@ import type {
   PendingImportPayload,
   RepoPublicationState,
   RepoParams,
+  ReviewFileDiff,
+  ReviewFileDiffInput,
   RepoReviewResult,
   SetVisibilityInput,
   StagedUpdate,
 } from './types'
+import { parseRepoParams } from './repo-detail'
 
 export async function loadReviewForRequest(data: RepoParams) {
   const idToken = await readRequestAuthToken()
@@ -22,6 +25,19 @@ export async function loadReviewForRequest(data: RepoParams) {
   }
 
   return loadRepoReview(data, idToken)
+}
+
+export async function loadReviewFileDiffForRequest(data: ReviewFileDiffInput) {
+  const idToken = await readRequestAuthToken()
+  if (!idToken) {
+    throw new Error('Sign in as the repo owner to review this file.')
+  }
+
+  const query = new URLSearchParams({ path: data.path })
+  return loadJson<ReviewFileDiff>(
+    `${getApiConnection()}/v1/repos/${data.owner}/${data.repo}/review/file-diff?${query}`,
+    { headers: authHeaders(idToken) },
+  )
 }
 
 export async function setVisibilityForRequest(data: SetVisibilityInput) {
@@ -192,4 +208,16 @@ export function parseSetVisibilityInput(input: unknown): SetVisibilityInput {
   }
 
   return { owner, repo, kind, paths, visibility }
+}
+
+export function parseReviewFileDiffInput(input: unknown): ReviewFileDiffInput {
+  const params = parseRepoParams(input)
+  const data = input as Partial<ReviewFileDiffInput> | null
+  const path = typeof data?.path === 'string' ? data.path.trim() : ''
+
+  if (!path) {
+    throw new Error('A file path is required.')
+  }
+
+  return { ...params, path }
 }

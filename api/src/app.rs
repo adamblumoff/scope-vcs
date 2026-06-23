@@ -49,6 +49,10 @@ pub fn router(state: AppState) -> Router {
             get(http::review::get_pending_import_review),
         )
         .route(
+            "/v1/repos/{owner}/{repo}/review/file-diff",
+            get(http::review::get_review_file_diff),
+        )
+        .route(
             "/v1/repos/{owner}/{repo}/publish",
             post(http::review::publish_repo),
         )

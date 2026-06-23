@@ -187,6 +187,21 @@ pub(crate) struct UpdateStagedFileVisibilityRequest {
     pub(crate) visibility: Visibility,
 }
 
+#[derive(Debug, Deserialize)]
+#[cfg_attr(test, derive(ts_rs::TS))]
+pub(crate) struct ReviewFileDiffRequest {
+    pub(crate) path: String,
+}
+
+#[derive(Debug, Serialize)]
+#[cfg_attr(test, derive(ts_rs::TS))]
+pub(crate) struct ReviewFileDiffResponse {
+    pub(crate) path: String,
+    pub(crate) kind: StagedFileChangeKind,
+    pub(crate) old_content: Option<String>,
+    pub(crate) new_content: Option<String>,
+}
+
 #[derive(Debug, Serialize)]
 #[cfg_attr(test, derive(ts_rs::TS))]
 pub(crate) struct StagedUpdateResponse {

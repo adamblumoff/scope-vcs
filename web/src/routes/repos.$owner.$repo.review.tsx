@@ -1,5 +1,6 @@
 import {
   applyStagedUpdate,
+  loadReviewFileDiff,
   loadReviewProjectionPreviews,
   loadReview,
   publishRepo,
@@ -46,6 +47,7 @@ function ReviewRoute() {
     <ReviewPage
       applyStagedUpdate={(data) => applyStagedUpdate({ data })}
       initialReview={review}
+      loadFileDiff={(data) => loadReviewFileDiff({ data })}
       params={params}
       projectionPreviews={projectionPreviews}
       publishRepo={(data) => publishRepo({ data })}

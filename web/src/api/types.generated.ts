@@ -54,6 +54,10 @@ export type UpdateFileVisibilityRequest = { paths: Array<string>, visibility: Vi
 
 export type UpdateStagedFileVisibilityRequest = { paths: Array<string>, visibility: Visibility, };
 
+export type ReviewFileDiffRequest = { path: string, };
+
+export type ReviewFileDiffResponse = { path: string, kind: StagedFileChangeKind, old_content: string | null, new_content: string | null, };
+
 export type PendingImportReviewResponse = { publication_state: RepoPublicationState, default_visibility: Visibility, files: Array<RepoFileResponse>, };
 
 export type StagedUpdateResponse = { id: string, branch: string, base_live_commit_id: string | null, message: string, files: Array<StagedFileResponse>, };

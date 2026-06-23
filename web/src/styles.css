@@ -369,3 +369,16 @@ a {
     box-shadow: 0 0 0 2px var(--background-100), 0 0 0 4px var(--blue-900);
   }
 }
+
+.review-diff-viewer diffs-container {
+  --diffs-dark: var(--foreground);
+  --diffs-dark-bg: var(--background);
+  --diffs-font-family: var(--font-mono);
+  --diffs-font-size: 12px;
+  --diffs-header-font-family: var(--font-sans);
+  --diffs-line-height: 20px;
+  --diffs-gap-block: 6px;
+  --diffs-gap-inline: 8px;
+  display: block;
+  min-width: 0;
+}

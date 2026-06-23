@@ -35,7 +35,9 @@ export function ReviewTree({
   disabled = false,
   files,
   onSetVisibility,
+  onSelectFile,
   pendingKey = null,
+  selectedFilePath = null,
   visiblePaths,
   variant = 'workflow',
   stagedReview,
@@ -48,7 +50,9 @@ export function ReviewTree({
     visibility: Visibility,
     pendingKey: string,
   ) => void
+  onSelectFile?: (file: ReviewFile) => void
   pendingKey?: string | null
+  selectedFilePath?: string | null
   visiblePaths?: ReadonlySet<string>
   variant?: ReviewTreeVariant
   stagedReview: boolean
@@ -103,9 +107,11 @@ export function ReviewTree({
           editable={editable}
           key={node.key}
           node={node}
+          onSelectFile={onSelectFile}
           onSetVisibility={onSetVisibility}
           onToggleFolder={toggleFolder}
           pendingKey={pendingKey}
+          selectedFilePath={selectedFilePath}
           stagedReview={stagedReview}
           viewAudience={audience}
           visiblePaths={visiblePaths}
@@ -121,9 +127,11 @@ function ReviewTreeNodeRow({
   disabled,
   editable,
   node,
+  onSelectFile,
   onSetVisibility,
   onToggleFolder,
   pendingKey,
+  selectedFilePath,
   stagedReview,
   viewAudience,
   visiblePaths,
@@ -134,6 +142,7 @@ function ReviewTreeNodeRow({
   disabled: boolean
   editable: boolean
   node: ReviewTreeNode
+  onSelectFile?: (file: ReviewFile) => void
   onSetVisibility?: (
     files: ReviewFile[],
     visibility: Visibility,
@@ -141,6 +150,7 @@ function ReviewTreeNodeRow({
   ) => void
   onToggleFolder: (key: string) => void
   pendingKey: string | null
+  selectedFilePath: string | null
   stagedReview: boolean
   viewAudience?: ProjectionPreviewAudience
   visiblePaths?: ReadonlySet<string>
@@ -156,24 +166,35 @@ function ReviewTreeNodeRow({
       viewAudience,
       visiblePaths,
     )
+    const selected =
+      selectedFilePath !== null &&
+      displayPath(selectedFilePath) === displayPath(node.file.path)
     return (
       <div
         className={cn(
           'grid gap-2 px-2 py-2.5 text-sm sm:items-center',
+          selected && 'bg-blue-100/60 dark:bg-blue-100/35',
           viewAudience === 'public' && !visibleInView && 'text-muted-foreground',
           publicTree ? PUBLIC_TREE_COLUMNS : REVIEW_TREE_COLUMNS,
         )}
       >
-        <div
-          className="flex min-w-0 items-center gap-2"
-          style={{ paddingLeft: `${depth * 18}px` }}
-        >
-          <span className="size-6 shrink-0" />
-          <File className="size-4 shrink-0 text-muted-foreground" />
-          <span className="min-w-0 truncate font-mono text-xs" title={node.path}>
-            {displayPath(node.path)}
-          </span>
-        </div>
+        {onSelectFile ? (
+          <button
+            className="flex min-w-0 items-center gap-2 rounded-md text-left transition-colors hover:bg-muted/70"
+            onClick={() => onSelectFile(node.file)}
+            style={{ paddingLeft: `${depth * 18}px` }}
+            type="button"
+          >
+            <FilePathLabel path={node.path} />
+          </button>
+        ) : (
+          <div
+            className="flex min-w-0 items-center gap-2"
+            style={{ paddingLeft: `${depth * 18}px` }}
+          >
+            <FilePathLabel path={node.path} />
+          </div>
+        )}
         {!publicTree && (
           <>
             <div className="flex flex-wrap gap-1.5 text-xs leading-4">
@@ -320,9 +341,11 @@ function ReviewTreeNodeRow({
             editable={editable}
             key={child.key}
             node={child}
+            onSelectFile={onSelectFile}
             onSetVisibility={onSetVisibility}
             onToggleFolder={onToggleFolder}
             pendingKey={pendingKey}
+            selectedFilePath={selectedFilePath}
             stagedReview={stagedReview}
             viewAudience={viewAudience}
             visiblePaths={visiblePaths}
@@ -332,6 +355,19 @@ function ReviewTreeNodeRow({
     </>
   )
 }
+
+function FilePathLabel({ path }: { path: string }) {
+  return (
+    <>
+      <span className="size-6 shrink-0" />
+      <File className="size-4 shrink-0 text-muted-foreground" />
+      <span className="min-w-0 truncate font-mono text-xs" title={path}>
+        {displayPath(path)}
+      </span>
+    </>
+  )
+}
+
 function folderViewState(
   files: ReviewFile[],
   audience: ProjectionPreviewAudience | undefined,

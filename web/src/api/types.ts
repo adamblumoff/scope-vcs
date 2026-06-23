@@ -13,6 +13,8 @@ import type {
   ProjectionPreviewResponse,
   ProjectionPreviewSource as GeneratedProjectionPreviewSource,
   ProjectionPreviewSummaryResponse,
+  ReviewFileDiffRequest,
+  ReviewFileDiffResponse,
   RepoFileResponse,
   RepoGitCredentialResponse,
   RepoPublicationState as GeneratedRepoPublicationState,
@@ -62,6 +64,7 @@ export type RepoSettings = RepoSettingsResponse
 export type PendingImportPayload = PendingImportReviewResponse
 export type StagedFile = StagedFileResponse
 export type StagedUpdate = StagedUpdateResponse
+export type ReviewFileDiff = ReviewFileDiffResponse
 export type ProjectionPreviewFile = ProjectionPreviewFileResponse
 export type ProjectionPreviewCommit = ProjectionPreviewCommitResponse
 export type ProjectionPreviewSummary = ProjectionPreviewSummaryResponse
@@ -147,6 +150,8 @@ export type ProjectionPreviewInput = RepoParams & {
   audience: ProjectionPreviewAudience
   source: ProjectionPreviewSource
 }
+
+export type ReviewFileDiffInput = RepoParams & ReviewFileDiffRequest
 
 export type SetVisibilityInput = RepoParams &
   UpdateFileVisibilityRequest & {
