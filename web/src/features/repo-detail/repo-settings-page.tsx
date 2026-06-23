@@ -7,14 +7,15 @@ import type {
   RepoSummary,
   UpdateRepoSettingsInput,
 } from '@/api/types'
-import { homeFlashKey } from '@/api/client'
 import { AppHeader } from '@/components/app-header'
 import { PageContent, PageHeader } from '@/components/page-header'
+import { PageErrorAlert } from '@/components/page-error-alert'
 import { VisibilityBadge } from '@/components/visibility-badge'
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert'
 import { Badge } from '@/components/ui/badge'
+import { storeHomeFlash } from '@/lib/home-flash'
 import { useNavigate, useRouter } from '@tanstack/react-router'
-import { AlertCircle, CheckCircle2 } from 'lucide-react'
+import { CheckCircle2 } from 'lucide-react'
 import { useReducer, useRef } from 'react'
 import { DeleteRepositoryDialog } from './delete-repository-dialog'
 import { SettingsSections } from './repo-settings-sections'
@@ -118,9 +119,7 @@ export function RepoSettingsPage({
         owner: target.owner_handle,
         repo: target.name,
       })
-      if (typeof window !== 'undefined') {
-        window.sessionStorage.setItem(homeFlashKey, `${target.id} deleted.`)
-      }
+      storeHomeFlash(`${target.id} deleted.`)
       await navigate({ to: '/' })
       void router.invalidate().catch(() => undefined)
     } catch (error) {
@@ -153,27 +152,21 @@ export function RepoSettingsPage({
         />
 
         {settingsError && (
-          <Alert className="mt-6" variant="destructive">
-            <AlertCircle className="size-4" />
-            <AlertTitle>Settings update failed</AlertTitle>
-            <AlertDescription>{settingsError}</AlertDescription>
-          </Alert>
+          <PageErrorAlert title="Settings update failed">
+            {settingsError}
+          </PageErrorAlert>
         )}
 
         {gitCredentialError && (
-          <Alert className="mt-6" variant="destructive">
-            <AlertCircle className="size-4" />
-            <AlertTitle>Git credential reset failed</AlertTitle>
-            <AlertDescription>{gitCredentialError}</AlertDescription>
-          </Alert>
+          <PageErrorAlert title="Git credential reset failed">
+            {gitCredentialError}
+          </PageErrorAlert>
         )}
 
         {deleteError && (
-          <Alert className="mt-6" variant="destructive">
-            <AlertCircle className="size-4" />
-            <AlertTitle>Repository deletion failed</AlertTitle>
-            <AlertDescription>{deleteError}</AlertDescription>
-          </Alert>
+          <PageErrorAlert title="Repository deletion failed">
+            {deleteError}
+          </PageErrorAlert>
         )}
 
         {gitCredential?.push_token.secret && (

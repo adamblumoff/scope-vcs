@@ -1,8 +1,8 @@
-import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert'
+import { PageErrorAlert } from '@/components/page-error-alert'
 import { Button } from '@/components/ui/button'
 import { createScopeShooAuth } from '@/lib/auth'
 import { createFileRoute, redirect } from '@tanstack/react-router'
-import { AlertCircle, LoaderCircle, LogIn } from 'lucide-react'
+import { LoaderCircle, LogIn } from 'lucide-react'
 
 export const Route = createFileRoute('/auth/callback')({
   ssr: false,
@@ -58,17 +58,17 @@ function AuthCallbackError({ error }: { error: unknown }) {
   return (
     <main className="grid min-h-screen place-items-center bg-background px-4 text-foreground">
       <div className="w-full max-w-[520px]">
-        <Alert variant="destructive">
-          <AlertCircle className="size-4" />
-          <AlertTitle>Sign in failed</AlertTitle>
-          <AlertDescription className="space-y-4">
-            <p>{message}</p>
-            <Button onClick={() => void restartSignIn()} size="sm">
-              <LogIn className="size-3.5" />
-              <span>Try again</span>
-            </Button>
-          </AlertDescription>
-        </Alert>
+        <PageErrorAlert
+          className="mt-0"
+          descriptionClassName="space-y-4"
+          title="Sign in failed"
+        >
+          <p>{message}</p>
+          <Button onClick={() => void restartSignIn()} size="sm">
+            <LogIn className="size-3.5" />
+            <span>Try again</span>
+          </Button>
+        </PageErrorAlert>
       </div>
     </main>
   )

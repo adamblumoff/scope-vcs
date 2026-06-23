@@ -1,23 +1,19 @@
 import type {
   RepoDetail,
   RepoParams,
-  RepoSummary,
   ReviewFile,
   Visibility,
 } from '@/api/types'
 import { AppHeader } from '@/components/app-header'
 import { PageContent, PageHeader } from '@/components/page-header'
+import { PageErrorAlert } from '@/components/page-error-alert'
+import { RepoPrimaryActionButton } from '@/components/repo-primary-action'
+import { RouteErrorPage } from '@/components/route-error-page'
 import { VisibilityBadge } from '@/components/visibility-badge'
-import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Link, useRouter } from '@tanstack/react-router'
-import {
-  AlertCircle,
-  ArrowLeft,
-  ArrowRight,
-  Settings,
-} from 'lucide-react'
+import { Settings } from 'lucide-react'
 import { useReducer } from 'react'
 import { ReviewVisibilityPanel } from '../review/review-visibility-panel'
 import {
@@ -106,7 +102,12 @@ export function RepoDetailPage({
         <PageHeader
           actions={() => (
             <>
-              <RepoAction repo={repo} />
+              <RepoPrimaryActionButton
+                includeOpen={false}
+                repo={repo}
+                requireOwner
+                variant="default"
+              />
               {repo.role === 'Owner' && (
                 <Button asChild size="sm" variant="secondary">
                   <Link
@@ -137,11 +138,9 @@ export function RepoDetailPage({
         />
 
         {error && (
-          <Alert className="mt-6" variant="destructive">
-            <AlertCircle className="size-4" />
-            <AlertTitle>Visibility update failed</AlertTitle>
-            <AlertDescription>{error}</AlertDescription>
-          </Alert>
+          <PageErrorAlert title="Visibility update failed">
+            {error}
+          </PageErrorAlert>
         )}
 
         <ReviewVisibilityPanel
@@ -179,61 +178,12 @@ export function RepoDetailPage({
   )
 }
 
-function RepoAction({ repo }: { repo: RepoSummary }) {
-  if (repo.role !== 'Owner') {
-    return null
-  }
-
-  if (repo.lifecycle_state === 'PendingFirstPush') {
-    return (
-      <Button asChild size="sm">
-        <Link
-          params={{ owner: repo.owner_handle, repo: repo.name }}
-          to="/repos/$owner/$repo/setup"
-        >
-          <ArrowRight className="size-3.5" />
-          <span>Setup</span>
-        </Link>
-      </Button>
-    )
-  }
-
-  if (repo.staged_update_pending) {
-    return (
-      <Button asChild size="sm">
-        <Link
-          params={{ owner: repo.owner_handle, repo: repo.name }}
-          to="/repos/$owner/$repo/review"
-        >
-          <ArrowRight className="size-3.5" />
-          <span>Review</span>
-        </Link>
-      </Button>
-    )
-  }
-
-  return null
-}
-
 export function RepoDetailError({ error }: { error: unknown }) {
-  const message =
-    error instanceof Error ? error.message : 'Unexpected repository error'
-
   return (
-    <main className="min-h-screen bg-background px-4 py-8 text-foreground sm:px-6">
-      <div className="mx-auto max-w-[760px] border-y border-border py-6">
-        <Alert variant="destructive">
-          <AlertCircle className="size-4" />
-          <AlertTitle>Repository unavailable</AlertTitle>
-          <AlertDescription>{message}</AlertDescription>
-        </Alert>
-        <Button asChild className="mt-5" size="sm" variant="secondary">
-          <Link to="/">
-            <ArrowLeft className="size-3.5" />
-            <span>Repos</span>
-          </Link>
-        </Button>
-      </div>
-    </main>
+    <RouteErrorPage
+      error={error}
+      fallbackMessage="Unexpected repository error"
+      title="Repository unavailable"
+    />
   )
 }

@@ -1,53 +1,34 @@
-import { homeFlashKey } from '@/api/client'
-import { setupPushSecretKey } from '@/api/setup'
 import type {
   CreateRepoInput,
   CreateRepoResponse,
   HomeState,
-  RepoSummary,
 } from '@/api/types'
 import { AppHeader } from '@/components/app-header'
 import { PageContent, PageHeader } from '@/components/page-header'
+import { PageErrorAlert } from '@/components/page-error-alert'
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert'
 import { Button } from '@/components/ui/button'
 import { createScopeShooAuth } from '@/lib/auth'
+import { useHomeFlash } from '@/lib/home-flash'
+import { storeSetupPushSecret } from '@/lib/setup-push-secret'
 import { useNavigate, useRouter } from '@tanstack/react-router'
 import {
-  AlertCircle,
   CheckCircle2,
   LoaderCircle,
   LogOut,
   Moon,
   Sun,
 } from 'lucide-react'
-import { useReducer, useState, useSyncExternalStore } from 'react'
+import { useReducer, useState } from 'react'
 import { CreateRepoForm } from './create-repo-form'
+import {
+  type ThemeMode,
+  activeHomeState,
+  homePageReducer,
+  initialHomePageState,
+  nextThemeMode,
+} from './home-page-state'
 import { RepoList } from './repo-list'
-
-type ThemeMode = 'dark' | 'light'
-
-type HomeOverride = {
-  account: HomeState['account']
-  baseHome: HomeState
-  repositories: RepoSummary[]
-  signedIn: boolean
-}
-
-type HomeUiState = {
-  createError: string | null
-  sessionError: string | null
-}
-
-type HomeUiAction =
-  | { type: 'createFailed'; message: string }
-  | { type: 'createStarted' }
-  | { type: 'sessionFailed'; message: string }
-  | { type: 'sessionStarted' }
-
-const initialHomeUiState: HomeUiState = {
-  createError: null,
-  sessionError: null,
-}
 
 export function HomePage({
   createRepo,
@@ -58,47 +39,42 @@ export function HomePage({
 }) {
   const navigate = useNavigate()
   const router = useRouter()
-  const [uiState, dispatchUi] = useReducer(
-    homeUiReducer,
-    initialHomeUiState,
+  const [state, dispatch] = useReducer(
+    homePageReducer,
+    initialHomePageState,
   )
-  const [homeOverride, setHomeOverride] = useState<HomeOverride | null>(null)
   const flash = useHomeFlash()
-  const [theme, setTheme] = useState<ThemeMode>('dark')
-  const activeHome = homeOverride?.baseHome === home ? homeOverride : home
+  const activeHome = activeHomeState(home, state)
   const { account, repositories, signedIn } = activeHome
-  const { createError, sessionError } = uiState
+  const { createError, sessionError, theme } = state
 
   function toggleTheme() {
-    const nextTheme = theme === 'dark' ? 'light' : 'dark'
-    setTheme(nextTheme)
+    const nextTheme = nextThemeMode(theme)
+    dispatch({ theme: nextTheme, type: 'themeChanged' })
     applyTheme(nextTheme)
   }
 
   async function createRepository(input: CreateRepoInput) {
-    dispatchUi({ type: 'createStarted' })
+    dispatch({ type: 'createStarted' })
     try {
       const created = await createRepo(input)
       const repo = created.repo
-      setHomeOverride({
+      dispatch({
         account,
         baseHome: home,
-        repositories: [repo, ...repositories],
+        repositories,
+        repo,
         signedIn,
+        type: 'repositoryCreated',
       })
-      if (created.setup.push_token?.secret) {
-        storeSetupSecret(
-          setupPushSecretKey(repo.id),
-          created.setup.push_token.secret,
-        )
-      }
+      storeSetupPushSecret(repo.id, created.setup.push_token?.secret ?? null)
       await router.invalidate()
       await navigate({
         to: '/repos/$owner/$repo/setup',
         params: { owner: repo.owner_handle, repo: repo.name },
       })
     } catch (error) {
-      dispatchUi({
+      dispatch({
         message:
           error instanceof Error ? error.message : 'repository creation failed',
         type: 'createFailed',
@@ -107,12 +83,12 @@ export function HomePage({
   }
 
   async function signOut() {
-    dispatchUi({ type: 'sessionStarted' })
+    dispatch({ type: 'sessionStarted' })
     let response: Response
     try {
       response = await fetch('/auth/session', { method: 'DELETE' })
     } catch (error) {
-      dispatchUi({
+      dispatch({
         message: error instanceof Error ? error.message : 'sign out failed',
         type: 'sessionFailed',
       })
@@ -120,7 +96,7 @@ export function HomePage({
     }
 
     if (!response.ok) {
-      dispatchUi({
+      dispatch({
         message: `sign out failed: ${response.status}`,
         type: 'sessionFailed',
       })
@@ -128,12 +104,7 @@ export function HomePage({
     }
 
     createScopeShooAuth().clearIdentity()
-    setHomeOverride({
-      account: null,
-      baseHome: home,
-      repositories: [],
-      signedIn: false,
-    })
+    dispatch({ baseHome: home, type: 'signedOut' })
     await router.invalidate()
   }
 
@@ -162,19 +133,15 @@ export function HomePage({
         />
 
         {home.error && (
-          <Alert className="mt-6" variant="destructive">
-            <AlertCircle className="size-4" />
-            <AlertTitle>Repositories unavailable</AlertTitle>
-            <AlertDescription>{home.error}</AlertDescription>
-          </Alert>
+          <PageErrorAlert title="Repositories unavailable">
+            {home.error}
+          </PageErrorAlert>
         )}
 
         {createError && (
-          <Alert className="mt-6" variant="destructive">
-            <AlertCircle className="size-4" />
-            <AlertTitle>Repository creation failed</AlertTitle>
-            <AlertDescription>{createError}</AlertDescription>
-          </Alert>
+          <PageErrorAlert title="Repository creation failed">
+            {createError}
+          </PageErrorAlert>
         )}
 
         {flash && (
@@ -186,11 +153,9 @@ export function HomePage({
         )}
 
         {sessionError && (
-          <Alert className="mt-6" variant="destructive">
-            <AlertCircle className="size-4" />
-            <AlertTitle>Session update failed</AlertTitle>
-            <AlertDescription>{sessionError}</AlertDescription>
-          </Alert>
+          <PageErrorAlert title="Session update failed">
+            {sessionError}
+          </PageErrorAlert>
         )}
 
         <RepoList
@@ -203,59 +168,8 @@ export function HomePage({
   )
 }
 
-function homeUiReducer(state: HomeUiState, action: HomeUiAction): HomeUiState {
-  switch (action.type) {
-    case 'createStarted':
-      return { ...state, createError: null }
-    case 'createFailed':
-      return { ...state, createError: action.message }
-    case 'sessionStarted':
-      return { ...state, sessionError: null }
-    case 'sessionFailed':
-      return { ...state, sessionError: action.message }
-  }
-}
-
 async function signIn() {
   await createScopeShooAuth().startSignIn({ requestPii: true })
-}
-
-type HomeFlashSnapshot = {
-  value: string | null | undefined
-}
-
-function useHomeFlash() {
-  const [snapshot] = useState<HomeFlashSnapshot>(() => ({ value: undefined }))
-  return useSyncExternalStore(
-    subscribeHomeFlash,
-    () => getHomeFlashSnapshot(snapshot),
-    getServerHomeFlashSnapshot,
-  )
-}
-
-function subscribeHomeFlash() {
-  return () => {}
-}
-
-function getHomeFlashSnapshot(snapshot: HomeFlashSnapshot) {
-  if (snapshot.value !== undefined) {
-    return snapshot.value
-  }
-
-  if (typeof window === 'undefined') {
-    return null
-  }
-
-  snapshot.value = window.sessionStorage.getItem(homeFlashKey)
-  if (snapshot.value) {
-    window.sessionStorage.removeItem(homeFlashKey)
-  }
-
-  return snapshot.value
-}
-
-function getServerHomeFlashSnapshot() {
-  return null
 }
 
 function AuthControls({
@@ -320,14 +234,6 @@ function ThemeToggle({
       )}
     </Button>
   )
-}
-
-function storeSetupSecret(key: string, secret: string) {
-  if (typeof window === 'undefined') {
-    return
-  }
-
-  window.sessionStorage.setItem(key, secret)
 }
 
 function applyTheme(theme: ThemeMode) {
