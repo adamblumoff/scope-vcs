@@ -34,7 +34,7 @@ export function AppHeader({
 
   return (
     <header className="border-b border-border bg-background">
-      <div className="mx-auto flex min-h-16 max-w-[1040px] items-center justify-between gap-3 px-4 py-3 sm:px-6">
+      <div className="mx-auto flex min-h-16 max-w-[1320px] items-center justify-between gap-3 px-4 py-3 sm:px-6">
         {homeLink ? (
           <Link className="flex min-w-0 items-center gap-3" to="/">
             {brand}

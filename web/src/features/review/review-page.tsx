@@ -181,7 +181,7 @@ export function ReviewPage({
     <main className="min-h-screen bg-background text-foreground">
       <AppHeader subtitle={`${params.owner}/${params.repo}`} subtitleClassName="font-mono" />
 
-      <PageContent className="max-w-[1320px]">
+      <PageContent>
         <PageHeader
           actions={() => (
             <>
