@@ -30,12 +30,14 @@ pub(crate) struct ReadinessCheckResponse {
 }
 
 #[derive(Debug, Serialize)]
+#[cfg_attr(test, derive(ts_rs::TS))]
 pub(crate) struct AccountSessionResponse {
     pub(crate) identity: Option<SessionIdentity>,
     pub(crate) user: Option<UserResponse>,
 }
 
 #[derive(Debug, Serialize)]
+#[cfg_attr(test, derive(ts_rs::TS))]
 pub(crate) struct UserResponse {
     pub(crate) id: String,
     pub(crate) handle: String,
@@ -55,6 +57,7 @@ impl From<UserAccount> for UserResponse {
 }
 
 #[derive(Debug, Serialize)]
+#[cfg_attr(test, derive(ts_rs::TS))]
 pub(crate) struct SessionResponse {
     pub(crate) identity: Option<SessionIdentity>,
     pub(crate) repo: SessionRepo,
@@ -63,6 +66,7 @@ pub(crate) struct SessionResponse {
 }
 
 #[derive(Debug, Serialize)]
+#[cfg_attr(test, derive(ts_rs::TS))]
 pub(crate) struct SessionIdentity {
     pub(crate) pairwise_sub: String,
     pub(crate) email: Option<String>,
@@ -70,6 +74,7 @@ pub(crate) struct SessionIdentity {
 }
 
 #[derive(Debug, Serialize)]
+#[cfg_attr(test, derive(ts_rs::TS))]
 pub(crate) struct SessionRepo {
     pub(crate) id: String,
     pub(crate) publication_state: RepoPublicationState,
@@ -77,12 +82,14 @@ pub(crate) struct SessionRepo {
 }
 
 #[derive(Debug, Serialize)]
+#[cfg_attr(test, derive(ts_rs::TS))]
 pub(crate) struct SessionCapabilities {
     pub(crate) read: bool,
     pub(crate) write: bool,
 }
 
 #[derive(Debug, Serialize)]
+#[cfg_attr(test, derive(ts_rs::TS))]
 pub(crate) struct RepoSummaryResponse {
     pub(crate) id: String,
     pub(crate) owner_handle: String,
@@ -94,18 +101,21 @@ pub(crate) struct RepoSummaryResponse {
 }
 
 #[derive(Debug, Serialize)]
+#[cfg_attr(test, derive(ts_rs::TS))]
 pub(crate) struct CreateRepoResponse {
     pub(crate) repo: RepoSummaryResponse,
     pub(crate) setup: RepoSetupResponse,
 }
 
 #[derive(Debug, Serialize)]
+#[cfg_attr(test, derive(ts_rs::TS))]
 pub(crate) struct DeleteRepoResponse {
     pub(crate) id: String,
     pub(crate) deleted: bool,
 }
 
 #[derive(Debug, Serialize)]
+#[cfg_attr(test, derive(ts_rs::TS))]
 pub(crate) struct RepoSetupResponse {
     pub(crate) repo: RepoSummaryResponse,
     pub(crate) git_remote_path: String,
@@ -117,6 +127,7 @@ pub(crate) struct RepoSetupResponse {
 }
 
 #[derive(Debug, Serialize)]
+#[cfg_attr(test, derive(ts_rs::TS))]
 pub(crate) struct RepoGitCredentialResponse {
     pub(crate) git_remote_path: String,
     pub(crate) remote_name: &'static str,
@@ -124,6 +135,7 @@ pub(crate) struct RepoGitCredentialResponse {
 }
 
 #[derive(Debug, Serialize)]
+#[cfg_attr(test, derive(ts_rs::TS))]
 pub(crate) struct FirstPushTokenResponse {
     pub(crate) status: FirstPushTokenStatus,
     pub(crate) created_at_unix: u64,
@@ -133,12 +145,14 @@ pub(crate) struct FirstPushTokenResponse {
 }
 
 #[derive(Debug, Serialize)]
+#[cfg_attr(test, derive(ts_rs::TS))]
 pub(crate) struct GitPushTokenResponse {
     pub(crate) created_at_unix: u64,
     pub(crate) secret: Option<String>,
 }
 
 #[derive(Debug, Serialize)]
+#[cfg_attr(test, derive(ts_rs::TS))]
 pub(crate) struct PendingImportReviewResponse {
     pub(crate) publication_state: RepoPublicationState,
     pub(crate) default_visibility: Visibility,
@@ -146,30 +160,35 @@ pub(crate) struct PendingImportReviewResponse {
 }
 
 #[derive(Debug, Deserialize)]
+#[cfg_attr(test, derive(ts_rs::TS))]
 pub(crate) struct UpdateFileVisibilityRequest {
     pub(crate) paths: Vec<String>,
     pub(crate) visibility: Visibility,
 }
 
 #[derive(Debug, Serialize)]
+#[cfg_attr(test, derive(ts_rs::TS))]
 pub(crate) struct RepoSettingsResponse {
     pub(crate) default_new_file_visibility: Visibility,
     pub(crate) review_pushes_before_applying: bool,
 }
 
 #[derive(Debug, Deserialize)]
+#[cfg_attr(test, derive(ts_rs::TS))]
 pub(crate) struct UpdateRepoSettingsRequest {
     pub(crate) default_new_file_visibility: Visibility,
     pub(crate) review_pushes_before_applying: bool,
 }
 
 #[derive(Debug, Deserialize)]
+#[cfg_attr(test, derive(ts_rs::TS))]
 pub(crate) struct UpdateStagedFileVisibilityRequest {
     pub(crate) paths: Vec<String>,
     pub(crate) visibility: Visibility,
 }
 
 #[derive(Debug, Serialize)]
+#[cfg_attr(test, derive(ts_rs::TS))]
 pub(crate) struct StagedUpdateResponse {
     pub(crate) id: String,
     pub(crate) branch: String,
@@ -179,6 +198,7 @@ pub(crate) struct StagedUpdateResponse {
 }
 
 #[derive(Debug, Serialize)]
+#[cfg_attr(test, derive(ts_rs::TS))]
 pub(crate) struct StagedFileResponse {
     pub(crate) path: String,
     pub(crate) kind: StagedFileChangeKind,
@@ -188,6 +208,7 @@ pub(crate) struct StagedFileResponse {
 }
 
 #[derive(Debug, Deserialize)]
+#[cfg_attr(test, derive(ts_rs::TS))]
 pub(crate) struct CreateRepoRequest {
     pub(crate) name: String,
     pub(crate) visibility: Option<Visibility>,

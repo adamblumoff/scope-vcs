@@ -1,5 +1,5 @@
 use super::{
-    repo_cleanup::{
+    cleanup_queue::{
         load_pending_repo_storage_deletions, load_pending_source_blob_deletions,
         queue_pending_repo_storage_deletion, queue_pending_source_blob_deletions,
         save_pending_repo_storage_deletions, save_pending_source_blob_deletions,

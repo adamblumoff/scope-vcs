@@ -1,69 +1,71 @@
-export type Visibility = 'Private' | 'Public'
+import type {
+  AccountSessionResponse,
+  CreateRepoRequest,
+  CreateRepoResponse as GeneratedCreateRepoResponse,
+  DeleteRepoResponse as GeneratedDeleteRepoResponse,
+  FirstPushTokenResponse,
+  FirstPushTokenStatus,
+  GitPushTokenResponse,
+  PendingImportReviewResponse,
+  ProjectionPreviewAudience as GeneratedProjectionPreviewAudience,
+  ProjectionPreviewCommitResponse,
+  ProjectionPreviewFileResponse,
+  ProjectionPreviewResponse,
+  ProjectionPreviewSource as GeneratedProjectionPreviewSource,
+  ProjectionPreviewSummaryResponse,
+  RepoFileResponse,
+  RepoGitCredentialResponse,
+  RepoPublicationState as GeneratedRepoPublicationState,
+  RepoRole as GeneratedRepoRole,
+  RepoSettingsResponse,
+  RepoSetupResponse,
+  RepoSummaryResponse,
+  SessionCapabilities,
+  SessionIdentity as GeneratedSessionIdentity,
+  SessionResponse,
+  SessionRepo as GeneratedSessionRepo,
+  StagedFileChangeKind as GeneratedStagedFileChangeKind,
+  StagedFileResponse,
+  StagedUpdateResponse,
+  UpdateFileVisibilityRequest,
+  UpdateRepoSettingsRequest,
+  UserResponse,
+  Visibility as GeneratedVisibility,
+} from './types.generated'
+
+export type Visibility = GeneratedVisibility
 export type VisibilityState = Visibility | 'Mixed'
-export type RepoRole = 'Reader' | 'Writer' | 'Maintainer' | 'Owner'
-export type RepoLifecycleState =
-  | 'PendingFirstPush'
-  | 'PendingPublish'
-  | 'Published'
-export type RepoPublicationState = RepoLifecycleState
-export type TokenStatus = 'Active' | 'Expired' | 'Used'
+export type RepoRole = GeneratedRepoRole
+export type RepoPublicationState = GeneratedRepoPublicationState
+export type RepoLifecycleState = RepoPublicationState
+export type TokenStatus = FirstPushTokenStatus
 export type ReviewKind = 'PendingImport' | 'StagedUpdate'
-export type StagedFileChangeKind = 'Added' | 'Modified' | 'Deleted'
-export type ProjectionPreviewAudience = 'owner' | 'public'
-export type ProjectionPreviewSource = 'live' | 'review'
+export type StagedFileChangeKind = GeneratedStagedFileChangeKind
+export type ProjectionPreviewAudience = GeneratedProjectionPreviewAudience
+export type ProjectionPreviewSource = GeneratedProjectionPreviewSource
 
-export type SessionIdentity = {
-  pairwise_sub: string
-  email: string | null
-  email_verified: boolean
-}
-
-export type User = {
-  id: string
-  handle: string
-  email: string
-  email_verified: boolean
-}
-
-export type AccountSession = {
-  identity: SessionIdentity | null
-  user: User | null
-}
-
-export type RepoSummary = {
-  id: string
-  owner_handle: string
-  name: string
-  lifecycle_state: RepoPublicationState
-  default_visibility: Visibility
-  role: RepoRole | null
-  staged_update_pending: boolean
-}
-
-export type RepoFile = {
-  path: string
-  oid: string
-  tracked: boolean
-  visibility: Visibility
-}
-
-export type RepoCapabilities = {
-  read: boolean
-  write: boolean
-}
-
-export type SessionRepo = {
-  id: string
-  publication_state: RepoPublicationState
-  role: RepoRole | null
-}
-
-export type RepoSession = {
-  identity: SessionIdentity | null
-  repo: SessionRepo
-  principal_id: string
-  capabilities: RepoCapabilities
-}
+export type SessionIdentity = GeneratedSessionIdentity
+export type User = UserResponse
+export type AccountSession = AccountSessionResponse
+export type RepoSummary = RepoSummaryResponse
+export type RepoFile = RepoFileResponse
+export type RepoCapabilities = SessionCapabilities
+export type SessionRepo = GeneratedSessionRepo
+export type RepoSession = SessionResponse
+export type FirstPushToken = FirstPushTokenResponse
+export type GitPushToken = GitPushTokenResponse
+export type RepoSetup = RepoSetupResponse
+export type RepoGitCredential = RepoGitCredentialResponse
+export type CreateRepoResponse = GeneratedCreateRepoResponse
+export type DeleteRepoResponse = GeneratedDeleteRepoResponse
+export type RepoSettings = RepoSettingsResponse
+export type PendingImportPayload = PendingImportReviewResponse
+export type StagedFile = StagedFileResponse
+export type StagedUpdate = StagedUpdateResponse
+export type ProjectionPreviewFile = ProjectionPreviewFileResponse
+export type ProjectionPreviewCommit = ProjectionPreviewCommitResponse
+export type ProjectionPreviewSummary = ProjectionPreviewSummaryResponse
+export type ProjectionPreview = ProjectionPreviewResponse
 
 export type RepoDetail = {
   capabilities: RepoCapabilities
@@ -79,37 +81,8 @@ export type RepoParams = {
   repo: string
 }
 
-export type FirstPushToken = {
-  status: TokenStatus
-  created_at_unix: number
-  expires_at_unix: number
-  used_at_unix: number | null
-  secret: string | null
-}
-
-export type GitPushToken = {
-  created_at_unix: number
-  secret: string | null
-}
-
-export type RepoSetup = {
-  repo: RepoSummary
-  git_remote_path: string
-  remote_name: string
-  push_branch: string
-  push_enabled: boolean
-  token: FirstPushToken | null
-  push_token: GitPushToken | null
-}
-
 export type RepoSetupView = RepoSetup & {
   git_remote_url: string
-}
-
-export type RepoGitCredential = {
-  git_remote_path: string
-  remote_name: string
-  push_token: GitPushToken
 }
 
 export type RepoGitCredentialView = RepoGitCredential & {
@@ -134,14 +107,8 @@ export type HomeState = {
   signedIn: boolean
 }
 
-export type CreateRepoInput = {
-  name: string
+export type CreateRepoInput = Omit<CreateRepoRequest, 'visibility'> & {
   visibility: Visibility
-}
-
-export type CreateRepoResponse = {
-  repo: RepoSummary
-  setup: RepoSetup
 }
 
 export type DeleteRepoInput = {
@@ -149,39 +116,7 @@ export type DeleteRepoInput = {
   repo: string
 }
 
-export type DeleteRepoResponse = {
-  id: string
-  deleted: boolean
-}
-
-export type RepoSettings = {
-  default_new_file_visibility: Visibility
-  review_pushes_before_applying: boolean
-}
-
-export type UpdateRepoSettingsInput = RepoParams & RepoSettings
-
-export type PendingImportPayload = {
-  publication_state: RepoPublicationState
-  default_visibility: Visibility
-  files: RepoFile[]
-}
-
-export type StagedFile = {
-  path: string
-  kind: StagedFileChangeKind
-  old_oid: string | null
-  new_oid: string | null
-  visibility: Visibility
-}
-
-export type StagedUpdate = {
-  id: string
-  branch: string
-  base_live_commit_id: string | null
-  message: string
-  files: StagedFile[]
-}
+export type UpdateRepoSettingsInput = RepoParams & UpdateRepoSettingsRequest
 
 export type PendingImportReview = PendingImportPayload & {
   kind: 'PendingImport'
@@ -202,41 +137,6 @@ export type RepoReview = PendingImportReview | StagedUpdateReview
 export type RepoReviewResult = RepoReview | { kind: 'NoReview' }
 export type ReviewFile = RepoFile | StagedFile
 
-export type ProjectionPreviewFile = {
-  path: string
-  oid: string
-  visibility: Visibility
-}
-
-export type ProjectionPreviewCommit = {
-  projected_id: string
-  logical_commit_id: string
-  parent_projected_id: string | null
-  author: string | null
-  message: string
-  synthetic: boolean
-  change_count: number
-}
-
-export type ProjectionPreviewSummary = {
-  visible_files: number
-  hidden_files: number
-  visible_commits: number
-  hidden_commits: number
-  synthetic_commits: number
-}
-
-export type ProjectionPreview = {
-  audience: ProjectionPreviewAudience
-  source: ProjectionPreviewSource
-  repo_id: string
-  principal_id: string
-  head_oid: string | null
-  files: ProjectionPreviewFile[]
-  commits: ProjectionPreviewCommit[]
-  summary: ProjectionPreviewSummary
-}
-
 export type ProjectionPreviews = {
   source: ProjectionPreviewSource
   owner: ProjectionPreview | null
@@ -248,13 +148,9 @@ export type ProjectionPreviewInput = RepoParams & {
   source: ProjectionPreviewSource
 }
 
-export type SetVisibilityInput = RepoParams & {
-  kind: ReviewKind
-  paths: string[]
-  visibility: Visibility
-}
+export type SetVisibilityInput = RepoParams &
+  UpdateFileVisibilityRequest & {
+    kind: ReviewKind
+  }
 
-export type SetRepoFileVisibilityInput = RepoParams & {
-  paths: string[]
-  visibility: Visibility
-}
+export type SetRepoFileVisibilityInput = RepoParams & UpdateFileVisibilityRequest

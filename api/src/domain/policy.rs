@@ -91,6 +91,7 @@ impl Principal {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(test, derive(ts_rs::TS))]
 pub enum Visibility {
     Public,
     Private,

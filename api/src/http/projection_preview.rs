@@ -1,8 +1,8 @@
 use crate::{
     domain::{
         policy::Principal,
-        repo_actions::promote_pending_import,
-        store::{RepoPublicationState, RepoRole, StoredRepository},
+        projection_views::repo_for_projection_preview,
+        store::{RepoRole, StoredRepository},
     },
     error::ApiError,
     http::responses::{ProjectionPreviewAudience, ProjectionPreviewSource},
@@ -39,18 +39,5 @@ pub(crate) fn projection_preview_repo(
     repo: &StoredRepository,
     source: ProjectionPreviewSource,
 ) -> Result<StoredRepository, ApiError> {
-    let mut preview = repo.clone();
-    match source {
-        ProjectionPreviewSource::Live => Ok(preview),
-        ProjectionPreviewSource::Review => {
-            if preview.record.publication_state == RepoPublicationState::PendingPublish {
-                promote_pending_import(&mut preview)?;
-            } else if let Some(staged_update) = preview.staged_update.clone() {
-                crate::git::import::apply_receive_pack_update(&mut preview, staged_update)?;
-            } else {
-                return Err(ApiError::bad_request("repo has no pending review"));
-            }
-            Ok(preview)
-        }
-    }
+    repo_for_projection_preview(repo, source.into())
 }

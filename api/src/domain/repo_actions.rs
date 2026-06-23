@@ -4,9 +4,9 @@ use super::{
         AuthorVisibility, FileChange, FileVisibilityChange, LogicalCommit, MixedCommitPolicy,
     },
     store::{
-        CatalogError, FirstPushToken, PendingImport, RepoPublicationState, RepoRecord, RepoRole,
-        RepoSettings, RepoStorageCleanup, SourceBlob, StagedRepoUpdate, StoredRepository,
-        pending_import_scope_path,
+        CatalogError, FirstPushToken, GitPushToken, PendingImport, RepoPublicationState,
+        RepoRecord, RepoRole, RepoSettings, RepoStorageCleanup, SourceBlob, StagedRepoUpdate,
+        StoredRepository, UserAccount, pending_import_scope_path,
     },
 };
 use crate::error::ApiError;
@@ -127,7 +127,32 @@ pub(crate) fn catalog_error(error: CatalogError) -> ApiError {
     }
 }
 
-pub(crate) fn apply_repo_file_visibility(
+pub(crate) fn create_repo(
+    owner: &UserAccount,
+    name: &str,
+    default_visibility: Visibility,
+    first_push_token: FirstPushToken,
+    git_push_token: GitPushToken,
+) -> Result<RepoMutation<StoredRepository>, ApiError> {
+    let mut repo = StoredRepository::new(owner, name, default_visibility).map_err(catalog_error)?;
+    repo.first_push_token = Some(secretless_first_push_token(first_push_token));
+    repo.git_push_token = Some(git_push_token);
+    Ok(RepoMutation::new(repo))
+}
+
+pub(crate) fn regenerate_setup_tokens(
+    repo: &mut StoredRepository,
+    user_id: &str,
+    first_push_token: FirstPushToken,
+    git_push_token: GitPushToken,
+) -> Result<RepoMutation<()>, ApiError> {
+    ensure_repo_setup_access(repo, user_id)?;
+    repo.first_push_token = Some(secretless_first_push_token(first_push_token));
+    repo.git_push_token = Some(git_push_token);
+    Ok(RepoMutation::new(()))
+}
+
+pub(crate) fn set_visibility(
     repo: &mut StoredRepository,
     user_id: &str,
     update_paths: &[ScopePath],
@@ -194,7 +219,7 @@ pub(crate) fn apply_repo_file_visibility(
     Ok(RepoMutation::new(()))
 }
 
-pub(crate) fn update_staged_file_visibility_for_repo(
+pub(crate) fn set_staged_visibility(
     repo: &mut StoredRepository,
     user_id: &str,
     update_paths: &[ScopePath],
@@ -222,7 +247,7 @@ pub(crate) fn update_staged_file_visibility_for_repo(
     Ok(RepoMutation::new(staged_update))
 }
 
-pub(crate) fn apply_staged_update_for_repo(
+pub(crate) fn apply_staged_update(
     repo: &mut StoredRepository,
     user_id: &str,
 ) -> Result<RepoMutation<StagedRepoUpdate>, ApiError> {
@@ -239,7 +264,7 @@ pub(crate) fn apply_staged_update_for_repo(
     Ok(RepoMutation::with_effects(applied, effects))
 }
 
-pub(crate) fn reject_staged_update_for_repo(
+pub(crate) fn reject_staged_update(
     repo: &mut StoredRepository,
     user_id: &str,
 ) -> Result<RepoMutation<StagedRepoUpdate>, ApiError> {
@@ -264,7 +289,7 @@ fn staged_update_blobs(staged_update: &StagedRepoUpdate) -> Vec<SourceBlob> {
         .collect()
 }
 
-pub(crate) fn apply_repo_settings(
+pub(crate) fn update_settings(
     repo: &mut StoredRepository,
     user_id: &str,
     settings: RepoSettings,
@@ -279,15 +304,15 @@ pub(crate) fn apply_repo_settings(
     Ok(RepoMutation::new(()))
 }
 
-pub(crate) fn publish_pending_import_for_repo(
+pub(crate) fn publish_import(
     repo: &mut StoredRepository,
     user_id: &str,
 ) -> Result<RepoMutation<RepoRecord>, ApiError> {
     ensure_repo_owner(repo, user_id)?;
-    promote_pending_import(repo)
+    preview_publish_import(repo)
 }
 
-pub(crate) fn promote_pending_import(
+pub(crate) fn preview_publish_import(
     repo: &mut StoredRepository,
 ) -> Result<RepoMutation<RepoRecord>, ApiError> {
     ensure_pending_publish(repo)?;
@@ -337,7 +362,7 @@ pub(crate) fn ensure_pending_publish(repo: &StoredRepository) -> Result<(), ApiE
     Ok(())
 }
 
-pub(crate) fn delete_repo_for_repo(
+pub(crate) fn delete_repo(
     repo: &StoredRepository,
     user_id: &str,
     owner: &str,
@@ -448,7 +473,7 @@ mod tests {
             }],
         });
 
-        let mutation = reject_staged_update_for_repo(&mut repo, &owner.id).unwrap();
+        let mutation = reject_staged_update(&mut repo, &owner.id).unwrap();
 
         assert!(repo.staged_update.is_none());
         assert_eq!(mutation.result.id, "staged");
@@ -465,8 +490,7 @@ mod tests {
         let snapshot = source_blob("live-snapshot");
         repo.git_snapshot = Some(snapshot.clone());
 
-        let mutation =
-            delete_repo_for_repo(&repo, &owner.id, &owner.handle, &repo.record.name).unwrap();
+        let mutation = delete_repo(&repo, &owner.id, &owner.handle, &repo.record.name).unwrap();
 
         assert_eq!(mutation.result, repo.record.id);
         assert_eq!(

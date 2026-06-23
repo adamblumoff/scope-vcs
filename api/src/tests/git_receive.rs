@@ -531,7 +531,7 @@ fn published_receive_pack_staging_restores_accepted_git_head_from_bucket_snapsho
         let repo = staged.repositories.get_mut(TEST_REPO_ID).unwrap();
         repo.record.publication_state = RepoPublicationState::PendingPublish;
         repo.pending_import = Some(pending);
-        promote_pending_import(repo).unwrap();
+        preview_publish_import(repo).unwrap();
         *catalog = staged;
     }
 

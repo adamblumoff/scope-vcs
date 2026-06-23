@@ -128,7 +128,7 @@ async fn pending_visibility_toggle_does_not_create_public_projection_history() {
         let mut catalog = lock_catalog(&state).unwrap();
         let repo = catalog.repositories.get_mut(TEST_REPO_ID).unwrap();
         assert!(repo.graph.commits.is_empty());
-        promote_pending_import(repo).unwrap();
+        preview_publish_import(repo).unwrap();
     }
     let repo = find_repo(&state, TEST_REPO_OWNER, TEST_REPO_NAME).unwrap();
     let projection = project_graph(&repo.policy, &repo.graph, &Principal::public());
@@ -311,7 +311,7 @@ fn zero_file_publish_promotes_pending_import() {
         created_at_unix: unix_now(),
     });
 
-    promote_pending_import(&mut repo).unwrap();
+    preview_publish_import(&mut repo).unwrap();
 
     assert_eq!(
         repo.record.publication_state,
@@ -374,8 +374,8 @@ fn publish_is_one_time() {
     repo.record.publication_state = RepoPublicationState::PendingPublish;
     repo.pending_import = Some(pending_import_fixture(vec![("README.md", "hello")]));
 
-    promote_pending_import(&mut repo).unwrap();
-    let error = promote_pending_import(&mut repo).unwrap_err();
+    preview_publish_import(&mut repo).unwrap();
+    let error = preview_publish_import(&mut repo).unwrap_err();
 
     assert_eq!(error.status, StatusCode::BAD_REQUEST);
 }

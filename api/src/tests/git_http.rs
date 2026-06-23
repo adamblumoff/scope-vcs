@@ -229,7 +229,7 @@ async fn owner_upload_pack_serves_raw_bucket_snapshot_head() {
         let repo = catalog.repositories.get_mut(TEST_REPO_ID).unwrap();
         repo.record.publication_state = RepoPublicationState::PendingPublish;
         repo.pending_import = Some(pending);
-        promote_pending_import(repo).unwrap();
+        preview_publish_import(repo).unwrap();
     }
     let mut headers = HeaderMap::new();
     headers.insert(AUTHORIZATION, bearer_header().parse().unwrap());

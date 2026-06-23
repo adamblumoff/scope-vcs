@@ -1,5 +1,5 @@
 use crate::domain::policy::{Principal, ScopePath};
-use crate::domain::projection::project_graph;
+use crate::domain::projection_views::has_visible_projected_files;
 use crate::domain::store::{
     AppCatalog, RepoPublicationState, RepoRole, SourceBlob, StoredRepository, repo_id,
 };
@@ -185,19 +185,6 @@ pub(crate) fn ensure_repo_read(
             repo.record.id
         )))
     }
-}
-
-pub(crate) fn has_visible_projected_files(repo: &StoredRepository, principal: &Principal) -> bool {
-    let projection = project_graph(&repo.policy, &repo.graph, principal);
-    let mut visible_paths = std::collections::BTreeSet::new();
-    for change in projection.commits.iter().flat_map(|commit| &commit.changes) {
-        if change.new_content.is_some() {
-            visible_paths.insert(change.path.clone());
-        } else {
-            visible_paths.remove(&change.path);
-        }
-    }
-    !visible_paths.is_empty()
 }
 
 pub(crate) fn ensure_owner(

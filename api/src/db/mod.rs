@@ -1,16 +1,19 @@
+mod cleanup_queue;
 mod entities;
 mod locks;
 mod metadata_reset;
-mod repo_cleanup;
+mod publish_apply;
+mod push_staging;
 mod repo_effects;
+mod repo_lifecycle;
 mod repo_settings;
 mod repo_tokens;
-mod repo_writes;
 mod repository_rows;
 mod runtime;
 mod schema;
 #[cfg(test)]
 mod test_support;
+mod visibility_changes;
 
 use crate::domain::store::{AppCatalog, RepoMembership, StoredRepository, repo_id};
 use crate::error::ApiError;

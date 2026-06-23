@@ -5,3 +5,5 @@ pub(crate) mod repos;
 pub(crate) mod responses;
 pub(crate) mod review;
 pub(crate) mod setup;
+#[cfg(test)]
+mod type_exports;
