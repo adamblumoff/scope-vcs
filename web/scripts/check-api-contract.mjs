@@ -1,14 +1,15 @@
-import { readFile } from 'node:fs/promises'
+import { readdir, readFile } from 'node:fs/promises'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 
 const webRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
 const repoRoot = path.resolve(webRoot, '..')
-const rustPath = path.join(repoRoot, 'api', 'src', 'http', 'responses.rs')
+const rustResponsesPath = path.join(repoRoot, 'api', 'src', 'http', 'responses.rs')
+const rustResponsesDir = path.join(repoRoot, 'api', 'src', 'http', 'responses')
 const tsPath = path.join(webRoot, 'src', 'api', 'types.ts')
 
 const [rustSource, tsSource] = await Promise.all([
-  readFile(rustPath, 'utf8'),
+  readRustResponseSources(),
   readFile(tsPath, 'utf8'),
 ])
 
@@ -104,6 +105,35 @@ function parseRustStructs(source) {
   }
 
   return structs
+}
+
+async function readRustResponseSources() {
+  const sources = [await readFile(rustResponsesPath, 'utf8')]
+  const responseFiles = await rustFilesIn(rustResponsesDir)
+
+  await Promise.all(
+    responseFiles.map(async (sourcePath) => {
+      sources.push(await readFile(sourcePath, 'utf8'))
+    }),
+  )
+
+  return sources.join('\n')
+}
+
+async function rustFilesIn(directoryPath) {
+  const entries = await readdir(directoryPath, { withFileTypes: true })
+  const files = []
+
+  for (const entry of entries) {
+    const entryPath = path.join(directoryPath, entry.name)
+    if (entry.isDirectory()) {
+      files.push(...(await rustFilesIn(entryPath)))
+    } else if (entry.isFile() && entry.name.endsWith('.rs')) {
+      files.push(entryPath)
+    }
+  }
+
+  return files.sort()
 }
 
 function parseTsObjectTypes(source) {

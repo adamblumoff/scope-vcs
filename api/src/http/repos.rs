@@ -11,12 +11,11 @@ use crate::{
         tokens::{generate_first_push_token, generate_git_push_token},
     },
     error::ApiError,
+    http::projection_preview::{ensure_projection_preview_access, projection_preview_repo},
     http::responses::*,
     persistence::unix_now,
     state::AppState,
-    state::{
-        ensure_owner, ensure_repo_read, find_repo, promote_pending_import, role_for_principal,
-    },
+    state::{ensure_owner, ensure_repo_read, find_repo, role_for_principal},
 };
 use axum::{
     Json,
@@ -199,54 +198,6 @@ pub(crate) async fn get_projection_preview(
         source,
         include_private_counts,
     )?))
-}
-
-fn ensure_projection_preview_access(
-    state: &AppState,
-    repo: &crate::domain::store::StoredRepository,
-    requester: &Principal,
-    audience: ProjectionPreviewAudience,
-    source: ProjectionPreviewSource,
-) -> Result<(), ApiError> {
-    match (audience, source) {
-        (ProjectionPreviewAudience::Owner, _) => {
-            ensure_repo_read(state, repo, requester)?;
-            ensure_owner(state, repo, requester)
-        }
-        (ProjectionPreviewAudience::Public, ProjectionPreviewSource::Review) => {
-            ensure_repo_read(state, repo, requester)?;
-            ensure_owner(state, repo, requester)
-        }
-        (ProjectionPreviewAudience::Public, ProjectionPreviewSource::Live) => {
-            if role_for_principal(state, repo, requester)? == Some(RepoRole::Owner) {
-                ensure_repo_read(state, repo, requester)
-            } else {
-                ensure_repo_read(state, repo, &Principal::public())
-            }
-        }
-    }
-}
-
-fn projection_preview_repo(
-    repo: &crate::domain::store::StoredRepository,
-    source: ProjectionPreviewSource,
-) -> Result<crate::domain::store::StoredRepository, ApiError> {
-    let mut preview = repo.clone();
-    match source {
-        ProjectionPreviewSource::Live => Ok(preview),
-        ProjectionPreviewSource::Review => {
-            if preview.record.publication_state
-                == crate::domain::store::RepoPublicationState::PendingPublish
-            {
-                promote_pending_import(&mut preview)?;
-            } else if let Some(staged_update) = preview.staged_update.clone() {
-                crate::git::import::apply_receive_pack_update(&mut preview, staged_update)?;
-            } else {
-                return Err(ApiError::bad_request("repo has no pending review"));
-            }
-            Ok(preview)
-        }
-    }
 }
 
 pub(crate) async fn get_files(

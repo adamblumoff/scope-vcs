@@ -2,7 +2,10 @@ use super::{
     MetadataStore, MetadataStoreInner, acquire_metadata_write_lock, encode_json, entities,
     repository_from_model, run_api_db_on,
 };
-use crate::domain::store::{GitPushToken, repo_id};
+use crate::domain::{
+    repo_actions::ensure_repo_owner,
+    store::{GitPushToken, repo_id},
+};
 use crate::error::ApiError;
 use sea_orm::{ColumnTrait, EntityTrait, QueryFilter, TransactionTrait, sea_query::Expr};
 use std::sync::Arc;
@@ -33,7 +36,7 @@ impl MetadataStore {
                             ApiError::not_found(format!("repo {owner}/{name} not found"))
                         })?;
                     let repo = repository_from_model(&tx, repo).await?;
-                    super::repo_writes::ensure_repo_owner(&repo, &user_id)?;
+                    ensure_repo_owner(&repo, &user_id)?;
 
                     entities::repository::Entity::update_many()
                         .filter(entities::repository::Column::Id.eq(repo_id))
@@ -54,7 +57,7 @@ impl MetadataStore {
                     .repositories
                     .get_mut(&repo_id)
                     .ok_or_else(|| ApiError::not_found(format!("repo {owner}/{name} not found")))?;
-                super::repo_writes::ensure_repo_owner(repo, &user_id)?;
+                ensure_repo_owner(repo, &user_id)?;
                 repo.git_push_token = Some(git_push_token.clone());
                 Ok(git_push_token)
             }),
