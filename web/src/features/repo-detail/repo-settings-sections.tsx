@@ -6,6 +6,10 @@ import type {
 import { CopyableCodeBlock } from '@/components/copyable-code-block'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
+import { Checkbox } from '@/components/ui/checkbox'
+import { Separator } from '@/components/ui/separator'
+import { Switch } from '@/components/ui/switch'
+import { ToggleGroup, ToggleGroupItem } from '@/components/ui/toggle-group'
 import {
   FilePlus2,
   GitBranch,
@@ -43,18 +47,18 @@ export function SettingsSections({
   settingsSaving: boolean
 }) {
   return (
-    <div className="mt-8 divide-y divide-border border-y border-border">
+    <div className="mt-8 border-y border-border">
       <SettingsRow
         description="Future Git pushes either stop in review or apply directly to the live repo."
         icon={<GitBranch className="size-4" />}
         title="Push workflow"
       >
-        <label className="flex items-center gap-3 text-sm leading-5">
-          <input
+        <div className="flex items-center gap-3 text-sm leading-5">
+          <Switch
+            aria-label="Review pushes before applying"
             checked={settings.review_pushes_before_applying}
-            className="size-4 accent-primary"
             disabled={settingsSaving}
-            onChange={() =>
+            onCheckedChange={() =>
               onSaveSettings(
                 {
                   ...settings,
@@ -64,14 +68,15 @@ export function SettingsSections({
                 'push-review',
               )
             }
-            type="checkbox"
+            type="button"
           />
           <span>Review pushes before applying</span>
           {pendingSetting === 'push-review' && (
             <LoaderCircle className="size-3.5 animate-spin text-muted-foreground" />
           )}
-        </label>
+        </div>
       </SettingsRow>
+      <Separator />
 
       <SettingsRow
         description="New paths inherit this visibility unless you set a more specific file or folder rule."
@@ -92,6 +97,7 @@ export function SettingsSections({
           }
         />
       </SettingsRow>
+      <Separator />
 
       <SettingsRow
         description="Refresh the credential your local Git client uses when pushing to the Scope remote."
@@ -130,18 +136,20 @@ export function SettingsSections({
           )}
         </div>
       </SettingsRow>
+      <Separator />
 
       <SettingsRow
         description="Roles are already enforced internally, but member list and invite endpoints are not implemented yet."
         icon={<Users className="size-4" />}
         title="Members"
       >
-        <label className="flex items-center gap-3 text-sm leading-5 text-muted-foreground">
-          <input className="size-4" disabled type="checkbox" />
+        <div className="flex items-center gap-3 text-sm leading-5 text-muted-foreground">
+          <Checkbox aria-label="Member management" disabled />
           <span>Member management</span>
           <Badge variant="outline">Blocked by API</Badge>
-        </label>
+        </div>
       </SettingsRow>
+      <Separator />
 
       <SettingsRow
         description="Permanently removes repo metadata, pending review state, and stored Git data from Scope."
@@ -200,36 +208,31 @@ function VisibilityChoice({
 }) {
   return (
     <div className="flex flex-wrap items-center gap-2">
-      <Button
-        aria-pressed={current === 'Private'}
+      <ToggleGroup
         disabled={disabled}
-        onClick={() => {
-          if (current !== 'Private') {
-            onSelect('Private')
+        onValueChange={(visibility) => {
+          if (visibility && visibility !== current) {
+            onSelect(visibility as Visibility)
           }
         }}
-        size="sm"
-        type="button"
-        variant={current === 'Private' ? 'default' : 'secondary'}
+        type="single"
+        value={current}
       >
-        <Lock className="size-3.5" />
-        <span>Private</span>
-      </Button>
-      <Button
-        aria-pressed={current === 'Public'}
-        disabled={disabled}
-        onClick={() => {
-          if (current !== 'Public') {
-            onSelect('Public')
-          }
-        }}
-        size="sm"
-        type="button"
-        variant={current === 'Public' ? 'default' : 'secondary'}
-      >
-        <Globe2 className="size-3.5" />
-        <span>Public</span>
-      </Button>
+        <ToggleGroupItem
+          aria-label="Set default new files private"
+          value="Private"
+        >
+          <Lock className="size-3.5" />
+          <span>Private</span>
+        </ToggleGroupItem>
+        <ToggleGroupItem
+          aria-label="Set default new files public"
+          value="Public"
+        >
+          <Globe2 className="size-3.5" />
+          <span>Public</span>
+        </ToggleGroupItem>
+      </ToggleGroup>
       {disabled && (
         <LoaderCircle className="size-3.5 animate-spin text-muted-foreground" />
       )}

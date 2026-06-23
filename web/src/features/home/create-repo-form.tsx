@@ -1,5 +1,13 @@
 import type { CreateRepoInput, Visibility } from '@/api/types'
 import { Button } from '@/components/ui/button'
+import { Input } from '@/components/ui/input'
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from '@/components/ui/select'
 import { LoaderCircle, Plus } from 'lucide-react'
 import type { FormEvent } from 'react'
 import { useState } from 'react'
@@ -34,24 +42,29 @@ export function CreateRepoForm({
       className="grid w-full gap-2 sm:w-auto sm:grid-cols-[180px_120px_auto]"
       onSubmit={(event) => void submit(event)}
     >
-      <input
+      <Input
         aria-label="Repository name"
-        className="h-9 min-w-0 rounded-md border border-input bg-background px-3 text-sm outline-none focus-visible:ring-2 focus-visible:ring-ring"
         disabled={busy}
         onChange={(event) => setName(event.target.value)}
         placeholder="new-repo"
         value={name}
       />
-      <select
-        aria-label="Default new file visibility"
-        className="h-9 rounded-md border border-input bg-background px-2 text-sm outline-none focus-visible:ring-2 focus-visible:ring-ring"
+      <Select
         disabled={busy}
-        onChange={(event) => setVisibility(event.target.value as Visibility)}
+        onValueChange={(value) => setVisibility(value as Visibility)}
         value={visibility}
       >
-        <option value="Private">Private</option>
-        <option value="Public">Public</option>
-      </select>
+        <SelectTrigger
+          aria-label="Default new file visibility"
+          className="w-full"
+        >
+          <SelectValue />
+        </SelectTrigger>
+        <SelectContent>
+          <SelectItem value="Private">Private</SelectItem>
+          <SelectItem value="Public">Public</SelectItem>
+        </SelectContent>
+      </Select>
       <Button disabled={busy || !name.trim()} size="sm" type="submit">
         {busy ? (
           <LoaderCircle className="size-3.5 animate-spin" />

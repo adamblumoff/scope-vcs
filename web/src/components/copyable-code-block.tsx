@@ -1,4 +1,10 @@
 import { Button } from '@/components/ui/button'
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipProvider,
+  TooltipTrigger,
+} from '@/components/ui/tooltip'
 import { cn } from '@/lib/utils'
 import { Check, Copy } from 'lucide-react'
 import { useEffect, useState } from 'react'
@@ -46,17 +52,27 @@ export function CopyableCodeBlock({
       <pre className="overflow-x-auto whitespace-pre-wrap break-words px-3 py-2 pr-12 font-mono text-xs leading-5 [overflow-wrap:anywhere]">
         <code>{value}</code>
       </pre>
-      <Button
-        aria-label={copied ? 'Copied' : copyLabel}
-        className="absolute right-2 top-2 bg-background/80 text-muted-foreground hover:bg-background hover:text-foreground"
-        onClick={() => void copyToClipboard()}
-        size="icon-sm"
-        title={copied ? 'Copied' : copyLabel}
-        type="button"
-        variant="secondary"
-      >
-        {copied ? <Check className="size-3.5" /> : <Copy className="size-3.5" />}
-      </Button>
+      <TooltipProvider>
+        <Tooltip>
+          <TooltipTrigger asChild>
+            <Button
+              aria-label={copied ? 'Copied' : copyLabel}
+              className="absolute right-2 top-2 bg-background/80 text-muted-foreground hover:bg-background hover:text-foreground"
+              onClick={() => void copyToClipboard()}
+              size="icon-sm"
+              type="button"
+              variant="secondary"
+            >
+              {copied ? (
+                <Check className="size-3.5" />
+              ) : (
+                <Copy className="size-3.5" />
+              )}
+            </Button>
+          </TooltipTrigger>
+          <TooltipContent>{copied ? 'Copied' : copyLabel}</TooltipContent>
+        </Tooltip>
+      </TooltipProvider>
     </div>
   )
 }

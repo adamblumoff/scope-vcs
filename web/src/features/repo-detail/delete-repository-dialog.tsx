@@ -1,5 +1,15 @@
 import type { RepoSummary } from '@/api/types'
+import {
+  AlertDialog,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from '@/components/ui/alert-dialog'
 import { Button } from '@/components/ui/button'
+import { Input } from '@/components/ui/input'
 import { AlertTriangle, LoaderCircle, Trash2 } from 'lucide-react'
 import type { FormEvent } from 'react'
 import { useId, useState } from 'react'
@@ -21,6 +31,11 @@ export function DeleteRepositoryDialog({
 
   async function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault()
+    if (!confirmed) {
+      setConfirmed(true)
+      return
+    }
+
     if (!confirmed || !canDelete || busy) {
       return
     }
@@ -34,74 +49,88 @@ export function DeleteRepositoryDialog({
   }
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-background/80 px-4 backdrop-blur-sm">
-      <div className="w-full max-w-[520px] rounded-md border border-border bg-background p-5 shadow-lg">
-        <div className="flex items-start gap-3">
-          <div className="flex size-9 shrink-0 items-center justify-center rounded-md border border-destructive/50 text-destructive">
-            <AlertTriangle className="size-4" />
-          </div>
-          <div className="min-w-0">
-            <div className="text-sm font-semibold leading-5">
-              Delete repository
+    <AlertDialog
+      open
+      onOpenChange={(open) => {
+        if (!open && !busy) {
+          onCancel()
+        }
+      }}
+    >
+      <AlertDialogContent asChild>
+        <form onSubmit={(event) => void submit(event)}>
+          <AlertDialogHeader className="grid-cols-[auto_minmax(0,1fr)] gap-x-3">
+            <div className="row-span-2 flex size-9 shrink-0 items-center justify-center rounded-md border border-destructive/50 text-destructive">
+              <AlertTriangle className="size-4" />
             </div>
-            <div className="mt-1 break-all font-mono text-xs leading-5 text-muted-foreground">
+            <AlertDialogTitle>Delete repository</AlertDialogTitle>
+            <div className="break-all font-mono text-xs leading-5 text-muted-foreground">
               {repo.id}
             </div>
-          </div>
-        </div>
+          </AlertDialogHeader>
 
-        {!confirmed ? (
-          <div className="mt-5 space-y-5">
-            <p className="text-sm leading-5 text-muted-foreground">
-              This permanently removes the repo, pending review state, and stored
-              Git data from Scope.
-            </p>
-            <div className="flex justify-end gap-2">
-              <Button onClick={onCancel} size="sm" type="button" variant="secondary">
-                Cancel
-              </Button>
-              <Button onClick={() => setConfirmed(true)} size="sm" type="button">
-                Continue
-              </Button>
+          {!confirmed ? (
+            <AlertDialogDescription>
+              This permanently removes the repo, pending review state, and
+              stored Git data from Scope.
+            </AlertDialogDescription>
+          ) : (
+            <div className="space-y-2">
+              <AlertDialogDescription>
+                Type{' '}
+                <span className="font-mono text-foreground">{repo.name}</span>{' '}
+                to permanently delete this repository.
+              </AlertDialogDescription>
+              <Input
+                aria-label={`Type ${repo.name} to permanently delete this repository`}
+                autoFocus
+                className="font-mono"
+                id={inputId}
+                onChange={(event) => setTypedName(event.target.value)}
+                value={typedName}
+              />
             </div>
-          </div>
-        ) : (
-          <form className="mt-5 space-y-5" onSubmit={(event) => void submit(event)}>
-            <label
-              className="block text-sm leading-5 text-muted-foreground"
-              htmlFor={inputId}
-            >
-              Type <span className="font-mono text-foreground">{repo.name}</span> to
-              permanently delete this repository.
-            </label>
-            <input
-              className="h-9 w-full rounded-md border border-input bg-background px-3 font-mono text-sm outline-none focus-visible:ring-2 focus-visible:ring-ring"
-              id={inputId}
-              onChange={(event) => setTypedName(event.target.value)}
-              value={typedName}
-            />
-            <div className="flex justify-end gap-2">
-              <Button
-                disabled={busy}
-                onClick={() => setConfirmed(false)}
-                size="sm"
-                type="button"
-                variant="secondary"
-              >
-                Back
-              </Button>
-              <Button disabled={!canDelete || busy} size="sm" type="submit">
-                {busy ? (
-                  <LoaderCircle className="size-3.5 animate-spin" />
-                ) : (
-                  <Trash2 className="size-3.5" />
-                )}
-                <span>Delete</span>
-              </Button>
-            </div>
-          </form>
-        )}
-      </div>
-    </div>
+          )}
+
+          <AlertDialogFooter>
+            {!confirmed ? (
+              <>
+                <AlertDialogCancel size="sm" variant="secondary">
+                  Cancel
+                </AlertDialogCancel>
+                <Button size="sm" type="submit">
+                  Continue
+                </Button>
+              </>
+            ) : (
+              <>
+                <Button
+                  disabled={busy}
+                  onClick={() => setConfirmed(false)}
+                  size="sm"
+                  type="button"
+                  variant="secondary"
+                >
+                  Back
+                </Button>
+                <Button
+                  disabled={!canDelete || busy}
+                  size="sm"
+                  type="submit"
+                  variant="destructive"
+                >
+                  {busy ? (
+                    <LoaderCircle className="size-3.5 animate-spin" />
+                  ) : (
+                    <Trash2 className="size-3.5" />
+                  )}
+                  <span>Delete</span>
+                </Button>
+              </>
+            )}
+          </AlertDialogFooter>
+        </form>
+      </AlertDialogContent>
+    </AlertDialog>
   )
 }

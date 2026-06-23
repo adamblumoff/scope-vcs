@@ -9,7 +9,8 @@ import type {
 } from '@/api/types'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
-import { cn } from '@/lib/utils'
+import { Separator } from '@/components/ui/separator'
+import { ToggleGroup, ToggleGroupItem } from '@/components/ui/toggle-group'
 import {
   ChevronDown,
   ChevronUp,
@@ -144,47 +145,30 @@ function AudienceToggle({
   onSelect: (audience: ProjectionPreviewAudience) => void
 }) {
   return (
-    <div className="inline-flex w-fit items-center rounded-md border border-border p-0.5">
-      {(['owner', 'public'] as const).map((option) => (
-        <AudienceButton
-          audience={option}
-          current={audience}
-          disabled={!availableAudiences.includes(option)}
-          key={option}
-          onSelect={onSelect}
-        />
-      ))}
-    </div>
-  )
-}
-
-function AudienceButton({
-  audience,
-  current,
-  disabled,
-  onSelect,
-}: {
-  audience: ProjectionPreviewAudience
-  current: ProjectionPreviewAudience
-  disabled: boolean
-  onSelect: (audience: ProjectionPreviewAudience) => void
-}) {
-  const selected = audience === current
-  const Icon = audience === 'owner' ? UserRound : Globe2
-
-  return (
-    <Button
-      aria-pressed={selected}
-      className={cn('h-7 px-2', selected && 'pointer-events-none')}
-      disabled={disabled}
-      onClick={() => onSelect(audience)}
-      size="xs"
-      type="button"
-      variant={selected ? 'default' : 'ghost'}
+    <ToggleGroup
+      onValueChange={(value) => {
+        if (value) {
+          onSelect(value as ProjectionPreviewAudience)
+        }
+      }}
+      type="single"
+      value={audience}
     >
-      <Icon className="size-3" />
-      <span>{audienceLabel(audience)} view</span>
-    </Button>
+      {(['owner', 'public'] as const).map((option) => {
+        const Icon = option === 'owner' ? UserRound : Globe2
+        return (
+          <ToggleGroupItem
+            aria-label={`${audienceLabel(option)} view`}
+            disabled={!availableAudiences.includes(option)}
+            key={option}
+            value={option}
+          >
+            <Icon className="size-3" />
+            <span>{audienceLabel(option)} view</span>
+          </ToggleGroupItem>
+        )
+      })}
+    </ToggleGroup>
   )
 }
 
@@ -196,21 +180,25 @@ function PreviewMetrics({
   showPrivateCounts: boolean
 }) {
   return (
-    <div className="mb-3 flex flex-wrap gap-x-6 gap-y-2 border-y border-border py-3 text-sm">
-      <Metric
-        label="Visible"
-        value={fileCountLabel(preview.summary.visible_files)}
-      />
-      {preview.audience === 'public' && showPrivateCounts && (
+    <div className="mb-3">
+      <Separator />
+      <div className="flex flex-wrap gap-x-6 gap-y-2 py-3 text-sm">
         <Metric
-          label="Private left out"
-          value={fileCountLabel(preview.summary.hidden_files)}
+          label="Visible"
+          value={fileCountLabel(preview.summary.visible_files)}
         />
-      )}
-      <Metric
-        label="History"
-        value={commitCountLabel(preview.summary.visible_commits)}
-      />
+        {preview.audience === 'public' && showPrivateCounts && (
+          <Metric
+            label="Private left out"
+            value={fileCountLabel(preview.summary.hidden_files)}
+          />
+        )}
+        <Metric
+          label="History"
+          value={commitCountLabel(preview.summary.visible_commits)}
+        />
+      </div>
+      <Separator />
     </div>
   )
 }
