@@ -8,4 +8,6 @@ Please don't use cards for ui, only use them if absolutely necessary.
 
 No file should be over 1000 lines of code, at that point do an audit of the file and modularize.
 
+In general, I trust you with refactors as they don't effect the behavior of the application. However, on behavior making changes I want to be very involved and make sure we go slow and methodically. 
+
 Autoreview timeout should be set to 10 minutes
