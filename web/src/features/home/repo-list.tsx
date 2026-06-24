@@ -3,7 +3,6 @@ import {
   type RepoAttentionAction,
   repoAttentionAction,
 } from '@/components/repo-primary-action'
-import { VisibilityBadge } from '@/components/visibility-badge'
 import { Button } from '@/components/ui/button'
 import {
   Tooltip,
@@ -58,9 +57,8 @@ export function RepoList({
   return (
     <TooltipProvider>
       <div className="mt-6 border-t border-border">
-        <div className="hidden grid-cols-[minmax(0,1fr)_120px] items-center gap-4 border-b border-border px-2 py-2 text-xs font-medium leading-4 text-muted-foreground lg:grid">
+        <div className="hidden border-b border-border px-2 py-2 text-xs font-medium leading-4 text-muted-foreground lg:block">
           <div>Repository</div>
-          <div>Visibility</div>
         </div>
         {repositories.map((repo) => (
           <RepoListRow key={repo.id} repo={repo} />
@@ -74,7 +72,7 @@ function RepoListRow({ repo }: { repo: RepoSummary }) {
   const action = repoAttentionAction(repo)
 
   return (
-    <div className="grid gap-3 border-b border-border px-2 py-3 text-sm transition-colors last:border-b-0 hover:bg-muted/40 lg:min-h-[60px] lg:grid-cols-[minmax(0,1fr)_120px] lg:items-center lg:gap-4">
+    <div className="border-b border-border px-2 py-3 text-sm transition-colors last:border-b-0 hover:bg-muted/40 lg:min-h-[60px]">
       <div className="min-w-0">
         <div className="flex min-w-0 items-center gap-1.5">
           <Link
@@ -88,14 +86,10 @@ function RepoListRow({ repo }: { repo: RepoSummary }) {
         </div>
         <div className="mt-1 flex flex-wrap gap-2 text-xs leading-4 text-muted-foreground lg:hidden">
           <span>{repo.role ?? 'reader'}</span>
-          <VisibilityBadge visibility={repo.default_visibility} />
         </div>
         <div className="mt-1 hidden text-xs leading-4 text-muted-foreground lg:block">
           {repo.role && <span>{repo.role}</span>}
         </div>
-      </div>
-      <div className="hidden min-h-8 items-center lg:flex">
-        <VisibilityBadge visibility={repo.default_visibility} />
       </div>
     </div>
   )
