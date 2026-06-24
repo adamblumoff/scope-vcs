@@ -2,7 +2,7 @@ use crate::domain::store::{FirstPushToken, GitCloneToken, GitPushToken};
 use crate::{
     config::{
         FIRST_PUSH_TOKEN_BYTES, FIRST_PUSH_TOKEN_PREFIX, FIRST_PUSH_TOKEN_TTL_SECS,
-        GIT_CLONE_TOKEN_PREFIX, GIT_PUSH_TOKEN_PREFIX,
+        GIT_PUSH_TOKEN_PREFIX,
     },
     error::ApiError,
     persistence::unix_now,
@@ -54,7 +54,7 @@ pub(crate) fn generate_git_clone_token(user_id: &str) -> Result<(String, GitClon
     getrandom::fill(&mut bytes).map_err(|error| {
         ApiError::internal_message(format!("failed to generate Git clone token: {error}"))
     })?;
-    let secret = format!("{GIT_CLONE_TOKEN_PREFIX}{}", hex::encode(bytes));
+    let secret = format!("{GIT_PUSH_TOKEN_PREFIX}{}", hex::encode(bytes));
     let token = GitCloneToken {
         token_hash: token_hash(&secret),
         user_id: user_id.to_string(),

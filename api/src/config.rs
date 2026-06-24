@@ -20,7 +20,6 @@ pub(crate) const SHOO_ISSUER: &str = "https://shoo.dev";
 pub(crate) const LOCAL_APP_ORIGIN: &str = "http://localhost:3000";
 pub(crate) const FIRST_PUSH_TOKEN_PREFIX: &str = "scope_fp_";
 pub(crate) const GIT_PUSH_TOKEN_PREFIX: &str = "scope_git_";
-pub(crate) const GIT_CLONE_TOKEN_PREFIX: &str = "scope_clone_";
 pub(crate) const FIRST_PUSH_TOKEN_BYTES: usize = 32;
 pub(crate) const RECEIVE_PACK_STAGING_BYTES: usize = 16;
 pub(crate) const FIRST_PUSH_TOKEN_TTL_SECS: u64 = 5 * 60;

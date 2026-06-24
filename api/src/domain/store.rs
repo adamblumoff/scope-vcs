@@ -428,6 +428,10 @@ impl AppCatalog {
         repo: &StoredRepository,
         principal: &Principal,
     ) -> Option<RepoRole> {
+        if principal.kind != PrincipalKind::Public && principal.id == repo.record.owner_user_id {
+            return Some(RepoRole::Owner);
+        }
+
         repo.memberships
             .iter()
             .find(|membership| membership.user_id == principal.id)

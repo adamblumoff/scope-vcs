@@ -13,7 +13,7 @@ export type RepoCloneCommandSource = {
   git_remote_url: string
 }
 
-const cloneCredentialUsername = 'scope-clone'
+const gitCredentialUsername = 'scope'
 
 export function publicCloneCommand(
   source: RepoCloneCommandSource,
@@ -54,7 +54,7 @@ function gitCloneCredentialApproveCommand(
     fields: gitCredentialFields({
       password: gitCloneTokenSecret,
       remoteUrl,
-      username: cloneCredentialUsername,
+      username: gitCredentialUsername,
     }),
     gitConfigArgs: ['-c', useHttpPathConfigArg],
     shell,
@@ -62,5 +62,5 @@ function gitCloneCredentialApproveCommand(
 }
 
 function gitCloneCredentialRemoteUrl(remoteUrl: string) {
-  return gitRemoteUrlWithUsername(remoteUrl, cloneCredentialUsername)
+  return gitRemoteUrlWithUsername(remoteUrl, gitCredentialUsername)
 }
