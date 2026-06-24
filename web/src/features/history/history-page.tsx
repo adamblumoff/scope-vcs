@@ -15,7 +15,7 @@ import { RouteErrorPage } from '@/components/route-error-page'
 import { Badge } from '@/components/ui/badge'
 import { ToggleGroup, ToggleGroupItem } from '@/components/ui/toggle-group'
 import { cn } from '@/lib/utils'
-import { Link } from '@tanstack/react-router'
+import { Link, useNavigate } from '@tanstack/react-router'
 import {
   Globe2,
   GitCommit,
@@ -49,6 +49,7 @@ export function HistoryPage({
   loadFileDiff: (input: CommitFileDiffInput) => Promise<ReviewFileDiff>
   params: RepoParams
 }) {
+  const navigate = useNavigate()
   const [audience, setAudience] =
     useState<ProjectionPreviewAudience>(initialAudience)
   const [selectedCommitId, setSelectedCommitId] = useState<string | null>(
@@ -82,6 +83,22 @@ export function HistoryPage({
     ? 'max-w-[1320px] transition-[max-width] duration-300 ease-out'
     : 'max-w-[1040px] transition-[max-width] duration-300 ease-out'
   const repoId = `${params.owner}/${params.repo}`
+
+  useEffect(() => {
+    setAudience(initialAudience)
+    setSelectedCommitId(
+      initialCommit?.projected_id ??
+        latestCommitId(histories[initialAudience]) ??
+        null,
+    )
+    setSelectedFilePath(null)
+    setCommitState(
+      initialCommit
+        ? { commit: initialCommit, error: null, status: 'loaded' }
+        : { commit: null, error: null, status: 'idle' },
+    )
+    setFileDiffState(emptyFileDiffState)
+  }, [histories, initialAudience, initialCommit])
 
   useEffect(() => {
     if (!selectedCommitId || !history) {
@@ -195,14 +212,32 @@ export function HistoryPage({
       return
     }
 
+    const nextCommitId = latestCommitId(nextHistory)
     setAudience(nextAudience)
     setSelectedFilePath(null)
-    setSelectedCommitId(latestCommitId(nextHistory))
+    setSelectedCommitId(nextCommitId)
+    replaceHistorySearch(nextAudience, nextCommitId)
   }
 
   function selectCommit(commit: CommitSummary) {
     setSelectedCommitId(commit.projected_id)
     setSelectedFilePath(null)
+    replaceHistorySearch(audience, commit.projected_id)
+  }
+
+  function replaceHistorySearch(
+    nextAudience: ProjectionPreviewAudience,
+    nextCommitId: string | null,
+  ) {
+    void navigate({
+      params,
+      replace: true,
+      search: {
+        audience: nextAudience,
+        commit: nextCommitId ?? undefined,
+      },
+      to: '/repos/$owner/$repo/history',
+    })
   }
 
   return (

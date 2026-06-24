@@ -92,8 +92,6 @@ export function ReviewVisibilityPanel({
     return null
   }
   const diffOpen = selectedFilePath !== null
-  const projectionHistoryParams =
-    preview.source === 'live' ? historyParams : undefined
 
   return (
     <section className="mt-8 border-y border-border">
@@ -170,7 +168,7 @@ export function ReviewVisibilityPanel({
 
       <div className="w-full max-w-[760px]">
         <ReviewProjectionHistory
-          historyParams={projectionHistoryParams}
+          historyParams={historyParams}
           preview={preview}
         />
       </div>

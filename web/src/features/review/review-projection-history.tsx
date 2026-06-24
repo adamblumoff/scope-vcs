@@ -22,6 +22,8 @@ export function ReviewProjectionHistory({
   preview: ProjectionPreview
 }) {
   const [expanded, setExpanded] = useState(false)
+  const liveHistoryParams =
+    preview.source === 'live' ? historyParams : undefined
   const commits = [...preview.commits].reverse()
   const collapsedCommitCount = 1
   const visibleCommits = expanded
@@ -56,7 +58,7 @@ export function ReviewProjectionHistory({
           {visibleCommits.map((commit, index) => (
             <HistoryCommitRow
               commit={commit}
-              historyParams={historyParams}
+              historyParams={liveHistoryParams}
               index={index}
               key={commit.projected_id}
               preview={preview}
