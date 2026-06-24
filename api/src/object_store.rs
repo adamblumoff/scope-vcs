@@ -424,7 +424,14 @@ pub fn repo_object_for_bytes(kind: &str, object_id: &str, bytes: &[u8]) -> Sourc
         sha256,
         git_oid,
         size_bytes: bytes.len() as u64,
+        line_count: text_line_count(bytes),
     }
+}
+
+fn text_line_count(bytes: &[u8]) -> usize {
+    std::str::from_utf8(bytes)
+        .map(|content| content.lines().count())
+        .unwrap_or_default()
 }
 
 pub fn put_source_blob(

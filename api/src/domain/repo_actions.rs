@@ -447,7 +447,8 @@ mod tests {
     use crate::domain::{
         policy::{ScopePath, Visibility},
         store::{
-            AccountAccess, StagedFileChange, StagedFileChangeKind, StagedRepoUpdate, UserAccount,
+            AccountAccess, LineDiff, StagedFileChange, StagedFileChangeKind, StagedRepoUpdate,
+            UserAccount,
         },
     };
 
@@ -468,6 +469,10 @@ mod tests {
                 path: ScopePath::parse("/src/lib.rs").unwrap(),
                 old_content: None,
                 new_content: Some(staged_blob.clone()),
+                line_diff: LineDiff {
+                    additions: staged_blob.line_count,
+                    deletions: 0,
+                },
                 visibility: Visibility::Private,
                 kind: StagedFileChangeKind::Added,
             }],
@@ -545,6 +550,7 @@ mod tests {
             sha256: format!("sha256-{label}"),
             git_oid: format!("oid-{label}"),
             size_bytes: label.len() as u64,
+            line_count: label.lines().count(),
         }
     }
 }

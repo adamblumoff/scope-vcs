@@ -154,6 +154,63 @@ async fn published_repo_projection_preview_serves_public_file_subset() {
 }
 
 #[tokio::test]
+async fn owner_projection_preview_labels_mixed_visibility_commit() {
+    let state = test_state_with_repo();
+    cache_test_jwks(&state);
+    {
+        let mut repo = test_repo(&test_owner_id());
+        repo.policy
+            .add_rule(VisibilityRule::private(
+                ScopePath::parse("/secret.txt").unwrap(),
+                repo_owner_ids(&repo),
+            ))
+            .unwrap();
+        repo.graph.commits.push(LogicalCommit {
+            id: "rv1".to_string(),
+            parent_ids: Vec::new(),
+            author_id: repo.record.owner_user_id.clone(),
+            author_visibility: AuthorVisibility::Visible,
+            message: "mixed visibility".to_string(),
+            mixed_policy: MixedCommitPolicy::SyntheticPublicCommit,
+            changes: vec![
+                FileChange {
+                    visibility: Visibility::Public,
+                    path: ScopePath::parse("/README.md").unwrap(),
+                    old_content: None,
+                    new_content: Some(source_blob("hello")),
+                },
+                FileChange {
+                    visibility: Visibility::Private,
+                    path: ScopePath::parse("/secret.txt").unwrap(),
+                    old_content: None,
+                    new_content: Some(source_blob("secret")),
+                },
+            ],
+            visibility_changes: Vec::new(),
+        });
+
+        let mut catalog = lock_catalog(&state).unwrap();
+        catalog.repositories.insert(TEST_REPO_ID.to_string(), repo);
+    }
+
+    let response = router(state)
+        .oneshot(
+            Request::builder()
+                .method("GET")
+                .uri("/v1/repos/owner/repo/projection-preview?audience=owner")
+                .header(AUTHORIZATION, bearer_header())
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = response_json(response).await;
+    assert_eq!(body["commits"][0]["visibility"], "Mixed");
+}
+
+#[tokio::test]
 async fn owner_public_projection_preview_counts_visibility_transition_hidden_commits() {
     let state = test_state_with_repo();
     cache_test_jwks(&state);
@@ -219,6 +276,7 @@ async fn owner_public_projection_preview_counts_visibility_transition_hidden_com
     assert_eq!(body["summary"]["visible_commits"], 1);
     assert_eq!(body["summary"]["hidden_commits"], 1);
     assert_eq!(body["commits"][0]["logical_commit_id"], "rv2");
+    assert_eq!(body["commits"][0]["visibility"], "FullyPublic");
 }
 
 #[tokio::test]

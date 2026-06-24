@@ -4,13 +4,17 @@ import {
   parseSetRepoFileVisibilityInput,
   setRepoFileVisibilityForRequest,
 } from '@/api/repos'
-import type { RepoDetail, RepoParams, ReviewFile, Visibility } from '@/api/types'
-import { setReviewVisibility } from '@/routes/-repo-review-actions'
+import type { RepoParams, ReviewFile, Visibility } from '@/api/types'
 import {
   RepoDetailError,
   RepoDetailPage,
 } from '@/features/repo-detail/repo-detail-page'
-import { Outlet, createFileRoute, useChildMatches } from '@tanstack/react-router'
+import {
+  Outlet,
+  createFileRoute,
+  redirect,
+  useChildMatches,
+} from '@tanstack/react-router'
 import { createServerFn } from '@tanstack/react-start'
 
 const loadRepo = createServerFn({ method: 'GET' })
@@ -22,10 +26,31 @@ const setRepoFileVisibility = createServerFn({ method: 'POST' })
   .handler(({ data }) => setRepoFileVisibilityForRequest(data))
 
 export const Route = createFileRoute('/repos/$owner/$repo')({
-  loader: ({ params }) => loadRepo({ data: params }),
+  loader: async ({ location, params }) => {
+    if (
+      stripTrailingSlash(location.pathname) !==
+      `/repos/${params.owner}/${params.repo}`
+    ) {
+      return null
+    }
+
+    const detail = await loadRepo({ data: params })
+    if (detail.review) {
+      throw redirect({
+        params,
+        to: '/repos/$owner/$repo/review',
+      })
+    }
+
+    return detail
+  },
   errorComponent: RepoDetailError,
   component: RepoDetailRoute,
 })
+
+function stripTrailingSlash(path: string) {
+  return path.length > 1 ? path.replace(/\/+$/, '') : path
+}
 
 function RepoDetailRoute() {
   const childMatches = useChildMatches()
@@ -36,29 +61,17 @@ function RepoDetailRoute() {
     return <Outlet />
   }
 
+  if (!detail) {
+    return null
+  }
+
   return (
     <RepoDetailPage
       detail={detail}
-      setFileVisibility={(params, files, visibility) =>
-        setRepoDetailVisibility(params, detail, files, visibility)
-      }
+      setFileVisibility={setLiveRepoFileVisibility}
       params={params}
     />
   )
-}
-
-async function setRepoDetailVisibility(
-  params: RepoParams,
-  detail: RepoDetail,
-  files: ReviewFile[],
-  visibility: Visibility,
-) {
-  if (detail.review) {
-    const review = await setReviewVisibility(params, detail.review, files, visibility)
-    return review.files
-  }
-
-  return setLiveRepoFileVisibility(params, files, visibility)
 }
 
 function setLiveRepoFileVisibility(

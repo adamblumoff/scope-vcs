@@ -1,5 +1,4 @@
 import type { ReviewFileDiff } from '@/api/types'
-import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { cn } from '@/lib/utils'
 import { parseDiffFromFile, type FileDiffMetadata } from '@pierre/diffs'
@@ -65,7 +64,6 @@ export function ReviewFileDiffDrawer({
               {loading ? 'Loading diff' : error ? 'Diff unavailable' : 'Diff'}
             </div>
           </div>
-          {diff && <Badge variant="outline">{diff.kind}</Badge>}
           <Button
             aria-label="Close diff viewer"
             onClick={onClose}

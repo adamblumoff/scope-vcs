@@ -1,4 +1,6 @@
 import type { ProjectionPreview } from '@/api/types'
+import { GitCommit, Lock, UserRoundCheck } from 'lucide-react'
+import type { ReactNode } from 'react'
 import {
   audienceLabel,
   commitCountLabel,
@@ -12,36 +14,71 @@ export function ReviewPreviewMetrics({
   preview: ProjectionPreview
   showPrivateCounts: boolean
 }) {
+  const visibleFiles = fileCountLabel(preview.summary.visible_files)
+  const hiddenFiles = fileCountLabel(preview.summary.hidden_files)
+  const visibleCommits = commitCountLabel(preview.summary.visible_commits)
+  const audience = audienceLabel(preview.audience)
+
   return (
-    <div className="mb-4 grid gap-3 border-y border-border py-3 text-sm sm:grid-cols-3">
-      <Metric
-        label="Visible"
-        value={fileCountLabel(preview.summary.visible_files)}
+    <div className="grid grid-cols-3 gap-1 text-xs sm:min-w-[300px]">
+      <SummaryChip
+        icon={<UserRoundCheck className="size-3" />}
+        label="Shown"
+        value={visibleFiles}
       />
       {preview.audience === 'public' && showPrivateCounts ? (
-        <Metric
-          label="Private left out"
-          value={fileCountLabel(preview.summary.hidden_files)}
+        <SummaryChip
+          icon={<Lock className="size-3" />}
+          label="Excluded"
+          tone="private"
+          value={hiddenFiles}
         />
       ) : (
-        <Metric
+        <SummaryChip
+          icon={<UserRoundCheck className="size-3" />}
           label="Audience"
-          value={audienceLabel(preview.audience)}
+          value={audience}
         />
       )}
-      <Metric
+      <SummaryChip
+        icon={<GitCommit className="size-3" />}
         label="History"
-        value={commitCountLabel(preview.summary.visible_commits)}
+        value={visibleCommits}
       />
     </div>
   )
 }
 
-function Metric({ label, value }: { label: string; value: number | string }) {
+function SummaryChip({
+  icon,
+  label,
+  tone = 'default',
+  value,
+}: {
+  icon: ReactNode
+  label: string
+  tone?: 'default' | 'private'
+  value: number | string
+}) {
   return (
-    <div className="min-w-0">
-      <div className="text-xs leading-4 text-muted-foreground">{label}</div>
-      <div className="mt-1 truncate font-mono text-sm font-semibold leading-5">
+    <div
+      className={
+        tone === 'private'
+          ? 'min-w-0 border-l-2 border-white bg-red-100/35 px-2 py-2.5 dark:bg-red-100/20'
+          : 'min-w-0 border-l-2 border-white bg-background/50 px-2 py-2.5 dark:bg-background/35'
+      }
+    >
+      <div className="flex items-center gap-1 text-[11px] leading-4 text-muted-foreground">
+        {icon}
+        <span>{label}</span>
+      </div>
+      <div
+        className={
+          tone === 'private'
+            ? 'mt-1.5 truncate font-mono text-xs font-semibold leading-4 text-red-900'
+            : 'mt-1.5 truncate font-mono text-xs font-semibold leading-4'
+        }
+      >
         {value}
       </div>
     </div>

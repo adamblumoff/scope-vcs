@@ -8,10 +8,10 @@ use crate::domain::projection::{
 };
 use crate::domain::repo_actions::preview_publish_import;
 use crate::domain::store::{
-    AccountAccess, AppCatalog, FirstPushToken, FirstPushTokenStatus, GitPushToken, PendingImport,
-    PendingImportFile, RepoMembership, RepoPublicationState, RepoRecord, RepoRole, RepoSettings,
-    RepoStorageCleanup, StagedFileChange, StagedFileChangeKind, StagedRepoUpdate, StoredRepository,
-    UserAccount,
+    AccountAccess, AppCatalog, FirstPushToken, FirstPushTokenStatus, GitPushToken, LineDiff,
+    PendingImport, PendingImportFile, RepoMembership, RepoPublicationState, RepoRecord, RepoRole,
+    RepoSettings, RepoStorageCleanup, StagedFileChange, StagedFileChangeKind, StagedRepoUpdate,
+    StoredRepository, UserAccount,
 };
 use crate::{
     app::router,

@@ -45,7 +45,16 @@ pub(crate) struct ProjectionPreviewCommit {
     pub(crate) author: Option<String>,
     pub(crate) message: String,
     pub(crate) synthetic: bool,
+    pub(crate) visibility: ProjectionPreviewCommitVisibility,
     pub(crate) change_count: usize,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum ProjectionPreviewCommitVisibility {
+    FullyPublic,
+    Synthetic,
+    Mixed,
+    FullyPrivate,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -94,6 +103,17 @@ pub(crate) fn projection_preview(
     let projection = project_graph(&repo.policy, &repo.graph, &principal);
     let files = projection_preview_files(repo, &projection);
     let head_oid = projection_preview_head_oid(&projection, &files);
+    let logical_commit_visibility = repo
+        .graph
+        .commits
+        .iter()
+        .map(|commit| {
+            (
+                commit.id.as_str(),
+                projection_preview_commit_visibility(commit),
+            )
+        })
+        .collect::<BTreeMap<_, _>>();
     let commits = projection
         .commits
         .iter()
@@ -104,6 +124,14 @@ pub(crate) fn projection_preview(
             author: commit.author.clone(),
             message: commit.message.clone(),
             synthetic: commit.synthetic,
+            visibility: if commit.synthetic {
+                ProjectionPreviewCommitVisibility::Synthetic
+            } else {
+                logical_commit_visibility
+                    .get(commit.logical_commit_id.as_str())
+                    .copied()
+                    .unwrap_or(ProjectionPreviewCommitVisibility::FullyPublic)
+            },
             change_count: commit.changes.len(),
         })
         .collect::<Vec<_>>();
@@ -143,6 +171,29 @@ pub(crate) fn projection_preview(
             synthetic_commits,
         },
     }
+}
+
+fn projection_preview_commit_visibility(
+    commit: &super::projection::LogicalCommit,
+) -> ProjectionPreviewCommitVisibility {
+    if !commit.changes.is_empty()
+        && commit
+            .changes
+            .iter()
+            .all(|change| change.visibility == Visibility::Private)
+    {
+        return ProjectionPreviewCommitVisibility::FullyPrivate;
+    }
+
+    if commit
+        .changes
+        .iter()
+        .all(|change| change.visibility == Visibility::Public)
+    {
+        return ProjectionPreviewCommitVisibility::FullyPublic;
+    }
+
+    ProjectionPreviewCommitVisibility::Mixed
 }
 
 pub(crate) fn projected_files(

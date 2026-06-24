@@ -44,6 +44,7 @@ fn export_api_types() {
         declaration::<UpdateStagedFileVisibilityRequest>(&ts_config),
         declaration::<ReviewFileDiffRequest>(&ts_config),
         declaration::<ReviewFileDiffResponse>(&ts_config),
+        declaration::<ReviewLineDiffResponse>(&ts_config),
         declaration::<PendingImportReviewResponse>(&ts_config),
         declaration::<StagedUpdateResponse>(&ts_config),
         declaration::<StagedFileResponse>(&ts_config),
@@ -51,6 +52,7 @@ fn export_api_types() {
         declaration::<ProjectionPreviewResponse>(&ts_config),
         declaration::<ProjectionPreviewFileResponse>(&ts_config),
         declaration::<ProjectionPreviewCommitResponse>(&ts_config),
+        declaration::<ProjectionPreviewCommitVisibilityResponse>(&ts_config),
         declaration::<ProjectionPreviewSummaryResponse>(&ts_config),
     ]
     .join("\n\n");

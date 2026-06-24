@@ -15,6 +15,7 @@ import type {
   ProjectionPreviewSummaryResponse,
   ReviewFileDiffRequest,
   ReviewFileDiffResponse,
+  ReviewLineDiffResponse,
   RepoFileResponse,
   RepoGitCredentialResponse,
   RepoPublicationState as GeneratedRepoPublicationState,
@@ -65,6 +66,7 @@ export type PendingImportPayload = PendingImportReviewResponse
 export type StagedFile = StagedFileResponse
 export type StagedUpdate = StagedUpdateResponse
 export type ReviewFileDiff = ReviewFileDiffResponse
+export type ReviewLineDiff = ReviewLineDiffResponse
 export type ProjectionPreviewFile = ProjectionPreviewFileResponse
 export type ProjectionPreviewCommit = ProjectionPreviewCommitResponse
 export type ProjectionPreviewSummary = ProjectionPreviewSummaryResponse
@@ -133,6 +135,7 @@ export type StagedUpdateReview = {
   branch: string | null
   base_live_commit_id: string | null
   message: string | null
+  line_diff: ReviewLineDiff
   files: StagedFile[]
 }
 

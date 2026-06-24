@@ -156,6 +156,7 @@ pub(crate) struct GitPushTokenResponse {
 pub(crate) struct PendingImportReviewResponse {
     pub(crate) publication_state: RepoPublicationState,
     pub(crate) default_visibility: Visibility,
+    pub(crate) line_diff: ReviewLineDiffResponse,
     pub(crate) files: Vec<RepoFileResponse>,
 }
 
@@ -204,11 +205,19 @@ pub(crate) struct ReviewFileDiffResponse {
 
 #[derive(Debug, Serialize)]
 #[cfg_attr(test, derive(ts_rs::TS))]
+pub(crate) struct ReviewLineDiffResponse {
+    pub(crate) additions: usize,
+    pub(crate) deletions: usize,
+}
+
+#[derive(Debug, Serialize)]
+#[cfg_attr(test, derive(ts_rs::TS))]
 pub(crate) struct StagedUpdateResponse {
     pub(crate) id: String,
     pub(crate) branch: String,
     pub(crate) base_live_commit_id: Option<String>,
     pub(crate) message: String,
+    pub(crate) line_diff: ReviewLineDiffResponse,
     pub(crate) files: Vec<StagedFileResponse>,
 }
 
@@ -352,12 +361,16 @@ pub(crate) fn repo_git_credential_response(
     }
 }
 
-pub(crate) fn staged_update_response(update: &StagedRepoUpdate) -> StagedUpdateResponse {
+pub(crate) fn staged_update_response(
+    update: &StagedRepoUpdate,
+    line_diff: ReviewLineDiffResponse,
+) -> StagedUpdateResponse {
     StagedUpdateResponse {
         id: update.id.clone(),
         branch: update.branch.clone(),
         base_live_commit_id: update.base_live_commit_id.clone(),
         message: update.message.clone(),
+        line_diff,
         files: update
             .changes
             .iter()

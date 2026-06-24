@@ -176,6 +176,7 @@ fn db_metadata_store_round_trips_repo_metadata() {
             path: ScopePath::parse("/README.md").unwrap(),
             old_content: repo.graph.commits[0].changes[0].new_content.clone(),
             new_content: Some(source_blob("staged readme")),
+            line_diff: LineDiff::default(),
             visibility: Visibility::Public,
             kind: StagedFileChangeKind::Modified,
         }],

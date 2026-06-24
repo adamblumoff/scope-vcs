@@ -58,9 +58,11 @@ export type ReviewFileDiffRequest = { path: string, };
 
 export type ReviewFileDiffResponse = { path: string, kind: StagedFileChangeKind, old_content: string | null, new_content: string | null, };
 
-export type PendingImportReviewResponse = { publication_state: RepoPublicationState, default_visibility: Visibility, files: Array<RepoFileResponse>, };
+export type ReviewLineDiffResponse = { additions: number, deletions: number, };
 
-export type StagedUpdateResponse = { id: string, branch: string, base_live_commit_id: string | null, message: string, files: Array<StagedFileResponse>, };
+export type PendingImportReviewResponse = { publication_state: RepoPublicationState, default_visibility: Visibility, line_diff: ReviewLineDiffResponse, files: Array<RepoFileResponse>, };
+
+export type StagedUpdateResponse = { id: string, branch: string, base_live_commit_id: string | null, message: string, line_diff: ReviewLineDiffResponse, files: Array<StagedFileResponse>, };
 
 export type StagedFileResponse = { path: string, kind: StagedFileChangeKind, old_oid: string | null, new_oid: string | null, visibility: Visibility, };
 
@@ -70,6 +72,8 @@ export type ProjectionPreviewResponse = { audience: ProjectionPreviewAudience, s
 
 export type ProjectionPreviewFileResponse = { path: string, oid: string, visibility: Visibility, };
 
-export type ProjectionPreviewCommitResponse = { projected_id: string, logical_commit_id: string, parent_projected_id: string | null, author: string | null, message: string, synthetic: boolean, change_count: number, };
+export type ProjectionPreviewCommitResponse = { projected_id: string, logical_commit_id: string, parent_projected_id: string | null, author: string | null, message: string, synthetic: boolean, visibility: ProjectionPreviewCommitVisibilityResponse, change_count: number, };
+
+export type ProjectionPreviewCommitVisibilityResponse = "FullyPublic" | "Synthetic" | "Mixed" | "FullyPrivate";
 
 export type ProjectionPreviewSummaryResponse = { visible_files: number, hidden_files: number, visible_commits: number, hidden_commits: number, synthetic_commits: number, };

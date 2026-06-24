@@ -39,6 +39,7 @@ pub(crate) async fn get_pending_import_review(
     Ok(Json(PendingImportReviewResponse {
         publication_state: repo.record.publication_state,
         default_visibility: repo.record.default_visibility,
+        line_diff: pending_import_line_diff(&repo),
         files: pending_import_files(&repo, &principal)?,
     }))
 }
@@ -108,9 +109,12 @@ pub(crate) async fn get_staged_update(
     ensure_repo_read(&state, &repo, &principal)?;
     ensure_owner(&state, &repo, &principal)?;
 
-    Ok(Json(
-        repo.staged_update.as_ref().map(staged_update_response),
-    ))
+    let staged = repo
+        .staged_update
+        .as_ref()
+        .map(staged_update_response_with_diff);
+
+    Ok(Json(staged))
 }
 
 pub(crate) async fn update_staged_file_visibility(
@@ -141,7 +145,7 @@ pub(crate) async fn update_staged_file_visibility(
         input.visibility,
     )?;
 
-    Ok(Json(staged_update_response(&updated)))
+    Ok(Json(staged_update_response_with_diff(&updated)))
 }
 
 pub(crate) async fn apply_staged_update(
@@ -159,7 +163,7 @@ pub(crate) async fn apply_staged_update(
         .apply_staged_update(&owner, &repo_name, &principal.id)?;
     best_effort_drain_pending_source_blob_deletions(&state);
 
-    Ok(Json(staged_update_response(&applied)))
+    Ok(Json(staged_update_response_with_diff(&applied)))
 }
 
 pub(crate) async fn reject_staged_update(
@@ -175,9 +179,10 @@ pub(crate) async fn reject_staged_update(
     let rejected = state
         .metadata
         .reject_staged_update(&owner, &repo_name, &principal.id)?;
+    let response = staged_update_response_with_diff(&rejected);
     best_effort_drain_pending_source_blob_deletions(&state);
 
-    Ok(Json(staged_update_response(&rejected)))
+    Ok(Json(response))
 }
 
 fn review_file_diff_response(
@@ -248,4 +253,35 @@ fn source_blob_text_opt(
     blob: Option<&SourceBlob>,
 ) -> Result<Option<String>, ApiError> {
     blob.map(|blob| source_blob_text(store, blob)).transpose()
+}
+
+fn pending_import_line_diff(repo: &StoredRepository) -> ReviewLineDiffResponse {
+    let mut line_diff = ReviewLineDiffResponse {
+        additions: 0,
+        deletions: 0,
+    };
+    if let Some(pending) = &repo.pending_import {
+        for file in &pending.files {
+            line_diff.additions += file.blob.line_count;
+        }
+    }
+    line_diff
+}
+
+fn staged_update_response_with_diff(update: &StagedRepoUpdate) -> StagedUpdateResponse {
+    staged_update_response(update, staged_update_line_diff(update))
+}
+
+fn staged_update_line_diff(update: &StagedRepoUpdate) -> ReviewLineDiffResponse {
+    let mut line_diff = ReviewLineDiffResponse {
+        additions: 0,
+        deletions: 0,
+    };
+
+    for change in &update.changes {
+        line_diff.additions += change.line_diff.additions;
+        line_diff.deletions += change.line_diff.deletions;
+    }
+
+    line_diff
 }

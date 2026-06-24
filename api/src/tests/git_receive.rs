@@ -831,14 +831,14 @@ fn applied_push_survives_obsolete_snapshot_cleanup_failure() {
 struct DeleteFailsObjectStore;
 
 impl crate::object_store::ObjectStore for DeleteFailsObjectStore {
-    fn put(&self, _key: &str, _bytes: &[u8]) -> Result<(), crate::error::ApiError> {
-        Ok(())
+    fn put(&self, key: &str, bytes: &[u8]) -> Result<(), crate::error::ApiError> {
+        let store = MemoryObjectStore::new();
+        crate::object_store::ObjectStore::put(&store, key, bytes)
     }
 
     fn get(&self, key: &str) -> Result<Vec<u8>, crate::error::ApiError> {
-        Err(crate::error::ApiError::not_found(format!(
-            "object {key} not found"
-        )))
+        let store = MemoryObjectStore::new();
+        crate::object_store::ObjectStore::get(&store, key)
     }
 
     fn delete(&self, _key: &str) -> Result<(), crate::error::ApiError> {

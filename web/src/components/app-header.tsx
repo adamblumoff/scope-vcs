@@ -1,17 +1,19 @@
-import { Button } from '@/components/ui/button'
+import { cn } from '@/lib/utils'
 import { Link } from '@tanstack/react-router'
-import { ArrowLeft, GitBranch } from 'lucide-react'
+import { GitBranch } from 'lucide-react'
 import type { ReactNode } from 'react'
 
 type AppHeaderProps = {
   subtitle: string
   subtitleClassName?: string
+  contentClassName?: string
   homeLink?: boolean
   action?: ReactNode
 }
 
 export function AppHeader({
   action,
+  contentClassName,
   homeLink = true,
   subtitle,
   subtitleClassName,
@@ -34,7 +36,12 @@ export function AppHeader({
 
   return (
     <header className="border-b border-border bg-background">
-      <div className="mx-auto flex min-h-16 max-w-[1320px] items-center justify-between gap-3 px-4 py-3 sm:px-6">
+      <div
+        className={cn(
+          'mx-auto flex min-h-16 max-w-[1320px] items-center justify-between gap-3 px-4 py-3 sm:px-6',
+          contentClassName,
+        )}
+      >
         {homeLink ? (
           <Link className="flex min-w-0 items-center gap-3" to="/">
             {brand}
@@ -42,14 +49,7 @@ export function AppHeader({
         ) : (
           <div className="flex min-w-0 items-center gap-3">{brand}</div>
         )}
-        {action ?? (
-          <Button asChild size="sm" variant="secondary">
-            <Link to="/">
-              <ArrowLeft className="size-3.5" />
-              <span>Repos</span>
-            </Link>
-          </Button>
-        )}
+        {action}
       </div>
     </header>
   )

@@ -23,7 +23,7 @@ export function ReviewVisibilityPanelHeader({
   title: string
 }) {
   return (
-    <div className="flex flex-col gap-3 border-b border-border py-4 sm:flex-row sm:items-center sm:justify-between">
+    <div className="flex flex-col gap-3 border-b border-border py-4 sm:flex-row sm:items-start sm:justify-between">
       <div className="min-w-0">
         <div className="flex flex-wrap items-center gap-2">
           <h2 className="text-sm font-semibold leading-5">{title}</h2>
@@ -33,13 +33,15 @@ export function ReviewVisibilityPanelHeader({
           {description}
         </p>
       </div>
-      {availableAudiences.length > 1 && (
-        <AudienceToggle
-          audience={audience}
-          availableAudiences={availableAudiences}
-          onSelect={onSelectAudience}
-        />
-      )}
+      <div className="flex shrink-0 items-start sm:justify-end">
+        {availableAudiences.length > 1 && (
+          <AudienceToggle
+            audience={audience}
+            availableAudiences={availableAudiences}
+            onSelect={onSelectAudience}
+          />
+        )}
+      </div>
     </div>
   )
 }

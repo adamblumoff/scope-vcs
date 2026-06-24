@@ -8,7 +8,6 @@ import type {
 import { cn } from '@/lib/utils'
 import { lazy, Suspense, useMemo, useState } from 'react'
 import { ReviewEmptyFiles } from './review-empty-files'
-import { ReviewPreviewMetrics } from './review-preview-metrics'
 import { ReviewProjectionHistory } from './review-projection-history'
 import { ReviewTree, type ReviewTreeVariant } from './review-tree'
 import { displayPath } from './review-tree-model'
@@ -28,14 +27,15 @@ export function ReviewVisibilityPanel({
   files,
   onSetVisibility,
   onCloseFileDiff,
+  onSelectAudience,
   onSelectFile,
   pendingKey,
+  preferredAudience,
   selectedFileDiff = null,
   selectedFileDiffError = null,
   selectedFileDiffLoading = false,
   selectedFilePath = null,
   previews,
-  showPrivateCounts = Boolean(previews.owner),
   stagedReview = false,
   title = 'Visibility',
   treeVariant = 'workflow',
@@ -51,19 +51,20 @@ export function ReviewVisibilityPanel({
     pendingKey: string,
   ) => void
   onCloseFileDiff?: () => void
+  onSelectAudience?: (audience: ProjectionPreviewAudience) => void
   onSelectFile?: (file: ReviewFile) => void
   pendingKey: string | null
+  preferredAudience?: ProjectionPreviewAudience
   selectedFileDiff?: ReviewFileDiff | null
   selectedFileDiffError?: string | null
   selectedFileDiffLoading?: boolean
   selectedFilePath?: string | null
   previews: ProjectionPreviews
-  showPrivateCounts?: boolean
   stagedReview?: boolean
   title?: string
   treeVariant?: ReviewTreeVariant
 }) {
-  const [preferredAudience, setPreferredAudience] =
+  const [internalPreferredAudience, setInternalPreferredAudience] =
     useState<ProjectionPreviewAudience>('public')
   const availableAudiences = useMemo(
     () =>
@@ -74,10 +75,12 @@ export function ReviewVisibilityPanel({
     [previews.owner, previews.public],
   )
 
-  const audience = availableAudiences.includes(preferredAudience)
-    ? preferredAudience
+  const selectedAudience = preferredAudience ?? internalPreferredAudience
+  const audience = availableAudiences.includes(selectedAudience)
+    ? selectedAudience
     : availableAudiences[0]
   const preview = audience ? previews[audience] : null
+  const handleSelectAudience = onSelectAudience ?? setInternalPreferredAudience
   const visiblePaths = useMemo(
     () => new Set((preview?.files ?? []).map((file) => displayPath(file.path))),
     [preview?.files],
@@ -93,16 +96,12 @@ export function ReviewVisibilityPanel({
         audience={preview.audience}
         availableAudiences={availableAudiences}
         description={description}
-        onSelectAudience={setPreferredAudience}
+        onSelectAudience={handleSelectAudience}
         source={previews.source}
         title={title}
       />
 
       <div className="border-b border-border py-4">
-        <ReviewPreviewMetrics
-          preview={preview}
-          showPrivateCounts={showPrivateCounts}
-        />
         {files.length === 0 ? (
           <ReviewEmptyFiles
             description={
@@ -164,10 +163,9 @@ export function ReviewVisibilityPanel({
         )}
       </div>
 
-      <ReviewProjectionHistory
-        preview={preview}
-        showPrivateCounts={showPrivateCounts}
-      />
+      <div className="w-full max-w-[760px]">
+        <ReviewProjectionHistory preview={preview} />
+      </div>
     </section>
   )
 }

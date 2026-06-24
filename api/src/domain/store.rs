@@ -95,6 +95,13 @@ pub struct SourceBlob {
     pub sha256: String,
     pub git_oid: String,
     pub size_bytes: u64,
+    pub line_count: usize,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct LineDiff {
+    pub additions: usize,
+    pub deletions: usize,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -159,6 +166,7 @@ pub struct StagedFileChange {
     pub path: ScopePath,
     pub old_content: Option<SourceBlob>,
     pub new_content: Option<SourceBlob>,
+    pub line_diff: LineDiff,
     pub visibility: Visibility,
     pub kind: StagedFileChangeKind,
 }

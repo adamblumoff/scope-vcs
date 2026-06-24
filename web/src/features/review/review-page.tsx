@@ -1,10 +1,12 @@
 import type {
+  ProjectionPreviewAudience,
   ProjectionPreviews,
   RepoParams,
   RepoReview,
   ReviewFileDiff,
   ReviewFileDiffInput,
   ReviewFile,
+  ReviewLineDiff,
   Visibility,
 } from '@/api/types'
 import { AppHeader } from '@/components/app-header'
@@ -17,11 +19,12 @@ import { Button } from '@/components/ui/button'
 import { storeHomeFlash } from '@/lib/home-flash'
 import { useNavigate, useRouter } from '@tanstack/react-router'
 import { LoaderCircle, Rocket, X } from 'lucide-react'
-import { useEffect, useReducer, useState } from 'react'
+import { useEffect, useMemo, useReducer, useState } from 'react'
 import {
   initialReviewPageState,
   reviewPageReducer,
 } from './review-page-state'
+import { ReviewPreviewMetrics } from './review-preview-metrics'
 import { ReviewVisibilityPanel } from './review-visibility-panel'
 
 export function ReviewPage({
@@ -55,6 +58,8 @@ export function ReviewPage({
     initialReviewPageState,
   )
   const [selectedFilePath, setSelectedFilePath] = useState<string | null>(null)
+  const [preferredAudience, setPreferredAudience] =
+    useState<ProjectionPreviewAudience>('public')
   const [fileDiffState, setFileDiffState] =
     useState<ReviewFileDiffState>(emptyFileDiffState)
   const review =
@@ -66,6 +71,22 @@ export function ReviewPage({
   const rejecting = state.runningAction === 'reject'
   const stagedReview = review.kind === 'StagedUpdate'
   const visibilityPending = pendingKey !== null
+  const availableAudiences = useMemo(
+    () =>
+      [
+        projectionPreviews.owner ? 'owner' : null,
+        projectionPreviews.public ? 'public' : null,
+      ].filter(Boolean) as ProjectionPreviewAudience[],
+    [projectionPreviews.owner, projectionPreviews.public],
+  )
+  const audience = availableAudiences.includes(preferredAudience)
+    ? preferredAudience
+    : availableAudiences[0]
+  const preview = audience ? projectionPreviews[audience] : null
+  const showPrivateCounts = Boolean(projectionPreviews.owner)
+  const reviewRailClassName = selectedFilePath
+    ? 'max-w-[1320px] transition-[max-width] duration-300 ease-out'
+    : 'max-w-[1040px] transition-[max-width] duration-300 ease-out'
 
   useEffect(() => {
     if (!selectedFilePath) {
@@ -179,59 +200,22 @@ export function ReviewPage({
 
   return (
     <main className="min-h-screen bg-background text-foreground">
-      <AppHeader subtitle={`${params.owner}/${params.repo}`} subtitleClassName="font-mono" />
+      <AppHeader
+        contentClassName={reviewRailClassName}
+        subtitle={`${params.owner}/${params.repo}`}
+        subtitleClassName="font-mono"
+      />
 
-      <PageContent>
+      <PageContent className={reviewRailClassName}>
         <PageHeader
           actions={() => (
             <>
-              {stagedReview && (
-                <Button
-                  disabled={
-                    publishing ||
-                    rejecting ||
-                    visibilityPending ||
-                    review.files.length === 0
-                  }
-                  onClick={() => void rejectUpdate()}
-                  size="sm"
-                  type="button"
-                  variant="secondary"
-                >
-                  {rejecting ? (
-                    <LoaderCircle className="size-3.5 animate-spin" />
-                  ) : (
-                    <X className="size-3.5" />
-                  )}
-                  <span>{rejecting ? 'Rejecting' : 'Reject'}</span>
-                </Button>
+              {preview && (
+                <ReviewPreviewMetrics
+                  preview={preview}
+                  showPrivateCounts={showPrivateCounts}
+                />
               )}
-              <Button
-                disabled={
-                  publishing ||
-                  rejecting ||
-                  visibilityPending ||
-                  (stagedReview && review.files.length === 0)
-                }
-                onClick={() => void completeReview()}
-                size="sm"
-                type="button"
-              >
-                {publishing ? (
-                  <LoaderCircle className="size-3.5 animate-spin" />
-                ) : (
-                  <Rocket className="size-3.5" />
-                )}
-                <span>
-                  {publishing
-                    ? stagedReview
-                      ? 'Applying'
-                      : 'Publishing'
-                    : stagedReview
-                      ? 'Apply'
-                      : 'Publish'}
-                </span>
-              </Button>
             </>
           )}
           badges={() => (
@@ -248,7 +232,59 @@ export function ReviewPage({
           )}
           title={`${params.owner}/${params.repo}`}
           titleClassName="font-mono"
-        />
+        >
+          <div className="mt-4 flex flex-wrap items-center gap-2">
+            {stagedReview && (
+              <Button
+                disabled={
+                  publishing ||
+                  rejecting ||
+                  visibilityPending ||
+                  review.files.length === 0
+                }
+                onClick={() => void rejectUpdate()}
+                size="sm"
+                className="bg-red-800 text-white hover:bg-red-900 focus-visible:border-red-400 focus-visible:ring-red-700/30 dark:bg-red-800 dark:text-white dark:hover:bg-red-900"
+                type="button"
+              >
+                {rejecting ? (
+                  <LoaderCircle className="size-3.5 animate-spin" />
+                ) : (
+                  <X className="size-3.5" />
+                )}
+                <span>{rejecting ? 'Rejecting' : 'Reject'}</span>
+              </Button>
+            )}
+            <Button
+              disabled={
+                publishing ||
+                rejecting ||
+                visibilityPending ||
+                (stagedReview && review.files.length === 0)
+              }
+              onClick={() => void completeReview()}
+              size="sm"
+              className="bg-green-700 text-green-1000 hover:bg-green-800 focus-visible:border-green-400 focus-visible:ring-green-700/30 dark:bg-green-700 dark:text-green-1000 dark:hover:bg-green-800"
+              type="button"
+            >
+              {publishing ? (
+                <LoaderCircle className="size-3.5 animate-spin" />
+              ) : (
+                <Rocket className="size-3.5" />
+              )}
+              <span>
+                {publishing
+                  ? stagedReview
+                    ? 'Applying'
+                    : 'Publishing'
+                  : stagedReview
+                    ? 'Apply'
+                    : 'Publish'}
+              </span>
+            </Button>
+            <ReviewLineDiffPill lineDiff={review.line_diff} />
+          </div>
+        </PageHeader>
 
         {error && (
           <PageErrorAlert title="Review update failed">
@@ -260,16 +296,22 @@ export function ReviewPage({
           disabled={publishing || rejecting}
           files={review.files}
           onCloseFileDiff={() => setSelectedFilePath(null)}
-          onSelectFile={(file) => setSelectedFilePath(file.path)}
+          onSelectFile={(file) =>
+            setSelectedFilePath((currentPath) =>
+              currentPath === file.path ? null : file.path,
+            )
+          }
           onSetVisibility={(files, visibility, key) =>
             void setVisibility(files, visibility, key)
           }
           pendingKey={pendingKey}
+          preferredAudience={audience}
           previews={projectionPreviews}
           selectedFileDiff={fileDiffState.diff}
           selectedFileDiffError={fileDiffState.error}
           selectedFileDiffLoading={fileDiffState.status === 'loading'}
           selectedFilePath={selectedFilePath}
+          onSelectAudience={setPreferredAudience}
           stagedReview={stagedReview}
         />
       </PageContent>
@@ -287,6 +329,26 @@ const emptyFileDiffState: ReviewFileDiffState = {
   diff: null,
   error: null,
   status: 'idle',
+}
+
+function ReviewLineDiffPill({
+  lineDiff,
+}: {
+  lineDiff: ReviewLineDiff | null | undefined
+}) {
+  if (!lineDiff) {
+    return null
+  }
+
+  return (
+    <div
+      aria-label={`${lineDiff.deletions} deletions and ${lineDiff.additions} additions`}
+      className="inline-flex items-center gap-2 px-1 font-mono text-base leading-9"
+    >
+      <span className="text-red-300">-{lineDiff.deletions}</span>
+      <span className="text-green-300">+{lineDiff.additions}</span>
+    </div>
+  )
 }
 
 export function ReviewError({ error }: { error: unknown }) {

@@ -45,7 +45,7 @@ export function RepoDetailPage({
     pendingVisibility,
     visibilityError,
   } = state
-  const baseFiles = detail.review?.files ?? detail.files
+  const baseFiles = detail.files
   const files =
     filesOverride?.baseFiles === baseFiles
       ? filesOverride.files
@@ -60,7 +60,6 @@ export function RepoDetailPage({
       : null
   const canEditFiles = detail.capabilities.write && repo.role === 'Owner'
   const publicOnlyView = repo.role === null
-  const stagedReview = detail.review?.kind === 'StagedUpdate'
 
   async function setVisibility(
     files: ReviewFile[],
@@ -168,8 +167,6 @@ export function RepoDetailPage({
           }
           pendingKey={pendingKey}
           previews={detail.projection_previews}
-          showPrivateCounts={canEditFiles}
-          stagedReview={stagedReview}
           title={publicOnlyView ? 'Public files' : 'Visibility'}
           treeVariant={publicOnlyView ? 'public' : 'workflow'}
         />

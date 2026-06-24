@@ -169,6 +169,7 @@ async function loadRepoReview(
     branch: staged.branch,
     base_live_commit_id: staged.base_live_commit_id,
     message: staged.message,
+    line_diff: staged.line_diff,
     files: staged.files,
   }
 }

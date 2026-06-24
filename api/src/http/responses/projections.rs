@@ -2,8 +2,8 @@ use crate::domain::{
     policy::{Principal, ScopePath, Visibility},
     projection::Projection,
     projection_views::{
-        ProjectionAudience, ProjectionPreviewCommit, ProjectionPreviewFile,
-        ProjectionPreviewSummary, ProjectionSource, ProjectionViewFile,
+        ProjectionAudience, ProjectionPreviewCommit, ProjectionPreviewCommitVisibility,
+        ProjectionPreviewFile, ProjectionPreviewSummary, ProjectionSource, ProjectionViewFile,
         files_for_visibility_update as domain_files_for_visibility_update,
         pending_import_files as domain_pending_import_files,
         pending_scope_path as domain_pending_scope_path, projected_files as domain_projected_files,
@@ -90,7 +90,17 @@ pub(crate) struct ProjectionPreviewCommitResponse {
     pub(crate) author: Option<String>,
     pub(crate) message: String,
     pub(crate) synthetic: bool,
+    pub(crate) visibility: ProjectionPreviewCommitVisibilityResponse,
     pub(crate) change_count: usize,
+}
+
+#[derive(Debug, Serialize)]
+#[cfg_attr(test, derive(ts_rs::TS))]
+pub(crate) enum ProjectionPreviewCommitVisibilityResponse {
+    FullyPublic,
+    Synthetic,
+    Mixed,
+    FullyPrivate,
 }
 
 #[derive(Debug, Serialize)]
@@ -255,7 +265,27 @@ fn projection_preview_commit_response(
         author: commit.author,
         message: commit.message,
         synthetic: commit.synthetic,
+        visibility: projection_preview_commit_visibility_response(commit.visibility),
         change_count: commit.change_count,
+    }
+}
+
+fn projection_preview_commit_visibility_response(
+    visibility: ProjectionPreviewCommitVisibility,
+) -> ProjectionPreviewCommitVisibilityResponse {
+    match visibility {
+        ProjectionPreviewCommitVisibility::FullyPublic => {
+            ProjectionPreviewCommitVisibilityResponse::FullyPublic
+        }
+        ProjectionPreviewCommitVisibility::Synthetic => {
+            ProjectionPreviewCommitVisibilityResponse::Synthetic
+        }
+        ProjectionPreviewCommitVisibility::Mixed => {
+            ProjectionPreviewCommitVisibilityResponse::Mixed
+        }
+        ProjectionPreviewCommitVisibility::FullyPrivate => {
+            ProjectionPreviewCommitVisibilityResponse::FullyPrivate
+        }
     }
 }
 
