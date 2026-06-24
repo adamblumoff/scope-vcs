@@ -3,7 +3,6 @@ import type {
   RepoSettings,
   Visibility,
 } from '@/api/types'
-import { CopyableCodeBlock } from '@/components/copyable-code-block'
 import { SectionRow, SectionRows } from '@/components/section-rows'
 import { Button } from '@/components/ui/button'
 import { Switch } from '@/components/ui/switch'
@@ -18,6 +17,7 @@ import {
   RefreshCw,
   Trash2,
 } from 'lucide-react'
+import { GitCommandBlock } from '../git-command-block'
 import { gitCredentialApproveCommand } from '../setup/commands'
 import type { SettingKey } from './repo-settings-state'
 
@@ -42,6 +42,13 @@ export function SettingsSections({
   settings: RepoSettings
   settingsSaving: boolean
 }) {
+  const gitCredentialCommand = gitCredential?.push_token.secret
+    ? {
+        credential: gitCredential,
+        secret: gitCredential.push_token.secret,
+      }
+    : null
+
   return (
     <SectionRows>
       <SectionRow
@@ -120,12 +127,15 @@ export function SettingsSections({
               Git credential reset is available after the repo is published.
             </p>
           )}
-          {gitCredential?.push_token.secret && (
-            <CopyableCodeBlock
-              value={gitCredentialApproveCommand(
-                gitCredential,
-                gitCredential.push_token.secret,
-              )}
+          {gitCredentialCommand && (
+            <GitCommandBlock
+              value={(shell) =>
+                gitCredentialApproveCommand(
+                  gitCredentialCommand.credential,
+                  gitCredentialCommand.secret,
+                  shell,
+                )
+              }
             />
           )}
         </div>

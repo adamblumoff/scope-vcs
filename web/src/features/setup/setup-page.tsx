@@ -5,7 +5,6 @@ import type {
   SetupProgressState,
 } from '@/api/types'
 import { AppHeader } from '@/components/app-header'
-import { CopyableCodeBlock } from '@/components/copyable-code-block'
 import { PageContent, PageHeader } from '@/components/page-header'
 import { PageErrorAlert } from '@/components/page-error-alert'
 import { RouteErrorPage } from '@/components/route-error-page'
@@ -18,6 +17,7 @@ import { useNavigate, useRouter } from '@tanstack/react-router'
 import { LoaderCircle, RefreshCw, Terminal } from 'lucide-react'
 import type { ReactNode } from 'react'
 import { useCallback, useReducer } from 'react'
+import { GitCommandBlock } from '../git-command-block'
 import { setupCommand } from './commands'
 import {
   initialSetupPageState,
@@ -53,9 +53,6 @@ export function SetupPage({
     ? setupOverride.pushTokenSecret
     : storedPushTokenSecret ?? setup.push_token?.secret ?? null
   const { busy, error, progressError, progressState } = state
-  const setupCommandText = pushTokenSecret
-    ? setupCommand(setup, pushTokenSecret)
-    : null
   const updateToken = useRegenerateSetupToken({
     dispatch,
     initialSetup,
@@ -150,11 +147,13 @@ export function SetupPage({
                 <LoaderCircle className="size-3.5 animate-spin" />
                 <span>{setupProgressLabel(progressState)}</span>
               </div>
-              {setupCommandText ? (
+              {pushTokenSecret ? (
                 <>
-                  <CopyableCodeBlock
+                  <GitCommandBlock
                     copyLabel="Copy setup command"
-                    value={setupCommandText}
+                    value={(shell) =>
+                      setupCommand(setup, pushTokenSecret, shell)
+                    }
                   />
                   <p className="text-sm leading-5 text-muted-foreground">
                     This stores your Scope push token in Git credentials,
