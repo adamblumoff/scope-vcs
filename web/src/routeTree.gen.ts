@@ -16,6 +16,7 @@ import { Route as ReposOwnerRepoRouteImport } from './routes/repos.$owner.$repo'
 import { Route as ReposOwnerRepoSetupRouteImport } from './routes/repos.$owner.$repo.setup'
 import { Route as ReposOwnerRepoSettingsRouteImport } from './routes/repos.$owner.$repo.settings'
 import { Route as ReposOwnerRepoReviewRouteImport } from './routes/repos.$owner.$repo.review'
+import { Route as ReposOwnerRepoHistoryRouteImport } from './routes/repos.$owner.$repo.history'
 
 const IndexRoute = IndexRouteImport.update({
   id: '/',
@@ -52,12 +53,18 @@ const ReposOwnerRepoReviewRoute = ReposOwnerRepoReviewRouteImport.update({
   path: '/review',
   getParentRoute: () => ReposOwnerRepoRoute,
 } as any)
+const ReposOwnerRepoHistoryRoute = ReposOwnerRepoHistoryRouteImport.update({
+  id: '/history',
+  path: '/history',
+  getParentRoute: () => ReposOwnerRepoRoute,
+} as any)
 
 export interface FileRoutesByFullPath {
   '/': typeof IndexRoute
   '/auth/callback': typeof AuthCallbackRoute
   '/auth/session': typeof AuthSessionRoute
   '/repos/$owner/$repo': typeof ReposOwnerRepoRouteWithChildren
+  '/repos/$owner/$repo/history': typeof ReposOwnerRepoHistoryRoute
   '/repos/$owner/$repo/review': typeof ReposOwnerRepoReviewRoute
   '/repos/$owner/$repo/settings': typeof ReposOwnerRepoSettingsRoute
   '/repos/$owner/$repo/setup': typeof ReposOwnerRepoSetupRoute
@@ -67,6 +74,7 @@ export interface FileRoutesByTo {
   '/auth/callback': typeof AuthCallbackRoute
   '/auth/session': typeof AuthSessionRoute
   '/repos/$owner/$repo': typeof ReposOwnerRepoRouteWithChildren
+  '/repos/$owner/$repo/history': typeof ReposOwnerRepoHistoryRoute
   '/repos/$owner/$repo/review': typeof ReposOwnerRepoReviewRoute
   '/repos/$owner/$repo/settings': typeof ReposOwnerRepoSettingsRoute
   '/repos/$owner/$repo/setup': typeof ReposOwnerRepoSetupRoute
@@ -77,6 +85,7 @@ export interface FileRoutesById {
   '/auth/callback': typeof AuthCallbackRoute
   '/auth/session': typeof AuthSessionRoute
   '/repos/$owner/$repo': typeof ReposOwnerRepoRouteWithChildren
+  '/repos/$owner/$repo/history': typeof ReposOwnerRepoHistoryRoute
   '/repos/$owner/$repo/review': typeof ReposOwnerRepoReviewRoute
   '/repos/$owner/$repo/settings': typeof ReposOwnerRepoSettingsRoute
   '/repos/$owner/$repo/setup': typeof ReposOwnerRepoSetupRoute
@@ -88,6 +97,7 @@ export interface FileRouteTypes {
     | '/auth/callback'
     | '/auth/session'
     | '/repos/$owner/$repo'
+    | '/repos/$owner/$repo/history'
     | '/repos/$owner/$repo/review'
     | '/repos/$owner/$repo/settings'
     | '/repos/$owner/$repo/setup'
@@ -97,6 +107,7 @@ export interface FileRouteTypes {
     | '/auth/callback'
     | '/auth/session'
     | '/repos/$owner/$repo'
+    | '/repos/$owner/$repo/history'
     | '/repos/$owner/$repo/review'
     | '/repos/$owner/$repo/settings'
     | '/repos/$owner/$repo/setup'
@@ -106,6 +117,7 @@ export interface FileRouteTypes {
     | '/auth/callback'
     | '/auth/session'
     | '/repos/$owner/$repo'
+    | '/repos/$owner/$repo/history'
     | '/repos/$owner/$repo/review'
     | '/repos/$owner/$repo/settings'
     | '/repos/$owner/$repo/setup'
@@ -169,16 +181,25 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof ReposOwnerRepoReviewRouteImport
       parentRoute: typeof ReposOwnerRepoRoute
     }
+    '/repos/$owner/$repo/history': {
+      id: '/repos/$owner/$repo/history'
+      path: '/history'
+      fullPath: '/repos/$owner/$repo/history'
+      preLoaderRoute: typeof ReposOwnerRepoHistoryRouteImport
+      parentRoute: typeof ReposOwnerRepoRoute
+    }
   }
 }
 
 interface ReposOwnerRepoRouteChildren {
+  ReposOwnerRepoHistoryRoute: typeof ReposOwnerRepoHistoryRoute
   ReposOwnerRepoReviewRoute: typeof ReposOwnerRepoReviewRoute
   ReposOwnerRepoSettingsRoute: typeof ReposOwnerRepoSettingsRoute
   ReposOwnerRepoSetupRoute: typeof ReposOwnerRepoSetupRoute
 }
 
 const ReposOwnerRepoRouteChildren: ReposOwnerRepoRouteChildren = {
+  ReposOwnerRepoHistoryRoute: ReposOwnerRepoHistoryRoute,
   ReposOwnerRepoReviewRoute: ReposOwnerRepoReviewRoute,
   ReposOwnerRepoSettingsRoute: ReposOwnerRepoSettingsRoute,
   ReposOwnerRepoSetupRoute: ReposOwnerRepoSetupRoute,

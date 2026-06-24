@@ -1,6 +1,11 @@
-import type { ProjectionPreview, ProjectionPreviewCommit } from '@/api/types'
+import type {
+  ProjectionPreview,
+  ProjectionPreviewCommit,
+  RepoParams,
+} from '@/api/types'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
+import { Link } from '@tanstack/react-router'
 import { ChevronDown, ChevronUp, GitCommit, History } from 'lucide-react'
 import { useState } from 'react'
 import {
@@ -10,11 +15,15 @@ import {
 } from './review-labels'
 
 export function ReviewProjectionHistory({
+  historyParams,
   preview,
 }: {
+  historyParams?: RepoParams
   preview: ProjectionPreview
 }) {
   const [expanded, setExpanded] = useState(false)
+  const liveHistoryParams =
+    preview.source === 'live' ? historyParams : undefined
   const commits = [...preview.commits].reverse()
   const collapsedCommitCount = 1
   const visibleCommits = expanded
@@ -49,8 +58,10 @@ export function ReviewProjectionHistory({
           {visibleCommits.map((commit, index) => (
             <HistoryCommitRow
               commit={commit}
+              historyParams={liveHistoryParams}
               index={index}
               key={commit.projected_id}
+              preview={preview}
             />
           ))}
         </div>
@@ -90,35 +101,69 @@ export function ReviewProjectionHistory({
 
 function HistoryCommitRow({
   commit,
+  historyParams,
+  index,
+  preview,
+}: {
+  commit: ProjectionPreviewCommit
+  historyParams?: RepoParams
+  index: number
+  preview: ProjectionPreview
+}) {
+  const content = <HistoryCommitContent commit={commit} index={index} />
+
+  return (
+    <div className="relative">
+      <div className="absolute -left-[23px] top-4 flex size-5 items-center justify-center rounded-full border border-border bg-background shadow-sm">
+        <span className="size-2 rounded-full bg-foreground" />
+      </div>
+      {historyParams ? (
+        <Link
+          className="grid items-center gap-1 border border-border bg-background px-3 py-2 text-sm shadow-sm transition-colors hover:bg-muted/70 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background sm:grid-cols-[minmax(0,1fr)_auto]"
+          params={historyParams}
+          search={{
+            audience: preview.audience,
+            commit: commit.projected_id,
+          }}
+          to="/repos/$owner/$repo/history"
+        >
+          {content}
+        </Link>
+      ) : (
+        <div className="grid items-center gap-1 border border-border bg-background px-3 py-2 text-sm shadow-sm sm:grid-cols-[minmax(0,1fr)_auto]">
+          {content}
+        </div>
+      )}
+    </div>
+  )
+}
+
+function HistoryCommitContent({
+  commit,
   index,
 }: {
   commit: ProjectionPreviewCommit
   index: number
 }) {
   return (
-    <div className="relative">
-      <div className="absolute -left-[23px] top-4 flex size-5 items-center justify-center rounded-full border border-border bg-background shadow-sm">
-        <span className="size-2 rounded-full bg-foreground" />
-      </div>
-      <div className="grid items-center gap-1 border border-border bg-background px-3 py-2 text-sm shadow-sm sm:grid-cols-[minmax(0,1fr)_auto]">
-        <div className="min-w-0">
-          <div
-            className="truncate font-mono text-xs leading-4"
-            title={commit.message}
-          >
-            {commit.message}
-          </div>
-          <div className="mt-0.5 flex flex-wrap gap-2 text-xs leading-4 text-muted-foreground">
-            <span>#{index + 1}</span>
-            <span>{changeCountLabel(commit.change_count)}</span>
-            {commit.author && <span>{commit.author}</span>}
-          </div>
+    <>
+      <div className="min-w-0">
+        <div
+          className="truncate font-mono text-xs leading-4"
+          title={commit.message}
+        >
+          {commit.message}
         </div>
-        <div className="sm:text-right">
-          <CommitVisibilityBadge visibility={commit.visibility} />
+        <div className="mt-0.5 flex flex-wrap gap-2 text-xs leading-4 text-muted-foreground">
+          <span>#{index + 1}</span>
+          <span>{changeCountLabel(commit.change_count)}</span>
+          {commit.author && <span>{commit.author}</span>}
         </div>
       </div>
-    </div>
+      <div className="sm:text-right">
+        <CommitVisibilityBadge visibility={commit.visibility} />
+      </div>
+    </>
   )
 }
 

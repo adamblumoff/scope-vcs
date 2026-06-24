@@ -1,5 +1,11 @@
 import type {
   AccountSessionResponse,
+  CommitDetailResponse,
+  CommitFileDiffRequest,
+  CommitFileResponse,
+  CommitHistoryRequest,
+  CommitHistoryResponse,
+  CommitSummaryResponse,
   CreateRepoRequest,
   CreateRepoResponse as GeneratedCreateRepoResponse,
   DeleteRepoResponse as GeneratedDeleteRepoResponse,
@@ -62,6 +68,10 @@ export type RepoGitCredential = RepoGitCredentialResponse
 export type CreateRepoResponse = GeneratedCreateRepoResponse
 export type DeleteRepoResponse = GeneratedDeleteRepoResponse
 export type RepoSettings = RepoSettingsResponse
+export type CommitHistory = CommitHistoryResponse
+export type CommitSummary = CommitSummaryResponse
+export type CommitDetail = CommitDetailResponse
+export type CommitFile = CommitFileResponse
 export type PendingImportPayload = PendingImportReviewResponse
 export type StagedFile = StagedFileResponse
 export type StagedUpdate = StagedUpdateResponse
@@ -155,6 +165,13 @@ export type ProjectionPreviewInput = RepoParams & {
 }
 
 export type ReviewFileDiffInput = RepoParams & ReviewFileDiffRequest
+export type CommitHistoryInput = RepoParams & CommitHistoryRequest
+export type CommitDetailInput = CommitHistoryInput & {
+  commit: string
+}
+export type CommitFileDiffInput = RepoParams & CommitFileDiffRequest & {
+  commit: string
+}
 
 export type SetVisibilityInput = RepoParams &
   UpdateFileVisibilityRequest & {

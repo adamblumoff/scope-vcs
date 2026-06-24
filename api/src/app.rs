@@ -45,6 +45,18 @@ pub fn router(state: AppState) -> Router {
             get(http::repos::get_files),
         )
         .route(
+            "/v1/repos/{owner}/{repo}/commits",
+            get(http::history::get_commit_history),
+        )
+        .route(
+            "/v1/repos/{owner}/{repo}/commits/{commit_id}",
+            get(http::history::get_commit_detail),
+        )
+        .route(
+            "/v1/repos/{owner}/{repo}/commits/{commit_id}/file-diff",
+            get(http::history::get_commit_file_diff),
+        )
+        .route(
             "/v1/repos/{owner}/{repo}/pending-import",
             get(http::review::get_pending_import_review),
         )

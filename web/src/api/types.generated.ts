@@ -56,6 +56,10 @@ export type UpdateStagedFileVisibilityRequest = { paths: Array<string>, visibili
 
 export type ReviewFileDiffRequest = { path: string, };
 
+export type CommitHistoryRequest = { audience: ProjectionPreviewAudience | null, };
+
+export type CommitFileDiffRequest = { audience: ProjectionPreviewAudience | null, path: string, };
+
 export type ReviewFileDiffResponse = { path: string, kind: StagedFileChangeKind, old_content: string | null, new_content: string | null, };
 
 export type ReviewLineDiffResponse = { additions: number, deletions: number, };
@@ -65,6 +69,14 @@ export type PendingImportReviewResponse = { publication_state: RepoPublicationSt
 export type StagedUpdateResponse = { id: string, branch: string, base_live_commit_id: string | null, message: string, line_diff: ReviewLineDiffResponse, files: Array<StagedFileResponse>, };
 
 export type StagedFileResponse = { path: string, kind: StagedFileChangeKind, old_oid: string | null, new_oid: string | null, visibility: Visibility, };
+
+export type CommitHistoryResponse = { audience: ProjectionPreviewAudience, repo_id: string, principal_id: string, commits: Array<CommitSummaryResponse>, };
+
+export type CommitSummaryResponse = { projected_id: string, logical_commit_id: string, parent_projected_id: string | null, author: string | null, message: string, synthetic: boolean, change_count: number, };
+
+export type CommitDetailResponse = { audience: ProjectionPreviewAudience, repo_id: string, principal_id: string, projected_id: string, logical_commit_id: string, parent_projected_id: string | null, author: string | null, message: string, synthetic: boolean, change_count: number, files: Array<CommitFileResponse>, };
+
+export type CommitFileResponse = { path: string, kind: StagedFileChangeKind, old_oid: string | null, new_oid: string | null, visibility: Visibility, };
 
 export type ProjectionPreviewRequest = { audience: ProjectionPreviewAudience, source: ProjectionPreviewSource | null, };
 
