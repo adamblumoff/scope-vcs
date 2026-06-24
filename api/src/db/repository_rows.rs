@@ -42,6 +42,10 @@ where
             Expr::value(row.git_push_token),
         )
         .col_expr(
+            entities::repository::Column::GitCloneTokens,
+            Expr::value(row.git_clone_tokens),
+        )
+        .col_expr(
             entities::repository::Column::PendingImport,
             Expr::value(row.pending_import),
         )

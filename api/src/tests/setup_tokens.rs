@@ -193,6 +193,152 @@ async fn git_credential_regeneration_is_owner_only_and_recreates_git_push_token(
     assert_ne!(new_hash, secret);
 }
 
+#[tokio::test]
+async fn clone_credential_creation_requires_repo_membership() {
+    let state = test_state_with_repo();
+    cache_test_jwks(&state);
+    let member_pairwise_sub = "pairwise-member";
+    let member_email = "member@example.com";
+    let member_id = identity_user_id(&ShooIdentity {
+        pairwise_sub: member_pairwise_sub.to_string(),
+        email: Some(member_email.to_string()),
+        email_verified: true,
+    });
+    {
+        let mut catalog = lock_catalog(&state).unwrap();
+        catalog.users.insert(
+            member_id.clone(),
+            UserAccount {
+                id: member_id.clone(),
+                handle: "member".to_string(),
+                email: member_email.to_string(),
+                email_verified: true,
+                access: AccountAccess::Member,
+            },
+        );
+        let repo = catalog.repositories.get_mut(TEST_REPO_ID).unwrap();
+        repo.memberships.push(RepoMembership {
+            repo_id: TEST_REPO_ID.to_string(),
+            user_id: member_id.clone(),
+            role: RepoRole::Reader,
+        });
+    }
+    let app = router(state.clone());
+
+    let public_response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/v1/repos/owner/repo/clone-credential")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(public_response.status(), StatusCode::UNAUTHORIZED);
+
+    let stranger_response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/v1/repos/owner/repo/clone-credential")
+                .header(
+                    AUTHORIZATION,
+                    bearer_header_for("pairwise-stranger", "stranger@example.com"),
+                )
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(stranger_response.status(), StatusCode::FORBIDDEN);
+
+    let member_response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/v1/repos/owner/repo/clone-credential")
+                .header(
+                    AUTHORIZATION,
+                    bearer_header_for(member_pairwise_sub, member_email),
+                )
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(member_response.status(), StatusCode::OK);
+    let body = response_json(member_response).await;
+    assert_eq!(body["git_remote_path"], "/git/owner/repo");
+    let secret = body["token"]["secret"].as_str().unwrap();
+    assert!(secret.starts_with("scope_clone_"));
+    let catalog = lock_catalog(&state).unwrap();
+    let repo = catalog.repositories.get(TEST_REPO_ID).unwrap();
+    assert_eq!(repo.git_clone_tokens.len(), 1);
+    assert_eq!(repo.git_clone_tokens[0].user_id, member_id);
+    assert_ne!(repo.git_clone_tokens[0].token_hash, secret);
+    let first_hash = repo.git_clone_tokens[0].token_hash.clone();
+    drop(catalog);
+
+    let second_response = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/v1/repos/owner/repo/clone-credential")
+                .header(
+                    AUTHORIZATION,
+                    bearer_header_for(member_pairwise_sub, member_email),
+                )
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(second_response.status(), StatusCode::OK);
+    let second_body = response_json(second_response).await;
+    let second_secret = second_body["token"]["secret"].as_str().unwrap();
+    assert!(second_secret.starts_with("scope_clone_"));
+    assert_ne!(second_secret, secret);
+    let catalog = lock_catalog(&state).unwrap();
+    let repo = catalog.repositories.get(TEST_REPO_ID).unwrap();
+    assert_eq!(repo.git_clone_tokens.len(), 2);
+    assert!(
+        repo.git_clone_tokens
+            .iter()
+            .any(|token| token.token_hash == first_hash)
+    );
+}
+
+#[tokio::test]
+async fn clone_credential_creation_requires_published_repo() {
+    let state = test_state_with_repo();
+    cache_test_jwks(&state);
+    {
+        let mut catalog = lock_catalog(&state).unwrap();
+        let repo = catalog.repositories.get_mut(TEST_REPO_ID).unwrap();
+        repo.record.publication_state = RepoPublicationState::PendingFirstPush;
+    }
+
+    let response = router(state)
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/v1/repos/owner/repo/clone-credential")
+                .header(AUTHORIZATION, bearer_header())
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::CONFLICT);
+}
+
 #[test]
 fn first_push_token_response_uses_persisted_expiry() {
     let token = FirstPushToken {

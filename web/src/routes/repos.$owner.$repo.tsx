@@ -2,9 +2,15 @@ import {
   loadRepoForRequest,
   parseRepoParams,
   parseSetRepoFileVisibilityInput,
+  createCloneCredentialForRequest,
   setRepoFileVisibilityForRequest,
 } from '@/api/repos'
-import type { RepoParams, ReviewFile, Visibility } from '@/api/types'
+import type {
+  RepoCloneCredentialView,
+  RepoParams,
+  ReviewFile,
+  Visibility,
+} from '@/api/types'
 import {
   RepoDetailError,
   RepoDetailPage,
@@ -24,6 +30,10 @@ const loadRepo = createServerFn({ method: 'GET' })
 const setRepoFileVisibility = createServerFn({ method: 'POST' })
   .validator(parseSetRepoFileVisibilityInput)
   .handler(({ data }) => setRepoFileVisibilityForRequest(data))
+
+const createCloneCredential = createServerFn({ method: 'POST' })
+  .validator(parseRepoParams)
+  .handler(({ data }) => createCloneCredentialForRequest(data))
 
 export const Route = createFileRoute('/repos/$owner/$repo')({
   loader: async ({ location, params }) => {
@@ -68,10 +78,17 @@ function RepoDetailRoute() {
   return (
     <RepoDetailPage
       detail={detail}
+      loadCloneCredential={loadCloneCredential}
       setFileVisibility={setLiveRepoFileVisibility}
       params={params}
     />
   )
+}
+
+function loadCloneCredential(
+  params: RepoParams,
+): Promise<RepoCloneCredentialView> {
+  return createCloneCredential({ data: params })
 }
 
 function setLiveRepoFileVisibility(

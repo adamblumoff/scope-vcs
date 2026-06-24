@@ -6,7 +6,9 @@ pub(crate) async fn migrate_metadata_schema(db: &DatabaseConnection) -> Result<(
     let manager = SchemaManager::new(db);
     ensure_metadata_reset_events_table(&manager).await?;
     if let Some(drift) = metadata_schema_drift(&manager).await? {
-        if !metadata_schema_has_catalog_rows(db, &manager).await? {
+        if !metadata_schema_has_catalog_rows(db, &manager).await?
+            || is_destructive_pre_alpha_reset_drift(&drift)
+        {
             reset_metadata_schema(db).await?;
             ensure_metadata_reset_events_table(&manager).await?;
         } else {
@@ -99,6 +101,11 @@ pub(crate) async fn migrate_metadata_schema(db: &DatabaseConnection) -> Result<(
                 )
                 .col(ColumnDef::new(Repositories::FirstPushToken).json_binary())
                 .col(ColumnDef::new(Repositories::GitPushToken).json_binary())
+                .col(
+                    ColumnDef::new(Repositories::GitCloneTokens)
+                        .json_binary()
+                        .not_null(),
+                )
                 .col(ColumnDef::new(Repositories::PendingImport).json_binary())
                 .col(
                     ColumnDef::new(Repositories::Policy)
@@ -307,6 +314,7 @@ async fn metadata_schema_drift(manager: &SchemaManager<'_>) -> Result<Option<Str
                 "settings",
                 "first_push_token",
                 "git_push_token",
+                "git_clone_tokens",
                 "pending_import",
                 "policy",
                 "graph",
@@ -332,6 +340,10 @@ async fn metadata_schema_drift(manager: &SchemaManager<'_>) -> Result<Option<Str
         }
     }
     Ok(None)
+}
+
+fn is_destructive_pre_alpha_reset_drift(drift: &str) -> bool {
+    drift == "missing column scope_repositories.git_clone_tokens"
 }
 
 macro_rules! impl_iden {
@@ -378,6 +390,7 @@ enum Repositories {
     Settings,
     FirstPushToken,
     GitPushToken,
+    GitCloneTokens,
     PendingImport,
     Policy,
     Graph,
@@ -397,6 +410,7 @@ impl_iden!(Repositories {
     Settings => "settings",
     FirstPushToken => "first_push_token",
     GitPushToken => "git_push_token",
+    GitCloneTokens => "git_clone_tokens",
     PendingImport => "pending_import",
     Policy => "policy",
     Graph => "graph",
@@ -451,3 +465,21 @@ impl_iden!(MetadataResetEvents {
     Trigger => "trigger",
     Reason => "reason",
 });
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn destructive_pre_alpha_reset_drift_is_limited_to_clone_token_schema_bump() {
+        assert!(is_destructive_pre_alpha_reset_drift(
+            "missing column scope_repositories.git_clone_tokens"
+        ));
+        assert!(!is_destructive_pre_alpha_reset_drift(
+            "missing column scope_repositories.owner_user_id"
+        ));
+        assert!(!is_destructive_pre_alpha_reset_drift(
+            "missing column scope_users.email"
+        ));
+    }
+}

@@ -1,5 +1,6 @@
 import type {
   RepoDetail,
+  RepoCloneCredentialView,
   RepoParams,
   ReviewFile,
   Visibility,
@@ -16,6 +17,7 @@ import { Link, useRouter } from '@tanstack/react-router'
 import { Settings } from 'lucide-react'
 import { useReducer } from 'react'
 import { ReviewVisibilityPanel } from '../review/review-visibility-panel'
+import { RepoCloneDropdown } from './repo-clone-dropdown'
 import {
   initialRepoDetailPageState,
   repoDetailPageReducer,
@@ -23,10 +25,12 @@ import {
 
 export function RepoDetailPage({
   detail,
+  loadCloneCredential,
   params,
   setFileVisibility,
 }: {
   detail: RepoDetail
+  loadCloneCredential: (params: RepoParams) => Promise<RepoCloneCredentialView>
   params: RepoParams
   setFileVisibility: (
     params: RepoParams,
@@ -101,6 +105,13 @@ export function RepoDetailPage({
         <PageHeader
           actions={() => (
             <>
+              {repo.lifecycle_state === 'Published' && (
+                <RepoCloneDropdown
+                  cloneRemoteUrl={detail.clone_remote_url}
+                  loadCloneCredential={() => loadCloneCredential(params)}
+                  repo={repo}
+                />
+              )}
               <RepoPrimaryActionButton
                 includeOpen={false}
                 repo={repo}

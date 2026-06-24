@@ -29,6 +29,10 @@ pub fn router(state: AppState) -> Router {
             post(http::repos::regenerate_git_credential),
         )
         .route(
+            "/v1/repos/{owner}/{repo}/clone-credential",
+            post(http::repos::create_clone_credential),
+        )
+        .route(
             "/v1/repos/{owner}/{repo}/setup",
             get(http::setup::get_repo_setup),
         )

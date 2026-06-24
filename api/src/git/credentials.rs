@@ -2,9 +2,9 @@ use crate::domain::store::{FirstPushTokenStatus, RepoPublicationState, StoredRep
 use crate::{
     auth::{
         shoo::{ShooIdentity, require_identity},
-        tokens::{first_push_token_hash, git_push_token_hash},
+        tokens::{first_push_token_hash, git_clone_token_hash, git_push_token_hash},
     },
-    config::{FIRST_PUSH_TOKEN_PREFIX, GIT_PUSH_TOKEN_PREFIX},
+    config::{FIRST_PUSH_TOKEN_PREFIX, GIT_CLONE_TOKEN_PREFIX, GIT_PUSH_TOKEN_PREFIX},
     error::ApiError,
     persistence::unix_now,
     state::{AppState, find_repo},
@@ -22,6 +22,12 @@ pub(crate) enum InitialPushCredential {
 pub(crate) enum ReceivePackAuthorization {
     ScopeToken { secret: String },
     ShooIdentity(ShooIdentity),
+}
+
+#[derive(Clone, Debug)]
+pub(crate) enum GitReadAuthorization {
+    CloneToken { secret: String },
+    PushToken { secret: String },
 }
 
 #[cfg(test)]
@@ -98,7 +104,9 @@ pub(crate) fn git_receive_pack_auth_required() -> ApiError {
     ApiError::unauthorized("Git push credentials required")
 }
 
-pub(crate) fn git_push_token_from_headers(headers: &HeaderMap) -> Result<Option<String>, ApiError> {
+pub(crate) fn git_read_authorization_from_headers(
+    headers: &HeaderMap,
+) -> Result<Option<GitReadAuthorization>, ApiError> {
     let Some(value) = headers.get(AUTHORIZATION) else {
         return Ok(None);
     };
@@ -111,23 +119,33 @@ pub(crate) fn git_push_token_from_headers(headers: &HeaderMap) -> Result<Option<
         if token.is_empty() {
             return Err(ApiError::unauthorized("empty bearer token"));
         }
-        return if token.starts_with(GIT_PUSH_TOKEN_PREFIX) {
-            Ok(Some(token.to_string()))
-        } else {
-            Ok(None)
-        };
+        if token.starts_with(GIT_CLONE_TOKEN_PREFIX) {
+            return Ok(Some(GitReadAuthorization::CloneToken {
+                secret: token.to_string(),
+            }));
+        }
+        if token.starts_with(GIT_PUSH_TOKEN_PREFIX) {
+            return Ok(Some(GitReadAuthorization::PushToken {
+                secret: token.to_string(),
+            }));
+        }
+        return Ok(None);
     }
 
     if let Some(encoded) = value.strip_prefix("Basic ") {
         let token = basic_auth_secret(encoded)?;
         if token.is_empty() {
-            return Err(ApiError::unauthorized("empty Git push token"));
+            return Err(ApiError::unauthorized("empty Git token"));
         }
-        return Ok(Some(token));
+        return if token.starts_with(GIT_CLONE_TOKEN_PREFIX) {
+            Ok(Some(GitReadAuthorization::CloneToken { secret: token }))
+        } else {
+            Ok(Some(GitReadAuthorization::PushToken { secret: token }))
+        };
     }
 
     Err(ApiError::unauthorized(
-        "expected Authorization: Basic Git push token or Bearer token",
+        "expected Authorization: Basic Git token or Bearer token",
     ))
 }
 
@@ -278,4 +296,20 @@ pub(crate) fn authorize_git_push_token_for_repo(
     }
 
     Ok(token.owner_user_id.clone())
+}
+
+pub(crate) fn authorize_git_clone_token_for_repo(
+    repo: &StoredRepository,
+    secret: &str,
+) -> Result<String, ApiError> {
+    let hash = git_clone_token_hash(secret);
+    let Some(token) = repo
+        .git_clone_tokens
+        .iter()
+        .find(|token| token.token_hash == hash)
+    else {
+        return Err(ApiError::unauthorized("invalid Git credentials"));
+    };
+
+    Ok(token.user_id.clone())
 }

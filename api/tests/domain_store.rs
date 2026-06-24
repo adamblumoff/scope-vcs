@@ -47,6 +47,7 @@ fn test_repo() -> StoredRepository {
         settings: RepoSettings::default(),
         first_push_token: None,
         git_push_token: None,
+        git_clone_tokens: Vec::new(),
         pending_import: None,
         policy: Policy::new(Visibility::Public, TEST_OWNER_ID),
         graph: SourceGraph {

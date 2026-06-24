@@ -74,6 +74,18 @@ pub(crate) fn ensure_repo_owner(repo: &StoredRepository, user_id: &str) -> Resul
     Ok(())
 }
 
+pub(crate) fn ensure_repo_member(repo: &StoredRepository, user_id: &str) -> Result<(), ApiError> {
+    if repo
+        .memberships
+        .iter()
+        .any(|membership| membership.user_id == user_id)
+    {
+        Ok(())
+    } else {
+        Err(ApiError::forbidden("repo membership required"))
+    }
+}
+
 pub(crate) fn ensure_repo_setup_access(
     repo: &StoredRepository,
     user_id: &str,

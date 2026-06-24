@@ -5,8 +5,8 @@ pub(crate) use projections::*;
 use crate::domain::commit_history::{CommitHistoryCommit, CommitHistoryView};
 use crate::domain::policy::{Principal, ScopePath, Visibility};
 use crate::domain::store::{
-    FirstPushToken, FirstPushTokenStatus, GitPushToken, RepoPublicationState, RepoRole,
-    StagedFileChangeKind, StagedRepoUpdate, StoredRepository, UserAccount,
+    FirstPushToken, FirstPushTokenStatus, GitCloneToken, GitPushToken, RepoPublicationState,
+    RepoRole, StagedFileChangeKind, StagedRepoUpdate, StoredRepository, UserAccount,
 };
 use crate::{config::DEFAULT_GIT_BRANCH, error::ApiError};
 use serde::{Deserialize, Serialize};
@@ -137,6 +137,13 @@ pub(crate) struct RepoGitCredentialResponse {
 
 #[derive(Debug, Serialize)]
 #[cfg_attr(test, derive(ts_rs::TS))]
+pub(crate) struct RepoCloneCredentialResponse {
+    pub(crate) git_remote_path: String,
+    pub(crate) token: GitCloneTokenResponse,
+}
+
+#[derive(Debug, Serialize)]
+#[cfg_attr(test, derive(ts_rs::TS))]
 pub(crate) struct FirstPushTokenResponse {
     pub(crate) status: FirstPushTokenStatus,
     pub(crate) created_at_unix: u64,
@@ -148,6 +155,13 @@ pub(crate) struct FirstPushTokenResponse {
 #[derive(Debug, Serialize)]
 #[cfg_attr(test, derive(ts_rs::TS))]
 pub(crate) struct GitPushTokenResponse {
+    pub(crate) created_at_unix: u64,
+    pub(crate) secret: Option<String>,
+}
+
+#[derive(Debug, Serialize)]
+#[cfg_attr(test, derive(ts_rs::TS))]
+pub(crate) struct GitCloneTokenResponse {
     pub(crate) created_at_unix: u64,
     pub(crate) secret: Option<String>,
 }
@@ -410,6 +424,16 @@ pub(crate) fn git_push_token_response(
     }
 }
 
+pub(crate) fn git_clone_token_response(
+    token: &GitCloneToken,
+    secret: Option<String>,
+) -> GitCloneTokenResponse {
+    GitCloneTokenResponse {
+        created_at_unix: token.created_at_unix,
+        secret,
+    }
+}
+
 pub(crate) fn repo_git_credential_response(
     repo: &StoredRepository,
     token: &GitPushToken,
@@ -419,6 +443,17 @@ pub(crate) fn repo_git_credential_response(
         git_remote_path: format!("/git/{}/{}", repo.record.owner_handle, repo.record.name),
         remote_name: "scope",
         push_token: git_push_token_response(token, secret),
+    }
+}
+
+pub(crate) fn repo_clone_credential_response(
+    repo: &StoredRepository,
+    token: &GitCloneToken,
+    secret: Option<String>,
+) -> RepoCloneCredentialResponse {
+    RepoCloneCredentialResponse {
+        git_remote_path: format!("/git/{}/{}", repo.record.owner_handle, repo.record.name),
+        token: git_clone_token_response(token, secret),
     }
 }
 

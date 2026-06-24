@@ -7,8 +7,10 @@ use crate::{
     config::{DEFAULT_GIT_BRANCH, GIT_UPLOAD_PACK, UNPUBLISHED_GIT_ERROR},
     error::ApiError,
     git::{
+        GitReadAuthorization, authorize_git_clone_token_for_repo,
         authorize_git_push_token_for_repo, find_repo_after_git_scope_token, git_credential_error,
-        git_push_token_from_headers, storage::cached_raw_git_snapshot_repo,
+        git_read_authorization_from_headers, invalid_git_credentials,
+        storage::cached_raw_git_snapshot_repo,
     },
     state::AppState,
     state::{ensure_repo_read, find_repo, role_for_principal},
@@ -40,14 +42,8 @@ pub(crate) async fn git_projection_for_request(
     owner: &str,
     repo_name: &str,
 ) -> Result<Projection, ApiError> {
-    if let Some(secret) = git_push_token_from_headers(headers)? {
-        let repo = find_repo_after_git_scope_token(state, owner, repo_name)?;
-        let author_id =
-            authorize_git_push_token_for_repo(&repo, &secret).map_err(git_credential_error)?;
-        let principal = Principal {
-            id: author_id,
-            kind: crate::domain::policy::PrincipalKind::User,
-        };
+    if let Some(read_auth) = git_read_authorization_from_headers(headers)? {
+        let (repo, principal) = principal_for_git_read_token(state, read_auth, owner, repo_name)?;
         if repo.record.publication_state != RepoPublicationState::Published {
             return match role_for_principal(state, &repo, &principal)? {
                 Some(RepoRole::Owner) => Err(ApiError::forbidden(UNPUBLISHED_GIT_ERROR)),
@@ -114,17 +110,8 @@ pub(crate) async fn owner_snapshot_repo_for_request(
     owner: &str,
     repo_name: &str,
 ) -> Result<Option<PathBuf>, ApiError> {
-    let (repo, principal) = if let Some(secret) = git_push_token_from_headers(headers)? {
-        let repo = find_repo_after_git_scope_token(state, owner, repo_name)?;
-        let author_id =
-            authorize_git_push_token_for_repo(&repo, &secret).map_err(git_credential_error)?;
-        (
-            repo,
-            Principal {
-                id: author_id,
-                kind: crate::domain::policy::PrincipalKind::User,
-            },
-        )
+    let (repo, principal) = if let Some(read_auth) = git_read_authorization_from_headers(headers)? {
+        principal_for_git_read_token(state, read_auth, owner, repo_name)?
     } else {
         let repo = find_repo(state, owner, repo_name)?;
         let identity = http_identity(state, headers).await?;
@@ -146,6 +133,40 @@ pub(crate) async fn owner_snapshot_repo_for_request(
         return Ok(None);
     };
     cached_raw_git_snapshot_repo(state, snapshot).map(Some)
+}
+
+fn principal_for_git_read_token(
+    state: &AppState,
+    read_auth: GitReadAuthorization,
+    owner: &str,
+    repo_name: &str,
+) -> Result<(crate::domain::store::StoredRepository, Principal), ApiError> {
+    let repo = find_repo_after_git_scope_token(state, owner, repo_name)?;
+    let user_id = match read_auth {
+        GitReadAuthorization::PushToken { secret } => {
+            authorize_git_push_token_for_repo(&repo, &secret).map_err(git_credential_error)?
+        }
+        GitReadAuthorization::CloneToken { secret } => {
+            let user_id =
+                authorize_git_clone_token_for_repo(&repo, &secret).map_err(git_credential_error)?;
+            let principal = Principal {
+                id: user_id.clone(),
+                kind: crate::domain::policy::PrincipalKind::User,
+            };
+            if role_for_principal(state, &repo, &principal)?.is_none() {
+                return Err(invalid_git_credentials());
+            }
+            user_id
+        }
+    };
+
+    Ok((
+        repo,
+        Principal {
+            id: user_id,
+            kind: crate::domain::policy::PrincipalKind::User,
+        },
+    ))
 }
 
 pub(crate) fn projection_bare_repo(

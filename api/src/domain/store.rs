@@ -90,6 +90,13 @@ pub struct GitPushToken {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct GitCloneToken {
+    pub token_hash: String,
+    pub user_id: String,
+    pub created_at_unix: u64,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SourceBlob {
     pub object_key: String,
     pub sha256: String,
@@ -212,6 +219,7 @@ pub struct StoredRepository {
     pub settings: RepoSettings,
     pub first_push_token: Option<FirstPushToken>,
     pub git_push_token: Option<GitPushToken>,
+    pub git_clone_tokens: Vec<GitCloneToken>,
     pub pending_import: Option<PendingImport>,
     pub policy: Policy,
     pub graph: SourceGraph,
@@ -241,6 +249,7 @@ impl StoredRepository {
             settings: RepoSettings::default(),
             first_push_token: None,
             git_push_token: None,
+            git_clone_tokens: Vec::new(),
             pending_import: None,
             policy: Policy::new(default_visibility, owner.id.clone()),
             graph: SourceGraph {
