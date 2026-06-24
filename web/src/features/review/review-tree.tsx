@@ -25,13 +25,19 @@ import {
   visibleInProjectionPreview,
 } from './review-tree-model'
 
-const REVIEW_TREE_COLUMNS = 'sm:grid-cols-[minmax(0,1fr)_110px_120px_120px]'
+const EDITABLE_REVIEW_TREE_COLUMNS =
+  'sm:grid-cols-[minmax(0,1fr)_110px_120px_120px]'
+const READONLY_REVIEW_TREE_COLUMNS =
+  'sm:grid-cols-[minmax(0,1fr)_110px_120px]'
+const COMPACT_READONLY_REVIEW_TREE_COLUMNS =
+  'sm:grid-cols-[minmax(0,1fr)_84px_28px]'
 const PUBLIC_TREE_COLUMNS = 'sm:grid-cols-[minmax(0,1fr)]'
 const VISIBILITY_ACTION_CLASS = 'w-[88px] justify-start'
 export type ReviewTreeVariant = 'workflow' | 'public'
 
 export function ReviewTree({
   audience,
+  compactVisibility = false,
   disabled = false,
   files,
   onSetVisibility,
@@ -43,6 +49,7 @@ export function ReviewTree({
   stagedReview,
 }: {
   audience?: ProjectionPreviewAudience
+  compactVisibility?: boolean
   disabled?: boolean
   files: ReviewFile[]
   onSetVisibility?: (
@@ -60,6 +67,11 @@ export function ReviewTree({
   const root = useMemo(() => buildReviewTree(files), [files])
   const editable = Boolean(onSetVisibility)
   const publicTree = variant === 'public'
+  const columnsClassName = treeColumns({
+    compactVisibility,
+    editable,
+    publicTree,
+  })
   const [collapsed, setCollapsed] = useState<Set<string>>(
     () => new Set(folderCollapseKeys(root)),
   )
@@ -81,7 +93,7 @@ export function ReviewTree({
       <div
         className={cn(
           'hidden gap-3 px-2 py-2 text-xs font-medium leading-4 text-muted-foreground sm:grid',
-          publicTree ? PUBLIC_TREE_COLUMNS : REVIEW_TREE_COLUMNS,
+          columnsClassName,
         )}
       >
         <div>Path</div>
@@ -94,14 +106,22 @@ export function ReviewTree({
                   ? 'Change'
                   : 'Scope'}
             </div>
-            <div>Visibility</div>
-            <div className="text-right">{editable ? 'Set' : null}</div>
+            <div className={compactVisibility ? 'text-center' : undefined}>
+              {compactVisibility ? (
+                <span className="sr-only">Visibility</span>
+              ) : (
+                'Visibility'
+              )}
+            </div>
+            {editable && <div className="text-right">Set</div>}
           </>
         )}
       </div>
       {root.children.map((node) => (
         <ReviewTreeNodeRow
           collapsed={collapsed}
+          columnsClassName={columnsClassName}
+          compactVisibility={compactVisibility}
           depth={0}
           disabled={disabled}
           editable={editable}
@@ -123,6 +143,8 @@ export function ReviewTree({
 }
 function ReviewTreeNodeRow({
   collapsed,
+  columnsClassName,
+  compactVisibility,
   depth,
   disabled,
   editable,
@@ -138,6 +160,8 @@ function ReviewTreeNodeRow({
   variant,
 }: {
   collapsed: Set<string>
+  columnsClassName: string
+  compactVisibility: boolean
   depth: number
   disabled: boolean
   editable: boolean
@@ -175,7 +199,7 @@ function ReviewTreeNodeRow({
           'grid gap-2 px-2 py-2.5 text-sm sm:items-center',
           selected && 'bg-blue-100/60 dark:bg-blue-100/35',
           viewAudience === 'public' && !visibleInView && 'text-muted-foreground',
-          publicTree ? PUBLIC_TREE_COLUMNS : REVIEW_TREE_COLUMNS,
+          columnsClassName,
         )}
       >
         {onSelectFile ? (
@@ -205,8 +229,11 @@ function ReviewTreeNodeRow({
                 </Badge>
               )}
             </div>
-            <div>
-              <VisibilityBadge visibility={node.file.visibility} />
+            <div className={cn(compactVisibility && 'flex justify-center')}>
+              <VisibilityBadge
+                compact={compactVisibility}
+                visibility={node.file.visibility}
+              />
             </div>
             {editable && onSetVisibility ? (
               <div className="flex justify-end">
@@ -231,9 +258,7 @@ function ReviewTreeNodeRow({
                   <span>{nextVisibility}</span>
                 </Button>
               </div>
-            ) : (
-              <div className="hidden sm:block" />
-            )}
+            ) : null}
           </>
         )}
       </div>
@@ -251,7 +276,7 @@ function ReviewTreeNodeRow({
       <div
         className={cn(
           'grid gap-2 bg-muted/20 px-2 py-2.5 text-sm sm:items-center',
-          publicTree ? PUBLIC_TREE_COLUMNS : REVIEW_TREE_COLUMNS,
+          columnsClassName,
         )}
       >
         <div
@@ -300,8 +325,11 @@ function ReviewTreeNodeRow({
                 </>
               )}
             </div>
-            <div>
-              <VisibilityBadge visibility={visibility} />
+            <div className={cn(compactVisibility && 'flex justify-center')}>
+              <VisibilityBadge
+                compact={compactVisibility}
+                visibility={visibility}
+              />
             </div>
             {editable && onSetVisibility ? (
               <div className="flex justify-end">
@@ -326,9 +354,7 @@ function ReviewTreeNodeRow({
                   <span>{nextVisibility}</span>
                 </Button>
               </div>
-            ) : (
-              <div className="hidden sm:block" />
-            )}
+            ) : null}
           </>
         )}
       </div>
@@ -336,6 +362,8 @@ function ReviewTreeNodeRow({
         node.children.map((child) => (
           <ReviewTreeNodeRow
             collapsed={collapsed}
+            columnsClassName={columnsClassName}
+            compactVisibility={compactVisibility}
             depth={depth + 1}
             disabled={disabled}
             editable={editable}
@@ -354,6 +382,26 @@ function ReviewTreeNodeRow({
         ))}
     </>
   )
+}
+
+function treeColumns({
+  compactVisibility,
+  editable,
+  publicTree,
+}: {
+  compactVisibility: boolean
+  editable: boolean
+  publicTree: boolean
+}) {
+  if (publicTree) {
+    return PUBLIC_TREE_COLUMNS
+  }
+  if (editable) {
+    return EDITABLE_REVIEW_TREE_COLUMNS
+  }
+  return compactVisibility
+    ? COMPACT_READONLY_REVIEW_TREE_COLUMNS
+    : READONLY_REVIEW_TREE_COLUMNS
 }
 
 function FilePathLabel({ path }: { path: string }) {

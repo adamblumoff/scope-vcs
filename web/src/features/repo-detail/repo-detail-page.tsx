@@ -159,6 +159,7 @@ export function RepoDetailPage({
           }
           emptyTitle={publicOnlyView ? 'No public files' : 'No live files'}
           files={files}
+          historyParams={params}
           onSetVisibility={
             canEditFiles
               ? (files, visibility, key) =>

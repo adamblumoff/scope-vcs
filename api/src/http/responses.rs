@@ -2,6 +2,7 @@ mod projections;
 
 pub(crate) use projections::*;
 
+use crate::domain::commit_history::{CommitHistoryCommit, CommitHistoryView};
 use crate::domain::policy::{Principal, ScopePath, Visibility};
 use crate::domain::store::{
     FirstPushToken, FirstPushTokenStatus, GitPushToken, RepoPublicationState, RepoRole,
@@ -194,6 +195,19 @@ pub(crate) struct ReviewFileDiffRequest {
     pub(crate) path: String,
 }
 
+#[derive(Debug, Deserialize)]
+#[cfg_attr(test, derive(ts_rs::TS))]
+pub(crate) struct CommitHistoryRequest {
+    pub(crate) audience: Option<ProjectionPreviewAudience>,
+}
+
+#[derive(Debug, Deserialize)]
+#[cfg_attr(test, derive(ts_rs::TS))]
+pub(crate) struct CommitFileDiffRequest {
+    pub(crate) audience: Option<ProjectionPreviewAudience>,
+    pub(crate) path: String,
+}
+
 #[derive(Debug, Serialize)]
 #[cfg_attr(test, derive(ts_rs::TS))]
 pub(crate) struct ReviewFileDiffResponse {
@@ -224,6 +238,53 @@ pub(crate) struct StagedUpdateResponse {
 #[derive(Debug, Serialize)]
 #[cfg_attr(test, derive(ts_rs::TS))]
 pub(crate) struct StagedFileResponse {
+    pub(crate) path: String,
+    pub(crate) kind: StagedFileChangeKind,
+    pub(crate) old_oid: Option<String>,
+    pub(crate) new_oid: Option<String>,
+    pub(crate) visibility: Visibility,
+}
+
+#[derive(Debug, Serialize)]
+#[cfg_attr(test, derive(ts_rs::TS))]
+pub(crate) struct CommitHistoryResponse {
+    pub(crate) audience: ProjectionPreviewAudience,
+    pub(crate) repo_id: String,
+    pub(crate) principal_id: String,
+    pub(crate) commits: Vec<CommitSummaryResponse>,
+}
+
+#[derive(Debug, Serialize)]
+#[cfg_attr(test, derive(ts_rs::TS))]
+pub(crate) struct CommitSummaryResponse {
+    pub(crate) projected_id: String,
+    pub(crate) logical_commit_id: String,
+    pub(crate) parent_projected_id: Option<String>,
+    pub(crate) author: Option<String>,
+    pub(crate) message: String,
+    pub(crate) synthetic: bool,
+    pub(crate) change_count: usize,
+}
+
+#[derive(Debug, Serialize)]
+#[cfg_attr(test, derive(ts_rs::TS))]
+pub(crate) struct CommitDetailResponse {
+    pub(crate) audience: ProjectionPreviewAudience,
+    pub(crate) repo_id: String,
+    pub(crate) principal_id: String,
+    pub(crate) projected_id: String,
+    pub(crate) logical_commit_id: String,
+    pub(crate) parent_projected_id: Option<String>,
+    pub(crate) author: Option<String>,
+    pub(crate) message: String,
+    pub(crate) synthetic: bool,
+    pub(crate) change_count: usize,
+    pub(crate) files: Vec<CommitFileResponse>,
+}
+
+#[derive(Debug, Serialize)]
+#[cfg_attr(test, derive(ts_rs::TS))]
+pub(crate) struct CommitFileResponse {
     pub(crate) path: String,
     pub(crate) kind: StagedFileChangeKind,
     pub(crate) old_oid: Option<String>,
@@ -382,6 +443,62 @@ pub(crate) fn staged_update_response(
                 visibility: change.visibility,
             })
             .collect(),
+    }
+}
+
+pub(crate) fn commit_history_response(
+    audience: ProjectionPreviewAudience,
+    view: CommitHistoryView,
+) -> CommitHistoryResponse {
+    CommitHistoryResponse {
+        audience,
+        repo_id: view.repo_id,
+        principal_id: view.principal_id,
+        commits: view.commits.iter().map(commit_summary_response).collect(),
+    }
+}
+
+pub(crate) fn commit_detail_response(
+    audience: ProjectionPreviewAudience,
+    view: &CommitHistoryView,
+    commit: &CommitHistoryCommit,
+) -> CommitDetailResponse {
+    CommitDetailResponse {
+        audience,
+        repo_id: view.repo_id.clone(),
+        principal_id: view.principal_id.clone(),
+        projected_id: commit.projected_id.clone(),
+        logical_commit_id: commit.logical_commit_id.clone(),
+        parent_projected_id: commit.parent_projected_id.clone(),
+        author: commit.author.clone(),
+        message: commit.message.clone(),
+        synthetic: commit.synthetic,
+        change_count: commit.files.len(),
+        files: commit.files.iter().map(commit_file_response).collect(),
+    }
+}
+
+fn commit_summary_response(commit: &CommitHistoryCommit) -> CommitSummaryResponse {
+    CommitSummaryResponse {
+        projected_id: commit.projected_id.clone(),
+        logical_commit_id: commit.logical_commit_id.clone(),
+        parent_projected_id: commit.parent_projected_id.clone(),
+        author: commit.author.clone(),
+        message: commit.message.clone(),
+        synthetic: commit.synthetic,
+        change_count: commit.files.len(),
+    }
+}
+
+fn commit_file_response(
+    file: &crate::domain::commit_history::CommitHistoryFile,
+) -> CommitFileResponse {
+    CommitFileResponse {
+        path: file.path.as_str().to_string(),
+        kind: file.kind,
+        old_oid: file.old_content.as_ref().map(|blob| blob.git_oid.clone()),
+        new_oid: file.new_content.as_ref().map(|blob| blob.git_oid.clone()),
+        visibility: file.visibility,
     }
 }
 

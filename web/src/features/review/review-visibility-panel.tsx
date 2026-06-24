@@ -1,6 +1,7 @@
 import type {
   ProjectionPreviewAudience,
   ProjectionPreviews,
+  RepoParams,
   ReviewFileDiff,
   ReviewFile,
   Visibility,
@@ -25,6 +26,7 @@ export function ReviewVisibilityPanel({
   emptyDescription,
   emptyTitle = 'No files found',
   files,
+  historyParams,
   onSetVisibility,
   onCloseFileDiff,
   onSelectAudience,
@@ -45,6 +47,7 @@ export function ReviewVisibilityPanel({
   emptyDescription?: string
   emptyTitle?: string
   files: ReviewFile[]
+  historyParams?: RepoParams
   onSetVisibility?: (
     files: ReviewFile[],
     visibility: Visibility,
@@ -89,6 +92,8 @@ export function ReviewVisibilityPanel({
     return null
   }
   const diffOpen = selectedFilePath !== null
+  const projectionHistoryParams =
+    preview.source === 'live' ? historyParams : undefined
 
   return (
     <section className="mt-8 border-y border-border">
@@ -164,7 +169,10 @@ export function ReviewVisibilityPanel({
       </div>
 
       <div className="w-full max-w-[760px]">
-        <ReviewProjectionHistory preview={preview} />
+        <ReviewProjectionHistory
+          historyParams={projectionHistoryParams}
+          preview={preview}
+        />
       </div>
     </section>
   )

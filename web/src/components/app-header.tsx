@@ -38,7 +38,7 @@ export function AppHeader({
     <header className="border-b border-border bg-background">
       <div
         className={cn(
-          'mx-auto flex min-h-16 max-w-[1320px] items-center justify-between gap-3 px-4 py-3 sm:px-6',
+          'mx-auto flex min-h-16 max-w-[1040px] items-center justify-between gap-3 px-4 py-3 sm:px-6',
           contentClassName,
         )}
       >
