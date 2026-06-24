@@ -340,6 +340,11 @@ fn reassign_user_references(catalog: &mut AppCatalog, old_id: &str, new_id: &str
         {
             token.owner_user_id = new_id.to_string();
         }
+        for token in &mut repo.git_clone_tokens {
+            if token.user_id == old_id {
+                token.user_id = new_id.to_string();
+            }
+        }
         if let Some(update) = repo.staged_update.as_mut()
             && update.author_id == old_id
         {

@@ -1,6 +1,8 @@
 import type {
   RepoGitCredential,
   RepoGitCredentialView,
+  RepoCloneCredential,
+  RepoCloneCredentialView,
   RepoSetup,
   RepoSetupView,
 } from './types'
@@ -22,7 +24,17 @@ export function repoGitCredentialView(
   }
 }
 
-function gitRemoteUrl(api: string, path: string) {
+export function repoCloneCredentialView(
+  api: string,
+  credential: RepoCloneCredential,
+): RepoCloneCredentialView {
+  return {
+    ...credential,
+    git_remote_url: gitRemoteUrl(api, credential.git_remote_path),
+  }
+}
+
+export function gitRemoteUrl(api: string, path: string) {
   return `${stripTrailingSlash(api)}${path}`
 }
 

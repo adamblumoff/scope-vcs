@@ -160,6 +160,106 @@ async fn upload_pack_uses_git_push_token_for_owner_projection_after_publish() {
 }
 
 #[tokio::test]
+async fn upload_pack_uses_git_clone_token_for_member_projection_after_publish() {
+    let state = test_state_with_repo();
+    let member_id = "user_member".to_string();
+    let (secret, clone_token) = generate_git_clone_token(&member_id).unwrap();
+    {
+        let mut repo = repo_with_readme();
+        repo.memberships.push(RepoMembership {
+            repo_id: TEST_REPO_ID.to_string(),
+            user_id: member_id.clone(),
+            role: RepoRole::Reader,
+        });
+        repo.policy
+            .add_rule(VisibilityRule::private(
+                ScopePath::parse("/member-secret.txt").unwrap(),
+                [member_id.clone()],
+            ))
+            .unwrap();
+        repo.policy
+            .add_rule(VisibilityRule::private(
+                ScopePath::parse("/owner-secret.txt").unwrap(),
+                [repo.record.owner_user_id.clone()],
+            ))
+            .unwrap();
+        repo.graph.commits[0].changes.extend([
+            FileChange {
+                visibility: Visibility::Private,
+                path: ScopePath::parse("/member-secret.txt").unwrap(),
+                old_content: None,
+                new_content: Some(source_blob("member can read")),
+            },
+            FileChange {
+                visibility: Visibility::Private,
+                path: ScopePath::parse("/owner-secret.txt").unwrap(),
+                old_content: None,
+                new_content: Some(source_blob("owner only")),
+            },
+        ]);
+        repo.git_clone_tokens.push(clone_token);
+
+        let mut catalog = lock_catalog(&state).unwrap();
+        catalog.users.insert(
+            member_id.clone(),
+            UserAccount {
+                id: member_id.clone(),
+                handle: "member".to_string(),
+                email: "member@example.com".to_string(),
+                email_verified: true,
+                access: AccountAccess::Member,
+            },
+        );
+        catalog.repositories.insert(TEST_REPO_ID.to_string(), repo);
+    }
+    let mut headers = HeaderMap::new();
+    headers.insert(
+        AUTHORIZATION,
+        format!("Basic {}", BASE64.encode(format!("scope:{secret}")))
+            .parse()
+            .unwrap(),
+    );
+
+    let projection = git_projection_for_request(&state, &headers, TEST_REPO_OWNER, TEST_REPO_NAME)
+        .await
+        .unwrap();
+    let visible_paths = projection
+        .commits
+        .iter()
+        .flat_map(|commit| &commit.changes)
+        .map(|change| change.path.as_str())
+        .collect::<Vec<_>>();
+
+    assert!(visible_paths.contains(&"/README.md"));
+    assert!(visible_paths.contains(&"/member-secret.txt"));
+    assert!(!visible_paths.contains(&"/owner-secret.txt"));
+}
+
+#[tokio::test]
+async fn receive_pack_rejects_clone_token() {
+    let state = test_state_with_repo();
+    let (secret, clone_token) = generate_git_clone_token(&test_owner_id()).unwrap();
+    {
+        let mut catalog = lock_catalog(&state).unwrap();
+        let repo = catalog.repositories.get_mut(TEST_REPO_ID).unwrap();
+        repo.git_clone_tokens.push(clone_token);
+    }
+    let mut headers = HeaderMap::new();
+    headers.insert(
+        AUTHORIZATION,
+        format!("Basic {}", BASE64.encode(format!("scope:{secret}")))
+            .parse()
+            .unwrap(),
+    );
+
+    let error = receive_pack_access(&state, &headers, TEST_REPO_OWNER, TEST_REPO_NAME)
+        .await
+        .unwrap_err();
+
+    assert_eq!(error.status, StatusCode::UNAUTHORIZED);
+}
+
+#[tokio::test]
 async fn upload_pack_ignores_stale_durable_git_repos() {
     let state = test_state_with_repo();
     cache_test_jwks(&state);

@@ -12,6 +12,7 @@ import type {
   FirstPushTokenResponse,
   FirstPushTokenStatus,
   GitPushTokenResponse,
+  GitCloneTokenResponse,
   PendingImportReviewResponse,
   ProjectionPreviewAudience as GeneratedProjectionPreviewAudience,
   ProjectionPreviewCommitResponse,
@@ -24,6 +25,7 @@ import type {
   ReviewLineDiffResponse,
   RepoFileResponse,
   RepoGitCredentialResponse,
+  RepoCloneCredentialResponse,
   RepoPublicationState as GeneratedRepoPublicationState,
   RepoRole as GeneratedRepoRole,
   RepoSettingsResponse,
@@ -63,8 +65,10 @@ export type SessionRepo = GeneratedSessionRepo
 export type RepoSession = SessionResponse
 export type FirstPushToken = FirstPushTokenResponse
 export type GitPushToken = GitPushTokenResponse
+export type GitCloneToken = GitCloneTokenResponse
 export type RepoSetup = RepoSetupResponse
 export type RepoGitCredential = RepoGitCredentialResponse
+export type RepoCloneCredential = RepoCloneCredentialResponse
 export type CreateRepoResponse = GeneratedCreateRepoResponse
 export type DeleteRepoResponse = GeneratedDeleteRepoResponse
 export type RepoSettings = RepoSettingsResponse
@@ -84,6 +88,7 @@ export type ProjectionPreview = ProjectionPreviewResponse
 
 export type RepoDetail = {
   capabilities: RepoCapabilities
+  clone_remote_url: string
   files: RepoFile[]
   kind: 'repo'
   projection_previews: ProjectionPreviews
@@ -101,6 +106,10 @@ export type RepoSetupView = RepoSetup & {
 }
 
 export type RepoGitCredentialView = RepoGitCredential & {
+  git_remote_url: string
+}
+
+export type RepoCloneCredentialView = RepoCloneCredential & {
   git_remote_url: string
 }
 

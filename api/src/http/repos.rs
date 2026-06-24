@@ -8,7 +8,7 @@ use crate::{
             ensure_user_for_identity, http_identity, principal_for_repo, principal_for_user_id,
             require_identity,
         },
-        tokens::{generate_first_push_token, generate_git_push_token},
+        tokens::{generate_first_push_token, generate_git_clone_token, generate_git_push_token},
     },
     error::ApiError,
     http::projection_preview::{ensure_projection_preview_access, projection_preview_repo},
@@ -142,6 +142,32 @@ pub(crate) async fn regenerate_git_credential(
         &repo,
         &push_token,
         Some(push_secret),
+    )))
+}
+
+pub(crate) async fn create_clone_credential(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path((owner, repo_name)): Path<(String, String)>,
+) -> Result<Json<RepoCloneCredentialResponse>, ApiError> {
+    let identity = require_identity(&state, &headers).await?;
+    let user = ensure_user_for_identity(&state, &identity)?;
+    let repo = find_repo(&state, &owner, &repo_name)?;
+    let principal = principal_for_user_id(&repo, &user.id);
+    ensure_repo_read(&state, &repo, &principal)?;
+    if role_for_principal(&state, &repo, &principal)?.is_none() {
+        return Err(ApiError::forbidden("repo membership required"));
+    }
+
+    let (secret, token) = generate_git_clone_token(&user.id)?;
+    let token = state
+        .metadata
+        .create_git_clone_token(&owner, &repo_name, &user.id, token)?;
+
+    Ok(Json(repo_clone_credential_response(
+        &repo,
+        &token,
+        Some(secret),
     )))
 }
 

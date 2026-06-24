@@ -8,8 +8,14 @@ import {
 } from '@/api/client'
 import { loadProjectionPreviewsForRequest } from './projection-preview'
 import { loadReviewForRequest } from './review'
-import { repoGitCredentialView } from './setup-view'
+import {
+  gitRemoteUrl,
+  repoCloneCredentialView,
+  repoGitCredentialView,
+} from './setup-view'
 import type {
+  RepoCloneCredential,
+  RepoCloneCredentialView,
   RepoDetail,
   RepoFile,
   RepoGitCredential,
@@ -47,6 +53,33 @@ export async function regenerateGitCredentialForRequest(
   )
 }
 
+export async function createCloneCredentialForRequest(
+  data: RepoParams,
+): Promise<RepoCloneCredentialView> {
+  const idToken = await readRequestAuthToken()
+  if (!idToken) {
+    throw new Error('Sign in as a repo member to clone with credentials.')
+  }
+
+  const response = await fetch(
+    `${getApiMutationConnection()}/v1/repos/${data.owner}/${data.repo}/clone-credential`,
+    {
+      headers: authHeaders(idToken),
+      method: 'POST',
+    },
+  )
+  const payload = await response.json().catch(() => null)
+
+  if (!response.ok) {
+    throw new Error(payload?.error ?? `request failed: ${response.status}`)
+  }
+
+  return repoCloneCredentialView(
+    getPublicApiConnection('building clone command'),
+    payload as RepoCloneCredential,
+  )
+}
+
 export async function loadRepoForRequest(data: RepoParams) {
   const idToken = await readRequestAuthToken()
   const api = getApiConnection()
@@ -73,6 +106,10 @@ export async function loadRepoForRequest(data: RepoParams) {
 
   return {
     capabilities: session.capabilities,
+    clone_remote_url: gitRemoteUrl(
+      getPublicApiConnection('building clone command'),
+      `/git/${repo.owner_handle}/${repo.name}`,
+    ),
     files,
     kind: 'repo',
     projection_previews: projectionPreviews,

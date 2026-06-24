@@ -6,6 +6,7 @@ export {
 export {
   loadRepoForRequest,
   parseRepoParams,
+  createCloneCredentialForRequest,
   regenerateGitCredentialForRequest,
   setRepoFileVisibilityForRequest,
 } from './repo-detail'

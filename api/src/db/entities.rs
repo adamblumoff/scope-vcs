@@ -2,9 +2,9 @@ use crate::db::{decode_json, encode_json};
 use crate::domain::policy::{Policy, Visibility};
 use crate::domain::projection::SourceGraph;
 use crate::domain::store::{
-    AccountAccess, FirstPushToken, GitPushToken, InvitationState, PendingImport, RepoInvitation,
-    RepoMembership, RepoPublicationState, RepoRecord, RepoRole, RepoSettings, SourceBlob,
-    StagedRepoUpdate, StoredRepository, UserAccount,
+    AccountAccess, FirstPushToken, GitCloneToken, GitPushToken, InvitationState, PendingImport,
+    RepoInvitation, RepoMembership, RepoPublicationState, RepoRecord, RepoRole, RepoSettings,
+    SourceBlob, StagedRepoUpdate, StoredRepository, UserAccount,
 };
 use crate::error::ApiError;
 use sea_orm::entity::prelude::*;
@@ -146,6 +146,7 @@ pub(crate) mod repository {
         pub settings: Json,
         pub first_push_token: Option<Json>,
         pub git_push_token: Option<Json>,
+        pub git_clone_tokens: Json,
         pub pending_import: Option<Json>,
         pub policy: Json,
         pub graph: Json,
@@ -175,6 +176,7 @@ pub(crate) mod repository {
                     .map(encode_first_push_token)
                     .transpose()?,
                 git_push_token: repo.git_push_token.as_ref().map(encode_json).transpose()?,
+                git_clone_tokens: encode_json(&repo.git_clone_tokens)?,
                 pending_import: repo.pending_import.as_ref().map(encode_json).transpose()?,
                 policy: encode_json(&repo.policy)?,
                 graph: encode_json(&repo.graph)?,
@@ -209,6 +211,7 @@ pub(crate) mod repository {
                     .git_push_token
                     .map(decode_json::<GitPushToken>)
                     .transpose()?,
+                git_clone_tokens: decode_json::<Vec<GitCloneToken>>(self.git_clone_tokens)?,
                 pending_import: self
                     .pending_import
                     .map(decode_json::<PendingImport>)

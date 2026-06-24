@@ -151,6 +151,8 @@ fn verified_email_sign_in_collapses_existing_duplicate_user() {
         access: AccountAccess::Member,
     };
     let mut repo = test_repo(&canonical_id);
+    let (clone_secret, clone_token) = generate_git_clone_token(&duplicate_id).unwrap();
+    repo.git_clone_tokens.push(clone_token);
     repo.memberships.push(RepoMembership {
         repo_id: TEST_REPO_ID.to_string(),
         user_id: duplicate_id.clone(),
@@ -187,6 +189,12 @@ fn verified_email_sign_in_collapses_existing_duplicate_user() {
     assert_eq!(repo.memberships.len(), 1);
     assert_eq!(repo.memberships[0].user_id, canonical_id);
     assert_eq!(repo.memberships[0].role, RepoRole::Owner);
+    assert_eq!(repo.git_clone_tokens.len(), 1);
+    assert_eq!(repo.git_clone_tokens[0].user_id, canonical_id);
+    assert_eq!(
+        repo.git_clone_tokens[0].token_hash,
+        git_clone_token_hash(&clone_secret)
+    );
     assert_eq!(repo.graph.commits[0].author_id, canonical_id);
 }
 

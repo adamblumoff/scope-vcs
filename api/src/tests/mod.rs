@@ -299,6 +299,7 @@ fn test_repo(owner_id: &str) -> StoredRepository {
         settings: RepoSettings::default(),
         first_push_token: None,
         git_push_token: None,
+        git_clone_tokens: Vec::new(),
         pending_import: None,
         policy: Policy::new(Visibility::Public, owner_id),
         graph: SourceGraph {

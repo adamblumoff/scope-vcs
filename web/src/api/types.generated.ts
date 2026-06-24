@@ -40,9 +40,13 @@ export type RepoSetupResponse = { repo: RepoSummaryResponse, git_remote_path: st
 
 export type RepoGitCredentialResponse = { git_remote_path: string, remote_name: string, push_token: GitPushTokenResponse, };
 
+export type RepoCloneCredentialResponse = { git_remote_path: string, token: GitCloneTokenResponse, };
+
 export type FirstPushTokenResponse = { status: FirstPushTokenStatus, created_at_unix: number, expires_at_unix: number, used_at_unix: number | null, secret: string | null, };
 
 export type GitPushTokenResponse = { created_at_unix: number, secret: string | null, };
+
+export type GitCloneTokenResponse = { created_at_unix: number, secret: string | null, };
 
 export type RepoFileResponse = { path: string, oid: string, tracked: boolean, visibility: Visibility, };
 
