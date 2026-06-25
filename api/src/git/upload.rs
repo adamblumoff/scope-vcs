@@ -7,9 +7,8 @@ use crate::{
     config::{DEFAULT_GIT_BRANCH, GIT_UPLOAD_PACK, UNPUBLISHED_GIT_ERROR},
     error::ApiError,
     git::{
-        GitReadAuthorization, authorize_git_clone_token_for_repo,
-        authorize_git_push_token_for_repo, find_repo_after_git_scope_token, git_credential_error,
-        git_read_authorization_from_headers, invalid_git_credentials,
+        GitReadAuthorization, authorize_git_scope_token_for_repo, find_repo_after_git_scope_token,
+        git_credential_error, git_read_authorization_from_headers,
         storage::cached_raw_git_snapshot_repo,
     },
     state::AppState,
@@ -143,20 +142,8 @@ fn principal_for_git_read_token(
 ) -> Result<(crate::domain::store::StoredRepository, Principal), ApiError> {
     let repo = find_repo_after_git_scope_token(state, owner, repo_name)?;
     let user_id = match read_auth {
-        GitReadAuthorization::PushToken { secret } => {
-            authorize_git_push_token_for_repo(&repo, &secret).map_err(git_credential_error)?
-        }
-        GitReadAuthorization::CloneToken { secret } => {
-            let user_id =
-                authorize_git_clone_token_for_repo(&repo, &secret).map_err(git_credential_error)?;
-            let principal = Principal {
-                id: user_id.clone(),
-                kind: crate::domain::policy::PrincipalKind::User,
-            };
-            if role_for_principal(state, &repo, &principal)?.is_none() {
-                return Err(invalid_git_credentials());
-            }
-            user_id
+        GitReadAuthorization::ScopeToken { secret } => {
+            authorize_git_scope_token_for_repo(&repo, &secret).map_err(git_credential_error)?
         }
     };
 

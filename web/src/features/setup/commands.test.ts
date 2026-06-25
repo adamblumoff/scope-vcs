@@ -3,35 +3,31 @@ import { test } from 'node:test'
 
 import { gitCredentialApproveCommand, setupCommand } from './commands'
 
-test('setupCommand stores the Scope credential, resets the remote, and pushes', () => {
+const setupSource = {
+  git_remote_url: 'https://old-user@scope.example/git/adam/scope-vcs',
+  push_branch: 'trunk',
+  remote_name: 'scope',
+}
+
+test('setupCommand defaults to Bash/Zsh and pushes with Scope remote config', () => {
   assert.equal(
-    setupCommand(
-      {
-        git_remote_url: 'https://old-user@scope.example/git/adam/scope-vcs',
-        push_branch: 'trunk',
-        remote_name: 'scope',
-      },
-      'scope_git_secret',
-    ),
-    'git config "credential.https://scope.example.useHttpPath" true; "protocol=https`nhost=scope.example`npath=git/adam/scope-vcs`nusername=scope`npassword=scope_git_secret`n`n" | git credential approve; git remote remove scope 2>$null; git remote add scope https://scope@scope.example/git/adam/scope-vcs; git push scope HEAD:trunk',
+    setupCommand(setupSource, 'scope_git_secret'),
+    "git config --replace-all 'credential.https://scope.example.useHttpPath' 'true' && printf '%s\\n' 'protocol=https' 'host=scope.example' 'path=git/adam/scope-vcs' 'username=scope' 'password=scope_git_secret' '' | git credential approve && (git config --remove-section 'remote.scope' >/dev/null 2>&1 || true) && git config --replace-all 'remote.scope.url' 'https://scope@scope.example/git/adam/scope-vcs' && git config --replace-all 'remote.scope.pushurl' 'https://scope@scope.example/git/adam/scope-vcs' && git config --replace-all 'remote.scope.fetch' '+refs/heads/*:refs/remotes/scope/*' && git push 'scope' 'HEAD:trunk'",
   )
 })
 
-test('setupCommand escapes PowerShell credential values', () => {
+test('setupCommand renders PowerShell on request', () => {
   assert.equal(
     setupCommand(
-      {
-        git_remote_url: 'https://old-user@scope.example/git/adam/scope-vcs',
-        push_branch: 'trunk',
-        remote_name: 'scope',
-      },
+      setupSource,
       'scope_git_$"tick`',
+      'powershell',
     ),
-    'git config "credential.https://scope.example.useHttpPath" true; "protocol=https`nhost=scope.example`npath=git/adam/scope-vcs`nusername=scope`npassword=scope_git_`$`"tick```n`n" | git credential approve; git remote remove scope 2>$null; git remote add scope https://scope@scope.example/git/adam/scope-vcs; git push scope HEAD:trunk',
+    'git config --replace-all \'credential.https://scope.example.useHttpPath\' \'true\'; @(\'protocol=https\', \'host=scope.example\', \'path=git/adam/scope-vcs\', \'username=scope\', \'password=scope_git_$"tick`\', \'\') | git credential approve; git config --remove-section \'remote.scope\' 2>$null; git config --replace-all \'remote.scope.url\' \'https://scope@scope.example/git/adam/scope-vcs\'; git config --replace-all \'remote.scope.pushurl\' \'https://scope@scope.example/git/adam/scope-vcs\'; git config --replace-all \'remote.scope.fetch\' \'+refs/heads/*:refs/remotes/scope/*\'; git push \'scope\' \'HEAD:trunk\'',
   )
 })
 
-test('gitCredentialApproveCommand stores only the Scope credential', () => {
+test('gitCredentialApproveCommand stores only the Scope credential in Bash/Zsh', () => {
   assert.equal(
     gitCredentialApproveCommand(
       {
@@ -39,7 +35,32 @@ test('gitCredentialApproveCommand stores only the Scope credential', () => {
       },
       'scope_git_secret',
     ),
-    'git config "credential.https://scope.example.useHttpPath" true; "protocol=https`nhost=scope.example`npath=git/adam/scope-vcs`nusername=scope`npassword=scope_git_secret`n`n" | git credential approve',
+    "git config --replace-all 'credential.https://scope.example.useHttpPath' 'true' && printf '%s\\n' 'protocol=https' 'host=scope.example' 'path=git/adam/scope-vcs' 'username=scope' 'password=scope_git_secret' '' | git credential approve",
+  )
+})
+
+test('gitCredentialApproveCommand escapes Bash/Zsh credential values', () => {
+  assert.equal(
+    gitCredentialApproveCommand(
+      {
+        git_remote_url: 'https://old-user@scope.example/git/adam/scope-vcs',
+      },
+      'scope_git_$"tick`; \'apostrophe',
+    ),
+    "git config --replace-all 'credential.https://scope.example.useHttpPath' 'true' && printf '%s\\n' 'protocol=https' 'host=scope.example' 'path=git/adam/scope-vcs' 'username=scope' 'password=scope_git_$\"tick`; '\\''apostrophe' '' | git credential approve",
+  )
+})
+
+test('gitCredentialApproveCommand escapes PowerShell credential values', () => {
+  assert.equal(
+    gitCredentialApproveCommand(
+      {
+        git_remote_url: 'https://old-user@scope.example/git/adam/scope-vcs',
+      },
+      'scope_git_$"tick`; \'apostrophe',
+      'powershell',
+    ),
+    "git config --replace-all 'credential.https://scope.example.useHttpPath' 'true'; @('protocol=https', 'host=scope.example', 'path=git/adam/scope-vcs', 'username=scope', 'password=scope_git_$\"tick`; ''apostrophe', '') | git credential approve",
   )
 })
 

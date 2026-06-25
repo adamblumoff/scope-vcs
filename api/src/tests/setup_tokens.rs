@@ -275,7 +275,7 @@ async fn clone_credential_creation_requires_repo_membership() {
     let body = response_json(member_response).await;
     assert_eq!(body["git_remote_path"], "/git/owner/repo");
     let secret = body["token"]["secret"].as_str().unwrap();
-    assert!(secret.starts_with("scope_clone_"));
+    assert!(secret.starts_with("scope_git_"));
     let catalog = lock_catalog(&state).unwrap();
     let repo = catalog.repositories.get(TEST_REPO_ID).unwrap();
     assert_eq!(repo.git_clone_tokens.len(), 1);
@@ -302,7 +302,7 @@ async fn clone_credential_creation_requires_repo_membership() {
     assert_eq!(second_response.status(), StatusCode::OK);
     let second_body = response_json(second_response).await;
     let second_secret = second_body["token"]["secret"].as_str().unwrap();
-    assert!(second_secret.starts_with("scope_clone_"));
+    assert!(second_secret.starts_with("scope_git_"));
     assert_ne!(second_secret, secret);
     let catalog = lock_catalog(&state).unwrap();
     let repo = catalog.repositories.get(TEST_REPO_ID).unwrap();

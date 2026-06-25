@@ -2,11 +2,12 @@ import type {
   RepoCloneCredentialView,
   RepoSummary,
 } from '@/api/types'
-import { CopyableCodeBlock } from '@/components/copyable-code-block'
 import { Button } from '@/components/ui/button'
 import { cn } from '@/lib/utils'
 import { ChevronDown, Code2, LoaderCircle } from 'lucide-react'
 import { useEffect, useRef, useState } from 'react'
+import { GitCommandBlock } from '../git-command-block'
+import type { GitCommandShell } from '../git-command-shell'
 import {
   credentialedCloneCommand,
   publicCloneCommand,
@@ -31,9 +32,18 @@ export function RepoCloneDropdown({
   const credentialSecret = credential?.token.secret ?? null
   const credentialedCommandReady =
     permissioned && credential !== null && credentialSecret !== null
-  const cloneCommand = credentialedCommandReady
-    ? credentialedCloneCommand(credential, credentialSecret)
-    : publicCloneCommand({ git_remote_url: cloneRemoteUrl })
+
+  function cloneCommand(shell: GitCommandShell) {
+    if (credentialedCommandReady) {
+      return credentialedCloneCommand(
+        credential,
+        credentialSecret,
+        shell,
+      )
+    }
+
+    return publicCloneCommand({ git_remote_url: cloneRemoteUrl }, shell)
+  }
 
   useEffect(() => {
     if (!open) {
@@ -127,7 +137,7 @@ export function RepoCloneDropdown({
               </span>
             </div>
           ) : (
-            <CopyableCodeBlock
+            <GitCommandBlock
               copyLabel="Copy clone command"
               value={cloneCommand}
             />

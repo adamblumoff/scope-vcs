@@ -1,10 +1,12 @@
-use crate::domain::store::{FirstPushTokenStatus, RepoPublicationState, StoredRepository};
+use crate::domain::store::{
+    FirstPushTokenStatus, RepoPublicationState, RepoRole, StoredRepository,
+};
 use crate::{
     auth::{
         shoo::{ShooIdentity, require_identity},
         tokens::{first_push_token_hash, git_clone_token_hash, git_push_token_hash},
     },
-    config::{FIRST_PUSH_TOKEN_PREFIX, GIT_CLONE_TOKEN_PREFIX, GIT_PUSH_TOKEN_PREFIX},
+    config::{FIRST_PUSH_TOKEN_PREFIX, GIT_PUSH_TOKEN_PREFIX},
     error::ApiError,
     persistence::unix_now,
     state::{AppState, find_repo},
@@ -26,8 +28,7 @@ pub(crate) enum ReceivePackAuthorization {
 
 #[derive(Clone, Debug)]
 pub(crate) enum GitReadAuthorization {
-    CloneToken { secret: String },
-    PushToken { secret: String },
+    ScopeToken { secret: String },
 }
 
 #[cfg(test)]
@@ -119,13 +120,8 @@ pub(crate) fn git_read_authorization_from_headers(
         if token.is_empty() {
             return Err(ApiError::unauthorized("empty bearer token"));
         }
-        if token.starts_with(GIT_CLONE_TOKEN_PREFIX) {
-            return Ok(Some(GitReadAuthorization::CloneToken {
-                secret: token.to_string(),
-            }));
-        }
         if token.starts_with(GIT_PUSH_TOKEN_PREFIX) {
-            return Ok(Some(GitReadAuthorization::PushToken {
+            return Ok(Some(GitReadAuthorization::ScopeToken {
                 secret: token.to_string(),
             }));
         }
@@ -137,11 +133,7 @@ pub(crate) fn git_read_authorization_from_headers(
         if token.is_empty() {
             return Err(ApiError::unauthorized("empty Git token"));
         }
-        return if token.starts_with(GIT_CLONE_TOKEN_PREFIX) {
-            Ok(Some(GitReadAuthorization::CloneToken { secret: token }))
-        } else {
-            Ok(Some(GitReadAuthorization::PushToken { secret: token }))
-        };
+        return Ok(Some(GitReadAuthorization::ScopeToken { secret: token }));
     }
 
     Err(ApiError::unauthorized(
@@ -298,9 +290,46 @@ pub(crate) fn authorize_git_push_token_for_repo(
     Ok(token.owner_user_id.clone())
 }
 
-pub(crate) fn authorize_git_clone_token_for_repo(
+pub(crate) fn authorize_git_scope_token_for_repo(
     repo: &StoredRepository,
     secret: &str,
+) -> Result<String, ApiError> {
+    if let Some(token) = repo.git_push_token.as_ref()
+        && token.token_hash == git_push_token_hash(secret)
+    {
+        if token.owner_user_id != repo.record.owner_user_id {
+            return Err(ApiError::forbidden(
+                "Git push token owner does not match repo owner",
+            ));
+        }
+        return Ok(token.owner_user_id.clone());
+    }
+
+    authorize_git_member_token_for_repo(repo, secret, None)
+}
+
+pub(crate) fn authorize_git_write_token_for_repo(
+    repo: &StoredRepository,
+    secret: &str,
+) -> Result<String, ApiError> {
+    if let Some(token) = repo.git_push_token.as_ref()
+        && token.token_hash == git_push_token_hash(secret)
+    {
+        if token.owner_user_id != repo.record.owner_user_id {
+            return Err(ApiError::forbidden(
+                "Git push token owner does not match repo owner",
+            ));
+        }
+        return Ok(token.owner_user_id.clone());
+    }
+
+    authorize_git_member_token_for_repo(repo, secret, Some(RepoRole::Writer))
+}
+
+pub(crate) fn authorize_git_member_token_for_repo(
+    repo: &StoredRepository,
+    secret: &str,
+    minimum_role: Option<RepoRole>,
 ) -> Result<String, ApiError> {
     let hash = git_clone_token_hash(secret);
     let Some(token) = repo
@@ -310,6 +339,24 @@ pub(crate) fn authorize_git_clone_token_for_repo(
     else {
         return Err(ApiError::unauthorized("invalid Git credentials"));
     };
+
+    let role = if token.user_id == repo.record.owner_user_id {
+        RepoRole::Owner
+    } else {
+        let Some(role) = repo
+            .memberships
+            .iter()
+            .find(|membership| membership.user_id == token.user_id)
+            .map(|membership| membership.role)
+        else {
+            return Err(ApiError::unauthorized("invalid Git credentials"));
+        };
+        role
+    };
+
+    if minimum_role.is_some_and(|minimum| role < minimum) {
+        return Err(ApiError::unauthorized("invalid Git credentials"));
+    }
 
     Ok(token.user_id.clone())
 }

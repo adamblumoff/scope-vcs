@@ -1,75 +1,66 @@
+import {
+  defaultGitCommandShell,
+  gitCredentialApproveCommandForShell,
+  gitCredentialFields,
+  gitCredentialUseHttpPathConfig,
+  gitRemoteUrlWithUsername,
+  joinShellCommands,
+  shellArg,
+  type GitCommandShell,
+} from '../git-command-shell'
+
 export type RepoCloneCommandSource = {
   git_remote_url: string
 }
 
-const cloneCredentialUsername = 'scope-clone'
+const gitCredentialUsername = 'scope'
 
-export function publicCloneCommand(source: RepoCloneCommandSource) {
-  return `git clone ${source.git_remote_url}`
+export function publicCloneCommand(
+  source: RepoCloneCommandSource,
+  shell: GitCommandShell = defaultGitCommandShell,
+) {
+  return `git clone ${shellArg(shell, source.git_remote_url)}`
 }
 
 export function credentialedCloneCommand(
   source: RepoCloneCommandSource,
   gitCloneTokenSecret: string,
+  shell: GitCommandShell = defaultGitCommandShell,
 ) {
   const remoteUrl = gitCloneCredentialRemoteUrl(source.git_remote_url)
   const useHttpPathConfig = gitCredentialUseHttpPathConfig(remoteUrl)
-  return `${gitCloneCredentialApproveCommand(
-    remoteUrl,
-    gitCloneTokenSecret,
-    useHttpPathConfig,
-  )}; git clone -c "${useHttpPathConfig}=true" -c "http.proactiveAuth=basic" ${remoteUrl}`
+  const useHttpPathConfigArg = `${useHttpPathConfig}=true`
+  return joinShellCommands(shell, [
+    gitCloneCredentialApproveCommand(
+      shell,
+      remoteUrl,
+      gitCloneTokenSecret,
+      useHttpPathConfigArg,
+    ),
+    `git clone -c ${shellArg(shell, useHttpPathConfigArg)} -c ${shellArg(
+      shell,
+      'http.proactiveAuth=basic',
+    )} ${shellArg(shell, remoteUrl)}`,
+  ])
 }
 
 function gitCloneCredentialApproveCommand(
+  shell: GitCommandShell,
   remoteUrl: string,
   gitCloneTokenSecret: string,
-  useHttpPathConfig: string,
+  useHttpPathConfigArg: string,
 ) {
-  return `"${gitCloneCredentialFields(
-    remoteUrl,
-    gitCloneTokenSecret,
-  )}" | git -c "${useHttpPathConfig}=true" credential approve`
-}
-
-function gitCloneCredentialFields(
-  remoteUrl: string,
-  gitCloneTokenSecret: string,
-) {
-  const url = new URL(remoteUrl)
-  const fields = [
-    `protocol=${powerShellDoubleQuoted(url.protocol.replace(/:$/, ''))}`,
-    `host=${powerShellDoubleQuoted(url.host)}`,
-    `path=${powerShellDoubleQuoted(gitCredentialPath(url))}`,
-    `username=${cloneCredentialUsername}`,
-    `password=${powerShellDoubleQuoted(gitCloneTokenSecret)}`,
-    '',
-    '',
-  ]
-  return fields.join('`n')
+  return gitCredentialApproveCommandForShell({
+    fields: gitCredentialFields({
+      password: gitCloneTokenSecret,
+      remoteUrl,
+      username: gitCredentialUsername,
+    }),
+    gitConfigArgs: ['-c', useHttpPathConfigArg],
+    shell,
+  })
 }
 
 function gitCloneCredentialRemoteUrl(remoteUrl: string) {
-  try {
-    const url = new URL(remoteUrl)
-    url.username = cloneCredentialUsername
-    url.password = ''
-    return url.toString()
-  } catch {
-    return remoteUrl
-  }
-}
-
-function gitCredentialUseHttpPathConfig(remoteUrl: string) {
-  const url = new URL(remoteUrl)
-  const credentialUrl = `${url.protocol}//${url.host}`
-  return `credential.${powerShellDoubleQuoted(credentialUrl)}.useHttpPath`
-}
-
-function gitCredentialPath(url: URL) {
-  return url.pathname.replace(/^\/+/, '')
-}
-
-function powerShellDoubleQuoted(value: string) {
-  return value.replaceAll('`', '``').replaceAll('$', '`$').replaceAll('"', '`"')
+  return gitRemoteUrlWithUsername(remoteUrl, gitCredentialUsername)
 }

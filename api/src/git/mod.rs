@@ -42,7 +42,7 @@ pub(crate) struct GitInfoRefsQuery {
 #[derive(Debug)]
 pub(crate) enum ReceivePackAccess {
     FirstPush { credential: InitialPushCredential },
-    PublishedOwner { author_id: String },
+    PublishedMember { author_id: String },
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -202,9 +202,9 @@ pub(crate) async fn receive_pack_access(
                 }
                 RepoPublicationState::Published => match credential {
                     InitialPushCredential::GitPushToken { secret } => {
-                        let author_id = authorize_git_push_token_for_repo(&repo, &secret)
+                        let author_id = authorize_git_write_token_for_repo(&repo, &secret)
                             .map_err(git_credential_error)?;
-                        Ok(ReceivePackAccess::PublishedOwner { author_id })
+                        Ok(ReceivePackAccess::PublishedMember { author_id })
                     }
                     InitialPushCredential::FirstPushToken { .. } => Err(invalid_git_credentials()),
                 },
@@ -214,7 +214,9 @@ pub(crate) async fn receive_pack_access(
             let repo = find_repo(state, owner, repo_name)?;
             let user = ensure_user_for_identity(state, &identity)?;
             let principal = principal_for_user_id(&repo, &user.id);
-            if role_for_principal(state, &repo, &principal)? != Some(RepoRole::Owner) {
+            if !role_for_principal(state, &repo, &principal)?
+                .is_some_and(|role| role >= RepoRole::Writer)
+            {
                 return Err(ApiError::not_found(format!(
                     "repo {owner}/{repo_name} not found"
                 )));
@@ -228,7 +230,7 @@ pub(crate) async fn receive_pack_access(
                     "repo is waiting for publish and cannot receive another push",
                 )),
                 RepoPublicationState::Published => {
-                    Ok(ReceivePackAccess::PublishedOwner { author_id: user.id })
+                    Ok(ReceivePackAccess::PublishedMember { author_id: user.id })
                 }
             }
         }
@@ -248,13 +250,13 @@ pub(crate) fn handle_git_receive_pack(
         ReceivePackAccess::FirstPush { .. } => {
             ensure_first_push_receive_pack_staging_repo(state, owner, repo_name)?
         }
-        ReceivePackAccess::PublishedOwner { author_id } => {
+        ReceivePackAccess::PublishedMember { author_id } => {
             ensure_published_receive_pack_staging_repo(state, owner, repo_name, author_id)?
         }
     };
     let remote_user = match &access {
         ReceivePackAccess::FirstPush { .. } => "first-push-token",
-        ReceivePackAccess::PublishedOwner { author_id } => author_id.as_str(),
+        ReceivePackAccess::PublishedMember { author_id } => author_id.as_str(),
     };
     let cgi = match git_http_backend(
         &staging_repo,
@@ -309,7 +311,7 @@ pub(crate) fn handle_git_receive_pack(
                     return Err(error);
                 }
             }
-            ReceivePackAccess::PublishedOwner { author_id } => {
+            ReceivePackAccess::PublishedMember { author_id } => {
                 let update = match receive_pack_update_from_staging_repo(
                     state,
                     owner,

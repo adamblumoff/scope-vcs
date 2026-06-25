@@ -28,7 +28,7 @@ async fn published_receive_pack_accepts_git_push_token() {
 
     assert!(matches!(
         access,
-        ReceivePackAccess::PublishedOwner { author_id } if author_id == test_owner_id()
+        ReceivePackAccess::PublishedMember { author_id } if author_id == test_owner_id()
     ));
 }
 
@@ -236,13 +236,107 @@ async fn upload_pack_uses_git_clone_token_for_member_projection_after_publish() 
 }
 
 #[tokio::test]
-async fn receive_pack_rejects_clone_token() {
+async fn owner_git_credential_survives_missing_membership_row() {
     let state = test_state_with_repo();
-    let (secret, clone_token) = generate_git_clone_token(&test_owner_id()).unwrap();
+    let owner_id = test_owner_id();
+    let (secret, owner_token) = generate_git_clone_token(&owner_id).unwrap();
+    {
+        let mut repo = repo_with_readme();
+        repo.memberships
+            .retain(|membership| membership.user_id != owner_id);
+        repo.policy
+            .add_rule(VisibilityRule::private(
+                ScopePath::parse("/owner-secret.txt").unwrap(),
+                [owner_id.clone()],
+            ))
+            .unwrap();
+        repo.graph.commits[0].changes.push(FileChange {
+            visibility: Visibility::Private,
+            path: ScopePath::parse("/owner-secret.txt").unwrap(),
+            old_content: None,
+            new_content: Some(source_blob("owner can read")),
+        });
+        repo.git_clone_tokens.push(owner_token);
+
+        let mut catalog = lock_catalog(&state).unwrap();
+        catalog.repositories.insert(TEST_REPO_ID.to_string(), repo);
+    }
+    let mut headers = HeaderMap::new();
+    headers.insert(
+        AUTHORIZATION,
+        format!("Basic {}", BASE64.encode(format!("scope:{secret}")))
+            .parse()
+            .unwrap(),
+    );
+
+    let projection = git_projection_for_request(&state, &headers, TEST_REPO_OWNER, TEST_REPO_NAME)
+        .await
+        .unwrap();
+    let access = receive_pack_access(&state, &headers, TEST_REPO_OWNER, TEST_REPO_NAME)
+        .await
+        .unwrap();
+
+    assert!(
+        projection
+            .commits
+            .iter()
+            .flat_map(|commit| &commit.changes)
+            .any(|change| change.path.as_str() == "/owner-secret.txt"
+                && change.new_content.is_some())
+    );
+    assert!(matches!(
+        access,
+        ReceivePackAccess::PublishedMember { author_id } if author_id == owner_id
+    ));
+}
+
+#[tokio::test]
+async fn published_receive_pack_accepts_member_git_credential() {
+    let state = test_state_with_repo();
+    let member_id = "user_member".to_string();
+    let (secret, member_token) = generate_git_clone_token(&member_id).unwrap();
     {
         let mut catalog = lock_catalog(&state).unwrap();
         let repo = catalog.repositories.get_mut(TEST_REPO_ID).unwrap();
-        repo.git_clone_tokens.push(clone_token);
+        repo.memberships.push(RepoMembership {
+            repo_id: TEST_REPO_ID.to_string(),
+            user_id: member_id.clone(),
+            role: RepoRole::Writer,
+        });
+        repo.git_clone_tokens.push(member_token);
+    }
+    let mut headers = HeaderMap::new();
+    headers.insert(
+        AUTHORIZATION,
+        format!("Basic {}", BASE64.encode(format!("scope:{secret}")))
+            .parse()
+            .unwrap(),
+    );
+
+    let access = receive_pack_access(&state, &headers, TEST_REPO_OWNER, TEST_REPO_NAME)
+        .await
+        .unwrap();
+
+    assert!(matches!(
+        access,
+        ReceivePackAccess::PublishedMember { author_id } if author_id == member_id
+    ));
+}
+
+#[tokio::test]
+async fn published_receive_pack_rejects_reader_git_credential() {
+    let state = test_state_with_repo();
+    let member_id = "user_reader".to_string();
+    let (secret, member_token) = generate_git_clone_token(&member_id).unwrap();
+    {
+        let mut catalog = lock_catalog(&state).unwrap();
+        let repo = catalog.repositories.get_mut(TEST_REPO_ID).unwrap();
+        repo.memberships.push(RepoMembership {
+            repo_id: TEST_REPO_ID.to_string(),
+            user_id: member_id,
+            role: RepoRole::Reader,
+        });
+        repo.git_clone_tokens.push(member_token);
     }
     let mut headers = HeaderMap::new();
     headers.insert(

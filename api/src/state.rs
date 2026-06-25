@@ -1,3 +1,4 @@
+use crate::domain::policy::PrincipalKind;
 use crate::domain::policy::{Principal, ScopePath};
 use crate::domain::projection_views::has_visible_projected_files;
 use crate::domain::store::{
@@ -204,6 +205,10 @@ pub(crate) fn role_for_principal(
     repo: &StoredRepository,
     principal: &Principal,
 ) -> Result<Option<RepoRole>, ApiError> {
+    if principal.kind != PrincipalKind::Public && principal.id == repo.record.owner_user_id {
+        return Ok(Some(RepoRole::Owner));
+    }
+
     Ok(repo
         .memberships
         .iter()
@@ -224,12 +229,7 @@ pub(crate) fn can_read_path(
         );
     }
 
-    let Some(role) = repo
-        .memberships
-        .iter()
-        .find(|membership| membership.user_id == principal.id)
-        .map(|membership| membership.role)
-    else {
+    let Some(role) = role_for_principal(_state, repo, principal)? else {
         return Ok(false);
     };
 
@@ -245,11 +245,8 @@ pub(crate) fn can_write_path(
     principal: &Principal,
     path: &ScopePath,
 ) -> Result<bool, ApiError> {
-    let can_write = repo
-        .memberships
-        .iter()
-        .find(|membership| membership.user_id == principal.id)
-        .is_some_and(|membership| membership.role >= RepoRole::Writer)
+    let can_write = role_for_principal(_state, repo, principal)?
+        .is_some_and(|role| role >= RepoRole::Writer)
         && can_read_path(_state, repo, principal, path)?;
     Ok(can_write)
 }
