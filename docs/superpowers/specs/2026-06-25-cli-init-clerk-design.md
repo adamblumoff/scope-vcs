@@ -187,11 +187,15 @@ Keep/adapt:
 Signed-in empty state:
 
 - Show a compact CLI-first message.
-- Show a copyable install command using a configured Railway-generated CLI
+- Show copyable install commands using a configured Railway-generated CLI
   service URL:
 
 ```sh
 curl -fsSL <SCOPE_CLI_INSTALL_URL>/install.sh | sh
+```
+
+```powershell
+irm <SCOPE_CLI_INSTALL_URL>/install.ps1 | iex
 ```
 
 - Tell users to run `scope init` from a local Git repository after install.
@@ -209,20 +213,24 @@ Add a third Railway service for CLI distribution.
 - Service root: `cli`.
 - Link the service to the same GitHub repository as `scope-api` and
   `scope-web`.
-- Configure build/deploy from GitHub with the same Railway conventions as the
+- Keep the service linked to GitHub with the same Railway conventions as the
   existing services: service root, Railpack config, generated public domain,
   and environment variables managed in Railway.
-- Provider: Rust, or a static/minimal server if release artifacts are produced
-  elsewhere.
+- Provider: Rust.
 - Public Railway auto-domain enabled.
 - Serves `GET /install.sh`.
-- Serves platform-specific release artifacts needed by `install.sh`.
+- Serves `GET /install.ps1`.
+- Serves platform-specific release artifacts and checksums needed by the
+  generated installers.
 - The web app uses this service's generated public URL for
   `SCOPE_CLI_INSTALL_URL`.
 
-The install script must install the `scope` binary and make `scope init`
-available on `PATH` for supported platforms. Exact packaging can start narrow
-and expand later.
+GitHub Actions owns the artifact build/deploy loop for the CLI service because
+Railway's source build environment cannot produce the full macOS, Windows, and
+Linux matrix by itself. The workflow builds Linux x64, Linux ARM64, macOS
+Intel, macOS Apple Silicon, and Windows x64 binaries, writes SHA-256 checksum
+files, and deploys the `cli` bundle to Railway with `cli/dist` included.
+Raspberry Pi and Alpine binaries are intentionally out of scope for this pass.
 
 ## Error Handling And Recovery
 

@@ -78,23 +78,25 @@ switch ($arch) {{
 New-Item -ItemType Directory -Force -Path $installDir | Out-Null
 $tmpFile = New-TemporaryFile
 $checksumFile = New-TemporaryFile
+$tmpPath = $tmpFile.FullName
+$checksumPath = $checksumFile.FullName
 
 try {{
-  Invoke-WebRequest -Uri "$baseUrl/downloads/$artifact" -OutFile $tmpFile
-  Invoke-WebRequest -Uri "$baseUrl/downloads/$artifact.sha256" -OutFile $checksumFile
+  Invoke-WebRequest -Uri "$baseUrl/downloads/$artifact" -OutFile $tmpPath
+  Invoke-WebRequest -Uri "$baseUrl/downloads/$artifact.sha256" -OutFile $checksumPath
 
-  $expected = ((Get-Content -LiteralPath $checksumFile | Select-Object -First 1) -split "\s+")[0].ToLowerInvariant()
-  $actual = (Get-FileHash -Algorithm SHA256 -LiteralPath $tmpFile).Hash.ToLowerInvariant()
+  $expected = ((Get-Content -LiteralPath $checksumPath | Select-Object -First 1) -split "\s+")[0].ToLowerInvariant()
+  $actual = (Get-FileHash -Algorithm SHA256 -LiteralPath $tmpPath).Hash.ToLowerInvariant()
   if ($expected -ne $actual) {{
     throw "scope checksum verification failed for $artifact."
   }}
 
   $destination = Join-Path $installDir "scope.exe"
-  Move-Item -LiteralPath $tmpFile -Destination $destination -Force
+  Move-Item -LiteralPath $tmpPath -Destination $destination -Force
   Write-Output "scope installed to $destination"
 }} finally {{
-  Remove-Item -LiteralPath $tmpFile -Force -ErrorAction SilentlyContinue
-  Remove-Item -LiteralPath $checksumFile -Force -ErrorAction SilentlyContinue
+  Remove-Item -LiteralPath $tmpPath -Force -ErrorAction SilentlyContinue
+  Remove-Item -LiteralPath $checksumPath -Force -ErrorAction SilentlyContinue
 }}
 "#,
     )

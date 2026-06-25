@@ -1,0 +1,177 @@
+name: Scope CLI
+
+on:
+  pull_request:
+    paths:
+      - ".github/workflows/scope-cli.yml"
+      - "cli/**"
+  push:
+    branches:
+      - main
+    paths:
+      - ".github/workflows/scope-cli.yml"
+      - "cli/**"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  build:
+    name: Build ${{ matrix.label }}
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - label: Linux x64
+            runner: ubuntu-latest
+            target: x86_64-unknown-linux-gnu
+            artifact: scope-x86_64-unknown-linux-gnu
+            binary: target/x86_64-unknown-linux-gnu/release/scope
+            builder: cargo
+            smoke: true
+          - label: Linux ARM64
+            runner: ubuntu-latest
+            target: aarch64-unknown-linux-gnu
+            artifact: scope-aarch64-unknown-linux-gnu
+            binary: target/aarch64-unknown-linux-gnu/release/scope
+            builder: cross
+            smoke: false
+          - label: macOS Intel
+            runner: macos-15-intel
+            target: x86_64-apple-darwin
+            artifact: scope-x86_64-apple-darwin
+            binary: target/x86_64-apple-darwin/release/scope
+            builder: cargo
+            smoke: true
+          - label: macOS Apple Silicon
+            runner: macos-15
+            target: aarch64-apple-darwin
+            artifact: scope-aarch64-apple-darwin
+            binary: target/aarch64-apple-darwin/release/scope
+            builder: cargo
+            smoke: true
+          - label: Windows x64
+            runner: windows-latest
+            target: x86_64-pc-windows-msvc
+            artifact: scope-x86_64-pc-windows-msvc.exe
+            binary: target/x86_64-pc-windows-msvc/release/scope.exe
+            builder: cargo
+            smoke: true
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: 1.94.0
+          targets: ${{ matrix.target }}
+
+      - name: Install cross
+        if: matrix.builder == 'cross'
+        run: cargo install cross --locked
+
+      - name: Build scope
+        working-directory: cli
+        shell: bash
+        run: |
+          if [ "${{ matrix.builder }}" = "cross" ]; then
+            cross build --release --locked --target "${{ matrix.target }}" --bin scope
+          else
+            cargo build --release --locked --target "${{ matrix.target }}" --bin scope
+          fi
+
+      - name: Smoke test
+        if: matrix.smoke
+        working-directory: cli
+        shell: bash
+        run: ./${{ matrix.binary }} --help
+
+      - name: Stage artifact
+        working-directory: cli
+        shell: bash
+        run: |
+          mkdir -p dist
+          cp "${{ matrix.binary }}" "dist/${{ matrix.artifact }}"
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.artifact }}
+          path: cli/dist/${{ matrix.artifact }}
+          if-no-files-found: error
+
+  deploy:
+    name: Deploy scope-cli
+    needs: build
+    runs-on: ubuntu-latest
+    if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main'
+    env:
+      RAILWAY_PROJECT_ID: ${{ secrets.RAILWAY_PROJECT_ID }}
+      RAILWAY_TOKEN: ${{ secrets.RAILWAY_TOKEN }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Download artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: cli/dist
+          merge-multiple: true
+
+      - name: Verify artifacts and write checksums
+        shell: bash
+        run: |
+          expected=(
+            scope-x86_64-unknown-linux-gnu
+            scope-aarch64-unknown-linux-gnu
+            scope-x86_64-apple-darwin
+            scope-aarch64-apple-darwin
+            scope-x86_64-pc-windows-msvc.exe
+          )
+
+          for artifact in "${expected[@]}"; do
+            test -s "cli/dist/$artifact"
+          done
+
+          (
+            cd cli/dist
+            for artifact in "${expected[@]}"; do
+              sha256sum "$artifact" > "$artifact.sha256"
+            done
+          )
+
+      - name: Require Railway configuration
+        shell: bash
+        run: |
+          if [ -z "$RAILWAY_TOKEN" ]; then
+            echo "Set the RAILWAY_TOKEN repository secret before deploying scope-cli."
+            exit 1
+          fi
+
+          if [ -z "$RAILWAY_PROJECT_ID" ]; then
+            echo "Set the RAILWAY_PROJECT_ID repository secret before deploying scope-cli."
+            exit 1
+          fi
+
+      - name: Install Railway CLI
+        run: npm install -g @railway/cli
+
+      - name: Deploy artifacts to Railway
+        shell: bash
+        run: >
+          railway up ./cli
+          --path-as-root
+          --no-gitignore
+          --project "$RAILWAY_PROJECT_ID"
+          --service scope-cli
+          --environment production
+          --detach
+          --json
+          --message "Deploy scope CLI artifacts ${GITHUB_SHA}"

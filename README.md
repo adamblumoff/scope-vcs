@@ -10,8 +10,8 @@ the canonical source of truth is a server-side source graph.
 
 - `api` - Axum API, Git facade boundary, and API-owned domain modules for
   policy, projection, Git projection, and catalog state.
-- `cli` - Rust `scope` CLI plus the Railway installer service that serves the
-  install script and current Linux binary.
+- `cli` - Rust `scope` CLI plus the Railway installer service that serves
+  generated install scripts and CI-built CLI binaries.
 - `web` - TanStack Start control-plane UI.
 
 ## Local Checks
@@ -40,12 +40,23 @@ Railway services:
   Railway Postgres service and runs API-owned SeaORM migrations on startup.
   Keep the API service port pinned to `8080` if `scope-web` uses the private
   URL example below.
-- `scope-cli` is a Railpack Rust service rooted at `cli`. It builds the
-  `scope` CLI and starts `scope-cli-service`, which serves `/install.sh` and
-  `/downloads/scope-x86_64-unknown-linux-gnu`. Use the Railway-generated public
-  service URL as `SCOPE_CLI_INSTALL_URL` in `scope-web`. Set
-  `SCOPE_CLI_PUBLIC_URL` on the CLI service to the same public URL when you
-  want installer scripts to avoid inferring the URL from request headers.
+- `scope-cli` is a Railpack Rust service rooted at `cli`. Runtime deploys build
+  `scope-cli-service`, which serves `/install.sh`, `/install.ps1`, and
+  allowlisted files from `/downloads/<artifact>`. The downloadable `scope`
+  binaries are built by `.github/workflows/scope-cli.yml`, staged in
+  `cli/dist`, checksummed, and uploaded to Railway with
+  `railway up ./cli --path-as-root --no-gitignore`. The service `readyz` route
+  stays unavailable until every manifest artifact and checksum exists in
+  `SCOPE_CLI_ARTIFACT_DIR`, which defaults to `./dist`.
+  Supported install targets are Linux x64, Linux ARM64, macOS Intel, macOS
+  Apple Silicon, and Windows x64. Raspberry Pi and Alpine builds are
+  intentionally not published yet. Keep the service linked to GitHub for source
+  metadata, but treat the GitHub Actions workflow as the authoritative deploy
+  path because a plain Railway source deploy does not include CI-built
+  cross-platform artifacts. Use the Railway-generated public service URL as
+  `SCOPE_CLI_INSTALL_URL` in `scope-web`. Set `SCOPE_CLI_PUBLIC_URL` on the CLI
+  service to the same public URL when you want installer scripts to avoid
+  inferring the URL from request headers.
 - `scope-web` is a Railpack Node service rooted at `web`. It requires two API
   origin variables, the CLI installer origin, and Clerk browser/server keys:
   - `SCOPE_API_INTERNAL_URL` is the server-to-server API origin used by
@@ -72,6 +83,13 @@ Railway services:
 
 Railway Postgres stores canonical metadata. Railway Buckets store encrypted
 source blobs and Git bundle snapshots.
+
+`scope-cli` GitHub Actions deploy variables:
+
+- `RAILWAY_TOKEN` - repository secret used by the workflow to deploy the CLI
+  artifact bundle.
+- `RAILWAY_PROJECT_ID` - repository secret for the Railway project that owns
+  the `scope-cli` service.
 
 `scope-api` bucket variables:
 
