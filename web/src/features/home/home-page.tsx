@@ -5,9 +5,10 @@ import { PageErrorAlert } from '@/components/page-error-alert'
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert'
 import { Button } from '@/components/ui/button'
 import { useHomeFlash } from '@/lib/home-flash'
-import { UserButton } from '@clerk/tanstack-react-start'
+import { UserButton, useUser } from '@clerk/tanstack-react-start'
+import { useRouter } from '@tanstack/react-router'
 import { CheckCircle2, Moon, Sun } from 'lucide-react'
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { RepoList } from './repo-list'
 
 type ThemeMode = 'dark' | 'light'
@@ -15,7 +16,18 @@ type ThemeMode = 'dark' | 'light'
 export function HomePage({ home }: { home: HomeState }) {
   const [theme, setTheme] = useState<ThemeMode>('dark')
   const flash = useHomeFlash()
-  const { account, repositories, signedIn } = home
+  const router = useRouter()
+  const clerkUser = useUser()
+  const { account, repositories } = home
+  const signedIn = clerkUser.isLoaded ? clerkUser.isSignedIn : home.signedIn
+
+  useEffect(() => {
+    if (!clerkUser.isLoaded || clerkUser.isSignedIn === home.signedIn) {
+      return
+    }
+
+    void router.invalidate()
+  }, [clerkUser.isLoaded, clerkUser.isSignedIn, home.signedIn, router])
 
   function toggleTheme() {
     const nextTheme = nextThemeMode(theme)
