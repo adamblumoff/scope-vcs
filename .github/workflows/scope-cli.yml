@@ -172,6 +172,5 @@ jobs:
           --project "$RAILWAY_PROJECT_ID"
           --service scope-cli
           --environment production
-          --detach
           --json
           --message "Deploy scope CLI artifacts ${GITHUB_SHA}"
