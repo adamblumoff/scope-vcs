@@ -3,7 +3,8 @@ use super::*;
 #[test]
 fn clerk_token_verifies_issuer_signature_expiration_and_subject() {
     let jwt = token(TEST_CLERK_USER_ID, true);
-    let identity = verify_clerk_token(&jwt, &test_jwks(), TEST_CLERK_ISSUER).unwrap();
+    let identity =
+        verify_clerk_token(&jwt, &test_jwks(), TEST_CLERK_ISSUER, &test_clerk_policy()).unwrap();
 
     assert_eq!(identity.user_id, TEST_CLERK_USER_ID);
     assert_eq!(identity.email.as_deref(), Some(TEST_OWNER_EMAIL));
@@ -13,7 +14,13 @@ fn clerk_token_verifies_issuer_signature_expiration_and_subject() {
 #[test]
 fn clerk_token_rejects_wrong_issuer() {
     let jwt = token(TEST_CLERK_USER_ID, true);
-    let error = verify_clerk_token(&jwt, &test_jwks(), "https://other.example").unwrap_err();
+    let error = verify_clerk_token(
+        &jwt,
+        &test_jwks(),
+        "https://other.example",
+        &test_clerk_policy(),
+    )
+    .unwrap_err();
 
     assert_eq!(error.status, StatusCode::UNAUTHORIZED);
 }
@@ -21,7 +28,8 @@ fn clerk_token_rejects_wrong_issuer() {
 #[test]
 fn clerk_token_requires_issuer_and_subject_claims() {
     let jwt = token_without_required_claims();
-    let error = verify_clerk_token(&jwt, &test_jwks(), TEST_CLERK_ISSUER).unwrap_err();
+    let error = verify_clerk_token(&jwt, &test_jwks(), TEST_CLERK_ISSUER, &test_clerk_policy())
+        .unwrap_err();
 
     assert_eq!(error.status, StatusCode::UNAUTHORIZED);
 }
@@ -29,7 +37,59 @@ fn clerk_token_requires_issuer_and_subject_claims() {
 #[test]
 fn clerk_token_requires_subject() {
     let jwt = token("", true);
-    let error = verify_clerk_token(&jwt, &test_jwks(), TEST_CLERK_ISSUER).unwrap_err();
+    let error = verify_clerk_token(&jwt, &test_jwks(), TEST_CLERK_ISSUER, &test_clerk_policy())
+        .unwrap_err();
+
+    assert_eq!(error.status, StatusCode::UNAUTHORIZED);
+}
+
+#[test]
+fn clerk_token_rejects_wrong_authorized_party() {
+    let jwt = token_with_authorized_party(TEST_CLERK_USER_ID, Some("https://evil.example"));
+    let error = verify_clerk_token(&jwt, &test_jwks(), TEST_CLERK_ISSUER, &test_clerk_policy())
+        .unwrap_err();
+
+    assert_eq!(error.status, StatusCode::UNAUTHORIZED);
+}
+
+#[test]
+fn clerk_token_without_authorized_party_is_allowed() {
+    let jwt = token_with_authorized_party(TEST_CLERK_USER_ID, None);
+    let identity =
+        verify_clerk_token(&jwt, &test_jwks(), TEST_CLERK_ISSUER, &test_clerk_policy()).unwrap();
+
+    assert_eq!(identity.user_id, TEST_CLERK_USER_ID);
+}
+
+#[test]
+fn clerk_token_rejects_authorized_party_when_policy_is_missing() {
+    let jwt = token(TEST_CLERK_USER_ID, true);
+    let error = verify_clerk_token(
+        &jwt,
+        &test_jwks(),
+        TEST_CLERK_ISSUER,
+        &ClerkTokenPolicy::default(),
+    )
+    .unwrap_err();
+
+    assert_eq!(error.status, StatusCode::SERVICE_UNAVAILABLE);
+}
+
+#[test]
+fn clerk_token_audience_is_checked_when_configured() {
+    let policy = ClerkTokenPolicy {
+        authorized_parties: vec![LOCAL_APP_ORIGIN.to_string()],
+        audiences: vec![TEST_CLERK_AUDIENCE.to_string()],
+    };
+    let accepted = token_with_audience(
+        TEST_CLERK_USER_ID,
+        serde_json::json!(["other-audience", TEST_CLERK_AUDIENCE]),
+    );
+    let rejected = token_with_audience(TEST_CLERK_USER_ID, serde_json::json!("other-audience"));
+
+    verify_clerk_token(&accepted, &test_jwks(), TEST_CLERK_ISSUER, &policy).unwrap();
+    let error =
+        verify_clerk_token(&rejected, &test_jwks(), TEST_CLERK_ISSUER, &policy).unwrap_err();
 
     assert_eq!(error.status, StatusCode::UNAUTHORIZED);
 }
@@ -76,9 +136,10 @@ fn clerk_user_ids_do_not_merge_by_verified_email() {
 
 #[tokio::test]
 async fn clerk_verifier_requires_configured_issuer() {
-    let verifier = ClerkVerifier::new(
+    let verifier = ClerkVerifier::new_with_policy(
         None,
         Some("http://127.0.0.1/.well-known/jwks.json".to_string()),
+        test_clerk_policy(),
     );
     let jwt = token(TEST_CLERK_USER_ID, true);
     let error = verifier.verify(&jwt).await.unwrap_err();

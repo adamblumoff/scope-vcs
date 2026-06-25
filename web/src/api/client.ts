@@ -8,16 +8,9 @@ const internalApiUrlEnv = 'SCOPE_API_INTERNAL_URL'
 const publicApiUrlEnv = 'SCOPE_API_PUBLIC_URL'
 
 export async function readRequestAuthToken() {
-  const { auth, clerkClient } = await import(
-    '@clerk/tanstack-react-start/server'
-  )
-  const { sessionId } = await auth()
-  if (!sessionId) {
-    return null
-  }
-
-  const token = await clerkClient().sessions.getToken(sessionId)
-  return token.jwt
+  const { auth } = await import('@clerk/tanstack-react-start/server')
+  const { getToken } = await auth()
+  return getToken()
 }
 
 export function getApiConnection(action = 'loading repositories') {

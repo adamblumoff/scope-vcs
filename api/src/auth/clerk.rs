@@ -1,7 +1,10 @@
 use crate::domain::policy::Principal;
 use crate::domain::store::{AccountAccess, AppCatalog, StoredRepository, UserAccount};
 use crate::{
-    config::{CLERK_ISSUER_ENV, CLERK_JWKS_URL_ENV, CLI_ACCESS_TOKEN_PREFIX, non_empty_env},
+    config::{
+        CLERK_AUDIENCE_ENV, CLERK_AUTHORIZED_PARTIES_ENV, CLERK_ISSUER_ENV, CLERK_JWKS_URL_ENV,
+        CLI_ACCESS_TOKEN_PREFIX, LOCAL_APP_ORIGIN, SCOPE_APP_ORIGIN_ENV, non_empty_env,
+    },
     error::ApiError,
     http::responses::SessionIdentity,
     state::AppState,
@@ -22,6 +25,7 @@ pub(crate) struct ClerkVerifier {
     pub(crate) client: reqwest::Client,
     pub(crate) issuer: Option<String>,
     pub(crate) jwks_url: Option<String>,
+    pub(crate) token_policy: ClerkTokenPolicy,
     pub(crate) jwks_cache: Arc<Mutex<Option<JwkSet>>>,
 }
 
@@ -34,10 +38,14 @@ impl ClerkVerifier {
                 .as_ref()
                 .map(|issuer| format!("{issuer}/.well-known/jwks.json"))
         });
-        Self::new(issuer, jwks_url)
+        Self::new_with_policy(issuer, jwks_url, ClerkTokenPolicy::from_env())
     }
 
-    pub(crate) fn new(issuer: Option<String>, jwks_url: Option<String>) -> Self {
+    pub(crate) fn new_with_policy(
+        issuer: Option<String>,
+        jwks_url: Option<String>,
+        token_policy: ClerkTokenPolicy,
+    ) -> Self {
         Self {
             client: reqwest::Client::builder()
                 .timeout(Duration::from_secs(5))
@@ -45,6 +53,7 @@ impl ClerkVerifier {
                 .expect("Clerk verifier HTTP client config must be valid"),
             issuer,
             jwks_url,
+            token_policy,
             jwks_cache: Arc::new(Mutex::new(None)),
         }
     }
@@ -57,7 +66,7 @@ impl ClerkVerifier {
         })?;
         let jwks = self.jwks().await?;
 
-        verify_clerk_token(token, &jwks, issuer)
+        verify_clerk_token(token, &jwks, issuer, &self.token_policy)
     }
 
     pub(crate) async fn jwks(&self) -> Result<JwkSet, ApiError> {
@@ -116,28 +125,99 @@ impl From<&ClerkIdentity> for SessionIdentity {
     }
 }
 
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub(crate) struct ClerkTokenPolicy {
+    pub(crate) authorized_parties: Vec<String>,
+    pub(crate) audiences: Vec<String>,
+}
+
+impl ClerkTokenPolicy {
+    pub(crate) fn from_env() -> Self {
+        Self {
+            authorized_parties: configured_authorized_parties(),
+            audiences: configured_list(CLERK_AUDIENCE_ENV),
+        }
+    }
+
+    fn validate(&self, claims: &ClerkClaims) -> Result<(), ApiError> {
+        if let Some(azp) = claims.azp.as_deref().map(normalize_claim_value) {
+            if self.authorized_parties.is_empty() {
+                return Err(ApiError::service_unavailable(format!(
+                    "{CLERK_AUTHORIZED_PARTIES_ENV} or {SCOPE_APP_ORIGIN_ENV} is required to validate Clerk authorized parties"
+                )));
+            }
+            if !self
+                .authorized_parties
+                .iter()
+                .any(|allowed| allowed == &azp)
+            {
+                return Err(ApiError::unauthorized(
+                    "Clerk token authorized party is not allowed",
+                ));
+            }
+        }
+
+        if !self.audiences.is_empty()
+            && !claims
+                .aud
+                .as_ref()
+                .is_some_and(|audience| audience.matches_any(&self.audiences))
+        {
+            return Err(ApiError::unauthorized(
+                "Clerk token audience is not allowed",
+            ));
+        }
+
+        Ok(())
+    }
+}
+
 #[derive(Debug, Deserialize, Serialize)]
 pub(crate) struct ClerkClaims {
     pub(crate) sub: String,
     pub(crate) email: Option<String>,
     pub(crate) email_verified: Option<bool>,
+    pub(crate) aud: Option<AudienceClaim>,
+    pub(crate) azp: Option<String>,
+}
+
+#[derive(Debug, Deserialize, Serialize)]
+#[serde(untagged)]
+pub(crate) enum AudienceClaim {
+    One(String),
+    Many(Vec<String>),
+}
+
+impl AudienceClaim {
+    fn matches_any(&self, allowed: &[String]) -> bool {
+        match self {
+            AudienceClaim::One(value) => allowed.iter().any(|allowed| allowed == value),
+            AudienceClaim::Many(values) => values
+                .iter()
+                .any(|value| allowed.iter().any(|allowed| allowed == value)),
+        }
+    }
 }
 
 pub(crate) fn verify_clerk_token(
     token: &str,
     jwks: &JwkSet,
     issuer: &str,
+    token_policy: &ClerkTokenPolicy,
 ) -> Result<ClerkIdentity, ApiError> {
     let header = validated_clerk_header(token)?;
     let jwk = signing_key(&header.kid, jwks)?;
     let key = DecodingKey::from_jwk(jwk).map_err(ApiError::internal)?;
     let mut validation = Validation::new(header.alg);
+    validation.validate_aud = false;
     validation.set_required_spec_claims(&["exp", "iss", "sub"]);
     validation.set_issuer(&[issuer]);
 
     let claims = decode::<ClerkClaims>(token, &key, &validation)
         .map_err(|_| ApiError::unauthorized("invalid Clerk token"))?
         .claims;
+
+    token_policy.validate(&claims)?;
 
     if claims.sub.trim().is_empty() {
         return Err(ApiError::unauthorized("Clerk token is missing sub"));
@@ -172,6 +252,37 @@ fn signing_key<'a>(kid: &Option<String>, jwks: &'a JwkSet) -> Result<&'a Jwk, Ap
         .iter()
         .find(|jwk| jwk.common.key_id.as_deref() == Some(kid))
         .ok_or_else(|| ApiError::unauthorized("Clerk signing key not found"))
+}
+
+fn configured_authorized_parties() -> Vec<String> {
+    let mut values = configured_list(CLERK_AUTHORIZED_PARTIES_ENV);
+    if values.is_empty() {
+        values
+            .extend(non_empty_env(SCOPE_APP_ORIGIN_ENV).map(|value| normalize_claim_value(&value)));
+        if cfg!(debug_assertions) {
+            values.push(LOCAL_APP_ORIGIN.to_string());
+        }
+    }
+    values.sort();
+    values.dedup();
+    values
+}
+
+fn configured_list(name: &str) -> Vec<String> {
+    non_empty_env(name)
+        .into_iter()
+        .flat_map(|value| {
+            value
+                .split(',')
+                .map(normalize_claim_value)
+                .filter(|value| !value.is_empty())
+                .collect::<Vec<_>>()
+        })
+        .collect()
+}
+
+fn normalize_claim_value(value: &str) -> String {
+    value.trim().trim_end_matches('/').to_string()
 }
 
 pub(crate) async fn http_identity(

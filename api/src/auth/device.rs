@@ -14,6 +14,7 @@ use std::{
 };
 
 const USER_CODE_BYTES: usize = 16;
+pub(crate) const MAX_PENDING_DEVICE_LOGINS: usize = 1024;
 const MAX_FAILED_COMPLETION_ATTEMPTS: u32 = 10;
 const COMPLETION_ATTEMPT_WINDOW_SECS: u64 = 60;
 
@@ -78,6 +79,11 @@ impl DeviceLoginStore {
         let expires_at_unix = now + CLI_DEVICE_LOGIN_TTL_SECS;
         let mut state = self.lock_state();
         state.cleanup_expired(now);
+        if state.logins_by_device_code.len() >= MAX_PENDING_DEVICE_LOGINS {
+            return Err(ApiError::too_many_requests(
+                "too many pending CLI device logins",
+            ));
+        }
 
         let (device_code, user_code) = loop {
             let device_code = random_prefixed_token(CLI_DEVICE_CODE_PREFIX)?;

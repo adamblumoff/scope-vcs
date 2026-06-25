@@ -143,9 +143,13 @@ impl AppState {
         Self {
             metadata: MetadataStore::memory(app_catalog()),
             data_dir: Arc::new(test_data_dir()),
-            clerk: ClerkVerifier::new(
+            clerk: ClerkVerifier::new_with_policy(
                 Some("https://clerk.test".to_string()),
                 Some("http://127.0.0.1/.well-known/jwks.json".to_string()),
+                crate::auth::clerk::ClerkTokenPolicy {
+                    authorized_parties: vec![crate::config::LOCAL_APP_ORIGIN.to_string()],
+                    audiences: Vec::new(),
+                },
             ),
             device_logins: DeviceLoginStore::default(),
             object_store: Arc::new(crate::object_store::MemoryObjectStore::new()),

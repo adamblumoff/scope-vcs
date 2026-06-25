@@ -210,3 +210,18 @@ async fn cli_device_login_completion_is_single_use() {
         .unwrap();
     assert_eq!(second.status(), StatusCode::CONFLICT);
 }
+
+#[test]
+fn cli_device_login_start_is_bounded() {
+    let store = crate::auth::device::DeviceLoginStore::default();
+
+    for _ in 0..crate::auth::device::MAX_PENDING_DEVICE_LOGINS {
+        store.start(LOCAL_APP_ORIGIN).unwrap();
+    }
+    let error = match store.start(LOCAL_APP_ORIGIN) {
+        Ok(_) => panic!("device login start should be capped"),
+        Err(error) => error,
+    };
+
+    assert_eq!(error.status, StatusCode::TOO_MANY_REQUESTS);
+}

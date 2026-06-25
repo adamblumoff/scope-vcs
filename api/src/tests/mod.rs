@@ -56,6 +56,7 @@ mod repo_visibility;
 mod review_publish;
 
 const TEST_CLERK_ISSUER: &str = "https://clerk.test";
+const TEST_CLERK_AUDIENCE: &str = "scope-api";
 const TEST_CLERK_USER_ID: &str = "user_owner";
 const TEST_OWNER_EMAIL: &str = "owner@example.com";
 const TEST_REPO_OWNER: &str = "owner";
@@ -100,20 +101,45 @@ fn token(user_id: &str, email_verified: bool) -> String {
 }
 
 fn token_for(user_id: &str, email: Option<String>, email_verified: bool) -> String {
+    token_for_claims(user_id, email, email_verified, Some(LOCAL_APP_ORIGIN), None)
+}
+
+fn token_with_authorized_party(user_id: &str, azp: Option<&str>) -> String {
+    token_for_claims(user_id, Some(TEST_OWNER_EMAIL.to_string()), true, azp, None)
+}
+
+fn token_with_audience(user_id: &str, aud: serde_json::Value) -> String {
+    token_for_claims(
+        user_id,
+        Some(TEST_OWNER_EMAIL.to_string()),
+        true,
+        Some(LOCAL_APP_ORIGIN),
+        Some(aud),
+    )
+}
+
+fn token_for_claims(
+    user_id: &str,
+    email: Option<String>,
+    email_verified: bool,
+    azp: Option<&str>,
+    aud: Option<serde_json::Value>,
+) -> String {
     let mut header = Header::new(Algorithm::ES256);
     header.kid = Some("test-key".to_string());
-    let claims = ClerkClaims {
-        sub: user_id.to_string(),
-        email,
-        email_verified: Some(email_verified),
-    };
-    let claims = serde_json::json!({
+    let mut claims = serde_json::json!({
         "iss": TEST_CLERK_ISSUER,
         "exp": unix_now() + 300,
-        "sub": claims.sub,
-        "email": claims.email,
-        "email_verified": claims.email_verified,
+        "sub": user_id,
+        "email": email,
+        "email_verified": email_verified,
     });
+    if let Some(azp) = azp {
+        claims["azp"] = serde_json::json!(azp);
+    }
+    if let Some(aud) = aud {
+        claims["aud"] = aud;
+    }
 
     encode(
         &header,
@@ -121,6 +147,13 @@ fn token_for(user_id: &str, email: Option<String>, email_verified: bool) -> Stri
         &EncodingKey::from_ec_pem(TEST_PRIVATE_KEY.as_bytes()).unwrap(),
     )
     .unwrap()
+}
+
+fn test_clerk_policy() -> ClerkTokenPolicy {
+    ClerkTokenPolicy {
+        authorized_parties: vec![LOCAL_APP_ORIGIN.to_string()],
+        audiences: Vec::new(),
+    }
 }
 
 fn token_without_required_claims() -> String {
@@ -178,9 +211,10 @@ fn test_state_with_repo() -> AppState {
             pending_source_blob_deletions: Vec::new(),
         }),
         data_dir: Arc::new(test_data_dir()),
-        clerk: ClerkVerifier::new(
+        clerk: ClerkVerifier::new_with_policy(
             Some(TEST_CLERK_ISSUER.to_string()),
             Some("http://127.0.0.1/.well-known/jwks.json".to_string()),
+            test_clerk_policy(),
         ),
         device_logins: crate::auth::device::DeviceLoginStore::default(),
         object_store: Arc::new(MemoryObjectStore::new()),
@@ -198,9 +232,10 @@ fn test_state_with_metadata(metadata: crate::db::MetadataStore) -> AppState {
     let state = AppState {
         metadata,
         data_dir: Arc::new(test_data_dir()),
-        clerk: ClerkVerifier::new(
+        clerk: ClerkVerifier::new_with_policy(
             Some(TEST_CLERK_ISSUER.to_string()),
             Some("http://127.0.0.1/.well-known/jwks.json".to_string()),
+            test_clerk_policy(),
         ),
         device_logins: crate::auth::device::DeviceLoginStore::default(),
         object_store: Arc::new(MemoryObjectStore::new()),

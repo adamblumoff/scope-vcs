@@ -53,6 +53,8 @@ pub(crate) async fn create_repo(
     let identity = require_identity(&state, &headers).await?;
     let user = ensure_user_for_identity(&state, &identity)?;
     let default_visibility = input.visibility.unwrap_or(Visibility::Private);
+    let api_origin = public_api_origin()?;
+    let app_origin = public_app_origin("create repository init metadata")?;
     let cleanup_state = state.clone();
     let (secret, token) = generate_first_push_token(&user.id)?;
     let (push_secret, push_token) = generate_git_push_token(&user.id)?;
@@ -72,8 +74,6 @@ pub(crate) async fn create_repo(
     let user_id = user.id.clone();
     let summary = repo_summary_for_user(&repo, &user_id)
         .ok_or_else(|| ApiError::internal_message("created repository is missing owner role"))?;
-    let api_origin = public_api_origin()?;
-    let app_origin = public_app_origin("create repository init metadata")?;
     let init = repo_init_response(
         &repo,
         &user_id,
