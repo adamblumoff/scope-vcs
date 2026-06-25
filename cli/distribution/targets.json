@@ -1,0 +1,40 @@
+{
+  "schema_version": 1,
+  "targets": [
+    {
+      "triple": "x86_64-unknown-linux-gnu",
+      "artifact": "scope-x86_64-unknown-linux-gnu",
+      "os": "linux",
+      "arch": "x64",
+      "label": "Linux x64"
+    },
+    {
+      "triple": "aarch64-unknown-linux-gnu",
+      "artifact": "scope-aarch64-unknown-linux-gnu",
+      "os": "linux",
+      "arch": "arm64",
+      "label": "Linux ARM64"
+    },
+    {
+      "triple": "x86_64-apple-darwin",
+      "artifact": "scope-x86_64-apple-darwin",
+      "os": "macos",
+      "arch": "x64",
+      "label": "macOS Intel"
+    },
+    {
+      "triple": "aarch64-apple-darwin",
+      "artifact": "scope-aarch64-apple-darwin",
+      "os": "macos",
+      "arch": "arm64",
+      "label": "macOS Apple Silicon"
+    },
+    {
+      "triple": "x86_64-pc-windows-msvc",
+      "artifact": "scope-x86_64-pc-windows-msvc.exe",
+      "os": "windows",
+      "arch": "x64",
+      "label": "Windows x64"
+    }
+  ]
+}
