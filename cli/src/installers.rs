@@ -46,7 +46,7 @@ if [ "$expected" != "$actual" ]; then
 fi
 
 mv "$tmp_file" "$install_dir/scope"
-chmod +x "$install_dir/scope"
+chmod 755 "$install_dir/scope"
 echo "scope installed to $install_dir/scope"
 "#,
     )
@@ -75,6 +75,33 @@ switch ($arch) {{
   }}
 }}
 
+function ConvertTo-ComparablePath([string] $path) {{
+  try {{
+    return [System.IO.Path]::GetFullPath($path).TrimEnd([char[]]@('\', '/')).ToLowerInvariant()
+  }} catch {{
+    return $path.TrimEnd([char[]]@('\', '/')).ToLowerInvariant()
+  }}
+}}
+
+function Test-PathListContains([string] $pathList, [string] $directory) {{
+  if ([string]::IsNullOrWhiteSpace($pathList)) {{
+    return $false
+  }}
+
+  $needle = ConvertTo-ComparablePath $directory
+  foreach ($entry in $pathList -split [System.Text.RegularExpressions.Regex]::Escape([System.IO.Path]::PathSeparator)) {{
+    if ([string]::IsNullOrWhiteSpace($entry)) {{
+      continue
+    }}
+
+    if ((ConvertTo-ComparablePath $entry) -eq $needle) {{
+      return $true
+    }}
+  }}
+
+  return $false
+}}
+
 New-Item -ItemType Directory -Force -Path $installDir | Out-Null
 $tmpFile = New-TemporaryFile
 $checksumFile = New-TemporaryFile
@@ -93,6 +120,32 @@ try {{
 
   $destination = Join-Path $installDir "scope.exe"
   Move-Item -LiteralPath $tmpPath -Destination $destination -Force
+  $userPath = [Environment]::GetEnvironmentVariable("Path", "User")
+  $machinePath = [Environment]::GetEnvironmentVariable("Path", "Machine")
+  $processPath = [Environment]::GetEnvironmentVariable("Path", "Process")
+  if (
+    -not (Test-PathListContains $userPath $installDir) -and
+    -not (Test-PathListContains $machinePath $installDir) -and
+    -not (Test-PathListContains $processPath $installDir)
+  ) {{
+    $separator = [System.IO.Path]::PathSeparator
+    $nextUserPath = if ([string]::IsNullOrWhiteSpace($userPath)) {{
+      $installDir
+    }} else {{
+      "$userPath$separator$installDir"
+    }}
+    [Environment]::SetEnvironmentVariable("Path", $nextUserPath, "User")
+  }}
+
+  if (-not (Test-PathListContains $env:Path $installDir)) {{
+    $separator = [System.IO.Path]::PathSeparator
+    $env:Path = if ([string]::IsNullOrWhiteSpace($env:Path)) {{
+      $installDir
+    }} else {{
+      "$env:Path$separator$installDir"
+    }}
+  }}
+
   Write-Output "scope installed to $destination"
 }} finally {{
   Remove-Item -LiteralPath $tmpPath -Force -ErrorAction SilentlyContinue
@@ -151,6 +204,7 @@ mod tests {
         assert!(script.contains("Darwin-x86_64|Darwin-amd64"));
         assert!(script.contains("Darwin-arm64|Darwin-aarch64"));
         assert!(script.contains("$base_url/downloads/$artifact.sha256"));
+        assert!(script.contains(r#"chmod 755 "$install_dir/scope""#));
     }
 
     #[test]
@@ -164,5 +218,6 @@ mod tests {
         assert!(script.contains(r#""X64" {"#));
         assert!(script.contains("scope-x86_64-pc-windows-msvc.exe"));
         assert!(script.contains("scope.exe"));
+        assert!(script.contains("SetEnvironmentVariable(\"Path\""));
     }
 }
