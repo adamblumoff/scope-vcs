@@ -21,7 +21,7 @@ async fn cli_device_login_exchanges_browser_auth_for_cli_token() {
     let device_code = start["device_code"].as_str().unwrap();
     let user_code = start["user_code"].as_str().unwrap();
     assert!(device_code.starts_with(CLI_DEVICE_CODE_PREFIX));
-    assert_eq!(user_code.len(), 8);
+    assert_eq!(user_code.len(), 32);
     assert_eq!(
         start["verification_url"].as_str().unwrap(),
         format!("{LOCAL_APP_ORIGIN}/cli-login?code={user_code}")
@@ -127,4 +127,86 @@ async fn cli_device_login_completion_requires_clerk_auth() {
         .unwrap();
 
     assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+}
+
+#[tokio::test]
+async fn cli_device_login_throttles_invalid_completion_attempts() {
+    let app = router(test_state_with_jwks());
+
+    for index in 0..10 {
+        let response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri(format!("/v1/cli/device-login/invalid-{index}/complete"))
+                    .header(AUTHORIZATION, bearer_header())
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::NOT_FOUND);
+    }
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/v1/cli/device-login/invalid-lockout/complete")
+                .header(AUTHORIZATION, bearer_header())
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::TOO_MANY_REQUESTS);
+}
+
+#[tokio::test]
+async fn cli_device_login_completion_is_single_use() {
+    let app = router(test_state_with_jwks());
+    let start = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/v1/cli/device-login")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let user_code = response_json(start).await["user_code"]
+        .as_str()
+        .unwrap()
+        .to_string();
+
+    let first = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri(format!("/v1/cli/device-login/{user_code}/complete"))
+                .header(AUTHORIZATION, bearer_header())
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(first.status(), StatusCode::OK);
+
+    let second = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri(format!("/v1/cli/device-login/{user_code}/complete"))
+                .header(AUTHORIZATION, bearer_header())
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(second.status(), StatusCode::CONFLICT);
 }

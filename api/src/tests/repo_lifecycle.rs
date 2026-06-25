@@ -64,7 +64,10 @@ async fn create_repo_route_creates_user_and_lists_repo() {
 
     assert_eq!(response.status(), StatusCode::OK);
     let body = response_json(response).await;
-    assert_eq!(body.as_array().unwrap().len(), 0);
+    assert_eq!(body.as_array().unwrap().len(), 1);
+    assert_eq!(body[0]["id"], "owner/scope_app");
+    assert_eq!(body[0]["lifecycle_state"], "PendingFirstPush");
+    assert_eq!(body[0]["role"], "Owner");
 
     let catalog = lock_catalog(&state).unwrap();
     assert_eq!(catalog.users.len(), 1);

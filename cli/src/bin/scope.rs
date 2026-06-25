@@ -66,7 +66,14 @@ struct CreateRepoRequest {
 
 #[derive(Deserialize)]
 struct CreateRepoResponse {
+    repo: RepoSummaryResponse,
     init: RepoInitResponse,
+}
+
+#[derive(Deserialize)]
+struct RepoSummaryResponse {
+    owner_handle: String,
+    name: String,
 }
 
 #[derive(Deserialize)]
@@ -118,8 +125,12 @@ fn init(args: InitArgs) -> anyhow::Result<()> {
         .cloned()
         .context("API did not return a Git push token")?;
 
-    configure_remote(&created.init)?;
-    push_initial_commit(&created.init, &push_secret)?;
+    if let Err(error) = configure_remote(&created.init)
+        .and_then(|_| push_initial_commit(&created.init, &push_secret))
+    {
+        rollback_created_repo(&client, &api_url, &access_token, &created.repo);
+        return Err(error);
+    }
 
     println!("{}", created.init.review_url);
     Ok(())
@@ -179,6 +190,36 @@ fn create_repo(
         .context("create Scope repository")?
         .json()
         .context("parse create repository response")
+}
+
+fn rollback_created_repo(
+    client: &Client,
+    api_url: &str,
+    access_token: &str,
+    repo: &RepoSummaryResponse,
+) {
+    let result = client
+        .delete(format!(
+            "{api_url}/v1/repos/{}/{}",
+            repo.owner_handle, repo.name
+        ))
+        .bearer_auth(access_token)
+        .send();
+
+    match result {
+        Ok(response) if response.status().is_success() => {
+            eprintln!("Deleted Scope repository after failed init");
+        }
+        Ok(response) => {
+            eprintln!(
+                "Scope repository was created, but rollback failed: {}",
+                response.status()
+            );
+        }
+        Err(error) => {
+            eprintln!("Scope repository was created, but rollback failed: {error}");
+        }
+    }
 }
 
 fn configure_remote(init: &RepoInitResponse) -> anyhow::Result<()> {

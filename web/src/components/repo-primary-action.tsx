@@ -7,6 +7,7 @@ import type { ComponentProps } from 'react'
 type RepoActionRoute =
   | '/repos/$owner/$repo'
   | '/repos/$owner/$repo/review'
+  | '/repos/$owner/$repo/settings'
 
 type RepoPrimaryAction = {
   label: string
@@ -51,7 +52,16 @@ export function repoAttentionAction(
   repo: RepoSummary,
 ): RepoAttentionAction | null {
   if (repo.lifecycle_state === 'PendingFirstPush') {
-    return null
+    if (repo.role !== 'Owner') {
+      return null
+    }
+
+    return {
+      icon: 'init',
+      label: 'Initialization incomplete',
+      primaryLabel: 'Clean up',
+      to: '/repos/$owner/$repo/settings',
+    }
   }
 
   if (repo.lifecycle_state === 'PendingPublish') {

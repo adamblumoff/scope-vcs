@@ -13,6 +13,10 @@ use std::{
     sync::{Arc, Mutex},
 };
 
+const USER_CODE_BYTES: usize = 16;
+const MAX_FAILED_COMPLETION_ATTEMPTS: u32 = 10;
+const COMPLETION_ATTEMPT_WINDOW_SECS: u64 = 60;
+
 #[derive(Clone, Default)]
 pub(crate) struct DeviceLoginStore {
     state: Arc<Mutex<DeviceLoginState>>,
@@ -23,6 +27,7 @@ struct DeviceLoginState {
     logins_by_device_code: BTreeMap<String, DeviceLoginEntry>,
     device_code_by_user_code: BTreeMap<String, String>,
     access_sessions_by_token_hash: BTreeMap<String, CliAccessSession>,
+    completion_attempts_by_user_id: BTreeMap<String, CompletionAttemptWindow>,
 }
 
 struct DeviceLoginEntry {
@@ -35,6 +40,11 @@ struct CompletedDeviceLogin {
     identity: ClerkIdentity,
     access_token: String,
     access_expires_at_unix: u64,
+}
+
+struct CompletionAttemptWindow {
+    failures: u32,
+    reset_at_unix: u64,
 }
 
 #[derive(Clone)]
@@ -113,21 +123,27 @@ impl DeviceLoginStore {
         let now = unix_now()?;
         let mut state = self.lock_state();
         state.cleanup_expired(now);
+        let identity_user_id = identity.user_id.clone();
+        state.ensure_completion_attempt_allowed(&identity_user_id, now)?;
+
         let user_code = normalize_user_code(raw_user_code);
-        let device_code = state
-            .device_code_by_user_code
-            .get(&user_code)
-            .cloned()
-            .ok_or_else(|| ApiError::not_found("CLI login code not found"))?;
-        let expires_at_unix = state
-            .logins_by_device_code
-            .get(&device_code)
-            .map(|entry| entry.expires_at_unix)
-            .ok_or_else(|| ApiError::not_found("CLI login code not found"))?;
+        let Some(device_code) = state.device_code_by_user_code.get(&user_code).cloned() else {
+            state.record_completion_failure(&identity_user_id, now);
+            return Err(ApiError::not_found("CLI login code not found"));
+        };
+        let Some(entry) = state.logins_by_device_code.get(&device_code) else {
+            state.record_completion_failure(&identity_user_id, now);
+            return Err(ApiError::not_found("CLI login code not found"));
+        };
+        let expires_at_unix = entry.expires_at_unix;
 
         if now >= expires_at_unix {
             state.remove_login(&device_code);
+            state.record_completion_failure(&identity_user_id, now);
             return Err(ApiError::conflict("CLI login code expired"));
+        }
+        if entry.completed.is_some() {
+            return Err(ApiError::conflict("CLI login already completed"));
         }
 
         let access_token = random_prefixed_token(CLI_ACCESS_TOKEN_PREFIX)?;
@@ -148,6 +164,7 @@ impl DeviceLoginStore {
             access_token,
             access_expires_at_unix,
         });
+        state.clear_completion_failures(&identity_user_id);
 
         Ok(())
     }
@@ -225,12 +242,52 @@ impl DeviceLoginState {
 
         self.access_sessions_by_token_hash
             .retain(|_, session| now < session.expires_at_unix);
+        self.completion_attempts_by_user_id
+            .retain(|_, window| now < window.reset_at_unix);
     }
 
     fn remove_login(&mut self, device_code: &str) -> Option<DeviceLoginEntry> {
         let entry = self.logins_by_device_code.remove(device_code)?;
         self.device_code_by_user_code.remove(&entry.user_code);
         Some(entry)
+    }
+
+    fn ensure_completion_attempt_allowed(
+        &mut self,
+        user_id: &str,
+        now: u64,
+    ) -> Result<(), ApiError> {
+        self.completion_attempts_by_user_id
+            .retain(|_, window| now < window.reset_at_unix);
+        if self
+            .completion_attempts_by_user_id
+            .get(user_id)
+            .is_some_and(|window| window.failures >= MAX_FAILED_COMPLETION_ATTEMPTS)
+        {
+            return Err(ApiError::too_many_requests(
+                "too many CLI login completion attempts",
+            ));
+        }
+        Ok(())
+    }
+
+    fn record_completion_failure(&mut self, user_id: &str, now: u64) {
+        let window = self
+            .completion_attempts_by_user_id
+            .entry(user_id.to_string())
+            .or_insert(CompletionAttemptWindow {
+                failures: 0,
+                reset_at_unix: now + COMPLETION_ATTEMPT_WINDOW_SECS,
+            });
+        if now >= window.reset_at_unix {
+            window.failures = 0;
+            window.reset_at_unix = now + COMPLETION_ATTEMPT_WINDOW_SECS;
+        }
+        window.failures = window.failures.saturating_add(1);
+    }
+
+    fn clear_completion_failures(&mut self, user_id: &str) {
+        self.completion_attempts_by_user_id.remove(user_id);
     }
 }
 
@@ -243,7 +300,7 @@ fn random_prefixed_token(prefix: &str) -> Result<String, ApiError> {
 }
 
 fn random_user_code() -> Result<String, ApiError> {
-    let mut bytes = [0_u8; 4];
+    let mut bytes = [0_u8; USER_CODE_BYTES];
     getrandom::fill(&mut bytes).map_err(|error| {
         ApiError::internal_message(format!("failed to generate login code: {error}"))
     })?;

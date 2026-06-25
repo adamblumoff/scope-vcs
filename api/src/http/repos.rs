@@ -38,10 +38,6 @@ pub(crate) async fn list_repos(
         .metadata
         .repositories_for_user(&user_id)?
         .into_iter()
-        .filter(|repo| {
-            repo.record.publication_state
-                != crate::domain::store::RepoPublicationState::PendingFirstPush
-        })
         .filter_map(|repo| repo_summary_for_user(&repo, &user_id))
         .collect::<Vec<_>>();
     repositories.sort_by(|left, right| left.id.cmp(&right.id));
