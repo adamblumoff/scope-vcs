@@ -7,7 +7,7 @@ pub(crate) use credentials::*;
 
 use crate::domain::store::{RepoPublicationState, RepoRole};
 use crate::{
-    auth::shoo::{ensure_user_for_identity, principal_for_user_id},
+    auth::clerk::{ensure_user_for_identity, principal_for_user_id},
     config::*,
     error::ApiError,
     git::{
@@ -210,7 +210,7 @@ pub(crate) async fn receive_pack_access(
                 },
             }
         }
-        ReceivePackAuthorization::ShooIdentity(identity) => {
+        ReceivePackAuthorization::ClerkIdentity(identity) => {
             let repo = find_repo(state, owner, repo_name)?;
             let user = ensure_user_for_identity(state, &identity)?;
             let principal = principal_for_user_id(&repo, &user.id);

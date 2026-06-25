@@ -6,12 +6,9 @@ import type {
   CommitHistoryRequest,
   CommitHistoryResponse,
   CommitSummaryResponse,
-  CreateRepoRequest,
-  CreateRepoResponse as GeneratedCreateRepoResponse,
   DeleteRepoResponse as GeneratedDeleteRepoResponse,
   FirstPushTokenResponse,
   FirstPushTokenStatus,
-  GitPushTokenResponse,
   GitCloneTokenResponse,
   PendingImportReviewResponse,
   ProjectionPreviewAudience as GeneratedProjectionPreviewAudience,
@@ -24,12 +21,10 @@ import type {
   ReviewFileDiffResponse,
   ReviewLineDiffResponse,
   RepoFileResponse,
-  RepoGitCredentialResponse,
   RepoCloneCredentialResponse,
   RepoPublicationState as GeneratedRepoPublicationState,
   RepoRole as GeneratedRepoRole,
   RepoSettingsResponse,
-  RepoSetupResponse,
   RepoSummaryResponse,
   SessionCapabilities,
   SessionIdentity as GeneratedSessionIdentity,
@@ -64,12 +59,8 @@ export type RepoCapabilities = SessionCapabilities
 export type SessionRepo = GeneratedSessionRepo
 export type RepoSession = SessionResponse
 export type FirstPushToken = FirstPushTokenResponse
-export type GitPushToken = GitPushTokenResponse
 export type GitCloneToken = GitCloneTokenResponse
-export type RepoSetup = RepoSetupResponse
-export type RepoGitCredential = RepoGitCredentialResponse
 export type RepoCloneCredential = RepoCloneCredentialResponse
-export type CreateRepoResponse = GeneratedCreateRepoResponse
 export type DeleteRepoResponse = GeneratedDeleteRepoResponse
 export type RepoSettings = RepoSettingsResponse
 export type CommitHistory = CommitHistoryResponse
@@ -101,38 +92,16 @@ export type RepoParams = {
   repo: string
 }
 
-export type RepoSetupView = RepoSetup & {
-  git_remote_url: string
-}
-
-export type RepoGitCredentialView = RepoGitCredential & {
-  git_remote_url: string
-}
-
 export type RepoCloneCredentialView = RepoCloneCredential & {
   git_remote_url: string
 }
 
-export type SetupRouteState =
-  | {
-      kind: 'setup'
-      setup: RepoSetupView
-    }
-  | {
-      kind: 'review'
-    }
-
-export type SetupProgressState = 'waiting' | 'opening-review' | 'published'
-
 export type HomeState = {
   account: AccountSession | null
+  cliInstallCommand: string
   error: string | null
   repositories: RepoSummary[]
   signedIn: boolean
-}
-
-export type CreateRepoInput = Omit<CreateRepoRequest, 'visibility'> & {
-  visibility: Visibility
 }
 
 export type DeleteRepoInput = {

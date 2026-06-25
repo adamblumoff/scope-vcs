@@ -4,6 +4,7 @@ use std::{
 };
 
 pub(crate) const SCOPE_APP_ORIGIN_ENV: &str = "SCOPE_APP_ORIGIN";
+pub(crate) const SCOPE_API_PUBLIC_URL_ENV: &str = "SCOPE_API_PUBLIC_URL";
 pub(crate) const DATABASE_URL_ENV: &str = "DATABASE_URL";
 pub(crate) const SCOPE_REPO_ROOT_ENV: &str = "SCOPE_REPO_ROOT";
 pub(crate) const SCOPE_DATA_DIR_ENV: &str = "SCOPE_DATA_DIR";
@@ -15,12 +16,20 @@ pub(crate) const SCOPE_BUCKET_SECRET_ACCESS_KEY_ENV: &str = "SCOPE_BUCKET_SECRET
 pub(crate) const SCOPE_BUCKET_FORCE_PATH_STYLE_ENV: &str = "SCOPE_BUCKET_FORCE_PATH_STYLE";
 pub(crate) const SCOPE_OBJECT_ENCRYPTION_KEY_ENV: &str = "SCOPE_OBJECT_ENCRYPTION_KEY";
 pub(crate) const SCOPE_OPERATOR_TOKEN_ENV: &str = "SCOPE_OPERATOR_TOKEN";
-pub(crate) const SHOO_JWKS_URL: &str = "https://shoo.dev/.well-known/jwks.json";
-pub(crate) const SHOO_ISSUER: &str = "https://shoo.dev";
+pub(crate) const CLERK_ISSUER_ENV: &str = "CLERK_ISSUER";
+pub(crate) const CLERK_JWKS_URL_ENV: &str = "CLERK_JWKS_URL";
+pub(crate) const CLERK_AUTHORIZED_PARTIES_ENV: &str = "CLERK_AUTHORIZED_PARTIES";
+pub(crate) const CLERK_AUDIENCE_ENV: &str = "CLERK_AUDIENCE";
 pub(crate) const LOCAL_APP_ORIGIN: &str = "http://localhost:3000";
+pub(crate) const LOCAL_API_ORIGIN: &str = "http://localhost:8080";
 pub(crate) const FIRST_PUSH_TOKEN_PREFIX: &str = "scope_fp_";
 pub(crate) const GIT_PUSH_TOKEN_PREFIX: &str = "scope_git_";
+pub(crate) const CLI_ACCESS_TOKEN_PREFIX: &str = "scope_cli_";
+pub(crate) const CLI_DEVICE_CODE_PREFIX: &str = "scope_device_";
 pub(crate) const FIRST_PUSH_TOKEN_BYTES: usize = 32;
+pub(crate) const CLI_DEVICE_LOGIN_TTL_SECS: u64 = 10 * 60;
+pub(crate) const CLI_ACCESS_TOKEN_TTL_SECS: u64 = 15 * 60;
+pub(crate) const CLI_DEVICE_LOGIN_POLL_INTERVAL_SECS: u64 = 2;
 pub(crate) const RECEIVE_PACK_STAGING_BYTES: usize = 16;
 pub(crate) const FIRST_PUSH_TOKEN_TTL_SECS: u64 = 5 * 60;
 pub(crate) const EMPTY_GIT_OID: &str = "0000000000000000000000000000000000000000";

@@ -34,14 +34,20 @@ async fn create_repo_route_creates_user_and_lists_repo() {
     assert_eq!(body["repo"]["default_visibility"], "Private");
     assert_eq!(body["repo"]["role"], "Owner");
     assert_eq!(body["repo"]["staged_update_pending"], false);
-    assert_eq!(body["setup"]["git_remote_path"], "/git/owner/scope_app");
-    assert_eq!(body["setup"]["remote_name"], "scope");
-    assert_eq!(body["setup"]["push_branch"], DEFAULT_GIT_BRANCH);
-    assert_eq!(body["setup"]["push_enabled"], true);
-    let secret = body["setup"]["token"]["secret"].as_str().unwrap();
+    assert_eq!(
+        body["init"]["git_remote_url"],
+        "http://localhost:8080/git/owner/scope_app"
+    );
+    assert_eq!(body["init"]["remote_name"], "scope");
+    assert_eq!(body["init"]["push_branch"], DEFAULT_GIT_BRANCH);
+    assert_eq!(
+        body["init"]["review_url"],
+        "http://localhost:3000/repos/owner/scope_app/review"
+    );
+    let secret = body["init"]["token"]["secret"].as_str().unwrap();
     assert!(secret.starts_with("scope_fp_"));
-    assert_eq!(body["setup"]["token"]["status"], "Active");
-    let push_secret = body["setup"]["push_token"]["secret"].as_str().unwrap();
+    assert_eq!(body["init"]["token"]["status"], "Active");
+    let push_secret = body["init"]["push_token"]["secret"].as_str().unwrap();
     assert!(push_secret.starts_with("scope_git_"));
 
     let response = app
@@ -60,6 +66,8 @@ async fn create_repo_route_creates_user_and_lists_repo() {
     let body = response_json(response).await;
     assert_eq!(body.as_array().unwrap().len(), 1);
     assert_eq!(body[0]["id"], "owner/scope_app");
+    assert_eq!(body[0]["lifecycle_state"], "PendingFirstPush");
+    assert_eq!(body[0]["role"], "Owner");
 
     let catalog = lock_catalog(&state).unwrap();
     assert_eq!(catalog.users.len(), 1);
@@ -105,8 +113,8 @@ async fn db_metadata_route_round_trips_from_clean_database() {
     assert_eq!(response.status(), StatusCode::OK);
     let body = response_json(response).await;
     assert_eq!(body["repo"]["id"], "owner/db-backed");
-    let secret = body["setup"]["token"]["secret"].as_str().unwrap();
-    let push_secret = body["setup"]["push_token"]["secret"].as_str().unwrap();
+    let secret = body["init"]["token"]["secret"].as_str().unwrap();
+    let push_secret = body["init"]["push_token"]["secret"].as_str().unwrap();
 
     let fresh_metadata = crate::db::MetadataStore::connect_for_tests(&test_db).unwrap();
     let row_repo = fresh_metadata
@@ -133,8 +141,7 @@ async fn db_metadata_route_round_trips_from_clean_database() {
 
     assert_eq!(response.status(), StatusCode::OK);
     let body = response_json(response).await;
-    assert_eq!(body.as_array().unwrap().len(), 1);
-    assert_eq!(body[0]["id"], "owner/db-backed");
+    assert_eq!(body.as_array().unwrap().len(), 0);
 }
 
 #[test]
@@ -294,59 +301,6 @@ fn db_metadata_store_round_trips_repo_metadata() {
         Visibility::Private
     );
     assert_eq!(row_repo.graph, updated_repo.graph);
-
-    fresh_metadata
-        .update(|catalog| {
-            let repo = catalog.repositories.get_mut(TEST_REPO_ID).unwrap();
-            repo.record.publication_state = RepoPublicationState::PendingFirstPush;
-            Ok(())
-        })
-        .unwrap();
-    let (_, regenerated_first_push_token) = generate_first_push_token(&owner_id).unwrap();
-    let (_, regenerated_git_push_token) = generate_git_push_token(&owner_id).unwrap();
-    let updated_repo = fresh_metadata
-        .regenerate_repo_setup_tokens(
-            TEST_REPO_OWNER,
-            TEST_REPO_NAME,
-            &owner_id,
-            regenerated_first_push_token.clone(),
-            regenerated_git_push_token.clone(),
-        )
-        .unwrap();
-    assert_eq!(
-        updated_repo.first_push_token.as_ref().unwrap().token_hash,
-        regenerated_first_push_token.token_hash
-    );
-    assert_eq!(updated_repo.first_push_token.as_ref().unwrap().secret, None);
-    assert_eq!(
-        updated_repo.git_push_token.as_ref().unwrap(),
-        &regenerated_git_push_token
-    );
-    let row_repo = fresh_metadata
-        .repository(TEST_REPO_OWNER, TEST_REPO_NAME)
-        .unwrap()
-        .expect("row repo loads after setup token update");
-    assert_eq!(row_repo.first_push_token, updated_repo.first_push_token);
-    assert_eq!(row_repo.git_push_token, updated_repo.git_push_token);
-
-    let (_, regenerated_git_push_token) = generate_git_push_token(&owner_id).unwrap();
-    let updated_git_push_token = fresh_metadata
-        .regenerate_git_push_token(
-            TEST_REPO_OWNER,
-            TEST_REPO_NAME,
-            &owner_id,
-            regenerated_git_push_token.clone(),
-        )
-        .unwrap();
-    assert_eq!(updated_git_push_token, regenerated_git_push_token);
-    let row_repo = fresh_metadata
-        .repository(TEST_REPO_OWNER, TEST_REPO_NAME)
-        .unwrap()
-        .expect("row repo loads after Git credential update");
-    assert_eq!(
-        row_repo.git_push_token.as_ref(),
-        Some(&updated_git_push_token)
-    );
 }
 
 #[tokio::test]
@@ -457,7 +411,7 @@ async fn projection_route_returns_content_not_blob_metadata() {
 }
 
 #[tokio::test]
-async fn visibility_update_uses_verified_email_canonical_owner() {
+async fn visibility_update_rejects_different_clerk_user_with_same_email() {
     let state = test_state_with_repo();
     cache_test_jwks(&state);
     {
@@ -474,7 +428,7 @@ async fn visibility_update_uses_verified_email_canonical_owner() {
                 .uri("/v1/repos/owner/repo/files/visibility")
                 .header(
                     AUTHORIZATION,
-                    bearer_header_for("rotated-pairwise-owner", TEST_OWNER_EMAIL),
+                    bearer_header_for("user_rotated_owner", TEST_OWNER_EMAIL),
                 )
                 .header(CONTENT_TYPE, "application/json")
                 .body(Body::from(
@@ -485,17 +439,13 @@ async fn visibility_update_uses_verified_email_canonical_owner() {
         .await
         .unwrap();
 
-    assert_eq!(response.status(), StatusCode::OK);
-    let body = response_json(response).await;
-    assert_eq!(body.as_array().unwrap().len(), 1);
-    assert_eq!(body[0]["path"], "/README.md");
-    assert_eq!(body[0]["visibility"], "Private");
+    assert_eq!(response.status(), StatusCode::FORBIDDEN);
 
     let catalog = lock_catalog(&state).unwrap();
-    assert_eq!(catalog.users.len(), 1);
+    assert_eq!(catalog.users.len(), 2);
     let repo = catalog.repositories.get(TEST_REPO_ID).unwrap();
     let path = ScopePath::parse("/README.md").unwrap();
-    assert_eq!(repo.policy.effective_visibility(&path), Visibility::Private);
+    assert_eq!(repo.policy.effective_visibility(&path), Visibility::Public);
 }
 
 #[tokio::test]
@@ -554,7 +504,7 @@ async fn visibility_update_batches_multiple_paths() {
 }
 
 #[tokio::test]
-async fn settings_update_uses_verified_email_canonical_owner() {
+async fn settings_update_rejects_different_clerk_user_with_same_email() {
     let state = test_state_with_repo();
     cache_test_jwks(&state);
 
@@ -565,7 +515,7 @@ async fn settings_update_uses_verified_email_canonical_owner() {
                 .uri("/v1/repos/owner/repo/settings")
                 .header(
                     AUTHORIZATION,
-                    bearer_header_for("rotated-pairwise-owner", TEST_OWNER_EMAIL),
+                    bearer_header_for("user_rotated_owner", TEST_OWNER_EMAIL),
                 )
                 .header(CONTENT_TYPE, "application/json")
                 .body(Body::from(
@@ -576,21 +526,18 @@ async fn settings_update_uses_verified_email_canonical_owner() {
         .await
         .unwrap();
 
-    assert_eq!(response.status(), StatusCode::OK);
-    let body = response_json(response).await;
-    assert_eq!(body["default_new_file_visibility"], "Private");
-    assert_eq!(body["review_pushes_before_applying"], false);
+    assert_eq!(response.status(), StatusCode::FORBIDDEN);
 
     let catalog = lock_catalog(&state).unwrap();
-    assert_eq!(catalog.users.len(), 1);
+    assert_eq!(catalog.users.len(), 2);
     let repo = catalog.repositories.get(TEST_REPO_ID).unwrap();
     assert!(!repo.settings.include_ignored_files);
-    assert!(!repo.settings.review_pushes_before_applying);
-    assert_eq!(repo.record.default_visibility, Visibility::Private);
+    assert!(repo.settings.review_pushes_before_applying);
+    assert_eq!(repo.record.default_visibility, Visibility::Public);
     assert_eq!(
         repo.policy
             .effective_visibility(&ScopePath::parse("/new.ts").unwrap()),
-        Visibility::Private
+        Visibility::Public
     );
 }
 
@@ -614,8 +561,8 @@ async fn list_repos_route_requires_sign_in() {
 async fn list_repos_route_hides_pending_repo_from_reader_member() {
     let state = test_state_with_repo();
     cache_test_jwks(&state);
-    let reader_identity = ShooIdentity {
-        pairwise_sub: "pairwise-reader".to_string(),
+    let reader_identity = ClerkIdentity {
+        user_id: "user_reader".to_string(),
         email: Some("reader@example.com".to_string()),
         email_verified: true,
     };
@@ -648,7 +595,7 @@ async fn list_repos_route_hides_pending_repo_from_reader_member() {
                 .uri("/v1/repos")
                 .header(
                     AUTHORIZATION,
-                    bearer_header_for("pairwise-reader", "reader@example.com"),
+                    bearer_header_for("user_reader", "reader@example.com"),
                 )
                 .body(Body::empty())
                 .unwrap(),

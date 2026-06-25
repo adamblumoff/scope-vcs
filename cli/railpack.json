@@ -1,0 +1,14 @@
+{
+  "$schema": "https://schema.railpack.com",
+  "provider": "rust",
+  "steps": {
+    "build": {
+      "commands": [
+        "cargo build --release --locked && mkdir -p bin && cp target/release/scope bin/scope && cp target/release/scope-cli-service bin/scope-cli-service"
+      ]
+    }
+  },
+  "deploy": {
+    "startCommand": "./bin/scope-cli-service"
+  }
+}

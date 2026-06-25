@@ -1,8 +1,4 @@
-import type {
-  RepoGitCredentialView,
-  RepoSettings,
-  Visibility,
-} from '@/api/types'
+import type { RepoSettings, Visibility } from '@/api/types'
 import { SectionRow, SectionRows } from '@/components/section-rows'
 import { Button } from '@/components/ui/button'
 import { Switch } from '@/components/ui/switch'
@@ -11,44 +7,25 @@ import {
   FilePlus2,
   GitBranch,
   Globe2,
-  KeyRound,
   LoaderCircle,
   Lock,
-  RefreshCw,
   Trash2,
 } from 'lucide-react'
-import { GitCommandBlock } from '../git-command-block'
-import { gitCredentialApproveCommand } from '../setup/commands'
 import type { SettingKey } from './repo-settings-state'
 
 export function SettingsSections({
-  canResetGitCredential,
-  gitCredential,
-  gitCredentialPending,
   onDeleteRepository,
-  onResetGitCredential,
   onSaveSettings,
   pendingSetting,
   settings,
   settingsSaving,
 }: {
-  canResetGitCredential: boolean
-  gitCredential: RepoGitCredentialView | null
-  gitCredentialPending: boolean
   onDeleteRepository: () => void
-  onResetGitCredential: () => void
   onSaveSettings: (settings: RepoSettings, pendingKey: SettingKey) => void
   pendingSetting: SettingKey | null
   settings: RepoSettings
   settingsSaving: boolean
 }) {
-  const gitCredentialCommand = gitCredential?.push_token.secret
-    ? {
-        credential: gitCredential,
-        secret: gitCredential.push_token.secret,
-      }
-    : null
-
   return (
     <SectionRows>
       <SectionRow
@@ -98,47 +75,6 @@ export function SettingsSections({
             )
           }
         />
-      </SectionRow>
-
-      <SectionRow
-        description="Refresh the credential your local Git client uses when pushing to the Scope remote."
-        icon={<KeyRound className="size-4" />}
-        title="Git credentials"
-      >
-        <div className="min-w-0 space-y-3">
-          <Button
-            disabled={!canResetGitCredential || gitCredentialPending}
-            onClick={onResetGitCredential}
-            size="sm"
-            type="button"
-            variant="secondary"
-          >
-            {gitCredentialPending ? (
-              <LoaderCircle className="size-3.5 animate-spin" />
-            ) : (
-              <RefreshCw className="size-3.5" />
-            )}
-            <span>
-              {gitCredentialPending ? 'Resetting' : 'Reset Git credential'}
-            </span>
-          </Button>
-          {!canResetGitCredential && (
-            <p className="text-sm leading-5 text-muted-foreground">
-              Git credential reset is available after the repo is published.
-            </p>
-          )}
-          {gitCredentialCommand && (
-            <GitCommandBlock
-              value={(shell) =>
-                gitCredentialApproveCommand(
-                  gitCredentialCommand.credential,
-                  gitCredentialCommand.secret,
-                  shell,
-                )
-              }
-            />
-          )}
-        </div>
       </SectionRow>
 
       <SectionRow

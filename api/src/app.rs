@@ -15,6 +15,18 @@ pub fn router(state: AppState) -> Router {
             "/v1/admin/metadata/reset",
             post(http::admin::reset_metadata),
         )
+        .route(
+            "/v1/cli/device-login",
+            post(http::device_login::start_cli_device_login),
+        )
+        .route(
+            "/v1/cli/device-login/{user_code}/complete",
+            post(http::device_login::complete_cli_device_login),
+        )
+        .route(
+            "/v1/cli/device-login/{device_code}/poll",
+            post(http::device_login::poll_cli_device_login),
+        )
         .route("/v1/session", get(http::account::get_account_session))
         .route(
             "/v1/repos",
@@ -25,20 +37,8 @@ pub fn router(state: AppState) -> Router {
             get(http::repos::get_repo).delete(http::repos::delete_repo),
         )
         .route(
-            "/v1/repos/{owner}/{repo}/git-credential",
-            post(http::repos::regenerate_git_credential),
-        )
-        .route(
             "/v1/repos/{owner}/{repo}/clone-credential",
             post(http::repos::create_clone_credential),
-        )
-        .route(
-            "/v1/repos/{owner}/{repo}/setup",
-            get(http::setup::get_repo_setup),
-        )
-        .route(
-            "/v1/repos/{owner}/{repo}/setup-token",
-            get(http::setup::get_repo_setup).post(http::setup::regenerate_first_push_token),
         )
         .route(
             "/v1/repos/{owner}/{repo}/session",

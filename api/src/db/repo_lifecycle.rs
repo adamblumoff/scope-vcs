@@ -22,7 +22,7 @@ use sea_orm::{
 use std::sync::Arc;
 
 impl MetadataStore {
-    pub(crate) fn create_repo_with_setup_tokens<F>(
+    pub(crate) fn create_repo_with_init_tokens<F>(
         &self,
         owner_user_id: &str,
         name: &str,

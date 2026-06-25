@@ -22,23 +22,29 @@ export type UserResponse = { id: string, handle: string, email: string, email_ve
 
 export type SessionResponse = { identity: SessionIdentity | null, repo: SessionRepo, principal_id: string, capabilities: SessionCapabilities, };
 
-export type SessionIdentity = { pairwise_sub: string, email: string | null, email_verified: boolean, };
+export type SessionIdentity = { user_id: string, email: string | null, email_verified: boolean, };
 
 export type SessionRepo = { id: string, publication_state: RepoPublicationState, role: RepoRole | null, };
 
 export type SessionCapabilities = { read: boolean, write: boolean, };
 
+export type DeviceLoginStatus = "Pending" | "Complete";
+
+export type DeviceLoginStartResponse = { device_code: string, user_code: string, verification_url: string, expires_at_unix: number, poll_interval_secs: number, };
+
+export type DeviceLoginPollResponse = { status: DeviceLoginStatus, access_token: string | null, expires_at_unix: number, identity: SessionIdentity | null, };
+
+export type DeviceLoginCompleteResponse = { status: DeviceLoginStatus, };
+
 export type RepoSummaryResponse = { id: string, owner_handle: string, name: string, lifecycle_state: RepoPublicationState, default_visibility: Visibility, role: RepoRole | null, staged_update_pending: boolean, };
 
 export type CreateRepoRequest = { name: string, visibility: Visibility | null, };
 
-export type CreateRepoResponse = { repo: RepoSummaryResponse, setup: RepoSetupResponse, };
+export type CreateRepoResponse = { repo: RepoSummaryResponse, init: RepoInitResponse, };
 
 export type DeleteRepoResponse = { id: string, deleted: boolean, };
 
-export type RepoSetupResponse = { repo: RepoSummaryResponse, git_remote_path: string, remote_name: string, push_branch: string, push_enabled: boolean, token: FirstPushTokenResponse | null, push_token: GitPushTokenResponse | null, };
-
-export type RepoGitCredentialResponse = { git_remote_path: string, remote_name: string, push_token: GitPushTokenResponse, };
+export type RepoInitResponse = { repo: RepoSummaryResponse, git_remote_url: string, remote_name: string, push_branch: string, token: FirstPushTokenResponse | null, push_token: GitPushTokenResponse | null, review_url: string, };
 
 export type RepoCloneCredentialResponse = { git_remote_path: string, token: GitCloneTokenResponse, };
 

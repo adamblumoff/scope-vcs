@@ -1,5 +1,5 @@
 use crate::{
-    auth::shoo::{http_identity, principal_for_repo},
+    auth::clerk::{http_identity, principal_for_repo},
     domain::{
         commit_history::{CommitHistoryCommit, CommitHistoryFile, commit_history_view},
         policy::{Principal, PrincipalKind},

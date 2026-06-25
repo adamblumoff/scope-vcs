@@ -8,50 +8,17 @@ import {
 } from '@/api/client'
 import { loadProjectionPreviewsForRequest } from './projection-preview'
 import { loadReviewForRequest } from './review'
-import {
-  gitRemoteUrl,
-  repoCloneCredentialView,
-  repoGitCredentialView,
-} from './setup-view'
+import { gitRemoteUrl, repoCloneCredentialView } from './repo-urls'
 import type {
   RepoCloneCredential,
   RepoCloneCredentialView,
   RepoDetail,
   RepoFile,
-  RepoGitCredential,
-  RepoGitCredentialView,
   RepoParams,
   RepoSession,
   RepoSummary,
   SetRepoFileVisibilityInput,
 } from './types'
-
-export async function regenerateGitCredentialForRequest(
-  data: RepoParams,
-): Promise<RepoGitCredentialView> {
-  const idToken = await readRequestAuthToken()
-  if (!idToken) {
-    throw new Error('Sign in as the repo owner to reset Git credentials.')
-  }
-
-  const response = await fetch(
-    `${getApiMutationConnection()}/v1/repos/${data.owner}/${data.repo}/git-credential`,
-    {
-      headers: authHeaders(idToken),
-      method: 'POST',
-    },
-  )
-  const payload = await response.json().catch(() => null)
-
-  if (!response.ok) {
-    throw new Error(payload?.error ?? `request failed: ${response.status}`)
-  }
-
-  return repoGitCredentialView(
-    getPublicApiConnection('building Git credential command'),
-    payload as RepoGitCredential,
-  )
-}
 
 export async function createCloneCredentialForRequest(
   data: RepoParams,

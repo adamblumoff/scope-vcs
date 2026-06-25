@@ -554,7 +554,7 @@ fn zero_file_publish_promotes_pending_import() {
 }
 
 #[tokio::test]
-async fn publish_uses_verified_email_canonical_owner() {
+async fn publish_rejects_different_clerk_user_with_same_email() {
     let state = test_state_with_repo();
     cache_test_jwks(&state);
     {
@@ -571,7 +571,7 @@ async fn publish_uses_verified_email_canonical_owner() {
                 .uri("/v1/repos/owner/repo/publish")
                 .header(
                     AUTHORIZATION,
-                    bearer_header_for("rotated-pairwise-owner", TEST_OWNER_EMAIL),
+                    bearer_header_for("user_rotated_owner", TEST_OWNER_EMAIL),
                 )
                 .body(Body::empty())
                 .unwrap(),
@@ -579,19 +579,16 @@ async fn publish_uses_verified_email_canonical_owner() {
         .await
         .unwrap();
 
-    assert_eq!(response.status(), StatusCode::OK);
-    let body = response_json(response).await;
-    assert_eq!(body["publication_state"], "Published");
-    assert_eq!(body["role"], "Owner");
+    assert_eq!(response.status(), StatusCode::NOT_FOUND);
 
     let catalog = lock_catalog(&state).unwrap();
-    assert_eq!(catalog.users.len(), 1);
+    assert_eq!(catalog.users.len(), 2);
     let repo = catalog.repositories.get(TEST_REPO_ID).unwrap();
     assert_eq!(
         repo.record.publication_state,
-        RepoPublicationState::Published
+        RepoPublicationState::PendingPublish
     );
-    assert!(repo.pending_import.is_none());
+    assert!(repo.pending_import.is_some());
 }
 
 #[test]

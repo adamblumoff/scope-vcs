@@ -1,3 +1,5 @@
+import { ClerkProvider } from '@clerk/tanstack-react-start'
+import { shadcn } from '@clerk/ui/themes'
 import {
   HeadContent,
   Outlet,
@@ -43,9 +45,11 @@ function RootDocument({ children }: { children: ReactNode }) {
         <HeadContent />
       </head>
       <body>
-        {children}
-        <Toaster richColors position="bottom-right" />
-        <Scripts />
+        <ClerkProvider appearance={{ theme: shadcn }}>
+          {children}
+          <Toaster richColors position="bottom-right" />
+          <Scripts />
+        </ClerkProvider>
       </body>
     </html>
   )

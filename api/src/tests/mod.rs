@@ -8,14 +8,14 @@ use crate::domain::projection::{
 };
 use crate::domain::repo_actions::preview_publish_import;
 use crate::domain::store::{
-    AccountAccess, AppCatalog, FirstPushToken, FirstPushTokenStatus, GitPushToken, LineDiff,
-    PendingImport, PendingImportFile, RepoMembership, RepoPublicationState, RepoRecord, RepoRole,
-    RepoSettings, RepoStorageCleanup, StagedFileChange, StagedFileChangeKind, StagedRepoUpdate,
-    StoredRepository, UserAccount,
+    AccountAccess, AppCatalog, FirstPushToken, GitPushToken, LineDiff, PendingImport,
+    PendingImportFile, RepoMembership, RepoPublicationState, RepoRecord, RepoRole, RepoSettings,
+    RepoStorageCleanup, StagedFileChange, StagedFileChangeKind, StagedRepoUpdate, StoredRepository,
+    UserAccount,
 };
 use crate::{
     app::router,
-    auth::{shoo::*, tokens::*},
+    auth::{clerk::*, tokens::*},
     config::*,
     git::{import::*, storage::*, upload::*, *},
     http::responses::*,
@@ -45,16 +45,19 @@ use tower::ServiceExt;
 mod admin;
 mod auth;
 mod commit_history;
+mod device_login;
 mod git_http;
 mod git_receive;
+mod obsolete_routes;
 mod readiness;
 mod repo_cleanup;
 mod repo_lifecycle;
 mod repo_visibility;
 mod review_publish;
-mod setup_tokens;
 
-const TEST_PAIRWISE_SUB: &str = "pairwise-owner";
+const TEST_CLERK_ISSUER: &str = "https://clerk.test";
+const TEST_CLERK_AUDIENCE: &str = "scope-api";
+const TEST_CLERK_USER_ID: &str = "user_owner";
 const TEST_OWNER_EMAIL: &str = "owner@example.com";
 const TEST_REPO_OWNER: &str = "owner";
 const TEST_REPO_NAME: &str = "repo";
@@ -93,36 +96,50 @@ fn test_jwks() -> JwkSet {
     serde_json::from_str(TEST_JWKS).unwrap()
 }
 
-fn token(audience: &str, pairwise_sub: &str, email_verified: bool) -> String {
-    token_for(
-        audience,
-        pairwise_sub,
+fn token(user_id: &str, email_verified: bool) -> String {
+    token_for(user_id, Some(TEST_OWNER_EMAIL.to_string()), email_verified)
+}
+
+fn token_for(user_id: &str, email: Option<String>, email_verified: bool) -> String {
+    token_for_claims(user_id, email, email_verified, Some(LOCAL_APP_ORIGIN), None)
+}
+
+fn token_with_authorized_party(user_id: &str, azp: Option<&str>) -> String {
+    token_for_claims(user_id, Some(TEST_OWNER_EMAIL.to_string()), true, azp, None)
+}
+
+fn token_with_audience(user_id: &str, aud: serde_json::Value) -> String {
+    token_for_claims(
+        user_id,
         Some(TEST_OWNER_EMAIL.to_string()),
-        email_verified,
+        true,
+        Some(LOCAL_APP_ORIGIN),
+        Some(aud),
     )
 }
 
-fn token_for(
-    audience: &str,
-    pairwise_sub: &str,
+fn token_for_claims(
+    user_id: &str,
     email: Option<String>,
     email_verified: bool,
+    azp: Option<&str>,
+    aud: Option<serde_json::Value>,
 ) -> String {
     let mut header = Header::new(Algorithm::ES256);
     header.kid = Some("test-key".to_string());
-    let claims = ShooClaims {
-        pairwise_sub: pairwise_sub.to_string(),
-        email,
-        email_verified: Some(email_verified),
-    };
-    let claims = serde_json::json!({
-        "iss": SHOO_ISSUER,
-        "aud": audience,
+    let mut claims = serde_json::json!({
+        "iss": TEST_CLERK_ISSUER,
         "exp": unix_now() + 300,
-        "pairwise_sub": claims.pairwise_sub,
-        "email": claims.email,
-        "email_verified": claims.email_verified,
+        "sub": user_id,
+        "email": email,
+        "email_verified": email_verified,
     });
+    if let Some(azp) = azp {
+        claims["azp"] = serde_json::json!(azp);
+    }
+    if let Some(aud) = aud {
+        claims["aud"] = aud;
+    }
 
     encode(
         &header,
@@ -132,12 +149,18 @@ fn token_for(
     .unwrap()
 }
 
-fn token_without_origin_claims() -> String {
+fn test_clerk_policy() -> ClerkTokenPolicy {
+    ClerkTokenPolicy {
+        authorized_parties: vec![LOCAL_APP_ORIGIN.to_string()],
+        audiences: Vec::new(),
+    }
+}
+
+fn token_without_required_claims() -> String {
     let mut header = Header::new(Algorithm::ES256);
     header.kid = Some("test-key".to_string());
     let claims = serde_json::json!({
         "exp": unix_now() + 300,
-        "pairwise_sub": "pairwise-owner",
         "email": TEST_OWNER_EMAIL,
         "email_verified": true,
     });
@@ -157,9 +180,9 @@ fn unix_now() -> u64 {
         .as_secs()
 }
 
-fn owner_identity(email_verified: bool) -> ShooIdentity {
-    ShooIdentity {
-        pairwise_sub: TEST_PAIRWISE_SUB.to_string(),
+fn owner_identity(email_verified: bool) -> ClerkIdentity {
+    ClerkIdentity {
+        user_id: TEST_CLERK_USER_ID.to_string(),
         email: Some(TEST_OWNER_EMAIL.to_string()),
         email_verified,
     }
@@ -188,11 +211,12 @@ fn test_state_with_repo() -> AppState {
             pending_source_blob_deletions: Vec::new(),
         }),
         data_dir: Arc::new(test_data_dir()),
-        shoo: ShooVerifier::new(
-            SHOO_ISSUER,
-            Some("origin:http://localhost:3000".to_string()),
-            "http://127.0.0.1/.well-known/jwks.json",
+        clerk: ClerkVerifier::new_with_policy(
+            Some(TEST_CLERK_ISSUER.to_string()),
+            Some("http://127.0.0.1/.well-known/jwks.json".to_string()),
+            test_clerk_policy(),
         ),
+        device_logins: crate::auth::device::DeviceLoginStore::default(),
         object_store: Arc::new(MemoryObjectStore::new()),
         operator_token: None,
     }
@@ -208,11 +232,12 @@ fn test_state_with_metadata(metadata: crate::db::MetadataStore) -> AppState {
     let state = AppState {
         metadata,
         data_dir: Arc::new(test_data_dir()),
-        shoo: ShooVerifier::new(
-            SHOO_ISSUER,
-            Some("origin:http://localhost:3000".to_string()),
-            "http://127.0.0.1/.well-known/jwks.json",
+        clerk: ClerkVerifier::new_with_policy(
+            Some(TEST_CLERK_ISSUER.to_string()),
+            Some("http://127.0.0.1/.well-known/jwks.json".to_string()),
+            test_clerk_policy(),
         ),
+        device_logins: crate::auth::device::DeviceLoginStore::default(),
         object_store: Arc::new(MemoryObjectStore::new()),
         operator_token: None,
     };
@@ -222,28 +247,20 @@ fn test_state_with_metadata(metadata: crate::db::MetadataStore) -> AppState {
 
 fn cache_test_jwks(state: &AppState) {
     *state
-        .shoo
+        .clerk
         .jwks_cache
         .lock()
         .expect("test JWKS lock must not be poisoned") = Some(test_jwks());
 }
 
 fn bearer_header() -> String {
-    format!(
-        "Bearer {}",
-        token("origin:http://localhost:3000", TEST_PAIRWISE_SUB, true)
-    )
+    format!("Bearer {}", token(TEST_CLERK_USER_ID, true))
 }
 
-fn bearer_header_for(pairwise_sub: &str, email: &str) -> String {
+fn bearer_header_for(user_id: &str, email: &str) -> String {
     format!(
         "Bearer {}",
-        token_for(
-            "origin:http://localhost:3000",
-            pairwise_sub,
-            Some(email.to_string()),
-            true,
-        )
+        token_for(user_id, Some(email.to_string()), true,)
     )
 }
 

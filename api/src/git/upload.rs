@@ -3,7 +3,7 @@ use crate::domain::policy::Principal;
 use crate::domain::projection::{Projection, project_graph};
 use crate::domain::store::{RepoPublicationState, RepoRole};
 use crate::{
-    auth::shoo::{http_identity, principal_for_repo},
+    auth::clerk::{http_identity, principal_for_repo},
     config::{DEFAULT_GIT_BRANCH, GIT_UPLOAD_PACK, UNPUBLISHED_GIT_ERROR},
     error::ApiError,
     git::{

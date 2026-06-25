@@ -69,7 +69,7 @@ pub(crate) struct SessionResponse {
 #[derive(Debug, Serialize)]
 #[cfg_attr(test, derive(ts_rs::TS))]
 pub(crate) struct SessionIdentity {
-    pub(crate) pairwise_sub: String,
+    pub(crate) user_id: String,
     pub(crate) email: Option<String>,
     pub(crate) email_verified: bool,
 }
@@ -89,6 +89,38 @@ pub(crate) struct SessionCapabilities {
     pub(crate) write: bool,
 }
 
+#[derive(Clone, Copy, Debug, Serialize)]
+#[cfg_attr(test, derive(ts_rs::TS))]
+pub(crate) enum DeviceLoginStatus {
+    Pending,
+    Complete,
+}
+
+#[derive(Debug, Serialize)]
+#[cfg_attr(test, derive(ts_rs::TS))]
+pub(crate) struct DeviceLoginStartResponse {
+    pub(crate) device_code: String,
+    pub(crate) user_code: String,
+    pub(crate) verification_url: String,
+    pub(crate) expires_at_unix: u64,
+    pub(crate) poll_interval_secs: u64,
+}
+
+#[derive(Debug, Serialize)]
+#[cfg_attr(test, derive(ts_rs::TS))]
+pub(crate) struct DeviceLoginPollResponse {
+    pub(crate) status: DeviceLoginStatus,
+    pub(crate) access_token: Option<String>,
+    pub(crate) expires_at_unix: u64,
+    pub(crate) identity: Option<SessionIdentity>,
+}
+
+#[derive(Debug, Serialize)]
+#[cfg_attr(test, derive(ts_rs::TS))]
+pub(crate) struct DeviceLoginCompleteResponse {
+    pub(crate) status: DeviceLoginStatus,
+}
+
 #[derive(Debug, Serialize)]
 #[cfg_attr(test, derive(ts_rs::TS))]
 pub(crate) struct RepoSummaryResponse {
@@ -105,7 +137,7 @@ pub(crate) struct RepoSummaryResponse {
 #[cfg_attr(test, derive(ts_rs::TS))]
 pub(crate) struct CreateRepoResponse {
     pub(crate) repo: RepoSummaryResponse,
-    pub(crate) setup: RepoSetupResponse,
+    pub(crate) init: RepoInitResponse,
 }
 
 #[derive(Debug, Serialize)]
@@ -117,22 +149,14 @@ pub(crate) struct DeleteRepoResponse {
 
 #[derive(Debug, Serialize)]
 #[cfg_attr(test, derive(ts_rs::TS))]
-pub(crate) struct RepoSetupResponse {
+pub(crate) struct RepoInitResponse {
     pub(crate) repo: RepoSummaryResponse,
-    pub(crate) git_remote_path: String,
+    pub(crate) git_remote_url: String,
     pub(crate) remote_name: &'static str,
     pub(crate) push_branch: &'static str,
-    pub(crate) push_enabled: bool,
     pub(crate) token: Option<FirstPushTokenResponse>,
     pub(crate) push_token: Option<GitPushTokenResponse>,
-}
-
-#[derive(Debug, Serialize)]
-#[cfg_attr(test, derive(ts_rs::TS))]
-pub(crate) struct RepoGitCredentialResponse {
-    pub(crate) git_remote_path: String,
-    pub(crate) remote_name: &'static str,
-    pub(crate) push_token: GitPushTokenResponse,
+    pub(crate) review_url: String,
 }
 
 #[derive(Debug, Serialize)]
@@ -343,16 +367,18 @@ pub(crate) fn repo_summary_for_user(
     })
 }
 
-pub(crate) fn repo_setup_response(
+pub(crate) fn repo_init_response(
     repo: &StoredRepository,
     user_id: &str,
+    api_origin: &str,
+    app_origin: &str,
     now_unix: u64,
     secret: Option<String>,
     push_secret: Option<String>,
-) -> Result<RepoSetupResponse, ApiError> {
-    ensure_repo_setup_access(repo, user_id)?;
+) -> Result<RepoInitResponse, ApiError> {
+    ensure_repo_init_access(repo, user_id)?;
     let repo_summary = repo_summary_for_user(repo, user_id)
-        .ok_or_else(|| ApiError::internal_message("setup repository is not readable"))?;
+        .ok_or_else(|| ApiError::internal_message("init repository is not readable"))?;
     let token = repo
         .first_push_token
         .as_ref()
@@ -362,18 +388,24 @@ pub(crate) fn repo_setup_response(
         .as_ref()
         .map(|stored_token| git_push_token_response(stored_token, push_secret));
 
-    Ok(RepoSetupResponse {
-        git_remote_path: format!("/git/{}/{}", repo_summary.owner_handle, repo_summary.name),
+    let git_remote_path = format!("/git/{}/{}", repo_summary.owner_handle, repo_summary.name);
+    Ok(RepoInitResponse {
+        git_remote_url: format!("{}{}", api_origin.trim_end_matches('/'), git_remote_path),
         remote_name: "scope",
         push_branch: DEFAULT_GIT_BRANCH,
-        push_enabled: true,
+        review_url: format!(
+            "{}/repos/{}/{}/review",
+            app_origin.trim_end_matches('/'),
+            repo_summary.owner_handle,
+            repo_summary.name
+        ),
         repo: repo_summary,
         token,
         push_token,
     })
 }
 
-fn ensure_repo_setup_access(repo: &StoredRepository, user_id: &str) -> Result<(), ApiError> {
+fn ensure_repo_init_access(repo: &StoredRepository, user_id: &str) -> Result<(), ApiError> {
     let role = repo
         .memberships
         .iter()
@@ -387,7 +419,7 @@ fn ensure_repo_setup_access(repo: &StoredRepository, user_id: &str) -> Result<()
     }
     if repo.record.publication_state != RepoPublicationState::PendingFirstPush {
         return Err(ApiError::conflict(
-            "setup token is only available before the first push",
+            "init token is only available before the first push",
         ));
     }
     Ok(())
@@ -431,18 +463,6 @@ pub(crate) fn git_clone_token_response(
     GitCloneTokenResponse {
         created_at_unix: token.created_at_unix,
         secret,
-    }
-}
-
-pub(crate) fn repo_git_credential_response(
-    repo: &StoredRepository,
-    token: &GitPushToken,
-    secret: Option<String>,
-) -> RepoGitCredentialResponse {
-    RepoGitCredentialResponse {
-        git_remote_path: format!("/git/{}/{}", repo.record.owner_handle, repo.record.name),
-        remote_name: "scope",
-        push_token: git_push_token_response(token, secret),
     }
 }
 

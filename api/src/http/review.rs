@@ -7,7 +7,7 @@ use crate::domain::{
     },
 };
 use crate::{
-    auth::shoo::{
+    auth::clerk::{
         ensure_user_for_identity, http_identity, principal_for_repo, principal_for_user_id,
     },
     error::ApiError,

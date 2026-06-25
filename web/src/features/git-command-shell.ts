@@ -36,7 +36,7 @@ export function gitCredentialUseHttpPathConfig(remoteUrl: string) {
   return `credential.${url.protocol}//${url.host}.useHttpPath`
 }
 
-export function gitCredentialStoreSetupCommands(
+export function gitCredentialStoreCommands(
   shell: GitCommandShell,
   remoteUrl: string,
 ) {
