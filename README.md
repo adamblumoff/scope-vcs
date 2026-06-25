@@ -44,8 +44,9 @@ Railway services:
   `scope-cli-service`, which serves `/install.sh`, `/install.ps1`, and
   allowlisted files from `/downloads/<artifact>`. The downloadable `scope`
   binaries are built by `.github/workflows/scope-cli.yml`, staged in
-  `cli/dist`, checksummed, and uploaded to Railway with
-  `railway up . --no-gitignore`. The service `readyz` route
+  `cli/dist`, checksummed, copied into `.railway-upload/cli`, and uploaded to
+  Railway with `railway up .railway-upload --path-as-root --no-gitignore`.
+  The service `readyz` route
   stays unavailable until every manifest artifact and checksum exists in
   `SCOPE_CLI_ARTIFACT_DIR`, which defaults to `./dist`.
   Supported install targets are Linux x64, Linux ARM64, macOS Intel, macOS

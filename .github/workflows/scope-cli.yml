@@ -160,6 +160,13 @@ jobs:
             exit 1
           fi
 
+      - name: Stage Railway upload root
+        shell: bash
+        run: |
+          rm -rf .railway-upload
+          mkdir -p .railway-upload
+          cp -a cli .railway-upload/cli
+
       - name: Install Railway CLI
         run: npm install -g @railway/cli@5.23.1
 
@@ -169,7 +176,8 @@ jobs:
           RAILWAY_PROJECT_ID: ${{ secrets.RAILWAY_PROJECT_ID }}
           RAILWAY_TOKEN: ${{ secrets.RAILWAY_TOKEN }}
         run: >
-          railway up .
+          railway up .railway-upload
+          --path-as-root
           --no-gitignore
           --project "$RAILWAY_PROJECT_ID"
           --service scope-cli
