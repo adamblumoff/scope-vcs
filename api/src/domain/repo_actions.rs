@@ -86,29 +86,6 @@ pub(crate) fn ensure_repo_member(repo: &StoredRepository, user_id: &str) -> Resu
     }
 }
 
-pub(crate) fn ensure_repo_setup_access(
-    repo: &StoredRepository,
-    user_id: &str,
-) -> Result<(), ApiError> {
-    let role = repo
-        .memberships
-        .iter()
-        .find(|membership| membership.user_id == user_id)
-        .map(|membership| membership.role);
-    if role != Some(RepoRole::Owner) {
-        return Err(ApiError::not_found(format!(
-            "repo {} not found",
-            repo.record.id
-        )));
-    }
-    if repo.record.publication_state != RepoPublicationState::PendingFirstPush {
-        return Err(ApiError::conflict(
-            "setup token is only available before the first push",
-        ));
-    }
-    Ok(())
-}
-
 pub(crate) fn ensure_repo_delete_owner(
     repo: &StoredRepository,
     user_id: &str,
@@ -150,18 +127,6 @@ pub(crate) fn create_repo(
     repo.first_push_token = Some(secretless_first_push_token(first_push_token));
     repo.git_push_token = Some(git_push_token);
     Ok(RepoMutation::new(repo))
-}
-
-pub(crate) fn regenerate_setup_tokens(
-    repo: &mut StoredRepository,
-    user_id: &str,
-    first_push_token: FirstPushToken,
-    git_push_token: GitPushToken,
-) -> Result<RepoMutation<()>, ApiError> {
-    ensure_repo_setup_access(repo, user_id)?;
-    repo.first_push_token = Some(secretless_first_push_token(first_push_token));
-    repo.git_push_token = Some(git_push_token);
-    Ok(RepoMutation::new(()))
 }
 
 pub(crate) fn set_visibility(

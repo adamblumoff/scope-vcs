@@ -69,7 +69,7 @@ mod tests {
     fn persisted_first_push_token_never_stores_plaintext_secret() {
         let token = FirstPushToken {
             token_hash: "hash".to_string(),
-            secret: Some("scope-setup-secret".to_string()),
+            secret: Some("scope-first-push-secret".to_string()),
             owner_user_id: "user-1".to_string(),
             created_at_unix: 10,
             expires_at_unix: 20,

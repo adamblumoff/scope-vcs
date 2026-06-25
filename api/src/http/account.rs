@@ -1,6 +1,6 @@
 use crate::domain::policy::ScopePath;
 use crate::{
-    auth::shoo::{ensure_user_for_identity, http_identity, principal_for_repo},
+    auth::clerk::{ensure_user_for_identity, http_identity, principal_for_repo},
     error::ApiError,
     http::responses::{
         AccountSessionResponse, HealthResponse, ReadinessCheckResponse, ReadinessResponse,

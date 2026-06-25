@@ -133,7 +133,7 @@ async fn delete_repo_route_requires_owner_and_removes_storage() {
                 .uri("/v1/repos/owner/repo")
                 .header(
                     AUTHORIZATION,
-                    bearer_header_for("pairwise-stranger", "stranger@example.com"),
+                    bearer_header_for("user_stranger", "stranger@example.com"),
                 )
                 .body(Body::empty())
                 .unwrap(),

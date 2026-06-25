@@ -1,5 +1,5 @@
 use crate::{
-    auth::shoo::bearer_token,
+    auth::clerk::bearer_token,
     config::SCOPE_OPERATOR_TOKEN_ENV,
     db::MetadataResetEvent,
     domain::store::{RepoStorageCleanup, SourceBlob},

@@ -4,18 +4,22 @@ use crate::domain::projection::project_graph;
 use crate::domain::store::{RepoRole, RepoSettings};
 use crate::{
     auth::{
-        shoo::{
+        clerk::{
             ensure_user_for_identity, http_identity, principal_for_repo, principal_for_user_id,
             require_identity,
         },
         tokens::{generate_first_push_token, generate_git_clone_token, generate_git_push_token},
+    },
+    config::{
+        LOCAL_API_ORIGIN, LOCAL_APP_ORIGIN, SCOPE_API_PUBLIC_URL_ENV, SCOPE_APP_ORIGIN_ENV,
+        non_empty_env,
     },
     error::ApiError,
     http::projection_preview::{ensure_projection_preview_access, projection_preview_repo},
     http::responses::*,
     persistence::unix_now,
     state::AppState,
-    state::{ensure_owner, ensure_repo_read, find_repo, role_for_principal},
+    state::{ensure_repo_read, find_repo, role_for_principal},
 };
 use axum::{
     Json,
@@ -35,6 +39,10 @@ pub(crate) async fn list_repos(
         .metadata
         .repositories_for_user(&user_id)?
         .into_iter()
+        .filter(|repo| {
+            repo.record.publication_state
+                != crate::domain::store::RepoPublicationState::PendingFirstPush
+        })
         .filter_map(|repo| repo_summary_for_user(&repo, &user_id))
         .collect::<Vec<_>>();
     repositories.sort_by(|left, right| left.id.cmp(&right.id));
@@ -55,7 +63,7 @@ pub(crate) async fn create_repo(
     let (push_secret, push_token) = generate_git_push_token(&user.id)?;
     let now = unix_now()?;
 
-    let repo = state.metadata.create_repo_with_setup_tokens(
+    let repo = state.metadata.create_repo_with_init_tokens(
         &user.id,
         &input.name,
         default_visibility,
@@ -69,14 +77,46 @@ pub(crate) async fn create_repo(
     let user_id = user.id.clone();
     let summary = repo_summary_for_user(&repo, &user_id)
         .ok_or_else(|| ApiError::internal_message("created repository is missing owner role"))?;
-    let setup = repo_setup_response(&repo, &user_id, now, Some(secret), Some(push_secret))?;
+    let api_origin = public_api_origin()?;
+    let app_origin = public_app_origin()?;
+    let init = repo_init_response(
+        &repo,
+        &user_id,
+        &api_origin,
+        &app_origin,
+        now,
+        Some(secret),
+        Some(push_secret),
+    )?;
 
     let created = CreateRepoResponse {
         repo: summary,
-        setup,
+        init,
     };
 
     Ok(Json(created))
+}
+
+fn public_api_origin() -> Result<String, ApiError> {
+    non_empty_env(SCOPE_API_PUBLIC_URL_ENV)
+        .or_else(|| cfg!(debug_assertions).then(|| LOCAL_API_ORIGIN.to_string()))
+        .map(|value| value.trim_end_matches('/').to_string())
+        .ok_or_else(|| {
+            ApiError::service_unavailable(format!(
+                "{SCOPE_API_PUBLIC_URL_ENV} is required to create repository init metadata"
+            ))
+        })
+}
+
+fn public_app_origin() -> Result<String, ApiError> {
+    non_empty_env(SCOPE_APP_ORIGIN_ENV)
+        .or_else(|| cfg!(debug_assertions).then(|| LOCAL_APP_ORIGIN.to_string()))
+        .map(|value| value.trim_end_matches('/').to_string())
+        .ok_or_else(|| {
+            ApiError::service_unavailable(format!(
+                "{SCOPE_APP_ORIGIN_ENV} is required to create repository init metadata"
+            ))
+        })
 }
 
 pub(crate) async fn get_repo(
@@ -119,30 +159,6 @@ pub(crate) async fn delete_repo(
         id: repo_id,
         deleted: true,
     }))
-}
-
-pub(crate) async fn regenerate_git_credential(
-    State(state): State<AppState>,
-    headers: HeaderMap,
-    Path((owner, repo_name)): Path<(String, String)>,
-) -> Result<Json<RepoGitCredentialResponse>, ApiError> {
-    let identity = require_identity(&state, &headers).await?;
-    let user = ensure_user_for_identity(&state, &identity)?;
-    let repo = find_repo(&state, &owner, &repo_name)?;
-    let principal = principal_for_user_id(&repo, &user.id);
-    ensure_repo_read(&state, &repo, &principal)?;
-    ensure_owner(&state, &repo, &principal)?;
-
-    let (push_secret, push_token) = generate_git_push_token(&user.id)?;
-    let push_token = state
-        .metadata
-        .regenerate_git_push_token(&owner, &repo_name, &user.id, push_token)?;
-
-    Ok(Json(repo_git_credential_response(
-        &repo,
-        &push_token,
-        Some(push_secret),
-    )))
 }
 
 pub(crate) async fn create_clone_credential(

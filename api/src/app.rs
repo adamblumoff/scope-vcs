@@ -25,20 +25,8 @@ pub fn router(state: AppState) -> Router {
             get(http::repos::get_repo).delete(http::repos::delete_repo),
         )
         .route(
-            "/v1/repos/{owner}/{repo}/git-credential",
-            post(http::repos::regenerate_git_credential),
-        )
-        .route(
             "/v1/repos/{owner}/{repo}/clone-credential",
             post(http::repos::create_clone_credential),
-        )
-        .route(
-            "/v1/repos/{owner}/{repo}/setup",
-            get(http::setup::get_repo_setup),
-        )
-        .route(
-            "/v1/repos/{owner}/{repo}/setup-token",
-            get(http::setup::get_repo_setup).post(http::setup::regenerate_first_push_token),
         )
         .route(
             "/v1/repos/{owner}/{repo}/session",

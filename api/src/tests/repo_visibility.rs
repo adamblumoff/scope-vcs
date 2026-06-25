@@ -394,7 +394,7 @@ fn anonymous_request_uses_public_principal() {
 }
 
 #[test]
-fn verified_member_email_uses_repo_principal() {
+fn verified_clerk_owner_uses_repo_principal() {
     let state = test_state_with_repo();
     let repo = find_repo(&state, TEST_REPO_OWNER, TEST_REPO_NAME).unwrap();
     let identity = owner_identity(true);
@@ -405,7 +405,7 @@ fn verified_member_email_uses_repo_principal() {
 }
 
 #[test]
-fn unverified_email_still_uses_pairwise_user_principal() {
+fn unverified_email_still_uses_clerk_user_principal() {
     let state = test_state_with_repo();
     let repo = find_repo(&state, TEST_REPO_OWNER, TEST_REPO_NAME).unwrap();
     let identity = owner_identity(false);

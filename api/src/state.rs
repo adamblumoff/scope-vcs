@@ -5,7 +5,7 @@ use crate::domain::store::{
     AppCatalog, RepoPublicationState, RepoRole, SourceBlob, StoredRepository, repo_id,
 };
 use crate::{
-    auth::shoo::ShooVerifier,
+    auth::clerk::ClerkVerifier,
     config::{SCOPE_OPERATOR_TOKEN_ENV, data_dir, git_repo_root, non_empty_env},
     db::MetadataStore,
     error::ApiError,
@@ -23,7 +23,7 @@ use std::{
 pub struct AppState {
     pub(crate) metadata: MetadataStore,
     pub(crate) data_dir: Arc<PathBuf>,
-    pub(crate) shoo: ShooVerifier,
+    pub(crate) clerk: ClerkVerifier,
     pub(crate) object_store: Arc<dyn ObjectStore>,
     pub(crate) operator_token: Option<Arc<str>>,
 }
@@ -123,7 +123,7 @@ impl AppState {
         let state = Self {
             metadata: MetadataStore::connect_from_env()?,
             data_dir: Arc::new(data_dir),
-            shoo: ShooVerifier::from_env(),
+            clerk: ClerkVerifier::from_env(),
             object_store: Arc::new(EncryptedObjectStore::from_env(Arc::new(
                 S3ObjectStore::from_env()?,
             ))?),
@@ -136,15 +136,14 @@ impl AppState {
 
     #[cfg(test)]
     pub(crate) fn test_state() -> Self {
-        use crate::{config::SHOO_ISSUER, domain::store::app_catalog, persistence::test_data_dir};
+        use crate::{domain::store::app_catalog, persistence::test_data_dir};
 
         Self {
             metadata: MetadataStore::memory(app_catalog()),
             data_dir: Arc::new(test_data_dir()),
-            shoo: ShooVerifier::new(
-                SHOO_ISSUER,
-                Some("origin:http://localhost:3000".to_string()),
-                "http://127.0.0.1/.well-known/jwks.json",
+            clerk: ClerkVerifier::new(
+                Some("https://clerk.test".to_string()),
+                Some("http://127.0.0.1/.well-known/jwks.json".to_string()),
             ),
             object_store: Arc::new(crate::object_store::MemoryObjectStore::new()),
             operator_token: None,

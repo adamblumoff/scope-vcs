@@ -15,7 +15,7 @@ pub(crate) fn generate_first_push_token(
     let now = unix_now()?;
     let mut bytes = [0_u8; FIRST_PUSH_TOKEN_BYTES];
     getrandom::fill(&mut bytes).map_err(|error| {
-        ApiError::internal_message(format!("failed to generate setup token: {error}"))
+        ApiError::internal_message(format!("failed to generate first-push token: {error}"))
     })?;
     let secret = format!("{FIRST_PUSH_TOKEN_PREFIX}{}", hex::encode(bytes));
     let token = FirstPushToken {
