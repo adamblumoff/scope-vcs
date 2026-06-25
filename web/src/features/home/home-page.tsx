@@ -69,7 +69,7 @@ export function HomePage({ home }: { home: HomeState }) {
         )}
 
         <RepoList
-          cliInstallCommand={home.cliInstallCommand}
+          cliInstallCommands={home.cliInstallCommands}
           repositories={repositories}
           signedIn={signedIn}
         />

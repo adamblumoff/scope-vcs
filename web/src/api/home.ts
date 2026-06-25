@@ -8,17 +8,18 @@ import {
 } from '@/api/client'
 import type {
   AccountSession,
+  CliInstallCommands,
   HomeState,
   RepoSummary,
 } from './types'
 
 export async function loadHomeForRequest(): Promise<HomeState> {
-  const cliInstallCommand = buildCliInstallCommand()
+  const cliInstallCommands = buildCliInstallCommands()
   const idToken = await readRequestAuthToken()
   if (!idToken) {
     return {
       account: null,
-      cliInstallCommand,
+      cliInstallCommands,
       error: null,
       repositories: [],
       signedIn: false,
@@ -35,7 +36,7 @@ export async function loadHomeForRequest(): Promise<HomeState> {
 
     return {
       account,
-      cliInstallCommand,
+      cliInstallCommands,
       error: null,
       repositories,
       signedIn: true,
@@ -44,7 +45,7 @@ export async function loadHomeForRequest(): Promise<HomeState> {
     if (error instanceof HttpError && error.status === 401) {
       return {
         account: null,
-        cliInstallCommand,
+        cliInstallCommands,
         error: null,
         repositories: [],
         signedIn: false,
@@ -53,7 +54,7 @@ export async function loadHomeForRequest(): Promise<HomeState> {
 
     return {
       account: null,
-      cliInstallCommand,
+      cliInstallCommands,
       error: error instanceof Error ? error.message : 'request failed',
       repositories: [],
       signedIn: true,
@@ -61,6 +62,10 @@ export async function loadHomeForRequest(): Promise<HomeState> {
   }
 }
 
-function buildCliInstallCommand() {
-  return `curl -fsSL ${getCliInstallConnection()}/install.sh | sh`
+function buildCliInstallCommands(): CliInstallCommands {
+  const baseUrl = getCliInstallConnection()
+  return {
+    posix: `curl -fsSL ${baseUrl}/install.sh | sh`,
+    windows: `irm ${baseUrl}/install.ps1 | iex`,
+  }
 }

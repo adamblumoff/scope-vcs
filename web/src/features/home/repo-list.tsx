@@ -1,4 +1,4 @@
-import type { RepoSummary } from '@/api/types'
+import type { CliInstallCommands, RepoSummary } from '@/api/types'
 import {
   type RepoAttentionAction,
   repoAttentionAction,
@@ -22,11 +22,11 @@ import {
 } from 'lucide-react'
 
 export function RepoList({
-  cliInstallCommand,
+  cliInstallCommands,
   repositories,
   signedIn,
 }: {
-  cliInstallCommand: string
+  cliInstallCommands: CliInstallCommands
   repositories: RepoSummary[]
   signedIn: boolean
 }) {
@@ -48,8 +48,12 @@ export function RepoList({
           {signedIn && (
             <div className="mt-2 w-full space-y-3 text-left">
               <CopyableCodeBlock
-                copyLabel="Copy install command"
-                value={cliInstallCommand}
+                copyLabel="Copy macOS/Linux install command"
+                value={cliInstallCommands.posix}
+              />
+              <CopyableCodeBlock
+                copyLabel="Copy Windows install command"
+                value={cliInstallCommands.windows}
               />
               <CopyableCodeBlock
                 copyLabel="Copy init command"

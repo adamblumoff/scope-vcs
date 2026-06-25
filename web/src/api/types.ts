@@ -98,10 +98,15 @@ export type RepoCloneCredentialView = RepoCloneCredential & {
 
 export type HomeState = {
   account: AccountSession | null
-  cliInstallCommand: string
+  cliInstallCommands: CliInstallCommands
   error: string | null
   repositories: RepoSummary[]
   signedIn: boolean
+}
+
+export type CliInstallCommands = {
+  posix: string
+  windows: string
 }
 
 export type DeleteRepoInput = {
