@@ -15,10 +15,10 @@ async fn cli_device_login_exchanges_browser_auth_for_cli_token() {
     let device_code = start["device_code"].as_str().unwrap();
     let user_code = start["user_code"].as_str().unwrap();
     assert!(device_code.starts_with(CLI_DEVICE_CODE_PREFIX));
-    assert_eq!(user_code.len(), 32);
+    assert_eq!(user_code.len(), 16);
     assert_eq!(
         start["verification_url"].as_str().unwrap(),
-        format!("{LOCAL_APP_ORIGIN}/cli-login?code={user_code}")
+        format!("{LOCAL_APP_ORIGIN}/cli-login")
     );
 
     let pending = app
@@ -194,31 +194,14 @@ async fn cli_device_login_completion_is_single_use() {
 }
 
 #[test]
-fn cli_device_login_start_is_bounded_per_client() {
+fn cli_device_login_start_is_rate_limited() {
     let store = crate::auth::device::DeviceLoginStore::default();
 
-    for _ in 0..crate::auth::device::MAX_PENDING_DEVICE_LOGINS_PER_CLIENT {
-        store.start(LOCAL_APP_ORIGIN, "client-a").unwrap();
+    for _ in 0..crate::auth::device::MAX_DEVICE_LOGIN_STARTS_PER_WINDOW {
+        store.start(LOCAL_APP_ORIGIN).unwrap();
     }
-    let error = match store.start(LOCAL_APP_ORIGIN, "client-a") {
-        Ok(_) => panic!("device login start should be capped per client"),
-        Err(error) => error,
-    };
-
-    assert_eq!(error.status, StatusCode::TOO_MANY_REQUESTS);
-}
-
-#[test]
-fn cli_device_login_start_is_bounded_globally() {
-    let store = crate::auth::device::DeviceLoginStore::default();
-
-    for index in 0..crate::auth::device::MAX_PENDING_DEVICE_LOGINS {
-        store
-            .start(LOCAL_APP_ORIGIN, &format!("client-{index}"))
-            .unwrap();
-    }
-    let error = match store.start(LOCAL_APP_ORIGIN, "overflow-client") {
-        Ok(_) => panic!("device login start should be capped globally"),
+    let error = match store.start(LOCAL_APP_ORIGIN) {
+        Ok(_) => panic!("device login start should be globally rate limited"),
         Err(error) => error,
     };
 
@@ -229,10 +212,6 @@ fn start_device_login_request() -> Request<Body> {
     Request::builder()
         .method("POST")
         .uri("/v1/cli/device-login")
-        .extension(axum::extract::ConnectInfo(std::net::SocketAddr::from((
-            [127, 0, 0, 1],
-            49000,
-        ))))
         .body(Body::empty())
         .unwrap()
 }

@@ -41,6 +41,7 @@ enum Visibility {
 #[derive(Deserialize)]
 struct DeviceLoginStartResponse {
     device_code: String,
+    user_code: String,
     verification_url: String,
     expires_at_unix: u64,
     poll_interval_secs: u64,
@@ -147,6 +148,7 @@ fn browser_login(client: &Client, api_url: &str) -> anyhow::Result<String> {
         .context("parse browser login response")?;
 
     eprintln!("{}", start.verification_url);
+    eprintln!("Code: {}", format_user_code(&start.user_code));
     let _ = webbrowser::open(&start.verification_url);
 
     loop {
@@ -171,6 +173,14 @@ fn browser_login(client: &Client, api_url: &str) -> anyhow::Result<String> {
             return poll.access_token.context("completed login missing token");
         }
     }
+}
+
+fn format_user_code(code: &str) -> String {
+    code.as_bytes()
+        .chunks(4)
+        .map(|chunk| String::from_utf8_lossy(chunk).to_string())
+        .collect::<Vec<_>>()
+        .join("-")
 }
 
 fn create_repo(
