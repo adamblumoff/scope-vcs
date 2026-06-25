@@ -62,6 +62,13 @@ jobs:
             binary: target/x86_64-pc-windows-msvc/release/scope.exe
             builder: cargo
             smoke: true
+          - label: Windows ARM64
+            runner: windows-latest
+            target: aarch64-pc-windows-msvc
+            artifact: scope-aarch64-pc-windows-msvc.exe
+            binary: target/aarch64-pc-windows-msvc/release/scope.exe
+            builder: cargo
+            smoke: false
 
     steps:
       - name: Checkout
@@ -131,6 +138,7 @@ jobs:
             scope-x86_64-apple-darwin
             scope-aarch64-apple-darwin
             scope-x86_64-pc-windows-msvc.exe
+            scope-aarch64-pc-windows-msvc.exe
           )
 
           for artifact in "${expected[@]}"; do

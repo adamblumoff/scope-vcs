@@ -92,6 +92,7 @@ mod tests {
                 "x86_64-apple-darwin",
                 "aarch64-apple-darwin",
                 "x86_64-pc-windows-msvc",
+                "aarch64-pc-windows-msvc",
             ]
         );
     }

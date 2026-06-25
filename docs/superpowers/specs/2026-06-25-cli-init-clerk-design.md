@@ -228,8 +228,9 @@ Add a third Railway service for CLI distribution.
 GitHub Actions owns the artifact build/deploy loop for the CLI service because
 Railway's source build environment cannot produce the full macOS, Windows, and
 Linux matrix by itself. The workflow builds Linux x64, Linux ARM64, macOS
-Intel, macOS Apple Silicon, and Windows x64 binaries, writes SHA-256 checksum
-files, and deploys the `cli` bundle to Railway with `cli/dist` included.
+Intel, macOS Apple Silicon, Windows x64, and Windows ARM64 binaries, writes
+SHA-256 checksum files, and deploys the `cli` bundle to Railway with
+`cli/dist` included.
 Raspberry Pi and Alpine binaries are intentionally out of scope for this pass.
 
 ## Error Handling And Recovery

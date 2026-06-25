@@ -35,6 +35,13 @@
       "os": "windows",
       "arch": "x64",
       "label": "Windows x64"
+    },
+    {
+      "triple": "aarch64-pc-windows-msvc",
+      "artifact": "scope-aarch64-pc-windows-msvc.exe",
+      "os": "windows",
+      "arch": "arm64",
+      "label": "Windows ARM64"
     }
   ]
 }

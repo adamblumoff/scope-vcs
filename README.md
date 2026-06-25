@@ -50,10 +50,10 @@ Railway services:
   stays unavailable until every manifest artifact and checksum exists in
   `SCOPE_CLI_ARTIFACT_DIR`, which defaults to `./dist`.
   Supported install targets are Linux x64, Linux ARM64, macOS Intel, macOS
-  Apple Silicon, and Windows x64. Raspberry Pi and Alpine builds are
-  intentionally not published yet. Keep the service linked to GitHub for source
-  metadata, but treat the GitHub Actions workflow as the authoritative deploy
-  path because a plain Railway source deploy does not include CI-built
+  Apple Silicon, Windows x64, and Windows ARM64. Raspberry Pi and Alpine builds
+  are intentionally not published yet. Keep the service linked to GitHub for
+  source metadata, but treat the GitHub Actions workflow as the authoritative
+  deploy path because a plain Railway source deploy does not include CI-built
   cross-platform artifacts. Use the Railway-generated public service URL as
   `SCOPE_CLI_INSTALL_URL` in `scope-web`. Set `SCOPE_CLI_PUBLIC_URL` on the CLI
   service to the same public URL when you want installer scripts to avoid

@@ -277,6 +277,13 @@ fn windows_case_arm(target: &DistributionTarget) -> Option<String> {
 "#,
             artifact = target.artifact
         )),
+        ("windows", "arm64") => Some(format!(
+            r#"  "Arm64" {{
+    $artifact = "{artifact}"
+  }}
+"#,
+            artifact = target.artifact
+        )),
         _ => None,
     }
 }
@@ -307,7 +314,7 @@ mod tests {
     }
 
     #[test]
-    fn windows_installer_supports_windows_x64() {
+    fn windows_installer_supports_windows_targets() {
         let script = windows_install_script(
             "https://scope-cli.up.railway.app/",
             DistributionManifest::bundled(),
@@ -315,7 +322,9 @@ mod tests {
 
         assert!(script.contains(r#"$baseUrl = "https://scope-cli.up.railway.app""#));
         assert!(script.contains(r#""X64" {"#));
+        assert!(script.contains(r#""Arm64" {"#));
         assert!(script.contains("scope-x86_64-pc-windows-msvc.exe"));
+        assert!(script.contains("scope-aarch64-pc-windows-msvc.exe"));
         assert!(script.contains("scope.exe"));
         assert!(script.contains("SetEnvironmentVariable(\"Path\""));
     }
