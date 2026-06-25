@@ -3,6 +3,7 @@ import {
   type RepoAttentionAction,
   repoAttentionAction,
 } from '@/components/repo-primary-action'
+import { CopyableCodeBlock } from '@/components/copyable-code-block'
 import { Button } from '@/components/ui/button'
 import {
   Tooltip,
@@ -10,21 +11,22 @@ import {
   TooltipProvider,
   TooltipTrigger,
 } from '@/components/ui/tooltip'
+import { SignInButton } from '@clerk/tanstack-react-start'
 import { Link } from '@tanstack/react-router'
 import {
   GitBranch,
   GitPullRequestArrow,
   LogIn,
   Rocket,
-  Upload,
+  TerminalSquare,
 } from 'lucide-react'
 
 export function RepoList({
-  onSignIn,
+  cliInstallCommand,
   repositories,
   signedIn,
 }: {
-  onSignIn: () => Promise<void>
+  cliInstallCommand: string
   repositories: RepoSummary[]
   signedIn: boolean
 }) {
@@ -39,15 +41,29 @@ export function RepoList({
             <div className="font-medium leading-5">No repositories</div>
             <p className="mt-1 leading-5 text-muted-foreground">
               {signedIn
-                ? 'Create a repository to start.'
+                ? 'Install the CLI, then initialize this folder from your terminal.'
                 : 'Sign in to start from an empty workspace.'}
             </p>
           </div>
+          {signedIn && (
+            <div className="mt-2 w-full space-y-3 text-left">
+              <CopyableCodeBlock
+                copyLabel="Copy install command"
+                value={cliInstallCommand}
+              />
+              <CopyableCodeBlock
+                copyLabel="Copy init command"
+                value="scope init"
+              />
+            </div>
+          )}
           {!signedIn && (
-            <Button size="sm" onClick={() => void onSignIn()} type="button">
-              <LogIn className="size-3.5" />
-              <span>Sign in</span>
-            </Button>
+            <SignInButton mode="modal">
+              <Button size="sm" type="button">
+                <LogIn className="size-3.5" />
+                <span>Sign in</span>
+              </Button>
+            </SignInButton>
           )}
         </div>
       </div>
@@ -131,8 +147,8 @@ function attentionActionIcon(action: RepoAttentionAction) {
   switch (action.icon) {
     case 'publish-review':
       return Rocket
-    case 'setup':
-      return Upload
+    case 'init':
+      return TerminalSquare
     case 'update-review':
       return GitPullRequestArrow
   }

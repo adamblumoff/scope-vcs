@@ -10,10 +10,9 @@
 
 import { Route as rootRouteImport } from './routes/__root'
 import { Route as IndexRouteImport } from './routes/index'
-import { Route as AuthSessionRouteImport } from './routes/auth.session'
-import { Route as AuthCallbackRouteImport } from './routes/auth.callback'
+import { Route as SignUpSplatRouteImport } from './routes/sign-up.$'
+import { Route as SignInSplatRouteImport } from './routes/sign-in.$'
 import { Route as ReposOwnerRepoRouteImport } from './routes/repos.$owner.$repo'
-import { Route as ReposOwnerRepoSetupRouteImport } from './routes/repos.$owner.$repo.setup'
 import { Route as ReposOwnerRepoSettingsRouteImport } from './routes/repos.$owner.$repo.settings'
 import { Route as ReposOwnerRepoReviewRouteImport } from './routes/repos.$owner.$repo.review'
 import { Route as ReposOwnerRepoHistoryRouteImport } from './routes/repos.$owner.$repo.history'
@@ -23,25 +22,20 @@ const IndexRoute = IndexRouteImport.update({
   path: '/',
   getParentRoute: () => rootRouteImport,
 } as any)
-const AuthSessionRoute = AuthSessionRouteImport.update({
-  id: '/auth/session',
-  path: '/auth/session',
+const SignUpSplatRoute = SignUpSplatRouteImport.update({
+  id: '/sign-up/$',
+  path: '/sign-up/$',
   getParentRoute: () => rootRouteImport,
 } as any)
-const AuthCallbackRoute = AuthCallbackRouteImport.update({
-  id: '/auth/callback',
-  path: '/auth/callback',
+const SignInSplatRoute = SignInSplatRouteImport.update({
+  id: '/sign-in/$',
+  path: '/sign-in/$',
   getParentRoute: () => rootRouteImport,
 } as any)
 const ReposOwnerRepoRoute = ReposOwnerRepoRouteImport.update({
   id: '/repos/$owner/$repo',
   path: '/repos/$owner/$repo',
   getParentRoute: () => rootRouteImport,
-} as any)
-const ReposOwnerRepoSetupRoute = ReposOwnerRepoSetupRouteImport.update({
-  id: '/setup',
-  path: '/setup',
-  getParentRoute: () => ReposOwnerRepoRoute,
 } as any)
 const ReposOwnerRepoSettingsRoute = ReposOwnerRepoSettingsRouteImport.update({
   id: '/settings',
@@ -61,72 +55,66 @@ const ReposOwnerRepoHistoryRoute = ReposOwnerRepoHistoryRouteImport.update({
 
 export interface FileRoutesByFullPath {
   '/': typeof IndexRoute
-  '/auth/callback': typeof AuthCallbackRoute
-  '/auth/session': typeof AuthSessionRoute
+  '/sign-in/$': typeof SignInSplatRoute
+  '/sign-up/$': typeof SignUpSplatRoute
   '/repos/$owner/$repo': typeof ReposOwnerRepoRouteWithChildren
   '/repos/$owner/$repo/history': typeof ReposOwnerRepoHistoryRoute
   '/repos/$owner/$repo/review': typeof ReposOwnerRepoReviewRoute
   '/repos/$owner/$repo/settings': typeof ReposOwnerRepoSettingsRoute
-  '/repos/$owner/$repo/setup': typeof ReposOwnerRepoSetupRoute
 }
 export interface FileRoutesByTo {
   '/': typeof IndexRoute
-  '/auth/callback': typeof AuthCallbackRoute
-  '/auth/session': typeof AuthSessionRoute
+  '/sign-in/$': typeof SignInSplatRoute
+  '/sign-up/$': typeof SignUpSplatRoute
   '/repos/$owner/$repo': typeof ReposOwnerRepoRouteWithChildren
   '/repos/$owner/$repo/history': typeof ReposOwnerRepoHistoryRoute
   '/repos/$owner/$repo/review': typeof ReposOwnerRepoReviewRoute
   '/repos/$owner/$repo/settings': typeof ReposOwnerRepoSettingsRoute
-  '/repos/$owner/$repo/setup': typeof ReposOwnerRepoSetupRoute
 }
 export interface FileRoutesById {
   __root__: typeof rootRouteImport
   '/': typeof IndexRoute
-  '/auth/callback': typeof AuthCallbackRoute
-  '/auth/session': typeof AuthSessionRoute
+  '/sign-in/$': typeof SignInSplatRoute
+  '/sign-up/$': typeof SignUpSplatRoute
   '/repos/$owner/$repo': typeof ReposOwnerRepoRouteWithChildren
   '/repos/$owner/$repo/history': typeof ReposOwnerRepoHistoryRoute
   '/repos/$owner/$repo/review': typeof ReposOwnerRepoReviewRoute
   '/repos/$owner/$repo/settings': typeof ReposOwnerRepoSettingsRoute
-  '/repos/$owner/$repo/setup': typeof ReposOwnerRepoSetupRoute
 }
 export interface FileRouteTypes {
   fileRoutesByFullPath: FileRoutesByFullPath
   fullPaths:
     | '/'
-    | '/auth/callback'
-    | '/auth/session'
+    | '/sign-in/$'
+    | '/sign-up/$'
     | '/repos/$owner/$repo'
     | '/repos/$owner/$repo/history'
     | '/repos/$owner/$repo/review'
     | '/repos/$owner/$repo/settings'
-    | '/repos/$owner/$repo/setup'
   fileRoutesByTo: FileRoutesByTo
   to:
     | '/'
-    | '/auth/callback'
-    | '/auth/session'
+    | '/sign-in/$'
+    | '/sign-up/$'
     | '/repos/$owner/$repo'
     | '/repos/$owner/$repo/history'
     | '/repos/$owner/$repo/review'
     | '/repos/$owner/$repo/settings'
-    | '/repos/$owner/$repo/setup'
   id:
     | '__root__'
     | '/'
-    | '/auth/callback'
-    | '/auth/session'
+    | '/sign-in/$'
+    | '/sign-up/$'
     | '/repos/$owner/$repo'
     | '/repos/$owner/$repo/history'
     | '/repos/$owner/$repo/review'
     | '/repos/$owner/$repo/settings'
-    | '/repos/$owner/$repo/setup'
   fileRoutesById: FileRoutesById
 }
 export interface RootRouteChildren {
   IndexRoute: typeof IndexRoute
-  AuthCallbackRoute: typeof AuthCallbackRoute
-  AuthSessionRoute: typeof AuthSessionRoute
+  SignInSplatRoute: typeof SignInSplatRoute
+  SignUpSplatRoute: typeof SignUpSplatRoute
   ReposOwnerRepoRoute: typeof ReposOwnerRepoRouteWithChildren
 }
 
@@ -139,18 +127,18 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof IndexRouteImport
       parentRoute: typeof rootRouteImport
     }
-    '/auth/session': {
-      id: '/auth/session'
-      path: '/auth/session'
-      fullPath: '/auth/session'
-      preLoaderRoute: typeof AuthSessionRouteImport
+    '/sign-up/$': {
+      id: '/sign-up/$'
+      path: '/sign-up/$'
+      fullPath: '/sign-up/$'
+      preLoaderRoute: typeof SignUpSplatRouteImport
       parentRoute: typeof rootRouteImport
     }
-    '/auth/callback': {
-      id: '/auth/callback'
-      path: '/auth/callback'
-      fullPath: '/auth/callback'
-      preLoaderRoute: typeof AuthCallbackRouteImport
+    '/sign-in/$': {
+      id: '/sign-in/$'
+      path: '/sign-in/$'
+      fullPath: '/sign-in/$'
+      preLoaderRoute: typeof SignInSplatRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/repos/$owner/$repo': {
@@ -159,13 +147,6 @@ declare module '@tanstack/react-router' {
       fullPath: '/repos/$owner/$repo'
       preLoaderRoute: typeof ReposOwnerRepoRouteImport
       parentRoute: typeof rootRouteImport
-    }
-    '/repos/$owner/$repo/setup': {
-      id: '/repos/$owner/$repo/setup'
-      path: '/setup'
-      fullPath: '/repos/$owner/$repo/setup'
-      preLoaderRoute: typeof ReposOwnerRepoSetupRouteImport
-      parentRoute: typeof ReposOwnerRepoRoute
     }
     '/repos/$owner/$repo/settings': {
       id: '/repos/$owner/$repo/settings'
@@ -195,14 +176,12 @@ interface ReposOwnerRepoRouteChildren {
   ReposOwnerRepoHistoryRoute: typeof ReposOwnerRepoHistoryRoute
   ReposOwnerRepoReviewRoute: typeof ReposOwnerRepoReviewRoute
   ReposOwnerRepoSettingsRoute: typeof ReposOwnerRepoSettingsRoute
-  ReposOwnerRepoSetupRoute: typeof ReposOwnerRepoSetupRoute
 }
 
 const ReposOwnerRepoRouteChildren: ReposOwnerRepoRouteChildren = {
   ReposOwnerRepoHistoryRoute: ReposOwnerRepoHistoryRoute,
   ReposOwnerRepoReviewRoute: ReposOwnerRepoReviewRoute,
   ReposOwnerRepoSettingsRoute: ReposOwnerRepoSettingsRoute,
-  ReposOwnerRepoSetupRoute: ReposOwnerRepoSetupRoute,
 }
 
 const ReposOwnerRepoRouteWithChildren = ReposOwnerRepoRoute._addFileChildren(
@@ -211,8 +190,8 @@ const ReposOwnerRepoRouteWithChildren = ReposOwnerRepoRoute._addFileChildren(
 
 const rootRouteChildren: RootRouteChildren = {
   IndexRoute: IndexRoute,
-  AuthCallbackRoute: AuthCallbackRoute,
-  AuthSessionRoute: AuthSessionRoute,
+  SignInSplatRoute: SignInSplatRoute,
+  SignUpSplatRoute: SignUpSplatRoute,
   ReposOwnerRepoRoute: ReposOwnerRepoRouteWithChildren,
 }
 export const routeTree = rootRouteImport
@@ -220,10 +199,11 @@ export const routeTree = rootRouteImport
   ._addFileTypes<FileRouteTypes>()
 
 import type { getRouter } from './router.tsx'
-import type { createStart } from '@tanstack/react-start'
+import type { startInstance } from './start.ts'
 declare module '@tanstack/react-start' {
   interface Register {
     ssr: true
     router: Awaited<ReturnType<typeof getRouter>>
+    config: Awaited<ReturnType<typeof startInstance.getOptions>>
   }
 }

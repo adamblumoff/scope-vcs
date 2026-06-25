@@ -1,8 +1,4 @@
-import type {
-  RepoGitCredentialView,
-  RepoSettings,
-  RepoSummary,
-} from '@/api/types'
+import type { RepoSettings, RepoSummary } from '@/api/types'
 
 export type SettingKey = 'default-new-file-visibility' | 'push-review'
 
@@ -14,9 +10,6 @@ type SettingsOverride = {
 export type RepoSettingsPageState = {
   deleteError: string | null
   deleteTarget: RepoSummary | null
-  gitCredential: RepoGitCredentialView | null
-  gitCredentialError: string | null
-  gitCredentialPending: boolean
   pendingSetting: SettingKey | null
   settingsError: string | null
   settingsOverride: SettingsOverride | null
@@ -26,9 +19,6 @@ export type RepoSettingsPageAction =
   | { type: 'deleteFailed'; message: string }
   | { type: 'deleteStarted'; repo: RepoSummary }
   | { type: 'deleteTargetChanged'; repo: RepoSummary | null }
-  | { type: 'gitCredentialStarted' }
-  | { credential: RepoGitCredentialView; type: 'gitCredentialSucceeded' }
-  | { message: string; type: 'gitCredentialFailed' }
   | { key: SettingKey; type: 'settingsStarted' }
   | {
       baseSettings: RepoSettings
@@ -40,9 +30,6 @@ export type RepoSettingsPageAction =
 export const initialRepoSettingsPageState: RepoSettingsPageState = {
   deleteError: null,
   deleteTarget: null,
-  gitCredential: null,
-  gitCredentialError: null,
-  gitCredentialPending: false,
   pendingSetting: null,
   settingsError: null,
   settingsOverride: null,
@@ -59,24 +46,6 @@ export function repoSettingsPageReducer(
       return { ...state, deleteError: null, deleteTarget: action.repo }
     case 'deleteTargetChanged':
       return { ...state, deleteTarget: action.repo }
-    case 'gitCredentialStarted':
-      return {
-        ...state,
-        gitCredentialError: null,
-        gitCredentialPending: true,
-      }
-    case 'gitCredentialSucceeded':
-      return {
-        ...state,
-        gitCredential: action.credential,
-        gitCredentialPending: false,
-      }
-    case 'gitCredentialFailed':
-      return {
-        ...state,
-        gitCredentialError: action.message,
-        gitCredentialPending: false,
-      }
     case 'settingsStarted':
       return {
         ...state,

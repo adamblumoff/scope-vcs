@@ -1,7 +1,6 @@
 import type {
   DeleteRepoResponse,
   RepoDetail,
-  RepoGitCredentialView,
   RepoParams,
   RepoSettings,
   RepoSummary,
@@ -11,11 +10,9 @@ import { AppHeader } from '@/components/app-header'
 import { PageContent, PageHeader } from '@/components/page-header'
 import { PageErrorAlert } from '@/components/page-error-alert'
 import { VisibilityBadge } from '@/components/visibility-badge'
-import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert'
 import { Badge } from '@/components/ui/badge'
 import { storeHomeFlash } from '@/lib/home-flash'
 import { Link, useNavigate, useRouter } from '@tanstack/react-router'
-import { CheckCircle2 } from 'lucide-react'
 import { useReducer, useRef } from 'react'
 import { DeleteRepositoryDialog } from './delete-repository-dialog'
 import { SettingsSections } from './repo-settings-sections'
@@ -30,14 +27,12 @@ export function RepoSettingsPage({
   detail,
   initialSettings,
   params,
-  regenerateGitCredential,
   updateSettings,
 }: {
   deleteRepo: (params: RepoParams) => Promise<DeleteRepoResponse>
   detail: RepoDetail
   initialSettings: RepoSettings
   params: RepoParams
-  regenerateGitCredential: (params: RepoParams) => Promise<RepoGitCredentialView>
   updateSettings: (settings: UpdateRepoSettingsInput) => Promise<RepoSettings>
 }) {
   const navigate = useNavigate()
@@ -56,14 +51,10 @@ export function RepoSettingsPage({
   const {
     deleteError,
     deleteTarget,
-    gitCredential,
-    gitCredentialError,
-    gitCredentialPending,
     pendingSetting,
     settingsError,
   } = state
   const settingsSaving = pendingSetting !== null
-  const canResetGitCredential = repo.lifecycle_state === 'Published'
 
   async function saveSettings(
     nextSettings: RepoSettings,
@@ -91,24 +82,6 @@ export function RepoSettingsPage({
       })
     } finally {
       settingsSavePendingRef.current = false
-    }
-  }
-
-  async function resetGitCredential() {
-    if (!canResetGitCredential) {
-      return
-    }
-
-    dispatch({ type: 'gitCredentialStarted' })
-    try {
-      const updated = await regenerateGitCredential(params)
-      dispatch({ credential: updated, type: 'gitCredentialSucceeded' })
-    } catch (error) {
-      dispatch({
-        message:
-          error instanceof Error ? error.message : 'Git credential reset failed',
-        type: 'gitCredentialFailed',
-      })
     }
   }
 
@@ -165,36 +138,16 @@ export function RepoSettingsPage({
           </PageErrorAlert>
         )}
 
-        {gitCredentialError && (
-          <PageErrorAlert title="Git credential reset failed">
-            {gitCredentialError}
-          </PageErrorAlert>
-        )}
-
         {deleteError && (
           <PageErrorAlert title="Repository deletion failed">
             {deleteError}
           </PageErrorAlert>
         )}
 
-        {gitCredential?.push_token.secret && (
-          <Alert className="mt-6">
-            <CheckCircle2 className="size-4" />
-            <AlertTitle>Git credential reset</AlertTitle>
-            <AlertDescription>
-              Run the refreshed command below in your local repo.
-            </AlertDescription>
-          </Alert>
-        )}
-
         <SettingsSections
-          canResetGitCredential={canResetGitCredential}
-          gitCredential={gitCredential}
-          gitCredentialPending={gitCredentialPending}
           onDeleteRepository={() =>
             dispatch({ repo, type: 'deleteTargetChanged' })
           }
-          onResetGitCredential={() => void resetGitCredential()}
           onSaveSettings={(nextSettings, pendingKey) =>
             void saveSettings(nextSettings, pendingKey)
           }

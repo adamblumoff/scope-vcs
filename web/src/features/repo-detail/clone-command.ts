@@ -2,7 +2,7 @@ import {
   defaultGitCommandShell,
   gitCredentialApproveCommandForShell,
   gitCredentialFields,
-  gitCredentialStoreSetupCommands,
+  gitCredentialStoreCommands,
   gitRemoteUrlWithUsername,
   joinShellCommands,
   shellArg,
@@ -29,7 +29,7 @@ export function credentialedCloneCommand(
 ) {
   const remoteUrl = gitCloneCredentialRemoteUrl(source.git_remote_url)
   return joinShellCommands(shell, [
-    ...gitCredentialStoreSetupCommands(shell, remoteUrl),
+    ...gitCredentialStoreCommands(shell, remoteUrl),
     gitCloneCredentialApproveCommand(shell, remoteUrl, gitCloneTokenSecret),
     `git clone -c ${shellArg(
       shell,
