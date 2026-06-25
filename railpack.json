@@ -3,10 +3,10 @@
   "provider": "rust",
   "steps": {
     "build": {
-      "commands": ["sh ./scripts/build-railway.sh ."]
+      "commands": ["sh ./cli/scripts/build-railway.sh cli"]
     }
   },
   "deploy": {
-    "startCommand": "./bin/scope-cli-service"
+    "startCommand": "./cli/bin/scope-cli-service"
   }
 }
