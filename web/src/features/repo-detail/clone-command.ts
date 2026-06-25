@@ -2,7 +2,7 @@ import {
   defaultGitCommandShell,
   gitCredentialApproveCommandForShell,
   gitCredentialFields,
-  gitCredentialUseHttpPathConfig,
+  gitCredentialStoreSetupCommands,
   gitRemoteUrlWithUsername,
   joinShellCommands,
   shellArg,
@@ -28,16 +28,10 @@ export function credentialedCloneCommand(
   shell: GitCommandShell = defaultGitCommandShell,
 ) {
   const remoteUrl = gitCloneCredentialRemoteUrl(source.git_remote_url)
-  const useHttpPathConfig = gitCredentialUseHttpPathConfig(remoteUrl)
-  const useHttpPathConfigArg = `${useHttpPathConfig}=true`
   return joinShellCommands(shell, [
-    gitCloneCredentialApproveCommand(
-      shell,
-      remoteUrl,
-      gitCloneTokenSecret,
-      useHttpPathConfigArg,
-    ),
-    `git clone -c ${shellArg(shell, useHttpPathConfigArg)} -c ${shellArg(
+    ...gitCredentialStoreSetupCommands(shell, remoteUrl),
+    gitCloneCredentialApproveCommand(shell, remoteUrl, gitCloneTokenSecret),
+    `git clone -c ${shellArg(
       shell,
       'http.proactiveAuth=basic',
     )} ${shellArg(shell, remoteUrl)}`,
@@ -48,7 +42,6 @@ function gitCloneCredentialApproveCommand(
   shell: GitCommandShell,
   remoteUrl: string,
   gitCloneTokenSecret: string,
-  useHttpPathConfigArg: string,
 ) {
   return gitCredentialApproveCommandForShell({
     fields: gitCredentialFields({
@@ -56,7 +49,6 @@ function gitCloneCredentialApproveCommand(
       remoteUrl,
       username: gitCredentialUsername,
     }),
-    gitConfigArgs: ['-c', useHttpPathConfigArg],
     shell,
   })
 }

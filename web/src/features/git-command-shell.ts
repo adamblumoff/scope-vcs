@@ -36,6 +36,22 @@ export function gitCredentialUseHttpPathConfig(remoteUrl: string) {
   return `credential.${url.protocol}//${url.host}.useHttpPath`
 }
 
+export function gitCredentialStoreSetupCommands(
+  shell: GitCommandShell,
+  remoteUrl: string,
+) {
+  return [
+    ...gitCredentialStoreDirectoryCommands(shell),
+    gitCredentialStoreHelperConfigCommand(shell, remoteUrl),
+    gitConfigSetCommand(
+      shell,
+      gitCredentialUseHttpPathConfig(remoteUrl),
+      'true',
+      { global: true },
+    ),
+  ]
+}
+
 export function gitRemoteUrlWithUsername(remoteUrl: string, username: string) {
   try {
     const url = new URL(remoteUrl)
@@ -51,8 +67,10 @@ export function gitConfigSetCommand(
   shell: GitCommandShell,
   key: string,
   value: string,
+  options: { global?: boolean } = {},
 ) {
-  return `git config --replace-all ${shellArg(shell, key)} ${shellArg(
+  const scopeArg = options.global ? ' --global' : ''
+  return `git config${scopeArg} --replace-all ${shellArg(shell, key)} ${shellArg(
     shell,
     value,
   )}`
@@ -117,6 +135,45 @@ function credentialInputCommand(shell: GitCommandShell, fields: string[]) {
 
 function gitCredentialPath(url: URL) {
   return url.pathname.replace(/^\/+/, '')
+}
+
+function gitCredentialStoreHelperConfig(remoteUrl: string) {
+  const url = new URL(remoteUrl)
+  return `credential.${url.protocol}//${url.host}.helper`
+}
+
+function gitCredentialStoreDirectoryCommands(shell: GitCommandShell) {
+  switch (shell) {
+    case 'posix':
+      return ['mkdir -p ~/.config/scope', 'chmod 700 ~/.config/scope']
+    case 'powershell':
+      return [
+        "$scopeCredentialDir = ($env:USERPROFILE -replace '\\\\', '/') + '/.config/scope'",
+        'New-Item -ItemType Directory -Force $scopeCredentialDir | Out-Null',
+        '$scopeCredentialFile = "$scopeCredentialDir/git-credentials"',
+      ]
+  }
+}
+
+function gitCredentialStoreHelperConfigCommand(
+  shell: GitCommandShell,
+  remoteUrl: string,
+) {
+  const key = gitCredentialStoreHelperConfig(remoteUrl)
+  switch (shell) {
+    case 'posix':
+      return gitConfigSetCommand(
+        shell,
+        key,
+        'store --file ~/.config/scope/git-credentials',
+        { global: true },
+      )
+    case 'powershell':
+      return `git config --global --replace-all ${shellArg(
+        shell,
+        key,
+      )} "store --file \`"$scopeCredentialFile\`""`
+  }
 }
 
 function posixSingleQuoted(value: string) {

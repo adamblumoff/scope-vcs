@@ -4,7 +4,7 @@ import {
   gitConfigSetCommand,
   gitCredentialApproveCommandForShell,
   gitCredentialFields,
-  gitCredentialUseHttpPathConfig,
+  gitCredentialStoreSetupCommands,
   gitRemoteUrlWithUsername,
   joinShellCommands,
   shellArg,
@@ -56,11 +56,7 @@ export function gitCredentialApproveCommand(
     username: 'scope',
   })
   return joinShellCommands(shell, [
-    gitConfigSetCommand(
-      shell,
-      gitCredentialUseHttpPathConfig(remoteUrl),
-      'true',
-    ),
+    ...gitCredentialStoreSetupCommands(shell, remoteUrl),
     gitCredentialApproveCommandForShell({ fields: credential, shell }),
   ])
 }
