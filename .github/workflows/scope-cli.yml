@@ -80,8 +80,19 @@ jobs:
           toolchain: 1.94.0
           targets: ${{ matrix.target }}
 
+      - name: Cache Rust build outputs
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: |
+            cli -> target
+          key: ${{ matrix.target }}
+          cache-on-failure: true
+
       - name: Install cross
         if: matrix.builder == 'cross'
+        working-directory: cli
+        env:
+          CARGO_TARGET_DIR: target/cargo-install
         run: cargo install cross --locked
 
       - name: Build scope
