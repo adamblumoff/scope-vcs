@@ -53,10 +53,25 @@ fn clerk_token_rejects_wrong_authorized_party() {
 }
 
 #[test]
-fn clerk_token_without_authorized_party_is_allowed() {
+fn clerk_token_without_authorized_party_requires_matching_audience() {
     let jwt = token_with_authorized_party(TEST_CLERK_USER_ID, None);
-    let identity =
-        verify_clerk_token(&jwt, &test_jwks(), TEST_CLERK_ISSUER, &test_clerk_policy()).unwrap();
+    let error = verify_clerk_token(&jwt, &test_jwks(), TEST_CLERK_ISSUER, &test_clerk_policy())
+        .unwrap_err();
+
+    assert_eq!(error.status, StatusCode::UNAUTHORIZED);
+
+    let policy = ClerkTokenPolicy {
+        authorized_parties: vec![LOCAL_APP_ORIGIN.to_string()],
+        audiences: vec![TEST_CLERK_AUDIENCE.to_string()],
+    };
+    let jwt = token_for_claims(
+        TEST_CLERK_USER_ID,
+        Some(TEST_OWNER_EMAIL.to_string()),
+        true,
+        None,
+        Some(serde_json::json!(TEST_CLERK_AUDIENCE)),
+    );
+    let identity = verify_clerk_token(&jwt, &test_jwks(), TEST_CLERK_ISSUER, &policy).unwrap();
 
     assert_eq!(identity.user_id, TEST_CLERK_USER_ID);
 }

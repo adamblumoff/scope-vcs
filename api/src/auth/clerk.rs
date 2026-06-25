@@ -140,31 +140,42 @@ impl ClerkTokenPolicy {
     }
 
     fn validate(&self, claims: &ClerkClaims) -> Result<(), ApiError> {
-        if let Some(azp) = claims.azp.as_deref().map(normalize_claim_value) {
-            if self.authorized_parties.is_empty() {
-                return Err(ApiError::service_unavailable(format!(
-                    "{CLERK_AUTHORIZED_PARTIES_ENV} or {SCOPE_APP_ORIGIN_ENV} is required to validate Clerk authorized parties"
-                )));
-            }
-            if !self
-                .authorized_parties
-                .iter()
-                .any(|allowed| allowed == &azp)
-            {
-                return Err(ApiError::unauthorized(
-                    "Clerk token authorized party is not allowed",
-                ));
-            }
+        if self.authorized_parties.is_empty() && self.audiences.is_empty() {
+            return Err(ApiError::service_unavailable(format!(
+                "{CLERK_AUTHORIZED_PARTIES_ENV}, {SCOPE_APP_ORIGIN_ENV}, or {CLERK_AUDIENCE_ENV} is required to validate Clerk tokens"
+            )));
         }
 
-        if !self.audiences.is_empty()
-            && !claims
+        let audience_allowed = !self.audiences.is_empty()
+            && claims
                 .aud
                 .as_ref()
-                .is_some_and(|audience| audience.matches_any(&self.audiences))
-        {
+                .is_some_and(|audience| audience.matches_any(&self.audiences));
+        if !self.audiences.is_empty() && !audience_allowed {
             return Err(ApiError::unauthorized(
                 "Clerk token audience is not allowed",
+            ));
+        }
+
+        let Some(azp) = claims.azp.as_deref().map(normalize_claim_value) else {
+            if audience_allowed {
+                return Ok(());
+            }
+            return Err(ApiError::unauthorized(
+                "Clerk token is missing authorized party",
+            ));
+        };
+
+        if self.authorized_parties.is_empty() {
+            return Ok(());
+        }
+        if !self
+            .authorized_parties
+            .iter()
+            .any(|allowed| allowed == &azp)
+        {
+            return Err(ApiError::unauthorized(
+                "Clerk token authorized party is not allowed",
             ));
         }
 

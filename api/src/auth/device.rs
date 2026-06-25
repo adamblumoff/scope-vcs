@@ -15,6 +15,7 @@ use std::{
 
 const USER_CODE_BYTES: usize = 16;
 pub(crate) const MAX_PENDING_DEVICE_LOGINS: usize = 1024;
+pub(crate) const MAX_PENDING_DEVICE_LOGINS_PER_CLIENT: usize = 3;
 const MAX_FAILED_COMPLETION_ATTEMPTS: u32 = 10;
 const COMPLETION_ATTEMPT_WINDOW_SECS: u64 = 60;
 
@@ -27,12 +28,14 @@ pub(crate) struct DeviceLoginStore {
 struct DeviceLoginState {
     logins_by_device_code: BTreeMap<String, DeviceLoginEntry>,
     device_code_by_user_code: BTreeMap<String, String>,
+    pending_count_by_client_key: BTreeMap<String, usize>,
     access_sessions_by_token_hash: BTreeMap<String, CliAccessSession>,
     completion_attempts_by_user_id: BTreeMap<String, CompletionAttemptWindow>,
 }
 
 struct DeviceLoginEntry {
     user_code: String,
+    client_key: String,
     expires_at_unix: u64,
     completed: Option<CompletedDeviceLogin>,
 }
@@ -74,11 +77,27 @@ pub(crate) enum DeviceLoginPoll {
 }
 
 impl DeviceLoginStore {
-    pub(crate) fn start(&self, app_origin: &str) -> Result<DeviceLoginStart, ApiError> {
+    pub(crate) fn start(
+        &self,
+        app_origin: &str,
+        client_key: &str,
+    ) -> Result<DeviceLoginStart, ApiError> {
         let now = unix_now()?;
         let expires_at_unix = now + CLI_DEVICE_LOGIN_TTL_SECS;
         let mut state = self.lock_state();
         state.cleanup_expired(now);
+        let client_key = normalize_client_key(client_key);
+        if state
+            .pending_count_by_client_key
+            .get(&client_key)
+            .copied()
+            .unwrap_or_default()
+            >= MAX_PENDING_DEVICE_LOGINS_PER_CLIENT
+        {
+            return Err(ApiError::too_many_requests(
+                "too many pending CLI device logins for this client",
+            ));
+        }
         if state.logins_by_device_code.len() >= MAX_PENDING_DEVICE_LOGINS {
             return Err(ApiError::too_many_requests(
                 "too many pending CLI device logins",
@@ -101,6 +120,7 @@ impl DeviceLoginStore {
         );
         let entry = DeviceLoginEntry {
             user_code: user_code.clone(),
+            client_key: client_key.clone(),
             expires_at_unix,
             completed: None,
         };
@@ -111,6 +131,10 @@ impl DeviceLoginStore {
         state
             .logins_by_device_code
             .insert(device_code.clone(), entry);
+        *state
+            .pending_count_by_client_key
+            .entry(client_key)
+            .or_default() += 1;
 
         Ok(DeviceLoginStart {
             device_code,
@@ -255,6 +279,7 @@ impl DeviceLoginState {
     fn remove_login(&mut self, device_code: &str) -> Option<DeviceLoginEntry> {
         let entry = self.logins_by_device_code.remove(device_code)?;
         self.device_code_by_user_code.remove(&entry.user_code);
+        decrement_pending_client_count(&mut self.pending_count_by_client_key, &entry.client_key);
         Some(entry)
     }
 
@@ -311,6 +336,25 @@ fn random_user_code() -> Result<String, ApiError> {
         ApiError::internal_message(format!("failed to generate login code: {error}"))
     })?;
     Ok(hex::encode_upper(bytes))
+}
+
+fn normalize_client_key(value: &str) -> String {
+    let value = value.trim();
+    if value.is_empty() {
+        "unknown".to_string()
+    } else {
+        value.to_string()
+    }
+}
+
+fn decrement_pending_client_count(counts: &mut BTreeMap<String, usize>, client_key: &str) {
+    let Some(count) = counts.get_mut(client_key) else {
+        return;
+    };
+    *count = count.saturating_sub(1);
+    if *count == 0 {
+        counts.remove(client_key);
+    }
 }
 
 fn normalize_user_code(value: &str) -> String {

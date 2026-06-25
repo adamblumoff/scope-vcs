@@ -212,14 +212,31 @@ async fn cli_device_login_completion_is_single_use() {
 }
 
 #[test]
-fn cli_device_login_start_is_bounded() {
+fn cli_device_login_start_is_bounded_per_client() {
     let store = crate::auth::device::DeviceLoginStore::default();
 
-    for _ in 0..crate::auth::device::MAX_PENDING_DEVICE_LOGINS {
-        store.start(LOCAL_APP_ORIGIN).unwrap();
+    for _ in 0..crate::auth::device::MAX_PENDING_DEVICE_LOGINS_PER_CLIENT {
+        store.start(LOCAL_APP_ORIGIN, "client-a").unwrap();
     }
-    let error = match store.start(LOCAL_APP_ORIGIN) {
-        Ok(_) => panic!("device login start should be capped"),
+    let error = match store.start(LOCAL_APP_ORIGIN, "client-a") {
+        Ok(_) => panic!("device login start should be capped per client"),
+        Err(error) => error,
+    };
+
+    assert_eq!(error.status, StatusCode::TOO_MANY_REQUESTS);
+}
+
+#[test]
+fn cli_device_login_start_is_bounded_globally() {
+    let store = crate::auth::device::DeviceLoginStore::default();
+
+    for index in 0..crate::auth::device::MAX_PENDING_DEVICE_LOGINS {
+        store
+            .start(LOCAL_APP_ORIGIN, &format!("client-{index}"))
+            .unwrap();
+    }
+    let error = match store.start(LOCAL_APP_ORIGIN, "overflow-client") {
+        Ok(_) => panic!("device login start should be capped globally"),
         Err(error) => error,
     };
 
