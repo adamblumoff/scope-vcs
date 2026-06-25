@@ -9,6 +9,7 @@
 // Additionally, you should also exclude this file from your linter and/or formatter to prevent it from being checked or modified.
 
 import { Route as rootRouteImport } from './routes/__root'
+import { Route as CliLoginRouteImport } from './routes/cli-login'
 import { Route as IndexRouteImport } from './routes/index'
 import { Route as SignUpSplatRouteImport } from './routes/sign-up.$'
 import { Route as SignInSplatRouteImport } from './routes/sign-in.$'
@@ -17,6 +18,11 @@ import { Route as ReposOwnerRepoSettingsRouteImport } from './routes/repos.$owne
 import { Route as ReposOwnerRepoReviewRouteImport } from './routes/repos.$owner.$repo.review'
 import { Route as ReposOwnerRepoHistoryRouteImport } from './routes/repos.$owner.$repo.history'
 
+const CliLoginRoute = CliLoginRouteImport.update({
+  id: '/cli-login',
+  path: '/cli-login',
+  getParentRoute: () => rootRouteImport,
+} as any)
 const IndexRoute = IndexRouteImport.update({
   id: '/',
   path: '/',
@@ -55,6 +61,7 @@ const ReposOwnerRepoHistoryRoute = ReposOwnerRepoHistoryRouteImport.update({
 
 export interface FileRoutesByFullPath {
   '/': typeof IndexRoute
+  '/cli-login': typeof CliLoginRoute
   '/sign-in/$': typeof SignInSplatRoute
   '/sign-up/$': typeof SignUpSplatRoute
   '/repos/$owner/$repo': typeof ReposOwnerRepoRouteWithChildren
@@ -64,6 +71,7 @@ export interface FileRoutesByFullPath {
 }
 export interface FileRoutesByTo {
   '/': typeof IndexRoute
+  '/cli-login': typeof CliLoginRoute
   '/sign-in/$': typeof SignInSplatRoute
   '/sign-up/$': typeof SignUpSplatRoute
   '/repos/$owner/$repo': typeof ReposOwnerRepoRouteWithChildren
@@ -74,6 +82,7 @@ export interface FileRoutesByTo {
 export interface FileRoutesById {
   __root__: typeof rootRouteImport
   '/': typeof IndexRoute
+  '/cli-login': typeof CliLoginRoute
   '/sign-in/$': typeof SignInSplatRoute
   '/sign-up/$': typeof SignUpSplatRoute
   '/repos/$owner/$repo': typeof ReposOwnerRepoRouteWithChildren
@@ -85,6 +94,7 @@ export interface FileRouteTypes {
   fileRoutesByFullPath: FileRoutesByFullPath
   fullPaths:
     | '/'
+    | '/cli-login'
     | '/sign-in/$'
     | '/sign-up/$'
     | '/repos/$owner/$repo'
@@ -94,6 +104,7 @@ export interface FileRouteTypes {
   fileRoutesByTo: FileRoutesByTo
   to:
     | '/'
+    | '/cli-login'
     | '/sign-in/$'
     | '/sign-up/$'
     | '/repos/$owner/$repo'
@@ -103,6 +114,7 @@ export interface FileRouteTypes {
   id:
     | '__root__'
     | '/'
+    | '/cli-login'
     | '/sign-in/$'
     | '/sign-up/$'
     | '/repos/$owner/$repo'
@@ -113,6 +125,7 @@ export interface FileRouteTypes {
 }
 export interface RootRouteChildren {
   IndexRoute: typeof IndexRoute
+  CliLoginRoute: typeof CliLoginRoute
   SignInSplatRoute: typeof SignInSplatRoute
   SignUpSplatRoute: typeof SignUpSplatRoute
   ReposOwnerRepoRoute: typeof ReposOwnerRepoRouteWithChildren
@@ -120,6 +133,13 @@ export interface RootRouteChildren {
 
 declare module '@tanstack/react-router' {
   interface FileRoutesByPath {
+    '/cli-login': {
+      id: '/cli-login'
+      path: '/cli-login'
+      fullPath: '/cli-login'
+      preLoaderRoute: typeof CliLoginRouteImport
+      parentRoute: typeof rootRouteImport
+    }
     '/': {
       id: '/'
       path: '/'
@@ -190,6 +210,7 @@ const ReposOwnerRepoRouteWithChildren = ReposOwnerRepoRoute._addFileChildren(
 
 const rootRouteChildren: RootRouteChildren = {
   IndexRoute: IndexRoute,
+  CliLoginRoute: CliLoginRoute,
   SignInSplatRoute: SignInSplatRoute,
   SignUpSplatRoute: SignUpSplatRoute,
   ReposOwnerRepoRoute: ReposOwnerRepoRouteWithChildren,

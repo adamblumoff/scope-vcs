@@ -45,6 +45,7 @@ use tower::ServiceExt;
 mod admin;
 mod auth;
 mod commit_history;
+mod device_login;
 mod git_http;
 mod git_receive;
 mod obsolete_routes;
@@ -181,6 +182,7 @@ fn test_state_with_repo() -> AppState {
             Some(TEST_CLERK_ISSUER.to_string()),
             Some("http://127.0.0.1/.well-known/jwks.json".to_string()),
         ),
+        device_logins: crate::auth::device::DeviceLoginStore::default(),
         object_store: Arc::new(MemoryObjectStore::new()),
         operator_token: None,
     }
@@ -200,6 +202,7 @@ fn test_state_with_metadata(metadata: crate::db::MetadataStore) -> AppState {
             Some(TEST_CLERK_ISSUER.to_string()),
             Some("http://127.0.0.1/.well-known/jwks.json".to_string()),
         ),
+        device_logins: crate::auth::device::DeviceLoginStore::default(),
         object_store: Arc::new(MemoryObjectStore::new()),
         operator_token: None,
     };

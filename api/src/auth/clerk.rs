@@ -1,7 +1,7 @@
 use crate::domain::policy::Principal;
 use crate::domain::store::{AccountAccess, AppCatalog, StoredRepository, UserAccount};
 use crate::{
-    config::{CLERK_ISSUER_ENV, CLERK_JWKS_URL_ENV, non_empty_env},
+    config::{CLERK_ISSUER_ENV, CLERK_JWKS_URL_ENV, CLI_ACCESS_TOKEN_PREFIX, non_empty_env},
     error::ApiError,
     http::responses::SessionIdentity,
     state::AppState,
@@ -181,6 +181,10 @@ pub(crate) async fn http_identity(
     let Some(token) = bearer_token(headers)? else {
         return Ok(None);
     };
+
+    if token.starts_with(CLI_ACCESS_TOKEN_PREFIX) {
+        return state.device_logins.verify_access_token(token).map(Some);
+    }
 
     state.clerk.verify(token).await.map(Some)
 }

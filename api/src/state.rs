@@ -5,7 +5,7 @@ use crate::domain::store::{
     AppCatalog, RepoPublicationState, RepoRole, SourceBlob, StoredRepository, repo_id,
 };
 use crate::{
-    auth::clerk::ClerkVerifier,
+    auth::{clerk::ClerkVerifier, device::DeviceLoginStore},
     config::{SCOPE_OPERATOR_TOKEN_ENV, data_dir, git_repo_root, non_empty_env},
     db::MetadataStore,
     error::ApiError,
@@ -24,6 +24,7 @@ pub struct AppState {
     pub(crate) metadata: MetadataStore,
     pub(crate) data_dir: Arc<PathBuf>,
     pub(crate) clerk: ClerkVerifier,
+    pub(crate) device_logins: DeviceLoginStore,
     pub(crate) object_store: Arc<dyn ObjectStore>,
     pub(crate) operator_token: Option<Arc<str>>,
 }
@@ -124,6 +125,7 @@ impl AppState {
             metadata: MetadataStore::connect_from_env()?,
             data_dir: Arc::new(data_dir),
             clerk: ClerkVerifier::from_env(),
+            device_logins: DeviceLoginStore::default(),
             object_store: Arc::new(EncryptedObjectStore::from_env(Arc::new(
                 S3ObjectStore::from_env()?,
             ))?),
@@ -145,6 +147,7 @@ impl AppState {
                 Some("https://clerk.test".to_string()),
                 Some("http://127.0.0.1/.well-known/jwks.json".to_string()),
             ),
+            device_logins: DeviceLoginStore::default(),
             object_store: Arc::new(crate::object_store::MemoryObjectStore::new()),
             operator_token: None,
         }

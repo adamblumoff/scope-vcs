@@ -89,6 +89,38 @@ pub(crate) struct SessionCapabilities {
     pub(crate) write: bool,
 }
 
+#[derive(Clone, Copy, Debug, Serialize)]
+#[cfg_attr(test, derive(ts_rs::TS))]
+pub(crate) enum DeviceLoginStatus {
+    Pending,
+    Complete,
+}
+
+#[derive(Debug, Serialize)]
+#[cfg_attr(test, derive(ts_rs::TS))]
+pub(crate) struct DeviceLoginStartResponse {
+    pub(crate) device_code: String,
+    pub(crate) user_code: String,
+    pub(crate) verification_url: String,
+    pub(crate) expires_at_unix: u64,
+    pub(crate) poll_interval_secs: u64,
+}
+
+#[derive(Debug, Serialize)]
+#[cfg_attr(test, derive(ts_rs::TS))]
+pub(crate) struct DeviceLoginPollResponse {
+    pub(crate) status: DeviceLoginStatus,
+    pub(crate) access_token: Option<String>,
+    pub(crate) expires_at_unix: u64,
+    pub(crate) identity: Option<SessionIdentity>,
+}
+
+#[derive(Debug, Serialize)]
+#[cfg_attr(test, derive(ts_rs::TS))]
+pub(crate) struct DeviceLoginCompleteResponse {
+    pub(crate) status: DeviceLoginStatus,
+}
+
 #[derive(Debug, Serialize)]
 #[cfg_attr(test, derive(ts_rs::TS))]
 pub(crate) struct RepoSummaryResponse {

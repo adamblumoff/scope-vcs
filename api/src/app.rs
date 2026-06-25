@@ -15,6 +15,18 @@ pub fn router(state: AppState) -> Router {
             "/v1/admin/metadata/reset",
             post(http::admin::reset_metadata),
         )
+        .route(
+            "/v1/cli/device-login",
+            post(http::device_login::start_cli_device_login),
+        )
+        .route(
+            "/v1/cli/device-login/{user_code}/complete",
+            post(http::device_login::complete_cli_device_login),
+        )
+        .route(
+            "/v1/cli/device-login/{device_code}/poll",
+            post(http::device_login::poll_cli_device_login),
+        )
         .route("/v1/session", get(http::account::get_account_session))
         .route(
             "/v1/repos",

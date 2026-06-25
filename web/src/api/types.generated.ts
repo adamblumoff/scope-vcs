@@ -28,6 +28,14 @@ export type SessionRepo = { id: string, publication_state: RepoPublicationState,
 
 export type SessionCapabilities = { read: boolean, write: boolean, };
 
+export type DeviceLoginStatus = "Pending" | "Complete";
+
+export type DeviceLoginStartResponse = { device_code: string, user_code: string, verification_url: string, expires_at_unix: number, poll_interval_secs: number, };
+
+export type DeviceLoginPollResponse = { status: DeviceLoginStatus, access_token: string | null, expires_at_unix: number, identity: SessionIdentity | null, };
+
+export type DeviceLoginCompleteResponse = { status: DeviceLoginStatus, };
+
 export type RepoSummaryResponse = { id: string, owner_handle: string, name: string, lifecycle_state: RepoPublicationState, default_visibility: Visibility, role: RepoRole | null, staged_update_pending: boolean, };
 
 export type CreateRepoRequest = { name: string, visibility: Visibility | null, };

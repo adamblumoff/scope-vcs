@@ -10,13 +10,12 @@ use crate::{
         },
         tokens::{generate_first_push_token, generate_git_clone_token, generate_git_push_token},
     },
-    config::{
-        LOCAL_API_ORIGIN, LOCAL_APP_ORIGIN, SCOPE_API_PUBLIC_URL_ENV, SCOPE_APP_ORIGIN_ENV,
-        non_empty_env,
-    },
     error::ApiError,
-    http::projection_preview::{ensure_projection_preview_access, projection_preview_repo},
     http::responses::*,
+    http::{
+        origins::{public_api_origin, public_app_origin},
+        projection_preview::{ensure_projection_preview_access, projection_preview_repo},
+    },
     persistence::unix_now,
     state::AppState,
     state::{ensure_repo_read, find_repo, role_for_principal},
@@ -78,7 +77,7 @@ pub(crate) async fn create_repo(
     let summary = repo_summary_for_user(&repo, &user_id)
         .ok_or_else(|| ApiError::internal_message("created repository is missing owner role"))?;
     let api_origin = public_api_origin()?;
-    let app_origin = public_app_origin()?;
+    let app_origin = public_app_origin("create repository init metadata")?;
     let init = repo_init_response(
         &repo,
         &user_id,
@@ -95,28 +94,6 @@ pub(crate) async fn create_repo(
     };
 
     Ok(Json(created))
-}
-
-fn public_api_origin() -> Result<String, ApiError> {
-    non_empty_env(SCOPE_API_PUBLIC_URL_ENV)
-        .or_else(|| cfg!(debug_assertions).then(|| LOCAL_API_ORIGIN.to_string()))
-        .map(|value| value.trim_end_matches('/').to_string())
-        .ok_or_else(|| {
-            ApiError::service_unavailable(format!(
-                "{SCOPE_API_PUBLIC_URL_ENV} is required to create repository init metadata"
-            ))
-        })
-}
-
-fn public_app_origin() -> Result<String, ApiError> {
-    non_empty_env(SCOPE_APP_ORIGIN_ENV)
-        .or_else(|| cfg!(debug_assertions).then(|| LOCAL_APP_ORIGIN.to_string()))
-        .map(|value| value.trim_end_matches('/').to_string())
-        .ok_or_else(|| {
-            ApiError::service_unavailable(format!(
-                "{SCOPE_APP_ORIGIN_ENV} is required to create repository init metadata"
-            ))
-        })
 }
 
 pub(crate) async fn get_repo(
