@@ -14,7 +14,6 @@ pub fn posix_install_script(base_url: &str, manifest: &DistributionManifest) -> 
 set -eu
 
 base_url="{base_url}"
-install_dir="${{SCOPE_INSTALL_DIR:-$HOME/.local/bin}}"
 target="$(uname -s)-$(uname -m)"
 
 case "$target" in
@@ -25,7 +24,53 @@ case "$target" in
     ;;
 esac
 
+path_contains() {{
+  case ":${{PATH:-}}:" in
+    *":$1:"*) return 0 ;;
+    *) return 1 ;;
+  esac
+}}
+
+choose_install_dir() {{
+  if [ -n "${{SCOPE_INSTALL_DIR:-}}" ]; then
+    printf '%s\n' "$SCOPE_INSTALL_DIR"
+    return
+  fi
+
+  for candidate in "$HOME/.local/bin" "$HOME/bin" "$HOME/.cargo/bin" "/opt/homebrew/bin" "/usr/local/bin"; do
+    if [ -d "$candidate" ] && [ -w "$candidate" ] && path_contains "$candidate"; then
+      printf '%s\n' "$candidate"
+      return
+    fi
+  done
+
+  old_ifs="$IFS"
+  IFS=:
+  for candidate in ${{PATH:-}}; do
+    IFS="$old_ifs"
+    case "$candidate" in
+      /*)
+        if [ -d "$candidate" ] && [ -w "$candidate" ]; then
+          printf '%s\n' "$candidate"
+          return
+        fi
+        ;;
+    esac
+    IFS=:
+  done
+  IFS="$old_ifs"
+
+  printf '%s\n' "$HOME/.local/bin"
+}}
+
+install_dir="$(choose_install_dir)"
 mkdir -p "$install_dir"
+if ! path_contains "$install_dir"; then
+  echo "scope install directory is not on PATH: $install_dir" >&2
+  echo "Set SCOPE_INSTALL_DIR to a writable directory already on PATH and rerun." >&2
+  exit 1
+fi
+
 tmp_file="$(mktemp)"
 checksum_file="$(mktemp)"
 trap 'rm -f "$tmp_file" "$checksum_file"' EXIT
@@ -203,6 +248,8 @@ mod tests {
         assert!(script.contains("Linux-aarch64|Linux-arm64"));
         assert!(script.contains("Darwin-x86_64|Darwin-amd64"));
         assert!(script.contains("Darwin-arm64|Darwin-aarch64"));
+        assert!(script.contains("choose_install_dir"));
+        assert!(script.contains("scope install directory is not on PATH"));
         assert!(script.contains("$base_url/downloads/$artifact.sha256"));
         assert!(script.contains(r#"chmod 755 "$install_dir/scope""#));
     }
