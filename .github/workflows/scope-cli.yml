@@ -169,8 +169,7 @@ jobs:
           RAILWAY_PROJECT_ID: ${{ secrets.RAILWAY_PROJECT_ID }}
           RAILWAY_TOKEN: ${{ secrets.RAILWAY_TOKEN }}
         run: >
-          railway up ./cli
-          --path-as-root
+          railway up .
           --no-gitignore
           --project "$RAILWAY_PROJECT_ID"
           --service scope-cli
