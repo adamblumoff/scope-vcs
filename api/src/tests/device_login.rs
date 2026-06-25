@@ -7,13 +7,7 @@ async fn cli_device_login_exchanges_browser_auth_for_cli_token() {
 
     let start = app
         .clone()
-        .oneshot(
-            Request::builder()
-                .method("POST")
-                .uri("/v1/cli/device-login")
-                .body(Body::empty())
-                .unwrap(),
-        )
+        .oneshot(start_device_login_request())
         .await
         .unwrap();
     assert_eq!(start.status(), StatusCode::OK);
@@ -97,13 +91,7 @@ async fn cli_device_login_completion_requires_clerk_auth() {
     let app = router(test_state_with_jwks());
     let start = app
         .clone()
-        .oneshot(
-            Request::builder()
-                .method("POST")
-                .uri("/v1/cli/device-login")
-                .body(Body::empty())
-                .unwrap(),
-        )
+        .oneshot(start_device_login_request())
         .await
         .unwrap();
     let user_code = response_json(start).await["user_code"]
@@ -169,13 +157,7 @@ async fn cli_device_login_completion_is_single_use() {
     let app = router(test_state_with_jwks());
     let start = app
         .clone()
-        .oneshot(
-            Request::builder()
-                .method("POST")
-                .uri("/v1/cli/device-login")
-                .body(Body::empty())
-                .unwrap(),
-        )
+        .oneshot(start_device_login_request())
         .await
         .unwrap();
     let user_code = response_json(start).await["user_code"]
@@ -241,4 +223,16 @@ fn cli_device_login_start_is_bounded_globally() {
     };
 
     assert_eq!(error.status, StatusCode::TOO_MANY_REQUESTS);
+}
+
+fn start_device_login_request() -> Request<Body> {
+    Request::builder()
+        .method("POST")
+        .uri("/v1/cli/device-login")
+        .extension(axum::extract::ConnectInfo(std::net::SocketAddr::from((
+            [127, 0, 0, 1],
+            49000,
+        ))))
+        .body(Body::empty())
+        .unwrap()
 }

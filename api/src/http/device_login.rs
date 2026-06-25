@@ -12,18 +12,19 @@ use crate::{
 };
 use axum::{
     Json,
-    extract::{Path, State},
+    extract::{ConnectInfo, Path, State},
     http::HeaderMap,
 };
+use std::net::SocketAddr;
 
 pub(crate) async fn start_cli_device_login(
     State(state): State<AppState>,
-    headers: HeaderMap,
+    ConnectInfo(addr): ConnectInfo<SocketAddr>,
 ) -> Result<Json<DeviceLoginStartResponse>, ApiError> {
     let app_origin = public_app_origin("build CLI login URL")?;
     let login = state
         .device_logins
-        .start(&app_origin, &device_login_client_key(&headers))?;
+        .start(&app_origin, &device_login_client_key(addr))?;
 
     Ok(Json(DeviceLoginStartResponse {
         device_code: login.device_code,
@@ -34,17 +35,8 @@ pub(crate) async fn start_cli_device_login(
     }))
 }
 
-fn device_login_client_key(headers: &HeaderMap) -> String {
-    for name in ["x-forwarded-for", "x-real-ip", "cf-connecting-ip"] {
-        if let Some(value) = headers.get(name).and_then(|value| value.to_str().ok()) {
-            let first = value.split(',').next().unwrap_or_default().trim();
-            if !first.is_empty() {
-                return first.to_string();
-            }
-        }
-    }
-
-    "unknown".to_string()
+fn device_login_client_key(addr: SocketAddr) -> String {
+    addr.ip().to_string()
 }
 
 pub(crate) async fn complete_cli_device_login(
