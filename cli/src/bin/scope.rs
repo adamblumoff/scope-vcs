@@ -5,7 +5,8 @@ use reqwest::{StatusCode, blocking::Client};
 use serde::{Deserialize, Serialize};
 use std::{
     env,
-    io::{self, Write},
+    io::{self, Read, Write},
+    net::{TcpListener, TcpStream},
     process::Command,
     thread,
     time::{Duration, SystemTime, UNIX_EPOCH},
@@ -41,6 +42,8 @@ struct InitArgs {
 struct LoginArgs {
     #[arg(long)]
     headless: bool,
+    #[arg(long, value_name = "TOKEN")]
+    exchange: Option<String>,
 }
 
 #[derive(Clone, Copy, Debug, Serialize)]
@@ -62,6 +65,35 @@ struct DeviceLoginStartResponse {
 struct DeviceLoginPollResponse {
     status: DeviceLoginStatus,
     session_token: Option<String>,
+}
+
+#[derive(Serialize)]
+struct BrowserLoginStartRequest {
+    callback_url: String,
+}
+
+#[derive(Deserialize)]
+struct BrowserLoginStartResponse {
+    request_id: String,
+    request_secret: String,
+    authorization_url: String,
+    expires_at_unix: u64,
+}
+
+#[derive(Serialize)]
+struct BrowserLoginExchangeRequest {
+    request_secret: String,
+    callback_code: String,
+}
+
+#[derive(Serialize)]
+struct CliExchangeGrantExchangeRequest {
+    exchange_token: String,
+}
+
+#[derive(Deserialize)]
+struct CliSessionTokenResponse {
+    session_token: String,
 }
 
 #[derive(Deserialize)]
@@ -168,18 +200,33 @@ fn init(args: InitArgs) -> anyhow::Result<()> {
 }
 
 fn login(args: LoginArgs) -> anyhow::Result<()> {
+    if args.headless && args.exchange.is_some() {
+        bail!("--headless and --exchange cannot be used together");
+    }
+
     let api_url = api_url();
     let client = Client::builder()
         .timeout(Duration::from_secs(20))
         .build()
         .context("build HTTP client")?;
 
+    if let Some(exchange_token) = args.exchange {
+        let session = exchange_login(&client, &api_url, &exchange_token)?;
+        store_session_token(&api_url, &session.token)?;
+        println!("Signed in as {}", display_user(&session.user));
+        return Ok(());
+    }
+
     if let Some(session) = cached_cli_session(&client, &api_url)? {
         println!("Signed in as {}", display_user(&session.user));
         return Ok(());
     }
 
-    let session = browser_login(&client, &api_url, !args.headless)?;
+    let session = if args.headless {
+        device_login(&client, &api_url, false)?
+    } else {
+        local_browser_login(&client, &api_url)?
+    };
     store_session_token(&api_url, &session.token)?;
     println!("Signed in as {}", display_user(&session.user));
     Ok(())
@@ -224,7 +271,7 @@ fn ensure_cli_session(client: &Client, api_url: &str) -> anyhow::Result<Authenti
         return Ok(session);
     }
 
-    let session = browser_login(client, api_url, true)?;
+    let session = local_browser_login(client, api_url)?;
     store_session_token(api_url, &session.token)?;
     Ok(session)
 }
@@ -246,7 +293,83 @@ fn cached_cli_session(
     }
 }
 
-fn browser_login(
+fn local_browser_login(client: &Client, api_url: &str) -> anyhow::Result<AuthenticatedSession> {
+    let listener = TcpListener::bind("127.0.0.1:0").context("bind local Scope login callback")?;
+    listener
+        .set_nonblocking(true)
+        .context("configure local Scope login callback")?;
+    let port = listener
+        .local_addr()
+        .context("read local Scope login callback address")?
+        .port();
+    let callback_url = format!("http://127.0.0.1:{port}/scope-cli-callback");
+    let start: BrowserLoginStartResponse = client
+        .post(format!("{api_url}/v1/cli/browser-login"))
+        .json(&BrowserLoginStartRequest { callback_url })
+        .send()
+        .context("start browser login")?
+        .error_for_status()
+        .context("start browser login")?
+        .json()
+        .context("parse browser login response")?;
+
+    eprintln!("Opening browser to sign in:");
+    eprintln!("{}", start.authorization_url);
+    if let Err(error) = webbrowser::open(&start.authorization_url) {
+        eprintln!("Could not open browser automatically: {error}");
+        eprintln!("Open the URL above to continue.");
+    }
+
+    let callback_code =
+        wait_for_browser_callback(&listener, &start.request_id, start.expires_at_unix)?;
+    let exchanged: CliSessionTokenResponse = client
+        .post(format!(
+            "{api_url}/v1/cli/browser-login/{}/exchange",
+            start.request_id
+        ))
+        .json(&BrowserLoginExchangeRequest {
+            request_secret: start.request_secret,
+            callback_code,
+        })
+        .send()
+        .context("exchange browser login")?
+        .error_for_status()
+        .context("exchange browser login")?
+        .json()
+        .context("parse browser login exchange response")?;
+    let user = validate_session_token(client, api_url, &exchanged.session_token)?
+        .context("completed login did not create a valid CLI session")?;
+    Ok(AuthenticatedSession {
+        token: exchanged.session_token,
+        user,
+    })
+}
+
+fn exchange_login(
+    client: &Client,
+    api_url: &str,
+    exchange_token: &str,
+) -> anyhow::Result<AuthenticatedSession> {
+    let exchanged: CliSessionTokenResponse = client
+        .post(format!("{api_url}/v1/cli/exchange-grants/exchange"))
+        .json(&CliExchangeGrantExchangeRequest {
+            exchange_token: exchange_token.to_string(),
+        })
+        .send()
+        .context("exchange Scope login token")?
+        .error_for_status()
+        .context("exchange Scope login token")?
+        .json()
+        .context("parse Scope login exchange response")?;
+    let user = validate_session_token(client, api_url, &exchanged.session_token)?
+        .context("exchange token did not create a valid CLI session")?;
+    Ok(AuthenticatedSession {
+        token: exchanged.session_token,
+        user,
+    })
+}
+
+fn device_login(
     client: &Client,
     api_url: &str,
     open_browser: bool,
@@ -294,6 +417,110 @@ fn browser_login(
             return Ok(AuthenticatedSession { token, user });
         }
     }
+}
+
+fn wait_for_browser_callback(
+    listener: &TcpListener,
+    expected_request_id: &str,
+    expires_at_unix: u64,
+) -> anyhow::Result<String> {
+    eprintln!("Waiting for browser confirmation...");
+    loop {
+        if unix_now() >= expires_at_unix {
+            bail!("browser login expired");
+        }
+
+        match listener.accept() {
+            Ok((mut stream, _)) => match read_browser_callback(&mut stream, expected_request_id) {
+                Ok(callback_code) => {
+                    write_browser_callback_response(
+                        &mut stream,
+                        "200 OK",
+                        "Scope CLI sign-in complete. You can close this tab.",
+                    );
+                    return Ok(callback_code);
+                }
+                Err(error) => {
+                    write_browser_callback_response(
+                        &mut stream,
+                        "400 Bad Request",
+                        "Scope CLI sign-in failed. Return to your terminal and try again.",
+                    );
+                    eprintln!("Ignoring invalid browser callback: {error}");
+                }
+            },
+            Err(error) if error.kind() == io::ErrorKind::WouldBlock => {
+                thread::sleep(Duration::from_millis(100));
+            }
+            Err(error) => return Err(error).context("accept local Scope login callback"),
+        }
+    }
+}
+
+fn read_browser_callback(
+    stream: &mut TcpStream,
+    expected_request_id: &str,
+) -> anyhow::Result<String> {
+    let mut buffer = [0_u8; 4096];
+    let byte_count = stream
+        .read(&mut buffer)
+        .context("read local Scope login callback")?;
+    let request = String::from_utf8_lossy(&buffer[..byte_count]);
+    let request_line = request
+        .lines()
+        .next()
+        .context("local Scope login callback was empty")?;
+    let mut parts = request_line.split_whitespace();
+    let method = parts
+        .next()
+        .context("local Scope login callback missing method")?;
+    if method != "GET" {
+        bail!("local Scope login callback must use GET");
+    }
+    let target = parts
+        .next()
+        .context("local Scope login callback missing path")?;
+    browser_callback_code_from_target(target, expected_request_id)
+}
+
+fn browser_callback_code_from_target(
+    target: &str,
+    expected_request_id: &str,
+) -> anyhow::Result<String> {
+    let url = if target.starts_with("http://") {
+        reqwest::Url::parse(target)
+    } else {
+        reqwest::Url::parse(&format!("http://127.0.0.1{target}"))
+    }
+    .context("parse local Scope login callback URL")?;
+    if url.path() != "/scope-cli-callback" {
+        bail!("local Scope login callback used an unexpected path");
+    }
+
+    let mut request_id = None;
+    let mut callback_code = None;
+    for (key, value) in url.query_pairs() {
+        match key.as_ref() {
+            "request_id" => request_id = Some(value.into_owned()),
+            "code" => callback_code = Some(value.into_owned()),
+            _ => {}
+        }
+    }
+
+    if request_id.as_deref() != Some(expected_request_id) {
+        bail!("local Scope login callback request id did not match");
+    }
+    callback_code.context("local Scope login callback missing code")
+}
+
+fn write_browser_callback_response(stream: &mut TcpStream, status: &str, message: &str) {
+    let body = format!("<!doctype html><title>Scope CLI</title><p>{message}</p>");
+    let response = format!(
+        "HTTP/1.1 {status}\r\nContent-Type: text/html; charset=utf-8\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+        body.len()
+    );
+    let _ = stream.write_all(response.as_bytes());
+    let _ = stream.flush();
 }
 
 fn validate_session_token(
@@ -555,6 +782,29 @@ mod tests {
         assert_ne!(
             session_keychain_username("https://scope-api-production.up.railway.app"),
             session_keychain_username("http://localhost:8080")
+        );
+    }
+
+    #[test]
+    fn browser_callback_target_returns_code_for_matching_request() {
+        assert_eq!(
+            browser_callback_code_from_target(
+                "/scope-cli-callback?request_id=cli_browser_123&code=scope_callback_456",
+                "cli_browser_123"
+            )
+            .unwrap(),
+            "scope_callback_456"
+        );
+    }
+
+    #[test]
+    fn browser_callback_target_rejects_mismatched_request() {
+        assert!(
+            browser_callback_code_from_target(
+                "/scope-cli-callback?request_id=cli_browser_other&code=scope_callback_456",
+                "cli_browser_123"
+            )
+            .is_err()
         );
     }
 }
