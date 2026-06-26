@@ -17,6 +17,7 @@ path = "src/bin/scope-cli-service.rs"
 anyhow = "1.0.100"
 axum = "0.8.7"
 clap = { version = "4.6.0", features = ["derive"] }
+keyring = "4.1.2"
 reqwest = { version = "0.12.26", default-features = false, features = ["blocking", "json", "rustls-tls"] }
 serde = { version = "1.0.228", features = ["derive"] }
 serde_json = "1.0.147"
