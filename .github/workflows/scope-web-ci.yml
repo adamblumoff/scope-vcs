@@ -61,6 +61,9 @@ jobs:
       - name: Test
         run: pnpm test
 
+      - name: Typecheck
+        run: pnpm typecheck
+
       - name: Build
         run: pnpm build
 
@@ -126,6 +129,62 @@ jobs:
             deploy_message="${GITHUB_WORKFLOW:-Scope Web CI}"
           fi
 
+          wait_for_deployment() {
+            local service_name="$1"
+            local message="$2"
+            local started_at="$3"
+            local deadline=$((SECONDS + 900))
+
+            while true; do
+              if deployment_json="$(
+                railway deployment list \
+                  --project "$RAILWAY_PROJECT_ID" \
+                  --service "$service_name" \
+                  --environment production \
+                  --limit 10 \
+                  --json
+              )"; then
+                deployment_line="$(
+                  DEPLOYMENTS_JSON="$deployment_json" \
+                  DEPLOY_MESSAGE="$message" \
+                  DEPLOY_STARTED_AT="$started_at" \
+                  node -e 'const deployments = JSON.parse(process.env.DEPLOYMENTS_JSON || "[]"); const message = process.env.DEPLOY_MESSAGE || ""; const startedAt = Date.parse(process.env.DEPLOY_STARTED_AT || "1970-01-01T00:00:00Z") - 30000; const deployment = deployments.find((candidate) => { const createdAt = Date.parse(candidate.createdAt || ""); return candidate.meta?.cliMessage === message && Number.isFinite(createdAt) && createdAt >= startedAt; }); if (deployment) console.log([deployment.id, deployment.status, deployment.meta?.skippedReason || ""].join("\t"));'
+                )"
+
+                if [ -n "$deployment_line" ]; then
+                  IFS=$'\t' read -r deployment_id deployment_status skipped_reason <<< "$deployment_line"
+                  echo "Railway deployment $deployment_id is $deployment_status."
+
+                  case "$deployment_status" in
+                    SUCCESS)
+                      return 0
+                      ;;
+                    SKIPPED)
+                      echo "Railway skipped deployment: ${skipped_reason:-no reason provided}."
+                      return 0
+                      ;;
+                    FAILED|CRASHED|REMOVED)
+                      return 1
+                      ;;
+                  esac
+                else
+                  echo "Waiting for Railway deployment to appear..."
+                fi
+              else
+                echo "Waiting for Railway deployment status..."
+              fi
+
+              if [ "$SECONDS" -ge "$deadline" ]; then
+                echo "Timed out waiting for Railway deployment."
+                return 1
+              fi
+
+              sleep 10
+            done
+          }
+
+          deploy_started_at="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+
           railway up .railway-upload \
             --path-as-root \
             --no-gitignore \
@@ -133,4 +192,7 @@ jobs:
             --service scope-web \
             --environment production \
             --message "$deploy_message" \
+            --detach \
             --json
+
+          wait_for_deployment "scope-web" "$deploy_message" "$deploy_started_at"
