@@ -1,6 +1,5 @@
 import type {
   RepoDetail,
-  RepoCloneCredentialView,
   RepoParams,
   ReviewFile,
   Visibility,
@@ -25,12 +24,10 @@ import {
 
 export function RepoDetailPage({
   detail,
-  loadCloneCredential,
   params,
   setFileVisibility,
 }: {
   detail: RepoDetail
-  loadCloneCredential: (params: RepoParams) => Promise<RepoCloneCredentialView>
   params: RepoParams
   setFileVisibility: (
     params: RepoParams,
@@ -108,7 +105,6 @@ export function RepoDetailPage({
               {repo.lifecycle_state === 'Published' && (
                 <RepoCloneDropdown
                   cloneRemoteUrl={detail.clone_remote_url}
-                  loadCloneCredential={() => loadCloneCredential(params)}
                   repo={repo}
                 />
               )}

@@ -1,49 +1,31 @@
-import type {
-  RepoCloneCredentialView,
-  RepoSummary,
-} from '@/api/types'
+import type { RepoSummary } from '@/api/types'
+import { CopyableCodeBlock } from '@/components/copyable-code-block'
 import { Button } from '@/components/ui/button'
 import { cn } from '@/lib/utils'
-import { ChevronDown, Code2, LoaderCircle } from 'lucide-react'
+import { ChevronDown, Code2 } from 'lucide-react'
 import { useEffect, useRef, useState } from 'react'
-import { GitCommandBlock } from '../git-command-block'
-import type { GitCommandShell } from '../git-command-shell'
 import {
-  credentialedCloneCommand,
+  permissionedCloneCommand,
   publicCloneCommand,
 } from './clone-command'
 
 export function RepoCloneDropdown({
   cloneRemoteUrl,
-  loadCloneCredential,
   repo,
 }: {
   cloneRemoteUrl: string
-  loadCloneCredential: () => Promise<RepoCloneCredentialView>
   repo: RepoSummary
 }) {
   const [open, setOpen] = useState(false)
-  const [busy, setBusy] = useState(false)
-  const [error, setError] = useState<string | null>(null)
-  const [credential, setCredential] =
-    useState<RepoCloneCredentialView | null>(null)
   const rootRef = useRef<HTMLDivElement>(null)
   const permissioned = repo.role !== null
-  const credentialSecret = credential?.token.secret ?? null
-  const credentialedCommandReady =
-    permissioned && credential !== null && credentialSecret !== null
-
-  function cloneCommand(shell: GitCommandShell) {
-    if (credentialedCommandReady) {
-      return credentialedCloneCommand(
-        credential,
-        credentialSecret,
-        shell,
-      )
-    }
-
-    return publicCloneCommand({ git_remote_url: cloneRemoteUrl }, shell)
-  }
+  const cloneCommand = permissioned
+    ? permissionedCloneCommand(repo.owner_handle, repo.name)
+    : publicCloneCommand(cloneRemoteUrl)
+  const cloneLabel = permissioned ? 'Scope CLI' : 'Public HTTPS'
+  const copyLabel = permissioned
+    ? 'Copy permissioned clone command'
+    : 'Copy public clone command'
 
   useEffect(() => {
     if (!open) {
@@ -64,36 +46,8 @@ export function RepoCloneDropdown({
       document.removeEventListener('mousedown', closeOnOutsidePointer)
   }, [open])
 
-  async function ensureCloneCredential() {
-    if (!permissioned || credential || busy) {
-      return
-    }
-
-    setBusy(true)
-    setError(null)
-    try {
-      const nextCredential = await loadCloneCredential()
-      if (!nextCredential.token.secret) {
-        throw new Error('Clone credential did not include a secret')
-      }
-      setCredential(nextCredential)
-    } catch (cloneError) {
-      setError(
-        cloneError instanceof Error
-          ? cloneError.message
-          : 'Clone credential failed',
-      )
-    } finally {
-      setBusy(false)
-    }
-  }
-
   function toggleOpen() {
-    const nextOpen = !open
-    setOpen(nextOpen)
-    if (nextOpen) {
-      void ensureCloneCredential()
-    }
+    setOpen(!open)
   }
 
   return (
@@ -122,31 +76,9 @@ export function RepoCloneDropdown({
           role="dialog"
         >
           <div className="mb-2 flex h-6 items-center justify-between text-xs font-semibold leading-4">
-            <span>HTTPS</span>
-            {permissioned && busy && (
-              <LoaderCircle className="size-3.5 animate-spin text-muted-foreground" />
-            )}
+            <span>{cloneLabel}</span>
           </div>
-          {permissioned && !credentialedCommandReady ? (
-            <div className="flex min-h-16 items-center gap-2 rounded-md border border-border bg-muted px-3 py-2 text-sm leading-5 text-muted-foreground">
-              {busy && <LoaderCircle className="size-3.5 animate-spin" />}
-              <span>
-                {busy
-                  ? 'Preparing clone command'
-                  : 'Clone command unavailable'}
-              </span>
-            </div>
-          ) : (
-            <GitCommandBlock
-              copyLabel="Copy clone command"
-              value={cloneCommand}
-            />
-          )}
-          {error && (
-            <p className="mt-2 text-sm leading-5 text-destructive">
-              {error}
-            </p>
-          )}
+          <CopyableCodeBlock copyLabel={copyLabel} value={cloneCommand} />
         </div>
       )}
     </div>
