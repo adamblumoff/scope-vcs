@@ -41,8 +41,9 @@ jobs:
             ~/.cargo/git
             ~/.cargo/registry
             cli/target
-          key: ${{ runner.os }}-cli-cargo-${{ hashFiles('cli/Cargo.lock') }}
+          key: ${{ runner.os }}-cli-cargo-${{ hashFiles('cli/Cargo.lock') }}-${{ github.sha }}
           restore-keys: |
+            ${{ runner.os }}-cli-cargo-${{ hashFiles('cli/Cargo.lock') }}
             ${{ runner.os }}-cli-cargo-
 
       - name: Check formatting
@@ -131,8 +132,9 @@ jobs:
             ~/.cargo/git
             ~/.cargo/registry
             cli/target
-          key: ${{ runner.os }}-${{ matrix.target }}-cargo-${{ hashFiles('cli/Cargo.lock') }}
+          key: ${{ runner.os }}-${{ matrix.target }}-cargo-${{ hashFiles('cli/Cargo.lock') }}-${{ github.sha }}
           restore-keys: |
+            ${{ runner.os }}-${{ matrix.target }}-cargo-${{ hashFiles('cli/Cargo.lock') }}
             ${{ runner.os }}-${{ matrix.target }}-cargo-
 
       - name: Install cross

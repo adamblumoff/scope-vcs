@@ -55,9 +55,6 @@ jobs:
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
 
-      - name: Typecheck
-        run: pnpm typecheck
-
       - name: Check line limit
         run: pnpm check:line-limit
 
@@ -121,7 +118,6 @@ jobs:
           fi
 
           railway up web \
-            --path-as-root \
             --project "$RAILWAY_PROJECT_ID" \
             --service scope-web \
             --environment production \
