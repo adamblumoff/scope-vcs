@@ -1,10 +1,7 @@
 import {
-  authHeaders,
-  getApiConnection,
-  getApiMutationConnection,
+  createApiClient,
+  type ApiClient,
   getPublicApiConnection,
-  loadJson,
-  readRequestAuthToken,
 } from '@/api/client'
 import { loadProjectionPreviewsForRequest } from './projection-preview'
 import { loadReviewForRequest } from './review'
@@ -23,50 +20,37 @@ import type {
 export async function createCloneCredentialForRequest(
   data: RepoParams,
 ): Promise<RepoCloneCredentialView> {
-  const idToken = await readRequestAuthToken()
-  if (!idToken) {
-    throw new Error('Sign in as a repo member to clone with credentials.')
-  }
-
-  const response = await fetch(
-    `${getApiMutationConnection()}/v1/repos/${data.owner}/${data.repo}/clone-credential`,
-    {
-      headers: authHeaders(idToken),
-      method: 'POST',
-    },
+  const api = createApiClient()
+  const payload = await api.post<RepoCloneCredential>(
+    `/v1/repos/${data.owner}/${data.repo}/clone-credential`,
+    { auth: 'required' },
   )
-  const payload = await response.json().catch(() => null)
-
-  if (!response.ok) {
-    throw new Error(payload?.error ?? `request failed: ${response.status}`)
-  }
 
   return repoCloneCredentialView(
     getPublicApiConnection('building clone command'),
-    payload as RepoCloneCredential,
+    payload,
   )
 }
 
 export async function loadRepoForRequest(data: RepoParams) {
-  const idToken = await readRequestAuthToken()
-  const api = getApiConnection()
-  const init = { headers: authHeaders(idToken) }
+  const api = createApiClient()
   const [repo, session] = await Promise.all([
-    loadJson<RepoSummary>(`${api}/v1/repos/${data.owner}/${data.repo}`, init),
-    loadJson<RepoSession>(
-      `${api}/v1/repos/${data.owner}/${data.repo}/session`,
-      init,
-    ),
+    api.get<RepoSummary>(`/v1/repos/${data.owner}/${data.repo}`, {
+      auth: 'optional',
+    }),
+    api.get<RepoSession>(`/v1/repos/${data.owner}/${data.repo}/session`, {
+      auth: 'optional',
+    }),
   ])
-  const review = await loadOpenRepoReview(data, repo, idToken ?? null)
+  const review = await loadOpenRepoReview(data, repo, api)
   const [files, projectionPreviews] = await Promise.all([
     review
       ? Promise.resolve([])
-      : loadJson<RepoFile[]>(
-          `${api}/v1/repos/${data.owner}/${data.repo}/files`,
-          init,
-        ),
+      : api.get<RepoFile[]>(`/v1/repos/${data.owner}/${data.repo}/files`, {
+          auth: 'optional',
+        }),
     loadProjectionPreviewsForRequest(data, review ? 'review' : 'live', {
+      api,
       includeOwner: repo.role === 'Owner',
     }),
   ])
@@ -88,49 +72,34 @@ export async function loadRepoForRequest(data: RepoParams) {
 async function loadOpenRepoReview(
   data: RepoParams,
   repo: RepoSummary,
-  idToken: string | null,
+  api: ApiClient,
 ) {
   if (
-    !idToken ||
+    !(await api.authenticated()) ||
     repo.role !== 'Owner' ||
     (repo.lifecycle_state !== 'PendingPublish' && !repo.staged_update_pending)
   ) {
     return null
   }
 
-  const review = await loadReviewForRequest(data)
+  const review = await loadReviewForRequest(data, api)
   return review.kind === 'NoReview' ? null : review
 }
 
 export async function setRepoFileVisibilityForRequest(
   data: SetRepoFileVisibilityInput,
 ) {
-  const idToken = await readRequestAuthToken()
-  if (!idToken) {
-    throw new Error('Sign in as the repo owner to update file visibility.')
-  }
-
-  const response = await fetch(
-    `${getApiMutationConnection()}/v1/repos/${data.owner}/${data.repo}/files/visibility`,
+  const api = createApiClient()
+  return api.patch<RepoFile[]>(
+    `/v1/repos/${data.owner}/${data.repo}/files/visibility`,
     {
-      body: JSON.stringify({
+      auth: 'required',
+      body: {
         paths: data.paths,
         visibility: data.visibility,
-      }),
-      headers: {
-        ...authHeaders(idToken),
-        'content-type': 'application/json',
       },
-      method: 'PATCH',
     },
   )
-  const payload = await response.json().catch(() => null)
-
-  if (!response.ok) {
-    throw new Error(payload?.error ?? `request failed: ${response.status}`)
-  }
-
-  return payload as RepoFile[]
 }
 
 export function parseRepoParams(

@@ -1,9 +1,9 @@
 use crate::domain::store::{
-    FirstPushTokenStatus, RepoPublicationState, RepoRole, StoredRepository,
+    FirstPushTokenStatus, RepoPublicationState, RepoRole, StoredRepository, UserAccount,
 };
 use crate::{
     auth::{
-        clerk::{ClerkIdentity, require_identity},
+        scope::require_scope_user,
         tokens::{first_push_token_hash, git_clone_token_hash, git_push_token_hash},
     },
     config::{FIRST_PUSH_TOKEN_PREFIX, GIT_PUSH_TOKEN_PREFIX},
@@ -23,7 +23,7 @@ pub(crate) enum InitialPushCredential {
 #[derive(Clone, Debug)]
 pub(crate) enum ReceivePackAuthorization {
     ScopeToken { secret: String },
-    ClerkIdentity(ClerkIdentity),
+    ScopeUser(UserAccount),
 }
 
 #[derive(Clone, Debug)]
@@ -91,9 +91,9 @@ pub(crate) async fn receive_pack_authorization(
             });
         }
 
-        return require_identity(state, headers)
+        return require_scope_user(state, headers)
             .await
-            .map(ReceivePackAuthorization::ClerkIdentity);
+            .map(ReceivePackAuthorization::ScopeUser);
     }
 
     Err(ApiError::unauthorized(

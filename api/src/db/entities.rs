@@ -130,6 +130,25 @@ pub(crate) mod user {
     }
 }
 
+pub(crate) mod auth_identity {
+    use super::*;
+
+    #[derive(Clone, Debug, PartialEq, DeriveEntityModel)]
+    #[sea_orm(table_name = "scope_auth_identities")]
+    pub struct Model {
+        #[sea_orm(primary_key, auto_increment = false)]
+        pub provider: String,
+        #[sea_orm(primary_key, auto_increment = false)]
+        pub subject: String,
+        pub user_id: String,
+    }
+
+    #[derive(Copy, Clone, Debug, EnumIter, DeriveRelation)]
+    pub enum Relation {}
+
+    impl ActiveModelBehavior for ActiveModel {}
+}
+
 pub(crate) mod repository {
     use super::*;
 
@@ -231,6 +250,47 @@ pub(crate) mod repository {
             })
         }
     }
+}
+
+pub(crate) mod cli_device_login {
+    use super::*;
+
+    #[derive(Clone, Debug, PartialEq, DeriveEntityModel)]
+    #[sea_orm(table_name = "scope_cli_device_logins")]
+    pub struct Model {
+        #[sea_orm(primary_key, auto_increment = false)]
+        pub device_code_hash: String,
+        #[sea_orm(unique)]
+        pub user_code_hash: String,
+        pub created_at_unix: i64,
+        pub expires_at_unix: i64,
+        pub completed_user_id: Option<String>,
+        pub completed_at_unix: Option<i64>,
+        pub consumed_at_unix: Option<i64>,
+    }
+
+    #[derive(Copy, Clone, Debug, EnumIter, DeriveRelation)]
+    pub enum Relation {}
+
+    impl ActiveModelBehavior for ActiveModel {}
+}
+
+pub(crate) mod cli_access_session {
+    use super::*;
+
+    #[derive(Clone, Debug, PartialEq, DeriveEntityModel)]
+    #[sea_orm(table_name = "scope_cli_access_sessions")]
+    pub struct Model {
+        #[sea_orm(primary_key, auto_increment = false)]
+        pub token_hash: String,
+        pub user_id: String,
+        pub expires_at_unix: i64,
+    }
+
+    #[derive(Copy, Clone, Debug, EnumIter, DeriveRelation)]
+    pub enum Relation {}
+
+    impl ActiveModelBehavior for ActiveModel {}
 }
 
 pub(crate) mod membership {

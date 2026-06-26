@@ -1,20 +1,12 @@
 import * as assert from 'node:assert/strict'
 import { afterEach, test } from 'node:test'
 
-import { HttpError, authHeaders, loadJson } from './http'
+import { HttpError, loadJson } from './http'
 
 const originalFetch = globalThis.fetch
 
 afterEach(() => {
   globalThis.fetch = originalFetch
-})
-
-test('authHeaders sends bearer auth only when a token is present', () => {
-  assert.deepEqual(authHeaders('id-token'), {
-    authorization: 'Bearer id-token',
-  })
-  assert.deepEqual(authHeaders(null), {})
-  assert.deepEqual(authHeaders(''), {})
 })
 
 test('loadJson returns parsed JSON and preserves request init', async () => {
@@ -29,7 +21,9 @@ test('loadJson returns parsed JSON and preserves request init', async () => {
 
   await assert.doesNotReject(async () => {
     assert.deepEqual(
-      await loadJson('/v1/repos', { headers: authHeaders('repo-token') }),
+      await loadJson('/v1/repos', {
+        headers: { authorization: 'Bearer repo-token' },
+      }),
       { ok: true },
     )
   })

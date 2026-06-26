@@ -65,6 +65,42 @@ pub(crate) async fn migrate_metadata_schema(db: &DatabaseConnection) -> Result<(
     manager
         .create_table(
             Table::create()
+                .table(AuthIdentities::Table)
+                .if_not_exists()
+                .col(ColumnDef::new(AuthIdentities::Provider).string().not_null())
+                .col(ColumnDef::new(AuthIdentities::Subject).string().not_null())
+                .col(ColumnDef::new(AuthIdentities::UserId).string().not_null())
+                .primary_key(
+                    Index::create()
+                        .name("pk_scope_auth_identities")
+                        .col(AuthIdentities::Provider)
+                        .col(AuthIdentities::Subject),
+                )
+                .foreign_key(
+                    ForeignKey::create()
+                        .name("fk_scope_auth_identities_user")
+                        .from(AuthIdentities::Table, AuthIdentities::UserId)
+                        .to(Users::Table, Users::Id)
+                        .on_delete(ForeignKeyAction::Cascade),
+                )
+                .to_owned(),
+        )
+        .await?;
+
+    manager
+        .create_index(
+            Index::create()
+                .name("idx_scope_auth_identities_user")
+                .table(AuthIdentities::Table)
+                .col(AuthIdentities::UserId)
+                .if_not_exists()
+                .to_owned(),
+        )
+        .await?;
+
+    manager
+        .create_table(
+            Table::create()
                 .table(Repositories::Table)
                 .if_not_exists()
                 .col(
@@ -187,6 +223,90 @@ pub(crate) async fn migrate_metadata_schema(db: &DatabaseConnection) -> Result<(
         )
         .await?;
 
+    manager
+        .create_table(
+            Table::create()
+                .table(CliDeviceLogins::Table)
+                .if_not_exists()
+                .col(
+                    ColumnDef::new(CliDeviceLogins::DeviceCodeHash)
+                        .string()
+                        .not_null()
+                        .primary_key(),
+                )
+                .col(
+                    ColumnDef::new(CliDeviceLogins::UserCodeHash)
+                        .string()
+                        .not_null()
+                        .unique_key(),
+                )
+                .col(
+                    ColumnDef::new(CliDeviceLogins::CreatedAtUnix)
+                        .big_integer()
+                        .not_null(),
+                )
+                .col(
+                    ColumnDef::new(CliDeviceLogins::ExpiresAtUnix)
+                        .big_integer()
+                        .not_null(),
+                )
+                .col(ColumnDef::new(CliDeviceLogins::CompletedUserId).string())
+                .col(ColumnDef::new(CliDeviceLogins::CompletedAtUnix).big_integer())
+                .col(ColumnDef::new(CliDeviceLogins::ConsumedAtUnix).big_integer())
+                .foreign_key(
+                    ForeignKey::create()
+                        .name("fk_scope_cli_device_logins_completed_user")
+                        .from(CliDeviceLogins::Table, CliDeviceLogins::CompletedUserId)
+                        .to(Users::Table, Users::Id)
+                        .on_delete(ForeignKeyAction::Cascade),
+                )
+                .to_owned(),
+        )
+        .await?;
+
+    manager
+        .create_table(
+            Table::create()
+                .table(CliAccessSessions::Table)
+                .if_not_exists()
+                .col(
+                    ColumnDef::new(CliAccessSessions::TokenHash)
+                        .string()
+                        .not_null()
+                        .primary_key(),
+                )
+                .col(
+                    ColumnDef::new(CliAccessSessions::UserId)
+                        .string()
+                        .not_null(),
+                )
+                .col(
+                    ColumnDef::new(CliAccessSessions::ExpiresAtUnix)
+                        .big_integer()
+                        .not_null(),
+                )
+                .foreign_key(
+                    ForeignKey::create()
+                        .name("fk_scope_cli_access_sessions_user")
+                        .from(CliAccessSessions::Table, CliAccessSessions::UserId)
+                        .to(Users::Table, Users::Id)
+                        .on_delete(ForeignKeyAction::Cascade),
+                )
+                .to_owned(),
+        )
+        .await?;
+
+    manager
+        .create_index(
+            Index::create()
+                .name("idx_scope_cli_access_sessions_user")
+                .table(CliAccessSessions::Table)
+                .col(CliAccessSessions::UserId)
+                .if_not_exists()
+                .to_owned(),
+        )
+        .await?;
+
     Ok(())
 }
 
@@ -228,6 +348,9 @@ pub(crate) async fn reset_metadata_schema(db: &DatabaseConnection) -> Result<(),
         backend,
         [
             "DROP TABLE IF EXISTS",
+            "scope_cli_access_sessions,",
+            "scope_cli_device_logins,",
+            "scope_auth_identities,",
             "scope_repo_memberships,",
             "scope_repositories,",
             "scope_users,",
@@ -247,8 +370,11 @@ async fn metadata_schema_has_catalog_rows(
     let backend = db.get_database_backend();
     for table in [
         "scope_users",
+        "scope_auth_identities",
         "scope_repositories",
         "scope_repo_memberships",
+        "scope_cli_device_logins",
+        "scope_cli_access_sessions",
     ] {
         if !manager.has_table(table).await? {
             continue;
@@ -303,6 +429,10 @@ async fn metadata_schema_drift(manager: &SchemaManager<'_>) -> Result<Option<Str
             &["id", "handle", "email", "email_verified", "access"][..],
         ),
         (
+            "scope_auth_identities",
+            &["provider", "subject", "user_id"][..],
+        ),
+        (
             "scope_repositories",
             &[
                 "id",
@@ -327,11 +457,27 @@ async fn metadata_schema_drift(manager: &SchemaManager<'_>) -> Result<Option<Str
             "scope_repo_memberships",
             &["repo_id", "user_id", "role"][..],
         ),
+        (
+            "scope_cli_device_logins",
+            &[
+                "device_code_hash",
+                "user_code_hash",
+                "created_at_unix",
+                "expires_at_unix",
+                "completed_user_id",
+                "completed_at_unix",
+                "consumed_at_unix",
+            ][..],
+        ),
+        (
+            "scope_cli_access_sessions",
+            &["token_hash", "user_id", "expires_at_unix"][..],
+        ),
     ];
 
     for (table, columns) in tables {
         if !manager.has_table(table).await? {
-            continue;
+            return Ok(Some(format!("missing table {table}")));
         }
         for column in columns {
             if !manager.has_column(table, column).await? {
@@ -343,7 +489,7 @@ async fn metadata_schema_drift(manager: &SchemaManager<'_>) -> Result<Option<Str
 }
 
 fn is_destructive_pre_alpha_reset_drift(drift: &str) -> bool {
-    drift == "missing column scope_repositories.git_clone_tokens"
+    drift.starts_with("missing table ") || drift.starts_with("missing column ")
 }
 
 macro_rules! impl_iden {
@@ -376,6 +522,21 @@ impl_iden!(Users {
     Email => "email",
     EmailVerified => "email_verified",
     Access => "access",
+});
+
+#[derive(Copy, Clone)]
+enum AuthIdentities {
+    Table,
+    Provider,
+    Subject,
+    UserId,
+}
+
+impl_iden!(AuthIdentities {
+    Table => "scope_auth_identities",
+    Provider => "provider",
+    Subject => "subject",
+    UserId => "user_id",
 });
 
 #[derive(Copy, Clone)]
@@ -417,6 +578,44 @@ impl_iden!(Repositories {
     GitSnapshot => "git_snapshot",
     StagedUpdate => "staged_update",
     Invitations => "invitations",
+});
+
+#[derive(Copy, Clone)]
+enum CliDeviceLogins {
+    Table,
+    DeviceCodeHash,
+    UserCodeHash,
+    CreatedAtUnix,
+    ExpiresAtUnix,
+    CompletedUserId,
+    CompletedAtUnix,
+    ConsumedAtUnix,
+}
+
+impl_iden!(CliDeviceLogins {
+    Table => "scope_cli_device_logins",
+    DeviceCodeHash => "device_code_hash",
+    UserCodeHash => "user_code_hash",
+    CreatedAtUnix => "created_at_unix",
+    ExpiresAtUnix => "expires_at_unix",
+    CompletedUserId => "completed_user_id",
+    CompletedAtUnix => "completed_at_unix",
+    ConsumedAtUnix => "consumed_at_unix",
+});
+
+#[derive(Copy, Clone)]
+enum CliAccessSessions {
+    Table,
+    TokenHash,
+    UserId,
+    ExpiresAtUnix,
+}
+
+impl_iden!(CliAccessSessions {
+    Table => "scope_cli_access_sessions",
+    TokenHash => "token_hash",
+    UserId => "user_id",
+    ExpiresAtUnix => "expires_at_unix",
 });
 
 #[derive(Copy, Clone)]
@@ -471,15 +670,18 @@ mod tests {
     use super::*;
 
     #[test]
-    fn destructive_pre_alpha_reset_drift_is_limited_to_clone_token_schema_bump() {
+    fn destructive_pre_alpha_reset_drift_allows_pre_alpha_shape_changes() {
         assert!(is_destructive_pre_alpha_reset_drift(
             "missing column scope_repositories.git_clone_tokens"
         ));
-        assert!(!is_destructive_pre_alpha_reset_drift(
+        assert!(is_destructive_pre_alpha_reset_drift(
             "missing column scope_repositories.owner_user_id"
         ));
-        assert!(!is_destructive_pre_alpha_reset_drift(
+        assert!(is_destructive_pre_alpha_reset_drift(
             "missing column scope_users.email"
+        ));
+        assert!(is_destructive_pre_alpha_reset_drift(
+            "missing table scope_auth_identities"
         ));
     }
 }

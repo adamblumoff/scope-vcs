@@ -20,6 +20,7 @@ pub(crate) const CLERK_ISSUER_ENV: &str = "CLERK_ISSUER";
 pub(crate) const CLERK_JWKS_URL_ENV: &str = "CLERK_JWKS_URL";
 pub(crate) const CLERK_AUTHORIZED_PARTIES_ENV: &str = "CLERK_AUTHORIZED_PARTIES";
 pub(crate) const CLERK_AUDIENCE_ENV: &str = "CLERK_AUDIENCE";
+pub(crate) const DEFAULT_CLERK_AUDIENCE: &str = "scope-api";
 pub(crate) const LOCAL_APP_ORIGIN: &str = "http://localhost:3000";
 pub(crate) const LOCAL_API_ORIGIN: &str = "http://localhost:8080";
 pub(crate) const FIRST_PUSH_TOKEN_PREFIX: &str = "scope_fp_";

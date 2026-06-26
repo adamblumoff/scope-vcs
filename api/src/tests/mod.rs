@@ -15,7 +15,7 @@ use crate::domain::store::{
 };
 use crate::{
     app::router,
-    auth::{clerk::*, tokens::*},
+    auth::{clerk::*, scope::*, tokens::*},
     config::*,
     git::{import::*, storage::*, upload::*, *},
     http::responses::*,
@@ -152,7 +152,7 @@ fn token_for_claims(
 fn test_clerk_policy() -> ClerkTokenPolicy {
     ClerkTokenPolicy {
         authorized_parties: vec![LOCAL_APP_ORIGIN.to_string()],
-        audiences: Vec::new(),
+        audiences: vec![TEST_CLERK_AUDIENCE.to_string()],
     }
 }
 
@@ -180,16 +180,8 @@ fn unix_now() -> u64 {
         .as_secs()
 }
 
-fn owner_identity(email_verified: bool) -> ClerkIdentity {
-    ClerkIdentity {
-        user_id: TEST_CLERK_USER_ID.to_string(),
-        email: Some(TEST_OWNER_EMAIL.to_string()),
-        email_verified,
-    }
-}
-
 fn test_owner_id() -> String {
-    identity_user_id(&owner_identity(true))
+    crate::db::scope_user_id_for_auth_identity("clerk", TEST_CLERK_USER_ID)
 }
 
 fn test_state_with_repo() -> AppState {
@@ -216,7 +208,6 @@ fn test_state_with_repo() -> AppState {
             Some("http://127.0.0.1/.well-known/jwks.json".to_string()),
             test_clerk_policy(),
         ),
-        device_logins: crate::auth::device::DeviceLoginStore::default(),
         object_store: Arc::new(MemoryObjectStore::new()),
         operator_token: None,
     }
@@ -237,7 +228,6 @@ fn test_state_with_metadata(metadata: crate::db::MetadataStore) -> AppState {
             Some("http://127.0.0.1/.well-known/jwks.json".to_string()),
             test_clerk_policy(),
         ),
-        device_logins: crate::auth::device::DeviceLoginStore::default(),
         object_store: Arc::new(MemoryObjectStore::new()),
         operator_token: None,
     };
@@ -254,13 +244,20 @@ fn cache_test_jwks(state: &AppState) {
 }
 
 fn bearer_header() -> String {
-    format!("Bearer {}", token(TEST_CLERK_USER_ID, true))
+    format!("Bearer {}", api_token(TEST_CLERK_USER_ID, TEST_OWNER_EMAIL))
 }
 
 fn bearer_header_for(user_id: &str, email: &str) -> String {
-    format!(
-        "Bearer {}",
-        token_for(user_id, Some(email.to_string()), true,)
+    format!("Bearer {}", api_token(user_id, email))
+}
+
+fn api_token(user_id: &str, email: &str) -> String {
+    token_for_claims(
+        user_id,
+        Some(email.to_string()),
+        true,
+        Some(LOCAL_APP_ORIGIN),
+        Some(serde_json::json!(TEST_CLERK_AUDIENCE)),
     )
 }
 

@@ -1,5 +1,5 @@
 use crate::{
-    auth::clerk::{bearer_token, ensure_user_for_identity},
+    auth::scope::require_clerk_scope_user,
     error::ApiError,
     http::{
         origins::public_app_origin,
@@ -20,7 +20,7 @@ pub(crate) async fn start_cli_device_login(
     State(state): State<AppState>,
 ) -> Result<Json<DeviceLoginStartResponse>, ApiError> {
     let app_origin = public_app_origin("build CLI login URL")?;
-    let login = state.device_logins.start(&app_origin)?;
+    let login = state.metadata.start_cli_device_login(&app_origin)?;
 
     Ok(Json(DeviceLoginStartResponse {
         device_code: login.device_code,
@@ -36,11 +36,10 @@ pub(crate) async fn complete_cli_device_login(
     headers: HeaderMap,
     Path(user_code): Path<String>,
 ) -> Result<Json<DeviceLoginCompleteResponse>, ApiError> {
-    let token =
-        bearer_token(&headers)?.ok_or_else(|| ApiError::unauthorized("sign in required"))?;
-    let identity = state.clerk.verify(token).await?;
-    ensure_user_for_identity(&state, &identity)?;
-    state.device_logins.complete(&user_code, identity)?;
+    let user = require_clerk_scope_user(&state, &headers).await?;
+    state
+        .metadata
+        .complete_cli_device_login(&user_code, &user)?;
 
     Ok(Json(DeviceLoginCompleteResponse {
         status: DeviceLoginStatus::Complete,
@@ -51,7 +50,7 @@ pub(crate) async fn poll_cli_device_login(
     State(state): State<AppState>,
     Path(device_code): Path<String>,
 ) -> Result<Json<DeviceLoginPollResponse>, ApiError> {
-    match state.device_logins.poll(&device_code)? {
+    match state.metadata.poll_cli_device_login(&device_code)? {
         crate::auth::device::DeviceLoginPoll::Pending { expires_at_unix } => {
             Ok(Json(DeviceLoginPollResponse {
                 status: DeviceLoginStatus::Pending,

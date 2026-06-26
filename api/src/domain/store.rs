@@ -5,21 +5,6 @@ use super::{
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub struct VerifiedEmail {
-    pub email: String,
-    pub verified: bool,
-}
-
-impl VerifiedEmail {
-    pub fn new(email: impl Into<String>, verified: bool) -> Self {
-        Self {
-            email: normalize_email(email),
-            verified,
-        }
-    }
-}
-
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum AccountAccess {
     Public,
@@ -386,43 +371,6 @@ impl AppCatalog {
         Ok(self.repositories.get(&id).expect("repository was inserted"))
     }
 
-    pub fn verified_user_for_email(&self, email: &VerifiedEmail) -> Option<&UserAccount> {
-        if !email.verified {
-            return None;
-        }
-
-        self.users
-            .values()
-            .find(|user| user.email_verified && user.email == email.email)
-    }
-
-    pub fn principal_for_repo(
-        &self,
-        repo: &StoredRepository,
-        identity: Option<&VerifiedEmail>,
-    ) -> Principal {
-        let Some(identity) = identity else {
-            return Principal::public();
-        };
-
-        let Some(user) = self.verified_user_for_email(identity) else {
-            return Principal::public();
-        };
-
-        if repo
-            .memberships
-            .iter()
-            .any(|membership| membership.user_id == user.id)
-        {
-            Principal {
-                id: user.id.clone(),
-                kind: PrincipalKind::User,
-            }
-        } else {
-            Principal::public()
-        }
-    }
-
     pub fn role_for_principal(
         &self,
         repo: &StoredRepository,
@@ -491,10 +439,6 @@ pub fn pending_import_scope_path(path: &str) -> Result<ScopePath, PolicyError> {
         format!("/{path}")
     };
     ScopePath::parse(path)
-}
-
-fn normalize_email(email: impl Into<String>) -> String {
-    email.into().trim().to_ascii_lowercase()
 }
 
 fn validate_repo_name(name: &str) -> Result<String, CatalogError> {

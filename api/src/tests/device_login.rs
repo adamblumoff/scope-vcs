@@ -65,9 +65,22 @@ async fn cli_device_login_exchanges_browser_auth_for_cli_token() {
     assert_eq!(authorized.status(), StatusCode::OK);
     let authorized = response_json(authorized).await;
     assert_eq!(authorized["status"], "Complete");
-    assert_eq!(authorized["identity"]["user_id"], TEST_CLERK_USER_ID);
+    assert_eq!(authorized["identity"]["user_id"], test_owner_id());
     let cli_token = authorized["access_token"].as_str().unwrap();
     assert!(cli_token.starts_with(CLI_ACCESS_TOKEN_PREFIX));
+
+    let consumed = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri(format!("/v1/cli/device-login/{device_code}/poll"))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(consumed.status(), StatusCode::CONFLICT);
 
     let session = app
         .oneshot(
@@ -82,7 +95,7 @@ async fn cli_device_login_exchanges_browser_auth_for_cli_token() {
         .unwrap();
     assert_eq!(session.status(), StatusCode::OK);
     let session = response_json(session).await;
-    assert_eq!(session["identity"]["user_id"], TEST_CLERK_USER_ID);
+    assert_eq!(session["identity"]["user_id"], test_owner_id());
     assert_eq!(session["user"]["handle"], "owner");
 }
 
@@ -118,37 +131,19 @@ async fn cli_device_login_completion_requires_clerk_auth() {
 }
 
 #[tokio::test]
-async fn cli_device_login_throttles_invalid_completion_attempts() {
+async fn cli_device_login_start_is_rate_limited() {
     let app = router(test_state_with_jwks());
 
-    for index in 0..10 {
+    for _ in 0..crate::auth::device::MAX_DEVICE_LOGIN_STARTS_PER_WINDOW {
         let response = app
             .clone()
-            .oneshot(
-                Request::builder()
-                    .method("POST")
-                    .uri(format!("/v1/cli/device-login/invalid-{index}/complete"))
-                    .header(AUTHORIZATION, bearer_header())
-                    .body(Body::empty())
-                    .unwrap(),
-            )
+            .oneshot(start_device_login_request())
             .await
             .unwrap();
-        assert_eq!(response.status(), StatusCode::NOT_FOUND);
+        assert_eq!(response.status(), StatusCode::OK);
     }
 
-    let response = app
-        .oneshot(
-            Request::builder()
-                .method("POST")
-                .uri("/v1/cli/device-login/invalid-lockout/complete")
-                .header(AUTHORIZATION, bearer_header())
-                .body(Body::empty())
-                .unwrap(),
-        )
-        .await
-        .unwrap();
-
+    let response = app.oneshot(start_device_login_request()).await.unwrap();
     assert_eq!(response.status(), StatusCode::TOO_MANY_REQUESTS);
 }
 
@@ -191,21 +186,6 @@ async fn cli_device_login_completion_is_single_use() {
         .await
         .unwrap();
     assert_eq!(second.status(), StatusCode::CONFLICT);
-}
-
-#[test]
-fn cli_device_login_start_is_rate_limited() {
-    let store = crate::auth::device::DeviceLoginStore::default();
-
-    for _ in 0..crate::auth::device::MAX_DEVICE_LOGIN_STARTS_PER_WINDOW {
-        store.start(LOCAL_APP_ORIGIN).unwrap();
-    }
-    let error = match store.start(LOCAL_APP_ORIGIN) {
-        Ok(_) => panic!("device login start should be globally rate limited"),
-        Err(error) => error,
-    };
-
-    assert_eq!(error.status, StatusCode::TOO_MANY_REQUESTS);
 }
 
 fn start_device_login_request() -> Request<Body> {

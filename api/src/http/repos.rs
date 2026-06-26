@@ -4,9 +4,9 @@ use crate::domain::projection::project_graph;
 use crate::domain::store::{RepoRole, RepoSettings};
 use crate::{
     auth::{
-        clerk::{
-            ensure_user_for_identity, http_identity, principal_for_repo, principal_for_user_id,
-            require_identity,
+        scope::{
+            optional_scope_user, principal_for_scope_user, principal_for_user_id,
+            require_scope_user,
         },
         tokens::{generate_first_push_token, generate_git_clone_token, generate_git_push_token},
     },
@@ -31,8 +31,7 @@ pub(crate) async fn list_repos(
     State(state): State<AppState>,
     headers: HeaderMap,
 ) -> Result<Json<Vec<RepoSummaryResponse>>, ApiError> {
-    let identity = require_identity(&state, &headers).await?;
-    let user = ensure_user_for_identity(&state, &identity)?;
+    let user = require_scope_user(&state, &headers).await?;
     let user_id = user.id.clone();
     let mut repositories = state
         .metadata
@@ -50,8 +49,7 @@ pub(crate) async fn create_repo(
     headers: HeaderMap,
     Json(input): Json<CreateRepoRequest>,
 ) -> Result<Json<CreateRepoResponse>, ApiError> {
-    let identity = require_identity(&state, &headers).await?;
-    let user = ensure_user_for_identity(&state, &identity)?;
+    let user = require_scope_user(&state, &headers).await?;
     let default_visibility = input.visibility.unwrap_or(Visibility::Private);
     let api_origin = public_api_origin()?;
     let app_origin = public_app_origin("create repository init metadata")?;
@@ -98,8 +96,8 @@ pub(crate) async fn get_repo(
     Path((owner, repo_name)): Path<(String, String)>,
 ) -> Result<Json<RepoSummaryResponse>, ApiError> {
     let repo = find_repo(&state, &owner, &repo_name)?;
-    let identity = http_identity(&state, &headers).await?;
-    let principal = principal_for_repo(&state, &repo, identity.as_ref())?;
+    let user = optional_scope_user(&state, &headers).await?;
+    let principal = principal_for_scope_user(&repo, user.as_ref());
     ensure_repo_read(&state, &repo, &principal)?;
     let role = role_for_principal(&state, &repo, &principal)?;
     let staged_update_pending = role == Some(RepoRole::Owner) && repo.staged_update.is_some();
@@ -121,8 +119,7 @@ pub(crate) async fn delete_repo(
     headers: HeaderMap,
     Path((owner, repo_name)): Path<(String, String)>,
 ) -> Result<Json<DeleteRepoResponse>, ApiError> {
-    let identity = require_identity(&state, &headers).await?;
-    let user = ensure_user_for_identity(&state, &identity)?;
+    let user = require_scope_user(&state, &headers).await?;
     let repo_id = state.metadata.delete_repo(&owner, &repo_name, &user.id)?;
 
     crate::state::best_effort_drain_pending_repo_storage_deletions(&state);
@@ -139,8 +136,7 @@ pub(crate) async fn create_clone_credential(
     headers: HeaderMap,
     Path((owner, repo_name)): Path<(String, String)>,
 ) -> Result<Json<RepoCloneCredentialResponse>, ApiError> {
-    let identity = require_identity(&state, &headers).await?;
-    let user = ensure_user_for_identity(&state, &identity)?;
+    let user = require_scope_user(&state, &headers).await?;
     let repo = find_repo(&state, &owner, &repo_name)?;
     let principal = principal_for_user_id(&repo, &user.id);
     ensure_repo_read(&state, &repo, &principal)?;
@@ -166,8 +162,8 @@ pub(crate) async fn get_projection(
     Path((owner, repo_name)): Path<(String, String)>,
 ) -> Result<Json<ProjectionResponse>, ApiError> {
     let repo = find_repo(&state, &owner, &repo_name)?;
-    let identity = http_identity(&state, &headers).await?;
-    let principal = principal_for_repo(&state, &repo, identity.as_ref())?;
+    let user = optional_scope_user(&state, &headers).await?;
+    let principal = principal_for_scope_user(&repo, user.as_ref());
     ensure_repo_read(&state, &repo, &principal)?;
     let projection = project_graph(&repo.policy, &repo.graph, &principal);
     Ok(Json(projection_response(
@@ -182,8 +178,8 @@ pub(crate) async fn get_git_projection(
     Path((owner, repo_name)): Path<(String, String)>,
 ) -> Result<Json<VirtualGitProjection>, ApiError> {
     let repo = find_repo(&state, &owner, &repo_name)?;
-    let identity = http_identity(&state, &headers).await?;
-    let principal = principal_for_repo(&state, &repo, identity.as_ref())?;
+    let user = optional_scope_user(&state, &headers).await?;
+    let principal = principal_for_scope_user(&repo, user.as_ref());
     ensure_repo_read(&state, &repo, &principal)?;
     let projection = project_graph(&repo.policy, &repo.graph, &principal);
     Ok(Json(build_virtual_git_projection(
@@ -200,8 +196,8 @@ pub(crate) async fn get_projection_preview(
 ) -> Result<Json<ProjectionPreviewResponse>, ApiError> {
     let repo = find_repo(&state, &owner, &repo_name)?;
     let source = input.source.unwrap_or(ProjectionPreviewSource::Live);
-    let identity = http_identity(&state, &headers).await?;
-    let requester = principal_for_repo(&state, &repo, identity.as_ref())?;
+    let user = optional_scope_user(&state, &headers).await?;
+    let requester = principal_for_scope_user(&repo, user.as_ref());
     ensure_projection_preview_access(&state, &repo, &requester, input.audience, source)?;
     let include_private_counts =
         role_for_principal(&state, &repo, &requester)? == Some(RepoRole::Owner);
@@ -221,8 +217,8 @@ pub(crate) async fn get_files(
     Path((owner, repo_name)): Path<(String, String)>,
 ) -> Result<Json<Vec<RepoFileResponse>>, ApiError> {
     let repo = find_repo(&state, &owner, &repo_name)?;
-    let identity = http_identity(&state, &headers).await?;
-    let principal = principal_for_repo(&state, &repo, identity.as_ref())?;
+    let user = optional_scope_user(&state, &headers).await?;
+    let principal = principal_for_scope_user(&repo, user.as_ref());
     ensure_repo_read(&state, &repo, &principal)?;
 
     Ok(Json(projected_files(&repo, &principal)?))
@@ -234,11 +230,7 @@ pub(crate) async fn update_file_visibility(
     Path((owner, repo_name)): Path<(String, String)>,
     Json(input): Json<UpdateFileVisibilityRequest>,
 ) -> Result<Json<Vec<RepoFileResponse>>, ApiError> {
-    let identity = http_identity(&state, &headers).await?;
-    let user = identity
-        .as_ref()
-        .map(|identity| ensure_user_for_identity(&state, identity))
-        .transpose()?;
+    let user = optional_scope_user(&state, &headers).await?;
     let update_paths = parse_visibility_paths(&input.paths)?;
     let visibility = input.visibility;
     let repo = find_repo(&state, &owner, &repo_name)?;
@@ -305,8 +297,8 @@ pub(crate) async fn get_settings(
     Path((owner, repo_name)): Path<(String, String)>,
 ) -> Result<Json<RepoSettingsResponse>, ApiError> {
     let repo = find_repo(&state, &owner, &repo_name)?;
-    let identity = http_identity(&state, &headers).await?;
-    let principal = principal_for_repo(&state, &repo, identity.as_ref())?;
+    let user = optional_scope_user(&state, &headers).await?;
+    let principal = principal_for_scope_user(&repo, user.as_ref());
     ensure_repo_read(&state, &repo, &principal)?;
 
     if role_for_principal(&state, &repo, &principal)? != Some(RepoRole::Owner) {
@@ -325,11 +317,7 @@ pub(crate) async fn update_settings(
     Path((owner, repo_name)): Path<(String, String)>,
     Json(input): Json<UpdateRepoSettingsRequest>,
 ) -> Result<Json<RepoSettingsResponse>, ApiError> {
-    let identity = http_identity(&state, &headers).await?;
-    let user = identity
-        .as_ref()
-        .map(|identity| ensure_user_for_identity(&state, identity))
-        .transpose()?;
+    let user = optional_scope_user(&state, &headers).await?;
     let repo = find_repo(&state, &owner, &repo_name)?;
     let principal = user
         .as_ref()

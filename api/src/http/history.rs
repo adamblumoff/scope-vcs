@@ -1,5 +1,5 @@
 use crate::{
-    auth::clerk::{http_identity, principal_for_repo},
+    auth::scope::{optional_scope_user, principal_for_scope_user},
     domain::{
         commit_history::{CommitHistoryCommit, CommitHistoryFile, commit_history_view},
         policy::{Principal, PrincipalKind},
@@ -85,8 +85,8 @@ async fn repo_and_audience(
 ) -> Result<(StoredRepository, ProjectionPreviewAudience), ApiError> {
     let repo = find_repo(state, owner, repo_name)?;
     let audience = input.audience.unwrap_or(ProjectionPreviewAudience::Public);
-    let identity = http_identity(state, headers).await?;
-    let requester = principal_for_repo(state, &repo, identity.as_ref())?;
+    let user = optional_scope_user(state, headers).await?;
+    let requester = principal_for_scope_user(&repo, user.as_ref());
     ensure_projection_preview_access(
         state,
         &repo,

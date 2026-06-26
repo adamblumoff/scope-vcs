@@ -566,7 +566,7 @@ async fn list_repos_route_hides_pending_repo_from_reader_member() {
         email: Some("reader@example.com".to_string()),
         email_verified: true,
     };
-    let reader_id = identity_user_id(&reader_identity);
+    let reader_id = crate::db::scope_user_id_for_auth_identity("clerk", &reader_identity.user_id);
     {
         let mut catalog = lock_catalog(&state).unwrap();
         catalog.users.insert(

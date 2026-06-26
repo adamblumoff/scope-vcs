@@ -35,6 +35,12 @@ impl ApiError {
             message: message.into(),
         }
     }
+    pub(crate) fn too_many_requests(message: impl Into<String>) -> Self {
+        Self {
+            status: StatusCode::TOO_MANY_REQUESTS,
+            message: message.into(),
+        }
+    }
     pub(crate) fn unauthorized(message: impl Into<String>) -> Self {
         Self {
             status: StatusCode::UNAUTHORIZED,
@@ -62,12 +68,6 @@ impl ApiError {
     pub(crate) fn service_unavailable(message: impl Into<String>) -> Self {
         Self {
             status: StatusCode::SERVICE_UNAVAILABLE,
-            message: message.into(),
-        }
-    }
-    pub(crate) fn too_many_requests(message: impl Into<String>) -> Self {
-        Self {
-            status: StatusCode::TOO_MANY_REQUESTS,
             message: message.into(),
         }
     }

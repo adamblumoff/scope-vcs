@@ -7,9 +7,7 @@ use crate::domain::{
     },
 };
 use crate::{
-    auth::clerk::{
-        ensure_user_for_identity, http_identity, principal_for_repo, principal_for_user_id,
-    },
+    auth::scope::{optional_scope_user, principal_for_scope_user},
     error::ApiError,
     http::responses::*,
     object_store::{ObjectStore, source_blob_text},
@@ -30,8 +28,8 @@ pub(crate) async fn get_pending_import_review(
     Path((owner, repo_name)): Path<(String, String)>,
 ) -> Result<Json<PendingImportReviewResponse>, ApiError> {
     let repo = find_repo(&state, &owner, &repo_name)?;
-    let identity = http_identity(&state, &headers).await?;
-    let principal = principal_for_repo(&state, &repo, identity.as_ref())?;
+    let user = optional_scope_user(&state, &headers).await?;
+    let principal = principal_for_scope_user(&repo, user.as_ref());
     ensure_repo_read(&state, &repo, &principal)?;
     ensure_owner(&state, &repo, &principal)?;
     ensure_pending_publish(&repo)?;
@@ -51,8 +49,8 @@ pub(crate) async fn get_review_file_diff(
     Query(input): Query<ReviewFileDiffRequest>,
 ) -> Result<Json<ReviewFileDiffResponse>, ApiError> {
     let repo = find_repo(&state, &owner, &repo_name)?;
-    let identity = http_identity(&state, &headers).await?;
-    let principal = principal_for_repo(&state, &repo, identity.as_ref())?;
+    let user = optional_scope_user(&state, &headers).await?;
+    let principal = principal_for_scope_user(&repo, user.as_ref());
     ensure_repo_read(&state, &repo, &principal)?;
     ensure_owner(&state, &repo, &principal)?;
 
@@ -69,16 +67,9 @@ pub(crate) async fn publish_repo(
     headers: HeaderMap,
     Path((owner, repo_name)): Path<(String, String)>,
 ) -> Result<Json<SessionRepo>, ApiError> {
-    let identity = http_identity(&state, &headers).await?;
-    let user = identity
-        .as_ref()
-        .map(|identity| ensure_user_for_identity(&state, identity))
-        .transpose()?;
+    let user = optional_scope_user(&state, &headers).await?;
     let repo = find_repo(&state, &owner, &repo_name)?;
-    let principal = user
-        .as_ref()
-        .map(|user| principal_for_user_id(&repo, &user.id))
-        .unwrap_or_else(crate::domain::policy::Principal::public);
+    let principal = principal_for_scope_user(&repo, user.as_ref());
     ensure_repo_read(&state, &repo, &principal)?;
     ensure_owner(&state, &repo, &principal)?;
     ensure_pending_publish(&repo)?;
@@ -104,8 +95,8 @@ pub(crate) async fn get_staged_update(
     Path((owner, repo_name)): Path<(String, String)>,
 ) -> Result<Json<Option<StagedUpdateResponse>>, ApiError> {
     let repo = find_repo(&state, &owner, &repo_name)?;
-    let identity = http_identity(&state, &headers).await?;
-    let principal = principal_for_repo(&state, &repo, identity.as_ref())?;
+    let user = optional_scope_user(&state, &headers).await?;
+    let principal = principal_for_scope_user(&repo, user.as_ref());
     ensure_repo_read(&state, &repo, &principal)?;
     ensure_owner(&state, &repo, &principal)?;
 
@@ -124,8 +115,8 @@ pub(crate) async fn update_staged_file_visibility(
     Json(input): Json<UpdateStagedFileVisibilityRequest>,
 ) -> Result<Json<StagedUpdateResponse>, ApiError> {
     let repo = find_repo(&state, &owner, &repo_name)?;
-    let identity = http_identity(&state, &headers).await?;
-    let principal = principal_for_repo(&state, &repo, identity.as_ref())?;
+    let user = optional_scope_user(&state, &headers).await?;
+    let principal = principal_for_scope_user(&repo, user.as_ref());
     ensure_repo_read(&state, &repo, &principal)?;
     ensure_owner(&state, &repo, &principal)?;
     if input.paths.is_empty() {
@@ -154,8 +145,8 @@ pub(crate) async fn apply_staged_update(
     Path((owner, repo_name)): Path<(String, String)>,
 ) -> Result<Json<StagedUpdateResponse>, ApiError> {
     let repo = find_repo(&state, &owner, &repo_name)?;
-    let identity = http_identity(&state, &headers).await?;
-    let principal = principal_for_repo(&state, &repo, identity.as_ref())?;
+    let user = optional_scope_user(&state, &headers).await?;
+    let principal = principal_for_scope_user(&repo, user.as_ref());
     ensure_repo_read(&state, &repo, &principal)?;
     ensure_owner(&state, &repo, &principal)?;
     let applied = state
@@ -172,8 +163,8 @@ pub(crate) async fn reject_staged_update(
     Path((owner, repo_name)): Path<(String, String)>,
 ) -> Result<Json<StagedUpdateResponse>, ApiError> {
     let repo = find_repo(&state, &owner, &repo_name)?;
-    let identity = http_identity(&state, &headers).await?;
-    let principal = principal_for_repo(&state, &repo, identity.as_ref())?;
+    let user = optional_scope_user(&state, &headers).await?;
+    let principal = principal_for_scope_user(&repo, user.as_ref());
     ensure_repo_read(&state, &repo, &principal)?;
     ensure_owner(&state, &repo, &principal)?;
     let rejected = state
