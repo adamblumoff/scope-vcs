@@ -14,7 +14,10 @@
     "install": {
       "inputs": [
         { "step": "packages:mise" },
-        { "local": true, "include": ["."] }
+        {
+          "local": true,
+          "include": ["package.json", "pnpm-lock.yaml", "pnpm-workspace.yaml"]
+        }
       ],
       "commands": [
         "corepack enable",
@@ -24,7 +27,10 @@
       "caches": ["pnpm-store"]
     },
     "build": {
-      "inputs": [{ "step": "install" }],
+      "inputs": [
+        { "step": "install" },
+        { "local": true, "include": ["."] }
+      ],
       "commands": ["pnpm typecheck", "pnpm build"],
       "caches": ["pnpm-store"]
     }
