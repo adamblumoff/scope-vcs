@@ -21,7 +21,7 @@
     },
     "build": {
       "inputs": [{ "step": "install" }],
-      "commands": ["pnpm build"],
+      "commands": ["pnpm typecheck", "pnpm build"],
       "caches": ["pnpm-store"]
     }
   },
