@@ -1,0 +1,129 @@
+name: Scope API CI
+
+on:
+  pull_request:
+    paths:
+      - ".github/workflows/scope-api-ci.yml"
+      - "api/**"
+      - "web/scripts/check-api-contract.mjs"
+      - "web/src/api/types.generated.ts"
+  push:
+    branches:
+      - main
+    paths:
+      - ".github/workflows/scope-api-ci.yml"
+      - "api/**"
+      - "web/scripts/check-api-contract.mjs"
+      - "web/src/api/types.generated.ts"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+
+jobs:
+  checks:
+    name: Check scope-api
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: 1.94.0
+          components: rustfmt, clippy
+
+      - name: Cache Rust build outputs
+        uses: actions/cache@v6
+        with:
+          path: |
+            ~/.cargo/git
+            ~/.cargo/registry
+            api/target
+          key: ${{ runner.os }}-api-cargo-${{ hashFiles('api/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-api-cargo-
+
+      - name: Check formatting
+        run: cargo fmt --manifest-path api/Cargo.toml -- --check
+
+      - name: Test
+        run: cargo test --manifest-path api/Cargo.toml --locked
+
+      - name: Lint
+        run: cargo clippy --manifest-path api/Cargo.toml --all-targets --locked -- -D warnings
+
+      - name: Install Node
+        uses: actions/setup-node@v6
+        with:
+          node-version: 24
+
+      - name: Check API TypeScript contract
+        working-directory: web
+        run: node scripts/check-api-contract.mjs
+
+  deploy:
+    name: Deploy scope-api
+    needs: checks
+    runs-on: ubuntu-latest
+    if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main'
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Install Node
+        uses: actions/setup-node@v6
+        with:
+          node-version: 24
+
+      - name: Require Railway configuration
+        shell: bash
+        env:
+          RAILWAY_PROJECT_ID: ${{ secrets.RAILWAY_PROJECT_ID }}
+          RAILWAY_TOKEN: ${{ secrets.RAILWAY_TOKEN }}
+        run: |
+          if [ -z "$RAILWAY_TOKEN" ]; then
+            echo "Set the RAILWAY_TOKEN repository secret before deploying scope-api."
+            exit 1
+          fi
+
+          if [ -z "$RAILWAY_PROJECT_ID" ]; then
+            echo "Set the RAILWAY_PROJECT_ID repository secret before deploying scope-api."
+            exit 1
+          fi
+
+      - name: Install Railway CLI
+        run: npm install -g @railway/cli@5.23.1
+
+      - name: Deploy to Railway
+        shell: bash
+        env:
+          RAILWAY_DEPLOY_MESSAGE: ${{ github.event.head_commit.message || github.workflow }}
+          RAILWAY_PROJECT_ID: ${{ secrets.RAILWAY_PROJECT_ID }}
+          RAILWAY_TOKEN: ${{ secrets.RAILWAY_TOKEN }}
+        run: |
+          first_line="$(printf '%s\n' "$RAILWAY_DEPLOY_MESSAGE" | sed -n '1p')"
+          pr_title="$(printf '%s\n' "$RAILWAY_DEPLOY_MESSAGE" | awk 'NR > 1 && NF { print; exit }')"
+
+          if [[ "$first_line" =~ ^Merge\ pull\ request\ #[0-9]+ ]] && [ -n "$pr_title" ]; then
+            deploy_message="$pr_title"
+          else
+            deploy_message="$first_line"
+          fi
+
+          if [ -z "$deploy_message" ]; then
+            deploy_message="${GITHUB_WORKFLOW:-Scope API CI}"
+          fi
+
+          railway up api \
+            --path-as-root \
+            --project "$RAILWAY_PROJECT_ID" \
+            --service scope-api \
+            --environment production \
+            --message "$deploy_message" \
+            --json

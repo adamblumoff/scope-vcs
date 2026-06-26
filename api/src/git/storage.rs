@@ -315,15 +315,15 @@ pub(crate) fn install_published_pre_receive_hook(repo_root: &FsPath) -> Result<(
 }
 
 pub(crate) fn write_receive_pack_hook(hook: &FsPath, script: &str) -> Result<(), ApiError> {
-    fs::write(&hook, script).map_err(ApiError::internal)?;
+    fs::write(hook, script).map_err(ApiError::internal)?;
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
-        let mut permissions = fs::metadata(&hook)
+        let mut permissions = fs::metadata(hook)
             .map_err(ApiError::internal)?
             .permissions();
         permissions.set_mode(0o755);
-        fs::set_permissions(&hook, permissions).map_err(ApiError::internal)?;
+        fs::set_permissions(hook, permissions).map_err(ApiError::internal)?;
     }
     Ok(())
 }
@@ -404,7 +404,6 @@ impl CgiResponse {
             };
             if name.eq_ignore_ascii_case("Status") {
                 let code = value
-                    .trim()
                     .split_whitespace()
                     .next()
                     .and_then(|code| code.parse::<u16>().ok())

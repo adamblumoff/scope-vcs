@@ -24,6 +24,7 @@ use std::{
 use time::OffsetDateTime;
 
 type HmacSha256 = Hmac<Sha256>;
+type MemoryObjects = Arc<Mutex<BTreeMap<String, Vec<u8>>>>;
 const ENCRYPTED_OBJECT_MAGIC: &[u8] = b"scope-vcs-object-v1\n";
 const ENCRYPTED_OBJECT_NONCE_BYTES: usize = 12;
 const S3_CONNECT_TIMEOUT: Duration = Duration::from_secs(3);
@@ -40,12 +41,12 @@ pub trait ObjectStore: Send + Sync {
 
 #[derive(Clone)]
 pub struct MemoryObjectStore {
-    objects: Arc<Mutex<BTreeMap<String, Vec<u8>>>>,
+    objects: MemoryObjects,
 }
 
 impl MemoryObjectStore {
     pub fn new() -> Self {
-        static OBJECTS: OnceLock<Arc<Mutex<BTreeMap<String, Vec<u8>>>>> = OnceLock::new();
+        static OBJECTS: OnceLock<MemoryObjects> = OnceLock::new();
         Self {
             objects: OBJECTS
                 .get_or_init(|| Arc::new(Mutex::new(BTreeMap::new())))
@@ -68,6 +69,12 @@ impl MemoryObjectStore {
             .expect("object store lock")
             .values()
             .any(|stored| stored == bytes)
+    }
+}
+
+impl Default for MemoryObjectStore {
+    fn default() -> Self {
+        Self::new()
     }
 }
 

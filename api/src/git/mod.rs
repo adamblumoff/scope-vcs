@@ -213,8 +213,8 @@ pub(crate) async fn receive_pack_access(
         ReceivePackAuthorization::ScopeUser(user) => {
             let repo = find_repo(state, owner, repo_name)?;
             let principal = principal_for_user_id(&repo, &user.id);
-            if !role_for_principal(state, &repo, &principal)?
-                .is_some_and(|role| role >= RepoRole::Writer)
+            if role_for_principal(state, &repo, &principal)?
+                .is_none_or(|role| role < RepoRole::Writer)
             {
                 return Err(ApiError::not_found(format!(
                     "repo {owner}/{repo_name} not found"

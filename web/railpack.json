@@ -1,6 +1,30 @@
 {
   "$schema": "https://schema.railpack.com",
   "provider": "node",
+  "packages": {
+    "node": "24"
+  },
+  "caches": {
+    "pnpm-store": {
+      "directory": "/root/.local/share/pnpm/store",
+      "type": "shared"
+    }
+  },
+  "steps": {
+    "install": {
+      "commands": [
+        "corepack enable",
+        "corepack prepare pnpm@11.1.0 --activate",
+        "pnpm install --frozen-lockfile"
+      ],
+      "caches": ["pnpm-store"]
+    },
+    "build": {
+      "inputs": [{ "step": "install" }],
+      "commands": ["pnpm build"],
+      "caches": ["pnpm-store"]
+    }
+  },
   "deploy": {
     "startCommand": "node .output/server/index.mjs"
   }

@@ -4,9 +4,12 @@
   "sideEffects": false,
   "type": "module",
   "packageManager": "pnpm@11.1.0",
+  "engines": {
+    "node": "24.x"
+  },
   "scripts": {
     "dev": "vite dev",
-    "build": "vite build && tsc --noEmit",
+    "build": "vite build",
     "check": "pnpm typecheck && pnpm check:api-contract && pnpm check:line-limit",
     "check:api-contract": "node scripts/check-api-contract.mjs",
     "check:line-limit": "node scripts/check-line-limit.mjs",
