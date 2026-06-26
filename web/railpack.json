@@ -12,6 +12,10 @@
   },
   "steps": {
     "install": {
+      "inputs": [
+        { "step": "packages:mise" },
+        { "local": true, "include": ["."] }
+      ],
       "commands": [
         "corepack enable",
         "corepack prepare pnpm@11.1.0 --activate",
