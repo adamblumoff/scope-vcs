@@ -80,7 +80,7 @@ fn keychain_setup_help() -> &'static str {
             target_os = "android"
         ))
     )) {
-        "Scope stores CLI sessions in the OS keychain. On Linux this requires a running, unlocked Secret Service provider.\n\nUbuntu/WSL setup:\n  sudo apt update\n  sudo apt install -y gnome-keyring dbus-x11 libsecret-tools\n  dbus-run-session -- bash\n\nThen, inside that fresh shell:\n  read -rsp \"Keyring password: \" KEYRING_PASSWORD; echo\n  printf %s \"$KEYRING_PASSWORD\" | gnome-keyring-daemon --unlock --components=secrets\n  unset KEYRING_PASSWORD\n  printf ok | secret-tool store --label=\"Scope keyring test\" scope test\n  secret-tool lookup scope test\n  secret-tool clear scope test\n  scope login\n\nIf you add the DBus/keyring startup commands to your shell profile, restart the shell or run `source ~/.bashrc` before running scope login. The important part is that scope must run from a shell that has the DBus/keyring environment variables.\n\nIf the test store still fails in WSL, back up and recreate the Linux keyring with:\n  cp -a ~/.local/share/keyrings ~/.local/share/keyrings.backup.$(date +%s) 2>/dev/null || true\n  rm -rf ~/.local/share/keyrings\n\nThen rerun the unlock and secret-tool test commands above from the same dbus-run-session shell."
+        "Scope stores CLI sessions in the OS keychain. On Linux this requires a running, unlocked Secret Service provider.\n\nUbuntu/WSL setup:\n  sudo apt update\n  sudo apt install -y gnome-keyring dbus-x11 libsecret-tools\n  dbus-run-session -- bash\n\nThen, inside that fresh shell:\n  You may be prompted to create or enter a Linux keyring password. This can be different from your account password.\n  read -rsp \"Keyring password: \" KEYRING_PASSWORD; echo\n  printf %s \"$KEYRING_PASSWORD\" | gnome-keyring-daemon --unlock --components=secrets\n  unset KEYRING_PASSWORD\n  printf ok | secret-tool store --label=\"Scope keyring test\" scope test\n  secret-tool lookup scope test\n  secret-tool clear scope test\n  scope login\n\nIf you add the DBus/keyring startup commands to your shell profile, restart the shell or run `source ~/.bashrc` before running scope login. The important part is that scope must run from a shell that has the DBus/keyring environment variables.\n\nIf the test store still fails in WSL, back up and recreate the Linux keyring with:\n  cp -a ~/.local/share/keyrings ~/.local/share/keyrings.backup.$(date +%s) 2>/dev/null || true\n  rm -rf ~/.local/share/keyrings\n\nThen rerun the unlock and secret-tool test commands above from the same dbus-run-session shell."
     } else {
         "Scope stores CLI sessions in the OS keychain. Make sure the OS credential store is available and unlocked."
     }
@@ -126,6 +126,7 @@ mod tests {
             assert!(help.contains("Secret Service"));
             assert!(help.contains("gnome-keyring"));
             assert!(help.contains("dbus-run-session"));
+            assert!(help.contains("create or enter a Linux keyring password"));
             assert!(help.contains("restart the shell"));
             assert!(help.contains("source ~/.bashrc"));
         }
