@@ -83,7 +83,9 @@ jobs:
         run: |
           rm -rf .railway-upload
           mkdir -p .railway-upload
-          cp -a web .railway-upload/web
+          cp -a web/. .railway-upload/
+          mkdir -p .railway-upload/web
+          cp -a web/. .railway-upload/web/
 
       - name: Require Railway configuration
         shell: bash

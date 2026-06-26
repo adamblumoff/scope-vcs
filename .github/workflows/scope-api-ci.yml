@@ -87,7 +87,9 @@ jobs:
         run: |
           rm -rf .railway-upload
           mkdir -p .railway-upload
-          cp -a api .railway-upload/api
+          cp -a api/. .railway-upload/
+          mkdir -p .railway-upload/api
+          cp -a api/. .railway-upload/api/
 
       - name: Require Railway configuration
         shell: bash
