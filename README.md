@@ -17,8 +17,12 @@ the canonical source of truth is a server-side source graph.
 ## Local Checks
 
 ```bash
+(cd api && cargo fmt -- --check)
 (cd api && cargo test)
+(cd api && cargo clippy --all-targets --locked -- -D warnings)
+(cd cli && cargo fmt -- --check)
 (cd cli && cargo test)
+(cd cli && cargo clippy --all-targets --locked -- -D warnings)
 (cd cli && cargo build --release --locked)
 (cd web && pnpm install)
 (cd web && pnpm check)
@@ -43,7 +47,7 @@ Railway services:
 - `scope-cli` is a Railpack Rust service rooted at `cli`. Runtime deploys build
   `scope-cli-service`, which serves `/install.sh`, `/install.ps1`, and
   allowlisted files from `/downloads/<artifact>`. The downloadable `scope`
-  binaries are built by `.github/workflows/scope-cli.yml`, staged in
+  binaries are built by `.github/workflows/scope-cli-build.yml`, staged in
   `cli/dist`, checksummed, copied into `.railway-upload/cli`, and uploaded to
   Railway with `railway up .railway-upload --path-as-root --no-gitignore`.
   The service `readyz` route
@@ -58,8 +62,11 @@ Railway services:
   `SCOPE_CLI_INSTALL_URL` in `scope-web`. Set `SCOPE_CLI_PUBLIC_URL` on the CLI
   service to the same public URL when you want installer scripts to avoid
   inferring the URL from request headers.
-- `scope-web` is a Railpack Node service rooted at `web`. It requires two API
-  origin variables, the CLI installer origin, and Clerk browser/server keys:
+- `scope-web` is a Railpack Node service rooted at `web`. Build and CI use
+  Node 24. Railway runs the Vite production build only; GitHub Actions owns
+  typechecking and other checks. Railpack caches the pnpm store between web
+  deploys. The service requires two API origin variables, the CLI installer
+  origin, and Clerk browser/server keys:
   - `SCOPE_API_INTERNAL_URL` is the server-to-server API origin used by
     TanStack Start server functions. On Railway, point it at the API private
     domain with the API port, for example
@@ -88,12 +95,17 @@ Railway services:
 Railway Postgres stores canonical metadata. Railway Buckets store encrypted
 source blobs and Git bundle snapshots.
 
-`scope-cli` GitHub Actions deploy variables:
+GitHub Actions deploy variables:
 
-- `RAILWAY_TOKEN` - repository secret used by the workflow to deploy the CLI
-  artifact bundle.
+- `RAILWAY_TOKEN` - repository secret used by service workflows to deploy to
+  Railway after service-specific checks pass on `main`.
 - `RAILWAY_PROJECT_ID` - repository secret for the Railway project that owns
-  the `scope-cli` service.
+  the `scope-api`, `scope-cli`, and `scope-web` services.
+
+Railway GitHub autodeploy should stay disabled for app services when CI owns
+deploys. The service-specific workflows pass the pushed commit message to
+Railway with `railway up --message`, so deployment names track the merged PR or
+commit rather than the raw CLI command.
 
 `scope-api` bucket variables:
 

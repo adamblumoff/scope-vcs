@@ -1,15 +1,15 @@
-name: Scope CLI
+name: Scope CLI Build
 
 on:
   pull_request:
     paths:
-      - ".github/workflows/scope-cli.yml"
+      - ".github/workflows/scope-cli-build.yml"
       - "cli/**"
   push:
     branches:
       - main
     paths:
-      - ".github/workflows/scope-cli.yml"
+      - ".github/workflows/scope-cli-build.yml"
       - "cli/**"
   workflow_dispatch:
 
@@ -18,10 +18,54 @@ permissions:
 
 env:
   CARGO_TERM_COLOR: always
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
 
 jobs:
+  checks:
+    name: Check scope-cli
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: 1.94.0
+          components: rustfmt, clippy
+
+      - name: Cache Rust build outputs
+        uses: actions/cache@v6
+        with:
+          path: |
+            ~/.cargo/git
+            ~/.cargo/registry
+            cli/target
+          key: ${{ runner.os }}-cli-cargo-${{ hashFiles('cli/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-cli-cargo-
+
+      - name: Check formatting
+        run: cargo fmt --manifest-path cli/Cargo.toml -- --check
+
+      - name: Test
+        run: cargo test --manifest-path cli/Cargo.toml --locked
+
+      - name: Lint
+        run: cargo clippy --manifest-path cli/Cargo.toml --all-targets --locked -- -D warnings
+
+      - name: Build release binaries
+        run: >
+          cargo build
+          --manifest-path cli/Cargo.toml
+          --release
+          --locked
+          --bin scope
+          --bin scope-cli-service
+
   build:
     name: Build ${{ matrix.label }}
+    needs: checks
     runs-on: ${{ matrix.runner }}
     strategy:
       fail-fast: false
@@ -72,7 +116,7 @@ jobs:
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       - name: Install Rust
         uses: dtolnay/rust-toolchain@master
@@ -81,12 +125,15 @@ jobs:
           targets: ${{ matrix.target }}
 
       - name: Cache Rust build outputs
-        uses: Swatinem/rust-cache@v2
+        uses: actions/cache@v6
         with:
-          workspaces: |
-            cli -> target
-          key: ${{ matrix.target }}
-          cache-on-failure: true
+          path: |
+            ~/.cargo/git
+            ~/.cargo/registry
+            cli/target
+          key: ${{ runner.os }}-${{ matrix.target }}-cargo-${{ hashFiles('cli/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-${{ matrix.target }}-cargo-
 
       - name: Install cross
         if: matrix.builder == 'cross'
@@ -119,7 +166,7 @@ jobs:
           cp "${{ matrix.binary }}" "dist/${{ matrix.artifact }}"
 
       - name: Upload artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: ${{ matrix.artifact }}
           path: cli/dist/${{ matrix.artifact }}
@@ -132,10 +179,10 @@ jobs:
     if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main'
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       - name: Download artifacts
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           path: cli/dist
           merge-multiple: true
@@ -179,6 +226,11 @@ jobs:
             exit 1
           fi
 
+      - name: Install Node
+        uses: actions/setup-node@v6
+        with:
+          node-version: 24
+
       - name: Stage Railway upload root
         shell: bash
         run: |
@@ -192,13 +244,28 @@ jobs:
       - name: Deploy artifacts to Railway
         shell: bash
         env:
+          RAILWAY_DEPLOY_MESSAGE: ${{ github.event.head_commit.message || github.workflow }}
           RAILWAY_PROJECT_ID: ${{ secrets.RAILWAY_PROJECT_ID }}
           RAILWAY_TOKEN: ${{ secrets.RAILWAY_TOKEN }}
-        run: >
-          railway up .railway-upload
-          --path-as-root
-          --no-gitignore
-          --project "$RAILWAY_PROJECT_ID"
-          --service scope-cli
-          --environment production
-          --json
+        run: |
+          first_line="$(printf '%s\n' "$RAILWAY_DEPLOY_MESSAGE" | sed -n '1p')"
+          pr_title="$(printf '%s\n' "$RAILWAY_DEPLOY_MESSAGE" | awk 'NR > 1 && NF { print; exit }')"
+
+          if [[ "$first_line" =~ ^Merge\ pull\ request\ #[0-9]+ ]] && [ -n "$pr_title" ]; then
+            deploy_message="$pr_title"
+          else
+            deploy_message="$first_line"
+          fi
+
+          if [ -z "$deploy_message" ]; then
+            deploy_message="${GITHUB_WORKFLOW:-Scope CLI Build}"
+          fi
+
+          railway up .railway-upload \
+            --path-as-root \
+            --no-gitignore \
+            --project "$RAILWAY_PROJECT_ID" \
+            --service scope-cli \
+            --environment production \
+            --message "$deploy_message" \
+            --json

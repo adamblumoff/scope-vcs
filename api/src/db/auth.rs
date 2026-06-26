@@ -770,9 +770,8 @@ impl MemoryAuthState {
         let expired_device_codes = self
             .cli_device_logins
             .iter()
-            .filter_map(|(device_code_hash, login)| {
-                (now >= login.expires_at_unix).then(|| device_code_hash.clone())
-            })
+            .filter(|(_, login)| now >= login.expires_at_unix)
+            .map(|(device_code_hash, _)| device_code_hash.clone())
             .collect::<Vec<_>>();
         for device_code_hash in expired_device_codes {
             self.remove_device_login(&device_code_hash);
