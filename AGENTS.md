@@ -4,6 +4,8 @@ We want the architecture centered around durable domain code: the layer that def
 
 Keep sources of truth singular, make side effects explicit, and prefer small behavior-owned modules over broad catch-all files. When ownership gets blurry, refactor toward clearer boundaries; when code exists only for speculation, compatibility, or half-owned future surfaces, delete it.
 
+Testing code should be seperate from source code, only combine if you have a good justification to do so.
+
 Please don't use cards for ui, only use them if absolutely necessary.
 
 No file should be over 1000 lines of code, at that point do an audit of the file and modularize.

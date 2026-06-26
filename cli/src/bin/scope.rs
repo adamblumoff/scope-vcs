@@ -1,19 +1,28 @@
 use anyhow::{Context, bail};
 use clap::{Parser, Subcommand};
-use keyring::Entry;
-use reqwest::{StatusCode, blocking::Client};
-use serde::{Deserialize, Serialize};
+use reqwest::blocking::Client;
+use scope_cli::{
+    api::{
+        AuthenticatedSession, BrowserLoginExchangeRequest, BrowserLoginStartRequest,
+        BrowserLoginStartResponse, CliExchangeGrantExchangeRequest, CliSessionTokenResponse,
+        DeviceLoginPollResponse, DeviceLoginStartResponse, DeviceLoginStatus, RepoInitResponse,
+        Visibility, api_url, create_repo, display_user, http_client, revoke_cli_session,
+        rollback_created_repo, validate_session_token,
+    },
+    auth::{
+        cached_cli_session, delete_stored_session_token, ensure_cli_session,
+        read_stored_session_token, store_session_token,
+    },
+};
 use std::{
     env,
     io::{self, Read, Write},
     net::{TcpListener, TcpStream},
+    path::PathBuf,
     process::Command,
     thread,
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
-
-const DEFAULT_API_URL: &str = "https://scope-api-production-0251.up.railway.app";
-const KEYCHAIN_SERVICE: &str = "scope-vcs";
 
 #[derive(Parser)]
 #[command(name = "scope")]
@@ -26,6 +35,7 @@ struct Cli {
 #[derive(Subcommand)]
 enum CommandKind {
     Init(InitArgs),
+    Clone(CloneArgs),
     Login(LoginArgs),
     Logout,
     Whoami,
@@ -39,6 +49,12 @@ struct InitArgs {
 }
 
 #[derive(Parser)]
+struct CloneArgs {
+    repository: String,
+    destination: Option<PathBuf>,
+}
+
+#[derive(Parser)]
 struct LoginArgs {
     #[arg(long)]
     headless: bool,
@@ -46,114 +62,11 @@ struct LoginArgs {
     exchange: Option<String>,
 }
 
-#[derive(Clone, Copy, Debug, Serialize)]
-enum Visibility {
-    Private,
-    Public,
-}
-
-#[derive(Deserialize)]
-struct DeviceLoginStartResponse {
-    device_code: String,
-    user_code: String,
-    verification_url: String,
-    expires_at_unix: u64,
-    poll_interval_secs: u64,
-}
-
-#[derive(Deserialize)]
-struct DeviceLoginPollResponse {
-    status: DeviceLoginStatus,
-    session_token: Option<String>,
-}
-
-#[derive(Serialize)]
-struct BrowserLoginStartRequest {
-    callback_url: String,
-}
-
-#[derive(Deserialize)]
-struct BrowserLoginStartResponse {
-    request_id: String,
-    request_secret: String,
-    authorization_url: String,
-    expires_at_unix: u64,
-}
-
-#[derive(Serialize)]
-struct BrowserLoginExchangeRequest {
-    request_secret: String,
-    callback_code: String,
-}
-
-#[derive(Serialize)]
-struct CliExchangeGrantExchangeRequest {
-    exchange_token: String,
-}
-
-#[derive(Deserialize)]
-struct CliSessionTokenResponse {
-    session_token: String,
-}
-
-#[derive(Deserialize)]
-enum DeviceLoginStatus {
-    Pending,
-    Complete,
-}
-
-struct AuthenticatedSession {
-    token: String,
-    user: UserResponse,
-}
-
-#[derive(Deserialize)]
-struct AccountSessionResponse {
-    user: Option<UserResponse>,
-}
-
-#[derive(Deserialize)]
-struct UserResponse {
-    handle: String,
-    email: String,
-}
-
-#[derive(Serialize)]
-struct CreateRepoRequest {
-    name: String,
-    visibility: Visibility,
-}
-
-#[derive(Deserialize)]
-struct CreateRepoResponse {
-    repo: RepoSummaryResponse,
-    init: RepoInitResponse,
-}
-
-#[derive(Deserialize)]
-struct RepoSummaryResponse {
-    owner_handle: String,
-    name: String,
-}
-
-#[derive(Deserialize)]
-struct RepoInitResponse {
-    git_remote_url: String,
-    remote_name: String,
-    push_branch: String,
-    push_token: Option<GitPushTokenResponse>,
-    review_url: String,
-}
-
-#[derive(Deserialize)]
-struct GitPushTokenResponse {
-    secret: Option<String>,
-}
-
 fn main() -> anyhow::Result<()> {
     let cli = Cli::parse();
     match cli.command {
         CommandKind::Init(args) => init(args),
+        CommandKind::Clone(args) => clone(args),
         CommandKind::Login(args) => login(args),
         CommandKind::Logout => logout(),
         CommandKind::Whoami => whoami(),
@@ -174,10 +87,7 @@ fn init(args: InitArgs) -> anyhow::Result<()> {
 
     ensure_git_repo_ready()?;
 
-    let client = Client::builder()
-        .timeout(Duration::from_secs(20))
-        .build()
-        .context("build HTTP client")?;
+    let client = http_client()?;
     let session = ensure_cli_session(&client, &api_url)?;
     let created = create_repo(&client, &api_url, &session.token, repo_name, visibility)?;
     let push_secret = created
@@ -199,16 +109,17 @@ fn init(args: InitArgs) -> anyhow::Result<()> {
     Ok(())
 }
 
+fn clone(args: CloneArgs) -> anyhow::Result<()> {
+    scope_cli::clone::clone_repo(&args.repository, args.destination.as_deref())
+}
+
 fn login(args: LoginArgs) -> anyhow::Result<()> {
     if args.headless && args.exchange.is_some() {
         bail!("--headless and --exchange cannot be used together");
     }
 
     let api_url = api_url();
-    let client = Client::builder()
-        .timeout(Duration::from_secs(20))
-        .build()
-        .context("build HTTP client")?;
+    let client = http_client()?;
 
     if let Some(exchange_token) = args.exchange {
         let session = exchange_login(&client, &api_url, &exchange_token)?;
@@ -234,10 +145,7 @@ fn login(args: LoginArgs) -> anyhow::Result<()> {
 
 fn logout() -> anyhow::Result<()> {
     let api_url = api_url();
-    let client = Client::builder()
-        .timeout(Duration::from_secs(20))
-        .build()
-        .context("build HTTP client")?;
+    let client = http_client()?;
 
     let Some(token) = read_stored_session_token(&api_url)? else {
         println!("Not signed in");
@@ -254,41 +162,13 @@ fn logout() -> anyhow::Result<()> {
 
 fn whoami() -> anyhow::Result<()> {
     let api_url = api_url();
-    let client = Client::builder()
-        .timeout(Duration::from_secs(20))
-        .build()
-        .context("build HTTP client")?;
+    let client = http_client()?;
 
     let Some(session) = cached_cli_session(&client, &api_url)? else {
         bail!("not signed in; run scope login");
     };
     println!("{}", display_user(&session.user));
     Ok(())
-}
-
-fn ensure_cli_session(client: &Client, api_url: &str) -> anyhow::Result<AuthenticatedSession> {
-    if let Some(session) = cached_cli_session(client, api_url)? {
-        return Ok(session);
-    }
-
-    bail!("not signed in; run scope login before scope init")
-}
-
-fn cached_cli_session(
-    client: &Client,
-    api_url: &str,
-) -> anyhow::Result<Option<AuthenticatedSession>> {
-    let Some(token) = read_stored_session_token(api_url)? else {
-        return Ok(None);
-    };
-
-    match validate_session_token(client, api_url, &token)? {
-        Some(user) => Ok(Some(AuthenticatedSession { token, user })),
-        None => {
-            delete_stored_session_token(api_url)?;
-            Ok(None)
-        }
-    }
 }
 
 fn local_browser_login(client: &Client, api_url: &str) -> anyhow::Result<AuthenticatedSession> {
@@ -549,99 +429,12 @@ fn write_browser_callback_response(stream: &mut TcpStream, status: &str, message
     let _ = stream.flush();
 }
 
-fn validate_session_token(
-    client: &Client,
-    api_url: &str,
-    session_token: &str,
-) -> anyhow::Result<Option<UserResponse>> {
-    let response = client
-        .get(format!("{api_url}/v1/session"))
-        .bearer_auth(session_token)
-        .send()
-        .context("validate saved Scope login")?;
-    if response.status() == StatusCode::UNAUTHORIZED {
-        return Ok(None);
-    }
-
-    let session: AccountSessionResponse = response
-        .error_for_status()
-        .context("validate saved Scope login")?
-        .json()
-        .context("parse saved Scope login response")?;
-    Ok(session.user)
-}
-
-fn revoke_cli_session(client: &Client, api_url: &str, session_token: &str) -> anyhow::Result<()> {
-    let response = client
-        .delete(format!("{api_url}/v1/cli/session"))
-        .bearer_auth(session_token)
-        .send()
-        .context("revoke Scope CLI session")?;
-    if response.status() == StatusCode::UNAUTHORIZED {
-        return Ok(());
-    }
-
-    response
-        .error_for_status()
-        .context("revoke Scope CLI session")?;
-    Ok(())
-}
-
 fn format_user_code(code: &str) -> String {
     code.as_bytes()
         .chunks(4)
         .map(|chunk| String::from_utf8_lossy(chunk).to_string())
         .collect::<Vec<_>>()
         .join("-")
-}
-
-fn create_repo(
-    client: &Client,
-    api_url: &str,
-    session_token: &str,
-    name: String,
-    visibility: Visibility,
-) -> anyhow::Result<CreateRepoResponse> {
-    client
-        .post(format!("{api_url}/v1/repos"))
-        .bearer_auth(session_token)
-        .json(&CreateRepoRequest { name, visibility })
-        .send()
-        .context("create Scope repository")?
-        .error_for_status()
-        .context("create Scope repository")?
-        .json()
-        .context("parse create repository response")
-}
-
-fn rollback_created_repo(
-    client: &Client,
-    api_url: &str,
-    session_token: &str,
-    repo: &RepoSummaryResponse,
-) {
-    let result = client
-        .delete(format!(
-            "{api_url}/v1/repos/{}/{}",
-            repo.owner_handle, repo.name
-        ))
-        .bearer_auth(session_token)
-        .send();
-
-    match result {
-        Ok(response) if response.status().is_success() => {
-            eprintln!("Deleted Scope repository after failed init");
-        }
-        Ok(response) => {
-            eprintln!(
-                "Scope repository was created, but rollback failed: {}",
-                response.status()
-            );
-        }
-        Err(error) => {
-            eprintln!("Scope repository was created, but rollback failed: {error}");
-        }
-    }
 }
 
 fn configure_remote(init: &RepoInitResponse) -> anyhow::Result<()> {
@@ -717,96 +510,12 @@ fn prompt_repo_name() -> anyhow::Result<String> {
     normalize_repo_name(&name)
 }
 
-fn read_stored_session_token(api_url: &str) -> anyhow::Result<Option<String>> {
-    let entry = session_keychain_entry(api_url)?;
-    match entry.get_password() {
-        Ok(token) if token.trim().is_empty() => Ok(None),
-        Ok(token) => Ok(Some(token)),
-        Err(keyring::Error::NoEntry) => Ok(None),
-        Err(error) => Err(error).context(keychain_error_context(
-            "read Scope CLI session from OS keychain",
-        )),
-    }
-}
-
-fn store_session_token(api_url: &str, session_token: &str) -> anyhow::Result<()> {
-    let entry = session_keychain_entry(api_url)?;
-    entry
-        .set_password(session_token)
-        .context(keychain_error_context(
-            "store Scope CLI session in OS keychain",
-        ))
-}
-
-fn delete_stored_session_token(api_url: &str) -> anyhow::Result<()> {
-    let entry = session_keychain_entry(api_url)?;
-    match entry.delete_credential() {
-        Ok(()) | Err(keyring::Error::NoEntry) => Ok(()),
-        Err(error) => Err(error).context(keychain_error_context(
-            "delete Scope CLI session from OS keychain",
-        )),
-    }
-}
-
-fn session_keychain_entry(api_url: &str) -> anyhow::Result<Entry> {
-    Entry::new(KEYCHAIN_SERVICE, &session_keychain_username(api_url)).context(
-        keychain_error_context("open OS keychain entry for Scope CLI session"),
-    )
-}
-
-fn keychain_error_context(action: &str) -> String {
-    format!("{action}\n\n{}", keychain_setup_help())
-}
-
-fn keychain_setup_help() -> &'static str {
-    if cfg!(all(
-        unix,
-        not(any(
-            target_os = "macos",
-            target_os = "ios",
-            target_os = "android"
-        ))
-    )) {
-        "Scope stores CLI sessions in the OS keychain. On Linux this requires a running, unlocked Secret Service provider.\n\nUbuntu/WSL setup:\n  sudo apt update\n  sudo apt install -y gnome-keyring dbus-x11 libsecret-tools\n  dbus-run-session -- bash\n\nThen, inside that fresh shell:\n  read -rsp \"Keyring password: \" KEYRING_PASSWORD; echo\n  printf %s \"$KEYRING_PASSWORD\" | gnome-keyring-daemon --unlock --components=secrets\n  unset KEYRING_PASSWORD\n  printf ok | secret-tool store --label=\"Scope keyring test\" scope test\n  secret-tool lookup scope test\n  secret-tool clear scope test\n  scope login\n\nIf you add the DBus/keyring startup commands to your shell profile, restart the shell or run `source ~/.bashrc` before running scope login. The important part is that scope must run from a shell that has the DBus/keyring environment variables.\n\nIf the test store still fails in WSL, back up and recreate the Linux keyring with:\n  cp -a ~/.local/share/keyrings ~/.local/share/keyrings.backup.$(date +%s) 2>/dev/null || true\n  rm -rf ~/.local/share/keyrings\n\nThen rerun the unlock and secret-tool test commands above from the same dbus-run-session shell."
-    } else {
-        "Scope stores CLI sessions in the OS keychain. Make sure the OS credential store is available and unlocked."
-    }
-}
-
-fn session_keychain_username(api_url: &str) -> String {
-    let mut encoded = String::with_capacity(api_url.len() * 2);
-    for byte in api_url.bytes() {
-        use std::fmt::Write as _;
-        write!(&mut encoded, "{byte:02x}").expect("writing to a string cannot fail");
-    }
-    format!("cli-session-{encoded}")
-}
-
-fn display_user(user: &UserResponse) -> String {
-    if user.email.trim().is_empty() {
-        format!("@{}", user.handle)
-    } else {
-        format!("@{} <{}>", user.handle, user.email)
-    }
-}
-
 fn normalize_repo_name(name: &str) -> anyhow::Result<String> {
     let name = name.trim().to_ascii_lowercase();
     if name.is_empty() {
         bail!("repository name is required");
     }
     Ok(name)
-}
-
-fn api_url() -> String {
-    env::var("SCOPE_API_URL")
-        .or_else(|_| env::var("SCOPE_API_PUBLIC_URL"))
-        .ok()
-        .or_else(|| option_env!("SCOPE_API_URL").map(str::to_string))
-        .or_else(|| option_env!("SCOPE_API_PUBLIC_URL").map(str::to_string))
-        .unwrap_or_else(|| DEFAULT_API_URL.to_string())
-        .trim_end_matches('/')
-        .to_string()
 }
 
 fn unix_now() -> u64 {
@@ -823,38 +532,6 @@ mod tests {
     #[test]
     fn user_code_is_grouped_for_manual_entry() {
         assert_eq!(format_user_code("ABCDEF1234567890"), "ABCD-EF12-3456-7890");
-    }
-
-    #[test]
-    fn keychain_username_is_scoped_to_api_url() {
-        assert_eq!(
-            session_keychain_username("https://scope-api-production.up.railway.app"),
-            "cli-session-68747470733a2f2f73636f70652d6170692d70726f64756374696f6e2e75702e7261696c7761792e617070"
-        );
-        assert_ne!(
-            session_keychain_username("https://scope-api-production.up.railway.app"),
-            session_keychain_username("http://localhost:8080")
-        );
-    }
-
-    #[test]
-    fn keychain_error_help_explains_linux_secret_service_setup() {
-        let help = keychain_error_context("open OS keychain entry");
-        assert!(help.contains("OS keychain"));
-        if cfg!(all(
-            unix,
-            not(any(
-                target_os = "macos",
-                target_os = "ios",
-                target_os = "android"
-            ))
-        )) {
-            assert!(help.contains("Secret Service"));
-            assert!(help.contains("gnome-keyring"));
-            assert!(help.contains("dbus-run-session"));
-            assert!(help.contains("restart the shell"));
-            assert!(help.contains("source ~/.bashrc"));
-        }
     }
 
     #[test]

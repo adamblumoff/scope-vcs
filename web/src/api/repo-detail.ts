@@ -5,10 +5,8 @@ import {
 } from '@/api/client'
 import { loadProjectionPreviewsForRequest } from './projection-preview'
 import { loadReviewForRequest } from './review'
-import { gitRemoteUrl, repoCloneCredentialView } from './repo-urls'
+import { gitRemoteUrl } from './repo-urls'
 import type {
-  RepoCloneCredential,
-  RepoCloneCredentialView,
   RepoDetail,
   RepoFile,
   RepoParams,
@@ -16,21 +14,6 @@ import type {
   RepoSummary,
   SetRepoFileVisibilityInput,
 } from './types'
-
-export async function createCloneCredentialForRequest(
-  data: RepoParams,
-): Promise<RepoCloneCredentialView> {
-  const api = createApiClient()
-  const payload = await api.post<RepoCloneCredential>(
-    `/v1/repos/${data.owner}/${data.repo}/clone-credential`,
-    { auth: 'required' },
-  )
-
-  return repoCloneCredentialView(
-    getPublicApiConnection('building clone command'),
-    payload,
-  )
-}
 
 export async function loadRepoForRequest(data: RepoParams) {
   const api = createApiClient()

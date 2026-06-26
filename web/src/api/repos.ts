@@ -2,7 +2,6 @@ export { loadHomeForRequest } from './home'
 export {
   loadRepoForRequest,
   parseRepoParams,
-  createCloneCredentialForRequest,
   setRepoFileVisibilityForRequest,
 } from './repo-detail'
 export {

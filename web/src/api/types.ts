@@ -13,7 +13,6 @@ import type {
   DeleteRepoResponse as GeneratedDeleteRepoResponse,
   FirstPushTokenResponse,
   FirstPushTokenStatus,
-  GitCloneTokenResponse,
   PendingImportReviewResponse,
   ProjectionPreviewAudience as GeneratedProjectionPreviewAudience,
   ProjectionPreviewCommitResponse,
@@ -25,7 +24,6 @@ import type {
   ReviewFileDiffResponse,
   ReviewLineDiffResponse,
   RepoFileResponse,
-  RepoCloneCredentialResponse,
   RepoPublicationState as GeneratedRepoPublicationState,
   RepoRole as GeneratedRepoRole,
   RepoSettingsResponse,
@@ -67,8 +65,6 @@ export type RepoCapabilities = SessionCapabilities
 export type SessionRepo = GeneratedSessionRepo
 export type RepoSession = SessionResponse
 export type FirstPushToken = FirstPushTokenResponse
-export type GitCloneToken = GitCloneTokenResponse
-export type RepoCloneCredential = RepoCloneCredentialResponse
 export type DeleteRepoResponse = GeneratedDeleteRepoResponse
 export type RepoSettings = RepoSettingsResponse
 export type CommitHistory = CommitHistoryResponse
@@ -98,10 +94,6 @@ export type RepoDetail = {
 export type RepoParams = {
   owner: string
   repo: string
-}
-
-export type RepoCloneCredentialView = RepoCloneCredential & {
-  git_remote_url: string
 }
 
 export type HomeState = {
