@@ -40,11 +40,11 @@ pub(crate) async fn complete_cli_browser_login(
     Path(request_id): Path<String>,
 ) -> Result<Json<BrowserLoginCompleteResponse>, ApiError> {
     let user = require_clerk_scope_user(&state, &headers).await?;
-    let redirect_url = state
+    let callback_url = state
         .metadata
         .complete_cli_browser_login(&request_id, &user)?;
 
-    Ok(Json(BrowserLoginCompleteResponse { redirect_url }))
+    Ok(Json(BrowserLoginCompleteResponse { callback_url }))
 }
 
 pub(crate) async fn exchange_cli_browser_login(

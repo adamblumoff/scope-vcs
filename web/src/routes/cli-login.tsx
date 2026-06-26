@@ -12,11 +12,15 @@ import { PageErrorAlert } from '@/components/page-error-alert'
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
+import {
+  CLI_CALLBACK_FALLBACK_DELAY_MS,
+  parseCliCallbackHandoffUrl,
+} from '@/lib/cli-callback-handoff'
 import { SignInButton, useUser } from '@clerk/tanstack-react-start'
 import { createFileRoute } from '@tanstack/react-router'
 import { createServerFn } from '@tanstack/react-start'
 import { CheckCircle2, LoaderCircle, LogIn, ShieldCheck } from 'lucide-react'
-import { type FormEvent, useState } from 'react'
+import { type FormEvent, useEffect, useState } from 'react'
 
 const completeCliLogin = createServerFn({ method: 'POST' })
   .validator(parseCompleteCliLoginInput)
@@ -45,13 +49,27 @@ function CliLoginRoute() {
   const search = Route.useSearch()
   const { isLoaded, isSignedIn } = useUser()
   const [code, setCode] = useState('')
-  const [state, setState] = useState<
-    | { kind: 'idle' }
-    | { kind: 'pending' }
-    | { kind: 'complete' }
-    | { kind: 'error'; message: string }
-  >({ kind: 'idle' })
+  const [state, setState] = useState<CliLoginRouteState>({ kind: 'idle' })
   const browserRequestId = search.request_id
+  const callbackUrl =
+    state.kind === 'callback-handoff' ? state.callbackUrl : null
+
+  useEffect(() => {
+    if (!callbackUrl) {
+      return
+    }
+
+    const timeout = window.setTimeout(() => {
+      setState((current) =>
+        current.kind === 'callback-handoff' &&
+        current.callbackUrl === callbackUrl
+          ? { ...current, fallbackAvailable: true }
+          : current,
+      )
+    }, CLI_CALLBACK_FALLBACK_DELAY_MS)
+
+    return () => window.clearTimeout(timeout)
+  }, [callbackUrl])
 
   async function authorizeCli(event: FormEvent<HTMLFormElement>) {
     event.preventDefault()
@@ -78,8 +96,11 @@ function CliLoginRoute() {
       const result = await completeBrowserCliLogin({
         data: { requestId: browserRequestId },
       })
-      setState({ kind: 'complete' })
-      window.location.assign(result.redirect_url)
+      setState({
+        kind: 'callback-handoff',
+        callbackUrl: parseCliCallbackHandoffUrl(result.callback_url),
+        fallbackAvailable: false,
+      })
     } catch (error) {
       setState({
         kind: 'error',
@@ -107,15 +128,59 @@ function CliLoginRoute() {
           </PageErrorAlert>
         )}
 
-        {state.kind === 'complete' && (
+        {(state.kind === 'complete' || state.kind === 'callback-handoff') && (
           <Alert className="mt-6">
             <CheckCircle2 className="size-4" />
             <AlertTitle>CLI authorized</AlertTitle>
-            <AlertDescription>Return to your terminal.</AlertDescription>
+            <AlertDescription>
+              <p>Return to your terminal.</p>
+              {state.kind === 'callback-handoff' &&
+                state.fallbackAvailable && (
+                  <div className="mt-3 flex flex-col items-start gap-2">
+                    <p>
+                      If your terminal is still waiting, finish the local CLI
+                      callback manually.
+                    </p>
+                    <Button
+                      asChild
+                      className="no-underline hover:no-underline"
+                      size="sm"
+                      variant="secondary"
+                    >
+                      <a href={state.callbackUrl}>Finish terminal login</a>
+                    </Button>
+                  </div>
+                )}
+            </AlertDescription>
           </Alert>
         )}
 
-        {state.kind !== 'complete' && browserRequestId && (
+        {state.kind === 'callback-handoff' && (
+          <iframe
+            aria-hidden="true"
+            className="sr-only"
+            onError={() =>
+              setState((current) =>
+                current.kind === 'callback-handoff' &&
+                current.callbackUrl === state.callbackUrl
+                  ? { ...current, fallbackAvailable: true }
+                  : current,
+              )
+            }
+            onLoad={() =>
+              setState((current) =>
+                current.kind === 'callback-handoff' &&
+                current.callbackUrl === state.callbackUrl
+                  ? { kind: 'complete' }
+                  : current,
+              )
+            }
+            src={state.callbackUrl}
+            title="Scope CLI local callback"
+          />
+        )}
+
+        {!isTerminalLoginComplete(state) && browserRequestId && (
           <section className="mt-8 border-y border-border py-5">
             <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
               <div className="min-w-0">
@@ -138,7 +203,7 @@ function CliLoginRoute() {
           </section>
         )}
 
-        {state.kind !== 'complete' && !browserRequestId && (
+        {!isTerminalLoginComplete(state) && !browserRequestId && (
           <form
             className="mt-8 border-y border-border py-5"
             onSubmit={(event) => void authorizeCli(event)}
@@ -176,6 +241,21 @@ function CliLoginRoute() {
       </PageContent>
     </main>
   )
+}
+
+type CliLoginRouteState =
+  | { kind: 'idle' }
+  | { kind: 'pending' }
+  | {
+      kind: 'callback-handoff'
+      callbackUrl: string
+      fallbackAvailable: boolean
+    }
+  | { kind: 'complete' }
+  | { kind: 'error'; message: string }
+
+function isTerminalLoginComplete(state: CliLoginRouteState) {
+  return state.kind === 'complete' || state.kind === 'callback-handoff'
 }
 
 function CliLoginAction({

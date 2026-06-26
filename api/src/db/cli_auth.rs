@@ -160,7 +160,7 @@ impl MetadataStore {
                         .await
                         .map_err(ApiError::internal)?;
                     tx.commit().await.map_err(ApiError::internal)?;
-                    callback_redirect_url(&login.callback_url, &login.request_id, &callback_code)
+                    browser_callback_url(&login.callback_url, &login.request_id, &callback_code)
                 })
             }
             #[cfg(test)]
@@ -185,7 +185,7 @@ impl MetadataStore {
                 login.callback_code_hash = Some(callback_code_hash);
                 login.completed_user_id = Some(user.id.clone());
                 login.completed_at_unix = Some(now);
-                callback_redirect_url(&login.callback_url, request_id, &callback_code)
+                browser_callback_url(&login.callback_url, request_id, &callback_code)
             }
         }
     }
@@ -591,7 +591,7 @@ fn browser_authorization_url(app_origin: &str, request_id: &str) -> Result<Strin
     Ok(url.to_string())
 }
 
-fn callback_redirect_url(
+fn browser_callback_url(
     callback_url: &str,
     request_id: &str,
     callback_code: &str,

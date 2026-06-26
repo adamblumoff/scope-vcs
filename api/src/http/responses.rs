@@ -149,7 +149,7 @@ pub(crate) struct BrowserLoginStartResponse {
 #[derive(Debug, Serialize)]
 #[cfg_attr(test, derive(ts_rs::TS))]
 pub(crate) struct BrowserLoginCompleteResponse {
-    pub(crate) redirect_url: String,
+    pub(crate) callback_url: String,
 }
 
 #[derive(Debug, Deserialize)]

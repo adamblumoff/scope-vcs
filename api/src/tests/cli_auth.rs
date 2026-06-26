@@ -35,11 +35,11 @@ async fn cli_browser_login_exchanges_local_callback_for_cli_token() {
         .unwrap();
     assert_eq!(complete.status(), StatusCode::OK);
     let complete = response_json(complete).await;
-    let redirect_url = reqwest::Url::parse(complete["redirect_url"].as_str().unwrap()).unwrap();
-    assert_eq!(redirect_url.scheme(), "http");
-    assert_eq!(redirect_url.host_str(), Some("127.0.0.1"));
-    assert_eq!(redirect_url.port(), Some(49152));
-    let query = redirect_url
+    let callback_url = reqwest::Url::parse(complete["callback_url"].as_str().unwrap()).unwrap();
+    assert_eq!(callback_url.scheme(), "http");
+    assert_eq!(callback_url.host_str(), Some("127.0.0.1"));
+    assert_eq!(callback_url.port(), Some(49152));
+    let query = callback_url
         .query_pairs()
         .into_owned()
         .collect::<BTreeMap<_, _>>();

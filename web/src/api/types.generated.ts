@@ -40,7 +40,7 @@ export type BrowserLoginStartRequest = { callback_url: string, };
 
 export type BrowserLoginStartResponse = { request_id: string, request_secret: string, authorization_url: string, expires_at_unix: number, };
 
-export type BrowserLoginCompleteResponse = { redirect_url: string, };
+export type BrowserLoginCompleteResponse = { callback_url: string, };
 
 export type BrowserLoginExchangeRequest = { request_secret: string, callback_code: string, };
 
