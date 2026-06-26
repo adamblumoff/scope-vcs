@@ -45,8 +45,9 @@ jobs:
             ~/.cargo/git
             ~/.cargo/registry
             api/target
-          key: ${{ runner.os }}-api-cargo-${{ hashFiles('api/Cargo.lock') }}
+          key: ${{ runner.os }}-api-cargo-${{ hashFiles('api/Cargo.lock') }}-${{ github.sha }}
           restore-keys: |
+            ${{ runner.os }}-api-cargo-${{ hashFiles('api/Cargo.lock') }}
             ${{ runner.os }}-api-cargo-
 
       - name: Check formatting
@@ -121,7 +122,6 @@ jobs:
           fi
 
           railway up api \
-            --path-as-root \
             --project "$RAILWAY_PROJECT_ID" \
             --service scope-api \
             --environment production \
