@@ -1,7 +1,9 @@
 use anyhow::{Context, bail};
 use reqwest::Url;
 use std::{
-    env, fs,
+    env,
+    ffi::OsString,
+    fs,
     io::Write,
     path::{Path, PathBuf},
     process::{Command, Stdio},
@@ -148,11 +150,22 @@ fn quote_git_helper_arg(value: &str) -> String {
 }
 
 fn home_dir() -> anyhow::Result<PathBuf> {
-    env::var_os("USERPROFILE")
-        .or_else(|| env::var_os("HOME"))
-        .map(PathBuf::from)
-        .filter(|path| !path.as_os_str().is_empty())
+    credential_home_dir(env::var_os("HOME"), env::var_os("USERPROFILE"))
         .context("find home directory for Scope Git credential store")
+}
+
+pub fn credential_home_dir(
+    home: Option<OsString>,
+    userprofile: Option<OsString>,
+) -> Option<PathBuf> {
+    let home = home.filter(|path| !path.is_empty());
+    let userprofile = userprofile.filter(|path| !path.is_empty());
+    let selected = if cfg!(windows) {
+        userprofile.or(home)
+    } else {
+        home.or(userprofile)
+    }?;
+    Some(PathBuf::from(selected))
 }
 
 fn approve_git_credential(fields: &[String]) -> anyhow::Result<()> {

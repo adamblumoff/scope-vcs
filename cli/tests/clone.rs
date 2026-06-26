@@ -1,7 +1,8 @@
 use scope_cli::{
     clone::{RepoSpec, parse_repo_spec},
-    git_credentials::git_clone_plan,
+    git_credentials::{credential_home_dir, git_clone_plan},
 };
+use std::ffi::OsString;
 use std::path::{Path, PathBuf};
 
 #[test]
@@ -121,5 +122,29 @@ fn git_clone_plan_quotes_space_containing_credential_store_paths() {
     assert_eq!(
         plan.helper_config_value,
         "store --file \"C:/Users/Adam Smith/.config/scope/git-credentials\""
+    );
+}
+
+#[test]
+#[cfg(not(windows))]
+fn credential_home_dir_prefers_home_on_non_windows() {
+    assert_eq!(
+        credential_home_dir(
+            Some(OsString::from("/home/scope")),
+            Some(OsString::from("C:/Users/Scope")),
+        ),
+        Some(PathBuf::from("/home/scope"))
+    );
+}
+
+#[test]
+#[cfg(windows)]
+fn credential_home_dir_prefers_userprofile_on_windows() {
+    assert_eq!(
+        credential_home_dir(
+            Some(OsString::from("C:/msys/home/scope")),
+            Some(OsString::from("C:/Users/Scope")),
+        ),
+        Some(PathBuf::from("C:/Users/Scope"))
     );
 }
