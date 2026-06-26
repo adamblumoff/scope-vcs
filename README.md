@@ -76,11 +76,14 @@ Railway services:
   The web app intentionally has no hard-coded production API fallback.
 - `scope-api` also requires `SCOPE_API_PUBLIC_URL`, `SCOPE_APP_ORIGIN`,
   `CLERK_ISSUER`, and optionally `CLERK_JWKS_URL`, `CLERK_AUTHORIZED_PARTIES`,
-  and `CLERK_AUDIENCE`. The API verifies Clerk session tokens against the
-  configured issuer and authorized origins, builds CLI login links, and returns
-  the review URL from `scope init`. `CLERK_AUTHORIZED_PARTIES` defaults to
-  `SCOPE_APP_ORIGIN` when omitted; set `CLERK_AUDIENCE` only when Clerk tokens
-  are minted with an API audience claim.
+  and `CLERK_AUDIENCE`. The API verifies Clerk API tokens against the
+  configured issuer, authorized origins, and the API audience. The default API
+  audience is `scope-api`; set `CLERK_AUDIENCE` only to override that value.
+  `CLERK_AUTHORIZED_PARTIES` defaults to `SCOPE_APP_ORIGIN` when omitted.
+- Clerk development and production instances must each define a JWT template
+  named `scope_api` with an `aud` claim of `scope-api`. The web app requests
+  this template for server-side API calls; missing templates cause Clerk token
+  generation to fail before the Scope API is reached.
 
 Railway Postgres stores canonical metadata. Railway Buckets store encrypted
 source blobs and Git bundle snapshots.
