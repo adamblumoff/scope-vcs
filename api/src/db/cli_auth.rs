@@ -8,8 +8,9 @@ use super::{
 use crate::{
     auth::{
         device::{
-            BrowserLoginStart, CliExchangeGrant, CliSessionSummary, CliSessionToken,
-            random_prefixed_token,
+            BROWSER_LOGIN_START_WINDOW_SECS, BrowserLoginStart, CliExchangeGrant,
+            CliSessionSummary, CliSessionToken, MAX_BROWSER_LOGIN_STARTS_PER_WINDOW,
+            MAX_PENDING_BROWSER_LOGINS, random_prefixed_token,
         },
         tokens::token_hash,
     },
@@ -25,8 +26,8 @@ use crate::{
 };
 use reqwest::Url;
 use sea_orm::{
-    ActiveModelTrait, ColumnTrait, EntityTrait, IntoActiveModel, QueryFilter, QueryOrder,
-    TransactionTrait, sea_query::Expr,
+    ActiveModelTrait, ColumnTrait, EntityTrait, IntoActiveModel, PaginatorTrait, QueryFilter,
+    QueryOrder, TransactionTrait, sea_query::Expr,
 };
 use std::sync::Arc;
 
@@ -61,6 +62,7 @@ impl MetadataStore {
                     let tx = db.as_ref().begin().await.map_err(ApiError::internal)?;
                     acquire_metadata_write_lock(&tx).await?;
                     cleanup_expired_cli_rows(&tx, now).await?;
+                    enforce_browser_login_start_limits(&tx, now).await?;
                     row.into_active_model()
                         .insert(&tx)
                         .await
@@ -76,12 +78,14 @@ impl MetadataStore {
                     .lock()
                     .map_err(|_| ApiError::internal_message("auth lock is poisoned"))?;
                 auth.cleanup_expired(now);
+                enforce_memory_browser_login_start_limits(&auth, now)?;
                 auth.cli_browser_logins.insert(
                     request_id.clone(),
                     MemoryBrowserLogin {
                         request_secret_hash: token_hash(&request_secret),
                         callback_url: callback_url.to_string(),
                         callback_code_hash: None,
+                        created_at_unix: now,
                         expires_at_unix,
                         completed_user_id: None,
                         completed_at_unix: None,
@@ -610,6 +614,21 @@ fn validate_loopback_callback_url(callback_url: &str) -> Result<Url, ApiError> {
             "CLI callback URL must include a port",
         ));
     }
+    if url.path() != "/scope-cli-callback" {
+        return Err(ApiError::bad_request(
+            "CLI callback URL must use /scope-cli-callback",
+        ));
+    }
+    if url.query().is_some() {
+        return Err(ApiError::bad_request(
+            "CLI callback URL must not include query parameters",
+        ));
+    }
+    if url.fragment().is_some() {
+        return Err(ApiError::bad_request(
+            "CLI callback URL must not include a fragment",
+        ));
+    }
     let Some(host) = url.host_str() else {
         return Err(ApiError::bad_request(
             "CLI callback URL must include a host",
@@ -621,6 +640,61 @@ fn validate_loopback_callback_url(callback_url: &str) -> Result<Url, ApiError> {
         ));
     }
     Ok(url)
+}
+
+async fn enforce_browser_login_start_limits<C>(conn: &C, now: u64) -> Result<(), ApiError>
+where
+    C: sea_orm::ConnectionTrait,
+{
+    let pending_count = entities::cli_browser_login::Entity::find()
+        .count(conn)
+        .await
+        .map_err(ApiError::internal)?;
+    if pending_count >= MAX_PENDING_BROWSER_LOGINS {
+        return Err(ApiError::too_many_requests(
+            "too many pending CLI browser logins",
+        ));
+    }
+
+    let window_start = u64_to_i64(now.saturating_sub(BROWSER_LOGIN_START_WINDOW_SECS))?;
+    let window_count = entities::cli_browser_login::Entity::find()
+        .filter(entities::cli_browser_login::Column::CreatedAtUnix.gte(window_start))
+        .count(conn)
+        .await
+        .map_err(ApiError::internal)?;
+    if window_count >= MAX_BROWSER_LOGIN_STARTS_PER_WINDOW {
+        return Err(ApiError::too_many_requests(
+            "too many CLI browser login starts",
+        ));
+    }
+
+    Ok(())
+}
+
+#[cfg(test)]
+fn enforce_memory_browser_login_start_limits(
+    auth: &super::auth::MemoryAuthState,
+    now: u64,
+) -> Result<(), ApiError> {
+    if auth.cli_browser_logins.len() as u64 >= MAX_PENDING_BROWSER_LOGINS {
+        return Err(ApiError::too_many_requests(
+            "too many pending CLI browser logins",
+        ));
+    }
+
+    let window_start = now.saturating_sub(BROWSER_LOGIN_START_WINDOW_SECS);
+    let window_count = auth
+        .cli_browser_logins
+        .values()
+        .filter(|login| login.created_at_unix >= window_start)
+        .count() as u64;
+    if window_count >= MAX_BROWSER_LOGIN_STARTS_PER_WINDOW {
+        return Err(ApiError::too_many_requests(
+            "too many CLI browser login starts",
+        ));
+    }
+
+    Ok(())
 }
 
 fn cli_session_summary_from_model(

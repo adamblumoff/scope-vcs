@@ -6,7 +6,7 @@ async fn cli_browser_login_exchanges_local_callback_for_cli_token() {
     let start = app
         .clone()
         .oneshot(start_browser_login_request(
-            "http://127.0.0.1:49152/scope-callback",
+            "http://127.0.0.1:49152/scope-cli-callback",
         ))
         .await
         .unwrap();
@@ -91,12 +91,51 @@ async fn cli_browser_login_exchanges_local_callback_for_cli_token() {
 async fn cli_browser_login_rejects_non_loopback_callbacks() {
     let app = router(test_state_with_jwks());
 
-    let response = app
+    let non_loopback = app
+        .clone()
         .oneshot(start_browser_login_request("https://scopevcs.com/callback"))
         .await
         .unwrap();
+    assert_eq!(non_loopback.status(), StatusCode::BAD_REQUEST);
 
-    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    let wrong_path = app
+        .clone()
+        .oneshot(start_browser_login_request("http://127.0.0.1:49152/other"))
+        .await
+        .unwrap();
+    assert_eq!(wrong_path.status(), StatusCode::BAD_REQUEST);
+
+    let existing_query = app
+        .oneshot(start_browser_login_request(
+            "http://127.0.0.1:49152/scope-cli-callback?next=/other",
+        ))
+        .await
+        .unwrap();
+    assert_eq!(existing_query.status(), StatusCode::BAD_REQUEST);
+}
+
+#[tokio::test]
+async fn cli_browser_login_start_is_rate_limited() {
+    let app = router(test_state_with_jwks());
+
+    for _ in 0..crate::auth::device::MAX_BROWSER_LOGIN_STARTS_PER_WINDOW {
+        let response = app
+            .clone()
+            .oneshot(start_browser_login_request(
+                "http://127.0.0.1:49152/scope-cli-callback",
+            ))
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+    }
+
+    let response = app
+        .oneshot(start_browser_login_request(
+            "http://127.0.0.1:49152/scope-cli-callback",
+        ))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::TOO_MANY_REQUESTS);
 }
 
 #[tokio::test]

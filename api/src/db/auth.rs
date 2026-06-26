@@ -59,6 +59,7 @@ pub(super) struct MemoryBrowserLogin {
     pub(super) request_secret_hash: String,
     pub(super) callback_url: String,
     pub(super) callback_code_hash: Option<String>,
+    pub(super) created_at_unix: u64,
     pub(super) expires_at_unix: u64,
     pub(super) completed_user_id: Option<String>,
     pub(super) completed_at_unix: Option<u64>,
