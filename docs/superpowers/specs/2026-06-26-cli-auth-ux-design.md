@@ -45,8 +45,10 @@ scope login --exchange scope_otc_...
   -> stores the session token in the OS keychain
 ```
 
-`scope init` keeps the PR 1 behavior: validate cached auth first, then invoke
-login only when needed.
+`scope init` validates cached auth and publishes immediately when a CLI session
+exists. If no cached session exists, it tells the user to run `scope login`
+first. Login mode selection stays under `scope login`, including `--headless`
+and `--exchange`.
 
 ## API Shape
 

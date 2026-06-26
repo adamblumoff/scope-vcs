@@ -271,9 +271,7 @@ fn ensure_cli_session(client: &Client, api_url: &str) -> anyhow::Result<Authenti
         return Ok(session);
     }
 
-    let session = local_browser_login(client, api_url)?;
-    store_session_token(api_url, &session.token)?;
-    Ok(session)
+    bail!("not signed in; run scope login before scope init")
 }
 
 fn cached_cli_session(
