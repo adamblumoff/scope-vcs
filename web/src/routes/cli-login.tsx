@@ -1,7 +1,11 @@
 import {
+  completeBrowserCliLoginForRequest,
   completeCliLoginForRequest,
 } from '@/api/cli-login'
-import { parseCompleteCliLoginInput } from '@/api/cli-login-input'
+import {
+  parseCompleteBrowserCliLoginInput,
+  parseCompleteCliLoginInput,
+} from '@/api/cli-login-input'
 import { AppHeader } from '@/components/app-header'
 import { PageContent, PageHeader } from '@/components/page-header'
 import { PageErrorAlert } from '@/components/page-error-alert'
@@ -18,11 +22,27 @@ const completeCliLogin = createServerFn({ method: 'POST' })
   .validator(parseCompleteCliLoginInput)
   .handler(({ data }) => completeCliLoginForRequest(data))
 
+const completeBrowserCliLogin = createServerFn({ method: 'POST' })
+  .validator(parseCompleteBrowserCliLoginInput)
+  .handler(({ data }) => completeBrowserCliLoginForRequest(data))
+
+type CliLoginSearch = {
+  request_id?: string
+}
+
 export const Route = createFileRoute('/cli-login')({
+  validateSearch: (search: Record<string, unknown>): CliLoginSearch => ({
+    request_id:
+      typeof search.request_id === 'string' &&
+      search.request_id.startsWith('cli_browser_')
+        ? search.request_id
+        : undefined,
+  }),
   component: CliLoginRoute,
 })
 
 function CliLoginRoute() {
+  const search = Route.useSearch()
   const { isLoaded, isSignedIn } = useUser()
   const [code, setCode] = useState('')
   const [state, setState] = useState<
@@ -31,6 +51,7 @@ function CliLoginRoute() {
     | { kind: 'complete' }
     | { kind: 'error'; message: string }
   >({ kind: 'idle' })
+  const browserRequestId = search.request_id
 
   async function authorizeCli(event: FormEvent<HTMLFormElement>) {
     event.preventDefault()
@@ -47,12 +68,36 @@ function CliLoginRoute() {
     }
   }
 
+  async function authorizeBrowserCli() {
+    if (!browserRequestId) {
+      return
+    }
+
+    setState({ kind: 'pending' })
+    try {
+      const result = await completeBrowserCliLogin({
+        data: { requestId: browserRequestId },
+      })
+      setState({ kind: 'complete' })
+      window.location.assign(result.redirect_url)
+    } catch (error) {
+      setState({
+        kind: 'error',
+        message: error instanceof Error ? error.message : 'CLI authorization failed',
+      })
+    }
+  }
+
   return (
     <main className="min-h-screen bg-background text-foreground">
       <AppHeader subtitle="CLI login" />
       <PageContent>
         <PageHeader
-          description="Authorize this terminal session to create and publish a repository."
+          description={
+            browserRequestId
+              ? 'Approve the terminal session that opened this browser.'
+              : 'Authorize this terminal session to create and publish a repository.'
+          }
           title="Authorize Scope CLI"
         />
 
@@ -70,7 +115,30 @@ function CliLoginRoute() {
           </Alert>
         )}
 
-        {state.kind !== 'complete' && (
+        {state.kind !== 'complete' && browserRequestId && (
+          <section className="mt-8 border-y border-border py-5">
+            <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
+              <div className="min-w-0">
+                <div className="flex items-center gap-2 text-sm font-semibold leading-5">
+                  <ShieldCheck className="size-4" />
+                  <span>Terminal authorization</span>
+                </div>
+                <p className="mt-1 max-w-[560px] text-sm leading-5 text-muted-foreground">
+                  This approves a short-lived Scope CLI session on this machine.
+                </p>
+              </div>
+              <CliLoginAction
+                isLoaded={isLoaded}
+                isSignedIn={isSignedIn}
+                isPending={state.kind === 'pending'}
+                onAuthorize={() => void authorizeBrowserCli()}
+                pendingLabel="Authorizing"
+              />
+            </div>
+          </section>
+        )}
+
+        {state.kind !== 'complete' && !browserRequestId && (
           <form
             className="mt-8 border-y border-border py-5"
             onSubmit={(event) => void authorizeCli(event)}
@@ -95,40 +163,69 @@ function CliLoginRoute() {
                   value={code}
                 />
               </div>
-              {!isLoaded && (
-                <Button disabled size="sm" type="button">
-                  <LoaderCircle className="size-3.5 animate-spin" />
-                  <span>Loading</span>
-                </Button>
-              )}
-              {isLoaded && !isSignedIn && (
-                <SignInButton mode="modal">
-                  <Button size="sm" type="button">
-                    <LogIn className="size-3.5" />
-                    <span>Sign in</span>
-                  </Button>
-                </SignInButton>
-              )}
-              {isLoaded && isSignedIn && (
-                <Button
-                  disabled={state.kind === 'pending' || code.trim().length === 0}
-                  size="sm"
-                  type="submit"
-                >
-                  {state.kind === 'pending' ? (
-                    <LoaderCircle className="size-3.5 animate-spin" />
-                  ) : (
-                    <ShieldCheck className="size-3.5" />
-                  )}
-                  <span>
-                    {state.kind === 'pending' ? 'Authorizing' : 'Authorize'}
-                  </span>
-                </Button>
-              )}
+              <CliLoginAction
+                disabled={code.trim().length === 0}
+                isLoaded={isLoaded}
+                isPending={state.kind === 'pending'}
+                isSignedIn={isSignedIn}
+                pendingLabel="Authorizing"
+              />
             </div>
           </form>
         )}
       </PageContent>
     </main>
+  )
+}
+
+function CliLoginAction({
+  disabled = false,
+  isLoaded,
+  isPending,
+  isSignedIn,
+  onAuthorize,
+  pendingLabel,
+}: {
+  disabled?: boolean
+  isLoaded: boolean
+  isPending: boolean
+  isSignedIn: boolean | undefined
+  onAuthorize?: () => void
+  pendingLabel: string
+}) {
+  if (!isLoaded) {
+    return (
+      <Button disabled size="sm" type="button">
+        <LoaderCircle className="size-3.5 animate-spin" />
+        <span>Loading</span>
+      </Button>
+    )
+  }
+
+  if (!isSignedIn) {
+    return (
+      <SignInButton mode="modal">
+        <Button size="sm" type="button">
+          <LogIn className="size-3.5" />
+          <span>Sign in</span>
+        </Button>
+      </SignInButton>
+    )
+  }
+
+  return (
+    <Button
+      disabled={isPending || disabled}
+      onClick={onAuthorize}
+      size="sm"
+      type={onAuthorize ? 'button' : 'submit'}
+    >
+      {isPending ? (
+        <LoaderCircle className="size-3.5 animate-spin" />
+      ) : (
+        <ShieldCheck className="size-3.5" />
+      )}
+      <span>{isPending ? pendingLabel : 'Authorize'}</span>
+    </Button>
   )
 }
