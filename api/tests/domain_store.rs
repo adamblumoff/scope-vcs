@@ -6,7 +6,7 @@ use api::domain::{
     store::{
         AccountAccess, AppCatalog, CatalogError, FirstPushToken, FirstPushTokenStatus,
         InvitationState, RepoInvitation, RepoMembership, RepoPublicationState, RepoRecord,
-        RepoRole, RepoSettings, StoredRepository, UserAccount, VerifiedEmail, app_catalog,
+        RepoRole, RepoSettings, StoredRepository, UserAccount, app_catalog,
     },
 };
 
@@ -80,12 +80,13 @@ fn app_catalog_starts_empty() {
 }
 
 #[test]
-fn verified_member_email_becomes_repo_principal() {
+fn member_scope_user_principal_can_write_repo() {
     let catalog = catalog_with_test_repo();
     let repo = catalog.repository(TEST_REPO_OWNER, TEST_REPO_NAME).unwrap();
-    let identity = VerifiedEmail::new("Owner@Example.com", true);
-
-    let principal = catalog.principal_for_repo(repo, Some(&identity));
+    let principal = Principal {
+        id: TEST_OWNER_ID.to_string(),
+        kind: PrincipalKind::User,
+    };
 
     assert_eq!(principal.id, TEST_OWNER_ID);
     assert_eq!(principal.kind, PrincipalKind::User);
@@ -170,28 +171,6 @@ fn duplicate_owner_repo_name_is_rejected() {
 }
 
 #[test]
-fn unverified_email_stays_public() {
-    let catalog = catalog_with_test_repo();
-    let repo = catalog.repository(TEST_REPO_OWNER, TEST_REPO_NAME).unwrap();
-    let identity = VerifiedEmail::new(TEST_OWNER_EMAIL, false);
-
-    let principal = catalog.principal_for_repo(repo, Some(&identity));
-
-    assert_eq!(principal, Principal::public());
-}
-
-#[test]
-fn unknown_verified_user_defaults_to_public() {
-    let catalog = catalog_with_test_repo();
-    let repo = catalog.repository(TEST_REPO_OWNER, TEST_REPO_NAME).unwrap();
-    let identity = VerifiedEmail::new("someone@example.com", true);
-
-    let principal = catalog.principal_for_repo(repo, Some(&identity));
-
-    assert_eq!(principal, Principal::public());
-}
-
-#[test]
 fn unpublished_repo_blocks_public_reads() {
     let catalog = catalog_with_test_repo();
     let mut repo = catalog
@@ -264,10 +243,10 @@ fn pending_invite_does_not_grant_private_access() {
         state: InvitationState::Pending,
     });
     let repo = catalog.repository(TEST_REPO_OWNER, TEST_REPO_NAME).unwrap();
-    let identity = VerifiedEmail::new("invited@example.com", true);
+    let principal = Principal {
+        id: "user_invited".to_string(),
+        kind: PrincipalKind::User,
+    };
 
-    let principal = catalog.principal_for_repo(repo, Some(&identity));
-
-    assert_eq!(principal, Principal::public());
     assert!(!catalog.can_read_path(repo, &principal, &ScopePath::parse("/private.txt").unwrap(),));
 }

@@ -11,12 +11,10 @@ import {
   TooltipProvider,
   TooltipTrigger,
 } from '@/components/ui/tooltip'
-import { SignInButton } from '@clerk/tanstack-react-start'
 import { Link } from '@tanstack/react-router'
 import {
   GitBranch,
   GitPullRequestArrow,
-  LogIn,
   Rocket,
   TerminalSquare,
 } from 'lucide-react'
@@ -24,11 +22,9 @@ import {
 export function RepoList({
   cliInstallCommands,
   repositories,
-  signedIn,
 }: {
   cliInstallCommands: CliInstallCommands
   repositories: RepoSummary[]
-  signedIn: boolean
 }) {
   if (repositories.length === 0) {
     return (
@@ -40,35 +36,23 @@ export function RepoList({
           <div>
             <div className="font-medium leading-5">No repositories</div>
             <p className="mt-1 leading-5 text-muted-foreground">
-              {signedIn
-                ? 'Install the CLI, then initialize this folder from your terminal.'
-                : 'Sign in to start from an empty workspace.'}
+              Install the CLI, then initialize this folder from your terminal.
             </p>
           </div>
-          {signedIn && (
-            <div className="mt-2 w-full space-y-3 text-left">
-              <CopyableCodeBlock
-                copyLabel="Copy macOS/Linux install command"
-                value={cliInstallCommands.posix}
-              />
-              <CopyableCodeBlock
-                copyLabel="Copy Windows install command"
-                value={cliInstallCommands.windows}
-              />
-              <CopyableCodeBlock
-                copyLabel="Copy init command"
-                value="scope init"
-              />
-            </div>
-          )}
-          {!signedIn && (
-            <SignInButton mode="modal">
-              <Button size="sm" type="button">
-                <LogIn className="size-3.5" />
-                <span>Sign in</span>
-              </Button>
-            </SignInButton>
-          )}
+          <div className="mt-2 w-full space-y-3 text-left">
+            <CopyableCodeBlock
+              copyLabel="Copy macOS/Linux install command"
+              value={cliInstallCommands.posix}
+            />
+            <CopyableCodeBlock
+              copyLabel="Copy Windows install command"
+              value={cliInstallCommands.windows}
+            />
+            <CopyableCodeBlock
+              copyLabel="Copy init command"
+              value="scope init"
+            />
+          </div>
         </div>
       </div>
     )

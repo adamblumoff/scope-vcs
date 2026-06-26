@@ -101,7 +101,6 @@ export type HomeState = {
   cliInstallCommands: CliInstallCommands
   error: string | null
   repositories: RepoSummary[]
-  signedIn: boolean
 }
 
 export type CliInstallCommands = {

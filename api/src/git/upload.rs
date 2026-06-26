@@ -3,7 +3,7 @@ use crate::domain::policy::Principal;
 use crate::domain::projection::{Projection, project_graph};
 use crate::domain::store::{RepoPublicationState, RepoRole};
 use crate::{
-    auth::clerk::{http_identity, principal_for_repo},
+    auth::scope::{optional_scope_user, principal_for_scope_user},
     config::{DEFAULT_GIT_BRANCH, GIT_UPLOAD_PACK, UNPUBLISHED_GIT_ERROR},
     error::ApiError,
     git::{
@@ -57,8 +57,8 @@ pub(crate) async fn git_projection_for_request(
     }
 
     let repo = find_repo(state, owner, repo_name)?;
-    let identity = http_identity(state, headers).await?;
-    let principal = principal_for_repo(state, &repo, identity.as_ref())?;
+    let user = optional_scope_user(state, headers).await?;
+    let principal = principal_for_scope_user(&repo, user.as_ref());
     if repo.record.publication_state != RepoPublicationState::Published {
         return match role_for_principal(state, &repo, &principal)? {
             Some(RepoRole::Owner) => Err(ApiError::forbidden(UNPUBLISHED_GIT_ERROR)),
@@ -113,8 +113,8 @@ pub(crate) async fn owner_snapshot_repo_for_request(
         principal_for_git_read_token(state, read_auth, owner, repo_name)?
     } else {
         let repo = find_repo(state, owner, repo_name)?;
-        let identity = http_identity(state, headers).await?;
-        let principal = principal_for_repo(state, &repo, identity.as_ref())?;
+        let user = optional_scope_user(state, headers).await?;
+        let principal = principal_for_scope_user(&repo, user.as_ref());
         (repo, principal)
     };
     if role_for_principal(state, &repo, &principal)? != Some(RepoRole::Owner) {

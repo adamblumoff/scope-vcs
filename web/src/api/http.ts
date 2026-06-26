@@ -22,10 +22,6 @@ export async function loadJson<T>(
   return payload as T
 }
 
-export function authHeaders(idToken?: string | null): HeadersInit {
-  return idToken ? { authorization: `Bearer ${idToken}` } : {}
-}
-
 export function stripTrailingSlash(value: string) {
   return value.replace(/\/+$/, '')
 }

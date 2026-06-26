@@ -1,32 +1,12 @@
-import {
-  authHeaders,
-  getApiMutationConnection,
-  readRequestAuthToken,
-} from '@/api/client'
+import { createApiClient } from '@/api/client'
 import type { CompleteCliLoginInput } from './cli-login-input'
+import type { DeviceLoginCompleteResponse } from './types.generated'
 
 export async function completeCliLoginForRequest(
   data: CompleteCliLoginInput,
 ) {
-  const idToken = await readRequestAuthToken()
-  if (!idToken) {
-    throw new Error('Sign in to authorize the CLI.')
-  }
-
-  const response = await fetch(
-    `${getApiMutationConnection('authorizing CLI login')}/v1/cli/device-login/${encodeURIComponent(
-      data.code,
-    )}/complete`,
-    {
-      headers: authHeaders(idToken),
-      method: 'POST',
-    },
+  return createApiClient().post<DeviceLoginCompleteResponse>(
+    `/v1/cli/device-login/${encodeURIComponent(data.code)}/complete`,
+    { auth: 'required' },
   )
-  const payload = await response.json().catch(() => null)
-
-  if (!response.ok) {
-    throw new Error(payload?.error ?? `request failed: ${response.status}`)
-  }
-
-  return payload
 }

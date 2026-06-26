@@ -1,16 +1,88 @@
-export { HttpError, authHeaders, loadJson, stripTrailingSlash } from './http'
-import { stripTrailingSlash } from './http'
+export { HttpError, loadJson, stripTrailingSlash } from './http'
+import { loadJson, stripTrailingSlash } from './http'
 
 const localApiBase = 'http://localhost:8080'
 const localCliInstallBase = 'http://localhost:8787'
 const cliInstallUrlEnv = 'SCOPE_CLI_INSTALL_URL'
 const internalApiUrlEnv = 'SCOPE_API_INTERNAL_URL'
 const publicApiUrlEnv = 'SCOPE_API_PUBLIC_URL'
+const clerkApiTokenTemplateEnv = 'SCOPE_CLERK_API_TOKEN_TEMPLATE'
+const defaultClerkApiTokenTemplate = 'scope_api'
 
-export async function readRequestAuthToken() {
+export type ApiAuthMode = 'none' | 'optional' | 'required'
+
+type ApiRequestOptions = {
+  auth?: ApiAuthMode
+  body?: unknown
+}
+
+export type ApiClient = ReturnType<typeof createApiClient>
+
+export function createApiClient() {
+  let tokenPromise: Promise<string | null> | undefined
+
+  async function request<T>(
+    method: string,
+    path: string,
+    options: ApiRequestOptions = {},
+  ): Promise<T> {
+    const headers = new Headers()
+    if (options.body !== undefined) {
+      headers.set('content-type', 'application/json')
+    }
+
+    const authMode = options.auth ?? 'none'
+    if (authMode !== 'none') {
+      const token = await requestAuthToken()
+      if (!token && authMode === 'required') {
+        throw new Error('Sign in required.')
+      }
+      if (token) {
+        headers.set('authorization', `Bearer ${token}`)
+      }
+    }
+
+    return loadJson<T>(`${connectionForMethod(method)}${path}`, {
+      body:
+        options.body === undefined ? undefined : JSON.stringify(options.body),
+      headers,
+      method,
+    })
+  }
+
+  async function requestAuthToken() {
+    tokenPromise ??= readClerkApiToken()
+    return tokenPromise
+  }
+
+  return {
+    authenticated: async () => Boolean(await requestAuthToken()),
+    delete: <T>(path: string, options?: ApiRequestOptions) =>
+      request<T>('DELETE', path, options),
+    get: <T>(path: string, options?: ApiRequestOptions) =>
+      request<T>('GET', path, options),
+    patch: <T>(path: string, options?: ApiRequestOptions) =>
+      request<T>('PATCH', path, options),
+    post: <T>(path: string, options?: ApiRequestOptions) =>
+      request<T>('POST', path, options),
+  }
+}
+
+async function readClerkApiToken() {
   const { auth } = await import('@clerk/tanstack-react-start/server')
-  const { getToken } = await auth()
-  return getToken()
+  const { getToken, isAuthenticated } = await auth()
+  if (!isAuthenticated) {
+    return null
+  }
+  return getToken({ template: clerkApiTokenTemplate() })
+}
+
+function clerkApiTokenTemplate() {
+  return runtimeEnv(clerkApiTokenTemplateEnv) ?? defaultClerkApiTokenTemplate
+}
+
+function connectionForMethod(method: string) {
+  return method === 'GET' ? getApiConnection() : getApiMutationConnection()
 }
 
 export function getApiConnection(action = 'loading repositories') {

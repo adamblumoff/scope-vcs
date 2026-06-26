@@ -1,10 +1,7 @@
 import {
   HttpError,
-  authHeaders,
+  createApiClient,
   getCliInstallConnection,
-  getApiConnection,
-  loadJson,
-  readRequestAuthToken,
 } from '@/api/client'
 import type {
   AccountSession,
@@ -15,23 +12,12 @@ import type {
 
 export async function loadHomeForRequest(): Promise<HomeState> {
   const cliInstallCommands = buildCliInstallCommands()
-  const idToken = await readRequestAuthToken()
-  if (!idToken) {
-    return {
-      account: null,
-      cliInstallCommands,
-      error: null,
-      repositories: [],
-      signedIn: false,
-    }
-  }
+  const api = createApiClient()
 
   try {
-    const api = getApiConnection()
-    const init = { headers: authHeaders(idToken) }
     const [account, repositories] = await Promise.all([
-      loadJson<AccountSession>(`${api}/v1/session`, init),
-      loadJson<RepoSummary[]>(`${api}/v1/repos`, init),
+      api.get<AccountSession>('/v1/session', { auth: 'required' }),
+      api.get<RepoSummary[]>('/v1/repos', { auth: 'required' }),
     ])
 
     return {
@@ -39,17 +25,10 @@ export async function loadHomeForRequest(): Promise<HomeState> {
       cliInstallCommands,
       error: null,
       repositories,
-      signedIn: true,
     }
   } catch (error) {
     if (error instanceof HttpError && error.status === 401) {
-      return {
-        account: null,
-        cliInstallCommands,
-        error: null,
-        repositories: [],
-        signedIn: false,
-      }
+      throw new Error('Sign in required.')
     }
 
     return {
@@ -57,7 +36,6 @@ export async function loadHomeForRequest(): Promise<HomeState> {
       cliInstallCommands,
       error: error instanceof Error ? error.message : 'request failed',
       repositories: [],
-      signedIn: true,
     }
   }
 }

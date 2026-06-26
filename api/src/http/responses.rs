@@ -74,6 +74,16 @@ pub(crate) struct SessionIdentity {
     pub(crate) email_verified: bool,
 }
 
+impl From<&UserAccount> for SessionIdentity {
+    fn from(user: &UserAccount) -> Self {
+        Self {
+            user_id: user.id.clone(),
+            email: (!user.email.is_empty()).then(|| user.email.clone()),
+            email_verified: user.email_verified,
+        }
+    }
+}
+
 #[derive(Debug, Serialize)]
 #[cfg_attr(test, derive(ts_rs::TS))]
 pub(crate) struct SessionRepo {

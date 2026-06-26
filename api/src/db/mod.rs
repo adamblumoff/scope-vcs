@@ -1,3 +1,4 @@
+mod auth;
 mod cleanup_queue;
 mod entities;
 mod locks;
@@ -17,6 +18,8 @@ mod visibility_changes;
 
 use crate::domain::store::{AppCatalog, RepoMembership, StoredRepository, repo_id};
 use crate::error::ApiError;
+#[cfg(test)]
+pub(crate) use auth::scope_user_id_for_auth_identity;
 use locks::{acquire_metadata_read_lock, acquire_metadata_write_lock, ensure_metadata_lock_row};
 pub(crate) use metadata_reset::MetadataResetEvent;
 use metadata_reset::{
@@ -55,6 +58,7 @@ enum MetadataStoreInner {
 #[cfg(test)]
 struct MemoryMetadataStore {
     catalog: std::sync::Mutex<AppCatalog>,
+    auth: std::sync::Mutex<auth::MemoryAuthState>,
     reset_events: std::sync::Mutex<Vec<MetadataResetEvent>>,
     fail_next_persist: AtomicBool,
 }
@@ -71,6 +75,7 @@ impl MetadataStore {
         Self {
             inner: Arc::new(MetadataStoreInner::Memory(Arc::new(MemoryMetadataStore {
                 catalog: std::sync::Mutex::new(catalog),
+                auth: std::sync::Mutex::new(auth::MemoryAuthState::default()),
                 reset_events: std::sync::Mutex::new(Vec::new()),
                 fail_next_persist: AtomicBool::new(false),
             }))),
@@ -311,6 +316,11 @@ impl MetadataStore {
                     .lock()
                     .map_err(|_| ApiError::internal_message("catalog lock is poisoned"))? =
                     AppCatalog::default();
+                *memory
+                    .auth
+                    .lock()
+                    .map_err(|_| ApiError::internal_message("auth lock is poisoned"))? =
+                    auth::MemoryAuthState::default();
                 memory
                     .reset_events
                     .lock()
@@ -526,6 +536,18 @@ async fn save_catalog_async<C>(conn: &C, catalog: &AppCatalog) -> Result<(), Api
 where
     C: ConnectionTrait,
 {
+    let auth_identities = entities::auth_identity::Entity::find()
+        .all(conn)
+        .await
+        .map_err(ApiError::internal)?;
+    let cli_device_logins = entities::cli_device_login::Entity::find()
+        .all(conn)
+        .await
+        .map_err(ApiError::internal)?;
+    let cli_access_sessions = entities::cli_access_session::Entity::find()
+        .all(conn)
+        .await
+        .map_err(ApiError::internal)?;
     let users = catalog
         .users
         .values()
@@ -543,6 +565,18 @@ where
         .map(entities::membership::Model::from_domain)
         .collect::<Vec<_>>();
 
+    entities::cli_access_session::Entity::delete_many()
+        .exec(conn)
+        .await
+        .map_err(ApiError::internal)?;
+    entities::cli_device_login::Entity::delete_many()
+        .exec(conn)
+        .await
+        .map_err(ApiError::internal)?;
+    entities::auth_identity::Entity::delete_many()
+        .exec(conn)
+        .await
+        .map_err(ApiError::internal)?;
     entities::membership::Entity::delete_many()
         .exec(conn)
         .await
@@ -571,6 +605,27 @@ where
     }
     for membership in memberships {
         membership
+            .into_active_model()
+            .insert(conn)
+            .await
+            .map_err(ApiError::internal)?;
+    }
+    for auth_identity in auth_identities {
+        auth_identity
+            .into_active_model()
+            .insert(conn)
+            .await
+            .map_err(ApiError::internal)?;
+    }
+    for cli_device_login in cli_device_logins {
+        cli_device_login
+            .into_active_model()
+            .insert(conn)
+            .await
+            .map_err(ApiError::internal)?;
+    }
+    for cli_access_session in cli_access_sessions {
+        cli_access_session
             .into_active_model()
             .insert(conn)
             .await

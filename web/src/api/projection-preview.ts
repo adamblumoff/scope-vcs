@@ -1,9 +1,7 @@
 import {
+  type ApiClient,
+  createApiClient,
   HttpError,
-  authHeaders,
-  getApiConnection,
-  loadJson,
-  readRequestAuthToken,
 } from './client'
 import type {
   ProjectionPreview,
@@ -16,18 +14,16 @@ import type {
 export async function loadProjectionPreviewsForRequest(
   data: RepoParams,
   source: ProjectionPreviewSource,
-  options: { includeOwner?: boolean } = {},
+  options: { includeOwner?: boolean; api?: ApiClient } = {},
 ): Promise<ProjectionPreviews> {
-  const idToken = await readRequestAuthToken()
+  const api = options.api ?? createApiClient()
+  const authenticated = await api.authenticated()
   const includeOwner = options.includeOwner ?? true
   const [owner, publicPreview] = await Promise.all([
-    idToken && includeOwner
-      ? loadProjectionPreviewWithToken({ ...data, audience: 'owner', source }, idToken)
+    authenticated && includeOwner
+      ? loadProjectionPreview(api, { ...data, audience: 'owner', source })
       : Promise.resolve(null),
-    loadOptionalProjectionPreviewWithToken(
-      { ...data, audience: 'public', source },
-      idToken,
-    ),
+    loadOptionalProjectionPreview(api, { ...data, audience: 'public', source }),
   ])
 
   return {
@@ -37,27 +33,27 @@ export async function loadProjectionPreviewsForRequest(
   }
 }
 
-async function loadProjectionPreviewWithToken(
+async function loadProjectionPreview(
+  api: ApiClient,
   data: ProjectionPreviewInput,
-  idToken: string | null | undefined,
 ) {
   const query = new URLSearchParams({
     audience: data.audience,
     source: data.source,
   })
 
-  return loadJson<ProjectionPreview>(
-    `${getApiConnection()}/v1/repos/${data.owner}/${data.repo}/projection-preview?${query}`,
-    { headers: authHeaders(idToken) },
+  return api.get<ProjectionPreview>(
+    `/v1/repos/${data.owner}/${data.repo}/projection-preview?${query}`,
+    { auth: 'optional' },
   )
 }
 
-async function loadOptionalProjectionPreviewWithToken(
+async function loadOptionalProjectionPreview(
+  api: ApiClient,
   data: ProjectionPreviewInput,
-  idToken: string | null | undefined,
 ) {
   try {
-    return await loadProjectionPreviewWithToken(data, idToken)
+    return await loadProjectionPreview(api, data)
   } catch (error) {
     if (error instanceof HttpError && [403, 404].includes(error.status)) {
       return null

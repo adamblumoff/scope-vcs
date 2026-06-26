@@ -1,9 +1,6 @@
 import {
-  authHeaders,
-  getApiConnection,
-  getApiMutationConnection,
-  loadJson,
-  readRequestAuthToken,
+  type ApiClient,
+  createApiClient,
   HttpError,
 } from '@/api/client'
 import type {
@@ -18,47 +15,29 @@ import type {
 } from './types'
 import { parseRepoParams } from './repo-detail'
 
-export async function loadReviewForRequest(data: RepoParams) {
-  const idToken = await readRequestAuthToken()
-  if (!idToken) {
-    throw new Error('Sign in as the repo owner to review this import.')
-  }
-
-  return loadRepoReview(data, idToken)
+export async function loadReviewForRequest(
+  data: RepoParams,
+  api = createApiClient(),
+) {
+  return loadRepoReview(data, api)
 }
 
 export async function loadReviewFileDiffForRequest(data: ReviewFileDiffInput) {
-  const idToken = await readRequestAuthToken()
-  if (!idToken) {
-    throw new Error('Sign in as the repo owner to review this file.')
-  }
-
   const query = new URLSearchParams({ path: data.path })
-  return loadJson<ReviewFileDiff>(
-    `${getApiConnection()}/v1/repos/${data.owner}/${data.repo}/review/file-diff?${query}`,
-    { headers: authHeaders(idToken) },
+  return createApiClient().get<ReviewFileDiff>(
+    `/v1/repos/${data.owner}/${data.repo}/review/file-diff?${query}`,
+    { auth: 'required' },
   )
 }
 
 export async function setVisibilityForRequest(data: SetVisibilityInput) {
-  const idToken = await readRequestAuthToken()
-  if (!idToken) {
-    throw new Error('Sign in as the repo owner to update file visibility.')
-  }
+  const api = createApiClient()
+  await updateVisibility(api, reviewVisibilityPath(data), {
+    paths: data.paths,
+    visibility: data.visibility,
+  })
 
-  if (data.kind === 'StagedUpdate') {
-    await updateVisibility(idToken, reviewVisibilityUrl(data), {
-      paths: data.paths,
-      visibility: data.visibility,
-    })
-  } else {
-    await updateVisibility(idToken, reviewVisibilityUrl(data), {
-      paths: data.paths,
-      visibility: data.visibility,
-    })
-  }
-
-  const updated = await loadRepoReview(data, idToken)
+  const updated = await loadRepoReview(data, api)
   if (updated.kind === 'NoReview') {
     throw new Error('No review is waiting for this repo.')
   }
@@ -67,83 +46,44 @@ export async function setVisibilityForRequest(data: SetVisibilityInput) {
 }
 
 async function updateVisibility(
-  idToken: string,
-  url: string,
+  api: ApiClient,
+  path: string,
   body: Record<string, unknown>,
 ) {
-  const response = await fetch(url, {
-    body: JSON.stringify(body),
-    headers: {
-      ...authHeaders(idToken),
-      'content-type': 'application/json',
-    },
-    method: 'PATCH',
+  await api.patch<unknown>(path, {
+    auth: 'required',
+    body,
   })
-  const payload = await response.json().catch(() => null)
-
-  if (!response.ok) {
-    throw new Error(payload?.error ?? `request failed: ${response.status}`)
-  }
 }
 
 export async function publishRepoForRequest(data: RepoParams) {
-  const idToken = await readRequestAuthToken()
-  if (!idToken) {
-    throw new Error('Sign in as the repo owner to publish this repo.')
-  }
-
-  const response = await fetch(
-    `${getApiMutationConnection()}/v1/repos/${data.owner}/${data.repo}/publish`,
-    {
-      headers: authHeaders(idToken),
-      method: 'POST',
-    },
+  return createApiClient().post<{
+    id: string
+    publication_state: RepoPublicationState
+  }>(
+    `/v1/repos/${data.owner}/${data.repo}/publish`,
+    { auth: 'required' },
   )
-  const payload = await response.json().catch(() => null)
-
-  if (!response.ok) {
-    throw new Error(payload?.error ?? `request failed: ${response.status}`)
-  }
-
-  return payload as { id: string; publication_state: RepoPublicationState }
 }
 
 export async function postStagedUpdateAction(
   data: RepoParams,
   action: 'apply' | 'reject',
 ) {
-  const idToken = await readRequestAuthToken()
-  if (!idToken) {
-    throw new Error('Sign in as the repo owner to review this push.')
-  }
-
-  const response = await fetch(
-    `${getApiMutationConnection()}/v1/repos/${data.owner}/${data.repo}/staged-update/${action}`,
-    {
-      headers: authHeaders(idToken),
-      method: 'POST',
-    },
+  return createApiClient().post<StagedUpdate>(
+    `/v1/repos/${data.owner}/${data.repo}/staged-update/${action}`,
+    { auth: 'required' },
   )
-  const payload = await response.json().catch(() => null)
-
-  if (!response.ok) {
-    throw new Error(payload?.error ?? `request failed: ${response.status}`)
-  }
-
-  return payload as StagedUpdate
 }
 
 async function loadRepoReview(
   data: RepoParams,
-  idToken: string,
+  api: ApiClient,
 ): Promise<RepoReviewResult> {
-  const api = getApiConnection()
-  const init = { headers: authHeaders(idToken) }
-
   try {
-    const pending = await loadJson<PendingImportPayload>(
-      `${api}/v1/repos/${data.owner}/${data.repo}/pending-import`,
-      init,
+    const pending = await api.get<PendingImportPayload>(
+      `/v1/repos/${data.owner}/${data.repo}/pending-import`,
+      { auth: 'required' },
     )
     return { kind: 'PendingImport', ...pending }
   } catch (error) {
@@ -152,9 +92,9 @@ async function loadRepoReview(
     }
   }
 
-  const staged = await loadJson<StagedUpdate | null>(
-    `${api}/v1/repos/${data.owner}/${data.repo}/staged-update`,
-    init,
+  const staged = await api.get<StagedUpdate | null>(
+    `/v1/repos/${data.owner}/${data.repo}/staged-update`,
+    { auth: 'required' },
   )
 
   if (!staged) {
@@ -174,13 +114,13 @@ async function loadRepoReview(
   }
 }
 
-function reviewVisibilityUrl(data: SetVisibilityInput) {
+function reviewVisibilityPath(data: SetVisibilityInput) {
   const endpoint =
     data.kind === 'StagedUpdate'
       ? 'staged-update/files/visibility'
       : 'files/visibility'
 
-  return `${getApiMutationConnection()}/v1/repos/${data.owner}/${data.repo}/${endpoint}`
+  return `/v1/repos/${data.owner}/${data.repo}/${endpoint}`
 }
 
 export function parseSetVisibilityInput(input: unknown): SetVisibilityInput {

@@ -1,6 +1,6 @@
-use crate::domain::policy::ScopePath;
 use crate::{
-    auth::clerk::{ensure_user_for_identity, http_identity, principal_for_repo},
+    auth::scope::{optional_scope_user, principal_for_scope_user},
+    domain::policy::ScopePath,
     error::ApiError,
     http::responses::{
         AccountSessionResponse, HealthResponse, ReadinessCheckResponse, ReadinessResponse,
@@ -58,17 +58,11 @@ pub(crate) async fn get_account_session(
     State(state): State<AppState>,
     headers: HeaderMap,
 ) -> Result<Json<AccountSessionResponse>, ApiError> {
-    let identity = http_identity(&state, &headers).await?;
-    let user = match identity.as_ref() {
-        Some(identity) => Some(UserResponse::from(ensure_user_for_identity(
-            &state, identity,
-        )?)),
-        None => None,
-    };
+    let user = optional_scope_user(&state, &headers).await?;
 
     Ok(Json(AccountSessionResponse {
-        identity: identity.as_ref().map(SessionIdentity::from),
-        user,
+        identity: user.as_ref().map(SessionIdentity::from),
+        user: user.map(UserResponse::from),
     }))
 }
 
@@ -78,14 +72,14 @@ pub(crate) async fn get_session(
     Path((owner, repo_name)): Path<(String, String)>,
 ) -> Result<Json<SessionResponse>, ApiError> {
     let repo = find_repo(&state, &owner, &repo_name)?;
-    let identity = http_identity(&state, &headers).await?;
-    let principal = principal_for_repo(&state, &repo, identity.as_ref())?;
+    let user = optional_scope_user(&state, &headers).await?;
+    let principal = principal_for_scope_user(&repo, user.as_ref());
     ensure_repo_read(&state, &repo, &principal)?;
     let root = ScopePath::root();
     let role = role_for_principal(&state, &repo, &principal)?;
 
     Ok(Json(SessionResponse {
-        identity: identity.as_ref().map(SessionIdentity::from),
+        identity: user.as_ref().map(SessionIdentity::from),
         repo: SessionRepo {
             id: repo.record.id.clone(),
             publication_state: repo.record.publication_state,

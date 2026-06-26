@@ -5,10 +5,9 @@ import { PageErrorAlert } from '@/components/page-error-alert'
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert'
 import { Button } from '@/components/ui/button'
 import { useHomeFlash } from '@/lib/home-flash'
-import { UserButton, useUser } from '@clerk/tanstack-react-start'
-import { useRouter } from '@tanstack/react-router'
+import { UserButton } from '@clerk/tanstack-react-start'
 import { CheckCircle2, Moon, Sun } from 'lucide-react'
-import { useEffect, useState } from 'react'
+import { useState } from 'react'
 import { RepoList } from './repo-list'
 
 type ThemeMode = 'dark' | 'light'
@@ -16,18 +15,7 @@ type ThemeMode = 'dark' | 'light'
 export function HomePage({ home }: { home: HomeState }) {
   const [theme, setTheme] = useState<ThemeMode>('dark')
   const flash = useHomeFlash()
-  const router = useRouter()
-  const clerkUser = useUser()
   const { account, repositories } = home
-  const signedIn = clerkUser.isLoaded ? clerkUser.isSignedIn : home.signedIn
-
-  useEffect(() => {
-    if (!clerkUser.isLoaded || clerkUser.isSignedIn === home.signedIn) {
-      return
-    }
-
-    void router.invalidate()
-  }, [clerkUser.isLoaded, clerkUser.isSignedIn, home.signedIn, router])
 
   function toggleTheme() {
     const nextTheme = nextThemeMode(theme)
@@ -40,7 +28,7 @@ export function HomePage({ home }: { home: HomeState }) {
       <AppHeader
         action={
           <div className="flex min-w-0 items-center gap-2">
-            {signedIn && <UserButton />}
+            <UserButton />
             <ThemeToggle theme={theme} toggleTheme={toggleTheme} />
           </div>
         }
@@ -71,7 +59,6 @@ export function HomePage({ home }: { home: HomeState }) {
         <RepoList
           cliInstallCommands={home.cliInstallCommands}
           repositories={repositories}
-          signedIn={signedIn}
         />
       </PageContent>
     </main>

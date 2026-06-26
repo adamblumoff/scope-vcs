@@ -388,31 +388,42 @@ async fn deleted_public_file_no_longer_makes_private_repo_visible() {
 fn anonymous_request_uses_public_principal() {
     let state = test_state_with_repo();
     let repo = find_repo(&state, TEST_REPO_OWNER, TEST_REPO_NAME).unwrap();
-    let principal = principal_for_repo(&state, &repo, None).unwrap();
+    let principal = principal_for_scope_user(&repo, None);
 
     assert_eq!(principal, Principal::public());
 }
 
 #[test]
-fn verified_clerk_owner_uses_repo_principal() {
+fn scope_owner_uses_repo_principal() {
     let state = test_state_with_repo();
     let repo = find_repo(&state, TEST_REPO_OWNER, TEST_REPO_NAME).unwrap();
-    let identity = owner_identity(true);
-    let principal = principal_for_repo(&state, &repo, Some(&identity)).unwrap();
+    let user = UserAccount {
+        id: test_owner_id(),
+        handle: TEST_REPO_OWNER.to_string(),
+        email: TEST_OWNER_EMAIL.to_string(),
+        email_verified: true,
+        access: AccountAccess::Member,
+    };
+    let principal = principal_for_scope_user(&repo, Some(&user));
 
     assert_eq!(principal.id, test_owner_id());
     assert_eq!(principal.kind, PrincipalKind::User);
 }
 
 #[test]
-fn unverified_email_still_uses_clerk_user_principal() {
+fn non_member_scope_user_uses_public_principal() {
     let state = test_state_with_repo();
     let repo = find_repo(&state, TEST_REPO_OWNER, TEST_REPO_NAME).unwrap();
-    let identity = owner_identity(false);
-    let principal = principal_for_repo(&state, &repo, Some(&identity)).unwrap();
+    let user = UserAccount {
+        id: "scope_usr_other".to_string(),
+        handle: "other".to_string(),
+        email: "other@example.com".to_string(),
+        email_verified: true,
+        access: AccountAccess::Member,
+    };
+    let principal = principal_for_scope_user(&repo, Some(&user));
 
-    assert_eq!(principal.id, test_owner_id());
-    assert_eq!(principal.kind, PrincipalKind::User);
+    assert_eq!(principal, Principal::public());
 }
 
 #[test]
