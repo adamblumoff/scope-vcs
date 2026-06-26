@@ -78,6 +78,13 @@ jobs:
         with:
           node-version: 24
 
+      - name: Stage Railway upload root
+        shell: bash
+        run: |
+          rm -rf .railway-upload
+          mkdir -p .railway-upload
+          cp -a web .railway-upload/web
+
       - name: Require Railway configuration
         shell: bash
         env:
@@ -117,7 +124,9 @@ jobs:
             deploy_message="${GITHUB_WORKFLOW:-Scope Web CI}"
           fi
 
-          railway up web \
+          railway up .railway-upload \
+            --path-as-root \
+            --no-gitignore \
             --project "$RAILWAY_PROJECT_ID" \
             --service scope-web \
             --environment production \
