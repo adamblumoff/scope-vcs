@@ -267,6 +267,101 @@ pub(crate) async fn migrate_metadata_schema(db: &DatabaseConnection) -> Result<(
     manager
         .create_table(
             Table::create()
+                .table(CliBrowserLogins::Table)
+                .if_not_exists()
+                .col(
+                    ColumnDef::new(CliBrowserLogins::RequestId)
+                        .string()
+                        .not_null()
+                        .primary_key(),
+                )
+                .col(
+                    ColumnDef::new(CliBrowserLogins::RequestSecretHash)
+                        .string()
+                        .not_null(),
+                )
+                .col(
+                    ColumnDef::new(CliBrowserLogins::CallbackUrl)
+                        .text()
+                        .not_null(),
+                )
+                .col(ColumnDef::new(CliBrowserLogins::CallbackCodeHash).string())
+                .col(
+                    ColumnDef::new(CliBrowserLogins::CreatedAtUnix)
+                        .big_integer()
+                        .not_null(),
+                )
+                .col(
+                    ColumnDef::new(CliBrowserLogins::ExpiresAtUnix)
+                        .big_integer()
+                        .not_null(),
+                )
+                .col(ColumnDef::new(CliBrowserLogins::CompletedUserId).string())
+                .col(ColumnDef::new(CliBrowserLogins::CompletedAtUnix).big_integer())
+                .col(ColumnDef::new(CliBrowserLogins::ConsumedAtUnix).big_integer())
+                .foreign_key(
+                    ForeignKey::create()
+                        .name("fk_scope_cli_browser_logins_completed_user")
+                        .from(CliBrowserLogins::Table, CliBrowserLogins::CompletedUserId)
+                        .to(Users::Table, Users::Id)
+                        .on_delete(ForeignKeyAction::Cascade),
+                )
+                .to_owned(),
+        )
+        .await?;
+
+    manager
+        .create_table(
+            Table::create()
+                .table(CliExchangeGrants::Table)
+                .if_not_exists()
+                .col(
+                    ColumnDef::new(CliExchangeGrants::GrantHash)
+                        .string()
+                        .not_null()
+                        .primary_key(),
+                )
+                .col(
+                    ColumnDef::new(CliExchangeGrants::UserId)
+                        .string()
+                        .not_null(),
+                )
+                .col(
+                    ColumnDef::new(CliExchangeGrants::CreatedAtUnix)
+                        .big_integer()
+                        .not_null(),
+                )
+                .col(
+                    ColumnDef::new(CliExchangeGrants::ExpiresAtUnix)
+                        .big_integer()
+                        .not_null(),
+                )
+                .col(ColumnDef::new(CliExchangeGrants::ConsumedAtUnix).big_integer())
+                .foreign_key(
+                    ForeignKey::create()
+                        .name("fk_scope_cli_exchange_grants_user")
+                        .from(CliExchangeGrants::Table, CliExchangeGrants::UserId)
+                        .to(Users::Table, Users::Id)
+                        .on_delete(ForeignKeyAction::Cascade),
+                )
+                .to_owned(),
+        )
+        .await?;
+
+    manager
+        .create_index(
+            Index::create()
+                .name("idx_scope_cli_exchange_grants_user")
+                .table(CliExchangeGrants::Table)
+                .col(CliExchangeGrants::UserId)
+                .if_not_exists()
+                .to_owned(),
+        )
+        .await?;
+
+    manager
+        .create_table(
+            Table::create()
                 .table(CliSessions::Table)
                 .if_not_exists()
                 .col(
@@ -359,6 +454,8 @@ pub(crate) async fn reset_metadata_schema(db: &DatabaseConnection) -> Result<(),
         [
             "DROP TABLE IF EXISTS",
             "scope_cli_sessions,",
+            "scope_cli_exchange_grants,",
+            "scope_cli_browser_logins,",
             "scope_cli_device_logins,",
             "scope_cli_access_sessions,",
             "scope_auth_identities,",
@@ -385,6 +482,8 @@ async fn metadata_schema_has_catalog_rows(
         "scope_repositories",
         "scope_repo_memberships",
         "scope_cli_device_logins",
+        "scope_cli_browser_logins",
+        "scope_cli_exchange_grants",
         "scope_cli_sessions",
     ] {
         if !manager.has_table(table).await? {
@@ -477,6 +576,30 @@ async fn metadata_schema_drift(manager: &SchemaManager<'_>) -> Result<Option<Str
                 "expires_at_unix",
                 "completed_user_id",
                 "completed_at_unix",
+                "consumed_at_unix",
+            ][..],
+        ),
+        (
+            "scope_cli_browser_logins",
+            &[
+                "request_id",
+                "request_secret_hash",
+                "callback_url",
+                "callback_code_hash",
+                "created_at_unix",
+                "expires_at_unix",
+                "completed_user_id",
+                "completed_at_unix",
+                "consumed_at_unix",
+            ][..],
+        ),
+        (
+            "scope_cli_exchange_grants",
+            &[
+                "grant_hash",
+                "user_id",
+                "created_at_unix",
+                "expires_at_unix",
                 "consumed_at_unix",
             ][..],
         ),
@@ -620,6 +743,52 @@ impl_iden!(CliDeviceLogins {
     ExpiresAtUnix => "expires_at_unix",
     CompletedUserId => "completed_user_id",
     CompletedAtUnix => "completed_at_unix",
+    ConsumedAtUnix => "consumed_at_unix",
+});
+
+#[derive(Copy, Clone)]
+enum CliBrowserLogins {
+    Table,
+    RequestId,
+    RequestSecretHash,
+    CallbackUrl,
+    CallbackCodeHash,
+    CreatedAtUnix,
+    ExpiresAtUnix,
+    CompletedUserId,
+    CompletedAtUnix,
+    ConsumedAtUnix,
+}
+
+impl_iden!(CliBrowserLogins {
+    Table => "scope_cli_browser_logins",
+    RequestId => "request_id",
+    RequestSecretHash => "request_secret_hash",
+    CallbackUrl => "callback_url",
+    CallbackCodeHash => "callback_code_hash",
+    CreatedAtUnix => "created_at_unix",
+    ExpiresAtUnix => "expires_at_unix",
+    CompletedUserId => "completed_user_id",
+    CompletedAtUnix => "completed_at_unix",
+    ConsumedAtUnix => "consumed_at_unix",
+});
+
+#[derive(Copy, Clone)]
+enum CliExchangeGrants {
+    Table,
+    GrantHash,
+    UserId,
+    CreatedAtUnix,
+    ExpiresAtUnix,
+    ConsumedAtUnix,
+}
+
+impl_iden!(CliExchangeGrants {
+    Table => "scope_cli_exchange_grants",
+    GrantHash => "grant_hash",
+    UserId => "user_id",
+    CreatedAtUnix => "created_at_unix",
+    ExpiresAtUnix => "expires_at_unix",
     ConsumedAtUnix => "consumed_at_unix",
 });
 

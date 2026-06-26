@@ -24,6 +24,32 @@ pub(crate) enum DeviceLoginPoll {
     },
 }
 
+pub(crate) struct BrowserLoginStart {
+    pub(crate) request_id: String,
+    pub(crate) request_secret: String,
+    pub(crate) authorization_url: String,
+    pub(crate) expires_at_unix: u64,
+}
+
+pub(crate) struct CliExchangeGrant {
+    pub(crate) exchange_token: String,
+    pub(crate) expires_at_unix: u64,
+}
+
+pub(crate) struct CliSessionToken {
+    pub(crate) session_token: String,
+    pub(crate) expires_at_unix: u64,
+    pub(crate) identity: SessionIdentity,
+}
+
+pub(crate) struct CliSessionSummary {
+    pub(crate) id: String,
+    pub(crate) label: String,
+    pub(crate) created_at_unix: u64,
+    pub(crate) last_used_at_unix: Option<u64>,
+    pub(crate) expires_at_unix: u64,
+}
+
 pub(crate) fn random_prefixed_token(prefix: &str) -> Result<String, ApiError> {
     let mut bytes = [0_u8; FIRST_PUSH_TOKEN_BYTES];
     getrandom::fill(&mut bytes).map_err(|error| {

@@ -275,6 +275,50 @@ pub(crate) mod cli_device_login {
     impl ActiveModelBehavior for ActiveModel {}
 }
 
+pub(crate) mod cli_browser_login {
+    use super::*;
+
+    #[derive(Clone, Debug, PartialEq, DeriveEntityModel)]
+    #[sea_orm(table_name = "scope_cli_browser_logins")]
+    pub struct Model {
+        #[sea_orm(primary_key, auto_increment = false)]
+        pub request_id: String,
+        pub request_secret_hash: String,
+        pub callback_url: String,
+        pub callback_code_hash: Option<String>,
+        pub created_at_unix: i64,
+        pub expires_at_unix: i64,
+        pub completed_user_id: Option<String>,
+        pub completed_at_unix: Option<i64>,
+        pub consumed_at_unix: Option<i64>,
+    }
+
+    #[derive(Copy, Clone, Debug, EnumIter, DeriveRelation)]
+    pub enum Relation {}
+
+    impl ActiveModelBehavior for ActiveModel {}
+}
+
+pub(crate) mod cli_exchange_grant {
+    use super::*;
+
+    #[derive(Clone, Debug, PartialEq, DeriveEntityModel)]
+    #[sea_orm(table_name = "scope_cli_exchange_grants")]
+    pub struct Model {
+        #[sea_orm(primary_key, auto_increment = false)]
+        pub grant_hash: String,
+        pub user_id: String,
+        pub created_at_unix: i64,
+        pub expires_at_unix: i64,
+        pub consumed_at_unix: Option<i64>,
+    }
+
+    #[derive(Copy, Clone, Debug, EnumIter, DeriveRelation)]
+    pub enum Relation {}
+
+    impl ActiveModelBehavior for ActiveModel {}
+}
+
 pub(crate) mod cli_session {
     use super::*;
 
