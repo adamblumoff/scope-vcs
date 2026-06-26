@@ -65,7 +65,7 @@ fn git_clone_plan_stores_scope_credentials_by_host_and_path() {
     );
     assert_eq!(
         plan.helper_config_value,
-        "store --file /home/adam/.config/scope/git-credentials"
+        "store --file \"/home/adam/.config/scope/git-credentials\""
     );
     assert_eq!(
         plan.use_http_path_config_key,
@@ -103,7 +103,23 @@ fn git_clone_plan_preserves_localhost_ports() {
     );
     assert_eq!(
         plan.helper_config_value,
-        "store --file C:/Users/Adam/.config/scope/git-credentials"
+        "store --file \"C:/Users/Adam/.config/scope/git-credentials\""
     );
     assert_eq!(plan.credential_fields[1], "host=localhost:8080");
+}
+
+#[test]
+fn git_clone_plan_quotes_space_containing_credential_store_paths() {
+    let plan = git_clone_plan(
+        "https://scope.example/git/adam/scope-vcs",
+        "scope_git_secret",
+        None,
+        Path::new("C:/Users/Adam Smith"),
+    )
+    .unwrap();
+
+    assert_eq!(
+        plan.helper_config_value,
+        "store --file \"C:/Users/Adam Smith/.config/scope/git-credentials\""
+    );
 }

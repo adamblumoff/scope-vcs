@@ -69,7 +69,7 @@ pub fn git_clone_plan(
     let credential_store_path = credential_store_path(home);
     let helper_config_value = format!(
         "store --file {}",
-        git_path_for_config(&credential_store_path)
+        quote_git_helper_arg(&git_path_for_config(&credential_store_path))
     );
     let mut clone_args = vec![
         "clone".to_string(),
@@ -141,6 +141,10 @@ fn credential_store_path(home: &Path) -> PathBuf {
 
 fn git_path_for_config(path: &Path) -> String {
     path.to_string_lossy().replace('\\', "/")
+}
+
+fn quote_git_helper_arg(value: &str) -> String {
+    format!("\"{}\"", value.replace('\\', "\\\\").replace('"', "\\\""))
 }
 
 fn home_dir() -> anyhow::Result<PathBuf> {
