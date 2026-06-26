@@ -36,6 +36,24 @@ export type DeviceLoginPollResponse = { status: DeviceLoginStatus, session_token
 
 export type DeviceLoginCompleteResponse = { status: DeviceLoginStatus, };
 
+export type BrowserLoginStartRequest = { callback_url: string, };
+
+export type BrowserLoginStartResponse = { request_id: string, request_secret: string, authorization_url: string, expires_at_unix: number, };
+
+export type BrowserLoginCompleteResponse = { redirect_url: string, };
+
+export type BrowserLoginExchangeRequest = { request_secret: string, callback_code: string, };
+
+export type CliSessionTokenResponse = { session_token: string, expires_at_unix: number, identity: SessionIdentity, };
+
+export type CliExchangeGrantResponse = { exchange_token: string, expires_at_unix: number, };
+
+export type CliExchangeGrantExchangeRequest = { exchange_token: string, };
+
+export type CliSessionsResponse = { sessions: Array<CliSessionResponse>, };
+
+export type CliSessionResponse = { id: string, label: string, created_at_unix: number, last_used_at_unix: number | null, expires_at_unix: number, };
+
 export type RepoSummaryResponse = { id: string, owner_handle: string, name: string, lifecycle_state: RepoPublicationState, default_visibility: Visibility, role: RepoRole | null, staged_update_pending: boolean, };
 
 export type CreateRepoRequest = { name: string, visibility: Visibility | null, };

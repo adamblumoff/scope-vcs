@@ -131,6 +131,71 @@ pub(crate) struct DeviceLoginCompleteResponse {
     pub(crate) status: DeviceLoginStatus,
 }
 
+#[derive(Debug, Deserialize)]
+#[cfg_attr(test, derive(ts_rs::TS))]
+pub(crate) struct BrowserLoginStartRequest {
+    pub(crate) callback_url: String,
+}
+
+#[derive(Debug, Serialize)]
+#[cfg_attr(test, derive(ts_rs::TS))]
+pub(crate) struct BrowserLoginStartResponse {
+    pub(crate) request_id: String,
+    pub(crate) request_secret: String,
+    pub(crate) authorization_url: String,
+    pub(crate) expires_at_unix: u64,
+}
+
+#[derive(Debug, Serialize)]
+#[cfg_attr(test, derive(ts_rs::TS))]
+pub(crate) struct BrowserLoginCompleteResponse {
+    pub(crate) redirect_url: String,
+}
+
+#[derive(Debug, Deserialize)]
+#[cfg_attr(test, derive(ts_rs::TS))]
+pub(crate) struct BrowserLoginExchangeRequest {
+    pub(crate) request_secret: String,
+    pub(crate) callback_code: String,
+}
+
+#[derive(Debug, Serialize)]
+#[cfg_attr(test, derive(ts_rs::TS))]
+pub(crate) struct CliSessionTokenResponse {
+    pub(crate) session_token: String,
+    pub(crate) expires_at_unix: u64,
+    pub(crate) identity: SessionIdentity,
+}
+
+#[derive(Debug, Serialize)]
+#[cfg_attr(test, derive(ts_rs::TS))]
+pub(crate) struct CliExchangeGrantResponse {
+    pub(crate) exchange_token: String,
+    pub(crate) expires_at_unix: u64,
+}
+
+#[derive(Debug, Deserialize)]
+#[cfg_attr(test, derive(ts_rs::TS))]
+pub(crate) struct CliExchangeGrantExchangeRequest {
+    pub(crate) exchange_token: String,
+}
+
+#[derive(Debug, Serialize)]
+#[cfg_attr(test, derive(ts_rs::TS))]
+pub(crate) struct CliSessionsResponse {
+    pub(crate) sessions: Vec<CliSessionResponse>,
+}
+
+#[derive(Debug, Serialize)]
+#[cfg_attr(test, derive(ts_rs::TS))]
+pub(crate) struct CliSessionResponse {
+    pub(crate) id: String,
+    pub(crate) label: String,
+    pub(crate) created_at_unix: u64,
+    pub(crate) last_used_at_unix: Option<u64>,
+    pub(crate) expires_at_unix: u64,
+}
+
 #[derive(Debug, Serialize)]
 #[cfg_attr(test, derive(ts_rs::TS))]
 pub(crate) struct RepoSummaryResponse {

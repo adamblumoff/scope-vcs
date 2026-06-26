@@ -6,7 +6,8 @@ import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert'
 import { Button } from '@/components/ui/button'
 import { useHomeFlash } from '@/lib/home-flash'
 import { UserButton } from '@clerk/tanstack-react-start'
-import { CheckCircle2, Moon, Sun } from 'lucide-react'
+import { Link } from '@tanstack/react-router'
+import { CheckCircle2, KeyRound, Moon, Sun } from 'lucide-react'
 import { useState } from 'react'
 import { RepoList } from './repo-list'
 
@@ -28,6 +29,18 @@ export function HomePage({ home }: { home: HomeState }) {
       <AppHeader
         action={
           <div className="flex min-w-0 items-center gap-2">
+            <Button
+              aria-label="CLI sessions"
+              asChild
+              size="icon-sm"
+              title="CLI sessions"
+              type="button"
+              variant="secondary"
+            >
+              <Link to="/account">
+                <KeyRound className="size-3.5" />
+              </Link>
+            </Button>
             <UserButton />
             <ThemeToggle theme={theme} toggleTheme={toggleTheme} />
           </div>

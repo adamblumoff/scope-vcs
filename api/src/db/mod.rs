@@ -1,5 +1,6 @@
 mod auth;
 mod cleanup_queue;
+mod cli_auth;
 mod entities;
 mod locks;
 mod metadata_reset;
@@ -544,6 +545,14 @@ where
         .all(conn)
         .await
         .map_err(ApiError::internal)?;
+    let cli_browser_logins = entities::cli_browser_login::Entity::find()
+        .all(conn)
+        .await
+        .map_err(ApiError::internal)?;
+    let cli_exchange_grants = entities::cli_exchange_grant::Entity::find()
+        .all(conn)
+        .await
+        .map_err(ApiError::internal)?;
     let cli_sessions = entities::cli_session::Entity::find()
         .all(conn)
         .await
@@ -566,6 +575,14 @@ where
         .collect::<Vec<_>>();
 
     entities::cli_session::Entity::delete_many()
+        .exec(conn)
+        .await
+        .map_err(ApiError::internal)?;
+    entities::cli_exchange_grant::Entity::delete_many()
+        .exec(conn)
+        .await
+        .map_err(ApiError::internal)?;
+    entities::cli_browser_login::Entity::delete_many()
         .exec(conn)
         .await
         .map_err(ApiError::internal)?;
@@ -619,6 +636,20 @@ where
     }
     for cli_device_login in cli_device_logins {
         cli_device_login
+            .into_active_model()
+            .insert(conn)
+            .await
+            .map_err(ApiError::internal)?;
+    }
+    for cli_browser_login in cli_browser_logins {
+        cli_browser_login
+            .into_active_model()
+            .insert(conn)
+            .await
+            .map_err(ApiError::internal)?;
+    }
+    for cli_exchange_grant in cli_exchange_grants {
+        cli_exchange_grant
             .into_active_model()
             .insert(conn)
             .await

@@ -28,6 +28,31 @@ pub fn router(state: AppState) -> Router {
             post(http::device_login::poll_cli_device_login),
         )
         .route(
+            "/v1/cli/browser-login",
+            post(http::cli_auth::start_cli_browser_login),
+        )
+        .route(
+            "/v1/cli/browser-login/{request_id}/complete",
+            post(http::cli_auth::complete_cli_browser_login),
+        )
+        .route(
+            "/v1/cli/browser-login/{request_id}/exchange",
+            post(http::cli_auth::exchange_cli_browser_login),
+        )
+        .route(
+            "/v1/cli/exchange-grants",
+            post(http::cli_auth::create_cli_exchange_grant),
+        )
+        .route(
+            "/v1/cli/exchange-grants/exchange",
+            post(http::cli_auth::exchange_cli_grant),
+        )
+        .route("/v1/cli/sessions", get(http::cli_auth::list_cli_sessions))
+        .route(
+            "/v1/cli/sessions/{session_id}",
+            delete(http::cli_auth::revoke_cli_session),
+        )
+        .route(
             "/v1/cli/session",
             delete(http::device_login::revoke_current_cli_session),
         )

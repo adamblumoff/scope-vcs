@@ -44,6 +44,7 @@ use tower::ServiceExt;
 
 mod admin;
 mod auth;
+mod cli_auth;
 mod commit_history;
 mod device_login;
 mod git_http;

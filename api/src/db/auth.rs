@@ -39,7 +39,9 @@ pub(super) struct MemoryAuthState {
     auth_identities: BTreeMap<String, String>,
     cli_device_logins: BTreeMap<String, MemoryDeviceLogin>,
     cli_device_code_by_user_code_hash: BTreeMap<String, String>,
-    cli_sessions: BTreeMap<String, MemoryCliSession>,
+    pub(super) cli_browser_logins: BTreeMap<String, MemoryBrowserLogin>,
+    pub(super) cli_exchange_grants: BTreeMap<String, MemoryExchangeGrant>,
+    pub(super) cli_sessions: BTreeMap<String, MemoryCliSession>,
 }
 
 #[cfg(test)]
@@ -53,11 +55,33 @@ struct MemoryDeviceLogin {
 }
 
 #[cfg(test)]
-struct MemoryCliSession {
-    user_id: String,
-    last_used_at_unix: Option<u64>,
-    expires_at_unix: u64,
-    revoked_at_unix: Option<u64>,
+pub(super) struct MemoryBrowserLogin {
+    pub(super) request_secret_hash: String,
+    pub(super) callback_url: String,
+    pub(super) callback_code_hash: Option<String>,
+    pub(super) created_at_unix: u64,
+    pub(super) expires_at_unix: u64,
+    pub(super) completed_user_id: Option<String>,
+    pub(super) completed_at_unix: Option<u64>,
+    pub(super) consumed_at_unix: Option<u64>,
+}
+
+#[cfg(test)]
+pub(super) struct MemoryExchangeGrant {
+    pub(super) user_id: String,
+    pub(super) expires_at_unix: u64,
+    pub(super) consumed_at_unix: Option<u64>,
+}
+
+#[cfg(test)]
+pub(super) struct MemoryCliSession {
+    pub(super) id: String,
+    pub(super) user_id: String,
+    pub(super) label: String,
+    pub(super) created_at_unix: u64,
+    pub(super) last_used_at_unix: Option<u64>,
+    pub(super) expires_at_unix: u64,
+    pub(super) revoked_at_unix: Option<u64>,
 }
 
 impl MetadataStore {
@@ -392,12 +416,16 @@ impl MetadataStore {
                 };
 
                 login.consumed_at_unix = Some(now);
+                let session_id = random_prefixed_token(CLI_SESSION_ID_PREFIX)?;
                 let session_token = random_prefixed_token(CLI_SESSION_TOKEN_PREFIX)?;
                 let session_expires_at_unix = now + CLI_SESSION_TTL_SECS;
                 auth.cli_sessions.insert(
                     token_hash(&session_token),
                     MemoryCliSession {
+                        id: session_id,
                         user_id: user_id.clone(),
+                        label: "Scope CLI".to_string(),
+                        created_at_unix: now,
                         last_used_at_unix: None,
                         expires_at_unix: session_expires_at_unix,
                         revoked_at_unix: None,
@@ -657,13 +685,23 @@ fn resolve_clerk_user_in_memory(
     Ok(user)
 }
 
-async fn cleanup_expired_cli_rows<C>(conn: &C, now: u64) -> Result<(), ApiError>
+pub(super) async fn cleanup_expired_cli_rows<C>(conn: &C, now: u64) -> Result<(), ApiError>
 where
     C: sea_orm::ConnectionTrait,
 {
     let now = u64_to_i64(now)?;
     entities::cli_device_login::Entity::delete_many()
         .filter(entities::cli_device_login::Column::ExpiresAtUnix.lte(now))
+        .exec(conn)
+        .await
+        .map_err(ApiError::internal)?;
+    entities::cli_browser_login::Entity::delete_many()
+        .filter(entities::cli_browser_login::Column::ExpiresAtUnix.lte(now))
+        .exec(conn)
+        .await
+        .map_err(ApiError::internal)?;
+    entities::cli_exchange_grant::Entity::delete_many()
+        .filter(entities::cli_exchange_grant::Column::ExpiresAtUnix.lte(now))
         .exec(conn)
         .await
         .map_err(ApiError::internal)?;
@@ -728,7 +766,7 @@ impl MemoryAuthState {
         Ok(())
     }
 
-    fn cleanup_expired(&mut self, now: u64) {
+    pub(super) fn cleanup_expired(&mut self, now: u64) {
         let expired_device_codes = self
             .cli_device_logins
             .iter()
@@ -739,6 +777,10 @@ impl MemoryAuthState {
         for device_code_hash in expired_device_codes {
             self.remove_device_login(&device_code_hash);
         }
+        self.cli_browser_logins
+            .retain(|_, login| now < login.expires_at_unix);
+        self.cli_exchange_grants
+            .retain(|_, grant| now < grant.expires_at_unix);
         self.cli_sessions
             .retain(|_, session| now < session.expires_at_unix);
     }
@@ -751,7 +793,7 @@ impl MemoryAuthState {
     }
 }
 
-async fn load_user_by_id<C>(conn: &C, user_id: &str) -> Result<UserAccount, ApiError>
+pub(super) async fn load_user_by_id<C>(conn: &C, user_id: &str) -> Result<UserAccount, ApiError>
 where
     C: sea_orm::ConnectionTrait,
 {
@@ -880,10 +922,10 @@ fn normalize_user_code(value: &str) -> String {
         .collect()
 }
 
-fn u64_to_i64(value: u64) -> Result<i64, ApiError> {
+pub(super) fn u64_to_i64(value: u64) -> Result<i64, ApiError> {
     i64::try_from(value).map_err(ApiError::internal)
 }
 
-fn i64_to_u64(value: i64) -> Result<u64, ApiError> {
+pub(super) fn i64_to_u64(value: i64) -> Result<u64, ApiError> {
     u64::try_from(value).map_err(ApiError::internal)
 }

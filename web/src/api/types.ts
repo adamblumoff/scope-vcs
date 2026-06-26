@@ -1,5 +1,9 @@
 import type {
   AccountSessionResponse,
+  BrowserLoginCompleteResponse,
+  CliExchangeGrantResponse,
+  CliSessionResponse,
+  CliSessionsResponse,
   CommitDetailResponse,
   CommitFileDiffRequest,
   CommitFileResponse,
@@ -53,6 +57,10 @@ export type ProjectionPreviewSource = GeneratedProjectionPreviewSource
 export type SessionIdentity = GeneratedSessionIdentity
 export type User = UserResponse
 export type AccountSession = AccountSessionResponse
+export type BrowserLoginComplete = BrowserLoginCompleteResponse
+export type CliExchangeGrant = CliExchangeGrantResponse
+export type CliSession = CliSessionResponse
+export type CliSessions = CliSessionsResponse
 export type RepoSummary = RepoSummaryResponse
 export type RepoFile = RepoFileResponse
 export type RepoCapabilities = SessionCapabilities
