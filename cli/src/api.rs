@@ -109,6 +109,17 @@ pub struct GitPushTokenResponse {
     pub secret: Option<String>,
 }
 
+#[derive(Deserialize)]
+pub struct RepoCloneCredentialResponse {
+    pub git_remote_path: String,
+    pub token: GitCloneTokenResponse,
+}
+
+#[derive(Deserialize)]
+pub struct GitCloneTokenResponse {
+    pub secret: Option<String>,
+}
+
 pub fn api_url() -> String {
     env::var("SCOPE_API_URL")
         .or_else(|_| env::var("SCOPE_API_PUBLIC_URL"))
@@ -186,6 +197,40 @@ pub fn create_repo(
         .context("create Scope repository")?
         .json()
         .context("parse create repository response")
+}
+
+pub fn create_clone_credential(
+    client: &Client,
+    api_url: &str,
+    session_token: &str,
+    owner: &str,
+    repo: &str,
+) -> anyhow::Result<RepoCloneCredentialResponse> {
+    let response = client
+        .post(format!(
+            "{api_url}/v1/repos/{owner}/{repo}/clone-credential"
+        ))
+        .bearer_auth(session_token)
+        .send()
+        .with_context(|| format!("create clone credential for {owner}/{repo}"))?;
+    match response.status() {
+        StatusCode::UNAUTHORIZED => {
+            anyhow::bail!("not signed in; run scope login")
+        }
+        StatusCode::FORBIDDEN => {
+            anyhow::bail!("you are not an owner or member of {owner}/{repo}")
+        }
+        StatusCode::NOT_FOUND => {
+            anyhow::bail!("repo {owner}/{repo} not found")
+        }
+        _ => {}
+    }
+
+    response
+        .error_for_status()
+        .with_context(|| format!("create clone credential for {owner}/{repo}"))?
+        .json()
+        .context("parse clone credential response")
 }
 
 pub fn rollback_created_repo(

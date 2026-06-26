@@ -18,6 +18,7 @@ use std::{
     env,
     io::{self, Read, Write},
     net::{TcpListener, TcpStream},
+    path::PathBuf,
     process::Command,
     thread,
     time::{Duration, SystemTime, UNIX_EPOCH},
@@ -34,6 +35,7 @@ struct Cli {
 #[derive(Subcommand)]
 enum CommandKind {
     Init(InitArgs),
+    Clone(CloneArgs),
     Login(LoginArgs),
     Logout,
     Whoami,
@@ -44,6 +46,12 @@ struct InitArgs {
     name: Option<String>,
     #[arg(long)]
     public: bool,
+}
+
+#[derive(Parser)]
+struct CloneArgs {
+    repository: String,
+    destination: Option<PathBuf>,
 }
 
 #[derive(Parser)]
@@ -58,6 +66,7 @@ fn main() -> anyhow::Result<()> {
     let cli = Cli::parse();
     match cli.command {
         CommandKind::Init(args) => init(args),
+        CommandKind::Clone(args) => clone(args),
         CommandKind::Login(args) => login(args),
         CommandKind::Logout => logout(),
         CommandKind::Whoami => whoami(),
@@ -98,6 +107,10 @@ fn init(args: InitArgs) -> anyhow::Result<()> {
 
     println!("{}", created.init.review_url);
     Ok(())
+}
+
+fn clone(args: CloneArgs) -> anyhow::Result<()> {
+    scope_cli::clone::clone_repo(&args.repository, args.destination.as_deref())
 }
 
 fn login(args: LoginArgs) -> anyhow::Result<()> {
