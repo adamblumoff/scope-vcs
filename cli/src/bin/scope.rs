@@ -461,15 +461,10 @@ fn read_browser_callback(
     stream: &mut TcpStream,
     expected_request_id: &str,
 ) -> anyhow::Result<String> {
-    let mut buffer = [0_u8; 4096];
-    let byte_count = stream
-        .read(&mut buffer)
-        .context("read local Scope login callback")?;
-    let request = String::from_utf8_lossy(&buffer[..byte_count]);
-    let request_line = request
-        .lines()
-        .next()
-        .context("local Scope login callback was empty")?;
+    stream
+        .set_read_timeout(Some(Duration::from_secs(2)))
+        .context("configure local Scope login callback timeout")?;
+    let request_line = read_http_request_line(stream)?;
     let mut parts = request_line.split_whitespace();
     let method = parts
         .next()
@@ -481,6 +476,39 @@ fn read_browser_callback(
         .next()
         .context("local Scope login callback missing path")?;
     browser_callback_code_from_target(target, expected_request_id)
+}
+
+fn read_http_request_line(stream: &mut TcpStream) -> anyhow::Result<String> {
+    let mut request = Vec::with_capacity(512);
+    let mut chunk = [0_u8; 256];
+    loop {
+        if request.len() > 4096 {
+            bail!("local Scope login callback request line is too large");
+        }
+        if let Some(line_end) = request.iter().position(|byte| *byte == b'\n') {
+            let line = String::from_utf8_lossy(&request[..line_end])
+                .trim_end_matches('\r')
+                .to_string();
+            if line.is_empty() {
+                bail!("local Scope login callback was empty");
+            }
+            return Ok(line);
+        }
+
+        match stream.read(&mut chunk) {
+            Ok(0) => bail!("local Scope login callback closed before request line"),
+            Ok(byte_count) => request.extend_from_slice(&chunk[..byte_count]),
+            Err(error)
+                if matches!(
+                    error.kind(),
+                    io::ErrorKind::WouldBlock | io::ErrorKind::TimedOut
+                ) =>
+            {
+                bail!("local Scope login callback timed out")
+            }
+            Err(error) => return Err(error).context("read local Scope login callback"),
+        }
+    }
 }
 
 fn browser_callback_code_from_target(
@@ -806,5 +834,28 @@ mod tests {
             )
             .is_err()
         );
+    }
+
+    #[test]
+    fn browser_callback_reader_accepts_split_request_line() {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let address = listener.local_addr().unwrap();
+        let writer = thread::spawn(move || {
+            let mut stream = TcpStream::connect(address).unwrap();
+            stream
+                .write_all(b"GET /scope-cli-callback?request_id=cli_browser_123")
+                .unwrap();
+            thread::sleep(Duration::from_millis(25));
+            stream
+                .write_all(b"&code=scope_callback_456 HTTP/1.1\r\nHost: localhost\r\n\r\n")
+                .unwrap();
+        });
+
+        let (mut stream, _) = listener.accept().unwrap();
+        assert_eq!(
+            read_browser_callback(&mut stream, "cli_browser_123").unwrap(),
+            "scope_callback_456"
+        );
+        writer.join().unwrap();
     }
 }
