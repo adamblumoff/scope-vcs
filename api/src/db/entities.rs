@@ -275,16 +275,22 @@ pub(crate) mod cli_device_login {
     impl ActiveModelBehavior for ActiveModel {}
 }
 
-pub(crate) mod cli_access_session {
+pub(crate) mod cli_session {
     use super::*;
 
     #[derive(Clone, Debug, PartialEq, DeriveEntityModel)]
-    #[sea_orm(table_name = "scope_cli_access_sessions")]
+    #[sea_orm(table_name = "scope_cli_sessions")]
     pub struct Model {
         #[sea_orm(primary_key, auto_increment = false)]
+        pub id: String,
+        #[sea_orm(unique)]
         pub token_hash: String,
         pub user_id: String,
+        pub label: String,
+        pub created_at_unix: i64,
+        pub last_used_at_unix: Option<i64>,
         pub expires_at_unix: i64,
+        pub revoked_at_unix: Option<i64>,
     }
 
     #[derive(Copy, Clone, Debug, EnumIter, DeriveRelation)]

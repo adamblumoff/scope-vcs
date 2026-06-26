@@ -120,7 +120,7 @@ pub(crate) struct DeviceLoginStartResponse {
 #[cfg_attr(test, derive(ts_rs::TS))]
 pub(crate) struct DeviceLoginPollResponse {
     pub(crate) status: DeviceLoginStatus,
-    pub(crate) access_token: Option<String>,
+    pub(crate) session_token: Option<String>,
     pub(crate) expires_at_unix: u64,
     pub(crate) identity: Option<SessionIdentity>,
 }

@@ -14,8 +14,8 @@ use crate::{
         tokens::token_hash,
     },
     config::{
-        CLI_ACCESS_TOKEN_PREFIX, CLI_ACCESS_TOKEN_TTL_SECS, CLI_DEVICE_CODE_PREFIX,
-        CLI_DEVICE_LOGIN_POLL_INTERVAL_SECS, CLI_DEVICE_LOGIN_TTL_SECS,
+        CLI_DEVICE_CODE_PREFIX, CLI_DEVICE_LOGIN_POLL_INTERVAL_SECS, CLI_DEVICE_LOGIN_TTL_SECS,
+        CLI_SESSION_ID_PREFIX, CLI_SESSION_TOKEN_PREFIX, CLI_SESSION_TTL_SECS,
     },
     domain::store::{AccountAccess, UserAccount},
     error::ApiError,
@@ -39,7 +39,7 @@ pub(super) struct MemoryAuthState {
     auth_identities: BTreeMap<String, String>,
     cli_device_logins: BTreeMap<String, MemoryDeviceLogin>,
     cli_device_code_by_user_code_hash: BTreeMap<String, String>,
-    cli_access_sessions: BTreeMap<String, MemoryCliAccessSession>,
+    cli_sessions: BTreeMap<String, MemoryCliSession>,
 }
 
 #[cfg(test)]
@@ -53,9 +53,11 @@ struct MemoryDeviceLogin {
 }
 
 #[cfg(test)]
-struct MemoryCliAccessSession {
+struct MemoryCliSession {
     user_id: String,
+    last_used_at_unix: Option<u64>,
     expires_at_unix: u64,
+    revoked_at_unix: Option<u64>,
 }
 
 impl MetadataStore {
@@ -329,12 +331,18 @@ impl MetadataStore {
                     };
 
                     cleanup_expired_cli_rows(&tx, now).await?;
-                    let access_token = random_prefixed_token(CLI_ACCESS_TOKEN_PREFIX)?;
-                    let access_expires_at_unix = now + CLI_ACCESS_TOKEN_TTL_SECS;
-                    entities::cli_access_session::Model {
-                        token_hash: token_hash(&access_token),
+                    let session_id = random_prefixed_token(CLI_SESSION_ID_PREFIX)?;
+                    let session_token = random_prefixed_token(CLI_SESSION_TOKEN_PREFIX)?;
+                    let session_expires_at_unix = now + CLI_SESSION_TTL_SECS;
+                    entities::cli_session::Model {
+                        id: session_id,
+                        token_hash: token_hash(&session_token),
                         user_id: user_id.clone(),
-                        expires_at_unix: u64_to_i64(access_expires_at_unix)?,
+                        label: "Scope CLI".to_string(),
+                        created_at_unix: u64_to_i64(now)?,
+                        last_used_at_unix: None,
+                        expires_at_unix: u64_to_i64(session_expires_at_unix)?,
+                        revoked_at_unix: None,
                     }
                     .into_active_model()
                     .insert(&tx)
@@ -355,8 +363,8 @@ impl MetadataStore {
                     let user = load_user_by_id(&tx, &user_id).await?;
                     tx.commit().await.map_err(ApiError::internal)?;
                     Ok(DeviceLoginPoll::Complete {
-                        access_token,
-                        expires_at_unix: access_expires_at_unix,
+                        session_token,
+                        expires_at_unix: session_expires_at_unix,
                         identity: SessionIdentity::from(&user),
                     })
                 })
@@ -384,13 +392,15 @@ impl MetadataStore {
                 };
 
                 login.consumed_at_unix = Some(now);
-                let access_token = random_prefixed_token(CLI_ACCESS_TOKEN_PREFIX)?;
-                let access_expires_at_unix = now + CLI_ACCESS_TOKEN_TTL_SECS;
-                auth.cli_access_sessions.insert(
-                    token_hash(&access_token),
-                    MemoryCliAccessSession {
+                let session_token = random_prefixed_token(CLI_SESSION_TOKEN_PREFIX)?;
+                let session_expires_at_unix = now + CLI_SESSION_TTL_SECS;
+                auth.cli_sessions.insert(
+                    token_hash(&session_token),
+                    MemoryCliSession {
                         user_id: user_id.clone(),
-                        expires_at_unix: access_expires_at_unix,
+                        last_used_at_unix: None,
+                        expires_at_unix: session_expires_at_unix,
+                        revoked_at_unix: None,
                     },
                 );
                 drop(auth);
@@ -402,19 +412,19 @@ impl MetadataStore {
                     ApiError::internal_message("CLI login completed for missing user")
                 })?;
                 Ok(DeviceLoginPoll::Complete {
-                    access_token,
-                    expires_at_unix: access_expires_at_unix,
+                    session_token,
+                    expires_at_unix: session_expires_at_unix,
                     identity: SessionIdentity::from(&user),
                 })
             }
         }
     }
 
-    pub(crate) fn verify_cli_access_token(
+    pub(crate) fn verify_cli_session_token(
         &self,
-        access_token: &str,
+        session_token: &str,
     ) -> Result<UserAccount, ApiError> {
-        let token_hash = token_hash(access_token);
+        let token_hash = token_hash(session_token);
         let now = unix_now()?;
         match self.inner.as_ref() {
             MetadataStoreInner::Postgres { db, runtime } => {
@@ -422,23 +432,35 @@ impl MetadataStore {
                 run_api_db_on(runtime, async move {
                     let tx = db.as_ref().begin().await.map_err(ApiError::internal)?;
                     acquire_metadata_write_lock(&tx).await?;
-                    let Some(session) =
-                        entities::cli_access_session::Entity::find_by_id(token_hash)
-                            .one(&tx)
-                            .await
-                            .map_err(ApiError::internal)?
+                    let Some(session) = entities::cli_session::Entity::find()
+                        .filter(entities::cli_session::Column::TokenHash.eq(token_hash))
+                        .one(&tx)
+                        .await
+                        .map_err(ApiError::internal)?
                     else {
                         return Err(ApiError::unauthorized("invalid CLI token"));
                     };
                     if now >= i64_to_u64(session.expires_at_unix)? {
-                        entities::cli_access_session::Entity::delete_by_id(session.token_hash)
+                        entities::cli_session::Entity::delete_by_id(session.id)
                             .exec(&tx)
                             .await
                             .map_err(ApiError::internal)?;
                         return Err(ApiError::unauthorized("CLI token expired"));
                     }
+                    if session.revoked_at_unix.is_some() {
+                        return Err(ApiError::unauthorized("CLI session revoked"));
+                    }
                     cleanup_expired_cli_rows(&tx, now).await?;
                     let user = load_user_by_id(&tx, &session.user_id).await?;
+                    entities::cli_session::Entity::update_many()
+                        .filter(entities::cli_session::Column::Id.eq(session.id))
+                        .col_expr(
+                            entities::cli_session::Column::LastUsedAtUnix,
+                            Expr::value(u64_to_i64(now)?),
+                        )
+                        .exec(&tx)
+                        .await
+                        .map_err(ApiError::internal)?;
                     tx.commit().await.map_err(ApiError::internal)?;
                     Ok(user)
                 })
@@ -449,14 +471,18 @@ impl MetadataStore {
                     .auth
                     .lock()
                     .map_err(|_| ApiError::internal_message("auth lock is poisoned"))?;
-                let Some(session) = auth.cli_access_sessions.get(&token_hash) else {
+                let Some(session) = auth.cli_sessions.get_mut(&token_hash) else {
                     return Err(ApiError::unauthorized("invalid CLI token"));
                 };
                 if now >= session.expires_at_unix {
-                    auth.cli_access_sessions.remove(&token_hash);
+                    auth.cli_sessions.remove(&token_hash);
                     return Err(ApiError::unauthorized("CLI token expired"));
                 }
+                if session.revoked_at_unix.is_some() {
+                    return Err(ApiError::unauthorized("CLI session revoked"));
+                }
                 let user_id = session.user_id.clone();
+                session.last_used_at_unix = Some(now);
                 auth.cleanup_expired(now);
                 drop(auth);
                 let catalog = memory
@@ -468,6 +494,62 @@ impl MetadataStore {
                     .get(&user_id)
                     .cloned()
                     .ok_or_else(|| ApiError::unauthorized("invalid CLI token"))
+            }
+        }
+    }
+
+    pub(crate) fn revoke_cli_session_token(&self, session_token: &str) -> Result<(), ApiError> {
+        let token_hash = token_hash(session_token);
+        let now = unix_now()?;
+        match self.inner.as_ref() {
+            MetadataStoreInner::Postgres { db, runtime } => {
+                let db = Arc::clone(db);
+                run_api_db_on(runtime, async move {
+                    let tx = db.as_ref().begin().await.map_err(ApiError::internal)?;
+                    acquire_metadata_write_lock(&tx).await?;
+                    let Some(session) = entities::cli_session::Entity::find()
+                        .filter(entities::cli_session::Column::TokenHash.eq(token_hash))
+                        .one(&tx)
+                        .await
+                        .map_err(ApiError::internal)?
+                    else {
+                        return Err(ApiError::unauthorized("invalid CLI token"));
+                    };
+                    if now >= i64_to_u64(session.expires_at_unix)? {
+                        entities::cli_session::Entity::delete_by_id(session.id)
+                            .exec(&tx)
+                            .await
+                            .map_err(ApiError::internal)?;
+                        return Err(ApiError::unauthorized("CLI token expired"));
+                    }
+                    entities::cli_session::Entity::update_many()
+                        .filter(entities::cli_session::Column::Id.eq(session.id))
+                        .col_expr(
+                            entities::cli_session::Column::RevokedAtUnix,
+                            Expr::value(u64_to_i64(now)?),
+                        )
+                        .exec(&tx)
+                        .await
+                        .map_err(ApiError::internal)?;
+                    tx.commit().await.map_err(ApiError::internal)?;
+                    Ok(())
+                })
+            }
+            #[cfg(test)]
+            MetadataStoreInner::Memory(memory) => {
+                let mut auth = memory
+                    .auth
+                    .lock()
+                    .map_err(|_| ApiError::internal_message("auth lock is poisoned"))?;
+                let Some(session) = auth.cli_sessions.get_mut(&token_hash) else {
+                    return Err(ApiError::unauthorized("invalid CLI token"));
+                };
+                if now >= session.expires_at_unix {
+                    auth.cli_sessions.remove(&token_hash);
+                    return Err(ApiError::unauthorized("CLI token expired"));
+                }
+                session.revoked_at_unix = Some(now);
+                Ok(())
             }
         }
     }
@@ -585,8 +667,8 @@ where
         .exec(conn)
         .await
         .map_err(ApiError::internal)?;
-    entities::cli_access_session::Entity::delete_many()
-        .filter(entities::cli_access_session::Column::ExpiresAtUnix.lte(now))
+    entities::cli_session::Entity::delete_many()
+        .filter(entities::cli_session::Column::ExpiresAtUnix.lte(now))
         .exec(conn)
         .await
         .map_err(ApiError::internal)?;
@@ -657,7 +739,7 @@ impl MemoryAuthState {
         for device_code_hash in expired_device_codes {
             self.remove_device_login(&device_code_hash);
         }
-        self.cli_access_sessions
+        self.cli_sessions
             .retain(|_, session| now < session.expires_at_unix);
     }
 

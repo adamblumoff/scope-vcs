@@ -18,7 +18,7 @@ pub(crate) enum DeviceLoginPoll {
         expires_at_unix: u64,
     },
     Complete {
-        access_token: String,
+        session_token: String,
         expires_at_unix: u64,
         identity: SessionIdentity,
     },

@@ -1,5 +1,6 @@
 use crate::{
-    auth::scope::require_clerk_scope_user,
+    auth::{clerk::bearer_token, scope::require_clerk_scope_user},
+    config::CLI_SESSION_TOKEN_PREFIX,
     error::ApiError,
     http::{
         origins::public_app_origin,
@@ -13,7 +14,7 @@ use crate::{
 use axum::{
     Json,
     extract::{Path, State},
-    http::HeaderMap,
+    http::{HeaderMap, StatusCode},
 };
 
 pub(crate) async fn start_cli_device_login(
@@ -54,20 +55,34 @@ pub(crate) async fn poll_cli_device_login(
         crate::auth::device::DeviceLoginPoll::Pending { expires_at_unix } => {
             Ok(Json(DeviceLoginPollResponse {
                 status: DeviceLoginStatus::Pending,
-                access_token: None,
+                session_token: None,
                 expires_at_unix,
                 identity: None,
             }))
         }
         crate::auth::device::DeviceLoginPoll::Complete {
-            access_token,
+            session_token,
             expires_at_unix,
             identity,
         } => Ok(Json(DeviceLoginPollResponse {
             status: DeviceLoginStatus::Complete,
-            access_token: Some(access_token),
+            session_token: Some(session_token),
             expires_at_unix,
             identity: Some(identity),
         })),
     }
+}
+
+pub(crate) async fn revoke_current_cli_session(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> Result<StatusCode, ApiError> {
+    let token =
+        bearer_token(&headers)?.ok_or_else(|| ApiError::unauthorized("sign in required"))?;
+    if !token.starts_with(CLI_SESSION_TOKEN_PREFIX) {
+        return Err(ApiError::unauthorized("CLI session required"));
+    }
+
+    state.metadata.revoke_cli_session_token(token)?;
+    Ok(StatusCode::NO_CONTENT)
 }

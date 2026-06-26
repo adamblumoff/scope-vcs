@@ -544,7 +544,7 @@ where
         .all(conn)
         .await
         .map_err(ApiError::internal)?;
-    let cli_access_sessions = entities::cli_access_session::Entity::find()
+    let cli_sessions = entities::cli_session::Entity::find()
         .all(conn)
         .await
         .map_err(ApiError::internal)?;
@@ -565,7 +565,7 @@ where
         .map(entities::membership::Model::from_domain)
         .collect::<Vec<_>>();
 
-    entities::cli_access_session::Entity::delete_many()
+    entities::cli_session::Entity::delete_many()
         .exec(conn)
         .await
         .map_err(ApiError::internal)?;
@@ -624,8 +624,8 @@ where
             .await
             .map_err(ApiError::internal)?;
     }
-    for cli_access_session in cli_access_sessions {
-        cli_access_session
+    for cli_session in cli_sessions {
+        cli_session
             .into_active_model()
             .insert(conn)
             .await

@@ -267,28 +267,38 @@ pub(crate) async fn migrate_metadata_schema(db: &DatabaseConnection) -> Result<(
     manager
         .create_table(
             Table::create()
-                .table(CliAccessSessions::Table)
+                .table(CliSessions::Table)
                 .if_not_exists()
                 .col(
-                    ColumnDef::new(CliAccessSessions::TokenHash)
+                    ColumnDef::new(CliSessions::Id)
                         .string()
                         .not_null()
                         .primary_key(),
                 )
                 .col(
-                    ColumnDef::new(CliAccessSessions::UserId)
+                    ColumnDef::new(CliSessions::TokenHash)
                         .string()
-                        .not_null(),
+                        .not_null()
+                        .unique_key(),
                 )
+                .col(ColumnDef::new(CliSessions::UserId).string().not_null())
+                .col(ColumnDef::new(CliSessions::Label).string().not_null())
                 .col(
-                    ColumnDef::new(CliAccessSessions::ExpiresAtUnix)
+                    ColumnDef::new(CliSessions::CreatedAtUnix)
                         .big_integer()
                         .not_null(),
                 )
+                .col(ColumnDef::new(CliSessions::LastUsedAtUnix).big_integer())
+                .col(
+                    ColumnDef::new(CliSessions::ExpiresAtUnix)
+                        .big_integer()
+                        .not_null(),
+                )
+                .col(ColumnDef::new(CliSessions::RevokedAtUnix).big_integer())
                 .foreign_key(
                     ForeignKey::create()
-                        .name("fk_scope_cli_access_sessions_user")
-                        .from(CliAccessSessions::Table, CliAccessSessions::UserId)
+                        .name("fk_scope_cli_sessions_user")
+                        .from(CliSessions::Table, CliSessions::UserId)
                         .to(Users::Table, Users::Id)
                         .on_delete(ForeignKeyAction::Cascade),
                 )
@@ -299,9 +309,9 @@ pub(crate) async fn migrate_metadata_schema(db: &DatabaseConnection) -> Result<(
     manager
         .create_index(
             Index::create()
-                .name("idx_scope_cli_access_sessions_user")
-                .table(CliAccessSessions::Table)
-                .col(CliAccessSessions::UserId)
+                .name("idx_scope_cli_sessions_user")
+                .table(CliSessions::Table)
+                .col(CliSessions::UserId)
                 .if_not_exists()
                 .to_owned(),
         )
@@ -348,8 +358,9 @@ pub(crate) async fn reset_metadata_schema(db: &DatabaseConnection) -> Result<(),
         backend,
         [
             "DROP TABLE IF EXISTS",
-            "scope_cli_access_sessions,",
+            "scope_cli_sessions,",
             "scope_cli_device_logins,",
+            "scope_cli_access_sessions,",
             "scope_auth_identities,",
             "scope_repo_memberships,",
             "scope_repositories,",
@@ -374,7 +385,7 @@ async fn metadata_schema_has_catalog_rows(
         "scope_repositories",
         "scope_repo_memberships",
         "scope_cli_device_logins",
-        "scope_cli_access_sessions",
+        "scope_cli_sessions",
     ] {
         if !manager.has_table(table).await? {
             continue;
@@ -470,8 +481,17 @@ async fn metadata_schema_drift(manager: &SchemaManager<'_>) -> Result<Option<Str
             ][..],
         ),
         (
-            "scope_cli_access_sessions",
-            &["token_hash", "user_id", "expires_at_unix"][..],
+            "scope_cli_sessions",
+            &[
+                "id",
+                "token_hash",
+                "user_id",
+                "label",
+                "created_at_unix",
+                "last_used_at_unix",
+                "expires_at_unix",
+                "revoked_at_unix",
+            ][..],
         ),
     ];
 
@@ -604,18 +624,28 @@ impl_iden!(CliDeviceLogins {
 });
 
 #[derive(Copy, Clone)]
-enum CliAccessSessions {
+enum CliSessions {
     Table,
+    Id,
     TokenHash,
     UserId,
+    Label,
+    CreatedAtUnix,
+    LastUsedAtUnix,
     ExpiresAtUnix,
+    RevokedAtUnix,
 }
 
-impl_iden!(CliAccessSessions {
-    Table => "scope_cli_access_sessions",
+impl_iden!(CliSessions {
+    Table => "scope_cli_sessions",
+    Id => "id",
     TokenHash => "token_hash",
     UserId => "user_id",
+    Label => "label",
+    CreatedAtUnix => "created_at_unix",
+    LastUsedAtUnix => "last_used_at_unix",
     ExpiresAtUnix => "expires_at_unix",
+    RevokedAtUnix => "revoked_at_unix",
 });
 
 #[derive(Copy, Clone)]
