@@ -1,6 +1,6 @@
 use crate::{
     auth::clerk::{ClerkIdentity, bearer_token},
-    config::CLI_ACCESS_TOKEN_PREFIX,
+    config::CLI_SESSION_TOKEN_PREFIX,
     domain::{
         policy::{Principal, PrincipalKind},
         store::{StoredRepository, UserAccount},
@@ -18,8 +18,8 @@ pub(crate) async fn optional_scope_user(
         return Ok(None);
     };
 
-    if token.starts_with(CLI_ACCESS_TOKEN_PREFIX) {
-        return state.metadata.verify_cli_access_token(token).map(Some);
+    if token.starts_with(CLI_SESSION_TOKEN_PREFIX) {
+        return state.metadata.verify_cli_session_token(token).map(Some);
     }
 
     let identity = state.clerk.verify(token).await?;
@@ -48,7 +48,7 @@ pub(crate) async fn require_clerk_identity(
     headers: &HeaderMap,
 ) -> Result<ClerkIdentity, ApiError> {
     let token = bearer_token(headers)?.ok_or_else(|| ApiError::unauthorized("sign in required"))?;
-    if token.starts_with(CLI_ACCESS_TOKEN_PREFIX) {
+    if token.starts_with(CLI_SESSION_TOKEN_PREFIX) {
         return Err(ApiError::unauthorized("Clerk auth required"));
     }
     state.clerk.verify(token).await

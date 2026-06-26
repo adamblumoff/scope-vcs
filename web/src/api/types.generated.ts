@@ -32,7 +32,7 @@ export type DeviceLoginStatus = "Pending" | "Complete";
 
 export type DeviceLoginStartResponse = { device_code: string, user_code: string, verification_url: string, expires_at_unix: number, poll_interval_secs: number, };
 
-export type DeviceLoginPollResponse = { status: DeviceLoginStatus, access_token: string | null, expires_at_unix: number, identity: SessionIdentity | null, };
+export type DeviceLoginPollResponse = { status: DeviceLoginStatus, session_token: string | null, expires_at_unix: number, identity: SessionIdentity | null, };
 
 export type DeviceLoginCompleteResponse = { status: DeviceLoginStatus, };
 

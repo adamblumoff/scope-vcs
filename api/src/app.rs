@@ -1,7 +1,7 @@
 use crate::{git, http, state::AppState};
 use axum::{
     Router,
-    routing::{get, patch, post},
+    routing::{delete, get, patch, post},
 };
 use tower_http::{cors::CorsLayer, trace::TraceLayer};
 
@@ -26,6 +26,10 @@ pub fn router(state: AppState) -> Router {
         .route(
             "/v1/cli/device-login/{device_code}/poll",
             post(http::device_login::poll_cli_device_login),
+        )
+        .route(
+            "/v1/cli/session",
+            delete(http::device_login::revoke_current_cli_session),
         )
         .route("/v1/session", get(http::account::get_account_session))
         .route(
