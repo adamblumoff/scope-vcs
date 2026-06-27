@@ -365,11 +365,11 @@ impl MetadataStore {
                             .exec(&tx)
                             .await
                             .map_err(ApiError::internal)?;
-                            return Err(ApiError::conflict("CLI device login expired"));
+                            Err(ApiError::conflict("CLI device login expired"))
                         }
                         cli_auth_rules::DeviceLoginPollDecision::Pending { expires_at_unix } => {
                             tx.commit().await.map_err(ApiError::internal)?;
-                            return Ok(DeviceLoginPoll::Pending { expires_at_unix });
+                            Ok(DeviceLoginPoll::Pending { expires_at_unix })
                         }
                         cli_auth_rules::DeviceLoginPollDecision::Complete { user_id } => {
                             cleanup_expired_cli_rows(&tx, now).await?;
@@ -387,11 +387,11 @@ impl MetadataStore {
                                 .await
                                 .map_err(ApiError::internal)?;
                             tx.commit().await.map_err(ApiError::internal)?;
-                            return Ok(DeviceLoginPoll::Complete {
+                            Ok(DeviceLoginPoll::Complete {
                                 session_token: token.session_token,
                                 expires_at_unix: token.expires_at_unix,
                                 identity: token.identity,
-                            });
+                            })
                         }
                     }
                 })
@@ -415,21 +415,21 @@ impl MetadataStore {
                 )? {
                     cli_auth_rules::DeviceLoginPollDecision::Expired => {
                         auth.remove_device_login(&device_code_hash);
-                        return Err(ApiError::conflict("CLI device login expired"));
+                        Err(ApiError::conflict("CLI device login expired"))
                     }
                     cli_auth_rules::DeviceLoginPollDecision::Pending { expires_at_unix } => {
-                        return Ok(DeviceLoginPoll::Pending { expires_at_unix });
+                        Ok(DeviceLoginPoll::Pending { expires_at_unix })
                     }
                     cli_auth_rules::DeviceLoginPollDecision::Complete { user_id } => {
                         login.consumed_at_unix = Some(now);
                         let token = create_cli_session_token_in_memory(memory, auth, user_id, now)?;
-                        return Ok(DeviceLoginPoll::Complete {
+                        Ok(DeviceLoginPoll::Complete {
                             session_token: token.session_token,
                             expires_at_unix: token.expires_at_unix,
                             identity: token.identity,
-                        });
+                        })
                     }
-                };
+                }
             }
         }
     }
