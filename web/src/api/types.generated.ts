@@ -117,3 +117,13 @@ export type ProjectionPreviewCommitResponse = { projected_id: string, logical_co
 export type ProjectionPreviewCommitVisibilityResponse = "FullyPublic" | "Synthetic" | "Mixed" | "FullyPrivate";
 
 export type ProjectionPreviewSummaryResponse = { visible_files: number, hidden_files: number, visible_commits: number, hidden_commits: number, synthetic_commits: number, };
+
+export const CliAuthApiEndpoints = {
+  accountSession: "/v1/session",
+  cliSession: "/v1/cli/session",
+  deviceLoginStart: "/v1/cli/device-login",
+  deviceLoginPoll: "/v1/cli/device-login/{device_code}/poll",
+  browserLoginStart: "/v1/cli/browser-login",
+  browserLoginExchange: "/v1/cli/browser-login/{request_id}/exchange",
+  exchangeGrantExchange: "/v1/cli/exchange-grants/exchange",
+} as const;

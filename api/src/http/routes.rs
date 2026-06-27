@@ -1,0 +1,12 @@
+pub(crate) const ACCOUNT_SESSION: &str = "/v1/session";
+pub(crate) const CLI_BROWSER_LOGIN: &str = "/v1/cli/browser-login";
+pub(crate) const CLI_BROWSER_LOGIN_COMPLETE: &str = "/v1/cli/browser-login/{request_id}/complete";
+pub(crate) const CLI_BROWSER_LOGIN_EXCHANGE: &str = "/v1/cli/browser-login/{request_id}/exchange";
+pub(crate) const CLI_DEVICE_LOGIN: &str = "/v1/cli/device-login";
+pub(crate) const CLI_DEVICE_LOGIN_COMPLETE: &str = "/v1/cli/device-login/{user_code}/complete";
+pub(crate) const CLI_DEVICE_LOGIN_POLL: &str = "/v1/cli/device-login/{device_code}/poll";
+pub(crate) const CLI_EXCHANGE_GRANTS: &str = "/v1/cli/exchange-grants";
+pub(crate) const CLI_EXCHANGE_GRANTS_EXCHANGE: &str = "/v1/cli/exchange-grants/exchange";
+pub(crate) const CLI_SESSION: &str = "/v1/cli/session";
+pub(crate) const CLI_SESSIONS: &str = "/v1/cli/sessions";
+pub(crate) const CLI_SESSION_BY_ID: &str = "/v1/cli/sessions/{session_id}";
