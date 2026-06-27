@@ -1,0 +1,85 @@
+# Local Dev Environment Redesign
+
+## Problem
+
+Local development currently depends on operator-specific shell commands and ignored
+`.tmp` files. The API can be started with production Railway variables and then
+manually patched to accept local Clerk tokens. That mixes development auth with
+production data and makes local bugs hard to reason about.
+
+## Goals
+
+- One command starts the local web and API stack.
+- Local API startup refuses dangerous environment combinations.
+- Local development uses disposable local metadata and local object storage by
+  default.
+- Clerk development keys are the only supported local auth keys.
+- The development contract is versioned in the repo, not stored in shell history.
+- Old ad hoc local-dev scripts and docs are removed or replaced.
+- Scope users are unique by normalized verified email.
+
+## Runtime Shape
+
+Local development has three boundaries:
+
+1. Web runs at `http://localhost:3000` with Clerk development keys.
+2. API runs at `http://localhost:8080` with a matching Clerk development issuer.
+3. Persistence is local: Postgres from a local URL and filesystem object storage
+   under `.scope/dev`.
+
+Railway production variables are not part of the default local workflow. A
+separate Railway development environment may be added later for deployed
+integration testing, but local development must stay safe without it.
+
+## Developer Commands
+
+Add a committed `dev` command surface:
+
+- `up` starts API and web, writes logs and pid files under `.tmp/local-dev`.
+- `down` stops only processes owned by those pid files.
+- `status` reports process and readiness state.
+- `doctor` checks required tools, ports, env shape, database safety, and Clerk
+  issuer alignment.
+- `reset` resets local runtime data after explicit operator action.
+
+The launcher should keep local defaults small and explicit. It may read
+`.env.local` and `web/.env.local`, but it must not pull production Railway
+variables.
+
+## API Changes
+
+Add first-class local object storage through the existing `ObjectStore` trait:
+
+- `SCOPE_OBJECT_STORE=s3` keeps production behavior.
+- `SCOPE_OBJECT_STORE=filesystem` stores encrypted object envelopes on disk.
+- Omitted `SCOPE_OBJECT_STORE` defaults to `s3` unless `SCOPE_ENV=local`.
+
+Add environment validation before `AppState` starts:
+
+- `SCOPE_ENV=local` requires localhost app/API origins.
+- `SCOPE_ENV=local` rejects Railway production markers.
+- `SCOPE_ENV=local` rejects database URLs without a visible local-dev marker.
+- `SCOPE_ENV=local` rejects live Clerk keys and production Clerk issuers.
+
+## Auth Identity Rule
+
+Scope users are unique by normalized verified email. If a new Clerk subject logs
+in with an email already owned by a Scope user, the new auth identity links to
+that existing Scope user instead of creating a second user. Unverified or missing
+emails do not merge and should fail where a verified email is required.
+
+The database schema enforces the invariant with a unique email index. Because the
+product is pre-alpha, destructive schema reset on drift is acceptable and expected.
+
+## Verification
+
+Implementation is complete only when:
+
+- `dev doctor` passes in the local environment.
+- `dev up` starts API and web without Railway production variables.
+- `/readyz` passes on the local API.
+- `dev down` stops owned processes.
+- API tests cover local object storage, environment guards, and same-email Clerk
+  identity merging.
+- Existing API, CLI, and web checks pass or any remaining failure is documented
+  with a concrete blocker.
