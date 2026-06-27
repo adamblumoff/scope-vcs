@@ -12,15 +12,14 @@ use scope_cli::{
         rollback_created_repo, validate_session_token,
     },
     auth::{
-        cached_cli_session, delete_stored_session_token, ensure_cli_session,
-        read_stored_session_token, store_session_token,
+        cached_cli_session, delete_stored_session_token, read_stored_session_token,
+        store_session_token,
     },
 };
 use std::{
-    env,
     io::{self, Read, Write},
     net::{TcpListener, TcpStream},
-    path::PathBuf,
+    path::{Path, PathBuf},
     process::Command,
     thread,
     time::{Duration, SystemTime, UNIX_EPOCH},
@@ -45,9 +44,12 @@ enum CommandKind {
 
 #[derive(Parser)]
 struct InitArgs {
-    name: Option<String>,
     #[arg(long)]
+    name: Option<String>,
+    #[arg(long, conflicts_with = "private")]
     public: bool,
+    #[arg(long, conflicts_with = "public")]
+    private: bool,
 }
 
 #[derive(Parser)]
@@ -76,21 +78,18 @@ fn main() -> anyhow::Result<()> {
 }
 
 fn init(args: InitArgs) -> anyhow::Result<()> {
+    let git_repo = ensure_git_repo_ready()?;
     let api_url = api_url();
-    let repo_name = match args.name {
-        Some(name) => normalize_repo_name(&name)?,
-        None => prompt_repo_name()?,
+    let repo_name = match args.name.as_deref() {
+        Some(name) => normalize_repo_name(name)?,
+        None => prompt_repo_name(&git_repo.root)?,
     };
-    let visibility = if args.public {
-        Visibility::Public
-    } else {
-        Visibility::Private
-    };
-
-    ensure_git_repo_ready()?;
+    let visibility = resolve_visibility(&args)?;
+    warn_if_dirty_working_tree(&git_repo)?;
 
     let client = http_client()?;
-    let session = ensure_cli_session(&client, &api_url)?;
+    let session = session_from_cache_or_login(&client, &api_url, local_browser_login)?;
+    eprintln!("Signed in as {}", display_user(&session.user));
     let created = create_repo(&client, &api_url, &session.token, repo_name, visibility)?;
     let push_secret = created
         .init
@@ -130,17 +129,13 @@ fn login(args: LoginArgs) -> anyhow::Result<()> {
         return Ok(());
     }
 
-    if let Some(session) = cached_cli_session(&client, &api_url)? {
-        println!("Signed in as {}", display_user(&session.user));
-        return Ok(());
-    }
-
     let session = if args.headless {
-        device_login(&client, &api_url, false)?
+        session_from_cache_or_login(&client, &api_url, |client, api_url| {
+            device_login(client, api_url, false)
+        })?
     } else {
-        local_browser_login(&client, &api_url)?
+        session_from_cache_or_login(&client, &api_url, local_browser_login)?
     };
-    store_session_token(&api_url, &session.token)?;
     println!("Signed in as {}", display_user(&session.user));
     Ok(())
 }
@@ -171,6 +166,20 @@ fn whoami() -> anyhow::Result<()> {
     };
     println!("{}", display_user(&session.user));
     Ok(())
+}
+
+fn session_from_cache_or_login(
+    client: &Client,
+    api_url: &str,
+    login: impl FnOnce(&Client, &str) -> anyhow::Result<AuthenticatedSession>,
+) -> anyhow::Result<AuthenticatedSession> {
+    if let Some(session) = cached_cli_session(client, api_url)? {
+        return Ok(session);
+    }
+
+    let session = login(client, api_url)?;
+    store_session_token(api_url, &session.token)?;
+    Ok(session)
 }
 
 fn local_browser_login(client: &Client, api_url: &str) -> anyhow::Result<AuthenticatedSession> {
@@ -457,16 +466,48 @@ fn push_initial_commit(init: &RepoInitResponse, push_secret: &str) -> anyhow::Re
     ])
 }
 
-fn ensure_git_repo_ready() -> anyhow::Result<()> {
-    if !git_success(&["rev-parse", "--is-inside-work-tree"]) {
-        eprintln!("Initializing Git repository");
-        run_git(&["init", "-b", "main"])?;
+struct GitRepo {
+    root: PathBuf,
+}
+
+fn ensure_git_repo_ready() -> anyhow::Result<GitRepo> {
+    let root_output = Command::new("git")
+        .args(["rev-parse", "--show-toplevel"])
+        .output()
+        .context("inspect Git repository")?;
+    if !root_output.status.success() {
+        bail!("run scope init from inside an existing Git repository");
     }
 
     if !git_success(&["rev-parse", "--verify", "HEAD"]) {
         bail!("create at least one Git commit before running scope init");
     }
 
+    let root = String::from_utf8_lossy(&root_output.stdout)
+        .trim()
+        .to_string();
+    if root.is_empty() {
+        bail!("Git repository root could not be determined");
+    }
+
+    Ok(GitRepo {
+        root: PathBuf::from(root),
+    })
+}
+
+fn warn_if_dirty_working_tree(repo: &GitRepo) -> anyhow::Result<()> {
+    let output = Command::new("git")
+        .current_dir(&repo.root)
+        .args(["status", "--porcelain"])
+        .output()
+        .context("inspect Git working tree")?;
+    if !output.status.success() {
+        bail!("git status --porcelain failed");
+    }
+    if !output.stdout.is_empty() {
+        eprintln!("Working tree has uncommitted changes.");
+        eprintln!("Only committed HEAD will be pushed to Scope.");
+    }
     Ok(())
 }
 
@@ -488,15 +529,8 @@ fn git_success(args: &[&str]) -> bool {
         .is_ok_and(|status| status.success())
 }
 
-fn prompt_repo_name() -> anyhow::Result<String> {
-    let default = env::current_dir()
-        .ok()
-        .and_then(|path| {
-            path.file_name()
-                .map(|name| name.to_string_lossy().to_string())
-        })
-        .filter(|name| !name.trim().is_empty())
-        .unwrap_or_else(|| "repo".to_string());
+fn prompt_repo_name(git_root: &Path) -> anyhow::Result<String> {
+    let default = default_repo_name(git_root);
     eprint!("Repository name [{default}]: ");
     io::stderr().flush().ok();
 
@@ -510,6 +544,42 @@ fn prompt_repo_name() -> anyhow::Result<String> {
         input
     };
     normalize_repo_name(&name)
+}
+
+fn default_repo_name(git_root: &Path) -> String {
+    git_root
+        .file_name()
+        .map(|name| name.to_string_lossy().to_string())
+        .filter(|name| !name.trim().is_empty())
+        .unwrap_or_else(|| "repo".to_string())
+}
+
+fn resolve_visibility(args: &InitArgs) -> anyhow::Result<Visibility> {
+    match (args.public, args.private) {
+        (true, true) => bail!("--public and --private cannot be used together"),
+        (true, false) => Ok(Visibility::Public),
+        (false, true) => Ok(Visibility::Private),
+        (false, false) => prompt_visibility(),
+    }
+}
+
+fn prompt_visibility() -> anyhow::Result<Visibility> {
+    eprint!("Default visibility [Private]: ");
+    io::stderr().flush().ok();
+
+    let mut input = String::new();
+    io::stdin()
+        .read_line(&mut input)
+        .context("read repository visibility")?;
+    parse_visibility(input.trim())
+}
+
+fn parse_visibility(input: &str) -> anyhow::Result<Visibility> {
+    match input.trim().to_ascii_lowercase().as_str() {
+        "" | "private" => Ok(Visibility::Private),
+        "public" => Ok(Visibility::Public),
+        _ => bail!("visibility must be private or public"),
+    }
 }
 
 fn normalize_repo_name(name: &str) -> anyhow::Result<String> {
@@ -580,5 +650,64 @@ mod tests {
             "scope_callback_456"
         );
         writer.join().unwrap();
+    }
+
+    #[test]
+    fn default_repo_name_uses_git_root_folder_name() {
+        assert_eq!(
+            default_repo_name(Path::new("C:/Users/adam/Code/scope-vcs")),
+            "scope-vcs"
+        );
+    }
+
+    #[test]
+    fn visibility_prompt_defaults_to_private() {
+        assert_eq!(parse_visibility("").unwrap(), Visibility::Private);
+        assert_eq!(parse_visibility(" private ").unwrap(), Visibility::Private);
+    }
+
+    #[test]
+    fn visibility_prompt_accepts_public() {
+        assert_eq!(parse_visibility("public").unwrap(), Visibility::Public);
+        assert_eq!(parse_visibility(" PUBLIC ").unwrap(), Visibility::Public);
+    }
+
+    #[test]
+    fn visibility_flags_resolve_without_prompting() {
+        assert_eq!(
+            resolve_visibility(&InitArgs {
+                name: None,
+                public: true,
+                private: false,
+            })
+            .unwrap(),
+            Visibility::Public
+        );
+        assert_eq!(
+            resolve_visibility(&InitArgs {
+                name: None,
+                public: false,
+                private: true,
+            })
+            .unwrap(),
+            Visibility::Private
+        );
+    }
+
+    #[test]
+    fn visibility_flags_reject_conflict() {
+        assert!(
+            resolve_visibility(&InitArgs {
+                name: None,
+                public: true,
+                private: true,
+            })
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn visibility_prompt_rejects_unknown_values() {
+        assert!(parse_visibility("internal").is_err());
     }
 }

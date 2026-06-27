@@ -1,5 +1,5 @@
 use crate::api::{AuthenticatedSession, validate_session_token};
-use anyhow::{Context, bail};
+use anyhow::Context;
 #[cfg(any(target_os = "macos", windows))]
 use keyring_core::{Entry, Error as KeyringError};
 use reqwest::blocking::Client;
@@ -19,14 +19,6 @@ use std::{
 const KEYCHAIN_SERVICE: &str = "scope-vcs";
 #[cfg(any(target_os = "macos", windows))]
 static SET_CREDENTIAL_STORE: Once = Once::new();
-
-pub fn ensure_cli_session(client: &Client, api_url: &str) -> anyhow::Result<AuthenticatedSession> {
-    if let Some(session) = cached_cli_session(client, api_url)? {
-        return Ok(session);
-    }
-
-    bail!("not signed in; run scope login before scope init")
-}
 
 pub fn cached_cli_session(
     client: &Client,

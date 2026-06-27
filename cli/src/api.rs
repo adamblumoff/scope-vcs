@@ -21,7 +21,7 @@ pub fn cli_device_login_poll_path(device_code: &str) -> String {
     format!("/v1/cli/device-login/{device_code}/poll")
 }
 
-#[derive(Clone, Copy, Debug, Serialize)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
 pub enum Visibility {
     Private,
     Public,
