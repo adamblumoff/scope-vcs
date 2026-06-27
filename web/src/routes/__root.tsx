@@ -1,5 +1,4 @@
 import { ClerkProvider } from '@clerk/tanstack-react-start'
-import { shadcn } from '@clerk/ui/themes'
 import {
   HeadContent,
   Outlet,
@@ -8,6 +7,7 @@ import {
 } from '@tanstack/react-router'
 import type { ReactNode } from 'react'
 import { Toaster } from 'sonner'
+import { scopeClerkAppearance } from '../clerk-appearance'
 import '../styles.css'
 
 export const Route = createRootRoute({
@@ -45,7 +45,7 @@ function RootDocument({ children }: { children: ReactNode }) {
         <HeadContent />
       </head>
       <body>
-        <ClerkProvider appearance={{ theme: shadcn }}>
+        <ClerkProvider appearance={scopeClerkAppearance}>
           {children}
           <Toaster richColors position="bottom-right" />
           <Scripts />
