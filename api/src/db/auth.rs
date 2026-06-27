@@ -1,5 +1,8 @@
+#[cfg(test)]
+use super::cli_sessions::create_cli_session_token_in_memory;
 use super::{
-    MetadataStore, MetadataStoreInner, acquire_metadata_write_lock, entities, run_api_db_on,
+    MetadataStore, MetadataStoreInner, acquire_metadata_write_lock,
+    cli_sessions::create_cli_session_token_in_tx, entities, run_api_db_on,
 };
 #[cfg(test)]
 use crate::domain::store::AppCatalog;
@@ -15,11 +18,9 @@ use crate::{
     },
     config::{
         CLI_DEVICE_CODE_PREFIX, CLI_DEVICE_LOGIN_POLL_INTERVAL_SECS, CLI_DEVICE_LOGIN_TTL_SECS,
-        CLI_SESSION_ID_PREFIX, CLI_SESSION_TOKEN_PREFIX, CLI_SESSION_TTL_SECS,
     },
     domain::store::{AccountAccess, UserAccount},
     error::ApiError,
-    http::responses::SessionIdentity,
     persistence::unix_now,
 };
 use sea_orm::{
@@ -355,23 +356,7 @@ impl MetadataStore {
                     };
 
                     cleanup_expired_cli_rows(&tx, now).await?;
-                    let session_id = random_prefixed_token(CLI_SESSION_ID_PREFIX)?;
-                    let session_token = random_prefixed_token(CLI_SESSION_TOKEN_PREFIX)?;
-                    let session_expires_at_unix = now + CLI_SESSION_TTL_SECS;
-                    entities::cli_session::Model {
-                        id: session_id,
-                        token_hash: token_hash(&session_token),
-                        user_id: user_id.clone(),
-                        label: "Scope CLI".to_string(),
-                        created_at_unix: u64_to_i64(now)?,
-                        last_used_at_unix: None,
-                        expires_at_unix: u64_to_i64(session_expires_at_unix)?,
-                        revoked_at_unix: None,
-                    }
-                    .into_active_model()
-                    .insert(&tx)
-                    .await
-                    .map_err(ApiError::internal)?;
+                    let token = create_cli_session_token_in_tx(&tx, &user_id, now).await?;
                     entities::cli_device_login::Entity::update_many()
                         .filter(
                             entities::cli_device_login::Column::DeviceCodeHash
@@ -384,12 +369,11 @@ impl MetadataStore {
                         .exec(&tx)
                         .await
                         .map_err(ApiError::internal)?;
-                    let user = load_user_by_id(&tx, &user_id).await?;
                     tx.commit().await.map_err(ApiError::internal)?;
                     Ok(DeviceLoginPoll::Complete {
-                        session_token,
-                        expires_at_unix: session_expires_at_unix,
-                        identity: SessionIdentity::from(&user),
+                        session_token: token.session_token,
+                        expires_at_unix: token.expires_at_unix,
+                        identity: token.identity,
                     })
                 })
             }
@@ -416,33 +400,11 @@ impl MetadataStore {
                 };
 
                 login.consumed_at_unix = Some(now);
-                let session_id = random_prefixed_token(CLI_SESSION_ID_PREFIX)?;
-                let session_token = random_prefixed_token(CLI_SESSION_TOKEN_PREFIX)?;
-                let session_expires_at_unix = now + CLI_SESSION_TTL_SECS;
-                auth.cli_sessions.insert(
-                    token_hash(&session_token),
-                    MemoryCliSession {
-                        id: session_id,
-                        user_id: user_id.clone(),
-                        label: "Scope CLI".to_string(),
-                        created_at_unix: now,
-                        last_used_at_unix: None,
-                        expires_at_unix: session_expires_at_unix,
-                        revoked_at_unix: None,
-                    },
-                );
-                drop(auth);
-                let catalog = memory
-                    .catalog
-                    .lock()
-                    .map_err(|_| ApiError::internal_message("catalog lock is poisoned"))?;
-                let user = catalog.users.get(&user_id).cloned().ok_or_else(|| {
-                    ApiError::internal_message("CLI login completed for missing user")
-                })?;
+                let token = create_cli_session_token_in_memory(memory, auth, user_id, now)?;
                 Ok(DeviceLoginPoll::Complete {
-                    session_token,
-                    expires_at_unix: session_expires_at_unix,
-                    identity: SessionIdentity::from(&user),
+                    session_token: token.session_token,
+                    expires_at_unix: token.expires_at_unix,
+                    identity: token.identity,
                 })
             }
         }

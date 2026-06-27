@@ -1,6 +1,7 @@
 mod auth;
 mod cleanup_queue;
 mod cli_auth;
+mod cli_sessions;
 mod entities;
 mod locks;
 mod metadata_reset;
