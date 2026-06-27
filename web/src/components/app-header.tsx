@@ -20,11 +20,13 @@ export function AppHeader({
 }: AppHeaderProps) {
   const brand = (
     <>
-      <div className="flex size-8 shrink-0 items-center justify-center rounded-md border border-border">
-        <GitBranch className="size-4" />
+      <div className="flex size-9 shrink-0 items-center justify-center rounded-lg bg-brand text-brand-foreground shadow-[var(--shadow-card)]">
+        <GitBranch className="size-4.5" />
       </div>
       <div className="min-w-0">
-        <div className="truncate text-sm font-semibold leading-5">Scope</div>
+        <div className="truncate text-sm font-semibold leading-5 tracking-tight">
+          Scope
+        </div>
         <div
           className={`truncate text-xs leading-4 text-muted-foreground ${subtitleClassName ?? ''}`}
         >
@@ -35,7 +37,7 @@ export function AppHeader({
   )
 
   return (
-    <header className="border-b border-border bg-background">
+    <header className="sticky top-0 z-30 border-b border-border bg-background/80 backdrop-blur-md supports-[backdrop-filter]:bg-background/65">
       <div
         className={cn(
           'mx-auto flex min-h-16 max-w-[1040px] items-center justify-between gap-3 px-4 py-3 sm:px-6',

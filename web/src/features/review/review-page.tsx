@@ -244,7 +244,7 @@ export function ReviewPage({
                 }
                 onClick={() => void rejectUpdate()}
                 size="sm"
-                className="bg-red-800 text-white hover:bg-red-900 focus-visible:border-red-400 focus-visible:ring-red-700/30 dark:bg-red-800 dark:text-white dark:hover:bg-red-900"
+                variant="danger"
                 type="button"
               >
                 {rejecting ? (
@@ -264,7 +264,7 @@ export function ReviewPage({
               }
               onClick={() => void completeReview()}
               size="sm"
-              className="bg-green-700 text-green-1000 hover:bg-green-800 focus-visible:border-green-400 focus-visible:ring-green-700/30 dark:bg-green-700 dark:text-green-1000 dark:hover:bg-green-800"
+              variant="success"
               type="button"
             >
               {publishing ? (

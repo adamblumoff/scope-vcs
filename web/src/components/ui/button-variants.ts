@@ -5,13 +5,18 @@ const buttonVariants = cva(
   {
     variants: {
       variant: {
-        default: "bg-primary text-primary-foreground hover:bg-primary/85",
+        default:
+          "bg-primary text-primary-foreground shadow-[var(--shadow-card)] hover:bg-primary/90",
         secondary:
-          "border-border bg-secondary text-secondary-foreground hover:bg-muted aria-expanded:bg-secondary aria-expanded:text-secondary-foreground",
+          "border-border bg-secondary text-secondary-foreground shadow-[var(--shadow-card)] hover:bg-muted hover:border-border aria-expanded:bg-muted aria-expanded:text-secondary-foreground",
         ghost:
           "hover:bg-muted hover:text-foreground aria-expanded:bg-muted aria-expanded:text-foreground dark:hover:bg-muted/50",
         destructive:
           "bg-destructive/10 text-destructive hover:bg-destructive/20 focus-visible:border-destructive/40 focus-visible:ring-destructive/20 dark:bg-destructive/20 dark:hover:bg-destructive/30 dark:focus-visible:ring-destructive/40",
+        success:
+          "bg-green-700 text-white shadow-[var(--shadow-card)] hover:bg-green-800 focus-visible:border-green-400 focus-visible:ring-green-700/30",
+        danger:
+          "bg-destructive text-white shadow-[var(--shadow-card)] hover:bg-destructive/90 focus-visible:border-destructive/40 focus-visible:ring-destructive/30",
       },
       size: {
         default:

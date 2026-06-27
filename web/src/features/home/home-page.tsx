@@ -8,15 +8,21 @@ import { useHomeFlash } from '@/lib/home-flash'
 import { UserButton } from '@clerk/tanstack-react-start'
 import { Link } from '@tanstack/react-router'
 import { CheckCircle2, KeyRound, Moon, Sun } from 'lucide-react'
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { RepoList } from './repo-list'
 
 type ThemeMode = 'dark' | 'light'
+
+const THEME_STORAGE_KEY = 'scope-theme'
 
 export function HomePage({ home }: { home: HomeState }) {
   const [theme, setTheme] = useState<ThemeMode>('dark')
   const flash = useHomeFlash()
   const { account, repositories } = home
+
+  useEffect(() => {
+    setTheme(readStoredTheme())
+  }, [])
 
   function toggleTheme() {
     const nextTheme = nextThemeMode(theme)
@@ -112,6 +118,20 @@ function applyTheme(theme: ThemeMode) {
 
   document.documentElement.classList.toggle('dark', theme === 'dark')
   document.documentElement.style.colorScheme = theme
+
+  try {
+    localStorage.setItem(THEME_STORAGE_KEY, theme)
+  } catch {
+    // ignore persistence failures (private mode, disabled storage)
+  }
+}
+
+function readStoredTheme(): ThemeMode {
+  if (typeof document === 'undefined') {
+    return 'dark'
+  }
+
+  return document.documentElement.classList.contains('dark') ? 'dark' : 'light'
 }
 
 function nextThemeMode(theme: ThemeMode): ThemeMode {

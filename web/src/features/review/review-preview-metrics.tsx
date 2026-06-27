@@ -20,7 +20,7 @@ export function ReviewPreviewMetrics({
   const audience = audienceLabel(preview.audience)
 
   return (
-    <div className="grid grid-cols-3 gap-1 text-xs sm:min-w-[300px]">
+    <div className="grid grid-cols-3 gap-2 text-xs sm:min-w-[320px]">
       <SummaryChip
         icon={<UserRoundCheck className="size-3" />}
         label="Shown"
@@ -64,8 +64,8 @@ function SummaryChip({
     <div
       className={
         tone === 'private'
-          ? 'min-w-0 border-l-2 border-white bg-red-100/35 px-2 py-2.5 dark:bg-red-100/20'
-          : 'min-w-0 border-l-2 border-white bg-background/50 px-2 py-2.5 dark:bg-background/35'
+          ? 'min-w-0 rounded-lg border border-red-400/50 bg-red-100/40 px-2.5 py-2 dark:bg-red-100/25'
+          : 'min-w-0 rounded-lg border border-border bg-card px-2.5 py-2'
       }
     >
       <div className="flex items-center gap-1 text-[11px] leading-4 text-muted-foreground">

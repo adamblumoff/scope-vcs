@@ -36,7 +36,7 @@ export function CopyableCodeBlock({
     try {
       await navigator.clipboard.writeText(value)
       setCopied(true)
-      toast.success('Copied correctly')
+      toast.success('Copied')
     } catch {
       toast.error('Copy failed')
     }
