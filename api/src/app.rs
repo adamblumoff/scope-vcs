@@ -3,6 +3,7 @@ use axum::{
     Router,
     routing::{delete, get, patch, post},
 };
+use http::routes;
 use tower_http::{cors::CorsLayer, trace::TraceLayer};
 
 pub fn router(state: AppState) -> Router {
@@ -16,47 +17,50 @@ pub fn router(state: AppState) -> Router {
             post(http::admin::reset_metadata),
         )
         .route(
-            "/v1/cli/device-login",
+            routes::CLI_DEVICE_LOGIN,
             post(http::device_login::start_cli_device_login),
         )
         .route(
-            "/v1/cli/device-login/{user_code}/complete",
+            routes::CLI_DEVICE_LOGIN_COMPLETE,
             post(http::device_login::complete_cli_device_login),
         )
         .route(
-            "/v1/cli/device-login/{device_code}/poll",
+            routes::CLI_DEVICE_LOGIN_POLL,
             post(http::device_login::poll_cli_device_login),
         )
         .route(
-            "/v1/cli/browser-login",
+            routes::CLI_BROWSER_LOGIN,
             post(http::cli_auth::start_cli_browser_login),
         )
         .route(
-            "/v1/cli/browser-login/{request_id}/complete",
+            routes::CLI_BROWSER_LOGIN_COMPLETE,
             post(http::cli_auth::complete_cli_browser_login),
         )
         .route(
-            "/v1/cli/browser-login/{request_id}/exchange",
+            routes::CLI_BROWSER_LOGIN_EXCHANGE,
             post(http::cli_auth::exchange_cli_browser_login),
         )
         .route(
-            "/v1/cli/exchange-grants",
+            routes::CLI_EXCHANGE_GRANTS,
             post(http::cli_auth::create_cli_exchange_grant),
         )
         .route(
-            "/v1/cli/exchange-grants/exchange",
+            routes::CLI_EXCHANGE_GRANTS_EXCHANGE,
             post(http::cli_auth::exchange_cli_grant),
         )
-        .route("/v1/cli/sessions", get(http::cli_auth::list_cli_sessions))
+        .route(routes::CLI_SESSIONS, get(http::cli_auth::list_cli_sessions))
         .route(
-            "/v1/cli/sessions/{session_id}",
+            routes::CLI_SESSION_BY_ID,
             delete(http::cli_auth::revoke_cli_session),
         )
         .route(
-            "/v1/cli/session",
+            routes::CLI_SESSION,
             delete(http::device_login::revoke_current_cli_session),
         )
-        .route("/v1/session", get(http::account::get_account_session))
+        .route(
+            routes::ACCOUNT_SESSION,
+            get(http::account::get_account_session),
+        )
         .route(
             "/v1/repos",
             get(http::repos::list_repos).post(http::repos::create_repo),

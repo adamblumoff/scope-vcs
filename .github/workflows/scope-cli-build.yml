@@ -4,13 +4,23 @@ on:
   pull_request:
     paths:
       - ".github/workflows/scope-cli-build.yml"
+      - "api/src/app.rs"
+      - "api/src/http/responses.rs"
+      - "api/src/http/routes.rs"
+      - "api/src/http/type_exports.rs"
       - "cli/**"
+      - "web/src/api/types.generated.ts"
   push:
     branches:
       - main
     paths:
       - ".github/workflows/scope-cli-build.yml"
+      - "api/src/app.rs"
+      - "api/src/http/responses.rs"
+      - "api/src/http/routes.rs"
+      - "api/src/http/type_exports.rs"
       - "cli/**"
+      - "web/src/api/types.generated.ts"
   workflow_dispatch:
 
 permissions:

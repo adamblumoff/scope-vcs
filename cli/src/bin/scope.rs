@@ -4,9 +4,11 @@ use reqwest::blocking::Client;
 use scope_cli::{
     api::{
         AuthenticatedSession, BrowserLoginExchangeRequest, BrowserLoginStartRequest,
-        BrowserLoginStartResponse, CliExchangeGrantExchangeRequest, CliSessionTokenResponse,
-        DeviceLoginPollResponse, DeviceLoginStartResponse, DeviceLoginStatus, RepoInitResponse,
-        Visibility, api_url, create_repo, display_user, http_client, revoke_cli_session,
+        BrowserLoginStartResponse, CLI_BROWSER_LOGIN_PATH, CLI_DEVICE_LOGIN_PATH,
+        CLI_EXCHANGE_GRANTS_EXCHANGE_PATH, CliExchangeGrantExchangeRequest,
+        CliSessionTokenResponse, DeviceLoginPollResponse, DeviceLoginStartResponse,
+        DeviceLoginStatus, RepoInitResponse, Visibility, api_url, cli_browser_login_exchange_path,
+        cli_device_login_poll_path, create_repo, display_user, http_client, revoke_cli_session,
         rollback_created_repo, validate_session_token,
     },
     auth::{
@@ -182,7 +184,7 @@ fn local_browser_login(client: &Client, api_url: &str) -> anyhow::Result<Authent
         .port();
     let callback_url = format!("http://127.0.0.1:{port}/scope-cli-callback");
     let start: BrowserLoginStartResponse = client
-        .post(format!("{api_url}/v1/cli/browser-login"))
+        .post(format!("{api_url}{CLI_BROWSER_LOGIN_PATH}"))
         .json(&BrowserLoginStartRequest { callback_url })
         .send()
         .context("start browser login")?
@@ -202,8 +204,8 @@ fn local_browser_login(client: &Client, api_url: &str) -> anyhow::Result<Authent
         wait_for_browser_callback(&listener, &start.request_id, start.expires_at_unix)?;
     let exchanged: CliSessionTokenResponse = client
         .post(format!(
-            "{api_url}/v1/cli/browser-login/{}/exchange",
-            start.request_id
+            "{api_url}{}",
+            cli_browser_login_exchange_path(&start.request_id)
         ))
         .json(&BrowserLoginExchangeRequest {
             request_secret: start.request_secret,
@@ -229,7 +231,7 @@ fn exchange_login(
     exchange_token: &str,
 ) -> anyhow::Result<AuthenticatedSession> {
     let exchanged: CliSessionTokenResponse = client
-        .post(format!("{api_url}/v1/cli/exchange-grants/exchange"))
+        .post(format!("{api_url}{CLI_EXCHANGE_GRANTS_EXCHANGE_PATH}"))
         .json(&CliExchangeGrantExchangeRequest {
             exchange_token: exchange_token.to_string(),
         })
@@ -253,7 +255,7 @@ fn device_login(
     open_browser: bool,
 ) -> anyhow::Result<AuthenticatedSession> {
     let start: DeviceLoginStartResponse = client
-        .post(format!("{api_url}/v1/cli/device-login"))
+        .post(format!("{api_url}{CLI_DEVICE_LOGIN_PATH}"))
         .send()
         .context("start browser login")?
         .error_for_status()
@@ -276,8 +278,8 @@ fn device_login(
         thread::sleep(Duration::from_secs(start.poll_interval_secs.max(1)));
         let poll: DeviceLoginPollResponse = client
             .post(format!(
-                "{api_url}/v1/cli/device-login/{}/poll",
-                start.device_code
+                "{api_url}{}",
+                cli_device_login_poll_path(&start.device_code)
             ))
             .send()
             .context("poll browser login")?
