@@ -4,6 +4,7 @@ mod cli_auth;
 mod entities;
 mod locks;
 mod metadata_reset;
+mod metadata_schema;
 mod publish_apply;
 mod push_staging;
 mod repo_effects;
