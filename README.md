@@ -49,14 +49,19 @@ Use the committed dev entrypoint instead of pulling Railway variables by hand:
 
 The local stack runs the web app at `http://localhost:3000` and the API at
 `http://localhost:8080`. The API is started with `--features local-dev`, uses
-ephemeral in-memory metadata, and stores encrypted local objects under
-`.scope/dev`. The dev launcher strips inherited Railway variables and refuses
-production-looking Clerk or database settings.
+ephemeral in-memory metadata seeded with local demo repositories, and stores
+encrypted local objects under `.scope/dev`. The dev launcher strips inherited
+Railway variables and refuses production-looking Clerk or database settings.
 
 `web/.env.local` must contain Clerk development keys (`pk_test_` and
 `sk_test_`). The launcher derives the local API Clerk issuer from
 `VITE_CLERK_PUBLISHABLE_KEY`, so local web and local API stay on the same Clerk
 development instance.
+
+Root `.env.local` must contain `SCOPE_DEV_USER_EMAIL` matching the Clerk dev
+account you sign in with. `SCOPE_DEV_USER_HANDLE` is optional and controls the
+owner handle for seeded repositories. Copy `.env.example` when setting this up
+on a new machine.
 
 Do not use Railway `production` variables for local API development. A deployed
 Railway development environment can be added later for integration testing, but

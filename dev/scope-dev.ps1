@@ -63,6 +63,19 @@ function Get-ClerkIssuer {
     return "https://$clerkHost"
 }
 
+function Get-DevUser {
+    $rootEnv = Read-DotEnv (Join-Path $Root '.env.local')
+    $email = $rootEnv['SCOPE_DEV_USER_EMAIL']
+    if (!$email) {
+        throw 'root .env.local must define SCOPE_DEV_USER_EMAIL for seeded local repos'
+    }
+    $handle = $rootEnv['SCOPE_DEV_USER_HANDLE']
+    return @{
+        Email = $email
+        Handle = $handle
+    }
+}
+
 function Get-ObjectKey {
     Ensure-Dir $DataDir
     if (!(Test-Path -LiteralPath $KeyFile)) {
@@ -126,22 +139,30 @@ function Invoke-Doctor {
         throw 'pnpm is required for local web dev'
     }
     $issuer = Get-ClerkIssuer
+    $devUser = Get-DevUser
     $webEnv = Read-DotEnv (Join-Path $Root 'web\.env.local')
     if (!$webEnv['CLERK_SECRET_KEY'] -or !$webEnv['CLERK_SECRET_KEY'].StartsWith('sk_test_')) {
         throw 'web\.env.local must define a Clerk development secret key (sk_test_)'
     }
     Write-Host "doctor ok"
     Write-Host "clerk issuer: $issuer"
+    Write-Host "seed user: $($devUser.Email)"
     Write-Host "api: http://localhost:8080"
     Write-Host "web: http://localhost:3000"
 }
 
 function Start-Api {
     $issuer = Get-ClerkIssuer
+    $devUser = Get-DevUser
     $objectKey = Get-ObjectKey
     $cargo = (Get-Command cargo -ErrorAction Stop).Source
     $apiDir = Join-Path $Root 'api'
     $scriptPath = Join-Path $StateDir 'api.ps1'
+    $devHandleLine = if ($devUser.Handle) {
+        "`$env:SCOPE_DEV_USER_HANDLE = $(Quote-PS $devUser.Handle)"
+    } else {
+        "Remove-Item Env:\SCOPE_DEV_USER_HANDLE -ErrorAction SilentlyContinue"
+    }
     $script = @"
 `$ErrorActionPreference = 'Stop'
 Set-Location $(Quote-PS $Root)
@@ -160,6 +181,8 @@ Get-ChildItem Env:SCOPE_BUCKET_* -ErrorAction SilentlyContinue | Remove-Item
 `$env:CLERK_ISSUER = $(Quote-PS $issuer)
 `$env:CLERK_JWKS_URL = $(Quote-PS "$issuer/.well-known/jwks.json")
 `$env:CLERK_AUTHORIZED_PARTIES = 'http://localhost:3000'
+`$env:SCOPE_DEV_USER_EMAIL = $(Quote-PS $devUser.Email)
+$devHandleLine
 `$apiProcess = Start-Process -FilePath $(Quote-PS $cargo) -ArgumentList @('run', '--features', 'local-dev') -WorkingDirectory $(Quote-PS $apiDir) -RedirectStandardOutput $(Quote-PS $ApiOutLog) -RedirectStandardError $(Quote-PS $ApiErrLog) -PassThru -Wait
 exit `$apiProcess.ExitCode
 "@
@@ -181,7 +204,6 @@ Set-Location $(Quote-PS $Root)
 Get-ChildItem Env:RAILWAY_* -ErrorAction SilentlyContinue | Remove-Item
 `$env:SCOPE_API_INTERNAL_URL = 'http://localhost:8080'
 `$env:SCOPE_API_PUBLIC_URL = 'http://localhost:8080'
-`$env:SCOPE_CLI_INSTALL_URL = 'http://localhost:8787'
 `$webProcess = Start-Process -FilePath $(Quote-PS $pnpm.Source) -ArgumentList @('dev') -WorkingDirectory $(Quote-PS $webDir) -RedirectStandardOutput $(Quote-PS $WebOutLog) -RedirectStandardError $(Quote-PS $WebErrLog) -PassThru -Wait
 exit `$webProcess.ExitCode
 "@

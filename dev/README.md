@@ -18,9 +18,17 @@ The command starts:
 - web at `http://localhost:3000`
 - API at `http://localhost:8080`
 
-Local API runs with `cargo run --features local-dev`, in-memory metadata, and
-filesystem object storage under `.scope/dev`. The script strips inherited
-Railway variables and refuses production-looking Clerk or database settings.
+Local API runs with `cargo run --features local-dev`, in-memory metadata seeded
+with demo repositories, and filesystem object storage under `.scope/dev`. The
+script strips inherited Railway variables and refuses production-looking Clerk
+or database settings.
 
 `web/.env.local` must contain Clerk development keys. The script derives
 `CLERK_ISSUER` for the local API from `VITE_CLERK_PUBLISHABLE_KEY`.
+
+Root `.env.local` must contain `SCOPE_DEV_USER_EMAIL` matching the Clerk dev
+account you sign in with. `SCOPE_DEV_USER_HANDLE` is optional.
+
+The local dev stack intentionally does not start the CLI installer service.
+Seeded repositories are the default UI development path until a separate CLI dev
+environment exists.
