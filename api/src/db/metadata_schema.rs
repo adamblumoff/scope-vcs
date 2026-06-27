@@ -441,4 +441,27 @@ mod tests {
             ]
         );
     }
+
+    #[test]
+    fn metadata_schema_inventory_has_unique_names() {
+        let mut tables = std::collections::BTreeSet::new();
+        for table in METADATA_SCHEMA_TABLES {
+            assert!(
+                tables.insert(table.table),
+                "duplicate table {}",
+                table.table
+            );
+            assert!(!table.columns.is_empty(), "{} has no columns", table.table);
+
+            let mut columns = std::collections::BTreeSet::new();
+            for column in table.columns {
+                assert!(
+                    columns.insert(*column),
+                    "duplicate column {}.{}",
+                    table.table,
+                    column
+                );
+            }
+        }
+    }
 }
