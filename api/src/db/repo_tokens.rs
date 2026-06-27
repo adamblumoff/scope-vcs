@@ -53,7 +53,7 @@ impl MetadataStore {
                     Ok(git_clone_token)
                 })
             }
-            #[cfg(test)]
+            #[cfg(any(test, feature = "memory-metadata"))]
             MetadataStoreInner::Memory(_) => self.update(move |catalog| {
                 let repo = catalog
                     .repositories

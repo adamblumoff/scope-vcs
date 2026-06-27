@@ -1,4 +1,4 @@
-#[cfg(test)]
+#[cfg(any(test, feature = "memory-metadata"))]
 use super::repo_effects::apply_repo_effects;
 use super::{
     MetadataStore, MetadataStoreInner, acquire_metadata_write_lock, entities,
@@ -45,7 +45,7 @@ impl MetadataStore {
                     Ok(repo)
                 })
             }
-            #[cfg(test)]
+            #[cfg(any(test, feature = "memory-metadata"))]
             MetadataStoreInner::Memory(_) => self.update(move |catalog| {
                 let repo = catalog
                     .repositories

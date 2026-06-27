@@ -5,6 +5,11 @@ edition = "2024"
 license = "UNLICENSED"
 repository = "https://github.com/adamblumoff/scope-vcs"
 
+[features]
+default = []
+local-dev = ["memory-metadata"]
+memory-metadata = []
+
 [dependencies]
 anyhow = "1.0.100"
 axum = "0.8.7"

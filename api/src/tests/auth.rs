@@ -164,7 +164,7 @@ fn clerk_subject_resolves_to_internal_scope_user_id() {
 }
 
 #[test]
-fn clerk_user_ids_do_not_merge_by_verified_email() {
+fn clerk_user_ids_merge_by_verified_email() {
     let state = AppState::test_state();
     let first_identity = ClerkIdentity {
         user_id: "user_first".to_string(),
@@ -180,11 +180,25 @@ fn clerk_user_ids_do_not_merge_by_verified_email() {
     let first = state.metadata.resolve_clerk_user(&first_identity).unwrap();
     let second = state.metadata.resolve_clerk_user(&second_identity).unwrap();
 
-    assert_ne!(first.id, second.id);
+    assert_eq!(first.id, second.id);
+    assert_eq!(second.email, TEST_OWNER_EMAIL);
     let catalog = state.metadata.test_catalog().unwrap();
-    assert_eq!(catalog.users.len(), 2);
+    assert_eq!(catalog.users.len(), 1);
     assert!(catalog.users.contains_key(&first.id));
-    assert!(catalog.users.contains_key(&second.id));
+}
+
+#[test]
+fn clerk_user_requires_verified_email() {
+    let state = AppState::test_state();
+    let identity = ClerkIdentity {
+        user_id: "user_unverified".to_string(),
+        email: Some(TEST_OWNER_EMAIL.to_string()),
+        email_verified: false,
+    };
+
+    let error = state.metadata.resolve_clerk_user(&identity).unwrap_err();
+
+    assert_eq!(error.status, StatusCode::UNAUTHORIZED);
 }
 
 #[tokio::test]

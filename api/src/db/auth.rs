@@ -1,10 +1,10 @@
-#[cfg(test)]
+#[cfg(any(test, feature = "memory-metadata"))]
 use super::cli_sessions::create_cli_session_token_in_memory;
 use super::{
     MetadataStore, MetadataStoreInner, acquire_metadata_write_lock,
     cli_sessions::create_cli_session_token_in_tx, entities, run_api_db_on,
 };
-#[cfg(test)]
+#[cfg(any(test, feature = "memory-metadata"))]
 use crate::domain::store::AppCatalog;
 use crate::{
     auth::{
@@ -25,13 +25,13 @@ use sea_orm::{
     TransactionTrait, sea_query::Expr,
 };
 use sha2::{Digest, Sha256};
-#[cfg(test)]
+#[cfg(any(test, feature = "memory-metadata"))]
 use std::collections::BTreeMap;
 use std::sync::Arc;
 
 const CLERK_PROVIDER: &str = "clerk";
 
-#[cfg(test)]
+#[cfg(any(test, feature = "memory-metadata"))]
 #[derive(Default)]
 pub(super) struct MemoryAuthState {
     auth_identities: BTreeMap<String, String>,
@@ -42,7 +42,7 @@ pub(super) struct MemoryAuthState {
     pub(super) cli_sessions: BTreeMap<String, MemoryCliSession>,
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "memory-metadata"))]
 struct MemoryDeviceLogin {
     user_code_hash: String,
     created_at_unix: u64,
@@ -52,7 +52,7 @@ struct MemoryDeviceLogin {
     consumed_at_unix: Option<u64>,
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "memory-metadata"))]
 pub(super) struct MemoryBrowserLogin {
     pub(super) request_secret_hash: String,
     pub(super) callback_url: String,
@@ -64,14 +64,14 @@ pub(super) struct MemoryBrowserLogin {
     pub(super) consumed_at_unix: Option<u64>,
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "memory-metadata"))]
 pub(super) struct MemoryExchangeGrant {
     pub(super) user_id: String,
     pub(super) expires_at_unix: u64,
     pub(super) consumed_at_unix: Option<u64>,
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "memory-metadata"))]
 pub(super) struct MemoryCliSession {
     pub(super) id: String,
     pub(super) user_id: String,
@@ -99,7 +99,7 @@ impl MetadataStore {
                     Ok(user)
                 })
             }
-            #[cfg(test)]
+            #[cfg(any(test, feature = "memory-metadata"))]
             MetadataStoreInner::Memory(memory) => {
                 let mut auth = memory
                     .auth
@@ -179,7 +179,7 @@ impl MetadataStore {
                     })
                 })
             }
-            #[cfg(test)]
+            #[cfg(any(test, feature = "memory-metadata"))]
             MetadataStoreInner::Memory(memory) => {
                 let mut auth = memory
                     .auth
@@ -292,7 +292,7 @@ impl MetadataStore {
                     Ok(())
                 })
             }
-            #[cfg(test)]
+            #[cfg(any(test, feature = "memory-metadata"))]
             MetadataStoreInner::Memory(memory) => {
                 let mut auth = memory
                     .auth
@@ -396,7 +396,7 @@ impl MetadataStore {
                     }
                 })
             }
-            #[cfg(test)]
+            #[cfg(any(test, feature = "memory-metadata"))]
             MetadataStoreInner::Memory(memory) => {
                 let mut auth = memory
                     .auth
@@ -486,7 +486,7 @@ impl MetadataStore {
                     Ok(user)
                 })
             }
-            #[cfg(test)]
+            #[cfg(any(test, feature = "memory-metadata"))]
             MetadataStoreInner::Memory(memory) => {
                 let mut auth = memory
                     .auth
@@ -568,7 +568,7 @@ impl MetadataStore {
                     Ok(())
                 })
             }
-            #[cfg(test)]
+            #[cfg(any(test, feature = "memory-metadata"))]
             MetadataStoreInner::Memory(memory) => {
                 let mut auth = memory
                     .auth
@@ -598,6 +598,7 @@ async fn resolve_clerk_user_in_tx<C>(
 where
     C: sea_orm::ConnectionTrait,
 {
+    let verified_email = verified_identity_email(identity)?;
     if let Some(auth_identity) = entities::auth_identity::Entity::find()
         .filter(entities::auth_identity::Column::Provider.eq(CLERK_PROVIDER))
         .filter(entities::auth_identity::Column::Subject.eq(identity.user_id.clone()))
@@ -606,6 +607,13 @@ where
         .map_err(ApiError::internal)?
     {
         let mut user = load_user_by_id(conn, &auth_identity.user_id).await?;
+        if let Some(email_owner) = load_user_by_email(conn, &verified_email).await?
+            && email_owner.id != user.id
+        {
+            return Err(ApiError::conflict(
+                "verified email belongs to another Scope user",
+            ));
+        }
         update_user_snapshot(&mut user, identity);
         entities::user::Model::from_domain(&user)
             .into_active_model()
@@ -625,7 +633,8 @@ where
     let user_id = scope_user_id_for_auth_identity(CLERK_PROVIDER, &identity.user_id);
     let mut user = users
         .iter()
-        .find(|user| user.id == user_id)
+        .find(|user| user.email.as_str() == verified_email)
+        .or_else(|| users.iter().find(|user| user.id == user_id))
         .cloned()
         .unwrap_or_else(|| {
             let preferred = preferred_user_handle(identity);
@@ -665,17 +674,29 @@ where
     Ok(user)
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "memory-metadata"))]
 fn resolve_clerk_user_in_memory(
     auth: &mut MemoryAuthState,
     catalog: &mut AppCatalog,
     identity: &ClerkIdentity,
 ) -> Result<UserAccount, ApiError> {
+    let verified_email = verified_identity_email(identity)?;
     let key = auth_identity_key(CLERK_PROVIDER, &identity.user_id);
-    let user_id = auth
-        .auth_identities
-        .get(&key)
-        .cloned()
+    let mapped_user_id = auth.auth_identities.get(&key).cloned();
+    let email_user_id = catalog
+        .users
+        .values()
+        .find(|user| user.email.as_str() == verified_email)
+        .map(|user| user.id.clone());
+    if let (Some(mapped_user_id), Some(email_user_id)) = (&mapped_user_id, &email_user_id)
+        && mapped_user_id != email_user_id
+    {
+        return Err(ApiError::conflict(
+            "verified email belongs to another Scope user",
+        ));
+    }
+    let user_id = mapped_user_id
+        .or(email_user_id)
         .unwrap_or_else(|| scope_user_id_for_auth_identity(CLERK_PROVIDER, &identity.user_id));
     let mut user = catalog.users.get(&user_id).cloned().unwrap_or_else(|| {
         let preferred = preferred_user_handle(identity);
@@ -738,7 +759,7 @@ where
     cli_auth_rules::enforce_device_login_start_rate_limit(pending_count, window_count)
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "memory-metadata"))]
 impl MemoryAuthState {
     fn enforce_start_limits(&self, now: u64) -> Result<(), ApiError> {
         let pending_count = self.cli_device_logins.len() as u64;
@@ -789,6 +810,19 @@ where
         .try_into_domain()
 }
 
+async fn load_user_by_email<C>(conn: &C, email: &str) -> Result<Option<UserAccount>, ApiError>
+where
+    C: sea_orm::ConnectionTrait,
+{
+    entities::user::Entity::find()
+        .filter(entities::user::Column::Email.eq(email.to_string()))
+        .one(conn)
+        .await
+        .map_err(ApiError::internal)?
+        .map(|user| user.try_into_domain())
+        .transpose()
+}
+
 fn update_user_snapshot(user: &mut UserAccount, identity: &ClerkIdentity) {
     user.email = identity
         .email
@@ -797,6 +831,21 @@ fn update_user_snapshot(user: &mut UserAccount, identity: &ClerkIdentity) {
         .unwrap_or_default();
     user.email_verified = identity.email_verified;
     user.access = AccountAccess::Member;
+}
+
+fn verified_identity_email(identity: &ClerkIdentity) -> Result<String, ApiError> {
+    if !identity.email_verified {
+        return Err(ApiError::unauthorized("verified email required"));
+    }
+    let email = identity
+        .email
+        .as_deref()
+        .map(normalize_email)
+        .unwrap_or_default();
+    if email.is_empty() {
+        return Err(ApiError::unauthorized("verified email required"));
+    }
+    Ok(email)
 }
 
 pub(crate) fn scope_user_id_for_auth_identity(provider: &str, subject: &str) -> String {
@@ -808,7 +857,7 @@ pub(crate) fn scope_user_id_for_auth_identity(provider: &str, subject: &str) -> 
     format!("scope_usr_{}", &digest[..24])
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "memory-metadata"))]
 fn auth_identity_key(provider: &str, subject: &str) -> String {
     format!("{provider}\0{subject}")
 }

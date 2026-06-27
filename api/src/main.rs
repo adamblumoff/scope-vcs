@@ -17,11 +17,29 @@ fn main() -> anyhow::Result<()> {
         .and_then(|value| value.parse::<u16>().ok())
         .unwrap_or(8080);
     let addr = SocketAddr::from((Ipv6Addr::UNSPECIFIED, port));
-    let state = AppState::from_env()?;
+    let state = app_state_from_env()?;
 
     tokio::runtime::Runtime::new()
         .context("creating tokio runtime")?
         .block_on(serve(addr, state))
+}
+
+fn app_state_from_env() -> anyhow::Result<AppState> {
+    #[cfg(feature = "local-dev")]
+    {
+        if api::dev::is_local_dev_env() {
+            return api::dev::app_state_from_env();
+        }
+    }
+
+    #[cfg(not(feature = "local-dev"))]
+    {
+        if std::env::var("SCOPE_ENV").ok().as_deref() == Some("local") {
+            anyhow::bail!("SCOPE_ENV=local requires running the API with --features local-dev");
+        }
+    }
+
+    AppState::from_env()
 }
 
 async fn serve(addr: SocketAddr, state: AppState) -> anyhow::Result<()> {

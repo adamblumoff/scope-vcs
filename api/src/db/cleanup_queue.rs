@@ -32,7 +32,7 @@ impl MetadataStore {
                     Ok(())
                 })
             }
-            #[cfg(test)]
+            #[cfg(any(test, feature = "memory-metadata"))]
             MetadataStoreInner::Memory(_) => self.update(move |catalog| {
                 queue_pending_source_blob_deletions(
                     &mut catalog.pending_source_blob_deletions,
@@ -67,7 +67,7 @@ impl MetadataStore {
                     Ok(result)
                 })
             }
-            #[cfg(test)]
+            #[cfg(any(test, feature = "memory-metadata"))]
             MetadataStoreInner::Memory(_) => self.update(move |catalog| {
                 let live_repo_ids = catalog
                     .repositories
@@ -103,7 +103,7 @@ impl MetadataStore {
                     Ok(result)
                 })
             }
-            #[cfg(test)]
+            #[cfg(any(test, feature = "memory-metadata"))]
             MetadataStoreInner::Memory(_) => self.update(move |catalog| {
                 let referenced_blob_keys = catalog
                     .repositories

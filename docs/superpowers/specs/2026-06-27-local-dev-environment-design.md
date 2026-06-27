@@ -24,12 +24,22 @@ Local development has three boundaries:
 
 1. Web runs at `http://localhost:3000` with Clerk development keys.
 2. API runs at `http://localhost:8080` with a matching Clerk development issuer.
-3. Persistence is local: Postgres from a local URL and filesystem object storage
-   under `.scope/dev`.
+3. Persistence is local: ephemeral in-memory metadata by default, optional
+   local Postgres for integration work, and filesystem object storage under
+   `.scope/dev`.
 
 Railway production variables are not part of the default local workflow. A
 separate Railway development environment may be added later for deployed
 integration testing, but local development must stay safe without it.
+
+Local-only implementation code must be visually separated from the production
+runtime:
+
+- Repository orchestration lives under top-level `dev/`.
+- API local-dev startup code lives under top-level `dev/api/` and is compiled
+  into the API only with the `local-dev` feature.
+- Production `AppState::from_env()` remains Postgres plus encrypted S3 object
+  storage and does not branch on local dev variables.
 
 ## Developer Commands
 
@@ -48,6 +58,15 @@ variables.
 
 ## API Changes
 
+Add first-class local runtime dependencies:
+
+- `SCOPE_METADATA_STORE=memory` keeps local UI work zero-dependency and
+  disposable.
+- `SCOPE_METADATA_STORE=postgres` uses `DATABASE_URL` when a local Postgres is
+  available.
+- Omitted `SCOPE_METADATA_STORE` defaults to `memory` when `SCOPE_ENV=local`
+  and `postgres` otherwise.
+
 Add first-class local object storage through the existing `ObjectStore` trait:
 
 - `SCOPE_OBJECT_STORE=s3` keeps production behavior.
@@ -58,7 +77,8 @@ Add environment validation before `AppState` starts:
 
 - `SCOPE_ENV=local` requires localhost app/API origins.
 - `SCOPE_ENV=local` rejects Railway production markers.
-- `SCOPE_ENV=local` rejects database URLs without a visible local-dev marker.
+- `SCOPE_ENV=local` rejects database URLs without a visible local-dev marker
+  when `SCOPE_METADATA_STORE=postgres`.
 - `SCOPE_ENV=local` rejects live Clerk keys and production Clerk issuers.
 
 ## Auth Identity Rule
@@ -76,7 +96,8 @@ product is pre-alpha, destructive schema reset on drift is acceptable and expect
 Implementation is complete only when:
 
 - `dev doctor` passes in the local environment.
-- `dev up` starts API and web without Railway production variables.
+- `dev up` starts API and web without Railway production variables or local
+  Postgres.
 - `/readyz` passes on the local API.
 - `dev down` stops owned processes.
 - API tests cover local object storage, environment guards, and same-email Clerk

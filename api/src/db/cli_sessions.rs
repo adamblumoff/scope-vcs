@@ -1,4 +1,4 @@
-#[cfg(test)]
+#[cfg(any(test, feature = "memory-metadata"))]
 use super::{
     MemoryMetadataStore,
     auth::{MemoryAuthState, MemoryCliSession},
@@ -51,7 +51,7 @@ where
     })
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "memory-metadata"))]
 pub(super) fn create_cli_session_token_in_memory(
     memory: &MemoryMetadataStore,
     mut auth: std::sync::MutexGuard<'_, MemoryAuthState>,
@@ -102,7 +102,7 @@ pub(super) fn cli_session_summary_from_model(
     })
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "memory-metadata"))]
 pub(super) fn cli_session_summary_from_memory(session: &MemoryCliSession) -> CliSessionSummary {
     CliSessionSummary {
         id: session.id.clone(),

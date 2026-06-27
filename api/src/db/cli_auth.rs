@@ -1,6 +1,6 @@
-#[cfg(test)]
+#[cfg(any(test, feature = "memory-metadata"))]
 use super::auth::{MemoryBrowserLogin, MemoryExchangeGrant};
-#[cfg(test)]
+#[cfg(any(test, feature = "memory-metadata"))]
 use super::cli_sessions::{cli_session_summary_from_memory, create_cli_session_token_in_memory};
 use super::cli_sessions::{cli_session_summary_from_model, create_cli_session_token_in_tx};
 use super::{
@@ -72,7 +72,7 @@ impl MetadataStore {
                     Ok(())
                 })?;
             }
-            #[cfg(test)]
+            #[cfg(any(test, feature = "memory-metadata"))]
             MetadataStoreInner::Memory(memory) => {
                 let mut auth = memory
                     .auth
@@ -169,7 +169,7 @@ impl MetadataStore {
                     browser_callback_url(&login.callback_url, &login.request_id, &callback_code)
                 })
             }
-            #[cfg(test)]
+            #[cfg(any(test, feature = "memory-metadata"))]
             MetadataStoreInner::Memory(memory) => {
                 let mut auth = memory
                     .auth
@@ -264,7 +264,7 @@ impl MetadataStore {
                     Ok(token)
                 })
             }
-            #[cfg(test)]
+            #[cfg(any(test, feature = "memory-metadata"))]
             MetadataStoreInner::Memory(memory) => {
                 let mut auth = memory
                     .auth
@@ -327,7 +327,7 @@ impl MetadataStore {
                     Ok(())
                 })?;
             }
-            #[cfg(test)]
+            #[cfg(any(test, feature = "memory-metadata"))]
             MetadataStoreInner::Memory(memory) => {
                 let mut auth = memory
                     .auth
@@ -406,7 +406,7 @@ impl MetadataStore {
                     Ok(token)
                 })
             }
-            #[cfg(test)]
+            #[cfg(any(test, feature = "memory-metadata"))]
             MetadataStoreInner::Memory(memory) => {
                 let mut auth = memory
                     .auth
@@ -463,7 +463,7 @@ impl MetadataStore {
                     Ok(sessions)
                 })
             }
-            #[cfg(test)]
+            #[cfg(any(test, feature = "memory-metadata"))]
             MetadataStoreInner::Memory(memory) => {
                 let mut auth = memory
                     .auth
@@ -519,7 +519,7 @@ impl MetadataStore {
                     Ok(())
                 })
             }
-            #[cfg(test)]
+            #[cfg(any(test, feature = "memory-metadata"))]
             MetadataStoreInner::Memory(memory) => {
                 let mut auth = memory
                     .auth
@@ -617,7 +617,7 @@ where
     cli_auth_rules::enforce_browser_login_start_rate_limit(pending_count, window_count)
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "memory-metadata"))]
 fn enforce_memory_browser_login_start_limits(
     auth: &super::auth::MemoryAuthState,
     now: u64,

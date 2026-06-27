@@ -1,4 +1,4 @@
-#[cfg(test)]
+#[cfg(any(test, feature = "memory-metadata"))]
 use super::repo_effects::apply_repo_effects;
 use super::{
     MetadataStore, MetadataStoreInner, acquire_metadata_write_lock,
@@ -99,7 +99,7 @@ impl MetadataStore {
                     Ok(repo)
                 })
             }
-            #[cfg(test)]
+            #[cfg(any(test, feature = "memory-metadata"))]
             MetadataStoreInner::Memory(_) => self.update(move |catalog| {
                 let owner = catalog.users.get(&owner_user_id).cloned().ok_or_else(|| {
                     ApiError::internal_message("signed-in user was not persisted")
@@ -177,7 +177,7 @@ impl MetadataStore {
                     Ok(mutation.result)
                 })
             }
-            #[cfg(test)]
+            #[cfg(any(test, feature = "memory-metadata"))]
             MetadataStoreInner::Memory(_) => self.update(move |catalog| {
                 let repo = catalog.repositories.get(&repo_id).ok_or_else(|| {
                     crate::domain::repo_actions::hidden_repo_not_found(&owner, &name)

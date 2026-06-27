@@ -56,15 +56,16 @@ enum MetadataStoreInner {
         db: Arc<DatabaseConnection>,
         runtime: DbRuntime,
     },
-    #[cfg(test)]
+    #[cfg(any(test, feature = "memory-metadata"))]
     Memory(Arc<MemoryMetadataStore>),
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "memory-metadata"))]
 struct MemoryMetadataStore {
     catalog: std::sync::Mutex<AppCatalog>,
     auth: std::sync::Mutex<auth::MemoryAuthState>,
     reset_events: std::sync::Mutex<Vec<MetadataResetEvent>>,
+    #[cfg(test)]
     fail_next_persist: AtomicBool,
 }
 
@@ -75,13 +76,14 @@ impl MetadataStore {
         connect_postgres_store(database_url)
     }
 
-    #[cfg(test)]
+    #[cfg(any(test, feature = "memory-metadata"))]
     pub(crate) fn memory(catalog: AppCatalog) -> Self {
         Self {
             inner: Arc::new(MetadataStoreInner::Memory(Arc::new(MemoryMetadataStore {
                 catalog: std::sync::Mutex::new(catalog),
                 auth: std::sync::Mutex::new(auth::MemoryAuthState::default()),
                 reset_events: std::sync::Mutex::new(Vec::new()),
+                #[cfg(test)]
                 fail_next_persist: AtomicBool::new(false),
             }))),
         }
@@ -109,7 +111,7 @@ impl MetadataStore {
                 let catalog = load_catalog(runtime, db)?;
                 op(&catalog)
             }
-            #[cfg(test)]
+            #[cfg(any(test, feature = "memory-metadata"))]
             MetadataStoreInner::Memory(catalog) => {
                 let catalog = catalog
                     .catalog
@@ -120,7 +122,7 @@ impl MetadataStore {
         }
     }
 
-    #[cfg(test)]
+    #[cfg(any(test, feature = "memory-metadata"))]
     pub(crate) fn update<R, F>(&self, op: F) -> Result<R, ApiError>
     where
         R: Send + 'static,
@@ -134,8 +136,11 @@ impl MetadataStore {
                     .map_err(|_| ApiError::internal_message("catalog lock is poisoned"))?;
                 let mut draft = catalog.clone();
                 let result = op(&mut draft)?;
-                if memory.fail_next_persist.swap(false, Ordering::SeqCst) {
-                    return Err(ApiError::internal_message("test metadata persist failure"));
+                #[cfg(test)]
+                {
+                    if memory.fail_next_persist.swap(false, Ordering::SeqCst) {
+                        return Err(ApiError::internal_message("test metadata persist failure"));
+                    }
                 }
                 *catalog = draft;
                 Ok(result)
@@ -170,7 +175,7 @@ impl MetadataStore {
                     Ok(repo)
                 })
             }
-            #[cfg(test)]
+            #[cfg(any(test, feature = "memory-metadata"))]
             MetadataStoreInner::Memory(catalog) => {
                 let catalog = catalog
                     .catalog
@@ -217,7 +222,7 @@ impl MetadataStore {
                     Ok(repositories)
                 })
             }
-            #[cfg(test)]
+            #[cfg(any(test, feature = "memory-metadata"))]
             MetadataStoreInner::Memory(catalog) => {
                 let catalog = catalog
                     .catalog
@@ -246,7 +251,7 @@ impl MetadataStore {
                     Ok(())
                 })
             }
-            #[cfg(test)]
+            #[cfg(any(test, feature = "memory-metadata"))]
             MetadataStoreInner::Memory(catalog) => {
                 drop(
                     catalog
@@ -276,7 +281,7 @@ impl MetadataStore {
                         .collect())
                 })
             }
-            #[cfg(test)]
+            #[cfg(any(test, feature = "memory-metadata"))]
             MetadataStoreInner::Memory(memory) => {
                 let mut events = memory
                     .reset_events
@@ -316,7 +321,7 @@ impl MetadataStore {
                     Ok(())
                 })?;
             }
-            #[cfg(test)]
+            #[cfg(any(test, feature = "memory-metadata"))]
             MetadataStoreInner::Memory(memory) => {
                 *memory
                     .catalog

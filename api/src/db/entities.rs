@@ -97,6 +97,7 @@ pub(crate) mod user {
         pub id: String,
         #[sea_orm(unique)]
         pub handle: String,
+        #[sea_orm(unique)]
         pub email: String,
         pub email_verified: bool,
         pub access: String,

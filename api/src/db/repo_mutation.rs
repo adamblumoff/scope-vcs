@@ -83,7 +83,7 @@ impl MetadataStore {
                     Ok(mutation.result)
                 })
             }
-            #[cfg(test)]
+            #[cfg(any(test, feature = "memory-metadata"))]
             MetadataStoreInner::Memory(_) => self.update(move |catalog| {
                 let repo = catalog
                     .repositories

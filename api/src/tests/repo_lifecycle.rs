@@ -408,7 +408,7 @@ async fn projection_route_returns_content_not_blob_metadata() {
 }
 
 #[tokio::test]
-async fn visibility_update_rejects_different_clerk_user_with_same_email() {
+async fn visibility_update_accepts_rotated_clerk_subject_with_same_email() {
     let state = test_state_with_repo();
     cache_test_jwks(&state);
     {
@@ -436,13 +436,13 @@ async fn visibility_update_rejects_different_clerk_user_with_same_email() {
         .await
         .unwrap();
 
-    assert_eq!(response.status(), StatusCode::FORBIDDEN);
+    assert_eq!(response.status(), StatusCode::OK);
 
     let catalog = lock_catalog(&state).unwrap();
-    assert_eq!(catalog.users.len(), 2);
+    assert_eq!(catalog.users.len(), 1);
     let repo = catalog.repositories.get(TEST_REPO_ID).unwrap();
     let path = ScopePath::parse("/README.md").unwrap();
-    assert_eq!(repo.policy.effective_visibility(&path), Visibility::Public);
+    assert_eq!(repo.policy.effective_visibility(&path), Visibility::Private);
 }
 
 #[tokio::test]
@@ -501,7 +501,7 @@ async fn visibility_update_batches_multiple_paths() {
 }
 
 #[tokio::test]
-async fn settings_update_rejects_different_clerk_user_with_same_email() {
+async fn settings_update_accepts_rotated_clerk_subject_with_same_email() {
     let state = test_state_with_repo();
     cache_test_jwks(&state);
 
@@ -523,18 +523,18 @@ async fn settings_update_rejects_different_clerk_user_with_same_email() {
         .await
         .unwrap();
 
-    assert_eq!(response.status(), StatusCode::FORBIDDEN);
+    assert_eq!(response.status(), StatusCode::OK);
 
     let catalog = lock_catalog(&state).unwrap();
-    assert_eq!(catalog.users.len(), 2);
+    assert_eq!(catalog.users.len(), 1);
     let repo = catalog.repositories.get(TEST_REPO_ID).unwrap();
     assert!(!repo.settings.include_ignored_files);
-    assert!(repo.settings.review_pushes_before_applying);
-    assert_eq!(repo.record.default_visibility, Visibility::Public);
+    assert!(!repo.settings.review_pushes_before_applying);
+    assert_eq!(repo.record.default_visibility, Visibility::Private);
     assert_eq!(
         repo.policy
             .effective_visibility(&ScopePath::parse("/new.ts").unwrap()),
-        Visibility::Public
+        Visibility::Private
     );
 }
 

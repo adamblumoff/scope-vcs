@@ -554,7 +554,7 @@ fn zero_file_publish_promotes_pending_import() {
 }
 
 #[tokio::test]
-async fn publish_rejects_different_clerk_user_with_same_email() {
+async fn publish_accepts_rotated_clerk_subject_with_same_email() {
     let state = test_state_with_repo();
     cache_test_jwks(&state);
     {
@@ -579,16 +579,16 @@ async fn publish_rejects_different_clerk_user_with_same_email() {
         .await
         .unwrap();
 
-    assert_eq!(response.status(), StatusCode::NOT_FOUND);
+    assert_eq!(response.status(), StatusCode::OK);
 
     let catalog = lock_catalog(&state).unwrap();
-    assert_eq!(catalog.users.len(), 2);
+    assert_eq!(catalog.users.len(), 1);
     let repo = catalog.repositories.get(TEST_REPO_ID).unwrap();
     assert_eq!(
         repo.record.publication_state,
-        RepoPublicationState::PendingPublish
+        RepoPublicationState::Published
     );
-    assert!(repo.pending_import.is_some());
+    assert!(repo.pending_import.is_none());
 }
 
 #[test]

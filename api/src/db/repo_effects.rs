@@ -6,7 +6,7 @@ use super::{
     },
     repository_rows::save_repository_row,
 };
-#[cfg(test)]
+#[cfg(any(test, feature = "memory-metadata"))]
 use crate::domain::store::AppCatalog;
 use crate::{
     domain::{
@@ -63,7 +63,7 @@ where
     Ok(())
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "memory-metadata"))]
 pub(super) fn apply_repo_effects(catalog: &mut AppCatalog, effects: RepoEffects) {
     for effect in effects.iter() {
         match effect {

@@ -18,6 +18,10 @@ pub(crate) async fn migrate_metadata_schema(db: &DatabaseConnection) -> Result<(
             )));
         }
     }
+    if metadata_schema_has_duplicate_user_emails(db, &manager).await? {
+        reset_metadata_schema(db).await?;
+        ensure_metadata_reset_events_table(&manager).await?;
+    }
 
     manager
         .create_table(
@@ -40,6 +44,18 @@ pub(crate) async fn migrate_metadata_schema(db: &DatabaseConnection) -> Result<(
                         .json_binary()
                         .not_null(),
                 )
+                .to_owned(),
+        )
+        .await?;
+
+    manager
+        .create_index(
+            Index::create()
+                .name("idx_scope_users_email")
+                .table(Users::Table)
+                .col(Users::Email)
+                .unique()
+                .if_not_exists()
                 .to_owned(),
         )
         .await?;
@@ -517,6 +533,31 @@ async fn metadata_schema_drift(manager: &SchemaManager<'_>) -> Result<Option<Str
         }
     }
     Ok(None)
+}
+
+async fn metadata_schema_has_duplicate_user_emails(
+    db: &DatabaseConnection,
+    manager: &SchemaManager<'_>,
+) -> Result<bool, DbErr> {
+    if !manager.has_table(Users::Table.as_str()).await?
+        || !manager
+            .has_column(Users::Table.as_str(), Users::Email.as_str())
+            .await?
+    {
+        return Ok(false);
+    }
+
+    let row = db
+        .query_one(Statement::from_string(
+            db.get_database_backend(),
+            format!(
+                "SELECT {email} FROM {users} WHERE {email} <> '' GROUP BY {email} HAVING COUNT(*) > 1 LIMIT 1",
+                users = Users::Table.as_str(),
+                email = Users::Email.as_str(),
+            ),
+        ))
+        .await?;
+    Ok(row.is_some())
 }
 
 fn is_destructive_pre_alpha_reset_drift(drift: &str) -> bool {

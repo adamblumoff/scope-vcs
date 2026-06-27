@@ -35,6 +35,33 @@ checks the Rust/TypeScript API response contract, and scans the whole repo for
 source files over 1,000 lines while ignoring generated files, lockfiles,
 dependencies, and build output.
 
+## Local Development
+
+Use the committed dev entrypoint instead of pulling Railway variables by hand:
+
+```powershell
+.\dev\scope-dev.ps1 doctor
+.\dev\scope-dev.ps1 up
+.\dev\scope-dev.ps1 status
+.\dev\scope-dev.ps1 down
+.\dev\scope-dev.ps1 reset
+```
+
+The local stack runs the web app at `http://localhost:3000` and the API at
+`http://localhost:8080`. The API is started with `--features local-dev`, uses
+ephemeral in-memory metadata, and stores encrypted local objects under
+`.scope/dev`. The dev launcher strips inherited Railway variables and refuses
+production-looking Clerk or database settings.
+
+`web/.env.local` must contain Clerk development keys (`pk_test_` and
+`sk_test_`). The launcher derives the local API Clerk issuer from
+`VITE_CLERK_PUBLISHABLE_KEY`, so local web and local API stay on the same Clerk
+development instance.
+
+Do not use Railway `production` variables for local API development. A deployed
+Railway development environment can be added later for integration testing, but
+the default local workflow is intentionally hermetic and disposable.
+
 ## Deployment Shape
 
 Railway services:
