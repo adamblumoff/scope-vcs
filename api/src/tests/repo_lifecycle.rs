@@ -196,14 +196,11 @@ fn db_metadata_store_round_trips_repo_metadata() {
     let expected_pending_deletions = pending_deletions.clone();
 
     let metadata = crate::db::MetadataStore::connect_fresh_for_tests(&test_db).unwrap();
-    metadata
-        .update(move |catalog| {
-            catalog.users.insert(owner.id.clone(), owner);
-            catalog.repositories.insert(repo.record.id.clone(), repo);
-            catalog.pending_source_blob_deletions = pending_deletions;
-            Ok(())
-        })
-        .unwrap();
+    let mut catalog = AppCatalog::default();
+    catalog.users.insert(owner.id.clone(), owner);
+    catalog.repositories.insert(repo.record.id.clone(), repo);
+    catalog.pending_source_blob_deletions = pending_deletions;
+    metadata.seed_catalog_for_tests(catalog).unwrap();
 
     let fresh_metadata = crate::db::MetadataStore::connect_for_tests(&test_db).unwrap();
     let row_repo = fresh_metadata

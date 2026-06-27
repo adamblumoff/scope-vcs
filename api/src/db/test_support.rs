@@ -1,7 +1,13 @@
 use super::{
-    DbRuntime, MetadataStore, MetadataStoreInner, ensure_metadata_lock_row, run_db_on, schema,
+    DbRuntime, MetadataStore, MetadataStoreInner, acquire_metadata_write_lock,
+    cleanup_queue::{save_pending_repo_storage_deletions, save_pending_source_blob_deletions},
+    ensure_metadata_lock_row, entities, run_api_db_on, run_db_on, schema,
 };
-use sea_orm::{ConnectOptions, ConnectionTrait, Database, Statement};
+use crate::{domain::store::AppCatalog, error::ApiError};
+use sea_orm::{
+    ActiveModelTrait, ConnectOptions, ConnectionTrait, Database, IntoActiveModel, Statement,
+    TransactionTrait,
+};
 use std::sync::Arc;
 
 #[derive(Clone, Debug)]
@@ -67,6 +73,57 @@ pub(super) fn connect_postgres_test_store(
             runtime,
         }),
     })
+}
+
+impl MetadataStore {
+    pub(crate) fn seed_catalog_for_tests(&self, catalog: AppCatalog) -> Result<(), ApiError> {
+        match self.inner.as_ref() {
+            MetadataStoreInner::Postgres { db, runtime } => {
+                let db = Arc::clone(db);
+                run_api_db_on(runtime, async move {
+                    let tx = db.as_ref().begin().await.map_err(ApiError::internal)?;
+                    acquire_metadata_write_lock(&tx).await?;
+                    for user in catalog.users.values() {
+                        entities::user::Model::from_domain(user)
+                            .into_active_model()
+                            .insert(&tx)
+                            .await
+                            .map_err(ApiError::internal)?;
+                    }
+                    for repo in catalog.repositories.values() {
+                        entities::repository::Model::from_domain(repo)?
+                            .into_active_model()
+                            .insert(&tx)
+                            .await
+                            .map_err(ApiError::internal)?;
+                        for membership in &repo.memberships {
+                            entities::membership::Model::from_domain(membership)
+                                .into_active_model()
+                                .insert(&tx)
+                                .await
+                                .map_err(ApiError::internal)?;
+                        }
+                    }
+                    save_pending_repo_storage_deletions(
+                        &tx,
+                        &catalog.pending_repo_storage_deletions,
+                    )
+                    .await?;
+                    save_pending_source_blob_deletions(&tx, &catalog.pending_source_blob_deletions)
+                        .await?;
+                    tx.commit().await.map_err(ApiError::internal)?;
+                    Ok(())
+                })
+            }
+            MetadataStoreInner::Memory(memory) => {
+                *memory
+                    .catalog
+                    .lock()
+                    .map_err(|_| ApiError::internal_message("catalog lock is poisoned"))? = catalog;
+                Ok(())
+            }
+        }
+    }
 }
 
 fn validate_test_database_url(database_url: &str) -> anyhow::Result<()> {

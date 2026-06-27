@@ -8,6 +8,7 @@ mod publish_apply;
 mod push_staging;
 mod repo_effects;
 mod repo_lifecycle;
+mod repo_mutation;
 mod repo_settings;
 mod repo_tokens;
 mod repository_rows;
@@ -27,11 +28,12 @@ use metadata_reset::{
     insert_metadata_reset_event, metadata_reset_event_from_model,
     new_operator_metadata_reset_event, reset_stale_pre_alpha_metadata,
 };
+pub(crate) use repo_mutation::RepositoryMutation;
 use runtime::DbRuntime;
 use runtime::{run_api_db_on, run_db_on};
 use sea_orm::{
-    ActiveModelTrait, ColumnTrait, ConnectionTrait, Database, DatabaseConnection, EntityTrait,
-    IntoActiveModel, QueryFilter, QueryOrder, Statement, TransactionTrait,
+    ColumnTrait, ConnectionTrait, Database, DatabaseConnection, EntityTrait, QueryFilter,
+    QueryOrder, Statement, TransactionTrait,
 };
 use serde::{Serialize, de::DeserializeOwned};
 use std::sync::Arc;
@@ -116,14 +118,13 @@ impl MetadataStore {
         }
     }
 
+    #[cfg(test)]
     pub(crate) fn update<R, F>(&self, op: F) -> Result<R, ApiError>
     where
         R: Send + 'static,
         F: FnOnce(&mut AppCatalog) -> Result<R, ApiError> + Send + 'static,
     {
         match self.inner.as_ref() {
-            MetadataStoreInner::Postgres { db, runtime } => update_catalog(runtime, db, op),
-            #[cfg(test)]
             MetadataStoreInner::Memory(memory) => {
                 let mut catalog = memory
                     .catalog
@@ -137,6 +138,9 @@ impl MetadataStore {
                 *catalog = draft;
                 Ok(result)
             }
+            MetadataStoreInner::Postgres { .. } => Err(ApiError::internal_message(
+                "catalog updates are only available for memory metadata stores",
+            )),
         }
     }
 
@@ -391,27 +395,6 @@ fn load_catalog(
     })
 }
 
-fn update_catalog<R, F>(
-    runtime: &tokio::runtime::Runtime,
-    db: &Arc<DatabaseConnection>,
-    op: F,
-) -> Result<R, ApiError>
-where
-    R: Send + 'static,
-    F: FnOnce(&mut AppCatalog) -> Result<R, ApiError> + Send + 'static,
-{
-    let db = Arc::clone(db);
-    run_api_db_on(runtime, async move {
-        let tx = db.as_ref().begin().await.map_err(ApiError::internal)?;
-        acquire_metadata_write_lock(&tx).await?;
-        let mut catalog = load_catalog_async(&tx).await?;
-        let result = op(&mut catalog)?;
-        save_catalog_async(&tx, &catalog).await?;
-        tx.commit().await.map_err(ApiError::internal)?;
-        Ok(result)
-    })
-}
-
 async fn load_catalog_async<C>(conn: &C) -> Result<AppCatalog, ApiError>
 where
     C: ConnectionTrait,
@@ -531,152 +514,6 @@ where
         .into_iter()
         .next()
         .ok_or_else(|| ApiError::internal_message("repository row disappeared while loading"))
-}
-
-async fn save_catalog_async<C>(conn: &C, catalog: &AppCatalog) -> Result<(), ApiError>
-where
-    C: ConnectionTrait,
-{
-    let auth_identities = entities::auth_identity::Entity::find()
-        .all(conn)
-        .await
-        .map_err(ApiError::internal)?;
-    let cli_device_logins = entities::cli_device_login::Entity::find()
-        .all(conn)
-        .await
-        .map_err(ApiError::internal)?;
-    let cli_browser_logins = entities::cli_browser_login::Entity::find()
-        .all(conn)
-        .await
-        .map_err(ApiError::internal)?;
-    let cli_exchange_grants = entities::cli_exchange_grant::Entity::find()
-        .all(conn)
-        .await
-        .map_err(ApiError::internal)?;
-    let cli_sessions = entities::cli_session::Entity::find()
-        .all(conn)
-        .await
-        .map_err(ApiError::internal)?;
-    let users = catalog
-        .users
-        .values()
-        .map(entities::user::Model::from_domain)
-        .collect::<Vec<_>>();
-    let repositories = catalog
-        .repositories
-        .values()
-        .map(entities::repository::Model::from_domain)
-        .collect::<Result<Vec<_>, ApiError>>()?;
-    let memberships = catalog
-        .repositories
-        .values()
-        .flat_map(|repo| repo.memberships.iter())
-        .map(entities::membership::Model::from_domain)
-        .collect::<Vec<_>>();
-
-    entities::cli_session::Entity::delete_many()
-        .exec(conn)
-        .await
-        .map_err(ApiError::internal)?;
-    entities::cli_exchange_grant::Entity::delete_many()
-        .exec(conn)
-        .await
-        .map_err(ApiError::internal)?;
-    entities::cli_browser_login::Entity::delete_many()
-        .exec(conn)
-        .await
-        .map_err(ApiError::internal)?;
-    entities::cli_device_login::Entity::delete_many()
-        .exec(conn)
-        .await
-        .map_err(ApiError::internal)?;
-    entities::auth_identity::Entity::delete_many()
-        .exec(conn)
-        .await
-        .map_err(ApiError::internal)?;
-    entities::membership::Entity::delete_many()
-        .exec(conn)
-        .await
-        .map_err(ApiError::internal)?;
-    entities::repository::Entity::delete_many()
-        .exec(conn)
-        .await
-        .map_err(ApiError::internal)?;
-    entities::user::Entity::delete_many()
-        .exec(conn)
-        .await
-        .map_err(ApiError::internal)?;
-
-    for user in users {
-        user.into_active_model()
-            .insert(conn)
-            .await
-            .map_err(ApiError::internal)?;
-    }
-    for repository in repositories {
-        repository
-            .into_active_model()
-            .insert(conn)
-            .await
-            .map_err(ApiError::internal)?;
-    }
-    for membership in memberships {
-        membership
-            .into_active_model()
-            .insert(conn)
-            .await
-            .map_err(ApiError::internal)?;
-    }
-    for auth_identity in auth_identities {
-        auth_identity
-            .into_active_model()
-            .insert(conn)
-            .await
-            .map_err(ApiError::internal)?;
-    }
-    for cli_device_login in cli_device_logins {
-        cli_device_login
-            .into_active_model()
-            .insert(conn)
-            .await
-            .map_err(ApiError::internal)?;
-    }
-    for cli_browser_login in cli_browser_logins {
-        cli_browser_login
-            .into_active_model()
-            .insert(conn)
-            .await
-            .map_err(ApiError::internal)?;
-    }
-    for cli_exchange_grant in cli_exchange_grants {
-        cli_exchange_grant
-            .into_active_model()
-            .insert(conn)
-            .await
-            .map_err(ApiError::internal)?;
-    }
-    for cli_session in cli_sessions {
-        cli_session
-            .into_active_model()
-            .insert(conn)
-            .await
-            .map_err(ApiError::internal)?;
-    }
-    entities::metadata_lock::Entity::update_many()
-        .filter(entities::metadata_lock::Column::Key.eq(METADATA_LOCK_KEY))
-        .col_expr(
-            entities::metadata_lock::Column::PendingRepoStorageDeletions,
-            sea_orm::sea_query::Expr::value(encode_json(&catalog.pending_repo_storage_deletions)?),
-        )
-        .col_expr(
-            entities::metadata_lock::Column::PendingSourceBlobDeletions,
-            sea_orm::sea_query::Expr::value(encode_json(&catalog.pending_source_blob_deletions)?),
-        )
-        .exec(conn)
-        .await
-        .map_err(ApiError::internal)?;
-
-    Ok(())
 }
 
 fn encode_json<T: Serialize>(value: &T) -> Result<serde_json::Value, ApiError> {
