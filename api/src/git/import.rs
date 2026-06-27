@@ -12,6 +12,7 @@ use crate::{
         DEFAULT_GIT_BRANCH, MAX_PENDING_IMPORT_BLOB_BYTES, MAX_PENDING_IMPORT_FILES,
         MAX_PENDING_IMPORT_TOTAL_BYTES,
     },
+    db::RepositoryMutation,
     error::ApiError,
     git::{
         InitialPushCredential, PersistedReceivePackUpdate, authorize_first_push_token_for_repo,
@@ -722,41 +723,36 @@ pub(crate) fn persist_pending_import(
     credential: &InitialPushCredential,
     import: PendingImport,
 ) -> Result<(), ApiError> {
-    let repo_id = crate::domain::store::repo_id(owner, repo_name);
     let now = unix_now()?;
-    let owner = owner.to_string();
-    let repo_name = repo_name.to_string();
     let credential = credential.clone();
-    state.metadata.update(move |catalog| {
-        let repo = catalog
-            .repositories
-            .get_mut(&repo_id)
-            .ok_or_else(|| ApiError::not_found(format!("repo {owner}/{repo_name} not found")))?;
-        if repo.record.publication_state != RepoPublicationState::PendingFirstPush {
-            return Err(ApiError::conflict(
-                "repo is not waiting for an initial Git push",
-            ));
-        }
-        if repo.pending_import.is_some() {
-            return Err(ApiError::conflict("repo already has a pending import"));
-        }
-        match credential {
-            InitialPushCredential::FirstPushToken { secret } => {
-                authorize_first_push_token_for_repo(repo, &secret)?;
+    state
+        .metadata
+        .mutate_repository(owner, repo_name, move |repo| {
+            if repo.record.publication_state != RepoPublicationState::PendingFirstPush {
+                return Err(ApiError::conflict(
+                    "repo is not waiting for an initial Git push",
+                ));
             }
-            InitialPushCredential::GitPushToken { secret } => {
-                authorize_git_push_token_for_repo(repo, &secret)?;
+            if repo.pending_import.is_some() {
+                return Err(ApiError::conflict("repo already has a pending import"));
             }
-        }
-        if let Some(token) = repo.first_push_token.as_mut()
-            && token.status_at(now) == FirstPushTokenStatus::Active
-        {
-            token.used_at_unix = Some(now);
-        }
-        repo.pending_import = Some(import);
-        repo.record.publication_state = RepoPublicationState::PendingPublish;
-        Ok(())
-    })
+            match credential {
+                InitialPushCredential::FirstPushToken { secret } => {
+                    authorize_first_push_token_for_repo(repo, &secret)?;
+                }
+                InitialPushCredential::GitPushToken { secret } => {
+                    authorize_git_push_token_for_repo(repo, &secret)?;
+                }
+            }
+            if let Some(token) = repo.first_push_token.as_mut()
+                && token.status_at(now) == FirstPushTokenStatus::Active
+            {
+                token.used_at_unix = Some(now);
+            }
+            repo.pending_import = Some(import);
+            repo.record.publication_state = RepoPublicationState::PendingPublish;
+            Ok(RepositoryMutation::new(()))
+        })
 }
 
 #[cfg(test)]
@@ -766,21 +762,16 @@ pub(crate) fn persist_receive_pack_update(
     repo_name: &str,
     update: ReceivePackUpdate,
 ) -> Result<PersistedReceivePackUpdate, ApiError> {
-    let repo_id = crate::domain::store::repo_id(owner, repo_name);
-    let owner = owner.to_string();
-    let repo_name = repo_name.to_string();
     let store = state.object_store.clone();
-    state.metadata.update(move |catalog| {
-        let repo = catalog
-            .repositories
-            .get_mut(&repo_id)
-            .ok_or_else(|| ApiError::not_found(format!("repo {owner}/{repo_name} not found")))?;
-        if stage_receive_pack_update_with_store(repo, update, store.as_ref())?.is_some() {
-            Ok(PersistedReceivePackUpdate::Staged)
-        } else {
-            Ok(PersistedReceivePackUpdate::Applied)
-        }
-    })
+    state
+        .metadata
+        .mutate_repository(owner, repo_name, move |repo| {
+            if stage_receive_pack_update_with_store(repo, update, store.as_ref())?.is_some() {
+                Ok(RepositoryMutation::new(PersistedReceivePackUpdate::Staged))
+            } else {
+                Ok(RepositoryMutation::new(PersistedReceivePackUpdate::Applied))
+            }
+        })
 }
 
 pub(crate) fn persist_receive_pack_update_and_promote(
@@ -789,30 +780,26 @@ pub(crate) fn persist_receive_pack_update_and_promote(
     repo_name: &str,
     update: ReceivePackUpdate,
 ) -> Result<PersistedReceivePackUpdate, ApiError> {
-    let repo_id = crate::domain::store::repo_id(owner, repo_name);
-    let owner = owner.to_string();
-    let repo_name = repo_name.to_string();
     let uploaded_blobs = update.uploaded_blobs.clone();
     let store = state.object_store.clone();
 
-    let persisted = state.metadata.update(move |catalog| {
-        let repo = catalog
-            .repositories
-            .get_mut(&repo_id)
-            .ok_or_else(|| ApiError::not_found(format!("repo {owner}/{repo_name} not found")))?;
-        let old_snapshot = repo.git_snapshot.clone();
-        let persisted =
-            if stage_receive_pack_update_with_store(repo, update, store.as_ref())?.is_some() {
-                crate::state::queue_source_blob_deletions(catalog, uploaded_blobs);
-                PersistedReceivePackUpdate::Staged
-            } else {
-                let mut cleanup_blobs = uploaded_blobs;
-                cleanup_blobs.extend(old_snapshot);
-                crate::state::queue_source_blob_deletions(catalog, cleanup_blobs);
-                PersistedReceivePackUpdate::Applied
-            };
-        Ok(persisted)
-    })?;
+    let persisted = state
+        .metadata
+        .mutate_repository(owner, repo_name, move |repo| {
+            let old_snapshot = repo.git_snapshot.clone();
+            let mut cleanup_blobs = uploaded_blobs;
+            let persisted =
+                if stage_receive_pack_update_with_store(repo, update, store.as_ref())?.is_some() {
+                    PersistedReceivePackUpdate::Staged
+                } else {
+                    cleanup_blobs.extend(old_snapshot);
+                    PersistedReceivePackUpdate::Applied
+                };
+            Ok(RepositoryMutation::with_source_blob_deletions(
+                persisted,
+                cleanup_blobs,
+            ))
+        })?;
     crate::state::best_effort_drain_pending_source_blob_deletions(state);
     Ok(persisted)
 }

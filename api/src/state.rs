@@ -280,6 +280,13 @@ fn unreferenced_source_blobs(catalog: &AppCatalog, blobs: &[SourceBlob]) -> Vec<
         .flat_map(repo_source_blobs)
         .map(|blob| blob.object_key)
         .collect::<std::collections::BTreeSet<_>>();
+    unreferenced_source_blobs_by_key(&referenced, blobs)
+}
+
+fn unreferenced_source_blobs_by_key(
+    referenced: &std::collections::BTreeSet<String>,
+    blobs: &[SourceBlob],
+) -> Vec<SourceBlob> {
     let mut unreferenced = std::collections::BTreeMap::new();
     for blob in blobs {
         if !referenced.contains(blob.object_key.as_str()) {
@@ -319,22 +326,6 @@ fn delete_source_blob_storage_entry(state: &AppState, blob: &SourceBlob) -> Resu
     state.object_store.delete(&blob.object_key)
 }
 
-pub(crate) fn queue_source_blob_deletions(
-    catalog: &mut AppCatalog,
-    blobs: impl IntoIterator<Item = SourceBlob>,
-) {
-    let mut queued = catalog
-        .pending_source_blob_deletions
-        .iter()
-        .map(|blob| blob.object_key.clone())
-        .collect::<std::collections::BTreeSet<_>>();
-    for blob in blobs {
-        if queued.insert(blob.object_key.clone()) {
-            catalog.pending_source_blob_deletions.push(blob);
-        }
-    }
-}
-
 pub(crate) fn drain_pending_cleanup(state: &AppState) -> Result<CleanupDrainReport, ApiError> {
     Ok(CleanupDrainReport {
         repo_storage: drain_pending_repo_storage_deletions_report(state)?,
@@ -347,14 +338,11 @@ pub(crate) fn drain_pending_repo_storage_deletions_report(
 ) -> Result<RepoStorageCleanupDrainReport, ApiError> {
     let metadata = state.metadata.clone();
     let state = state.clone();
-    metadata.update(move |catalog| {
+    metadata.update_pending_repo_storage_deletions(move |pending, live_repo_ids| {
         let mut report = RepoStorageCleanupDrainReport::default();
         let mut retained = Vec::new();
-        for cleanup in std::mem::take(&mut catalog.pending_repo_storage_deletions) {
-            if catalog
-                .repositories
-                .contains_key(&repo_id(&cleanup.owner_handle, &cleanup.repo_name))
-            {
+        for cleanup in pending {
+            if live_repo_ids.contains(&repo_id(&cleanup.owner_handle, &cleanup.repo_name)) {
                 retained.push(cleanup);
                 continue;
             }
@@ -385,8 +373,7 @@ pub(crate) fn drain_pending_repo_storage_deletions_report(
             }
         }
         report.retained = retained.len();
-        catalog.pending_repo_storage_deletions = retained;
-        Ok(report)
+        Ok((report, retained))
     })
 }
 
@@ -415,10 +402,7 @@ pub(crate) fn persist_pending_source_blob_deletions(
         return Ok(());
     }
     let blobs = blobs.to_vec();
-    state.metadata.update(move |catalog| {
-        queue_source_blob_deletions(catalog, blobs);
-        Ok(())
-    })
+    state.metadata.queue_pending_source_blob_deletions(blobs)
 }
 
 pub(crate) fn best_effort_cleanup_rollback_source_blobs(state: &AppState, blobs: &[SourceBlob]) {
@@ -444,25 +428,24 @@ pub(crate) fn drain_pending_source_blob_deletions_report(
 ) -> Result<SourceBlobCleanupDrainReport, ApiError> {
     let metadata = state.metadata.clone();
     let state = state.clone();
-    metadata.update(move |catalog| {
+    metadata.update_pending_source_blob_deletions(move |pending, referenced_blob_keys| {
         let mut report = SourceBlobCleanupDrainReport::default();
-        let pending = std::mem::take(&mut catalog.pending_source_blob_deletions);
         if pending.is_empty() {
-            return Ok(report);
+            return Ok((report, pending));
         }
 
-        let unreferenced = unreferenced_source_blobs(catalog, &pending);
+        let unreferenced = unreferenced_source_blobs_by_key(referenced_blob_keys, &pending);
         report.skipped_referenced = pending.len().saturating_sub(unreferenced.len());
         report.attempted = unreferenced.len();
         let delete_report = delete_source_blob_storage(&state, &unreferenced);
         report.deleted = delete_report.deleted_keys.len();
         report.failed_object_deletes = delete_report.failed;
-        catalog.pending_source_blob_deletions = unreferenced
+        let retained = unreferenced
             .into_iter()
             .filter(|blob| !delete_report.deleted_keys.contains(&blob.object_key))
-            .collect();
-        report.retained = catalog.pending_source_blob_deletions.len();
-        Ok(report)
+            .collect::<Vec<_>>();
+        report.retained = retained.len();
+        Ok((report, retained))
     })
 }
 
