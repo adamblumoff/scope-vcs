@@ -10,10 +10,10 @@ use super::{
 };
 use crate::{
     auth::{
+        cli as cli_auth_rules,
         device::{
-            BROWSER_LOGIN_START_WINDOW_SECS, BrowserLoginStart, CliExchangeGrant,
-            CliSessionSummary, CliSessionToken, MAX_BROWSER_LOGIN_STARTS_PER_WINDOW,
-            MAX_PENDING_BROWSER_LOGINS, random_prefixed_token,
+            BrowserLoginStart, CliExchangeGrant, CliSessionSummary, CliSessionToken,
+            random_prefixed_token,
         },
         tokens::token_hash,
     },
@@ -129,18 +129,23 @@ impl MetadataStore {
                     else {
                         return Err(ApiError::not_found("CLI browser login not found"));
                     };
-                    if now >= i64_to_u64(login.expires_at_unix)? {
-                        entities::cli_browser_login::Entity::delete_by_id(login.request_id)
-                            .exec(&tx)
-                            .await
-                            .map_err(ApiError::internal)?;
-                        return Err(ApiError::conflict("CLI browser login expired"));
-                    }
-                    if login.consumed_at_unix.is_some() {
-                        return Err(ApiError::conflict("CLI browser login already consumed"));
-                    }
-                    if login.completed_user_id.is_some() || login.callback_code_hash.is_some() {
-                        return Err(ApiError::conflict("CLI browser login already completed"));
+                    match cli_auth_rules::decide_browser_login_completion(
+                        cli_auth_rules::BrowserLoginCompletionState {
+                            expires_at_unix: i64_to_u64(login.expires_at_unix)?,
+                            consumed: login.consumed_at_unix.is_some(),
+                            completed: login.completed_user_id.is_some()
+                                || login.callback_code_hash.is_some(),
+                        },
+                        now,
+                    )? {
+                        cli_auth_rules::BrowserLoginCompletionDecision::Expired => {
+                            entities::cli_browser_login::Entity::delete_by_id(login.request_id)
+                                .exec(&tx)
+                                .await
+                                .map_err(ApiError::internal)?;
+                            return Err(ApiError::conflict("CLI browser login expired"));
+                        }
+                        cli_auth_rules::BrowserLoginCompletionDecision::Complete => {}
                     }
 
                     entities::cli_browser_login::Entity::update_many()
@@ -173,15 +178,20 @@ impl MetadataStore {
                 let Some(login) = auth.cli_browser_logins.get_mut(request_id) else {
                     return Err(ApiError::not_found("CLI browser login not found"));
                 };
-                if now >= login.expires_at_unix {
-                    auth.cli_browser_logins.remove(request_id);
-                    return Err(ApiError::conflict("CLI browser login expired"));
-                }
-                if login.consumed_at_unix.is_some() {
-                    return Err(ApiError::conflict("CLI browser login already consumed"));
-                }
-                if login.completed_user_id.is_some() || login.callback_code_hash.is_some() {
-                    return Err(ApiError::conflict("CLI browser login already completed"));
+                match cli_auth_rules::decide_browser_login_completion(
+                    cli_auth_rules::BrowserLoginCompletionState {
+                        expires_at_unix: login.expires_at_unix,
+                        consumed: login.consumed_at_unix.is_some(),
+                        completed: login.completed_user_id.is_some()
+                            || login.callback_code_hash.is_some(),
+                    },
+                    now,
+                )? {
+                    cli_auth_rules::BrowserLoginCompletionDecision::Expired => {
+                        auth.cli_browser_logins.remove(request_id);
+                        return Err(ApiError::conflict("CLI browser login expired"));
+                    }
+                    cli_auth_rules::BrowserLoginCompletionDecision::Complete => {}
                 }
                 login.callback_code_hash = Some(callback_code_hash);
                 login.completed_user_id = Some(user.id.clone());
@@ -216,24 +226,28 @@ impl MetadataStore {
                     else {
                         return Err(ApiError::not_found("CLI browser login not found"));
                     };
-                    if now >= i64_to_u64(login.expires_at_unix)? {
-                        entities::cli_browser_login::Entity::delete_by_id(login.request_id)
-                            .exec(&tx)
-                            .await
-                            .map_err(ApiError::internal)?;
-                        return Err(ApiError::conflict("CLI browser login expired"));
-                    }
-                    if login.consumed_at_unix.is_some() {
-                        return Err(ApiError::conflict("CLI browser login already consumed"));
-                    }
-                    if login.request_secret_hash != request_secret_hash {
-                        return Err(ApiError::unauthorized("invalid CLI browser login secret"));
-                    }
-                    if login.callback_code_hash.as_deref() != Some(callback_code_hash.as_str()) {
-                        return Err(ApiError::unauthorized("invalid CLI browser login code"));
-                    }
-                    let Some(user_id) = login.completed_user_id else {
-                        return Err(ApiError::conflict("CLI browser login is pending"));
+                    let user_id = match cli_auth_rules::decide_browser_login_exchange(
+                        cli_auth_rules::BrowserLoginExchangeState {
+                            expires_at_unix: i64_to_u64(login.expires_at_unix)?,
+                            consumed: login.consumed_at_unix.is_some(),
+                            request_secret_hash: login.request_secret_hash.clone(),
+                            callback_code_hash: login.callback_code_hash.clone(),
+                            completed_user_id: login.completed_user_id.clone(),
+                        },
+                        now,
+                        &request_secret_hash,
+                        &callback_code_hash,
+                    )? {
+                        cli_auth_rules::BrowserLoginExchangeDecision::Expired => {
+                            entities::cli_browser_login::Entity::delete_by_id(login.request_id)
+                                .exec(&tx)
+                                .await
+                                .map_err(ApiError::internal)?;
+                            return Err(ApiError::conflict("CLI browser login expired"));
+                        }
+                        cli_auth_rules::BrowserLoginExchangeDecision::Complete { user_id } => {
+                            user_id
+                        }
                     };
 
                     entities::cli_browser_login::Entity::update_many()
@@ -259,21 +273,23 @@ impl MetadataStore {
                 let Some(login) = auth.cli_browser_logins.get_mut(request_id) else {
                     return Err(ApiError::not_found("CLI browser login not found"));
                 };
-                if now >= login.expires_at_unix {
-                    auth.cli_browser_logins.remove(request_id);
-                    return Err(ApiError::conflict("CLI browser login expired"));
-                }
-                if login.consumed_at_unix.is_some() {
-                    return Err(ApiError::conflict("CLI browser login already consumed"));
-                }
-                if login.request_secret_hash != request_secret_hash {
-                    return Err(ApiError::unauthorized("invalid CLI browser login secret"));
-                }
-                if login.callback_code_hash.as_deref() != Some(callback_code_hash.as_str()) {
-                    return Err(ApiError::unauthorized("invalid CLI browser login code"));
-                }
-                let Some(user_id) = login.completed_user_id.clone() else {
-                    return Err(ApiError::conflict("CLI browser login is pending"));
+                let user_id = match cli_auth_rules::decide_browser_login_exchange(
+                    cli_auth_rules::BrowserLoginExchangeState {
+                        expires_at_unix: login.expires_at_unix,
+                        consumed: login.consumed_at_unix.is_some(),
+                        request_secret_hash: login.request_secret_hash.clone(),
+                        callback_code_hash: login.callback_code_hash.clone(),
+                        completed_user_id: login.completed_user_id.clone(),
+                    },
+                    now,
+                    &request_secret_hash,
+                    &callback_code_hash,
+                )? {
+                    cli_auth_rules::BrowserLoginExchangeDecision::Expired => {
+                        auth.cli_browser_logins.remove(request_id);
+                        return Err(ApiError::conflict("CLI browser login expired"));
+                    }
+                    cli_auth_rules::BrowserLoginExchangeDecision::Complete { user_id } => user_id,
                 };
                 login.consumed_at_unix = Some(now);
                 create_cli_session_token_in_memory(memory, auth, user_id, now)
@@ -355,16 +371,23 @@ impl MetadataStore {
                     else {
                         return Err(ApiError::unauthorized("invalid CLI exchange token"));
                     };
-                    if now >= i64_to_u64(grant.expires_at_unix)? {
-                        entities::cli_exchange_grant::Entity::delete_by_id(grant.grant_hash)
-                            .exec(&tx)
-                            .await
-                            .map_err(ApiError::internal)?;
-                        return Err(ApiError::conflict("CLI exchange token expired"));
-                    }
-                    if grant.consumed_at_unix.is_some() {
-                        return Err(ApiError::conflict("CLI exchange token already used"));
-                    }
+                    let user_id = match cli_auth_rules::decide_cli_exchange_grant(
+                        cli_auth_rules::CliExchangeGrantState {
+                            expires_at_unix: i64_to_u64(grant.expires_at_unix)?,
+                            consumed: grant.consumed_at_unix.is_some(),
+                            user_id: grant.user_id.clone(),
+                        },
+                        now,
+                    )? {
+                        cli_auth_rules::CliExchangeGrantDecision::Expired => {
+                            entities::cli_exchange_grant::Entity::delete_by_id(grant.grant_hash)
+                                .exec(&tx)
+                                .await
+                                .map_err(ApiError::internal)?;
+                            return Err(ApiError::conflict("CLI exchange token expired"));
+                        }
+                        cli_auth_rules::CliExchangeGrantDecision::Complete { user_id } => user_id,
+                    };
 
                     entities::cli_exchange_grant::Entity::update_many()
                         .filter(
@@ -378,7 +401,7 @@ impl MetadataStore {
                         .exec(&tx)
                         .await
                         .map_err(ApiError::internal)?;
-                    let token = create_cli_session_token_in_tx(&tx, &grant.user_id, now).await?;
+                    let token = create_cli_session_token_in_tx(&tx, &user_id, now).await?;
                     tx.commit().await.map_err(ApiError::internal)?;
                     Ok(token)
                 })
@@ -392,14 +415,20 @@ impl MetadataStore {
                 let Some(grant) = auth.cli_exchange_grants.get_mut(&grant_hash) else {
                     return Err(ApiError::unauthorized("invalid CLI exchange token"));
                 };
-                if now >= grant.expires_at_unix {
-                    auth.cli_exchange_grants.remove(&grant_hash);
-                    return Err(ApiError::conflict("CLI exchange token expired"));
-                }
-                if grant.consumed_at_unix.is_some() {
-                    return Err(ApiError::conflict("CLI exchange token already used"));
-                }
-                let user_id = grant.user_id.clone();
+                let user_id = match cli_auth_rules::decide_cli_exchange_grant(
+                    cli_auth_rules::CliExchangeGrantState {
+                        expires_at_unix: grant.expires_at_unix,
+                        consumed: grant.consumed_at_unix.is_some(),
+                        user_id: grant.user_id.clone(),
+                    },
+                    now,
+                )? {
+                    cli_auth_rules::CliExchangeGrantDecision::Expired => {
+                        auth.cli_exchange_grants.remove(&grant_hash);
+                        return Err(ApiError::conflict("CLI exchange token expired"));
+                    }
+                    cli_auth_rules::CliExchangeGrantDecision::Complete { user_id } => user_id,
+                };
                 grant.consumed_at_unix = Some(now);
                 create_cli_session_token_in_memory(memory, auth, user_id, now)
             }
@@ -579,25 +608,13 @@ where
         .count(conn)
         .await
         .map_err(ApiError::internal)?;
-    if pending_count >= MAX_PENDING_BROWSER_LOGINS {
-        return Err(ApiError::too_many_requests(
-            "too many pending CLI browser logins",
-        ));
-    }
-
-    let window_start = u64_to_i64(now.saturating_sub(BROWSER_LOGIN_START_WINDOW_SECS))?;
+    let window_start = u64_to_i64(cli_auth_rules::browser_login_start_window_start(now))?;
     let window_count = entities::cli_browser_login::Entity::find()
         .filter(entities::cli_browser_login::Column::CreatedAtUnix.gte(window_start))
         .count(conn)
         .await
         .map_err(ApiError::internal)?;
-    if window_count >= MAX_BROWSER_LOGIN_STARTS_PER_WINDOW {
-        return Err(ApiError::too_many_requests(
-            "too many CLI browser login starts",
-        ));
-    }
-
-    Ok(())
+    cli_auth_rules::enforce_browser_login_start_rate_limit(pending_count, window_count)
 }
 
 #[cfg(test)]
@@ -605,23 +622,12 @@ fn enforce_memory_browser_login_start_limits(
     auth: &super::auth::MemoryAuthState,
     now: u64,
 ) -> Result<(), ApiError> {
-    if auth.cli_browser_logins.len() as u64 >= MAX_PENDING_BROWSER_LOGINS {
-        return Err(ApiError::too_many_requests(
-            "too many pending CLI browser logins",
-        ));
-    }
-
-    let window_start = now.saturating_sub(BROWSER_LOGIN_START_WINDOW_SECS);
+    let pending_count = auth.cli_browser_logins.len() as u64;
+    let window_start = cli_auth_rules::browser_login_start_window_start(now);
     let window_count = auth
         .cli_browser_logins
         .values()
         .filter(|login| login.created_at_unix >= window_start)
         .count() as u64;
-    if window_count >= MAX_BROWSER_LOGIN_STARTS_PER_WINDOW {
-        return Err(ApiError::too_many_requests(
-            "too many CLI browser login starts",
-        ));
-    }
-
-    Ok(())
+    cli_auth_rules::enforce_browser_login_start_rate_limit(pending_count, window_count)
 }
