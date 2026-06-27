@@ -10,6 +10,8 @@ import type {
   Visibility,
 } from '@/api/types'
 import { AppHeader } from '@/components/app-header'
+import { RepoBreadcrumb } from '@/components/repo-breadcrumb'
+import { LifecycleBadge } from '@/components/lifecycle-badge'
 import { PageContent, PageHeader } from '@/components/page-header'
 import { PageErrorAlert } from '@/components/page-error-alert'
 import { RouteErrorPage } from '@/components/route-error-page'
@@ -18,7 +20,7 @@ import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { storeHomeFlash } from '@/lib/home-flash'
 import { useNavigate, useRouter } from '@tanstack/react-router'
-import { LoaderCircle, Rocket, X } from 'lucide-react'
+import { GitBranch, LoaderCircle, Rocket, X } from 'lucide-react'
 import { useEffect, useMemo, useReducer, useState } from 'react'
 import {
   initialReviewPageState,
@@ -201,9 +203,8 @@ export function ReviewPage({
   return (
     <main className="min-h-screen bg-background text-foreground">
       <AppHeader
+        breadcrumb={<RepoBreadcrumb params={params} section="review" />}
         contentClassName={reviewRailClassName}
-        subtitle={`${params.owner}/${params.repo}`}
-        subtitleClassName="font-mono"
       />
 
       <PageContent className={reviewRailClassName}>
@@ -220,13 +221,16 @@ export function ReviewPage({
           )}
           badges={() => (
             <>
-              <Badge variant="outline">{review.publication_state}</Badge>
+              <LifecycleBadge state={review.publication_state} />
               {review.default_visibility && (
                 <VisibilityBadge visibility={review.default_visibility} />
               )}
-              <Badge variant="outline">{review.files.length} files</Badge>
+              <Badge variant="neutral">{review.files.length} files</Badge>
               {stagedReview && review.branch && (
-                <Badge variant="outline">{review.branch}</Badge>
+                <Badge variant="neutral">
+                  <GitBranch className="size-3" />
+                  {review.branch}
+                </Badge>
               )}
             </>
           )}

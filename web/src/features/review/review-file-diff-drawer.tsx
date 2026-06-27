@@ -8,7 +8,9 @@ import {
   type WorkerInitializationRenderOptions,
   type WorkerPoolOptions,
 } from '@pierre/diffs/react'
-import { FileText, LoaderCircle, TriangleAlert, X } from 'lucide-react'
+import { Skeleton } from '@/components/ui/skeleton'
+import { useThemeType } from '@/lib/use-theme-type'
+import { FileText, TriangleAlert, X } from 'lucide-react'
 import { type ReactNode, useMemo } from 'react'
 import { displayPath } from './review-tree-model'
 
@@ -18,7 +20,6 @@ const PIERRE_DIFF_OPTIONS = {
   hunkSeparators: 'line-info-basic',
   lineDiffType: 'word',
   overflow: 'wrap',
-  themeType: 'dark',
 } as const
 
 const PIERRE_WORKER_HIGHLIGHTER_OPTIONS = {} satisfies WorkerInitializationRenderOptions
@@ -38,9 +39,14 @@ export function ReviewFileDiffDrawer({
   onClose: () => void
   selectedPath: string | null
 }) {
+  const themeType = useThemeType()
   const fileDiff = useMemo(
     () => (diff ? diffMetadataForReviewFile(diff) : null),
     [diff],
+  )
+  const diffOptions = useMemo(
+    () => ({ ...PIERRE_DIFF_OPTIONS, themeType }),
+    [themeType],
   )
   const workerPoolOptions = useMemo(createPierreWorkerPoolOptions, [])
   const displayName = displayPath(diff?.path ?? selectedPath ?? '')
@@ -77,10 +83,7 @@ export function ReviewFileDiffDrawer({
 
         <div className="min-h-0 flex-1 overflow-auto">
           {loading ? (
-            <DiffState>
-              <LoaderCircle className="size-4 animate-spin text-muted-foreground" />
-              <span>Loading diff</span>
-            </DiffState>
+            <DiffSkeleton />
           ) : error ? (
             <DiffState tone="error">
               <TriangleAlert className="size-4 text-destructive" />
@@ -90,6 +93,7 @@ export function ReviewFileDiffDrawer({
             <div className="review-diff-viewer">
               <PierreFileDiff
                 fileDiff={fileDiff}
+                options={diffOptions}
                 workerPoolOptions={workerPoolOptions}
               />
             </div>
@@ -107,16 +111,18 @@ export function ReviewFileDiffDrawer({
 
 function PierreFileDiff({
   fileDiff,
+  options,
   workerPoolOptions,
 }: {
   fileDiff: FileDiffMetadata
+  options: typeof PIERRE_DIFF_OPTIONS & { themeType: 'dark' | 'light' }
   workerPoolOptions: WorkerPoolOptions | null
 }) {
   const renderer = (
     <FileDiff
       disableWorkerPool={!workerPoolOptions}
       fileDiff={fileDiff}
-      options={PIERRE_DIFF_OPTIONS}
+      options={options}
     />
   )
 
@@ -177,6 +183,29 @@ function emptyDiffLabel(diff: ReviewFileDiff | null) {
     return 'Empty file deleted'
   }
   return 'No content changes'
+}
+
+const DIFF_SKELETON_WIDTHS = [
+  'w-[82%]',
+  'w-[64%]',
+  'w-[91%]',
+  'w-[48%]',
+  'w-[73%]',
+  'w-[86%]',
+  'w-[57%]',
+  'w-[78%]',
+  'w-[40%]',
+  'w-[69%]',
+]
+
+function DiffSkeleton() {
+  return (
+    <div className="space-y-2.5 px-4 py-4 font-mono">
+      {DIFF_SKELETON_WIDTHS.map((width, index) => (
+        <Skeleton className={cn('h-3.5', width)} key={index} />
+      ))}
+    </div>
+  )
 }
 
 function DiffState({

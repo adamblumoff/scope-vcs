@@ -1,4 +1,5 @@
 import type { CliInstallCommands, RepoSummary } from '@/api/types'
+import { LifecycleBadge } from '@/components/lifecycle-badge'
 import { RepoPrimaryActionButton } from '@/components/repo-primary-action'
 import { CopyableCodeBlock } from '@/components/copyable-code-block'
 import { VisibilityBadge } from '@/components/visibility-badge'
@@ -82,11 +83,9 @@ function RepoListRow({ repo }: { repo: RepoSummary }) {
         </Link>
         <div className="mt-1.5 flex flex-wrap items-center gap-1.5 text-xs text-muted-foreground">
           <VisibilityBadge compact visibility={repo.default_visibility} />
-          {showLifecycle && (
-            <Badge variant="outline">{lifecycleLabel(repo.lifecycle_state)}</Badge>
-          )}
+          {showLifecycle && <LifecycleBadge state={repo.lifecycle_state} />}
           {repo.staged_update_pending && (
-            <Badge variant="outline">Update ready</Badge>
+            <Badge variant="warning">Update ready</Badge>
           )}
           <span className="capitalize">{repo.role ?? 'reader'}</span>
         </div>
@@ -98,15 +97,4 @@ function RepoListRow({ repo }: { repo: RepoSummary }) {
       </div>
     </div>
   )
-}
-
-function lifecycleLabel(state: RepoSummary['lifecycle_state']): string {
-  switch (state) {
-    case 'PendingFirstPush':
-      return 'Setup'
-    case 'PendingPublish':
-      return 'Review needed'
-    default:
-      return state
-  }
 }

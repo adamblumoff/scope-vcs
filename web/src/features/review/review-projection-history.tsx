@@ -32,7 +32,7 @@ export function ReviewProjectionHistory({
   const olderCount = Math.max(commits.length - visibleCommits.length, 0)
 
   return (
-    <div className="mt-8 border-y border-border px-2 py-4">
+    <div className="mt-2 border-t border-border px-2 pt-6 pb-4">
       <div className="mb-4">
         <div className="min-w-0">
           <div className="flex flex-wrap items-center gap-2">
@@ -173,32 +173,16 @@ function CommitVisibilityBadge({
   visibility: ProjectionPreviewCommit['visibility']
 }) {
   if (visibility === 'FullyPrivate') {
-    return (
-      <Badge className="border-red-400 bg-red-100 text-red-900">
-        Fully private
-      </Badge>
-    )
+    return <Badge variant="danger">Fully private</Badge>
   }
 
   if (visibility === 'Synthetic') {
-    return (
-      <Badge className="border-yellow-500 bg-yellow-100 text-yellow-900">
-        Synthetic
-      </Badge>
-    )
+    return <Badge variant="warning">Synthetic</Badge>
   }
 
   if (visibility === 'Mixed') {
-    return (
-      <Badge className="border-yellow-500 bg-yellow-100 text-yellow-900">
-        Mixed
-      </Badge>
-    )
+    return <Badge variant="warning">Mixed</Badge>
   }
 
-  return (
-    <Badge className="border-green-500 bg-green-100 text-green-900">
-      Fully public
-    </Badge>
-  )
+  return <Badge variant="success">Fully public</Badge>
 }

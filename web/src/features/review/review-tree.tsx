@@ -197,7 +197,8 @@ function ReviewTreeNodeRow({
       <div
         className={cn(
           'grid gap-2 px-2 py-2.5 text-sm sm:items-center',
-          selected && 'bg-blue-100/60 dark:bg-blue-100/35',
+          selected &&
+            'bg-brand-muted shadow-[inset_2px_0_0_0_var(--brand)]',
           viewAudience === 'public' && !visibleInView && 'text-muted-foreground',
           columnsClassName,
         )}

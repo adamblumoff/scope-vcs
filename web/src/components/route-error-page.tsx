@@ -16,7 +16,7 @@ export function RouteErrorPage({
 
   return (
     <main className="min-h-screen bg-background px-4 py-8 text-foreground sm:px-6">
-      <div className="mx-auto max-w-[760px] border-y border-border py-6">
+      <div className="mx-auto max-w-[760px] py-6">
         <PageErrorAlert className="mt-0" title={title}>
           {message}
         </PageErrorAlert>

@@ -10,9 +10,11 @@ import type {
   ReviewFileDiff,
 } from '@/api/types'
 import { AppHeader } from '@/components/app-header'
+import { RepoBreadcrumb } from '@/components/repo-breadcrumb'
 import { PageContent, PageHeader } from '@/components/page-header'
 import { RouteErrorPage } from '@/components/route-error-page'
 import { Badge } from '@/components/ui/badge'
+import { Skeleton } from '@/components/ui/skeleton'
 import { ToggleGroup, ToggleGroupItem } from '@/components/ui/toggle-group'
 import { cn } from '@/lib/utils'
 import { Link, useNavigate } from '@tanstack/react-router'
@@ -20,7 +22,6 @@ import {
   Globe2,
   GitCommit,
   History,
-  LoaderCircle,
   TriangleAlert,
   UserRound,
 } from 'lucide-react'
@@ -243,21 +244,20 @@ export function HistoryPage({
   return (
     <main className="min-h-screen bg-background text-foreground">
       <AppHeader
+        breadcrumb={<RepoBreadcrumb params={params} section="history" />}
         contentClassName={pageWidthClassName}
-        subtitle={repoId}
-        subtitleClassName="font-mono"
       />
 
       <PageContent className={pageWidthClassName}>
         <PageHeader
           badges={() => (
             <>
-              <Badge variant="outline">{audienceLabel(audience)} view</Badge>
-              <Badge variant="outline">
+              <Badge variant="info">{audienceLabel(audience)} view</Badge>
+              <Badge variant="neutral">
                 {commits.length} {commits.length === 1 ? 'commit' : 'commits'}
               </Badge>
               {selectedCommit && (
-                <Badge variant="outline">
+                <Badge variant="neutral">
                   {changeCountLabel(selectedCommit.change_count)}
                 </Badge>
               )}
@@ -278,7 +278,7 @@ export function HistoryPage({
           titleClassName="font-mono"
         />
 
-        <section className="mt-8 border-y border-border">
+        <section className="mt-8">
           <div className="flex flex-col gap-3 border-b border-border py-4 sm:flex-row sm:items-center sm:justify-between">
             <div className="min-w-0">
               <div className="flex flex-wrap items-center gap-2">
@@ -296,8 +296,18 @@ export function HistoryPage({
           </div>
 
           {!history || commits.length === 0 ? (
-            <div className="py-10 text-sm text-muted-foreground">
-              No commits yet.
+            <div className="flex flex-col items-center gap-3 py-16 text-center">
+              <div className="flex size-11 items-center justify-center rounded-xl bg-brand-muted text-brand">
+                <History className="size-5" />
+              </div>
+              <div className="text-sm">
+                <div className="text-base font-semibold leading-6">
+                  No commits yet
+                </div>
+                <p className="mt-0.5 text-muted-foreground">
+                  History appears here once this repo has published commits.
+                </p>
+              </div>
             </div>
           ) : (
             <div
@@ -353,7 +363,8 @@ function CommitList({
             <button
               className={cn(
                 'grid w-full grid-cols-[minmax(0,1fr)_80px] gap-3 px-2 py-3 text-left text-sm transition-colors hover:bg-muted/70',
-                selected && 'bg-blue-100/60 dark:bg-blue-100/35',
+                selected &&
+                  'bg-brand-muted shadow-[inset_2px_0_0_0_var(--brand)] hover:bg-brand-muted',
               )}
               key={commit.projected_id}
               onClick={() => onSelectCommit(commit)}
@@ -397,12 +408,7 @@ function CommitDetailPanel({
   selectedFilePath: string | null
 }) {
   if (commitState.status === 'loading') {
-    return (
-      <PanelState>
-        <LoaderCircle className="size-4 animate-spin text-muted-foreground" />
-        <span>Loading commit</span>
-      </PanelState>
-    )
+    return <CommitDetailSkeleton />
   }
 
   if (commitState.status === 'failed') {
@@ -430,9 +436,9 @@ function CommitDetailPanel({
     <div className="min-w-0">
       <div className="border-b border-border px-2 py-3">
         <div className="flex flex-wrap items-center gap-2">
-          <Badge variant="outline">{commit.logical_commit_id}</Badge>
-          {commit.synthetic && <Badge variant="outline">Synthetic</Badge>}
-          {commit.author && <Badge variant="outline">{commit.author}</Badge>}
+          <Badge variant="neutral">{commit.logical_commit_id}</Badge>
+          {commit.synthetic && <Badge variant="warning">Synthetic</Badge>}
+          {commit.author && <Badge variant="neutral">{commit.author}</Badge>}
         </div>
         <h3 className="mt-2 truncate font-mono text-sm font-semibold leading-5">
           {commitTitle(commit)}
@@ -479,6 +485,28 @@ function CommitDetailPanel({
             />
           ) : null}
         </div>
+      </div>
+    </div>
+  )
+}
+
+function CommitDetailSkeleton() {
+  return (
+    <div className="min-w-0">
+      <div className="border-b border-border px-2 py-3">
+        <div className="flex flex-wrap items-center gap-2">
+          <Skeleton className="h-5 w-16" />
+          <Skeleton className="h-5 w-24" />
+        </div>
+        <Skeleton className="mt-2 h-4 w-2/3" />
+      </div>
+      <div className="space-y-3 px-2 py-4">
+        {Array.from({ length: 5 }).map((_, index) => (
+          <div className="flex items-center gap-2" key={index}>
+            <Skeleton className="size-4 rounded" />
+            <Skeleton className="h-3.5 w-1/2" />
+          </div>
+        ))}
       </div>
     </div>
   )

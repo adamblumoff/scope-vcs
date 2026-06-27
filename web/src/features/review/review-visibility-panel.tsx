@@ -94,7 +94,7 @@ export function ReviewVisibilityPanel({
   const diffOpen = selectedFilePath !== null
 
   return (
-    <section className="mt-8 border-y border-border">
+    <section className="mt-8">
       <ReviewVisibilityPanelHeader
         audience={preview.audience}
         availableAudiences={availableAudiences}

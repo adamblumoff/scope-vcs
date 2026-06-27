@@ -7,8 +7,10 @@ import type {
 import { AppHeader } from '@/components/app-header'
 import { PageContent, PageHeader } from '@/components/page-header'
 import { PageErrorAlert } from '@/components/page-error-alert'
+import { RepoBreadcrumb } from '@/components/repo-breadcrumb'
 import { RepoPrimaryActionButton } from '@/components/repo-primary-action'
 import { RouteErrorPage } from '@/components/route-error-page'
+import { LifecycleBadge } from '@/components/lifecycle-badge'
 import { VisibilityBadge } from '@/components/visibility-badge'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
@@ -96,7 +98,7 @@ export function RepoDetailPage({
 
   return (
     <main className="min-h-screen bg-background text-foreground">
-      <AppHeader subtitle={repo.id} subtitleClassName="font-mono" />
+      <AppHeader breadcrumb={<RepoBreadcrumb params={params} />} />
 
       <PageContent>
         <PageHeader
@@ -129,13 +131,13 @@ export function RepoDetailPage({
           )}
           badges={() => (
             <>
-              <Badge variant="outline">{repo.lifecycle_state}</Badge>
+              <LifecycleBadge state={repo.lifecycle_state} />
               {repo.role === 'Owner' && (
                 <VisibilityBadge visibility={repo.default_visibility} />
               )}
-              <Badge variant="outline">{files.length} files</Badge>
+              <Badge variant="neutral">{files.length} files</Badge>
               {repo.staged_update_pending && (
-                <Badge variant="outline">Staged update</Badge>
+                <Badge variant="warning">Staged update</Badge>
               )}
             </>
           )}
