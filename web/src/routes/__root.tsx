@@ -40,7 +40,12 @@ function RootComponent() {
 
 function RootDocument({ children }: { children: ReactNode }) {
   return (
-    <html className="dark" lang="en">
+    <html
+      className="dark"
+      lang="en"
+      style={{ colorScheme: 'dark' }}
+      suppressHydrationWarning
+    >
       <head>
         <HeadContent />
         <script
