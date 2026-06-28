@@ -12,7 +12,7 @@ use crate::{
     error::ApiError,
     git::{
         import::{
-            pending_import_from_staging_repo, persist_pending_import,
+            git_refs, pending_import_from_staging_repo, persist_pending_import,
             persist_receive_pack_update_and_promote, receive_pack_update_from_staging_repo,
         },
         storage::*,
@@ -257,6 +257,17 @@ pub(crate) fn handle_git_receive_pack(
         ReceivePackAccess::FirstPush { .. } => "first-push-token",
         ReceivePackAccess::PublishedMember { author_id } => author_id.as_str(),
     };
+    let refs_before_receive = if method == "POST" {
+        match git_refs(&staging_repo) {
+            Ok(refs) => Some(refs),
+            Err(error) => {
+                let _ = fs::remove_dir_all(&staging_repo);
+                return Err(error);
+            }
+        }
+    } else {
+        None
+    };
     let cgi = match git_http_backend(
         &staging_repo,
         method,
@@ -282,6 +293,18 @@ pub(crate) fn handle_git_receive_pack(
     };
 
     if method == "POST" && cgi.status.is_success() {
+        let refs_after_receive = match git_refs(&staging_repo) {
+            Ok(refs) => refs,
+            Err(error) => {
+                let _ = fs::remove_dir_all(&staging_repo);
+                return Err(error);
+            }
+        };
+        if refs_before_receive.as_ref() == Some(&refs_after_receive) {
+            let _ = fs::remove_dir_all(&staging_repo);
+            return Ok(cgi.into_response());
+        }
+
         match access {
             ReceivePackAccess::FirstPush { credential } => {
                 let import = match pending_import_from_staging_repo(

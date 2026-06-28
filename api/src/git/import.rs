@@ -6,11 +6,11 @@ mod staging;
 pub(crate) use self::artifacts::{
     pending_import_from_staging_repo, receive_pack_update_from_staging_repo,
 };
+pub(crate) use self::repo_io::{git_refs, run_git, safe_repo_key};
 #[cfg(test)]
 pub(crate) use self::repo_io::{
-    git_refs, git_stdout_text, git_tree_files, run_git_output, validate_pushed_file_path,
+    git_stdout_text, git_tree_files, run_git_output, validate_pushed_file_path,
 };
-pub(crate) use self::repo_io::{run_git, safe_repo_key};
 use self::staging::stage_receive_pack_update_with_store;
 #[cfg(test)]
 pub(crate) use self::staging::{ReceivePackFileChange, stage_receive_pack_update};
