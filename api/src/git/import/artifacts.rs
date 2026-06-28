@@ -1,6 +1,6 @@
 use super::repo_io::{
-    describe_refs, git_refs, git_snapshot_from_repo, git_stdout_text, git_tree_entries,
-    git_tree_files, pushed_commit_message, read_git_tree_blob,
+    describe_refs, git_refs, git_snapshot_from_repo, git_stdout_text, git_tree_blob_contents,
+    git_tree_entries, git_tree_files, pushed_commit_message, put_git_blob_contents,
 };
 use super::staging::{
     ReceivePackFileChange, ReceivePackUpdate, ensure_default_branch, source_content_matches,
@@ -9,7 +9,6 @@ use crate::domain::projection_views::pending_scope_path;
 use crate::domain::store::{PendingImport, RepoPublicationState};
 use crate::{
     error::ApiError,
-    object_store::put_repo_object,
     persistence::unix_now,
     state::AppState,
     state::{find_repo, live_tree},
@@ -93,6 +92,8 @@ pub(crate) fn receive_pack_update_from_staging_repo(
     let mut changes = Vec::new();
     let mut uploaded_file_blobs = Vec::new();
     let mut pushed_paths = BTreeSet::new();
+    let mut changed_paths = Vec::new();
+    let mut changed_entries = Vec::new();
 
     for entry in pushed_entries {
         let path = match pending_scope_path(&entry.path) {
@@ -113,8 +114,20 @@ pub(crate) fn receive_pack_update_from_staging_repo(
             continue;
         }
 
-        let content = match read_git_tree_blob(staging_repo, &entry.oid, &entry.path) {
-            Ok(content) => content,
+        changed_paths.push((path, live_content.cloned()));
+        changed_entries.push(entry);
+    }
+
+    let changed_contents = match git_tree_blob_contents(staging_repo, &changed_entries) {
+        Ok(contents) => contents,
+        Err(error) => {
+            crate::state::best_effort_cleanup_rollback_source_blobs(state, &uploaded_file_blobs);
+            return Err(error);
+        }
+    };
+    let changed_blobs =
+        match put_git_blob_contents(state, &repo_id, &changed_contents, &mut uploaded_file_blobs) {
+            Ok(blobs) => blobs,
             Err(error) => {
                 crate::state::best_effort_cleanup_rollback_source_blobs(
                     state,
@@ -123,19 +136,8 @@ pub(crate) fn receive_pack_update_from_staging_repo(
                 return Err(error);
             }
         };
-        let new_content =
-            match put_repo_object(state.object_store.as_ref(), &repo_id, "blobs", &content) {
-                Ok(blob) => blob,
-                Err(error) => {
-                    crate::state::best_effort_cleanup_rollback_source_blobs(
-                        state,
-                        &uploaded_file_blobs,
-                    );
-                    return Err(error);
-                }
-            };
-        uploaded_file_blobs.push(new_content.clone());
-        if !source_content_matches(live_content, Some(&new_content)) {
+    for ((path, live_content), new_content) in changed_paths.into_iter().zip(changed_blobs) {
+        if !source_content_matches(live_content.as_ref(), Some(&new_content)) {
             changes.push(ReceivePackFileChange {
                 path,
                 content: Some(new_content),

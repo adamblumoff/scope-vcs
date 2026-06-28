@@ -11,7 +11,14 @@ use crate::{
     state::AppState,
 };
 use sha2::{Digest, Sha256};
-use std::{path::Path as FsPath, process::Command};
+use std::{
+    io::Write,
+    path::Path as FsPath,
+    process::{Command, Stdio},
+    thread,
+};
+
+const MAX_PARALLEL_BLOB_PUTS: usize = 8;
 
 pub(super) fn pushed_commit_message(
     staging_repo: &FsPath,
@@ -76,24 +83,17 @@ pub(crate) fn git_tree_files(
     head_oid: &str,
 ) -> Result<Vec<PendingImportFile>, ApiError> {
     let pending_files = git_tree_entries(staging_repo, head_oid)?;
+    let contents = git_tree_blob_contents(staging_repo, &pending_files)?;
     let mut files = Vec::with_capacity(pending_files.len());
     let mut uploaded_blobs = Vec::with_capacity(pending_files.len());
-    for pending in pending_files {
-        let content = match read_git_tree_blob(staging_repo, &pending.oid, &pending.path) {
-            Ok(content) => content,
-            Err(error) => {
-                crate::state::best_effort_cleanup_rollback_source_blobs(state, &uploaded_blobs);
-                return Err(error);
-            }
-        };
-        let blob = match put_repo_object(state.object_store.as_ref(), repo_id, "blobs", &content) {
-            Ok(blob) => blob,
-            Err(error) => {
-                crate::state::best_effort_cleanup_rollback_source_blobs(state, &uploaded_blobs);
-                return Err(error);
-            }
-        };
-        uploaded_blobs.push(blob.clone());
+    let blobs = match put_git_blob_contents(state, repo_id, &contents, &mut uploaded_blobs) {
+        Ok(blobs) => blobs,
+        Err(error) => {
+            crate::state::best_effort_cleanup_rollback_source_blobs(state, &uploaded_blobs);
+            return Err(error);
+        }
+    };
+    for (pending, blob) in pending_files.into_iter().zip(blobs) {
         files.push(PendingImportFile {
             path: pending.path,
             mode: pending.mode,
@@ -180,20 +180,167 @@ pub(super) fn git_tree_entries(
     Ok(pending_files)
 }
 
-pub(super) fn read_git_tree_blob(
+pub(super) fn git_tree_blob_contents(
     staging_repo: &FsPath,
-    oid: &str,
-    path: &str,
-) -> Result<Vec<u8>, ApiError> {
-    let content = run_git_output(
-        Some(staging_repo),
-        &["cat-file", "blob", oid],
-        "reading pushed blob",
-    )?
-    .stdout;
-    std::str::from_utf8(&content)
-        .map_err(|_| ApiError::bad_request(format!("blob {path} must be valid UTF-8 text")))?;
-    Ok(content)
+    pending_files: &[PendingGitTreeFile],
+) -> Result<Vec<Vec<u8>>, ApiError> {
+    if pending_files.is_empty() {
+        return Ok(Vec::new());
+    }
+
+    let mut child = Command::new("git")
+        .current_dir(staging_repo)
+        .args(["cat-file", "--batch"])
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .map_err(ApiError::internal)?;
+    let mut stdin = child
+        .stdin
+        .take()
+        .ok_or_else(|| ApiError::internal_message("opening git cat-file stdin failed"))?;
+
+    let (output, write_result) = thread::scope(|scope| {
+        let writer = scope.spawn(move || {
+            for pending in pending_files {
+                writeln!(stdin, "{}", pending.oid).map_err(ApiError::internal)?;
+            }
+            Ok(())
+        });
+        let output = child.wait_with_output().map_err(ApiError::internal);
+        let write_result = writer
+            .join()
+            .map_err(|_| ApiError::internal_message("git cat-file input writer panicked"));
+        (output, write_result)
+    });
+    let output = output?;
+    if !output.status.success() {
+        return Err(ApiError::service_unavailable(format!(
+            "reading pushed blobs: {}",
+            String::from_utf8_lossy(&output.stderr).trim()
+        )));
+    }
+    match write_result {
+        Ok(result) => result?,
+        Err(error) => return Err(error),
+    }
+
+    parse_git_cat_file_batch(&output.stdout, pending_files)
+}
+
+pub(super) fn put_git_blob_contents(
+    state: &AppState,
+    repo_id: &str,
+    contents: &[Vec<u8>],
+    uploaded_blobs: &mut Vec<SourceBlob>,
+) -> Result<Vec<SourceBlob>, ApiError> {
+    let store = state.object_store.as_ref();
+    let mut blobs = Vec::with_capacity(contents.len());
+    for chunk in contents.chunks(MAX_PARALLEL_BLOB_PUTS) {
+        let results = thread::scope(|scope| {
+            let handles = chunk
+                .iter()
+                .map(|content| {
+                    scope.spawn(move || put_repo_object(store, repo_id, "blobs", content))
+                })
+                .collect::<Vec<_>>();
+            handles
+                .into_iter()
+                .map(|handle| handle.join())
+                .collect::<Vec<_>>()
+        });
+
+        let mut first_error = None;
+        for result in results {
+            match result {
+                Ok(Ok(blob)) => {
+                    uploaded_blobs.push(blob.clone());
+                    blobs.push(blob);
+                }
+                Ok(Err(error)) => {
+                    first_error.get_or_insert(error);
+                }
+                Err(_) => {
+                    first_error.get_or_insert_with(|| {
+                        ApiError::internal_message("blob upload worker panicked")
+                    });
+                }
+            }
+        }
+        if let Some(error) = first_error {
+            return Err(error);
+        }
+    }
+
+    Ok(blobs)
+}
+
+fn parse_git_cat_file_batch(
+    output: &[u8],
+    pending_files: &[PendingGitTreeFile],
+) -> Result<Vec<Vec<u8>>, ApiError> {
+    let mut cursor = 0usize;
+    let mut contents = Vec::with_capacity(pending_files.len());
+
+    for pending in pending_files {
+        let header_end = output[cursor..]
+            .iter()
+            .position(|byte| *byte == b'\n')
+            .map(|offset| cursor + offset)
+            .ok_or_else(|| ApiError::internal_message("git cat-file batch header missing"))?;
+        let header = std::str::from_utf8(&output[cursor..header_end])
+            .map_err(|_| ApiError::internal_message("git cat-file batch header is invalid"))?;
+        cursor = header_end + 1;
+
+        let mut fields = header.split_whitespace();
+        let oid = fields
+            .next()
+            .ok_or_else(|| ApiError::internal_message("git cat-file batch header missing oid"))?;
+        let kind = fields
+            .next()
+            .ok_or_else(|| ApiError::internal_message("git cat-file batch header missing kind"))?;
+        let size = fields
+            .next()
+            .ok_or_else(|| ApiError::internal_message("git cat-file batch header missing size"))?
+            .parse::<usize>()
+            .map_err(|_| ApiError::internal_message("git cat-file batch size is invalid"))?;
+        if oid != pending.oid || kind != "blob" || size != pending.size_bytes {
+            return Err(ApiError::internal_message(
+                "git cat-file batch output mismatch",
+            ));
+        }
+
+        let content_end = cursor
+            .checked_add(size)
+            .ok_or_else(|| ApiError::internal_message("git cat-file batch output is too large"))?;
+        if content_end >= output.len() {
+            return Err(ApiError::internal_message(
+                "git cat-file batch content is truncated",
+            ));
+        }
+        let content = output[cursor..content_end].to_vec();
+        cursor = content_end;
+        if output.get(cursor) != Some(&b'\n') {
+            return Err(ApiError::internal_message(
+                "git cat-file batch content delimiter missing",
+            ));
+        }
+        cursor += 1;
+
+        std::str::from_utf8(&content).map_err(|_| {
+            ApiError::bad_request(format!("blob {} must be valid UTF-8 text", pending.path))
+        })?;
+        contents.push(content);
+    }
+
+    if cursor != output.len() {
+        return Err(ApiError::internal_message(
+            "git cat-file batch output has trailing data",
+        ));
+    }
+
+    Ok(contents)
 }
 
 pub(super) fn git_snapshot_from_repo(

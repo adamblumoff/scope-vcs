@@ -32,7 +32,7 @@ use axum::{
     response::{IntoResponse, Response},
 };
 use serde::Deserialize;
-use std::fs;
+use std::{fs, time::Instant};
 
 #[derive(Debug, Deserialize)]
 pub(crate) struct GitInfoRefsQuery {
@@ -257,6 +257,7 @@ pub(crate) fn handle_git_receive_pack(
         ReceivePackAccess::FirstPush { .. } => "first-push-token",
         ReceivePackAccess::PublishedMember { author_id } => author_id.as_str(),
     };
+    let receive_started_at = Instant::now();
     let refs_before_receive = if method == "POST" {
         match git_refs(&staging_repo) {
             Ok(refs) => Some(refs),
@@ -291,6 +292,7 @@ pub(crate) fn handle_git_receive_pack(
             return Err(error);
         }
     };
+    let receive_elapsed = receive_started_at.elapsed();
 
     if method == "POST" && cgi.status.is_success() {
         let refs_after_receive = match git_refs(&staging_repo) {
@@ -301,12 +303,19 @@ pub(crate) fn handle_git_receive_pack(
             }
         };
         if refs_before_receive.as_ref() == Some(&refs_after_receive) {
+            tracing::debug!(
+                owner,
+                repo = repo_name,
+                receive_ms = receive_elapsed.as_millis(),
+                "git receive-pack left refs unchanged"
+            );
             let _ = fs::remove_dir_all(&staging_repo);
             return Ok(cgi.into_response());
         }
 
         match access {
             ReceivePackAccess::FirstPush { credential } => {
+                let import_started_at = Instant::now();
                 let import = match pending_import_from_staging_repo(
                     state,
                     owner,
@@ -319,6 +328,7 @@ pub(crate) fn handle_git_receive_pack(
                         return Err(error);
                     }
                 };
+                let file_count = import.files.len();
                 let uploaded_blobs = import
                     .files
                     .iter()
@@ -332,8 +342,17 @@ pub(crate) fn handle_git_receive_pack(
                     let _ = fs::remove_dir_all(&staging_repo);
                     return Err(error);
                 }
+                tracing::info!(
+                    owner,
+                    repo = repo_name,
+                    receive_ms = receive_elapsed.as_millis(),
+                    import_ms = import_started_at.elapsed().as_millis(),
+                    file_count,
+                    "git receive-pack pending import persisted"
+                );
             }
             ReceivePackAccess::PublishedMember { author_id } => {
+                let import_started_at = Instant::now();
                 let update = match receive_pack_update_from_staging_repo(
                     state,
                     owner,
@@ -347,6 +366,7 @@ pub(crate) fn handle_git_receive_pack(
                         return Err(error);
                     }
                 };
+                let change_count = update.changes.len();
                 let uploaded_blobs = update
                     .uploaded_blobs
                     .iter()
@@ -360,6 +380,14 @@ pub(crate) fn handle_git_receive_pack(
                     let _ = fs::remove_dir_all(&staging_repo);
                     return Err(error);
                 }
+                tracing::info!(
+                    owner,
+                    repo = repo_name,
+                    receive_ms = receive_elapsed.as_millis(),
+                    import_ms = import_started_at.elapsed().as_millis(),
+                    change_count,
+                    "git receive-pack published update persisted"
+                );
             }
         }
     }
