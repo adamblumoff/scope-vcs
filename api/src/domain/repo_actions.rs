@@ -1,8 +1,6 @@
 use super::{
     policy::{ScopePath, Visibility, VisibilityRule},
-    projection::{
-        AuthorVisibility, FileChange, FileVisibilityChange, LogicalCommit, MixedCommitPolicy,
-    },
+    projection::{AuthorVisibility, FileChange, LogicalCommit, VisibilityEvent},
     store::{
         CatalogError, FirstPushToken, GitPushToken, PendingImport, RepoPublicationState,
         RepoRecord, RepoRole, RepoSettings, RepoStorageCleanup, SourceBlob, StagedRepoUpdate,
@@ -158,11 +156,19 @@ pub(crate) fn set_visibility(
     } else {
         Default::default()
     };
-    let mut visibility_changes = Vec::new();
+    let after_commit_id = repo.graph.commits.last().map(|commit| commit.id.clone());
+    let mut visibility_events = Vec::new();
     for update_path in update_paths {
         let old_visibility = repo.policy.effective_visibility(update_path);
         if record_visibility_history && old_visibility != visibility {
-            visibility_changes.push(FileVisibilityChange {
+            visibility_events.push(VisibilityEvent {
+                id: format!(
+                    "vis_{}",
+                    repo.visibility_events.len() + visibility_events.len() + 1
+                ),
+                after_commit_id: after_commit_id.clone(),
+                source_commit_id: None,
+                author_id: user_id.to_string(),
                 path: update_path.clone(),
                 old_visibility,
                 new_visibility: visibility,
@@ -175,24 +181,7 @@ pub(crate) fn set_visibility(
         };
         repo.policy.add_rule(rule).map_err(ApiError::bad_request)?;
     }
-    if !visibility_changes.is_empty() {
-        let parent_ids = repo
-            .graph
-            .commits
-            .last()
-            .map(|commit| vec![commit.id.clone()])
-            .unwrap_or_default();
-        repo.graph.commits.push(LogicalCommit {
-            id: format!("rv_visibility_{}", repo.graph.commits.len() + 1),
-            parent_ids,
-            author_id: user_id.to_string(),
-            author_visibility: AuthorVisibility::Visible,
-            message: "Update file visibility".to_string(),
-            mixed_policy: MixedCommitPolicy::SyntheticPublicCommit,
-            changes: Vec::new(),
-            visibility_changes,
-        });
-    }
+    repo.visibility_events.extend(visibility_events);
     Ok(RepoMutation::new(()))
 }
 
@@ -317,9 +306,7 @@ pub(crate) fn preview_publish_import(
         author_id: repo.record.owner_user_id.clone(),
         author_visibility: AuthorVisibility::Visible,
         message: format!("Import pushed {}", pending.default_branch),
-        mixed_policy: MixedCommitPolicy::SyntheticPublicCommit,
         changes,
-        visibility_changes: Vec::new(),
     });
     repo.git_snapshot = Some(pending.git_snapshot);
     repo.record.publication_state = RepoPublicationState::Published;

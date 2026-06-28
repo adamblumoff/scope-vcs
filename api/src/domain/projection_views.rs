@@ -44,7 +44,6 @@ pub(crate) struct ProjectionPreviewCommit {
     pub(crate) parent_projected_id: Option<String>,
     pub(crate) author: Option<String>,
     pub(crate) message: String,
-    pub(crate) synthetic: bool,
     pub(crate) visibility: ProjectionPreviewCommitVisibility,
     pub(crate) change_count: usize,
 }
@@ -52,7 +51,6 @@ pub(crate) struct ProjectionPreviewCommit {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum ProjectionPreviewCommitVisibility {
     FullyPublic,
-    Synthetic,
     Mixed,
     FullyPrivate,
 }
@@ -63,7 +61,6 @@ pub(crate) struct ProjectionPreviewSummary {
     pub(crate) hidden_files: usize,
     pub(crate) visible_commits: usize,
     pub(crate) hidden_commits: usize,
-    pub(crate) synthetic_commits: usize,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -100,7 +97,12 @@ pub(crate) fn projection_preview(
     include_private_counts: bool,
 ) -> ProjectionPreviewView {
     let principal = projection_preview_principal(repo, audience);
-    let projection = project_graph(&repo.policy, &repo.graph, &principal);
+    let projection = project_graph(
+        &repo.policy,
+        &repo.graph,
+        &repo.visibility_events,
+        &principal,
+    );
     let files = projection_preview_files(repo, &projection);
     let head_oid = projection_preview_head_oid(&projection, &files);
     let logical_commit_visibility = repo
@@ -123,19 +125,13 @@ pub(crate) fn projection_preview(
             parent_projected_id: commit.parent_projected_id.clone(),
             author: commit.author.clone(),
             message: commit.message.clone(),
-            synthetic: commit.synthetic,
-            visibility: if commit.synthetic {
-                ProjectionPreviewCommitVisibility::Synthetic
-            } else {
-                logical_commit_visibility
-                    .get(commit.logical_commit_id.as_str())
-                    .copied()
-                    .unwrap_or(ProjectionPreviewCommitVisibility::FullyPublic)
-            },
+            visibility: logical_commit_visibility
+                .get(commit.logical_commit_id.as_str())
+                .copied()
+                .unwrap_or(ProjectionPreviewCommitVisibility::FullyPublic),
             change_count: commit.changes.len(),
         })
         .collect::<Vec<_>>();
-    let synthetic_commits = commits.iter().filter(|commit| commit.synthetic).count();
     let visible_files = files.len();
     let visible_commits = commits.len();
     let (hidden_files, hidden_commits) =
@@ -143,6 +139,7 @@ pub(crate) fn projection_preview(
             let owner_projection = project_graph(
                 &repo.policy,
                 &repo.graph,
+                &repo.visibility_events,
                 &Principal {
                     id: repo.record.owner_user_id.clone(),
                     kind: PrincipalKind::User,
@@ -168,7 +165,6 @@ pub(crate) fn projection_preview(
             hidden_files,
             visible_commits,
             hidden_commits,
-            synthetic_commits,
         },
     }
 }
@@ -200,7 +196,12 @@ pub(crate) fn projected_files(
     repo: &StoredRepository,
     principal: &Principal,
 ) -> Vec<ProjectionViewFile> {
-    let projection = project_graph(&repo.policy, &repo.graph, principal);
+    let projection = project_graph(
+        &repo.policy,
+        &repo.graph,
+        &repo.visibility_events,
+        principal,
+    );
 
     projection_tree(&projection)
         .into_iter()
@@ -253,7 +254,12 @@ pub(crate) fn pending_scope_path(path: &str) -> Result<ScopePath, ApiError> {
 }
 
 pub(crate) fn has_visible_projected_files(repo: &StoredRepository, principal: &Principal) -> bool {
-    let projection = project_graph(&repo.policy, &repo.graph, principal);
+    let projection = project_graph(
+        &repo.policy,
+        &repo.graph,
+        &repo.visibility_events,
+        principal,
+    );
     !projection_tree(&projection).is_empty()
 }
 

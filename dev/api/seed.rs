@@ -3,7 +3,7 @@ use crate::{
     config::DEFAULT_GIT_BRANCH,
     domain::{
         policy::{ScopePath, Visibility, VisibilityRule},
-        projection::{AuthorVisibility, FileChange, LogicalCommit, MixedCommitPolicy},
+        projection::{AuthorVisibility, FileChange, LogicalCommit},
         store::{
             AccountAccess, AppCatalog, LineDiff, PendingImport, PendingImportFile,
             RepoPublicationState, RepoSettings, SourceBlob, StagedFileChange, StagedFileChangeKind,
@@ -250,9 +250,7 @@ fn commit(
         author_id: repo.record.owner_user_id.clone(),
         author_visibility: AuthorVisibility::Visible,
         message: message.to_string(),
-        mixed_policy: MixedCommitPolicy::SyntheticPublicCommit,
         changes,
-        visibility_changes: Vec::new(),
     }
 }
 

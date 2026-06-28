@@ -31,7 +31,12 @@ pub(crate) async fn get_commit_history(
 ) -> Result<Json<crate::http::responses::CommitHistoryResponse>, ApiError> {
     let (repo, audience) = repo_and_audience(&state, &headers, &owner, &repo_name, input).await?;
     let principal = history_principal(&repo, audience);
-    let view = commit_history_view(&repo.policy, &repo.graph, &principal);
+    let view = commit_history_view(
+        &repo.policy,
+        &repo.graph,
+        &repo.visibility_events,
+        &principal,
+    );
 
     Ok(Json(commit_history_response(audience, view)))
 }
@@ -44,7 +49,12 @@ pub(crate) async fn get_commit_detail(
 ) -> Result<Json<crate::http::responses::CommitDetailResponse>, ApiError> {
     let (repo, audience) = repo_and_audience(&state, &headers, &owner, &repo_name, input).await?;
     let principal = history_principal(&repo, audience);
-    let view = commit_history_view(&repo.policy, &repo.graph, &principal);
+    let view = commit_history_view(
+        &repo.policy,
+        &repo.graph,
+        &repo.visibility_events,
+        &principal,
+    );
     let commit = commit_for_id(&view.commits, &commit_id)?;
 
     Ok(Json(commit_detail_response(audience, &view, commit)))
@@ -61,7 +71,12 @@ pub(crate) async fn get_commit_file_diff(
     };
     let (repo, audience) = repo_and_audience(&state, &headers, &owner, &repo_name, request).await?;
     let principal = history_principal(&repo, audience);
-    let view = commit_history_view(&repo.policy, &repo.graph, &principal);
+    let view = commit_history_view(
+        &repo.policy,
+        &repo.graph,
+        &repo.visibility_events,
+        &principal,
+    );
     let commit = commit_for_id(&view.commits, &commit_id)?;
     let path = pending_scope_path(&input.path)?;
     let file = commit

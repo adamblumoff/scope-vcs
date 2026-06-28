@@ -89,7 +89,6 @@ pub(crate) struct ProjectionPreviewCommitResponse {
     pub(crate) parent_projected_id: Option<String>,
     pub(crate) author: Option<String>,
     pub(crate) message: String,
-    pub(crate) synthetic: bool,
     pub(crate) visibility: ProjectionPreviewCommitVisibilityResponse,
     pub(crate) change_count: usize,
 }
@@ -98,7 +97,6 @@ pub(crate) struct ProjectionPreviewCommitResponse {
 #[cfg_attr(test, derive(ts_rs::TS))]
 pub(crate) enum ProjectionPreviewCommitVisibilityResponse {
     FullyPublic,
-    Synthetic,
     Mixed,
     FullyPrivate,
 }
@@ -110,7 +108,6 @@ pub(crate) struct ProjectionPreviewSummaryResponse {
     pub(crate) hidden_files: usize,
     pub(crate) visible_commits: usize,
     pub(crate) hidden_commits: usize,
-    pub(crate) synthetic_commits: usize,
 }
 
 #[derive(Debug, Serialize)]
@@ -127,7 +124,6 @@ pub(crate) struct ProjectedCommitResponse {
     pub(crate) parent_projected_id: Option<String>,
     pub(crate) author: Option<String>,
     pub(crate) message: String,
-    pub(crate) synthetic: bool,
     pub(crate) changes: Vec<ProjectedChangeResponse>,
 }
 
@@ -177,7 +173,6 @@ pub(crate) fn projection_response(
                     parent_projected_id: commit.parent_projected_id,
                     author: commit.author,
                     message: commit.message,
-                    synthetic: commit.synthetic,
                     changes,
                 })
             })
@@ -264,7 +259,6 @@ fn projection_preview_commit_response(
         parent_projected_id: commit.parent_projected_id,
         author: commit.author,
         message: commit.message,
-        synthetic: commit.synthetic,
         visibility: projection_preview_commit_visibility_response(commit.visibility),
         change_count: commit.change_count,
     }
@@ -276,9 +270,6 @@ fn projection_preview_commit_visibility_response(
     match visibility {
         ProjectionPreviewCommitVisibility::FullyPublic => {
             ProjectionPreviewCommitVisibilityResponse::FullyPublic
-        }
-        ProjectionPreviewCommitVisibility::Synthetic => {
-            ProjectionPreviewCommitVisibilityResponse::Synthetic
         }
         ProjectionPreviewCommitVisibility::Mixed => {
             ProjectionPreviewCommitVisibilityResponse::Mixed
@@ -297,7 +288,6 @@ fn projection_preview_summary_response(
         hidden_files: summary.hidden_files,
         visible_commits: summary.visible_commits,
         hidden_commits: summary.hidden_commits,
-        synthetic_commits: summary.synthetic_commits,
     }
 }
 

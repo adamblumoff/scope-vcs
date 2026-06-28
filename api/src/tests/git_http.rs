@@ -559,14 +559,12 @@ async fn private_upload_pack_without_credentials_challenges_for_auth() {
             author_id: repo.record.owner_user_id.clone(),
             author_visibility: AuthorVisibility::Visible,
             message: "initial".to_string(),
-            mixed_policy: MixedCommitPolicy::SyntheticPublicCommit,
             changes: vec![FileChange {
                 visibility: Visibility::Private,
                 path: ScopePath::parse("/secret.txt").unwrap(),
                 old_content: None,
                 new_content: Some(source_blob("secret")),
             }],
-            visibility_changes: Vec::new(),
         });
 
         let mut catalog = lock_catalog(&state).unwrap();

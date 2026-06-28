@@ -379,7 +379,6 @@ function CommitList({
                 </div>
                 <div className="mt-1 flex flex-wrap gap-2 pl-6 text-xs leading-4 text-muted-foreground">
                   <span>{commit.logical_commit_id}</span>
-                  {commit.synthetic && <span>Synthetic</span>}
                   {commit.author && <span>{commit.author}</span>}
                 </div>
               </div>
@@ -437,7 +436,6 @@ function CommitDetailPanel({
       <div className="border-b border-border px-2 py-3">
         <div className="flex flex-wrap items-center gap-2">
           <Badge variant="neutral">{commit.logical_commit_id}</Badge>
-          {commit.synthetic && <Badge variant="warning">Synthetic</Badge>}
           {commit.author && <Badge variant="neutral">{commit.author}</Badge>}
         </div>
         <h3 className="mt-2 truncate font-mono text-sm font-semibold leading-5">

@@ -100,9 +100,9 @@ export type StagedFileResponse = { path: string, kind: StagedFileChangeKind, old
 
 export type CommitHistoryResponse = { audience: ProjectionPreviewAudience, repo_id: string, principal_id: string, commits: Array<CommitSummaryResponse>, };
 
-export type CommitSummaryResponse = { projected_id: string, logical_commit_id: string, parent_projected_id: string | null, author: string | null, message: string, synthetic: boolean, change_count: number, };
+export type CommitSummaryResponse = { projected_id: string, logical_commit_id: string, parent_projected_id: string | null, author: string | null, message: string, change_count: number, };
 
-export type CommitDetailResponse = { audience: ProjectionPreviewAudience, repo_id: string, principal_id: string, projected_id: string, logical_commit_id: string, parent_projected_id: string | null, author: string | null, message: string, synthetic: boolean, change_count: number, files: Array<CommitFileResponse>, };
+export type CommitDetailResponse = { audience: ProjectionPreviewAudience, repo_id: string, principal_id: string, projected_id: string, logical_commit_id: string, parent_projected_id: string | null, author: string | null, message: string, change_count: number, files: Array<CommitFileResponse>, };
 
 export type CommitFileResponse = { path: string, kind: StagedFileChangeKind, old_oid: string | null, new_oid: string | null, visibility: Visibility, };
 
@@ -112,11 +112,11 @@ export type ProjectionPreviewResponse = { audience: ProjectionPreviewAudience, s
 
 export type ProjectionPreviewFileResponse = { path: string, oid: string, visibility: Visibility, };
 
-export type ProjectionPreviewCommitResponse = { projected_id: string, logical_commit_id: string, parent_projected_id: string | null, author: string | null, message: string, synthetic: boolean, visibility: ProjectionPreviewCommitVisibilityResponse, change_count: number, };
+export type ProjectionPreviewCommitResponse = { projected_id: string, logical_commit_id: string, parent_projected_id: string | null, author: string | null, message: string, visibility: ProjectionPreviewCommitVisibilityResponse, change_count: number, };
 
-export type ProjectionPreviewCommitVisibilityResponse = "FullyPublic" | "Synthetic" | "Mixed" | "FullyPrivate";
+export type ProjectionPreviewCommitVisibilityResponse = "FullyPublic" | "Mixed" | "FullyPrivate";
 
-export type ProjectionPreviewSummaryResponse = { visible_files: number, hidden_files: number, visible_commits: number, hidden_commits: number, synthetic_commits: number, };
+export type ProjectionPreviewSummaryResponse = { visible_files: number, hidden_files: number, visible_commits: number, hidden_commits: number, };
 
 export const CliAuthApiEndpoints = {
   accountSession: "/v1/session",

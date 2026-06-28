@@ -233,7 +233,12 @@ pub(crate) fn ensure_published_receive_pack_staging_repo(
             "cloning receive-pack staging repo",
         )?;
     } else {
-        let projection = project_graph(&repo.policy, &repo.graph, &principal);
+        let projection = project_graph(
+            &repo.policy,
+            &repo.graph,
+            &repo.visibility_events,
+            &principal,
+        );
         let seed_repo = projection_bare_repo(
             state.object_store.as_ref(),
             &state.git_cache_root()?,
