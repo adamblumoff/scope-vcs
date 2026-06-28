@@ -1,4 +1,3 @@
-use crate::domain::git_projection::build_virtual_git_projection;
 use crate::domain::policy::{
     Policy, Principal, PrincipalKind, ScopePath, Visibility, VisibilityRule,
 };
@@ -52,6 +51,7 @@ mod git_receive;
 mod obsolete_routes;
 mod readiness;
 mod repo_cleanup;
+mod repo_events;
 mod repo_lifecycle;
 mod repo_visibility;
 mod review_publish;
@@ -211,6 +211,7 @@ fn test_state_with_repo() -> AppState {
         ),
         object_store: Arc::new(MemoryObjectStore::new()),
         operator_token: None,
+        repo_events: crate::repo_events::RepoChangeBus::default(),
     }
 }
 
@@ -231,6 +232,7 @@ fn test_state_with_metadata(metadata: crate::db::MetadataStore) -> AppState {
         ),
         object_store: Arc::new(MemoryObjectStore::new()),
         operator_token: None,
+        repo_events: crate::repo_events::RepoChangeBus::default(),
     };
     cache_test_jwks(&state);
     state
@@ -310,6 +312,7 @@ fn test_repo(owner_id: &str) -> StoredRepository {
             owner_user_id: owner_id.to_string(),
             publication_state: RepoPublicationState::Published,
             default_visibility: Visibility::Public,
+            change_version: 1,
         },
         settings: RepoSettings::default(),
         first_push_token: None,

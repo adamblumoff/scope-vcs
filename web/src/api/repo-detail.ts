@@ -1,6 +1,7 @@
 import {
   createApiClient,
   type ApiClient,
+  clerkApiTokenTemplate,
   getPublicApiConnection,
 } from '@/api/client'
 import { loadProjectionPreviewsForRequest } from './projection-preview'
@@ -9,6 +10,7 @@ import { gitRemoteUrl } from './repo-urls'
 import type {
   RepoDetail,
   RepoFile,
+  RepoLiveState,
   RepoParams,
   RepoSession,
   RepoSummary,
@@ -46,10 +48,30 @@ export async function loadRepoForRequest(data: RepoParams) {
     ),
     files,
     kind: 'repo',
+    live: repoLiveState(data, repo),
     projection_previews: projectionPreviews,
     repo,
     review,
   } satisfies RepoDetail
+}
+
+export async function loadRepoLiveStateForRequest(data: RepoParams) {
+  const api = createApiClient()
+  const repo = await api.get<RepoSummary>(`/v1/repos/${data.owner}/${data.repo}`, {
+    auth: 'optional',
+  })
+  return repoLiveState(data, repo)
+}
+
+function repoLiveState(data: RepoParams, repo: RepoSummary): RepoLiveState {
+  return {
+    clerk_token_template: clerkApiTokenTemplate(),
+    event_stream_url: gitRemoteUrl(
+      getPublicApiConnection('building repo event stream URL'),
+      `/v1/repos/${encodeURIComponent(data.owner)}/${encodeURIComponent(data.repo)}/events`,
+    ),
+    repo,
+  }
 }
 
 async function loadOpenRepoReview(

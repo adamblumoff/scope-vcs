@@ -94,6 +94,11 @@ pub(crate) async fn migrate_metadata_schema(db: &DatabaseConnection) -> Result<(
                         .not_null(),
                 )
                 .col(
+                    ColumnDef::new(Repositories::ChangeVersion)
+                        .big_integer()
+                        .not_null(),
+                )
+                .col(
                     ColumnDef::new(Repositories::Settings)
                         .json_binary()
                         .not_null(),

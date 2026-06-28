@@ -128,6 +128,7 @@ pub struct RepoRecord {
     pub owner_user_id: String,
     pub publication_state: RepoPublicationState,
     pub default_visibility: Visibility,
+    pub change_version: u64,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -231,6 +232,7 @@ impl StoredRepository {
                 owner_user_id: owner.id.clone(),
                 publication_state: RepoPublicationState::PendingFirstPush,
                 default_visibility,
+                change_version: 1,
             },
             settings: RepoSettings::default(),
             first_push_token: None,
@@ -277,6 +279,10 @@ impl StoredRepository {
             }
         }
         present
+    }
+
+    pub fn bump_change_version(&mut self) {
+        self.record.change_version = self.record.change_version.saturating_add(1);
     }
 
     pub fn live_tree(&self) -> BTreeMap<ScopePath, SourceBlob> {

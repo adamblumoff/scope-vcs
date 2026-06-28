@@ -43,6 +43,7 @@ fn test_repo() -> StoredRepository {
             owner_user_id: TEST_OWNER_ID.to_string(),
             publication_state: RepoPublicationState::Published,
             default_visibility: Visibility::Public,
+            change_version: 1,
         },
         settings: RepoSettings::default(),
         first_push_token: None,

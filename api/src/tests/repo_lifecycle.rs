@@ -375,6 +375,35 @@ async fn get_repo_route_returns_owner_summary() {
     assert_eq!(body["owner_handle"], TEST_REPO_OWNER);
     assert_eq!(body["name"], TEST_REPO_NAME);
     assert_eq!(body["role"], "Owner");
+    assert_eq!(body["change_version"], 1);
+}
+
+#[tokio::test]
+async fn get_repo_route_hides_change_version_from_public_reader() {
+    let state = test_state_with_repo();
+    {
+        let mut repo = repo_with_readme();
+        repo.bump_change_version();
+        repo.bump_change_version();
+        let mut catalog = lock_catalog(&state).unwrap();
+        catalog.repositories.insert(TEST_REPO_ID.to_string(), repo);
+    }
+
+    let response = router(state)
+        .oneshot(
+            Request::builder()
+                .method("GET")
+                .uri("/v1/repos/owner/repo")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = response_json(response).await;
+    assert_eq!(body["role"], serde_json::Value::Null);
+    assert_eq!(body["change_version"], 0);
 }
 
 #[tokio::test]

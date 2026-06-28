@@ -11,6 +11,7 @@ use crate::{
     error::ApiError,
     object_store::{EncryptedObjectStore, ObjectStore, S3ObjectStore},
     persistence::ensure_private_dir,
+    repo_events::{RepoChangeBus, RepoChangeEvent},
 };
 use serde::Serialize;
 use std::{
@@ -26,6 +27,7 @@ pub struct AppState {
     pub(crate) clerk: ClerkVerifier,
     pub(crate) object_store: Arc<dyn ObjectStore>,
     pub(crate) operator_token: Option<Arc<str>>,
+    pub(crate) repo_events: RepoChangeBus,
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize)]
@@ -119,15 +121,19 @@ impl AppState {
         let repo_root = git_repo_root();
         let data_dir = data_dir(&repo_root);
         ensure_private_dir(&data_dir).map_err(|error| anyhow::anyhow!(error.message))?;
+        let metadata = MetadataStore::connect_from_env()?;
+        let repo_events = RepoChangeBus::default();
+        metadata.start_repo_change_listener(repo_events.clone())?;
 
         let state = Self {
-            metadata: MetadataStore::connect_from_env()?,
+            metadata,
             data_dir: Arc::new(data_dir),
             clerk: ClerkVerifier::from_env(),
             object_store: Arc::new(EncryptedObjectStore::from_env(Arc::new(
                 S3ObjectStore::from_env()?,
             ))?),
             operator_token: non_empty_env(SCOPE_OPERATOR_TOKEN_ENV).map(Arc::from),
+            repo_events,
         };
         best_effort_drain_pending_repo_storage_deletions(&state);
         best_effort_drain_pending_source_blob_deletions(&state);
@@ -151,6 +157,7 @@ impl AppState {
             ),
             object_store: Arc::new(crate::object_store::MemoryObjectStore::new()),
             operator_token: None,
+            repo_events: RepoChangeBus::default(),
         }
     }
 
@@ -159,6 +166,20 @@ impl AppState {
         let cache_root = self.data_dir.join("git-cache");
         ensure_private_dir(&cache_root)?;
         Ok(cache_root)
+    }
+
+    pub(crate) fn publish_repo_change(&self, repo_id: &str, version: u64, reason: &'static str) {
+        let event = RepoChangeEvent::new(repo_id, version, reason);
+        self.repo_events.publish_event(event.clone());
+        if let Err(error) = self.metadata.notify_repo_change(&event) {
+            tracing::warn!(
+                repo_id,
+                version,
+                reason,
+                error = %error.message,
+                "failed to publish repo change notification"
+            );
+        }
     }
 }
 

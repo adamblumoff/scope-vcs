@@ -72,6 +72,7 @@ pub(super) fn connect_postgres_test_store(
             db: Arc::new(db),
             runtime,
         }),
+        postgres_database_url: Some(Arc::from(target.database_url.clone())),
     })
 }
 

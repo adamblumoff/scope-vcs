@@ -233,13 +233,10 @@ fn staged_new_private_file_stays_out_of_public_projection() {
         &repo.visibility_events,
         &Principal::public(),
     );
-    let public_git =
-        build_virtual_git_projection(&MemoryObjectStore::new(), &public_projection).unwrap();
     assert!(
-        !public_git
-            .blobs
-            .iter()
-            .any(|blob| blob.path == "/secret-plan.md")
+        !public_projection
+            .visible_paths()
+            .contains(&"/secret-plan.md".to_string())
     );
     let owner = Principal {
         id: repo.record.owner_user_id.clone(),
@@ -248,11 +245,9 @@ fn staged_new_private_file_stays_out_of_public_projection() {
     let owner_projection =
         project_graph(&repo.policy, &repo.graph, &repo.visibility_events, &owner);
     assert!(
-        build_virtual_git_projection(&MemoryObjectStore::new(), &owner_projection)
-            .unwrap()
-            .blobs
-            .iter()
-            .any(|blob| blob.path == "/secret-plan.md")
+        owner_projection
+            .visible_paths()
+            .contains(&"/secret-plan.md".to_string())
     );
 }
 
@@ -281,13 +276,10 @@ fn staged_new_file_inherits_private_parent_visibility() {
         &repo.visibility_events,
         &Principal::public(),
     );
-    let public_git =
-        build_virtual_git_projection(&MemoryObjectStore::new(), &public_projection).unwrap();
     assert!(
-        !public_git
-            .blobs
-            .iter()
-            .any(|blob| blob.path == "/private/new.txt")
+        !public_projection
+            .visible_paths()
+            .contains(&"/private/new.txt".to_string())
     );
 }
 #[tokio::test]

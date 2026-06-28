@@ -1,4 +1,3 @@
-use crate::domain::git_projection::{VirtualGitProjection, build_virtual_git_projection};
 use crate::domain::policy::{Principal, ScopePath, Visibility};
 use crate::domain::projection::project_graph;
 use crate::domain::store::{RepoRole, RepoSettings};
@@ -109,6 +108,7 @@ pub(crate) async fn get_repo(
         name: repo.record.name.clone(),
         lifecycle_state: repo.record.publication_state,
         default_visibility: repo.record.default_visibility,
+        change_version: repo_change_version_for_role(&repo, role),
         role,
         staged_update_pending,
         push_blocked_by_staged_update,
@@ -177,27 +177,6 @@ pub(crate) async fn get_projection(
     Ok(Json(projection_response(
         state.object_store.as_ref(),
         projection,
-    )?))
-}
-
-pub(crate) async fn get_git_projection(
-    State(state): State<AppState>,
-    headers: HeaderMap,
-    Path((owner, repo_name)): Path<(String, String)>,
-) -> Result<Json<VirtualGitProjection>, ApiError> {
-    let repo = find_repo(&state, &owner, &repo_name)?;
-    let user = optional_scope_user(&state, &headers).await?;
-    let principal = principal_for_scope_user(&repo, user.as_ref());
-    ensure_repo_read(&state, &repo, &principal)?;
-    let projection = project_graph(
-        &repo.policy,
-        &repo.graph,
-        &repo.visibility_events,
-        &principal,
-    );
-    Ok(Json(build_virtual_git_projection(
-        state.object_store.as_ref(),
-        &projection,
     )?))
 }
 
@@ -281,6 +260,11 @@ pub(crate) async fn update_file_visibility(
         update_paths,
         visibility,
     )?;
+    state.publish_repo_change(
+        &updated.record.id,
+        updated.record.change_version,
+        "visibility-changed",
+    );
 
     let principal = Principal {
         id: updated.record.owner_user_id.clone(),
@@ -352,6 +336,11 @@ pub(crate) async fn update_settings(
         },
         input.default_new_file_visibility,
     )?;
+    state.publish_repo_change(
+        &updated.record.id,
+        updated.record.change_version,
+        "settings-changed",
+    );
 
     Ok(Json(RepoSettingsResponse {
         default_new_file_visibility: updated.record.default_visibility,

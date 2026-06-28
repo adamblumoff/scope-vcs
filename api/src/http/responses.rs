@@ -204,6 +204,7 @@ pub(crate) struct RepoSummaryResponse {
     pub(crate) name: String,
     pub(crate) lifecycle_state: RepoPublicationState,
     pub(crate) default_visibility: Visibility,
+    pub(crate) change_version: u64,
     pub(crate) role: Option<RepoRole>,
     pub(crate) staged_update_pending: bool,
     pub(crate) push_blocked_by_staged_update: bool,
@@ -436,10 +437,19 @@ pub(crate) fn repo_summary_for_user(
         name: repo.record.name.clone(),
         lifecycle_state: repo.record.publication_state,
         default_visibility: repo.record.default_visibility,
+        change_version: repo_change_version_for_role(repo, Some(role)),
         role: Some(role),
         staged_update_pending: role == RepoRole::Owner && repo.staged_update.is_some(),
         push_blocked_by_staged_update: role >= RepoRole::Writer && repo.staged_update.is_some(),
     })
+}
+
+pub(crate) fn repo_change_version_for_role(repo: &StoredRepository, role: Option<RepoRole>) -> u64 {
+    if role.is_some_and(|role| role >= RepoRole::Writer) {
+        repo.record.change_version
+    } else {
+        0
+    }
 }
 
 pub(crate) fn repo_init_response(

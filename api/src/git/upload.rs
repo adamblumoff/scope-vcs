@@ -1,4 +1,3 @@
-use crate::domain::git_projection::projection_blob_text;
 use crate::domain::policy::Principal;
 use crate::domain::projection::{Projection, project_graph};
 use crate::domain::store::{RepoPublicationState, RepoRole};
@@ -11,6 +10,7 @@ use crate::{
         git_credential_error, git_read_authorization_from_headers,
         storage::cached_raw_git_snapshot_repo,
     },
+    object_store::source_blob_text,
     state::AppState,
     state::{ensure_repo_read, find_repo, role_for_principal},
 };
@@ -236,7 +236,7 @@ pub(crate) fn projection_bare_repo(
             let path = change.path.as_str().to_string();
             match &change.new_content {
                 Some(blob) => {
-                    visible_tree.insert(path, projection_blob_text(store, blob)?);
+                    visible_tree.insert(path, source_blob_text(store, blob)?);
                 }
                 None => {
                     visible_tree.remove(&path);

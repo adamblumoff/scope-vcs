@@ -335,13 +335,23 @@ pub(crate) fn handle_git_receive_pack(
                     .map(|file| file.blob.clone())
                     .chain(std::iter::once(import.git_snapshot.clone()))
                     .collect::<Vec<_>>();
-                if let Err(error) =
-                    persist_pending_import(state, owner, repo_name, &credential, import)
-                {
-                    crate::state::best_effort_cleanup_rollback_source_blobs(state, &uploaded_blobs);
-                    let _ = fs::remove_dir_all(&staging_repo);
-                    return Err(error);
-                }
+                let change_version =
+                    match persist_pending_import(state, owner, repo_name, &credential, import) {
+                        Ok(change_version) => change_version,
+                        Err(error) => {
+                            crate::state::best_effort_cleanup_rollback_source_blobs(
+                                state,
+                                &uploaded_blobs,
+                            );
+                            let _ = fs::remove_dir_all(&staging_repo);
+                            return Err(error);
+                        }
+                    };
+                state.publish_repo_change(
+                    &crate::domain::store::repo_id(owner, repo_name),
+                    change_version,
+                    "first-push-received",
+                );
                 tracing::info!(
                     owner,
                     repo = repo_name,
@@ -380,6 +390,12 @@ pub(crate) fn handle_git_receive_pack(
                     let _ = fs::remove_dir_all(&staging_repo);
                     return Err(error);
                 }
+                let repo = find_repo(state, owner, repo_name)?;
+                state.publish_repo_change(
+                    &repo.record.id,
+                    repo.record.change_version,
+                    "push-received",
+                );
                 tracing::info!(
                     owner,
                     repo = repo_name,

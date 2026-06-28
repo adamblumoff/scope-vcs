@@ -77,7 +77,7 @@ async function readClerkApiToken() {
   return getToken({ template: clerkApiTokenTemplate() })
 }
 
-function clerkApiTokenTemplate() {
+export function clerkApiTokenTemplate() {
   return runtimeEnv(clerkApiTokenTemplateEnv) ?? defaultClerkApiTokenTemplate
 }
 
