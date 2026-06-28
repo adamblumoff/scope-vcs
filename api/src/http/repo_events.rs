@@ -40,7 +40,12 @@ pub(crate) async fn repo_events(
         return Err(error);
     }
 
-    let initial = RepoChangeEvent::new(&repo_id, repo.record.change_version, "connected");
+    let initial = event_for_principal(
+        &state,
+        &repo,
+        &principal,
+        RepoChangeEvent::new(&repo_id, repo.record.change_version, "connected"),
+    )?;
     let updates = stream::unfold(
         RepoEventStreamState {
             lagged_repo_id: repo_id,
@@ -61,19 +66,16 @@ pub(crate) async fn repo_events(
                 },
             };
 
-            if stream_principal(
+            let event = match stream_event_for_user(
                 &stream_state.state,
                 &stream_state.owner,
                 &stream_state.repo_name,
                 stream_state.user.as_ref(),
-            )
-            .and_then(|(repo, principal)| {
-                ensure_repo_events_allowed(&stream_state.state, &repo, &principal)
-            })
-            .is_err()
-            {
-                return None;
-            }
+                event,
+            ) {
+                Ok(event) => event,
+                Err(_) => return None,
+            };
 
             Some((sse_event(event), stream_state))
         },
@@ -97,21 +99,17 @@ struct RepoEventStreamState {
     user: Option<UserAccount>,
 }
 
-fn stream_principal(
+fn stream_event_for_user(
     state: &AppState,
     owner: &str,
     repo_name: &str,
     user: Option<&UserAccount>,
-) -> Result<
-    (
-        crate::domain::store::StoredRepository,
-        crate::domain::policy::Principal,
-    ),
-    ApiError,
-> {
+    event: RepoChangeEvent,
+) -> Result<RepoChangeEvent, ApiError> {
     let repo = find_repo(state, owner, repo_name)?;
     let principal = principal_for_scope_user(&repo, user);
-    Ok((repo, principal))
+    ensure_repo_events_allowed(state, &repo, &principal)?;
+    event_for_principal(state, &repo, &principal, event)
 }
 
 fn ensure_repo_events_allowed(
@@ -119,15 +117,32 @@ fn ensure_repo_events_allowed(
     repo: &crate::domain::store::StoredRepository,
     principal: &crate::domain::policy::Principal,
 ) -> Result<(), ApiError> {
-    ensure_repo_read(state, repo, principal)?;
+    ensure_repo_read(state, repo, principal)
+}
+
+fn event_for_principal(
+    state: &AppState,
+    repo: &crate::domain::store::StoredRepository,
+    principal: &crate::domain::policy::Principal,
+    event: RepoChangeEvent,
+) -> Result<RepoChangeEvent, ApiError> {
     if role_for_principal(state, repo, principal)?.is_some_and(|role| role >= RepoRole::Writer) {
-        Ok(())
-    } else {
-        Err(ApiError::not_found(format!(
-            "repo {} not found",
-            repo.record.id
-        )))
+        return Ok(event);
     }
+
+    let RepoChangeEvent {
+        reason, repo_id, ..
+    } = event;
+    let reason = match reason.as_str() {
+        "connected" | "lagged" => reason,
+        _ => "repo-changed".to_string(),
+    };
+
+    Ok(RepoChangeEvent {
+        reason,
+        repo_id,
+        version: 0,
+    })
 }
 
 fn sse_event(event: RepoChangeEvent) -> Result<Event, Infallible> {

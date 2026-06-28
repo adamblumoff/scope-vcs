@@ -85,7 +85,15 @@ export function useRepoLiveRefresh(
       if (event.repo_id !== live.repo.id) {
         return
       }
+      if (event.reason === 'connected') {
+        return
+      }
       if (event.reason === 'lagged') {
+        forceRefreshPending = true
+        void flushRefresh()
+        return
+      }
+      if (!usesVersionedRepoChangeEvents(live)) {
         forceRefreshPending = true
         void flushRefresh()
         return
@@ -137,7 +145,11 @@ export function useRepoLiveRefresh(
   }, [getToken, invalidate, isLoaded, live])
 }
 
-function canUseRepoLiveRefresh(live: RepoLiveState) {
+export function canUseRepoLiveRefresh(_live: RepoLiveState) {
+  return true
+}
+
+export function usesVersionedRepoChangeEvents(live: RepoLiveState) {
   return (
     live.repo.role === 'Owner' ||
     live.repo.role === 'Maintainer' ||
