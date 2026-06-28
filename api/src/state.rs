@@ -171,7 +171,10 @@ impl AppState {
     pub(crate) fn publish_repo_change(&self, repo_id: &str, version: u64, reason: &'static str) {
         let event = RepoChangeEvent::new(repo_id, version, reason);
         self.repo_events.publish_event(event.clone());
-        if let Err(error) = self.metadata.notify_repo_change(&event) {
+        if let Err(error) = self
+            .metadata
+            .notify_repo_change(self.repo_events.origin_id(), &event)
+        {
             tracing::warn!(
                 repo_id,
                 version,

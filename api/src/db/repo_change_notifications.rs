@@ -1,7 +1,9 @@
 use super::{MetadataStore, MetadataStoreInner, run_api_db_on};
 use crate::{
     error::ApiError,
-    repo_events::{POSTGRES_REPO_CHANGE_CHANNEL, RepoChangeBus, RepoChangeEvent},
+    repo_events::{
+        POSTGRES_REPO_CHANGE_CHANNEL, RepoChangeBus, RepoChangeEvent, RepoChangeNotification,
+    },
 };
 use sea_orm::{ConnectionTrait, DbBackend, Statement};
 use std::sync::Arc;
@@ -14,8 +16,13 @@ impl MetadataStore {
         bus.start_postgres_listener(database_url.to_string())
     }
 
-    pub(crate) fn notify_repo_change(&self, event: &RepoChangeEvent) -> Result<(), ApiError> {
-        let payload = serde_json::to_string(event).map_err(ApiError::internal)?;
+    pub(crate) fn notify_repo_change(
+        &self,
+        origin_id: &str,
+        event: &RepoChangeEvent,
+    ) -> Result<(), ApiError> {
+        let notification = RepoChangeNotification::new(origin_id, event);
+        let payload = serde_json::to_string(&notification).map_err(ApiError::internal)?;
         match self.inner.as_ref() {
             MetadataStoreInner::Postgres { db, runtime } => {
                 let db = Arc::clone(db);

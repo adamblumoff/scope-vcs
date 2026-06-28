@@ -123,7 +123,10 @@ pub(crate) async fn delete_repo(
     Path((owner, repo_name)): Path<(String, String)>,
 ) -> Result<Json<DeleteRepoResponse>, ApiError> {
     let user = require_scope_user(&state, &headers).await?;
+    let repo = find_repo(&state, &owner, &repo_name)?;
+    let delete_version = repo.record.change_version.saturating_add(1);
     let repo_id = state.metadata.delete_repo(&owner, &repo_name, &user.id)?;
+    state.publish_repo_change(&repo_id, delete_version, "repo-deleted");
 
     crate::state::best_effort_drain_pending_repo_storage_deletions(&state);
     crate::state::best_effort_drain_pending_source_blob_deletions(&state);

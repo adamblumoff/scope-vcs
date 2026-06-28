@@ -169,3 +169,53 @@ async fn repo_events_close_when_write_access_is_revoked() {
         .unwrap();
     assert!(closed.is_none());
 }
+
+#[tokio::test]
+async fn repo_events_close_when_repo_is_deleted() {
+    let state = test_state_with_repo();
+    cache_test_jwks(&state);
+    {
+        let mut catalog = lock_catalog(&state).unwrap();
+        catalog
+            .repositories
+            .insert(TEST_REPO_ID.to_string(), repo_with_readme());
+    }
+    let app = router(state);
+
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("GET")
+                .uri("/v1/repos/owner/repo/events")
+                .header(AUTHORIZATION, bearer_header())
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let mut stream = response.into_body().into_data_stream();
+    let initial = stream.next().await.unwrap().unwrap();
+    let initial = String::from_utf8(initial.to_vec()).unwrap();
+    assert!(initial.contains(r#""reason":"connected""#));
+
+    let delete_response = app
+        .oneshot(
+            Request::builder()
+                .method("DELETE")
+                .uri("/v1/repos/owner/repo")
+                .header(AUTHORIZATION, bearer_header())
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(delete_response.status(), StatusCode::OK);
+    let closed = tokio::time::timeout(std::time::Duration::from_secs(1), stream.next())
+        .await
+        .unwrap();
+    assert!(closed.is_none());
+}

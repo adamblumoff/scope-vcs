@@ -2,7 +2,7 @@ use serde::{Deserialize, Serialize};
 use std::{
     collections::BTreeMap,
     sync::{Arc, Mutex},
-    time::Duration,
+    time::{Duration, SystemTime, UNIX_EPOCH},
 };
 use tokio::sync::broadcast;
 
@@ -26,12 +26,41 @@ impl RepoChangeEvent {
     }
 }
 
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Debug, Deserialize, Serialize)]
+pub(crate) struct RepoChangeNotification {
+    pub(crate) event: RepoChangeEvent,
+    pub(crate) origin_id: String,
+}
+
+impl RepoChangeNotification {
+    pub(crate) fn new(origin_id: &str, event: &RepoChangeEvent) -> Self {
+        Self {
+            event: event.clone(),
+            origin_id: origin_id.to_string(),
+        }
+    }
+}
+
+#[derive(Clone, Debug)]
 pub(crate) struct RepoChangeBus {
     channels: Arc<Mutex<BTreeMap<String, broadcast::Sender<RepoChangeEvent>>>>,
+    origin_id: Arc<str>,
+}
+
+impl Default for RepoChangeBus {
+    fn default() -> Self {
+        Self {
+            channels: Arc::new(Mutex::new(BTreeMap::new())),
+            origin_id: Arc::from(new_origin_id()),
+        }
+    }
 }
 
 impl RepoChangeBus {
+    pub(crate) fn origin_id(&self) -> &str {
+        &self.origin_id
+    }
+
     pub(crate) fn start_postgres_listener(&self, database_url: String) -> anyhow::Result<()> {
         let bus = self.clone();
         std::thread::Builder::new()
@@ -108,8 +137,12 @@ async fn listen_for_postgres_repo_changes(
     listener.listen(POSTGRES_REPO_CHANGE_CHANNEL).await?;
     loop {
         let notification = listener.recv().await?;
-        match serde_json::from_str::<RepoChangeEvent>(notification.payload()) {
-            Ok(event) => bus.publish_event(event),
+        match serde_json::from_str::<RepoChangeNotification>(notification.payload()) {
+            Ok(notification) => {
+                if notification.origin_id != bus.origin_id() {
+                    bus.publish_event(notification.event);
+                }
+            }
             Err(error) => tracing::warn!(
                 %error,
                 payload = notification.payload(),
@@ -117,4 +150,12 @@ async fn listen_for_postgres_repo_changes(
             ),
         }
     }
+}
+
+fn new_origin_id() -> String {
+    let nanos = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|duration| duration.as_nanos())
+        .unwrap_or_default();
+    format!("{}-{nanos}", std::process::id())
 }

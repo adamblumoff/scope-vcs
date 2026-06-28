@@ -31,7 +31,6 @@ export function useRepoLiveRefresh(
     let pendingVersion: number | null = null
     let refreshInFlight = false
     let retryTimeout: number | null = null
-    let streamCloseResynced = false
 
     const scheduleRetry = () => {
       if (stopped || retryTimeout !== null) {
@@ -98,11 +97,7 @@ export function useRepoLiveRefresh(
       void flushRefresh()
     }
 
-    const onStreamClosed = () => {
-      if (streamCloseResynced) {
-        return
-      }
-      streamCloseResynced = true
+    const onStreamInterrupted = () => {
       forceRefreshPending = true
       void flushRefresh()
     }
@@ -117,12 +112,13 @@ export function useRepoLiveRefresh(
             controller.signal,
           )
           if (!controller.signal.aborted && result === 'closed') {
-            onStreamClosed()
+            onStreamInterrupted()
           }
         } catch (error) {
           if (controller.signal.aborted) {
             return
           }
+          onStreamInterrupted()
         }
         if (!stopped) {
           await delay(RECONNECT_DELAY_MS, controller.signal)
