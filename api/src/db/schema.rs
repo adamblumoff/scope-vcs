@@ -23,61 +23,7 @@ pub(crate) async fn migrate_metadata_schema(db: &DatabaseConnection) -> Result<(
         ensure_metadata_reset_events_table(&manager).await?;
     }
 
-    manager
-        .create_table(
-            Table::create()
-                .table(MetadataLocks::Table)
-                .if_not_exists()
-                .col(
-                    ColumnDef::new(MetadataLocks::Key)
-                        .string()
-                        .not_null()
-                        .primary_key(),
-                )
-                .col(
-                    ColumnDef::new(MetadataLocks::PendingRepoStorageDeletions)
-                        .json_binary()
-                        .not_null(),
-                )
-                .col(
-                    ColumnDef::new(MetadataLocks::PendingSourceBlobDeletions)
-                        .json_binary()
-                        .not_null(),
-                )
-                .to_owned(),
-        )
-        .await?;
-
-    manager
-        .create_index(
-            Index::create()
-                .name("idx_scope_users_email")
-                .table(Users::Table)
-                .col(Users::Email)
-                .unique()
-                .if_not_exists()
-                .to_owned(),
-        )
-        .await?;
-
-    manager
-        .create_table(
-            Table::create()
-                .table(Users::Table)
-                .if_not_exists()
-                .col(ColumnDef::new(Users::Id).string().not_null().primary_key())
-                .col(
-                    ColumnDef::new(Users::Handle)
-                        .string()
-                        .not_null()
-                        .unique_key(),
-                )
-                .col(ColumnDef::new(Users::Email).string().not_null())
-                .col(ColumnDef::new(Users::EmailVerified).boolean().not_null())
-                .col(ColumnDef::new(Users::Access).string().not_null())
-                .to_owned(),
-        )
-        .await?;
+    ensure_metadata_locks_and_users(&manager).await?;
 
     manager
         .create_table(
@@ -437,6 +383,66 @@ pub(crate) async fn migrate_metadata_schema(db: &DatabaseConnection) -> Result<(
     Ok(())
 }
 
+async fn ensure_metadata_locks_and_users(manager: &SchemaManager<'_>) -> Result<(), DbErr> {
+    manager
+        .create_table(
+            Table::create()
+                .table(MetadataLocks::Table)
+                .if_not_exists()
+                .col(
+                    ColumnDef::new(MetadataLocks::Key)
+                        .string()
+                        .not_null()
+                        .primary_key(),
+                )
+                .col(
+                    ColumnDef::new(MetadataLocks::PendingRepoStorageDeletions)
+                        .json_binary()
+                        .not_null(),
+                )
+                .col(
+                    ColumnDef::new(MetadataLocks::PendingSourceBlobDeletions)
+                        .json_binary()
+                        .not_null(),
+                )
+                .to_owned(),
+        )
+        .await?;
+
+    manager
+        .create_table(
+            Table::create()
+                .table(Users::Table)
+                .if_not_exists()
+                .col(ColumnDef::new(Users::Id).string().not_null().primary_key())
+                .col(
+                    ColumnDef::new(Users::Handle)
+                        .string()
+                        .not_null()
+                        .unique_key(),
+                )
+                .col(ColumnDef::new(Users::Email).string().not_null())
+                .col(ColumnDef::new(Users::EmailVerified).boolean().not_null())
+                .col(ColumnDef::new(Users::Access).string().not_null())
+                .to_owned(),
+        )
+        .await?;
+
+    manager
+        .create_index(
+            Index::create()
+                .name("idx_scope_users_email")
+                .table(Users::Table)
+                .col(Users::Email)
+                .unique()
+                .if_not_exists()
+                .to_owned(),
+        )
+        .await?;
+
+    Ok(())
+}
+
 async fn ensure_metadata_reset_events_table(manager: &SchemaManager<'_>) -> Result<(), DbErr> {
     manager
         .create_table(
@@ -572,6 +578,43 @@ fn is_destructive_pre_alpha_reset_drift(drift: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn creates_users_table_before_user_email_index() {
+        use sea_orm::{DbBackend, MockDatabase, MockExecResult};
+
+        let db = MockDatabase::new(DbBackend::Postgres)
+            .append_exec_results(vec![MockExecResult::default(); 3])
+            .into_connection();
+        let manager = SchemaManager::new(&db);
+
+        ensure_metadata_locks_and_users(&manager).await.unwrap();
+
+        let sql = db
+            .into_transaction_log()
+            .into_iter()
+            .flat_map(|transaction| {
+                transaction
+                    .statements()
+                    .iter()
+                    .map(|statement| statement.sql.clone())
+                    .collect::<Vec<_>>()
+            })
+            .collect::<Vec<_>>();
+        let users_table = sql
+            .iter()
+            .position(|statement| statement.contains("CREATE TABLE IF NOT EXISTS \"scope_users\""))
+            .expect("scope_users table should be created");
+        let email_index = sql
+            .iter()
+            .position(|statement| statement.contains("idx_scope_users_email"))
+            .expect("scope_users email index should be created");
+
+        assert!(
+            users_table < email_index,
+            "scope_users must be created before idx_scope_users_email"
+        );
+    }
 
     #[test]
     fn destructive_pre_alpha_reset_drift_allows_pre_alpha_shape_changes() {
