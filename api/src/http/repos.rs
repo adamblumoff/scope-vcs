@@ -101,6 +101,8 @@ pub(crate) async fn get_repo(
     ensure_repo_read(&state, &repo, &principal)?;
     let role = role_for_principal(&state, &repo, &principal)?;
     let staged_update_pending = role == Some(RepoRole::Owner) && repo.staged_update.is_some();
+    let push_blocked_by_staged_update =
+        role.is_some_and(|role| role >= RepoRole::Writer) && repo.staged_update.is_some();
     let summary = RepoSummaryResponse {
         id: repo.record.id.clone(),
         owner_handle: repo.record.owner_handle.clone(),
@@ -109,6 +111,7 @@ pub(crate) async fn get_repo(
         default_visibility: repo.record.default_visibility,
         role,
         staged_update_pending,
+        push_blocked_by_staged_update,
     };
 
     Ok(Json(summary))

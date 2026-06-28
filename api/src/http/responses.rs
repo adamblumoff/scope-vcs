@@ -206,6 +206,7 @@ pub(crate) struct RepoSummaryResponse {
     pub(crate) default_visibility: Visibility,
     pub(crate) role: Option<RepoRole>,
     pub(crate) staged_update_pending: bool,
+    pub(crate) push_blocked_by_staged_update: bool,
 }
 
 #[derive(Debug, Serialize)]
@@ -439,6 +440,7 @@ pub(crate) fn repo_summary_for_user(
         default_visibility: repo.record.default_visibility,
         role: Some(role),
         staged_update_pending: role == RepoRole::Owner && repo.staged_update.is_some(),
+        push_blocked_by_staged_update: role >= RepoRole::Writer && repo.staged_update.is_some(),
     })
 }
 

@@ -54,7 +54,7 @@ export type CliSessionsResponse = { sessions: Array<CliSessionResponse>, };
 
 export type CliSessionResponse = { id: string, label: string, created_at_unix: number, last_used_at_unix: number | null, expires_at_unix: number, };
 
-export type RepoSummaryResponse = { id: string, owner_handle: string, name: string, lifecycle_state: RepoPublicationState, default_visibility: Visibility, role: RepoRole | null, staged_update_pending: boolean, };
+export type RepoSummaryResponse = { id: string, owner_handle: string, name: string, lifecycle_state: RepoPublicationState, default_visibility: Visibility, role: RepoRole | null, staged_update_pending: boolean, push_blocked_by_staged_update: boolean, };
 
 export type CreateRepoRequest = { name: string, visibility: Visibility | null, };
 

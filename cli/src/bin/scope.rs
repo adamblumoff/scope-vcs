@@ -15,6 +15,8 @@ use scope_cli::{
         cached_cli_session, delete_stored_session_token, read_stored_session_token,
         store_session_token,
     },
+    git_repo::{ensure_git_repo_ready, push_head_with_bearer, run_git, warn_if_dirty_working_tree},
+    push::{DEFAULT_SCOPE_REMOTE, load_scope_remote, push_authenticated_remote},
 };
 use std::{
     io::{self, Read, Write},
@@ -36,6 +38,7 @@ struct Cli {
 #[derive(Subcommand)]
 enum CommandKind {
     Init(InitArgs),
+    Push(PushArgs),
     Clone(CloneArgs),
     Login(LoginArgs),
     Logout,
@@ -50,6 +53,12 @@ struct InitArgs {
     public: bool,
     #[arg(long, conflicts_with = "public")]
     private: bool,
+}
+
+#[derive(Parser)]
+struct PushArgs {
+    #[arg(long, default_value = DEFAULT_SCOPE_REMOTE)]
+    remote: String,
 }
 
 #[derive(Parser)]
@@ -70,6 +79,7 @@ fn main() -> anyhow::Result<()> {
     let cli = Cli::parse();
     match cli.command {
         CommandKind::Init(args) => init(args),
+        CommandKind::Push(args) => push(args),
         CommandKind::Clone(args) => clone(args),
         CommandKind::Login(args) => login(args),
         CommandKind::Logout => logout(),
@@ -78,7 +88,7 @@ fn main() -> anyhow::Result<()> {
 }
 
 fn init(args: InitArgs) -> anyhow::Result<()> {
-    let git_repo = ensure_git_repo_ready()?;
+    let git_repo = ensure_git_repo_ready("scope init")?;
     let api_url = api_url();
     let repo_name = match args.name.as_deref() {
         Some(name) => normalize_repo_name(name)?,
@@ -107,6 +117,31 @@ fn init(args: InitArgs) -> anyhow::Result<()> {
     }
 
     println!("{}", created.init.review_url);
+    Ok(())
+}
+
+fn push(args: PushArgs) -> anyhow::Result<()> {
+    let git_repo = ensure_git_repo_ready("scope push")?;
+    warn_if_dirty_working_tree(&git_repo)?;
+
+    let api_url = api_url();
+    let target = load_scope_remote(&api_url, &args.remote)?;
+    let client = http_client()?;
+    let session = session_from_cache_or_login(&client, &api_url, local_browser_login)?;
+    let outcome = push_authenticated_remote(&client, &api_url, &session.token, &target)?;
+
+    if outcome.staged_update_pending {
+        println!(
+            "Pushed to Scope: {}/{}\nReview the staged update in the Scope app.",
+            outcome.owner, outcome.repo
+        );
+    } else {
+        println!(
+            "Pushed to Scope: {}/{}\nPush accepted by Scope.",
+            outcome.owner, outcome.repo
+        );
+    }
+
     Ok(())
 }
 
@@ -456,77 +491,7 @@ fn configure_remote(init: &RepoInitResponse) -> anyhow::Result<()> {
 }
 
 fn push_initial_commit(init: &RepoInitResponse, push_secret: &str) -> anyhow::Result<()> {
-    let auth_header = format!("http.extraHeader=Authorization: Bearer {push_secret}");
-    run_git(&[
-        "-c",
-        &auth_header,
-        "push",
-        &init.remote_name,
-        &format!("HEAD:{}", init.push_branch),
-    ])
-}
-
-struct GitRepo {
-    root: PathBuf,
-}
-
-fn ensure_git_repo_ready() -> anyhow::Result<GitRepo> {
-    let root_output = Command::new("git")
-        .args(["rev-parse", "--show-toplevel"])
-        .output()
-        .context("inspect Git repository")?;
-    if !root_output.status.success() {
-        bail!("run scope init from inside an existing Git repository");
-    }
-
-    if !git_success(&["rev-parse", "--verify", "HEAD"]) {
-        bail!("create at least one Git commit before running scope init");
-    }
-
-    let root = String::from_utf8_lossy(&root_output.stdout)
-        .trim()
-        .to_string();
-    if root.is_empty() {
-        bail!("Git repository root could not be determined");
-    }
-
-    Ok(GitRepo {
-        root: PathBuf::from(root),
-    })
-}
-
-fn warn_if_dirty_working_tree(repo: &GitRepo) -> anyhow::Result<()> {
-    let output = Command::new("git")
-        .current_dir(&repo.root)
-        .args(["status", "--porcelain"])
-        .output()
-        .context("inspect Git working tree")?;
-    if !output.status.success() {
-        bail!("git status --porcelain failed");
-    }
-    if !output.stdout.is_empty() {
-        eprintln!("Working tree has uncommitted changes.");
-        eprintln!("Only committed HEAD will be pushed to Scope.");
-    }
-    Ok(())
-}
-
-fn run_git(args: &[&str]) -> anyhow::Result<()> {
-    let status = Command::new("git")
-        .args(args)
-        .status()
-        .with_context(|| format!("run git {}", args.join(" ")))?;
-    if !status.success() {
-        bail!("git {} failed", args.join(" "));
-    }
-    Ok(())
-}
-
-fn git_success(args: &[&str]) -> bool {
-    Command::new("git")
-        .args(args)
-        .status()
-        .is_ok_and(|status| status.success())
+    push_head_with_bearer(&init.git_remote_url, &init.push_branch, push_secret)
 }
 
 fn prompt_repo_name(git_root: &Path) -> anyhow::Result<String> {

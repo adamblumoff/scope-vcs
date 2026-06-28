@@ -27,6 +27,23 @@ pub enum Visibility {
     Public,
 }
 
+#[derive(Clone, Copy, Debug, Deserialize, Eq, Ord, PartialEq, PartialOrd)]
+#[cfg_attr(test, derive(ts_rs::TS))]
+pub enum RepoRole {
+    Reader,
+    Writer,
+    Maintainer,
+    Owner,
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq)]
+#[cfg_attr(test, derive(ts_rs::TS))]
+pub enum RepoPublicationState {
+    PendingFirstPush,
+    PendingPublish,
+    Published,
+}
+
 #[derive(Deserialize)]
 #[cfg_attr(test, derive(ts_rs::TS))]
 pub struct DeviceLoginStartResponse {
@@ -132,8 +149,13 @@ pub struct CreateRepoResponse {
 
 #[derive(Deserialize)]
 pub struct RepoSummaryResponse {
+    pub id: String,
     pub owner_handle: String,
     pub name: String,
+    pub lifecycle_state: RepoPublicationState,
+    pub role: Option<RepoRole>,
+    pub staged_update_pending: bool,
+    pub push_blocked_by_staged_update: bool,
 }
 
 #[derive(Deserialize)]
@@ -242,6 +264,35 @@ pub fn create_repo(
         .context("parse create repository response")
 }
 
+pub fn get_repo(
+    client: &Client,
+    api_url: &str,
+    session_token: &str,
+    owner: &str,
+    repo: &str,
+) -> anyhow::Result<RepoSummaryResponse> {
+    let response = client
+        .get(format!("{api_url}/v1/repos/{owner}/{repo}"))
+        .bearer_auth(session_token)
+        .send()
+        .with_context(|| format!("load Scope repo {owner}/{repo}"))?;
+    match response.status() {
+        StatusCode::UNAUTHORIZED => {
+            anyhow::bail!("not signed in; run scope login")
+        }
+        StatusCode::NOT_FOUND => {
+            anyhow::bail!("repo {owner}/{repo} not found")
+        }
+        _ => {}
+    }
+
+    response
+        .error_for_status()
+        .with_context(|| format!("load Scope repo {owner}/{repo}"))?
+        .json()
+        .context("parse repository response")
+}
+
 pub fn create_clone_credential(
     client: &Client,
     api_url: &str,
@@ -324,6 +375,8 @@ mod tests {
     #[test]
     fn cli_auth_dtos_match_generated_api_contract() {
         assert_type_matches::<SessionIdentity>("SessionIdentity");
+        assert_type_matches::<RepoRole>("RepoRole");
+        assert_type_matches::<RepoPublicationState>("RepoPublicationState");
         assert_type_matches::<UserResponse>("UserResponse");
         assert_type_matches::<AccountSessionResponse>("AccountSessionResponse");
         assert_type_matches::<DeviceLoginStatus>("DeviceLoginStatus");
