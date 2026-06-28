@@ -376,7 +376,6 @@ pub(crate) struct CommitSummaryResponse {
     pub(crate) parent_projected_id: Option<String>,
     pub(crate) author: Option<String>,
     pub(crate) message: String,
-    pub(crate) synthetic: bool,
     pub(crate) change_count: usize,
 }
 
@@ -391,7 +390,6 @@ pub(crate) struct CommitDetailResponse {
     pub(crate) parent_projected_id: Option<String>,
     pub(crate) author: Option<String>,
     pub(crate) message: String,
-    pub(crate) synthetic: bool,
     pub(crate) change_count: usize,
     pub(crate) files: Vec<CommitFileResponse>,
 }
@@ -604,7 +602,6 @@ pub(crate) fn commit_detail_response(
         parent_projected_id: commit.parent_projected_id.clone(),
         author: commit.author.clone(),
         message: commit.message.clone(),
-        synthetic: commit.synthetic,
         change_count: commit.files.len(),
         files: commit.files.iter().map(commit_file_response).collect(),
     }
@@ -617,7 +614,6 @@ fn commit_summary_response(commit: &CommitHistoryCommit) -> CommitSummaryRespons
         parent_projected_id: commit.parent_projected_id.clone(),
         author: commit.author.clone(),
         message: commit.message.clone(),
-        synthetic: commit.synthetic,
         change_count: commit.files.len(),
     }
 }

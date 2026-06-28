@@ -18,7 +18,6 @@ async fn published_default_private_repo_serves_public_file_subset() {
             author_id: repo.record.owner_user_id.clone(),
             author_visibility: AuthorVisibility::Visible,
             message: "initial".to_string(),
-            mixed_policy: MixedCommitPolicy::SyntheticPublicCommit,
             changes: vec![
                 FileChange {
                     visibility: Visibility::Public,
@@ -33,7 +32,6 @@ async fn published_default_private_repo_serves_public_file_subset() {
                     new_content: Some(source_blob("secret")),
                 },
             ],
-            visibility_changes: Vec::new(),
         });
 
         let mut catalog = lock_catalog(&state).unwrap();
@@ -76,7 +74,6 @@ async fn published_repo_projection_preview_serves_public_file_subset() {
             author_id: repo.record.owner_user_id.clone(),
             author_visibility: AuthorVisibility::Visible,
             message: "initial".to_string(),
-            mixed_policy: MixedCommitPolicy::SyntheticPublicCommit,
             changes: vec![
                 FileChange {
                     visibility: Visibility::Public,
@@ -91,7 +88,6 @@ async fn published_repo_projection_preview_serves_public_file_subset() {
                     new_content: Some(source_blob("secret")),
                 },
             ],
-            visibility_changes: Vec::new(),
         });
         repo.graph.commits.push(LogicalCommit {
             id: "rv2".to_string(),
@@ -99,14 +95,12 @@ async fn published_repo_projection_preview_serves_public_file_subset() {
             author_id: repo.record.owner_user_id.clone(),
             author_visibility: AuthorVisibility::Visible,
             message: "private notes".to_string(),
-            mixed_policy: MixedCommitPolicy::SyntheticPublicCommit,
             changes: vec![FileChange {
                 visibility: Visibility::Private,
                 path: ScopePath::parse("/notes/private.md").unwrap(),
                 old_content: None,
                 new_content: Some(source_blob("private notes")),
             }],
-            visibility_changes: Vec::new(),
         });
 
         let mut catalog = lock_catalog(&state).unwrap();
@@ -171,7 +165,6 @@ async fn owner_projection_preview_labels_mixed_visibility_commit() {
             author_id: repo.record.owner_user_id.clone(),
             author_visibility: AuthorVisibility::Visible,
             message: "mixed visibility".to_string(),
-            mixed_policy: MixedCommitPolicy::SyntheticPublicCommit,
             changes: vec![
                 FileChange {
                     visibility: Visibility::Public,
@@ -186,7 +179,6 @@ async fn owner_projection_preview_labels_mixed_visibility_commit() {
                     new_content: Some(source_blob("secret")),
                 },
             ],
-            visibility_changes: Vec::new(),
         });
 
         let mut catalog = lock_catalog(&state).unwrap();
@@ -230,29 +222,22 @@ async fn owner_public_projection_preview_counts_visibility_transition_hidden_com
             author_id: repo.record.owner_user_id.clone(),
             author_visibility: AuthorVisibility::Visible,
             message: "private draft".to_string(),
-            mixed_policy: MixedCommitPolicy::SyntheticPublicCommit,
             changes: vec![FileChange {
                 visibility: Visibility::Private,
                 path: ScopePath::parse("/notes.md").unwrap(),
                 old_content: None,
                 new_content: Some(private_blob.clone()),
             }],
-            visibility_changes: Vec::new(),
         });
-        repo.graph.commits.push(LogicalCommit {
-            id: "rv2".to_string(),
-            parent_ids: vec!["rv1".to_string()],
+        repo.visibility_events.push(VisibilityEvent {
+            id: "vis_1".to_string(),
+            after_commit_id: Some("rv1".to_string()),
+            source_commit_id: None,
             author_id: repo.record.owner_user_id.clone(),
-            author_visibility: AuthorVisibility::Visible,
-            message: "publish notes".to_string(),
-            mixed_policy: MixedCommitPolicy::SyntheticPublicCommit,
-            changes: Vec::new(),
-            visibility_changes: vec![FileVisibilityChange {
-                path: ScopePath::parse("/notes.md").unwrap(),
-                old_visibility: Visibility::Private,
-                new_visibility: Visibility::Public,
-                current_content: Some(private_blob),
-            }],
+            path: ScopePath::parse("/notes.md").unwrap(),
+            old_visibility: Visibility::Private,
+            new_visibility: Visibility::Public,
+            current_content: Some(private_blob),
         });
 
         let mut catalog = lock_catalog(&state).unwrap();
@@ -275,7 +260,7 @@ async fn owner_public_projection_preview_counts_visibility_transition_hidden_com
     let body = response_json(response).await;
     assert_eq!(body["summary"]["visible_commits"], 1);
     assert_eq!(body["summary"]["hidden_commits"], 1);
-    assert_eq!(body["commits"][0]["logical_commit_id"], "rv2");
+    assert_eq!(body["commits"][0]["logical_commit_id"], "vis_1");
     assert_eq!(body["commits"][0]["visibility"], "FullyPublic");
 }
 
@@ -292,14 +277,12 @@ async fn published_default_private_repo_without_public_files_stays_hidden() {
             author_id: repo.record.owner_user_id.clone(),
             author_visibility: AuthorVisibility::Visible,
             message: "initial".to_string(),
-            mixed_policy: MixedCommitPolicy::SyntheticPublicCommit,
             changes: vec![FileChange {
                 visibility: Visibility::Private,
                 path: ScopePath::parse("/secret.txt").unwrap(),
                 old_content: None,
                 new_content: Some(source_blob("secret")),
             }],
-            visibility_changes: Vec::new(),
         });
 
         let mut catalog = lock_catalog(&state).unwrap();
@@ -340,14 +323,12 @@ async fn deleted_public_file_no_longer_makes_private_repo_visible() {
             author_id: repo.record.owner_user_id.clone(),
             author_visibility: AuthorVisibility::Visible,
             message: "initial".to_string(),
-            mixed_policy: MixedCommitPolicy::SyntheticPublicCommit,
             changes: vec![FileChange {
                 visibility: Visibility::Public,
                 path: ScopePath::parse("/README.md").unwrap(),
                 old_content: None,
                 new_content: Some(readme_blob.clone()),
             }],
-            visibility_changes: Vec::new(),
         });
         repo.graph.commits.push(LogicalCommit {
             id: "rv2".to_string(),
@@ -355,14 +336,12 @@ async fn deleted_public_file_no_longer_makes_private_repo_visible() {
             author_id: repo.record.owner_user_id.clone(),
             author_visibility: AuthorVisibility::Visible,
             message: "delete public file".to_string(),
-            mixed_policy: MixedCommitPolicy::SyntheticPublicCommit,
             changes: vec![FileChange {
                 visibility: Visibility::Public,
                 path: ScopePath::parse("/README.md").unwrap(),
                 old_content: Some(readme_blob),
                 new_content: None,
             }],
-            visibility_changes: Vec::new(),
         });
 
         let mut catalog = lock_catalog(&state).unwrap();
@@ -457,7 +436,6 @@ fn git_projection_cache_omits_private_files_for_public_clone() {
             author_id: owner_id,
             author_visibility: AuthorVisibility::Visible,
             message: "initial".to_string(),
-            mixed_policy: MixedCommitPolicy::SyntheticPublicCommit,
             changes: vec![
                 FileChange {
                     visibility: Visibility::Public,
@@ -472,10 +450,9 @@ fn git_projection_cache_omits_private_files_for_public_clone() {
                     new_content: Some(source_blob("nope")),
                 },
             ],
-            visibility_changes: Vec::new(),
         }],
     };
-    let projection = project_graph(&policy, &graph, &Principal::public());
+    let projection = project_graph(&policy, &graph, &[], &Principal::public());
     let cache_root = std::env::temp_dir().join(format!(
         "scope-vcs-git-cache-test-{}-{}",
         std::process::id(),
@@ -517,14 +494,12 @@ fn public_git_projection_starts_at_private_to_public_transition() {
                 author_id: owner_id.clone(),
                 author_visibility: AuthorVisibility::Visible,
                 message: "private draft".to_string(),
-                mixed_policy: MixedCommitPolicy::SyntheticPublicCommit,
                 changes: vec![FileChange {
                     visibility: Visibility::Private,
                     path: ScopePath::parse("/notes.md").unwrap(),
                     old_content: None,
                     new_content: Some(private_blob.clone()),
                 }],
-                visibility_changes: Vec::new(),
             },
             LogicalCommit {
                 id: "rv2".to_string(),
@@ -532,18 +507,16 @@ fn public_git_projection_starts_at_private_to_public_transition() {
                 author_id: owner_id,
                 author_visibility: AuthorVisibility::Visible,
                 message: "public release".to_string(),
-                mixed_policy: MixedCommitPolicy::SyntheticPublicCommit,
                 changes: vec![FileChange {
                     visibility: Visibility::Public,
                     path: ScopePath::parse("/notes.md").unwrap(),
                     old_content: Some(private_blob),
                     new_content: Some(source_blob("public release")),
                 }],
-                visibility_changes: Vec::new(),
             },
         ],
     };
-    let projection = project_graph(&policy, &graph, &Principal::public());
+    let projection = project_graph(&policy, &graph, &[], &Principal::public());
     let cache_root = std::env::temp_dir().join(format!(
         "scope-vcs-git-transition-test-{}-{}",
         std::process::id(),
@@ -566,7 +539,7 @@ fn public_git_projection_starts_at_private_to_public_transition() {
 }
 
 #[test]
-fn public_git_projection_keeps_public_history_before_public_to_private_transition() {
+fn public_git_projection_drops_history_after_public_to_private_transition() {
     let owner_id = test_owner_id();
     let mut policy = Policy::new(Visibility::Public, owner_id.clone());
     policy
@@ -585,14 +558,12 @@ fn public_git_projection_keeps_public_history_before_public_to_private_transitio
                 author_id: owner_id.clone(),
                 author_visibility: AuthorVisibility::Visible,
                 message: "public readme".to_string(),
-                mixed_policy: MixedCommitPolicy::SyntheticPublicCommit,
                 changes: vec![FileChange {
                     visibility: Visibility::Public,
                     path: ScopePath::parse("/README.md").unwrap(),
                     old_content: None,
                     new_content: Some(public_blob.clone()),
                 }],
-                visibility_changes: Vec::new(),
             },
             LogicalCommit {
                 id: "rv2".to_string(),
@@ -600,23 +571,16 @@ fn public_git_projection_keeps_public_history_before_public_to_private_transitio
                 author_id: owner_id,
                 author_visibility: AuthorVisibility::Visible,
                 message: "private readme".to_string(),
-                mixed_policy: MixedCommitPolicy::SyntheticPublicCommit,
                 changes: vec![FileChange {
                     visibility: Visibility::Private,
                     path: ScopePath::parse("/README.md").unwrap(),
                     old_content: Some(public_blob),
                     new_content: Some(source_blob("private readme")),
                 }],
-                visibility_changes: vec![FileVisibilityChange {
-                    path: ScopePath::parse("/README.md").unwrap(),
-                    old_visibility: Visibility::Public,
-                    new_visibility: Visibility::Private,
-                    current_content: Some(source_blob("private readme")),
-                }],
             },
         ],
     };
-    let projection = project_graph(&policy, &graph, &Principal::public());
+    let projection = project_graph(&policy, &graph, &[], &Principal::public());
     let cache_root = std::env::temp_dir().join(format!(
         "scope-vcs-git-public-to-private-test-{}-{}",
         std::process::id(),
@@ -640,7 +604,7 @@ fn public_git_projection_keeps_public_history_before_public_to_private_transitio
     )
     .unwrap();
 
-    assert!(history.contains("public readme"));
+    assert!(!history.contains("public readme"));
     assert!(!tree.contains("README.md"));
     let _ = fs::remove_dir_all(&cache_root);
 }

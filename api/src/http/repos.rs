@@ -168,7 +168,12 @@ pub(crate) async fn get_projection(
     let user = optional_scope_user(&state, &headers).await?;
     let principal = principal_for_scope_user(&repo, user.as_ref());
     ensure_repo_read(&state, &repo, &principal)?;
-    let projection = project_graph(&repo.policy, &repo.graph, &principal);
+    let projection = project_graph(
+        &repo.policy,
+        &repo.graph,
+        &repo.visibility_events,
+        &principal,
+    );
     Ok(Json(projection_response(
         state.object_store.as_ref(),
         projection,
@@ -184,7 +189,12 @@ pub(crate) async fn get_git_projection(
     let user = optional_scope_user(&state, &headers).await?;
     let principal = principal_for_scope_user(&repo, user.as_ref());
     ensure_repo_read(&state, &repo, &principal)?;
-    let projection = project_graph(&repo.policy, &repo.graph, &principal);
+    let projection = project_graph(
+        &repo.policy,
+        &repo.graph,
+        &repo.visibility_events,
+        &principal,
+    );
     Ok(Json(build_virtual_git_projection(
         state.object_store.as_ref(),
         &projection,

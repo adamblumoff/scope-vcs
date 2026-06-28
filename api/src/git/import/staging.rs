@@ -1,8 +1,6 @@
 use super::diff::staged_file_line_diff;
 use crate::domain::policy::{ScopePath, Visibility, VisibilityRule};
-use crate::domain::projection::{
-    AuthorVisibility, FileChange, FileVisibilityChange, LogicalCommit, MixedCommitPolicy,
-};
+use crate::domain::projection::{AuthorVisibility, FileChange, LogicalCommit, VisibilityEvent};
 use crate::domain::store::{
     LineDiff, RepoPublicationState, SourceBlob, StagedFileChange, StagedFileChangeKind,
     StagedRepoUpdate, StoredRepository,
@@ -157,17 +155,22 @@ pub(crate) fn apply_receive_pack_update(
 ) -> Result<(), ApiError> {
     validate_staged_update_policy(repo, &staged_update)?;
     let owner_ids = repo_owner_ids(repo);
-    let visibility_changes = staged_update
+    let logical_id = format!("rv_push_{}", repo.graph.commits.len() + 1);
+    let mut next_visibility_event_id = repo.visibility_events.len() + 1;
+    let visibility_events = staged_update
         .changes
         .iter()
         .filter(|change| change.new_content.is_some())
         .filter_map(|change| {
             let old_visibility = repo.policy.effective_visibility(&change.path);
-            if old_visibility == Visibility::Public
-                && change.visibility == Visibility::Private
-                && change.old_content.is_some()
-            {
-                Some(FileVisibilityChange {
+            if old_visibility != change.visibility {
+                let id = format!("vis_{next_visibility_event_id}");
+                next_visibility_event_id += 1;
+                Some(VisibilityEvent {
+                    id,
+                    after_commit_id: None,
+                    source_commit_id: Some(logical_id.clone()),
+                    author_id: staged_update.author_id.clone(),
                     path: change.path.clone(),
                     old_visibility,
                     new_visibility: change.visibility,
@@ -194,12 +197,11 @@ pub(crate) fn apply_receive_pack_update(
         .map(|commit| vec![commit.id.clone()])
         .unwrap_or_default();
     repo.graph.commits.push(LogicalCommit {
-        id: format!("rv_push_{}", repo.graph.commits.len() + 1),
+        id: logical_id,
         parent_ids,
         author_id: staged_update.author_id,
         author_visibility: AuthorVisibility::Visible,
         message: staged_update.message,
-        mixed_policy: MixedCommitPolicy::SyntheticPublicCommit,
         changes: staged_update
             .changes
             .into_iter()
@@ -210,8 +212,8 @@ pub(crate) fn apply_receive_pack_update(
                 new_content: change.new_content,
             })
             .collect(),
-        visibility_changes,
     });
+    repo.visibility_events.extend(visibility_events);
     repo.git_snapshot = Some(staged_update.git_snapshot);
     Ok(())
 }

@@ -176,10 +176,6 @@ function CommitVisibilityBadge({
     return <Badge variant="danger">Fully private</Badge>
   }
 
-  if (visibility === 'Synthetic') {
-    return <Badge variant="warning">Synthetic</Badge>
-  }
-
   if (visibility === 'Mixed') {
     return <Badge variant="warning">Mixed</Badge>
   }

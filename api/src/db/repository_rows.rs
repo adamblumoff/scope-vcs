@@ -55,6 +55,10 @@ where
         )
         .col_expr(entities::repository::Column::Graph, Expr::value(row.graph))
         .col_expr(
+            entities::repository::Column::VisibilityEvents,
+            Expr::value(row.visibility_events),
+        )
+        .col_expr(
             entities::repository::Column::GitSnapshot,
             Expr::value(row.git_snapshot),
         )

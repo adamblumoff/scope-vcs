@@ -54,6 +54,7 @@ fn test_repo() -> StoredRepository {
             repo_id: TEST_REPO_ID.to_string(),
             commits: Vec::new(),
         },
+        visibility_events: Vec::new(),
         git_snapshot: None,
         staged_update: None,
         memberships: vec![RepoMembership {

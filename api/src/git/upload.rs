@@ -33,6 +33,7 @@ use std::{
 };
 use tokio::{io::AsyncWriteExt, process::Command as TokioCommand};
 
+const PROJECTION_CACHE_SEMANTICS_VERSION: &str = "visibility-projection-v2";
 static GIT_CACHE_ATTEMPT: AtomicU64 = AtomicU64::new(1);
 
 pub(crate) async fn git_projection_for_request(
@@ -53,7 +54,12 @@ pub(crate) async fn git_projection_for_request(
         }
 
         ensure_repo_read(state, &repo, &principal)?;
-        return Ok(project_graph(&repo.policy, &repo.graph, &principal));
+        return Ok(project_graph(
+            &repo.policy,
+            &repo.graph,
+            &repo.visibility_events,
+            &principal,
+        ));
     }
 
     let repo = find_repo(state, owner, repo_name)?;
@@ -69,7 +75,12 @@ pub(crate) async fn git_projection_for_request(
     }
 
     ensure_repo_read(state, &repo, &principal)?;
-    Ok(project_graph(&repo.policy, &repo.graph, &principal))
+    Ok(project_graph(
+        &repo.policy,
+        &repo.graph,
+        &repo.visibility_events,
+        &principal,
+    ))
 }
 
 pub(crate) async fn git_upload_pack_repo_for_request(
@@ -267,6 +278,11 @@ pub(crate) fn projection_bare_repo(
 
 pub(crate) fn projection_cache_key(projection: &Projection) -> String {
     let mut hasher = Sha1::new();
+    hash_field(
+        &mut hasher,
+        b"semantics",
+        PROJECTION_CACHE_SEMANTICS_VERSION.as_bytes(),
+    );
     hash_field(&mut hasher, b"repo", projection.repo_id.as_bytes());
     hash_field(
         &mut hasher,

@@ -227,7 +227,12 @@ fn staged_new_private_file_stays_out_of_public_projection() {
 
     apply_receive_pack_update(&mut repo, staged).unwrap();
 
-    let public_projection = project_graph(&repo.policy, &repo.graph, &Principal::public());
+    let public_projection = project_graph(
+        &repo.policy,
+        &repo.graph,
+        &repo.visibility_events,
+        &Principal::public(),
+    );
     let public_git =
         build_virtual_git_projection(&MemoryObjectStore::new(), &public_projection).unwrap();
     assert!(
@@ -240,7 +245,8 @@ fn staged_new_private_file_stays_out_of_public_projection() {
         id: repo.record.owner_user_id.clone(),
         kind: PrincipalKind::User,
     };
-    let owner_projection = project_graph(&repo.policy, &repo.graph, &owner);
+    let owner_projection =
+        project_graph(&repo.policy, &repo.graph, &repo.visibility_events, &owner);
     assert!(
         build_virtual_git_projection(&MemoryObjectStore::new(), &owner_projection)
             .unwrap()
@@ -269,7 +275,12 @@ fn staged_new_file_inherits_private_parent_visibility() {
 
     assert_eq!(staged.changes[0].visibility, Visibility::Private);
     apply_receive_pack_update(&mut repo, staged).unwrap();
-    let public_projection = project_graph(&repo.policy, &repo.graph, &Principal::public());
+    let public_projection = project_graph(
+        &repo.policy,
+        &repo.graph,
+        &repo.visibility_events,
+        &Principal::public(),
+    );
     let public_git =
         build_virtual_git_projection(&MemoryObjectStore::new(), &public_projection).unwrap();
     assert!(
@@ -382,13 +393,17 @@ fn applying_staged_public_to_private_update_removes_file_from_public_projection(
 
     apply_receive_pack_update(&mut repo, staged).unwrap();
 
-    let projection = project_graph(&repo.policy, &repo.graph, &Principal::public());
-    let last_commit = projection.commits.last().unwrap();
+    let projection = project_graph(
+        &repo.policy,
+        &repo.graph,
+        &repo.visibility_events,
+        &Principal::public(),
+    );
+    assert!(projection.commits.is_empty());
     assert!(
-        last_commit
-            .changes
-            .iter()
-            .any(|change| { change.path.as_str() == "/README.md" && change.new_content.is_none() })
+        !projection
+            .visible_paths()
+            .contains(&"/README.md".to_string())
     );
 }
 
@@ -403,7 +418,12 @@ fn applying_staged_public_delete_marked_private_removes_file_from_public_project
 
     apply_receive_pack_update(&mut repo, staged).unwrap();
 
-    let projection = project_graph(&repo.policy, &repo.graph, &Principal::public());
+    let projection = project_graph(
+        &repo.policy,
+        &repo.graph,
+        &repo.visibility_events,
+        &Principal::public(),
+    );
     let last_commit = projection.commits.last().unwrap();
     assert!(
         last_commit
@@ -432,7 +452,12 @@ fn applying_staged_private_delete_marked_public_stays_out_of_public_projection()
 
     apply_receive_pack_update(&mut repo, staged).unwrap();
 
-    let projection = project_graph(&repo.policy, &repo.graph, &Principal::public());
+    let projection = project_graph(
+        &repo.policy,
+        &repo.graph,
+        &repo.visibility_events,
+        &Principal::public(),
+    );
     assert!(
         projection
             .commits

@@ -18,7 +18,6 @@ async fn public_commit_history_omits_private_files_from_mixed_commits() {
             author_id: repo.record.owner_user_id.clone(),
             author_visibility: AuthorVisibility::Visible,
             message: "mixed first commit".to_string(),
-            mixed_policy: MixedCommitPolicy::SyntheticPublicCommit,
             changes: vec![
                 FileChange {
                     visibility: Visibility::Public,
@@ -33,7 +32,6 @@ async fn public_commit_history_omits_private_files_from_mixed_commits() {
                     new_content: Some(source_blob("secret")),
                 },
             ],
-            visibility_changes: Vec::new(),
         });
 
         let mut catalog = lock_catalog(&state).unwrap();
@@ -56,7 +54,6 @@ async fn public_commit_history_omits_private_files_from_mixed_commits() {
     assert_eq!(list_body["audience"], "public");
     assert_eq!(list_body["commits"].as_array().unwrap().len(), 1);
     assert_eq!(list_body["commits"][0]["change_count"], 1);
-    assert_eq!(list_body["commits"][0]["synthetic"], true);
     let projected_id = list_body["commits"][0]["projected_id"]
         .as_str()
         .unwrap()
@@ -116,14 +113,12 @@ async fn public_commit_diff_does_not_leak_private_old_content() {
             author_id: repo.record.owner_user_id.clone(),
             author_visibility: AuthorVisibility::Visible,
             message: "private draft".to_string(),
-            mixed_policy: MixedCommitPolicy::SyntheticPublicCommit,
             changes: vec![FileChange {
                 visibility: Visibility::Private,
                 path: ScopePath::parse("/notes.md").unwrap(),
                 old_content: None,
                 new_content: Some(private_blob.clone()),
             }],
-            visibility_changes: Vec::new(),
         });
         repo.graph.commits.push(LogicalCommit {
             id: "rv2".to_string(),
@@ -131,14 +126,12 @@ async fn public_commit_diff_does_not_leak_private_old_content() {
             author_id: repo.record.owner_user_id.clone(),
             author_visibility: AuthorVisibility::Visible,
             message: "public release".to_string(),
-            mixed_policy: MixedCommitPolicy::SyntheticPublicCommit,
             changes: vec![FileChange {
                 visibility: Visibility::Public,
                 path: ScopePath::parse("/notes.md").unwrap(),
                 old_content: Some(private_blob),
                 new_content: Some(source_blob("public release")),
             }],
-            visibility_changes: Vec::new(),
         });
 
         let mut catalog = lock_catalog(&state).unwrap();

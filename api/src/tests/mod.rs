@@ -3,8 +3,7 @@ use crate::domain::policy::{
     Policy, Principal, PrincipalKind, ScopePath, Visibility, VisibilityRule,
 };
 use crate::domain::projection::{
-    AuthorVisibility, FileChange, FileVisibilityChange, LogicalCommit, MixedCommitPolicy,
-    SourceGraph, project_graph,
+    AuthorVisibility, FileChange, LogicalCommit, SourceGraph, VisibilityEvent, project_graph,
 };
 use crate::domain::repo_actions::preview_publish_import;
 use crate::domain::store::{
@@ -322,6 +321,7 @@ fn test_repo(owner_id: &str) -> StoredRepository {
             repo_id: TEST_REPO_ID.to_string(),
             commits: Vec::new(),
         },
+        visibility_events: Vec::new(),
         git_snapshot: None,
         staged_update: None,
         memberships: vec![RepoMembership {
@@ -374,14 +374,12 @@ fn repo_with_readme() -> StoredRepository {
         author_id: repo.record.owner_user_id.clone(),
         author_visibility: AuthorVisibility::Visible,
         message: "initial".to_string(),
-        mixed_policy: MixedCommitPolicy::SyntheticPublicCommit,
         changes: vec![FileChange {
             visibility: Visibility::Public,
             path: ScopePath::parse("/README.md").unwrap(),
             old_content: None,
             new_content: Some(source_blob("hello")),
         }],
-        visibility_changes: Vec::new(),
     });
     repo
 }

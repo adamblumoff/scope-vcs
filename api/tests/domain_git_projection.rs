@@ -2,8 +2,8 @@ use api::domain::{
     git_projection::build_virtual_git_projection,
     policy::{Policy, Principal, ScopePath, Visibility, VisibilityRule},
     projection::{
-        AuthorVisibility, FileChange, LogicalCommit, MixedCommitPolicy, ProjectedChange,
-        ProjectedCommit, Projection, SourceGraph, project_graph,
+        AuthorVisibility, FileChange, LogicalCommit, ProjectedChange, ProjectedCommit, Projection,
+        SourceGraph, project_graph,
     },
 };
 use api::object_store::{MemoryObjectStore, put_source_blob};
@@ -30,7 +30,6 @@ fn projected_git_blobs_do_not_include_hidden_content() {
             author_id: "owner".to_string(),
             author_visibility: AuthorVisibility::Hidden,
             message: "mixed".to_string(),
-            mixed_policy: MixedCommitPolicy::SyntheticPublicCommit,
             changes: vec![
                 FileChange {
                     visibility: Visibility::Public,
@@ -45,10 +44,9 @@ fn projected_git_blobs_do_not_include_hidden_content() {
                     new_content: Some(blob(&store, "SCOPE_TOKEN=secret")),
                 },
             ],
-            visibility_changes: Vec::new(),
         }],
     };
-    let projection = project_graph(&policy, &graph, &Principal::public());
+    let projection = project_graph(&policy, &graph, &[], &Principal::public());
     let git = build_virtual_git_projection(&store, &projection).unwrap();
     let serialized = serde_json::to_string(&git).unwrap();
 
@@ -70,7 +68,6 @@ fn projected_git_blobs_are_final_visible_tree() {
                 author_id: "owner".to_string(),
                 author_visibility: AuthorVisibility::Visible,
                 message: "initial".to_string(),
-                mixed_policy: MixedCommitPolicy::SyntheticPublicCommit,
                 changes: vec![
                     FileChange {
                         visibility: Visibility::Public,
@@ -85,7 +82,6 @@ fn projected_git_blobs_are_final_visible_tree() {
                         new_content: Some(blob(&store, "remove me")),
                     },
                 ],
-                visibility_changes: Vec::new(),
             },
             LogicalCommit {
                 id: "rv2".to_string(),
@@ -93,7 +89,6 @@ fn projected_git_blobs_are_final_visible_tree() {
                 author_id: "owner".to_string(),
                 author_visibility: AuthorVisibility::Visible,
                 message: "update".to_string(),
-                mixed_policy: MixedCommitPolicy::SyntheticPublicCommit,
                 changes: vec![
                     FileChange {
                         visibility: Visibility::Public,
@@ -108,11 +103,10 @@ fn projected_git_blobs_are_final_visible_tree() {
                         new_content: None,
                     },
                 ],
-                visibility_changes: Vec::new(),
             },
         ],
     };
-    let projection = project_graph(&policy, &graph, &Principal::public());
+    let projection = project_graph(&policy, &graph, &[], &Principal::public());
     let git = build_virtual_git_projection(&store, &projection).unwrap();
 
     assert_eq!(git.blobs.len(), 1);
@@ -132,7 +126,6 @@ fn head_oid_changes_when_tree_content_changes_with_same_blob_count() {
             parent_projected_id: None,
             author: Some("owner".to_string()),
             message: "commit".to_string(),
-            synthetic: false,
             changes: vec![ProjectedChange {
                 path: ScopePath::parse("/README.md").unwrap(),
                 new_content: Some(blob(&store, content)),

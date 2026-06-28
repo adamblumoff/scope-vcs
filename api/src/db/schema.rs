@@ -166,6 +166,11 @@ pub(crate) async fn migrate_metadata_schema(db: &DatabaseConnection) -> Result<(
                         .not_null(),
                 )
                 .col(ColumnDef::new(Repositories::Graph).json_binary().not_null())
+                .col(
+                    ColumnDef::new(Repositories::VisibilityEvents)
+                        .json_binary()
+                        .not_null(),
+                )
                 .col(ColumnDef::new(Repositories::GitSnapshot).json_binary())
                 .col(ColumnDef::new(Repositories::StagedUpdate).json_binary())
                 .col(

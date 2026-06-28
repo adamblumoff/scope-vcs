@@ -170,6 +170,7 @@ pub(crate) mod repository {
         pub pending_import: Option<Json>,
         pub policy: Json,
         pub graph: Json,
+        pub visibility_events: Json,
         pub git_snapshot: Option<Json>,
         pub staged_update: Option<Json>,
         pub invitations: Json,
@@ -200,6 +201,7 @@ pub(crate) mod repository {
                 pending_import: repo.pending_import.as_ref().map(encode_json).transpose()?,
                 policy: encode_json(&repo.policy)?,
                 graph: encode_json(&repo.graph)?,
+                visibility_events: encode_json(&repo.visibility_events)?,
                 git_snapshot: repo.git_snapshot.as_ref().map(encode_json).transpose()?,
                 staged_update: repo.staged_update.as_ref().map(encode_json).transpose()?,
                 invitations: encode_json(&repo.invitations)?,
@@ -238,6 +240,7 @@ pub(crate) mod repository {
                     .transpose()?,
                 policy: decode_json::<Policy>(self.policy)?,
                 graph: decode_json::<SourceGraph>(self.graph)?,
+                visibility_events: decode_json(self.visibility_events)?,
                 git_snapshot: self
                     .git_snapshot
                     .map(decode_json::<SourceBlob>)

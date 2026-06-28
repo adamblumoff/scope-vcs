@@ -1,6 +1,6 @@
 use super::{
     policy::{Policy, PolicyError, Principal, PrincipalKind, ScopePath, Visibility},
-    projection::SourceGraph,
+    projection::{SourceGraph, VisibilityEvent},
 };
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
@@ -208,6 +208,7 @@ pub struct StoredRepository {
     pub pending_import: Option<PendingImport>,
     pub policy: Policy,
     pub graph: SourceGraph,
+    pub visibility_events: Vec<VisibilityEvent>,
     pub git_snapshot: Option<SourceBlob>,
     pub staged_update: Option<StagedRepoUpdate>,
     pub memberships: Vec<RepoMembership>,
@@ -241,6 +242,7 @@ impl StoredRepository {
                 repo_id: id.clone(),
                 commits: Vec::new(),
             },
+            visibility_events: Vec::new(),
             git_snapshot: None,
             staged_update: None,
             memberships: vec![RepoMembership {
@@ -302,6 +304,9 @@ impl StoredRepository {
         for change in self.graph.commits.iter().flat_map(|commit| &commit.changes) {
             blobs.extend(change.old_content.clone());
             blobs.extend(change.new_content.clone());
+        }
+        for event in &self.visibility_events {
+            blobs.extend(event.current_content.clone());
         }
         if let Some(staged) = &self.staged_update {
             blobs.push(staged.git_snapshot.clone());

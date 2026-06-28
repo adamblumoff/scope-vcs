@@ -131,7 +131,12 @@ async fn pending_visibility_toggle_does_not_create_public_projection_history() {
         preview_publish_import(repo).unwrap();
     }
     let repo = find_repo(&state, TEST_REPO_OWNER, TEST_REPO_NAME).unwrap();
-    let projection = project_graph(&repo.policy, &repo.graph, &Principal::public());
+    let projection = project_graph(
+        &repo.policy,
+        &repo.graph,
+        &repo.visibility_events,
+        &Principal::public(),
+    );
 
     assert!(
         projection
@@ -189,8 +194,7 @@ async fn owner_can_preview_pending_import_public_projection_before_publish() {
     assert_eq!(body["source"], "review");
     assert_eq!(body["summary"]["visible_files"], 1);
     assert_eq!(body["summary"]["hidden_files"], 1);
-    assert_eq!(body["summary"]["synthetic_commits"], 1);
-    assert_eq!(body["commits"][0]["visibility"], "Synthetic");
+    assert_eq!(body["commits"][0]["visibility"], "Mixed");
     assert_eq!(body["files"][0]["path"], "/README.md");
     assert!(
         body["files"]
