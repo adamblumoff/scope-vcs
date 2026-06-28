@@ -75,6 +75,7 @@ pub(super) fn stage_receive_pack_update_with_store(
     let staged_update = build_staged_receive_pack_update(repo, update, store)?;
     if repo.settings.review_pushes_before_applying {
         repo.staged_update = Some(staged_update.clone());
+        repo.bump_change_version();
         Ok(Some(staged_update))
     } else {
         apply_receive_pack_update(repo, staged_update)?;
@@ -215,6 +216,7 @@ pub(crate) fn apply_receive_pack_update(
     });
     repo.visibility_events.extend(visibility_events);
     repo.git_snapshot = Some(staged_update.git_snapshot);
+    repo.bump_change_version();
     Ok(())
 }
 

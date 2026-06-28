@@ -30,6 +30,10 @@ where
             Expr::value(row.default_visibility),
         )
         .col_expr(
+            entities::repository::Column::ChangeVersion,
+            Expr::value(row.change_version),
+        )
+        .col_expr(
             entities::repository::Column::Settings,
             Expr::value(row.settings),
         )

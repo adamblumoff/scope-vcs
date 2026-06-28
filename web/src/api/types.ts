@@ -86,9 +86,16 @@ export type RepoDetail = {
   clone_remote_url: string
   files: RepoFile[]
   kind: 'repo'
+  live: RepoLiveState
   projection_previews: ProjectionPreviews
   repo: RepoSummary
   review: RepoReview | null
+}
+
+export type RepoLiveState = {
+  clerk_token_template: string
+  event_stream_url: string
+  repo: RepoSummary
 }
 
 export type RepoParams = {

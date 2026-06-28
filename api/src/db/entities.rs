@@ -163,6 +163,7 @@ pub(crate) mod repository {
         pub owner_user_id: String,
         pub publication_state: String,
         pub default_visibility: String,
+        pub change_version: i64,
         pub settings: Json,
         pub first_push_token: Option<Json>,
         pub git_push_token: Option<Json>,
@@ -190,6 +191,7 @@ pub(crate) mod repository {
                 owner_user_id: repo.record.owner_user_id.clone(),
                 publication_state: encode_enum(repo.record.publication_state)?,
                 default_visibility: encode_enum(repo.record.default_visibility)?,
+                change_version: repo.record.change_version.min(i64::MAX as u64) as i64,
                 settings: encode_json(&repo.settings)?,
                 first_push_token: repo
                     .first_push_token
@@ -222,6 +224,7 @@ pub(crate) mod repository {
                     owner_user_id: self.owner_user_id,
                     publication_state,
                     default_visibility,
+                    change_version: self.change_version.max(0) as u64,
                 },
                 settings: decode_json::<RepoSettings>(self.settings)?,
                 first_push_token: self

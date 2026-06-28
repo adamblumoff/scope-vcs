@@ -1,10 +1,13 @@
 import {
   loadRepoForRequest,
+  loadRepoLiveStateForRequest,
   parseRepoParams,
   parseSetRepoFileVisibilityInput,
   setRepoFileVisibilityForRequest,
 } from '@/api/repos'
 import type {
+  RepoDetail,
+  RepoLiveState,
   RepoParams,
   ReviewFile,
   Visibility,
@@ -13,7 +16,7 @@ import {
   RepoDetailError,
   RepoDetailPage,
 } from '@/features/repo-detail/repo-detail-page'
-import { shouldPollPendingFirstPush } from '@/features/repo-detail/pending-first-push-refresh'
+import { useRepoLiveRefresh } from '@/features/repo-detail/repo-live-refresh'
 import {
   Outlet,
   createFileRoute,
@@ -22,17 +25,30 @@ import {
   useRouter,
 } from '@tanstack/react-router'
 import { createServerFn } from '@tanstack/react-start'
-import { useEffect } from 'react'
-
-const PENDING_FIRST_PUSH_POLL_MS = 1500
+import { useCallback } from 'react'
 
 const loadRepo = createServerFn({ method: 'GET' })
   .validator(parseRepoParams)
   .handler(({ data }) => loadRepoForRequest(data))
 
+const loadRepoLiveState = createServerFn({ method: 'GET' })
+  .validator(parseRepoParams)
+  .handler(({ data }) => loadRepoLiveStateForRequest(data))
+
 const setRepoFileVisibility = createServerFn({ method: 'POST' })
   .validator(parseSetRepoFileVisibilityInput)
   .handler(({ data }) => setRepoFileVisibilityForRequest(data))
+
+type RepoRouteData =
+  | {
+      detail: RepoDetail
+      kind: 'detail'
+      live: RepoLiveState
+    }
+  | {
+      kind: 'live'
+      live: RepoLiveState
+    }
 
 export const Route = createFileRoute('/repos/$owner/$repo')({
   loader: async ({ location, params }) => {
@@ -40,7 +56,10 @@ export const Route = createFileRoute('/repos/$owner/$repo')({
       stripTrailingSlash(location.pathname) !==
       `/repos/${params.owner}/${params.repo}`
     ) {
-      return null
+      return {
+        kind: 'live',
+        live: await loadRepoLiveState({ data: params }),
+      } satisfies RepoRouteData
     }
 
     const detail = await loadRepo({ data: params })
@@ -51,7 +70,11 @@ export const Route = createFileRoute('/repos/$owner/$repo')({
       })
     }
 
-    return detail
+    return {
+      detail,
+      kind: 'detail',
+      live: detail.live,
+    } satisfies RepoRouteData
   },
   errorComponent: RepoDetailError,
   component: RepoDetailRoute,
@@ -63,59 +86,27 @@ function stripTrailingSlash(path: string) {
 
 function RepoDetailRoute() {
   const childMatches = useChildMatches()
-  const detail = Route.useLoaderData()
+  const routeData = Route.useLoaderData()
   const params = Route.useParams()
-  usePendingFirstPushRefresh(
-    shouldPollPendingFirstPush(detail, childMatches.length),
-  )
+  const router = useRouter()
+  const invalidate = useCallback(() => router.invalidate(), [router])
+  useRepoLiveRefresh(routeData.live, invalidate)
 
   if (childMatches.length > 0) {
     return <Outlet />
   }
 
-  if (!detail) {
+  if (routeData.kind !== 'detail') {
     return null
   }
 
   return (
     <RepoDetailPage
-      detail={detail}
+      detail={routeData.detail}
       setFileVisibility={setLiveRepoFileVisibility}
       params={params}
     />
   )
-}
-
-function usePendingFirstPushRefresh(enabled: boolean) {
-  const router = useRouter()
-
-  useEffect(() => {
-    if (!enabled) {
-      return
-    }
-
-    let stopped = false
-    let inFlight = false
-    const poll = () => {
-      if (stopped || inFlight) {
-        return
-      }
-      inFlight = true
-      void router
-        .invalidate()
-        .catch(() => undefined)
-        .finally(() => {
-          inFlight = false
-        })
-    }
-
-    poll()
-    const interval = window.setInterval(poll, PENDING_FIRST_PUSH_POLL_MS)
-    return () => {
-      stopped = true
-      window.clearInterval(interval)
-    }
-  }, [enabled, router])
 }
 
 function setLiveRepoFileVisibility(

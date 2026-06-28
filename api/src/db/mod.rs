@@ -8,6 +8,7 @@ mod metadata_reset;
 mod metadata_schema;
 mod publish_apply;
 mod push_staging;
+mod repo_change_notifications;
 mod repo_effects;
 mod repo_lifecycle;
 mod repo_mutation;
@@ -49,6 +50,7 @@ const METADATA_LOCK_KEY: &str = "catalog";
 #[derive(Clone)]
 pub(crate) struct MetadataStore {
     inner: Arc<MetadataStoreInner>,
+    postgres_database_url: Option<Arc<str>>,
 }
 
 enum MetadataStoreInner {
@@ -86,6 +88,7 @@ impl MetadataStore {
                 #[cfg(test)]
                 fail_next_persist: AtomicBool::new(false),
             }))),
+            postgres_database_url: None,
         }
     }
 
@@ -371,9 +374,11 @@ impl MetadataStore {
 }
 
 fn connect_postgres_store(database_url: String) -> anyhow::Result<MetadataStore> {
+    let database_url = Arc::<str>::from(database_url);
     let runtime = DbRuntime::new()?;
+    let connect_database_url = database_url.to_string();
     let db = run_db_on(&runtime, async move {
-        let db = Database::connect(&database_url).await?;
+        let db = Database::connect(&connect_database_url).await?;
         schema::migrate_metadata_schema(&db).await?;
         ensure_metadata_lock_row(&db).await?;
         reset_stale_pre_alpha_metadata(&db).await?;
@@ -385,6 +390,7 @@ fn connect_postgres_store(database_url: String) -> anyhow::Result<MetadataStore>
             db: Arc::new(db),
             runtime,
         }),
+        postgres_database_url: Some(database_url),
     })
 }
 

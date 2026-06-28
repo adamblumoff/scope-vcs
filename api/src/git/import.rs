@@ -35,7 +35,7 @@ pub(crate) fn persist_pending_import(
     repo_name: &str,
     credential: &InitialPushCredential,
     import: PendingImport,
-) -> Result<(), ApiError> {
+) -> Result<u64, ApiError> {
     let now = unix_now()?;
     let credential = credential.clone();
     state
@@ -64,7 +64,8 @@ pub(crate) fn persist_pending_import(
             }
             repo.pending_import = Some(import);
             repo.record.publication_state = RepoPublicationState::PendingPublish;
-            Ok(RepositoryMutation::new(()))
+            repo.bump_change_version();
+            Ok(RepositoryMutation::new(repo.record.change_version))
         })
 }
 

@@ -13,6 +13,7 @@ pub(crate) mod git;
 pub(crate) mod http;
 pub mod object_store;
 pub(crate) mod persistence;
+pub(crate) mod repo_events;
 
 #[cfg(test)]
 mod tests;

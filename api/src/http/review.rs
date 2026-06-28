@@ -81,6 +81,7 @@ pub(crate) async fn publish_repo(
     let updated = state
         .metadata
         .publish_pending_import(&owner, &repo_name, &user_id)?;
+    state.publish_repo_change(&updated.id, updated.change_version, "repo-published");
 
     Ok(Json(SessionRepo {
         id: updated.id,
@@ -135,6 +136,12 @@ pub(crate) async fn update_staged_file_visibility(
         paths,
         input.visibility,
     )?;
+    let repo = find_repo(&state, &owner, &repo_name)?;
+    state.publish_repo_change(
+        &repo.record.id,
+        repo.record.change_version,
+        "staged-visibility-changed",
+    );
 
     Ok(Json(staged_update_response_with_diff(&updated)))
 }
@@ -152,6 +159,12 @@ pub(crate) async fn apply_staged_update(
     let applied = state
         .metadata
         .apply_staged_update(&owner, &repo_name, &principal.id)?;
+    let repo = find_repo(&state, &owner, &repo_name)?;
+    state.publish_repo_change(
+        &repo.record.id,
+        repo.record.change_version,
+        "staged-update-applied",
+    );
     best_effort_drain_pending_source_blob_deletions(&state);
 
     Ok(Json(staged_update_response_with_diff(&applied)))
@@ -170,6 +183,12 @@ pub(crate) async fn reject_staged_update(
     let rejected = state
         .metadata
         .reject_staged_update(&owner, &repo_name, &principal.id)?;
+    let repo = find_repo(&state, &owner, &repo_name)?;
+    state.publish_repo_change(
+        &repo.record.id,
+        repo.record.change_version,
+        "staged-update-rejected",
+    );
     let response = staged_update_response_with_diff(&rejected);
     best_effort_drain_pending_source_blob_deletions(&state);
 

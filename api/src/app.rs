@@ -82,6 +82,10 @@ pub fn router(state: AppState) -> Router {
             get(http::repos::get_files),
         )
         .route(
+            "/v1/repos/{owner}/{repo}/events",
+            get(http::repo_events::repo_events),
+        )
+        .route(
             "/v1/repos/{owner}/{repo}/commits",
             get(http::history::get_commit_history),
         )
@@ -132,10 +136,6 @@ pub fn router(state: AppState) -> Router {
         .route(
             "/v1/repos/{owner}/{repo}/projections",
             get(http::repos::get_projection),
-        )
-        .route(
-            "/v1/repos/{owner}/{repo}/git-projections",
-            get(http::repos::get_git_projection),
         )
         .route(
             "/v1/repos/{owner}/{repo}/projection-preview",

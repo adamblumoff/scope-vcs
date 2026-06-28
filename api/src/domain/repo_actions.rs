@@ -182,6 +182,7 @@ pub(crate) fn set_visibility(
         repo.policy.add_rule(rule).map_err(ApiError::bad_request)?;
     }
     repo.visibility_events.extend(visibility_events);
+    repo.bump_change_version();
     Ok(RepoMutation::new(()))
 }
 
@@ -200,16 +201,21 @@ pub(crate) fn set_staged_visibility(
         .staged_update
         .clone()
         .ok_or_else(|| ApiError::not_found("no staged update pending"))?;
+    let mut changed = false;
     for path in update_paths {
         let file = staged_update
             .changes
             .iter_mut()
             .find(|change| change.path == *path)
             .ok_or_else(|| ApiError::not_found(format!("staged file {} not found", path)))?;
+        changed |= file.visibility != visibility;
         file.visibility = visibility;
     }
     crate::git::import::validate_staged_update_policy(repo, &staged_update)?;
     repo.staged_update = Some(staged_update.clone());
+    if changed {
+        repo.bump_change_version();
+    }
     Ok(RepoMutation::new(staged_update))
 }
 
@@ -239,6 +245,7 @@ pub(crate) fn reject_staged_update(
         .staged_update
         .take()
         .ok_or_else(|| ApiError::not_found("no staged update pending"))?;
+    repo.bump_change_version();
     let mut effects = RepoEffects::default();
     effects.delete_source_blobs(staged_update_blobs(&rejected));
     Ok(RepoMutation::with_effects(rejected, effects))
@@ -262,11 +269,15 @@ pub(crate) fn update_settings(
     default_visibility: Visibility,
 ) -> Result<RepoMutation<()>, ApiError> {
     ensure_repo_owner(repo, user_id)?;
+    let changed = repo.settings != settings || repo.record.default_visibility != default_visibility;
     repo.settings = settings;
     if repo.record.default_visibility != default_visibility {
         preserve_existing_visibility_for_new_default(repo, default_visibility)?;
     }
     repo.record.default_visibility = default_visibility;
+    if changed {
+        repo.bump_change_version();
+    }
     Ok(RepoMutation::new(()))
 }
 
@@ -311,6 +322,7 @@ pub(crate) fn preview_publish_import(
     repo.git_snapshot = Some(pending.git_snapshot);
     repo.record.publication_state = RepoPublicationState::Published;
     repo.first_push_token = None;
+    repo.bump_change_version();
     Ok(RepoMutation::new(repo.record.clone()))
 }
 
