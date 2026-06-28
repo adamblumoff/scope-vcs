@@ -3,6 +3,7 @@ use super::{
     store::SourceBlob,
 };
 use serde::{Deserialize, Serialize};
+use std::collections::BTreeMap;
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum AuthorVisibility {
@@ -89,29 +90,30 @@ pub fn project_graph(
     visibility_events: &[VisibilityEvent],
     principal: &Principal,
 ) -> Projection {
+    if policy.is_owner(principal) {
+        return project_owner_graph(graph, principal);
+    }
+
     let mut commits = Vec::new();
     let mut last_visible: Option<String> = None;
-    let owner_projection = policy.is_owner(principal);
+    let projected_principal_id = projected_principal_id(principal);
     let commit_positions = graph
         .commits
         .iter()
         .enumerate()
         .map(|(index, commit)| (commit.id.as_str(), index))
-        .collect::<std::collections::BTreeMap<_, _>>();
+        .collect::<BTreeMap<_, _>>();
     let readable_epoch_starts =
         readable_epoch_starts(policy, principal, visibility_events, &commit_positions);
-    let baseline_events = if owner_projection {
-        Vec::new()
-    } else {
-        baseline_events(policy, principal, visibility_events, &readable_epoch_starts)
-    };
+    let baseline_events =
+        baseline_events_by_anchor(policy, principal, visibility_events, &readable_epoch_starts);
 
     process_baseline_events_after(
         &mut commits,
         &mut last_visible,
         &baseline_events,
         None,
-        principal,
+        &projected_principal_id,
     );
 
     for (commit_index, logical) in graph.commits.iter().enumerate() {
@@ -119,13 +121,8 @@ pub fn project_graph(
             .changes
             .iter()
             .filter(|change| {
-                owner_projection
-                    || can_read_historical_change(
-                        policy,
-                        principal,
-                        &change.path,
-                        change.visibility,
-                    ) && is_change_in_readable_epoch(
+                can_read_historical_change(policy, principal, &change.path, change.visibility)
+                    && is_change_in_readable_epoch(
                         &readable_epoch_starts,
                         &change.path,
                         commit_index,
@@ -144,18 +141,13 @@ pub fn project_graph(
                 &mut last_visible,
                 &baseline_events,
                 Some(logical.id.as_str()),
-                principal,
+                &projected_principal_id,
             );
             continue;
         }
 
         let partial = visible_content_count < logical.changes.len();
-        let projected_id = format!(
-            "pv_{}_{}_{}",
-            principal.id.replace(['/', ':'], "_"),
-            logical.id,
-            commits.len() + 1
-        );
+        let projected_id = projected_id(&projected_principal_id, &logical.id, commits.len() + 1);
 
         commits.push(ProjectedCommit {
             projected_id: projected_id.clone(),
@@ -183,7 +175,7 @@ pub fn project_graph(
             &mut last_visible,
             &baseline_events,
             Some(logical.id.as_str()),
-            principal,
+            &projected_principal_id,
         );
     }
 
@@ -192,6 +184,54 @@ pub fn project_graph(
         principal_id: principal.id.clone(),
         commits,
     }
+}
+
+fn project_owner_graph(graph: &SourceGraph, principal: &Principal) -> Projection {
+    let mut commits = Vec::new();
+    let mut last_visible: Option<String> = None;
+    let projected_principal_id = projected_principal_id(principal);
+
+    for logical in &graph.commits {
+        let changes = logical
+            .changes
+            .iter()
+            .map(|change| ProjectedChange {
+                path: change.path.clone(),
+                new_content: change.new_content.clone(),
+            })
+            .collect::<Vec<_>>();
+        if changes.is_empty() {
+            continue;
+        }
+
+        let projected_id = projected_id(&projected_principal_id, &logical.id, commits.len() + 1);
+        commits.push(ProjectedCommit {
+            projected_id: projected_id.clone(),
+            logical_commit_id: logical.id.clone(),
+            parent_projected_id: last_visible,
+            author: match logical.author_visibility {
+                AuthorVisibility::Visible => Some(logical.author_id.clone()),
+                AuthorVisibility::Hidden => None,
+            },
+            message: logical.message.clone(),
+            changes,
+        });
+        last_visible = Some(projected_id);
+    }
+
+    Projection {
+        repo_id: graph.repo_id.clone(),
+        principal_id: principal.id.clone(),
+        commits,
+    }
+}
+
+fn projected_principal_id(principal: &Principal) -> String {
+    principal.id.replace(['/', ':'], "_")
+}
+
+fn projected_id(projected_principal_id: &str, source_id: &str, sequence: usize) -> String {
+    format!("pv_{projected_principal_id}_{source_id}_{sequence}")
 }
 
 fn can_read_historical_change(
@@ -220,9 +260,9 @@ fn readable_epoch_starts(
     policy: &Policy,
     principal: &Principal,
     events: &[VisibilityEvent],
-    commit_positions: &std::collections::BTreeMap<&str, usize>,
-) -> std::collections::BTreeMap<ScopePath, ReadableEpochStart> {
-    let mut starts = std::collections::BTreeMap::new();
+    commit_positions: &BTreeMap<&str, usize>,
+) -> BTreeMap<ScopePath, ReadableEpochStart> {
+    let mut starts = BTreeMap::new();
     for event in events {
         if !policy.can_read(principal, &event.path) {
             continue;
@@ -275,7 +315,7 @@ fn visibility_readable_for_event(
 }
 
 fn is_change_in_readable_epoch(
-    starts: &std::collections::BTreeMap<ScopePath, ReadableEpochStart>,
+    starts: &BTreeMap<ScopePath, ReadableEpochStart>,
     path: &ScopePath,
     commit_index: usize,
 ) -> bool {
@@ -285,42 +325,59 @@ fn is_change_in_readable_epoch(
         .is_none_or(|start_index| commit_index >= start_index)
 }
 
-fn baseline_events<'a>(
+struct BaselineEventsByAnchor<'a> {
+    before_graph: Vec<&'a VisibilityEvent>,
+    after_commits: BTreeMap<&'a str, Vec<&'a VisibilityEvent>>,
+}
+
+fn baseline_events_by_anchor<'a>(
     policy: &Policy,
     principal: &Principal,
     events: &'a [VisibilityEvent],
-    starts: &std::collections::BTreeMap<ScopePath, ReadableEpochStart>,
-) -> Vec<&'a VisibilityEvent> {
-    events
-        .iter()
-        .filter(|event| {
-            starts
-                .get(&event.path)
-                .and_then(|start| start.baseline_event_id.as_deref())
-                == Some(event.id.as_str())
-                && policy.can_read(principal, &event.path)
-                && event.current_content.is_some()
-        })
-        .collect()
+    starts: &BTreeMap<ScopePath, ReadableEpochStart>,
+) -> BaselineEventsByAnchor<'a> {
+    let mut events_by_anchor = BaselineEventsByAnchor {
+        before_graph: Vec::new(),
+        after_commits: BTreeMap::new(),
+    };
+    for event in events.iter().filter(|event| {
+        starts
+            .get(&event.path)
+            .and_then(|start| start.baseline_event_id.as_deref())
+            == Some(event.id.as_str())
+            && policy.can_read(principal, &event.path)
+            && event.current_content.is_some()
+    }) {
+        match event.after_commit_id.as_deref() {
+            Some(after_commit_id) => events_by_anchor
+                .after_commits
+                .entry(after_commit_id)
+                .or_default()
+                .push(event),
+            None => events_by_anchor.before_graph.push(event),
+        }
+    }
+    events_by_anchor
 }
 
 fn process_baseline_events_after(
     commits: &mut Vec<ProjectedCommit>,
     last_visible: &mut Option<String>,
-    baseline_events: &[&VisibilityEvent],
+    baseline_events: &BaselineEventsByAnchor<'_>,
     after_commit_id: Option<&str>,
-    principal: &Principal,
+    projected_principal_id: &str,
 ) {
-    for event in baseline_events
-        .iter()
-        .filter(|event| event.after_commit_id.as_deref() == after_commit_id)
-    {
-        let projected_id = format!(
-            "pv_{}_{}_{}",
-            principal.id.replace(['/', ':'], "_"),
-            event.id,
-            commits.len() + 1
-        );
+    let events = match after_commit_id {
+        Some(after_commit_id) => baseline_events
+            .after_commits
+            .get(after_commit_id)
+            .map(Vec::as_slice)
+            .unwrap_or(&[]),
+        None => baseline_events.before_graph.as_slice(),
+    };
+
+    for event in events {
+        let projected_id = projected_id(projected_principal_id, &event.id, commits.len() + 1);
         commits.push(ProjectedCommit {
             projected_id: projected_id.clone(),
             logical_commit_id: event.id.clone(),
