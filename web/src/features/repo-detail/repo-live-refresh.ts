@@ -83,7 +83,15 @@ export function useRepoLiveRefresh(
     }
 
     const onEvent = (event: RepoChangeEvent) => {
-      if (event.repo_id !== live.repo.id || event.version <= highestAppliedVersion) {
+      if (event.repo_id !== live.repo.id) {
+        return
+      }
+      if (event.reason === 'lagged') {
+        forceRefreshPending = true
+        void flushRefresh()
+        return
+      }
+      if (event.version <= highestAppliedVersion) {
         return
       }
       pendingVersion = Math.max(pendingVersion ?? event.version, event.version)
