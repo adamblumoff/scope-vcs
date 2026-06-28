@@ -20,7 +20,7 @@ export function useRepoLiveRefresh(
   const { getToken, isLoaded } = useAuth()
 
   useEffect(() => {
-    if (!live || !isLoaded) {
+    if (!live || !isLoaded || !canUseRepoLiveRefresh(live)) {
       return
     }
 
@@ -131,6 +131,14 @@ export function useRepoLiveRefresh(
       controller.abort()
     }
   }, [getToken, invalidate, isLoaded, live])
+}
+
+function canUseRepoLiveRefresh(live: RepoLiveState) {
+  return (
+    live.repo.role === 'Owner' ||
+    live.repo.role === 'Maintainer' ||
+    live.repo.role === 'Writer'
+  )
 }
 
 async function streamRepoEvents(

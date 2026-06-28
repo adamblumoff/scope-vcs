@@ -19,6 +19,7 @@ async fn repo_events_streams_committed_visibility_changes() {
             Request::builder()
                 .method("GET")
                 .uri("/v1/repos/owner/repo/events")
+                .header(AUTHORIZATION, bearer_header())
                 .body(Body::empty())
                 .unwrap(),
         )
@@ -86,14 +87,45 @@ async fn repo_events_hide_unreadable_private_repo() {
 }
 
 #[tokio::test]
-async fn repo_events_close_when_read_access_is_revoked() {
+async fn repo_events_reject_public_reader_for_public_repo() {
     let state = test_state_with_repo();
-    cache_test_jwks(&state);
     {
         let mut catalog = lock_catalog(&state).unwrap();
         catalog
             .repositories
             .insert(TEST_REPO_ID.to_string(), repo_with_readme());
+    }
+
+    let response = router(state)
+        .oneshot(
+            Request::builder()
+                .method("GET")
+                .uri("/v1/repos/owner/repo/events")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::NOT_FOUND);
+}
+
+#[tokio::test]
+async fn repo_events_close_when_write_access_is_revoked() {
+    let state = test_state_with_repo();
+    cache_test_jwks(&state);
+    let writer_clerk_id = "user_writer";
+    let writer_email = "writer@example.com";
+    let writer_id = crate::db::scope_user_id_for_auth_identity("clerk", writer_clerk_id);
+    {
+        let mut repo = repo_with_readme();
+        repo.memberships.push(RepoMembership {
+            repo_id: TEST_REPO_ID.to_string(),
+            user_id: writer_id.clone(),
+            role: RepoRole::Writer,
+        });
+        let mut catalog = lock_catalog(&state).unwrap();
+        catalog.repositories.insert(TEST_REPO_ID.to_string(), repo);
     }
     let app = router(state.clone());
 
@@ -103,6 +135,10 @@ async fn repo_events_close_when_read_access_is_revoked() {
             Request::builder()
                 .method("GET")
                 .uri("/v1/repos/owner/repo/events")
+                .header(
+                    AUTHORIZATION,
+                    bearer_header_for(writer_clerk_id, writer_email),
+                )
                 .body(Body::empty())
                 .unwrap(),
         )
@@ -118,9 +154,11 @@ async fn repo_events_close_when_read_access_is_revoked() {
     let change_version = {
         let mut catalog = lock_catalog(&state).unwrap();
         let repo = catalog.repositories.get_mut(TEST_REPO_ID).unwrap();
-        repo.record.default_visibility = Visibility::Private;
-        repo.policy = Policy::new(Visibility::Private, &repo.record.owner_user_id);
-        repo.graph.commits[0].changes[0].visibility = Visibility::Private;
+        repo.memberships
+            .iter_mut()
+            .find(|membership| membership.user_id == writer_id)
+            .unwrap()
+            .role = RepoRole::Reader;
         repo.bump_change_version();
         repo.record.change_version
     };

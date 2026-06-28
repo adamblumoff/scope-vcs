@@ -1,9 +1,9 @@
 use crate::{
     auth::scope::{optional_scope_user, principal_for_scope_user},
-    domain::store::{UserAccount, repo_id},
+    domain::store::{RepoRole, UserAccount, repo_id},
     error::ApiError,
     repo_events::RepoChangeEvent,
-    state::{AppState, ensure_repo_read, find_repo},
+    state::{AppState, ensure_repo_read, find_repo, role_for_principal},
 };
 use axum::{
     extract::{Path, State},
@@ -34,7 +34,7 @@ pub(crate) async fn repo_events(
         }
     };
     let principal = principal_for_scope_user(&repo, user.as_ref());
-    if let Err(error) = ensure_repo_read(&state, &repo, &principal) {
+    if let Err(error) = ensure_repo_events_allowed(&state, &repo, &principal) {
         drop(receiver);
         state.repo_events.remove_if_idle(&repo_id);
         return Err(error);
@@ -61,12 +61,15 @@ pub(crate) async fn repo_events(
                 },
             };
 
-            if can_continue_streaming(
+            if stream_principal(
                 &stream_state.state,
                 &stream_state.owner,
                 &stream_state.repo_name,
                 stream_state.user.as_ref(),
             )
+            .and_then(|(repo, principal)| {
+                ensure_repo_events_allowed(&stream_state.state, &repo, &principal)
+            })
             .is_err()
             {
                 return None;
@@ -94,15 +97,37 @@ struct RepoEventStreamState {
     user: Option<UserAccount>,
 }
 
-fn can_continue_streaming(
+fn stream_principal(
     state: &AppState,
     owner: &str,
     repo_name: &str,
     user: Option<&UserAccount>,
-) -> Result<(), ApiError> {
+) -> Result<
+    (
+        crate::domain::store::StoredRepository,
+        crate::domain::policy::Principal,
+    ),
+    ApiError,
+> {
     let repo = find_repo(state, owner, repo_name)?;
     let principal = principal_for_scope_user(&repo, user);
-    ensure_repo_read(state, &repo, &principal)
+    Ok((repo, principal))
+}
+
+fn ensure_repo_events_allowed(
+    state: &AppState,
+    repo: &crate::domain::store::StoredRepository,
+    principal: &crate::domain::policy::Principal,
+) -> Result<(), ApiError> {
+    ensure_repo_read(state, repo, principal)?;
+    if role_for_principal(state, repo, principal)?.is_some_and(|role| role >= RepoRole::Writer) {
+        Ok(())
+    } else {
+        Err(ApiError::not_found(format!(
+            "repo {} not found",
+            repo.record.id
+        )))
+    }
 }
 
 fn sse_event(event: RepoChangeEvent) -> Result<Event, Infallible> {
