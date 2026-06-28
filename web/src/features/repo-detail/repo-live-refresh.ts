@@ -25,17 +25,55 @@ export function useRepoLiveRefresh(
 
     const controller = new AbortController()
     let stopped = false
-    let highestInvalidatedVersion = live.repo.change_version
+    let highestAppliedVersion = live.repo.change_version
+    let pendingVersion: number | null = null
+    let refreshInFlight = false
+    let retryTimeout: number | null = null
 
-    const onEvent = (event: RepoChangeEvent) => {
-      if (
-        event.repo_id !== live.repo.id ||
-        event.version <= highestInvalidatedVersion
-      ) {
+    const scheduleRetry = () => {
+      if (stopped || retryTimeout !== null) {
         return
       }
-      highestInvalidatedVersion = event.version
-      void invalidate().catch(() => undefined)
+      retryTimeout = window.setTimeout(() => {
+        retryTimeout = null
+        void flushRefresh()
+      }, RECONNECT_DELAY_MS)
+    }
+
+    const flushRefresh = async () => {
+      if (stopped || refreshInFlight || pendingVersion === null) {
+        return
+      }
+
+      const version = pendingVersion
+      pendingVersion = null
+      refreshInFlight = true
+      let shouldRetry = false
+      try {
+        await invalidate()
+        highestAppliedVersion = Math.max(highestAppliedVersion, version)
+      } catch (error) {
+        pendingVersion = Math.max(pendingVersion ?? version, version)
+        shouldRetry = true
+      } finally {
+        refreshInFlight = false
+        if (stopped || pendingVersion === null) {
+          return
+        }
+        if (shouldRetry) {
+          scheduleRetry()
+        } else {
+          void flushRefresh()
+        }
+      }
+    }
+
+    const onEvent = (event: RepoChangeEvent) => {
+      if (event.repo_id !== live.repo.id || event.version <= highestAppliedVersion) {
+        return
+      }
+      pendingVersion = Math.max(pendingVersion ?? event.version, event.version)
+      void flushRefresh()
     }
 
     const run = async () => {
@@ -56,6 +94,9 @@ export function useRepoLiveRefresh(
     void run()
     return () => {
       stopped = true
+      if (retryTimeout !== null) {
+        window.clearTimeout(retryTimeout)
+      }
       controller.abort()
     }
   }, [getToken, invalidate, isLoaded, live])

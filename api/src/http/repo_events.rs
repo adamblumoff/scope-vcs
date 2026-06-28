@@ -1,5 +1,6 @@
 use crate::{
     auth::scope::{optional_scope_user, principal_for_scope_user},
+    domain::store::UserAccount,
     error::ApiError,
     repo_events::RepoChangeEvent,
     state::{AppState, ensure_repo_read, find_repo},
@@ -9,6 +10,7 @@ use axum::{
     http::HeaderMap,
     response::sse::{Event, KeepAlive, Sse},
 };
+use futures_util::stream;
 use std::{convert::Infallible, time::Duration};
 use tokio_stream::{Stream, StreamExt, once, wrappers::BroadcastStream};
 
@@ -28,15 +30,40 @@ pub(crate) async fn repo_events(
     let (initial, receiver) = state
         .repo_events
         .subscribe(&repo_id, repo.record.change_version);
-    let lagged_repo_id = repo_id.clone();
-    let updates = BroadcastStream::new(receiver).map(move |event| match event {
-        Ok(event) => sse_event(event),
-        Err(_) => sse_event(RepoChangeEvent {
-            repo_id: lagged_repo_id.clone(),
-            version: CLIENT_RESYNC_VERSION,
-            reason: "lagged".to_string(),
-        }),
-    });
+    let updates = stream::unfold(
+        RepoEventStreamState {
+            lagged_repo_id: repo_id,
+            owner,
+            receiver: BroadcastStream::new(receiver),
+            repo_name,
+            state: state.clone(),
+            user,
+        },
+        |mut stream_state| async move {
+            let event = stream_state.receiver.next().await?;
+            let event = match event {
+                Ok(event) => event,
+                Err(_) => RepoChangeEvent {
+                    repo_id: stream_state.lagged_repo_id.clone(),
+                    version: CLIENT_RESYNC_VERSION,
+                    reason: "lagged".to_string(),
+                },
+            };
+
+            if can_continue_streaming(
+                &stream_state.state,
+                &stream_state.owner,
+                &stream_state.repo_name,
+                stream_state.user.as_ref(),
+            )
+            .is_err()
+            {
+                return None;
+            }
+
+            Some((sse_event(event), stream_state))
+        },
+    );
 
     Ok(
         Sse::new(once(sse_event(initial)).chain(updates)).keep_alive(
@@ -45,6 +72,26 @@ pub(crate) async fn repo_events(
                 .text("keep-alive"),
         ),
     )
+}
+
+struct RepoEventStreamState {
+    lagged_repo_id: String,
+    owner: String,
+    receiver: BroadcastStream<RepoChangeEvent>,
+    repo_name: String,
+    state: AppState,
+    user: Option<UserAccount>,
+}
+
+fn can_continue_streaming(
+    state: &AppState,
+    owner: &str,
+    repo_name: &str,
+    user: Option<&UserAccount>,
+) -> Result<(), ApiError> {
+    let repo = find_repo(state, owner, repo_name)?;
+    let principal = principal_for_scope_user(&repo, user);
+    ensure_repo_read(state, &repo, &principal)
 }
 
 fn sse_event(event: RepoChangeEvent) -> Result<Event, Infallible> {
