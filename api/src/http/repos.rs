@@ -108,7 +108,7 @@ pub(crate) async fn get_repo(
         name: repo.record.name.clone(),
         lifecycle_state: repo.record.publication_state,
         default_visibility: repo.record.default_visibility,
-        change_version: repo.record.change_version,
+        change_version: repo_change_version_for_role(&repo, role),
         role,
         staged_update_pending,
         push_blocked_by_staged_update,

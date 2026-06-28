@@ -9,6 +9,7 @@ use crate::{
     db::MetadataStore,
     object_store::{EncryptedObjectStore, ObjectStore},
     persistence::ensure_private_dir,
+    repo_events::RepoChangeBus,
 };
 use std::sync::Arc;
 
@@ -31,6 +32,8 @@ pub fn app_state_from_env() -> anyhow::Result<AppState> {
         }
         env::DevMetadataStore::Postgres => MetadataStore::connect_from_env()?,
     };
+    let repo_events = RepoChangeBus::default();
+    metadata.start_repo_change_listener(repo_events.clone())?;
     let object_store: Arc<dyn ObjectStore> = object_store;
 
     Ok(AppState {
@@ -39,5 +42,6 @@ pub fn app_state_from_env() -> anyhow::Result<AppState> {
         clerk: ClerkVerifier::from_env(),
         object_store,
         operator_token: non_empty_env(SCOPE_OPERATOR_TOKEN_ENV).map(Arc::from),
+        repo_events,
     })
 }
