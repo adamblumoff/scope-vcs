@@ -22,6 +22,7 @@ import {
   createFileRoute,
   redirect,
   useChildMatches,
+  useLocation,
   useRouter,
 } from '@tanstack/react-router'
 import { createServerFn } from '@tanstack/react-start'
@@ -86,13 +87,17 @@ function stripTrailingSlash(path: string) {
 
 function RepoDetailRoute() {
   const childMatches = useChildMatches()
+  const location = useLocation()
   const routeData = Route.useLoaderData()
   const params = Route.useParams()
   const router = useRouter()
   const invalidate = useCallback(() => router.invalidate(), [router])
   useRepoLiveRefresh(routeData.live, invalidate)
+  const childPath =
+    stripTrailingSlash(location.pathname) !==
+    `/repos/${params.owner}/${params.repo}`
 
-  if (childMatches.length > 0) {
+  if (childPath && childMatches.length > 0) {
     return <Outlet />
   }
 
