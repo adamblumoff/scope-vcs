@@ -62,11 +62,7 @@ impl RepoChangeBus {
         Ok(())
     }
 
-    pub(crate) fn subscribe(
-        &self,
-        repo_id: &str,
-        current_version: u64,
-    ) -> (RepoChangeEvent, broadcast::Receiver<RepoChangeEvent>) {
+    pub(crate) fn subscribe(&self, repo_id: &str) -> broadcast::Receiver<RepoChangeEvent> {
         let mut channels = self
             .channels
             .lock()
@@ -74,14 +70,20 @@ impl RepoChangeBus {
         let sender = channels
             .entry(repo_id.to_string())
             .or_insert_with(|| broadcast::channel(REPO_CHANGE_CHANNEL_CAPACITY).0);
-        (
-            RepoChangeEvent {
-                repo_id: repo_id.to_string(),
-                version: current_version,
-                reason: "connected".to_string(),
-            },
-            sender.subscribe(),
-        )
+        sender.subscribe()
+    }
+
+    pub(crate) fn remove_if_idle(&self, repo_id: &str) {
+        let mut channels = self
+            .channels
+            .lock()
+            .expect("repo change bus lock must not be poisoned");
+        if channels
+            .get(repo_id)
+            .is_some_and(|sender| sender.receiver_count() == 0)
+        {
+            channels.remove(repo_id);
+        }
     }
 
     pub(crate) fn publish_event(&self, event: RepoChangeEvent) {

@@ -1,6 +1,6 @@
 use crate::{
     auth::scope::{optional_scope_user, principal_for_scope_user},
-    domain::store::UserAccount,
+    domain::store::{UserAccount, repo_id},
     error::ApiError,
     repo_events::RepoChangeEvent,
     state::{AppState, ensure_repo_read, find_repo},
@@ -21,15 +21,26 @@ pub(crate) async fn repo_events(
     headers: HeaderMap,
     Path((owner, repo_name)): Path<(String, String)>,
 ) -> Result<Sse<impl Stream<Item = Result<Event, Infallible>>>, ApiError> {
-    let repo = find_repo(&state, &owner, &repo_name)?;
     let user = optional_scope_user(&state, &headers).await?;
-    let principal = principal_for_scope_user(&repo, user.as_ref());
-    ensure_repo_read(&state, &repo, &principal)?;
+    let repo_id = repo_id(&owner, &repo_name);
+    let receiver = state.repo_events.subscribe(&repo_id);
 
-    let repo_id = repo.record.id.clone();
-    let (initial, receiver) = state
-        .repo_events
-        .subscribe(&repo_id, repo.record.change_version);
+    let repo = match find_repo(&state, &owner, &repo_name) {
+        Ok(repo) => repo,
+        Err(error) => {
+            drop(receiver);
+            state.repo_events.remove_if_idle(&repo_id);
+            return Err(error);
+        }
+    };
+    let principal = principal_for_scope_user(&repo, user.as_ref());
+    if let Err(error) = ensure_repo_read(&state, &repo, &principal) {
+        drop(receiver);
+        state.repo_events.remove_if_idle(&repo_id);
+        return Err(error);
+    }
+
+    let initial = RepoChangeEvent::new(&repo_id, repo.record.change_version, "connected");
     let updates = stream::unfold(
         RepoEventStreamState {
             lagged_repo_id: repo_id,

@@ -11,6 +11,7 @@ type RepoChangeEvent = {
 }
 
 type AuthTokenGetter = (options: { template: string }) => Promise<string | null>
+type StreamRepoEventsResult = 'closed'
 
 export function useRepoLiveRefresh(
   live: RepoLiveState | null,
@@ -26,9 +27,11 @@ export function useRepoLiveRefresh(
     const controller = new AbortController()
     let stopped = false
     let highestAppliedVersion = live.repo.change_version
+    let forceRefreshPending = false
     let pendingVersion: number | null = null
     let refreshInFlight = false
     let retryTimeout: number | null = null
+    let streamCloseResynced = false
 
     const scheduleRetry = () => {
       if (stopped || retryTimeout !== null) {
@@ -41,23 +44,34 @@ export function useRepoLiveRefresh(
     }
 
     const flushRefresh = async () => {
-      if (stopped || refreshInFlight || pendingVersion === null) {
+      if (
+        stopped ||
+        refreshInFlight ||
+        (pendingVersion === null && !forceRefreshPending)
+      ) {
         return
       }
 
       const version = pendingVersion
+      const forceRefresh = forceRefreshPending
       pendingVersion = null
+      forceRefreshPending = false
       refreshInFlight = true
       let shouldRetry = false
       try {
         await invalidate()
-        highestAppliedVersion = Math.max(highestAppliedVersion, version)
+        if (version !== null) {
+          highestAppliedVersion = Math.max(highestAppliedVersion, version)
+        }
       } catch (error) {
-        pendingVersion = Math.max(pendingVersion ?? version, version)
+        if (version !== null) {
+          pendingVersion = Math.max(pendingVersion ?? version, version)
+        }
+        forceRefreshPending ||= forceRefresh
         shouldRetry = true
       } finally {
         refreshInFlight = false
-        if (stopped || pendingVersion === null) {
+        if (stopped || (pendingVersion === null && !forceRefreshPending)) {
           return
         }
         if (shouldRetry) {
@@ -76,10 +90,27 @@ export function useRepoLiveRefresh(
       void flushRefresh()
     }
 
+    const onStreamClosed = () => {
+      if (streamCloseResynced) {
+        return
+      }
+      streamCloseResynced = true
+      forceRefreshPending = true
+      void flushRefresh()
+    }
+
     const run = async () => {
       while (!stopped) {
         try {
-          await streamRepoEvents(live, getToken, onEvent, controller.signal)
+          const result = await streamRepoEvents(
+            live,
+            getToken,
+            onEvent,
+            controller.signal,
+          )
+          if (!controller.signal.aborted && result === 'closed') {
+            onStreamClosed()
+          }
         } catch (error) {
           if (controller.signal.aborted) {
             return
@@ -107,7 +138,7 @@ async function streamRepoEvents(
   getToken: AuthTokenGetter,
   onEvent: (event: RepoChangeEvent) => void,
   signal: AbortSignal,
-) {
+): Promise<StreamRepoEventsResult> {
   const token = await getToken({ template: live.clerk_token_template })
   const headers = new Headers()
   if (token) {
@@ -116,7 +147,7 @@ async function streamRepoEvents(
 
   const response = await fetch(live.event_stream_url, { headers, signal })
   if (!response.ok || !response.body) {
-    return
+    return 'closed'
   }
 
   const reader = response.body.getReader()
@@ -125,7 +156,7 @@ async function streamRepoEvents(
   while (!signal.aborted) {
     const chunk = await reader.read()
     if (chunk.done) {
-      return
+      return 'closed'
     }
     buffer += decoder.decode(chunk.value, { stream: true }).replace(/\r\n/g, '\n')
     const taken = takeSseMessages(buffer)
@@ -137,6 +168,7 @@ async function streamRepoEvents(
       }
     }
   }
+  return 'closed'
 }
 
 export function parseRepoChangeEvent(message: string): RepoChangeEvent | null {
