@@ -26,7 +26,9 @@ export function ReviewVisibilityPanelHeader({
     <div className="flex flex-col gap-3 border-b border-border py-4 sm:flex-row sm:items-start sm:justify-between">
       <div className="min-w-0">
         <div className="flex flex-wrap items-center gap-2">
-          <h2 className="text-sm font-semibold leading-5">{title}</h2>
+          <h2 className="text-base font-semibold leading-6 tracking-tight">
+            {title}
+          </h2>
           <Badge variant="outline">{sourceLabel(source)}</Badge>
         </div>
         <p className="mt-1 max-w-[720px] text-sm leading-5 text-muted-foreground">

@@ -1,13 +1,13 @@
 mod env;
 mod file_object_store;
+mod seed;
 
 use crate::{
     AppState,
     auth::clerk::ClerkVerifier,
     config::{SCOPE_OPERATOR_TOKEN_ENV, data_dir, git_repo_root, non_empty_env},
     db::MetadataStore,
-    domain::store::AppCatalog,
-    object_store::EncryptedObjectStore,
+    object_store::{EncryptedObjectStore, ObjectStore},
     persistence::ensure_private_dir,
 };
 use std::sync::Arc;
@@ -20,13 +20,18 @@ pub fn app_state_from_env() -> anyhow::Result<AppState> {
     let data_dir = data_dir(&repo_root);
     ensure_private_dir(&data_dir).map_err(|error| anyhow::anyhow!(error.message))?;
 
-    let metadata = match settings.metadata_store {
-        env::DevMetadataStore::Memory => MetadataStore::memory(AppCatalog::default()),
-        env::DevMetadataStore::Postgres => MetadataStore::connect_from_env()?,
-    };
     let object_store = Arc::new(EncryptedObjectStore::from_env(Arc::new(
         file_object_store::FileObjectStore::from_env(&data_dir),
     ))?);
+    let metadata = match settings.metadata_store {
+        env::DevMetadataStore::Memory => {
+            let catalog = seed::catalog(object_store.as_ref(), settings.seed_user)
+                .map_err(|error| anyhow::anyhow!("seeding local dev catalog: {}", error.message))?;
+            MetadataStore::memory(catalog)
+        }
+        env::DevMetadataStore::Postgres => MetadataStore::connect_from_env()?,
+    };
+    let object_store: Arc<dyn ObjectStore> = object_store;
 
     Ok(AppState {
         metadata,

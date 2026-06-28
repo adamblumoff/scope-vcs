@@ -4,6 +4,8 @@ node_modules/
 .output/
 .test-output/
 dist/
+web/.screenshots/
+web/.tanstack/tmp/
 .tmp/
 .agents/
 .codex/

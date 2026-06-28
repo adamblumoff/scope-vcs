@@ -13,6 +13,7 @@ production data and makes local bugs hard to reason about.
 - Local API startup refuses dangerous environment combinations.
 - Local development uses disposable local metadata and local object storage by
   default.
+- Local memory metadata starts with seeded repositories for UI development.
 - Clerk development keys are the only supported local auth keys.
 - The development contract is versioned in the repo, not stored in shell history.
 - Old ad hoc local-dev scripts and docs are removed or replaced.
@@ -24,9 +25,9 @@ Local development has three boundaries:
 
 1. Web runs at `http://localhost:3000` with Clerk development keys.
 2. API runs at `http://localhost:8080` with a matching Clerk development issuer.
-3. Persistence is local: ephemeral in-memory metadata by default, optional
-   local Postgres for integration work, and filesystem object storage under
-   `.scope/dev`.
+3. Persistence is local: ephemeral seeded in-memory metadata by default,
+   optional local Postgres for integration work, and filesystem object storage
+   under `.scope/dev`.
 
 Railway production variables are not part of the default local workflow. A
 separate Railway development environment may be added later for deployed
@@ -56,12 +57,16 @@ The launcher should keep local defaults small and explicit. It may read
 `.env.local` and `web/.env.local`, but it must not pull production Railway
 variables.
 
+The default local stack does not start the CLI installer service. UI development
+uses preloaded repositories instead of depending on `scope init` or
+`scope-cli-service`.
+
 ## API Changes
 
 Add first-class local runtime dependencies:
 
 - `SCOPE_METADATA_STORE=memory` keeps local UI work zero-dependency and
-  disposable.
+  disposable, with seeded demo repositories.
 - `SCOPE_METADATA_STORE=postgres` uses `DATABASE_URL` when a local Postgres is
   available.
 - Omitted `SCOPE_METADATA_STORE` defaults to `memory` when `SCOPE_ENV=local`
@@ -80,6 +85,16 @@ Add environment validation before `AppState` starts:
 - `SCOPE_ENV=local` rejects database URLs without a visible local-dev marker
   when `SCOPE_METADATA_STORE=postgres`.
 - `SCOPE_ENV=local` rejects live Clerk keys and production Clerk issuers.
+- `SCOPE_ENV=local` requires `SCOPE_DEV_USER_EMAIL` so seeded repositories attach
+  to the signed-in Clerk dev account by verified email.
+
+## Seeded Data
+
+Local memory metadata creates one Scope user from `SCOPE_DEV_USER_EMAIL` and
+optional `SCOPE_DEV_USER_HANDLE`. The seed includes a published repository, a
+pending publish review repository, and a published repository with a staged
+update. The seed writes matching sample file blobs through the local encrypted
+object store so repo detail and review screens load real content.
 
 ## Auth Identity Rule
 
@@ -96,8 +111,9 @@ product is pre-alpha, destructive schema reset on drift is acceptable and expect
 Implementation is complete only when:
 
 - `dev doctor` passes in the local environment.
-- `dev up` starts API and web without Railway production variables or local
-  Postgres.
+- `dev up` starts API and web without Railway production variables, local
+  Postgres, or a CLI installer service.
+- Signed-in local web shows seeded repositories without running `scope init`.
 - `/readyz` passes on the local API.
 - `dev down` stops owned processes.
 - API tests cover local object storage, environment guards, and same-email Clerk

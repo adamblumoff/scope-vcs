@@ -40,9 +40,19 @@ function RootComponent() {
 
 function RootDocument({ children }: { children: ReactNode }) {
   return (
-    <html className="dark" lang="en">
+    <html
+      className="dark"
+      lang="en"
+      style={{ colorScheme: 'dark' }}
+      suppressHydrationWarning
+    >
       <head>
         <HeadContent />
+        <script
+          dangerouslySetInnerHTML={{
+            __html: `(function(){try{var s=localStorage.getItem('scope-theme');var dark=s?s==='dark':true;var e=document.documentElement;e.classList.toggle('dark',dark);e.style.colorScheme=dark?'dark':'light';}catch(_){}})();`,
+          }}
+        />
       </head>
       <body>
         <ClerkProvider appearance={scopeClerkAppearance}>

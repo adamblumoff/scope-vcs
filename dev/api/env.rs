@@ -8,6 +8,8 @@ pub(super) const LOCAL_SCOPE_ENV: &str = "local";
 pub(super) const SCOPE_METADATA_STORE_ENV: &str = "SCOPE_METADATA_STORE";
 pub(super) const SCOPE_OBJECT_STORE_ENV: &str = "SCOPE_OBJECT_STORE";
 pub(super) const SCOPE_OBJECT_STORE_DIR_ENV: &str = "SCOPE_OBJECT_STORE_DIR";
+pub(super) const SCOPE_DEV_USER_EMAIL_ENV: &str = "SCOPE_DEV_USER_EMAIL";
+pub(super) const SCOPE_DEV_USER_HANDLE_ENV: &str = "SCOPE_DEV_USER_HANDLE";
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) enum DevMetadataStore {
@@ -15,9 +17,16 @@ pub(super) enum DevMetadataStore {
     Postgres,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(super) struct DevSeedUser {
+    pub(super) email: String,
+    pub(super) handle: String,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub(super) struct LocalDevSettings {
     pub(super) metadata_store: DevMetadataStore,
+    pub(super) seed_user: DevSeedUser,
 }
 
 pub fn is_local_dev_env() -> bool {
@@ -41,6 +50,8 @@ struct DevEnvSnapshot {
     object_store: Option<String>,
     railway_environment_name: Option<String>,
     railway_project_id: Option<String>,
+    dev_user_email: Option<String>,
+    dev_user_handle: Option<String>,
 }
 
 impl DevEnvSnapshot {
@@ -56,6 +67,8 @@ impl DevEnvSnapshot {
             object_store: non_empty_env(SCOPE_OBJECT_STORE_ENV),
             railway_environment_name: non_empty_env("RAILWAY_ENVIRONMENT_NAME"),
             railway_project_id: non_empty_env("RAILWAY_PROJECT_ID"),
+            dev_user_email: non_empty_env(SCOPE_DEV_USER_EMAIL_ENV),
+            dev_user_handle: non_empty_env(SCOPE_DEV_USER_HANDLE_ENV),
         }
     }
 }
@@ -109,7 +122,10 @@ fn validate_snapshot(snapshot: &DevEnvSnapshot) -> anyhow::Result<LocalDevSettin
         anyhow::bail!("{CLERK_AUTHORIZED_PARTIES_ENV} must include {LOCAL_APP_ORIGIN}");
     }
 
-    Ok(LocalDevSettings { metadata_store })
+    Ok(LocalDevSettings {
+        metadata_store,
+        seed_user: dev_seed_user(snapshot)?,
+    })
 }
 
 fn dev_metadata_store(value: Option<&str>) -> anyhow::Result<DevMetadataStore> {
@@ -225,6 +241,60 @@ fn configured_list_contains(values: &str, expected: &str) -> bool {
         .any(|value| value == expected)
 }
 
+fn dev_seed_user(snapshot: &DevEnvSnapshot) -> anyhow::Result<DevSeedUser> {
+    let email = snapshot
+        .dev_user_email
+        .as_deref()
+        .map(normalize_email)
+        .filter(|email| email.contains('@'))
+        .ok_or_else(|| {
+            anyhow::anyhow!("{SCOPE_DEV_USER_EMAIL_ENV} must be set to your Clerk dev email")
+        })?;
+    let handle = match snapshot.dev_user_handle.as_deref() {
+        Some(raw) => normalize_handle(raw).ok_or_else(|| {
+            anyhow::anyhow!("{SCOPE_DEV_USER_HANDLE_ENV} must contain letters or numbers")
+        })?,
+        None => email
+            .split('@')
+            .next()
+            .and_then(normalize_handle)
+            .unwrap_or_else(|| "dev-user".to_string()),
+    };
+
+    Ok(DevSeedUser { email, handle })
+}
+
+fn normalize_email(email: &str) -> String {
+    email.trim().to_ascii_lowercase()
+}
+
+fn normalize_handle(value: &str) -> Option<String> {
+    let mut handle = String::new();
+    let mut last_was_separator = false;
+    for byte in value.trim().bytes() {
+        let next = if byte.is_ascii_alphanumeric() {
+            last_was_separator = false;
+            Some(byte.to_ascii_lowercase() as char)
+        } else if matches!(byte, b'-' | b'_') && !last_was_separator {
+            last_was_separator = true;
+            Some('-')
+        } else {
+            None
+        };
+
+        if let Some(next) = next {
+            handle.push(next);
+        }
+    }
+
+    let handle = handle.trim_matches('-').to_string();
+    if handle.is_empty() || handle.len() > 40 {
+        None
+    } else {
+        Some(handle)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -233,6 +303,8 @@ mod tests {
     fn local_runtime_defaults_to_memory_metadata() {
         let settings = validate_snapshot(&local_snapshot()).unwrap();
         assert_eq!(settings.metadata_store, DevMetadataStore::Memory);
+        assert_eq!(settings.seed_user.email, "dev@example.com");
+        assert_eq!(settings.seed_user.handle, "dev");
     }
 
     #[test]
@@ -295,6 +367,32 @@ mod tests {
         assert!(error.to_string().contains("production Clerk"));
     }
 
+    #[test]
+    fn local_runtime_requires_seed_user_email() {
+        let snapshot = DevEnvSnapshot {
+            dev_user_email: None,
+            ..local_snapshot()
+        };
+
+        let error = validate_snapshot(&snapshot).unwrap_err();
+
+        assert!(error.to_string().contains(SCOPE_DEV_USER_EMAIL_ENV));
+    }
+
+    #[test]
+    fn local_runtime_derives_seed_handle_from_email() {
+        let snapshot = DevEnvSnapshot {
+            dev_user_email: Some("Dev.User+local@Example.COM".to_string()),
+            dev_user_handle: None,
+            ..local_snapshot()
+        };
+
+        let settings = validate_snapshot(&snapshot).unwrap();
+
+        assert_eq!(settings.seed_user.email, "dev.user+local@example.com");
+        assert_eq!(settings.seed_user.handle, "devuserlocal");
+    }
+
     fn local_snapshot() -> DevEnvSnapshot {
         DevEnvSnapshot {
             scope_env: Some(LOCAL_SCOPE_ENV.to_string()),
@@ -303,6 +401,8 @@ mod tests {
             clerk_issuer: Some("https://scope-dev.clerk.accounts.dev".to_string()),
             clerk_authorized_parties: Some(LOCAL_APP_ORIGIN.to_string()),
             object_store: Some("filesystem".to_string()),
+            dev_user_email: Some("dev@example.com".to_string()),
+            dev_user_handle: Some("dev".to_string()),
             ..DevEnvSnapshot::default()
         }
     }

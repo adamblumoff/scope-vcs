@@ -60,7 +60,7 @@ export function DeleteRepositoryDialog({
       <AlertDialogContent asChild>
         <form onSubmit={(event) => void submit(event)}>
           <AlertDialogHeader className="grid-cols-[auto_minmax(0,1fr)] gap-x-3">
-            <div className="row-span-2 flex size-9 shrink-0 items-center justify-center rounded-md border border-destructive/50 text-destructive">
+            <div className="row-span-2 flex size-9 shrink-0 items-center justify-center rounded-xl bg-destructive/10 text-destructive">
               <AlertTriangle className="size-4" />
             </div>
             <AlertDialogTitle>Delete repository</AlertDialogTitle>

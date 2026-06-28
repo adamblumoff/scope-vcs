@@ -46,14 +46,14 @@ export function PageHeader({
         )}
         <h1
           className={cn(
-            'truncate text-2xl font-semibold leading-8 sm:text-[32px] sm:leading-10',
+            'truncate text-2xl font-semibold tracking-tight leading-8 sm:text-[32px] sm:leading-10',
             titleClassName,
           )}
         >
           {title}
         </h1>
         {renderedDescription && (
-          <p className="mt-2 max-w-[680px] text-sm leading-5 text-muted-foreground">
+          <p className="mt-2.5 max-w-[680px] text-[15px] leading-6 text-muted-foreground">
             {renderedDescription}
           </p>
         )}

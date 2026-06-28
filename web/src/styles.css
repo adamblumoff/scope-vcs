@@ -77,13 +77,16 @@ a {
   --color-card: var(--card);
   --color-foreground: var(--foreground);
   --color-background: var(--background);
+  --color-brand: var(--brand);
+  --color-brand-foreground: var(--brand-foreground);
+  --color-brand-muted: var(--brand-muted);
   --radius-sm: 6px;
-  --radius-md: 6px;
-  --radius-lg: 8px;
-  --radius-xl: 12px;
-  --radius-2xl: 16px;
-  --radius-3xl: 16px;
-  --radius-4xl: 16px;
+  --radius-md: 8px;
+  --radius-lg: 10px;
+  --radius-xl: 14px;
+  --radius-2xl: 18px;
+  --radius-3xl: 20px;
+  --radius-4xl: 24px;
 }
 
 :root {
@@ -196,20 +199,24 @@ a {
   --sidebar-accent-foreground: var(--gray-1000);
   --sidebar-border: var(--gray-alpha-200);
   --sidebar-ring: var(--blue-700);
-  --shadow-card: 0 2px 2px rgba(0, 0, 0, 0.04);
+  --brand: var(--blue-700);
+  --brand-foreground: #ffffff;
+  --brand-muted: color-mix(in srgb, var(--blue-700) 12%, transparent);
+  --shadow-card: 0 1px 2px rgba(0, 0, 0, 0.04), 0 1px 1px rgba(0, 0, 0, 0.03);
+  --shadow-pop: 0 12px 32px -12px rgba(0, 0, 0, 0.18), 0 4px 12px -6px rgba(0, 0, 0, 0.12);
 }
 
 .dark {
-  --background-100: #000000;
-  --background-200: #000000;
+  --background-100: #161616;
+  --background-200: #0a0a0a;
   --primary-token: #ededed;
   --secondary-token: #a0a0a0;
   --tertiary-token: #006efe;
-  --neutral-token: #1a1a1a;
-  --gray-100: #1a1a1a;
-  --gray-200: #1f1f1f;
-  --gray-300: #292929;
-  --gray-400: #2e2e2e;
+  --neutral-token: #1f1f1f;
+  --gray-100: #1c1c1c;
+  --gray-200: #232323;
+  --gray-300: #2c2c2c;
+  --gray-400: #323232;
   --gray-500: #454545;
   --gray-600: #878787;
   --gray-700: #8f8f8f;
@@ -296,7 +303,11 @@ a {
   --pink-800: #e7006d;
   --pink-900: #ff4d8d;
   --pink-1000: #ffe9f4;
-  --shadow-card: 0 1px 2px rgba(0, 0, 0, 0.16);
+  --brand: var(--blue-700);
+  --brand-foreground: #ffffff;
+  --brand-muted: color-mix(in srgb, var(--blue-700) 18%, transparent);
+  --shadow-card: 0 1px 2px rgba(0, 0, 0, 0.4), 0 1px 1px rgba(0, 0, 0, 0.3);
+  --shadow-pop: 0 16px 40px -12px rgba(0, 0, 0, 0.6), 0 6px 16px -8px rgba(0, 0, 0, 0.5);
 }
 
 @supports (color: oklch(0% 0 0)) {
@@ -356,6 +367,13 @@ a {
 
   body {
     @apply bg-background text-foreground antialiased;
+    background-repeat: no-repeat;
+    background-attachment: fixed;
+    background-image: radial-gradient(
+      48rem 26rem at 50% -8rem,
+      var(--brand-muted),
+      transparent 70%
+    );
   }
 
   button:not(:disabled),
@@ -366,7 +384,7 @@ a {
   button:focus-visible,
   [role="button"]:focus-visible,
   a:focus-visible {
-    box-shadow: 0 0 0 2px var(--background-100), 0 0 0 4px var(--blue-900);
+    box-shadow: 0 0 0 2px var(--background), 0 0 0 4px var(--ring);
   }
 }
 

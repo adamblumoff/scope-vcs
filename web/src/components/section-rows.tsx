@@ -16,12 +16,7 @@ export function SectionRows({
   className?: string
 }) {
   return (
-    <div
-      className={cn(
-        'mt-8 divide-y divide-border border-y border-border',
-        className,
-      )}
-    >
+    <div className={cn('mt-6 divide-y divide-border', className)}>
       {children}
     </div>
   )

@@ -4,51 +4,86 @@ import { GitBranch } from 'lucide-react'
 import type { ReactNode } from 'react'
 
 type AppHeaderProps = {
-  subtitle: string
+  subtitle?: string
   subtitleClassName?: string
   contentClassName?: string
   homeLink?: boolean
+  breadcrumb?: ReactNode
   action?: ReactNode
 }
 
 export function AppHeader({
   action,
+  breadcrumb,
   contentClassName,
   homeLink = true,
   subtitle,
   subtitleClassName,
 }: AppHeaderProps) {
-  const brand = (
-    <>
-      <div className="flex size-8 shrink-0 items-center justify-center rounded-md border border-border">
-        <GitBranch className="size-4" />
-      </div>
-      <div className="min-w-0">
-        <div className="truncate text-sm font-semibold leading-5">Scope</div>
-        <div
-          className={`truncate text-xs leading-4 text-muted-foreground ${subtitleClassName ?? ''}`}
-        >
-          {subtitle}
+  const mark = (
+    <div className="flex size-9 shrink-0 items-center justify-center rounded-lg bg-brand text-brand-foreground shadow-[var(--shadow-card)]">
+      <GitBranch className="size-4.5" />
+    </div>
+  )
+
+  const brand = breadcrumb ? (
+    <div className="flex min-w-0 items-center gap-2.5">
+      {homeLink ? (
+        <Link className="flex shrink-0 items-center gap-2.5" to="/">
+          {mark}
+          <span className="hidden text-sm font-semibold tracking-tight sm:inline">
+            Scope
+          </span>
+        </Link>
+      ) : (
+        <div className="flex shrink-0 items-center gap-2.5">
+          {mark}
+          <span className="hidden text-sm font-semibold tracking-tight sm:inline">
+            Scope
+          </span>
         </div>
+      )}
+      <span aria-hidden className="text-muted-foreground/50">
+        /
+      </span>
+      <div className="min-w-0">{breadcrumb}</div>
+    </div>
+  ) : (
+    <>
+      {mark}
+      <div className="min-w-0">
+        <div className="truncate text-sm font-semibold leading-5 tracking-tight">
+          Scope
+        </div>
+        {subtitle && (
+          <div
+            className={`truncate text-xs leading-4 text-muted-foreground ${subtitleClassName ?? ''}`}
+          >
+            {subtitle}
+          </div>
+        )}
       </div>
     </>
   )
 
+  const brandWrapper =
+    homeLink && !breadcrumb ? (
+      <Link className="flex min-w-0 items-center gap-3" to="/">
+        {brand}
+      </Link>
+    ) : (
+      <div className="flex min-w-0 items-center gap-3">{brand}</div>
+    )
+
   return (
-    <header className="border-b border-border bg-background">
+    <header className="sticky top-0 z-30 border-b border-border bg-background/80 backdrop-blur-md supports-[backdrop-filter]:bg-background/65">
       <div
         className={cn(
           'mx-auto flex min-h-16 max-w-[1040px] items-center justify-between gap-3 px-4 py-3 sm:px-6',
           contentClassName,
         )}
       >
-        {homeLink ? (
-          <Link className="flex min-w-0 items-center gap-3" to="/">
-            {brand}
-          </Link>
-        ) : (
-          <div className="flex min-w-0 items-center gap-3">{brand}</div>
-        )}
+        {brandWrapper}
         {action}
       </div>
     </header>

@@ -72,7 +72,7 @@ export function RepoCloneDropdown({
 
       {open && (
         <div
-          className="absolute right-0 top-full z-50 mt-2 w-[min(420px,calc(100vw-2rem))] rounded-md border border-border bg-popover p-3 text-popover-foreground shadow-md"
+          className="absolute right-0 top-full z-50 mt-2 w-[min(420px,calc(100vw-2rem))] rounded-xl border border-border bg-popover p-3 text-popover-foreground shadow-[var(--shadow-pop)]"
           role="dialog"
         >
           <div className="mb-2 flex h-6 items-center justify-between text-xs font-semibold leading-4">

@@ -7,7 +7,9 @@ import type {
   UpdateRepoSettingsInput,
 } from '@/api/types'
 import { AppHeader } from '@/components/app-header'
+import { RepoBreadcrumb } from '@/components/repo-breadcrumb'
 import { PageContent, PageHeader } from '@/components/page-header'
+import { LifecycleBadge } from '@/components/lifecycle-badge'
 import { PageErrorAlert } from '@/components/page-error-alert'
 import { VisibilityBadge } from '@/components/visibility-badge'
 import { Badge } from '@/components/ui/badge'
@@ -107,16 +109,16 @@ export function RepoSettingsPage({
 
   return (
     <main className="min-h-screen bg-background text-foreground">
-      <AppHeader subtitle={repo.id} subtitleClassName="font-mono" />
+      <AppHeader breadcrumb={<RepoBreadcrumb params={params} section="settings" />} />
 
       <PageContent>
         <PageHeader
           badges={() => (
             <>
-              <Badge variant="outline">{repo.lifecycle_state}</Badge>
+              <LifecycleBadge state={repo.lifecycle_state} />
               <VisibilityBadge visibility={settings.default_new_file_visibility} />
               {repo.staged_update_pending && (
-                <Badge variant="outline">Staged update</Badge>
+                <Badge variant="warning">Staged update</Badge>
               )}
             </>
           )}

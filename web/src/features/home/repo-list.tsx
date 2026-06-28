@@ -1,23 +1,11 @@
 import type { CliInstallCommands, RepoSummary } from '@/api/types'
-import {
-  type RepoAttentionAction,
-  repoAttentionAction,
-} from '@/components/repo-primary-action'
+import { LifecycleBadge } from '@/components/lifecycle-badge'
+import { RepoPrimaryActionButton } from '@/components/repo-primary-action'
 import { CopyableCodeBlock } from '@/components/copyable-code-block'
-import { Button } from '@/components/ui/button'
-import {
-  Tooltip,
-  TooltipContent,
-  TooltipProvider,
-  TooltipTrigger,
-} from '@/components/ui/tooltip'
+import { VisibilityBadge } from '@/components/visibility-badge'
+import { Badge } from '@/components/ui/badge'
 import { Link } from '@tanstack/react-router'
-import {
-  GitBranch,
-  GitPullRequestArrow,
-  Rocket,
-  TerminalSquare,
-} from 'lucide-react'
+import { ChevronRight, GitBranch } from 'lucide-react'
 
 export function RepoList({
   cliInstallCommands,
@@ -28,116 +16,85 @@ export function RepoList({
 }) {
   if (repositories.length === 0) {
     return (
-      <div className="mt-6 border-t border-border py-9">
-        <div className="mx-auto flex max-w-[520px] flex-col items-center gap-3 text-center text-sm">
-          <div className="flex size-9 items-center justify-center rounded-md border border-border text-muted-foreground">
-            <GitBranch className="size-4" />
+      <div className="mt-8 flex flex-col items-center gap-4 rounded-2xl border border-dashed border-border px-6 py-12 text-center text-sm">
+        <div className="flex size-11 items-center justify-center rounded-xl bg-brand-muted text-brand">
+          <GitBranch className="size-5" />
+        </div>
+        <div className="max-w-[420px]">
+          <div className="text-base font-semibold leading-6">
+            No repositories yet
           </div>
-          <div>
-            <div className="font-medium leading-5">No repositories</div>
-            <p className="mt-1 leading-5 text-muted-foreground">
-              Install the CLI, then initialize this folder from your terminal.
-            </p>
-          </div>
-          <div className="mt-2 w-full space-y-3 text-left">
-            <CopyableCodeBlock
-              copyLabel="Copy macOS/Linux install command"
-              value={cliInstallCommands.posix}
-            />
-            <CopyableCodeBlock
-              copyLabel="Copy Windows install command"
-              value={cliInstallCommands.windows}
-            />
-            <CopyableCodeBlock
-              copyLabel="Copy init command"
-              value="scope init"
-            />
-          </div>
+          <p className="mt-1 leading-6 text-muted-foreground">
+            Install the CLI, then initialize this folder from your terminal to
+            create your first repository.
+          </p>
+        </div>
+        <div className="mt-1 w-full max-w-[460px] space-y-2.5 text-left">
+          <CopyableCodeBlock
+            copyLabel="Copy macOS/Linux install command"
+            value={cliInstallCommands.posix}
+          />
+          <CopyableCodeBlock
+            copyLabel="Copy Windows install command"
+            value={cliInstallCommands.windows}
+          />
+          <CopyableCodeBlock copyLabel="Copy init command" value="scope init" />
         </div>
       </div>
     )
   }
 
   return (
-    <TooltipProvider>
-      <div className="mt-6 border-t border-border">
-        <div className="hidden border-b border-border px-2 py-2 text-xs font-medium leading-4 text-muted-foreground lg:block">
-          <div>Repository</div>
-        </div>
+    <div className="mt-6">
+      <div className="mb-2 px-1 text-xs font-medium uppercase tracking-wide text-muted-foreground">
+        {repositories.length}{' '}
+        {repositories.length === 1 ? 'repository' : 'repositories'}
+      </div>
+      <ul className="flex flex-col gap-1">
         {repositories.map((repo) => (
-          <RepoListRow key={repo.id} repo={repo} />
+          <li key={repo.id}>
+            <RepoListRow repo={repo} />
+          </li>
         ))}
-      </div>
-    </TooltipProvider>
-  )
-}
-
-function RepoListRow({ repo }: { repo: RepoSummary }) {
-  const action = repoAttentionAction(repo)
-
-  return (
-    <div className="border-b border-border px-2 py-3 text-sm transition-colors last:border-b-0 hover:bg-muted/40 lg:min-h-[60px]">
-      <div className="min-w-0">
-        <div className="flex min-w-0 items-center gap-1.5">
-          <Link
-            className="min-w-0 truncate font-mono text-sm font-semibold leading-5 underline-offset-4 hover:underline"
-            params={{ owner: repo.owner_handle, repo: repo.name }}
-            to="/repos/$owner/$repo"
-          >
-            {repo.id}
-          </Link>
-          {action && <RepoAttentionActionLink action={action} repo={repo} />}
-        </div>
-        <div className="mt-1 flex flex-wrap gap-2 text-xs leading-4 text-muted-foreground lg:hidden">
-          <span>{repo.role ?? 'reader'}</span>
-        </div>
-        <div className="mt-1 hidden text-xs leading-4 text-muted-foreground lg:block">
-          {repo.role && <span>{repo.role}</span>}
-        </div>
-      </div>
+      </ul>
     </div>
   )
 }
 
-function RepoAttentionActionLink({
-  action,
-  repo,
-}: {
-  action: RepoAttentionAction
-  repo: RepoSummary
-}) {
-  const Icon = attentionActionIcon(action)
+function RepoListRow({ repo }: { repo: RepoSummary }) {
+  const showLifecycle = repo.lifecycle_state !== 'Published'
 
   return (
-    <Tooltip>
-      <TooltipTrigger asChild>
-        <Button
-          aria-label={action.label}
-          asChild
-          className="size-5 rounded-md text-muted-foreground hover:text-foreground"
-          size="icon-xs"
-          variant="ghost"
-        >
-          <Link
-            params={{ owner: repo.owner_handle, repo: repo.name }}
-            to={action.to}
-          >
-            <Icon className="size-3.5" />
-          </Link>
-        </Button>
-      </TooltipTrigger>
-      <TooltipContent>{action.label}</TooltipContent>
-    </Tooltip>
-  )
-}
+    <div className="group relative flex items-center gap-3 rounded-xl border border-transparent px-3 py-3 transition-colors hover:border-border hover:bg-muted/40">
+      <div className="flex size-9 shrink-0 items-center justify-center rounded-lg border border-border bg-card text-muted-foreground transition-colors group-hover:text-brand">
+        <GitBranch className="size-4" />
+      </div>
 
-function attentionActionIcon(action: RepoAttentionAction) {
-  switch (action.icon) {
-    case 'publish-review':
-      return Rocket
-    case 'init':
-      return TerminalSquare
-    case 'update-review':
-      return GitPullRequestArrow
-  }
+      <div className="min-w-0 flex-1">
+        <Link
+          className="font-mono text-sm leading-5 tracking-tight outline-none after:absolute after:inset-0 after:rounded-xl"
+          params={{ owner: repo.owner_handle, repo: repo.name }}
+          to="/repos/$owner/$repo"
+        >
+          <span className="text-muted-foreground">{repo.owner_handle}/</span>
+          <span className="font-semibold text-foreground group-hover:text-brand">
+            {repo.name}
+          </span>
+        </Link>
+        <div className="mt-1.5 flex flex-wrap items-center gap-1.5 text-xs text-muted-foreground">
+          <VisibilityBadge compact visibility={repo.default_visibility} />
+          {showLifecycle && <LifecycleBadge state={repo.lifecycle_state} />}
+          {repo.staged_update_pending && (
+            <Badge variant="warning">Update ready</Badge>
+          )}
+          <span className="capitalize">{repo.role ?? 'reader'}</span>
+        </div>
+      </div>
+
+      <div className="relative z-10 flex shrink-0 items-center gap-1">
+        <RepoPrimaryActionButton repo={repo} variant="secondary" />
+        <ChevronRight className="size-4 text-muted-foreground/60 transition-transform group-hover:translate-x-0.5 group-hover:text-muted-foreground" />
+      </div>
+    </div>
+  )
 }

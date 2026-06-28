@@ -34,10 +34,20 @@ export function CopyableCodeBlock({
 
   async function copyToClipboard() {
     try {
-      await navigator.clipboard.writeText(value)
+      if (navigator.clipboard?.writeText) {
+        await navigator.clipboard.writeText(value)
+      } else if (!copyWithFallback(value)) {
+        throw new Error('clipboard unavailable')
+      }
       setCopied(true)
-      toast.success('Copied correctly')
-    } catch {
+      toast.success('Copied')
+    } catch (error) {
+      if (copyWithFallback(value)) {
+        setCopied(true)
+        toast.success('Copied')
+        return
+      }
+      console.error('copy failed', error)
       toast.error('Copy failed')
     }
   }
@@ -45,7 +55,7 @@ export function CopyableCodeBlock({
   return (
     <div
       className={cn(
-        'relative rounded-md border border-border bg-muted',
+        'relative rounded-lg border border-border bg-muted',
         className,
       )}
     >
@@ -75,4 +85,30 @@ export function CopyableCodeBlock({
       </TooltipProvider>
     </div>
   )
+}
+
+function copyWithFallback(value: string): boolean {
+  if (typeof document === 'undefined') {
+    return false
+  }
+
+  const textarea = document.createElement('textarea')
+  textarea.value = value
+  textarea.setAttribute('readonly', '')
+  textarea.style.position = 'fixed'
+  textarea.style.top = '-9999px'
+  textarea.style.opacity = '0'
+  document.body.appendChild(textarea)
+  textarea.select()
+
+  let copied = false
+  try {
+    copied = document.execCommand('copy')
+  } catch {
+    copied = false
+  } finally {
+    document.body.removeChild(textarea)
+  }
+
+  return copied
 }
