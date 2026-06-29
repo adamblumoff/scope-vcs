@@ -68,10 +68,7 @@ fn published_demo(
     let private_plan = blob(object_store, &repo, PUBLIC_DEMO_PLAN)?;
     let private_path = ScopePath::parse("/internal/plan.md").map_err(ApiError::internal)?;
     repo.policy
-        .add_rule(VisibilityRule::private(
-            private_path.clone(),
-            [owner.id.clone()],
-        ))
+        .add_rule(VisibilityRule::private(private_path.clone()))
         .map_err(ApiError::internal)?;
     repo.graph.commits.push(commit(
         &repo,
@@ -142,7 +139,7 @@ fn pending_publish_demo(
             })
             .collect::<Result<Vec<_>, ApiError>>()?,
     });
-    repo.record.publication_state = RepoPublicationState::PendingPublish;
+    repo.record.publication_state = RepoPublicationState::Unpublished;
     Ok(repo)
 }
 
