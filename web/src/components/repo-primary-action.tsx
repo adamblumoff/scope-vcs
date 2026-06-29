@@ -33,7 +33,7 @@ export function repoPrimaryAction(
     requireOwner = false,
   }: RepoPrimaryActionOptions = {},
 ): RepoPrimaryAction | null {
-  if (requireOwner && repo.role !== 'Owner') {
+  if (requireOwner && repo.access.actor !== 'Owner') {
     return null
   }
 
@@ -51,8 +51,8 @@ export function repoPrimaryAction(
 export function repoAttentionAction(
   repo: RepoSummary,
 ): RepoAttentionAction | null {
-  if (repo.lifecycle_state === 'PendingFirstPush') {
-    if (repo.role !== 'Owner') {
+  if (repo.lifecycle_state === 'Unpublished' && !repo.pending_import_pending) {
+    if (repo.access.actor !== 'Owner') {
       return null
     }
 
@@ -64,7 +64,11 @@ export function repoAttentionAction(
     }
   }
 
-  if (repo.lifecycle_state === 'PendingPublish') {
+  if (repo.lifecycle_state === 'Unpublished' && repo.pending_import_pending) {
+    if (repo.access.actor !== 'Owner') {
+      return null
+    }
+
     return {
       icon: 'publish-review',
       label: 'Publish review needed',
@@ -74,6 +78,14 @@ export function repoAttentionAction(
   }
 
   if (repo.lifecycle_state === 'Published' && repo.staged_update_pending) {
+    if (
+      repo.access.actor !== 'Owner' &&
+      !repo.access.can_apply_changes &&
+      !repo.access.can_change_file_visibility
+    ) {
+      return null
+    }
+
     return {
       icon: 'update-review',
       label: 'Update review needed',

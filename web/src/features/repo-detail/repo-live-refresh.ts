@@ -150,11 +150,7 @@ export function canUseRepoLiveRefresh(_live: RepoLiveState) {
 }
 
 export function usesVersionedRepoChangeEvents(live: RepoLiveState) {
-  return (
-    live.repo.role === 'Owner' ||
-    live.repo.role === 'Maintainer' ||
-    live.repo.role === 'Writer'
-  )
+  return live.repo.access.actor !== 'Public'
 }
 
 async function streamRepoEvents(

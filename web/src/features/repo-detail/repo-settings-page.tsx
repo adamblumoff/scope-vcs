@@ -1,9 +1,15 @@
 import type {
+  CreateRepoInviteInput,
+  CreateRepoInviteResponse,
   DeleteRepoResponse,
+  DeleteRepoMemberInput,
   RepoDetail,
+  RepoCollaboration,
+  RepoMember,
   RepoParams,
   RepoSettings,
   RepoSummary,
+  UpdateRepoMemberInput,
   UpdateRepoSettingsInput,
 } from '@/api/types'
 import { AppHeader } from '@/components/app-header'
@@ -15,8 +21,12 @@ import { VisibilityBadge } from '@/components/visibility-badge'
 import { Badge } from '@/components/ui/badge'
 import { storeHomeFlash } from '@/lib/home-flash'
 import { Link, useNavigate, useRouter } from '@tanstack/react-router'
-import { useReducer, useRef } from 'react'
+import { useEffect, useReducer, useRef, useState } from 'react'
 import { DeleteRepositoryDialog } from './delete-repository-dialog'
+import {
+  MemberAccessSections,
+  RepositoryMembersSection,
+} from './repo-members-section'
 import { SettingsSections } from './repo-settings-sections'
 import {
   type SettingKey,
@@ -25,16 +35,26 @@ import {
 } from './repo-settings-state'
 
 export function RepoSettingsPage({
+  createInvite,
+  deleteMember,
   deleteRepo,
   detail,
+  initialCollaboration,
   initialSettings,
   params,
+  updateMember,
   updateSettings,
 }: {
+  createInvite: (
+    input: CreateRepoInviteInput,
+  ) => Promise<CreateRepoInviteResponse>
+  deleteMember: (input: DeleteRepoMemberInput) => Promise<RepoMember>
   deleteRepo: (params: RepoParams) => Promise<DeleteRepoResponse>
   detail: RepoDetail
-  initialSettings: RepoSettings
+  initialCollaboration: RepoCollaboration | null
+  initialSettings: RepoSettings | null
   params: RepoParams
+  updateMember: (input: UpdateRepoMemberInput) => Promise<RepoMember>
   updateSettings: (settings: UpdateRepoSettingsInput) => Promise<RepoSettings>
 }) {
   const navigate = useNavigate()
@@ -45,7 +65,10 @@ export function RepoSettingsPage({
     initialRepoSettingsPageState,
   )
   const settingsSavePendingRef = useRef(false)
+  const [collaboration, setCollaboration] =
+    useState<RepoCollaboration | null>(initialCollaboration)
   const settingsOverride =
+    initialSettings &&
     state.settingsOverride?.baseSettings === initialSettings
       ? state.settingsOverride
       : null
@@ -58,11 +81,15 @@ export function RepoSettingsPage({
   } = state
   const settingsSaving = pendingSetting !== null
 
+  useEffect(() => {
+    setCollaboration(initialCollaboration)
+  }, [initialCollaboration])
+
   async function saveSettings(
     nextSettings: RepoSettings,
     pendingKey: SettingKey,
   ) {
-    if (settingsSavePendingRef.current) {
+    if (!initialSettings || settingsSavePendingRef.current) {
       return
     }
 
@@ -107,6 +134,59 @@ export function RepoSettingsPage({
     }
   }
 
+  async function createMemberInvite(input: CreateRepoInviteInput) {
+    const response = await createInvite(input)
+    setCollaboration((current) =>
+      current
+        ? {
+            ...current,
+            invites: [
+              response.invite,
+              ...current.invites.filter(
+                (invite) => invite.id !== response.invite.id,
+              ),
+            ],
+          }
+        : current,
+    )
+    return response
+  }
+
+  async function updateRepositoryMember(input: UpdateRepoMemberInput) {
+    const member = await updateMember(input)
+    setCollaboration((current) =>
+      current
+        ? {
+            ...current,
+            members: current.members.map((candidate) =>
+              candidate.user_id === member.user_id ? member : candidate,
+            ),
+          }
+        : current,
+    )
+    await router.invalidate()
+    return member
+  }
+
+  async function removeRepositoryMember(memberUserId: string) {
+    const member = await deleteMember({
+      ...params,
+      member_user_id: memberUserId,
+    })
+    setCollaboration((current) =>
+      current
+        ? {
+            ...current,
+            members: current.members.filter(
+              (candidate) => candidate.user_id !== member.user_id,
+            ),
+          }
+        : current,
+    )
+    await router.invalidate()
+    return member
+  }
+
   return (
     <main className="min-h-screen bg-background text-foreground">
       <AppHeader breadcrumb={<RepoBreadcrumb params={params} section="settings" />} />
@@ -116,7 +196,13 @@ export function RepoSettingsPage({
           badges={() => (
             <>
               <LifecycleBadge state={repo.lifecycle_state} />
-              <VisibilityBadge visibility={settings.default_new_file_visibility} />
+              {settings ? (
+                <VisibilityBadge
+                  visibility={settings.default_new_file_visibility}
+                />
+              ) : (
+                <Badge variant="neutral">{repo.access.actor}</Badge>
+              )}
               {repo.staged_update_pending && (
                 <Badge variant="warning">Staged update</Badge>
               )}
@@ -146,17 +232,41 @@ export function RepoSettingsPage({
           </PageErrorAlert>
         )}
 
-        <SettingsSections
-          onDeleteRepository={() =>
-            dispatch({ repo, type: 'deleteTargetChanged' })
-          }
-          onSaveSettings={(nextSettings, pendingKey) =>
-            void saveSettings(nextSettings, pendingKey)
-          }
-          pendingSetting={pendingSetting}
-          settings={settings}
-          settingsSaving={settingsSaving}
-        />
+        {repo.access.actor === 'Public' && (
+          <PageErrorAlert title="Settings unavailable">
+            Sign in as the owner or a repository member to view repository
+            access.
+          </PageErrorAlert>
+        )}
+
+        {settings && (
+          <SettingsSections
+            onDeleteRepository={() =>
+              dispatch({ repo, type: 'deleteTargetChanged' })
+            }
+            onSaveSettings={(nextSettings, pendingKey) =>
+              void saveSettings(nextSettings, pendingKey)
+            }
+            pendingSetting={pendingSetting}
+            settings={settings}
+            settingsSaving={settingsSaving}
+          />
+        )}
+
+        {repo.access.actor === 'Member' && (
+          <MemberAccessSections repo={repo} />
+        )}
+
+        {collaboration && (
+          <RepositoryMembersSection
+            collaboration={collaboration}
+            createInvite={createMemberInvite}
+            deleteMember={removeRepositoryMember}
+            params={params}
+            repo={repo}
+            updateMember={updateRepositoryMember}
+          />
+        )}
       </PageContent>
 
       {deleteTarget && (

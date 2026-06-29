@@ -61,8 +61,8 @@ export function RepoDetailPage({
     visibilityError?.baseFiles === baseFiles
       ? visibilityError.message
       : null
-  const canEditFiles = detail.capabilities.write && repo.role === 'Owner'
-  const publicOnlyView = repo.role === null
+  const canEditFiles = detail.capabilities.can_change_file_visibility
+  const publicOnlyView = repo.access.actor === 'Public'
 
   async function setVisibility(
     files: ReviewFile[],
@@ -116,7 +116,7 @@ export function RepoDetailPage({
                 requireOwner
                 variant="default"
               />
-              {repo.role === 'Owner' && (
+              {repo.access.actor !== 'Public' && (
                 <Button asChild size="sm" variant="secondary">
                   <Link
                     params={{ owner: repo.owner_handle, repo: repo.name }}
@@ -132,7 +132,7 @@ export function RepoDetailPage({
           badges={() => (
             <>
               <LifecycleBadge state={repo.lifecycle_state} />
-              {repo.role === 'Owner' && (
+              {repo.access.actor === 'Owner' && (
                 <VisibilityBadge visibility={repo.default_visibility} />
               )}
               <Badge variant="neutral">{files.length} files</Badge>
@@ -162,7 +162,7 @@ export function RepoDetailPage({
           emptyDescription={
             publicOnlyView
               ? 'This repo does not expose any public files yet.'
-              : repo.lifecycle_state === 'PendingPublish'
+              : repo.pending_import_pending
                 ? 'Review the pending import before publishing.'
                 : 'Files will appear here after the repo has published content.'
           }

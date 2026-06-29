@@ -18,7 +18,7 @@ export function RepoCloneDropdown({
 }) {
   const [open, setOpen] = useState(false)
   const rootRef = useRef<HTMLDivElement>(null)
-  const permissioned = repo.role !== null
+  const permissioned = repo.access.actor !== 'Public'
   const cloneCommand = permissioned
     ? permissionedCloneCommand(repo.owner_handle, repo.name)
     : publicCloneCommand(cloneRemoteUrl)

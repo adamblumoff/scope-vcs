@@ -36,7 +36,7 @@ export async function loadRepoForRequest(data: RepoParams) {
         }),
     loadProjectionPreviewsForRequest(data, review ? 'review' : 'live', {
       api,
-      includeOwner: repo.role === 'Owner',
+      includeOwner: repo.access.actor !== 'Public',
     }),
   ])
 
@@ -81,8 +81,13 @@ async function loadOpenRepoReview(
 ) {
   if (
     !(await api.authenticated()) ||
-    repo.role !== 'Owner' ||
-    (repo.lifecycle_state !== 'PendingPublish' && !repo.staged_update_pending)
+    (repo.pending_import_pending && repo.access.actor !== 'Owner') ||
+    (!repo.pending_import_pending &&
+      repo.staged_update_pending &&
+      !repo.access.can_apply_changes &&
+      !repo.access.can_change_file_visibility &&
+      repo.access.actor !== 'Owner') ||
+    (!repo.pending_import_pending && !repo.staged_update_pending)
   ) {
     return null
   }

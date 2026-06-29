@@ -1,9 +1,16 @@
 import {
+  createRepoInviteForRequest,
+  deleteRepoMemberForRequest,
   deleteRepoForRequest,
+  loadRepoCollaborationForRequest,
   loadRepoForRequest,
   loadRepoSettingsForRequest,
+  parseCreateRepoInviteInput,
+  parseDeleteRepoMemberInput,
   parseRepoParams,
+  parseUpdateRepoMemberInput,
   parseUpdateRepoSettingsInput,
+  updateRepoMemberForRequest,
   updateRepoSettingsForRequest,
 } from '@/api/repos'
 import { RepoSettingsPage } from '@/features/repo-detail/repo-settings-page'
@@ -13,11 +20,16 @@ import { createServerFn } from '@tanstack/react-start'
 const loadRepoSettings = createServerFn({ method: 'GET' })
   .validator(parseRepoParams)
   .handler(async ({ data }) => {
-    const [detail, settings] = await Promise.all([
-      loadRepoForRequest(data),
-      loadRepoSettingsForRequest(data),
+    const detail = await loadRepoForRequest(data)
+    const [settings, collaboration] = await Promise.all([
+      detail.repo.access.can_update_repo_settings
+        ? loadRepoSettingsForRequest(data)
+        : Promise.resolve(null),
+      detail.repo.access.can_manage_members
+        ? loadRepoCollaborationForRequest(data)
+        : Promise.resolve(null),
     ])
-    return { detail, settings }
+    return { collaboration, detail, settings }
   })
 
 const updateRepoSettings = createServerFn({ method: 'POST' })
@@ -28,6 +40,18 @@ const deleteRepo = createServerFn({ method: 'POST' })
   .validator(parseRepoParams)
   .handler(({ data }) => deleteRepoForRequest(data))
 
+const createRepoInvite = createServerFn({ method: 'POST' })
+  .validator(parseCreateRepoInviteInput)
+  .handler(({ data }) => createRepoInviteForRequest(data))
+
+const updateRepoMember = createServerFn({ method: 'POST' })
+  .validator(parseUpdateRepoMemberInput)
+  .handler(({ data }) => updateRepoMemberForRequest(data))
+
+const deleteRepoMember = createServerFn({ method: 'POST' })
+  .validator(parseDeleteRepoMemberInput)
+  .handler(({ data }) => deleteRepoMemberForRequest(data))
+
 export const Route = createFileRoute('/repos/$owner/$repo/settings')({
   loader: ({ params }) => loadRepoSettings({ data: params }),
   component: RepoSettingsRoute,
@@ -35,14 +59,18 @@ export const Route = createFileRoute('/repos/$owner/$repo/settings')({
 
 function RepoSettingsRoute() {
   const params = Route.useParams()
-  const { detail, settings } = Route.useLoaderData()
+  const { collaboration, detail, settings } = Route.useLoaderData()
 
   return (
     <RepoSettingsPage
+      createInvite={(data) => createRepoInvite({ data })}
       deleteRepo={(data) => deleteRepo({ data })}
+      deleteMember={(data) => deleteRepoMember({ data })}
       detail={detail}
+      initialCollaboration={collaboration}
       initialSettings={settings}
       params={params}
+      updateMember={(data) => updateRepoMember({ data })}
       updateSettings={(data) => updateRepoSettings({ data })}
     />
   )

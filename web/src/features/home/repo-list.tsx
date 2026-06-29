@@ -87,7 +87,7 @@ function RepoListRow({ repo }: { repo: RepoSummary }) {
           {repo.staged_update_pending && (
             <Badge variant="warning">Update ready</Badge>
           )}
-          <span className="capitalize">{repo.role ?? 'reader'}</span>
+          <span>{repo.access.actor}</span>
         </div>
       </div>
 
