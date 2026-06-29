@@ -1,5 +1,5 @@
 use crate::{
-    api::{RepoPublicationState, RepoRole, create_clone_credential, get_repo},
+    api::{RepoPublicationState, create_clone_credential, get_repo},
     git_repo::{git_remote_push_url, push_head_with_bearer},
 };
 use anyhow::{Context, bail};
@@ -46,7 +46,8 @@ pub fn push_authenticated_remote(
         &target.owner,
         &target.repo,
         repo.lifecycle_state,
-        repo.role,
+        repo.pending_import_pending,
+        repo.access.can_push,
         repo.push_blocked_by_staged_update,
     )?;
 
@@ -117,17 +118,18 @@ fn ensure_repo_can_receive_push(
     owner: &str,
     repo: &str,
     lifecycle_state: RepoPublicationState,
-    role: Option<RepoRole>,
+    pending_import_pending: bool,
+    can_push: bool,
     push_blocked_by_staged_update: bool,
 ) -> anyhow::Result<()> {
     match lifecycle_state {
-        RepoPublicationState::PendingFirstPush => {
+        RepoPublicationState::Unpublished => {
+            if pending_import_pending {
+                bail!(
+                    "repo {owner}/{repo} has a pending review; publish or reject it before pushing again"
+                );
+            }
             bail!("repo {owner}/{repo} is waiting for its first push. Run: scope init");
-        }
-        RepoPublicationState::PendingPublish => {
-            bail!(
-                "repo {owner}/{repo} has a pending review; publish or reject it before pushing again"
-            );
         }
         RepoPublicationState::Published => {}
     }
@@ -138,7 +140,7 @@ fn ensure_repo_can_receive_push(
         );
     }
 
-    if role.is_none_or(|role| role < RepoRole::Writer) {
+    if !can_push {
         bail!("you do not have write access to {owner}/{repo}");
     }
 
