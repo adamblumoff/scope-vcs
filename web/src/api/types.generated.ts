@@ -4,9 +4,13 @@
 
 export type Visibility = "Public" | "Private";
 
-export type RepoRole = "Reader" | "Writer" | "Maintainer" | "Owner";
+export type RepositoryActor = "Public" | "Member" | "Owner";
 
-export type RepoPublicationState = "PendingFirstPush" | "PendingPublish" | "Published";
+export type RepositoryMemberPermissions = { can_push: boolean, can_change_file_visibility: boolean, can_apply_changes: boolean, };
+
+export type RepositoryInviteState = "Pending" | "Accepted" | "Revoked" | "Expired";
+
+export type RepoPublicationState = "Unpublished" | "Published";
 
 export type FirstPushTokenStatus = "Active" | "Expired" | "Used";
 
@@ -24,9 +28,9 @@ export type SessionResponse = { identity: SessionIdentity | null, repo: SessionR
 
 export type SessionIdentity = { user_id: string, email: string | null, email_verified: boolean, };
 
-export type SessionRepo = { id: string, publication_state: RepoPublicationState, role: RepoRole | null, };
+export type SessionRepo = { id: string, publication_state: RepoPublicationState, access: RepositoryAccessResponse, };
 
-export type SessionCapabilities = { read: boolean, write: boolean, };
+export type SessionCapabilities = { read: boolean, can_read_private_files: boolean, can_push: boolean, can_change_file_visibility: boolean, can_apply_changes: boolean, can_update_repo_settings: boolean, can_manage_members: boolean, can_delete_repo: boolean, };
 
 export type DeviceLoginStatus = "Pending" | "Complete";
 
@@ -54,7 +58,7 @@ export type CliSessionsResponse = { sessions: Array<CliSessionResponse>, };
 
 export type CliSessionResponse = { id: string, label: string, created_at_unix: number, last_used_at_unix: number | null, expires_at_unix: number, };
 
-export type RepoSummaryResponse = { id: string, owner_handle: string, name: string, lifecycle_state: RepoPublicationState, default_visibility: Visibility, change_version: number, role: RepoRole | null, staged_update_pending: boolean, push_blocked_by_staged_update: boolean, };
+export type RepoSummaryResponse = { id: string, owner_handle: string, name: string, lifecycle_state: RepoPublicationState, default_visibility: Visibility, change_version: number, access: RepositoryAccessResponse, pending_import_pending: boolean, staged_update_pending: boolean, push_blocked_by_staged_update: boolean, };
 
 export type CreateRepoRequest = { name: string, visibility: Visibility | null, };
 
@@ -77,6 +81,24 @@ export type RepoFileResponse = { path: string, oid: string, tracked: boolean, vi
 export type RepoSettingsResponse = { default_new_file_visibility: Visibility, review_pushes_before_applying: boolean, };
 
 export type UpdateRepoSettingsRequest = { default_new_file_visibility: Visibility, review_pushes_before_applying: boolean, };
+
+export type RepositoryAccessResponse = { actor: RepositoryActor, can_read_private_files: boolean, can_push: boolean, can_change_file_visibility: boolean, can_apply_changes: boolean, can_update_repo_settings: boolean, can_manage_members: boolean, can_delete_repo: boolean, };
+
+export type RepositoryCollaborationResponse = { members: Array<RepositoryMemberResponse>, invites: Array<RepositoryInviteResponse>, };
+
+export type RepositoryMemberResponse = { user_id: string, handle: string, email: string, permissions: RepositoryMemberPermissions, created_at_unix: number, updated_at_unix: number, };
+
+export type RepositoryInviteResponse = { id: string, invited_email: string, permissions: RepositoryMemberPermissions, state: RepositoryInviteState, expires_at_unix: number, };
+
+export type CreateRepositoryInviteRequest = { email: string, permissions: RepositoryMemberPermissions, };
+
+export type CreateRepositoryInviteResponse = { invite: RepositoryInviteResponse, invite_url: string, };
+
+export type UpdateRepositoryMemberRequest = { permissions: RepositoryMemberPermissions, };
+
+export type RepositoryInviteLookupResponse = { repo_id: string, owner_handle: string, repo_name: string, invited_email: string, permissions: RepositoryMemberPermissions, expires_at_unix: number, };
+
+export type AcceptRepositoryInviteResponse = { repo: RepoSummaryResponse, member: RepositoryMemberResponse, };
 
 export type UpdateFileVisibilityRequest = { paths: Array<string>, visibility: Visibility, };
 

@@ -1,6 +1,9 @@
 use crate::domain::{
     policy::Visibility,
-    store::{FirstPushTokenStatus, RepoPublicationState, RepoRole, StagedFileChangeKind},
+    store::{
+        FirstPushTokenStatus, RepoPublicationState, RepositoryActor, RepositoryInviteState,
+        RepositoryMemberPermissions, StagedFileChangeKind,
+    },
 };
 use crate::http::{responses::*, routes};
 use std::{fs, path::PathBuf};
@@ -17,7 +20,9 @@ fn export_api_types() {
     let declarations = [
         generated_header(),
         declaration::<Visibility>(&ts_config),
-        declaration::<RepoRole>(&ts_config),
+        declaration::<RepositoryActor>(&ts_config),
+        declaration::<RepositoryMemberPermissions>(&ts_config),
+        declaration::<RepositoryInviteState>(&ts_config),
         declaration::<RepoPublicationState>(&ts_config),
         declaration::<FirstPushTokenStatus>(&ts_config),
         declaration::<StagedFileChangeKind>(&ts_config),
@@ -54,6 +59,15 @@ fn export_api_types() {
         declaration::<RepoFileResponse>(&ts_config),
         declaration::<RepoSettingsResponse>(&ts_config),
         declaration::<UpdateRepoSettingsRequest>(&ts_config),
+        declaration::<RepositoryAccessResponse>(&ts_config),
+        declaration::<RepositoryCollaborationResponse>(&ts_config),
+        declaration::<RepositoryMemberResponse>(&ts_config),
+        declaration::<RepositoryInviteResponse>(&ts_config),
+        declaration::<CreateRepositoryInviteRequest>(&ts_config),
+        declaration::<CreateRepositoryInviteResponse>(&ts_config),
+        declaration::<UpdateRepositoryMemberRequest>(&ts_config),
+        declaration::<RepositoryInviteLookupResponse>(&ts_config),
+        declaration::<AcceptRepositoryInviteResponse>(&ts_config),
         declaration::<UpdateFileVisibilityRequest>(&ts_config),
         declaration::<UpdateStagedFileVisibilityRequest>(&ts_config),
         declaration::<ReviewFileDiffRequest>(&ts_config),

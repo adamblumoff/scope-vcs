@@ -1,10 +1,7 @@
 use crate::domain::{
     policy::ScopePath,
     repo_actions::ensure_pending_publish,
-    store::{
-        RepoPublicationState, RepoRole, SourceBlob, StagedFileChangeKind, StagedRepoUpdate,
-        StoredRepository,
-    },
+    store::{SourceBlob, StagedFileChangeKind, StagedRepoUpdate, StoredRepository},
 };
 use crate::{
     auth::scope::{optional_scope_user, principal_for_scope_user},
@@ -31,7 +28,15 @@ pub(crate) async fn get_pending_import_review(
     let user = optional_scope_user(&state, &headers).await?;
     let principal = principal_for_scope_user(&repo, user.as_ref());
     ensure_repo_read(&state, &repo, &principal)?;
-    ensure_owner(&state, &repo, &principal)?;
+    if repo.has_pending_import_review() {
+        ensure_owner(&state, &repo, &principal)?;
+    } else if !repo.access_for_principal(&principal).can_apply_changes
+        && !repo
+            .access_for_principal(&principal)
+            .can_change_file_visibility
+    {
+        return Err(ApiError::forbidden("review permission required"));
+    }
     ensure_pending_publish(&repo)?;
 
     Ok(Json(PendingImportReviewResponse {
@@ -82,11 +87,13 @@ pub(crate) async fn publish_repo(
         .metadata
         .publish_pending_import(&owner, &repo_name, &user_id)?;
     state.publish_repo_change(&updated.id, updated.change_version, "repo-published");
+    let updated_repo = find_repo(&state, &owner, &repo_name)?;
+    let updated_principal = principal_for_scope_user(&updated_repo, user.as_ref());
 
     Ok(Json(SessionRepo {
         id: updated.id,
         publication_state: updated.publication_state,
-        role: Some(RepoRole::Owner),
+        access: repository_access_response(updated_repo.access_for_principal(&updated_principal)),
     }))
 }
 
@@ -99,7 +106,13 @@ pub(crate) async fn get_staged_update(
     let user = optional_scope_user(&state, &headers).await?;
     let principal = principal_for_scope_user(&repo, user.as_ref());
     ensure_repo_read(&state, &repo, &principal)?;
-    ensure_owner(&state, &repo, &principal)?;
+    if !repo.access_for_principal(&principal).can_apply_changes
+        && !repo
+            .access_for_principal(&principal)
+            .can_change_file_visibility
+    {
+        return Err(ApiError::forbidden("review permission required"));
+    }
 
     let staged = repo
         .staged_update
@@ -119,7 +132,12 @@ pub(crate) async fn update_staged_file_visibility(
     let user = optional_scope_user(&state, &headers).await?;
     let principal = principal_for_scope_user(&repo, user.as_ref());
     ensure_repo_read(&state, &repo, &principal)?;
-    ensure_owner(&state, &repo, &principal)?;
+    if !repo
+        .access_for_principal(&principal)
+        .can_change_file_visibility
+    {
+        return Err(ApiError::forbidden("file visibility permission required"));
+    }
     if input.paths.is_empty() {
         return Err(ApiError::bad_request("at least one file path is required"));
     }
@@ -155,7 +173,9 @@ pub(crate) async fn apply_staged_update(
     let user = optional_scope_user(&state, &headers).await?;
     let principal = principal_for_scope_user(&repo, user.as_ref());
     ensure_repo_read(&state, &repo, &principal)?;
-    ensure_owner(&state, &repo, &principal)?;
+    if !repo.access_for_principal(&principal).can_apply_changes {
+        return Err(ApiError::forbidden("apply changes permission required"));
+    }
     let applied = state
         .metadata
         .apply_staged_update(&owner, &repo_name, &principal.id)?;
@@ -179,7 +199,9 @@ pub(crate) async fn reject_staged_update(
     let user = optional_scope_user(&state, &headers).await?;
     let principal = principal_for_scope_user(&repo, user.as_ref());
     ensure_repo_read(&state, &repo, &principal)?;
-    ensure_owner(&state, &repo, &principal)?;
+    if !repo.access_for_principal(&principal).can_apply_changes {
+        return Err(ApiError::forbidden("apply changes permission required"));
+    }
     let rejected = state
         .metadata
         .reject_staged_update(&owner, &repo_name, &principal.id)?;
@@ -200,7 +222,7 @@ fn review_file_diff_response(
     repo: &StoredRepository,
     path: &ScopePath,
 ) -> Result<ReviewFileDiffResponse, ApiError> {
-    if repo.record.publication_state == RepoPublicationState::PendingPublish {
+    if repo.has_pending_import_review() {
         return pending_import_file_diff_response(store, repo, path);
     }
 

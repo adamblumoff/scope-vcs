@@ -87,13 +87,6 @@ impl MetadataStore {
                         .insert(&tx)
                         .await
                         .map_err(ApiError::internal)?;
-                    for membership in &repo.memberships {
-                        entities::membership::Model::from_domain(membership)
-                            .into_active_model()
-                            .insert(&tx)
-                            .await
-                            .map_err(ApiError::internal)?;
-                    }
                     save_repo_effects(&tx, &mutation.effects).await?;
                     tx.commit().await.map_err(ApiError::internal)?;
                     Ok(repo)
@@ -162,8 +155,13 @@ impl MetadataStore {
                     let repo = repository_from_model(&tx, repo).await?;
                     let mutation = delete_repo_command(&repo, &user_id, &owner, &name)?;
 
-                    entities::membership::Entity::delete_many()
-                        .filter(entities::membership::Column::RepoId.eq(repo_id.clone()))
+                    entities::repository_invite::Entity::delete_many()
+                        .filter(entities::repository_invite::Column::RepoId.eq(repo_id.clone()))
+                        .exec(&tx)
+                        .await
+                        .map_err(ApiError::internal)?;
+                    entities::repository_member::Entity::delete_many()
+                        .filter(entities::repository_member::Column::RepoId.eq(repo_id.clone()))
                         .exec(&tx)
                         .await
                         .map_err(ApiError::internal)?;

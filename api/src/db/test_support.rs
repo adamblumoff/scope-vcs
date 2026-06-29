@@ -1,7 +1,9 @@
 use super::{
     DbRuntime, MetadataStore, MetadataStoreInner, acquire_metadata_write_lock,
     cleanup_queue::{save_pending_repo_storage_deletions, save_pending_source_blob_deletions},
-    ensure_metadata_lock_row, entities, run_api_db_on, run_db_on, schema,
+    ensure_metadata_lock_row, entities,
+    repository_rows::save_repository_relations,
+    run_api_db_on, run_db_on, schema,
 };
 use crate::{domain::store::AppCatalog, error::ApiError};
 use sea_orm::{
@@ -97,13 +99,7 @@ impl MetadataStore {
                             .insert(&tx)
                             .await
                             .map_err(ApiError::internal)?;
-                        for membership in &repo.memberships {
-                            entities::membership::Model::from_domain(membership)
-                                .into_active_model()
-                                .insert(&tx)
-                                .await
-                                .map_err(ApiError::internal)?;
-                        }
+                        save_repository_relations(&tx, repo).await?;
                     }
                     save_pending_repo_storage_deletions(
                         &tx,

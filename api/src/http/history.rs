@@ -36,6 +36,7 @@ pub(crate) async fn get_commit_history(
         &repo.graph,
         &repo.visibility_events,
         &principal,
+        audience == ProjectionPreviewAudience::Owner,
     );
 
     Ok(Json(commit_history_response(audience, view)))
@@ -54,6 +55,7 @@ pub(crate) async fn get_commit_detail(
         &repo.graph,
         &repo.visibility_events,
         &principal,
+        audience == ProjectionPreviewAudience::Owner,
     );
     let commit = commit_for_id(&view.commits, &commit_id)?;
 
@@ -76,6 +78,7 @@ pub(crate) async fn get_commit_file_diff(
         &repo.graph,
         &repo.visibility_events,
         &principal,
+        audience == ProjectionPreviewAudience::Owner,
     );
     let commit = commit_for_id(&view.commits, &commit_id)?;
     let path = pending_scope_path(&input.path)?;

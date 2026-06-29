@@ -5,8 +5,8 @@ use api::domain::{
     projection::SourceGraph,
     store::{
         AccountAccess, AppCatalog, CatalogError, FirstPushToken, FirstPushTokenStatus,
-        InvitationState, RepoInvitation, RepoMembership, RepoPublicationState, RepoRecord,
-        RepoRole, RepoSettings, StoredRepository, UserAccount, app_catalog,
+        RepoPublicationState, RepoRecord, RepoSettings, RepositoryInvite, RepositoryInviteState,
+        RepositoryMember, RepositoryMemberPermissions, StoredRepository, UserAccount, app_catalog,
     },
 };
 
@@ -50,7 +50,7 @@ fn test_repo() -> StoredRepository {
         git_push_token: None,
         git_clone_tokens: Vec::new(),
         pending_import: None,
-        policy: Policy::new(Visibility::Public, TEST_OWNER_ID),
+        policy: Policy::new(Visibility::Public),
         graph: SourceGraph {
             repo_id: TEST_REPO_ID.to_string(),
             commits: Vec::new(),
@@ -58,11 +58,7 @@ fn test_repo() -> StoredRepository {
         visibility_events: Vec::new(),
         git_snapshot: None,
         staged_update: None,
-        memberships: vec![RepoMembership {
-            repo_id: TEST_REPO_ID.to_string(),
-            user_id: TEST_OWNER_ID.to_string(),
-            role: RepoRole::Owner,
-        }],
+        members: Vec::new(),
         invitations: Vec::new(),
     }
 }
@@ -92,7 +88,7 @@ fn member_scope_user_principal_can_write_repo() {
 
     assert_eq!(principal.id, TEST_OWNER_ID);
     assert_eq!(principal.kind, PrincipalKind::User);
-    assert!(catalog.can_write_path(repo, &principal, &ScopePath::root()));
+    assert!(catalog.can_push(repo, &principal));
 }
 
 #[test]
@@ -115,7 +111,7 @@ fn create_repository_makes_private_owner_repo_pending_first_push() {
     assert_eq!(repo.record.id, "owner/draft.repo");
     assert_eq!(
         repo.record.publication_state,
-        RepoPublicationState::PendingFirstPush
+        RepoPublicationState::Unpublished
     );
     assert_eq!(repo.record.default_visibility, Visibility::Private);
     assert!(repo.graph.commits.is_empty());
@@ -129,7 +125,7 @@ fn create_repository_makes_private_owner_repo_pending_first_push() {
         kind: PrincipalKind::User,
     };
     assert!(catalog.can_read_path(&repo, &principal, &ScopePath::root()));
-    assert!(catalog.can_write_path(&repo, &principal, &ScopePath::root()));
+    assert!(!catalog.can_push(&repo, &principal));
     assert!(!catalog.can_read_path(&repo, &Principal::public(), &ScopePath::root()));
 }
 
@@ -179,7 +175,7 @@ fn unpublished_repo_blocks_public_reads() {
         .repository(TEST_REPO_OWNER, TEST_REPO_NAME)
         .unwrap()
         .clone();
-    repo.record.publication_state = RepoPublicationState::PendingPublish;
+    repo.record.publication_state = RepoPublicationState::Unpublished;
 
     assert!(!catalog.can_read_path(&repo, &Principal::public(), &ScopePath::root()));
 }
@@ -196,11 +192,27 @@ fn pending_publish_repo_is_owner_only_even_with_reader_membership() {
     };
     catalog.users.insert(reader.id.clone(), reader.clone());
     let repo = catalog.repositories.get_mut(TEST_REPO_ID).unwrap();
-    repo.record.publication_state = RepoPublicationState::PendingPublish;
-    repo.memberships.push(RepoMembership {
+    repo.record.publication_state = RepoPublicationState::Unpublished;
+    repo.pending_import = Some(api::domain::store::PendingImport {
+        default_branch: "main".to_string(),
+        head_oid: "head".to_string(),
+        tree_oid: "tree".to_string(),
+        imported_at_unix: 1,
+        git_snapshot: api::domain::store::SourceBlob {
+            object_key: "snapshot".to_string(),
+            sha256: "sha".to_string(),
+            git_oid: "oid".to_string(),
+            size_bytes: 1,
+            line_count: 1,
+        },
+        files: Vec::new(),
+    });
+    repo.members.push(RepositoryMember {
         repo_id: TEST_REPO_ID.to_string(),
         user_id: reader.id.clone(),
-        role: RepoRole::Reader,
+        permissions: RepositoryMemberPermissions::default(),
+        created_at_unix: 1,
+        updated_at_unix: 1,
     });
     let repo = repo.clone();
 
@@ -233,16 +245,23 @@ fn pending_invite_does_not_grant_private_access() {
     repo.policy
         .add_rule(VisibilityRule::private(
             ScopePath::parse("/private.txt").unwrap(),
-            [TEST_OWNER_ID.to_string()],
         ))
         .unwrap();
-    repo.invitations.push(RepoInvitation {
+    repo.invitations.push(RepositoryInvite {
         id: "invite_pending".to_string(),
         repo_id: TEST_REPO_ID.to_string(),
         invited_email: "invited@example.com".to_string(),
-        role: RepoRole::Reader,
+        invited_email_normalized: "invited@example.com".to_string(),
+        permissions: RepositoryMemberPermissions::default(),
         invited_by_user_id: TEST_OWNER_ID.to_string(),
-        state: InvitationState::Pending,
+        state: RepositoryInviteState::Pending,
+        token_hash: "sha256:invite".to_string(),
+        created_at_unix: 1,
+        updated_at_unix: 1,
+        expires_at_unix: 100,
+        accepted_by_user_id: None,
+        accepted_at_unix: None,
+        revoked_at_unix: None,
     });
     let repo = catalog.repository(TEST_REPO_OWNER, TEST_REPO_NAME).unwrap();
     let principal = Principal {

@@ -118,6 +118,27 @@ pub fn router(state: AppState) -> Router {
             get(http::repos::get_settings).patch(http::repos::update_settings),
         )
         .route(
+            "/v1/repos/{owner}/{repo}/members",
+            get(http::repos::list_repository_collaboration),
+        )
+        .route(
+            "/v1/repos/{owner}/{repo}/invites",
+            post(http::repos::create_repository_invite),
+        )
+        .route(
+            "/v1/repos/{owner}/{repo}/members/{member_user_id}",
+            patch(http::repos::update_repository_member)
+                .delete(http::repos::delete_repository_member),
+        )
+        .route(
+            "/v1/repository-invites/{token}",
+            get(http::repos::get_repository_invite),
+        )
+        .route(
+            "/v1/repository-invites/{token}/accept",
+            post(http::repos::accept_repository_invite),
+        )
+        .route(
             "/v1/repos/{owner}/{repo}/staged-update",
             get(http::review::get_staged_update),
         )

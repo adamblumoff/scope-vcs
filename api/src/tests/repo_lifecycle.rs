@@ -30,9 +30,9 @@ async fn create_repo_route_creates_user_and_lists_repo() {
     let body = response_json(response).await;
     assert_eq!(body["repo"]["id"], "owner/scope_app");
     assert_eq!(body["repo"]["owner_handle"], "owner");
-    assert_eq!(body["repo"]["lifecycle_state"], "PendingFirstPush");
+    assert_eq!(body["repo"]["lifecycle_state"], "Unpublished");
     assert_eq!(body["repo"]["default_visibility"], "Private");
-    assert_eq!(body["repo"]["role"], "Owner");
+    assert_eq!(body["repo"]["access"]["actor"], "Owner");
     assert_eq!(body["repo"]["staged_update_pending"], false);
     assert_eq!(
         body["init"]["git_remote_url"],
@@ -66,8 +66,8 @@ async fn create_repo_route_creates_user_and_lists_repo() {
     let body = response_json(response).await;
     assert_eq!(body.as_array().unwrap().len(), 1);
     assert_eq!(body[0]["id"], "owner/scope_app");
-    assert_eq!(body[0]["lifecycle_state"], "PendingFirstPush");
-    assert_eq!(body[0]["role"], "Owner");
+    assert_eq!(body[0]["lifecycle_state"], "Unpublished");
+    assert_eq!(body[0]["access"]["actor"], "Owner");
 
     let catalog = lock_catalog(&state).unwrap();
     assert_eq!(catalog.users.len(), 1);
@@ -165,10 +165,7 @@ fn db_metadata_store_round_trips_repo_metadata() {
     repo.first_push_token = Some(first_push_token);
     repo.git_push_token = Some(git_push_token);
     repo.policy
-        .add_rule(VisibilityRule::private(
-            private_path.clone(),
-            vec![owner_id.clone()],
-        ))
+        .add_rule(VisibilityRule::private(private_path.clone()))
         .unwrap();
     repo.pending_import = Some(pending_import_fixture(vec![("imported.txt", "imported")]));
     repo.git_snapshot = Some(source_blob("live git snapshot"));
@@ -332,7 +329,7 @@ async fn list_repos_marks_published_repo_with_staged_update() {
     assert_eq!(summary_response.status(), StatusCode::OK);
     let summary_body = response_json(summary_response).await;
     assert_eq!(summary_body["id"], TEST_REPO_ID);
-    assert_eq!(summary_body["role"], serde_json::Value::Null);
+    assert_eq!(summary_body["access"]["actor"], "Public");
 
     let response = app
         .oneshot(
@@ -374,7 +371,7 @@ async fn get_repo_route_returns_owner_summary() {
     assert_eq!(body["id"], TEST_REPO_ID);
     assert_eq!(body["owner_handle"], TEST_REPO_OWNER);
     assert_eq!(body["name"], TEST_REPO_NAME);
-    assert_eq!(body["role"], "Owner");
+    assert_eq!(body["access"]["actor"], "Owner");
     assert_eq!(body["change_version"], 1);
 }
 
@@ -402,7 +399,7 @@ async fn get_repo_route_hides_change_version_from_public_reader() {
 
     assert_eq!(response.status(), StatusCode::OK);
     let body = response_json(response).await;
-    assert_eq!(body["role"], serde_json::Value::Null);
+    assert_eq!(body["access"]["actor"], "Public");
     assert_eq!(body["change_version"], 0);
 }
 
@@ -606,12 +603,12 @@ async fn list_repos_route_hides_pending_repo_from_reader_member() {
             },
         );
         let repo = catalog.repositories.get_mut(TEST_REPO_ID).unwrap();
-        repo.record.publication_state = RepoPublicationState::PendingPublish;
-        repo.memberships.push(RepoMembership {
-            repo_id: TEST_REPO_ID.to_string(),
-            user_id: reader_id,
-            role: RepoRole::Reader,
-        });
+        repo.record.publication_state = RepoPublicationState::Unpublished;
+        repo.members.push(test_repository_member(
+            TEST_REPO_ID,
+            reader_id,
+            RepositoryMemberPermissions::default(),
+        ));
     }
 
     let response = router(state)

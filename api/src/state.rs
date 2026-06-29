@@ -1,8 +1,8 @@
-use crate::domain::policy::PrincipalKind;
 use crate::domain::policy::{Principal, ScopePath};
 use crate::domain::projection_views::has_visible_projected_files;
 use crate::domain::store::{
-    AppCatalog, RepoPublicationState, RepoRole, SourceBlob, StoredRepository, repo_id,
+    AppCatalog, RepoPublicationState, RepositoryAccess, RepositoryActor, SourceBlob,
+    StoredRepository, repo_id,
 };
 use crate::{
     auth::clerk::ClerkVerifier,
@@ -220,27 +220,19 @@ pub(crate) fn ensure_owner(
     repo: &StoredRepository,
     principal: &Principal,
 ) -> Result<(), ApiError> {
-    if role_for_principal(state, repo, principal)? == Some(RepoRole::Owner) {
+    if access_for_principal(state, repo, principal)?.actor == RepositoryActor::Owner {
         Ok(())
     } else {
         Err(ApiError::forbidden("owner role required"))
     }
 }
 
-pub(crate) fn role_for_principal(
+pub(crate) fn access_for_principal(
     _state: &AppState,
     repo: &StoredRepository,
     principal: &Principal,
-) -> Result<Option<RepoRole>, ApiError> {
-    if principal.kind != PrincipalKind::Public && principal.id == repo.record.owner_user_id {
-        return Ok(Some(RepoRole::Owner));
-    }
-
-    Ok(repo
-        .memberships
-        .iter()
-        .find(|membership| membership.user_id == principal.id)
-        .map(|membership| membership.role))
+) -> Result<RepositoryAccess, ApiError> {
+    Ok(repo.access_for_principal(principal))
 }
 
 pub(crate) fn can_read_path(
@@ -252,30 +244,19 @@ pub(crate) fn can_read_path(
     if principal.kind == crate::domain::policy::PrincipalKind::Public {
         return Ok(
             repo.record.publication_state == RepoPublicationState::Published
-                && repo.policy.can_read(principal, path),
+                && repo.policy.can_read(path, false),
         );
     }
 
-    let Some(role) = role_for_principal(_state, repo, principal)? else {
-        return Ok(false);
-    };
-
-    let lifecycle_allows_read =
-        repo.record.publication_state == RepoPublicationState::Published || role == RepoRole::Owner;
-
-    Ok(lifecycle_allows_read && repo.policy.can_read(principal, path))
-}
-
-pub(crate) fn can_write_path(
-    _state: &AppState,
-    repo: &StoredRepository,
-    principal: &Principal,
-    path: &ScopePath,
-) -> Result<bool, ApiError> {
-    let can_write = role_for_principal(_state, repo, principal)?
-        .is_some_and(|role| role >= RepoRole::Writer)
-        && can_read_path(_state, repo, principal, path)?;
-    Ok(can_write)
+    let access = access_for_principal(_state, repo, principal)?;
+    Ok(match access.actor {
+        RepositoryActor::Owner => repo.policy.can_read(path, true),
+        RepositoryActor::Member => {
+            repo.record.publication_state == RepoPublicationState::Published
+                && repo.policy.can_read(path, access.can_read_private_files)
+        }
+        RepositoryActor::Public => false,
+    })
 }
 
 pub(crate) fn repo_source_blobs(repo: &StoredRepository) -> Vec<SourceBlob> {

@@ -11,11 +11,10 @@ fn blob(content: &str) -> api::domain::store::SourceBlob {
 }
 
 fn fixture_policy() -> Policy {
-    let mut policy = Policy::new(Visibility::Public, "owner");
+    let mut policy = Policy::new(Visibility::Public);
     policy
         .add_rule(VisibilityRule::private(
             ScopePath::parse("/internal").unwrap(),
-            ["owner".to_string(), "user_collaborator".to_string()],
         ))
         .unwrap();
     policy
@@ -48,7 +47,7 @@ fn public_projection_contains_only_visible_paths_from_mixed_commit() {
         }],
     };
 
-    let projection = project_graph(&fixture_policy(), &graph, &[], &Principal::public());
+    let projection = project_graph(&fixture_policy(), &graph, &[], &Principal::public(), false);
 
     assert_eq!(projection.commits.len(), 1);
     assert_eq!(projection.visible_paths(), vec!["/README.md"]);
@@ -58,11 +57,10 @@ fn public_projection_contains_only_visible_paths_from_mixed_commit() {
 
 #[test]
 fn public_projection_omits_current_private_path_history() {
-    let mut policy = Policy::new(Visibility::Public, "owner");
+    let mut policy = Policy::new(Visibility::Public);
     policy
         .add_rule(VisibilityRule::private(
             ScopePath::parse("/README.md").unwrap(),
-            ["owner".to_string()],
         ))
         .unwrap();
     let public_blob = blob("public readme");
@@ -83,7 +81,7 @@ fn public_projection_omits_current_private_path_history() {
         }],
     };
 
-    let projection = project_graph(&policy, &graph, &[], &Principal::public());
+    let projection = project_graph(&policy, &graph, &[], &Principal::public(), false);
 
     assert!(projection.commits.is_empty());
     assert!(projection.visible_paths().is_empty());
@@ -91,7 +89,7 @@ fn public_projection_omits_current_private_path_history() {
 
 #[test]
 fn private_to_public_source_change_starts_public_history_at_reveal() {
-    let mut policy = Policy::new(Visibility::Private, "owner");
+    let mut policy = Policy::new(Visibility::Private);
     policy
         .add_rule(VisibilityRule::public(
             ScopePath::parse("/notes.md").unwrap(),
@@ -130,7 +128,7 @@ fn private_to_public_source_change_starts_public_history_at_reveal() {
         ],
     };
 
-    let projection = project_graph(&policy, &graph, &[], &Principal::public());
+    let projection = project_graph(&policy, &graph, &[], &Principal::public(), false);
 
     assert_eq!(projection.commits.len(), 1);
     assert_eq!(projection.commits[0].logical_commit_id, "rv2");
@@ -139,7 +137,7 @@ fn private_to_public_source_change_starts_public_history_at_reveal() {
 
 #[test]
 fn private_to_public_visibility_event_adds_safe_projection_baseline() {
-    let mut policy = Policy::new(Visibility::Private, "owner");
+    let mut policy = Policy::new(Visibility::Private);
     policy
         .add_rule(VisibilityRule::public(
             ScopePath::parse("/notes.md").unwrap(),
@@ -173,7 +171,13 @@ fn private_to_public_visibility_event_adds_safe_projection_baseline() {
         current_content: Some(private_blob),
     }];
 
-    let projection = project_graph(&policy, &graph, &visibility_events, &Principal::public());
+    let projection = project_graph(
+        &policy,
+        &graph,
+        &visibility_events,
+        &Principal::public(),
+        false,
+    );
 
     assert_eq!(projection.commits.len(), 1);
     assert_eq!(projection.commits[0].logical_commit_id, "vis_1");
@@ -183,7 +187,7 @@ fn private_to_public_visibility_event_adds_safe_projection_baseline() {
 
 #[test]
 fn public_projection_restarts_after_private_gap() {
-    let policy = Policy::new(Visibility::Public, "owner");
+    let policy = Policy::new(Visibility::Public);
     let public_v1 = blob("public v1");
     let private_v2 = blob("private v2");
     let graph = SourceGraph {
@@ -254,7 +258,13 @@ fn public_projection_restarts_after_private_gap() {
         },
     ];
 
-    let projection = project_graph(&policy, &graph, &visibility_events, &Principal::public());
+    let projection = project_graph(
+        &policy,
+        &graph,
+        &visibility_events,
+        &Principal::public(),
+        false,
+    );
 
     assert_eq!(projection.commits.len(), 1);
     assert_eq!(projection.commits[0].logical_commit_id, "rv3");
@@ -263,7 +273,7 @@ fn public_projection_restarts_after_private_gap() {
 
 #[test]
 fn pure_visibility_reveal_does_not_restore_prior_public_history() {
-    let policy = Policy::new(Visibility::Public, "owner");
+    let policy = Policy::new(Visibility::Public);
     let readme = blob("public readme");
     let graph = SourceGraph {
         repo_id: "scope".to_string(),
@@ -305,7 +315,13 @@ fn pure_visibility_reveal_does_not_restore_prior_public_history() {
         },
     ];
 
-    let projection = project_graph(&policy, &graph, &visibility_events, &Principal::public());
+    let projection = project_graph(
+        &policy,
+        &graph,
+        &visibility_events,
+        &Principal::public(),
+        false,
+    );
 
     assert_eq!(projection.commits.len(), 1);
     assert_eq!(projection.commits[0].logical_commit_id, "vis_2");
@@ -335,7 +351,7 @@ fn authorized_collaborator_sees_private_paths() {
         id: "user_collaborator".to_string(),
         kind: PrincipalKind::User,
     };
-    let projection = project_graph(&fixture_policy(), &graph, &[], &collaborator);
+    let projection = project_graph(&fixture_policy(), &graph, &[], &collaborator, true);
 
     assert_eq!(projection.visible_paths(), vec!["/internal/model.rs"]);
 }

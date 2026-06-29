@@ -80,7 +80,6 @@ pub(super) enum Repositories {
     VisibilityEvents,
     GitSnapshot,
     StagedUpdate,
-    Invitations,
 }
 
 impl_iden!(Repositories {
@@ -102,7 +101,6 @@ impl_iden!(Repositories {
     VisibilityEvents => "visibility_events",
     GitSnapshot => "git_snapshot",
     StagedUpdate => "staged_update",
-    Invitations => "invitations",
 });
 
 #[derive(Copy, Clone)]
@@ -200,18 +198,59 @@ impl_iden!(CliSessions {
 });
 
 #[derive(Copy, Clone)]
-pub(super) enum Memberships {
+pub(super) enum RepositoryMembers {
     Table,
     RepoId,
     UserId,
-    Role,
+    Permissions,
+    CreatedAtUnix,
+    UpdatedAtUnix,
 }
 
-impl_iden!(Memberships {
-    Table => "scope_repo_memberships",
+impl_iden!(RepositoryMembers {
+    Table => "scope_repository_members",
     RepoId => "repo_id",
     UserId => "user_id",
-    Role => "role",
+    Permissions => "permissions",
+    CreatedAtUnix => "created_at_unix",
+    UpdatedAtUnix => "updated_at_unix",
+});
+
+#[derive(Copy, Clone)]
+pub(super) enum RepositoryInvites {
+    Table,
+    Id,
+    RepoId,
+    InvitedEmail,
+    InvitedEmailNormalized,
+    Permissions,
+    InvitedByUserId,
+    State,
+    TokenHash,
+    CreatedAtUnix,
+    UpdatedAtUnix,
+    ExpiresAtUnix,
+    AcceptedByUserId,
+    AcceptedAtUnix,
+    RevokedAtUnix,
+}
+
+impl_iden!(RepositoryInvites {
+    Table => "scope_repository_invites",
+    Id => "id",
+    RepoId => "repo_id",
+    InvitedEmail => "invited_email",
+    InvitedEmailNormalized => "invited_email_normalized",
+    Permissions => "permissions",
+    InvitedByUserId => "invited_by_user_id",
+    State => "state",
+    TokenHash => "token_hash",
+    CreatedAtUnix => "created_at_unix",
+    UpdatedAtUnix => "updated_at_unix",
+    ExpiresAtUnix => "expires_at_unix",
+    AcceptedByUserId => "accepted_by_user_id",
+    AcceptedAtUnix => "accepted_at_unix",
+    RevokedAtUnix => "revoked_at_unix",
 });
 
 #[derive(Copy, Clone)]
@@ -281,12 +320,29 @@ const REPOSITORY_COLUMNS: &[&str] = &[
     Repositories::VisibilityEvents.as_str(),
     Repositories::GitSnapshot.as_str(),
     Repositories::StagedUpdate.as_str(),
-    Repositories::Invitations.as_str(),
 ];
-const MEMBERSHIP_COLUMNS: &[&str] = &[
-    Memberships::RepoId.as_str(),
-    Memberships::UserId.as_str(),
-    Memberships::Role.as_str(),
+const REPOSITORY_MEMBER_COLUMNS: &[&str] = &[
+    RepositoryMembers::RepoId.as_str(),
+    RepositoryMembers::UserId.as_str(),
+    RepositoryMembers::Permissions.as_str(),
+    RepositoryMembers::CreatedAtUnix.as_str(),
+    RepositoryMembers::UpdatedAtUnix.as_str(),
+];
+const REPOSITORY_INVITE_COLUMNS: &[&str] = &[
+    RepositoryInvites::Id.as_str(),
+    RepositoryInvites::RepoId.as_str(),
+    RepositoryInvites::InvitedEmail.as_str(),
+    RepositoryInvites::InvitedEmailNormalized.as_str(),
+    RepositoryInvites::Permissions.as_str(),
+    RepositoryInvites::InvitedByUserId.as_str(),
+    RepositoryInvites::State.as_str(),
+    RepositoryInvites::TokenHash.as_str(),
+    RepositoryInvites::CreatedAtUnix.as_str(),
+    RepositoryInvites::UpdatedAtUnix.as_str(),
+    RepositoryInvites::ExpiresAtUnix.as_str(),
+    RepositoryInvites::AcceptedByUserId.as_str(),
+    RepositoryInvites::AcceptedAtUnix.as_str(),
+    RepositoryInvites::RevokedAtUnix.as_str(),
 ];
 const CLI_DEVICE_LOGIN_COLUMNS: &[&str] = &[
     CliDeviceLogins::DeviceCodeHash.as_str(),
@@ -335,13 +391,18 @@ const CURRENT_METADATA_DROP_TABLES: &[&str] = &[
     CliBrowserLogins::Table.as_str(),
     CliDeviceLogins::Table.as_str(),
     AuthIdentities::Table.as_str(),
-    Memberships::Table.as_str(),
+    RepositoryInvites::Table.as_str(),
+    RepositoryMembers::Table.as_str(),
     Repositories::Table.as_str(),
     Users::Table.as_str(),
     MetadataLocks::Table.as_str(),
 ];
 const OBSOLETE_CLI_ACCESS_SESSIONS_TABLE: &str = "scope_cli_access_sessions";
-const OBSOLETE_METADATA_DROP_TABLES: &[&str] = &[OBSOLETE_CLI_ACCESS_SESSIONS_TABLE];
+const OBSOLETE_REPO_MEMBERSHIPS_TABLE: &str = "scope_repo_memberships";
+const OBSOLETE_METADATA_DROP_TABLES: &[&str] = &[
+    OBSOLETE_CLI_ACCESS_SESSIONS_TABLE,
+    OBSOLETE_REPO_MEMBERSHIPS_TABLE,
+];
 pub(super) const METADATA_SCHEMA_TABLES: &[MetadataTableSpec] = &[
     MetadataTableSpec {
         table: MetadataLocks::Table.as_str(),
@@ -364,8 +425,13 @@ pub(super) const METADATA_SCHEMA_TABLES: &[MetadataTableSpec] = &[
         counts_for_catalog_rows: true,
     },
     MetadataTableSpec {
-        table: Memberships::Table.as_str(),
-        columns: MEMBERSHIP_COLUMNS,
+        table: RepositoryMembers::Table.as_str(),
+        columns: REPOSITORY_MEMBER_COLUMNS,
+        counts_for_catalog_rows: true,
+    },
+    MetadataTableSpec {
+        table: RepositoryInvites::Table.as_str(),
+        columns: REPOSITORY_INVITE_COLUMNS,
         counts_for_catalog_rows: true,
     },
     MetadataTableSpec {
@@ -416,6 +482,7 @@ mod tests {
             );
         }
         assert!(reset_tables.contains(&OBSOLETE_CLI_ACCESS_SESSIONS_TABLE));
+        assert!(reset_tables.contains(&OBSOLETE_REPO_MEMBERSHIPS_TABLE));
     }
 
     #[test]
@@ -432,7 +499,8 @@ mod tests {
                 Users::Table.as_str(),
                 AuthIdentities::Table.as_str(),
                 Repositories::Table.as_str(),
-                Memberships::Table.as_str(),
+                RepositoryMembers::Table.as_str(),
+                RepositoryInvites::Table.as_str(),
                 CliDeviceLogins::Table.as_str(),
                 CliBrowserLogins::Table.as_str(),
                 CliExchangeGrants::Table.as_str(),

@@ -36,8 +36,15 @@ pub(crate) fn commit_history_view(
     graph: &super::projection::SourceGraph,
     visibility_events: &[VisibilityEvent],
     principal: &Principal,
+    can_read_private_files: bool,
 ) -> CommitHistoryView {
-    let projection = project_graph(policy, graph, visibility_events, principal);
+    let projection = project_graph(
+        policy,
+        graph,
+        visibility_events,
+        principal,
+        can_read_private_files,
+    );
     let mut tree = BTreeMap::new();
     let commits = projection
         .commits

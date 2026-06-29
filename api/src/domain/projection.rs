@@ -1,5 +1,5 @@
 use super::{
-    policy::{Policy, Principal, PrincipalKind, ScopePath, Visibility},
+    policy::{Policy, Principal, ScopePath, Visibility},
     store::SourceBlob,
 };
 use serde::{Deserialize, Serialize};
@@ -89,8 +89,9 @@ pub fn project_graph(
     graph: &SourceGraph,
     visibility_events: &[VisibilityEvent],
     principal: &Principal,
+    can_read_private_files: bool,
 ) -> Projection {
-    if policy.is_owner(principal) {
+    if can_read_private_files {
         return project_owner_graph(graph, principal);
     }
 
@@ -103,10 +104,9 @@ pub fn project_graph(
         .enumerate()
         .map(|(index, commit)| (commit.id.as_str(), index))
         .collect::<BTreeMap<_, _>>();
-    let readable_epoch_starts =
-        readable_epoch_starts(policy, principal, visibility_events, &commit_positions);
+    let readable_epoch_starts = readable_epoch_starts(policy, visibility_events, &commit_positions);
     let baseline_events =
-        baseline_events_by_anchor(policy, principal, visibility_events, &readable_epoch_starts);
+        baseline_events_by_anchor(policy, visibility_events, &readable_epoch_starts);
 
     process_baseline_events_after(
         &mut commits,
@@ -121,7 +121,7 @@ pub fn project_graph(
             .changes
             .iter()
             .filter(|change| {
-                can_read_historical_change(policy, principal, &change.path, change.visibility)
+                can_read_historical_change(policy, &change.path, change.visibility)
                     && is_change_in_readable_epoch(
                         &readable_epoch_starts,
                         &change.path,
@@ -234,19 +234,10 @@ fn projected_id(projected_principal_id: &str, source_id: &str, sequence: usize) 
     format!("pv_{projected_principal_id}_{source_id}_{sequence}")
 }
 
-fn can_read_historical_change(
-    policy: &Policy,
-    principal: &Principal,
-    path: &ScopePath,
-    visibility: Visibility,
-) -> bool {
+fn can_read_historical_change(policy: &Policy, path: &ScopePath, visibility: Visibility) -> bool {
     match visibility {
-        Visibility::Public => policy.can_read(principal, path),
-        Visibility::Private => {
-            principal.kind != PrincipalKind::Public
-                && policy.effective_visibility(path) == Visibility::Private
-                && policy.can_read(principal, path)
-        }
+        Visibility::Public => policy.can_read(path, false),
+        Visibility::Private => false,
     }
 }
 
@@ -258,20 +249,17 @@ struct ReadableEpochStart {
 
 fn readable_epoch_starts(
     policy: &Policy,
-    principal: &Principal,
     events: &[VisibilityEvent],
     commit_positions: &BTreeMap<&str, usize>,
 ) -> BTreeMap<ScopePath, ReadableEpochStart> {
     let mut starts = BTreeMap::new();
     for event in events {
-        if !policy.can_read(principal, &event.path) {
+        if !policy.can_read(&event.path, false) {
             continue;
         }
 
-        let old_readable =
-            visibility_readable_for_event(policy, principal, &event.path, event.old_visibility);
-        let new_readable =
-            visibility_readable_for_event(policy, principal, &event.path, event.new_visibility);
+        let old_readable = visibility_readable_for_event(policy, &event.path, event.old_visibility);
+        let new_readable = visibility_readable_for_event(policy, &event.path, event.new_visibility);
         if old_readable || !new_readable {
             continue;
         }
@@ -300,16 +288,13 @@ fn readable_epoch_starts(
 
 fn visibility_readable_for_event(
     policy: &Policy,
-    principal: &Principal,
     path: &ScopePath,
     visibility: Visibility,
 ) -> bool {
     match visibility {
         Visibility::Public => true,
         Visibility::Private => {
-            principal.kind != PrincipalKind::Public
-                && policy.effective_visibility(path) == Visibility::Private
-                && policy.can_read(principal, path)
+            policy.effective_visibility(path) == Visibility::Private && policy.can_read(path, false)
         }
     }
 }
@@ -332,7 +317,6 @@ struct BaselineEventsByAnchor<'a> {
 
 fn baseline_events_by_anchor<'a>(
     policy: &Policy,
-    principal: &Principal,
     events: &'a [VisibilityEvent],
     starts: &BTreeMap<ScopePath, ReadableEpochStart>,
 ) -> BaselineEventsByAnchor<'a> {
@@ -345,7 +329,7 @@ fn baseline_events_by_anchor<'a>(
             .get(&event.path)
             .and_then(|start| start.baseline_event_id.as_deref())
             == Some(event.id.as_str())
-            && policy.can_read(principal, &event.path)
+            && policy.can_read(&event.path, false)
             && event.current_content.is_some()
     }) {
         match event.after_commit_id.as_deref() {

@@ -65,11 +65,7 @@ pub(crate) fn principal_for_scope_user(
 }
 
 pub(crate) fn principal_for_user_id(repo: &StoredRepository, user_id: &str) -> Principal {
-    if repo
-        .memberships
-        .iter()
-        .any(|membership| membership.user_id == user_id)
-    {
+    if repo.is_owner_user(user_id) || repo.member_for_user(user_id).is_some() {
         Principal {
             id: user_id.to_string(),
             kind: PrincipalKind::User,

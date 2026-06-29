@@ -66,7 +66,7 @@ async fn repo_events_hide_unreadable_private_repo() {
     {
         let mut repo = repo_with_readme();
         repo.record.default_visibility = Visibility::Private;
-        repo.policy = Policy::new(Visibility::Private, &repo.record.owner_user_id);
+        repo.policy = Policy::new(Visibility::Private);
         repo.graph.commits[0].changes[0].visibility = Visibility::Private;
         let mut catalog = lock_catalog(&state).unwrap();
         catalog.repositories.insert(TEST_REPO_ID.to_string(), repo);
@@ -185,7 +185,7 @@ async fn repo_events_close_public_stream_when_visibility_removes_public_read() {
     {
         let mut repo = repo_with_readme();
         repo.record.default_visibility = Visibility::Private;
-        repo.policy = Policy::new(Visibility::Private, &repo.record.owner_user_id);
+        repo.policy = Policy::new(Visibility::Private);
         repo.policy
             .add_rule(VisibilityRule::public(
                 ScopePath::parse("/README.md").unwrap(),
@@ -237,7 +237,7 @@ async fn repo_events_close_public_stream_when_visibility_removes_public_read() {
 }
 
 #[tokio::test]
-async fn repo_events_redact_when_write_access_is_revoked_but_read_remains() {
+async fn repo_events_stream_permission_changes_to_members() {
     let state = test_state_with_repo();
     cache_test_jwks(&state);
     let writer_clerk_id = "user_writer";
@@ -245,11 +245,11 @@ async fn repo_events_redact_when_write_access_is_revoked_but_read_remains() {
     let writer_id = crate::db::scope_user_id_for_auth_identity("clerk", writer_clerk_id);
     {
         let mut repo = repo_with_readme();
-        repo.memberships.push(RepoMembership {
-            repo_id: TEST_REPO_ID.to_string(),
-            user_id: writer_id.clone(),
-            role: RepoRole::Writer,
-        });
+        repo.members.push(test_repository_member(
+            TEST_REPO_ID,
+            writer_id.clone(),
+            member_permissions(true, false, false),
+        ));
         let mut catalog = lock_catalog(&state).unwrap();
         catalog.repositories.insert(TEST_REPO_ID.to_string(), repo);
     }
@@ -280,11 +280,12 @@ async fn repo_events_redact_when_write_access_is_revoked_but_read_remains() {
     let change_version = {
         let mut catalog = lock_catalog(&state).unwrap();
         let repo = catalog.repositories.get_mut(TEST_REPO_ID).unwrap();
-        repo.memberships
+        repo.members
             .iter_mut()
-            .find(|membership| membership.user_id == writer_id)
+            .find(|member| member.user_id == writer_id)
             .unwrap()
-            .role = RepoRole::Reader;
+            .permissions
+            .can_push = false;
         repo.bump_change_version();
         repo.record.change_version
     };
@@ -297,8 +298,8 @@ async fn repo_events_redact_when_write_access_is_revoked_but_read_remains() {
         .unwrap();
     let event = String::from_utf8(event.to_vec()).unwrap();
     assert!(event.contains("event: repo-change"));
-    assert!(event.contains(r#""reason":"repo-changed""#));
-    assert!(event.contains(r#""version":0"#));
+    assert!(event.contains(r#""reason":"visibility-changed""#));
+    assert!(event.contains(&format!(r#""version":{change_version}"#)));
 }
 
 #[tokio::test]

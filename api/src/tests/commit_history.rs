@@ -6,7 +6,7 @@ async fn public_commit_history_omits_private_files_from_mixed_commits() {
     {
         let mut repo = test_repo(&test_owner_id());
         repo.record.default_visibility = Visibility::Private;
-        repo.policy = Policy::new(Visibility::Private, &repo.record.owner_user_id);
+        repo.policy = Policy::new(Visibility::Private);
         repo.policy
             .add_rule(VisibilityRule::public(
                 ScopePath::parse("/README.md").unwrap(),
@@ -100,7 +100,7 @@ async fn public_commit_diff_does_not_leak_private_old_content() {
     {
         let mut repo = test_repo(&test_owner_id());
         repo.record.default_visibility = Visibility::Private;
-        repo.policy = Policy::new(Visibility::Private, &repo.record.owner_user_id);
+        repo.policy = Policy::new(Visibility::Private);
         repo.policy
             .add_rule(VisibilityRule::public(
                 ScopePath::parse("/notes.md").unwrap(),

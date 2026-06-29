@@ -3,7 +3,7 @@ use super::{
     projection::{AuthorVisibility, FileChange, LogicalCommit, VisibilityEvent},
     store::{
         CatalogError, FirstPushToken, GitPushToken, PendingImport, RepoPublicationState,
-        RepoRecord, RepoRole, RepoSettings, RepoStorageCleanup, SourceBlob, StagedRepoUpdate,
+        RepoRecord, RepoSettings, RepoStorageCleanup, SourceBlob, StagedRepoUpdate,
         StoredRepository, UserAccount, pending_import_scope_path,
     },
 };
@@ -61,26 +61,39 @@ impl<T> RepoMutation<T> {
 }
 
 pub(crate) fn ensure_repo_owner(repo: &StoredRepository, user_id: &str) -> Result<(), ApiError> {
-    let role = repo
-        .memberships
-        .iter()
-        .find(|membership| membership.user_id == user_id)
-        .map(|membership| membership.role);
-    if role != Some(RepoRole::Owner) {
+    if !repo.is_owner_user(user_id) {
         return Err(ApiError::forbidden("owner role required"));
     }
     Ok(())
 }
 
 pub(crate) fn ensure_repo_member(repo: &StoredRepository, user_id: &str) -> Result<(), ApiError> {
-    if repo
-        .memberships
-        .iter()
-        .any(|membership| membership.user_id == user_id)
-    {
+    if repo.is_owner_user(user_id) || repo.member_for_user(user_id).is_some() {
         Ok(())
     } else {
         Err(ApiError::forbidden("repo membership required"))
+    }
+}
+
+pub(crate) fn ensure_can_change_file_visibility(
+    repo: &StoredRepository,
+    user_id: &str,
+) -> Result<(), ApiError> {
+    if repo.access_for_user_id(user_id).can_change_file_visibility {
+        Ok(())
+    } else {
+        Err(ApiError::forbidden("file visibility permission required"))
+    }
+}
+
+pub(crate) fn ensure_can_apply_changes(
+    repo: &StoredRepository,
+    user_id: &str,
+) -> Result<(), ApiError> {
+    if repo.access_for_user_id(user_id).can_apply_changes {
+        Ok(())
+    } else {
+        Err(ApiError::forbidden("apply changes permission required"))
     }
 }
 
@@ -136,7 +149,7 @@ pub(crate) fn set_visibility(
     if update_paths.is_empty() {
         return Err(ApiError::bad_request("at least one file path is required"));
     }
-    ensure_repo_owner(repo, user_id)?;
+    ensure_can_change_file_visibility(repo, user_id)?;
     if visibility == Visibility::Public {
         for update_path in update_paths {
             if !repo.has_file_for_visibility_update(update_path) {
@@ -148,7 +161,6 @@ pub(crate) fn set_visibility(
         }
     }
 
-    let owner_ids = repo.owner_ids();
     let record_visibility_history =
         repo.record.publication_state == RepoPublicationState::Published;
     let live_tree = if record_visibility_history {
@@ -177,7 +189,7 @@ pub(crate) fn set_visibility(
         }
         let rule = match visibility {
             Visibility::Public => VisibilityRule::public(update_path.clone()),
-            Visibility::Private => VisibilityRule::private(update_path.clone(), owner_ids.clone()),
+            Visibility::Private => VisibilityRule::private(update_path.clone()),
         };
         repo.policy.add_rule(rule).map_err(ApiError::bad_request)?;
     }
@@ -195,7 +207,7 @@ pub(crate) fn set_staged_visibility(
     if update_paths.is_empty() {
         return Err(ApiError::bad_request("at least one file path is required"));
     }
-    ensure_repo_owner(repo, user_id)?;
+    ensure_can_change_file_visibility(repo, user_id)?;
 
     let mut staged_update = repo
         .staged_update
@@ -223,7 +235,7 @@ pub(crate) fn apply_staged_update(
     repo: &mut StoredRepository,
     user_id: &str,
 ) -> Result<RepoMutation<StagedRepoUpdate>, ApiError> {
-    ensure_repo_owner(repo, user_id)?;
+    ensure_can_apply_changes(repo, user_id)?;
     let old_snapshot = repo.git_snapshot.clone();
     let staged_update = repo
         .staged_update
@@ -240,7 +252,7 @@ pub(crate) fn reject_staged_update(
     repo: &mut StoredRepository,
     user_id: &str,
 ) -> Result<RepoMutation<StagedRepoUpdate>, ApiError> {
-    ensure_repo_owner(repo, user_id)?;
+    ensure_can_apply_changes(repo, user_id)?;
     let rejected = repo
         .staged_update
         .take()
@@ -327,7 +339,7 @@ pub(crate) fn preview_publish_import(
 }
 
 pub(crate) fn ensure_pending_publish(repo: &StoredRepository) -> Result<(), ApiError> {
-    if repo.record.publication_state != RepoPublicationState::PendingPublish {
+    if !repo.has_pending_import_review() {
         return Err(ApiError::bad_request("repo is not pending publish"));
     }
     if repo.pending_import.is_none() {
@@ -365,8 +377,6 @@ fn preserve_existing_visibility_for_new_default(
             (path, visibility)
         })
         .collect::<Vec<_>>();
-    let owner_ids = repo.owner_ids();
-
     repo.policy.set_default_visibility(default_visibility);
     for (path, visibility) in existing_visibility {
         if repo.policy.effective_visibility(&path) == visibility {
@@ -375,7 +385,7 @@ fn preserve_existing_visibility_for_new_default(
 
         let rule = match visibility {
             Visibility::Public => VisibilityRule::public(path),
-            Visibility::Private => VisibilityRule::private(path, owner_ids.clone()),
+            Visibility::Private => VisibilityRule::private(path),
         };
         repo.policy.add_rule(rule).map_err(ApiError::bad_request)?;
     }
@@ -383,7 +393,7 @@ fn preserve_existing_visibility_for_new_default(
 }
 
 fn existing_repo_paths(repo: &StoredRepository) -> Result<Vec<ScopePath>, ApiError> {
-    if repo.record.publication_state == RepoPublicationState::PendingPublish {
+    if repo.has_pending_import_review() {
         let Some(pending_import) = repo.pending_import.as_ref() else {
             return Ok(Vec::new());
         };

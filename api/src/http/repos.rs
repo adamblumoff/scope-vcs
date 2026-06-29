@@ -1,13 +1,16 @@
 use crate::domain::policy::{Principal, ScopePath, Visibility};
 use crate::domain::projection::project_graph;
-use crate::domain::store::{RepoRole, RepoSettings};
+use crate::domain::store::{RepoSettings, RepositoryActor};
 use crate::{
     auth::{
         scope::{
             optional_scope_user, principal_for_scope_user, principal_for_user_id,
             require_scope_user,
         },
-        tokens::{generate_first_push_token, generate_git_clone_token, generate_git_push_token},
+        tokens::{
+            generate_first_push_token, generate_git_clone_token, generate_git_push_token,
+            generate_repository_invite_token, repository_invite_token_hash,
+        },
     },
     error::ApiError,
     http::responses::*,
@@ -17,7 +20,7 @@ use crate::{
     },
     persistence::unix_now,
     state::AppState,
-    state::{ensure_repo_read, find_repo, role_for_principal},
+    state::{access_for_principal, ensure_repo_read, find_repo},
 };
 use axum::{
     Json,
@@ -98,20 +101,18 @@ pub(crate) async fn get_repo(
     let user = optional_scope_user(&state, &headers).await?;
     let principal = principal_for_scope_user(&repo, user.as_ref());
     ensure_repo_read(&state, &repo, &principal)?;
-    let role = role_for_principal(&state, &repo, &principal)?;
-    let staged_update_pending = role == Some(RepoRole::Owner) && repo.staged_update.is_some();
-    let push_blocked_by_staged_update =
-        role.is_some_and(|role| role >= RepoRole::Writer) && repo.staged_update.is_some();
+    let access = access_for_principal(&state, &repo, &principal)?;
     let summary = RepoSummaryResponse {
         id: repo.record.id.clone(),
         owner_handle: repo.record.owner_handle.clone(),
         name: repo.record.name.clone(),
         lifecycle_state: repo.record.publication_state,
         default_visibility: repo.record.default_visibility,
-        change_version: repo_change_version_for_role(&repo, role),
-        role,
-        staged_update_pending,
-        push_blocked_by_staged_update,
+        change_version: repo_change_version_for_access(&repo, access),
+        access: repository_access_response(access),
+        pending_import_pending: repo.has_pending_import_review(),
+        staged_update_pending: access.can_apply_changes && repo.staged_update.is_some(),
+        push_blocked_by_staged_update: access.can_push && repo.staged_update.is_some(),
     };
 
     Ok(Json(summary))
@@ -146,7 +147,7 @@ pub(crate) async fn create_clone_credential(
     let repo = find_repo(&state, &owner, &repo_name)?;
     let principal = principal_for_user_id(&repo, &user.id);
     ensure_repo_read(&state, &repo, &principal)?;
-    if role_for_principal(&state, &repo, &principal)?.is_none() {
+    if repo.access_for_principal(&principal).actor == RepositoryActor::Public {
         return Err(ApiError::forbidden("repo membership required"));
     }
 
@@ -176,6 +177,7 @@ pub(crate) async fn get_projection(
         &repo.graph,
         &repo.visibility_events,
         &principal,
+        repo.access_for_principal(&principal).can_read_private_files,
     );
     Ok(Json(projection_response(
         state.object_store.as_ref(),
@@ -195,7 +197,7 @@ pub(crate) async fn get_projection_preview(
     let requester = principal_for_scope_user(&repo, user.as_ref());
     ensure_projection_preview_access(&state, &repo, &requester, input.audience, source)?;
     let include_private_counts =
-        role_for_principal(&state, &repo, &requester)? == Some(RepoRole::Owner);
+        repo.access_for_principal(&requester).actor == RepositoryActor::Owner;
     let preview_repo = projection_preview_repo(&repo, source)?;
 
     Ok(Json(projection_preview_response(
@@ -234,8 +236,11 @@ pub(crate) async fn update_file_visibility(
         .map(|user| principal_for_user_id(&repo, &user.id))
         .unwrap_or_else(Principal::public);
     ensure_repo_read(&state, &repo, &principal)?;
-    if role_for_principal(&state, &repo, &principal)? != Some(RepoRole::Owner) {
-        return Err(ApiError::forbidden("owner role required"));
+    if !repo
+        .access_for_principal(&principal)
+        .can_change_file_visibility
+    {
+        return Err(ApiError::forbidden("file visibility permission required"));
     }
 
     let owner_files = files_for_visibility_update(&repo, &principal)?;
@@ -270,7 +275,7 @@ pub(crate) async fn update_file_visibility(
     );
 
     let principal = Principal {
-        id: updated.record.owner_user_id.clone(),
+        id: user_id,
         kind: crate::domain::policy::PrincipalKind::User,
     };
     let updated_files = files_for_visibility_update(&updated, &principal)?;
@@ -301,7 +306,7 @@ pub(crate) async fn get_settings(
     let principal = principal_for_scope_user(&repo, user.as_ref());
     ensure_repo_read(&state, &repo, &principal)?;
 
-    if role_for_principal(&state, &repo, &principal)? != Some(RepoRole::Owner) {
+    if repo.access_for_principal(&principal).actor != RepositoryActor::Owner {
         return Err(ApiError::forbidden("owner role required"));
     }
 
@@ -349,4 +354,174 @@ pub(crate) async fn update_settings(
         default_new_file_visibility: updated.record.default_visibility,
         review_pushes_before_applying: updated.settings.review_pushes_before_applying,
     }))
+}
+
+pub(crate) async fn list_repository_collaboration(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path((owner, repo_name)): Path<(String, String)>,
+) -> Result<Json<RepositoryCollaborationResponse>, ApiError> {
+    let user = require_scope_user(&state, &headers).await?;
+    let owner_for_read = owner.clone();
+    let repo_for_read = repo_name.clone();
+    let response = state.metadata.read(move |catalog| {
+        let repo = catalog
+            .repository(&owner_for_read, &repo_for_read)
+            .ok_or_else(|| {
+                ApiError::not_found(format!("repo {owner_for_read}/{repo_for_read} not found"))
+            })?;
+        if !repo.is_owner_user(&user.id) {
+            return Err(ApiError::forbidden("owner role required"));
+        }
+        Ok(repository_collaboration_response(repo, &catalog.users))
+    })?;
+
+    Ok(Json(response))
+}
+
+pub(crate) async fn create_repository_invite(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path((owner, repo_name)): Path<(String, String)>,
+    Json(input): Json<CreateRepositoryInviteRequest>,
+) -> Result<Json<CreateRepositoryInviteResponse>, ApiError> {
+    let user = require_scope_user(&state, &headers).await?;
+    let (secret, token_hash) = generate_repository_invite_token()?;
+    let now = unix_now()?;
+    let invite_id = format!("repo_invite_{}", token_hash.replace([':', '/'], "_"));
+    let invite = state.metadata.create_repository_invite(
+        &owner,
+        &repo_name,
+        user,
+        input.email,
+        input.permissions,
+        invite_id,
+        token_hash,
+        now,
+    )?;
+    let repo = find_repo(&state, &owner, &repo_name)?;
+    state.publish_repo_change(
+        &repo.record.id,
+        repo.record.change_version,
+        "invite-updated",
+    );
+    let app_origin = public_app_origin("building repository invite URL")?;
+
+    Ok(Json(CreateRepositoryInviteResponse {
+        invite: repository_invite_response(&invite),
+        invite_url: format!("{}/invites/{}", app_origin.trim_end_matches('/'), secret),
+    }))
+}
+
+pub(crate) async fn update_repository_member(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path((owner, repo_name, member_user_id)): Path<(String, String, String)>,
+    Json(input): Json<UpdateRepositoryMemberRequest>,
+) -> Result<Json<RepositoryMemberResponse>, ApiError> {
+    let user = require_scope_user(&state, &headers).await?;
+    let now = unix_now()?;
+    let member = state.metadata.update_repository_member_permissions(
+        &owner,
+        &repo_name,
+        &user.id,
+        &member_user_id,
+        input.permissions,
+        now,
+    )?;
+    let repo = find_repo(&state, &owner, &repo_name)?;
+    state.publish_repo_change(
+        &repo.record.id,
+        repo.record.change_version,
+        "member-permissions-changed",
+    );
+    Ok(Json(member_response_for_user(&state, &member)?))
+}
+
+pub(crate) async fn delete_repository_member(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path((owner, repo_name, member_user_id)): Path<(String, String, String)>,
+) -> Result<Json<RepositoryMemberResponse>, ApiError> {
+    let user = require_scope_user(&state, &headers).await?;
+    let member =
+        state
+            .metadata
+            .remove_repository_member(&owner, &repo_name, &user.id, &member_user_id)?;
+    let repo = find_repo(&state, &owner, &repo_name)?;
+    state.publish_repo_change(
+        &repo.record.id,
+        repo.record.change_version,
+        "member-removed",
+    );
+    Ok(Json(member_response_for_user(&state, &member)?))
+}
+
+pub(crate) async fn get_repository_invite(
+    State(state): State<AppState>,
+    Path(token): Path<String>,
+) -> Result<Json<RepositoryInviteLookupResponse>, ApiError> {
+    let now = unix_now()?;
+    let token_hash = repository_invite_token_hash(&token);
+    let (repo, invite) = state
+        .metadata
+        .repository_invite_by_token_hash(&token_hash)?;
+    ensure_invite_can_be_used(&invite, now)?;
+    Ok(Json(RepositoryInviteLookupResponse {
+        repo_id: repo.record.id,
+        owner_handle: repo.record.owner_handle,
+        repo_name: repo.record.name,
+        invited_email: invite.invited_email,
+        permissions: invite.permissions,
+        expires_at_unix: invite.expires_at_unix,
+    }))
+}
+
+pub(crate) async fn accept_repository_invite(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path(token): Path<String>,
+) -> Result<Json<AcceptRepositoryInviteResponse>, ApiError> {
+    let user = require_scope_user(&state, &headers).await?;
+    let now = unix_now()?;
+    let token_hash = repository_invite_token_hash(&token);
+    let (repo, member) = state
+        .metadata
+        .accept_repository_invite(&token_hash, user.clone(), now)?;
+    state.publish_repo_change(&repo.record.id, repo.record.change_version, "member-added");
+    let summary = repo_summary_for_user(&repo, &user.id)
+        .ok_or_else(|| ApiError::internal_message("accepted invite member cannot read repo"))?;
+    Ok(Json(AcceptRepositoryInviteResponse {
+        repo: summary,
+        member: repository_member_response(&member, &user),
+    }))
+}
+
+fn ensure_invite_can_be_used(
+    invite: &crate::domain::store::RepositoryInvite,
+    now_unix: u64,
+) -> Result<(), ApiError> {
+    if invite.state != crate::domain::store::RepositoryInviteState::Pending {
+        return Err(ApiError::conflict("repository invite is no longer pending"));
+    }
+    if now_unix >= invite.expires_at_unix {
+        return Err(ApiError::conflict("repository invite expired"));
+    }
+    Ok(())
+}
+
+fn member_response_for_user(
+    state: &AppState,
+    member: &crate::domain::store::RepositoryMember,
+) -> Result<RepositoryMemberResponse, ApiError> {
+    state.metadata.read({
+        let member = member.clone();
+        move |catalog| {
+            let user = catalog
+                .users
+                .get(&member.user_id)
+                .ok_or_else(|| ApiError::internal_message("repository member user is missing"))?;
+            Ok(repository_member_response(&member, user))
+        }
+    })
 }

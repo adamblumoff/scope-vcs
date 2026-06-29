@@ -20,21 +20,54 @@ pub struct UserAccount {
     pub access: AccountAccess,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(test, derive(ts_rs::TS))]
-pub enum RepoRole {
-    Reader,
-    Writer,
-    Maintainer,
+pub enum RepositoryActor {
+    Public,
+    Member,
     Owner,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(test, derive(ts_rs::TS))]
 pub enum RepoPublicationState {
-    PendingFirstPush,
-    PendingPublish,
+    Unpublished,
     Published,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(test, derive(ts_rs::TS))]
+pub struct RepositoryMemberPermissions {
+    pub can_push: bool,
+    pub can_change_file_visibility: bool,
+    pub can_apply_changes: bool,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RepositoryAccess {
+    pub actor: RepositoryActor,
+    pub can_read_private_files: bool,
+    pub can_push: bool,
+    pub can_change_file_visibility: bool,
+    pub can_apply_changes: bool,
+    pub can_update_repo_settings: bool,
+    pub can_manage_members: bool,
+    pub can_delete_repo: bool,
+}
+
+impl RepositoryAccess {
+    pub fn public() -> Self {
+        Self {
+            actor: RepositoryActor::Public,
+            can_read_private_files: false,
+            can_push: false,
+            can_change_file_visibility: false,
+            can_apply_changes: false,
+            can_update_repo_settings: false,
+            can_manage_members: false,
+            can_delete_repo: false,
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -176,27 +209,39 @@ pub struct StagedRepoUpdate {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub struct RepoMembership {
+pub struct RepositoryMember {
     pub repo_id: String,
     pub user_id: String,
-    pub role: RepoRole,
+    pub permissions: RepositoryMemberPermissions,
+    pub created_at_unix: u64,
+    pub updated_at_unix: u64,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub enum InvitationState {
+#[cfg_attr(test, derive(ts_rs::TS))]
+pub enum RepositoryInviteState {
     Pending,
     Accepted,
     Revoked,
+    Expired,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub struct RepoInvitation {
+pub struct RepositoryInvite {
     pub id: String,
     pub repo_id: String,
     pub invited_email: String,
-    pub role: RepoRole,
+    pub invited_email_normalized: String,
+    pub permissions: RepositoryMemberPermissions,
     pub invited_by_user_id: String,
-    pub state: InvitationState,
+    pub state: RepositoryInviteState,
+    pub token_hash: String,
+    pub created_at_unix: u64,
+    pub updated_at_unix: u64,
+    pub expires_at_unix: u64,
+    pub accepted_by_user_id: Option<String>,
+    pub accepted_at_unix: Option<u64>,
+    pub revoked_at_unix: Option<u64>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -212,8 +257,8 @@ pub struct StoredRepository {
     pub visibility_events: Vec<VisibilityEvent>,
     pub git_snapshot: Option<SourceBlob>,
     pub staged_update: Option<StagedRepoUpdate>,
-    pub memberships: Vec<RepoMembership>,
-    pub invitations: Vec<RepoInvitation>,
+    pub members: Vec<RepositoryMember>,
+    pub invitations: Vec<RepositoryInvite>,
 }
 
 impl StoredRepository {
@@ -230,7 +275,7 @@ impl StoredRepository {
                 owner_handle: owner.handle.clone(),
                 name,
                 owner_user_id: owner.id.clone(),
-                publication_state: RepoPublicationState::PendingFirstPush,
+                publication_state: RepoPublicationState::Unpublished,
                 default_visibility,
                 change_version: 1,
             },
@@ -239,7 +284,7 @@ impl StoredRepository {
             git_push_token: None,
             git_clone_tokens: Vec::new(),
             pending_import: None,
-            policy: Policy::new(default_visibility, owner.id.clone()),
+            policy: Policy::new(default_visibility),
             graph: SourceGraph {
                 repo_id: id.clone(),
                 commits: Vec::new(),
@@ -247,28 +292,66 @@ impl StoredRepository {
             visibility_events: Vec::new(),
             git_snapshot: None,
             staged_update: None,
-            memberships: vec![RepoMembership {
-                repo_id: id,
-                user_id: owner.id.clone(),
-                role: RepoRole::Owner,
-            }],
+            members: Vec::new(),
             invitations: Vec::new(),
         })
     }
 
-    pub fn owner_ids(&self) -> Vec<String> {
-        let mut owner_ids = self
-            .memberships
-            .iter()
-            .filter(|membership| membership.role == RepoRole::Owner)
-            .map(|membership| membership.user_id.clone())
-            .collect::<Vec<_>>();
-        if !owner_ids.contains(&self.record.owner_user_id) {
-            owner_ids.push(self.record.owner_user_id.clone());
+    pub fn is_owner_user(&self, user_id: &str) -> bool {
+        self.record.owner_user_id == user_id
+    }
+
+    pub fn member_for_user(&self, user_id: &str) -> Option<&RepositoryMember> {
+        self.members.iter().find(|member| member.user_id == user_id)
+    }
+
+    pub fn access_for_principal(&self, principal: &Principal) -> RepositoryAccess {
+        if principal.kind == PrincipalKind::Public {
+            return RepositoryAccess::public();
         }
-        owner_ids.sort();
-        owner_ids.dedup();
-        owner_ids
+
+        self.access_for_user_id(&principal.id)
+    }
+
+    pub fn access_for_user_id(&self, user_id: &str) -> RepositoryAccess {
+        let published = self.record.publication_state == RepoPublicationState::Published;
+        if self.is_owner_user(user_id) {
+            return RepositoryAccess {
+                actor: RepositoryActor::Owner,
+                can_read_private_files: true,
+                can_push: published,
+                can_change_file_visibility: true,
+                can_apply_changes: true,
+                can_update_repo_settings: true,
+                can_manage_members: published,
+                can_delete_repo: true,
+            };
+        }
+
+        let Some(member) = self.member_for_user(user_id) else {
+            return RepositoryAccess::public();
+        };
+        let permissions = member.permissions;
+        RepositoryAccess {
+            actor: RepositoryActor::Member,
+            can_read_private_files: published,
+            can_push: published && permissions.can_push,
+            can_change_file_visibility: published && permissions.can_change_file_visibility,
+            can_apply_changes: published && permissions.can_apply_changes,
+            can_update_repo_settings: false,
+            can_manage_members: false,
+            can_delete_repo: false,
+        }
+    }
+
+    pub fn is_waiting_for_first_push(&self) -> bool {
+        self.record.publication_state == RepoPublicationState::Unpublished
+            && self.pending_import.is_none()
+    }
+
+    pub fn has_pending_import_review(&self) -> bool {
+        self.record.publication_state == RepoPublicationState::Unpublished
+            && self.pending_import.is_some()
     }
 
     pub fn graph_has_file(&self, path: &ScopePath) -> bool {
@@ -325,7 +408,7 @@ impl StoredRepository {
     }
 
     pub fn has_file_for_visibility_update(&self, path: &ScopePath) -> bool {
-        if self.record.publication_state == RepoPublicationState::PendingPublish {
+        if self.has_pending_import_review() {
             self.pending_import_has_file(path)
         } else {
             self.graph_has_file(path)
@@ -360,13 +443,55 @@ impl AppCatalog {
         self.repositories
             .values()
             .filter(|repo| {
-                repo.memberships
-                    .iter()
-                    .any(|membership| membership.user_id == user_id)
+                repo.record.owner_user_id == user_id
+                    || repo.members.iter().any(|member| member.user_id == user_id)
             })
             .collect()
     }
 
+    pub fn can_read_path(
+        &self,
+        repo: &StoredRepository,
+        principal: &Principal,
+        path: &ScopePath,
+    ) -> bool {
+        if principal.kind == PrincipalKind::Public {
+            return repo.record.publication_state == RepoPublicationState::Published
+                && repo.policy.can_read(path, false);
+        }
+
+        let access = repo.access_for_principal(principal);
+        match access.actor {
+            RepositoryActor::Owner => repo.policy.can_read(path, true),
+            RepositoryActor::Member => {
+                repo.record.publication_state == RepoPublicationState::Published
+                    && repo.policy.can_read(path, access.can_read_private_files)
+            }
+            RepositoryActor::Public => false,
+        }
+    }
+
+    pub fn can_push(&self, repo: &StoredRepository, principal: &Principal) -> bool {
+        repo.access_for_principal(principal).can_push
+    }
+}
+
+pub fn normalize_repository_invite_email(email: &str) -> String {
+    email.trim().to_ascii_lowercase()
+}
+
+pub fn repository_member_sort_key(member: &RepositoryMember) -> (&str, &str) {
+    (&member.repo_id, &member.user_id)
+}
+
+pub fn repository_invite_sort_key(invite: &RepositoryInvite) -> (&str, &str, &str) {
+    (
+        &invite.repo_id,
+        &invite.invited_email_normalized,
+        &invite.id,
+    )
+}
+impl AppCatalog {
     pub fn create_repository(
         &mut self,
         owner: &UserAccount,
@@ -380,54 +505,6 @@ impl AppCatalog {
         }
         self.repositories.insert(id.clone(), repository);
         Ok(self.repositories.get(&id).expect("repository was inserted"))
-    }
-
-    pub fn role_for_principal(
-        &self,
-        repo: &StoredRepository,
-        principal: &Principal,
-    ) -> Option<RepoRole> {
-        if principal.kind != PrincipalKind::Public && principal.id == repo.record.owner_user_id {
-            return Some(RepoRole::Owner);
-        }
-
-        repo.memberships
-            .iter()
-            .find(|membership| membership.user_id == principal.id)
-            .map(|membership| membership.role)
-    }
-
-    pub fn can_read_path(
-        &self,
-        repo: &StoredRepository,
-        principal: &Principal,
-        path: &ScopePath,
-    ) -> bool {
-        if principal.kind == PrincipalKind::Public {
-            return repo.record.publication_state == RepoPublicationState::Published
-                && repo.policy.can_read(principal, path);
-        }
-
-        let Some(role) = self.role_for_principal(repo, principal) else {
-            return false;
-        };
-
-        let lifecycle_allows_read = repo.record.publication_state
-            == RepoPublicationState::Published
-            || role == RepoRole::Owner;
-
-        lifecycle_allows_read && repo.policy.can_read(principal, path)
-    }
-
-    pub fn can_write_path(
-        &self,
-        repo: &StoredRepository,
-        principal: &Principal,
-        path: &ScopePath,
-    ) -> bool {
-        self.role_for_principal(repo, principal)
-            .is_some_and(|role| role >= RepoRole::Writer)
-            && self.can_read_path(repo, principal, path)
     }
 }
 

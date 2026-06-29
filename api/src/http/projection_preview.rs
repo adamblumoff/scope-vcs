@@ -2,11 +2,11 @@ use crate::{
     domain::{
         policy::Principal,
         projection_views::repo_for_projection_preview,
-        store::{RepoRole, StoredRepository},
+        store::{RepositoryActor, StoredRepository},
     },
     error::ApiError,
     http::responses::{ProjectionPreviewAudience, ProjectionPreviewSource},
-    state::{AppState, ensure_owner, ensure_repo_read, role_for_principal},
+    state::{AppState, ensure_owner, ensure_repo_read},
 };
 
 pub(crate) fn ensure_projection_preview_access(
@@ -26,7 +26,7 @@ pub(crate) fn ensure_projection_preview_access(
             ensure_owner(state, repo, requester)
         }
         (ProjectionPreviewAudience::Public, ProjectionPreviewSource::Live) => {
-            if role_for_principal(state, repo, requester)? == Some(RepoRole::Owner) {
+            if repo.access_for_principal(requester).actor == RepositoryActor::Owner {
                 ensure_repo_read(state, repo, requester)
             } else {
                 ensure_repo_read(state, repo, &Principal::public())

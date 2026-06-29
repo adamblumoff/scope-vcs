@@ -28,7 +28,7 @@ async fn published_receive_pack_accepts_git_push_token() {
 
     assert!(matches!(
         access,
-        ReceivePackAccess::PublishedMember { author_id } if author_id == test_owner_id()
+        ReceivePackAccess::PublishedMember { author_id, .. } if author_id == test_owner_id()
     ));
 }
 
@@ -63,7 +63,7 @@ async fn receive_pack_requires_credentials_before_repo_state_is_revealed() {
     {
         let mut catalog = lock_catalog(&state).unwrap();
         let repo = catalog.repositories.get_mut(TEST_REPO_ID).unwrap();
-        repo.record.publication_state = RepoPublicationState::PendingPublish;
+        repo.record.publication_state = RepoPublicationState::Unpublished;
     }
     let pending_publish = app
         .oneshot(
@@ -89,7 +89,8 @@ async fn receive_pack_reports_pending_publish_only_after_owner_token_auth() {
     {
         let mut catalog = lock_catalog(&state).unwrap();
         let repo = catalog.repositories.get_mut(TEST_REPO_ID).unwrap();
-        repo.record.publication_state = RepoPublicationState::PendingPublish;
+        repo.record.publication_state = RepoPublicationState::Unpublished;
+        repo.pending_import = Some(pending_import_fixture(vec![("README.md", "hello")]));
         repo.git_push_token = Some(GitPushToken {
             token_hash: git_push_token_hash(secret),
             owner_user_id: repo.record.owner_user_id.clone(),
@@ -125,7 +126,6 @@ async fn upload_pack_uses_git_push_token_for_owner_projection_after_publish() {
         repo.policy
             .add_rule(VisibilityRule::private(
                 ScopePath::parse("/secret.txt").unwrap(),
-                [repo.record.owner_user_id.clone()],
             ))
             .unwrap();
         repo.graph.commits[0].changes.push(FileChange {
@@ -166,21 +166,19 @@ async fn upload_pack_uses_git_clone_token_for_member_projection_after_publish() 
     let (secret, clone_token) = generate_git_clone_token(&member_id).unwrap();
     {
         let mut repo = repo_with_readme();
-        repo.memberships.push(RepoMembership {
-            repo_id: TEST_REPO_ID.to_string(),
-            user_id: member_id.clone(),
-            role: RepoRole::Reader,
-        });
+        repo.members.push(test_repository_member(
+            TEST_REPO_ID,
+            member_id.clone(),
+            RepositoryMemberPermissions::default(),
+        ));
         repo.policy
             .add_rule(VisibilityRule::private(
                 ScopePath::parse("/member-secret.txt").unwrap(),
-                [member_id.clone()],
             ))
             .unwrap();
         repo.policy
             .add_rule(VisibilityRule::private(
                 ScopePath::parse("/owner-secret.txt").unwrap(),
-                [repo.record.owner_user_id.clone()],
             ))
             .unwrap();
         repo.graph.commits[0].changes.extend([
@@ -232,7 +230,7 @@ async fn upload_pack_uses_git_clone_token_for_member_projection_after_publish() 
 
     assert!(visible_paths.contains(&"/README.md"));
     assert!(visible_paths.contains(&"/member-secret.txt"));
-    assert!(!visible_paths.contains(&"/owner-secret.txt"));
+    assert!(visible_paths.contains(&"/owner-secret.txt"));
 }
 
 #[tokio::test]
@@ -242,12 +240,9 @@ async fn owner_git_credential_survives_missing_membership_row() {
     let (secret, owner_token) = generate_git_clone_token(&owner_id).unwrap();
     {
         let mut repo = repo_with_readme();
-        repo.memberships
-            .retain(|membership| membership.user_id != owner_id);
         repo.policy
             .add_rule(VisibilityRule::private(
                 ScopePath::parse("/owner-secret.txt").unwrap(),
-                [owner_id.clone()],
             ))
             .unwrap();
         repo.graph.commits[0].changes.push(FileChange {
@@ -286,7 +281,7 @@ async fn owner_git_credential_survives_missing_membership_row() {
     );
     assert!(matches!(
         access,
-        ReceivePackAccess::PublishedMember { author_id } if author_id == owner_id
+        ReceivePackAccess::PublishedMember { author_id, .. } if author_id == owner_id
     ));
 }
 
@@ -298,11 +293,11 @@ async fn published_receive_pack_accepts_member_git_credential() {
     {
         let mut catalog = lock_catalog(&state).unwrap();
         let repo = catalog.repositories.get_mut(TEST_REPO_ID).unwrap();
-        repo.memberships.push(RepoMembership {
-            repo_id: TEST_REPO_ID.to_string(),
-            user_id: member_id.clone(),
-            role: RepoRole::Writer,
-        });
+        repo.members.push(test_repository_member(
+            TEST_REPO_ID,
+            member_id.clone(),
+            member_permissions(true, false, false),
+        ));
         repo.git_clone_tokens.push(member_token);
     }
     let mut headers = HeaderMap::new();
@@ -319,7 +314,7 @@ async fn published_receive_pack_accepts_member_git_credential() {
 
     assert!(matches!(
         access,
-        ReceivePackAccess::PublishedMember { author_id } if author_id == member_id
+        ReceivePackAccess::PublishedMember { author_id, .. } if author_id == member_id
     ));
 }
 
@@ -331,11 +326,11 @@ async fn published_receive_pack_rejects_reader_git_credential() {
     {
         let mut catalog = lock_catalog(&state).unwrap();
         let repo = catalog.repositories.get_mut(TEST_REPO_ID).unwrap();
-        repo.memberships.push(RepoMembership {
-            repo_id: TEST_REPO_ID.to_string(),
-            user_id: member_id,
-            role: RepoRole::Reader,
-        });
+        repo.members.push(test_repository_member(
+            TEST_REPO_ID,
+            member_id,
+            RepositoryMemberPermissions::default(),
+        ));
         repo.git_clone_tokens.push(member_token);
     }
     let mut headers = HeaderMap::new();
@@ -421,7 +416,7 @@ async fn owner_upload_pack_serves_raw_bucket_snapshot_head() {
     {
         let mut catalog = lock_catalog(&state).unwrap();
         let repo = catalog.repositories.get_mut(TEST_REPO_ID).unwrap();
-        repo.record.publication_state = RepoPublicationState::PendingPublish;
+        repo.record.publication_state = RepoPublicationState::Unpublished;
         repo.pending_import = Some(pending);
         preview_publish_import(repo).unwrap();
     }
@@ -475,9 +470,14 @@ async fn owner_upload_pack_serves_raw_bucket_snapshot_head() {
         &test_owner_id(),
     )
     .unwrap();
-    let persisted =
-        persist_receive_pack_update_and_promote(&state, TEST_REPO_OWNER, TEST_REPO_NAME, update)
-            .unwrap();
+    let persisted = persist_receive_pack_update_and_promote(
+        &state,
+        TEST_REPO_OWNER,
+        TEST_REPO_NAME,
+        update,
+        true,
+    )
+    .unwrap();
     assert_eq!(persisted, PersistedReceivePackUpdate::Staged);
 
     let staged_repo_path =
@@ -552,7 +552,7 @@ async fn private_upload_pack_without_credentials_challenges_for_auth() {
     {
         let mut repo = test_repo(&test_owner_id());
         repo.record.default_visibility = Visibility::Private;
-        repo.policy = Policy::new(Visibility::Private, &repo.record.owner_user_id);
+        repo.policy = Policy::new(Visibility::Private);
         repo.graph.commits.push(LogicalCommit {
             id: "rv1".to_string(),
             parent_ids: Vec::new(),
@@ -649,7 +649,7 @@ async fn real_git_first_push_over_http_creates_pending_import() {
         let (secret, token) = generate_first_push_token(&test_owner_id()).unwrap();
         let mut catalog = lock_catalog(&state).unwrap();
         let repo = catalog.repositories.get_mut(TEST_REPO_ID).unwrap();
-        repo.record.publication_state = RepoPublicationState::PendingFirstPush;
+        repo.record.publication_state = RepoPublicationState::Unpublished;
         repo.first_push_token = Some(token);
         (secret, state.clone())
     };
@@ -684,7 +684,7 @@ async fn real_git_first_push_over_http_creates_pending_import() {
     let repo = find_repo(&state, TEST_REPO_OWNER, TEST_REPO_NAME).unwrap();
     assert_eq!(
         repo.record.publication_state,
-        RepoPublicationState::PendingPublish
+        RepoPublicationState::Unpublished
     );
     let pending = repo.pending_import.unwrap();
     assert_eq!(pending.default_branch, DEFAULT_GIT_BRANCH);
@@ -703,7 +703,7 @@ async fn chunked_real_git_first_push_over_http_creates_pending_import() {
         let (secret, token) = generate_first_push_token(&test_owner_id()).unwrap();
         let mut catalog = lock_catalog(&state).unwrap();
         let repo = catalog.repositories.get_mut(TEST_REPO_ID).unwrap();
-        repo.record.publication_state = RepoPublicationState::PendingFirstPush;
+        repo.record.publication_state = RepoPublicationState::Unpublished;
         repo.first_push_token = Some(token);
         (secret, state.clone())
     };
@@ -745,7 +745,7 @@ async fn chunked_real_git_first_push_over_http_creates_pending_import() {
     let repo = find_repo(&state, TEST_REPO_OWNER, TEST_REPO_NAME).unwrap();
     assert_eq!(
         repo.record.publication_state,
-        RepoPublicationState::PendingPublish
+        RepoPublicationState::Unpublished
     );
     let pending = repo.pending_import.unwrap();
     assert_eq!(pending.default_branch, DEFAULT_GIT_BRANCH);

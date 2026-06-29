@@ -4,10 +4,11 @@ use crate::{
     error::ApiError,
     http::responses::{
         AccountSessionResponse, HealthResponse, ReadinessCheckResponse, ReadinessResponse,
-        SessionCapabilities, SessionIdentity, SessionRepo, SessionResponse, UserResponse,
+        SessionIdentity, SessionRepo, SessionResponse, UserResponse, repository_access_response,
+        session_capabilities_response,
     },
     state::AppState,
-    state::{can_read_path, can_write_path, ensure_repo_read, find_repo, role_for_principal},
+    state::{access_for_principal, can_read_path, ensure_repo_read, find_repo},
 };
 use axum::{
     Json,
@@ -76,19 +77,17 @@ pub(crate) async fn get_session(
     let principal = principal_for_scope_user(&repo, user.as_ref());
     ensure_repo_read(&state, &repo, &principal)?;
     let root = ScopePath::root();
-    let role = role_for_principal(&state, &repo, &principal)?;
+    let access = access_for_principal(&state, &repo, &principal)?;
+    let can_read = can_read_path(&state, &repo, &principal, &root)?;
 
     Ok(Json(SessionResponse {
         identity: user.as_ref().map(SessionIdentity::from),
         repo: SessionRepo {
             id: repo.record.id.clone(),
             publication_state: repo.record.publication_state,
-            role,
+            access: repository_access_response(access),
         },
-        capabilities: SessionCapabilities {
-            read: can_read_path(&state, &repo, &principal, &root)?,
-            write: can_write_path(&state, &repo, &principal, &root)?,
-        },
+        capabilities: session_capabilities_response(can_read, access),
         principal_id: principal.id,
     }))
 }

@@ -2,9 +2,10 @@ use crate::db::{decode_json, encode_json};
 use crate::domain::policy::{Policy, Visibility};
 use crate::domain::projection::SourceGraph;
 use crate::domain::store::{
-    AccountAccess, FirstPushToken, GitCloneToken, GitPushToken, InvitationState, PendingImport,
-    RepoInvitation, RepoMembership, RepoPublicationState, RepoRecord, RepoRole, RepoSettings,
-    SourceBlob, StagedRepoUpdate, StoredRepository, UserAccount,
+    AccountAccess, FirstPushToken, GitCloneToken, GitPushToken, PendingImport,
+    RepoPublicationState, RepoRecord, RepoSettings, RepositoryInvite, RepositoryInviteState,
+    RepositoryMember, RepositoryMemberPermissions, SourceBlob, StagedRepoUpdate, StoredRepository,
+    UserAccount,
 };
 use crate::error::ApiError;
 use sea_orm::entity::prelude::*;
@@ -174,7 +175,6 @@ pub(crate) mod repository {
         pub visibility_events: Json,
         pub git_snapshot: Option<Json>,
         pub staged_update: Option<Json>,
-        pub invitations: Json,
     }
 
     #[derive(Copy, Clone, Debug, EnumIter, DeriveRelation)]
@@ -206,13 +206,13 @@ pub(crate) mod repository {
                 visibility_events: encode_json(&repo.visibility_events)?,
                 git_snapshot: repo.git_snapshot.as_ref().map(encode_json).transpose()?,
                 staged_update: repo.staged_update.as_ref().map(encode_json).transpose()?,
-                invitations: encode_json(&repo.invitations)?,
             })
         }
 
         pub(crate) fn try_into_domain(
             self,
-            memberships: Vec<RepoMembership>,
+            members: Vec<RepositoryMember>,
+            invitations: Vec<RepositoryInvite>,
         ) -> Result<StoredRepository, ApiError> {
             let publication_state = decode_enum::<RepoPublicationState>(self.publication_state)?;
             let default_visibility = decode_enum::<Visibility>(self.default_visibility)?;
@@ -252,8 +252,8 @@ pub(crate) mod repository {
                     .staged_update
                     .map(decode_json::<StagedRepoUpdate>)
                     .transpose()?,
-                memberships,
-                invitations: decode_json::<Vec<RepoInvitation>>(self.invitations)?,
+                members,
+                invitations,
             })
         }
     }
@@ -350,17 +350,19 @@ pub(crate) mod cli_session {
     impl ActiveModelBehavior for ActiveModel {}
 }
 
-pub(crate) mod membership {
+pub(crate) mod repository_member {
     use super::*;
 
     #[derive(Clone, Debug, PartialEq, DeriveEntityModel)]
-    #[sea_orm(table_name = "scope_repo_memberships")]
+    #[sea_orm(table_name = "scope_repository_members")]
     pub struct Model {
         #[sea_orm(primary_key, auto_increment = false)]
         pub repo_id: String,
         #[sea_orm(primary_key, auto_increment = false)]
         pub user_id: String,
-        pub role: String,
+        pub permissions: Json,
+        pub created_at_unix: i64,
+        pub updated_at_unix: i64,
     }
 
     #[derive(Copy, Clone, Debug, EnumIter, DeriveRelation)]
@@ -369,19 +371,96 @@ pub(crate) mod membership {
     impl ActiveModelBehavior for ActiveModel {}
 
     impl Model {
-        pub(crate) fn from_domain(membership: &RepoMembership) -> Self {
-            Self {
-                repo_id: membership.repo_id.clone(),
-                user_id: membership.user_id.clone(),
-                role: encode_enum(membership.role).expect("RepoRole serializes to a string"),
-            }
+        pub(crate) fn from_domain(member: &RepositoryMember) -> Result<Self, ApiError> {
+            Ok(Self {
+                repo_id: member.repo_id.clone(),
+                user_id: member.user_id.clone(),
+                permissions: encode_json(&member.permissions)?,
+                created_at_unix: member.created_at_unix.min(i64::MAX as u64) as i64,
+                updated_at_unix: member.updated_at_unix.min(i64::MAX as u64) as i64,
+            })
         }
 
-        pub(crate) fn try_into_domain(self) -> Result<RepoMembership, ApiError> {
-            Ok(RepoMembership {
+        pub(crate) fn try_into_domain(self) -> Result<RepositoryMember, ApiError> {
+            Ok(RepositoryMember {
                 repo_id: self.repo_id,
                 user_id: self.user_id,
-                role: decode_enum::<RepoRole>(self.role)?,
+                permissions: decode_json::<RepositoryMemberPermissions>(self.permissions)?,
+                created_at_unix: self.created_at_unix.max(0) as u64,
+                updated_at_unix: self.updated_at_unix.max(0) as u64,
+            })
+        }
+    }
+}
+
+pub(crate) mod repository_invite {
+    use super::*;
+
+    #[derive(Clone, Debug, PartialEq, DeriveEntityModel)]
+    #[sea_orm(table_name = "scope_repository_invites")]
+    pub struct Model {
+        #[sea_orm(primary_key, auto_increment = false)]
+        pub id: String,
+        pub repo_id: String,
+        pub invited_email: String,
+        pub invited_email_normalized: String,
+        pub permissions: Json,
+        pub invited_by_user_id: String,
+        pub state: String,
+        pub token_hash: String,
+        pub created_at_unix: i64,
+        pub updated_at_unix: i64,
+        pub expires_at_unix: i64,
+        pub accepted_by_user_id: Option<String>,
+        pub accepted_at_unix: Option<i64>,
+        pub revoked_at_unix: Option<i64>,
+    }
+
+    #[derive(Copy, Clone, Debug, EnumIter, DeriveRelation)]
+    pub enum Relation {}
+
+    impl ActiveModelBehavior for ActiveModel {}
+
+    impl Model {
+        pub(crate) fn from_domain(invite: &RepositoryInvite) -> Result<Self, ApiError> {
+            Ok(Self {
+                id: invite.id.clone(),
+                repo_id: invite.repo_id.clone(),
+                invited_email: invite.invited_email.clone(),
+                invited_email_normalized: invite.invited_email_normalized.clone(),
+                permissions: encode_json(&invite.permissions)?,
+                invited_by_user_id: invite.invited_by_user_id.clone(),
+                state: encode_enum(invite.state)?,
+                token_hash: invite.token_hash.clone(),
+                created_at_unix: invite.created_at_unix.min(i64::MAX as u64) as i64,
+                updated_at_unix: invite.updated_at_unix.min(i64::MAX as u64) as i64,
+                expires_at_unix: invite.expires_at_unix.min(i64::MAX as u64) as i64,
+                accepted_by_user_id: invite.accepted_by_user_id.clone(),
+                accepted_at_unix: invite
+                    .accepted_at_unix
+                    .map(|value| value.min(i64::MAX as u64) as i64),
+                revoked_at_unix: invite
+                    .revoked_at_unix
+                    .map(|value| value.min(i64::MAX as u64) as i64),
+            })
+        }
+
+        pub(crate) fn try_into_domain(self) -> Result<RepositoryInvite, ApiError> {
+            Ok(RepositoryInvite {
+                id: self.id,
+                repo_id: self.repo_id,
+                invited_email: self.invited_email,
+                invited_email_normalized: self.invited_email_normalized,
+                permissions: decode_json::<RepositoryMemberPermissions>(self.permissions)?,
+                invited_by_user_id: self.invited_by_user_id,
+                state: decode_enum::<RepositoryInviteState>(self.state)?,
+                token_hash: self.token_hash,
+                created_at_unix: self.created_at_unix.max(0) as u64,
+                updated_at_unix: self.updated_at_unix.max(0) as u64,
+                expires_at_unix: self.expires_at_unix.max(0) as u64,
+                accepted_by_user_id: self.accepted_by_user_id,
+                accepted_at_unix: self.accepted_at_unix.map(|value| value.max(0) as u64),
+                revoked_at_unix: self.revoked_at_unix.map(|value| value.max(0) as u64),
             })
         }
     }
@@ -422,9 +501,4 @@ pub(crate) mod metadata_reset_event {
     pub enum Relation {}
 
     impl ActiveModelBehavior for ActiveModel {}
-}
-
-#[allow(dead_code)]
-fn _keeps_invitation_state_serde_visible(state: InvitationState) -> InvitationState {
-    state
 }
