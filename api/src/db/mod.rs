@@ -34,6 +34,7 @@ use metadata_reset::{
     insert_metadata_reset_event, metadata_reset_event_from_model,
     new_operator_metadata_reset_event, reset_stale_pre_alpha_metadata,
 };
+pub(crate) use repo_collaboration::CreateRepositoryInviteMutation;
 pub(crate) use repo_mutation::RepositoryMutation;
 use runtime::DbRuntime;
 use runtime::{run_api_db_on, run_db_on};

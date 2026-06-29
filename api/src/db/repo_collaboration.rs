@@ -17,21 +17,25 @@ use crate::error::ApiError;
 use sea_orm::{ColumnTrait, EntityTrait, QueryFilter, TransactionTrait};
 use std::sync::Arc;
 
+pub(crate) struct CreateRepositoryInviteMutation {
+    pub(crate) owner: String,
+    pub(crate) name: String,
+    pub(crate) owner_user: UserAccount,
+    pub(crate) invited_email: String,
+    pub(crate) permissions: RepositoryMemberPermissions,
+    pub(crate) invite_id: String,
+    pub(crate) token_hash: String,
+    pub(crate) now_unix: u64,
+}
+
 impl MetadataStore {
     pub(crate) fn create_repository_invite(
         &self,
-        owner: &str,
-        name: &str,
-        owner_user: UserAccount,
-        invited_email: String,
-        permissions: RepositoryMemberPermissions,
-        invite_id: String,
-        token_hash: String,
-        now_unix: u64,
+        command: CreateRepositoryInviteMutation,
     ) -> Result<RepositoryInvite, ApiError> {
-        let repo_id = repo_id(owner, name);
-        let owner_name = owner.to_string();
-        let name = name.to_string();
+        let repo_id = repo_id(&command.owner, &command.name);
+        let owner_name = command.owner.clone();
+        let name = command.name.clone();
         match self.inner.as_ref() {
             MetadataStoreInner::Postgres { db, runtime } => {
                 let db = Arc::clone(db);
@@ -46,17 +50,17 @@ impl MetadataStore {
                             ApiError::not_found(format!("repo {owner_name}/{name} not found"))
                         })?;
                     let mut repo = repository_from_model(&tx, row).await?;
-                    let invitee = user_by_normalized_email(&tx, &invited_email).await?;
+                    let invitee = user_by_normalized_email(&tx, &command.invited_email).await?;
                     let mutation = create_or_refresh_repository_invite(
                         &mut repo,
                         CreateRepositoryInviteCommand {
-                            id: invite_id,
-                            owner: &owner_user,
-                            invited_email,
+                            id: command.invite_id,
+                            owner: &command.owner_user,
+                            invited_email: command.invited_email,
                             invitee: invitee.as_ref(),
-                            permissions,
-                            token_hash,
-                            now_unix,
+                            permissions: command.permissions,
+                            token_hash: command.token_hash,
+                            now_unix: command.now_unix,
                         },
                     )?;
                     save_repo_mutation(&tx, &repo, &mutation_effects_none()).await?;
@@ -68,7 +72,7 @@ impl MetadataStore {
             MetadataStoreInner::Memory(_) => self.update(move |catalog| {
                 let invitee = catalog.users.values().find(|user| {
                     normalize_repository_invite_email(&user.email)
-                        == normalize_repository_invite_email(&invited_email)
+                        == normalize_repository_invite_email(&command.invited_email)
                 });
                 let repo = catalog.repositories.get_mut(&repo_id).ok_or_else(|| {
                     ApiError::not_found(format!("repo {owner_name}/{name} not found"))
@@ -76,13 +80,13 @@ impl MetadataStore {
                 let invite = create_or_refresh_repository_invite(
                     repo,
                     CreateRepositoryInviteCommand {
-                        id: invite_id,
-                        owner: &owner_user,
-                        invited_email,
+                        id: command.invite_id,
+                        owner: &command.owner_user,
+                        invited_email: command.invited_email,
                         invitee,
-                        permissions,
-                        token_hash,
-                        now_unix,
+                        permissions: command.permissions,
+                        token_hash: command.token_hash,
+                        now_unix: command.now_unix,
                     },
                 )?;
                 Ok(invite)

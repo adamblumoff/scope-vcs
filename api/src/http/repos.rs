@@ -391,16 +391,19 @@ pub(crate) async fn create_repository_invite(
     let (secret, token_hash) = generate_repository_invite_token()?;
     let now = unix_now()?;
     let invite_id = format!("repo_invite_{}", token_hash.replace([':', '/'], "_"));
-    let invite = state.metadata.create_repository_invite(
-        &owner,
-        &repo_name,
-        user,
-        input.email,
-        input.permissions,
-        invite_id,
-        token_hash,
-        now,
-    )?;
+    let invite =
+        state
+            .metadata
+            .create_repository_invite(crate::db::CreateRepositoryInviteMutation {
+                owner: owner.clone(),
+                name: repo_name.clone(),
+                owner_user: user,
+                invited_email: input.email,
+                permissions: input.permissions,
+                invite_id,
+                token_hash,
+                now_unix: now,
+            })?;
     let repo = find_repo(&state, &owner, &repo_name)?;
     state.publish_repo_change(
         &repo.record.id,
