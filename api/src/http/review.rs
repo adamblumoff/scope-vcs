@@ -57,7 +57,15 @@ pub(crate) async fn get_review_file_diff(
     let user = optional_scope_user(&state, &headers).await?;
     let principal = principal_for_scope_user(&repo, user.as_ref());
     ensure_repo_read(&state, &repo, &principal)?;
-    ensure_owner(&state, &repo, &principal)?;
+    if repo.has_pending_import_review() {
+        ensure_owner(&state, &repo, &principal)?;
+    } else if !repo.access_for_principal(&principal).can_apply_changes
+        && !repo
+            .access_for_principal(&principal)
+            .can_change_file_visibility
+    {
+        return Err(ApiError::forbidden("review permission required"));
+    }
 
     let path = pending_scope_path(&input.path)?;
     Ok(Json(review_file_diff_response(

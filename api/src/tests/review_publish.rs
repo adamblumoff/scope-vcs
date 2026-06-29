@@ -439,6 +439,103 @@ async fn staged_update_review_includes_total_line_diff() {
 }
 
 #[tokio::test]
+async fn visibility_member_can_load_staged_review_preview_and_file_diff() {
+    let state = test_state_with_repo();
+    cache_test_jwks(&state);
+    let member_clerk_id = "user_visibility_reviewer";
+    let member_email = "visibility@example.com";
+    let member_id = crate::db::scope_user_id_for_auth_identity("clerk", member_clerk_id);
+    {
+        let mut repo = repo_with_readme();
+        repo.members.push(test_repository_member(
+            TEST_REPO_ID,
+            member_id.clone(),
+            member_permissions(false, true, false),
+        ));
+        stage_receive_pack_update(
+            &mut repo,
+            receive_pack_update(vec![("/README.md", Some("visibility review"))]),
+        )
+        .unwrap();
+
+        let mut catalog = lock_catalog(&state).unwrap();
+        catalog.repositories.insert(TEST_REPO_ID.to_string(), repo);
+    }
+
+    let app = router(state);
+    let summary_response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("GET")
+                .uri("/v1/repos/owner/repo")
+                .header(
+                    AUTHORIZATION,
+                    bearer_header_for(member_clerk_id, member_email),
+                )
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(summary_response.status(), StatusCode::OK);
+    let summary = response_json(summary_response).await;
+    assert_eq!(summary["staged_update_pending"], true);
+
+    let review_response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("GET")
+                .uri("/v1/repos/owner/repo/staged-update")
+                .header(
+                    AUTHORIZATION,
+                    bearer_header_for(member_clerk_id, member_email),
+                )
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(review_response.status(), StatusCode::OK);
+
+    let preview_response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("GET")
+                .uri("/v1/repos/owner/repo/projection-preview?audience=owner&source=review")
+                .header(
+                    AUTHORIZATION,
+                    bearer_header_for(member_clerk_id, member_email),
+                )
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(preview_response.status(), StatusCode::OK);
+
+    let diff_response = app
+        .oneshot(
+            Request::builder()
+                .method("GET")
+                .uri("/v1/repos/owner/repo/review/file-diff?path=/README.md")
+                .header(
+                    AUTHORIZATION,
+                    bearer_header_for(member_clerk_id, member_email),
+                )
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(diff_response.status(), StatusCode::OK);
+    let diff = response_json(diff_response).await;
+    assert_eq!(diff["new_content"], "visibility review");
+}
+
+#[tokio::test]
 async fn staged_update_review_counts_separate_line_diff_hunks() {
     let state = test_state_with_repo();
     cache_test_jwks(&state);

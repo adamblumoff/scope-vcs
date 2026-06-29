@@ -581,6 +581,38 @@ async fn list_repos_route_requires_sign_in() {
 }
 
 #[tokio::test]
+async fn member_management_hides_private_repo_from_unrelated_users() {
+    let state = test_state_with_repo();
+    cache_test_jwks(&state);
+    {
+        let mut repo = repo_with_readme();
+        repo.record.default_visibility = Visibility::Private;
+        repo.policy = Policy::new(Visibility::Private);
+        repo.graph.commits[0].changes[0].visibility = Visibility::Private;
+
+        let mut catalog = lock_catalog(&state).unwrap();
+        catalog.repositories.insert(TEST_REPO_ID.to_string(), repo);
+    }
+
+    let response = router(state)
+        .oneshot(
+            Request::builder()
+                .method("GET")
+                .uri("/v1/repos/owner/repo/members")
+                .header(
+                    AUTHORIZATION,
+                    bearer_header_for("user_other", "other@example.com"),
+                )
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::NOT_FOUND);
+}
+
+#[tokio::test]
 async fn list_repos_route_hides_pending_repo_from_reader_member() {
     let state = test_state_with_repo();
     cache_test_jwks(&state);

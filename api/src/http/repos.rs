@@ -1,6 +1,6 @@
 use crate::domain::policy::{Principal, ScopePath, Visibility};
 use crate::domain::projection::project_graph;
-use crate::domain::store::{RepoSettings, RepositoryActor};
+use crate::domain::store::{RepoSettings, RepositoryActor, StoredRepository};
 use crate::{
     auth::{
         scope::{
@@ -111,7 +111,7 @@ pub(crate) async fn get_repo(
         change_version: repo_change_version_for_access(&repo, access),
         access: repository_access_response(access),
         pending_import_pending: repo.has_pending_import_review(),
-        staged_update_pending: access.can_apply_changes && repo.staged_update.is_some(),
+        staged_update_pending: can_review_staged_update(access) && repo.staged_update.is_some(),
         push_blocked_by_staged_update: access.can_push && repo.staged_update.is_some(),
     };
 
@@ -362,6 +362,8 @@ pub(crate) async fn list_repository_collaboration(
     Path((owner, repo_name)): Path<(String, String)>,
 ) -> Result<Json<RepositoryCollaborationResponse>, ApiError> {
     let user = require_scope_user(&state, &headers).await?;
+    let repo = find_repo(&state, &owner, &repo_name)?;
+    ensure_collaboration_owner_access(&state, &repo, &user.id)?;
     let owner_for_read = owner.clone();
     let repo_for_read = repo_name.clone();
     let response = state.metadata.read(move |catalog| {
@@ -370,9 +372,6 @@ pub(crate) async fn list_repository_collaboration(
             .ok_or_else(|| {
                 ApiError::not_found(format!("repo {owner_for_read}/{repo_for_read} not found"))
             })?;
-        if !repo.is_owner_user(&user.id) {
-            return Err(ApiError::forbidden("owner role required"));
-        }
         Ok(repository_collaboration_response(repo, &catalog.users))
     })?;
 
@@ -386,6 +385,8 @@ pub(crate) async fn create_repository_invite(
     Json(input): Json<CreateRepositoryInviteRequest>,
 ) -> Result<Json<CreateRepositoryInviteResponse>, ApiError> {
     let user = require_scope_user(&state, &headers).await?;
+    let repo = find_repo(&state, &owner, &repo_name)?;
+    ensure_collaboration_owner_access(&state, &repo, &user.id)?;
     let (secret, token_hash) = generate_repository_invite_token()?;
     let now = unix_now()?;
     let invite_id = format!("repo_invite_{}", token_hash.replace([':', '/'], "_"));
@@ -420,6 +421,8 @@ pub(crate) async fn update_repository_member(
     Json(input): Json<UpdateRepositoryMemberRequest>,
 ) -> Result<Json<RepositoryMemberResponse>, ApiError> {
     let user = require_scope_user(&state, &headers).await?;
+    let repo = find_repo(&state, &owner, &repo_name)?;
+    ensure_collaboration_owner_access(&state, &repo, &user.id)?;
     let now = unix_now()?;
     let member = state.metadata.update_repository_member_permissions(
         &owner,
@@ -444,6 +447,8 @@ pub(crate) async fn delete_repository_member(
     Path((owner, repo_name, member_user_id)): Path<(String, String, String)>,
 ) -> Result<Json<RepositoryMemberResponse>, ApiError> {
     let user = require_scope_user(&state, &headers).await?;
+    let repo = find_repo(&state, &owner, &repo_name)?;
+    ensure_collaboration_owner_access(&state, &repo, &user.id)?;
     let member =
         state
             .metadata
@@ -455,6 +460,20 @@ pub(crate) async fn delete_repository_member(
         "member-removed",
     );
     Ok(Json(member_response_for_user(&state, &member)?))
+}
+
+fn ensure_collaboration_owner_access(
+    state: &AppState,
+    repo: &StoredRepository,
+    user_id: &str,
+) -> Result<(), ApiError> {
+    let principal = principal_for_user_id(repo, user_id);
+    ensure_repo_read(state, repo, &principal)?;
+    if repo.is_owner_user(user_id) {
+        Ok(())
+    } else {
+        Err(ApiError::forbidden("owner role required"))
+    }
 }
 
 pub(crate) async fn get_repository_invite(

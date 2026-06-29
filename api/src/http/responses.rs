@@ -526,9 +526,13 @@ pub(crate) fn repo_summary_for_user(
         change_version: repo_change_version_for_access(repo, access),
         access: repository_access_response(access),
         pending_import_pending: repo.has_pending_import_review(),
-        staged_update_pending: access.can_apply_changes && repo.staged_update.is_some(),
+        staged_update_pending: can_review_staged_update(access) && repo.staged_update.is_some(),
         push_blocked_by_staged_update: access.can_push && repo.staged_update.is_some(),
     })
+}
+
+pub(crate) fn can_review_staged_update(access: RepositoryAccess) -> bool {
+    access.can_apply_changes || access.can_change_file_visibility
 }
 
 pub(crate) fn repo_change_version_for_access(
