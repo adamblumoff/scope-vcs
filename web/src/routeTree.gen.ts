@@ -12,9 +12,9 @@ import { Route as rootRouteImport } from './routes/__root'
 import { Route as CliLoginRouteImport } from './routes/cli-login'
 import { Route as AccountRouteImport } from './routes/account'
 import { Route as IndexRouteImport } from './routes/index'
-import { Route as InvitesTokenRouteImport } from './routes/invites.$token'
 import { Route as SignUpSplatRouteImport } from './routes/sign-up.$'
 import { Route as SignInSplatRouteImport } from './routes/sign-in.$'
+import { Route as InvitesTokenRouteImport } from './routes/invites.$token'
 import { Route as ReposOwnerRepoRouteImport } from './routes/repos.$owner.$repo'
 import { Route as ReposOwnerRepoSettingsRouteImport } from './routes/repos.$owner.$repo.settings'
 import { Route as ReposOwnerRepoReviewRouteImport } from './routes/repos.$owner.$repo.review'
@@ -35,11 +35,6 @@ const IndexRoute = IndexRouteImport.update({
   path: '/',
   getParentRoute: () => rootRouteImport,
 } as any)
-const InvitesTokenRoute = InvitesTokenRouteImport.update({
-  id: '/invites/$token',
-  path: '/invites/$token',
-  getParentRoute: () => rootRouteImport,
-} as any)
 const SignUpSplatRoute = SignUpSplatRouteImport.update({
   id: '/sign-up/$',
   path: '/sign-up/$',
@@ -48,6 +43,11 @@ const SignUpSplatRoute = SignUpSplatRouteImport.update({
 const SignInSplatRoute = SignInSplatRouteImport.update({
   id: '/sign-in/$',
   path: '/sign-in/$',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const InvitesTokenRoute = InvitesTokenRouteImport.update({
+  id: '/invites/$token',
+  path: '/invites/$token',
   getParentRoute: () => rootRouteImport,
 } as any)
 const ReposOwnerRepoRoute = ReposOwnerRepoRouteImport.update({
@@ -180,13 +180,6 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof IndexRouteImport
       parentRoute: typeof rootRouteImport
     }
-    '/invites/$token': {
-      id: '/invites/$token'
-      path: '/invites/$token'
-      fullPath: '/invites/$token'
-      preLoaderRoute: typeof InvitesTokenRouteImport
-      parentRoute: typeof rootRouteImport
-    }
     '/sign-up/$': {
       id: '/sign-up/$'
       path: '/sign-up/$'
@@ -199,6 +192,13 @@ declare module '@tanstack/react-router' {
       path: '/sign-in/$'
       fullPath: '/sign-in/$'
       preLoaderRoute: typeof SignInSplatRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/invites/$token': {
+      id: '/invites/$token'
+      path: '/invites/$token'
+      fullPath: '/invites/$token'
+      preLoaderRoute: typeof InvitesTokenRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/repos/$owner/$repo': {
