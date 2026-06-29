@@ -39,12 +39,12 @@ dependencies, and build output.
 
 Use the committed dev entrypoint instead of pulling Railway variables by hand:
 
-```powershell
-.\dev\scope-dev.ps1 doctor
-.\dev\scope-dev.ps1 up
-.\dev\scope-dev.ps1 status
-.\dev\scope-dev.ps1 down
-.\dev\scope-dev.ps1 reset
+```bash
+./dev/scope-dev doctor
+./dev/scope-dev up
+./dev/scope-dev status
+./dev/scope-dev down
+./dev/scope-dev reset
 ```
 
 The local stack runs the web app at `http://localhost:3000` and the API at

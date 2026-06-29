@@ -1,0 +1,350 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+COMMAND="${1:-status}"
+case "$COMMAND" in
+  doctor|up|down|status|reset) ;;
+  *)
+    echo "usage: $0 [doctor|up|down|status|reset]" >&2
+    exit 2
+    ;;
+esac
+
+ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+STATE_DIR="$ROOT/.tmp/local-dev"
+DATA_DIR="$ROOT/.scope/dev"
+OBJECT_DIR="$DATA_DIR/objects"
+KEY_FILE="$DATA_DIR/object-key.txt"
+API_PID_FILE="$STATE_DIR/api.pid"
+WEB_PID_FILE="$STATE_DIR/web.pid"
+API_OUT_LOG="$STATE_DIR/api.out.log"
+API_ERR_LOG="$STATE_DIR/api.err.log"
+WEB_OUT_LOG="$STATE_DIR/web.out.log"
+WEB_ERR_LOG="$STATE_DIR/web.err.log"
+
+if [[ -d "$HOME/.local/share/scope-vcs-tools/node-24/bin" ]]; then
+  export PATH="$HOME/.local/share/scope-vcs-tools/node-24/bin:$PATH"
+fi
+if [[ -d "$HOME/.cargo/bin" ]]; then
+  export PATH="$HOME/.cargo/bin:$PATH"
+fi
+
+ensure_dir() {
+  mkdir -p "$1"
+}
+
+read_dotenv_value() {
+  local path="$1"
+  local key="$2"
+  [[ -f "$path" ]] || return 0
+
+  awk -v key="$key" '
+    /^[[:space:]]*#/ { next }
+    /^[[:space:]]*$/ { next }
+    {
+      split($0, parts, "=")
+      name = parts[1]
+      gsub(/^[[:space:]]+|[[:space:]]+$/, "", name)
+      if (name != key) {
+        next
+      }
+      value = substr($0, index($0, "=") + 1)
+      gsub(/^[[:space:]]+|[[:space:]]+$/, "", value)
+      if ((substr(value, 1, 1) == "\"" && substr(value, length(value), 1) == "\"") ||
+          (substr(value, 1, 1) == "'"'"'" && substr(value, length(value), 1) == "'"'"'")) {
+        value = substr(value, 2, length(value) - 2)
+      }
+      print value
+      exit
+    }
+  ' "$path"
+}
+
+get_clerk_issuer() {
+  local publishable_key payload mod clerk_host
+  publishable_key="$(read_dotenv_value "$ROOT/web/.env.local" "VITE_CLERK_PUBLISHABLE_KEY")"
+  if [[ -z "$publishable_key" ]]; then
+    echo "web/.env.local must define VITE_CLERK_PUBLISHABLE_KEY" >&2
+    exit 1
+  fi
+  if [[ "$publishable_key" != pk_test_* ]]; then
+    echo "local dev requires a Clerk development publishable key (pk_test_)" >&2
+    exit 1
+  fi
+
+  payload="${publishable_key#pk_test_}"
+  payload="${payload//_/\/}"
+  payload="${payload//-/+}"
+  mod=$(( ${#payload} % 4 ))
+  if [[ "$mod" -eq 2 ]]; then
+    payload="${payload}=="
+  elif [[ "$mod" -eq 3 ]]; then
+    payload="${payload}="
+  fi
+
+  if ! clerk_host="$(printf '%s' "$payload" | base64 --decode 2>/dev/null)"; then
+    echo "VITE_CLERK_PUBLISHABLE_KEY is not valid base64url" >&2
+    exit 1
+  fi
+  clerk_host="${clerk_host%$}"
+  if [[ "$clerk_host" != *.clerk.accounts.dev ]]; then
+    echo "local dev Clerk issuer must end with .clerk.accounts.dev, got $clerk_host" >&2
+    exit 1
+  fi
+  printf 'https://%s\n' "$clerk_host"
+}
+
+get_dev_user_email() {
+  local email
+  email="$(read_dotenv_value "$ROOT/.env.local" "SCOPE_DEV_USER_EMAIL")"
+  if [[ -z "$email" ]]; then
+    echo "root .env.local must define SCOPE_DEV_USER_EMAIL for seeded local repos" >&2
+    exit 1
+  fi
+  printf '%s\n' "$email"
+}
+
+get_dev_user_handle() {
+  read_dotenv_value "$ROOT/.env.local" "SCOPE_DEV_USER_HANDLE"
+}
+
+get_object_key() {
+  ensure_dir "$DATA_DIR"
+  if [[ ! -f "$KEY_FILE" ]]; then
+    openssl rand -base64 32 > "$KEY_FILE"
+  fi
+  tr -d '\r\n' < "$KEY_FILE"
+}
+
+assert_command() {
+  if ! command -v "$1" >/dev/null 2>&1; then
+    echo "$1 is required for local dev" >&2
+    exit 1
+  fi
+}
+
+port_owner() {
+  local port="$1"
+  ss -H -ltnp "sport = :$port" 2>/dev/null |
+    sed -n 's/.*pid=\([0-9][0-9]*\).*/\1/p' |
+    head -n 1
+}
+
+assert_port_free() {
+  local port="$1"
+  local name="$2"
+  local owner
+  owner="$(port_owner "$port")"
+  if [[ -n "$owner" ]]; then
+    echo "$name port $port is already in use by PID $owner" >&2
+    exit 1
+  fi
+}
+
+stop_pid_file() {
+  local pid_file="$1"
+  local pid
+  [[ -f "$pid_file" ]] || return 0
+  pid="$(tr -d '[:space:]' < "$pid_file")"
+  if [[ "$pid" =~ ^[0-9]+$ ]] && kill -0 "$pid" 2>/dev/null; then
+    kill -TERM -- "-$pid" 2>/dev/null || kill -TERM "$pid" 2>/dev/null || true
+    for _ in {1..30}; do
+      kill -0 "$pid" 2>/dev/null || break
+      sleep 0.1
+    done
+    if kill -0 "$pid" 2>/dev/null; then
+      kill -KILL -- "-$pid" 2>/dev/null || kill -KILL "$pid" 2>/dev/null || true
+    fi
+  fi
+  rm -f "$pid_file"
+}
+
+stop_owned_processes() {
+  stop_pid_file "$API_PID_FILE"
+  stop_pid_file "$WEB_PID_FILE"
+}
+
+write_api_runner() {
+  local issuer="$1"
+  local dev_email="$2"
+  local dev_handle="$3"
+  local object_key="$4"
+  local runner="$STATE_DIR/api.sh"
+
+  cat > "$runner" <<EOF
+#!/usr/bin/env bash
+set -euo pipefail
+cd "$ROOT/api"
+while IFS='=' read -r name _; do
+  [[ "\$name" == RAILWAY_* ]] && unset "\$name"
+  [[ "\$name" == SCOPE_BUCKET_* ]] && unset "\$name"
+done < <(env)
+unset DATABASE_URL
+export SCOPE_ENV="local"
+export SCOPE_METADATA_STORE="memory"
+export SCOPE_OBJECT_STORE="filesystem"
+export SCOPE_DATA_DIR="$DATA_DIR"
+export SCOPE_OBJECT_STORE_DIR="$OBJECT_DIR"
+export SCOPE_OBJECT_ENCRYPTION_KEY="$object_key"
+export PORT="8080"
+export SCOPE_APP_ORIGIN="http://localhost:3000"
+export SCOPE_API_PUBLIC_URL="http://localhost:8080"
+export CLERK_ISSUER="$issuer"
+export CLERK_JWKS_URL="$issuer/.well-known/jwks.json"
+export CLERK_AUTHORIZED_PARTIES="http://localhost:3000"
+export SCOPE_DEV_USER_EMAIL="$dev_email"
+EOF
+  if [[ -n "$dev_handle" ]]; then
+    printf 'export SCOPE_DEV_USER_HANDLE=%q\n' "$dev_handle" >> "$runner"
+  else
+    printf 'unset SCOPE_DEV_USER_HANDLE\n' >> "$runner"
+  fi
+  cat >> "$runner" <<'EOF'
+exec cargo run --features local-dev
+EOF
+  chmod +x "$runner"
+}
+
+write_web_runner() {
+  local runner="$STATE_DIR/web.sh"
+
+  cat > "$runner" <<EOF
+#!/usr/bin/env bash
+set -euo pipefail
+cd "$ROOT/web"
+while IFS='=' read -r name _; do
+  [[ "\$name" == RAILWAY_* ]] && unset "\$name"
+done < <(env)
+export SCOPE_API_INTERNAL_URL="http://localhost:8080"
+export SCOPE_API_PUBLIC_URL="http://localhost:8080"
+exec pnpm dev
+EOF
+  chmod +x "$runner"
+}
+
+start_api() {
+  local issuer dev_email dev_handle object_key
+  issuer="$(get_clerk_issuer)"
+  dev_email="$(get_dev_user_email)"
+  dev_handle="$(get_dev_user_handle)"
+  object_key="$(get_object_key)"
+  write_api_runner "$issuer" "$dev_email" "$dev_handle" "$object_key"
+  setsid "$STATE_DIR/api.sh" > "$API_OUT_LOG" 2> "$API_ERR_LOG" &
+  echo "$!" > "$API_PID_FILE"
+}
+
+start_web() {
+  write_web_runner
+  setsid "$STATE_DIR/web.sh" > "$WEB_OUT_LOG" 2> "$WEB_ERR_LOG" &
+  echo "$!" > "$WEB_PID_FILE"
+}
+
+wait_http() {
+  local url="$1"
+  local seconds="$2"
+  local deadline=$((SECONDS + seconds))
+  while (( SECONDS < deadline )); do
+    if curl -fsS --max-time 2 "$url" >/dev/null 2>&1; then
+      return 0
+    fi
+    sleep 0.5
+  done
+  return 1
+}
+
+pid_status() {
+  local pid_file="$1"
+  local pid
+  if [[ ! -f "$pid_file" ]]; then
+    echo "stopped"
+    return
+  fi
+  pid="$(tr -d '[:space:]' < "$pid_file")"
+  if [[ "$pid" =~ ^[0-9]+$ ]] && kill -0 "$pid" 2>/dev/null; then
+    echo "running pid $pid"
+    return
+  fi
+  echo "stale"
+}
+
+doctor() {
+  assert_command cargo
+  assert_command curl
+  assert_command git
+  assert_command openssl
+  assert_command pnpm
+  assert_command setsid
+  assert_command ss
+
+  local issuer dev_email secret_key
+  issuer="$(get_clerk_issuer)"
+  dev_email="$(get_dev_user_email)"
+  secret_key="$(read_dotenv_value "$ROOT/web/.env.local" "CLERK_SECRET_KEY")"
+  if [[ -z "$secret_key" || "$secret_key" != sk_test_* ]]; then
+    echo "web/.env.local must define a Clerk development secret key (sk_test_)" >&2
+    exit 1
+  fi
+
+  echo "doctor ok"
+  echo "clerk issuer: $issuer"
+  echo "seed user: $dev_email"
+  echo "api: http://localhost:8080"
+  echo "web: http://localhost:3000"
+}
+
+up() {
+  doctor >/dev/null
+  stop_owned_processes
+  assert_port_free 8080 "api"
+  assert_port_free 3000 "web"
+  ensure_dir "$STATE_DIR"
+  ensure_dir "$DATA_DIR"
+  rm -f "$API_OUT_LOG" "$API_ERR_LOG" "$WEB_OUT_LOG" "$WEB_ERR_LOG"
+  start_api
+  if ! wait_http "http://localhost:8080/readyz" 45; then
+    echo "api did not become ready; see $API_ERR_LOG" >&2
+    exit 1
+  fi
+  start_web
+  if ! wait_http "http://localhost:3000" 45; then
+    echo "web did not become ready; see $WEB_ERR_LOG" >&2
+    exit 1
+  fi
+  status
+}
+
+status() {
+  echo "api process: $(pid_status "$API_PID_FILE")"
+  echo "web process: $(pid_status "$WEB_PID_FILE")"
+  if body="$(curl -fsS --max-time 3 "http://localhost:8080/readyz" 2>/dev/null)"; then
+    echo "api readyz: $body"
+  else
+    echo "api readyz: unavailable"
+  fi
+  if code="$(curl -sS -o /dev/null -w '%{http_code}' --max-time 3 "http://localhost:3000" 2>/dev/null)"; then
+    echo "web: HTTP $code"
+  else
+    echo "web: unavailable"
+  fi
+}
+
+reset() {
+  stop_owned_processes
+  local resolved_data resolved_root
+  resolved_data="$(realpath -m "$DATA_DIR")"
+  resolved_root="$(realpath -m "$ROOT")"
+  if [[ "$resolved_data" != "$resolved_root"/* ]]; then
+    echo "refusing to remove data outside repo: $resolved_data" >&2
+    exit 1
+  fi
+  rm -rf "$DATA_DIR" "$STATE_DIR"
+  echo "local dev state reset"
+}
+
+case "$COMMAND" in
+  doctor) doctor ;;
+  up) up ;;
+  down) stop_owned_processes; echo "local dev stopped" ;;
+  status) status ;;
+  reset) reset ;;
+esac

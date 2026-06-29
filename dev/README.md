@@ -1,16 +1,16 @@
 # Local Dev
 
-`dev/scope-dev.ps1` is the supported local development entrypoint.
+`dev/scope-dev` is the supported local development entrypoint.
 `dev/api` contains Rust code that is compiled only for `--features local-dev`;
 it is intentionally outside `api/src` so it is not part of the production API
 runtime.
 
-```powershell
-.\dev\scope-dev.ps1 doctor
-.\dev\scope-dev.ps1 up
-.\dev\scope-dev.ps1 status
-.\dev\scope-dev.ps1 down
-.\dev\scope-dev.ps1 reset
+```bash
+./dev/scope-dev doctor
+./dev/scope-dev up
+./dev/scope-dev status
+./dev/scope-dev down
+./dev/scope-dev reset
 ```
 
 The command starts:
