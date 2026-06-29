@@ -16,6 +16,7 @@ import { Route as SignUpSplatRouteImport } from './routes/sign-up.$'
 import { Route as SignInSplatRouteImport } from './routes/sign-in.$'
 import { Route as InvitesTokenRouteImport } from './routes/invites.$token'
 import { Route as ReposOwnerRepoRouteImport } from './routes/repos.$owner.$repo'
+import { Route as ReposOwnerRepoIndexRouteImport } from './routes/repos.$owner.$repo.index'
 import { Route as ReposOwnerRepoSettingsRouteImport } from './routes/repos.$owner.$repo.settings'
 import { Route as ReposOwnerRepoReviewRouteImport } from './routes/repos.$owner.$repo.review'
 import { Route as ReposOwnerRepoHistoryRouteImport } from './routes/repos.$owner.$repo.history'
@@ -55,6 +56,11 @@ const ReposOwnerRepoRoute = ReposOwnerRepoRouteImport.update({
   path: '/repos/$owner/$repo',
   getParentRoute: () => rootRouteImport,
 } as any)
+const ReposOwnerRepoIndexRoute = ReposOwnerRepoIndexRouteImport.update({
+  id: '/',
+  path: '/',
+  getParentRoute: () => ReposOwnerRepoRoute,
+} as any)
 const ReposOwnerRepoSettingsRoute = ReposOwnerRepoSettingsRouteImport.update({
   id: '/settings',
   path: '/settings',
@@ -82,6 +88,7 @@ export interface FileRoutesByFullPath {
   '/repos/$owner/$repo/history': typeof ReposOwnerRepoHistoryRoute
   '/repos/$owner/$repo/review': typeof ReposOwnerRepoReviewRoute
   '/repos/$owner/$repo/settings': typeof ReposOwnerRepoSettingsRoute
+  '/repos/$owner/$repo/': typeof ReposOwnerRepoIndexRoute
 }
 export interface FileRoutesByTo {
   '/': typeof IndexRoute
@@ -90,10 +97,10 @@ export interface FileRoutesByTo {
   '/invites/$token': typeof InvitesTokenRoute
   '/sign-in/$': typeof SignInSplatRoute
   '/sign-up/$': typeof SignUpSplatRoute
-  '/repos/$owner/$repo': typeof ReposOwnerRepoRouteWithChildren
   '/repos/$owner/$repo/history': typeof ReposOwnerRepoHistoryRoute
   '/repos/$owner/$repo/review': typeof ReposOwnerRepoReviewRoute
   '/repos/$owner/$repo/settings': typeof ReposOwnerRepoSettingsRoute
+  '/repos/$owner/$repo': typeof ReposOwnerRepoIndexRoute
 }
 export interface FileRoutesById {
   __root__: typeof rootRouteImport
@@ -107,6 +114,7 @@ export interface FileRoutesById {
   '/repos/$owner/$repo/history': typeof ReposOwnerRepoHistoryRoute
   '/repos/$owner/$repo/review': typeof ReposOwnerRepoReviewRoute
   '/repos/$owner/$repo/settings': typeof ReposOwnerRepoSettingsRoute
+  '/repos/$owner/$repo/': typeof ReposOwnerRepoIndexRoute
 }
 export interface FileRouteTypes {
   fileRoutesByFullPath: FileRoutesByFullPath
@@ -121,6 +129,7 @@ export interface FileRouteTypes {
     | '/repos/$owner/$repo/history'
     | '/repos/$owner/$repo/review'
     | '/repos/$owner/$repo/settings'
+    | '/repos/$owner/$repo/'
   fileRoutesByTo: FileRoutesByTo
   to:
     | '/'
@@ -129,10 +138,10 @@ export interface FileRouteTypes {
     | '/invites/$token'
     | '/sign-in/$'
     | '/sign-up/$'
-    | '/repos/$owner/$repo'
     | '/repos/$owner/$repo/history'
     | '/repos/$owner/$repo/review'
     | '/repos/$owner/$repo/settings'
+    | '/repos/$owner/$repo'
   id:
     | '__root__'
     | '/'
@@ -145,6 +154,7 @@ export interface FileRouteTypes {
     | '/repos/$owner/$repo/history'
     | '/repos/$owner/$repo/review'
     | '/repos/$owner/$repo/settings'
+    | '/repos/$owner/$repo/'
   fileRoutesById: FileRoutesById
 }
 export interface RootRouteChildren {
@@ -208,6 +218,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof ReposOwnerRepoRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/repos/$owner/$repo/': {
+      id: '/repos/$owner/$repo/'
+      path: '/'
+      fullPath: '/repos/$owner/$repo/'
+      preLoaderRoute: typeof ReposOwnerRepoIndexRouteImport
+      parentRoute: typeof ReposOwnerRepoRoute
+    }
     '/repos/$owner/$repo/settings': {
       id: '/repos/$owner/$repo/settings'
       path: '/settings'
@@ -236,12 +253,14 @@ interface ReposOwnerRepoRouteChildren {
   ReposOwnerRepoHistoryRoute: typeof ReposOwnerRepoHistoryRoute
   ReposOwnerRepoReviewRoute: typeof ReposOwnerRepoReviewRoute
   ReposOwnerRepoSettingsRoute: typeof ReposOwnerRepoSettingsRoute
+  ReposOwnerRepoIndexRoute: typeof ReposOwnerRepoIndexRoute
 }
 
 const ReposOwnerRepoRouteChildren: ReposOwnerRepoRouteChildren = {
   ReposOwnerRepoHistoryRoute: ReposOwnerRepoHistoryRoute,
   ReposOwnerRepoReviewRoute: ReposOwnerRepoReviewRoute,
   ReposOwnerRepoSettingsRoute: ReposOwnerRepoSettingsRoute,
+  ReposOwnerRepoIndexRoute: ReposOwnerRepoIndexRoute,
 }
 
 const ReposOwnerRepoRouteWithChildren = ReposOwnerRepoRoute._addFileChildren(

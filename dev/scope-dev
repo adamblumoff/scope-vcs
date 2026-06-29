@@ -21,6 +21,20 @@ API_OUT_LOG="$STATE_DIR/api.out.log"
 API_ERR_LOG="$STATE_DIR/api.err.log"
 WEB_OUT_LOG="$STATE_DIR/web.out.log"
 WEB_ERR_LOG="$STATE_DIR/web.err.log"
+LOCAL_WEB_ORIGIN="http://localhost:3000"
+LOCAL_API_ORIGIN="http://localhost:8080"
+PUBLIC_HOST="${SCOPE_DEV_PUBLIC_HOST:-}"
+
+if [[ -z "$PUBLIC_HOST" ]] && command -v tailscale >/dev/null 2>&1; then
+  PUBLIC_HOST="$(tailscale ip -4 2>/dev/null | head -n 1 || true)"
+fi
+PUBLIC_HOST="${PUBLIC_HOST:-localhost}"
+PUBLIC_WEB_ORIGIN="http://$PUBLIC_HOST:3000"
+PUBLIC_API_ORIGIN="http://$PUBLIC_HOST:8080"
+CLERK_AUTHORIZED_PARTIES_VALUE="$LOCAL_WEB_ORIGIN"
+if [[ "$PUBLIC_WEB_ORIGIN" != "$LOCAL_WEB_ORIGIN" ]]; then
+  CLERK_AUTHORIZED_PARTIES_VALUE="$CLERK_AUTHORIZED_PARTIES_VALUE,$PUBLIC_WEB_ORIGIN"
+fi
 
 if [[ -d "$HOME/.local/share/scope-vcs-tools/node-24/bin" ]]; then
   export PATH="$HOME/.local/share/scope-vcs-tools/node-24/bin:$PATH"
@@ -187,11 +201,11 @@ export SCOPE_DATA_DIR="$DATA_DIR"
 export SCOPE_OBJECT_STORE_DIR="$OBJECT_DIR"
 export SCOPE_OBJECT_ENCRYPTION_KEY="$object_key"
 export PORT="8080"
-export SCOPE_APP_ORIGIN="http://localhost:3000"
-export SCOPE_API_PUBLIC_URL="http://localhost:8080"
+export SCOPE_APP_ORIGIN="$LOCAL_WEB_ORIGIN"
+export SCOPE_API_PUBLIC_URL="$LOCAL_API_ORIGIN"
 export CLERK_ISSUER="$issuer"
 export CLERK_JWKS_URL="$issuer/.well-known/jwks.json"
-export CLERK_AUTHORIZED_PARTIES="http://localhost:3000"
+export CLERK_AUTHORIZED_PARTIES="$CLERK_AUTHORIZED_PARTIES_VALUE"
 export SCOPE_DEV_USER_EMAIL="$dev_email"
 EOF
   if [[ -n "$dev_handle" ]]; then
@@ -216,8 +230,8 @@ while IFS='=' read -r name _; do
   [[ "\$name" == RAILWAY_* ]] && unset "\$name"
 done < <(env)
 export SCOPE_API_INTERNAL_URL="http://localhost:8080"
-export SCOPE_API_PUBLIC_URL="http://localhost:8080"
-exec pnpm dev
+export SCOPE_API_PUBLIC_URL="$PUBLIC_API_ORIGIN"
+exec pnpm dev --host 0.0.0.0
 EOF
   chmod +x "$runner"
 }
@@ -288,8 +302,12 @@ doctor() {
   echo "doctor ok"
   echo "clerk issuer: $issuer"
   echo "seed user: $dev_email"
-  echo "api: http://localhost:8080"
-  echo "web: http://localhost:3000"
+  echo "api: $LOCAL_API_ORIGIN"
+  echo "web: $LOCAL_WEB_ORIGIN"
+  if [[ "$PUBLIC_HOST" != "localhost" ]]; then
+    echo "tailscale api: $PUBLIC_API_ORIGIN"
+    echo "tailscale web: $PUBLIC_WEB_ORIGIN"
+  fi
 }
 
 up() {
