@@ -14,8 +14,10 @@ import {
   updateRepoSettingsForRequest,
 } from '@/api/repos'
 import { RepoSettingsPage } from '@/features/repo-detail/repo-settings-page'
-import { createFileRoute } from '@tanstack/react-router'
+import { useRepoLiveRefresh } from '@/features/repo-detail/repo-live-refresh'
+import { createFileRoute, useRouter } from '@tanstack/react-router'
 import { createServerFn } from '@tanstack/react-start'
+import { useCallback } from 'react'
 
 const loadRepoSettings = createServerFn({ method: 'GET' })
   .validator(parseRepoParams)
@@ -60,6 +62,9 @@ export const Route = createFileRoute('/repos/$owner/$repo/settings')({
 function RepoSettingsRoute() {
   const params = Route.useParams()
   const { collaboration, detail, settings } = Route.useLoaderData()
+  const router = useRouter()
+  const invalidate = useCallback(() => router.invalidate(), [router])
+  useRepoLiveRefresh(detail.live, invalidate)
 
   return (
     <RepoSettingsPage
