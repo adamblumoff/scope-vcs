@@ -1,6 +1,18 @@
 minimumReleaseAge: 10080
 trustPolicy: no-downgrade
 blockExoticSubdeps: true
+supportedArchitectures:
+  os:
+    - current
+    - linux
+    - win32
+  cpu:
+    - current
+    - x64
+    - arm64
+  libc:
+    - current
+    - glibc
 allowBuilds:
   bufferutil: false
   core-js: false

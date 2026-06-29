@@ -1,6 +1,5 @@
 import {
   applyStagedUpdate,
-  loadReviewFileDiff,
   loadReviewProjectionPreviews,
   loadReviewRepoLiveState,
   loadReview,
@@ -50,7 +49,6 @@ function ReviewRoute() {
       access={access}
       applyStagedUpdate={(data) => applyStagedUpdate({ data })}
       initialReview={review}
-      loadFileDiff={(data) => loadReviewFileDiff({ data })}
       params={params}
       projectionPreviews={projectionPreviews}
       publishRepo={(data) => publishRepo({ data })}

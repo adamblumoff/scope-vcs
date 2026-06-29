@@ -14,7 +14,7 @@ type RepoPrimaryAction = {
   to: RepoActionRoute
 }
 
-export type RepoAttentionAction = {
+type RepoAttentionAction = {
   icon: 'init' | 'publish-review' | 'update-review'
   label: string
   primaryLabel: string
@@ -26,7 +26,7 @@ type RepoPrimaryActionOptions = {
   requireOwner?: boolean
 }
 
-export function repoPrimaryAction(
+function repoPrimaryAction(
   repo: RepoSummary,
   {
     includeOpen = true,
@@ -48,7 +48,7 @@ export function repoPrimaryAction(
   return includeOpen ? { label: 'Open', to: '/repos/$owner/$repo' } : null
 }
 
-export function repoAttentionAction(
+function repoAttentionAction(
   repo: RepoSummary,
 ): RepoAttentionAction | null {
   if (repo.lifecycle_state === 'Unpublished' && !repo.pending_import_pending) {

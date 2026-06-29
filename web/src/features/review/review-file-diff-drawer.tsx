@@ -201,8 +201,8 @@ const DIFF_SKELETON_WIDTHS = [
 function DiffSkeleton() {
   return (
     <div className="space-y-2.5 px-4 py-4 font-mono">
-      {DIFF_SKELETON_WIDTHS.map((width, index) => (
-        <Skeleton className={cn('h-3.5', width)} key={index} />
+      {DIFF_SKELETON_WIDTHS.map((width) => (
+        <Skeleton className={cn('h-3.5', width)} key={width} />
       ))}
     </div>
   )

@@ -8,32 +8,32 @@ import { useHomeFlash } from '@/lib/home-flash'
 import { UserButton } from '@clerk/tanstack-react-start'
 import { Link } from '@tanstack/react-router'
 import { CheckCircle2, KeyRound, Moon, Sun } from 'lucide-react'
-import { useEffect, useState } from 'react'
+import { useSyncExternalStore } from 'react'
 import { RepoList } from './repo-list'
 
 type ThemeMode = 'dark' | 'light'
 
 const THEME_STORAGE_KEY = 'scope-theme'
+const THEME_CHANGE_EVENT = 'scope-theme-change'
 
 export function HomePage({ home }: { home: HomeState }) {
-  const [theme, setTheme] = useState<ThemeMode>('dark')
+  const theme = useSyncExternalStore(
+    subscribeToTheme,
+    readBrowserTheme,
+    readServerTheme,
+  )
   const flash = useHomeFlash()
   const { account, repositories } = home
 
-  useEffect(() => {
-    setTheme(readStoredTheme())
-  }, [])
-
   function toggleTheme() {
     const nextTheme = nextThemeMode(theme)
-    setTheme(nextTheme)
     applyTheme(nextTheme)
   }
 
   return (
     <main className="min-h-screen bg-background text-foreground">
       <AppHeader
-        action={
+        action={() => (
           <div className="flex min-w-0 items-center gap-2">
             <Button
               aria-label="CLI sessions"
@@ -50,7 +50,7 @@ export function HomePage({ home }: { home: HomeState }) {
             <UserButton />
             <ThemeToggle theme={theme} toggleTheme={toggleTheme} />
           </div>
-        }
+        )}
         homeLink={false}
         subtitle={account?.user?.handle ?? 'Repositories'}
       />
@@ -124,14 +124,40 @@ function applyTheme(theme: ThemeMode) {
   } catch {
     // ignore persistence failures (private mode, disabled storage)
   }
+
+  window.dispatchEvent(new Event(THEME_CHANGE_EVENT))
 }
 
-function readStoredTheme(): ThemeMode {
+function subscribeToTheme(onStoreChange: () => void) {
+  if (typeof window === 'undefined') {
+    return () => undefined
+  }
+
+  const observer = new MutationObserver(onStoreChange)
+  observer.observe(document.documentElement, {
+    attributeFilter: ['class'],
+    attributes: true,
+  })
+  window.addEventListener('storage', onStoreChange)
+  window.addEventListener(THEME_CHANGE_EVENT, onStoreChange)
+
+  return () => {
+    observer.disconnect()
+    window.removeEventListener('storage', onStoreChange)
+    window.removeEventListener(THEME_CHANGE_EVENT, onStoreChange)
+  }
+}
+
+function readBrowserTheme(): ThemeMode {
   if (typeof document === 'undefined') {
     return 'dark'
   }
 
   return document.documentElement.classList.contains('dark') ? 'dark' : 'light'
+}
+
+function readServerTheme(): ThemeMode {
+  return 'dark'
 }
 
 function nextThemeMode(theme: ThemeMode): ThemeMode {

@@ -71,15 +71,16 @@ export function RepoCloneDropdown({
       </Button>
 
       {open && (
-        <div
-          className="absolute right-0 top-full z-50 mt-2 w-[min(420px,calc(100vw-2rem))] rounded-xl border border-border bg-popover p-3 text-popover-foreground shadow-[var(--shadow-pop)]"
-          role="dialog"
+        <dialog
+          aria-label={`${cloneLabel} clone command`}
+          className="absolute left-auto right-0 top-full z-50 m-0 mt-2 w-[min(420px,calc(100vw-2rem))] rounded-xl border border-border bg-popover p-3 text-popover-foreground shadow-[var(--shadow-pop)]"
+          open
         >
           <div className="mb-2 flex h-6 items-center justify-between text-xs font-semibold leading-4">
             <span>{cloneLabel}</span>
           </div>
           <CopyableCodeBlock copyLabel={copyLabel} value={cloneCommand} />
-        </div>
+        </dialog>
       )}
     </div>
   )

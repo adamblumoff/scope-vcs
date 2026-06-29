@@ -98,7 +98,7 @@ export function RepoDetailPage({
 
   return (
     <main className="min-h-screen bg-background text-foreground">
-      <AppHeader breadcrumb={<RepoBreadcrumb params={params} />} />
+      <AppHeader breadcrumb={() => <RepoBreadcrumb params={params} />} />
 
       <PageContent>
         <PageHeader

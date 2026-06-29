@@ -391,14 +391,13 @@ function VisibilityToggle({
   const isPrivate = visibility === 'Private'
 
   return (
-    <div
+    <fieldset
       aria-label={
         visibility === 'Mixed'
           ? `${targetLabel} visibility: mixed`
           : `${targetLabel} visibility: ${visibility.toLowerCase()}`
       }
       className="inline-flex shrink-0 items-center rounded-md border border-border bg-muted p-0.5"
-      role="group"
     >
       {busy ? (
         <span className="flex h-6 w-[3.25rem] items-center justify-center">
@@ -426,7 +425,7 @@ function VisibilityToggle({
           />
         </>
       )}
-    </div>
+    </fieldset>
   )
 }
 

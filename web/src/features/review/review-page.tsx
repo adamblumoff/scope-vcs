@@ -5,7 +5,6 @@ import type {
   RepoParams,
   RepoReview,
   ReviewFileDiff,
-  ReviewFileDiffInput,
   ReviewFile,
   ReviewLineDiff,
   Visibility,
@@ -20,9 +19,10 @@ import { VisibilityBadge } from '@/components/visibility-badge'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { storeHomeFlash } from '@/lib/home-flash'
+import { loadReviewFileDiff } from '@/routes/-repo-review-actions'
 import { useNavigate, useRouter } from '@tanstack/react-router'
 import { GitBranch, LoaderCircle, Rocket, X } from 'lucide-react'
-import { useEffect, useMemo, useReducer, useState } from 'react'
+import { useEffect, useMemo, useReducer, useRef, useState } from 'react'
 import {
   initialReviewPageState,
   reviewPageReducer,
@@ -30,21 +30,10 @@ import {
 import { ReviewPreviewMetrics } from './review-preview-metrics'
 import { ReviewVisibilityPanel } from './review-visibility-panel'
 
-export function ReviewPage({
-  access,
-  applyStagedUpdate,
-  initialReview,
-  params,
-  projectionPreviews,
-  publishRepo,
-  rejectStagedUpdate,
-  loadFileDiff,
-  setReviewVisibility,
-}: {
+type ReviewPageProps = {
   access: RepoAccess
   applyStagedUpdate: (params: RepoParams) => Promise<unknown>
   initialReview: RepoReview
-  loadFileDiff: (input: ReviewFileDiffInput) => Promise<ReviewFileDiff>
   params: RepoParams
   projectionPreviews: ProjectionPreviews
   publishRepo: (params: RepoParams) => Promise<unknown>
@@ -55,163 +44,38 @@ export function ReviewPage({
     files: ReviewFile[],
     visibility: Visibility,
   ) => Promise<RepoReview>
-}) {
-  const navigate = useNavigate()
-  const router = useRouter()
-  const [state, dispatch] = useReducer(
-    reviewPageReducer,
-    initialReviewPageState,
-  )
-  const [selectedFilePath, setSelectedFilePath] = useState<string | null>(null)
-  const [preferredAudience, setPreferredAudience] =
-    useState<ProjectionPreviewAudience>('public')
-  const [fileDiffState, setFileDiffState] =
-    useState<ReviewFileDiffState>(emptyFileDiffState)
-  const review =
-    state.reviewOverride?.baseReview === initialReview
-      ? state.reviewOverride.review
-      : initialReview
-  const { error, pendingKey } = state
-  const publishing = state.runningAction === 'publish'
-  const rejecting = state.runningAction === 'reject'
-  const stagedReview = review.kind === 'StagedUpdate'
-  const canApplyReview =
-    review.kind === 'PendingImport'
-      ? access.actor === 'Owner'
-      : access.can_apply_changes
-  const canChangeVisibility = access.can_change_file_visibility
-  const visibilityPending = pendingKey !== null
-  const availableAudiences = useMemo(
-    () =>
-      [
-        projectionPreviews.owner ? 'owner' : null,
-        projectionPreviews.public ? 'public' : null,
-      ].filter(Boolean) as ProjectionPreviewAudience[],
-    [projectionPreviews.owner, projectionPreviews.public],
-  )
-  const audience = availableAudiences.includes(preferredAudience)
-    ? preferredAudience
-    : availableAudiences[0]
-  const preview = audience ? projectionPreviews[audience] : null
-  const showPrivateCounts = Boolean(projectionPreviews.owner)
-  const reviewRailClassName = selectedFilePath
-    ? 'max-w-[1320px] transition-[max-width] duration-300 ease-out'
-    : 'max-w-[1040px] transition-[max-width] duration-300 ease-out'
+}
 
-  useEffect(() => {
-    if (!selectedFilePath) {
-      setFileDiffState(emptyFileDiffState)
-      return
-    }
-
-    let active = true
-    setFileDiffState({ diff: null, error: null, status: 'loading' })
-    loadFileDiff({
-      owner: params.owner,
-      path: selectedFilePath,
-      repo: params.repo,
-    }).then(
-      (diff) => {
-        if (active) {
-          setFileDiffState({ diff, error: null, status: 'loaded' })
-        }
-      },
-      (error) => {
-        if (active) {
-          setFileDiffState({
-            diff: null,
-            error: error instanceof Error ? error.message : 'diff load failed',
-            status: 'failed',
-          })
-        }
-      },
-    )
-
-    return () => {
-      active = false
-    }
-  }, [loadFileDiff, params.owner, params.repo, selectedFilePath])
-
-  async function setVisibility(
-    files: ReviewFile[],
-    visibility: Visibility,
-    pendingKey: string,
-  ) {
-    const paths = files.map((file) => file.path)
-    if (paths.length === 0) {
-      return
-    }
-
-    dispatch({ pendingKey, type: 'visibilityStarted' })
-    try {
-      const updated = await setReviewVisibility(params, review, files, visibility)
-      dispatch({
-        baseReview: initialReview,
-        review: updated,
-        type: 'visibilitySucceeded',
-      })
-      await router.invalidate()
-    } catch (visibilityError) {
-      dispatch({
-        message:
-          visibilityError instanceof Error
-            ? visibilityError.message
-            : 'visibility update failed',
-        type: 'visibilityFailed',
-      })
-    } finally {
-      dispatch({ type: 'visibilityFinished' })
-    }
-  }
-
-  async function completeReview() {
-    if (visibilityPending) {
-      return
-    }
-    dispatch({ type: 'publishStarted' })
-    try {
-      if (review.kind === 'StagedUpdate') {
-        await applyStagedUpdate(params)
-        storeHomeFlash(`${params.owner}/${params.repo} update applied.`)
-      } else {
-        await publishRepo(params)
-        storeHomeFlash(`${params.owner}/${params.repo} published.`)
-      }
-      await navigate({ replace: true, to: '/' })
-      await router.invalidate()
-    } catch (publishError) {
-      dispatch({
-        message:
-          publishError instanceof Error
-            ? publishError.message
-            : 'review action failed',
-        type: 'actionFailed',
-      })
-    }
-  }
-
-  async function rejectUpdate() {
-    if (visibilityPending) {
-      return
-    }
-    dispatch({ type: 'rejectStarted' })
-    try {
-      await rejectStagedUpdate(params)
-      storeHomeFlash(`${params.owner}/${params.repo} update rejected.`)
-      await navigate({ replace: true, to: '/' })
-      await router.invalidate()
-    } catch (rejectError) {
-      dispatch({
-        message: rejectError instanceof Error ? rejectError.message : 'reject failed',
-        type: 'actionFailed',
-      })
-    }
-  }
+export function ReviewPage(props: ReviewPageProps) {
+  const { params, projectionPreviews } = props
+  const {
+    audience,
+    canApplyReview,
+    canChangeVisibility,
+    closeFileDiff,
+    completeReview,
+    error,
+    fileDiffState,
+    pendingKey,
+    preview,
+    publishing,
+    rejecting,
+    rejectUpdate,
+    review,
+    reviewRailClassName,
+    selectAudience,
+    selectFile,
+    selectedFilePath,
+    setVisibility,
+    showPrivateCounts,
+    stagedReview,
+    visibilityPending,
+  } = useReviewPageModel(props)
 
   return (
     <main className="min-h-screen bg-background text-foreground">
       <AppHeader
-        breadcrumb={<RepoBreadcrumb params={params} section="review" />}
+        breadcrumb={() => <RepoBreadcrumb params={params} section="review" />}
         contentClassName={reviewRailClassName}
       />
 
@@ -234,7 +98,7 @@ export function ReviewPage({
                 <VisibilityBadge visibility={review.default_visibility} />
               )}
               <Badge variant="neutral">{review.files.length} files</Badge>
-              {stagedReview && review.branch && (
+              {review.kind === 'StagedUpdate' && review.branch && (
                 <Badge variant="neutral">
                   <GitBranch className="size-3" />
                   {review.branch}
@@ -309,12 +173,8 @@ export function ReviewPage({
         <ReviewVisibilityPanel
           disabled={publishing || rejecting}
           files={review.files}
-          onCloseFileDiff={() => setSelectedFilePath(null)}
-          onSelectFile={(file) =>
-            setSelectedFilePath((currentPath) =>
-              currentPath === file.path ? null : file.path,
-            )
-          }
+          onCloseFileDiff={closeFileDiff}
+          onSelectFile={selectFile}
           onSetVisibility={
             canChangeVisibility
               ? (files, visibility, key) =>
@@ -328,12 +188,215 @@ export function ReviewPage({
           selectedFileDiffError={fileDiffState.error}
           selectedFileDiffLoading={fileDiffState.status === 'loading'}
           selectedFilePath={selectedFilePath}
-          onSelectAudience={setPreferredAudience}
+          onSelectAudience={selectAudience}
           stagedReview={stagedReview}
         />
       </PageContent>
     </main>
   )
+}
+
+function useReviewPageModel({
+  access,
+  applyStagedUpdate,
+  initialReview,
+  params,
+  projectionPreviews,
+  publishRepo,
+  rejectStagedUpdate,
+  setReviewVisibility,
+}: ReviewPageProps) {
+  const navigate = useNavigate()
+  const router = useRouter()
+  const [state, dispatch] = useReducer(
+    reviewPageReducer,
+    initialReviewPageState,
+  )
+  const [selectedFilePath, setSelectedFilePath] = useState<string | null>(null)
+  const [preferredAudience, setPreferredAudience] =
+    useState<ProjectionPreviewAudience>('public')
+  const [fileDiffState, setFileDiffState] =
+    useState<ReviewFileDiffState>(emptyFileDiffState)
+  const review =
+    state.reviewOverride?.baseReview === initialReview
+      ? state.reviewOverride.review
+      : initialReview
+  const { error, pendingKey } = state
+  const publishing = state.runningAction === 'publish'
+  const rejecting = state.runningAction === 'reject'
+  const stagedReview = review.kind === 'StagedUpdate'
+  const canApplyReview =
+    review.kind === 'PendingImport'
+      ? access.actor === 'Owner'
+      : access.can_apply_changes
+  const canChangeVisibility = access.can_change_file_visibility
+  const visibilityPending = pendingKey !== null
+  const availableAudiences = useMemo(
+    () =>
+      [
+        projectionPreviews.owner ? 'owner' : null,
+        projectionPreviews.public ? 'public' : null,
+      ].filter(Boolean) as ProjectionPreviewAudience[],
+    [projectionPreviews.owner, projectionPreviews.public],
+  )
+  const audience = availableAudiences.includes(preferredAudience)
+    ? preferredAudience
+    : availableAudiences[0]
+  const preview = audience ? projectionPreviews[audience] : null
+  const showPrivateCounts = Boolean(projectionPreviews.owner)
+  const reviewRailClassName = selectedFilePath
+    ? 'max-w-[1320px] transition-[max-width] duration-300 ease-out'
+    : 'max-w-[1040px] transition-[max-width] duration-300 ease-out'
+  const diffRequestKey = selectedFilePath
+    ? reviewFileDiffRequestKey(params.owner, params.repo, selectedFilePath)
+    : null
+  const activeDiffKeyRef = useRef<string | null>(diffRequestKey)
+
+  if (activeDiffKeyRef.current !== diffRequestKey) {
+    activeDiffKeyRef.current = diffRequestKey
+    setFileDiffState(
+      diffRequestKey
+        ? { diff: null, error: null, status: 'loading' }
+        : emptyFileDiffState,
+    )
+  }
+
+  useEffect(() => {
+    if (!diffRequestKey || selectedFilePath === null) {
+      return
+    }
+    let active = true
+    loadReviewFileDiff({
+      data: {
+        owner: params.owner,
+        path: selectedFilePath,
+        repo: params.repo,
+      },
+    }).then(
+      (diff) => {
+        if (active) {
+          setFileDiffState({ diff, error: null, status: 'loaded' })
+        }
+      },
+      (error) => {
+        if (active) {
+          setFileDiffState({
+            diff: null,
+            error: error instanceof Error ? error.message : 'diff load failed',
+            status: 'failed',
+          })
+        }
+      },
+    )
+
+    return () => {
+      active = false
+    }
+  }, [diffRequestKey, params.owner, params.repo, selectedFilePath])
+
+  async function setVisibility(
+    files: ReviewFile[],
+    visibility: Visibility,
+    pendingKey: string,
+  ) {
+    const paths = files.map((file) => file.path)
+    if (paths.length === 0) {
+      return
+    }
+
+    dispatch({ pendingKey, type: 'visibilityStarted' })
+    try {
+      const updated = await setReviewVisibility(params, review, files, visibility)
+      dispatch({
+        baseReview: initialReview,
+        review: updated,
+        type: 'visibilitySucceeded',
+      })
+      await router.invalidate()
+    } catch (visibilityError) {
+      dispatch({
+        message:
+          visibilityError instanceof Error
+            ? visibilityError.message
+            : 'visibility update failed',
+        type: 'visibilityFailed',
+      })
+    } finally {
+      dispatch({ type: 'visibilityFinished' })
+    }
+  }
+
+  async function completeReview() {
+    if (visibilityPending) {
+      return
+    }
+    dispatch({ type: 'publishStarted' })
+    try {
+      if (review.kind === 'StagedUpdate') {
+        await applyStagedUpdate(params)
+        storeHomeFlash(`${params.owner}/${params.repo} update applied.`)
+      } else {
+        await publishRepo(params)
+        storeHomeFlash(`${params.owner}/${params.repo} published.`)
+      }
+      await navigate({ replace: true, to: '/' })
+      await router.invalidate()
+    } catch (publishError) {
+      dispatch({
+        message:
+          publishError instanceof Error
+            ? publishError.message
+            : 'review action failed',
+        type: 'actionFailed',
+      })
+    }
+  }
+
+  async function rejectUpdate() {
+    if (visibilityPending) {
+      return
+    }
+    dispatch({ type: 'rejectStarted' })
+    try {
+      await rejectStagedUpdate(params)
+      storeHomeFlash(`${params.owner}/${params.repo} update rejected.`)
+      await navigate({ replace: true, to: '/' })
+      await router.invalidate()
+    } catch (rejectError) {
+      dispatch({
+        message:
+          rejectError instanceof Error ? rejectError.message : 'reject failed',
+        type: 'actionFailed',
+      })
+    }
+  }
+
+  return {
+    audience,
+    canApplyReview,
+    canChangeVisibility,
+    closeFileDiff: () => setSelectedFilePath(null),
+    completeReview,
+    error,
+    fileDiffState,
+    pendingKey,
+    preview,
+    publishing,
+    rejecting,
+    rejectUpdate,
+    review,
+    reviewRailClassName,
+    selectAudience: setPreferredAudience,
+    selectFile: (file: ReviewFile) =>
+      setSelectedFilePath((currentPath) =>
+        currentPath === file.path ? null : file.path,
+      ),
+    selectedFilePath,
+    setVisibility,
+    showPrivateCounts,
+    stagedReview,
+    visibilityPending,
+  }
 }
 
 type ReviewFileDiffState =
@@ -346,6 +409,10 @@ const emptyFileDiffState: ReviewFileDiffState = {
   diff: null,
   error: null,
   status: 'idle',
+}
+
+function reviewFileDiffRequestKey(owner: string, repo: string, path: string) {
+  return `${owner}/${repo}:${path}`
 }
 
 function ReviewLineDiffPill({

@@ -66,6 +66,9 @@ jobs:
       - name: Typecheck
         run: pnpm typecheck
 
+      - name: React Doctor
+        run: pnpm check:react-doctor
+
       - name: Build
         run: pnpm build
 

@@ -13,7 +13,7 @@ import type {
   SetVisibilityInput,
   StagedUpdate,
 } from './types'
-import { parseRepoParams } from './repo-detail'
+import { parseRepoParams } from './repo-params'
 
 export async function loadReviewForRequest(
   data: RepoParams,

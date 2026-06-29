@@ -21,7 +21,7 @@ import { VisibilityBadge } from '@/components/visibility-badge'
 import { Badge } from '@/components/ui/badge'
 import { storeHomeFlash } from '@/lib/home-flash'
 import { Link, useNavigate, useRouter } from '@tanstack/react-router'
-import { useEffect, useReducer, useRef, useState } from 'react'
+import { useReducer, useRef, useState } from 'react'
 import { DeleteRepositoryDialog } from './delete-repository-dialog'
 import {
   MemberAccessSections,
@@ -65,8 +65,14 @@ export function RepoSettingsPage({
     initialRepoSettingsPageState,
   )
   const settingsSavePendingRef = useRef(false)
-  const [collaboration, setCollaboration] =
-    useState<RepoCollaboration | null>(initialCollaboration)
+  const [collaborationState, setCollaborationState] = useState(() => ({
+    base: initialCollaboration,
+    value: initialCollaboration,
+  }))
+  const collaboration =
+    collaborationState.base === initialCollaboration
+      ? collaborationState.value
+      : initialCollaboration
   const settingsOverride =
     initialSettings &&
     state.settingsOverride?.baseSettings === initialSettings
@@ -81,9 +87,12 @@ export function RepoSettingsPage({
   } = state
   const settingsSaving = pendingSetting !== null
 
-  useEffect(() => {
-    setCollaboration(initialCollaboration)
-  }, [initialCollaboration])
+  if (collaborationState.base !== initialCollaboration) {
+    setCollaborationState({
+      base: initialCollaboration,
+      value: initialCollaboration,
+    })
+  }
 
   async function saveSettings(
     nextSettings: RepoSettings,
@@ -136,34 +145,36 @@ export function RepoSettingsPage({
 
   async function createMemberInvite(input: CreateRepoInviteInput) {
     const response = await createInvite(input)
-    setCollaboration((current) =>
-      current
+    setCollaborationState((current) => ({
+      base: current.base,
+      value: current.value
         ? {
-            ...current,
+            ...current.value,
             invites: [
               response.invite,
-              ...current.invites.filter(
+              ...current.value.invites.filter(
                 (invite) => invite.id !== response.invite.id,
               ),
             ],
           }
-        : current,
-    )
+        : current.value,
+    }))
     return response
   }
 
   async function updateRepositoryMember(input: UpdateRepoMemberInput) {
     const member = await updateMember(input)
-    setCollaboration((current) =>
-      current
+    setCollaborationState((current) => ({
+      base: current.base,
+      value: current.value
         ? {
-            ...current,
-            members: current.members.map((candidate) =>
+            ...current.value,
+            members: current.value.members.map((candidate) =>
               candidate.user_id === member.user_id ? member : candidate,
             ),
           }
-        : current,
-    )
+        : current.value,
+    }))
     await router.invalidate()
     return member
   }
@@ -173,23 +184,26 @@ export function RepoSettingsPage({
       ...params,
       member_user_id: memberUserId,
     })
-    setCollaboration((current) =>
-      current
+    setCollaborationState((current) => ({
+      base: current.base,
+      value: current.value
         ? {
-            ...current,
-            members: current.members.filter(
+            ...current.value,
+            members: current.value.members.filter(
               (candidate) => candidate.user_id !== member.user_id,
             ),
           }
-        : current,
-    )
+        : current.value,
+    }))
     await router.invalidate()
     return member
   }
 
   return (
     <main className="min-h-screen bg-background text-foreground">
-      <AppHeader breadcrumb={<RepoBreadcrumb params={params} section="settings" />} />
+      <AppHeader
+        breadcrumb={() => <RepoBreadcrumb params={params} section="settings" />}
+      />
 
       <PageContent>
         <PageHeader

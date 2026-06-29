@@ -9,13 +9,16 @@ import type {
   CliExchangeGrant,
   CliSessions,
 } from './types'
-import type { DeviceLoginCompleteResponse } from './types.generated'
+import {
+  CliAuthApiEndpoints,
+  type DeviceLoginCompleteResponse,
+} from './types.generated'
 
 export async function completeCliLoginForRequest(
   data: CompleteCliLoginInput,
 ) {
   return createApiClient().post<DeviceLoginCompleteResponse>(
-    `/v1/cli/device-login/${encodeURIComponent(data.code)}/complete`,
+    `${CliAuthApiEndpoints.deviceLoginStart}/${encodeURIComponent(data.code)}/complete`,
     { auth: 'required' },
   )
 }
@@ -24,7 +27,7 @@ export async function completeBrowserCliLoginForRequest(
   data: CompleteBrowserCliLoginInput,
 ) {
   return createApiClient().post<BrowserLoginComplete>(
-    `/v1/cli/browser-login/${encodeURIComponent(data.requestId)}/complete`,
+    `${CliAuthApiEndpoints.browserLoginStart}/${encodeURIComponent(data.requestId)}/complete`,
     { auth: 'required' },
   )
 }

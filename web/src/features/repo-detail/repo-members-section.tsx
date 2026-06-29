@@ -23,7 +23,7 @@ import {
   Trash2,
   Users,
 } from 'lucide-react'
-import { useState, type FormEvent } from 'react'
+import { useReducer, useState, type FormEvent } from 'react'
 
 const defaultPermissions: RepoMemberPermissions = {
   can_apply_changes: false,
@@ -50,6 +50,53 @@ const permissionLabels = [
 ] as const
 
 type PermissionKey = (typeof permissionLabels)[number]['key']
+
+type InviteMemberFormState = {
+  email: string
+  error: string | null
+  inviteUrl: string | null
+  pending: boolean
+  permissions: RepoMemberPermissions
+}
+
+type InviteMemberFormAction =
+  | { email: string; type: 'emailChanged' }
+  | { permissions: RepoMemberPermissions; type: 'permissionsChanged' }
+  | { type: 'submitStarted' }
+  | { inviteUrl: string; type: 'submitSucceeded' }
+  | { message: string; type: 'submitFailed' }
+
+const initialInviteMemberFormState: InviteMemberFormState = {
+  email: '',
+  error: null,
+  inviteUrl: null,
+  pending: false,
+  permissions: defaultPermissions,
+}
+
+function inviteMemberFormReducer(
+  state: InviteMemberFormState,
+  action: InviteMemberFormAction,
+): InviteMemberFormState {
+  switch (action.type) {
+    case 'emailChanged':
+      return { ...state, email: action.email }
+    case 'permissionsChanged':
+      return { ...state, permissions: action.permissions }
+    case 'submitStarted':
+      return { ...state, error: null, inviteUrl: null, pending: true }
+    case 'submitSucceeded':
+      return {
+        ...state,
+        email: '',
+        inviteUrl: action.inviteUrl,
+        pending: false,
+        permissions: defaultPermissions,
+      }
+    case 'submitFailed':
+      return { ...state, error: action.message, pending: false }
+  }
+}
 
 export function MemberAccessSections({
   repo,
@@ -149,31 +196,29 @@ function InviteMemberForm({
     input: Omit<CreateRepoInviteInput, 'owner' | 'repo'>,
   ) => Promise<CreateRepoInviteResponse>
 }) {
-  const [email, setEmail] = useState('')
-  const [error, setError] = useState<string | null>(null)
-  const [inviteUrl, setInviteUrl] = useState<string | null>(null)
-  const [pending, setPending] = useState(false)
-  const [permissions, setPermissions] =
-    useState<RepoMemberPermissions>(defaultPermissions)
+  const [state, dispatch] = useReducer(
+    inviteMemberFormReducer,
+    initialInviteMemberFormState,
+  )
 
   async function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault()
-    if (!canInvite || pending) {
+    if (!canInvite || state.pending) {
       return
     }
 
-    setError(null)
-    setInviteUrl(null)
-    setPending(true)
+    dispatch({ type: 'submitStarted' })
     try {
-      const response = await createInvite({ email, permissions })
-      setEmail('')
-      setPermissions(defaultPermissions)
-      setInviteUrl(response.invite_url)
+      const response = await createInvite({
+        email: state.email,
+        permissions: state.permissions,
+      })
+      dispatch({ inviteUrl: response.invite_url, type: 'submitSucceeded' })
     } catch (error) {
-      setError(error instanceof Error ? error.message : 'invite failed')
-    } finally {
-      setPending(false)
+      dispatch({
+        message: error instanceof Error ? error.message : 'invite failed',
+        type: 'submitFailed',
+      })
     }
   }
 
@@ -182,14 +227,19 @@ function InviteMemberForm({
       <div className="flex flex-col gap-2 sm:flex-row">
         <Input
           aria-label="Member email"
-          disabled={!canInvite || pending}
-          onChange={(event) => setEmail(event.target.value)}
+          disabled={!canInvite || state.pending}
+          onChange={(event) =>
+            dispatch({ email: event.target.value, type: 'emailChanged' })
+          }
           placeholder="teammate@example.com"
           type="email"
-          value={email}
+          value={state.email}
         />
-        <Button disabled={!canInvite || pending || !email.trim()} type="submit">
-          {pending ? (
+        <Button
+          disabled={!canInvite || state.pending || !state.email.trim()}
+          type="submit"
+        >
+          {state.pending ? (
             <LoaderCircle className="size-3.5 animate-spin" />
           ) : (
             <MailPlus className="size-3.5" />
@@ -204,20 +254,22 @@ function InviteMemberForm({
       </div>
 
       <PermissionEditor
-        disabled={!canInvite || pending}
-        onChange={setPermissions}
-        permissions={permissions}
+        disabled={!canInvite || state.pending}
+        onChange={(permissions) =>
+          dispatch({ permissions, type: 'permissionsChanged' })
+        }
+        permissions={state.permissions}
       />
 
-      {error && <p className="text-sm text-destructive">{error}</p>}
-      {inviteUrl && (
+      {state.error && <p className="text-sm text-destructive">{state.error}</p>}
+      {state.inviteUrl && (
         <div className="space-y-2">
           <p className="text-sm text-muted-foreground">
             Invite created. Share this link with the invitee.
           </p>
           <CopyableCodeBlock
             copyLabel="Copy invite link"
-            value={inviteUrl}
+            value={state.inviteUrl}
           />
         </div>
       )}
@@ -433,9 +485,12 @@ function AlwaysOnPrivateRead() {
 }
 
 function permissionSummaryText(permissions: RepoMemberPermissions) {
-  const enabled = permissionLabels
-    .filter((permission) => permissions[permission.key])
-    .map((permission) => permission.label.toLowerCase())
+  const enabled = permissionLabels.reduce<string[]>((labels, permission) => {
+    if (permissions[permission.key]) {
+      labels.push(permission.label.toLowerCase())
+    }
+    return labels
+  }, [])
 
   return enabled.length === 0 ? 'No extra actions' : enabled.join(', ')
 }
