@@ -20,14 +20,22 @@ import type {
   ProjectionPreviewResponse,
   ProjectionPreviewSource as GeneratedProjectionPreviewSource,
   ProjectionPreviewSummaryResponse,
+  AcceptRepositoryInviteResponse,
+  CreateRepositoryInviteResponse,
   ReviewFileDiffRequest,
   ReviewFileDiffResponse,
   ReviewLineDiffResponse,
   RepoFileResponse,
   RepoPublicationState as GeneratedRepoPublicationState,
-  RepoRole as GeneratedRepoRole,
   RepoSettingsResponse,
   RepoSummaryResponse,
+  RepositoryAccessResponse,
+  RepositoryActor as GeneratedRepositoryActor,
+  RepositoryCollaborationResponse,
+  RepositoryInviteLookupResponse,
+  RepositoryInviteResponse,
+  RepositoryMemberPermissions,
+  RepositoryMemberResponse,
   SessionCapabilities,
   SessionIdentity as GeneratedSessionIdentity,
   SessionResponse,
@@ -43,7 +51,7 @@ import type {
 
 export type Visibility = GeneratedVisibility
 export type VisibilityState = Visibility | 'Mixed'
-export type RepoRole = GeneratedRepoRole
+export type RepositoryActor = GeneratedRepositoryActor
 export type RepoPublicationState = GeneratedRepoPublicationState
 export type RepoLifecycleState = RepoPublicationState
 export type TokenStatus = FirstPushTokenStatus
@@ -60,6 +68,14 @@ export type CliExchangeGrant = CliExchangeGrantResponse
 export type CliSession = CliSessionResponse
 export type CliSessions = CliSessionsResponse
 export type RepoSummary = RepoSummaryResponse
+export type RepoAccess = RepositoryAccessResponse
+export type RepoMemberPermissions = RepositoryMemberPermissions
+export type RepoMember = RepositoryMemberResponse
+export type RepoInvite = RepositoryInviteResponse
+export type RepoCollaboration = RepositoryCollaborationResponse
+export type CreateRepoInviteResponse = CreateRepositoryInviteResponse
+export type RepoInviteLookup = RepositoryInviteLookupResponse
+export type AcceptRepoInviteResponse = AcceptRepositoryInviteResponse
 export type RepoFile = RepoFileResponse
 export type RepoCapabilities = SessionCapabilities
 export type SessionRepo = GeneratedSessionRepo
@@ -121,6 +137,28 @@ export type DeleteRepoInput = {
 }
 
 export type UpdateRepoSettingsInput = RepoParams & UpdateRepoSettingsRequest
+
+export type CreateRepoInviteInput = RepoParams & {
+  email: string
+  permissions: RepoMemberPermissions
+}
+
+export type UpdateRepoMemberInput = RepoParams & {
+  member_user_id: string
+  permissions: RepoMemberPermissions
+}
+
+export type DeleteRepoMemberInput = RepoParams & {
+  member_user_id: string
+}
+
+export type DeleteRepoInviteInput = RepoParams & {
+  invite_id: string
+}
+
+export type RepoInviteTokenInput = {
+  token: string
+}
 
 export type PendingImportReview = PendingImportPayload & {
   kind: 'PendingImport'

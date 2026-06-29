@@ -93,6 +93,11 @@ export function useRepoLiveRefresh(
         void flushRefresh()
         return
       }
+      if (event.version === 0 && usesVersionedRepoChangeEvents(live)) {
+        forceRefreshPending = true
+        void flushRefresh()
+        return
+      }
       if (!usesVersionedRepoChangeEvents(live)) {
         forceRefreshPending = true
         void flushRefresh()
@@ -150,11 +155,7 @@ export function canUseRepoLiveRefresh(_live: RepoLiveState) {
 }
 
 export function usesVersionedRepoChangeEvents(live: RepoLiveState) {
-  return (
-    live.repo.role === 'Owner' ||
-    live.repo.role === 'Maintainer' ||
-    live.repo.role === 'Writer'
-  )
+  return live.repo.access.actor !== 'Public'
 }
 
 async function streamRepoEvents(

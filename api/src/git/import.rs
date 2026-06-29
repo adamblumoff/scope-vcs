@@ -17,7 +17,9 @@ pub(crate) use self::staging::{ReceivePackFileChange, stage_receive_pack_update}
 pub(crate) use self::staging::{
     ReceivePackUpdate, apply_receive_pack_update, validate_staged_update_policy,
 };
-use crate::domain::store::{FirstPushTokenStatus, PendingImport, RepoPublicationState};
+use crate::domain::store::{
+    FirstPushTokenStatus, PendingImport, RepoPublicationState, RepositoryActor,
+};
 use crate::{
     db::RepositoryMutation,
     error::ApiError,
@@ -41,7 +43,7 @@ pub(crate) fn persist_pending_import(
     state
         .metadata
         .mutate_repository(owner, repo_name, move |repo| {
-            if repo.record.publication_state != RepoPublicationState::PendingFirstPush {
+            if !repo.is_waiting_for_first_push() {
                 return Err(ApiError::conflict(
                     "repo is not waiting for an initial Git push",
                 ));
@@ -63,7 +65,7 @@ pub(crate) fn persist_pending_import(
                 token.used_at_unix = Some(now);
             }
             repo.pending_import = Some(import);
-            repo.record.publication_state = RepoPublicationState::PendingPublish;
+            repo.record.publication_state = RepoPublicationState::Unpublished;
             repo.bump_change_version();
             Ok(RepositoryMutation::new(repo.record.change_version))
         })
@@ -80,7 +82,7 @@ pub(crate) fn persist_receive_pack_update(
     state
         .metadata
         .mutate_repository(owner, repo_name, move |repo| {
-            if stage_receive_pack_update_with_store(repo, update, store.as_ref())?.is_some() {
+            if stage_receive_pack_update_with_store(repo, update, store.as_ref(), true)?.is_some() {
                 Ok(RepositoryMutation::new(PersistedReceivePackUpdate::Staged))
             } else {
                 Ok(RepositoryMutation::new(PersistedReceivePackUpdate::Applied))
@@ -93,22 +95,39 @@ pub(crate) fn persist_receive_pack_update_and_promote(
     owner: &str,
     repo_name: &str,
     update: ReceivePackUpdate,
+    author_id: &str,
 ) -> Result<PersistedReceivePackUpdate, ApiError> {
     let uploaded_blobs = update.uploaded_blobs.clone();
     let store = state.object_store.clone();
+    let author_id = author_id.to_string();
 
     let persisted = state
         .metadata
         .mutate_repository(owner, repo_name, move |repo| {
             let old_snapshot = repo.git_snapshot.clone();
             let mut cleanup_blobs = uploaded_blobs;
-            let persisted =
-                if stage_receive_pack_update_with_store(repo, update, store.as_ref())?.is_some() {
-                    PersistedReceivePackUpdate::Staged
+            let access = repo.access_for_user_id(&author_id);
+            if !access.can_push {
+                let message = if access.actor == RepositoryActor::Public {
+                    "repo membership required"
                 } else {
-                    cleanup_blobs.extend(old_snapshot);
-                    PersistedReceivePackUpdate::Applied
+                    "push permission required"
                 };
+                return Err(ApiError::forbidden(message));
+            }
+            let persisted = if stage_receive_pack_update_with_store(
+                repo,
+                update,
+                store.as_ref(),
+                access.can_apply_changes,
+            )?
+            .is_some()
+            {
+                PersistedReceivePackUpdate::Staged
+            } else {
+                cleanup_blobs.extend(old_snapshot);
+                PersistedReceivePackUpdate::Applied
+            };
             Ok(RepositoryMutation::with_source_blob_deletions(
                 persisted,
                 cleanup_blobs,

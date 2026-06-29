@@ -6,7 +6,7 @@ async fn published_default_private_repo_serves_public_file_subset() {
     {
         let mut repo = test_repo(&test_owner_id());
         repo.record.default_visibility = Visibility::Private;
-        repo.policy = Policy::new(Visibility::Private, &repo.record.owner_user_id);
+        repo.policy = Policy::new(Visibility::Private);
         repo.policy
             .add_rule(VisibilityRule::public(
                 ScopePath::parse("/README.md").unwrap(),
@@ -62,7 +62,7 @@ async fn published_repo_projection_preview_serves_public_file_subset() {
     {
         let mut repo = test_repo(&test_owner_id());
         repo.record.default_visibility = Visibility::Private;
-        repo.policy = Policy::new(Visibility::Private, &repo.record.owner_user_id);
+        repo.policy = Policy::new(Visibility::Private);
         repo.policy
             .add_rule(VisibilityRule::public(
                 ScopePath::parse("/README.md").unwrap(),
@@ -156,7 +156,6 @@ async fn owner_projection_preview_labels_mixed_visibility_commit() {
         repo.policy
             .add_rule(VisibilityRule::private(
                 ScopePath::parse("/secret.txt").unwrap(),
-                repo_owner_ids(&repo),
             ))
             .unwrap();
         repo.graph.commits.push(LogicalCommit {
@@ -209,7 +208,7 @@ async fn owner_public_projection_preview_counts_visibility_transition_hidden_com
     {
         let mut repo = test_repo(&test_owner_id());
         repo.record.default_visibility = Visibility::Private;
-        repo.policy = Policy::new(Visibility::Private, &repo.record.owner_user_id);
+        repo.policy = Policy::new(Visibility::Private);
         repo.policy
             .add_rule(VisibilityRule::public(
                 ScopePath::parse("/notes.md").unwrap(),
@@ -270,7 +269,7 @@ async fn published_default_private_repo_without_public_files_stays_hidden() {
     {
         let mut repo = test_repo(&test_owner_id());
         repo.record.default_visibility = Visibility::Private;
-        repo.policy = Policy::new(Visibility::Private, &repo.record.owner_user_id);
+        repo.policy = Policy::new(Visibility::Private);
         repo.graph.commits.push(LogicalCommit {
             id: "rv1".to_string(),
             parent_ids: Vec::new(),
@@ -310,7 +309,7 @@ async fn deleted_public_file_no_longer_makes_private_repo_visible() {
     {
         let mut repo = test_repo(&test_owner_id());
         repo.record.default_visibility = Visibility::Private;
-        repo.policy = Policy::new(Visibility::Private, &repo.record.owner_user_id);
+        repo.policy = Policy::new(Visibility::Private);
         repo.policy
             .add_rule(VisibilityRule::public(
                 ScopePath::parse("/README.md").unwrap(),
@@ -411,7 +410,7 @@ fn unreadable_repo_is_hidden_from_public_requests() {
     let mut repo = find_repo(&state, TEST_REPO_OWNER, TEST_REPO_NAME)
         .unwrap()
         .clone();
-    repo.record.publication_state = RepoPublicationState::PendingPublish;
+    repo.record.publication_state = RepoPublicationState::Unpublished;
 
     let error = ensure_repo_read(&state, &repo, &Principal::public()).unwrap_err();
 
@@ -421,11 +420,10 @@ fn unreadable_repo_is_hidden_from_public_requests() {
 #[test]
 fn git_projection_cache_omits_private_files_for_public_clone() {
     let owner_id = test_owner_id();
-    let mut policy = Policy::new(Visibility::Public, owner_id.clone());
+    let mut policy = Policy::new(Visibility::Public);
     policy
         .add_rule(VisibilityRule::private(
             ScopePath::parse("/secret.txt").unwrap(),
-            [owner_id.clone()],
         ))
         .unwrap();
     let graph = SourceGraph {
@@ -452,7 +450,7 @@ fn git_projection_cache_omits_private_files_for_public_clone() {
             ],
         }],
     };
-    let projection = project_graph(&policy, &graph, &[], &Principal::public());
+    let projection = project_graph(&policy, &graph, &[], &Principal::public(), false);
     let cache_root = std::env::temp_dir().join(format!(
         "scope-vcs-git-cache-test-{}-{}",
         std::process::id(),
@@ -478,7 +476,7 @@ fn git_projection_cache_omits_private_files_for_public_clone() {
 #[test]
 fn public_git_projection_starts_at_private_to_public_transition() {
     let owner_id = test_owner_id();
-    let mut policy = Policy::new(Visibility::Private, owner_id.clone());
+    let mut policy = Policy::new(Visibility::Private);
     policy
         .add_rule(VisibilityRule::public(
             ScopePath::parse("/notes.md").unwrap(),
@@ -516,7 +514,7 @@ fn public_git_projection_starts_at_private_to_public_transition() {
             },
         ],
     };
-    let projection = project_graph(&policy, &graph, &[], &Principal::public());
+    let projection = project_graph(&policy, &graph, &[], &Principal::public(), false);
     let cache_root = std::env::temp_dir().join(format!(
         "scope-vcs-git-transition-test-{}-{}",
         std::process::id(),
@@ -541,11 +539,10 @@ fn public_git_projection_starts_at_private_to_public_transition() {
 #[test]
 fn public_git_projection_drops_history_after_public_to_private_transition() {
     let owner_id = test_owner_id();
-    let mut policy = Policy::new(Visibility::Public, owner_id.clone());
+    let mut policy = Policy::new(Visibility::Public);
     policy
         .add_rule(VisibilityRule::private(
             ScopePath::parse("/README.md").unwrap(),
-            [owner_id.clone()],
         ))
         .unwrap();
     let public_blob = source_blob("public readme");
@@ -580,7 +577,7 @@ fn public_git_projection_drops_history_after_public_to_private_transition() {
             },
         ],
     };
-    let projection = project_graph(&policy, &graph, &[], &Principal::public());
+    let projection = project_graph(&policy, &graph, &[], &Principal::public(), false);
     let cache_root = std::env::temp_dir().join(format!(
         "scope-vcs-git-public-to-private-test-{}-{}",
         std::process::id(),

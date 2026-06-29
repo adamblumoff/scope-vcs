@@ -215,6 +215,80 @@ fn review_off_receive_pack_applies_immediately() {
 }
 
 #[test]
+fn permission_forced_staged_push_counts_line_diff_when_review_is_off() {
+    let state = test_state_with_repo();
+    let member_id = "user_push_only";
+    {
+        let mut catalog = lock_catalog(&state).unwrap();
+        let mut repo = repo_with_readme();
+        repo.settings.review_pushes_before_applying = false;
+        repo.members.push(test_repository_member(
+            TEST_REPO_ID,
+            member_id,
+            member_permissions(true, false, false),
+        ));
+        catalog.repositories.insert(TEST_REPO_ID.to_string(), repo);
+    }
+
+    let persisted = persist_receive_pack_update_and_promote(
+        &state,
+        TEST_REPO_OWNER,
+        TEST_REPO_NAME,
+        receive_pack_update(vec![("/README.md", Some("hello\nextra line"))]),
+        member_id,
+    )
+    .unwrap();
+
+    assert_eq!(persisted, PersistedReceivePackUpdate::Staged);
+    let repo = find_repo(&state, TEST_REPO_OWNER, TEST_REPO_NAME).unwrap();
+    let staged = repo.staged_update.unwrap();
+    assert_eq!(staged.changes[0].line_diff.additions, 1);
+    assert_eq!(staged.changes[0].line_diff.deletions, 0);
+}
+
+#[test]
+fn published_push_rechecks_member_permission_before_persisting() {
+    let state = test_state_with_repo();
+    let member_id = "user_removed_during_push";
+    {
+        let mut catalog = lock_catalog(&state).unwrap();
+        let mut repo = repo_with_readme();
+        repo.settings.review_pushes_before_applying = false;
+        repo.members.push(test_repository_member(
+            TEST_REPO_ID,
+            member_id,
+            member_permissions(true, false, true),
+        ));
+        catalog.repositories.insert(TEST_REPO_ID.to_string(), repo);
+    }
+    {
+        let mut catalog = lock_catalog(&state).unwrap();
+        let repo = catalog.repositories.get_mut(TEST_REPO_ID).unwrap();
+        repo.members.retain(|member| member.user_id != member_id);
+    }
+
+    let error = persist_receive_pack_update_and_promote(
+        &state,
+        TEST_REPO_OWNER,
+        TEST_REPO_NAME,
+        receive_pack_update(vec![("/README.md", Some("should not persist"))]),
+        member_id,
+    )
+    .unwrap_err();
+
+    assert_eq!(error.status, StatusCode::FORBIDDEN);
+    let repo = find_repo(&state, TEST_REPO_OWNER, TEST_REPO_NAME).unwrap();
+    assert!(repo.staged_update.is_none());
+    assert_eq!(
+        live_tree(&repo)
+            .get(&ScopePath::parse("/README.md").unwrap())
+            .map(blob_content)
+            .as_deref(),
+        Some("hello")
+    );
+}
+
+#[test]
 fn staged_new_private_file_stays_out_of_public_projection() {
     let mut repo = repo_with_readme();
     let mut staged = stage_receive_pack_update(
@@ -232,6 +306,7 @@ fn staged_new_private_file_stays_out_of_public_projection() {
         &repo.graph,
         &repo.visibility_events,
         &Principal::public(),
+        false,
     );
     assert!(
         !public_projection
@@ -242,8 +317,13 @@ fn staged_new_private_file_stays_out_of_public_projection() {
         id: repo.record.owner_user_id.clone(),
         kind: PrincipalKind::User,
     };
-    let owner_projection =
-        project_graph(&repo.policy, &repo.graph, &repo.visibility_events, &owner);
+    let owner_projection = project_graph(
+        &repo.policy,
+        &repo.graph,
+        &repo.visibility_events,
+        &owner,
+        true,
+    );
     assert!(
         owner_projection
             .visible_paths()
@@ -257,7 +337,6 @@ fn staged_new_file_inherits_private_parent_visibility() {
     repo.policy
         .add_rule(VisibilityRule::private(
             ScopePath::parse("/private").unwrap(),
-            [repo.record.owner_user_id.clone()],
         ))
         .unwrap();
 
@@ -275,6 +354,7 @@ fn staged_new_file_inherits_private_parent_visibility() {
         &repo.graph,
         &repo.visibility_events,
         &Principal::public(),
+        false,
     );
     assert!(
         !public_projection
@@ -291,7 +371,6 @@ async fn staged_visibility_route_rejects_public_child_under_private_parent() {
         repo.policy
             .add_rule(VisibilityRule::private(
                 ScopePath::parse("/private").unwrap(),
-                [repo.record.owner_user_id.clone()],
             ))
             .unwrap();
         stage_receive_pack_update(
@@ -390,6 +469,7 @@ fn applying_staged_public_to_private_update_removes_file_from_public_projection(
         &repo.graph,
         &repo.visibility_events,
         &Principal::public(),
+        false,
     );
     assert!(projection.commits.is_empty());
     assert!(
@@ -415,6 +495,7 @@ fn applying_staged_public_delete_marked_private_removes_file_from_public_project
         &repo.graph,
         &repo.visibility_events,
         &Principal::public(),
+        false,
     );
     let last_commit = projection.commits.last().unwrap();
     assert!(
@@ -429,11 +510,9 @@ fn applying_staged_public_delete_marked_private_removes_file_from_public_project
 fn applying_staged_private_delete_marked_public_stays_out_of_public_projection() {
     let mut repo = repo_with_readme();
     repo.graph.commits[0].changes[0].visibility = Visibility::Private;
-    let owner_ids = repo_owner_ids(&repo);
     repo.policy
         .add_rule(VisibilityRule::private(
             ScopePath::parse("/README.md").unwrap(),
-            owner_ids,
         ))
         .unwrap();
     let mut staged =
@@ -449,6 +528,7 @@ fn applying_staged_private_delete_marked_public_stays_out_of_public_projection()
         &repo.graph,
         &repo.visibility_events,
         &Principal::public(),
+        false,
     );
     assert!(
         projection
@@ -546,7 +626,7 @@ fn published_receive_pack_staging_restores_accepted_git_head_from_bucket_snapsho
         let mut catalog = lock_catalog(&state).unwrap();
         let mut staged = catalog.clone();
         let repo = staged.repositories.get_mut(TEST_REPO_ID).unwrap();
-        repo.record.publication_state = RepoPublicationState::PendingPublish;
+        repo.record.publication_state = RepoPublicationState::Unpublished;
         repo.pending_import = Some(pending);
         preview_publish_import(repo).unwrap();
         *catalog = staged;
@@ -587,9 +667,14 @@ fn applying_push_deletes_replaced_git_snapshot_bundle() {
         catalog.repositories.insert(TEST_REPO_ID.to_string(), repo);
     }
 
-    let persisted =
-        persist_receive_pack_update_and_promote(&state, TEST_REPO_OWNER, TEST_REPO_NAME, update)
-            .unwrap();
+    let persisted = persist_receive_pack_update_and_promote(
+        &state,
+        TEST_REPO_OWNER,
+        TEST_REPO_NAME,
+        update,
+        &test_owner_id(),
+    )
+    .unwrap();
 
     assert_eq!(persisted, PersistedReceivePackUpdate::Applied);
     let store = MemoryObjectStore::new();
@@ -678,7 +763,7 @@ fn pending_import_marks_token_used_after_durable_state_update() {
     {
         let mut catalog = lock_catalog(&state).unwrap();
         let repo = catalog.repositories.get_mut(TEST_REPO_ID).unwrap();
-        repo.record.publication_state = RepoPublicationState::PendingFirstPush;
+        repo.record.publication_state = RepoPublicationState::Unpublished;
         repo.first_push_token = Some(FirstPushToken {
             token_hash: first_push_token_hash(secret),
             secret: Some(secret.to_string()),
@@ -713,7 +798,7 @@ fn pending_import_marks_token_used_after_durable_state_update() {
     let repo = find_repo(&state, TEST_REPO_OWNER, TEST_REPO_NAME).unwrap();
     assert_eq!(
         repo.record.publication_state,
-        RepoPublicationState::PendingPublish
+        RepoPublicationState::Unpublished
     );
     assert_eq!(repo.pending_import.as_ref().unwrap().default_branch, "main");
     assert!(repo.first_push_token.unwrap().used_at_unix.is_some());
@@ -730,7 +815,7 @@ fn pending_import_with_git_token_marks_first_push_token_used() {
     {
         let mut catalog = lock_catalog(&state).unwrap();
         let repo = catalog.repositories.get_mut(TEST_REPO_ID).unwrap();
-        repo.record.publication_state = RepoPublicationState::PendingFirstPush;
+        repo.record.publication_state = RepoPublicationState::Unpublished;
         repo.first_push_token = Some(FirstPushToken {
             token_hash: first_push_token_hash(first_secret),
             secret: Some(first_secret.to_string()),
@@ -761,7 +846,7 @@ fn pending_import_with_git_token_marks_first_push_token_used() {
     let repo = find_repo(&state, TEST_REPO_OWNER, TEST_REPO_NAME).unwrap();
     assert_eq!(
         repo.record.publication_state,
-        RepoPublicationState::PendingPublish
+        RepoPublicationState::Unpublished
     );
     assert!(repo.first_push_token.unwrap().used_at_unix.is_some());
 }
@@ -829,6 +914,7 @@ fn applied_push_survives_obsolete_snapshot_cleanup_failure() {
         TEST_REPO_OWNER,
         TEST_REPO_NAME,
         receive_pack_update(vec![("/README.md", Some("cleanup failure still lands"))]),
+        &test_owner_id(),
     )
     .unwrap();
 

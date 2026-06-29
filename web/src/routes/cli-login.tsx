@@ -175,6 +175,7 @@ function CliLoginRoute() {
                   : current,
               )
             }
+            sandbox=""
             src={state.callbackUrl}
             title="Scope CLI local callback"
           />
@@ -214,7 +215,10 @@ function CliLoginRoute() {
                   <ShieldCheck className="size-4" />
                   <span>Terminal authorization</span>
                 </div>
-                <label className="mt-3 block text-xs font-medium leading-4 text-muted-foreground">
+                <label
+                  className="mt-3 block text-xs font-medium leading-4 text-muted-foreground"
+                  htmlFor="cli-login-code"
+                >
                   Code
                 </label>
                 <Input
@@ -222,6 +226,7 @@ function CliLoginRoute() {
                   autoComplete="one-time-code"
                   className="mt-1 max-w-[320px] font-mono uppercase"
                   disabled={state.kind === 'pending'}
+                  id="cli-login-code"
                   inputMode="text"
                   onChange={(event) => setCode(event.target.value)}
                   placeholder="A1B2-C3D4-E5F6-A7B8"

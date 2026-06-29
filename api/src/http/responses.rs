@@ -3,10 +3,11 @@ mod projections;
 pub(crate) use projections::*;
 
 use crate::domain::commit_history::{CommitHistoryCommit, CommitHistoryView};
-use crate::domain::policy::{Principal, ScopePath, Visibility};
+use crate::domain::policy::{ScopePath, Visibility};
 use crate::domain::store::{
     FirstPushToken, FirstPushTokenStatus, GitCloneToken, GitPushToken, RepoPublicationState,
-    RepoRole, StagedFileChangeKind, StagedRepoUpdate, StoredRepository, UserAccount,
+    RepositoryAccess, RepositoryActor, RepositoryMemberPermissions, StagedFileChangeKind,
+    StagedRepoUpdate, StoredRepository, UserAccount,
 };
 use crate::{config::DEFAULT_GIT_BRANCH, error::ApiError};
 use serde::{Deserialize, Serialize};
@@ -89,14 +90,20 @@ impl From<&UserAccount> for SessionIdentity {
 pub(crate) struct SessionRepo {
     pub(crate) id: String,
     pub(crate) publication_state: RepoPublicationState,
-    pub(crate) role: Option<RepoRole>,
+    pub(crate) access: RepositoryAccessResponse,
 }
 
 #[derive(Debug, Serialize)]
 #[cfg_attr(test, derive(ts_rs::TS))]
 pub(crate) struct SessionCapabilities {
     pub(crate) read: bool,
-    pub(crate) write: bool,
+    pub(crate) can_read_private_files: bool,
+    pub(crate) can_push: bool,
+    pub(crate) can_change_file_visibility: bool,
+    pub(crate) can_apply_changes: bool,
+    pub(crate) can_update_repo_settings: bool,
+    pub(crate) can_manage_members: bool,
+    pub(crate) can_delete_repo: bool,
 }
 
 #[derive(Clone, Copy, Debug, Serialize)]
@@ -205,9 +212,23 @@ pub(crate) struct RepoSummaryResponse {
     pub(crate) lifecycle_state: RepoPublicationState,
     pub(crate) default_visibility: Visibility,
     pub(crate) change_version: u64,
-    pub(crate) role: Option<RepoRole>,
+    pub(crate) access: RepositoryAccessResponse,
+    pub(crate) pending_import_pending: bool,
     pub(crate) staged_update_pending: bool,
     pub(crate) push_blocked_by_staged_update: bool,
+}
+
+#[derive(Debug, Serialize)]
+#[cfg_attr(test, derive(ts_rs::TS))]
+pub(crate) struct RepositoryAccessResponse {
+    pub(crate) actor: RepositoryActor,
+    pub(crate) can_read_private_files: bool,
+    pub(crate) can_push: bool,
+    pub(crate) can_change_file_visibility: bool,
+    pub(crate) can_apply_changes: bool,
+    pub(crate) can_update_repo_settings: bool,
+    pub(crate) can_manage_members: bool,
+    pub(crate) can_delete_repo: bool,
 }
 
 #[derive(Debug, Serialize)]
@@ -295,6 +316,72 @@ pub(crate) struct RepoSettingsResponse {
 pub(crate) struct UpdateRepoSettingsRequest {
     pub(crate) default_new_file_visibility: Visibility,
     pub(crate) review_pushes_before_applying: bool,
+}
+
+#[derive(Debug, Serialize)]
+#[cfg_attr(test, derive(ts_rs::TS))]
+pub(crate) struct RepositoryCollaborationResponse {
+    pub(crate) members: Vec<RepositoryMemberResponse>,
+    pub(crate) invites: Vec<RepositoryInviteResponse>,
+}
+
+#[derive(Debug, Serialize)]
+#[cfg_attr(test, derive(ts_rs::TS))]
+pub(crate) struct RepositoryMemberResponse {
+    pub(crate) user_id: String,
+    pub(crate) handle: String,
+    pub(crate) email: String,
+    pub(crate) permissions: RepositoryMemberPermissions,
+    pub(crate) created_at_unix: u64,
+    pub(crate) updated_at_unix: u64,
+}
+
+#[derive(Debug, Serialize)]
+#[cfg_attr(test, derive(ts_rs::TS))]
+pub(crate) struct RepositoryInviteResponse {
+    pub(crate) id: String,
+    pub(crate) invited_email: String,
+    pub(crate) permissions: RepositoryMemberPermissions,
+    pub(crate) state: crate::domain::store::RepositoryInviteState,
+    pub(crate) expires_at_unix: u64,
+}
+
+#[derive(Debug, Deserialize)]
+#[cfg_attr(test, derive(ts_rs::TS))]
+pub(crate) struct CreateRepositoryInviteRequest {
+    pub(crate) email: String,
+    pub(crate) permissions: RepositoryMemberPermissions,
+}
+
+#[derive(Debug, Serialize)]
+#[cfg_attr(test, derive(ts_rs::TS))]
+pub(crate) struct CreateRepositoryInviteResponse {
+    pub(crate) invite: RepositoryInviteResponse,
+    pub(crate) invite_url: String,
+}
+
+#[derive(Debug, Deserialize)]
+#[cfg_attr(test, derive(ts_rs::TS))]
+pub(crate) struct UpdateRepositoryMemberRequest {
+    pub(crate) permissions: RepositoryMemberPermissions,
+}
+
+#[derive(Debug, Serialize)]
+#[cfg_attr(test, derive(ts_rs::TS))]
+pub(crate) struct RepositoryInviteLookupResponse {
+    pub(crate) repo_id: String,
+    pub(crate) owner_handle: String,
+    pub(crate) repo_name: String,
+    pub(crate) invited_email: String,
+    pub(crate) permissions: RepositoryMemberPermissions,
+    pub(crate) expires_at_unix: u64,
+}
+
+#[derive(Debug, Serialize)]
+#[cfg_attr(test, derive(ts_rs::TS))]
+pub(crate) struct AcceptRepositoryInviteResponse {
+    pub(crate) repo: RepoSummaryResponse,
+    pub(crate) member: RepositoryMemberResponse,
 }
 
 #[derive(Debug, Deserialize)]
@@ -416,18 +503,17 @@ pub(crate) fn repo_summary_for_user(
     repo: &StoredRepository,
     user_id: &str,
 ) -> Option<RepoSummaryResponse> {
-    let principal = Principal {
-        id: user_id.to_string(),
-        kind: crate::domain::policy::PrincipalKind::User,
-    };
-    let role = repo
-        .memberships
-        .iter()
-        .find(|membership| membership.user_id == user_id)
-        .map(|membership| membership.role)?;
-    let lifecycle_allows_read =
-        repo.record.publication_state == RepoPublicationState::Published || role == RepoRole::Owner;
-    if !lifecycle_allows_read || !repo.policy.can_read(&principal, &ScopePath::root()) {
+    let access = repo.access_for_user_id(user_id);
+    if access.actor == RepositoryActor::Public {
+        return None;
+    }
+    let lifecycle_allows_read = repo.record.publication_state == RepoPublicationState::Published
+        || access.actor == RepositoryActor::Owner;
+    if !lifecycle_allows_read
+        || !repo
+            .policy
+            .can_read(&ScopePath::root(), access.can_read_private_files)
+    {
         return None;
     }
 
@@ -437,18 +523,55 @@ pub(crate) fn repo_summary_for_user(
         name: repo.record.name.clone(),
         lifecycle_state: repo.record.publication_state,
         default_visibility: repo.record.default_visibility,
-        change_version: repo_change_version_for_role(repo, Some(role)),
-        role: Some(role),
-        staged_update_pending: role == RepoRole::Owner && repo.staged_update.is_some(),
-        push_blocked_by_staged_update: role >= RepoRole::Writer && repo.staged_update.is_some(),
+        change_version: repo_change_version_for_access(repo, access),
+        access: repository_access_response(access),
+        pending_import_pending: repo.has_pending_import_review(),
+        staged_update_pending: can_review_staged_update(access) && repo.staged_update.is_some(),
+        push_blocked_by_staged_update: access.can_push && repo.staged_update.is_some(),
     })
 }
 
-pub(crate) fn repo_change_version_for_role(repo: &StoredRepository, role: Option<RepoRole>) -> u64 {
-    if role.is_some_and(|role| role >= RepoRole::Writer) {
+pub(crate) fn can_review_staged_update(access: RepositoryAccess) -> bool {
+    access.can_apply_changes || access.can_change_file_visibility
+}
+
+pub(crate) fn repo_change_version_for_access(
+    repo: &StoredRepository,
+    access: RepositoryAccess,
+) -> u64 {
+    if access.actor != RepositoryActor::Public {
         repo.record.change_version
     } else {
         0
+    }
+}
+
+pub(crate) fn repository_access_response(access: RepositoryAccess) -> RepositoryAccessResponse {
+    RepositoryAccessResponse {
+        actor: access.actor,
+        can_read_private_files: access.can_read_private_files,
+        can_push: access.can_push,
+        can_change_file_visibility: access.can_change_file_visibility,
+        can_apply_changes: access.can_apply_changes,
+        can_update_repo_settings: access.can_update_repo_settings,
+        can_manage_members: access.can_manage_members,
+        can_delete_repo: access.can_delete_repo,
+    }
+}
+
+pub(crate) fn session_capabilities_response(
+    read: bool,
+    access: RepositoryAccess,
+) -> SessionCapabilities {
+    SessionCapabilities {
+        read,
+        can_read_private_files: access.can_read_private_files,
+        can_push: access.can_push,
+        can_change_file_visibility: access.can_change_file_visibility,
+        can_apply_changes: access.can_apply_changes,
+        can_update_repo_settings: access.can_update_repo_settings,
+        can_manage_members: access.can_manage_members,
+        can_delete_repo: access.can_delete_repo,
     }
 }
 
@@ -491,18 +614,13 @@ pub(crate) fn repo_init_response(
 }
 
 fn ensure_repo_init_access(repo: &StoredRepository, user_id: &str) -> Result<(), ApiError> {
-    let role = repo
-        .memberships
-        .iter()
-        .find(|membership| membership.user_id == user_id)
-        .map(|membership| membership.role);
-    if role != Some(RepoRole::Owner) {
+    if !repo.is_owner_user(user_id) {
         return Err(ApiError::not_found(format!(
             "repo {} not found",
             repo.record.id
         )));
     }
-    if repo.record.publication_state != RepoPublicationState::PendingFirstPush {
+    if !repo.is_waiting_for_first_push() {
         return Err(ApiError::conflict(
             "init token is only available before the first push",
         ));
@@ -559,6 +677,65 @@ pub(crate) fn repo_clone_credential_response(
     RepoCloneCredentialResponse {
         git_remote_path: format!("/git/{}/{}", repo.record.owner_handle, repo.record.name),
         token: git_clone_token_response(token, secret),
+    }
+}
+
+pub(crate) fn repository_collaboration_response(
+    repo: &StoredRepository,
+    users: &std::collections::BTreeMap<String, UserAccount>,
+) -> RepositoryCollaborationResponse {
+    let mut members = repo
+        .members
+        .iter()
+        .filter_map(|member| {
+            users
+                .get(&member.user_id)
+                .map(|user| repository_member_response(member, user))
+        })
+        .collect::<Vec<_>>();
+    members.sort_by(|left, right| {
+        left.email
+            .cmp(&right.email)
+            .then(left.user_id.cmp(&right.user_id))
+    });
+
+    let mut invites = repo
+        .invitations
+        .iter()
+        .map(repository_invite_response)
+        .collect::<Vec<_>>();
+    invites.sort_by(|left, right| {
+        left.invited_email
+            .cmp(&right.invited_email)
+            .then(left.id.cmp(&right.id))
+    });
+
+    RepositoryCollaborationResponse { members, invites }
+}
+
+pub(crate) fn repository_member_response(
+    member: &crate::domain::store::RepositoryMember,
+    user: &UserAccount,
+) -> RepositoryMemberResponse {
+    RepositoryMemberResponse {
+        user_id: member.user_id.clone(),
+        handle: user.handle.clone(),
+        email: user.email.clone(),
+        permissions: member.permissions,
+        created_at_unix: member.created_at_unix,
+        updated_at_unix: member.updated_at_unix,
+    }
+}
+
+pub(crate) fn repository_invite_response(
+    invite: &crate::domain::store::RepositoryInvite,
+) -> RepositoryInviteResponse {
+    RepositoryInviteResponse {
+        id: invite.id.clone(),
+        invited_email: invite.invited_email.clone(),
+        permissions: invite.permissions,
+        state: invite.state,
+        expires_at_unix: invite.expires_at_unix,
     }
 }
 
@@ -638,8 +815,4 @@ fn commit_file_response(
         new_oid: file.new_content.as_ref().map(|blob| blob.git_oid.clone()),
         visibility: file.visibility,
     }
-}
-
-pub(crate) fn repo_owner_ids(repo: &StoredRepository) -> Vec<String> {
-    repo.owner_ids()
 }

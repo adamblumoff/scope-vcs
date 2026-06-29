@@ -9,6 +9,7 @@ mod metadata_schema;
 mod publish_apply;
 mod push_staging;
 mod repo_change_notifications;
+mod repo_collaboration;
 mod repo_effects;
 mod repo_lifecycle;
 mod repo_mutation;
@@ -21,7 +22,9 @@ mod schema;
 mod test_support;
 mod visibility_changes;
 
-use crate::domain::store::{AppCatalog, RepoMembership, StoredRepository, repo_id};
+use crate::domain::store::{
+    AppCatalog, RepositoryInvite, RepositoryMember, StoredRepository, repo_id,
+};
 use crate::error::ApiError;
 #[cfg(test)]
 pub(crate) use auth::scope_user_id_for_auth_identity;
@@ -31,6 +34,7 @@ use metadata_reset::{
     insert_metadata_reset_event, metadata_reset_event_from_model,
     new_operator_metadata_reset_event, reset_stale_pre_alpha_metadata,
 };
+pub(crate) use repo_collaboration::CreateRepositoryInviteMutation;
 pub(crate) use repo_mutation::RepositoryMutation;
 use runtime::DbRuntime;
 use runtime::{run_api_db_on, run_db_on};
@@ -200,16 +204,25 @@ impl MetadataStore {
                 run_api_db_on(runtime, async move {
                     let tx = db.as_ref().begin().await.map_err(ApiError::internal)?;
                     acquire_metadata_read_lock(&tx).await?;
-                    let memberships = entities::membership::Entity::find()
-                        .filter(entities::membership::Column::UserId.eq(user_id))
-                        .order_by_asc(entities::membership::Column::RepoId)
+                    let member_rows = entities::repository_member::Entity::find()
+                        .filter(entities::repository_member::Column::UserId.eq(user_id.clone()))
+                        .order_by_asc(entities::repository_member::Column::RepoId)
                         .all(&tx)
                         .await
                         .map_err(ApiError::internal)?;
-                    let repo_ids = memberships
+                    let mut repo_ids = member_rows
                         .into_iter()
-                        .map(|membership| membership.repo_id)
+                        .map(|member| member.repo_id)
                         .collect::<Vec<_>>();
+                    let owner_rows = entities::repository::Entity::find()
+                        .filter(entities::repository::Column::OwnerUserId.eq(user_id))
+                        .order_by_asc(entities::repository::Column::Id)
+                        .all(&tx)
+                        .await
+                        .map_err(ApiError::internal)?;
+                    repo_ids.extend(owner_rows.iter().map(|repo| repo.id.clone()));
+                    repo_ids.sort();
+                    repo_ids.dedup();
                     if repo_ids.is_empty() {
                         tx.commit().await.map_err(ApiError::internal)?;
                         return Ok(Vec::new());
@@ -422,9 +435,16 @@ where
         .all(conn)
         .await
         .map_err(ApiError::internal)?;
-    let memberships = entities::membership::Entity::find()
-        .order_by_asc(entities::membership::Column::RepoId)
-        .order_by_asc(entities::membership::Column::UserId)
+    let members = entities::repository_member::Entity::find()
+        .order_by_asc(entities::repository_member::Column::RepoId)
+        .order_by_asc(entities::repository_member::Column::UserId)
+        .all(conn)
+        .await
+        .map_err(ApiError::internal)?;
+    let invites = entities::repository_invite::Entity::find()
+        .order_by_asc(entities::repository_invite::Column::RepoId)
+        .order_by_asc(entities::repository_invite::Column::InvitedEmailNormalized)
+        .order_by_asc(entities::repository_invite::Column::Id)
         .all(conn)
         .await
         .map_err(ApiError::internal)?;
@@ -438,25 +458,34 @@ where
         .into_iter()
         .map(|user| Ok((user.id.clone(), user.try_into_domain()?)))
         .collect::<Result<_, ApiError>>()?;
-    let memberships_by_repo = memberships.into_iter().try_fold(
-        std::collections::BTreeMap::<String, Vec<RepoMembership>>::new(),
-        |mut by_repo, membership| {
-            let repo_id = membership.repo_id.clone();
+    let members_by_repo = members.into_iter().try_fold(
+        std::collections::BTreeMap::<String, Vec<RepositoryMember>>::new(),
+        |mut by_repo, member| {
+            let repo_id = member.repo_id.clone();
             by_repo
                 .entry(repo_id)
                 .or_default()
-                .push(membership.try_into_domain()?);
+                .push(member.try_into_domain()?);
+            Ok::<_, ApiError>(by_repo)
+        },
+    )?;
+    let invites_by_repo = invites.into_iter().try_fold(
+        std::collections::BTreeMap::<String, Vec<RepositoryInvite>>::new(),
+        |mut by_repo, invite| {
+            let repo_id = invite.repo_id.clone();
+            by_repo
+                .entry(repo_id)
+                .or_default()
+                .push(invite.try_into_domain()?);
             Ok::<_, ApiError>(by_repo)
         },
     )?;
     let repositories = repositories
         .into_iter()
         .map(|repo| {
-            let memberships = memberships_by_repo
-                .get(&repo.id)
-                .cloned()
-                .unwrap_or_default();
-            let repo = repo.try_into_domain(memberships)?;
+            let members = members_by_repo.get(&repo.id).cloned().unwrap_or_default();
+            let invitations = invites_by_repo.get(&repo.id).cloned().unwrap_or_default();
+            let repo = repo.try_into_domain(members, invitations)?;
             Ok((repo.record.id.clone(), repo))
         })
         .collect::<Result<_, ApiError>>()?;
@@ -480,25 +509,48 @@ where
         .iter()
         .map(|repo| repo.id.clone())
         .collect::<Vec<_>>();
-    let memberships = if repo_ids.is_empty() {
+    let members = if repo_ids.is_empty() {
         Vec::new()
     } else {
-        entities::membership::Entity::find()
-            .filter(entities::membership::Column::RepoId.is_in(repo_ids))
-            .order_by_asc(entities::membership::Column::RepoId)
-            .order_by_asc(entities::membership::Column::UserId)
+        entities::repository_member::Entity::find()
+            .filter(entities::repository_member::Column::RepoId.is_in(repo_ids.clone()))
+            .order_by_asc(entities::repository_member::Column::RepoId)
+            .order_by_asc(entities::repository_member::Column::UserId)
             .all(conn)
             .await
             .map_err(ApiError::internal)?
     };
-    let memberships_by_repo = memberships.into_iter().try_fold(
-        std::collections::BTreeMap::<String, Vec<RepoMembership>>::new(),
-        |mut by_repo, membership| {
-            let repo_id = membership.repo_id.clone();
+    let invites = if repo_ids.is_empty() {
+        Vec::new()
+    } else {
+        entities::repository_invite::Entity::find()
+            .filter(entities::repository_invite::Column::RepoId.is_in(repo_ids))
+            .order_by_asc(entities::repository_invite::Column::RepoId)
+            .order_by_asc(entities::repository_invite::Column::InvitedEmailNormalized)
+            .order_by_asc(entities::repository_invite::Column::Id)
+            .all(conn)
+            .await
+            .map_err(ApiError::internal)?
+    };
+    let members_by_repo = members.into_iter().try_fold(
+        std::collections::BTreeMap::<String, Vec<RepositoryMember>>::new(),
+        |mut by_repo, member| {
+            let repo_id = member.repo_id.clone();
             by_repo
                 .entry(repo_id)
                 .or_default()
-                .push(membership.try_into_domain()?);
+                .push(member.try_into_domain()?);
+            Ok::<_, ApiError>(by_repo)
+        },
+    )?;
+    let invites_by_repo = invites.into_iter().try_fold(
+        std::collections::BTreeMap::<String, Vec<RepositoryInvite>>::new(),
+        |mut by_repo, invite| {
+            let repo_id = invite.repo_id.clone();
+            by_repo
+                .entry(repo_id)
+                .or_default()
+                .push(invite.try_into_domain()?);
             Ok::<_, ApiError>(by_repo)
         },
     )?;
@@ -506,11 +558,9 @@ where
     repositories
         .into_iter()
         .map(|repo| {
-            let memberships = memberships_by_repo
-                .get(&repo.id)
-                .cloned()
-                .unwrap_or_default();
-            repo.try_into_domain(memberships)
+            let members = members_by_repo.get(&repo.id).cloned().unwrap_or_default();
+            let invitations = invites_by_repo.get(&repo.id).cloned().unwrap_or_default();
+            repo.try_into_domain(members, invitations)
         })
         .collect()
 }

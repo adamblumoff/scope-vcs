@@ -1,4 +1,4 @@
-import { parseRepoParams } from '@/api/repos'
+import { loadRepoLiveStateForRequest, parseRepoParams } from '@/api/repos'
 import { loadProjectionPreviewsForRequest } from '@/api/projection-preview'
 import {
   loadReviewFileDiffForRequest,
@@ -15,6 +15,10 @@ import { createServerFn } from '@tanstack/react-start'
 export const loadReview = createServerFn({ method: 'GET' })
   .validator(parseRepoParams)
   .handler(({ data }) => loadReviewForRequest(data))
+
+export const loadReviewRepoLiveState = createServerFn({ method: 'GET' })
+  .validator(parseRepoParams)
+  .handler(({ data }) => loadRepoLiveStateForRequest(data))
 
 export const loadReviewProjectionPreviews = createServerFn({ method: 'GET' })
   .validator(parseRepoParams)

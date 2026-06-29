@@ -16,6 +16,7 @@ import type {
   RepoSummary,
   SetRepoFileVisibilityInput,
 } from './types'
+export { parseRepoParams } from './repo-params'
 
 export async function loadRepoForRequest(data: RepoParams) {
   const api = createApiClient()
@@ -36,7 +37,7 @@ export async function loadRepoForRequest(data: RepoParams) {
         }),
     loadProjectionPreviewsForRequest(data, review ? 'review' : 'live', {
       api,
-      includeOwner: repo.role === 'Owner',
+      includeOwner: repo.access.actor !== 'Public',
     }),
   ])
 
@@ -81,8 +82,13 @@ async function loadOpenRepoReview(
 ) {
   if (
     !(await api.authenticated()) ||
-    repo.role !== 'Owner' ||
-    (repo.lifecycle_state !== 'PendingPublish' && !repo.staged_update_pending)
+    (repo.pending_import_pending && repo.access.actor !== 'Owner') ||
+    (!repo.pending_import_pending &&
+      repo.staged_update_pending &&
+      !repo.access.can_apply_changes &&
+      !repo.access.can_change_file_visibility &&
+      repo.access.actor !== 'Owner') ||
+    (!repo.pending_import_pending && !repo.staged_update_pending)
   ) {
     return null
   }
@@ -105,19 +111,4 @@ export async function setRepoFileVisibilityForRequest(
       },
     },
   )
-}
-
-export function parseRepoParams(
-  input: unknown,
-  message = 'Repository route is incomplete.',
-): RepoParams {
-  const data = input as Partial<RepoParams> | null
-  const owner = typeof data?.owner === 'string' ? data.owner.trim() : ''
-  const repo = typeof data?.repo === 'string' ? data.repo.trim() : ''
-
-  if (!owner || !repo) {
-    throw new Error(message)
-  }
-
-  return { owner, repo }
 }

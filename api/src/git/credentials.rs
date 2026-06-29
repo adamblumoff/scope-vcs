@@ -1,6 +1,4 @@
-use crate::domain::store::{
-    FirstPushTokenStatus, RepoPublicationState, RepoRole, StoredRepository, UserAccount,
-};
+use crate::domain::store::{FirstPushTokenStatus, StoredRepository, UserAccount};
 use crate::{
     auth::{
         scope::require_scope_user,
@@ -189,7 +187,7 @@ pub(crate) fn authorize_initial_push_for_repo(
     repo: &StoredRepository,
     credential: &InitialPushCredential,
 ) -> Result<(), ApiError> {
-    if repo.record.publication_state != RepoPublicationState::PendingFirstPush {
+    if !repo.is_waiting_for_first_push() {
         return Err(ApiError::conflict(
             "repo is not waiting for an initial Git push",
         ));
@@ -305,7 +303,7 @@ pub(crate) fn authorize_git_scope_token_for_repo(
         return Ok(token.owner_user_id.clone());
     }
 
-    authorize_git_member_token_for_repo(repo, secret, None)
+    authorize_git_read_token_for_repo(repo, secret)
 }
 
 pub(crate) fn authorize_git_write_token_for_repo(
@@ -323,13 +321,12 @@ pub(crate) fn authorize_git_write_token_for_repo(
         return Ok(token.owner_user_id.clone());
     }
 
-    authorize_git_member_token_for_repo(repo, secret, Some(RepoRole::Writer))
+    authorize_git_member_token_for_repo(repo, secret)
 }
 
-pub(crate) fn authorize_git_member_token_for_repo(
+pub(crate) fn authorize_git_read_token_for_repo(
     repo: &StoredRepository,
     secret: &str,
-    minimum_role: Option<RepoRole>,
 ) -> Result<String, ApiError> {
     let hash = git_clone_token_hash(secret);
     let Some(token) = repo
@@ -340,21 +337,31 @@ pub(crate) fn authorize_git_member_token_for_repo(
         return Err(ApiError::unauthorized("invalid Git credentials"));
     };
 
-    let role = if token.user_id == repo.record.owner_user_id {
-        RepoRole::Owner
-    } else {
-        let Some(role) = repo
-            .memberships
-            .iter()
-            .find(|membership| membership.user_id == token.user_id)
-            .map(|membership| membership.role)
-        else {
-            return Err(ApiError::unauthorized("invalid Git credentials"));
-        };
-        role
+    let access = repo.access_for_user_id(&token.user_id);
+    if !access.can_read_private_files
+        && access.actor != crate::domain::store::RepositoryActor::Owner
+    {
+        return Err(ApiError::unauthorized("invalid Git credentials"));
+    }
+
+    Ok(token.user_id.clone())
+}
+
+pub(crate) fn authorize_git_member_token_for_repo(
+    repo: &StoredRepository,
+    secret: &str,
+) -> Result<String, ApiError> {
+    let hash = git_clone_token_hash(secret);
+    let Some(token) = repo
+        .git_clone_tokens
+        .iter()
+        .find(|token| token.token_hash == hash)
+    else {
+        return Err(ApiError::unauthorized("invalid Git credentials"));
     };
 
-    if minimum_role.is_some_and(|minimum| role < minimum) {
+    let access = repo.access_for_user_id(&token.user_id);
+    if !access.can_push {
         return Err(ApiError::unauthorized("invalid Git credentials"));
     }
 

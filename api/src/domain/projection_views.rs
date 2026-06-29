@@ -2,7 +2,8 @@ use super::{
     policy::{Principal, PrincipalKind, ScopePath, Visibility},
     projection::{Projection, project_graph},
     repo_actions::preview_publish_import,
-    store::{RepoPublicationState, StoredRepository, pending_import_scope_path},
+    store::StoredRepository,
+    store::pending_import_scope_path,
 };
 use crate::error::ApiError;
 use sha1::{Digest, Sha1};
@@ -79,7 +80,7 @@ pub(crate) fn repo_for_projection_preview(
     match source {
         ProjectionSource::Live => Ok(preview),
         ProjectionSource::Review => {
-            if preview.record.publication_state == RepoPublicationState::PendingPublish {
+            if preview.has_pending_import_review() {
                 preview_publish_import(&mut preview)?;
             } else if let Some(staged_update) = preview.staged_update.clone() {
                 crate::git::import::apply_receive_pack_update(&mut preview, staged_update)?;
@@ -97,11 +98,13 @@ pub(crate) fn projection_preview(
     include_private_counts: bool,
 ) -> ProjectionPreviewView {
     let principal = projection_preview_principal(repo, audience);
+    let can_read_private_files = audience == ProjectionAudience::Owner;
     let projection = project_graph(
         &repo.policy,
         &repo.graph,
         &repo.visibility_events,
         &principal,
+        can_read_private_files,
     );
     let files = projection_preview_files(repo, &projection);
     let head_oid = projection_preview_head_oid(&projection, &files);
@@ -144,6 +147,7 @@ pub(crate) fn projection_preview(
                     id: repo.record.owner_user_id.clone(),
                     kind: PrincipalKind::User,
                 },
+                true,
             );
             let owner_files = projection_preview_files(repo, &owner_projection);
             (
@@ -196,11 +200,13 @@ pub(crate) fn projected_files(
     repo: &StoredRepository,
     principal: &Principal,
 ) -> Vec<ProjectionViewFile> {
+    let access = repo.access_for_principal(principal);
     let projection = project_graph(
         &repo.policy,
         &repo.graph,
         &repo.visibility_events,
         principal,
+        access.can_read_private_files,
     );
 
     projection_tree(&projection)
@@ -224,7 +230,8 @@ pub(crate) fn pending_import_files(
     let mut files = Vec::new();
     for file in &pending.files {
         let path = pending_scope_path(&file.path)?;
-        if !repo.policy.can_read(principal, &path) {
+        let access = repo.access_for_principal(principal);
+        if !repo.policy.can_read(&path, access.can_read_private_files) {
             continue;
         }
         files.push(ProjectionViewFile {
@@ -242,7 +249,7 @@ pub(crate) fn files_for_visibility_update(
     repo: &StoredRepository,
     principal: &Principal,
 ) -> Result<Vec<ProjectionViewFile>, ApiError> {
-    if repo.record.publication_state == RepoPublicationState::PendingPublish {
+    if repo.has_pending_import_review() {
         pending_import_files(repo, principal)
     } else {
         Ok(projected_files(repo, principal))
@@ -259,6 +266,7 @@ pub(crate) fn has_visible_projected_files(repo: &StoredRepository, principal: &P
         &repo.graph,
         &repo.visibility_events,
         principal,
+        repo.access_for_principal(principal).can_read_private_files,
     );
     !projection_tree(&projection).is_empty()
 }

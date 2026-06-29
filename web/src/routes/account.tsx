@@ -38,6 +38,11 @@ const revokeCliSession = createServerFn({ method: 'POST' })
   .validator(parseRevokeCliSessionInput)
   .handler(({ data }) => revokeCliSessionForRequest(data))
 
+const UNIX_TIME_FORMATTER = new Intl.DateTimeFormat('en-US', {
+  dateStyle: 'medium',
+  timeStyle: 'short',
+})
+
 export const Route = createFileRoute('/account')({
   beforeLoad: () => requireAccountAuth(),
   loader: () => loadCliSessions(),
@@ -80,7 +85,7 @@ function AccountRoute() {
 
   return (
     <main className="min-h-screen bg-background text-foreground">
-      <AppHeader action={<UserButton />} subtitle="Account" />
+      <AppHeader action={() => <UserButton />} subtitle="Account" />
       <PageContent>
         <PageHeader
           description="Manage Scope CLI access for this account."
@@ -195,8 +200,5 @@ function CliSessionList({
 }
 
 function formatUnixTime(value: number) {
-  return new Intl.DateTimeFormat('en-US', {
-    dateStyle: 'medium',
-    timeStyle: 'short',
-  }).format(new Date(value * 1000))
+  return UNIX_TIME_FORMATTER.format(new Date(value * 1000))
 }

@@ -1,5 +1,5 @@
 import { createApiClient } from '@/api/client'
-import { parseRepoParams } from './repo-detail'
+import { parseRepoParams } from './repo-params'
 import type {
   CommitDetail,
   CommitDetailInput,

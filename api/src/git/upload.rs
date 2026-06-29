@@ -1,6 +1,6 @@
 use crate::domain::policy::Principal;
 use crate::domain::projection::{Projection, project_graph};
-use crate::domain::store::{RepoPublicationState, RepoRole};
+use crate::domain::store::{RepoPublicationState, RepositoryActor};
 use crate::{
     auth::scope::{optional_scope_user, principal_for_scope_user},
     config::{DEFAULT_GIT_BRANCH, GIT_UPLOAD_PACK, UNPUBLISHED_GIT_ERROR},
@@ -12,7 +12,7 @@ use crate::{
     },
     object_store::source_blob_text,
     state::AppState,
-    state::{ensure_repo_read, find_repo, role_for_principal},
+    state::{ensure_repo_read, find_repo},
 };
 use axum::{
     body::Body,
@@ -45,12 +45,7 @@ pub(crate) async fn git_projection_for_request(
     if let Some(read_auth) = git_read_authorization_from_headers(headers)? {
         let (repo, principal) = principal_for_git_read_token(state, read_auth, owner, repo_name)?;
         if repo.record.publication_state != RepoPublicationState::Published {
-            return match role_for_principal(state, &repo, &principal)? {
-                Some(RepoRole::Owner) => Err(ApiError::forbidden(UNPUBLISHED_GIT_ERROR)),
-                _ => Err(ApiError::not_found(format!(
-                    "repo {owner}/{repo_name} not found"
-                ))),
-            };
+            return unpublished_git_read_error(&repo, owner, repo_name, &principal);
         }
 
         ensure_repo_read(state, &repo, &principal)?;
@@ -59,6 +54,7 @@ pub(crate) async fn git_projection_for_request(
             &repo.graph,
             &repo.visibility_events,
             &principal,
+            repo.access_for_principal(&principal).can_read_private_files,
         ));
     }
 
@@ -66,12 +62,7 @@ pub(crate) async fn git_projection_for_request(
     let user = optional_scope_user(state, headers).await?;
     let principal = principal_for_scope_user(&repo, user.as_ref());
     if repo.record.publication_state != RepoPublicationState::Published {
-        return match role_for_principal(state, &repo, &principal)? {
-            Some(RepoRole::Owner) => Err(ApiError::forbidden(UNPUBLISHED_GIT_ERROR)),
-            _ => Err(ApiError::not_found(format!(
-                "repo {owner}/{repo_name} not found"
-            ))),
-        };
+        return unpublished_git_read_error(&repo, owner, repo_name, &principal);
     }
 
     ensure_repo_read(state, &repo, &principal)?;
@@ -80,6 +71,7 @@ pub(crate) async fn git_projection_for_request(
         &repo.graph,
         &repo.visibility_events,
         &principal,
+        repo.access_for_principal(&principal).can_read_private_files,
     ))
 }
 
@@ -128,7 +120,7 @@ pub(crate) async fn owner_snapshot_repo_for_request(
         let principal = principal_for_scope_user(&repo, user.as_ref());
         (repo, principal)
     };
-    if role_for_principal(state, &repo, &principal)? != Some(RepoRole::Owner) {
+    if repo.access_for_principal(&principal).actor != RepositoryActor::Owner {
         return Ok(None);
     }
     if repo.record.publication_state != RepoPublicationState::Published {
@@ -143,6 +135,21 @@ pub(crate) async fn owner_snapshot_repo_for_request(
         return Ok(None);
     };
     cached_raw_git_snapshot_repo(state, snapshot).map(Some)
+}
+
+fn unpublished_git_read_error(
+    repo: &crate::domain::store::StoredRepository,
+    owner: &str,
+    repo_name: &str,
+    principal: &Principal,
+) -> Result<Projection, ApiError> {
+    if repo.access_for_principal(principal).actor == RepositoryActor::Owner {
+        Err(ApiError::forbidden(UNPUBLISHED_GIT_ERROR))
+    } else {
+        Err(ApiError::not_found(format!(
+            "repo {owner}/{repo_name} not found"
+        )))
+    }
 }
 
 fn principal_for_git_read_token(

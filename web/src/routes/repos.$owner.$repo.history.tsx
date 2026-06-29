@@ -10,7 +10,6 @@ import {
 } from '@/features/history/history-page'
 import {
   loadCommitDetail,
-  loadCommitFileDiff,
   loadCommitHistory,
 } from '@/routes/-repo-history-actions'
 import { createFileRoute } from '@tanstack/react-router'
@@ -71,8 +70,6 @@ function HistoryRoute() {
       histories={histories}
       initialAudience={initialAudience}
       initialCommit={initialCommit}
-      loadCommit={(data) => loadCommitDetail({ data })}
-      loadFileDiff={(data) => loadCommitFileDiff({ data })}
       params={params}
     />
   )

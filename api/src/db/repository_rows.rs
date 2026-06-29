@@ -1,6 +1,9 @@
 use super::entities;
 use crate::{domain::store::StoredRepository, error::ApiError};
-use sea_orm::{ColumnTrait, ConnectionTrait, EntityTrait, QueryFilter, sea_query::Expr};
+use sea_orm::{
+    ActiveModelTrait, ColumnTrait, ConnectionTrait, EntityTrait, IntoActiveModel, QueryFilter,
+    sea_query::Expr,
+};
 
 pub(super) async fn save_repository_row<C>(
     conn: &C,
@@ -70,12 +73,45 @@ where
             entities::repository::Column::StagedUpdate,
             Expr::value(row.staged_update),
         )
-        .col_expr(
-            entities::repository::Column::Invitations,
-            Expr::value(row.invitations),
-        )
         .exec(conn)
         .await
         .map_err(ApiError::internal)?;
+    save_repository_relations(conn, repo).await?;
+    Ok(())
+}
+
+pub(super) async fn save_repository_relations<C>(
+    conn: &C,
+    repo: &StoredRepository,
+) -> Result<(), ApiError>
+where
+    C: ConnectionTrait,
+{
+    entities::repository_member::Entity::delete_many()
+        .filter(entities::repository_member::Column::RepoId.eq(repo.record.id.clone()))
+        .exec(conn)
+        .await
+        .map_err(ApiError::internal)?;
+    for member in &repo.members {
+        entities::repository_member::Model::from_domain(member)?
+            .into_active_model()
+            .insert(conn)
+            .await
+            .map_err(ApiError::internal)?;
+    }
+
+    entities::repository_invite::Entity::delete_many()
+        .filter(entities::repository_invite::Column::RepoId.eq(repo.record.id.clone()))
+        .exec(conn)
+        .await
+        .map_err(ApiError::internal)?;
+    for invite in &repo.invitations {
+        entities::repository_invite::Model::from_domain(invite)?
+            .into_active_model()
+            .insert(conn)
+            .await
+            .map_err(ApiError::internal)?;
+    }
+
     Ok(())
 }

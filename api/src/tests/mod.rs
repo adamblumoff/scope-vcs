@@ -7,9 +7,9 @@ use crate::domain::projection::{
 use crate::domain::repo_actions::preview_publish_import;
 use crate::domain::store::{
     AccountAccess, AppCatalog, FirstPushToken, GitPushToken, LineDiff, PendingImport,
-    PendingImportFile, RepoMembership, RepoPublicationState, RepoRecord, RepoRole, RepoSettings,
-    RepoStorageCleanup, StagedFileChange, StagedFileChangeKind, StagedRepoUpdate, StoredRepository,
-    UserAccount,
+    PendingImportFile, RepoPublicationState, RepoRecord, RepoSettings, RepoStorageCleanup,
+    RepositoryInvite, RepositoryInviteState, RepositoryMember, RepositoryMemberPermissions,
+    StagedFileChange, StagedFileChangeKind, StagedRepoUpdate, StoredRepository, UserAccount,
 };
 use crate::{
     app::router,
@@ -319,7 +319,7 @@ fn test_repo(owner_id: &str) -> StoredRepository {
         git_push_token: None,
         git_clone_tokens: Vec::new(),
         pending_import: None,
-        policy: Policy::new(Visibility::Public, owner_id),
+        policy: Policy::new(Visibility::Public),
         graph: SourceGraph {
             repo_id: TEST_REPO_ID.to_string(),
             commits: Vec::new(),
@@ -327,12 +327,34 @@ fn test_repo(owner_id: &str) -> StoredRepository {
         visibility_events: Vec::new(),
         git_snapshot: None,
         staged_update: None,
-        memberships: vec![RepoMembership {
-            repo_id: TEST_REPO_ID.to_string(),
-            user_id: owner_id.to_string(),
-            role: RepoRole::Owner,
-        }],
+        members: Vec::new(),
         invitations: Vec::new(),
+    }
+}
+
+fn test_repository_member(
+    repo_id: impl Into<String>,
+    user_id: impl Into<String>,
+    permissions: RepositoryMemberPermissions,
+) -> RepositoryMember {
+    RepositoryMember {
+        repo_id: repo_id.into(),
+        user_id: user_id.into(),
+        permissions,
+        created_at_unix: 10,
+        updated_at_unix: 10,
+    }
+}
+
+fn member_permissions(
+    can_push: bool,
+    can_change_file_visibility: bool,
+    can_apply_changes: bool,
+) -> RepositoryMemberPermissions {
+    RepositoryMemberPermissions {
+        can_push,
+        can_change_file_visibility,
+        can_apply_changes,
     }
 }
 

@@ -4,14 +4,12 @@ import { Badge } from '@/components/ui/badge'
 type BadgeVariant = 'success' | 'warning' | 'info'
 
 const LIFECYCLE_VARIANT: Record<RepoPublicationState, BadgeVariant> = {
-  PendingFirstPush: 'info',
-  PendingPublish: 'warning',
+  Unpublished: 'info',
   Published: 'success',
 }
 
 const LIFECYCLE_LABEL: Record<RepoPublicationState, string> = {
-  PendingFirstPush: 'Setup',
-  PendingPublish: 'Review needed',
+  Unpublished: 'Unpublished',
   Published: 'Published',
 }
 

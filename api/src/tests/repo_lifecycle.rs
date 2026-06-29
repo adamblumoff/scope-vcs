@@ -30,9 +30,9 @@ async fn create_repo_route_creates_user_and_lists_repo() {
     let body = response_json(response).await;
     assert_eq!(body["repo"]["id"], "owner/scope_app");
     assert_eq!(body["repo"]["owner_handle"], "owner");
-    assert_eq!(body["repo"]["lifecycle_state"], "PendingFirstPush");
+    assert_eq!(body["repo"]["lifecycle_state"], "Unpublished");
     assert_eq!(body["repo"]["default_visibility"], "Private");
-    assert_eq!(body["repo"]["role"], "Owner");
+    assert_eq!(body["repo"]["access"]["actor"], "Owner");
     assert_eq!(body["repo"]["staged_update_pending"], false);
     assert_eq!(
         body["init"]["git_remote_url"],
@@ -66,8 +66,8 @@ async fn create_repo_route_creates_user_and_lists_repo() {
     let body = response_json(response).await;
     assert_eq!(body.as_array().unwrap().len(), 1);
     assert_eq!(body[0]["id"], "owner/scope_app");
-    assert_eq!(body[0]["lifecycle_state"], "PendingFirstPush");
-    assert_eq!(body[0]["role"], "Owner");
+    assert_eq!(body[0]["lifecycle_state"], "Unpublished");
+    assert_eq!(body[0]["access"]["actor"], "Owner");
 
     let catalog = lock_catalog(&state).unwrap();
     assert_eq!(catalog.users.len(), 1);
@@ -165,10 +165,7 @@ fn db_metadata_store_round_trips_repo_metadata() {
     repo.first_push_token = Some(first_push_token);
     repo.git_push_token = Some(git_push_token);
     repo.policy
-        .add_rule(VisibilityRule::private(
-            private_path.clone(),
-            vec![owner_id.clone()],
-        ))
+        .add_rule(VisibilityRule::private(private_path.clone()))
         .unwrap();
     repo.pending_import = Some(pending_import_fixture(vec![("imported.txt", "imported")]));
     repo.git_snapshot = Some(source_blob("live git snapshot"));
@@ -332,7 +329,7 @@ async fn list_repos_marks_published_repo_with_staged_update() {
     assert_eq!(summary_response.status(), StatusCode::OK);
     let summary_body = response_json(summary_response).await;
     assert_eq!(summary_body["id"], TEST_REPO_ID);
-    assert_eq!(summary_body["role"], serde_json::Value::Null);
+    assert_eq!(summary_body["access"]["actor"], "Public");
 
     let response = app
         .oneshot(
@@ -374,7 +371,7 @@ async fn get_repo_route_returns_owner_summary() {
     assert_eq!(body["id"], TEST_REPO_ID);
     assert_eq!(body["owner_handle"], TEST_REPO_OWNER);
     assert_eq!(body["name"], TEST_REPO_NAME);
-    assert_eq!(body["role"], "Owner");
+    assert_eq!(body["access"]["actor"], "Owner");
     assert_eq!(body["change_version"], 1);
 }
 
@@ -402,7 +399,7 @@ async fn get_repo_route_hides_change_version_from_public_reader() {
 
     assert_eq!(response.status(), StatusCode::OK);
     let body = response_json(response).await;
-    assert_eq!(body["role"], serde_json::Value::Null);
+    assert_eq!(body["access"]["actor"], "Public");
     assert_eq!(body["change_version"], 0);
 }
 
@@ -584,6 +581,170 @@ async fn list_repos_route_requires_sign_in() {
 }
 
 #[tokio::test]
+async fn member_management_hides_private_repo_from_unrelated_users() {
+    let state = test_state_with_repo();
+    cache_test_jwks(&state);
+    {
+        let mut repo = repo_with_readme();
+        repo.record.default_visibility = Visibility::Private;
+        repo.policy = Policy::new(Visibility::Private);
+        repo.graph.commits[0].changes[0].visibility = Visibility::Private;
+
+        let mut catalog = lock_catalog(&state).unwrap();
+        catalog.repositories.insert(TEST_REPO_ID.to_string(), repo);
+    }
+
+    let response = router(state)
+        .oneshot(
+            Request::builder()
+                .method("GET")
+                .uri("/v1/repos/owner/repo/members")
+                .header(
+                    AUTHORIZATION,
+                    bearer_header_for("user_other", "other@example.com"),
+                )
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::NOT_FOUND);
+}
+
+#[tokio::test]
+async fn accept_expired_invite_persists_expired_state() {
+    let state = test_state_with_repo();
+    cache_test_jwks(&state);
+    let token = "expired-invite-token";
+    let token_hash = repository_invite_token_hash(token);
+    let invited_email = "invitee@example.com";
+    let expires_at_unix = unix_now().saturating_sub(1);
+    {
+        let mut catalog = lock_catalog(&state).unwrap();
+        let repo = catalog.repositories.get_mut(TEST_REPO_ID).unwrap();
+        repo.invitations.push(RepositoryInvite {
+            id: "invite_1".to_string(),
+            repo_id: TEST_REPO_ID.to_string(),
+            invited_email: invited_email.to_string(),
+            invited_email_normalized: crate::domain::store::normalize_repository_invite_email(
+                invited_email,
+            ),
+            permissions: RepositoryMemberPermissions::default(),
+            invited_by_user_id: test_owner_id(),
+            state: RepositoryInviteState::Pending,
+            token_hash: token_hash.clone(),
+            created_at_unix: expires_at_unix.saturating_sub(100),
+            updated_at_unix: expires_at_unix.saturating_sub(100),
+            expires_at_unix,
+            accepted_by_user_id: None,
+            accepted_at_unix: None,
+            revoked_at_unix: None,
+        });
+    }
+
+    let response = router(state.clone())
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri(format!("/v1/repository-invites/{token}/accept"))
+                .header(
+                    AUTHORIZATION,
+                    bearer_header_for("user_invitee", invited_email),
+                )
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::CONFLICT);
+    let catalog = lock_catalog(&state).unwrap();
+    let repo = catalog.repositories.get(TEST_REPO_ID).unwrap();
+    let invite = repo
+        .invitations
+        .iter()
+        .find(|invite| invite.token_hash == token_hash)
+        .unwrap();
+    assert_eq!(invite.state, RepositoryInviteState::Expired);
+}
+
+#[tokio::test]
+async fn owner_can_revoke_pending_invite_before_acceptance() {
+    let state = test_state_with_repo();
+    cache_test_jwks(&state);
+    let token = "revoked-invite-token";
+    let token_hash = repository_invite_token_hash(token);
+    let invited_email = "invitee@example.com";
+    {
+        let mut catalog = lock_catalog(&state).unwrap();
+        let repo = catalog.repositories.get_mut(TEST_REPO_ID).unwrap();
+        repo.invitations.push(RepositoryInvite {
+            id: "invite_revoke".to_string(),
+            repo_id: TEST_REPO_ID.to_string(),
+            invited_email: invited_email.to_string(),
+            invited_email_normalized: crate::domain::store::normalize_repository_invite_email(
+                invited_email,
+            ),
+            permissions: RepositoryMemberPermissions::default(),
+            invited_by_user_id: test_owner_id(),
+            state: RepositoryInviteState::Pending,
+            token_hash: token_hash.clone(),
+            created_at_unix: unix_now(),
+            updated_at_unix: unix_now(),
+            expires_at_unix: unix_now() + 600,
+            accepted_by_user_id: None,
+            accepted_at_unix: None,
+            revoked_at_unix: None,
+        });
+    }
+
+    let app = router(state.clone());
+    let revoke_response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("DELETE")
+                .uri("/v1/repos/owner/repo/invites/invite_revoke")
+                .header(AUTHORIZATION, bearer_header())
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(revoke_response.status(), StatusCode::OK);
+    let body = response_json(revoke_response).await;
+    assert_eq!(body["state"], "Revoked");
+
+    let accept_response = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri(format!("/v1/repository-invites/{token}/accept"))
+                .header(
+                    AUTHORIZATION,
+                    bearer_header_for("user_invitee", invited_email),
+                )
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(accept_response.status(), StatusCode::CONFLICT);
+    let catalog = lock_catalog(&state).unwrap();
+    let repo = catalog.repositories.get(TEST_REPO_ID).unwrap();
+    let invite = repo
+        .invitations
+        .iter()
+        .find(|invite| invite.id == "invite_revoke")
+        .unwrap();
+    assert_eq!(invite.state, RepositoryInviteState::Revoked);
+    assert!(invite.revoked_at_unix.is_some());
+}
+
+#[tokio::test]
 async fn list_repos_route_hides_pending_repo_from_reader_member() {
     let state = test_state_with_repo();
     cache_test_jwks(&state);
@@ -606,12 +767,12 @@ async fn list_repos_route_hides_pending_repo_from_reader_member() {
             },
         );
         let repo = catalog.repositories.get_mut(TEST_REPO_ID).unwrap();
-        repo.record.publication_state = RepoPublicationState::PendingPublish;
-        repo.memberships.push(RepoMembership {
-            repo_id: TEST_REPO_ID.to_string(),
-            user_id: reader_id,
-            role: RepoRole::Reader,
-        });
+        repo.record.publication_state = RepoPublicationState::Unpublished;
+        repo.members.push(test_repository_member(
+            TEST_REPO_ID,
+            reader_id,
+            RepositoryMemberPermissions::default(),
+        ));
     }
 
     let response = router(state)

@@ -5,7 +5,7 @@ pub(crate) mod upload;
 
 pub(crate) use credentials::*;
 
-use crate::domain::store::{RepoPublicationState, RepoRole};
+use crate::domain::store::{RepoPublicationState, RepositoryActor};
 use crate::{
     auth::scope::principal_for_user_id,
     config::*,
@@ -19,7 +19,7 @@ use crate::{
         upload::*,
     },
     state::AppState,
-    state::{find_repo, role_for_principal},
+    state::find_repo,
 };
 use axum::{
     Json,
@@ -187,19 +187,22 @@ pub(crate) async fn receive_pack_access(
                 InitialPushCredential::FirstPushToken { secret }
             };
 
+            if repo.is_waiting_for_first_push() {
+                authorize_initial_push_for_repo(&repo, &credential)
+                    .map_err(git_credential_error)?;
+                return Ok(ReceivePackAccess::FirstPush { credential });
+            }
+            if repo.has_pending_import_review() {
+                authorize_receive_pack_scope_token_for_repo(&repo, &credential)
+                    .map_err(git_credential_error)?;
+                return Err(ApiError::conflict(
+                    "repo is waiting for publish and cannot receive another push",
+                ));
+            }
             match repo.record.publication_state {
-                RepoPublicationState::PendingFirstPush => {
-                    authorize_initial_push_for_repo(&repo, &credential)
-                        .map_err(git_credential_error)?;
-                    Ok(ReceivePackAccess::FirstPush { credential })
-                }
-                RepoPublicationState::PendingPublish => {
-                    authorize_receive_pack_scope_token_for_repo(&repo, &credential)
-                        .map_err(git_credential_error)?;
-                    Err(ApiError::conflict(
-                        "repo is waiting for publish and cannot receive another push",
-                    ))
-                }
+                RepoPublicationState::Unpublished => Err(ApiError::conflict(
+                    "repo is waiting for publish and cannot receive another push",
+                )),
                 RepoPublicationState::Published => match credential {
                     InitialPushCredential::GitPushToken { secret } => {
                         let author_id = authorize_git_write_token_for_repo(&repo, &secret)
@@ -213,19 +216,34 @@ pub(crate) async fn receive_pack_access(
         ReceivePackAuthorization::ScopeUser(user) => {
             let repo = find_repo(state, owner, repo_name)?;
             let principal = principal_for_user_id(&repo, &user.id);
-            if role_for_principal(state, &repo, &principal)?
-                .is_none_or(|role| role < RepoRole::Writer)
-            {
+            let access = repo.access_for_principal(&principal);
+            if repo.is_waiting_for_first_push() {
+                if access.actor != RepositoryActor::Owner {
+                    return Err(ApiError::not_found(format!(
+                        "repo {owner}/{repo_name} not found"
+                    )));
+                }
+                return Err(ApiError::unauthorized(
+                    "first-push token or Git push token required",
+                ));
+            }
+            if repo.has_pending_import_review() {
+                if access.actor != RepositoryActor::Owner {
+                    return Err(ApiError::not_found(format!(
+                        "repo {owner}/{repo_name} not found"
+                    )));
+                }
+                return Err(ApiError::conflict(
+                    "repo is waiting for publish and cannot receive another push",
+                ));
+            }
+            if !access.can_push {
                 return Err(ApiError::not_found(format!(
                     "repo {owner}/{repo_name} not found"
                 )));
             }
-
             match repo.record.publication_state {
-                RepoPublicationState::PendingFirstPush => Err(ApiError::unauthorized(
-                    "first-push token or Git push token required",
-                )),
-                RepoPublicationState::PendingPublish => Err(ApiError::conflict(
+                RepoPublicationState::Unpublished => Err(ApiError::conflict(
                     "repo is waiting for publish and cannot receive another push",
                 )),
                 RepoPublicationState::Published => {
@@ -249,13 +267,13 @@ pub(crate) fn handle_git_receive_pack(
         ReceivePackAccess::FirstPush { .. } => {
             ensure_first_push_receive_pack_staging_repo(state, owner, repo_name)?
         }
-        ReceivePackAccess::PublishedMember { author_id } => {
+        ReceivePackAccess::PublishedMember { author_id, .. } => {
             ensure_published_receive_pack_staging_repo(state, owner, repo_name, author_id)?
         }
     };
     let remote_user = match &access {
         ReceivePackAccess::FirstPush { .. } => "first-push-token",
-        ReceivePackAccess::PublishedMember { author_id } => author_id.as_str(),
+        ReceivePackAccess::PublishedMember { author_id, .. } => author_id.as_str(),
     };
     let receive_started_at = Instant::now();
     let refs_before_receive = if method == "POST" {
@@ -383,9 +401,9 @@ pub(crate) fn handle_git_receive_pack(
                     .cloned()
                     .chain(std::iter::once(update.git_snapshot.clone()))
                     .collect::<Vec<_>>();
-                if let Err(error) =
-                    persist_receive_pack_update_and_promote(state, owner, repo_name, update)
-                {
+                if let Err(error) = persist_receive_pack_update_and_promote(
+                    state, owner, repo_name, update, &author_id,
+                ) {
                     crate::state::best_effort_cleanup_rollback_source_blobs(state, &uploaded_blobs);
                     let _ = fs::remove_dir_all(&staging_repo);
                     return Err(error);

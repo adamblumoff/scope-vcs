@@ -8,21 +8,19 @@ async fn clone_credential_endpoint_accepts_cli_session_for_repo_member_projectio
     let member_id = crate::db::scope_user_id_for_auth_identity("clerk", member_clerk_id);
     {
         let mut repo = repo_with_readme();
-        repo.memberships.push(RepoMembership {
-            repo_id: TEST_REPO_ID.to_string(),
-            user_id: member_id.clone(),
-            role: RepoRole::Reader,
-        });
+        repo.members.push(test_repository_member(
+            TEST_REPO_ID,
+            member_id.clone(),
+            RepositoryMemberPermissions::default(),
+        ));
         repo.policy
             .add_rule(VisibilityRule::private(
                 ScopePath::parse("/member-secret.txt").unwrap(),
-                [member_id.clone()],
             ))
             .unwrap();
         repo.policy
             .add_rule(VisibilityRule::private(
                 ScopePath::parse("/owner-secret.txt").unwrap(),
-                [repo.record.owner_user_id.clone()],
             ))
             .unwrap();
         repo.graph.commits[0].changes.extend([
@@ -85,7 +83,7 @@ async fn clone_credential_endpoint_accepts_cli_session_for_repo_member_projectio
 
     assert!(visible_paths.contains(&"/README.md"));
     assert!(visible_paths.contains(&"/member-secret.txt"));
-    assert!(!visible_paths.contains(&"/owner-secret.txt"));
+    assert!(visible_paths.contains(&"/owner-secret.txt"));
 }
 
 #[tokio::test]
@@ -100,10 +98,6 @@ async fn clone_credential_endpoint_rejects_cli_session_without_target_repo_membe
         other_repo.record.owner_handle = "other".to_string();
         other_repo.record.name = "owned".to_string();
         other_repo.graph.repo_id = other_repo.record.id.clone();
-        for membership in &mut other_repo.memberships {
-            membership.repo_id = other_repo.record.id.clone();
-        }
-
         let mut catalog = lock_catalog(&state).unwrap();
         catalog
             .repositories
@@ -136,7 +130,6 @@ async fn public_git_projection_without_credentials_omits_private_files() {
         repo.policy
             .add_rule(VisibilityRule::private(
                 ScopePath::parse("/owner-secret.txt").unwrap(),
-                [repo.record.owner_user_id.clone()],
             ))
             .unwrap();
         repo.graph.commits[0].changes.push(FileChange {

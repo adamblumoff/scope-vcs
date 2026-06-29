@@ -1,10 +1,10 @@
 import type {
   ProjectionPreviewAudience,
   ProjectionPreviews,
+  RepoAccess,
   RepoParams,
   RepoReview,
   ReviewFileDiff,
-  ReviewFileDiffInput,
   ReviewFile,
   ReviewLineDiff,
   Visibility,
@@ -19,9 +19,10 @@ import { VisibilityBadge } from '@/components/visibility-badge'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { storeHomeFlash } from '@/lib/home-flash'
+import { loadReviewFileDiff } from '@/routes/-repo-review-actions'
 import { useNavigate, useRouter } from '@tanstack/react-router'
 import { GitBranch, LoaderCircle, Rocket, X } from 'lucide-react'
-import { useEffect, useMemo, useReducer, useState } from 'react'
+import { useEffect, useMemo, useReducer, useRef, useState } from 'react'
 import {
   initialReviewPageState,
   reviewPageReducer,
@@ -29,19 +30,10 @@ import {
 import { ReviewPreviewMetrics } from './review-preview-metrics'
 import { ReviewVisibilityPanel } from './review-visibility-panel'
 
-export function ReviewPage({
-  applyStagedUpdate,
-  initialReview,
-  params,
-  projectionPreviews,
-  publishRepo,
-  rejectStagedUpdate,
-  loadFileDiff,
-  setReviewVisibility,
-}: {
+type ReviewPageProps = {
+  access: RepoAccess
   applyStagedUpdate: (params: RepoParams) => Promise<unknown>
   initialReview: RepoReview
-  loadFileDiff: (input: ReviewFileDiffInput) => Promise<ReviewFileDiff>
   params: RepoParams
   projectionPreviews: ProjectionPreviews
   publishRepo: (params: RepoParams) => Promise<unknown>
@@ -52,7 +44,168 @@ export function ReviewPage({
     files: ReviewFile[],
     visibility: Visibility,
   ) => Promise<RepoReview>
-}) {
+}
+
+export function ReviewPage(props: ReviewPageProps) {
+  const { params, projectionPreviews } = props
+  const {
+    audience,
+    canApplyReview,
+    canChangeVisibility,
+    closeFileDiff,
+    completeReview,
+    error,
+    fileDiffState,
+    pendingKey,
+    preview,
+    publishing,
+    rejecting,
+    rejectUpdate,
+    review,
+    reviewRailClassName,
+    selectAudience,
+    selectFile,
+    selectedFilePath,
+    setVisibility,
+    showPrivateCounts,
+    stagedReview,
+    visibilityPending,
+  } = useReviewPageModel(props)
+
+  return (
+    <main className="min-h-screen bg-background text-foreground">
+      <AppHeader
+        breadcrumb={() => <RepoBreadcrumb params={params} section="review" />}
+        contentClassName={reviewRailClassName}
+      />
+
+      <PageContent className={reviewRailClassName}>
+        <PageHeader
+          actions={() => (
+            <>
+              {preview && (
+                <ReviewPreviewMetrics
+                  preview={preview}
+                  showPrivateCounts={showPrivateCounts}
+                />
+              )}
+            </>
+          )}
+          badges={() => (
+            <>
+              <LifecycleBadge state={review.publication_state} />
+              {review.default_visibility && (
+                <VisibilityBadge visibility={review.default_visibility} />
+              )}
+              <Badge variant="neutral">{review.files.length} files</Badge>
+              {review.kind === 'StagedUpdate' && review.branch && (
+                <Badge variant="neutral">
+                  <GitBranch className="size-3" />
+                  {review.branch}
+                </Badge>
+              )}
+            </>
+          )}
+          title={`${params.owner}/${params.repo}`}
+          titleClassName="font-mono"
+        >
+          <div className="mt-4 flex flex-wrap items-center gap-2">
+            {stagedReview && canApplyReview && (
+              <Button
+                disabled={
+                  publishing ||
+                  rejecting ||
+                  visibilityPending ||
+                  review.files.length === 0
+                }
+                onClick={() => void rejectUpdate()}
+                size="sm"
+                variant="danger"
+                type="button"
+              >
+                {rejecting ? (
+                  <LoaderCircle className="size-3.5 animate-spin" />
+                ) : (
+                  <X className="size-3.5" />
+                )}
+                <span>{rejecting ? 'Rejecting' : 'Reject'}</span>
+              </Button>
+            )}
+            {canApplyReview && (
+              <Button
+                disabled={
+                  publishing ||
+                  rejecting ||
+                  visibilityPending ||
+                  (stagedReview && review.files.length === 0)
+                }
+                onClick={() => void completeReview()}
+                size="sm"
+                variant="success"
+                type="button"
+              >
+                {publishing ? (
+                  <LoaderCircle className="size-3.5 animate-spin" />
+                ) : (
+                  <Rocket className="size-3.5" />
+                )}
+                <span>
+                  {publishing
+                    ? stagedReview
+                      ? 'Applying'
+                      : 'Publishing'
+                    : stagedReview
+                      ? 'Apply'
+                      : 'Publish'}
+                </span>
+              </Button>
+            )}
+            <ReviewLineDiffPill lineDiff={review.line_diff} />
+          </div>
+        </PageHeader>
+
+        {error && (
+          <PageErrorAlert title="Review update failed">
+            {error}
+          </PageErrorAlert>
+        )}
+
+        <ReviewVisibilityPanel
+          disabled={publishing || rejecting}
+          files={review.files}
+          onCloseFileDiff={closeFileDiff}
+          onSelectFile={selectFile}
+          onSetVisibility={
+            canChangeVisibility
+              ? (files, visibility, key) =>
+                  void setVisibility(files, visibility, key)
+              : undefined
+          }
+          pendingKey={pendingKey}
+          preferredAudience={audience}
+          previews={projectionPreviews}
+          selectedFileDiff={fileDiffState.diff}
+          selectedFileDiffError={fileDiffState.error}
+          selectedFileDiffLoading={fileDiffState.status === 'loading'}
+          selectedFilePath={selectedFilePath}
+          onSelectAudience={selectAudience}
+          stagedReview={stagedReview}
+        />
+      </PageContent>
+    </main>
+  )
+}
+
+function useReviewPageModel({
+  access,
+  applyStagedUpdate,
+  initialReview,
+  params,
+  projectionPreviews,
+  publishRepo,
+  rejectStagedUpdate,
+  setReviewVisibility,
+}: ReviewPageProps) {
   const navigate = useNavigate()
   const router = useRouter()
   const [state, dispatch] = useReducer(
@@ -72,6 +225,11 @@ export function ReviewPage({
   const publishing = state.runningAction === 'publish'
   const rejecting = state.runningAction === 'reject'
   const stagedReview = review.kind === 'StagedUpdate'
+  const canApplyReview =
+    review.kind === 'PendingImport'
+      ? access.actor === 'Owner'
+      : access.can_apply_changes
+  const canChangeVisibility = access.can_change_file_visibility
   const visibilityPending = pendingKey !== null
   const availableAudiences = useMemo(
     () =>
@@ -89,19 +247,31 @@ export function ReviewPage({
   const reviewRailClassName = selectedFilePath
     ? 'max-w-[1320px] transition-[max-width] duration-300 ease-out'
     : 'max-w-[1040px] transition-[max-width] duration-300 ease-out'
+  const diffRequestKey = selectedFilePath
+    ? reviewFileDiffRequestKey(params.owner, params.repo, selectedFilePath)
+    : null
+  const activeDiffKeyRef = useRef<string | null>(diffRequestKey)
+
+  if (activeDiffKeyRef.current !== diffRequestKey) {
+    activeDiffKeyRef.current = diffRequestKey
+    setFileDiffState(
+      diffRequestKey
+        ? { diff: null, error: null, status: 'loading' }
+        : emptyFileDiffState,
+    )
+  }
 
   useEffect(() => {
-    if (!selectedFilePath) {
-      setFileDiffState(emptyFileDiffState)
+    if (!diffRequestKey || selectedFilePath === null) {
       return
     }
-
     let active = true
-    setFileDiffState({ diff: null, error: null, status: 'loading' })
-    loadFileDiff({
-      owner: params.owner,
-      path: selectedFilePath,
-      repo: params.repo,
+    loadReviewFileDiff({
+      data: {
+        owner: params.owner,
+        path: selectedFilePath,
+        repo: params.repo,
+      },
     }).then(
       (diff) => {
         if (active) {
@@ -122,7 +292,7 @@ export function ReviewPage({
     return () => {
       active = false
     }
-  }, [loadFileDiff, params.owner, params.repo, selectedFilePath])
+  }, [diffRequestKey, params.owner, params.repo, selectedFilePath])
 
   async function setVisibility(
     files: ReviewFile[],
@@ -194,133 +364,39 @@ export function ReviewPage({
       await router.invalidate()
     } catch (rejectError) {
       dispatch({
-        message: rejectError instanceof Error ? rejectError.message : 'reject failed',
+        message:
+          rejectError instanceof Error ? rejectError.message : 'reject failed',
         type: 'actionFailed',
       })
     }
   }
 
-  return (
-    <main className="min-h-screen bg-background text-foreground">
-      <AppHeader
-        breadcrumb={<RepoBreadcrumb params={params} section="review" />}
-        contentClassName={reviewRailClassName}
-      />
-
-      <PageContent className={reviewRailClassName}>
-        <PageHeader
-          actions={() => (
-            <>
-              {preview && (
-                <ReviewPreviewMetrics
-                  preview={preview}
-                  showPrivateCounts={showPrivateCounts}
-                />
-              )}
-            </>
-          )}
-          badges={() => (
-            <>
-              <LifecycleBadge state={review.publication_state} />
-              {review.default_visibility && (
-                <VisibilityBadge visibility={review.default_visibility} />
-              )}
-              <Badge variant="neutral">{review.files.length} files</Badge>
-              {stagedReview && review.branch && (
-                <Badge variant="neutral">
-                  <GitBranch className="size-3" />
-                  {review.branch}
-                </Badge>
-              )}
-            </>
-          )}
-          title={`${params.owner}/${params.repo}`}
-          titleClassName="font-mono"
-        >
-          <div className="mt-4 flex flex-wrap items-center gap-2">
-            {stagedReview && (
-              <Button
-                disabled={
-                  publishing ||
-                  rejecting ||
-                  visibilityPending ||
-                  review.files.length === 0
-                }
-                onClick={() => void rejectUpdate()}
-                size="sm"
-                variant="danger"
-                type="button"
-              >
-                {rejecting ? (
-                  <LoaderCircle className="size-3.5 animate-spin" />
-                ) : (
-                  <X className="size-3.5" />
-                )}
-                <span>{rejecting ? 'Rejecting' : 'Reject'}</span>
-              </Button>
-            )}
-            <Button
-              disabled={
-                publishing ||
-                rejecting ||
-                visibilityPending ||
-                (stagedReview && review.files.length === 0)
-              }
-              onClick={() => void completeReview()}
-              size="sm"
-              variant="success"
-              type="button"
-            >
-              {publishing ? (
-                <LoaderCircle className="size-3.5 animate-spin" />
-              ) : (
-                <Rocket className="size-3.5" />
-              )}
-              <span>
-                {publishing
-                  ? stagedReview
-                    ? 'Applying'
-                    : 'Publishing'
-                  : stagedReview
-                    ? 'Apply'
-                    : 'Publish'}
-              </span>
-            </Button>
-            <ReviewLineDiffPill lineDiff={review.line_diff} />
-          </div>
-        </PageHeader>
-
-        {error && (
-          <PageErrorAlert title="Review update failed">
-            {error}
-          </PageErrorAlert>
-        )}
-
-        <ReviewVisibilityPanel
-          disabled={publishing || rejecting}
-          files={review.files}
-          onCloseFileDiff={() => setSelectedFilePath(null)}
-          onSelectFile={(file) =>
-            setSelectedFilePath((currentPath) =>
-              currentPath === file.path ? null : file.path,
-            )
-          }
-          onSetVisibility={(files, visibility, key) =>
-            void setVisibility(files, visibility, key)
-          }
-          pendingKey={pendingKey}
-          preferredAudience={audience}
-          previews={projectionPreviews}
-          selectedFileDiff={fileDiffState.diff}
-          selectedFileDiffError={fileDiffState.error}
-          selectedFileDiffLoading={fileDiffState.status === 'loading'}
-          selectedFilePath={selectedFilePath}
-          onSelectAudience={setPreferredAudience}
-          stagedReview={stagedReview}
-        />
-      </PageContent>
-    </main>
-  )
+  return {
+    audience,
+    canApplyReview,
+    canChangeVisibility,
+    closeFileDiff: () => setSelectedFilePath(null),
+    completeReview,
+    error,
+    fileDiffState,
+    pendingKey,
+    preview,
+    publishing,
+    rejecting,
+    rejectUpdate,
+    review,
+    reviewRailClassName,
+    selectAudience: setPreferredAudience,
+    selectFile: (file: ReviewFile) =>
+      setSelectedFilePath((currentPath) =>
+        currentPath === file.path ? null : file.path,
+      ),
+    selectedFilePath,
+    setVisibility,
+    showPrivateCounts,
+    stagedReview,
+    visibilityPending,
+  }
 }
 
 type ReviewFileDiffState =
@@ -333,6 +409,10 @@ const emptyFileDiffState: ReviewFileDiffState = {
   diff: null,
   error: null,
   status: 'idle',
+}
+
+function reviewFileDiffRequestKey(owner: string, repo: string, path: string) {
+  return `${owner}/${repo}:${path}`
 }
 
 function ReviewLineDiffPill({

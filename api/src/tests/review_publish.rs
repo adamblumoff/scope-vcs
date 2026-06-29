@@ -7,7 +7,7 @@ async fn pending_publish_repo_session_is_owner_only() {
     {
         let mut catalog = lock_catalog(&state).unwrap();
         let repo = catalog.repositories.get_mut(TEST_REPO_ID).unwrap();
-        repo.record.publication_state = RepoPublicationState::PendingPublish;
+        repo.record.publication_state = RepoPublicationState::Unpublished;
     }
     let app = router(state);
 
@@ -46,9 +46,9 @@ async fn pending_publish_repo_session_is_owner_only() {
 #[test]
 fn pending_import_review_uses_default_visibility() {
     let mut repo = test_repo(&test_owner_id());
-    repo.record.publication_state = RepoPublicationState::PendingPublish;
+    repo.record.publication_state = RepoPublicationState::Unpublished;
     repo.record.default_visibility = Visibility::Private;
-    repo.policy = Policy::new(Visibility::Private, repo.record.owner_user_id.clone());
+    repo.policy = Policy::new(Visibility::Private);
     repo.pending_import = Some(pending_import_fixture(vec![
         ("README.md", "hello"),
         ("src/main.rs", "fn main() {}"),
@@ -71,11 +71,11 @@ fn pending_import_review_uses_default_visibility() {
 #[test]
 fn pending_visibility_toggles_apply_before_publish() {
     let mut repo = test_repo(&test_owner_id());
-    repo.record.publication_state = RepoPublicationState::PendingPublish;
+    repo.record.publication_state = RepoPublicationState::Unpublished;
     repo.pending_import = Some(pending_import_fixture(vec![("README.md", "hello")]));
     let path = ScopePath::parse("/README.md").unwrap();
     repo.policy
-        .add_rule(VisibilityRule::private(path.clone(), repo_owner_ids(&repo)))
+        .add_rule(VisibilityRule::private(path.clone()))
         .unwrap();
     let owner = Principal {
         id: repo.record.owner_user_id.clone(),
@@ -97,9 +97,9 @@ async fn pending_visibility_toggle_does_not_create_public_projection_history() {
     {
         let mut catalog = lock_catalog(&state).unwrap();
         let repo = catalog.repositories.get_mut(TEST_REPO_ID).unwrap();
-        repo.record.publication_state = RepoPublicationState::PendingPublish;
+        repo.record.publication_state = RepoPublicationState::Unpublished;
         repo.record.default_visibility = Visibility::Public;
-        repo.policy = Policy::new(Visibility::Public, repo.record.owner_user_id.clone());
+        repo.policy = Policy::new(Visibility::Public);
         repo.graph.commits.clear();
         repo.pending_import = Some(pending_import_fixture(vec![
             ("README.md", "private before publish"),
@@ -136,6 +136,7 @@ async fn pending_visibility_toggle_does_not_create_public_projection_history() {
         &repo.graph,
         &repo.visibility_events,
         &Principal::public(),
+        false,
     );
 
     assert!(
@@ -161,13 +162,12 @@ async fn owner_can_preview_pending_import_public_projection_before_publish() {
     {
         let mut catalog = lock_catalog(&state).unwrap();
         let repo = catalog.repositories.get_mut(TEST_REPO_ID).unwrap();
-        repo.record.publication_state = RepoPublicationState::PendingPublish;
+        repo.record.publication_state = RepoPublicationState::Unpublished;
         repo.record.default_visibility = Visibility::Public;
-        repo.policy = Policy::new(Visibility::Public, repo.record.owner_user_id.clone());
+        repo.policy = Policy::new(Visibility::Public);
         repo.policy
             .add_rule(VisibilityRule::private(
                 ScopePath::parse("/secret.txt").unwrap(),
-                repo_owner_ids(repo),
             ))
             .unwrap();
         repo.pending_import = Some(pending_import_fixture(vec![
@@ -207,7 +207,7 @@ async fn owner_can_preview_pending_import_public_projection_before_publish() {
     let repo = find_repo(&state, TEST_REPO_OWNER, TEST_REPO_NAME).unwrap();
     assert_eq!(
         repo.record.publication_state,
-        RepoPublicationState::PendingPublish
+        RepoPublicationState::Unpublished
     );
     assert!(repo.pending_import.is_some());
     assert!(repo.graph.commits.is_empty());
@@ -220,7 +220,7 @@ async fn owner_can_load_pending_import_file_diff() {
     {
         let mut catalog = lock_catalog(&state).unwrap();
         let repo = catalog.repositories.get_mut(TEST_REPO_ID).unwrap();
-        repo.record.publication_state = RepoPublicationState::PendingPublish;
+        repo.record.publication_state = RepoPublicationState::Unpublished;
         repo.pending_import = Some(pending_import_fixture(vec![
             ("README.md", "hello from import"),
             ("src/main.rs", "fn main() {}"),
@@ -254,7 +254,7 @@ async fn pending_import_review_includes_total_line_diff() {
     {
         let mut catalog = lock_catalog(&state).unwrap();
         let repo = catalog.repositories.get_mut(TEST_REPO_ID).unwrap();
-        repo.record.publication_state = RepoPublicationState::PendingPublish;
+        repo.record.publication_state = RepoPublicationState::Unpublished;
         repo.pending_import = Some(pending_import_fixture(vec![
             ("README.md", "hello\nfrom import\n"),
             ("src/main.rs", "fn main() {}"),
@@ -285,7 +285,7 @@ async fn public_cannot_preview_pending_import_review() {
     {
         let mut catalog = lock_catalog(&state).unwrap();
         let repo = catalog.repositories.get_mut(TEST_REPO_ID).unwrap();
-        repo.record.publication_state = RepoPublicationState::PendingPublish;
+        repo.record.publication_state = RepoPublicationState::Unpublished;
         repo.pending_import = Some(pending_import_fixture(vec![("README.md", "hello")]));
     }
 
@@ -439,6 +439,156 @@ async fn staged_update_review_includes_total_line_diff() {
 }
 
 #[tokio::test]
+async fn visibility_member_can_load_staged_review_preview_and_file_diff() {
+    let state = test_state_with_repo();
+    cache_test_jwks(&state);
+    let member_clerk_id = "user_visibility_reviewer";
+    let member_email = "visibility@example.com";
+    let member_id = crate::db::scope_user_id_for_auth_identity("clerk", member_clerk_id);
+    {
+        let mut repo = repo_with_readme();
+        repo.members.push(test_repository_member(
+            TEST_REPO_ID,
+            member_id.clone(),
+            member_permissions(false, true, false),
+        ));
+        stage_receive_pack_update(
+            &mut repo,
+            receive_pack_update(vec![("/README.md", Some("visibility review"))]),
+        )
+        .unwrap();
+
+        let mut catalog = lock_catalog(&state).unwrap();
+        catalog.repositories.insert(TEST_REPO_ID.to_string(), repo);
+    }
+
+    let app = router(state);
+    let summary_response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("GET")
+                .uri("/v1/repos/owner/repo")
+                .header(
+                    AUTHORIZATION,
+                    bearer_header_for(member_clerk_id, member_email),
+                )
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(summary_response.status(), StatusCode::OK);
+    let summary = response_json(summary_response).await;
+    assert_eq!(summary["staged_update_pending"], true);
+
+    let review_response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("GET")
+                .uri("/v1/repos/owner/repo/staged-update")
+                .header(
+                    AUTHORIZATION,
+                    bearer_header_for(member_clerk_id, member_email),
+                )
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(review_response.status(), StatusCode::OK);
+
+    let preview_response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("GET")
+                .uri("/v1/repos/owner/repo/projection-preview?audience=owner&source=review")
+                .header(
+                    AUTHORIZATION,
+                    bearer_header_for(member_clerk_id, member_email),
+                )
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(preview_response.status(), StatusCode::OK);
+
+    let diff_response = app
+        .oneshot(
+            Request::builder()
+                .method("GET")
+                .uri("/v1/repos/owner/repo/review/file-diff?path=/README.md")
+                .header(
+                    AUTHORIZATION,
+                    bearer_header_for(member_clerk_id, member_email),
+                )
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(diff_response.status(), StatusCode::OK);
+    let diff = response_json(diff_response).await;
+    assert_eq!(diff["new_content"], "visibility review");
+}
+
+#[tokio::test]
+async fn visibility_member_public_review_preview_counts_private_exclusions() {
+    let state = test_state_with_repo();
+    cache_test_jwks(&state);
+    let member_clerk_id = "user_visibility_reviewer";
+    let member_email = "visibility@example.com";
+    let member_id = crate::db::scope_user_id_for_auth_identity("clerk", member_clerk_id);
+    {
+        let mut repo = repo_with_readme();
+        repo.record.default_visibility = Visibility::Private;
+        repo.policy = Policy::new(Visibility::Private);
+        repo.policy
+            .add_rule(VisibilityRule::public(
+                ScopePath::parse("/README.md").unwrap(),
+            ))
+            .unwrap();
+        repo.graph.commits[0].changes[0].visibility = Visibility::Public;
+        repo.members.push(test_repository_member(
+            TEST_REPO_ID,
+            member_id,
+            member_permissions(false, true, false),
+        ));
+        stage_receive_pack_update(
+            &mut repo,
+            receive_pack_update(vec![("/secret.txt", Some("private review"))]),
+        )
+        .unwrap();
+
+        let mut catalog = lock_catalog(&state).unwrap();
+        catalog.repositories.insert(TEST_REPO_ID.to_string(), repo);
+    }
+
+    let response = router(state)
+        .oneshot(
+            Request::builder()
+                .method("GET")
+                .uri("/v1/repos/owner/repo/projection-preview?audience=public&source=review")
+                .header(
+                    AUTHORIZATION,
+                    bearer_header_for(member_clerk_id, member_email),
+                )
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = response_json(response).await;
+    assert_eq!(body["summary"]["visible_files"], 1);
+    assert_eq!(body["summary"]["hidden_files"], 1);
+}
+
+#[tokio::test]
 async fn staged_update_review_counts_separate_line_diff_hunks() {
     let state = test_state_with_repo();
     cache_test_jwks(&state);
@@ -525,7 +675,7 @@ async fn rejecting_staged_update_returns_line_diff_before_cleanup() {
 #[test]
 fn zero_file_publish_promotes_pending_import() {
     let mut repo = test_repo(&test_owner_id());
-    repo.record.publication_state = RepoPublicationState::PendingPublish;
+    repo.record.publication_state = RepoPublicationState::Unpublished;
     repo.pending_import = Some(pending_import_fixture(Vec::new()));
     repo.first_push_token = Some(FirstPushToken {
         token_hash: first_push_token_hash("scope_fp_test"),
@@ -564,7 +714,7 @@ async fn publish_accepts_rotated_clerk_subject_with_same_email() {
     {
         let mut catalog = lock_catalog(&state).unwrap();
         let repo = catalog.repositories.get_mut(TEST_REPO_ID).unwrap();
-        repo.record.publication_state = RepoPublicationState::PendingPublish;
+        repo.record.publication_state = RepoPublicationState::Unpublished;
         repo.pending_import = Some(pending_import_fixture(vec![("README.md", "hello")]));
     }
 
@@ -598,7 +748,7 @@ async fn publish_accepts_rotated_clerk_subject_with_same_email() {
 #[test]
 fn publish_is_one_time() {
     let mut repo = test_repo(&test_owner_id());
-    repo.record.publication_state = RepoPublicationState::PendingPublish;
+    repo.record.publication_state = RepoPublicationState::Unpublished;
     repo.pending_import = Some(pending_import_fixture(vec![("README.md", "hello")]));
 
     preview_publish_import(&mut repo).unwrap();

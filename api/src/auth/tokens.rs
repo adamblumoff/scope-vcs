@@ -2,7 +2,7 @@ use crate::domain::store::{FirstPushToken, GitCloneToken, GitPushToken};
 use crate::{
     config::{
         FIRST_PUSH_TOKEN_BYTES, FIRST_PUSH_TOKEN_PREFIX, FIRST_PUSH_TOKEN_TTL_SECS,
-        GIT_PUSH_TOKEN_PREFIX,
+        GIT_PUSH_TOKEN_PREFIX, REPOSITORY_INVITE_TOKEN_PREFIX,
     },
     error::ApiError,
     persistence::unix_now,
@@ -64,6 +64,18 @@ pub(crate) fn generate_git_clone_token(user_id: &str) -> Result<(String, GitClon
     Ok((secret, token))
 }
 
+pub(crate) fn generate_repository_invite_token() -> Result<(String, String), ApiError> {
+    let mut bytes = [0_u8; FIRST_PUSH_TOKEN_BYTES];
+    getrandom::fill(&mut bytes).map_err(|error| {
+        ApiError::internal_message(format!(
+            "failed to generate repository invite token: {error}"
+        ))
+    })?;
+    let secret = format!("{REPOSITORY_INVITE_TOKEN_PREFIX}{}", hex::encode(bytes));
+    let hash = token_hash(&secret);
+    Ok((secret, hash))
+}
+
 pub(crate) fn token_hash(secret: &str) -> String {
     let digest = Sha256::digest(secret.as_bytes());
     format!("sha256:{digest:x}")
@@ -78,5 +90,9 @@ pub(crate) fn git_push_token_hash(secret: &str) -> String {
 }
 
 pub(crate) fn git_clone_token_hash(secret: &str) -> String {
+    token_hash(secret)
+}
+
+pub(crate) fn repository_invite_token_hash(secret: &str) -> String {
     token_hash(secret)
 }

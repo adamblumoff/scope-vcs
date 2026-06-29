@@ -25,6 +25,7 @@ pub(crate) const LOCAL_APP_ORIGIN: &str = "http://localhost:3000";
 pub(crate) const LOCAL_API_ORIGIN: &str = "http://localhost:8080";
 pub(crate) const FIRST_PUSH_TOKEN_PREFIX: &str = "scope_fp_";
 pub(crate) const GIT_PUSH_TOKEN_PREFIX: &str = "scope_git_";
+pub(crate) const REPOSITORY_INVITE_TOKEN_PREFIX: &str = "scope_invite_";
 pub(crate) const CLI_BROWSER_LOGIN_ID_PREFIX: &str = "cli_browser_";
 pub(crate) const CLI_BROWSER_LOGIN_SECRET_PREFIX: &str = "scope_browser_";
 pub(crate) const CLI_CALLBACK_CODE_PREFIX: &str = "scope_callback_";

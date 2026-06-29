@@ -1,9 +1,9 @@
 use crate::{
     auth::scope::{optional_scope_user, principal_for_scope_user},
-    domain::store::{RepoRole, UserAccount, repo_id},
+    domain::store::{RepositoryActor, UserAccount, repo_id},
     error::ApiError,
     repo_events::RepoChangeEvent,
-    state::{AppState, ensure_repo_read, find_repo, role_for_principal},
+    state::{AppState, ensure_repo_read, find_repo},
 };
 use axum::{
     extract::{Path, State},
@@ -121,12 +121,12 @@ fn ensure_repo_events_allowed(
 }
 
 fn event_for_principal(
-    state: &AppState,
+    _state: &AppState,
     repo: &crate::domain::store::StoredRepository,
     principal: &crate::domain::policy::Principal,
     event: RepoChangeEvent,
 ) -> Result<RepoChangeEvent, ApiError> {
-    if role_for_principal(state, repo, principal)?.is_some_and(|role| role >= RepoRole::Writer) {
+    if repo.access_for_principal(principal).actor != RepositoryActor::Public {
         return Ok(event);
     }
 

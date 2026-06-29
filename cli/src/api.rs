@@ -27,20 +27,18 @@ pub enum Visibility {
     Public,
 }
 
-#[derive(Clone, Copy, Debug, Deserialize, Eq, Ord, PartialEq, PartialOrd)]
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq)]
 #[cfg_attr(test, derive(ts_rs::TS))]
-pub enum RepoRole {
-    Reader,
-    Writer,
-    Maintainer,
+pub enum RepositoryActor {
+    Public,
+    Member,
     Owner,
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq)]
 #[cfg_attr(test, derive(ts_rs::TS))]
 pub enum RepoPublicationState {
-    PendingFirstPush,
-    PendingPublish,
+    Unpublished,
     Published,
 }
 
@@ -153,9 +151,16 @@ pub struct RepoSummaryResponse {
     pub owner_handle: String,
     pub name: String,
     pub lifecycle_state: RepoPublicationState,
-    pub role: Option<RepoRole>,
+    pub access: RepositoryAccessResponse,
+    pub pending_import_pending: bool,
     pub staged_update_pending: bool,
     pub push_blocked_by_staged_update: bool,
+}
+
+#[derive(Deserialize)]
+pub struct RepositoryAccessResponse {
+    pub actor: RepositoryActor,
+    pub can_push: bool,
 }
 
 #[derive(Deserialize)]
@@ -375,7 +380,7 @@ mod tests {
     #[test]
     fn cli_auth_dtos_match_generated_api_contract() {
         assert_type_matches::<SessionIdentity>("SessionIdentity");
-        assert_type_matches::<RepoRole>("RepoRole");
+        assert_type_matches::<RepositoryActor>("RepositoryActor");
         assert_type_matches::<RepoPublicationState>("RepoPublicationState");
         assert_type_matches::<UserResponse>("UserResponse");
         assert_type_matches::<AccountSessionResponse>("AccountSessionResponse");

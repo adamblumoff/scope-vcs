@@ -6,8 +6,7 @@ use crate::domain::store::{
     StagedRepoUpdate, StoredRepository,
 };
 use crate::{
-    config::DEFAULT_GIT_BRANCH, error::ApiError, http::responses::repo_owner_ids,
-    object_store::ObjectStore, state::live_tree,
+    config::DEFAULT_GIT_BRANCH, error::ApiError, object_store::ObjectStore, state::live_tree,
 };
 
 #[derive(Clone, Debug)]
@@ -51,13 +50,14 @@ pub(crate) fn stage_receive_pack_update(
     update: ReceivePackUpdate,
 ) -> Result<Option<StagedRepoUpdate>, ApiError> {
     let store = crate::object_store::MemoryObjectStore::new();
-    stage_receive_pack_update_with_store(repo, update, &store)
+    stage_receive_pack_update_with_store(repo, update, &store, true)
 }
 
 pub(super) fn stage_receive_pack_update_with_store(
     repo: &mut StoredRepository,
     update: ReceivePackUpdate,
     store: &dyn ObjectStore,
+    can_apply_changes: bool,
 ) -> Result<Option<StagedRepoUpdate>, ApiError> {
     ensure_default_branch(&update.branch)?;
     if repo.record.publication_state != RepoPublicationState::Published {
@@ -72,8 +72,9 @@ pub(super) fn stage_receive_pack_update_with_store(
         return Err(ApiError::conflict("a staged update is already pending"));
     }
 
-    let staged_update = build_staged_receive_pack_update(repo, update, store)?;
-    if repo.settings.review_pushes_before_applying {
+    let will_stage = repo.settings.review_pushes_before_applying || !can_apply_changes;
+    let staged_update = build_staged_receive_pack_update(repo, update, store, will_stage)?;
+    if will_stage {
         repo.staged_update = Some(staged_update.clone());
         repo.bump_change_version();
         Ok(Some(staged_update))
@@ -88,6 +89,7 @@ pub(crate) fn build_staged_receive_pack_update(
     repo: &StoredRepository,
     update: ReceivePackUpdate,
     store: &dyn ObjectStore,
+    include_line_diff: bool,
 ) -> Result<StagedRepoUpdate, ApiError> {
     let live_tree = live_tree(repo);
     let mut staged_changes = Vec::with_capacity(update.changes.len());
@@ -106,7 +108,7 @@ pub(crate) fn build_staged_receive_pack_update(
         let visibility = repo.policy.effective_visibility(&change.path);
         staged_changes.push(StagedFileChange {
             path: change.path,
-            line_diff: if repo.settings.review_pushes_before_applying {
+            line_diff: if include_line_diff {
                 staged_file_line_diff(store, old_content.as_ref(), change.content.as_ref())?
             } else {
                 LineDiff::default()
@@ -155,7 +157,6 @@ pub(crate) fn apply_receive_pack_update(
     staged_update: StagedRepoUpdate,
 ) -> Result<(), ApiError> {
     validate_staged_update_policy(repo, &staged_update)?;
-    let owner_ids = repo_owner_ids(repo);
     let logical_id = format!("rv_push_{}", repo.graph.commits.len() + 1);
     let mut next_visibility_event_id = repo.visibility_events.len() + 1;
     let visibility_events = staged_update
@@ -187,7 +188,7 @@ pub(crate) fn apply_receive_pack_update(
             continue;
         }
 
-        let rule = staged_visibility_rule(change, &owner_ids);
+        let rule = staged_visibility_rule(change);
         repo.policy.add_rule(rule).map_err(ApiError::bad_request)?;
     }
 
@@ -232,26 +233,22 @@ pub(crate) fn validate_staged_update_policy(
     repo: &StoredRepository,
     staged_update: &StagedRepoUpdate,
 ) -> Result<(), ApiError> {
-    let owner_ids = repo_owner_ids(repo);
     let mut policy = repo.policy.clone();
     for change in &staged_update.changes {
         if change.new_content.is_none() {
             continue;
         }
 
-        let rule = staged_visibility_rule(change, &owner_ids);
+        let rule = staged_visibility_rule(change);
         policy.add_rule(rule).map_err(ApiError::bad_request)?;
     }
 
     Ok(())
 }
 
-pub(crate) fn staged_visibility_rule(
-    change: &StagedFileChange,
-    owner_ids: &[String],
-) -> VisibilityRule {
+pub(crate) fn staged_visibility_rule(change: &StagedFileChange) -> VisibilityRule {
     match change.visibility {
         Visibility::Public => VisibilityRule::public(change.path.clone()),
-        Visibility::Private => VisibilityRule::private(change.path.clone(), owner_ids.to_vec()),
+        Visibility::Private => VisibilityRule::private(change.path.clone()),
     }
 }

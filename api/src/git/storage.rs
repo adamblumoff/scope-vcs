@@ -238,6 +238,7 @@ pub(crate) fn ensure_published_receive_pack_staging_repo(
             &repo.graph,
             &repo.visibility_events,
             &principal,
+            repo.access_for_principal(&principal).can_read_private_files,
         );
         let seed_repo = projection_bare_repo(
             state.object_store.as_ref(),

@@ -1,5 +1,4 @@
 use serde::{Deserialize, Serialize};
-use std::collections::BTreeSet;
 use std::fmt;
 use thiserror::Error;
 
@@ -97,21 +96,10 @@ pub enum Visibility {
     Private,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
-pub enum Permission {
-    List,
-    Read,
-    Write,
-    Publish,
-    Admin,
-    Delegate,
-}
-
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct VisibilityRule {
     pub path: ScopePath,
     pub visibility: Visibility,
-    pub allowed_principals: BTreeSet<String>,
 }
 
 impl VisibilityRule {
@@ -119,15 +107,13 @@ impl VisibilityRule {
         Self {
             path,
             visibility: Visibility::Public,
-            allowed_principals: BTreeSet::new(),
         }
     }
 
-    pub fn private(path: ScopePath, allowed_principals: impl IntoIterator<Item = String>) -> Self {
+    pub fn private(path: ScopePath) -> Self {
         Self {
             path,
             visibility: Visibility::Private,
-            allowed_principals: allowed_principals.into_iter().collect(),
         }
     }
 }
@@ -135,15 +121,13 @@ impl VisibilityRule {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Policy {
     default_visibility: Visibility,
-    owner_id: String,
     rules: Vec<VisibilityRule>,
 }
 
 impl Policy {
-    pub fn new(default_visibility: Visibility, owner_id: impl Into<String>) -> Self {
+    pub fn new(default_visibility: Visibility) -> Self {
         Self {
             default_visibility,
-            owner_id: owner_id.into(),
             rules: Vec::new(),
         }
     }
@@ -183,44 +167,15 @@ impl Policy {
         self.default_visibility = visibility;
     }
 
-    pub fn can_read(&self, principal: &Principal, path: &ScopePath) -> bool {
-        if self.is_owner(principal) {
-            return true;
-        }
-
+    pub fn can_read(&self, path: &ScopePath, can_read_private_files: bool) -> bool {
         match self.effective_visibility(path) {
             Visibility::Public => true,
-            Visibility::Private => self
-                .effective_rule(path)
-                .is_some_and(|rule| rule.allowed_principals.contains(&principal.id)),
+            Visibility::Private => can_read_private_files,
         }
-    }
-
-    pub fn can_write(&self, principal: &Principal, path: &ScopePath) -> bool {
-        principal.id == self.owner_id
-            || self
-                .effective_rule(path)
-                .is_some_and(|rule| rule.allowed_principals.contains(&principal.id))
     }
 
     pub fn rules(&self) -> &[VisibilityRule] {
         &self.rules
-    }
-
-    pub fn is_owner(&self, principal: &Principal) -> bool {
-        principal.id == self.owner_id
-    }
-
-    pub fn reassign_principal(&mut self, old_id: &str, new_id: &str) {
-        if self.owner_id == old_id {
-            self.owner_id = new_id.to_string();
-        }
-
-        for rule in &mut self.rules {
-            if rule.allowed_principals.remove(old_id) {
-                rule.allowed_principals.insert(new_id.to_string());
-            }
-        }
     }
 
     fn private_ancestor_for(&self, path: &ScopePath) -> Option<ScopePath> {

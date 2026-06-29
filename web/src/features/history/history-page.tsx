@@ -1,8 +1,6 @@
 import type {
   CommitDetail,
-  CommitDetailInput,
   CommitFile,
-  CommitFileDiffInput,
   CommitHistory,
   CommitSummary,
   ProjectionPreviewAudience,
@@ -17,6 +15,10 @@ import { Badge } from '@/components/ui/badge'
 import { Skeleton } from '@/components/ui/skeleton'
 import { ToggleGroup, ToggleGroupItem } from '@/components/ui/toggle-group'
 import { cn } from '@/lib/utils'
+import {
+  loadCommitDetail,
+  loadCommitFileDiff,
+} from '@/routes/-repo-history-actions'
 import { Link, useNavigate } from '@tanstack/react-router'
 import {
   Globe2,
@@ -25,7 +27,7 @@ import {
   TriangleAlert,
   UserRound,
 } from 'lucide-react'
-import { type ReactNode, useEffect, useMemo, useState } from 'react'
+import { type ReactNode, useEffect, useMemo, useReducer, useRef } from 'react'
 import { ReviewFileDiffDrawer } from '../review/review-file-diff-drawer'
 import { ReviewTree } from '../review/review-tree'
 import { audienceLabel, changeCountLabel } from '../review/review-labels'
@@ -35,216 +37,37 @@ export type CommitHistories = {
   public: CommitHistory | null
 }
 
-export function HistoryPage({
-  histories,
-  initialAudience,
-  initialCommit,
-  loadCommit,
-  loadFileDiff,
-  params,
-}: {
+type HistoryPageProps = {
   histories: CommitHistories
   initialAudience: ProjectionPreviewAudience
   initialCommit: CommitDetail | null
-  loadCommit: (input: CommitDetailInput) => Promise<CommitDetail>
-  loadFileDiff: (input: CommitFileDiffInput) => Promise<ReviewFileDiff>
   params: RepoParams
-}) {
-  const navigate = useNavigate()
-  const [audience, setAudience] =
-    useState<ProjectionPreviewAudience>(initialAudience)
-  const [selectedCommitId, setSelectedCommitId] = useState<string | null>(
-    initialCommit?.projected_id ??
-      latestCommitId(histories[initialAudience]) ??
-      null,
-  )
-  const [selectedFilePath, setSelectedFilePath] = useState<string | null>(null)
-  const [commitState, setCommitState] = useState<CommitDetailState>(
-    initialCommit
-      ? { commit: initialCommit, error: null, status: 'loaded' }
-      : { commit: null, error: null, status: 'idle' },
-  )
-  const [fileDiffState, setFileDiffState] =
-    useState<CommitFileDiffState>(emptyFileDiffState)
-  const availableAudiences = useMemo(
-    () =>
-      (['owner', 'public'] as const).filter(
-        (option) => histories[option] !== null,
-      ),
-    [histories],
-  )
-  const history = histories[audience] ?? histories.public ?? histories.owner
-  const commits = useMemo(
-    () => [...(history?.commits ?? [])].reverse(),
-    [history?.commits],
-  )
-  const selectedCommit =
-    commitState.status === 'loaded' ? commitState.commit : null
-  const pageWidthClassName = selectedFilePath
-    ? 'max-w-[1320px] transition-[max-width] duration-300 ease-out'
-    : 'max-w-[1040px] transition-[max-width] duration-300 ease-out'
-  const repoId = `${params.owner}/${params.repo}`
+}
 
-  useEffect(() => {
-    setAudience(initialAudience)
-    setSelectedCommitId(
-      initialCommit?.projected_id ??
-        latestCommitId(histories[initialAudience]) ??
-        null,
-    )
-    setSelectedFilePath(null)
-    setCommitState(
-      initialCommit
-        ? { commit: initialCommit, error: null, status: 'loaded' }
-        : { commit: null, error: null, status: 'idle' },
-    )
-    setFileDiffState(emptyFileDiffState)
-  }, [histories, initialAudience, initialCommit])
-
-  useEffect(() => {
-    if (!selectedCommitId || !history) {
-      setCommitState({ commit: null, error: null, status: 'idle' })
-      return
-    }
-
-    if (
-      commitState.status === 'loaded' &&
-      commitState.commit.audience === audience &&
-      commitState.commit.projected_id === selectedCommitId
-    ) {
-      return
-    }
-
-    let active = true
-    setCommitState({ commit: null, error: null, status: 'loading' })
-    loadCommit({
-      audience,
-      commit: selectedCommitId,
-      owner: params.owner,
-      repo: params.repo,
-    }).then(
-      (commit) => {
-        if (active) {
-          setCommitState({ commit, error: null, status: 'loaded' })
-        }
-      },
-      (error) => {
-        if (active) {
-          setCommitState({
-            commit: null,
-            error:
-              error instanceof Error ? error.message : 'commit load failed',
-            status: 'failed',
-          })
-        }
-      },
-    )
-
-    return () => {
-      active = false
-    }
-  }, [
+export function HistoryPage(props: HistoryPageProps) {
+  const { params } = props
+  const {
     audience,
+    availableAudiences,
+    closeFileDiff,
+    commitState,
+    commits,
+    fileDiffState,
     history,
-    loadCommit,
-    params.owner,
-    params.repo,
-    selectedCommitId,
-  ])
-
-  useEffect(() => {
-    if (!selectedCommit) {
-      setSelectedFilePath(null)
-      return
-    }
-
-    const paths = selectedCommit.files.map((file) => file.path)
-    setSelectedFilePath((current) =>
-      current && paths.includes(current) ? current : null,
-    )
-  }, [selectedCommit])
-
-  useEffect(() => {
-    if (!selectedCommit || !selectedFilePath) {
-      setFileDiffState(emptyFileDiffState)
-      return
-    }
-
-    let active = true
-    setFileDiffState({ diff: null, error: null, status: 'loading' })
-    loadFileDiff({
-      audience,
-      commit: selectedCommit.projected_id,
-      owner: params.owner,
-      path: selectedFilePath,
-      repo: params.repo,
-    }).then(
-      (diff) => {
-        if (active) {
-          setFileDiffState({ diff, error: null, status: 'loaded' })
-        }
-      },
-      (error) => {
-        if (active) {
-          setFileDiffState({
-            diff: null,
-            error: error instanceof Error ? error.message : 'diff load failed',
-            status: 'failed',
-          })
-        }
-      },
-    )
-
-    return () => {
-      active = false
-    }
-  }, [
-    audience,
-    loadFileDiff,
-    params.owner,
-    params.repo,
+    pageWidthClassName,
+    repoId,
+    selectAudience,
+    selectCommit,
+    selectFile,
     selectedCommit,
+    selectedCommitId,
     selectedFilePath,
-  ])
-
-  function selectAudience(nextAudience: ProjectionPreviewAudience) {
-    const nextHistory = histories[nextAudience]
-    if (!nextHistory) {
-      return
-    }
-
-    const nextCommitId = latestCommitId(nextHistory)
-    setAudience(nextAudience)
-    setSelectedFilePath(null)
-    setSelectedCommitId(nextCommitId)
-    replaceHistorySearch(nextAudience, nextCommitId)
-  }
-
-  function selectCommit(commit: CommitSummary) {
-    setSelectedCommitId(commit.projected_id)
-    setSelectedFilePath(null)
-    replaceHistorySearch(audience, commit.projected_id)
-  }
-
-  function replaceHistorySearch(
-    nextAudience: ProjectionPreviewAudience,
-    nextCommitId: string | null,
-  ) {
-    void navigate({
-      params,
-      replace: true,
-      search: {
-        audience: nextAudience,
-        commit: nextCommitId ?? undefined,
-      },
-      to: '/repos/$owner/$repo/history',
-    })
-  }
+  } = useHistoryPageModel(props)
 
   return (
     <main className="min-h-screen bg-background text-foreground">
       <AppHeader
-        breadcrumb={<RepoBreadcrumb params={params} section="history" />}
+        breadcrumb={() => <RepoBreadcrumb params={params} section="history" />}
         contentClassName={pageWidthClassName}
       />
 
@@ -325,12 +148,8 @@ export function HistoryPage({
               <CommitDetailPanel
                 commitState={commitState}
                 fileDiffState={fileDiffState}
-                onCloseFileDiff={() => setSelectedFilePath(null)}
-                onSelectFile={(file) =>
-                  setSelectedFilePath((current) =>
-                    current === file.path ? null : file.path,
-                  )
-                }
+                onCloseFileDiff={closeFileDiff}
+                onSelectFile={selectFile}
                 selectedFilePath={selectedFilePath}
               />
             </div>
@@ -339,6 +158,274 @@ export function HistoryPage({
       </PageContent>
     </main>
   )
+}
+
+function useHistoryPageModel({
+  histories,
+  initialAudience,
+  initialCommit,
+  params,
+}: HistoryPageProps) {
+  const navigate = useNavigate()
+  const [state, dispatch] = useReducer(
+    historyPageReducer,
+    { histories, initialAudience, initialCommit },
+    createHistoryPageState,
+  )
+  const {
+    audience,
+    commitState,
+    fileDiffState,
+    selectedCommitId,
+    selectedFilePath,
+  } = state
+  const availableAudiences = useMemo(
+    () =>
+      (['owner', 'public'] as const).filter(
+        (option) => histories[option] !== null,
+      ),
+    [histories],
+  )
+  const history = histories[audience] ?? histories.public ?? histories.owner
+  const commits = useMemo(
+    () => [...(history?.commits ?? [])].reverse(),
+    [history?.commits],
+  )
+  const selectedCommit =
+    commitState.status === 'loaded' ? commitState.commit : null
+  const pageWidthClassName = selectedFilePath
+    ? 'max-w-[1320px] transition-[max-width] duration-300 ease-out'
+    : 'max-w-[1040px] transition-[max-width] duration-300 ease-out'
+  const repoId = `${params.owner}/${params.repo}`
+  const initialSelectedCommitId =
+    initialCommit?.projected_id ??
+    latestCommitId(histories[initialAudience]) ??
+    null
+  const initialCommitKey = initialCommit
+    ? commitRequestKey(initialCommit.audience, initialCommit.projected_id)
+    : null
+  const commitRequestKeyValue =
+    selectedCommitId && history
+      ? commitRequestKey(audience, selectedCommitId)
+      : null
+  const commitRequestAudience = commitRequestKeyValue ? audience : null
+  const commitRequestProjectedId = commitRequestKeyValue
+    ? selectedCommitId
+    : null
+  const historySourceRef = useRef({
+    histories,
+    initialAudience,
+    initialCommit,
+  })
+  const activeCommitKeyRef = useRef<string | null>(commitRequestKeyValue)
+  const selectedFilePathInCommit =
+    selectedCommit &&
+    selectedFilePath &&
+    selectedCommit.files.some((file) => file.path === selectedFilePath)
+      ? selectedFilePath
+      : null
+  const diffRequestKeyValue =
+    selectedCommit && selectedFilePathInCommit
+      ? fileDiffRequestKey(
+          audience,
+          selectedCommit.projected_id,
+          selectedFilePathInCommit,
+        )
+      : null
+  const diffRequestProjectedId =
+    selectedCommit && selectedFilePathInCommit
+      ? selectedCommit.projected_id
+      : null
+  const diffRequestPath = selectedFilePathInCommit
+  const activeDiffKeyRef = useRef<string | null>(diffRequestKeyValue)
+  const historySource = historySourceRef.current
+
+  if (
+    historySource.histories !== histories ||
+    historySource.initialAudience !== initialAudience ||
+    historySource.initialCommit !== initialCommit
+  ) {
+    historySourceRef.current = { histories, initialAudience, initialCommit }
+    activeCommitKeyRef.current = initialSelectedCommitId
+      ? commitRequestKey(initialAudience, initialSelectedCommitId)
+      : null
+    activeDiffKeyRef.current = null
+    dispatch({
+      state: createHistoryPageState({
+        histories,
+        initialAudience,
+        initialCommit,
+      }),
+      type: 'stateReset',
+    })
+  } else if (activeCommitKeyRef.current !== commitRequestKeyValue) {
+    activeCommitKeyRef.current = commitRequestKeyValue
+    activeDiffKeyRef.current = null
+    dispatch({
+      commit:
+        commitRequestKeyValue === initialCommitKey ? initialCommit : null,
+      loading:
+        commitRequestKeyValue !== null &&
+        commitRequestKeyValue !== initialCommitKey,
+      type: 'commitRequestChanged',
+    })
+  } else if (activeDiffKeyRef.current !== diffRequestKeyValue) {
+    activeDiffKeyRef.current = diffRequestKeyValue
+    dispatch({
+      loading: diffRequestKeyValue !== null,
+      type: 'fileDiffRequestChanged',
+    })
+  }
+
+  useEffect(() => {
+    if (
+      !commitRequestKeyValue ||
+      commitRequestAudience === null ||
+      commitRequestProjectedId === null
+    ) {
+      return
+    }
+
+    if (commitRequestKeyValue === initialCommitKey) {
+      return
+    }
+
+    let active = true
+    loadCommitDetail({
+      data: {
+        audience: commitRequestAudience,
+        commit: commitRequestProjectedId,
+        owner: params.owner,
+        repo: params.repo,
+      },
+    }).then(
+      (commit) => {
+        if (active) {
+          dispatch({ commit, type: 'commitLoaded' })
+        }
+      },
+      (error) => {
+        if (active) {
+          dispatch({
+            message:
+              error instanceof Error ? error.message : 'commit load failed',
+            type: 'commitFailed',
+          })
+        }
+      },
+    )
+
+    return () => {
+      active = false
+    }
+  }, [
+    commitRequestAudience,
+    commitRequestKeyValue,
+    commitRequestProjectedId,
+    initialCommitKey,
+    params.owner,
+    params.repo,
+  ])
+
+  useEffect(() => {
+    if (
+      !diffRequestKeyValue ||
+      diffRequestPath === null ||
+      diffRequestProjectedId === null
+    ) {
+      return
+    }
+
+    let active = true
+    loadCommitFileDiff({
+      data: {
+        audience,
+        commit: diffRequestProjectedId,
+        owner: params.owner,
+        path: diffRequestPath,
+        repo: params.repo,
+      },
+    }).then(
+      (diff) => {
+        if (active) {
+          dispatch({ diff, type: 'fileDiffLoaded' })
+        }
+      },
+      (error) => {
+        if (active) {
+          dispatch({
+            message: error instanceof Error ? error.message : 'diff load failed',
+            type: 'fileDiffFailed',
+          })
+        }
+      },
+    )
+
+    return () => {
+      active = false
+    }
+  }, [
+    audience,
+    diffRequestKeyValue,
+    diffRequestPath,
+    diffRequestProjectedId,
+    params.owner,
+    params.repo,
+  ])
+
+  function selectAudience(nextAudience: ProjectionPreviewAudience) {
+    const nextHistory = histories[nextAudience]
+    if (!nextHistory) {
+      return
+    }
+
+    const nextCommitId = latestCommitId(nextHistory)
+    dispatch({
+      audience: nextAudience,
+      commitId: nextCommitId,
+      type: 'audienceSelected',
+    })
+    replaceHistorySearch(nextAudience, nextCommitId)
+  }
+
+  function selectCommit(commit: CommitSummary) {
+    dispatch({ commitId: commit.projected_id, type: 'commitSelected' })
+    replaceHistorySearch(audience, commit.projected_id)
+  }
+
+  function replaceHistorySearch(
+    nextAudience: ProjectionPreviewAudience,
+    nextCommitId: string | null,
+  ) {
+    void navigate({
+      params,
+      replace: true,
+      search: {
+        audience: nextAudience,
+        commit: nextCommitId ?? undefined,
+      },
+      to: '/repos/$owner/$repo/history',
+    })
+  }
+
+  return {
+    audience,
+    availableAudiences,
+    closeFileDiff: () => dispatch({ type: 'fileDiffClosed' }),
+    commitState,
+    commits,
+    fileDiffState,
+    history,
+    pageWidthClassName,
+    repoId,
+    selectAudience,
+    selectCommit,
+    selectFile: (file: CommitFile) =>
+      dispatch({ path: file.path, type: 'fileSelected' }),
+    selectedCommit,
+    selectedCommitId,
+    selectedFilePath,
+  }
 }
 
 function CommitList({
@@ -566,6 +653,136 @@ function PanelState({
   )
 }
 
+type HistoryPageState = {
+  audience: ProjectionPreviewAudience
+  commitState: CommitDetailState
+  fileDiffState: CommitFileDiffState
+  selectedCommitId: string | null
+  selectedFilePath: string | null
+}
+
+type HistoryPageStateInput = Pick<
+  HistoryPageProps,
+  'histories' | 'initialAudience' | 'initialCommit'
+>
+
+type HistoryPageAction =
+  | { state: HistoryPageState; type: 'stateReset' }
+  | {
+      audience: ProjectionPreviewAudience
+      commitId: string | null
+      type: 'audienceSelected'
+    }
+  | { commitId: string; type: 'commitSelected' }
+  | {
+      commit: CommitDetail | null
+      loading: boolean
+      type: 'commitRequestChanged'
+    }
+  | { commit: CommitDetail; type: 'commitLoaded' }
+  | { message: string; type: 'commitFailed' }
+  | { path: string; type: 'fileSelected' }
+  | { type: 'fileDiffClosed' }
+  | { loading: boolean; type: 'fileDiffRequestChanged' }
+  | { diff: ReviewFileDiff; type: 'fileDiffLoaded' }
+  | { message: string; type: 'fileDiffFailed' }
+
+function createHistoryPageState({
+  histories,
+  initialAudience,
+  initialCommit,
+}: HistoryPageStateInput): HistoryPageState {
+  return {
+    audience: initialAudience,
+    commitState: initialCommit
+      ? { commit: initialCommit, error: null, status: 'loaded' }
+      : emptyCommitState,
+    fileDiffState: emptyFileDiffState,
+    selectedCommitId:
+      initialCommit?.projected_id ??
+      latestCommitId(histories[initialAudience]) ??
+      null,
+    selectedFilePath: null,
+  }
+}
+
+function historyPageReducer(
+  state: HistoryPageState,
+  action: HistoryPageAction,
+): HistoryPageState {
+  switch (action.type) {
+    case 'stateReset':
+      return action.state
+    case 'audienceSelected':
+      return {
+        ...state,
+        audience: action.audience,
+        selectedCommitId: action.commitId,
+        selectedFilePath: null,
+      }
+    case 'commitSelected':
+      return {
+        ...state,
+        selectedCommitId: action.commitId,
+        selectedFilePath: null,
+      }
+    case 'commitRequestChanged':
+      return {
+        ...state,
+        commitState: action.commit
+          ? { commit: action.commit, error: null, status: 'loaded' }
+          : action.loading
+            ? { commit: null, error: null, status: 'loading' }
+            : emptyCommitState,
+        fileDiffState: emptyFileDiffState,
+        selectedFilePath: null,
+      }
+    case 'commitLoaded':
+      return {
+        ...state,
+        commitState: { commit: action.commit, error: null, status: 'loaded' },
+      }
+    case 'commitFailed':
+      return {
+        ...state,
+        commitState: {
+          commit: null,
+          error: action.message,
+          status: 'failed',
+        },
+      }
+    case 'fileSelected':
+      return {
+        ...state,
+        selectedFilePath:
+          state.selectedFilePath === action.path ? null : action.path,
+      }
+    case 'fileDiffClosed':
+      return { ...state, selectedFilePath: null }
+    case 'fileDiffRequestChanged':
+      return {
+        ...state,
+        fileDiffState: action.loading
+          ? { diff: null, error: null, status: 'loading' }
+          : emptyFileDiffState,
+      }
+    case 'fileDiffLoaded':
+      return {
+        ...state,
+        fileDiffState: { diff: action.diff, error: null, status: 'loaded' },
+      }
+    case 'fileDiffFailed':
+      return {
+        ...state,
+        fileDiffState: {
+          diff: null,
+          error: action.message,
+          status: 'failed',
+        },
+      }
+  }
+}
+
 type CommitDetailState =
   | { commit: null; error: null; status: 'idle' }
   | { commit: null; error: null; status: 'loading' }
@@ -582,6 +799,27 @@ const emptyFileDiffState: CommitFileDiffState = {
   diff: null,
   error: null,
   status: 'idle',
+}
+
+const emptyCommitState: CommitDetailState = {
+  commit: null,
+  error: null,
+  status: 'idle',
+}
+
+function commitRequestKey(
+  audience: ProjectionPreviewAudience,
+  projectedId: string,
+) {
+  return `${audience}:${projectedId}`
+}
+
+function fileDiffRequestKey(
+  audience: ProjectionPreviewAudience,
+  projectedId: string,
+  path: string,
+) {
+  return `${audience}:${projectedId}:${path}`
 }
 
 function latestCommitId(history: CommitHistory | null) {
