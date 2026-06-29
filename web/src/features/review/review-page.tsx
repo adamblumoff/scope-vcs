@@ -1,6 +1,7 @@
 import type {
   ProjectionPreviewAudience,
   ProjectionPreviews,
+  RepoAccess,
   RepoParams,
   RepoReview,
   ReviewFileDiff,
@@ -30,6 +31,7 @@ import { ReviewPreviewMetrics } from './review-preview-metrics'
 import { ReviewVisibilityPanel } from './review-visibility-panel'
 
 export function ReviewPage({
+  access,
   applyStagedUpdate,
   initialReview,
   params,
@@ -39,6 +41,7 @@ export function ReviewPage({
   loadFileDiff,
   setReviewVisibility,
 }: {
+  access: RepoAccess
   applyStagedUpdate: (params: RepoParams) => Promise<unknown>
   initialReview: RepoReview
   loadFileDiff: (input: ReviewFileDiffInput) => Promise<ReviewFileDiff>
@@ -72,6 +75,11 @@ export function ReviewPage({
   const publishing = state.runningAction === 'publish'
   const rejecting = state.runningAction === 'reject'
   const stagedReview = review.kind === 'StagedUpdate'
+  const canApplyReview =
+    review.kind === 'PendingImport'
+      ? access.actor === 'Owner'
+      : access.can_apply_changes
+  const canChangeVisibility = access.can_change_file_visibility
   const visibilityPending = pendingKey !== null
   const availableAudiences = useMemo(
     () =>
@@ -238,7 +246,7 @@ export function ReviewPage({
           titleClassName="font-mono"
         >
           <div className="mt-4 flex flex-wrap items-center gap-2">
-            {stagedReview && (
+            {stagedReview && canApplyReview && (
               <Button
                 disabled={
                   publishing ||
@@ -259,33 +267,35 @@ export function ReviewPage({
                 <span>{rejecting ? 'Rejecting' : 'Reject'}</span>
               </Button>
             )}
-            <Button
-              disabled={
-                publishing ||
-                rejecting ||
-                visibilityPending ||
-                (stagedReview && review.files.length === 0)
-              }
-              onClick={() => void completeReview()}
-              size="sm"
-              variant="success"
-              type="button"
-            >
-              {publishing ? (
-                <LoaderCircle className="size-3.5 animate-spin" />
-              ) : (
-                <Rocket className="size-3.5" />
-              )}
-              <span>
-                {publishing
-                  ? stagedReview
-                    ? 'Applying'
-                    : 'Publishing'
-                  : stagedReview
-                    ? 'Apply'
-                    : 'Publish'}
-              </span>
-            </Button>
+            {canApplyReview && (
+              <Button
+                disabled={
+                  publishing ||
+                  rejecting ||
+                  visibilityPending ||
+                  (stagedReview && review.files.length === 0)
+                }
+                onClick={() => void completeReview()}
+                size="sm"
+                variant="success"
+                type="button"
+              >
+                {publishing ? (
+                  <LoaderCircle className="size-3.5 animate-spin" />
+                ) : (
+                  <Rocket className="size-3.5" />
+                )}
+                <span>
+                  {publishing
+                    ? stagedReview
+                      ? 'Applying'
+                      : 'Publishing'
+                    : stagedReview
+                      ? 'Apply'
+                      : 'Publish'}
+                </span>
+              </Button>
+            )}
             <ReviewLineDiffPill lineDiff={review.line_diff} />
           </div>
         </PageHeader>
@@ -305,8 +315,11 @@ export function ReviewPage({
               currentPath === file.path ? null : file.path,
             )
           }
-          onSetVisibility={(files, visibility, key) =>
-            void setVisibility(files, visibility, key)
+          onSetVisibility={
+            canChangeVisibility
+              ? (files, visibility, key) =>
+                  void setVisibility(files, visibility, key)
+              : undefined
           }
           pendingKey={pendingKey}
           preferredAudience={audience}

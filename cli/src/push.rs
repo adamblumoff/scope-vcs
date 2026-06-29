@@ -63,7 +63,7 @@ pub fn push_authenticated_remote(
     Ok(ScopePushOutcome {
         owner: repo.owner_handle,
         repo: repo.name,
-        staged_update_pending: repo.staged_update_pending,
+        staged_update_pending: repo.staged_update_pending || repo.push_blocked_by_staged_update,
     })
 }
 

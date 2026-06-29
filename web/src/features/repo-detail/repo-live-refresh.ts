@@ -93,6 +93,11 @@ export function useRepoLiveRefresh(
         void flushRefresh()
         return
       }
+      if (event.version === 0 && usesVersionedRepoChangeEvents(live)) {
+        forceRefreshPending = true
+        void flushRefresh()
+        return
+      }
       if (!usesVersionedRepoChangeEvents(live)) {
         forceRefreshPending = true
         void flushRefresh()

@@ -2,6 +2,7 @@ import {
   applyStagedUpdate,
   loadReviewFileDiff,
   loadReviewProjectionPreviews,
+  loadReviewRepoLiveState,
   loadReview,
   publishRepo,
   rejectStagedUpdate,
@@ -12,8 +13,9 @@ import { createFileRoute, redirect } from '@tanstack/react-router'
 
 export const Route = createFileRoute('/repos/$owner/$repo/review')({
   loader: async ({ params }) => {
-    const [review, projectionPreviewsResult] = await Promise.all([
+    const [review, live, projectionPreviewsResult] = await Promise.all([
       loadReview({ data: params }),
+      loadReviewRepoLiveState({ data: params }),
       loadReviewProjectionPreviews({ data: params }).then(
         (projectionPreviews) =>
           ({ projectionPreviews, status: 'fulfilled' }) as const,
@@ -33,7 +35,7 @@ export const Route = createFileRoute('/repos/$owner/$repo/review')({
     }
 
     const { projectionPreviews } = projectionPreviewsResult
-    return { projectionPreviews, review }
+    return { access: live.repo.access, projectionPreviews, review }
   },
   errorComponent: ReviewError,
   component: ReviewRoute,
@@ -41,10 +43,11 @@ export const Route = createFileRoute('/repos/$owner/$repo/review')({
 
 function ReviewRoute() {
   const params = Route.useParams()
-  const { projectionPreviews, review } = Route.useLoaderData()
+  const { access, projectionPreviews, review } = Route.useLoaderData()
 
   return (
     <ReviewPage
+      access={access}
       applyStagedUpdate={(data) => applyStagedUpdate({ data })}
       initialReview={review}
       loadFileDiff={(data) => loadReviewFileDiff({ data })}
