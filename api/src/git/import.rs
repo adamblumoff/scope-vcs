@@ -17,7 +17,9 @@ pub(crate) use self::staging::{ReceivePackFileChange, stage_receive_pack_update}
 pub(crate) use self::staging::{
     ReceivePackUpdate, apply_receive_pack_update, validate_staged_update_policy,
 };
-use crate::domain::store::{FirstPushTokenStatus, PendingImport, RepoPublicationState};
+use crate::domain::store::{
+    FirstPushTokenStatus, PendingImport, RepoPublicationState, RepositoryActor,
+};
 use crate::{
     db::RepositoryMutation,
     error::ApiError,
@@ -93,21 +95,31 @@ pub(crate) fn persist_receive_pack_update_and_promote(
     owner: &str,
     repo_name: &str,
     update: ReceivePackUpdate,
-    can_apply_changes: bool,
+    author_id: &str,
 ) -> Result<PersistedReceivePackUpdate, ApiError> {
     let uploaded_blobs = update.uploaded_blobs.clone();
     let store = state.object_store.clone();
+    let author_id = author_id.to_string();
 
     let persisted = state
         .metadata
         .mutate_repository(owner, repo_name, move |repo| {
             let old_snapshot = repo.git_snapshot.clone();
             let mut cleanup_blobs = uploaded_blobs;
+            let access = repo.access_for_user_id(&author_id);
+            if !access.can_push {
+                let message = if access.actor == RepositoryActor::Public {
+                    "repo membership required"
+                } else {
+                    "push permission required"
+                };
+                return Err(ApiError::forbidden(message));
+            }
             let persisted = if stage_receive_pack_update_with_store(
                 repo,
                 update,
                 store.as_ref(),
-                can_apply_changes,
+                access.can_apply_changes,
             )?
             .is_some()
             {

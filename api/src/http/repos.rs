@@ -197,7 +197,7 @@ pub(crate) async fn get_projection_preview(
     let requester = principal_for_scope_user(&repo, user.as_ref());
     ensure_projection_preview_access(&state, &repo, &requester, input.audience, source)?;
     let include_private_counts =
-        repo.access_for_principal(&requester).actor == RepositoryActor::Owner;
+        repo.access_for_principal(&requester).actor != RepositoryActor::Public;
     let preview_repo = projection_preview_repo(&repo, source)?;
 
     Ok(Json(projection_preview_response(
@@ -439,6 +439,30 @@ pub(crate) async fn update_repository_member(
         "member-permissions-changed",
     );
     Ok(Json(member_response_for_user(&state, &member)?))
+}
+
+pub(crate) async fn delete_repository_invite(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path((owner, repo_name, invite_id)): Path<(String, String, String)>,
+) -> Result<Json<RepositoryInviteResponse>, ApiError> {
+    let user = require_scope_user(&state, &headers).await?;
+    let repo = find_repo(&state, &owner, &repo_name)?;
+    ensure_collaboration_owner_access(&state, &repo, &user.id)?;
+    let invite = state.metadata.revoke_repository_invite(
+        &owner,
+        &repo_name,
+        &user.id,
+        &invite_id,
+        unix_now()?,
+    )?;
+    let repo = find_repo(&state, &owner, &repo_name)?;
+    state.publish_repo_change(
+        &repo.record.id,
+        repo.record.change_version,
+        "invite-revoked",
+    );
+    Ok(Json(repository_invite_response(&invite)))
 }
 
 pub(crate) async fn delete_repository_member(

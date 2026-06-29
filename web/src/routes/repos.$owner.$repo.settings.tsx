@@ -1,11 +1,13 @@
 import {
   createRepoInviteForRequest,
+  deleteRepoInviteForRequest,
   deleteRepoMemberForRequest,
   deleteRepoForRequest,
   loadRepoCollaborationForRequest,
   loadRepoForRequest,
   loadRepoSettingsForRequest,
   parseCreateRepoInviteInput,
+  parseDeleteRepoInviteInput,
   parseDeleteRepoMemberInput,
   parseRepoParams,
   parseUpdateRepoMemberInput,
@@ -54,6 +56,10 @@ const deleteRepoMember = createServerFn({ method: 'POST' })
   .validator(parseDeleteRepoMemberInput)
   .handler(({ data }) => deleteRepoMemberForRequest(data))
 
+const deleteRepoInvite = createServerFn({ method: 'POST' })
+  .validator(parseDeleteRepoInviteInput)
+  .handler(({ data }) => deleteRepoInviteForRequest(data))
+
 export const Route = createFileRoute('/repos/$owner/$repo/settings')({
   loader: ({ params }) => loadRepoSettings({ data: params }),
   component: RepoSettingsRoute,
@@ -69,6 +75,7 @@ function RepoSettingsRoute() {
   return (
     <RepoSettingsPage
       createInvite={(data) => createRepoInvite({ data })}
+      deleteInvite={(data) => deleteRepoInvite({ data })}
       deleteRepo={(data) => deleteRepo({ data })}
       deleteMember={(data) => deleteRepoMember({ data })}
       detail={detail}

@@ -670,6 +670,81 @@ async fn accept_expired_invite_persists_expired_state() {
 }
 
 #[tokio::test]
+async fn owner_can_revoke_pending_invite_before_acceptance() {
+    let state = test_state_with_repo();
+    cache_test_jwks(&state);
+    let token = "revoked-invite-token";
+    let token_hash = repository_invite_token_hash(token);
+    let invited_email = "invitee@example.com";
+    {
+        let mut catalog = lock_catalog(&state).unwrap();
+        let repo = catalog.repositories.get_mut(TEST_REPO_ID).unwrap();
+        repo.invitations.push(RepositoryInvite {
+            id: "invite_revoke".to_string(),
+            repo_id: TEST_REPO_ID.to_string(),
+            invited_email: invited_email.to_string(),
+            invited_email_normalized: crate::domain::store::normalize_repository_invite_email(
+                invited_email,
+            ),
+            permissions: RepositoryMemberPermissions::default(),
+            invited_by_user_id: test_owner_id(),
+            state: RepositoryInviteState::Pending,
+            token_hash: token_hash.clone(),
+            created_at_unix: unix_now(),
+            updated_at_unix: unix_now(),
+            expires_at_unix: unix_now() + 600,
+            accepted_by_user_id: None,
+            accepted_at_unix: None,
+            revoked_at_unix: None,
+        });
+    }
+
+    let app = router(state.clone());
+    let revoke_response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("DELETE")
+                .uri("/v1/repos/owner/repo/invites/invite_revoke")
+                .header(AUTHORIZATION, bearer_header())
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(revoke_response.status(), StatusCode::OK);
+    let body = response_json(revoke_response).await;
+    assert_eq!(body["state"], "Revoked");
+
+    let accept_response = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri(format!("/v1/repository-invites/{token}/accept"))
+                .header(
+                    AUTHORIZATION,
+                    bearer_header_for("user_invitee", invited_email),
+                )
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(accept_response.status(), StatusCode::CONFLICT);
+    let catalog = lock_catalog(&state).unwrap();
+    let repo = catalog.repositories.get(TEST_REPO_ID).unwrap();
+    let invite = repo
+        .invitations
+        .iter()
+        .find(|invite| invite.id == "invite_revoke")
+        .unwrap();
+    assert_eq!(invite.state, RepositoryInviteState::Revoked);
+    assert!(invite.revoked_at_unix.is_some());
+}
+
+#[tokio::test]
 async fn list_repos_route_hides_pending_repo_from_reader_member() {
     let state = test_state_with_repo();
     cache_test_jwks(&state);

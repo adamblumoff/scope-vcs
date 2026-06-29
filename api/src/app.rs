@@ -126,6 +126,10 @@ pub fn router(state: AppState) -> Router {
             post(http::repos::create_repository_invite),
         )
         .route(
+            "/v1/repos/{owner}/{repo}/invites/{invite_id}",
+            delete(http::repos::delete_repository_invite),
+        )
+        .route(
             "/v1/repos/{owner}/{repo}/members/{member_user_id}",
             patch(http::repos::update_repository_member)
                 .delete(http::repos::delete_repository_member),

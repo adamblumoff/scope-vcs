@@ -120,6 +120,30 @@ pub(crate) fn accept_repository_invite(
     Ok(AcceptRepositoryInviteOutcome::Accepted(member))
 }
 
+pub(crate) fn revoke_repository_invite(
+    repo: &mut StoredRepository,
+    owner_user_id: &str,
+    invite_id: &str,
+    now_unix: u64,
+) -> Result<RepositoryInvite, ApiError> {
+    ensure_can_manage_members(repo, owner_user_id)?;
+    let invite = repo
+        .invitations
+        .iter_mut()
+        .find(|invite| invite.id == invite_id)
+        .ok_or_else(|| ApiError::not_found("repository invite not found"))?;
+    if invite.state != RepositoryInviteState::Pending {
+        return Err(ApiError::conflict("repository invite is no longer pending"));
+    }
+
+    invite.state = RepositoryInviteState::Revoked;
+    invite.revoked_at_unix = Some(now_unix);
+    invite.updated_at_unix = now_unix;
+    let invite = invite.clone();
+    repo.bump_change_version();
+    Ok(invite)
+}
+
 pub(crate) fn update_repository_member_permissions(
     repo: &mut StoredRepository,
     owner_user_id: &str,

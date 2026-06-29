@@ -122,6 +122,7 @@ export function MemberAccessSections({
 export function RepositoryMembersSection({
   collaboration,
   createInvite,
+  deleteInvite,
   deleteMember,
   params,
   repo,
@@ -131,12 +132,16 @@ export function RepositoryMembersSection({
   createInvite: (
     input: CreateRepoInviteInput,
   ) => Promise<CreateRepoInviteResponse>
+  deleteInvite: (inviteId: string) => Promise<RepoInvite>
   deleteMember: (memberUserId: string) => Promise<RepoMember>
   params: RepoParams
   repo: RepoSummary
   updateMember: (input: UpdateRepoMemberInput) => Promise<RepoMember>
 }) {
   const canInvite = repo.lifecycle_state === 'Published'
+  const pendingInvites = collaboration.invites.filter(
+    (invite) => invite.state === 'Pending',
+  )
 
   return (
     <SectionRows>
@@ -174,13 +179,13 @@ export function RepositoryMembersSection({
         />
       </SectionRow>
 
-      {collaboration.invites.length > 0 && (
+      {pendingInvites.length > 0 && (
         <SectionRow
           description="Pending email invites are unique per repository and email."
           icon={<MailPlus className="size-4" />}
           title="Pending invites"
         >
-          <InviteList invites={collaboration.invites} />
+          <InviteList deleteInvite={deleteInvite} invites={pendingInvites} />
         </SectionRow>
       )}
     </SectionRows>
@@ -376,26 +381,69 @@ function MemberList({
   )
 }
 
-function InviteList({ invites }: { invites: RepoInvite[] }) {
+function InviteList({
+  deleteInvite,
+  invites,
+}: {
+  deleteInvite: (inviteId: string) => Promise<RepoInvite>
+  invites: RepoInvite[]
+}) {
+  const [error, setError] = useState<string | null>(null)
+  const [pendingId, setPendingId] = useState<string | null>(null)
+
+  async function revoke(invite: RepoInvite) {
+    setError(null)
+    setPendingId(invite.id)
+    try {
+      await deleteInvite(invite.id)
+    } catch (error) {
+      setError(error instanceof Error ? error.message : 'invite revoke failed')
+    } finally {
+      setPendingId(null)
+    }
+  }
+
   return (
-    <ul className="divide-y divide-border">
-      {invites.map((invite) => (
-        <li
-          className="flex flex-col gap-2 py-3 text-sm first:pt-0 sm:flex-row sm:items-center sm:justify-between"
-          key={invite.id}
-        >
-          <div className="min-w-0">
-            <div className="truncate font-medium leading-5">
-              {invite.invited_email}
-            </div>
-            <div className="leading-5 text-muted-foreground">
-              {permissionSummaryText(invite.permissions)}
-            </div>
-          </div>
-          <Badge variant="warning">{invite.state}</Badge>
-        </li>
-      ))}
-    </ul>
+    <div className="space-y-3">
+      <ul className="divide-y divide-border">
+        {invites.map((invite) => {
+          const pending = pendingId === invite.id
+          return (
+            <li
+              className="flex flex-col gap-2 py-3 text-sm first:pt-0 sm:flex-row sm:items-center sm:justify-between"
+              key={invite.id}
+            >
+              <div className="min-w-0">
+                <div className="truncate font-medium leading-5">
+                  {invite.invited_email}
+                </div>
+                <div className="leading-5 text-muted-foreground">
+                  {permissionSummaryText(invite.permissions)}
+                </div>
+              </div>
+              <div className="flex items-center gap-2">
+                <Badge variant="warning">{invite.state}</Badge>
+                <Button
+                  disabled={pending}
+                  onClick={() => void revoke(invite)}
+                  size="sm"
+                  type="button"
+                  variant="secondary"
+                >
+                  {pending ? (
+                    <LoaderCircle className="size-3.5 animate-spin" />
+                  ) : (
+                    <Trash2 className="size-3.5" />
+                  )}
+                  <span>Revoke</span>
+                </Button>
+              </div>
+            </li>
+          )
+        })}
+      </ul>
+      {error && <p className="text-sm text-destructive">{error}</p>}
+    </div>
   )
 }
 

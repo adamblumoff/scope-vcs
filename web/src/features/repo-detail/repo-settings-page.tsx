@@ -1,10 +1,12 @@
 import type {
   CreateRepoInviteInput,
   CreateRepoInviteResponse,
+  DeleteRepoInviteInput,
   DeleteRepoResponse,
   DeleteRepoMemberInput,
   RepoDetail,
   RepoCollaboration,
+  RepoInvite,
   RepoMember,
   RepoParams,
   RepoSettings,
@@ -36,6 +38,7 @@ import {
 
 export function RepoSettingsPage({
   createInvite,
+  deleteInvite,
   deleteMember,
   deleteRepo,
   detail,
@@ -48,6 +51,7 @@ export function RepoSettingsPage({
   createInvite: (
     input: CreateRepoInviteInput,
   ) => Promise<CreateRepoInviteResponse>
+  deleteInvite: (input: DeleteRepoInviteInput) => Promise<RepoInvite>
   deleteMember: (input: DeleteRepoMemberInput) => Promise<RepoMember>
   deleteRepo: (params: RepoParams) => Promise<DeleteRepoResponse>
   detail: RepoDetail
@@ -199,6 +203,26 @@ export function RepoSettingsPage({
     return member
   }
 
+  async function removeRepositoryInvite(inviteId: string) {
+    const invite = await deleteInvite({
+      ...params,
+      invite_id: inviteId,
+    })
+    setCollaborationState((current) => ({
+      base: current.base,
+      value: current.value
+        ? {
+            ...current.value,
+            invites: current.value.invites.map((candidate) =>
+              candidate.id === invite.id ? invite : candidate,
+            ),
+          }
+        : current.value,
+    }))
+    await router.invalidate()
+    return invite
+  }
+
   return (
     <main className="min-h-screen bg-background text-foreground">
       <AppHeader
@@ -275,6 +299,7 @@ export function RepoSettingsPage({
           <RepositoryMembersSection
             collaboration={collaboration}
             createInvite={createMemberInvite}
+            deleteInvite={removeRepositoryInvite}
             deleteMember={removeRepositoryMember}
             params={params}
             repo={repo}

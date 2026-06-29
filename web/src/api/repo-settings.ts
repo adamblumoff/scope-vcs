@@ -3,10 +3,12 @@ import type {
   AcceptRepoInviteResponse,
   CreateRepoInviteInput,
   CreateRepoInviteResponse,
+  DeleteRepoInviteInput,
   DeleteRepoMemberInput,
   DeleteRepoInput,
   DeleteRepoResponse,
   RepoCollaboration,
+  RepoInvite,
   RepoInviteLookup,
   RepoInviteTokenInput,
   RepoMember,
@@ -90,6 +92,15 @@ export async function deleteRepoMemberForRequest(
 ): Promise<RepoMember> {
   return createApiClient().delete<RepoMember>(
     `/v1/repos/${data.owner}/${data.repo}/members/${data.member_user_id}`,
+    { auth: 'required' },
+  )
+}
+
+export async function deleteRepoInviteForRequest(
+  data: DeleteRepoInviteInput,
+): Promise<RepoInvite> {
+  return createApiClient().delete<RepoInvite>(
+    `/v1/repos/${data.owner}/${data.repo}/invites/${data.invite_id}`,
     { auth: 'required' },
   )
 }

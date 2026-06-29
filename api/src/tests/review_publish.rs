@@ -536,6 +536,59 @@ async fn visibility_member_can_load_staged_review_preview_and_file_diff() {
 }
 
 #[tokio::test]
+async fn visibility_member_public_review_preview_counts_private_exclusions() {
+    let state = test_state_with_repo();
+    cache_test_jwks(&state);
+    let member_clerk_id = "user_visibility_reviewer";
+    let member_email = "visibility@example.com";
+    let member_id = crate::db::scope_user_id_for_auth_identity("clerk", member_clerk_id);
+    {
+        let mut repo = repo_with_readme();
+        repo.record.default_visibility = Visibility::Private;
+        repo.policy = Policy::new(Visibility::Private);
+        repo.policy
+            .add_rule(VisibilityRule::public(
+                ScopePath::parse("/README.md").unwrap(),
+            ))
+            .unwrap();
+        repo.graph.commits[0].changes[0].visibility = Visibility::Public;
+        repo.members.push(test_repository_member(
+            TEST_REPO_ID,
+            member_id,
+            member_permissions(false, true, false),
+        ));
+        stage_receive_pack_update(
+            &mut repo,
+            receive_pack_update(vec![("/secret.txt", Some("private review"))]),
+        )
+        .unwrap();
+
+        let mut catalog = lock_catalog(&state).unwrap();
+        catalog.repositories.insert(TEST_REPO_ID.to_string(), repo);
+    }
+
+    let response = router(state)
+        .oneshot(
+            Request::builder()
+                .method("GET")
+                .uri("/v1/repos/owner/repo/projection-preview?audience=public&source=review")
+                .header(
+                    AUTHORIZATION,
+                    bearer_header_for(member_clerk_id, member_email),
+                )
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = response_json(response).await;
+    assert_eq!(body["summary"]["visible_files"], 1);
+    assert_eq!(body["summary"]["hidden_files"], 1);
+}
+
+#[tokio::test]
 async fn staged_update_review_counts_separate_line_diff_hunks() {
     let state = test_state_with_repo();
     cache_test_jwks(&state);

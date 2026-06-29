@@ -8,6 +8,7 @@ export {
 export {
   acceptRepoInviteForRequest,
   createRepoInviteForRequest,
+  deleteRepoInviteForRequest,
   deleteRepoMemberForRequest,
   deleteRepoForRequest,
   loadRepoCollaborationForRequest,
@@ -18,6 +19,7 @@ export {
 } from './repo-settings'
 export {
   parseCreateRepoInviteInput,
+  parseDeleteRepoInviteInput,
   parseDeleteRepoMemberInput,
   parseRepoInviteTokenInput,
   parseSetRepoFileVisibilityInput,

@@ -5,7 +5,7 @@ use super::{
 use crate::domain::{
     repo_collaboration::{
         AcceptRepositoryInviteOutcome, CreateRepositoryInviteCommand, accept_repository_invite,
-        create_or_refresh_repository_invite, remove_repository_member,
+        create_or_refresh_repository_invite, remove_repository_member, revoke_repository_invite,
         update_repository_member_permissions,
     },
     store::{
@@ -14,7 +14,7 @@ use crate::domain::{
     },
 };
 use crate::error::ApiError;
-use sea_orm::{ColumnTrait, EntityTrait, QueryFilter, QueryOrder, TransactionTrait};
+use sea_orm::{ColumnTrait, EntityTrait, QueryFilter, TransactionTrait};
 use std::sync::Arc;
 
 impl MetadataStore {
@@ -109,6 +109,21 @@ impl MetadataStore {
                 permissions,
                 now_unix,
             )
+        })
+    }
+
+    pub(crate) fn revoke_repository_invite(
+        &self,
+        owner: &str,
+        name: &str,
+        owner_user_id: &str,
+        invite_id: &str,
+        now_unix: u64,
+    ) -> Result<RepositoryInvite, ApiError> {
+        let owner_user_id = owner_user_id.to_string();
+        let invite_id = invite_id.to_string();
+        mutate_repository_invite(self, owner, name, move |repo| {
+            revoke_repository_invite(repo, &owner_user_id, &invite_id, now_unix)
         })
     }
 
@@ -264,20 +279,56 @@ where
     C: sea_orm::ConnectionTrait,
 {
     let normalized = normalize_repository_invite_email(email);
-    let users = entities::user::Entity::find()
-        .order_by_asc(entities::user::Column::Id)
-        .all(conn)
+    entities::user::Entity::find()
+        .filter(entities::user::Column::Email.eq(normalized))
+        .one(conn)
         .await
-        .map_err(ApiError::internal)?;
-    users
-        .into_iter()
+        .map_err(ApiError::internal)?
         .map(entities::user::Model::try_into_domain)
-        .find(|user| {
-            user.as_ref()
-                .map(|user| normalize_repository_invite_email(&user.email) == normalized)
-                .unwrap_or(true)
-        })
         .transpose()
+}
+
+fn mutate_repository_invite<F>(
+    store: &MetadataStore,
+    owner: &str,
+    name: &str,
+    op: F,
+) -> Result<RepositoryInvite, ApiError>
+where
+    F: FnOnce(&mut crate::domain::store::StoredRepository) -> Result<RepositoryInvite, ApiError>
+        + Send
+        + 'static,
+{
+    let repo_id = repo_id(owner, name);
+    let owner = owner.to_string();
+    let name = name.to_string();
+    match store.inner.as_ref() {
+        MetadataStoreInner::Postgres { db, runtime } => {
+            let db = Arc::clone(db);
+            run_api_db_on(runtime, async move {
+                let tx = db.as_ref().begin().await.map_err(ApiError::internal)?;
+                acquire_metadata_write_lock(&tx).await?;
+                let row = entities::repository::Entity::find_by_id(repo_id)
+                    .one(&tx)
+                    .await
+                    .map_err(ApiError::internal)?
+                    .ok_or_else(|| ApiError::not_found(format!("repo {owner}/{name} not found")))?;
+                let mut repo = repository_from_model(&tx, row).await?;
+                let invite = op(&mut repo)?;
+                save_repo_mutation(&tx, &repo, &mutation_effects_none()).await?;
+                tx.commit().await.map_err(ApiError::internal)?;
+                Ok(invite)
+            })
+        }
+        #[cfg(any(test, feature = "memory-metadata"))]
+        MetadataStoreInner::Memory(_) => store.update(move |catalog| {
+            let repo = catalog
+                .repositories
+                .get_mut(&repo_id)
+                .ok_or_else(|| ApiError::not_found(format!("repo {owner}/{name} not found")))?;
+            op(repo)
+        }),
+    }
 }
 
 fn mutation_effects_none() -> crate::domain::repo_actions::RepoEffects {

@@ -152,6 +152,10 @@ export type DeleteRepoMemberInput = RepoParams & {
   member_user_id: string
 }
 
+export type DeleteRepoInviteInput = RepoParams & {
+  invite_id: string
+}
+
 export type RepoInviteTokenInput = {
   token: string
 }

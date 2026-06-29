@@ -217,10 +217,16 @@ fn review_off_receive_pack_applies_immediately() {
 #[test]
 fn permission_forced_staged_push_counts_line_diff_when_review_is_off() {
     let state = test_state_with_repo();
+    let member_id = "user_push_only";
     {
         let mut catalog = lock_catalog(&state).unwrap();
         let mut repo = repo_with_readme();
         repo.settings.review_pushes_before_applying = false;
+        repo.members.push(test_repository_member(
+            TEST_REPO_ID,
+            member_id,
+            member_permissions(true, false, false),
+        ));
         catalog.repositories.insert(TEST_REPO_ID.to_string(), repo);
     }
 
@@ -229,7 +235,7 @@ fn permission_forced_staged_push_counts_line_diff_when_review_is_off() {
         TEST_REPO_OWNER,
         TEST_REPO_NAME,
         receive_pack_update(vec![("/README.md", Some("hello\nextra line"))]),
-        false,
+        member_id,
     )
     .unwrap();
 
@@ -238,6 +244,48 @@ fn permission_forced_staged_push_counts_line_diff_when_review_is_off() {
     let staged = repo.staged_update.unwrap();
     assert_eq!(staged.changes[0].line_diff.additions, 1);
     assert_eq!(staged.changes[0].line_diff.deletions, 0);
+}
+
+#[test]
+fn published_push_rechecks_member_permission_before_persisting() {
+    let state = test_state_with_repo();
+    let member_id = "user_removed_during_push";
+    {
+        let mut catalog = lock_catalog(&state).unwrap();
+        let mut repo = repo_with_readme();
+        repo.settings.review_pushes_before_applying = false;
+        repo.members.push(test_repository_member(
+            TEST_REPO_ID,
+            member_id,
+            member_permissions(true, false, true),
+        ));
+        catalog.repositories.insert(TEST_REPO_ID.to_string(), repo);
+    }
+    {
+        let mut catalog = lock_catalog(&state).unwrap();
+        let repo = catalog.repositories.get_mut(TEST_REPO_ID).unwrap();
+        repo.members.retain(|member| member.user_id != member_id);
+    }
+
+    let error = persist_receive_pack_update_and_promote(
+        &state,
+        TEST_REPO_OWNER,
+        TEST_REPO_NAME,
+        receive_pack_update(vec![("/README.md", Some("should not persist"))]),
+        member_id,
+    )
+    .unwrap_err();
+
+    assert_eq!(error.status, StatusCode::FORBIDDEN);
+    let repo = find_repo(&state, TEST_REPO_OWNER, TEST_REPO_NAME).unwrap();
+    assert!(repo.staged_update.is_none());
+    assert_eq!(
+        live_tree(&repo)
+            .get(&ScopePath::parse("/README.md").unwrap())
+            .map(blob_content)
+            .as_deref(),
+        Some("hello")
+    );
 }
 
 #[test]
@@ -624,7 +672,7 @@ fn applying_push_deletes_replaced_git_snapshot_bundle() {
         TEST_REPO_OWNER,
         TEST_REPO_NAME,
         update,
-        true,
+        &test_owner_id(),
     )
     .unwrap();
 
@@ -866,7 +914,7 @@ fn applied_push_survives_obsolete_snapshot_cleanup_failure() {
         TEST_REPO_OWNER,
         TEST_REPO_NAME,
         receive_pack_update(vec![("/README.md", Some("cleanup failure still lands"))]),
-        true,
+        &test_owner_id(),
     )
     .unwrap();
 

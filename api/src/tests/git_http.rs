@@ -532,7 +532,7 @@ async fn owner_upload_pack_serves_raw_bucket_snapshot_head() {
         TEST_REPO_OWNER,
         TEST_REPO_NAME,
         update,
-        true,
+        &test_owner_id(),
     )
     .unwrap();
     assert_eq!(persisted, PersistedReceivePackUpdate::Staged);

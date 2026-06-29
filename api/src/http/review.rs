@@ -37,6 +37,8 @@ pub(crate) async fn get_pending_import_review(
     {
         return Err(ApiError::forbidden("review permission required"));
     }
+    // Without a pending import this route intentionally returns 400 for
+    // staged-review users while unrelated readers still get 403 above.
     ensure_pending_publish(&repo)?;
 
     Ok(Json(PendingImportReviewResponse {

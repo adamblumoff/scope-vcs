@@ -1,5 +1,6 @@
 import type {
   CreateRepoInviteInput,
+  DeleteRepoInviteInput,
   DeleteRepoMemberInput,
   RepoInviteTokenInput,
   RepoMemberPermissions,
@@ -118,6 +119,21 @@ export function parseDeleteRepoMemberInput(
   }
 
   return { owner, repo, member_user_id: memberUserId }
+}
+
+export function parseDeleteRepoInviteInput(
+  input: unknown,
+): DeleteRepoInviteInput {
+  const data = input as Partial<DeleteRepoInviteInput> | null
+  const { owner, repo } = parseRepoParamsInput(data)
+  const inviteId =
+    typeof data?.invite_id === 'string' ? data.invite_id.trim() : ''
+
+  if (!owner || !repo || !inviteId) {
+    throw new Error('Repository invite route is incomplete.')
+  }
+
+  return { owner, repo, invite_id: inviteId }
 }
 
 export function parseRepoInviteTokenInput(

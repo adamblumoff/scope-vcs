@@ -41,13 +41,8 @@ pub(crate) struct GitInfoRefsQuery {
 
 #[derive(Debug)]
 pub(crate) enum ReceivePackAccess {
-    FirstPush {
-        credential: InitialPushCredential,
-    },
-    PublishedMember {
-        author_id: String,
-        can_apply_changes: bool,
-    },
+    FirstPush { credential: InitialPushCredential },
+    PublishedMember { author_id: String },
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -212,11 +207,7 @@ pub(crate) async fn receive_pack_access(
                     InitialPushCredential::GitPushToken { secret } => {
                         let author_id = authorize_git_write_token_for_repo(&repo, &secret)
                             .map_err(git_credential_error)?;
-                        let access = repo.access_for_user_id(&author_id);
-                        Ok(ReceivePackAccess::PublishedMember {
-                            author_id,
-                            can_apply_changes: access.can_apply_changes,
-                        })
+                        Ok(ReceivePackAccess::PublishedMember { author_id })
                     }
                     InitialPushCredential::FirstPushToken { .. } => Err(invalid_git_credentials()),
                 },
@@ -255,10 +246,9 @@ pub(crate) async fn receive_pack_access(
                 RepoPublicationState::Unpublished => Err(ApiError::conflict(
                     "repo is waiting for publish and cannot receive another push",
                 )),
-                RepoPublicationState::Published => Ok(ReceivePackAccess::PublishedMember {
-                    author_id: user.id,
-                    can_apply_changes: access.can_apply_changes,
-                }),
+                RepoPublicationState::Published => {
+                    Ok(ReceivePackAccess::PublishedMember { author_id: user.id })
+                }
             }
         }
     }
@@ -389,10 +379,7 @@ pub(crate) fn handle_git_receive_pack(
                     "git receive-pack pending import persisted"
                 );
             }
-            ReceivePackAccess::PublishedMember {
-                author_id,
-                can_apply_changes,
-            } => {
+            ReceivePackAccess::PublishedMember { author_id } => {
                 let import_started_at = Instant::now();
                 let update = match receive_pack_update_from_staging_repo(
                     state,
@@ -415,11 +402,7 @@ pub(crate) fn handle_git_receive_pack(
                     .chain(std::iter::once(update.git_snapshot.clone()))
                     .collect::<Vec<_>>();
                 if let Err(error) = persist_receive_pack_update_and_promote(
-                    state,
-                    owner,
-                    repo_name,
-                    update,
-                    can_apply_changes,
+                    state, owner, repo_name, update, &author_id,
                 ) {
                     crate::state::best_effort_cleanup_rollback_source_blobs(state, &uploaded_blobs);
                     let _ = fs::remove_dir_all(&staging_repo);
