@@ -72,8 +72,9 @@ pub(super) fn stage_receive_pack_update_with_store(
         return Err(ApiError::conflict("a staged update is already pending"));
     }
 
-    let staged_update = build_staged_receive_pack_update(repo, update, store)?;
-    if repo.settings.review_pushes_before_applying || !can_apply_changes {
+    let will_stage = repo.settings.review_pushes_before_applying || !can_apply_changes;
+    let staged_update = build_staged_receive_pack_update(repo, update, store, will_stage)?;
+    if will_stage {
         repo.staged_update = Some(staged_update.clone());
         repo.bump_change_version();
         Ok(Some(staged_update))
@@ -88,6 +89,7 @@ pub(crate) fn build_staged_receive_pack_update(
     repo: &StoredRepository,
     update: ReceivePackUpdate,
     store: &dyn ObjectStore,
+    include_line_diff: bool,
 ) -> Result<StagedRepoUpdate, ApiError> {
     let live_tree = live_tree(repo);
     let mut staged_changes = Vec::with_capacity(update.changes.len());
@@ -106,7 +108,7 @@ pub(crate) fn build_staged_receive_pack_update(
         let visibility = repo.policy.effective_visibility(&change.path);
         staged_changes.push(StagedFileChange {
             path: change.path,
-            line_diff: if repo.settings.review_pushes_before_applying {
+            line_diff: if include_line_diff {
                 staged_file_line_diff(store, old_content.as_ref(), change.content.as_ref())?
             } else {
                 LineDiff::default()

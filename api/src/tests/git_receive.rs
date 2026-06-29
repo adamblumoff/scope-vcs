@@ -215,6 +215,32 @@ fn review_off_receive_pack_applies_immediately() {
 }
 
 #[test]
+fn permission_forced_staged_push_counts_line_diff_when_review_is_off() {
+    let state = test_state_with_repo();
+    {
+        let mut catalog = lock_catalog(&state).unwrap();
+        let mut repo = repo_with_readme();
+        repo.settings.review_pushes_before_applying = false;
+        catalog.repositories.insert(TEST_REPO_ID.to_string(), repo);
+    }
+
+    let persisted = persist_receive_pack_update_and_promote(
+        &state,
+        TEST_REPO_OWNER,
+        TEST_REPO_NAME,
+        receive_pack_update(vec![("/README.md", Some("hello\nextra line"))]),
+        false,
+    )
+    .unwrap();
+
+    assert_eq!(persisted, PersistedReceivePackUpdate::Staged);
+    let repo = find_repo(&state, TEST_REPO_OWNER, TEST_REPO_NAME).unwrap();
+    let staged = repo.staged_update.unwrap();
+    assert_eq!(staged.changes[0].line_diff.additions, 1);
+    assert_eq!(staged.changes[0].line_diff.deletions, 0);
+}
+
+#[test]
 fn staged_new_private_file_stays_out_of_public_projection() {
     let mut repo = repo_with_readme();
     let mut staged = stage_receive_pack_update(
