@@ -236,15 +236,20 @@ pub(crate) async fn receive_pack_access(
                     "first-push token or Git push token required",
                 ));
             }
+            if repo.has_pending_import_review() {
+                if access.actor != RepositoryActor::Owner {
+                    return Err(ApiError::not_found(format!(
+                        "repo {owner}/{repo_name} not found"
+                    )));
+                }
+                return Err(ApiError::conflict(
+                    "repo is waiting for publish and cannot receive another push",
+                ));
+            }
             if !access.can_push {
                 return Err(ApiError::not_found(format!(
                     "repo {owner}/{repo_name} not found"
                 )));
-            }
-            if repo.has_pending_import_review() {
-                return Err(ApiError::conflict(
-                    "repo is waiting for publish and cannot receive another push",
-                ));
             }
             match repo.record.publication_state {
                 RepoPublicationState::Unpublished => Err(ApiError::conflict(

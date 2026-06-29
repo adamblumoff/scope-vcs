@@ -6,6 +6,11 @@ use crate::error::ApiError;
 
 pub(crate) const REPOSITORY_INVITE_TTL_SECS: u64 = 7 * 24 * 60 * 60;
 
+pub(crate) enum AcceptRepositoryInviteOutcome {
+    Accepted(RepositoryMember),
+    Expired,
+}
+
 pub(crate) struct CreateRepositoryInviteCommand<'a> {
     pub(crate) id: String,
     pub(crate) owner: &'a UserAccount,
@@ -74,7 +79,7 @@ pub(crate) fn accept_repository_invite(
     user: &UserAccount,
     token_hash: &str,
     now_unix: u64,
-) -> Result<RepositoryMember, ApiError> {
+) -> Result<AcceptRepositoryInviteOutcome, ApiError> {
     let normalized_user_email = normalize_repository_invite_email(&user.email);
     if repo.is_owner_user(&user.id) || repo.member_for_user(&user.id).is_some() {
         return Err(ApiError::conflict("user is already a repository member"));
@@ -91,7 +96,7 @@ pub(crate) fn accept_repository_invite(
         invite.state = RepositoryInviteState::Expired;
         invite.updated_at_unix = now_unix;
         repo.bump_change_version();
-        return Err(ApiError::conflict("repository invite expired"));
+        return Ok(AcceptRepositoryInviteOutcome::Expired);
     }
     if !user.email_verified || normalized_user_email != invite.invited_email_normalized {
         return Err(ApiError::forbidden(
@@ -112,7 +117,7 @@ pub(crate) fn accept_repository_invite(
     repo.members.push(member.clone());
     sort_members(repo);
     repo.bump_change_version();
-    Ok(member)
+    Ok(AcceptRepositoryInviteOutcome::Accepted(member))
 }
 
 pub(crate) fn update_repository_member_permissions(

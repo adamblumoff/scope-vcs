@@ -613,6 +613,63 @@ async fn member_management_hides_private_repo_from_unrelated_users() {
 }
 
 #[tokio::test]
+async fn accept_expired_invite_persists_expired_state() {
+    let state = test_state_with_repo();
+    cache_test_jwks(&state);
+    let token = "expired-invite-token";
+    let token_hash = repository_invite_token_hash(token);
+    let invited_email = "invitee@example.com";
+    let expires_at_unix = unix_now().saturating_sub(1);
+    {
+        let mut catalog = lock_catalog(&state).unwrap();
+        let repo = catalog.repositories.get_mut(TEST_REPO_ID).unwrap();
+        repo.invitations.push(RepositoryInvite {
+            id: "invite_1".to_string(),
+            repo_id: TEST_REPO_ID.to_string(),
+            invited_email: invited_email.to_string(),
+            invited_email_normalized: crate::domain::store::normalize_repository_invite_email(
+                invited_email,
+            ),
+            permissions: RepositoryMemberPermissions::default(),
+            invited_by_user_id: test_owner_id(),
+            state: RepositoryInviteState::Pending,
+            token_hash: token_hash.clone(),
+            created_at_unix: expires_at_unix.saturating_sub(100),
+            updated_at_unix: expires_at_unix.saturating_sub(100),
+            expires_at_unix,
+            accepted_by_user_id: None,
+            accepted_at_unix: None,
+            revoked_at_unix: None,
+        });
+    }
+
+    let response = router(state.clone())
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri(format!("/v1/repository-invites/{token}/accept"))
+                .header(
+                    AUTHORIZATION,
+                    bearer_header_for("user_invitee", invited_email),
+                )
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::CONFLICT);
+    let catalog = lock_catalog(&state).unwrap();
+    let repo = catalog.repositories.get(TEST_REPO_ID).unwrap();
+    let invite = repo
+        .invitations
+        .iter()
+        .find(|invite| invite.token_hash == token_hash)
+        .unwrap();
+    assert_eq!(invite.state, RepositoryInviteState::Expired);
+}
+
+#[tokio::test]
 async fn list_repos_route_hides_pending_repo_from_reader_member() {
     let state = test_state_with_repo();
     cache_test_jwks(&state);

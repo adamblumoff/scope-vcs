@@ -4,7 +4,7 @@ use super::{
 };
 use crate::domain::{
     repo_collaboration::{
-        CreateRepositoryInviteCommand, accept_repository_invite,
+        AcceptRepositoryInviteOutcome, CreateRepositoryInviteCommand, accept_repository_invite,
         create_or_refresh_repository_invite, remove_repository_member,
         update_repository_member_permissions,
     },
@@ -172,31 +172,46 @@ impl MetadataStore {
                         .map_err(ApiError::internal)?
                         .ok_or_else(|| ApiError::not_found("repository invite not found"))?;
                     let mut repo = repository_from_model(&tx, row).await?;
-                    let member = accept_repository_invite(&mut repo, &user, &token_hash, now_unix)?;
+                    let outcome =
+                        accept_repository_invite(&mut repo, &user, &token_hash, now_unix)?;
                     save_repo_mutation(&tx, &repo, &mutation_effects_none()).await?;
+                    let result = match outcome {
+                        AcceptRepositoryInviteOutcome::Accepted(member) => Ok((repo, member)),
+                        AcceptRepositoryInviteOutcome::Expired => {
+                            Err(ApiError::conflict("repository invite expired"))
+                        }
+                    };
                     tx.commit().await.map_err(ApiError::internal)?;
-                    Ok((repo, member))
+                    result
                 })
             }
             #[cfg(any(test, feature = "memory-metadata"))]
-            MetadataStoreInner::Memory(_) => self.update(move |catalog| {
-                let repo_id = catalog
-                    .repositories
-                    .values()
-                    .find(|repo| {
-                        repo.invitations
-                            .iter()
-                            .any(|invite| invite.token_hash == token_hash)
-                    })
-                    .map(|repo| repo.record.id.clone())
-                    .ok_or_else(|| ApiError::not_found("repository invite not found"))?;
-                let repo = catalog
-                    .repositories
-                    .get_mut(&repo_id)
-                    .ok_or_else(|| ApiError::not_found("repository invite not found"))?;
-                let member = accept_repository_invite(repo, &user, &token_hash, now_unix)?;
-                Ok((repo.clone(), member))
-            }),
+            MetadataStoreInner::Memory(_) => {
+                let (repo, outcome) = self.update(move |catalog| {
+                    let repo_id = catalog
+                        .repositories
+                        .values()
+                        .find(|repo| {
+                            repo.invitations
+                                .iter()
+                                .any(|invite| invite.token_hash == token_hash)
+                        })
+                        .map(|repo| repo.record.id.clone())
+                        .ok_or_else(|| ApiError::not_found("repository invite not found"))?;
+                    let repo = catalog
+                        .repositories
+                        .get_mut(&repo_id)
+                        .ok_or_else(|| ApiError::not_found("repository invite not found"))?;
+                    let outcome = accept_repository_invite(repo, &user, &token_hash, now_unix)?;
+                    Ok((repo.clone(), outcome))
+                })?;
+                match outcome {
+                    AcceptRepositoryInviteOutcome::Accepted(member) => Ok((repo, member)),
+                    AcceptRepositoryInviteOutcome::Expired => {
+                        Err(ApiError::conflict("repository invite expired"))
+                    }
+                }
+            }
         }
     }
 }

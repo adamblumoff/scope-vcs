@@ -143,6 +143,33 @@ async fn receive_pack_hides_pending_import_from_unrelated_scope_user() {
 }
 
 #[tokio::test]
+async fn receive_pack_reports_pending_import_to_owner_scope_user() {
+    let state = test_state_with_repo();
+    cache_test_jwks(&state);
+    {
+        let mut catalog = lock_catalog(&state).unwrap();
+        let repo = catalog.repositories.get_mut(TEST_REPO_ID).unwrap();
+        repo.record.publication_state = RepoPublicationState::Unpublished;
+        repo.pending_import = Some(pending_import_fixture(vec![("README.md", "hello")]));
+    }
+    let app = router(state);
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("GET")
+                .uri("/git/owner/repo/info/refs?service=git-receive-pack")
+                .header(AUTHORIZATION, bearer_header())
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::CONFLICT);
+}
+
+#[tokio::test]
 async fn upload_pack_uses_git_push_token_for_owner_projection_after_publish() {
     let state = test_state_with_repo();
     let secret = "scope_git_test";
