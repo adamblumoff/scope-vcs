@@ -1,0 +1,821 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Access Control & Collaboration Data Model Plan</title>
+    <style>
+      :root {
+        color-scheme: light;
+        --ink: #161616; --muted: #59554c; --paper: #f7f3ea; --line: #c9bea9;
+        --strong: #0f766e; --warn: #a13d2d; --accent: #b98518; --code: #24211c;
+      }
+      * { box-sizing: border-box; }
+      html { scroll-behavior: smooth; }
+      body {
+        margin: 0;
+        background:
+          linear-gradient(90deg, rgba(22, 22, 22, 0.035) 1px, transparent 1px) 0 0 / 32px 32px,
+          linear-gradient(rgba(22, 22, 22, 0.03) 1px, transparent 1px) 0 0 / 32px 32px,
+          var(--paper);
+        color: var(--ink);
+        font-family: Candara, "Segoe UI", sans-serif;
+        font-size: 17px;
+        line-height: 1.55;
+      }
+      a { color: var(--strong); text-decoration-color: rgba(15, 118, 110, 0.35); text-underline-offset: 0.18em; }
+      code, pre { font-family: "Cascadia Mono", "Consolas", monospace; }
+      pre { margin: 0; overflow-x: auto; white-space: pre; }
+      .shell { min-height: 100vh; }
+      .masthead { border-bottom: 1px solid var(--line); background: rgba(247, 243, 234, 0.92); }
+      .masthead-inner, .layout { width: min(1180px, calc(100vw - 48px)); margin: 0 auto; }
+      .masthead-inner {
+        display: grid;
+        grid-template-columns: minmax(0, 1fr) minmax(240px, 360px);
+        gap: 48px;
+        padding: 64px 0 46px;
+      }
+      .eyebrow {
+        margin: 0 0 18px;
+        color: var(--strong);
+        font-size: 0.78rem;
+        font-weight: 800;
+        letter-spacing: 0.11em;
+        text-transform: uppercase;
+      }
+      h1, h2, h3 { font-family: "Palatino Linotype", Palatino, Georgia, serif; letter-spacing: 0; }
+      h1 { max-width: 920px; margin: 0; font-size: clamp(3rem, 7vw, 6.3rem); line-height: 0.93; }
+      h2 { margin: 0 0 20px; font-size: clamp(1.8rem, 3vw, 2.65rem); line-height: 1.05; }
+      h3 { margin: 30px 0 10px; font-size: 1.35rem; }
+      p { max-width: 900px; }
+      ul, ol { padding-left: 1.2rem; }
+      li { margin: 0.35rem 0; }
+      .subtitle { max-width: 760px; margin: 28px 0 0; color: var(--muted); font-size: 1.18rem; }
+      .meta { align-self: end; border-left: 3px solid var(--accent); padding: 12px 0 12px 22px; }
+      .meta p { margin: 0 0 10px; color: var(--muted); }
+      .meta strong {
+        display: block;
+        color: var(--ink);
+        font-size: 0.82rem;
+        letter-spacing: 0.09em;
+        text-transform: uppercase;
+      }
+      .layout {
+        display: grid;
+        grid-template-columns: 260px minmax(0, 1fr);
+        gap: 40px;
+        padding: 38px 0 72px;
+      }
+      nav {
+        position: sticky;
+        top: 20px;
+        align-self: start;
+        border-right: 1px solid var(--line);
+        padding: 2px 28px 20px 0;
+      }
+      nav h2 { margin: 0 0 14px; font-size: 1rem; text-transform: uppercase; }
+      nav a { display: block; padding: 7px 0; color: var(--muted); font-size: 0.95rem; text-decoration: none; }
+      nav a:hover { color: var(--ink); }
+      main { min-width: 0; }
+      section { border-top: 1px solid var(--line); padding: 34px 0 40px; }
+      section:first-child { border-top: 0; padding-top: 0; }
+      .lead { color: var(--muted); font-size: 1.08rem; }
+      .decision-strip {
+        display: grid;
+        grid-template-columns: repeat(4, minmax(0, 1fr));
+        border-top: 2px solid var(--ink);
+        border-bottom: 2px solid var(--ink);
+        margin: 26px 0;
+      }
+      .decision-strip div { min-height: 132px; border-right: 1px solid var(--line); padding: 20px 18px; }
+      .decision-strip div:last-child { border-right: 0; }
+      .decision-strip strong {
+        display: block;
+        margin-bottom: 8px;
+        color: var(--strong);
+        font-size: 0.83rem;
+        letter-spacing: 0.08em;
+        text-transform: uppercase;
+      }
+      .callout {
+        border-left: 4px solid var(--warn);
+        background: rgba(255, 250, 240, 0.62);
+        margin: 26px 0;
+        padding: 18px 24px;
+      }
+      .callout strong, td code, .warn { color: var(--warn); }
+      .model {
+        display: grid;
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+        gap: 18px;
+        margin: 24px 0;
+      }
+      .schema { border-top: 1px solid var(--ink); padding-top: 14px; }
+      .schema h3, .phase h3 { margin-top: 0; }
+      .schema pre { background: var(--code); color: #f6ebd5; padding: 18px; font-size: 0.88rem; line-height: 1.48; }
+      table { width: 100%; border-collapse: collapse; margin: 22px 0; background: rgba(255, 250, 240, 0.58); }
+      th, td { border-bottom: 1px solid var(--line); padding: 12px 11px; text-align: left; vertical-align: top; }
+      th { color: var(--ink); font-size: 0.78rem; letter-spacing: 0.08em; text-transform: uppercase; }
+      td code { font-size: 0.88em; }
+      .phase {
+        display: grid;
+        grid-template-columns: 88px minmax(0, 1fr);
+        gap: 24px;
+        border-top: 1px solid var(--line);
+        padding: 24px 0;
+      }
+      .phase-number {
+        color: var(--accent);
+        font-family: "Palatino Linotype", Palatino, Georgia, serif;
+        font-size: 2.4rem;
+        line-height: 1;
+      }
+      .checklist { columns: 2; column-gap: 42px; }
+      .checklist li { break-inside: avoid; margin-bottom: 0.55rem; }
+      .status-key { display: flex; flex-wrap: wrap; gap: 10px; margin: 20px 0; }
+      .pill { border: 1px solid var(--line); padding: 5px 9px; color: var(--muted); font-size: 0.82rem; text-transform: uppercase; }
+      .ok { color: var(--strong); }
+      footer { border-top: 1px solid var(--line); color: var(--muted); padding: 32px 0; }
+      @media (max-width: 900px) {
+        .masthead-inner, .layout, .model { grid-template-columns: 1fr; }
+        nav { position: static; border-right: 0; border-bottom: 1px solid var(--line); padding: 0 0 20px; }
+        .decision-strip { grid-template-columns: 1fr 1fr; }
+        .decision-strip div:nth-child(2) { border-right: 0; }
+        .checklist { columns: 1; }
+      }
+      @media (max-width: 560px) {
+        body { font-size: 16px; }
+        .masthead-inner, .layout { width: min(100vw - 28px, 1180px); }
+        .decision-strip { grid-template-columns: 1fr; }
+        .decision-strip div { min-height: auto; border-right: 0; border-bottom: 1px solid var(--line); }
+        .decision-strip div:last-child { border-bottom: 0; }
+        .phase { grid-template-columns: 1fr; gap: 8px; }
+      }
+    </style>
+  </head>
+  <body>
+    <div class="shell">
+      <header class="masthead">
+        <div class="masthead-inner">
+          <div>
+            <p class="eyebrow">Scope VCS data model plan</p>
+            <h1>Access Control &amp; Collaboration</h1>
+            <p class="subtitle">
+              A destructive pre-alpha plan for replacing the current role ladder
+              with user-owned repositories, explicit repository members, and
+              member permission grants that stay separate from file visibility
+              policy.
+            </p>
+          </div>
+          <div class="meta" aria-label="Plan metadata">
+            <p><strong>Date</strong> 2026-06-29</p>
+            <p><strong>Linear project</strong> Access Control &amp; Collaboration</p>
+            <p><strong>Relevant issues</strong> ADA-26, ADA-27, ADA-30, ADA-31</p>
+            <p><strong>Implementation stance</strong> destructive, no compatibility layer</p>
+          </div>
+        </div>
+      </header>
+
+      <div class="layout">
+        <nav aria-label="Plan sections">
+          <h2>Contents</h2>
+          <a href="#decisions">Decisions</a>
+          <a href="#current-state">Current State</a>
+          <a href="#target-model">Target Model</a>
+          <a href="#capabilities">Capabilities</a>
+          <a href="#invites">Invite Flow</a>
+          <a href="#lifecycle">Repo Lifecycle</a>
+          <a href="#boundaries">Domain Boundaries</a>
+          <a href="#implementation">Implementation Phases</a>
+          <a href="#testing">Verification</a>
+          <a href="#open-checks">Checks Before Coding</a>
+        </nav>
+
+        <main>
+          <section id="decisions">
+            <h2>Locked Decisions</h2>
+            <p class="lead">
+              The product model is repository-centric. Repositories are owned by
+              one Scope user. Collaboration is granted through explicit
+              repository membership. Public access is computed from file
+              visibility and publication state, not stored as a role.
+            </p>
+
+            <div class="decision-strip" aria-label="Core decisions">
+              <div>
+                <strong>Ownership</strong>
+                Repos are user-owned for now. The owner is derived from
+                <code>Repository.owner_user_id</code>.
+              </div>
+              <div>
+                <strong>Membership</strong>
+                Collaborators are <code>RepositoryMember</code> records. Every
+                member can read private files.
+              </div>
+              <div>
+                <strong>Permissions</strong>
+                Member powers are individual booleans, not role names or a
+                rank-ordered enum.
+              </div>
+              <div>
+                <strong>Public</strong>
+                Public means no repo membership. Public readers see only the
+                published public projection.
+              </div>
+            </div>
+
+            <h3>Explicitly Rejected</h3>
+            <ul>
+              <li>No workspace or organization ownership in this pass.</li>
+              <li>Collapse <code>PendingFirstPush</code> and <code>PendingPublish</code> into one unpublished repository state.</li>
+              <li>No <code>Public</code>, <code>Reader</code>, <code>Writer</code>, <code>Maintainer</code>, or <code>Owner</code> role ladder.</li>
+              <li>No persisted owner membership row.</li>
+              <li>No member-management powers delegated to members.</li>
+              <li>No compatibility with the current pre-alpha schema.</li>
+              <li>No historical member table; removed members are hard-deleted.</li>
+            </ul>
+          </section>
+
+          <section id="current-state">
+            <h2>Current State And Failure Mode</h2>
+            <p>
+              The current implementation has useful pieces, but the ownership
+              and role model are duplicated. That creates drift risk and has
+              already shaped inconsistent checks.
+            </p>
+
+            <table>
+              <thead>
+                <tr>
+                  <th>Current source</th>
+                  <th>What it says</th>
+                  <th>Problem</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr>
+                  <td><code>RepoRecord.owner_user_id</code></td>
+                  <td>Canonical repo owner user id.</td>
+                  <td>Some code derives owner access from this even if membership rows drift.</td>
+                </tr>
+                <tr>
+                  <td><code>RepoMembership.role = Owner</code></td>
+                  <td>Also says who owns the repo.</td>
+                  <td>Owner-only mutations can reject the owner if this row is missing or stale.</td>
+                </tr>
+                <tr>
+                  <td><code>Policy.owner_id</code></td>
+                  <td>Gives one principal file-policy bypass behavior.</td>
+                  <td>File policy knows about ownership even though ownership is a repo concern.</td>
+                </tr>
+                <tr>
+                  <td><code>RepoRole</code> enum</td>
+                  <td><code>Reader | Writer | Maintainer | Owner</code>.</td>
+                  <td><code>Maintainer</code> has no distinct behavior, and role rank hides product decisions.</td>
+                </tr>
+              </tbody>
+            </table>
+
+            <div class="callout">
+              <strong>Core cleanup:</strong> ownership must have one source of
+              truth, and file visibility policy must stop deciding who owns a
+              repo. Policy should answer visibility; repository access should
+              answer authority.
+            </div>
+          </section>
+
+          <section id="target-model">
+            <h2>Target Data Model</h2>
+            <p class="lead">
+              The durable domain model should make access explicit and small:
+              repository ownership, repository membership, member permission
+              grants, invite state, and file visibility policy.
+            </p>
+
+            <div class="model">
+              <div class="schema">
+                <h3>Repository</h3>
+                <pre>Repository
+  id: RepositoryId
+  owner_user_id: ScopeUserId
+  owner_handle: Handle
+  name: RepositoryName
+  publication_state: Unpublished | Published
+  change_version: u64
+  settings: RepositorySettings
+  file_visibility_policy: FileVisibilityPolicy
+  graph / snapshots / staged update data</pre>
+              </div>
+
+              <div class="schema">
+                <h3>Repository Member</h3>
+                <pre>RepositoryMember
+  repo_id: RepositoryId
+  user_id: ScopeUserId
+  permissions: RepositoryMemberPermissions
+  created_at_unix: u64
+  updated_at_unix: u64</pre>
+              </div>
+
+              <div class="schema">
+                <h3>Member Permissions</h3>
+                <pre>RepositoryMemberPermissions
+  can_push: bool
+  can_change_file_visibility: bool
+  can_apply_changes: bool</pre>
+              </div>
+
+              <div class="schema">
+                <h3>File Visibility Policy</h3>
+                <pre>FileVisibilityPolicy
+  default_visibility: Public | Private
+  path_rules: Vec&lt;FileVisibilityRule&gt;
+
+FileVisibilityRule
+  path: ScopePath
+  visibility: Public | Private</pre>
+              </div>
+            </div>
+
+            <h3>Invariants</h3>
+            <ul>
+              <li>A repository has exactly one owner user id.</li>
+              <li>The owner is not stored as a repository member.</li>
+              <li>A repository member always has private read access.</li>
+              <li>Members receive no mutation permissions by default.</li>
+              <li>Member permissions are independent booleans.</li>
+              <li>Public access is the absence of ownership or membership.</li>
+              <li>File visibility policy stores only public/private file visibility, not ownership.</li>
+              <li>Owners cannot invite members until the repository is published.</li>
+              <li>Owner-only settings remain owner-only, even if a member has every member permission.</li>
+            </ul>
+          </section>
+
+          <section id="capabilities">
+            <h2>Computed Capabilities</h2>
+            <p>
+              Routes, Git auth, review actions, and UI state should consume one
+              computed access object instead of checking raw rows or booleans in
+              place. That keeps the rules singular.
+            </p>
+
+            <div class="schema">
+              <h3>Access Shape</h3>
+              <pre>RepositoryAccess
+  actor: Owner | Member | Public
+  can_read_private_files: bool
+  can_push: bool
+  can_change_file_visibility: bool
+  can_apply_changes: bool
+  can_update_repo_settings: bool
+  can_manage_members: bool
+  can_delete_repo: bool</pre>
+            </div>
+
+            <table>
+              <thead>
+                <tr>
+                  <th>Actor</th>
+                  <th>Private read</th>
+                  <th>Push</th>
+                  <th>Visibility</th>
+                  <th>Apply/reject/publish</th>
+                  <th>Settings</th>
+                  <th>Members</th>
+                  <th>Delete</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr>
+                  <td>Owner</td>
+                  <td class="ok">Yes</td>
+                  <td class="ok">Yes</td>
+                  <td class="ok">Yes</td>
+                  <td class="ok">Yes</td>
+                  <td class="ok">Yes</td>
+                  <td class="ok">Yes</td>
+                  <td class="ok">Yes</td>
+                </tr>
+                <tr>
+                  <td>Member</td>
+                  <td class="ok">Yes</td>
+                  <td>Permission</td>
+                  <td>Permission</td>
+                  <td>Permission</td>
+                  <td class="warn">No</td>
+                  <td class="warn">No</td>
+                  <td class="warn">No</td>
+                </tr>
+                <tr>
+                  <td>Public/nonmember</td>
+                  <td class="warn">No</td>
+                  <td class="warn">No</td>
+                  <td class="warn">No</td>
+                  <td class="warn">No</td>
+                  <td class="warn">No</td>
+                  <td class="warn">No</td>
+                  <td class="warn">No</td>
+                </tr>
+              </tbody>
+            </table>
+
+            <h3>Important Permission Interactions</h3>
+            <ul>
+              <li><code>can_push</code> does not imply <code>can_apply_changes</code>.</li>
+              <li><code>can_apply_changes</code> does not imply <code>can_change_file_visibility</code>.</li>
+              <li>A member with push but without apply permission must not bypass review through auto-apply settings.</li>
+              <li>Changing member permissions bumps <code>change_version</code> and publishes a repo-change event.</li>
+              <li>Git tokens identify a user; they do not embed permissions. Authorization checks current membership and permissions at request time.</li>
+            </ul>
+          </section>
+
+          <section id="invites">
+            <h2>Invite Flow</h2>
+            <p class="lead">
+              Invites are email-based. The invite link finds the pending invite,
+              but verified email proves the invitee. Pending invites grant no
+              repository access.
+            </p>
+
+            <div class="model">
+              <div class="schema">
+                <h3>Repository Invite</h3>
+                <pre>RepositoryInvite
+  id: InviteId
+  repo_id: RepositoryId
+  invited_email: String
+  invited_email_normalized: String
+  invited_by_user_id: ScopeUserId
+  permissions: RepositoryMemberPermissions
+  state: Pending | Accepted | Revoked | Expired
+  token_hash: String
+  created_at_unix: u64
+  updated_at_unix: u64
+  expires_at_unix: u64
+  accepted_by_user_id: Option&lt;ScopeUserId&gt;
+  accepted_at_unix: Option&lt;u64&gt;
+  revoked_at_unix: Option&lt;u64&gt;</pre>
+              </div>
+
+              <div class="schema">
+                <h3>Default Invite Permissions</h3>
+                <pre>RepositoryMemberPermissions
+  can_push = false
+  can_change_file_visibility = false
+  can_apply_changes = false</pre>
+              </div>
+            </div>
+
+            <h3>Invite Rules</h3>
+            <ul>
+              <li>Only the repository owner can create, refresh, or revoke invites.</li>
+              <li>Invites can only be created after the repository is published.</li>
+              <li>A pending invite is unique by <code>repo_id</code> and normalized email.</li>
+              <li>Re-inviting the same pending email refreshes the invite, token, expiry, and permissions.</li>
+              <li>Inviting the owner email is rejected.</li>
+              <li>Inviting an email that already belongs to a repository member is rejected.</li>
+              <li>Accepted, revoked, and expired invites cannot be accepted.</li>
+              <li>Acceptance requires a signed-in Scope user with a verified matching email.</li>
+              <li>Acceptance creates a <code>RepositoryMember</code> with the invite permissions.</li>
+              <li>If the invitee is not a Scope user yet, sign-up/sign-in resumes the invite flow afterward.</li>
+            </ul>
+
+            <div class="callout">
+              <strong>Owner-facing UI copy:</strong> membership always includes
+              private file access. The invite and member settings screens should
+              say this next to the permission toggles, because all toggles off
+              still grants private read access.
+            </div>
+          </section>
+
+          <section id="lifecycle">
+            <h2>Repository Lifecycle And Collaboration</h2>
+            <p>
+              Collaboration must be wired through repository lifecycle without
+              inventing a second access model. The target lifecycle is only
+              <code>Unpublished</code> and <code>Published</code>; whether an
+              unpublished repo has not received a first push yet or has a
+              pending first import is represented by pending import/token data.
+            </p>
+
+            <table>
+              <thead>
+                <tr>
+                  <th>Lifecycle state</th>
+                  <th>Owner behavior</th>
+                  <th>Member behavior</th>
+                  <th>Public behavior</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr>
+                  <td><code>Unpublished</code></td>
+                  <td>Can initialize, review first import, publish, and delete.</td>
+                  <td>No members yet; invites are blocked until published.</td>
+                  <td>No read.</td>
+                </tr>
+                <tr>
+                  <td><code>Published</code></td>
+                  <td>All capabilities.</td>
+                  <td>Private read plus explicit mutation permissions.</td>
+                  <td>Public projection only.</td>
+                </tr>
+              </tbody>
+            </table>
+
+            <h3>Push And Review Rules</h3>
+            <ul>
+              <li>First import review and publication are owner-only because members cannot be invited before publish.</li>
+              <li>Owner pushes follow repository settings.</li>
+              <li>Member push requires <code>can_push</code>.</li>
+              <li>If a member lacks <code>can_apply_changes</code>, their push must stage for review even when the repo is configured to auto-apply owner pushes.</li>
+              <li>Applying or rejecting a staged update requires owner access or member <code>can_apply_changes</code>.</li>
+              <li>Changing staged or live file visibility requires owner access or member <code>can_change_file_visibility</code>.</li>
+            </ul>
+          </section>
+
+          <section id="boundaries">
+            <h2>Domain Boundaries To Create</h2>
+            <p>
+              The heavy lift is not just schema. The code needs one domain
+              access boundary that every outer layer calls. HTTP, Git, SSE,
+              response shaping, and web UI should not invent their own rules.
+            </p>
+
+            <table>
+              <thead>
+                <tr>
+                  <th>Boundary</th>
+                  <th>Owns</th>
+                  <th>Deletes/replaces</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr>
+                  <td>Repository access domain module</td>
+                  <td>Owner/member/public resolution and capability computation.</td>
+                  <td>Scattered role rank checks such as <code>role &gt;= Writer</code>.</td>
+                </tr>
+                <tr>
+                  <td>File visibility policy module</td>
+                  <td>Effective public/private visibility for paths.</td>
+                  <td><code>Policy.owner_id</code> and owner bypass behavior inside policy.</td>
+                </tr>
+                <tr>
+                  <td>Repository member domain module</td>
+                  <td>Adding, removing, and updating members and permissions.</td>
+                  <td>Generic <code>RepoMembership</code> role records.</td>
+                </tr>
+                <tr>
+                  <td>Repository invite domain module</td>
+                  <td>Email invite state machine, acceptance, revocation, expiry.</td>
+                  <td>Invitation JSON stored inside repository rows.</td>
+                </tr>
+                <tr>
+                  <td>Capability-shaped API responses</td>
+                  <td>UI action availability without leaking raw internals.</td>
+                  <td>UI checks against role strings such as <code>repo.role === "Owner"</code>.</td>
+                </tr>
+              </tbody>
+            </table>
+          </section>
+
+          <section id="implementation">
+            <h2>Implementation Phases</h2>
+            <p class="lead">
+              This should be done as a planned destructive refactor, not as a
+              local patch. Each phase should leave the repo compiling and test
+              failures should point at the next intentional behavior gap.
+            </p>
+
+            <div class="phase">
+              <div class="phase-number">01</div>
+              <div>
+                <h3>Domain Model Rewrite</h3>
+                <p>
+                  Replace <code>RepoRole</code> and <code>RepoMembership</code>
+                  with <code>RepositoryMember</code> and
+                  <code>RepositoryMemberPermissions</code>. Remove owner rows
+                  and move ownership decisions to <code>Repository.owner_user_id</code>.
+                </p>
+                <ul>
+                  <li>Update domain structs in <code>api/src/domain/store.rs</code>.</li>
+                  <li>Collapse <code>RepoPublicationState</code> to <code>Unpublished | Published</code>.</li>
+                  <li>Split file policy from repo ownership in <code>api/src/domain/policy.rs</code>.</li>
+                  <li>Add capability computation tests before wiring HTTP.</li>
+                </ul>
+              </div>
+            </div>
+
+            <div class="phase">
+              <div class="phase-number">02</div>
+              <div>
+                <h3>Persistence Schema Reset</h3>
+                <p>
+                  Destructively replace membership persistence and make invites
+                  first-class rows. Do not migrate old role data.
+                </p>
+                <ul>
+                  <li>Replace stored <code>PendingFirstPush</code>/<code>PendingPublish</code> values with the new unpublished shape by resetting schema.</li>
+                  <li>Create <code>scope_repository_members</code> with permission columns or a typed JSON permissions column.</li>
+                  <li>Create <code>scope_repository_invites</code> with token hash, normalized email, state, timestamps, and acceptance fields.</li>
+                  <li>Remove repository-row <code>invitations</code> JSON.</li>
+                  <li>Update schema inventory, entity models, load/save paths, and test support.</li>
+                </ul>
+              </div>
+            </div>
+
+            <div class="phase">
+              <div class="phase-number">03</div>
+              <div>
+                <h3>Authorization Boundary</h3>
+                <p>
+                  Add a single access service that returns
+                  <code>RepositoryAccess</code>. Convert state helpers, repo
+                  actions, Git auth, SSE, and response builders to consume it.
+                </p>
+                <ul>
+                  <li>Replace <code>ensure_repo_owner</code> with capability-specific guards.</li>
+                  <li>Replace <code>can_write_path</code> with explicit push and visibility capabilities.</li>
+                  <li>Keep public/nonmember principal behavior, but rename concepts around audience/access.</li>
+                </ul>
+              </div>
+            </div>
+
+            <div class="phase">
+              <div class="phase-number">04</div>
+              <div>
+                <h3>Git, Review, And Events</h3>
+                <p>
+                  Rewire Git read/write and review routes so token-based access
+                  checks current membership and permission grants at request time.
+                </p>
+                <ul>
+                  <li>Clone token read access requires owner or current member.</li>
+                  <li>Push requires owner or member <code>can_push</code>.</li>
+                  <li>Apply/reject/publish requires owner or member <code>can_apply_changes</code>.</li>
+                  <li>Visibility changes require owner or member <code>can_change_file_visibility</code>.</li>
+                  <li>Member permission changes bump version and publish repo-change events.</li>
+                </ul>
+              </div>
+            </div>
+
+            <div class="phase">
+              <div class="phase-number">05</div>
+              <div>
+                <h3>Invite And Member APIs</h3>
+                <p>
+                  Add owner-only endpoints for invite creation, refresh,
+                  revocation, member removal, and member permission updates.
+                  Add invite lookup/acceptance endpoints for signed-in users.
+                </p>
+                <ul>
+                  <li>Normalize emails consistently.</li>
+                  <li>Reject invite creation while the repository is unpublished.</li>
+                  <li>Hash invite tokens and return plaintext tokens only when creating or refreshing.</li>
+                  <li>Reject owner email and existing member email invites.</li>
+                  <li>Hard-delete removed members and revoke or invalidate repo-scoped tokens.</li>
+                </ul>
+              </div>
+            </div>
+
+            <div class="phase">
+              <div class="phase-number">06</div>
+              <div>
+                <h3>Web Surface</h3>
+                <p>
+                  Build owner-only collaboration settings without presenting
+                  private read access as optional. Refresh action availability
+                  immediately when repo-change events report capability changes.
+                </p>
+                <ul>
+                  <li>Owner settings: published-only members list, invite form, permission toggles, remove member.</li>
+                  <li>Member settings: read-only section showing private read access and each enabled/disabled permission.</li>
+                  <li>Invite page: token lookup, sign-in/sign-up resume, verified email acceptance.</li>
+                  <li>Repo pages: use API capabilities instead of role string checks.</li>
+                  <li>Copy: "Members can always view private files in this repository."</li>
+                </ul>
+              </div>
+            </div>
+
+            <div class="phase">
+              <div class="phase-number">07</div>
+              <div>
+                <h3>Cleanup And Contract Regeneration</h3>
+                <p>
+                  Remove old role names and compatibility branches, regenerate
+                  TypeScript API types, and run static deletion checks.
+                </p>
+                <ul>
+                  <li>No production references to <code>Reader</code>, <code>Writer</code>, <code>Maintainer</code>, or <code>RepoRole</code>.</li>
+                  <li>No owner check that depends on a member row.</li>
+                  <li>No file policy owner id.</li>
+                  <li>No invitation JSON stored on repository rows.</li>
+                </ul>
+              </div>
+            </div>
+          </section>
+
+          <section id="testing">
+            <h2>Verification Plan</h2>
+            <p>
+              Tests need to prove the invariants, not just exercise endpoints.
+              The important failures are privilege escalation, stale token
+              permissions, stale UI actions, and accidental public/private leaks.
+            </p>
+
+            <div class="status-key">
+              <span class="pill">Domain</span>
+              <span class="pill">Persistence</span>
+              <span class="pill">HTTP</span>
+              <span class="pill">Git</span>
+              <span class="pill">Web</span>
+              <span class="pill">Static checks</span>
+            </div>
+
+            <ul class="checklist">
+              <li>Owner access is derived from <code>owner_user_id</code> only.</li>
+              <li>Repository lifecycle exposes only <code>Unpublished</code> and <code>Published</code>.</li>
+              <li>Repository members always read private files.</li>
+              <li>All member permission defaults are false.</li>
+              <li>Public/nonmember sees only public published files.</li>
+              <li>Pending invite grants no private access.</li>
+              <li>Invite acceptance requires verified matching email.</li>
+              <li>Duplicate pending invite refreshes instead of inserting another pending row.</li>
+              <li>Existing member invite is rejected.</li>
+              <li>Owner email invite is rejected.</li>
+              <li>Owner cannot invite members while the repo is unpublished.</li>
+              <li>Removed member immediately loses private read.</li>
+              <li>Removed member cannot use old clone token.</li>
+              <li>Permission downgrade refreshes UI capabilities.</li>
+              <li>Member without push cannot push over Git HTTP.</li>
+              <li>Member with push can push, but cannot auto-apply without apply permission.</li>
+              <li>Member without visibility permission cannot change live or staged visibility.</li>
+              <li>Member without apply permission cannot publish, apply, or reject.</li>
+              <li>Member cannot update repo settings.</li>
+              <li>Member settings show a read-only permission summary.</li>
+              <li>Member cannot invite, revoke, remove, or edit member permissions.</li>
+              <li>Owner-only delete remains owner-only.</li>
+              <li>Public event streams stay redacted.</li>
+              <li>Removed member event stream closes or loses permissioned action state.</li>
+              <li>Generated TypeScript API types match Rust response/request types.</li>
+              <li>Static search finds no old role ladder names in production code.</li>
+            </ul>
+          </section>
+
+          <section id="open-checks">
+            <h2>Checks Before Coding</h2>
+            <p>
+              These are the remaining implementation-time decisions to confirm
+              before changing product code. They are narrow enough to resolve in
+              the implementation plan.
+            </p>
+
+            <table>
+              <thead>
+                <tr>
+                  <th>Check</th>
+                  <th>Default recommendation</th>
+                  <th>Why it matters</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr>
+                  <td>Unpublished collaboration</td>
+                  <td>Owner-only. Members cannot be invited until the repo is published.</td>
+                  <td>Prevents first-import review from needing member permissions before collaboration exists.</td>
+                </tr>
+                <tr>
+                  <td>Member table permission storage shape</td>
+                  <td>Dedicated boolean columns.</td>
+                  <td>Columns make queries, indexes, and drift checks clearer than opaque JSON.</td>
+                </tr>
+                <tr>
+                  <td>Invite expiry duration</td>
+                  <td>7 days.</td>
+                  <td>Needs a concrete default for token lifecycle tests and UI copy.</td>
+                </tr>
+                <tr>
+                  <td>Token invalidation on member removal</td>
+                  <td>Delete repo-scoped clone tokens for removed user.</td>
+                  <td>Defense in depth even though auth checks current membership.</td>
+                </tr>
+                <tr>
+                  <td>Capability response naming</td>
+                  <td>Return <code>capabilities</code>, not <code>role</code>.</td>
+                  <td>Keeps web from reconstructing domain rules from labels.</td>
+                </tr>
+              </tbody>
+            </table>
+
+            <footer>
+              This plan intentionally treats the current app as pre-alpha:
+              destructive schema replacement is preferred over compatibility
+              shims, legacy role translation, or partial dual-read behavior.
+            </footer>
+          </section>
+        </main>
+      </div>
+    </div>
+  </body>
+</html>
