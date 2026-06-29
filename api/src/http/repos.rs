@@ -387,6 +387,7 @@ pub(crate) async fn create_repository_invite(
     let user = require_scope_user(&state, &headers).await?;
     let repo = find_repo(&state, &owner, &repo_name)?;
     ensure_collaboration_owner_access(&state, &repo, &user.id)?;
+    let app_origin = public_app_origin("building repository invite URL")?;
     let (secret, token_hash) = generate_repository_invite_token()?;
     let now = unix_now()?;
     let invite_id = format!("repo_invite_{}", token_hash.replace([':', '/'], "_"));
@@ -406,7 +407,6 @@ pub(crate) async fn create_repository_invite(
         repo.record.change_version,
         "invite-updated",
     );
-    let app_origin = public_app_origin("building repository invite URL")?;
 
     Ok(Json(CreateRepositoryInviteResponse {
         invite: repository_invite_response(&invite),

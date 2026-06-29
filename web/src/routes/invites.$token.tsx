@@ -140,6 +140,7 @@ function InvitePage({
                 <>
                   <Button asChild>
                     <Link
+                      params={{ _splat: '' }}
                       search={{ redirect_url: returnPath }}
                       to="/sign-up/$"
                     >
@@ -148,6 +149,7 @@ function InvitePage({
                   </Button>
                   <Button asChild variant="secondary">
                     <Link
+                      params={{ _splat: '' }}
                       search={{ redirect_url: returnPath }}
                       to="/sign-in/$"
                     >
