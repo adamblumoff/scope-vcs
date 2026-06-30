@@ -21,11 +21,17 @@ export default defineConfig({
       srcDirectory: 'src',
       server: {
         build: {
-          inlineCss: true,
+          inlineCss: false,
         },
       },
     }),
     viteReact(),
-    nitro(),
+    nitro({
+      compressPublicAssets: {
+        brotli: true,
+        gzip: true,
+      },
+      plugins: ['./src/server/compress-responses.ts'],
+    }),
   ],
 })
