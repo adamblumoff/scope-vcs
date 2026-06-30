@@ -1,4 +1,5 @@
-import { Readable } from 'node:stream'
+import { PassThrough, Readable } from 'node:stream'
+import { pipeline } from 'node:stream/promises'
 import type { ReadableStream as NodeReadableStream } from 'node:stream/web'
 import { createBrotliCompress, createGzip } from 'node:zlib'
 import { definePlugin } from 'nitro'
@@ -10,6 +11,8 @@ const COMPRESSIBLE_TYPES = [
   'image/svg+xml',
   'text/',
 ]
+
+type Encoding = 'br' | 'gzip'
 
 export default definePlugin((nitroApp) => {
   const fetch = nitroApp.fetch
@@ -41,32 +44,67 @@ function compressResponse(request: Request, response: Response) {
   headers.delete('content-length')
   appendVary(headers, 'Accept-Encoding')
 
-  const source = Readable.fromWeb(
-    response.body as unknown as NodeReadableStream,
-  )
-  const compressed = source.pipe(
-    encoding === 'br' ? createBrotliCompress() : createGzip(),
-  )
-
-  return new Response(Readable.toWeb(compressed) as unknown as BodyInit, {
+  return new Response(compressBody(response.body, encoding), {
     headers,
     status: response.status,
     statusText: response.statusText,
   })
 }
 
-function preferredEncoding(acceptEncoding: string | null) {
+function compressBody(body: ReadableStream<Uint8Array>, encoding: Encoding) {
+  const source = Readable.fromWeb(body as unknown as NodeReadableStream)
+  const compressor = encoding === 'br' ? createBrotliCompress() : createGzip()
+  const output = new PassThrough()
+
+  pipeline(source, compressor, output).catch((error) => {
+    output.destroy(error instanceof Error ? error : new Error(String(error)))
+  })
+
+  return Readable.toWeb(output) as unknown as BodyInit
+}
+
+function preferredEncoding(acceptEncoding: string | null): Encoding | null {
   if (!acceptEncoding) {
     return null
   }
-  const accepted = acceptEncoding.toLowerCase()
-  if (accepted.includes('br')) {
-    return 'br'
+
+  const weights = new Map<string, number>()
+  for (const part of acceptEncoding.split(',')) {
+    const [rawToken, ...rawParams] = part.trim().split(';')
+    const token = rawToken?.trim().toLowerCase()
+    if (!token || (token !== 'br' && token !== 'gzip' && token !== '*')) {
+      continue
+    }
+    weights.set(token, parseQuality(rawParams))
   }
-  if (accepted.includes('gzip')) {
-    return 'gzip'
+
+  const brotliQuality = acceptedQuality(weights, 'br')
+  const gzipQuality = acceptedQuality(weights, 'gzip')
+
+  if (brotliQuality <= 0 && gzipQuality <= 0) {
+    return null
   }
-  return null
+  return brotliQuality >= gzipQuality ? 'br' : 'gzip'
+}
+
+function acceptedQuality(weights: Map<string, number>, encoding: Encoding) {
+  return weights.get(encoding) ?? weights.get('*') ?? 0
+}
+
+function parseQuality(params: string[]) {
+  const qParam = params
+    .map((param) => param.trim().toLowerCase())
+    .find((param) => param.startsWith('q='))
+
+  if (!qParam) {
+    return 1
+  }
+
+  const parsed = Number(qParam.slice(2))
+  if (!Number.isFinite(parsed)) {
+    return 0
+  }
+  return Math.max(0, Math.min(parsed, 1))
 }
 
 function isCompressible(contentType: string | null) {
