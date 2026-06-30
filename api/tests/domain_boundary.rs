@@ -70,12 +70,16 @@ fn use_statements(source: &str) -> Vec<String> {
 
     for line in source.lines() {
         let trimmed = line.trim_start();
-        if current_statement.is_none() && !trimmed.starts_with("use ") {
+        let statement_line = if current_statement.is_some() {
+            trimmed
+        } else if let Some(use_start) = use_statement_start(trimmed) {
+            use_start
+        } else {
             continue;
-        }
+        };
 
         let statement = current_statement.get_or_insert_with(String::new);
-        statement.push_str(trimmed);
+        statement.push_str(statement_line);
         statement.push('\n');
 
         if trimmed.ends_with(';') {
@@ -88,6 +92,27 @@ fn use_statements(source: &str) -> Vec<String> {
     }
 
     statements
+}
+
+fn use_statement_start(trimmed_line: &str) -> Option<&str> {
+    if trimmed_line.starts_with("use ") {
+        return Some(trimmed_line);
+    }
+
+    let after_pub = trimmed_line.strip_prefix("pub")?;
+    if after_pub.chars().next().is_some_and(char::is_whitespace) {
+        let after_visibility = after_pub.trim_start();
+        return after_visibility
+            .starts_with("use ")
+            .then_some(after_visibility);
+    }
+
+    let after_scope_start = after_pub.strip_prefix('(')?;
+    let scope_end = after_scope_start.find(')')?;
+    let after_visibility = after_scope_start[scope_end + 1..].trim_start();
+    after_visibility
+        .starts_with("use ")
+        .then_some(after_visibility)
 }
 
 fn strip_comments_and_strings(source: &str) -> String {
@@ -405,6 +430,28 @@ use super::super::git::import::ReceivePackUpdate;
     );
 
     assert_eq!(violations, vec!["example.rs references crate::git"]);
+}
+
+#[test]
+fn boundary_import_detection_catches_visibility_qualified_outer_imports() {
+    let source = r#"
+pub(crate) use crate::git as outer_git;
+pub(in crate::domain) use crate::{state};
+"#;
+
+    let violations = forbidden_outer_layer_references(
+        Path::new("example.rs"),
+        source,
+        &["git", "http", "state", "db", "persistence"],
+    );
+
+    assert_eq!(
+        violations,
+        vec![
+            "example.rs references crate::git",
+            "example.rs references crate::state"
+        ]
+    );
 }
 
 #[test]
