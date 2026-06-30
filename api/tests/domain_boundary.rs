@@ -11,7 +11,7 @@ fn domain_modules_do_not_import_outer_layers() {
 
     visit_rust_files(&domain_dir, &mut |path| {
         let source = fs::read_to_string(path).expect("domain source should be readable");
-        violations.extend(forbidden_outer_layer_imports(
+        violations.extend(forbidden_outer_layer_references(
             path,
             &source,
             &forbidden_layers,
@@ -25,30 +25,45 @@ fn domain_modules_do_not_import_outer_layers() {
     );
 }
 
-fn forbidden_outer_layer_imports(
+fn forbidden_outer_layer_references(
     path: &Path,
     source: &str,
     forbidden_layers: &[&str],
 ) -> Vec<String> {
     let mut violations = Vec::new();
+    let sanitized_source = strip_comments_and_strings(source);
+    let compact_source = compact(&sanitized_source);
 
-    for use_statement in use_statements(source) {
-        let compact_statement = use_statement
-            .chars()
-            .filter(|character| !character.is_whitespace())
-            .collect::<String>();
+    for layer in forbidden_layers {
+        let direct_reference = format!("crate::{layer}::");
+        if compact_source.contains(&direct_reference) {
+            violations.push(format!("{} references crate::{layer}", path.display()));
+        }
+    }
+
+    for use_statement in use_statements(&sanitized_source) {
+        let compact_statement = compact(&use_statement);
         if !compact_statement.starts_with("usecrate::") {
             continue;
         }
 
         for layer in forbidden_layers {
             if has_forbidden_outer_layer_import(&compact_statement, layer) {
-                violations.push(format!("{} imports crate::{layer}", path.display()));
+                violations.push(format!("{} references crate::{layer}", path.display()));
             }
         }
     }
 
+    violations.sort();
+    violations.dedup();
     violations
+}
+
+fn compact(source: &str) -> String {
+    source
+        .chars()
+        .filter(|character| !character.is_whitespace())
+        .collect()
 }
 
 fn use_statements(source: &str) -> Vec<String> {
@@ -75,6 +90,126 @@ fn use_statements(source: &str) -> Vec<String> {
     }
 
     statements
+}
+
+fn strip_comments_and_strings(source: &str) -> String {
+    let chars = source.chars().collect::<Vec<_>>();
+    let mut stripped = String::with_capacity(source.len());
+    let mut index = 0;
+
+    while index < chars.len() {
+        if starts_with(&chars, index, &['/', '/']) {
+            push_replacement(&mut stripped, chars[index]);
+            push_replacement(&mut stripped, chars[index + 1]);
+            index += 2;
+            while index < chars.len() && chars[index] != '\n' {
+                push_replacement(&mut stripped, chars[index]);
+                index += 1;
+            }
+            continue;
+        }
+
+        if starts_with(&chars, index, &['/', '*']) {
+            push_replacement(&mut stripped, chars[index]);
+            push_replacement(&mut stripped, chars[index + 1]);
+            index += 2;
+            while index < chars.len() {
+                let current = chars[index];
+                let is_block_end = starts_with(&chars, index, &['*', '/']);
+                push_replacement(&mut stripped, current);
+                index += 1;
+                if is_block_end {
+                    push_replacement(&mut stripped, chars[index]);
+                    index += 1;
+                    break;
+                }
+            }
+            continue;
+        }
+
+        if let Some(raw_string_end) = raw_string_end(&chars, index) {
+            while index < raw_string_end {
+                push_replacement(&mut stripped, chars[index]);
+                index += 1;
+            }
+            continue;
+        }
+
+        if chars[index] == '"' {
+            push_replacement(&mut stripped, chars[index]);
+            index += 1;
+            let mut escaped = false;
+            while index < chars.len() {
+                let current = chars[index];
+                push_replacement(&mut stripped, current);
+                index += 1;
+                if current == '"' && !escaped {
+                    break;
+                }
+                escaped = current == '\\' && !escaped;
+                if current != '\\' {
+                    escaped = false;
+                }
+            }
+            continue;
+        }
+
+        stripped.push(chars[index]);
+        index += 1;
+    }
+
+    stripped
+}
+
+fn starts_with(chars: &[char], index: usize, pattern: &[char]) -> bool {
+    chars
+        .get(index..index.saturating_add(pattern.len()))
+        .is_some_and(|slice| slice == pattern)
+}
+
+fn push_replacement(output: &mut String, character: char) {
+    if character == '\n' {
+        output.push('\n');
+    } else {
+        output.push(' ');
+    }
+}
+
+fn raw_string_end(chars: &[char], start: usize) -> Option<usize> {
+    let mut cursor = start;
+    if chars.get(cursor) == Some(&'b') {
+        cursor += 1;
+    }
+    if chars.get(cursor) != Some(&'r') {
+        return None;
+    }
+    cursor += 1;
+
+    let mut hashes = 0;
+    while chars.get(cursor) == Some(&'#') {
+        hashes += 1;
+        cursor += 1;
+    }
+    if chars.get(cursor) != Some(&'"') {
+        return None;
+    }
+    cursor += 1;
+
+    while cursor < chars.len() {
+        if chars[cursor] == '"' {
+            let hash_end = cursor + 1 + hashes;
+            if hash_end <= chars.len()
+                && chars[cursor + 1..hash_end]
+                    .iter()
+                    .all(|character| *character == '#')
+            {
+                return Some(hash_end);
+            }
+        }
+        cursor += 1;
+    }
+
+    Some(chars.len())
 }
 
 fn has_forbidden_outer_layer_import(compact_statement: &str, layer: &str) -> bool {
@@ -109,12 +244,13 @@ fn visit_rust_files(dir: &Path, visitor: &mut impl FnMut(&Path)) {
 
 #[test]
 fn boundary_import_detection_ignores_comments_and_strings() {
-    let source = r#"
+    let source = r##"
 // Previously called crate::state::live_tree.
 const NOTE: &str = "crate::git::import";
-"#;
+const RAW: &str = r#"crate::http::responses"#;
+"##;
 
-    let violations = forbidden_outer_layer_imports(
+    let violations = forbidden_outer_layer_references(
         Path::new("example.rs"),
         source,
         &["git", "http", "state", "db", "persistence"],
@@ -132,11 +268,28 @@ use crate::{
 };
 "#;
 
-    let violations = forbidden_outer_layer_imports(
+    let violations = forbidden_outer_layer_references(
         Path::new("example.rs"),
         source,
         &["git", "http", "state", "db", "persistence"],
     );
 
-    assert_eq!(violations, vec!["example.rs imports crate::git"]);
+    assert_eq!(violations, vec!["example.rs references crate::git"]);
+}
+
+#[test]
+fn boundary_detection_catches_direct_outer_references() {
+    let source = r#"
+fn preview(repo: &mut StoredRepository, staged: StagedRepoUpdate) {
+    crate::git::import::apply_receive_pack_update(repo, staged).unwrap();
+}
+"#;
+
+    let violations = forbidden_outer_layer_references(
+        Path::new("example.rs"),
+        source,
+        &["git", "http", "state", "db", "persistence"],
+    );
+
+    assert_eq!(violations, vec!["example.rs references crate::git"]);
 }
