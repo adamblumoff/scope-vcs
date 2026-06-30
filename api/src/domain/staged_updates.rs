@@ -1,12 +1,22 @@
 use super::{
-    policy::{ScopePath, Visibility, VisibilityRule},
+    policy::{PolicyError, ScopePath, Visibility, VisibilityRule},
     projection::{AuthorVisibility, FileChange, LogicalCommit, VisibilityEvent},
     store::{
         LineDiff, RepoPublicationState, SourceBlob, StagedFileChange, StagedFileChangeKind,
         StagedRepoUpdate, StoredRepository,
     },
 };
-use crate::error::ApiError;
+use std::convert::Infallible;
+
+pub(crate) type StagedUpdateResult<T, E = Infallible> = Result<T, StagedUpdateError<E>>;
+
+#[derive(Debug)]
+pub(crate) enum StagedUpdateError<E = Infallible> {
+    BadRequest(&'static str),
+    Conflict(&'static str),
+    InvalidPolicy(PolicyError),
+    LineDiff(E),
+}
 
 #[derive(Clone, Debug)]
 pub(crate) struct StagedContentChange {
@@ -23,23 +33,29 @@ pub(crate) struct StagedUpdateInput {
     pub(crate) changes: Vec<StagedContentChange>,
 }
 
-pub(crate) fn stage_staged_update<F>(
+pub(crate) fn stage_staged_update<F, E>(
     repo: &mut StoredRepository,
     update: StagedUpdateInput,
     can_apply_changes: bool,
     line_diff: F,
-) -> Result<Option<StagedRepoUpdate>, ApiError>
+) -> StagedUpdateResult<Option<StagedRepoUpdate>, E>
 where
-    F: FnMut(Option<&SourceBlob>, Option<&SourceBlob>) -> Result<LineDiff, ApiError>,
+    F: FnMut(Option<&SourceBlob>, Option<&SourceBlob>) -> Result<LineDiff, E>,
 {
     if repo.record.publication_state != RepoPublicationState::Published {
-        return Err(ApiError::conflict("repo must be published before push"));
+        return Err(StagedUpdateError::Conflict(
+            "repo must be published before push",
+        ));
     }
     if update.changes.is_empty() {
-        return Err(ApiError::bad_request("update must include file changes"));
+        return Err(StagedUpdateError::BadRequest(
+            "update must include file changes",
+        ));
     }
     if repo.staged_update.is_some() {
-        return Err(ApiError::conflict("a staged update is already pending"));
+        return Err(StagedUpdateError::Conflict(
+            "a staged update is already pending",
+        ));
     }
 
     let will_stage = repo.settings.review_pushes_before_applying || !can_apply_changes;
@@ -49,19 +65,29 @@ where
         repo.bump_change_version();
         Ok(Some(staged_update))
     } else {
-        apply_staged_update_to_repo(repo, staged_update)?;
+        apply_staged_update_to_repo(repo, staged_update)
+            .map_err(staged_update_error_without_line_diff)?;
         Ok(None)
     }
 }
 
-pub(crate) fn build_staged_update<F>(
+fn staged_update_error_without_line_diff<E>(error: StagedUpdateError) -> StagedUpdateError<E> {
+    match error {
+        StagedUpdateError::BadRequest(message) => StagedUpdateError::BadRequest(message),
+        StagedUpdateError::Conflict(message) => StagedUpdateError::Conflict(message),
+        StagedUpdateError::InvalidPolicy(error) => StagedUpdateError::InvalidPolicy(error),
+        StagedUpdateError::LineDiff(error) => match error {},
+    }
+}
+
+pub(crate) fn build_staged_update<F, E>(
     repo: &StoredRepository,
     update: StagedUpdateInput,
     include_line_diff: bool,
     mut line_diff: F,
-) -> Result<StagedRepoUpdate, ApiError>
+) -> StagedUpdateResult<StagedRepoUpdate, E>
 where
-    F: FnMut(Option<&SourceBlob>, Option<&SourceBlob>) -> Result<LineDiff, ApiError>,
+    F: FnMut(Option<&SourceBlob>, Option<&SourceBlob>) -> Result<LineDiff, E>,
 {
     let live_tree = repo.live_tree();
     let mut staged_changes = Vec::with_capacity(update.changes.len());
@@ -79,7 +105,8 @@ where
         };
         let visibility = repo.policy.effective_visibility(&change.path);
         let line_diff = if include_line_diff {
-            line_diff(old_content.as_ref(), change.content.as_ref())?
+            line_diff(old_content.as_ref(), change.content.as_ref())
+                .map_err(StagedUpdateError::LineDiff)?
         } else {
             LineDiff::default()
         };
@@ -94,7 +121,9 @@ where
     }
 
     if staged_changes.is_empty() {
-        return Err(ApiError::bad_request("update did not change the live tree"));
+        return Err(StagedUpdateError::BadRequest(
+            "update did not change the live tree",
+        ));
     }
 
     Ok(StagedRepoUpdate {
@@ -126,7 +155,7 @@ pub(crate) fn source_content_matches(
 pub(crate) fn apply_staged_update_to_repo(
     repo: &mut StoredRepository,
     staged_update: StagedRepoUpdate,
-) -> Result<(), ApiError> {
+) -> StagedUpdateResult<()> {
     validate_staged_update_policy(repo, &staged_update)?;
     let logical_id = format!("rv_push_{}", repo.graph.commits.len() + 1);
     let mut next_visibility_event_id = repo.visibility_events.len() + 1;
@@ -160,7 +189,9 @@ pub(crate) fn apply_staged_update_to_repo(
         }
 
         let rule = staged_visibility_rule(change);
-        repo.policy.add_rule(rule).map_err(ApiError::bad_request)?;
+        repo.policy
+            .add_rule(rule)
+            .map_err(StagedUpdateError::InvalidPolicy)?;
     }
 
     let parent_ids = repo
@@ -203,7 +234,7 @@ fn applied_file_visibility(repo: &StoredRepository, change: &StagedFileChange) -
 pub(crate) fn validate_staged_update_policy(
     repo: &StoredRepository,
     staged_update: &StagedRepoUpdate,
-) -> Result<(), ApiError> {
+) -> StagedUpdateResult<()> {
     let mut policy = repo.policy.clone();
     for change in &staged_update.changes {
         if change.new_content.is_none() {
@@ -211,7 +242,9 @@ pub(crate) fn validate_staged_update_policy(
         }
 
         let rule = staged_visibility_rule(change);
-        policy.add_rule(rule).map_err(ApiError::bad_request)?;
+        policy
+            .add_rule(rule)
+            .map_err(StagedUpdateError::InvalidPolicy)?;
     }
 
     Ok(())

@@ -1,6 +1,8 @@
 use super::diff::staged_file_line_diff;
 use crate::domain::policy::ScopePath;
-use crate::domain::staged_updates::{StagedContentChange, StagedUpdateInput, stage_staged_update};
+use crate::domain::staged_updates::{
+    StagedContentChange, StagedUpdateError, StagedUpdateInput, stage_staged_update,
+};
 use crate::domain::store::{SourceBlob, StagedRepoUpdate, StoredRepository};
 use crate::{config::DEFAULT_GIT_BRANCH, error::ApiError, object_store::ObjectStore};
 
@@ -74,4 +76,14 @@ pub(super) fn stage_receive_pack_update_with_store(
         can_apply_changes,
         |old_content, new_content| staged_file_line_diff(store, old_content, new_content),
     )
+    .map_err(staged_update_error_to_api_error)
+}
+
+fn staged_update_error_to_api_error(error: StagedUpdateError<ApiError>) -> ApiError {
+    match error {
+        StagedUpdateError::BadRequest(message) => ApiError::bad_request(message),
+        StagedUpdateError::Conflict(message) => ApiError::conflict(message),
+        StagedUpdateError::InvalidPolicy(error) => ApiError::bad_request(error),
+        StagedUpdateError::LineDiff(error) => error,
+    }
 }
