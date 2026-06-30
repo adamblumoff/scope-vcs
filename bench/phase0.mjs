@@ -45,6 +45,7 @@ async function main() {
   validateConfig(config);
 
   await requireReady(config.apiUrl);
+  await validateAuthToken();
   const owner = await discoverOwner(config.apiUrl, ownerCandidates());
   const cases = benchmarkCases(owner);
   const skipped = skippedCases();
@@ -137,6 +138,33 @@ async function requireReady(apiUrl) {
   }
 }
 
+async function validateAuthToken() {
+  if (!config.authToken) {
+    return;
+  }
+
+  const result = await sampleFetch({
+    name: 'auth token validation',
+    method: 'GET',
+    url: `${config.apiUrl}/v1/repos`,
+    expectedStatuses: [200],
+    auth: true,
+    burst: false,
+  });
+  if (result.ok) {
+    config.authTokenSource = `${config.authTokenSource} (validated)`;
+    return;
+  }
+  if (config.authTokenSource === 'local Scope CLI session') {
+    config.authToken = '';
+    config.authTokenSource = 'none (stale local Scope CLI session ignored)';
+    return;
+  }
+  throw new Error(
+    `SCOPE_BENCH_AUTH_TOKEN did not validate against ${config.apiUrl}/v1/repos: ${result.error}`,
+  );
+}
+
 async function discoverOwner(apiUrl, candidates) {
   for (const owner of candidates) {
     const result = await sampleFetch({
@@ -156,13 +184,13 @@ async function discoverOwner(apiUrl, candidates) {
 }
 
 function ownerCandidates() {
-  const explicitOwner = envValue('SCOPE_BENCH_OWNER');
+  const explicitOwner = normalizeHandle(envValue('SCOPE_BENCH_OWNER'));
   if (explicitOwner) {
     return [explicitOwner];
   }
 
   const candidates = [];
-  addCandidate(candidates, envValue('SCOPE_DEV_USER_HANDLE'));
+  addCandidate(candidates, normalizeHandle(envValue('SCOPE_DEV_USER_HANDLE')));
   const email = envValue('SCOPE_DEV_USER_EMAIL');
   if (email.includes('@')) {
     addCandidate(candidates, normalizeHandle(email.split('@')[0]));
@@ -252,10 +280,13 @@ function skippedCases() {
 }
 
 function unauthenticatedSkipReason(action) {
+  const stalePrefix = config.authTokenSource.includes('stale')
+    ? 'cached local session was rejected; '
+    : '';
   if (process.platform === 'darwin' || process.platform === 'win32') {
-    return `set SCOPE_BENCH_AUTH_TOKEN to ${action}; local CLI session auto-detection is only supported for Linux file-backed sessions`;
+    return `${stalePrefix}set SCOPE_BENCH_AUTH_TOKEN to ${action}; local CLI session auto-detection is only supported for Linux file-backed sessions`;
   }
-  return `run scope login against the local API or set SCOPE_BENCH_AUTH_TOKEN to ${action}`;
+  return `${stalePrefix}run scope login against the local API or set SCOPE_BENCH_AUTH_TOKEN to ${action}`;
 }
 
 function httpCase(name, path, options = {}) {
@@ -637,7 +668,7 @@ function summarizeSamples(samples) {
     maxMs: percentile(durations, 1),
     meanMs: mean(durations),
     meanBytes: mean(bytes),
-    statuses: statusCounts(okSamples),
+    statuses: statusCounts(samples),
   };
 }
 

@@ -4,641 +4,7 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>Scope Data Architecture Landscape</title>
-    <style>
-      :root {
-        --bg: #f8f8f6;
-        --ink: #171717;
-        --muted: #66645e;
-        --line: #d9d7d0;
-        --soft-line: #ebe9e2;
-        --surface: #ffffff;
-        --code: #20201d;
-        --accent: #0f766e;
-        --accent-soft: #e0f2ef;
-        --warn: #b45309;
-        --warn-soft: #fff4dc;
-        --risk: #b91c1c;
-        --risk-soft: #fde8e8;
-        --done: #166534;
-        --done-soft: #e8f5e9;
-        --z-base: 0;
-        --z-nav: 10;
-      }
-
-      * {
-        box-sizing: border-box;
-      }
-
-      html {
-        background: var(--bg);
-        color: var(--ink);
-        font-family:
-          ui-serif, Georgia, Cambria, "Times New Roman", Times, serif;
-        scroll-behavior: smooth;
-      }
-
-      body {
-        margin: 0;
-        min-height: 100dvh;
-      }
-
-      a {
-        color: inherit;
-        text-decoration-color: var(--accent);
-        text-decoration-thickness: 1px;
-        text-underline-offset: 3px;
-      }
-
-      a:hover {
-        color: var(--accent);
-      }
-
-      .topbar {
-        position: sticky;
-        top: 0;
-        z-index: var(--z-nav);
-        border-bottom: 1px solid var(--line);
-        background: rgba(248, 248, 246, 0.96);
-      }
-
-      .topbar-inner {
-        display: flex;
-        max-width: 1180px;
-        margin: 0 auto;
-        padding: 12px 24px;
-        align-items: center;
-        justify-content: space-between;
-        gap: 24px;
-      }
-
-      .brand {
-        font-family:
-          ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI",
-          sans-serif;
-        font-size: 13px;
-        font-weight: 700;
-        letter-spacing: 0;
-        text-transform: uppercase;
-      }
-
-      nav {
-        display: flex;
-        flex-wrap: wrap;
-        justify-content: flex-end;
-        gap: 12px 18px;
-        font-family:
-          ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI",
-          sans-serif;
-        font-size: 13px;
-        color: var(--muted);
-      }
-
-      nav a {
-        text-decoration: none;
-      }
-
-      main {
-        max-width: 1180px;
-        margin: 0 auto;
-        padding: 52px 24px 80px;
-      }
-
-      .hero {
-        display: grid;
-        grid-template-columns: minmax(0, 1fr) 280px;
-        gap: 48px;
-        align-items: end;
-        border-bottom: 2px solid var(--ink);
-        padding-bottom: 34px;
-      }
-
-      .kicker {
-        margin: 0 0 18px;
-        color: var(--accent);
-        font-family:
-          ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI",
-          sans-serif;
-        font-size: 13px;
-        font-weight: 700;
-        letter-spacing: 0;
-        text-transform: uppercase;
-      }
-
-      h1,
-      h2,
-      h3 {
-        margin: 0;
-        letter-spacing: 0;
-        text-wrap: balance;
-      }
-
-      h1 {
-        max-width: 880px;
-        font-size: clamp(42px, 7vw, 96px);
-        line-height: 0.94;
-        font-weight: 900;
-      }
-
-      h2 {
-        font-size: clamp(28px, 4vw, 54px);
-        line-height: 1;
-        font-weight: 900;
-      }
-
-      h3 {
-        font-family:
-          ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI",
-          sans-serif;
-        font-size: 16px;
-        line-height: 1.2;
-        font-weight: 800;
-      }
-
-      p {
-        margin: 0;
-        color: var(--muted);
-        font-size: 17px;
-        line-height: 1.55;
-        text-wrap: pretty;
-      }
-
-      .hero-aside {
-        border-left: 1px solid var(--line);
-        padding-left: 22px;
-        font-family:
-          ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI",
-          sans-serif;
-      }
-
-      .stamp {
-        display: block;
-        color: var(--muted);
-        font-size: 12px;
-        font-weight: 700;
-        text-transform: uppercase;
-      }
-
-      .date {
-        display: block;
-        margin-top: 4px;
-        font-size: 22px;
-        font-weight: 800;
-        font-variant-numeric: tabular-nums;
-      }
-
-      .hero-links {
-        display: grid;
-        gap: 8px;
-        margin-top: 22px;
-        font-size: 14px;
-      }
-
-      section {
-        border-bottom: 1px solid var(--line);
-        padding: 46px 0;
-      }
-
-      .section-head {
-        display: grid;
-        grid-template-columns: minmax(180px, 320px) minmax(0, 1fr);
-        gap: 36px;
-        align-items: start;
-        margin-bottom: 30px;
-      }
-
-      .section-head p {
-        max-width: 760px;
-      }
-
-      .lede {
-        color: var(--ink);
-        font-size: 23px;
-        line-height: 1.4;
-      }
-
-      .band {
-        border-top: 1px solid var(--line);
-        padding: 22px 0;
-      }
-
-      .band:last-child {
-        border-bottom: 1px solid var(--line);
-      }
-
-      .split {
-        display: grid;
-        grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
-        gap: 24px 42px;
-      }
-
-      .triple {
-        display: grid;
-        grid-template-columns: repeat(3, minmax(0, 1fr));
-        gap: 22px;
-      }
-
-      .quad {
-        display: grid;
-        grid-template-columns: repeat(4, minmax(0, 1fr));
-        gap: 18px;
-      }
-
-      .cell {
-        border-top: 4px solid var(--ink);
-        padding-top: 14px;
-      }
-
-      .cell p,
-      .cell li {
-        font-family:
-          ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI",
-          sans-serif;
-        font-size: 14px;
-        line-height: 1.5;
-      }
-
-      .label {
-        display: inline-flex;
-        align-items: center;
-        min-height: 26px;
-        border: 1px solid var(--line);
-        background: var(--surface);
-        padding: 3px 9px;
-        font-family:
-          ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI",
-          sans-serif;
-        font-size: 12px;
-        font-weight: 800;
-        text-transform: uppercase;
-      }
-
-      .label.high {
-        border-color: #efb4b4;
-        background: var(--risk-soft);
-        color: var(--risk);
-      }
-
-      .label.medium {
-        border-color: #f2d092;
-        background: var(--warn-soft);
-        color: var(--warn);
-      }
-
-      .label.good {
-        border-color: #9fd4a4;
-        background: var(--done-soft);
-        color: var(--done);
-      }
-
-      .label.now {
-        border-color: #9bd9d2;
-        background: var(--accent-soft);
-        color: var(--accent);
-      }
-
-      .change-key {
-        display: flex;
-        flex-wrap: wrap;
-        gap: 10px;
-        align-items: center;
-        margin-top: 16px;
-        font-family:
-          ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI",
-          sans-serif;
-        font-size: 13px;
-      }
-
-      ins.plan-add,
-      del.plan-delete {
-        display: inline;
-        border: 1px solid transparent;
-        padding: 1px 5px;
-        font-family: inherit;
-        text-decoration-thickness: 1px;
-        text-underline-offset: 3px;
-      }
-
-      ins.plan-add {
-        border-color: #9bd9d2;
-        background: var(--accent-soft);
-        color: var(--accent);
-        text-decoration: underline;
-      }
-
-      del.plan-delete {
-        border-color: #efb4b4;
-        background: var(--risk-soft);
-        color: var(--risk);
-        text-decoration: line-through;
-      }
-
-      .decision-mark {
-        display: inline-flex;
-        align-items: center;
-        min-height: 24px;
-        border: 1px solid #9bd9d2;
-        background: var(--accent-soft);
-        padding: 2px 8px;
-        color: var(--accent);
-        font-family:
-          ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI",
-          sans-serif;
-        font-size: 12px;
-        font-weight: 800;
-        text-transform: uppercase;
-      }
-
-      ul,
-      ol {
-        margin: 12px 0 0;
-        padding-left: 18px;
-      }
-
-      li {
-        margin: 8px 0;
-        color: var(--muted);
-        font-size: 16px;
-        line-height: 1.5;
-        text-wrap: pretty;
-      }
-
-      strong {
-        color: var(--ink);
-      }
-
-      code {
-        border: 1px solid var(--soft-line);
-        background: var(--surface);
-        padding: 1px 5px;
-        color: var(--code);
-        font-family:
-          "SFMono-Regular", Consolas, "Liberation Mono", Menlo, monospace;
-        font-size: 0.9em;
-      }
-
-      .flow {
-        display: grid;
-        gap: 12px;
-        font-family:
-          ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI",
-          sans-serif;
-      }
-
-      .flow-row {
-        display: grid;
-        grid-template-columns: 150px minmax(0, 1fr);
-        gap: 16px;
-        align-items: start;
-        border-top: 1px solid var(--line);
-        padding-top: 14px;
-      }
-
-      .flow-row:first-child {
-        border-top: 0;
-        padding-top: 0;
-      }
-
-      .flow-title {
-        font-size: 13px;
-        font-weight: 800;
-        text-transform: uppercase;
-      }
-
-      .flow-text {
-        color: var(--muted);
-        font-size: 15px;
-        line-height: 1.5;
-      }
-
-      .matrix {
-        width: 100%;
-        border-collapse: collapse;
-        font-family:
-          ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI",
-          sans-serif;
-        font-size: 14px;
-      }
-
-      .matrix th,
-      .matrix td {
-        border-top: 1px solid var(--line);
-        padding: 13px 10px;
-        text-align: left;
-        vertical-align: top;
-      }
-
-      .matrix th {
-        color: var(--ink);
-        font-size: 12px;
-        font-weight: 900;
-        text-transform: uppercase;
-      }
-
-      .matrix td {
-        color: var(--muted);
-        line-height: 1.45;
-      }
-
-      .matrix tr:last-child td {
-        border-bottom: 1px solid var(--line);
-      }
-
-      .timeline {
-        display: grid;
-        border-top: 1px solid var(--line);
-      }
-
-      .phase {
-        display: grid;
-        grid-template-columns: 130px minmax(0, 1fr) 210px;
-        gap: 22px;
-        border-bottom: 1px solid var(--line);
-        padding: 18px 0;
-        align-items: start;
-      }
-
-      .phase-id {
-        font-family:
-          ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI",
-          sans-serif;
-        font-size: 13px;
-        font-weight: 900;
-        font-variant-numeric: tabular-nums;
-        text-transform: uppercase;
-      }
-
-      .phase h3 {
-        margin-bottom: 6px;
-      }
-
-      .phase-note {
-        color: var(--muted);
-        font-family:
-          ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI",
-          sans-serif;
-        font-size: 14px;
-        line-height: 1.45;
-      }
-
-      .artifact-map {
-        display: grid;
-        grid-template-columns: repeat(5, minmax(0, 1fr));
-        gap: 0;
-        border: 1px solid var(--line);
-        background: var(--surface);
-      }
-
-      .artifact-map div {
-        min-height: 116px;
-        border-right: 1px solid var(--line);
-        padding: 14px;
-        font-family:
-          ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI",
-          sans-serif;
-      }
-
-      .artifact-map div:last-child {
-        border-right: 0;
-      }
-
-      .artifact-map b {
-        display: block;
-        margin-bottom: 8px;
-        color: var(--ink);
-        font-size: 13px;
-        text-transform: uppercase;
-      }
-
-      .artifact-map span {
-        display: block;
-        color: var(--muted);
-        font-size: 13px;
-        line-height: 1.45;
-      }
-
-      .callout {
-        border-left: 4px solid var(--accent);
-        background: var(--surface);
-        padding: 18px 20px;
-      }
-
-      .callout.warning {
-        border-left-color: var(--warn);
-      }
-
-      .callout.risk {
-        border-left-color: var(--risk);
-      }
-
-      .callout p {
-        font-family:
-          ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI",
-          sans-serif;
-        font-size: 15px;
-      }
-
-      .source-list {
-        display: flex;
-        flex-wrap: wrap;
-        gap: 8px;
-        margin-top: 18px;
-        font-family:
-          ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI",
-          sans-serif;
-        font-size: 13px;
-      }
-
-      .source-list a {
-        border: 1px solid var(--line);
-        background: var(--surface);
-        padding: 6px 9px;
-        text-decoration: none;
-      }
-
-      .source-list a:hover {
-        border-color: var(--accent);
-      }
-
-      .print-note {
-        margin-top: 40px;
-        color: var(--muted);
-        font-family:
-          ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI",
-          sans-serif;
-        font-size: 13px;
-      }
-
-      @media (max-width: 920px) {
-        .hero,
-        .section-head,
-        .split,
-        .triple,
-        .quad {
-          grid-template-columns: 1fr;
-        }
-
-        .hero-aside {
-          border-left: 0;
-          border-top: 1px solid var(--line);
-          padding: 18px 0 0;
-        }
-
-        .phase {
-          grid-template-columns: 1fr;
-        }
-
-        .artifact-map {
-          grid-template-columns: 1fr;
-        }
-
-        .artifact-map div {
-          border-right: 0;
-          border-bottom: 1px solid var(--line);
-        }
-
-        .artifact-map div:last-child {
-          border-bottom: 0;
-        }
-      }
-
-      @media (max-width: 680px) {
-        .topbar-inner {
-          align-items: flex-start;
-          flex-direction: column;
-          gap: 10px;
-          padding: 12px 18px;
-        }
-
-        nav {
-          justify-content: flex-start;
-        }
-
-        main {
-          padding: 34px 18px 60px;
-        }
-
-        h1 {
-          font-size: 44px;
-        }
-
-        .flow-row {
-          grid-template-columns: 1fr;
-          gap: 6px;
-        }
-
-        .matrix {
-          display: block;
-          overflow-x: auto;
-          white-space: normal;
-        }
-      }
-
-      @media (prefers-reduced-motion: reduce) {
-        html {
-          scroll-behavior: auto;
-        }
-      }
-    </style>
+    <link rel="stylesheet" href="2026-06-30-data-architecture-landscape.css" />
   </head>
   <body>
     <header class="topbar">
@@ -680,32 +46,15 @@
       <section id="summary">
         <div class="section-head">
           <h2>Executive read</h2>
-          <p class="lede">
-            Scope has a strong domain center, but the persistence and read side
-            still behave like a serialized catalog with large repository
-            aggregates. The next architecture push should keep domain behavior
-            authoritative while breaking storage, reads, and side effects into
-            smaller durable facts.
-          </p>
+          <p class="lede"> Scope has a strong domain center, but the persistence and read side still behave like a serialized catalog with large repository aggregates. The next architecture push should keep domain behavior authoritative while breaking storage, reads, and side effects into smaller durable facts. </p>
         </div>
 
         <div class="split">
           <div class="callout">
-            <p>
-              <strong>My recommendation:</strong> start the Data Architecture
-              project now, but do not jump straight into a large table rewrite.
-              First benchmark the hot paths, then remove request-path auth
-              writes and the global lock pressure, then split repository
-              persistence and materialize read models.
-            </p>
+            <p> <strong>My recommendation:</strong> start the Data Architecture project now, but do not jump straight into a large table rewrite. First benchmark the hot paths, then remove request-path auth writes and the global lock pressure, then split repository persistence and materialize read models. </p>
           </div>
           <div class="callout warning">
-            <p>
-              <strong>Pre-alpha advantage:</strong> this is the right time to
-              do destructive schema replacement. Keeping compatibility for the
-              current JSON-heavy repository row would preserve the exact shape
-              we need to escape.
-            </p>
+            <p> <strong>Pre-alpha advantage:</strong> this is the right time to do destructive schema replacement. Keeping compatibility for the current JSON-heavy repository row would preserve the exact shape we need to escape. </p>
           </div>
         </div>
       </section>
@@ -713,12 +62,7 @@
       <section id="changes">
         <div class="section-head">
           <h2>Decision pass changes</h2>
-          <p>
-            This revision folds in the first answer set. Decisions 1, 2, 3, and
-            5 keep the defaults. Decision 4 changes the worker direction:
-            workers should be a dedicated Railway service, with repo structure
-            and CI/deploy work included in the plan.
-          </p>
+          <p> This revision folds in the first answer set. Decisions 1, 2, 3, and 5 keep the defaults. Decision 4 changes the worker direction: workers should be a dedicated Railway service, with repo structure and CI/deploy work included in the plan. </p>
         </div>
 
         <div class="change-key" aria-label="Change marker legend">
@@ -730,46 +74,15 @@
           <div>
             <h3>Defaults accepted</h3>
             <ul>
-              <li>
-                <ins class="plan-add"
-                  >Roles should be settled enough for table vocabulary now:
-                  public, member/maintainer capabilities, and owner.</ins
-                >
-              </li>
-              <li>
-                <ins class="plan-add"
-                  >Read models should start as audience-class based, not
-                  user-specific.</ins
-                >
-              </li>
-              <li>
-                <ins class="plan-add"
-                  >History should remain product/projected history for now, not
-                  full audit history.</ins
-                >
-              </li>
-              <li>
-                <ins class="plan-add"
-                  >Bound Git and object-store work before doing broad streaming
-                  rewrites.</ins
-                >
-              </li>
+              <li> <ins class="plan-add" >Roles should be settled enough for table vocabulary now: public, member/maintainer capabilities, and owner.</ins > </li>
+              <li> <ins class="plan-add" >Read models should start as audience-class based, not user-specific.</ins > </li>
+              <li> <ins class="plan-add" >History should remain product/projected history for now, not full audit history.</ins > </li>
+              <li> <ins class="plan-add" >Bound Git and object-store work before doing broad streaming rewrites.</ins > </li>
             </ul>
           </div>
           <div>
             <h3>Direction changed</h3>
-            <p>
-              <del class="plan-delete"
-                >Start workers inside the API process behind a feature/config
-                boundary.</del
-              >
-              <ins class="plan-add"
-                >Build workers as their own Railway service and refactor the
-                Rust codebase so API and worker binaries share domain,
-                persistence, object-store, and job execution modules without
-                duplicating delivery code.</ins
-              >
-            </p>
+            <p> <del class="plan-delete" >Start workers inside the API process behind a feature/config boundary.</del > <ins class="plan-add" >Build workers as their own Railway service and refactor the Rust codebase so API and worker binaries share domain, persistence, object-store, and job execution modules without duplicating delivery code.</ins > </p>
           </div>
         </div>
       </section>
@@ -777,53 +90,29 @@
       <section id="current">
         <div class="section-head">
           <h2>Current state</h2>
-          <p>
-            Recent work has cleaned up several boundaries: object-store modules
-            are split, staged push rules moved into domain ownership, and
-            collaboration HTTP glue was condensed. The remaining data problem is
-            less about file size and more about the shape of state and side
-            effects.
-          </p>
+          <p> Recent work has cleaned up several boundaries: object-store modules are split, staged push rules moved into domain ownership, and collaboration HTTP glue was condensed. The remaining data problem is less about file size and more about the shape of state and side effects. </p>
         </div>
 
         <div class="quad">
           <div class="cell">
             <span class="label good">Strong</span>
             <h3>Domain model</h3>
-            <p>
-              <code>StoredRepository</code>, <code>SourceGraph</code>,
-              visibility policy, staged updates, collaboration rules, and
-              projections hold the important product rules in durable domain
-              code.
-            </p>
+            <p> <code>StoredRepository</code>, <code>SourceGraph</code>, visibility policy, staged updates, collaboration rules, and projections hold the important product rules in durable domain code. </p>
           </div>
           <div class="cell">
             <span class="label now">Mixed</span>
             <h3>Persistence</h3>
-            <p>
-              Postgres has real tables for users, auth identities, members,
-              invites, CLI auth, and repositories. The repository table still
-              stores graph, policy, tokens, pending import, snapshot, and staged
-              update as JSON.
-            </p>
+            <p> Postgres has real tables for users, auth identities, members, invites, CLI auth, and repositories. The repository table still stores graph, policy, tokens, pending import, snapshot, and staged update as JSON. </p>
           </div>
           <div class="cell">
             <span class="label medium">Costly</span>
             <h3>Reads</h3>
-            <p>
-              Repo detail, files, projection preview, history, and Git clone
-              paths commonly rehydrate the full repository aggregate and replay
-              projection logic on demand.
-            </p>
+            <p> Repo detail, files, projection preview, history, and Git clone paths commonly rehydrate the full repository aggregate and replay projection logic on demand. </p>
           </div>
           <div class="cell">
             <span class="label high">Hot</span>
             <h3>Side effects</h3>
-            <p>
-              Git subprocesses, object-store reads and writes, projection Git
-              repo creation, bundle restore, and cleanup can run inline with
-              request handling.
-            </p>
+            <p> Git subprocesses, object-store reads and writes, projection Git repo creation, bundle restore, and cleanup can run inline with request handling. </p>
           </div>
         </div>
 
@@ -845,11 +134,7 @@
       <section id="request-flow">
         <div class="section-head">
           <h2>Typical hot path today</h2>
-          <p>
-            This is the pattern I would expect to dominate current latency and
-            capacity. It is not wrong for pre-alpha, but it is the shape that
-            will cap growth.
-          </p>
+          <p> This is the pattern I would expect to dominate current latency and capacity. It is not wrong for pre-alpha, but it is the shape that will cap growth. </p>
         </div>
 
         <div class="flow">
@@ -899,10 +184,7 @@
       <section id="pressure">
         <div class="section-head">
           <h2>Pressure points</h2>
-          <p>
-            These are the places where the architecture is likely to bend first
-            as data or concurrency grows.
-          </p>
+          <p> These are the places where the architecture is likely to bend first as data or concurrency grows. </p>
         </div>
 
         <table class="matrix">
@@ -917,92 +199,39 @@
           <tbody>
             <tr>
               <td><strong>Global metadata lock</strong></td>
-              <td>
-                One <code>scope_metadata_locks</code> row protects broad
-                metadata invariants.
-              </td>
-              <td>
-                Unrelated users and repos can queue behind auth writes, repo
-                mutations, cleanup updates, and large reads.
-              </td>
-              <td>
-                Use constraints, row-level locks, scoped repo locks, and typed
-                job tables instead of one catalog lock.
-              </td>
+              <td> One <code>scope_metadata_locks</code> row protects broad metadata invariants. </td>
+              <td> Unrelated users and repos can queue behind auth writes, repo mutations, cleanup updates, and large reads. </td>
+              <td> Use constraints, row-level locks, scoped repo locks, and typed job tables instead of one catalog lock. </td>
             </tr>
             <tr>
               <td><strong>Large repository JSON</strong></td>
-              <td>
-                <code>scope_repositories</code> stores graph, policy,
-                visibility events, tokens, snapshots, pending import, and staged
-                update as JSON.
-              </td>
-              <td>
-                Normal detail/list/settings reads become sensitive to repo
-                history size and JSON decode cost.
-              </td>
-              <td>
-                Split canonical facts into domain-owned tables and rehydrate
-                full aggregate only for mutation paths.
-              </td>
+              <td> <code>scope_repositories</code> stores graph, policy, visibility events, tokens, snapshots, pending import, and staged update as JSON. </td>
+              <td> Normal detail/list/settings reads become sensitive to repo history size and JSON decode cost. </td>
+              <td> Split canonical facts into domain-owned tables and rehydrate full aggregate only for mutation paths. </td>
             </tr>
             <tr>
               <td><strong>Derived reads</strong></td>
-              <td>
-                Projections, file trees, history, and clone artifacts are built
-                from canonical graph data on demand.
-              </td>
-              <td>
-                Read cost tracks total repo history instead of result size.
-              </td>
-              <td>
-                Materialize read models keyed by repo revision, source, and
-                audience class.
-              </td>
+              <td> Projections, file trees, history, and clone artifacts are built from canonical graph data on demand. </td>
+              <td> Read cost tracks total repo history instead of result size. </td>
+              <td> Materialize read models keyed by repo revision, source, and audience class. </td>
             </tr>
             <tr>
               <td><strong>Inline Git work</strong></td>
-              <td>
-                Git subprocesses and bundle/projection repo creation happen
-                during request handling.
-              </td>
-              <td>
-                A burst of pushes or clones can block normal UI traffic.
-              </td>
-              <td>
-                Add outbox jobs, workers, prepared artifacts, concurrency
-                limits, and explicit backpressure responses.
-              </td>
+              <td> Git subprocesses and bundle/projection repo creation happen during request handling. </td>
+              <td> A burst of pushes or clones can block normal UI traffic. </td>
+              <td> Add outbox jobs, workers, prepared artifacts, concurrency limits, and explicit backpressure responses. </td>
             </tr>
             <tr>
               <td><strong>Object-store interface</strong></td>
-              <td>
-                <code>ObjectStore::get</code> returns <code>Vec&lt;u8&gt;</code>;
-                S3 uses blocking reqwest inside <code>block_in_place</code>.
-              </td>
-              <td>
-                Large blobs and parallel Git operations can put memory and
-                blocking thread capacity under pressure.
-              </td>
-              <td>
-                Introduce bounded read/write APIs, streaming where useful, and
-                one service-level IO budget.
-              </td>
+              <td> <code>ObjectStore::get</code> returns <code>Vec&lt;u8&gt;</code>; S3 uses blocking reqwest inside <code>block_in_place</code>. </td>
+              <td> Large blobs and parallel Git operations can put memory and blocking thread capacity under pressure. </td>
+              <td> Introduce bounded read/write APIs, streaming where useful, and one service-level IO budget. </td>
             </tr>
             <tr>
               <td><strong>Cleanup queues</strong></td>
-              <td>
-                Pending source blob and repo storage deletions live as JSON on
-                the metadata lock row.
-              </td>
-              <td>
-                Cleanup state shares contention with unrelated metadata work and
-                is hard to retry or inspect.
-              </td>
-              <td>
-                Move cleanup into typed job rows with idempotency keys,
-                attempts, next run time, and failure diagnostics.
-              </td>
+              <td> Pending source blob and repo storage deletions live as JSON on the metadata lock row. </td>
+              <td> Cleanup state shares contention with unrelated metadata work and is hard to retry or inspect. </td>
+              <td> Move cleanup into typed job rows with idempotency keys, attempts, next run time, and failure diagnostics. </td>
             </tr>
           </tbody>
         </table>
@@ -1011,11 +240,7 @@
       <section id="north-star">
         <div class="section-head">
           <h2>North star</h2>
-          <p>
-            The target architecture should preserve the thing Scope already does
-            well: domain behavior owns the rules. The change is that persistence
-            stores durable facts and read models serve repeated queries.
-          </p>
+          <p> The target architecture should preserve the thing Scope already does well: domain behavior owns the rules. The change is that persistence stores durable facts and read models serve repeated queries. </p>
         </div>
 
         <div class="artifact-map" aria-label="Target architecture layers">
@@ -1064,42 +289,19 @@
           <div>
             <h3>Canonical write model</h3>
             <ul>
-              <li>
-                Keep source graph and policy canonical, but store them as rows
-                instead of one large JSON document.
-              </li>
-              <li>
-                Require every mutation to produce a repo revision and explicit
-                effects.
-              </li>
-              <li>
-                Commit facts and outbox jobs in the same transaction.
-              </li>
-              <li>
-                Rehydrate a full aggregate only where domain behavior needs the
-                whole aggregate to make a transition.
-              </li>
+              <li> Keep source graph and policy canonical, but store them as rows instead of one large JSON document. </li>
+              <li> Require every mutation to produce a repo revision and explicit effects. </li>
+              <li> Commit facts and outbox jobs in the same transaction. </li>
+              <li> Rehydrate a full aggregate only where domain behavior needs the whole aggregate to make a transition. </li>
             </ul>
           </div>
           <div>
             <h3>Disposable read model</h3>
             <ul>
-              <li>
-                Treat projection trees, history pages, file diffs, and Git
-                artifacts as rebuildable products of canonical facts.
-              </li>
-              <li>
-                Key read models by repo id, repo revision, source
-                (<code>live</code> or <code>review</code>), and audience class.
-              </li>
-              <li>
-                Return explicit rebuilding or unavailable states when the read
-                model is stale or missing.
-              </li>
-              <li>
-                Version read-model semantics so old caches can be deleted
-                destructively.
-              </li>
+              <li> Treat projection trees, history pages, file diffs, and Git artifacts as rebuildable products of canonical facts. </li>
+              <li> Key read models by repo id, repo revision, source (<code>live</code> or <code>review</code>), and audience class. </li>
+              <li> Return explicit rebuilding or unavailable states when the read model is stale or missing. </li>
+              <li> Version read-model semantics so old caches can be deleted destructively. </li>
             </ul>
           </div>
         </div>
@@ -1108,12 +310,7 @@
       <section id="tables">
         <div class="section-head">
           <h2>Table direction</h2>
-          <p>
-            This is not a final schema. It is the table vocabulary I think we
-            should use when we start ADA-36 and ADA-37. The important part is
-            ownership: each table should either be canonical domain fact,
-            disposable read model, or explicit side-effect work.
-          </p>
+          <p> This is not a final schema. It is the table vocabulary I think we should use when we start ADA-36 and ADA-37. The important part is ownership: each table should either be canonical domain fact, disposable read model, or explicit side-effect work. </p>
         </div>
 
         <table class="matrix">
@@ -1127,127 +324,53 @@
           <tbody>
             <tr>
               <td><strong>Repository identity</strong></td>
-              <td>
-                <code>repo_records</code>, <code>repo_settings</code>,
-                <code>repo_revisions</code>
-              </td>
-              <td>
-                Small rows for list/detail/settings routes. Revision becomes
-                the join point between canonical changes, read models, and job
-                idempotency.
-              </td>
+              <td> <code>repo_records</code>, <code>repo_settings</code>, <code>repo_revisions</code> </td>
+              <td> Small rows for list/detail/settings routes. Revision becomes the join point between canonical changes, read models, and job idempotency. </td>
             </tr>
             <tr>
               <td><strong>Access</strong></td>
-              <td>
-                <code>repo_members</code>, <code>repo_invites</code>,
-                <code>repo_access_snapshots</code>
-              </td>
-              <td>
-                Members and invites are already partly normalized. Access
-                snapshots can keep UI and Git authorization from needing the
-                full source graph.
-              </td>
+              <td> <code>repo_members</code>, <code>repo_invites</code>, <code>repo_access_snapshots</code> </td>
+              <td> Members and invites are already partly normalized. Access snapshots can keep UI and Git authorization from needing the full source graph. </td>
             </tr>
             <tr>
               <td><strong>Auth and tokens</strong></td>
-              <td>
-                <code>auth_identities</code>, <code>cli_sessions</code>,
-                <code>repo_push_tokens</code>, <code>repo_clone_tokens</code>
-              </td>
-              <td>
-                Move repo token state out of repository JSON. Normal auth
-                verification should be a narrow indexed lookup, not a catalog
-                write.
-              </td>
+              <td> <code>auth_identities</code>, <code>cli_sessions</code>, <code>repo_push_tokens</code>, <code>repo_clone_tokens</code> </td>
+              <td> Move repo token state out of repository JSON. Normal auth verification should be a narrow indexed lookup, not a catalog write. </td>
             </tr>
             <tr>
               <td><strong>Source graph</strong></td>
-              <td>
-                <code>logical_commits</code>, <code>logical_commit_parents</code>,
-                <code>file_changes</code>, <code>source_blobs</code>
-              </td>
-              <td>
-                Store the canonical source graph in queryable rows. Preserve
-                domain ownership by writing through domain transition outputs.
-              </td>
+              <td> <code>logical_commits</code>, <code>logical_commit_parents</code>, <code>file_changes</code>, <code>source_blobs</code> </td>
+              <td> Store the canonical source graph in queryable rows. Preserve domain ownership by writing through domain transition outputs. </td>
             </tr>
             <tr>
               <td><strong>Visibility</strong></td>
-              <td>
-                <code>visibility_rules</code>, <code>visibility_events</code>,
-                <code>path_visibility_epochs</code>
-              </td>
-              <td>
-                Make current visibility and historical visibility inspectable.
-                Epochs can support fast public history and audit semantics.
-              </td>
+              <td> <code>visibility_rules</code>, <code>visibility_events</code>, <code>path_visibility_epochs</code> </td>
+              <td> Make current visibility and historical visibility inspectable. Epochs can support fast public history and audit semantics. </td>
             </tr>
             <tr>
               <td><strong>Review state</strong></td>
-              <td>
-                <code>pending_imports</code>, <code>pending_import_files</code>,
-                <code>staged_updates</code>, <code>staged_file_changes</code>
-              </td>
-              <td>
-                Keep review surfaces explicit instead of stuffing pending work
-                into the repo row.
-              </td>
+              <td> <code>pending_imports</code>, <code>pending_import_files</code>, <code>staged_updates</code>, <code>staged_file_changes</code> </td>
+              <td> Keep review surfaces explicit instead of stuffing pending work into the repo row. </td>
             </tr>
             <tr>
               <td><strong>Read models</strong></td>
-              <td>
-                <code>projection_files</code>, <code>projection_commits</code>,
-                <code>history_entries</code>, <code>file_diff_index</code>
-              </td>
-              <td>
-                Serve UI and API reads in O(page size or result size), not
-                O(total repo history).
-              </td>
+              <td> <code>projection_files</code>, <code>projection_commits</code>, <code>history_entries</code>, <code>file_diff_index</code> </td>
+              <td> Serve UI and API reads in O(page size or result size), not O(total repo history). </td>
             </tr>
             <tr>
               <td><strong>Git artifacts</strong></td>
-              <td>
-                <code>git_snapshots</code>, <code>git_projection_artifacts</code>,
-                <code>git_artifact_refs</code>
-              </td>
-              <td>
-                Track prepared bundles, bare repo cache keys, snapshot blobs,
-                and artifact readiness.
-              </td>
+              <td> <code>git_snapshots</code>, <code>git_projection_artifacts</code>, <code>git_artifact_refs</code> </td>
+              <td> Track prepared bundles, bare repo cache keys, snapshot blobs, and artifact readiness. </td>
             </tr>
             <tr>
               <td><strong>Work queues</strong></td>
-              <td>
-                <code>outbox_jobs</code>, <code>cleanup_jobs</code>,
-                <code>job_attempts</code>
-              </td>
-              <td>
-                Make side effects explicit, idempotent, retryable, and visible
-                to operators.
-                <ins class="plan-add"
-                  >The worker service owns job execution; API requests own job
-                  enqueueing inside the metadata transaction.</ins
-                >
-              </td>
+              <td> <code>outbox_jobs</code>, <code>cleanup_jobs</code>, <code>job_attempts</code> </td>
+              <td> Make side effects explicit, idempotent, retryable, and visible to operators. <ins class="plan-add" >The worker service owns job execution; API requests own job enqueueing inside the metadata transaction.</ins > </td>
             </tr>
             <tr>
               <td><strong>Worker service deployment</strong></td>
-              <td>
-                <ins class="plan-add"
-                  ><code>api</code> crate shared modules, worker binary,
-                  service-specific Railpack config, and GitHub Actions deploy
-                  workflow.</ins
-                >
-              </td>
-              <td>
-                <ins class="plan-add"
-                  >Make <code>scope-worker</code> deploy like
-                  <code>scope-api</code>, <code>scope-cli</code>, and
-                  <code>scope-web</code>: CI first, Railway deploy second, no
-                  manual service drift.</ins
-                >
-              </td>
+              <td> <ins class="plan-add" ><code>api</code> crate shared modules, worker binary, service-specific Railpack config, and GitHub Actions deploy workflow.</ins > </td>
+              <td> <ins class="plan-add" >Make <code>scope-worker</code> deploy like <code>scope-api</code>, <code>scope-cli</code>, and <code>scope-web</code>: CI first, Railway deploy second, no manual service drift.</ins > </td>
             </tr>
           </tbody>
         </table>
@@ -1256,29 +379,15 @@
       <section id="roadmap">
         <div class="section-head">
           <h2>Roadmap</h2>
-          <p>
-            I would treat the Linear project as a sequence of small destructive
-            changes. Each step should leave the app working, but we should not
-            preserve old storage paths for compatibility.
-          </p>
+          <p> I would treat the Linear project as a sequence of small destructive changes. Each step should leave the app working, but we should not preserve old storage paths for compatibility. </p>
         </div>
 
         <div class="timeline">
           <div class="phase">
             <div class="phase-id">Phase 0</div>
             <div>
-              <h3>
-                <a
-                  href="https://linear.app/scope-vcs/issue/ADA-33/benchmark-current-metadata-auth-projection-and-git-hot-paths"
-                  >ADA-33 - Benchmark hot paths</a
-                >
-              </h3>
-              <p>
-                Build a repeatable simulated benchmark for auth, repo list,
-                repo detail, files, projection preview, history, clone
-                credential, info/refs, upload-pack, receive-pack, publish, and
-                cleanup.
-              </p>
+              <h3> <a href="https://linear.app/scope-vcs/issue/ADA-33/benchmark-current-metadata-auth-projection-and-git-hot-paths" >ADA-33 - Benchmark hot paths</a > </h3>
+              <p> Build a repeatable simulated benchmark for auth, repo list, repo detail, files, projection preview, history, clone credential, info/refs, upload-pack, receive-pack, publish, and cleanup. </p>
             </div>
             <div class="phase-note">
               Output: baseline latency, lock wait time, object-store bytes, Git
@@ -1289,17 +398,8 @@
           <div class="phase">
             <div class="phase-id">Phase 1</div>
             <div>
-              <h3>
-                <a
-                  href="https://linear.app/scope-vcs/issue/ADA-34/remove-db-writes-from-normal-authenticated-request-paths"
-                  >ADA-34 - Remove auth writes from normal reads</a
-                >
-              </h3>
-              <p>
-                Resolve Clerk users from indexed identity rows without updating
-                user snapshots on every request. Move snapshot refresh and
-                session last-used writes to explicit events or sampled updates.
-              </p>
+              <h3> <a href="https://linear.app/scope-vcs/issue/ADA-34/remove-db-writes-from-normal-authenticated-request-paths" >ADA-34 - Remove auth writes from normal reads</a > </h3>
+              <p> Resolve Clerk users from indexed identity rows without updating user snapshots on every request. Move snapshot refresh and session last-used writes to explicit events or sampled updates. </p>
             </div>
             <div class="phase-note">
               This is the lowest-risk way to reduce write contention quickly.
@@ -1309,17 +409,8 @@
           <div class="phase">
             <div class="phase-id">Phase 2</div>
             <div>
-              <h3>
-                <a
-                  href="https://linear.app/scope-vcs/issue/ADA-35/replace-the-global-metadata-lock-with-scoped-transactional-invariants"
-                  >ADA-35 - Replace the global metadata lock</a
-                >
-              </h3>
-              <p>
-                Move uniqueness and referential integrity into constraints,
-                lock individual repo rows for repo mutations, and use typed job
-                rows for cleanup state.
-              </p>
+              <h3> <a href="https://linear.app/scope-vcs/issue/ADA-35/replace-the-global-metadata-lock-with-scoped-transactional-invariants" >ADA-35 - Replace the global metadata lock</a > </h3>
+              <p> Move uniqueness and referential integrity into constraints, lock individual repo rows for repo mutations, and use typed job rows for cleanup state. </p>
             </div>
             <div class="phase-note">
               Success means unrelated repos can read and mutate without queuing
@@ -1330,17 +421,8 @@
           <div class="phase">
             <div class="phase-id">Phase 3</div>
             <div>
-              <h3>
-                <a
-                  href="https://linear.app/scope-vcs/issue/ADA-36/normalize-repository-persistence-around-domain-owned-tables"
-                  >ADA-36 - Normalize repository persistence</a
-                >
-              </h3>
-              <p>
-                Split the large repository JSON aggregate into durable fact
-                tables. Keep mutation APIs behavior-owned: SQL stores facts, but
-                domain modules still decide transitions and side effects.
-              </p>
+              <h3> <a href="https://linear.app/scope-vcs/issue/ADA-36/normalize-repository-persistence-around-domain-owned-tables" >ADA-36 - Normalize repository persistence</a > </h3>
+              <p> Split the large repository JSON aggregate into durable fact tables. Keep mutation APIs behavior-owned: SQL stores facts, but domain modules still decide transitions and side effects. </p>
             </div>
             <div class="phase-note">
               Use destructive pre-alpha reset. Delete obsolete JSON columns
@@ -1351,17 +433,8 @@
           <div class="phase">
             <div class="phase-id">Phase 4</div>
             <div>
-              <h3>
-                <a
-                  href="https://linear.app/scope-vcs/issue/ADA-37/materialize-projection-file-tree-history-and-git-read-models"
-                  >ADA-37 - Materialize read models</a
-                >
-              </h3>
-              <p>
-                Precompute current file trees, projected commits, history
-                summaries, file diff indexes, and visibility summaries by repo
-                revision and audience class.
-              </p>
+              <h3> <a href="https://linear.app/scope-vcs/issue/ADA-37/materialize-projection-file-tree-history-and-git-read-models" >ADA-37 - Materialize read models</a > </h3>
+              <p> Precompute current file trees, projected commits, history summaries, file diff indexes, and visibility summaries by repo revision and audience class. </p>
             </div>
             <div class="phase-note">
               Normal UI reads should become indexed reads. Rebuild code should
@@ -1372,22 +445,8 @@
           <div class="phase">
             <div class="phase-id">Phase 5</div>
             <div>
-              <h3>
-                <a
-                  href="https://linear.app/scope-vcs/issue/ADA-38/introduce-transactional-outbox-and-workers-for-gitimportpublishcleanup"
-                  >ADA-38 - Add outbox and workers</a
-                >
-              </h3>
-              <p>
-                Commit side-effect jobs with metadata changes. Workers handle
-                import processing, read-model rebuild, Git artifact generation,
-                and cleanup with explicit states and retries.
-                <ins class="plan-add"
-                  >The implementation target is a separate
-                  <code>scope-worker</code> Railway service, not an in-process
-                  API background loop.</ins
-                >
-              </p>
+              <h3> <a href="https://linear.app/scope-vcs/issue/ADA-38/introduce-transactional-outbox-and-workers-for-gitimportpublishcleanup" >ADA-38 - Add outbox and workers</a > </h3>
+              <p> Commit side-effect jobs with metadata changes. Workers handle import processing, read-model rebuild, Git artifact generation, and cleanup with explicit states and retries. <ins class="plan-add" >The implementation target is a separate <code>scope-worker</code> Railway service, not an in-process API background loop.</ins > </p>
             </div>
             <div class="phase-note">
               <del class="plan-delete"
@@ -1405,17 +464,8 @@
           <div class="phase">
             <div class="phase-id">Phase 6</div>
             <div>
-              <h3>
-                <a
-                  href="https://linear.app/scope-vcs/issue/ADA-39/bound-and-stream-git-subprocess-and-object-store-io"
-                  >ADA-39 - Bound Git and object-store IO</a
-                >
-              </h3>
-              <p>
-                Add service-level concurrency budgets for receive-pack,
-                upload-pack, projection builds, raw snapshot restore, bundle
-                generation, and object-store operations.
-              </p>
+              <h3> <a href="https://linear.app/scope-vcs/issue/ADA-39/bound-and-stream-git-subprocess-and-object-store-io" >ADA-39 - Bound Git and object-store IO</a > </h3>
+              <p> Add service-level concurrency budgets for receive-pack, upload-pack, projection builds, raw snapshot restore, bundle generation, and object-store operations. </p>
             </div>
             <div class="phase-note">
               The user-visible behavior should be predictable backpressure
@@ -1428,52 +478,30 @@
       <section id="first">
         <div class="section-head">
           <h2>What I would do first</h2>
-          <p>
-            The first PR should not be a schema replacement. It should make the
-            bottlenecks measurable and create a shared vocabulary for the rest
-            of the work.
-          </p>
+          <p> The first PR should not be a schema replacement. It should make the bottlenecks measurable and create a shared vocabulary for the rest of the work. </p>
         </div>
 
         <div class="triple">
           <div class="cell">
             <span class="label now">1</span>
             <h3>Benchmark fixture</h3>
-            <p>
-              Generate repos with a small, medium, and large source graph:
-              different file counts, commit counts, visibility mixes, pending
-              review state, and member access.
-            </p>
+            <p> Generate repos with a small, medium, and large source graph: different file counts, commit counts, visibility mixes, pending review state, and member access. </p>
           </div>
           <div class="cell">
             <span class="label now">2</span>
             <h3>Hot path runner</h3>
-            <p>
-              Exercise auth, repo list/detail, projection preview, history,
-              files, Git clone, push, publish, and cleanup under light and burst
-              concurrency.
-            </p>
+            <p> Exercise auth, repo list/detail, projection preview, history, files, Git clone, push, publish, and cleanup under light and burst concurrency. </p>
           </div>
           <div class="cell">
             <span class="label now">3</span>
             <h3>Report format</h3>
-            <p>
-              Emit a stable JSON or Markdown report with latency, query count,
-              lock wait, decoded bytes, object-store bytes, Git subprocesses,
-              and memory high-water notes.
-            </p>
+            <p> Emit a stable JSON or Markdown report with latency, query count, lock wait, decoded bytes, object-store bytes, Git subprocesses, and memory high-water notes. </p>
           </div>
         </div>
 
         <div class="band">
           <div class="callout">
-            <p>
-              <strong>Useful threshold:</strong> if a normal read route
-              deserializes source graph JSON or reconstructs a projection tree,
-              the benchmark should make that visible. We do not need perfect
-              production load testing yet; we need enough measurement to stop
-              arguing blind.
-            </p>
+            <p> <strong>Useful threshold:</strong> if a normal read route deserializes source graph JSON or reconstructs a projection tree, the benchmark should make that visible. We do not need perfect production load testing yet; we need enough measurement to stop arguing blind. </p>
           </div>
         </div>
       </section>
@@ -1481,53 +509,26 @@
       <section id="guardrails">
         <div class="section-head">
           <h2>Guardrails</h2>
-          <p>
-            These are the architectural rules I would hold while doing the data
-            work.
-          </p>
+          <p> These are the architectural rules I would hold while doing the data work. </p>
         </div>
 
         <div class="split">
           <div>
             <h3>Keep</h3>
             <ul>
-              <li>
-                Domain modules own rules, allowed transitions, visibility
-                semantics, and required side effects.
-              </li>
-              <li>
-                Effects are explicit values before they become jobs, object
-                deletes, notifications, or artifact builds.
-              </li>
-              <li>
-                Read models are rebuildable from canonical facts and versioned
-                by semantics.
-              </li>
-              <li>
-                Tests target behavior and failure modes: permissions, visibility
-                leaks, stale reads, idempotent retries, and cleanup safety.
-              </li>
+              <li> Domain modules own rules, allowed transitions, visibility semantics, and required side effects. </li>
+              <li> Effects are explicit values before they become jobs, object deletes, notifications, or artifact builds. </li>
+              <li> Read models are rebuildable from canonical facts and versioned by semantics. </li>
+              <li> Tests target behavior and failure modes: permissions, visibility leaks, stale reads, idempotent retries, and cleanup safety. </li>
             </ul>
           </div>
           <div>
             <h3>Reject</h3>
             <ul>
-              <li>
-                Backward compatibility layers for obsolete pre-alpha storage
-                shapes.
-              </li>
-              <li>
-                SQL branches that independently invent business rules already
-                owned by domain code.
-              </li>
-              <li>
-                Read-model tables that become a second canonical source of
-                truth.
-              </li>
-              <li>
-                Inline long-running Git, S3, or cleanup work when a transaction
-                can enqueue explicit work instead.
-              </li>
+              <li> Backward compatibility layers for obsolete pre-alpha storage shapes. </li>
+              <li> SQL branches that independently invent business rules already owned by domain code. </li>
+              <li> Read-model tables that become a second canonical source of truth. </li>
+              <li> Inline long-running Git, S3, or cleanup work when a transaction can enqueue explicit work instead. </li>
             </ul>
           </div>
         </div>
@@ -1536,11 +537,7 @@
       <section id="decisions">
         <div class="section-head">
           <h2>Resolved decisions</h2>
-          <p>
-            These choices are no longer open for the current plan. They should
-            shape the first implementation passes unless we deliberately reopen
-            them later.
-          </p>
+          <p> These choices are no longer open for the current plan. They should shape the first implementation passes unless we deliberately reopen them later. </p>
         </div>
 
         <table class="matrix">
@@ -1555,80 +552,32 @@
           <tbody>
             <tr>
               <td><strong>Role model before data split</strong></td>
-              <td>
-                <ins class="plan-add"
-                  >Use the default: settle enough vocabulary now for public,
-                  member/maintainer capabilities, and owner.</ins
-                >
-              </td>
-              <td>
-                Access tables and read-model audience classes should be named
-                around durable concepts, not temporary UI labels.
-              </td>
+              <td> <ins class="plan-add" >Use the default: settle enough vocabulary now for public, member/maintainer capabilities, and owner.</ins > </td>
+              <td> Access tables and read-model audience classes should be named around durable concepts, not temporary UI labels. </td>
               <td><span class="decision-mark">Accepted</span></td>
             </tr>
             <tr>
               <td><strong>Projection audience classes</strong></td>
-              <td>
-                <ins class="plan-add"
-                  >Use the default: start with owner/private-reader and public;
-                  avoid per-user read models unless member-specific visibility
-                  appears.</ins
-                >
-              </td>
-              <td>
-                Per-user read models explode cardinality. Current members all
-                read private files once published, so audience classes are
-                enough.
-              </td>
+              <td> <ins class="plan-add" >Use the default: start with owner/private-reader and public; avoid per-user read models unless member-specific visibility appears.</ins > </td>
+              <td> Per-user read models explode cardinality. Current members all read private files once published, so audience classes are enough. </td>
               <td><span class="decision-mark">Accepted</span></td>
             </tr>
             <tr>
               <td><strong>History semantics</strong></td>
-              <td>
-                <ins class="plan-add"
-                  >Use the default: keep history as product/projected history
-                  for now, not full audit history.</ins
-                >
-              </td>
-              <td>
-                Audit semantics require different storage and permissions than
-                user-facing public history.
-              </td>
+              <td> <ins class="plan-add" >Use the default: keep history as product/projected history for now, not full audit history.</ins > </td>
+              <td> Audit semantics require different storage and permissions than user-facing public history. </td>
               <td><span class="decision-mark">Accepted</span></td>
             </tr>
             <tr>
               <td><strong>Worker runtime</strong></td>
-              <td>
-                <del class="plan-delete"
-                  >Start inside the API process behind a feature/config
-                  boundary.</del
-                >
-                <ins class="plan-add"
-                  >Run workers as their own Railway service, with a codebase
-                  refactor and CI deploy path similar to the other services.</ins
-                >
-              </td>
-              <td>
-                The project now includes shared-library extraction,
-                <code>scope-worker</code> binary ownership, Railway service
-                configuration, and GitHub Actions deployment.
-              </td>
+              <td> <del class="plan-delete" >Start inside the API process behind a feature/config boundary.</del > <ins class="plan-add" >Run workers as their own Railway service, with a codebase refactor and CI deploy path similar to the other services.</ins > </td>
+              <td> The project now includes shared-library extraction, <code>scope-worker</code> binary ownership, Railway service configuration, and GitHub Actions deployment. </td>
               <td><span class="decision-mark">Changed</span></td>
             </tr>
             <tr>
               <td><strong>Streaming sequence</strong></td>
-              <td>
-                <ins class="plan-add"
-                  >Use the default: bound first, stream second. Add concurrency
-                  budgets and size limits before broad async object-store
-                  rewrites.</ins
-                >
-              </td>
-              <td>
-                Streaming is useful, but an unbounded streaming system still
-                overloads. Budgeting gives immediate safety.
-              </td>
+              <td> <ins class="plan-add" >Use the default: bound first, stream second. Add concurrency budgets and size limits before broad async object-store rewrites.</ins > </td>
+              <td> Streaming is useful, but an unbounded streaming system still overloads. Budgeting gives immediate safety. </td>
               <td><span class="decision-mark">Accepted</span></td>
             </tr>
           </tbody>
@@ -1638,68 +587,23 @@
       <section id="conversation">
         <div class="section-head">
           <h2>Conversation agenda</h2>
-          <p>
-            The first-pass defaults are accepted, so the next conversation
-            should focus on execution details instead of reopening those
-            direction choices.
-          </p>
+          <p> The first-pass defaults are accepted, so the next conversation should focus on execution details instead of reopening those direction choices. </p>
         </div>
 
         <ol>
-          <li>
-            <del class="plan-delete"
-              >Confirm the product role model: public, member/maintainer,
-              owner, and which actions each can take.</del
-            >
-            <ins class="plan-add"
-              >Translate the accepted role vocabulary into table names,
-              permission columns, and read-model audience names.</ins
-            >
-          </li>
-          <li>
-            <del class="plan-delete"
-              >Decide whether read models are audience-class based or
-              user-specific.</del
-            >
-            <ins class="plan-add"
-              >Define the first two audience classes explicitly:
-              public-projection and private-reader-projection.</ins
-            >
-          </li>
-          <li>
-            Agree that the source graph stays canonical and read models are
-            disposable.
-          </li>
-          <li>
-            Define the first benchmark fixture and the report numbers we care
-            about.
-          </li>
-          <li>
-            Pick the first destructive schema cut: auth writes, global lock, or
-            repo JSON columns.
-          </li>
-          <li>
-            <del class="plan-delete"
-              >Decide how aggressive we want to be about workers in the first
-              pass.</del
-            >
-            <ins class="plan-add"
-              >Define the <code>scope-worker</code> service boundary, shared
-              Rust modules, Railway variables, and GitHub Actions deployment
-              flow before implementing ADA-38.</ins
-            >
-          </li>
+          <li> <del class="plan-delete" >Confirm the product role model: public, member/maintainer, owner, and which actions each can take.</del > <ins class="plan-add" >Translate the accepted role vocabulary into table names, permission columns, and read-model audience names.</ins > </li>
+          <li> <del class="plan-delete" >Decide whether read models are audience-class based or user-specific.</del > <ins class="plan-add" >Define the first two audience classes explicitly: public-projection and private-reader-projection.</ins > </li>
+          <li> Agree that the source graph stays canonical and read models are disposable. </li>
+          <li> Define the first benchmark fixture and the report numbers we care about. </li>
+          <li> Pick the first destructive schema cut: auth writes, global lock, or repo JSON columns. </li>
+          <li> <del class="plan-delete" >Decide how aggressive we want to be about workers in the first pass.</del > <ins class="plan-add" >Define the <code>scope-worker</code> service boundary, shared Rust modules, Railway variables, and GitHub Actions deployment flow before implementing ADA-38.</ins > </li>
         </ol>
       </section>
 
       <section id="phase-0-start">
         <div class="section-head">
           <h2>How I will start Phase 0</h2>
-          <p>
-            Phase 0 should produce trustworthy baseline numbers and a fixture we
-            can reuse after every architecture cut. It should not change
-            behavior or schema.
-          </p>
+          <p> Phase 0 should produce trustworthy baseline numbers and a fixture we can reuse after every architecture cut. It should not change behavior or schema. </p>
         </div>
 
         <div class="timeline">
@@ -1707,14 +611,7 @@
             <div class="phase-id">Start 1</div>
             <div>
               <h3>Inventory the hot paths</h3>
-              <p>
-                <ins class="plan-add"
-                  >Map the exact handlers and functions for auth resolution,
-                  repo list/detail, files, projection preview, history, Git
-                  info/refs, upload-pack, receive-pack, publish/apply, and
-                  cleanup drain.</ins
-                >
-              </p>
+              <p> <ins class="plan-add" >Map the exact handlers and functions for auth resolution, repo list/detail, files, projection preview, history, Git info/refs, upload-pack, receive-pack, publish/apply, and cleanup drain.</ins > </p>
             </div>
             <div class="phase-note">
               Output: a short route/function matrix tied to the benchmark
@@ -1726,14 +623,7 @@
             <div class="phase-id">Start 2</div>
             <div>
               <h3>Build deterministic fixtures outside source code</h3>
-              <p>
-                <ins class="plan-add"
-                  >Create small, medium, and large repo fixtures with generated
-                  commits, files, visibility changes, pending review state, and
-                  member access. Keep benchmark/test code outside production
-                  source unless there is a specific justification.</ins
-                >
-              </p>
+              <p> <ins class="plan-add" >Create small, medium, and large repo fixtures with generated commits, files, visibility changes, pending review state, and member access. Keep benchmark/test code outside production source unless there is a specific justification.</ins > </p>
             </div>
             <div class="phase-note">
               Output: repeatable fixture setup that can target Postgres, with a
@@ -1745,14 +635,7 @@
             <div class="phase-id">Start 3</div>
             <div>
               <h3>Add a benchmark runner</h3>
-              <p>
-                <ins class="plan-add"
-                  >Run each hot path under light and burst concurrency, measure
-                  elapsed time, status, response bytes, Git subprocess count,
-                  object-store bytes, and observable lock/transaction wait
-                  where Postgres exposes it cheaply.</ins
-                >
-              </p>
+              <p> <ins class="plan-add" >Run each hot path under light and burst concurrency, measure elapsed time, status, response bytes, Git subprocess count, object-store bytes, and observable lock/transaction wait where Postgres exposes it cheaply.</ins > </p>
             </div>
             <div class="phase-note">
               Output: JSON plus a readable Markdown summary under a generated
@@ -1764,14 +647,7 @@
             <div class="phase-id">Start 4</div>
             <div>
               <h3>Keep CI sane</h3>
-              <p>
-                <ins class="plan-add"
-                  >Do not make full benchmarks part of normal CI. Add a fast
-                  compile/smoke path so fixture and runner code does not rot,
-                  then run the full benchmark manually before and after each
-                  data-architecture phase.</ins
-                >
-              </p>
+              <p> <ins class="plan-add" >Do not make full benchmarks part of normal CI. Add a fast compile/smoke path so fixture and runner code does not rot, then run the full benchmark manually before and after each data-architecture phase.</ins > </p>
             </div>
             <div class="phase-note">
               Output: normal checks stay fast; architecture PRs still have
@@ -1783,14 +659,7 @@
             <div class="phase-id">Start 5</div>
             <div>
               <h3>Use the baseline to choose the first cut</h3>
-              <p>
-                <ins class="plan-add"
-                  >If auth writes dominate, start ADA-34. If lock wait dominates
-                  across unrelated repos, start ADA-35. If JSON decode and
-                  projection rebuild dominate normal reads, start ADA-36/37
-                  sequencing with the narrowest destructive split.</ins
-                >
-              </p>
+              <p> <ins class="plan-add" >If auth writes dominate, start ADA-34. If lock wait dominates across unrelated repos, start ADA-35. If JSON decode and projection rebuild dominate normal reads, start ADA-36/37 sequencing with the narrowest destructive split.</ins > </p>
             </div>
             <div class="phase-note">
               Output: the Phase 1 choice is evidence-driven instead of based on
@@ -1802,35 +671,8 @@
             <div class="phase-id">Built</div>
             <div>
               <h3>Phase 0 local harness</h3>
-              <p>
-                <del class="plan-delete"
-                  >Generate small, medium, and large disposable fixtures before
-                  taking the first baseline measurement.</del
-                >
-                <ins class="plan-add"
-                  >Start with the seeded local repos so Phase 0 measures today
-                  without changing API runtime code: <code>bench/phase0.mjs</code>
-                  runs through <code>./dev/scope-dev bench</code>, targets
-                  <code>public-demo</code> and <code>update-demo</code>, and
-                  writes ignored JSON/Markdown reports under
-                  <code>.tmp/bench/phase0/</code>.</ins
-                >
-              </p>
-              <p>
-                <ins class="plan-add"
-                  >The first report captures external latency, response bytes,
-                  status-code mix, Git smart HTTP latency, and
-                  <code>git ls-remote</code> subprocess latency. Authenticated
-                  read-only cases use the local
-                  <code>scope_cli_...</code> session when available on Linux,
-                  with <code>SCOPE_BENCH_AUTH_TOKEN</code> kept as the
-                  cross-platform override. The receive-pack path now uses
-                  disposable generated repositories: create through the API,
-                  push once over Git smart HTTP, and delete after the sample.
-                  Internal counters remain explicit next instrumentation
-                  work.</ins
-                >
-              </p>
+              <p> <del class="plan-delete" >Generate small, medium, and large disposable fixtures before taking the first baseline measurement.</del > <ins class="plan-add" >Start with the seeded local repos so Phase 0 measures today without changing API runtime code: <code>bench/phase0.mjs</code> runs through <code>./dev/scope-dev bench</code>, targets <code>public-demo</code> and <code>update-demo</code>, and writes ignored JSON/Markdown reports under <code>.tmp/bench/phase0/</code>.</ins > </p>
+              <p> <ins class="plan-add" >The first report captures external latency, response bytes, status-code mix, Git smart HTTP latency, and <code>git ls-remote</code> subprocess latency. Authenticated read-only cases use the local <code>scope_cli_...</code> session when available on Linux, with <code>SCOPE_BENCH_AUTH_TOKEN</code> kept as the cross-platform override. The receive-pack path now uses disposable generated repositories: create through the API, push once over Git smart HTTP, and delete after the sample. Internal counters remain explicit next instrumentation work.</ins > </p>
             </div>
             <div class="phase-note">
               Output: a local benchmark command that is part of the dev loop,
@@ -1840,11 +682,7 @@
         </div>
       </section>
 
-      <p class="print-note">
-        This is a discussion artifact, not an approved implementation spec. It
-        reflects the repo state, Linear backlog, and first resolved decision set
-        as of 2026-06-30.
-      </p>
+      <p class="print-note"> This is a discussion artifact, not an approved implementation spec. It reflects the repo state, Linear backlog, and first resolved decision set as of 2026-06-30. </p>
     </main>
   </body>
 </html>
