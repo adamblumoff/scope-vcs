@@ -67,7 +67,8 @@ on a new machine.
 `./dev/scope-dev bench` runs the Phase 0 local data-architecture benchmark from
 `bench/` against the seeded repos and writes ignored JSON/Markdown reports under
 `.tmp/bench/phase0/`. It reuses the local `scope_cli_...` session token when
-available, and `SCOPE_BENCH_AUTH_TOKEN` can override that auto-detected auth.
+available on Linux, and `SCOPE_BENCH_AUTH_TOKEN` can override that
+auto-detected auth. Use `SCOPE_BENCH_AUTH_TOKEN` on macOS and Windows.
 The mutating Git receive-pack path uses throwaway repos created and deleted by
 the benchmark harness.
 

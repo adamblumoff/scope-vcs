@@ -45,10 +45,14 @@ Configuration:
   concurrent throwaway repos.
 - `SCOPE_BENCH_AUTH_TOKEN` overrides auto-detected auth. By default the harness
   reuses the local `scope_cli_...` session token for the configured API URL when
-  the CLI stores that token in the local session file.
+  the CLI stores that token in the local session file. Auto-detection is
+  supported for Linux file-backed CLI sessions; on macOS and Windows, where the
+  CLI stores sessions in the OS keychain, pass `SCOPE_BENCH_AUTH_TOKEN`.
 
 The Phase 0 harness reports external latency, response size, status-code mix,
 subprocess latency for `git ls-remote`, and first-push receive-pack latency.
+The readiness endpoint is checked before the run and is not included in the
+benchmark report.
 Object-store byte counters, projection cache hit rates, and internal Git
 subprocess counters are not observable from the public local API yet; those
 remain explicit gaps for later instrumentation work.

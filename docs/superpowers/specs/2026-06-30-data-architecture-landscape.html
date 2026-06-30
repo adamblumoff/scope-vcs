@@ -1822,12 +1822,13 @@
                   status-code mix, Git smart HTTP latency, and
                   <code>git ls-remote</code> subprocess latency. Authenticated
                   read-only cases use the local
-                  <code>scope_cli_...</code> session when available, with
-                  <code>SCOPE_BENCH_AUTH_TOKEN</code> kept as an override. The
-                  receive-pack path now uses disposable generated repositories:
-                  create through the API, push once over Git smart HTTP, and
-                  delete after the sample. Internal counters remain explicit
-                  next instrumentation work.</ins
+                  <code>scope_cli_...</code> session when available on Linux,
+                  with <code>SCOPE_BENCH_AUTH_TOKEN</code> kept as the
+                  cross-platform override. The receive-pack path now uses
+                  disposable generated repositories: create through the API,
+                  push once over Git smart HTTP, and delete after the sample.
+                  Internal counters remain explicit next instrumentation
+                  work.</ins
                 >
               </p>
             </div>

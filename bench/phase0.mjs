@@ -185,7 +185,6 @@ function benchmarkCases(owner) {
   const updateBase = `/v1/repos/${segment(owner)}/${segment(updateRepo)}`;
 
   const cases = [
-    httpCase('readyz', '/readyz'),
     httpCase('repo summary public-demo', publicBase),
     httpCase('repo files public-demo', `${publicBase}/files`),
     httpCase('projection public-demo', `${publicBase}/projections`),
@@ -243,15 +242,20 @@ function skippedCases() {
   return [
     {
       name: 'owner/review API routes',
-      reason:
-        'run scope login against the local API or set SCOPE_BENCH_AUTH_TOKEN to include authenticated read-only cases',
+      reason: unauthenticatedSkipReason('include authenticated read-only cases'),
     },
     {
       name: 'git receive-pack push benchmark',
-      reason:
-        'run scope login against the local API or set SCOPE_BENCH_AUTH_TOKEN to create disposable push fixtures',
+      reason: unauthenticatedSkipReason('create disposable push fixtures'),
     },
   ];
+}
+
+function unauthenticatedSkipReason(action) {
+  if (process.platform === 'darwin' || process.platform === 'win32') {
+    return `set SCOPE_BENCH_AUTH_TOKEN to ${action}; local CLI session auto-detection is only supported for Linux file-backed sessions`;
+  }
+  return `run scope login against the local API or set SCOPE_BENCH_AUTH_TOKEN to ${action}`;
 }
 
 function httpCase(name, path, options = {}) {
@@ -779,6 +783,8 @@ function envValue(name) {
 
 function readStoredCliSessionToken(apiUrl) {
   if (process.platform === 'darwin' || process.platform === 'win32') {
+    // The CLI stores sessions in the OS keychain on macOS/Windows. Keep this
+    // harness dependency-free and use SCOPE_BENCH_AUTH_TOKEN on those systems.
     return '';
   }
 
