@@ -36,9 +36,7 @@ where
         return Err(ApiError::conflict("repo must be published before push"));
     }
     if update.changes.is_empty() {
-        return Err(ApiError::bad_request(
-            "receive-pack update must include file changes",
-        ));
+        return Err(ApiError::bad_request("update must include file changes"));
     }
     if repo.staged_update.is_some() {
         return Err(ApiError::conflict("a staged update is already pending"));
@@ -96,9 +94,7 @@ where
     }
 
     if staged_changes.is_empty() {
-        return Err(ApiError::bad_request(
-            "receive-pack update did not change the live tree",
-        ));
+        return Err(ApiError::bad_request("update did not change the live tree"));
     }
 
     Ok(StagedRepoUpdate {
