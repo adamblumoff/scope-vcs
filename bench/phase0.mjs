@@ -423,11 +423,14 @@ async function samplePushFixture() {
       env: gitPushAuthEnv(fixture.remoteUrl, fixture.pushToken),
     });
     const cleanupErrors = await cleanupPushFixture(fixture);
-    if (pushSample.ok && cleanupErrors.length > 0) {
+    if (cleanupErrors.length > 0) {
+      const cleanupMessage = `push fixture cleanup failed: ${cleanupErrors.join('; ')}`;
       return {
         ...pushSample,
         ok: false,
-        error: `push fixture cleanup failed: ${cleanupErrors.join('; ')}`,
+        error: pushSample.error
+          ? `${pushSample.error}; ${cleanupMessage}`
+          : cleanupMessage,
       };
     }
     return pushSample;
