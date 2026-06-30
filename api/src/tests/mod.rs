@@ -46,6 +46,7 @@ mod auth;
 mod cli_auth;
 mod clone_credentials;
 mod commit_history;
+mod cors;
 mod device_login;
 mod git_http;
 mod git_receive;

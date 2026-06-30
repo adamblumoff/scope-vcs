@@ -1,10 +1,17 @@
 use crate::{git, http, state::AppState};
 use axum::{
     Router,
+    http::{
+        Method,
+        header::{AUTHORIZATION, CONTENT_TYPE},
+    },
     routing::{delete, get, patch, post},
 };
 use http::routes;
-use tower_http::{cors::CorsLayer, trace::TraceLayer};
+use tower_http::{
+    cors::{Any, CorsLayer},
+    trace::TraceLayer,
+};
 
 pub fn router(state: AppState) -> Router {
     Router::new()
@@ -176,6 +183,17 @@ pub fn router(state: AppState) -> Router {
             post(git::git_upload_pack_rpc),
         )
         .with_state(state)
-        .layer(CorsLayer::permissive())
+        .layer(
+            CorsLayer::new()
+                .allow_origin(Any)
+                .allow_methods([
+                    Method::GET,
+                    Method::HEAD,
+                    Method::POST,
+                    Method::PATCH,
+                    Method::DELETE,
+                ])
+                .allow_headers([AUTHORIZATION, CONTENT_TYPE]),
+        )
         .layer(TraceLayer::new_for_http())
 }

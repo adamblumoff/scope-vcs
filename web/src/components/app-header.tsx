@@ -33,7 +33,11 @@ export function AppHeader({
   const brand = renderedBreadcrumb ? (
     <div className="flex min-w-0 items-center gap-2.5">
       {homeLink ? (
-        <Link className="flex shrink-0 items-center gap-2.5" to="/">
+        <Link
+          aria-label="Scope home"
+          className="flex shrink-0 items-center gap-2.5"
+          to="/"
+        >
           {APP_MARK}
           <span className="hidden text-sm font-semibold tracking-tight sm:inline">
             Scope
@@ -72,7 +76,11 @@ export function AppHeader({
 
   const brandWrapper =
     homeLink && !renderedBreadcrumb ? (
-      <Link className="flex min-w-0 items-center gap-3" to="/">
+      <Link
+        aria-label="Scope home"
+        className="flex min-w-0 items-center gap-3"
+        to="/"
+      >
         {brand}
       </Link>
     ) : (
