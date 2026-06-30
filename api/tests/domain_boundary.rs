@@ -35,18 +35,16 @@ fn forbidden_outer_layer_references(
     let compact_source = compact(&sanitized_source);
 
     for layer in forbidden_layers {
-        let direct_reference = format!("crate::{layer}::");
-        if compact_source.contains(&direct_reference) {
+        if direct_outer_layer_reference_patterns(layer)
+            .iter()
+            .any(|pattern| compact_source.contains(pattern))
+        {
             violations.push(format!("{} references crate::{layer}", path.display()));
         }
     }
 
     for use_statement in use_statements(&sanitized_source) {
         let compact_statement = compact(&use_statement);
-        if !compact_statement.starts_with("usecrate::") {
-            continue;
-        }
-
         for layer in forbidden_layers {
             if has_forbidden_outer_layer_import(&compact_statement, layer) {
                 violations.push(format!("{} references crate::{layer}", path.display()));
@@ -135,6 +133,14 @@ fn strip_comments_and_strings(source: &str) -> String {
             continue;
         }
 
+        if let Some(char_literal_end) = char_literal_end(&chars, index) {
+            while index < char_literal_end {
+                push_replacement(&mut stripped, chars[index]);
+                index += 1;
+            }
+            continue;
+        }
+
         if chars[index] == '"' {
             push_replacement(&mut stripped, chars[index]);
             index += 1;
@@ -212,14 +218,101 @@ fn raw_string_end(chars: &[char], start: usize) -> Option<usize> {
     Some(chars.len())
 }
 
-fn has_forbidden_outer_layer_import(compact_statement: &str, layer: &str) -> bool {
-    let direct = format!("crate::{layer}::");
-    let grouped_first = format!("crate::{{{layer}::");
-    let grouped_later = format!(",{layer}::");
+fn char_literal_end(chars: &[char], start: usize) -> Option<usize> {
+    if chars.get(start) != Some(&'\'') {
+        return None;
+    }
 
-    compact_statement.contains(&direct)
-        || compact_statement.contains(&grouped_first)
-        || compact_statement.contains(&grouped_later)
+    let character = *chars.get(start + 1)?;
+    if character == '\n' {
+        return None;
+    }
+
+    if character != '\\' {
+        return (chars.get(start + 2) == Some(&'\'')).then_some(start + 3);
+    }
+
+    let escaped = *chars.get(start + 2)?;
+    let mut cursor = start + 3;
+    if escaped == 'u' && chars.get(cursor) == Some(&'{') {
+        cursor += 1;
+        while cursor < chars.len() && chars[cursor] != '}' {
+            if chars[cursor] == '\n' {
+                return None;
+            }
+            cursor += 1;
+        }
+        if chars.get(cursor) != Some(&'}') {
+            return None;
+        }
+        cursor += 1;
+    } else if escaped == 'x' {
+        cursor += 2;
+    }
+
+    (chars.get(cursor) == Some(&'\'')).then_some(cursor + 1)
+}
+
+fn has_forbidden_outer_layer_import(compact_statement: &str, layer: &str) -> bool {
+    if import_from_root_references_layer(compact_statement, "crate", layer) {
+        return true;
+    }
+
+    for depth in 1..=4 {
+        if import_from_root_references_layer(compact_statement, &relative_root(depth), layer) {
+            return true;
+        }
+    }
+
+    false
+}
+
+fn import_from_root_references_layer(compact_statement: &str, root: &str, layer: &str) -> bool {
+    let prefix = format!("use{root}::");
+    let Some(import_path) = compact_statement.strip_prefix(&prefix) else {
+        return false;
+    };
+
+    starts_with_layer_segment(import_path, layer)
+        || import_path
+            .strip_prefix('{')
+            .is_some_and(|group| grouped_import_references_layer(group, layer))
+}
+
+fn grouped_import_references_layer(group: &str, layer: &str) -> bool {
+    starts_with_layer_segment(group, layer)
+        || group.match_indices(',').any(|(index, _)| {
+            let next_segment = &group[index + 1..];
+            starts_with_layer_segment(next_segment, layer)
+        })
+}
+
+fn starts_with_layer_segment(import_path: &str, layer: &str) -> bool {
+    let Some(remainder) = import_path.strip_prefix(layer) else {
+        return false;
+    };
+
+    remainder.starts_with("::")
+        || remainder.starts_with(';')
+        || remainder.starts_with(',')
+        || remainder.starts_with('}')
+        || remainder.starts_with("as")
+}
+
+fn direct_outer_layer_reference_patterns(layer: &str) -> Vec<String> {
+    let mut patterns = vec![format!("crate::{layer}::")];
+
+    for depth in 1..=4 {
+        patterns.push(format!("{}::{layer}::", relative_root(depth)));
+    }
+
+    patterns
+}
+
+fn relative_root(depth: usize) -> String {
+    std::iter::repeat_n("super", depth)
+        .collect::<Vec<_>>()
+        .join("::")
 }
 
 fn visit_rust_files(dir: &Path, visitor: &mut impl FnMut(&Path)) {
@@ -278,8 +371,64 @@ use crate::{
 }
 
 #[test]
+fn boundary_import_detection_catches_bare_and_alias_outer_imports() {
+    let source = r#"
+use crate::git as outer_git;
+use crate::{domain::store::StoredRepository, state};
+"#;
+
+    let violations = forbidden_outer_layer_references(
+        Path::new("example.rs"),
+        source,
+        &["git", "http", "state", "db", "persistence"],
+    );
+
+    assert_eq!(
+        violations,
+        vec![
+            "example.rs references crate::git",
+            "example.rs references crate::state"
+        ]
+    );
+}
+
+#[test]
+fn boundary_import_detection_catches_relative_outer_imports() {
+    let source = r#"
+use super::super::git::import::ReceivePackUpdate;
+"#;
+
+    let violations = forbidden_outer_layer_references(
+        Path::new("example.rs"),
+        source,
+        &["git", "http", "state", "db", "persistence"],
+    );
+
+    assert_eq!(violations, vec!["example.rs references crate::git"]);
+}
+
+#[test]
 fn boundary_detection_catches_direct_outer_references() {
     let source = r#"
+fn preview(repo: &mut StoredRepository, staged: StagedRepoUpdate) {
+    crate::git::import::apply_receive_pack_update(repo, staged).unwrap();
+}
+"#;
+
+    let violations = forbidden_outer_layer_references(
+        Path::new("example.rs"),
+        source,
+        &["git", "http", "state", "db", "persistence"],
+    );
+
+    assert_eq!(violations, vec!["example.rs references crate::git"]);
+}
+
+#[test]
+fn boundary_detection_catches_reference_after_quote_char_literal() {
+    let source = r#"
+const QUOTE: char = '"';
+
 fn preview(repo: &mut StoredRepository, staged: StagedRepoUpdate) {
     crate::git::import::apply_receive_pack_update(repo, staged).unwrap();
 }
