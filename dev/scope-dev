@@ -3,9 +3,9 @@ set -euo pipefail
 
 COMMAND="${1:-status}"
 case "$COMMAND" in
-  doctor|up|down|status|reset) ;;
+  bench|doctor|up|down|status|reset) ;;
   *)
-    echo "usage: $0 [doctor|up|down|status|reset]" >&2
+    echo "usage: $0 [bench|doctor|up|down|status|reset]" >&2
     exit 2
     ;;
 esac
@@ -285,6 +285,7 @@ doctor() {
   assert_command cargo
   assert_command curl
   assert_command git
+  assert_command node
   assert_command openssl
   assert_command pnpm
   assert_command setsid
@@ -308,6 +309,30 @@ doctor() {
     echo "tailscale api: $PUBLIC_API_ORIGIN"
     echo "tailscale web: $PUBLIC_WEB_ORIGIN"
   fi
+}
+
+bench() {
+  assert_command curl
+  assert_command git
+  assert_command node
+
+  local bench_api_origin
+  bench_api_origin="${SCOPE_BENCH_API_URL:-$LOCAL_API_ORIGIN}"
+  bench_api_origin="${bench_api_origin%/}"
+
+  if ! wait_http "$bench_api_origin/readyz" 5; then
+    echo "api is not ready at $bench_api_origin; run ./dev/scope-dev up first or set SCOPE_BENCH_API_URL" >&2
+    exit 1
+  fi
+
+  local dev_email dev_handle
+  dev_email="$(get_dev_user_email)"
+  dev_handle="$(get_dev_user_handle)"
+
+  SCOPE_BENCH_API_URL="$bench_api_origin" \
+    SCOPE_DEV_USER_EMAIL="${SCOPE_DEV_USER_EMAIL:-$dev_email}" \
+    SCOPE_DEV_USER_HANDLE="${SCOPE_DEV_USER_HANDLE:-$dev_handle}" \
+    node "$ROOT/bench/phase0.mjs"
 }
 
 up() {
@@ -360,6 +385,7 @@ reset() {
 }
 
 case "$COMMAND" in
+  bench) bench ;;
   doctor) doctor ;;
   up) up ;;
   down) stop_owned_processes; echo "local dev stopped" ;;

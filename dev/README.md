@@ -8,6 +8,7 @@ runtime.
 ```bash
 ./dev/scope-dev doctor
 ./dev/scope-dev up
+./dev/scope-dev bench
 ./dev/scope-dev status
 ./dev/scope-dev down
 ./dev/scope-dev reset
@@ -32,3 +33,8 @@ account you sign in with. `SCOPE_DEV_USER_HANDLE` is optional.
 The local dev stack intentionally does not start the CLI installer service.
 Seeded repositories are the default UI development path until a separate CLI dev
 environment exists.
+
+Run `./dev/scope-dev bench` while the stack is up to collect the Phase 0 local
+data-architecture baseline. The benchmark harness lives under `bench/`, uses
+the seeded local repos, reuses the local Scope CLI session when available, and
+writes ignored reports to `.tmp/bench/phase0/`.
