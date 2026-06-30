@@ -538,6 +538,7 @@ async function initializePushFixtureRepo(dir, repoName) {
   await checkedCommand('git', ['symbolic-ref', 'HEAD', 'refs/heads/main'], dir);
   await checkedCommand('git', ['config', 'user.email', 'bench@scope.local'], dir);
   await checkedCommand('git', ['config', 'user.name', 'Scope Bench'], dir);
+  await checkedCommand('git', ['config', 'commit.gpgsign', 'false'], dir);
 
   for (let commitIndex = 0; commitIndex < config.pushCommits; commitIndex += 1) {
     await writePushFixtureFiles(dir, repoName, commitIndex);
