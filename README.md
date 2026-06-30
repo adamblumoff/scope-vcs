@@ -42,6 +42,7 @@ Use the committed dev entrypoint instead of pulling Railway variables by hand:
 ```bash
 ./dev/scope-dev doctor
 ./dev/scope-dev up
+./dev/scope-dev bench
 ./dev/scope-dev status
 ./dev/scope-dev down
 ./dev/scope-dev reset
@@ -62,6 +63,14 @@ Root `.env.local` must contain `SCOPE_DEV_USER_EMAIL` matching the Clerk dev
 account you sign in with. `SCOPE_DEV_USER_HANDLE` is optional and controls the
 owner handle for seeded repositories. Copy `.env.example` when setting this up
 on a new machine.
+
+`./dev/scope-dev bench` runs the Phase 0 local data-architecture benchmark from
+`bench/` against the seeded repos and writes ignored JSON/Markdown reports under
+`.tmp/bench/phase0/`. It reuses the local `scope_cli_...` session token when
+available on Linux, and `SCOPE_BENCH_AUTH_TOKEN` can override that
+auto-detected auth. Use `SCOPE_BENCH_AUTH_TOKEN` on macOS and Windows.
+The mutating Git receive-pack path uses throwaway repos created and deleted by
+the benchmark harness.
 
 Do not use Railway `production` variables for local API development. A deployed
 Railway development environment can be added later for integration testing, but

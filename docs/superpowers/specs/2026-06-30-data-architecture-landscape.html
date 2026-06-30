@@ -1,0 +1,688 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Scope Data Architecture Landscape</title>
+    <link rel="stylesheet" href="2026-06-30-data-architecture-landscape.css" />
+  </head>
+  <body>
+    <header class="topbar">
+      <div class="topbar-inner">
+        <div class="brand">Scope VCS data architecture</div>
+        <nav aria-label="Page sections">
+          <a href="#changes">Changes</a>
+          <a href="#current">Current state</a>
+          <a href="#pressure">Pressure points</a>
+          <a href="#north-star">North star</a>
+          <a href="#roadmap">Roadmap</a>
+          <a href="#phase-0-start">Phase 0 start</a>
+        </nav>
+      </div>
+    </header>
+
+    <main>
+      <header class="hero">
+        <div>
+          <p class="kicker">Planning artifact</p>
+          <h1>Data architecture lay of the land</h1>
+        </div>
+        <aside class="hero-aside" aria-label="Artifact metadata">
+          <span class="stamp">Prepared</span>
+          <span class="date">2026-06-30</span>
+          <span class="stamp" style="margin-top: 18px">Revised</span>
+          <span class="date">Decision pass 1</span>
+          <div class="hero-links">
+            <a
+              href="https://linear.app/scope-vcs/project/data-architecture-improvements-4388f7444947"
+              >Linear project: Data Architecture Improvements</a
+            >
+            <a href="../../../README.md">Repo README</a>
+            <a href="../../../post-pre-alpha.md">Post-pre-alpha notes</a>
+          </div>
+        </aside>
+      </header>
+
+      <section id="summary">
+        <div class="section-head">
+          <h2>Executive read</h2>
+          <p class="lede"> Scope has a strong domain center, but the persistence and read side still behave like a serialized catalog with large repository aggregates. The next architecture push should keep domain behavior authoritative while breaking storage, reads, and side effects into smaller durable facts. </p>
+        </div>
+
+        <div class="split">
+          <div class="callout">
+            <p> <strong>My recommendation:</strong> start the Data Architecture project now, but do not jump straight into a large table rewrite. First benchmark the hot paths, then remove request-path auth writes and the global lock pressure, then split repository persistence and materialize read models. </p>
+          </div>
+          <div class="callout warning">
+            <p> <strong>Pre-alpha advantage:</strong> this is the right time to do destructive schema replacement. Keeping compatibility for the current JSON-heavy repository row would preserve the exact shape we need to escape. </p>
+          </div>
+        </div>
+      </section>
+
+      <section id="changes">
+        <div class="section-head">
+          <h2>Decision pass changes</h2>
+          <p> This revision folds in the first answer set. Decisions 1, 2, 3, and 5 keep the defaults. Decision 4 changes the worker direction: workers should be a dedicated Railway service, with repo structure and CI/deploy work included in the plan. </p>
+        </div>
+
+        <div class="change-key" aria-label="Change marker legend">
+          <ins class="plan-add">Added or newly accepted plan text</ins>
+          <del class="plan-delete">Deleted or replaced plan text</del>
+        </div>
+
+        <div class="band split">
+          <div>
+            <h3>Defaults accepted</h3>
+            <ul>
+              <li> <ins class="plan-add" >Roles should be settled enough for table vocabulary now: public, member/maintainer capabilities, and owner.</ins > </li>
+              <li> <ins class="plan-add" >Read models should start as audience-class based, not user-specific.</ins > </li>
+              <li> <ins class="plan-add" >History should remain product/projected history for now, not full audit history.</ins > </li>
+              <li> <ins class="plan-add" >Bound Git and object-store work before doing broad streaming rewrites.</ins > </li>
+            </ul>
+          </div>
+          <div>
+            <h3>Direction changed</h3>
+            <p> <del class="plan-delete" >Start workers inside the API process behind a feature/config boundary.</del > <ins class="plan-add" >Build workers as their own Railway service and refactor the Rust codebase so API and worker binaries share domain, persistence, object-store, and job execution modules without duplicating delivery code.</ins > </p>
+          </div>
+        </div>
+      </section>
+
+      <section id="current">
+        <div class="section-head">
+          <h2>Current state</h2>
+          <p> Recent work has cleaned up several boundaries: object-store modules are split, staged push rules moved into domain ownership, and collaboration HTTP glue was condensed. The remaining data problem is less about file size and more about the shape of state and side effects. </p>
+        </div>
+
+        <div class="quad">
+          <div class="cell">
+            <span class="label good">Strong</span>
+            <h3>Domain model</h3>
+            <p> <code>StoredRepository</code>, <code>SourceGraph</code>, visibility policy, staged updates, collaboration rules, and projections hold the important product rules in durable domain code. </p>
+          </div>
+          <div class="cell">
+            <span class="label now">Mixed</span>
+            <h3>Persistence</h3>
+            <p> Postgres has real tables for users, auth identities, members, invites, CLI auth, and repositories. The repository table still stores graph, policy, tokens, pending import, snapshot, and staged update as JSON. </p>
+          </div>
+          <div class="cell">
+            <span class="label medium">Costly</span>
+            <h3>Reads</h3>
+            <p> Repo detail, files, projection preview, history, and Git clone paths commonly rehydrate the full repository aggregate and replay projection logic on demand. </p>
+          </div>
+          <div class="cell">
+            <span class="label high">Hot</span>
+            <h3>Side effects</h3>
+            <p> Git subprocesses, object-store reads and writes, projection Git repo creation, bundle restore, and cleanup can run inline with request handling. </p>
+          </div>
+        </div>
+
+        <div class="source-list" aria-label="Relevant local source links">
+          <a href="../../../api/src/domain/store.rs">domain/store.rs</a>
+          <a href="../../../api/src/domain/projection.rs">domain/projection.rs</a>
+          <a href="../../../api/src/domain/projection_views.rs"
+            >domain/projection_views.rs</a
+          >
+          <a href="../../../api/src/db/schema.rs">db/schema.rs</a>
+          <a href="../../../api/src/db/mod.rs">db/mod.rs</a>
+          <a href="../../../api/src/db/locks.rs">db/locks.rs</a>
+          <a href="../../../api/src/git/upload.rs">git/upload.rs</a>
+          <a href="../../../api/src/git/storage.rs">git/storage.rs</a>
+          <a href="../../../api/src/object_store/mod.rs">object_store/mod.rs</a>
+        </div>
+      </section>
+
+      <section id="request-flow">
+        <div class="section-head">
+          <h2>Typical hot path today</h2>
+          <p> This is the pattern I would expect to dominate current latency and capacity. It is not wrong for pre-alpha, but it is the shape that will cap growth. </p>
+        </div>
+
+        <div class="flow">
+          <div class="flow-row">
+            <div class="flow-title">Auth</div>
+            <div class="flow-text">
+              Clerk JWT is verified, then <code>resolve_clerk_user</code> can
+              enter a metadata write transaction to create or update the Scope
+              user snapshot.
+            </div>
+          </div>
+          <div class="flow-row">
+            <div class="flow-title">Metadata</div>
+            <div class="flow-text">
+              Repo reads take the metadata lock row in share mode. Mutations and
+              auth flows take it in update mode. Many unrelated repos therefore
+              still coordinate through one row.
+            </div>
+          </div>
+          <div class="flow-row">
+            <div class="flow-title">Aggregate</div>
+            <div class="flow-text">
+              A repository row is loaded and decoded into
+              <code>StoredRepository</code>, including graph, policy, token
+              state, snapshots, pending import, and staged updates.
+            </div>
+          </div>
+          <div class="flow-row">
+            <div class="flow-title">Compute</div>
+            <div class="flow-text">
+              Projection, file tree, preview, and history are computed from the
+              source graph on request. Public and owner views often repeat the
+              same work.
+            </div>
+          </div>
+          <div class="flow-row">
+            <div class="flow-title">Git and blobs</div>
+            <div class="flow-text">
+              Git clone paths may build or restore bare repos using subprocesses
+              and object-store reads. Object-store calls currently return whole
+              byte buffers.
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <section id="pressure">
+        <div class="section-head">
+          <h2>Pressure points</h2>
+          <p> These are the places where the architecture is likely to bend first as data or concurrency grows. </p>
+        </div>
+
+        <table class="matrix">
+          <thead>
+            <tr>
+              <th>Area</th>
+              <th>Current behavior</th>
+              <th>Why it matters</th>
+              <th>Likely fix</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td><strong>Global metadata lock</strong></td>
+              <td> One <code>scope_metadata_locks</code> row protects broad metadata invariants. </td>
+              <td> Unrelated users and repos can queue behind auth writes, repo mutations, cleanup updates, and large reads. </td>
+              <td> Use constraints, row-level locks, scoped repo locks, and typed job tables instead of one catalog lock. </td>
+            </tr>
+            <tr>
+              <td><strong>Large repository JSON</strong></td>
+              <td> <code>scope_repositories</code> stores graph, policy, visibility events, tokens, snapshots, pending import, and staged update as JSON. </td>
+              <td> Normal detail/list/settings reads become sensitive to repo history size and JSON decode cost. </td>
+              <td> Split canonical facts into domain-owned tables and rehydrate full aggregate only for mutation paths. </td>
+            </tr>
+            <tr>
+              <td><strong>Derived reads</strong></td>
+              <td> Projections, file trees, history, and clone artifacts are built from canonical graph data on demand. </td>
+              <td> Read cost tracks total repo history instead of result size. </td>
+              <td> Materialize read models keyed by repo revision, source, and audience class. </td>
+            </tr>
+            <tr>
+              <td><strong>Inline Git work</strong></td>
+              <td> Git subprocesses and bundle/projection repo creation happen during request handling. </td>
+              <td> A burst of pushes or clones can block normal UI traffic. </td>
+              <td> Add outbox jobs, workers, prepared artifacts, concurrency limits, and explicit backpressure responses. </td>
+            </tr>
+            <tr>
+              <td><strong>Object-store interface</strong></td>
+              <td> <code>ObjectStore::get</code> returns <code>Vec&lt;u8&gt;</code>; S3 uses blocking reqwest inside <code>block_in_place</code>. </td>
+              <td> Large blobs and parallel Git operations can put memory and blocking thread capacity under pressure. </td>
+              <td> Introduce bounded read/write APIs, streaming where useful, and one service-level IO budget. </td>
+            </tr>
+            <tr>
+              <td><strong>Cleanup queues</strong></td>
+              <td> Pending source blob and repo storage deletions live as JSON on the metadata lock row. </td>
+              <td> Cleanup state shares contention with unrelated metadata work and is hard to retry or inspect. </td>
+              <td> Move cleanup into typed job rows with idempotency keys, attempts, next run time, and failure diagnostics. </td>
+            </tr>
+          </tbody>
+        </table>
+      </section>
+
+      <section id="north-star">
+        <div class="section-head">
+          <h2>North star</h2>
+          <p> The target architecture should preserve the thing Scope already does well: domain behavior owns the rules. The change is that persistence stores durable facts and read models serve repeated queries. </p>
+        </div>
+
+        <div class="artifact-map" aria-label="Target architecture layers">
+          <div>
+            <b>Domain behavior</b>
+            <span>
+              Owns invariants, transitions, access decisions, projection
+              semantics, and required effects.
+            </span>
+          </div>
+          <div>
+            <b>Canonical facts</b>
+            <span>
+              Repo record, settings, commits, file changes, visibility events,
+              blobs, tokens, members, invites, staged updates.
+            </span>
+          </div>
+          <div>
+            <b>Read models</b>
+            <span>
+              Current file trees, history summaries, file diffs, preview
+              metrics, access summaries, prepared Git refs.
+            </span>
+          </div>
+          <div>
+            <b>Workers</b>
+            <span>
+              Import, publish, read-model rebuild, Git artifact generation,
+              source blob cleanup, repo storage cleanup.
+              <ins class="plan-add"
+                >Run these from a dedicated Railway worker service rather than
+                the request-serving API.</ins
+              >
+            </span>
+          </div>
+          <div>
+            <b>Thin delivery</b>
+            <span>
+              HTTP, CLI, Git smart HTTP, and web routes translate inputs, call
+              domain operations, persist facts, and render results.
+            </span>
+          </div>
+        </div>
+
+        <div class="band split">
+          <div>
+            <h3>Canonical write model</h3>
+            <ul>
+              <li> Keep source graph and policy canonical, but store them as rows instead of one large JSON document. </li>
+              <li> Require every mutation to produce a repo revision and explicit effects. </li>
+              <li> Commit facts and outbox jobs in the same transaction. </li>
+              <li> Rehydrate a full aggregate only where domain behavior needs the whole aggregate to make a transition. </li>
+            </ul>
+          </div>
+          <div>
+            <h3>Disposable read model</h3>
+            <ul>
+              <li> Treat projection trees, history pages, file diffs, and Git artifacts as rebuildable products of canonical facts. </li>
+              <li> Key read models by repo id, repo revision, source (<code>live</code> or <code>review</code>), and audience class. </li>
+              <li> Return explicit rebuilding or unavailable states when the read model is stale or missing. </li>
+              <li> Version read-model semantics so old caches can be deleted destructively. </li>
+            </ul>
+          </div>
+        </div>
+      </section>
+
+      <section id="tables">
+        <div class="section-head">
+          <h2>Table direction</h2>
+          <p> This is not a final schema. It is the table vocabulary I think we should use when we start ADA-36 and ADA-37. The important part is ownership: each table should either be canonical domain fact, disposable read model, or explicit side-effect work. </p>
+        </div>
+
+        <table class="matrix">
+          <thead>
+            <tr>
+              <th>Group</th>
+              <th>Candidate tables</th>
+              <th>Purpose</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td><strong>Repository identity</strong></td>
+              <td> <code>repo_records</code>, <code>repo_settings</code>, <code>repo_revisions</code> </td>
+              <td> Small rows for list/detail/settings routes. Revision becomes the join point between canonical changes, read models, and job idempotency. </td>
+            </tr>
+            <tr>
+              <td><strong>Access</strong></td>
+              <td> <code>repo_members</code>, <code>repo_invites</code>, <code>repo_access_snapshots</code> </td>
+              <td> Members and invites are already partly normalized. Access snapshots can keep UI and Git authorization from needing the full source graph. </td>
+            </tr>
+            <tr>
+              <td><strong>Auth and tokens</strong></td>
+              <td> <code>auth_identities</code>, <code>cli_sessions</code>, <code>repo_push_tokens</code>, <code>repo_clone_tokens</code> </td>
+              <td> Move repo token state out of repository JSON. Normal auth verification should be a narrow indexed lookup, not a catalog write. </td>
+            </tr>
+            <tr>
+              <td><strong>Source graph</strong></td>
+              <td> <code>logical_commits</code>, <code>logical_commit_parents</code>, <code>file_changes</code>, <code>source_blobs</code> </td>
+              <td> Store the canonical source graph in queryable rows. Preserve domain ownership by writing through domain transition outputs. </td>
+            </tr>
+            <tr>
+              <td><strong>Visibility</strong></td>
+              <td> <code>visibility_rules</code>, <code>visibility_events</code>, <code>path_visibility_epochs</code> </td>
+              <td> Make current visibility and historical visibility inspectable. Epochs can support fast public history and audit semantics. </td>
+            </tr>
+            <tr>
+              <td><strong>Review state</strong></td>
+              <td> <code>pending_imports</code>, <code>pending_import_files</code>, <code>staged_updates</code>, <code>staged_file_changes</code> </td>
+              <td> Keep review surfaces explicit instead of stuffing pending work into the repo row. </td>
+            </tr>
+            <tr>
+              <td><strong>Read models</strong></td>
+              <td> <code>projection_files</code>, <code>projection_commits</code>, <code>history_entries</code>, <code>file_diff_index</code> </td>
+              <td> Serve UI and API reads in O(page size or result size), not O(total repo history). </td>
+            </tr>
+            <tr>
+              <td><strong>Git artifacts</strong></td>
+              <td> <code>git_snapshots</code>, <code>git_projection_artifacts</code>, <code>git_artifact_refs</code> </td>
+              <td> Track prepared bundles, bare repo cache keys, snapshot blobs, and artifact readiness. </td>
+            </tr>
+            <tr>
+              <td><strong>Work queues</strong></td>
+              <td> <code>outbox_jobs</code>, <code>cleanup_jobs</code>, <code>job_attempts</code> </td>
+              <td> Make side effects explicit, idempotent, retryable, and visible to operators. <ins class="plan-add" >The worker service owns job execution; API requests own job enqueueing inside the metadata transaction.</ins > </td>
+            </tr>
+            <tr>
+              <td><strong>Worker service deployment</strong></td>
+              <td> <ins class="plan-add" ><code>api</code> crate shared modules, worker binary, service-specific Railpack config, and GitHub Actions deploy workflow.</ins > </td>
+              <td> <ins class="plan-add" >Make <code>scope-worker</code> deploy like <code>scope-api</code>, <code>scope-cli</code>, and <code>scope-web</code>: CI first, Railway deploy second, no manual service drift.</ins > </td>
+            </tr>
+          </tbody>
+        </table>
+      </section>
+
+      <section id="roadmap">
+        <div class="section-head">
+          <h2>Roadmap</h2>
+          <p> I would treat the Linear project as a sequence of small destructive changes. Each step should leave the app working, but we should not preserve old storage paths for compatibility. </p>
+        </div>
+
+        <div class="timeline">
+          <div class="phase">
+            <div class="phase-id">Phase 0</div>
+            <div>
+              <h3> <a href="https://linear.app/scope-vcs/issue/ADA-33/benchmark-current-metadata-auth-projection-and-git-hot-paths" >ADA-33 - Benchmark hot paths</a > </h3>
+              <p> Build a repeatable simulated benchmark for auth, repo list, repo detail, files, projection preview, history, clone credential, info/refs, upload-pack, receive-pack, publish, and cleanup. </p>
+            </div>
+            <div class="phase-note">
+              Output: baseline latency, lock wait time, object-store bytes, Git
+              subprocess count, memory pressure, and a small fixture matrix.
+            </div>
+          </div>
+
+          <div class="phase">
+            <div class="phase-id">Phase 1</div>
+            <div>
+              <h3> <a href="https://linear.app/scope-vcs/issue/ADA-34/remove-db-writes-from-normal-authenticated-request-paths" >ADA-34 - Remove auth writes from normal reads</a > </h3>
+              <p> Resolve Clerk users from indexed identity rows without updating user snapshots on every request. Move snapshot refresh and session last-used writes to explicit events or sampled updates. </p>
+            </div>
+            <div class="phase-note">
+              This is the lowest-risk way to reduce write contention quickly.
+            </div>
+          </div>
+
+          <div class="phase">
+            <div class="phase-id">Phase 2</div>
+            <div>
+              <h3> <a href="https://linear.app/scope-vcs/issue/ADA-35/replace-the-global-metadata-lock-with-scoped-transactional-invariants" >ADA-35 - Replace the global metadata lock</a > </h3>
+              <p> Move uniqueness and referential integrity into constraints, lock individual repo rows for repo mutations, and use typed job rows for cleanup state. </p>
+            </div>
+            <div class="phase-note">
+              Success means unrelated repos can read and mutate without queuing
+              behind a catalog-wide lock row.
+            </div>
+          </div>
+
+          <div class="phase">
+            <div class="phase-id">Phase 3</div>
+            <div>
+              <h3> <a href="https://linear.app/scope-vcs/issue/ADA-36/normalize-repository-persistence-around-domain-owned-tables" >ADA-36 - Normalize repository persistence</a > </h3>
+              <p> Split the large repository JSON aggregate into durable fact tables. Keep mutation APIs behavior-owned: SQL stores facts, but domain modules still decide transitions and side effects. </p>
+            </div>
+            <div class="phase-note">
+              Use destructive pre-alpha reset. Delete obsolete JSON columns
+              instead of shadow-writing old and new shapes.
+            </div>
+          </div>
+
+          <div class="phase">
+            <div class="phase-id">Phase 4</div>
+            <div>
+              <h3> <a href="https://linear.app/scope-vcs/issue/ADA-37/materialize-projection-file-tree-history-and-git-read-models" >ADA-37 - Materialize read models</a > </h3>
+              <p> Precompute current file trees, projected commits, history summaries, file diff indexes, and visibility summaries by repo revision and audience class. </p>
+            </div>
+            <div class="phase-note">
+              Normal UI reads should become indexed reads. Rebuild code should
+              prove read models are disposable.
+            </div>
+          </div>
+
+          <div class="phase">
+            <div class="phase-id">Phase 5</div>
+            <div>
+              <h3> <a href="https://linear.app/scope-vcs/issue/ADA-38/introduce-transactional-outbox-and-workers-for-gitimportpublishcleanup" >ADA-38 - Add outbox and workers</a > </h3>
+              <p> Commit side-effect jobs with metadata changes. Workers handle import processing, read-model rebuild, Git artifact generation, and cleanup with explicit states and retries. <ins class="plan-add" >The implementation target is a separate <code>scope-worker</code> Railway service, not an in-process API background loop.</ins > </p>
+            </div>
+            <div class="phase-note">
+              <del class="plan-delete"
+                >This is where pushes and publishes stop tying up request
+                handlers for all expensive work.</del
+              >
+              <ins class="plan-add"
+                >This phase includes the repo refactor needed for shared API
+                and worker code, plus CI and Railway deployment for the worker
+                service.</ins
+              >
+            </div>
+          </div>
+
+          <div class="phase">
+            <div class="phase-id">Phase 6</div>
+            <div>
+              <h3> <a href="https://linear.app/scope-vcs/issue/ADA-39/bound-and-stream-git-subprocess-and-object-store-io" >ADA-39 - Bound Git and object-store IO</a > </h3>
+              <p> Add service-level concurrency budgets for receive-pack, upload-pack, projection builds, raw snapshot restore, bundle generation, and object-store operations. </p>
+            </div>
+            <div class="phase-note">
+              The user-visible behavior should be predictable backpressure
+              rather than random request stalls.
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <section id="first">
+        <div class="section-head">
+          <h2>What I would do first</h2>
+          <p> The first PR should not be a schema replacement. It should make the bottlenecks measurable and create a shared vocabulary for the rest of the work. </p>
+        </div>
+
+        <div class="triple">
+          <div class="cell">
+            <span class="label now">1</span>
+            <h3>Benchmark fixture</h3>
+            <p> Generate repos with a small, medium, and large source graph: different file counts, commit counts, visibility mixes, pending review state, and member access. </p>
+          </div>
+          <div class="cell">
+            <span class="label now">2</span>
+            <h3>Hot path runner</h3>
+            <p> Exercise auth, repo list/detail, projection preview, history, files, Git clone, push, publish, and cleanup under light and burst concurrency. </p>
+          </div>
+          <div class="cell">
+            <span class="label now">3</span>
+            <h3>Report format</h3>
+            <p> Emit a stable JSON or Markdown report with latency, query count, lock wait, decoded bytes, object-store bytes, Git subprocesses, and memory high-water notes. </p>
+          </div>
+        </div>
+
+        <div class="band">
+          <div class="callout">
+            <p> <strong>Useful threshold:</strong> if a normal read route deserializes source graph JSON or reconstructs a projection tree, the benchmark should make that visible. We do not need perfect production load testing yet; we need enough measurement to stop arguing blind. </p>
+          </div>
+        </div>
+      </section>
+
+      <section id="guardrails">
+        <div class="section-head">
+          <h2>Guardrails</h2>
+          <p> These are the architectural rules I would hold while doing the data work. </p>
+        </div>
+
+        <div class="split">
+          <div>
+            <h3>Keep</h3>
+            <ul>
+              <li> Domain modules own rules, allowed transitions, visibility semantics, and required side effects. </li>
+              <li> Effects are explicit values before they become jobs, object deletes, notifications, or artifact builds. </li>
+              <li> Read models are rebuildable from canonical facts and versioned by semantics. </li>
+              <li> Tests target behavior and failure modes: permissions, visibility leaks, stale reads, idempotent retries, and cleanup safety. </li>
+            </ul>
+          </div>
+          <div>
+            <h3>Reject</h3>
+            <ul>
+              <li> Backward compatibility layers for obsolete pre-alpha storage shapes. </li>
+              <li> SQL branches that independently invent business rules already owned by domain code. </li>
+              <li> Read-model tables that become a second canonical source of truth. </li>
+              <li> Inline long-running Git, S3, or cleanup work when a transaction can enqueue explicit work instead. </li>
+            </ul>
+          </div>
+        </div>
+      </section>
+
+      <section id="decisions">
+        <div class="section-head">
+          <h2>Resolved decisions</h2>
+          <p> These choices are no longer open for the current plan. They should shape the first implementation passes unless we deliberately reopen them later. </p>
+        </div>
+
+        <table class="matrix">
+          <thead>
+            <tr>
+              <th>Decision</th>
+              <th>Answer</th>
+              <th>Plan effect</th>
+              <th>Status</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td><strong>Role model before data split</strong></td>
+              <td> <ins class="plan-add" >Use the default: settle enough vocabulary now for public, member/maintainer capabilities, and owner.</ins > </td>
+              <td> Access tables and read-model audience classes should be named around durable concepts, not temporary UI labels. </td>
+              <td><span class="decision-mark">Accepted</span></td>
+            </tr>
+            <tr>
+              <td><strong>Projection audience classes</strong></td>
+              <td> <ins class="plan-add" >Use the default: start with owner/private-reader and public; avoid per-user read models unless member-specific visibility appears.</ins > </td>
+              <td> Per-user read models explode cardinality. Current members all read private files once published, so audience classes are enough. </td>
+              <td><span class="decision-mark">Accepted</span></td>
+            </tr>
+            <tr>
+              <td><strong>History semantics</strong></td>
+              <td> <ins class="plan-add" >Use the default: keep history as product/projected history for now, not full audit history.</ins > </td>
+              <td> Audit semantics require different storage and permissions than user-facing public history. </td>
+              <td><span class="decision-mark">Accepted</span></td>
+            </tr>
+            <tr>
+              <td><strong>Worker runtime</strong></td>
+              <td> <del class="plan-delete" >Start inside the API process behind a feature/config boundary.</del > <ins class="plan-add" >Run workers as their own Railway service, with a codebase refactor and CI deploy path similar to the other services.</ins > </td>
+              <td> The project now includes shared-library extraction, <code>scope-worker</code> binary ownership, Railway service configuration, and GitHub Actions deployment. </td>
+              <td><span class="decision-mark">Changed</span></td>
+            </tr>
+            <tr>
+              <td><strong>Streaming sequence</strong></td>
+              <td> <ins class="plan-add" >Use the default: bound first, stream second. Add concurrency budgets and size limits before broad async object-store rewrites.</ins > </td>
+              <td> Streaming is useful, but an unbounded streaming system still overloads. Budgeting gives immediate safety. </td>
+              <td><span class="decision-mark">Accepted</span></td>
+            </tr>
+          </tbody>
+        </table>
+      </section>
+
+      <section id="conversation">
+        <div class="section-head">
+          <h2>Conversation agenda</h2>
+          <p> The first-pass defaults are accepted, so the next conversation should focus on execution details instead of reopening those direction choices. </p>
+        </div>
+
+        <ol>
+          <li> <del class="plan-delete" >Confirm the product role model: public, member/maintainer, owner, and which actions each can take.</del > <ins class="plan-add" >Translate the accepted role vocabulary into table names, permission columns, and read-model audience names.</ins > </li>
+          <li> <del class="plan-delete" >Decide whether read models are audience-class based or user-specific.</del > <ins class="plan-add" >Define the first two audience classes explicitly: public-projection and private-reader-projection.</ins > </li>
+          <li> Agree that the source graph stays canonical and read models are disposable. </li>
+          <li> Define the first benchmark fixture and the report numbers we care about. </li>
+          <li> Pick the first destructive schema cut: auth writes, global lock, or repo JSON columns. </li>
+          <li> <del class="plan-delete" >Decide how aggressive we want to be about workers in the first pass.</del > <ins class="plan-add" >Define the <code>scope-worker</code> service boundary, shared Rust modules, Railway variables, and GitHub Actions deployment flow before implementing ADA-38.</ins > </li>
+        </ol>
+      </section>
+
+      <section id="phase-0-start">
+        <div class="section-head">
+          <h2>How I will start Phase 0</h2>
+          <p> Phase 0 should produce trustworthy baseline numbers and a fixture we can reuse after every architecture cut. It should not change behavior or schema. </p>
+        </div>
+
+        <div class="timeline">
+          <div class="phase">
+            <div class="phase-id">Start 1</div>
+            <div>
+              <h3>Inventory the hot paths</h3>
+              <p> <ins class="plan-add" >Map the exact handlers and functions for auth resolution, repo list/detail, files, projection preview, history, Git info/refs, upload-pack, receive-pack, publish/apply, and cleanup drain.</ins > </p>
+            </div>
+            <div class="phase-note">
+              Output: a short route/function matrix tied to the benchmark
+              cases.
+            </div>
+          </div>
+
+          <div class="phase">
+            <div class="phase-id">Start 2</div>
+            <div>
+              <h3>Build deterministic fixtures outside source code</h3>
+              <p> <ins class="plan-add" >Create small, medium, and large repo fixtures with generated commits, files, visibility changes, pending review state, and member access. Keep benchmark/test code outside production source unless there is a specific justification.</ins > </p>
+            </div>
+            <div class="phase-note">
+              Output: repeatable fixture setup that can target Postgres, with a
+              memory fallback only for cheap smoke coverage.
+            </div>
+          </div>
+
+          <div class="phase">
+            <div class="phase-id">Start 3</div>
+            <div>
+              <h3>Add a benchmark runner</h3>
+              <p> <ins class="plan-add" >Run each hot path under light and burst concurrency, measure elapsed time, status, response bytes, Git subprocess count, object-store bytes, and observable lock/transaction wait where Postgres exposes it cheaply.</ins > </p>
+            </div>
+            <div class="phase-note">
+              Output: JSON plus a readable Markdown summary under a generated
+              output directory, not committed benchmark results.
+            </div>
+          </div>
+
+          <div class="phase">
+            <div class="phase-id">Start 4</div>
+            <div>
+              <h3>Keep CI sane</h3>
+              <p> <ins class="plan-add" >Do not make full benchmarks part of normal CI. Add a fast compile/smoke path so fixture and runner code does not rot, then run the full benchmark manually before and after each data-architecture phase.</ins > </p>
+            </div>
+            <div class="phase-note">
+              Output: normal checks stay fast; architecture PRs still have
+              before/after evidence.
+            </div>
+          </div>
+
+          <div class="phase">
+            <div class="phase-id">Start 5</div>
+            <div>
+              <h3>Use the baseline to choose the first cut</h3>
+              <p> <ins class="plan-add" >If auth writes dominate, start ADA-34. If lock wait dominates across unrelated repos, start ADA-35. If JSON decode and projection rebuild dominate normal reads, start ADA-36/37 sequencing with the narrowest destructive split.</ins > </p>
+            </div>
+            <div class="phase-note">
+              Output: the Phase 1 choice is evidence-driven instead of based on
+              whichever concern feels loudest.
+            </div>
+          </div>
+
+          <div class="phase">
+            <div class="phase-id">Built</div>
+            <div>
+              <h3>Phase 0 local harness</h3>
+              <p> <del class="plan-delete" >Generate small, medium, and large disposable fixtures before taking the first baseline measurement.</del > <ins class="plan-add" >Start with the seeded local repos so Phase 0 measures today without changing API runtime code: <code>bench/phase0.mjs</code> runs through <code>./dev/scope-dev bench</code>, targets <code>public-demo</code> and <code>update-demo</code>, and writes ignored JSON/Markdown reports under <code>.tmp/bench/phase0/</code>.</ins > </p>
+              <p> <ins class="plan-add" >The first report captures external latency, response bytes, status-code mix, Git smart HTTP latency, and <code>git ls-remote</code> subprocess latency. Authenticated read-only cases use the local <code>scope_cli_...</code> session when available on Linux, with <code>SCOPE_BENCH_AUTH_TOKEN</code> kept as the cross-platform override. The receive-pack path now uses disposable generated repositories: create through the API, push once over Git smart HTTP, and delete after the sample. Internal counters remain explicit next instrumentation work.</ins > </p>
+            </div>
+            <div class="phase-note">
+              Output: a local benchmark command that is part of the dev loop,
+              not production source or normal CI.
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <p class="print-note"> This is a discussion artifact, not an approved implementation spec. It reflects the repo state, Linear backlog, and first resolved decision set as of 2026-06-30. </p>
+    </main>
+  </body>
+</html>
