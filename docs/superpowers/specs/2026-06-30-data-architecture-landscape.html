@@ -16,7 +16,7 @@
           <a href="#pressure">Pressure points</a>
           <a href="#north-star">North star</a>
           <a href="#roadmap">Roadmap</a>
-          <a href="#phase-0-start">Phase 0 start</a>
+          <a href="#phase-1-start">Phase 1 start</a>
         </nav>
       </div>
     </header>
@@ -31,7 +31,7 @@
           <span class="stamp">Prepared</span>
           <span class="date">2026-06-30</span>
           <span class="stamp" style="margin-top: 18px">Revised</span>
-          <span class="date">Decision pass 1</span>
+          <span class="date">Phase 1 start</span>
           <div class="hero-links">
             <a
               href="https://linear.app/scope-vcs/project/data-architecture-improvements-4388f7444947"
@@ -51,18 +51,18 @@
 
         <div class="split">
           <div class="callout">
-            <p> <strong>My recommendation:</strong> start the Data Architecture project now, but do not jump straight into a large table rewrite. First benchmark the hot paths, then remove request-path auth writes and the global lock pressure, then split repository persistence and materialize read models. </p>
+            <p> <strong>Current recommendation:</strong> Phase 0 is complete enough to use as the baseline harness. Move next to ADA-34: remove normal authenticated request writes before touching the global metadata lock or repository JSON shape. </p>
           </div>
-          <div class="callout warning">
-            <p> <strong>Pre-alpha advantage:</strong> this is the right time to do destructive schema replacement. Keeping compatibility for the current JSON-heavy repository row would preserve the exact shape we need to escape. </p>
+          <div class="callout phase-focus">
+            <p> <strong>Phase 1 target:</strong> known Clerk users and valid CLI sessions should resolve principals through read-only database work. Writes should happen only for explicit lifecycle events: first identity bootstrap, account reconciliation, CLI login/exchange, revocation, and later cleanup. </p>
           </div>
         </div>
       </section>
 
       <section id="changes">
         <div class="section-head">
-          <h2>Decision pass changes</h2>
-          <p> This revision folds in the first answer set. Decisions 1, 2, 3, and 5 keep the defaults. Decision 4 changes the worker direction: workers should be a dedicated Railway service, with repo structure and CI/deploy work included in the plan. </p>
+          <h2>Phase 1 transition</h2>
+          <p> This revision moves the plan from baseline gathering into execution. The earlier defaults still stand, but the active work is now narrower: remove normal auth request writes and use the benchmark harness as before/after evidence. </p>
         </div>
 
         <div class="change-key" aria-label="Change marker legend">
@@ -74,6 +74,8 @@
           <div>
             <h3>Defaults accepted</h3>
             <ul>
+              <li> <ins class="plan-add" >Phase 0 local benchmark work is merged on main and available through <code>./dev/scope-dev bench</code>.</ins > </li>
+              <li> <ins class="plan-add" >Phase 1 is now the active work: ADA-34 removes database writes from normal authenticated request paths.</ins > </li>
               <li> <ins class="plan-add" >Roles should be settled enough for table vocabulary now: public, member/maintainer capabilities, and owner.</ins > </li>
               <li> <ins class="plan-add" >Read models should start as audience-class based, not user-specific.</ins > </li>
               <li> <ins class="plan-add" >History should remain product/projected history for now, not full audit history.</ins > </li>
@@ -81,8 +83,38 @@
             </ul>
           </div>
           <div>
-            <h3>Direction changed</h3>
-            <p> <del class="plan-delete" >Start workers inside the API process behind a feature/config boundary.</del > <ins class="plan-add" >Build workers as their own Railway service and refactor the Rust codebase so API and worker binaries share domain, persistence, object-store, and job execution modules without duplicating delivery code.</ins > </p>
+            <h3>Now deferred</h3>
+            <p> <del class="plan-delete" >Use the Phase 0 baseline to choose between auth writes, global lock replacement, or repository JSON splitting.</del > <ins class="plan-add" >Do ADA-34 first because the code has known write-lock auth paths: <code>resolve_clerk_user</code> writes user snapshots and <code>verify_cli_session_token</code> updates session last-used during normal reads.</ins > </p>
+          </div>
+        </div>
+      </section>
+
+      <section id="phase-0-result">
+        <div class="section-head">
+          <h2>Phase 0 result</h2>
+          <p> The baseline does not yet expose internal lock wait or SQL query counts, but it gives us a repeatable local measurement loop and enough external timings to compare before and after ADA-34. Internal counters stay on the instrumentation backlog. </p>
+        </div>
+
+        <div class="quad">
+          <div class="cell">
+            <span class="label good">Merged</span>
+            <h3>Local harness</h3>
+            <p> <code>bench/phase0.mjs</code> runs through <code>./dev/scope-dev bench</code> and writes ignored JSON/Markdown reports under <code>.tmp/bench/phase0/</code>. </p>
+          </div>
+          <div class="cell">
+            <span class="label now">Auth read</span>
+            <h3>List repos</h3>
+            <p> Latest local run: auth list repos p50 <code>2.04ms</code>, p95 <code>2.68ms</code>, burst p95 <code>6.13ms</code>. This is the route family Phase 1 should protect from avoidable writes. </p>
+          </div>
+          <div class="cell">
+            <span class="label now">Git write</span>
+            <h3>Receive-pack</h3>
+            <p> First push with disposable generated repos measured p50 <code>73.46ms</code>, p95 <code>83.81ms</code>. This remains useful as a regression guard, not the Phase 1 target. </p>
+          </div>
+          <div class="cell">
+            <span class="label medium">Gap</span>
+            <h3>Lock visibility</h3>
+            <p> The harness reports external latency and status mix today. Phase 1 should still use code inspection and targeted tests to prove normal auth reads stop taking metadata write locks. </p>
           </div>
         </div>
       </section>
@@ -383,26 +415,28 @@
         </div>
 
         <div class="timeline">
-          <div class="phase">
+          <div class="phase phase-done">
             <div class="phase-id">Phase 0</div>
             <div>
               <h3> <a href="https://linear.app/scope-vcs/issue/ADA-33/benchmark-current-metadata-auth-projection-and-git-hot-paths" >ADA-33 - Benchmark hot paths</a > </h3>
-              <p> Build a repeatable simulated benchmark for auth, repo list, repo detail, files, projection preview, history, clone credential, info/refs, upload-pack, receive-pack, publish, and cleanup. </p>
+              <p> <del class="plan-delete" >Build a repeatable simulated benchmark for auth, repo list, repo detail, files, projection preview, history, clone credential, info/refs, upload-pack, receive-pack, publish, and cleanup.</del > <ins class="plan-add" >Complete: local benchmark harness is merged and available through <code>./dev/scope-dev bench</code>.</ins > </p>
             </div>
             <div class="phase-note">
-              Output: baseline latency, lock wait time, object-store bytes, Git
-              subprocess count, memory pressure, and a small fixture matrix.
+              Baseline is available for external latency, response bytes, status
+              mix, Git smart HTTP, git subprocess, and first-push receive-pack
+              timing.
             </div>
           </div>
 
-          <div class="phase">
+          <div class="phase phase-active">
             <div class="phase-id">Phase 1</div>
             <div>
               <h3> <a href="https://linear.app/scope-vcs/issue/ADA-34/remove-db-writes-from-normal-authenticated-request-paths" >ADA-34 - Remove auth writes from normal reads</a > </h3>
-              <p> Resolve Clerk users from indexed identity rows without updating user snapshots on every request. Move snapshot refresh and session last-used writes to explicit events or sampled updates. </p>
+              <p> <ins class="plan-add" >Active now: resolve established Clerk users and valid CLI sessions through read-only lookups. Move user snapshot refresh, expired-session cleanup, and last-used writes out of the normal request path.</ins > </p>
             </div>
             <div class="phase-note">
-              This is the lowest-risk way to reduce write contention quickly.
+              Success means normal authenticated GETs do not take the metadata
+              write lock just to know who the principal is.
             </div>
           </div>
 
@@ -477,31 +511,31 @@
 
       <section id="first">
         <div class="section-head">
-          <h2>What I would do first</h2>
-          <p> The first PR should not be a schema replacement. It should make the bottlenecks measurable and create a shared vocabulary for the rest of the work. </p>
+          <h2>Phase 1 work order</h2>
+          <p> The first Phase 1 PR should be narrow: preserve user-facing auth behavior, but stop turning every known authenticated read into a metadata write transaction. Do not start the global lock replacement or repository JSON split in this phase. </p>
         </div>
 
         <div class="triple">
           <div class="cell">
             <span class="label now">1</span>
-            <h3>Benchmark fixture</h3>
-            <p> Generate repos with a small, medium, and large source graph: different file counts, commit counts, visibility mixes, pending review state, and member access. </p>
+            <h3>Map auth callers</h3>
+            <p> Trace <code>optional_scope_user</code>, <code>require_scope_user</code>, and <code>require_clerk_scope_user</code> through repo list/detail/session/projection routes. Mark which calls only need an existing principal and which are true auth lifecycle writes. </p>
           </div>
           <div class="cell">
             <span class="label now">2</span>
-            <h3>Hot path runner</h3>
-            <p> Exercise auth, repo list/detail, projection preview, history, files, Git clone, push, publish, and cleanup under light and burst concurrency. </p>
+            <h3>Split read and write APIs</h3>
+            <p> Add read-only lookup paths for known Clerk identities and CLI sessions. Keep explicit write paths for first Clerk bootstrap, CLI login/exchange, session revoke, and account reconciliation. </p>
           </div>
           <div class="cell">
             <span class="label now">3</span>
-            <h3>Report format</h3>
-            <p> Emit a stable JSON or Markdown report with latency, query count, lock wait, decoded bytes, object-store bytes, Git subprocesses, and memory high-water notes. </p>
+            <h3>Benchmark the cut</h3>
+            <p> Run the Phase 0 harness before and after. The important comparison is authenticated read routes: repo list, settings, staged update, owner projection preview, and session endpoints. </p>
           </div>
         </div>
 
         <div class="band">
           <div class="callout">
-            <p> <strong>Useful threshold:</strong> if a normal read route deserializes source graph JSON or reconstructs a projection tree, the benchmark should make that visible. We do not need perfect production load testing yet; we need enough measurement to stop arguing blind. </p>
+            <p> <strong>Implementation rule:</strong> a valid existing user/session should not mutate <code>scope_users</code>, <code>scope_auth_identities</code>, <code>scope_cli_sessions</code>, or <code>scope_metadata_locks</code> during normal read authorization. If a write is still required, it must be named as a lifecycle event and tested as such. </p>
           </div>
         </div>
       </section>
@@ -587,102 +621,101 @@
       <section id="conversation">
         <div class="section-head">
           <h2>Conversation agenda</h2>
-          <p> The first-pass defaults are accepted, so the next conversation should focus on execution details instead of reopening those direction choices. </p>
+          <p> The first-pass defaults are accepted. The next conversation should focus on ADA-34 execution details and what counts as a normal read versus an explicit auth lifecycle event. </p>
         </div>
 
         <ol>
           <li> <del class="plan-delete" >Confirm the product role model: public, member/maintainer, owner, and which actions each can take.</del > <ins class="plan-add" >Translate the accepted role vocabulary into table names, permission columns, and read-model audience names.</ins > </li>
           <li> <del class="plan-delete" >Decide whether read models are audience-class based or user-specific.</del > <ins class="plan-add" >Define the first two audience classes explicitly: public-projection and private-reader-projection.</ins > </li>
           <li> Agree that the source graph stays canonical and read models are disposable. </li>
-          <li> Define the first benchmark fixture and the report numbers we care about. </li>
-          <li> Pick the first destructive schema cut: auth writes, global lock, or repo JSON columns. </li>
+          <li> <del class="plan-delete" >Define the first benchmark fixture and the report numbers we care about.</del > <ins class="plan-add" >Use the merged Phase 0 harness as the before/after proof for ADA-34.</ins > </li>
+          <li> <del class="plan-delete" >Pick the first destructive schema cut: auth writes, global lock, or repo JSON columns.</del > <ins class="plan-add" >The first cut is chosen: remove normal auth request writes before global lock or repo JSON work.</ins > </li>
           <li> <del class="plan-delete" >Decide how aggressive we want to be about workers in the first pass.</del > <ins class="plan-add" >Define the <code>scope-worker</code> service boundary, shared Rust modules, Railway variables, and GitHub Actions deployment flow before implementing ADA-38.</ins > </li>
         </ol>
       </section>
 
-      <section id="phase-0-start">
+      <section id="phase-1-start">
         <div class="section-head">
-          <h2>How I will start Phase 0</h2>
-          <p> Phase 0 should produce trustworthy baseline numbers and a fixture we can reuse after every architecture cut. It should not change behavior or schema. </p>
+          <h2>How I will start Phase 1</h2>
+          <p> Phase 1 should remove avoidable writes from established authenticated reads without weakening auth behavior. Unknown Clerk identities can still bootstrap, and explicit auth lifecycle actions can still write; ordinary read authorization should not. </p>
         </div>
 
         <div class="timeline">
           <div class="phase">
             <div class="phase-id">Start 1</div>
             <div>
-              <h3>Inventory the hot paths</h3>
-              <p> <ins class="plan-add" >Map the exact handlers and functions for auth resolution, repo list/detail, files, projection preview, history, Git info/refs, upload-pack, receive-pack, publish/apply, and cleanup drain.</ins > </p>
+              <h3>Establish the before picture</h3>
+              <p> <ins class="plan-add" >Run <code>./dev/scope-dev bench</code> and record the authenticated read cases. Then inspect <code>api/src/auth/scope.rs</code> and <code>api/src/db/auth.rs</code> to list every route that reaches <code>resolve_clerk_user</code> or <code>verify_cli_session_token</code>.</ins > </p>
             </div>
             <div class="phase-note">
-              Output: a short route/function matrix tied to the benchmark
-              cases.
+              Output: before benchmark plus a route/function matrix for auth
+              reads versus lifecycle writes.
             </div>
           </div>
 
           <div class="phase">
             <div class="phase-id">Start 2</div>
             <div>
-              <h3>Build deterministic fixtures outside source code</h3>
-              <p> <ins class="plan-add" >Create small, medium, and large repo fixtures with generated commits, files, visibility changes, pending review state, and member access. Keep benchmark/test code outside production source unless there is a specific justification.</ins > </p>
+              <h3>Add read-only principal resolution</h3>
+              <p> <ins class="plan-add" >Introduce a read-only lookup for existing Clerk identities that loads <code>scope_auth_identities</code> and <code>scope_users</code> without updating the user snapshot. Keep the current write path for missing identities, email conflicts, and deliberate account reconciliation.</ins > </p>
             </div>
             <div class="phase-note">
-              Output: repeatable fixture setup that can target Postgres, with a
-              memory fallback only for cheap smoke coverage.
+              Output: normal known-user Clerk auth stops updating
+              <code>scope_users</code> on every request.
             </div>
           </div>
 
           <div class="phase">
             <div class="phase-id">Start 3</div>
             <div>
-              <h3>Add a benchmark runner</h3>
-              <p> <ins class="plan-add" >Run each hot path under light and burst concurrency, measure elapsed time, status, response bytes, Git subprocess count, object-store bytes, and observable lock/transaction wait where Postgres exposes it cheaply.</ins > </p>
+              <h3>Stop per-request CLI session writes</h3>
+              <p> <ins class="plan-add" >Change active CLI session verification to read the session and user without writing <code>last_used_at_unix</code> during every request. Expired-session deletion and last-used maintenance should move to explicit cleanup/sampling work instead of the auth read path.</ins > </p>
             </div>
             <div class="phase-note">
-              Output: JSON plus a readable Markdown summary under a generated
-              output directory, not committed benchmark results.
+              Output: valid CLI token reads no longer update
+              <code>scope_cli_sessions</code> for every API call.
             </div>
           </div>
 
           <div class="phase">
             <div class="phase-id">Start 4</div>
             <div>
-              <h3>Keep CI sane</h3>
-              <p> <ins class="plan-add" >Do not make full benchmarks part of normal CI. Add a fast compile/smoke path so fixture and runner code does not rot, then run the full benchmark manually before and after each data-architecture phase.</ins > </p>
+              <h3>Test lifecycle boundaries</h3>
+              <p> <ins class="plan-add" >Add targeted tests for established Clerk users, first Clerk login, verified-email conflict, valid CLI session use, expired CLI session handling, and revoke. The tests should make it hard to accidentally put snapshot or last-used writes back in normal reads.</ins > </p>
             </div>
             <div class="phase-note">
-              Output: normal checks stay fast; architecture PRs still have
-              before/after evidence.
+              Output: behavior stays clear: read authorization reads; lifecycle
+              events write.
             </div>
           </div>
 
           <div class="phase">
             <div class="phase-id">Start 5</div>
             <div>
-              <h3>Use the baseline to choose the first cut</h3>
-              <p> <ins class="plan-add" >If auth writes dominate, start ADA-34. If lock wait dominates across unrelated repos, start ADA-35. If JSON decode and projection rebuild dominate normal reads, start ADA-36/37 sequencing with the narrowest destructive split.</ins > </p>
+              <h3>Compare after numbers</h3>
+              <p> <ins class="plan-add" >Run <code>./dev/scope-dev bench</code> again and compare the authenticated read cases against the Phase 0 baseline. If external latency barely moves, the win is still meaningful if the code no longer takes metadata write locks for normal auth reads.</ins > </p>
             </div>
             <div class="phase-note">
-              Output: the Phase 1 choice is evidence-driven instead of based on
-              whichever concern feels loudest.
+              Output: ADA-34 closes with before/after evidence and a clearer
+              path into ADA-35.
             </div>
           </div>
 
           <div class="phase">
-            <div class="phase-id">Built</div>
+            <div class="phase-id">Guardrail</div>
             <div>
-              <h3>Phase 0 local harness</h3>
-              <p> <del class="plan-delete" >Generate small, medium, and large disposable fixtures before taking the first baseline measurement.</del > <ins class="plan-add" >Start with the seeded local repos so Phase 0 measures today without changing API runtime code: <code>bench/phase0.mjs</code> runs through <code>./dev/scope-dev bench</code>, targets <code>public-demo</code> and <code>update-demo</code>, and writes ignored JSON/Markdown reports under <code>.tmp/bench/phase0/</code>.</ins > </p>
-              <p> <ins class="plan-add" >The first report captures external latency, response bytes, status-code mix, Git smart HTTP latency, and <code>git ls-remote</code> subprocess latency. Authenticated read-only cases use the local <code>scope_cli_...</code> session when available on Linux, with <code>SCOPE_BENCH_AUTH_TOKEN</code> kept as the cross-platform override. The receive-pack path now uses disposable generated repositories: create through the API, push once over Git smart HTTP, and delete after the sample. Internal counters remain explicit next instrumentation work.</ins > </p>
+              <h3>Do not overbuild Phase 1</h3>
+              <p> <ins class="plan-add" >Do not introduce the worker service, job tables, read models, or global lock replacement inside ADA-34. This phase is successful when the existing auth behavior is preserved and normal authenticated reads become read-only.</ins > </p>
             </div>
             <div class="phase-note">
-              Output: a local benchmark command that is part of the dev loop,
-              not production source or normal CI.
+              Output: a small destructive refactor with a clean rollback story:
+              route auth reads through the previous write resolver if needed.
             </div>
           </div>
         </div>
       </section>
 
-      <p class="print-note"> This is a discussion artifact, not an approved implementation spec. It reflects the repo state, Linear backlog, and first resolved decision set as of 2026-06-30. </p>
+      <p class="print-note"> This is a discussion artifact, not an approved implementation spec. It reflects the repo state, Linear backlog, merged Phase 0 benchmark work, and Phase 1 direction as of 2026-06-30. </p>
     </main>
   </body>
 </html>

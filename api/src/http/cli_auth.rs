@@ -1,5 +1,8 @@
 use crate::{
-    auth::{device::CliSessionSummary, scope::require_clerk_scope_user},
+    auth::{
+        device::CliSessionSummary,
+        scope::{require_clerk_scope_user, require_reconciled_clerk_scope_user},
+    },
     error::ApiError,
     http::{
         origins::public_app_origin,
@@ -39,7 +42,7 @@ pub(crate) async fn complete_cli_browser_login(
     headers: HeaderMap,
     Path(request_id): Path<String>,
 ) -> Result<Json<BrowserLoginCompleteResponse>, ApiError> {
-    let user = require_clerk_scope_user(&state, &headers).await?;
+    let user = require_reconciled_clerk_scope_user(&state, &headers).await?;
     let callback_url = state
         .metadata
         .complete_cli_browser_login(&request_id, &user)?;
@@ -69,7 +72,7 @@ pub(crate) async fn create_cli_exchange_grant(
     State(state): State<AppState>,
     headers: HeaderMap,
 ) -> Result<Json<CliExchangeGrantResponse>, ApiError> {
-    let user = require_clerk_scope_user(&state, &headers).await?;
+    let user = require_reconciled_clerk_scope_user(&state, &headers).await?;
     let grant = state.metadata.create_cli_exchange_grant(&user)?;
 
     Ok(Json(CliExchangeGrantResponse {
@@ -111,7 +114,7 @@ pub(crate) async fn revoke_cli_session(
     headers: HeaderMap,
     Path(session_id): Path<String>,
 ) -> Result<StatusCode, ApiError> {
-    let user = require_clerk_scope_user(&state, &headers).await?;
+    let user = require_reconciled_clerk_scope_user(&state, &headers).await?;
     state
         .metadata
         .revoke_cli_session_for_user(&user, &session_id)?;

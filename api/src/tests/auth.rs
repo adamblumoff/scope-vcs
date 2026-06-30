@@ -202,6 +202,62 @@ fn clerk_user_requires_verified_email() {
 }
 
 #[tokio::test]
+async fn known_clerk_session_uses_current_identity_without_persisting_snapshot() {
+    let state = test_state_with_jwks();
+    let identity = ClerkIdentity {
+        user_id: TEST_CLERK_USER_ID.to_string(),
+        email: Some(TEST_OWNER_EMAIL.to_string()),
+        email_verified: true,
+    };
+    state.metadata.resolve_clerk_user(&identity).unwrap();
+
+    let response = router(state.clone())
+        .oneshot(
+            Request::builder()
+                .method("GET")
+                .uri("/v1/session")
+                .header(
+                    AUTHORIZATION,
+                    bearer_header_for(TEST_CLERK_USER_ID, "renamed@example.com"),
+                )
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = response_json(response).await;
+    assert_eq!(body["identity"]["email"], "renamed@example.com");
+
+    let catalog = state.metadata.test_catalog().unwrap();
+    let user = catalog.users.get(&test_owner_id()).unwrap();
+    assert_eq!(user.email, TEST_OWNER_EMAIL);
+}
+
+#[tokio::test]
+async fn missing_clerk_identity_still_bootstraps_from_session_read() {
+    let state = test_state_with_jwks();
+    let response = router(state.clone())
+        .oneshot(
+            Request::builder()
+                .method("GET")
+                .uri("/v1/session")
+                .header(AUTHORIZATION, bearer_header())
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = response_json(response).await;
+    assert_eq!(body["identity"]["user_id"], test_owner_id());
+
+    let catalog = state.metadata.test_catalog().unwrap();
+    let user = catalog.users.get(&test_owner_id()).unwrap();
+    assert_eq!(user.email, TEST_OWNER_EMAIL);
+}
+
+#[tokio::test]
 async fn clerk_verifier_requires_configured_issuer() {
     let verifier = ClerkVerifier::new_with_policy(
         None,

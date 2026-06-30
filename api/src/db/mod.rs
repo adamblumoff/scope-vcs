@@ -1,5 +1,6 @@
 mod auth;
 mod cleanup_queue;
+mod clerk_users;
 mod cli_auth;
 mod cli_sessions;
 mod entities;
@@ -27,7 +28,7 @@ use crate::domain::store::{
 };
 use crate::error::ApiError;
 #[cfg(test)]
-pub(crate) use auth::scope_user_id_for_auth_identity;
+pub(crate) use clerk_users::scope_user_id_for_auth_identity;
 use locks::{acquire_metadata_read_lock, acquire_metadata_write_lock, ensure_metadata_lock_row};
 pub(crate) use metadata_reset::MetadataResetEvent;
 use metadata_reset::{

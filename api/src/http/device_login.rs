@@ -1,5 +1,5 @@
 use crate::{
-    auth::{clerk::bearer_token, scope::require_clerk_scope_user},
+    auth::{clerk::bearer_token, scope::require_reconciled_clerk_scope_user},
     config::CLI_SESSION_TOKEN_PREFIX,
     error::ApiError,
     http::{
@@ -37,7 +37,7 @@ pub(crate) async fn complete_cli_device_login(
     headers: HeaderMap,
     Path(user_code): Path<String>,
 ) -> Result<Json<DeviceLoginCompleteResponse>, ApiError> {
-    let user = require_clerk_scope_user(&state, &headers).await?;
+    let user = require_reconciled_clerk_scope_user(&state, &headers).await?;
     state
         .metadata
         .complete_cli_device_login(&user_code, &user)?;

@@ -670,6 +670,83 @@ async fn accept_expired_invite_persists_expired_state() {
 }
 
 #[tokio::test]
+async fn accept_invite_uses_current_clerk_email_for_existing_identity() {
+    let state = test_state_with_repo();
+    cache_test_jwks(&state);
+    let app = router(state.clone());
+    let invited_email = "invitee@example.com";
+    let token = "stale-email-invite-token";
+    let token_hash = repository_invite_token_hash(token);
+    let invitee_user_id = crate::db::scope_user_id_for_auth_identity("clerk", "user_invitee");
+
+    let bootstrap_response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("GET")
+                .uri("/v1/session")
+                .header(
+                    AUTHORIZATION,
+                    bearer_header_for("user_invitee", invited_email),
+                )
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(bootstrap_response.status(), StatusCode::OK);
+
+    {
+        let mut catalog = lock_catalog(&state).unwrap();
+        let repo = catalog.repositories.get_mut(TEST_REPO_ID).unwrap();
+        repo.invitations.push(RepositoryInvite {
+            id: "invite_stale_email".to_string(),
+            repo_id: TEST_REPO_ID.to_string(),
+            invited_email: invited_email.to_string(),
+            invited_email_normalized: crate::domain::store::normalize_repository_invite_email(
+                invited_email,
+            ),
+            permissions: RepositoryMemberPermissions::default(),
+            invited_by_user_id: test_owner_id(),
+            state: RepositoryInviteState::Pending,
+            token_hash: token_hash.clone(),
+            created_at_unix: unix_now(),
+            updated_at_unix: unix_now(),
+            expires_at_unix: unix_now() + 3600,
+            accepted_by_user_id: None,
+            accepted_at_unix: None,
+            revoked_at_unix: None,
+        });
+    }
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri(format!("/v1/repository-invites/{token}/accept"))
+                .header(
+                    AUTHORIZATION,
+                    bearer_header_for("user_invitee", "renamed@example.com"),
+                )
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::FORBIDDEN);
+    let catalog = lock_catalog(&state).unwrap();
+    let repo = catalog.repositories.get(TEST_REPO_ID).unwrap();
+    let invite = repo
+        .invitations
+        .iter()
+        .find(|invite| invite.token_hash == token_hash)
+        .unwrap();
+    assert_eq!(invite.state, RepositoryInviteState::Pending);
+    assert!(repo.member_for_user(&invitee_user_id).is_none());
+}
+
+#[tokio::test]
 async fn owner_can_revoke_pending_invite_before_acceptance() {
     let state = test_state_with_repo();
     cache_test_jwks(&state);

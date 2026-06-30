@@ -221,6 +221,163 @@ async fn cli_exchange_grant_is_single_use_and_sessions_are_revocable() {
     assert_eq!(session.status(), StatusCode::UNAUTHORIZED);
 }
 
+#[tokio::test]
+async fn cli_session_read_does_not_update_last_used() {
+    let app = router(test_state_with_jwks());
+
+    let grant = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/v1/cli/exchange-grants")
+                .header(AUTHORIZATION, bearer_header())
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(grant.status(), StatusCode::OK);
+    let grant = response_json(grant).await;
+    let exchange_token = grant["exchange_token"].as_str().unwrap();
+
+    let exchanged = app
+        .clone()
+        .oneshot(exchange_grant_request(exchange_token))
+        .await
+        .unwrap();
+    assert_eq!(exchanged.status(), StatusCode::OK);
+    let cli_token = response_json(exchanged).await["session_token"]
+        .as_str()
+        .unwrap()
+        .to_string();
+
+    let session = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("GET")
+                .uri("/v1/session")
+                .header(AUTHORIZATION, format!("Bearer {cli_token}"))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(session.status(), StatusCode::OK);
+
+    let sessions = app
+        .oneshot(
+            Request::builder()
+                .method("GET")
+                .uri("/v1/cli/sessions")
+                .header(AUTHORIZATION, bearer_header())
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(sessions.status(), StatusCode::OK);
+    let sessions = response_json(sessions).await;
+    assert_eq!(
+        sessions["sessions"][0]["last_used_at_unix"],
+        serde_json::Value::Null
+    );
+}
+
+#[tokio::test]
+async fn list_cli_sessions_does_not_refresh_clerk_user_snapshot() {
+    let state = test_state_with_jwks();
+    let identity = ClerkIdentity {
+        user_id: TEST_CLERK_USER_ID.to_string(),
+        email: Some(TEST_OWNER_EMAIL.to_string()),
+        email_verified: true,
+    };
+    state.metadata.resolve_clerk_user(&identity).unwrap();
+
+    let response = router(state.clone())
+        .oneshot(
+            Request::builder()
+                .method("GET")
+                .uri("/v1/cli/sessions")
+                .header(
+                    AUTHORIZATION,
+                    bearer_header_for(TEST_CLERK_USER_ID, "renamed@example.com"),
+                )
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let catalog = state.metadata.test_catalog().unwrap();
+    let user = catalog.users.get(&test_owner_id()).unwrap();
+    assert_eq!(user.email, TEST_OWNER_EMAIL);
+}
+
+#[tokio::test]
+async fn cli_exchange_grant_reconciles_clerk_snapshot_before_minting_session() {
+    let state = test_state_with_jwks();
+    let identity = ClerkIdentity {
+        user_id: TEST_CLERK_USER_ID.to_string(),
+        email: Some(TEST_OWNER_EMAIL.to_string()),
+        email_verified: true,
+    };
+    state.metadata.resolve_clerk_user(&identity).unwrap();
+    let app = router(state.clone());
+
+    let grant = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/v1/cli/exchange-grants")
+                .header(
+                    AUTHORIZATION,
+                    bearer_header_for(TEST_CLERK_USER_ID, "renamed@example.com"),
+                )
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(grant.status(), StatusCode::OK);
+    let exchange_token = response_json(grant).await["exchange_token"]
+        .as_str()
+        .unwrap()
+        .to_string();
+
+    let exchanged = app
+        .clone()
+        .oneshot(exchange_grant_request(&exchange_token))
+        .await
+        .unwrap();
+    assert_eq!(exchanged.status(), StatusCode::OK);
+    let exchanged = response_json(exchanged).await;
+    assert_eq!(exchanged["identity"]["email"], "renamed@example.com");
+    let cli_token = exchanged["session_token"].as_str().unwrap();
+
+    let session = app
+        .oneshot(
+            Request::builder()
+                .method("GET")
+                .uri("/v1/session")
+                .header(AUTHORIZATION, format!("Bearer {cli_token}"))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(session.status(), StatusCode::OK);
+    let session = response_json(session).await;
+    assert_eq!(session["identity"]["email"], "renamed@example.com");
+
+    let catalog = state.metadata.test_catalog().unwrap();
+    let user = catalog.users.get(&test_owner_id()).unwrap();
+    assert_eq!(user.email, "renamed@example.com");
+}
+
 fn start_browser_login_request(callback_url: &str) -> Request<Body> {
     Request::builder()
         .method("POST")

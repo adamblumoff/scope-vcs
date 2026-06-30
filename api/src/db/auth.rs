@@ -1,14 +1,11 @@
 #[cfg(any(test, feature = "memory-metadata"))]
 use super::cli_sessions::create_cli_session_token_in_memory;
 use super::{
-    MetadataStore, MetadataStoreInner, acquire_metadata_write_lock,
+    MetadataStore, MetadataStoreInner, acquire_metadata_read_lock, acquire_metadata_write_lock,
     cli_sessions::create_cli_session_token_in_tx, entities, run_api_db_on,
 };
-#[cfg(any(test, feature = "memory-metadata"))]
-use crate::domain::store::AppCatalog;
 use crate::{
     auth::{
-        clerk::ClerkIdentity,
         cli as cli_auth_rules,
         device::{DeviceLoginPoll, DeviceLoginStart, random_prefixed_token, random_user_code},
         tokens::token_hash,
@@ -16,7 +13,7 @@ use crate::{
     config::{
         CLI_DEVICE_CODE_PREFIX, CLI_DEVICE_LOGIN_POLL_INTERVAL_SECS, CLI_DEVICE_LOGIN_TTL_SECS,
     },
-    domain::store::{AccountAccess, UserAccount},
+    domain::store::UserAccount,
     error::ApiError,
     persistence::unix_now,
 };
@@ -24,17 +21,14 @@ use sea_orm::{
     ActiveModelTrait, ColumnTrait, EntityTrait, IntoActiveModel, PaginatorTrait, QueryFilter,
     TransactionTrait, sea_query::Expr,
 };
-use sha2::{Digest, Sha256};
 #[cfg(any(test, feature = "memory-metadata"))]
 use std::collections::BTreeMap;
 use std::sync::Arc;
 
-const CLERK_PROVIDER: &str = "clerk";
-
 #[cfg(any(test, feature = "memory-metadata"))]
 #[derive(Default)]
 pub(super) struct MemoryAuthState {
-    auth_identities: BTreeMap<String, String>,
+    pub(super) auth_identities: BTreeMap<String, String>,
     cli_device_logins: BTreeMap<String, MemoryDeviceLogin>,
     cli_device_code_by_user_code_hash: BTreeMap<String, String>,
     pub(super) cli_browser_logins: BTreeMap<String, MemoryBrowserLogin>,
@@ -83,37 +77,6 @@ pub(super) struct MemoryCliSession {
 }
 
 impl MetadataStore {
-    pub(crate) fn resolve_clerk_user(
-        &self,
-        identity: &ClerkIdentity,
-    ) -> Result<UserAccount, ApiError> {
-        let identity = identity.clone();
-        match self.inner.as_ref() {
-            MetadataStoreInner::Postgres { db, runtime } => {
-                let db = Arc::clone(db);
-                run_api_db_on(runtime, async move {
-                    let tx = db.as_ref().begin().await.map_err(ApiError::internal)?;
-                    acquire_metadata_write_lock(&tx).await?;
-                    let user = resolve_clerk_user_in_tx(&tx, &identity).await?;
-                    tx.commit().await.map_err(ApiError::internal)?;
-                    Ok(user)
-                })
-            }
-            #[cfg(any(test, feature = "memory-metadata"))]
-            MetadataStoreInner::Memory(memory) => {
-                let mut auth = memory
-                    .auth
-                    .lock()
-                    .map_err(|_| ApiError::internal_message("auth lock is poisoned"))?;
-                let mut catalog = memory
-                    .catalog
-                    .lock()
-                    .map_err(|_| ApiError::internal_message("catalog lock is poisoned"))?;
-                resolve_clerk_user_in_memory(&mut auth, &mut catalog, &identity)
-            }
-        }
-    }
-
     pub(crate) fn start_cli_device_login(
         &self,
         app_origin: &str,
@@ -445,7 +408,7 @@ impl MetadataStore {
                 let db = Arc::clone(db);
                 run_api_db_on(runtime, async move {
                     let tx = db.as_ref().begin().await.map_err(ApiError::internal)?;
-                    acquire_metadata_write_lock(&tx).await?;
+                    acquire_metadata_read_lock(&tx).await?;
                     let Some(session) = entities::cli_session::Entity::find()
                         .filter(entities::cli_session::Column::TokenHash.eq(token_hash))
                         .one(&tx)
@@ -463,36 +426,22 @@ impl MetadataStore {
                         now,
                     )? {
                         cli_auth_rules::CliSessionUseDecision::Expired => {
-                            entities::cli_session::Entity::delete_by_id(session.id)
-                                .exec(&tx)
-                                .await
-                                .map_err(ApiError::internal)?;
                             return Err(ApiError::unauthorized("CLI token expired"));
                         }
                         cli_auth_rules::CliSessionUseDecision::Active { user_id } => user_id,
                     };
-                    cleanup_expired_cli_rows(&tx, now).await?;
                     let user = load_user_by_id(&tx, &user_id).await?;
-                    entities::cli_session::Entity::update_many()
-                        .filter(entities::cli_session::Column::Id.eq(session.id))
-                        .col_expr(
-                            entities::cli_session::Column::LastUsedAtUnix,
-                            Expr::value(u64_to_i64(now)?),
-                        )
-                        .exec(&tx)
-                        .await
-                        .map_err(ApiError::internal)?;
                     tx.commit().await.map_err(ApiError::internal)?;
                     Ok(user)
                 })
             }
             #[cfg(any(test, feature = "memory-metadata"))]
             MetadataStoreInner::Memory(memory) => {
-                let mut auth = memory
+                let auth = memory
                     .auth
                     .lock()
                     .map_err(|_| ApiError::internal_message("auth lock is poisoned"))?;
-                let Some(session) = auth.cli_sessions.get_mut(&token_hash) else {
+                let Some(session) = auth.cli_sessions.get(&token_hash) else {
                     return Err(ApiError::unauthorized("invalid CLI token"));
                 };
                 let user_id = match cli_auth_rules::decide_cli_session_use(
@@ -504,13 +453,10 @@ impl MetadataStore {
                     now,
                 )? {
                     cli_auth_rules::CliSessionUseDecision::Expired => {
-                        auth.cli_sessions.remove(&token_hash);
                         return Err(ApiError::unauthorized("CLI token expired"));
                     }
                     cli_auth_rules::CliSessionUseDecision::Active { user_id } => user_id,
                 };
-                session.last_used_at_unix = Some(now);
-                auth.cleanup_expired(now);
                 drop(auth);
                 let catalog = memory
                     .catalog
@@ -589,129 +535,6 @@ impl MetadataStore {
             }
         }
     }
-}
-
-async fn resolve_clerk_user_in_tx<C>(
-    conn: &C,
-    identity: &ClerkIdentity,
-) -> Result<UserAccount, ApiError>
-where
-    C: sea_orm::ConnectionTrait,
-{
-    let verified_email = verified_identity_email(identity)?;
-    if let Some(auth_identity) = entities::auth_identity::Entity::find()
-        .filter(entities::auth_identity::Column::Provider.eq(CLERK_PROVIDER))
-        .filter(entities::auth_identity::Column::Subject.eq(identity.user_id.clone()))
-        .one(conn)
-        .await
-        .map_err(ApiError::internal)?
-    {
-        let mut user = load_user_by_id(conn, &auth_identity.user_id).await?;
-        if let Some(email_owner) = load_user_by_email(conn, &verified_email).await?
-            && email_owner.id != user.id
-        {
-            return Err(ApiError::conflict(
-                "verified email belongs to another Scope user",
-            ));
-        }
-        update_user_snapshot(&mut user, identity);
-        entities::user::Model::from_domain(&user)
-            .into_active_model()
-            .update(conn)
-            .await
-            .map_err(ApiError::internal)?;
-        return Ok(user);
-    }
-
-    let users = entities::user::Entity::find()
-        .all(conn)
-        .await
-        .map_err(ApiError::internal)?
-        .into_iter()
-        .map(|user| user.try_into_domain())
-        .collect::<Result<Vec<_>, _>>()?;
-    let user_id = scope_user_id_for_auth_identity(CLERK_PROVIDER, &identity.user_id);
-    let mut user = users
-        .iter()
-        .find(|user| user.email.as_str() == verified_email)
-        .or_else(|| users.iter().find(|user| user.id == user_id))
-        .cloned()
-        .unwrap_or_else(|| {
-            let preferred = preferred_user_handle(identity);
-            UserAccount {
-                id: user_id.clone(),
-                handle: unique_user_handle(users.iter(), &preferred, &user_id),
-                email: String::new(),
-                email_verified: false,
-                access: AccountAccess::Member,
-            }
-        });
-    update_user_snapshot(&mut user, identity);
-
-    if users.iter().any(|existing| existing.id == user.id) {
-        entities::user::Model::from_domain(&user)
-            .into_active_model()
-            .update(conn)
-            .await
-            .map_err(ApiError::internal)?;
-    } else {
-        entities::user::Model::from_domain(&user)
-            .into_active_model()
-            .insert(conn)
-            .await
-            .map_err(ApiError::internal)?;
-    }
-    entities::auth_identity::Model {
-        provider: CLERK_PROVIDER.to_string(),
-        subject: identity.user_id.clone(),
-        user_id: user.id.clone(),
-    }
-    .into_active_model()
-    .insert(conn)
-    .await
-    .map_err(ApiError::internal)?;
-
-    Ok(user)
-}
-
-#[cfg(any(test, feature = "memory-metadata"))]
-fn resolve_clerk_user_in_memory(
-    auth: &mut MemoryAuthState,
-    catalog: &mut AppCatalog,
-    identity: &ClerkIdentity,
-) -> Result<UserAccount, ApiError> {
-    let verified_email = verified_identity_email(identity)?;
-    let key = auth_identity_key(CLERK_PROVIDER, &identity.user_id);
-    let mapped_user_id = auth.auth_identities.get(&key).cloned();
-    let email_user_id = catalog
-        .users
-        .values()
-        .find(|user| user.email.as_str() == verified_email)
-        .map(|user| user.id.clone());
-    if let (Some(mapped_user_id), Some(email_user_id)) = (&mapped_user_id, &email_user_id)
-        && mapped_user_id != email_user_id
-    {
-        return Err(ApiError::conflict(
-            "verified email belongs to another Scope user",
-        ));
-    }
-    let user_id = mapped_user_id
-        .or(email_user_id)
-        .unwrap_or_else(|| scope_user_id_for_auth_identity(CLERK_PROVIDER, &identity.user_id));
-    let mut user = catalog.users.get(&user_id).cloned().unwrap_or_else(|| {
-        let preferred = preferred_user_handle(identity);
-        UserAccount {
-            id: user_id.clone(),
-            handle: unique_user_handle(catalog.users.values(), &preferred, &user_id),
-            email: String::new(),
-            email_verified: false,
-            access: AccountAccess::Member,
-        }
-    });
-    update_user_snapshot(&mut user, identity);
-    catalog.users.insert(user.id.clone(), user.clone());
-    auth.auth_identities.insert(key, user.id.clone());
-    Ok(user)
 }
 
 pub(super) async fn cleanup_expired_cli_rows<C>(conn: &C, now: u64) -> Result<(), ApiError>
@@ -808,142 +631,6 @@ where
         .map_err(ApiError::internal)?
         .ok_or_else(|| ApiError::internal_message("signed-in user was not persisted"))?
         .try_into_domain()
-}
-
-async fn load_user_by_email<C>(conn: &C, email: &str) -> Result<Option<UserAccount>, ApiError>
-where
-    C: sea_orm::ConnectionTrait,
-{
-    entities::user::Entity::find()
-        .filter(entities::user::Column::Email.eq(email.to_string()))
-        .one(conn)
-        .await
-        .map_err(ApiError::internal)?
-        .map(|user| user.try_into_domain())
-        .transpose()
-}
-
-fn update_user_snapshot(user: &mut UserAccount, identity: &ClerkIdentity) {
-    user.email = identity
-        .email
-        .as_deref()
-        .map(normalize_email)
-        .unwrap_or_default();
-    user.email_verified = identity.email_verified;
-    user.access = AccountAccess::Member;
-}
-
-fn verified_identity_email(identity: &ClerkIdentity) -> Result<String, ApiError> {
-    if !identity.email_verified {
-        return Err(ApiError::unauthorized("verified email required"));
-    }
-    let email = identity
-        .email
-        .as_deref()
-        .map(normalize_email)
-        .unwrap_or_default();
-    if email.is_empty() {
-        return Err(ApiError::unauthorized("verified email required"));
-    }
-    Ok(email)
-}
-
-pub(crate) fn scope_user_id_for_auth_identity(provider: &str, subject: &str) -> String {
-    let mut hasher = Sha256::new();
-    hasher.update(provider.as_bytes());
-    hasher.update(b"\0");
-    hasher.update(subject.as_bytes());
-    let digest = hex::encode(hasher.finalize());
-    format!("scope_usr_{}", &digest[..24])
-}
-
-#[cfg(any(test, feature = "memory-metadata"))]
-fn auth_identity_key(provider: &str, subject: &str) -> String {
-    format!("{provider}\0{subject}")
-}
-
-fn preferred_user_handle(identity: &ClerkIdentity) -> String {
-    let fallback = handle_suffix(&identity.user_id);
-    let raw = identity
-        .email
-        .as_deref()
-        .filter(|_| identity.email_verified)
-        .and_then(|email| email.split('@').next())
-        .filter(|local| !local.trim().is_empty())
-        .unwrap_or(&fallback);
-
-    normalize_handle(raw).unwrap_or(fallback)
-}
-
-fn handle_suffix(user_id: &str) -> String {
-    let suffix = user_id
-        .chars()
-        .filter(|ch| ch.is_ascii_alphanumeric())
-        .take(8)
-        .collect::<String>();
-    if suffix.is_empty() {
-        "user".to_string()
-    } else {
-        format!("user-{suffix}")
-    }
-}
-
-fn unique_user_handle<'a>(
-    users: impl IntoIterator<Item = &'a UserAccount>,
-    preferred: &str,
-    user_id: &str,
-) -> String {
-    let users = users.into_iter().collect::<Vec<_>>();
-    let base = normalize_handle(preferred).unwrap_or_else(|| "user".to_string());
-    if handle_is_available(&users, &base, user_id) {
-        return base;
-    }
-
-    for suffix in 2.. {
-        let candidate = format!("{base}-{suffix}");
-        if handle_is_available(&users, &candidate, user_id) {
-            return candidate;
-        }
-    }
-
-    unreachable!("infinite suffix search must find an available handle")
-}
-
-fn handle_is_available(users: &[&UserAccount], handle: &str, user_id: &str) -> bool {
-    users
-        .iter()
-        .all(|user| user.id == user_id || user.handle != handle)
-}
-
-fn normalize_handle(value: &str) -> Option<String> {
-    let mut handle = String::new();
-    let mut last_was_separator = false;
-    for byte in value.trim().bytes() {
-        let next = if byte.is_ascii_alphanumeric() {
-            last_was_separator = false;
-            Some(byte.to_ascii_lowercase() as char)
-        } else if matches!(byte, b'-' | b'_') && !last_was_separator {
-            last_was_separator = true;
-            Some('-')
-        } else {
-            None
-        };
-
-        if let Some(next) = next {
-            handle.push(next);
-        }
-    }
-
-    let handle = handle.trim_matches('-').to_string();
-    if handle.is_empty() || handle.len() > 40 {
-        None
-    } else {
-        Some(handle)
-    }
-}
-
-fn normalize_email(email: &str) -> String {
-    email.trim().to_ascii_lowercase()
 }
 
 fn normalize_user_code(value: &str) -> String {

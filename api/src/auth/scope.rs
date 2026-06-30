@@ -23,7 +23,7 @@ pub(crate) async fn optional_scope_user(
     }
 
     let identity = state.clerk.verify(token).await?;
-    state.metadata.resolve_clerk_user(&identity).map(Some)
+    resolve_clerk_scope_user(state, &identity).map(Some)
 }
 
 pub(crate) async fn require_scope_user(
@@ -40,6 +40,14 @@ pub(crate) async fn require_clerk_scope_user(
     headers: &HeaderMap,
 ) -> Result<UserAccount, ApiError> {
     let identity = require_clerk_identity(state, headers).await?;
+    resolve_clerk_scope_user(state, &identity)
+}
+
+pub(crate) async fn require_reconciled_clerk_scope_user(
+    state: &AppState,
+    headers: &HeaderMap,
+) -> Result<UserAccount, ApiError> {
+    let identity = require_clerk_identity(state, headers).await?;
     state.metadata.resolve_clerk_user(&identity)
 }
 
@@ -52,6 +60,16 @@ pub(crate) async fn require_clerk_identity(
         return Err(ApiError::unauthorized("Clerk auth required"));
     }
     state.clerk.verify(token).await
+}
+
+fn resolve_clerk_scope_user(
+    state: &AppState,
+    identity: &ClerkIdentity,
+) -> Result<UserAccount, ApiError> {
+    match state.metadata.resolve_existing_clerk_user(identity)? {
+        Some(user) => Ok(user),
+        None => state.metadata.resolve_clerk_user(identity),
+    }
 }
 
 pub(crate) fn principal_for_scope_user(

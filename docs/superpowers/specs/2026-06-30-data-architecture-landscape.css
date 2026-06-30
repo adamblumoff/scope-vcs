@@ -450,6 +450,16 @@ code {
   align-items: start;
 }
 
+.phase.phase-done {
+  background: linear-gradient(90deg, var(--done-soft), transparent 42%);
+}
+
+.phase.phase-active {
+  border-left: 4px solid var(--accent);
+  background: linear-gradient(90deg, var(--accent-soft), transparent 46%);
+  padding-left: 14px;
+}
+
 .phase-id {
   font-family:
     ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI",
@@ -517,6 +527,10 @@ code {
 
 .callout.warning {
   border-left-color: var(--warn);
+}
+
+.callout.phase-focus {
+  border-left-color: var(--done);
 }
 
 .callout.risk {

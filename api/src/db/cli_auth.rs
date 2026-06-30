@@ -4,7 +4,7 @@ use super::auth::{MemoryBrowserLogin, MemoryExchangeGrant};
 use super::cli_sessions::{cli_session_summary_from_memory, create_cli_session_token_in_memory};
 use super::cli_sessions::{cli_session_summary_from_model, create_cli_session_token_in_tx};
 use super::{
-    MetadataStore, MetadataStoreInner, acquire_metadata_write_lock,
+    MetadataStore, MetadataStoreInner, acquire_metadata_read_lock, acquire_metadata_write_lock,
     auth::{cleanup_expired_cli_rows, i64_to_u64, u64_to_i64},
     entities, run_api_db_on,
 };
@@ -446,8 +446,7 @@ impl MetadataStore {
                 let db = Arc::clone(db);
                 run_api_db_on(runtime, async move {
                     let tx = db.as_ref().begin().await.map_err(ApiError::internal)?;
-                    acquire_metadata_write_lock(&tx).await?;
-                    cleanup_expired_cli_rows(&tx, now).await?;
+                    acquire_metadata_read_lock(&tx).await?;
                     let sessions = entities::cli_session::Entity::find()
                         .filter(entities::cli_session::Column::UserId.eq(user_id))
                         .filter(entities::cli_session::Column::RevokedAtUnix.is_null())
@@ -465,11 +464,10 @@ impl MetadataStore {
             }
             #[cfg(any(test, feature = "memory-metadata"))]
             MetadataStoreInner::Memory(memory) => {
-                let mut auth = memory
+                let auth = memory
                     .auth
                     .lock()
                     .map_err(|_| ApiError::internal_message("auth lock is poisoned"))?;
-                auth.cleanup_expired(now);
                 let mut sessions = auth
                     .cli_sessions
                     .values()
