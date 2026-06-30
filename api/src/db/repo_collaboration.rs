@@ -9,8 +9,8 @@ use crate::domain::{
         update_repository_member_permissions,
     },
     store::{
-        RepositoryInvite, RepositoryMember, RepositoryMemberPermissions, UserAccount,
-        normalize_repository_invite_email, repo_id,
+        RepositoryInvite, RepositoryMember, RepositoryMemberPermissions, StoredRepository,
+        UserAccount, normalize_repository_invite_email, repo_id,
     },
 };
 use crate::error::ApiError;
@@ -105,7 +105,7 @@ impl MetadataStore {
     ) -> Result<RepositoryMember, ApiError> {
         let owner_user_id = owner_user_id.to_string();
         let member_user_id = member_user_id.to_string();
-        mutate_repository_member(self, owner, name, move |repo| {
+        mutate_repository_collaboration(self, owner, name, move |repo| {
             update_repository_member_permissions(
                 repo,
                 &owner_user_id,
@@ -126,7 +126,7 @@ impl MetadataStore {
     ) -> Result<RepositoryInvite, ApiError> {
         let owner_user_id = owner_user_id.to_string();
         let invite_id = invite_id.to_string();
-        mutate_repository_invite(self, owner, name, move |repo| {
+        mutate_repository_collaboration(self, owner, name, move |repo| {
             revoke_repository_invite(repo, &owner_user_id, &invite_id, now_unix)
         })
     }
@@ -140,7 +140,7 @@ impl MetadataStore {
     ) -> Result<RepositoryMember, ApiError> {
         let owner_user_id = owner_user_id.to_string();
         let member_user_id = member_user_id.to_string();
-        mutate_repository_member(self, owner, name, move |repo| {
+        mutate_repository_collaboration(self, owner, name, move |repo| {
             remove_repository_member(repo, &owner_user_id, &member_user_id)
         })
     }
@@ -235,16 +235,15 @@ impl MetadataStore {
     }
 }
 
-fn mutate_repository_member<F>(
+fn mutate_repository_collaboration<T, F>(
     store: &MetadataStore,
     owner: &str,
     name: &str,
     op: F,
-) -> Result<RepositoryMember, ApiError>
+) -> Result<T, ApiError>
 where
-    F: FnOnce(&mut crate::domain::store::StoredRepository) -> Result<RepositoryMember, ApiError>
-        + Send
-        + 'static,
+    T: Send + 'static,
+    F: FnOnce(&mut StoredRepository) -> Result<T, ApiError> + Send + 'static,
 {
     let repo_id = repo_id(owner, name);
     let owner = owner.to_string();
@@ -261,10 +260,10 @@ where
                     .map_err(ApiError::internal)?
                     .ok_or_else(|| ApiError::not_found(format!("repo {owner}/{name} not found")))?;
                 let mut repo = repository_from_model(&tx, row).await?;
-                let member = op(&mut repo)?;
+                let result = op(&mut repo)?;
                 save_repo_mutation(&tx, &repo, &mutation_effects_none()).await?;
                 tx.commit().await.map_err(ApiError::internal)?;
-                Ok(member)
+                Ok(result)
             })
         }
         #[cfg(any(test, feature = "memory-metadata"))]
@@ -290,49 +289,6 @@ where
         .map_err(ApiError::internal)?
         .map(entities::user::Model::try_into_domain)
         .transpose()
-}
-
-fn mutate_repository_invite<F>(
-    store: &MetadataStore,
-    owner: &str,
-    name: &str,
-    op: F,
-) -> Result<RepositoryInvite, ApiError>
-where
-    F: FnOnce(&mut crate::domain::store::StoredRepository) -> Result<RepositoryInvite, ApiError>
-        + Send
-        + 'static,
-{
-    let repo_id = repo_id(owner, name);
-    let owner = owner.to_string();
-    let name = name.to_string();
-    match store.inner.as_ref() {
-        MetadataStoreInner::Postgres { db, runtime } => {
-            let db = Arc::clone(db);
-            run_api_db_on(runtime, async move {
-                let tx = db.as_ref().begin().await.map_err(ApiError::internal)?;
-                acquire_metadata_write_lock(&tx).await?;
-                let row = entities::repository::Entity::find_by_id(repo_id)
-                    .one(&tx)
-                    .await
-                    .map_err(ApiError::internal)?
-                    .ok_or_else(|| ApiError::not_found(format!("repo {owner}/{name} not found")))?;
-                let mut repo = repository_from_model(&tx, row).await?;
-                let invite = op(&mut repo)?;
-                save_repo_mutation(&tx, &repo, &mutation_effects_none()).await?;
-                tx.commit().await.map_err(ApiError::internal)?;
-                Ok(invite)
-            })
-        }
-        #[cfg(any(test, feature = "memory-metadata"))]
-        MetadataStoreInner::Memory(_) => store.update(move |catalog| {
-            let repo = catalog
-                .repositories
-                .get_mut(&repo_id)
-                .ok_or_else(|| ApiError::not_found(format!("repo {owner}/{name} not found")))?;
-            op(repo)
-        }),
-    }
 }
 
 fn mutation_effects_none() -> crate::domain::repo_actions::RepoEffects {

@@ -126,28 +126,28 @@ pub fn router(state: AppState) -> Router {
         )
         .route(
             "/v1/repos/{owner}/{repo}/members",
-            get(http::repos::list_repository_collaboration),
+            get(http::repo_collaboration::list_repository_collaboration),
         )
         .route(
             "/v1/repos/{owner}/{repo}/invites",
-            post(http::repos::create_repository_invite),
+            post(http::repo_collaboration::create_repository_invite),
         )
         .route(
             "/v1/repos/{owner}/{repo}/invites/{invite_id}",
-            delete(http::repos::delete_repository_invite),
+            delete(http::repo_collaboration::delete_repository_invite),
         )
         .route(
             "/v1/repos/{owner}/{repo}/members/{member_user_id}",
-            patch(http::repos::update_repository_member)
-                .delete(http::repos::delete_repository_member),
+            patch(http::repo_collaboration::update_repository_member)
+                .delete(http::repo_collaboration::delete_repository_member),
         )
         .route(
             "/v1/repository-invites/{token}",
-            get(http::repos::get_repository_invite),
+            get(http::repo_collaboration::get_repository_invite),
         )
         .route(
             "/v1/repository-invites/{token}/accept",
-            post(http::repos::accept_repository_invite),
+            post(http::repo_collaboration::accept_repository_invite),
         )
         .route(
             "/v1/repos/{owner}/{repo}/staged-update",
