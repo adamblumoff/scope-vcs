@@ -2,17 +2,11 @@ use super::repo_io::{
     describe_refs, git_refs, git_snapshot_from_repo, git_stdout_text, git_tree_blob_contents,
     git_tree_entries, git_tree_files, pushed_commit_message, put_git_blob_contents,
 };
-use super::staging::{
-    ReceivePackFileChange, ReceivePackUpdate, ensure_default_branch, source_content_matches,
-};
+use super::staging::{ReceivePackFileChange, ReceivePackUpdate, ensure_default_branch};
 use crate::domain::projection_views::pending_scope_path;
+use crate::domain::staged_updates::source_content_matches;
 use crate::domain::store::{PendingImport, RepoPublicationState};
-use crate::{
-    error::ApiError,
-    persistence::unix_now,
-    state::AppState,
-    state::{find_repo, live_tree},
-};
+use crate::{error::ApiError, persistence::unix_now, state::AppState, state::find_repo};
 use std::{collections::BTreeSet, path::Path as FsPath};
 
 pub(crate) fn pending_import_from_staging_repo(
@@ -87,7 +81,7 @@ pub(crate) fn receive_pack_update_from_staging_repo(
     }
     let repo_id = crate::domain::store::repo_id(owner, repo_name);
     let message = pushed_commit_message(staging_repo, &head_oid)?;
-    let live_tree = live_tree(&repo);
+    let live_tree = repo.live_tree();
     let pushed_entries = git_tree_entries(staging_repo, &head_oid)?;
     let mut changes = Vec::new();
     let mut uploaded_file_blobs = Vec::new();

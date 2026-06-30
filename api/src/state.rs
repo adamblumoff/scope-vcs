@@ -14,11 +14,7 @@ use crate::{
     repo_events::{RepoChangeBus, RepoChangeEvent},
 };
 use serde::Serialize;
-use std::{
-    collections::{BTreeMap, BTreeSet},
-    path::PathBuf,
-    sync::Arc,
-};
+use std::{collections::BTreeSet, path::PathBuf, sync::Arc};
 
 #[derive(Clone)]
 pub struct AppState {
@@ -471,9 +467,4 @@ pub(crate) fn best_effort_drain_pending_source_blob_deletions(state: &AppState) 
     if let Err(error) = drain_pending_source_blob_deletions(state) {
         tracing::warn!(?error, "failed to drain pending source blob deletions");
     }
-}
-
-#[allow(dead_code)]
-pub(crate) fn live_tree(repo: &StoredRepository) -> BTreeMap<ScopePath, SourceBlob> {
-    repo.live_tree()
 }

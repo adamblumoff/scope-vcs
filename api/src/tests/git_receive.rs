@@ -13,7 +13,7 @@ fn receive_pack_stages_owner_update_without_changing_live_tree() {
     assert_eq!(staged.branch, format!("refs/heads/{DEFAULT_GIT_BRANCH}"));
     assert!(repo.staged_update.is_some());
     assert_eq!(
-        live_tree(&repo)
+        repo.live_tree()
             .get(&ScopePath::parse("/README.md").unwrap())
             .map(blob_content)
             .as_deref(),
@@ -25,7 +25,7 @@ fn receive_pack_stages_owner_update_without_changing_live_tree() {
 fn receive_pack_same_content_with_new_object_key_is_noop() {
     let mut repo = repo_with_readme();
     let readme = ScopePath::parse("/README.md").unwrap();
-    let live = live_tree(&repo);
+    let live = repo.live_tree();
     let live_blob = live.get(&readme).unwrap();
     let update = receive_pack_update(vec![("/README.md", Some("hello"))]);
     let update_blob = update.changes[0].content.as_ref().unwrap();
@@ -105,7 +105,7 @@ fn published_receive_pack_push_stages_from_seeded_git_repo() {
     let staged_update = repo.staged_update.as_ref().unwrap();
     assert_eq!(staged_update.changes.len(), 2);
     assert_eq!(
-        live_tree(&repo)
+        repo.live_tree()
             .get(&ScopePath::parse("/README.md").unwrap())
             .map(blob_content)
             .as_deref(),
@@ -206,7 +206,7 @@ fn review_off_receive_pack_applies_immediately() {
     assert!(staged.is_none());
     assert!(repo.staged_update.is_none());
     assert_eq!(
-        live_tree(&repo)
+        repo.live_tree()
             .get(&ScopePath::parse("/README.md").unwrap())
             .map(blob_content)
             .as_deref(),
@@ -280,7 +280,7 @@ fn published_push_rechecks_member_permission_before_persisting() {
     let repo = find_repo(&state, TEST_REPO_OWNER, TEST_REPO_NAME).unwrap();
     assert!(repo.staged_update.is_none());
     assert_eq!(
-        live_tree(&repo)
+        repo.live_tree()
             .get(&ScopePath::parse("/README.md").unwrap())
             .map(blob_content)
             .as_deref(),
@@ -299,7 +299,7 @@ fn staged_new_private_file_stays_out_of_public_projection() {
     .unwrap();
     staged.changes[0].visibility = Visibility::Private;
 
-    apply_receive_pack_update(&mut repo, staged).unwrap();
+    apply_staged_update_to_repo(&mut repo, staged).unwrap();
 
     let public_projection = project_graph(
         &repo.policy,
@@ -348,7 +348,7 @@ fn staged_new_file_inherits_private_parent_visibility() {
     .unwrap();
 
     assert_eq!(staged.changes[0].visibility, Visibility::Private);
-    apply_receive_pack_update(&mut repo, staged).unwrap();
+    apply_staged_update_to_repo(&mut repo, staged).unwrap();
     let public_projection = project_graph(
         &repo.policy,
         &repo.graph,
@@ -462,7 +462,7 @@ fn applying_staged_public_to_private_update_removes_file_from_public_projection(
     .unwrap();
     staged.changes[0].visibility = Visibility::Private;
 
-    apply_receive_pack_update(&mut repo, staged).unwrap();
+    apply_staged_update_to_repo(&mut repo, staged).unwrap();
 
     let projection = project_graph(
         &repo.policy,
@@ -488,7 +488,7 @@ fn applying_staged_public_delete_marked_private_removes_file_from_public_project
             .unwrap();
     staged.changes[0].visibility = Visibility::Private;
 
-    apply_receive_pack_update(&mut repo, staged).unwrap();
+    apply_staged_update_to_repo(&mut repo, staged).unwrap();
 
     let projection = project_graph(
         &repo.policy,
@@ -521,7 +521,7 @@ fn applying_staged_private_delete_marked_public_stays_out_of_public_projection()
             .unwrap();
     staged.changes[0].visibility = Visibility::Public;
 
-    apply_receive_pack_update(&mut repo, staged).unwrap();
+    apply_staged_update_to_repo(&mut repo, staged).unwrap();
 
     let projection = project_graph(
         &repo.policy,
@@ -920,7 +920,7 @@ fn applied_push_survives_obsolete_snapshot_cleanup_failure() {
 
     assert_eq!(persisted, PersistedReceivePackUpdate::Applied);
     let repo = find_repo(&state, TEST_REPO_OWNER, TEST_REPO_NAME).unwrap();
-    let live = live_tree(&repo);
+    let live = repo.live_tree();
     let readme = live.get(&ScopePath::parse("/README.md").unwrap()).unwrap();
     assert_eq!(blob_content(readme), "cleanup failure still lands");
     assert!(
