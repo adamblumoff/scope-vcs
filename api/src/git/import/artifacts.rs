@@ -2,10 +2,9 @@ use super::repo_io::{
     describe_refs, git_refs, git_snapshot_from_repo, git_stdout_text, git_tree_blob_contents,
     git_tree_entries, git_tree_files, pushed_commit_message, put_git_blob_contents,
 };
-use super::staging::{
-    ReceivePackFileChange, ReceivePackUpdate, ensure_default_branch, source_content_matches,
-};
+use super::staging::{ReceivePackFileChange, ReceivePackUpdate, ensure_default_branch};
 use crate::domain::projection_views::pending_scope_path;
+use crate::domain::staged_updates::source_content_matches;
 use crate::domain::store::{PendingImport, RepoPublicationState};
 use crate::{
     error::ApiError,

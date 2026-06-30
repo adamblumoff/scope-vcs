@@ -11,12 +11,10 @@ pub(crate) use self::repo_io::{git_refs, run_git, safe_repo_key};
 pub(crate) use self::repo_io::{
     git_stdout_text, git_tree_files, run_git_output, validate_pushed_file_path,
 };
+pub(crate) use self::staging::ReceivePackUpdate;
 use self::staging::stage_receive_pack_update_with_store;
 #[cfg(test)]
 pub(crate) use self::staging::{ReceivePackFileChange, stage_receive_pack_update};
-pub(crate) use self::staging::{
-    ReceivePackUpdate, apply_receive_pack_update, validate_staged_update_policy,
-};
 use crate::domain::store::{
     FirstPushTokenStatus, PendingImport, RepoPublicationState, RepositoryActor,
 };

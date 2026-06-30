@@ -5,6 +5,7 @@ use crate::domain::projection::{
     AuthorVisibility, FileChange, LogicalCommit, SourceGraph, VisibilityEvent, project_graph,
 };
 use crate::domain::repo_actions::preview_publish_import;
+use crate::domain::staged_updates::apply_staged_update_to_repo;
 use crate::domain::store::{
     AccountAccess, AppCatalog, FirstPushToken, GitPushToken, LineDiff, PendingImport,
     PendingImportFile, RepoPublicationState, RepoRecord, RepoSettings, RepoStorageCleanup,

@@ -1,6 +1,7 @@
 use super::{
     policy::{ScopePath, Visibility, VisibilityRule},
     projection::{AuthorVisibility, FileChange, LogicalCommit, VisibilityEvent},
+    staged_updates::{apply_staged_update_to_repo, validate_staged_update_policy},
     store::{
         CatalogError, FirstPushToken, GitPushToken, PendingImport, RepoPublicationState,
         RepoRecord, RepoSettings, RepoStorageCleanup, SourceBlob, StagedRepoUpdate,
@@ -223,7 +224,7 @@ pub(crate) fn set_staged_visibility(
         changed |= file.visibility != visibility;
         file.visibility = visibility;
     }
-    crate::git::import::validate_staged_update_policy(repo, &staged_update)?;
+    validate_staged_update_policy(repo, &staged_update)?;
     repo.staged_update = Some(staged_update.clone());
     if changed {
         repo.bump_change_version();
@@ -242,7 +243,7 @@ pub(crate) fn apply_staged_update(
         .take()
         .ok_or_else(|| ApiError::not_found("no staged update pending"))?;
     let applied = staged_update.clone();
-    crate::git::import::apply_receive_pack_update(repo, staged_update)?;
+    apply_staged_update_to_repo(repo, staged_update)?;
     let mut effects = RepoEffects::default();
     effects.delete_source_blobs(old_snapshot);
     Ok(RepoMutation::with_effects(applied, effects))

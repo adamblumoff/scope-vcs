@@ -2,6 +2,7 @@ use super::{
     policy::{Principal, PrincipalKind, ScopePath, Visibility},
     projection::{Projection, project_graph},
     repo_actions::preview_publish_import,
+    staged_updates::apply_staged_update_to_repo,
     store::StoredRepository,
     store::pending_import_scope_path,
 };
@@ -83,7 +84,7 @@ pub(crate) fn repo_for_projection_preview(
             if preview.has_pending_import_review() {
                 preview_publish_import(&mut preview)?;
             } else if let Some(staged_update) = preview.staged_update.clone() {
-                crate::git::import::apply_receive_pack_update(&mut preview, staged_update)?;
+                apply_staged_update_to_repo(&mut preview, staged_update)?;
             } else {
                 return Err(ApiError::bad_request("repo has no pending review"));
             }

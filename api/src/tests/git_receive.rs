@@ -299,7 +299,7 @@ fn staged_new_private_file_stays_out_of_public_projection() {
     .unwrap();
     staged.changes[0].visibility = Visibility::Private;
 
-    apply_receive_pack_update(&mut repo, staged).unwrap();
+    apply_staged_update_to_repo(&mut repo, staged).unwrap();
 
     let public_projection = project_graph(
         &repo.policy,
@@ -348,7 +348,7 @@ fn staged_new_file_inherits_private_parent_visibility() {
     .unwrap();
 
     assert_eq!(staged.changes[0].visibility, Visibility::Private);
-    apply_receive_pack_update(&mut repo, staged).unwrap();
+    apply_staged_update_to_repo(&mut repo, staged).unwrap();
     let public_projection = project_graph(
         &repo.policy,
         &repo.graph,
@@ -462,7 +462,7 @@ fn applying_staged_public_to_private_update_removes_file_from_public_projection(
     .unwrap();
     staged.changes[0].visibility = Visibility::Private;
 
-    apply_receive_pack_update(&mut repo, staged).unwrap();
+    apply_staged_update_to_repo(&mut repo, staged).unwrap();
 
     let projection = project_graph(
         &repo.policy,
@@ -488,7 +488,7 @@ fn applying_staged_public_delete_marked_private_removes_file_from_public_project
             .unwrap();
     staged.changes[0].visibility = Visibility::Private;
 
-    apply_receive_pack_update(&mut repo, staged).unwrap();
+    apply_staged_update_to_repo(&mut repo, staged).unwrap();
 
     let projection = project_graph(
         &repo.policy,
@@ -521,7 +521,7 @@ fn applying_staged_private_delete_marked_public_stays_out_of_public_projection()
             .unwrap();
     staged.changes[0].visibility = Visibility::Public;
 
-    apply_receive_pack_update(&mut repo, staged).unwrap();
+    apply_staged_update_to_repo(&mut repo, staged).unwrap();
 
     let projection = project_graph(
         &repo.policy,
