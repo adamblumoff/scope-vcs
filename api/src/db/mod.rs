@@ -21,6 +21,7 @@ mod repo_tokens;
 mod repository_rows;
 mod runtime;
 mod schema;
+mod schema_repository_facts;
 #[cfg(test)]
 mod test_support;
 mod visibility_changes;
@@ -39,6 +40,7 @@ use metadata_reset::{
 };
 pub(crate) use repo_collaboration::CreateRepositoryInviteMutation;
 pub(crate) use repo_mutation::RepositoryMutation;
+use repository_rows::load_repository_facts;
 use runtime::DbRuntime;
 use runtime::{run_api_db_on, run_db_on};
 use sea_orm::{
@@ -482,12 +484,22 @@ where
             Ok::<_, ApiError>(by_repo)
         },
     )?;
+    let repo_ids = repositories
+        .iter()
+        .map(|repo| repo.id.clone())
+        .collect::<Vec<_>>();
+    let mut facts_by_repo = load_repository_facts(conn, &repo_ids).await?;
     let repositories = repositories
         .into_iter()
         .map(|repo| {
-            let members = members_by_repo.get(&repo.id).cloned().unwrap_or_default();
-            let invitations = invites_by_repo.get(&repo.id).cloned().unwrap_or_default();
-            let repo = repo.try_into_domain(members, invitations)?;
+            let repo_id = repo.id.clone();
+            let members = members_by_repo.get(&repo_id).cloned().unwrap_or_default();
+            let invitations = invites_by_repo.get(&repo_id).cloned().unwrap_or_default();
+            let facts = facts_by_repo.remove(&repo_id).ok_or_else(|| {
+                ApiError::internal_message(format!("repository facts missing for {repo_id}"))
+            })?;
+            let repo =
+                repo.try_into_domain(facts.into_required(&repo_id)?, members, invitations)?;
             Ok((repo.record.id.clone(), repo))
         })
         .collect::<Result<_, ApiError>>()?;
@@ -511,6 +523,7 @@ where
         .iter()
         .map(|repo| repo.id.clone())
         .collect::<Vec<_>>();
+    let mut facts_by_repo = load_repository_facts(conn, &repo_ids).await?;
     let members = if repo_ids.is_empty() {
         Vec::new()
     } else {
@@ -560,9 +573,13 @@ where
     repositories
         .into_iter()
         .map(|repo| {
-            let members = members_by_repo.get(&repo.id).cloned().unwrap_or_default();
-            let invitations = invites_by_repo.get(&repo.id).cloned().unwrap_or_default();
-            repo.try_into_domain(members, invitations)
+            let repo_id = repo.id.clone();
+            let members = members_by_repo.get(&repo_id).cloned().unwrap_or_default();
+            let invitations = invites_by_repo.get(&repo_id).cloned().unwrap_or_default();
+            let facts = facts_by_repo.remove(&repo_id).ok_or_else(|| {
+                ApiError::internal_message(format!("repository facts missing for {repo_id}"))
+            })?;
+            repo.try_into_domain(facts.into_required(&repo_id)?, members, invitations)
         })
         .collect()
 }

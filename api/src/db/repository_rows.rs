@@ -1,9 +1,56 @@
 use super::entities;
-use crate::{domain::store::StoredRepository, error::ApiError};
+use crate::{
+    domain::store::{
+        FirstPushToken, GitCloneToken, GitPushToken, RepoSettings, SourceBlob, StoredRepository,
+    },
+    error::ApiError,
+};
 use sea_orm::{
     ActiveModelTrait, ColumnTrait, ConnectionTrait, EntityTrait, IntoActiveModel, QueryFilter,
-    sea_query::Expr,
+    QueryOrder, sea_query::Expr,
 };
+use std::collections::BTreeMap;
+
+#[derive(Default)]
+pub(super) struct RepositoryFactRows {
+    pub(super) settings: Option<RepoSettings>,
+    pub(super) first_push_token: Option<FirstPushToken>,
+    pub(super) git_push_token: Option<GitPushToken>,
+    pub(super) git_clone_tokens: Vec<GitCloneToken>,
+    pub(super) git_snapshot: Option<SourceBlob>,
+}
+
+impl RepositoryFactRows {
+    pub(super) fn into_required(
+        self,
+        repo_id: &str,
+    ) -> Result<entities::RepositoryFacts, ApiError> {
+        let settings = self.settings.ok_or_else(|| {
+            ApiError::internal_message(format!("repository settings missing for {repo_id}"))
+        })?;
+        Ok(entities::RepositoryFacts {
+            settings,
+            first_push_token: self.first_push_token,
+            git_push_token: self.git_push_token,
+            git_clone_tokens: self.git_clone_tokens,
+            git_snapshot: self.git_snapshot,
+        })
+    }
+}
+
+pub(super) async fn insert_repository<C>(conn: &C, repo: &StoredRepository) -> Result<(), ApiError>
+where
+    C: ConnectionTrait,
+{
+    entities::repository::Model::from_domain(repo)?
+        .into_active_model()
+        .insert(conn)
+        .await
+        .map_err(ApiError::internal)?;
+    save_repository_fact_rows(conn, repo).await?;
+    save_repository_relations(conn, repo).await?;
+    Ok(())
+}
 
 pub(super) async fn save_repository_row<C>(
     conn: &C,
@@ -37,22 +84,6 @@ where
             Expr::value(row.change_version),
         )
         .col_expr(
-            entities::repository::Column::Settings,
-            Expr::value(row.settings),
-        )
-        .col_expr(
-            entities::repository::Column::FirstPushToken,
-            Expr::value(row.first_push_token),
-        )
-        .col_expr(
-            entities::repository::Column::GitPushToken,
-            Expr::value(row.git_push_token),
-        )
-        .col_expr(
-            entities::repository::Column::GitCloneTokens,
-            Expr::value(row.git_clone_tokens),
-        )
-        .col_expr(
             entities::repository::Column::PendingImport,
             Expr::value(row.pending_import),
         )
@@ -66,17 +97,94 @@ where
             Expr::value(row.visibility_events),
         )
         .col_expr(
-            entities::repository::Column::GitSnapshot,
-            Expr::value(row.git_snapshot),
-        )
-        .col_expr(
             entities::repository::Column::StagedUpdate,
             Expr::value(row.staged_update),
         )
         .exec(conn)
         .await
         .map_err(ApiError::internal)?;
+    save_repository_fact_rows(conn, repo).await?;
     save_repository_relations(conn, repo).await?;
+    Ok(())
+}
+
+pub(super) async fn save_repository_fact_rows<C>(
+    conn: &C,
+    repo: &StoredRepository,
+) -> Result<(), ApiError>
+where
+    C: ConnectionTrait,
+{
+    let repo_id = repo.record.id.clone();
+    delete_repository_fact_rows(conn, &repo_id).await?;
+
+    entities::repository_setting::Model::from_domain(&repo_id, repo.settings)
+        .into_active_model()
+        .insert(conn)
+        .await
+        .map_err(ApiError::internal)?;
+
+    if let Some(token) = repo.first_push_token.as_ref() {
+        entities::repository_first_push_token::Model::from_domain(&repo_id, token)
+            .into_active_model()
+            .insert(conn)
+            .await
+            .map_err(ApiError::internal)?;
+    }
+    if let Some(token) = repo.git_push_token.as_ref() {
+        entities::repository_git_push_token::Model::from_domain(&repo_id, token)
+            .into_active_model()
+            .insert(conn)
+            .await
+            .map_err(ApiError::internal)?;
+    }
+    for token in &repo.git_clone_tokens {
+        entities::repository_git_clone_token::Model::from_domain(&repo_id, token)
+            .into_active_model()
+            .insert(conn)
+            .await
+            .map_err(ApiError::internal)?;
+    }
+    if let Some(snapshot) = repo.git_snapshot.as_ref() {
+        entities::repository_git_snapshot::Model::from_domain(&repo_id, snapshot)
+            .into_active_model()
+            .insert(conn)
+            .await
+            .map_err(ApiError::internal)?;
+    }
+
+    Ok(())
+}
+
+async fn delete_repository_fact_rows<C>(conn: &C, repo_id: &str) -> Result<(), ApiError>
+where
+    C: ConnectionTrait,
+{
+    entities::repository_setting::Entity::delete_many()
+        .filter(entities::repository_setting::Column::RepoId.eq(repo_id.to_string()))
+        .exec(conn)
+        .await
+        .map_err(ApiError::internal)?;
+    entities::repository_first_push_token::Entity::delete_many()
+        .filter(entities::repository_first_push_token::Column::RepoId.eq(repo_id.to_string()))
+        .exec(conn)
+        .await
+        .map_err(ApiError::internal)?;
+    entities::repository_git_push_token::Entity::delete_many()
+        .filter(entities::repository_git_push_token::Column::RepoId.eq(repo_id.to_string()))
+        .exec(conn)
+        .await
+        .map_err(ApiError::internal)?;
+    entities::repository_git_clone_token::Entity::delete_many()
+        .filter(entities::repository_git_clone_token::Column::RepoId.eq(repo_id.to_string()))
+        .exec(conn)
+        .await
+        .map_err(ApiError::internal)?;
+    entities::repository_git_snapshot::Entity::delete_many()
+        .filter(entities::repository_git_snapshot::Column::RepoId.eq(repo_id.to_string()))
+        .exec(conn)
+        .await
+        .map_err(ApiError::internal)?;
     Ok(())
 }
 
@@ -114,4 +222,85 @@ where
     }
 
     Ok(())
+}
+
+pub(super) async fn load_repository_facts<C>(
+    conn: &C,
+    repo_ids: &[String],
+) -> Result<BTreeMap<String, RepositoryFactRows>, ApiError>
+where
+    C: ConnectionTrait,
+{
+    let mut facts = repo_ids
+        .iter()
+        .map(|repo_id| (repo_id.clone(), RepositoryFactRows::default()))
+        .collect::<BTreeMap<_, _>>();
+    if repo_ids.is_empty() {
+        return Ok(facts);
+    }
+
+    let settings = entities::repository_setting::Entity::find()
+        .filter(entities::repository_setting::Column::RepoId.is_in(repo_ids.to_vec()))
+        .order_by_asc(entities::repository_setting::Column::RepoId)
+        .all(conn)
+        .await
+        .map_err(ApiError::internal)?;
+    for row in settings {
+        if let Some(fact) = facts.get_mut(&row.repo_id) {
+            fact.settings = Some(row.into_domain());
+        }
+    }
+
+    let first_push_tokens = entities::repository_first_push_token::Entity::find()
+        .filter(entities::repository_first_push_token::Column::RepoId.is_in(repo_ids.to_vec()))
+        .order_by_asc(entities::repository_first_push_token::Column::RepoId)
+        .all(conn)
+        .await
+        .map_err(ApiError::internal)?;
+    for row in first_push_tokens {
+        if let Some(fact) = facts.get_mut(&row.repo_id) {
+            fact.first_push_token = Some(row.into_domain());
+        }
+    }
+
+    let git_push_tokens = entities::repository_git_push_token::Entity::find()
+        .filter(entities::repository_git_push_token::Column::RepoId.is_in(repo_ids.to_vec()))
+        .order_by_asc(entities::repository_git_push_token::Column::RepoId)
+        .all(conn)
+        .await
+        .map_err(ApiError::internal)?;
+    for row in git_push_tokens {
+        if let Some(fact) = facts.get_mut(&row.repo_id) {
+            fact.git_push_token = Some(row.into_domain());
+        }
+    }
+
+    let git_clone_tokens = entities::repository_git_clone_token::Entity::find()
+        .filter(entities::repository_git_clone_token::Column::RepoId.is_in(repo_ids.to_vec()))
+        .order_by_asc(entities::repository_git_clone_token::Column::RepoId)
+        .order_by_asc(entities::repository_git_clone_token::Column::UserId)
+        .order_by_asc(entities::repository_git_clone_token::Column::CreatedAtUnix)
+        .order_by_asc(entities::repository_git_clone_token::Column::TokenHash)
+        .all(conn)
+        .await
+        .map_err(ApiError::internal)?;
+    for row in git_clone_tokens {
+        if let Some(fact) = facts.get_mut(&row.repo_id) {
+            fact.git_clone_tokens.push(row.into_domain());
+        }
+    }
+
+    let git_snapshots = entities::repository_git_snapshot::Entity::find()
+        .filter(entities::repository_git_snapshot::Column::RepoId.is_in(repo_ids.to_vec()))
+        .order_by_asc(entities::repository_git_snapshot::Column::RepoId)
+        .all(conn)
+        .await
+        .map_err(ApiError::internal)?;
+    for row in git_snapshots {
+        if let Some(fact) = facts.get_mut(&row.repo_id) {
+            fact.git_snapshot = Some(row.into_domain());
+        }
+    }
+
+    Ok(facts)
 }

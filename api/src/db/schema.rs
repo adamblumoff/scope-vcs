@@ -1,4 +1,5 @@
 use super::metadata_schema::*;
+use super::schema_repository_facts::ensure_repository_fact_tables;
 use sea_orm::{ConnectionTrait, Statement};
 use sea_orm::{DatabaseConnection, DbErr};
 use sea_orm_migration::{manager::SchemaManager, prelude::*};
@@ -98,18 +99,6 @@ pub(crate) async fn migrate_metadata_schema(db: &DatabaseConnection) -> Result<(
                         .big_integer()
                         .not_null(),
                 )
-                .col(
-                    ColumnDef::new(Repositories::Settings)
-                        .json_binary()
-                        .not_null(),
-                )
-                .col(ColumnDef::new(Repositories::FirstPushToken).json_binary())
-                .col(ColumnDef::new(Repositories::GitPushToken).json_binary())
-                .col(
-                    ColumnDef::new(Repositories::GitCloneTokens)
-                        .json_binary()
-                        .not_null(),
-                )
                 .col(ColumnDef::new(Repositories::PendingImport).json_binary())
                 .col(
                     ColumnDef::new(Repositories::Policy)
@@ -122,7 +111,6 @@ pub(crate) async fn migrate_metadata_schema(db: &DatabaseConnection) -> Result<(
                         .json_binary()
                         .not_null(),
                 )
-                .col(ColumnDef::new(Repositories::GitSnapshot).json_binary())
                 .col(ColumnDef::new(Repositories::StagedUpdate).json_binary())
                 .foreign_key(
                     ForeignKey::create()
@@ -147,6 +135,8 @@ pub(crate) async fn migrate_metadata_schema(db: &DatabaseConnection) -> Result<(
                 .to_owned(),
         )
         .await?;
+
+    ensure_repository_fact_tables(&manager).await?;
 
     manager
         .create_table(
@@ -861,7 +851,7 @@ mod tests {
     #[test]
     fn destructive_pre_alpha_reset_drift_allows_pre_alpha_shape_changes() {
         assert!(is_destructive_pre_alpha_reset_drift(
-            "missing column scope_repositories.git_clone_tokens"
+            "missing table scope_repository_git_clone_tokens"
         ));
         assert!(is_destructive_pre_alpha_reset_drift(
             "missing column scope_repositories.owner_user_id"

@@ -24,42 +24,24 @@ fn decode_enum<T: serde::de::DeserializeOwned>(value: String) -> Result<T, ApiEr
     serde_json::from_value(serde_json::Value::String(value)).map_err(ApiError::internal)
 }
 
-#[derive(Serialize, Deserialize)]
-struct PersistedFirstPushToken {
-    token_hash: String,
-    owner_user_id: String,
-    created_at_unix: u64,
-    expires_at_unix: u64,
-    used_at_unix: Option<u64>,
+fn u64_to_i64_saturating(value: u64) -> i64 {
+    value.min(i64::MAX as u64) as i64
 }
 
-impl From<&FirstPushToken> for PersistedFirstPushToken {
-    fn from(token: &FirstPushToken) -> Self {
-        Self {
-            token_hash: token.token_hash.clone(),
-            owner_user_id: token.owner_user_id.clone(),
-            created_at_unix: token.created_at_unix,
-            expires_at_unix: token.expires_at_unix,
-            used_at_unix: token.used_at_unix,
-        }
-    }
+fn i64_to_u64_floor(value: i64) -> u64 {
+    value.max(0) as u64
 }
 
-impl From<PersistedFirstPushToken> for FirstPushToken {
-    fn from(token: PersistedFirstPushToken) -> Self {
-        Self {
-            token_hash: token.token_hash,
-            secret: None,
-            owner_user_id: token.owner_user_id,
-            created_at_unix: token.created_at_unix,
-            expires_at_unix: token.expires_at_unix,
-            used_at_unix: token.used_at_unix,
-        }
-    }
+fn usize_to_i64_saturating(value: usize) -> i64 {
+    value.min(i64::MAX as usize) as i64
 }
 
-pub(crate) fn encode_first_push_token(token: &FirstPushToken) -> Result<Json, ApiError> {
-    encode_json(&PersistedFirstPushToken::from(token))
+pub(crate) struct RepositoryFacts {
+    pub(crate) settings: RepoSettings,
+    pub(crate) first_push_token: Option<FirstPushToken>,
+    pub(crate) git_push_token: Option<GitPushToken>,
+    pub(crate) git_clone_tokens: Vec<GitCloneToken>,
+    pub(crate) git_snapshot: Option<SourceBlob>,
 }
 
 #[cfg(test)]
@@ -77,13 +59,13 @@ mod tests {
             used_at_unix: None,
         };
 
-        let persisted = PersistedFirstPushToken::from(&token);
+        let persisted = repository_first_push_token::Model::from_domain("repo-1", &token);
         let json = serde_json::to_value(&persisted).expect("token serializes");
         assert!(json.get("secret").is_none());
 
-        let rehydrated = FirstPushToken::from(
-            serde_json::from_value::<PersistedFirstPushToken>(json).expect("token deserializes"),
-        );
+        let rehydrated = serde_json::from_value::<repository_first_push_token::Model>(json)
+            .expect("token deserializes")
+            .into_domain();
         assert_eq!(rehydrated.secret, None);
     }
 }
@@ -165,15 +147,10 @@ pub(crate) mod repository {
         pub publication_state: String,
         pub default_visibility: String,
         pub change_version: i64,
-        pub settings: Json,
-        pub first_push_token: Option<Json>,
-        pub git_push_token: Option<Json>,
-        pub git_clone_tokens: Json,
         pub pending_import: Option<Json>,
         pub policy: Json,
         pub graph: Json,
         pub visibility_events: Json,
-        pub git_snapshot: Option<Json>,
         pub staged_update: Option<Json>,
     }
 
@@ -192,25 +169,17 @@ pub(crate) mod repository {
                 publication_state: encode_enum(repo.record.publication_state)?,
                 default_visibility: encode_enum(repo.record.default_visibility)?,
                 change_version: repo.record.change_version.min(i64::MAX as u64) as i64,
-                settings: encode_json(&repo.settings)?,
-                first_push_token: repo
-                    .first_push_token
-                    .as_ref()
-                    .map(encode_first_push_token)
-                    .transpose()?,
-                git_push_token: repo.git_push_token.as_ref().map(encode_json).transpose()?,
-                git_clone_tokens: encode_json(&repo.git_clone_tokens)?,
                 pending_import: repo.pending_import.as_ref().map(encode_json).transpose()?,
                 policy: encode_json(&repo.policy)?,
                 graph: encode_json(&repo.graph)?,
                 visibility_events: encode_json(&repo.visibility_events)?,
-                git_snapshot: repo.git_snapshot.as_ref().map(encode_json).transpose()?,
                 staged_update: repo.staged_update.as_ref().map(encode_json).transpose()?,
             })
         }
 
         pub(crate) fn try_into_domain(
             self,
+            facts: RepositoryFacts,
             members: Vec<RepositoryMember>,
             invitations: Vec<RepositoryInvite>,
         ) -> Result<StoredRepository, ApiError> {
@@ -226,17 +195,10 @@ pub(crate) mod repository {
                     default_visibility,
                     change_version: self.change_version.max(0) as u64,
                 },
-                settings: decode_json::<RepoSettings>(self.settings)?,
-                first_push_token: self
-                    .first_push_token
-                    .map(decode_json::<PersistedFirstPushToken>)
-                    .transpose()?
-                    .map(FirstPushToken::from),
-                git_push_token: self
-                    .git_push_token
-                    .map(decode_json::<GitPushToken>)
-                    .transpose()?,
-                git_clone_tokens: decode_json::<Vec<GitCloneToken>>(self.git_clone_tokens)?,
+                settings: facts.settings,
+                first_push_token: facts.first_push_token,
+                git_push_token: facts.git_push_token,
+                git_clone_tokens: facts.git_clone_tokens,
                 pending_import: self
                     .pending_import
                     .map(decode_json::<PendingImport>)
@@ -244,10 +206,7 @@ pub(crate) mod repository {
                 policy: decode_json::<Policy>(self.policy)?,
                 graph: decode_json::<SourceGraph>(self.graph)?,
                 visibility_events: decode_json(self.visibility_events)?,
-                git_snapshot: self
-                    .git_snapshot
-                    .map(decode_json::<SourceBlob>)
-                    .transpose()?,
+                git_snapshot: facts.git_snapshot,
                 staged_update: self
                     .staged_update
                     .map(decode_json::<StagedRepoUpdate>)
@@ -255,6 +214,207 @@ pub(crate) mod repository {
                 members,
                 invitations,
             })
+        }
+    }
+}
+
+pub(crate) mod repository_setting {
+    use super::*;
+
+    #[derive(Clone, Debug, PartialEq, DeriveEntityModel)]
+    #[sea_orm(table_name = "scope_repository_settings")]
+    pub struct Model {
+        #[sea_orm(primary_key, auto_increment = false)]
+        pub repo_id: String,
+        pub include_ignored_files: bool,
+        pub review_pushes_before_applying: bool,
+    }
+
+    #[derive(Copy, Clone, Debug, EnumIter, DeriveRelation)]
+    pub enum Relation {}
+
+    impl ActiveModelBehavior for ActiveModel {}
+
+    impl Model {
+        pub(crate) fn from_domain(repo_id: &str, settings: RepoSettings) -> Self {
+            Self {
+                repo_id: repo_id.to_string(),
+                include_ignored_files: settings.include_ignored_files,
+                review_pushes_before_applying: settings.review_pushes_before_applying,
+            }
+        }
+
+        pub(crate) fn into_domain(self) -> RepoSettings {
+            RepoSettings {
+                include_ignored_files: self.include_ignored_files,
+                review_pushes_before_applying: self.review_pushes_before_applying,
+            }
+        }
+    }
+}
+
+pub(crate) mod repository_first_push_token {
+    use super::*;
+
+    #[derive(Clone, Debug, PartialEq, DeriveEntityModel, Serialize, Deserialize)]
+    #[sea_orm(table_name = "scope_repository_first_push_tokens")]
+    pub struct Model {
+        #[sea_orm(primary_key, auto_increment = false)]
+        pub repo_id: String,
+        pub token_hash: String,
+        pub owner_user_id: String,
+        pub created_at_unix: i64,
+        pub expires_at_unix: i64,
+        pub used_at_unix: Option<i64>,
+    }
+
+    #[derive(Copy, Clone, Debug, EnumIter, DeriveRelation)]
+    pub enum Relation {}
+
+    impl ActiveModelBehavior for ActiveModel {}
+
+    impl Model {
+        pub(crate) fn from_domain(repo_id: &str, token: &FirstPushToken) -> Self {
+            Self {
+                repo_id: repo_id.to_string(),
+                token_hash: token.token_hash.clone(),
+                owner_user_id: token.owner_user_id.clone(),
+                created_at_unix: u64_to_i64_saturating(token.created_at_unix),
+                expires_at_unix: u64_to_i64_saturating(token.expires_at_unix),
+                used_at_unix: token.used_at_unix.map(u64_to_i64_saturating),
+            }
+        }
+
+        pub(crate) fn into_domain(self) -> FirstPushToken {
+            FirstPushToken {
+                token_hash: self.token_hash,
+                secret: None,
+                owner_user_id: self.owner_user_id,
+                created_at_unix: i64_to_u64_floor(self.created_at_unix),
+                expires_at_unix: i64_to_u64_floor(self.expires_at_unix),
+                used_at_unix: self.used_at_unix.map(i64_to_u64_floor),
+            }
+        }
+    }
+}
+
+pub(crate) mod repository_git_push_token {
+    use super::*;
+
+    #[derive(Clone, Debug, PartialEq, DeriveEntityModel)]
+    #[sea_orm(table_name = "scope_repository_git_push_tokens")]
+    pub struct Model {
+        #[sea_orm(primary_key, auto_increment = false)]
+        pub repo_id: String,
+        pub token_hash: String,
+        pub owner_user_id: String,
+        pub created_at_unix: i64,
+    }
+
+    #[derive(Copy, Clone, Debug, EnumIter, DeriveRelation)]
+    pub enum Relation {}
+
+    impl ActiveModelBehavior for ActiveModel {}
+
+    impl Model {
+        pub(crate) fn from_domain(repo_id: &str, token: &GitPushToken) -> Self {
+            Self {
+                repo_id: repo_id.to_string(),
+                token_hash: token.token_hash.clone(),
+                owner_user_id: token.owner_user_id.clone(),
+                created_at_unix: u64_to_i64_saturating(token.created_at_unix),
+            }
+        }
+
+        pub(crate) fn into_domain(self) -> GitPushToken {
+            GitPushToken {
+                token_hash: self.token_hash,
+                owner_user_id: self.owner_user_id,
+                created_at_unix: i64_to_u64_floor(self.created_at_unix),
+            }
+        }
+    }
+}
+
+pub(crate) mod repository_git_clone_token {
+    use super::*;
+
+    #[derive(Clone, Debug, PartialEq, DeriveEntityModel)]
+    #[sea_orm(table_name = "scope_repository_git_clone_tokens")]
+    pub struct Model {
+        #[sea_orm(primary_key, auto_increment = false)]
+        pub repo_id: String,
+        #[sea_orm(primary_key, auto_increment = false)]
+        pub token_hash: String,
+        pub user_id: String,
+        pub created_at_unix: i64,
+    }
+
+    #[derive(Copy, Clone, Debug, EnumIter, DeriveRelation)]
+    pub enum Relation {}
+
+    impl ActiveModelBehavior for ActiveModel {}
+
+    impl Model {
+        pub(crate) fn from_domain(repo_id: &str, token: &GitCloneToken) -> Self {
+            Self {
+                repo_id: repo_id.to_string(),
+                token_hash: token.token_hash.clone(),
+                user_id: token.user_id.clone(),
+                created_at_unix: u64_to_i64_saturating(token.created_at_unix),
+            }
+        }
+
+        pub(crate) fn into_domain(self) -> GitCloneToken {
+            GitCloneToken {
+                token_hash: self.token_hash,
+                user_id: self.user_id,
+                created_at_unix: i64_to_u64_floor(self.created_at_unix),
+            }
+        }
+    }
+}
+
+pub(crate) mod repository_git_snapshot {
+    use super::*;
+
+    #[derive(Clone, Debug, PartialEq, DeriveEntityModel)]
+    #[sea_orm(table_name = "scope_repository_git_snapshots")]
+    pub struct Model {
+        #[sea_orm(primary_key, auto_increment = false)]
+        pub repo_id: String,
+        pub object_key: String,
+        pub sha256: String,
+        pub git_oid: String,
+        pub size_bytes: i64,
+        pub line_count: i64,
+    }
+
+    #[derive(Copy, Clone, Debug, EnumIter, DeriveRelation)]
+    pub enum Relation {}
+
+    impl ActiveModelBehavior for ActiveModel {}
+
+    impl Model {
+        pub(crate) fn from_domain(repo_id: &str, blob: &SourceBlob) -> Self {
+            Self {
+                repo_id: repo_id.to_string(),
+                object_key: blob.object_key.clone(),
+                sha256: blob.sha256.clone(),
+                git_oid: blob.git_oid.clone(),
+                size_bytes: u64_to_i64_saturating(blob.size_bytes),
+                line_count: usize_to_i64_saturating(blob.line_count),
+            }
+        }
+
+        pub(crate) fn into_domain(self) -> SourceBlob {
+            SourceBlob {
+                object_key: self.object_key,
+                sha256: self.sha256,
+                git_oid: self.git_oid,
+                size_bytes: i64_to_u64_floor(self.size_bytes),
+                line_count: self.line_count.max(0) as usize,
+            }
         }
     }
 }

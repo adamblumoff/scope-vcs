@@ -7,7 +7,9 @@ use super::{
     cleanup_queue::{complete_pending_repo_storage_cleanup, pending_repo_storage_cleanup_exists},
     entities,
     repo_effects::save_repo_effects,
-    repository_from_model, run_api_db_on,
+    repository_from_model,
+    repository_rows::insert_repository,
+    run_api_db_on,
 };
 use crate::domain::{
     policy::Visibility,
@@ -15,9 +17,7 @@ use crate::domain::{
     store::{FirstPushToken, GitPushToken, StoredRepository, repo_id},
 };
 use crate::error::ApiError;
-use sea_orm::{
-    ActiveModelTrait, ColumnTrait, EntityTrait, IntoActiveModel, QueryFilter, TransactionTrait,
-};
+use sea_orm::{ColumnTrait, EntityTrait, QueryFilter, TransactionTrait};
 use std::sync::Arc;
 
 impl MetadataStore {
@@ -74,11 +74,7 @@ impl MetadataStore {
                         complete_pending_repo_storage_cleanup(&tx, &repo.record.id).await?;
                     }
 
-                    entities::repository::Model::from_domain(&repo)?
-                        .into_active_model()
-                        .insert(&tx)
-                        .await
-                        .map_err(ApiError::internal)?;
+                    insert_repository(&tx, &repo).await?;
                     save_repo_effects(&tx, &mutation.effects).await?;
                     tx.commit().await.map_err(ApiError::internal)?;
                     Ok(repo)

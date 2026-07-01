@@ -70,15 +70,10 @@ pub(super) enum Repositories {
     PublicationState,
     DefaultVisibility,
     ChangeVersion,
-    Settings,
-    FirstPushToken,
-    GitPushToken,
-    GitCloneTokens,
     PendingImport,
     Policy,
     Graph,
     VisibilityEvents,
-    GitSnapshot,
     StagedUpdate,
 }
 
@@ -91,16 +86,102 @@ impl_iden!(Repositories {
     PublicationState => "publication_state",
     DefaultVisibility => "default_visibility",
     ChangeVersion => "change_version",
-    Settings => "settings",
-    FirstPushToken => "first_push_token",
-    GitPushToken => "git_push_token",
-    GitCloneTokens => "git_clone_tokens",
     PendingImport => "pending_import",
     Policy => "policy",
     Graph => "graph",
     VisibilityEvents => "visibility_events",
-    GitSnapshot => "git_snapshot",
     StagedUpdate => "staged_update",
+});
+
+#[derive(Copy, Clone)]
+pub(super) enum RepositorySettings {
+    Table,
+    RepoId,
+    IncludeIgnoredFiles,
+    ReviewPushesBeforeApplying,
+}
+
+impl_iden!(RepositorySettings {
+    Table => "scope_repository_settings",
+    RepoId => "repo_id",
+    IncludeIgnoredFiles => "include_ignored_files",
+    ReviewPushesBeforeApplying => "review_pushes_before_applying",
+});
+
+#[derive(Copy, Clone)]
+pub(super) enum RepositoryFirstPushTokens {
+    Table,
+    RepoId,
+    TokenHash,
+    OwnerUserId,
+    CreatedAtUnix,
+    ExpiresAtUnix,
+    UsedAtUnix,
+}
+
+impl_iden!(RepositoryFirstPushTokens {
+    Table => "scope_repository_first_push_tokens",
+    RepoId => "repo_id",
+    TokenHash => "token_hash",
+    OwnerUserId => "owner_user_id",
+    CreatedAtUnix => "created_at_unix",
+    ExpiresAtUnix => "expires_at_unix",
+    UsedAtUnix => "used_at_unix",
+});
+
+#[derive(Copy, Clone)]
+pub(super) enum RepositoryGitPushTokens {
+    Table,
+    RepoId,
+    TokenHash,
+    OwnerUserId,
+    CreatedAtUnix,
+}
+
+impl_iden!(RepositoryGitPushTokens {
+    Table => "scope_repository_git_push_tokens",
+    RepoId => "repo_id",
+    TokenHash => "token_hash",
+    OwnerUserId => "owner_user_id",
+    CreatedAtUnix => "created_at_unix",
+});
+
+#[derive(Copy, Clone)]
+pub(super) enum RepositoryGitCloneTokens {
+    Table,
+    RepoId,
+    TokenHash,
+    UserId,
+    CreatedAtUnix,
+}
+
+impl_iden!(RepositoryGitCloneTokens {
+    Table => "scope_repository_git_clone_tokens",
+    RepoId => "repo_id",
+    TokenHash => "token_hash",
+    UserId => "user_id",
+    CreatedAtUnix => "created_at_unix",
+});
+
+#[derive(Copy, Clone)]
+pub(super) enum RepositoryGitSnapshots {
+    Table,
+    RepoId,
+    ObjectKey,
+    Sha256,
+    GitOid,
+    SizeBytes,
+    LineCount,
+}
+
+impl_iden!(RepositoryGitSnapshots {
+    Table => "scope_repository_git_snapshots",
+    RepoId => "repo_id",
+    ObjectKey => "object_key",
+    Sha256 => "sha256",
+    GitOid => "git_oid",
+    SizeBytes => "size_bytes",
+    LineCount => "line_count",
 });
 
 #[derive(Copy, Clone)]
@@ -390,16 +471,44 @@ const REPOSITORY_COLUMNS: &[&str] = &[
     Repositories::PublicationState.as_str(),
     Repositories::DefaultVisibility.as_str(),
     Repositories::ChangeVersion.as_str(),
-    Repositories::Settings.as_str(),
-    Repositories::FirstPushToken.as_str(),
-    Repositories::GitPushToken.as_str(),
-    Repositories::GitCloneTokens.as_str(),
     Repositories::PendingImport.as_str(),
     Repositories::Policy.as_str(),
     Repositories::Graph.as_str(),
     Repositories::VisibilityEvents.as_str(),
-    Repositories::GitSnapshot.as_str(),
     Repositories::StagedUpdate.as_str(),
+];
+const REPOSITORY_SETTING_COLUMNS: &[&str] = &[
+    RepositorySettings::RepoId.as_str(),
+    RepositorySettings::IncludeIgnoredFiles.as_str(),
+    RepositorySettings::ReviewPushesBeforeApplying.as_str(),
+];
+const REPOSITORY_FIRST_PUSH_TOKEN_COLUMNS: &[&str] = &[
+    RepositoryFirstPushTokens::RepoId.as_str(),
+    RepositoryFirstPushTokens::TokenHash.as_str(),
+    RepositoryFirstPushTokens::OwnerUserId.as_str(),
+    RepositoryFirstPushTokens::CreatedAtUnix.as_str(),
+    RepositoryFirstPushTokens::ExpiresAtUnix.as_str(),
+    RepositoryFirstPushTokens::UsedAtUnix.as_str(),
+];
+const REPOSITORY_GIT_PUSH_TOKEN_COLUMNS: &[&str] = &[
+    RepositoryGitPushTokens::RepoId.as_str(),
+    RepositoryGitPushTokens::TokenHash.as_str(),
+    RepositoryGitPushTokens::OwnerUserId.as_str(),
+    RepositoryGitPushTokens::CreatedAtUnix.as_str(),
+];
+const REPOSITORY_GIT_CLONE_TOKEN_COLUMNS: &[&str] = &[
+    RepositoryGitCloneTokens::RepoId.as_str(),
+    RepositoryGitCloneTokens::TokenHash.as_str(),
+    RepositoryGitCloneTokens::UserId.as_str(),
+    RepositoryGitCloneTokens::CreatedAtUnix.as_str(),
+];
+const REPOSITORY_GIT_SNAPSHOT_COLUMNS: &[&str] = &[
+    RepositoryGitSnapshots::RepoId.as_str(),
+    RepositoryGitSnapshots::ObjectKey.as_str(),
+    RepositoryGitSnapshots::Sha256.as_str(),
+    RepositoryGitSnapshots::GitOid.as_str(),
+    RepositoryGitSnapshots::SizeBytes.as_str(),
+    RepositoryGitSnapshots::LineCount.as_str(),
 ];
 const REPOSITORY_MEMBER_COLUMNS: &[&str] = &[
     RepositoryMembers::RepoId.as_str(),
@@ -471,6 +580,11 @@ const CURRENT_METADATA_DROP_TABLES: &[&str] = &[
     AuthIdentities::Table.as_str(),
     RepositoryInvites::Table.as_str(),
     RepositoryMembers::Table.as_str(),
+    RepositoryGitCloneTokens::Table.as_str(),
+    RepositoryGitSnapshots::Table.as_str(),
+    RepositoryGitPushTokens::Table.as_str(),
+    RepositoryFirstPushTokens::Table.as_str(),
+    RepositorySettings::Table.as_str(),
     Repositories::Table.as_str(),
     Users::Table.as_str(),
     MetadataLocks::Table.as_str(),
@@ -510,6 +624,31 @@ pub(super) const METADATA_SCHEMA_TABLES: &[MetadataTableSpec] = &[
     MetadataTableSpec {
         table: Repositories::Table.as_str(),
         columns: REPOSITORY_COLUMNS,
+        counts_for_catalog_rows: true,
+    },
+    MetadataTableSpec {
+        table: RepositorySettings::Table.as_str(),
+        columns: REPOSITORY_SETTING_COLUMNS,
+        counts_for_catalog_rows: true,
+    },
+    MetadataTableSpec {
+        table: RepositoryFirstPushTokens::Table.as_str(),
+        columns: REPOSITORY_FIRST_PUSH_TOKEN_COLUMNS,
+        counts_for_catalog_rows: true,
+    },
+    MetadataTableSpec {
+        table: RepositoryGitPushTokens::Table.as_str(),
+        columns: REPOSITORY_GIT_PUSH_TOKEN_COLUMNS,
+        counts_for_catalog_rows: true,
+    },
+    MetadataTableSpec {
+        table: RepositoryGitCloneTokens::Table.as_str(),
+        columns: REPOSITORY_GIT_CLONE_TOKEN_COLUMNS,
+        counts_for_catalog_rows: true,
+    },
+    MetadataTableSpec {
+        table: RepositoryGitSnapshots::Table.as_str(),
+        columns: REPOSITORY_GIT_SNAPSHOT_COLUMNS,
         counts_for_catalog_rows: true,
     },
     MetadataTableSpec {
@@ -589,6 +728,11 @@ mod tests {
                 Users::Table.as_str(),
                 AuthIdentities::Table.as_str(),
                 Repositories::Table.as_str(),
+                RepositorySettings::Table.as_str(),
+                RepositoryFirstPushTokens::Table.as_str(),
+                RepositoryGitPushTokens::Table.as_str(),
+                RepositoryGitCloneTokens::Table.as_str(),
+                RepositoryGitSnapshots::Table.as_str(),
                 RepositoryMembers::Table.as_str(),
                 RepositoryInvites::Table.as_str(),
                 CliDeviceLogins::Table.as_str(),
