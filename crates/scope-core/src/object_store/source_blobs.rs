@@ -1,5 +1,8 @@
 use super::ObjectStore;
-use crate::{domain::store::SourceBlob, error::ApiError};
+use crate::{
+    domain::store::{DEFAULT_GIT_FILE_MODE, SourceBlob},
+    error::ApiError,
+};
 use sha1::{Digest as _, Sha1};
 use sha2::Sha256;
 
@@ -10,6 +13,7 @@ pub fn repo_object_for_bytes(kind: &str, object_id: &str, bytes: &[u8]) -> Sourc
         object_key: format!("objects/{kind}/{object_id}"),
         sha256,
         git_oid,
+        git_file_mode: DEFAULT_GIT_FILE_MODE.to_string(),
         size_bytes: bytes.len() as u64,
         line_count: text_line_count(bytes),
     }

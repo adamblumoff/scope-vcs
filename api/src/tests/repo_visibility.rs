@@ -474,6 +474,51 @@ fn git_projection_cache_omits_private_files_for_public_clone() {
 }
 
 #[test]
+fn git_projection_cache_preserves_executable_file_mode() {
+    let owner_id = test_owner_id();
+    let policy = Policy::new(Visibility::Public);
+    let mut script = source_blob("#!/bin/sh\necho hi\n");
+    script.git_file_mode = EXECUTABLE_GIT_FILE_MODE.to_string();
+    let graph = SourceGraph {
+        repo_id: TEST_REPO_ID.to_string(),
+        commits: vec![LogicalCommit {
+            id: "rv1".to_string(),
+            parent_ids: Vec::new(),
+            author_id: owner_id,
+            author_visibility: AuthorVisibility::Visible,
+            message: "initial".to_string(),
+            changes: vec![FileChange {
+                visibility: Visibility::Public,
+                path: ScopePath::parse("/bin/run").unwrap(),
+                old_content: None,
+                new_content: Some(script),
+            }],
+        }],
+    };
+    let projection = project_graph(&policy, &graph, &[], &Principal::public(), false);
+    let cache_root = std::env::temp_dir().join(format!(
+        "scope-vcs-git-mode-cache-test-{}-{}",
+        std::process::id(),
+        unix_now()
+    ));
+    let _ = fs::remove_dir_all(&cache_root);
+    ensure_private_dir(&cache_root).unwrap();
+
+    let repo_path =
+        projection_bare_repo(&MemoryObjectStore::new(), &cache_root, &projection).unwrap();
+    let tree = git_stdout_text(
+        &repo_path,
+        &["ls-tree", "-r", DEFAULT_GIT_BRANCH],
+        "list cached projection modes",
+    )
+    .unwrap();
+
+    assert!(tree.contains("100755 blob"));
+    assert!(tree.contains("bin/run"));
+    let _ = fs::remove_dir_all(&cache_root);
+}
+
+#[test]
 fn public_git_projection_starts_at_private_to_public_transition() {
     let owner_id = test_owner_id();
     let mut policy = Policy::new(Visibility::Private);

@@ -38,6 +38,52 @@ fn receive_pack_same_content_with_new_object_key_is_noop() {
 }
 
 #[test]
+fn receive_pack_same_content_with_new_mode_is_staged_update() {
+    let mut repo = repo_with_readme();
+    let readme = ScopePath::parse("/README.md").unwrap();
+    let mut executable_blob = repo.live_tree().get(&readme).unwrap().clone();
+    executable_blob.git_file_mode = EXECUTABLE_GIT_FILE_MODE.to_string();
+
+    let staged = stage_receive_pack_update(
+        &mut repo,
+        ReceivePackUpdate {
+            branch: format!("refs/heads/{DEFAULT_GIT_BRANCH}"),
+            author_id: test_owner_id(),
+            message: "chmod readme".to_string(),
+            git_snapshot: source_blob("test chmod git snapshot"),
+            uploaded_blobs: vec![executable_blob.clone()],
+            changes: vec![ReceivePackFileChange {
+                path: readme.clone(),
+                content: Some(executable_blob),
+            }],
+        },
+    )
+    .unwrap()
+    .unwrap();
+
+    assert_eq!(staged.changes.len(), 1);
+    assert_eq!(staged.changes[0].path, readme);
+    assert_eq!(
+        staged.changes[0]
+            .old_content
+            .as_ref()
+            .unwrap()
+            .git_file_mode,
+        DEFAULT_GIT_FILE_MODE
+    );
+    assert_eq!(
+        staged.changes[0]
+            .new_content
+            .as_ref()
+            .unwrap()
+            .git_file_mode,
+        EXECUTABLE_GIT_FILE_MODE
+    );
+    assert_eq!(staged.changes[0].line_diff.additions, 0);
+    assert_eq!(staged.changes[0].line_diff.deletions, 0);
+}
+
+#[test]
 fn published_receive_pack_push_stages_from_seeded_git_repo() {
     let state = test_state_with_repo();
     {

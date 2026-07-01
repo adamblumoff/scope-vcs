@@ -119,8 +119,16 @@ pub struct SourceBlob {
     pub object_key: String,
     pub sha256: String,
     pub git_oid: String,
+    pub git_file_mode: String,
     pub size_bytes: u64,
     pub line_count: usize,
+}
+
+pub const DEFAULT_GIT_FILE_MODE: &str = "100644";
+pub const EXECUTABLE_GIT_FILE_MODE: &str = "100755";
+
+pub fn is_supported_git_file_mode(mode: &str) -> bool {
+    matches!(mode, DEFAULT_GIT_FILE_MODE | EXECUTABLE_GIT_FILE_MODE)
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]

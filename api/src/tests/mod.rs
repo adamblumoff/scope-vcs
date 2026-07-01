@@ -7,10 +7,11 @@ use crate::domain::projection::{
 use crate::domain::repo_actions::preview_publish_import;
 use crate::domain::staged_updates::apply_staged_update_to_repo;
 use crate::domain::store::{
-    AccountAccess, AppCatalog, FirstPushToken, GitPushToken, LineDiff, PendingImport,
-    PendingImportFile, RepoPublicationState, RepoRecord, RepoSettings, RepoStorageCleanup,
-    RepositoryInvite, RepositoryInviteState, RepositoryMember, RepositoryMemberPermissions,
-    StagedFileChange, StagedFileChangeKind, StagedRepoUpdate, StoredRepository, UserAccount,
+    AccountAccess, AppCatalog, DEFAULT_GIT_FILE_MODE, EXECUTABLE_GIT_FILE_MODE, FirstPushToken,
+    GitPushToken, LineDiff, PendingImport, PendingImportFile, RepoPublicationState, RepoRecord,
+    RepoSettings, RepoStorageCleanup, RepositoryInvite, RepositoryInviteState, RepositoryMember,
+    RepositoryMemberPermissions, StagedFileChange, StagedFileChangeKind, StagedRepoUpdate,
+    StoredRepository, UserAccount,
 };
 use crate::{
     app::router,

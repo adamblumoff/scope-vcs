@@ -202,6 +202,7 @@ fn pending_publish_repo_is_owner_only_even_with_reader_membership() {
             object_key: "snapshot".to_string(),
             sha256: "sha".to_string(),
             git_oid: "oid".to_string(),
+            git_file_mode: api::domain::store::DEFAULT_GIT_FILE_MODE.to_string(),
             size_bytes: 1,
             line_count: 1,
         },

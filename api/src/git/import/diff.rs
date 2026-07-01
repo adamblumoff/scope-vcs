@@ -149,6 +149,7 @@ mod tests {
             object_key: format!("objects/test/{label}"),
             sha256: format!("sha256-{label}"),
             git_oid: format!("oid-{label}"),
+            git_file_mode: crate::domain::store::DEFAULT_GIT_FILE_MODE.to_string(),
             size_bytes,
             line_count,
         }

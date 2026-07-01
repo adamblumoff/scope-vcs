@@ -142,6 +142,7 @@ pub fn source_content_matches(left: Option<&SourceBlob>, right: Option<&SourceBl
         (Some(left), Some(right)) => {
             left.sha256 == right.sha256
                 && left.git_oid == right.git_oid
+                && left.git_file_mode == right.git_file_mode
                 && left.size_bytes == right.size_bytes
         }
         (None, None) => true,

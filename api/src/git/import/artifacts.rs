@@ -103,7 +103,9 @@ pub(crate) fn receive_pack_update_from_staging_repo(
         pushed_paths.insert(path.clone());
         let live_content = live_tree.get(&path);
         if live_content.is_some_and(|blob| {
-            blob.git_oid == entry.oid && blob.size_bytes == entry.size_bytes as u64
+            blob.git_oid == entry.oid
+                && blob.git_file_mode == entry.mode
+                && blob.size_bytes == entry.size_bytes as u64
         }) {
             continue;
         }
@@ -119,17 +121,19 @@ pub(crate) fn receive_pack_update_from_staging_repo(
             return Err(error);
         }
     };
-    let changed_blobs =
-        match put_git_blob_contents(state, &repo_id, &changed_contents, &mut uploaded_file_blobs) {
-            Ok(blobs) => blobs,
-            Err(error) => {
-                crate::state::best_effort_cleanup_rollback_source_blobs(
-                    state,
-                    &uploaded_file_blobs,
-                );
-                return Err(error);
-            }
-        };
+    let changed_blobs = match put_git_blob_contents(
+        state,
+        &repo_id,
+        &changed_entries,
+        &changed_contents,
+        &mut uploaded_file_blobs,
+    ) {
+        Ok(blobs) => blobs,
+        Err(error) => {
+            crate::state::best_effort_cleanup_rollback_source_blobs(state, &uploaded_file_blobs);
+            return Err(error);
+        }
+    };
     for ((path, live_content), new_content) in changed_paths.into_iter().zip(changed_blobs) {
         if !source_content_matches(live_content.as_ref(), Some(&new_content)) {
             changes.push(ReceivePackFileChange {

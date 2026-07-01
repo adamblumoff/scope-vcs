@@ -3,10 +3,10 @@ use crate::domain::policy::{Policy, ScopePath, Visibility};
 use crate::domain::projection::SourceGraph;
 use crate::domain::projection_views::ProjectionViewFile;
 use crate::domain::store::{
-    AccountAccess, FirstPushToken, GitCloneToken, GitPushToken, PendingImport,
-    RepoPublicationState, RepoRecord, RepoSettings, RepoStorageCleanup, RepositoryInvite,
-    RepositoryInviteState, RepositoryMember, RepositoryMemberPermissions, SourceBlob,
-    StagedRepoUpdate, StoredRepository, UserAccount,
+    AccountAccess, DEFAULT_GIT_FILE_MODE, FirstPushToken, GitCloneToken, GitPushToken,
+    PendingImport, RepoPublicationState, RepoRecord, RepoSettings, RepoStorageCleanup,
+    RepositoryInvite, RepositoryInviteState, RepositoryMember, RepositoryMemberPermissions,
+    SourceBlob, StagedRepoUpdate, StoredRepository, UserAccount,
 };
 use crate::error::ApiError;
 use sea_orm::entity::prelude::*;
@@ -434,6 +434,7 @@ pub mod repository_git_snapshot {
                 object_key: self.object_key,
                 sha256: self.sha256,
                 git_oid: self.git_oid,
+                git_file_mode: DEFAULT_GIT_FILE_MODE.to_string(),
                 size_bytes: i64_to_u64_floor(self.size_bytes),
                 line_count: self.line_count.max(0) as usize,
             }
@@ -944,6 +945,7 @@ pub mod source_blob_cleanup_job {
                 object_key: self.object_key,
                 sha256: self.sha256,
                 git_oid: self.git_oid,
+                git_file_mode: DEFAULT_GIT_FILE_MODE.to_string(),
                 size_bytes: self.size_bytes.max(0) as u64,
                 line_count: self.line_count.max(0) as usize,
             }

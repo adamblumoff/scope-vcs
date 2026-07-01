@@ -2,7 +2,7 @@ use super::cleanup_queue::{
     complete_pending_repo_storage_cleanup_at, complete_pending_source_blob_cleanup_at,
     queue_pending_repo_storage_cleanup_row, queue_pending_source_blob_deletion_rows,
 };
-use crate::domain::store::{RepoStorageCleanup, SourceBlob};
+use crate::domain::store::{DEFAULT_GIT_FILE_MODE, RepoStorageCleanup, SourceBlob};
 use sea_orm::{DbBackend, MockDatabase, MockExecResult};
 
 #[tokio::test]
@@ -16,6 +16,7 @@ async fn source_blob_cleanup_queue_writes_typed_rows_not_metadata_lock_json() {
             object_key: "objects/blob-1".to_string(),
             sha256: "sha".to_string(),
             git_oid: "oid".to_string(),
+            git_file_mode: DEFAULT_GIT_FILE_MODE.to_string(),
             size_bytes: 10,
             line_count: 1,
         }],

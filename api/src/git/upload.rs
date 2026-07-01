@@ -1,6 +1,6 @@
 use crate::domain::policy::Principal;
 use crate::domain::projection::{Projection, project_graph};
-use crate::domain::store::{RepoPublicationState, RepositoryActor};
+use crate::domain::store::{RepoPublicationState, RepositoryActor, is_supported_git_file_mode};
 use crate::{
     auth::scope::{optional_scope_user, principal_for_scope_user},
     config::{DEFAULT_GIT_BRANCH, GIT_UPLOAD_PACK, UNPUBLISHED_GIT_ERROR},
@@ -33,7 +33,7 @@ use std::{
 };
 use tokio::{io::AsyncWriteExt, process::Command as TokioCommand};
 
-const PROJECTION_CACHE_SEMANTICS_VERSION: &str = "visibility-projection-v2";
+const PROJECTION_CACHE_SEMANTICS_VERSION: &str = "visibility-projection-v3";
 static GIT_CACHE_ATTEMPT: AtomicU64 = AtomicU64::new(1);
 
 pub(crate) async fn git_projection_for_request(
@@ -243,7 +243,13 @@ pub(crate) fn projection_bare_repo(
             let path = change.path.as_str().to_string();
             match &change.new_content {
                 Some(blob) => {
-                    visible_tree.insert(path, source_blob_text(store, blob)?);
+                    visible_tree.insert(
+                        path,
+                        ProjectionTreeFile {
+                            content: source_blob_text(store, blob)?,
+                            git_file_mode: blob.git_file_mode.clone(),
+                        },
+                    );
                 }
                 None => {
                     visible_tree.remove(&path);
@@ -309,6 +315,7 @@ pub(crate) fn projection_cache_key(projection: &Projection) -> String {
                 Some(blob) => {
                     hash_field(&mut hasher, b"sha256", blob.sha256.as_bytes());
                     hash_field(&mut hasher, b"git_oid", blob.git_oid.as_bytes());
+                    hash_field(&mut hasher, b"mode", blob.git_file_mode.as_bytes());
                     hash_field(&mut hasher, b"size", blob.size_bytes.to_string().as_bytes());
                 }
                 None => hash_field(&mut hasher, b"delete", b""),
@@ -328,7 +335,7 @@ pub(crate) fn hash_field(hasher: &mut Sha1, label: &[u8], value: &[u8]) {
 pub(crate) fn write_projection_tree(
     repo_path: &FsPath,
     index_path: &FsPath,
-    visible_tree: &BTreeMap<String, String>,
+    visible_tree: &BTreeMap<String, ProjectionTreeFile>,
 ) -> Result<String, ApiError> {
     if index_path.exists() {
         fs::remove_file(index_path).map_err(ApiError::internal)?;
@@ -344,7 +351,13 @@ pub(crate) fn write_projection_tree(
     )?;
 
     let mut index_info = Vec::new();
-    for (path, content) in visible_tree {
+    for (path, file) in visible_tree {
+        if !is_supported_git_file_mode(&file.git_file_mode) {
+            return Err(ApiError::internal_message(format!(
+                "projected Git path {path} has unsupported mode {}",
+                file.git_file_mode
+            )));
+        }
         let oid = git_command_output(
             Command::new("git")
                 .arg("--git-dir")
@@ -352,12 +365,18 @@ pub(crate) fn write_projection_tree(
                 .arg("hash-object")
                 .arg("-w")
                 .arg("--stdin"),
-            Some(content.as_bytes()),
+            Some(file.content.as_bytes()),
         )?;
         let oid = String::from_utf8(oid).map_err(ApiError::bad_request)?;
         let relative_path = git_relative_path(path)?;
-        index_info
-            .extend_from_slice(format!("100644 blob {}\t{relative_path}\n", oid.trim()).as_bytes());
+        index_info.extend_from_slice(
+            format!(
+                "{} blob {}\t{relative_path}\n",
+                file.git_file_mode,
+                oid.trim()
+            )
+            .as_bytes(),
+        );
     }
 
     if !index_info.is_empty() {
@@ -381,6 +400,11 @@ pub(crate) fn write_projection_tree(
     )?;
     let tree = String::from_utf8(tree).map_err(ApiError::bad_request)?;
     Ok(tree.trim().to_string())
+}
+
+pub(crate) struct ProjectionTreeFile {
+    pub(crate) content: String,
+    pub(crate) git_file_mode: String,
 }
 
 pub(crate) fn git_relative_path(path: &str) -> Result<String, ApiError> {

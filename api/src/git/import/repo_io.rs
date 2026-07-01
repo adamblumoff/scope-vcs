@@ -1,5 +1,5 @@
 use crate::domain::policy::ScopePath;
-use crate::domain::store::{PendingImportFile, SourceBlob};
+use crate::domain::store::{PendingImportFile, SourceBlob, is_supported_git_file_mode};
 use crate::{
     config::{
         DEFAULT_GIT_BRANCH, MAX_PENDING_IMPORT_BLOB_BYTES, MAX_PENDING_IMPORT_FILES,
@@ -86,7 +86,13 @@ pub(crate) fn git_tree_files(
     let contents = git_tree_blob_contents(staging_repo, &pending_files)?;
     let mut files = Vec::with_capacity(pending_files.len());
     let mut uploaded_blobs = Vec::with_capacity(pending_files.len());
-    let blobs = match put_git_blob_contents(state, repo_id, &contents, &mut uploaded_blobs) {
+    let blobs = match put_git_blob_contents(
+        state,
+        repo_id,
+        &pending_files,
+        &contents,
+        &mut uploaded_blobs,
+    ) {
         Ok(blobs) => blobs,
         Err(error) => {
             crate::state::best_effort_cleanup_rollback_source_blobs(state, &uploaded_blobs);
@@ -148,7 +154,7 @@ pub(super) fn git_tree_entries(
             .next()
             .ok_or_else(|| ApiError::internal_message("tree entry is missing size"))?;
         validate_pushed_file_path(path)?;
-        if mode != "100644" {
+        if !is_supported_git_file_mode(mode) {
             return Err(ApiError::bad_request(format!(
                 "unsupported Git file mode {path}: {mode}"
             )));
@@ -232,17 +238,32 @@ pub(super) fn git_tree_blob_contents(
 pub(super) fn put_git_blob_contents(
     state: &AppState,
     repo_id: &str,
+    pending_files: &[PendingGitTreeFile],
     contents: &[Vec<u8>],
     uploaded_blobs: &mut Vec<SourceBlob>,
 ) -> Result<Vec<SourceBlob>, ApiError> {
+    if pending_files.len() != contents.len() {
+        return Err(ApiError::internal_message(
+            "Git tree entry count did not match blob content count",
+        ));
+    }
     let store = state.object_store.as_ref();
     let mut blobs = Vec::with_capacity(contents.len());
-    for chunk in contents.chunks(MAX_PARALLEL_BLOB_PUTS) {
+    for chunk in pending_files
+        .iter()
+        .zip(contents)
+        .collect::<Vec<_>>()
+        .chunks(MAX_PARALLEL_BLOB_PUTS)
+    {
         let results = thread::scope(|scope| {
             let handles = chunk
                 .iter()
-                .map(|content| {
-                    scope.spawn(move || put_repo_object(store, repo_id, "blobs", content))
+                .map(|(pending, content)| {
+                    scope.spawn(move || {
+                        let mut blob = put_repo_object(store, repo_id, "blobs", content)?;
+                        blob.git_file_mode = pending.mode.clone();
+                        Ok(blob)
+                    })
                 })
                 .collect::<Vec<_>>();
             handles
@@ -366,7 +387,7 @@ pub(super) fn git_snapshot_from_repo(
 
 pub(super) struct PendingGitTreeFile {
     pub(super) path: String,
-    mode: String,
+    pub(super) mode: String,
     pub(super) oid: String,
     pub(super) size_bytes: usize,
 }

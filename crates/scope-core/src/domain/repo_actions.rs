@@ -426,11 +426,13 @@ fn pending_import_changes(
         .map(|file| {
             let path = pending_import_scope_path(&file.path)
                 .expect("pending import paths were validated before persistence");
+            let mut blob = file.blob.clone();
+            blob.git_file_mode = file.mode.clone();
             FileChange {
                 visibility: policy.effective_visibility(&path),
                 path,
                 old_content: None,
-                new_content: Some(file.blob.clone()),
+                new_content: Some(blob),
             }
         })
         .collect()
@@ -442,8 +444,8 @@ mod tests {
     use crate::domain::{
         policy::{ScopePath, Visibility},
         store::{
-            AccountAccess, LineDiff, StagedFileChange, StagedFileChangeKind, StagedRepoUpdate,
-            UserAccount,
+            AccountAccess, DEFAULT_GIT_FILE_MODE, LineDiff, StagedFileChange, StagedFileChangeKind,
+            StagedRepoUpdate, UserAccount,
         },
     };
 
@@ -544,6 +546,7 @@ mod tests {
             object_key: format!("objects/{label}"),
             sha256: format!("sha256-{label}"),
             git_oid: format!("oid-{label}"),
+            git_file_mode: DEFAULT_GIT_FILE_MODE.to_string(),
             size_bytes: label.len() as u64,
             line_count: label.lines().count(),
         }

@@ -721,7 +721,19 @@ async fn real_git_first_push_over_http_creates_pending_import() {
 
     let source = temp_git_repo("real-first-http-push");
     fs::write(source.join("README.md"), "hello over http\n").unwrap();
-    run_git(Some(&source), &["add", "README.md"], "add readme").unwrap();
+    fs::write(source.join("script.sh"), "#!/bin/sh\necho hi\n").unwrap();
+    run_git(
+        Some(&source),
+        &["add", "README.md", "script.sh"],
+        "add first push files",
+    )
+    .unwrap();
+    run_git(
+        Some(&source),
+        &["update-index", "--chmod=+x", "script.sh"],
+        "make first push script executable",
+    )
+    .unwrap();
     commit_all(&source, "initial");
 
     let remote = format!("http://scope:{secret}@{addr}/git/{TEST_REPO_ID}");
@@ -738,16 +750,36 @@ async fn real_git_first_push_over_http_creates_pending_import() {
     )
     .unwrap();
 
-    let repo = find_repo(&state, TEST_REPO_OWNER, TEST_REPO_NAME).unwrap();
+    let mut repo = find_repo(&state, TEST_REPO_OWNER, TEST_REPO_NAME).unwrap();
     assert_eq!(
         repo.record.publication_state,
         RepoPublicationState::Unpublished
     );
-    let pending = repo.pending_import.unwrap();
+    let pending = repo.pending_import.as_ref().unwrap();
     assert_eq!(pending.default_branch, DEFAULT_GIT_BRANCH);
-    assert_eq!(pending.files.len(), 1);
+    assert_eq!(pending.files.len(), 2);
     assert_eq!(pending.files[0].path, "README.md");
-    assert!(repo.first_push_token.unwrap().used_at_unix.is_some());
+    assert_eq!(pending.files[0].mode, "100644");
+    assert_eq!(pending.files[1].path, "script.sh");
+    assert_eq!(pending.files[1].mode, "100755");
+    assert_eq!(pending.files[1].blob.git_file_mode, "100755");
+    assert!(
+        repo.first_push_token
+            .as_ref()
+            .unwrap()
+            .used_at_unix
+            .is_some()
+    );
+
+    preview_publish_import(&mut repo).unwrap();
+    let live_tree = repo.live_tree();
+    assert_eq!(
+        live_tree
+            .get(&ScopePath::parse("/script.sh").unwrap())
+            .unwrap()
+            .git_file_mode,
+        "100755"
+    );
 
     server.abort();
     let _ = fs::remove_dir_all(source);
@@ -950,7 +982,7 @@ fn pushed_tree_cleans_uploaded_blobs_when_later_blob_is_invalid() {
 }
 
 #[test]
-fn pushed_tree_rejects_modes_that_projection_cannot_preserve() {
+fn pushed_tree_accepts_executable_text_files() {
     let repo = temp_git_repo("mode-test");
     fs::write(repo.join("script.sh"), "#!/bin/sh\necho hi\n").unwrap();
     run_git(Some(&repo), &["add", "script.sh"], "add script").unwrap();
@@ -963,10 +995,11 @@ fn pushed_tree_rejects_modes_that_projection_cannot_preserve() {
     commit_all(&repo, "executable");
 
     let state = test_state_with_repo();
-    let error = git_tree_files(&state, TEST_REPO_ID, &repo, "HEAD").unwrap_err();
+    let files = git_tree_files(&state, TEST_REPO_ID, &repo, "HEAD").unwrap();
 
-    assert_eq!(error.status, StatusCode::BAD_REQUEST);
-    assert!(error.message.contains("unsupported Git file mode"));
+    assert_eq!(files.len(), 1);
+    assert_eq!(files[0].path, "script.sh");
+    assert_eq!(files[0].mode, "100755");
     let _ = fs::remove_dir_all(&repo);
 }
 
