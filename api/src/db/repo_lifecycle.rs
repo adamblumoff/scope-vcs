@@ -1,11 +1,10 @@
 #[cfg(any(test, feature = "memory-metadata"))]
+use super::cleanup_queue::remove_matching_pending_repo_storage_cleanup;
+#[cfg(any(test, feature = "memory-metadata"))]
 use super::repo_effects::apply_repo_effects;
 use super::{
     MetadataStore, MetadataStoreInner, acquire_metadata_write_lock,
-    cleanup_queue::{
-        load_pending_repo_storage_deletions, remove_matching_pending_repo_storage_cleanup,
-        save_pending_repo_storage_deletions,
-    },
+    cleanup_queue::{complete_pending_repo_storage_cleanup, pending_repo_storage_cleanup_exists},
     entities,
     repo_effects::save_repo_effects,
     repository_from_model, run_api_db_on,
@@ -70,16 +69,9 @@ impl MetadataStore {
                         )));
                     }
 
-                    let mut pending_repo_storage_deletions =
-                        load_pending_repo_storage_deletions(&tx).await?;
-                    let had_pending_cleanup = remove_matching_pending_repo_storage_cleanup(
-                        &mut pending_repo_storage_deletions,
-                        &repo.record.id,
-                    );
-                    if had_pending_cleanup {
+                    if pending_repo_storage_cleanup_exists(&tx, &repo.record.id).await? {
                         cleanup_pending_storage(&repo.record.owner_handle, &repo.record.name)?;
-                        save_pending_repo_storage_deletions(&tx, &pending_repo_storage_deletions)
-                            .await?;
+                        complete_pending_repo_storage_cleanup(&tx, &repo.record.id).await?;
                     }
 
                     entities::repository::Model::from_domain(&repo)?

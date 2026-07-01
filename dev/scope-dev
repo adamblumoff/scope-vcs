@@ -311,6 +311,29 @@ doctor() {
   fi
 }
 
+mint_bench_auth_token() {
+  local api_origin="$1"
+  curl -fsS --max-time 3 -X POST "$api_origin/v1/dev/bench/cli-session" \
+    | node -e '
+let input = "";
+process.stdin.setEncoding("utf8");
+process.stdin.on("data", (chunk) => {
+  input += chunk;
+});
+process.stdin.on("end", () => {
+  try {
+    const body = JSON.parse(input);
+    if (typeof body.session_token !== "string" || !body.session_token.startsWith("scope_cli_")) {
+      process.exit(1);
+    }
+    process.stdout.write(body.session_token);
+  } catch {
+    process.exit(1);
+  }
+});
+'
+}
+
 bench() {
   assert_command curl
   assert_command git
@@ -329,7 +352,17 @@ bench() {
   dev_email="$(get_dev_user_email)"
   dev_handle="$(get_dev_user_handle)"
 
+  local bench_auth_token
+  bench_auth_token="${SCOPE_BENCH_AUTH_TOKEN:-}"
+  if [[ -z "$bench_auth_token" ]]; then
+    if ! bench_auth_token="$(mint_bench_auth_token "$bench_api_origin" 2>/dev/null)"; then
+      bench_auth_token=""
+      echo "warning: could not mint a local benchmark CLI session; authenticated benchmark cases may be skipped" >&2
+    fi
+  fi
+
   SCOPE_BENCH_API_URL="$bench_api_origin" \
+    SCOPE_BENCH_AUTH_TOKEN="$bench_auth_token" \
     SCOPE_DEV_USER_EMAIL="${SCOPE_DEV_USER_EMAIL:-$dev_email}" \
     SCOPE_DEV_USER_HANDLE="${SCOPE_DEV_USER_HANDLE:-$dev_handle}" \
     node "$ROOT/bench/phase0.mjs"
