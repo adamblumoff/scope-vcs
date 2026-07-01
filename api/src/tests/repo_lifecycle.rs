@@ -232,6 +232,7 @@ fn db_metadata_store_round_trips_repo_metadata() {
         .unwrap()
         .expect("row repo loads after settings update");
     assert_eq!(row_repo.settings, updated_settings);
+    let settings_change_version = row_repo.record.change_version;
     assert_eq!(row_repo.record.default_visibility, Visibility::Private);
     assert_eq!(
         row_repo
@@ -244,6 +245,19 @@ fn db_metadata_store_round_trips_repo_metadata() {
             .policy
             .effective_visibility(&ScopePath::parse("/README.md").unwrap()),
         Visibility::Public
+    );
+    let repeated_settings_update = fresh_metadata
+        .update_repo_settings(
+            TEST_REPO_OWNER,
+            TEST_REPO_NAME,
+            &owner_id,
+            updated_settings,
+            Visibility::Private,
+        )
+        .unwrap();
+    assert_eq!(
+        repeated_settings_update.record.change_version,
+        settings_change_version
     );
 
     fresh_metadata

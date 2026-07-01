@@ -7,7 +7,7 @@ use crate::{error::ApiError, persistence::unix_now};
 use sea_orm::PaginatorTrait;
 use sea_orm::{
     ColumnTrait, Condition, ConnectionTrait, EntityTrait, IntoActiveModel, QueryFilter, QueryOrder,
-    TransactionTrait,
+    TransactionTrait, TryInsertResult,
     sea_query::{Expr, OnConflict},
 };
 use std::sync::Arc;
@@ -16,8 +16,11 @@ const PROJECTION_READ_MODEL_REBUILD: &str = "projection_read_model_rebuild";
 const JOB_READY: &str = "ready";
 const JOB_RUNNING: &str = "running";
 const JOB_SUCCEEDED: &str = "succeeded";
+const JOB_FAILED: &str = "failed";
 const DEFAULT_JOB_LEASE_SECS: i64 = 60;
 const MAX_RETRY_DELAY_SECS: i64 = 300;
+const MAX_JOB_ATTEMPTS: i64 = 12;
+const SUCCEEDED_JOB_RETENTION_SECS: i64 = 7 * 24 * 60 * 60;
 
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct OutboxRunSummary {
@@ -31,6 +34,7 @@ pub struct OutboxJobCounts {
     pub ready: usize,
     pub running: usize,
     pub succeeded: usize,
+    pub failed: usize,
     pub total: usize,
 }
 
@@ -75,12 +79,27 @@ impl MetadataStore {
                             }
                             Err(error) => {
                                 let message = error.message;
-                                tracing::warn!(
-                                    job_id = %job.id,
-                                    kind = %job.kind,
-                                    error = %message,
-                                    "outbox job failed; scheduling retry"
-                                );
+                                let attempts = next_retry_attempt(job.attempts);
+                                if is_terminal_retry_attempt(attempts) {
+                                    tracing::error!(
+                                        job_id = %job.id,
+                                        kind = %job.kind,
+                                        attempts,
+                                        max_attempts = MAX_JOB_ATTEMPTS,
+                                        error = %message,
+                                        "outbox job exhausted retries; marking failed"
+                                    );
+                                } else {
+                                    tracing::warn!(
+                                        job_id = %job.id,
+                                        kind = %job.kind,
+                                        attempts,
+                                        max_attempts = MAX_JOB_ATTEMPTS,
+                                        next_retry_delay_secs = retry_delay_seconds(attempts),
+                                        error = %message,
+                                        "outbox job failed; scheduling retry"
+                                    );
+                                }
                                 fail_outbox_job(db.as_ref(), &job, &worker_id, message).await?;
                                 summary.failed += 1;
                             }
@@ -144,15 +163,19 @@ where
         repo,
         now,
     )?;
-    entities::outbox_job::Entity::insert(job.into_active_model())
+    match entities::outbox_job::Entity::insert(job.into_active_model())
         .on_conflict(
             OnConflict::column(entities::outbox_job::Column::IdempotencyKey)
                 .do_nothing()
                 .to_owned(),
         )
+        .do_nothing()
         .exec(conn)
         .await
-        .map_err(ApiError::internal)?;
+        .map_err(ApiError::internal)?
+    {
+        TryInsertResult::Empty | TryInsertResult::Conflicted | TryInsertResult::Inserted(_) => {}
+    }
     Ok(())
 }
 
@@ -306,6 +329,7 @@ where
         .exec(conn)
         .await
         .map_err(ApiError::internal)?;
+    prune_succeeded_outbox_jobs(conn, now).await?;
     Ok(())
 }
 
@@ -319,13 +343,20 @@ where
     C: ConnectionTrait,
 {
     let now = now_i64()?;
-    let attempts = job.attempts.saturating_add(1).max(1);
-    let next_run_at = now.saturating_add(retry_delay_seconds(attempts));
+    let attempts = next_retry_attempt(job.attempts);
+    let terminal = is_terminal_retry_attempt(attempts);
+    let next_run_at = if terminal {
+        now
+    } else {
+        now.saturating_add(retry_delay_seconds(attempts))
+    };
+    let completed_at_unix = terminal.then_some(now);
+    let state = if terminal { JOB_FAILED } else { JOB_READY };
     entities::outbox_job::Entity::update_many()
         .filter(entities::outbox_job::Column::Id.eq(job.id.clone()))
         .filter(entities::outbox_job::Column::LeaseOwner.eq(worker_id.to_string()))
         .filter(entities::outbox_job::Column::CompletedAtUnix.is_null())
-        .col_expr(entities::outbox_job::Column::State, Expr::value(JOB_READY))
+        .col_expr(entities::outbox_job::Column::State, Expr::value(state))
         .col_expr(
             entities::outbox_job::Column::Attempts,
             Expr::value(attempts),
@@ -350,6 +381,24 @@ where
             entities::outbox_job::Column::UpdatedAtUnix,
             Expr::value(now),
         )
+        .col_expr(
+            entities::outbox_job::Column::CompletedAtUnix,
+            Expr::value(completed_at_unix),
+        )
+        .exec(conn)
+        .await
+        .map_err(ApiError::internal)?;
+    Ok(())
+}
+
+async fn prune_succeeded_outbox_jobs<C>(conn: &C, now: i64) -> Result<(), ApiError>
+where
+    C: ConnectionTrait,
+{
+    let cutoff = now.saturating_sub(SUCCEEDED_JOB_RETENTION_SECS);
+    entities::outbox_job::Entity::delete_many()
+        .filter(entities::outbox_job::Column::State.eq(JOB_SUCCEEDED))
+        .filter(entities::outbox_job::Column::CompletedAtUnix.lte(cutoff))
         .exec(conn)
         .await
         .map_err(ApiError::internal)?;
@@ -367,6 +416,7 @@ fn outbox_job_counts(rows: Vec<entities::outbox_job::Model>) -> OutboxJobCounts 
             JOB_READY => counts.ready += 1,
             JOB_RUNNING => counts.running += 1,
             JOB_SUCCEEDED => counts.succeeded += 1,
+            JOB_FAILED => counts.failed += 1,
             _ => {}
         }
     }
@@ -376,6 +426,14 @@ fn outbox_job_counts(rows: Vec<entities::outbox_job::Model>) -> OutboxJobCounts 
 fn retry_delay_seconds(attempts: i64) -> i64 {
     let exponent = attempts.saturating_sub(1).clamp(0, 6) as u32;
     (5_i64.saturating_mul(2_i64.saturating_pow(exponent))).min(MAX_RETRY_DELAY_SECS)
+}
+
+fn next_retry_attempt(previous_attempts: i64) -> i64 {
+    previous_attempts.saturating_add(1).max(1)
+}
+
+fn is_terminal_retry_attempt(attempts: i64) -> bool {
+    attempts >= MAX_JOB_ATTEMPTS
 }
 
 fn truncate_error(error: String) -> String {
@@ -412,5 +470,13 @@ mod tests {
         assert_eq!(retry_delay_seconds(2), 10);
         assert_eq!(retry_delay_seconds(7), 300);
         assert_eq!(retry_delay_seconds(99), 300);
+    }
+
+    #[test]
+    fn retry_policy_stops_at_max_attempts() {
+        assert_eq!(next_retry_attempt(0), 1);
+        assert!(!is_terminal_retry_attempt(MAX_JOB_ATTEMPTS - 1));
+        assert!(is_terminal_retry_attempt(MAX_JOB_ATTEMPTS));
+        assert!(is_terminal_retry_attempt(MAX_JOB_ATTEMPTS + 10));
     }
 }

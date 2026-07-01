@@ -265,6 +265,10 @@ write_worker_runner() {
   local database_url runner
   database_url="$(local_database_url)"
   runner="$STATE_DIR/worker.sh"
+  if [[ -z "$database_url" ]]; then
+    echo "DATABASE_URL is required for the worker (SCOPE_METADATA_STORE=postgres)" >&2
+    exit 1
+  fi
 
   cat > "$runner" <<EOF
 #!/usr/bin/env bash
