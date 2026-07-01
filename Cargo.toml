@@ -1,0 +1,8 @@
+[workspace]
+members = [
+    "api",
+    "crates/scope-core",
+    "worker",
+]
+exclude = ["cli"]
+resolver = "3"

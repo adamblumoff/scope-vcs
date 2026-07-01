@@ -1,0 +1,161 @@
+use serde::{Deserialize, Serialize};
+use std::{
+    collections::BTreeMap,
+    sync::{Arc, Mutex},
+    time::{Duration, SystemTime, UNIX_EPOCH},
+};
+use tokio::sync::broadcast;
+
+const REPO_CHANGE_CHANNEL_CAPACITY: usize = 128;
+pub const POSTGRES_REPO_CHANGE_CHANNEL: &str = "scope_repo_changes";
+
+#[derive(Clone, Debug, Deserialize, PartialEq, Eq, Serialize)]
+pub struct RepoChangeEvent {
+    pub repo_id: String,
+    pub version: u64,
+    pub reason: String,
+}
+
+impl RepoChangeEvent {
+    pub fn new(repo_id: &str, version: u64, reason: &'static str) -> Self {
+        Self {
+            repo_id: repo_id.to_string(),
+            version,
+            reason: reason.to_string(),
+        }
+    }
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+pub struct RepoChangeNotification {
+    pub event: RepoChangeEvent,
+    pub origin_id: String,
+}
+
+impl RepoChangeNotification {
+    pub fn new(origin_id: &str, event: &RepoChangeEvent) -> Self {
+        Self {
+            event: event.clone(),
+            origin_id: origin_id.to_string(),
+        }
+    }
+}
+
+#[derive(Clone, Debug)]
+pub struct RepoChangeBus {
+    channels: Arc<Mutex<BTreeMap<String, broadcast::Sender<RepoChangeEvent>>>>,
+    origin_id: Arc<str>,
+}
+
+impl Default for RepoChangeBus {
+    fn default() -> Self {
+        Self {
+            channels: Arc::new(Mutex::new(BTreeMap::new())),
+            origin_id: Arc::from(new_origin_id()),
+        }
+    }
+}
+
+impl RepoChangeBus {
+    pub fn origin_id(&self) -> &str {
+        &self.origin_id
+    }
+
+    pub fn start_postgres_listener(&self, database_url: String) -> anyhow::Result<()> {
+        let bus = self.clone();
+        std::thread::Builder::new()
+            .name("scope-repo-change-listener".to_string())
+            .spawn(move || {
+                let runtime = match tokio::runtime::Builder::new_current_thread()
+                    .enable_all()
+                    .build()
+                {
+                    Ok(runtime) => runtime,
+                    Err(error) => {
+                        tracing::error!(%error, "failed to start repo change listener runtime");
+                        return;
+                    }
+                };
+
+                runtime.block_on(async move {
+                    loop {
+                        if let Err(error) =
+                            listen_for_postgres_repo_changes(&database_url, &bus).await
+                        {
+                            tracing::warn!(%error, "repo change listener disconnected");
+                            tokio::time::sleep(Duration::from_secs(2)).await;
+                        }
+                    }
+                });
+            })?;
+        Ok(())
+    }
+
+    pub fn subscribe(&self, repo_id: &str) -> broadcast::Receiver<RepoChangeEvent> {
+        let mut channels = self
+            .channels
+            .lock()
+            .expect("repo change bus lock must not be poisoned");
+        let sender = channels
+            .entry(repo_id.to_string())
+            .or_insert_with(|| broadcast::channel(REPO_CHANGE_CHANNEL_CAPACITY).0);
+        sender.subscribe()
+    }
+
+    pub fn remove_if_idle(&self, repo_id: &str) {
+        let mut channels = self
+            .channels
+            .lock()
+            .expect("repo change bus lock must not be poisoned");
+        if channels
+            .get(repo_id)
+            .is_some_and(|sender| sender.receiver_count() == 0)
+        {
+            channels.remove(repo_id);
+        }
+    }
+
+    pub fn publish_event(&self, event: RepoChangeEvent) {
+        let mut channels = self
+            .channels
+            .lock()
+            .expect("repo change bus lock must not be poisoned");
+        let Some(sender) = channels.get(&event.repo_id).cloned() else {
+            return;
+        };
+        if sender.receiver_count() == 0 || sender.send(event.clone()).is_err() {
+            channels.remove(&event.repo_id);
+        }
+    }
+}
+
+async fn listen_for_postgres_repo_changes(
+    database_url: &str,
+    bus: &RepoChangeBus,
+) -> Result<(), sqlx::Error> {
+    let mut listener = sqlx::postgres::PgListener::connect(database_url).await?;
+    listener.listen(POSTGRES_REPO_CHANGE_CHANNEL).await?;
+    loop {
+        let notification = listener.recv().await?;
+        match serde_json::from_str::<RepoChangeNotification>(notification.payload()) {
+            Ok(notification) => {
+                if notification.origin_id != bus.origin_id() {
+                    bus.publish_event(notification.event);
+                }
+            }
+            Err(error) => tracing::warn!(
+                %error,
+                payload = notification.payload(),
+                "ignored malformed repo change notification"
+            ),
+        }
+    }
+}
+
+fn new_origin_id() -> String {
+    let nanos = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|duration| duration.as_nanos())
+        .unwrap_or_default();
+    format!("{}-{nanos}", std::process::id())
+}

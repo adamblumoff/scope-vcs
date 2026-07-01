@@ -1,28 +1,24 @@
-name: Scope API CI
+name: Scope Worker CI
 
 on:
   pull_request:
     paths:
       - ".github/scripts/deploy-railway.sh"
-      - ".github/workflows/scope-api-ci.yml"
+      - ".github/workflows/scope-worker-ci.yml"
       - "Cargo.lock"
       - "Cargo.toml"
-      - "api/**"
       - "crates/scope-core/**"
-      - "web/scripts/check-api-contract.mjs"
-      - "web/src/api/types.generated.ts"
+      - "worker/**"
   push:
     branches:
       - main
     paths:
       - ".github/scripts/deploy-railway.sh"
-      - ".github/workflows/scope-api-ci.yml"
+      - ".github/workflows/scope-worker-ci.yml"
       - "Cargo.lock"
       - "Cargo.toml"
-      - "api/**"
       - "crates/scope-core/**"
-      - "web/scripts/check-api-contract.mjs"
-      - "web/src/api/types.generated.ts"
+      - "worker/**"
   workflow_dispatch:
 
 permissions:
@@ -34,7 +30,7 @@ env:
 
 jobs:
   checks:
-    name: Check scope-api
+    name: Check scope-worker
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
@@ -53,31 +49,22 @@ jobs:
             ~/.cargo/git
             ~/.cargo/registry
             target
-          key: ${{ runner.os }}-api-cargo-${{ hashFiles('Cargo.lock') }}-${{ github.sha }}
+          key: ${{ runner.os }}-worker-cargo-${{ hashFiles('Cargo.lock') }}-${{ github.sha }}
           restore-keys: |
-            ${{ runner.os }}-api-cargo-${{ hashFiles('Cargo.lock') }}
-            ${{ runner.os }}-api-cargo-
+            ${{ runner.os }}-worker-cargo-${{ hashFiles('Cargo.lock') }}
+            ${{ runner.os }}-worker-cargo-
 
       - name: Check formatting
         run: cargo fmt --all --check
 
       - name: Test
-        run: cargo test -p api --locked
+        run: cargo test -p scope-core -p worker --locked
 
       - name: Lint
-        run: cargo clippy -p api --all-targets --locked -- -D warnings
-
-      - name: Install Node
-        uses: actions/setup-node@v6
-        with:
-          node-version: 24
-
-      - name: Check API TypeScript contract
-        working-directory: web
-        run: node scripts/check-api-contract.mjs
+        run: cargo clippy -p scope-core -p worker --all-targets --locked -- -D warnings
 
   deploy:
-    name: Deploy scope-api
+    name: Deploy scope-worker
     needs: checks
     runs-on: ubuntu-latest
     if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main'
@@ -96,7 +83,7 @@ jobs:
           rm -rf .railway-upload
           mkdir -p .railway-upload
           cp Cargo.toml Cargo.lock rust-toolchain.toml .railway-upload/
-          cp api/railpack.json .railway-upload/railpack.json
+          cp worker/railpack.json .railway-upload/railpack.json
           cp -a api .railway-upload/api
           cp -a worker .railway-upload/worker
           cp -a crates .railway-upload/crates
@@ -110,4 +97,4 @@ jobs:
           RAILWAY_DEPLOY_MESSAGE: ${{ github.event.head_commit.message || github.workflow }}
           RAILWAY_PROJECT_ID: ${{ secrets.RAILWAY_PROJECT_ID }}
           RAILWAY_TOKEN: ${{ secrets.RAILWAY_TOKEN }}
-        run: bash .github/scripts/deploy-railway.sh scope-api .railway-upload
+        run: bash .github/scripts/deploy-railway.sh scope-worker .railway-upload

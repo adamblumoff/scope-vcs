@@ -12,6 +12,7 @@ use crate::domain::store::{
     UserAccount,
 };
 use crate::{config::DEFAULT_GIT_BRANCH, error::ApiError};
+pub(crate) use scope_core::auth::device::SessionIdentity;
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Serialize)]
@@ -67,24 +68,6 @@ pub(crate) struct SessionResponse {
     pub(crate) repo: SessionRepo,
     pub(crate) principal_id: String,
     pub(crate) capabilities: SessionCapabilities,
-}
-
-#[derive(Debug, Serialize)]
-#[cfg_attr(test, derive(ts_rs::TS))]
-pub(crate) struct SessionIdentity {
-    pub(crate) user_id: String,
-    pub(crate) email: Option<String>,
-    pub(crate) email_verified: bool,
-}
-
-impl From<&UserAccount> for SessionIdentity {
-    fn from(user: &UserAccount) -> Self {
-        Self {
-            user_id: user.id.clone(),
-            email: (!user.email.is_empty()).then(|| user.email.clone()),
-            email_verified: user.email_verified,
-        }
-    }
 }
 
 #[derive(Debug, Serialize)]

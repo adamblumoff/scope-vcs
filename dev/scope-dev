@@ -17,10 +17,13 @@ OBJECT_DIR="$DATA_DIR/objects"
 KEY_FILE="$DATA_DIR/object-key.txt"
 API_PID_FILE="$STATE_DIR/api.pid"
 WEB_PID_FILE="$STATE_DIR/web.pid"
+WORKER_PID_FILE="$STATE_DIR/worker.pid"
 API_OUT_LOG="$STATE_DIR/api.out.log"
 API_ERR_LOG="$STATE_DIR/api.err.log"
 WEB_OUT_LOG="$STATE_DIR/web.out.log"
 WEB_ERR_LOG="$STATE_DIR/web.err.log"
+WORKER_OUT_LOG="$STATE_DIR/worker.out.log"
+WORKER_ERR_LOG="$STATE_DIR/worker.err.log"
 LOCAL_WEB_ORIGIN="http://localhost:3000"
 LOCAL_API_ORIGIN="http://localhost:8080"
 PUBLIC_HOST="${SCOPE_DEV_PUBLIC_HOST:-}"
@@ -122,6 +125,28 @@ get_dev_user_handle() {
   read_dotenv_value "$ROOT/.env.local" "SCOPE_DEV_USER_HANDLE"
 }
 
+local_metadata_store() {
+  local value
+  value="${SCOPE_METADATA_STORE:-}"
+  if [[ -z "$value" ]]; then
+    value="$(read_dotenv_value "$ROOT/.env.local" "SCOPE_METADATA_STORE")"
+  fi
+  printf '%s\n' "${value:-memory}"
+}
+
+local_database_url() {
+  local value
+  value="${DATABASE_URL:-}"
+  if [[ -z "$value" ]]; then
+    value="$(read_dotenv_value "$ROOT/.env.local" "DATABASE_URL")"
+  fi
+  printf '%s\n' "$value"
+}
+
+worker_enabled() {
+  [[ "$(local_metadata_store)" == "postgres" ]]
+}
+
 get_object_key() {
   ensure_dir "$DATA_DIR"
   if [[ ! -f "$KEY_FILE" ]]; then
@@ -174,6 +199,7 @@ stop_pid_file() {
 }
 
 stop_owned_processes() {
+  stop_pid_file "$WORKER_PID_FILE"
   stop_pid_file "$API_PID_FILE"
   stop_pid_file "$WEB_PID_FILE"
 }
@@ -183,19 +209,30 @@ write_api_runner() {
   local dev_email="$2"
   local dev_handle="$3"
   local object_key="$4"
+  local metadata_store database_url
+  metadata_store="$(local_metadata_store)"
+  database_url="$(local_database_url)"
   local runner="$STATE_DIR/api.sh"
+
+  if [[ "$metadata_store" != "memory" && "$metadata_store" != "postgres" ]]; then
+    echo "unsupported SCOPE_METADATA_STORE=$metadata_store" >&2
+    exit 1
+  fi
+  if [[ "$metadata_store" == "postgres" && -z "$database_url" ]]; then
+    echo "DATABASE_URL is required when SCOPE_METADATA_STORE=postgres" >&2
+    exit 1
+  fi
 
   cat > "$runner" <<EOF
 #!/usr/bin/env bash
 set -euo pipefail
-cd "$ROOT/api"
+cd "$ROOT"
 while IFS='=' read -r name _; do
   [[ "\$name" == RAILWAY_* ]] && unset "\$name"
   [[ "\$name" == SCOPE_BUCKET_* ]] && unset "\$name"
 done < <(env)
-unset DATABASE_URL
 export SCOPE_ENV="local"
-export SCOPE_METADATA_STORE="memory"
+export SCOPE_METADATA_STORE="$metadata_store"
 export SCOPE_OBJECT_STORE="filesystem"
 export SCOPE_DATA_DIR="$DATA_DIR"
 export SCOPE_OBJECT_STORE_DIR="$OBJECT_DIR"
@@ -208,13 +245,40 @@ export CLERK_JWKS_URL="$issuer/.well-known/jwks.json"
 export CLERK_AUTHORIZED_PARTIES="$CLERK_AUTHORIZED_PARTIES_VALUE"
 export SCOPE_DEV_USER_EMAIL="$dev_email"
 EOF
+  if [[ "$metadata_store" == "postgres" ]]; then
+    printf 'export DATABASE_URL=%q\n' "$database_url" >> "$runner"
+  else
+    printf 'unset DATABASE_URL\n' >> "$runner"
+  fi
   if [[ -n "$dev_handle" ]]; then
     printf 'export SCOPE_DEV_USER_HANDLE=%q\n' "$dev_handle" >> "$runner"
   else
     printf 'unset SCOPE_DEV_USER_HANDLE\n' >> "$runner"
   fi
   cat >> "$runner" <<'EOF'
-exec cargo run --features local-dev
+exec cargo run -p api --features local-dev
+EOF
+  chmod +x "$runner"
+}
+
+write_worker_runner() {
+  local database_url runner
+  database_url="$(local_database_url)"
+  runner="$STATE_DIR/worker.sh"
+
+  cat > "$runner" <<EOF
+#!/usr/bin/env bash
+set -euo pipefail
+cd "$ROOT"
+while IFS='=' read -r name _; do
+  [[ "\$name" == RAILWAY_* ]] && unset "\$name"
+  [[ "\$name" == SCOPE_BUCKET_* ]] && unset "\$name"
+done < <(env)
+export SCOPE_WORKER_ID="local-dev-worker"
+EOF
+  printf 'export DATABASE_URL=%q\n' "$database_url" >> "$runner"
+  cat >> "$runner" <<'EOF'
+exec cargo run -p worker
 EOF
   chmod +x "$runner"
 }
@@ -245,6 +309,13 @@ start_api() {
   write_api_runner "$issuer" "$dev_email" "$dev_handle" "$object_key"
   setsid "$STATE_DIR/api.sh" > "$API_OUT_LOG" 2> "$API_ERR_LOG" &
   echo "$!" > "$API_PID_FILE"
+}
+
+start_worker() {
+  worker_enabled || return 0
+  write_worker_runner
+  setsid "$STATE_DIR/worker.sh" > "$WORKER_OUT_LOG" 2> "$WORKER_ERR_LOG" &
+  echo "$!" > "$WORKER_PID_FILE"
 }
 
 start_web() {
@@ -301,6 +372,7 @@ doctor() {
   fi
 
   echo "doctor ok"
+  echo "metadata: $(local_metadata_store)"
   echo "clerk issuer: $issuer"
   echo "seed user: $dev_email"
   echo "api: $LOCAL_API_ORIGIN"
@@ -376,11 +448,13 @@ up() {
   ensure_dir "$STATE_DIR"
   ensure_dir "$DATA_DIR"
   rm -f "$API_OUT_LOG" "$API_ERR_LOG" "$WEB_OUT_LOG" "$WEB_ERR_LOG"
+  rm -f "$WORKER_OUT_LOG" "$WORKER_ERR_LOG"
   start_api
   if ! wait_http "http://localhost:8080/readyz" 45; then
     echo "api did not become ready; see $API_ERR_LOG" >&2
     exit 1
   fi
+  start_worker
   start_web
   if ! wait_http "http://localhost:3000" 45; then
     echo "web did not become ready; see $WEB_ERR_LOG" >&2
@@ -391,6 +465,11 @@ up() {
 
 status() {
   echo "api process: $(pid_status "$API_PID_FILE")"
+  if worker_enabled; then
+    echo "worker process: $(pid_status "$WORKER_PID_FILE")"
+  else
+    echo "worker process: skipped (memory metadata)"
+  fi
   echo "web process: $(pid_status "$WEB_PID_FILE")"
   if body="$(curl -fsS --max-time 3 "http://localhost:8080/readyz" 2>/dev/null)"; then
     echo "api readyz: $body"

@@ -18,11 +18,18 @@ The command starts:
 
 - web at `http://localhost:3000`
 - API at `http://localhost:8080`
+- worker when `SCOPE_METADATA_STORE=postgres`
 
-Local API runs with `cargo run --features local-dev`, in-memory metadata seeded
-with demo repositories, and filesystem object storage under `.scope/dev`. The
-script strips inherited Railway variables and refuses production-looking Clerk
-or database settings.
+Local API runs with `cargo run -p api --features local-dev`, in-memory metadata
+seeded with demo repositories by default, and filesystem object storage under
+`.scope/dev`. The script strips inherited Railway variables and refuses
+production-looking Clerk or database settings.
+
+The worker is skipped for the default in-memory metadata mode because a
+separate process cannot share that in-memory catalog. To exercise worker-owned
+outbox jobs locally, set `SCOPE_METADATA_STORE=postgres` and a safe local
+`DATABASE_URL` in the environment or root `.env.local` before running
+`./dev/scope-dev up`.
 
 `web/.env.local` must contain Clerk development keys. The script derives
 `CLERK_ISSUER` for the local API from `VITE_CLERK_PUBLISHABLE_KEY`.
