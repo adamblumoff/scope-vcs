@@ -86,6 +86,7 @@ jobs:
           cp worker/railpack.json .railway-upload/railpack.json
           cp -a api .railway-upload/api
           cp -a worker .railway-upload/worker
+          printf '%s\n' "${GITHUB_SHA:-manual}" > .railway-upload/worker/.railway-deploy-ref
           cp -a crates .railway-upload/crates
 
       - name: Install Railway CLI
