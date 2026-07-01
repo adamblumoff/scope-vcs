@@ -136,7 +136,7 @@ Railway services:
   configured issuer, authorized origins, and the API audience. The default API
   audience is `scope-api`; set `CLERK_AUDIENCE` only to override that value.
   `CLERK_AUTHORIZED_PARTIES` defaults to `SCOPE_APP_ORIGIN` when omitted.
-- `scope-core` is a Railpack Rust service built from the Rust workspace
+- `scope-worker` is a Railpack Rust service built from the Rust workspace
   root. It starts the `worker` binary, requires the same `DATABASE_URL`, and
   claims retryable outbox jobs such as projection read-model rebuilds. The API
   service owns metadata migrations and pre-alpha resets; the worker waits for
@@ -154,7 +154,7 @@ GitHub Actions deploy variables:
 - `RAILWAY_TOKEN` - repository secret used by service workflows to deploy to
   Railway after service-specific checks pass on `main`.
 - `RAILWAY_PROJECT_ID` - repository secret for the Railway project that owns
-  the `scope-api`, `scope-core`, `scope-cli`, and `scope-web` services.
+  the `scope-api`, `scope-worker`, `scope-cli`, and `scope-web` services.
 
 Railway GitHub autodeploy should stay disabled for app services when CI owns
 deploys. The service-specific workflows pass the pushed commit message to
