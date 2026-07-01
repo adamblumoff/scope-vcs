@@ -8,8 +8,11 @@ the canonical source of truth is a server-side source graph.
 
 ## Layout
 
-- `api` - Axum API, Git facade boundary, and API-owned domain modules for
-  policy, projection, Git projection, and catalog state.
+- `api` - Axum API, Git facade boundary, HTTP response contracts, and
+  request-only adapters.
+- `crates/scope-core` - durable domain, metadata persistence, object-store,
+  auth, read-model, and outbox code shared by API and worker services.
+- `worker` - background worker service that claims and executes outbox jobs.
 - `cli` - Rust `scope` CLI plus the Railway installer service that serves
   generated install scripts and CI-built CLI binaries.
 - `web` - TanStack Start control-plane UI.
@@ -17,9 +20,9 @@ the canonical source of truth is a server-side source graph.
 ## Local Checks
 
 ```bash
-(cd api && cargo fmt -- --check)
-(cd api && cargo test)
-(cd api && cargo clippy --all-targets --locked -- -D warnings)
+cargo fmt --all --check
+cargo test -p api -p scope-core -p worker --locked
+cargo clippy -p api -p scope-core -p worker --all-targets --locked -- -D warnings
 (cd cli && cargo fmt -- --check)
 (cd cli && cargo test)
 (cd cli && cargo clippy --all-targets --locked -- -D warnings)
@@ -50,9 +53,13 @@ Use the committed dev entrypoint instead of pulling Railway variables by hand:
 
 The local stack runs the web app at `http://localhost:3000` and the API at
 `http://localhost:8080`. The API is started with `--features local-dev`, uses
-ephemeral in-memory metadata seeded with local demo repositories, and stores
-encrypted local objects under `.scope/dev`. The dev launcher strips inherited
-Railway variables and refuses production-looking Clerk or database settings.
+ephemeral in-memory metadata by default, seeds local demo repositories, and
+stores encrypted local objects under `.scope/dev`. The worker process is
+started by `dev/scope-dev up` when local dev is configured with
+`SCOPE_METADATA_STORE=postgres` and `DATABASE_URL`; memory metadata stays API
+local and therefore skips the separate worker. The dev launcher strips
+inherited Railway variables and refuses production-looking Clerk or database
+settings.
 
 `web/.env.local` must contain Clerk development keys (`pk_test_` and
 `sk_test_`). The launcher derives the local API Clerk issuer from
@@ -80,9 +87,10 @@ the default local workflow is intentionally hermetic and disposable.
 
 Railway services:
 
-- `scope-api` is a Railpack Rust service rooted at `api`. Build and start the
-  `api` binary from that directory. It requires `DATABASE_URL` from the
-  Railway Postgres service and runs API-owned SeaORM migrations on startup.
+- `scope-api` is a Railpack Rust service built from the Rust workspace root.
+  It starts the `api` binary. It requires `DATABASE_URL` from the Railway
+  Postgres service and runs metadata migrations on startup through
+  `crates/scope-core`.
   Keep the API service port pinned to `8080` if `scope-web` uses the private
   URL example below.
 - `scope-cli` is a Railpack Rust service rooted at `cli`. Runtime deploys build
@@ -128,6 +136,11 @@ Railway services:
   configured issuer, authorized origins, and the API audience. The default API
   audience is `scope-api`; set `CLERK_AUDIENCE` only to override that value.
   `CLERK_AUTHORIZED_PARTIES` defaults to `SCOPE_APP_ORIGIN` when omitted.
+- `scope-worker` is a Railpack Rust service built from the Rust workspace
+  root. It starts the `worker` binary, requires the same `DATABASE_URL`, and
+  claims retryable outbox jobs such as projection read-model rebuilds. The API
+  service owns metadata migrations and pre-alpha resets; the worker waits for
+  an already-migrated schema before claiming jobs.
 - Clerk development and production instances must each define a JWT template
   named `scope_api` with an `aud` claim of `scope-api`. The web app requests
   this template for server-side API calls; missing templates cause Clerk token
@@ -141,7 +154,7 @@ GitHub Actions deploy variables:
 - `RAILWAY_TOKEN` - repository secret used by service workflows to deploy to
   Railway after service-specific checks pass on `main`.
 - `RAILWAY_PROJECT_ID` - repository secret for the Railway project that owns
-  the `scope-api`, `scope-cli`, and `scope-web` services.
+  the `scope-api`, `scope-worker`, `scope-cli`, and `scope-web` services.
 
 Railway GitHub autodeploy should stay disabled for app services when CI owns
 deploys. The service-specific workflows pass the pushed commit message to

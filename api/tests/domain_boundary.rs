@@ -5,7 +5,7 @@ use std::{
 
 #[test]
 fn domain_modules_do_not_import_outer_layers() {
-    let domain_dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("src/domain");
+    let domain_dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("../crates/scope-core/src/domain");
     let forbidden_layers = ["git", "http", "state", "db", "persistence"];
     let mut violations = Vec::new();
 

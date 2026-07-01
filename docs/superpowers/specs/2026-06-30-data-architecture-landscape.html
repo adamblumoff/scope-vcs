@@ -16,7 +16,7 @@
           <a href="#pressure">Pressure points</a>
           <a href="#north-star">North star</a>
           <a href="#roadmap">Roadmap</a>
-          <a href="#phase-4-start">Phase 4 start</a>
+          <a href="#phase-5-start">Phase 5 start</a>
         </nav>
       </div>
     </header>
@@ -31,7 +31,7 @@
           <span class="stamp">Prepared</span>
           <span class="date">2026-06-30</span>
           <span class="stamp" style="margin-top: 18px">Revised</span>
-          <span class="date">Phase 4 start</span>
+          <span class="date"><del class="plan-delete">Phase 4 start</del> <ins class="plan-add">Phase 5 start</ins></span>
           <div class="hero-links">
             <a
               href="https://linear.app/scope-vcs/project/data-architecture-improvements-4388f7444947"
@@ -51,18 +51,18 @@
 
         <div class="split">
           <div class="callout">
-            <p> <strong>Current recommendation:</strong> <del class="plan-delete" >Phase 2 is merged on main. Move next to ADA-36: normalize repository persistence around durable domain-owned fact tables, starting with the repository aggregate JSON split.</del > <ins class="plan-add" >Phase 3 is merged on main. Move next to ADA-37: materialize disposable read models, starting with live projection file trees by repo revision and audience class.</ins > </p>
+            <p> <strong>Current recommendation:</strong> <del class="plan-delete" >Phase 3 is merged on main. Move next to ADA-37: materialize disposable read models, starting with live projection file trees by repo revision and audience class.</del > <ins class="plan-add" >Phase 4 is merged on main. Move next to ADA-38: introduce a transactional outbox and a dedicated <code>scope-worker</code> Railway service, starting with worker-owned read-model rebuild jobs.</ins > </p>
           </div>
           <div class="callout phase-focus">
-            <p> <strong>Phase 4 target:</strong> <del class="plan-delete" >the repository row should stop being a catch-all JSON aggregate. Keep domain transitions authoritative, but persist repo identity, settings, tokens, source graph, visibility, and review state as queryable canonical facts.</del > <ins class="plan-add" >normal UI and API read paths should stop rebuilding every projection from the full repository aggregate. Keep canonical facts authoritative, but serve hot reads from rebuildable, versioned read-model rows.</ins > </p>
+            <p> <strong>Phase 5 target:</strong> <del class="plan-delete" >normal UI and API read paths should stop rebuilding every projection from the full repository aggregate. Keep canonical facts authoritative, but serve hot reads from rebuildable, versioned read-model rows.</del > <ins class="plan-add" >request handlers should stop owning durable side-effect execution. Commit explicit work with canonical facts, then let a worker service claim, execute, retry, and report jobs without making derived data canonical.</ins > </p>
           </div>
         </div>
       </section>
 
       <section id="changes">
         <div class="section-head">
-          <h2>Phase 4 transition</h2>
-          <p> <del class="plan-delete" >This revision moves the plan from cleanup-row extraction into repository persistence normalization. Phase 2 made cleanup side effects typed and inspectable; Phase 3 should now split canonical repository facts out of the large JSON aggregate without moving product rules into SQL.</del > <ins class="plan-add" >This revision moves the plan from repository persistence normalization into disposable read-model materialization. Phase 3 split settings, repo tokens, clone tokens, and git snapshot pointers out of the repository row; Phase 4 should now prove derived reads can be rebuilt from canonical facts without becoming a second source of truth.</ins > </p>
+          <h2>Phase 5 transition</h2>
+          <p> <del class="plan-delete" >This revision moves the plan from repository persistence normalization into disposable read-model materialization. Phase 3 split settings, repo tokens, clone tokens, and git snapshot pointers out of the repository row; Phase 4 should now prove derived reads can be rebuilt from canonical facts without becoming a second source of truth.</del > <ins class="plan-add" >This revision moves the plan from read-model materialization into worker-owned side effects. Phase 4 proved live file-tree read models can be rebuilt from canonical facts; Phase 5 should now move rebuild execution behind a transactional outbox and a deployable worker service.</ins > </p>
         </div>
 
         <div class="change-key" aria-label="Change marker legend">
@@ -78,7 +78,8 @@
               <li> <del class="plan-delete" >Phase 1 is now the active work: ADA-34 removes database writes from normal authenticated request paths.</del > <ins class="plan-add" >Phase 1 is complete on main: normal Clerk/CLI read authorization no longer performs snapshot refreshes or session last-used writes.</ins > </li>
               <li> <del class="plan-delete" >Phase 2 is now the active work: ADA-35 replaces the global metadata lock with scoped transactional invariants.</del > <ins class="plan-add" >Phase 2 is merged: cleanup queues now persist as typed SQL rows with idempotent upserts, generation fences, attempts, next-run timing, completion state, and diagnostics.</ins > </li>
               <li> <del class="plan-delete" >Phase 3 is now the active work: ADA-36 normalizes repository persistence around domain-owned tables while preserving destructive pre-alpha reset semantics.</del > <ins class="plan-add" >Phase 3 is merged: repository settings, first-push tokens, git-push tokens, git-clone tokens, and live git snapshots now persist as typed fact rows.</ins > </li>
-              <li> <ins class="plan-add" >Phase 4 is now the active work: ADA-37 materializes read models, starting with live projection file trees keyed by repo revision and audience class.</ins > </li>
+              <li> <del class="plan-delete" >Phase 4 is now the active work: ADA-37 materializes read models, starting with live projection file trees keyed by repo revision and audience class.</del > <ins class="plan-add" >Phase 4 is merged: live projection file-tree read models now persist by repo revision, source, audience class, and bounded path key, with route fallback when rows are stale or missing.</ins > </li>
+              <li> <ins class="plan-add" >Phase 5 is now the active planning topic: ADA-38 introduces transactional outbox jobs and a dedicated Railway worker service, starting with read-model rebuild execution.</ins > </li>
               <li> <ins class="plan-add" >The local benchmark harness now mints a fresh local-dev CLI session for authenticated and push cases, so stale workstation tokens no longer hide benchmark coverage.</ins > </li>
               <li> <ins class="plan-add" >Roles should be settled enough for table vocabulary now: public, member/maintainer capabilities, and owner.</ins > </li>
               <li> <ins class="plan-add" >Read models should start as audience-class based, not user-specific.</ins > </li>
@@ -88,7 +89,7 @@
           </div>
           <div>
             <h3>Now deferred</h3>
-            <p> <del class="plan-delete" >Do not start read-model materialization or the Railway worker service inside ADA-36. The next cut is canonical storage shape: facts first, derived reads and outbox execution later.</del > <ins class="plan-add" >Do not build the Railway worker service inside ADA-37. Rebuild read models synchronously from domain code in this phase, then move rebuild execution into workers after the outbox exists.</ins > </p>
+            <p> <del class="plan-delete" >Do not build the Railway worker service inside ADA-37. Rebuild read models synchronously from domain code in this phase, then move rebuild execution into workers after the outbox exists.</del > <ins class="plan-add" >Do not move every side effect at once inside ADA-38. Start with the outbox contract, worker service shell, and one safe job family: projection read-model rebuilds. Cleanup, import, publish, and Git artifact jobs follow after the worker loop is proven.</ins > </p>
           </div>
         </div>
       </section>
@@ -96,7 +97,7 @@
       <section id="phase-0-result">
         <div class="section-head">
           <h2>Phase 0 result</h2>
-          <p> The baseline does not yet expose internal lock wait or SQL query counts, but it gives us a repeatable local measurement loop. <del class="plan-delete" >It now serves as a regression guard while ADA-35 changes transaction and lock boundaries.</del > <ins class="plan-add" >It now serves as a regression guard while ADA-36 changes repository persistence shape; it is not expected to prove a speedup by itself.</ins > Internal counters stay on the instrumentation backlog. </p>
+          <p> The baseline does not yet expose internal lock wait or SQL query counts, but it gives us a repeatable local measurement loop. <del class="plan-delete" >It now serves as a regression guard while ADA-36 changes repository persistence shape; it is not expected to prove a speedup by itself.</del > <ins class="plan-add" >It now serves as a regression guard while ADA-38 moves work out of request handlers; it is not expected to prove a speedup until larger fixtures and more worker-owned job families exist.</ins > Internal counters stay on the instrumentation backlog. </p>
         </div>
 
         <div class="quad">
@@ -108,17 +109,17 @@
           <div class="cell">
             <span class="label now">Auth read</span>
             <h3>List repos</h3>
-            <p> Latest local run: auth list repos p50 <del class="plan-delete" ><code>2.04ms</code></del > <ins class="plan-add" ><code>2.33ms</code></ins >, p95 <code>2.68ms</code>, burst p95 <del class="plan-delete" ><code>6.13ms</code></del > <ins class="plan-add" ><code>4.19ms</code></ins >. <del class="plan-delete" >Phase 1 protected this route family from avoidable auth writes; Phase 2 should protect it from unrelated lock contention.</del > <ins class="plan-add" >Phase 3 should keep this as a regression guard while moving repo facts out of aggregate JSON.</ins > </p>
+            <p> Latest local run: auth list repos p50 <del class="plan-delete" ><code>2.33ms</code></del > <ins class="plan-add" ><code>2.01ms</code></ins >, p95 <del class="plan-delete"><code>2.68ms</code></del> <ins class="plan-add"><code>2.47ms</code></ins>, burst p95 <del class="plan-delete" ><code>4.19ms</code></del > <ins class="plan-add" ><code>4.05ms</code></ins >. <del class="plan-delete" >Phase 3 should keep this as a regression guard while moving repo facts out of aggregate JSON.</del > <ins class="plan-add" >Phase 5 should keep this as a regression guard while moving derived work out of request handling.</ins > </p>
           </div>
           <div class="cell">
             <span class="label now">Git write</span>
             <h3>Receive-pack</h3>
-            <p> First push with disposable generated repos measured p50 <del class="plan-delete" ><code>73.46ms</code></del > <ins class="plan-add" ><code>75.24ms</code></ins >, p95 <del class="plan-delete" ><code>83.81ms</code></del > <ins class="plan-add" ><code>146.77ms</code></ins >. This remains useful as a regression guard, not the Phase 3 target. </p>
+            <p> First push with disposable generated repos measured p50 <del class="plan-delete" ><code>75.24ms</code></del > <ins class="plan-add" ><code>75.50ms</code></ins >, p95 <del class="plan-delete" ><code>146.77ms</code></del > <ins class="plan-add" ><code>151.14ms</code></ins >. This remains useful as a regression guard, not the first Phase 5 target. </p>
           </div>
           <div class="cell">
             <span class="label medium">Gap</span>
             <h3>Lock visibility</h3>
-            <p> The harness reports external latency and status mix today. <del class="plan-delete" >Phase 2 should use code inspection and transactional tests to prove lock callers are removed or narrowed.</del > <ins class="plan-add" >Phase 3 should use schema tests, round-trip tests, and route behavior tests as primary proof; the harness is a regression signal, not the success metric.</ins > </p>
+            <p> The harness reports external latency and status mix today. <del class="plan-delete" >Phase 3 should use schema tests, round-trip tests, and route behavior tests as primary proof; the harness is a regression signal, not the success metric.</del > <ins class="plan-add" >Phase 5 should use schema tests, enqueue/claim/retry tests, worker route-fallback tests, and CI deployment checks as primary proof; the harness is a regression signal, not the success metric.</ins > </p>
           </div>
         </div>
       </section>
@@ -178,7 +179,7 @@
           <div class="cell">
             <span class="label now">Carry forward</span>
             <h3>Lock remains</h3>
-            <p> <ins class="plan-add" >Repository mutations, repo lifecycle writes, admin/reset paths, and explicit auth lifecycle flows still use the metadata lock. Phase 3 should not pretend the lock problem is solved.</ins > </p>
+            <p> <del class="plan-delete" >Repository mutations, repo lifecycle writes, admin/reset paths, and explicit auth lifecycle flows still use the metadata lock. Phase 3 should not pretend the lock problem is solved.</del > <ins class="plan-add" >Repository mutations, repo lifecycle writes, admin/reset paths, and explicit auth lifecycle flows still use the metadata lock. Phase 5 should not pretend workers solve all locking; it only moves explicit side-effect execution out of request handlers.</ins > </p>
           </div>
         </div>
       </section>
@@ -198,17 +199,17 @@
           <div class="cell">
             <span class="label now">Mixed</span>
             <h3>Persistence</h3>
-            <p> Postgres has real tables for users, auth identities, members, invites, CLI auth, repositories, and typed cleanup jobs. <del class="plan-delete" >Auth reads are cleaner after Phase 1, but broad metadata operations still coordinate through the same lock row.</del > <ins class="plan-add" >Cleanup queues are typed after Phase 2, but repository and auth lifecycle mutations still coordinate through the metadata lock.</ins > The repository table still stores graph, policy, tokens, pending import, snapshot, and staged update as JSON. </p>
+            <p> Postgres has real tables for users, auth identities, members, invites, CLI auth, repositories, typed cleanup jobs, repository fact rows, and live projection read models. <del class="plan-delete" >Cleanup queues are typed after Phase 2, but repository and auth lifecycle mutations still coordinate through the metadata lock.</del > <ins class="plan-add" >Repository and auth lifecycle mutations still coordinate through the metadata lock, and worker execution is not yet separated.</ins > <del class="plan-delete" >The repository table still stores graph, policy, tokens, pending import, snapshot, and staged update as JSON.</del > <ins class="plan-add" >The repository table still stores graph, policy, visibility events, pending import, and staged update as JSON; settings, repo tokens, clone tokens, and live git snapshots are typed fact rows.</ins > </p>
           </div>
           <div class="cell">
             <span class="label medium">Costly</span>
             <h3>Reads</h3>
-            <p> Repo detail, files, projection preview, history, and Git clone paths commonly rehydrate the full repository aggregate and replay projection logic on demand. </p>
+            <p> <del class="plan-delete" >Repo detail, files, projection preview, history, and Git clone paths commonly rehydrate the full repository aggregate and replay projection logic on demand.</del > <ins class="plan-add" >The file-list route can now use a live projection read model, but repo detail, projection preview, history, and Git clone paths still commonly rehydrate the full repository aggregate and replay projection logic on demand.</ins > </p>
           </div>
           <div class="cell">
             <span class="label high">Hot</span>
             <h3>Side effects</h3>
-            <p> Git subprocesses, object-store reads and writes, projection Git repo creation, bundle restore, and cleanup can run inline with request handling. <ins class="plan-add" >Cleanup is now represented by typed rows, but execution is still API-owned rather than worker-owned.</ins > </p>
+            <p> Git subprocesses, object-store reads and writes, projection Git repo creation, bundle restore, read-model rebuild, and cleanup can run inline with request handling. <del class="plan-delete" >Cleanup is now represented by typed rows, but execution is still API-owned rather than worker-owned.</del > <ins class="plan-add" >Cleanup and read-model state are now represented by typed rows, but execution is still API-owned rather than worker-owned.</ins > </p>
           </div>
         </div>
 
@@ -270,10 +271,16 @@
             <div class="flow-title">Aggregate</div>
             <div class="flow-text">
               A repository row is loaded and decoded into
-              <code>StoredRepository</code>, including graph, policy, token
-              state, snapshots, pending import, and staged updates.
+              <code>StoredRepository</code>, including graph, policy,
+              visibility events, pending import, and staged updates.
+              <del class="plan-delete"
+                >This aggregate decode is the main Phase 3 target.</del
+              >
               <ins class="plan-add"
-                >This aggregate decode is the main Phase 3 target.</ins
+                >Phase 3 moved settings, token state, clone tokens, and live
+                snapshot pointers out of this aggregate; Phase 5 targets
+                side-effect execution rather than another broad aggregate
+                split.</ins
               >
             </div>
           </div>
@@ -316,17 +323,17 @@
               <td><strong>Global metadata lock</strong></td>
               <td> One <code>scope_metadata_locks</code> row protects broad metadata invariants. </td>
               <td> <del class="plan-delete" >Normal auth reads are no longer the issue, but unrelated repos can still queue behind repo mutations, cleanup updates, metadata reset, and explicit lifecycle writes.</del > <ins class="plan-add" >Normal auth reads and cleanup queue storage are no longer the core issue, but unrelated repos can still queue behind repo mutations, cleanup drain reconciliation, metadata reset, and explicit lifecycle writes.</ins > </td>
-              <td> Use constraints, row-level locks, scoped repo locks, and typed job tables instead of one catalog lock. <del class="plan-delete" >This is now the Phase 2 target.</del > <ins class="plan-add" >Phase 3 should continue this only where repository fact normalization naturally narrows transaction scope.</ins > </td>
+              <td> Use constraints, row-level locks, scoped repo locks, and typed job tables instead of one catalog lock. <del class="plan-delete" >Phase 3 should continue this only where repository fact normalization naturally narrows transaction scope.</del > <ins class="plan-add" >Phase 5 should avoid holding request-owned transaction scope while executing rebuild work, but scoped locking remains a later storage/invariant pass.</ins > </td>
             </tr>
             <tr>
               <td><strong>Large repository JSON</strong></td>
-              <td> <code>scope_repositories</code> stores graph, policy, visibility events, tokens, snapshots, pending import, and staged update as JSON. </td>
+              <td> <del class="plan-delete" ><code>scope_repositories</code> stores graph, policy, visibility events, tokens, snapshots, pending import, and staged update as JSON.</del > <ins class="plan-add" ><code>scope_repositories</code> still stores graph, policy, visibility events, pending import, and staged update as JSON; settings, tokens, clone tokens, and snapshot pointers are typed rows.</ins > </td>
               <td> Normal detail/list/settings reads become sensitive to repo history size and JSON decode cost. </td>
-              <td> Split canonical facts into domain-owned tables and rehydrate full aggregate only for mutation paths. <ins class="plan-add" >This is now the Phase 3 target.</ins > </td>
+              <td> Split canonical facts into domain-owned tables and rehydrate full aggregate only for mutation paths. <del class="plan-delete" >This is now the Phase 3 target.</del > <ins class="plan-add" >This is partly landed; defer the next canonical split unless Phase 5 worker boundaries require a smaller fact surface.</ins > </td>
             </tr>
             <tr>
               <td><strong>Derived reads</strong></td>
-              <td> Projections, file trees, history, and clone artifacts are built from canonical graph data on demand. </td>
+              <td> <del class="plan-delete" >Projections, file trees, history, and clone artifacts are built from canonical graph data on demand.</del > <ins class="plan-add" >Live file trees have a disposable read model, but projection preview, history, file diffs, and clone artifacts are still built from canonical graph data on demand.</ins > </td>
               <td> Read cost tracks total repo history instead of result size. </td>
               <td> Materialize read models keyed by repo revision, source, and audience class. </td>
             </tr>
@@ -425,7 +432,7 @@
       <section id="tables">
         <div class="section-head">
           <h2>Table direction</h2>
-          <p> This is not a final schema. <del class="plan-delete" >Phase 2 used this vocabulary for cleanup/job rows; Phase 3 should now expand it into repository identity, source graph, visibility, tokens, and review facts before Phase 4 materializes read models.</del > <ins class="plan-add" >Phase 2 used this vocabulary for cleanup rows, and Phase 3 used it for repository fact rows. Phase 4 should now use the same ownership vocabulary for disposable projection read models.</ins > The important part is ownership: each table should either be canonical domain fact, disposable read model, or explicit side-effect work. </p>
+          <p> This is not a final schema. <del class="plan-delete" >Phase 2 used this vocabulary for cleanup rows, and Phase 3 used it for repository fact rows. Phase 4 should now use the same ownership vocabulary for disposable projection read models.</del > <ins class="plan-add" >Phase 2 used this vocabulary for cleanup rows, Phase 3 used it for repository fact rows, and Phase 4 used it for disposable projection read models. Phase 5 should now apply the same ownership vocabulary to transactional outbox jobs and worker execution.</ins > The important part is ownership: each table should either be canonical domain fact, disposable read model, or explicit side-effect work. </p>
         </div>
 
         <table class="matrix">
@@ -470,7 +477,7 @@
             <tr>
               <td><strong>Read models</strong></td>
               <td> <code>projection_files</code>, <code>projection_commits</code>, <code>history_entries</code>, <code>file_diff_index</code> </td>
-              <td> Serve UI and API reads in O(page size or result size), not O(total repo history). <ins class="plan-add" >Start Phase 4 with live projection file trees before projected commits, history pages, or diff indexes.</ins > </td>
+              <td> Serve UI and API reads in O(page size or result size), not O(total repo history). <del class="plan-delete" >Start Phase 4 with live projection file trees before projected commits, history pages, or diff indexes.</del > <ins class="plan-add" >Live projection file trees are landed; Phase 5 should make rebuild execution worker-owned before broadening to projected commits, history pages, or diff indexes.</ins > </td>
             </tr>
             <tr>
               <td><strong>Git artifacts</strong></td>
@@ -480,12 +487,12 @@
             <tr>
               <td><strong>Work queues</strong></td>
               <td> <code>outbox_jobs</code>, <code>cleanup_jobs</code>, <code>job_attempts</code> <ins class="plan-add" >plus the landed <code>scope_repo_storage_cleanup_jobs</code> and <code>scope_source_blob_cleanup_jobs</code>.</ins > </td>
-              <td> Make side effects explicit, idempotent, retryable, and visible to operators. <ins class="plan-add" >The worker service owns job execution; API requests own job enqueueing inside the metadata transaction.</ins > </td>
+              <td> Make side effects explicit, idempotent, retryable, and visible to operators. <del class="plan-delete" >The worker service owns job execution; API requests own job enqueueing inside the metadata transaction.</del > <ins class="plan-add" >Phase 5 should add a transactional outbox envelope for new worker-owned jobs while preserving typed cleanup rows until their execution path is migrated deliberately.</ins > </td>
             </tr>
             <tr>
               <td><strong>Worker service deployment</strong></td>
-              <td> <ins class="plan-add" ><code>api</code> crate shared modules, worker binary, service-specific Railpack config, and GitHub Actions deploy workflow.</ins > </td>
-              <td> <ins class="plan-add" >Make <code>scope-worker</code> deploy like <code>scope-api</code>, <code>scope-cli</code>, and <code>scope-web</code>: CI first, Railway deploy second, no manual service drift.</ins > </td>
+              <td> <del class="plan-delete" ><code>api</code> crate shared modules, worker binary, service-specific Railpack config, and GitHub Actions deploy workflow.</del > <ins class="plan-add" >Root Rust workspace, shared <code>crates/scope-core</code> library, thin <code>api</code> service crate, thin <code>worker</code> service crate, service-specific Railpack configs, and GitHub Actions deploy workflows.</ins > </td>
+              <td> <del class="plan-delete" >Make <code>scope-worker</code> deploy like <code>scope-api</code>, <code>scope-cli</code>, and <code>scope-web</code>: CI first, Railway deploy second, no manual service drift.</del > <ins class="plan-add" >Phase 5 should make <code>scope-worker</code> deploy like <code>scope-api</code>, <code>scope-cli</code>, and <code>scope-web</code>: CI first, Railway deploy second, no manual service drift. The structure should prevent the API crate from becoming the worker's implicit shared library.</ins > </td>
             </tr>
           </tbody>
         </table>
@@ -571,22 +578,22 @@
             </div>
           </div>
 
-          <div class="phase phase-active">
+          <div class="phase phase-done">
             <div class="phase-id">Phase 4</div>
             <div>
               <h3> <a href="https://linear.app/scope-vcs/issue/ADA-37/materialize-projection-file-tree-history-and-git-read-models" >ADA-37 - Materialize read models</a > </h3>
-              <p> <del class="plan-delete" >Precompute current file trees, projected commits, history summaries, file diff indexes, and visibility summaries by repo revision and audience class.</del > <ins class="plan-add" >Active now: precompute live projection file trees by repo revision and audience class. Keep projected commits, history summaries, and file diff indexes as the next read-model expansions.</ins > </p>
+              <p> <del class="plan-delete" >Active now: precompute live projection file trees by repo revision and audience class. Keep projected commits, history summaries, and file diff indexes as the next read-model expansions.</del > <ins class="plan-add" >Complete for this slice: live file-tree read models are materialized by repo revision and audience class, with stale/missing fallback to domain projection.</ins > </p>
             </div>
             <div class="phase-note">
-              <del class="plan-delete" >Normal UI reads should become indexed reads. Rebuild code should prove read models are disposable.</del > <ins class="plan-add" >Normal file-list reads should become indexed reads first. Rebuild code should delete and recreate rows from canonical repo facts, not mutate read models directly.</ins >
+              <del class="plan-delete" >Normal file-list reads should become indexed reads first. Rebuild code should delete and recreate rows from canonical repo facts, not mutate read models directly.</del > <ins class="plan-add" >Phase 5 can now stop doing rebuild work inside request-owned repository saves because the route already has a safe fallback path.</ins >
             </div>
           </div>
 
-          <div class="phase">
+          <div class="phase phase-active">
             <div class="phase-id">Phase 5</div>
             <div>
               <h3> <a href="https://linear.app/scope-vcs/issue/ADA-38/introduce-transactional-outbox-and-workers-for-gitimportpublishcleanup" >ADA-38 - Add outbox and workers</a > </h3>
-              <p> Commit side-effect jobs with metadata changes. Workers handle import processing, read-model rebuild, Git artifact generation, and cleanup with explicit states and retries. <ins class="plan-add" >The implementation target is a separate <code>scope-worker</code> Railway service, not an in-process API background loop.</ins > </p>
+              <p> <del class="plan-delete" >Commit side-effect jobs with metadata changes. Workers handle import processing, read-model rebuild, Git artifact generation, and cleanup with explicit states and retries.</del > <ins class="plan-add" >Active now: commit outbox jobs with metadata changes and run a separate <code>scope-worker</code> Railway service. Start with projection read-model rebuild jobs before import, publish, cleanup, or Git artifact execution.</ins > </p>
             </div>
             <div class="phase-note">
               <del class="plan-delete"
@@ -594,9 +601,9 @@
                 handlers for all expensive work.</del
               >
               <ins class="plan-add"
-                >This phase includes the repo refactor needed for shared API
-                and worker code, plus CI and Railway deployment for the worker
-                service.</ins
+                >This phase includes a narrow shared-runtime refactor, a
+                durable claim/retry job contract, local dev worker startup,
+                and CI/Railway deployment for <code>scope-worker</code>.</ins
               >
             </div>
           </div>
@@ -615,33 +622,33 @@
         </div>
       </section>
 
-      <section id="phase-4-work-order">
+      <section id="phase-5-work-order">
         <div class="section-head">
-          <h2>Phase 4 work order</h2>
-          <p> <del class="plan-delete" >The first Phase 3 PR should be a narrow repository persistence split, not a read-model rewrite. Preserve domain behavior, keep destructive reset available, and prove that facts can move out of repository JSON without creating a second source of truth.</del > <ins class="plan-add" >The first Phase 4 PR should be a narrow read-model slice, not a worker or full history rewrite. Preserve domain projection behavior, store derived rows as disposable products, and prove one hot read can use an indexed model without creating a second source of truth.</ins > </p>
+          <h2>Phase 5 work order</h2>
+          <p> <del class="plan-delete" >The first Phase 4 PR should be a narrow read-model slice, not a worker or full history rewrite. Preserve domain projection behavior, store derived rows as disposable products, and prove one hot read can use an indexed model without creating a second source of truth.</del > <ins class="plan-add" >The first Phase 5 PR should be a narrow worker/outbox slice, not a rewrite of import, publish, cleanup, and Git artifact execution all at once. Preserve domain behavior, commit jobs transactionally, and prove one disposable job family can move out of request handling.</ins > </p>
         </div>
 
         <div class="triple">
           <div class="cell">
             <span class="label now">1</span>
-            <h3>Pick the first read model</h3>
-            <p> <del class="plan-delete" >Trace every field currently encoded on <code>scope_repositories</code>: settings, tokens, pending import, policy, graph, visibility events, git snapshot, and staged update. Classify each as canonical fact, review state, token state, or disposable artifact pointer.</del > <ins class="plan-add" >Start with live projection file trees because they are small, route-visible, easy to key by repo revision, and independent from projected commit/history pagination semantics.</ins > </p>
+            <h3>Pick the first worker job</h3>
+            <p> <del class="plan-delete" >Start with live projection file trees because they are small, route-visible, easy to key by repo revision, and independent from projected commit/history pagination semantics.</del > <ins class="plan-add" >Start with projection read-model rebuilds because they are disposable, idempotent by repo version, and already protected by route fallback when rows are stale or missing.</ins > </p>
           </div>
           <div class="cell">
             <span class="label now">2</span>
-            <h3>Key by revision and audience</h3>
-            <p> <del class="plan-delete" >Start with rows that reduce decode cost and transaction ambiguity without forcing full graph normalization: repo settings, repo token state, and repository artifact pointers are safer first candidates than the full source graph.</del > <ins class="plan-add" >Store read-model rows by repo id, repo version, source, and audience class. Use <code>live/private</code> and <code>live/public</code> first; defer review-source models until review routes need them.</ins > </p>
+            <h3>Define the outbox envelope</h3>
+            <p> <del class="plan-delete" >Store read-model rows by repo id, repo version, source, and audience class. Use <code>live/private</code> and <code>live/public</code> first; defer review-source models until review routes need them.</del > <ins class="plan-add" >Create an explicit job envelope with kind, idempotency key, target repo/version, payload, state, attempt count, next run time, lease fields, timestamps, and last error.</ins > </p>
           </div>
           <div class="cell">
             <span class="label now">3</span>
-            <h3>Rebuild from domain projection</h3>
-            <p> <del class="plan-delete" >Have domain operations still return one behavior-owned mutation/effects result. Persistence should fan that result into rows; SQL should not independently decide visibility, publication, cleanup, or token rules.</del > <ins class="plan-add" >Rebuild disposable rows from the existing domain projection functions whenever canonical repository state is saved. SQL stores the output; it does not decide visibility or projection semantics.</ins > </p>
+            <h3>Ship a real worker service</h3>
+            <p> <del class="plan-delete" >Rebuild disposable rows from the existing domain projection functions whenever canonical repository state is saved. SQL stores the output; it does not decide visibility or projection semantics.</del > <ins class="plan-add" >Add a worker binary/service that claims jobs, runs handlers, records success or retryable failure, and deploys through its own Railway service and GitHub Actions workflow.</ins > </p>
           </div>
         </div>
 
         <div class="band">
           <div class="callout">
-            <p> <strong>Implementation rule:</strong> <del class="plan-delete" >no Phase 3 change should shadow-write old and new repository storage shapes for compatibility. This is pre-alpha: update the schema, update the loader/saver, update tests, and delete the obsolete JSON column for that slice.</del > <ins class="plan-add" >no Phase 4 read model is canonical. If a read-model row is stale or missing, the system may rebuild or fall back to domain projection; mutations must still write canonical repository facts first.</ins > </p>
+            <p> <strong>Implementation rule:</strong> <del class="plan-delete" >no Phase 4 read model is canonical. If a read-model row is stale or missing, the system may rebuild or fall back to domain projection; mutations must still write canonical repository facts first.</del > <ins class="plan-add" >no Phase 5 worker job is allowed to invent product state. API/domain writes own canonical facts and enqueue jobs in the same transaction; workers only execute explicit, idempotent side effects from those facts.</ins > </p>
           </div>
         </div>
       </section>
@@ -727,101 +734,127 @@
       <section id="conversation">
         <div class="section-head">
           <h2>Conversation agenda</h2>
-          <p> <del class="plan-delete" >The Phase 3 conversation should focus on repository aggregate ownership: which JSON fields become canonical rows first, how the domain transition API stays authoritative, and which obsolete JSON columns can be deleted in the first destructive reset.</del > <ins class="plan-add" >The Phase 4 conversation should focus on read-model ownership: which reads are hottest, which models can be rebuilt synchronously first, and how stale or missing rows fall back without becoming canonical state.</ins > </p>
+          <p> <del class="plan-delete" >The Phase 4 conversation should focus on read-model ownership: which reads are hottest, which models can be rebuilt synchronously first, and how stale or missing rows fall back without becoming canonical state.</del > <ins class="plan-add" >The Phase 5 conversation should focus on worker ownership: which side effect moves first, what the transactional job envelope guarantees, how workers claim/retry jobs, and how Railway deploys the worker without manual drift.</ins > </p>
         </div>
 
         <ol>
-          <li> <del class="plan-delete" >Inventory repository JSON fields and assign each one an owner: repo identity/settings, token state, source graph, visibility, review state, or artifact pointer.</del > <ins class="plan-add" >Inventory hot read paths: file list, projection preview, history list, commit detail, file diff, and Git projection artifact creation.</ins > </li>
-          <li> <del class="plan-delete" >Pick the first small split, with a bias toward settings, token state, or artifact pointers before the full source graph.</del > <ins class="plan-add" >Pick the first model: live projection file tree, keyed by repo revision, source, and audience class.</ins > </li>
-          <li> <del class="plan-delete" >Agree that the source graph stays canonical and read models are disposable.</del > <ins class="plan-add" >Keep the source graph and policy canonical; read-model rows are disposable rebuild products.</ins > </li>
-          <li> <del class="plan-delete" >Use schema inventory, round-trip tests, route behavior tests, and domain boundary tests as primary proof for ADA-36.</del > <ins class="plan-add" >Use schema inventory, route behavior tests, read-model builder tests, local clippy/tests, and the Phase 0 harness as primary proof for ADA-37.</ins > </li>
-          <li> <del class="plan-delete" >The next cut is chosen: normalize the repository row before building read models.</del > <ins class="plan-add" >The next cut is chosen: serve the file-list route from a fresh read model when one exists.</ins > </li>
-          <li> <del class="plan-delete" >Keep worker deployment and read-model rebuilds deferred; Phase 3 should only enqueue or preserve effects already required by the domain mutation.</del > <ins class="plan-add" >Keep worker deployment deferred; Phase 4 can rebuild synchronously until Phase 5 introduces outbox-owned worker execution.</ins > </li>
+          <li> <del class="plan-delete" >Inventory hot read paths: file list, projection preview, history list, commit detail, file diff, and Git projection artifact creation.</del > <ins class="plan-add" >Inventory side-effect surfaces: read-model rebuild, cleanup queues, import processing, publish/apply work, Git projection artifacts, and object-store deletes.</ins > </li>
+          <li> <del class="plan-delete" >Pick the first model: live projection file tree, keyed by repo revision, source, and audience class.</del > <ins class="plan-add" >Pick the first worker job: projection read-model rebuild, keyed by repo id, repo version, source, and audience class semantics.</ins > </li>
+          <li> <del class="plan-delete" >Keep the source graph and policy canonical; read-model rows are disposable rebuild products.</del > <ins class="plan-add" >Keep source graph, policy, and repo facts canonical; outbox rows are commands to derive or clean up state, not product state themselves.</ins > </li>
+          <li> <del class="plan-delete" >Use schema inventory, route behavior tests, read-model builder tests, local clippy/tests, and the Phase 0 harness as primary proof for ADA-37.</del > <ins class="plan-add" >Use schema inventory, transactional enqueue tests, worker claim/retry tests, route fallback tests, local clippy/tests, CI workflow checks, and the Phase 0 harness as primary proof for ADA-38.</ins > </li>
+          <li> <del class="plan-delete" >The next cut is chosen: serve the file-list route from a fresh read model when one exists.</del > <ins class="plan-add" >The next cut is chosen: enqueue read-model rebuild jobs transactionally and let <code>scope-worker</code> execute them.</ins > </li>
+          <li> <del class="plan-delete" >Keep worker deployment deferred; Phase 4 can rebuild synchronously until Phase 5 introduces outbox-owned worker execution.</del > <ins class="plan-add" >Keep cleanup, import, publish, and Git artifact execution deferred until the first worker loop is landed and observable.</ins > </li>
         </ol>
       </section>
 
-      <section id="phase-4-start">
+      <section id="phase-5-start">
         <div class="section-head">
-          <h2>How I will start Phase 4</h2>
-          <p> <del class="plan-delete" >Phase 3 should normalize repository persistence without weakening domain-owned behavior. The work starts with the repository row encode/decode boundary, not with projection read models or workers.</del > <ins class="plan-add" >Phase 4 should materialize reads without weakening domain-owned projection semantics. The work starts with live projection file trees, not history pagination, file diff indexes, or worker deployment.</ins > </p>
+          <h2>How I will start Phase 5</h2>
+          <p> <del class="plan-delete" >Phase 4 should materialize reads without weakening domain-owned projection semantics. The work starts with live projection file trees, not history pagination, file diff indexes, or worker deployment.</del > <ins class="plan-add" >Phase 5 should move side-effect execution out of request handlers without weakening domain-owned transitions. The work starts with a transactional outbox and worker-owned read-model rebuilds, not import/publish rewrites or cleanup execution.</ins > </p>
         </div>
 
         <div class="timeline">
           <div class="phase">
             <div class="phase-id">Start 1</div>
             <div>
-              <h3>Define the read-model key</h3>
-              <p> <del class="plan-delete" >Trace <code>entities::repository::Model::from_domain</code>, <code>try_into_domain</code>, and every column on <code>scope_repositories</code>. Record each field's owner, route surfaces, mutation surfaces, and test coverage.</del > <ins class="plan-add" >Create read-model metadata keyed by repo id, repo version, source, and audience class. Use <code>live/private</code> and <code>live/public</code> first.</ins > </p>
+              <h3>Restructure service ownership</h3>
+              <p> <del class="plan-delete" >Create read-model metadata keyed by repo id, repo version, source, and audience class. Use <code>live/private</code> and <code>live/public</code> first.</del > <ins class="plan-add" >Introduce a root Rust workspace with a shared <code>crates/scope-core</code> library and thin service crates for <code>api</code> and <code>worker</code>. Move durable domain, persistence, database, object-store, Git, and job contracts into <code>scope-core</code>; keep HTTP routes, response types, TypeScript export glue, and request-only auth adapters in <code>api</code>; keep polling, job claiming, job handlers, and worker lifecycle in <code>worker</code>.</ins > </p>
             </div>
             <div class="phase-note">
-              Output: a disposable model row that can identify stale file-tree
-              data without reading the whole repository graph.
+              Output: shared code has a named home before the worker exists.
+              The API crate should stay a delivery layer, not the worker's
+              dependency dumping ground.
             </div>
           </div>
 
           <div class="phase">
             <div class="phase-id">Start 2</div>
             <div>
-              <h3>Store live file rows</h3>
-              <p> <del class="plan-delete" >Prefer a slice that can be proven independently: <code>repo_settings</code>, repo token rows, or artifact pointer rows. Defer <code>graph</code>, <code>policy</code>, and review state until the save/load pattern is proven.</del > <ins class="plan-add" >Create projection file rows with path, oid, visibility, source, audience, and repo version. The rows should be deleted and recreated from domain projection output.</ins > </p>
+              <h3>Define the worker boundary</h3>
+              <p> <ins class="plan-add" >Expose only the shared runtime facade the worker needs: metadata connection setup, object-store setup, job repository APIs, and read-model rebuild handlers. Keep module visibility narrow; do not make every existing API module public just to make the worker compile.</ins > </p>
             </div>
             <div class="phase-note">
-              Output: indexed file-tree reads for the route shape that already
-              powers repo file lists.
+              Output: <code>scope-worker</code> has a real binary/service shape
+              without forcing a broad module visibility rewrite.
             </div>
           </div>
 
           <div class="phase">
             <div class="phase-id">Start 3</div>
             <div>
-              <h3>Rebuild on canonical save</h3>
-              <p> <del class="plan-delete" >Keep the domain mutation result whole, but teach Postgres persistence to write the selected fact rows and load them back into <code>StoredRepository</code>. Avoid SQL-side business branching.</del > <ins class="plan-add" >Whenever repository persistence saves canonical state, rebuild the live file-tree read models in the same transaction. Keep read-model generation synchronous until workers exist.</ins > </p>
+              <h3>Create the outbox schema</h3>
+              <p> <del class="plan-delete" >Create projection file rows with path, oid, visibility, source, audience, and repo version. The rows should be deleted and recreated from domain projection output.</del > <ins class="plan-add" >Create durable outbox/job rows with idempotency keys, job kind, target repo/version, payload, state, attempt count, next-run time, lease owner, lease expiry, timestamps, and last error.</ins > </p>
             </div>
             <div class="phase-note">
-              Output: saved repository state and derived file-tree rows stay
-              version-aligned.
+              Output: API writes can commit canonical facts and explicit work
+              in one metadata transaction.
             </div>
           </div>
 
           <div class="phase">
             <div class="phase-id">Start 4</div>
             <div>
-              <h3>Read through the model safely</h3>
-              <p> <del class="plan-delete" >Update the schema inventory and destructive pre-alpha reset behavior for the new table shape. Do not write compatibility migrations for obsolete repository JSON columns.</del > <ins class="plan-add" >Teach the file-list route to use a fresh model when Postgres has one. If rows are stale, missing, or internally inconsistent, fall back to domain projection instead of trusting partial derived state.</ins > </p>
+              <h3>Enqueue read-model rebuilds</h3>
+              <p> <del class="plan-delete" >Whenever repository persistence saves canonical state, rebuild the live file-tree read models in the same transaction. Keep read-model generation synchronous until workers exist.</del > <ins class="plan-add" >When repository persistence saves canonical state, enqueue one idempotent read-model rebuild job for the saved repo version. The request path should no longer execute the rebuild directly once the worker path is proven.</ins > </p>
             </div>
             <div class="phase-note">
-              Output: user-visible behavior stays stable while the read path
-              starts moving off full aggregate replay.
+              Output: repository writes become facts plus commands, while
+              <code>/files</code> keeps its Phase 4 fallback for missing rows.
             </div>
           </div>
 
           <div class="phase">
             <div class="phase-id">Start 5</div>
             <div>
-              <h3>Prove behavior and boundaries</h3>
-              <p> <del class="plan-delete" >Run route behavior tests, repository round-trip tests, schema inventory tests, domain boundary tests, and the Phase 0 harness as a regression check. Success is storage shape clarity, not a guaranteed speedup.</del > <ins class="plan-add" >Run schema inventory tests, read-model builder tests, route behavior tests, clippy, local-dev API tests, and the Phase 0 benchmark harness. Success is read-model correctness and fallback safety, not guaranteed speedup yet.</ins > </p>
+              <h3>Run claim, execute, retry</h3>
+              <p> <del class="plan-delete" >Teach the file-list route to use a fresh model when Postgres has one. If rows are stale, missing, or internally inconsistent, fall back to domain projection instead of trusting partial derived state.</del > <ins class="plan-add" >Teach <code>scope-worker</code> to claim ready jobs with a lease, execute the read-model handler idempotently, mark success, and record retryable failure with backoff and diagnostics.</ins > </p>
             </div>
             <div class="phase-note">
-              Output: ADA-37 starts with one disposable read model wired to one
-              route and no user-facing behavior drift.
+              Output: worker crashes leave jobs visible and retryable instead
+              of silently dropping side effects.
+            </div>
+          </div>
+
+          <div class="phase">
+            <div class="phase-id">Start 6</div>
+            <div>
+              <h3>Wire local dev and Railway</h3>
+              <p> <del class="plan-delete" >Run schema inventory tests, read-model builder tests, route behavior tests, clippy, local-dev API tests, and the Phase 0 benchmark harness. Success is read-model correctness and fallback safety, not guaranteed speedup yet.</del > <ins class="plan-add" >Add local worker startup to the dev process and add <code>scope-worker</code> Railpack/GitHub Actions deployment parallel to the existing API, web, and CLI service deploys.</ins > </p>
+            </div>
+            <div class="phase-note">
+              Output: the worker is not a local-only binary; it is a deployable
+              service with the same CI discipline as the other services.
+            </div>
+          </div>
+
+          <div class="phase">
+            <div class="phase-id">Start 7</div>
+            <div>
+              <h3>Prove behavior and boundaries</h3>
+              <p> <del class="plan-delete" >Do not build the outbox, Railway worker service, projected commit tables, history pages, diff indexes, or Git artifact registry in the first Phase 4 PR. Land the file-tree model first.</del > <ins class="plan-add" >Run schema inventory tests, transactional enqueue tests, worker claim/retry tests, route fallback tests, clippy, local-dev API tests, and the Phase 0 benchmark harness.</ins > </p>
+            </div>
+            <div class="phase-note">
+              Output: one worker-owned job family is live and observable. If
+              the service refactor gets broad, land outbox schema plus worker
+              skeleton before migrating more job types.
             </div>
           </div>
 
           <div class="phase">
             <div class="phase-id">Guardrail</div>
             <div>
-              <h3>Do not overbuild Phase 4</h3>
-              <p> <del class="plan-delete" >Do not materialize projection/history read models, build the Railway worker service, or redesign Git artifact generation inside ADA-36. If the first split gets broad, stop at a smaller fact family.</del > <ins class="plan-add" >Do not build the outbox, Railway worker service, projected commit tables, history pages, diff indexes, or Git artifact registry in the first Phase 4 PR. Land the file-tree model first.</ins > </p>
+              <h3>Do not overbuild Phase 5</h3>
+              <p> <ins class="plan-add" >Do not move import processing, publish/apply, cleanup execution, Git artifact generation, projected commit tables, history pages, or diff indexes in the first Phase 5 PR. Prove the job contract and worker service with read-model rebuilds first.</ins > </p>
             </div>
             <div class="phase-note">
-              Output: a narrow read-model refactor. If the route integration
-              gets broad, land the tables and rebuild helper first.
+              Output: a narrow worker refactor. The next job families become
+              follow-up PRs after the claim/retry/deploy loop is boring.
             </div>
           </div>
         </div>
       </section>
 
-      <p class="print-note"> This is a discussion artifact, not an approved implementation spec. It reflects the repo state, Linear backlog, merged Phase 0 benchmark work, landed Phase 1 auth-read work, merged Phase 2 cleanup-row work, merged Phase 3 repository-persistence work, and Phase 4 read-model direction as of 2026-07-01. </p>
+      <p class="print-note"> This is a discussion artifact, not an approved implementation spec. It reflects the repo state, Linear backlog, merged Phase 0 benchmark work, landed Phase 1 auth-read work, merged Phase 2 cleanup-row work, merged Phase 3 repository-persistence work, merged Phase 4 read-model work, and Phase 5 worker/outbox direction as of 2026-07-01. </p>
     </main>
   </body>
 </html>

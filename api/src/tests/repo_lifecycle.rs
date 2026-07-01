@@ -232,6 +232,7 @@ fn db_metadata_store_round_trips_repo_metadata() {
         .unwrap()
         .expect("row repo loads after settings update");
     assert_eq!(row_repo.settings, updated_settings);
+    let settings_change_version = row_repo.record.change_version;
     assert_eq!(row_repo.record.default_visibility, Visibility::Private);
     assert_eq!(
         row_repo
@@ -244,6 +245,19 @@ fn db_metadata_store_round_trips_repo_metadata() {
             .policy
             .effective_visibility(&ScopePath::parse("/README.md").unwrap()),
         Visibility::Public
+    );
+    let repeated_settings_update = fresh_metadata
+        .update_repo_settings(
+            TEST_REPO_OWNER,
+            TEST_REPO_NAME,
+            &owner_id,
+            updated_settings,
+            Visibility::Private,
+        )
+        .unwrap();
+    assert_eq!(
+        repeated_settings_update.record.change_version,
+        settings_change_version
     );
 
     fresh_metadata
@@ -295,6 +309,68 @@ fn db_metadata_store_round_trips_repo_metadata() {
         Visibility::Private
     );
     assert_eq!(row_repo.graph, updated_repo.graph);
+}
+
+#[test]
+fn db_metadata_worker_rebuilds_projection_read_models_from_outbox() {
+    let Some(test_db) = crate::db::TestDatabaseTarget::from_env().unwrap() else {
+        eprintln!("skipping DB metadata worker test; SCOPE_TEST_DATABASE_URL is not set");
+        return;
+    };
+
+    let owner = UserAccount {
+        id: test_owner_id(),
+        handle: TEST_REPO_OWNER.to_string(),
+        email: TEST_OWNER_EMAIL.to_string(),
+        email_verified: true,
+        access: AccountAccess::Member,
+    };
+    let repo = repo_with_readme();
+    let metadata = crate::db::MetadataStore::connect_fresh_for_tests(&test_db).unwrap();
+    metadata
+        .seed_catalog_for_tests(AppCatalog {
+            users: BTreeMap::from([(owner.id.clone(), owner)]),
+            repositories: BTreeMap::from([(repo.record.id.clone(), repo)]),
+            pending_repo_storage_deletions: Vec::new(),
+            pending_source_blob_deletions: Vec::new(),
+        })
+        .unwrap();
+
+    assert_eq!(
+        metadata
+            .projection_read_model_count_for_tests(TEST_REPO_ID)
+            .unwrap(),
+        0
+    );
+    assert_eq!(
+        metadata.outbox_job_counts_for_tests().unwrap(),
+        crate::db::OutboxJobCounts {
+            ready: 1,
+            total: 1,
+            ..crate::db::OutboxJobCounts::default()
+        }
+    );
+
+    let summary = metadata
+        .run_ready_outbox_jobs("test-worker", 10)
+        .expect("worker drains ready outbox job");
+    assert_eq!(summary.claimed, 1);
+    assert_eq!(summary.completed, 1);
+    assert_eq!(summary.failed, 0);
+    assert_eq!(
+        metadata
+            .projection_read_model_count_for_tests(TEST_REPO_ID)
+            .unwrap(),
+        2
+    );
+    assert_eq!(
+        metadata.outbox_job_counts_for_tests().unwrap(),
+        crate::db::OutboxJobCounts {
+            succeeded: 1,
+            total: 1,
+            ..crate::db::OutboxJobCounts::default()
+        }
+    );
 }
 
 #[tokio::test]
