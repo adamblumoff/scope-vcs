@@ -214,8 +214,9 @@ pub(crate) async fn get_files(
     let user = optional_scope_user(&state, &headers).await?;
     let principal = principal_for_scope_user(&repo, user.as_ref());
     ensure_repo_read(&state, &repo, &principal)?;
+    let files = state.metadata.live_projection_files(&repo, &principal)?;
 
-    Ok(Json(projected_files(&repo, &principal)?))
+    Ok(Json(projection_file_responses(files)))
 }
 
 pub(crate) async fn update_file_visibility(

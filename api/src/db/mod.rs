@@ -9,6 +9,7 @@ mod entities;
 mod locks;
 mod metadata_reset;
 mod metadata_schema;
+mod projection_read_models;
 mod publish_apply;
 mod push_staging;
 mod repo_change_notifications;
@@ -21,6 +22,7 @@ mod repo_tokens;
 mod repository_rows;
 mod runtime;
 mod schema;
+mod schema_read_models;
 mod schema_repository_facts;
 #[cfg(test)]
 mod test_support;

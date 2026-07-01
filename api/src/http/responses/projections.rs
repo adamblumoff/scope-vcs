@@ -6,8 +6,7 @@ use crate::domain::{
         ProjectionPreviewFile, ProjectionPreviewSummary, ProjectionSource, ProjectionViewFile,
         files_for_visibility_update as domain_files_for_visibility_update,
         pending_import_files as domain_pending_import_files,
-        pending_scope_path as domain_pending_scope_path, projected_files as domain_projected_files,
-        projection_preview,
+        pending_scope_path as domain_pending_scope_path, projection_preview,
     },
     store::StoredRepository,
 };
@@ -208,14 +207,8 @@ pub(crate) fn projection_preview_response(
     })
 }
 
-pub(crate) fn projected_files(
-    repo: &StoredRepository,
-    principal: &Principal,
-) -> Result<Vec<RepoFileResponse>, ApiError> {
-    Ok(domain_projected_files(repo, principal)
-        .into_iter()
-        .map(repo_file_response)
-        .collect())
+pub(crate) fn projection_file_responses(files: Vec<ProjectionViewFile>) -> Vec<RepoFileResponse> {
+    files.into_iter().map(repo_file_response).collect()
 }
 
 pub(crate) fn pending_import_files(
