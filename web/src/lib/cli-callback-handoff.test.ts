@@ -1,6 +1,9 @@
 import { strict as assert } from 'node:assert'
 import test from 'node:test'
-import { parseCliCallbackHandoffUrl } from './cli-callback-handoff'
+import {
+  handOffCliCallbackToLocalCli,
+  parseCliCallbackHandoffUrl,
+} from './cli-callback-handoff'
 
 test('parseCliCallbackHandoffUrl accepts loopback CLI callbacks', () => {
   assert.equal(
@@ -44,4 +47,31 @@ test('parseCliCallbackHandoffUrl rejects non-local callbacks', () => {
       'http://127.0.0.1:61353/other?request_id=cli_browser_123',
     ),
   )
+})
+
+test('handOffCliCallbackToLocalCli uses top-level navigation for valid callbacks', () => {
+  const assigned: string[] = []
+  const callback =
+    'http://127.0.0.1:61353/scope-cli-callback?request_id=cli_browser_123&code=scope_callback_456'
+
+  handOffCliCallbackToLocalCli(callback, {
+    assign(url: string) {
+      assigned.push(url)
+    },
+  })
+
+  assert.deepEqual(assigned, [callback])
+})
+
+test('handOffCliCallbackToLocalCli rejects invalid callbacks before navigation', () => {
+  const assigned: string[] = []
+
+  assert.throws(() =>
+    handOffCliCallbackToLocalCli('https://scopevcs.com/scope-cli-callback', {
+      assign(url: string) {
+        assigned.push(url)
+      },
+    }),
+  )
+  assert.deepEqual(assigned, [])
 })

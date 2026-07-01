@@ -1,7 +1,10 @@
 export const CLI_CALLBACK_FALLBACK_DELAY_MS = 3000
+export const CLI_CALLBACK_HANDOFF_DELAY_MS = 50
 
 const CLI_CALLBACK_PATH = '/scope-cli-callback'
 const LOOPBACK_HOSTS = new Set(['127.0.0.1', 'localhost', '[::1]'])
+
+type CallbackLocation = Pick<Location, 'assign'>
 
 export function parseCliCallbackHandoffUrl(value: string): string {
   let url: URL
@@ -21,4 +24,11 @@ export function parseCliCallbackHandoffUrl(value: string): string {
   }
 
   return url.toString()
+}
+
+export function handOffCliCallbackToLocalCli(
+  value: string,
+  location: CallbackLocation,
+) {
+  location.assign(parseCliCallbackHandoffUrl(value))
 }

@@ -50,6 +50,7 @@ mod commit_history;
 mod cors;
 mod device_login;
 mod git_http;
+mod git_import_validation;
 mod git_receive;
 mod obsolete_routes;
 mod readiness;

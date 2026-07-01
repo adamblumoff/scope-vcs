@@ -14,6 +14,8 @@ import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import {
   CLI_CALLBACK_FALLBACK_DELAY_MS,
+  CLI_CALLBACK_HANDOFF_DELAY_MS,
+  handOffCliCallbackToLocalCli,
   parseCliCallbackHandoffUrl,
 } from '@/lib/cli-callback-handoff'
 import { SignInButton, useUser } from '@clerk/tanstack-react-start'
@@ -59,7 +61,10 @@ function CliLoginRoute() {
       return
     }
 
-    const timeout = window.setTimeout(() => {
+    const handoff = window.setTimeout(() => {
+      handOffCliCallbackToLocalCli(callbackUrl, window.location)
+    }, CLI_CALLBACK_HANDOFF_DELAY_MS)
+    const fallback = window.setTimeout(() => {
       setState((current) =>
         current.kind === 'callback-handoff' &&
         current.callbackUrl === callbackUrl
@@ -68,7 +73,10 @@ function CliLoginRoute() {
       )
     }, CLI_CALLBACK_FALLBACK_DELAY_MS)
 
-    return () => window.clearTimeout(timeout)
+    return () => {
+      window.clearTimeout(handoff)
+      window.clearTimeout(fallback)
+    }
   }, [callbackUrl])
 
   async function authorizeCli(event: FormEvent<HTMLFormElement>) {
@@ -128,57 +136,43 @@ function CliLoginRoute() {
           </PageErrorAlert>
         )}
 
-        {(state.kind === 'complete' || state.kind === 'callback-handoff') && (
+        {state.kind === 'complete' && (
           <Alert className="mt-6">
             <CheckCircle2 className="size-4" />
             <AlertTitle>CLI authorized</AlertTitle>
             <AlertDescription>
               <p>Return to your terminal.</p>
-              {state.kind === 'callback-handoff' &&
-                state.fallbackAvailable && (
-                  <div className="mt-3 flex flex-col items-start gap-2">
-                    <p>
-                      If your terminal is still waiting, finish the local CLI
-                      callback manually.
-                    </p>
-                    <Button
-                      asChild
-                      className="no-underline hover:no-underline"
-                      size="sm"
-                      variant="secondary"
-                    >
-                      <a href={state.callbackUrl}>Finish terminal login</a>
-                    </Button>
-                  </div>
-                )}
             </AlertDescription>
           </Alert>
         )}
 
         {state.kind === 'callback-handoff' && (
-          <iframe
-            aria-hidden="true"
-            className="sr-only"
-            onError={() =>
-              setState((current) =>
-                current.kind === 'callback-handoff' &&
-                current.callbackUrl === state.callbackUrl
-                  ? { ...current, fallbackAvailable: true }
-                  : current,
-              )
-            }
-            onLoad={() =>
-              setState((current) =>
-                current.kind === 'callback-handoff' &&
-                current.callbackUrl === state.callbackUrl
-                  ? { kind: 'complete' }
-                  : current,
-              )
-            }
-            sandbox=""
-            src={state.callbackUrl}
-            title="Scope CLI local callback"
-          />
+          <Alert className="mt-6">
+            <LoaderCircle className="size-4 animate-spin" />
+            <AlertTitle>Opening CLI callback</AlertTitle>
+            <AlertDescription>
+              <p>
+                Your browser is opening the local Scope CLI callback to finish
+                this login.
+              </p>
+              {state.fallbackAvailable && (
+                <div className="mt-3 flex flex-col items-start gap-2">
+                  <p>
+                    If your terminal is still waiting, finish the local CLI
+                    callback manually.
+                  </p>
+                  <Button
+                    asChild
+                    className="no-underline hover:no-underline"
+                    size="sm"
+                    variant="secondary"
+                  >
+                    <a href={state.callbackUrl}>Finish terminal login</a>
+                  </Button>
+                </div>
+              )}
+            </AlertDescription>
+          </Alert>
         )}
 
         {!isTerminalLoginComplete(state) && browserRequestId && (
