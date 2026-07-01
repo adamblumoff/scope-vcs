@@ -1,13 +1,13 @@
 use super::{
-    MetadataStore, MetadataStoreInner, acquire_metadata_write_lock, encode_json, entities,
-    repository_from_model, run_api_db_on,
+    MetadataStore, MetadataStoreInner, acquire_metadata_write_lock, entities,
+    repository_from_model, repository_rows::save_repository_fact_rows, run_api_db_on,
 };
 use crate::domain::{
     repo_actions::ensure_repo_member,
     store::{GitCloneToken, RepoPublicationState, repo_id},
 };
 use crate::error::ApiError;
-use sea_orm::{ColumnTrait, EntityTrait, QueryFilter, TransactionTrait, sea_query::Expr};
+use sea_orm::{EntityTrait, TransactionTrait};
 use std::sync::Arc;
 
 impl MetadataStore {
@@ -40,15 +40,7 @@ impl MetadataStore {
                     ensure_published_for_clone(&repo)?;
                     append_clone_token(&mut repo.git_clone_tokens, git_clone_token.clone());
 
-                    entities::repository::Entity::update_many()
-                        .filter(entities::repository::Column::Id.eq(repo_id))
-                        .col_expr(
-                            entities::repository::Column::GitCloneTokens,
-                            Expr::value(encode_json(&repo.git_clone_tokens)?),
-                        )
-                        .exec(&tx)
-                        .await
-                        .map_err(ApiError::internal)?;
+                    save_repository_fact_rows(&tx, &repo).await?;
                     tx.commit().await.map_err(ApiError::internal)?;
                     Ok(git_clone_token)
                 })
