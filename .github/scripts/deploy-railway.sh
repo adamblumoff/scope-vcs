@@ -31,7 +31,7 @@ deploy_message_from_event() {
   fi
 }
 
-ensure_service_exists() {
+service_exists() {
   local service_name="$1"
   local services_json
 
@@ -42,9 +42,81 @@ ensure_service_exists() {
       --json
   )"
 
-  if ! SERVICES_JSON="$services_json" SERVICE_NAME="$service_name" node -e 'const services = JSON.parse(process.env.SERVICES_JSON || "[]"); const name = process.env.SERVICE_NAME || ""; process.exit(services.some((service) => service.name === name || service.id === name) ? 0 : 1);'; then
+  SERVICES_JSON="$services_json" SERVICE_NAME="$service_name" node -e 'const services = JSON.parse(process.env.SERVICES_JSON || "[]"); const name = process.env.SERVICE_NAME || ""; process.exit(services.some((service) => service.name === name || service.id === name) ? 0 : 1);'
+}
+
+ensure_service_exists() {
+  local service_name="$1"
+
+  if ! service_exists "$service_name"; then
     echo "Railway service '${service_name}' was not found in the production environment."
     echo "Create the service in Railway, configure its variables, then rerun this workflow."
+    return 1
+  fi
+}
+
+create_scope_worker_service() {
+  local service_name="$1"
+  local api_variables_json
+  local database_url
+
+  if [ "$service_name" != "scope-worker" ]; then
+    return 1
+  fi
+
+  echo "Creating Railway service '${service_name}' in the production environment."
+  railway link \
+    --project "$RAILWAY_PROJECT_ID" \
+    --environment production \
+    --json >/dev/null
+  railway add --service "$service_name" --json >/dev/null
+
+  api_variables_json="$(
+    railway variable list \
+      --project "$RAILWAY_PROJECT_ID" \
+      --service scope-api \
+      --environment production \
+      --json
+  )"
+  database_url="$(
+    VARIABLES_JSON="$api_variables_json" node -e '
+const data = JSON.parse(process.env.VARIABLES_JSON || "{}");
+let value = "";
+if (Array.isArray(data)) {
+  const found = data.find((item) => item && (item.name === "DATABASE_URL" || item.key === "DATABASE_URL"));
+  value = found?.value || found?.rawValue || "";
+} else if (data && typeof data === "object") {
+  const nested = data.variables?.DATABASE_URL;
+  value = data.DATABASE_URL || (typeof nested === "string" ? nested : nested?.value) || "";
+}
+if (typeof value !== "string" || value.length === 0) process.exit(1);
+process.stdout.write(value);
+'
+  )"
+  if [ -z "$database_url" ]; then
+    echo "Could not read DATABASE_URL from scope-api; configure DATABASE_URL on ${service_name} manually."
+    return 1
+  fi
+
+  printf '%s' "$database_url" | railway variable set DATABASE_URL \
+    --project "$RAILWAY_PROJECT_ID" \
+    --service "$service_name" \
+    --environment production \
+    --stdin \
+    --skip-deploys \
+    --json >/dev/null
+}
+
+ensure_or_create_service_exists() {
+  local service_name="$1"
+
+  if service_exists "$service_name"; then
+    return 0
+  fi
+
+  create_scope_worker_service "$service_name"
+  if ! service_exists "$service_name"; then
+    echo "Railway service '${service_name}' was not found in the production environment after creation."
     return 1
   fi
 }
@@ -135,7 +207,7 @@ wait_for_deployment() {
 deploy_message="$(deploy_message_from_event)"
 deploy_started_at="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 
-ensure_service_exists "$service_name"
+ensure_or_create_service_exists "$service_name"
 
 railway up "$upload_root" \
   --path-as-root \
