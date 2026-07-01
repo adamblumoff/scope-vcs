@@ -14,7 +14,7 @@ use tower_http::{
 };
 
 pub fn router(state: AppState) -> Router {
-    Router::new()
+    let router = Router::new()
         .route("/healthz", get(http::account::healthz))
         .route("/readyz", get(http::account::readyz))
         .route("/v1/admin/cleanup", get(http::admin::get_cleanup_status))
@@ -181,7 +181,15 @@ pub fn router(state: AppState) -> Router {
         .route(
             "/git/{org}/{repo}/git-upload-pack",
             post(git::git_upload_pack_rpc),
-        )
+        );
+
+    #[cfg(feature = "local-dev")]
+    let router = router.route(
+        "/v1/dev/bench/cli-session",
+        post(crate::dev::create_bench_cli_session),
+    );
+
+    router
         .with_state(state)
         .layer(
             CorsLayer::new()

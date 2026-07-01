@@ -15,7 +15,7 @@ use crate::{
 };
 use std::{fs, path::Path as FsPath, process::Command};
 
-const DEV_SEED_USER_ID: &str = "scope_usr_dev_seed";
+pub(super) const DEV_SEED_USER_ID: &str = "scope_usr_dev_seed";
 const PUBLIC_DEMO_README: &str =
     "# Public Demo\n\nThis seeded repository is ready to browse locally.\n";
 const PUBLIC_DEMO_APP: &str =
@@ -37,13 +37,7 @@ pub(super) fn catalog(
     object_store: &dyn ObjectStore,
     seed_user: DevSeedUser,
 ) -> Result<AppCatalog, ApiError> {
-    let owner = UserAccount {
-        id: DEV_SEED_USER_ID.to_string(),
-        handle: seed_user.handle,
-        email: seed_user.email,
-        email_verified: true,
-        access: AccountAccess::Member,
-    };
+    let owner = seed_user_account(seed_user);
     let mut catalog = AppCatalog::default();
     catalog.users.insert(owner.id.clone(), owner.clone());
 
@@ -56,6 +50,16 @@ pub(super) fn catalog(
     }
 
     Ok(catalog)
+}
+
+pub(super) fn seed_user_account(seed_user: DevSeedUser) -> UserAccount {
+    UserAccount {
+        id: DEV_SEED_USER_ID.to_string(),
+        handle: seed_user.handle,
+        email: seed_user.email,
+        email_verified: true,
+        access: AccountAccess::Member,
+    }
 }
 
 fn published_demo(
