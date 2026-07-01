@@ -231,6 +231,11 @@ async fn delete_repo_route_records_pending_filesystem_cleanup_when_storage_delet
     fs::create_dir_all(&owner_repo).unwrap();
     fs::create_dir_all(&staged_repo).unwrap();
     fs::create_dir_all(&storage_root).unwrap();
+    if rx_root.is_dir() {
+        fs::remove_dir_all(&rx_root).unwrap();
+    } else if rx_root.exists() {
+        fs::remove_file(&rx_root).unwrap();
+    }
     fs::write(&rx_root, "not a directory").unwrap();
 
     let response = router(state.clone())

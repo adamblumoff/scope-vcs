@@ -3,9 +3,9 @@ use crate::domain::policy::{Policy, Visibility};
 use crate::domain::projection::SourceGraph;
 use crate::domain::store::{
     AccountAccess, FirstPushToken, GitCloneToken, GitPushToken, PendingImport,
-    RepoPublicationState, RepoRecord, RepoSettings, RepositoryInvite, RepositoryInviteState,
-    RepositoryMember, RepositoryMemberPermissions, SourceBlob, StagedRepoUpdate, StoredRepository,
-    UserAccount,
+    RepoPublicationState, RepoRecord, RepoSettings, RepoStorageCleanup, RepositoryInvite,
+    RepositoryInviteState, RepositoryMember, RepositoryMemberPermissions, SourceBlob,
+    StagedRepoUpdate, StoredRepository, UserAccount,
 };
 use crate::error::ApiError;
 use sea_orm::entity::prelude::*;
@@ -474,14 +474,124 @@ pub(crate) mod metadata_lock {
     pub struct Model {
         #[sea_orm(primary_key, auto_increment = false)]
         pub key: String,
-        pub pending_repo_storage_deletions: Json,
-        pub pending_source_blob_deletions: Json,
     }
 
     #[derive(Copy, Clone, Debug, EnumIter, DeriveRelation)]
     pub enum Relation {}
 
     impl ActiveModelBehavior for ActiveModel {}
+}
+
+pub(crate) mod repo_storage_cleanup_job {
+    use super::*;
+
+    #[derive(Clone, Debug, PartialEq, DeriveEntityModel)]
+    #[sea_orm(table_name = "scope_repo_storage_cleanup_jobs")]
+    pub struct Model {
+        #[sea_orm(primary_key, auto_increment = false)]
+        pub repo_id: String,
+        pub generation: String,
+        pub owner_handle: String,
+        pub repo_name: String,
+        pub attempts: i32,
+        pub next_run_at_unix: i64,
+        pub last_error: Option<String>,
+        pub completed_at_unix: Option<i64>,
+        pub created_at_unix: i64,
+        pub updated_at_unix: i64,
+    }
+
+    #[derive(Copy, Clone, Debug, EnumIter, DeriveRelation)]
+    pub enum Relation {}
+
+    impl ActiveModelBehavior for ActiveModel {}
+
+    impl Model {
+        pub(crate) fn from_domain(
+            cleanup: &RepoStorageCleanup,
+            generation: String,
+            now_unix: u64,
+        ) -> Self {
+            let repo_id = crate::domain::store::repo_id(&cleanup.owner_handle, &cleanup.repo_name);
+            let now_unix = now_unix.min(i64::MAX as u64) as i64;
+            Self {
+                repo_id,
+                generation,
+                owner_handle: cleanup.owner_handle.clone(),
+                repo_name: cleanup.repo_name.clone(),
+                attempts: 0,
+                next_run_at_unix: now_unix,
+                last_error: None,
+                completed_at_unix: None,
+                created_at_unix: now_unix,
+                updated_at_unix: now_unix,
+            }
+        }
+
+        pub(crate) fn into_domain(self) -> RepoStorageCleanup {
+            RepoStorageCleanup {
+                owner_handle: self.owner_handle,
+                repo_name: self.repo_name,
+            }
+        }
+    }
+}
+
+pub(crate) mod source_blob_cleanup_job {
+    use super::*;
+
+    #[derive(Clone, Debug, PartialEq, DeriveEntityModel)]
+    #[sea_orm(table_name = "scope_source_blob_cleanup_jobs")]
+    pub struct Model {
+        #[sea_orm(primary_key, auto_increment = false)]
+        pub object_key: String,
+        pub generation: String,
+        pub sha256: String,
+        pub git_oid: String,
+        pub size_bytes: i64,
+        pub line_count: i64,
+        pub attempts: i32,
+        pub next_run_at_unix: i64,
+        pub last_error: Option<String>,
+        pub completed_at_unix: Option<i64>,
+        pub created_at_unix: i64,
+        pub updated_at_unix: i64,
+    }
+
+    #[derive(Copy, Clone, Debug, EnumIter, DeriveRelation)]
+    pub enum Relation {}
+
+    impl ActiveModelBehavior for ActiveModel {}
+
+    impl Model {
+        pub(crate) fn from_domain(blob: &SourceBlob, generation: String, now_unix: u64) -> Self {
+            let now_unix = now_unix.min(i64::MAX as u64) as i64;
+            Self {
+                object_key: blob.object_key.clone(),
+                generation,
+                sha256: blob.sha256.clone(),
+                git_oid: blob.git_oid.clone(),
+                size_bytes: blob.size_bytes.min(i64::MAX as u64) as i64,
+                line_count: (blob.line_count.min(i64::MAX as usize)) as i64,
+                attempts: 0,
+                next_run_at_unix: now_unix,
+                last_error: None,
+                completed_at_unix: None,
+                created_at_unix: now_unix,
+                updated_at_unix: now_unix,
+            }
+        }
+
+        pub(crate) fn into_domain(self) -> SourceBlob {
+            SourceBlob {
+                object_key: self.object_key,
+                sha256: self.sha256,
+                git_oid: self.git_oid,
+                size_bytes: self.size_bytes.max(0) as u64,
+                line_count: self.line_count.max(0) as usize,
+            }
+        }
+    }
 }
 
 pub(crate) mod metadata_reset_event {

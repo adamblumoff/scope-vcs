@@ -528,16 +528,144 @@ async fn ensure_metadata_locks_and_users(manager: &SchemaManager<'_>) -> Result<
                         .not_null()
                         .primary_key(),
                 )
+                .to_owned(),
+        )
+        .await?;
+
+    manager
+        .create_table(
+            Table::create()
+                .table(RepoStorageCleanupJobs::Table)
+                .if_not_exists()
                 .col(
-                    ColumnDef::new(MetadataLocks::PendingRepoStorageDeletions)
-                        .json_binary()
+                    ColumnDef::new(RepoStorageCleanupJobs::RepoId)
+                        .string()
+                        .not_null()
+                        .primary_key(),
+                )
+                .col(
+                    ColumnDef::new(RepoStorageCleanupJobs::Generation)
+                        .string()
                         .not_null(),
                 )
                 .col(
-                    ColumnDef::new(MetadataLocks::PendingSourceBlobDeletions)
-                        .json_binary()
+                    ColumnDef::new(RepoStorageCleanupJobs::OwnerHandle)
+                        .string()
                         .not_null(),
                 )
+                .col(
+                    ColumnDef::new(RepoStorageCleanupJobs::RepoName)
+                        .string()
+                        .not_null(),
+                )
+                .col(
+                    ColumnDef::new(RepoStorageCleanupJobs::Attempts)
+                        .integer()
+                        .not_null(),
+                )
+                .col(
+                    ColumnDef::new(RepoStorageCleanupJobs::NextRunAtUnix)
+                        .big_integer()
+                        .not_null(),
+                )
+                .col(ColumnDef::new(RepoStorageCleanupJobs::LastError).text())
+                .col(ColumnDef::new(RepoStorageCleanupJobs::CompletedAtUnix).big_integer())
+                .col(
+                    ColumnDef::new(RepoStorageCleanupJobs::CreatedAtUnix)
+                        .big_integer()
+                        .not_null(),
+                )
+                .col(
+                    ColumnDef::new(RepoStorageCleanupJobs::UpdatedAtUnix)
+                        .big_integer()
+                        .not_null(),
+                )
+                .to_owned(),
+        )
+        .await?;
+
+    manager
+        .create_index(
+            Index::create()
+                .name("idx_scope_repo_storage_cleanup_jobs_pending")
+                .table(RepoStorageCleanupJobs::Table)
+                .col(RepoStorageCleanupJobs::CompletedAtUnix)
+                .col(RepoStorageCleanupJobs::NextRunAtUnix)
+                .if_not_exists()
+                .to_owned(),
+        )
+        .await?;
+
+    manager
+        .create_table(
+            Table::create()
+                .table(SourceBlobCleanupJobs::Table)
+                .if_not_exists()
+                .col(
+                    ColumnDef::new(SourceBlobCleanupJobs::ObjectKey)
+                        .string()
+                        .not_null()
+                        .primary_key(),
+                )
+                .col(
+                    ColumnDef::new(SourceBlobCleanupJobs::Generation)
+                        .string()
+                        .not_null(),
+                )
+                .col(
+                    ColumnDef::new(SourceBlobCleanupJobs::Sha256)
+                        .string()
+                        .not_null(),
+                )
+                .col(
+                    ColumnDef::new(SourceBlobCleanupJobs::GitOid)
+                        .string()
+                        .not_null(),
+                )
+                .col(
+                    ColumnDef::new(SourceBlobCleanupJobs::SizeBytes)
+                        .big_integer()
+                        .not_null(),
+                )
+                .col(
+                    ColumnDef::new(SourceBlobCleanupJobs::LineCount)
+                        .big_integer()
+                        .not_null(),
+                )
+                .col(
+                    ColumnDef::new(SourceBlobCleanupJobs::Attempts)
+                        .integer()
+                        .not_null(),
+                )
+                .col(
+                    ColumnDef::new(SourceBlobCleanupJobs::NextRunAtUnix)
+                        .big_integer()
+                        .not_null(),
+                )
+                .col(ColumnDef::new(SourceBlobCleanupJobs::LastError).text())
+                .col(ColumnDef::new(SourceBlobCleanupJobs::CompletedAtUnix).big_integer())
+                .col(
+                    ColumnDef::new(SourceBlobCleanupJobs::CreatedAtUnix)
+                        .big_integer()
+                        .not_null(),
+                )
+                .col(
+                    ColumnDef::new(SourceBlobCleanupJobs::UpdatedAtUnix)
+                        .big_integer()
+                        .not_null(),
+                )
+                .to_owned(),
+        )
+        .await?;
+
+    manager
+        .create_index(
+            Index::create()
+                .name("idx_scope_source_blob_cleanup_jobs_pending")
+                .table(SourceBlobCleanupJobs::Table)
+                .col(SourceBlobCleanupJobs::CompletedAtUnix)
+                .col(SourceBlobCleanupJobs::NextRunAtUnix)
+                .if_not_exists()
                 .to_owned(),
         )
         .await?;
@@ -643,25 +771,6 @@ async fn metadata_schema_has_catalog_rows(
         }
     }
 
-    let metadata_locks_table = MetadataLocks::Table.as_str();
-    if manager.has_table(metadata_locks_table).await? {
-        for column in METADATA_LOCK_CATALOG_COLUMNS.iter().copied() {
-            if !manager.has_column(metadata_locks_table, column).await? {
-                continue;
-            }
-            let row = db
-                .query_one(Statement::from_string(
-                    backend,
-                    format!(
-                        "SELECT 1 FROM {metadata_locks_table} WHERE jsonb_array_length({column}) > 0 LIMIT 1"
-                    ),
-                ))
-                .await?;
-            if row.is_some() {
-                return Ok(true);
-            }
-        }
-    }
     Ok(false)
 }
 
@@ -717,7 +826,7 @@ mod tests {
         use sea_orm::{DbBackend, MockDatabase, MockExecResult};
 
         let db = MockDatabase::new(DbBackend::Postgres)
-            .append_exec_results(vec![MockExecResult::default(); 3])
+            .append_exec_results(vec![MockExecResult::default(); 7])
             .into_connection();
         let manager = SchemaManager::new(&db);
 

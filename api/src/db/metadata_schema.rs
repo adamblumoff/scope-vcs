@@ -257,15 +257,73 @@ impl_iden!(RepositoryInvites {
 pub(super) enum MetadataLocks {
     Table,
     Key,
-    PendingRepoStorageDeletions,
-    PendingSourceBlobDeletions,
 }
 
 impl_iden!(MetadataLocks {
     Table => "scope_metadata_locks",
     Key => "key",
-    PendingRepoStorageDeletions => "pending_repo_storage_deletions",
-    PendingSourceBlobDeletions => "pending_source_blob_deletions",
+});
+
+#[derive(Copy, Clone)]
+pub(super) enum RepoStorageCleanupJobs {
+    Table,
+    RepoId,
+    Generation,
+    OwnerHandle,
+    RepoName,
+    Attempts,
+    NextRunAtUnix,
+    LastError,
+    CompletedAtUnix,
+    CreatedAtUnix,
+    UpdatedAtUnix,
+}
+
+impl_iden!(RepoStorageCleanupJobs {
+    Table => "scope_repo_storage_cleanup_jobs",
+    RepoId => "repo_id",
+    Generation => "generation",
+    OwnerHandle => "owner_handle",
+    RepoName => "repo_name",
+    Attempts => "attempts",
+    NextRunAtUnix => "next_run_at_unix",
+    LastError => "last_error",
+    CompletedAtUnix => "completed_at_unix",
+    CreatedAtUnix => "created_at_unix",
+    UpdatedAtUnix => "updated_at_unix",
+});
+
+#[derive(Copy, Clone)]
+pub(super) enum SourceBlobCleanupJobs {
+    Table,
+    ObjectKey,
+    Generation,
+    Sha256,
+    GitOid,
+    SizeBytes,
+    LineCount,
+    Attempts,
+    NextRunAtUnix,
+    LastError,
+    CompletedAtUnix,
+    CreatedAtUnix,
+    UpdatedAtUnix,
+}
+
+impl_iden!(SourceBlobCleanupJobs {
+    Table => "scope_source_blob_cleanup_jobs",
+    ObjectKey => "object_key",
+    Generation => "generation",
+    Sha256 => "sha256",
+    GitOid => "git_oid",
+    SizeBytes => "size_bytes",
+    LineCount => "line_count",
+    Attempts => "attempts",
+    NextRunAtUnix => "next_run_at_unix",
+    LastError => "last_error",
+    CompletedAtUnix => "completed_at_unix",
+    CreatedAtUnix => "created_at_unix",
+    UpdatedAtUnix => "updated_at_unix",
 });
 
 #[derive(Copy, Clone)]
@@ -285,10 +343,32 @@ impl_iden!(MetadataResetEvents {
     Reason => "reason",
 });
 
-const METADATA_LOCK_COLUMNS: &[&str] = &[
-    MetadataLocks::Key.as_str(),
-    MetadataLocks::PendingRepoStorageDeletions.as_str(),
-    MetadataLocks::PendingSourceBlobDeletions.as_str(),
+const METADATA_LOCK_COLUMNS: &[&str] = &[MetadataLocks::Key.as_str()];
+const REPO_STORAGE_CLEANUP_JOB_COLUMNS: &[&str] = &[
+    RepoStorageCleanupJobs::RepoId.as_str(),
+    RepoStorageCleanupJobs::Generation.as_str(),
+    RepoStorageCleanupJobs::OwnerHandle.as_str(),
+    RepoStorageCleanupJobs::RepoName.as_str(),
+    RepoStorageCleanupJobs::Attempts.as_str(),
+    RepoStorageCleanupJobs::NextRunAtUnix.as_str(),
+    RepoStorageCleanupJobs::LastError.as_str(),
+    RepoStorageCleanupJobs::CompletedAtUnix.as_str(),
+    RepoStorageCleanupJobs::CreatedAtUnix.as_str(),
+    RepoStorageCleanupJobs::UpdatedAtUnix.as_str(),
+];
+const SOURCE_BLOB_CLEANUP_JOB_COLUMNS: &[&str] = &[
+    SourceBlobCleanupJobs::ObjectKey.as_str(),
+    SourceBlobCleanupJobs::Generation.as_str(),
+    SourceBlobCleanupJobs::Sha256.as_str(),
+    SourceBlobCleanupJobs::GitOid.as_str(),
+    SourceBlobCleanupJobs::SizeBytes.as_str(),
+    SourceBlobCleanupJobs::LineCount.as_str(),
+    SourceBlobCleanupJobs::Attempts.as_str(),
+    SourceBlobCleanupJobs::NextRunAtUnix.as_str(),
+    SourceBlobCleanupJobs::LastError.as_str(),
+    SourceBlobCleanupJobs::CompletedAtUnix.as_str(),
+    SourceBlobCleanupJobs::CreatedAtUnix.as_str(),
+    SourceBlobCleanupJobs::UpdatedAtUnix.as_str(),
 ];
 const USER_COLUMNS: &[&str] = &[
     Users::Id.as_str(),
@@ -381,11 +461,9 @@ const CLI_SESSION_COLUMNS: &[&str] = &[
     CliSessions::ExpiresAtUnix.as_str(),
     CliSessions::RevokedAtUnix.as_str(),
 ];
-pub(super) const METADATA_LOCK_CATALOG_COLUMNS: &[&str] = &[
-    MetadataLocks::PendingRepoStorageDeletions.as_str(),
-    MetadataLocks::PendingSourceBlobDeletions.as_str(),
-];
 const CURRENT_METADATA_DROP_TABLES: &[&str] = &[
+    SourceBlobCleanupJobs::Table.as_str(),
+    RepoStorageCleanupJobs::Table.as_str(),
     CliSessions::Table.as_str(),
     CliExchangeGrants::Table.as_str(),
     CliBrowserLogins::Table.as_str(),
@@ -408,6 +486,16 @@ pub(super) const METADATA_SCHEMA_TABLES: &[MetadataTableSpec] = &[
         table: MetadataLocks::Table.as_str(),
         columns: METADATA_LOCK_COLUMNS,
         counts_for_catalog_rows: false,
+    },
+    MetadataTableSpec {
+        table: RepoStorageCleanupJobs::Table.as_str(),
+        columns: REPO_STORAGE_CLEANUP_JOB_COLUMNS,
+        counts_for_catalog_rows: true,
+    },
+    MetadataTableSpec {
+        table: SourceBlobCleanupJobs::Table.as_str(),
+        columns: SOURCE_BLOB_CLEANUP_JOB_COLUMNS,
+        counts_for_catalog_rows: true,
     },
     MetadataTableSpec {
         table: Users::Table.as_str(),
@@ -496,6 +584,8 @@ mod tests {
         assert_eq!(
             catalog_tables,
             vec![
+                RepoStorageCleanupJobs::Table.as_str(),
+                SourceBlobCleanupJobs::Table.as_str(),
                 Users::Table.as_str(),
                 AuthIdentities::Table.as_str(),
                 Repositories::Table.as_str(),
@@ -505,13 +595,6 @@ mod tests {
                 CliBrowserLogins::Table.as_str(),
                 CliExchangeGrants::Table.as_str(),
                 CliSessions::Table.as_str(),
-            ]
-        );
-        assert_eq!(
-            METADATA_LOCK_CATALOG_COLUMNS,
-            &[
-                MetadataLocks::PendingRepoStorageDeletions.as_str(),
-                MetadataLocks::PendingSourceBlobDeletions.as_str(),
             ]
         );
     }

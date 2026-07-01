@@ -449,11 +449,10 @@ where
         .all(conn)
         .await
         .map_err(ApiError::internal)?;
-    let metadata_lock = entities::metadata_lock::Entity::find_by_id(METADATA_LOCK_KEY.to_string())
-        .one(conn)
-        .await
-        .map_err(ApiError::internal)?
-        .ok_or_else(|| ApiError::internal_message("metadata lock row is missing"))?;
+    let pending_repo_storage_deletions =
+        cleanup_queue::load_pending_repo_storage_deletions(conn).await?;
+    let pending_source_blob_deletions =
+        cleanup_queue::load_pending_source_blob_deletions(conn).await?;
 
     let users = users
         .into_iter()
@@ -494,8 +493,8 @@ where
     Ok(AppCatalog {
         users,
         repositories,
-        pending_repo_storage_deletions: decode_json(metadata_lock.pending_repo_storage_deletions)?,
-        pending_source_blob_deletions: decode_json(metadata_lock.pending_source_blob_deletions)?,
+        pending_repo_storage_deletions,
+        pending_source_blob_deletions,
     })
 }
 

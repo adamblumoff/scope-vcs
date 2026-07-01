@@ -1,8 +1,10 @@
+#[cfg(any(test, feature = "memory-metadata"))]
+use super::cleanup_queue::{
+    queue_pending_repo_storage_deletion, queue_pending_source_blob_deletions,
+};
 use super::{
     cleanup_queue::{
-        load_pending_repo_storage_deletions, load_pending_source_blob_deletions,
-        queue_pending_repo_storage_deletion, queue_pending_source_blob_deletions,
-        save_pending_repo_storage_deletions, save_pending_source_blob_deletions,
+        queue_pending_repo_storage_cleanup_row, queue_pending_source_blob_deletion_rows,
     },
     repository_rows::save_repository_row,
 };
@@ -40,22 +42,10 @@ where
     for effect in effects.iter() {
         match effect {
             RepoEffect::DeleteRepoStorage(cleanup) => {
-                let mut pending_repo_storage_deletions =
-                    load_pending_repo_storage_deletions(conn).await?;
-                queue_pending_repo_storage_deletion(
-                    &mut pending_repo_storage_deletions,
-                    cleanup.clone(),
-                );
-                save_pending_repo_storage_deletions(conn, &pending_repo_storage_deletions).await?;
+                queue_pending_repo_storage_cleanup_row(conn, cleanup.clone()).await?;
             }
             RepoEffect::DeleteSourceBlobs(blobs) => {
-                let mut pending_source_blob_deletions =
-                    load_pending_source_blob_deletions(conn).await?;
-                queue_pending_source_blob_deletions(
-                    &mut pending_source_blob_deletions,
-                    blobs.clone(),
-                );
-                save_pending_source_blob_deletions(conn, &pending_source_blob_deletions).await?;
+                queue_pending_source_blob_deletion_rows(conn, blobs.clone()).await?;
             }
         }
     }

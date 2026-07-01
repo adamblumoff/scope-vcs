@@ -1,12 +1,9 @@
+#[cfg(any(test, feature = "memory-metadata"))]
+use super::cleanup_queue::queue_pending_source_blob_deletions;
 use super::{
     MetadataStore, MetadataStoreInner, acquire_metadata_write_lock,
-    cleanup_queue::{
-        load_pending_source_blob_deletions, queue_pending_source_blob_deletions,
-        save_pending_source_blob_deletions,
-    },
-    entities, repository_from_model,
-    repository_rows::save_repository_row,
-    run_api_db_on,
+    cleanup_queue::queue_pending_source_blob_deletion_rows, entities, repository_from_model,
+    repository_rows::save_repository_row, run_api_db_on,
 };
 use crate::{
     domain::store::{SourceBlob, StoredRepository, repo_id},
@@ -72,12 +69,11 @@ impl MetadataStore {
                     let mutation = op(&mut repo)?;
                     save_repository_row(&tx, &repo).await?;
                     if !mutation.source_blobs_to_delete.is_empty() {
-                        let mut pending = load_pending_source_blob_deletions(&tx).await?;
-                        queue_pending_source_blob_deletions(
-                            &mut pending,
+                        queue_pending_source_blob_deletion_rows(
+                            &tx,
                             mutation.source_blobs_to_delete,
-                        );
-                        save_pending_source_blob_deletions(&tx, &pending).await?;
+                        )
+                        .await?;
                     }
                     tx.commit().await.map_err(ApiError::internal)?;
                     Ok(mutation.result)

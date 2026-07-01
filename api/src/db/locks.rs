@@ -10,8 +10,6 @@ pub(super) async fn ensure_metadata_lock_row(
 ) -> Result<(), sea_orm::DbErr> {
     match entities::metadata_lock::Entity::insert(entities::metadata_lock::ActiveModel {
         key: Set(METADATA_LOCK_KEY.to_string()),
-        pending_repo_storage_deletions: Set(serde_json::Value::Array(Vec::new())),
-        pending_source_blob_deletions: Set(serde_json::Value::Array(Vec::new())),
     })
     .on_conflict(
         OnConflict::column(entities::metadata_lock::Column::Key)
