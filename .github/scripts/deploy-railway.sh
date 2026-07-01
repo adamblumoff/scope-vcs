@@ -31,6 +31,47 @@ deploy_message_from_event() {
   fi
 }
 
+ensure_service_exists() {
+  local service_name="$1"
+  local services_json
+
+  services_json="$(
+    railway service list \
+      --project "$RAILWAY_PROJECT_ID" \
+      --environment production \
+      --json
+  )"
+
+  if ! SERVICES_JSON="$services_json" SERVICE_NAME="$service_name" node -e 'const services = JSON.parse(process.env.SERVICES_JSON || "[]"); const name = process.env.SERVICE_NAME || ""; process.exit(services.some((service) => service.name === name || service.id === name) ? 0 : 1);'; then
+    echo "Railway service '${service_name}' was not found in the production environment."
+    echo "Create the service in Railway, configure its variables, then rerun this workflow."
+    return 1
+  fi
+}
+
+print_deployment_logs() {
+  local service_name="$1"
+  local deployment_id="$2"
+
+  echo "::group::Railway build logs for ${service_name}/${deployment_id}"
+  railway logs "$deployment_id" \
+    --project "$RAILWAY_PROJECT_ID" \
+    --service "$service_name" \
+    --environment production \
+    --build \
+    --lines 200 || true
+  echo "::endgroup::"
+
+  echo "::group::Railway deploy logs for ${service_name}/${deployment_id}"
+  railway logs "$deployment_id" \
+    --project "$RAILWAY_PROJECT_ID" \
+    --service "$service_name" \
+    --environment production \
+    --deployment \
+    --lines 200 || true
+  echo "::endgroup::"
+}
+
 wait_for_deployment() {
   local service_name="$1"
   local message="$2"
@@ -71,6 +112,7 @@ wait_for_deployment() {
             return 0
             ;;
           FAILED|CRASHED|REMOVED)
+            print_deployment_logs "$service_name" "$deployment_id"
             return 1
             ;;
         esac
@@ -92,6 +134,8 @@ wait_for_deployment() {
 
 deploy_message="$(deploy_message_from_event)"
 deploy_started_at="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+
+ensure_service_exists "$service_name"
 
 railway up "$upload_root" \
   --path-as-root \
