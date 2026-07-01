@@ -1,4 +1,5 @@
 use super::metadata_schema::*;
+use super::schema_read_models::ensure_read_model_tables;
 use super::schema_repository_facts::ensure_repository_fact_tables;
 use sea_orm::{ConnectionTrait, Statement};
 use sea_orm::{DatabaseConnection, DbErr};
@@ -137,6 +138,7 @@ pub(crate) async fn migrate_metadata_schema(db: &DatabaseConnection) -> Result<(
         .await?;
 
     ensure_repository_fact_tables(&manager).await?;
+    ensure_read_model_tables(&manager).await?;
 
     manager
         .create_table(

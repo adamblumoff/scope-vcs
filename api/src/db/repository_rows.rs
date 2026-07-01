@@ -1,4 +1,4 @@
-use super::entities;
+use super::{entities, projection_read_models::save_live_projection_read_models};
 use crate::{
     domain::store::{
         FirstPushToken, GitCloneToken, GitPushToken, RepoSettings, SourceBlob, StoredRepository,
@@ -49,6 +49,7 @@ where
         .map_err(ApiError::internal)?;
     save_repository_fact_rows(conn, repo).await?;
     save_repository_relations(conn, repo).await?;
+    save_live_projection_read_models(conn, repo).await?;
     Ok(())
 }
 
@@ -105,6 +106,7 @@ where
         .map_err(ApiError::internal)?;
     save_repository_fact_rows(conn, repo).await?;
     save_repository_relations(conn, repo).await?;
+    save_live_projection_read_models(conn, repo).await?;
     Ok(())
 }
 

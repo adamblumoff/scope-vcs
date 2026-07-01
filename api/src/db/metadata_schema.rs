@@ -185,6 +185,52 @@ impl_iden!(RepositoryGitSnapshots {
 });
 
 #[derive(Copy, Clone)]
+pub(super) enum ProjectionReadModels {
+    Table,
+    RepoId,
+    RepoVersion,
+    Source,
+    Audience,
+    RebuiltAtUnix,
+    FileCount,
+}
+
+impl_iden!(ProjectionReadModels {
+    Table => "scope_projection_read_models",
+    RepoId => "repo_id",
+    RepoVersion => "repo_version",
+    Source => "source",
+    Audience => "audience",
+    RebuiltAtUnix => "rebuilt_at_unix",
+    FileCount => "file_count",
+});
+
+#[derive(Copy, Clone)]
+pub(super) enum ProjectionFiles {
+    Table,
+    RepoId,
+    RepoVersion,
+    Source,
+    Audience,
+    PathKey,
+    Path,
+    Oid,
+    Visibility,
+}
+
+impl_iden!(ProjectionFiles {
+    Table => "scope_projection_files",
+    RepoId => "repo_id",
+    RepoVersion => "repo_version",
+    Source => "source",
+    Audience => "audience",
+    PathKey => "path_key",
+    Path => "path",
+    Oid => "oid",
+    Visibility => "visibility",
+});
+
+#[derive(Copy, Clone)]
 pub(super) enum CliDeviceLogins {
     Table,
     DeviceCodeHash,
@@ -510,6 +556,24 @@ const REPOSITORY_GIT_SNAPSHOT_COLUMNS: &[&str] = &[
     RepositoryGitSnapshots::SizeBytes.as_str(),
     RepositoryGitSnapshots::LineCount.as_str(),
 ];
+const PROJECTION_READ_MODEL_COLUMNS: &[&str] = &[
+    ProjectionReadModels::RepoId.as_str(),
+    ProjectionReadModels::RepoVersion.as_str(),
+    ProjectionReadModels::Source.as_str(),
+    ProjectionReadModels::Audience.as_str(),
+    ProjectionReadModels::RebuiltAtUnix.as_str(),
+    ProjectionReadModels::FileCount.as_str(),
+];
+const PROJECTION_FILE_COLUMNS: &[&str] = &[
+    ProjectionFiles::RepoId.as_str(),
+    ProjectionFiles::RepoVersion.as_str(),
+    ProjectionFiles::Source.as_str(),
+    ProjectionFiles::Audience.as_str(),
+    ProjectionFiles::PathKey.as_str(),
+    ProjectionFiles::Path.as_str(),
+    ProjectionFiles::Oid.as_str(),
+    ProjectionFiles::Visibility.as_str(),
+];
 const REPOSITORY_MEMBER_COLUMNS: &[&str] = &[
     RepositoryMembers::RepoId.as_str(),
     RepositoryMembers::UserId.as_str(),
@@ -580,6 +644,8 @@ const CURRENT_METADATA_DROP_TABLES: &[&str] = &[
     AuthIdentities::Table.as_str(),
     RepositoryInvites::Table.as_str(),
     RepositoryMembers::Table.as_str(),
+    ProjectionFiles::Table.as_str(),
+    ProjectionReadModels::Table.as_str(),
     RepositoryGitCloneTokens::Table.as_str(),
     RepositoryGitSnapshots::Table.as_str(),
     RepositoryGitPushTokens::Table.as_str(),
@@ -650,6 +716,16 @@ pub(super) const METADATA_SCHEMA_TABLES: &[MetadataTableSpec] = &[
         table: RepositoryGitSnapshots::Table.as_str(),
         columns: REPOSITORY_GIT_SNAPSHOT_COLUMNS,
         counts_for_catalog_rows: true,
+    },
+    MetadataTableSpec {
+        table: ProjectionReadModels::Table.as_str(),
+        columns: PROJECTION_READ_MODEL_COLUMNS,
+        counts_for_catalog_rows: false,
+    },
+    MetadataTableSpec {
+        table: ProjectionFiles::Table.as_str(),
+        columns: PROJECTION_FILE_COLUMNS,
+        counts_for_catalog_rows: false,
     },
     MetadataTableSpec {
         table: RepositoryMembers::Table.as_str(),
