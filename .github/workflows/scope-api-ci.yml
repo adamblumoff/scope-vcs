@@ -98,6 +98,7 @@ jobs:
           cp Cargo.toml Cargo.lock rust-toolchain.toml .railway-upload/
           cp api/railpack.json .railway-upload/railpack.json
           cp -a api .railway-upload/api
+          printf '%s\n' "${GITHUB_SHA:-manual}-${GITHUB_RUN_ID:-local}-${GITHUB_RUN_ATTEMPT:-0}" > .railway-upload/api/railway-deploy-ref.txt
           cp -a worker .railway-upload/worker
           cp -a crates .railway-upload/crates
 
