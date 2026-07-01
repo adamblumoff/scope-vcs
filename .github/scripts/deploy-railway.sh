@@ -72,16 +72,41 @@ print_deployment_logs() {
   echo "::endgroup::"
 }
 
+service_health_line() {
+  local service_name="$1"
+  local services_json
+
+  services_json="$(
+    railway service list \
+      --project "$RAILWAY_PROJECT_ID" \
+      --environment production \
+      --json
+  )"
+
+  SERVICES_JSON="$services_json" SERVICE_NAME="$service_name" node -e '
+const services = JSON.parse(process.env.SERVICES_JSON || "[]");
+const name = process.env.SERVICE_NAME || "";
+const service = services.find((candidate) => candidate.name === name || candidate.id === name);
+if (!service) process.exit(1);
+const replicas = service.replicas || {};
+console.log([service.status || "", replicas.running || 0, replicas.crashed || 0, replicas.exited || 0, replicas.total || 0].join("\t"));
+'
+}
+
 wait_for_deployment() {
   local service_name="$1"
-  local message="$2"
-  local started_at="$3"
+  local deployment_id="$2"
   local deadline=$((SECONDS + 900))
   local deployment_json
   local deployment_line
-  local deployment_id
   local deployment_status
   local skipped_reason
+  local health_line
+  local service_status
+  local running_replicas
+  local crashed_replicas
+  local exited_replicas
+  local total_replicas
 
   while true; do
     if deployment_json="$(
@@ -94,9 +119,8 @@ wait_for_deployment() {
     )"; then
       deployment_line="$(
         DEPLOYMENTS_JSON="$deployment_json" \
-        DEPLOY_MESSAGE="$message" \
-        DEPLOY_STARTED_AT="$started_at" \
-        node -e 'const deployments = JSON.parse(process.env.DEPLOYMENTS_JSON || "[]"); const message = process.env.DEPLOY_MESSAGE || ""; const startedAt = Date.parse(process.env.DEPLOY_STARTED_AT || "1970-01-01T00:00:00Z") - 30000; const deployment = deployments.find((candidate) => { const createdAt = Date.parse(candidate.createdAt || ""); return candidate.meta?.cliMessage === message && Number.isFinite(createdAt) && createdAt >= startedAt; }); if (deployment) console.log([deployment.id, deployment.status, deployment.meta?.skippedReason || ""].join("\t"));'
+        DEPLOYMENT_ID="$deployment_id" \
+        node -e 'const deployments = JSON.parse(process.env.DEPLOYMENTS_JSON || "[]"); const id = process.env.DEPLOYMENT_ID || ""; const deployment = deployments.find((candidate) => candidate.id === id); if (deployment) console.log([deployment.id, deployment.status, deployment.meta?.skippedReason || ""].join("\t"));'
       )"
 
       if [ -n "$deployment_line" ]; then
@@ -109,7 +133,16 @@ wait_for_deployment() {
             ;;
           SKIPPED)
             echo "Railway skipped deployment: ${skipped_reason:-no reason provided}."
-            return 0
+            health_line="$(service_health_line "$service_name" || true)"
+            if [ -n "$health_line" ]; then
+              IFS=$'\t' read -r service_status running_replicas crashed_replicas exited_replicas total_replicas <<< "$health_line"
+              if [ "$service_status" = "SUCCESS" ] && [ "${running_replicas:-0}" -gt 0 ]; then
+                return 0
+              fi
+            fi
+            echo "Railway skipped deployment, but ${service_name} is not currently healthy."
+            echo "Service status: ${service_status:-unknown}; replicas running=${running_replicas:-0}, crashed=${crashed_replicas:-0}, exited=${exited_replicas:-0}, total=${total_replicas:-0}."
+            return 1
             ;;
           FAILED|CRASHED|REMOVED)
             print_deployment_logs "$service_name" "$deployment_id"
@@ -117,7 +150,7 @@ wait_for_deployment() {
             ;;
         esac
       else
-        echo "Waiting for Railway deployment to appear..."
+        echo "Waiting for Railway deployment $deployment_id to appear..."
       fi
     else
       echo "Waiting for Railway deployment status..."
@@ -133,11 +166,13 @@ wait_for_deployment() {
 }
 
 deploy_message="$(deploy_message_from_event)"
-deploy_started_at="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+deploy_output=""
+deployment_id=""
 
 ensure_service_exists "$service_name"
 
-railway up "$upload_root" \
+deploy_output="$(
+  railway up "$upload_root" \
   --path-as-root \
   --no-gitignore \
   --project "$RAILWAY_PROJECT_ID" \
@@ -146,5 +181,23 @@ railway up "$upload_root" \
   --message "$deploy_message" \
   --detach \
   --json
+)"
+printf '%s\n' "$deploy_output"
 
-wait_for_deployment "$service_name" "$deploy_message" "$deploy_started_at"
+deployment_id="$(
+  DEPLOY_OUTPUT="$deploy_output" node -e '
+const lines = (process.env.DEPLOY_OUTPUT || "").split(/\r?\n/).filter(Boolean);
+for (const line of lines) {
+  try {
+    const parsed = JSON.parse(line);
+    if (parsed && typeof parsed.deploymentId === "string" && parsed.deploymentId.length > 0) {
+      process.stdout.write(parsed.deploymentId);
+      process.exit(0);
+    }
+  } catch {}
+}
+process.exit(1);
+'
+)"
+
+wait_for_deployment "$service_name" "$deployment_id"
