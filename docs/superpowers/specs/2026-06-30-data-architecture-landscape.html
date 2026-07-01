@@ -51,7 +51,7 @@
 
         <div class="split">
           <div class="callout">
-            <p> <strong>Current recommendation:</strong> <del class="plan-delete" >Phase 3 is merged on main. Move next to ADA-37: materialize disposable read models, starting with live projection file trees by repo revision and audience class.</del > <ins class="plan-add" >Phase 4 is merged on main. Move next to ADA-38: introduce a transactional outbox and a dedicated <code>scope-worker</code> Railway service, starting with worker-owned read-model rebuild jobs.</ins > </p>
+            <p> <strong>Current recommendation:</strong> <del class="plan-delete" >Phase 3 is merged on main. Move next to ADA-37: materialize disposable read models, starting with live projection file trees by repo revision and audience class.</del > <ins class="plan-add" >Phase 4 is merged on main. Move next to ADA-38: introduce a transactional outbox and a dedicated <code>scope-core</code> Railway service, starting with worker-owned read-model rebuild jobs.</ins > </p>
           </div>
           <div class="callout phase-focus">
             <p> <strong>Phase 5 target:</strong> <del class="plan-delete" >normal UI and API read paths should stop rebuilding every projection from the full repository aggregate. Keep canonical facts authoritative, but serve hot reads from rebuildable, versioned read-model rows.</del > <ins class="plan-add" >request handlers should stop owning durable side-effect execution. Commit explicit work with canonical facts, then let a worker service claim, execute, retry, and report jobs without making derived data canonical.</ins > </p>
@@ -492,7 +492,7 @@
             <tr>
               <td><strong>Worker service deployment</strong></td>
               <td> <del class="plan-delete" ><code>api</code> crate shared modules, worker binary, service-specific Railpack config, and GitHub Actions deploy workflow.</del > <ins class="plan-add" >Root Rust workspace, shared <code>crates/scope-core</code> library, thin <code>api</code> service crate, thin <code>worker</code> service crate, service-specific Railpack configs, and GitHub Actions deploy workflows.</ins > </td>
-              <td> <del class="plan-delete" >Make <code>scope-worker</code> deploy like <code>scope-api</code>, <code>scope-cli</code>, and <code>scope-web</code>: CI first, Railway deploy second, no manual service drift.</del > <ins class="plan-add" >Phase 5 should make <code>scope-worker</code> deploy like <code>scope-api</code>, <code>scope-cli</code>, and <code>scope-web</code>: CI first, Railway deploy second, no manual service drift. The structure should prevent the API crate from becoming the worker's implicit shared library.</ins > </td>
+              <td> <del class="plan-delete" >Make <code>scope-core</code> deploy like <code>scope-api</code>, <code>scope-cli</code>, and <code>scope-web</code>: CI first, Railway deploy second, no manual service drift.</del > <ins class="plan-add" >Phase 5 should make <code>scope-core</code> deploy like <code>scope-api</code>, <code>scope-cli</code>, and <code>scope-web</code>: CI first, Railway deploy second, no manual service drift. The structure should prevent the API crate from becoming the worker's implicit shared library.</ins > </td>
             </tr>
           </tbody>
         </table>
@@ -593,7 +593,7 @@
             <div class="phase-id">Phase 5</div>
             <div>
               <h3> <a href="https://linear.app/scope-vcs/issue/ADA-38/introduce-transactional-outbox-and-workers-for-gitimportpublishcleanup" >ADA-38 - Add outbox and workers</a > </h3>
-              <p> <del class="plan-delete" >Commit side-effect jobs with metadata changes. Workers handle import processing, read-model rebuild, Git artifact generation, and cleanup with explicit states and retries.</del > <ins class="plan-add" >Active now: commit outbox jobs with metadata changes and run a separate <code>scope-worker</code> Railway service. Start with projection read-model rebuild jobs before import, publish, cleanup, or Git artifact execution.</ins > </p>
+              <p> <del class="plan-delete" >Commit side-effect jobs with metadata changes. Workers handle import processing, read-model rebuild, Git artifact generation, and cleanup with explicit states and retries.</del > <ins class="plan-add" >Active now: commit outbox jobs with metadata changes and run a separate <code>scope-core</code> Railway service. Start with projection read-model rebuild jobs before import, publish, cleanup, or Git artifact execution.</ins > </p>
             </div>
             <div class="phase-note">
               <del class="plan-delete"
@@ -603,7 +603,7 @@
               <ins class="plan-add"
                 >This phase includes a narrow shared-runtime refactor, a
                 durable claim/retry job contract, local dev worker startup,
-                and CI/Railway deployment for <code>scope-worker</code>.</ins
+                and CI/Railway deployment for <code>scope-core</code>.</ins
               >
             </div>
           </div>
@@ -718,7 +718,7 @@
             <tr>
               <td><strong>Worker runtime</strong></td>
               <td> <del class="plan-delete" >Start inside the API process behind a feature/config boundary.</del > <ins class="plan-add" >Run workers as their own Railway service, with a codebase refactor and CI deploy path similar to the other services.</ins > </td>
-              <td> The project now includes shared-library extraction, <code>scope-worker</code> binary ownership, Railway service configuration, and GitHub Actions deployment. </td>
+              <td> The project now includes shared-library extraction, <code>scope-core</code> binary ownership, Railway service configuration, and GitHub Actions deployment. </td>
               <td><span class="decision-mark">Changed</span></td>
             </tr>
             <tr>
@@ -742,7 +742,7 @@
           <li> <del class="plan-delete" >Pick the first model: live projection file tree, keyed by repo revision, source, and audience class.</del > <ins class="plan-add" >Pick the first worker job: projection read-model rebuild, keyed by repo id, repo version, source, and audience class semantics.</ins > </li>
           <li> <del class="plan-delete" >Keep the source graph and policy canonical; read-model rows are disposable rebuild products.</del > <ins class="plan-add" >Keep source graph, policy, and repo facts canonical; outbox rows are commands to derive or clean up state, not product state themselves.</ins > </li>
           <li> <del class="plan-delete" >Use schema inventory, route behavior tests, read-model builder tests, local clippy/tests, and the Phase 0 harness as primary proof for ADA-37.</del > <ins class="plan-add" >Use schema inventory, transactional enqueue tests, worker claim/retry tests, route fallback tests, local clippy/tests, CI workflow checks, and the Phase 0 harness as primary proof for ADA-38.</ins > </li>
-          <li> <del class="plan-delete" >The next cut is chosen: serve the file-list route from a fresh read model when one exists.</del > <ins class="plan-add" >The next cut is chosen: enqueue read-model rebuild jobs transactionally and let <code>scope-worker</code> execute them.</ins > </li>
+          <li> <del class="plan-delete" >The next cut is chosen: serve the file-list route from a fresh read model when one exists.</del > <ins class="plan-add" >The next cut is chosen: enqueue read-model rebuild jobs transactionally and let <code>scope-core</code> execute them.</ins > </li>
           <li> <del class="plan-delete" >Keep worker deployment deferred; Phase 4 can rebuild synchronously until Phase 5 introduces outbox-owned worker execution.</del > <ins class="plan-add" >Keep cleanup, import, publish, and Git artifact execution deferred until the first worker loop is landed and observable.</ins > </li>
         </ol>
       </section>
@@ -774,7 +774,7 @@
               <p> <ins class="plan-add" >Expose only the shared runtime facade the worker needs: metadata connection setup, object-store setup, job repository APIs, and read-model rebuild handlers. Keep module visibility narrow; do not make every existing API module public just to make the worker compile.</ins > </p>
             </div>
             <div class="phase-note">
-              Output: <code>scope-worker</code> has a real binary/service shape
+              Output: <code>scope-core</code> has a real binary/service shape
               without forcing a broad module visibility rewrite.
             </div>
           </div>
@@ -807,7 +807,7 @@
             <div class="phase-id">Start 5</div>
             <div>
               <h3>Run claim, execute, retry</h3>
-              <p> <del class="plan-delete" >Teach the file-list route to use a fresh model when Postgres has one. If rows are stale, missing, or internally inconsistent, fall back to domain projection instead of trusting partial derived state.</del > <ins class="plan-add" >Teach <code>scope-worker</code> to claim ready jobs with a lease, execute the read-model handler idempotently, mark success, and record retryable failure with backoff and diagnostics.</ins > </p>
+              <p> <del class="plan-delete" >Teach the file-list route to use a fresh model when Postgres has one. If rows are stale, missing, or internally inconsistent, fall back to domain projection instead of trusting partial derived state.</del > <ins class="plan-add" >Teach <code>scope-core</code> to claim ready jobs with a lease, execute the read-model handler idempotently, mark success, and record retryable failure with backoff and diagnostics.</ins > </p>
             </div>
             <div class="phase-note">
               Output: worker crashes leave jobs visible and retryable instead
@@ -819,7 +819,7 @@
             <div class="phase-id">Start 6</div>
             <div>
               <h3>Wire local dev and Railway</h3>
-              <p> <del class="plan-delete" >Run schema inventory tests, read-model builder tests, route behavior tests, clippy, local-dev API tests, and the Phase 0 benchmark harness. Success is read-model correctness and fallback safety, not guaranteed speedup yet.</del > <ins class="plan-add" >Add local worker startup to the dev process and add <code>scope-worker</code> Railpack/GitHub Actions deployment parallel to the existing API, web, and CLI service deploys.</ins > </p>
+              <p> <del class="plan-delete" >Run schema inventory tests, read-model builder tests, route behavior tests, clippy, local-dev API tests, and the Phase 0 benchmark harness. Success is read-model correctness and fallback safety, not guaranteed speedup yet.</del > <ins class="plan-add" >Add local worker startup to the dev process and add <code>scope-core</code> Railpack/GitHub Actions deployment parallel to the existing API, web, and CLI service deploys.</ins > </p>
             </div>
             <div class="phase-note">
               Output: the worker is not a local-only binary; it is a deployable

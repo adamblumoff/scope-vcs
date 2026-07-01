@@ -1,10 +1,10 @@
-name: Scope Worker CI
+name: Scope Core CI
 
 on:
   pull_request:
     paths:
       - ".github/scripts/deploy-railway.sh"
-      - ".github/workflows/scope-worker-ci.yml"
+      - ".github/workflows/scope-core-ci.yml"
       - "Cargo.lock"
       - "Cargo.toml"
       - "crates/scope-core/**"
@@ -14,7 +14,7 @@ on:
       - main
     paths:
       - ".github/scripts/deploy-railway.sh"
-      - ".github/workflows/scope-worker-ci.yml"
+      - ".github/workflows/scope-core-ci.yml"
       - "Cargo.lock"
       - "Cargo.toml"
       - "crates/scope-core/**"
@@ -30,7 +30,7 @@ env:
 
 jobs:
   checks:
-    name: Check scope-worker
+    name: Check scope-core
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
@@ -49,10 +49,10 @@ jobs:
             ~/.cargo/git
             ~/.cargo/registry
             target
-          key: ${{ runner.os }}-worker-cargo-${{ hashFiles('Cargo.lock') }}-${{ github.sha }}
+          key: ${{ runner.os }}-core-cargo-${{ hashFiles('Cargo.lock') }}-${{ github.sha }}
           restore-keys: |
-            ${{ runner.os }}-worker-cargo-${{ hashFiles('Cargo.lock') }}
-            ${{ runner.os }}-worker-cargo-
+            ${{ runner.os }}-core-cargo-${{ hashFiles('Cargo.lock') }}
+            ${{ runner.os }}-core-cargo-
 
       - name: Check formatting
         run: cargo fmt --all --check
@@ -64,7 +64,7 @@ jobs:
         run: cargo clippy -p scope-core -p worker --all-targets --locked -- -D warnings
 
   deploy:
-    name: Deploy scope-worker
+    name: Deploy scope-core
     needs: checks
     runs-on: ubuntu-latest
     if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main'
@@ -97,4 +97,4 @@ jobs:
           RAILWAY_DEPLOY_MESSAGE: ${{ github.event.head_commit.message || github.workflow }}
           RAILWAY_PROJECT_ID: ${{ secrets.RAILWAY_PROJECT_ID }}
           RAILWAY_TOKEN: ${{ secrets.RAILWAY_TOKEN }}
-        run: bash .github/scripts/deploy-railway.sh scope-worker .railway-upload
+        run: bash .github/scripts/deploy-railway.sh scope-core .railway-upload

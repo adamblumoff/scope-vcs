@@ -278,7 +278,7 @@ while IFS='=' read -r name _; do
   [[ "\$name" == RAILWAY_* ]] && unset "\$name"
   [[ "\$name" == SCOPE_BUCKET_* ]] && unset "\$name"
 done < <(env)
-export SCOPE_WORKER_ID="local-dev-worker"
+export SCOPE_CORE_ID="local-dev-core"
 EOF
   printf 'export DATABASE_URL=%q\n' "$database_url" >> "$runner"
   cat >> "$runner" <<'EOF'

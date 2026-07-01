@@ -4,11 +4,11 @@
   "steps": {
     "build": {
       "commands": [
-        "cargo build --release --locked -p worker && mkdir -p bin && cp target/release/worker bin/scope-worker"
+        "cargo build --release --locked -p worker && mkdir -p bin && cp target/release/worker bin/scope-core"
       ]
     }
   },
   "deploy": {
-    "startCommand": "./bin/scope-worker"
+    "startCommand": "./bin/scope-core"
   }
 }

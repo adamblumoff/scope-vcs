@@ -73,15 +73,15 @@ struct WorkerSettings {
 
 impl WorkerSettings {
     fn from_env() -> anyhow::Result<Self> {
-        let worker_id = std::env::var("SCOPE_WORKER_ID")
+        let worker_id = std::env::var("SCOPE_CORE_ID")
             .ok()
             .filter(|value| !value.trim().is_empty())
             .unwrap_or_else(default_worker_id);
-        let batch_size = parse_usize_env("SCOPE_WORKER_BATCH_SIZE", DEFAULT_BATCH_SIZE)?;
+        let batch_size = parse_usize_env("SCOPE_CORE_BATCH_SIZE", DEFAULT_BATCH_SIZE)?;
         let poll_interval_ms =
-            parse_u64_env("SCOPE_WORKER_POLL_INTERVAL_MS", DEFAULT_POLL_INTERVAL_MS)?;
+            parse_u64_env("SCOPE_CORE_POLL_INTERVAL_MS", DEFAULT_POLL_INTERVAL_MS)?;
         let schema_wait_secs =
-            parse_u64_env("SCOPE_WORKER_SCHEMA_WAIT_SECS", DEFAULT_SCHEMA_WAIT_SECS)?;
+            parse_u64_env("SCOPE_CORE_SCHEMA_WAIT_SECS", DEFAULT_SCHEMA_WAIT_SECS)?;
         Ok(Self {
             worker_id,
             batch_size: batch_size.max(1),
@@ -113,7 +113,7 @@ fn default_worker_id() -> String {
     let host = std::env::var("RAILWAY_REPLICA_ID")
         .or_else(|_| std::env::var("HOSTNAME"))
         .unwrap_or_else(|_| "local".to_string());
-    format!("scope-worker-{host}-{}", std::process::id())
+    format!("scope-core-{host}-{}", std::process::id())
 }
 
 async fn shutdown_signal() {
