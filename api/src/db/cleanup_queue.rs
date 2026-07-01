@@ -180,61 +180,28 @@ where
     C: ConnectionTrait,
 {
     let now = unix_now()?;
-    let repo_id = repo_id(&cleanup.owner_handle, &cleanup.repo_name);
-    let now_i64 = u64_to_i64(now)?;
     let generation = new_cleanup_generation()?;
-    let result = entities::repo_storage_cleanup_job::Entity::update_many()
-        .filter(entities::repo_storage_cleanup_job::Column::RepoId.eq(repo_id.clone()))
-        .col_expr(
-            entities::repo_storage_cleanup_job::Column::Generation,
-            Expr::value(generation.clone()),
-        )
-        .col_expr(
-            entities::repo_storage_cleanup_job::Column::OwnerHandle,
-            Expr::value(cleanup.owner_handle.clone()),
-        )
-        .col_expr(
-            entities::repo_storage_cleanup_job::Column::RepoName,
-            Expr::value(cleanup.repo_name.clone()),
-        )
-        .col_expr(
-            entities::repo_storage_cleanup_job::Column::Attempts,
-            Expr::value(0),
-        )
-        .col_expr(
-            entities::repo_storage_cleanup_job::Column::NextRunAtUnix,
-            Expr::value(now_i64),
-        )
-        .col_expr(
-            entities::repo_storage_cleanup_job::Column::LastError,
-            Expr::value(Option::<String>::None),
-        )
-        .col_expr(
-            entities::repo_storage_cleanup_job::Column::CompletedAtUnix,
-            Expr::value(Option::<i64>::None),
-        )
-        .col_expr(
-            entities::repo_storage_cleanup_job::Column::UpdatedAtUnix,
-            Expr::value(now_i64),
-        )
-        .exec(conn)
-        .await
-        .map_err(ApiError::internal)?;
-    if result.rows_affected == 0 {
-        entities::repo_storage_cleanup_job::Entity::insert(
-            entities::repo_storage_cleanup_job::Model::from_domain(&cleanup, generation, now)
-                .into_active_model(),
-        )
-        .on_conflict(
-            OnConflict::column(entities::repo_storage_cleanup_job::Column::RepoId)
-                .do_nothing()
-                .to_owned(),
-        )
-        .do_nothing()
-        .exec(conn)
-        .await
-        .map_err(ApiError::internal)?;
-    }
+    entities::repo_storage_cleanup_job::Entity::insert(
+        entities::repo_storage_cleanup_job::Model::from_domain(&cleanup, generation, now)
+            .into_active_model(),
+    )
+    .on_conflict(
+        OnConflict::column(entities::repo_storage_cleanup_job::Column::RepoId)
+            .update_columns([
+                entities::repo_storage_cleanup_job::Column::Generation,
+                entities::repo_storage_cleanup_job::Column::OwnerHandle,
+                entities::repo_storage_cleanup_job::Column::RepoName,
+                entities::repo_storage_cleanup_job::Column::Attempts,
+                entities::repo_storage_cleanup_job::Column::NextRunAtUnix,
+                entities::repo_storage_cleanup_job::Column::LastError,
+                entities::repo_storage_cleanup_job::Column::CompletedAtUnix,
+                entities::repo_storage_cleanup_job::Column::UpdatedAtUnix,
+            ])
+            .to_owned(),
+    )
+    .exec(conn)
+    .await
+    .map_err(ApiError::internal)?;
     Ok(())
 }
 
@@ -246,71 +213,33 @@ where
     C: ConnectionTrait,
 {
     let now = unix_now()?;
-    let now_i64 = u64_to_i64(now)?;
     for blob in blobs {
+        u64_to_i64(blob.size_bytes)?;
+        usize_to_i64(blob.line_count)?;
         let generation = new_cleanup_generation()?;
-        let result = entities::source_blob_cleanup_job::Entity::update_many()
-            .filter(
-                entities::source_blob_cleanup_job::Column::ObjectKey.eq(blob.object_key.clone()),
-            )
-            .col_expr(
-                entities::source_blob_cleanup_job::Column::Generation,
-                Expr::value(generation.clone()),
-            )
-            .col_expr(
-                entities::source_blob_cleanup_job::Column::Sha256,
-                Expr::value(blob.sha256.clone()),
-            )
-            .col_expr(
-                entities::source_blob_cleanup_job::Column::GitOid,
-                Expr::value(blob.git_oid.clone()),
-            )
-            .col_expr(
-                entities::source_blob_cleanup_job::Column::SizeBytes,
-                Expr::value(u64_to_i64(blob.size_bytes)?),
-            )
-            .col_expr(
-                entities::source_blob_cleanup_job::Column::LineCount,
-                Expr::value(usize_to_i64(blob.line_count)?),
-            )
-            .col_expr(
-                entities::source_blob_cleanup_job::Column::Attempts,
-                Expr::value(0),
-            )
-            .col_expr(
-                entities::source_blob_cleanup_job::Column::NextRunAtUnix,
-                Expr::value(now_i64),
-            )
-            .col_expr(
-                entities::source_blob_cleanup_job::Column::LastError,
-                Expr::value(Option::<String>::None),
-            )
-            .col_expr(
-                entities::source_blob_cleanup_job::Column::CompletedAtUnix,
-                Expr::value(Option::<i64>::None),
-            )
-            .col_expr(
-                entities::source_blob_cleanup_job::Column::UpdatedAtUnix,
-                Expr::value(now_i64),
-            )
-            .exec(conn)
-            .await
-            .map_err(ApiError::internal)?;
-        if result.rows_affected == 0 {
-            entities::source_blob_cleanup_job::Entity::insert(
-                entities::source_blob_cleanup_job::Model::from_domain(&blob, generation, now)
-                    .into_active_model(),
-            )
-            .on_conflict(
-                OnConflict::column(entities::source_blob_cleanup_job::Column::ObjectKey)
-                    .do_nothing()
-                    .to_owned(),
-            )
-            .do_nothing()
-            .exec(conn)
-            .await
-            .map_err(ApiError::internal)?;
-        }
+        entities::source_blob_cleanup_job::Entity::insert(
+            entities::source_blob_cleanup_job::Model::from_domain(&blob, generation, now)
+                .into_active_model(),
+        )
+        .on_conflict(
+            OnConflict::column(entities::source_blob_cleanup_job::Column::ObjectKey)
+                .update_columns([
+                    entities::source_blob_cleanup_job::Column::Generation,
+                    entities::source_blob_cleanup_job::Column::Sha256,
+                    entities::source_blob_cleanup_job::Column::GitOid,
+                    entities::source_blob_cleanup_job::Column::SizeBytes,
+                    entities::source_blob_cleanup_job::Column::LineCount,
+                    entities::source_blob_cleanup_job::Column::Attempts,
+                    entities::source_blob_cleanup_job::Column::NextRunAtUnix,
+                    entities::source_blob_cleanup_job::Column::LastError,
+                    entities::source_blob_cleanup_job::Column::CompletedAtUnix,
+                    entities::source_blob_cleanup_job::Column::UpdatedAtUnix,
+                ])
+                .to_owned(),
+        )
+        .exec(conn)
+        .await
+        .map_err(ApiError::internal)?;
     }
     Ok(())
 }
@@ -528,9 +457,9 @@ where
         let blob = &loaded_blob.blob;
         if retained_object_keys.contains(&blob.object_key) {
             mark_source_blob_cleanup_retained(
+                conn,
                 &blob.object_key,
                 &loaded_blob.generation,
-                conn,
                 now_i64,
             )
             .await?;
@@ -604,9 +533,9 @@ where
 }
 
 async fn mark_source_blob_cleanup_retained<C>(
+    conn: &C,
     object_key: &str,
     generation: &str,
-    conn: &C,
     now_i64: i64,
 ) -> Result<(), ApiError>
 where
@@ -645,7 +574,7 @@ where
     Ok(())
 }
 
-async fn complete_pending_repo_storage_cleanup_at<C>(
+pub(super) async fn complete_pending_repo_storage_cleanup_at<C>(
     conn: &C,
     cleanup_repo_id: &str,
     generation: &str,
@@ -676,7 +605,7 @@ where
     Ok(())
 }
 
-async fn complete_pending_source_blob_cleanup_at<C>(
+pub(super) async fn complete_pending_source_blob_cleanup_at<C>(
     conn: &C,
     object_key: &str,
     generation: &str,
@@ -767,112 +696,4 @@ fn new_cleanup_generation() -> Result<String, ApiError> {
         ApiError::internal_message(format!("failed to generate cleanup row token: {error}"))
     })?;
     Ok(hex::encode(bytes))
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use sea_orm::{DbBackend, MockDatabase, MockExecResult};
-
-    #[tokio::test]
-    async fn source_blob_cleanup_queue_writes_typed_rows_not_metadata_lock_json() {
-        let db = MockDatabase::new(DbBackend::Postgres)
-            .append_exec_results(vec![MockExecResult::default(); 2])
-            .into_connection();
-        queue_pending_source_blob_deletion_rows(
-            &db,
-            [SourceBlob {
-                object_key: "objects/blob-1".to_string(),
-                sha256: "sha".to_string(),
-                git_oid: "oid".to_string(),
-                size_bytes: 10,
-                line_count: 1,
-            }],
-        )
-        .await
-        .unwrap();
-
-        let sql = transaction_sql(db);
-        assert!(
-            sql.iter()
-                .any(|statement| statement.contains("scope_source_blob_cleanup_jobs"))
-        );
-        assert!(
-            !sql.iter()
-                .any(|statement| statement.contains("scope_metadata_locks"))
-        );
-    }
-
-    #[tokio::test]
-    async fn repo_storage_cleanup_queue_writes_typed_rows_not_metadata_lock_json() {
-        let db = MockDatabase::new(DbBackend::Postgres)
-            .append_exec_results(vec![MockExecResult::default(); 2])
-            .into_connection();
-        queue_pending_repo_storage_cleanup_row(
-            &db,
-            RepoStorageCleanup {
-                owner_handle: "owner".to_string(),
-                repo_name: "repo".to_string(),
-            },
-        )
-        .await
-        .unwrap();
-
-        let sql = transaction_sql(db);
-        assert!(
-            sql.iter()
-                .any(|statement| statement.contains("scope_repo_storage_cleanup_jobs"))
-        );
-        assert!(
-            !sql.iter()
-                .any(|statement| statement.contains("scope_metadata_locks"))
-        );
-    }
-
-    #[tokio::test]
-    async fn repo_storage_cleanup_completion_is_generation_fenced() {
-        let db = MockDatabase::new(DbBackend::Postgres)
-            .append_exec_results(vec![MockExecResult::default()])
-            .into_connection();
-        complete_pending_repo_storage_cleanup_at(&db, "owner/repo", "cleanup-generation", 10)
-            .await
-            .unwrap();
-
-        let sql = transaction_sql(db);
-        assert!(
-            sql.iter()
-                .any(|statement| statement.contains("\"generation\"")),
-            "completion must filter by cleanup row generation: {sql:?}"
-        );
-    }
-
-    #[tokio::test]
-    async fn source_blob_cleanup_completion_is_generation_fenced() {
-        let db = MockDatabase::new(DbBackend::Postgres)
-            .append_exec_results(vec![MockExecResult::default()])
-            .into_connection();
-        complete_pending_source_blob_cleanup_at(&db, "objects/blob-1", "cleanup-generation", 10)
-            .await
-            .unwrap();
-
-        let sql = transaction_sql(db);
-        assert!(
-            sql.iter()
-                .any(|statement| statement.contains("\"generation\"")),
-            "completion must filter by cleanup row generation: {sql:?}"
-        );
-    }
-
-    fn transaction_sql(db: sea_orm::DatabaseConnection) -> Vec<String> {
-        db.into_transaction_log()
-            .into_iter()
-            .flat_map(|transaction| {
-                transaction
-                    .statements()
-                    .iter()
-                    .map(|statement| statement.sql.clone())
-                    .collect::<Vec<_>>()
-            })
-            .collect()
-    }
 }

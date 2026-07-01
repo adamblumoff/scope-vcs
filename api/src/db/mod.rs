@@ -1,5 +1,7 @@
 mod auth;
 mod cleanup_queue;
+#[cfg(test)]
+mod cleanup_queue_tests;
 mod clerk_users;
 mod cli_auth;
 mod cli_sessions;
