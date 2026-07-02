@@ -103,12 +103,6 @@ impl MetadataStore {
         connect_postgres_store(database_url)
     }
 
-    pub fn connect_worker_from_env() -> anyhow::Result<Self> {
-        let database_url = std::env::var(crate::config::DATABASE_URL_ENV)
-            .map_err(|_| anyhow::anyhow!("DATABASE_URL is required for Scope worker metadata"))?;
-        connect_postgres_worker_store(database_url)
-    }
-
     pub fn connect_worker_from_env_with_schema_wait(
         wait_timeout: Duration,
         retry_interval: Duration,
@@ -438,10 +432,6 @@ fn connect_postgres_store(database_url: String) -> anyhow::Result<MetadataStore>
         }),
         postgres_database_url: Some(database_url),
     })
-}
-
-fn connect_postgres_worker_store(database_url: String) -> anyhow::Result<MetadataStore> {
-    connect_postgres_worker_store_with_schema_wait(database_url, Duration::ZERO, Duration::ZERO)
 }
 
 fn connect_postgres_worker_store_with_schema_wait(

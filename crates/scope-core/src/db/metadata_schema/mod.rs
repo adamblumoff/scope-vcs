@@ -77,12 +77,6 @@ const CURRENT_METADATA_DROP_TABLES: &[&str] = &[
     Users::Table.as_str(),
     MetadataLocks::Table.as_str(),
 ];
-const OBSOLETE_CLI_ACCESS_SESSIONS_TABLE: &str = "scope_cli_access_sessions";
-const OBSOLETE_REPO_MEMBERSHIPS_TABLE: &str = "scope_repo_memberships";
-const OBSOLETE_METADATA_DROP_TABLES: &[&str] = &[
-    OBSOLETE_CLI_ACCESS_SESSIONS_TABLE,
-    OBSOLETE_REPO_MEMBERSHIPS_TABLE,
-];
 
 pub fn metadata_schema_tables() -> impl Iterator<Item = &'static MetadataTableSpec> {
     METADATA_SCHEMA_TABLE_GROUPS
@@ -91,11 +85,7 @@ pub fn metadata_schema_tables() -> impl Iterator<Item = &'static MetadataTableSp
 }
 
 pub fn metadata_reset_tables() -> Vec<&'static str> {
-    CURRENT_METADATA_DROP_TABLES
-        .iter()
-        .chain(OBSOLETE_METADATA_DROP_TABLES.iter())
-        .copied()
-        .collect()
+    CURRENT_METADATA_DROP_TABLES.to_vec()
 }
 #[cfg(test)]
 mod tests {
@@ -114,8 +104,6 @@ mod tests {
                 table.table
             );
         }
-        assert!(reset_tables.contains(&OBSOLETE_CLI_ACCESS_SESSIONS_TABLE));
-        assert!(reset_tables.contains(&OBSOLETE_REPO_MEMBERSHIPS_TABLE));
     }
 
     #[test]
