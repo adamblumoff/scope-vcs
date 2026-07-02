@@ -8,6 +8,7 @@ pub mod dev;
 pub(crate) mod git;
 pub(crate) mod http;
 pub(crate) mod persistence;
+pub(crate) mod runtime_budgets;
 
 pub use scope_core::domain;
 pub use scope_core::object_store;
