@@ -1,14 +1,14 @@
-use super::metadata_schema::*;
-use super::schema_auth::ensure_auth_tables;
-use super::schema_cleanup::ensure_metadata_lock_and_cleanup_tables;
-use super::schema_collaboration::ensure_repository_collaboration_tables;
-use super::schema_outbox::ensure_outbox_tables;
-use super::schema_read_models::ensure_read_model_tables;
-use super::schema_repositories::ensure_repository_tables;
-use super::schema_repository_facts::ensure_repository_fact_tables;
+use super::schema_contract::{
+    self, ColumnSpec, ColumnType, ForeignKeyActionSpec, ForeignKeySpec, IndexSpec, PrimaryKeySpec,
+    SchemaIden, TableSpec,
+};
 use sea_orm::{ConnectionTrait, Statement};
 use sea_orm::{DatabaseConnection, DbErr};
-use sea_orm_migration::{manager::SchemaManager, prelude::*};
+use sea_orm_migration::{
+    manager::SchemaManager,
+    prelude::*,
+    sea_query::{ForeignKeyCreateStatement, IndexCreateStatement, TableCreateStatement},
+};
 
 pub async fn migrate_metadata_schema(db: &DatabaseConnection) -> Result<(), DbErr> {
     let manager = SchemaManager::new(db);
@@ -30,13 +30,7 @@ pub async fn migrate_metadata_schema(db: &DatabaseConnection) -> Result<(), DbEr
         ensure_metadata_reset_events_table(&manager).await?;
     }
 
-    ensure_metadata_lock_and_cleanup_tables(&manager).await?;
-    ensure_auth_tables(&manager).await?;
-    ensure_repository_tables(&manager).await?;
-    ensure_repository_fact_tables(&manager).await?;
-    ensure_read_model_tables(&manager).await?;
-    ensure_outbox_tables(&manager).await?;
-    ensure_repository_collaboration_tables(&manager).await?;
+    ensure_schema_tables(&manager).await?;
 
     Ok(())
 }
@@ -52,7 +46,10 @@ pub async fn assert_metadata_schema_ready(db: &DatabaseConnection) -> Result<(),
     let lock_row = db
         .query_one(Statement::from_string(
             db.get_database_backend(),
-            format!("SELECT 1 FROM {} LIMIT 1", MetadataLocks::Table.as_str()),
+            format!(
+                "SELECT 1 FROM {} LIMIT 1",
+                schema_contract::jobs::METADATA_LOCKS.name
+            ),
         ))
         .await?;
     if lock_row.is_none() {
@@ -65,40 +62,138 @@ pub async fn assert_metadata_schema_ready(db: &DatabaseConnection) -> Result<(),
 }
 
 async fn ensure_metadata_reset_events_table(manager: &SchemaManager<'_>) -> Result<(), DbErr> {
-    manager
-        .create_table(
-            Table::create()
-                .table(MetadataResetEvents::Table)
-                .if_not_exists()
-                .col(
-                    ColumnDef::new(MetadataResetEvents::Id)
-                        .string()
-                        .not_null()
-                        .primary_key(),
-                )
-                .col(
-                    ColumnDef::new(MetadataResetEvents::ResetAtUnix)
-                        .big_integer()
-                        .not_null(),
-                )
-                .col(
-                    ColumnDef::new(MetadataResetEvents::Trigger)
-                        .string()
-                        .not_null(),
-                )
-                .col(
-                    ColumnDef::new(MetadataResetEvents::Reason)
-                        .text()
-                        .not_null(),
-                )
-                .to_owned(),
+    ensure_table(manager, schema_contract::metadata_reset_events_table()).await
+}
+
+async fn ensure_schema_tables(manager: &SchemaManager<'_>) -> Result<(), DbErr> {
+    for table in schema_contract::schema_tables() {
+        ensure_table(manager, table).await?;
+    }
+
+    for table in schema_contract::schema_tables() {
+        for index in table.indexes {
+            manager
+                .create_index(create_index_statement(table, index))
+                .await?;
+        }
+    }
+
+    Ok(())
+}
+
+async fn ensure_table(manager: &SchemaManager<'_>, table: &TableSpec) -> Result<(), DbErr> {
+    manager.create_table(create_table_statement(table)).await
+}
+
+fn create_table_statement(table: &TableSpec) -> TableCreateStatement {
+    let mut statement = Table::create();
+    statement.table(SchemaIden::new(table.name)).if_not_exists();
+
+    let inline_primary_key = table.inline_primary_key_column();
+    for column in table.columns {
+        statement.col(column_definition(
+            column,
+            inline_primary_key == Some(column.name),
+        ));
+    }
+
+    if let PrimaryKeySpec::Composite { name, columns } = table.primary_key {
+        let mut primary_key = Index::create();
+        primary_key.name(name);
+        for column in columns.iter().copied() {
+            primary_key.col(SchemaIden::new(column));
+        }
+        statement.primary_key(&mut primary_key);
+    }
+
+    for foreign_key in table.foreign_keys {
+        let mut foreign_key = foreign_key_statement(table.name, foreign_key);
+        statement.foreign_key(&mut foreign_key);
+    }
+
+    statement
+}
+
+fn column_definition(column: &ColumnSpec, primary_key: bool) -> ColumnDef {
+    let mut definition = ColumnDef::new(SchemaIden::new(column.name));
+    match column.column_type {
+        ColumnType::BigInteger => {
+            definition.big_integer();
+        }
+        ColumnType::Boolean => {
+            definition.boolean();
+        }
+        ColumnType::Integer => {
+            definition.integer();
+        }
+        ColumnType::JsonBinary => {
+            definition.json_binary();
+        }
+        ColumnType::String => {
+            definition.string();
+        }
+        ColumnType::Text => {
+            definition.text();
+        }
+    }
+
+    if !column.nullable {
+        definition.not_null();
+    }
+    if primary_key {
+        definition.primary_key();
+    }
+    if column.unique {
+        definition.unique_key();
+    }
+
+    definition
+}
+
+fn create_index_statement(table: &TableSpec, index: &IndexSpec) -> IndexCreateStatement {
+    let mut statement = Index::create();
+    statement
+        .name(index.name)
+        .table(SchemaIden::new(table.name))
+        .if_not_exists();
+    for column in index.columns.iter().copied() {
+        statement.col(SchemaIden::new(column));
+    }
+    if index.unique {
+        statement.unique();
+    }
+    statement
+}
+
+fn foreign_key_statement(
+    table_name: &'static str,
+    foreign_key: &ForeignKeySpec,
+) -> ForeignKeyCreateStatement {
+    let mut statement = ForeignKey::create();
+    statement
+        .name(foreign_key.name)
+        .from(
+            SchemaIden::new(table_name),
+            SchemaIden::new(foreign_key.column),
         )
-        .await
+        .to(
+            SchemaIden::new(foreign_key.to_table),
+            SchemaIden::new(foreign_key.to_column),
+        )
+        .on_delete(foreign_key_action(foreign_key.on_delete));
+    statement
+}
+
+fn foreign_key_action(action: ForeignKeyActionSpec) -> ForeignKeyAction {
+    match action {
+        ForeignKeyActionSpec::Cascade => ForeignKeyAction::Cascade,
+        ForeignKeyActionSpec::SetNull => ForeignKeyAction::SetNull,
+    }
 }
 
 pub async fn reset_metadata_schema(db: &DatabaseConnection) -> Result<(), DbErr> {
     let backend = db.get_database_backend();
-    let tables = metadata_reset_tables().join(", ");
+    let tables = schema_contract::metadata_reset_tables().join(", ");
     db.execute(Statement::from_string(
         backend,
         format!("DROP TABLE IF EXISTS {tables} CASCADE"),
@@ -112,17 +207,14 @@ async fn metadata_schema_has_catalog_rows(
     manager: &SchemaManager<'_>,
 ) -> Result<bool, DbErr> {
     let backend = db.get_database_backend();
-    for table in metadata_schema_tables()
-        .filter(|table| table.counts_for_catalog_rows)
-        .map(|table| table.table)
-    {
-        if !manager.has_table(table).await? {
+    for table in schema_contract::catalog_row_tables() {
+        if !manager.has_table(table.name).await? {
             continue;
         }
         let row = db
             .query_one(Statement::from_string(
                 backend,
-                format!("SELECT 1 FROM {table} LIMIT 1"),
+                format!("SELECT 1 FROM {} LIMIT 1", table.name),
             ))
             .await?;
         if row.is_some() {
@@ -134,13 +226,13 @@ async fn metadata_schema_has_catalog_rows(
 }
 
 async fn metadata_schema_drift(manager: &SchemaManager<'_>) -> Result<Option<String>, DbErr> {
-    for table in metadata_schema_tables() {
-        if !manager.has_table(table.table).await? {
-            return Ok(Some(format!("missing table {}", table.table)));
+    for table in schema_contract::schema_tables() {
+        if !manager.has_table(table.name).await? {
+            return Ok(Some(format!("missing table {}", table.name)));
         }
-        for column in table.columns.iter().copied() {
-            if !manager.has_column(table.table, column).await? {
-                return Ok(Some(format!("missing column {}.{column}", table.table)));
+        for column in table.column_names() {
+            if !manager.has_column(table.name, column).await? {
+                return Ok(Some(format!("missing column {}.{column}", table.name)));
             }
         }
     }
@@ -151,9 +243,12 @@ async fn metadata_schema_has_duplicate_user_emails(
     db: &DatabaseConnection,
     manager: &SchemaManager<'_>,
 ) -> Result<bool, DbErr> {
-    if !manager.has_table(Users::Table.as_str()).await?
+    if !manager.has_table(schema_contract::auth::USERS.name).await?
         || !manager
-            .has_column(Users::Table.as_str(), Users::Email.as_str())
+            .has_column(
+                schema_contract::auth::USERS.name,
+                schema_contract::auth::USER_EMAIL,
+            )
             .await?
     {
         return Ok(false);
@@ -164,8 +259,8 @@ async fn metadata_schema_has_duplicate_user_emails(
             db.get_database_backend(),
             format!(
                 "SELECT {email} FROM {users} WHERE {email} <> '' GROUP BY {email} HAVING COUNT(*) > 1 LIMIT 1",
-                users = Users::Table.as_str(),
-                email = Users::Email.as_str(),
+                users = schema_contract::auth::USERS.name,
+                email = schema_contract::auth::USER_EMAIL,
             ),
         ))
         .await?;
@@ -185,11 +280,11 @@ mod tests {
         use sea_orm::{DbBackend, MockDatabase, MockExecResult};
 
         let db = MockDatabase::new(DbBackend::Postgres)
-            .append_exec_results(vec![MockExecResult::default(); 10])
+            .append_exec_results(vec![MockExecResult::default(); 64])
             .into_connection();
         let manager = SchemaManager::new(&db);
 
-        ensure_auth_tables(&manager).await.unwrap();
+        ensure_schema_tables(&manager).await.unwrap();
 
         let sql = db
             .into_transaction_log()
