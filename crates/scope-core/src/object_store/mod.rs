@@ -16,10 +16,33 @@ pub use source_blobs::{
 pub trait ObjectStore: Send + Sync {
     fn put(&self, key: &str, bytes: &[u8]) -> Result<(), ApiError>;
     fn get(&self, key: &str) -> Result<Vec<u8>, ApiError>;
+    fn get_bounded(&self, key: &str, max_bytes: usize) -> Result<Vec<u8>, ApiError> {
+        let bytes = self.get(key)?;
+        ensure_object_size("read", key, bytes.len(), max_bytes)?;
+        Ok(bytes)
+    }
     fn delete(&self, key: &str) -> Result<(), ApiError>;
     fn readiness_check(&self) -> Result<(), ApiError> {
         Ok(())
     }
+}
+
+pub fn ensure_object_size(
+    operation: &str,
+    key: &str,
+    bytes: usize,
+    max_bytes: usize,
+) -> Result<(), ApiError> {
+    if bytes > max_bytes {
+        return Err(object_too_large(operation, key, bytes, max_bytes));
+    }
+    Ok(())
+}
+
+pub fn object_too_large(operation: &str, key: &str, bytes: usize, max_bytes: usize) -> ApiError {
+    ApiError::payload_too_large(format!(
+        "object store {operation} for {key} is too large: {bytes} bytes exceeds {max_bytes} bytes"
+    ))
 }
 
 fn required_env(name: &str) -> anyhow::Result<String> {

@@ -72,6 +72,10 @@ pub(crate) async fn git_info_refs(
     match query.service.as_deref() {
         Some(GIT_RECEIVE_PACK) => match receive_pack_access(&state, &headers, &org, &repo).await {
             Ok(access) => {
+                let _permit = match state.runtime_budgets.try_receive_pack() {
+                    Ok(permit) => permit,
+                    Err(error) => return git_error_response(error),
+                };
                 match handle_git_receive_pack(&state, &org, &repo, "GET", Vec::new(), None, access)
                 {
                     Ok(response) => response,
@@ -81,8 +85,15 @@ pub(crate) async fn git_info_refs(
             Err(error) => git_error_response(error),
         },
         Some(GIT_UPLOAD_PACK) => {
+            let _permit = match state.runtime_budgets.try_upload_pack() {
+                Ok(permit) => permit,
+                Err(error) => return git_advertisement_error(error.message),
+            };
             match git_upload_pack_repo_for_request(&state, &headers, &org, &repo).await {
-                Ok(repo_path) => git_upload_pack_advertisement(&repo_path),
+                Ok(repo_path) => git_upload_pack_advertisement(
+                    &repo_path,
+                    state.runtime_budgets.git_command_timeout(),
+                ),
                 Err(error) if error.status == StatusCode::UNAUTHORIZED => git_error_response(error),
                 Err(error) => git_advertisement_error(error.message),
             }
@@ -112,6 +123,10 @@ pub(crate) async fn git_receive_pack(
     let headers = request.headers().clone();
     let access = match receive_pack_access(&state, &headers, &org, &repo).await {
         Ok(access) => access,
+        Err(error) => return git_error_response(error),
+    };
+    let _permit = match state.runtime_budgets.try_receive_pack() {
+        Ok(permit) => permit,
         Err(error) => return git_error_response(error),
     };
 
@@ -152,6 +167,10 @@ pub(crate) async fn git_upload_pack_rpc(
     Path((org, repo_name)): Path<(String, String)>,
     request: Request,
 ) -> Response {
+    let permit = match state.runtime_budgets.try_upload_pack() {
+        Ok(permit) => permit,
+        Err(error) => return git_upload_pack_error(error.message),
+    };
     let repo_path = match git_upload_pack_repo_for_request(&state, &headers, &org, &repo_name).await
     {
         Ok(repo_path) => repo_path,
@@ -164,7 +183,14 @@ pub(crate) async fn git_upload_pack_rpc(
         }
     };
 
-    match git_upload_pack_response(&repo_path, &body).await {
+    match git_upload_pack_response(
+        &repo_path,
+        &body,
+        state.runtime_budgets.git_command_timeout(),
+        permit,
+    )
+    .await
+    {
         Ok(response) => response,
         Err(error) => git_upload_pack_error(error.message),
     }
