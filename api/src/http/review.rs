@@ -1,7 +1,7 @@
 use crate::domain::{
     policy::ScopePath,
     repo_actions::ensure_pending_publish,
-    store::{StagedFileChangeKind, StagedRepoUpdate, StoredRepository},
+    store::{SourceBlob, StagedFileChangeKind, StagedRepoUpdate, StoredRepository},
 };
 use crate::{
     auth::scope::{optional_scope_user, principal_for_scope_user},
@@ -47,7 +47,7 @@ pub(crate) async fn get_pending_import_review(
     Ok(Json(PendingImportReviewResponse {
         publication_state: repo.record.publication_state,
         default_visibility: repo.record.default_visibility,
-        line_diff: pending_import_line_diff(state.object_store.as_ref(), &repo)?,
+        line_diff: pending_import_line_diff_best_effort(state.object_store.as_ref(), &repo),
         files: pending_import_files(&repo, &principal)?,
     }))
 }
@@ -127,11 +127,9 @@ pub(crate) async fn get_staged_update(
         return Err(ApiError::forbidden("review permission required"));
     }
 
-    let staged = repo
-        .staged_update
-        .as_ref()
-        .map(|update| staged_update_response_with_diff(state.object_store.as_ref(), update))
-        .transpose()?;
+    let staged = repo.staged_update.as_ref().map(|update| {
+        staged_update_response_with_best_effort_diff(state.object_store.as_ref(), update)
+    });
 
     Ok(Json(staged))
 }
@@ -163,8 +161,8 @@ pub(crate) async fn update_staged_file_visibility(
     let line_diff = repo
         .staged_update
         .as_ref()
-        .map(|update| staged_update_line_diff(state.object_store.as_ref(), update))
-        .transpose()?;
+        .map(|update| staged_update_line_diff_best_effort(state.object_store.as_ref(), update))
+        .unwrap_or_default();
 
     let updated = state.metadata.update_staged_file_visibility(
         &owner,
@@ -180,10 +178,7 @@ pub(crate) async fn update_staged_file_visibility(
         "staged-visibility-changed",
     );
 
-    Ok(Json(staged_update_response(
-        &updated,
-        line_diff.unwrap_or_default(),
-    )))
+    Ok(Json(staged_update_response(&updated, line_diff)))
 }
 
 pub(crate) async fn apply_staged_update(
@@ -323,6 +318,9 @@ fn pending_import_line_diff(
 ) -> Result<ReviewLineDiffResponse, ApiError> {
     let mut line_diff = ReviewLineDiffResponse::default();
     if let Some(pending) = &repo.pending_import {
+        if summary_line_diff_exceeds_byte_budget(pending.files.iter().map(|file| &file.blob)) {
+            return Ok(line_diff);
+        }
         for file in &pending.files {
             let file_diff = review_line_diff_for_blobs(store, None, Some(&file.blob))?;
             add_line_diff(&mut line_diff, file_diff);
@@ -331,14 +329,28 @@ fn pending_import_line_diff(
     Ok(line_diff)
 }
 
-fn staged_update_response_with_diff(
+fn pending_import_line_diff_best_effort(
+    store: &dyn ObjectStore,
+    repo: &StoredRepository,
+) -> ReviewLineDiffResponse {
+    match pending_import_line_diff(store, repo) {
+        Ok(line_diff) => line_diff,
+        Err(error) => {
+            tracing::debug!(
+                status = ?error.status,
+                message = %error.message,
+                "skipping pending import summary line diff"
+            );
+            ReviewLineDiffResponse::default()
+        }
+    }
+}
+
+fn staged_update_response_with_best_effort_diff(
     store: &dyn ObjectStore,
     update: &StagedRepoUpdate,
-) -> Result<StagedUpdateResponse, ApiError> {
-    Ok(staged_update_response(
-        update,
-        staged_update_line_diff(store, update)?,
-    ))
+) -> StagedUpdateResponse {
+    staged_update_response(update, staged_update_line_diff_best_effort(store, update))
 }
 
 fn staged_update_line_diff(
@@ -346,6 +358,15 @@ fn staged_update_line_diff(
     update: &StagedRepoUpdate,
 ) -> Result<ReviewLineDiffResponse, ApiError> {
     let mut line_diff = ReviewLineDiffResponse::default();
+    if summary_line_diff_exceeds_byte_budget(
+        update
+            .changes
+            .iter()
+            .flat_map(|change| [change.old_content.as_ref(), change.new_content.as_ref()])
+            .flatten(),
+    ) {
+        return Ok(line_diff);
+    }
 
     for change in &update.changes {
         let change_diff = review_line_diff_for_blobs(
@@ -369,9 +390,23 @@ fn staged_update_line_diff_best_effort(
             tracing::debug!(
                 status = ?error.status,
                 message = %error.message,
-                "skipping staged update line diff before reject"
+                "skipping staged update summary line diff"
             );
             ReviewLineDiffResponse::default()
         }
     }
+}
+
+fn summary_line_diff_exceeds_byte_budget<'a>(
+    blobs: impl IntoIterator<Item = &'a SourceBlob>,
+) -> bool {
+    const SUMMARY_LINE_DIFF_BYTE_BUDGET: u64 = 1024 * 1024;
+    let mut total = 0_u64;
+    for blob in blobs {
+        total = total.saturating_add(blob.size_bytes);
+        if total > SUMMARY_LINE_DIFF_BYTE_BUDGET {
+            return true;
+        }
+    }
+    false
 }

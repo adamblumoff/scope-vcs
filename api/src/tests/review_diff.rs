@@ -1,4 +1,5 @@
 use super::*;
+use crate::domain::store::SourceBlob;
 
 #[tokio::test]
 async fn owner_can_load_pending_import_file_diff() {
@@ -145,6 +146,170 @@ async fn large_binary_file_diff_uses_metadata_without_fetching_blob() {
     let review = response_json(review_response).await;
     assert_eq!(review["line_diff"]["additions"], 0);
     assert_eq!(review["line_diff"]["deletions"], 0);
+}
+
+#[tokio::test]
+async fn pending_import_review_blob_read_failure_returns_zero_line_diff() {
+    let mut state = test_state_with_repo();
+    cache_test_jwks(&state);
+    {
+        let mut catalog = lock_catalog(&state).unwrap();
+        let repo = catalog.repositories.get_mut(TEST_REPO_ID).unwrap();
+        repo.record.publication_state = RepoPublicationState::Unpublished;
+        repo.pending_import = Some(pending_import_fixture(vec![(
+            "README.md",
+            "hello\nfrom import",
+        )]));
+    }
+    state.object_store = Arc::new(ReadDeleteFailsObjectStore);
+
+    let response = router(state)
+        .oneshot(
+            Request::builder()
+                .method("GET")
+                .uri("/v1/repos/owner/repo/pending-import")
+                .header(AUTHORIZATION, bearer_header())
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = response_json(response).await;
+    assert_eq!(body["line_diff"]["additions"], 0);
+    assert_eq!(body["line_diff"]["deletions"], 0);
+}
+
+#[tokio::test]
+async fn staged_update_review_blob_read_failure_returns_zero_line_diff() {
+    let mut state = test_state_with_repo();
+    cache_test_jwks(&state);
+    {
+        let mut repo = repo_with_readme();
+        stage_receive_pack_update(
+            &mut repo,
+            receive_pack_update(vec![("/README.md", Some("missing read"))]),
+        )
+        .unwrap();
+
+        let mut catalog = lock_catalog(&state).unwrap();
+        catalog.repositories.insert(TEST_REPO_ID.to_string(), repo);
+    }
+    state.object_store = Arc::new(ReadDeleteFailsObjectStore);
+
+    let response = router(state)
+        .oneshot(
+            Request::builder()
+                .method("GET")
+                .uri("/v1/repos/owner/repo/staged-update")
+                .header(AUTHORIZATION, bearer_header())
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = response_json(response).await;
+    assert_eq!(body["line_diff"]["additions"], 0);
+    assert_eq!(body["line_diff"]["deletions"], 0);
+}
+
+#[tokio::test]
+async fn staged_visibility_update_blob_read_failure_still_updates_visibility() {
+    let mut state = test_state_with_repo();
+    cache_test_jwks(&state);
+    {
+        let mut repo = repo_with_readme();
+        stage_receive_pack_update(
+            &mut repo,
+            receive_pack_update(vec![("/README.md", Some("private readme"))]),
+        )
+        .unwrap();
+
+        let mut catalog = lock_catalog(&state).unwrap();
+        catalog.repositories.insert(TEST_REPO_ID.to_string(), repo);
+    }
+    state.object_store = Arc::new(ReadDeleteFailsObjectStore);
+
+    let response = router(state.clone())
+        .oneshot(
+            Request::builder()
+                .method("PATCH")
+                .uri("/v1/repos/owner/repo/staged-update/files/visibility")
+                .header(AUTHORIZATION, bearer_header())
+                .header(CONTENT_TYPE, "application/json")
+                .body(Body::from(
+                    r#"{"paths":["/README.md"],"visibility":"Private"}"#,
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = response_json(response).await;
+    assert_eq!(body["line_diff"]["additions"], 0);
+    assert_eq!(body["line_diff"]["deletions"], 0);
+    let repo = find_repo(&state, TEST_REPO_OWNER, TEST_REPO_NAME).unwrap();
+    assert_eq!(
+        repo.staged_update.as_ref().unwrap().changes[0].visibility,
+        Visibility::Private
+    );
+}
+
+#[tokio::test]
+async fn staged_update_summary_line_diff_skips_over_aggregate_byte_budget() {
+    let state = test_state_with_repo();
+    cache_test_jwks(&state);
+    {
+        let mut repo = repo_with_readme();
+        repo.staged_update = Some(StagedRepoUpdate {
+            id: "large-summary".to_string(),
+            branch: "refs/heads/main".to_string(),
+            base_live_commit_id: Some(repo.graph.commits[0].id.clone()),
+            author_id: repo.record.owner_user_id.clone(),
+            message: "large summary".to_string(),
+            git_snapshot: source_blob("snapshot"),
+            changes: vec![
+                StagedFileChange {
+                    path: ScopePath::parse("/one.txt").unwrap(),
+                    old_content: None,
+                    new_content: Some(missing_blob("one", 600 * 1024)),
+                    visibility: Visibility::Public,
+                    kind: StagedFileChangeKind::Added,
+                },
+                StagedFileChange {
+                    path: ScopePath::parse("/two.txt").unwrap(),
+                    old_content: None,
+                    new_content: Some(missing_blob("two", 600 * 1024)),
+                    visibility: Visibility::Public,
+                    kind: StagedFileChangeKind::Added,
+                },
+            ],
+        });
+
+        let mut catalog = lock_catalog(&state).unwrap();
+        catalog.repositories.insert(TEST_REPO_ID.to_string(), repo);
+    }
+
+    let response = router(state)
+        .oneshot(
+            Request::builder()
+                .method("GET")
+                .uri("/v1/repos/owner/repo/staged-update")
+                .header(AUTHORIZATION, bearer_header())
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = response_json(response).await;
+    assert_eq!(body["line_diff"]["additions"], 0);
+    assert_eq!(body["line_diff"]["deletions"], 0);
 }
 
 #[tokio::test]
@@ -429,5 +594,15 @@ impl crate::object_store::ObjectStore for ReadDeleteFailsObjectStore {
 
     fn delete(&self, _key: &str) -> Result<(), crate::error::ApiError> {
         Err(crate::error::ApiError::service_unavailable("delete failed"))
+    }
+}
+
+fn missing_blob(label: &str, size_bytes: u64) -> SourceBlob {
+    SourceBlob {
+        object_key: format!("objects/missing-{label}"),
+        sha256: format!("missing-{label}-sha"),
+        git_oid: "3333333333333333333333333333333333333333".to_string(),
+        git_file_mode: DEFAULT_GIT_FILE_MODE.to_string(),
+        size_bytes,
     }
 }

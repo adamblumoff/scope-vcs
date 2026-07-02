@@ -10,7 +10,7 @@ import {
 } from '@pierre/diffs/react'
 import { Skeleton } from '@/components/ui/skeleton'
 import { useThemeType } from '@/lib/use-theme-type'
-import { FileText, TriangleAlert, X } from 'lucide-react'
+import { File, FileText, TriangleAlert, X } from 'lucide-react'
 import { type ReactNode, useMemo } from 'react'
 import { displayPath } from './review-tree-model'
 
@@ -228,7 +228,7 @@ function BinaryDiffState({ sides }: { sides: BinaryContentSide[] }) {
     <div className="flex min-h-[220px] items-center justify-center px-4 py-6 text-sm text-muted-foreground">
       <div className="w-full max-w-md space-y-3">
         <div className="flex items-center gap-2 text-foreground">
-          <FileText className="size-4" />
+          <File className="size-4" />
           <span className="font-medium">Binary file not rendered</span>
         </div>
         <div className="space-y-2 font-mono text-xs leading-5">

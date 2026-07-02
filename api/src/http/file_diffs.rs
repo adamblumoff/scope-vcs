@@ -130,7 +130,7 @@ fn line_diff_between(old_content: &str, new_content: &str) -> ReviewLineDiffResp
 }
 
 fn exceeds_diff_line_limit(content: &str) -> bool {
-    content.lines().take(MAX_DIFF_TEXT_LINES + 1).count() > MAX_DIFF_TEXT_LINES
+    content.lines().count() > MAX_DIFF_TEXT_LINES
 }
 
 #[cfg(test)]
