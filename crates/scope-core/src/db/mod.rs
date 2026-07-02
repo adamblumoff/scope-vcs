@@ -1,3 +1,10 @@
+//! Metadata persistence entry point.
+//!
+//! Table row shapes live in `entities/*`, table identifiers and schema
+//! inventory live in `metadata_schema/*`, and table creation lives in
+//! `schema_*.rs`. Runtime behavior should stay in the focused DB modules that
+//! own the workflow being persisted.
+
 mod auth;
 mod cleanup_queue;
 #[cfg(test)]
@@ -23,8 +30,12 @@ mod repo_tokens;
 mod repository_rows;
 mod runtime;
 mod schema;
+mod schema_auth;
+mod schema_cleanup;
+mod schema_collaboration;
 mod schema_outbox;
 mod schema_read_models;
+mod schema_repositories;
 mod schema_repository_facts;
 #[cfg(any(test, feature = "test-support"))]
 mod test_support;
