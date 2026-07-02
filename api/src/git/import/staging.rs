@@ -1,10 +1,9 @@
-use super::diff::staged_file_line_diff;
 use crate::domain::policy::ScopePath;
 use crate::domain::staged_updates::{
     StagedContentChange, StagedUpdateError, StagedUpdateInput, stage_staged_update,
 };
 use crate::domain::store::{SourceBlob, StagedRepoUpdate, StoredRepository};
-use crate::{config::DEFAULT_GIT_BRANCH, error::ApiError, object_store::ObjectStore};
+use crate::{config::DEFAULT_GIT_BRANCH, error::ApiError};
 
 #[derive(Clone, Debug)]
 pub(crate) struct ReceivePackFileChange {
@@ -46,14 +45,12 @@ pub(crate) fn stage_receive_pack_update(
     repo: &mut StoredRepository,
     update: ReceivePackUpdate,
 ) -> Result<Option<StagedRepoUpdate>, ApiError> {
-    let store = crate::object_store::MemoryObjectStore::new();
-    stage_receive_pack_update_with_store(repo, update, &store, true)
+    stage_receive_pack_update_for_access(repo, update, true)
 }
 
-pub(super) fn stage_receive_pack_update_with_store(
+pub(super) fn stage_receive_pack_update_for_access(
     repo: &mut StoredRepository,
     update: ReceivePackUpdate,
-    store: &dyn ObjectStore,
     can_apply_changes: bool,
 ) -> Result<Option<StagedRepoUpdate>, ApiError> {
     ensure_default_branch(&update.branch)?;
@@ -74,16 +71,14 @@ pub(super) fn stage_receive_pack_update_with_store(
                 .collect(),
         },
         can_apply_changes,
-        |old_content, new_content| staged_file_line_diff(store, old_content, new_content),
     )
     .map_err(staged_update_error_to_api_error)
 }
 
-fn staged_update_error_to_api_error(error: StagedUpdateError<ApiError>) -> ApiError {
+fn staged_update_error_to_api_error(error: StagedUpdateError) -> ApiError {
     match error {
         StagedUpdateError::BadRequest(message) => ApiError::bad_request(message),
         StagedUpdateError::Conflict(message) => ApiError::conflict(message),
         StagedUpdateError::InvalidPolicy(error) => ApiError::bad_request(error),
-        StagedUpdateError::LineDiff(error) => error,
     }
 }

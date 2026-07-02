@@ -1,13 +1,16 @@
 use crate::domain::{
     policy::ScopePath,
     repo_actions::ensure_pending_publish,
-    store::{SourceBlob, StagedFileChangeKind, StagedRepoUpdate, StoredRepository},
+    store::{StagedFileChangeKind, StagedRepoUpdate, StoredRepository},
 };
 use crate::{
     auth::scope::{optional_scope_user, principal_for_scope_user},
     error::ApiError,
+    http::file_diffs::{
+        add_line_diff, review_file_diff_response_for_blobs, review_line_diff_for_blobs,
+    },
     http::responses::*,
-    object_store::{ObjectStore, source_blob_text},
+    object_store::ObjectStore,
     state::AppState,
     state::{
         best_effort_drain_pending_source_blob_deletions, ensure_owner, ensure_repo_read, find_repo,
@@ -44,7 +47,7 @@ pub(crate) async fn get_pending_import_review(
     Ok(Json(PendingImportReviewResponse {
         publication_state: repo.record.publication_state,
         default_visibility: repo.record.default_visibility,
-        line_diff: pending_import_line_diff(&repo),
+        line_diff: pending_import_line_diff(state.object_store.as_ref(), &repo)?,
         files: pending_import_files(&repo, &principal)?,
     }))
 }
@@ -127,7 +130,8 @@ pub(crate) async fn get_staged_update(
     let staged = repo
         .staged_update
         .as_ref()
-        .map(staged_update_response_with_diff);
+        .map(|update| staged_update_response_with_diff(state.object_store.as_ref(), update))
+        .transpose()?;
 
     Ok(Json(staged))
 }
@@ -156,6 +160,11 @@ pub(crate) async fn update_staged_file_visibility(
         .iter()
         .map(|path| pending_scope_path(path))
         .collect::<Result<Vec<_>, _>>()?;
+    let line_diff = repo
+        .staged_update
+        .as_ref()
+        .map(|update| staged_update_line_diff(state.object_store.as_ref(), update))
+        .transpose()?;
 
     let updated = state.metadata.update_staged_file_visibility(
         &owner,
@@ -171,7 +180,10 @@ pub(crate) async fn update_staged_file_visibility(
         "staged-visibility-changed",
     );
 
-    Ok(Json(staged_update_response_with_diff(&updated)))
+    Ok(Json(staged_update_response(
+        &updated,
+        line_diff.unwrap_or_default(),
+    )))
 }
 
 pub(crate) async fn apply_staged_update(
@@ -186,6 +198,11 @@ pub(crate) async fn apply_staged_update(
     if !repo.access_for_principal(&principal).can_apply_changes {
         return Err(ApiError::forbidden("apply changes permission required"));
     }
+    let line_diff = repo
+        .staged_update
+        .as_ref()
+        .map(|update| staged_update_line_diff(state.object_store.as_ref(), update))
+        .transpose()?;
     let applied = state
         .metadata
         .apply_staged_update(&owner, &repo_name, &principal.id)?;
@@ -197,7 +214,10 @@ pub(crate) async fn apply_staged_update(
     );
     best_effort_drain_pending_source_blob_deletions(&state);
 
-    Ok(Json(staged_update_response_with_diff(&applied)))
+    Ok(Json(staged_update_response(
+        &applied,
+        line_diff.unwrap_or_default(),
+    )))
 }
 
 pub(crate) async fn reject_staged_update(
@@ -212,6 +232,11 @@ pub(crate) async fn reject_staged_update(
     if !repo.access_for_principal(&principal).can_apply_changes {
         return Err(ApiError::forbidden("apply changes permission required"));
     }
+    let line_diff = repo
+        .staged_update
+        .as_ref()
+        .map(|update| staged_update_line_diff_best_effort(state.object_store.as_ref(), update))
+        .unwrap_or_default();
     let rejected = state
         .metadata
         .reject_staged_update(&owner, &repo_name, &principal.id)?;
@@ -221,7 +246,7 @@ pub(crate) async fn reject_staged_update(
         repo.record.change_version,
         "staged-update-rejected",
     );
-    let response = staged_update_response_with_diff(&rejected);
+    let response = staged_update_response(&rejected, line_diff);
     best_effort_drain_pending_source_blob_deletions(&state);
 
     Ok(Json(response))
@@ -263,12 +288,13 @@ fn pending_import_file_diff_response(
         )));
     };
 
-    Ok(ReviewFileDiffResponse {
-        path: file_path.as_str().to_string(),
-        kind: StagedFileChangeKind::Added,
-        old_content: None,
-        new_content: Some(source_blob_text(store, &file.blob)?),
-    })
+    review_file_diff_response_for_blobs(
+        store,
+        file_path.as_str().to_string(),
+        StagedFileChangeKind::Added,
+        None,
+        Some(&file.blob),
+    )
 }
 
 fn staged_file_diff_response(
@@ -282,48 +308,70 @@ fn staged_file_diff_response(
         .find(|change| change.path.as_str() == path.as_str())
         .ok_or_else(|| ApiError::not_found(format!("file {} not found", path.as_str())))?;
 
-    Ok(ReviewFileDiffResponse {
-        path: change.path.as_str().to_string(),
-        kind: change.kind,
-        old_content: source_blob_text_opt(store, change.old_content.as_ref())?,
-        new_content: source_blob_text_opt(store, change.new_content.as_ref())?,
-    })
+    review_file_diff_response_for_blobs(
+        store,
+        change.path.as_str().to_string(),
+        change.kind,
+        change.old_content.as_ref(),
+        change.new_content.as_ref(),
+    )
 }
 
-fn source_blob_text_opt(
+fn pending_import_line_diff(
     store: &dyn ObjectStore,
-    blob: Option<&SourceBlob>,
-) -> Result<Option<String>, ApiError> {
-    blob.map(|blob| source_blob_text(store, blob)).transpose()
-}
-
-fn pending_import_line_diff(repo: &StoredRepository) -> ReviewLineDiffResponse {
-    let mut line_diff = ReviewLineDiffResponse {
-        additions: 0,
-        deletions: 0,
-    };
+    repo: &StoredRepository,
+) -> Result<ReviewLineDiffResponse, ApiError> {
+    let mut line_diff = ReviewLineDiffResponse::default();
     if let Some(pending) = &repo.pending_import {
         for file in &pending.files {
-            line_diff.additions += file.blob.line_count;
+            let file_diff = review_line_diff_for_blobs(store, None, Some(&file.blob))?;
+            add_line_diff(&mut line_diff, file_diff);
         }
     }
-    line_diff
+    Ok(line_diff)
 }
 
-fn staged_update_response_with_diff(update: &StagedRepoUpdate) -> StagedUpdateResponse {
-    staged_update_response(update, staged_update_line_diff(update))
+fn staged_update_response_with_diff(
+    store: &dyn ObjectStore,
+    update: &StagedRepoUpdate,
+) -> Result<StagedUpdateResponse, ApiError> {
+    Ok(staged_update_response(
+        update,
+        staged_update_line_diff(store, update)?,
+    ))
 }
 
-fn staged_update_line_diff(update: &StagedRepoUpdate) -> ReviewLineDiffResponse {
-    let mut line_diff = ReviewLineDiffResponse {
-        additions: 0,
-        deletions: 0,
-    };
+fn staged_update_line_diff(
+    store: &dyn ObjectStore,
+    update: &StagedRepoUpdate,
+) -> Result<ReviewLineDiffResponse, ApiError> {
+    let mut line_diff = ReviewLineDiffResponse::default();
 
     for change in &update.changes {
-        line_diff.additions += change.line_diff.additions;
-        line_diff.deletions += change.line_diff.deletions;
+        let change_diff = review_line_diff_for_blobs(
+            store,
+            change.old_content.as_ref(),
+            change.new_content.as_ref(),
+        )?;
+        add_line_diff(&mut line_diff, change_diff);
     }
 
-    line_diff
+    Ok(line_diff)
+}
+
+fn staged_update_line_diff_best_effort(
+    store: &dyn ObjectStore,
+    update: &StagedRepoUpdate,
+) -> ReviewLineDiffResponse {
+    match staged_update_line_diff(store, update) {
+        Ok(line_diff) => line_diff,
+        Err(error) => {
+            tracing::debug!(
+                status = ?error.status,
+                message = %error.message,
+                "skipping staged update line diff before reject"
+            );
+            ReviewLineDiffResponse::default()
+        }
+    }
 }

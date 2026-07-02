@@ -355,9 +355,6 @@ fn parse_git_cat_file_batch(
         }
         cursor += 1;
 
-        std::str::from_utf8(&content).map_err(|_| {
-            ApiError::bad_request(format!("blob {} must be valid UTF-8 text", pending.path))
-        })?;
         contents.push(content);
     }
 

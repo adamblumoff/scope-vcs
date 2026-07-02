@@ -5,9 +5,9 @@ use crate::{
         policy::{ScopePath, Visibility, VisibilityRule},
         projection::{AuthorVisibility, FileChange, LogicalCommit},
         store::{
-            AccountAccess, AppCatalog, LineDiff, PendingImport, PendingImportFile,
-            RepoPublicationState, RepoSettings, SourceBlob, StagedFileChange, StagedFileChangeKind,
-            StagedRepoUpdate, StoredRepository, UserAccount,
+            AccountAccess, AppCatalog, PendingImport, PendingImportFile, RepoPublicationState,
+            RepoSettings, SourceBlob, StagedFileChange, StagedFileChangeKind, StagedRepoUpdate,
+            StoredRepository, UserAccount,
         },
     },
     error::ApiError,
@@ -206,10 +206,6 @@ fn staged_update_demo(
                 path: ScopePath::parse("/README.md").map_err(ApiError::internal)?,
                 old_content: Some(initial_readme),
                 new_content: Some(updated_readme),
-                line_diff: LineDiff {
-                    additions: 1,
-                    deletions: 1,
-                },
                 visibility: Visibility::Public,
                 kind: StagedFileChangeKind::Modified,
             },
@@ -217,10 +213,6 @@ fn staged_update_demo(
                 path: ScopePath::parse("/internal/release-notes.md").map_err(ApiError::internal)?,
                 old_content: None,
                 new_content: Some(private_note),
-                line_diff: LineDiff {
-                    additions: 3,
-                    deletions: 0,
-                },
                 visibility: Visibility::Private,
                 kind: StagedFileChangeKind::Added,
             },
@@ -396,7 +388,7 @@ mod tests {
     use crate::AppState;
     use crate::git::import::git_stdout_text;
     use crate::git::storage::restore_git_snapshot;
-    use crate::object_store::{EncryptedObjectStore, MemoryObjectStore, source_blob_text};
+    use crate::object_store::{EncryptedObjectStore, MemoryObjectStore, source_blob_bytes};
     use std::sync::Arc;
 
     #[test]
@@ -423,8 +415,9 @@ mod tests {
             .new_content
             .as_ref()
             .unwrap();
+        let readme_bytes = source_blob_bytes(&store, readme).unwrap();
         assert!(
-            source_blob_text(&store, readme)
+            std::str::from_utf8(&readme_bytes)
                 .unwrap()
                 .contains("Public Demo")
         );

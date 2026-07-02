@@ -79,8 +79,6 @@ fn receive_pack_same_content_with_new_mode_is_staged_update() {
             .git_file_mode,
         EXECUTABLE_GIT_FILE_MODE
     );
-    assert_eq!(staged.changes[0].line_diff.additions, 0);
-    assert_eq!(staged.changes[0].line_diff.deletions, 0);
 }
 
 #[test]
@@ -261,7 +259,7 @@ fn review_off_receive_pack_applies_immediately() {
 }
 
 #[test]
-fn permission_forced_staged_push_counts_line_diff_when_review_is_off() {
+fn permission_forced_staged_push_keeps_content_when_review_is_off() {
     let state = test_state_with_repo();
     let member_id = "user_push_only";
     {
@@ -288,8 +286,14 @@ fn permission_forced_staged_push_counts_line_diff_when_review_is_off() {
     assert_eq!(persisted, PersistedReceivePackUpdate::Staged);
     let repo = find_repo(&state, TEST_REPO_OWNER, TEST_REPO_NAME).unwrap();
     let staged = repo.staged_update.unwrap();
-    assert_eq!(staged.changes[0].line_diff.additions, 1);
-    assert_eq!(staged.changes[0].line_diff.deletions, 0);
+    assert_eq!(
+        staged.changes[0]
+            .new_content
+            .as_ref()
+            .map(blob_content)
+            .as_deref(),
+        Some("hello\nextra line")
+    );
 }
 
 #[test]

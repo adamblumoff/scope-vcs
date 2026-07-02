@@ -166,10 +166,6 @@ pub fn router(state: AppState) -> Router {
             post(http::review::reject_staged_update),
         )
         .route(
-            "/v1/repos/{owner}/{repo}/projections",
-            get(http::repos::get_projection),
-        )
-        .route(
             "/v1/repos/{owner}/{repo}/projection-preview",
             get(http::repos::get_projection_preview),
         )

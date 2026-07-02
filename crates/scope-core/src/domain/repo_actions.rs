@@ -132,7 +132,6 @@ pub fn staged_update_api_error(error: StagedUpdateError) -> ApiError {
         StagedUpdateError::BadRequest(message) => ApiError::bad_request(message),
         StagedUpdateError::Conflict(message) => ApiError::conflict(message),
         StagedUpdateError::InvalidPolicy(error) => ApiError::bad_request(error),
-        StagedUpdateError::LineDiff(error) => match error {},
     }
 }
 
@@ -444,7 +443,7 @@ mod tests {
     use crate::domain::{
         policy::{ScopePath, Visibility},
         store::{
-            AccountAccess, DEFAULT_GIT_FILE_MODE, LineDiff, StagedFileChange, StagedFileChangeKind,
+            AccountAccess, DEFAULT_GIT_FILE_MODE, StagedFileChange, StagedFileChangeKind,
             StagedRepoUpdate, UserAccount,
         },
     };
@@ -466,10 +465,6 @@ mod tests {
                 path: ScopePath::parse("/src/lib.rs").unwrap(),
                 old_content: None,
                 new_content: Some(staged_blob.clone()),
-                line_diff: LineDiff {
-                    additions: staged_blob.line_count,
-                    deletions: 0,
-                },
                 visibility: Visibility::Private,
                 kind: StagedFileChangeKind::Added,
             }],
@@ -548,7 +543,6 @@ mod tests {
             git_oid: format!("oid-{label}"),
             git_file_mode: DEFAULT_GIT_FILE_MODE.to_string(),
             size_bytes: label.len() as u64,
-            line_count: label.lines().count(),
         }
     }
 }

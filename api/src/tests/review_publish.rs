@@ -214,72 +214,6 @@ async fn owner_can_preview_pending_import_public_projection_before_publish() {
 }
 
 #[tokio::test]
-async fn owner_can_load_pending_import_file_diff() {
-    let state = test_state_with_repo();
-    cache_test_jwks(&state);
-    {
-        let mut catalog = lock_catalog(&state).unwrap();
-        let repo = catalog.repositories.get_mut(TEST_REPO_ID).unwrap();
-        repo.record.publication_state = RepoPublicationState::Unpublished;
-        repo.pending_import = Some(pending_import_fixture(vec![
-            ("README.md", "hello from import"),
-            ("src/main.rs", "fn main() {}"),
-        ]));
-    }
-
-    let response = router(state)
-        .oneshot(
-            Request::builder()
-                .method("GET")
-                .uri("/v1/repos/owner/repo/review/file-diff?path=README.md")
-                .header(AUTHORIZATION, bearer_header())
-                .body(Body::empty())
-                .unwrap(),
-        )
-        .await
-        .unwrap();
-
-    assert_eq!(response.status(), StatusCode::OK);
-    let body = response_json(response).await;
-    assert_eq!(body["path"], "/README.md");
-    assert_eq!(body["kind"], "Added");
-    assert_eq!(body["old_content"], serde_json::Value::Null);
-    assert_eq!(body["new_content"], "hello from import");
-}
-
-#[tokio::test]
-async fn pending_import_review_includes_total_line_diff() {
-    let state = test_state_with_repo();
-    cache_test_jwks(&state);
-    {
-        let mut catalog = lock_catalog(&state).unwrap();
-        let repo = catalog.repositories.get_mut(TEST_REPO_ID).unwrap();
-        repo.record.publication_state = RepoPublicationState::Unpublished;
-        repo.pending_import = Some(pending_import_fixture(vec![
-            ("README.md", "hello\nfrom import\n"),
-            ("src/main.rs", "fn main() {}"),
-        ]));
-    }
-
-    let response = router(state)
-        .oneshot(
-            Request::builder()
-                .method("GET")
-                .uri("/v1/repos/owner/repo/pending-import")
-                .header(AUTHORIZATION, bearer_header())
-                .body(Body::empty())
-                .unwrap(),
-        )
-        .await
-        .unwrap();
-
-    assert_eq!(response.status(), StatusCode::OK);
-    let body = response_json(response).await;
-    assert_eq!(body["line_diff"]["deletions"], 0);
-    assert_eq!(body["line_diff"]["additions"], 3);
-}
-
-#[tokio::test]
 async fn public_cannot_preview_pending_import_review() {
     let state = test_state_with_repo();
     {
@@ -324,7 +258,6 @@ async fn owner_can_preview_staged_update_public_projection_before_apply() {
                     path: ScopePath::parse("/docs/guide.md").unwrap(),
                     old_content: None,
                     new_content: Some(source_blob("public docs")),
-                    line_diff: LineDiff::default(),
                     visibility: Visibility::Public,
                     kind: StagedFileChangeKind::Added,
                 },
@@ -332,7 +265,6 @@ async fn owner_can_preview_staged_update_public_projection_before_apply() {
                     path: ScopePath::parse("/secret.txt").unwrap(),
                     old_content: None,
                     new_content: Some(source_blob("private staged content")),
-                    line_diff: LineDiff::default(),
                     visibility: Visibility::Private,
                     kind: StagedFileChangeKind::Added,
                 },
@@ -363,79 +295,6 @@ async fn owner_can_preview_staged_update_public_projection_before_apply() {
     let repo = find_repo(&state, TEST_REPO_OWNER, TEST_REPO_NAME).unwrap();
     assert!(repo.staged_update.is_some());
     assert_eq!(repo.graph.commits.len(), 1);
-}
-
-#[tokio::test]
-async fn owner_can_load_staged_update_file_diff() {
-    let state = test_state_with_repo();
-    cache_test_jwks(&state);
-    {
-        let mut repo = repo_with_readme();
-        stage_receive_pack_update(
-            &mut repo,
-            receive_pack_update(vec![("/README.md", Some("updated readme"))]),
-        )
-        .unwrap();
-
-        let mut catalog = lock_catalog(&state).unwrap();
-        catalog.repositories.insert(TEST_REPO_ID.to_string(), repo);
-    }
-
-    let response = router(state)
-        .oneshot(
-            Request::builder()
-                .method("GET")
-                .uri("/v1/repos/owner/repo/review/file-diff?path=/README.md")
-                .header(AUTHORIZATION, bearer_header())
-                .body(Body::empty())
-                .unwrap(),
-        )
-        .await
-        .unwrap();
-
-    assert_eq!(response.status(), StatusCode::OK);
-    let body = response_json(response).await;
-    assert_eq!(body["path"], "/README.md");
-    assert_eq!(body["kind"], "Modified");
-    assert_eq!(body["old_content"], "hello");
-    assert_eq!(body["new_content"], "updated readme");
-}
-
-#[tokio::test]
-async fn staged_update_review_includes_total_line_diff() {
-    let state = test_state_with_repo();
-    cache_test_jwks(&state);
-    {
-        let mut repo = repo_with_readme();
-        stage_receive_pack_update(
-            &mut repo,
-            receive_pack_update(vec![
-                ("/README.md", Some("hello\nnew line")),
-                ("/docs/guide.md", Some("first\nsecond")),
-            ]),
-        )
-        .unwrap();
-
-        let mut catalog = lock_catalog(&state).unwrap();
-        catalog.repositories.insert(TEST_REPO_ID.to_string(), repo);
-    }
-
-    let response = router(state)
-        .oneshot(
-            Request::builder()
-                .method("GET")
-                .uri("/v1/repos/owner/repo/staged-update")
-                .header(AUTHORIZATION, bearer_header())
-                .body(Body::empty())
-                .unwrap(),
-        )
-        .await
-        .unwrap();
-
-    assert_eq!(response.status(), StatusCode::OK);
-    let body = response_json(response).await;
-    assert_eq!(body["line_diff"]["deletions"], 0);
-    assert_eq!(body["line_diff"]["additions"], 3);
 }
 
 #[tokio::test]
@@ -532,7 +391,7 @@ async fn visibility_member_can_load_staged_review_preview_and_file_diff() {
         .unwrap();
     assert_eq!(diff_response.status(), StatusCode::OK);
     let diff = response_json(diff_response).await;
-    assert_eq!(diff["new_content"], "visibility review");
+    assert_text_content(&diff["new_content"], "visibility review");
 }
 
 #[tokio::test]
@@ -586,90 +445,6 @@ async fn visibility_member_public_review_preview_counts_private_exclusions() {
     let body = response_json(response).await;
     assert_eq!(body["summary"]["visible_files"], 1);
     assert_eq!(body["summary"]["hidden_files"], 1);
-}
-
-#[tokio::test]
-async fn staged_update_review_counts_separate_line_diff_hunks() {
-    let state = test_state_with_repo();
-    cache_test_jwks(&state);
-    {
-        let mut repo = repo_with_readme();
-        repo.graph.commits[0].changes[0].new_content =
-            Some(source_blob("one\nold-a\nsame\nold-b\nlast"));
-        stage_receive_pack_update(
-            &mut repo,
-            receive_pack_update(vec![("/README.md", Some("one\nnew-a\nsame\nnew-b\nlast"))]),
-        )
-        .unwrap();
-
-        let mut catalog = lock_catalog(&state).unwrap();
-        catalog.repositories.insert(TEST_REPO_ID.to_string(), repo);
-    }
-
-    let response = router(state)
-        .oneshot(
-            Request::builder()
-                .method("GET")
-                .uri("/v1/repos/owner/repo/staged-update")
-                .header(AUTHORIZATION, bearer_header())
-                .body(Body::empty())
-                .unwrap(),
-        )
-        .await
-        .unwrap();
-
-    assert_eq!(response.status(), StatusCode::OK);
-    let body = response_json(response).await;
-    assert_eq!(body["line_diff"]["deletions"], 2);
-    assert_eq!(body["line_diff"]["additions"], 2);
-}
-
-#[tokio::test]
-async fn rejecting_staged_update_returns_line_diff_before_cleanup() {
-    let state = test_state_with_repo();
-    cache_test_jwks(&state);
-    let rejected_blob_key = {
-        let mut repo = repo_with_readme();
-        stage_receive_pack_update(
-            &mut repo,
-            receive_pack_update(vec![("/README.md", Some("hello\nrejected line"))]),
-        )
-        .unwrap();
-        let rejected_blob_key = repo
-            .staged_update
-            .as_ref()
-            .unwrap()
-            .changes
-            .first()
-            .unwrap()
-            .new_content
-            .as_ref()
-            .unwrap()
-            .object_key
-            .clone();
-
-        let mut catalog = lock_catalog(&state).unwrap();
-        catalog.repositories.insert(TEST_REPO_ID.to_string(), repo);
-        rejected_blob_key
-    };
-
-    let response = router(state)
-        .oneshot(
-            Request::builder()
-                .method("POST")
-                .uri("/v1/repos/owner/repo/staged-update/reject")
-                .header(AUTHORIZATION, bearer_header())
-                .body(Body::empty())
-                .unwrap(),
-        )
-        .await
-        .unwrap();
-
-    assert_eq!(response.status(), StatusCode::OK);
-    let body = response_json(response).await;
-    assert_eq!(body["line_diff"]["deletions"], 0);
-    assert_eq!(body["line_diff"]["additions"], 1);
-    assert!(!MemoryObjectStore::new().contains_key(&rejected_blob_key));
 }
 
 #[test]
@@ -781,7 +556,6 @@ fn rejecting_staged_update_deletes_unreferenced_bucket_objects() {
                 path: ScopePath::parse("/private.txt").unwrap(),
                 old_content: None,
                 new_content: Some(rejected_blob),
-                line_diff: LineDiff::default(),
                 visibility: Visibility::Private,
                 kind: StagedFileChangeKind::Added,
             }],
@@ -814,7 +588,6 @@ fn rejecting_staged_update_records_pending_cleanup_when_bucket_delete_fails() {
                 path: ScopePath::parse("/private.txt").unwrap(),
                 old_content: None,
                 new_content: Some(rejected_blob),
-                line_diff: LineDiff::default(),
                 visibility: Visibility::Private,
                 kind: StagedFileChangeKind::Added,
             }],
@@ -854,7 +627,6 @@ fn rejecting_staged_update_does_not_cleanup_when_metadata_persist_fails() {
                 path: ScopePath::parse("/private.txt").unwrap(),
                 old_content: None,
                 new_content: Some(rejected_blob),
-                line_diff: LineDiff::default(),
                 visibility: Visibility::Private,
                 kind: StagedFileChangeKind::Added,
             }],

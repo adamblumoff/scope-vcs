@@ -334,11 +334,20 @@ pub(crate) struct CommitFileDiffRequest {
 pub(crate) struct ReviewFileDiffResponse {
     pub(crate) path: String,
     pub(crate) kind: StagedFileChangeKind,
-    pub(crate) old_content: Option<String>,
-    pub(crate) new_content: Option<String>,
+    pub(crate) old_content: Option<ReviewFileContentResponse>,
+    pub(crate) new_content: Option<ReviewFileContentResponse>,
 }
 
 #[derive(Debug, Serialize)]
+#[serde(tag = "kind", rename_all = "lowercase")]
+#[cfg_attr(test, derive(ts_rs::TS))]
+#[cfg_attr(test, ts(rename_all = "lowercase"))]
+pub(crate) enum ReviewFileContentResponse {
+    Text { text: String },
+    Binary { oid: String, size_bytes: u64 },
+}
+
+#[derive(Debug, Default, Serialize)]
 #[cfg_attr(test, derive(ts_rs::TS))]
 pub(crate) struct ReviewLineDiffResponse {
     pub(crate) additions: usize,

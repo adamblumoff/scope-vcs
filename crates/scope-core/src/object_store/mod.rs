@@ -9,8 +9,7 @@ pub use encrypted::EncryptedObjectStore;
 pub use memory::MemoryObjectStore;
 pub use s3::S3ObjectStore;
 pub use source_blobs::{
-    delete_source_blobs, put_repo_object, put_source_blob, repo_object_for_bytes,
-    source_blob_bytes, source_blob_text,
+    delete_source_blobs, put_repo_object, put_source_blob, repo_object_for_bytes, source_blob_bytes,
 };
 
 pub trait ObjectStore: Send + Sync {

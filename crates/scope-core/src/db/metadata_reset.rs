@@ -99,8 +99,6 @@ fn is_stale_pre_alpha_metadata_error(error: &ApiError) -> bool {
         "missing field `visibility`"
             | "missing field `visibility_changes`"
             | "missing field `visibility_events`"
-            | "missing field `line_count`"
-            | "missing field `line_diff`"
     )
 }
 
@@ -118,12 +116,6 @@ mod tests {
         ));
         assert!(is_stale_pre_alpha_metadata_error(
             &ApiError::internal_message("missing field `visibility_events`")
-        ));
-        assert!(is_stale_pre_alpha_metadata_error(
-            &ApiError::internal_message("missing field `line_count`")
-        ));
-        assert!(is_stale_pre_alpha_metadata_error(
-            &ApiError::internal_message("missing field `line_diff`")
         ));
         assert!(!is_stale_pre_alpha_metadata_error(
             &ApiError::internal_message("missing field `owner_user_id`")

@@ -2,7 +2,7 @@ use super::schema_contract::{
     self, ColumnSpec, ColumnType, ForeignKeyActionSpec, ForeignKeySpec, IndexSpec, PrimaryKeySpec,
     SchemaIden, TableSpec,
 };
-use sea_orm::{ConnectionTrait, Statement};
+use sea_orm::{ConnectionTrait, QueryResult, Statement};
 use sea_orm::{DatabaseConnection, DbErr};
 use sea_orm_migration::{
     manager::SchemaManager,
@@ -13,7 +13,7 @@ use sea_orm_migration::{
 pub async fn migrate_metadata_schema(db: &DatabaseConnection) -> Result<(), DbErr> {
     let manager = SchemaManager::new(db);
     ensure_metadata_reset_events_table(&manager).await?;
-    if let Some(drift) = metadata_schema_drift(&manager).await? {
+    if let Some(drift) = metadata_schema_drift(db, &manager).await? {
         if !metadata_schema_has_catalog_rows(db, &manager).await?
             || is_destructive_pre_alpha_reset_drift(&drift)
         {
@@ -37,7 +37,7 @@ pub async fn migrate_metadata_schema(db: &DatabaseConnection) -> Result<(), DbEr
 
 pub async fn assert_metadata_schema_ready(db: &DatabaseConnection) -> Result<(), DbErr> {
     let manager = SchemaManager::new(db);
-    if let Some(drift) = metadata_schema_drift(&manager).await? {
+    if let Some(drift) = metadata_schema_drift(db, &manager).await? {
         return Err(DbErr::Custom(format!(
             "Scope metadata schema is not ready for workers: {drift}"
         )));
@@ -225,7 +225,10 @@ async fn metadata_schema_has_catalog_rows(
     Ok(false)
 }
 
-async fn metadata_schema_drift(manager: &SchemaManager<'_>) -> Result<Option<String>, DbErr> {
+async fn metadata_schema_drift(
+    db: &DatabaseConnection,
+    manager: &SchemaManager<'_>,
+) -> Result<Option<String>, DbErr> {
     for table in schema_contract::schema_tables() {
         if !manager.has_table(table.name).await? {
             return Ok(Some(format!("missing table {}", table.name)));
@@ -235,8 +238,39 @@ async fn metadata_schema_drift(manager: &SchemaManager<'_>) -> Result<Option<Str
                 return Ok(Some(format!("missing column {}.{column}", table.name)));
             }
         }
+        let actual_columns = metadata_table_columns(db, table.name).await?;
+        let expected_columns = table.column_names().collect::<Vec<_>>();
+        if actual_columns.len() != expected_columns.len() {
+            let expected = expected_columns.join(", ");
+            let actual = actual_columns.join(", ");
+            return Ok(Some(format!(
+                "column mismatch {}: expected [{expected}], found [{actual}]",
+                table.name
+            )));
+        }
     }
     Ok(None)
+}
+
+async fn metadata_table_columns(
+    db: &DatabaseConnection,
+    table_name: &str,
+) -> Result<Vec<String>, DbErr> {
+    let rows = db
+        .query_all(Statement::from_string(
+            db.get_database_backend(),
+            format!(
+                "SELECT column_name FROM information_schema.columns WHERE table_schema = current_schema() AND table_name = '{}' ORDER BY ordinal_position",
+                table_name.replace('\'', "''")
+            ),
+        ))
+        .await?;
+    rows.into_iter().map(column_name_from_row).collect()
+}
+
+fn column_name_from_row(row: QueryResult) -> Result<String, DbErr> {
+    row.try_get("", "column_name")
+        .map_err(|error| DbErr::Custom(format!("reading metadata column name failed: {error}")))
 }
 
 async fn metadata_schema_has_duplicate_user_emails(
@@ -268,7 +302,9 @@ async fn metadata_schema_has_duplicate_user_emails(
 }
 
 fn is_destructive_pre_alpha_reset_drift(drift: &str) -> bool {
-    drift.starts_with("missing table ") || drift.starts_with("missing column ")
+    drift.starts_with("missing table ")
+        || drift.starts_with("missing column ")
+        || drift.starts_with("column mismatch ")
 }
 
 #[cfg(test)]
@@ -325,6 +361,9 @@ mod tests {
         ));
         assert!(is_destructive_pre_alpha_reset_drift(
             "missing table scope_auth_identities"
+        ));
+        assert!(is_destructive_pre_alpha_reset_drift(
+            "column mismatch scope_source_blob_cleanup_jobs: expected [object_key], found [object_key, line_count]"
         ));
     }
 }

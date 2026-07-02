@@ -121,7 +121,6 @@ pub struct SourceBlob {
     pub git_oid: String,
     pub git_file_mode: String,
     pub size_bytes: u64,
-    pub line_count: usize,
 }
 
 pub const DEFAULT_GIT_FILE_MODE: &str = "100644";
@@ -129,12 +128,6 @@ pub const EXECUTABLE_GIT_FILE_MODE: &str = "100755";
 
 pub fn is_supported_git_file_mode(mode: &str) -> bool {
     matches!(mode, DEFAULT_GIT_FILE_MODE | EXECUTABLE_GIT_FILE_MODE)
-}
-
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
-pub struct LineDiff {
-    pub additions: usize,
-    pub deletions: usize,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -200,7 +193,6 @@ pub struct StagedFileChange {
     pub path: ScopePath,
     pub old_content: Option<SourceBlob>,
     pub new_content: Option<SourceBlob>,
-    pub line_diff: LineDiff,
     pub visibility: Visibility,
     pub kind: StagedFileChangeKind,
 }

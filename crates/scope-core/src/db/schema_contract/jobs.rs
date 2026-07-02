@@ -44,7 +44,6 @@ const SOURCE_BLOB_CLEANUP_JOB_COLUMNS: &[ColumnSpec] = &[
     required_column("sha256", ColumnType::String),
     required_column("git_oid", ColumnType::String),
     required_column("size_bytes", ColumnType::BigInteger),
-    required_column("line_count", ColumnType::BigInteger),
     required_column("attempts", ColumnType::Integer),
     required_column("next_run_at_unix", ColumnType::BigInteger),
     nullable_column("last_error", ColumnType::Text),

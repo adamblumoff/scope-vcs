@@ -152,7 +152,6 @@ pub mod source_blob_cleanup_job {
         pub sha256: String,
         pub git_oid: String,
         pub size_bytes: i64,
-        pub line_count: i64,
         pub attempts: i32,
         pub next_run_at_unix: i64,
         pub last_error: Option<String>,
@@ -175,7 +174,6 @@ pub mod source_blob_cleanup_job {
                 sha256: blob.sha256.clone(),
                 git_oid: blob.git_oid.clone(),
                 size_bytes: blob.size_bytes.min(i64::MAX as u64) as i64,
-                line_count: (blob.line_count.min(i64::MAX as usize)) as i64,
                 attempts: 0,
                 next_run_at_unix: now_unix,
                 last_error: None,
@@ -192,7 +190,6 @@ pub mod source_blob_cleanup_job {
                 git_oid: self.git_oid,
                 git_file_mode: DEFAULT_GIT_FILE_MODE.to_string(),
                 size_bytes: self.size_bytes.max(0) as u64,
-                line_count: self.line_count.max(0) as usize,
             }
         }
     }

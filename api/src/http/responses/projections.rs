@@ -1,6 +1,5 @@
 use crate::domain::{
     policy::{Principal, ScopePath, Visibility},
-    projection::Projection,
     projection_views::{
         ProjectionAudience, ProjectionPreviewCommit, ProjectionPreviewCommitVisibility,
         ProjectionPreviewFile, ProjectionPreviewSummary, ProjectionSource, ProjectionViewFile,
@@ -10,10 +9,7 @@ use crate::domain::{
     },
     store::StoredRepository,
 };
-use crate::{
-    error::ApiError,
-    object_store::{ObjectStore, source_blob_text},
-};
+use crate::error::ApiError;
 use serde::{Deserialize, Serialize};
 
 #[derive(Clone, Copy, Debug, Deserialize, PartialEq, Eq, Serialize)]
@@ -110,73 +106,12 @@ pub(crate) struct ProjectionPreviewSummaryResponse {
 }
 
 #[derive(Debug, Serialize)]
-pub(crate) struct ProjectionResponse {
-    pub(crate) repo_id: String,
-    pub(crate) principal_id: String,
-    pub(crate) commits: Vec<ProjectedCommitResponse>,
-}
-
-#[derive(Debug, Serialize)]
-pub(crate) struct ProjectedCommitResponse {
-    pub(crate) projected_id: String,
-    pub(crate) logical_commit_id: String,
-    pub(crate) parent_projected_id: Option<String>,
-    pub(crate) author: Option<String>,
-    pub(crate) message: String,
-    pub(crate) changes: Vec<ProjectedChangeResponse>,
-}
-
-#[derive(Debug, Serialize)]
-pub(crate) struct ProjectedChangeResponse {
-    pub(crate) path: ScopePath,
-    pub(crate) new_content: Option<String>,
-}
-
-#[derive(Debug, Serialize)]
 #[cfg_attr(test, derive(ts_rs::TS))]
 pub(crate) struct RepoFileResponse {
     pub(crate) path: String,
     pub(crate) oid: String,
     pub(crate) tracked: bool,
     pub(crate) visibility: Visibility,
-}
-
-pub(crate) fn projection_response(
-    store: &dyn ObjectStore,
-    projection: Projection,
-) -> Result<ProjectionResponse, ApiError> {
-    Ok(ProjectionResponse {
-        repo_id: projection.repo_id,
-        principal_id: projection.principal_id,
-        commits: projection
-            .commits
-            .into_iter()
-            .map(|commit| {
-                let changes = commit
-                    .changes
-                    .into_iter()
-                    .map(|change| {
-                        Ok(ProjectedChangeResponse {
-                            path: change.path,
-                            new_content: change
-                                .new_content
-                                .as_ref()
-                                .map(|blob| source_blob_text(store, blob))
-                                .transpose()?,
-                        })
-                    })
-                    .collect::<Result<Vec<_>, ApiError>>()?;
-                Ok(ProjectedCommitResponse {
-                    projected_id: commit.projected_id,
-                    logical_commit_id: commit.logical_commit_id,
-                    parent_projected_id: commit.parent_projected_id,
-                    author: commit.author,
-                    message: commit.message,
-                    changes,
-                })
-            })
-            .collect::<Result<Vec<_>, ApiError>>()?,
-    })
 }
 
 pub(crate) fn projection_preview_response(

@@ -73,6 +73,7 @@ fn export_api_types() {
         declaration::<ReviewFileDiffRequest>(&ts_config),
         declaration::<CommitHistoryRequest>(&ts_config),
         declaration::<CommitFileDiffRequest>(&ts_config),
+        declaration::<ReviewFileContentResponse>(&ts_config),
         declaration::<ReviewFileDiffResponse>(&ts_config),
         declaration::<ReviewLineDiffResponse>(&ts_config),
         declaration::<PendingImportReviewResponse>(&ts_config),

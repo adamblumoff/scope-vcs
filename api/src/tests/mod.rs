@@ -8,8 +8,8 @@ use crate::domain::repo_actions::preview_publish_import;
 use crate::domain::staged_updates::apply_staged_update_to_repo;
 use crate::domain::store::{
     AccountAccess, AppCatalog, DEFAULT_GIT_FILE_MODE, EXECUTABLE_GIT_FILE_MODE, FirstPushToken,
-    GitPushToken, LineDiff, PendingImport, PendingImportFile, RepoPublicationState, RepoRecord,
-    RepoSettings, RepoStorageCleanup, RepositoryInvite, RepositoryInviteState, RepositoryMember,
+    GitPushToken, PendingImport, PendingImportFile, RepoPublicationState, RepoRecord, RepoSettings,
+    RepoStorageCleanup, RepositoryInvite, RepositoryInviteState, RepositoryMember,
     RepositoryMemberPermissions, StagedFileChange, StagedFileChangeKind, StagedRepoUpdate,
     StoredRepository, UserAccount,
 };
@@ -19,7 +19,7 @@ use crate::{
     config::*,
     git::{import::*, storage::*, upload::*, *},
     http::responses::*,
-    object_store::{MemoryObjectStore, put_source_blob, source_blob_text},
+    object_store::{MemoryObjectStore, put_source_blob, source_blob_bytes},
     persistence::*,
     runtime_budgets::{BudgetedObjectStore, RuntimeBudgetConfig, RuntimeBudgets},
     state::*,
@@ -50,6 +50,7 @@ mod clone_credentials;
 mod commit_history;
 mod cors;
 mod device_login;
+mod git_binary;
 mod git_http;
 mod git_http_gzip;
 mod git_import_validation;
@@ -60,6 +61,7 @@ mod repo_cleanup;
 mod repo_events;
 mod repo_lifecycle;
 mod repo_visibility;
+mod review_diff;
 mod review_publish;
 mod runtime_budgets;
 
@@ -286,6 +288,17 @@ async fn response_json(response: Response) -> serde_json::Value {
     serde_json::from_slice(&body).unwrap()
 }
 
+fn assert_text_content(value: &serde_json::Value, expected: &str) {
+    assert_eq!(value["kind"], "text");
+    assert_eq!(value["text"], expected);
+}
+
+fn assert_binary_content(value: &serde_json::Value, oid: &str, size_bytes: u64) {
+    assert_eq!(value["kind"], "binary");
+    assert_eq!(value["oid"], oid);
+    assert_eq!(value["size_bytes"], size_bytes);
+}
+
 fn temp_git_repo(label: &str) -> PathBuf {
     let repo = std::env::temp_dir().join(format!(
         "scope-vcs-{label}-{}-{}",
@@ -396,16 +409,20 @@ fn pending_import_fixture(files: Vec<(&str, &str)>) -> PendingImport {
 }
 
 fn source_blob(content: &str) -> crate::domain::store::SourceBlob {
+    source_blob_from_bytes(content.as_bytes())
+}
+
+fn source_blob_from_bytes(bytes: &[u8]) -> crate::domain::store::SourceBlob {
     put_source_blob(
         AppState::test_state().object_store.as_ref(),
         TEST_REPO_ID,
-        content.as_bytes(),
+        bytes,
     )
     .unwrap()
 }
 
 fn blob_content(blob: &crate::domain::store::SourceBlob) -> String {
-    source_blob_text(&MemoryObjectStore::new(), blob).unwrap()
+    String::from_utf8(source_blob_bytes(&MemoryObjectStore::new(), blob).unwrap()).unwrap()
 }
 
 fn repo_with_readme() -> StoredRepository {

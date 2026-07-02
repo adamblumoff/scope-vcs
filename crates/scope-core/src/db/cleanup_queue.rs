@@ -215,7 +215,6 @@ where
     let now = unix_now()?;
     for blob in blobs {
         u64_to_i64(blob.size_bytes)?;
-        usize_to_i64(blob.line_count)?;
         let generation = new_cleanup_generation()?;
         entities::source_blob_cleanup_job::Entity::insert(
             entities::source_blob_cleanup_job::Model::from_domain(&blob, generation, now)
@@ -228,7 +227,6 @@ where
                     entities::source_blob_cleanup_job::Column::Sha256,
                     entities::source_blob_cleanup_job::Column::GitOid,
                     entities::source_blob_cleanup_job::Column::SizeBytes,
-                    entities::source_blob_cleanup_job::Column::LineCount,
                     entities::source_blob_cleanup_job::Column::Attempts,
                     entities::source_blob_cleanup_job::Column::NextRunAtUnix,
                     entities::source_blob_cleanup_job::Column::LastError,
@@ -677,13 +675,6 @@ where
 fn u64_to_i64(value: u64) -> Result<i64, ApiError> {
     if value > i64::MAX as u64 {
         return Err(ApiError::internal_message("timestamp exceeds i64 range"));
-    }
-    Ok(value as i64)
-}
-
-fn usize_to_i64(value: usize) -> Result<i64, ApiError> {
-    if value > i64::MAX as usize {
-        return Err(ApiError::internal_message("line count exceeds i64 range"));
     }
     Ok(value as i64)
 }

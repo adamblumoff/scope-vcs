@@ -110,7 +110,9 @@ export type CommitHistoryRequest = { audience: ProjectionPreviewAudience | null,
 
 export type CommitFileDiffRequest = { audience: ProjectionPreviewAudience | null, path: string, };
 
-export type ReviewFileDiffResponse = { path: string, kind: StagedFileChangeKind, old_content: string | null, new_content: string | null, };
+export type ReviewFileContentResponse = { "kind": "text", text: string, } | { "kind": "binary", oid: string, size_bytes: number, };
+
+export type ReviewFileDiffResponse = { path: string, kind: StagedFileChangeKind, old_content: ReviewFileContentResponse | null, new_content: ReviewFileContentResponse | null, };
 
 export type ReviewLineDiffResponse = { additions: number, deletions: number, };
 
