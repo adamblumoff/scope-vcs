@@ -1,4 +1,4 @@
-use super::{ObjectStore, ensure_object_size, required_env};
+use super::{ObjectStore, required_env};
 use crate::{config::SCOPE_OBJECT_ENCRYPTION_KEY_ENV, error::ApiError};
 use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64};
 use chacha20poly1305::{
@@ -9,7 +9,6 @@ use std::sync::Arc;
 
 const ENCRYPTED_OBJECT_MAGIC: &[u8] = b"scope-vcs-object-v1\n";
 const ENCRYPTED_OBJECT_NONCE_BYTES: usize = 12;
-const ENCRYPTED_OBJECT_TAG_BYTES: usize = 16;
 
 pub struct EncryptedObjectStore {
     inner: Arc<dyn ObjectStore>,
@@ -34,37 +33,6 @@ impl EncryptedObjectStore {
 
     fn cipher(&self) -> ChaCha20Poly1305 {
         ChaCha20Poly1305::new(Key::from_slice(&self.key))
-    }
-
-    fn decrypt_envelope(&self, key: &str, envelope: Vec<u8>) -> Result<Vec<u8>, ApiError> {
-        let Some(payload) = envelope.strip_prefix(ENCRYPTED_OBJECT_MAGIC) else {
-            return Err(ApiError::internal_message(format!(
-                "object {key} is missing encryption envelope"
-            )));
-        };
-        if payload.len() < ENCRYPTED_OBJECT_NONCE_BYTES {
-            return Err(ApiError::internal_message(format!(
-                "object {key} has an invalid encryption envelope"
-            )));
-        }
-        let (nonce, ciphertext) = payload.split_at(ENCRYPTED_OBJECT_NONCE_BYTES);
-        self.cipher()
-            .decrypt(
-                Nonce::from_slice(nonce),
-                Payload {
-                    msg: ciphertext,
-                    aad: key.as_bytes(),
-                },
-            )
-            .map_err(|_| ApiError::internal_message(format!("object {key} failed decryption")))
-    }
-
-    fn max_envelope_bytes(max_plaintext_bytes: usize) -> usize {
-        ENCRYPTED_OBJECT_MAGIC
-            .len()
-            .saturating_add(ENCRYPTED_OBJECT_NONCE_BYTES)
-            .saturating_add(ENCRYPTED_OBJECT_TAG_BYTES)
-            .saturating_add(max_plaintext_bytes)
     }
 }
 
@@ -94,16 +62,26 @@ impl ObjectStore for EncryptedObjectStore {
 
     fn get(&self, key: &str) -> Result<Vec<u8>, ApiError> {
         let envelope = self.inner.get(key)?;
-        self.decrypt_envelope(key, envelope)
-    }
-
-    fn get_bounded(&self, key: &str, max_bytes: usize) -> Result<Vec<u8>, ApiError> {
-        let envelope = self
-            .inner
-            .get_bounded(key, Self::max_envelope_bytes(max_bytes))?;
-        let bytes = self.decrypt_envelope(key, envelope)?;
-        ensure_object_size("read", key, bytes.len(), max_bytes)?;
-        Ok(bytes)
+        let Some(payload) = envelope.strip_prefix(ENCRYPTED_OBJECT_MAGIC) else {
+            return Err(ApiError::internal_message(format!(
+                "object {key} is missing encryption envelope"
+            )));
+        };
+        if payload.len() < ENCRYPTED_OBJECT_NONCE_BYTES {
+            return Err(ApiError::internal_message(format!(
+                "object {key} has an invalid encryption envelope"
+            )));
+        }
+        let (nonce, ciphertext) = payload.split_at(ENCRYPTED_OBJECT_NONCE_BYTES);
+        self.cipher()
+            .decrypt(
+                Nonce::from_slice(nonce),
+                Payload {
+                    msg: ciphertext,
+                    aad: key.as_bytes(),
+                },
+            )
+            .map_err(|_| ApiError::internal_message(format!("object {key} failed decryption")))
     }
 
     fn delete(&self, key: &str) -> Result<(), ApiError> {

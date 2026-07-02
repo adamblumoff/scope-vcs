@@ -11,7 +11,6 @@ use crate::{
         storage::cached_raw_git_snapshot_repo,
     },
     object_store::source_blob_text,
-    runtime_budgets::{RuntimeBudgets, RuntimePermit},
     state::AppState,
     state::{ensure_repo_read, find_repo},
 };
@@ -27,16 +26,14 @@ use sha1::{Digest, Sha1};
 use std::{
     collections::BTreeMap,
     fs,
-    io::{Read, Write},
+    io::Write,
     path::{Path as FsPath, PathBuf},
-    process::{Child, Output},
     process::{Command, Stdio},
     sync::atomic::{AtomicU64, Ordering},
-    thread,
-    time::{Duration, Instant},
 };
+use tokio::{io::AsyncWriteExt, process::Command as TokioCommand};
+
 const PROJECTION_CACHE_SEMANTICS_VERSION: &str = "visibility-projection-v3";
-const GIT_STDERR_DIAGNOSTIC_BYTES: usize = 8 * 1024;
 static GIT_CACHE_ATTEMPT: AtomicU64 = AtomicU64::new(1);
 
 pub(crate) async fn git_projection_for_request(
@@ -100,7 +97,9 @@ pub(crate) async fn git_upload_pack_repo_for_request(
         }
         Err(error) => return Err(error),
     };
-    projection_bare_repo_for_state(state, &projection)
+    state.git_cache_root().and_then(|cache_root| {
+        projection_bare_repo(state.object_store.as_ref(), &cache_root, &projection)
+    })
 }
 
 pub(crate) fn git_upload_pack_auth_required() -> ApiError {
@@ -290,26 +289,6 @@ pub(crate) fn projection_bare_repo(
     }
 }
 
-pub(crate) fn projection_bare_repo_for_state(
-    state: &AppState,
-    projection: &Projection,
-) -> Result<PathBuf, ApiError> {
-    let cache_root = state.git_cache_root()?;
-    let cache_key = projection_cache_key(projection);
-    let repo_path = cache_root.join(format!("{cache_key}.git"));
-    if repo_path
-        .join("refs")
-        .join("heads")
-        .join(DEFAULT_GIT_BRANCH)
-        .is_file()
-    {
-        return Ok(repo_path);
-    }
-
-    let _permit = state.runtime_budgets.try_projection_build()?;
-    projection_bare_repo(state.object_store.as_ref(), &cache_root, projection)
-}
-
 pub(crate) fn projection_cache_key(projection: &Projection) -> String {
     let mut hasher = Sha1::new();
     hash_field(
@@ -487,205 +466,56 @@ pub(crate) fn git_command_output(
     command: &mut Command,
     stdin: Option<&[u8]>,
 ) -> Result<Vec<u8>, ApiError> {
-    git_command_output_with_timeout(
-        command,
-        stdin.map(Vec::from),
-        RuntimeBudgets::default_git_command_timeout(),
-    )
-}
-
-pub(crate) fn git_command_output_with_timeout(
-    command: &mut Command,
-    stdin: Option<Vec<u8>>,
-    timeout: Duration,
-) -> Result<Vec<u8>, ApiError> {
-    let output = git_process_output_with_timeout(command, stdin, timeout)?;
-    if output.status.success() {
-        return Ok(output.stdout);
-    }
-
-    let stderr = truncated_git_stderr(&output.stderr);
-    Err(ApiError::service_unavailable(stderr.trim()))
-}
-
-pub(crate) fn git_process_output_with_timeout(
-    command: &mut Command,
-    stdin: Option<Vec<u8>>,
-    timeout: Duration,
-) -> Result<Output, ApiError> {
     if stdin.is_some() {
         command.stdin(Stdio::piped());
     }
-    configure_process_group(command);
     let mut child = command
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .spawn()
         .map_err(|error| ApiError::service_unavailable(format!("failed to run Git: {error}")))?;
-    let stdin_writer = if let Some(input) = stdin {
+    if let Some(input) = stdin {
         let mut child_stdin = child
             .stdin
             .take()
             .ok_or_else(|| ApiError::internal_message("failed to open Git stdin"))?;
-        Some(thread::spawn(move || {
-            child_stdin.write_all(&input)?;
-            child_stdin.flush()
-        }))
-    } else {
-        None
-    };
-    wait_with_timeout(child, stdin_writer, timeout, "Git command")
-}
-
-fn wait_with_timeout(
-    mut child: std::process::Child,
-    stdin_writer: Option<thread::JoinHandle<std::io::Result<()>>>,
-    timeout: Duration,
-    action: &str,
-) -> Result<Output, ApiError> {
-    let mut stdout = child
-        .stdout
-        .take()
-        .ok_or_else(|| ApiError::internal_message("failed to open Git stdout"))?;
-    let mut stderr = child
-        .stderr
-        .take()
-        .ok_or_else(|| ApiError::internal_message("failed to open Git stderr"))?;
-    let stdout_reader = thread::spawn(move || {
-        let mut bytes = Vec::new();
-        stdout.read_to_end(&mut bytes).map(|_| bytes)
-    });
-    let stderr_reader = thread::spawn(move || {
-        let mut bytes = Vec::new();
-        stderr.read_to_end(&mut bytes).map(|_| bytes)
-    });
-
-    let started_at = Instant::now();
-    let mut status = None;
-    let status = loop {
-        if status.is_none() {
-            status = child.try_wait().map_err(ApiError::internal)?;
-        }
-        let stdin_done = stdin_writer
-            .as_ref()
-            .is_none_or(thread::JoinHandle::is_finished);
-        if stdout_reader.is_finished()
-            && stderr_reader.is_finished()
-            && stdin_done
-            && let Some(status) = status.take()
-        {
-            break status;
-        }
-        if started_at.elapsed() >= timeout {
-            kill_process_group(&mut child);
-            if status.is_none() {
-                let _status = child.wait().map_err(ApiError::internal)?;
-            }
-            drop(stdin_writer);
-            let _stdout = join_reader(stdout_reader)?;
-            let stderr = join_reader(stderr_reader)?;
-            let message = truncated_git_stderr(&stderr);
-            return Err(ApiError::service_unavailable(format!(
-                "{action} timed out after {}ms{}{}",
-                timeout.as_millis(),
-                if message.is_empty() { "" } else { ": " },
-                message
-            )));
-        }
-        thread::sleep(Duration::from_millis(10));
-    };
-
-    if let Some(stdin_writer) = stdin_writer {
-        join_writer(stdin_writer)?;
+        child_stdin.write_all(input).map_err(ApiError::internal)?;
     }
-    let stdout = join_reader(stdout_reader)?;
-    let stderr = join_reader(stderr_reader)?;
-    Ok(Output {
-        status,
-        stdout,
-        stderr,
-    })
-}
-
-fn join_reader(handle: thread::JoinHandle<std::io::Result<Vec<u8>>>) -> Result<Vec<u8>, ApiError> {
-    handle
-        .join()
-        .map_err(|_| ApiError::internal_message("Git output reader panicked"))?
-        .map_err(ApiError::internal)
-}
-
-fn join_writer(handle: thread::JoinHandle<std::io::Result<()>>) -> Result<(), ApiError> {
-    handle
-        .join()
-        .map_err(|_| ApiError::internal_message("Git stdin writer panicked"))?
-        .map_err(ApiError::internal)
-}
-
-#[cfg(unix)]
-fn configure_process_group(command: &mut Command) {
-    use std::os::unix::process::CommandExt;
-    command.process_group(0);
-}
-
-#[cfg(not(unix))]
-fn configure_process_group(_command: &mut Command) {}
-
-#[cfg(unix)]
-fn kill_process_group(child: &mut Child) {
-    let group = format!("-{}", child.id());
-    let _ = Command::new("kill")
-        .arg("-KILL")
-        .arg("--")
-        .arg(group)
-        .status();
-    let _ = child.kill();
-}
-
-#[cfg(not(unix))]
-fn kill_process_group(child: &mut Child) {
-    let _ = child.kill();
-}
-
-fn truncated_git_stderr(stderr: &[u8]) -> String {
-    let mut message = String::from_utf8_lossy(stderr).trim().to_string();
-    if message.len() > GIT_STDERR_DIAGNOSTIC_BYTES {
-        let mut end = 0;
-        for (index, character) in message.char_indices() {
-            let next = index + character.len_utf8();
-            if next > GIT_STDERR_DIAGNOSTIC_BYTES {
-                break;
-            }
-            end = next;
-        }
-        message.truncate(end);
-        message.push_str("...");
+    let output = child.wait_with_output().map_err(ApiError::internal)?;
+    if output.status.success() {
+        return Ok(output.stdout);
     }
-    message
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    Err(ApiError::service_unavailable(stderr.trim()))
 }
 
 pub(crate) async fn git_upload_pack_response(
     repo_path: &FsPath,
     request: &[u8],
-    timeout: Duration,
-    permit: RuntimePermit,
 ) -> Result<Response, ApiError> {
-    let repo_path = repo_path.to_path_buf();
-    let request = request.to_vec();
-    let output = tokio::task::spawn_blocking(move || {
-        let _permit = permit;
-        let mut command = Command::new("git");
-        command
-            .arg("upload-pack")
-            .arg("--stateless-rpc")
-            .arg(repo_path);
-        git_process_output_with_timeout(&mut command, Some(request), timeout)
-    })
-    .await
-    .map_err(ApiError::internal)??;
+    let mut child = TokioCommand::new("git")
+        .arg("upload-pack")
+        .arg("--stateless-rpc")
+        .arg(repo_path)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .map_err(|error| ApiError::service_unavailable(format!("failed to run Git: {error}")))?;
+
+    let mut stdin = child
+        .stdin
+        .take()
+        .ok_or_else(|| ApiError::internal_message("failed to open Git stdin"))?;
+    stdin.write_all(request).await.map_err(ApiError::internal)?;
+    drop(stdin);
+
+    let output = child.wait_with_output().await.map_err(ApiError::internal)?;
     if !output.status.success() {
         return Err(ApiError::service_unavailable(format!(
             "git upload-pack failed: {}",
-            truncated_git_stderr(&output.stderr)
+            String::from_utf8_lossy(&output.stderr).trim()
         )));
     }
 
@@ -695,15 +525,14 @@ pub(crate) async fn git_upload_pack_response(
     ))
 }
 
-pub(crate) fn git_upload_pack_advertisement(repo_path: &FsPath, timeout: Duration) -> Response {
-    match git_command_output_with_timeout(
+pub(crate) fn git_upload_pack_advertisement(repo_path: &FsPath) -> Response {
+    match git_command_output(
         Command::new("git")
             .arg("upload-pack")
             .arg("--stateless-rpc")
             .arg("--advertise-refs")
             .arg(repo_path),
         None,
-        timeout,
     ) {
         Ok(advertisement) => {
             let mut body = pkt_line(format!("# service={GIT_UPLOAD_PACK}\n").as_bytes());
@@ -747,34 +576,4 @@ pub(crate) fn pkt_line(payload: &[u8]) -> Vec<u8> {
     let mut line = format!("{len:04x}").into_bytes();
     line.extend_from_slice(payload);
     line
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn stderr_truncation_preserves_utf8_boundaries() {
-        let stderr = "é".repeat(GIT_STDERR_DIAGNOSTIC_BYTES);
-
-        let truncated = truncated_git_stderr(stderr.as_bytes());
-
-        assert!(truncated.ends_with("..."));
-        assert!(truncated.is_char_boundary(truncated.len() - 3));
-    }
-
-    #[cfg(unix)]
-    #[test]
-    fn git_timeout_kills_descendants_that_hold_output_pipes() {
-        let mut command = Command::new("sh");
-        command.arg("-c").arg("(sleep 5) & sleep 5");
-        let started_at = Instant::now();
-
-        let error = git_command_output_with_timeout(&mut command, None, Duration::from_millis(25))
-            .unwrap_err();
-
-        assert_eq!(error.status, StatusCode::SERVICE_UNAVAILABLE);
-        assert!(error.message.contains("timed out"));
-        assert!(started_at.elapsed() < Duration::from_secs(2));
-    }
 }

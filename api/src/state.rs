@@ -12,7 +12,6 @@ use crate::{
     object_store::{EncryptedObjectStore, ObjectStore, S3ObjectStore},
     persistence::ensure_private_dir,
     repo_events::{RepoChangeBus, RepoChangeEvent},
-    runtime_budgets::{BudgetedObjectStore, RuntimeBudgets},
 };
 use serde::Serialize;
 use std::{collections::BTreeSet, path::PathBuf, sync::Arc};
@@ -23,7 +22,6 @@ pub struct AppState {
     pub(crate) data_dir: Arc<PathBuf>,
     pub(crate) clerk: ClerkVerifier,
     pub(crate) object_store: Arc<dyn ObjectStore>,
-    pub(crate) runtime_budgets: Arc<RuntimeBudgets>,
     pub(crate) operator_token: Option<Arc<str>>,
     pub(crate) repo_events: RepoChangeBus,
 }
@@ -121,21 +119,15 @@ impl AppState {
         ensure_private_dir(&data_dir).map_err(|error| anyhow::anyhow!(error.message))?;
         let metadata = MetadataStore::connect_from_env()?;
         let repo_events = RepoChangeBus::default();
-        let runtime_budgets = Arc::new(RuntimeBudgets::from_env()?);
-        let object_store = Arc::new(BudgetedObjectStore::new(
-            Arc::new(EncryptedObjectStore::from_env(Arc::new(
-                S3ObjectStore::from_env()?,
-            ))?),
-            runtime_budgets.clone(),
-        ));
         metadata.start_repo_change_listener(repo_events.clone())?;
 
         let state = Self {
             metadata,
             data_dir: Arc::new(data_dir),
             clerk: ClerkVerifier::from_env(),
-            object_store,
-            runtime_budgets,
+            object_store: Arc::new(EncryptedObjectStore::from_env(Arc::new(
+                S3ObjectStore::from_env()?,
+            ))?),
             operator_token: non_empty_env(SCOPE_OPERATOR_TOKEN_ENV).map(Arc::from),
             repo_events,
         };
@@ -148,7 +140,6 @@ impl AppState {
     pub(crate) fn test_state() -> Self {
         use crate::{domain::store::app_catalog, persistence::test_data_dir};
 
-        let runtime_budgets = Arc::new(RuntimeBudgets::from_config(Default::default()));
         Self {
             metadata: MetadataStore::memory(app_catalog()),
             data_dir: Arc::new(test_data_dir()),
@@ -160,11 +151,7 @@ impl AppState {
                     audiences: vec![crate::config::DEFAULT_CLERK_AUDIENCE.to_string()],
                 },
             ),
-            object_store: Arc::new(BudgetedObjectStore::new(
-                Arc::new(crate::object_store::MemoryObjectStore::new()),
-                runtime_budgets.clone(),
-            )),
-            runtime_budgets,
+            object_store: Arc::new(crate::object_store::MemoryObjectStore::new()),
             operator_token: None,
             repo_events: RepoChangeBus::default(),
         }

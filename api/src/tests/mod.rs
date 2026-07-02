@@ -21,7 +21,6 @@ use crate::{
     http::responses::*,
     object_store::{MemoryObjectStore, put_source_blob, source_blob_text},
     persistence::*,
-    runtime_budgets::{BudgetedObjectStore, RuntimeBudgetConfig, RuntimeBudgets},
     state::*,
 };
 use axum::{
@@ -60,7 +59,6 @@ mod repo_events;
 mod repo_lifecycle;
 mod repo_visibility;
 mod review_publish;
-mod runtime_budgets;
 
 const TEST_CLERK_ISSUER: &str = "https://clerk.test";
 const TEST_CLERK_AUDIENCE: &str = "scope-api";
@@ -201,7 +199,6 @@ fn test_state_with_repo() -> AppState {
         access: AccountAccess::Member,
     };
     let repo = test_repo(&owner_id);
-    let runtime_budgets = Arc::new(RuntimeBudgets::from_config(Default::default()));
 
     AppState {
         metadata: crate::db::MetadataStore::memory(AppCatalog {
@@ -216,11 +213,7 @@ fn test_state_with_repo() -> AppState {
             Some("http://127.0.0.1/.well-known/jwks.json".to_string()),
             test_clerk_policy(),
         ),
-        object_store: Arc::new(BudgetedObjectStore::new(
-            Arc::new(MemoryObjectStore::new()),
-            runtime_budgets.clone(),
-        )),
-        runtime_budgets,
+        object_store: Arc::new(MemoryObjectStore::new()),
         operator_token: None,
         repo_events: crate::repo_events::RepoChangeBus::default(),
     }
@@ -233,7 +226,6 @@ fn test_state_with_jwks() -> AppState {
 }
 
 fn test_state_with_metadata(metadata: crate::db::MetadataStore) -> AppState {
-    let runtime_budgets = Arc::new(RuntimeBudgets::from_config(Default::default()));
     let state = AppState {
         metadata,
         data_dir: Arc::new(test_data_dir()),
@@ -242,11 +234,7 @@ fn test_state_with_metadata(metadata: crate::db::MetadataStore) -> AppState {
             Some("http://127.0.0.1/.well-known/jwks.json".to_string()),
             test_clerk_policy(),
         ),
-        object_store: Arc::new(BudgetedObjectStore::new(
-            Arc::new(MemoryObjectStore::new()),
-            runtime_budgets.clone(),
-        )),
-        runtime_budgets,
+        object_store: Arc::new(MemoryObjectStore::new()),
         operator_token: None,
         repo_events: crate::repo_events::RepoChangeBus::default(),
     };
