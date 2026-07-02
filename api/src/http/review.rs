@@ -10,7 +10,7 @@ use crate::{
         add_line_diff, review_file_diff_response_for_blobs, review_line_diff_for_blobs,
     },
     http::responses::*,
-    object_store::ObjectStore,
+    object_store::{ObjectStore, source_blob_bytes},
     state::AppState,
     state::{
         best_effort_drain_pending_source_blob_deletions, ensure_owner, ensure_repo_read, find_repo,
@@ -193,11 +193,12 @@ pub(crate) async fn apply_staged_update(
     if !repo.access_for_principal(&principal).can_apply_changes {
         return Err(ApiError::forbidden("apply changes permission required"));
     }
-    let line_diff = repo
-        .staged_update
-        .as_ref()
-        .map(|update| staged_update_line_diff(state.object_store.as_ref(), update))
-        .transpose()?;
+    let line_diff = if let Some(update) = repo.staged_update.as_ref() {
+        verify_staged_update_new_blobs(state.object_store.as_ref(), update)?;
+        staged_update_line_diff_best_effort(state.object_store.as_ref(), update)
+    } else {
+        ReviewLineDiffResponse::default()
+    };
     let applied = state
         .metadata
         .apply_staged_update(&owner, &repo_name, &principal.id)?;
@@ -209,10 +210,7 @@ pub(crate) async fn apply_staged_update(
     );
     best_effort_drain_pending_source_blob_deletions(&state);
 
-    Ok(Json(staged_update_response(
-        &applied,
-        line_diff.unwrap_or_default(),
-    )))
+    Ok(Json(staged_update_response(&applied, line_diff)))
 }
 
 pub(crate) async fn reject_staged_update(
@@ -318,7 +316,7 @@ fn pending_import_line_diff(
 ) -> Result<ReviewLineDiffResponse, ApiError> {
     let mut line_diff = ReviewLineDiffResponse::default();
     if let Some(pending) = &repo.pending_import {
-        if summary_line_diff_exceeds_byte_budget(pending.files.iter().map(|file| &file.blob)) {
+        if summary_line_diff_exceeds_budget(pending.files.iter().map(|file| &file.blob)) {
             return Ok(line_diff);
         }
         for file in &pending.files {
@@ -358,7 +356,7 @@ fn staged_update_line_diff(
     update: &StagedRepoUpdate,
 ) -> Result<ReviewLineDiffResponse, ApiError> {
     let mut line_diff = ReviewLineDiffResponse::default();
-    if summary_line_diff_exceeds_byte_budget(
+    if summary_line_diff_exceeds_budget(
         update
             .changes
             .iter()
@@ -380,6 +378,18 @@ fn staged_update_line_diff(
     Ok(line_diff)
 }
 
+fn verify_staged_update_new_blobs(
+    store: &dyn ObjectStore,
+    update: &StagedRepoUpdate,
+) -> Result<(), ApiError> {
+    for change in &update.changes {
+        if let Some(blob) = change.new_content.as_ref() {
+            source_blob_bytes(store, blob)?;
+        }
+    }
+    Ok(())
+}
+
 fn staged_update_line_diff_best_effort(
     store: &dyn ObjectStore,
     update: &StagedRepoUpdate,
@@ -397,12 +407,14 @@ fn staged_update_line_diff_best_effort(
     }
 }
 
-fn summary_line_diff_exceeds_byte_budget<'a>(
-    blobs: impl IntoIterator<Item = &'a SourceBlob>,
-) -> bool {
+fn summary_line_diff_exceeds_budget<'a>(blobs: impl IntoIterator<Item = &'a SourceBlob>) -> bool {
+    const SUMMARY_LINE_DIFF_BLOB_BUDGET: usize = 100;
     const SUMMARY_LINE_DIFF_BYTE_BUDGET: u64 = 1024 * 1024;
     let mut total = 0_u64;
-    for blob in blobs {
+    for (index, blob) in blobs.into_iter().enumerate() {
+        if index >= SUMMARY_LINE_DIFF_BLOB_BUDGET {
+            return true;
+        }
         total = total.saturating_add(blob.size_bytes);
         if total > SUMMARY_LINE_DIFF_BYTE_BUDGET {
             return true;

@@ -313,6 +313,57 @@ async fn staged_update_summary_line_diff_skips_over_aggregate_byte_budget() {
 }
 
 #[tokio::test]
+async fn pending_import_summary_line_diff_skips_over_file_budget_without_fetching() {
+    let mut state = test_state_with_repo();
+    cache_test_jwks(&state);
+    {
+        let mut catalog = lock_catalog(&state).unwrap();
+        let repo = catalog.repositories.get_mut(TEST_REPO_ID).unwrap();
+        repo.record.publication_state = RepoPublicationState::Unpublished;
+        repo.pending_import = Some(PendingImport {
+            default_branch: DEFAULT_GIT_BRANCH.to_string(),
+            head_oid: "1111111111111111111111111111111111111111".to_string(),
+            tree_oid: "2222222222222222222222222222222222222222".to_string(),
+            imported_at_unix: unix_now(),
+            git_snapshot: source_blob("test git snapshot"),
+            files: (0..101)
+                .map(|index| {
+                    let blob = missing_blob(&format!("small-{index}"), 1);
+                    PendingImportFile {
+                        path: format!("small-{index}.txt"),
+                        mode: DEFAULT_GIT_FILE_MODE.to_string(),
+                        oid: blob.git_oid.clone(),
+                        blob,
+                    }
+                })
+                .collect(),
+        });
+    }
+    let read_count = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    state.object_store = Arc::new(ReadCountingObjectStore {
+        read_count: Arc::clone(&read_count),
+    });
+
+    let response = router(state)
+        .oneshot(
+            Request::builder()
+                .method("GET")
+                .uri("/v1/repos/owner/repo/pending-import")
+                .header(AUTHORIZATION, bearer_header())
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = response_json(response).await;
+    assert_eq!(body["line_diff"]["additions"], 0);
+    assert_eq!(body["line_diff"]["deletions"], 0);
+    assert_eq!(read_count.load(std::sync::atomic::Ordering::SeqCst), 0);
+}
+
+#[tokio::test]
 async fn pending_import_review_includes_total_line_diff() {
     let state = test_state_with_repo();
     cache_test_jwks(&state);
@@ -543,6 +594,54 @@ async fn apply_staged_update_blob_read_failure_does_not_commit_metadata() {
 }
 
 #[tokio::test]
+async fn apply_staged_update_large_blob_read_failure_does_not_commit_metadata() {
+    let state = test_state_with_repo();
+    cache_test_jwks(&state);
+    {
+        let mut repo = repo_with_readme();
+        repo.staged_update = Some(StagedRepoUpdate {
+            id: "large-missing-apply".to_string(),
+            branch: "refs/heads/main".to_string(),
+            base_live_commit_id: Some(repo.graph.commits[0].id.clone()),
+            author_id: repo.record.owner_user_id.clone(),
+            message: "large missing apply".to_string(),
+            git_snapshot: source_blob("snapshot"),
+            changes: vec![StagedFileChange {
+                path: ScopePath::parse("/large.bin").unwrap(),
+                old_content: None,
+                new_content: Some(missing_blob("large-apply", 1024 * 1024 + 1)),
+                visibility: Visibility::Public,
+                kind: StagedFileChangeKind::Added,
+            }],
+        });
+
+        let mut catalog = lock_catalog(&state).unwrap();
+        catalog.repositories.insert(TEST_REPO_ID.to_string(), repo);
+    }
+
+    let response = router(state.clone())
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/v1/repos/owner/repo/staged-update/apply")
+                .header(AUTHORIZATION, bearer_header())
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::NOT_FOUND);
+    let repo = find_repo(&state, TEST_REPO_OWNER, TEST_REPO_NAME).unwrap();
+    assert!(repo.staged_update.is_some());
+    assert!(
+        !repo
+            .live_tree()
+            .contains_key(&ScopePath::parse("/large.bin").unwrap())
+    );
+}
+
+#[tokio::test]
 async fn reject_staged_update_blob_read_failure_still_discards_update() {
     let mut state = test_state_with_repo();
     cache_test_jwks(&state);
@@ -594,6 +693,28 @@ impl crate::object_store::ObjectStore for ReadDeleteFailsObjectStore {
 
     fn delete(&self, _key: &str) -> Result<(), crate::error::ApiError> {
         Err(crate::error::ApiError::service_unavailable("delete failed"))
+    }
+}
+
+struct ReadCountingObjectStore {
+    read_count: Arc<std::sync::atomic::AtomicUsize>,
+}
+
+impl crate::object_store::ObjectStore for ReadCountingObjectStore {
+    fn put(&self, _key: &str, _bytes: &[u8]) -> Result<(), crate::error::ApiError> {
+        Ok(())
+    }
+
+    fn get(&self, key: &str) -> Result<Vec<u8>, crate::error::ApiError> {
+        self.read_count
+            .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        Err(crate::error::ApiError::not_found(format!(
+            "object {key} not found"
+        )))
+    }
+
+    fn delete(&self, _key: &str) -> Result<(), crate::error::ApiError> {
+        Ok(())
     }
 }
 
