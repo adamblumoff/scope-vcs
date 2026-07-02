@@ -10,10 +10,13 @@
   "scripts": {
     "dev": "vite dev",
     "build": "vite build",
-    "check": "pnpm typecheck && pnpm check:api-contract && pnpm check:line-limit && pnpm check:react-doctor",
+    "check": "pnpm typecheck && pnpm check:api-contract && pnpm check:line-limit && pnpm check:react-doctor && pnpm check:konsistent",
     "check:api-contract": "node scripts/check-api-contract.mjs",
+    "check:konsistent": "konsistent check",
     "check:line-limit": "node scripts/check-line-limit.mjs",
     "check:react-doctor": "react-doctor --blocking warning --no-score --yes",
+    "konsistent": "konsistent check",
+    "konsistent:validate": "konsistent validate",
     "start": "node .output/server/index.mjs",
     "test": "node -e \"const fs=require('node:fs'); fs.rmSync('.test-output',{recursive:true,force:true}); fs.mkdirSync('.test-output',{recursive:true}); fs.writeFileSync('.test-output/package.json','{\\\"type\\\":\\\"commonjs\\\"}')\" && tsc -p tsconfig.test.json && node --test \".test-output/**/*.test.js\"",
     "typecheck": "tsc --noEmit"
@@ -43,6 +46,7 @@
     "@types/react": "^19.0.8",
     "@types/react-dom": "^19.0.3",
     "@vitejs/plugin-react": "^6.0.1",
+    "konsistent": "1.0.0-beta.1",
     "nitro": "^3.0.260311-beta",
     "react-doctor": "^0.5.8",
     "typescript": "^6.0.2",

@@ -1,4 +1,7 @@
 minimumReleaseAge: 10080
+minimumReleaseAgeExclude:
+  - konsistent
+  - '@konsistent/convention'
 trustPolicy: no-downgrade
 blockExoticSubdeps: true
 supportedArchitectures:

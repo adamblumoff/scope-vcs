@@ -1,0 +1,22 @@
+{
+  "$schema": "node_modules/konsistent/konsistent.schema.json",
+  "version": "v1",
+  "conventions": [
+    {
+      "name": "route-files-export-route",
+      "description": "TanStack route files must expose the route definition under the standard Route export.",
+      "paths": "src/routes/**/*.tsx",
+      "must": {
+        "export": ["Route"]
+      }
+    },
+    {
+      "name": "feature-pages-export-matching-page-component",
+      "description": "Feature page modules must export a Page component named from the page filename.",
+      "paths": "src/features/{featureName}/{pageName}-page.tsx",
+      "must": {
+        "exportFunctions": ["${pageName.toPascalCase()}Page"]
+      }
+    }
+  ]
+}
