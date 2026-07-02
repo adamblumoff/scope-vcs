@@ -5,16 +5,16 @@ use crate::{
     config::{DEFAULT_GIT_BRANCH, EMPTY_GIT_OID, RECEIVE_PACK_STAGING_BYTES},
     error::ApiError,
     git::import::{run_git, safe_repo_key},
-    git::upload::{git_command_output_with_timeout, projection_bare_repo_for_state},
+    git::upload::projection_bare_repo,
     object_store::source_blob_bytes,
     persistence::ensure_private_dir,
-    runtime_budgets::RuntimeBudgets,
     state::{AppState, find_repo},
 };
 use axum::{body::Body, http::StatusCode, response::Response};
 use sha2::{Digest, Sha256};
 use std::{
     fs,
+    io::Write,
     path::{Path as FsPath, PathBuf},
     process::{Command, Stdio},
     sync::atomic::{AtomicU64, Ordering},
@@ -105,7 +105,6 @@ pub(crate) fn cached_raw_git_snapshot_repo(
         std::process::id(),
         attempt
     ));
-    let _permit = state.runtime_budgets.try_projection_build()?;
     restore_git_snapshot(state, snapshot, &temp_path)?;
     match fs::rename(&temp_path, &repo_path) {
         Ok(()) => Ok(repo_path),
@@ -241,7 +240,11 @@ pub(crate) fn ensure_published_receive_pack_staging_repo(
             &principal,
             repo.access_for_principal(&principal).can_read_private_files,
         );
-        let seed_repo = projection_bare_repo_for_state(state, &projection)?;
+        let seed_repo = projection_bare_repo(
+            state.object_store.as_ref(),
+            &state.git_cache_root()?,
+            &projection,
+        )?;
         let seed = seed_repo.to_string_lossy().to_string();
         let target = repo_root.to_string_lossy().to_string();
         run_git(
@@ -364,12 +367,22 @@ pub(crate) fn git_http_backend(
         command.env("CONTENT_TYPE", content_type);
     }
 
-    let output = git_command_output_with_timeout(
-        &mut command,
-        Some(body),
-        RuntimeBudgets::default_git_command_timeout(),
-    )?;
-    CgiResponse::parse(output)
+    let mut child = command.spawn().map_err(|error| {
+        ApiError::service_unavailable(format!("failed to start git http-backend: {error}"))
+    })?;
+    if let Some(stdin) = child.stdin.as_mut() {
+        stdin.write_all(&body).map_err(ApiError::internal)?;
+    }
+
+    let output = child.wait_with_output().map_err(ApiError::internal)?;
+    if !output.status.success() {
+        return Err(ApiError::service_unavailable(format!(
+            "git http-backend failed: {}",
+            String::from_utf8_lossy(&output.stderr).trim()
+        )));
+    }
+
+    CgiResponse::parse(output.stdout)
 }
 
 pub(crate) struct CgiResponse {

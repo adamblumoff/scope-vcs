@@ -1,4 +1,4 @@
-use super::{ObjectStore, ensure_object_size, object_too_large, required_env};
+use super::{ObjectStore, required_env};
 use crate::{
     config::{
         SCOPE_BUCKET_ACCESS_KEY_ID_ENV, SCOPE_BUCKET_ENDPOINT_ENV,
@@ -10,7 +10,7 @@ use crate::{
 use hmac::{Hmac, Mac};
 use reqwest::blocking::Client;
 use sha2::{Digest as _, Sha256};
-use std::{io::Read, time::Duration};
+use std::time::Duration;
 use time::OffsetDateTime;
 
 type HmacSha256 = Hmac<Sha256>;
@@ -170,16 +170,10 @@ impl S3ObjectStore {
         for (name, value) in self.signed_headers(method, &canonical_uri, &host, &payload)? {
             request = request.header(name, value);
         }
-        send_blocking_request(method, "bucket", request, None)
+        send_blocking_request(method, "bucket", request)
     }
 
-    fn send(
-        &self,
-        method: &str,
-        key: &str,
-        payload: Vec<u8>,
-        max_bytes: Option<usize>,
-    ) -> Result<Vec<u8>, ApiError> {
+    fn send(&self, method: &str, key: &str, payload: Vec<u8>) -> Result<Vec<u8>, ApiError> {
         let url = self.request_url(key);
         let host = Self::request_host(&url)?;
         let canonical_uri = self.canonical_uri(key);
@@ -188,12 +182,9 @@ impl S3ObjectStore {
             .as_ref()
             .ok_or_else(|| ApiError::internal_message("object store client is shut down"))?;
         let mut request = match method {
-            "GET" => client.get(&url).timeout(S3_REQUEST_TIMEOUT),
-            "PUT" => client
-                .put(&url)
-                .timeout(S3_REQUEST_TIMEOUT)
-                .body(payload.clone()),
-            "DELETE" => client.delete(&url).timeout(S3_REQUEST_TIMEOUT),
+            "GET" => client.get(&url),
+            "PUT" => client.put(&url).body(payload.clone()),
+            "DELETE" => client.delete(&url),
             _ => {
                 return Err(ApiError::internal_message(
                     "unsupported object store method",
@@ -203,7 +194,7 @@ impl S3ObjectStore {
         for (name, value) in self.signed_headers(method, &canonical_uri, &host, &payload)? {
             request = request.header(name, value);
         }
-        send_blocking_request(method, key, request, max_bytes)
+        send_blocking_request(method, key, request)
     }
 }
 
@@ -211,7 +202,6 @@ fn send_blocking_request(
     method: &str,
     key: &str,
     request: reqwest::blocking::RequestBuilder,
-    max_bytes: Option<usize>,
 ) -> Result<Vec<u8>, ApiError> {
     let send = || {
         let response = request.send().map_err(ApiError::internal)?;
@@ -221,7 +211,10 @@ fn send_blocking_request(
                 "object store {method} failed for {key}: {status}"
             )));
         }
-        read_response_body(response, key, max_bytes)
+        response
+            .bytes()
+            .map(|bytes| bytes.to_vec())
+            .map_err(ApiError::internal)
     };
 
     if tokio::runtime::Handle::try_current().is_ok() {
@@ -229,38 +222,6 @@ fn send_blocking_request(
     } else {
         send()
     }
-}
-
-fn read_response_body(
-    response: reqwest::blocking::Response,
-    key: &str,
-    max_bytes: Option<usize>,
-) -> Result<Vec<u8>, ApiError> {
-    let Some(max_bytes) = max_bytes else {
-        return response
-            .bytes()
-            .map(|bytes| bytes.to_vec())
-            .map_err(ApiError::internal);
-    };
-
-    if let Some(content_length) = response.content_length()
-        && content_length > max_bytes as u64
-    {
-        return Err(object_too_large(
-            "read",
-            key,
-            usize::try_from(content_length).unwrap_or(usize::MAX),
-            max_bytes,
-        ));
-    }
-
-    let mut body = Vec::new();
-    response
-        .take((max_bytes as u64).saturating_add(1))
-        .read_to_end(&mut body)
-        .map_err(ApiError::internal)?;
-    ensure_object_size("read", key, body.len(), max_bytes)?;
-    Ok(body)
 }
 
 impl Drop for S3ObjectStore {
@@ -275,19 +236,15 @@ impl Drop for S3ObjectStore {
 
 impl ObjectStore for S3ObjectStore {
     fn put(&self, key: &str, bytes: &[u8]) -> Result<(), ApiError> {
-        self.send("PUT", key, bytes.to_vec(), None).map(|_| ())
+        self.send("PUT", key, bytes.to_vec()).map(|_| ())
     }
 
     fn get(&self, key: &str) -> Result<Vec<u8>, ApiError> {
-        self.send("GET", key, Vec::new(), None)
-    }
-
-    fn get_bounded(&self, key: &str, max_bytes: usize) -> Result<Vec<u8>, ApiError> {
-        self.send("GET", key, Vec::new(), Some(max_bytes))
+        self.send("GET", key, Vec::new())
     }
 
     fn delete(&self, key: &str) -> Result<(), ApiError> {
-        self.send("DELETE", key, Vec::new(), None).map(|_| ())
+        self.send("DELETE", key, Vec::new()).map(|_| ())
     }
 
     fn readiness_check(&self) -> Result<(), ApiError> {
@@ -363,21 +320,6 @@ mod tests {
         assert_signed_s3_headers(&delete);
     }
 
-    #[test]
-    fn s3_store_bounded_get_rejects_declared_oversized_body_before_reading() {
-        let server = TestS3Server::start(vec![TestS3Response::declared_length(5)]);
-        let store = test_s3_store(&server.endpoint);
-
-        let error = store.get_bounded("objects/too-large", 4).unwrap_err();
-
-        assert_eq!(error.status, axum::http::StatusCode::PAYLOAD_TOO_LARGE);
-        assert!(error.message.contains("exceeds 4 bytes"));
-        let request = server.recv();
-        assert_eq!(request.method, "GET");
-        assert_eq!(request.path, "/scope-bucket/objects/too-large");
-        assert_signed_s3_headers(&request);
-    }
-
     fn test_s3_store(endpoint: &str) -> S3ObjectStore {
         S3ObjectStore {
             client: Some(
@@ -418,28 +360,16 @@ mod tests {
 
     struct TestS3Response {
         body: Vec<u8>,
-        content_length: Option<usize>,
     }
 
     impl TestS3Response {
         fn empty() -> Self {
-            Self {
-                body: Vec::new(),
-                content_length: None,
-            }
+            Self { body: Vec::new() }
         }
 
         fn body(body: &[u8]) -> Self {
             Self {
                 body: body.to_vec(),
-                content_length: None,
-            }
-        }
-
-        fn declared_length(content_length: usize) -> Self {
-            Self {
-                body: Vec::new(),
-                content_length: Some(content_length),
             }
         }
     }
@@ -462,10 +392,9 @@ mod tests {
                     let (mut stream, _) = listener.accept().unwrap();
                     let request = read_request(&mut stream);
                     sender.send(request).unwrap();
-                    let content_length = response.content_length.unwrap_or(response.body.len());
                     let headers = format!(
                         "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
-                        content_length
+                        response.body.len()
                     );
                     use std::io::Write as _;
                     stream.write_all(headers.as_bytes()).unwrap();
