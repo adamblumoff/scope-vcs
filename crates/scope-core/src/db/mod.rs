@@ -1,3 +1,10 @@
+//! Metadata persistence entry point.
+//!
+//! Table row shapes live in `entities/*`, table identifiers and schema
+//! inventory live in `metadata_schema/*`, and table creation lives in
+//! `schema_*.rs`. Runtime behavior should stay in the focused DB modules that
+//! own the workflow being persisted.
+
 mod auth;
 mod cleanup_queue;
 #[cfg(test)]
@@ -23,8 +30,12 @@ mod repo_tokens;
 mod repository_rows;
 mod runtime;
 mod schema;
+mod schema_auth;
+mod schema_cleanup;
+mod schema_collaboration;
 mod schema_outbox;
 mod schema_read_models;
+mod schema_repositories;
 mod schema_repository_facts;
 #[cfg(any(test, feature = "test-support"))]
 mod test_support;
@@ -90,12 +101,6 @@ impl MetadataStore {
         let database_url = std::env::var(crate::config::DATABASE_URL_ENV)
             .map_err(|_| anyhow::anyhow!("DATABASE_URL is required for Scope metadata storage"))?;
         connect_postgres_store(database_url)
-    }
-
-    pub fn connect_worker_from_env() -> anyhow::Result<Self> {
-        let database_url = std::env::var(crate::config::DATABASE_URL_ENV)
-            .map_err(|_| anyhow::anyhow!("DATABASE_URL is required for Scope worker metadata"))?;
-        connect_postgres_worker_store(database_url)
     }
 
     pub fn connect_worker_from_env_with_schema_wait(
@@ -427,10 +432,6 @@ fn connect_postgres_store(database_url: String) -> anyhow::Result<MetadataStore>
         }),
         postgres_database_url: Some(database_url),
     })
-}
-
-fn connect_postgres_worker_store(database_url: String) -> anyhow::Result<MetadataStore> {
-    connect_postgres_worker_store_with_schema_wait(database_url, Duration::ZERO, Duration::ZERO)
 }
 
 fn connect_postgres_worker_store_with_schema_wait(
