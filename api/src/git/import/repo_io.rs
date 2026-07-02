@@ -6,8 +6,10 @@ use crate::{
         MAX_PENDING_IMPORT_TOTAL_BYTES,
     },
     error::ApiError,
+    git::upload::git_process_output_with_timeout,
     object_store::put_repo_object,
     persistence::unix_now,
+    runtime_budgets::RuntimeBudgets,
     state::AppState,
 };
 use sha2::{Digest, Sha256};
@@ -248,12 +250,16 @@ pub(super) fn put_git_blob_contents(
         ));
     }
     let store = state.object_store.as_ref();
+    let blob_put_parallelism = state
+        .runtime_budgets
+        .object_store_concurrency()
+        .clamp(1, MAX_PARALLEL_BLOB_PUTS);
     let mut blobs = Vec::with_capacity(contents.len());
     for chunk in pending_files
         .iter()
         .zip(contents)
         .collect::<Vec<_>>()
-        .chunks(MAX_PARALLEL_BLOB_PUTS)
+        .chunks(blob_put_parallelism)
     {
         let results = thread::scope(|scope| {
             let handles = chunk
@@ -450,10 +456,13 @@ pub(crate) fn run_git_output(
     if let Some(repo) = repo {
         command.arg("-C").arg(repo);
     }
-    command
-        .args(args)
-        .output()
-        .map_err(|error| ApiError::service_unavailable(format!("failed {action}: {error}")))
+    command.args(args);
+    git_process_output_with_timeout(
+        &mut command,
+        None,
+        RuntimeBudgets::default_git_command_timeout(),
+    )
+    .map_err(|error| ApiError::service_unavailable(format!("failed {action}: {}", error.message)))
 }
 
 pub(crate) fn safe_repo_key(owner: &str, repo_name: &str) -> String {

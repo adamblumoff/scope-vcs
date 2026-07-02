@@ -23,16 +23,17 @@ use crate::{
 };
 use axum::{
     Json,
-    body::to_bytes,
+    body::{Bytes, to_bytes},
     extract::{Path, Query, Request, State},
     http::{
         HeaderMap, HeaderValue, StatusCode,
-        header::{CONTENT_TYPE, WWW_AUTHENTICATE},
+        header::{CONTENT_ENCODING, CONTENT_TYPE, WWW_AUTHENTICATE},
     },
     response::{IntoResponse, Response},
 };
+use flate2::read::GzDecoder;
 use serde::Deserialize;
-use std::{fs, time::Instant};
+use std::{fs, io::Read, time::Instant};
 
 #[derive(Debug, Deserialize)]
 pub(crate) struct GitInfoRefsQuery {
@@ -72,6 +73,10 @@ pub(crate) async fn git_info_refs(
     match query.service.as_deref() {
         Some(GIT_RECEIVE_PACK) => match receive_pack_access(&state, &headers, &org, &repo).await {
             Ok(access) => {
+                let _permit = match state.runtime_budgets.try_receive_pack() {
+                    Ok(permit) => permit,
+                    Err(error) => return git_error_response(error),
+                };
                 match handle_git_receive_pack(&state, &org, &repo, "GET", Vec::new(), None, access)
                 {
                     Ok(response) => response,
@@ -81,8 +86,15 @@ pub(crate) async fn git_info_refs(
             Err(error) => git_error_response(error),
         },
         Some(GIT_UPLOAD_PACK) => {
+            let _permit = match state.runtime_budgets.try_upload_pack() {
+                Ok(permit) => permit,
+                Err(error) => return git_advertisement_error(error.message),
+            };
             match git_upload_pack_repo_for_request(&state, &headers, &org, &repo).await {
-                Ok(repo_path) => git_upload_pack_advertisement(&repo_path),
+                Ok(repo_path) => git_upload_pack_advertisement(
+                    &repo_path,
+                    state.runtime_budgets.git_command_timeout(),
+                ),
                 Err(error) if error.status == StatusCode::UNAUTHORIZED => git_error_response(error),
                 Err(error) => git_advertisement_error(error.message),
             }
@@ -114,6 +126,10 @@ pub(crate) async fn git_receive_pack(
         Ok(access) => access,
         Err(error) => return git_error_response(error),
     };
+    let _permit = match state.runtime_budgets.try_receive_pack() {
+        Ok(permit) => permit,
+        Err(error) => return git_error_response(error),
+    };
 
     let content_type = headers
         .get(CONTENT_TYPE)
@@ -122,25 +138,17 @@ pub(crate) async fn git_receive_pack(
     let body = match to_bytes(request.into_body(), MAX_RECEIVE_PACK_BYTES).await {
         Ok(body) => body,
         Err(error) => {
-            return (
-                StatusCode::PAYLOAD_TOO_LARGE,
-                Json(serde_json::json!({
-                    "error": format!("git receive-pack body is too large: {error}")
-                })),
-            )
-                .into_response();
+            return git_error_response(ApiError::payload_too_large(format!(
+                "git receive-pack body is too large: {error}"
+            )));
         }
     };
+    let body = match decode_git_request_body(&headers, body, MAX_RECEIVE_PACK_BYTES) {
+        Ok(body) => body,
+        Err(error) => return git_error_response(error),
+    };
 
-    match handle_git_receive_pack(
-        &state,
-        &org,
-        &repo,
-        "POST",
-        body.to_vec(),
-        content_type,
-        access,
-    ) {
+    match handle_git_receive_pack(&state, &org, &repo, "POST", body, content_type, access) {
         Ok(response) => response,
         Err(error) => git_error_response(error),
     }
@@ -152,6 +160,10 @@ pub(crate) async fn git_upload_pack_rpc(
     Path((org, repo_name)): Path<(String, String)>,
     request: Request,
 ) -> Response {
+    let permit = match state.runtime_budgets.try_upload_pack() {
+        Ok(permit) => permit,
+        Err(error) => return git_upload_pack_error(error.message),
+    };
     let repo_path = match git_upload_pack_repo_for_request(&state, &headers, &org, &repo_name).await
     {
         Ok(repo_path) => repo_path,
@@ -163,11 +175,65 @@ pub(crate) async fn git_upload_pack_rpc(
             return git_upload_pack_error(format!("git upload-pack body is too large: {error}"));
         }
     };
+    let body = match decode_git_request_body(&headers, body, MAX_UPLOAD_PACK_BYTES) {
+        Ok(body) => body,
+        Err(error) => return git_upload_pack_error(error.message),
+    };
 
-    match git_upload_pack_response(&repo_path, &body).await {
+    match git_upload_pack_response(
+        &repo_path,
+        &body,
+        state.runtime_budgets.git_command_timeout(),
+        permit,
+    )
+    .await
+    {
         Ok(response) => response,
         Err(error) => git_upload_pack_error(error.message),
     }
+}
+
+pub(crate) fn decode_git_request_body(
+    headers: &HeaderMap,
+    body: Bytes,
+    max_bytes: usize,
+) -> Result<Vec<u8>, ApiError> {
+    let mut encodings = headers.get_all(CONTENT_ENCODING).iter();
+    let Some(encoding) = encodings.next() else {
+        return Ok(body.to_vec());
+    };
+    if encodings.next().is_some() {
+        return Err(ApiError::bad_request(
+            "multiple Git content-encoding headers are unsupported",
+        ));
+    }
+
+    let encoding = encoding
+        .to_str()
+        .map_err(|_| ApiError::bad_request("invalid Git content-encoding header"))?
+        .trim();
+    if encoding.is_empty() || encoding.eq_ignore_ascii_case("identity") {
+        return Ok(body.to_vec());
+    }
+    if !encoding.eq_ignore_ascii_case("gzip") {
+        return Err(ApiError::bad_request(format!(
+            "unsupported Git content-encoding {encoding}"
+        )));
+    }
+
+    let mut decoded = Vec::new();
+    GzDecoder::new(body.as_ref())
+        .take((max_bytes as u64).saturating_add(1))
+        .read_to_end(&mut decoded)
+        .map_err(|error| {
+            ApiError::bad_request(format!("invalid gzip Git request body: {error}"))
+        })?;
+    if decoded.len() > max_bytes {
+        return Err(ApiError::payload_too_large(
+            "git request body is too large after decompression",
+        ));
+    }
+    Ok(decoded)
 }
 
 pub(crate) async fn receive_pack_access(
