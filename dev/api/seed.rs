@@ -5,9 +5,9 @@ use crate::{
         policy::{ScopePath, Visibility, VisibilityRule},
         projection::{AuthorVisibility, FileChange, LogicalCommit},
         store::{
-            AccountAccess, AppCatalog, PendingImport, PendingImportFile, RepoPublicationState,
-            RepoSettings, SourceBlob, StagedFileChange, StagedFileChangeKind, StagedRepoUpdate,
-            StoredRepository, UserAccount,
+            AppCatalog, PendingImport, PendingImportFile, RepoPublicationState, RepoSettings,
+            SourceBlob, StagedFileChange, StagedFileChangeKind, StagedRepoUpdate, StoredRepository,
+            UserAccount,
         },
     },
     error::ApiError,
@@ -58,7 +58,6 @@ pub(super) fn seed_user_account(seed_user: DevSeedUser) -> UserAccount {
         handle: seed_user.handle,
         email: seed_user.email,
         email_verified: true,
-        access: AccountAccess::Member,
     }
 }
 

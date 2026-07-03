@@ -8,8 +8,8 @@ use crate::domain::projection::{
 use crate::domain::repo_actions::preview_publish_import;
 use crate::domain::staged_updates::apply_staged_update_to_repo;
 use crate::domain::store::{
-    AccountAccess, AppCatalog, DEFAULT_GIT_FILE_MODE, EXECUTABLE_GIT_FILE_MODE, FirstPushToken,
-    GitPushToken, PendingImport, PendingImportFile, RepoPublicationState, RepoRecord, RepoSettings,
+    AppCatalog, DEFAULT_GIT_FILE_MODE, EXECUTABLE_GIT_FILE_MODE, FirstPushToken, GitPushToken,
+    PendingImport, PendingImportFile, RepoPublicationState, RepoRecord, RepoSettings,
     RepoStorageCleanup, RepositoryInvite, RepositoryInviteState, RepositoryMember,
     RepositoryMemberPermissions, StagedFileChange, StagedFileChangeKind, StagedRepoUpdate,
     StoredRepository, UserAccount,
@@ -203,7 +203,6 @@ fn test_state_with_repo() -> AppState {
         handle: TEST_REPO_OWNER.to_string(),
         email: TEST_OWNER_EMAIL.to_string(),
         email_verified: true,
-        access: AccountAccess::Member,
     };
     let repo = test_repo(&owner_id);
     let runtime_budgets = Arc::new(RuntimeBudgets::from_config(Default::default()));

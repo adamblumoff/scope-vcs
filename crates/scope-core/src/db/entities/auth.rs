@@ -13,7 +13,6 @@ pub mod user {
         #[sea_orm(unique)]
         pub email: String,
         pub email_verified: bool,
-        pub access: String,
     }
 
     #[derive(Copy, Clone, Debug, EnumIter, DeriveRelation)]
@@ -28,7 +27,6 @@ pub mod user {
                 handle: user.handle.clone(),
                 email: user.email.clone(),
                 email_verified: user.email_verified,
-                access: encode_enum(user.access).expect("AccountAccess serializes to a string"),
             }
         }
 
@@ -38,7 +36,6 @@ pub mod user {
                 handle: self.handle,
                 email: self.email,
                 email_verified: self.email_verified,
-                access: decode_enum::<AccountAccess>(self.access)?,
             })
         }
     }

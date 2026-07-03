@@ -443,8 +443,8 @@ mod tests {
     use crate::domain::{
         policy::{ScopePath, Visibility},
         store::{
-            AccountAccess, DEFAULT_GIT_FILE_MODE, StagedFileChange, StagedFileChangeKind,
-            StagedRepoUpdate, UserAccount,
+            DEFAULT_GIT_FILE_MODE, StagedFileChange, StagedFileChangeKind, StagedRepoUpdate,
+            UserAccount,
         },
     };
 
@@ -532,7 +532,6 @@ mod tests {
             handle: "owner".to_string(),
             email: "owner@example.com".to_string(),
             email_verified: true,
-            access: AccountAccess::Member,
         }
     }
 

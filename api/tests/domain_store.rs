@@ -4,9 +4,9 @@ use api::domain::{
     policy::{Policy, Principal, PrincipalKind, ScopePath, Visibility, VisibilityRule},
     projection::SourceGraph,
     store::{
-        AccountAccess, AppCatalog, CatalogError, FirstPushToken, FirstPushTokenStatus,
-        RepoPublicationState, RepoRecord, RepoSettings, RepositoryInvite, RepositoryInviteState,
-        RepositoryMember, RepositoryMemberPermissions, StoredRepository, UserAccount, app_catalog,
+        AppCatalog, CatalogError, FirstPushToken, FirstPushTokenStatus, RepoPublicationState,
+        RepoRecord, RepoSettings, RepositoryInvite, RepositoryInviteState, RepositoryMember,
+        RepositoryMemberPermissions, StoredRepository, UserAccount, app_catalog,
     },
 };
 
@@ -22,7 +22,6 @@ fn catalog_with_test_repo() -> AppCatalog {
         handle: TEST_REPO_OWNER.to_string(),
         email: TEST_OWNER_EMAIL.to_string(),
         email_verified: true,
-        access: AccountAccess::Member,
     };
     let repo = test_repo();
 
@@ -99,7 +98,6 @@ fn create_repository_makes_private_owner_repo_pending_first_push() {
         handle: TEST_REPO_OWNER.to_string(),
         email: TEST_OWNER_EMAIL.to_string(),
         email_verified: true,
-        access: AccountAccess::Member,
     };
     catalog.users.insert(owner.id.clone(), owner.clone());
 
@@ -155,7 +153,6 @@ fn duplicate_owner_repo_name_is_rejected() {
         handle: TEST_REPO_OWNER.to_string(),
         email: TEST_OWNER_EMAIL.to_string(),
         email_verified: true,
-        access: AccountAccess::Member,
     };
 
     catalog
@@ -188,7 +185,6 @@ fn pending_publish_repo_is_owner_only_even_with_reader_membership() {
         handle: "reader".to_string(),
         email: "reader@example.com".to_string(),
         email_verified: true,
-        access: AccountAccess::Member,
     };
     catalog.users.insert(reader.id.clone(), reader.clone());
     let repo = catalog.repositories.get_mut(TEST_REPO_ID).unwrap();
@@ -238,7 +234,6 @@ fn pending_invite_does_not_grant_private_access() {
         handle: "invited".to_string(),
         email: "invited@example.com".to_string(),
         email_verified: true,
-        access: AccountAccess::Member,
     };
     catalog.users.insert(invited.id.clone(), invited);
     let repo = catalog.repositories.get_mut(TEST_REPO_ID).unwrap();

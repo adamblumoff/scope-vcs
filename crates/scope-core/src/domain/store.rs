@@ -5,19 +5,12 @@ use super::{
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub enum AccountAccess {
-    Public,
-    Member,
-}
-
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct UserAccount {
     pub id: String,
     pub handle: String,
     pub email: String,
     pub email_verified: bool,
-    pub access: AccountAccess,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]

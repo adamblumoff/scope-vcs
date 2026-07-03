@@ -443,7 +443,6 @@ fn scope_owner_uses_repo_principal() {
         handle: TEST_REPO_OWNER.to_string(),
         email: TEST_OWNER_EMAIL.to_string(),
         email_verified: true,
-        access: AccountAccess::Member,
     };
     let principal = principal_for_scope_user(&repo, Some(&user));
 
@@ -460,7 +459,6 @@ fn non_member_scope_user_uses_public_principal() {
         handle: "other".to_string(),
         email: "other@example.com".to_string(),
         email_verified: true,
-        access: AccountAccess::Member,
     };
     let principal = principal_for_scope_user(&repo, Some(&user));
 

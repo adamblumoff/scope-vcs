@@ -262,7 +262,6 @@ async fn upload_pack_uses_git_clone_token_for_member_projection_after_publish() 
                 handle: "member".to_string(),
                 email: "member@example.com".to_string(),
                 email_verified: true,
-                access: AccountAccess::Member,
             },
         );
         catalog.repositories.insert(TEST_REPO_ID.to_string(), repo);

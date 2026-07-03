@@ -158,7 +158,6 @@ fn db_metadata_store_round_trips_repo_metadata() {
         handle: TEST_REPO_OWNER.to_string(),
         email: TEST_OWNER_EMAIL.to_string(),
         email_verified: true,
-        access: AccountAccess::Member,
     };
     let mut repo = repo_with_readme();
     let private_path = ScopePath::parse("/secret.txt").unwrap();
@@ -327,7 +326,6 @@ fn db_metadata_worker_rebuilds_projection_read_models_from_outbox() {
         handle: TEST_REPO_OWNER.to_string(),
         email: TEST_OWNER_EMAIL.to_string(),
         email_verified: true,
-        access: AccountAccess::Member,
     };
     let repo = repo_with_readme();
     let metadata = crate::db::MetadataStore::connect_fresh_for_tests(&test_db).unwrap();
@@ -890,7 +888,6 @@ async fn list_repos_route_hides_pending_repo_from_reader_member() {
                 handle: "reader".to_string(),
                 email: "reader@example.com".to_string(),
                 email_verified: true,
-                access: AccountAccess::Member,
             },
         );
         let repo = catalog.repositories.get_mut(TEST_REPO_ID).unwrap();

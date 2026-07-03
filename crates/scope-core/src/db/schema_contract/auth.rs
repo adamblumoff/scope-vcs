@@ -8,7 +8,6 @@ const USER_COLUMNS: &[ColumnSpec] = &[
     unique_column("handle", ColumnType::String),
     required_column(USER_EMAIL, ColumnType::String),
     required_column("email_verified", ColumnType::Boolean),
-    required_column("access", ColumnType::String),
 ];
 
 const USER_INDEXES: &[IndexSpec] = &[unique_index("idx_scope_users_email", &[USER_EMAIL])];

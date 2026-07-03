@@ -6,11 +6,7 @@ use super::{
 };
 #[cfg(any(test, feature = "memory-metadata"))]
 use crate::domain::store::AppCatalog;
-use crate::{
-    auth::clerk::ClerkIdentity,
-    domain::store::{AccountAccess, UserAccount},
-    error::ApiError,
-};
+use crate::{auth::clerk::ClerkIdentity, domain::store::UserAccount, error::ApiError};
 use sea_orm::{
     ActiveModelTrait, ColumnTrait, EntityTrait, IntoActiveModel, QueryFilter, TransactionTrait,
 };
@@ -159,7 +155,6 @@ where
                 handle: unique_user_handle(users.iter(), &preferred, &user_id),
                 email: String::new(),
                 email_verified: false,
-                access: AccountAccess::Member,
             }
         });
     update_user_snapshot(&mut user, identity);
@@ -252,7 +247,6 @@ fn resolve_clerk_user_in_memory(
             handle: unique_user_handle(catalog.users.values(), &preferred, &user_id),
             email: String::new(),
             email_verified: false,
-            access: AccountAccess::Member,
         }
     });
     update_user_snapshot(&mut user, identity);
@@ -281,7 +275,6 @@ fn update_user_snapshot(user: &mut UserAccount, identity: &ClerkIdentity) {
         .map(normalize_email)
         .unwrap_or_default();
     user.email_verified = identity.email_verified;
-    user.access = AccountAccess::Member;
 }
 
 fn verified_identity_email(identity: &ClerkIdentity) -> Result<String, ApiError> {
