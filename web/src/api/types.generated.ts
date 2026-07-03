@@ -116,9 +116,9 @@ export type ReviewFileDiffResponse = { path: string, kind: StagedFileChangeKind,
 
 export type ReviewLineDiffResponse = { additions: number, deletions: number, };
 
-export type PendingImportReviewResponse = { publication_state: RepoPublicationState, default_visibility: Visibility, line_diff: ReviewLineDiffResponse, files: Array<RepoFileResponse>, };
+export type PendingImportReviewResponse = { publication_state: RepoPublicationState, default_visibility: Visibility, line_diff: ReviewLineDiffResponse | null, files: Array<RepoFileResponse>, };
 
-export type StagedUpdateResponse = { id: string, branch: string, base_live_commit_id: string | null, message: string, line_diff: ReviewLineDiffResponse, files: Array<StagedFileResponse>, };
+export type StagedUpdateResponse = { id: string, branch: string, base_live_commit_id: string | null, message: string, line_diff: ReviewLineDiffResponse | null, files: Array<StagedFileResponse>, };
 
 export type StagedFileResponse = { path: string, kind: StagedFileChangeKind, old_oid: string | null, new_oid: string | null, visibility: Visibility, };
 

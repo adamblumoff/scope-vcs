@@ -421,13 +421,20 @@ function ReviewLineDiffPill({
   lineDiff: ReviewLineDiff | null | undefined
 }) {
   if (!lineDiff) {
-    return null
+    return (
+      <div
+        aria-label="diff too large to summarize"
+        className="inline-flex items-center px-1 text-xs font-medium leading-9 text-muted-foreground"
+      >
+        diff too large to summarize
+      </div>
+    )
   }
 
   return (
     <div
       aria-label={`${lineDiff.deletions} deletions and ${lineDiff.additions} additions`}
-      className="inline-flex items-center gap-2 px-1 font-mono text-base leading-9"
+      className="inline-flex items-center gap-2 px-1 font-mono text-base leading-9 tabular-nums"
     >
       <span className="text-red-300">-{lineDiff.deletions}</span>
       <span className="text-green-300">+{lineDiff.additions}</span>

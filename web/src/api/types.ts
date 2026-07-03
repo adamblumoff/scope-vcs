@@ -172,7 +172,7 @@ export type StagedUpdateReview = {
   branch: string | null
   base_live_commit_id: string | null
   message: string | null
-  line_diff: ReviewLineDiff
+  line_diff: ReviewLineDiff | null
   files: StagedFile[]
 }
 

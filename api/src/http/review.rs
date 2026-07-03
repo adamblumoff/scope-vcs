@@ -162,7 +162,7 @@ pub(crate) async fn update_staged_file_visibility(
         .staged_update
         .as_ref()
         .map(|update| staged_update_line_diff_best_effort(state.object_store.as_ref(), update))
-        .unwrap_or_default();
+        .unwrap_or_else(|| Some(ReviewLineDiffResponse::default()));
 
     let updated = state.metadata.update_staged_file_visibility(
         &owner,
@@ -197,7 +197,7 @@ pub(crate) async fn apply_staged_update(
         verify_staged_update_new_blobs(state.object_store.as_ref(), update)?;
         staged_update_line_diff_best_effort(state.object_store.as_ref(), update)
     } else {
-        ReviewLineDiffResponse::default()
+        Some(ReviewLineDiffResponse::default())
     };
     let applied = state
         .metadata
@@ -229,7 +229,7 @@ pub(crate) async fn reject_staged_update(
         .staged_update
         .as_ref()
         .map(|update| staged_update_line_diff_best_effort(state.object_store.as_ref(), update))
-        .unwrap_or_default();
+        .unwrap_or_else(|| Some(ReviewLineDiffResponse::default()));
     let rejected = state
         .metadata
         .reject_staged_update(&owner, &repo_name, &principal.id)?;
@@ -313,24 +313,24 @@ fn staged_file_diff_response(
 fn pending_import_line_diff(
     store: &dyn ObjectStore,
     repo: &StoredRepository,
-) -> Result<ReviewLineDiffResponse, ApiError> {
+) -> Result<Option<ReviewLineDiffResponse>, ApiError> {
     let mut line_diff = ReviewLineDiffResponse::default();
     if let Some(pending) = &repo.pending_import {
         if summary_line_diff_exceeds_budget(pending.files.iter().map(|file| &file.blob)) {
-            return Ok(line_diff);
+            return Ok(None);
         }
         for file in &pending.files {
             let file_diff = review_line_diff_for_blobs(store, None, Some(&file.blob))?;
             add_line_diff(&mut line_diff, file_diff);
         }
     }
-    Ok(line_diff)
+    Ok(Some(line_diff))
 }
 
 fn pending_import_line_diff_best_effort(
     store: &dyn ObjectStore,
     repo: &StoredRepository,
-) -> ReviewLineDiffResponse {
+) -> Option<ReviewLineDiffResponse> {
     match pending_import_line_diff(store, repo) {
         Ok(line_diff) => line_diff,
         Err(error) => {
@@ -339,7 +339,7 @@ fn pending_import_line_diff_best_effort(
                 message = %error.message,
                 "skipping pending import summary line diff"
             );
-            ReviewLineDiffResponse::default()
+            Some(ReviewLineDiffResponse::default())
         }
     }
 }
@@ -354,7 +354,7 @@ fn staged_update_response_with_best_effort_diff(
 fn staged_update_line_diff(
     store: &dyn ObjectStore,
     update: &StagedRepoUpdate,
-) -> Result<ReviewLineDiffResponse, ApiError> {
+) -> Result<Option<ReviewLineDiffResponse>, ApiError> {
     let mut line_diff = ReviewLineDiffResponse::default();
     if summary_line_diff_exceeds_budget(
         update
@@ -363,7 +363,7 @@ fn staged_update_line_diff(
             .flat_map(|change| [change.old_content.as_ref(), change.new_content.as_ref()])
             .flatten(),
     ) {
-        return Ok(line_diff);
+        return Ok(None);
     }
 
     for change in &update.changes {
@@ -375,7 +375,7 @@ fn staged_update_line_diff(
         add_line_diff(&mut line_diff, change_diff);
     }
 
-    Ok(line_diff)
+    Ok(Some(line_diff))
 }
 
 fn verify_staged_update_new_blobs(
@@ -393,7 +393,7 @@ fn verify_staged_update_new_blobs(
 fn staged_update_line_diff_best_effort(
     store: &dyn ObjectStore,
     update: &StagedRepoUpdate,
-) -> ReviewLineDiffResponse {
+) -> Option<ReviewLineDiffResponse> {
     match staged_update_line_diff(store, update) {
         Ok(line_diff) => line_diff,
         Err(error) => {
@@ -402,7 +402,7 @@ fn staged_update_line_diff_best_effort(
                 message = %error.message,
                 "skipping staged update summary line diff"
             );
-            ReviewLineDiffResponse::default()
+            Some(ReviewLineDiffResponse::default())
         }
     }
 }

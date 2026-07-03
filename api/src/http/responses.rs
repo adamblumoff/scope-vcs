@@ -278,7 +278,7 @@ pub(crate) struct GitCloneTokenResponse {
 pub(crate) struct PendingImportReviewResponse {
     pub(crate) publication_state: RepoPublicationState,
     pub(crate) default_visibility: Visibility,
-    pub(crate) line_diff: ReviewLineDiffResponse,
+    pub(crate) line_diff: Option<ReviewLineDiffResponse>,
     pub(crate) files: Vec<RepoFileResponse>,
 }
 
@@ -361,7 +361,7 @@ pub(crate) struct StagedUpdateResponse {
     pub(crate) branch: String,
     pub(crate) base_live_commit_id: Option<String>,
     pub(crate) message: String,
-    pub(crate) line_diff: ReviewLineDiffResponse,
+    pub(crate) line_diff: Option<ReviewLineDiffResponse>,
     pub(crate) files: Vec<StagedFileResponse>,
 }
 
@@ -610,7 +610,7 @@ pub(crate) fn repo_clone_credential_response(
 
 pub(crate) fn staged_update_response(
     update: &StagedRepoUpdate,
-    line_diff: ReviewLineDiffResponse,
+    line_diff: Option<ReviewLineDiffResponse>,
 ) -> StagedUpdateResponse {
     StagedUpdateResponse {
         id: update.id.clone(),

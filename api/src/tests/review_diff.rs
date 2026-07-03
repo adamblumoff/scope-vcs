@@ -144,8 +144,7 @@ async fn large_binary_file_diff_uses_metadata_without_fetching_blob() {
         .unwrap();
     assert_eq!(review_response.status(), StatusCode::OK);
     let review = response_json(review_response).await;
-    assert_eq!(review["line_diff"]["additions"], 0);
-    assert_eq!(review["line_diff"]["deletions"], 0);
+    assert!(review["line_diff"].is_null());
 }
 
 #[tokio::test]
@@ -308,8 +307,7 @@ async fn staged_update_summary_line_diff_skips_over_aggregate_byte_budget() {
 
     assert_eq!(response.status(), StatusCode::OK);
     let body = response_json(response).await;
-    assert_eq!(body["line_diff"]["additions"], 0);
-    assert_eq!(body["line_diff"]["deletions"], 0);
+    assert!(body["line_diff"].is_null());
 }
 
 #[tokio::test]
@@ -358,8 +356,7 @@ async fn pending_import_summary_line_diff_skips_over_file_budget_without_fetchin
 
     assert_eq!(response.status(), StatusCode::OK);
     let body = response_json(response).await;
-    assert_eq!(body["line_diff"]["additions"], 0);
-    assert_eq!(body["line_diff"]["deletions"], 0);
+    assert!(body["line_diff"].is_null());
     assert_eq!(read_count.load(std::sync::atomic::Ordering::SeqCst), 0);
 }
 
