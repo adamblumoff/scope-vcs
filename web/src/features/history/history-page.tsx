@@ -24,8 +24,8 @@ import {
   Globe2,
   GitCommit,
   History,
+  LockKeyhole,
   TriangleAlert,
-  UserRound,
 } from 'lucide-react'
 import { type ReactNode, useEffect, useMemo, useReducer, useRef } from 'react'
 import { ReviewFileDiffDrawer } from '../review/review-file-diff-drawer'
@@ -33,7 +33,7 @@ import { ReviewTree } from '../review/review-tree'
 import { audienceLabel, changeCountLabel } from '../review/review-labels'
 
 export type CommitHistories = {
-  owner: CommitHistory | null
+  private: CommitHistory | null
   public: CommitHistory | null
 }
 
@@ -181,12 +181,12 @@ function useHistoryPageModel({
   } = state
   const availableAudiences = useMemo(
     () =>
-      (['owner', 'public'] as const).filter(
+      (['private', 'public'] as const).filter(
         (option) => histories[option] !== null,
       ),
     [histories],
   )
-  const history = histories[audience] ?? histories.public ?? histories.owner
+  const history = histories[audience] ?? histories.public ?? histories.private
   const commits = useMemo(
     () => [...(history?.commits ?? [])].reverse(),
     [history?.commits],
@@ -616,8 +616,8 @@ function AudienceToggle({
       type="single"
       value={audience}
     >
-      {(['owner', 'public'] as const).map((option) => {
-        const Icon = option === 'owner' ? UserRound : Globe2
+      {(['private', 'public'] as const).map((option) => {
+        const Icon = option === 'private' ? LockKeyhole : Globe2
         return (
           <ToggleGroupItem
             aria-label={`${audienceLabel(option)} view`}

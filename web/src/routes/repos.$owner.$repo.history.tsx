@@ -15,26 +15,20 @@ import {
 import { createFileRoute } from '@tanstack/react-router'
 
 export const Route = createFileRoute('/repos/$owner/$repo/history')({
-  validateSearch: (search: Record<string, unknown>): HistorySearch => ({
-    audience:
-      search.audience === 'owner' || search.audience === 'public'
-        ? search.audience
-        : undefined,
-    commit: searchCommitId(search.commit),
-  }),
+  validateSearch: parseHistorySearch,
   loaderDeps: ({ search }) => search,
   loader: async ({ deps: search, params }) => {
-    const [ownerHistory, publicHistory] = await Promise.all([
-      loadOptionalOwnerHistory(params),
+    const [privateHistory, publicHistory] = await Promise.all([
+      loadOptionalPrivateHistory(params),
       loadPublicHistory(params),
     ])
 
-    if (!ownerHistory && !publicHistory.history) {
+    if (!privateHistory && !publicHistory.history) {
       throw publicHistory.error
     }
 
     const histories = {
-      owner: ownerHistory,
+      private: privateHistory,
       public: publicHistory.history,
     } satisfies CommitHistories
     const initialAudience = initialHistoryAudience(histories, search)
@@ -80,6 +74,23 @@ type HistorySearch = {
   commit?: string
 }
 
+function parseHistorySearch(search: Record<string, unknown>): HistorySearch {
+  return {
+    audience: searchHistoryAudience(search.audience),
+    commit: searchCommitId(search.commit),
+  }
+}
+
+function searchHistoryAudience(value: unknown): ProjectionPreviewAudience | undefined {
+  if (value === undefined || value === null || value === '') {
+    return undefined
+  }
+  if (value === 'private' || value === 'public') {
+    return value
+  }
+  throw new Error(`Unsupported history audience: ${String(value)}`)
+}
+
 function searchCommitId(value: unknown) {
   if (typeof value === 'string') {
     const commitId = value.trim()
@@ -93,10 +104,10 @@ function searchCommitId(value: unknown) {
   return undefined
 }
 
-async function loadOptionalOwnerHistory(params: RepoParams) {
+async function loadOptionalPrivateHistory(params: RepoParams) {
   try {
     return await loadCommitHistory({
-      data: { ...params, audience: 'owner' },
+      data: { ...params, audience: 'private' },
     })
   } catch (error) {
     if (isForbiddenOrNotFound(error)) {
@@ -129,7 +140,7 @@ function initialHistoryAudience(
   if (search.audience && histories[search.audience]) {
     return search.audience
   }
-  return histories.owner ? 'owner' : 'public'
+  return histories.private ? 'private' : 'public'
 }
 
 function selectedCommitId(history: CommitHistory | null, commitId?: string) {

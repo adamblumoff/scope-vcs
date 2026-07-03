@@ -4,7 +4,7 @@ import type {
 } from '@/api/types'
 import { Badge } from '@/components/ui/badge'
 import { ToggleGroup, ToggleGroupItem } from '@/components/ui/toggle-group'
-import { Globe2, UserRound } from 'lucide-react'
+import { Globe2, LockKeyhole } from 'lucide-react'
 import { audienceLabel, sourceLabel } from './review-labels'
 
 export function ReviewVisibilityPanelHeader({
@@ -67,8 +67,8 @@ function AudienceToggle({
       type="single"
       value={audience}
     >
-      {(['owner', 'public'] as const).map((option) => {
-        const Icon = option === 'owner' ? UserRound : Globe2
+      {(['private', 'public'] as const).map((option) => {
+        const Icon = option === 'private' ? LockKeyhole : Globe2
         return (
           <ToggleGroupItem
             aria-label={`${audienceLabel(option)} view`}

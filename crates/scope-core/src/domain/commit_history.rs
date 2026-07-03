@@ -1,6 +1,6 @@
 use super::{
-    policy::{Policy, Principal, ScopePath, Visibility},
-    projection::{ProjectedCommit, VisibilityEvent, project_graph},
+    policy::{Policy, ScopePath, Visibility},
+    projection::{ProjectedCommit, ProjectionViewKey, VisibilityEvent, project_graph},
     store::{SourceBlob, StagedFileChangeKind},
 };
 use std::collections::BTreeMap;
@@ -8,7 +8,7 @@ use std::collections::BTreeMap;
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct CommitHistoryView {
     pub repo_id: String,
-    pub principal_id: String,
+    pub view_key: String,
     pub commits: Vec<CommitHistoryCommit>,
 }
 
@@ -35,16 +35,9 @@ pub fn commit_history_view(
     policy: &Policy,
     graph: &super::projection::SourceGraph,
     visibility_events: &[VisibilityEvent],
-    principal: &Principal,
-    can_read_private_files: bool,
+    view_key: ProjectionViewKey,
 ) -> CommitHistoryView {
-    let projection = project_graph(
-        policy,
-        graph,
-        visibility_events,
-        principal,
-        can_read_private_files,
-    );
+    let projection = project_graph(policy, graph, visibility_events, view_key);
     let mut tree = BTreeMap::new();
     let commits = projection
         .commits
@@ -54,7 +47,7 @@ pub fn commit_history_view(
 
     CommitHistoryView {
         repo_id: graph.repo_id.clone(),
-        principal_id: principal.id.clone(),
+        view_key: projection.view_key.as_str().to_string(),
         commits,
     }
 }

@@ -1,5 +1,5 @@
 use crate::domain::policy::Principal;
-use crate::domain::projection::project_graph;
+use crate::domain::projection::{ProjectionViewKey, project_graph};
 use crate::domain::store::{RepoPublicationState, SourceBlob};
 use crate::{
     config::{DEFAULT_GIT_BRANCH, EMPTY_GIT_OID, RECEIVE_PACK_STAGING_BYTES},
@@ -234,13 +234,9 @@ pub(crate) fn ensure_published_receive_pack_staging_repo(
             "cloning receive-pack staging repo",
         )?;
     } else {
-        let projection = project_graph(
-            &repo.policy,
-            &repo.graph,
-            &repo.visibility_events,
-            &principal,
-            repo.access_for_principal(&principal).can_read_private_files,
-        );
+        let view_key = ProjectionViewKey::from_access(repo.access_for_principal(&principal));
+        let projection =
+            project_graph(&repo.policy, &repo.graph, &repo.visibility_events, view_key);
         let seed_repo = projection_bare_repo_for_state(state, &projection)?;
         let seed = seed_repo.to_string_lossy().to_string();
         let target = repo_root.to_string_lossy().to_string();

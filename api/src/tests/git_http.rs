@@ -442,126 +442,6 @@ async fn upload_pack_ignores_stale_durable_git_repos() {
 }
 
 #[tokio::test]
-async fn owner_upload_pack_serves_raw_bucket_snapshot_head() {
-    let state = test_state_with_repo();
-    cache_test_jwks(&state);
-    let source = temp_git_repo("owner-upload-snapshot");
-    fs::write(source.join("README.md"), "raw snapshot").unwrap();
-    run_git(Some(&source), &["add", "README.md"], "add readme").unwrap();
-    commit_all(&source, "raw snapshot commit");
-    let bare = std::env::temp_dir().join(format!(
-        "scope-vcs-owner-upload-snapshot-bare-{}-{}",
-        std::process::id(),
-        unix_now()
-    ));
-    let _ = fs::remove_dir_all(&bare);
-    run_git(
-        None,
-        &[
-            "clone",
-            "--bare",
-            source.to_str().unwrap(),
-            bare.to_str().unwrap(),
-        ],
-        "clone snapshot bare repo",
-    )
-    .unwrap();
-    let expected_head =
-        git_stdout_text(&bare, &["rev-parse", DEFAULT_GIT_BRANCH], "snapshot head").unwrap();
-    let pending =
-        pending_import_from_staging_repo(&state, TEST_REPO_OWNER, TEST_REPO_NAME, &bare).unwrap();
-    {
-        let mut catalog = lock_catalog(&state).unwrap();
-        let repo = catalog.repositories.get_mut(TEST_REPO_ID).unwrap();
-        repo.record.publication_state = RepoPublicationState::Unpublished;
-        repo.pending_import = Some(pending);
-        preview_publish_import(repo).unwrap();
-    }
-    let mut headers = HeaderMap::new();
-    headers.insert(AUTHORIZATION, bearer_header().parse().unwrap());
-
-    let repo_path =
-        git_upload_pack_repo_for_request(&state, &headers, TEST_REPO_OWNER, TEST_REPO_NAME)
-            .await
-            .unwrap();
-    let actual_head = git_stdout_text(
-        &repo_path,
-        &["rev-parse", DEFAULT_GIT_BRANCH],
-        "upload head",
-    )
-    .unwrap();
-
-    assert_eq!(actual_head, expected_head);
-
-    fs::write(source.join("README.md"), "staged snapshot").unwrap();
-    run_git(Some(&source), &["add", "README.md"], "add staged readme").unwrap();
-    commit_all(&source, "staged snapshot commit");
-    let staged_bare = std::env::temp_dir().join(format!(
-        "scope-vcs-owner-upload-staged-snapshot-bare-{}-{}",
-        std::process::id(),
-        unix_now()
-    ));
-    let _ = fs::remove_dir_all(&staged_bare);
-    run_git(
-        None,
-        &[
-            "clone",
-            "--bare",
-            source.to_str().unwrap(),
-            staged_bare.to_str().unwrap(),
-        ],
-        "clone staged snapshot bare repo",
-    )
-    .unwrap();
-    let expected_staged_head = git_stdout_text(
-        &staged_bare,
-        &["rev-parse", DEFAULT_GIT_BRANCH],
-        "staged snapshot head",
-    )
-    .unwrap();
-    let update = receive_pack_update_from_staging_repo(
-        &state,
-        TEST_REPO_OWNER,
-        TEST_REPO_NAME,
-        &staged_bare,
-        &test_owner_id(),
-    )
-    .unwrap();
-    let persisted = persist_receive_pack_update_and_promote(
-        &state,
-        TEST_REPO_OWNER,
-        TEST_REPO_NAME,
-        update,
-        &test_owner_id(),
-    )
-    .unwrap();
-    assert_eq!(persisted, PersistedReceivePackUpdate::Staged);
-
-    let staged_repo_path =
-        git_upload_pack_repo_for_request(&state, &headers, TEST_REPO_OWNER, TEST_REPO_NAME)
-            .await
-            .unwrap();
-    let actual_staged_head = git_stdout_text(
-        &staged_repo_path,
-        &["rev-parse", DEFAULT_GIT_BRANCH],
-        "staged upload head",
-    )
-    .unwrap();
-
-    assert_eq!(actual_staged_head, expected_staged_head);
-    assert!(staged_repo_path.exists());
-
-    reject_staged_update_as_owner(&state).unwrap();
-    assert!(!staged_repo_path.exists());
-
-    let _ = fs::remove_dir_all(&source);
-    let _ = fs::remove_dir_all(&bare);
-    let _ = fs::remove_dir_all(&staged_bare);
-    let _ = fs::remove_dir_all(&repo_path);
-    let _ = fs::remove_dir_all(&staged_repo_path);
-}
-
-#[tokio::test]
 async fn upload_pack_wrong_basic_credentials_do_not_reveal_repo_existence() {
     let state = test_state_with_repo();
     cache_test_jwks(&state);
@@ -655,6 +535,38 @@ async fn private_upload_pack_without_credentials_challenges_for_auth() {
         assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
         assert!(response.headers().contains_key(WWW_AUTHENTICATE));
     }
+}
+
+#[tokio::test]
+async fn unpublished_upload_pack_member_git_credential_stays_hidden() {
+    let state = test_state_with_repo();
+    let member_id = "user_member".to_string();
+    let (secret, member_token) = generate_git_clone_token(&member_id).unwrap();
+    {
+        let mut catalog = lock_catalog(&state).unwrap();
+        let repo = catalog.repositories.get_mut(TEST_REPO_ID).unwrap();
+        repo.record.publication_state = RepoPublicationState::Unpublished;
+        repo.pending_import = Some(pending_import_fixture(vec![("README.md", "hello")]));
+        repo.members.push(test_repository_member(
+            TEST_REPO_ID,
+            member_id,
+            RepositoryMemberPermissions::default(),
+        ));
+        repo.git_clone_tokens.push(member_token);
+    }
+    let mut headers = HeaderMap::new();
+    headers.insert(
+        AUTHORIZATION,
+        format!("Basic {}", BASE64.encode(format!("scope:{secret}")))
+            .parse()
+            .unwrap(),
+    );
+
+    let error = git_upload_pack_repo_for_request(&state, &headers, TEST_REPO_OWNER, TEST_REPO_NAME)
+        .await
+        .unwrap_err();
+
+    assert_eq!(error.status, StatusCode::UNAUTHORIZED);
 }
 #[test]
 fn receive_pack_staging_key_does_not_collapse_valid_repo_names() {

@@ -188,7 +188,7 @@ async fn owner_projection_preview_labels_mixed_visibility_commit() {
         .oneshot(
             Request::builder()
                 .method("GET")
-                .uri("/v1/repos/owner/repo/projection-preview?audience=owner")
+                .uri("/v1/repos/owner/repo/projection-preview?audience=private")
                 .header(AUTHORIZATION, bearer_header())
                 .body(Body::empty())
                 .unwrap(),
@@ -513,7 +513,7 @@ fn git_projection_cache_omits_private_files_for_public_clone() {
             ],
         }],
     };
-    let projection = project_graph(&policy, &graph, &[], &Principal::public(), false);
+    let projection = project_graph(&policy, &graph, &[], ProjectionViewKey::Public);
     let cache_root = std::env::temp_dir().join(format!(
         "scope-vcs-git-cache-test-{}-{}",
         std::process::id(),
@@ -558,7 +558,7 @@ fn git_projection_cache_preserves_executable_file_mode() {
             }],
         }],
     };
-    let projection = project_graph(&policy, &graph, &[], &Principal::public(), false);
+    let projection = project_graph(&policy, &graph, &[], ProjectionViewKey::Public);
     let cache_root = std::env::temp_dir().join(format!(
         "scope-vcs-git-mode-cache-test-{}-{}",
         std::process::id(),
@@ -622,7 +622,7 @@ fn public_git_projection_starts_at_private_to_public_transition() {
             },
         ],
     };
-    let projection = project_graph(&policy, &graph, &[], &Principal::public(), false);
+    let projection = project_graph(&policy, &graph, &[], ProjectionViewKey::Public);
     let cache_root = std::env::temp_dir().join(format!(
         "scope-vcs-git-transition-test-{}-{}",
         std::process::id(),
@@ -685,7 +685,7 @@ fn public_git_projection_drops_history_after_public_to_private_transition() {
             },
         ],
     };
-    let projection = project_graph(&policy, &graph, &[], &Principal::public(), false);
+    let projection = project_graph(&policy, &graph, &[], ProjectionViewKey::Public);
     let cache_root = std::env::temp_dir().join(format!(
         "scope-vcs-git-public-to-private-test-{}-{}",
         std::process::id(),

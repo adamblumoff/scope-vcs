@@ -1,7 +1,8 @@
 use api::domain::{
-    policy::{Policy, Principal, PrincipalKind, ScopePath, Visibility, VisibilityRule},
+    policy::{Policy, ScopePath, Visibility, VisibilityRule},
     projection::{
-        AuthorVisibility, FileChange, LogicalCommit, SourceGraph, VisibilityEvent, project_graph,
+        AuthorVisibility, FileChange, LogicalCommit, ProjectionViewKey, SourceGraph,
+        VisibilityEvent, project_graph,
     },
 };
 use api::object_store::{MemoryObjectStore, put_source_blob};
@@ -47,7 +48,7 @@ fn public_projection_contains_only_visible_paths_from_mixed_commit() {
         }],
     };
 
-    let projection = project_graph(&fixture_policy(), &graph, &[], &Principal::public(), false);
+    let projection = project_graph(&fixture_policy(), &graph, &[], ProjectionViewKey::Public);
 
     assert_eq!(projection.commits.len(), 1);
     assert_eq!(projection.visible_paths(), vec!["/README.md"]);
@@ -81,7 +82,7 @@ fn public_projection_omits_current_private_path_history() {
         }],
     };
 
-    let projection = project_graph(&policy, &graph, &[], &Principal::public(), false);
+    let projection = project_graph(&policy, &graph, &[], ProjectionViewKey::Public);
 
     assert!(projection.commits.is_empty());
     assert!(projection.visible_paths().is_empty());
@@ -128,7 +129,7 @@ fn private_to_public_source_change_starts_public_history_at_reveal() {
         ],
     };
 
-    let projection = project_graph(&policy, &graph, &[], &Principal::public(), false);
+    let projection = project_graph(&policy, &graph, &[], ProjectionViewKey::Public);
 
     assert_eq!(projection.commits.len(), 1);
     assert_eq!(projection.commits[0].logical_commit_id, "rv2");
@@ -175,8 +176,7 @@ fn private_to_public_visibility_event_adds_safe_projection_baseline() {
         &policy,
         &graph,
         &visibility_events,
-        &Principal::public(),
-        false,
+        ProjectionViewKey::Public,
     );
 
     assert_eq!(projection.commits.len(), 1);
@@ -262,8 +262,7 @@ fn public_projection_restarts_after_private_gap() {
         &policy,
         &graph,
         &visibility_events,
-        &Principal::public(),
-        false,
+        ProjectionViewKey::Public,
     );
 
     assert_eq!(projection.commits.len(), 1);
@@ -319,8 +318,7 @@ fn pure_visibility_reveal_does_not_restore_prior_public_history() {
         &policy,
         &graph,
         &visibility_events,
-        &Principal::public(),
-        false,
+        ProjectionViewKey::Public,
     );
 
     assert_eq!(projection.commits.len(), 1);
@@ -347,11 +345,7 @@ fn authorized_collaborator_sees_private_paths() {
         }],
     };
 
-    let collaborator = Principal {
-        id: "user_collaborator".to_string(),
-        kind: PrincipalKind::User,
-    };
-    let projection = project_graph(&fixture_policy(), &graph, &[], &collaborator, true);
+    let projection = project_graph(&fixture_policy(), &graph, &[], ProjectionViewKey::Private);
 
     assert_eq!(projection.visible_paths(), vec!["/internal/model.rs"]);
 }

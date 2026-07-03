@@ -95,7 +95,7 @@ test('path helpers normalize leading slashes, backslashes, dot segments, and emp
   assert.equal(displayPath('/docs//guide.md'), 'docs/guide.md')
 })
 
-test('projection preview visibility uses the preview path set for owner and public views', () => {
+test('projection preview visibility uses the preview path set for private and public views', () => {
   const visiblePaths = new Set(['README.md'])
   const files: TestFile[] = [
     { path: '/README.md', visibility: 'Public' },
@@ -103,11 +103,11 @@ test('projection preview visibility uses the preview path set for owner and publ
   ]
 
   assert.equal(
-    visibleInProjectionPreview('/README.md', 'owner', visiblePaths),
+    visibleInProjectionPreview('/README.md', 'private', visiblePaths),
     true,
   )
   assert.equal(
-    visibleInProjectionPreview('/deleted.txt', 'owner', visiblePaths),
+    visibleInProjectionPreview('/deleted.txt', 'private', visiblePaths),
     false,
   )
   assert.equal(
@@ -118,6 +118,5 @@ test('projection preview visibility uses the preview path set for owner and publ
     visibleInProjectionPreview('/deleted.txt', undefined, visiblePaths),
     true,
   )
-  assert.equal(visibleFileCountInProjectionPreview(files, 'owner', visiblePaths), 1)
+  assert.equal(visibleFileCountInProjectionPreview(files, 'private', visiblePaths), 1)
 })
-

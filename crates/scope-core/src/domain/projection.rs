@@ -1,6 +1,6 @@
 use super::{
-    policy::{Policy, Principal, ScopePath, Visibility},
-    store::SourceBlob,
+    policy::{Policy, ScopePath, Visibility},
+    store::{RepositoryAccess, RepositoryActor, SourceBlob},
 };
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
@@ -63,10 +63,37 @@ pub struct ProjectedCommit {
     pub changes: Vec<ProjectedChange>,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub enum ProjectionViewKey {
+    Private,
+    Public,
+}
+
+impl ProjectionViewKey {
+    pub fn from_access(access: RepositoryAccess) -> Self {
+        match access.actor {
+            RepositoryActor::Owner => Self::Private,
+            RepositoryActor::Member if access.can_read_private_files => Self::Private,
+            RepositoryActor::Member | RepositoryActor::Public => Self::Public,
+        }
+    }
+
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Private => "private",
+            Self::Public => "public",
+        }
+    }
+
+    fn can_read_private_files(self) -> bool {
+        matches!(self, Self::Private)
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Projection {
     pub repo_id: String,
-    pub principal_id: String,
+    pub view_key: ProjectionViewKey,
     pub commits: Vec<ProjectedCommit>,
 }
 
@@ -88,16 +115,14 @@ pub fn project_graph(
     policy: &Policy,
     graph: &SourceGraph,
     visibility_events: &[VisibilityEvent],
-    principal: &Principal,
-    can_read_private_files: bool,
+    view_key: ProjectionViewKey,
 ) -> Projection {
-    if can_read_private_files {
-        return project_owner_graph(graph, principal);
+    if view_key.can_read_private_files() {
+        return project_private_graph(graph, view_key);
     }
 
     let mut commits = Vec::new();
     let mut last_visible: Option<String> = None;
-    let projected_principal_id = projected_principal_id(principal);
     let commit_positions = graph
         .commits
         .iter()
@@ -113,7 +138,7 @@ pub fn project_graph(
         &mut last_visible,
         &baseline_events,
         None,
-        &projected_principal_id,
+        view_key,
     );
 
     for (commit_index, logical) in graph.commits.iter().enumerate() {
@@ -141,13 +166,13 @@ pub fn project_graph(
                 &mut last_visible,
                 &baseline_events,
                 Some(logical.id.as_str()),
-                &projected_principal_id,
+                view_key,
             );
             continue;
         }
 
         let partial = visible_content_count < logical.changes.len();
-        let projected_id = projected_id(&projected_principal_id, &logical.id, commits.len() + 1);
+        let projected_id = projected_id(view_key, &logical.id, commits.len() + 1);
 
         commits.push(ProjectedCommit {
             projected_id: projected_id.clone(),
@@ -175,21 +200,20 @@ pub fn project_graph(
             &mut last_visible,
             &baseline_events,
             Some(logical.id.as_str()),
-            &projected_principal_id,
+            view_key,
         );
     }
 
     Projection {
         repo_id: graph.repo_id.clone(),
-        principal_id: principal.id.clone(),
+        view_key,
         commits,
     }
 }
 
-fn project_owner_graph(graph: &SourceGraph, principal: &Principal) -> Projection {
+fn project_private_graph(graph: &SourceGraph, view_key: ProjectionViewKey) -> Projection {
     let mut commits = Vec::new();
     let mut last_visible: Option<String> = None;
-    let projected_principal_id = projected_principal_id(principal);
 
     for logical in &graph.commits {
         let changes = logical
@@ -204,7 +228,7 @@ fn project_owner_graph(graph: &SourceGraph, principal: &Principal) -> Projection
             continue;
         }
 
-        let projected_id = projected_id(&projected_principal_id, &logical.id, commits.len() + 1);
+        let projected_id = projected_id(view_key, &logical.id, commits.len() + 1);
         commits.push(ProjectedCommit {
             projected_id: projected_id.clone(),
             logical_commit_id: logical.id.clone(),
@@ -221,17 +245,13 @@ fn project_owner_graph(graph: &SourceGraph, principal: &Principal) -> Projection
 
     Projection {
         repo_id: graph.repo_id.clone(),
-        principal_id: principal.id.clone(),
+        view_key,
         commits,
     }
 }
 
-fn projected_principal_id(principal: &Principal) -> String {
-    principal.id.replace(['/', ':'], "_")
-}
-
-fn projected_id(projected_principal_id: &str, source_id: &str, sequence: usize) -> String {
-    format!("pv_{projected_principal_id}_{source_id}_{sequence}")
+fn projected_id(view_key: ProjectionViewKey, source_id: &str, sequence: usize) -> String {
+    format!("pv_{}_{}_{}", view_key.as_str(), source_id, sequence)
 }
 
 fn can_read_historical_change(policy: &Policy, path: &ScopePath, visibility: Visibility) -> bool {
@@ -349,7 +369,7 @@ fn process_baseline_events_after(
     last_visible: &mut Option<String>,
     baseline_events: &BaselineEventsByAnchor<'_>,
     after_commit_id: Option<&str>,
-    projected_principal_id: &str,
+    view_key: ProjectionViewKey,
 ) {
     let events = match after_commit_id {
         Some(after_commit_id) => baseline_events
@@ -361,7 +381,7 @@ fn process_baseline_events_after(
     };
 
     for event in events {
-        let projected_id = projected_id(projected_principal_id, &event.id, commits.len() + 1);
+        let projected_id = projected_id(view_key, &event.id, commits.len() + 1);
         commits.push(ProjectedCommit {
             projected_id: projected_id.clone(),
             logical_commit_id: event.id.clone(),

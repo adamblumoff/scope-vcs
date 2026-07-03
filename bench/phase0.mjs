@@ -246,8 +246,8 @@ function benchmarkCases(owner) {
         auth: true,
       }),
       httpCase(
-        'auth owner projection preview update-demo',
-        `${updateBase}/projection-preview?audience=owner&source=live`,
+        'auth private projection preview update-demo',
+        `${updateBase}/projection-preview?audience=private&source=live`,
         { auth: true },
       ),
       {

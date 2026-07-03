@@ -1,0 +1,930 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Shared Projection Identity Plan</title>
+    <style>
+      :root {
+        color-scheme: light;
+        --paper: #f7f5ef;
+        --ink: #161616;
+        --muted: #5f635f;
+        --line: #d6d0c2;
+        --soft: #ebe5d8;
+        --surface: #fffdf7;
+        --accent: #0f766e;
+        --accent-2: #244f74;
+        --warn: #9a3412;
+        --ok: #166534;
+        --code: #24231f;
+      }
+
+      * {
+        box-sizing: border-box;
+      }
+
+      html {
+        scroll-behavior: smooth;
+      }
+
+      body {
+        margin: 0;
+        background: var(--paper);
+        color: var(--ink);
+        font-family:
+          ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont,
+          "Segoe UI", sans-serif;
+        font-size: 17px;
+        line-height: 1.55;
+      }
+
+      code,
+      pre {
+        font-family:
+          "Cascadia Mono", "Consolas", "SFMono-Regular", ui-monospace,
+          monospace;
+      }
+
+      code {
+        color: var(--code);
+        font-size: 0.94em;
+      }
+
+      a {
+        color: var(--accent);
+        text-decoration-color: rgba(15, 118, 110, 0.4);
+        text-underline-offset: 0.18em;
+      }
+
+      p {
+        max-width: 900px;
+        margin: 0;
+        color: var(--muted);
+      }
+
+      ul,
+      ol {
+        margin: 12px 0 0;
+        padding-left: 1.2rem;
+        color: var(--muted);
+      }
+
+      li {
+        margin: 0.45rem 0;
+      }
+
+      .topbar {
+        position: sticky;
+        top: 0;
+        z-index: 20;
+        border-bottom: 1px solid var(--line);
+        background: rgba(247, 245, 239, 0.96);
+        backdrop-filter: blur(10px);
+      }
+
+      .topbar-inner,
+      .masthead,
+      .layout,
+      footer {
+        width: min(1180px, calc(100vw - 48px));
+        margin: 0 auto;
+      }
+
+      .topbar-inner {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        gap: 24px;
+        padding: 12px 0;
+      }
+
+      .brand {
+        font-size: 0.78rem;
+        font-weight: 850;
+        letter-spacing: 0.08em;
+        text-transform: uppercase;
+      }
+
+      .topbar nav {
+        display: flex;
+        flex-wrap: wrap;
+        justify-content: flex-end;
+        gap: 10px 16px;
+        font-size: 0.84rem;
+      }
+
+      .topbar nav a {
+        color: var(--muted);
+        text-decoration: none;
+      }
+
+      .topbar nav a:hover {
+        color: var(--accent);
+      }
+
+      .masthead {
+        display: grid;
+        grid-template-columns: minmax(0, 1fr) 330px;
+        gap: 54px;
+        padding: 64px 0 42px;
+        border-bottom: 2px solid var(--ink);
+      }
+
+      .eyebrow {
+        margin: 0 0 18px;
+        color: var(--accent);
+        font-size: 0.78rem;
+        font-weight: 850;
+        letter-spacing: 0.09em;
+        text-transform: uppercase;
+      }
+
+      h1,
+      h2,
+      h3 {
+        margin: 0;
+        letter-spacing: 0;
+      }
+
+      h1 {
+        max-width: 900px;
+        font-family: Georgia, Cambria, "Times New Roman", Times, serif;
+        font-size: clamp(3rem, 6.6vw, 6.15rem);
+        font-weight: 900;
+        line-height: 0.95;
+      }
+
+      h2 {
+        font-family: Georgia, Cambria, "Times New Roman", Times, serif;
+        font-size: clamp(2rem, 3.4vw, 3.15rem);
+        line-height: 1.03;
+      }
+
+      h3 {
+        font-size: 1rem;
+        font-weight: 850;
+        line-height: 1.25;
+      }
+
+      .subtitle {
+        margin-top: 24px;
+        max-width: 825px;
+        font-size: 1.2rem;
+      }
+
+      .meta {
+        align-self: end;
+        border-left: 3px solid var(--accent);
+        padding: 8px 0 10px 22px;
+      }
+
+      .meta p {
+        margin-bottom: 12px;
+        font-size: 0.94rem;
+      }
+
+      .meta strong {
+        display: block;
+        color: var(--ink);
+      }
+
+      .layout {
+        display: grid;
+        grid-template-columns: 245px minmax(0, 1fr);
+        gap: 54px;
+        padding: 36px 0 72px;
+      }
+
+      .side-nav {
+        position: sticky;
+        top: 64px;
+        align-self: start;
+        border-right: 1px solid var(--line);
+        padding-right: 20px;
+      }
+
+      .side-nav h2 {
+        margin-bottom: 16px;
+        font-family: inherit;
+        font-size: 0.8rem;
+        letter-spacing: 0.08em;
+        text-transform: uppercase;
+      }
+
+      .side-nav a {
+        display: block;
+        padding: 7px 0;
+        color: var(--muted);
+        font-size: 0.9rem;
+        text-decoration: none;
+      }
+
+      .side-nav a:hover {
+        color: var(--accent);
+      }
+
+      main {
+        min-width: 0;
+      }
+
+      section {
+        padding: 34px 0 42px;
+        border-bottom: 1px solid var(--line);
+      }
+
+      section:first-child {
+        padding-top: 0;
+      }
+
+      .section-kicker {
+        margin-bottom: 12px;
+        color: var(--accent);
+        font-size: 0.78rem;
+        font-weight: 850;
+        letter-spacing: 0.09em;
+        text-transform: uppercase;
+      }
+
+      .lede {
+        margin-top: 16px;
+        font-size: 1.08rem;
+      }
+
+      .grid {
+        display: grid;
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+        gap: 18px;
+        margin-top: 22px;
+      }
+
+      .panel {
+        border: 1px solid var(--line);
+        background: var(--surface);
+        padding: 20px;
+      }
+
+      .panel h3 {
+        margin-bottom: 10px;
+      }
+
+      .panel p,
+      .panel li {
+        font-size: 0.96rem;
+      }
+
+      .callout {
+        margin-top: 22px;
+        border-left: 4px solid var(--accent);
+        background: rgba(15, 118, 110, 0.08);
+        padding: 18px 20px;
+      }
+
+      .callout.warn {
+        border-left-color: var(--warn);
+        background: rgba(154, 52, 18, 0.08);
+      }
+
+      .callout strong {
+        color: var(--ink);
+      }
+
+      .flow {
+        display: grid;
+        gap: 12px;
+        margin-top: 22px;
+      }
+
+      .step {
+        display: grid;
+        grid-template-columns: 52px minmax(0, 1fr);
+        gap: 16px;
+        align-items: start;
+        border-top: 1px solid var(--soft);
+        padding-top: 16px;
+      }
+
+      .step:first-child {
+        border-top: 0;
+        padding-top: 0;
+      }
+
+      .num {
+        display: inline-flex;
+        width: 38px;
+        height: 38px;
+        align-items: center;
+        justify-content: center;
+        border: 1px solid var(--accent);
+        color: var(--accent);
+        font-weight: 850;
+      }
+
+      .tag-list {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 8px;
+        margin-top: 16px;
+      }
+
+      .tag {
+        border: 1px solid var(--line);
+        background: var(--surface);
+        padding: 4px 8px;
+        color: var(--muted);
+        font-size: 0.82rem;
+        font-weight: 750;
+      }
+
+      .decision-table {
+        width: 100%;
+        margin-top: 22px;
+        border-collapse: collapse;
+        background: var(--surface);
+      }
+
+      .decision-table th,
+      .decision-table td {
+        vertical-align: top;
+        border: 1px solid var(--line);
+        padding: 12px 14px;
+        text-align: left;
+      }
+
+      .decision-table th {
+        color: var(--ink);
+        font-size: 0.78rem;
+        letter-spacing: 0.08em;
+        text-transform: uppercase;
+      }
+
+      .decision-table td {
+        color: var(--muted);
+      }
+
+      .codeblock {
+        overflow-x: auto;
+        margin-top: 18px;
+        border: 1px solid var(--line);
+        background: #24231f;
+        color: #f6f0e3;
+        padding: 18px;
+        font-size: 0.9rem;
+        line-height: 1.45;
+      }
+
+      footer {
+        border-top: 2px solid var(--ink);
+        padding: 28px 0 46px;
+        color: var(--muted);
+        font-size: 0.9rem;
+      }
+
+      @media (max-width: 880px) {
+        .topbar-inner {
+          align-items: flex-start;
+          flex-direction: column;
+        }
+
+        .masthead,
+        .layout,
+        .grid {
+          grid-template-columns: 1fr;
+        }
+
+        .layout {
+          gap: 24px;
+        }
+
+        .side-nav {
+          position: static;
+          border-right: 0;
+          border-bottom: 1px solid var(--line);
+          padding: 0 0 18px;
+        }
+      }
+
+      @media (max-width: 560px) {
+        .topbar-inner,
+        .masthead,
+        .layout,
+        footer {
+          width: min(100vw - 28px, 1180px);
+        }
+
+        .masthead {
+          padding-top: 42px;
+        }
+
+        .step {
+          grid-template-columns: 1fr;
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <header class="topbar">
+      <div class="topbar-inner">
+        <div class="brand">Scope architecture plan</div>
+        <nav aria-label="Plan sections">
+          <a href="#decision">Decision</a>
+          <a href="#current">Current State</a>
+          <a href="#model">Target Model</a>
+          <a href="#implementation">Implementation</a>
+          <a href="#deletions">Deletions</a>
+          <a href="#verification">Verification</a>
+        </nav>
+      </div>
+    </header>
+
+    <div class="masthead">
+      <div>
+        <p class="eyebrow">Recommended next slice</p>
+        <h1>Shared projection identity</h1>
+        <p class="subtitle">
+          Make Git history, API history, and projection caches canonical by
+          effective view class so owners and full-read members get the same
+          private view instead of user-shaped histories.
+        </p>
+      </div>
+      <aside class="meta" aria-label="Plan metadata">
+        <p><strong>Date</strong>July 3, 2026</p>
+        <p><strong>Scope</strong>Git upload-pack, projection domain, history and preview APIs</p>
+        <p><strong>Priority</strong>High product correctness before scoped agent tokens</p>
+        <p><strong>Compatibility</strong>Pre-alpha destructive change, no legacy aliases</p>
+      </aside>
+    </div>
+
+    <div class="layout">
+      <aside class="side-nav">
+        <h2>Sections</h2>
+        <a href="#decision">1. Decision</a>
+        <a href="#current">2. Current State</a>
+        <a href="#model">3. Target Model</a>
+        <a href="#implementation">4. Implementation</a>
+        <a href="#deletions">5. Code To Delete</a>
+        <a href="#verification">6. Verification</a>
+        <a href="#not-doing">7. Not Doing</a>
+      </aside>
+
+      <main>
+        <section id="decision">
+          <p class="section-kicker">Product rule</p>
+          <h2>Same effective view, same identity.</h2>
+          <p class="lede">
+            Projection identity should be keyed by what the requester can see,
+            not by who the requester is. Owners and members who can read private
+            files should share the canonical <code>private</code> view. Public
+            readers should share the canonical <code>public</code> view. Future
+            scoped agents can add more view classes, but the key remains the
+            visible repository shape, not the token or user id.
+          </p>
+
+          <div class="callout">
+            <strong>Recommended decision:</strong> default Git clone and API
+            history are live audience views. The private live view is shared by
+            owner and full-read members. Review or staged snapshots should not
+            be hidden behind the owner's default clone path.
+          </div>
+        </section>
+
+        <section id="current">
+          <p class="section-kicker">What exists today</p>
+          <h2>The repo already has the pieces, but they disagree.</h2>
+          <div class="grid">
+            <article class="panel">
+              <h3>Projection domain is principal-shaped</h3>
+              <p>
+                <code>project_graph</code> accepts a <code>Principal</code> and
+                emits <code>Projection.principal_id</code>. Projected commit IDs
+                are built as <code>pv_{principal}_{source}_{seq}</code>, so API
+                history and preview IDs are user-shaped even when content is
+                identical.
+              </p>
+            </article>
+            <article class="panel">
+              <h3>Git cache is principal-shaped</h3>
+              <p>
+                <code>projection_cache_key</code> hashes
+                <code>projection.principal_id</code>,
+                <code>commit.projected_id</code>, and parent projected IDs. That
+                creates duplicate bare repo caches for equivalent views.
+              </p>
+            </article>
+            <article class="panel">
+              <h3>Owner clone is special</h3>
+              <p>
+                Authenticated owners bypass the synthetic projection and receive
+                the raw Git snapshot when available. Members receive a synthetic
+                projection, even when they can read the same private files.
+              </p>
+            </article>
+            <article class="panel">
+              <h3>Read models already point the right way</h3>
+              <p>
+                Projection file read models are already keyed by
+                <code>audience = private|public</code>. That should become the
+                shared concept for Git, history, preview, and file read paths.
+              </p>
+            </article>
+          </div>
+
+          <div class="callout warn">
+            <strong>Important correction:</strong> principal-shaped
+            <code>projected_id</code> is not directly written into the synthetic
+            Git commit object. The more serious SHA divergence is owner raw
+            snapshot versus member synthetic projection. The plan fixes both by
+            making the view class explicit everywhere.
+          </div>
+        </section>
+
+        <section id="model">
+          <p class="section-kicker">Target architecture</p>
+          <h2>Introduce one canonical projection view key.</h2>
+          <p class="lede">
+            Add a domain-owned view identity and make every projection caller use
+            it. The first version only needs two classes:
+          </p>
+
+          <table class="decision-table">
+            <thead>
+              <tr>
+                <th>View key</th>
+                <th>Who gets it</th>
+                <th>Git source</th>
+                <th>Why</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td><code>private</code></td>
+                <td>Owner and members with <code>can_read_private_files</code></td>
+                <td>Live raw Git snapshot when available, otherwise synthetic private projection</td>
+                <td>Preserves real Git SHAs for full collaborators and makes owner/member collaboration normal.</td>
+              </tr>
+              <tr>
+                <td><code>public</code></td>
+                <td>Anonymous readers, public principals, and logged-in non-members</td>
+                <td>Synthetic public projection</td>
+                <td>Redacts private content and hides private activity shape.</td>
+              </tr>
+              <tr>
+                <td><code>scoped:{hash}</code></td>
+                <td>Future agent or token views with narrower file access</td>
+                <td>Synthetic scoped projection</td>
+                <td>Leaves a clean path for scoped tokens without per-token SHA divergence.</td>
+              </tr>
+            </tbody>
+          </table>
+
+          <pre class="codeblock"><code>RepositoryAccess + policy + source = ProjectionViewKey
+
+private:
+  can_read_private_files == true
+  source == live
+
+public:
+  can_read_private_files == false
+  source == live
+
+future scoped:
+  visibility-equivalence digest of readable path rules</code></pre>
+        </section>
+
+        <section id="implementation">
+          <p class="section-kicker">Implementation sequence</p>
+          <h2>Keep it small and proof-driven.</h2>
+
+          <div class="flow">
+            <div class="step">
+              <span class="num">1</span>
+              <div>
+                <h3>Pin the behavior with failing tests</h3>
+                <ul>
+                  <li>Owner clone token and member clone token for the same full-private repo resolve the same <code>main</code> SHA.</li>
+                  <li>Two members with identical private access resolve the same projection cache key and API history projected IDs.</li>
+                  <li>Public clone still omits private files and produces a different head when private files exist.</li>
+                  <li>Default owner clone does not serve a staged update snapshot unless a future explicit review clone route asks for it.</li>
+                </ul>
+                <p>
+                  Delete in this step: remove or rewrite tests that bless
+                  owner-only clone behavior as the desired contract. Keep the
+                  raw snapshot tests only when they prove the shared
+                  <code>private</code> view, not an owner exception.
+                </p>
+              </div>
+            </div>
+
+            <div class="step">
+              <span class="num">2</span>
+              <div>
+                <h3>Add a domain projection view key</h3>
+                <p>
+                  Create a small domain type such as
+                  <code>ProjectionViewKey</code> with <code>private</code> and
+                  <code>public</code>. Make <code>project_graph</code> accept the
+                  view key and <code>can_read_private_files</code> instead of a
+                  principal used only for naming.
+                </p>
+                <p>
+                  Delete in this step: remove
+                  <code>projected_principal_id</code> and stop threading
+                  <code>Principal</code> through projection code for identity.
+                  Keep principal only at the authorization boundary where it
+                  actually answers access questions.
+                </p>
+              </div>
+            </div>
+
+            <div class="step">
+              <span class="num">3</span>
+              <div>
+                <h3>Make projected IDs audience-stable</h3>
+                <p>
+                  Generate projected IDs as
+                  <code>pv_{view_key}_{source}_{seq}</code>. Replace
+                  <code>Projection.principal_id</code> with
+                  <code>Projection.view_key</code>. API responses should expose
+                  <code>view_id</code> or <code>view_key</code>, not
+                  <code>principal_id</code>.
+                </p>
+                <p>
+                  Delete in this step: remove <code>principal_id</code> from
+                  <code>Projection</code>, <code>ProjectionPreviewView</code>,
+                  <code>CommitHistoryView</code>, response structs, and the
+                  generated TypeScript contract. Do not leave alias fields.
+                </p>
+              </div>
+            </div>
+
+            <div class="step">
+              <span class="num">4</span>
+              <div>
+                <h3>Unify Git upload-pack around the view key</h3>
+                <p>
+                  Replace <code>owner_snapshot_repo_for_request</code> with a
+                  private live repo resolver. Any requester in the
+                  <code>private</code> view gets the same live raw snapshot when
+                  available. Public requesters get the synthetic public
+                  projection. Synthetic projection cache keys hash the view key,
+                  not user identity.
+                </p>
+                <p>
+                  Delete in this step: remove the owner-only upload-pack branch
+                  and the path where default owner clone serves
+                  <code>staged_update.git_snapshot</code>. Review snapshots need
+                  an explicit future route if the product wants them.
+                </p>
+              </div>
+            </div>
+
+            <div class="step">
+              <span class="num">5</span>
+              <div>
+                <h3>Rename owner audience to private audience</h3>
+                <p>
+                  The UI and API should talk about <code>private</code> and
+                  <code>public</code>, not <code>owner</code> and
+                  <code>public</code>. Owners are one kind of private-view
+                  participant, not a projection class.
+                </p>
+                <p>
+                  Delete in this step: remove <code>owner</code> as an API
+                  audience value, route search value, UI label branch, and
+                  generated TypeScript union member. This is pre-alpha, so do
+                  not keep <code>owner</code> compatibility parsing.
+                </p>
+              </div>
+            </div>
+
+            <div class="step">
+              <span class="num">6</span>
+              <div>
+                <h3>Centralize audience derivation</h3>
+                <p>
+                  Move the duplicated audience-selection helpers from repo reads
+                  and projection read models into one domain-owned helper. The DB
+                  read model can keep its existing <code>private</code> and
+                  <code>public</code> audience strings.
+                </p>
+                <p>
+                  Delete in this step: remove duplicate
+                  <code>live_projection_audience</code> and
+                  <code>projection_preview_principal</code>-style helpers that
+                  independently infer the same audience class.
+                </p>
+              </div>
+            </div>
+
+            <div class="step">
+              <span class="num">7</span>
+              <div>
+                <h3>Bump projection cache semantics</h3>
+                <p>
+                  Update <code>PROJECTION_CACHE_SEMANTICS_VERSION</code> because
+                  cache keys, projected IDs, and private clone behavior change.
+                  No migration is needed; old local caches can be abandoned.
+                </p>
+                <p>
+                  Delete in this step: remove stale cache-key assumptions from
+                  tests and docs. Do not add cleanup code for old cache
+                  directories.
+                </p>
+              </div>
+            </div>
+          </div>
+        </section>
+
+        <section id="deletions">
+          <p class="section-kicker">Delete while changing</p>
+          <h2>Remove the user-shaped projection surface.</h2>
+          <p class="lede">
+            This should be a subtraction-shaped change. The goal is not to add
+            a second identity layer beside the current principal-shaped one; it
+            is to replace the current identity surface with the view-key model.
+          </p>
+
+          <table class="decision-table">
+            <thead>
+              <tr>
+                <th>Area</th>
+                <th>Delete</th>
+                <th>Replace with</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td>Projection domain</td>
+                <td>
+                  <code>projected_principal_id</code>,
+                  <code>Projection.principal_id</code>, and projected IDs based
+                  on user ids.
+                </td>
+                <td>
+                  <code>ProjectionViewKey</code> and
+                  <code>pv_{view_key}_{source}_{seq}</code>.
+                </td>
+              </tr>
+              <tr>
+                <td>Projection functions</td>
+                <td>
+                  The separate owner/private naming path in
+                  <code>project_owner_graph</code> if it only exists to attach
+                  user identity.
+                </td>
+                <td>
+                  One projection builder that handles public filtering versus
+                  private full-read behavior from the view key.
+                </td>
+              </tr>
+              <tr>
+                <td>Git upload-pack</td>
+                <td>
+                  <code>owner_snapshot_repo_for_request</code> as an owner-only
+                  special case.
+                </td>
+                <td>
+                  A <code>private_live_repo_for_request</code>-style resolver
+                  shared by owners and full-read members.
+                </td>
+              </tr>
+              <tr>
+                <td>Staged clone behavior</td>
+                <td>
+                  The default clone path that serves
+                  <code>staged_update.git_snapshot</code> to owners.
+                </td>
+                <td>
+                  Default clone always serves live view. Review clone can be a
+                  separate explicit feature later.
+                </td>
+              </tr>
+              <tr>
+                <td>API naming</td>
+                <td>
+                  <code>ProjectionPreviewAudience::Owner</code>, query parsing
+                  for <code>audience=owner</code>, and response fields named
+                  <code>principal_id</code>.
+                </td>
+                <td>
+                  <code>ProjectionPreviewAudience::Private</code>,
+                  <code>audience=private</code>, and response
+                  <code>view_key</code>.
+                </td>
+              </tr>
+              <tr>
+                <td>Web naming</td>
+                <td>
+                  UI labels, search params, reducer state, request keys, and
+                  generated types that treat <code>owner</code> as a projection
+                  audience.
+                </td>
+                <td>
+                  <code>private</code> and <code>public</code> audience options.
+                </td>
+              </tr>
+              <tr>
+                <td>Read helpers</td>
+                <td>
+                  Duplicate <code>live_projection_audience</code>,
+                  <code>history_principal</code>, and preview-principal helpers
+                  that each rederive audience identity.
+                </td>
+                <td>
+                  One domain-owned helper that maps access to a view key.
+                </td>
+              </tr>
+              <tr>
+                <td>Tests</td>
+                <td>
+                  Assertions that owner raw clone and member projection clone
+                  are intentionally different, plus tests asserting staged owner
+                  clone as default behavior.
+                </td>
+                <td>
+                  Real clone tests proving owner/member private SHA equality
+                  and public/private SHA separation.
+                </td>
+              </tr>
+              <tr>
+                <td>Cache compatibility</td>
+                <td>
+                  Any attempt to preserve or clean old principal-keyed cache
+                  directories.
+                </td>
+                <td>
+                  Bumped cache semantics and abandonment of old local caches.
+                </td>
+              </tr>
+            </tbody>
+          </table>
+        </section>
+
+        <section id="verification">
+          <p class="section-kicker">Verification</p>
+          <h2>The proof is a real clone, not just API JSON.</h2>
+          <div class="grid">
+            <article class="panel">
+              <h3>Unit tests</h3>
+              <ul>
+                <li><code>project_graph</code> emits identical IDs for identical view keys.</li>
+                <li>Projection cache key is identical for two private readers.</li>
+                <li>Public and private view keys produce distinct projections when private content exists.</li>
+              </ul>
+            </article>
+            <article class="panel">
+              <h3>API tests</h3>
+              <ul>
+                <li>Private history route returns stable projected IDs for owner and member.</li>
+                <li>Public history continues to redact private commits and versions.</li>
+                <li>Generated TypeScript contract uses <code>private</code> and <code>public</code>.</li>
+              </ul>
+            </article>
+            <article class="panel">
+              <h3>Git tests</h3>
+              <ul>
+                <li>Owner and full-read member clone the same repo and get the same <code>rev-parse main</code>.</li>
+                <li>Two full-read members get the same <code>rev-parse main</code>.</li>
+                <li>Public clone omits private blobs and has the expected redacted history.</li>
+              </ul>
+            </article>
+            <article class="panel">
+              <h3>Manual QA</h3>
+              <ul>
+                <li>Create a repo with public and private files.</li>
+                <li>Create owner and member clone credentials.</li>
+                <li>Clone as both, compare <code>git rev-parse main</code>, then inspect files.</li>
+                <li>Clone anonymously or as public and verify private files are absent.</li>
+              </ul>
+            </article>
+          </div>
+        </section>
+
+        <section id="not-doing">
+          <p class="section-kicker">Not doing</p>
+          <h2>Keep this slice about identity, not new permissions.</h2>
+          <ul>
+            <li>No scoped agent token implementation in this PR.</li>
+            <li>No per-path member ACLs yet.</li>
+            <li>No GitHub mirror or branch model work.</li>
+            <li>No compatibility aliases for old <code>owner</code> audience names.</li>
+            <li>No durable migration for old projection caches or old local projected IDs.</li>
+          </ul>
+
+          <div class="callout">
+            <strong>Recommended landing shape:</strong> one destructive PR that
+            converts projection identity from principal-shaped to view-shaped,
+            unifies owner/member private clone behavior, updates API/UI naming,
+            and proves it with real Git clone tests.
+          </div>
+        </section>
+      </main>
+    </div>
+
+    <footer>
+      Scope pre-alpha architecture note. This plan intentionally favors a
+      destructive cleanup over compatibility because the product has no users or
+      valuable legacy data.
+    </footer>
+  </body>
+</html>

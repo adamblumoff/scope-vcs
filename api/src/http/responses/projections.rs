@@ -17,14 +17,14 @@ use serde::{Deserialize, Serialize};
 #[cfg_attr(test, derive(ts_rs::TS))]
 #[cfg_attr(test, ts(rename_all = "lowercase"))]
 pub(crate) enum ProjectionPreviewAudience {
-    Owner,
+    Private,
     Public,
 }
 
 impl From<ProjectionPreviewAudience> for ProjectionAudience {
     fn from(audience: ProjectionPreviewAudience) -> Self {
         match audience {
-            ProjectionPreviewAudience::Owner => Self::Owner,
+            ProjectionPreviewAudience::Private => Self::Private,
             ProjectionPreviewAudience::Public => Self::Public,
         }
     }
@@ -61,7 +61,7 @@ pub(crate) struct ProjectionPreviewResponse {
     pub(crate) audience: ProjectionPreviewAudience,
     pub(crate) source: ProjectionPreviewSource,
     pub(crate) repo_id: String,
-    pub(crate) principal_id: String,
+    pub(crate) view_key: String,
     pub(crate) head_oid: Option<String>,
     pub(crate) files: Vec<ProjectionPreviewFileResponse>,
     pub(crate) commits: Vec<ProjectionPreviewCommitResponse>,
@@ -126,7 +126,7 @@ pub(crate) fn projection_preview_response(
         audience,
         source,
         repo_id: preview.repo_id,
-        principal_id: preview.principal_id,
+        view_key: preview.view_key,
         head_oid: preview.head_oid,
         files: preview
             .files

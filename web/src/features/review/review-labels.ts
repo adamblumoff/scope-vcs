@@ -4,7 +4,7 @@ import type {
 } from '@/api/types'
 
 export function audienceLabel(audience: ProjectionPreviewAudience) {
-  return audience === 'owner' ? 'Owner' : 'Public'
+  return audience === 'private' ? 'Private' : 'Public'
 }
 
 export function sourceLabel(source: ProjectionPreviewSource) {

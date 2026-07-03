@@ -37,7 +37,7 @@ export async function loadRepoForRequest(data: RepoParams) {
         }),
     loadProjectionPreviewsForRequest(data, review ? 'review' : 'live', {
       api,
-      includeOwner: repo.access.actor !== 'Public',
+      includePrivate: repo.access.actor !== 'Public',
     }),
   ])
 
