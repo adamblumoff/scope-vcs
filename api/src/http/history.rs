@@ -7,6 +7,7 @@ use crate::{
     },
     error::ApiError,
     http::{
+        file_diffs::review_file_diff_response_for_blobs,
         projection_preview::ensure_projection_preview_access,
         responses::{
             CommitFileDiffRequest, CommitHistoryRequest, ProjectionPreviewAudience,
@@ -14,7 +15,7 @@ use crate::{
             commit_history_response, pending_scope_path,
         },
     },
-    object_store::{ObjectStore, source_blob_text},
+    object_store::ObjectStore,
     state::{AppState, find_repo},
 };
 use axum::{
@@ -140,18 +141,11 @@ fn commit_file_diff_response(
     store: &dyn ObjectStore,
     file: &CommitHistoryFile,
 ) -> Result<ReviewFileDiffResponse, ApiError> {
-    Ok(ReviewFileDiffResponse {
-        path: file.path.as_str().to_string(),
-        kind: file.kind,
-        old_content: file
-            .old_content
-            .as_ref()
-            .map(|blob| source_blob_text(store, blob))
-            .transpose()?,
-        new_content: file
-            .new_content
-            .as_ref()
-            .map(|blob| source_blob_text(store, blob))
-            .transpose()?,
-    })
+    review_file_diff_response_for_blobs(
+        store,
+        file.path.as_str().to_string(),
+        file.kind,
+        file.old_content.as_ref(),
+        file.new_content.as_ref(),
+    )
 }

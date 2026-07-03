@@ -249,7 +249,6 @@ pub mod repository_git_snapshot {
         pub sha256: String,
         pub git_oid: String,
         pub size_bytes: i64,
-        pub line_count: i64,
     }
 
     #[derive(Copy, Clone, Debug, EnumIter, DeriveRelation)]
@@ -265,7 +264,6 @@ pub mod repository_git_snapshot {
                 sha256: blob.sha256.clone(),
                 git_oid: blob.git_oid.clone(),
                 size_bytes: u64_to_i64_saturating(blob.size_bytes),
-                line_count: usize_to_i64_saturating(blob.line_count),
             }
         }
 
@@ -276,7 +274,6 @@ pub mod repository_git_snapshot {
                 git_oid: self.git_oid,
                 git_file_mode: DEFAULT_GIT_FILE_MODE.to_string(),
                 size_bytes: i64_to_u64_floor(self.size_bytes),
-                line_count: self.line_count.max(0) as usize,
             }
         }
     }

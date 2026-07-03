@@ -2,6 +2,7 @@ pub(crate) mod account;
 pub(crate) mod admin;
 pub(crate) mod cli_auth;
 pub(crate) mod device_login;
+pub(crate) mod file_diffs;
 pub(crate) mod history;
 pub(crate) mod origins;
 pub(crate) mod projection_preview;

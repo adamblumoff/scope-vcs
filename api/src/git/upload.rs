@@ -10,7 +10,7 @@ use crate::{
         git_credential_error, git_read_authorization_from_headers,
         storage::cached_raw_git_snapshot_repo,
     },
-    object_store::source_blob_text,
+    object_store::source_blob_bytes,
     runtime_budgets::{RuntimeBudgets, RuntimePermit},
     state::AppState,
     state::{ensure_repo_read, find_repo},
@@ -35,7 +35,7 @@ use std::{
     thread,
     time::{Duration, Instant},
 };
-const PROJECTION_CACHE_SEMANTICS_VERSION: &str = "visibility-projection-v3";
+const PROJECTION_CACHE_SEMANTICS_VERSION: &str = "visibility-projection-v4";
 const GIT_STDERR_DIAGNOSTIC_BYTES: usize = 8 * 1024;
 static GIT_CACHE_ATTEMPT: AtomicU64 = AtomicU64::new(1);
 
@@ -247,7 +247,7 @@ pub(crate) fn projection_bare_repo(
                     visible_tree.insert(
                         path,
                         ProjectionTreeFile {
-                            content: source_blob_text(store, blob)?,
+                            bytes: source_blob_bytes(store, blob)?,
                             git_file_mode: blob.git_file_mode.clone(),
                         },
                     );
@@ -386,7 +386,7 @@ pub(crate) fn write_projection_tree(
                 .arg("hash-object")
                 .arg("-w")
                 .arg("--stdin"),
-            Some(file.content.as_bytes()),
+            Some(&file.bytes),
         )?;
         let oid = String::from_utf8(oid).map_err(ApiError::bad_request)?;
         let relative_path = git_relative_path(path)?;
@@ -424,7 +424,7 @@ pub(crate) fn write_projection_tree(
 }
 
 pub(crate) struct ProjectionTreeFile {
-    pub(crate) content: String,
+    pub(crate) bytes: Vec<u8>,
     pub(crate) git_file_mode: String,
 }
 

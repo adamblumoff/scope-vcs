@@ -174,7 +174,6 @@ const REPOSITORY_GIT_SNAPSHOT_COLUMNS: &[ColumnSpec] = &[
     required_column("sha256", ColumnType::String),
     required_column("git_oid", ColumnType::String),
     required_column("size_bytes", ColumnType::BigInteger),
-    required_column("line_count", ColumnType::BigInteger),
 ];
 
 const REPOSITORY_GIT_SNAPSHOT_FOREIGN_KEYS: &[ForeignKeySpec] = &[cascade_fk(

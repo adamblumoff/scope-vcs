@@ -15,14 +15,7 @@ pub fn repo_object_for_bytes(kind: &str, object_id: &str, bytes: &[u8]) -> Sourc
         git_oid,
         git_file_mode: DEFAULT_GIT_FILE_MODE.to_string(),
         size_bytes: bytes.len() as u64,
-        line_count: text_line_count(bytes),
     }
-}
-
-fn text_line_count(bytes: &[u8]) -> usize {
-    std::str::from_utf8(bytes)
-        .map(|content| content.lines().count())
-        .unwrap_or_default()
 }
 
 pub fn put_source_blob(
@@ -43,11 +36,6 @@ pub fn put_repo_object(
     let blob = repo_object_for_bytes(kind, &object_id, bytes);
     store.put(&blob.object_key, bytes)?;
     Ok(blob)
-}
-
-pub fn source_blob_text(store: &dyn ObjectStore, blob: &SourceBlob) -> Result<String, ApiError> {
-    let bytes = source_blob_bytes(store, blob)?;
-    String::from_utf8(bytes).map_err(ApiError::bad_request)
 }
 
 pub fn source_blob_bytes(store: &dyn ObjectStore, blob: &SourceBlob) -> Result<Vec<u8>, ApiError> {

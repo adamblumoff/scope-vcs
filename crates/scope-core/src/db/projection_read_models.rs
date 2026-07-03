@@ -235,7 +235,6 @@ mod tests {
             git_oid: "1111111111111111111111111111111111111111".to_string(),
             git_file_mode: crate::domain::store::DEFAULT_GIT_FILE_MODE.to_string(),
             size_bytes: 10,
-            line_count: 1,
         };
         let secret = crate::domain::store::SourceBlob {
             object_key: "objects/secret".to_string(),
@@ -243,7 +242,6 @@ mod tests {
             git_oid: "2222222222222222222222222222222222222222".to_string(),
             git_file_mode: crate::domain::store::DEFAULT_GIT_FILE_MODE.to_string(),
             size_bytes: 20,
-            line_count: 1,
         };
 
         let mut policy = Policy::new(Visibility::Private);

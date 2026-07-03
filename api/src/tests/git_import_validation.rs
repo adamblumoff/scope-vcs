@@ -32,7 +32,7 @@ fn pushed_tree_rejects_gitlinks_instead_of_dropping_them() {
 }
 
 #[test]
-fn pushed_tree_rejects_non_utf8_blobs_before_pending_import() {
+fn pushed_tree_accepts_binary_blobs() {
     let repo = temp_git_repo("binary-test");
     let binary = [0xff, 0x00, 0x61];
     fs::write(repo.join("image.bin"), binary).unwrap();
@@ -40,33 +40,36 @@ fn pushed_tree_rejects_non_utf8_blobs_before_pending_import() {
     commit_all(&repo, "binary");
 
     let state = test_state_with_repo();
-    let error = git_tree_files(&state, TEST_REPO_ID, &repo, "HEAD").unwrap_err();
+    let files = git_tree_files(&state, TEST_REPO_ID, &repo, "HEAD").unwrap();
 
-    assert_eq!(error.status, StatusCode::BAD_REQUEST);
-    assert!(error.message.contains("valid UTF-8 text"));
-    assert!(!MemoryObjectStore::new().contains_bytes(&binary));
+    assert_eq!(files.len(), 1);
+    assert_eq!(files[0].path, "image.bin");
+    assert!(MemoryObjectStore::new().contains_bytes(&binary));
     let _ = fs::remove_dir_all(&repo);
 }
 
 #[test]
-fn pushed_tree_cleans_uploaded_blobs_when_later_blob_is_invalid() {
-    let repo = temp_git_repo("binary-cleanup-test");
-    let valid = format!(
-        "valid before binary cleanup {} {}",
-        std::process::id(),
-        unix_now()
-    );
-    fs::write(repo.join("a.txt"), &valid).unwrap();
-    fs::write(repo.join("image.bin"), [0xff, 0x00, 0x61]).unwrap();
-    run_git(Some(&repo), &["add", "-A"], "add mixed blobs").unwrap();
-    commit_all(&repo, "mixed blobs");
+fn oversized_binary_push_names_path_and_limit() {
+    let repo = temp_git_repo("oversized-binary-test");
+    let large_path = repo.join("video.bin");
+    let large = fs::File::create(&large_path).unwrap();
+    large
+        .set_len((MAX_PENDING_IMPORT_BLOB_BYTES + 1) as u64)
+        .unwrap();
+    drop(large);
+    run_git(Some(&repo), &["add", "video.bin"], "add oversized binary").unwrap();
+    commit_all(&repo, "oversized binary");
 
     let state = test_state_with_repo();
     let error = git_tree_files(&state, TEST_REPO_ID, &repo, "HEAD").unwrap_err();
 
     assert_eq!(error.status, StatusCode::BAD_REQUEST);
-    assert!(error.message.contains("valid UTF-8 text"));
-    assert!(!MemoryObjectStore::new().contains_bytes(valid.as_bytes()));
+    assert!(error.message.contains("video.bin"));
+    assert!(
+        error
+            .message
+            .contains(&MAX_PENDING_IMPORT_BLOB_BYTES.to_string())
+    );
     let _ = fs::remove_dir_all(&repo);
 }
 

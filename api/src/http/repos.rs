@@ -1,5 +1,4 @@
 use crate::domain::policy::{Principal, ScopePath, Visibility};
-use crate::domain::projection::project_graph;
 use crate::domain::store::{RepoSettings, RepositoryActor};
 use crate::{
     auth::{
@@ -158,28 +157,6 @@ pub(crate) async fn create_clone_credential(
         &token,
         Some(secret),
     )))
-}
-
-pub(crate) async fn get_projection(
-    State(state): State<AppState>,
-    headers: HeaderMap,
-    Path((owner, repo_name)): Path<(String, String)>,
-) -> Result<Json<ProjectionResponse>, ApiError> {
-    let repo = find_repo(&state, &owner, &repo_name)?;
-    let user = optional_scope_user(&state, &headers).await?;
-    let principal = principal_for_scope_user(&repo, user.as_ref());
-    ensure_repo_read(&state, &repo, &principal)?;
-    let projection = project_graph(
-        &repo.policy,
-        &repo.graph,
-        &repo.visibility_events,
-        &principal,
-        repo.access_for_principal(&principal).can_read_private_files,
-    );
-    Ok(Json(projection_response(
-        state.object_store.as_ref(),
-        projection,
-    )?))
 }
 
 pub(crate) async fn get_projection_preview(

@@ -10,7 +10,7 @@ import {
 } from '@pierre/diffs/react'
 import { Skeleton } from '@/components/ui/skeleton'
 import { useThemeType } from '@/lib/use-theme-type'
-import { FileText, TriangleAlert, X } from 'lucide-react'
+import { File, FileText, TriangleAlert, X } from 'lucide-react'
 import { type ReactNode, useMemo } from 'react'
 import { displayPath } from './review-tree-model'
 
@@ -42,6 +42,10 @@ export function ReviewFileDiffDrawer({
   const themeType = useThemeType()
   const fileDiff = useMemo(
     () => (diff ? diffMetadataForReviewFile(diff) : null),
+    [diff],
+  )
+  const binarySides = useMemo(
+    () => (diff ? binaryContentSides(diff) : []),
     [diff],
   )
   const diffOptions = useMemo(
@@ -89,6 +93,8 @@ export function ReviewFileDiffDrawer({
               <TriangleAlert className="size-4 text-destructive" />
               <span>{error}</span>
             </DiffState>
+          ) : binarySides.length > 0 ? (
+            <BinaryDiffState sides={binarySides} />
           ) : fileDiff && fileDiff.hunks.length > 0 ? (
             <div className="review-diff-viewer">
               <PierreFileDiff
@@ -162,17 +168,99 @@ function pierreWorkerPoolSize() {
   return Math.min(4, Math.max(1, navigator.hardwareConcurrency))
 }
 
-function diffMetadataForReviewFile(diff: ReviewFileDiff): FileDiffMetadata {
+function diffMetadataForReviewFile(diff: ReviewFileDiff): FileDiffMetadata | null {
+  const oldText = textContents(diff.old_content)
+  const newText = textContents(diff.new_content)
+  if (oldText === null || newText === null) {
+    return null
+  }
+
   return parseDiffFromFile(
     {
-      contents: diff.old_content ?? '',
+      contents: oldText,
       name: diff.path,
     },
     {
-      contents: diff.new_content ?? '',
+      contents: newText,
       name: diff.path,
     },
   )
+}
+
+type ReviewFileContent = NonNullable<ReviewFileDiff['old_content']>
+
+type BinaryContentSide = {
+  label: string
+  oid: string
+  sizeBytes: number
+}
+
+function textContents(content: ReviewFileContent | null) {
+  if (!content) {
+    return ''
+  }
+  return content.kind === 'text' ? content.text : null
+}
+
+function binaryContentSides(diff: ReviewFileDiff): BinaryContentSide[] {
+  return [
+    binarySide('Old', diff.old_content),
+    binarySide('New', diff.new_content),
+  ].filter((side): side is BinaryContentSide => Boolean(side))
+}
+
+function binarySide(
+  label: string,
+  content: ReviewFileContent | null,
+): BinaryContentSide | null {
+  if (!content || content.kind !== 'binary') {
+    return null
+  }
+  return {
+    label,
+    oid: content.oid,
+    sizeBytes: content.size_bytes,
+  }
+}
+
+function BinaryDiffState({ sides }: { sides: BinaryContentSide[] }) {
+  return (
+    <div className="flex min-h-[220px] items-center justify-center px-4 py-6 text-sm text-muted-foreground">
+      <div className="w-full max-w-md space-y-3">
+        <div className="flex items-center gap-2 text-foreground">
+          <File className="size-4" />
+          <span className="font-medium">Binary file not rendered</span>
+        </div>
+        <div className="space-y-2 font-mono text-xs leading-5">
+          {sides.map((side) => (
+            <div
+              className="grid grid-cols-[44px_minmax(0,1fr)] gap-x-3"
+              key={`${side.label}-${side.oid}`}
+            >
+              <span className="text-muted-foreground">{side.label}</span>
+              <span className="min-w-0 break-all">
+                {formatBytes(side.sizeBytes)} - {abbreviateOid(side.oid)}
+              </span>
+            </div>
+          ))}
+        </div>
+      </div>
+    </div>
+  )
+}
+
+function abbreviateOid(oid: string) {
+  return oid.length > 12 ? oid.slice(0, 12) : oid
+}
+
+function formatBytes(bytes: number) {
+  if (bytes < 1024) {
+    return `${bytes} B`
+  }
+  if (bytes < 1024 * 1024) {
+    return `${(bytes / 1024).toFixed(1)} KB`
+  }
+  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`
 }
 
 function emptyDiffLabel(diff: ReviewFileDiff | null) {

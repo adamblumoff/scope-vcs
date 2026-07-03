@@ -180,7 +180,6 @@ fn db_metadata_store_round_trips_repo_metadata() {
             path: ScopePath::parse("/README.md").unwrap(),
             old_content: repo.graph.commits[0].changes[0].new_content.clone(),
             new_content: Some(source_blob("staged readme")),
-            line_diff: LineDiff::default(),
             visibility: Visibility::Public,
             kind: StagedFileChangeKind::Modified,
         }],
@@ -477,36 +476,6 @@ async fn get_repo_route_hides_change_version_from_public_reader() {
     let body = response_json(response).await;
     assert_eq!(body["access"]["actor"], "Public");
     assert_eq!(body["change_version"], 0);
-}
-
-#[tokio::test]
-async fn projection_route_returns_content_not_blob_metadata() {
-    let state = test_state_with_repo();
-    cache_test_jwks(&state);
-    {
-        let mut catalog = lock_catalog(&state).unwrap();
-        catalog
-            .repositories
-            .insert(TEST_REPO_ID.to_string(), repo_with_readme());
-    }
-
-    let response = router(state)
-        .oneshot(
-            Request::builder()
-                .method("GET")
-                .uri("/v1/repos/owner/repo/projections")
-                .header(AUTHORIZATION, bearer_header())
-                .body(Body::empty())
-                .unwrap(),
-        )
-        .await
-        .unwrap();
-
-    assert_eq!(response.status(), StatusCode::OK);
-    let body = response_json(response).await;
-    let content = &body["commits"][0]["changes"][0]["new_content"];
-    assert_eq!(content, "hello");
-    assert!(content["object_key"].is_null());
 }
 
 #[tokio::test]

@@ -171,7 +171,7 @@ async fn public_commit_diff_does_not_leak_private_old_content() {
     let public_diff_body = response_json(public_diff).await;
     assert_eq!(public_diff_body["kind"], "Added");
     assert_eq!(public_diff_body["old_content"], serde_json::Value::Null);
-    assert_eq!(public_diff_body["new_content"], "public release");
+    assert_text_content(&public_diff_body["new_content"], "public release");
 
     let owner_list = router(state.clone())
         .oneshot(
@@ -206,6 +206,6 @@ async fn public_commit_diff_does_not_leak_private_old_content() {
     assert_eq!(owner_diff.status(), StatusCode::OK);
     let owner_diff_body = response_json(owner_diff).await;
     assert_eq!(owner_diff_body["kind"], "Modified");
-    assert_eq!(owner_diff_body["old_content"], "private draft");
-    assert_eq!(owner_diff_body["new_content"], "public release");
+    assert_text_content(&owner_diff_body["old_content"], "private draft");
+    assert_text_content(&owner_diff_body["new_content"], "public release");
 }

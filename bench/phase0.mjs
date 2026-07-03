@@ -215,7 +215,6 @@ function benchmarkCases(owner) {
   const cases = [
     httpCase('repo summary public-demo', publicBase),
     httpCase('repo files public-demo', `${publicBase}/files`),
-    httpCase('projection public-demo', `${publicBase}/projections`),
     httpCase(
       'projection preview public-demo',
       `${publicBase}/projection-preview?audience=public&source=live`,
