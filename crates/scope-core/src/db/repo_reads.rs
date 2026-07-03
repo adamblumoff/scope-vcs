@@ -249,7 +249,7 @@ where
 
     let mut summaries = Vec::new();
     for (row, permissions) in rows.into_values() {
-        let access = access_for_row(&row, Some(user_id), permissions);
+        let access = access_for_row(&row, Some(user_id), permissions)?;
         if let Some(summary) = summary_for_user_list_row(row, access)? {
             summaries.push(summary);
         }
@@ -271,7 +271,7 @@ where
         return Ok(None);
     };
     let permissions = member_permissions_for_viewer(conn, &row, viewer_user_id).await?;
-    let access = access_for_row(&row, viewer_user_id, permissions);
+    let access = access_for_row(&row, viewer_user_id, permissions)?;
     summary_for_viewer_row(conn, row, viewer_user_id, access).await
 }
 
@@ -305,7 +305,7 @@ where
     }
 
     let permissions = member_permissions_for_viewer(conn, &row, viewer_user_id).await?;
-    let access = access_for_row(&row, viewer_user_id, permissions);
+    let access = access_for_row(&row, viewer_user_id, permissions)?;
     if row_is_readable_for_viewer(conn, &row, viewer_user_id, access).await? {
         return Err(ApiError::forbidden("owner role required"));
     }
@@ -325,7 +325,7 @@ where
         return Ok(None);
     };
     let permissions = member_permissions_for_viewer(conn, &row, viewer_user_id).await?;
-    let access = access_for_row(&row, viewer_user_id, permissions);
+    let access = access_for_row(&row, viewer_user_id, permissions)?;
     let audience = live_projection_audience(access);
 
     if let Some(files) =
@@ -342,7 +342,9 @@ where
 
     let repo = hydrate_repo_from_row_id(conn, &row.id).await?;
     let principal = principal_for_access(viewer_user_id, access);
-    if !repo_is_readable_for_principal(&repo, &principal) {
+    let visible_projected_files = repo.record.publication_state == RepoPublicationState::Published
+        && has_visible_projected_files(&repo, &principal);
+    if !row_is_readable_with_visible_files(&row, access, visible_projected_files)? {
         return Ok(None);
     }
     Ok(Some(domain_projected_files(&repo, &principal)))
@@ -567,17 +569,17 @@ fn access_for_row(
     row: &RepoReadRow,
     viewer_user_id: Option<&str>,
     member_permissions: Option<RepositoryMemberPermissions>,
-) -> RepositoryAccess {
+) -> Result<RepositoryAccess, ApiError> {
     let Some(user_id) = viewer_user_id else {
-        return RepositoryAccess::public();
+        return Ok(RepositoryAccess::public());
     };
-    access_for_user_id(
+    let publication_state = row.publication_state()?;
+    Ok(access_for_user_id(
         user_id,
         &row.owner_user_id,
-        row.publication_state()
-            .unwrap_or(RepoPublicationState::Unpublished),
+        publication_state,
         member_permissions,
-    )
+    ))
 }
 
 fn access_for_user_id(
