@@ -205,9 +205,14 @@ fn db_metadata_store_round_trips_repo_metadata() {
         .expect("row repo loads");
     assert_eq!(row_repo.graph, expected_graph);
     assert_eq!(row_repo.pending_import, expected_pending_import);
-    let row_repos = fresh_metadata.repositories_for_user(&owner_id).unwrap();
+    let row_repos = fresh_metadata.repo_summaries_for_user(&owner_id).unwrap();
     assert_eq!(row_repos.len(), 1);
-    assert_eq!(row_repos[0].record.id, TEST_REPO_ID);
+    assert_eq!(row_repos[0].id, TEST_REPO_ID);
+    let cased_summary = fresh_metadata
+        .repo_summary("OWNER", "Repo", Some(&owner_id))
+        .unwrap()
+        .expect("cased repo route params canonicalize to repo id");
+    assert_eq!(cased_summary.id, TEST_REPO_ID);
 
     let updated_settings = RepoSettings {
         include_ignored_files: true,
