@@ -87,18 +87,43 @@ where
     Ok(())
 }
 
-async fn load_live_projection_files<C>(
+pub(super) async fn load_live_projection_file_count_for_audience<C>(
     conn: &C,
-    repo: &StoredRepository,
-    principal: &Principal,
+    repo_id: &str,
+    repo_version: u64,
+    audience: &str,
+) -> Result<Option<usize>, ApiError>
+where
+    C: ConnectionTrait,
+{
+    let expected_version = repo_version.min(i64::MAX as u64) as i64;
+    let Some(model) = entities::projection_read_model::Entity::find()
+        .filter(entities::projection_read_model::Column::RepoId.eq(repo_id.to_string()))
+        .filter(entities::projection_read_model::Column::RepoVersion.eq(expected_version))
+        .filter(entities::projection_read_model::Column::Source.eq(LIVE_SOURCE.to_string()))
+        .filter(entities::projection_read_model::Column::Audience.eq(audience.to_string()))
+        .one(conn)
+        .await
+        .map_err(ApiError::internal)?
+    else {
+        return Ok(None);
+    };
+
+    Ok(Some(model.file_count.max(0) as usize))
+}
+
+pub(super) async fn load_live_projection_files_for_audience<C>(
+    conn: &C,
+    repo_id: &str,
+    repo_version: u64,
+    audience: &str,
 ) -> Result<Option<Vec<ProjectionViewFile>>, ApiError>
 where
     C: ConnectionTrait,
 {
-    let audience = live_projection_audience(repo, principal);
-    let expected_version = repo.record.change_version.min(i64::MAX as u64) as i64;
+    let expected_version = repo_version.min(i64::MAX as u64) as i64;
     let Some(model) = entities::projection_read_model::Entity::find()
-        .filter(entities::projection_read_model::Column::RepoId.eq(repo.record.id.clone()))
+        .filter(entities::projection_read_model::Column::RepoId.eq(repo_id.to_string()))
         .filter(entities::projection_read_model::Column::RepoVersion.eq(expected_version))
         .filter(entities::projection_read_model::Column::Source.eq(LIVE_SOURCE.to_string()))
         .filter(entities::projection_read_model::Column::Audience.eq(audience.to_string()))
@@ -110,7 +135,7 @@ where
     };
 
     let rows = entities::projection_file::Entity::find()
-        .filter(entities::projection_file::Column::RepoId.eq(repo.record.id.clone()))
+        .filter(entities::projection_file::Column::RepoId.eq(repo_id.to_string()))
         .filter(entities::projection_file::Column::RepoVersion.eq(expected_version))
         .filter(entities::projection_file::Column::Source.eq(LIVE_SOURCE.to_string()))
         .filter(entities::projection_file::Column::Audience.eq(audience.to_string()))
@@ -130,7 +155,7 @@ where
             Ok(file) => files.push(file),
             Err(error) => {
                 tracing::warn!(
-                    repo_id = %repo.record.id,
+                    repo_id,
                     path = %row_path,
                     error = %error.message,
                     "ignoring invalid projection read-model row"
@@ -141,6 +166,24 @@ where
     }
 
     Ok(Some(files))
+}
+
+async fn load_live_projection_files<C>(
+    conn: &C,
+    repo: &StoredRepository,
+    principal: &Principal,
+) -> Result<Option<Vec<ProjectionViewFile>>, ApiError>
+where
+    C: ConnectionTrait,
+{
+    let audience = live_projection_audience(repo, principal);
+    load_live_projection_files_for_audience(
+        conn,
+        &repo.record.id,
+        repo.record.change_version,
+        audience,
+    )
+    .await
 }
 
 fn projected_files_for_audience(

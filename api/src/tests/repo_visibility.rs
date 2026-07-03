@@ -304,6 +304,69 @@ async fn published_default_private_repo_without_public_files_stays_hidden() {
 }
 
 #[tokio::test]
+async fn logged_in_non_member_reads_empty_public_repo_as_public() {
+    let state = test_state_with_repo();
+    cache_test_jwks(&state);
+    let app = router(state);
+    let other_auth = bearer_header_for("user_other", "other@example.com");
+
+    let repo_response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("GET")
+                .uri("/v1/repos/owner/repo")
+                .header(AUTHORIZATION, other_auth.as_str())
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(repo_response.status(), StatusCode::OK);
+    let body = response_json(repo_response).await;
+    assert_eq!(body["id"], TEST_REPO_ID);
+    assert_eq!(body["access"]["actor"], "Public");
+    assert_eq!(body["change_version"], 0);
+
+    let files_response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("GET")
+                .uri("/v1/repos/owner/repo/files")
+                .header(AUTHORIZATION, other_auth.as_str())
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(files_response.status(), StatusCode::OK);
+    assert!(
+        response_json(files_response)
+            .await
+            .as_array()
+            .unwrap()
+            .is_empty()
+    );
+
+    let settings_response = app
+        .oneshot(
+            Request::builder()
+                .method("GET")
+                .uri("/v1/repos/owner/repo/settings")
+                .header(AUTHORIZATION, other_auth)
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(settings_response.status(), StatusCode::FORBIDDEN);
+}
+
+#[tokio::test]
 async fn deleted_public_file_no_longer_makes_private_repo_visible() {
     let state = test_state_with_repo();
     {

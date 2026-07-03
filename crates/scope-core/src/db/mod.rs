@@ -23,6 +23,7 @@ mod repo_collaboration;
 mod repo_effects;
 mod repo_lifecycle;
 mod repo_mutation;
+mod repo_reads;
 mod repo_settings;
 mod repo_tokens;
 mod repository_rows;
@@ -48,12 +49,13 @@ use metadata_reset::{
 pub use outbox::{OutboxJobCounts, OutboxRunSummary};
 pub use repo_collaboration::CreateRepositoryInviteMutation;
 pub use repo_mutation::RepositoryMutation;
+pub use repo_reads::{RepoSettingsRead, RepoSummaryRead};
 use repository_rows::load_repository_facts;
 use runtime::DbRuntime;
 use runtime::{run_api_db_on, run_db_on};
 use sea_orm::{
-    ColumnTrait, ConnectionTrait, Database, DatabaseConnection, EntityTrait, QueryFilter,
-    QueryOrder, Statement, TransactionTrait,
+    AccessMode, ColumnTrait, ConnectionTrait, Database, DatabaseConnection, DatabaseTransaction,
+    EntityTrait, IsolationLevel, QueryFilter, QueryOrder, Statement, TransactionTrait,
 };
 use serde::{Serialize, de::DeserializeOwned};
 #[cfg(any(test, feature = "test-support"))]
@@ -190,8 +192,7 @@ impl MetadataStore {
             MetadataStoreInner::Postgres { db, runtime } => {
                 let db = Arc::clone(db);
                 run_api_db_on(runtime, async move {
-                    let tx = db.as_ref().begin().await.map_err(ApiError::internal)?;
-                    acquire_metadata_read_lock(&tx).await?;
+                    let tx = begin_metadata_read_snapshot(db.as_ref()).await?;
                     let repo = match entities::repository::Entity::find_by_id(id)
                         .one(&tx)
                         .await
@@ -211,63 +212,6 @@ impl MetadataStore {
                     .lock()
                     .map_err(|_| ApiError::internal_message("catalog lock is poisoned"))?;
                 Ok(catalog.repositories.get(&id).cloned())
-            }
-        }
-    }
-
-    pub fn repositories_for_user(&self, user_id: &str) -> Result<Vec<StoredRepository>, ApiError> {
-        let user_id = user_id.to_string();
-        match self.inner.as_ref() {
-            MetadataStoreInner::Postgres { db, runtime } => {
-                let db = Arc::clone(db);
-                run_api_db_on(runtime, async move {
-                    let tx = db.as_ref().begin().await.map_err(ApiError::internal)?;
-                    acquire_metadata_read_lock(&tx).await?;
-                    let member_rows = entities::repository_member::Entity::find()
-                        .filter(entities::repository_member::Column::UserId.eq(user_id.clone()))
-                        .order_by_asc(entities::repository_member::Column::RepoId)
-                        .all(&tx)
-                        .await
-                        .map_err(ApiError::internal)?;
-                    let mut repo_ids = member_rows
-                        .into_iter()
-                        .map(|member| member.repo_id)
-                        .collect::<Vec<_>>();
-                    let owner_rows = entities::repository::Entity::find()
-                        .filter(entities::repository::Column::OwnerUserId.eq(user_id))
-                        .order_by_asc(entities::repository::Column::Id)
-                        .all(&tx)
-                        .await
-                        .map_err(ApiError::internal)?;
-                    repo_ids.extend(owner_rows.iter().map(|repo| repo.id.clone()));
-                    repo_ids.sort();
-                    repo_ids.dedup();
-                    if repo_ids.is_empty() {
-                        tx.commit().await.map_err(ApiError::internal)?;
-                        return Ok(Vec::new());
-                    }
-                    let repositories = entities::repository::Entity::find()
-                        .filter(entities::repository::Column::Id.is_in(repo_ids))
-                        .order_by_asc(entities::repository::Column::Id)
-                        .all(&tx)
-                        .await
-                        .map_err(ApiError::internal)?;
-                    let repositories = repositories_from_models(&tx, repositories).await?;
-                    tx.commit().await.map_err(ApiError::internal)?;
-                    Ok(repositories)
-                })
-            }
-            #[cfg(any(test, feature = "memory-metadata"))]
-            MetadataStoreInner::Memory(catalog) => {
-                let catalog = catalog
-                    .catalog
-                    .lock()
-                    .map_err(|_| ApiError::internal_message("catalog lock is poisoned"))?;
-                Ok(catalog
-                    .repositories_for_user(&user_id)
-                    .into_iter()
-                    .cloned()
-                    .collect())
             }
         }
     }
@@ -481,6 +425,17 @@ fn load_catalog(
         tx.commit().await.map_err(ApiError::internal)?;
         Ok(catalog)
     })
+}
+
+pub(super) async fn begin_metadata_read_snapshot(
+    db: &DatabaseConnection,
+) -> Result<DatabaseTransaction, ApiError> {
+    db.begin_with_config(
+        Some(IsolationLevel::RepeatableRead),
+        Some(AccessMode::ReadOnly),
+    )
+    .await
+    .map_err(ApiError::internal)
 }
 
 async fn load_catalog_async<C>(conn: &C) -> Result<AppCatalog, ApiError>

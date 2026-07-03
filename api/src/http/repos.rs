@@ -8,6 +8,7 @@ use crate::{
         },
         tokens::{generate_first_push_token, generate_git_clone_token, generate_git_push_token},
     },
+    db::{RepoSettingsRead, RepoSummaryRead},
     error::ApiError,
     http::responses::*,
     http::{
@@ -16,7 +17,7 @@ use crate::{
     },
     persistence::unix_now,
     state::AppState,
-    state::{access_for_principal, ensure_repo_read, find_repo},
+    state::{ensure_repo_read, find_repo},
 };
 use axum::{
     Json,
@@ -33,9 +34,9 @@ pub(crate) async fn list_repos(
     let user_id = user.id.clone();
     let mut repositories = state
         .metadata
-        .repositories_for_user(&user_id)?
+        .repo_summaries_for_user(&user_id)?
         .into_iter()
-        .filter_map(|repo| repo_summary_for_user(&repo, &user_id))
+        .map(repo_summary_response)
         .collect::<Vec<_>>();
     repositories.sort_by(|left, right| left.id.cmp(&right.id));
 
@@ -93,25 +94,17 @@ pub(crate) async fn get_repo(
     headers: HeaderMap,
     Path((owner, repo_name)): Path<(String, String)>,
 ) -> Result<Json<RepoSummaryResponse>, ApiError> {
-    let repo = find_repo(&state, &owner, &repo_name)?;
     let user = optional_scope_user(&state, &headers).await?;
-    let principal = principal_for_scope_user(&repo, user.as_ref());
-    ensure_repo_read(&state, &repo, &principal)?;
-    let access = access_for_principal(&state, &repo, &principal)?;
-    let summary = RepoSummaryResponse {
-        id: repo.record.id.clone(),
-        owner_handle: repo.record.owner_handle.clone(),
-        name: repo.record.name.clone(),
-        lifecycle_state: repo.record.publication_state,
-        default_visibility: repo.record.default_visibility,
-        change_version: repo_change_version_for_access(&repo, access),
-        access: repository_access_response(access),
-        pending_import_pending: repo.has_pending_import_review(),
-        staged_update_pending: can_review_staged_update(access) && repo.staged_update.is_some(),
-        push_blocked_by_staged_update: access.can_push && repo.staged_update.is_some(),
-    };
+    let summary = state
+        .metadata
+        .repo_summary(
+            &owner,
+            &repo_name,
+            user.as_ref().map(|user| user.id.as_str()),
+        )?
+        .ok_or_else(|| ApiError::not_found(format!("repo {owner}/{repo_name} not found")))?;
 
-    Ok(Json(summary))
+    Ok(Json(repo_summary_response(summary)))
 }
 
 pub(crate) async fn delete_repo(
@@ -187,11 +180,15 @@ pub(crate) async fn get_files(
     headers: HeaderMap,
     Path((owner, repo_name)): Path<(String, String)>,
 ) -> Result<Json<Vec<RepoFileResponse>>, ApiError> {
-    let repo = find_repo(&state, &owner, &repo_name)?;
     let user = optional_scope_user(&state, &headers).await?;
-    let principal = principal_for_scope_user(&repo, user.as_ref());
-    ensure_repo_read(&state, &repo, &principal)?;
-    let files = state.metadata.live_projection_files(&repo, &principal)?;
+    let files = state
+        .metadata
+        .repo_live_files(
+            &owner,
+            &repo_name,
+            user.as_ref().map(|user| user.id.as_str()),
+        )?
+        .ok_or_else(|| ApiError::not_found(format!("repo {owner}/{repo_name} not found")))?;
 
     Ok(Json(projection_file_responses(files)))
 }
@@ -276,19 +273,17 @@ pub(crate) async fn get_settings(
     headers: HeaderMap,
     Path((owner, repo_name)): Path<(String, String)>,
 ) -> Result<Json<RepoSettingsResponse>, ApiError> {
-    let repo = find_repo(&state, &owner, &repo_name)?;
     let user = optional_scope_user(&state, &headers).await?;
-    let principal = principal_for_scope_user(&repo, user.as_ref());
-    ensure_repo_read(&state, &repo, &principal)?;
+    let settings = state
+        .metadata
+        .repo_settings(
+            &owner,
+            &repo_name,
+            user.as_ref().map(|user| user.id.as_str()),
+        )?
+        .ok_or_else(|| ApiError::not_found(format!("repo {owner}/{repo_name} not found")))?;
 
-    if repo.access_for_principal(&principal).actor != RepositoryActor::Owner {
-        return Err(ApiError::forbidden("owner role required"));
-    }
-
-    Ok(Json(RepoSettingsResponse {
-        default_new_file_visibility: repo.record.default_visibility,
-        review_pushes_before_applying: repo.settings.review_pushes_before_applying,
-    }))
+    Ok(Json(repo_settings_response(settings)))
 }
 
 pub(crate) async fn update_settings(
@@ -329,4 +324,26 @@ pub(crate) async fn update_settings(
         default_new_file_visibility: updated.record.default_visibility,
         review_pushes_before_applying: updated.settings.review_pushes_before_applying,
     }))
+}
+
+fn repo_summary_response(summary: RepoSummaryRead) -> RepoSummaryResponse {
+    RepoSummaryResponse {
+        id: summary.id,
+        owner_handle: summary.owner_handle,
+        name: summary.name,
+        lifecycle_state: summary.lifecycle_state,
+        default_visibility: summary.default_visibility,
+        change_version: summary.change_version,
+        access: repository_access_response(summary.access),
+        pending_import_pending: summary.pending_import_pending,
+        staged_update_pending: summary.staged_update_pending,
+        push_blocked_by_staged_update: summary.push_blocked_by_staged_update,
+    }
+}
+
+fn repo_settings_response(settings: RepoSettingsRead) -> RepoSettingsResponse {
+    RepoSettingsResponse {
+        default_new_file_visibility: settings.default_new_file_visibility,
+        review_pushes_before_applying: settings.review_pushes_before_applying,
+    }
 }
