@@ -72,10 +72,10 @@ export function ReviewVisibilityPanel({
   const availableAudiences = useMemo(
     () =>
       [
-        previews.owner ? 'owner' : null,
+        previews.private ? 'private' : null,
         previews.public ? 'public' : null,
       ].filter(Boolean) as ProjectionPreviewAudience[],
-    [previews.owner, previews.public],
+    [previews.private, previews.public],
   )
 
   const selectedAudience = preferredAudience ?? internalPreferredAudience

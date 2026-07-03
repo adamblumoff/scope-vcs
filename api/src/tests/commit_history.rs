@@ -173,11 +173,11 @@ async fn public_commit_diff_does_not_leak_private_old_content() {
     assert_eq!(public_diff_body["old_content"], serde_json::Value::Null);
     assert_text_content(&public_diff_body["new_content"], "public release");
 
-    let owner_list = router(state.clone())
+    let private_list = router(state.clone())
         .oneshot(
             Request::builder()
                 .method("GET")
-                .uri("/v1/repos/owner/repo/commits?audience=owner")
+                .uri("/v1/repos/owner/repo/commits?audience=private")
                 .header(AUTHORIZATION, bearer_header())
                 .body(Body::empty())
                 .unwrap(),
@@ -185,16 +185,16 @@ async fn public_commit_diff_does_not_leak_private_old_content() {
         .await
         .unwrap();
 
-    assert_eq!(owner_list.status(), StatusCode::OK);
-    let owner_body = response_json(owner_list).await;
-    let owner_projected_id = owner_body["commits"][1]["projected_id"].as_str().unwrap();
+    assert_eq!(private_list.status(), StatusCode::OK);
+    let private_body = response_json(private_list).await;
+    let private_projected_id = private_body["commits"][1]["projected_id"].as_str().unwrap();
 
-    let owner_diff = router(state)
+    let private_diff = router(state)
         .oneshot(
             Request::builder()
                 .method("GET")
                 .uri(format!(
-                    "/v1/repos/owner/repo/commits/{owner_projected_id}/file-diff?audience=owner&path=/notes.md"
+                    "/v1/repos/owner/repo/commits/{private_projected_id}/file-diff?audience=private&path=/notes.md"
                 ))
                 .header(AUTHORIZATION, bearer_header())
                 .body(Body::empty())
@@ -203,9 +203,9 @@ async fn public_commit_diff_does_not_leak_private_old_content() {
         .await
         .unwrap();
 
-    assert_eq!(owner_diff.status(), StatusCode::OK);
-    let owner_diff_body = response_json(owner_diff).await;
-    assert_eq!(owner_diff_body["kind"], "Modified");
-    assert_text_content(&owner_diff_body["old_content"], "private draft");
-    assert_text_content(&owner_diff_body["new_content"], "public release");
+    assert_eq!(private_diff.status(), StatusCode::OK);
+    let private_diff_body = response_json(private_diff).await;
+    assert_eq!(private_diff_body["kind"], "Modified");
+    assert_text_content(&private_diff_body["old_content"], "private draft");
+    assert_text_content(&private_diff_body["new_content"], "public release");
 }

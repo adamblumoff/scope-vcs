@@ -2,7 +2,7 @@ use crate::{
     auth::scope::{optional_scope_user, principal_for_scope_user},
     domain::{
         commit_history::{CommitHistoryCommit, CommitHistoryFile, commit_history_view},
-        policy::{Principal, PrincipalKind},
+        projection::ProjectionViewKey,
         store::StoredRepository,
     },
     error::ApiError,
@@ -31,13 +31,11 @@ pub(crate) async fn get_commit_history(
     Query(input): Query<CommitHistoryRequest>,
 ) -> Result<Json<crate::http::responses::CommitHistoryResponse>, ApiError> {
     let (repo, audience) = repo_and_audience(&state, &headers, &owner, &repo_name, input).await?;
-    let principal = history_principal(&repo, audience);
     let view = commit_history_view(
         &repo.policy,
         &repo.graph,
         &repo.visibility_events,
-        &principal,
-        audience == ProjectionPreviewAudience::Owner,
+        history_view_key(audience),
     );
 
     Ok(Json(commit_history_response(audience, view)))
@@ -50,13 +48,11 @@ pub(crate) async fn get_commit_detail(
     Query(input): Query<CommitHistoryRequest>,
 ) -> Result<Json<crate::http::responses::CommitDetailResponse>, ApiError> {
     let (repo, audience) = repo_and_audience(&state, &headers, &owner, &repo_name, input).await?;
-    let principal = history_principal(&repo, audience);
     let view = commit_history_view(
         &repo.policy,
         &repo.graph,
         &repo.visibility_events,
-        &principal,
-        audience == ProjectionPreviewAudience::Owner,
+        history_view_key(audience),
     );
     let commit = commit_for_id(&view.commits, &commit_id)?;
 
@@ -73,13 +69,11 @@ pub(crate) async fn get_commit_file_diff(
         audience: input.audience,
     };
     let (repo, audience) = repo_and_audience(&state, &headers, &owner, &repo_name, request).await?;
-    let principal = history_principal(&repo, audience);
     let view = commit_history_view(
         &repo.policy,
         &repo.graph,
         &repo.visibility_events,
-        &principal,
-        audience == ProjectionPreviewAudience::Owner,
+        history_view_key(audience),
     );
     let commit = commit_for_id(&view.commits, &commit_id)?;
     let path = pending_scope_path(&input.path)?;
@@ -117,13 +111,10 @@ async fn repo_and_audience(
     Ok((repo, audience))
 }
 
-fn history_principal(repo: &StoredRepository, audience: ProjectionPreviewAudience) -> Principal {
+fn history_view_key(audience: ProjectionPreviewAudience) -> ProjectionViewKey {
     match audience {
-        ProjectionPreviewAudience::Owner => Principal {
-            id: repo.record.owner_user_id.clone(),
-            kind: PrincipalKind::User,
-        },
-        ProjectionPreviewAudience::Public => Principal::public(),
+        ProjectionPreviewAudience::Private => ProjectionViewKey::Private,
+        ProjectionPreviewAudience::Public => ProjectionViewKey::Public,
     }
 }
 

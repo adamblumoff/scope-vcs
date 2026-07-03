@@ -17,7 +17,7 @@ pub(crate) fn ensure_projection_preview_access(
     source: ProjectionPreviewSource,
 ) -> Result<(), ApiError> {
     match (audience, source) {
-        (ProjectionPreviewAudience::Owner, _) => {
+        (ProjectionPreviewAudience::Private, _) => {
             ensure_repo_read(state, repo, requester)?;
             ensure_review_preview_access(state, repo, requester, source)?;
             if repo.access_for_principal(requester).actor != RepositoryActor::Public {
@@ -31,7 +31,7 @@ pub(crate) fn ensure_projection_preview_access(
             ensure_review_preview_access(state, repo, requester, source)
         }
         (ProjectionPreviewAudience::Public, ProjectionPreviewSource::Live) => {
-            if repo.access_for_principal(requester).actor == RepositoryActor::Owner {
+            if repo.access_for_principal(requester).actor != RepositoryActor::Public {
                 ensure_repo_read(state, repo, requester)
             } else {
                 ensure_repo_read(state, repo, &Principal::public())

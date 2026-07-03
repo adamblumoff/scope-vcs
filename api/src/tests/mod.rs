@@ -2,7 +2,8 @@ use crate::domain::policy::{
     Policy, Principal, PrincipalKind, ScopePath, Visibility, VisibilityRule,
 };
 use crate::domain::projection::{
-    AuthorVisibility, FileChange, LogicalCommit, SourceGraph, VisibilityEvent, project_graph,
+    AuthorVisibility, FileChange, LogicalCommit, ProjectionViewKey, SourceGraph, VisibilityEvent,
+    project_graph,
 };
 use crate::domain::repo_actions::preview_publish_import;
 use crate::domain::staged_updates::apply_staged_update_to_repo;
@@ -54,6 +55,7 @@ mod git_binary;
 mod git_http;
 mod git_http_gzip;
 mod git_import_validation;
+mod git_projection_identity;
 mod git_receive;
 mod obsolete_routes;
 mod readiness;

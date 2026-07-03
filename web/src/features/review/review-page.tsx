@@ -234,16 +234,16 @@ function useReviewPageModel({
   const availableAudiences = useMemo(
     () =>
       [
-        projectionPreviews.owner ? 'owner' : null,
+        projectionPreviews.private ? 'private' : null,
         projectionPreviews.public ? 'public' : null,
       ].filter(Boolean) as ProjectionPreviewAudience[],
-    [projectionPreviews.owner, projectionPreviews.public],
+    [projectionPreviews.private, projectionPreviews.public],
   )
   const audience = availableAudiences.includes(preferredAudience)
     ? preferredAudience
     : availableAudiences[0]
   const preview = audience ? projectionPreviews[audience] : null
-  const showPrivateCounts = Boolean(projectionPreviews.owner)
+  const showPrivateCounts = Boolean(projectionPreviews.private)
   const reviewRailClassName = selectedFilePath
     ? 'max-w-[1320px] transition-[max-width] duration-300 ease-out'
     : 'max-w-[1040px] transition-[max-width] duration-300 ease-out'

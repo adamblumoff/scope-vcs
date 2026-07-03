@@ -1,5 +1,5 @@
 use crate::domain::policy::Principal;
-use crate::domain::projection::{Projection, project_graph};
+use crate::domain::projection::{Projection, ProjectionViewKey, project_graph};
 use crate::domain::store::{RepoPublicationState, RepositoryActor, is_supported_git_file_mode};
 use crate::{
     auth::scope::{optional_scope_user, principal_for_scope_user},
@@ -35,7 +35,7 @@ use std::{
     thread,
     time::{Duration, Instant},
 };
-const PROJECTION_CACHE_SEMANTICS_VERSION: &str = "visibility-projection-v4";
+const PROJECTION_CACHE_SEMANTICS_VERSION: &str = "shared-projection-view-v1";
 const GIT_STDERR_DIAGNOSTIC_BYTES: usize = 8 * 1024;
 static GIT_CACHE_ATTEMPT: AtomicU64 = AtomicU64::new(1);
 
@@ -52,12 +52,12 @@ pub(crate) async fn git_projection_for_request(
         }
 
         ensure_repo_read(state, &repo, &principal)?;
+        let view_key = ProjectionViewKey::from_access(repo.access_for_principal(&principal));
         return Ok(project_graph(
             &repo.policy,
             &repo.graph,
             &repo.visibility_events,
-            &principal,
-            repo.access_for_principal(&principal).can_read_private_files,
+            view_key,
         ));
     }
 
@@ -69,12 +69,12 @@ pub(crate) async fn git_projection_for_request(
     }
 
     ensure_repo_read(state, &repo, &principal)?;
+    let view_key = ProjectionViewKey::from_access(repo.access_for_principal(&principal));
     Ok(project_graph(
         &repo.policy,
         &repo.graph,
         &repo.visibility_events,
-        &principal,
-        repo.access_for_principal(&principal).can_read_private_files,
+        view_key,
     ))
 }
 
@@ -86,7 +86,7 @@ pub(crate) async fn git_upload_pack_repo_for_request(
 ) -> Result<PathBuf, ApiError> {
     if headers.contains_key(AUTHORIZATION)
         && let Some(repo_path) =
-            owner_snapshot_repo_for_request(state, headers, owner, repo_name).await?
+            private_live_repo_for_request(state, headers, owner, repo_name).await?
     {
         return Ok(repo_path);
     }
@@ -107,7 +107,7 @@ pub(crate) fn git_upload_pack_auth_required() -> ApiError {
     ApiError::unauthorized("Git credentials required")
 }
 
-pub(crate) async fn owner_snapshot_repo_for_request(
+pub(crate) async fn private_live_repo_for_request(
     state: &AppState,
     headers: &HeaderMap,
     owner: &str,
@@ -121,21 +121,33 @@ pub(crate) async fn owner_snapshot_repo_for_request(
         let principal = principal_for_scope_user(&repo, user.as_ref());
         (repo, principal)
     };
-    if repo.access_for_principal(&principal).actor != RepositoryActor::Owner {
+    if repo.record.publication_state != RepoPublicationState::Published {
+        return unpublished_private_live_repo_error(&repo, owner, repo_name, &principal);
+    }
+    ensure_repo_read(state, &repo, &principal)?;
+    let access = repo.access_for_principal(&principal);
+    if ProjectionViewKey::from_access(access) != ProjectionViewKey::Private {
         return Ok(None);
     }
-    if repo.record.publication_state != RepoPublicationState::Published {
-        return Err(ApiError::forbidden(UNPUBLISHED_GIT_ERROR));
-    }
-    let Some(snapshot) = repo
-        .staged_update
-        .as_ref()
-        .map(|update| &update.git_snapshot)
-        .or(repo.git_snapshot.as_ref())
-    else {
+    let Some(snapshot) = repo.git_snapshot.as_ref() else {
         return Ok(None);
     };
     cached_raw_git_snapshot_repo(state, snapshot).map(Some)
+}
+
+fn unpublished_private_live_repo_error(
+    repo: &crate::domain::store::StoredRepository,
+    owner: &str,
+    repo_name: &str,
+    principal: &Principal,
+) -> Result<Option<PathBuf>, ApiError> {
+    if repo.access_for_principal(principal).actor == RepositoryActor::Owner {
+        Err(ApiError::forbidden(UNPUBLISHED_GIT_ERROR))
+    } else {
+        Err(ApiError::not_found(format!(
+            "repo {owner}/{repo_name} not found"
+        )))
+    }
 }
 
 fn unpublished_git_read_error(
@@ -320,8 +332,8 @@ pub(crate) fn projection_cache_key(projection: &Projection) -> String {
     hash_field(&mut hasher, b"repo", projection.repo_id.as_bytes());
     hash_field(
         &mut hasher,
-        b"principal",
-        projection.principal_id.as_bytes(),
+        b"view",
+        projection.view_key.as_str().as_bytes(),
     );
     for commit in &projection.commits {
         hash_field(&mut hasher, b"commit", commit.projected_id.as_bytes());

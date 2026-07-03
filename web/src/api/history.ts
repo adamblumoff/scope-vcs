@@ -91,5 +91,5 @@ function parseOptionalAudience(input: unknown): ProjectionPreviewAudience {
 function parseAudience(
   audience: ProjectionPreviewAudience | null | undefined,
 ): ProjectionPreviewAudience {
-  return audience === 'owner' ? 'owner' : 'public'
+  return audience === 'private' ? 'private' : 'public'
 }

@@ -355,27 +355,21 @@ fn staged_new_private_file_stays_out_of_public_projection() {
         &repo.policy,
         &repo.graph,
         &repo.visibility_events,
-        &Principal::public(),
-        false,
+        ProjectionViewKey::Public,
     );
     assert!(
         !public_projection
             .visible_paths()
             .contains(&"/secret-plan.md".to_string())
     );
-    let owner = Principal {
-        id: repo.record.owner_user_id.clone(),
-        kind: PrincipalKind::User,
-    };
-    let owner_projection = project_graph(
+    let private_projection = project_graph(
         &repo.policy,
         &repo.graph,
         &repo.visibility_events,
-        &owner,
-        true,
+        ProjectionViewKey::Private,
     );
     assert!(
-        owner_projection
+        private_projection
             .visible_paths()
             .contains(&"/secret-plan.md".to_string())
     );
@@ -403,8 +397,7 @@ fn staged_new_file_inherits_private_parent_visibility() {
         &repo.policy,
         &repo.graph,
         &repo.visibility_events,
-        &Principal::public(),
-        false,
+        ProjectionViewKey::Public,
     );
     assert!(
         !public_projection
@@ -518,8 +511,7 @@ fn applying_staged_public_to_private_update_removes_file_from_public_projection(
         &repo.policy,
         &repo.graph,
         &repo.visibility_events,
-        &Principal::public(),
-        false,
+        ProjectionViewKey::Public,
     );
     assert!(projection.commits.is_empty());
     assert!(
@@ -544,8 +536,7 @@ fn applying_staged_public_delete_marked_private_removes_file_from_public_project
         &repo.policy,
         &repo.graph,
         &repo.visibility_events,
-        &Principal::public(),
-        false,
+        ProjectionViewKey::Public,
     );
     let last_commit = projection.commits.last().unwrap();
     assert!(
@@ -577,8 +568,7 @@ fn applying_staged_private_delete_marked_public_stays_out_of_public_projection()
         &repo.policy,
         &repo.graph,
         &repo.visibility_events,
-        &Principal::public(),
-        false,
+        ProjectionViewKey::Public,
     );
     assert!(
         projection

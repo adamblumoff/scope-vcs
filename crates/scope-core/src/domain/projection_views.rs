@@ -1,6 +1,6 @@
 use super::{
-    policy::{Principal, PrincipalKind, ScopePath, Visibility},
-    projection::{Projection, project_graph},
+    policy::{Principal, ScopePath, Visibility},
+    projection::{Projection, ProjectionViewKey, project_graph},
     repo_actions::{preview_publish_import, staged_update_api_error},
     staged_updates::apply_staged_update_to_repo,
     store::StoredRepository,
@@ -12,8 +12,17 @@ use std::collections::{BTreeMap, HashSet};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ProjectionAudience {
-    Owner,
+    Private,
     Public,
+}
+
+impl From<ProjectionAudience> for ProjectionViewKey {
+    fn from(audience: ProjectionAudience) -> Self {
+        match audience {
+            ProjectionAudience::Private => Self::Private,
+            ProjectionAudience::Public => Self::Public,
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -25,7 +34,7 @@ pub enum ProjectionSource {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ProjectionPreviewView {
     pub repo_id: String,
-    pub principal_id: String,
+    pub view_key: String,
     pub head_oid: Option<String>,
     pub files: Vec<ProjectionPreviewFile>,
     pub commits: Vec<ProjectionPreviewCommit>,
@@ -99,15 +108,8 @@ pub fn projection_preview(
     audience: ProjectionAudience,
     include_private_counts: bool,
 ) -> ProjectionPreviewView {
-    let principal = projection_preview_principal(repo, audience);
-    let can_read_private_files = audience == ProjectionAudience::Owner;
-    let projection = project_graph(
-        &repo.policy,
-        &repo.graph,
-        &repo.visibility_events,
-        &principal,
-        can_read_private_files,
-    );
+    let view_key = ProjectionViewKey::from(audience);
+    let projection = project_graph(&repo.policy, &repo.graph, &repo.visibility_events, view_key);
     let files = projection_preview_files(repo, &projection);
     let head_oid = projection_preview_head_oid(&projection, &files);
     let logical_commit_visibility = repo
@@ -141,20 +143,16 @@ pub fn projection_preview(
     let visible_commits = commits.len();
     let (hidden_files, hidden_commits) =
         if audience == ProjectionAudience::Public && include_private_counts {
-            let owner_projection = project_graph(
+            let private_projection = project_graph(
                 &repo.policy,
                 &repo.graph,
                 &repo.visibility_events,
-                &Principal {
-                    id: repo.record.owner_user_id.clone(),
-                    kind: PrincipalKind::User,
-                },
-                true,
+                ProjectionViewKey::Private,
             );
-            let owner_files = projection_preview_files(repo, &owner_projection);
+            let private_files = projection_preview_files(repo, &private_projection);
             (
-                owner_files.len().saturating_sub(visible_files),
-                hidden_logical_commit_count(&owner_projection, &projection),
+                private_files.len().saturating_sub(visible_files),
+                hidden_logical_commit_count(&private_projection, &projection),
             )
         } else {
             (0, 0)
@@ -162,7 +160,7 @@ pub fn projection_preview(
 
     ProjectionPreviewView {
         repo_id: repo.record.id.clone(),
-        principal_id: projection.principal_id,
+        view_key: projection.view_key.as_str().to_string(),
         head_oid,
         files,
         commits,
@@ -204,8 +202,7 @@ pub fn projected_files(repo: &StoredRepository, principal: &Principal) -> Vec<Pr
         &repo.policy,
         &repo.graph,
         &repo.visibility_events,
-        principal,
-        access.can_read_private_files,
+        ProjectionViewKey::from_access(access),
     );
 
     projection_tree(&projection)
@@ -264,23 +261,9 @@ pub fn has_visible_projected_files(repo: &StoredRepository, principal: &Principa
         &repo.policy,
         &repo.graph,
         &repo.visibility_events,
-        principal,
-        repo.access_for_principal(principal).can_read_private_files,
+        ProjectionViewKey::from_access(repo.access_for_principal(principal)),
     );
     !projection_tree(&projection).is_empty()
-}
-
-fn projection_preview_principal(
-    repo: &StoredRepository,
-    audience: ProjectionAudience,
-) -> Principal {
-    match audience {
-        ProjectionAudience::Owner => Principal {
-            id: repo.record.owner_user_id.clone(),
-            kind: PrincipalKind::User,
-        },
-        ProjectionAudience::Public => Principal::public(),
-    }
 }
 
 fn projection_preview_files(
@@ -343,7 +326,9 @@ fn projection_preview_head_oid(
             .join("\n");
         let payload = format!(
             "projection:{}\nhead:{}\ntree:\n{}\n",
-            projection.principal_id, commit.projected_id, tree_payload
+            projection.view_key.as_str(),
+            commit.projected_id,
+            tree_payload
         );
         hasher.update(format!("commit {}\0", payload.len()).as_bytes());
         hasher.update(payload.as_bytes());

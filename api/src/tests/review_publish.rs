@@ -135,8 +135,7 @@ async fn pending_visibility_toggle_does_not_create_public_projection_history() {
         &repo.policy,
         &repo.graph,
         &repo.visibility_events,
-        &Principal::public(),
-        false,
+        ProjectionViewKey::Public,
     );
 
     assert!(
@@ -363,7 +362,7 @@ async fn visibility_member_can_load_staged_review_preview_and_file_diff() {
         .oneshot(
             Request::builder()
                 .method("GET")
-                .uri("/v1/repos/owner/repo/projection-preview?audience=owner&source=review")
+                .uri("/v1/repos/owner/repo/projection-preview?audience=private&source=review")
                 .header(
                     AUTHORIZATION,
                     bearer_header_for(member_clerk_id, member_email),

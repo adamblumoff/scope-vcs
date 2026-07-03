@@ -380,7 +380,7 @@ pub(crate) struct StagedFileResponse {
 pub(crate) struct CommitHistoryResponse {
     pub(crate) audience: ProjectionPreviewAudience,
     pub(crate) repo_id: String,
-    pub(crate) principal_id: String,
+    pub(crate) view_key: String,
     pub(crate) commits: Vec<CommitSummaryResponse>,
 }
 
@@ -400,7 +400,7 @@ pub(crate) struct CommitSummaryResponse {
 pub(crate) struct CommitDetailResponse {
     pub(crate) audience: ProjectionPreviewAudience,
     pub(crate) repo_id: String,
-    pub(crate) principal_id: String,
+    pub(crate) view_key: String,
     pub(crate) projected_id: String,
     pub(crate) logical_commit_id: String,
     pub(crate) parent_projected_id: Option<String>,
@@ -639,7 +639,7 @@ pub(crate) fn commit_history_response(
     CommitHistoryResponse {
         audience,
         repo_id: view.repo_id,
-        principal_id: view.principal_id,
+        view_key: view.view_key,
         commits: view.commits.iter().map(commit_summary_response).collect(),
     }
 }
@@ -652,7 +652,7 @@ pub(crate) fn commit_detail_response(
     CommitDetailResponse {
         audience,
         repo_id: view.repo_id.clone(),
-        principal_id: view.principal_id.clone(),
+        view_key: view.view_key.clone(),
         projected_id: commit.projected_id.clone(),
         logical_commit_id: commit.logical_commit_id.clone(),
         parent_projected_id: commit.parent_projected_id.clone(),

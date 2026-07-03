@@ -16,7 +16,7 @@ export type FirstPushTokenStatus = "Active" | "Expired" | "Used";
 
 export type StagedFileChangeKind = "Added" | "Modified" | "Deleted";
 
-export type ProjectionPreviewAudience = "owner" | "public";
+export type ProjectionPreviewAudience = "private" | "public";
 
 export type ProjectionPreviewSource = "live" | "review";
 
@@ -122,17 +122,17 @@ export type StagedUpdateResponse = { id: string, branch: string, base_live_commi
 
 export type StagedFileResponse = { path: string, kind: StagedFileChangeKind, old_oid: string | null, new_oid: string | null, visibility: Visibility, };
 
-export type CommitHistoryResponse = { audience: ProjectionPreviewAudience, repo_id: string, principal_id: string, commits: Array<CommitSummaryResponse>, };
+export type CommitHistoryResponse = { audience: ProjectionPreviewAudience, repo_id: string, view_key: string, commits: Array<CommitSummaryResponse>, };
 
 export type CommitSummaryResponse = { projected_id: string, logical_commit_id: string, parent_projected_id: string | null, author: string | null, message: string, change_count: number, };
 
-export type CommitDetailResponse = { audience: ProjectionPreviewAudience, repo_id: string, principal_id: string, projected_id: string, logical_commit_id: string, parent_projected_id: string | null, author: string | null, message: string, change_count: number, files: Array<CommitFileResponse>, };
+export type CommitDetailResponse = { audience: ProjectionPreviewAudience, repo_id: string, view_key: string, projected_id: string, logical_commit_id: string, parent_projected_id: string | null, author: string | null, message: string, change_count: number, files: Array<CommitFileResponse>, };
 
 export type CommitFileResponse = { path: string, kind: StagedFileChangeKind, old_oid: string | null, new_oid: string | null, visibility: Visibility, };
 
 export type ProjectionPreviewRequest = { audience: ProjectionPreviewAudience, source: ProjectionPreviewSource | null, };
 
-export type ProjectionPreviewResponse = { audience: ProjectionPreviewAudience, source: ProjectionPreviewSource, repo_id: string, principal_id: string, head_oid: string | null, files: Array<ProjectionPreviewFileResponse>, commits: Array<ProjectionPreviewCommitResponse>, summary: ProjectionPreviewSummaryResponse, };
+export type ProjectionPreviewResponse = { audience: ProjectionPreviewAudience, source: ProjectionPreviewSource, repo_id: string, view_key: string, head_oid: string | null, files: Array<ProjectionPreviewFileResponse>, commits: Array<ProjectionPreviewCommitResponse>, summary: ProjectionPreviewSummaryResponse, };
 
 export type ProjectionPreviewFileResponse = { path: string, oid: string, visibility: Visibility, };
 

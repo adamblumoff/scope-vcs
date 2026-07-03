@@ -14,20 +14,20 @@ import type {
 export async function loadProjectionPreviewsForRequest(
   data: RepoParams,
   source: ProjectionPreviewSource,
-  options: { includeOwner?: boolean; api?: ApiClient } = {},
+  options: { includePrivate?: boolean; api?: ApiClient } = {},
 ): Promise<ProjectionPreviews> {
   const api = options.api ?? createApiClient()
   const authenticated = await api.authenticated()
-  const includeOwner = options.includeOwner ?? true
-  const [owner, publicPreview] = await Promise.all([
-    authenticated && includeOwner
-      ? loadProjectionPreview(api, { ...data, audience: 'owner', source })
+  const includePrivate = options.includePrivate ?? true
+  const [privatePreview, publicPreview] = await Promise.all([
+    authenticated && includePrivate
+      ? loadProjectionPreview(api, { ...data, audience: 'private', source })
       : Promise.resolve(null),
     loadOptionalProjectionPreview(api, { ...data, audience: 'public', source }),
   ])
 
   return {
-    owner,
+    private: privatePreview,
     public: publicPreview,
     source,
   }

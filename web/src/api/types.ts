@@ -182,7 +182,7 @@ export type ReviewFile = RepoFile | StagedFile
 
 export type ProjectionPreviews = {
   source: ProjectionPreviewSource
-  owner: ProjectionPreview | null
+  private: ProjectionPreview | null
   public: ProjectionPreview | null
 }
 
