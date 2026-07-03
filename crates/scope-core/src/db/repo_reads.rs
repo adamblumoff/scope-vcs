@@ -704,6 +704,7 @@ fn repo_is_readable_for_viewer(repo: &StoredRepository, viewer_user_id: Option<&
     repo_is_readable_for_principal(repo, &principal)
 }
 
+#[cfg(any(test, feature = "memory-metadata"))]
 fn repo_is_readable_for_principal(repo: &StoredRepository, principal: &Principal) -> bool {
     let access = repo.access_for_principal(principal);
     readable_from_facts(
