@@ -15,13 +15,7 @@ import {
 import { createFileRoute } from '@tanstack/react-router'
 
 export const Route = createFileRoute('/repos/$owner/$repo/history')({
-  validateSearch: (search: Record<string, unknown>): HistorySearch => ({
-    audience:
-      search.audience === 'private' || search.audience === 'public'
-        ? search.audience
-        : undefined,
-    commit: searchCommitId(search.commit),
-  }),
+  validateSearch: parseHistorySearch,
   loaderDeps: ({ search }) => search,
   loader: async ({ deps: search, params }) => {
     const [privateHistory, publicHistory] = await Promise.all([
@@ -78,6 +72,23 @@ function HistoryRoute() {
 type HistorySearch = {
   audience?: ProjectionPreviewAudience
   commit?: string
+}
+
+function parseHistorySearch(search: Record<string, unknown>): HistorySearch {
+  return {
+    audience: searchHistoryAudience(search.audience),
+    commit: searchCommitId(search.commit),
+  }
+}
+
+function searchHistoryAudience(value: unknown): ProjectionPreviewAudience | undefined {
+  if (value === undefined || value === null || value === '') {
+    return undefined
+  }
+  if (value === 'private' || value === 'public') {
+    return value
+  }
+  throw new Error(`Unsupported history audience: ${String(value)}`)
 }
 
 function searchCommitId(value: unknown) {

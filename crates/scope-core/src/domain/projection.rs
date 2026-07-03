@@ -71,10 +71,10 @@ pub enum ProjectionViewKey {
 
 impl ProjectionViewKey {
     pub fn from_access(access: RepositoryAccess) -> Self {
-        if access.actor != RepositoryActor::Public && access.can_read_private_files {
-            Self::Private
-        } else {
-            Self::Public
+        match access.actor {
+            RepositoryActor::Owner => Self::Private,
+            RepositoryActor::Member if access.can_read_private_files => Self::Private,
+            RepositoryActor::Member | RepositoryActor::Public => Self::Public,
         }
     }
 

@@ -536,6 +536,38 @@ async fn private_upload_pack_without_credentials_challenges_for_auth() {
         assert!(response.headers().contains_key(WWW_AUTHENTICATE));
     }
 }
+
+#[tokio::test]
+async fn unpublished_upload_pack_member_git_credential_stays_hidden() {
+    let state = test_state_with_repo();
+    let member_id = "user_member".to_string();
+    let (secret, member_token) = generate_git_clone_token(&member_id).unwrap();
+    {
+        let mut catalog = lock_catalog(&state).unwrap();
+        let repo = catalog.repositories.get_mut(TEST_REPO_ID).unwrap();
+        repo.record.publication_state = RepoPublicationState::Unpublished;
+        repo.pending_import = Some(pending_import_fixture(vec![("README.md", "hello")]));
+        repo.members.push(test_repository_member(
+            TEST_REPO_ID,
+            member_id,
+            RepositoryMemberPermissions::default(),
+        ));
+        repo.git_clone_tokens.push(member_token);
+    }
+    let mut headers = HeaderMap::new();
+    headers.insert(
+        AUTHORIZATION,
+        format!("Basic {}", BASE64.encode(format!("scope:{secret}")))
+            .parse()
+            .unwrap(),
+    );
+
+    let error = git_upload_pack_repo_for_request(&state, &headers, TEST_REPO_OWNER, TEST_REPO_NAME)
+        .await
+        .unwrap_err();
+
+    assert_eq!(error.status, StatusCode::UNAUTHORIZED);
+}
 #[test]
 fn receive_pack_staging_key_does_not_collapse_valid_repo_names() {
     assert_ne!(safe_repo_key("owner", "a-b"), safe_repo_key("owner", "a_b"));

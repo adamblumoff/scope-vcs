@@ -1,4 +1,24 @@
 use super::*;
+use crate::domain::store::{RepositoryAccess, RepositoryActor};
+
+#[test]
+fn projection_view_key_treats_owner_as_private_view() {
+    let access = RepositoryAccess {
+        actor: RepositoryActor::Owner,
+        can_read_private_files: false,
+        can_push: false,
+        can_change_file_visibility: false,
+        can_apply_changes: false,
+        can_update_repo_settings: false,
+        can_manage_members: false,
+        can_delete_repo: false,
+    };
+
+    assert_eq!(
+        ProjectionViewKey::from_access(access),
+        ProjectionViewKey::Private
+    );
+}
 
 #[tokio::test]
 async fn private_projection_cache_key_is_shared_by_owner_and_member() {

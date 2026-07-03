@@ -122,7 +122,10 @@ pub(crate) async fn private_live_repo_for_request(
         (repo, principal)
     };
     if repo.record.publication_state != RepoPublicationState::Published {
-        return unpublished_private_live_repo_error(&repo, owner, repo_name, &principal);
+        if repo.access_for_principal(&principal).actor == RepositoryActor::Owner {
+            return Err(ApiError::forbidden(UNPUBLISHED_GIT_ERROR));
+        }
+        return Ok(None);
     }
     ensure_repo_read(state, &repo, &principal)?;
     let access = repo.access_for_principal(&principal);
@@ -133,21 +136,6 @@ pub(crate) async fn private_live_repo_for_request(
         return Ok(None);
     };
     cached_raw_git_snapshot_repo(state, snapshot).map(Some)
-}
-
-fn unpublished_private_live_repo_error(
-    repo: &crate::domain::store::StoredRepository,
-    owner: &str,
-    repo_name: &str,
-    principal: &Principal,
-) -> Result<Option<PathBuf>, ApiError> {
-    if repo.access_for_principal(principal).actor == RepositoryActor::Owner {
-        Err(ApiError::forbidden(UNPUBLISHED_GIT_ERROR))
-    } else {
-        Err(ApiError::not_found(format!(
-            "repo {owner}/{repo_name} not found"
-        )))
-    }
 }
 
 fn unpublished_git_read_error(
