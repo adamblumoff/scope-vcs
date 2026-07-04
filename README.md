@@ -93,15 +93,18 @@ Railway services:
   `crates/scope-core`.
   Keep the API service port pinned to `8080` if `scope-web` uses the private
   URL example below.
-- `scope-cli` is a Railpack Rust service rooted at `cli`. Runtime deploys build
-  `scope-cli-service`, which serves `/install.sh`, `/install.ps1`, and
-  allowlisted files from `/downloads/<artifact>`. The downloadable `scope`
-  binaries are built by `.github/workflows/scope-cli-build.yml`, staged in
-  `cli/dist`, checksummed, copied into `.railway-upload/cli`, and uploaded to
-  Railway with `railway up .railway-upload --path-as-root --no-gitignore`.
-  The service `readyz` route
-  stays unavailable until every manifest artifact and checksum exists in
-  `SCOPE_CLI_ARTIFACT_DIR`, which defaults to `./dist`.
+- `scope-cli` is a Railpack Rust service uploaded as a minimal repo root.
+  Runtime deploys build `scope-cli-service`, which serves `/install.sh`,
+  `/install.ps1`, and allowlisted files from `/downloads/<artifact>`. The
+  downloadable `scope` binaries are built by
+  `.github/workflows/scope-cli-build.yml`, staged in `cli/dist`, checksummed,
+  copied into `.railway-upload/cli`, and uploaded with the root `railpack.json`,
+  root `rust-toolchain.toml`, and `crates/scope-core` so the CLI path dependency
+  resolves during Railway build.
+  The Railway start command points `SCOPE_CLI_ARTIFACT_DIR` at `./cli/dist`.
+  The service `readyz` route stays unavailable until every manifest artifact and
+  checksum exists in `SCOPE_CLI_ARTIFACT_DIR`, which defaults to `./dist` when
+  the variable is unset.
   Supported install targets are Linux x64, Linux ARM64, macOS Intel, macOS
   Apple Silicon, Windows x64, and Windows ARM64. Raspberry Pi and Alpine builds
   are intentionally not published yet. Keep the service linked to GitHub for

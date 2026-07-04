@@ -10,6 +10,9 @@ on:
       - "api/src/http/routes.rs"
       - "api/src/http/type_exports.rs"
       - "cli/**"
+      - "crates/scope-core/**"
+      - "railpack.json"
+      - "rust-toolchain.toml"
       - "web/src/api/types.generated.ts"
   push:
     branches:
@@ -22,6 +25,9 @@ on:
       - "api/src/http/routes.rs"
       - "api/src/http/type_exports.rs"
       - "cli/**"
+      - "crates/scope-core/**"
+      - "railpack.json"
+      - "rust-toolchain.toml"
       - "web/src/api/types.generated.ts"
   workflow_dispatch:
 
@@ -233,8 +239,11 @@ jobs:
         shell: bash
         run: |
           rm -rf .railway-upload
-          mkdir -p .railway-upload
+          mkdir -p .railway-upload/crates
+          cp railpack.json .railway-upload/railpack.json
+          cp rust-toolchain.toml .railway-upload/rust-toolchain.toml
           cp -a cli .railway-upload/cli
+          cp -a crates/scope-core .railway-upload/crates/scope-core
 
       - name: Install Railway CLI
         run: npm install -g @railway/cli@5.23.1
