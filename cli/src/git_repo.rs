@@ -266,7 +266,7 @@ pub fn git_push_auth_plan(
             "push.recurseSubmodules=no".to_string(),
             "push".to_string(),
             destination.to_string(),
-            format!("{commit_oid}:{branch}"),
+            format!("{commit_oid}:refs/heads/{branch}"),
         ],
         env: vec![
             (
@@ -422,7 +422,7 @@ mod tests {
                 "push.recurseSubmodules=no",
                 "push",
                 "https://scope.example/git/adam/random",
-                "1234567890123456789012345678901234567890:main"
+                "1234567890123456789012345678901234567890:refs/heads/main"
             ]
         );
         assert!(!plan.args.iter().any(|arg| arg.contains("scope_cli_secret")));
