@@ -90,7 +90,10 @@ fn push_refuses_missing_config_before_remote_lookup() {
         stderr.contains("commit .scope/repo.json before running scope push"),
         "{stderr}"
     );
-    assert!(!stderr.contains("Scope remote 'scope' is not configured"), "{stderr}");
+    assert!(
+        !stderr.contains("Scope remote 'scope' is not configured"),
+        "{stderr}"
+    );
     assert!(!stderr.contains("start browser login"), "{stderr}");
 }
 
@@ -126,7 +129,10 @@ fn push_refuses_invalid_config_before_remote_lookup() {
         stderr.contains("repo config kind must be scope.repo-config"),
         "{stderr}"
     );
-    assert!(!stderr.contains("Scope remote 'scope' is not configured"), "{stderr}");
+    assert!(
+        !stderr.contains("Scope remote 'scope' is not configured"),
+        "{stderr}"
+    );
     assert!(!stderr.contains("start browser login"), "{stderr}");
 }
 
@@ -144,10 +150,15 @@ fn push_refuses_uncommitted_config_before_remote_lookup() {
     assert_failure(&output, "scope push with uncommitted config");
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(
-        stderr.contains(".scope/repo.json has uncommitted changes; commit it before running scope push"),
+        stderr.contains(
+            ".scope/repo.json has uncommitted changes; commit it before running scope push"
+        ),
         "{stderr}"
     );
-    assert!(!stderr.contains("Scope remote 'scope' is not configured"), "{stderr}");
+    assert!(
+        !stderr.contains("Scope remote 'scope' is not configured"),
+        "{stderr}"
+    );
     assert!(!stderr.contains("start browser login"), "{stderr}");
 }
 
