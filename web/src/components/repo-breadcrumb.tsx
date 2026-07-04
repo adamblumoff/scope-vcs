@@ -1,11 +1,10 @@
 import type { RepoParams } from '@/api/types'
 import { Link } from '@tanstack/react-router'
 
-type RepoSection = 'history' | 'review' | 'settings'
+type RepoSection = 'history' | 'settings'
 
 const SECTION_LABEL: Record<RepoSection, string> = {
   history: 'History',
-  review: 'Review',
   settings: 'Settings',
 }
 

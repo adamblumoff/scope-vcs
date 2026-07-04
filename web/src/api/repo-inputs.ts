@@ -5,59 +5,8 @@ import type {
   RepoInviteTokenInput,
   RepoMemberPermissions,
   RepoParams,
-  SetRepoFileVisibilityInput,
   UpdateRepoMemberInput,
-  UpdateRepoSettingsInput,
 } from './types'
-
-export function parseSetRepoFileVisibilityInput(
-  input: unknown,
-): SetRepoFileVisibilityInput {
-  const data = input as Partial<SetRepoFileVisibilityInput> | null
-  const { owner, repo } = parseRepoParamsInput(data)
-  const paths = Array.isArray(data?.paths)
-    ? data.paths.flatMap((path) => {
-        if (typeof path !== 'string') {
-          return []
-        }
-
-        const trimmed = path.trim()
-        return trimmed ? [trimmed] : []
-      })
-    : []
-  const visibility = data?.visibility === 'Public' ? 'Public' : 'Private'
-
-  if (!owner || !repo) {
-    throw new Error('Repository route is incomplete.')
-  }
-
-  if (paths.length === 0) {
-    throw new Error('At least one file path is required.')
-  }
-
-  return { owner, repo, paths, visibility }
-}
-
-export function parseUpdateRepoSettingsInput(
-  input: unknown,
-): UpdateRepoSettingsInput {
-  const data = input as Partial<UpdateRepoSettingsInput> | null
-  const { owner, repo } = parseRepoParamsInput(data)
-  const defaultNewFileVisibility =
-    data?.default_new_file_visibility === 'Public' ? 'Public' : 'Private'
-
-  if (!owner || !repo) {
-    throw new Error('Repository settings route is incomplete.')
-  }
-
-  return {
-    owner,
-    repo,
-    default_new_file_visibility: defaultNewFileVisibility,
-    review_pushes_before_applying:
-      data?.review_pushes_before_applying !== false,
-  }
-}
 
 export function parseCreateRepoInviteInput(
   input: unknown,
@@ -152,9 +101,8 @@ export function parseRepoInviteTokenInput(
 function parseMemberPermissions(input: unknown): RepoMemberPermissions {
   const data = input as Partial<RepoMemberPermissions> | null
   return {
-    can_apply_changes: data?.can_apply_changes === true,
-    can_change_file_visibility:
-      data?.can_change_file_visibility === true,
+    can_apply_changes: false,
+    can_change_file_visibility: false,
     can_push: data?.can_push === true,
   }
 }

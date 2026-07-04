@@ -350,24 +350,10 @@ async fn logged_in_non_member_reads_empty_public_repo_as_public() {
             .unwrap()
             .is_empty()
     );
-
-    let settings_response = app
-        .oneshot(
-            Request::builder()
-                .method("GET")
-                .uri("/v1/repos/owner/repo/settings")
-                .header(AUTHORIZATION, other_auth)
-                .body(Body::empty())
-                .unwrap(),
-        )
-        .await
-        .unwrap();
-
-    assert_eq!(settings_response.status(), StatusCode::FORBIDDEN);
 }
 
 #[tokio::test]
-async fn deleted_public_file_no_longer_makes_private_repo_visible() {
+async fn deleted_public_file_keeps_public_history_readable_with_empty_tree() {
     let state = test_state_with_repo();
     {
         let mut repo = test_repo(&test_owner_id());
@@ -422,7 +408,8 @@ async fn deleted_public_file_no_longer_makes_private_repo_visible() {
         .await
         .unwrap();
 
-    assert_eq!(response.status(), StatusCode::NOT_FOUND);
+    assert_eq!(response.status(), StatusCode::OK);
+    assert!(response_json(response).await.as_array().unwrap().is_empty());
 }
 
 #[test]
@@ -643,7 +630,7 @@ fn public_git_projection_starts_at_private_to_public_transition() {
 }
 
 #[test]
-fn public_git_projection_drops_history_after_public_to_private_transition() {
+fn public_git_projection_keeps_history_after_public_to_private_transition() {
     let owner_id = test_owner_id();
     let mut policy = Policy::new(Visibility::Public);
     policy
@@ -683,7 +670,21 @@ fn public_git_projection_drops_history_after_public_to_private_transition() {
             },
         ],
     };
-    let projection = project_graph(&policy, &graph, &[], ProjectionViewKey::Public);
+    let projection = project_graph(
+        &policy,
+        &graph,
+        &[VisibilityEvent {
+            id: "vis_1".to_string(),
+            after_commit_id: Some("rv1".to_string()),
+            source_commit_id: Some("rv2".to_string()),
+            author_id: TEST_REPO_OWNER.to_string(),
+            path: ScopePath::parse("/README.md").unwrap(),
+            old_visibility: Visibility::Public,
+            new_visibility: Visibility::Private,
+            current_content: Some(source_blob("private readme")),
+        }],
+        ProjectionViewKey::Public,
+    );
     let cache_root = std::env::temp_dir().join(format!(
         "scope-vcs-git-public-to-private-test-{}-{}",
         std::process::id(),
@@ -707,7 +708,8 @@ fn public_git_projection_drops_history_after_public_to_private_transition() {
     )
     .unwrap();
 
-    assert!(!history.contains("public readme"));
+    assert!(history.contains("public readme"));
+    assert!(!history.contains("private readme"));
     assert!(!tree.contains("README.md"));
     let _ = fs::remove_dir_all(&cache_root);
 }

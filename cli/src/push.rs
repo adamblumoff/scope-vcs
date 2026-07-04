@@ -1,5 +1,7 @@
 use crate::{
-    api::{RepoPublicationState, create_clone_credential, get_repo},
+    api::{
+        RepoPublicationState, RepoSummaryResponse, RepositoryActor, create_push_intent, get_repo,
+    },
     git_repo::{git_remote_push_url, push_head_with_bearer},
 };
 use anyhow::{Context, bail};
@@ -40,9 +42,40 @@ pub fn push_authenticated_remote(
     api_url: &str,
     session_token: &str,
     target: &ScopePushTarget,
+    reviewed_head_oid: &str,
 ) -> anyhow::Result<ScopePushOutcome> {
     let repo = get_repo(client, api_url, session_token, &target.owner, &target.repo)?;
-    ensure_repo_can_receive_push(
+    if repo.lifecycle_state == RepoPublicationState::Unpublished {
+        ensure_unpublished_repo_can_receive_first_push(
+            &target.owner,
+            &target.repo,
+            repo.pending_import_pending,
+            repo.access.actor,
+        )?;
+        let intent = create_push_intent(
+            client,
+            api_url,
+            session_token,
+            &target.owner,
+            &target.repo,
+            reviewed_head_oid,
+        )?;
+        push_head_with_bearer(
+            &target.push_url,
+            reviewed_head_oid,
+            DEFAULT_SCOPE_BRANCH,
+            session_token,
+            &intent.token,
+        )?;
+        let repo = get_repo(client, api_url, session_token, &target.owner, &target.repo)?;
+        return Ok(ScopePushOutcome {
+            owner: repo.owner_handle,
+            repo: repo.name,
+            staged_update_pending: repo.staged_update_pending || repo.push_blocked_by_staged_update,
+        });
+    }
+
+    ensure_published_repo_can_receive_push(
         &target.owner,
         &target.repo,
         repo.lifecycle_state,
@@ -51,13 +84,68 @@ pub fn push_authenticated_remote(
         repo.push_blocked_by_staged_update,
     )?;
 
-    let credential =
-        create_clone_credential(client, api_url, session_token, &target.owner, &target.repo)?;
-    let git_secret = credential
-        .token
-        .secret
-        .context("API did not return a Git credential")?;
-    push_head_with_bearer(&target.push_url, DEFAULT_SCOPE_BRANCH, &git_secret)?;
+    let intent = create_push_intent(
+        client,
+        api_url,
+        session_token,
+        &target.owner,
+        &target.repo,
+        reviewed_head_oid,
+    )?;
+    push_head_with_bearer(
+        &target.push_url,
+        reviewed_head_oid,
+        DEFAULT_SCOPE_BRANCH,
+        session_token,
+        &intent.token,
+    )?;
+
+    let repo = get_repo(client, api_url, session_token, &target.owner, &target.repo)?;
+    Ok(ScopePushOutcome {
+        owner: repo.owner_handle,
+        repo: repo.name,
+        staged_update_pending: repo.staged_update_pending || repo.push_blocked_by_staged_update,
+    })
+}
+
+pub fn ensure_scope_remote_can_receive_push(
+    target: &ScopePushTarget,
+    repo: &RepoSummaryResponse,
+) -> anyhow::Result<()> {
+    if repo.lifecycle_state == RepoPublicationState::Unpublished {
+        ensure_unpublished_repo_can_receive_first_push(
+            &target.owner,
+            &target.repo,
+            repo.pending_import_pending,
+            repo.access.actor,
+        )
+    } else {
+        ensure_published_repo_can_receive_push(
+            &target.owner,
+            &target.repo,
+            repo.lifecycle_state,
+            repo.pending_import_pending,
+            repo.access.can_push,
+            repo.push_blocked_by_staged_update,
+        )
+    }
+}
+
+pub fn push_reviewed_head_with_intent(
+    client: &Client,
+    api_url: &str,
+    session_token: &str,
+    target: &ScopePushTarget,
+    reviewed_head_oid: &str,
+    push_intent_token: &str,
+) -> anyhow::Result<ScopePushOutcome> {
+    push_head_with_bearer(
+        &target.push_url,
+        reviewed_head_oid,
+        DEFAULT_SCOPE_BRANCH,
+        session_token,
+        push_intent_token,
+    )?;
 
     let repo = get_repo(client, api_url, session_token, &target.owner, &target.repo)?;
     Ok(ScopePushOutcome {
@@ -114,7 +202,22 @@ fn redacted_url(url: &Url) -> String {
     redacted.to_string()
 }
 
-fn ensure_repo_can_receive_push(
+fn ensure_unpublished_repo_can_receive_first_push(
+    owner: &str,
+    repo: &str,
+    pending_import_pending: bool,
+    actor: RepositoryActor,
+) -> anyhow::Result<()> {
+    if pending_import_pending {
+        bail!("repo {owner}/{repo} is blocked by stale pending import state");
+    }
+    if actor != RepositoryActor::Owner {
+        bail!("you do not have owner access to first-push {owner}/{repo}");
+    }
+    Ok(())
+}
+
+fn ensure_published_repo_can_receive_push(
     owner: &str,
     repo: &str,
     lifecycle_state: RepoPublicationState,
@@ -125,9 +228,7 @@ fn ensure_repo_can_receive_push(
     match lifecycle_state {
         RepoPublicationState::Unpublished => {
             if pending_import_pending {
-                bail!(
-                    "repo {owner}/{repo} has a pending review; publish or reject it before pushing again"
-                );
+                bail!("repo {owner}/{repo} is blocked by stale pending import state");
             }
             bail!("repo {owner}/{repo} is waiting for its first push. Run: scope init");
         }
@@ -135,9 +236,7 @@ fn ensure_repo_can_receive_push(
     }
 
     if push_blocked_by_staged_update {
-        bail!(
-            "repo {owner}/{repo} has a pending review; publish or reject it before pushing again"
-        );
+        bail!("repo {owner}/{repo} is blocked by stale staged update state");
     }
 
     if !can_push {

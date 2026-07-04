@@ -1,10 +1,8 @@
 use crate::domain::{
-    policy::{Principal, ScopePath, Visibility},
+    policy::{ScopePath, Visibility},
     projection_views::{
         ProjectionAudience, ProjectionPreviewCommit, ProjectionPreviewCommitVisibility,
         ProjectionPreviewFile, ProjectionPreviewSummary, ProjectionSource, ProjectionViewFile,
-        files_for_visibility_update as domain_files_for_visibility_update,
-        pending_import_files as domain_pending_import_files,
         pending_scope_path as domain_pending_scope_path, projection_preview,
     },
     store::StoredRepository,
@@ -36,14 +34,12 @@ impl From<ProjectionPreviewAudience> for ProjectionAudience {
 #[cfg_attr(test, ts(rename_all = "lowercase"))]
 pub(crate) enum ProjectionPreviewSource {
     Live,
-    Review,
 }
 
 impl From<ProjectionPreviewSource> for ProjectionSource {
     fn from(source: ProjectionPreviewSource) -> Self {
         match source {
             ProjectionPreviewSource::Live => Self::Live,
-            ProjectionPreviewSource::Review => Self::Review,
         }
     }
 }
@@ -144,26 +140,6 @@ pub(crate) fn projection_preview_response(
 
 pub(crate) fn projection_file_responses(files: Vec<ProjectionViewFile>) -> Vec<RepoFileResponse> {
     files.into_iter().map(repo_file_response).collect()
-}
-
-pub(crate) fn pending_import_files(
-    repo: &StoredRepository,
-    principal: &Principal,
-) -> Result<Vec<RepoFileResponse>, ApiError> {
-    Ok(domain_pending_import_files(repo, principal)?
-        .into_iter()
-        .map(repo_file_response)
-        .collect())
-}
-
-pub(crate) fn files_for_visibility_update(
-    repo: &StoredRepository,
-    principal: &Principal,
-) -> Result<Vec<RepoFileResponse>, ApiError> {
-    Ok(domain_files_for_visibility_update(repo, principal)?
-        .into_iter()
-        .map(repo_file_response)
-        .collect())
 }
 
 pub(crate) fn pending_scope_path(path: &str) -> Result<ScopePath, ApiError> {

@@ -21,12 +21,6 @@ pub fn cli_device_login_poll_path(device_code: &str) -> String {
     format!("/v1/cli/device-login/{device_code}/poll")
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
-pub enum Visibility {
-    Private,
-    Public,
-}
-
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq)]
 #[cfg_attr(test, derive(ts_rs::TS))]
 pub enum RepositoryActor {
@@ -136,7 +130,6 @@ pub struct UserResponse {
 #[derive(Serialize)]
 struct CreateRepoRequest {
     name: String,
-    visibility: Visibility,
 }
 
 #[derive(Deserialize)]
@@ -169,7 +162,6 @@ pub struct RepoInitResponse {
     pub remote_name: String,
     pub push_branch: String,
     pub push_token: Option<GitPushTokenResponse>,
-    pub review_url: String,
 }
 
 #[derive(Deserialize)]
@@ -186,6 +178,18 @@ pub struct RepoCloneCredentialResponse {
 #[derive(Deserialize)]
 pub struct GitCloneTokenResponse {
     pub secret: Option<String>,
+}
+
+#[derive(Serialize)]
+struct CreatePushIntentRequest {
+    head_oid: String,
+}
+
+#[derive(Deserialize)]
+pub struct CreatePushIntentResponse {
+    pub token: String,
+    pub base_head_oid: Option<String>,
+    pub expires_at_unix: u64,
 }
 
 pub fn api_url() -> String {
@@ -255,12 +259,11 @@ pub fn create_repo(
     api_url: &str,
     session_token: &str,
     name: String,
-    visibility: Visibility,
 ) -> anyhow::Result<CreateRepoResponse> {
     client
         .post(format!("{api_url}/v1/repos"))
         .bearer_auth(session_token)
-        .json(&CreateRepoRequest { name, visibility })
+        .json(&CreateRepoRequest { name })
         .send()
         .context("create Scope repository")?
         .error_for_status()
@@ -330,6 +333,42 @@ pub fn create_clone_credential(
         .with_context(|| format!("create clone credential for {owner}/{repo}"))?
         .json()
         .context("parse clone credential response")
+}
+
+pub fn create_push_intent(
+    client: &Client,
+    api_url: &str,
+    session_token: &str,
+    owner: &str,
+    repo: &str,
+    head_oid: &str,
+) -> anyhow::Result<CreatePushIntentResponse> {
+    let response = client
+        .post(format!("{api_url}/v1/repos/{owner}/{repo}/push-intents"))
+        .bearer_auth(session_token)
+        .json(&CreatePushIntentRequest {
+            head_oid: head_oid.to_string(),
+        })
+        .send()
+        .with_context(|| format!("create push intent for {owner}/{repo}"))?;
+    match response.status() {
+        StatusCode::UNAUTHORIZED => {
+            anyhow::bail!("not signed in; run scope login")
+        }
+        StatusCode::FORBIDDEN => {
+            anyhow::bail!("you do not have write access to {owner}/{repo}")
+        }
+        StatusCode::NOT_FOUND => {
+            anyhow::bail!("repo {owner}/{repo} not found")
+        }
+        _ => {}
+    }
+
+    response
+        .error_for_status()
+        .with_context(|| format!("create push intent for {owner}/{repo}"))?
+        .json()
+        .context("parse push intent response")
 }
 
 pub fn rollback_created_repo(

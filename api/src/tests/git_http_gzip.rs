@@ -17,9 +17,11 @@ async fn receive_pack_accepts_gzip_encoded_request_body() {
         repo.first_push_token = Some(token);
     }
     let source = temp_git_repo("gzip-first-push");
+    write_scope_repo_config(&source, Visibility::Public);
     fs::write(source.join("README.md"), "hello over gzip receive-pack\n").unwrap();
-    run_git(Some(&source), &["add", "README.md"], "add readme").unwrap();
+    run_git(Some(&source), &["add", "-A"], "add readme").unwrap();
     commit_all(&source, "initial");
+    let push_intent = create_test_push_intent(&state, &test_owner_id(), &git_head_oid(&source));
 
     let response = router(state.clone())
         .oneshot(
@@ -28,6 +30,7 @@ async fn receive_pack_accepts_gzip_encoded_request_body() {
                 .uri("/git/owner/repo/git-receive-pack")
                 .header(CONTENT_TYPE, "application/x-git-receive-pack-request")
                 .header(CONTENT_ENCODING, "gzip")
+                .header("x-scope-push-intent", push_intent)
                 .header(
                     AUTHORIZATION,
                     format!("Basic {}", BASE64.encode(format!("scope:{secret}"))),
@@ -50,18 +53,62 @@ async fn receive_pack_accepts_gzip_encoded_request_body() {
     let repo = find_repo(&state, TEST_REPO_OWNER, TEST_REPO_NAME).unwrap();
     assert_eq!(
         repo.record.publication_state,
-        RepoPublicationState::Unpublished
+        RepoPublicationState::Published
     );
-    let pending = repo.pending_import.as_ref().unwrap();
-    assert_eq!(pending.files.len(), 1);
-    assert_eq!(pending.files[0].path, "README.md");
-    assert!(
-        repo.first_push_token
-            .as_ref()
-            .unwrap()
-            .used_at_unix
-            .is_some()
+    assert!(repo.pending_import.is_none());
+    assert!(repo.first_push_token.is_none());
+    assert_eq!(
+        repo.live_tree()
+            .get(&ScopePath::parse("/README.md").unwrap())
+            .map(blob_content)
+            .as_deref(),
+        Some("hello over gzip receive-pack\n")
     );
+
+    let _ = fs::remove_dir_all(source);
+}
+
+#[tokio::test]
+async fn receive_pack_cleans_uploaded_blobs_when_push_intent_does_not_match_head() {
+    let state = test_state_with_repo();
+    let (secret, token) = generate_first_push_token(&test_owner_id()).unwrap();
+    {
+        let mut catalog = lock_catalog(&state).unwrap();
+        let repo = catalog.repositories.get_mut(TEST_REPO_ID).unwrap();
+        repo.record.publication_state = RepoPublicationState::Unpublished;
+        repo.first_push_token = Some(token);
+    }
+    let source = temp_git_repo("intent-head-mismatch-first-push");
+    write_scope_repo_config(&source, Visibility::Public);
+    let readme = b"intent mismatch should be cleaned\n";
+    fs::write(source.join("README.md"), readme).unwrap();
+    run_git(Some(&source), &["add", "-A"], "add readme").unwrap();
+    commit_all(&source, "initial");
+    let push_intent = create_test_push_intent(&state, &test_owner_id(), TEST_PUSH_HEAD_OID);
+
+    let response = router(state.clone())
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/git/owner/repo/git-receive-pack")
+                .header(CONTENT_TYPE, "application/x-git-receive-pack-request")
+                .header("x-scope-push-intent", push_intent)
+                .header(
+                    AUTHORIZATION,
+                    format!("Basic {}", BASE64.encode(format!("scope:{secret}"))),
+                )
+                .body(Body::from(receive_pack_first_push_request(&source)))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::FORBIDDEN);
+    assert!(!MemoryObjectStore::new().contains_bytes(readme));
+    let rx_root = state.git_cache_root().unwrap().join("git-rx");
+    if rx_root.exists() {
+        assert!(fs::read_dir(rx_root).unwrap().next().is_none());
+    }
 
     let _ = fs::remove_dir_all(source);
 }

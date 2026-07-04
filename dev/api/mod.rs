@@ -13,6 +13,7 @@ use crate::{
     persistence::ensure_private_dir,
     repo_events::RepoChangeBus,
     runtime_budgets::{BudgetedObjectStore, RuntimeBudgets},
+    state::push_intent_signing_key,
 };
 use axum::{Json, extract::State};
 use std::sync::Arc;
@@ -24,6 +25,8 @@ pub fn app_state_from_env() -> anyhow::Result<AppState> {
     let repo_root = git_repo_root();
     let data_dir = data_dir(&repo_root);
     ensure_private_dir(&data_dir).map_err(|error| anyhow::anyhow!(error.message))?;
+    let push_intent_signing_key =
+        push_intent_signing_key(&data_dir).map_err(|error| anyhow::anyhow!(error.message))?;
 
     let raw_object_store = Arc::new(EncryptedObjectStore::from_env(Arc::new(
         file_object_store::FileObjectStore::from_env(&data_dir),
@@ -52,6 +55,7 @@ pub fn app_state_from_env() -> anyhow::Result<AppState> {
         runtime_budgets,
         operator_token: non_empty_env(SCOPE_OPERATOR_TOKEN_ENV).map(Arc::from),
         repo_events,
+        push_intent_signing_key,
     })
 }
 

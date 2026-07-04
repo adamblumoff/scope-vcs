@@ -37,16 +37,6 @@ const permissionLabels = [
     key: 'can_push',
     label: 'Push changes',
   },
-  {
-    description: 'Allows public/private file visibility decisions.',
-    key: 'can_change_file_visibility',
-    label: 'Change file visibility',
-  },
-  {
-    description: 'Allows applying or rejecting staged updates.',
-    key: 'can_apply_changes',
-    label: 'Apply changes',
-  },
 ] as const
 
 type PermissionKey = (typeof permissionLabels)[number]['key']
@@ -149,7 +139,7 @@ export function RepositoryMembersSection({
         description={
           canInvite
             ? 'Invite members by email and assign only the extra actions they need.'
-            : 'Members can be invited after the repository is published.'
+            : 'Members can be invited after the first Scope push is applied.'
         }
         icon={<MailPlus className="size-4" />}
         title="Invite member"
@@ -254,8 +244,8 @@ function InviteMemberForm({
       </div>
 
       <div className="rounded-lg border border-amber-400/50 bg-amber-100 px-3 py-2 text-sm leading-5 text-amber-900 dark:bg-amber-400/10 dark:text-amber-100">
-        Members always read private files once they accept. These toggles grant
-        additional actions only.
+        Members always read private files once they accept. This toggle grants
+        repository push access only.
       </div>
 
       <PermissionEditor

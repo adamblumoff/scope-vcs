@@ -92,15 +92,16 @@ async fn private_projection_cache_key_is_shared_by_owner_and_member() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn private_clone_tokens_share_live_raw_snapshot_head() {
+async fn private_clone_tokens_share_applied_raw_snapshot_head() {
     let state = test_state_with_repo();
     let owner_id = test_owner_id();
     let member_id = "user_member".to_string();
     let (owner_secret, owner_token) = generate_git_clone_token(&owner_id).unwrap();
     let (member_secret, member_token) = generate_git_clone_token(&member_id).unwrap();
     let source = temp_git_repo("owner-upload-snapshot");
+    write_scope_repo_config(&source, Visibility::Private);
     fs::write(source.join("README.md"), "raw snapshot").unwrap();
-    run_git(Some(&source), &["add", "README.md"], "add readme").unwrap();
+    run_git(Some(&source), &["add", "-A"], "add readme").unwrap();
     commit_all(&source, "raw snapshot commit");
     let bare = std::env::temp_dir().join(format!(
         "scope-vcs-owner-upload-snapshot-bare-{}-{}",
@@ -181,7 +182,7 @@ async fn private_clone_tokens_share_live_raw_snapshot_head() {
         &test_owner_id(),
     )
     .unwrap();
-    assert_eq!(persisted, PersistedReceivePackUpdate::Staged);
+    assert_eq!(persisted, PersistedReceivePackUpdate::Applied);
 
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();
@@ -229,10 +230,11 @@ async fn private_clone_tokens_share_live_raw_snapshot_head() {
     let member_head =
         git_stdout_text(&member_clone, &["rev-parse", "HEAD"], "member clone head").unwrap();
 
-    assert_eq!(owner_head, expected_head);
-    assert_eq!(member_head, expected_head);
+    assert_ne!(owner_head, expected_head);
+    assert_ne!(member_head, expected_head);
+    assert_eq!(owner_head, expected_staged_head);
+    assert_eq!(member_head, expected_staged_head);
     assert_eq!(owner_head, member_head);
-    assert_ne!(owner_head, expected_staged_head);
 
     server.abort();
     let _ = fs::remove_dir_all(&source);

@@ -1,5 +1,6 @@
 use super::{
     policy::{Policy, ScopePath, Visibility},
+    repo_config::is_reserved_config_path,
     store::{RepositoryAccess, RepositoryActor, SourceBlob},
 };
 use serde::{Deserialize, Serialize};
@@ -51,6 +52,7 @@ pub struct SourceGraph {
 pub struct ProjectedChange {
     pub path: ScopePath,
     pub new_content: Option<SourceBlob>,
+    pub visibility: Visibility,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -99,20 +101,20 @@ pub struct Projection {
 
 impl Projection {
     pub fn visible_paths(&self) -> Vec<String> {
-        let mut paths = self
-            .commits
-            .iter()
-            .flat_map(|commit| commit.changes.iter())
-            .map(|change| change.path.as_str().to_string())
-            .collect::<Vec<_>>();
-        paths.sort();
-        paths.dedup();
-        paths
+        let mut live = BTreeMap::new();
+        for change in self.commits.iter().flat_map(|commit| commit.changes.iter()) {
+            if change.new_content.is_some() {
+                live.insert(change.path.as_str().to_string(), ());
+            } else {
+                live.remove(change.path.as_str());
+            }
+        }
+        live.into_keys().collect::<Vec<_>>()
     }
 }
 
 pub fn project_graph(
-    policy: &Policy,
+    _policy: &Policy,
     graph: &SourceGraph,
     visibility_events: &[VisibilityEvent],
     view_key: ProjectionViewKey,
@@ -123,48 +125,36 @@ pub fn project_graph(
 
     let mut commits = Vec::new();
     let mut last_visible: Option<String> = None;
-    let commit_positions = graph
-        .commits
-        .iter()
-        .enumerate()
-        .map(|(index, commit)| (commit.id.as_str(), index))
-        .collect::<BTreeMap<_, _>>();
-    let readable_epoch_starts = readable_epoch_starts(policy, visibility_events, &commit_positions);
-    let baseline_events =
-        baseline_events_by_anchor(policy, visibility_events, &readable_epoch_starts);
+    let boundary_events = projection_boundary_events_by_anchor(visibility_events);
 
-    process_baseline_events_after(
+    process_projection_boundary_events_after(
         &mut commits,
         &mut last_visible,
-        &baseline_events,
+        &boundary_events,
         None,
         view_key,
     );
 
-    for (commit_index, logical) in graph.commits.iter().enumerate() {
+    for logical in &graph.commits {
         let visible_changes = logical
             .changes
             .iter()
             .filter(|change| {
-                can_read_historical_change(policy, &change.path, change.visibility)
-                    && is_change_in_readable_epoch(
-                        &readable_epoch_starts,
-                        &change.path,
-                        commit_index,
-                    )
+                change.visibility == Visibility::Public && !is_reserved_config_path(&change.path)
             })
             .map(|change| ProjectedChange {
                 path: change.path.clone(),
                 new_content: change.new_content.clone(),
+                visibility: change.visibility,
             })
             .collect::<Vec<_>>();
         let visible_content_count = visible_changes.len();
 
         if visible_changes.is_empty() {
-            process_baseline_events_after(
+            process_projection_boundary_events_after(
                 &mut commits,
                 &mut last_visible,
-                &baseline_events,
+                &boundary_events,
                 Some(logical.id.as_str()),
                 view_key,
             );
@@ -195,10 +185,10 @@ pub fn project_graph(
         });
 
         last_visible = Some(projected_id);
-        process_baseline_events_after(
+        process_projection_boundary_events_after(
             &mut commits,
             &mut last_visible,
-            &baseline_events,
+            &boundary_events,
             Some(logical.id.as_str()),
             view_key,
         );
@@ -222,6 +212,7 @@ fn project_private_graph(graph: &SourceGraph, view_key: ProjectionViewKey) -> Pr
             .map(|change| ProjectedChange {
                 path: change.path.clone(),
                 new_content: change.new_content.clone(),
+                visibility: change.visibility,
             })
             .collect::<Vec<_>>();
         if changes.is_empty() {
@@ -254,143 +245,93 @@ fn projected_id(view_key: ProjectionViewKey, source_id: &str, sequence: usize) -
     format!("pv_{}_{}_{}", view_key.as_str(), source_id, sequence)
 }
 
-fn can_read_historical_change(policy: &Policy, path: &ScopePath, visibility: Visibility) -> bool {
-    match visibility {
-        Visibility::Public => policy.can_read(path, false),
-        Visibility::Private => false,
-    }
+struct ProjectionBoundaryEventsByAnchor<'a> {
+    before_graph: Vec<ProjectionBoundaryEvent<'a>>,
+    after_commits: BTreeMap<&'a str, Vec<ProjectionBoundaryEvent<'a>>>,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
-struct ReadableEpochStart {
-    source_commit_index: Option<usize>,
-    baseline_event_id: Option<String>,
+#[derive(Clone, Copy)]
+struct ProjectionBoundaryEvent<'a> {
+    event: &'a VisibilityEvent,
+    new_content: Option<&'a SourceBlob>,
 }
 
-fn readable_epoch_starts(
-    policy: &Policy,
-    events: &[VisibilityEvent],
-    commit_positions: &BTreeMap<&str, usize>,
-) -> BTreeMap<ScopePath, ReadableEpochStart> {
-    let mut starts = BTreeMap::new();
-    for event in events {
-        if !policy.can_read(&event.path, false) {
-            continue;
-        }
-
-        let old_readable = visibility_readable_for_event(policy, &event.path, event.old_visibility);
-        let new_readable = visibility_readable_for_event(policy, &event.path, event.new_visibility);
-        if old_readable || !new_readable {
-            continue;
-        }
-
-        let source_commit_index = event
-            .source_commit_id
-            .as_deref()
-            .and_then(|id| commit_positions.get(id).copied())
-            .or_else(|| {
-                event
-                    .after_commit_id
-                    .as_deref()
-                    .and_then(|id| commit_positions.get(id).map(|index| index + 1))
-            })
-            .or(Some(0));
-        starts.insert(
-            event.path.clone(),
-            ReadableEpochStart {
-                source_commit_index,
-                baseline_event_id: event.source_commit_id.is_none().then(|| event.id.clone()),
-            },
-        );
-    }
-    starts
-}
-
-fn visibility_readable_for_event(
-    policy: &Policy,
-    path: &ScopePath,
-    visibility: Visibility,
-) -> bool {
-    match visibility {
-        Visibility::Public => true,
-        Visibility::Private => {
-            policy.effective_visibility(path) == Visibility::Private && policy.can_read(path, false)
-        }
-    }
-}
-
-fn is_change_in_readable_epoch(
-    starts: &BTreeMap<ScopePath, ReadableEpochStart>,
-    path: &ScopePath,
-    commit_index: usize,
-) -> bool {
-    starts
-        .get(path)
-        .and_then(|start| start.source_commit_index)
-        .is_none_or(|start_index| commit_index >= start_index)
-}
-
-struct BaselineEventsByAnchor<'a> {
-    before_graph: Vec<&'a VisibilityEvent>,
-    after_commits: BTreeMap<&'a str, Vec<&'a VisibilityEvent>>,
-}
-
-fn baseline_events_by_anchor<'a>(
-    policy: &Policy,
+fn projection_boundary_events_by_anchor<'a>(
     events: &'a [VisibilityEvent],
-    starts: &BTreeMap<ScopePath, ReadableEpochStart>,
-) -> BaselineEventsByAnchor<'a> {
-    let mut events_by_anchor = BaselineEventsByAnchor {
+) -> ProjectionBoundaryEventsByAnchor<'a> {
+    let mut events_by_anchor = ProjectionBoundaryEventsByAnchor {
         before_graph: Vec::new(),
         after_commits: BTreeMap::new(),
     };
-    for event in events.iter().filter(|event| {
-        starts
-            .get(&event.path)
-            .and_then(|start| start.baseline_event_id.as_deref())
-            == Some(event.id.as_str())
-            && policy.can_read(&event.path, false)
-            && event.current_content.is_some()
-    }) {
+    for event in events
+        .iter()
+        .filter(|event| !is_reserved_config_path(&event.path))
+    {
+        let boundary = match (event.old_visibility, event.new_visibility) {
+            (Visibility::Private, Visibility::Public) if event.source_commit_id.is_none() => {
+                let Some(content) = event.current_content.as_ref() else {
+                    continue;
+                };
+                ProjectionBoundaryEvent {
+                    event,
+                    new_content: Some(content),
+                }
+            }
+            (Visibility::Public, Visibility::Private) => ProjectionBoundaryEvent {
+                event,
+                new_content: None,
+            },
+            _ => continue,
+        };
         match event.after_commit_id.as_deref() {
             Some(after_commit_id) => events_by_anchor
                 .after_commits
                 .entry(after_commit_id)
                 .or_default()
-                .push(event),
-            None => events_by_anchor.before_graph.push(event),
+                .push(boundary),
+            None => events_by_anchor.before_graph.push(boundary),
         }
     }
     events_by_anchor
 }
 
-fn process_baseline_events_after(
+fn process_projection_boundary_events_after(
     commits: &mut Vec<ProjectedCommit>,
     last_visible: &mut Option<String>,
-    baseline_events: &BaselineEventsByAnchor<'_>,
+    boundary_events: &ProjectionBoundaryEventsByAnchor<'_>,
     after_commit_id: Option<&str>,
     view_key: ProjectionViewKey,
 ) {
     let events = match after_commit_id {
-        Some(after_commit_id) => baseline_events
+        Some(after_commit_id) => boundary_events
             .after_commits
             .get(after_commit_id)
             .map(Vec::as_slice)
             .unwrap_or(&[]),
-        None => baseline_events.before_graph.as_slice(),
+        None => boundary_events.before_graph.as_slice(),
     };
 
-    for event in events {
+    for boundary in events {
+        let event = boundary.event;
         let projected_id = projected_id(view_key, &event.id, commits.len() + 1);
         commits.push(ProjectedCommit {
             projected_id: projected_id.clone(),
             logical_commit_id: event.id.clone(),
             parent_projected_id: last_visible.clone(),
             author: None,
-            message: "Projection baseline".to_string(),
+            message: if boundary.new_content.is_some() {
+                "Projection baseline".to_string()
+            } else {
+                "Projection visibility boundary".to_string()
+            },
             changes: vec![ProjectedChange {
                 path: event.path.clone(),
-                new_content: event.current_content.clone(),
+                new_content: boundary.new_content.cloned(),
+                visibility: if boundary.new_content.is_some() {
+                    event.new_visibility
+                } else {
+                    event.old_visibility
+                },
             }],
         });
         *last_visible = Some(projected_id);

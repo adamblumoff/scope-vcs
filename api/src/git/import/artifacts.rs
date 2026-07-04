@@ -1,14 +1,22 @@
 use super::repo_io::{
-    describe_refs, git_refs, git_snapshot_from_repo, git_stdout_text, git_tree_blob_contents,
-    git_tree_entries, git_tree_files, pushed_commit_message, put_git_blob_contents,
+    PendingGitTreeFile, describe_refs, git_refs, git_snapshot_from_repo, git_tree_blob_contents,
+    git_tree_entries, pushed_commit_message, put_git_blob_contents,
 };
+#[cfg(test)]
+use super::repo_io::{git_stdout_text, git_tree_files};
 use super::staging::{ReceivePackFileChange, ReceivePackUpdate, ensure_default_branch};
 use crate::domain::projection_views::pending_scope_path;
+use crate::domain::repo_config::{REPO_CONFIG_PATH, RepoConfig, RepoConfigError};
 use crate::domain::staged_updates::source_content_matches;
-use crate::domain::store::{PendingImport, RepoPublicationState};
-use crate::{error::ApiError, persistence::unix_now, state::AppState, state::find_repo};
+#[cfg(test)]
+use crate::domain::store::PendingImport;
+use crate::domain::store::RepoPublicationState;
+#[cfg(test)]
+use crate::persistence::unix_now;
+use crate::{error::ApiError, state::AppState, state::find_repo};
 use std::{collections::BTreeSet, path::Path as FsPath};
 
+#[cfg(test)]
 pub(crate) fn pending_import_from_staging_repo(
     state: &AppState,
     owner: &str,
@@ -66,6 +74,20 @@ pub(crate) fn receive_pack_update_from_staging_repo(
     staging_repo: &FsPath,
     author_id: &str,
 ) -> Result<ReceivePackUpdate, ApiError> {
+    let repo = find_repo(state, owner, repo_name)?;
+    if repo.record.publication_state != RepoPublicationState::Published {
+        return Err(ApiError::conflict("repo must be published before push"));
+    }
+    reviewed_update_from_staging_repo(state, owner, repo_name, staging_repo, author_id)
+}
+
+pub(crate) fn reviewed_update_from_staging_repo(
+    state: &AppState,
+    owner: &str,
+    repo_name: &str,
+    staging_repo: &FsPath,
+    author_id: &str,
+) -> Result<ReceivePackUpdate, ApiError> {
     let refs = git_refs(staging_repo)?;
     if refs.len() != 1 {
         return Err(ApiError::bad_request(format!(
@@ -76,20 +98,20 @@ pub(crate) fn receive_pack_update_from_staging_repo(
     let (branch, head_oid) = refs.into_iter().next().expect("length checked");
     ensure_default_branch(&branch)?;
     let repo = find_repo(state, owner, repo_name)?;
-    if repo.record.publication_state != RepoPublicationState::Published {
-        return Err(ApiError::conflict("repo must be published before push"));
-    }
     let repo_id = crate::domain::store::repo_id(owner, repo_name);
     let message = pushed_commit_message(staging_repo, &head_oid)?;
     let live_tree = repo.live_tree();
     let pushed_entries = git_tree_entries(staging_repo, &head_oid)?;
+    let changed_contents = git_tree_blob_contents(staging_repo, &pushed_entries)?;
+    let config = repo_config_from_tree(&pushed_entries, &changed_contents)?;
     let mut changes = Vec::new();
     let mut uploaded_file_blobs = Vec::new();
     let mut pushed_paths = BTreeSet::new();
     let mut changed_paths = Vec::new();
     let mut changed_entries = Vec::new();
+    let mut changed_entry_contents = Vec::new();
 
-    for entry in pushed_entries {
+    for (entry, content) in pushed_entries.into_iter().zip(changed_contents) {
         let path = match pending_scope_path(&entry.path) {
             Ok(path) => path,
             Err(error) => {
@@ -112,20 +134,14 @@ pub(crate) fn receive_pack_update_from_staging_repo(
 
         changed_paths.push((path, live_content.cloned()));
         changed_entries.push(entry);
+        changed_entry_contents.push(content);
     }
 
-    let changed_contents = match git_tree_blob_contents(staging_repo, &changed_entries) {
-        Ok(contents) => contents,
-        Err(error) => {
-            crate::state::best_effort_cleanup_rollback_source_blobs(state, &uploaded_file_blobs);
-            return Err(error);
-        }
-    };
     let changed_blobs = match put_git_blob_contents(
         state,
         &repo_id,
         &changed_entries,
-        &changed_contents,
+        &changed_entry_contents,
         &mut uploaded_file_blobs,
     ) {
         Ok(blobs) => blobs,
@@ -165,10 +181,30 @@ pub(crate) fn receive_pack_update_from_staging_repo(
 
     Ok(ReceivePackUpdate {
         branch,
+        head_oid,
+        base_git_snapshot_key: None,
         author_id: author_id.to_string(),
         message,
         git_snapshot,
         uploaded_blobs: uploaded_file_blobs,
         changes,
+        previous_config: None,
+        config,
     })
+}
+
+fn repo_config_from_tree(
+    entries: &[PendingGitTreeFile],
+    contents: &[Vec<u8>],
+) -> Result<RepoConfig, ApiError> {
+    let config_path = REPO_CONFIG_PATH.trim_start_matches('/');
+    let Some((_, bytes)) = entries
+        .iter()
+        .zip(contents)
+        .find(|(entry, _)| entry.path == config_path)
+    else {
+        return Err(ApiError::bad_request(RepoConfigError::Missing));
+    };
+
+    RepoConfig::parse_json(bytes).map_err(ApiError::bad_request)
 }

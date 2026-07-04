@@ -6,13 +6,13 @@ use crate::domain::projection::{
     project_graph,
 };
 use crate::domain::repo_actions::preview_publish_import;
+use crate::domain::repo_config::RepoConfig;
 use crate::domain::staged_updates::apply_staged_update_to_repo;
 use crate::domain::store::{
-    AppCatalog, DEFAULT_GIT_FILE_MODE, EXECUTABLE_GIT_FILE_MODE, FirstPushToken, GitPushToken,
-    PendingImport, PendingImportFile, RepoPublicationState, RepoRecord, RepoSettings,
-    RepoStorageCleanup, RepositoryInvite, RepositoryInviteState, RepositoryMember,
-    RepositoryMemberPermissions, StagedFileChange, StagedFileChangeKind, StagedRepoUpdate,
-    StoredRepository, UserAccount,
+    AppCatalog, DEFAULT_GIT_FILE_MODE, EXECUTABLE_GIT_FILE_MODE, GitPushToken, PendingImport,
+    PendingImportFile, RepoPublicationState, RepoRecord, RepoSettings, RepoStorageCleanup,
+    RepositoryInvite, RepositoryInviteState, RepositoryMember, RepositoryMemberPermissions,
+    StagedFileChange, StagedFileChangeKind, StagedRepoUpdate, StoredRepository, UserAccount,
 };
 use crate::{
     app::router,
@@ -57,14 +57,13 @@ mod git_http_gzip;
 mod git_import_validation;
 mod git_projection_identity;
 mod git_receive;
+mod git_receive_config;
 mod obsolete_routes;
 mod readiness;
 mod repo_cleanup;
 mod repo_events;
 mod repo_lifecycle;
 mod repo_visibility;
-mod review_diff;
-mod review_publish;
 mod runtime_budgets;
 
 const TEST_CLERK_ISSUER: &str = "https://clerk.test";
@@ -74,17 +73,6 @@ const TEST_OWNER_EMAIL: &str = "owner@example.com";
 const TEST_REPO_OWNER: &str = "owner";
 const TEST_REPO_NAME: &str = "repo";
 const TEST_REPO_ID: &str = "owner/repo";
-
-fn reject_staged_update_as_owner(
-    state: &AppState,
-) -> Result<StagedRepoUpdate, crate::error::ApiError> {
-    let rejected =
-        state
-            .metadata
-            .reject_staged_update(TEST_REPO_OWNER, TEST_REPO_NAME, &test_owner_id())?;
-    best_effort_drain_pending_source_blob_deletions(state);
-    Ok(rejected)
-}
 
 const TEST_PRIVATE_KEY: &str = r#"-----BEGIN PRIVATE KEY-----
 MIGHAgEAMBMGByqGSM49AgEGCCqGSM49AwEHBG0wawIBAQQgj30p9gYDpHRqbshS
@@ -227,6 +215,7 @@ fn test_state_with_repo() -> AppState {
         runtime_budgets,
         operator_token: None,
         repo_events: crate::repo_events::RepoChangeBus::default(),
+        push_intent_signing_key: Arc::from(b"scope-test-push-intent-signing-key".as_slice()),
     }
 }
 
@@ -253,6 +242,7 @@ fn test_state_with_metadata(metadata: crate::db::MetadataStore) -> AppState {
         runtime_budgets,
         operator_token: None,
         repo_events: crate::repo_events::RepoChangeBus::default(),
+        push_intent_signing_key: Arc::from(b"scope-test-push-intent-signing-key".as_slice()),
     };
     cache_test_jwks(&state);
     state
@@ -294,12 +284,6 @@ fn assert_text_content(value: &serde_json::Value, expected: &str) {
     assert_eq!(value["text"], expected);
 }
 
-fn assert_binary_content(value: &serde_json::Value, oid: &str, size_bytes: u64) {
-    assert_eq!(value["kind"], "binary");
-    assert_eq!(value["oid"], oid);
-    assert_eq!(value["size_bytes"], size_bytes);
-}
-
 fn temp_git_repo(label: &str) -> PathBuf {
     let repo = std::env::temp_dir().join(format!(
         "scope-vcs-{label}-{}-{}",
@@ -332,6 +316,80 @@ fn commit_all(repo: &FsPath, message: &str) {
         "commit test repo",
     )
     .unwrap();
+}
+
+fn write_scope_repo_config(repo: &FsPath, default_visibility: Visibility) {
+    let default = match default_visibility {
+        Visibility::Private => "private",
+        Visibility::Public => "public",
+    };
+    fs::create_dir_all(repo.join(".scope")).unwrap();
+    let config = serde_json::json!({
+        "kind": "scope.repo-config",
+        "version": 1,
+        "visibility": {
+            "default": default,
+            "rules": [],
+        },
+        "history": {
+            "rewrites": [],
+        },
+    });
+    fs::write(
+        repo.join(".scope/repo.json"),
+        format!("{}\n", serde_json::to_string_pretty(&config).unwrap()),
+    )
+    .unwrap();
+}
+
+const TEST_PUSH_HEAD_OID: &str = "1111111111111111111111111111111111111111";
+
+fn insert_push_intent_header(
+    state: &AppState,
+    headers: &mut HeaderMap,
+    user_id: &str,
+    head_oid: &str,
+) {
+    let token = create_test_push_intent(state, user_id, head_oid);
+    headers.insert("x-scope-push-intent", token.parse().unwrap());
+}
+
+fn configure_push_intent_header(state: &AppState, repo: &FsPath, remote: &str, user_id: &str) {
+    let head_oid = git_head_oid(repo);
+    let token = create_test_push_intent(state, user_id, &head_oid);
+    let key = format!("http.{remote}.extraHeader");
+    run_git(
+        Some(repo),
+        &[
+            "config",
+            key.as_str(),
+            &format!("X-Scope-Push-Intent: {token}"),
+        ],
+        "configure push intent header",
+    )
+    .unwrap();
+}
+
+fn create_test_push_intent(state: &AppState, user_id: &str, head_oid: &str) -> String {
+    let repo = find_repo(state, TEST_REPO_OWNER, TEST_REPO_NAME).unwrap();
+    state
+        .create_push_intent(
+            TEST_REPO_ID,
+            user_id,
+            head_oid,
+            repo.git_snapshot
+                .as_ref()
+                .map(|snapshot| snapshot.object_key.clone()),
+        )
+        .unwrap()
+        .token
+}
+
+fn git_head_oid(repo: &FsPath) -> String {
+    git_stdout_text(repo, &["rev-parse", "HEAD"], "read git head")
+        .unwrap()
+        .trim()
+        .to_string()
 }
 
 fn test_repo(owner_id: &str) -> StoredRepository {
@@ -447,10 +505,14 @@ fn repo_with_readme() -> StoredRepository {
 fn receive_pack_update(changes: Vec<(&str, Option<&str>)>) -> ReceivePackUpdate {
     ReceivePackUpdate {
         branch: format!("refs/heads/{DEFAULT_GIT_BRANCH}"),
+        head_oid: "1111111111111111111111111111111111111111".to_string(),
+        base_git_snapshot_key: None,
         author_id: test_owner_id(),
         message: "owner push".to_string(),
         git_snapshot: source_blob("test staged git snapshot"),
         uploaded_blobs: Vec::new(),
+        previous_config: None,
+        config: repo_config(Visibility::Public),
         changes: changes
             .into_iter()
             .map(|(path, content)| ReceivePackFileChange {
@@ -459,4 +521,25 @@ fn receive_pack_update(changes: Vec<(&str, Option<&str>)>) -> ReceivePackUpdate 
             })
             .collect(),
     }
+}
+
+fn repo_config(default_visibility: Visibility) -> RepoConfig {
+    let default = match default_visibility {
+        Visibility::Private => "private",
+        Visibility::Public => "public",
+    };
+    RepoConfig::parse_json(
+        format!(
+            r#"{{
+                "kind": "scope.repo-config",
+                "version": 1,
+                "visibility": {{
+                    "default": "{default}",
+                    "rules": []
+                }}
+            }}"#
+        )
+        .as_bytes(),
+    )
+    .unwrap()
 }

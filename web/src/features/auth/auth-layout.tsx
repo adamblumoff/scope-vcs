@@ -9,13 +9,13 @@ const highlights = [
   },
   {
     icon: ShieldCheck,
-    title: 'Visibility you control',
-    description: 'Decide per file what each audience is allowed to see.',
+    title: 'Config-owned visibility',
+    description: 'Define audience rules in the repo config.',
   },
   {
     icon: History,
-    title: 'Reviewable by design',
-    description: 'Every publish and update is staged for review first.',
+    title: 'CLI-owned pushes',
+    description: 'Apply committed changes from the terminal.',
   },
 ]
 

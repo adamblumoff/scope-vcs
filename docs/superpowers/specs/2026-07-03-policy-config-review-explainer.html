@@ -1,0 +1,728 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Scope Policy Config And CLI Review Explainer</title>
+    <style>
+      :root {
+        color-scheme: light;
+        --paper: #f6f2e8;
+        --ink: #181714;
+        --muted: #625f55;
+        --line: #cfc5ad;
+        --soft-line: #e5dcc8;
+        --private: #7d2f2f;
+        --public: #17695f;
+        --server: #27506d;
+        --config: #95620e;
+        --surface: #fffaf0;
+        --code: #25221d;
+      }
+
+      * {
+        box-sizing: border-box;
+      }
+
+      html {
+        scroll-behavior: smooth;
+      }
+
+      body {
+        margin: 0;
+        background:
+          linear-gradient(90deg, rgba(24, 23, 20, 0.035) 1px, transparent 1px)
+            0 0 / 36px 36px,
+          linear-gradient(rgba(24, 23, 20, 0.028) 1px, transparent 1px) 0 0 /
+            36px 36px,
+          var(--paper);
+        color: var(--ink);
+        font-family:
+          "Avenir Next", "Segoe UI", "Gill Sans", system-ui, sans-serif;
+        font-size: 17px;
+        line-height: 1.55;
+      }
+
+      a {
+        color: var(--public);
+        text-decoration-color: rgba(23, 105, 95, 0.35);
+        text-underline-offset: 0.18em;
+      }
+
+      code,
+      pre,
+      .mono {
+        font-family:
+          "Cascadia Mono", "SFMono-Regular", Consolas, ui-monospace, monospace;
+      }
+
+      pre {
+        margin: 0;
+        overflow-x: auto;
+        white-space: pre;
+      }
+
+      .wrap {
+        width: min(1160px, calc(100vw - 48px));
+        margin: 0 auto;
+      }
+
+      header {
+        border-bottom: 2px solid var(--ink);
+        padding: 58px 0 36px;
+      }
+
+      .eyebrow {
+        margin: 0 0 16px;
+        color: var(--config);
+        font-size: 0.78rem;
+        font-weight: 850;
+        letter-spacing: 0.11em;
+        text-transform: uppercase;
+      }
+
+      h1,
+      h2,
+      h3 {
+        margin: 0;
+        letter-spacing: 0;
+      }
+
+      h1 {
+        max-width: 980px;
+        font-family: Georgia, Cambria, "Times New Roman", Times, serif;
+        font-size: clamp(2.7rem, 6.4vw, 6rem);
+        font-weight: 900;
+        line-height: 0.96;
+      }
+
+      h2 {
+        font-family: Georgia, Cambria, "Times New Roman", Times, serif;
+        font-size: clamp(2rem, 3.4vw, 3.1rem);
+        line-height: 1.05;
+      }
+
+      h3 {
+        font-size: 1rem;
+        font-weight: 850;
+      }
+
+      p {
+        max-width: 820px;
+        margin: 0;
+        color: var(--muted);
+      }
+
+      .subtitle {
+        margin-top: 22px;
+        font-size: 1.22rem;
+      }
+
+      .decision {
+        display: grid;
+        grid-template-columns: minmax(0, 1fr) minmax(280px, 420px);
+        gap: 42px;
+        align-items: end;
+        padding-top: 34px;
+      }
+
+      .rule-list {
+        border-left: 3px solid var(--config);
+        padding-left: 22px;
+      }
+
+      .rule-list p + p {
+        margin-top: 12px;
+      }
+
+      main {
+        padding: 34px 0 70px;
+      }
+
+      section {
+        border-top: 1px solid var(--line);
+        padding: 38px 0 46px;
+      }
+
+      section:first-child {
+        border-top: 0;
+        padding-top: 0;
+      }
+
+      .lead {
+        margin-top: 14px;
+        font-size: 1.08rem;
+      }
+
+      .timeline-grid {
+        display: grid;
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+        gap: 26px;
+        margin-top: 26px;
+      }
+
+      .lane {
+        border-top: 3px solid var(--ink);
+        padding-top: 18px;
+      }
+
+      .lane h3 {
+        display: flex;
+        justify-content: space-between;
+        gap: 14px;
+        margin-bottom: 18px;
+      }
+
+      .tag {
+        border: 1px solid currentColor;
+        padding: 2px 7px;
+        font-size: 0.72rem;
+        font-weight: 850;
+        letter-spacing: 0.08em;
+        text-transform: uppercase;
+      }
+
+      .tag.bad {
+        color: var(--private);
+      }
+
+      .tag.good {
+        color: var(--public);
+      }
+
+      .timeline {
+        position: relative;
+        display: grid;
+        grid-template-columns: repeat(4, minmax(0, 1fr));
+        gap: 0;
+        min-height: 220px;
+        border-bottom: 2px solid var(--ink);
+        padding-bottom: 34px;
+      }
+
+      .timeline::before {
+        content: "";
+        position: absolute;
+        left: 0;
+        right: 0;
+        bottom: 31px;
+        height: 2px;
+        background: var(--ink);
+      }
+
+      .tick {
+        position: relative;
+        min-width: 0;
+        padding: 0 14px 0 0;
+      }
+
+      .tick::after {
+        content: "";
+        position: absolute;
+        bottom: 24px;
+        left: 0;
+        width: 2px;
+        height: 16px;
+        background: var(--ink);
+      }
+
+      .node {
+        min-height: 118px;
+        border-left: 2px solid var(--soft-line);
+        padding: 10px 10px 12px 12px;
+      }
+
+      .node strong {
+        display: block;
+        margin-bottom: 8px;
+        font-size: 0.82rem;
+        letter-spacing: 0.06em;
+        text-transform: uppercase;
+      }
+
+      .node p {
+        font-size: 0.92rem;
+      }
+
+      .public {
+        color: var(--public);
+      }
+
+      .private {
+        color: var(--private);
+      }
+
+      .config {
+        color: var(--config);
+      }
+
+      .server {
+        color: var(--server);
+      }
+
+      .rewrite {
+        background: repeating-linear-gradient(
+          -45deg,
+          rgba(125, 47, 47, 0.12),
+          rgba(125, 47, 47, 0.12) 8px,
+          transparent 8px,
+          transparent 15px
+        );
+      }
+
+      .future {
+        background: repeating-linear-gradient(
+          -45deg,
+          rgba(23, 105, 95, 0.1),
+          rgba(23, 105, 95, 0.1) 8px,
+          transparent 8px,
+          transparent 15px
+        );
+      }
+
+      .flow {
+        display: grid;
+        grid-template-columns: repeat(5, minmax(0, 1fr));
+        gap: 0;
+        margin-top: 28px;
+        border-top: 2px solid var(--ink);
+        border-bottom: 2px solid var(--ink);
+      }
+
+      .step {
+        min-height: 164px;
+        border-right: 1px solid var(--line);
+        padding: 18px 16px 20px;
+      }
+
+      .step:last-child {
+        border-right: 0;
+      }
+
+      .step-number {
+        display: block;
+        margin-bottom: 18px;
+        color: var(--config);
+        font-family: Georgia, Cambria, "Times New Roman", Times, serif;
+        font-size: 2.1rem;
+        font-weight: 900;
+        line-height: 1;
+      }
+
+      .step h3 {
+        margin-bottom: 8px;
+      }
+
+      .split {
+        display: grid;
+        grid-template-columns: minmax(0, 1fr) minmax(300px, 420px);
+        gap: 42px;
+        align-items: start;
+        margin-top: 26px;
+      }
+
+      .plain-table {
+        width: 100%;
+        border-collapse: collapse;
+        background: rgba(255, 250, 240, 0.56);
+      }
+
+      .plain-table th,
+      .plain-table td {
+        border-bottom: 1px solid var(--line);
+        padding: 12px 10px;
+        text-align: left;
+        vertical-align: top;
+      }
+
+      .plain-table th {
+        color: var(--ink);
+        font-size: 0.76rem;
+        letter-spacing: 0.08em;
+        text-transform: uppercase;
+      }
+
+      .sample {
+        border-top: 2px solid var(--ink);
+        background: var(--code);
+        color: #fff4d8;
+        padding: 18px;
+        font-size: 0.86rem;
+        line-height: 1.55;
+      }
+
+      .callout {
+        border-left: 4px solid var(--private);
+        margin-top: 22px;
+        padding: 4px 0 4px 18px;
+      }
+
+      .callout strong {
+        color: var(--private);
+      }
+
+      .summary-strip {
+        display: grid;
+        grid-template-columns: repeat(3, minmax(0, 1fr));
+        gap: 0;
+        margin-top: 26px;
+        border-top: 2px solid var(--ink);
+        border-bottom: 2px solid var(--ink);
+      }
+
+      .summary-item {
+        border-right: 1px solid var(--line);
+        padding: 18px 18px 20px;
+      }
+
+      .summary-item:last-child {
+        border-right: 0;
+      }
+
+      footer {
+        border-top: 1px solid var(--line);
+        padding: 28px 0 36px;
+      }
+
+      @media (max-width: 940px) {
+        .decision,
+        .timeline-grid,
+        .split {
+          grid-template-columns: 1fr;
+        }
+
+        .flow,
+        .summary-strip {
+          grid-template-columns: 1fr;
+        }
+
+        .step,
+        .summary-item {
+          border-right: 0;
+          border-bottom: 1px solid var(--line);
+        }
+
+        .step:last-child,
+        .summary-item:last-child {
+          border-bottom: 0;
+        }
+      }
+
+      @media (max-width: 620px) {
+        body {
+          font-size: 16px;
+        }
+
+        .wrap {
+          width: min(100vw - 28px, 1160px);
+        }
+
+        .timeline {
+          grid-template-columns: 1fr;
+          min-height: 0;
+          padding-bottom: 0;
+        }
+
+        .timeline::before,
+        .tick::after {
+          display: none;
+        }
+
+        .tick {
+          padding-right: 0;
+        }
+
+        .node {
+          min-height: 0;
+          border-left: 0;
+          border-top: 1px solid var(--line);
+          padding: 14px 0;
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <header>
+      <div class="wrap">
+        <p class="eyebrow">Scope VCS policy model</p>
+        <h1>Make visibility move forward, not backward.</h1>
+        <p class="subtitle">
+          The config file should decide what happens next. Old commits should
+          keep the visibility they had when they were created, unless the config
+          asks for a destructive rewrite on a specific path.
+        </p>
+        <div class="decision">
+          <p>
+            The simple rule: a commit carries its own public/private label. A
+            later config edit does not silently relabel old commits.
+          </p>
+          <div class="rule-list">
+            <p><strong>Config file:</strong> always private Scope metadata.</p>
+            <p><strong>CLI:</strong> local review and human choice.</p>
+            <p><strong>Server:</strong> final validation and public exposure.</p>
+          </div>
+        </div>
+      </div>
+    </header>
+
+    <main class="wrap">
+      <section>
+        <h2>What is wrong today?</h2>
+        <p class="lead">
+          Today, the public view can be rebuilt by looking at the current policy.
+          That means changing policy now can change what old history looks like.
+          That is powerful, but surprising.
+        </p>
+
+        <div class="timeline-grid" aria-label="Destructive versus forward-only timeline">
+          <div class="lane">
+            <h3>
+              <span>Today: current policy rewrites the past</span>
+              <span class="tag bad">destructive by default</span>
+            </h3>
+            <div class="timeline">
+              <div class="tick">
+                <div class="node public">
+                  <strong>Commit A</strong>
+                  <p>File starts public. Public readers can see it.</p>
+                </div>
+              </div>
+              <div class="tick">
+                <div class="node public">
+                  <strong>Commit B</strong>
+                  <p>More public changes are added.</p>
+                </div>
+              </div>
+              <div class="tick">
+                <div class="node rewrite private">
+                  <strong>Policy flips</strong>
+                  <p>The file is now private.</p>
+                </div>
+              </div>
+              <div class="tick">
+                <div class="node rewrite private">
+                  <strong>Old view changes</strong>
+                  <p>Public history can lose A and B after the fact.</p>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <div class="lane">
+            <h3>
+              <span>Proposed: each commit keeps its label</span>
+              <span class="tag good">forward by default</span>
+            </h3>
+            <div class="timeline">
+              <div class="tick">
+                <div class="node public">
+                  <strong>Commit A</strong>
+                  <p>Public then, public forever in public history.</p>
+                </div>
+              </div>
+              <div class="tick">
+                <div class="node public">
+                  <strong>Commit B</strong>
+                  <p>Also remains visible because it was public then.</p>
+                </div>
+              </div>
+              <div class="tick">
+                <div class="node future private">
+                  <strong>Config flips</strong>
+                  <p>From this point forward, the file is private.</p>
+                </div>
+              </div>
+              <div class="tick">
+                <div class="node future private">
+                  <strong>Commit C</strong>
+                  <p>New private changes stay out of public history.</p>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <section>
+        <h2>What happens when visibility changes?</h2>
+        <p class="lead">
+          Changing visibility creates a boundary. The boundary affects the
+          public checkout from that point forward, but it does not rewrite older
+          commits unless the config explicitly asks for that.
+        </p>
+
+        <div class="summary-strip" aria-label="Visibility change cases">
+          <div class="summary-item">
+            <h3 class="public">Public -> Private</h3>
+            <p>
+              Public readers keep old public commits. The public checkout gets a
+              forward delete boundary so the file disappears from the latest
+              public tree.
+            </p>
+          </div>
+          <div class="summary-item">
+            <h3 class="private">Private -> Public</h3>
+            <p>
+              Public readers get a new baseline with current content. They do
+              not get the old private history that created that content.
+            </p>
+          </div>
+          <div class="summary-item">
+            <h3 class="config">Destructive cleanup</h3>
+            <p>
+              Old public history is removed only when the config names a path
+              and asks for a destructive rewrite.
+            </p>
+          </div>
+        </div>
+      </section>
+
+      <section>
+        <h2>The config file becomes the write surface.</h2>
+        <p class="lead">
+          Instead of letting the web UI and CLI both edit visibility, make the
+          config file the only place that changes file visibility behavior.
+        </p>
+
+        <div class="split">
+          <div>
+            <table class="plain-table">
+              <thead>
+                <tr>
+                  <th>Thing</th>
+                  <th>Plain meaning</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr>
+                  <td><code>.scope/repo.json</code></td>
+                  <td>
+                    Reserved Scope config. It is always private, even if the
+                    repo owner tries to make it public.
+                  </td>
+                </tr>
+                <tr>
+                  <td><code>visibility.rules</code></td>
+                  <td>
+                    Normal forward-only public/private decisions for paths.
+                  </td>
+                </tr>
+                <tr>
+                  <td><code>history.rewrites</code></td>
+                  <td>
+                    Explicit destructive operations. They must name the path or
+                    directory being rewritten.
+                  </td>
+                </tr>
+                <tr>
+                  <td>Web UI</td>
+                  <td>
+                    Preview and explain visibility. Do not mutate visibility
+                    once config owns that job.
+                  </td>
+                </tr>
+              </tbody>
+            </table>
+
+            <div class="callout">
+              <p>
+                <strong>Invariant:</strong> the server also enforces the config
+                file privacy rule. This cannot be only a CLI promise.
+              </p>
+            </div>
+          </div>
+
+          <pre class="sample"><code>{
+  "$schema": "https://scope.dev/schemas/repo-config.v1.json",
+  "kind": "scope.repo-config",
+  "version": 1,
+  "visibility": {
+    "default": "private",
+    "rules": [
+      { "path": "/README.md", "visibility": "public" },
+      { "path": "/src/**", "visibility": "public" },
+      { "path": "/notes/**", "visibility": "private" }
+    ]
+  },
+  "history": {
+    "rewrites": [
+      {
+        "path": "/leaked-secrets/**",
+        "action": "redact-public-history"
+      }
+    ]
+  }
+}</code></pre>
+        </div>
+      </section>
+
+      <section>
+        <h2>Why move review into the CLI?</h2>
+        <p class="lead">
+          Review is about deciding what this push should expose. That decision
+          is easier when the CLI can inspect local files, local config, and the
+          exact Git change before upload.
+        </p>
+
+        <div class="flow" aria-label="Scope push flow">
+          <div class="step">
+            <span class="step-number">1</span>
+            <h3 class="config">Read config</h3>
+            <p>
+              The CLI reads the reserved config and computes intended
+              visibility.
+            </p>
+          </div>
+          <div class="step">
+            <span class="step-number">2</span>
+            <h3>Compare base</h3>
+            <p>
+              The CLI compares local HEAD to the last Scope-accepted snapshot.
+            </p>
+          </div>
+          <div class="step">
+            <span class="step-number">3</span>
+            <h3>Local review</h3>
+            <p>
+              The terminal shows changed files, visibility, and any destructive
+              history requests.
+            </p>
+          </div>
+          <div class="step">
+            <span class="step-number">4</span>
+            <h3 class="server">Server validates</h3>
+            <p>
+              The server rejects stale bases, invalid config, and attempts to
+              expose reserved private files.
+            </p>
+          </div>
+          <div class="step">
+            <span class="step-number">5</span>
+            <h3 class="public">Apply atomically</h3>
+            <p>
+              Content, policy boundaries, and optional rewrites land together.
+            </p>
+          </div>
+        </div>
+      </section>
+
+      <section>
+        <h2>The short version.</h2>
+        <p class="lead">
+          Keep the human review local, but keep privacy enforcement on the
+          server. Make normal policy changes forward-only. Make destructive
+          history changes explicit, path-scoped, and config-only.
+        </p>
+      </section>
+    </main>
+
+    <footer>
+      <div class="wrap">
+        <p>
+          Draft explainer for Scope VCS. File:
+          <span class="mono">docs/superpowers/specs/2026-07-03-policy-config-review-explainer.html</span>
+        </p>
+      </div>
+    </footer>
+  </body>
+</html>

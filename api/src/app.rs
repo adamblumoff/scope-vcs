@@ -81,6 +81,10 @@ pub fn router(state: AppState) -> Router {
             post(http::repos::create_clone_credential),
         )
         .route(
+            "/v1/repos/{owner}/{repo}/push-intents",
+            post(http::repos::create_push_intent),
+        )
+        .route(
             "/v1/repos/{owner}/{repo}/session",
             get(http::account::get_session),
         )
@@ -103,26 +107,6 @@ pub fn router(state: AppState) -> Router {
         .route(
             "/v1/repos/{owner}/{repo}/commits/{commit_id}/file-diff",
             get(http::history::get_commit_file_diff),
-        )
-        .route(
-            "/v1/repos/{owner}/{repo}/pending-import",
-            get(http::review::get_pending_import_review),
-        )
-        .route(
-            "/v1/repos/{owner}/{repo}/review/file-diff",
-            get(http::review::get_review_file_diff),
-        )
-        .route(
-            "/v1/repos/{owner}/{repo}/publish",
-            post(http::review::publish_repo),
-        )
-        .route(
-            "/v1/repos/{owner}/{repo}/files/visibility",
-            patch(http::repos::update_file_visibility),
-        )
-        .route(
-            "/v1/repos/{owner}/{repo}/settings",
-            get(http::repos::get_settings).patch(http::repos::update_settings),
         )
         .route(
             "/v1/repos/{owner}/{repo}/members",
@@ -148,22 +132,6 @@ pub fn router(state: AppState) -> Router {
         .route(
             "/v1/repository-invites/{token}/accept",
             post(http::repo_collaboration::accept_repository_invite),
-        )
-        .route(
-            "/v1/repos/{owner}/{repo}/staged-update",
-            get(http::review::get_staged_update),
-        )
-        .route(
-            "/v1/repos/{owner}/{repo}/staged-update/files/visibility",
-            patch(http::review::update_staged_file_visibility),
-        )
-        .route(
-            "/v1/repos/{owner}/{repo}/staged-update/apply",
-            post(http::review::apply_staged_update),
-        )
-        .route(
-            "/v1/repos/{owner}/{repo}/staged-update/reject",
-            post(http::review::reject_staged_update),
         )
         .route(
             "/v1/repos/{owner}/{repo}/projection-preview",

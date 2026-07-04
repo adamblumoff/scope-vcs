@@ -1,8 +1,6 @@
 use super::{
     policy::{Principal, ScopePath, Visibility},
     projection::{Projection, ProjectionViewKey, project_graph},
-    repo_actions::{preview_publish_import, staged_update_api_error},
-    staged_updates::apply_staged_update_to_repo,
     store::StoredRepository,
     store::pending_import_scope_path,
 };
@@ -28,7 +26,6 @@ impl From<ProjectionAudience> for ProjectionViewKey {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ProjectionSource {
     Live,
-    Review,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -86,20 +83,8 @@ pub fn repo_for_projection_preview(
     repo: &StoredRepository,
     source: ProjectionSource,
 ) -> Result<StoredRepository, ApiError> {
-    let mut preview = repo.clone();
     match source {
-        ProjectionSource::Live => Ok(preview),
-        ProjectionSource::Review => {
-            if preview.has_pending_import_review() {
-                preview_publish_import(&mut preview)?;
-            } else if let Some(staged_update) = preview.staged_update.clone() {
-                apply_staged_update_to_repo(&mut preview, staged_update)
-                    .map_err(staged_update_api_error)?;
-            } else {
-                return Err(ApiError::bad_request("repo has no pending review"));
-            }
-            Ok(preview)
-        }
+        ProjectionSource::Live => Ok(repo.clone()),
     }
 }
 
@@ -264,6 +249,16 @@ pub fn has_visible_projected_files(repo: &StoredRepository, principal: &Principa
         ProjectionViewKey::from_access(repo.access_for_principal(principal)),
     );
     !projection_tree(&projection).is_empty()
+}
+
+pub fn has_visible_projected_history(repo: &StoredRepository, principal: &Principal) -> bool {
+    let projection = project_graph(
+        &repo.policy,
+        &repo.graph,
+        &repo.visibility_events,
+        ProjectionViewKey::from_access(repo.access_for_principal(principal)),
+    );
+    !projection.commits.is_empty()
 }
 
 fn projection_preview_files(

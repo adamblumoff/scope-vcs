@@ -10,7 +10,6 @@ pub(crate) mod repo_collaboration;
 pub(crate) mod repo_events;
 pub(crate) mod repos;
 pub(crate) mod responses;
-pub(crate) mod review;
 pub(crate) mod routes;
 #[cfg(test)]
 mod type_exports;

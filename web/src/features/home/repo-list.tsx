@@ -3,7 +3,6 @@ import { LifecycleBadge } from '@/components/lifecycle-badge'
 import { RepoPrimaryActionButton } from '@/components/repo-primary-action'
 import { CopyableCodeBlock } from '@/components/copyable-code-block'
 import { VisibilityBadge } from '@/components/visibility-badge'
-import { Badge } from '@/components/ui/badge'
 import { Link } from '@tanstack/react-router'
 import { ChevronRight, GitBranch } from 'lucide-react'
 
@@ -84,9 +83,6 @@ function RepoListRow({ repo }: { repo: RepoSummary }) {
         <div className="mt-1.5 flex flex-wrap items-center gap-1.5 text-xs text-muted-foreground">
           <VisibilityBadge compact visibility={repo.default_visibility} />
           {showLifecycle && <LifecycleBadge state={repo.lifecycle_state} />}
-          {repo.staged_update_pending && (
-            <Badge variant="warning">Update ready</Badge>
-          )}
           <span>{repo.access.actor}</span>
         </div>
       </div>

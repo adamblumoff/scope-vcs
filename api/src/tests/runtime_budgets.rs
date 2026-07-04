@@ -22,6 +22,7 @@ async fn receive_pack_capacity_exhaustion_returns_backpressure() {
         });
     }
 
+    let push_intent = create_test_push_intent(&state, &test_owner_id(), TEST_PUSH_HEAD_OID);
     let response = router(state)
         .oneshot(
             Request::builder()
@@ -31,6 +32,7 @@ async fn receive_pack_capacity_exhaustion_returns_backpressure() {
                     AUTHORIZATION,
                     format!("Basic {}", BASE64.encode(format!("scope:{secret}"))),
                 )
+                .header("x-scope-push-intent", push_intent)
                 .body(Body::empty())
                 .unwrap(),
         )

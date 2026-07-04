@@ -75,12 +75,103 @@ fn push_refuses_git_repo_without_head_before_login() {
 }
 
 #[test]
+fn push_refuses_missing_config_before_remote_lookup() {
+    let dir = TempDir::new("missing-config");
+    create_repo_with_readme(dir.path());
+
+    let output = scope_command(dir.path())
+        .args(["push", "--yes"])
+        .output()
+        .unwrap();
+
+    assert_failure(&output, "scope push without config");
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("commit .scope/repo.json before running scope push"),
+        "{stderr}"
+    );
+    assert!(
+        !stderr.contains("Scope remote 'scope' is not configured"),
+        "{stderr}"
+    );
+    assert!(!stderr.contains("start browser login"), "{stderr}");
+}
+
+#[test]
+fn push_refuses_invalid_config_before_remote_lookup() {
+    let dir = TempDir::new("invalid-config");
+    create_repo_with_readme(dir.path());
+    fs::create_dir_all(dir.path().join(".scope")).unwrap();
+    fs::write(
+        dir.path().join(".scope/repo.json"),
+        r#"{
+  "kind": "wrong",
+  "version": 1,
+  "visibility": {
+    "default": "private",
+    "rules": []
+  }
+}
+"#,
+    )
+    .unwrap();
+    run_git(dir.path(), ["add", ".scope/repo.json"]);
+    commit_all(dir.path(), "add invalid config");
+
+    let output = scope_command(dir.path())
+        .args(["push", "--yes"])
+        .output()
+        .unwrap();
+
+    assert_failure(&output, "scope push with invalid config");
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("repo config kind must be scope.repo-config"),
+        "{stderr}"
+    );
+    assert!(
+        !stderr.contains("Scope remote 'scope' is not configured"),
+        "{stderr}"
+    );
+    assert!(!stderr.contains("start browser login"), "{stderr}");
+}
+
+#[test]
+fn push_refuses_uncommitted_config_before_remote_lookup() {
+    let dir = TempDir::new("uncommitted-config");
+    create_repo_with_readme(dir.path());
+    write_valid_config(dir.path());
+
+    let output = scope_command(dir.path())
+        .args(["push", "--yes"])
+        .output()
+        .unwrap();
+
+    assert_failure(&output, "scope push with uncommitted config");
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains(
+            ".scope/repo.json has uncommitted changes; commit it before running scope push"
+        ),
+        "{stderr}"
+    );
+    assert!(
+        !stderr.contains("Scope remote 'scope' is not configured"),
+        "{stderr}"
+    );
+    assert!(!stderr.contains("start browser login"), "{stderr}");
+}
+
+#[test]
 fn push_warns_on_dirty_working_tree_before_remote_lookup_failure() {
     let dir = TempDir::new("dirty");
     create_repo_with_head(dir.path());
     fs::write(dir.path().join("dirty.txt"), "uncommitted\n").unwrap();
 
-    let output = scope_command(dir.path()).args(["push"]).output().unwrap();
+    let output = scope_command(dir.path())
+        .args(["push", "--yes"])
+        .output()
+        .unwrap();
 
     assert_failure(&output, "scope push without remote");
     let stderr = String::from_utf8_lossy(&output.stderr);
@@ -107,9 +198,40 @@ fn scope_command(cwd: &Path) -> Command {
 }
 
 fn create_repo_with_head(cwd: &Path) {
+    create_repo_with_readme(cwd);
+    write_valid_config(cwd);
+    run_git(cwd, ["add", ".scope/repo.json"]);
+    commit_all(cwd, "add scope config");
+}
+
+fn create_repo_with_readme(cwd: &Path) {
     run_git(cwd, ["-c", "init.defaultBranch=main", "init"]);
     fs::write(cwd.join("README.md"), "initial\n").unwrap();
     run_git(cwd, ["add", "README.md"]);
+    commit_all(cwd, "initial");
+}
+
+fn write_valid_config(cwd: &Path) {
+    fs::create_dir_all(cwd.join(".scope")).unwrap();
+    fs::write(
+        cwd.join(".scope/repo.json"),
+        r#"{
+  "kind": "scope.repo-config",
+  "version": 1,
+  "visibility": {
+    "default": "private",
+    "rules": []
+  },
+  "history": {
+    "rewrites": []
+  }
+}
+"#,
+    )
+    .unwrap();
+}
+
+fn commit_all(cwd: &Path, message: &str) {
     run_git(
         cwd,
         [
@@ -119,7 +241,7 @@ fn create_repo_with_head(cwd: &Path) {
             "user.name=Scope Test",
             "commit",
             "-m",
-            "initial",
+            message,
         ],
     );
 }

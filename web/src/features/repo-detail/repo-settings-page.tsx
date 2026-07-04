@@ -2,28 +2,25 @@ import type {
   CreateRepoInviteInput,
   CreateRepoInviteResponse,
   DeleteRepoInviteInput,
-  DeleteRepoResponse,
   DeleteRepoMemberInput,
-  RepoDetail,
+  DeleteRepoResponse,
   RepoCollaboration,
+  RepoDetail,
   RepoInvite,
   RepoMember,
   RepoParams,
-  RepoSettings,
   RepoSummary,
   UpdateRepoMemberInput,
-  UpdateRepoSettingsInput,
 } from '@/api/types'
 import { AppHeader } from '@/components/app-header'
-import { RepoBreadcrumb } from '@/components/repo-breadcrumb'
-import { PageContent, PageHeader } from '@/components/page-header'
 import { LifecycleBadge } from '@/components/lifecycle-badge'
+import { PageContent, PageHeader } from '@/components/page-header'
 import { PageErrorAlert } from '@/components/page-error-alert'
-import { VisibilityBadge } from '@/components/visibility-badge'
+import { RepoBreadcrumb } from '@/components/repo-breadcrumb'
 import { Badge } from '@/components/ui/badge'
 import { storeHomeFlash } from '@/lib/home-flash'
 import { Link, useNavigate, useRouter } from '@tanstack/react-router'
-import { useReducer, useRef, useState } from 'react'
+import { useReducer, useState } from 'react'
 import { DeleteRepositoryDialog } from './delete-repository-dialog'
 import {
   MemberAccessSections,
@@ -31,7 +28,6 @@ import {
 } from './repo-members-section'
 import { SettingsSections } from './repo-settings-sections'
 import {
-  type SettingKey,
   initialRepoSettingsPageState,
   repoSettingsPageReducer,
 } from './repo-settings-state'
@@ -43,10 +39,8 @@ export function RepoSettingsPage({
   deleteRepo,
   detail,
   initialCollaboration,
-  initialSettings,
   params,
   updateMember,
-  updateSettings,
 }: {
   createInvite: (
     input: CreateRepoInviteInput,
@@ -56,10 +50,8 @@ export function RepoSettingsPage({
   deleteRepo: (params: RepoParams) => Promise<DeleteRepoResponse>
   detail: RepoDetail
   initialCollaboration: RepoCollaboration | null
-  initialSettings: RepoSettings | null
   params: RepoParams
   updateMember: (input: UpdateRepoMemberInput) => Promise<RepoMember>
-  updateSettings: (settings: UpdateRepoSettingsInput) => Promise<RepoSettings>
 }) {
   const navigate = useNavigate()
   const router = useRouter()
@@ -68,7 +60,6 @@ export function RepoSettingsPage({
     repoSettingsPageReducer,
     initialRepoSettingsPageState,
   )
-  const settingsSavePendingRef = useRef(false)
   const [collaborationState, setCollaborationState] = useState(() => ({
     base: initialCollaboration,
     value: initialCollaboration,
@@ -77,54 +68,13 @@ export function RepoSettingsPage({
     collaborationState.base === initialCollaboration
       ? collaborationState.value
       : initialCollaboration
-  const settingsOverride =
-    initialSettings &&
-    state.settingsOverride?.baseSettings === initialSettings
-      ? state.settingsOverride
-      : null
-  const settings = settingsOverride?.settings ?? initialSettings
-  const {
-    deleteError,
-    deleteTarget,
-    pendingSetting,
-    settingsError,
-  } = state
-  const settingsSaving = pendingSetting !== null
+  const { deleteError, deleteTarget } = state
 
   if (collaborationState.base !== initialCollaboration) {
     setCollaborationState({
       base: initialCollaboration,
       value: initialCollaboration,
     })
-  }
-
-  async function saveSettings(
-    nextSettings: RepoSettings,
-    pendingKey: SettingKey,
-  ) {
-    if (!initialSettings || settingsSavePendingRef.current) {
-      return
-    }
-
-    settingsSavePendingRef.current = true
-    dispatch({ key: pendingKey, type: 'settingsStarted' })
-    try {
-      const updated = await updateSettings({ ...params, ...nextSettings })
-      dispatch({
-        baseSettings: initialSettings,
-        settings: updated,
-        type: 'settingsSucceeded',
-      })
-      await router.invalidate()
-    } catch (error) {
-      dispatch({
-        message:
-          error instanceof Error ? error.message : 'settings update failed',
-        type: 'settingsFailed',
-      })
-    } finally {
-      settingsSavePendingRef.current = false
-    }
   }
 
   async function deleteRepository(target: RepoSummary) {
@@ -234,16 +184,7 @@ export function RepoSettingsPage({
           badges={() => (
             <>
               <LifecycleBadge state={repo.lifecycle_state} />
-              {settings ? (
-                <VisibilityBadge
-                  visibility={settings.default_new_file_visibility}
-                />
-              ) : (
-                <Badge variant="neutral">{repo.access.actor}</Badge>
-              )}
-              {repo.staged_update_pending && (
-                <Badge variant="warning">Staged update</Badge>
-              )}
+              <Badge variant="neutral">{repo.access.actor}</Badge>
             </>
           )}
           description={() => (
@@ -258,12 +199,6 @@ export function RepoSettingsPage({
           title="Settings"
         />
 
-        {settingsError && (
-          <PageErrorAlert title="Settings update failed">
-            {settingsError}
-          </PageErrorAlert>
-        )}
-
         {deleteError && (
           <PageErrorAlert title="Repository deletion failed">
             {deleteError}
@@ -277,17 +212,11 @@ export function RepoSettingsPage({
           </PageErrorAlert>
         )}
 
-        {settings && (
+        {repo.access.actor === 'Owner' && (
           <SettingsSections
             onDeleteRepository={() =>
               dispatch({ repo, type: 'deleteTargetChanged' })
             }
-            onSaveSettings={(nextSettings, pendingKey) =>
-              void saveSettings(nextSettings, pendingKey)
-            }
-            pendingSetting={pendingSetting}
-            settings={settings}
-            settingsSaving={settingsSaving}
           />
         )}
 
