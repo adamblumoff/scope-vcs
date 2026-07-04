@@ -1,0 +1,11 @@
+{
+  "kind": "scope.repo-config",
+  "version": 1,
+  "visibility": {
+    "default": "private",
+    "rules": []
+  },
+  "history": {
+    "rewrites": []
+  }
+}

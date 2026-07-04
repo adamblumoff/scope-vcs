@@ -10,7 +10,6 @@ web/.tanstack/tmp/
 .agents/
 .codex/
 .railway/
-.scope/
 .codex-local/
 .env
 .env.*
