@@ -143,6 +143,7 @@ fn push(args: PushArgs) -> anyhow::Result<()> {
     let reviewed_head_oid = head_oid(&git_repo)?;
     warn_if_dirty_working_tree(&git_repo)?;
     ensure_scope_repo_config_is_committed(&git_repo.root)?;
+    let config = load_scope_repo_config_at_commit(&git_repo.root, &reviewed_head_oid)?;
 
     let api_url = api_url();
     let target = load_scope_remote(&api_url, &args.remote)?;
@@ -182,7 +183,6 @@ fn push(args: PushArgs) -> anyhow::Result<()> {
         &session.token,
         intent.base_head_oid.as_deref(),
     )?;
-    let config = load_scope_repo_config_at_commit(&git_repo.root, &reviewed_head_oid)?;
     let changed_paths = changed_paths_since_scope_base_at_commit(
         &git_repo,
         intent.base_head_oid.as_deref(),

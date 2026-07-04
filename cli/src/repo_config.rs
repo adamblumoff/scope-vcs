@@ -53,6 +53,16 @@ pub fn ensure_scope_repo_config_is_committed(git_root: &Path) -> anyhow::Result<
     if !output.stdout.is_empty() {
         bail!(".scope/repo.json has uncommitted changes; commit it before running scope push");
     }
+
+    let output = Command::new("git")
+        .current_dir(git_root)
+        .args(["cat-file", "-e", "HEAD:.scope/repo.json"])
+        .output()
+        .context("inspect committed .scope/repo.json")?;
+    if !output.status.success() {
+        bail!("commit .scope/repo.json before running scope push");
+    }
+
     Ok(())
 }
 
