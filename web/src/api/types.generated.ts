@@ -68,7 +68,7 @@ export type DeleteRepoResponse = { id: string, deleted: boolean, };
 
 export type CreatePushIntentRequest = { head_oid: string, };
 
-export type CreatePushIntentResponse = { token: string, base_head_oid: string | null, };
+export type CreatePushIntentResponse = { token: string, base_head_oid: string | null, expires_at_unix: number, };
 
 export type RepoInitResponse = { repo: RepoSummaryResponse, git_remote_url: string, remote_name: string, push_branch: string, token: FirstPushTokenResponse | null, push_token: GitPushTokenResponse | null, };
 

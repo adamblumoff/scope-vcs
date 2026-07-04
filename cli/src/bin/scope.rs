@@ -189,6 +189,7 @@ fn push(args: PushArgs) -> anyhow::Result<()> {
         &reviewed_head_oid,
     )?;
     confirm_scope_push(&args, &config, &changed_paths)?;
+    ensure_push_intent_not_expired(intent.expires_at_unix)?;
 
     let outcome = push_reviewed_head_with_intent(
         &client,
@@ -218,6 +219,14 @@ fn push(args: PushArgs) -> anyhow::Result<()> {
     }
 
     Ok(())
+}
+
+fn ensure_push_intent_not_expired(expires_at_unix: u64) -> anyhow::Result<()> {
+    if unix_now() < expires_at_unix {
+        return Ok(());
+    }
+
+    bail!("Scope push review expired; rerun scope push")
 }
 
 fn ensure_review_base_matches_intent(
@@ -708,6 +717,17 @@ mod tests {
     #[test]
     fn user_code_is_grouped_for_manual_entry() {
         assert_eq!(format_user_code("ABCDEF1234567890"), "ABCD-EF12-3456-7890");
+    }
+
+    #[test]
+    fn expired_push_intent_reports_rerun_message() {
+        let error = ensure_push_intent_not_expired(0).unwrap_err();
+        assert!(
+            error
+                .to_string()
+                .contains("Scope push review expired; rerun scope push")
+        );
+        ensure_push_intent_not_expired(unix_now().saturating_add(60)).unwrap();
     }
 
     #[test]

@@ -180,7 +180,7 @@ pub(crate) async fn create_push_intent(
             )));
         }
         return Err(ApiError::conflict(
-            "repo is waiting for first push and cannot receive another push",
+            "repo has a stale pending import; retry after cleanup",
         ));
     }
 
@@ -192,7 +192,7 @@ pub(crate) async fn create_push_intent(
 
     let head_oid = normalize_git_oid(&input.head_oid)?;
     let base_head_oid = git_snapshot_head_oid(&state, repo.git_snapshot.as_ref())?;
-    let token = state.create_push_intent(
+    let intent = state.create_push_intent(
         &repo.record.id,
         &user.id,
         &head_oid,
@@ -202,8 +202,9 @@ pub(crate) async fn create_push_intent(
     )?;
 
     Ok(Json(CreatePushIntentResponse {
-        token,
+        token: intent.token,
         base_head_oid,
+        expires_at_unix: intent.expires_at_unix,
     }))
 }
 
@@ -229,11 +230,12 @@ fn git_snapshot_head_oid(
 
 fn normalize_git_oid(value: &str) -> Result<String, ApiError> {
     let oid = value.trim();
+    // Scope stores raw Git snapshots as SHA-1 repositories today.
     if oid.len() == 40 && oid.bytes().all(|byte| byte.is_ascii_hexdigit()) {
         Ok(oid.to_ascii_lowercase())
     } else {
         Err(ApiError::bad_request(
-            "head_oid must be a full Git object id",
+            "head_oid must be a full SHA-1 Git object id",
         ))
     }
 }

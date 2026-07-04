@@ -64,6 +64,12 @@ pub(crate) struct ValidatedPushIntent {
     pub(crate) base_git_snapshot_key: Option<String>,
 }
 
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct CreatedPushIntent {
+    pub(crate) token: String,
+    pub(crate) expires_at_unix: u64,
+}
+
 impl ValidatedPushIntent {
     pub(crate) fn ensure_repo_user(&self, repo_id: &str, user_id: &str) -> Result<(), ApiError> {
         if self.repo_id == repo_id && self.user_id == user_id {
@@ -238,7 +244,7 @@ impl AppState {
         user_id: &str,
         head_oid: &str,
         base_git_snapshot_key: Option<String>,
-    ) -> Result<String, ApiError> {
+    ) -> Result<CreatedPushIntent, ApiError> {
         let expires_at_unix = unix_now()?.saturating_add(PUSH_INTENT_TTL_SECS);
         let intent = PushIntentClaims {
             kind: PUSH_INTENT_KIND.to_string(),
@@ -249,7 +255,11 @@ impl AppState {
             base_git_snapshot_key,
             expires_at_unix,
         };
-        encode_push_intent(&self.push_intent_signing_key, &intent)
+        let token = encode_push_intent(&self.push_intent_signing_key, &intent)?;
+        Ok(CreatedPushIntent {
+            token,
+            expires_at_unix,
+        })
     }
 
     pub(crate) fn validate_push_intent_secret(

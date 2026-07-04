@@ -240,6 +240,7 @@ pub(crate) struct CreatePushIntentRequest {
 pub(crate) struct CreatePushIntentResponse {
     pub(crate) token: String,
     pub(crate) base_head_oid: Option<String>,
+    pub(crate) expires_at_unix: u64,
 }
 
 #[derive(Debug, Serialize)]

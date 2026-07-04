@@ -189,6 +189,7 @@ struct CreatePushIntentRequest {
 pub struct CreatePushIntentResponse {
     pub token: String,
     pub base_head_oid: Option<String>,
+    pub expires_at_unix: u64,
 }
 
 pub fn api_url() -> String {

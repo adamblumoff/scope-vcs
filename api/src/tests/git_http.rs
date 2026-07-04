@@ -39,7 +39,8 @@ fn push_intent_is_signed_instead_of_process_local() {
     let verifier = test_state_with_repo();
     let token = issuer
         .create_push_intent(TEST_REPO_ID, &test_owner_id(), TEST_PUSH_HEAD_OID, None)
-        .unwrap();
+        .unwrap()
+        .token;
 
     let intent = verifier.validate_push_intent_secret(&token).unwrap();
     intent
@@ -101,6 +102,36 @@ async fn create_push_intent_returns_null_base_when_repo_has_no_git_snapshot() {
     let body = response_json(response).await;
     assert!(body["token"].as_str().unwrap().starts_with("scope_pi_"));
     assert!(body["base_head_oid"].is_null());
+    assert!(body["expires_at_unix"].as_u64().unwrap() > unix_now());
+}
+
+#[tokio::test]
+async fn create_push_intent_rejects_sha256_oid_until_git_storage_supports_it() {
+    let state = test_state_with_repo();
+    cache_test_jwks(&state);
+
+    let response = router(state)
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/v1/repos/owner/repo/push-intents")
+                .header(
+                    AUTHORIZATION,
+                    bearer_header_for(&test_owner_id(), TEST_OWNER_EMAIL),
+                )
+                .header(CONTENT_TYPE, "application/json")
+                .body(Body::from(format!(
+                    r#"{{"head_oid":"{}"}}"#,
+                    "a".repeat(64)
+                )))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    let body = response_json(response).await;
+    assert_eq!(body["error"], "head_oid must be a full SHA-1 Git object id");
 }
 
 #[tokio::test]

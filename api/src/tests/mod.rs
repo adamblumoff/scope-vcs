@@ -382,6 +382,7 @@ fn create_test_push_intent(state: &AppState, user_id: &str, head_oid: &str) -> S
                 .map(|snapshot| snapshot.object_key.clone()),
         )
         .unwrap()
+        .token
 }
 
 fn git_head_oid(repo: &FsPath) -> String {
