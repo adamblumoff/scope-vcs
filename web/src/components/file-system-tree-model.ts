@@ -1,18 +1,15 @@
-import type {
-  ProjectionPreviewAudience,
-  ReviewFile,
-  Visibility,
-  VisibilityState,
-} from '@/api/types'
+import type { Visibility, VisibilityState } from '@/api/types'
 
-type ReviewTreeFileBase = {
+export type FileSystemTreeFileBase = {
   path: string
   visibility: Visibility
 }
 
-export type ReviewTreeNode<TFile extends ReviewTreeFileBase = ReviewFile> =
+export type FileSystemTreeNode<
+  TFile extends FileSystemTreeFileBase = FileSystemTreeFileBase,
+> =
   | {
-      children: ReviewTreeNode<TFile>[]
+      children: FileSystemTreeNode<TFile>[]
       files: TFile[]
       key: string
       name: string
@@ -27,8 +24,10 @@ export type ReviewTreeNode<TFile extends ReviewTreeFileBase = ReviewFile> =
       type: 'file'
     }
 
-export function buildReviewTree<TFile extends ReviewTreeFileBase>(files: TFile[]) {
-  const root: Extract<ReviewTreeNode<TFile>, { type: 'folder' }> = {
+export function buildFileSystemTree<TFile extends FileSystemTreeFileBase>(
+  files: TFile[],
+) {
+  const root: Extract<FileSystemTreeNode<TFile>, { type: 'folder' }> = {
     children: [],
     files: [],
     key: 'folder:/',
@@ -39,7 +38,7 @@ export function buildReviewTree<TFile extends ReviewTreeFileBase>(files: TFile[]
   const foldersByPath = new Map<string, typeof root>([[root.path, root]])
 
   for (const file of files) {
-    const path = normalizeReviewPath(file.path)
+    const path = normalizeFilePath(file.path)
     const parts = pathParts(path)
     if (parts.length === 0) {
       continue
@@ -77,12 +76,14 @@ export function buildReviewTree<TFile extends ReviewTreeFileBase>(files: TFile[]
     }
   }
 
-  sortReviewTree(root)
+  sortFileSystemTree(root)
   attachDescendantFiles(root)
   return root
 }
 
-export function folderVisibility(files: ReviewTreeFileBase[]): VisibilityState {
+export function folderVisibility(
+  files: FileSystemTreeFileBase[],
+): VisibilityState {
   const hasPublic = files.some((file) => file.visibility === 'Public')
   const hasPrivate = files.some((file) => file.visibility === 'Private')
   if (hasPublic && hasPrivate) {
@@ -91,8 +92,8 @@ export function folderVisibility(files: ReviewTreeFileBase[]): VisibilityState {
   return hasPublic ? 'Public' : 'Private'
 }
 
-export function folderCollapseKeys<TFile extends ReviewTreeFileBase>(
-  node: Extract<ReviewTreeNode<TFile>, { type: 'folder' }>,
+export function folderCollapseKeys<TFile extends FileSystemTreeFileBase>(
+  node: Extract<FileSystemTreeNode<TFile>, { type: 'folder' }>,
 ): string[] {
   return node.children.flatMap((child) => {
     if (child.type === 'file') {
@@ -103,34 +104,10 @@ export function folderCollapseKeys<TFile extends ReviewTreeFileBase>(
 }
 
 export function displayPath(path: string) {
-  return normalizeReviewPath(path)
+  return normalizeFilePath(path)
 }
 
-export function visibleInProjectionPreview(
-  path: string,
-  audience: ProjectionPreviewAudience | undefined,
-  visiblePaths: ReadonlySet<string> | undefined,
-) {
-  if (!audience) {
-    return true
-  }
-  return visiblePaths?.has(displayPath(path)) ?? false
-}
-
-export function visibleFileCountInProjectionPreview(
-  files: ReviewTreeFileBase[],
-  audience: ProjectionPreviewAudience | undefined,
-  visiblePaths: ReadonlySet<string> | undefined,
-) {
-  if (!audience) {
-    return files.length
-  }
-  return files.filter((file) =>
-    visibleInProjectionPreview(file.path, audience, visiblePaths),
-  ).length
-}
-
-export function normalizeReviewPath(path: string) {
+export function normalizeFilePath(path: string) {
   return path
     .replace(/\\/g, '/')
     .split('/')
@@ -138,8 +115,8 @@ export function normalizeReviewPath(path: string) {
     .join('/')
 }
 
-function sortReviewTree<TFile extends ReviewTreeFileBase>(
-  node: Extract<ReviewTreeNode<TFile>, { type: 'folder' }>,
+function sortFileSystemTree<TFile extends FileSystemTreeFileBase>(
+  node: Extract<FileSystemTreeNode<TFile>, { type: 'folder' }>,
 ) {
   node.children.sort((left, right) => {
     if (left.type !== right.type) {
@@ -149,13 +126,13 @@ function sortReviewTree<TFile extends ReviewTreeFileBase>(
   })
   for (const child of node.children) {
     if (child.type === 'folder') {
-      sortReviewTree(child)
+      sortFileSystemTree(child)
     }
   }
 }
 
-function attachDescendantFiles<TFile extends ReviewTreeFileBase>(
-  node: Extract<ReviewTreeNode<TFile>, { type: 'folder' }>,
+function attachDescendantFiles<TFile extends FileSystemTreeFileBase>(
+  node: Extract<FileSystemTreeNode<TFile>, { type: 'folder' }>,
 ) {
   node.files = node.children.flatMap((child) => {
     if (child.type === 'file') {

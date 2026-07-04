@@ -1,4 +1,5 @@
 import type { ReviewFileDiff } from '@/api/types'
+import { displayPath } from '@/components/file-system-tree-model'
 import { Button } from '@/components/ui/button'
 import { cn } from '@/lib/utils'
 import { parseDiffFromFile, type FileDiffMetadata } from '@pierre/diffs'
@@ -12,7 +13,6 @@ import { Skeleton } from '@/components/ui/skeleton'
 import { useThemeType } from '@/lib/use-theme-type'
 import { File, FileText, TriangleAlert, X } from 'lucide-react'
 import { type ReactNode, useMemo } from 'react'
-import { displayPath } from './review-tree-model'
 
 const PIERRE_DIFF_OPTIONS = {
   diffStyle: 'unified',

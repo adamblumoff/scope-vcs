@@ -7,6 +7,6 @@
     }
   },
   "deploy": {
-    "startCommand": "./cli/bin/scope-cli-service"
+    "startCommand": "SCOPE_CLI_ARTIFACT_DIR=./cli/dist ./cli/bin/scope-cli-service"
   }
 }

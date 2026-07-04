@@ -8,6 +8,7 @@ import type {
   ReviewFileDiff,
 } from '@/api/types'
 import { AppHeader } from '@/components/app-header'
+import { FileSystemTree } from '@/components/file-system-tree'
 import { RepoBreadcrumb } from '@/components/repo-breadcrumb'
 import { PageContent, PageHeader } from '@/components/page-header'
 import { RouteErrorPage } from '@/components/route-error-page'
@@ -29,7 +30,6 @@ import {
 } from 'lucide-react'
 import { type ReactNode, useEffect, useMemo, useReducer, useRef } from 'react'
 import { ReviewFileDiffDrawer } from '../review/review-file-diff-drawer'
-import { ReviewTree } from '../review/review-tree'
 import { audienceLabel, changeCountLabel } from '../review/review-labels'
 
 export type CommitHistories = {
@@ -542,13 +542,13 @@ function CommitDetailPanel({
               No file changes in this commit.
             </div>
           ) : (
-            <ReviewTree
+            <FileSystemTree
               compactVisibility
               files={commit.files}
-              onSelectFile={(file) => onSelectFile(file as CommitFile)}
-              pendingKey={null}
+              getFileMeta={commitFileStatus}
+              metaColumnLabel="Change"
+              onSelectFile={onSelectFile}
               selectedFilePath={selectedFilePath}
-              stagedReview
             />
           )}
         </div>
@@ -828,6 +828,10 @@ function latestCommitId(history: CommitHistory | null) {
 
 function commitTitle(commit: Pick<CommitSummary, 'message'>) {
   return commit.message.split(/\r?\n/, 1)[0]?.trim() || '(no message)'
+}
+
+function commitFileStatus(file: CommitFile) {
+  return <Badge variant="neutral">{file.kind}</Badge>
 }
 
 export function HistoryError({ error }: { error: unknown }) {
