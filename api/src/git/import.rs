@@ -60,15 +60,15 @@ pub(crate) fn persist_receive_pack_update_and_promote(
             let mut cleanup_blobs = uploaded_blobs;
             let mut update = update;
             let access = repo.access_for_user_id(&author_id);
-            if !access.can_push {
-                if !(repo.is_waiting_for_first_push() && repo.is_owner_user(&author_id)) {
-                    let message = if access.actor == RepositoryActor::Public {
-                        "repo membership required"
-                    } else {
-                        "push permission required"
-                    };
-                    return Err(ApiError::forbidden(message));
-                }
+            let can_receive_push = access.can_push
+                || repo.is_waiting_for_first_push() && repo.is_owner_user(&author_id);
+            if !can_receive_push {
+                let message = if access.actor == RepositoryActor::Public {
+                    "repo membership required"
+                } else {
+                    "push permission required"
+                };
+                return Err(ApiError::forbidden(message));
             }
             let previous_config = previous_repo_config(repo, object_store.as_ref())?;
             if !access.can_change_file_visibility

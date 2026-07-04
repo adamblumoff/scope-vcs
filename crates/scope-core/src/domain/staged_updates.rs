@@ -282,13 +282,15 @@ pub fn apply_reviewed_update_to_repo(
         .history_rewrites_added_since(update.previous_config.as_ref());
     let history_rewrite = apply_history_rewrites(
         repo,
-        &update.config,
-        &history_rewrites,
-        &old_tree,
-        &changed_paths,
-        after_commit_id.clone(),
         &mut next_visibility_event_id,
-        &update.author_id,
+        HistoryRewriteInput {
+            config: &update.config,
+            rewrites: &history_rewrites,
+            live_tree: &old_tree,
+            changed_paths: &changed_paths,
+            after_commit_id: after_commit_id.clone(),
+            author_id: &update.author_id,
+        },
     );
     for change in &mut file_changes {
         if change.new_content.is_none() && history_rewrite.redacted_paths.contains(&change.path) {
@@ -371,16 +373,29 @@ struct HistoryRewriteResult {
     redacted_paths: BTreeSet<ScopePath>,
 }
 
+struct HistoryRewriteInput<'a> {
+    config: &'a RepoConfig,
+    rewrites: &'a [HistoryRewriteRequest],
+    live_tree: &'a BTreeMap<ScopePath, SourceBlob>,
+    changed_paths: &'a BTreeSet<ScopePath>,
+    after_commit_id: Option<String>,
+    author_id: &'a str,
+}
+
 fn apply_history_rewrites(
     repo: &mut StoredRepository,
-    config: &RepoConfig,
-    rewrites: &[HistoryRewriteRequest],
-    live_tree: &BTreeMap<ScopePath, SourceBlob>,
-    changed_paths: &BTreeSet<ScopePath>,
-    after_commit_id: Option<String>,
     next_visibility_event_id: &mut usize,
-    author_id: &str,
+    input: HistoryRewriteInput<'_>,
 ) -> HistoryRewriteResult {
+    let HistoryRewriteInput {
+        config,
+        rewrites,
+        live_tree,
+        changed_paths,
+        after_commit_id,
+        author_id,
+    } = input;
+
     if rewrites.is_empty() {
         return HistoryRewriteResult {
             visibility_events: Vec::new(),
@@ -418,7 +433,7 @@ fn apply_history_rewrites(
         if changed_paths.contains(path) || config.visibility_for_path(path) != Visibility::Public {
             continue;
         }
-        let Some(current_content) = live_tree.get(&path) else {
+        let Some(current_content) = live_tree.get(path) else {
             continue;
         };
 

@@ -109,8 +109,7 @@ impl Projection {
                 live.remove(change.path.as_str());
             }
         }
-        let paths = live.into_keys().collect::<Vec<_>>();
-        paths
+        live.into_keys().collect::<Vec<_>>()
     }
 }
 
