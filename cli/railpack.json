@@ -1,0 +1,12 @@
+{
+  "$schema": "https://schema.railpack.com",
+  "provider": "rust",
+  "steps": {
+    "build": {
+      "commands": ["sh ./scripts/build-railway.sh ."]
+    }
+  },
+  "deploy": {
+    "startCommand": "./bin/scope-cli-service"
+  }
+}

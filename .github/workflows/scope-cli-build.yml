@@ -11,7 +11,6 @@ on:
       - "api/src/http/type_exports.rs"
       - "cli/**"
       - "crates/scope-core/**"
-      - "railpack.json"
       - "rust-toolchain.toml"
       - "web/src/api/types.generated.ts"
   push:
@@ -26,7 +25,6 @@ on:
       - "api/src/http/type_exports.rs"
       - "cli/**"
       - "crates/scope-core/**"
-      - "railpack.json"
       - "rust-toolchain.toml"
       - "web/src/api/types.generated.ts"
   workflow_dispatch:
@@ -239,11 +237,23 @@ jobs:
         shell: bash
         run: |
           rm -rf .railway-upload
-          mkdir -p .railway-upload/crates
-          cp railpack.json .railway-upload/railpack.json
+          mkdir -p .railway-upload
+          cp -a cli/. .railway-upload/
           cp rust-toolchain.toml .railway-upload/rust-toolchain.toml
-          cp -a cli .railway-upload/cli
+          mkdir -p .railway-upload/crates
           cp -a crates/scope-core .railway-upload/crates/scope-core
+          perl -0pi -e 's#path = "\.\./crates/scope-core"#path = "crates/scope-core"#' .railway-upload/Cargo.toml
+          mkdir -p .railway-upload/cli
+          cp -a cli/. .railway-upload/cli/
+          mkdir -p .railway-upload/cli/crates
+          cp rust-toolchain.toml .railway-upload/cli/rust-toolchain.toml
+          cp -a crates/scope-core .railway-upload/cli/crates/scope-core
+          perl -0pi -e 's#path = "\.\./crates/scope-core"#path = "crates/scope-core"#' .railway-upload/cli/Cargo.toml
+          for root in .railway-upload .railway-upload/cli; do
+            grep -F 'path = "crates/scope-core"' "$root/Cargo.toml"
+            test -s "$root/railpack.json"
+            test -s "$root/crates/scope-core/Cargo.toml"
+          done
 
       - name: Install Railway CLI
         run: npm install -g @railway/cli@5.23.1
