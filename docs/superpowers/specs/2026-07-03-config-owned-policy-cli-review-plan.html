@@ -1,0 +1,736 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Config-Owned Policy And CLI Review Plan</title>
+    <style>:root{color-scheme:light;--paper:#f4f1e8;--ink:#171612;--muted:#5e5a50;--line:#cbc1aa;--soft-line:#e3dac7;--surface:#fffaf0;--delete:#9f2f24;--replace:#17695f;--cli:#245878;--domain:#7b5a12;--db:#4e4a42;--code:#24211c;}*{box-sizing:border-box;}html{scroll-behavior:smooth;}body{margin:0;background:linear-gradient(90deg,rgba(23,22,18,0.04) 1px,transparent 1px) 0 0 / 34px 34px,linear-gradient(rgba(23,22,18,0.032) 1px,transparent 1px) 0 0 / 34px 34px,var(--paper);color:var(--ink);font-family:"Avenir Next","Segoe UI","Gill Sans",system-ui,sans-serif;font-size:17px;line-height:1.55;}a{color:var(--replace);text-decoration-color:rgba(23,105,95,0.35);text-underline-offset:0.18em;}code,pre,.mono{font-family:"Cascadia Mono","SFMono-Regular",Consolas,ui-monospace,monospace;}pre{margin:0;overflow-x:auto;white-space:pre;}p{max-width:880px;margin:0;color:var(--muted);}ul,ol{margin:12px 0 0;padding-left:1.2rem;color:var(--muted);}li{margin:0.42rem 0;}.wrap{width:min(1200px,calc(100vw - 48px));margin:0 auto;}header{border-bottom:2px solid var(--ink);padding:58px 0 42px;}.eyebrow{margin:0 0 16px;color:var(--delete);font-size:0.78rem;font-weight:850;letter-spacing:0.11em;text-transform:uppercase;}h1,h2,h3{margin:0;letter-spacing:0;}h1{max-width:1040px;font-family:Georgia,Cambria,"Times New Roman",Times,serif;font-size:clamp(2.8rem,6.2vw,6.1rem);font-weight:900;line-height:0.95;}h2{font-family:Georgia,Cambria,"Times New Roman",Times,serif;font-size:clamp(2rem,3.3vw,3.2rem);line-height:1.04;}h3{font-size:1rem;font-weight:850;}.subtitle{margin-top:22px;font-size:1.2rem;}.masthead-grid{display:grid;grid-template-columns:minmax(0,1fr) minmax(270px,390px);gap:42px;align-items:end;margin-top:28px;}.thesis{border-left:4px solid var(--delete);padding:8px 0 8px 20px;}main{padding:34px 0 76px;}section{border-top:1px solid var(--line);padding:38px 0 48px;}section:first-child{border-top:0;padding-top:0;}.lead{margin-top:14px;font-size:1.08rem;}.rail{display:grid;grid-template-columns:280px minmax(0,1fr);gap:34px;margin-top:26px;}.rail-label{border-top:3px solid var(--ink);padding-top:14px;}.rail-label p{margin-top:8px;font-size:0.96rem;}.matrix{width:100%;border-collapse:collapse;background:rgba(255,250,240,0.56);}.matrix th,.matrix td{border-bottom:1px solid var(--line);padding:13px 12px;text-align:left;vertical-align:top;}.matrix th{color:var(--ink);font-size:0.75rem;letter-spacing:0.08em;text-transform:uppercase;}.matrix td:first-child{width:34%;}.delete{color:var(--delete);}.replace{color:var(--replace);}.cli{color:var(--cli);}.domain{color:var(--domain);}.db{color:var(--db);}.flow{display:grid;grid-template-columns:repeat(6,minmax(0,1fr));border-top:2px solid var(--ink);border-bottom:2px solid var(--ink);margin-top:28px;}.flow-step{min-height:178px;border-right:1px solid var(--line);padding:18px 15px 20px;}.flow-step:last-child{border-right:0;}.step-number{display:block;margin-bottom:18px;color:var(--domain);font-family:Georgia,Cambria,"Times New Roman",Times,serif;font-size:2.25rem;font-weight:900;line-height:1;}.split{display:grid;grid-template-columns:minmax(0,1fr) minmax(330px,430px);gap:42px;align-items:start;margin-top:26px;}.sample{border-top:3px solid var(--ink);background:var(--code);color:#fff2d5;padding:18px;font-size:0.86rem;line-height:1.55;}.phase-list{counter-reset:phase;margin-top:26px;}.phase{counter-increment:phase;display:grid;grid-template-columns:86px minmax(0,1fr);gap:26px;border-top:1px solid var(--line);padding:24px 0;}.phase:first-child{border-top:2px solid var(--ink);}.phase::before{content:counter(phase,decimal-leading-zero);color:var(--delete);font-family:Georgia,Cambria,"Times New Roman",Times,serif;font-size:2.45rem;font-weight:900;line-height:1;}.phase h3{margin-bottom:8px;}.bars{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));border-top:2px solid var(--ink);border-bottom:2px solid var(--ink);margin-top:26px;}.bar{border-right:1px solid var(--line);padding:18px 18px 20px;}.bar:last-child{border-right:0;}.callout{border-left:4px solid var(--replace);margin-top:22px;padding:4px 0 4px 18px;}footer{border-top:1px solid var(--line);padding:28px 0 36px;}@media (max-width:1020px){.masthead-grid,.rail,.split{grid-template-columns:1fr;}.flow,.bars{grid-template-columns:1fr;}.flow-step,.bar{border-right:0;border-bottom:1px solid var(--line);}.flow-step:last-child,.bar:last-child{border-bottom:0;}}@media (max-width:640px){body{font-size:16px;}.wrap{width:min(100vw - 28px,1200px);}.matrix,.matrix thead,.matrix tbody,.matrix tr,.matrix th,.matrix td{display:block;}.matrix thead{display:none;}.matrix tr{border-bottom:1px solid var(--line);padding:12px 0;}.matrix td{border-bottom:0;padding:5px 0;}.matrix td:first-child{width:auto;}.phase{grid-template-columns:1fr;gap:8px;}}</style>
+  </head>
+  <body>
+    <header>
+      <div class="wrap">
+        <p class="eyebrow">Destructive implementation plan</p>
+        <h1>Replace web review and UI visibility edits with config-owned CLI review.</h1>
+        <p class="subtitle">
+          Scope should stop storing pending reviews for the web app. The config
+          file becomes the only file-visibility write surface, the CLI becomes
+          the review surface, and the server becomes the validator and atomic
+          applier.
+        </p>
+        <div class="masthead-grid">
+          <p>
+            This plan intentionally deletes old surfaces instead of preserving
+            compatibility. There are no users and no valuable data, so the
+            architecture should move to the model we actually want.
+          </p>
+          <div class="thesis">
+            <p>
+              <strong>Core replacement:</strong> delete server-side review
+              queues and web publish controls. Replace them with a reviewed
+              push intent generated by <code>scope push</code>.
+            </p>
+          </div>
+        </div>
+      </div>
+    </header>
+
+    <main class="wrap">
+      <section>
+        <h2>Non-negotiable outcomes</h2>
+        <p class="lead">
+          These are the target rules the implementation should optimize around.
+        </p>
+        <div class="bars">
+          <div class="bar">
+            <h3 class="replace">Config owns visibility</h3>
+            <p>
+              File and folder visibility changes come only from
+              <code>.scope/repo.json</code>. The web UI can display policy, but
+              it cannot change it.
+            </p>
+          </div>
+          <div class="bar">
+            <h3 class="cli">CLI owns review</h3>
+            <p>
+              Review happens before upload in <code>scope push</code>. The user
+              reviews content changes, config changes, and destructive rewrite
+              requests locally.
+            </p>
+          </div>
+          <div class="bar">
+            <h3 class="domain">History is forward-only by default</h3>
+            <p>
+              Old commits keep the visibility they had when created. Destructive
+              public-history cleanup requires an explicit config entry.
+            </p>
+          </div>
+        </div>
+      </section>
+
+      <section>
+        <h2>The new push flow</h2>
+        <p class="lead">
+          The important change is that the server no longer persists a pending
+          review. The server applies a reviewed push or rejects it.
+        </p>
+
+        <div class="flow" aria-label="New scope push flow">
+          <div class="flow-step">
+            <span class="step-number">1</span>
+            <h3 class="cli">Read local state</h3>
+            <p>
+              CLI reads committed <code>.scope/repo.json</code>, current HEAD,
+              and the Scope base snapshot.
+            </p>
+          </div>
+          <div class="flow-step">
+            <span class="step-number">2</span>
+            <h3 class="cli">Compute plan</h3>
+            <p>
+              CLI builds changed files, config policy diff, forward visibility
+              boundaries, and requested destructive rewrites.
+            </p>
+          </div>
+          <div class="flow-step">
+            <span class="step-number">3</span>
+            <h3 class="cli">Review locally</h3>
+            <p>
+              TUI shows what will be public, private, forward-only, and
+              destructively rewritten. Flags can skip prompts.
+            </p>
+          </div>
+          <div class="flow-step">
+            <span class="step-number">4</span>
+            <h3 class="replace">Create push intent</h3>
+            <p>
+              CLI sends the reviewed manifest to Scope. Scope returns a
+              one-time Git credential bound to that exact manifest.
+            </p>
+          </div>
+          <div class="flow-step">
+            <span class="step-number">5</span>
+            <h3 class="db">Upload Git data</h3>
+            <p>
+              CLI performs Git receive-pack with the intent credential. The
+              server verifies HEAD, config digest, base, and manifest.
+            </p>
+          </div>
+          <div class="flow-step">
+            <span class="step-number">6</span>
+            <h3 class="domain">Apply atomically</h3>
+            <p>
+              Server writes graph, visibility boundaries, config, snapshot, and
+              optional destructive rewrites in one mutation.
+            </p>
+          </div>
+        </div>
+      </section>
+
+      <section>
+        <h2>Delete and replace matrix</h2>
+        <p class="lead">
+          This is the implementation posture: remove the current review and UI
+          policy paths, then introduce the smaller config/CLI path.
+        </p>
+
+        <div class="rail">
+          <div class="rail-label">
+            <h3 class="delete">Web app deletion</h3>
+            <p>
+              The web app becomes read/browse/settings/collaboration. It stops
+              being a review or visibility mutation surface.
+            </p>
+          </div>
+          <table class="matrix">
+            <thead>
+              <tr>
+                <th>Delete</th>
+                <th>Replace with</th>
+                <th>Reason</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td><code>web/src/routes/repos.$owner.$repo.review.tsx</code></td>
+                <td>No review route.</td>
+                <td>Review is local in the CLI, not a browser workflow.</td>
+              </tr>
+              <tr>
+                <td><code>web/src/routes/-repo-review-actions.ts</code></td>
+                <td>No server functions for publish/apply/reject/visibility.</td>
+                <td>Those actions become part of <code>scope push</code>.</td>
+              </tr>
+              <tr>
+                <td><code>web/src/api/review.ts</code></td>
+                <td>CLI-only API client methods in the Rust CLI.</td>
+                <td>The web app should not load or mutate pending review state.</td>
+              </tr>
+              <tr>
+                <td><code>web/src/features/review/*</code></td>
+                <td>
+                  A smaller read-only repo file browser, if the existing detail
+                  page still needs a tree.
+                </td>
+                <td>
+                  Current components are built around visibility toggles,
+                  review diffs, publish/apply/reject, and review previews.
+                </td>
+              </tr>
+              <tr>
+                <td>Repo index redirect to <code>/review</code></td>
+                <td>Always render repo detail when readable.</td>
+                <td>No browser review destination exists.</td>
+              </tr>
+              <tr>
+                <td>Live visibility editing on repo detail</td>
+                <td>Read-only public/private indicators from projection state.</td>
+                <td>Config is the only visibility write surface.</td>
+              </tr>
+              <tr>
+                <td>Settings push-review/default-visibility toggles</td>
+                <td>Settings keeps collaboration and delete controls only.</td>
+                <td>Push review and default visibility move to config/CLI.</td>
+              </tr>
+              <tr>
+                <td><code>RepoPrimaryAction</code> links to review</td>
+                <td>Open/settings/clone only.</td>
+                <td>No pending review call-to-action in web UI.</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+
+        <div class="rail">
+          <div class="rail-label">
+            <h3 class="delete">API deletion</h3>
+            <p>
+              Browser review endpoints disappear. New endpoints are scoped to
+              CLI push preflight and reviewed push intent creation.
+            </p>
+          </div>
+          <table class="matrix">
+            <thead>
+              <tr>
+                <th>Delete</th>
+                <th>Replace with</th>
+                <th>Reason</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td><code>GET /pending-import</code></td>
+                <td><code>GET /push-context</code></td>
+                <td>
+                  CLI needs accepted base/config state, not a server-side review
+                  payload.
+                </td>
+              </tr>
+              <tr>
+                <td><code>POST /publish</code></td>
+                <td>First reviewed push publishes automatically.</td>
+                <td>No manual web publish step.</td>
+              </tr>
+              <tr>
+                <td><code>GET /staged-update</code></td>
+                <td>No persisted staged update.</td>
+                <td>Pending review state is deleted from the server model.</td>
+              </tr>
+              <tr>
+                <td><code>POST /staged-update/apply</code></td>
+                <td><code>POST /push-intents</code> plus Git receive-pack.</td>
+                <td>Apply happens atomically when a reviewed push uploads.</td>
+              </tr>
+              <tr>
+                <td><code>POST /staged-update/reject</code></td>
+                <td>No server reject.</td>
+                <td>If local review is rejected, the CLI never uploads.</td>
+              </tr>
+              <tr>
+                <td><code>PATCH /files/visibility</code></td>
+                <td>Config diff inside reviewed push intent.</td>
+                <td>Live visibility edits are not an API operation anymore.</td>
+              </tr>
+              <tr>
+                <td><code>PATCH /staged-update/files/visibility</code></td>
+                <td>Config/TUI decision before intent creation.</td>
+                <td>There is no staged update to mutate.</td>
+              </tr>
+              <tr>
+                <td><code>source=review</code> projection preview mode</td>
+                <td>CLI preview derived from local manifest.</td>
+                <td>Web/API preview should show live projections only.</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+
+        <div class="rail">
+          <div class="rail-label">
+            <h3 class="delete">Domain and DB deletion</h3>
+            <p>
+              Remove data structures whose only purpose is web/server pending
+              review. Replace destructive current-policy projection with
+              commit-forward visibility.
+            </p>
+          </div>
+          <table class="matrix">
+            <thead>
+              <tr>
+                <th>Delete</th>
+                <th>Replace with</th>
+                <th>Reason</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td><code>PendingImport</code> and <code>pending_import</code></td>
+                <td>Reviewed first push applies and publishes immediately.</td>
+                <td>No web publish queue.</td>
+              </tr>
+              <tr>
+                <td><code>StagedRepoUpdate</code> and <code>staged_update</code></td>
+                <td><code>ReviewedPush</code> command applied in one transaction.</td>
+                <td>No server-side pending update.</td>
+              </tr>
+              <tr>
+                <td><code>RepoSettings.review_pushes_before_applying</code></td>
+                <td>CLI review is always the push path.</td>
+                <td>Review is not configurable in the web UI.</td>
+              </tr>
+              <tr>
+                <td>Mutable default visibility setting</td>
+                <td><code>.scope/repo.json.visibility.default</code></td>
+                <td>Default visibility belongs to versioned repo config.</td>
+              </tr>
+              <tr>
+                <td>Projection filtering old commits through current policy</td>
+                <td><code>FileChange.visibility</code> as historical truth.</td>
+                <td>Current policy should not rewrite old history by default.</td>
+              </tr>
+              <tr>
+                <td>Implicit destructive policy behavior</td>
+                <td>Explicit <code>history.rewrites</code> entries.</td>
+                <td>Destruction must be named, path-scoped, and reviewed.</td>
+              </tr>
+              <tr>
+                <td>Config file as ordinary file policy target</td>
+                <td>Reserved private path rule enforced by domain.</td>
+                <td>The config file can never be public, even for owners.</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      </section>
+
+      <section>
+        <h2>Replacement domain shape</h2>
+        <p class="lead">
+          The durable domain should own the config schema, validation,
+          visibility timeline, and destructive rewrite commands. Outer layers
+          only parse inputs, call the domain, persist results, and render output.
+        </p>
+
+        <div class="split">
+          <div>
+            <h3 class="domain">New domain-owned concepts</h3>
+            <ul>
+              <li>
+                <code>RepoConfig</code>: parsed config with
+                <code>kind</code>, <code>version</code>, visibility rules, and
+                explicit history rewrite requests.
+              </li>
+              <li>
+                <code>ReservedScopePath</code>: domain rule that
+                <code>/.scope/repo.json</code> is always private and cannot be
+                overridden.
+              </li>
+              <li>
+                <code>ReviewedPush</code>: content changes plus reviewed config
+                effects plus expected base/head/config digest.
+              </li>
+              <li>
+                <code>VisibilityBoundary</code>: forward-only public/private
+                boundary emitted when config changes affect a live path.
+              </li>
+              <li>
+                <code>HistoryRewriteRequest</code>: explicit destructive
+                path-scoped operation such as
+                <code>redact-public-history</code>.
+              </li>
+            </ul>
+
+            <div class="callout">
+              <p>
+                The existing <code>FileChange.visibility</code> should become
+                the historical source of truth for that commit. Public
+                projection should stop asking the current policy whether an old
+                public change is still readable.
+              </p>
+            </div>
+          </div>
+
+          <pre class="sample"><code>{
+  "$schema": "https://scope.dev/schemas/repo-config.v1.json",
+  "kind": "scope.repo-config",
+  "version": 1,
+  "visibility": {
+    "default": "private",
+    "rules": [
+      { "path": "/README.md", "visibility": "public" },
+      { "path": "/src/**", "visibility": "public" },
+      { "path": "/notes/**", "visibility": "private" }
+    ]
+  },
+  "history": {
+    "rewrites": [
+      {
+        "path": "/leaked-secrets/**",
+        "action": "redact-public-history"
+      }
+    ]
+  }
+}</code></pre>
+        </div>
+      </section>
+
+      <section>
+        <h2>Implementation phases</h2>
+        <p class="lead">
+          This order deletes broad surfaces early, then replaces the core path
+          with a single reviewed push command.
+        </p>
+
+        <div class="phase-list">
+          <div class="phase">
+            <div>
+              <h3>Introduce config parsing and validation in the domain</h3>
+              <p>
+                Add <code>RepoConfig</code>, reserved path validation, glob/path
+                matching, schema version handling, and config digesting in
+                <code>crates/scope-core</code>. Reject config attempts to expose
+                <code>/.scope/repo.json</code>.
+              </p>
+            </div>
+          </div>
+
+          <div class="phase">
+            <div>
+              <h3>Switch projection to commit-forward visibility</h3>
+              <p>
+                Change public projection so historical public file changes stay
+                visible based on their stored <code>FileChange.visibility</code>.
+                Use visibility boundaries for future tree changes. Keep private
+                to public as a baseline; public to private as a forward public
+                deletion.
+              </p>
+            </div>
+          </div>
+
+          <div class="phase">
+            <div>
+              <h3>Add reviewed push command</h3>
+              <p>
+                Replace <code>stage_staged_update</code>,
+                <code>apply_staged_update</code>, and
+                <code>publish_import</code> with one domain command that accepts
+                a reviewed push manifest and either applies it completely or
+                fails without mutating the repo.
+              </p>
+            </div>
+          </div>
+
+          <div class="phase">
+            <div>
+              <h3>Replace receive-pack persistence with push intents</h3>
+              <p>
+                Add <code>GET /push-context</code> and
+                <code>POST /push-intents</code>. The intent returns a one-time
+                Git credential bound to expected base, head, config digest, and
+                reviewed policy effects. Receive-pack applies only if those
+                facts match.
+              </p>
+            </div>
+          </div>
+
+          <div class="phase">
+            <div>
+              <h3>Rewrite <code>scope push</code></h3>
+              <p>
+                CLI loads push context, reads committed config from HEAD,
+                computes local diff, runs TUI review, creates the push intent,
+                then performs Git push with the intent credential. Add flags for
+                noninteractive approval and browser-free operation.
+              </p>
+            </div>
+          </div>
+
+          <div class="phase">
+            <div>
+              <h3>Make <code>scope init</code> config-first</h3>
+              <p>
+                Stop printing a web review URL. Create the repo and remote, add
+                or validate <code>.scope/repo.json</code>, and direct the user to
+                commit the config and run <code>scope push</code>. First
+                reviewed push publishes the repo automatically.
+              </p>
+            </div>
+          </div>
+
+          <div class="phase">
+            <div>
+              <h3>Delete web review and visibility mutation surfaces</h3>
+              <p>
+                Remove review route, review actions, review API client,
+                publish/apply/reject buttons, live visibility toggles, settings
+                visibility toggles, and review redirects. Replace repo detail
+                with a read-only file/projection view.
+              </p>
+            </div>
+          </div>
+
+          <div class="phase">
+            <div>
+              <h3>Destructively simplify schema and generated types</h3>
+              <p>
+                Drop pending review columns and settings fields. Regenerate
+                TypeScript API contracts after removing review DTOs. Update
+                schema contract tests to assert the smaller shape.
+              </p>
+            </div>
+          </div>
+
+          <div class="phase">
+            <div>
+              <h3>Replace tests instead of patching them</h3>
+              <p>
+                Delete review publish/diff tests that assert old behavior.
+                Replace with domain tests for config validation, reserved path
+                privacy, commit-forward projection, destructive rewrites, push
+                intent validation, and CLI push flows.
+              </p>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <section>
+        <h2>Specific files and areas to delete</h2>
+        <p class="lead">
+          This list should guide the actual implementation sweep. Some files may
+          disappear entirely; others should be reduced after their review or
+          visibility responsibilities are removed.
+        </p>
+
+        <table class="matrix">
+          <thead>
+            <tr>
+              <th>Area</th>
+              <th>Delete or gut</th>
+              <th>Replacement</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td>Web routes</td>
+              <td>
+                <code>web/src/routes/repos.$owner.$repo.review.tsx</code>,
+                <code>web/src/routes/-repo-review-actions.ts</code>, review
+                route entries in <code>routeTree.gen.ts</code>.
+              </td>
+              <td>Generated route tree without review route.</td>
+            </tr>
+            <tr>
+              <td>Web review feature</td>
+              <td><code>web/src/features/review/*</code></td>
+              <td>Read-only repo file tree only if needed by repo detail.</td>
+            </tr>
+            <tr>
+              <td>Web API</td>
+              <td>
+                <code>web/src/api/review.ts</code>, review imports in
+                <code>repo-detail.ts</code>, file visibility mutator exports.
+              </td>
+              <td>Repo detail loads live files and live projection previews only.</td>
+            </tr>
+            <tr>
+              <td>Web settings</td>
+              <td>
+                <code>review_pushes_before_applying</code> and
+                <code>default_new_file_visibility</code> controls/state/input.
+              </td>
+              <td>Settings remains collaboration plus danger zone.</td>
+            </tr>
+            <tr>
+              <td>API routes</td>
+              <td>
+                Review, publish, staged-update, and file-visibility routes in
+                <code>api/src/app.rs</code>.
+              </td>
+              <td>Push context and push intent routes.</td>
+            </tr>
+            <tr>
+              <td>API modules</td>
+              <td>
+                <code>api/src/http/review.rs</code> and review-only response
+                DTOs.
+              </td>
+              <td>Push intent HTTP module and CLI response DTOs.</td>
+            </tr>
+            <tr>
+              <td>Domain review code</td>
+              <td>
+                <code>PendingImport</code>, <code>StagedRepoUpdate</code>,
+                staged apply/reject/publish commands.
+              </td>
+              <td><code>ReviewedPush</code> command.</td>
+            </tr>
+            <tr>
+              <td>DB schema</td>
+              <td>
+                <code>pending_import</code>, <code>staged_update</code>,
+                <code>review_pushes_before_applying</code>, review read booleans.
+              </td>
+              <td>Persisted config digest/source and push intent state if needed.</td>
+            </tr>
+            <tr>
+              <td>CLI push</td>
+              <td>
+                "Push accepted; review in app" messaging and plain authenticated
+                push flow.
+              </td>
+              <td>Config-aware local review plus push intent credential flow.</td>
+            </tr>
+            <tr>
+              <td>Tests</td>
+              <td>
+                Review publish/diff tests and web tests around visibility
+                mutation.
+              </td>
+              <td>Config, projection, push-intent, and CLI review tests.</td>
+            </tr>
+          </tbody>
+        </table>
+      </section>
+
+      <section>
+        <h2>Tradeoffs we are choosing</h2>
+        <p class="lead">
+          This approach is simpler and more coherent, but it deliberately gives
+          up some flexibility.
+        </p>
+
+        <table class="matrix">
+          <thead>
+            <tr>
+              <th>Tradeoff</th>
+              <th>What we gain</th>
+              <th>What we give up</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td>CLI-only review</td>
+              <td>Local, fast, config-aware review with no server reconciliation queue.</td>
+              <td>No browser-based review, no pending review link, no review handoff across devices.</td>
+            </tr>
+            <tr>
+              <td>Config-only visibility changes</td>
+              <td>Versioned, auditable policy changes that travel with the repo.</td>
+              <td>No quick web toggle for one-off visibility changes.</td>
+            </tr>
+            <tr>
+              <td>No server-side staged update</td>
+              <td>Smaller server state and fewer stuck states to clean up.</td>
+              <td>A rejected review cannot be resumed later because it never reaches the server.</td>
+            </tr>
+            <tr>
+              <td>Forward-only history by default</td>
+              <td>Policy changes no longer surprise users by rewriting old history.</td>
+              <td>Previously public leaks remain public until an explicit destructive rewrite is requested.</td>
+            </tr>
+            <tr>
+              <td>Explicit destructive rewrites</td>
+              <td>Dangerous changes are visible, path-scoped, and reviewable.</td>
+              <td>Rewrite implementation is more complex and can invalidate projection/cache identities.</td>
+            </tr>
+            <tr>
+              <td>Reserved config file is always private</td>
+              <td>Public readers cannot inspect policy or destructive rewrite intent.</td>
+              <td>Public clones are intentionally not a byte-for-byte view of the source tree.</td>
+            </tr>
+            <tr>
+              <td>Push intent credential</td>
+              <td>Server can bind Git upload to reviewed local decisions.</td>
+              <td>Push flow gets one more API round trip and a new failure mode when intent facts drift.</td>
+            </tr>
+            <tr>
+              <td>Collapse review settings</td>
+              <td>One push path, fewer settings, fewer branches in domain logic.</td>
+              <td>No per-repo choice between auto-apply and review-before-apply.</td>
+            </tr>
+            <tr>
+              <td>Potentially collapse visibility permission into push permission</td>
+              <td>Simpler collaboration model: if you can push config, you can affect policy.</td>
+              <td>Less granular safety for collaborators. If this feels wrong, keep a server-side config-change permission without adding UI toggles for file paths.</td>
+            </tr>
+            <tr>
+              <td>Destructive schema cleanup</td>
+              <td>No compatibility layer and less dead model weight.</td>
+              <td>Existing dev data and tests around old review behavior are thrown away.</td>
+            </tr>
+          </tbody>
+        </table>
+      </section>
+
+      <section>
+        <h2>Verification plan</h2>
+        <p class="lead">
+          The new tests should prove the new model directly instead of trying to
+          preserve old review behavior.
+        </p>
+
+        <div class="bars">
+          <div class="bar">
+            <h3 class="domain">Domain tests</h3>
+            <ul>
+              <li>Config parser accepts only known schema/kind/version.</li>
+              <li>Reserved config path is always private.</li>
+              <li>Public to private creates forward public deletion only.</li>
+              <li>Private to public creates public baseline only.</li>
+              <li>Destructive rewrite removes named public history only.</li>
+            </ul>
+          </div>
+          <div class="bar">
+            <h3 class="db">API/Git tests</h3>
+            <ul>
+              <li>Push intent rejects stale base/head/config digest.</li>
+              <li>Receive-pack without a valid intent cannot mutate repo.</li>
+              <li>First reviewed push publishes repo.</li>
+              <li>Published reviewed push applies atomically.</li>
+              <li>Public clone never contains <code>.scope/repo.json</code>.</li>
+            </ul>
+          </div>
+          <div class="bar">
+            <h3 class="cli">CLI/Web tests</h3>
+            <ul>
+              <li><code>scope push</code> fails when config is missing or uncommitted.</li>
+              <li>TUI review lists visibility and destructive rewrite effects.</li>
+              <li>Flags can run push noninteractively.</li>
+              <li>Web has no review route and no visibility controls.</li>
+              <li>Settings has no review/default-visibility toggles.</li>
+            </ul>
+          </div>
+        </div>
+      </section>
+    </main>
+
+    <footer>
+      <div class="wrap">
+        <p>
+          Plan artifact:
+          <span class="mono">docs/superpowers/specs/2026-07-03-config-owned-policy-cli-review-plan.html</span>
+        </p>
+      </div>
+    </footer>
+  </body>
+</html>

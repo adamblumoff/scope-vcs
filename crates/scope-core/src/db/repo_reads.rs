@@ -9,7 +9,7 @@ use crate::{
     domain::{
         policy::{Policy, Principal, PrincipalKind, ScopePath, Visibility},
         projection_views::{
-            ProjectionViewFile, has_visible_projected_files,
+            ProjectionViewFile, has_visible_projected_history,
             projected_files as domain_projected_files,
         },
         store::{
@@ -332,8 +332,16 @@ where
         load_live_projection_files_for_audience(conn, &row.id, row.change_version(), audience)
             .await?
     {
-        let visible_projected_files = !files.is_empty();
-        return if row_is_readable_with_visible_files(&row, access, visible_projected_files)? {
+        let visible_projection = if !files.is_empty() {
+            true
+        } else if needs_public_projection_visibility(&row, viewer_user_id, access) {
+            let repo = hydrate_repo_from_row_id(conn, &row.id).await?;
+            let principal = principal_for_access(viewer_user_id, access);
+            has_visible_projected_history(&repo, &principal)
+        } else {
+            false
+        };
+        return if row_is_readable_with_visible_projection(&row, access, visible_projection)? {
             Ok(Some(files))
         } else {
             Ok(None)
@@ -342,9 +350,9 @@ where
 
     let repo = hydrate_repo_from_row_id(conn, &row.id).await?;
     let principal = principal_for_access(viewer_user_id, access);
-    let visible_projected_files = repo.record.publication_state == RepoPublicationState::Published
-        && has_visible_projected_files(&repo, &principal);
-    if !row_is_readable_with_visible_files(&row, access, visible_projected_files)? {
+    let visible_projection = repo.record.publication_state == RepoPublicationState::Published
+        && has_visible_projected_history(&repo, &principal);
+    if !row_is_readable_with_visible_projection(&row, access, visible_projection)? {
         return Ok(None);
     }
     Ok(Some(domain_projected_files(&repo, &principal)))
@@ -467,28 +475,27 @@ async fn summary_for_viewer_row<C>(
 where
     C: ConnectionTrait,
 {
-    let visible_projected_files =
-        if needs_public_projection_visibility(&row, viewer_user_id, access) {
-            match load_live_projection_file_count_for_audience(
-                conn,
-                &row.id,
-                row.change_version(),
-                LIVE_PUBLIC_AUDIENCE,
-            )
-            .await?
-            {
-                Some(count) => count > 0,
-                None => {
-                    let repo = hydrate_repo_from_row_id(conn, &row.id).await?;
-                    let principal = principal_for_access(viewer_user_id, access);
-                    has_visible_projected_files(&repo, &principal)
-                }
+    let visible_projection = if needs_public_projection_visibility(&row, viewer_user_id, access) {
+        match load_live_projection_file_count_for_audience(
+            conn,
+            &row.id,
+            row.change_version(),
+            LIVE_PUBLIC_AUDIENCE,
+        )
+        .await?
+        {
+            Some(count) if count > 0 => true,
+            Some(_) | None => {
+                let repo = hydrate_repo_from_row_id(conn, &row.id).await?;
+                let principal = principal_for_access(viewer_user_id, access);
+                has_visible_projected_history(&repo, &principal)
             }
-        } else {
-            false
-        };
+        }
+    } else {
+        false
+    };
 
-    if !row_is_readable_with_visible_files(&row, access, visible_projected_files)? {
+    if !row_is_readable_with_visible_projection(&row, access, visible_projection)? {
         return Ok(None);
     }
     Ok(Some(summary_from_row(row, access)?))
@@ -504,9 +511,9 @@ where
     C: ConnectionTrait,
 {
     if !needs_public_projection_visibility(row, viewer_user_id, access) {
-        return row_is_readable_with_visible_files(row, access, false);
+        return row_is_readable_with_visible_projection(row, access, false);
     }
-    let visible_projected_files = match load_live_projection_file_count_for_audience(
+    let visible_projection = match load_live_projection_file_count_for_audience(
         conn,
         &row.id,
         row.change_version(),
@@ -514,14 +521,14 @@ where
     )
     .await?
     {
-        Some(count) => count > 0,
-        None => {
+        Some(count) if count > 0 => true,
+        Some(_) | None => {
             let repo = hydrate_repo_from_row_id(conn, &row.id).await?;
             let principal = principal_for_access(viewer_user_id, access);
-            has_visible_projected_files(&repo, &principal)
+            has_visible_projected_history(&repo, &principal)
         }
     };
-    row_is_readable_with_visible_files(row, access, visible_projected_files)
+    row_is_readable_with_visible_projection(row, access, visible_projection)
 }
 
 fn summary_for_user_list_row(
@@ -616,10 +623,10 @@ fn access_for_user_id(
     }
 }
 
-fn row_is_readable_with_visible_files(
+fn row_is_readable_with_visible_projection(
     row: &RepoReadRow,
     access: RepositoryAccess,
-    visible_projected_files: bool,
+    visible_projection: bool,
 ) -> Result<bool, ApiError> {
     let publication_state = row.publication_state()?;
     let policy = row.policy()?;
@@ -628,7 +635,7 @@ fn row_is_readable_with_visible_files(
         &policy,
         access.actor == RepositoryActor::Public,
         access,
-        visible_projected_files,
+        visible_projection,
     ))
 }
 
@@ -713,7 +720,7 @@ fn repo_is_readable_for_principal(repo: &StoredRepository, principal: &Principal
         access.actor == RepositoryActor::Public,
         access,
         repo.record.publication_state == RepoPublicationState::Published
-            && has_visible_projected_files(repo, principal),
+            && has_visible_projected_history(repo, principal),
     )
 }
 
@@ -722,7 +729,7 @@ fn readable_from_facts(
     policy: &Policy,
     principal_is_public: bool,
     access: RepositoryAccess,
-    visible_projected_files: bool,
+    visible_projection: bool,
 ) -> bool {
     let root = ScopePath::root();
     match access.actor {
@@ -733,8 +740,7 @@ fn readable_from_facts(
         }
         RepositoryActor::Public => {
             publication_state == RepoPublicationState::Published
-                && ((principal_is_public && policy.can_read(&root, false))
-                    || visible_projected_files)
+                && ((principal_is_public && policy.can_read(&root, false)) || visible_projection)
         }
     }
 }

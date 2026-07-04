@@ -48,7 +48,7 @@ async fn real_git_binary_published_push_round_trips_through_clone() {
         catalog.repositories.insert(TEST_REPO_ID.to_string(), repo);
     }
 
-    let (addr, server) = start_git_http_server(state).await;
+    let (addr, server) = start_git_http_server(state.clone()).await;
     let source = temp_path("binary-published-update-source");
     let remote = format!("http://scope:{secret}@{addr}/git/{TEST_REPO_ID}");
     run_git(
@@ -60,8 +60,10 @@ async fn real_git_binary_published_push_round_trips_through_clone() {
     assert_eq!(fs::read(source.join("image.png")).unwrap(), original);
 
     fs::write(source.join("image.png"), updated).unwrap();
-    run_git(Some(&source), &["add", "image.png"], "add binary update").unwrap();
+    write_scope_repo_config(&source, Visibility::Public);
+    run_git(Some(&source), &["add", "-A"], "add binary update").unwrap();
     commit_all(&source, "update binary image");
+    configure_push_intent_header(&state, &source, &remote, &test_owner_id());
     run_git(
         Some(&source),
         &["push", "origin", "HEAD:main"],
@@ -136,6 +138,7 @@ async fn first_push_publish_clone_round_trip(label: &str, files: &[(&str, &[u8])
     let (addr, server) = start_git_http_server(state_for_server).await;
 
     let source = temp_git_repo(label);
+    write_scope_repo_config(&source, Visibility::Public);
     for (path, bytes) in files {
         let path = source.join(path);
         if let Some(parent) = path.parent() {
@@ -153,18 +156,13 @@ async fn first_push_publish_clone_round_trip(label: &str, files: &[(&str, &[u8])
         "add scope remote",
     )
     .unwrap();
+    configure_push_intent_header(&state, &source, &remote, &test_owner_id());
     run_git(
         Some(&source),
         &["push", "-u", "scope", "HEAD:main"],
         "push first import over http",
     )
     .unwrap();
-
-    {
-        let mut catalog = lock_catalog(&state).unwrap();
-        let repo = catalog.repositories.get_mut(TEST_REPO_ID).unwrap();
-        preview_publish_import(repo).unwrap();
-    }
 
     let clone = temp_path(&format!("{label}-public-clone"));
     let public_remote = format!("http://{addr}/git/{TEST_REPO_ID}");

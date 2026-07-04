@@ -8,8 +8,7 @@ use crate::domain::commit_history::{CommitHistoryCommit, CommitHistoryView};
 use crate::domain::policy::{ScopePath, Visibility};
 use crate::domain::store::{
     FirstPushToken, FirstPushTokenStatus, GitCloneToken, GitPushToken, RepoPublicationState,
-    RepositoryAccess, RepositoryActor, StagedFileChangeKind, StagedRepoUpdate, StoredRepository,
-    UserAccount,
+    RepositoryAccess, RepositoryActor, StagedFileChangeKind, StoredRepository, UserAccount,
 };
 use crate::{config::DEFAULT_GIT_BRANCH, error::ApiError};
 pub(crate) use scope_core::auth::device::SessionIdentity;
@@ -230,6 +229,19 @@ pub(crate) struct DeleteRepoResponse {
     pub(crate) deleted: bool,
 }
 
+#[derive(Debug, Deserialize)]
+#[cfg_attr(test, derive(ts_rs::TS))]
+pub(crate) struct CreatePushIntentRequest {
+    pub(crate) head_oid: String,
+}
+
+#[derive(Debug, Serialize)]
+#[cfg_attr(test, derive(ts_rs::TS))]
+pub(crate) struct CreatePushIntentResponse {
+    pub(crate) token: String,
+    pub(crate) base_head_oid: Option<String>,
+}
+
 #[derive(Debug, Serialize)]
 #[cfg_attr(test, derive(ts_rs::TS))]
 pub(crate) struct RepoInitResponse {
@@ -239,7 +251,6 @@ pub(crate) struct RepoInitResponse {
     pub(crate) push_branch: &'static str,
     pub(crate) token: Option<FirstPushTokenResponse>,
     pub(crate) push_token: Option<GitPushTokenResponse>,
-    pub(crate) review_url: String,
 }
 
 #[derive(Debug, Serialize)]
@@ -273,49 +284,6 @@ pub(crate) struct GitCloneTokenResponse {
     pub(crate) secret: Option<String>,
 }
 
-#[derive(Debug, Serialize)]
-#[cfg_attr(test, derive(ts_rs::TS))]
-pub(crate) struct PendingImportReviewResponse {
-    pub(crate) publication_state: RepoPublicationState,
-    pub(crate) default_visibility: Visibility,
-    pub(crate) line_diff: Option<ReviewLineDiffResponse>,
-    pub(crate) files: Vec<RepoFileResponse>,
-}
-
-#[derive(Debug, Deserialize)]
-#[cfg_attr(test, derive(ts_rs::TS))]
-pub(crate) struct UpdateFileVisibilityRequest {
-    pub(crate) paths: Vec<String>,
-    pub(crate) visibility: Visibility,
-}
-
-#[derive(Debug, Serialize)]
-#[cfg_attr(test, derive(ts_rs::TS))]
-pub(crate) struct RepoSettingsResponse {
-    pub(crate) default_new_file_visibility: Visibility,
-    pub(crate) review_pushes_before_applying: bool,
-}
-
-#[derive(Debug, Deserialize)]
-#[cfg_attr(test, derive(ts_rs::TS))]
-pub(crate) struct UpdateRepoSettingsRequest {
-    pub(crate) default_new_file_visibility: Visibility,
-    pub(crate) review_pushes_before_applying: bool,
-}
-
-#[derive(Debug, Deserialize)]
-#[cfg_attr(test, derive(ts_rs::TS))]
-pub(crate) struct UpdateStagedFileVisibilityRequest {
-    pub(crate) paths: Vec<String>,
-    pub(crate) visibility: Visibility,
-}
-
-#[derive(Debug, Deserialize)]
-#[cfg_attr(test, derive(ts_rs::TS))]
-pub(crate) struct ReviewFileDiffRequest {
-    pub(crate) path: String,
-}
-
 #[derive(Debug, Deserialize)]
 #[cfg_attr(test, derive(ts_rs::TS))]
 pub(crate) struct CommitHistoryRequest {
@@ -345,34 +313,6 @@ pub(crate) struct ReviewFileDiffResponse {
 pub(crate) enum ReviewFileContentResponse {
     Text { text: String },
     Binary { oid: String, size_bytes: u64 },
-}
-
-#[derive(Debug, Default, Serialize)]
-#[cfg_attr(test, derive(ts_rs::TS))]
-pub(crate) struct ReviewLineDiffResponse {
-    pub(crate) additions: usize,
-    pub(crate) deletions: usize,
-}
-
-#[derive(Debug, Serialize)]
-#[cfg_attr(test, derive(ts_rs::TS))]
-pub(crate) struct StagedUpdateResponse {
-    pub(crate) id: String,
-    pub(crate) branch: String,
-    pub(crate) base_live_commit_id: Option<String>,
-    pub(crate) message: String,
-    pub(crate) line_diff: Option<ReviewLineDiffResponse>,
-    pub(crate) files: Vec<StagedFileResponse>,
-}
-
-#[derive(Debug, Serialize)]
-#[cfg_attr(test, derive(ts_rs::TS))]
-pub(crate) struct StagedFileResponse {
-    pub(crate) path: String,
-    pub(crate) kind: StagedFileChangeKind,
-    pub(crate) old_oid: Option<String>,
-    pub(crate) new_oid: Option<String>,
-    pub(crate) visibility: Visibility,
 }
 
 #[derive(Debug, Serialize)]
@@ -507,7 +447,6 @@ pub(crate) fn repo_init_response(
     repo: &StoredRepository,
     user_id: &str,
     api_origin: &str,
-    app_origin: &str,
     now_unix: u64,
     secret: Option<String>,
     push_secret: Option<String>,
@@ -529,12 +468,6 @@ pub(crate) fn repo_init_response(
         git_remote_url: format!("{}{}", api_origin.trim_end_matches('/'), git_remote_path),
         remote_name: "scope",
         push_branch: DEFAULT_GIT_BRANCH,
-        review_url: format!(
-            "{}/repos/{}/{}/review",
-            app_origin.trim_end_matches('/'),
-            repo_summary.owner_handle,
-            repo_summary.name
-        ),
         repo: repo_summary,
         token,
         push_token,
@@ -605,30 +538,6 @@ pub(crate) fn repo_clone_credential_response(
     RepoCloneCredentialResponse {
         git_remote_path: format!("/git/{}/{}", repo.record.owner_handle, repo.record.name),
         token: git_clone_token_response(token, secret),
-    }
-}
-
-pub(crate) fn staged_update_response(
-    update: &StagedRepoUpdate,
-    line_diff: Option<ReviewLineDiffResponse>,
-) -> StagedUpdateResponse {
-    StagedUpdateResponse {
-        id: update.id.clone(),
-        branch: update.branch.clone(),
-        base_live_commit_id: update.base_live_commit_id.clone(),
-        message: update.message.clone(),
-        line_diff,
-        files: update
-            .changes
-            .iter()
-            .map(|change| StagedFileResponse {
-                path: change.path.as_str().to_string(),
-                kind: change.kind,
-                old_oid: change.old_content.as_ref().map(|blob| blob.git_oid.clone()),
-                new_oid: change.new_content.as_ref().map(|blob| blob.git_oid.clone()),
-                visibility: change.visibility,
-            })
-            .collect(),
     }
 }
 

@@ -128,7 +128,7 @@ export function HistoryPage(props: HistoryPageProps) {
                   No commits yet
                 </div>
                 <p className="mt-0.5 text-muted-foreground">
-                  History appears here once this repo has published commits.
+                  History appears here once Scope has applied commits.
                 </p>
               </div>
             </div>

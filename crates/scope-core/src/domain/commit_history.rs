@@ -42,7 +42,7 @@ pub fn commit_history_view(
     let commits = projection
         .commits
         .into_iter()
-        .map(|commit| commit_history_commit(policy, &mut tree, commit))
+        .map(|commit| commit_history_commit(&mut tree, commit))
         .collect();
 
     CommitHistoryView {
@@ -53,7 +53,6 @@ pub fn commit_history_view(
 }
 
 fn commit_history_commit(
-    policy: &Policy,
     tree: &mut BTreeMap<ScopePath, SourceBlob>,
     commit: ProjectedCommit,
 ) -> CommitHistoryCommit {
@@ -75,7 +74,7 @@ fn commit_history_commit(
             }
 
             Some(CommitHistoryFile {
-                visibility: policy.effective_visibility(&change.path),
+                visibility: change.visibility,
                 path: change.path,
                 kind,
                 old_content,

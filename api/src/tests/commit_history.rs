@@ -94,6 +94,65 @@ async fn public_commit_history_omits_private_files_from_mixed_commits() {
 }
 
 #[tokio::test]
+async fn public_commit_history_reports_historical_visibility_after_policy_turns_private() {
+    let state = test_state_with_repo();
+    {
+        let mut repo = test_repo(&test_owner_id());
+        repo.record.default_visibility = Visibility::Private;
+        repo.policy = Policy::new(Visibility::Private);
+        repo.graph.commits.push(LogicalCommit {
+            id: "rv1".to_string(),
+            parent_ids: Vec::new(),
+            author_id: repo.record.owner_user_id.clone(),
+            author_visibility: AuthorVisibility::Visible,
+            message: "old public readme".to_string(),
+            changes: vec![FileChange {
+                visibility: Visibility::Public,
+                path: ScopePath::parse("/README.md").unwrap(),
+                old_content: None,
+                new_content: Some(source_blob("old public readme")),
+            }],
+        });
+
+        let mut catalog = lock_catalog(&state).unwrap();
+        catalog.repositories.insert(TEST_REPO_ID.to_string(), repo);
+    }
+
+    let list_response = router(state.clone())
+        .oneshot(
+            Request::builder()
+                .method("GET")
+                .uri("/v1/repos/owner/repo/commits?audience=public")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(list_response.status(), StatusCode::OK);
+    let list_body = response_json(list_response).await;
+    let projected_id = list_body["commits"][0]["projected_id"].as_str().unwrap();
+
+    let detail_response = router(state)
+        .oneshot(
+            Request::builder()
+                .method("GET")
+                .uri(format!(
+                    "/v1/repos/owner/repo/commits/{projected_id}?audience=public"
+                ))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(detail_response.status(), StatusCode::OK);
+    let detail_body = response_json(detail_response).await;
+    assert_eq!(detail_body["files"][0]["path"], "/README.md");
+    assert_eq!(detail_body["files"][0]["visibility"], "Public");
+}
+
+#[tokio::test]
 async fn public_commit_diff_does_not_leak_private_old_content() {
     let state = test_state_with_repo();
     cache_test_jwks(&state);

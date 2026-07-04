@@ -5,15 +5,12 @@ import {
   deleteRepoForRequest,
   loadRepoCollaborationForRequest,
   loadRepoForRequest,
-  loadRepoSettingsForRequest,
   parseCreateRepoInviteInput,
   parseDeleteRepoInviteInput,
   parseDeleteRepoMemberInput,
   parseRepoParams,
   parseUpdateRepoMemberInput,
-  parseUpdateRepoSettingsInput,
   updateRepoMemberForRequest,
-  updateRepoSettingsForRequest,
 } from '@/api/repos'
 import { RepoSettingsPage } from '@/features/repo-detail/repo-settings-page'
 import { useRepoLiveRefresh } from '@/features/repo-detail/repo-live-refresh'
@@ -25,20 +22,11 @@ const loadRepoSettings = createServerFn({ method: 'GET' })
   .validator(parseRepoParams)
   .handler(async ({ data }) => {
     const detail = await loadRepoForRequest(data)
-    const [settings, collaboration] = await Promise.all([
-      detail.repo.access.can_update_repo_settings
-        ? loadRepoSettingsForRequest(data)
-        : Promise.resolve(null),
-      detail.repo.access.can_manage_members
-        ? loadRepoCollaborationForRequest(data)
-        : Promise.resolve(null),
-    ])
-    return { collaboration, detail, settings }
+    const collaboration = detail.repo.access.can_manage_members
+      ? await loadRepoCollaborationForRequest(data)
+      : null
+    return { collaboration, detail }
   })
-
-const updateRepoSettings = createServerFn({ method: 'POST' })
-  .validator(parseUpdateRepoSettingsInput)
-  .handler(({ data }) => updateRepoSettingsForRequest(data))
 
 const deleteRepo = createServerFn({ method: 'POST' })
   .validator(parseRepoParams)
@@ -67,7 +55,7 @@ export const Route = createFileRoute('/repos/$owner/$repo/settings')({
 
 function RepoSettingsRoute() {
   const params = Route.useParams()
-  const { collaboration, detail, settings } = Route.useLoaderData()
+  const { collaboration, detail } = Route.useLoaderData()
   const router = useRouter()
   const invalidate = useCallback(() => router.invalidate(), [router])
   useRepoLiveRefresh(detail.live, invalidate)
@@ -80,10 +68,8 @@ function RepoSettingsRoute() {
       deleteMember={(data) => deleteRepoMember({ data })}
       detail={detail}
       initialCollaboration={collaboration}
-      initialSettings={settings}
       params={params}
       updateMember={(data) => updateRepoMember({ data })}
-      updateSettings={(data) => updateRepoSettings({ data })}
     />
   )
 }

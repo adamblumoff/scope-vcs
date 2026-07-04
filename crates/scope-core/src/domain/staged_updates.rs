@@ -1,11 +1,13 @@
 use super::{
-    policy::{PolicyError, ScopePath, Visibility, VisibilityRule},
+    policy::{Policy, PolicyError, ScopePath, Visibility, VisibilityRule},
     projection::{AuthorVisibility, FileChange, LogicalCommit, VisibilityEvent},
+    repo_config::{HistoryRewriteAction, HistoryRewriteRequest, RepoConfig},
     store::{
         RepoPublicationState, SourceBlob, StagedFileChange, StagedFileChangeKind, StagedRepoUpdate,
         StoredRepository,
     },
 };
+use std::collections::{BTreeMap, BTreeSet};
 
 pub type StagedUpdateResult<T> = Result<T, StagedUpdateError>;
 
@@ -29,6 +31,17 @@ pub struct StagedUpdateInput {
     pub message: String,
     pub git_snapshot: SourceBlob,
     pub changes: Vec<StagedContentChange>,
+}
+
+#[derive(Clone, Debug)]
+pub struct ReviewedUpdateInput {
+    pub branch: String,
+    pub author_id: String,
+    pub message: String,
+    pub git_snapshot: SourceBlob,
+    pub changes: Vec<StagedContentChange>,
+    pub previous_config: Option<RepoConfig>,
+    pub config: RepoConfig,
 }
 
 pub fn stage_staged_update(
@@ -128,6 +141,7 @@ pub fn apply_staged_update_to_repo(
 ) -> StagedUpdateResult<()> {
     validate_staged_update_policy(repo, &staged_update)?;
     let logical_id = format!("rv_push_{}", repo.graph.commits.len() + 1);
+    let after_commit_id = repo.graph.commits.last().map(|commit| commit.id.clone());
     let mut next_visibility_event_id = repo.visibility_events.len() + 1;
     let visibility_events = staged_update
         .changes
@@ -136,11 +150,22 @@ pub fn apply_staged_update_to_repo(
         .filter_map(|change| {
             let old_visibility = repo.policy.effective_visibility(&change.path);
             if old_visibility != change.visibility {
+                if old_visibility == Visibility::Public
+                    && change.visibility == Visibility::Private
+                    && change.old_content.is_none()
+                {
+                    return None;
+                }
+
                 let id = format!("vis_{next_visibility_event_id}");
                 next_visibility_event_id += 1;
+                let boundary_after_commit_id = (old_visibility == Visibility::Public
+                    && change.visibility == Visibility::Private)
+                    .then(|| after_commit_id.clone())
+                    .flatten();
                 Some(VisibilityEvent {
                     id,
-                    after_commit_id: None,
+                    after_commit_id: boundary_after_commit_id,
                     source_commit_id: Some(logical_id.clone()),
                     author_id: staged_update.author_id.clone(),
                     path: change.path.clone(),
@@ -191,6 +216,230 @@ pub fn apply_staged_update_to_repo(
     repo.git_snapshot = Some(staged_update.git_snapshot);
     repo.bump_change_version();
     Ok(())
+}
+
+pub fn apply_reviewed_update_to_repo(
+    repo: &mut StoredRepository,
+    update: ReviewedUpdateInput,
+) -> StagedUpdateResult<()> {
+    if update.changes.is_empty() {
+        return Err(StagedUpdateError::BadRequest(
+            "update must include file changes",
+        ));
+    }
+    if repo.staged_update.is_some() {
+        return Err(StagedUpdateError::Conflict(
+            "a staged update is already pending",
+        ));
+    }
+
+    let old_tree = repo.live_tree();
+    let mut new_tree = old_tree.clone();
+    let mut file_changes = Vec::with_capacity(update.changes.len());
+    for change in update.changes {
+        let old_content = old_tree.get(&change.path).cloned();
+        if source_content_matches(old_content.as_ref(), change.content.as_ref()) {
+            continue;
+        }
+
+        match &change.content {
+            Some(content) => {
+                new_tree.insert(change.path.clone(), content.clone());
+            }
+            None => {
+                new_tree.remove(&change.path);
+            }
+        }
+
+        let visibility = if change.content.is_some() {
+            update.config.visibility_for_path(&change.path)
+        } else {
+            repo.policy.effective_visibility(&change.path)
+        };
+        file_changes.push(FileChange {
+            visibility,
+            path: change.path,
+            old_content,
+            new_content: change.content,
+        });
+    }
+
+    if file_changes.is_empty() {
+        return Err(StagedUpdateError::BadRequest(
+            "update did not change the live tree",
+        ));
+    }
+
+    let changed_paths = file_changes
+        .iter()
+        .map(|change| change.path.clone())
+        .collect::<BTreeSet<_>>();
+    let logical_id = format!("rv_push_{}", repo.graph.commits.len() + 1);
+    let after_commit_id = repo.graph.commits.last().map(|commit| commit.id.clone());
+    let mut next_visibility_event_id = repo.visibility_events.len() + 1;
+    let history_rewrites = update
+        .config
+        .history_rewrites_added_since(update.previous_config.as_ref());
+    let history_rewrite = apply_history_rewrites(
+        repo,
+        &update.config,
+        &history_rewrites,
+        &old_tree,
+        &changed_paths,
+        after_commit_id.clone(),
+        &mut next_visibility_event_id,
+        &update.author_id,
+    );
+    for change in &mut file_changes {
+        if change.new_content.is_none() && history_rewrite.redacted_paths.contains(&change.path) {
+            change.visibility = Visibility::Private;
+        }
+    }
+    let mut visibility_events = history_rewrite.visibility_events;
+    for (path, current_content) in &new_tree {
+        let old_visibility = repo.policy.effective_visibility(path);
+        let new_visibility = update.config.visibility_for_path(path);
+        if old_visibility == new_visibility {
+            continue;
+        }
+        if history_rewrite.redacted_paths.contains(path)
+            && old_visibility == Visibility::Public
+            && new_visibility == Visibility::Private
+        {
+            continue;
+        }
+        if old_visibility == Visibility::Public
+            && new_visibility == Visibility::Private
+            && !old_tree.contains_key(path)
+        {
+            continue;
+        }
+
+        let id = format!("vis_{next_visibility_event_id}");
+        next_visibility_event_id += 1;
+        let boundary_after_commit_id = match (old_visibility, new_visibility) {
+            (Visibility::Public, Visibility::Private) => after_commit_id.clone(),
+            _ if changed_paths.contains(path) => None,
+            _ => after_commit_id.clone(),
+        };
+        visibility_events.push(VisibilityEvent {
+            id,
+            after_commit_id: boundary_after_commit_id,
+            source_commit_id: changed_paths.contains(path).then(|| logical_id.clone()),
+            author_id: update.author_id.clone(),
+            path: path.clone(),
+            old_visibility,
+            new_visibility,
+            current_content: Some(current_content.clone()),
+        });
+    }
+
+    let mut next_policy = Policy::new(update.config.visibility.default_visibility().into());
+    for path in new_tree.keys() {
+        let rule = match update.config.visibility_for_path(path) {
+            Visibility::Public => VisibilityRule::public(path.clone()),
+            Visibility::Private => VisibilityRule::private(path.clone()),
+        };
+        next_policy
+            .add_rule(rule)
+            .map_err(StagedUpdateError::InvalidPolicy)?;
+    }
+
+    let parent_ids = after_commit_id.into_iter().collect::<Vec<_>>();
+    repo.graph.commits.push(LogicalCommit {
+        id: logical_id,
+        parent_ids,
+        author_id: update.author_id,
+        author_visibility: AuthorVisibility::Visible,
+        message: update.message,
+        changes: file_changes,
+    });
+    repo.policy = next_policy;
+    repo.record.default_visibility = update.config.visibility.default_visibility().into();
+    repo.visibility_events.extend(visibility_events);
+    repo.git_snapshot = Some(update.git_snapshot);
+    repo.pending_import = None;
+    repo.staged_update = None;
+    repo.first_push_token = None;
+    repo.record.publication_state = RepoPublicationState::Published;
+    repo.bump_change_version();
+    Ok(())
+}
+
+struct HistoryRewriteResult {
+    visibility_events: Vec<VisibilityEvent>,
+    redacted_paths: BTreeSet<ScopePath>,
+}
+
+fn apply_history_rewrites(
+    repo: &mut StoredRepository,
+    config: &RepoConfig,
+    rewrites: &[HistoryRewriteRequest],
+    live_tree: &BTreeMap<ScopePath, SourceBlob>,
+    changed_paths: &BTreeSet<ScopePath>,
+    after_commit_id: Option<String>,
+    next_visibility_event_id: &mut usize,
+    author_id: &str,
+) -> HistoryRewriteResult {
+    if rewrites.is_empty() {
+        return HistoryRewriteResult {
+            visibility_events: Vec::new(),
+            redacted_paths: BTreeSet::new(),
+        };
+    }
+
+    let should_redact = |path: &ScopePath| {
+        rewrites.iter().any(|rewrite| {
+            rewrite.action == HistoryRewriteAction::RedactPublicHistory
+                && rewrite.matches_path(path)
+        })
+    };
+
+    let mut redacted_paths = BTreeSet::new();
+    for commit in &mut repo.graph.commits {
+        for change in &mut commit.changes {
+            if change.visibility == Visibility::Public && should_redact(&change.path) {
+                change.visibility = Visibility::Private;
+                redacted_paths.insert(change.path.clone());
+            }
+        }
+    }
+
+    repo.visibility_events.retain(|event| {
+        let redact = should_redact(&event.path);
+        if redact {
+            redacted_paths.insert(event.path.clone());
+        }
+        !redact
+    });
+
+    let mut baseline_events = Vec::new();
+    for path in redacted_paths.iter() {
+        if changed_paths.contains(path) || config.visibility_for_path(path) != Visibility::Public {
+            continue;
+        }
+        let Some(current_content) = live_tree.get(&path) else {
+            continue;
+        };
+
+        let id = format!("vis_{}", *next_visibility_event_id);
+        *next_visibility_event_id += 1;
+        baseline_events.push(VisibilityEvent {
+            id,
+            after_commit_id: after_commit_id.clone(),
+            source_commit_id: None,
+            author_id: author_id.to_string(),
+            path: path.clone(),
+            old_visibility: Visibility::Private,
+            new_visibility: Visibility::Public,
+            current_content: Some(current_content.clone()),
+        });
+    }
+
+    HistoryRewriteResult {
+        visibility_events: baseline_events,
+        redacted_paths,
+    }
 }
 
 fn applied_file_visibility(repo: &StoredRepository, change: &StagedFileChange) -> Visibility {

@@ -12,14 +12,13 @@ use crate::{
     error::ApiError,
     git::{
         import::{
-            git_refs, pending_import_from_staging_repo, persist_pending_import,
-            persist_receive_pack_update_and_promote, receive_pack_update_from_staging_repo,
+            git_refs, persist_receive_pack_update_and_promote,
+            receive_pack_update_from_staging_repo, reviewed_update_from_staging_repo,
         },
         storage::*,
         upload::*,
     },
-    state::AppState,
-    state::find_repo,
+    state::{AppState, ValidatedPushIntent, find_repo},
 };
 use axum::{
     Json,
@@ -42,13 +41,20 @@ pub(crate) struct GitInfoRefsQuery {
 
 #[derive(Debug)]
 pub(crate) enum ReceivePackAccess {
-    FirstPush { credential: InitialPushCredential },
-    PublishedMember { author_id: String },
+    FirstPush {
+        author_id: String,
+        push_intent: ValidatedPushIntent,
+    },
+    PublishedMember {
+        author_id: String,
+        push_intent: ValidatedPushIntent,
+    },
 }
+
+const PUSH_INTENT_HEADER: &str = "x-scope-push-intent";
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum PersistedReceivePackUpdate {
-    Staged,
     Applied,
 }
 
@@ -243,6 +249,7 @@ pub(crate) async fn receive_pack_access(
     repo_name: &str,
 ) -> Result<ReceivePackAccess, ApiError> {
     let authorization = receive_pack_authorization(state, headers).await?;
+    let push_intent = state.validate_push_intent_secret(&push_intent_from_headers(headers)?)?;
 
     match authorization {
         ReceivePackAuthorization::ScopeToken { secret } => {
@@ -256,7 +263,12 @@ pub(crate) async fn receive_pack_access(
             if repo.is_waiting_for_first_push() {
                 authorize_initial_push_for_repo(&repo, &credential)
                     .map_err(git_credential_error)?;
-                return Ok(ReceivePackAccess::FirstPush { credential });
+                let author_id = repo.record.owner_user_id.clone();
+                push_intent.ensure_repo_user(&repo.record.id, &author_id)?;
+                return Ok(ReceivePackAccess::FirstPush {
+                    author_id,
+                    push_intent,
+                });
             }
             if repo.has_pending_import_review() {
                 authorize_receive_pack_scope_token_for_repo(&repo, &credential)
@@ -273,7 +285,11 @@ pub(crate) async fn receive_pack_access(
                     InitialPushCredential::GitPushToken { secret } => {
                         let author_id = authorize_git_write_token_for_repo(&repo, &secret)
                             .map_err(git_credential_error)?;
-                        Ok(ReceivePackAccess::PublishedMember { author_id })
+                        push_intent.ensure_repo_user(&repo.record.id, &author_id)?;
+                        Ok(ReceivePackAccess::PublishedMember {
+                            author_id,
+                            push_intent,
+                        })
                     }
                     InitialPushCredential::FirstPushToken { .. } => Err(invalid_git_credentials()),
                 },
@@ -283,15 +299,18 @@ pub(crate) async fn receive_pack_access(
             let repo = find_repo(state, owner, repo_name)?;
             let principal = principal_for_user_id(&repo, &user.id);
             let access = repo.access_for_principal(&principal);
+            let author_id = user.id.clone();
             if repo.is_waiting_for_first_push() {
                 if access.actor != RepositoryActor::Owner {
                     return Err(ApiError::not_found(format!(
                         "repo {owner}/{repo_name} not found"
                     )));
                 }
-                return Err(ApiError::unauthorized(
-                    "first-push token or Git push token required",
-                ));
+                push_intent.ensure_repo_user(&repo.record.id, &author_id)?;
+                return Ok(ReceivePackAccess::FirstPush {
+                    author_id,
+                    push_intent,
+                });
             }
             if repo.has_pending_import_review() {
                 if access.actor != RepositoryActor::Owner {
@@ -313,10 +332,29 @@ pub(crate) async fn receive_pack_access(
                     "repo is waiting for publish and cannot receive another push",
                 )),
                 RepoPublicationState::Published => {
-                    Ok(ReceivePackAccess::PublishedMember { author_id: user.id })
+                    push_intent.ensure_repo_user(&repo.record.id, &author_id)?;
+                    Ok(ReceivePackAccess::PublishedMember {
+                        author_id,
+                        push_intent,
+                    })
                 }
             }
         }
+    }
+}
+
+fn push_intent_from_headers(headers: &HeaderMap) -> Result<String, ApiError> {
+    let Some(value) = headers.get(PUSH_INTENT_HEADER) else {
+        return Err(ApiError::forbidden("valid Scope push intent required"));
+    };
+    let value = value
+        .to_str()
+        .map_err(|_| ApiError::forbidden("valid Scope push intent required"))?
+        .trim();
+    if value.is_empty() {
+        Err(ApiError::forbidden("valid Scope push intent required"))
+    } else {
+        Ok(value.to_string())
     }
 }
 
@@ -338,7 +376,7 @@ pub(crate) fn handle_git_receive_pack(
         }
     };
     let remote_user = match &access {
-        ReceivePackAccess::FirstPush { .. } => "first-push-token",
+        ReceivePackAccess::FirstPush { author_id, .. } => author_id.as_str(),
         ReceivePackAccess::PublishedMember { author_id, .. } => author_id.as_str(),
     };
     let receive_started_at = Instant::now();
@@ -398,13 +436,17 @@ pub(crate) fn handle_git_receive_pack(
         }
 
         match access {
-            ReceivePackAccess::FirstPush { credential } => {
+            ReceivePackAccess::FirstPush {
+                author_id,
+                push_intent,
+            } => {
                 let import_started_at = Instant::now();
-                let import = match pending_import_from_staging_repo(
+                let mut update = match reviewed_update_from_staging_repo(
                     state,
                     owner,
                     repo_name,
                     &staging_repo,
+                    &author_id,
                 ) {
                     Ok(import) => import,
                     Err(error) => {
@@ -412,16 +454,15 @@ pub(crate) fn handle_git_receive_pack(
                         return Err(error);
                     }
                 };
-                let file_count = import.files.len();
-                let uploaded_blobs = import
-                    .files
+                let uploaded_blobs = update
+                    .uploaded_blobs
                     .iter()
-                    .map(|file| file.blob.clone())
-                    .chain(std::iter::once(import.git_snapshot.clone()))
+                    .cloned()
+                    .chain(std::iter::once(update.git_snapshot.clone()))
                     .collect::<Vec<_>>();
-                let change_version =
-                    match persist_pending_import(state, owner, repo_name, &credential, import) {
-                        Ok(change_version) => change_version,
+                update.base_git_snapshot_key =
+                    Some(match push_intent.base_for_head(&update.head_oid) {
+                        Ok(base) => base,
                         Err(error) => {
                             crate::state::best_effort_cleanup_rollback_source_blobs(
                                 state,
@@ -430,11 +471,20 @@ pub(crate) fn handle_git_receive_pack(
                             let _ = fs::remove_dir_all(&staging_repo);
                             return Err(error);
                         }
-                    };
+                    });
+                let file_count = update.changes.len();
+                if let Err(error) = persist_receive_pack_update_and_promote(
+                    state, owner, repo_name, update, &author_id,
+                ) {
+                    crate::state::best_effort_cleanup_rollback_source_blobs(state, &uploaded_blobs);
+                    let _ = fs::remove_dir_all(&staging_repo);
+                    return Err(error);
+                }
+                let repo = find_repo(state, owner, repo_name)?;
                 state.publish_repo_change(
                     &crate::domain::store::repo_id(owner, repo_name),
-                    change_version,
-                    "first-push-received",
+                    repo.record.change_version,
+                    "first-push-applied",
                 );
                 tracing::info!(
                     owner,
@@ -442,12 +492,15 @@ pub(crate) fn handle_git_receive_pack(
                     receive_ms = receive_elapsed.as_millis(),
                     import_ms = import_started_at.elapsed().as_millis(),
                     file_count,
-                    "git receive-pack pending import persisted"
+                    "git receive-pack first push applied"
                 );
             }
-            ReceivePackAccess::PublishedMember { author_id } => {
+            ReceivePackAccess::PublishedMember {
+                author_id,
+                push_intent,
+            } => {
                 let import_started_at = Instant::now();
-                let update = match receive_pack_update_from_staging_repo(
+                let mut update = match receive_pack_update_from_staging_repo(
                     state,
                     owner,
                     repo_name,
@@ -460,13 +513,25 @@ pub(crate) fn handle_git_receive_pack(
                         return Err(error);
                     }
                 };
-                let change_count = update.changes.len();
                 let uploaded_blobs = update
                     .uploaded_blobs
                     .iter()
                     .cloned()
                     .chain(std::iter::once(update.git_snapshot.clone()))
                     .collect::<Vec<_>>();
+                update.base_git_snapshot_key =
+                    Some(match push_intent.base_for_head(&update.head_oid) {
+                        Ok(base) => base,
+                        Err(error) => {
+                            crate::state::best_effort_cleanup_rollback_source_blobs(
+                                state,
+                                &uploaded_blobs,
+                            );
+                            let _ = fs::remove_dir_all(&staging_repo);
+                            return Err(error);
+                        }
+                    });
+                let change_count = update.changes.len();
                 if let Err(error) = persist_receive_pack_update_and_promote(
                     state, owner, repo_name, update, &author_id,
                 ) {

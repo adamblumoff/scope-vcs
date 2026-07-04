@@ -13,7 +13,6 @@ import type {
   DeleteRepoResponse as GeneratedDeleteRepoResponse,
   FirstPushTokenResponse,
   FirstPushTokenStatus,
-  PendingImportReviewResponse,
   ProjectionPreviewAudience as GeneratedProjectionPreviewAudience,
   ProjectionPreviewCommitResponse,
   ProjectionPreviewFileResponse,
@@ -22,12 +21,9 @@ import type {
   ProjectionPreviewSummaryResponse,
   AcceptRepositoryInviteResponse,
   CreateRepositoryInviteResponse,
-  ReviewFileDiffRequest,
   ReviewFileDiffResponse,
-  ReviewLineDiffResponse,
   RepoFileResponse,
   RepoPublicationState as GeneratedRepoPublicationState,
-  RepoSettingsResponse,
   RepoSummaryResponse,
   RepositoryAccessResponse,
   RepositoryActor as GeneratedRepositoryActor,
@@ -41,10 +37,6 @@ import type {
   SessionResponse,
   SessionRepo as GeneratedSessionRepo,
   StagedFileChangeKind as GeneratedStagedFileChangeKind,
-  StagedFileResponse,
-  StagedUpdateResponse,
-  UpdateFileVisibilityRequest,
-  UpdateRepoSettingsRequest,
   UserResponse,
   Visibility as GeneratedVisibility,
 } from './types.generated'
@@ -55,7 +47,6 @@ export type RepositoryActor = GeneratedRepositoryActor
 export type RepoPublicationState = GeneratedRepoPublicationState
 export type RepoLifecycleState = RepoPublicationState
 export type TokenStatus = FirstPushTokenStatus
-export type ReviewKind = 'PendingImport' | 'StagedUpdate'
 export type StagedFileChangeKind = GeneratedStagedFileChangeKind
 export type ProjectionPreviewAudience = GeneratedProjectionPreviewAudience
 export type ProjectionPreviewSource = GeneratedProjectionPreviewSource
@@ -82,16 +73,11 @@ export type SessionRepo = GeneratedSessionRepo
 export type RepoSession = SessionResponse
 export type FirstPushToken = FirstPushTokenResponse
 export type DeleteRepoResponse = GeneratedDeleteRepoResponse
-export type RepoSettings = RepoSettingsResponse
 export type CommitHistory = CommitHistoryResponse
 export type CommitSummary = CommitSummaryResponse
 export type CommitDetail = CommitDetailResponse
 export type CommitFile = CommitFileResponse
-export type PendingImportPayload = PendingImportReviewResponse
-export type StagedFile = StagedFileResponse
-export type StagedUpdate = StagedUpdateResponse
 export type ReviewFileDiff = ReviewFileDiffResponse
-export type ReviewLineDiff = ReviewLineDiffResponse
 export type ProjectionPreviewFile = ProjectionPreviewFileResponse
 export type ProjectionPreviewCommit = ProjectionPreviewCommitResponse
 export type ProjectionPreviewSummary = ProjectionPreviewSummaryResponse
@@ -105,7 +91,6 @@ export type RepoDetail = {
   live: RepoLiveState
   projection_previews: ProjectionPreviews
   repo: RepoSummary
-  review: RepoReview | null
 }
 
 export type RepoLiveState = {
@@ -136,8 +121,6 @@ export type DeleteRepoInput = {
   repo: string
 }
 
-export type UpdateRepoSettingsInput = RepoParams & UpdateRepoSettingsRequest
-
 export type CreateRepoInviteInput = RepoParams & {
   email: string
   permissions: RepoMemberPermissions
@@ -160,25 +143,7 @@ export type RepoInviteTokenInput = {
   token: string
 }
 
-export type PendingImportReview = PendingImportPayload & {
-  kind: 'PendingImport'
-}
-
-export type StagedUpdateReview = {
-  kind: 'StagedUpdate'
-  publication_state: 'Published'
-  default_visibility: null
-  id: string | null
-  branch: string | null
-  base_live_commit_id: string | null
-  message: string | null
-  line_diff: ReviewLineDiff | null
-  files: StagedFile[]
-}
-
-export type RepoReview = PendingImportReview | StagedUpdateReview
-export type RepoReviewResult = RepoReview | { kind: 'NoReview' }
-export type ReviewFile = RepoFile | StagedFile
+export type ReviewFile = RepoFile | CommitFile
 
 export type ProjectionPreviews = {
   source: ProjectionPreviewSource
@@ -191,7 +156,6 @@ export type ProjectionPreviewInput = RepoParams & {
   source: ProjectionPreviewSource
 }
 
-export type ReviewFileDiffInput = RepoParams & ReviewFileDiffRequest
 export type CommitHistoryInput = RepoParams & CommitHistoryRequest
 export type CommitDetailInput = CommitHistoryInput & {
   commit: string
@@ -199,10 +163,3 @@ export type CommitDetailInput = CommitHistoryInput & {
 export type CommitFileDiffInput = RepoParams & CommitFileDiffRequest & {
   commit: string
 }
-
-export type SetVisibilityInput = RepoParams &
-  UpdateFileVisibilityRequest & {
-    kind: ReviewKind
-  }
-
-export type SetRepoFileVisibilityInput = RepoParams & UpdateFileVisibilityRequest

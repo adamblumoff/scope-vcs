@@ -80,7 +80,10 @@ fn push_warns_on_dirty_working_tree_before_remote_lookup_failure() {
     create_repo_with_head(dir.path());
     fs::write(dir.path().join("dirty.txt"), "uncommitted\n").unwrap();
 
-    let output = scope_command(dir.path()).args(["push"]).output().unwrap();
+    let output = scope_command(dir.path())
+        .args(["push", "--yes"])
+        .output()
+        .unwrap();
 
     assert_failure(&output, "scope push without remote");
     let stderr = String::from_utf8_lossy(&output.stderr);
@@ -109,7 +112,24 @@ fn scope_command(cwd: &Path) -> Command {
 fn create_repo_with_head(cwd: &Path) {
     run_git(cwd, ["-c", "init.defaultBranch=main", "init"]);
     fs::write(cwd.join("README.md"), "initial\n").unwrap();
-    run_git(cwd, ["add", "README.md"]);
+    fs::create_dir_all(cwd.join(".scope")).unwrap();
+    fs::write(
+        cwd.join(".scope/repo.json"),
+        r#"{
+  "kind": "scope.repo-config",
+  "version": 1,
+  "visibility": {
+    "default": "private",
+    "rules": []
+  },
+  "history": {
+    "rewrites": []
+  }
+}
+"#,
+    )
+    .unwrap();
+    run_git(cwd, ["add", "-A"]);
     run_git(
         cwd,
         [

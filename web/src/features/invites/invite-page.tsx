@@ -87,14 +87,6 @@ export function InvitePage({
                 enabled={invite.permissions.can_push}
                 label="Push changes"
               />
-              <PermissionLine
-                enabled={invite.permissions.can_change_file_visibility}
-                label="Change file visibility"
-              />
-              <PermissionLine
-                enabled={invite.permissions.can_apply_changes}
-                label="Apply changes"
-              />
             </div>
           </section>
 

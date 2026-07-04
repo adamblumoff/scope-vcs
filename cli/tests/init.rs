@@ -1,8 +1,7 @@
 use std::{
     env, fs,
-    io::Write,
     path::{Path, PathBuf},
-    process::{Command, Output, Stdio},
+    process::{Command, Output},
     time::{SystemTime, UNIX_EPOCH},
 };
 
@@ -34,7 +33,7 @@ impl Drop for TempDir {
 }
 
 #[test]
-fn init_help_exposes_name_and_visibility_flags() {
+fn init_help_exposes_name_and_omits_visibility_flags() {
     let output = Command::new(env!("CARGO_BIN_EXE_scope"))
         .args(["init", "--help"])
         .output()
@@ -43,8 +42,8 @@ fn init_help_exposes_name_and_visibility_flags() {
     assert_success(&output, "scope init --help");
     let stdout = String::from_utf8_lossy(&output.stdout);
     assert!(stdout.contains("--name <NAME>"), "{stdout}");
-    assert!(stdout.contains("--public"), "{stdout}");
-    assert!(stdout.contains("--private"), "{stdout}");
+    assert!(!stdout.contains("--public"), "{stdout}");
+    assert!(!stdout.contains("--private"), "{stdout}");
     assert!(!stdout.contains("[NAME]"), "{stdout}");
 }
 
@@ -52,7 +51,7 @@ fn init_help_exposes_name_and_visibility_flags() {
 fn init_refuses_non_git_directory_without_creating_repo() {
     let dir = TempDir::new("non-git");
     let output = scope_command(dir.path())
-        .args(["init", "--name", "sample", "--private"])
+        .args(["init", "--name", "sample"])
         .output()
         .unwrap();
 
@@ -71,7 +70,7 @@ fn init_refuses_git_repo_without_head() {
     run_git(dir.path(), ["-c", "init.defaultBranch=main", "init"]);
 
     let output = scope_command(dir.path())
-        .args(["init", "--name", "sample", "--private"])
+        .args(["init", "--name", "sample"])
         .output()
         .unwrap();
 
@@ -84,15 +83,18 @@ fn init_refuses_git_repo_without_head() {
 }
 
 #[test]
-fn init_prompts_for_default_visibility_when_flag_is_omitted() {
-    let dir = TempDir::new("visibility-prompt");
+fn init_without_visibility_flags_continues_to_auth() {
+    let dir = TempDir::new("no-visibility-prompt");
     create_repo_with_head(dir.path());
 
-    let output = scope_command_with_stdin(dir.path(), "\n", ["init", "--name", "sample"]);
+    let output = scope_command(dir.path())
+        .args(["init", "--name", "sample"])
+        .output()
+        .unwrap();
 
     assert_failure(&output, "scope init without API");
     let stderr = String::from_utf8_lossy(&output.stderr);
-    assert!(stderr.contains("Default visibility [Private]:"), "{stderr}");
+    assert!(!stderr.contains("Default visibility"), "{stderr}");
     assert!(stderr.contains("start browser login"), "{stderr}");
 }
 
@@ -103,7 +105,7 @@ fn init_warns_on_dirty_working_tree_and_continues_to_auth() {
     fs::write(dir.path().join("dirty.txt"), "uncommitted\n").unwrap();
 
     let output = scope_command(dir.path())
-        .args(["init", "--name", "sample", "--private"])
+        .args(["init", "--name", "sample"])
         .output()
         .unwrap();
 
@@ -125,23 +127,6 @@ fn scope_command(cwd: &Path) -> Command {
     command.current_dir(cwd);
     command.env("SCOPE_API_URL", unique_api_url());
     command
-}
-
-fn scope_command_with_stdin<const N: usize>(cwd: &Path, input: &str, args: [&str; N]) -> Output {
-    let mut child = scope_command(cwd)
-        .args(args)
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
-        .unwrap();
-    child
-        .stdin
-        .as_mut()
-        .unwrap()
-        .write_all(input.as_bytes())
-        .unwrap();
-    child.wait_with_output().unwrap()
 }
 
 fn create_repo_with_head(cwd: &Path) {

@@ -125,7 +125,7 @@ function CliLoginRoute() {
           description={
             browserRequestId
               ? 'Approve the terminal session that opened this browser.'
-              : 'Authorize this terminal session to create and publish a repository.'
+              : 'Authorize this terminal session to create repositories and push config-owned updates.'
           }
           title="Authorize Scope CLI"
         />

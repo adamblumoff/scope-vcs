@@ -1,5 +1,7 @@
 use crate::domain::policy::ScopePath;
-use crate::domain::store::{PendingImportFile, SourceBlob, is_supported_git_file_mode};
+#[cfg(test)]
+use crate::domain::store::PendingImportFile;
+use crate::domain::store::{SourceBlob, is_supported_git_file_mode};
 use crate::{
     config::{
         DEFAULT_GIT_BRANCH, MAX_PENDING_IMPORT_BLOB_BYTES, MAX_PENDING_IMPORT_FILES,
@@ -78,6 +80,7 @@ pub(super) fn describe_refs(refs: &[(String, String)]) -> String {
         .join(", ")
 }
 
+#[cfg(test)]
 pub(crate) fn git_tree_files(
     state: &AppState,
     repo_id: &str,

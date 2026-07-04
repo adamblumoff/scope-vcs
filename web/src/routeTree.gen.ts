@@ -18,7 +18,6 @@ import { Route as InvitesTokenRouteImport } from './routes/invites.$token'
 import { Route as ReposOwnerRepoRouteImport } from './routes/repos.$owner.$repo'
 import { Route as ReposOwnerRepoIndexRouteImport } from './routes/repos.$owner.$repo.index'
 import { Route as ReposOwnerRepoSettingsRouteImport } from './routes/repos.$owner.$repo.settings'
-import { Route as ReposOwnerRepoReviewRouteImport } from './routes/repos.$owner.$repo.review'
 import { Route as ReposOwnerRepoHistoryRouteImport } from './routes/repos.$owner.$repo.history'
 
 const CliLoginRoute = CliLoginRouteImport.update({
@@ -66,11 +65,6 @@ const ReposOwnerRepoSettingsRoute = ReposOwnerRepoSettingsRouteImport.update({
   path: '/settings',
   getParentRoute: () => ReposOwnerRepoRoute,
 } as any)
-const ReposOwnerRepoReviewRoute = ReposOwnerRepoReviewRouteImport.update({
-  id: '/review',
-  path: '/review',
-  getParentRoute: () => ReposOwnerRepoRoute,
-} as any)
 const ReposOwnerRepoHistoryRoute = ReposOwnerRepoHistoryRouteImport.update({
   id: '/history',
   path: '/history',
@@ -86,7 +80,6 @@ export interface FileRoutesByFullPath {
   '/sign-up/$': typeof SignUpSplatRoute
   '/repos/$owner/$repo': typeof ReposOwnerRepoRouteWithChildren
   '/repos/$owner/$repo/history': typeof ReposOwnerRepoHistoryRoute
-  '/repos/$owner/$repo/review': typeof ReposOwnerRepoReviewRoute
   '/repos/$owner/$repo/settings': typeof ReposOwnerRepoSettingsRoute
   '/repos/$owner/$repo/': typeof ReposOwnerRepoIndexRoute
 }
@@ -98,7 +91,6 @@ export interface FileRoutesByTo {
   '/sign-in/$': typeof SignInSplatRoute
   '/sign-up/$': typeof SignUpSplatRoute
   '/repos/$owner/$repo/history': typeof ReposOwnerRepoHistoryRoute
-  '/repos/$owner/$repo/review': typeof ReposOwnerRepoReviewRoute
   '/repos/$owner/$repo/settings': typeof ReposOwnerRepoSettingsRoute
   '/repos/$owner/$repo': typeof ReposOwnerRepoIndexRoute
 }
@@ -112,7 +104,6 @@ export interface FileRoutesById {
   '/sign-up/$': typeof SignUpSplatRoute
   '/repos/$owner/$repo': typeof ReposOwnerRepoRouteWithChildren
   '/repos/$owner/$repo/history': typeof ReposOwnerRepoHistoryRoute
-  '/repos/$owner/$repo/review': typeof ReposOwnerRepoReviewRoute
   '/repos/$owner/$repo/settings': typeof ReposOwnerRepoSettingsRoute
   '/repos/$owner/$repo/': typeof ReposOwnerRepoIndexRoute
 }
@@ -127,7 +118,6 @@ export interface FileRouteTypes {
     | '/sign-up/$'
     | '/repos/$owner/$repo'
     | '/repos/$owner/$repo/history'
-    | '/repos/$owner/$repo/review'
     | '/repos/$owner/$repo/settings'
     | '/repos/$owner/$repo/'
   fileRoutesByTo: FileRoutesByTo
@@ -139,7 +129,6 @@ export interface FileRouteTypes {
     | '/sign-in/$'
     | '/sign-up/$'
     | '/repos/$owner/$repo/history'
-    | '/repos/$owner/$repo/review'
     | '/repos/$owner/$repo/settings'
     | '/repos/$owner/$repo'
   id:
@@ -152,7 +141,6 @@ export interface FileRouteTypes {
     | '/sign-up/$'
     | '/repos/$owner/$repo'
     | '/repos/$owner/$repo/history'
-    | '/repos/$owner/$repo/review'
     | '/repos/$owner/$repo/settings'
     | '/repos/$owner/$repo/'
   fileRoutesById: FileRoutesById
@@ -232,13 +220,6 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof ReposOwnerRepoSettingsRouteImport
       parentRoute: typeof ReposOwnerRepoRoute
     }
-    '/repos/$owner/$repo/review': {
-      id: '/repos/$owner/$repo/review'
-      path: '/review'
-      fullPath: '/repos/$owner/$repo/review'
-      preLoaderRoute: typeof ReposOwnerRepoReviewRouteImport
-      parentRoute: typeof ReposOwnerRepoRoute
-    }
     '/repos/$owner/$repo/history': {
       id: '/repos/$owner/$repo/history'
       path: '/history'
@@ -251,14 +232,12 @@ declare module '@tanstack/react-router' {
 
 interface ReposOwnerRepoRouteChildren {
   ReposOwnerRepoHistoryRoute: typeof ReposOwnerRepoHistoryRoute
-  ReposOwnerRepoReviewRoute: typeof ReposOwnerRepoReviewRoute
   ReposOwnerRepoSettingsRoute: typeof ReposOwnerRepoSettingsRoute
   ReposOwnerRepoIndexRoute: typeof ReposOwnerRepoIndexRoute
 }
 
 const ReposOwnerRepoRouteChildren: ReposOwnerRepoRouteChildren = {
   ReposOwnerRepoHistoryRoute: ReposOwnerRepoHistoryRoute,
-  ReposOwnerRepoReviewRoute: ReposOwnerRepoReviewRoute,
   ReposOwnerRepoSettingsRoute: ReposOwnerRepoSettingsRoute,
   ReposOwnerRepoIndexRoute: ReposOwnerRepoIndexRoute,
 }

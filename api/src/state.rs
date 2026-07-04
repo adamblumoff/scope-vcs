@@ -1,5 +1,5 @@
 use crate::domain::policy::{Principal, ScopePath};
-use crate::domain::projection_views::has_visible_projected_files;
+use crate::domain::projection_views::has_visible_projected_history;
 use crate::domain::store::{
     AppCatalog, RepoPublicationState, RepositoryAccess, RepositoryActor, SourceBlob,
     StoredRepository, repo_id,
@@ -10,12 +10,28 @@ use crate::{
     db::MetadataStore,
     error::ApiError,
     object_store::{EncryptedObjectStore, ObjectStore, S3ObjectStore},
-    persistence::ensure_private_dir,
+    persistence::{ensure_private_dir, unix_now},
     repo_events::{RepoChangeBus, RepoChangeEvent},
     runtime_budgets::{BudgetedObjectStore, RuntimeBudgets},
 };
-use serde::Serialize;
-use std::{collections::BTreeSet, path::PathBuf, sync::Arc};
+use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
+use hmac::{Hmac, Mac};
+use serde::{Deserialize, Serialize};
+use sha2::Sha256;
+use std::{
+    collections::BTreeSet,
+    fs,
+    path::{Path, PathBuf},
+    sync::Arc,
+};
+
+const PUSH_INTENT_TTL_SECS: u64 = 10 * 60;
+const PUSH_INTENT_TOKEN_PREFIX: &str = "scope_pi_";
+const PUSH_INTENT_KIND: &str = "scope.push-intent";
+const PUSH_INTENT_VERSION: u8 = 1;
+const PUSH_INTENT_SIGNING_KEY_ENV: &str = "SCOPE_PUSH_INTENT_SIGNING_KEY";
+const PUSH_INTENT_SIGNING_KEY_FILE: &str = "push-intent-signing-key";
+type HmacSha256 = Hmac<Sha256>;
 
 #[derive(Clone)]
 pub struct AppState {
@@ -26,6 +42,48 @@ pub struct AppState {
     pub(crate) runtime_budgets: Arc<RuntimeBudgets>,
     pub(crate) operator_token: Option<Arc<str>>,
     pub(crate) repo_events: RepoChangeBus,
+    pub(crate) push_intent_signing_key: Arc<[u8]>,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+struct PushIntentClaims {
+    kind: String,
+    version: u8,
+    repo_id: String,
+    user_id: String,
+    head_oid: String,
+    base_git_snapshot_key: Option<String>,
+    expires_at_unix: u64,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct ValidatedPushIntent {
+    pub(crate) repo_id: String,
+    pub(crate) user_id: String,
+    pub(crate) head_oid: String,
+    pub(crate) base_git_snapshot_key: Option<String>,
+}
+
+impl ValidatedPushIntent {
+    pub(crate) fn ensure_repo_user(&self, repo_id: &str, user_id: &str) -> Result<(), ApiError> {
+        if self.repo_id == repo_id && self.user_id == user_id {
+            Ok(())
+        } else {
+            Err(ApiError::forbidden(
+                "Scope push intent does not match received Git push",
+            ))
+        }
+    }
+
+    pub(crate) fn base_for_head(&self, head_oid: &str) -> Result<Option<String>, ApiError> {
+        if self.head_oid == head_oid {
+            Ok(self.base_git_snapshot_key.clone())
+        } else {
+            Err(ApiError::forbidden(
+                "Scope push intent does not match received Git push",
+            ))
+        }
+    }
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize)]
@@ -119,6 +177,8 @@ impl AppState {
         let repo_root = git_repo_root();
         let data_dir = data_dir(&repo_root);
         ensure_private_dir(&data_dir).map_err(|error| anyhow::anyhow!(error.message))?;
+        let push_intent_signing_key =
+            push_intent_signing_key(&data_dir).map_err(|error| anyhow::anyhow!(error.message))?;
         let metadata = MetadataStore::connect_from_env()?;
         let repo_events = RepoChangeBus::default();
         let runtime_budgets = Arc::new(RuntimeBudgets::from_env()?);
@@ -138,6 +198,7 @@ impl AppState {
             runtime_budgets,
             operator_token: non_empty_env(SCOPE_OPERATOR_TOKEN_ENV).map(Arc::from),
             repo_events,
+            push_intent_signing_key,
         };
         best_effort_drain_pending_repo_storage_deletions(&state);
         best_effort_drain_pending_source_blob_deletions(&state);
@@ -167,7 +228,42 @@ impl AppState {
             runtime_budgets,
             operator_token: None,
             repo_events: RepoChangeBus::default(),
+            push_intent_signing_key: Arc::from(b"scope-test-push-intent-signing-key".as_slice()),
         }
+    }
+
+    pub(crate) fn create_push_intent(
+        &self,
+        repo_id: &str,
+        user_id: &str,
+        head_oid: &str,
+        base_git_snapshot_key: Option<String>,
+    ) -> Result<String, ApiError> {
+        let expires_at_unix = unix_now()?.saturating_add(PUSH_INTENT_TTL_SECS);
+        let intent = PushIntentClaims {
+            kind: PUSH_INTENT_KIND.to_string(),
+            version: PUSH_INTENT_VERSION,
+            repo_id: repo_id.to_string(),
+            user_id: user_id.to_string(),
+            head_oid: head_oid.to_string(),
+            base_git_snapshot_key,
+            expires_at_unix,
+        };
+        encode_push_intent(&self.push_intent_signing_key, &intent)
+    }
+
+    pub(crate) fn validate_push_intent_secret(
+        &self,
+        secret: &str,
+    ) -> Result<ValidatedPushIntent, ApiError> {
+        decode_push_intent(&self.push_intent_signing_key, secret).map(|intent| {
+            ValidatedPushIntent {
+                repo_id: intent.repo_id,
+                user_id: intent.user_id,
+                head_oid: intent.head_oid,
+                base_git_snapshot_key: intent.base_git_snapshot_key,
+            }
+        })
     }
 
     pub(crate) fn git_cache_root(&self) -> Result<PathBuf, ApiError> {
@@ -195,6 +291,87 @@ impl AppState {
     }
 }
 
+pub(crate) fn push_intent_signing_key(data_dir: &Path) -> Result<Arc<[u8]>, ApiError> {
+    if let Some(secret) = non_empty_env(PUSH_INTENT_SIGNING_KEY_ENV) {
+        return Ok(Arc::from(secret.into_bytes()));
+    }
+
+    ensure_private_dir(data_dir)?;
+    let key_path = data_dir.join(PUSH_INTENT_SIGNING_KEY_FILE);
+    if key_path.exists() {
+        let secret = fs::read_to_string(&key_path).map_err(ApiError::internal)?;
+        let secret = secret.trim();
+        if secret.is_empty() {
+            return Err(ApiError::internal_message(
+                "push intent signing key file is empty",
+            ));
+        }
+        return Ok(Arc::from(secret.as_bytes()));
+    }
+
+    let mut bytes = [0u8; 32];
+    getrandom::fill(&mut bytes).map_err(|error| {
+        ApiError::internal_message(format!(
+            "push intent signing key generation failed: {error}"
+        ))
+    })?;
+    let secret = URL_SAFE_NO_PAD.encode(bytes);
+    fs::write(&key_path, format!("{secret}\n")).map_err(ApiError::internal)?;
+    Ok(Arc::from(secret.into_bytes()))
+}
+
+fn encode_push_intent(signing_key: &[u8], intent: &PushIntentClaims) -> Result<String, ApiError> {
+    let payload = serde_json::to_vec(intent).map_err(ApiError::internal)?;
+    let payload = URL_SAFE_NO_PAD.encode(payload);
+    let signature = sign_push_intent(signing_key, payload.as_bytes())?;
+    Ok(format!(
+        "{PUSH_INTENT_TOKEN_PREFIX}{payload}.{}",
+        URL_SAFE_NO_PAD.encode(signature)
+    ))
+}
+
+fn decode_push_intent(signing_key: &[u8], token: &str) -> Result<PushIntentClaims, ApiError> {
+    let Some(token) = token.trim().strip_prefix(PUSH_INTENT_TOKEN_PREFIX) else {
+        return Err(ApiError::forbidden("valid Scope push intent required"));
+    };
+    let Some((payload, signature)) = token.split_once('.') else {
+        return Err(ApiError::forbidden("valid Scope push intent required"));
+    };
+    let signature = URL_SAFE_NO_PAD
+        .decode(signature)
+        .map_err(|_| ApiError::forbidden("valid Scope push intent required"))?;
+    verify_push_intent_signature(signing_key, payload.as_bytes(), &signature)?;
+    let payload = URL_SAFE_NO_PAD
+        .decode(payload)
+        .map_err(|_| ApiError::forbidden("valid Scope push intent required"))?;
+    let intent: PushIntentClaims = serde_json::from_slice(&payload)
+        .map_err(|_| ApiError::forbidden("valid Scope push intent required"))?;
+    if intent.kind != PUSH_INTENT_KIND || intent.version != PUSH_INTENT_VERSION {
+        return Err(ApiError::forbidden("valid Scope push intent required"));
+    }
+    if intent.expires_at_unix <= unix_now()? {
+        return Err(ApiError::forbidden("valid Scope push intent required"));
+    }
+    Ok(intent)
+}
+
+fn sign_push_intent(signing_key: &[u8], payload: &[u8]) -> Result<Vec<u8>, ApiError> {
+    let mut mac = HmacSha256::new_from_slice(signing_key).map_err(ApiError::internal)?;
+    mac.update(payload);
+    Ok(mac.finalize().into_bytes().to_vec())
+}
+
+fn verify_push_intent_signature(
+    signing_key: &[u8],
+    payload: &[u8],
+    signature: &[u8],
+) -> Result<(), ApiError> {
+    let mut mac = HmacSha256::new_from_slice(signing_key).map_err(ApiError::internal)?;
+    mac.update(payload);
+    mac.verify_slice(signature)
+        .map_err(|_| ApiError::forbidden("valid Scope push intent required"))
+}
+
 pub(crate) fn find_repo(
     state: &AppState,
     owner: &str,
@@ -213,7 +390,7 @@ pub(crate) fn ensure_repo_read(
 ) -> Result<(), ApiError> {
     if can_read_path(state, repo, principal, &ScopePath::root())?
         || (repo.record.publication_state == RepoPublicationState::Published
-            && has_visible_projected_files(repo, principal))
+            && has_visible_projected_history(repo, principal))
     {
         Ok(())
     } else {
@@ -221,18 +398,6 @@ pub(crate) fn ensure_repo_read(
             "repo {} not found",
             repo.record.id
         )))
-    }
-}
-
-pub(crate) fn ensure_owner(
-    state: &AppState,
-    repo: &StoredRepository,
-    principal: &Principal,
-) -> Result<(), ApiError> {
-    if access_for_principal(state, repo, principal)?.actor == RepositoryActor::Owner {
-        Ok(())
-    } else {
-        Err(ApiError::forbidden("owner role required"))
     }
 }
 

@@ -1,5 +1,5 @@
-use crate::domain::policy::{Principal, ScopePath, Visibility};
-use crate::domain::store::{RepoSettings, RepositoryActor};
+use crate::domain::policy::Visibility;
+use crate::domain::store::RepositoryActor;
 use crate::{
     auth::{
         scope::{
@@ -8,11 +8,11 @@ use crate::{
         },
         tokens::{generate_first_push_token, generate_git_clone_token, generate_git_push_token},
     },
-    db::{RepoSettingsRead, RepoSummaryRead},
+    db::RepoSummaryRead,
     error::ApiError,
     http::responses::*,
     http::{
-        origins::{public_api_origin, public_app_origin},
+        origins::public_api_origin,
         projection_preview::{ensure_projection_preview_access, projection_preview_repo},
     },
     persistence::unix_now,
@@ -24,7 +24,6 @@ use axum::{
     extract::{Path, Query, State},
     http::HeaderMap,
 };
-use std::collections::BTreeSet;
 
 pub(crate) async fn list_repos(
     State(state): State<AppState>,
@@ -51,7 +50,6 @@ pub(crate) async fn create_repo(
     let user = require_scope_user(&state, &headers).await?;
     let default_visibility = input.visibility.unwrap_or(Visibility::Private);
     let api_origin = public_api_origin()?;
-    let app_origin = public_app_origin("create repository init metadata")?;
     let cleanup_state = state.clone();
     let (secret, token) = generate_first_push_token(&user.id)?;
     let (push_secret, push_token) = generate_git_push_token(&user.id)?;
@@ -75,7 +73,6 @@ pub(crate) async fn create_repo(
         &repo,
         &user_id,
         &api_origin,
-        &app_origin,
         now,
         Some(secret),
         Some(push_secret),
@@ -152,6 +149,95 @@ pub(crate) async fn create_clone_credential(
     )))
 }
 
+pub(crate) async fn create_push_intent(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path((owner, repo_name)): Path<(String, String)>,
+    Json(input): Json<CreatePushIntentRequest>,
+) -> Result<Json<CreatePushIntentResponse>, ApiError> {
+    let user = require_scope_user(&state, &headers).await?;
+    let repo = find_repo(&state, &owner, &repo_name)?;
+    let principal = principal_for_user_id(&repo, &user.id);
+    let access = repo.access_for_principal(&principal);
+
+    if repo.is_waiting_for_first_push() {
+        if access.actor != RepositoryActor::Owner {
+            return Err(ApiError::not_found(format!(
+                "repo {owner}/{repo_name} not found"
+            )));
+        }
+    } else if repo.record.publication_state == crate::domain::store::RepoPublicationState::Published
+    {
+        if !access.can_push {
+            return Err(ApiError::not_found(format!(
+                "repo {owner}/{repo_name} not found"
+            )));
+        }
+    } else {
+        if access.actor != RepositoryActor::Owner {
+            return Err(ApiError::not_found(format!(
+                "repo {owner}/{repo_name} not found"
+            )));
+        }
+        return Err(ApiError::conflict(
+            "repo is waiting for first push and cannot receive another push",
+        ));
+    }
+
+    if repo.has_pending_import_review() || repo.staged_update.is_some() {
+        return Err(ApiError::conflict(
+            "repo has stale pending push state; retry after cleanup",
+        ));
+    }
+
+    let head_oid = normalize_git_oid(&input.head_oid)?;
+    let base_head_oid = git_snapshot_head_oid(&state, repo.git_snapshot.as_ref())?;
+    let token = state.create_push_intent(
+        &repo.record.id,
+        &user.id,
+        &head_oid,
+        repo.git_snapshot
+            .as_ref()
+            .map(|snapshot| snapshot.object_key.clone()),
+    )?;
+
+    Ok(Json(CreatePushIntentResponse {
+        token,
+        base_head_oid,
+    }))
+}
+
+fn git_snapshot_head_oid(
+    state: &AppState,
+    snapshot: Option<&crate::domain::store::SourceBlob>,
+) -> Result<Option<String>, ApiError> {
+    let Some(snapshot) = snapshot else {
+        return Ok(None);
+    };
+
+    let repo_path = crate::git::storage::cached_raw_git_snapshot_repo(state, snapshot)?;
+    let branch_ref = format!("refs/heads/{}", crate::config::DEFAULT_GIT_BRANCH);
+    let refs = crate::git::import::git_refs(&repo_path)?;
+    Ok(refs.into_iter().find_map(|(refname, oid)| {
+        if refname == branch_ref {
+            Some(oid)
+        } else {
+            None
+        }
+    }))
+}
+
+fn normalize_git_oid(value: &str) -> Result<String, ApiError> {
+    let oid = value.trim();
+    if oid.len() == 40 && oid.bytes().all(|byte| byte.is_ascii_hexdigit()) {
+        Ok(oid.to_ascii_lowercase())
+    } else {
+        Err(ApiError::bad_request(
+            "head_oid must be a full Git object id",
+        ))
+    }
+}
+
 pub(crate) async fn get_projection_preview(
     State(state): State<AppState>,
     headers: HeaderMap,
@@ -193,139 +279,6 @@ pub(crate) async fn get_files(
     Ok(Json(projection_file_responses(files)))
 }
 
-pub(crate) async fn update_file_visibility(
-    State(state): State<AppState>,
-    headers: HeaderMap,
-    Path((owner, repo_name)): Path<(String, String)>,
-    Json(input): Json<UpdateFileVisibilityRequest>,
-) -> Result<Json<Vec<RepoFileResponse>>, ApiError> {
-    let user = optional_scope_user(&state, &headers).await?;
-    let update_paths = parse_visibility_paths(&input.paths)?;
-    let visibility = input.visibility;
-    let repo = find_repo(&state, &owner, &repo_name)?;
-    let principal = user
-        .as_ref()
-        .map(|user| principal_for_user_id(&repo, &user.id))
-        .unwrap_or_else(Principal::public);
-    ensure_repo_read(&state, &repo, &principal)?;
-    if !repo
-        .access_for_principal(&principal)
-        .can_change_file_visibility
-    {
-        return Err(ApiError::forbidden("file visibility permission required"));
-    }
-
-    let owner_files = files_for_visibility_update(&repo, &principal)?;
-    for path in &update_paths {
-        let selected_file = owner_files
-            .iter()
-            .find(|file| file.path == path.as_str())
-            .ok_or_else(|| ApiError::not_found(format!("file {} not found", path.as_str())))?;
-        if visibility == Visibility::Public && !selected_file.tracked {
-            return Err(ApiError::bad_request(format!(
-                "file {} must be tracked by Git before it can be made public",
-                path.as_str()
-            )));
-        }
-    }
-
-    let user_id = user
-        .as_ref()
-        .map(|user| user.id.clone())
-        .ok_or_else(|| ApiError::forbidden("owner role required"))?;
-    let updated = state.metadata.update_repo_file_visibility(
-        &owner,
-        &repo_name,
-        &user_id,
-        update_paths,
-        visibility,
-    )?;
-    state.publish_repo_change(
-        &updated.record.id,
-        updated.record.change_version,
-        "visibility-changed",
-    );
-
-    let principal = Principal {
-        id: user_id,
-        kind: crate::domain::policy::PrincipalKind::User,
-    };
-    let updated_files = files_for_visibility_update(&updated, &principal)?;
-
-    Ok(Json(updated_files))
-}
-
-fn parse_visibility_paths(paths: &[String]) -> Result<Vec<ScopePath>, ApiError> {
-    if paths.is_empty() {
-        return Err(ApiError::bad_request("at least one file path is required"));
-    }
-
-    let mut parsed = BTreeSet::new();
-    for path in paths {
-        parsed.insert(ScopePath::parse(path).map_err(ApiError::bad_request)?);
-    }
-
-    Ok(parsed.into_iter().collect())
-}
-
-pub(crate) async fn get_settings(
-    State(state): State<AppState>,
-    headers: HeaderMap,
-    Path((owner, repo_name)): Path<(String, String)>,
-) -> Result<Json<RepoSettingsResponse>, ApiError> {
-    let user = optional_scope_user(&state, &headers).await?;
-    let settings = state
-        .metadata
-        .repo_settings(
-            &owner,
-            &repo_name,
-            user.as_ref().map(|user| user.id.as_str()),
-        )?
-        .ok_or_else(|| ApiError::not_found(format!("repo {owner}/{repo_name} not found")))?;
-
-    Ok(Json(repo_settings_response(settings)))
-}
-
-pub(crate) async fn update_settings(
-    State(state): State<AppState>,
-    headers: HeaderMap,
-    Path((owner, repo_name)): Path<(String, String)>,
-    Json(input): Json<UpdateRepoSettingsRequest>,
-) -> Result<Json<RepoSettingsResponse>, ApiError> {
-    let user = optional_scope_user(&state, &headers).await?;
-    let repo = find_repo(&state, &owner, &repo_name)?;
-    let principal = user
-        .as_ref()
-        .map(|user| principal_for_user_id(&repo, &user.id))
-        .unwrap_or_else(Principal::public);
-    ensure_repo_read(&state, &repo, &principal)?;
-
-    let user_id = user
-        .as_ref()
-        .map(|user| user.id.clone())
-        .ok_or_else(|| ApiError::forbidden("owner role required"))?;
-    let updated = state.metadata.update_repo_settings(
-        &owner,
-        &repo_name,
-        &user_id,
-        RepoSettings {
-            include_ignored_files: repo.settings.include_ignored_files,
-            review_pushes_before_applying: input.review_pushes_before_applying,
-        },
-        input.default_new_file_visibility,
-    )?;
-    state.publish_repo_change(
-        &updated.record.id,
-        updated.record.change_version,
-        "settings-changed",
-    );
-
-    Ok(Json(RepoSettingsResponse {
-        default_new_file_visibility: updated.record.default_visibility,
-        review_pushes_before_applying: updated.settings.review_pushes_before_applying,
-    }))
-}
-
 fn repo_summary_response(summary: RepoSummaryRead) -> RepoSummaryResponse {
     RepoSummaryResponse {
         id: summary.id,
@@ -338,12 +291,5 @@ fn repo_summary_response(summary: RepoSummaryRead) -> RepoSummaryResponse {
         pending_import_pending: summary.pending_import_pending,
         staged_update_pending: summary.staged_update_pending,
         push_blocked_by_staged_update: summary.push_blocked_by_staged_update,
-    }
-}
-
-fn repo_settings_response(settings: RepoSettingsRead) -> RepoSettingsResponse {
-    RepoSettingsResponse {
-        default_new_file_visibility: settings.default_new_file_visibility,
-        review_pushes_before_applying: settings.review_pushes_before_applying,
     }
 }

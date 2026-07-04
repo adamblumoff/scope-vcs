@@ -16,6 +16,18 @@ pub struct GitPushAuthPlan {
     pub env: Vec<(String, String)>,
 }
 
+#[derive(Debug, Eq, PartialEq)]
+pub struct GitFetchAuthPlan {
+    pub args: Vec<String>,
+    pub env: Vec<(String, String)>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct GitChangedPath {
+    pub status: String,
+    pub path: String,
+}
+
 pub fn ensure_git_repo_ready(command_name: &str) -> anyhow::Result<GitRepo> {
     let root_output = Command::new("git")
         .args(["rev-parse", "--show-toplevel"])
@@ -57,6 +69,97 @@ pub fn warn_if_dirty_working_tree(repo: &GitRepo) -> anyhow::Result<()> {
     Ok(())
 }
 
+pub fn changed_paths_since_last_scope_push(
+    repo: &GitRepo,
+    remote: &str,
+    branch: &str,
+) -> anyhow::Result<Vec<GitChangedPath>> {
+    changed_paths_since_last_scope_push_at_commit(repo, remote, branch, "HEAD")
+}
+
+pub fn changed_paths_since_last_scope_push_at_commit(
+    repo: &GitRepo,
+    remote: &str,
+    branch: &str,
+    commit_oid: &str,
+) -> anyhow::Result<Vec<GitChangedPath>> {
+    let remote_ref = format!("refs/remotes/{remote}/{branch}");
+    if git_success_in_repo(repo, &["show-ref", "--verify", "--quiet", &remote_ref]) {
+        changed_paths_since_scope_base_at_commit(repo, Some(&remote_ref), commit_oid)
+    } else {
+        changed_paths_since_scope_base_at_commit(repo, None, commit_oid)
+    }
+}
+
+pub fn changed_paths_since_scope_base_at_commit(
+    repo: &GitRepo,
+    base_oid_or_ref: Option<&str>,
+    commit_oid: &str,
+) -> anyhow::Result<Vec<GitChangedPath>> {
+    match base_oid_or_ref {
+        Some(base) => {
+            let output = git_output_in_repo(
+                repo,
+                &["diff", "--name-status", &format!("{base}..{commit_oid}")],
+            )?;
+            if !output.status.success() {
+                bail!("inspect committed changes for Scope push review failed");
+            }
+
+            Ok(parse_name_status(&output.stdout))
+        }
+        None => {
+            let output = git_output_in_repo(repo, &["ls-tree", "-r", "--name-only", commit_oid])?;
+            if !output.status.success() {
+                bail!("inspect committed files for Scope first push review failed");
+            }
+
+            Ok(parse_tree_paths_as_added(&output.stdout))
+        }
+    }
+}
+
+pub fn scope_remote_head_oid(
+    repo: &GitRepo,
+    remote: &str,
+    branch: &str,
+) -> anyhow::Result<Option<String>> {
+    let remote_ref = format!("refs/remotes/{remote}/{branch}");
+    if !git_success_in_repo(repo, &["show-ref", "--verify", "--quiet", &remote_ref]) {
+        return Ok(None);
+    }
+
+    let output = git_output_in_repo(repo, &["show-ref", "--hash", "--verify", &remote_ref])?;
+    if !output.status.success() {
+        bail!("inspect Scope remote ref failed");
+    }
+
+    let oid = String::from_utf8_lossy(&output.stdout).trim().to_string();
+    if oid.is_empty() {
+        Ok(None)
+    } else {
+        Ok(Some(oid))
+    }
+}
+
+pub fn mark_scope_remote_pushed(
+    repo: &GitRepo,
+    remote: &str,
+    branch: &str,
+    commit_oid: &str,
+) -> anyhow::Result<()> {
+    let remote_ref = format!("refs/remotes/{remote}/{branch}");
+    let status = Command::new("git")
+        .current_dir(&repo.root)
+        .args(["update-ref", &remote_ref, commit_oid])
+        .status()
+        .with_context(|| format!("mark {remote_ref} as pushed"))?;
+    if !status.success() {
+        bail!("git update-ref {remote_ref} {commit_oid} failed");
+    }
+    Ok(())
+}
+
 pub fn git_remote_push_url(remote: &str) -> anyhow::Result<String> {
     let output = git_output(&["remote", "get-url", "--push", remote])?;
     if !output.status.success() {
@@ -83,13 +186,22 @@ pub fn run_git(args: &[&str]) -> anyhow::Result<()> {
 
 pub fn push_head_with_bearer(
     destination: &str,
+    commit_oid: &str,
     branch: &str,
     bearer_token: &str,
+    push_intent_token: &str,
 ) -> anyhow::Result<()> {
     let inherited_config_count = env::var("GIT_CONFIG_COUNT")
         .ok()
         .and_then(|value| value.parse::<usize>().ok());
-    let plan = git_push_auth_plan(destination, branch, bearer_token, inherited_config_count);
+    let plan = git_push_auth_plan(
+        destination,
+        commit_oid,
+        branch,
+        bearer_token,
+        push_intent_token,
+        inherited_config_count,
+    );
     let mut command = Command::new("git");
     command.args(plan.args.iter().map(String::as_str));
     for (key, value) in plan.env {
@@ -105,20 +217,98 @@ pub fn push_head_with_bearer(
     Ok(())
 }
 
-pub fn git_push_auth_plan(
+pub fn fetch_scope_remote_with_bearer(
+    repo: &GitRepo,
     destination: &str,
+    remote: &str,
     branch: &str,
     bearer_token: &str,
+) -> anyhow::Result<()> {
+    let inherited_config_count = env::var("GIT_CONFIG_COUNT")
+        .ok()
+        .and_then(|value| value.parse::<usize>().ok());
+    let plan = git_fetch_auth_plan(
+        destination,
+        remote,
+        branch,
+        bearer_token,
+        inherited_config_count,
+    );
+    let mut command = Command::new("git");
+    command.current_dir(&repo.root);
+    command.args(plan.args.iter().map(String::as_str));
+    for (key, value) in plan.env {
+        command.env(key, value);
+    }
+
+    let status = command
+        .status()
+        .context("refresh Scope Git remote before push review")?;
+    if !status.success() {
+        bail!("refresh Scope Git remote before push review failed");
+    }
+    Ok(())
+}
+
+pub fn git_push_auth_plan(
+    destination: &str,
+    commit_oid: &str,
+    branch: &str,
+    bearer_token: &str,
+    push_intent_token: &str,
     inherited_config_count: Option<usize>,
 ) -> GitPushAuthPlan {
     let config_index = inherited_config_count.unwrap_or(0);
+    let push_intent_header_config_index = config_index + 1;
     GitPushAuthPlan {
         args: vec![
             "-c".to_string(),
             "push.recurseSubmodules=no".to_string(),
             "push".to_string(),
             destination.to_string(),
-            format!("HEAD:{branch}"),
+            format!("{commit_oid}:{branch}"),
+        ],
+        env: vec![
+            (
+                "GIT_CONFIG_COUNT".to_string(),
+                (config_index + 2).to_string(),
+            ),
+            (
+                format!("GIT_CONFIG_KEY_{config_index}"),
+                format!("http.{destination}.extraHeader"),
+            ),
+            (
+                format!("GIT_CONFIG_VALUE_{config_index}"),
+                format!("Authorization: Bearer {bearer_token}"),
+            ),
+            (
+                format!("GIT_CONFIG_KEY_{push_intent_header_config_index}"),
+                format!("http.{destination}.extraHeader"),
+            ),
+            (
+                format!("GIT_CONFIG_VALUE_{push_intent_header_config_index}"),
+                format!("X-Scope-Push-Intent: {push_intent_token}"),
+            ),
+        ],
+    }
+}
+
+pub fn git_fetch_auth_plan(
+    destination: &str,
+    remote: &str,
+    branch: &str,
+    bearer_token: &str,
+    inherited_config_count: Option<usize>,
+) -> GitFetchAuthPlan {
+    let config_index = inherited_config_count.unwrap_or(0);
+    GitFetchAuthPlan {
+        args: vec![
+            "-c".to_string(),
+            "protocol.version=2".to_string(),
+            "fetch".to_string(),
+            "--no-tags".to_string(),
+            destination.to_string(),
+            format!("+refs/heads/{branch}:refs/remotes/{remote}/{branch}"),
         ],
         env: vec![
             (
@@ -137,8 +327,25 @@ pub fn git_push_auth_plan(
     }
 }
 
+pub fn head_oid(repo: &GitRepo) -> anyhow::Result<String> {
+    let output = git_output_in_repo(repo, &["rev-parse", "HEAD"])?;
+    if !output.status.success() {
+        bail!("inspect Git HEAD failed");
+    }
+
+    Ok(String::from_utf8_lossy(&output.stdout).trim().to_string())
+}
+
 fn git_output(args: &[&str]) -> anyhow::Result<Output> {
     Command::new("git")
+        .args(args)
+        .output()
+        .with_context(|| format!("run git {}", args.join(" ")))
+}
+
+fn git_output_in_repo(repo: &GitRepo, args: &[&str]) -> anyhow::Result<Output> {
+    Command::new("git")
+        .current_dir(&repo.root)
         .args(args)
         .output()
         .with_context(|| format!("run git {}", args.join(" ")))
@@ -151,6 +358,48 @@ fn git_success(args: &[&str]) -> bool {
         .is_ok_and(|status| status.success())
 }
 
+fn git_success_in_repo(repo: &GitRepo, args: &[&str]) -> bool {
+    Command::new("git")
+        .current_dir(&repo.root)
+        .args(args)
+        .status()
+        .is_ok_and(|status| status.success())
+}
+
+fn parse_name_status(output: &[u8]) -> Vec<GitChangedPath> {
+    String::from_utf8_lossy(output)
+        .lines()
+        .filter_map(|line| {
+            let mut parts = line.split('\t');
+            let status = parts.next()?.trim();
+            let path = parts.next()?.trim();
+            if status.is_empty() || path.is_empty() {
+                return None;
+            }
+            let path = match parts.next() {
+                Some(next_path) => format!("{path} -> {}", next_path.trim()),
+                None => path.to_string(),
+            };
+            Some(GitChangedPath {
+                status: status.to_string(),
+                path,
+            })
+        })
+        .collect()
+}
+
+fn parse_tree_paths_as_added(output: &[u8]) -> Vec<GitChangedPath> {
+    String::from_utf8_lossy(output)
+        .lines()
+        .map(str::trim)
+        .filter(|path| !path.is_empty())
+        .map(|path| GitChangedPath {
+            status: "A".to_string(),
+            path: path.to_string(),
+        })
+        .collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -159,8 +408,10 @@ mod tests {
     fn git_push_auth_plan_keeps_bearer_token_out_of_process_args() {
         let plan = git_push_auth_plan(
             "https://scope.example/git/adam/random",
+            "1234567890123456789012345678901234567890",
             "main",
             "scope_cli_secret",
+            "scope_pi_secret",
             Some(2),
         );
 
@@ -171,14 +422,14 @@ mod tests {
                 "push.recurseSubmodules=no",
                 "push",
                 "https://scope.example/git/adam/random",
-                "HEAD:main"
+                "1234567890123456789012345678901234567890:main"
             ]
         );
         assert!(!plan.args.iter().any(|arg| arg.contains("scope_cli_secret")));
         assert_eq!(
             plan.env,
             vec![
-                ("GIT_CONFIG_COUNT".to_string(), "3".to_string()),
+                ("GIT_CONFIG_COUNT".to_string(), "4".to_string()),
                 (
                     "GIT_CONFIG_KEY_2".to_string(),
                     "http.https://scope.example/git/adam/random.extraHeader".to_string()
@@ -187,6 +438,86 @@ mod tests {
                     "GIT_CONFIG_VALUE_2".to_string(),
                     "Authorization: Bearer scope_cli_secret".to_string()
                 ),
+                (
+                    "GIT_CONFIG_KEY_3".to_string(),
+                    "http.https://scope.example/git/adam/random.extraHeader".to_string()
+                ),
+                (
+                    "GIT_CONFIG_VALUE_3".to_string(),
+                    "X-Scope-Push-Intent: scope_pi_secret".to_string()
+                ),
+            ]
+        );
+    }
+
+    #[test]
+    fn git_fetch_auth_plan_keeps_bearer_token_out_of_process_args() {
+        let plan = git_fetch_auth_plan(
+            "https://scope.example/git/adam/random",
+            "scope",
+            "main",
+            "scope_cli_secret",
+            Some(1),
+        );
+
+        assert_eq!(
+            plan.args,
+            vec![
+                "-c",
+                "protocol.version=2",
+                "fetch",
+                "--no-tags",
+                "https://scope.example/git/adam/random",
+                "+refs/heads/main:refs/remotes/scope/main"
+            ]
+        );
+        assert!(!plan.args.iter().any(|arg| arg.contains("scope_cli_secret")));
+        assert_eq!(
+            plan.env,
+            vec![
+                ("GIT_CONFIG_COUNT".to_string(), "2".to_string()),
+                (
+                    "GIT_CONFIG_KEY_1".to_string(),
+                    "http.https://scope.example/git/adam/random.extraHeader".to_string()
+                ),
+                (
+                    "GIT_CONFIG_VALUE_1".to_string(),
+                    "Authorization: Bearer scope_cli_secret".to_string()
+                ),
+            ]
+        );
+    }
+
+    #[test]
+    fn parse_name_status_keeps_renames_readable() {
+        assert_eq!(
+            parse_name_status(b"A\tREADME.md\nR100\told.rs\tnew.rs\n"),
+            vec![
+                GitChangedPath {
+                    status: "A".to_string(),
+                    path: "README.md".to_string(),
+                },
+                GitChangedPath {
+                    status: "R100".to_string(),
+                    path: "old.rs -> new.rs".to_string(),
+                },
+            ]
+        );
+    }
+
+    #[test]
+    fn parse_tree_paths_marks_first_push_files_added() {
+        assert_eq!(
+            parse_tree_paths_as_added(b".scope/repo.json\nREADME.md\n"),
+            vec![
+                GitChangedPath {
+                    status: "A".to_string(),
+                    path: ".scope/repo.json".to_string(),
+                },
+                GitChangedPath {
+                    status: "A".to_string(),
+                    path: "README.md".to_string(),
+                },
             ]
         );
     }

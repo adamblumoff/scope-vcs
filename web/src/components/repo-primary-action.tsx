@@ -6,7 +6,6 @@ import type { ComponentProps } from 'react'
 
 type RepoActionRoute =
   | '/repos/$owner/$repo'
-  | '/repos/$owner/$repo/review'
   | '/repos/$owner/$repo/settings'
 
 type RepoPrimaryAction = {
@@ -15,7 +14,7 @@ type RepoPrimaryAction = {
 }
 
 type RepoAttentionAction = {
-  icon: 'init' | 'publish-review' | 'update-review'
+  icon: 'init'
   label: string
   primaryLabel: string
   to: RepoActionRoute
@@ -61,36 +60,6 @@ function repoAttentionAction(
       label: 'Initialization incomplete',
       primaryLabel: 'Clean up',
       to: '/repos/$owner/$repo/settings',
-    }
-  }
-
-  if (repo.lifecycle_state === 'Unpublished' && repo.pending_import_pending) {
-    if (repo.access.actor !== 'Owner') {
-      return null
-    }
-
-    return {
-      icon: 'publish-review',
-      label: 'Publish review needed',
-      primaryLabel: 'Review',
-      to: '/repos/$owner/$repo/review',
-    }
-  }
-
-  if (repo.lifecycle_state === 'Published' && repo.staged_update_pending) {
-    if (
-      repo.access.actor !== 'Owner' &&
-      !repo.access.can_apply_changes &&
-      !repo.access.can_change_file_visibility
-    ) {
-      return null
-    }
-
-    return {
-      icon: 'update-review',
-      label: 'Update review needed',
-      primaryLabel: 'Review',
-      to: '/repos/$owner/$repo/review',
     }
   }
 

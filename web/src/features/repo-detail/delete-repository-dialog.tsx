@@ -71,8 +71,7 @@ export function DeleteRepositoryDialog({
 
           {!confirmed ? (
             <AlertDialogDescription>
-              This permanently removes the repo, pending review state, and
-              stored Git data from Scope.
+              This permanently removes the repo and stored Git data from Scope.
             </AlertDialogDescription>
           ) : (
             <div className="space-y-2">

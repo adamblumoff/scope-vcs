@@ -18,7 +18,7 @@ export type StagedFileChangeKind = "Added" | "Modified" | "Deleted";
 
 export type ProjectionPreviewAudience = "private" | "public";
 
-export type ProjectionPreviewSource = "live" | "review";
+export type ProjectionPreviewSource = "live";
 
 export type AccountSessionResponse = { identity: SessionIdentity | null, user: UserResponse | null, };
 
@@ -66,7 +66,11 @@ export type CreateRepoResponse = { repo: RepoSummaryResponse, init: RepoInitResp
 
 export type DeleteRepoResponse = { id: string, deleted: boolean, };
 
-export type RepoInitResponse = { repo: RepoSummaryResponse, git_remote_url: string, remote_name: string, push_branch: string, token: FirstPushTokenResponse | null, push_token: GitPushTokenResponse | null, review_url: string, };
+export type CreatePushIntentRequest = { head_oid: string, };
+
+export type CreatePushIntentResponse = { token: string, base_head_oid: string | null, };
+
+export type RepoInitResponse = { repo: RepoSummaryResponse, git_remote_url: string, remote_name: string, push_branch: string, token: FirstPushTokenResponse | null, push_token: GitPushTokenResponse | null, };
 
 export type RepoCloneCredentialResponse = { git_remote_path: string, token: GitCloneTokenResponse, };
 
@@ -77,10 +81,6 @@ export type GitPushTokenResponse = { created_at_unix: number, secret: string | n
 export type GitCloneTokenResponse = { created_at_unix: number, secret: string | null, };
 
 export type RepoFileResponse = { path: string, oid: string, tracked: boolean, visibility: Visibility, };
-
-export type RepoSettingsResponse = { default_new_file_visibility: Visibility, review_pushes_before_applying: boolean, };
-
-export type UpdateRepoSettingsRequest = { default_new_file_visibility: Visibility, review_pushes_before_applying: boolean, };
 
 export type RepositoryAccessResponse = { actor: RepositoryActor, can_read_private_files: boolean, can_push: boolean, can_change_file_visibility: boolean, can_apply_changes: boolean, can_update_repo_settings: boolean, can_manage_members: boolean, can_delete_repo: boolean, };
 
@@ -100,12 +100,6 @@ export type RepositoryInviteLookupResponse = { repo_id: string, owner_handle: st
 
 export type AcceptRepositoryInviteResponse = { repo: RepoSummaryResponse, member: RepositoryMemberResponse, };
 
-export type UpdateFileVisibilityRequest = { paths: Array<string>, visibility: Visibility, };
-
-export type UpdateStagedFileVisibilityRequest = { paths: Array<string>, visibility: Visibility, };
-
-export type ReviewFileDiffRequest = { path: string, };
-
 export type CommitHistoryRequest = { audience: ProjectionPreviewAudience | null, };
 
 export type CommitFileDiffRequest = { audience: ProjectionPreviewAudience | null, path: string, };
@@ -113,14 +107,6 @@ export type CommitFileDiffRequest = { audience: ProjectionPreviewAudience | null
 export type ReviewFileContentResponse = { "kind": "text", text: string, } | { "kind": "binary", oid: string, size_bytes: number, };
 
 export type ReviewFileDiffResponse = { path: string, kind: StagedFileChangeKind, old_content: ReviewFileContentResponse | null, new_content: ReviewFileContentResponse | null, };
-
-export type ReviewLineDiffResponse = { additions: number, deletions: number, };
-
-export type PendingImportReviewResponse = { publication_state: RepoPublicationState, default_visibility: Visibility, line_diff: ReviewLineDiffResponse | null, files: Array<RepoFileResponse>, };
-
-export type StagedUpdateResponse = { id: string, branch: string, base_live_commit_id: string | null, message: string, line_diff: ReviewLineDiffResponse | null, files: Array<StagedFileResponse>, };
-
-export type StagedFileResponse = { path: string, kind: StagedFileChangeKind, old_oid: string | null, new_oid: string | null, visibility: Visibility, };
 
 export type CommitHistoryResponse = { audience: ProjectionPreviewAudience, repo_id: string, view_key: string, commits: Array<CommitSummaryResponse>, };
 

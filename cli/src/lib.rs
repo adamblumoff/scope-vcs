@@ -6,3 +6,4 @@ pub mod git_credentials;
 pub mod git_repo;
 pub mod installers;
 pub mod push;
+pub mod repo_config;

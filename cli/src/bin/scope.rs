@@ -7,17 +7,30 @@ use scope_cli::{
         BrowserLoginStartResponse, CLI_BROWSER_LOGIN_PATH, CLI_DEVICE_LOGIN_PATH,
         CLI_EXCHANGE_GRANTS_EXCHANGE_PATH, CliExchangeGrantExchangeRequest,
         CliSessionTokenResponse, DeviceLoginPollResponse, DeviceLoginStartResponse,
-        DeviceLoginStatus, RepoInitResponse, Visibility, api_url, cli_browser_login_exchange_path,
-        cli_device_login_poll_path, create_repo, display_user, http_client, revoke_cli_session,
+        DeviceLoginStatus, RepoInitResponse, RepoPublicationState, api_url,
+        cli_browser_login_exchange_path, cli_device_login_poll_path, create_push_intent,
+        create_repo, display_user, get_repo, http_client, revoke_cli_session,
         rollback_created_repo, validate_session_token,
     },
     auth::{
         cached_cli_session, delete_stored_session_token, read_stored_session_token,
         store_session_token,
     },
-    git_repo::{ensure_git_repo_ready, push_head_with_bearer, run_git, warn_if_dirty_working_tree},
-    push::{DEFAULT_SCOPE_REMOTE, load_scope_remote, push_authenticated_remote},
+    git_repo::{
+        GitChangedPath, changed_paths_since_scope_base_at_commit, ensure_git_repo_ready,
+        fetch_scope_remote_with_bearer, head_oid, mark_scope_remote_pushed, run_git,
+        scope_remote_head_oid, warn_if_dirty_working_tree,
+    },
+    push::{
+        DEFAULT_SCOPE_BRANCH, DEFAULT_SCOPE_REMOTE, ensure_scope_remote_can_receive_push,
+        load_scope_remote, push_reviewed_head_with_intent,
+    },
+    repo_config::{
+        config_visibility_label, ensure_scope_repo_config_exists,
+        ensure_scope_repo_config_is_committed, load_scope_repo_config_at_commit, repo_config_path,
+    },
 };
+use scope_core::domain::repo_config::{HistoryRewriteAction, RepoConfig};
 use std::{
     io::{self, Read, Write},
     net::{TcpListener, TcpStream},
@@ -49,16 +62,14 @@ enum CommandKind {
 struct InitArgs {
     #[arg(long)]
     name: Option<String>,
-    #[arg(long, conflicts_with = "private")]
-    public: bool,
-    #[arg(long, conflicts_with = "public")]
-    private: bool,
 }
 
 #[derive(Parser)]
 struct PushArgs {
     #[arg(long, default_value = DEFAULT_SCOPE_REMOTE)]
     remote: String,
+    #[arg(short, long)]
+    yes: bool,
 }
 
 #[derive(Parser)]
@@ -94,55 +105,215 @@ fn init(args: InitArgs) -> anyhow::Result<()> {
         Some(name) => normalize_repo_name(name)?,
         None => prompt_repo_name(&git_repo.root)?,
     };
-    let visibility = resolve_visibility(&args)?;
     warn_if_dirty_working_tree(&git_repo)?;
 
     let client = http_client()?;
     let session = session_from_cache_or_login(&client, &api_url, local_browser_login)?;
     eprintln!("Signed in as {}", display_user(&session.user));
-    let created = create_repo(&client, &api_url, &session.token, repo_name, visibility)?;
-    let push_secret = created
-        .init
-        .push_token
-        .as_ref()
-        .and_then(|token| token.secret.as_ref())
-        .cloned()
-        .context("API did not return a Git push token")?;
+    let created = create_repo(&client, &api_url, &session.token, repo_name)?;
 
-    if let Err(error) = configure_remote(&created.init)
-        .and_then(|_| push_initial_commit(&created.init, &push_secret))
+    let config_created = match configure_remote(&created.init)
+        .and_then(|_| ensure_scope_repo_config_exists(&git_repo.root))
     {
-        rollback_created_repo(&client, &api_url, &session.token, &created.repo);
-        return Err(error);
+        Ok(config_created) => config_created,
+        Err(error) => {
+            rollback_created_repo(&client, &api_url, &session.token, &created.repo);
+            return Err(error);
+        }
+    };
+
+    println!(
+        "Created Scope repo: {}/{}",
+        created.repo.owner_handle, created.repo.name
+    );
+    println!("Configured Git remote: {}", created.init.remote_name);
+    if config_created {
+        println!("Created {}", repo_config_path());
+        println!("Commit the config file, then run: scope push");
+    } else {
+        println!("Using existing {}", repo_config_path());
+        println!("Run: scope push");
     }
 
-    println!("{}", created.init.review_url);
     Ok(())
 }
 
 fn push(args: PushArgs) -> anyhow::Result<()> {
     let git_repo = ensure_git_repo_ready("scope push")?;
+    let reviewed_head_oid = head_oid(&git_repo)?;
     warn_if_dirty_working_tree(&git_repo)?;
+    ensure_scope_repo_config_is_committed(&git_repo.root)?;
 
     let api_url = api_url();
     let target = load_scope_remote(&api_url, &args.remote)?;
     let client = http_client()?;
     let session = session_from_cache_or_login(&client, &api_url, local_browser_login)?;
-    let outcome = push_authenticated_remote(&client, &api_url, &session.token, &target)?;
+
+    let repo = get_repo(
+        &client,
+        &api_url,
+        &session.token,
+        &target.owner,
+        &target.repo,
+    )?;
+    ensure_scope_remote_can_receive_push(&target, &repo)?;
+    if repo.lifecycle_state == RepoPublicationState::Published {
+        fetch_scope_remote_with_bearer(
+            &git_repo,
+            &target.push_url,
+            &args.remote,
+            DEFAULT_SCOPE_BRANCH,
+            &session.token,
+        )?;
+    }
+
+    let intent = create_push_intent(
+        &client,
+        &api_url,
+        &session.token,
+        &target.owner,
+        &target.repo,
+        &reviewed_head_oid,
+    )?;
+    ensure_review_base_matches_intent(
+        &git_repo,
+        &target.push_url,
+        &args.remote,
+        &session.token,
+        intent.base_head_oid.as_deref(),
+    )?;
+    let config = load_scope_repo_config_at_commit(&git_repo.root, &reviewed_head_oid)?;
+    let changed_paths = changed_paths_since_scope_base_at_commit(
+        &git_repo,
+        intent.base_head_oid.as_deref(),
+        &reviewed_head_oid,
+    )?;
+    confirm_scope_push(&args, &config, &changed_paths)?;
+
+    let outcome = push_reviewed_head_with_intent(
+        &client,
+        &api_url,
+        &session.token,
+        &target,
+        &reviewed_head_oid,
+        &intent.token,
+    )?;
+    mark_scope_remote_pushed(
+        &git_repo,
+        &args.remote,
+        DEFAULT_SCOPE_BRANCH,
+        &reviewed_head_oid,
+    )?;
 
     if outcome.staged_update_pending {
         println!(
-            "Pushed to Scope: {}/{}\nReview the staged update in the Scope app.",
+            "Pushed to Scope: {}/{}\nScope reported a pending update; this should not happen with config-owned pushes.",
             outcome.owner, outcome.repo
         );
     } else {
         println!(
-            "Pushed to Scope: {}/{}\nPush accepted by Scope.",
+            "Pushed to Scope: {}/{}\nPush applied by Scope.",
             outcome.owner, outcome.repo
         );
     }
 
     Ok(())
+}
+
+fn ensure_review_base_matches_intent(
+    git_repo: &scope_cli::git_repo::GitRepo,
+    push_url: &str,
+    remote: &str,
+    session_token: &str,
+    intent_base_head_oid: Option<&str>,
+) -> anyhow::Result<()> {
+    let Some(intent_base_head_oid) = intent_base_head_oid else {
+        return Ok(());
+    };
+    if scope_remote_head_oid(git_repo, remote, DEFAULT_SCOPE_BRANCH)?.as_deref()
+        == Some(intent_base_head_oid)
+    {
+        return Ok(());
+    }
+
+    fetch_scope_remote_with_bearer(
+        git_repo,
+        push_url,
+        remote,
+        DEFAULT_SCOPE_BRANCH,
+        session_token,
+    )?;
+    if scope_remote_head_oid(git_repo, remote, DEFAULT_SCOPE_BRANCH)?.as_deref()
+        == Some(intent_base_head_oid)
+    {
+        return Ok(());
+    }
+
+    bail!("Scope changed while preparing push review; rerun scope push");
+}
+
+fn confirm_scope_push(
+    args: &PushArgs,
+    config: &RepoConfig,
+    changed_paths: &[GitChangedPath],
+) -> anyhow::Result<()> {
+    print_scope_push_review(config, changed_paths);
+    if args.yes {
+        return Ok(());
+    }
+
+    eprint!("Apply this Scope push? [y/N]: ");
+    io::stderr().flush().ok();
+    let mut input = String::new();
+    io::stdin()
+        .read_line(&mut input)
+        .context("read Scope push confirmation")?;
+    match input.trim().to_ascii_lowercase().as_str() {
+        "y" | "yes" => Ok(()),
+        _ => bail!("scope push cancelled"),
+    }
+}
+
+fn print_scope_push_review(config: &RepoConfig, changed_paths: &[GitChangedPath]) {
+    eprintln!("Scope push review");
+    eprintln!("Config: {}", repo_config_path());
+    eprintln!(
+        "Default visibility: {}",
+        config_visibility_label(config.visibility.default_visibility())
+    );
+    if config.visibility.rules.is_empty() {
+        eprintln!("Visibility rules: none");
+    } else {
+        eprintln!("Visibility rules:");
+        for rule in &config.visibility.rules {
+            eprintln!(
+                "  {} -> {}",
+                rule.path,
+                config_visibility_label(rule.visibility)
+            );
+        }
+    }
+
+    if config.history.rewrites.is_empty() {
+        eprintln!("History rewrites: none");
+    } else {
+        eprintln!("History rewrites:");
+        for rewrite in &config.history.rewrites {
+            let action = match rewrite.action {
+                HistoryRewriteAction::RedactPublicHistory => "redact public history",
+            };
+            eprintln!("  {} -> {}", rewrite.path, action);
+        }
+    }
+
+    if changed_paths.is_empty() {
+        eprintln!("Committed file changes since last Scope push: none");
+    } else {
+        eprintln!("Committed file changes since last Scope push:");
+        for change in changed_paths {
+            eprintln!("  {} {}", change.status, change.path);
+        }
+    }
 }
 
 fn clone(args: CloneArgs) -> anyhow::Result<()> {
@@ -490,10 +661,6 @@ fn configure_remote(init: &RepoInitResponse) -> anyhow::Result<()> {
     run_git(&["remote", "add", &init.remote_name, &init.git_remote_url])
 }
 
-fn push_initial_commit(init: &RepoInitResponse, push_secret: &str) -> anyhow::Result<()> {
-    push_head_with_bearer(&init.git_remote_url, &init.push_branch, push_secret)
-}
-
 fn prompt_repo_name(git_root: &Path) -> anyhow::Result<String> {
     let default = default_repo_name(git_root);
     eprint!("Repository name [{default}]: ");
@@ -517,34 +684,6 @@ fn default_repo_name(git_root: &Path) -> String {
         .map(|name| name.to_string_lossy().to_string())
         .filter(|name| !name.trim().is_empty())
         .unwrap_or_else(|| "repo".to_string())
-}
-
-fn resolve_visibility(args: &InitArgs) -> anyhow::Result<Visibility> {
-    match (args.public, args.private) {
-        (true, true) => bail!("--public and --private cannot be used together"),
-        (true, false) => Ok(Visibility::Public),
-        (false, true) => Ok(Visibility::Private),
-        (false, false) => prompt_visibility(),
-    }
-}
-
-fn prompt_visibility() -> anyhow::Result<Visibility> {
-    eprint!("Default visibility [Private]: ");
-    io::stderr().flush().ok();
-
-    let mut input = String::new();
-    io::stdin()
-        .read_line(&mut input)
-        .context("read repository visibility")?;
-    parse_visibility(input.trim())
-}
-
-fn parse_visibility(input: &str) -> anyhow::Result<Visibility> {
-    match input.trim().to_ascii_lowercase().as_str() {
-        "" | "private" => Ok(Visibility::Private),
-        "public" => Ok(Visibility::Public),
-        _ => bail!("visibility must be private or public"),
-    }
 }
 
 fn normalize_repo_name(name: &str) -> anyhow::Result<String> {
@@ -623,56 +762,5 @@ mod tests {
             default_repo_name(Path::new("C:/Users/adam/Code/scope-vcs")),
             "scope-vcs"
         );
-    }
-
-    #[test]
-    fn visibility_prompt_defaults_to_private() {
-        assert_eq!(parse_visibility("").unwrap(), Visibility::Private);
-        assert_eq!(parse_visibility(" private ").unwrap(), Visibility::Private);
-    }
-
-    #[test]
-    fn visibility_prompt_accepts_public() {
-        assert_eq!(parse_visibility("public").unwrap(), Visibility::Public);
-        assert_eq!(parse_visibility(" PUBLIC ").unwrap(), Visibility::Public);
-    }
-
-    #[test]
-    fn visibility_flags_resolve_without_prompting() {
-        assert_eq!(
-            resolve_visibility(&InitArgs {
-                name: None,
-                public: true,
-                private: false,
-            })
-            .unwrap(),
-            Visibility::Public
-        );
-        assert_eq!(
-            resolve_visibility(&InitArgs {
-                name: None,
-                public: false,
-                private: true,
-            })
-            .unwrap(),
-            Visibility::Private
-        );
-    }
-
-    #[test]
-    fn visibility_flags_reject_conflict() {
-        assert!(
-            resolve_visibility(&InitArgs {
-                name: None,
-                public: true,
-                private: true,
-            })
-            .is_err()
-        );
-    }
-
-    #[test]
-    fn visibility_prompt_rejects_unknown_values() {
-        assert!(parse_visibility("internal").is_err());
     }
 }

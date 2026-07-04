@@ -155,34 +155,6 @@ pub(crate) fn basic_auth_secret(encoded: &str) -> Result<String, ApiError> {
     Ok(token.to_string())
 }
 
-#[cfg(test)]
-pub(crate) fn authorize_first_push(
-    state: &AppState,
-    owner: &str,
-    repo_name: &str,
-    token_secret: &str,
-) -> Result<(), ApiError> {
-    authorize_initial_push(
-        state,
-        owner,
-        repo_name,
-        &InitialPushCredential::FirstPushToken {
-            secret: token_secret.to_string(),
-        },
-    )
-}
-
-#[cfg(test)]
-pub(crate) fn authorize_initial_push(
-    state: &AppState,
-    owner: &str,
-    repo_name: &str,
-    credential: &InitialPushCredential,
-) -> Result<(), ApiError> {
-    let repo = find_repo(state, owner, repo_name)?;
-    authorize_initial_push_for_repo(&repo, credential)
-}
-
 pub(crate) fn authorize_initial_push_for_repo(
     repo: &StoredRepository,
     credential: &InitialPushCredential,
@@ -321,7 +293,7 @@ pub(crate) fn authorize_git_write_token_for_repo(
         return Ok(token.owner_user_id.clone());
     }
 
-    authorize_git_member_token_for_repo(repo, secret)
+    Err(ApiError::unauthorized("invalid Git credentials"))
 }
 
 pub(crate) fn authorize_git_read_token_for_repo(
@@ -341,27 +313,6 @@ pub(crate) fn authorize_git_read_token_for_repo(
     if !access.can_read_private_files
         && access.actor != crate::domain::store::RepositoryActor::Owner
     {
-        return Err(ApiError::unauthorized("invalid Git credentials"));
-    }
-
-    Ok(token.user_id.clone())
-}
-
-pub(crate) fn authorize_git_member_token_for_repo(
-    repo: &StoredRepository,
-    secret: &str,
-) -> Result<String, ApiError> {
-    let hash = git_clone_token_hash(secret);
-    let Some(token) = repo
-        .git_clone_tokens
-        .iter()
-        .find(|token| token.token_hash == hash)
-    else {
-        return Err(ApiError::unauthorized("invalid Git credentials"));
-    };
-
-    let access = repo.access_for_user_id(&token.user_id);
-    if !access.can_push {
         return Err(ApiError::unauthorized("invalid Git credentials"));
     }
 
