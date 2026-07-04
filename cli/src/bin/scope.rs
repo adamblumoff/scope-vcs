@@ -191,14 +191,20 @@ fn push(args: PushArgs) -> anyhow::Result<()> {
     confirm_scope_push(&args, &config, &changed_paths)?;
     ensure_push_intent_not_expired(intent.expires_at_unix)?;
 
-    let outcome = push_reviewed_head_with_intent(
+    let outcome = match push_reviewed_head_with_intent(
         &client,
         &api_url,
         &session.token,
         &target,
         &reviewed_head_oid,
         &intent.token,
-    )?;
+    ) {
+        Ok(outcome) => outcome,
+        Err(_error) if push_intent_expired(intent.expires_at_unix) => {
+            bail!("Scope push review expired; rerun scope push");
+        }
+        Err(error) => return Err(error),
+    };
     mark_scope_remote_pushed(
         &git_repo,
         &args.remote,
@@ -222,11 +228,15 @@ fn push(args: PushArgs) -> anyhow::Result<()> {
 }
 
 fn ensure_push_intent_not_expired(expires_at_unix: u64) -> anyhow::Result<()> {
-    if unix_now() < expires_at_unix {
+    if !push_intent_expired(expires_at_unix) {
         return Ok(());
     }
 
     bail!("Scope push review expired; rerun scope push")
+}
+
+fn push_intent_expired(expires_at_unix: u64) -> bool {
+    unix_now() >= expires_at_unix
 }
 
 fn ensure_review_base_matches_intent(

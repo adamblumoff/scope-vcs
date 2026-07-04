@@ -180,7 +180,7 @@ pub(crate) async fn create_push_intent(
             )));
         }
         return Err(ApiError::conflict(
-            "repo has a stale pending import; retry after cleanup",
+            "repo has a stale pending import; resolve it before creating a push intent",
         ));
     }
 
