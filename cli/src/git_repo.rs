@@ -28,17 +28,13 @@ pub struct GitChangedPath {
     pub path: String,
 }
 
-pub fn ensure_git_repo_ready(command_name: &str) -> anyhow::Result<GitRepo> {
+pub fn discover_git_repo(command_name: &str) -> anyhow::Result<GitRepo> {
     let root_output = Command::new("git")
         .args(["rev-parse", "--show-toplevel"])
         .output()
         .context("inspect Git repository")?;
     if !root_output.status.success() {
         bail!("run {command_name} from inside an existing Git repository");
-    }
-
-    if !git_success(&["rev-parse", "--verify", "HEAD"]) {
-        bail!("create at least one Git commit before running {command_name}");
     }
 
     let root = String::from_utf8_lossy(&root_output.stdout)
@@ -51,6 +47,15 @@ pub fn ensure_git_repo_ready(command_name: &str) -> anyhow::Result<GitRepo> {
     Ok(GitRepo {
         root: PathBuf::from(root),
     })
+}
+
+pub fn ensure_git_repo_ready(command_name: &str) -> anyhow::Result<GitRepo> {
+    let repo = discover_git_repo(command_name)?;
+    if !git_success_in_repo(&repo, &["rev-parse", "--verify", "HEAD"]) {
+        bail!("create at least one Git commit before running {command_name}");
+    }
+
+    Ok(repo)
 }
 
 pub fn warn_if_dirty_working_tree(repo: &GitRepo) -> anyhow::Result<()> {
@@ -117,6 +122,36 @@ pub fn changed_paths_since_scope_base_at_commit(
             Ok(parse_tree_paths_as_added(&output.stdout))
         }
     }
+}
+
+pub fn worktree_file_paths(repo: &GitRepo) -> anyhow::Result<Vec<String>> {
+    let output = git_output_in_repo(
+        repo,
+        &[
+            "ls-files",
+            "-z",
+            "--cached",
+            "--others",
+            "--exclude-standard",
+        ],
+    )?;
+    if !output.status.success() {
+        bail!("inspect Git worktree files failed");
+    }
+
+    Ok(parse_nul_paths(&output.stdout))
+}
+
+pub fn committed_file_paths_at_commit(
+    repo: &GitRepo,
+    commit_oid: &str,
+) -> anyhow::Result<Vec<String>> {
+    let output = git_output_in_repo(repo, &["ls-tree", "-rz", "--name-only", commit_oid])?;
+    if !output.status.success() {
+        bail!("inspect committed files for Scope review failed");
+    }
+
+    Ok(parse_nul_paths(&output.stdout))
 }
 
 pub fn scope_remote_head_oid(
@@ -351,13 +386,6 @@ fn git_output_in_repo(repo: &GitRepo, args: &[&str]) -> anyhow::Result<Output> {
         .with_context(|| format!("run git {}", args.join(" ")))
 }
 
-fn git_success(args: &[&str]) -> bool {
-    Command::new("git")
-        .args(args)
-        .status()
-        .is_ok_and(|status| status.success())
-}
-
 fn git_success_in_repo(repo: &GitRepo, args: &[&str]) -> bool {
     Command::new("git")
         .current_dir(&repo.root)
@@ -396,6 +424,16 @@ fn parse_tree_paths_as_added(output: &[u8]) -> Vec<GitChangedPath> {
         .map(|path| GitChangedPath {
             status: "A".to_string(),
             path: path.to_string(),
+        })
+        .collect()
+}
+
+fn parse_nul_paths(output: &[u8]) -> Vec<String> {
+    output
+        .split(|byte| *byte == 0)
+        .filter_map(|path| {
+            let path = String::from_utf8_lossy(path).to_string();
+            (!path.is_empty()).then_some(path)
         })
         .collect()
 }
@@ -519,6 +557,14 @@ mod tests {
                     path: "README.md".to_string(),
                 },
             ]
+        );
+    }
+
+    #[test]
+    fn parse_nul_paths_ignores_empty_entries() {
+        assert_eq!(
+            parse_nul_paths(b" README.md\0src/main.rs \0\0"),
+            vec![" README.md".to_string(), "src/main.rs ".to_string()]
         );
     }
 }

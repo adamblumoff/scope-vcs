@@ -33,7 +33,7 @@ impl Drop for TempDir {
 }
 
 #[test]
-fn push_help_exposes_remote_option() {
+fn push_help_exposes_remote_and_no_review_options() {
     let output = Command::new(env!("CARGO_BIN_EXE_scope"))
         .args(["push", "--help"])
         .output()
@@ -42,6 +42,9 @@ fn push_help_exposes_remote_option() {
     assert_success(&output, "scope push --help");
     let stdout = String::from_utf8_lossy(&output.stdout);
     assert!(stdout.contains("--remote <REMOTE>"), "{stdout}");
+    assert!(stdout.contains("--no-review"), "{stdout}");
+    assert!(!stdout.contains("--yes"), "{stdout}");
+    assert!(!stdout.contains("-y"), "{stdout}");
 }
 
 #[test]
@@ -80,7 +83,7 @@ fn push_refuses_missing_config_before_remote_lookup() {
     create_repo_with_readme(dir.path());
 
     let output = scope_command(dir.path())
-        .args(["push", "--yes"])
+        .args(["push", "--no-review"])
         .output()
         .unwrap();
 
@@ -119,7 +122,7 @@ fn push_refuses_invalid_config_before_remote_lookup() {
     commit_all(dir.path(), "add invalid config");
 
     let output = scope_command(dir.path())
-        .args(["push", "--yes"])
+        .args(["push", "--no-review"])
         .output()
         .unwrap();
 
@@ -143,7 +146,7 @@ fn push_refuses_uncommitted_config_before_remote_lookup() {
     write_valid_config(dir.path());
 
     let output = scope_command(dir.path())
-        .args(["push", "--yes"])
+        .args(["push", "--no-review"])
         .output()
         .unwrap();
 
@@ -169,7 +172,7 @@ fn push_warns_on_dirty_working_tree_before_remote_lookup_failure() {
     fs::write(dir.path().join("dirty.txt"), "uncommitted\n").unwrap();
 
     let output = scope_command(dir.path())
-        .args(["push", "--yes"])
+        .args(["push", "--no-review"])
         .output()
         .unwrap();
 
@@ -185,6 +188,26 @@ fn push_warns_on_dirty_working_tree_before_remote_lookup_failure() {
     );
     assert!(
         stderr.contains("Scope remote 'scope' is not configured. Run: scope init"),
+        "{stderr}"
+    );
+    assert!(!stderr.contains("start browser login"), "{stderr}");
+}
+
+#[test]
+fn push_requires_review_tty_before_remote_lookup() {
+    let dir = TempDir::new("review-non-tty");
+    create_repo_with_head(dir.path());
+
+    let output = scope_command(dir.path()).args(["push"]).output().unwrap();
+
+    assert_failure(&output, "scope push without review tty");
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("scope push review requires an interactive terminal"),
+        "{stderr}"
+    );
+    assert!(
+        !stderr.contains("Scope remote 'scope' is not configured"),
         "{stderr}"
     );
     assert!(!stderr.contains("start browser login"), "{stderr}");
