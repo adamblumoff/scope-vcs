@@ -7,6 +7,10 @@
       {
         "path": "/AGENTS.md",
         "visibility": "public"
+      },
+      {
+        "path": "/README.md",
+        "visibility": "public"
       }
     ]
   },
