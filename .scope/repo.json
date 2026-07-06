@@ -3,7 +3,12 @@
   "version": 1,
   "visibility": {
     "default": "private",
-    "rules": []
+    "rules": [
+      {
+        "path": "/AGENTS.md",
+        "visibility": "public"
+      }
+    ]
   },
   "history": {
     "rewrites": []
