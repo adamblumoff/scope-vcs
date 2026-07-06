@@ -122,10 +122,10 @@ fn render(frame: &mut Frame<'_>, state: &mut ReviewState) {
         .chain(state.deleted_path_summaries().iter().cloned())
         .map(|line| Line::from(terminal_safe(&line)))
         .collect::<Vec<_>>();
-    let read_only_height = read_only_lines.len().min(body_height);
-    let row_height = body_height.saturating_sub(read_only_height);
-    state.adjust_scroll(row_height);
     let rows = state.visible_rows();
+    let (read_only_height, row_height) =
+        review_body_heights(body_height, read_only_lines.len(), rows.len());
+    state.adjust_scroll(row_height);
     let mut lines = read_only_lines
         .into_iter()
         .take(read_only_height)
@@ -158,6 +158,20 @@ fn render(frame: &mut Frame<'_>, state: &mut ReviewState) {
         ]),
         chunks[2],
     );
+}
+
+fn review_body_heights(
+    body_height: usize,
+    read_only_line_count: usize,
+    row_count: usize,
+) -> (usize, usize) {
+    let reserved_row_height = usize::from(body_height > 0 && row_count > 0);
+    let read_only_height =
+        read_only_line_count.min(body_height.saturating_sub(reserved_row_height));
+    (
+        read_only_height,
+        body_height.saturating_sub(read_only_height),
+    )
 }
 
 fn row_line(row: &ReviewRow, selected: bool) -> Line<'static> {
@@ -232,14 +246,5 @@ impl Drop for TerminalRestoreGuard {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::terminal_safe;
-
-    #[test]
-    fn terminal_safe_escapes_control_characters() {
-        assert_eq!(
-            terminal_safe("a\u{1b}]52;c;bad\u{7}\n"),
-            "a\\u{1b}]52;c;bad\\u{7}\\n"
-        );
-    }
-}
+#[path = "tui_tests.rs"]
+mod tests;
