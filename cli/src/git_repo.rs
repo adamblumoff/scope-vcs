@@ -1,5 +1,6 @@
 use anyhow::{Context, bail};
 use std::{
+    collections::BTreeSet,
     env,
     path::PathBuf,
     process::{Command, Output},
@@ -28,17 +29,13 @@ pub struct GitChangedPath {
     pub path: String,
 }
 
-pub fn ensure_git_repo_ready(command_name: &str) -> anyhow::Result<GitRepo> {
+pub fn discover_git_repo(command_name: &str) -> anyhow::Result<GitRepo> {
     let root_output = Command::new("git")
         .args(["rev-parse", "--show-toplevel"])
         .output()
         .context("inspect Git repository")?;
     if !root_output.status.success() {
         bail!("run {command_name} from inside an existing Git repository");
-    }
-
-    if !git_success(&["rev-parse", "--verify", "HEAD"]) {
-        bail!("create at least one Git commit before running {command_name}");
     }
 
     let root = String::from_utf8_lossy(&root_output.stdout)
@@ -51,6 +48,15 @@ pub fn ensure_git_repo_ready(command_name: &str) -> anyhow::Result<GitRepo> {
     Ok(GitRepo {
         root: PathBuf::from(root),
     })
+}
+
+pub fn ensure_git_repo_ready(command_name: &str) -> anyhow::Result<GitRepo> {
+    let repo = discover_git_repo(command_name)?;
+    if !git_success_in_repo(&repo, &["rev-parse", "--verify", "HEAD"]) {
+        bail!("create at least one Git commit before running {command_name}");
+    }
+
+    Ok(repo)
 }
 
 pub fn warn_if_dirty_working_tree(repo: &GitRepo) -> anyhow::Result<()> {
@@ -117,6 +123,44 @@ pub fn changed_paths_since_scope_base_at_commit(
             Ok(parse_tree_paths_as_added(&output.stdout))
         }
     }
+}
+
+pub fn worktree_file_paths(repo: &GitRepo) -> anyhow::Result<Vec<String>> {
+    let output = git_output_in_repo(
+        repo,
+        &[
+            "ls-files",
+            "-z",
+            "--cached",
+            "--others",
+            "--exclude-standard",
+        ],
+    )?;
+    if !output.status.success() {
+        bail!("inspect Git worktree files failed");
+    }
+
+    let deleted_output = git_output_in_repo(repo, &["ls-files", "-z", "--deleted"])?;
+    if !deleted_output.status.success() {
+        bail!("inspect deleted Git worktree files failed");
+    }
+
+    Ok(exclude_deleted_paths(
+        parse_nul_paths(&output.stdout),
+        parse_nul_paths(&deleted_output.stdout),
+    ))
+}
+
+pub fn committed_file_paths_at_commit(
+    repo: &GitRepo,
+    commit_oid: &str,
+) -> anyhow::Result<Vec<String>> {
+    let output = git_output_in_repo(repo, &["ls-tree", "-rz", "--name-only", commit_oid])?;
+    if !output.status.success() {
+        bail!("inspect committed files for Scope review failed");
+    }
+
+    Ok(parse_nul_paths(&output.stdout))
 }
 
 pub fn scope_remote_head_oid(
@@ -351,13 +395,6 @@ fn git_output_in_repo(repo: &GitRepo, args: &[&str]) -> anyhow::Result<Output> {
         .with_context(|| format!("run git {}", args.join(" ")))
 }
 
-fn git_success(args: &[&str]) -> bool {
-    Command::new("git")
-        .args(args)
-        .status()
-        .is_ok_and(|status| status.success())
-}
-
 fn git_success_in_repo(repo: &GitRepo, args: &[&str]) -> bool {
     Command::new("git")
         .current_dir(&repo.root)
@@ -400,125 +437,24 @@ fn parse_tree_paths_as_added(output: &[u8]) -> Vec<GitChangedPath> {
         .collect()
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn git_push_auth_plan_keeps_bearer_token_out_of_process_args() {
-        let plan = git_push_auth_plan(
-            "https://scope.example/git/adam/random",
-            "1234567890123456789012345678901234567890",
-            "main",
-            "scope_cli_secret",
-            "scope_pi_secret",
-            Some(2),
-        );
-
-        assert_eq!(
-            plan.args,
-            vec![
-                "-c",
-                "push.recurseSubmodules=no",
-                "push",
-                "https://scope.example/git/adam/random",
-                "1234567890123456789012345678901234567890:refs/heads/main"
-            ]
-        );
-        assert!(!plan.args.iter().any(|arg| arg.contains("scope_cli_secret")));
-        assert_eq!(
-            plan.env,
-            vec![
-                ("GIT_CONFIG_COUNT".to_string(), "4".to_string()),
-                (
-                    "GIT_CONFIG_KEY_2".to_string(),
-                    "http.https://scope.example/git/adam/random.extraHeader".to_string()
-                ),
-                (
-                    "GIT_CONFIG_VALUE_2".to_string(),
-                    "Authorization: Bearer scope_cli_secret".to_string()
-                ),
-                (
-                    "GIT_CONFIG_KEY_3".to_string(),
-                    "http.https://scope.example/git/adam/random.extraHeader".to_string()
-                ),
-                (
-                    "GIT_CONFIG_VALUE_3".to_string(),
-                    "X-Scope-Push-Intent: scope_pi_secret".to_string()
-                ),
-            ]
-        );
-    }
-
-    #[test]
-    fn git_fetch_auth_plan_keeps_bearer_token_out_of_process_args() {
-        let plan = git_fetch_auth_plan(
-            "https://scope.example/git/adam/random",
-            "scope",
-            "main",
-            "scope_cli_secret",
-            Some(1),
-        );
-
-        assert_eq!(
-            plan.args,
-            vec![
-                "-c",
-                "protocol.version=2",
-                "fetch",
-                "--no-tags",
-                "https://scope.example/git/adam/random",
-                "+refs/heads/main:refs/remotes/scope/main"
-            ]
-        );
-        assert!(!plan.args.iter().any(|arg| arg.contains("scope_cli_secret")));
-        assert_eq!(
-            plan.env,
-            vec![
-                ("GIT_CONFIG_COUNT".to_string(), "2".to_string()),
-                (
-                    "GIT_CONFIG_KEY_1".to_string(),
-                    "http.https://scope.example/git/adam/random.extraHeader".to_string()
-                ),
-                (
-                    "GIT_CONFIG_VALUE_1".to_string(),
-                    "Authorization: Bearer scope_cli_secret".to_string()
-                ),
-            ]
-        );
-    }
-
-    #[test]
-    fn parse_name_status_keeps_renames_readable() {
-        assert_eq!(
-            parse_name_status(b"A\tREADME.md\nR100\told.rs\tnew.rs\n"),
-            vec![
-                GitChangedPath {
-                    status: "A".to_string(),
-                    path: "README.md".to_string(),
-                },
-                GitChangedPath {
-                    status: "R100".to_string(),
-                    path: "old.rs -> new.rs".to_string(),
-                },
-            ]
-        );
-    }
-
-    #[test]
-    fn parse_tree_paths_marks_first_push_files_added() {
-        assert_eq!(
-            parse_tree_paths_as_added(b".scope/repo.json\nREADME.md\n"),
-            vec![
-                GitChangedPath {
-                    status: "A".to_string(),
-                    path: ".scope/repo.json".to_string(),
-                },
-                GitChangedPath {
-                    status: "A".to_string(),
-                    path: "README.md".to_string(),
-                },
-            ]
-        );
-    }
+fn parse_nul_paths(output: &[u8]) -> Vec<String> {
+    output
+        .split(|byte| *byte == 0)
+        .filter_map(|path| {
+            let path = String::from_utf8_lossy(path).to_string();
+            (!path.is_empty()).then_some(path)
+        })
+        .collect()
 }
+
+fn exclude_deleted_paths(paths: Vec<String>, deleted_paths: Vec<String>) -> Vec<String> {
+    let deleted_paths = deleted_paths.into_iter().collect::<BTreeSet<_>>();
+    paths
+        .into_iter()
+        .filter(|path| !deleted_paths.contains(path))
+        .collect()
+}
+
+#[cfg(test)]
+#[path = "git_repo_tests.rs"]
+mod tests;

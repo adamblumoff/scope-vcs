@@ -17,7 +17,7 @@ use scope_cli::{
         store_session_token,
     },
     git_repo::{
-        GitChangedPath, changed_paths_since_scope_base_at_commit, ensure_git_repo_ready,
+        changed_paths_since_scope_base_at_commit, discover_git_repo, ensure_git_repo_ready,
         fetch_scope_remote_with_bearer, head_oid, mark_scope_remote_pushed, run_git,
         scope_remote_head_oid, warn_if_dirty_working_tree,
     },
@@ -26,11 +26,14 @@ use scope_cli::{
         load_scope_remote, push_reviewed_head_with_intent,
     },
     repo_config::{
-        config_visibility_label, ensure_scope_repo_config_exists,
-        ensure_scope_repo_config_is_committed, load_scope_repo_config_at_commit, repo_config_path,
+        ensure_scope_repo_config_exists, ensure_scope_repo_config_is_committed,
+        load_scope_repo_config_at_commit, repo_config_path,
+    },
+    review::{
+        PushReviewOutcome, config_changed_message, ensure_review_terminal_available,
+        run_push_review, run_standalone_review,
     },
 };
-use scope_core::domain::repo_config::{HistoryRewriteAction, RepoConfig};
 use std::{
     io::{self, Read, Write},
     net::{TcpListener, TcpStream},
@@ -52,6 +55,8 @@ struct Cli {
 enum CommandKind {
     Init(InitArgs),
     Push(PushArgs),
+    #[command(about = "Review repo visibility config locally")]
+    Review(ReviewArgs),
     Clone(CloneArgs),
     Login(LoginArgs),
     Logout,
@@ -68,9 +73,15 @@ struct InitArgs {
 struct PushArgs {
     #[arg(long, default_value = DEFAULT_SCOPE_REMOTE)]
     remote: String,
-    #[arg(short, long)]
-    yes: bool,
+    #[arg(
+        long,
+        help = "Skip local visibility review and push using committed config"
+    )]
+    no_review: bool,
 }
+
+#[derive(Parser)]
+struct ReviewArgs {}
 
 #[derive(Parser)]
 struct CloneArgs {
@@ -91,6 +102,7 @@ fn main() -> anyhow::Result<()> {
     match cli.command {
         CommandKind::Init(args) => init(args),
         CommandKind::Push(args) => push(args),
+        CommandKind::Review(args) => review(args),
         CommandKind::Clone(args) => clone(args),
         CommandKind::Login(args) => login(args),
         CommandKind::Logout => logout(),
@@ -143,7 +155,10 @@ fn push(args: PushArgs) -> anyhow::Result<()> {
     let reviewed_head_oid = head_oid(&git_repo)?;
     warn_if_dirty_working_tree(&git_repo)?;
     ensure_scope_repo_config_is_committed(&git_repo.root)?;
-    let config = load_scope_repo_config_at_commit(&git_repo.root, &reviewed_head_oid)?;
+    load_scope_repo_config_at_commit(&git_repo.root, &reviewed_head_oid)?;
+    if !args.no_review {
+        ensure_review_terminal_available("scope push review")?;
+    }
 
     let api_url = api_url();
     let target = load_scope_remote(&api_url, &args.remote)?;
@@ -167,6 +182,28 @@ fn push(args: PushArgs) -> anyhow::Result<()> {
             &session.token,
         )?;
     }
+    let reviewed_base_oid = if args.no_review {
+        None
+    } else {
+        Some(if repo.lifecycle_state == RepoPublicationState::Published {
+            scope_remote_head_oid(&git_repo, &args.remote, DEFAULT_SCOPE_BRANCH)?
+        } else {
+            None
+        })
+    };
+    if let Some(review_base_oid) = &reviewed_base_oid {
+        let changed_paths = changed_paths_since_scope_base_at_commit(
+            &git_repo,
+            review_base_oid.as_deref(),
+            &reviewed_head_oid,
+        )?;
+        match run_push_review(&git_repo, &reviewed_head_oid, &changed_paths)? {
+            PushReviewOutcome::Continue => {}
+            PushReviewOutcome::ConfigChanged => bail!("{}", config_changed_message()),
+        }
+        ensure_scope_repo_config_is_committed(&git_repo.root)?;
+        load_scope_repo_config_at_commit(&git_repo.root, &reviewed_head_oid)?;
+    }
 
     let intent = create_push_intent(
         &client,
@@ -176,6 +213,12 @@ fn push(args: PushArgs) -> anyhow::Result<()> {
         &target.repo,
         &reviewed_head_oid,
     )?;
+    if let Some(review_base_oid) = &reviewed_base_oid {
+        ensure_reviewed_base_matches_intent(
+            review_base_oid.as_deref(),
+            intent.base_head_oid.as_deref(),
+        )?;
+    }
     ensure_review_base_matches_intent(
         &git_repo,
         &target.push_url,
@@ -183,12 +226,6 @@ fn push(args: PushArgs) -> anyhow::Result<()> {
         &session.token,
         intent.base_head_oid.as_deref(),
     )?;
-    let changed_paths = changed_paths_since_scope_base_at_commit(
-        &git_repo,
-        intent.base_head_oid.as_deref(),
-        &reviewed_head_oid,
-    )?;
-    confirm_scope_push(&args, &config, &changed_paths)?;
     ensure_push_intent_not_expired(intent.expires_at_unix)?;
 
     let outcome = match push_reviewed_head_with_intent(
@@ -225,6 +262,11 @@ fn push(args: PushArgs) -> anyhow::Result<()> {
     }
 
     Ok(())
+}
+
+fn review(_args: ReviewArgs) -> anyhow::Result<()> {
+    let git_repo = discover_git_repo("scope review")?;
+    run_standalone_review(&git_repo)
 }
 
 fn ensure_push_intent_not_expired(expires_at_unix: u64) -> anyhow::Result<()> {
@@ -271,68 +313,15 @@ fn ensure_review_base_matches_intent(
     bail!("Scope changed while preparing push review; rerun scope push");
 }
 
-fn confirm_scope_push(
-    args: &PushArgs,
-    config: &RepoConfig,
-    changed_paths: &[GitChangedPath],
+fn ensure_reviewed_base_matches_intent(
+    reviewed_base_oid: Option<&str>,
+    intent_base_head_oid: Option<&str>,
 ) -> anyhow::Result<()> {
-    print_scope_push_review(config, changed_paths);
-    if args.yes {
+    if reviewed_base_oid == intent_base_head_oid {
         return Ok(());
     }
 
-    eprint!("Apply this Scope push? [y/N]: ");
-    io::stderr().flush().ok();
-    let mut input = String::new();
-    io::stdin()
-        .read_line(&mut input)
-        .context("read Scope push confirmation")?;
-    match input.trim().to_ascii_lowercase().as_str() {
-        "y" | "yes" => Ok(()),
-        _ => bail!("scope push cancelled"),
-    }
-}
-
-fn print_scope_push_review(config: &RepoConfig, changed_paths: &[GitChangedPath]) {
-    eprintln!("Scope push review");
-    eprintln!("Config: {}", repo_config_path());
-    eprintln!(
-        "Default visibility: {}",
-        config_visibility_label(config.visibility.default_visibility())
-    );
-    if config.visibility.rules.is_empty() {
-        eprintln!("Visibility rules: none");
-    } else {
-        eprintln!("Visibility rules:");
-        for rule in &config.visibility.rules {
-            eprintln!(
-                "  {} -> {}",
-                rule.path,
-                config_visibility_label(rule.visibility)
-            );
-        }
-    }
-
-    if config.history.rewrites.is_empty() {
-        eprintln!("History rewrites: none");
-    } else {
-        eprintln!("History rewrites:");
-        for rewrite in &config.history.rewrites {
-            let action = match rewrite.action {
-                HistoryRewriteAction::RedactPublicHistory => "redact public history",
-            };
-            eprintln!("  {} -> {}", rewrite.path, action);
-        }
-    }
-
-    if changed_paths.is_empty() {
-        eprintln!("Committed file changes since last Scope push: none");
-    } else {
-        eprintln!("Committed file changes since last Scope push:");
-        for change in changed_paths {
-            eprintln!("  {} {}", change.status, change.path);
-        }
-    }
+    bail!("Scope changed while preparing push review; rerun scope push");
 }
 
 fn clone(args: CloneArgs) -> anyhow::Result<()> {
@@ -738,6 +727,21 @@ mod tests {
                 .contains("Scope push review expired; rerun scope push")
         );
         ensure_push_intent_not_expired(unix_now().saturating_add(60)).unwrap();
+    }
+
+    #[test]
+    fn reviewed_base_must_match_push_intent_base() {
+        ensure_reviewed_base_matches_intent(None, None).unwrap();
+        ensure_reviewed_base_matches_intent(Some("abc"), Some("abc")).unwrap();
+
+        let error = ensure_reviewed_base_matches_intent(Some("abc"), Some("def")).unwrap_err();
+        assert!(
+            error
+                .to_string()
+                .contains("Scope changed while preparing push review; rerun scope push")
+        );
+        assert!(ensure_reviewed_base_matches_intent(None, Some("def")).is_err());
+        assert!(ensure_reviewed_base_matches_intent(Some("abc"), None).is_err());
     }
 
     #[test]
