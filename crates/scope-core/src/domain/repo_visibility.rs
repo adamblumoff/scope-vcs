@@ -33,7 +33,10 @@ pub struct VisibilityTarget<'a> {
     pub file_paths_under: Vec<&'a str>,
 }
 
-pub fn toggle_visibility_target(config: &mut RepoConfig, target: VisibilityTarget<'_>) -> ToggleResult {
+pub fn toggle_visibility_target(
+    config: &mut RepoConfig,
+    target: VisibilityTarget<'_>,
+) -> ToggleResult {
     if target.reserved {
         return ToggleResult {
             changed: false,
@@ -64,7 +67,11 @@ pub fn toggle_visibility_target(config: &mut RepoConfig, target: VisibilityTarge
             }
             let current = effective_config_visibility_for_path(config, target.path);
             remove_same_base_folder_rule(config, target.path);
-            upsert_visibility_rule(config, target.path.to_string(), opposite_config_visibility(current));
+            upsert_visibility_rule(
+                config,
+                target.path.to_string(),
+                opposite_config_visibility(current),
+            );
         }
     }
     canonicalize_visibility_rules(config);
@@ -318,7 +325,10 @@ fn effective_config_visibility_for_path(config: &RepoConfig, path: &str) -> Conf
     }
 }
 
-fn next_directory_visibility(config: &RepoConfig, target: &VisibilityTarget<'_>) -> ConfigVisibility {
+fn next_directory_visibility(
+    config: &RepoConfig,
+    target: &VisibilityTarget<'_>,
+) -> ConfigVisibility {
     match target_visibility(config, target) {
         ReviewVisibility::Public => ConfigVisibility::Private,
         ReviewVisibility::Private => ConfigVisibility::Public,

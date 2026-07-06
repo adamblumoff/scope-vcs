@@ -102,11 +102,17 @@ fn folder_toggle_private_clears_public_descendant_overrides() {
     );
     let target = directory("/src", vec!["/src/a.rs", "/src/b.rs"]);
 
-    assert_eq!(target_visibility(&config, &target), ReviewVisibility::Public);
+    assert_eq!(
+        target_visibility(&config, &target),
+        ReviewVisibility::Public
+    );
     toggle_visibility_target(&mut config, target.clone());
 
     assert!(config.visibility.rules.is_empty());
-    assert_eq!(target_visibility(&config, &target), ReviewVisibility::Private);
+    assert_eq!(
+        target_visibility(&config, &target),
+        ReviewVisibility::Private
+    );
 }
 
 #[test]
@@ -153,7 +159,10 @@ fn mixed_folder_with_public_base_toggles_private() {
     toggle_visibility_target(&mut config, target.clone());
 
     assert!(config.visibility.rules.is_empty());
-    assert_eq!(target_visibility(&config, &target), ReviewVisibility::Private);
+    assert_eq!(
+        target_visibility(&config, &target),
+        ReviewVisibility::Private
+    );
 }
 
 #[test]
@@ -164,11 +173,17 @@ fn file_toggle_removes_stale_same_base_folder_rule() {
     );
     let target = file("/docs");
 
-    assert_eq!(target_visibility(&config, &target), ReviewVisibility::Public);
+    assert_eq!(
+        target_visibility(&config, &target),
+        ReviewVisibility::Public
+    );
     toggle_visibility_target(&mut config, target.clone());
 
     assert!(config.visibility.rules.is_empty());
-    assert_eq!(target_visibility(&config, &target), ReviewVisibility::Private);
+    assert_eq!(
+        target_visibility(&config, &target),
+        ReviewVisibility::Private
+    );
 }
 
 #[test]
@@ -288,5 +303,8 @@ fn reserved_scope_paths_cannot_be_toggled_public() {
 
     assert!(!result.changed);
     assert!(config.visibility.rules.is_empty());
-    assert_eq!(target_visibility(&config, &target), ReviewVisibility::Private);
+    assert_eq!(
+        target_visibility(&config, &target),
+        ReviewVisibility::Private
+    );
 }
