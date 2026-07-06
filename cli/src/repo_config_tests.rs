@@ -196,7 +196,11 @@ fn create_rejects_symlinked_scope_directory() {
 }
 
 fn run_git<const N: usize>(cwd: &std::path::Path, args: [&str; N]) {
-    let output = Command::new("git").current_dir(cwd).args(args).output().unwrap();
+    let output = Command::new("git")
+        .current_dir(cwd)
+        .args(args)
+        .output()
+        .unwrap();
     assert_success(&output, "git");
 }
 

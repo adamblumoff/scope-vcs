@@ -8,10 +8,9 @@ use scope_cli::{
         CLI_EXCHANGE_GRANTS_EXCHANGE_PATH, CliExchangeGrantExchangeRequest,
         CliSessionTokenResponse, CreatePushIntentParams, DeviceLoginPollResponse,
         DeviceLoginStartResponse, DeviceLoginStatus, RepoInitResponse, RepoPublicationState,
-        api_url, cli_browser_login_exchange_path, cli_device_login_poll_path,
-        complete_push_intent, create_repo, create_push_intent, display_user, get_repo,
-        get_repo_config,
-        http_client, revoke_cli_session, rollback_created_repo, validate_session_token,
+        api_url, cli_browser_login_exchange_path, cli_device_login_poll_path, complete_push_intent,
+        create_push_intent, create_repo, display_user, get_repo, get_repo_config, http_client,
+        revoke_cli_session, rollback_created_repo, validate_session_token,
     },
     auth::{
         cached_cli_session, delete_stored_session_token, read_stored_session_token,
@@ -130,8 +129,7 @@ fn init(args: InitArgs) -> anyhow::Result<()> {
         .and_then(|config_created| {
             mark_worktree_scope_repo_config_synced(&git_repo.root, &default_scope_repo_config())?;
             Ok(config_created)
-        })
-    {
+        }) {
         Ok(config_created) => config_created,
         Err(error) => {
             rollback_created_repo(&client, &api_url, &session.token, &created.repo);
@@ -199,7 +197,10 @@ fn push(args: PushArgs) -> anyhow::Result<()> {
             Ok(hash) if hash == local_config_hash => {
                 write_worktree_scope_repo_config_with_base(&git_repo.root, &repo_config.config)?;
                 config = repo_config.config;
-                eprintln!("Scope repo config changed; refreshed {}", repo_config_path());
+                eprintln!(
+                    "Scope repo config changed; refreshed {}",
+                    repo_config_path()
+                );
             }
             Ok(_) => {
                 bail!(

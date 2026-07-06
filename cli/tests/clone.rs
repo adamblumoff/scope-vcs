@@ -112,7 +112,10 @@ fn git_clone_plan_preserves_localhost_ports() {
 #[test]
 fn default_clone_dir_strips_dot_git_suffix_like_git_clone() {
     assert_eq!(default_clone_dir("scope-vcs"), PathBuf::from("scope-vcs"));
-    assert_eq!(default_clone_dir("scope-vcs.git"), PathBuf::from("scope-vcs"));
+    assert_eq!(
+        default_clone_dir("scope-vcs.git"),
+        PathBuf::from("scope-vcs")
+    );
     assert_eq!(default_clone_dir(".git"), PathBuf::from(".git"));
 }
 

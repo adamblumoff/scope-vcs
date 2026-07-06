@@ -64,8 +64,9 @@ pub fn load_worktree_scope_repo_config(git_root: &Path) -> anyhow::Result<RepoCo
 
 pub fn load_worktree_scope_repo_config_base_hash(git_root: &Path) -> anyhow::Result<String> {
     let path = git_root.join(WORKTREE_CONFIG_STATE_PATH);
-    let bytes = fs::read(&path)
-        .with_context(|| format!("read {WORKTREE_CONFIG_STATE_PATH}; run scope clone or scope init"))?;
+    let bytes = fs::read(&path).with_context(|| {
+        format!("read {WORKTREE_CONFIG_STATE_PATH}; run scope clone or scope init")
+    })?;
     let state: WorktreeRepoConfigState =
         serde_json::from_slice(&bytes).context("parse .scope/repo-state.json")?;
     if state.kind != WORKTREE_CONFIG_STATE_KIND {
@@ -128,7 +129,8 @@ pub fn mark_worktree_scope_repo_config_synced(
         version: WORKTREE_CONFIG_STATE_VERSION,
         base_config_hash,
     };
-    let mut json = serde_json::to_string_pretty(&state).context("serialize .scope/repo-state.json")?;
+    let mut json =
+        serde_json::to_string_pretty(&state).context("serialize .scope/repo-state.json")?;
     json.push('\n');
     write_config_atomically(&git_root.join(WORKTREE_CONFIG_STATE_PATH), &json)?;
     ensure_scope_repo_config_is_locally_excluded(git_root)
@@ -250,12 +252,7 @@ fn ensure_scope_repo_config_is_locally_excluded(git_root: &Path) -> anyhow::Resu
     let missing = LOCAL_ONLY_SCOPE_PATHS
         .iter()
         .copied()
-        .filter(|path| {
-            !existing
-                .lines()
-                .map(str::trim)
-                .any(|line| line == *path)
-        })
+        .filter(|path| !existing.lines().map(str::trim).any(|line| line == *path))
         .collect::<Vec<_>>();
     if missing.is_empty() {
         return Ok(());

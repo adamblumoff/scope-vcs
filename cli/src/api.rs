@@ -414,7 +414,11 @@ pub fn create_push_intent(
             anyhow::bail!("not signed in; run scope login")
         }
         StatusCode::FORBIDDEN => {
-            anyhow::bail!("you do not have write access to {}/{}", params.owner, params.repo)
+            anyhow::bail!(
+                "you do not have write access to {}/{}",
+                params.owner,
+                params.repo
+            )
         }
         StatusCode::NOT_FOUND => {
             anyhow::bail!("repo {}/{} not found", params.owner, params.repo)
@@ -438,7 +442,9 @@ pub fn complete_push_intent(
     token: &str,
 ) -> anyhow::Result<()> {
     let response = client
-        .post(format!("{api_url}/v1/repos/{owner}/{repo}/push-intents/complete"))
+        .post(format!(
+            "{api_url}/v1/repos/{owner}/{repo}/push-intents/complete"
+        ))
         .bearer_auth(session_token)
         .json(&CompletePushIntentRequest {
             token: token.to_string(),
