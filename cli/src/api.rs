@@ -1,5 +1,6 @@
 use anyhow::Context;
 use reqwest::{StatusCode, blocking::Client};
+use scope_core::domain::repo_config::RepoConfig;
 use serde::{Deserialize, Serialize};
 use std::{env, time::Duration};
 
@@ -173,6 +174,13 @@ pub struct GitPushTokenResponse {
 pub struct RepoCloneCredentialResponse {
     pub git_remote_path: String,
     pub token: GitCloneTokenResponse,
+    pub config: RepoConfig,
+}
+
+#[derive(Deserialize)]
+pub struct RepoConfigResponse {
+    pub config: RepoConfig,
+    pub config_hash: String,
 }
 
 #[derive(Deserialize)]
@@ -183,6 +191,8 @@ pub struct GitCloneTokenResponse {
 #[derive(Serialize)]
 struct CreatePushIntentRequest {
     head_oid: String,
+    base_config_hash: String,
+    config: RepoConfig,
 }
 
 #[derive(Deserialize)]
@@ -190,6 +200,19 @@ pub struct CreatePushIntentResponse {
     pub token: String,
     pub base_head_oid: Option<String>,
     pub expires_at_unix: u64,
+}
+
+pub struct CreatePushIntentParams<'a> {
+    pub owner: &'a str,
+    pub repo: &'a str,
+    pub head_oid: &'a str,
+    pub base_config_hash: &'a str,
+    pub config: &'a RepoConfig,
+}
+
+#[derive(Serialize)]
+struct CompletePushIntentRequest {
+    token: String,
 }
 
 pub fn api_url() -> String {
@@ -335,22 +358,93 @@ pub fn create_clone_credential(
         .context("parse clone credential response")
 }
 
-pub fn create_push_intent(
+pub fn get_repo_config(
     client: &Client,
     api_url: &str,
     session_token: &str,
     owner: &str,
     repo: &str,
-    head_oid: &str,
+) -> anyhow::Result<RepoConfigResponse> {
+    let response = client
+        .get(format!("{api_url}/v1/repos/{owner}/{repo}/config"))
+        .bearer_auth(session_token)
+        .send()
+        .with_context(|| format!("get repo config for {owner}/{repo}"))?;
+    match response.status() {
+        StatusCode::UNAUTHORIZED => {
+            anyhow::bail!("not signed in; run scope login")
+        }
+        StatusCode::FORBIDDEN => {
+            anyhow::bail!("repo membership required for {owner}/{repo}")
+        }
+        StatusCode::NOT_FOUND => {
+            anyhow::bail!("repo {owner}/{repo} not found")
+        }
+        _ => {}
+    }
+
+    response
+        .error_for_status()
+        .with_context(|| format!("get repo config for {owner}/{repo}"))?
+        .json()
+        .context("parse repo config response")
+}
+
+pub fn create_push_intent(
+    client: &Client,
+    api_url: &str,
+    session_token: &str,
+    params: CreatePushIntentParams<'_>,
 ) -> anyhow::Result<CreatePushIntentResponse> {
     let response = client
-        .post(format!("{api_url}/v1/repos/{owner}/{repo}/push-intents"))
+        .post(format!(
+            "{api_url}/v1/repos/{}/{}/push-intents",
+            params.owner, params.repo
+        ))
         .bearer_auth(session_token)
         .json(&CreatePushIntentRequest {
-            head_oid: head_oid.to_string(),
+            head_oid: params.head_oid.to_string(),
+            base_config_hash: params.base_config_hash.to_string(),
+            config: params.config.clone(),
         })
         .send()
-        .with_context(|| format!("create push intent for {owner}/{repo}"))?;
+        .with_context(|| format!("create push intent for {}/{}", params.owner, params.repo))?;
+    match response.status() {
+        StatusCode::UNAUTHORIZED => {
+            anyhow::bail!("not signed in; run scope login")
+        }
+        StatusCode::FORBIDDEN => {
+            anyhow::bail!("you do not have write access to {}/{}", params.owner, params.repo)
+        }
+        StatusCode::NOT_FOUND => {
+            anyhow::bail!("repo {}/{} not found", params.owner, params.repo)
+        }
+        _ => {}
+    }
+
+    response
+        .error_for_status()
+        .with_context(|| format!("create push intent for {}/{}", params.owner, params.repo))?
+        .json()
+        .context("parse push intent response")
+}
+
+pub fn complete_push_intent(
+    client: &Client,
+    api_url: &str,
+    session_token: &str,
+    owner: &str,
+    repo: &str,
+    token: &str,
+) -> anyhow::Result<()> {
+    let response = client
+        .post(format!("{api_url}/v1/repos/{owner}/{repo}/push-intents/complete"))
+        .bearer_auth(session_token)
+        .json(&CompletePushIntentRequest {
+            token: token.to_string(),
+        })
+        .send()
+        .with_context(|| format!("complete push intent for {owner}/{repo}"))?;
     match response.status() {
         StatusCode::UNAUTHORIZED => {
             anyhow::bail!("not signed in; run scope login")
@@ -366,9 +460,8 @@ pub fn create_push_intent(
 
     response
         .error_for_status()
-        .with_context(|| format!("create push intent for {owner}/{repo}"))?
-        .json()
-        .context("parse push intent response")
+        .with_context(|| format!("complete push intent for {owner}/{repo}"))?;
+    Ok(())
 }
 
 pub fn rollback_created_repo(

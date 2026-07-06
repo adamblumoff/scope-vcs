@@ -79,6 +79,10 @@ where
             Expr::value(row.change_version),
         )
         .col_expr(
+            entities::repository::Column::RepoConfig,
+            Expr::value(row.repo_config),
+        )
+        .col_expr(
             entities::repository::Column::PendingImport,
             Expr::value(row.pending_import),
         )

@@ -61,6 +61,11 @@ async fn clone_credential_endpoint_accepts_cli_session_for_repo_member_projectio
     assert_eq!(response.status(), StatusCode::OK);
     let body = response_json(response).await;
     assert_eq!(body["git_remote_path"].as_str().unwrap(), "/git/owner/repo");
+    assert_eq!(
+        body["config"]["kind"].as_str().unwrap(),
+        "scope.repo-config"
+    );
+    assert_eq!(body["config"]["visibility"]["default"], "public");
     let secret = body["token"]["secret"].as_str().unwrap();
     assert!(secret.starts_with(GIT_PUSH_TOKEN_PREFIX));
     let mut headers = HeaderMap::new();

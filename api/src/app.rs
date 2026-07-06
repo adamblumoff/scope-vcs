@@ -81,8 +81,16 @@ pub fn router(state: AppState) -> Router {
             post(http::repos::create_clone_credential),
         )
         .route(
+            "/v1/repos/{owner}/{repo}/config",
+            get(http::repos::get_repo_config),
+        )
+        .route(
             "/v1/repos/{owner}/{repo}/push-intents",
             post(http::repos::create_push_intent),
+        )
+        .route(
+            "/v1/repos/{owner}/{repo}/push-intents/complete",
+            post(http::repos::complete_push_intent),
         )
         .route(
             "/v1/repos/{owner}/{repo}/session",

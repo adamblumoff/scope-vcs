@@ -17,7 +17,6 @@ async fn receive_pack_accepts_gzip_encoded_request_body() {
         repo.first_push_token = Some(token);
     }
     let source = temp_git_repo("gzip-first-push");
-    write_scope_repo_config(&source, Visibility::Public);
     fs::write(source.join("README.md"), "hello over gzip receive-pack\n").unwrap();
     run_git(Some(&source), &["add", "-A"], "add readme").unwrap();
     commit_all(&source, "initial");
@@ -79,7 +78,6 @@ async fn receive_pack_cleans_uploaded_blobs_when_push_intent_does_not_match_head
         repo.first_push_token = Some(token);
     }
     let source = temp_git_repo("intent-head-mismatch-first-push");
-    write_scope_repo_config(&source, Visibility::Public);
     let readme = b"intent mismatch should be cleaned\n";
     fs::write(source.join("README.md"), readme).unwrap();
     run_git(Some(&source), &["add", "-A"], "add readme").unwrap();

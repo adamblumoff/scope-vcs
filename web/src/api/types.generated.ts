@@ -16,6 +16,20 @@ export type FirstPushTokenStatus = "Active" | "Expired" | "Used";
 
 export type StagedFileChangeKind = "Added" | "Modified" | "Deleted";
 
+export type ConfigVisibility = "public" | "private";
+
+export type RepoConfig = { $schema?: string | null, kind: string, version: number, visibility: RepoConfigVisibility, history: RepoConfigHistory, };
+
+export type RepoConfigVisibility = { default: ConfigVisibility, rules: Array<RepoConfigVisibilityRule>, };
+
+export type RepoConfigVisibilityRule = { path: string, visibility: ConfigVisibility, };
+
+export type RepoConfigHistory = { rewrites: Array<HistoryRewriteRequest>, };
+
+export type HistoryRewriteRequest = { path: string, action: HistoryRewriteAction, };
+
+export type HistoryRewriteAction = "redact-public-history";
+
 export type ProjectionPreviewAudience = "private" | "public";
 
 export type ProjectionPreviewSource = "live";
@@ -66,13 +80,19 @@ export type CreateRepoResponse = { repo: RepoSummaryResponse, init: RepoInitResp
 
 export type DeleteRepoResponse = { id: string, deleted: boolean, };
 
-export type CreatePushIntentRequest = { head_oid: string, };
+export type CreatePushIntentRequest = { head_oid: string, base_config_hash: string, config: RepoConfig, };
 
 export type CreatePushIntentResponse = { token: string, base_head_oid: string | null, expires_at_unix: number, };
 
+export type CompletePushIntentRequest = { token: string, };
+
+export type CompletePushIntentResponse = { config_applied: boolean, };
+
 export type RepoInitResponse = { repo: RepoSummaryResponse, git_remote_url: string, remote_name: string, push_branch: string, token: FirstPushTokenResponse | null, push_token: GitPushTokenResponse | null, };
 
-export type RepoCloneCredentialResponse = { git_remote_path: string, token: GitCloneTokenResponse, };
+export type RepoCloneCredentialResponse = { git_remote_path: string, token: GitCloneTokenResponse, config: RepoConfig, };
+
+export type RepoConfigResponse = { config: RepoConfig, config_hash: string, };
 
 export type FirstPushTokenResponse = { status: FirstPushTokenStatus, created_at_unix: number, expires_at_unix: number, used_at_unix: number | null, secret: string | null, };
 

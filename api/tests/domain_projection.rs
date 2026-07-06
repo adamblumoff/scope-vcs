@@ -5,7 +5,10 @@ use api::domain::{
         VisibilityEvent, project_graph,
     },
     repo_config::RepoConfig,
-    staged_updates::{ReviewedUpdateInput, StagedContentChange, apply_reviewed_update_to_repo},
+    staged_updates::{
+        ReviewedConfigUpdateInput, ReviewedUpdateInput, StagedContentChange,
+        apply_reviewed_config_to_repo, apply_reviewed_update_to_repo,
+    },
     store::{RepoPublicationState, StoredRepository, UserAccount},
 };
 use api::object_store::{MemoryObjectStore, put_source_blob};
@@ -41,6 +44,62 @@ fn published_test_repo(default_visibility: Visibility) -> StoredRepository {
 
 fn parse_config(json: &[u8]) -> RepoConfig {
     RepoConfig::parse_json(json).unwrap()
+}
+
+#[test]
+fn config_only_update_changes_policy_without_content_commit() {
+    let mut repo = published_test_repo(Visibility::Private);
+    repo.graph.commits.push(LogicalCommit {
+        id: "rv1".to_string(),
+        parent_ids: Vec::new(),
+        author_id: "owner".to_string(),
+        author_visibility: AuthorVisibility::Visible,
+        message: "initial".to_string(),
+        changes: vec![FileChange {
+            visibility: Visibility::Private,
+            path: ScopePath::parse("/README.md").unwrap(),
+            old_content: None,
+            new_content: Some(blob("hello")),
+        }],
+    });
+
+    let changed = apply_reviewed_config_to_repo(
+        &mut repo,
+        ReviewedConfigUpdateInput {
+            author_id: "owner".to_string(),
+            config: parse_config(
+                br#"{
+                    "kind": "scope.repo-config",
+                    "version": 1,
+                    "visibility": {
+                        "default": "private",
+                        "rules": [
+                            { "path": "/README.md", "visibility": "public" }
+                        ]
+                    },
+                    "history": {
+                        "rewrites": []
+                    }
+                }"#,
+            ),
+        },
+    )
+    .unwrap();
+
+    assert!(changed);
+    assert_eq!(repo.graph.commits.len(), 1);
+    assert_eq!(
+        repo.policy
+            .effective_visibility(&ScopePath::parse("/README.md").unwrap()),
+        Visibility::Public
+    );
+    assert_eq!(repo.visibility_events.len(), 1);
+    assert_eq!(repo.visibility_events[0].source_commit_id, None);
+    assert_eq!(
+        repo.repo_config
+            .visibility_for_path(&ScopePath::parse("/README.md").unwrap()),
+        Visibility::Public
+    );
 }
 
 #[test]

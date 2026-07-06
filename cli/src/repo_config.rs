@@ -1,7 +1,9 @@
 use anyhow::{Context, bail};
 use scope_core::domain::repo_config::{
-    ConfigVisibility, REPO_CONFIG_KIND, REPO_CONFIG_PATH, REPO_CONFIG_VERSION, RepoConfig,
+    ConfigVisibility, REPO_CONFIG_PATH, RepoConfig, is_repo_config_fingerprint,
+    repo_config_fingerprint,
 };
+use serde::{Deserialize, Serialize};
 use std::{
     fs::{self, OpenOptions},
     io::{self, Write},
@@ -11,13 +13,24 @@ use std::{
 };
 
 const WORKTREE_CONFIG_PATH: &str = ".scope/repo.json";
+const WORKTREE_CONFIG_STATE_PATH: &str = ".scope/repo-state.json";
+const WORKTREE_CONFIG_STATE_KIND: &str = "scope.repo-config-state";
+const WORKTREE_CONFIG_STATE_VERSION: u8 = 1;
+const LOCAL_ONLY_SCOPE_PATHS: [&str; 2] = [WORKTREE_CONFIG_PATH, WORKTREE_CONFIG_STATE_PATH];
+
+#[derive(Deserialize, Serialize)]
+struct WorktreeRepoConfigState {
+    kind: String,
+    version: u8,
+    base_config_hash: String,
+}
 
 pub fn ensure_scope_repo_config_exists(git_root: &Path) -> anyhow::Result<bool> {
     let scope_dir = git_root.join(".scope");
     ensure_safe_worktree_config_directory_exists(&scope_dir)?;
 
     let path = git_root.join(WORKTREE_CONFIG_PATH);
-    match fs::symlink_metadata(&path) {
+    let created = match fs::symlink_metadata(&path) {
         Ok(metadata) => {
             if metadata.file_type().is_symlink() {
                 bail!(".scope/repo.json cannot be a symlink");
@@ -38,7 +51,9 @@ pub fn ensure_scope_repo_config_exists(git_root: &Path) -> anyhow::Result<bool> 
             Ok(true)
         }
         Err(error) => Err(error).context("inspect .scope/repo.json"),
-    }
+    }?;
+    ensure_scope_repo_config_is_locally_excluded(git_root)?;
+    Ok(created)
 }
 
 pub fn load_worktree_scope_repo_config(git_root: &Path) -> anyhow::Result<RepoConfig> {
@@ -47,50 +62,22 @@ pub fn load_worktree_scope_repo_config(git_root: &Path) -> anyhow::Result<RepoCo
     RepoConfig::parse_json(&bytes).context("parse .scope/repo.json")
 }
 
-pub fn load_committed_scope_repo_config(git_root: &Path) -> anyhow::Result<RepoConfig> {
-    load_scope_repo_config_at_commit(git_root, "HEAD")
-}
-
-pub fn load_scope_repo_config_at_commit(
-    git_root: &Path,
-    commit_oid: &str,
-) -> anyhow::Result<RepoConfig> {
-    let spec = format!("{commit_oid}:.scope/repo.json");
-    let output = Command::new("git")
-        .current_dir(git_root)
-        .args(["show", &spec])
-        .output()
-        .context("read committed .scope/repo.json")?;
-    if !output.status.success() {
-        bail!("commit .scope/repo.json before running scope push");
+pub fn load_worktree_scope_repo_config_base_hash(git_root: &Path) -> anyhow::Result<String> {
+    let path = git_root.join(WORKTREE_CONFIG_STATE_PATH);
+    let bytes = fs::read(&path)
+        .with_context(|| format!("read {WORKTREE_CONFIG_STATE_PATH}; run scope clone or scope init"))?;
+    let state: WorktreeRepoConfigState =
+        serde_json::from_slice(&bytes).context("parse .scope/repo-state.json")?;
+    if state.kind != WORKTREE_CONFIG_STATE_KIND {
+        bail!(".scope/repo-state.json kind must be {WORKTREE_CONFIG_STATE_KIND}");
     }
-
-    RepoConfig::parse_json(&output.stdout).context("parse committed .scope/repo.json")
-}
-
-pub fn ensure_scope_repo_config_is_committed(git_root: &Path) -> anyhow::Result<()> {
-    let output = Command::new("git")
-        .current_dir(git_root)
-        .args(["status", "--porcelain", "--", WORKTREE_CONFIG_PATH])
-        .output()
-        .context("inspect .scope/repo.json status")?;
-    if !output.status.success() {
-        bail!("git status for .scope/repo.json failed");
+    if state.version != WORKTREE_CONFIG_STATE_VERSION {
+        bail!(".scope/repo-state.json version must be {WORKTREE_CONFIG_STATE_VERSION}");
     }
-    if !output.stdout.is_empty() {
-        bail!(".scope/repo.json has uncommitted changes; commit it before running scope push");
+    if !is_repo_config_fingerprint(&state.base_config_hash) {
+        bail!(".scope/repo-state.json base_config_hash must be a SHA-256 hex digest");
     }
-
-    let output = Command::new("git")
-        .current_dir(git_root)
-        .args(["cat-file", "-e", "HEAD:.scope/repo.json"])
-        .output()
-        .context("inspect committed .scope/repo.json")?;
-    if !output.status.success() {
-        bail!("commit .scope/repo.json before running scope push");
-    }
-
-    Ok(())
+    Ok(state.base_config_hash)
 }
 
 pub fn config_visibility_label(visibility: ConfigVisibility) -> &'static str {
@@ -104,6 +91,10 @@ pub fn repo_config_path() -> &'static str {
     REPO_CONFIG_PATH.trim_start_matches('/')
 }
 
+pub fn default_scope_repo_config() -> RepoConfig {
+    RepoConfig::with_default_visibility(ConfigVisibility::Private)
+}
+
 pub fn write_worktree_scope_repo_config(
     git_root: &Path,
     config: &RepoConfig,
@@ -112,7 +103,35 @@ pub fn write_worktree_scope_repo_config(
     let path = git_root.join(WORKTREE_CONFIG_PATH);
     ensure_safe_worktree_config_path(git_root)?;
     let json = canonical_repo_config_json(config)?;
-    write_config_atomically(&path, &json)
+    write_config_atomically(&path, &json)?;
+    ensure_scope_repo_config_is_locally_excluded(git_root)
+}
+
+pub fn write_worktree_scope_repo_config_with_base(
+    git_root: &Path,
+    config: &RepoConfig,
+) -> anyhow::Result<()> {
+    write_worktree_scope_repo_config(git_root, config)?;
+    mark_worktree_scope_repo_config_synced(git_root, config)
+}
+
+pub fn mark_worktree_scope_repo_config_synced(
+    git_root: &Path,
+    config: &RepoConfig,
+) -> anyhow::Result<()> {
+    config.validate().context("validate .scope/repo.json")?;
+    ensure_safe_worktree_config_state_path(git_root)?;
+    let base_config_hash =
+        repo_config_fingerprint(config).context("fingerprint .scope/repo.json")?;
+    let state = WorktreeRepoConfigState {
+        kind: WORKTREE_CONFIG_STATE_KIND.to_string(),
+        version: WORKTREE_CONFIG_STATE_VERSION,
+        base_config_hash,
+    };
+    let mut json = serde_json::to_string_pretty(&state).context("serialize .scope/repo-state.json")?;
+    json.push('\n');
+    write_config_atomically(&git_root.join(WORKTREE_CONFIG_STATE_PATH), &json)?;
+    ensure_scope_repo_config_is_locally_excluded(git_root)
 }
 
 pub fn canonical_repo_config_json(config: &RepoConfig) -> anyhow::Result<String> {
@@ -122,20 +141,7 @@ pub fn canonical_repo_config_json(config: &RepoConfig) -> anyhow::Result<String>
 }
 
 fn default_repo_config_json() -> String {
-    format!(
-        r#"{{
-  "kind": "{REPO_CONFIG_KIND}",
-  "version": {REPO_CONFIG_VERSION},
-  "visibility": {{
-    "default": "private",
-    "rules": []
-  }},
-  "history": {{
-    "rewrites": []
-  }}
-}}
-"#
-    )
+    canonical_repo_config_json(&default_scope_repo_config()).expect("default repo config is valid")
 }
 
 fn ensure_safe_worktree_config_path(git_root: &Path) -> anyhow::Result<()> {
@@ -154,6 +160,27 @@ fn ensure_safe_worktree_config_path(git_root: &Path) -> anyhow::Result<()> {
         }
         Err(error) if error.kind() == io::ErrorKind::NotFound => {}
         Err(error) => return Err(error).context("inspect .scope/repo.json"),
+    }
+
+    Ok(())
+}
+
+fn ensure_safe_worktree_config_state_path(git_root: &Path) -> anyhow::Result<()> {
+    let scope_dir = git_root.join(".scope");
+    ensure_safe_worktree_config_directory_exists(&scope_dir)?;
+
+    let state_path = git_root.join(WORKTREE_CONFIG_STATE_PATH);
+    match fs::symlink_metadata(&state_path) {
+        Ok(metadata) => {
+            if metadata.file_type().is_symlink() {
+                bail!(".scope/repo-state.json cannot be a symlink");
+            }
+            if !metadata.is_file() {
+                bail!(".scope/repo-state.json must be a regular file");
+            }
+        }
+        Err(error) if error.kind() == io::ErrorKind::NotFound => {}
+        Err(error) => return Err(error).context("inspect .scope/repo-state.json"),
     }
 
     Ok(())
@@ -210,6 +237,70 @@ fn temporary_config_path(parent: &Path) -> anyhow::Result<PathBuf> {
         .context("system clock is before Unix epoch")?
         .as_nanos();
     Ok(parent.join(format!(".repo.json.{}.{}.tmp", std::process::id(), nanos)))
+}
+
+fn ensure_scope_repo_config_is_locally_excluded(git_root: &Path) -> anyhow::Result<()> {
+    let Some(exclude_path) = git_info_exclude_path(git_root)? else {
+        return Ok(());
+    };
+    if let Some(parent) = exclude_path.parent() {
+        fs::create_dir_all(parent).context("create Git info directory")?;
+    }
+    let existing = fs::read_to_string(&exclude_path).unwrap_or_default();
+    let missing = LOCAL_ONLY_SCOPE_PATHS
+        .iter()
+        .copied()
+        .filter(|path| {
+            !existing
+                .lines()
+                .map(str::trim)
+                .any(|line| line == *path)
+        })
+        .collect::<Vec<_>>();
+    if missing.is_empty() {
+        return Ok(());
+    }
+
+    let mut file = OpenOptions::new()
+        .append(true)
+        .create(true)
+        .open(&exclude_path)
+        .with_context(|| format!("open {}", exclude_path.display()))?;
+    if !existing.is_empty() && !existing.ends_with('\n') {
+        file.write_all(b"\n")
+            .with_context(|| format!("update {}", exclude_path.display()))?;
+    }
+    for path in missing {
+        file.write_all(format!("{path}\n").as_bytes())
+            .with_context(|| format!("update {}", exclude_path.display()))?;
+    }
+    Ok(())
+}
+
+fn git_info_exclude_path(git_root: &Path) -> anyhow::Result<Option<PathBuf>> {
+    let output = Command::new("git")
+        .current_dir(git_root)
+        .args(["rev-parse", "--git-path", "info/exclude"])
+        .output()
+        .context("resolve Git exclude path")?;
+    if !output.status.success() {
+        let fallback = git_root.join(".git/info/exclude");
+        if fallback.parent().is_some_and(Path::is_dir) {
+            return Ok(Some(fallback));
+        }
+        return Ok(None);
+    }
+
+    let path = String::from_utf8_lossy(&output.stdout).trim().to_string();
+    if path.is_empty() {
+        bail!("Git exclude path could not be determined");
+    }
+    let path = PathBuf::from(path);
+    if path.is_absolute() {
+        Ok(Some(path))
+    } else {
+        Ok(Some(git_root.join(path)))
+    }
 }
 
 #[cfg(test)]

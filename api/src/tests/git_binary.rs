@@ -60,7 +60,6 @@ async fn real_git_binary_published_push_round_trips_through_clone() {
     assert_eq!(fs::read(source.join("image.png")).unwrap(), original);
 
     fs::write(source.join("image.png"), updated).unwrap();
-    write_scope_repo_config(&source, Visibility::Public);
     run_git(Some(&source), &["add", "-A"], "add binary update").unwrap();
     commit_all(&source, "update binary image");
     configure_push_intent_header(&state, &source, &remote, &test_owner_id());
@@ -138,7 +137,6 @@ async fn first_push_publish_clone_round_trip(label: &str, files: &[(&str, &[u8])
     let (addr, server) = start_git_http_server(state_for_server).await;
 
     let source = temp_git_repo(label);
-    write_scope_repo_config(&source, Visibility::Public);
     for (path, bytes) in files {
         let path = source.join(path);
         if let Some(parent) = path.parent() {

@@ -44,6 +44,7 @@ pub(crate) struct ReceivePackUpdate {
     pub(crate) uploaded_blobs: Vec<SourceBlob>,
     pub(crate) changes: Vec<ReceivePackFileChange>,
     pub(crate) previous_config: Option<RepoConfig>,
+    pub(crate) base_config_hash: String,
     pub(crate) config: RepoConfig,
 }
 
@@ -91,8 +92,7 @@ pub(super) fn receive_pack_update_changes_visibility(
     update: &ReceivePackUpdate,
 ) -> bool {
     if let Some(previous_config) = previous_config {
-        return previous_config.visibility != update.config.visibility
-            || previous_config.history != update.config.history;
+        return previous_config != &update.config;
     }
 
     if Visibility::from(update.config.visibility.default_visibility())

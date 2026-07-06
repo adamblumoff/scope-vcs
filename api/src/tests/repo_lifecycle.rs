@@ -245,6 +245,18 @@ fn db_metadata_store_round_trips_repo_metadata() {
             .effective_visibility(&ScopePath::parse("/README.md").unwrap()),
         Visibility::Public
     );
+    assert_eq!(
+        row_repo
+            .repo_config
+            .visibility_for_path(&ScopePath::parse("/new.ts").unwrap()),
+        Visibility::Private
+    );
+    assert_eq!(
+        row_repo
+            .repo_config
+            .visibility_for_path(&ScopePath::parse("/README.md").unwrap()),
+        Visibility::Public
+    );
     let repeated_settings_update = fresh_metadata
         .update_repo_settings(
             TEST_REPO_OWNER,
@@ -305,6 +317,10 @@ fn db_metadata_store_round_trips_repo_metadata() {
         .expect("row repo loads after visibility update");
     assert_eq!(
         row_repo.policy.effective_visibility(&readme_path),
+        Visibility::Private
+    );
+    assert_eq!(
+        row_repo.repo_config.visibility_for_path(&readme_path),
         Visibility::Private
     );
     assert_eq!(row_repo.graph, updated_repo.graph);

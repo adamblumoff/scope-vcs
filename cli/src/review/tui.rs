@@ -14,7 +14,6 @@ pub enum TuiOutcome {
     Exit,
     Cancel,
     ContinuePush,
-    ConfigChanged,
 }
 
 pub fn run_review_tui(
@@ -47,16 +46,12 @@ pub fn run_review_tui(
             ReviewStateAction::Save => {
                 if state.is_dirty() {
                     save_config(&state.config)?;
-                    if state.mode() == ReviewMode::Push {
-                        return Ok(TuiOutcome::ConfigChanged);
-                    }
                     state.mark_saved();
                 }
             }
             ReviewStateAction::ContinuePush => {
                 if state.is_dirty() {
                     save_config(&state.config)?;
-                    return Ok(TuiOutcome::ConfigChanged);
                 }
                 return Ok(TuiOutcome::ContinuePush);
             }

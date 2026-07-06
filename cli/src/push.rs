@@ -1,11 +1,13 @@
 use crate::{
     api::{
-        RepoPublicationState, RepoSummaryResponse, RepositoryActor, create_push_intent, get_repo,
+        CreatePushIntentParams, RepoPublicationState, RepoSummaryResponse, RepositoryActor,
+        complete_push_intent, create_push_intent, get_repo,
     },
     git_repo::{git_remote_push_url, push_head_with_bearer},
 };
 use anyhow::{Context, bail};
 use reqwest::{Url, blocking::Client};
+use scope_core::domain::repo_config::RepoConfig;
 
 pub const DEFAULT_SCOPE_REMOTE: &str = "scope";
 pub const DEFAULT_SCOPE_BRANCH: &str = "main";
@@ -43,6 +45,8 @@ pub fn push_authenticated_remote(
     session_token: &str,
     target: &ScopePushTarget,
     reviewed_head_oid: &str,
+    base_config_hash: &str,
+    config: &RepoConfig,
 ) -> anyhow::Result<ScopePushOutcome> {
     let repo = get_repo(client, api_url, session_token, &target.owner, &target.repo)?;
     if repo.lifecycle_state == RepoPublicationState::Unpublished {
@@ -56,15 +60,27 @@ pub fn push_authenticated_remote(
             client,
             api_url,
             session_token,
-            &target.owner,
-            &target.repo,
-            reviewed_head_oid,
+            CreatePushIntentParams {
+                owner: &target.owner,
+                repo: &target.repo,
+                head_oid: reviewed_head_oid,
+                base_config_hash,
+                config,
+            },
         )?;
         push_head_with_bearer(
             &target.push_url,
             reviewed_head_oid,
             DEFAULT_SCOPE_BRANCH,
             session_token,
+            &intent.token,
+        )?;
+        complete_push_intent(
+            client,
+            api_url,
+            session_token,
+            &target.owner,
+            &target.repo,
             &intent.token,
         )?;
         let repo = get_repo(client, api_url, session_token, &target.owner, &target.repo)?;
@@ -88,15 +104,27 @@ pub fn push_authenticated_remote(
         client,
         api_url,
         session_token,
-        &target.owner,
-        &target.repo,
-        reviewed_head_oid,
+        CreatePushIntentParams {
+            owner: &target.owner,
+            repo: &target.repo,
+            head_oid: reviewed_head_oid,
+            base_config_hash,
+            config,
+        },
     )?;
     push_head_with_bearer(
         &target.push_url,
         reviewed_head_oid,
         DEFAULT_SCOPE_BRANCH,
         session_token,
+        &intent.token,
+    )?;
+    complete_push_intent(
+        client,
+        api_url,
+        session_token,
+        &target.owner,
+        &target.repo,
         &intent.token,
     )?;
 

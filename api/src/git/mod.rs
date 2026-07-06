@@ -447,6 +447,7 @@ pub(crate) fn handle_git_receive_pack(
                     repo_name,
                     &staging_repo,
                     &author_id,
+                    push_intent.config.clone(),
                 ) {
                     Ok(import) => import,
                     Err(error) => {
@@ -472,6 +473,7 @@ pub(crate) fn handle_git_receive_pack(
                             return Err(error);
                         }
                     });
+                update.base_config_hash = push_intent.base_config_hash;
                 let file_count = update.changes.len();
                 if let Err(error) = persist_receive_pack_update_and_promote(
                     state, owner, repo_name, update, &author_id,
@@ -506,6 +508,7 @@ pub(crate) fn handle_git_receive_pack(
                     repo_name,
                     &staging_repo,
                     &author_id,
+                    push_intent.config.clone(),
                 ) {
                     Ok(update) => update,
                     Err(error) => {
@@ -531,6 +534,7 @@ pub(crate) fn handle_git_receive_pack(
                             return Err(error);
                         }
                     });
+                update.base_config_hash = push_intent.base_config_hash;
                 let change_count = update.changes.len();
                 if let Err(error) = persist_receive_pack_update_and_promote(
                     state, owner, repo_name, update, &author_id,

@@ -6,6 +6,7 @@ pub(crate) use repo_collaboration::*;
 
 use crate::domain::commit_history::{CommitHistoryCommit, CommitHistoryView};
 use crate::domain::policy::{ScopePath, Visibility};
+use crate::domain::repo_config::RepoConfig;
 use crate::domain::store::{
     FirstPushToken, FirstPushTokenStatus, GitCloneToken, GitPushToken, RepoPublicationState,
     RepositoryAccess, RepositoryActor, StagedFileChangeKind, StoredRepository, UserAccount,
@@ -233,6 +234,8 @@ pub(crate) struct DeleteRepoResponse {
 #[cfg_attr(test, derive(ts_rs::TS))]
 pub(crate) struct CreatePushIntentRequest {
     pub(crate) head_oid: String,
+    pub(crate) base_config_hash: String,
+    pub(crate) config: RepoConfig,
 }
 
 #[derive(Debug, Serialize)]
@@ -241,6 +244,18 @@ pub(crate) struct CreatePushIntentResponse {
     pub(crate) token: String,
     pub(crate) base_head_oid: Option<String>,
     pub(crate) expires_at_unix: u64,
+}
+
+#[derive(Debug, Deserialize)]
+#[cfg_attr(test, derive(ts_rs::TS))]
+pub(crate) struct CompletePushIntentRequest {
+    pub(crate) token: String,
+}
+
+#[derive(Debug, Serialize)]
+#[cfg_attr(test, derive(ts_rs::TS))]
+pub(crate) struct CompletePushIntentResponse {
+    pub(crate) config_applied: bool,
 }
 
 #[derive(Debug, Serialize)]
@@ -259,6 +274,14 @@ pub(crate) struct RepoInitResponse {
 pub(crate) struct RepoCloneCredentialResponse {
     pub(crate) git_remote_path: String,
     pub(crate) token: GitCloneTokenResponse,
+    pub(crate) config: RepoConfig,
+}
+
+#[derive(Debug, Serialize)]
+#[cfg_attr(test, derive(ts_rs::TS))]
+pub(crate) struct RepoConfigResponse {
+    pub(crate) config: RepoConfig,
+    pub(crate) config_hash: String,
 }
 
 #[derive(Debug, Serialize)]
@@ -539,6 +562,7 @@ pub(crate) fn repo_clone_credential_response(
     RepoCloneCredentialResponse {
         git_remote_path: format!("/git/{}/{}", repo.record.owner_handle, repo.record.name),
         token: git_clone_token_response(token, secret),
+        config: repo.repo_config.clone(),
     }
 }
 

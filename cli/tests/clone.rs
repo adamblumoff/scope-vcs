@@ -1,5 +1,5 @@
 use scope_cli::{
-    clone::{RepoSpec, parse_repo_spec},
+    clone::{RepoSpec, default_clone_dir, parse_repo_spec},
     git_credentials::{credential_home_dir, git_clone_plan},
 };
 use std::ffi::OsString;
@@ -107,6 +107,13 @@ fn git_clone_plan_preserves_localhost_ports() {
         "store --file \"C:/Users/Adam/.config/scope/git-credentials\""
     );
     assert_eq!(plan.credential_fields[1], "host=localhost:8080");
+}
+
+#[test]
+fn default_clone_dir_strips_dot_git_suffix_like_git_clone() {
+    assert_eq!(default_clone_dir("scope-vcs"), PathBuf::from("scope-vcs"));
+    assert_eq!(default_clone_dir("scope-vcs.git"), PathBuf::from("scope-vcs"));
+    assert_eq!(default_clone_dir(".git"), PathBuf::from(".git"));
 }
 
 #[test]

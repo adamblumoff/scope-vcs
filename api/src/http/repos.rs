@@ -1,4 +1,7 @@
 use crate::domain::policy::Visibility;
+use crate::domain::repo_actions::staged_update_api_error;
+use crate::domain::repo_config::is_repo_config_fingerprint;
+use crate::domain::staged_updates::{ReviewedConfigUpdateInput, apply_reviewed_config_to_repo};
 use crate::domain::store::RepositoryActor;
 use crate::{
     auth::{
@@ -8,7 +11,7 @@ use crate::{
         },
         tokens::{generate_first_push_token, generate_git_clone_token, generate_git_push_token},
     },
-    db::RepoSummaryRead,
+    db::{RepoSummaryRead, RepositoryMutation},
     error::ApiError,
     http::responses::*,
     http::{
@@ -17,13 +20,15 @@ use crate::{
     },
     persistence::unix_now,
     state::AppState,
-    state::{ensure_repo_read, find_repo},
+    state::{ensure_repo_read, find_repo, repo_config_fingerprint},
 };
 use axum::{
     Json,
     extract::{Path, Query, State},
     http::HeaderMap,
 };
+
+const MAX_PUSH_INTENT_CONFIG_BYTES: usize = 4096;
 
 pub(crate) async fn list_repos(
     State(state): State<AppState>,
@@ -149,6 +154,25 @@ pub(crate) async fn create_clone_credential(
     )))
 }
 
+pub(crate) async fn get_repo_config(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path((owner, repo_name)): Path<(String, String)>,
+) -> Result<Json<RepoConfigResponse>, ApiError> {
+    let user = require_scope_user(&state, &headers).await?;
+    let repo = find_repo(&state, &owner, &repo_name)?;
+    let principal = principal_for_user_id(&repo, &user.id);
+    ensure_repo_read(&state, &repo, &principal)?;
+    if repo.access_for_principal(&principal).actor == RepositoryActor::Public {
+        return Err(ApiError::forbidden("repo membership required"));
+    }
+
+    Ok(Json(RepoConfigResponse {
+        config_hash: repo_config_fingerprint(&repo.repo_config)?,
+        config: repo.repo_config,
+    }))
+}
+
 pub(crate) async fn create_push_intent(
     State(state): State<AppState>,
     headers: HeaderMap,
@@ -191,11 +215,25 @@ pub(crate) async fn create_push_intent(
     }
 
     let head_oid = normalize_git_oid(&input.head_oid)?;
+    validate_push_intent_config_transport(&input.config)?;
+    let base_config_hash = repo_config_fingerprint(&repo.repo_config)?;
+    if !is_repo_config_fingerprint(&input.base_config_hash) {
+        return Err(ApiError::bad_request(
+            "base_config_hash must be a SHA-256 hex digest",
+        ));
+    }
+    if base_config_hash != input.base_config_hash && repo.repo_config != input.config {
+        return Err(ApiError::conflict(
+            "repo config changed since review; rerun scope review",
+        ));
+    }
     let base_head_oid = git_snapshot_head_oid(&state, repo.git_snapshot.as_ref())?;
     let intent = state.create_push_intent(
         &repo.record.id,
         &user.id,
         &head_oid,
+        input.config,
+        base_config_hash,
         repo.git_snapshot
             .as_ref()
             .map(|snapshot| snapshot.object_key.clone()),
@@ -206,6 +244,102 @@ pub(crate) async fn create_push_intent(
         base_head_oid,
         expires_at_unix: intent.expires_at_unix,
     }))
+}
+
+fn validate_push_intent_config_transport(
+    config: &crate::domain::repo_config::RepoConfig,
+) -> Result<(), ApiError> {
+    config.validate().map_err(ApiError::bad_request)?;
+    let bytes = serde_json::to_vec(config).map_err(ApiError::internal)?;
+    if bytes.len() > MAX_PUSH_INTENT_CONFIG_BYTES {
+        return Err(ApiError::bad_request(format!(
+            "repo config exceeds {MAX_PUSH_INTENT_CONFIG_BYTES} bytes"
+        )));
+    }
+    Ok(())
+}
+
+pub(crate) async fn complete_push_intent(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path((owner, repo_name)): Path<(String, String)>,
+    Json(input): Json<CompletePushIntentRequest>,
+) -> Result<Json<CompletePushIntentResponse>, ApiError> {
+    let user = require_scope_user(&state, &headers).await?;
+    let push_intent = state.validate_completed_push_intent_secret(&input.token)?;
+    let repo = find_repo(&state, &owner, &repo_name)?;
+    if !repo.access_for_user_id(&user.id).can_push {
+        return Err(ApiError::not_found(format!(
+            "repo {owner}/{repo_name} not found"
+        )));
+    }
+    push_intent.ensure_repo_user(&repo.record.id, &user.id)?;
+
+    let current_head_oid = git_snapshot_head_oid(&state, repo.git_snapshot.as_ref())?;
+    if current_head_oid.as_deref() != Some(push_intent.head_oid.as_str()) {
+        return Err(ApiError::conflict(
+            "Scope push did not apply the reviewed Git head; rerun scope push",
+        ));
+    }
+    let current_git_snapshot_key = repo
+        .git_snapshot
+        .as_ref()
+        .map(|snapshot| snapshot.object_key.clone());
+    if push_intent.expires_at_unix <= unix_now()?
+        && current_git_snapshot_key == push_intent.base_git_snapshot_key
+    {
+        return Err(ApiError::forbidden("valid Scope push intent required"));
+    }
+
+    let author_id = user.id.clone();
+    let base_git_snapshot_key = push_intent.base_git_snapshot_key;
+    let base_config_hash = push_intent.base_config_hash;
+    let config = push_intent.config;
+    let config_applied = state
+        .metadata
+        .mutate_repository(&owner, &repo_name, move |repo| {
+            let access = repo.access_for_user_id(&author_id);
+            if !access.can_push {
+                return Err(ApiError::forbidden("push permission required"));
+            }
+            if !access.can_change_file_visibility && repo.repo_config != config {
+                return Err(ApiError::forbidden("file visibility permission required"));
+            }
+            if repo.repo_config != config
+                && repo
+                    .git_snapshot
+                    .as_ref()
+                    .map(|snapshot| snapshot.object_key.clone())
+                    != base_git_snapshot_key
+            {
+                return Err(ApiError::conflict(
+                    "repo content changed since review; rerun scope push",
+                ));
+            }
+            if repo.repo_config != config
+                && repo_config_fingerprint(&repo.repo_config)? != base_config_hash
+            {
+                return Err(ApiError::conflict(
+                    "repo config changed since review; rerun scope push",
+                ));
+            }
+            let changed = apply_reviewed_config_to_repo(
+                repo,
+                ReviewedConfigUpdateInput { author_id, config },
+            )
+            .map_err(staged_update_api_error)?;
+            Ok(RepositoryMutation::new(changed))
+        })?;
+    if config_applied {
+        let repo = find_repo(&state, &owner, &repo_name)?;
+        state.publish_repo_change(
+            &repo.record.id,
+            repo.record.change_version,
+            "config-applied",
+        );
+    }
+
+    Ok(Json(CompletePushIntentResponse { config_applied }))
 }
 
 fn git_snapshot_head_oid(

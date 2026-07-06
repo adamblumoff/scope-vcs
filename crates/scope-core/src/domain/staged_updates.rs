@@ -1,7 +1,9 @@
 use super::{
     policy::{Policy, PolicyError, ScopePath, Visibility, VisibilityRule},
     projection::{AuthorVisibility, FileChange, LogicalCommit, VisibilityEvent},
-    repo_config::{HistoryRewriteAction, HistoryRewriteRequest, RepoConfig},
+    repo_config::{
+        HistoryRewriteAction, HistoryRewriteRequest, RepoConfig, repo_config_from_policy,
+    },
     store::{
         RepoPublicationState, SourceBlob, StagedFileChange, StagedFileChangeKind, StagedRepoUpdate,
         StoredRepository,
@@ -41,6 +43,12 @@ pub struct ReviewedUpdateInput {
     pub git_snapshot: SourceBlob,
     pub changes: Vec<StagedContentChange>,
     pub previous_config: Option<RepoConfig>,
+    pub config: RepoConfig,
+}
+
+#[derive(Clone, Debug)]
+pub struct ReviewedConfigUpdateInput {
+    pub author_id: String,
     pub config: RepoConfig,
 }
 
@@ -214,6 +222,14 @@ pub fn apply_staged_update_to_repo(
     });
     repo.visibility_events.extend(visibility_events);
     repo.git_snapshot = Some(staged_update.git_snapshot);
+    repo.repo_config = repo_config_from_policy(
+        &repo.policy,
+        repo.record.default_visibility,
+        repo.repo_config.history.clone(),
+    )
+    .map_err(|_| {
+        StagedUpdateError::BadRequest("repo visibility policy cannot be mirrored into config")
+    })?;
     repo.bump_change_version();
     Ok(())
 }
@@ -336,16 +352,9 @@ pub fn apply_reviewed_update_to_repo(
         });
     }
 
-    let mut next_policy = Policy::new(update.config.visibility.default_visibility().into());
-    for path in new_tree.keys() {
-        let rule = match update.config.visibility_for_path(path) {
-            Visibility::Public => VisibilityRule::public(path.clone()),
-            Visibility::Private => VisibilityRule::private(path.clone()),
-        };
-        next_policy
-            .add_rule(rule)
-            .map_err(StagedUpdateError::InvalidPolicy)?;
-    }
+    let next_policy = policy_from_config_for_tree(&update.config, new_tree.keys())?;
+    let next_default_visibility = update.config.visibility.default_visibility().into();
+    let next_config = update.config.clone();
 
     let parent_ids = after_commit_id.into_iter().collect::<Vec<_>>();
     repo.graph.commits.push(LogicalCommit {
@@ -357,7 +366,8 @@ pub fn apply_reviewed_update_to_repo(
         changes: file_changes,
     });
     repo.policy = next_policy;
-    repo.record.default_visibility = update.config.visibility.default_visibility().into();
+    repo.record.default_visibility = next_default_visibility;
+    repo.repo_config = next_config;
     repo.visibility_events.extend(visibility_events);
     repo.git_snapshot = Some(update.git_snapshot);
     repo.pending_import = None;
@@ -366,6 +376,74 @@ pub fn apply_reviewed_update_to_repo(
     repo.record.publication_state = RepoPublicationState::Published;
     repo.bump_change_version();
     Ok(())
+}
+
+pub fn apply_reviewed_config_to_repo(
+    repo: &mut StoredRepository,
+    update: ReviewedConfigUpdateInput,
+) -> StagedUpdateResult<bool> {
+    if repo.repo_config == update.config {
+        return Ok(false);
+    }
+    if repo.staged_update.is_some() {
+        return Err(StagedUpdateError::Conflict(
+            "a staged update is already pending",
+        ));
+    }
+
+    let live_tree = repo.live_tree();
+    let after_commit_id = repo.graph.commits.last().map(|commit| commit.id.clone());
+    let mut next_visibility_event_id = repo.visibility_events.len() + 1;
+    let history_rewrites = update
+        .config
+        .history_rewrites_added_since(Some(&repo.repo_config));
+    let history_rewrite = apply_history_rewrites(
+        repo,
+        &mut next_visibility_event_id,
+        HistoryRewriteInput {
+            config: &update.config,
+            rewrites: &history_rewrites,
+            live_tree: &live_tree,
+            changed_paths: &BTreeSet::new(),
+            after_commit_id: after_commit_id.clone(),
+            author_id: &update.author_id,
+        },
+    );
+
+    let mut visibility_events = history_rewrite.visibility_events;
+    for (path, current_content) in &live_tree {
+        let old_visibility = repo.policy.effective_visibility(path);
+        let new_visibility = update.config.visibility_for_path(path);
+        if old_visibility == new_visibility {
+            continue;
+        }
+        if history_rewrite.redacted_paths.contains(path)
+            && old_visibility == Visibility::Public
+            && new_visibility == Visibility::Private
+        {
+            continue;
+        }
+
+        let id = format!("vis_{next_visibility_event_id}");
+        next_visibility_event_id += 1;
+        visibility_events.push(VisibilityEvent {
+            id,
+            after_commit_id: after_commit_id.clone(),
+            source_commit_id: None,
+            author_id: update.author_id.clone(),
+            path: path.clone(),
+            old_visibility,
+            new_visibility,
+            current_content: Some(current_content.clone()),
+        });
+    }
+
+    repo.policy = policy_from_config_for_tree(&update.config, live_tree.keys())?;
+    repo.record.default_visibility = update.config.visibility.default_visibility().into();
+    repo.repo_config = update.config;
+    repo.visibility_events.extend(visibility_events);
+    repo.bump_change_version();
+    Ok(true)
 }
 
 struct HistoryRewriteResult {
@@ -463,6 +541,23 @@ fn applied_file_visibility(repo: &StoredRepository, change: &StagedFileChange) -
     } else {
         change.visibility
     }
+}
+
+fn policy_from_config_for_tree<'a>(
+    config: &RepoConfig,
+    paths: impl IntoIterator<Item = &'a ScopePath>,
+) -> StagedUpdateResult<Policy> {
+    let mut policy = Policy::new(config.visibility.default_visibility().into());
+    for path in paths {
+        let rule = match config.visibility_for_path(path) {
+            Visibility::Public => VisibilityRule::public(path.clone()),
+            Visibility::Private => VisibilityRule::private(path.clone()),
+        };
+        policy
+            .add_rule(rule)
+            .map_err(StagedUpdateError::InvalidPolicy)?;
+    }
+    Ok(policy)
 }
 
 pub fn validate_staged_update_policy(

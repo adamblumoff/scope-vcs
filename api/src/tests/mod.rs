@@ -6,7 +6,7 @@ use crate::domain::projection::{
     project_graph,
 };
 use crate::domain::repo_actions::preview_publish_import;
-use crate::domain::repo_config::RepoConfig;
+use crate::domain::repo_config::{ConfigVisibility, RepoConfig};
 use crate::domain::staged_updates::apply_staged_update_to_repo;
 use crate::domain::store::{
     AppCatalog, DEFAULT_GIT_FILE_MODE, EXECUTABLE_GIT_FILE_MODE, GitPushToken, PendingImport,
@@ -59,6 +59,7 @@ mod git_projection_identity;
 mod git_receive;
 mod git_receive_config;
 mod obsolete_routes;
+mod push_intent_completion;
 mod readiness;
 mod repo_cleanup;
 mod repo_events;
@@ -318,30 +319,6 @@ fn commit_all(repo: &FsPath, message: &str) {
     .unwrap();
 }
 
-fn write_scope_repo_config(repo: &FsPath, default_visibility: Visibility) {
-    let default = match default_visibility {
-        Visibility::Private => "private",
-        Visibility::Public => "public",
-    };
-    fs::create_dir_all(repo.join(".scope")).unwrap();
-    let config = serde_json::json!({
-        "kind": "scope.repo-config",
-        "version": 1,
-        "visibility": {
-            "default": default,
-            "rules": [],
-        },
-        "history": {
-            "rewrites": [],
-        },
-    });
-    fs::write(
-        repo.join(".scope/repo.json"),
-        format!("{}\n", serde_json::to_string_pretty(&config).unwrap()),
-    )
-    .unwrap();
-}
-
 const TEST_PUSH_HEAD_OID: &str = "1111111111111111111111111111111111111111";
 
 fn insert_push_intent_header(
@@ -372,11 +349,14 @@ fn configure_push_intent_header(state: &AppState, repo: &FsPath, remote: &str, u
 
 fn create_test_push_intent(state: &AppState, user_id: &str, head_oid: &str) -> String {
     let repo = find_repo(state, TEST_REPO_OWNER, TEST_REPO_NAME).unwrap();
+    let config = repo.repo_config.clone();
     state
         .create_push_intent(
             TEST_REPO_ID,
             user_id,
             head_oid,
+            config.clone(),
+            repo_config_fingerprint(&config).unwrap(),
             repo.git_snapshot
                 .as_ref()
                 .map(|snapshot| snapshot.object_key.clone()),
@@ -404,6 +384,7 @@ fn test_repo(owner_id: &str) -> StoredRepository {
             change_version: 1,
         },
         settings: RepoSettings::default(),
+        repo_config: RepoConfig::with_default_visibility(ConfigVisibility::Public),
         first_push_token: None,
         git_push_token: None,
         git_clone_tokens: Vec::new(),
@@ -512,6 +493,7 @@ fn receive_pack_update(changes: Vec<(&str, Option<&str>)>) -> ReceivePackUpdate 
         git_snapshot: source_blob("test staged git snapshot"),
         uploaded_blobs: Vec::new(),
         previous_config: None,
+        base_config_hash: repo_config_fingerprint(&repo_config(Visibility::Public)).unwrap(),
         config: repo_config(Visibility::Public),
         changes: changes
             .into_iter()

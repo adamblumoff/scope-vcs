@@ -1,6 +1,7 @@
 use super::{
     policy::{Policy, PolicyError, Principal, PrincipalKind, ScopePath, Visibility},
     projection::{SourceGraph, VisibilityEvent},
+    repo_config::{ConfigVisibility, RepoConfig},
 };
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
@@ -241,6 +242,7 @@ pub struct RepositoryInvite {
 pub struct StoredRepository {
     pub record: RepoRecord,
     pub settings: RepoSettings,
+    pub repo_config: RepoConfig,
     pub first_push_token: Option<FirstPushToken>,
     pub git_push_token: Option<GitPushToken>,
     pub git_clone_tokens: Vec<GitCloneToken>,
@@ -262,6 +264,7 @@ impl StoredRepository {
     ) -> Result<Self, CatalogError> {
         let name = validate_repo_name(name)?;
         let id = repo_id(&owner.handle, &name);
+        let config_default = ConfigVisibility::from(default_visibility);
         Ok(Self {
             record: RepoRecord {
                 id: id.clone(),
@@ -273,6 +276,7 @@ impl StoredRepository {
                 change_version: 1,
             },
             settings: RepoSettings::default(),
+            repo_config: RepoConfig::with_default_visibility(config_default),
             first_push_token: None,
             git_push_token: None,
             git_clone_tokens: Vec::new(),

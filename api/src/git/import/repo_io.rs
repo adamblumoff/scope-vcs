@@ -1,7 +1,7 @@
-use crate::domain::policy::ScopePath;
 #[cfg(test)]
 use crate::domain::store::PendingImportFile;
 use crate::domain::store::{SourceBlob, is_supported_git_file_mode};
+use crate::domain::{policy::ScopePath, repo_config::is_reserved_config_path};
 use crate::{
     config::{
         DEFAULT_GIT_BRANCH, MAX_PENDING_IMPORT_BLOB_BYTES, MAX_PENDING_IMPORT_FILES,
@@ -414,6 +414,11 @@ pub(crate) fn validate_pushed_file_path(path: &str) -> Result<(), ApiError> {
     if scope_path.as_str() != format!("/{path}") {
         return Err(ApiError::bad_request(format!(
             "unsupported Git file path {path:?}"
+        )));
+    }
+    if is_reserved_config_path(&scope_path) {
+        return Err(ApiError::bad_request(format!(
+            "Scope config path {path:?} is a local sidecar file and cannot be pushed"
         )));
     }
 

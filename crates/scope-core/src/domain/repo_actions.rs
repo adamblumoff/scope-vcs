@@ -1,6 +1,7 @@
 use super::{
     policy::{ScopePath, Visibility, VisibilityRule},
     projection::{AuthorVisibility, FileChange, LogicalCommit, VisibilityEvent},
+    repo_config::repo_config_from_policy,
     staged_updates::{
         StagedUpdateError, apply_staged_update_to_repo, validate_staged_update_policy,
     },
@@ -202,6 +203,12 @@ pub fn set_visibility(
         repo.policy.add_rule(rule).map_err(ApiError::bad_request)?;
     }
     repo.visibility_events.extend(visibility_events);
+    repo.repo_config = repo_config_from_policy(
+        &repo.policy,
+        repo.record.default_visibility,
+        repo.repo_config.history.clone(),
+    )
+    .map_err(ApiError::bad_request)?;
     repo.bump_change_version();
     Ok(RepoMutation::new(()))
 }
@@ -293,6 +300,12 @@ pub fn update_settings(
     repo.settings = settings;
     if repo.record.default_visibility != default_visibility {
         preserve_existing_visibility_for_new_default(repo, default_visibility)?;
+        repo.repo_config = repo_config_from_policy(
+            &repo.policy,
+            default_visibility,
+            repo.repo_config.history.clone(),
+        )
+        .map_err(ApiError::bad_request)?;
     }
     repo.record.default_visibility = default_visibility;
     if changed {
@@ -500,6 +513,57 @@ mod tests {
         assert_eq!(
             source_blob_effect_keys(&mutation.effects),
             vec![snapshot.object_key]
+        );
+    }
+
+    #[test]
+    fn direct_visibility_update_mirrors_repo_config() {
+        let owner = test_owner();
+        let mut repo = StoredRepository::new(&owner, "repo", Visibility::Public).unwrap();
+        let path = ScopePath::parse("/README.md").unwrap();
+
+        set_visibility(
+            &mut repo,
+            &owner.id,
+            std::slice::from_ref(&path),
+            Visibility::Private,
+        )
+        .unwrap();
+
+        assert_eq!(repo.policy.effective_visibility(&path), Visibility::Private);
+        assert_eq!(
+            repo.repo_config.visibility_for_path(&path),
+            Visibility::Private
+        );
+    }
+
+    #[test]
+    fn staged_update_apply_mirrors_repo_config() {
+        let owner = test_owner();
+        let mut repo = StoredRepository::new(&owner, "repo", Visibility::Private).unwrap();
+        let path = ScopePath::parse("/README.md").unwrap();
+        repo.staged_update = Some(StagedRepoUpdate {
+            id: "staged".to_string(),
+            branch: "main".to_string(),
+            base_live_commit_id: None,
+            author_id: owner.id.clone(),
+            message: "Push".to_string(),
+            git_snapshot: source_blob("staged-snapshot"),
+            changes: vec![StagedFileChange {
+                path: path.clone(),
+                old_content: None,
+                new_content: Some(source_blob("staged-file")),
+                visibility: Visibility::Public,
+                kind: StagedFileChangeKind::Added,
+            }],
+        });
+
+        apply_staged_update(&mut repo, &owner.id).unwrap();
+
+        assert_eq!(repo.policy.effective_visibility(&path), Visibility::Public);
+        assert_eq!(
+            repo.repo_config.visibility_for_path(&path),
+            Visibility::Public
         );
     }
 

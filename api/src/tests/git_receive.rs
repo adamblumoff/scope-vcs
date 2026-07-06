@@ -55,6 +55,7 @@ fn receive_pack_same_content_with_new_mode_is_staged_update() {
             git_snapshot: source_blob("test chmod git snapshot"),
             uploaded_blobs: vec![executable_blob.clone()],
             previous_config: None,
+            base_config_hash: repo_config_fingerprint(&repo_config(Visibility::Public)).unwrap(),
             config: repo_config(Visibility::Public),
             changes: vec![ReceivePackFileChange {
                 path: readme.clone(),
@@ -126,7 +127,6 @@ fn published_receive_pack_push_applies_from_seeded_git_repo() {
     .unwrap();
     fs::write(clone.join("README.md"), "staged readme").unwrap();
     fs::write(clone.join("notes.md"), "new notes").unwrap();
-    write_scope_repo_config(&clone, Visibility::Public);
     run_git(Some(&clone), &["add", "-A"], "stage clone changes").unwrap();
     commit_all(&clone, "update from git");
     run_git(
@@ -142,13 +142,14 @@ fn published_receive_pack_push_applies_from_seeded_git_repo() {
         TEST_REPO_NAME,
         &staging_repo,
         &test_owner_id(),
+        repo_config(Visibility::Public),
     )
     .unwrap();
 
     assert_eq!(update.branch, format!("refs/heads/{DEFAULT_GIT_BRANCH}"));
     assert_eq!(update.message, "update from git");
-    assert_eq!(update.changes.len(), 3);
-    assert_eq!(update.uploaded_blobs.len(), 3);
+    assert_eq!(update.changes.len(), 2);
+    assert_eq!(update.uploaded_blobs.len(), 2);
     persist_receive_pack_update(&state, TEST_REPO_OWNER, TEST_REPO_NAME, update).unwrap();
     let repo = find_repo(&state, TEST_REPO_OWNER, TEST_REPO_NAME).unwrap();
     assert!(repo.staged_update.is_none());

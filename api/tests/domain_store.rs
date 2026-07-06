@@ -3,6 +3,7 @@ use std::collections::BTreeMap;
 use api::domain::{
     policy::{Policy, Principal, PrincipalKind, ScopePath, Visibility, VisibilityRule},
     projection::SourceGraph,
+    repo_config::{ConfigVisibility, RepoConfig},
     store::{
         AppCatalog, CatalogError, FirstPushToken, FirstPushTokenStatus, RepoPublicationState,
         RepoRecord, RepoSettings, RepositoryInvite, RepositoryInviteState, RepositoryMember,
@@ -45,6 +46,7 @@ fn test_repo() -> StoredRepository {
             change_version: 1,
         },
         settings: RepoSettings::default(),
+        repo_config: RepoConfig::with_default_visibility(ConfigVisibility::Public),
         first_push_token: None,
         git_push_token: None,
         git_clone_tokens: Vec::new(),

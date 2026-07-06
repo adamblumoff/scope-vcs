@@ -38,7 +38,14 @@ fn push_intent_is_signed_instead_of_process_local() {
     let issuer = test_state_with_repo();
     let verifier = test_state_with_repo();
     let token = issuer
-        .create_push_intent(TEST_REPO_ID, &test_owner_id(), TEST_PUSH_HEAD_OID, None)
+        .create_push_intent(
+            TEST_REPO_ID,
+            &test_owner_id(),
+            TEST_PUSH_HEAD_OID,
+            repo_config(Visibility::Public),
+            repo_config_fingerprint(&repo_config(Visibility::Public)).unwrap(),
+            None,
+        )
         .unwrap()
         .token;
 
@@ -66,7 +73,7 @@ async fn create_push_intent_hides_repo_before_head_validation_for_non_writer() {
                     bearer_header_for("user_other", "other@example.com"),
                 )
                 .header(CONTENT_TYPE, "application/json")
-                .body(Body::from(r#"{"head_oid":"not-a-git-oid"}"#))
+                .body(Body::from(push_intent_request_json("not-a-git-oid")))
                 .unwrap(),
         )
         .await
@@ -90,9 +97,7 @@ async fn create_push_intent_returns_null_base_when_repo_has_no_git_snapshot() {
                     bearer_header_for(&test_owner_id(), TEST_OWNER_EMAIL),
                 )
                 .header(CONTENT_TYPE, "application/json")
-                .body(Body::from(format!(
-                    r#"{{"head_oid":"{TEST_PUSH_HEAD_OID}"}}"#
-                )))
+                .body(Body::from(push_intent_request_json(TEST_PUSH_HEAD_OID)))
                 .unwrap(),
         )
         .await
@@ -120,10 +125,7 @@ async fn create_push_intent_rejects_sha256_oid_until_git_storage_supports_it() {
                     bearer_header_for(&test_owner_id(), TEST_OWNER_EMAIL),
                 )
                 .header(CONTENT_TYPE, "application/json")
-                .body(Body::from(format!(
-                    r#"{{"head_oid":"{}"}}"#,
-                    "a".repeat(64)
-                )))
+                .body(Body::from(push_intent_request_json(&"a".repeat(64))))
                 .unwrap(),
         )
         .await
@@ -132,6 +134,15 @@ async fn create_push_intent_rejects_sha256_oid_until_git_storage_supports_it() {
     assert_eq!(response.status(), StatusCode::BAD_REQUEST);
     let body = response_json(response).await;
     assert_eq!(body["error"], "head_oid must be a full SHA-1 Git object id");
+}
+
+fn push_intent_request_json(head_oid: &str) -> String {
+    serde_json::json!({
+        "head_oid": head_oid,
+        "base_config_hash": repo_config_fingerprint(&repo_config(Visibility::Public)).unwrap(),
+        "config": repo_config(Visibility::Public),
+    })
+    .to_string()
 }
 
 #[tokio::test]
@@ -762,7 +773,6 @@ async fn real_git_first_push_over_http_applies_immediately() {
     });
 
     let source = temp_git_repo("real-first-http-push");
-    write_scope_repo_config(&source, Visibility::Public);
     fs::write(source.join("README.md"), "hello over http\n").unwrap();
     fs::write(source.join("script.sh"), "#!/bin/sh\necho hi\n").unwrap();
     run_git(Some(&source), &["add", "-A"], "add first push files").unwrap();
@@ -797,7 +807,8 @@ async fn real_git_first_push_over_http_applies_immediately() {
     assert!(repo.pending_import.is_none());
     assert!(repo.first_push_token.is_none());
     let live_tree = repo.live_tree();
-    assert!(live_tree.contains_key(&ScopePath::parse("/.scope/repo.json").unwrap()));
+    assert!(!live_tree.contains_key(&ScopePath::parse("/.scope/repo.json").unwrap()));
+    assert_eq!(repo.repo_config, repo_config(Visibility::Public));
     assert_eq!(
         live_tree
             .get(&ScopePath::parse("/script.sh").unwrap())
@@ -831,7 +842,6 @@ async fn chunked_real_git_first_push_over_http_applies_immediately() {
     });
 
     let source = temp_git_repo("chunked-real-first-http-push");
-    write_scope_repo_config(&source, Visibility::Public);
     fs::write(source.join("README.md"), "hello over chunked http\n").unwrap();
     run_git(Some(&source), &["add", "-A"], "add readme").unwrap();
     commit_all(&source, "initial");
@@ -920,7 +930,6 @@ async fn chunked_real_git_published_push_over_http_applies_update() {
         "hello over published chunked http\n",
     )
     .unwrap();
-    write_scope_repo_config(&source, Visibility::Public);
     run_git(Some(&source), &["add", "-A"], "add readme update").unwrap();
     commit_all(&source, "update readme");
     configure_push_intent_header(&state, &source, &remote, &test_owner_id());

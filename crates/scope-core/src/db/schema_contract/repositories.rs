@@ -10,6 +10,7 @@ const REPOSITORY_COLUMNS: &[ColumnSpec] = &[
     required_column("publication_state", ColumnType::String),
     required_column("default_visibility", ColumnType::String),
     required_column("change_version", ColumnType::BigInteger),
+    required_column("repo_config", ColumnType::JsonBinary),
     nullable_column("pending_import", ColumnType::JsonBinary),
     required_column("policy", ColumnType::JsonBinary),
     required_column("graph", ColumnType::JsonBinary),

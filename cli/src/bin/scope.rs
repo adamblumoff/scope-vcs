@@ -6,11 +6,12 @@ use scope_cli::{
         AuthenticatedSession, BrowserLoginExchangeRequest, BrowserLoginStartRequest,
         BrowserLoginStartResponse, CLI_BROWSER_LOGIN_PATH, CLI_DEVICE_LOGIN_PATH,
         CLI_EXCHANGE_GRANTS_EXCHANGE_PATH, CliExchangeGrantExchangeRequest,
-        CliSessionTokenResponse, DeviceLoginPollResponse, DeviceLoginStartResponse,
-        DeviceLoginStatus, RepoInitResponse, RepoPublicationState, api_url,
-        cli_browser_login_exchange_path, cli_device_login_poll_path, create_push_intent,
-        create_repo, display_user, get_repo, http_client, revoke_cli_session,
-        rollback_created_repo, validate_session_token,
+        CliSessionTokenResponse, CreatePushIntentParams, DeviceLoginPollResponse,
+        DeviceLoginStartResponse, DeviceLoginStatus, RepoInitResponse, RepoPublicationState,
+        api_url, cli_browser_login_exchange_path, cli_device_login_poll_path,
+        complete_push_intent, create_repo, create_push_intent, display_user, get_repo,
+        get_repo_config,
+        http_client, revoke_cli_session, rollback_created_repo, validate_session_token,
     },
     auth::{
         cached_cli_session, delete_stored_session_token, read_stored_session_token,
@@ -26,14 +27,14 @@ use scope_cli::{
         load_scope_remote, push_reviewed_head_with_intent,
     },
     repo_config::{
-        ensure_scope_repo_config_exists, ensure_scope_repo_config_is_committed,
-        load_scope_repo_config_at_commit, repo_config_path,
+        default_scope_repo_config, ensure_scope_repo_config_exists,
+        load_worktree_scope_repo_config, load_worktree_scope_repo_config_base_hash,
+        mark_worktree_scope_repo_config_synced, repo_config_path,
+        write_worktree_scope_repo_config_with_base,
     },
-    review::{
-        PushReviewOutcome, config_changed_message, ensure_review_terminal_available,
-        run_push_review, run_standalone_review,
-    },
+    review::{ensure_review_terminal_available, run_push_review, run_standalone_review},
 };
+use scope_core::domain::repo_config::repo_config_fingerprint;
 use std::{
     io::{self, Read, Write},
     net::{TcpListener, TcpStream},
@@ -126,6 +127,10 @@ fn init(args: InitArgs) -> anyhow::Result<()> {
 
     let config_created = match configure_remote(&created.init)
         .and_then(|_| ensure_scope_repo_config_exists(&git_repo.root))
+        .and_then(|config_created| {
+            mark_worktree_scope_repo_config_synced(&git_repo.root, &default_scope_repo_config())?;
+            Ok(config_created)
+        })
     {
         Ok(config_created) => config_created,
         Err(error) => {
@@ -141,7 +146,7 @@ fn init(args: InitArgs) -> anyhow::Result<()> {
     println!("Configured Git remote: {}", created.init.remote_name);
     if config_created {
         println!("Created {}", repo_config_path());
-        println!("Commit the config file, then run: scope push");
+        println!("Run: scope push");
     } else {
         println!("Using existing {}", repo_config_path());
         println!("Run: scope push");
@@ -153,9 +158,9 @@ fn init(args: InitArgs) -> anyhow::Result<()> {
 fn push(args: PushArgs) -> anyhow::Result<()> {
     let git_repo = ensure_git_repo_ready("scope push")?;
     let reviewed_head_oid = head_oid(&git_repo)?;
+    let config_created = ensure_scope_repo_config_exists(&git_repo.root)?;
+    let mut config = load_worktree_scope_repo_config(&git_repo.root)?;
     warn_if_dirty_working_tree(&git_repo)?;
-    ensure_scope_repo_config_is_committed(&git_repo.root)?;
-    load_scope_repo_config_at_commit(&git_repo.root, &reviewed_head_oid)?;
     if !args.no_review {
         ensure_review_terminal_available("scope push review")?;
     }
@@ -173,6 +178,46 @@ fn push(args: PushArgs) -> anyhow::Result<()> {
         &target.repo,
     )?;
     ensure_scope_remote_can_receive_push(&target, &repo)?;
+    let repo_config = get_repo_config(
+        &client,
+        &api_url,
+        &session.token,
+        &target.owner,
+        &target.repo,
+    )?;
+    if config_created {
+        write_worktree_scope_repo_config_with_base(&git_repo.root, &repo_config.config)?;
+        config = repo_config.config;
+        eprintln!("Created {}", repo_config_path());
+    } else {
+        let local_config_hash = repo_config_fingerprint(&config)?;
+        match load_worktree_scope_repo_config_base_hash(&git_repo.root) {
+            Ok(hash) if hash == repo_config.config_hash => {}
+            Ok(_) if local_config_hash == repo_config.config_hash => {
+                mark_worktree_scope_repo_config_synced(&git_repo.root, &config)?;
+            }
+            Ok(hash) if hash == local_config_hash => {
+                write_worktree_scope_repo_config_with_base(&git_repo.root, &repo_config.config)?;
+                config = repo_config.config;
+                eprintln!("Scope repo config changed; refreshed {}", repo_config_path());
+            }
+            Ok(_) => {
+                bail!(
+                    "Scope repo config changed, and local {} has unsynced edits. Run scope review, resolve the config, then retry scope push.",
+                    repo_config_path()
+                );
+            }
+            Err(_) if local_config_hash == repo_config.config_hash => {
+                mark_worktree_scope_repo_config_synced(&git_repo.root, &config)?;
+            }
+            Err(error) => {
+                bail!(
+                    "{error}. Local {} has unsynced edits, so Scope will not overwrite it.",
+                    repo_config_path()
+                );
+            }
+        }
+    }
     if repo.lifecycle_state == RepoPublicationState::Published {
         fetch_scope_remote_with_bearer(
             &git_repo,
@@ -197,21 +242,21 @@ fn push(args: PushArgs) -> anyhow::Result<()> {
             review_base_oid.as_deref(),
             &reviewed_head_oid,
         )?;
-        match run_push_review(&git_repo, &reviewed_head_oid, &changed_paths)? {
-            PushReviewOutcome::Continue => {}
-            PushReviewOutcome::ConfigChanged => bail!("{}", config_changed_message()),
-        }
-        ensure_scope_repo_config_is_committed(&git_repo.root)?;
-        load_scope_repo_config_at_commit(&git_repo.root, &reviewed_head_oid)?;
+        config = run_push_review(&git_repo, &reviewed_head_oid, &changed_paths)?;
     }
+    let base_config_hash = load_worktree_scope_repo_config_base_hash(&git_repo.root)?;
 
     let intent = create_push_intent(
         &client,
         &api_url,
         &session.token,
-        &target.owner,
-        &target.repo,
-        &reviewed_head_oid,
+        CreatePushIntentParams {
+            owner: &target.owner,
+            repo: &target.repo,
+            head_oid: &reviewed_head_oid,
+            base_config_hash: &base_config_hash,
+            config: &config,
+        },
     )?;
     if let Some(review_base_oid) = &reviewed_base_oid {
         ensure_reviewed_base_matches_intent(
@@ -242,12 +287,21 @@ fn push(args: PushArgs) -> anyhow::Result<()> {
         }
         Err(error) => return Err(error),
     };
+    complete_push_intent(
+        &client,
+        &api_url,
+        &session.token,
+        &target.owner,
+        &target.repo,
+        &intent.token,
+    )?;
     mark_scope_remote_pushed(
         &git_repo,
         &args.remote,
         DEFAULT_SCOPE_BRANCH,
         &reviewed_head_oid,
     )?;
+    mark_worktree_scope_repo_config_synced(&git_repo.root, &config)?;
 
     if outcome.staged_update_pending {
         println!(

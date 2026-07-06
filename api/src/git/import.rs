@@ -16,14 +16,12 @@ pub(crate) use self::staging::ReceivePackUpdate;
 #[cfg(test)]
 pub(crate) use self::staging::{ReceivePackFileChange, stage_receive_pack_update};
 use self::staging::{apply_receive_pack_update, receive_pack_update_changes_visibility};
-use crate::domain::{
-    policy::ScopePath,
-    repo_config::{REPO_CONFIG_PATH, RepoConfig},
-    store::{RepositoryActor, StoredRepository},
-};
-use crate::object_store::{ObjectStore, source_blob_bytes};
+use crate::domain::store::{RepositoryActor, StoredRepository};
 use crate::{
-    db::RepositoryMutation, error::ApiError, git::PersistedReceivePackUpdate, state::AppState,
+    db::RepositoryMutation,
+    error::ApiError,
+    git::PersistedReceivePackUpdate,
+    state::{AppState, repo_config_fingerprint},
 };
 
 #[cfg(test)]
@@ -51,7 +49,6 @@ pub(crate) fn persist_receive_pack_update_and_promote(
 ) -> Result<PersistedReceivePackUpdate, ApiError> {
     let uploaded_blobs = update.uploaded_blobs.clone();
     let author_id = author_id.to_string();
-    let object_store = state.object_store.clone();
 
     let persisted = state
         .metadata
@@ -70,7 +67,8 @@ pub(crate) fn persist_receive_pack_update_and_promote(
                 };
                 return Err(ApiError::forbidden(message));
             }
-            let previous_config = previous_repo_config(repo, object_store.as_ref())?;
+            ensure_receive_pack_config_base_matches(repo, &update)?;
+            let previous_config = Some(repo.repo_config.clone());
             if !access.can_change_file_visibility
                 && receive_pack_update_changes_visibility(repo, previous_config.as_ref(), &update)
             {
@@ -90,18 +88,20 @@ pub(crate) fn persist_receive_pack_update_and_promote(
     Ok(persisted)
 }
 
-fn previous_repo_config(
+fn ensure_receive_pack_config_base_matches(
     repo: &StoredRepository,
-    object_store: &dyn ObjectStore,
-) -> Result<Option<RepoConfig>, ApiError> {
-    let config_path = ScopePath::parse(REPO_CONFIG_PATH).map_err(ApiError::internal)?;
-    let Some(config_blob) = repo.live_tree().get(&config_path).cloned() else {
-        return Ok(None);
-    };
-    let bytes = source_blob_bytes(object_store, &config_blob)?;
-    RepoConfig::parse_json(&bytes).map(Some).map_err(|error| {
-        ApiError::internal_message(format!("stored repo config is invalid: {error}"))
-    })
+    update: &ReceivePackUpdate,
+) -> Result<(), ApiError> {
+    if repo.repo_config == update.config {
+        return Ok(());
+    }
+    if repo_config_fingerprint(&repo.repo_config)? == update.base_config_hash {
+        return Ok(());
+    }
+
+    Err(ApiError::conflict(
+        "repo config changed since review; rerun scope push",
+    ))
 }
 
 fn ensure_receive_pack_base_matches(

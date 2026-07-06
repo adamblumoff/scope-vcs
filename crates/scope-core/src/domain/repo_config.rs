@@ -1,5 +1,6 @@
-use super::policy::{ScopePath, Visibility};
+use super::policy::{Policy, ScopePath, Visibility};
 use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
 use thiserror::Error;
 
 pub const REPO_CONFIG_PATH: &str = "/.scope/repo.json";
@@ -27,11 +28,10 @@ pub enum RepoConfigError {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(any(test, feature = "ts"), derive(ts_rs::TS))]
 #[serde(rename_all = "lowercase")]
 pub enum ConfigVisibility {
-    #[serde(alias = "Public")]
     Public,
-    #[serde(alias = "Private")]
     Private,
 }
 
@@ -44,7 +44,17 @@ impl From<ConfigVisibility> for Visibility {
     }
 }
 
+impl From<Visibility> for ConfigVisibility {
+    fn from(value: Visibility) -> Self {
+        match value {
+            Visibility::Public => Self::Public,
+            Visibility::Private => Self::Private,
+        }
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(any(test, feature = "ts"), derive(ts_rs::TS))]
 pub struct RepoConfig {
     #[serde(rename = "$schema", default, skip_serializing_if = "Option::is_none")]
     pub schema: Option<String>,
@@ -56,6 +66,19 @@ pub struct RepoConfig {
 }
 
 impl RepoConfig {
+    pub fn with_default_visibility(default: ConfigVisibility) -> Self {
+        Self {
+            schema: None,
+            kind: REPO_CONFIG_KIND.to_string(),
+            version: REPO_CONFIG_VERSION,
+            visibility: RepoConfigVisibility {
+                default,
+                rules: Vec::new(),
+            },
+            history: RepoConfigHistory::default(),
+        }
+    }
+
     pub fn parse_json(bytes: &[u8]) -> Result<Self, RepoConfigError> {
         let config: Self = serde_json::from_slice(bytes).map_err(RepoConfigError::InvalidJson)?;
         config.validate()?;
@@ -125,6 +148,7 @@ impl RepoConfig {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(any(test, feature = "ts"), derive(ts_rs::TS))]
 pub struct RepoConfigVisibility {
     #[serde(default = "default_private_visibility")]
     pub default: ConfigVisibility,
@@ -139,18 +163,21 @@ impl RepoConfigVisibility {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(any(test, feature = "ts"), derive(ts_rs::TS))]
 pub struct RepoConfigVisibilityRule {
     pub path: String,
     pub visibility: ConfigVisibility,
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(any(test, feature = "ts"), derive(ts_rs::TS))]
 pub struct RepoConfigHistory {
     #[serde(default)]
     pub rewrites: Vec<HistoryRewriteRequest>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(any(test, feature = "ts"), derive(ts_rs::TS))]
 pub struct HistoryRewriteRequest {
     pub path: String,
     pub action: HistoryRewriteAction,
@@ -163,6 +190,7 @@ impl HistoryRewriteRequest {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(any(test, feature = "ts"), derive(ts_rs::TS))]
 #[serde(rename_all = "kebab-case")]
 pub enum HistoryRewriteAction {
     RedactPublicHistory,
@@ -177,7 +205,9 @@ impl HistoryRewriteAction {
 }
 
 pub fn is_reserved_config_path(path: &ScopePath) -> bool {
-    path.as_str() == REPO_CONFIG_PATH || path.as_str().starts_with("/.scope/")
+    path.as_str() == "/.scope"
+        || path.as_str() == REPO_CONFIG_PATH
+        || path.as_str().starts_with("/.scope/")
 }
 
 pub fn validate_config_path(path: &str) -> Result<ScopePath, RepoConfigError> {
@@ -190,6 +220,35 @@ pub fn validate_config_path(path: &str) -> Result<ScopePath, RepoConfigError> {
         return Err(RepoConfigError::InvalidSegment);
     }
     Ok(parsed)
+}
+
+pub fn repo_config_from_policy(
+    policy: &Policy,
+    default_visibility: Visibility,
+    history: RepoConfigHistory,
+) -> Result<RepoConfig, RepoConfigError> {
+    let mut config =
+        RepoConfig::with_default_visibility(ConfigVisibility::from(default_visibility));
+    config.visibility.rules = policy
+        .rules()
+        .iter()
+        .map(|rule| RepoConfigVisibilityRule {
+            path: rule.path.as_str().to_string(),
+            visibility: ConfigVisibility::from(rule.visibility),
+        })
+        .collect();
+    config.history = history;
+    config.validate()?;
+    Ok(config)
+}
+
+pub fn repo_config_fingerprint(config: &RepoConfig) -> Result<String, serde_json::Error> {
+    let bytes = serde_json::to_vec(config)?;
+    Ok(hex::encode(Sha256::digest(&bytes)))
+}
+
+pub fn is_repo_config_fingerprint(value: &str) -> bool {
+    value.len() == 64 && value.bytes().all(|byte| byte.is_ascii_hexdigit())
 }
 
 fn validate_config_pattern(pattern: &str) -> Result<(), RepoConfigError> {
@@ -275,6 +334,10 @@ mod tests {
 
         assert_eq!(
             config.visibility_for_path(&ScopePath::parse("/.scope/repo.json").unwrap()),
+            Visibility::Private
+        );
+        assert_eq!(
+            config.visibility_for_path(&ScopePath::parse("/.scope").unwrap()),
             Visibility::Private
         );
     }

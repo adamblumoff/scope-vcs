@@ -1,12 +1,12 @@
 use super::repo_io::{
-    PendingGitTreeFile, describe_refs, git_refs, git_snapshot_from_repo, git_tree_blob_contents,
-    git_tree_entries, pushed_commit_message, put_git_blob_contents,
+    describe_refs, git_refs, git_snapshot_from_repo, git_tree_blob_contents, git_tree_entries,
+    pushed_commit_message, put_git_blob_contents,
 };
 #[cfg(test)]
 use super::repo_io::{git_stdout_text, git_tree_files};
 use super::staging::{ReceivePackFileChange, ReceivePackUpdate, ensure_default_branch};
 use crate::domain::projection_views::pending_scope_path;
-use crate::domain::repo_config::{REPO_CONFIG_PATH, RepoConfig, RepoConfigError};
+use crate::domain::repo_config::RepoConfig;
 use crate::domain::staged_updates::source_content_matches;
 #[cfg(test)]
 use crate::domain::store::PendingImport;
@@ -73,12 +73,13 @@ pub(crate) fn receive_pack_update_from_staging_repo(
     repo_name: &str,
     staging_repo: &FsPath,
     author_id: &str,
+    config: RepoConfig,
 ) -> Result<ReceivePackUpdate, ApiError> {
     let repo = find_repo(state, owner, repo_name)?;
     if repo.record.publication_state != RepoPublicationState::Published {
         return Err(ApiError::conflict("repo must be published before push"));
     }
-    reviewed_update_from_staging_repo(state, owner, repo_name, staging_repo, author_id)
+    reviewed_update_from_staging_repo(state, owner, repo_name, staging_repo, author_id, config)
 }
 
 pub(crate) fn reviewed_update_from_staging_repo(
@@ -87,6 +88,7 @@ pub(crate) fn reviewed_update_from_staging_repo(
     repo_name: &str,
     staging_repo: &FsPath,
     author_id: &str,
+    config: RepoConfig,
 ) -> Result<ReceivePackUpdate, ApiError> {
     let refs = git_refs(staging_repo)?;
     if refs.len() != 1 {
@@ -103,7 +105,6 @@ pub(crate) fn reviewed_update_from_staging_repo(
     let live_tree = repo.live_tree();
     let pushed_entries = git_tree_entries(staging_repo, &head_oid)?;
     let changed_contents = git_tree_blob_contents(staging_repo, &pushed_entries)?;
-    let config = repo_config_from_tree(&pushed_entries, &changed_contents)?;
     let mut changes = Vec::new();
     let mut uploaded_file_blobs = Vec::new();
     let mut pushed_paths = BTreeSet::new();
@@ -189,22 +190,7 @@ pub(crate) fn reviewed_update_from_staging_repo(
         uploaded_blobs: uploaded_file_blobs,
         changes,
         previous_config: None,
+        base_config_hash: crate::state::repo_config_fingerprint(&repo.repo_config)?,
         config,
     })
-}
-
-fn repo_config_from_tree(
-    entries: &[PendingGitTreeFile],
-    contents: &[Vec<u8>],
-) -> Result<RepoConfig, ApiError> {
-    let config_path = REPO_CONFIG_PATH.trim_start_matches('/');
-    let Some((_, bytes)) = entries
-        .iter()
-        .zip(contents)
-        .find(|(entry, _)| entry.path == config_path)
-    else {
-        return Err(ApiError::bad_request(RepoConfigError::Missing));
-    };
-
-    RepoConfig::parse_json(bytes).map_err(ApiError::bad_request)
 }

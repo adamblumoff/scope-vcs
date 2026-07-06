@@ -62,17 +62,24 @@ pub fn ensure_git_repo_ready(command_name: &str) -> anyhow::Result<GitRepo> {
 pub fn warn_if_dirty_working_tree(repo: &GitRepo) -> anyhow::Result<()> {
     let output = Command::new("git")
         .current_dir(&repo.root)
-        .args(["status", "--porcelain"])
+        .args(["status", "--porcelain", "--untracked-files=all"])
         .output()
         .context("inspect Git working tree")?;
     if !output.status.success() {
         bail!("git status --porcelain failed");
     }
-    if !output.stdout.is_empty() {
+    if has_dirty_paths_outside_scope_config(&output.stdout) {
         eprintln!("Working tree has uncommitted changes.");
         eprintln!("Only committed HEAD will be pushed to Scope.");
     }
     Ok(())
+}
+
+fn has_dirty_paths_outside_scope_config(status: &[u8]) -> bool {
+    String::from_utf8_lossy(status).lines().any(|line| {
+        let path = line.get(3..).unwrap_or_default();
+        path != ".scope/repo.json" && path != ".scope/repo-state.json"
+    })
 }
 
 pub fn changed_paths_since_last_scope_push(

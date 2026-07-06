@@ -1,5 +1,8 @@
 use crate::domain::policy::{Principal, ScopePath};
 use crate::domain::projection_views::has_visible_projected_history;
+use crate::domain::repo_config::{
+    RepoConfig, repo_config_fingerprint as core_repo_config_fingerprint,
+};
 use crate::domain::store::{
     AppCatalog, RepoPublicationState, RepositoryAccess, RepositoryActor, SourceBlob,
     StoredRepository, repo_id,
@@ -52,6 +55,8 @@ struct PushIntentClaims {
     repo_id: String,
     user_id: String,
     head_oid: String,
+    config: RepoConfig,
+    base_config_hash: String,
     base_git_snapshot_key: Option<String>,
     expires_at_unix: u64,
 }
@@ -61,7 +66,10 @@ pub(crate) struct ValidatedPushIntent {
     pub(crate) repo_id: String,
     pub(crate) user_id: String,
     pub(crate) head_oid: String,
+    pub(crate) config: RepoConfig,
+    pub(crate) base_config_hash: String,
     pub(crate) base_git_snapshot_key: Option<String>,
+    pub(crate) expires_at_unix: u64,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -243,6 +251,8 @@ impl AppState {
         repo_id: &str,
         user_id: &str,
         head_oid: &str,
+        config: RepoConfig,
+        base_config_hash: String,
         base_git_snapshot_key: Option<String>,
     ) -> Result<CreatedPushIntent, ApiError> {
         let expires_at_unix = unix_now()?.saturating_add(PUSH_INTENT_TTL_SECS);
@@ -252,6 +262,8 @@ impl AppState {
             repo_id: repo_id.to_string(),
             user_id: user_id.to_string(),
             head_oid: head_oid.to_string(),
+            config,
+            base_config_hash,
             base_git_snapshot_key,
             expires_at_unix,
         };
@@ -266,14 +278,16 @@ impl AppState {
         &self,
         secret: &str,
     ) -> Result<ValidatedPushIntent, ApiError> {
-        decode_push_intent(&self.push_intent_signing_key, secret).map(|intent| {
-            ValidatedPushIntent {
-                repo_id: intent.repo_id,
-                user_id: intent.user_id,
-                head_oid: intent.head_oid,
-                base_git_snapshot_key: intent.base_git_snapshot_key,
-            }
-        })
+        decode_push_intent(&self.push_intent_signing_key, secret, true)
+            .map(validated_push_intent_from_claims)
+    }
+
+    pub(crate) fn validate_completed_push_intent_secret(
+        &self,
+        secret: &str,
+    ) -> Result<ValidatedPushIntent, ApiError> {
+        decode_push_intent(&self.push_intent_signing_key, secret, false)
+            .map(validated_push_intent_from_claims)
     }
 
     pub(crate) fn git_cache_root(&self) -> Result<PathBuf, ApiError> {
@@ -340,7 +354,27 @@ fn encode_push_intent(signing_key: &[u8], intent: &PushIntentClaims) -> Result<S
     ))
 }
 
-fn decode_push_intent(signing_key: &[u8], token: &str) -> Result<PushIntentClaims, ApiError> {
+pub(crate) fn repo_config_fingerprint(config: &RepoConfig) -> Result<String, ApiError> {
+    core_repo_config_fingerprint(config).map_err(ApiError::internal)
+}
+
+fn validated_push_intent_from_claims(intent: PushIntentClaims) -> ValidatedPushIntent {
+    ValidatedPushIntent {
+        repo_id: intent.repo_id,
+        user_id: intent.user_id,
+        head_oid: intent.head_oid,
+        config: intent.config,
+        base_config_hash: intent.base_config_hash,
+        base_git_snapshot_key: intent.base_git_snapshot_key,
+        expires_at_unix: intent.expires_at_unix,
+    }
+}
+
+fn decode_push_intent(
+    signing_key: &[u8],
+    token: &str,
+    enforce_expiry: bool,
+) -> Result<PushIntentClaims, ApiError> {
     let Some(token) = token.trim().strip_prefix(PUSH_INTENT_TOKEN_PREFIX) else {
         return Err(ApiError::forbidden("valid Scope push intent required"));
     };
@@ -359,7 +393,7 @@ fn decode_push_intent(signing_key: &[u8], token: &str) -> Result<PushIntentClaim
     if intent.kind != PUSH_INTENT_KIND || intent.version != PUSH_INTENT_VERSION {
         return Err(ApiError::forbidden("valid Scope push intent required"));
     }
-    if intent.expires_at_unix <= unix_now()? {
+    if enforce_expiry && intent.expires_at_unix <= unix_now()? {
         return Err(ApiError::forbidden("valid Scope push intent required"));
     }
     Ok(intent)
@@ -654,5 +688,38 @@ pub(crate) fn drain_pending_source_blob_deletions(state: &AppState) -> Result<()
 pub(crate) fn best_effort_drain_pending_source_blob_deletions(state: &AppState) {
     if let Err(error) = drain_pending_source_blob_deletions(state) {
         tracing::warn!(?error, "failed to drain pending source blob deletions");
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::domain::repo_config::{ConfigVisibility, RepoConfig};
+    use axum::http::StatusCode;
+
+    #[test]
+    fn completion_validation_accepts_expired_signed_push_intent() {
+        let state = AppState::test_state();
+        let expired = PushIntentClaims {
+            kind: PUSH_INTENT_KIND.to_string(),
+            version: PUSH_INTENT_VERSION,
+            repo_id: "repo-id".to_string(),
+            user_id: "user-id".to_string(),
+            head_oid: "1111111111111111111111111111111111111111".to_string(),
+            config: RepoConfig::with_default_visibility(ConfigVisibility::Private),
+            base_config_hash: "0".repeat(64),
+            base_git_snapshot_key: None,
+            expires_at_unix: unix_now().unwrap().saturating_sub(1),
+        };
+        let token = encode_push_intent(&state.push_intent_signing_key, &expired).unwrap();
+
+        let error = state.validate_push_intent_secret(&token).unwrap_err();
+        assert_eq!(error.status, StatusCode::FORBIDDEN);
+
+        let validated = state.validate_completed_push_intent_secret(&token).unwrap();
+        assert_eq!(validated.repo_id, expired.repo_id);
+        assert_eq!(validated.user_id, expired.user_id);
+        assert_eq!(validated.head_oid, expired.head_oid);
+        assert_eq!(validated.expires_at_unix, expired.expires_at_unix);
     }
 }

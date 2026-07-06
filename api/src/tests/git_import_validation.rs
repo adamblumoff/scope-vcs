@@ -104,6 +104,9 @@ fn pushed_tree_rejects_paths_scope_would_normalize_or_git_cannot_serve() {
         "line\nbreak.txt",
         "./README.md",
         "docs/../README.md",
+        ".scope",
+        ".scope/repo.json",
+        ".scope/anything.json",
     ] {
         let error = validate_pushed_file_path(path).unwrap_err();
         assert_eq!(error.status, StatusCode::BAD_REQUEST);

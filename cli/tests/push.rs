@@ -78,7 +78,7 @@ fn push_refuses_git_repo_without_head_before_login() {
 }
 
 #[test]
-fn push_refuses_missing_config_before_remote_lookup() {
+fn push_creates_missing_config_before_remote_lookup() {
     let dir = TempDir::new("missing-config");
     create_repo_with_readme(dir.path());
 
@@ -87,14 +87,15 @@ fn push_refuses_missing_config_before_remote_lookup() {
         .output()
         .unwrap();
 
-    assert_failure(&output, "scope push without config");
+    assert_failure(&output, "scope push without remote");
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(
-        stderr.contains("commit .scope/repo.json before running scope push"),
+        stderr.contains("Scope remote 'scope' is not configured. Run: scope init"),
         "{stderr}"
     );
+    assert!(dir.path().join(".scope/repo.json").is_file());
     assert!(
-        !stderr.contains("Scope remote 'scope' is not configured"),
+        !stderr.contains("Working tree has uncommitted changes."),
         "{stderr}"
     );
     assert!(!stderr.contains("start browser login"), "{stderr}");
@@ -140,7 +141,7 @@ fn push_refuses_invalid_config_before_remote_lookup() {
 }
 
 #[test]
-fn push_refuses_uncommitted_config_before_remote_lookup() {
+fn push_allows_uncommitted_config_before_remote_lookup() {
     let dir = TempDir::new("uncommitted-config");
     create_repo_with_readme(dir.path());
     write_valid_config(dir.path());
@@ -150,16 +151,14 @@ fn push_refuses_uncommitted_config_before_remote_lookup() {
         .output()
         .unwrap();
 
-    assert_failure(&output, "scope push with uncommitted config");
+    assert_failure(&output, "scope push without remote");
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(
-        stderr.contains(
-            ".scope/repo.json has uncommitted changes; commit it before running scope push"
-        ),
+        stderr.contains("Scope remote 'scope' is not configured. Run: scope init"),
         "{stderr}"
     );
     assert!(
-        !stderr.contains("Scope remote 'scope' is not configured"),
+        !stderr.contains("Working tree has uncommitted changes."),
         "{stderr}"
     );
     assert!(!stderr.contains("start browser login"), "{stderr}");
@@ -223,8 +222,6 @@ fn scope_command(cwd: &Path) -> Command {
 fn create_repo_with_head(cwd: &Path) {
     create_repo_with_readme(cwd);
     write_valid_config(cwd);
-    run_git(cwd, ["add", ".scope/repo.json"]);
-    commit_all(cwd, "add scope config");
 }
 
 fn create_repo_with_readme(cwd: &Path) {

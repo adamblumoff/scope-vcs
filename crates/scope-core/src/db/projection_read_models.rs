@@ -305,6 +305,9 @@ mod tests {
                 change_version: 7,
             },
             settings: RepoSettings::default(),
+            repo_config: crate::domain::repo_config::RepoConfig::with_default_visibility(
+                crate::domain::repo_config::ConfigVisibility::Private,
+            ),
             first_push_token: None,
             git_push_token: None,
             git_clone_tokens: Vec::new(),
