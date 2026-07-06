@@ -5,8 +5,9 @@ use scope_core::domain::repo_config::{
 use std::{
     fs::{self, OpenOptions},
     io::{self, Write},
-    path::Path,
+    path::{Path, PathBuf},
     process::Command,
+    time::{SystemTime, UNIX_EPOCH},
 };
 
 const WORKTREE_CONFIG_PATH: &str = ".scope/repo.json";
@@ -111,7 +112,7 @@ pub fn write_worktree_scope_repo_config(
     let path = git_root.join(WORKTREE_CONFIG_PATH);
     ensure_safe_worktree_config_path(git_root)?;
     let json = canonical_repo_config_json(config)?;
-    fs::write(&path, json).context("write .scope/repo.json")
+    write_config_atomically(&path, &json)
 }
 
 pub fn canonical_repo_config_json(config: &RepoConfig) -> anyhow::Result<String> {
@@ -175,6 +176,40 @@ fn ensure_safe_worktree_config_directory_exists(scope_dir: &Path) -> anyhow::Res
         }
         Err(error) => Err(error).context("inspect .scope config directory"),
     }
+}
+
+fn write_config_atomically(path: &Path, contents: &str) -> anyhow::Result<()> {
+    let parent = path
+        .parent()
+        .context("Scope config path is missing a parent directory")?;
+    let temp_path = temporary_config_path(parent)?;
+    let result = (|| -> anyhow::Result<()> {
+        let mut file = OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&temp_path)
+            .context("create temporary .scope/repo.json")?;
+        file.write_all(contents.as_bytes())
+            .context("write temporary .scope/repo.json")?;
+        file.sync_all().context("sync temporary .scope/repo.json")?;
+        drop(file);
+        fs::rename(&temp_path, path).context("replace .scope/repo.json")?;
+        Ok(())
+    })();
+
+    if result.is_err() {
+        let _ = fs::remove_file(&temp_path);
+    }
+
+    result
+}
+
+fn temporary_config_path(parent: &Path) -> anyhow::Result<PathBuf> {
+    let nanos = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .context("system clock is before Unix epoch")?
+        .as_nanos();
+    Ok(parent.join(format!(".repo.json.{}.{}.tmp", std::process::id(), nanos)))
 }
 
 #[cfg(test)]
@@ -251,6 +286,26 @@ mod tests {
                 .to_string()
                 .contains(".scope config directory cannot be a symlink")
         );
+    }
+
+    #[test]
+    fn write_replaces_existing_config_without_leaving_temp_file() {
+        let dir = TempDir::new("atomic-write");
+        fs::create_dir_all(dir.path.join(".scope")).unwrap();
+        fs::write(dir.path.join(WORKTREE_CONFIG_PATH), "old config").unwrap();
+        let config = RepoConfig::parse_json(default_repo_config_json().as_bytes()).unwrap();
+
+        write_worktree_scope_repo_config(&dir.path, &config).unwrap();
+
+        assert_eq!(
+            fs::read_to_string(dir.path.join(WORKTREE_CONFIG_PATH)).unwrap(),
+            canonical_repo_config_json(&config).unwrap()
+        );
+        let entries = fs::read_dir(dir.path.join(".scope"))
+            .unwrap()
+            .map(|entry| entry.unwrap().file_name().to_string_lossy().into_owned())
+            .collect::<Vec<_>>();
+        assert_eq!(entries, vec!["repo.json"]);
     }
 
     #[cfg(unix)]

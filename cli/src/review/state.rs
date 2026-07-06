@@ -17,6 +17,7 @@ pub struct ReviewState {
     pub config: RepoConfig,
     original_config: RepoConfig,
     expanded: BTreeSet<usize>,
+    visible_ids: Vec<usize>,
     cursor: usize,
     scroll: usize,
     filter: String,
@@ -87,11 +88,12 @@ impl ReviewState {
                 config.history.rewrites.len()
             )
         };
-        Self {
+        let mut state = Self {
             tree,
             original_config: config.clone(),
             config,
             expanded,
+            visible_ids: Vec::new(),
             cursor: 0,
             scroll: 0,
             filter: String::new(),
@@ -99,7 +101,9 @@ impl ReviewState {
             message,
             deleted_path_summaries,
             mode,
-        }
+        };
+        state.rebuild_visible_ids();
+        state
     }
 
     pub fn is_dirty(&self) -> bool {
@@ -159,8 +163,9 @@ impl ReviewState {
     }
 
     pub fn visible_rows(&self) -> Vec<ReviewRow> {
-        self.visible_node_ids()
-            .into_iter()
+        self.visible_ids
+            .iter()
+            .copied()
             .map(|id| {
                 let node = self.tree.node(id);
                 ReviewRow {
@@ -214,6 +219,11 @@ impl ReviewState {
                     ReviewStateAction::Exit
                 };
             }
+            ReviewInput::Escape if !self.filter.is_empty() => {
+                self.filter.clear();
+                self.rebuild_visible_ids();
+                self.message = "Filter cleared".to_string();
+            }
             ReviewInput::Escape => return ReviewStateAction::Cancel,
             ReviewInput::Filter => {
                 self.editing_filter = true;
@@ -240,15 +250,15 @@ impl ReviewState {
             }
             ReviewInput::Backspace => {
                 self.filter.pop();
-                self.clamp_cursor();
+                self.rebuild_visible_ids();
             }
             ReviewInput::Char(value) => {
                 self.filter.push(value);
-                self.clamp_cursor();
+                self.rebuild_visible_ids();
             }
             ReviewInput::Quit => {
                 self.filter.push('q');
-                self.clamp_cursor();
+                self.rebuild_visible_ids();
             }
             _ => {}
         }
@@ -260,8 +270,7 @@ impl ReviewState {
     }
 
     fn move_cursor_down(&mut self) {
-        let rows = self.visible_node_ids();
-        if self.cursor + 1 < rows.len() {
+        if self.cursor + 1 < self.visible_ids.len() {
             self.cursor += 1;
         }
     }
@@ -271,14 +280,13 @@ impl ReviewState {
             return;
         };
         let node = self.tree.node(id);
-        if node.kind != ReviewNodeKind::File
-            && id != self.tree.root_id()
-            && self.expanded.remove(&id)
-        {
-            self.clamp_cursor();
+        let kind = node.kind;
+        let parent = node.parent;
+        if kind != ReviewNodeKind::File && id != self.tree.root_id() && self.expanded.remove(&id) {
+            self.rebuild_visible_ids();
             return;
         }
-        if let Some(parent) = node.parent {
+        if let Some(parent) = parent {
             self.move_cursor_to_node(parent);
         }
     }
@@ -288,13 +296,16 @@ impl ReviewState {
             return;
         };
         let node = self.tree.node(id);
-        if node.kind == ReviewNodeKind::File || node.children.is_empty() {
+        let kind = node.kind;
+        let first_child = node.children.first().copied();
+        if kind == ReviewNodeKind::File || first_child.is_none() {
             return;
         }
         if self.expanded.insert(id) {
+            self.rebuild_visible_ids();
             return;
         }
-        self.move_cursor_to_node(node.children[0]);
+        self.move_cursor_to_node(first_child.expect("first child is checked above"));
     }
 
     fn toggle_selected(&mut self) {
@@ -306,12 +317,12 @@ impl ReviewState {
     }
 
     fn selected_node_id(&self) -> Option<usize> {
-        self.visible_node_ids().get(self.cursor).copied()
+        self.visible_ids.get(self.cursor).copied()
     }
 
     fn move_cursor_to_node(&mut self, node_id: usize) {
         if let Some(index) = self
-            .visible_node_ids()
+            .visible_ids
             .iter()
             .position(|visible_id| *visible_id == node_id)
         {
@@ -320,7 +331,7 @@ impl ReviewState {
     }
 
     fn clamp_cursor(&mut self) {
-        let visible_count = self.visible_node_ids().len();
+        let visible_count = self.visible_ids.len();
         if visible_count == 0 {
             self.cursor = 0;
         } else if self.cursor >= visible_count {
@@ -328,10 +339,11 @@ impl ReviewState {
         }
     }
 
-    fn visible_node_ids(&self) -> Vec<usize> {
+    fn rebuild_visible_ids(&mut self) {
         let mut ids = Vec::new();
         self.collect_visible_node_ids(self.tree.root_id(), &mut ids);
-        ids
+        self.visible_ids = ids;
+        self.clamp_cursor();
     }
 
     fn collect_visible_node_ids(&self, node_id: usize, ids: &mut Vec<usize>) {
@@ -424,6 +436,35 @@ mod tests {
 
         assert_eq!(
             state.handle_input(ReviewInput::Quit),
+            ReviewStateAction::Cancel
+        );
+    }
+
+    #[test]
+    fn escape_clears_closed_filter_before_canceling() {
+        let mut state = state();
+
+        state.handle_input(ReviewInput::Filter);
+        state.handle_input(ReviewInput::Char('s'));
+        assert_eq!(state.filter(), "s");
+        assert!(state.editing_filter());
+
+        assert_eq!(
+            state.handle_input(ReviewInput::Escape),
+            ReviewStateAction::None
+        );
+        assert_eq!(state.filter(), "s");
+        assert!(!state.editing_filter());
+
+        assert_eq!(
+            state.handle_input(ReviewInput::Escape),
+            ReviewStateAction::None
+        );
+        assert_eq!(state.filter(), "");
+        assert!(state.message().contains("Filter cleared"));
+
+        assert_eq!(
+            state.handle_input(ReviewInput::Escape),
             ReviewStateAction::Cancel
         );
     }
