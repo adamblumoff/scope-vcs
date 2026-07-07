@@ -33,6 +33,14 @@ fn i64_to_u64_floor(value: i64) -> u64 {
     value.max(0) as u64
 }
 
+fn u32_to_i32_saturating(value: u32) -> i32 {
+    value.min(i32::MAX as u32) as i32
+}
+
+fn i32_to_u32_floor(value: i32) -> u32 {
+    value.max(0) as u32
+}
+
 fn usize_to_i64_saturating(value: usize) -> i64 {
     value.min(i64::MAX as usize) as i64
 }
@@ -49,6 +57,7 @@ mod collaboration;
 mod jobs;
 mod read_models;
 mod repositories;
+mod requests;
 
 pub use auth::{
     auth_identity, cli_browser_login, cli_device_login, cli_exchange_grant, cli_session, user,
@@ -63,6 +72,7 @@ pub use repositories::{
     repository, repository_first_push_token, repository_git_push_token, repository_git_snapshot,
     repository_setting,
 };
+pub use requests::{credit_ledger_entry, request, request_event, user_credit_account};
 
 #[cfg(test)]
 mod tests {

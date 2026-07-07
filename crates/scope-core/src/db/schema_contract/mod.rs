@@ -5,6 +5,7 @@ pub mod collaboration;
 pub mod jobs;
 pub mod read_models;
 pub mod repositories;
+pub mod requests;
 
 #[derive(Copy, Clone)]
 pub struct SchemaIden(&'static str);
@@ -182,6 +183,7 @@ const SCHEMA_TABLE_GROUPS: &[&[TableSpec]] = &[
     jobs::LOCK_AND_CLEANUP_TABLES,
     auth::TABLES,
     repositories::TABLES,
+    requests::TABLES,
     read_models::TABLES,
     jobs::OUTBOX_TABLES,
     collaboration::TABLES,
@@ -253,6 +255,10 @@ mod tests {
                 repositories::REPOSITORY_FIRST_PUSH_TOKENS.name,
                 repositories::REPOSITORY_GIT_PUSH_TOKENS.name,
                 repositories::REPOSITORY_GIT_SNAPSHOTS.name,
+                requests::REQUESTS.name,
+                requests::REQUEST_EVENTS.name,
+                requests::USER_CREDIT_ACCOUNTS.name,
+                requests::CREDIT_LEDGER_ENTRIES.name,
                 collaboration::REPOSITORY_MEMBERS.name,
                 collaboration::REPOSITORY_INVITES.name,
             ]

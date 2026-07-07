@@ -345,6 +345,10 @@ fn db_metadata_worker_rebuilds_projection_read_models_from_outbox() {
         .seed_catalog_for_tests(AppCatalog {
             users: BTreeMap::from([(owner.id.clone(), owner)]),
             repositories: BTreeMap::from([(repo.record.id.clone(), repo)]),
+            requests: BTreeMap::new(),
+            request_events: BTreeMap::new(),
+            user_credit_accounts: BTreeMap::new(),
+            credit_ledger_entries: BTreeMap::new(),
             pending_repo_storage_deletions: Vec::new(),
             pending_source_blob_deletions: Vec::new(),
         })

@@ -1,14 +1,6 @@
 name: Scope Worker CI
 
 on:
-  pull_request:
-    paths:
-      - ".github/scripts/deploy-railway.sh"
-      - ".github/workflows/scope-worker-ci.yml"
-      - "Cargo.lock"
-      - "Cargo.toml"
-      - "crates/scope-core/**"
-      - "worker/**"
   push:
     branches:
       - main
@@ -20,6 +12,10 @@ on:
       - "crates/scope-core/**"
       - "worker/**"
   workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: false
 
 permissions:
   contents: read
