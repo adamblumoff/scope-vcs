@@ -246,6 +246,7 @@ fn revision_reopens_needs_response_request() {
             request_id: "req_1".to_string(),
             actor_user_id: "user_public".to_string(),
             new_head_oid: "new_head".to_string(),
+            git_snapshot: None,
             event_id: "event_revision".to_string(),
             body: None,
             now_unix: 20,
@@ -335,6 +336,139 @@ fn accepted_resolution_requires_merge_flow() {
     );
     assert_eq!(accounts.get("user_public").unwrap().balance_credits, 0);
     assert!(events.is_empty());
+    assert!(ledger_entries.is_empty());
+}
+
+#[test]
+fn clean_merge_accepts_and_settles_public_request() {
+    let mut requests = BTreeMap::from([("req_1".to_string(), submitted_request())]);
+    let mut events = BTreeMap::new();
+    let mut accounts = BTreeMap::from([(
+        "user_public".to_string(),
+        UserCreditAccount {
+            user_id: "user_public".to_string(),
+            balance_credits: 0,
+        },
+    )]);
+    let mut ledger_entries = BTreeMap::new();
+
+    let mutation = merge_request(
+        &mut requests,
+        &mut events,
+        &mut accounts,
+        &mut ledger_entries,
+        clean_merge_input(),
+    )
+    .unwrap();
+
+    assert_eq!(mutation.request.state, RequestState::Resolved);
+    assert_eq!(
+        mutation.request.disposition,
+        Some(RequestDisposition::Accepted)
+    );
+    assert_eq!(mutation.request.settlement.unwrap().reward_credits, 5);
+    assert_eq!(mutation.merged_event.kind, RequestEventKind::Merged);
+    assert_eq!(mutation.settled_event.kind, RequestEventKind::Settled);
+    assert_eq!(accounts.get("user_public").unwrap().balance_credits, 15);
+    assert_eq!(mutation.ledger_entries.len(), 2);
+}
+
+#[test]
+fn clean_merge_rejects_stale_main_without_settling() {
+    let mut requests = BTreeMap::from([("req_1".to_string(), submitted_request())]);
+    let mut events = BTreeMap::new();
+    let mut accounts = BTreeMap::from([(
+        "user_public".to_string(),
+        UserCreditAccount {
+            user_id: "user_public".to_string(),
+            balance_credits: 0,
+        },
+    )]);
+    let mut ledger_entries = BTreeMap::new();
+    let mut input = clean_merge_input();
+    input.current_main_oid = "new-main".to_string();
+
+    let error = merge_request(
+        &mut requests,
+        &mut events,
+        &mut accounts,
+        &mut ledger_entries,
+        input,
+    )
+    .unwrap_err();
+
+    assert!(error.message.contains("main changed"));
+    assert_eq!(
+        requests.get("req_1").unwrap().state,
+        RequestState::Submitted
+    );
+    assert!(events.is_empty());
+    assert!(ledger_entries.is_empty());
+    assert_eq!(accounts.get("user_public").unwrap().balance_credits, 0);
+}
+
+#[test]
+fn clean_merge_rejects_stale_request_head_without_settling() {
+    let mut requests = BTreeMap::from([("req_1".to_string(), submitted_request())]);
+    let mut events = BTreeMap::new();
+    let mut accounts = BTreeMap::from([(
+        "user_public".to_string(),
+        UserCreditAccount {
+            user_id: "user_public".to_string(),
+            balance_credits: 0,
+        },
+    )]);
+    let mut ledger_entries = BTreeMap::new();
+    let mut input = clean_merge_input();
+    input.expected_head_oid = "old-head".to_string();
+
+    let error = merge_request(
+        &mut requests,
+        &mut events,
+        &mut accounts,
+        &mut ledger_entries,
+        input,
+    )
+    .unwrap_err();
+
+    assert!(error.message.contains("request changed"));
+    assert_eq!(
+        requests.get("req_1").unwrap().state,
+        RequestState::Submitted
+    );
+    assert!(events.is_empty());
+    assert!(ledger_entries.is_empty());
+    assert_eq!(accounts.get("user_public").unwrap().balance_credits, 0);
+}
+
+#[test]
+fn owner_clean_merge_does_not_touch_credit_accounts() {
+    let mut request = submitted_request();
+    request.author_user_id = "user_owner".to_string();
+    request.author_role = RequestActorRole::Owner;
+    request.base_audience = RequestBaseAudience::Private;
+    request.stake_credits = 0;
+    let mut requests = BTreeMap::from([("req_1".to_string(), request)]);
+    let mut events = BTreeMap::new();
+    let mut accounts = BTreeMap::new();
+    let mut ledger_entries = BTreeMap::new();
+
+    let mutation = merge_request(
+        &mut requests,
+        &mut events,
+        &mut accounts,
+        &mut ledger_entries,
+        clean_merge_input(),
+    )
+    .unwrap();
+
+    assert_eq!(
+        mutation.request.disposition,
+        Some(RequestDisposition::Accepted)
+    );
+    assert!(mutation.account.is_none());
+    assert!(mutation.ledger_entries.is_empty());
+    assert!(accounts.is_empty());
     assert!(ledger_entries.is_empty());
 }
 
@@ -506,6 +640,22 @@ fn public_submit_input() -> SubmitRequestInput {
     }
 }
 
+fn clean_merge_input() -> MergeRequestInput {
+    MergeRequestInput {
+        request_id: "req_1".to_string(),
+        actor_user_id: "maintainer".to_string(),
+        expected_main_oid: "base".to_string(),
+        current_main_oid: "base".to_string(),
+        expected_head_oid: "head".to_string(),
+        event_id: "event_merged".to_string(),
+        settlement_event_id: "event_settled".to_string(),
+        refund_ledger_entry_id: Some("ledger_refund".to_string()),
+        reward_ledger_entry_id: Some("ledger_reward".to_string()),
+        body: None,
+        now_unix: 30,
+    }
+}
+
 fn submitted_request() -> Request {
     Request {
         id: "req_1".to_string(),
@@ -517,6 +667,7 @@ fn submitted_request() -> Request {
         request_ref: "refs/scope/requests/req_1".to_string(),
         base_main_oid: "base".to_string(),
         head_oid: "head".to_string(),
+        git_snapshot: None,
         title: "Fix parser crash".to_string(),
         state: RequestState::Submitted,
         stake_credits: 10,

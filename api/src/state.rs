@@ -501,6 +501,12 @@ fn unreferenced_source_blobs(catalog: &AppCatalog, blobs: &[SourceBlob]) -> Vec<
         .repositories
         .values()
         .flat_map(repo_source_blobs)
+        .chain(
+            catalog
+                .requests
+                .values()
+                .filter_map(|request| request.git_snapshot.clone()),
+        )
         .map(|blob| blob.object_key)
         .collect::<std::collections::BTreeSet<_>>();
     unreferenced_source_blobs_by_key(&referenced, blobs)

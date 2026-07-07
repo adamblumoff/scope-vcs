@@ -1,19 +1,23 @@
+#[cfg(any(test, feature = "memory-metadata"))]
+use super::cleanup_queue::queue_pending_source_blob_deletions;
 use super::{
-    MetadataStore, MetadataStoreInner, acquire_metadata_write_lock, entities,
-    repository_from_model,
+    MetadataStore, MetadataStoreInner, acquire_metadata_write_lock,
+    cleanup_queue::queue_pending_source_blob_deletion_rows,
+    entities, repository_from_model,
     request_rows::{
         credit_account_by_user_id, credit_ledger_entry_by_id, insert_credit_ledger_entry_row,
         insert_request_event_row, insert_request_row, request_by_id, request_by_ref,
-        request_event_by_id, save_credit_account_row, save_request_row,
+        request_event_by_id, requests_by_repo_author, save_credit_account_row, save_request_row,
     },
     run_api_db_on,
 };
 use crate::{
     domain::{
         requests::{
-            CreditAccountMutation, GrantUserCreditsInput, RecordRequestRevisionInput,
-            RequestActorRole, RequestBaseAudience, RequestRevisionMutation, ResolveRequestInput,
-            ResolveRequestMutation, SubmitRequestInput, SubmitRequestMutation, grant_user_credits,
+            CreditAccountMutation, GrantUserCreditsInput, MergeRequestInput, MergeRequestMutation,
+            RecordRequestRevisionInput, Request, RequestActorRole, RequestBaseAudience,
+            RequestRevisionMutation, ResolveRequestInput, ResolveRequestMutation,
+            SubmitRequestInput, SubmitRequestMutation, grant_user_credits, merge_request,
             record_request_revision, resolve_request, submit_request,
         },
         store::{RepoPublicationState, RepositoryActor, StoredRepository},
@@ -24,6 +28,54 @@ use sea_orm::{EntityTrait, TransactionTrait};
 use std::{collections::BTreeMap, sync::Arc};
 
 impl MetadataStore {
+    pub fn request_by_ref(&self, request_ref: &str) -> Result<Option<Request>, ApiError> {
+        let request_ref = request_ref.to_string();
+        match self.inner.as_ref() {
+            MetadataStoreInner::Postgres { db, runtime } => {
+                let db = Arc::clone(db);
+                run_api_db_on(runtime, async move {
+                    request_by_ref(db.as_ref(), &request_ref).await
+                })
+            }
+            #[cfg(any(test, feature = "memory-metadata"))]
+            MetadataStoreInner::Memory(_) => self.read(move |catalog| {
+                Ok(catalog
+                    .requests
+                    .values()
+                    .find(|request| request.request_ref == request_ref)
+                    .cloned())
+            }),
+        }
+    }
+
+    pub fn requests_by_repo_author(
+        &self,
+        repo_id: &str,
+        author_user_id: &str,
+    ) -> Result<Vec<Request>, ApiError> {
+        let repo_id = repo_id.to_string();
+        let author_user_id = author_user_id.to_string();
+        match self.inner.as_ref() {
+            MetadataStoreInner::Postgres { db, runtime } => {
+                let db = Arc::clone(db);
+                run_api_db_on(runtime, async move {
+                    requests_by_repo_author(db.as_ref(), &repo_id, &author_user_id).await
+                })
+            }
+            #[cfg(any(test, feature = "memory-metadata"))]
+            MetadataStoreInner::Memory(_) => self.read(move |catalog| {
+                Ok(catalog
+                    .requests
+                    .values()
+                    .filter(|request| {
+                        request.repo_id == repo_id && request.author_user_id == author_user_id
+                    })
+                    .cloned()
+                    .collect())
+            }),
+        }
+    }
+
     pub fn grant_user_credits(
         &self,
         input: GrantUserCreditsInput,
@@ -170,13 +222,29 @@ impl MetadataStore {
                     let mutation = record_request_revision(&mut requests, &mut events, input)?;
                     save_request_row(&tx, &mutation.request).await?;
                     insert_request_event_row(&tx, &mutation.event).await?;
+                    if !mutation.source_blobs_to_delete.is_empty() {
+                        queue_pending_source_blob_deletion_rows(
+                            &tx,
+                            mutation.source_blobs_to_delete.clone(),
+                        )
+                        .await?;
+                    }
                     tx.commit().await.map_err(ApiError::internal)?;
                     Ok(mutation)
                 })
             }
             #[cfg(any(test, feature = "memory-metadata"))]
             MetadataStoreInner::Memory(_) => self.update(move |catalog| {
-                record_request_revision(&mut catalog.requests, &mut catalog.request_events, input)
+                let mutation = record_request_revision(
+                    &mut catalog.requests,
+                    &mut catalog.request_events,
+                    input,
+                )?;
+                queue_pending_source_blob_deletions(
+                    &mut catalog.pending_source_blob_deletions,
+                    mutation.source_blobs_to_delete.clone(),
+                );
+                Ok(mutation)
             }),
         }
     }
@@ -260,6 +328,95 @@ impl MetadataStore {
                     .ok_or_else(|| ApiError::not_found("repo not found"))?;
                 ensure_request_maintainer(repo, &input.actor_user_id)?;
                 resolve_request(
+                    &mut catalog.requests,
+                    &mut catalog.request_events,
+                    &mut catalog.user_credit_accounts,
+                    &mut catalog.credit_ledger_entries,
+                    input,
+                )
+            }),
+        }
+    }
+
+    pub fn merge_request(
+        &self,
+        input: MergeRequestInput,
+    ) -> Result<MergeRequestMutation, ApiError> {
+        match self.inner.as_ref() {
+            MetadataStoreInner::Postgres { db, runtime } => {
+                let db = Arc::clone(db);
+                run_api_db_on(runtime, async move {
+                    let tx = db.as_ref().begin().await.map_err(ApiError::internal)?;
+                    acquire_metadata_write_lock(&tx).await?;
+
+                    let mut requests = BTreeMap::new();
+                    let request = request_by_id(&tx, &input.request_id)
+                        .await?
+                        .ok_or_else(|| ApiError::not_found("request not found"))?;
+                    ensure_user_exists(&tx, &input.actor_user_id).await?;
+                    let repo = repo_by_id(&tx, &request.repo_id).await?;
+                    ensure_request_maintainer(&repo, &input.actor_user_id)?;
+                    requests.insert(request.id.clone(), request.clone());
+                    let mut events = BTreeMap::new();
+                    for event_id in [&input.event_id, &input.settlement_event_id] {
+                        if let Some(event) = request_event_by_id(&tx, event_id).await? {
+                            events.insert(event.id.clone(), event);
+                        }
+                    }
+                    let mut accounts = BTreeMap::new();
+                    if let Some(account) =
+                        credit_account_by_user_id(&tx, &request.author_user_id).await?
+                    {
+                        accounts.insert(account.user_id.clone(), account);
+                    }
+                    let mut ledger_entries = BTreeMap::new();
+                    for entry_id in [
+                        input.refund_ledger_entry_id.as_deref(),
+                        input.reward_ledger_entry_id.as_deref(),
+                    ]
+                    .into_iter()
+                    .flatten()
+                    {
+                        if let Some(entry) = credit_ledger_entry_by_id(&tx, entry_id).await? {
+                            ledger_entries.insert(entry.id.clone(), entry);
+                        }
+                    }
+
+                    let mutation = merge_request(
+                        &mut requests,
+                        &mut events,
+                        &mut accounts,
+                        &mut ledger_entries,
+                        input,
+                    )?;
+                    save_request_row(&tx, &mutation.request).await?;
+                    insert_request_event_row(&tx, &mutation.merged_event).await?;
+                    insert_request_event_row(&tx, &mutation.settled_event).await?;
+                    if let Some(account) = &mutation.account {
+                        save_credit_account_row(&tx, account).await?;
+                    }
+                    for entry in &mutation.ledger_entries {
+                        insert_credit_ledger_entry_row(&tx, entry).await?;
+                    }
+                    tx.commit().await.map_err(ApiError::internal)?;
+                    Ok(mutation)
+                })
+            }
+            #[cfg(any(test, feature = "memory-metadata"))]
+            MetadataStoreInner::Memory(_) => self.update(move |catalog| {
+                let request = catalog
+                    .requests
+                    .get(&input.request_id)
+                    .ok_or_else(|| ApiError::not_found("request not found"))?;
+                if !catalog.users.contains_key(&input.actor_user_id) {
+                    return Err(ApiError::not_found("user not found"));
+                }
+                let repo = catalog
+                    .repositories
+                    .get(&request.repo_id)
+                    .ok_or_else(|| ApiError::not_found("repo not found"))?;
+                ensure_request_maintainer(repo, &input.actor_user_id)?;
+                merge_request(
                     &mut catalog.requests,
                     &mut catalog.request_events,
                     &mut catalog.user_credit_accounts,
@@ -501,6 +658,7 @@ mod tests {
                 request_id: "req_1".to_string(),
                 actor_user_id: "user_public".to_string(),
                 new_head_oid: "head_2".to_string(),
+                git_snapshot: None,
                 event_id: "event_revision".to_string(),
                 body: None,
                 now_unix: 2,

@@ -1,9 +1,9 @@
-use crate::error::ApiError;
+use crate::{domain::store::SourceBlob, error::ApiError};
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
 
 const MAIN_BRANCH: &str = "main";
-const REQUEST_REF_PREFIX: &str = "refs/scope/requests/";
+pub const REQUEST_REF_PREFIX: &str = "refs/scope/requests/";
 const REPO_DELETE_REFUND_LEDGER_ENTRY_PREFIX: &str = "repo_delete_refund:";
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -63,6 +63,7 @@ pub struct Request {
     pub request_ref: String,
     pub base_main_oid: String,
     pub head_oid: String,
+    pub git_snapshot: Option<SourceBlob>,
     pub title: String,
     pub state: RequestState,
     pub stake_credits: u32,
@@ -170,6 +171,7 @@ pub struct RecordRequestRevisionInput {
     pub request_id: String,
     pub actor_user_id: String,
     pub new_head_oid: String,
+    pub git_snapshot: Option<SourceBlob>,
     pub event_id: String,
     pub body: Option<String>,
     pub now_unix: u64,
@@ -179,6 +181,7 @@ pub struct RecordRequestRevisionInput {
 pub struct RequestRevisionMutation {
     pub request: Request,
     pub event: RequestEvent,
+    pub source_blobs_to_delete: Vec<SourceBlob>,
 }
 
 #[derive(Clone, Debug)]
@@ -198,6 +201,30 @@ pub struct ResolveRequestInput {
 pub struct ResolveRequestMutation {
     pub request: Request,
     pub resolved_event: RequestEvent,
+    pub settled_event: RequestEvent,
+    pub account: Option<UserCreditAccount>,
+    pub ledger_entries: Vec<CreditLedgerEntry>,
+}
+
+#[derive(Clone, Debug)]
+pub struct MergeRequestInput {
+    pub request_id: String,
+    pub actor_user_id: String,
+    pub expected_main_oid: String,
+    pub current_main_oid: String,
+    pub expected_head_oid: String,
+    pub event_id: String,
+    pub settlement_event_id: String,
+    pub refund_ledger_entry_id: Option<String>,
+    pub reward_ledger_entry_id: Option<String>,
+    pub body: Option<String>,
+    pub now_unix: u64,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct MergeRequestMutation {
+    pub request: Request,
+    pub merged_event: RequestEvent,
     pub settled_event: RequestEvent,
     pub account: Option<UserCreditAccount>,
     pub ledger_entries: Vec<CreditLedgerEntry>,
@@ -306,6 +333,7 @@ pub fn submit_request(
         request_ref: input.request_ref,
         base_main_oid: input.base_main_oid,
         head_oid: input.head_oid.clone(),
+        git_snapshot: None,
         title: input.title,
         state: RequestState::Submitted,
         stake_credits: input.stake_credits,
@@ -370,7 +398,14 @@ pub fn record_request_revision(
     }
 
     let old_head_oid = request.head_oid.clone();
+    let old_git_snapshot = input
+        .git_snapshot
+        .as_ref()
+        .and_then(|_| request.git_snapshot.clone());
     request.head_oid = input.new_head_oid.clone();
+    if input.git_snapshot.is_some() {
+        request.git_snapshot = input.git_snapshot.clone();
+    }
     request.updated_at_unix = input.now_unix;
     if request.state == RequestState::NeedsResponse {
         request.state = RequestState::Submitted;
@@ -387,7 +422,11 @@ pub fn record_request_revision(
         created_at_unix: input.now_unix,
     };
     events.insert(event.id.clone(), event.clone());
-    Ok(RequestRevisionMutation { request, event })
+    Ok(RequestRevisionMutation {
+        request,
+        event,
+        source_blobs_to_delete: old_git_snapshot.into_iter().collect(),
+    })
 }
 
 pub fn resolve_request(
@@ -433,66 +472,17 @@ pub fn resolve_request(
     }
 
     let settlement = settlement_for(request.stake_credits, input.disposition, input.now_unix);
-    let mut new_ledger_entries = Vec::new();
-    let account = if request.stake_credits == 0 {
-        None
-    } else {
-        let account = accounts.get(&request.author_user_id).ok_or_else(|| {
-            ApiError::internal_message("request author credit account is missing")
-        })?;
-        let mut balance_credits = account.balance_credits;
-        let mut reserved_ledger_entry_ids = BTreeSet::new();
-        if settlement.refunded_credits > 0 {
-            let entry_id = input
-                .refund_ledger_entry_id
-                .clone()
-                .ok_or_else(|| ApiError::bad_request("refund ledger entry id is required"))?;
-            ensure_new_ledger_entry_id(ledger_entries, &mut reserved_ledger_entry_ids, &entry_id)?;
-            let amount_credits = u32_to_i32(settlement.refunded_credits)?;
-            balance_credits = balance_credits
-                .checked_add(settlement.refunded_credits)
-                .ok_or_else(|| ApiError::bad_request("credit balance overflow"))?;
-            u32_to_i32(balance_credits)?;
-            new_ledger_entries.push(CreditLedgerEntry {
-                id: entry_id,
-                user_id: request.author_user_id.clone(),
-                request_id: Some(request.id.clone()),
-                kind: CreditLedgerEntryKind::StakeRefund,
-                amount_credits,
-                created_at_unix: input.now_unix,
-            });
-        }
-        if settlement.reward_credits > 0 {
-            let entry_id = input
-                .reward_ledger_entry_id
-                .clone()
-                .ok_or_else(|| ApiError::bad_request("reward ledger entry id is required"))?;
-            ensure_new_ledger_entry_id(ledger_entries, &mut reserved_ledger_entry_ids, &entry_id)?;
-            let amount_credits = u32_to_i32(settlement.reward_credits)?;
-            balance_credits = balance_credits
-                .checked_add(settlement.reward_credits)
-                .ok_or_else(|| ApiError::bad_request("credit balance overflow"))?;
-            u32_to_i32(balance_credits)?;
-            new_ledger_entries.push(CreditLedgerEntry {
-                id: entry_id,
-                user_id: request.author_user_id.clone(),
-                request_id: Some(request.id.clone()),
-                kind: CreditLedgerEntryKind::RequestReward,
-                amount_credits,
-                created_at_unix: input.now_unix,
-            });
-        }
-        Some(UserCreditAccount {
-            user_id: account.user_id.clone(),
-            balance_credits,
-        })
-    };
-    if let Some(account) = &account {
-        accounts.insert(account.user_id.clone(), account.clone());
-    }
-    for entry in &new_ledger_entries {
-        ledger_entries.insert(entry.id.clone(), entry.clone());
-    }
+    let credit_mutation = settle_request_credits(
+        accounts,
+        ledger_entries,
+        request,
+        &settlement,
+        CreditSettlementIds {
+            refund_ledger_entry_id: input.refund_ledger_entry_id.clone(),
+            reward_ledger_entry_id: input.reward_ledger_entry_id.clone(),
+        },
+        input.now_unix,
+    )?;
 
     let request = requests
         .get_mut(&input.request_id)
@@ -531,8 +521,108 @@ pub fn resolve_request(
         request,
         resolved_event,
         settled_event,
-        account,
-        ledger_entries: new_ledger_entries,
+        account: credit_mutation.account,
+        ledger_entries: credit_mutation.ledger_entries,
+    })
+}
+
+pub fn merge_request(
+    requests: &mut BTreeMap<String, Request>,
+    events: &mut BTreeMap<String, RequestEvent>,
+    accounts: &mut BTreeMap<String, UserCreditAccount>,
+    ledger_entries: &mut BTreeMap<String, CreditLedgerEntry>,
+    input: MergeRequestInput,
+) -> Result<MergeRequestMutation, ApiError> {
+    validate_required_id("request id", &input.request_id)?;
+    validate_required_id("actor user id", &input.actor_user_id)?;
+    validate_required_id("expected main oid", &input.expected_main_oid)?;
+    validate_required_id("current main oid", &input.current_main_oid)?;
+    validate_required_id("expected head oid", &input.expected_head_oid)?;
+    validate_required_id("event id", &input.event_id)?;
+    validate_required_id("settlement event id", &input.settlement_event_id)?;
+    ensure_event_id_available(events, &input.event_id)?;
+    ensure_event_id_available(events, &input.settlement_event_id)?;
+    if input.event_id == input.settlement_event_id {
+        return Err(ApiError::bad_request("settlement event id must be unique"));
+    }
+    if input.expected_main_oid != input.current_main_oid {
+        return Err(ApiError::conflict("main changed since merge was confirmed"));
+    }
+
+    let request = requests
+        .get(&input.request_id)
+        .ok_or_else(|| ApiError::not_found("request not found"))?;
+    if matches!(
+        request.state,
+        RequestState::Resolved | RequestState::Withdrawn
+    ) {
+        return Err(ApiError::conflict("request is already closed"));
+    }
+    if request.settlement.is_some() {
+        return Err(ApiError::conflict("request is already settled"));
+    }
+    if request.head_oid != input.expected_head_oid {
+        return Err(ApiError::conflict(
+            "request changed since merge was confirmed",
+        ));
+    }
+
+    let settlement = settlement_for(
+        request.stake_credits,
+        RequestDisposition::Accepted,
+        input.now_unix,
+    );
+    let credit_mutation = settle_request_credits(
+        accounts,
+        ledger_entries,
+        request,
+        &settlement,
+        CreditSettlementIds {
+            refund_ledger_entry_id: input.refund_ledger_entry_id.clone(),
+            reward_ledger_entry_id: input.reward_ledger_entry_id.clone(),
+        },
+        input.now_unix,
+    )?;
+
+    let request = requests
+        .get_mut(&input.request_id)
+        .ok_or_else(|| ApiError::not_found("request not found"))?;
+    request.state = RequestState::Resolved;
+    request.disposition = Some(RequestDisposition::Accepted);
+    request.settlement = Some(settlement.clone());
+    request.updated_at_unix = input.now_unix;
+    request.resolved_at_unix = Some(input.now_unix);
+    let request = request.clone();
+
+    let merged_event = RequestEvent {
+        id: input.event_id,
+        request_id: request.id.clone(),
+        actor_user_id: input.actor_user_id.clone(),
+        kind: RequestEventKind::Merged,
+        body: input.body,
+        old_head_oid: None,
+        new_head_oid: Some(request.head_oid.clone()),
+        created_at_unix: input.now_unix,
+    };
+    let settled_event = RequestEvent {
+        id: input.settlement_event_id,
+        request_id: request.id.clone(),
+        actor_user_id: input.actor_user_id,
+        kind: RequestEventKind::Settled,
+        body: Some(settlement_event_body(&settlement)),
+        old_head_oid: None,
+        new_head_oid: None,
+        created_at_unix: input.now_unix,
+    };
+    events.insert(merged_event.id.clone(), merged_event.clone());
+    events.insert(settled_event.id.clone(), settled_event.clone());
+
+    Ok(MergeRequestMutation {
+        request,
+        merged_event,
+        settled_event,
+        account: credit_mutation.account,
+        ledger_entries: credit_mutation.ledger_entries,
     })
 }
 
@@ -681,6 +771,91 @@ fn settlement_event_body(settlement: &RequestSettlement) -> String {
         "refunded={} reward={} burned={}",
         settlement.refunded_credits, settlement.reward_credits, settlement.burned_credits
     )
+}
+
+struct CreditSettlementIds {
+    refund_ledger_entry_id: Option<String>,
+    reward_ledger_entry_id: Option<String>,
+}
+
+struct CreditSettlementMutation {
+    account: Option<UserCreditAccount>,
+    ledger_entries: Vec<CreditLedgerEntry>,
+}
+
+fn settle_request_credits(
+    accounts: &mut BTreeMap<String, UserCreditAccount>,
+    ledger_entries: &mut BTreeMap<String, CreditLedgerEntry>,
+    request: &Request,
+    settlement: &RequestSettlement,
+    ids: CreditSettlementIds,
+    now_unix: u64,
+) -> Result<CreditSettlementMutation, ApiError> {
+    let mut new_ledger_entries = Vec::new();
+    let account = if request.stake_credits == 0 {
+        None
+    } else {
+        let account = accounts.get(&request.author_user_id).ok_or_else(|| {
+            ApiError::internal_message("request author credit account is missing")
+        })?;
+        let mut balance_credits = account.balance_credits;
+        let mut reserved_ledger_entry_ids = BTreeSet::new();
+        if settlement.refunded_credits > 0 {
+            let entry_id = ids
+                .refund_ledger_entry_id
+                .clone()
+                .ok_or_else(|| ApiError::bad_request("refund ledger entry id is required"))?;
+            ensure_new_ledger_entry_id(ledger_entries, &mut reserved_ledger_entry_ids, &entry_id)?;
+            let amount_credits = u32_to_i32(settlement.refunded_credits)?;
+            balance_credits = balance_credits
+                .checked_add(settlement.refunded_credits)
+                .ok_or_else(|| ApiError::bad_request("credit balance overflow"))?;
+            u32_to_i32(balance_credits)?;
+            new_ledger_entries.push(CreditLedgerEntry {
+                id: entry_id,
+                user_id: request.author_user_id.clone(),
+                request_id: Some(request.id.clone()),
+                kind: CreditLedgerEntryKind::StakeRefund,
+                amount_credits,
+                created_at_unix: now_unix,
+            });
+        }
+        if settlement.reward_credits > 0 {
+            let entry_id = ids
+                .reward_ledger_entry_id
+                .clone()
+                .ok_or_else(|| ApiError::bad_request("reward ledger entry id is required"))?;
+            ensure_new_ledger_entry_id(ledger_entries, &mut reserved_ledger_entry_ids, &entry_id)?;
+            let amount_credits = u32_to_i32(settlement.reward_credits)?;
+            balance_credits = balance_credits
+                .checked_add(settlement.reward_credits)
+                .ok_or_else(|| ApiError::bad_request("credit balance overflow"))?;
+            u32_to_i32(balance_credits)?;
+            new_ledger_entries.push(CreditLedgerEntry {
+                id: entry_id,
+                user_id: request.author_user_id.clone(),
+                request_id: Some(request.id.clone()),
+                kind: CreditLedgerEntryKind::RequestReward,
+                amount_credits,
+                created_at_unix: now_unix,
+            });
+        }
+        Some(UserCreditAccount {
+            user_id: account.user_id.clone(),
+            balance_credits,
+        })
+    };
+    if let Some(account) = &account {
+        accounts.insert(account.user_id.clone(), account.clone());
+    }
+    for entry in &new_ledger_entries {
+        ledger_entries.insert(entry.id.clone(), entry.clone());
+    }
+
+    Ok(CreditSettlementMutation {
+        account,
+        ledger_entries: new_ledger_entries,
+    })
 }
 
 fn u32_to_i32(value: u32) -> Result<i32, ApiError> {

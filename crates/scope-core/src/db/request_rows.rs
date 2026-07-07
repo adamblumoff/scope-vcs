@@ -122,6 +122,26 @@ where
         .collect()
 }
 
+pub async fn requests_by_repo_author<C>(
+    conn: &C,
+    repo_id: &str,
+    author_user_id: &str,
+) -> Result<Vec<Request>, ApiError>
+where
+    C: ConnectionTrait,
+{
+    entities::request::Entity::find()
+        .filter(entities::request::Column::RepoId.eq(repo_id.to_string()))
+        .filter(entities::request::Column::AuthorUserId.eq(author_user_id.to_string()))
+        .order_by_asc(entities::request::Column::Id)
+        .all(conn)
+        .await
+        .map_err(ApiError::internal)?
+        .into_iter()
+        .map(entities::request::Model::try_into_domain)
+        .collect()
+}
+
 pub async fn request_event_by_id<C>(
     conn: &C,
     event_id: &str,
@@ -221,6 +241,10 @@ where
         .col_expr(
             entities::request::Column::HeadOid,
             Expr::value(row.head_oid),
+        )
+        .col_expr(
+            entities::request::Column::GitSnapshot,
+            Expr::value(row.git_snapshot),
         )
         .col_expr(entities::request::Column::State, Expr::value(row.state))
         .col_expr(

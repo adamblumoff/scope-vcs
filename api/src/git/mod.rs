@@ -1,5 +1,6 @@
 mod credentials;
 pub(crate) mod import;
+pub(crate) mod request_refs;
 pub(crate) mod storage;
 pub(crate) mod upload;
 
@@ -12,8 +13,13 @@ use crate::{
     error::ApiError,
     git::{
         import::{
-            git_refs, persist_receive_pack_update_and_promote,
-            receive_pack_update_from_staging_repo, reviewed_update_from_staging_repo,
+            persist_receive_pack_update_and_promote, receive_pack_update_from_staging_repo,
+            reviewed_update_from_staging_repo,
+        },
+        request_refs::{
+            author_has_open_request, ensure_request_receive_pack_staging_repo,
+            non_request_refs_changed, persist_request_ref_revision, receive_pack_refs,
+            request_ref_update_from_refs, seed_author_request_refs,
         },
         storage::*,
         upload::*,
@@ -48,6 +54,9 @@ pub(crate) enum ReceivePackAccess {
     PublishedMember {
         author_id: String,
         push_intent: ValidatedPushIntent,
+    },
+    RequestAuthor {
+        author_id: String,
     },
 }
 
@@ -287,10 +296,14 @@ pub(crate) async fn receive_pack_access(
     repo_name: &str,
 ) -> Result<ReceivePackAccess, ApiError> {
     let authorization = receive_pack_authorization(state, headers).await?;
-    let push_intent = state.validate_push_intent_secret(&push_intent_from_headers(headers)?)?;
+    let push_intent = optional_push_intent_from_headers(headers)?
+        .map(|secret| state.validate_push_intent_secret(&secret))
+        .transpose()?;
 
     match authorization {
         ReceivePackAuthorization::ScopeToken { secret } => {
+            let push_intent = push_intent
+                .ok_or_else(|| ApiError::forbidden("valid Scope push intent required"))?;
             let repo = find_repo_after_git_scope_token(state, owner, repo_name)?;
             let credential = if secret.starts_with(GIT_PUSH_TOKEN_PREFIX) {
                 InitialPushCredential::GitPushToken { secret }
@@ -344,6 +357,8 @@ pub(crate) async fn receive_pack_access(
                         "repo {owner}/{repo_name} not found"
                     )));
                 }
+                let push_intent = push_intent
+                    .ok_or_else(|| ApiError::forbidden("valid Scope push intent required"))?;
                 push_intent.ensure_repo_user(&repo.record.id, &author_id)?;
                 return Ok(ReceivePackAccess::FirstPush {
                     author_id,
@@ -361,6 +376,11 @@ pub(crate) async fn receive_pack_access(
                 ));
             }
             if !access.can_push {
+                if repo.record.publication_state == RepoPublicationState::Published
+                    && author_has_open_request(state, &repo.record.id, &author_id, access.actor)?
+                {
+                    return Ok(ReceivePackAccess::RequestAuthor { author_id });
+                }
                 return Err(ApiError::not_found(format!(
                     "repo {owner}/{repo_name} not found"
                 )));
@@ -370,20 +390,31 @@ pub(crate) async fn receive_pack_access(
                     "repo is waiting for publish and cannot receive another push",
                 )),
                 RepoPublicationState::Published => {
-                    push_intent.ensure_repo_user(&repo.record.id, &author_id)?;
-                    Ok(ReceivePackAccess::PublishedMember {
-                        author_id,
-                        push_intent,
-                    })
+                    if let Some(push_intent) = push_intent {
+                        push_intent.ensure_repo_user(&repo.record.id, &author_id)?;
+                        Ok(ReceivePackAccess::PublishedMember {
+                            author_id,
+                            push_intent,
+                        })
+                    } else if author_has_open_request(
+                        state,
+                        &repo.record.id,
+                        &author_id,
+                        access.actor,
+                    )? {
+                        Ok(ReceivePackAccess::RequestAuthor { author_id })
+                    } else {
+                        Err(ApiError::forbidden("valid Scope push intent required"))
+                    }
                 }
             }
         }
     }
 }
 
-fn push_intent_from_headers(headers: &HeaderMap) -> Result<String, ApiError> {
+fn optional_push_intent_from_headers(headers: &HeaderMap) -> Result<Option<String>, ApiError> {
     let Some(value) = headers.get(PUSH_INTENT_HEADER) else {
-        return Err(ApiError::forbidden("valid Scope push intent required"));
+        return Ok(None);
     };
     let value = value
         .to_str()
@@ -392,7 +423,7 @@ fn push_intent_from_headers(headers: &HeaderMap) -> Result<String, ApiError> {
     if value.is_empty() {
         Err(ApiError::forbidden("valid Scope push intent required"))
     } else {
-        Ok(value.to_string())
+        Ok(Some(value.to_string()))
     }
 }
 
@@ -412,14 +443,25 @@ pub(crate) fn handle_git_receive_pack(
         ReceivePackAccess::PublishedMember { author_id, .. } => {
             ensure_published_receive_pack_staging_repo(state, owner, repo_name, author_id)?
         }
+        ReceivePackAccess::RequestAuthor { author_id } => {
+            ensure_request_receive_pack_staging_repo(state, owner, repo_name, author_id)?
+        }
     };
+    if let ReceivePackAccess::PublishedMember { author_id, .. } = &access
+        && let Err(error) =
+            seed_author_request_refs(state, owner, repo_name, author_id, &staging_repo)
+    {
+        let _ = fs::remove_dir_all(&staging_repo);
+        return Err(error);
+    }
     let remote_user = match &access {
         ReceivePackAccess::FirstPush { author_id, .. } => author_id.as_str(),
         ReceivePackAccess::PublishedMember { author_id, .. } => author_id.as_str(),
+        ReceivePackAccess::RequestAuthor { author_id } => author_id.as_str(),
     };
     let receive_started_at = Instant::now();
     let refs_before_receive = if method == "POST" {
-        match git_refs(&staging_repo) {
+        match receive_pack_refs(&staging_repo) {
             Ok(refs) => Some(refs),
             Err(error) => {
                 let _ = fs::remove_dir_all(&staging_repo);
@@ -455,7 +497,7 @@ pub(crate) fn handle_git_receive_pack(
     let receive_elapsed = receive_started_at.elapsed();
 
     if method == "POST" && cgi.status.is_success() {
-        let refs_after_receive = match git_refs(&staging_repo) {
+        let refs_after_receive = match receive_pack_refs(&staging_repo) {
             Ok(refs) => refs,
             Err(error) => {
                 let _ = fs::remove_dir_all(&staging_repo);
@@ -473,7 +515,75 @@ pub(crate) fn handle_git_receive_pack(
             return Ok(cgi.into_response());
         }
 
+        let request_ref_update = match refs_before_receive
+            .as_ref()
+            .map(|refs_before| request_ref_update_from_refs(refs_before, &refs_after_receive))
+            .transpose()
+        {
+            Ok(update) => update.flatten(),
+            Err(error) => {
+                let _ = fs::remove_dir_all(&staging_repo);
+                return Err(error);
+            }
+        };
+        if let Some(request_ref_update) = request_ref_update {
+            let Some(refs_before) = refs_before_receive.as_ref() else {
+                let _ = fs::remove_dir_all(&staging_repo);
+                return Err(ApiError::internal_message(
+                    "missing refs before receive-pack",
+                ));
+            };
+            if non_request_refs_changed(refs_before, &refs_after_receive) {
+                let _ = fs::remove_dir_all(&staging_repo);
+                return Err(ApiError::bad_request(
+                    "Scope accepts either one request ref update or one main update",
+                ));
+            }
+            let author_id = match &access {
+                ReceivePackAccess::FirstPush { .. } => {
+                    let _ = fs::remove_dir_all(&staging_repo);
+                    return Err(ApiError::bad_request(
+                        "request refs cannot be pushed during first push",
+                    ));
+                }
+                ReceivePackAccess::PublishedMember { author_id, .. }
+                | ReceivePackAccess::RequestAuthor { author_id } => author_id,
+            };
+            if let Err(error) = persist_request_ref_revision(
+                state,
+                owner,
+                repo_name,
+                author_id,
+                &staging_repo,
+                request_ref_update,
+            ) {
+                let _ = fs::remove_dir_all(&staging_repo);
+                return Err(error);
+            }
+            tracing::info!(
+                owner,
+                repo = repo_name,
+                receive_ms = receive_elapsed.as_millis(),
+                "git receive-pack request ref persisted"
+            );
+            let _ = fs::remove_dir_all(&staging_repo);
+            return Ok(cgi.into_response());
+        }
+
+        if matches!(&access, ReceivePackAccess::RequestAuthor { .. }) {
+            let _ = fs::remove_dir_all(&staging_repo);
+            return Err(ApiError::bad_request(
+                "request authors can only push request refs",
+            ));
+        }
+
         match access {
+            ReceivePackAccess::RequestAuthor { .. } => {
+                let _ = fs::remove_dir_all(&staging_repo);
+                return Err(ApiError::bad_request(
+                    "request authors can only push request refs",
+                ));
+            }
             ReceivePackAccess::FirstPush {
                 author_id,
                 push_intent,
