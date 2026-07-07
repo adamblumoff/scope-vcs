@@ -194,7 +194,11 @@ fn delete_request_ref_locks(
         let entry = entry.map_err(ApiError::internal)?;
         let file_name = entry.file_name();
         if file_name.to_string_lossy().starts_with(&prefix) {
-            fs::remove_file(entry.path()).map_err(ApiError::internal)?;
+            match fs::remove_file(entry.path()) {
+                Ok(()) => {}
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+                Err(error) => return Err(ApiError::internal(error)),
+            }
         }
     }
     Ok(())

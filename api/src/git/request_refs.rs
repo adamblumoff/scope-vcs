@@ -711,7 +711,16 @@ fn process_is_alive(pid: u32) -> bool {
     PathBuf::from(format!("/proc/{pid}")).exists()
 }
 
-#[cfg(not(target_os = "linux"))]
+#[cfg(all(unix, not(target_os = "linux")))]
+fn process_is_alive(pid: u32) -> bool {
+    std::process::Command::new("kill")
+        .arg("-0")
+        .arg(pid.to_string())
+        .status()
+        .is_ok_and(|status| status.success())
+}
+
+#[cfg(not(unix))]
 fn process_is_alive(_pid: u32) -> bool {
     true
 }
@@ -744,19 +753,6 @@ fn request_revision_event_id() -> Result<String, ApiError> {
         ))
     })?;
     Ok(format!("event_request_revision_{}", hex::encode(bytes)))
-}
-
-#[allow(dead_code)]
-fn remove_request_ref_store_for_tests(
-    state: &AppState,
-    owner: &str,
-    repo_name: &str,
-) -> Result<(), ApiError> {
-    let store_repo = request_ref_store_repo_path(state, owner, repo_name);
-    if store_repo.exists() {
-        fs::remove_dir_all(store_repo).map_err(ApiError::internal)?;
-    }
-    Ok(())
 }
 
 #[cfg(test)]
