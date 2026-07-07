@@ -26,6 +26,8 @@ mod repo_mutation;
 mod repo_reads;
 mod repo_settings;
 mod repository_rows;
+mod request_rows;
+mod requests;
 mod runtime;
 mod schema;
 mod schema_contract;
@@ -50,6 +52,7 @@ pub use repo_collaboration::CreateRepositoryInviteMutation;
 pub use repo_mutation::RepositoryMutation;
 pub use repo_reads::{RepoSettingsRead, RepoSummaryRead};
 use repository_rows::load_repository_facts;
+use request_rows::load_request_catalog_rows;
 use runtime::DbRuntime;
 use runtime::{run_api_db_on, run_db_on};
 use sea_orm::{
@@ -515,9 +518,15 @@ where
         })
         .collect::<Result<_, ApiError>>()?;
 
+    let request_rows = load_request_catalog_rows(conn).await?;
+
     Ok(AppCatalog {
         users,
         repositories,
+        requests: request_rows.requests,
+        request_events: request_rows.request_events,
+        user_credit_accounts: request_rows.user_credit_accounts,
+        credit_ledger_entries: request_rows.credit_ledger_entries,
         pending_repo_storage_deletions,
         pending_source_blob_deletions,
     })

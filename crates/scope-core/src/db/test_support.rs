@@ -3,6 +3,10 @@ use super::{
     cleanup_queue::{save_pending_repo_storage_deletions, save_pending_source_blob_deletions},
     ensure_metadata_lock_row, entities,
     repository_rows::insert_repository,
+    request_rows::{
+        insert_credit_ledger_entry_row, insert_request_event_row, insert_request_row,
+        save_credit_account_row,
+    },
     run_api_db_on, run_db_on, schema,
 };
 use crate::{domain::store::AppCatalog, error::ApiError};
@@ -95,6 +99,18 @@ impl MetadataStore {
                     }
                     for repo in catalog.repositories.values() {
                         insert_repository(&tx, repo).await?;
+                    }
+                    for request in catalog.requests.values() {
+                        insert_request_row(&tx, request).await?;
+                    }
+                    for event in catalog.request_events.values() {
+                        insert_request_event_row(&tx, event).await?;
+                    }
+                    for account in catalog.user_credit_accounts.values() {
+                        save_credit_account_row(&tx, account).await?;
+                    }
+                    for entry in catalog.credit_ledger_entries.values() {
+                        insert_credit_ledger_entry_row(&tx, entry).await?;
                     }
                     save_pending_repo_storage_deletions(
                         &tx,

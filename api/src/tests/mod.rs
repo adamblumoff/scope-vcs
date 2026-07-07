@@ -201,6 +201,10 @@ fn test_state_with_repo() -> AppState {
         metadata: crate::db::MetadataStore::memory(AppCatalog {
             users: BTreeMap::from([(owner.id.clone(), owner)]),
             repositories: BTreeMap::from([(repo.record.id.clone(), repo)]),
+            requests: BTreeMap::new(),
+            request_events: BTreeMap::new(),
+            user_credit_accounts: BTreeMap::new(),
+            credit_ledger_entries: BTreeMap::new(),
             pending_repo_storage_deletions: Vec::new(),
             pending_source_blob_deletions: Vec::new(),
         }),

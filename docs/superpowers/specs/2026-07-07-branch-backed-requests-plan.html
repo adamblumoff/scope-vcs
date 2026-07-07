@@ -1,0 +1,1438 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Branch-Backed Requests Plan</title>
+    <style>
+      :root {
+        color-scheme: light;
+        --page: #f6f5ef;
+        --surface: #fffefa;
+        --ink: #171717;
+        --muted: #5f645f;
+        --line: #d2ccbb;
+        --strong-line: #171717;
+        --accent: #0f766e;
+        --accent-2: #245b8f;
+        --accent-3: #7a4b14;
+        --danger: #9a2f25;
+        --good: #126c57;
+        --code: #171a1f;
+        --code-ink: #f3f7f2;
+      }
+
+      * {
+        box-sizing: border-box;
+      }
+
+      html {
+        scroll-behavior: smooth;
+      }
+
+      body {
+        margin: 0;
+        background:
+          linear-gradient(90deg, rgba(23, 23, 23, 0.035) 1px, transparent 1px)
+            0 0 / 32px 32px,
+          linear-gradient(rgba(23, 23, 23, 0.03) 1px, transparent 1px) 0 0 /
+            32px 32px,
+          var(--page);
+        color: var(--ink);
+        font-family:
+          Inter, "Avenir Next", "Segoe UI", system-ui, -apple-system,
+          BlinkMacSystemFont, sans-serif;
+        font-size: 16px;
+        line-height: 1.58;
+      }
+
+      a {
+        color: var(--accent-2);
+        text-decoration-color: rgba(36, 91, 143, 0.34);
+        text-underline-offset: 0.18em;
+      }
+
+      code,
+      pre,
+      .mono {
+        font-family:
+          "Cascadia Mono", "SFMono-Regular", Consolas, ui-monospace,
+          monospace;
+      }
+
+      code {
+        font-size: 0.92em;
+      }
+
+      pre {
+        margin: 0;
+        overflow-x: auto;
+        white-space: pre;
+      }
+
+      p {
+        max-width: 900px;
+        margin: 0;
+        color: var(--muted);
+      }
+
+      ul,
+      ol {
+        margin: 12px 0 0;
+        padding-left: 1.2rem;
+        color: var(--muted);
+      }
+
+      li {
+        margin: 0.42rem 0;
+      }
+
+      h1,
+      h2,
+      h3,
+      h4 {
+        margin: 0;
+        letter-spacing: 0;
+      }
+
+      h1 {
+        max-width: 1080px;
+        font-size: clamp(2.7rem, 6.4vw, 6.15rem);
+        font-weight: 900;
+        line-height: 0.96;
+      }
+
+      h2 {
+        font-size: clamp(1.7rem, 3.1vw, 2.9rem);
+        font-weight: 860;
+        line-height: 1.06;
+      }
+
+      h3 {
+        font-size: 1.06rem;
+        font-weight: 830;
+      }
+
+      h4 {
+        font-size: 0.86rem;
+        font-weight: 850;
+        letter-spacing: 0.08em;
+        text-transform: uppercase;
+      }
+
+      .wrap {
+        width: min(1180px, calc(100vw - 48px));
+        margin: 0 auto;
+      }
+
+      .topbar {
+        position: sticky;
+        top: 0;
+        z-index: 20;
+        border-bottom: 1px solid var(--line);
+        background: rgba(246, 245, 239, 0.96);
+      }
+
+      .topbar .wrap {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 24px;
+        padding: 12px 0;
+      }
+
+      .brand {
+        font-size: 0.78rem;
+        font-weight: 850;
+        letter-spacing: 0.08em;
+        text-transform: uppercase;
+      }
+
+      .topbar nav {
+        display: flex;
+        flex-wrap: wrap;
+        justify-content: flex-end;
+        gap: 10px 16px;
+        font-size: 0.84rem;
+      }
+
+      .topbar nav a {
+        color: var(--muted);
+        text-decoration: none;
+      }
+
+      .topbar nav a:hover {
+        color: var(--accent);
+      }
+
+      header.hero {
+        border-bottom: 3px solid var(--strong-line);
+        padding: 62px 0 42px;
+      }
+
+      .eyebrow {
+        margin-bottom: 14px;
+        color: var(--accent);
+        font-size: 0.78rem;
+        font-weight: 850;
+        letter-spacing: 0.11em;
+        text-transform: uppercase;
+      }
+
+      .subtitle {
+        margin-top: 20px;
+        font-size: 1.14rem;
+      }
+
+      .header-grid {
+        display: grid;
+        grid-template-columns: minmax(0, 1fr) minmax(280px, 380px);
+        gap: 42px;
+        align-items: end;
+        margin-top: 30px;
+      }
+
+      .thesis {
+        border-left: 4px solid var(--accent-2);
+        padding: 8px 0 8px 18px;
+      }
+
+      .meta {
+        border-left: 3px solid var(--accent);
+        padding: 8px 0 10px 20px;
+      }
+
+      .meta p {
+        margin-bottom: 12px;
+        font-size: 0.94rem;
+      }
+
+      .meta strong {
+        display: inline-block;
+        min-width: 86px;
+        color: var(--ink);
+      }
+
+      main {
+        padding: 34px 0 80px;
+      }
+
+      section {
+        border-top: 1px solid var(--line);
+        padding: 40px 0 46px;
+      }
+
+      section:first-child {
+        border-top: 0;
+        padding-top: 0;
+      }
+
+      .lead {
+        margin-top: 12px;
+        font-size: 1.06rem;
+      }
+
+      .split {
+        display: grid;
+        grid-template-columns: minmax(0, 1fr) minmax(300px, 420px);
+        gap: 32px;
+        align-items: start;
+        margin-top: 24px;
+      }
+
+      .band {
+        display: grid;
+        grid-template-columns: repeat(4, minmax(0, 1fr));
+        border-top: 2px solid var(--strong-line);
+        border-bottom: 2px solid var(--strong-line);
+        margin-top: 24px;
+      }
+
+      .band-item {
+        min-height: 166px;
+        border-right: 1px solid var(--line);
+        padding: 18px 16px 20px;
+      }
+
+      .band-item:last-child {
+        border-right: 0;
+      }
+
+      .band-item h3,
+      .phase h3,
+      .rule h3,
+      .cell h3 {
+        margin-bottom: 8px;
+      }
+
+      .tag {
+        display: inline-flex;
+        align-items: center;
+        border: 1px solid var(--line);
+        border-radius: 999px;
+        padding: 0.16rem 0.54rem;
+        color: var(--muted);
+        font-size: 0.78rem;
+        font-weight: 760;
+        white-space: nowrap;
+      }
+
+      .tag.good {
+        border-color: rgba(18, 108, 87, 0.32);
+        color: var(--good);
+      }
+
+      .tag.warn {
+        border-color: rgba(122, 75, 20, 0.32);
+        color: var(--accent-3);
+      }
+
+      .tag.hot {
+        border-color: rgba(154, 47, 37, 0.32);
+        color: var(--danger);
+      }
+
+      .rules {
+        display: grid;
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+        gap: 0;
+        border-top: 2px solid var(--strong-line);
+        border-bottom: 2px solid var(--strong-line);
+        margin-top: 24px;
+      }
+
+      .rule {
+        min-height: 150px;
+        border-right: 1px solid var(--line);
+        border-bottom: 1px solid var(--line);
+        padding: 18px;
+      }
+
+      .rule:nth-child(2n) {
+        border-right: 0;
+      }
+
+      .rule:nth-last-child(-n + 2) {
+        border-bottom: 0;
+      }
+
+      .flow {
+        display: grid;
+        grid-template-columns: repeat(6, minmax(0, 1fr));
+        border-top: 2px solid var(--strong-line);
+        border-bottom: 2px solid var(--strong-line);
+        margin-top: 26px;
+      }
+
+      .flow-step {
+        min-height: 174px;
+        border-right: 1px solid var(--line);
+        padding: 16px 14px 18px;
+      }
+
+      .flow-step:last-child {
+        border-right: 0;
+      }
+
+      .num {
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        width: 2rem;
+        height: 2rem;
+        margin-bottom: 12px;
+        border-radius: 50%;
+        background: var(--ink);
+        color: #fff;
+        font-weight: 850;
+      }
+
+      .phase-list {
+        display: grid;
+        gap: 18px;
+        margin-top: 26px;
+      }
+
+      .phase {
+        display: grid;
+        grid-template-columns: 160px minmax(0, 1fr);
+        gap: 24px;
+        border-top: 2px solid var(--strong-line);
+        padding-top: 20px;
+      }
+
+      .phase:last-child {
+        border-bottom: 2px solid var(--strong-line);
+        padding-bottom: 20px;
+      }
+
+      .phase-title {
+        display: flex;
+        flex-direction: column;
+        gap: 10px;
+      }
+
+      .steps {
+        display: grid;
+        gap: 12px;
+      }
+
+      .step {
+        display: grid;
+        grid-template-columns: 90px minmax(0, 1fr);
+        gap: 18px;
+        border-top: 1px solid var(--line);
+        padding-top: 12px;
+      }
+
+      .step:first-child {
+        border-top: 0;
+        padding-top: 0;
+      }
+
+      .step-id {
+        color: var(--accent-2);
+        font-size: 0.82rem;
+        font-weight: 850;
+        letter-spacing: 0.08em;
+        text-transform: uppercase;
+      }
+
+      .grid-3 {
+        display: grid;
+        grid-template-columns: repeat(3, minmax(0, 1fr));
+        gap: 0;
+        border-top: 2px solid var(--strong-line);
+        border-bottom: 2px solid var(--strong-line);
+        margin-top: 24px;
+      }
+
+      .cell {
+        min-height: 176px;
+        border-right: 1px solid var(--line);
+        padding: 18px;
+      }
+
+      .cell:last-child {
+        border-right: 0;
+      }
+
+      .codeblock {
+        margin-top: 18px;
+        border-radius: 0;
+        background: var(--code);
+        color: var(--code-ink);
+        padding: 18px;
+      }
+
+      .codeblock code {
+        font-size: 0.9rem;
+      }
+
+      table {
+        width: 100%;
+        border-collapse: collapse;
+        margin-top: 22px;
+        border-top: 2px solid var(--strong-line);
+        border-bottom: 2px solid var(--strong-line);
+      }
+
+      th,
+      td {
+        border-bottom: 1px solid var(--line);
+        padding: 13px 12px;
+        text-align: left;
+        vertical-align: top;
+      }
+
+      th {
+        color: var(--ink);
+        font-size: 0.76rem;
+        font-weight: 850;
+        letter-spacing: 0.08em;
+        text-transform: uppercase;
+      }
+
+      tr:last-child td {
+        border-bottom: 0;
+      }
+
+      footer {
+        border-top: 3px solid var(--strong-line);
+        padding: 28px 0 56px;
+      }
+
+      @media (max-width: 980px) {
+        .topbar {
+          position: static;
+        }
+
+        .header-grid,
+        .split,
+        .phase,
+        .step {
+          grid-template-columns: 1fr;
+        }
+
+        .band,
+        .flow,
+        .grid-3 {
+          grid-template-columns: 1fr;
+        }
+
+        .rules {
+          grid-template-columns: 1fr;
+        }
+
+        .band-item,
+        .flow-step,
+        .cell,
+        .rule,
+        .rule:nth-child(2n) {
+          border-right: 0;
+          border-bottom: 1px solid var(--line);
+        }
+
+        .band-item:last-child,
+        .flow-step:last-child,
+        .cell:last-child,
+        .rule:last-child {
+          border-bottom: 0;
+        }
+
+        .rule:nth-last-child(2) {
+          border-bottom: 1px solid var(--line);
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <div class="topbar">
+      <div class="wrap">
+        <div class="brand">Scope VCS requests plan</div>
+        <nav aria-label="Page sections">
+          <a href="#thesis">Thesis</a>
+          <a href="#domain">Domain</a>
+          <a href="#git">Git</a>
+          <a href="#api">API</a>
+          <a href="#cli">CLI</a>
+          <a href="#web">Web</a>
+          <a href="#settlement">Settlement</a>
+          <a href="#phases">Phases</a>
+          <a href="#deletions">Deletions</a>
+        </nav>
+      </div>
+    </div>
+
+    <header class="hero">
+      <div class="wrap">
+        <p class="eyebrow">Approved product direction</p>
+        <h1>Branch-backed Requests with credit-staked public submissions</h1>
+        <p class="subtitle">
+          Build the Requests system from the branch workflow outward: durable
+          request records, server-owned request refs, CLI-first branch writes,
+          web-visible review timelines, clean web merge, and deterministic
+          credit settlement for public contributors.
+        </p>
+        <div class="header-grid">
+          <div class="thesis">
+            <p>
+              The first version intentionally supports only branch-backed
+              Requests. Text-only issues, feature proposals, bounties, ratings,
+              direct credit purchases, maintainer reputation, and browser-based
+              conflict resolution are deferred until the branch and settlement
+              foundation is boring.
+            </p>
+          </div>
+          <aside class="meta" aria-label="Plan metadata">
+            <p><strong>Prepared</strong> 2026-07-07</p>
+            <p>
+              <strong>Linear</strong>
+              <a
+                href="https://linear.app/scope-vcs/project/branch-backed-requests-339fcabb5b28"
+                >Branch-Backed Requests</a
+              >
+            </p>
+            <p>
+              <strong>Doc</strong>
+              <a
+                href="https://linear.app/scope-vcs/document/branch-backed-requests-plan-bbe609dbdd0b"
+                >Linear plan summary</a
+              >
+            </p>
+            <p><strong>Issues</strong> ADA-47 through ADA-64</p>
+            <p><strong>Scope</strong> Data/API model, CLI UX, web request workflow</p>
+            <p><strong>Non-goal</strong> Backwards compatibility with staged update review</p>
+          </aside>
+        </div>
+      </div>
+    </header>
+
+    <main class="wrap">
+      <section id="thesis">
+        <h2>Thesis</h2>
+        <p class="lead">
+          A Request is the maintainer-facing economic object. In v1 every
+          Request is backed by a branch-like server ref. Public contributors
+          stake credits when submitting; owners and members may create Requests
+          without participating in the credit economy. Public users can never
+          push main. Owners and members can update main, including through a
+          clean web merge action.
+        </p>
+
+        <div class="band" aria-label="Core plan summary">
+          <div class="band-item">
+            <span class="tag good">Object</span>
+            <h3>Request</h3>
+            <p>
+              One durable domain object owns lifecycle, base projection, request
+              ref, current head, stake, disposition, and settlement facts.
+            </p>
+          </div>
+          <div class="band-item">
+            <span class="tag good">Git</span>
+            <h3>Request ref</h3>
+            <p>
+              Submitted code lives under a server-owned ref such as
+              <code>refs/scope/requests/req_123</code>, not on main.
+            </p>
+          </div>
+          <div class="band-item">
+            <span class="tag warn">Economy</span>
+            <h3>Stake once</h3>
+            <p>
+              Public contributors pay stake on first submit only. Updates to
+              the same Request are free until the Request is resolved or
+              withdrawn.
+            </p>
+          </div>
+          <div class="band-item">
+            <span class="tag hot">Boundary</span>
+            <h3>No leakage</h3>
+            <p>
+              Public Requests are based on public main. Private files, private
+              history, and private conflicts must not leak to public authors.
+            </p>
+          </div>
+        </div>
+      </section>
+
+      <section id="non-negotiables">
+        <h2>Non-Negotiable Rules</h2>
+        <p class="lead">
+          These rules drive the data model and should be enforced in
+          <code>scope-core</code>, with HTTP, CLI, and web acting as delivery
+          adapters.
+        </p>
+
+        <div class="rules">
+          <div class="rule">
+            <h3>Public users never push main</h3>
+            <p>
+              Public contributors may create and update request refs. Main is
+              updated only by owner/member actions.
+            </p>
+          </div>
+          <div class="rule">
+            <h3>Base projection follows auth</h3>
+            <p>
+              <code>scope request start</code> authenticates. Public users start
+              from public main; members and owners start from private main.
+            </p>
+          </div>
+          <div class="rule">
+            <h3>Web can mutate workflow</h3>
+            <p>
+              Web may comment, ask for response, resolve, and clean-merge a
+              Request. It is not a general Git push surface.
+            </p>
+          </div>
+          <div class="rule">
+            <h3>Clean merge only</h3>
+            <p>
+              Browser merge succeeds only when the backend can cleanly merge the
+              request head into the confirmed current main.
+            </p>
+          </div>
+          <div class="rule">
+            <h3>Abandonment requires contributor turn</h3>
+            <p>
+              A contributor can be penalized only after the Request is waiting
+              on them. Maintainer silence cannot burn contributor stake.
+            </p>
+          </div>
+          <div class="rule">
+            <h3>Settlement is deterministic</h3>
+            <p>
+              Maintainers pick dispositions. Domain code maps dispositions to
+              refund, reward, partial refund, or burn.
+            </p>
+          </div>
+        </div>
+      </section>
+
+      <section id="domain">
+        <h2>Domain Model</h2>
+        <p class="lead">
+          Put the core model under <code>crates/scope-core/src/domain</code>.
+          The API layer should validate transport and auth, then call domain
+          commands. Persistence should store typed request and ledger facts
+          rather than hiding the economy in one mutable user row.
+        </p>
+
+        <div class="codeblock">
+          <pre><code>Request
+  id: RequestId
+  repo_id: RepoId
+  author_user_id: UserId
+  author_access_at_creation: Public | Member | Owner
+  base_audience: Public | Private
+  target_branch: "main"
+  request_ref: "refs/scope/requests/{request_id}"
+  base_main_oid: GitOid
+  head_oid: GitOid
+  title: String
+  state: Submitted | NeedsResponse | Resolved | Withdrawn
+  stake_credits: u32
+  disposition: Option&lt;RequestDisposition&gt;
+  settlement: Option&lt;RequestSettlement&gt;
+  created_at_unix: u64
+  updated_at_unix: u64
+  resolved_at_unix: Option&lt;u64&gt;
+
+RequestEvent
+  id: RequestEventId
+  request_id: RequestId
+  actor_user_id: UserId
+  kind: Created | RevisionPushed | Commented | NeedsResponse |
+        ContributorResponded | Merged | Resolved | Settled | Withdrawn
+  body: Option&lt;String&gt;
+  old_head_oid: Option&lt;GitOid&gt;
+  new_head_oid: Option&lt;GitOid&gt;
+  created_at_unix: u64
+
+UserCreditAccount
+  user_id: UserId
+  balance_credits: u32
+
+CreditLedgerEntry
+  id: CreditLedgerEntryId
+  user_id: UserId
+  request_id: Option&lt;RequestId&gt;
+  kind: StarterGrant | RequestStakeDebit | StakeRefund |
+        RequestReward | AdminAdjustment
+  amount_credits: i32
+  created_at_unix: u64</code></pre>
+        </div>
+
+        <table aria-label="Request states">
+          <thead>
+            <tr>
+              <th>State</th>
+              <th>Meaning</th>
+              <th>Allowed transitions</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td><code>Submitted</code></td>
+              <td>
+                Request is open. The author can push new revisions. Maintainers
+                can comment, ask for response, resolve, or merge.
+              </td>
+              <td>
+                <code>NeedsResponse</code>, <code>Resolved</code>,
+                <code>Withdrawn</code>
+              </td>
+            </tr>
+            <tr>
+              <td><code>NeedsResponse</code></td>
+              <td>
+                Maintainer asked for something specific. Contributor updates or
+                explicit response move it back to <code>Submitted</code>.
+              </td>
+              <td><code>Submitted</code>, <code>Resolved</code></td>
+            </tr>
+            <tr>
+              <td><code>Resolved</code></td>
+              <td>
+                Maintainer selected a disposition. The request ref is locked and
+                settlement is final for v1.
+              </td>
+              <td>None in MVP</td>
+            </tr>
+            <tr>
+              <td><code>Withdrawn</code></td>
+              <td>
+                Author closed the Request before maintainer resolution. Refund
+                behavior depends on whether review work has happened.
+              </td>
+              <td>None in MVP</td>
+            </tr>
+          </tbody>
+        </table>
+      </section>
+
+      <section id="git">
+        <h2>Git And Branch Model</h2>
+        <p class="lead">
+          The existing staged push review concept is dead for this feature.
+          Requests use separate refs and explicit merge commands. Public
+          contributors pull and rebase against public main only; members and
+          owners pull private main when their auth allows it.
+        </p>
+
+        <div class="flow" aria-label="Branch-backed request flow">
+          <div class="flow-step">
+            <span class="num">1</span>
+            <h3>Authenticate</h3>
+            <p>
+              CLI resolves repo access and prints whether the user is operating
+              as Public, Member, or Owner.
+            </p>
+          </div>
+          <div class="flow-step">
+            <span class="num">2</span>
+            <h3>Start</h3>
+            <p>
+              CLI fetches the allowed main projection and creates a local
+              request branch from it.
+            </p>
+          </div>
+          <div class="flow-step">
+            <span class="num">3</span>
+            <h3>Submit</h3>
+            <p>
+              CLI pushes local HEAD to a request ref and creates the durable
+              Request. Public users pay stake.
+            </p>
+          </div>
+          <div class="flow-step">
+            <span class="num">4</span>
+            <h3>Update</h3>
+            <p>
+              Author can push new revisions to the same request ref without
+              additional stake.
+            </p>
+          </div>
+          <div class="flow-step">
+            <span class="num">5</span>
+            <h3>Review</h3>
+            <p>
+              CLI and web show request diff, timeline, stake, state, and next
+              actor. Comments can happen in both places.
+            </p>
+          </div>
+          <div class="flow-step">
+            <span class="num">6</span>
+            <h3>Merge</h3>
+            <p>
+              Owner/member confirms clean web merge into current main or uses
+              CLI for local conflict resolution.
+            </p>
+          </div>
+        </div>
+
+        <div class="codeblock">
+          <pre><code>Ref rules
+  Public author:
+    can create/update refs/scope/requests/{own_request_id}
+    cannot update refs/heads/main
+    base_audience = Public
+
+  Member/owner author:
+    can create/update request refs with stake_credits = 0
+    can update refs/heads/main only through owner/member permissions
+    base_audience = Private
+
+  Resolved/withdrawn Request:
+    request ref is locked from further author updates</code></pre>
+        </div>
+      </section>
+
+      <section id="api">
+        <h2>API Surface</h2>
+        <p class="lead">
+          Keep API endpoints thin. They should identify the user, load repo
+          access, validate request payloads, invoke domain commands, persist
+          typed facts, and return generated TypeScript response contracts.
+        </p>
+
+        <table aria-label="Request API endpoints">
+          <thead>
+            <tr>
+              <th>Endpoint</th>
+              <th>Used by</th>
+              <th>Purpose</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td><code>GET /v1/repos/{owner}/{repo}/requests</code></td>
+              <td>Web, CLI</td>
+              <td>List request summaries visible to the current principal.</td>
+            </tr>
+            <tr>
+              <td><code>GET /v1/repos/{owner}/{repo}/requests/{id}</code></td>
+              <td>Web, CLI</td>
+              <td>Get request detail, mergeability, settlement preview, and timeline.</td>
+            </tr>
+            <tr>
+              <td><code>POST /v1/repos/{owner}/{repo}/requests</code></td>
+              <td>CLI</td>
+              <td>Create a submitted branch-backed Request after request ref push.</td>
+            </tr>
+            <tr>
+              <td><code>POST /v1/repos/{owner}/{repo}/requests/{id}/revisions</code></td>
+              <td>CLI</td>
+              <td>Record a pushed update to the request ref.</td>
+            </tr>
+            <tr>
+              <td><code>POST /v1/repos/{owner}/{repo}/requests/{id}/comments</code></td>
+              <td>Web, CLI</td>
+              <td>Add a timeline comment without changing lifecycle state.</td>
+            </tr>
+            <tr>
+              <td><code>POST /v1/repos/{owner}/{repo}/requests/{id}/needs-response</code></td>
+              <td>Web, CLI</td>
+              <td>Maintainer asks for contributor action with a required note.</td>
+            </tr>
+            <tr>
+              <td><code>POST /v1/repos/{owner}/{repo}/requests/{id}/respond</code></td>
+              <td>Web, CLI</td>
+              <td>Contributor replies and returns the Request to Submitted.</td>
+            </tr>
+            <tr>
+              <td><code>POST /v1/repos/{owner}/{repo}/requests/{id}/resolve</code></td>
+              <td>Web, CLI</td>
+              <td>Maintainer resolves with a non-merge disposition and settlement.</td>
+            </tr>
+            <tr>
+              <td><code>POST /v1/repos/{owner}/{repo}/requests/{id}/merge</code></td>
+              <td>Web, CLI</td>
+              <td>Owner/member clean-merges into confirmed current main, resolves as Accepted, settles.</td>
+            </tr>
+          </tbody>
+        </table>
+      </section>
+
+      <section id="cli">
+        <h2>CLI UX</h2>
+        <p class="lead">
+          The CLI must be explicit about auth and projection every time it
+          starts, submits, syncs, or updates a Request. Users should never have
+          to infer whether they are using public main or private main.
+        </p>
+
+        <div class="grid-3">
+          <div class="cell">
+            <h3><code>scope request start</code></h3>
+            <p>
+              Authenticates, prints access level, fetches allowed main
+              projection, creates local branch, and explains what commands are
+              valid for that user.
+            </p>
+          </div>
+          <div class="cell">
+            <h3><code>scope request submit</code></h3>
+            <p>
+              Shows diff summary, stake cost, current balance, target
+              projection, and pushes request head. Public users pay stake once.
+            </p>
+          </div>
+          <div class="cell">
+            <h3><code>scope request sync</code></h3>
+            <p>
+              Pulls the latest allowed main projection into the local request
+              branch. Public users sync from public main only.
+            </p>
+          </div>
+        </div>
+
+        <div class="codeblock">
+          <pre><code>Example public contributor receipt
+  Authenticated as jane
+  Repo access: Public
+  Base projection: public main @ abc123
+  Request: req_123
+  Request ref: refs/scope/requests/req_123
+  Stake: 10 credits
+  Balance: 90 credits
+  Next actor: maintainer
+  View: https://scope.example/adam/scope-vcs/requests/req_123
+
+Example member receipt
+  Authenticated as adam
+  Repo access: Member
+  Base projection: private main @ abc123
+  Request: req_124
+  Stake: none
+  Next: merge cleanly from web or CLI when ready</code></pre>
+        </div>
+      </section>
+
+      <section id="web">
+        <h2>Web UX</h2>
+        <p class="lead">
+          The web UI can mutate request workflow and perform clean merges. It
+          should not become a general Git editor. The request page is a
+          maintainer queue, diff viewer, timeline, settlement preview, and
+          confirmation surface.
+        </p>
+
+        <div class="rules">
+          <div class="rule">
+            <h3>Request list</h3>
+            <p>
+              Filter by open, needs response, resolved, author, and mergeable.
+              Show stake only when relevant to the viewer.
+            </p>
+          </div>
+          <div class="rule">
+            <h3>Request detail</h3>
+            <p>
+              Show title, state, base audience, current head, changed files,
+              timeline, comments, and available actions.
+            </p>
+          </div>
+          <div class="rule">
+            <h3>Merge dialog</h3>
+            <p>
+              Confirm exact current main OID, request head OID, target branch,
+              disposition, and settlement before backend merge.
+            </p>
+          </div>
+          <div class="rule">
+            <h3>Stale merge handling</h3>
+            <p>
+              If main changes after the dialog opens, reject and require refresh
+              before merge.
+            </p>
+          </div>
+        </div>
+
+        <div class="codeblock">
+          <pre><code>Merge confirmation copy
+  Merge req_123 into main?
+
+  Current main: abc123
+  Request head: def456
+  Settlement: refund 10 credits, reward 5 credits
+
+  This will update main and resolve the Request as Accepted.</code></pre>
+        </div>
+      </section>
+
+      <section id="settlement">
+        <h2>Settlement Logic</h2>
+        <p class="lead">
+          Settlement runs once, after resolution. For accepted code Requests,
+          settlement happens only after merge succeeds. Maintainer dispositions
+          are product judgments; credit outcomes are domain-owned rules.
+        </p>
+
+        <table aria-label="Settlement mapping">
+          <thead>
+            <tr>
+              <th>Disposition</th>
+              <th>When used</th>
+              <th>Default settlement</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td><code>Accepted</code></td>
+              <td>Clean merge succeeded and main was updated.</td>
+              <td>Refund full stake plus reward 50% of stake.</td>
+            </tr>
+            <tr>
+              <td><code>UsefulNotMerged</code></td>
+              <td>Work was helpful but maintainers chose another path.</td>
+              <td>Refund full stake plus reward 20% of stake.</td>
+            </tr>
+            <tr>
+              <td><code>HiddenContext</code></td>
+              <td>Public contributor could not reasonably know why it could not land.</td>
+              <td>Refund full stake. No penalty.</td>
+            </tr>
+            <tr>
+              <td><code>NotAligned</code></td>
+              <td>Good-faith work that is not a project priority.</td>
+              <td>Refund full stake for MVP.</td>
+            </tr>
+            <tr>
+              <td><code>Duplicate</code></td>
+              <td>Contributor missed visible public context.</td>
+              <td>Refund 50% of stake. Burn the rest.</td>
+            </tr>
+            <tr>
+              <td><code>Abandoned</code></td>
+              <td>Only after NeedsResponse and contributor deadline passes.</td>
+              <td>Refund 0% in MVP unless manually resolved otherwise.</td>
+            </tr>
+            <tr>
+              <td><code>LowQuality</code></td>
+              <td>Low-signal, misleading, spammy, or no meaningful diff.</td>
+              <td>Refund 0%. Burn full stake.</td>
+            </tr>
+          </tbody>
+        </table>
+      </section>
+
+      <section id="phases">
+        <h2>Implementation Phases</h2>
+        <p class="lead">
+          Start with durable facts and invariant tests before wiring UX. Each
+          phase should leave the app in a coherent state and avoid compatibility
+          scaffolding for the dead staged-update review model.
+        </p>
+
+        <div class="phase-list">
+          <article class="phase">
+            <div class="phase-title">
+              <span class="tag good">Foundation</span>
+              <h3>Phase 1</h3>
+            </div>
+            <div class="steps">
+              <div class="step">
+                <div class="step-id">1.1</div>
+                <p>
+                  Add request, request event, credit account, and ledger domain
+                  types with state transition tests in <code>scope-core</code>.
+                </p>
+              </div>
+              <div class="step">
+                <div class="step-id">1.2</div>
+                <p>
+                  Add deterministic settlement functions and idempotency guards.
+                  Settlement should be impossible to run twice.
+                </p>
+              </div>
+              <div class="step">
+                <div class="step-id">1.3</div>
+                <p>
+                  Add memory metadata support and Postgres schema contract rows
+                  for requests, events, accounts, and ledger entries.
+                </p>
+              </div>
+            </div>
+          </article>
+
+          <article class="phase">
+            <div class="phase-title">
+              <span class="tag good">Git</span>
+              <h3>Phase 2</h3>
+            </div>
+            <div class="steps">
+              <div class="step">
+                <div class="step-id">2.1</div>
+                <p>
+                  Teach Git receive-pack to admit authenticated request ref
+                  writes and reject public main writes.
+                </p>
+              </div>
+              <div class="step">
+                <div class="step-id">2.2</div>
+                <p>
+                  Add request ref storage, lookup, update, and lock behavior for
+                  resolved/withdrawn Requests.
+                </p>
+              </div>
+              <div class="step">
+                <div class="step-id">2.3</div>
+                <p>
+                  Add clean merge domain command that validates expected main
+                  OID and request head OID before applying.
+                </p>
+              </div>
+            </div>
+          </article>
+
+          <article class="phase">
+            <div class="phase-title">
+              <span class="tag warn">API</span>
+              <h3>Phase 3</h3>
+            </div>
+            <div class="steps">
+              <div class="step">
+                <div class="step-id">3.1</div>
+                <p>
+                  Add request list/detail responses and TypeScript contract
+                  exports. Keep response shapes explicit and stable.
+                </p>
+              </div>
+              <div class="step">
+                <div class="step-id">3.2</div>
+                <p>
+                  Add submit, revision, comment, needs-response, respond,
+                  resolve, and merge endpoints.
+                </p>
+              </div>
+              <div class="step">
+                <div class="step-id">3.3</div>
+                <p>
+                  Add API tests for public/private projection selection, no
+                  private leakage, stake debit, and settlement.
+                </p>
+              </div>
+            </div>
+          </article>
+
+          <article class="phase">
+            <div class="phase-title">
+              <span class="tag warn">CLI</span>
+              <h3>Phase 4</h3>
+            </div>
+            <div class="steps">
+              <div class="step">
+                <div class="step-id">4.1</div>
+                <p>
+                  Add <code>scope request start</code> with auth-aware base
+                  projection fetch and explicit permission messaging.
+                </p>
+              </div>
+              <div class="step">
+                <div class="step-id">4.2</div>
+                <p>
+                  Add <code>submit</code>, <code>update</code>, and
+                  <code>sync</code> commands with receipt output.
+                </p>
+              </div>
+              <div class="step">
+                <div class="step-id">4.3</div>
+                <p>
+                  Add <code>status</code>, <code>comment</code>,
+                  <code>respond</code>, <code>resolve</code>, and
+                  <code>merge</code> command coverage.
+                </p>
+              </div>
+            </div>
+          </article>
+
+          <article class="phase">
+            <div class="phase-title">
+              <span class="tag hot">Web</span>
+              <h3>Phase 5</h3>
+            </div>
+            <div class="steps">
+              <div class="step">
+                <div class="step-id">5.1</div>
+                <p>
+                  Add request list and detail pages under repo routes using the
+                  existing repo read layout style.
+                </p>
+              </div>
+              <div class="step">
+                <div class="step-id">5.2</div>
+                <p>
+                  Add comment, needs-response, respond, and resolve forms. Keep
+                  actions dense and avoid card-heavy layout.
+                </p>
+              </div>
+              <div class="step">
+                <div class="step-id">5.3</div>
+                <p>
+                  Add clean merge dialog with exact main/head OIDs and
+                  settlement preview. Reject stale confirmation.
+                </p>
+              </div>
+            </div>
+          </article>
+
+          <article class="phase">
+            <div class="phase-title">
+              <span class="tag good">Closeout</span>
+              <h3>Phase 6</h3>
+            </div>
+            <div class="steps">
+              <div class="step">
+                <div class="step-id">6.1</div>
+                <p>
+                  Remove dead staged-update review surface that conflicts with
+                  branch-backed Requests.
+                </p>
+              </div>
+              <div class="step">
+                <div class="step-id">6.2</div>
+                <p>
+                  Run Rust, API contract, web, CLI, and targeted Git integration
+                  tests. Add regression cases for every domain invariant.
+                </p>
+              </div>
+              <div class="step">
+                <div class="step-id">6.3</div>
+                <p>
+                  Run local autoreview with the project timeout. Fix real
+                  findings before implementation closeout.
+                </p>
+              </div>
+            </div>
+          </article>
+        </div>
+      </section>
+
+      <section id="deletions">
+        <h2>Deletion Track</h2>
+        <p class="lead">
+          This project should remove the old server-side staged-update review
+          concept as branch-backed Requests come online. The CLI visibility
+          review TUI remains useful and should not be deleted merely because it
+          uses the word review. The dead thing is the server-side pending staged
+          update queue as a product workflow.
+        </p>
+
+        <table aria-label="Deletion plan by phase">
+          <thead>
+            <tr>
+              <th>Phase</th>
+              <th>Delete or replace</th>
+              <th>Keep or rename</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td>Phase 1</td>
+              <td>
+                Do not add compatibility shims for staged update review. New
+                request and ledger domain code should stand on its own instead
+                of wrapping <code>StagedRepoUpdate</code>.
+              </td>
+              <td>
+                Keep generic file-change concepts only if they are renamed away
+                from staged-update ownership.
+              </td>
+            </tr>
+            <tr>
+              <td>Phase 2</td>
+              <td>
+                Replace receive-pack paths that create server pending staged
+                updates with request-ref admission and request revision
+                recording. Remove public/main write paths that only existed to
+                feed server staged review.
+              </td>
+              <td>
+                Keep lower-level Git import, snapshot, and diff helpers when
+                they can serve request refs without preserving the old workflow.
+              </td>
+            </tr>
+            <tr>
+              <td>Phase 3</td>
+              <td>
+                Remove staged-update response fields from repo summaries,
+                especially <code>staged_update_pending</code> and
+                <code>push_blocked_by_staged_update</code>. Remove generated
+                TypeScript exports that exist only for staged update review.
+              </td>
+              <td>
+                Replace them with request counts, request permissions, and
+                mergeability fields owned by the Request read model.
+              </td>
+            </tr>
+            <tr>
+              <td>Phase 4</td>
+              <td>
+                Remove CLI messages and guards about stale staged update state.
+                Delete API client fields that mirror staged-update repo summary
+                flags.
+              </td>
+              <td>
+                Keep <code>scope review</code> and the push visibility review
+                TUI as local config/diff tooling. Rename only if the new command
+                vocabulary makes the old labels confusing.
+              </td>
+            </tr>
+            <tr>
+              <td>Phase 5</td>
+              <td>
+                Remove web assumptions that repo state is blocked by a single
+                staged update. Delete any stale request/review UI code that
+                cannot represent multiple branch-backed Requests.
+              </td>
+              <td>
+                Keep generic diff drawer and file-tree UI if it can be reused
+                for request diffs or history without staged-update language.
+              </td>
+            </tr>
+            <tr>
+              <td>Phase 6</td>
+              <td>
+                Delete <code>StoredRepository.staged_update</code>,
+                <code>StagedRepoUpdate</code>,
+                <code>StagedFileChange</code>, staged update apply/reject
+                commands, staged update DB JSON columns, schema contract entries,
+                and tests that only protect the removed workflow.
+              </td>
+              <td>
+                Preserve behavior by moving any still-needed apply/diff logic
+                into Request-owned modules before deleting the staged names.
+              </td>
+            </tr>
+          </tbody>
+        </table>
+
+        <div class="codeblock">
+          <pre><code>Primary deletion targets
+  crates/scope-core/src/domain/store.rs
+    staged_update field and staged update structs
+
+  crates/scope-core/src/domain/staged_updates.rs
+    delete or split into request-owned apply/diff helpers
+
+  crates/scope-core/src/domain/repo_actions.rs
+    delete apply/reject/set-staged-visibility commands
+
+  crates/scope-core/src/db/entities/repositories.rs
+    remove staged_update JSON column mapping
+
+  crates/scope-core/src/db/schema_contract/repositories.rs
+    remove staged_update column from scope_repositories
+
+  crates/scope-core/src/db/push_staging.rs
+  crates/scope-core/src/db/publish_apply.rs
+    delete staged-update mutation surfaces once request merge replaces them
+
+  api/src/http/responses.rs
+    remove staged_update_pending and push_blocked_by_staged_update
+
+  cli/src/api.rs and cli/src/push.rs
+    remove stale staged-update fields and blocker messaging
+
+  api/src/tests/* and cli/tests/*
+    delete tests that only assert dead staged-update review behavior;
+    replace with branch-backed Request coverage</code></pre>
+        </div>
+
+        <p class="lead">
+          Deletion should happen as soon as the replacement slice is in place,
+          not only at the end. The final closeout phase should be a confirmation
+          pass, not the first time dead staged-review code is touched.
+        </p>
+      </section>
+
+      <section id="deferred">
+        <h2>Deferred</h2>
+        <p class="lead">
+          These are valid product layers, but adding them now would muddy the
+          foundation. The MVP proves branch-backed requests, public contribution
+          staking, clean maintainer merge, and deterministic settlement.
+        </p>
+        <ul>
+          <li>Text-only requests for bugs, questions, design proposals, and bounties.</li>
+          <li>Visible contributor or maintainer ratings.</li>
+          <li>Direct credit purchases, pricing tiers, or public/private pricing spread.</li>
+          <li>Browser conflict resolution.</li>
+          <li>Maintainer punishment logic for slow review. Track facts first.</li>
+          <li>Complex repo policy engines for request pricing or submission rules.</li>
+        </ul>
+      </section>
+    </main>
+
+    <footer class="wrap">
+      <p>
+        This plan is intentionally destructive and pre-alpha native. It does not
+        preserve staged update review as a product concept. Requests become the
+        branch-backed maintainer attention primitive.
+      </p>
+    </footer>
+  </body>
+</html>
