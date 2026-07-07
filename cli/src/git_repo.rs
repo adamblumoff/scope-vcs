@@ -81,7 +81,6 @@ fn has_dirty_paths_outside_scope_config(status: &[u8]) -> bool {
         path != ".scope/repo.json" && path != ".scope/repo-state.json"
     })
 }
-
 pub fn changed_paths_since_last_scope_push(
     repo: &GitRepo,
     remote: &str,

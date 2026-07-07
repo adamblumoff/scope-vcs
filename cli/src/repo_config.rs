@@ -16,7 +16,7 @@ const WORKTREE_CONFIG_PATH: &str = ".scope/repo.json";
 const WORKTREE_CONFIG_STATE_PATH: &str = ".scope/repo-state.json";
 const WORKTREE_CONFIG_STATE_KIND: &str = "scope.repo-config-state";
 const WORKTREE_CONFIG_STATE_VERSION: u8 = 1;
-const LOCAL_ONLY_SCOPE_PATHS: [&str; 2] = [WORKTREE_CONFIG_PATH, WORKTREE_CONFIG_STATE_PATH];
+const LOCAL_ONLY_SCOPE_IGNORE_PATTERNS: [&str; 1] = ["/.scope/"];
 
 #[derive(Deserialize, Serialize)]
 struct WorktreeRepoConfigState {
@@ -52,6 +52,7 @@ pub fn ensure_scope_repo_config_exists(git_root: &Path) -> anyhow::Result<bool> 
         }
         Err(error) => Err(error).context("inspect .scope/repo.json"),
     }?;
+    ensure_scope_repo_config_is_gitignored(git_root)?;
     ensure_scope_repo_config_is_locally_excluded(git_root)?;
     Ok(created)
 }
@@ -241,6 +242,24 @@ fn temporary_config_path(parent: &Path) -> anyhow::Result<PathBuf> {
     Ok(parent.join(format!(".repo.json.{}.{}.tmp", std::process::id(), nanos)))
 }
 
+fn ensure_scope_repo_config_is_gitignored(git_root: &Path) -> anyhow::Result<()> {
+    let gitignore_path = git_root.join(".gitignore");
+    let existing = match fs::symlink_metadata(&gitignore_path) {
+        Ok(metadata) => {
+            if metadata.file_type().is_symlink() {
+                bail!(".gitignore cannot be a symlink");
+            }
+            if !metadata.is_file() {
+                bail!(".gitignore must be a regular file");
+            }
+            fs::read_to_string(&gitignore_path).context("read .gitignore")?
+        }
+        Err(error) if error.kind() == io::ErrorKind::NotFound => String::new(),
+        Err(error) => return Err(error).context("inspect .gitignore"),
+    };
+    append_missing_ignore_patterns(&gitignore_path, &existing, "update .gitignore")
+}
+
 fn ensure_scope_repo_config_is_locally_excluded(git_root: &Path) -> anyhow::Result<()> {
     let Some(exclude_path) = git_info_exclude_path(git_root)? else {
         return Ok(());
@@ -249,7 +268,15 @@ fn ensure_scope_repo_config_is_locally_excluded(git_root: &Path) -> anyhow::Resu
         fs::create_dir_all(parent).context("create Git info directory")?;
     }
     let existing = fs::read_to_string(&exclude_path).unwrap_or_default();
-    let missing = LOCAL_ONLY_SCOPE_PATHS
+    append_missing_ignore_patterns(
+        &exclude_path,
+        &existing,
+        &format!("update {}", exclude_path.display()),
+    )
+}
+
+fn append_missing_ignore_patterns(path: &Path, existing: &str, action: &str) -> anyhow::Result<()> {
+    let missing = LOCAL_ONLY_SCOPE_IGNORE_PATTERNS
         .iter()
         .copied()
         .filter(|path| !existing.lines().map(str::trim).any(|line| line == *path))
@@ -261,15 +288,14 @@ fn ensure_scope_repo_config_is_locally_excluded(git_root: &Path) -> anyhow::Resu
     let mut file = OpenOptions::new()
         .append(true)
         .create(true)
-        .open(&exclude_path)
-        .with_context(|| format!("open {}", exclude_path.display()))?;
+        .open(path)
+        .with_context(|| format!("open {}", path.display()))?;
     if !existing.is_empty() && !existing.ends_with('\n') {
-        file.write_all(b"\n")
-            .with_context(|| format!("update {}", exclude_path.display()))?;
+        file.write_all(b"\n").context(action.to_string())?;
     }
-    for path in missing {
-        file.write_all(format!("{path}\n").as_bytes())
-            .with_context(|| format!("update {}", exclude_path.display()))?;
+    for pattern in missing {
+        file.write_all(format!("{pattern}\n").as_bytes())
+            .context(action.to_string())?;
     }
     Ok(())
 }

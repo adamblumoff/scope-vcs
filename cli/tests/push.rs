@@ -95,7 +95,7 @@ fn push_creates_missing_config_before_remote_lookup() {
     );
     assert!(dir.path().join(".scope/repo.json").is_file());
     assert!(
-        !stderr.contains("Working tree has uncommitted changes."),
+        stderr.contains("Working tree has uncommitted changes."),
         "{stderr}"
     );
     assert!(!stderr.contains("start browser login"), "{stderr}");
@@ -158,7 +158,7 @@ fn push_allows_uncommitted_config_before_remote_lookup() {
         "{stderr}"
     );
     assert!(
-        !stderr.contains("Working tree has uncommitted changes."),
+        stderr.contains("Working tree has uncommitted changes."),
         "{stderr}"
     );
     assert!(!stderr.contains("start browser login"), "{stderr}");

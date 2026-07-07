@@ -54,16 +54,31 @@ fn write_rejects_symlinked_worktree_config_file() {
 }
 
 #[test]
-fn creating_config_adds_local_git_exclude_entry() {
+fn creating_config_adds_gitignore_and_local_git_exclude_entries() {
     let dir = TempDir::new("exclude");
     fs::create_dir_all(dir.path.join(".git/info")).unwrap();
 
     let created = ensure_scope_repo_config_exists(&dir.path).unwrap();
 
     assert!(created);
+    let gitignore = fs::read_to_string(dir.path.join(".gitignore")).unwrap();
+    assert!(gitignore.lines().any(|line| line == "/.scope/"));
     let exclude = fs::read_to_string(dir.path.join(".git/info/exclude")).unwrap();
-    assert!(exclude.lines().any(|line| line == ".scope/repo.json"));
-    assert!(exclude.lines().any(|line| line == ".scope/repo-state.json"));
+    assert!(exclude.lines().any(|line| line == "/.scope/"));
+}
+
+#[test]
+fn creating_config_appends_gitignore_entry_after_existing_contents() {
+    let dir = TempDir::new("gitignore-existing");
+    fs::create_dir_all(dir.path.join(".git/info")).unwrap();
+    fs::write(dir.path.join(".gitignore"), "target/").unwrap();
+
+    ensure_scope_repo_config_exists(&dir.path).unwrap();
+
+    assert_eq!(
+        fs::read_to_string(dir.path.join(".gitignore")).unwrap(),
+        "target/\n/.scope/\n"
+    );
 }
 
 #[test]
@@ -78,9 +93,9 @@ fn synced_config_writes_base_hash_and_excludes_state_file() {
         load_worktree_scope_repo_config_base_hash(&dir.path).unwrap(),
         repo_config_fingerprint(&config).unwrap()
     );
+    assert!(!dir.path.join(".gitignore").exists());
     let exclude = fs::read_to_string(dir.path.join(".git/info/exclude")).unwrap();
-    assert!(exclude.lines().any(|line| line == ".scope/repo.json"));
-    assert!(exclude.lines().any(|line| line == ".scope/repo-state.json"));
+    assert!(exclude.lines().any(|line| line == "/.scope/"));
 }
 
 #[test]
@@ -110,9 +125,10 @@ fn creating_config_uses_linked_worktree_git_exclude_path() {
     ensure_scope_repo_config_exists(&linked).unwrap();
 
     let exclude_path = git_info_exclude_path(&linked).unwrap().unwrap();
+    let gitignore = fs::read_to_string(linked.join(".gitignore")).unwrap();
+    assert!(gitignore.lines().any(|line| line == "/.scope/"));
     let exclude = fs::read_to_string(exclude_path).unwrap();
-    assert!(exclude.lines().any(|line| line == ".scope/repo.json"));
-    assert!(exclude.lines().any(|line| line == ".scope/repo-state.json"));
+    assert!(exclude.lines().any(|line| line == "/.scope/"));
 }
 
 #[cfg(unix)]
