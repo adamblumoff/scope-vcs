@@ -24,7 +24,7 @@ use crate::{
         storage::*,
         upload::*,
     },
-    state::{AppState, ValidatedPushIntent, find_repo},
+    state::{AppState, ValidatedPushIntent, ensure_repo_read, find_repo},
 };
 use axum::{
     Json,
@@ -296,14 +296,11 @@ pub(crate) async fn receive_pack_access(
     repo_name: &str,
 ) -> Result<ReceivePackAccess, ApiError> {
     let authorization = receive_pack_authorization(state, headers).await?;
-    let push_intent = optional_push_intent_from_headers(headers)?
-        .map(|secret| state.validate_push_intent_secret(&secret))
-        .transpose()?;
+    let push_intent_secret = optional_push_intent_from_headers(headers)?;
 
     match authorization {
         ReceivePackAuthorization::ScopeToken { secret } => {
-            let push_intent = push_intent
-                .ok_or_else(|| ApiError::forbidden("valid Scope push intent required"))?;
+            let push_intent = required_push_intent(state, push_intent_secret.as_deref())?;
             let repo = find_repo_after_git_scope_token(state, owner, repo_name)?;
             let credential = if secret.starts_with(GIT_PUSH_TOKEN_PREFIX) {
                 InitialPushCredential::GitPushToken { secret }
@@ -357,8 +354,7 @@ pub(crate) async fn receive_pack_access(
                         "repo {owner}/{repo_name} not found"
                     )));
                 }
-                let push_intent = push_intent
-                    .ok_or_else(|| ApiError::forbidden("valid Scope push intent required"))?;
+                let push_intent = required_push_intent(state, push_intent_secret.as_deref())?;
                 push_intent.ensure_repo_user(&repo.record.id, &author_id)?;
                 return Ok(ReceivePackAccess::FirstPush {
                     author_id,
@@ -377,7 +373,13 @@ pub(crate) async fn receive_pack_access(
             }
             if !access.can_push {
                 if repo.record.publication_state == RepoPublicationState::Published
-                    && author_has_open_request(state, &repo.record.id, &author_id, access.actor)?
+                    && author_can_receive_request_push(
+                        state,
+                        &repo,
+                        &principal,
+                        &author_id,
+                        access.actor,
+                    )?
                 {
                     return Ok(ReceivePackAccess::RequestAuthor { author_id });
                 }
@@ -390,15 +392,33 @@ pub(crate) async fn receive_pack_access(
                     "repo is waiting for publish and cannot receive another push",
                 )),
                 RepoPublicationState::Published => {
-                    if let Some(push_intent) = push_intent {
-                        push_intent.ensure_repo_user(&repo.record.id, &author_id)?;
-                        Ok(ReceivePackAccess::PublishedMember {
-                            author_id,
-                            push_intent,
-                        })
-                    } else if author_has_open_request(
+                    if let Some(secret) = push_intent_secret.as_deref() {
+                        match state.validate_push_intent_secret(secret) {
+                            Ok(push_intent) => {
+                                push_intent.ensure_repo_user(&repo.record.id, &author_id)?;
+                                return Ok(ReceivePackAccess::PublishedMember {
+                                    author_id,
+                                    push_intent,
+                                });
+                            }
+                            Err(error) => {
+                                if author_can_receive_request_push(
+                                    state,
+                                    &repo,
+                                    &principal,
+                                    &author_id,
+                                    access.actor,
+                                )? {
+                                    return Ok(ReceivePackAccess::RequestAuthor { author_id });
+                                }
+                                return Err(error);
+                            }
+                        }
+                    }
+                    if author_can_receive_request_push(
                         state,
-                        &repo.record.id,
+                        &repo,
+                        &principal,
                         &author_id,
                         access.actor,
                     )? {
@@ -410,6 +430,25 @@ pub(crate) async fn receive_pack_access(
             }
         }
     }
+}
+
+fn required_push_intent(
+    state: &AppState,
+    secret: Option<&str>,
+) -> Result<ValidatedPushIntent, ApiError> {
+    let secret = secret.ok_or_else(|| ApiError::forbidden("valid Scope push intent required"))?;
+    state.validate_push_intent_secret(secret)
+}
+
+fn author_can_receive_request_push(
+    state: &AppState,
+    repo: &crate::domain::store::StoredRepository,
+    principal: &crate::domain::policy::Principal,
+    author_id: &str,
+    actor: RepositoryActor,
+) -> Result<bool, ApiError> {
+    ensure_repo_read(state, repo, principal)?;
+    author_has_open_request(state, &repo.record.id, author_id, actor)
 }
 
 fn optional_push_intent_from_headers(headers: &HeaderMap) -> Result<Option<String>, ApiError> {

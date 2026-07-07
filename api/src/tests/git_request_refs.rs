@@ -21,6 +21,10 @@ async fn request_author_receive_pack_does_not_require_push_intent() {
             .parse()
             .unwrap(),
     );
+    headers.insert(
+        "x-scope-push-intent",
+        "stale-request-push-intent".parse().unwrap(),
+    );
 
     let access = receive_pack_access(&state, &headers, TEST_REPO_OWNER, TEST_REPO_NAME)
         .await
@@ -30,6 +34,33 @@ async fn request_author_receive_pack_does_not_require_push_intent() {
         access,
         ReceivePackAccess::RequestAuthor { author_id } if author_id == public_user_id()
     ));
+}
+
+#[tokio::test]
+async fn request_author_receive_pack_requires_current_repo_read() {
+    let state = test_state_with_request();
+    state
+        .metadata
+        .update(|catalog| {
+            let repo = catalog.repositories.get_mut(TEST_REPO_ID).unwrap();
+            repo.policy = Policy::new(Visibility::Private);
+            repo.graph.commits.clear();
+            Ok(())
+        })
+        .unwrap();
+    let mut headers = HeaderMap::new();
+    headers.insert(
+        AUTHORIZATION,
+        bearer_header_for(PUBLIC_SUBJECT, PUBLIC_EMAIL)
+            .parse()
+            .unwrap(),
+    );
+
+    let error = receive_pack_access(&state, &headers, TEST_REPO_OWNER, TEST_REPO_NAME)
+        .await
+        .unwrap_err();
+
+    assert_eq!(error.status, StatusCode::NOT_FOUND);
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
