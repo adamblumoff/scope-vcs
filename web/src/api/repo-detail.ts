@@ -39,7 +39,7 @@ export async function loadRepoForRequest(data: RepoParams) {
     capabilities: session.capabilities,
     clone_remote_url: gitRemoteUrl(
       getPublicApiConnection('building clone command'),
-      `/git/${repo.owner_handle}/${repo.name}`,
+      `/git/public/${repo.owner_handle}/${repo.name}`,
     ),
     files,
     kind: 'repo',

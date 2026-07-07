@@ -1,7 +1,7 @@
 use crate::{
-    api::{api_url, create_clone_credential, http_client},
+    api::{api_url, get_repo_config, http_client},
     auth::read_stored_session_token,
-    git_credentials::clone_with_credential,
+    git_repo::{clone_with_bearer, install_scope_fetch_auth},
     repo_config::write_worktree_scope_repo_config_with_base,
 };
 use anyhow::{Context, bail};
@@ -19,24 +19,24 @@ pub fn clone_repo(repository: &str, destination: Option<&Path>) -> anyhow::Resul
     let session_token =
         read_stored_session_token(&api_url)?.context("not signed in; run scope login")?;
     let client = http_client()?;
-    let credential = create_clone_credential(
+    let repo_config = get_repo_config(
         &client,
         &api_url,
         &session_token,
         &target.owner,
         &target.repo,
     )?;
-    let secret = credential
-        .token
-        .secret
-        .context("API did not return a Git clone token")?;
-    let remote_url = git_remote_url(&api_url, &credential.git_remote_path);
+    let remote_url = git_remote_url(
+        &api_url,
+        &permissioned_git_remote_path(&target.owner, &target.repo),
+    );
     let checkout_dir = destination
         .map(Path::to_path_buf)
         .unwrap_or_else(|| default_clone_dir(&target.repo));
 
-    clone_with_credential(&remote_url, &secret, Some(checkout_dir.as_path()))?;
-    write_worktree_scope_repo_config_with_base(&checkout_dir, &credential.config)
+    clone_with_bearer(&remote_url, &session_token, Some(checkout_dir.as_path()))?;
+    install_scope_fetch_auth(&checkout_dir, &remote_url)?;
+    write_worktree_scope_repo_config_with_base(&checkout_dir, &repo_config.config)
 }
 
 pub fn parse_repo_spec(repository: &str) -> anyhow::Result<RepoSpec> {
@@ -64,6 +64,10 @@ fn git_remote_url(api_url: &str, git_remote_path: &str) -> String {
         api_url.trim_end_matches('/'),
         git_remote_path.trim_start_matches('/')
     )
+}
+
+pub fn permissioned_git_remote_path(owner: &str, repo: &str) -> String {
+    format!("/git/permissioned/{owner}/{repo}")
 }
 
 pub fn default_clone_dir(repo: &str) -> PathBuf {

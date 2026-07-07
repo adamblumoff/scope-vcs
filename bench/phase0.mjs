@@ -222,7 +222,7 @@ function benchmarkCases(owner) {
     httpCase('commit history public-demo', `${publicBase}/commits?audience=public`),
     httpCase(
       'git info refs public-demo',
-      `/git/${segment(owner)}/${segment(publicRepo)}/info/refs?service=git-upload-pack`,
+      `/git/public/${segment(owner)}/${segment(publicRepo)}/info/refs?service=git-upload-pack`,
     ),
     httpCase('repo summary update-demo', updateBase),
     httpCase(
@@ -233,7 +233,7 @@ function benchmarkCases(owner) {
       name: 'git ls-remote public-demo',
       kind: 'command',
       command: 'git',
-      args: ['ls-remote', `${config.apiUrl}/git/${owner}/${publicRepo}`],
+      args: ['ls-remote', `${config.apiUrl}/git/public/${owner}/${publicRepo}`],
       burst: false,
     },
   ];

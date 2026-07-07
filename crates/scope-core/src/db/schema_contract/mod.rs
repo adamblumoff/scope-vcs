@@ -252,7 +252,6 @@ mod tests {
                 repositories::REPOSITORY_SETTINGS.name,
                 repositories::REPOSITORY_FIRST_PUSH_TOKENS.name,
                 repositories::REPOSITORY_GIT_PUSH_TOKENS.name,
-                repositories::REPOSITORY_GIT_CLONE_TOKENS.name,
                 repositories::REPOSITORY_GIT_SNAPSHOTS.name,
                 collaboration::REPOSITORY_MEMBERS.name,
                 collaboration::REPOSITORY_INVITES.name,

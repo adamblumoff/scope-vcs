@@ -1,9 +1,106 @@
 use super::*;
+use std::{
+    fs,
+    path::{Path, PathBuf},
+    process::Command,
+    time::{SystemTime, UNIX_EPOCH},
+};
+
+#[test]
+fn git_clone_auth_plan_keeps_bearer_token_out_of_process_args() {
+    let plan = git_clone_auth_plan(
+        "https://scope.example/git/permissioned/adam/random",
+        "scope_cli_secret",
+        Some(Path::new("local-dir")),
+        Some(2),
+    );
+
+    assert_eq!(
+        plan.args,
+        vec![
+            "clone",
+            "https://scope.example/git/permissioned/adam/random",
+            "local-dir",
+        ]
+    );
+    assert!(!plan.args.iter().any(|arg| arg.contains("scope_cli_secret")));
+    assert_eq!(
+        plan.env,
+        vec![
+            ("GIT_CONFIG_COUNT".to_string(), "3".to_string()),
+            (
+                "GIT_CONFIG_KEY_2".to_string(),
+                "http.https://scope.example/git/permissioned/adam/random.extraHeader".to_string()
+            ),
+            (
+                "GIT_CONFIG_VALUE_2".to_string(),
+                "Authorization: Bearer scope_cli_secret".to_string()
+            ),
+        ]
+    );
+}
+
+#[test]
+fn install_scope_fetch_auth_writes_secret_free_credential_helper_for_permissioned_remote() {
+    let root = temporary_git_repo("scope-fetch-auth");
+    let remote_url = "https://scope.example/git/permissioned/adam/random";
+
+    install_scope_fetch_auth(&root, remote_url).unwrap();
+
+    let helper = Command::new("git")
+        .current_dir(&root)
+        .args([
+            "config",
+            "--local",
+            "--get-urlmatch",
+            "credential.helper",
+            remote_url,
+        ])
+        .output()
+        .unwrap();
+    assert!(helper.status.success());
+    assert_eq!(
+        String::from_utf8_lossy(&helper.stdout).trim(),
+        SCOPE_GIT_CREDENTIAL_HELPER
+    );
+    let use_http_path = Command::new("git")
+        .current_dir(&root)
+        .args([
+            "config",
+            "--local",
+            "--get-urlmatch",
+            "credential.useHttpPath",
+            remote_url,
+        ])
+        .output()
+        .unwrap();
+    assert!(use_http_path.status.success());
+    assert_eq!(
+        String::from_utf8_lossy(&use_http_path.stdout).trim(),
+        "true"
+    );
+    let config = fs::read_to_string(root.join(".git/config")).unwrap();
+    assert!(config.contains("\thelper =\n\thelper = \"!scope git-credential\""));
+    assert!(
+        !config.contains("scope_cli_secret"),
+        "repo config must not persist Scope session tokens"
+    );
+
+    let _ = fs::remove_dir_all(root);
+}
+
+#[test]
+fn scope_fetch_auth_config_rejects_config_injection() {
+    assert!(
+        scope_fetch_auth_config("https://scope.example/git/permissioned/adam/random\n[alias]",)
+            .is_err()
+    );
+}
 
 #[test]
 fn git_push_auth_plan_keeps_bearer_token_out_of_process_args() {
     let plan = git_push_auth_plan(
-        "https://scope.example/git/adam/random",
+        "https://scope.example/git/permissioned/adam/random",
         "1234567890123456789012345678901234567890",
         "main",
         "scope_cli_secret",
@@ -17,7 +114,7 @@ fn git_push_auth_plan_keeps_bearer_token_out_of_process_args() {
             "-c",
             "push.recurseSubmodules=no",
             "push",
-            "https://scope.example/git/adam/random",
+            "https://scope.example/git/permissioned/adam/random",
             "1234567890123456789012345678901234567890:refs/heads/main"
         ]
     );
@@ -28,7 +125,7 @@ fn git_push_auth_plan_keeps_bearer_token_out_of_process_args() {
             ("GIT_CONFIG_COUNT".to_string(), "4".to_string()),
             (
                 "GIT_CONFIG_KEY_2".to_string(),
-                "http.https://scope.example/git/adam/random.extraHeader".to_string()
+                "http.https://scope.example/git/permissioned/adam/random.extraHeader".to_string()
             ),
             (
                 "GIT_CONFIG_VALUE_2".to_string(),
@@ -36,7 +133,7 @@ fn git_push_auth_plan_keeps_bearer_token_out_of_process_args() {
             ),
             (
                 "GIT_CONFIG_KEY_3".to_string(),
-                "http.https://scope.example/git/adam/random.extraHeader".to_string()
+                "http.https://scope.example/git/permissioned/adam/random.extraHeader".to_string()
             ),
             (
                 "GIT_CONFIG_VALUE_3".to_string(),
@@ -46,10 +143,26 @@ fn git_push_auth_plan_keeps_bearer_token_out_of_process_args() {
     );
 }
 
+fn temporary_git_repo(name: &str) -> PathBuf {
+    let now = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap()
+        .as_nanos();
+    let root = std::env::temp_dir().join(format!("scope-cli-{name}-{}-{now}", std::process::id()));
+    fs::create_dir_all(&root).unwrap();
+    let status = Command::new("git")
+        .args(["init", "-q"])
+        .arg(&root)
+        .status()
+        .unwrap();
+    assert!(status.success());
+    root
+}
+
 #[test]
 fn git_fetch_auth_plan_keeps_bearer_token_out_of_process_args() {
     let plan = git_fetch_auth_plan(
-        "https://scope.example/git/adam/random",
+        "https://scope.example/git/permissioned/adam/random",
         "scope",
         "main",
         "scope_cli_secret",
@@ -63,7 +176,7 @@ fn git_fetch_auth_plan_keeps_bearer_token_out_of_process_args() {
             "protocol.version=2",
             "fetch",
             "--no-tags",
-            "https://scope.example/git/adam/random",
+            "https://scope.example/git/permissioned/adam/random",
             "+refs/heads/main:refs/remotes/scope/main"
         ]
     );
@@ -74,7 +187,7 @@ fn git_fetch_auth_plan_keeps_bearer_token_out_of_process_args() {
             ("GIT_CONFIG_COUNT".to_string(), "2".to_string()),
             (
                 "GIT_CONFIG_KEY_1".to_string(),
-                "http.https://scope.example/git/adam/random.extraHeader".to_string()
+                "http.https://scope.example/git/permissioned/adam/random.extraHeader".to_string()
             ),
             (
                 "GIT_CONFIG_VALUE_1".to_string(),

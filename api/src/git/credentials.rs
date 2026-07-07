@@ -2,9 +2,9 @@ use crate::domain::store::{FirstPushTokenStatus, StoredRepository, UserAccount};
 use crate::{
     auth::{
         scope::require_scope_user,
-        tokens::{first_push_token_hash, git_clone_token_hash, git_push_token_hash},
+        tokens::{first_push_token_hash, git_push_token_hash},
     },
-    config::{FIRST_PUSH_TOKEN_PREFIX, GIT_PUSH_TOKEN_PREFIX},
+    config::{CLI_SESSION_TOKEN_PREFIX, FIRST_PUSH_TOKEN_PREFIX, GIT_PUSH_TOKEN_PREFIX},
     error::ApiError,
     persistence::unix_now,
     state::{AppState, find_repo},
@@ -24,9 +24,32 @@ pub(crate) enum ReceivePackAuthorization {
     ScopeUser(UserAccount),
 }
 
-#[derive(Clone, Debug)]
-pub(crate) enum GitReadAuthorization {
-    ScopeToken { secret: String },
+pub(crate) async fn git_read_scope_user(
+    state: &AppState,
+    headers: &HeaderMap,
+) -> Result<UserAccount, ApiError> {
+    let Some(value) = headers.get(AUTHORIZATION) else {
+        return Err(ApiError::unauthorized("Git credentials required"));
+    };
+    let value = value
+        .to_str()
+        .map_err(|_| ApiError::unauthorized("invalid authorization header"))?;
+
+    if let Some(encoded) = value.strip_prefix("Basic ") {
+        let (username, password) = basic_auth_parts(encoded)?;
+        let token = password.trim();
+        if username.trim() != "scope" || !token.starts_with(CLI_SESSION_TOKEN_PREFIX) {
+            return Err(invalid_git_credentials());
+        }
+        return state
+            .metadata
+            .verify_cli_session_token(token)
+            .map_err(git_credential_error);
+    }
+
+    require_scope_user(state, headers)
+        .await
+        .map_err(git_credential_error)
 }
 
 #[cfg(test)]
@@ -103,49 +126,8 @@ pub(crate) fn git_receive_pack_auth_required() -> ApiError {
     ApiError::unauthorized("Git push credentials required")
 }
 
-pub(crate) fn git_read_authorization_from_headers(
-    headers: &HeaderMap,
-) -> Result<Option<GitReadAuthorization>, ApiError> {
-    let Some(value) = headers.get(AUTHORIZATION) else {
-        return Ok(None);
-    };
-    let value = value
-        .to_str()
-        .map_err(|_| ApiError::unauthorized("invalid authorization header"))?;
-
-    if let Some(token) = value.strip_prefix("Bearer ") {
-        let token = token.trim();
-        if token.is_empty() {
-            return Err(ApiError::unauthorized("empty bearer token"));
-        }
-        if token.starts_with(GIT_PUSH_TOKEN_PREFIX) {
-            return Ok(Some(GitReadAuthorization::ScopeToken {
-                secret: token.to_string(),
-            }));
-        }
-        return Ok(None);
-    }
-
-    if let Some(encoded) = value.strip_prefix("Basic ") {
-        let token = basic_auth_secret(encoded)?;
-        if token.is_empty() {
-            return Err(ApiError::unauthorized("empty Git token"));
-        }
-        return Ok(Some(GitReadAuthorization::ScopeToken { secret: token }));
-    }
-
-    Err(ApiError::unauthorized(
-        "expected Authorization: Basic Git token or Bearer token",
-    ))
-}
-
 pub(crate) fn basic_auth_secret(encoded: &str) -> Result<String, ApiError> {
-    let decoded = BASE64
-        .decode(encoded.trim())
-        .map_err(|_| ApiError::unauthorized("invalid basic authorization"))?;
-    let decoded = String::from_utf8(decoded)
-        .map_err(|_| ApiError::unauthorized("invalid basic authorization"))?;
-    let (username, password) = decoded.split_once(':').unwrap_or((decoded.as_str(), ""));
+    let (username, password) = basic_auth_parts(encoded)?;
     let token = if password.is_empty() {
         username.trim()
     } else {
@@ -153,6 +135,16 @@ pub(crate) fn basic_auth_secret(encoded: &str) -> Result<String, ApiError> {
     };
 
     Ok(token.to_string())
+}
+
+fn basic_auth_parts(encoded: &str) -> Result<(String, String), ApiError> {
+    let decoded = BASE64
+        .decode(encoded.trim())
+        .map_err(|_| ApiError::unauthorized("invalid basic authorization"))?;
+    let decoded = String::from_utf8(decoded)
+        .map_err(|_| ApiError::unauthorized("invalid basic authorization"))?;
+    let (username, password) = decoded.split_once(':').unwrap_or((decoded.as_str(), ""));
+    Ok((username.to_string(), password.to_string()))
 }
 
 pub(crate) fn authorize_initial_push_for_repo(
@@ -260,24 +252,6 @@ pub(crate) fn authorize_git_push_token_for_repo(
     Ok(token.owner_user_id.clone())
 }
 
-pub(crate) fn authorize_git_scope_token_for_repo(
-    repo: &StoredRepository,
-    secret: &str,
-) -> Result<String, ApiError> {
-    if let Some(token) = repo.git_push_token.as_ref()
-        && token.token_hash == git_push_token_hash(secret)
-    {
-        if token.owner_user_id != repo.record.owner_user_id {
-            return Err(ApiError::forbidden(
-                "Git push token owner does not match repo owner",
-            ));
-        }
-        return Ok(token.owner_user_id.clone());
-    }
-
-    authorize_git_read_token_for_repo(repo, secret)
-}
-
 pub(crate) fn authorize_git_write_token_for_repo(
     repo: &StoredRepository,
     secret: &str,
@@ -294,27 +268,4 @@ pub(crate) fn authorize_git_write_token_for_repo(
     }
 
     Err(ApiError::unauthorized("invalid Git credentials"))
-}
-
-pub(crate) fn authorize_git_read_token_for_repo(
-    repo: &StoredRepository,
-    secret: &str,
-) -> Result<String, ApiError> {
-    let hash = git_clone_token_hash(secret);
-    let Some(token) = repo
-        .git_clone_tokens
-        .iter()
-        .find(|token| token.token_hash == hash)
-    else {
-        return Err(ApiError::unauthorized("invalid Git credentials"));
-    };
-
-    let access = repo.access_for_user_id(&token.user_id);
-    if !access.can_read_private_files
-        && access.actor != crate::domain::store::RepositoryActor::Owner
-    {
-        return Err(ApiError::unauthorized("invalid Git credentials"));
-    }
-
-    Ok(token.user_id.clone())
 }

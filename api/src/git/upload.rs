@@ -2,14 +2,10 @@ use crate::domain::policy::Principal;
 use crate::domain::projection::{Projection, ProjectionViewKey, project_graph};
 use crate::domain::store::{RepoPublicationState, RepositoryActor, is_supported_git_file_mode};
 use crate::{
-    auth::scope::{optional_scope_user, principal_for_scope_user},
+    auth::scope::principal_for_user_id,
     config::{DEFAULT_GIT_BRANCH, GIT_UPLOAD_PACK, UNPUBLISHED_GIT_ERROR},
     error::ApiError,
-    git::{
-        GitReadAuthorization, authorize_git_scope_token_for_repo, find_repo_after_git_scope_token,
-        git_credential_error, git_read_authorization_from_headers,
-        storage::cached_raw_git_snapshot_repo,
-    },
+    git::{GitRemoteMode, git_read_scope_user, storage::cached_raw_git_snapshot_repo},
     object_store::source_blob_bytes,
     runtime_budgets::{RuntimeBudgets, RuntimePermit},
     state::AppState,
@@ -19,7 +15,7 @@ use axum::{
     body::Body,
     http::{
         HeaderMap, StatusCode,
-        header::{AUTHORIZATION, CACHE_CONTROL, CONTENT_TYPE},
+        header::{CACHE_CONTROL, CONTENT_TYPE},
     },
     response::{IntoResponse, Response},
 };
@@ -44,32 +40,20 @@ pub(crate) async fn git_projection_for_request(
     headers: &HeaderMap,
     owner: &str,
     repo_name: &str,
+    mode: GitRemoteMode,
 ) -> Result<Projection, ApiError> {
-    if let Some(read_auth) = git_read_authorization_from_headers(headers)? {
-        let (repo, principal) = principal_for_git_read_token(state, read_auth, owner, repo_name)?;
-        if repo.record.publication_state != RepoPublicationState::Published {
-            return unpublished_git_read_error(&repo, owner, repo_name, &principal);
-        }
-
-        ensure_repo_read(state, &repo, &principal)?;
-        let view_key = ProjectionViewKey::from_access(repo.access_for_principal(&principal));
-        return Ok(project_graph(
-            &repo.policy,
-            &repo.graph,
-            &repo.visibility_events,
-            view_key,
-        ));
-    }
-
-    let repo = find_repo(state, owner, repo_name)?;
-    let user = optional_scope_user(state, headers).await?;
-    let principal = principal_for_scope_user(&repo, user.as_ref());
+    let (repo, principal) =
+        git_read_principal_for_request(state, headers, owner, repo_name, mode).await?;
     if repo.record.publication_state != RepoPublicationState::Published {
         return unpublished_git_read_error(&repo, owner, repo_name, &principal);
     }
 
     ensure_repo_read(state, &repo, &principal)?;
-    let view_key = ProjectionViewKey::from_access(repo.access_for_principal(&principal));
+    let access = repo.access_for_principal(&principal);
+    if mode == GitRemoteMode::Permissioned && access.actor == RepositoryActor::Public {
+        return Err(ApiError::forbidden("repo membership required"));
+    }
+    let view_key = ProjectionViewKey::from_access(access);
     Ok(project_graph(
         &repo.policy,
         &repo.graph,
@@ -83,19 +67,19 @@ pub(crate) async fn git_upload_pack_repo_for_request(
     headers: &HeaderMap,
     owner: &str,
     repo_name: &str,
+    mode: GitRemoteMode,
 ) -> Result<PathBuf, ApiError> {
-    if headers.contains_key(AUTHORIZATION)
+    if mode == GitRemoteMode::Permissioned
         && let Some(repo_path) =
-            private_live_repo_for_request(state, headers, owner, repo_name).await?
+            private_live_repo_for_request(state, headers, owner, repo_name, mode).await?
     {
         return Ok(repo_path);
     }
 
-    let projection = match git_projection_for_request(state, headers, owner, repo_name).await {
+    let projection = match git_projection_for_request(state, headers, owner, repo_name, mode).await
+    {
         Ok(projection) => projection,
-        Err(error)
-            if !headers.contains_key(AUTHORIZATION) && error.status == StatusCode::NOT_FOUND =>
-        {
+        Err(error) if mode == GitRemoteMode::Public && error.status == StatusCode::NOT_FOUND => {
             return Err(git_upload_pack_auth_required());
         }
         Err(error) => return Err(error),
@@ -112,15 +96,10 @@ pub(crate) async fn private_live_repo_for_request(
     headers: &HeaderMap,
     owner: &str,
     repo_name: &str,
+    mode: GitRemoteMode,
 ) -> Result<Option<PathBuf>, ApiError> {
-    let (repo, principal) = if let Some(read_auth) = git_read_authorization_from_headers(headers)? {
-        principal_for_git_read_token(state, read_auth, owner, repo_name)?
-    } else {
-        let repo = find_repo(state, owner, repo_name)?;
-        let user = optional_scope_user(state, headers).await?;
-        let principal = principal_for_scope_user(&repo, user.as_ref());
-        (repo, principal)
-    };
+    let (repo, principal) =
+        git_read_principal_for_request(state, headers, owner, repo_name, mode).await?;
     if repo.record.publication_state != RepoPublicationState::Published {
         if repo.access_for_principal(&principal).actor == RepositoryActor::Owner {
             return Err(ApiError::forbidden(UNPUBLISHED_GIT_ERROR));
@@ -138,6 +117,27 @@ pub(crate) async fn private_live_repo_for_request(
     cached_raw_git_snapshot_repo(state, snapshot).map(Some)
 }
 
+async fn git_read_principal_for_request(
+    state: &AppState,
+    headers: &HeaderMap,
+    owner: &str,
+    repo_name: &str,
+    mode: GitRemoteMode,
+) -> Result<(crate::domain::store::StoredRepository, Principal), ApiError> {
+    match mode {
+        GitRemoteMode::Public => {
+            let repo = find_repo(state, owner, repo_name)?;
+            Ok((repo, Principal::public()))
+        }
+        GitRemoteMode::Permissioned => {
+            let user = git_read_scope_user(state, headers).await?;
+            let repo = find_repo(state, owner, repo_name)?;
+            let principal = principal_for_user_id(&repo, &user.id);
+            Ok((repo, principal))
+        }
+    }
+}
+
 fn unpublished_git_read_error(
     repo: &crate::domain::store::StoredRepository,
     owner: &str,
@@ -151,28 +151,6 @@ fn unpublished_git_read_error(
             "repo {owner}/{repo_name} not found"
         )))
     }
-}
-
-fn principal_for_git_read_token(
-    state: &AppState,
-    read_auth: GitReadAuthorization,
-    owner: &str,
-    repo_name: &str,
-) -> Result<(crate::domain::store::StoredRepository, Principal), ApiError> {
-    let repo = find_repo_after_git_scope_token(state, owner, repo_name)?;
-    let user_id = match read_auth {
-        GitReadAuthorization::ScopeToken { secret } => {
-            authorize_git_scope_token_for_repo(&repo, &secret).map_err(git_credential_error)?
-        }
-    };
-
-    Ok((
-        repo,
-        Principal {
-            id: user_id,
-            kind: crate::domain::policy::PrincipalKind::User,
-        },
-    ))
 }
 
 pub(crate) fn projection_bare_repo(

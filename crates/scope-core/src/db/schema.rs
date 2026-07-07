@@ -351,9 +351,6 @@ mod tests {
     #[test]
     fn destructive_pre_alpha_reset_drift_allows_pre_alpha_shape_changes() {
         assert!(is_destructive_pre_alpha_reset_drift(
-            "missing table scope_repository_git_clone_tokens"
-        ));
-        assert!(is_destructive_pre_alpha_reset_drift(
             "missing column scope_repositories.owner_user_id"
         ));
         assert!(is_destructive_pre_alpha_reset_drift(

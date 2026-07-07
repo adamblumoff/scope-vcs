@@ -50,11 +50,18 @@ async fn real_git_binary_published_push_round_trips_through_clone() {
 
     let (addr, server) = start_git_http_server(state.clone()).await;
     let source = temp_path("binary-published-update-source");
-    let remote = format!("http://scope:{secret}@{addr}/git/{TEST_REPO_ID}");
+    let remote = format!("http://scope:{secret}@{addr}/git/permissioned/{TEST_REPO_ID}");
+    let public_remote = format!("http://{addr}/git/public/{TEST_REPO_ID}");
     run_git(
         None,
-        &["clone", &remote, source.to_str().unwrap()],
+        &["clone", &public_remote, source.to_str().unwrap()],
         "clone published binary repo",
+    )
+    .unwrap();
+    run_git(
+        Some(&source),
+        &["remote", "set-url", "origin", &remote],
+        "point origin at permissioned Scope remote",
     )
     .unwrap();
     assert_eq!(fs::read(source.join("image.png")).unwrap(), original);
@@ -71,7 +78,6 @@ async fn real_git_binary_published_push_round_trips_through_clone() {
     .unwrap();
 
     let public_clone = temp_path("binary-published-update-public-clone");
-    let public_remote = format!("http://{addr}/git/{TEST_REPO_ID}");
     run_git(
         None,
         &["clone", &public_remote, public_clone.to_str().unwrap()],
@@ -109,7 +115,7 @@ async fn public_git_projection_omits_private_binary_file() {
 
     let (addr, server) = start_git_http_server(state).await;
     let public_clone = temp_path("private-binary-public-clone");
-    let public_remote = format!("http://{addr}/git/{TEST_REPO_ID}");
+    let public_remote = format!("http://{addr}/git/public/{TEST_REPO_ID}");
     run_git(
         None,
         &["clone", &public_remote, public_clone.to_str().unwrap()],
@@ -147,7 +153,7 @@ async fn first_push_publish_clone_round_trip(label: &str, files: &[(&str, &[u8])
     run_git(Some(&source), &["add", "-A"], "add round-trip files").unwrap();
     commit_all(&source, "round-trip files");
 
-    let remote = format!("http://scope:{secret}@{addr}/git/{TEST_REPO_ID}");
+    let remote = format!("http://scope:{secret}@{addr}/git/permissioned/{TEST_REPO_ID}");
     run_git(
         Some(&source),
         &["remote", "add", "scope", &remote],
@@ -163,7 +169,7 @@ async fn first_push_publish_clone_round_trip(label: &str, files: &[(&str, &[u8])
     .unwrap();
 
     let clone = temp_path(&format!("{label}-public-clone"));
-    let public_remote = format!("http://{addr}/git/{TEST_REPO_ID}");
+    let public_remote = format!("http://{addr}/git/public/{TEST_REPO_ID}");
     run_git(
         None,
         &["clone", &public_remote, clone.to_str().unwrap()],

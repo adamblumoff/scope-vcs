@@ -49,7 +49,6 @@ fn test_repo() -> StoredRepository {
         repo_config: RepoConfig::with_default_visibility(ConfigVisibility::Public),
         first_push_token: None,
         git_push_token: None,
-        git_clone_tokens: Vec::new(),
         pending_import: None,
         policy: Policy::new(Visibility::Public),
         graph: SourceGraph {

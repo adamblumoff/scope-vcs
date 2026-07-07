@@ -68,7 +68,6 @@ pub mod repository {
                 repo_config: decode_json(self.repo_config)?,
                 first_push_token: facts.first_push_token,
                 git_push_token: facts.git_push_token,
-                git_clone_tokens: facts.git_clone_tokens,
                 pending_import: self
                     .pending_import
                     .map(decode_json::<PendingImport>)
@@ -197,44 +196,6 @@ pub mod repository_git_push_token {
             GitPushToken {
                 token_hash: self.token_hash,
                 owner_user_id: self.owner_user_id,
-                created_at_unix: i64_to_u64_floor(self.created_at_unix),
-            }
-        }
-    }
-}
-pub mod repository_git_clone_token {
-    use super::*;
-
-    #[derive(Clone, Debug, PartialEq, DeriveEntityModel)]
-    #[sea_orm(table_name = "scope_repository_git_clone_tokens")]
-    pub struct Model {
-        #[sea_orm(primary_key, auto_increment = false)]
-        pub repo_id: String,
-        #[sea_orm(primary_key, auto_increment = false)]
-        pub token_hash: String,
-        pub user_id: String,
-        pub created_at_unix: i64,
-    }
-
-    #[derive(Copy, Clone, Debug, EnumIter, DeriveRelation)]
-    pub enum Relation {}
-
-    impl ActiveModelBehavior for ActiveModel {}
-
-    impl Model {
-        pub fn from_domain(repo_id: &str, token: &GitCloneToken) -> Self {
-            Self {
-                repo_id: repo_id.to_string(),
-                token_hash: token.token_hash.clone(),
-                user_id: token.user_id.clone(),
-                created_at_unix: u64_to_i64_saturating(token.created_at_unix),
-            }
-        }
-
-        pub fn into_domain(self) -> GitCloneToken {
-            GitCloneToken {
-                token_hash: self.token_hash,
-                user_id: self.user_id,
                 created_at_unix: i64_to_u64_floor(self.created_at_unix),
             }
         }

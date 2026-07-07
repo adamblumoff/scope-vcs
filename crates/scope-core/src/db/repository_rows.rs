@@ -1,8 +1,6 @@
 use super::{entities, outbox::enqueue_projection_read_model_rebuild};
 use crate::{
-    domain::store::{
-        FirstPushToken, GitCloneToken, GitPushToken, RepoSettings, SourceBlob, StoredRepository,
-    },
+    domain::store::{FirstPushToken, GitPushToken, RepoSettings, SourceBlob, StoredRepository},
     error::ApiError,
 };
 use sea_orm::{
@@ -16,7 +14,6 @@ pub struct RepositoryFactRows {
     pub settings: Option<RepoSettings>,
     pub first_push_token: Option<FirstPushToken>,
     pub git_push_token: Option<GitPushToken>,
-    pub git_clone_tokens: Vec<GitCloneToken>,
     pub git_snapshot: Option<SourceBlob>,
 }
 
@@ -29,7 +26,6 @@ impl RepositoryFactRows {
             settings,
             first_push_token: self.first_push_token,
             git_push_token: self.git_push_token,
-            git_clone_tokens: self.git_clone_tokens,
             git_snapshot: self.git_snapshot,
         })
     }
@@ -135,13 +131,6 @@ where
             .await
             .map_err(ApiError::internal)?;
     }
-    for token in &repo.git_clone_tokens {
-        entities::repository_git_clone_token::Model::from_domain(&repo_id, token)
-            .into_active_model()
-            .insert(conn)
-            .await
-            .map_err(ApiError::internal)?;
-    }
     if let Some(snapshot) = repo.git_snapshot.as_ref() {
         entities::repository_git_snapshot::Model::from_domain(&repo_id, snapshot)
             .into_active_model()
@@ -169,11 +158,6 @@ where
         .map_err(ApiError::internal)?;
     entities::repository_git_push_token::Entity::delete_many()
         .filter(entities::repository_git_push_token::Column::RepoId.eq(repo_id.to_string()))
-        .exec(conn)
-        .await
-        .map_err(ApiError::internal)?;
-    entities::repository_git_clone_token::Entity::delete_many()
-        .filter(entities::repository_git_clone_token::Column::RepoId.eq(repo_id.to_string()))
         .exec(conn)
         .await
         .map_err(ApiError::internal)?;
@@ -266,21 +250,6 @@ where
     for row in git_push_tokens {
         if let Some(fact) = facts.get_mut(&row.repo_id) {
             fact.git_push_token = Some(row.into_domain());
-        }
-    }
-
-    let git_clone_tokens = entities::repository_git_clone_token::Entity::find()
-        .filter(entities::repository_git_clone_token::Column::RepoId.is_in(repo_ids.to_vec()))
-        .order_by_asc(entities::repository_git_clone_token::Column::RepoId)
-        .order_by_asc(entities::repository_git_clone_token::Column::UserId)
-        .order_by_asc(entities::repository_git_clone_token::Column::CreatedAtUnix)
-        .order_by_asc(entities::repository_git_clone_token::Column::TokenHash)
-        .all(conn)
-        .await
-        .map_err(ApiError::internal)?;
-    for row in git_clone_tokens {
-        if let Some(fact) = facts.get_mut(&row.repo_id) {
-            fact.git_clone_tokens.push(row.into_domain());
         }
     }
 

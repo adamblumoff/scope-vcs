@@ -9,7 +9,7 @@ use crate::{
             optional_scope_user, principal_for_scope_user, principal_for_user_id,
             require_scope_user,
         },
-        tokens::{generate_first_push_token, generate_git_clone_token, generate_git_push_token},
+        tokens::{generate_first_push_token, generate_git_push_token},
     },
     db::{RepoSummaryRead, RepositoryMutation},
     error::ApiError,
@@ -127,31 +127,6 @@ pub(crate) async fn delete_repo(
         id: repo_id,
         deleted: true,
     }))
-}
-
-pub(crate) async fn create_clone_credential(
-    State(state): State<AppState>,
-    headers: HeaderMap,
-    Path((owner, repo_name)): Path<(String, String)>,
-) -> Result<Json<RepoCloneCredentialResponse>, ApiError> {
-    let user = require_scope_user(&state, &headers).await?;
-    let repo = find_repo(&state, &owner, &repo_name)?;
-    let principal = principal_for_user_id(&repo, &user.id);
-    ensure_repo_read(&state, &repo, &principal)?;
-    if repo.access_for_principal(&principal).actor == RepositoryActor::Public {
-        return Err(ApiError::forbidden("repo membership required"));
-    }
-
-    let (secret, token) = generate_git_clone_token(&user.id)?;
-    let token = state
-        .metadata
-        .create_git_clone_token(&owner, &repo_name, &user.id, token)?;
-
-    Ok(Json(repo_clone_credential_response(
-        &repo,
-        &token,
-        Some(secret),
-    )))
 }
 
 pub(crate) async fn get_repo_config(

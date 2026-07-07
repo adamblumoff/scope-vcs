@@ -2,7 +2,9 @@ use anyhow::{Context, bail};
 use std::{
     collections::BTreeSet,
     env,
-    path::PathBuf,
+    fs::OpenOptions,
+    io::Write,
+    path::{Path, PathBuf},
     process::{Command, Output},
 };
 
@@ -23,11 +25,19 @@ pub struct GitFetchAuthPlan {
     pub env: Vec<(String, String)>,
 }
 
+#[derive(Debug, Eq, PartialEq)]
+pub struct GitCloneAuthPlan {
+    pub args: Vec<String>,
+    pub env: Vec<(String, String)>,
+}
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct GitChangedPath {
     pub status: String,
     pub path: String,
 }
+
+const SCOPE_GIT_CREDENTIAL_HELPER: &str = "!scope git-credential";
 
 pub fn discover_git_repo(command_name: &str) -> anyhow::Result<GitRepo> {
     let root_output = Command::new("git")
@@ -267,6 +277,90 @@ pub fn push_head_with_bearer(
     Ok(())
 }
 
+pub fn clone_with_bearer(
+    remote_url: &str,
+    bearer_token: &str,
+    destination: Option<&Path>,
+) -> anyhow::Result<()> {
+    let inherited_config_count = env::var("GIT_CONFIG_COUNT")
+        .ok()
+        .and_then(|value| value.parse::<usize>().ok());
+    let plan = git_clone_auth_plan(
+        remote_url,
+        bearer_token,
+        destination,
+        inherited_config_count,
+    );
+    let mut command = Command::new("git");
+    command.args(plan.args.iter().map(String::as_str));
+    for (key, value) in plan.env {
+        command.env(key, value);
+    }
+
+    let status = command
+        .status()
+        .context("run authenticated Scope git clone")?;
+    if !status.success() {
+        bail!("git clone from Scope failed");
+    }
+    Ok(())
+}
+
+pub fn install_scope_fetch_auth(repo_root: &Path, remote_url: &str) -> anyhow::Result<()> {
+    let git_dir = git_dir_for_repo(repo_root)?;
+    let config_path = git_dir.join("config");
+    let auth_config = scope_fetch_auth_config(remote_url)?;
+    let mut config = OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(&config_path)
+        .with_context(|| format!("open {}", config_path.display()))?;
+    config
+        .write_all(auth_config.as_bytes())
+        .with_context(|| format!("write {}", config_path.display()))?;
+    Ok(())
+}
+
+fn git_dir_for_repo(repo_root: &Path) -> anyhow::Result<PathBuf> {
+    let output = Command::new("git")
+        .current_dir(repo_root)
+        .args(["rev-parse", "--git-dir"])
+        .output()
+        .context("inspect cloned Git directory")?;
+    if !output.status.success() {
+        bail!("inspect cloned Git directory failed");
+    }
+
+    let git_dir = String::from_utf8(output.stdout).context("Git directory path was not UTF-8")?;
+    let git_dir = git_dir.trim();
+    if git_dir.is_empty() {
+        bail!("Git directory path could not be determined");
+    }
+
+    let git_dir = PathBuf::from(git_dir);
+    Ok(if git_dir.is_absolute() {
+        git_dir
+    } else {
+        repo_root.join(git_dir)
+    })
+}
+
+fn scope_fetch_auth_config(remote_url: &str) -> anyhow::Result<String> {
+    let remote_url = git_config_quoted(remote_url, "Scope Git remote URL")?;
+    let helper = git_config_quoted(SCOPE_GIT_CREDENTIAL_HELPER, "Scope Git credential helper")?;
+    Ok(format!(
+        "\n[credential \"{remote_url}\"]\n\thelper =\n\thelper = \"{helper}\"\n\tuseHttpPath = true\n"
+    ))
+}
+
+fn git_config_quoted(value: &str, description: &str) -> anyhow::Result<String> {
+    if value.chars().any(char::is_control) {
+        bail!("{description} cannot contain control characters");
+    }
+
+    Ok(value.replace('\\', "\\\\").replace('"', "\\\""))
+}
+
 pub fn fetch_scope_remote_with_bearer(
     repo: &GitRepo,
     destination: &str,
@@ -298,6 +392,36 @@ pub fn fetch_scope_remote_with_bearer(
         bail!("refresh Scope Git remote before push review failed");
     }
     Ok(())
+}
+
+pub fn git_clone_auth_plan(
+    remote_url: &str,
+    bearer_token: &str,
+    destination: Option<&Path>,
+    inherited_config_count: Option<usize>,
+) -> GitCloneAuthPlan {
+    let config_index = inherited_config_count.unwrap_or(0);
+    let mut args = vec!["clone".to_string(), remote_url.to_string()];
+    if let Some(destination) = destination {
+        args.push(destination.to_string_lossy().to_string());
+    }
+    GitCloneAuthPlan {
+        args,
+        env: vec![
+            (
+                "GIT_CONFIG_COUNT".to_string(),
+                (config_index + 1).to_string(),
+            ),
+            (
+                format!("GIT_CONFIG_KEY_{config_index}"),
+                format!("http.{remote_url}.extraHeader"),
+            ),
+            (
+                format!("GIT_CONFIG_VALUE_{config_index}"),
+                format!("Authorization: Bearer {bearer_token}"),
+            ),
+        ],
+    }
 }
 
 pub fn git_push_auth_plan(
