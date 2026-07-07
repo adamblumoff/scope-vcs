@@ -8,7 +8,7 @@ pub(crate) use self::artifacts::{
     receive_pack_update_from_staging_repo, reviewed_update_from_staging_repo,
 };
 pub(crate) use self::repo_io::{
-    git_refs, git_snapshot_from_ref, run_git, run_git_output, safe_repo_key,
+    git_refs, git_snapshot_from_ref, run_git, run_git_output, safe_repo_key, validate_pushed_tree,
 };
 #[cfg(test)]
 pub(crate) use self::repo_io::{git_stdout_text, git_tree_files, validate_pushed_file_path};

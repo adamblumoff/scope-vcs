@@ -170,6 +170,7 @@ pub struct SubmitRequestMutation {
 pub struct RecordRequestRevisionInput {
     pub request_id: String,
     pub actor_user_id: String,
+    pub expected_old_head_oid: Option<String>,
     pub new_head_oid: String,
     pub git_snapshot: Option<SourceBlob>,
     pub event_id: String,
@@ -395,6 +396,19 @@ pub fn record_request_revision(
         RequestState::Resolved | RequestState::Withdrawn
     ) {
         return Err(ApiError::conflict("request is closed"));
+    }
+    match input.expected_old_head_oid.as_deref() {
+        Some(expected_old_head_oid) if request.head_oid != expected_old_head_oid => {
+            return Err(ApiError::conflict(
+                "request branch changed since push started; fetch and retry",
+            ));
+        }
+        None if request.git_snapshot.is_some() => {
+            return Err(ApiError::conflict(
+                "request branch changed since push started; fetch and retry",
+            ));
+        }
+        _ => {}
     }
 
     let old_head_oid = request.head_oid.clone();

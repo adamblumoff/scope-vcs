@@ -164,6 +164,69 @@ async fn real_git_request_ref_push_records_revision_without_touching_main() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn request_ref_push_rejects_unsupported_tree_entries() {
+    let state = test_state_with_request();
+    let state_for_server = state.clone();
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    let server = tokio::spawn(async move {
+        axum::serve(listener, router(state_for_server))
+            .await
+            .unwrap();
+    });
+
+    let source = temp_checkout_dir("request-ref-invalid-tree");
+    let public_remote = format!("http://{addr}/git/public/{TEST_REPO_ID}");
+    run_git(
+        None,
+        &["clone", &public_remote, source.to_str().unwrap()],
+        "clone public repo for invalid request",
+    )
+    .unwrap();
+    let commit = git_head_oid(&source);
+    run_git(
+        Some(&source),
+        &[
+            "update-index",
+            "--add",
+            "--cacheinfo",
+            &format!("160000,{commit},vendor/submodule"),
+        ],
+        "add request gitlink",
+    )
+    .unwrap();
+    commit_all(&source, "invalid request tree");
+    let permissioned_remote = format!("http://{addr}/git/permissioned/{TEST_REPO_ID}");
+    configure_bearer_header(
+        &source,
+        &permissioned_remote,
+        &bearer_header_for(PUBLIC_SUBJECT, PUBLIC_EMAIL),
+    );
+
+    let output = run_git_output(
+        Some(&source),
+        &["push", &permissioned_remote, &format!("HEAD:{REQUEST_REF}")],
+        "push invalid request ref",
+    )
+    .unwrap();
+
+    assert!(!output.status.success());
+    state
+        .metadata
+        .read(|catalog| {
+            let request = catalog.requests.get(REQUEST_ID).unwrap();
+            assert_eq!(request.head_oid, "initial_request_head");
+            assert!(request.git_snapshot.is_none());
+            assert_eq!(catalog.request_events.len(), 1);
+            Ok(())
+        })
+        .unwrap();
+
+    server.abort();
+    let _ = fs::remove_dir_all(source);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn public_request_author_cannot_push_main() {
     let state = test_state_with_request();
     let state_for_server = state.clone();

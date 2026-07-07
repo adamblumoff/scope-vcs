@@ -190,6 +190,10 @@ pub(super) fn git_tree_entries(
     Ok(pending_files)
 }
 
+pub(crate) fn validate_pushed_tree(staging_repo: &FsPath, head_oid: &str) -> Result<(), ApiError> {
+    git_tree_entries(staging_repo, head_oid).map(|_| ())
+}
+
 pub(super) fn git_tree_blob_contents(
     staging_repo: &FsPath,
     pending_files: &[PendingGitTreeFile],

@@ -11,7 +11,9 @@ use crate::{
     },
     error::ApiError,
     git::{
-        import::{git_snapshot_from_ref, run_git, run_git_output, safe_repo_key},
+        import::{
+            git_snapshot_from_ref, run_git, run_git_output, safe_repo_key, validate_pushed_tree,
+        },
         storage::{
             cached_raw_git_snapshot_repo, git_repo_storage_root, receive_pack_staging_repo_path,
             remove_dir_if_exists, request_ref_store_repo_path, write_receive_pack_hook,
@@ -276,6 +278,7 @@ pub(crate) fn persist_request_ref_revision(
         .record_request_revision(RecordRequestRevisionInput {
             request_id: request.id,
             actor_user_id: author_id.to_string(),
+            expected_old_head_oid: update.old_head_oid.clone(),
             new_head_oid: update.new_head_oid.clone(),
             git_snapshot: Some(persisted.git_snapshot.clone()),
             event_id,
@@ -401,6 +404,7 @@ fn persist_request_ref_to_store(
     update: &RequestRefUpdate,
 ) -> Result<PersistedRequestRef, ApiError> {
     ensure_request_ref_oid_is_commit(staging_repo, &update.new_head_oid)?;
+    validate_pushed_tree(staging_repo, &update.new_head_oid)?;
     let _store_lock = acquire_request_ref_store_lock(state, owner, repo_name)?;
     let store_repo = ensure_request_ref_store_repo_locked(state, owner, repo_name)?;
     let previous_head = request_ref_head(&store_repo, &update.request_ref)?;

@@ -657,6 +657,7 @@ mod tests {
             .record_request_revision(RecordRequestRevisionInput {
                 request_id: "req_1".to_string(),
                 actor_user_id: "user_public".to_string(),
+                expected_old_head_oid: Some("head".to_string()),
                 new_head_oid: "head_2".to_string(),
                 git_snapshot: None,
                 event_id: "event_revision".to_string(),
