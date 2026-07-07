@@ -28,6 +28,7 @@ use std::{
     fs::{self, OpenOptions},
     io::{ErrorKind, Write},
     path::{Path as FsPath, PathBuf},
+    sync::Mutex,
     thread,
     time::{Duration, Instant},
 };
@@ -35,6 +36,7 @@ use std::{
 const REQUEST_REF_LOCK_TIMEOUT: Duration = Duration::from_secs(10);
 const REQUEST_REF_LOCK_RETRY: Duration = Duration::from_millis(10);
 const REQUEST_REF_STALE_LOCK_AFTER_SECS: u64 = 30 * 60;
+static STALE_GIT_LOCK_REMOVAL: Mutex<()> = Mutex::new(());
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct RequestRefUpdate {
@@ -265,9 +267,10 @@ pub(crate) fn persist_request_ref_revision(
 ) -> Result<(), ApiError> {
     let _lock = acquire_request_ref_update_lock(state, owner, repo_name, &update.request_ref)?;
     let request = ensure_request_ref_update_allowed(state, owner, repo_name, author_id, &update)?;
+    let event_id = request_revision_event_id()?;
+    let now_unix = unix_now()?;
     let persisted =
         persist_request_ref_to_store(state, owner, repo_name, staging_repo, &request, &update)?;
-    let event_id = request_revision_event_id()?;
     let mutation = state
         .metadata
         .record_request_revision(RecordRequestRevisionInput {
@@ -277,7 +280,7 @@ pub(crate) fn persist_request_ref_revision(
             git_snapshot: Some(persisted.git_snapshot.clone()),
             event_id,
             body: None,
-            now_unix: unix_now()?,
+            now_unix,
         });
     if let Err(error) = mutation {
         rollback_request_ref(
@@ -635,6 +638,14 @@ fn acquire_git_lock(
     path: PathBuf,
     conflict_message: &'static str,
 ) -> Result<GitLockFile, ApiError> {
+    acquire_git_lock_with_stale_cleanup(path, conflict_message, true)
+}
+
+fn acquire_git_lock_with_stale_cleanup(
+    path: PathBuf,
+    conflict_message: &'static str,
+    stale_cleanup: bool,
+) -> Result<GitLockFile, ApiError> {
     if let Some(parent) = path.parent() {
         crate::persistence::ensure_private_dir(parent)?;
     }
@@ -654,7 +665,7 @@ fn acquire_git_lock(
                 return Ok(GitLockFile { path });
             }
             Err(error) if error.kind() == ErrorKind::AlreadyExists => {
-                if remove_stale_git_lock(&path)? {
+                if stale_cleanup && remove_stale_git_lock(&path)? {
                     continue;
                 }
                 if started_at.elapsed() >= REQUEST_REF_LOCK_TIMEOUT {
@@ -668,6 +679,17 @@ fn acquire_git_lock(
 }
 
 fn remove_stale_git_lock(path: &FsPath) -> Result<bool, ApiError> {
+    let _guard = STALE_GIT_LOCK_REMOVAL.lock().map_err(|_| {
+        ApiError::internal(std::io::Error::other(
+            "stale git lock removal mutex poisoned",
+        ))
+    })?;
+    let recovery_path = stale_git_lock_recovery_path(path);
+    let _recovery_lock = acquire_git_lock_with_stale_cleanup(
+        recovery_path,
+        "request branch lock recovery already in progress",
+        false,
+    )?;
     if !git_lock_is_stale(path)? {
         return Ok(false);
     }
@@ -678,8 +700,22 @@ fn remove_stale_git_lock(path: &FsPath) -> Result<bool, ApiError> {
     }
 }
 
+fn stale_git_lock_recovery_path(path: &FsPath) -> PathBuf {
+    let mut recovery_path = path.to_path_buf();
+    let file_name = path
+        .file_name()
+        .map(|value| value.to_string_lossy())
+        .unwrap_or_default();
+    recovery_path.set_file_name(format!("{file_name}.recovery"));
+    recovery_path
+}
+
 fn git_lock_is_stale(path: &FsPath) -> Result<bool, ApiError> {
-    let text = fs::read_to_string(path).unwrap_or_default();
+    let text = match fs::read_to_string(path) {
+        Ok(text) => text,
+        Err(error) if error.kind() == ErrorKind::NotFound => return Ok(true),
+        Err(_) => String::new(),
+    };
     let pid = lock_field(&text, "pid").and_then(|value| value.parse::<u32>().ok());
     if let Some(pid) = pid
         && !process_is_alive(pid)
