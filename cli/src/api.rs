@@ -283,16 +283,28 @@ pub fn create_repo(
     session_token: &str,
     name: String,
 ) -> anyhow::Result<CreateRepoResponse> {
-    client
+    let request = CreateRepoRequest { name };
+    let response = client
         .post(format!("{api_url}/v1/repos"))
         .bearer_auth(session_token)
-        .json(&CreateRepoRequest { name })
+        .json(&request)
         .send()
-        .context("create Scope repository")?
+        .context("create Scope repository")?;
+    if response.status() == StatusCode::CONFLICT {
+        anyhow::bail!("{}", duplicate_repo_error_message(&request.name));
+    }
+
+    response
         .error_for_status()
         .context("create Scope repository")?
         .json()
         .context("parse create repository response")
+}
+
+fn duplicate_repo_error_message(name: &str) -> String {
+    format!(
+        "Scope repository {name:?} already exists for this account. Use `scope init --name <new-name>` to create a different repo, or run `scope push` if this checkout is already linked to Scope."
+    )
 }
 
 pub fn get_repo(
@@ -544,6 +556,15 @@ mod tests {
             CLI_BROWSER_LOGIN_EXCHANGE_PATH_TEMPLATE,
         );
         assert_endpoint_matches("exchangeGrantExchange", CLI_EXCHANGE_GRANTS_EXCHANGE_PATH);
+    }
+
+    #[test]
+    fn duplicate_repo_error_names_repo_and_next_steps() {
+        let message = duplicate_repo_error_message("scope-vcs");
+
+        assert!(message.contains("Scope repository \"scope-vcs\" already exists"));
+        assert!(message.contains("scope init --name <new-name>"));
+        assert!(message.contains("scope push"));
     }
 
     fn assert_type_matches<T: TS>(name: &str) {
