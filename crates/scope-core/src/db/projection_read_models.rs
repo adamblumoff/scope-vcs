@@ -310,7 +310,6 @@ mod tests {
             ),
             first_push_token: None,
             git_push_token: None,
-            git_clone_tokens: Vec::new(),
             pending_import: None,
             policy,
             graph: SourceGraph {

@@ -90,15 +90,11 @@ export type CompletePushIntentResponse = { config_applied: boolean, };
 
 export type RepoInitResponse = { repo: RepoSummaryResponse, git_remote_url: string, remote_name: string, push_branch: string, token: FirstPushTokenResponse | null, push_token: GitPushTokenResponse | null, };
 
-export type RepoCloneCredentialResponse = { git_remote_path: string, token: GitCloneTokenResponse, config: RepoConfig, };
-
 export type RepoConfigResponse = { config: RepoConfig, config_hash: string, };
 
 export type FirstPushTokenResponse = { status: FirstPushTokenStatus, created_at_unix: number, expires_at_unix: number, used_at_unix: number | null, secret: string | null, };
 
 export type GitPushTokenResponse = { created_at_unix: number, secret: string | null, };
-
-export type GitCloneTokenResponse = { created_at_unix: number, secret: string | null, };
 
 export type RepoFileResponse = { path: string, oid: string, tracked: boolean, visibility: Visibility, };
 

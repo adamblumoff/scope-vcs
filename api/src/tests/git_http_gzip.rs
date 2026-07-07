@@ -26,7 +26,7 @@ async fn receive_pack_accepts_gzip_encoded_request_body() {
         .oneshot(
             Request::builder()
                 .method("POST")
-                .uri("/git/owner/repo/git-receive-pack")
+                .uri("/git/permissioned/owner/repo/git-receive-pack")
                 .header(CONTENT_TYPE, "application/x-git-receive-pack-request")
                 .header(CONTENT_ENCODING, "gzip")
                 .header("x-scope-push-intent", push_intent)
@@ -88,7 +88,7 @@ async fn receive_pack_cleans_uploaded_blobs_when_push_intent_does_not_match_head
         .oneshot(
             Request::builder()
                 .method("POST")
-                .uri("/git/owner/repo/git-receive-pack")
+                .uri("/git/permissioned/owner/repo/git-receive-pack")
                 .header(CONTENT_TYPE, "application/x-git-receive-pack-request")
                 .header("x-scope-push-intent", push_intent)
                 .header(
@@ -125,6 +125,7 @@ async fn upload_pack_accepts_gzip_encoded_request_body() {
         &HeaderMap::new(),
         TEST_REPO_OWNER,
         TEST_REPO_NAME,
+        GitRemoteMode::Public,
     )
     .await
     .unwrap();
@@ -141,7 +142,7 @@ async fn upload_pack_accepts_gzip_encoded_request_body() {
         .oneshot(
             Request::builder()
                 .method("POST")
-                .uri("/git/owner/repo/git-upload-pack")
+                .uri("/git/public/owner/repo/git-upload-pack")
                 .header(CONTENT_TYPE, "application/x-git-upload-pack-request")
                 .header(CONTENT_ENCODING, "gzip")
                 .body(Body::from(gzipped_request))

@@ -8,8 +8,8 @@ import {
 
 test('publicCloneCommand uses the plain Git remote URL', () => {
   assert.equal(
-    publicCloneCommand('https://scope.example/git/adam/scope-vcs'),
-    'git clone https://scope.example/git/adam/scope-vcs',
+    publicCloneCommand('https://scope.example/git/public/adam/scope-vcs'),
+    'git clone https://scope.example/git/public/adam/scope-vcs',
   )
 })
 

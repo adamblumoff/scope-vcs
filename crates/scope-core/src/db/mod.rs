@@ -25,7 +25,6 @@ mod repo_lifecycle;
 mod repo_mutation;
 mod repo_reads;
 mod repo_settings;
-mod repo_tokens;
 mod repository_rows;
 mod runtime;
 mod schema;

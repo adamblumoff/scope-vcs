@@ -3,10 +3,10 @@ use crate::domain::policy::{Policy, ScopePath, Visibility};
 use crate::domain::projection::SourceGraph;
 use crate::domain::projection_views::ProjectionViewFile;
 use crate::domain::store::{
-    DEFAULT_GIT_FILE_MODE, FirstPushToken, GitCloneToken, GitPushToken, PendingImport,
-    RepoPublicationState, RepoRecord, RepoSettings, RepoStorageCleanup, RepositoryInvite,
-    RepositoryInviteState, RepositoryMember, RepositoryMemberPermissions, SourceBlob,
-    StagedRepoUpdate, StoredRepository, UserAccount,
+    DEFAULT_GIT_FILE_MODE, FirstPushToken, GitPushToken, PendingImport, RepoPublicationState,
+    RepoRecord, RepoSettings, RepoStorageCleanup, RepositoryInvite, RepositoryInviteState,
+    RepositoryMember, RepositoryMemberPermissions, SourceBlob, StagedRepoUpdate, StoredRepository,
+    UserAccount,
 };
 use crate::error::ApiError;
 use sea_orm::entity::prelude::*;
@@ -41,7 +41,6 @@ pub struct RepositoryFacts {
     pub settings: RepoSettings,
     pub first_push_token: Option<FirstPushToken>,
     pub git_push_token: Option<GitPushToken>,
-    pub git_clone_tokens: Vec<GitCloneToken>,
     pub git_snapshot: Option<SourceBlob>,
 }
 
@@ -61,8 +60,8 @@ pub use jobs::{
 };
 pub use read_models::{projection_file, projection_read_model};
 pub use repositories::{
-    repository, repository_first_push_token, repository_git_clone_token, repository_git_push_token,
-    repository_git_snapshot, repository_setting,
+    repository, repository_first_push_token, repository_git_push_token, repository_git_snapshot,
+    repository_setting,
 };
 
 #[cfg(test)]

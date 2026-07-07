@@ -39,6 +39,7 @@ use std::{
     collections::BTreeMap,
     fs,
     path::{Path as FsPath, PathBuf},
+    process::Command,
     sync::Arc,
     time::{SystemTime, UNIX_EPOCH},
 };
@@ -47,7 +48,7 @@ use tower::ServiceExt;
 mod admin;
 mod auth;
 mod cli_auth;
-mod clone_credentials;
+mod clone_access;
 mod commit_history;
 mod cors;
 mod device_login;
@@ -319,6 +320,25 @@ fn commit_all(repo: &FsPath, message: &str) {
     .unwrap();
 }
 
+fn clone_with_bearer(remote: &str, destination: &FsPath, bearer_header_value: &str, action: &str) {
+    let output = Command::new("git")
+        .args(["clone", remote, destination.to_str().unwrap()])
+        .env("GIT_CONFIG_COUNT", "1")
+        .env("GIT_CONFIG_KEY_0", format!("http.{remote}.extraHeader"))
+        .env(
+            "GIT_CONFIG_VALUE_0",
+            format!("Authorization: {bearer_header_value}"),
+        )
+        .output()
+        .unwrap_or_else(|error| panic!("{action}: failed to run git clone: {error}"));
+    if !output.status.success() {
+        panic!(
+            "{action}: {}",
+            String::from_utf8_lossy(&output.stderr).trim()
+        );
+    }
+}
+
 const TEST_PUSH_HEAD_OID: &str = "1111111111111111111111111111111111111111";
 
 fn insert_push_intent_header(
@@ -387,7 +407,6 @@ fn test_repo(owner_id: &str) -> StoredRepository {
         repo_config: RepoConfig::with_default_visibility(ConfigVisibility::Public),
         first_push_token: None,
         git_push_token: None,
-        git_clone_tokens: Vec::new(),
         pending_import: None,
         policy: Policy::new(Visibility::Public),
         graph: SourceGraph {

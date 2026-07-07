@@ -27,7 +27,7 @@ async fn receive_pack_capacity_exhaustion_returns_backpressure() {
         .oneshot(
             Request::builder()
                 .method("GET")
-                .uri("/git/owner/repo/info/refs?service=git-receive-pack")
+                .uri("/git/permissioned/owner/repo/info/refs?service=git-receive-pack")
                 .header(
                     AUTHORIZATION,
                     format!("Basic {}", BASE64.encode(format!("scope:{secret}"))),
@@ -59,7 +59,7 @@ async fn upload_pack_capacity_exhaustion_happens_before_projection_build() {
         .oneshot(
             Request::builder()
                 .method("POST")
-                .uri("/git/owner/repo/git-upload-pack")
+                .uri("/git/public/owner/repo/git-upload-pack")
                 .header(CONTENT_TYPE, "application/x-git-upload-pack-request")
                 .body(Body::empty())
                 .unwrap(),

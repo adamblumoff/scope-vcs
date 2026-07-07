@@ -206,14 +206,14 @@ pub fn parse_scope_git_remote(api_url: &str, remote_url: &str) -> anyhow::Result
         .path_segments()
         .map(|segments| segments.collect::<Vec<_>>())
         .unwrap_or_default();
-    if segments.len() != 3 || segments[0] != "git" {
-        bail!("Scope remote must have path /git/owner/repo");
+    if segments.len() != 4 || segments[0] != "git" || segments[1] != "permissioned" {
+        bail!("Scope remote must have path /git/permissioned/owner/repo");
     }
 
-    let owner = segments[1].trim();
-    let repo = segments[2].trim();
+    let owner = segments[2].trim();
+    let repo = segments[3].trim();
     if owner.is_empty() || repo.is_empty() {
-        bail!("Scope remote must have path /git/owner/repo");
+        bail!("Scope remote must have path /git/permissioned/owner/repo");
     }
 
     Ok((owner.to_string(), repo.to_string()))
@@ -290,7 +290,7 @@ mod tests {
         assert_eq!(
             parse_scope_git_remote(
                 "https://scope-api-production-0251.up.railway.app",
-                "https://scope-api-production-0251.up.railway.app/git/adam/random"
+                "https://scope-api-production-0251.up.railway.app/git/permissioned/adam/random"
             )
             .unwrap(),
             ("adam".to_string(), "random".to_string())
@@ -302,7 +302,7 @@ mod tests {
         assert_eq!(
             parse_scope_git_remote(
                 "https://scope.example",
-                "https://scope@scope.example/git/adam/random"
+                "https://scope@scope.example/git/permissioned/adam/random"
             )
             .unwrap(),
             ("adam".to_string(), "random".to_string())
@@ -312,8 +312,11 @@ mod tests {
     #[test]
     fn parse_scope_git_remote_rejects_different_origins() {
         assert!(
-            parse_scope_git_remote("https://scope.example", "https://evil.example/git/a/b")
-                .is_err()
+            parse_scope_git_remote(
+                "https://scope.example",
+                "https://evil.example/git/permissioned/a/b"
+            )
+            .is_err()
         );
     }
 
@@ -322,7 +325,7 @@ mod tests {
         assert!(
             parse_scope_git_remote(
                 "https://scope.example",
-                "https://scope:secret@scope.example/git/a/b"
+                "https://scope:secret@scope.example/git/permissioned/a/b"
             )
             .is_err()
         );
@@ -332,7 +335,7 @@ mod tests {
     fn parse_scope_git_remote_redacts_userinfo_in_mismatch_errors() {
         let error = parse_scope_git_remote(
             "https://scope.example",
-            "https://scope:secret@evil.example/git/a/b",
+            "https://scope:secret@evil.example/git/permissioned/a/b",
         )
         .unwrap_err()
         .to_string();
@@ -346,8 +349,10 @@ mod tests {
     fn parse_scope_git_remote_rejects_non_scope_paths() {
         for remote in [
             "https://scope.example/adam/random",
-            "https://scope.example/git/adam",
-            "https://scope.example/git/adam/random/extra",
+            "https://scope.example/git/adam/random",
+            "https://scope.example/git/public/adam/random",
+            "https://scope.example/git/permissioned/adam",
+            "https://scope.example/git/permissioned/adam/random/extra",
         ] {
             assert!(parse_scope_git_remote("https://scope.example", remote).is_err());
         }

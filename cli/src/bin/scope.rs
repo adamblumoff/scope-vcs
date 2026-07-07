@@ -16,10 +16,11 @@ use scope_cli::{
         cached_cli_session, delete_stored_session_token, read_stored_session_token,
         store_session_token,
     },
+    git_credential::run_git_credential,
     git_repo::{
         changed_paths_since_scope_base_at_commit, discover_git_repo, ensure_git_repo_ready,
-        fetch_scope_remote_with_bearer, head_oid, mark_scope_remote_pushed, run_git,
-        scope_remote_head_oid, warn_if_dirty_working_tree,
+        fetch_scope_remote_with_bearer, head_oid, install_scope_fetch_auth,
+        mark_scope_remote_pushed, run_git, scope_remote_head_oid, warn_if_dirty_working_tree,
     },
     push::{
         DEFAULT_SCOPE_BRANCH, DEFAULT_SCOPE_REMOTE, ensure_scope_remote_can_receive_push,
@@ -61,6 +62,8 @@ enum CommandKind {
     Login(LoginArgs),
     Logout,
     Whoami,
+    #[command(name = "git-credential", hide = true)]
+    GitCredential(GitCredentialArgs),
 }
 
 #[derive(Parser)]
@@ -97,6 +100,11 @@ struct LoginArgs {
     exchange: Option<String>,
 }
 
+#[derive(Parser)]
+struct GitCredentialArgs {
+    operation: String,
+}
+
 fn main() -> anyhow::Result<()> {
     let cli = Cli::parse();
     match cli.command {
@@ -107,6 +115,7 @@ fn main() -> anyhow::Result<()> {
         CommandKind::Login(args) => login(args),
         CommandKind::Logout => logout(),
         CommandKind::Whoami => whoami(),
+        CommandKind::GitCredential(args) => git_credential(args),
     }
 }
 
@@ -124,7 +133,7 @@ fn init(args: InitArgs) -> anyhow::Result<()> {
     eprintln!("Signed in as {}", display_user(&session.user));
     let created = create_repo(&client, &api_url, &session.token, repo_name)?;
 
-    let config_created = match configure_remote(&created.init)
+    let config_created = match configure_remote(&git_repo.root, &created.init)
         .and_then(|_| ensure_scope_repo_config_exists(&git_repo.root))
         .and_then(|config_created| {
             mark_worktree_scope_repo_config_synced(&git_repo.root, &default_scope_repo_config())?;
@@ -437,6 +446,10 @@ fn whoami() -> anyhow::Result<()> {
     Ok(())
 }
 
+fn git_credential(args: GitCredentialArgs) -> anyhow::Result<()> {
+    run_git_credential(&args.operation)
+}
+
 fn session_from_cache_or_login(
     client: &Client,
     api_url: &str,
@@ -717,11 +730,12 @@ fn format_user_code(code: &str) -> String {
         .join("-")
 }
 
-fn configure_remote(init: &RepoInitResponse) -> anyhow::Result<()> {
+fn configure_remote(git_root: &Path, init: &RepoInitResponse) -> anyhow::Result<()> {
     let _ = Command::new("git")
         .args(["remote", "remove", &init.remote_name])
         .status();
-    run_git(&["remote", "add", &init.remote_name, &init.git_remote_url])
+    run_git(&["remote", "add", &init.remote_name, &init.git_remote_url])?;
+    install_scope_fetch_auth(git_root, &init.git_remote_url)
 }
 
 fn prompt_repo_name(git_root: &Path) -> anyhow::Result<String> {

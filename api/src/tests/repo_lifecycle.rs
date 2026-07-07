@@ -36,7 +36,7 @@ async fn create_repo_route_creates_user_and_lists_repo() {
     assert_eq!(body["repo"]["staged_update_pending"], false);
     assert_eq!(
         body["init"]["git_remote_url"],
-        "http://localhost:8080/git/owner/scope_app"
+        "http://localhost:8080/git/permissioned/owner/scope_app"
     );
     assert_eq!(body["init"]["remote_name"], "scope");
     assert_eq!(body["init"]["push_branch"], DEFAULT_GIT_BRANCH);

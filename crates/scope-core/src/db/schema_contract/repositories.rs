@@ -129,46 +129,6 @@ pub const REPOSITORY_GIT_PUSH_TOKENS: TableSpec = TableSpec {
     reset_order: 150,
 };
 
-const REPOSITORY_GIT_CLONE_TOKEN_COLUMNS: &[ColumnSpec] = &[
-    required_column("repo_id", ColumnType::String),
-    required_column("token_hash", ColumnType::String),
-    required_column("user_id", ColumnType::String),
-    required_column("created_at_unix", ColumnType::BigInteger),
-];
-
-const REPOSITORY_GIT_CLONE_TOKEN_INDEXES: &[IndexSpec] = &[index(
-    "idx_scope_repository_git_clone_tokens_user",
-    &["user_id"],
-)];
-
-const REPOSITORY_GIT_CLONE_TOKEN_FOREIGN_KEYS: &[ForeignKeySpec] = &[
-    cascade_fk(
-        "fk_scope_repository_git_clone_tokens_repo",
-        "repo_id",
-        REPOSITORIES.name,
-        REPOSITORY_ID,
-    ),
-    cascade_fk(
-        "fk_scope_repository_git_clone_tokens_user",
-        "user_id",
-        auth::USERS.name,
-        auth::USER_ID,
-    ),
-];
-
-pub const REPOSITORY_GIT_CLONE_TOKENS: TableSpec = TableSpec {
-    name: "scope_repository_git_clone_tokens",
-    columns: REPOSITORY_GIT_CLONE_TOKEN_COLUMNS,
-    primary_key: composite_primary_key(
-        "pk_scope_repository_git_clone_tokens",
-        &["repo_id", "token_hash"],
-    ),
-    indexes: REPOSITORY_GIT_CLONE_TOKEN_INDEXES,
-    foreign_keys: REPOSITORY_GIT_CLONE_TOKEN_FOREIGN_KEYS,
-    counts_for_catalog_rows: true,
-    reset_order: 130,
-};
-
 const REPOSITORY_GIT_SNAPSHOT_COLUMNS: &[ColumnSpec] = &[
     required_column("repo_id", ColumnType::String),
     required_column("object_key", ColumnType::String),
@@ -199,6 +159,5 @@ pub const TABLES: &[TableSpec] = &[
     REPOSITORY_SETTINGS,
     REPOSITORY_FIRST_PUSH_TOKENS,
     REPOSITORY_GIT_PUSH_TOKENS,
-    REPOSITORY_GIT_CLONE_TOKENS,
     REPOSITORY_GIT_SNAPSHOTS,
 ];

@@ -2,7 +2,7 @@ pub mod api;
 pub mod auth;
 pub mod clone;
 pub mod distribution;
-pub mod git_credentials;
+pub mod git_credential;
 pub mod git_repo;
 pub mod installers;
 pub mod push;

@@ -51,6 +51,24 @@ pub(crate) enum ReceivePackAccess {
     },
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum GitRemoteMode {
+    Public,
+    Permissioned,
+}
+
+impl GitRemoteMode {
+    fn parse(mode: &str) -> Result<Self, ApiError> {
+        match mode {
+            "public" => Ok(Self::Public),
+            "permissioned" => Ok(Self::Permissioned),
+            _ => Err(ApiError::not_found(format!(
+                "Git remote mode {mode} not found"
+            ))),
+        }
+    }
+}
+
 const PUSH_INTENT_HEADER: &str = "x-scope-push-intent";
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -73,10 +91,17 @@ pub(crate) fn git_error_response(error: ApiError) -> Response {
 pub(crate) async fn git_info_refs(
     State(state): State<AppState>,
     headers: HeaderMap,
-    Path((org, repo)): Path<(String, String)>,
+    Path((mode, org, repo)): Path<(String, String, String)>,
     Query(query): Query<GitInfoRefsQuery>,
 ) -> Response {
+    let mode = match GitRemoteMode::parse(&mode) {
+        Ok(mode) => mode,
+        Err(error) => return git_error_response(error),
+    };
     match query.service.as_deref() {
+        Some(GIT_RECEIVE_PACK) if mode == GitRemoteMode::Public => git_error_response(
+            ApiError::forbidden("public Git remote cannot receive pushes"),
+        ),
         Some(GIT_RECEIVE_PACK) => match receive_pack_access(&state, &headers, &org, &repo).await {
             Ok(access) => {
                 let _permit = match state.runtime_budgets.try_receive_pack() {
@@ -96,7 +121,7 @@ pub(crate) async fn git_info_refs(
                 Ok(permit) => permit,
                 Err(error) => return git_advertisement_error(error.message),
             };
-            match git_upload_pack_repo_for_request(&state, &headers, &org, &repo).await {
+            match git_upload_pack_repo_for_request(&state, &headers, &org, &repo, mode).await {
                 Ok(repo_path) => git_upload_pack_advertisement(
                     &repo_path,
                     state.runtime_budgets.git_command_timeout(),
@@ -124,9 +149,18 @@ pub(crate) async fn git_info_refs(
 
 pub(crate) async fn git_receive_pack(
     State(state): State<AppState>,
-    Path((org, repo)): Path<(String, String)>,
+    Path((mode, org, repo)): Path<(String, String, String)>,
     request: Request,
 ) -> Response {
+    let mode = match GitRemoteMode::parse(&mode) {
+        Ok(mode) => mode,
+        Err(error) => return git_error_response(error),
+    };
+    if mode == GitRemoteMode::Public {
+        return git_error_response(ApiError::forbidden(
+            "public Git remote cannot receive pushes",
+        ));
+    }
     let headers = request.headers().clone();
     let access = match receive_pack_access(&state, &headers, &org, &repo).await {
         Ok(access) => access,
@@ -163,18 +197,22 @@ pub(crate) async fn git_receive_pack(
 pub(crate) async fn git_upload_pack_rpc(
     State(state): State<AppState>,
     headers: HeaderMap,
-    Path((org, repo_name)): Path<(String, String)>,
+    Path((mode, org, repo_name)): Path<(String, String, String)>,
     request: Request,
 ) -> Response {
+    let mode = match GitRemoteMode::parse(&mode) {
+        Ok(mode) => mode,
+        Err(error) => return git_upload_pack_error(error.message),
+    };
     let permit = match state.runtime_budgets.try_upload_pack() {
         Ok(permit) => permit,
         Err(error) => return git_upload_pack_error(error.message),
     };
-    let repo_path = match git_upload_pack_repo_for_request(&state, &headers, &org, &repo_name).await
-    {
-        Ok(repo_path) => repo_path,
-        Err(error) => return git_upload_pack_error(error.message),
-    };
+    let repo_path =
+        match git_upload_pack_repo_for_request(&state, &headers, &org, &repo_name, mode).await {
+            Ok(repo_path) => repo_path,
+            Err(error) => return git_upload_pack_error(error.message),
+        };
     let body = match to_bytes(request.into_body(), MAX_UPLOAD_PACK_BYTES).await {
         Ok(body) => body,
         Err(error) => {

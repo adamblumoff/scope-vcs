@@ -77,10 +77,6 @@ pub fn router(state: AppState) -> Router {
             get(http::repos::get_repo).delete(http::repos::delete_repo),
         )
         .route(
-            "/v1/repos/{owner}/{repo}/clone-credential",
-            post(http::repos::create_clone_credential),
-        )
-        .route(
             "/v1/repos/{owner}/{repo}/config",
             get(http::repos::get_repo_config),
         )
@@ -145,13 +141,16 @@ pub fn router(state: AppState) -> Router {
             "/v1/repos/{owner}/{repo}/projection-preview",
             get(http::repos::get_projection_preview),
         )
-        .route("/git/{org}/{repo}/info/refs", get(git::git_info_refs))
         .route(
-            "/git/{org}/{repo}/git-receive-pack",
+            "/git/{mode}/{org}/{repo}/info/refs",
+            get(git::git_info_refs),
+        )
+        .route(
+            "/git/{mode}/{org}/{repo}/git-receive-pack",
             post(git::git_receive_pack),
         )
         .route(
-            "/git/{org}/{repo}/git-upload-pack",
+            "/git/{mode}/{org}/{repo}/git-upload-pack",
             post(git::git_upload_pack_rpc),
         );
 
