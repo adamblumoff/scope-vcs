@@ -170,30 +170,10 @@ impl Default for RepoSettings {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(any(test, feature = "ts"), derive(ts_rs::TS))]
-pub enum StagedFileChangeKind {
+pub enum FileChangeKind {
     Added,
     Modified,
     Deleted,
-}
-
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub struct StagedFileChange {
-    pub path: ScopePath,
-    pub old_content: Option<SourceBlob>,
-    pub new_content: Option<SourceBlob>,
-    pub visibility: Visibility,
-    pub kind: StagedFileChangeKind,
-}
-
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub struct StagedRepoUpdate {
-    pub id: String,
-    pub branch: String,
-    pub base_live_commit_id: Option<String>,
-    pub author_id: String,
-    pub message: String,
-    pub git_snapshot: SourceBlob,
-    pub changes: Vec<StagedFileChange>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -244,7 +224,6 @@ pub struct StoredRepository {
     pub graph: SourceGraph,
     pub visibility_events: Vec<VisibilityEvent>,
     pub git_snapshot: Option<SourceBlob>,
-    pub staged_update: Option<StagedRepoUpdate>,
     pub members: Vec<RepositoryMember>,
     pub invitations: Vec<RepositoryInvite>,
 }
@@ -280,7 +259,6 @@ impl StoredRepository {
             },
             visibility_events: Vec::new(),
             git_snapshot: None,
-            staged_update: None,
             members: Vec::new(),
             invitations: Vec::new(),
         })
@@ -385,13 +363,6 @@ impl StoredRepository {
         }
         for event in &self.visibility_events {
             blobs.extend(event.current_content.clone());
-        }
-        if let Some(staged) = &self.staged_update {
-            blobs.push(staged.git_snapshot.clone());
-            for change in &staged.changes {
-                blobs.extend(change.old_content.clone());
-                blobs.extend(change.new_content.clone());
-            }
         }
         blobs
     }

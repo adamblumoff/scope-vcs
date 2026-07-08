@@ -7,12 +7,11 @@ use crate::domain::projection::{
 };
 use crate::domain::repo_actions::preview_publish_import;
 use crate::domain::repo_config::{ConfigVisibility, RepoConfig};
-use crate::domain::staged_updates::apply_staged_update_to_repo;
 use crate::domain::store::{
-    AppCatalog, DEFAULT_GIT_FILE_MODE, EXECUTABLE_GIT_FILE_MODE, GitPushToken, PendingImport,
-    PendingImportFile, RepoPublicationState, RepoRecord, RepoSettings, RepoStorageCleanup,
-    RepositoryInvite, RepositoryInviteState, RepositoryMember, RepositoryMemberPermissions,
-    StagedFileChange, StagedFileChangeKind, StagedRepoUpdate, StoredRepository, UserAccount,
+    AppCatalog, EXECUTABLE_GIT_FILE_MODE, GitPushToken, PendingImport, PendingImportFile,
+    RepoPublicationState, RepoRecord, RepoSettings, RepoStorageCleanup, RepositoryInvite,
+    RepositoryInviteState, RepositoryMember, RepositoryMemberPermissions, StoredRepository,
+    UserAccount,
 };
 use crate::{
     app::router,
@@ -421,7 +420,6 @@ fn test_repo(owner_id: &str) -> StoredRepository {
         },
         visibility_events: Vec::new(),
         git_snapshot: None,
-        staged_update: None,
         members: Vec::new(),
         invitations: Vec::new(),
     }

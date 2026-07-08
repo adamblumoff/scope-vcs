@@ -7,7 +7,7 @@ use super::repo_io::{git_stdout_text, git_tree_files};
 use super::staging::{ReceivePackFileChange, ReceivePackUpdate, ensure_default_branch};
 use crate::domain::projection_views::pending_scope_path;
 use crate::domain::repo_config::RepoConfig;
-use crate::domain::staged_updates::source_content_matches;
+use crate::domain::reviewed_updates::source_content_matches;
 #[cfg(test)]
 use crate::domain::store::PendingImport;
 use crate::domain::store::RepoPublicationState;

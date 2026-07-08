@@ -8,8 +8,8 @@ use crate::domain::{
         RequestActorRole, RequestBaseAudience, RequestDisposition, RequestEventKind, RequestState,
     },
     store::{
-        FirstPushTokenStatus, RepoPublicationState, RepositoryActor, RepositoryInviteState,
-        RepositoryMemberPermissions, StagedFileChangeKind,
+        FileChangeKind, FirstPushTokenStatus, RepoPublicationState, RepositoryActor,
+        RepositoryInviteState, RepositoryMemberPermissions,
     },
 };
 use crate::http::{responses::*, routes};
@@ -32,7 +32,7 @@ fn export_api_types() {
         declaration::<RepositoryInviteState>(&ts_config),
         declaration::<RepoPublicationState>(&ts_config),
         declaration::<FirstPushTokenStatus>(&ts_config),
-        declaration::<StagedFileChangeKind>(&ts_config),
+        declaration::<FileChangeKind>(&ts_config),
         declaration::<ConfigVisibility>(&ts_config),
         declaration::<RepoConfig>(&ts_config),
         declaration::<RepoConfigVisibility>(&ts_config),

@@ -15,7 +15,6 @@ const REPOSITORY_COLUMNS: &[ColumnSpec] = &[
     required_column("policy", ColumnType::JsonBinary),
     required_column("graph", ColumnType::JsonBinary),
     required_column("visibility_events", ColumnType::JsonBinary),
-    nullable_column("staged_update", ColumnType::JsonBinary),
 ];
 
 const REPOSITORY_INDEXES: &[IndexSpec] = &[unique_index(

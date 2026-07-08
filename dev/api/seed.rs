@@ -6,8 +6,7 @@ use crate::{
         projection::{AuthorVisibility, FileChange, LogicalCommit},
         store::{
             AppCatalog, PendingImport, PendingImportFile, RepoPublicationState, RepoSettings,
-            SourceBlob, StagedFileChange, StagedFileChangeKind, StagedRepoUpdate, StoredRepository,
-            UserAccount,
+            SourceBlob, StoredRepository, UserAccount,
         },
     },
     error::ApiError,
@@ -28,10 +27,6 @@ const REVIEW_DEMO_LIB: &str = "pub fn seeded_answer() -> usize {\n    42\n}\n";
 const REVIEW_DEMO_ROADMAP: &str = "# Private Roadmap\n\nReview can decide what becomes public.\n";
 const UPDATE_DEMO_INITIAL_README: &str =
     "# Update Demo\n\nThis repository has a clean published baseline.\n";
-const UPDATE_DEMO_UPDATED_README: &str =
-    "# Update Demo\n\nThis staged change is waiting for review.\n";
-const UPDATE_DEMO_RELEASE_NOTES: &str =
-    "# Release Notes\n\nKeep this private until the launch is announced.\n";
 
 pub(super) fn catalog(
     object_store: &dyn ObjectStore,
@@ -44,7 +39,7 @@ pub(super) fn catalog(
     for repo in [
         published_demo(object_store, &owner)?,
         pending_publish_demo(object_store, &owner)?,
-        staged_update_demo(object_store, &owner)?,
+        update_demo(object_store, &owner)?,
     ] {
         catalog.repositories.insert(repo.record.id.clone(), repo);
     }
@@ -146,7 +141,7 @@ fn pending_publish_demo(
     Ok(repo)
 }
 
-fn staged_update_demo(
+fn update_demo(
     object_store: &dyn ObjectStore,
     owner: &UserAccount,
 ) -> Result<StoredRepository, ApiError> {
@@ -173,50 +168,6 @@ fn staged_update_demo(
             message: "Seed update demo",
         }],
     )?);
-
-    let updated_readme = blob(object_store, &repo, UPDATE_DEMO_UPDATED_README)?;
-    let private_note = blob(object_store, &repo, UPDATE_DEMO_RELEASE_NOTES)?;
-    repo.staged_update = Some(StagedRepoUpdate {
-        id: "staged-dev-update".to_string(),
-        branch: "refs/heads/main".to_string(),
-        base_live_commit_id: Some("dev-update-1".to_string()),
-        author_id: owner.id.clone(),
-        message: "Stage local UI review sample".to_string(),
-        git_snapshot: git_snapshot(
-            object_store,
-            &repo,
-            "update-demo-staged",
-            &[
-                SeedGitCommit {
-                    files: &[("README.md", UPDATE_DEMO_INITIAL_README)],
-                    message: "Seed update demo",
-                },
-                SeedGitCommit {
-                    files: &[
-                        ("README.md", UPDATE_DEMO_UPDATED_README),
-                        ("internal/release-notes.md", UPDATE_DEMO_RELEASE_NOTES),
-                    ],
-                    message: "Stage local UI review sample",
-                },
-            ],
-        )?,
-        changes: vec![
-            StagedFileChange {
-                path: ScopePath::parse("/README.md").map_err(ApiError::internal)?,
-                old_content: Some(initial_readme),
-                new_content: Some(updated_readme),
-                visibility: Visibility::Public,
-                kind: StagedFileChangeKind::Modified,
-            },
-            StagedFileChange {
-                path: ScopePath::parse("/internal/release-notes.md").map_err(ApiError::internal)?,
-                old_content: None,
-                new_content: Some(private_note),
-                visibility: Visibility::Private,
-                kind: StagedFileChangeKind::Added,
-            },
-        ],
-    });
     Ok(repo)
 }
 
@@ -304,7 +255,7 @@ fn git_snapshot(
                 }
                 fs::write(path, content).map_err(ApiError::internal)?;
             }
-            seed_git(Some(&repo_path), &["add", "--all"], "staging seeded files")?;
+            seed_git(Some(&repo_path), &["add", "--all"], "adding seeded files")?;
             seed_git(
                 Some(&repo_path),
                 &[
@@ -466,13 +417,6 @@ mod tests {
             "update-demo-live",
             "README.md",
             UPDATE_DEMO_INITIAL_README,
-        );
-        assert_snapshot_file(
-            &state,
-            &update_demo.staged_update.as_ref().unwrap().git_snapshot,
-            "update-demo-staged",
-            "internal/release-notes.md",
-            UPDATE_DEMO_RELEASE_NOTES,
         );
 
         let _ = fs::remove_dir_all(state.data_dir.as_ref());

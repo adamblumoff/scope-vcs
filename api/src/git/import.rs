@@ -12,9 +12,9 @@ pub(crate) use self::repo_io::{
 };
 #[cfg(test)]
 pub(crate) use self::repo_io::{git_stdout_text, git_tree_files, validate_pushed_file_path};
-pub(crate) use self::staging::ReceivePackUpdate;
 #[cfg(test)]
-pub(crate) use self::staging::{ReceivePackFileChange, stage_receive_pack_update};
+pub(crate) use self::staging::ReceivePackFileChange;
+pub(crate) use self::staging::ReceivePackUpdate;
 use self::staging::{apply_receive_pack_update, receive_pack_update_changes_visibility};
 use crate::domain::store::{RepositoryActor, StoredRepository};
 use crate::{

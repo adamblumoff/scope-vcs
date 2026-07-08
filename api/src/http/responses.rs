@@ -10,8 +10,8 @@ use crate::domain::commit_history::{CommitHistoryCommit, CommitHistoryView};
 use crate::domain::policy::{ScopePath, Visibility};
 use crate::domain::repo_config::RepoConfig;
 use crate::domain::store::{
-    FirstPushToken, FirstPushTokenStatus, GitPushToken, RepoPublicationState, RepositoryAccess,
-    RepositoryActor, StagedFileChangeKind, StoredRepository, UserAccount,
+    FileChangeKind, FirstPushToken, FirstPushTokenStatus, GitPushToken, RepoPublicationState,
+    RepositoryAccess, RepositoryActor, StoredRepository, UserAccount,
 };
 use crate::{config::DEFAULT_GIT_BRANCH, error::ApiError};
 pub(crate) use scope_core::auth::device::SessionIdentity;
@@ -312,7 +312,7 @@ pub(crate) struct CommitFileDiffRequest {
 #[cfg_attr(test, derive(ts_rs::TS))]
 pub(crate) struct ReviewFileDiffResponse {
     pub(crate) path: String,
-    pub(crate) kind: StagedFileChangeKind,
+    pub(crate) kind: FileChangeKind,
     pub(crate) old_content: Option<ReviewFileContentResponse>,
     pub(crate) new_content: Option<ReviewFileContentResponse>,
 }
@@ -365,7 +365,7 @@ pub(crate) struct CommitDetailResponse {
 #[cfg_attr(test, derive(ts_rs::TS))]
 pub(crate) struct CommitFileResponse {
     pub(crate) path: String,
-    pub(crate) kind: StagedFileChangeKind,
+    pub(crate) kind: FileChangeKind,
     pub(crate) old_oid: Option<String>,
     pub(crate) new_oid: Option<String>,
     pub(crate) visibility: Visibility,

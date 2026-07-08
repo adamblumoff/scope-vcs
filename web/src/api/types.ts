@@ -55,7 +55,7 @@ import type {
   SessionIdentity as GeneratedSessionIdentity,
   SessionResponse,
   SessionRepo as GeneratedSessionRepo,
-  StagedFileChangeKind as GeneratedStagedFileChangeKind,
+  FileChangeKind as GeneratedFileChangeKind,
   UserResponse,
   Visibility as GeneratedVisibility,
 } from './types.generated'
@@ -66,7 +66,7 @@ export type RepositoryActor = GeneratedRepositoryActor
 export type RepoPublicationState = GeneratedRepoPublicationState
 export type RepoLifecycleState = RepoPublicationState
 export type TokenStatus = FirstPushTokenStatus
-export type StagedFileChangeKind = GeneratedStagedFileChangeKind
+export type FileChangeKind = GeneratedFileChangeKind
 export type ProjectionPreviewAudience = GeneratedProjectionPreviewAudience
 export type ProjectionPreviewSource = GeneratedProjectionPreviewSource
 

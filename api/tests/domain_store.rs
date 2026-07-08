@@ -61,7 +61,6 @@ fn test_repo() -> StoredRepository {
         },
         visibility_events: Vec::new(),
         git_snapshot: None,
-        staged_update: None,
         members: Vec::new(),
         invitations: Vec::new(),
     }

@@ -516,9 +516,9 @@ fn content_push_rejects_stale_reviewed_config() {
     {
         let mut catalog = lock_catalog(&state).unwrap();
         let repo = catalog.repositories.get_mut(TEST_REPO_ID).unwrap();
-        crate::domain::staged_updates::apply_reviewed_config_to_repo(
+        crate::domain::reviewed_updates::apply_reviewed_config_to_repo(
             repo,
-            crate::domain::staged_updates::ReviewedConfigUpdateInput {
+            crate::domain::reviewed_updates::ReviewedConfigUpdateInput {
                 author_id: test_owner_id(),
                 config: newer_config.clone(),
             },

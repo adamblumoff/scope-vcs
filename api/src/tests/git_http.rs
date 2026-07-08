@@ -935,7 +935,6 @@ async fn chunked_real_git_published_push_over_http_applies_update() {
     .unwrap();
 
     let repo = find_repo(&state, TEST_REPO_OWNER, TEST_REPO_NAME).unwrap();
-    assert!(repo.staged_update.is_none());
     assert_eq!(
         repo.live_tree()
             .get(&ScopePath::parse("/README.md").unwrap())

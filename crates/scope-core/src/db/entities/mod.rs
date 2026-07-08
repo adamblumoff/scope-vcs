@@ -5,8 +5,7 @@ use crate::domain::projection_views::ProjectionViewFile;
 use crate::domain::store::{
     DEFAULT_GIT_FILE_MODE, FirstPushToken, GitPushToken, PendingImport, RepoPublicationState,
     RepoRecord, RepoSettings, RepoStorageCleanup, RepositoryInvite, RepositoryInviteState,
-    RepositoryMember, RepositoryMemberPermissions, SourceBlob, StagedRepoUpdate, StoredRepository,
-    UserAccount,
+    RepositoryMember, RepositoryMemberPermissions, SourceBlob, StoredRepository, UserAccount,
 };
 use crate::error::ApiError;
 use sea_orm::entity::prelude::*;

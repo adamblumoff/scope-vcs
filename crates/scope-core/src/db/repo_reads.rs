@@ -38,8 +38,6 @@ pub struct RepoSummaryRead {
     pub change_version: u64,
     pub access: RepositoryAccess,
     pub pending_import_pending: bool,
-    pub staged_update_pending: bool,
-    pub push_blocked_by_staged_update: bool,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -59,7 +57,6 @@ struct RepoReadRow {
     change_version: i64,
     policy: Json,
     pending_import_pending: bool,
-    staged_update_pending: bool,
 }
 
 impl MetadataStore {
@@ -422,10 +419,6 @@ fn repo_read_query() -> sea_orm::Select<entities::repository::Entity> {
             Expr::col(entities::repository::Column::PendingImport).is_not_null(),
             "pending_import_pending",
         )
-        .column_as(
-            Expr::col(entities::repository::Column::StagedUpdate).is_not_null(),
-            "staged_update_pending",
-        )
 }
 
 async fn member_permissions_for_viewer<C>(
@@ -567,8 +560,6 @@ fn summary_from_row(
         change_version,
         access,
         pending_import_pending,
-        staged_update_pending: can_review_staged_update(access) && row.staged_update_pending,
-        push_blocked_by_staged_update: access.can_push && row.staged_update_pending,
     })
 }
 
@@ -700,8 +691,6 @@ fn summary_from_repo(repo: &StoredRepository, access: RepositoryAccess) -> RepoS
         change_version: repo_change_version_for_access(repo.record.change_version, access),
         access,
         pending_import_pending: repo.has_pending_import_review(),
-        staged_update_pending: can_review_staged_update(access) && repo.staged_update.is_some(),
-        push_blocked_by_staged_update: access.can_push && repo.staged_update.is_some(),
     }
 }
 
@@ -799,10 +788,6 @@ fn repo_change_version_for_access(change_version: u64, access: RepositoryAccess)
     }
 }
 
-fn can_review_staged_update(access: RepositoryAccess) -> bool {
-    access.can_apply_changes || access.can_change_file_visibility
-}
-
 fn decode_enum<T: serde::de::DeserializeOwned>(value: &str) -> Result<T, ApiError> {
     serde_json::from_value(serde_json::Value::String(value.to_string())).map_err(ApiError::internal)
 }
@@ -847,16 +832,8 @@ mod tests {
             "narrow repo reads should only test pending import presence: {sql}"
         );
         assert!(
-            !sql.contains("\"scope_repositories\".\"staged_update\","),
-            "narrow repo reads should only test staged update presence: {sql}"
-        );
-        assert!(
             sql.contains("\"pending_import\" IS NOT NULL"),
             "pending import state should be a SQL null check: {sql}"
-        );
-        assert!(
-            sql.contains("\"staged_update\" IS NOT NULL"),
-            "staged update state should be a SQL null check: {sql}"
         );
     }
 }

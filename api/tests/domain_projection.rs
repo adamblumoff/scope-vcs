@@ -5,8 +5,8 @@ use api::domain::{
         VisibilityEvent, project_graph,
     },
     repo_config::RepoConfig,
-    staged_updates::{
-        ReviewedConfigUpdateInput, ReviewedUpdateInput, StagedContentChange,
+    reviewed_updates::{
+        ReviewedConfigUpdateInput, ReviewedContentChange, ReviewedUpdateInput,
         apply_reviewed_config_to_repo, apply_reviewed_update_to_repo,
     },
     store::{RepoPublicationState, StoredRepository, UserAccount},
@@ -196,11 +196,11 @@ fn destructive_rewrite_removes_old_public_history_for_changed_path() {
             message: "sanitize leaked file".to_string(),
             git_snapshot: blob("snapshot v2"),
             changes: vec![
-                StagedContentChange {
+                ReviewedContentChange {
                     path: ScopePath::parse("/leaked.txt").unwrap(),
                     content: Some(blob("sanitized public content")),
                 },
-                StagedContentChange {
+                ReviewedContentChange {
                     path: ScopePath::parse("/.scope/repo.json").unwrap(),
                     content: Some(blob("config v2")),
                 },
@@ -284,7 +284,7 @@ fn destructive_rewrite_replaces_unchanged_public_history_with_baseline() {
             author_id: "owner".to_string(),
             message: "redact readme history".to_string(),
             git_snapshot: blob("snapshot v2"),
-            changes: vec![StagedContentChange {
+            changes: vec![ReviewedContentChange {
                 path: ScopePath::parse("/.scope/repo.json").unwrap(),
                 content: Some(blob("config v2")),
             }],
@@ -350,7 +350,7 @@ fn destructive_rewrite_to_private_leaves_no_public_boundary_commit() {
             author_id: "owner".to_string(),
             message: "make leaked file private".to_string(),
             git_snapshot: blob("snapshot v2"),
-            changes: vec![StagedContentChange {
+            changes: vec![ReviewedContentChange {
                 path: ScopePath::parse("/.scope/repo.json").unwrap(),
                 content: Some(blob("config v2")),
             }],
@@ -413,11 +413,11 @@ fn destructive_rewrite_delete_does_not_create_public_delete_commit() {
             message: "delete leaked file".to_string(),
             git_snapshot: blob("snapshot v2"),
             changes: vec![
-                StagedContentChange {
+                ReviewedContentChange {
                     path: ScopePath::parse("/leaked.txt").unwrap(),
                     content: None,
                 },
-                StagedContentChange {
+                ReviewedContentChange {
                     path: ScopePath::parse("/.scope/repo.json").unwrap(),
                     content: Some(blob("config v2")),
                 },
@@ -498,7 +498,7 @@ fn unchanged_history_rewrite_is_not_reapplied_on_later_push() {
             author_id: "owner".to_string(),
             message: "later config-only push".to_string(),
             git_snapshot: blob("snapshot v2"),
-            changes: vec![StagedContentChange {
+            changes: vec![ReviewedContentChange {
                 path: ScopePath::parse("/.scope/repo.json").unwrap(),
                 content: Some(blob("same config")),
             }],

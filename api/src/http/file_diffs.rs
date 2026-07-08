@@ -1,5 +1,5 @@
 use crate::{
-    domain::store::{SourceBlob, StagedFileChangeKind},
+    domain::store::{FileChangeKind, SourceBlob},
     error::ApiError,
     http::responses::{ReviewFileContentResponse, ReviewFileDiffResponse},
     object_store::{ObjectStore, source_blob_bytes},
@@ -10,7 +10,7 @@ const MAX_RENDERED_TEXT_BYTES: usize = 1024 * 1024;
 pub(crate) fn review_file_diff_response_for_blobs(
     store: &dyn ObjectStore,
     path: String,
-    kind: StagedFileChangeKind,
+    kind: FileChangeKind,
     old_content: Option<&SourceBlob>,
     new_content: Option<&SourceBlob>,
 ) -> Result<ReviewFileDiffResponse, ApiError> {
