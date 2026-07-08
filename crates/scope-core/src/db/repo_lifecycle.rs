@@ -1,9 +1,12 @@
 #[cfg(any(test, feature = "memory-metadata"))]
-use super::cleanup_queue::remove_matching_pending_repo_storage_cleanup;
+use super::cleanup_queue::{
+    queue_pending_source_blob_deletions, remove_matching_pending_repo_storage_cleanup,
+};
 #[cfg(any(test, feature = "memory-metadata"))]
 use super::repo_effects::apply_repo_effects;
 use super::{
     MetadataStore, MetadataStoreInner, acquire_metadata_write_lock,
+    cleanup_queue::queue_pending_source_blob_deletion_rows,
     cleanup_queue::{complete_pending_repo_storage_cleanup, pending_repo_storage_cleanup_exists},
     entities,
     repo_effects::save_repo_effects,
@@ -19,7 +22,7 @@ use crate::domain::{
     policy::Visibility,
     repo_actions::{create_repo as create_repo_command, delete_repo as delete_repo_command},
     requests::{CreditLedgerEntry, CreditLedgerEntryKind, Request, UserCreditAccount},
-    store::{FirstPushToken, GitPushToken, StoredRepository, repo_id},
+    store::{FirstPushToken, GitPushToken, SourceBlob, StoredRepository, repo_id},
 };
 use crate::error::ApiError;
 use sea_orm::{ColumnTrait, EntityTrait, QueryFilter, TransactionTrait};
@@ -143,6 +146,8 @@ impl MetadataStore {
                     let repo = repository_from_model(&tx, repo).await?;
                     let mutation = delete_repo_command(&repo, &user_id, &owner, &name)?;
                     refund_open_request_stakes_for_repo_postgres(&tx, &repo_id, unix_now()).await?;
+                    let request_git_snapshots =
+                        request_git_snapshots_for_repo_postgres(&tx, &repo_id).await?;
 
                     entities::repository_invite::Entity::delete_many()
                         .filter(entities::repository_invite::Column::RepoId.eq(repo_id.clone()))
@@ -160,6 +165,7 @@ impl MetadataStore {
                         .map_err(ApiError::internal)?;
 
                     save_repo_effects(&tx, &mutation.effects).await?;
+                    queue_pending_source_blob_deletion_rows(&tx, request_git_snapshots).await?;
                     tx.commit().await.map_err(ApiError::internal)?;
                     Ok(mutation.result)
                 })
@@ -172,12 +178,18 @@ impl MetadataStore {
                 let mutation = delete_repo_command(repo, &user_id, &owner, &name)?;
 
                 refund_open_request_stakes_for_repo_memory(catalog, &repo_id, unix_now())?;
+                let request_git_snapshots =
+                    request_git_snapshots_for_repo_memory(catalog, &repo_id);
                 catalog
                     .repositories
                     .remove(&repo_id)
                     .expect("repo was already checked");
                 remove_request_facts_for_repo(catalog, &repo_id);
                 apply_repo_effects(catalog, mutation.effects);
+                queue_pending_source_blob_deletions(
+                    &mut catalog.pending_source_blob_deletions,
+                    request_git_snapshots,
+                );
                 Ok(mutation.result)
             }),
         }
@@ -215,6 +227,33 @@ where
         insert_credit_ledger_entry_row(conn, &ledger_entry).await?;
     }
     Ok(())
+}
+
+async fn request_git_snapshots_for_repo_postgres<C>(
+    conn: &C,
+    repo_id: &str,
+) -> Result<Vec<SourceBlob>, ApiError>
+where
+    C: sea_orm::ConnectionTrait,
+{
+    Ok(requests_by_repo_id(conn, repo_id)
+        .await?
+        .into_iter()
+        .filter_map(|request| request.git_snapshot)
+        .collect())
+}
+
+#[cfg(any(test, feature = "memory-metadata"))]
+fn request_git_snapshots_for_repo_memory(
+    catalog: &crate::domain::store::AppCatalog,
+    repo_id: &str,
+) -> Vec<SourceBlob> {
+    catalog
+        .requests
+        .values()
+        .filter(|request| request.repo_id == repo_id)
+        .filter_map(|request| request.git_snapshot.clone())
+        .collect()
 }
 
 #[cfg(any(test, feature = "memory-metadata"))]
@@ -389,7 +428,11 @@ mod tests {
 
     #[test]
     fn memory_delete_repo_refunds_open_request_stake() {
-        let store = MetadataStore::memory(catalog_with_open_request(0, "ledger_stake"));
+        let request_git_snapshot = source_blob("request-git-snapshot");
+        let mut catalog = catalog_with_open_request(0, "ledger_stake");
+        catalog.requests.get_mut("req_1").unwrap().git_snapshot =
+            Some(request_git_snapshot.clone());
+        let store = MetadataStore::memory(catalog);
         store
             .delete_repo("owner", "repo", "user_owner")
             .expect("repo deletes");
@@ -422,6 +465,14 @@ mod tests {
                 assert_eq!(refund.kind, CreditLedgerEntryKind::StakeRefund);
                 assert_eq!(refund.amount_credits, 10);
                 assert_eq!(refund.request_id, None);
+                assert_eq!(
+                    catalog
+                        .pending_source_blob_deletions
+                        .iter()
+                        .map(|blob| blob.object_key.as_str())
+                        .collect::<Vec<_>>(),
+                    vec![request_git_snapshot.object_key.as_str()]
+                );
                 Ok(())
             })
             .unwrap();
@@ -602,6 +653,7 @@ mod tests {
             request_ref: "refs/scope/requests/req_1".to_string(),
             base_main_oid: "base".to_string(),
             head_oid: "head".to_string(),
+            git_snapshot: None,
             title: "Fix parser crash".to_string(),
             state: RequestState::Submitted,
             stake_credits: 10,
@@ -610,6 +662,16 @@ mod tests {
             created_at_unix: 10,
             updated_at_unix: 10,
             resolved_at_unix: None,
+        }
+    }
+
+    fn source_blob(label: &str) -> SourceBlob {
+        SourceBlob {
+            object_key: format!("objects/test/{label}"),
+            sha256: format!("sha256-{label}"),
+            git_oid: format!("git-{label}"),
+            git_file_mode: "100644".to_string(),
+            size_bytes: label.len() as u64,
         }
     }
 }

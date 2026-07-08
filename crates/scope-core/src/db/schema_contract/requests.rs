@@ -12,6 +12,7 @@ const REQUEST_COLUMNS: &[ColumnSpec] = &[
     unique_column("request_ref", ColumnType::String),
     required_column("base_main_oid", ColumnType::String),
     required_column("head_oid", ColumnType::String),
+    nullable_column("git_snapshot", ColumnType::JsonBinary),
     required_column("title", ColumnType::Text),
     required_column("state", ColumnType::String),
     required_column("stake_credits", ColumnType::Integer),

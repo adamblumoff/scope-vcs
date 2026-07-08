@@ -59,6 +59,7 @@ mod git_import_validation;
 mod git_projection_identity;
 mod git_receive;
 mod git_receive_config;
+mod git_request_refs;
 mod obsolete_routes;
 mod push_intent_completion;
 mod readiness;

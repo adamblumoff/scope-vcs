@@ -62,6 +62,16 @@ pub(crate) fn staged_git_repo_path(state: &AppState, owner: &str, repo_name: &st
         .join(format!("{}.git", safe_repo_key(owner, repo_name)))
 }
 
+pub(crate) fn request_ref_store_repo_path(
+    state: &AppState,
+    owner: &str,
+    repo_name: &str,
+) -> PathBuf {
+    git_repo_storage_root(state)
+        .join("git-request-refs")
+        .join(format!("{}.git", safe_repo_key(owner, repo_name)))
+}
+
 pub(crate) fn git_repo_storage_root(state: &AppState) -> PathBuf {
     state.data_dir.as_ref().clone()
 }
@@ -147,6 +157,8 @@ pub(crate) fn delete_repo_storage(
 ) -> Result<(), ApiError> {
     remove_dir_if_exists(&owner_git_repo_path(state, owner, repo_name))?;
     remove_dir_if_exists(&staged_git_repo_path(state, owner, repo_name))?;
+    remove_dir_if_exists(&request_ref_store_repo_path(state, owner, repo_name))?;
+    delete_request_ref_locks(state, owner, repo_name)?;
 
     let rx_root = git_repo_storage_root(state).join("git-rx");
     let prefix = receive_pack_staging_repo_prefix(owner, repo_name);
@@ -163,6 +175,32 @@ pub(crate) fn delete_repo_storage(
         }
     }
 
+    Ok(())
+}
+
+fn delete_request_ref_locks(
+    state: &AppState,
+    owner: &str,
+    repo_name: &str,
+) -> Result<(), ApiError> {
+    let lock_root = git_repo_storage_root(state).join("git-request-refs-locks");
+    let entries = match fs::read_dir(&lock_root) {
+        Ok(entries) => entries,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+        Err(error) => return Err(ApiError::internal(error)),
+    };
+    let prefix = format!("{}-", safe_repo_key(owner, repo_name));
+    for entry in entries {
+        let entry = entry.map_err(ApiError::internal)?;
+        let file_name = entry.file_name();
+        if file_name.to_string_lossy().starts_with(&prefix) {
+            match fs::remove_file(entry.path()) {
+                Ok(()) => {}
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+                Err(error) => return Err(ApiError::internal(error)),
+            }
+        }
+    }
     Ok(())
 }
 
@@ -308,7 +346,7 @@ pub(crate) fn install_first_push_pre_receive_hook(repo_root: &FsPath) -> Result<
 pub(crate) fn install_published_pre_receive_hook(repo_root: &FsPath) -> Result<(), ApiError> {
     let hook = repo_root.join("hooks").join("pre-receive");
     let script = format!(
-        "#!/bin/sh\ncount=0\nwhile read old new ref; do\n  count=$((count + 1))\n  if [ \"$ref\" != \"refs/heads/{DEFAULT_GIT_BRANCH}\" ]; then\n    echo \"Scope accepts pushes only to refs/heads/{DEFAULT_GIT_BRANCH}\" >&2\n    exit 1\n  fi\n  if [ \"$new\" = \"{EMPTY_GIT_OID}\" ]; then\n    echo \"Scope does not accept branch deletes in v0\" >&2\n    exit 1\n  fi\n  if [ \"$old\" = \"{EMPTY_GIT_OID}\" ]; then\n    echo \"Scope accepts only updates to refs/heads/{DEFAULT_GIT_BRANCH}\" >&2\n    exit 1\n  fi\n  if ! git merge-base --is-ancestor \"$old\" \"$new\"; then\n    echo \"Scope rejects non-fast-forward pushes in v0\" >&2\n    exit 1\n  fi\ndone\nif [ \"$count\" -ne 1 ]; then\n  echo \"Scope accepts exactly one pushed branch in v0\" >&2\n  exit 1\nfi\n"
+        "#!/bin/sh\ncount=0\nwhile read old new ref; do\n  count=$((count + 1))\n  if [ \"$new\" = \"{EMPTY_GIT_OID}\" ]; then\n    echo \"Scope does not accept branch deletes in v0\" >&2\n    exit 1\n  fi\n  if [ \"$ref\" = \"refs/heads/{DEFAULT_GIT_BRANCH}\" ]; then\n    if [ \"$old\" = \"{EMPTY_GIT_OID}\" ]; then\n      echo \"Scope accepts only updates to refs/heads/{DEFAULT_GIT_BRANCH}\" >&2\n      exit 1\n    fi\n    if ! git merge-base --is-ancestor \"$old\" \"$new\"; then\n      echo \"Scope rejects non-fast-forward pushes in v0\" >&2\n      exit 1\n    fi\n    continue\n  fi\n  case \"$ref\" in\n    refs/scope/requests/*)\n      if ! git cat-file -e \"$new^{{commit}}\"; then\n        echo \"Scope request refs must point at commits\" >&2\n        exit 1\n      fi\n      ;;\n    *)\n      echo \"Scope accepts pushes only to refs/heads/{DEFAULT_GIT_BRANCH} or refs/scope/requests/*\" >&2\n      exit 1\n      ;;\n  esac\ndone\nif [ \"$count\" -ne 1 ]; then\n  echo \"Scope accepts exactly one pushed ref in v0\" >&2\n  exit 1\nfi\n"
     );
     write_receive_pack_hook(&hook, &script)
 }

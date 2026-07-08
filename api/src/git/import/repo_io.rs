@@ -10,7 +10,6 @@ use crate::{
     error::ApiError,
     git::upload::git_process_output_with_timeout,
     object_store::put_repo_object,
-    persistence::unix_now,
     runtime_budgets::RuntimeBudgets,
     state::AppState,
 };
@@ -189,6 +188,10 @@ pub(super) fn git_tree_entries(
     }
 
     Ok(pending_files)
+}
+
+pub(crate) fn validate_pushed_tree(staging_repo: &FsPath, head_oid: &str) -> Result<(), ApiError> {
+    git_tree_entries(staging_repo, head_oid).map(|_| ())
 }
 
 pub(super) fn git_tree_blob_contents(
@@ -370,25 +373,50 @@ fn parse_git_cat_file_batch(
     Ok(contents)
 }
 
-pub(super) fn git_snapshot_from_repo(
+pub(crate) fn git_snapshot_from_repo(
     state: &AppState,
     repo_id: &str,
     repo: &FsPath,
 ) -> Result<SourceBlob, ApiError> {
-    let bundle_path = repo.join(format!(
-        "scope-snapshot-{}-{}.bundle",
-        std::process::id(),
-        unix_now()?
-    ));
+    git_snapshot_from_refs(
+        state,
+        repo_id,
+        repo,
+        &[format!("refs/heads/{DEFAULT_GIT_BRANCH}")],
+    )
+}
+
+pub(crate) fn git_snapshot_from_ref(
+    state: &AppState,
+    repo_id: &str,
+    repo: &FsPath,
+    refname: &str,
+) -> Result<SourceBlob, ApiError> {
+    git_snapshot_from_refs(state, repo_id, repo, &[refname.to_string()])
+}
+
+fn git_snapshot_from_refs(
+    state: &AppState,
+    repo_id: &str,
+    repo: &FsPath,
+    refs: &[String],
+) -> Result<SourceBlob, ApiError> {
+    let bundle_path = repo.join(format!("scope-snapshot-{}.bundle", random_bundle_id()?));
     let bundle = bundle_path.to_string_lossy().to_string();
-    run_git(
-        Some(repo),
-        &["bundle", "create", &bundle, "--all"],
-        "creating Git snapshot bundle",
-    )?;
+    let mut args = vec!["bundle", "create", bundle.as_str()];
+    args.extend(refs.iter().map(String::as_str));
+    run_git(Some(repo), &args, "creating Git snapshot bundle")?;
     let bytes = std::fs::read(&bundle_path).map_err(ApiError::internal)?;
     let _ = std::fs::remove_file(&bundle_path);
     put_repo_object(state.object_store.as_ref(), repo_id, "git-bundles", &bytes)
+}
+
+fn random_bundle_id() -> Result<String, ApiError> {
+    let mut bytes = [0_u8; 16];
+    getrandom::fill(&mut bytes).map_err(|error| {
+        ApiError::internal_message(format!("Git snapshot bundle id generation failed: {error}"))
+    })?;
+    Ok(format!("{}-{}", std::process::id(), hex::encode(bytes)))
 }
 
 pub(super) struct PendingGitTreeFile {

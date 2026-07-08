@@ -131,6 +131,12 @@ impl MetadataStore {
                     .repositories
                     .values()
                     .flat_map(|repo| repo.source_blobs())
+                    .chain(
+                        catalog
+                            .requests
+                            .values()
+                            .filter_map(|request| request.git_snapshot.clone()),
+                    )
                     .map(|blob| blob.object_key)
                     .collect::<BTreeSet<_>>();
                 let pending = std::mem::take(&mut catalog.pending_source_blob_deletions);
@@ -665,11 +671,22 @@ where
         .await
         .map_err(ApiError::internal)?;
     let repositories = repositories_from_models(conn, repositories).await?;
-    Ok(repositories
+    let mut keys = repositories
         .into_iter()
         .flat_map(|repo| repo.source_blobs())
         .map(|blob| blob.object_key)
-        .collect())
+        .collect::<BTreeSet<_>>();
+    let requests = entities::request::Entity::find()
+        .order_by_asc(entities::request::Column::Id)
+        .all(conn)
+        .await
+        .map_err(ApiError::internal)?;
+    for request in requests {
+        if let Some(snapshot) = request.try_into_domain()?.git_snapshot {
+            keys.insert(snapshot.object_key);
+        }
+    }
+    Ok(keys)
 }
 
 fn u64_to_i64(value: u64) -> Result<i64, ApiError> {

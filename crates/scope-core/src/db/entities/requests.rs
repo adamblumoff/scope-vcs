@@ -4,6 +4,7 @@ use crate::domain::requests::{
     RequestDisposition, RequestEvent, RequestEventKind, RequestSettlement, RequestState,
     UserCreditAccount,
 };
+use crate::domain::store::SourceBlob;
 
 pub mod request {
     use super::*;
@@ -21,6 +22,7 @@ pub mod request {
         pub request_ref: String,
         pub base_main_oid: String,
         pub head_oid: String,
+        pub git_snapshot: Option<Json>,
         pub title: String,
         pub state: String,
         pub stake_credits: i32,
@@ -48,6 +50,7 @@ pub mod request {
                 request_ref: request.request_ref.clone(),
                 base_main_oid: request.base_main_oid.clone(),
                 head_oid: request.head_oid.clone(),
+                git_snapshot: request.git_snapshot.as_ref().map(encode_json).transpose()?,
                 title: request.title.clone(),
                 state: encode_enum(request.state)?,
                 stake_credits: u32_to_i32_saturating(request.stake_credits),
@@ -70,6 +73,10 @@ pub mod request {
                 request_ref: self.request_ref,
                 base_main_oid: self.base_main_oid,
                 head_oid: self.head_oid,
+                git_snapshot: self
+                    .git_snapshot
+                    .map(decode_json::<SourceBlob>)
+                    .transpose()?,
                 title: self.title,
                 state: decode_enum::<RequestState>(self.state)?,
                 stake_credits: i32_to_u32_floor(self.stake_credits),
