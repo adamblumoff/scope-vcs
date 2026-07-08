@@ -4,9 +4,10 @@ use crate::{
     domain::{
         projection::{ProjectionViewKey, project_graph},
         requests::{
-            CommentRequestInput, MarkRequestNeedsResponseInput, MergeRequestInput, Request,
-            RequestActorRole, RequestDisposition, RequestState, ResolveRequestInput,
-            RespondToRequestInput, SubmitRequestInput, canonical_request_ref, settlement_for,
+            CommentRequestInput, FinalizeReservedRequestInput, MarkRequestNeedsResponseInput,
+            MergeRequestInput, Request, RequestActorRole, RequestDisposition, RequestState,
+            ReserveRequestInput, ResolveRequestInput, RespondToRequestInput, canonical_request_ref,
+            settlement_for,
         },
         store::{RepositoryAccess, RepositoryActor, StoredRepository},
     },
@@ -77,12 +78,11 @@ pub(crate) async fn get_request(
     Ok(Json(RequestDetailResponse { request, events }))
 }
 
-pub(crate) async fn submit_request(
+pub(crate) async fn reserve_request(
     State(state): State<AppState>,
     headers: HeaderMap,
     Path((owner, repo_name)): Path<(String, String)>,
-    Json(input): Json<SubmitRequestRequest>,
-) -> Result<Json<RequestMutationResponse>, ApiError> {
+) -> Result<Json<RequestReservationResponse>, ApiError> {
     let user = require_scope_user(&state, &headers).await?;
     let repo = find_repo(&state, &owner, &repo_name)?;
     let principal = principal_for_scope_user(&repo, Some(&user));
@@ -90,11 +90,9 @@ pub(crate) async fn submit_request(
     let access = repo.access_for_principal(&principal);
     let base_main_oid = current_main_oid_for_access(&state, &repo, access)?
         .ok_or_else(|| ApiError::conflict("repo has no main branch to base a request on"))?;
-    let head_oid = normalize_git_oid("head_oid", &input.head_oid)?;
-    let stake_credits = input.stake_credits.unwrap_or(0);
     let request_id = random_id("req")?;
     let now_unix = unix_now()?;
-    let mutation = state.metadata.submit_request(SubmitRequestInput {
+    let mutation = state.metadata.reserve_request(ReserveRequestInput {
         id: request_id.clone(),
         repo_id: repo.record.id.clone(),
         author_user_id: user.id.clone(),
@@ -103,17 +101,62 @@ pub(crate) async fn submit_request(
         target_branch: DEFAULT_GIT_BRANCH.to_string(),
         request_ref: canonical_request_ref(&request_id),
         base_main_oid,
-        head_oid,
-        title: input.title,
-        stake_credits,
-        stake_ledger_entry_id: if stake_credits == 0 {
-            None
-        } else {
-            Some(random_id("ledger_request_stake")?)
-        },
-        event_id: random_id("event_request_created")?,
         now_unix,
     })?;
+    Ok(Json(RequestReservationResponse {
+        id: mutation.request.id,
+        request_ref: mutation.request.request_ref,
+        base_audience: mutation.request.base_audience,
+        base_main_oid: mutation.request.base_main_oid,
+    }))
+}
+
+pub(crate) async fn finalize_request_submission(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path((owner, repo_name, request_id)): Path<(String, String, String)>,
+    Json(input): Json<FinalizeRequestSubmissionRequest>,
+) -> Result<Json<RequestMutationResponse>, ApiError> {
+    let user = require_scope_user(&state, &headers).await?;
+    let repo = find_repo(&state, &owner, &repo_name)?;
+    let principal = principal_for_scope_user(&repo, Some(&user));
+    ensure_repo_read(&state, &repo, &principal)?;
+    let access = repo.access_for_principal(&principal);
+    let request = state
+        .metadata
+        .request_by_id(&request_id)?
+        .ok_or_else(|| ApiError::not_found("request not found"))?;
+    if request.repo_id != repo.record.id || request.author_user_id != user.id {
+        return Err(ApiError::not_found("request not found"));
+    }
+    if request.author_role != RequestActorRole::Public
+        && !matches!(
+            access.actor,
+            RepositoryActor::Owner | RepositoryActor::Member
+        )
+    {
+        return Err(ApiError::forbidden(
+            "repo maintainer required to finalize this request",
+        ));
+    }
+    let head_oid = normalize_git_oid("head_oid", &input.head_oid)?;
+    let stake_credits = input.stake_credits.unwrap_or(0);
+    let mutation = state
+        .metadata
+        .finalize_reserved_request(FinalizeReservedRequestInput {
+            request_id,
+            actor_user_id: user.id.clone(),
+            title: input.title,
+            expected_head_oid: head_oid,
+            stake_credits,
+            stake_ledger_entry_id: if stake_credits == 0 {
+                None
+            } else {
+                Some(random_id("ledger_request_stake")?)
+            },
+            event_id: random_id("event_request_created")?,
+            now_unix: unix_now()?,
+        })?;
     let current_main_oid = current_main_oid_for_access(&state, &repo, access)?;
     let request = request_response(mutation.request, access, current_main_oid, Some(&user.id));
     publish_request_summary_refresh(&state, &repo, "request-submitted");
@@ -352,6 +395,9 @@ fn publish_request_summary_refresh(
 }
 
 fn request_visible_to_access(request: &Request, access: RepositoryAccess) -> bool {
+    if request.state == RequestState::Reserved {
+        return false;
+    }
     match access.actor {
         RepositoryActor::Owner | RepositoryActor::Member => true,
         RepositoryActor::Public => {

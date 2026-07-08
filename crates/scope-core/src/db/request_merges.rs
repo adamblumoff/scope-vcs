@@ -180,10 +180,13 @@ mod tests {
     use crate::domain::{
         policy::Visibility,
         requests::{
-            RequestActorRole, RequestBaseAudience, RequestState, SubmitRequestInput,
-            canonical_request_ref,
+            FinalizeReservedRequestInput, RecordReservedRequestUploadInput, RequestActorRole,
+            RequestBaseAudience, RequestState, ReserveRequestInput, canonical_request_ref,
         },
-        store::{AppCatalog, RepoPublicationState, StoredRepository, UserAccount, app_catalog},
+        store::{
+            AppCatalog, DEFAULT_GIT_FILE_MODE, RepoPublicationState, SourceBlob, StoredRepository,
+            UserAccount, app_catalog,
+        },
     };
 
     #[test]
@@ -241,7 +244,13 @@ mod tests {
 
     fn store_with_owner_request() -> MetadataStore {
         let store = MetadataStore::memory(catalog_with_repo());
-        store.submit_request(owner_submit_input()).unwrap();
+        store.reserve_request(owner_reserve_input()).unwrap();
+        store
+            .record_reserved_request_upload(owner_upload_input())
+            .unwrap();
+        store
+            .finalize_reserved_request(owner_finalize_input())
+            .unwrap();
         store
     }
 
@@ -261,8 +270,8 @@ mod tests {
         catalog
     }
 
-    fn owner_submit_input() -> SubmitRequestInput {
-        SubmitRequestInput {
+    fn owner_reserve_input() -> ReserveRequestInput {
+        ReserveRequestInput {
             id: "req_1".to_string(),
             repo_id: "owner/repo".to_string(),
             author_user_id: "user_owner".to_string(),
@@ -271,12 +280,37 @@ mod tests {
             target_branch: "main".to_string(),
             request_ref: canonical_request_ref("req_1"),
             base_main_oid: "main_a".to_string(),
-            head_oid: "head_a".to_string(),
+            now_unix: 1,
+        }
+    }
+
+    fn owner_upload_input() -> RecordReservedRequestUploadInput {
+        RecordReservedRequestUploadInput {
+            request_id: "req_1".to_string(),
+            actor_user_id: "user_owner".to_string(),
+            expected_old_head_oid: None,
+            new_head_oid: "head_a".to_string(),
+            git_snapshot: SourceBlob {
+                object_key: "objects/head_a".to_string(),
+                sha256: "sha256-head_a".to_string(),
+                git_oid: "head_a".to_string(),
+                git_file_mode: DEFAULT_GIT_FILE_MODE.to_string(),
+                size_bytes: 1,
+            },
+            now_unix: 2,
+        }
+    }
+
+    fn owner_finalize_input() -> FinalizeReservedRequestInput {
+        FinalizeReservedRequestInput {
+            request_id: "req_1".to_string(),
+            actor_user_id: "user_owner".to_string(),
             title: "Owner request".to_string(),
+            expected_head_oid: "head_a".to_string(),
             stake_credits: 0,
             stake_ledger_entry_id: None,
             event_id: "event_created".to_string(),
-            now_unix: 1,
+            now_unix: 3,
         }
     }
 

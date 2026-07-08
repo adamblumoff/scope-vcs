@@ -1,6 +1,7 @@
 use super::*;
 use crate::domain::requests::{
-    RequestActorRole, RequestBaseAudience, SubmitRequestInput, canonical_request_ref,
+    FinalizeReservedRequestInput, RecordReservedRequestUploadInput, RequestActorRole,
+    RequestBaseAudience, ReserveRequestInput, canonical_request_ref,
 };
 
 #[test]
@@ -561,7 +562,7 @@ async fn accept_invite_returns_open_request_count() {
     cache_test_jwks(&state);
     state
         .metadata
-        .submit_request(SubmitRequestInput {
+        .reserve_request(ReserveRequestInput {
             id: "req_invite_count".to_string(),
             repo_id: TEST_REPO_ID.to_string(),
             author_user_id: test_owner_id(),
@@ -570,12 +571,31 @@ async fn accept_invite_returns_open_request_count() {
             target_branch: DEFAULT_GIT_BRANCH.to_string(),
             request_ref: canonical_request_ref("req_invite_count"),
             base_main_oid: "base_main".to_string(),
-            head_oid: "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb".to_string(),
+            now_unix: 2,
+        })
+        .unwrap();
+    state
+        .metadata
+        .record_reserved_request_upload(RecordReservedRequestUploadInput {
+            request_id: "req_invite_count".to_string(),
+            actor_user_id: test_owner_id(),
+            expected_old_head_oid: None,
+            new_head_oid: "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb".to_string(),
+            git_snapshot: source_blob("invite count request"),
+            now_unix: 3,
+        })
+        .unwrap();
+    state
+        .metadata
+        .finalize_reserved_request(FinalizeReservedRequestInput {
+            request_id: "req_invite_count".to_string(),
+            actor_user_id: test_owner_id(),
             title: "Open owner request".to_string(),
+            expected_head_oid: "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb".to_string(),
             stake_credits: 0,
             stake_ledger_entry_id: None,
             event_id: "event_invite_count_created".to_string(),
-            now_unix: 2,
+            now_unix: 4,
         })
         .unwrap();
     let app = router(state);

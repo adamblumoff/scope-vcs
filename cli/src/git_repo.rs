@@ -85,6 +85,21 @@ pub fn warn_if_dirty_working_tree(repo: &GitRepo) -> anyhow::Result<()> {
     Ok(())
 }
 
+pub fn ensure_clean_working_tree(repo: &GitRepo, command_name: &str) -> anyhow::Result<()> {
+    let output = Command::new("git")
+        .current_dir(&repo.root)
+        .args(["status", "--porcelain", "--untracked-files=all"])
+        .output()
+        .context("inspect Git working tree")?;
+    if !output.status.success() {
+        bail!("git status --porcelain failed");
+    }
+    if has_dirty_paths_outside_scope_config(&output.stdout) {
+        bail!("commit or stash local changes before running {command_name}");
+    }
+    Ok(())
+}
+
 fn has_dirty_paths_outside_scope_config(status: &[u8]) -> bool {
     String::from_utf8_lossy(status).lines().any(|line| {
         let path = line.get(3..).unwrap_or_default();
@@ -233,6 +248,33 @@ pub fn git_remote_push_url(remote: &str) -> anyhow::Result<String> {
     Ok(url)
 }
 
+pub fn git_remote_fetch_url(repo: &GitRepo, remote: &str) -> anyhow::Result<String> {
+    let output = git_output_in_repo(repo, &["remote", "get-url", remote])?;
+    if !output.status.success() {
+        bail!("Scope remote '{remote}' is not configured. Run: scope init");
+    }
+
+    let url = String::from_utf8_lossy(&output.stdout).trim().to_string();
+    if url.is_empty() {
+        bail!("Scope remote '{remote}' has an empty fetch URL");
+    }
+    Ok(url)
+}
+
+pub fn git_remote_names(repo: &GitRepo) -> anyhow::Result<Vec<String>> {
+    let output = git_output_in_repo(repo, &["remote"])?;
+    if !output.status.success() {
+        bail!("list Git remotes failed");
+    }
+
+    Ok(String::from_utf8_lossy(&output.stdout)
+        .lines()
+        .map(str::trim)
+        .filter(|remote| !remote.is_empty())
+        .map(str::to_string)
+        .collect())
+}
+
 pub fn run_git(args: &[&str]) -> anyhow::Result<()> {
     let status = Command::new("git")
         .args(args)
@@ -242,6 +284,58 @@ pub fn run_git(args: &[&str]) -> anyhow::Result<()> {
         bail!("git {} failed", args.join(" "));
     }
     Ok(())
+}
+
+pub fn run_git_in_repo(repo: &GitRepo, args: &[&str]) -> anyhow::Result<()> {
+    let status = Command::new("git")
+        .current_dir(&repo.root)
+        .args(args)
+        .status()
+        .with_context(|| format!("run git {}", args.join(" ")))?;
+    if !status.success() {
+        bail!("git {} failed", args.join(" "));
+    }
+    Ok(())
+}
+
+pub fn git_text_in_repo(repo: &GitRepo, args: &[&str]) -> anyhow::Result<String> {
+    let output = git_output_in_repo(repo, args)?;
+    if !output.status.success() {
+        bail!("git {} failed", args.join(" "));
+    }
+    Ok(String::from_utf8_lossy(&output.stdout).trim().to_string())
+}
+
+pub fn current_branch(repo: &GitRepo) -> anyhow::Result<String> {
+    let branch = git_text_in_repo(repo, &["branch", "--show-current"])?;
+    if branch.is_empty() {
+        bail!("request commands require a named local branch");
+    }
+    Ok(branch)
+}
+
+pub fn branch_config_value(
+    repo: &GitRepo,
+    branch: &str,
+    key: &str,
+) -> anyhow::Result<Option<String>> {
+    let config_key = format!("branch.{branch}.{key}");
+    let output = git_output_in_repo(repo, &["config", "--get", &config_key])?;
+    if output.status.success() {
+        let value = String::from_utf8_lossy(&output.stdout).trim().to_string();
+        return Ok((!value.is_empty()).then_some(value));
+    }
+    Ok(None)
+}
+
+pub fn set_branch_config_value(
+    repo: &GitRepo,
+    branch: &str,
+    key: &str,
+    value: &str,
+) -> anyhow::Result<()> {
+    let config_key = format!("branch.{branch}.{key}");
+    run_git_in_repo(repo, &["config", "--local", &config_key, value])
 }
 
 pub fn push_head_with_bearer(
@@ -273,6 +367,43 @@ pub fn push_head_with_bearer(
         .context("run authenticated Scope git push")?;
     if !status.success() {
         bail!("git push to Scope failed");
+    }
+    Ok(())
+}
+
+pub fn push_head_to_ref_with_bearer(
+    destination: &str,
+    commit_oid: &str,
+    refname: &str,
+    bearer_token: &str,
+) -> anyhow::Result<()> {
+    let inherited_config_count = env::var("GIT_CONFIG_COUNT")
+        .ok()
+        .and_then(|value| value.parse::<usize>().ok());
+    let config_index = inherited_config_count.unwrap_or(0);
+    let mut command = Command::new("git");
+    command.args([
+        "-c",
+        "push.recurseSubmodules=no",
+        "push",
+        destination,
+        &format!("+{commit_oid}:{refname}"),
+    ]);
+    command.env("GIT_CONFIG_COUNT", (config_index + 1).to_string());
+    command.env(
+        format!("GIT_CONFIG_KEY_{config_index}"),
+        format!("http.{destination}.extraHeader"),
+    );
+    command.env(
+        format!("GIT_CONFIG_VALUE_{config_index}"),
+        format!("Authorization: Bearer {bearer_token}"),
+    );
+
+    let status = command
+        .status()
+        .context("run authenticated Scope request branch push")?;
+    if !status.success() {
+        bail!("git push to Scope request ref failed");
     }
     Ok(())
 }

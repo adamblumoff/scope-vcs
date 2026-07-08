@@ -7,4 +7,5 @@ pub mod git_repo;
 pub mod installers;
 pub mod push;
 pub mod repo_config;
+pub mod request;
 pub mod review;

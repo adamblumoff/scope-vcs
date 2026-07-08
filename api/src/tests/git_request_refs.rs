@@ -1,7 +1,7 @@
 use super::*;
 use crate::domain::requests::{
-    GrantUserCreditsInput, Request, RequestActorRole, RequestBaseAudience, RequestState,
-    SubmitRequestInput,
+    FinalizeReservedRequestInput, GrantUserCreditsInput, Request, RequestActorRole,
+    RequestBaseAudience, RequestState, ReserveRequestInput,
 };
 
 const PUBLIC_SUBJECT: &str = "user_public";
@@ -102,6 +102,19 @@ async fn real_git_request_ref_push_records_revision_without_touching_main() {
     )
     .unwrap();
     let first_request_head = git_head_oid(&source);
+    state
+        .metadata
+        .finalize_reserved_request(FinalizeReservedRequestInput {
+            request_id: REQUEST_ID.to_string(),
+            actor_user_id: public_user_id(),
+            title: "Request branch".to_string(),
+            expected_head_oid: first_request_head.clone(),
+            stake_credits: 10,
+            stake_ledger_entry_id: Some("ledger_stake".to_string()),
+            event_id: "event_created".to_string(),
+            now_unix: 4,
+        })
+        .unwrap();
     fs::write(source.join("request.txt"), "request branch content v2\n").unwrap();
     run_git(Some(&source), &["add", "-A"], "add second request change").unwrap();
     commit_all(&source, "request change v2");
@@ -137,7 +150,7 @@ async fn real_git_request_ref_push_records_revision_without_touching_main() {
             assert_eq!(request.head_oid, request_head);
             let snapshot = request.git_snapshot.as_ref().unwrap();
             source_blob_bytes(state.object_store.as_ref(), snapshot).unwrap();
-            assert_eq!(catalog.request_events.len(), 3);
+            assert_eq!(catalog.request_events.len(), 2);
             Ok(())
         })
         .unwrap();
@@ -246,9 +259,10 @@ async fn request_ref_push_rejects_unsupported_tree_entries() {
         .metadata
         .read(|catalog| {
             let request = catalog.requests.get(REQUEST_ID).unwrap();
-            assert_eq!(request.head_oid, "initial_request_head");
+            assert_eq!(request.state, RequestState::Reserved);
+            assert_eq!(request.head_oid, "base_main");
             assert!(request.git_snapshot.is_none());
-            assert_eq!(catalog.request_events.len(), 1);
+            assert!(catalog.request_events.is_empty());
             Ok(())
         })
         .unwrap();
@@ -310,11 +324,10 @@ async fn public_request_author_cannot_push_main() {
     state
         .metadata
         .read(|catalog| {
-            assert_eq!(
-                catalog.requests.get(REQUEST_ID).unwrap().head_oid,
-                "initial_request_head"
-            );
-            assert_eq!(catalog.request_events.len(), 1);
+            let request = catalog.requests.get(REQUEST_ID).unwrap();
+            assert_eq!(request.state, RequestState::Reserved);
+            assert_eq!(request.head_oid, "base_main");
+            assert!(catalog.request_events.is_empty());
             Ok(())
         })
         .unwrap();
@@ -412,7 +425,7 @@ fn test_state_with_request() -> AppState {
         .unwrap();
     state
         .metadata
-        .submit_request(SubmitRequestInput {
+        .reserve_request(ReserveRequestInput {
             id: REQUEST_ID.to_string(),
             repo_id: TEST_REPO_ID.to_string(),
             author_user_id: public_user_id(),
@@ -421,11 +434,6 @@ fn test_state_with_request() -> AppState {
             target_branch: DEFAULT_GIT_BRANCH.to_string(),
             request_ref: REQUEST_REF.to_string(),
             base_main_oid: "base_main".to_string(),
-            head_oid: "initial_request_head".to_string(),
-            title: "Request branch".to_string(),
-            stake_credits: 10,
-            stake_ledger_entry_id: Some("ledger_stake".to_string()),
-            event_id: "event_created".to_string(),
             now_unix: 2,
         })
         .unwrap();

@@ -257,6 +257,7 @@ where
     let row = entities::request::Model::from_domain(request)?;
     let result = entities::request::Entity::update_many()
         .filter(entities::request::Column::Id.eq(row.id))
+        .col_expr(entities::request::Column::Title, Expr::value(row.title))
         .col_expr(
             entities::request::Column::HeadOid,
             Expr::value(row.head_oid),
@@ -266,6 +267,10 @@ where
             Expr::value(row.git_snapshot),
         )
         .col_expr(entities::request::Column::State, Expr::value(row.state))
+        .col_expr(
+            entities::request::Column::StakeCredits,
+            Expr::value(row.stake_credits),
+        )
         .col_expr(
             entities::request::Column::Disposition,
             Expr::value(row.disposition),
