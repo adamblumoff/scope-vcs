@@ -18,7 +18,10 @@ import { Route as InvitesTokenRouteImport } from './routes/invites.$token'
 import { Route as ReposOwnerRepoRouteImport } from './routes/repos.$owner.$repo'
 import { Route as ReposOwnerRepoIndexRouteImport } from './routes/repos.$owner.$repo.index'
 import { Route as ReposOwnerRepoSettingsRouteImport } from './routes/repos.$owner.$repo.settings'
+import { Route as ReposOwnerRepoRequestsRouteImport } from './routes/repos.$owner.$repo.requests'
 import { Route as ReposOwnerRepoHistoryRouteImport } from './routes/repos.$owner.$repo.history'
+import { Route as ReposOwnerRepoRequestsIndexRouteImport } from './routes/repos.$owner.$repo.requests.index'
+import { Route as ReposOwnerRepoRequestsRequestIdRouteImport } from './routes/repos.$owner.$repo.requests.$requestId'
 
 const CliLoginRoute = CliLoginRouteImport.update({
   id: '/cli-login',
@@ -65,11 +68,28 @@ const ReposOwnerRepoSettingsRoute = ReposOwnerRepoSettingsRouteImport.update({
   path: '/settings',
   getParentRoute: () => ReposOwnerRepoRoute,
 } as any)
+const ReposOwnerRepoRequestsRoute = ReposOwnerRepoRequestsRouteImport.update({
+  id: '/requests',
+  path: '/requests',
+  getParentRoute: () => ReposOwnerRepoRoute,
+} as any)
 const ReposOwnerRepoHistoryRoute = ReposOwnerRepoHistoryRouteImport.update({
   id: '/history',
   path: '/history',
   getParentRoute: () => ReposOwnerRepoRoute,
 } as any)
+const ReposOwnerRepoRequestsIndexRoute =
+  ReposOwnerRepoRequestsIndexRouteImport.update({
+    id: '/',
+    path: '/',
+    getParentRoute: () => ReposOwnerRepoRequestsRoute,
+  } as any)
+const ReposOwnerRepoRequestsRequestIdRoute =
+  ReposOwnerRepoRequestsRequestIdRouteImport.update({
+    id: '/$requestId',
+    path: '/$requestId',
+    getParentRoute: () => ReposOwnerRepoRequestsRoute,
+  } as any)
 
 export interface FileRoutesByFullPath {
   '/': typeof IndexRoute
@@ -80,8 +100,11 @@ export interface FileRoutesByFullPath {
   '/sign-up/$': typeof SignUpSplatRoute
   '/repos/$owner/$repo': typeof ReposOwnerRepoRouteWithChildren
   '/repos/$owner/$repo/history': typeof ReposOwnerRepoHistoryRoute
+  '/repos/$owner/$repo/requests': typeof ReposOwnerRepoRequestsRouteWithChildren
   '/repos/$owner/$repo/settings': typeof ReposOwnerRepoSettingsRoute
   '/repos/$owner/$repo/': typeof ReposOwnerRepoIndexRoute
+  '/repos/$owner/$repo/requests/$requestId': typeof ReposOwnerRepoRequestsRequestIdRoute
+  '/repos/$owner/$repo/requests/': typeof ReposOwnerRepoRequestsIndexRoute
 }
 export interface FileRoutesByTo {
   '/': typeof IndexRoute
@@ -93,6 +116,8 @@ export interface FileRoutesByTo {
   '/repos/$owner/$repo/history': typeof ReposOwnerRepoHistoryRoute
   '/repos/$owner/$repo/settings': typeof ReposOwnerRepoSettingsRoute
   '/repos/$owner/$repo': typeof ReposOwnerRepoIndexRoute
+  '/repos/$owner/$repo/requests/$requestId': typeof ReposOwnerRepoRequestsRequestIdRoute
+  '/repos/$owner/$repo/requests': typeof ReposOwnerRepoRequestsIndexRoute
 }
 export interface FileRoutesById {
   __root__: typeof rootRouteImport
@@ -104,8 +129,11 @@ export interface FileRoutesById {
   '/sign-up/$': typeof SignUpSplatRoute
   '/repos/$owner/$repo': typeof ReposOwnerRepoRouteWithChildren
   '/repos/$owner/$repo/history': typeof ReposOwnerRepoHistoryRoute
+  '/repos/$owner/$repo/requests': typeof ReposOwnerRepoRequestsRouteWithChildren
   '/repos/$owner/$repo/settings': typeof ReposOwnerRepoSettingsRoute
   '/repos/$owner/$repo/': typeof ReposOwnerRepoIndexRoute
+  '/repos/$owner/$repo/requests/$requestId': typeof ReposOwnerRepoRequestsRequestIdRoute
+  '/repos/$owner/$repo/requests/': typeof ReposOwnerRepoRequestsIndexRoute
 }
 export interface FileRouteTypes {
   fileRoutesByFullPath: FileRoutesByFullPath
@@ -118,8 +146,11 @@ export interface FileRouteTypes {
     | '/sign-up/$'
     | '/repos/$owner/$repo'
     | '/repos/$owner/$repo/history'
+    | '/repos/$owner/$repo/requests'
     | '/repos/$owner/$repo/settings'
     | '/repos/$owner/$repo/'
+    | '/repos/$owner/$repo/requests/$requestId'
+    | '/repos/$owner/$repo/requests/'
   fileRoutesByTo: FileRoutesByTo
   to:
     | '/'
@@ -131,6 +162,8 @@ export interface FileRouteTypes {
     | '/repos/$owner/$repo/history'
     | '/repos/$owner/$repo/settings'
     | '/repos/$owner/$repo'
+    | '/repos/$owner/$repo/requests/$requestId'
+    | '/repos/$owner/$repo/requests'
   id:
     | '__root__'
     | '/'
@@ -141,8 +174,11 @@ export interface FileRouteTypes {
     | '/sign-up/$'
     | '/repos/$owner/$repo'
     | '/repos/$owner/$repo/history'
+    | '/repos/$owner/$repo/requests'
     | '/repos/$owner/$repo/settings'
     | '/repos/$owner/$repo/'
+    | '/repos/$owner/$repo/requests/$requestId'
+    | '/repos/$owner/$repo/requests/'
   fileRoutesById: FileRoutesById
 }
 export interface RootRouteChildren {
@@ -220,6 +256,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof ReposOwnerRepoSettingsRouteImport
       parentRoute: typeof ReposOwnerRepoRoute
     }
+    '/repos/$owner/$repo/requests': {
+      id: '/repos/$owner/$repo/requests'
+      path: '/requests'
+      fullPath: '/repos/$owner/$repo/requests'
+      preLoaderRoute: typeof ReposOwnerRepoRequestsRouteImport
+      parentRoute: typeof ReposOwnerRepoRoute
+    }
     '/repos/$owner/$repo/history': {
       id: '/repos/$owner/$repo/history'
       path: '/history'
@@ -227,17 +270,49 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof ReposOwnerRepoHistoryRouteImport
       parentRoute: typeof ReposOwnerRepoRoute
     }
+    '/repos/$owner/$repo/requests/': {
+      id: '/repos/$owner/$repo/requests/'
+      path: '/'
+      fullPath: '/repos/$owner/$repo/requests/'
+      preLoaderRoute: typeof ReposOwnerRepoRequestsIndexRouteImport
+      parentRoute: typeof ReposOwnerRepoRequestsRoute
+    }
+    '/repos/$owner/$repo/requests/$requestId': {
+      id: '/repos/$owner/$repo/requests/$requestId'
+      path: '/$requestId'
+      fullPath: '/repos/$owner/$repo/requests/$requestId'
+      preLoaderRoute: typeof ReposOwnerRepoRequestsRequestIdRouteImport
+      parentRoute: typeof ReposOwnerRepoRequestsRoute
+    }
   }
 }
 
+interface ReposOwnerRepoRequestsRouteChildren {
+  ReposOwnerRepoRequestsRequestIdRoute: typeof ReposOwnerRepoRequestsRequestIdRoute
+  ReposOwnerRepoRequestsIndexRoute: typeof ReposOwnerRepoRequestsIndexRoute
+}
+
+const ReposOwnerRepoRequestsRouteChildren: ReposOwnerRepoRequestsRouteChildren =
+  {
+    ReposOwnerRepoRequestsRequestIdRoute: ReposOwnerRepoRequestsRequestIdRoute,
+    ReposOwnerRepoRequestsIndexRoute: ReposOwnerRepoRequestsIndexRoute,
+  }
+
+const ReposOwnerRepoRequestsRouteWithChildren =
+  ReposOwnerRepoRequestsRoute._addFileChildren(
+    ReposOwnerRepoRequestsRouteChildren,
+  )
+
 interface ReposOwnerRepoRouteChildren {
   ReposOwnerRepoHistoryRoute: typeof ReposOwnerRepoHistoryRoute
+  ReposOwnerRepoRequestsRoute: typeof ReposOwnerRepoRequestsRouteWithChildren
   ReposOwnerRepoSettingsRoute: typeof ReposOwnerRepoSettingsRoute
   ReposOwnerRepoIndexRoute: typeof ReposOwnerRepoIndexRoute
 }
 
 const ReposOwnerRepoRouteChildren: ReposOwnerRepoRouteChildren = {
   ReposOwnerRepoHistoryRoute: ReposOwnerRepoHistoryRoute,
+  ReposOwnerRepoRequestsRoute: ReposOwnerRepoRequestsRouteWithChildren,
   ReposOwnerRepoSettingsRoute: ReposOwnerRepoSettingsRoute,
   ReposOwnerRepoIndexRoute: ReposOwnerRepoIndexRoute,
 }

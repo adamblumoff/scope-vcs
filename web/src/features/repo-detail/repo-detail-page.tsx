@@ -9,7 +9,7 @@ import { RouteErrorPage } from '@/components/route-error-page'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Link } from '@tanstack/react-router'
-import { Settings } from 'lucide-react'
+import { GitPullRequest, Settings } from 'lucide-react'
 import { RepoCloneDropdown } from './repo-clone-dropdown'
 
 export function RepoDetailPage({
@@ -43,6 +43,15 @@ export function RepoDetailPage({
                 requireOwner
                 variant="default"
               />
+              <Button asChild size="sm" variant="secondary">
+                <Link
+                  params={{ owner: repo.owner_handle, repo: repo.name }}
+                  to="/repos/$owner/$repo/requests"
+                >
+                  <GitPullRequest className="size-3.5" />
+                  <span>Requests</span>
+                </Link>
+              </Button>
               {repo.access.actor !== 'Public' && (
                 <Button asChild size="sm" variant="secondary">
                   <Link
@@ -60,6 +69,9 @@ export function RepoDetailPage({
             <>
               <LifecycleBadge state={repo.lifecycle_state} />
               <Badge variant="neutral">{files.length} files</Badge>
+              <Badge variant={repo.open_request_count > 0 ? 'info' : 'neutral'}>
+                {repo.open_request_count} requests
+              </Badge>
             </>
           )}
           title={repo.id}

@@ -171,7 +171,10 @@ pub(crate) async fn comment_request(
 ) -> Result<Json<RequestMutationResponse>, ApiError> {
     let user = require_scope_user(&state, &headers).await?;
     let (repo, access, _) = repo_and_access(&state, &headers, &owner, &repo_name).await?;
-    visible_request(&state, &repo, access, &request_id)?;
+    let request = visible_request(&state, &repo, access, &request_id)?;
+    if !request_permissions(&request, access, Some(&user.id)).can_comment {
+        return Err(ApiError::forbidden("request author or maintainer required"));
+    }
     let mutation = state.metadata.comment_request(CommentRequestInput {
         request_id,
         actor_user_id: user.id.clone(),

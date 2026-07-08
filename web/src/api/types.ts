@@ -19,8 +19,27 @@ import type {
   ProjectionPreviewResponse,
   ProjectionPreviewSource as GeneratedProjectionPreviewSource,
   ProjectionPreviewSummaryResponse,
+  CommentRequestRequest,
+  MergeRequestRequest,
+  NeedsResponseRequest,
   AcceptRepositoryInviteResponse,
   CreateRepositoryInviteResponse,
+  RequestActorRole,
+  RequestBaseAudience,
+  RequestDetailResponse,
+  RequestDisposition,
+  RequestEventKind,
+  RequestEventResponse,
+  RequestListResponse,
+  RequestMergeabilityResponse,
+  RequestMergeabilityStatus,
+  RequestMutationResponse,
+  RequestPermissionsResponse,
+  RequestSettlementResponse,
+  RequestState,
+  RequestSummaryResponse,
+  ResolveRequestRequest,
+  RespondRequestRequest,
   ReviewFileDiffResponse,
   RepoFileResponse,
   RepoPublicationState as GeneratedRepoPublicationState,
@@ -82,6 +101,20 @@ export type ProjectionPreviewFile = ProjectionPreviewFileResponse
 export type ProjectionPreviewCommit = ProjectionPreviewCommitResponse
 export type ProjectionPreviewSummary = ProjectionPreviewSummaryResponse
 export type ProjectionPreview = ProjectionPreviewResponse
+export type RequestList = RequestListResponse
+export type RequestDetail = RequestDetailResponse
+export type RequestMutation = RequestMutationResponse
+export type RequestSummary = RequestSummaryResponse
+export type RequestPermissions = RequestPermissionsResponse
+export type RequestMergeability = RequestMergeabilityResponse
+export type RequestMergeabilityState = RequestMergeabilityStatus
+export type RequestSettlement = RequestSettlementResponse
+export type RequestEvent = RequestEventResponse
+export type RequestWorkflowState = RequestState
+export type RequestWorkflowDisposition = RequestDisposition
+export type RequestWorkflowEventKind = RequestEventKind
+export type RequestWorkflowActorRole = RequestActorRole
+export type RequestWorkflowBaseAudience = RequestBaseAudience
 
 export type RepoDetail = {
   capabilities: RepoCapabilities
@@ -163,3 +196,13 @@ export type CommitDetailInput = CommitHistoryInput & {
 export type CommitFileDiffInput = RepoParams & CommitFileDiffRequest & {
   commit: string
 }
+
+export type RequestParams = RepoParams & {
+  request_id: string
+}
+
+export type CommentRequestInput = RequestParams & CommentRequestRequest
+export type NeedsResponseInput = RequestParams & NeedsResponseRequest
+export type RespondRequestInput = RequestParams & RespondRequestRequest
+export type ResolveRequestInput = RequestParams & ResolveRequestRequest
+export type MergeRequestInput = RequestParams & MergeRequestRequest
