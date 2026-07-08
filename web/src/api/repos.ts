@@ -21,3 +21,18 @@ export {
   parseRepoInviteTokenInput,
   parseUpdateRepoMemberInput,
 } from './repo-inputs'
+export {
+  commentRequestForRequest,
+  loadRequestForRequest,
+  loadRequestsForRequest,
+  markRequestNeedsResponseForRequest,
+  mergeRequestForRequest,
+  parseCommentRequestInput,
+  parseMergeRequestInput,
+  parseNeedsResponseInput,
+  parseRequestParams,
+  parseResolveRequestInput,
+  parseRespondRequestInput,
+  resolveRequestForRequest,
+  respondToRequestForRequest,
+} from './requests'

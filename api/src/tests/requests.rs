@@ -373,6 +373,72 @@ async fn needs_response_respond_and_resolution_settle_public_stake() {
 }
 
 #[tokio::test]
+async fn unrelated_public_reader_cannot_comment_on_public_request() {
+    let state = state_with_public_request();
+    let unrelated_user_id = crate::db::scope_user_id_for_auth_identity("clerk", "public_other");
+    state
+        .metadata
+        .update(|catalog| {
+            catalog.users.insert(
+                unrelated_user_id.clone(),
+                UserAccount {
+                    id: unrelated_user_id,
+                    handle: "public-other".to_string(),
+                    email: "public-other@example.com".to_string(),
+                    email_verified: true,
+                },
+            );
+            Ok(())
+        })
+        .unwrap();
+    let app = router(state.clone());
+
+    let visible = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("GET")
+                .uri("/v1/repos/owner/repo/requests/req_public")
+                .header(
+                    AUTHORIZATION,
+                    bearer_header_for("public_other", "public-other@example.com"),
+                )
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(visible.status(), StatusCode::OK);
+    let body = response_json(visible).await;
+    assert_eq!(body["request"]["permissions"]["can_comment"], false);
+
+    let comment = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/v1/repos/owner/repo/requests/req_public/comments")
+                .header(
+                    AUTHORIZATION,
+                    bearer_header_for("public_other", "public-other@example.com"),
+                )
+                .header(CONTENT_TYPE, "application/json")
+                .body(Body::from(r#"{"body":"drive-by comment"}"#))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(comment.status(), StatusCode::FORBIDDEN);
+    state
+        .metadata
+        .read(|catalog| {
+            assert_eq!(catalog.request_events.len(), 1);
+            Ok(())
+        })
+        .unwrap();
+}
+
+#[tokio::test]
 async fn clean_merge_applies_repo_update_and_resolves_as_accepted() {
     let state = test_state_with_repo();
     cache_test_jwks(&state);
