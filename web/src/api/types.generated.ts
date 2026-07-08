@@ -30,6 +30,16 @@ export type HistoryRewriteRequest = { path: string, action: HistoryRewriteAction
 
 export type HistoryRewriteAction = "redact-public-history";
 
+export type RequestActorRole = "Public" | "Member" | "Owner";
+
+export type RequestBaseAudience = "Public" | "Private";
+
+export type RequestState = "Submitted" | "NeedsResponse" | "Resolved" | "Withdrawn";
+
+export type RequestDisposition = "Accepted" | "UsefulNotMerged" | "HiddenContext" | "NotAligned" | "Duplicate" | "Abandoned" | "LowQuality";
+
+export type RequestEventKind = "Created" | "RevisionPushed" | "Commented" | "NeedsResponse" | "ContributorResponded" | "Merged" | "Resolved" | "Settled" | "Withdrawn";
+
 export type ProjectionPreviewAudience = "private" | "public";
 
 export type ProjectionPreviewSource = "live";
@@ -72,7 +82,9 @@ export type CliSessionsResponse = { sessions: Array<CliSessionResponse>, };
 
 export type CliSessionResponse = { id: string, label: string, created_at_unix: number, last_used_at_unix: number | null, expires_at_unix: number, };
 
-export type RepoSummaryResponse = { id: string, owner_handle: string, name: string, lifecycle_state: RepoPublicationState, default_visibility: Visibility, change_version: number, access: RepositoryAccessResponse, pending_import_pending: boolean, staged_update_pending: boolean, push_blocked_by_staged_update: boolean, };
+export type RepoSummaryResponse = { id: string, owner_handle: string, name: string, lifecycle_state: RepoPublicationState, default_visibility: Visibility, change_version: number, access: RepositoryAccessResponse, pending_import_pending: boolean, open_request_count: number, request_permissions: RepoRequestPermissionsResponse, };
+
+export type RepoRequestPermissionsResponse = { can_submit_request: boolean, uses_credit_stake: boolean, };
 
 export type CreateRepoRequest = { name: string, visibility: Visibility | null, };
 
@@ -143,6 +155,36 @@ export type ProjectionPreviewCommitResponse = { projected_id: string, logical_co
 export type ProjectionPreviewCommitVisibilityResponse = "FullyPublic" | "Mixed" | "FullyPrivate";
 
 export type ProjectionPreviewSummaryResponse = { visible_files: number, hidden_files: number, visible_commits: number, hidden_commits: number, };
+
+export type RequestListResponse = { requests: Array<RequestSummaryResponse>, };
+
+export type RequestDetailResponse = { request: RequestSummaryResponse, events: Array<RequestEventResponse>, };
+
+export type RequestMutationResponse = { request: RequestSummaryResponse, };
+
+export type RequestSummaryResponse = { id: string, title: string, author_user_id: string, author_role: RequestActorRole, base_audience: RequestBaseAudience, target_branch: string, request_ref: string, base_main_oid: string, head_oid: string, state: RequestState, stake_credits: number, disposition: RequestDisposition | null, settlement: RequestSettlementResponse | null, created_at_unix: number, updated_at_unix: number, resolved_at_unix: number | null, permissions: RequestPermissionsResponse, mergeability: RequestMergeabilityResponse, };
+
+export type RequestPermissionsResponse = { can_comment: boolean, can_update_branch: boolean, can_mark_needs_response: boolean, can_respond: boolean, can_resolve: boolean, can_merge: boolean, };
+
+export type RequestMergeabilityStatus = "Ready" | "Closed" | "NotMaintainer" | "MissingRequestBranch";
+
+export type RequestMergeabilityResponse = { status: RequestMergeabilityStatus, current_main_oid: string | null, request_head_oid: string, reason: string | null, };
+
+export type RequestSettlementResponse = { disposition: RequestDisposition, stake_credits: number, refunded_credits: number, reward_credits: number, burned_credits: number, settled_at_unix: number, };
+
+export type RequestEventResponse = { id: string, actor_user_id: string, kind: RequestEventKind, body: string | null, old_head_oid: string | null, new_head_oid: string | null, created_at_unix: number, };
+
+export type SubmitRequestRequest = { title: string, head_oid: string, stake_credits: number | null, };
+
+export type CommentRequestRequest = { body: string, };
+
+export type NeedsResponseRequest = { body: string, };
+
+export type RespondRequestRequest = { body: string | null, };
+
+export type ResolveRequestRequest = { disposition: RequestDisposition, body: string | null, };
+
+export type MergeRequestRequest = { expected_main_oid: string, expected_head_oid: string, body: string | null, };
 
 export const CliAuthApiEndpoints = {
   accountSession: "/v1/session",

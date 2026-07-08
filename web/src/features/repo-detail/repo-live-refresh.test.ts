@@ -62,7 +62,11 @@ function repoLiveState(
       name: 'repo',
       owner_handle: 'owner',
       pending_import_pending: false,
-      push_blocked_by_staged_update: false,
+      open_request_count: 0,
+      request_permissions: {
+        can_submit_request: true,
+        uses_credit_stake: actor === 'Public',
+      },
       access: {
         actor,
         can_apply_changes: false,
@@ -73,7 +77,6 @@ function repoLiveState(
         can_read_private_files: actor !== 'Public',
         can_update_repo_settings: actor === 'Owner',
       },
-      staged_update_pending: false,
     },
   }
 }

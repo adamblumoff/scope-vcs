@@ -142,6 +142,25 @@ where
         .collect()
 }
 
+pub async fn request_events_by_request_id<C>(
+    conn: &C,
+    request_id: &str,
+) -> Result<Vec<RequestEvent>, ApiError>
+where
+    C: ConnectionTrait,
+{
+    entities::request_event::Entity::find()
+        .filter(entities::request_event::Column::RequestId.eq(request_id.to_string()))
+        .order_by_asc(entities::request_event::Column::CreatedAtUnix)
+        .order_by_asc(entities::request_event::Column::Id)
+        .all(conn)
+        .await
+        .map_err(ApiError::internal)?
+        .into_iter()
+        .map(entities::request_event::Model::try_into_domain)
+        .collect()
+}
+
 pub async fn request_event_by_id<C>(
     conn: &C,
     event_id: &str,

@@ -7,18 +7,22 @@ use super::{
     request_rows::{
         credit_account_by_user_id, credit_ledger_entry_by_id, insert_credit_ledger_entry_row,
         insert_request_event_row, insert_request_row, request_by_id, request_by_ref,
-        request_event_by_id, requests_by_repo_author, save_credit_account_row, save_request_row,
+        request_event_by_id, request_events_by_request_id, requests_by_repo_author,
+        requests_by_repo_id, save_credit_account_row, save_request_row,
     },
     run_api_db_on,
 };
 use crate::{
     domain::{
         requests::{
-            CreditAccountMutation, GrantUserCreditsInput, MergeRequestInput, MergeRequestMutation,
+            CommentRequestInput, CreditAccountMutation, GrantUserCreditsInput,
+            MarkRequestNeedsResponseInput, MergeRequestInput, MergeRequestMutation,
             RecordRequestRevisionInput, Request, RequestActorRole, RequestBaseAudience,
-            RequestRevisionMutation, ResolveRequestInput, ResolveRequestMutation,
-            SubmitRequestInput, SubmitRequestMutation, grant_user_credits, merge_request,
-            record_request_revision, resolve_request, submit_request,
+            RequestEvent, RequestRevisionMutation, RequestTimelineMutation, ResolveRequestInput,
+            ResolveRequestMutation, RespondToRequestInput, SubmitRequestInput,
+            SubmitRequestMutation, comment_request, grant_user_credits,
+            mark_request_needs_response, merge_request, record_request_revision, resolve_request,
+            respond_to_request, submit_request,
         },
         store::{RepoPublicationState, RepositoryActor, StoredRepository},
     },
@@ -28,6 +32,22 @@ use sea_orm::{EntityTrait, TransactionTrait};
 use std::{collections::BTreeMap, sync::Arc};
 
 impl MetadataStore {
+    pub fn request_by_id(&self, request_id: &str) -> Result<Option<Request>, ApiError> {
+        let request_id = request_id.to_string();
+        match self.inner.as_ref() {
+            MetadataStoreInner::Postgres { db, runtime } => {
+                let db = Arc::clone(db);
+                run_api_db_on(runtime, async move {
+                    request_by_id(db.as_ref(), &request_id).await
+                })
+            }
+            #[cfg(any(test, feature = "memory-metadata"))]
+            MetadataStoreInner::Memory(_) => {
+                self.read(move |catalog| Ok(catalog.requests.get(&request_id).cloned()))
+            }
+        }
+    }
+
     pub fn request_by_ref(&self, request_ref: &str) -> Result<Option<Request>, ApiError> {
         let request_ref = request_ref.to_string();
         match self.inner.as_ref() {
@@ -44,6 +64,33 @@ impl MetadataStore {
                     .values()
                     .find(|request| request.request_ref == request_ref)
                     .cloned())
+            }),
+        }
+    }
+
+    pub fn requests_by_repo_id(&self, repo_id: &str) -> Result<Vec<Request>, ApiError> {
+        let repo_id = repo_id.to_string();
+        match self.inner.as_ref() {
+            MetadataStoreInner::Postgres { db, runtime } => {
+                let db = Arc::clone(db);
+                run_api_db_on(runtime, async move {
+                    requests_by_repo_id(db.as_ref(), &repo_id).await
+                })
+            }
+            #[cfg(any(test, feature = "memory-metadata"))]
+            MetadataStoreInner::Memory(_) => self.read(move |catalog| {
+                let mut requests = catalog
+                    .requests
+                    .values()
+                    .filter(|request| request.repo_id == repo_id)
+                    .cloned()
+                    .collect::<Vec<_>>();
+                requests.sort_by(|left, right| {
+                    left.created_at_unix
+                        .cmp(&right.created_at_unix)
+                        .then_with(|| left.id.cmp(&right.id))
+                });
+                Ok(requests)
             }),
         }
     }
@@ -72,6 +119,36 @@ impl MetadataStore {
                     })
                     .cloned()
                     .collect())
+            }),
+        }
+    }
+
+    pub fn request_events_by_request_id(
+        &self,
+        request_id: &str,
+    ) -> Result<Vec<RequestEvent>, ApiError> {
+        let request_id = request_id.to_string();
+        match self.inner.as_ref() {
+            MetadataStoreInner::Postgres { db, runtime } => {
+                let db = Arc::clone(db);
+                run_api_db_on(runtime, async move {
+                    request_events_by_request_id(db.as_ref(), &request_id).await
+                })
+            }
+            #[cfg(any(test, feature = "memory-metadata"))]
+            MetadataStoreInner::Memory(_) => self.read(move |catalog| {
+                let mut events = catalog
+                    .request_events
+                    .values()
+                    .filter(|event| event.request_id == request_id)
+                    .cloned()
+                    .collect::<Vec<_>>();
+                events.sort_by(|left, right| {
+                    left.created_at_unix
+                        .cmp(&right.created_at_unix)
+                        .then_with(|| left.id.cmp(&right.id))
+                });
+                Ok(events)
             }),
         }
     }
@@ -245,6 +322,149 @@ impl MetadataStore {
                     mutation.source_blobs_to_delete.clone(),
                 );
                 Ok(mutation)
+            }),
+        }
+    }
+
+    pub fn comment_request(
+        &self,
+        input: CommentRequestInput,
+    ) -> Result<RequestTimelineMutation, ApiError> {
+        match self.inner.as_ref() {
+            MetadataStoreInner::Postgres { db, runtime } => {
+                let db = Arc::clone(db);
+                run_api_db_on(runtime, async move {
+                    let tx = db.as_ref().begin().await.map_err(ApiError::internal)?;
+                    acquire_metadata_write_lock(&tx).await?;
+                    ensure_user_exists(&tx, &input.actor_user_id).await?;
+
+                    let mut requests = BTreeMap::new();
+                    let request = request_by_id(&tx, &input.request_id)
+                        .await?
+                        .ok_or_else(|| ApiError::not_found("request not found"))?;
+                    let repo = repo_by_id(&tx, &request.repo_id).await?;
+                    ensure_request_participant(&repo, &request, &input.actor_user_id)?;
+                    requests.insert(request.id.clone(), request);
+                    let mut events = BTreeMap::new();
+                    if let Some(event) = request_event_by_id(&tx, &input.event_id).await? {
+                        events.insert(event.id.clone(), event);
+                    }
+
+                    let mutation = comment_request(&mut requests, &mut events, input)?;
+                    save_request_row(&tx, &mutation.request).await?;
+                    insert_request_event_row(&tx, &mutation.event).await?;
+                    tx.commit().await.map_err(ApiError::internal)?;
+                    Ok(mutation)
+                })
+            }
+            #[cfg(any(test, feature = "memory-metadata"))]
+            MetadataStoreInner::Memory(_) => self.update(move |catalog| {
+                if !catalog.users.contains_key(&input.actor_user_id) {
+                    return Err(ApiError::not_found("user not found"));
+                }
+                let request = catalog
+                    .requests
+                    .get(&input.request_id)
+                    .ok_or_else(|| ApiError::not_found("request not found"))?;
+                let repo = catalog
+                    .repositories
+                    .get(&request.repo_id)
+                    .ok_or_else(|| ApiError::not_found("repo not found"))?;
+                ensure_request_participant(repo, request, &input.actor_user_id)?;
+                comment_request(&mut catalog.requests, &mut catalog.request_events, input)
+            }),
+        }
+    }
+
+    pub fn mark_request_needs_response(
+        &self,
+        input: MarkRequestNeedsResponseInput,
+    ) -> Result<RequestTimelineMutation, ApiError> {
+        match self.inner.as_ref() {
+            MetadataStoreInner::Postgres { db, runtime } => {
+                let db = Arc::clone(db);
+                run_api_db_on(runtime, async move {
+                    let tx = db.as_ref().begin().await.map_err(ApiError::internal)?;
+                    acquire_metadata_write_lock(&tx).await?;
+                    ensure_user_exists(&tx, &input.actor_user_id).await?;
+
+                    let mut requests = BTreeMap::new();
+                    let request = request_by_id(&tx, &input.request_id)
+                        .await?
+                        .ok_or_else(|| ApiError::not_found("request not found"))?;
+                    let repo = repo_by_id(&tx, &request.repo_id).await?;
+                    ensure_request_maintainer(&repo, &input.actor_user_id)?;
+                    requests.insert(request.id.clone(), request);
+                    let mut events = BTreeMap::new();
+                    if let Some(event) = request_event_by_id(&tx, &input.event_id).await? {
+                        events.insert(event.id.clone(), event);
+                    }
+
+                    let mutation = mark_request_needs_response(&mut requests, &mut events, input)?;
+                    save_request_row(&tx, &mutation.request).await?;
+                    insert_request_event_row(&tx, &mutation.event).await?;
+                    tx.commit().await.map_err(ApiError::internal)?;
+                    Ok(mutation)
+                })
+            }
+            #[cfg(any(test, feature = "memory-metadata"))]
+            MetadataStoreInner::Memory(_) => self.update(move |catalog| {
+                if !catalog.users.contains_key(&input.actor_user_id) {
+                    return Err(ApiError::not_found("user not found"));
+                }
+                let request = catalog
+                    .requests
+                    .get(&input.request_id)
+                    .ok_or_else(|| ApiError::not_found("request not found"))?;
+                let repo = catalog
+                    .repositories
+                    .get(&request.repo_id)
+                    .ok_or_else(|| ApiError::not_found("repo not found"))?;
+                ensure_request_maintainer(repo, &input.actor_user_id)?;
+                mark_request_needs_response(
+                    &mut catalog.requests,
+                    &mut catalog.request_events,
+                    input,
+                )
+            }),
+        }
+    }
+
+    pub fn respond_to_request(
+        &self,
+        input: RespondToRequestInput,
+    ) -> Result<RequestTimelineMutation, ApiError> {
+        match self.inner.as_ref() {
+            MetadataStoreInner::Postgres { db, runtime } => {
+                let db = Arc::clone(db);
+                run_api_db_on(runtime, async move {
+                    let tx = db.as_ref().begin().await.map_err(ApiError::internal)?;
+                    acquire_metadata_write_lock(&tx).await?;
+                    ensure_user_exists(&tx, &input.actor_user_id).await?;
+
+                    let mut requests = BTreeMap::new();
+                    let request = request_by_id(&tx, &input.request_id)
+                        .await?
+                        .ok_or_else(|| ApiError::not_found("request not found"))?;
+                    requests.insert(request.id.clone(), request);
+                    let mut events = BTreeMap::new();
+                    if let Some(event) = request_event_by_id(&tx, &input.event_id).await? {
+                        events.insert(event.id.clone(), event);
+                    }
+
+                    let mutation = respond_to_request(&mut requests, &mut events, input)?;
+                    save_request_row(&tx, &mutation.request).await?;
+                    insert_request_event_row(&tx, &mutation.event).await?;
+                    tx.commit().await.map_err(ApiError::internal)?;
+                    Ok(mutation)
+                })
+            }
+            #[cfg(any(test, feature = "memory-metadata"))]
+            MetadataStoreInner::Memory(_) => self.update(move |catalog| {
+                if !catalog.users.contains_key(&input.actor_user_id) {
+                    return Err(ApiError::not_found("user not found"));
+                }
+                respond_to_request(&mut catalog.requests, &mut catalog.request_events, input)
             }),
         }
     }
@@ -447,14 +667,28 @@ fn authorize_submit_request(
     Ok(input)
 }
 
-fn ensure_request_maintainer(repo: &StoredRepository, user_id: &str) -> Result<(), ApiError> {
+pub(super) fn ensure_request_maintainer(
+    repo: &StoredRepository,
+    user_id: &str,
+) -> Result<(), ApiError> {
     match repo.access_for_user_id(user_id).actor {
         RepositoryActor::Owner | RepositoryActor::Member => Ok(()),
         RepositoryActor::Public => Err(ApiError::forbidden("repo maintainer required")),
     }
 }
 
-async fn ensure_user_exists<C>(conn: &C, user_id: &str) -> Result<(), ApiError>
+fn ensure_request_participant(
+    repo: &StoredRepository,
+    request: &Request,
+    user_id: &str,
+) -> Result<(), ApiError> {
+    if request.author_user_id == user_id {
+        return Ok(());
+    }
+    ensure_request_maintainer(repo, user_id)
+}
+
+pub(super) async fn ensure_user_exists<C>(conn: &C, user_id: &str) -> Result<(), ApiError>
 where
     C: sea_orm::ConnectionTrait,
 {

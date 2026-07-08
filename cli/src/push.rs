@@ -24,7 +24,6 @@ pub struct ScopePushTarget {
 pub struct ScopePushOutcome {
     pub owner: String,
     pub repo: String,
-    pub staged_update_pending: bool,
 }
 
 pub fn load_scope_remote(api_url: &str, remote: &str) -> anyhow::Result<ScopePushTarget> {
@@ -87,7 +86,6 @@ pub fn push_authenticated_remote(
         return Ok(ScopePushOutcome {
             owner: repo.owner_handle,
             repo: repo.name,
-            staged_update_pending: repo.staged_update_pending || repo.push_blocked_by_staged_update,
         });
     }
 
@@ -97,7 +95,6 @@ pub fn push_authenticated_remote(
         repo.lifecycle_state,
         repo.pending_import_pending,
         repo.access.can_push,
-        repo.push_blocked_by_staged_update,
     )?;
 
     let intent = create_push_intent(
@@ -132,7 +129,6 @@ pub fn push_authenticated_remote(
     Ok(ScopePushOutcome {
         owner: repo.owner_handle,
         repo: repo.name,
-        staged_update_pending: repo.staged_update_pending || repo.push_blocked_by_staged_update,
     })
 }
 
@@ -154,7 +150,6 @@ pub fn ensure_scope_remote_can_receive_push(
             repo.lifecycle_state,
             repo.pending_import_pending,
             repo.access.can_push,
-            repo.push_blocked_by_staged_update,
         )
     }
 }
@@ -179,7 +174,6 @@ pub fn push_reviewed_head_with_intent(
     Ok(ScopePushOutcome {
         owner: repo.owner_handle,
         repo: repo.name,
-        staged_update_pending: repo.staged_update_pending || repo.push_blocked_by_staged_update,
     })
 }
 
@@ -251,7 +245,6 @@ fn ensure_published_repo_can_receive_push(
     lifecycle_state: RepoPublicationState,
     pending_import_pending: bool,
     can_push: bool,
-    push_blocked_by_staged_update: bool,
 ) -> anyhow::Result<()> {
     match lifecycle_state {
         RepoPublicationState::Unpublished => {
@@ -261,10 +254,6 @@ fn ensure_published_repo_can_receive_push(
             bail!("repo {owner}/{repo} is waiting for its first push. Run: scope init");
         }
         RepoPublicationState::Published => {}
-    }
-
-    if push_blocked_by_staged_update {
-        bail!("repo {owner}/{repo} is blocked by stale staged update state");
     }
 
     if !can_push {

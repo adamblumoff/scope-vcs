@@ -313,17 +313,10 @@ fn push(args: PushArgs) -> anyhow::Result<()> {
     )?;
     mark_worktree_scope_repo_config_synced(&git_repo.root, &config)?;
 
-    if outcome.staged_update_pending {
-        println!(
-            "Pushed to Scope: {}/{}\nScope reported a pending update; this should not happen with config-owned pushes.",
-            outcome.owner, outcome.repo
-        );
-    } else {
-        println!(
-            "Pushed to Scope: {}/{}\nPush applied by Scope.",
-            outcome.owner, outcome.repo
-        );
-    }
+    println!(
+        "Pushed to Scope: {}/{}\nPush applied by Scope.",
+        outcome.owner, outcome.repo
+    );
 
     Ok(())
 }

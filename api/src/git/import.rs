@@ -88,6 +88,38 @@ pub(crate) fn persist_receive_pack_update_and_promote(
     Ok(persisted)
 }
 
+pub(crate) fn apply_request_merge_update(
+    repo: &mut StoredRepository,
+    update: ReceivePackUpdate,
+    maintainer_id: &str,
+) -> Result<RepositoryMutation<PersistedReceivePackUpdate>, ApiError> {
+    let old_snapshot = repo.git_snapshot.clone();
+    let mut cleanup_blobs = update.uploaded_blobs.clone();
+    let mut update = update;
+    let access = repo.access_for_user_id(maintainer_id);
+    if !matches!(
+        access.actor,
+        RepositoryActor::Owner | RepositoryActor::Member
+    ) {
+        return Err(ApiError::forbidden("repo maintainer required"));
+    }
+    ensure_receive_pack_config_base_matches(repo, &update)?;
+    let previous_config = Some(repo.repo_config.clone());
+    if !access.can_change_file_visibility
+        && receive_pack_update_changes_visibility(repo, previous_config.as_ref(), &update)
+    {
+        return Err(ApiError::forbidden("file visibility permission required"));
+    }
+    update.previous_config = previous_config;
+    ensure_receive_pack_base_matches(repo, &update)?;
+    apply_receive_pack_update(repo, update)?;
+    cleanup_blobs.extend(old_snapshot);
+    Ok(RepositoryMutation::with_source_blob_deletions(
+        PersistedReceivePackUpdate::Applied,
+        cleanup_blobs,
+    ))
+}
+
 fn ensure_receive_pack_config_base_matches(
     repo: &StoredRepository,
     update: &ReceivePackUpdate,

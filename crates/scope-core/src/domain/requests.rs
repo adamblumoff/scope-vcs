@@ -2,6 +2,13 @@ use crate::{domain::store::SourceBlob, error::ApiError};
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
 
+mod settlement;
+pub use settlement::settlement_for;
+use settlement::{
+    CreditSettlementIds, maximum_request_reward, settle_request_credits, settlement_event_body,
+    u32_to_i32,
+};
+
 const MAIN_BRANCH: &str = "main";
 pub const REQUEST_REF_PREFIX: &str = "refs/scope/requests/";
 const REPO_DELETE_REFUND_LEDGER_ENTRY_PREFIX: &str = "repo_delete_refund:";
@@ -183,6 +190,39 @@ pub struct RequestRevisionMutation {
     pub request: Request,
     pub event: RequestEvent,
     pub source_blobs_to_delete: Vec<SourceBlob>,
+}
+
+#[derive(Clone, Debug)]
+pub struct CommentRequestInput {
+    pub request_id: String,
+    pub actor_user_id: String,
+    pub event_id: String,
+    pub body: String,
+    pub now_unix: u64,
+}
+
+#[derive(Clone, Debug)]
+pub struct MarkRequestNeedsResponseInput {
+    pub request_id: String,
+    pub actor_user_id: String,
+    pub event_id: String,
+    pub body: String,
+    pub now_unix: u64,
+}
+
+#[derive(Clone, Debug)]
+pub struct RespondToRequestInput {
+    pub request_id: String,
+    pub actor_user_id: String,
+    pub event_id: String,
+    pub body: Option<String>,
+    pub now_unix: u64,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct RequestTimelineMutation {
+    pub request: Request,
+    pub event: RequestEvent,
 }
 
 #[derive(Clone, Debug)]
@@ -443,6 +483,96 @@ pub fn record_request_revision(
     })
 }
 
+pub fn comment_request(
+    requests: &mut BTreeMap<String, Request>,
+    events: &mut BTreeMap<String, RequestEvent>,
+    input: CommentRequestInput,
+) -> Result<RequestTimelineMutation, ApiError> {
+    validate_required_id("request id", &input.request_id)?;
+    validate_required_id("actor user id", &input.actor_user_id)?;
+    validate_required_id("event id", &input.event_id)?;
+    validate_required_body("comment body", &input.body)?;
+    ensure_event_id_available(events, &input.event_id)?;
+    let request = open_request_mut(requests, &input.request_id)?;
+    request.updated_at_unix = input.now_unix;
+    let request = request.clone();
+    let event = RequestEvent {
+        id: input.event_id,
+        request_id: request.id.clone(),
+        actor_user_id: input.actor_user_id,
+        kind: RequestEventKind::Commented,
+        body: Some(input.body),
+        old_head_oid: None,
+        new_head_oid: None,
+        created_at_unix: input.now_unix,
+    };
+    events.insert(event.id.clone(), event.clone());
+    Ok(RequestTimelineMutation { request, event })
+}
+
+pub fn mark_request_needs_response(
+    requests: &mut BTreeMap<String, Request>,
+    events: &mut BTreeMap<String, RequestEvent>,
+    input: MarkRequestNeedsResponseInput,
+) -> Result<RequestTimelineMutation, ApiError> {
+    validate_required_id("request id", &input.request_id)?;
+    validate_required_id("actor user id", &input.actor_user_id)?;
+    validate_required_id("event id", &input.event_id)?;
+    validate_required_body("needs-response body", &input.body)?;
+    ensure_event_id_available(events, &input.event_id)?;
+    let request = open_request_mut(requests, &input.request_id)?;
+    request.state = RequestState::NeedsResponse;
+    request.updated_at_unix = input.now_unix;
+    let request = request.clone();
+    let event = RequestEvent {
+        id: input.event_id,
+        request_id: request.id.clone(),
+        actor_user_id: input.actor_user_id,
+        kind: RequestEventKind::NeedsResponse,
+        body: Some(input.body),
+        old_head_oid: None,
+        new_head_oid: Some(request.head_oid.clone()),
+        created_at_unix: input.now_unix,
+    };
+    events.insert(event.id.clone(), event.clone());
+    Ok(RequestTimelineMutation { request, event })
+}
+
+pub fn respond_to_request(
+    requests: &mut BTreeMap<String, Request>,
+    events: &mut BTreeMap<String, RequestEvent>,
+    input: RespondToRequestInput,
+) -> Result<RequestTimelineMutation, ApiError> {
+    validate_required_id("request id", &input.request_id)?;
+    validate_required_id("actor user id", &input.actor_user_id)?;
+    validate_required_id("event id", &input.event_id)?;
+    ensure_event_id_available(events, &input.event_id)?;
+    let request = open_request_mut(requests, &input.request_id)?;
+    if request.author_user_id != input.actor_user_id {
+        return Err(ApiError::forbidden("request author required"));
+    }
+    if request.state != RequestState::NeedsResponse {
+        return Err(ApiError::conflict(
+            "request is not waiting on the contributor",
+        ));
+    }
+    request.state = RequestState::Submitted;
+    request.updated_at_unix = input.now_unix;
+    let request = request.clone();
+    let event = RequestEvent {
+        id: input.event_id,
+        request_id: request.id.clone(),
+        actor_user_id: input.actor_user_id,
+        kind: RequestEventKind::ContributorResponded,
+        body: input.body,
+        old_head_oid: None,
+        new_head_oid: Some(request.head_oid.clone()),
+        created_at_unix: input.now_unix,
+    };
+    events.insert(event.id.clone(), event.clone());
+    Ok(RequestTimelineMutation { request, event })
+}
+
 pub fn resolve_request(
     requests: &mut BTreeMap<String, Request>,
     events: &mut BTreeMap<String, RequestEvent>,
@@ -640,34 +770,6 @@ pub fn merge_request(
     })
 }
 
-pub fn settlement_for(
-    stake_credits: u32,
-    disposition: RequestDisposition,
-    settled_at_unix: u64,
-) -> RequestSettlement {
-    // `Accepted` is reserved for the merge flow; direct maintainer resolution
-    // rejects it before settlement so acceptance cannot pay without a clean merge.
-    let (refunded_credits, reward_credits) = match disposition {
-        RequestDisposition::Accepted => (stake_credits, maximum_request_reward(stake_credits)),
-        RequestDisposition::UsefulNotMerged => (stake_credits, stake_credits / 5),
-        RequestDisposition::HiddenContext | RequestDisposition::NotAligned => (stake_credits, 0),
-        RequestDisposition::Duplicate => (stake_credits / 2, 0),
-        RequestDisposition::Abandoned | RequestDisposition::LowQuality => (0, 0),
-    };
-    RequestSettlement {
-        disposition,
-        stake_credits,
-        refunded_credits,
-        reward_credits,
-        burned_credits: stake_credits.saturating_sub(refunded_credits),
-        settled_at_unix,
-    }
-}
-
-fn maximum_request_reward(stake_credits: u32) -> u32 {
-    stake_credits / 2
-}
-
 fn validate_submit_request_input(input: &SubmitRequestInput) -> Result<(), ApiError> {
     validate_required_id("request id", &input.id)?;
     validate_required_id("repo id", &input.repo_id)?;
@@ -713,7 +815,7 @@ fn validate_submit_request_input(input: &SubmitRequestInput) -> Result<(), ApiEr
     Ok(())
 }
 
-fn canonical_request_ref(request_id: &str) -> String {
+pub fn canonical_request_ref(request_id: &str) -> String {
     format!("{REQUEST_REF_PREFIX}{request_id}")
 }
 
@@ -722,6 +824,29 @@ fn validate_required_id(label: &str, value: &str) -> Result<(), ApiError> {
         return Err(ApiError::bad_request(format!("{label} is required")));
     }
     Ok(())
+}
+
+fn validate_required_body(label: &str, value: &str) -> Result<(), ApiError> {
+    if value.trim().is_empty() {
+        return Err(ApiError::bad_request(format!("{label} is required")));
+    }
+    Ok(())
+}
+
+fn open_request_mut<'a>(
+    requests: &'a mut BTreeMap<String, Request>,
+    request_id: &str,
+) -> Result<&'a mut Request, ApiError> {
+    let request = requests
+        .get_mut(request_id)
+        .ok_or_else(|| ApiError::not_found("request not found"))?;
+    if matches!(
+        request.state,
+        RequestState::Resolved | RequestState::Withdrawn
+    ) {
+        return Err(ApiError::conflict("request is closed"));
+    }
+    Ok(request)
 }
 
 fn ensure_event_id_available(
@@ -778,100 +903,4 @@ fn ensure_new_ledger_entry_id(
         ));
     }
     Ok(())
-}
-
-fn settlement_event_body(settlement: &RequestSettlement) -> String {
-    format!(
-        "refunded={} reward={} burned={}",
-        settlement.refunded_credits, settlement.reward_credits, settlement.burned_credits
-    )
-}
-
-struct CreditSettlementIds {
-    refund_ledger_entry_id: Option<String>,
-    reward_ledger_entry_id: Option<String>,
-}
-
-struct CreditSettlementMutation {
-    account: Option<UserCreditAccount>,
-    ledger_entries: Vec<CreditLedgerEntry>,
-}
-
-fn settle_request_credits(
-    accounts: &mut BTreeMap<String, UserCreditAccount>,
-    ledger_entries: &mut BTreeMap<String, CreditLedgerEntry>,
-    request: &Request,
-    settlement: &RequestSettlement,
-    ids: CreditSettlementIds,
-    now_unix: u64,
-) -> Result<CreditSettlementMutation, ApiError> {
-    let mut new_ledger_entries = Vec::new();
-    let account = if request.stake_credits == 0 {
-        None
-    } else {
-        let account = accounts.get(&request.author_user_id).ok_or_else(|| {
-            ApiError::internal_message("request author credit account is missing")
-        })?;
-        let mut balance_credits = account.balance_credits;
-        let mut reserved_ledger_entry_ids = BTreeSet::new();
-        if settlement.refunded_credits > 0 {
-            let entry_id = ids
-                .refund_ledger_entry_id
-                .clone()
-                .ok_or_else(|| ApiError::bad_request("refund ledger entry id is required"))?;
-            ensure_new_ledger_entry_id(ledger_entries, &mut reserved_ledger_entry_ids, &entry_id)?;
-            let amount_credits = u32_to_i32(settlement.refunded_credits)?;
-            balance_credits = balance_credits
-                .checked_add(settlement.refunded_credits)
-                .ok_or_else(|| ApiError::bad_request("credit balance overflow"))?;
-            u32_to_i32(balance_credits)?;
-            new_ledger_entries.push(CreditLedgerEntry {
-                id: entry_id,
-                user_id: request.author_user_id.clone(),
-                request_id: Some(request.id.clone()),
-                kind: CreditLedgerEntryKind::StakeRefund,
-                amount_credits,
-                created_at_unix: now_unix,
-            });
-        }
-        if settlement.reward_credits > 0 {
-            let entry_id = ids
-                .reward_ledger_entry_id
-                .clone()
-                .ok_or_else(|| ApiError::bad_request("reward ledger entry id is required"))?;
-            ensure_new_ledger_entry_id(ledger_entries, &mut reserved_ledger_entry_ids, &entry_id)?;
-            let amount_credits = u32_to_i32(settlement.reward_credits)?;
-            balance_credits = balance_credits
-                .checked_add(settlement.reward_credits)
-                .ok_or_else(|| ApiError::bad_request("credit balance overflow"))?;
-            u32_to_i32(balance_credits)?;
-            new_ledger_entries.push(CreditLedgerEntry {
-                id: entry_id,
-                user_id: request.author_user_id.clone(),
-                request_id: Some(request.id.clone()),
-                kind: CreditLedgerEntryKind::RequestReward,
-                amount_credits,
-                created_at_unix: now_unix,
-            });
-        }
-        Some(UserCreditAccount {
-            user_id: account.user_id.clone(),
-            balance_credits,
-        })
-    };
-    if let Some(account) = &account {
-        accounts.insert(account.user_id.clone(), account.clone());
-    }
-    for entry in &new_ledger_entries {
-        ledger_entries.insert(entry.id.clone(), entry.clone());
-    }
-
-    Ok(CreditSettlementMutation {
-        account,
-        ledger_entries: new_ledger_entries,
-    })
-}
-
-fn u32_to_i32(value: u32) -> Result<i32, ApiError> {
-    i32::try_from(value).map_err(|_| ApiError::bad_request("credit amount exceeds i32 range"))
 }
