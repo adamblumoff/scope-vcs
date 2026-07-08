@@ -4,9 +4,13 @@ use std::collections::{BTreeMap, BTreeSet};
 
 mod settlement;
 pub use settlement::settlement_for;
-use settlement::{
-    CreditSettlementIds, maximum_request_reward, settle_request_credits, settlement_event_body,
-    u32_to_i32,
+mod submission;
+use settlement::{CreditSettlementIds, settle_request_credits, settlement_event_body, u32_to_i32};
+pub use submission::{
+    FinalizeReservedRequestInput, FinalizeReservedRequestMutation,
+    RecordReservedRequestUploadInput, ReserveRequestInput, ReserveRequestMutation,
+    ReservedRequestUploadMutation, finalize_reserved_request, record_reserved_request_upload,
+    reserve_request,
 };
 
 const MAIN_BRANCH: &str = "main";
@@ -31,6 +35,7 @@ pub enum RequestBaseAudience {
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(any(test, feature = "ts"), derive(ts_rs::TS))]
 pub enum RequestState {
+    Reserved,
     Submitted,
     NeedsResponse,
     Resolved,
@@ -145,32 +150,6 @@ pub struct GrantUserCreditsInput {
 pub struct CreditAccountMutation {
     pub account: UserCreditAccount,
     pub ledger_entry: CreditLedgerEntry,
-}
-
-#[derive(Clone, Debug)]
-pub struct SubmitRequestInput {
-    pub id: String,
-    pub repo_id: String,
-    pub author_user_id: String,
-    pub author_role: RequestActorRole,
-    pub base_audience: RequestBaseAudience,
-    pub target_branch: String,
-    pub request_ref: String,
-    pub base_main_oid: String,
-    pub head_oid: String,
-    pub title: String,
-    pub stake_credits: u32,
-    pub stake_ledger_entry_id: Option<String>,
-    pub event_id: String,
-    pub now_unix: u64,
-}
-
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct SubmitRequestMutation {
-    pub request: Request,
-    pub event: RequestEvent,
-    pub account: Option<UserCreditAccount>,
-    pub ledger_entry: Option<CreditLedgerEntry>,
 }
 
 #[derive(Clone, Debug)]
@@ -309,106 +288,6 @@ pub fn grant_user_credits(
     accounts.insert(account.user_id.clone(), account.clone());
     ledger_entries.insert(ledger_entry.id.clone(), ledger_entry.clone());
     Ok(CreditAccountMutation {
-        account,
-        ledger_entry,
-    })
-}
-
-pub fn submit_request(
-    requests: &mut BTreeMap<String, Request>,
-    events: &mut BTreeMap<String, RequestEvent>,
-    accounts: &mut BTreeMap<String, UserCreditAccount>,
-    ledger_entries: &mut BTreeMap<String, CreditLedgerEntry>,
-    input: SubmitRequestInput,
-) -> Result<SubmitRequestMutation, ApiError> {
-    validate_submit_request_input(&input)?;
-    if requests.contains_key(&input.id) {
-        return Err(ApiError::conflict("request already exists"));
-    }
-    ensure_request_ref_available(requests, &input.request_ref)?;
-    ensure_event_id_available(events, &input.event_id)?;
-
-    let account_and_ledger_entry = if input.stake_credits == 0 {
-        None
-    } else {
-        let ledger_entry_id = input
-            .stake_ledger_entry_id
-            .clone()
-            .ok_or_else(|| ApiError::bad_request("stake ledger entry id is required"))?;
-        ensure_ledger_entry_id_available(ledger_entries, &ledger_entry_id)?;
-        let stake_amount = u32_to_i32(input.stake_credits)?;
-        let account = accounts
-            .get(&input.author_user_id)
-            .ok_or_else(|| ApiError::conflict("insufficient credits"))?;
-        if account.balance_credits < input.stake_credits {
-            return Err(ApiError::conflict("insufficient credits"));
-        }
-        let maximum_rewarded_balance = account
-            .balance_credits
-            .checked_add(maximum_request_reward(input.stake_credits))
-            .ok_or_else(|| ApiError::bad_request("credit balance overflow"))?;
-        u32_to_i32(maximum_rewarded_balance)?;
-        let account = UserCreditAccount {
-            user_id: account.user_id.clone(),
-            balance_credits: account.balance_credits - input.stake_credits,
-        };
-        u32_to_i32(account.balance_credits)?;
-        let entry = CreditLedgerEntry {
-            id: ledger_entry_id,
-            user_id: input.author_user_id.clone(),
-            request_id: Some(input.id.clone()),
-            kind: CreditLedgerEntryKind::RequestStakeDebit,
-            amount_credits: -stake_amount,
-            created_at_unix: input.now_unix,
-        };
-        Some((account, entry))
-    };
-
-    let request = Request {
-        id: input.id,
-        repo_id: input.repo_id,
-        author_user_id: input.author_user_id.clone(),
-        author_role: input.author_role,
-        base_audience: input.base_audience,
-        target_branch: input.target_branch,
-        request_ref: input.request_ref,
-        base_main_oid: input.base_main_oid,
-        head_oid: input.head_oid.clone(),
-        git_snapshot: None,
-        title: input.title,
-        state: RequestState::Submitted,
-        stake_credits: input.stake_credits,
-        disposition: None,
-        settlement: None,
-        created_at_unix: input.now_unix,
-        updated_at_unix: input.now_unix,
-        resolved_at_unix: None,
-    };
-    let event = RequestEvent {
-        id: input.event_id,
-        request_id: request.id.clone(),
-        actor_user_id: input.author_user_id,
-        kind: RequestEventKind::Created,
-        body: None,
-        old_head_oid: None,
-        new_head_oid: Some(input.head_oid),
-        created_at_unix: input.now_unix,
-    };
-    let account = account_and_ledger_entry
-        .as_ref()
-        .map(|(account, _)| account.clone());
-    let ledger_entry = account_and_ledger_entry
-        .as_ref()
-        .map(|(_, entry)| entry.clone());
-    if let Some((account, entry)) = account_and_ledger_entry {
-        accounts.insert(account.user_id.clone(), account);
-        ledger_entries.insert(entry.id.clone(), entry);
-    }
-    requests.insert(request.id.clone(), request.clone());
-    events.insert(event.id.clone(), event.clone());
-    Ok(SubmitRequestMutation {
-        request,
-        event,
         account,
         ledger_entry,
     })
@@ -768,51 +647,6 @@ pub fn merge_request(
         account: credit_mutation.account,
         ledger_entries: credit_mutation.ledger_entries,
     })
-}
-
-fn validate_submit_request_input(input: &SubmitRequestInput) -> Result<(), ApiError> {
-    validate_required_id("request id", &input.id)?;
-    validate_required_id("repo id", &input.repo_id)?;
-    validate_required_id("author user id", &input.author_user_id)?;
-    validate_required_id("target branch", &input.target_branch)?;
-    validate_required_id("request ref", &input.request_ref)?;
-    validate_required_id("base main oid", &input.base_main_oid)?;
-    validate_required_id("head oid", &input.head_oid)?;
-    validate_required_id("title", &input.title)?;
-    validate_required_id("event id", &input.event_id)?;
-    if input.target_branch != MAIN_BRANCH {
-        return Err(ApiError::bad_request("requests must target main"));
-    }
-    if input.request_ref != canonical_request_ref(&input.id) {
-        return Err(ApiError::bad_request(
-            "request ref must match refs/scope/requests/{request_id}",
-        ));
-    }
-    if input.author_role == RequestActorRole::Public && input.stake_credits == 0 {
-        return Err(ApiError::bad_request(
-            "public requests require credit stake",
-        ));
-    }
-    if input.author_role != RequestActorRole::Public && input.stake_credits != 0 {
-        return Err(ApiError::bad_request(
-            "member and owner requests do not use credit stake",
-        ));
-    }
-    if input.author_role == RequestActorRole::Public
-        && input.base_audience != RequestBaseAudience::Public
-    {
-        return Err(ApiError::bad_request(
-            "public requests must be based on public main",
-        ));
-    }
-    if input.author_role != RequestActorRole::Public
-        && input.base_audience != RequestBaseAudience::Private
-    {
-        return Err(ApiError::bad_request(
-            "member and owner requests must be based on private main",
-        ));
-    }
-    Ok(())
 }
 
 pub fn canonical_request_ref(request_id: &str) -> String {

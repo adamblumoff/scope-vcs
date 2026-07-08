@@ -1,6 +1,9 @@
 use anyhow::Context;
 use reqwest::{StatusCode, blocking::Client};
 use scope_core::domain::repo_config::RepoConfig;
+use scope_core::domain::requests::{
+    RequestActorRole, RequestBaseAudience, RequestDisposition, RequestEventKind, RequestState,
+};
 use serde::{Deserialize, Serialize};
 use std::{env, time::Duration};
 
@@ -147,12 +150,20 @@ pub struct RepoSummaryResponse {
     pub lifecycle_state: RepoPublicationState,
     pub access: RepositoryAccessResponse,
     pub pending_import_pending: bool,
+    pub open_request_count: usize,
+    pub request_permissions: RepoRequestPermissionsResponse,
 }
 
 #[derive(Deserialize)]
 pub struct RepositoryAccessResponse {
     pub actor: RepositoryActor,
     pub can_push: bool,
+}
+
+#[derive(Deserialize)]
+pub struct RepoRequestPermissionsResponse {
+    pub can_submit_request: bool,
+    pub uses_credit_stake: bool,
 }
 
 #[derive(Deserialize)]
@@ -199,6 +210,160 @@ pub struct CreatePushIntentParams<'a> {
 #[derive(Serialize)]
 struct CompletePushIntentRequest {
     token: String,
+}
+
+pub struct FinalizeRequestSubmissionParams<'a> {
+    pub owner: &'a str,
+    pub repo: &'a str,
+    pub request_id: &'a str,
+    pub title: String,
+    pub head_oid: String,
+    pub stake_credits: Option<u32>,
+}
+
+pub struct ResolveRequestParams<'a> {
+    pub owner: &'a str,
+    pub repo: &'a str,
+    pub request_id: &'a str,
+    pub disposition: RequestDisposition,
+    pub body: Option<String>,
+}
+
+pub struct MergeRequestParams<'a> {
+    pub owner: &'a str,
+    pub repo: &'a str,
+    pub request_id: &'a str,
+    pub expected_main_oid: String,
+    pub expected_head_oid: String,
+    pub body: Option<String>,
+}
+
+#[derive(Deserialize)]
+pub struct RequestListResponse {
+    pub requests: Vec<RequestSummaryResponse>,
+}
+
+#[derive(Deserialize)]
+pub struct RequestDetailResponse {
+    pub request: RequestSummaryResponse,
+    pub events: Vec<RequestEventResponse>,
+}
+
+#[derive(Deserialize)]
+pub struct RequestMutationResponse {
+    pub request: RequestSummaryResponse,
+}
+
+#[derive(Deserialize)]
+pub struct RequestReservationResponse {
+    pub id: String,
+    pub request_ref: String,
+    pub base_audience: RequestBaseAudience,
+    pub base_main_oid: String,
+}
+
+#[derive(Clone, Debug, Deserialize)]
+pub struct RequestSummaryResponse {
+    pub id: String,
+    pub title: String,
+    pub author_user_id: String,
+    pub author_role: RequestActorRole,
+    pub base_audience: RequestBaseAudience,
+    pub target_branch: String,
+    pub request_ref: String,
+    pub base_main_oid: String,
+    pub head_oid: String,
+    pub state: RequestState,
+    pub stake_credits: u32,
+    pub disposition: Option<RequestDisposition>,
+    pub settlement: Option<RequestSettlementResponse>,
+    pub created_at_unix: u64,
+    pub updated_at_unix: u64,
+    pub resolved_at_unix: Option<u64>,
+    pub permissions: RequestPermissionsResponse,
+    pub mergeability: RequestMergeabilityResponse,
+}
+
+#[derive(Clone, Debug, Deserialize)]
+pub struct RequestPermissionsResponse {
+    pub can_comment: bool,
+    pub can_update_branch: bool,
+    pub can_mark_needs_response: bool,
+    pub can_respond: bool,
+    pub can_resolve: bool,
+    pub can_merge: bool,
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq)]
+pub enum RequestMergeabilityStatus {
+    Ready,
+    Closed,
+    NotMaintainer,
+    MissingRequestBranch,
+}
+
+#[derive(Clone, Debug, Deserialize)]
+pub struct RequestMergeabilityResponse {
+    pub status: RequestMergeabilityStatus,
+    pub current_main_oid: Option<String>,
+    pub request_head_oid: String,
+    pub reason: Option<String>,
+}
+
+#[derive(Clone, Debug, Deserialize)]
+pub struct RequestSettlementResponse {
+    pub disposition: RequestDisposition,
+    pub stake_credits: u32,
+    pub refunded_credits: u32,
+    pub reward_credits: u32,
+    pub burned_credits: u32,
+    pub settled_at_unix: u64,
+}
+
+#[derive(Clone, Debug, Deserialize)]
+pub struct RequestEventResponse {
+    pub id: String,
+    pub actor_user_id: String,
+    pub kind: RequestEventKind,
+    pub body: Option<String>,
+    pub old_head_oid: Option<String>,
+    pub new_head_oid: Option<String>,
+    pub created_at_unix: u64,
+}
+
+#[derive(Serialize)]
+struct FinalizeRequestSubmissionRequest {
+    title: String,
+    head_oid: String,
+    stake_credits: Option<u32>,
+}
+
+#[derive(Serialize)]
+struct CommentRequestRequest {
+    body: String,
+}
+
+#[derive(Serialize)]
+struct NeedsResponseRequest {
+    body: String,
+}
+
+#[derive(Serialize)]
+struct RespondRequestRequest {
+    body: Option<String>,
+}
+
+#[derive(Serialize)]
+struct ResolveRequestRequest {
+    disposition: RequestDisposition,
+    body: Option<String>,
+}
+
+#[derive(Serialize)]
+struct MergeRequestRequest {
+    expected_main_oid: String,
+    expected_head_oid: String,
+    body: Option<String>,
 }
 
 pub fn api_url() -> String {
@@ -434,6 +599,315 @@ pub fn complete_push_intent(
     Ok(())
 }
 
+pub fn list_requests(
+    client: &Client,
+    api_url: &str,
+    session_token: &str,
+    owner: &str,
+    repo: &str,
+) -> anyhow::Result<RequestListResponse> {
+    let response = client
+        .get(format!("{api_url}/v1/repos/{owner}/{repo}/requests"))
+        .bearer_auth(session_token)
+        .send()
+        .with_context(|| format!("list requests for {owner}/{repo}"))?;
+    handle_repo_request_status(response.status(), owner, repo, "list requests")?;
+    response
+        .error_for_status()
+        .with_context(|| format!("list requests for {owner}/{repo}"))?
+        .json()
+        .context("parse request list response")
+}
+
+pub fn get_request(
+    client: &Client,
+    api_url: &str,
+    session_token: &str,
+    owner: &str,
+    repo: &str,
+    request_id: &str,
+) -> anyhow::Result<RequestDetailResponse> {
+    let response = client
+        .get(format!(
+            "{api_url}/v1/repos/{owner}/{repo}/requests/{request_id}"
+        ))
+        .bearer_auth(session_token)
+        .send()
+        .with_context(|| format!("load request {request_id} for {owner}/{repo}"))?;
+    handle_request_status(response.status(), owner, repo, request_id, "load request")?;
+    response
+        .error_for_status()
+        .with_context(|| format!("load request {request_id} for {owner}/{repo}"))?
+        .json()
+        .context("parse request detail response")
+}
+
+pub fn reserve_request(
+    client: &Client,
+    api_url: &str,
+    session_token: &str,
+    owner: &str,
+    repo: &str,
+) -> anyhow::Result<RequestReservationResponse> {
+    let response = client
+        .post(format!(
+            "{api_url}/v1/repos/{owner}/{repo}/requests/reservations"
+        ))
+        .bearer_auth(session_token)
+        .send()
+        .with_context(|| format!("reserve request upload for {owner}/{repo}"))?;
+    handle_repo_request_status(response.status(), owner, repo, "reserve request upload")?;
+    response
+        .error_for_status()
+        .with_context(|| format!("reserve request upload for {owner}/{repo}"))?
+        .json()
+        .context("parse request reservation response")
+}
+
+pub fn finalize_request_submission(
+    client: &Client,
+    api_url: &str,
+    session_token: &str,
+    params: FinalizeRequestSubmissionParams<'_>,
+) -> anyhow::Result<RequestMutationResponse> {
+    let response = client
+        .post(format!(
+            "{api_url}/v1/repos/{}/{}/requests/{}/submit",
+            params.owner, params.repo, params.request_id
+        ))
+        .bearer_auth(session_token)
+        .json(&FinalizeRequestSubmissionRequest {
+            title: params.title,
+            head_oid: params.head_oid,
+            stake_credits: params.stake_credits,
+        })
+        .send()
+        .with_context(|| {
+            format!(
+                "finalize request {} for {}/{}",
+                params.request_id, params.owner, params.repo
+            )
+        })?;
+    handle_repo_request_status(
+        response.status(),
+        params.owner,
+        params.repo,
+        "finalize request submission",
+    )?;
+    response
+        .error_for_status()
+        .with_context(|| {
+            format!(
+                "finalize request {} for {}/{}",
+                params.request_id, params.owner, params.repo
+            )
+        })?
+        .json()
+        .context("parse finalize request response")
+}
+
+pub fn comment_request(
+    client: &Client,
+    api_url: &str,
+    session_token: &str,
+    owner: &str,
+    repo: &str,
+    request_id: &str,
+    body: String,
+) -> anyhow::Result<RequestMutationResponse> {
+    request_mutation(
+        client,
+        api_url,
+        session_token,
+        RequestMutationEndpoint {
+            owner,
+            repo,
+            request_id,
+            action_path: "comments",
+            context: "comment request",
+        },
+        &CommentRequestRequest { body },
+    )
+}
+
+pub fn mark_request_needs_response(
+    client: &Client,
+    api_url: &str,
+    session_token: &str,
+    owner: &str,
+    repo: &str,
+    request_id: &str,
+    body: String,
+) -> anyhow::Result<RequestMutationResponse> {
+    request_mutation(
+        client,
+        api_url,
+        session_token,
+        RequestMutationEndpoint {
+            owner,
+            repo,
+            request_id,
+            action_path: "needs-response",
+            context: "mark request needs response",
+        },
+        &NeedsResponseRequest { body },
+    )
+}
+
+pub fn respond_to_request(
+    client: &Client,
+    api_url: &str,
+    session_token: &str,
+    owner: &str,
+    repo: &str,
+    request_id: &str,
+    body: Option<String>,
+) -> anyhow::Result<RequestMutationResponse> {
+    request_mutation(
+        client,
+        api_url,
+        session_token,
+        RequestMutationEndpoint {
+            owner,
+            repo,
+            request_id,
+            action_path: "respond",
+            context: "respond to request",
+        },
+        &RespondRequestRequest { body },
+    )
+}
+
+pub fn resolve_request(
+    client: &Client,
+    api_url: &str,
+    session_token: &str,
+    params: ResolveRequestParams<'_>,
+) -> anyhow::Result<RequestMutationResponse> {
+    request_mutation(
+        client,
+        api_url,
+        session_token,
+        RequestMutationEndpoint {
+            owner: params.owner,
+            repo: params.repo,
+            request_id: params.request_id,
+            action_path: "resolve",
+            context: "resolve request",
+        },
+        &ResolveRequestRequest {
+            disposition: params.disposition,
+            body: params.body,
+        },
+    )
+}
+
+pub fn merge_request(
+    client: &Client,
+    api_url: &str,
+    session_token: &str,
+    params: MergeRequestParams<'_>,
+) -> anyhow::Result<RequestMutationResponse> {
+    request_mutation(
+        client,
+        api_url,
+        session_token,
+        RequestMutationEndpoint {
+            owner: params.owner,
+            repo: params.repo,
+            request_id: params.request_id,
+            action_path: "merge",
+            context: "merge request",
+        },
+        &MergeRequestRequest {
+            expected_main_oid: params.expected_main_oid,
+            expected_head_oid: params.expected_head_oid,
+            body: params.body,
+        },
+    )
+}
+
+struct RequestMutationEndpoint<'a> {
+    owner: &'a str,
+    repo: &'a str,
+    request_id: &'a str,
+    action_path: &'static str,
+    context: &'static str,
+}
+
+fn request_mutation<T: Serialize>(
+    client: &Client,
+    api_url: &str,
+    session_token: &str,
+    endpoint: RequestMutationEndpoint<'_>,
+    body: &T,
+) -> anyhow::Result<RequestMutationResponse> {
+    let response = client
+        .post(format!(
+            "{api_url}/v1/repos/{}/{}/requests/{}/{}",
+            endpoint.owner, endpoint.repo, endpoint.request_id, endpoint.action_path
+        ))
+        .bearer_auth(session_token)
+        .json(body)
+        .send()
+        .with_context(|| {
+            format!(
+                "{} {} for {}/{}",
+                endpoint.context, endpoint.request_id, endpoint.owner, endpoint.repo
+            )
+        })?;
+    handle_request_status(
+        response.status(),
+        endpoint.owner,
+        endpoint.repo,
+        endpoint.request_id,
+        endpoint.context,
+    )?;
+    response
+        .error_for_status()
+        .with_context(|| {
+            format!(
+                "{} {} for {}/{}",
+                endpoint.context, endpoint.request_id, endpoint.owner, endpoint.repo
+            )
+        })?
+        .json()
+        .with_context(|| format!("parse {} response", endpoint.context))
+}
+
+fn handle_repo_request_status(
+    status: StatusCode,
+    owner: &str,
+    repo: &str,
+    action: &str,
+) -> anyhow::Result<()> {
+    match status {
+        StatusCode::UNAUTHORIZED => anyhow::bail!("not signed in; run scope login"),
+        StatusCode::FORBIDDEN => anyhow::bail!("{action} is not allowed for {owner}/{repo}"),
+        StatusCode::NOT_FOUND => anyhow::bail!("repo {owner}/{repo} not found"),
+        StatusCode::CONFLICT => anyhow::bail!("{action} conflicted for {owner}/{repo}"),
+        _ => Ok(()),
+    }
+}
+
+fn handle_request_status(
+    status: StatusCode,
+    owner: &str,
+    repo: &str,
+    request_id: &str,
+    action: &str,
+) -> anyhow::Result<()> {
+    match status {
+        StatusCode::UNAUTHORIZED => anyhow::bail!("not signed in; run scope login"),
+        StatusCode::FORBIDDEN => anyhow::bail!("{action} is not allowed for request {request_id}"),
+        StatusCode::NOT_FOUND => {
+            anyhow::bail!("request {request_id} not found in {owner}/{repo}")
+        }
+        StatusCode::CONFLICT => anyhow::bail!("{action} conflicted for request {request_id}"),
+        _ => Ok(()),
+    }
+}
+
 pub fn rollback_created_repo(
     client: &Client,
     api_url: &str,
@@ -473,81 +947,4 @@ pub fn display_user(user: &UserResponse) -> String {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-    use ts_rs::TS;
-
-    const API_TYPES: &str = include_str!("../../web/src/api/types.generated.ts");
-
-    #[test]
-    fn cli_auth_dtos_match_generated_api_contract() {
-        assert_type_matches::<SessionIdentity>("SessionIdentity");
-        assert_type_matches::<RepositoryActor>("RepositoryActor");
-        assert_type_matches::<RepoPublicationState>("RepoPublicationState");
-        assert_type_matches::<UserResponse>("UserResponse");
-        assert_type_matches::<AccountSessionResponse>("AccountSessionResponse");
-        assert_type_matches::<DeviceLoginStatus>("DeviceLoginStatus");
-        assert_type_matches::<DeviceLoginStartResponse>("DeviceLoginStartResponse");
-        assert_type_matches::<DeviceLoginPollResponse>("DeviceLoginPollResponse");
-        assert_type_matches::<BrowserLoginStartRequest>("BrowserLoginStartRequest");
-        assert_type_matches::<BrowserLoginStartResponse>("BrowserLoginStartResponse");
-        assert_type_matches::<BrowserLoginExchangeRequest>("BrowserLoginExchangeRequest");
-        assert_type_matches::<CliSessionTokenResponse>("CliSessionTokenResponse");
-        assert_type_matches::<CliExchangeGrantExchangeRequest>("CliExchangeGrantExchangeRequest");
-    }
-
-    #[test]
-    fn cli_auth_endpoints_match_generated_api_contract() {
-        assert_endpoint_matches("accountSession", ACCOUNT_SESSION_PATH);
-        assert_endpoint_matches("cliSession", CLI_SESSION_PATH);
-        assert_endpoint_matches("deviceLoginStart", CLI_DEVICE_LOGIN_PATH);
-        assert_endpoint_matches("deviceLoginPoll", CLI_DEVICE_LOGIN_POLL_PATH_TEMPLATE);
-        assert_endpoint_matches("browserLoginStart", CLI_BROWSER_LOGIN_PATH);
-        assert_endpoint_matches(
-            "browserLoginExchange",
-            CLI_BROWSER_LOGIN_EXCHANGE_PATH_TEMPLATE,
-        );
-        assert_endpoint_matches("exchangeGrantExchange", CLI_EXCHANGE_GRANTS_EXCHANGE_PATH);
-    }
-
-    #[test]
-    fn duplicate_repo_error_names_repo_and_next_steps() {
-        let message = duplicate_repo_error_message("scope-vcs");
-
-        assert!(message.contains("Scope repository \"scope-vcs\" already exists"));
-        assert!(message.contains("scope init --name <new-name>"));
-        assert!(message.contains("scope push"));
-    }
-
-    fn assert_type_matches<T: TS>(name: &str) {
-        let config = ts_rs::Config::new().with_large_int("number");
-        let cli_declaration = format!("export {}", T::decl(&config));
-        let api_declaration = exported_type_declaration(name);
-        assert_eq!(cli_declaration, api_declaration, "{name} drifted");
-    }
-
-    fn exported_type_declaration(name: &str) -> String {
-        let prefix = format!("export type {name} = ");
-        API_TYPES
-            .lines()
-            .find(|line| line.starts_with(&prefix))
-            .unwrap_or_else(|| panic!("missing generated API declaration for {name}"))
-            .to_string()
-    }
-
-    fn assert_endpoint_matches(name: &str, cli_path: &str) {
-        let api_path = exported_endpoint_path(name);
-        assert_eq!(cli_path, api_path, "{name} endpoint drifted");
-    }
-
-    fn exported_endpoint_path(name: &str) -> &str {
-        let prefix = format!("  {name}: \"");
-        let line = API_TYPES
-            .lines()
-            .find(|line| line.starts_with(&prefix))
-            .unwrap_or_else(|| panic!("missing generated API endpoint for {name}"));
-        line.strip_prefix(&prefix)
-            .and_then(|tail| tail.strip_suffix("\","))
-            .unwrap_or_else(|| panic!("invalid generated API endpoint line for {name}"))
-    }
-}
+mod tests;

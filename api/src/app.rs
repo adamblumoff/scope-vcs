@@ -98,11 +98,19 @@ pub fn router(state: AppState) -> Router {
         )
         .route(
             "/v1/repos/{owner}/{repo}/requests",
-            get(http::requests::list_requests).post(http::requests::submit_request),
+            get(http::requests::list_requests),
+        )
+        .route(
+            "/v1/repos/{owner}/{repo}/requests/reservations",
+            post(http::requests::reserve_request),
         )
         .route(
             "/v1/repos/{owner}/{repo}/requests/{request_id}",
             get(http::requests::get_request),
+        )
+        .route(
+            "/v1/repos/{owner}/{repo}/requests/{request_id}/submit",
+            post(http::requests::finalize_request_submission),
         )
         .route(
             "/v1/repos/{owner}/{repo}/requests/{request_id}/comments",

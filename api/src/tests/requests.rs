@@ -1,9 +1,15 @@
 use super::*;
 use crate::domain::requests::{
-    CreditLedgerEntryKind, GrantUserCreditsInput, RecordRequestRevisionInput, RequestActorRole,
-    SubmitRequestInput, canonical_request_ref,
+    CreditLedgerEntryKind, GrantUserCreditsInput, RecordRequestRevisionInput,
+    RecordReservedRequestUploadInput, canonical_request_ref,
 };
 use tokio_stream::StreamExt;
+
+mod helpers;
+use helpers::{
+    create_owner_request, create_public_request, finalize_request_via_http,
+    mark_reserved_request_uploaded, reserve_request_via_http,
+};
 
 const PUBLIC_SUBJECT: &str = "public_requester";
 const PUBLIC_EMAIL: &str = "public@example.com";
@@ -22,20 +28,48 @@ async fn public_submit_stakes_credits_and_uses_public_base() {
         })
         .unwrap();
 
-    let response = router(state.clone())
+    let app = router(state.clone());
+    let reservation = reserve_request_via_http(
+        app.clone(),
+        &bearer_header_for(PUBLIC_SUBJECT, PUBLIC_EMAIL),
+    )
+    .await;
+    assert_eq!(
+        reservation["request_ref"],
+        canonical_request_ref(reservation["id"].as_str().unwrap())
+    );
+    let hidden = app
+        .clone()
         .oneshot(
             Request::builder()
-                .method("POST")
+                .method("GET")
                 .uri("/v1/repos/owner/repo/requests")
-                .header(AUTHORIZATION, bearer_header_for(PUBLIC_SUBJECT, PUBLIC_EMAIL))
-                .header(CONTENT_TYPE, "application/json")
-                .body(Body::from(format!(
-                    r#"{{"title":"Fix parser crash","head_oid":"{REQUEST_HEAD}","stake_credits":10}}"#
-                )))
+                .header(
+                    AUTHORIZATION,
+                    bearer_header_for(PUBLIC_SUBJECT, PUBLIC_EMAIL),
+                )
+                .body(Body::empty())
                 .unwrap(),
         )
         .await
         .unwrap();
+    assert_eq!(hidden.status(), StatusCode::OK);
+    assert_eq!(
+        response_json(hidden).await["requests"]
+            .as_array()
+            .unwrap()
+            .len(),
+        0
+    );
+    mark_reserved_request_uploaded(&state, reservation["id"].as_str().unwrap(), REQUEST_HEAD);
+
+    let response = finalize_request_via_http(
+        app,
+        &bearer_header_for(PUBLIC_SUBJECT, PUBLIC_EMAIL),
+        reservation["id"].as_str().unwrap(),
+        r#"{"title":"Fix parser crash","head_oid":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","stake_credits":10}"#,
+    )
+    .await;
 
     assert_eq!(response.status(), StatusCode::OK);
     let body = response_json(response).await;
@@ -71,21 +105,17 @@ async fn public_submit_stakes_credits_and_uses_public_base() {
 #[tokio::test]
 async fn owner_submit_uses_private_base_without_credit_stake() {
     let state = test_state_with_repo_with_readme();
+    let app = router(state.clone());
+    let reservation = reserve_request_via_http(app.clone(), &bearer_header()).await;
+    mark_reserved_request_uploaded(&state, reservation["id"].as_str().unwrap(), REQUEST_HEAD);
 
-    let response = router(state.clone())
-        .oneshot(
-            Request::builder()
-                .method("POST")
-                .uri("/v1/repos/owner/repo/requests")
-                .header(AUTHORIZATION, bearer_header())
-                .header(CONTENT_TYPE, "application/json")
-                .body(Body::from(format!(
-                    r#"{{"title":"Owner maintenance","head_oid":"{REQUEST_HEAD}"}}"#
-                )))
-                .unwrap(),
-        )
-        .await
-        .unwrap();
+    let response = finalize_request_via_http(
+        app,
+        &bearer_header(),
+        reservation["id"].as_str().unwrap(),
+        r#"{"title":"Owner maintenance","head_oid":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}"#,
+    )
+    .await;
 
     assert_eq!(response.status(), StatusCode::OK);
     let body = response_json(response).await;
@@ -98,6 +128,56 @@ async fn owner_submit_uses_private_base_without_credit_stake() {
         .metadata
         .read(|catalog| {
             assert!(catalog.credit_ledger_entries.is_empty());
+            Ok(())
+        })
+        .unwrap();
+}
+
+#[tokio::test]
+async fn finalizing_without_uploaded_request_ref_does_not_stake_credits() {
+    let state = state_with_public_user();
+    state
+        .metadata
+        .grant_user_credits(GrantUserCreditsInput {
+            ledger_entry_id: "ledger_grant".to_string(),
+            user_id: public_user_id(),
+            amount_credits: 20,
+            now_unix: 1,
+        })
+        .unwrap();
+    let app = router(state.clone());
+    let reservation = reserve_request_via_http(
+        app.clone(),
+        &bearer_header_for(PUBLIC_SUBJECT, PUBLIC_EMAIL),
+    )
+    .await;
+
+    let response = finalize_request_via_http(
+        app,
+        &bearer_header_for(PUBLIC_SUBJECT, PUBLIC_EMAIL),
+        reservation["id"].as_str().unwrap(),
+        r#"{"title":"Fix parser crash","head_oid":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","stake_credits":10}"#,
+    )
+    .await;
+
+    assert_eq!(response.status(), StatusCode::CONFLICT);
+    state
+        .metadata
+        .read(|catalog| {
+            assert_eq!(
+                catalog
+                    .user_credit_accounts
+                    .get(&public_user_id())
+                    .unwrap()
+                    .balance_credits,
+                20
+            );
+            assert!(
+                catalog
+                    .credit_ledger_entries
+                    .values()
+                    .all(|entry| { entry.kind != CreditLedgerEntryKind::RequestStakeDebit })
+            );
             Ok(())
         })
         .unwrap();
@@ -128,20 +208,15 @@ async fn request_submit_publishes_summary_refresh_event() {
             .contains(r#""reason":"connected""#)
     );
 
-    let submit = app
-        .oneshot(
-            Request::builder()
-                .method("POST")
-                .uri("/v1/repos/owner/repo/requests")
-                .header(AUTHORIZATION, bearer_header())
-                .header(CONTENT_TYPE, "application/json")
-                .body(Body::from(format!(
-                    r#"{{"title":"Owner maintenance","head_oid":"{REQUEST_HEAD}"}}"#
-                )))
-                .unwrap(),
-        )
-        .await
-        .unwrap();
+    let reservation = reserve_request_via_http(app.clone(), &bearer_header()).await;
+    mark_reserved_request_uploaded(&state, reservation["id"].as_str().unwrap(), REQUEST_HEAD);
+    let submit = finalize_request_via_http(
+        app,
+        &bearer_header(),
+        reservation["id"].as_str().unwrap(),
+        r#"{"title":"Owner maintenance","head_oid":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}"#,
+    )
+    .await;
     assert_eq!(submit.status(), StatusCode::OK);
 
     let event = tokio::time::timeout(std::time::Duration::from_secs(1), stream.next())
@@ -497,25 +572,15 @@ async fn public_request_merge_replays_public_delta_without_deleting_private_file
     )
     .unwrap();
 
-    state
-        .metadata
-        .submit_request(SubmitRequestInput {
-            id: "req_public_merge".to_string(),
-            repo_id: TEST_REPO_ID.to_string(),
-            author_user_id: public_user_id(),
-            author_role: RequestActorRole::Public,
-            base_audience: crate::domain::requests::RequestBaseAudience::Public,
-            target_branch: DEFAULT_GIT_BRANCH.to_string(),
-            request_ref: canonical_request_ref("req_public_merge"),
-            base_main_oid: public_main_oid,
-            head_oid: request_head.clone(),
-            title: "Public request merge".to_string(),
-            stake_credits: 10,
-            stake_ledger_entry_id: Some("ledger_public_merge_stake".to_string()),
-            event_id: "event_public_merge_created".to_string(),
-            now_unix: 2,
-        })
-        .unwrap();
+    create_public_request(
+        &state,
+        "req_public_merge",
+        &public_main_oid,
+        &request_head,
+        "Public request merge",
+        "ledger_public_merge_stake",
+        "event_public_merge_created",
+    );
     state
         .metadata
         .record_request_revision(RecordRequestRevisionInput {
@@ -663,25 +728,15 @@ async fn public_request_merge_rejects_private_path_collision() {
     )
     .unwrap();
 
-    state
-        .metadata
-        .submit_request(SubmitRequestInput {
-            id: "req_private_collision".to_string(),
-            repo_id: TEST_REPO_ID.to_string(),
-            author_user_id: public_user_id(),
-            author_role: RequestActorRole::Public,
-            base_audience: crate::domain::requests::RequestBaseAudience::Public,
-            target_branch: DEFAULT_GIT_BRANCH.to_string(),
-            request_ref: canonical_request_ref("req_private_collision"),
-            base_main_oid: public_main_oid,
-            head_oid: request_head.clone(),
-            title: "Private collision request".to_string(),
-            stake_credits: 10,
-            stake_ledger_entry_id: Some("ledger_private_collision_stake".to_string()),
-            event_id: "event_private_collision_created".to_string(),
-            now_unix: 2,
-        })
-        .unwrap();
+    create_public_request(
+        &state,
+        "req_private_collision",
+        &public_main_oid,
+        &request_head,
+        "Private collision request",
+        "ledger_private_collision_stake",
+        "event_private_collision_created",
+    );
     state
         .metadata
         .record_request_revision(RecordRequestRevisionInput {
@@ -801,48 +856,16 @@ fn state_with_public_request() -> AppState {
             now_unix: 1,
         })
         .unwrap();
+    create_public_request(
+        &state,
+        "req_public",
+        "base_main",
+        REQUEST_HEAD,
+        "Public request",
+        "ledger_stake",
+        "event_created",
+    );
     state
-        .metadata
-        .submit_request(SubmitRequestInput {
-            id: "req_public".to_string(),
-            repo_id: TEST_REPO_ID.to_string(),
-            author_user_id: public_user_id(),
-            author_role: RequestActorRole::Public,
-            base_audience: crate::domain::requests::RequestBaseAudience::Public,
-            target_branch: DEFAULT_GIT_BRANCH.to_string(),
-            request_ref: canonical_request_ref("req_public"),
-            base_main_oid: "base_main".to_string(),
-            head_oid: REQUEST_HEAD.to_string(),
-            title: "Public request".to_string(),
-            stake_credits: 10,
-            stake_ledger_entry_id: Some("ledger_stake".to_string()),
-            event_id: "event_created".to_string(),
-            now_unix: 2,
-        })
-        .unwrap();
-    state
-}
-
-fn create_owner_request(state: &AppState, request_id: &str, head_oid: &str) {
-    state
-        .metadata
-        .submit_request(SubmitRequestInput {
-            id: request_id.to_string(),
-            repo_id: TEST_REPO_ID.to_string(),
-            author_user_id: test_owner_id(),
-            author_role: RequestActorRole::Owner,
-            base_audience: crate::domain::requests::RequestBaseAudience::Private,
-            target_branch: DEFAULT_GIT_BRANCH.to_string(),
-            request_ref: canonical_request_ref(request_id),
-            base_main_oid: "base_main".to_string(),
-            head_oid: head_oid.to_string(),
-            title: "Owner request".to_string(),
-            stake_credits: 0,
-            stake_ledger_entry_id: None,
-            event_id: format!("event_created_{request_id}"),
-            now_unix: 2,
-        })
-        .unwrap();
 }
 
 fn repo_with_public_readme_and_private_secret() -> StoredRepository {

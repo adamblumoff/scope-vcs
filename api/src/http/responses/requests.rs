@@ -32,6 +32,15 @@ pub(crate) struct RequestMutationResponse {
 
 #[derive(Debug, Serialize)]
 #[cfg_attr(test, derive(ts_rs::TS))]
+pub(crate) struct RequestReservationResponse {
+    pub(crate) id: String,
+    pub(crate) request_ref: String,
+    pub(crate) base_audience: RequestBaseAudience,
+    pub(crate) base_main_oid: String,
+}
+
+#[derive(Debug, Serialize)]
+#[cfg_attr(test, derive(ts_rs::TS))]
 pub(crate) struct RequestSummaryResponse {
     pub(crate) id: String,
     pub(crate) title: String,
@@ -134,7 +143,7 @@ impl From<RequestEvent> for RequestEventResponse {
 
 #[derive(Debug, Deserialize)]
 #[cfg_attr(test, derive(ts_rs::TS))]
-pub(crate) struct SubmitRequestRequest {
+pub(crate) struct FinalizeRequestSubmissionRequest {
     pub(crate) title: String,
     pub(crate) head_oid: String,
     pub(crate) stake_credits: Option<u32>,

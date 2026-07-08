@@ -4,8 +4,8 @@ use crate::{
     domain::{
         projection::{ProjectionViewKey, project_graph},
         requests::{
-            REQUEST_REF_PREFIX, RecordRequestRevisionInput, Request, RequestActorRole,
-            RequestBaseAudience, RequestState,
+            REQUEST_REF_PREFIX, RecordRequestRevisionInput, RecordReservedRequestUploadInput,
+            Request, RequestActorRole, RequestBaseAudience, RequestState,
         },
         store::{RepoPublicationState, RepositoryActor, SourceBlob},
     },
@@ -269,23 +269,37 @@ pub(crate) fn persist_request_ref_revision(
 ) -> Result<(), ApiError> {
     let _lock = acquire_request_ref_update_lock(state, owner, repo_name, &update.request_ref)?;
     let request = ensure_request_ref_update_allowed(state, owner, repo_name, author_id, &update)?;
-    let event_id = request_revision_event_id()?;
     let now_unix = unix_now()?;
     let persisted =
         persist_request_ref_to_store(state, owner, repo_name, staging_repo, &request, &update)?;
-    let mutation = state
-        .metadata
-        .record_request_revision(RecordRequestRevisionInput {
-            request_id: request.id,
-            actor_user_id: author_id.to_string(),
-            expected_old_head_oid: update.old_head_oid.clone(),
-            new_head_oid: update.new_head_oid.clone(),
-            git_snapshot: Some(persisted.git_snapshot.clone()),
-            event_id,
-            body: None,
-            now_unix,
-        });
-    if let Err(error) = mutation {
+    let mutation_result = if request.state == RequestState::Reserved {
+        state
+            .metadata
+            .record_reserved_request_upload(RecordReservedRequestUploadInput {
+                request_id: request.id,
+                actor_user_id: author_id.to_string(),
+                expected_old_head_oid: update.old_head_oid.clone(),
+                new_head_oid: update.new_head_oid.clone(),
+                git_snapshot: persisted.git_snapshot.clone(),
+                now_unix,
+            })
+            .map(|mutation| mutation.source_blobs_to_delete)
+    } else {
+        state
+            .metadata
+            .record_request_revision(RecordRequestRevisionInput {
+                request_id: request.id,
+                actor_user_id: author_id.to_string(),
+                expected_old_head_oid: update.old_head_oid.clone(),
+                new_head_oid: update.new_head_oid.clone(),
+                git_snapshot: Some(persisted.git_snapshot.clone()),
+                event_id: request_revision_event_id()?,
+                body: None,
+                now_unix,
+            })
+            .map(|mutation| mutation.source_blobs_to_delete)
+    };
+    if let Err(error) = mutation_result {
         rollback_request_ref(
             state,
             owner,

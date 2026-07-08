@@ -1,4 +1,5 @@
 use super::requests::*;
+use crate::domain::store::{DEFAULT_GIT_FILE_MODE, SourceBlob};
 use std::collections::BTreeMap;
 
 #[test]
@@ -14,12 +15,14 @@ fn public_submission_debits_stake_once() {
     )]);
     let mut ledger_entries = BTreeMap::new();
 
-    let mutation = submit_request(
+    reserve_request(&mut requests, public_reserve_input()).unwrap();
+    record_reserved_request_upload(&mut requests, public_upload_input()).unwrap();
+    let mutation = finalize_reserved_request(
         &mut requests,
         &mut events,
         &mut accounts,
         &mut ledger_entries,
-        public_submit_input(),
+        public_finalize_input(),
     )
     .unwrap();
 
@@ -77,14 +80,17 @@ fn reserved_internal_ledger_prefixes_are_rejected() {
     .unwrap_err();
     assert!(grant_error.message.contains("reserved internal prefix"));
 
-    let mut submit_input = public_submit_input();
-    submit_input.stake_ledger_entry_id = Some("repo_delete_refund:stake".to_string());
-    let submit_error = submit_request(
-        &mut BTreeMap::new(),
+    let mut requests = BTreeMap::new();
+    reserve_request(&mut requests, public_reserve_input()).unwrap();
+    record_reserved_request_upload(&mut requests, public_upload_input()).unwrap();
+    let mut finalize_input = public_finalize_input();
+    finalize_input.stake_ledger_entry_id = Some("repo_delete_refund:stake".to_string());
+    let submit_error = finalize_reserved_request(
+        &mut requests,
         &mut BTreeMap::new(),
         &mut accounts,
         &mut ledger_entries,
-        submit_input,
+        finalize_input,
     )
     .unwrap_err();
     assert!(submit_error.message.contains("reserved internal prefix"));
@@ -114,39 +120,18 @@ fn reserved_internal_ledger_prefixes_are_rejected() {
 }
 
 #[test]
-fn duplicate_request_ref_is_rejected_before_credit_debit() {
+fn duplicate_request_ref_is_rejected_before_reservation() {
     let mut existing = submitted_request();
     existing.request_ref = "refs/scope/requests/req_2".to_string();
     let mut requests = BTreeMap::from([("req_1".to_string(), existing)]);
-    let mut events = BTreeMap::new();
-    let mut accounts = BTreeMap::from([(
-        "user_public".to_string(),
-        UserCreditAccount {
-            user_id: "user_public".to_string(),
-            balance_credits: 20,
-        },
-    )]);
-    let mut ledger_entries = BTreeMap::new();
-    let mut input = public_submit_input();
+    let mut input = public_reserve_input();
     input.id = "req_2".to_string();
     input.request_ref = "refs/scope/requests/req_2".to_string();
-    input.event_id = "event_created_2".to_string();
-    input.stake_ledger_entry_id = Some("ledger_stake_2".to_string());
 
-    let error = submit_request(
-        &mut requests,
-        &mut events,
-        &mut accounts,
-        &mut ledger_entries,
-        input,
-    )
-    .unwrap_err();
+    let error = reserve_request(&mut requests, input).unwrap_err();
 
     assert!(error.message.contains("request ref already exists"));
     assert!(!requests.contains_key("req_2"));
-    assert!(events.is_empty());
-    assert!(ledger_entries.is_empty());
-    assert_eq!(accounts.get("user_public").unwrap().balance_credits, 20);
 }
 
 #[test]
@@ -161,10 +146,12 @@ fn invalid_stake_amount_does_not_debit_account() {
         },
     )]);
     let mut ledger_entries = BTreeMap::new();
-    let mut input = public_submit_input();
+    reserve_request(&mut requests, public_reserve_input()).unwrap();
+    record_reserved_request_upload(&mut requests, public_upload_input()).unwrap();
+    let mut input = public_finalize_input();
     input.stake_credits = i32::MAX as u32 + 1;
 
-    let error = submit_request(
+    let error = finalize_reserved_request(
         &mut requests,
         &mut events,
         &mut accounts,
@@ -174,7 +161,7 @@ fn invalid_stake_amount_does_not_debit_account() {
     .unwrap_err();
 
     assert!(error.message.contains("exceeds i32 range"));
-    assert!(requests.is_empty());
+    assert_eq!(requests.get("req_1").unwrap().state, RequestState::Reserved);
     assert!(events.is_empty());
     assert!(ledger_entries.is_empty());
     assert_eq!(
@@ -196,17 +183,19 @@ fn public_submission_reserves_room_for_maximum_reward() {
     )]);
     let mut ledger_entries = BTreeMap::new();
 
-    let error = submit_request(
+    reserve_request(&mut requests, public_reserve_input()).unwrap();
+    record_reserved_request_upload(&mut requests, public_upload_input()).unwrap();
+    let error = finalize_reserved_request(
         &mut requests,
         &mut events,
         &mut accounts,
         &mut ledger_entries,
-        public_submit_input(),
+        public_finalize_input(),
     )
     .unwrap_err();
 
     assert!(error.message.contains("exceeds i32 range"));
-    assert!(requests.is_empty());
+    assert_eq!(requests.get("req_1").unwrap().state, RequestState::Reserved);
     assert!(events.is_empty());
     assert!(ledger_entries.is_empty());
     assert_eq!(
@@ -217,16 +206,22 @@ fn public_submission_reserves_room_for_maximum_reward() {
 
 #[test]
 fn owner_submission_rejects_credit_stake() {
-    let mut input = public_submit_input();
+    let mut requests = BTreeMap::new();
+    let mut events = BTreeMap::new();
+    let mut input = public_reserve_input();
     input.author_role = RequestActorRole::Owner;
     input.base_audience = RequestBaseAudience::Private;
+    reserve_request(&mut requests, input).unwrap();
+    record_reserved_request_upload(&mut requests, public_upload_input()).unwrap();
+    let mut finalize_input = public_finalize_input();
+    finalize_input.stake_credits = 10;
 
-    let error = submit_request(
+    let error = finalize_reserved_request(
+        &mut requests,
+        &mut events,
         &mut BTreeMap::new(),
         &mut BTreeMap::new(),
-        &mut BTreeMap::new(),
-        &mut BTreeMap::new(),
-        input,
+        finalize_input,
     )
     .unwrap_err();
 
@@ -648,8 +643,8 @@ fn settlement_cannot_run_twice() {
     assert!(error.message.contains("already closed"));
 }
 
-fn public_submit_input() -> SubmitRequestInput {
-    SubmitRequestInput {
+fn public_reserve_input() -> ReserveRequestInput {
+    ReserveRequestInput {
         id: "req_1".to_string(),
         repo_id: "owner/repo".to_string(),
         author_user_id: "user_public".to_string(),
@@ -658,12 +653,41 @@ fn public_submit_input() -> SubmitRequestInput {
         target_branch: "main".to_string(),
         request_ref: "refs/scope/requests/req_1".to_string(),
         base_main_oid: "base".to_string(),
-        head_oid: "head".to_string(),
+        now_unix: 10,
+    }
+}
+
+fn public_upload_input() -> RecordReservedRequestUploadInput {
+    RecordReservedRequestUploadInput {
+        request_id: "req_1".to_string(),
+        actor_user_id: "user_public".to_string(),
+        expected_old_head_oid: None,
+        new_head_oid: "head".to_string(),
+        git_snapshot: source_blob("head"),
+        now_unix: 11,
+    }
+}
+
+fn public_finalize_input() -> FinalizeReservedRequestInput {
+    FinalizeReservedRequestInput {
+        request_id: "req_1".to_string(),
+        actor_user_id: "user_public".to_string(),
         title: "Fix parser crash".to_string(),
+        expected_head_oid: "head".to_string(),
         stake_credits: 10,
         stake_ledger_entry_id: Some("ledger_stake".to_string()),
         event_id: "event_created".to_string(),
-        now_unix: 10,
+        now_unix: 12,
+    }
+}
+
+fn source_blob(git_oid: &str) -> SourceBlob {
+    SourceBlob {
+        object_key: format!("objects/{git_oid}"),
+        sha256: format!("sha256-{git_oid}"),
+        git_oid: git_oid.to_string(),
+        git_file_mode: DEFAULT_GIT_FILE_MODE.to_string(),
+        size_bytes: 1,
     }
 }
 

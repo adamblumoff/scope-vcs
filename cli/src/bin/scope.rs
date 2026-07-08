@@ -32,6 +32,7 @@ use scope_cli::{
         mark_worktree_scope_repo_config_synced, repo_config_path,
         write_worktree_scope_repo_config_with_base,
     },
+    request::{RequestArgs, preflight_request_command, run_request_command},
     review::{ensure_review_terminal_available, run_push_review, run_standalone_review},
 };
 use scope_core::domain::repo_config::repo_config_fingerprint;
@@ -58,6 +59,8 @@ enum CommandKind {
     Push(PushArgs),
     #[command(about = "Review repo visibility config locally")]
     Review(ReviewArgs),
+    #[command(about = "Work with branch-backed maintainer requests")]
+    Request(RequestArgs),
     Clone(CloneArgs),
     Login(LoginArgs),
     Logout,
@@ -111,6 +114,7 @@ fn main() -> anyhow::Result<()> {
         CommandKind::Init(args) => init(args),
         CommandKind::Push(args) => push(args),
         CommandKind::Review(args) => review(args),
+        CommandKind::Request(args) => request(args),
         CommandKind::Clone(args) => clone(args),
         CommandKind::Login(args) => login(args),
         CommandKind::Logout => logout(),
@@ -160,6 +164,14 @@ fn init(args: InitArgs) -> anyhow::Result<()> {
     }
 
     Ok(())
+}
+
+fn request(args: RequestArgs) -> anyhow::Result<()> {
+    preflight_request_command(&args)?;
+    let api_url = api_url();
+    let client = http_client()?;
+    let session = session_from_cache_or_login(&client, &api_url, local_browser_login)?;
+    run_request_command(args, &client, &api_url, &session.token)
 }
 
 fn push(args: PushArgs) -> anyhow::Result<()> {

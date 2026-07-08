@@ -34,7 +34,7 @@ export type RequestActorRole = "Public" | "Member" | "Owner";
 
 export type RequestBaseAudience = "Public" | "Private";
 
-export type RequestState = "Submitted" | "NeedsResponse" | "Resolved" | "Withdrawn";
+export type RequestState = "Reserved" | "Submitted" | "NeedsResponse" | "Resolved" | "Withdrawn";
 
 export type RequestDisposition = "Accepted" | "UsefulNotMerged" | "HiddenContext" | "NotAligned" | "Duplicate" | "Abandoned" | "LowQuality";
 
@@ -174,7 +174,9 @@ export type RequestSettlementResponse = { disposition: RequestDisposition, stake
 
 export type RequestEventResponse = { id: string, actor_user_id: string, kind: RequestEventKind, body: string | null, old_head_oid: string | null, new_head_oid: string | null, created_at_unix: number, };
 
-export type SubmitRequestRequest = { title: string, head_oid: string, stake_credits: number | null, };
+export type RequestReservationResponse = { id: string, request_ref: string, base_audience: RequestBaseAudience, base_main_oid: string, };
+
+export type FinalizeRequestSubmissionRequest = { title: string, head_oid: string, stake_credits: number | null, };
 
 export type CommentRequestRequest = { body: string, };
 
