@@ -19,7 +19,6 @@ pub mod repository {
         pub policy: Json,
         pub graph: Json,
         pub visibility_events: Json,
-        pub staged_update: Option<Json>,
     }
 
     #[derive(Copy, Clone, Debug, EnumIter, DeriveRelation)]
@@ -42,7 +41,6 @@ pub mod repository {
                 policy: encode_json(&repo.policy)?,
                 graph: encode_json(&repo.graph)?,
                 visibility_events: encode_json(&repo.visibility_events)?,
-                staged_update: repo.staged_update.as_ref().map(encode_json).transpose()?,
             })
         }
 
@@ -76,10 +74,6 @@ pub mod repository {
                 graph: decode_json::<SourceGraph>(self.graph)?,
                 visibility_events: decode_json(self.visibility_events)?,
                 git_snapshot: facts.git_snapshot,
-                staged_update: self
-                    .staged_update
-                    .map(decode_json::<StagedRepoUpdate>)
-                    .transpose()?,
                 members,
                 invitations,
             })

@@ -91,10 +91,6 @@ where
             entities::repository::Column::VisibilityEvents,
             Expr::value(row.visibility_events),
         )
-        .col_expr(
-            entities::repository::Column::StagedUpdate,
-            Expr::value(row.staged_update),
-        )
         .exec(conn)
         .await
         .map_err(ApiError::internal)?;

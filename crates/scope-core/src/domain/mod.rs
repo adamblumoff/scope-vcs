@@ -9,5 +9,5 @@ pub mod repo_visibility;
 pub mod requests;
 #[cfg(test)]
 mod requests_tests;
-pub mod staged_updates;
+pub mod reviewed_updates;
 pub mod store;

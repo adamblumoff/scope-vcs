@@ -14,7 +14,7 @@ export type RepoPublicationState = "Unpublished" | "Published";
 
 export type FirstPushTokenStatus = "Active" | "Expired" | "Used";
 
-export type StagedFileChangeKind = "Added" | "Modified" | "Deleted";
+export type FileChangeKind = "Added" | "Modified" | "Deleted";
 
 export type ConfigVisibility = "public" | "private";
 
@@ -134,7 +134,7 @@ export type CommitFileDiffRequest = { audience: ProjectionPreviewAudience | null
 
 export type ReviewFileContentResponse = { "kind": "text", text: string, } | { "kind": "binary", oid: string, size_bytes: number, };
 
-export type ReviewFileDiffResponse = { path: string, kind: StagedFileChangeKind, old_content: ReviewFileContentResponse | null, new_content: ReviewFileContentResponse | null, };
+export type ReviewFileDiffResponse = { path: string, kind: FileChangeKind, old_content: ReviewFileContentResponse | null, new_content: ReviewFileContentResponse | null, };
 
 export type CommitHistoryResponse = { audience: ProjectionPreviewAudience, repo_id: string, view_key: string, commits: Array<CommitSummaryResponse>, };
 
@@ -142,7 +142,7 @@ export type CommitSummaryResponse = { projected_id: string, logical_commit_id: s
 
 export type CommitDetailResponse = { audience: ProjectionPreviewAudience, repo_id: string, view_key: string, projected_id: string, logical_commit_id: string, parent_projected_id: string | null, author: string | null, message: string, change_count: number, files: Array<CommitFileResponse>, };
 
-export type CommitFileResponse = { path: string, kind: StagedFileChangeKind, old_oid: string | null, new_oid: string | null, visibility: Visibility, };
+export type CommitFileResponse = { path: string, kind: FileChangeKind, old_oid: string | null, new_oid: string | null, visibility: Visibility, };
 
 export type ProjectionPreviewRequest = { audience: ProjectionPreviewAudience, source: ProjectionPreviewSource | null, };
 

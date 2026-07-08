@@ -2,13 +2,11 @@ use super::{
     policy::{ScopePath, Visibility, VisibilityRule},
     projection::{AuthorVisibility, FileChange, LogicalCommit, VisibilityEvent},
     repo_config::repo_config_from_policy,
-    staged_updates::{
-        StagedUpdateError, apply_staged_update_to_repo, validate_staged_update_policy,
-    },
+    reviewed_updates::ReviewedUpdateError,
     store::{
         CatalogError, FirstPushToken, GitPushToken, PendingImport, RepoPublicationState,
-        RepoRecord, RepoSettings, RepoStorageCleanup, SourceBlob, StagedRepoUpdate,
-        StoredRepository, UserAccount, pending_import_scope_path,
+        RepoRecord, RepoSettings, RepoStorageCleanup, SourceBlob, StoredRepository, UserAccount,
+        pending_import_scope_path,
     },
 };
 use crate::error::ApiError;
@@ -90,14 +88,6 @@ pub fn ensure_can_change_file_visibility(
     }
 }
 
-pub fn ensure_can_apply_changes(repo: &StoredRepository, user_id: &str) -> Result<(), ApiError> {
-    if repo.access_for_user_id(user_id).can_apply_changes {
-        Ok(())
-    } else {
-        Err(ApiError::forbidden("apply changes permission required"))
-    }
-}
-
 pub fn ensure_repo_delete_owner(
     repo: &StoredRepository,
     user_id: &str,
@@ -128,11 +118,11 @@ pub fn catalog_error(error: CatalogError) -> ApiError {
     }
 }
 
-pub fn staged_update_api_error(error: StagedUpdateError) -> ApiError {
+pub fn reviewed_update_api_error(error: ReviewedUpdateError) -> ApiError {
     match error {
-        StagedUpdateError::BadRequest(message) => ApiError::bad_request(message),
-        StagedUpdateError::Conflict(message) => ApiError::conflict(message),
-        StagedUpdateError::InvalidPolicy(error) => ApiError::bad_request(error),
+        ReviewedUpdateError::BadRequest(message) => ApiError::bad_request(message),
+        ReviewedUpdateError::Conflict(message) => ApiError::conflict(message),
+        ReviewedUpdateError::InvalidPolicy(error) => ApiError::bad_request(error),
     }
 }
 
@@ -211,82 +201,6 @@ pub fn set_visibility(
     .map_err(ApiError::bad_request)?;
     repo.bump_change_version();
     Ok(RepoMutation::new(()))
-}
-
-pub fn set_staged_visibility(
-    repo: &mut StoredRepository,
-    user_id: &str,
-    update_paths: &[ScopePath],
-    visibility: Visibility,
-) -> Result<RepoMutation<StagedRepoUpdate>, ApiError> {
-    if update_paths.is_empty() {
-        return Err(ApiError::bad_request("at least one file path is required"));
-    }
-    ensure_can_change_file_visibility(repo, user_id)?;
-
-    let mut staged_update = repo
-        .staged_update
-        .clone()
-        .ok_or_else(|| ApiError::not_found("no staged update pending"))?;
-    let mut changed = false;
-    for path in update_paths {
-        let file = staged_update
-            .changes
-            .iter_mut()
-            .find(|change| change.path == *path)
-            .ok_or_else(|| ApiError::not_found(format!("staged file {} not found", path)))?;
-        changed |= file.visibility != visibility;
-        file.visibility = visibility;
-    }
-    validate_staged_update_policy(repo, &staged_update).map_err(staged_update_api_error)?;
-    repo.staged_update = Some(staged_update.clone());
-    if changed {
-        repo.bump_change_version();
-    }
-    Ok(RepoMutation::new(staged_update))
-}
-
-pub fn apply_staged_update(
-    repo: &mut StoredRepository,
-    user_id: &str,
-) -> Result<RepoMutation<StagedRepoUpdate>, ApiError> {
-    ensure_can_apply_changes(repo, user_id)?;
-    let old_snapshot = repo.git_snapshot.clone();
-    let staged_update = repo
-        .staged_update
-        .take()
-        .ok_or_else(|| ApiError::not_found("no staged update pending"))?;
-    let applied = staged_update.clone();
-    apply_staged_update_to_repo(repo, staged_update).map_err(staged_update_api_error)?;
-    let mut effects = RepoEffects::default();
-    effects.delete_source_blobs(old_snapshot);
-    Ok(RepoMutation::with_effects(applied, effects))
-}
-
-pub fn reject_staged_update(
-    repo: &mut StoredRepository,
-    user_id: &str,
-) -> Result<RepoMutation<StagedRepoUpdate>, ApiError> {
-    ensure_can_apply_changes(repo, user_id)?;
-    let rejected = repo
-        .staged_update
-        .take()
-        .ok_or_else(|| ApiError::not_found("no staged update pending"))?;
-    repo.bump_change_version();
-    let mut effects = RepoEffects::default();
-    effects.delete_source_blobs(staged_update_blobs(&rejected));
-    Ok(RepoMutation::with_effects(rejected, effects))
-}
-
-fn staged_update_blobs(staged_update: &StagedRepoUpdate) -> Vec<SourceBlob> {
-    std::iter::once(staged_update.git_snapshot.clone())
-        .chain(
-            staged_update
-                .changes
-                .iter()
-                .filter_map(|change| change.new_content.clone()),
-        )
-        .collect()
 }
 
 pub fn update_settings(
@@ -455,43 +369,8 @@ mod tests {
     use super::*;
     use crate::domain::{
         policy::{ScopePath, Visibility},
-        store::{
-            DEFAULT_GIT_FILE_MODE, StagedFileChange, StagedFileChangeKind, StagedRepoUpdate,
-            UserAccount,
-        },
+        store::{DEFAULT_GIT_FILE_MODE, UserAccount},
     };
-
-    #[test]
-    fn rejecting_staged_update_returns_source_blob_cleanup_effects() {
-        let owner = test_owner();
-        let mut repo = StoredRepository::new(&owner, "repo", Visibility::Private).unwrap();
-        let staged_snapshot = source_blob("staged-snapshot");
-        let staged_blob = source_blob("staged-file");
-        repo.staged_update = Some(StagedRepoUpdate {
-            id: "staged".to_string(),
-            branch: "main".to_string(),
-            base_live_commit_id: None,
-            author_id: owner.id.clone(),
-            message: "Push".to_string(),
-            git_snapshot: staged_snapshot.clone(),
-            changes: vec![StagedFileChange {
-                path: ScopePath::parse("/src/lib.rs").unwrap(),
-                old_content: None,
-                new_content: Some(staged_blob.clone()),
-                visibility: Visibility::Private,
-                kind: StagedFileChangeKind::Added,
-            }],
-        });
-
-        let mutation = reject_staged_update(&mut repo, &owner.id).unwrap();
-
-        assert!(repo.staged_update.is_none());
-        assert_eq!(mutation.result.id, "staged");
-        assert_eq!(
-            source_blob_effect_keys(&mutation.effects),
-            vec![staged_snapshot.object_key, staged_blob.object_key]
-        );
-    }
 
     #[test]
     fn deleting_repo_returns_storage_and_source_blob_cleanup_effects() {
@@ -534,36 +413,6 @@ mod tests {
         assert_eq!(
             repo.repo_config.visibility_for_path(&path),
             Visibility::Private
-        );
-    }
-
-    #[test]
-    fn staged_update_apply_mirrors_repo_config() {
-        let owner = test_owner();
-        let mut repo = StoredRepository::new(&owner, "repo", Visibility::Private).unwrap();
-        let path = ScopePath::parse("/README.md").unwrap();
-        repo.staged_update = Some(StagedRepoUpdate {
-            id: "staged".to_string(),
-            branch: "main".to_string(),
-            base_live_commit_id: None,
-            author_id: owner.id.clone(),
-            message: "Push".to_string(),
-            git_snapshot: source_blob("staged-snapshot"),
-            changes: vec![StagedFileChange {
-                path: path.clone(),
-                old_content: None,
-                new_content: Some(source_blob("staged-file")),
-                visibility: Visibility::Public,
-                kind: StagedFileChangeKind::Added,
-            }],
-        });
-
-        apply_staged_update(&mut repo, &owner.id).unwrap();
-
-        assert_eq!(repo.policy.effective_visibility(&path), Visibility::Public);
-        assert_eq!(
-            repo.repo_config.visibility_for_path(&path),
-            Visibility::Public
         );
     }
 

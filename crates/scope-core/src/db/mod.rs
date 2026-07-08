@@ -17,7 +17,6 @@ mod metadata_reset;
 mod outbox;
 mod projection_read_models;
 mod publish_apply;
-mod push_staging;
 mod repo_change_notifications;
 mod repo_collaboration;
 mod repo_effects;

@@ -42,7 +42,6 @@ async fn create_repo_route_creates_user_and_lists_repo() {
         body["repo"]["request_permissions"]["uses_credit_stake"],
         false
     );
-    assert!(body["repo"].get("staged_update_pending").is_none());
     assert_eq!(
         body["init"]["git_remote_url"],
         "http://localhost:8080/git/permissioned/owner/scope_app"
@@ -173,25 +172,9 @@ fn db_metadata_store_round_trips_repo_metadata() {
         .unwrap();
     repo.pending_import = Some(pending_import_fixture(vec![("imported.txt", "imported")]));
     repo.git_snapshot = Some(source_blob("live git snapshot"));
-    repo.staged_update = Some(StagedRepoUpdate {
-        id: "stage-1".to_string(),
-        branch: "refs/heads/main".to_string(),
-        base_live_commit_id: Some("rv1".to_string()),
-        author_id: owner_id.clone(),
-        message: "stage update".to_string(),
-        git_snapshot: source_blob("staged git snapshot"),
-        changes: vec![StagedFileChange {
-            path: ScopePath::parse("/README.md").unwrap(),
-            old_content: repo.graph.commits[0].changes[0].new_content.clone(),
-            new_content: Some(source_blob("staged readme")),
-            visibility: Visibility::Public,
-            kind: StagedFileChangeKind::Modified,
-        }],
-    });
     let pending_deletions = vec![source_blob("delete after retry")];
     let expected_pending_import = repo.pending_import.clone();
     let expected_git_snapshot = repo.git_snapshot.clone();
-    let expected_staged_update = repo.staged_update.clone();
     let expected_graph = repo.graph.clone();
     let expected_pending_deletions = pending_deletions.clone();
 
@@ -290,7 +273,6 @@ fn db_metadata_store_round_trips_repo_metadata() {
             );
             assert_eq!(repo.pending_import, expected_pending_import);
             assert_eq!(repo.git_snapshot, expected_git_snapshot);
-            assert_eq!(repo.staged_update, expected_staged_update);
             assert_eq!(
                 catalog.pending_source_blob_deletions,
                 expected_pending_deletions
@@ -401,20 +383,9 @@ fn db_metadata_worker_rebuilds_projection_read_models_from_outbox() {
 }
 
 #[tokio::test]
-async fn list_repos_returns_request_summary_fields_without_staged_update_state() {
+async fn list_repos_returns_request_summary_fields() {
     let state = test_state_with_repo();
     cache_test_jwks(&state);
-    {
-        let mut repo = repo_with_readme();
-        stage_receive_pack_update(
-            &mut repo,
-            receive_pack_update(vec![("/README.md", Some("staged"))]),
-        )
-        .unwrap();
-
-        let mut catalog = lock_catalog(&state).unwrap();
-        catalog.repositories.insert(TEST_REPO_ID.to_string(), repo);
-    }
 
     let app = router(state);
     let summary_response = app
@@ -452,7 +423,6 @@ async fn list_repos_returns_request_summary_fields_without_staged_update_state()
     assert_eq!(body[0]["lifecycle_state"], "Published");
     assert_eq!(body[0]["open_request_count"], 0);
     assert_eq!(body[0]["request_permissions"]["uses_credit_stake"], false);
-    assert!(body[0].get("staged_update_pending").is_none());
 }
 
 #[tokio::test]

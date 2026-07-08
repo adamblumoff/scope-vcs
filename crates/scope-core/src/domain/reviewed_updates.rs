@@ -1,38 +1,24 @@
 use super::{
     policy::{Policy, PolicyError, ScopePath, Visibility, VisibilityRule},
     projection::{AuthorVisibility, FileChange, LogicalCommit, VisibilityEvent},
-    repo_config::{
-        HistoryRewriteAction, HistoryRewriteRequest, RepoConfig, repo_config_from_policy,
-    },
-    store::{
-        RepoPublicationState, SourceBlob, StagedFileChange, StagedFileChangeKind, StagedRepoUpdate,
-        StoredRepository,
-    },
+    repo_config::{HistoryRewriteAction, HistoryRewriteRequest, RepoConfig},
+    store::{RepoPublicationState, SourceBlob, StoredRepository},
 };
 use std::collections::{BTreeMap, BTreeSet};
 
-pub type StagedUpdateResult<T> = Result<T, StagedUpdateError>;
+pub type ReviewedUpdateResult<T> = Result<T, ReviewedUpdateError>;
 
 #[derive(Debug)]
-pub enum StagedUpdateError {
+pub enum ReviewedUpdateError {
     BadRequest(&'static str),
     Conflict(&'static str),
     InvalidPolicy(PolicyError),
 }
 
 #[derive(Clone, Debug)]
-pub struct StagedContentChange {
+pub struct ReviewedContentChange {
     pub path: ScopePath,
     pub content: Option<SourceBlob>,
-}
-
-#[derive(Clone, Debug)]
-pub struct StagedUpdateInput {
-    pub branch: String,
-    pub author_id: String,
-    pub message: String,
-    pub git_snapshot: SourceBlob,
-    pub changes: Vec<StagedContentChange>,
 }
 
 #[derive(Clone, Debug)]
@@ -41,7 +27,7 @@ pub struct ReviewedUpdateInput {
     pub author_id: String,
     pub message: String,
     pub git_snapshot: SourceBlob,
-    pub changes: Vec<StagedContentChange>,
+    pub changes: Vec<ReviewedContentChange>,
     pub previous_config: Option<RepoConfig>,
     pub config: RepoConfig,
 }
@@ -50,84 +36,6 @@ pub struct ReviewedUpdateInput {
 pub struct ReviewedConfigUpdateInput {
     pub author_id: String,
     pub config: RepoConfig,
-}
-
-pub fn stage_staged_update(
-    repo: &mut StoredRepository,
-    update: StagedUpdateInput,
-    can_apply_changes: bool,
-) -> StagedUpdateResult<Option<StagedRepoUpdate>> {
-    if repo.record.publication_state != RepoPublicationState::Published {
-        return Err(StagedUpdateError::Conflict(
-            "repo must be published before push",
-        ));
-    }
-    if update.changes.is_empty() {
-        return Err(StagedUpdateError::BadRequest(
-            "update must include file changes",
-        ));
-    }
-    if repo.staged_update.is_some() {
-        return Err(StagedUpdateError::Conflict(
-            "a staged update is already pending",
-        ));
-    }
-
-    let will_stage = repo.settings.review_pushes_before_applying || !can_apply_changes;
-    let staged_update = build_staged_update(repo, update)?;
-    if will_stage {
-        repo.staged_update = Some(staged_update.clone());
-        repo.bump_change_version();
-        Ok(Some(staged_update))
-    } else {
-        apply_staged_update_to_repo(repo, staged_update)?;
-        Ok(None)
-    }
-}
-
-pub fn build_staged_update(
-    repo: &StoredRepository,
-    update: StagedUpdateInput,
-) -> StagedUpdateResult<StagedRepoUpdate> {
-    let live_tree = repo.live_tree();
-    let mut staged_changes = Vec::with_capacity(update.changes.len());
-
-    for change in update.changes {
-        let old_content = live_tree.get(&change.path).cloned();
-        if source_content_matches(old_content.as_ref(), change.content.as_ref()) {
-            continue;
-        }
-        let kind = match (&old_content, &change.content) {
-            (None, Some(_)) => StagedFileChangeKind::Added,
-            (Some(_), Some(_)) => StagedFileChangeKind::Modified,
-            (Some(_), None) => StagedFileChangeKind::Deleted,
-            (None, None) => continue,
-        };
-        let visibility = repo.policy.effective_visibility(&change.path);
-        staged_changes.push(StagedFileChange {
-            path: change.path,
-            old_content,
-            new_content: change.content,
-            visibility,
-            kind,
-        });
-    }
-
-    if staged_changes.is_empty() {
-        return Err(StagedUpdateError::BadRequest(
-            "update did not change the live tree",
-        ));
-    }
-
-    Ok(StagedRepoUpdate {
-        id: format!("staged_push_{}", repo.graph.commits.len() + 1),
-        branch: update.branch,
-        base_live_commit_id: repo.graph.commits.last().map(|commit| commit.id.clone()),
-        author_id: update.author_id,
-        message: update.message,
-        git_snapshot: update.git_snapshot,
-        changes: staged_changes,
-    })
 }
 
 pub fn source_content_matches(left: Option<&SourceBlob>, right: Option<&SourceBlob>) -> bool {
@@ -143,112 +51,15 @@ pub fn source_content_matches(left: Option<&SourceBlob>, right: Option<&SourceBl
     }
 }
 
-pub fn apply_staged_update_to_repo(
-    repo: &mut StoredRepository,
-    staged_update: StagedRepoUpdate,
-) -> StagedUpdateResult<()> {
-    validate_staged_update_policy(repo, &staged_update)?;
-    let logical_id = format!("rv_push_{}", repo.graph.commits.len() + 1);
-    let after_commit_id = repo.graph.commits.last().map(|commit| commit.id.clone());
-    let mut next_visibility_event_id = repo.visibility_events.len() + 1;
-    let visibility_events = staged_update
-        .changes
-        .iter()
-        .filter(|change| change.new_content.is_some())
-        .filter_map(|change| {
-            let old_visibility = repo.policy.effective_visibility(&change.path);
-            if old_visibility != change.visibility {
-                if old_visibility == Visibility::Public
-                    && change.visibility == Visibility::Private
-                    && change.old_content.is_none()
-                {
-                    return None;
-                }
-
-                let id = format!("vis_{next_visibility_event_id}");
-                next_visibility_event_id += 1;
-                let boundary_after_commit_id = (old_visibility == Visibility::Public
-                    && change.visibility == Visibility::Private)
-                    .then(|| after_commit_id.clone())
-                    .flatten();
-                Some(VisibilityEvent {
-                    id,
-                    after_commit_id: boundary_after_commit_id,
-                    source_commit_id: Some(logical_id.clone()),
-                    author_id: staged_update.author_id.clone(),
-                    path: change.path.clone(),
-                    old_visibility,
-                    new_visibility: change.visibility,
-                    current_content: change.new_content.clone(),
-                })
-            } else {
-                None
-            }
-        })
-        .collect::<Vec<_>>();
-    for change in &staged_update.changes {
-        if change.new_content.is_none() {
-            continue;
-        }
-
-        let rule = staged_visibility_rule(change);
-        repo.policy
-            .add_rule(rule)
-            .map_err(StagedUpdateError::InvalidPolicy)?;
-    }
-
-    let parent_ids = repo
-        .graph
-        .commits
-        .last()
-        .map(|commit| vec![commit.id.clone()])
-        .unwrap_or_default();
-    repo.graph.commits.push(LogicalCommit {
-        id: logical_id,
-        parent_ids,
-        author_id: staged_update.author_id,
-        author_visibility: AuthorVisibility::Visible,
-        message: staged_update.message,
-        changes: staged_update
-            .changes
-            .into_iter()
-            .map(|change| FileChange {
-                visibility: applied_file_visibility(repo, &change),
-                path: change.path,
-                old_content: change.old_content,
-                new_content: change.new_content,
-            })
-            .collect(),
-    });
-    repo.visibility_events.extend(visibility_events);
-    repo.git_snapshot = Some(staged_update.git_snapshot);
-    repo.repo_config = repo_config_from_policy(
-        &repo.policy,
-        repo.record.default_visibility,
-        repo.repo_config.history.clone(),
-    )
-    .map_err(|_| {
-        StagedUpdateError::BadRequest("repo visibility policy cannot be mirrored into config")
-    })?;
-    repo.bump_change_version();
-    Ok(())
-}
-
 pub fn apply_reviewed_update_to_repo(
     repo: &mut StoredRepository,
     update: ReviewedUpdateInput,
-) -> StagedUpdateResult<()> {
+) -> ReviewedUpdateResult<()> {
     if update.changes.is_empty() {
-        return Err(StagedUpdateError::BadRequest(
+        return Err(ReviewedUpdateError::BadRequest(
             "update must include file changes",
         ));
     }
-    if repo.staged_update.is_some() {
-        return Err(StagedUpdateError::Conflict(
-            "a staged update is already pending",
-        ));
-    }
-
     let old_tree = repo.live_tree();
     let mut new_tree = old_tree.clone();
     let mut file_changes = Vec::with_capacity(update.changes.len());
@@ -281,7 +92,7 @@ pub fn apply_reviewed_update_to_repo(
     }
 
     if file_changes.is_empty() {
-        return Err(StagedUpdateError::BadRequest(
+        return Err(ReviewedUpdateError::BadRequest(
             "update did not change the live tree",
         ));
     }
@@ -371,7 +182,6 @@ pub fn apply_reviewed_update_to_repo(
     repo.visibility_events.extend(visibility_events);
     repo.git_snapshot = Some(update.git_snapshot);
     repo.pending_import = None;
-    repo.staged_update = None;
     repo.first_push_token = None;
     repo.record.publication_state = RepoPublicationState::Published;
     repo.bump_change_version();
@@ -381,16 +191,10 @@ pub fn apply_reviewed_update_to_repo(
 pub fn apply_reviewed_config_to_repo(
     repo: &mut StoredRepository,
     update: ReviewedConfigUpdateInput,
-) -> StagedUpdateResult<bool> {
+) -> ReviewedUpdateResult<bool> {
     if repo.repo_config == update.config {
         return Ok(false);
     }
-    if repo.staged_update.is_some() {
-        return Err(StagedUpdateError::Conflict(
-            "a staged update is already pending",
-        ));
-    }
-
     let live_tree = repo.live_tree();
     let after_commit_id = repo.graph.commits.last().map(|commit| commit.id.clone());
     let mut next_visibility_event_id = repo.visibility_events.len() + 1;
@@ -535,18 +339,10 @@ fn apply_history_rewrites(
     }
 }
 
-fn applied_file_visibility(repo: &StoredRepository, change: &StagedFileChange) -> Visibility {
-    if change.new_content.is_none() {
-        repo.policy.effective_visibility(&change.path)
-    } else {
-        change.visibility
-    }
-}
-
 fn policy_from_config_for_tree<'a>(
     config: &RepoConfig,
     paths: impl IntoIterator<Item = &'a ScopePath>,
-) -> StagedUpdateResult<Policy> {
+) -> ReviewedUpdateResult<Policy> {
     let mut policy = Policy::new(config.visibility.default_visibility().into());
     for path in paths {
         let rule = match config.visibility_for_path(path) {
@@ -555,33 +351,7 @@ fn policy_from_config_for_tree<'a>(
         };
         policy
             .add_rule(rule)
-            .map_err(StagedUpdateError::InvalidPolicy)?;
+            .map_err(ReviewedUpdateError::InvalidPolicy)?;
     }
     Ok(policy)
-}
-
-pub fn validate_staged_update_policy(
-    repo: &StoredRepository,
-    staged_update: &StagedRepoUpdate,
-) -> StagedUpdateResult<()> {
-    let mut policy = repo.policy.clone();
-    for change in &staged_update.changes {
-        if change.new_content.is_none() {
-            continue;
-        }
-
-        let rule = staged_visibility_rule(change);
-        policy
-            .add_rule(rule)
-            .map_err(StagedUpdateError::InvalidPolicy)?;
-    }
-
-    Ok(())
-}
-
-pub fn staged_visibility_rule(change: &StagedFileChange) -> VisibilityRule {
-    match change.visibility {
-        Visibility::Public => VisibilityRule::public(change.path.clone()),
-        Visibility::Private => VisibilityRule::private(change.path.clone()),
-    }
 }

@@ -1,7 +1,7 @@
 use super::{
     policy::{Policy, ScopePath, Visibility},
     projection::{ProjectedCommit, ProjectionViewKey, VisibilityEvent, project_graph},
-    store::{SourceBlob, StagedFileChangeKind},
+    store::{FileChangeKind, SourceBlob},
 };
 use std::collections::BTreeMap;
 
@@ -25,7 +25,7 @@ pub struct CommitHistoryCommit {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct CommitHistoryFile {
     pub path: ScopePath,
-    pub kind: StagedFileChangeKind,
+    pub kind: FileChangeKind,
     pub old_content: Option<SourceBlob>,
     pub new_content: Option<SourceBlob>,
     pub visibility: Visibility,
@@ -96,11 +96,11 @@ fn commit_history_commit(
 fn file_change_kind(
     old_content: Option<&SourceBlob>,
     new_content: Option<&SourceBlob>,
-) -> Option<StagedFileChangeKind> {
+) -> Option<FileChangeKind> {
     match (old_content, new_content) {
-        (None, Some(_)) => Some(StagedFileChangeKind::Added),
-        (Some(_), Some(_)) => Some(StagedFileChangeKind::Modified),
-        (Some(_), None) => Some(StagedFileChangeKind::Deleted),
+        (None, Some(_)) => Some(FileChangeKind::Added),
+        (Some(_), Some(_)) => Some(FileChangeKind::Modified),
+        (Some(_), None) => Some(FileChangeKind::Deleted),
         (None, None) => None,
     }
 }

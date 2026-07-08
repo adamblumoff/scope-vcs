@@ -1,8 +1,8 @@
 use crate::domain::policy::Visibility;
-use crate::domain::repo_actions::staged_update_api_error;
+use crate::domain::repo_actions::reviewed_update_api_error;
 use crate::domain::repo_config::is_repo_config_fingerprint;
 use crate::domain::requests::{Request, RequestActorRole, RequestBaseAudience, RequestState};
-use crate::domain::staged_updates::{ReviewedConfigUpdateInput, apply_reviewed_config_to_repo};
+use crate::domain::reviewed_updates::{ReviewedConfigUpdateInput, apply_reviewed_config_to_repo};
 use crate::domain::store::{RepositoryAccess, RepositoryActor};
 use crate::{
     auth::{
@@ -184,9 +184,9 @@ pub(crate) async fn create_push_intent(
         ));
     }
 
-    if repo.has_pending_import_review() || repo.staged_update.is_some() {
+    if repo.has_pending_import_review() {
         return Err(ApiError::conflict(
-            "repo has stale pending push state; retry after cleanup",
+            "repo has a pending import review; publish it before creating a push intent",
         ));
     }
 
@@ -303,7 +303,7 @@ pub(crate) async fn complete_push_intent(
                 repo,
                 ReviewedConfigUpdateInput { author_id, config },
             )
-            .map_err(staged_update_api_error)?;
+            .map_err(reviewed_update_api_error)?;
             Ok(RepositoryMutation::new(changed))
         })?;
     if config_applied {

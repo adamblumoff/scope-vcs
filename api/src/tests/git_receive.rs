@@ -1,51 +1,52 @@
 use super::*;
 
 #[test]
-fn receive_pack_stages_owner_update_without_changing_live_tree() {
-    let mut repo = repo_with_readme();
-    let staged = stage_receive_pack_update(
-        &mut repo,
-        receive_pack_update(vec![("/README.md", Some("staged readme"))]),
-    )
-    .unwrap()
-    .unwrap();
-
-    assert_eq!(staged.branch, format!("refs/heads/{DEFAULT_GIT_BRANCH}"));
-    assert!(repo.staged_update.is_some());
-    assert_eq!(
-        repo.live_tree()
-            .get(&ScopePath::parse("/README.md").unwrap())
-            .map(blob_content)
-            .as_deref(),
-        Some("hello")
-    );
-}
-
-#[test]
 fn receive_pack_same_content_with_new_object_key_is_noop() {
-    let mut repo = repo_with_readme();
+    let state = test_state_with_repo();
+    {
+        let mut catalog = lock_catalog(&state).unwrap();
+        catalog
+            .repositories
+            .insert(TEST_REPO_ID.to_string(), repo_with_readme());
+    }
     let readme = ScopePath::parse("/README.md").unwrap();
-    let live = repo.live_tree();
+    let live = find_repo(&state, TEST_REPO_OWNER, TEST_REPO_NAME)
+        .unwrap()
+        .live_tree();
     let live_blob = live.get(&readme).unwrap();
     let update = receive_pack_update(vec![("/README.md", Some("hello"))]);
     let update_blob = update.changes[0].content.as_ref().unwrap();
     assert_ne!(live_blob.object_key, update_blob.object_key);
 
-    let error = stage_receive_pack_update(&mut repo, update).unwrap_err();
+    let error =
+        persist_receive_pack_update(&state, TEST_REPO_OWNER, TEST_REPO_NAME, update).unwrap_err();
 
     assert_eq!(error.status, StatusCode::BAD_REQUEST);
     assert!(error.message.contains("did not change"));
 }
 
 #[test]
-fn receive_pack_same_content_with_new_mode_is_staged_update() {
-    let mut repo = repo_with_readme();
+fn receive_pack_same_content_with_new_mode_applies_mode_change() {
+    let state = test_state_with_repo();
+    {
+        let mut catalog = lock_catalog(&state).unwrap();
+        catalog
+            .repositories
+            .insert(TEST_REPO_ID.to_string(), repo_with_readme());
+    }
     let readme = ScopePath::parse("/README.md").unwrap();
-    let mut executable_blob = repo.live_tree().get(&readme).unwrap().clone();
+    let mut executable_blob = find_repo(&state, TEST_REPO_OWNER, TEST_REPO_NAME)
+        .unwrap()
+        .live_tree()
+        .get(&readme)
+        .unwrap()
+        .clone();
     executable_blob.git_file_mode = EXECUTABLE_GIT_FILE_MODE.to_string();
 
-    let staged = stage_receive_pack_update(
-        &mut repo,
+    persist_receive_pack_update(
+        &state,
+        TEST_REPO_OWNER,
+        TEST_REPO_NAME,
         ReceivePackUpdate {
             branch: format!("refs/heads/{DEFAULT_GIT_BRANCH}"),
             head_oid: TEST_PUSH_HEAD_OID.to_string(),
@@ -63,23 +64,13 @@ fn receive_pack_same_content_with_new_mode_is_staged_update() {
             }],
         },
     )
-    .unwrap()
     .unwrap();
 
-    assert_eq!(staged.changes.len(), 1);
-    assert_eq!(staged.changes[0].path, readme);
     assert_eq!(
-        staged.changes[0]
-            .old_content
-            .as_ref()
+        find_repo(&state, TEST_REPO_OWNER, TEST_REPO_NAME)
             .unwrap()
-            .git_file_mode,
-        DEFAULT_GIT_FILE_MODE
-    );
-    assert_eq!(
-        staged.changes[0]
-            .new_content
-            .as_ref()
+            .live_tree()
+            .get(&readme)
             .unwrap()
             .git_file_mode,
         EXECUTABLE_GIT_FILE_MODE
@@ -152,7 +143,6 @@ fn published_receive_pack_push_applies_from_seeded_git_repo() {
     assert_eq!(update.uploaded_blobs.len(), 2);
     persist_receive_pack_update(&state, TEST_REPO_OWNER, TEST_REPO_NAME, update).unwrap();
     let repo = find_repo(&state, TEST_REPO_OWNER, TEST_REPO_NAME).unwrap();
-    assert!(repo.staged_update.is_none());
     assert_eq!(
         repo.live_tree()
             .get(&ScopePath::parse("/README.md").unwrap())
@@ -309,18 +299,18 @@ fn published_receive_pack_rejects_non_fast_forward_push() {
 }
 
 #[test]
-fn review_off_receive_pack_applies_immediately() {
-    let mut repo = repo_with_readme();
-    repo.settings.review_pushes_before_applying = false;
+fn receive_pack_applies_even_when_review_setting_is_enabled() {
+    let state = test_state_with_repo();
 
-    let staged = stage_receive_pack_update(
-        &mut repo,
+    persist_receive_pack_update(
+        &state,
+        TEST_REPO_OWNER,
+        TEST_REPO_NAME,
         receive_pack_update(vec![("/README.md", Some("live now"))]),
     )
     .unwrap();
 
-    assert!(staged.is_none());
-    assert!(repo.staged_update.is_none());
+    let repo = find_repo(&state, TEST_REPO_OWNER, TEST_REPO_NAME).unwrap();
     assert_eq!(
         repo.live_tree()
             .get(&ScopePath::parse("/README.md").unwrap())
@@ -331,13 +321,12 @@ fn review_off_receive_pack_applies_immediately() {
 }
 
 #[test]
-fn permission_forced_staged_push_keeps_content_when_review_is_off() {
+fn push_only_member_can_apply_content_without_visibility_changes() {
     let state = test_state_with_repo();
     let member_id = "user_push_only";
     {
         let mut catalog = lock_catalog(&state).unwrap();
         let mut repo = repo_with_readme();
-        repo.settings.review_pushes_before_applying = false;
         repo.members.push(test_repository_member(
             TEST_REPO_ID,
             member_id,
@@ -357,7 +346,6 @@ fn permission_forced_staged_push_keeps_content_when_review_is_off() {
 
     assert_eq!(persisted, PersistedReceivePackUpdate::Applied);
     let repo = find_repo(&state, TEST_REPO_OWNER, TEST_REPO_NAME).unwrap();
-    assert!(repo.staged_update.is_none());
     assert_eq!(
         repo.live_tree()
             .get(&ScopePath::parse("/README.md").unwrap())
@@ -399,7 +387,6 @@ fn published_push_rechecks_member_permission_before_persisting() {
 
     assert_eq!(error.status, StatusCode::FORBIDDEN);
     let repo = find_repo(&state, TEST_REPO_OWNER, TEST_REPO_NAME).unwrap();
-    assert!(repo.staged_update.is_none());
     assert_eq!(
         repo.live_tree()
             .get(&ScopePath::parse("/README.md").unwrap())
@@ -410,176 +397,20 @@ fn published_push_rechecks_member_permission_before_persisting() {
 }
 
 #[test]
-fn staged_new_private_file_stays_out_of_public_projection() {
-    let mut repo = repo_with_readme();
-    let mut staged = stage_receive_pack_update(
-        &mut repo,
-        receive_pack_update(vec![("/secret-plan.md", Some("private"))]),
-    )
-    .unwrap()
-    .unwrap();
-    staged.changes[0].visibility = Visibility::Private;
-
-    apply_staged_update_to_repo(&mut repo, staged).unwrap();
-
-    let public_projection = project_graph(
-        &repo.policy,
-        &repo.graph,
-        &repo.visibility_events,
-        ProjectionViewKey::Public,
-    );
-    assert!(
-        !public_projection
-            .visible_paths()
-            .contains(&"/secret-plan.md".to_string())
-    );
-    let private_projection = project_graph(
-        &repo.policy,
-        &repo.graph,
-        &repo.visibility_events,
-        ProjectionViewKey::Private,
-    );
-    assert!(
-        private_projection
-            .visible_paths()
-            .contains(&"/secret-plan.md".to_string())
-    );
-}
-
-#[test]
-fn staged_new_file_inherits_private_parent_visibility() {
-    let mut repo = repo_with_readme();
-    repo.policy
-        .add_rule(VisibilityRule::private(
-            ScopePath::parse("/private").unwrap(),
-        ))
-        .unwrap();
-
-    let staged = stage_receive_pack_update(
-        &mut repo,
-        receive_pack_update(vec![("/private/new.txt", Some("private child"))]),
-    )
-    .unwrap()
-    .unwrap();
-
-    assert_eq!(staged.changes[0].visibility, Visibility::Private);
-    apply_staged_update_to_repo(&mut repo, staged).unwrap();
-    let public_projection = project_graph(
-        &repo.policy,
-        &repo.graph,
-        &repo.visibility_events,
-        ProjectionViewKey::Public,
-    );
-    assert!(
-        !public_projection
-            .visible_paths()
-            .contains(&"/private/new.txt".to_string())
-    );
-}
-#[test]
-fn applying_staged_public_to_private_update_keeps_history_and_removes_live_file() {
-    let mut repo = repo_with_readme();
-    let mut staged = stage_receive_pack_update(
-        &mut repo,
-        receive_pack_update(vec![("/README.md", Some("private now"))]),
-    )
-    .unwrap()
-    .unwrap();
-    staged.changes[0].visibility = Visibility::Private;
-
-    apply_staged_update_to_repo(&mut repo, staged).unwrap();
-
-    let projection = project_graph(
-        &repo.policy,
-        &repo.graph,
-        &repo.visibility_events,
-        ProjectionViewKey::Public,
-    );
-    assert!(
-        projection
-            .commits
-            .iter()
-            .flat_map(|commit| commit.changes.iter())
-            .any(|change| change.path.as_str() == "/README.md" && change.new_content.is_some())
-    );
-    assert!(
-        !projection
-            .visible_paths()
-            .contains(&"/README.md".to_string())
-    );
-}
-
-#[test]
-fn applying_staged_public_delete_marked_private_removes_file_from_public_projection() {
-    let mut repo = repo_with_readme();
-    let mut staged =
-        stage_receive_pack_update(&mut repo, receive_pack_update(vec![("/README.md", None)]))
-            .unwrap()
-            .unwrap();
-    staged.changes[0].visibility = Visibility::Private;
-
-    apply_staged_update_to_repo(&mut repo, staged).unwrap();
-
-    let projection = project_graph(
-        &repo.policy,
-        &repo.graph,
-        &repo.visibility_events,
-        ProjectionViewKey::Public,
-    );
-    let last_commit = projection.commits.last().unwrap();
-    assert!(
-        last_commit
-            .changes
-            .iter()
-            .any(|change| { change.path.as_str() == "/README.md" && change.new_content.is_none() })
-    );
-}
-
-#[test]
-fn applying_staged_private_delete_marked_public_stays_out_of_public_projection() {
-    let mut repo = repo_with_readme();
-    repo.graph.commits[0].changes[0].visibility = Visibility::Private;
-    repo.policy
-        .add_rule(VisibilityRule::private(
-            ScopePath::parse("/README.md").unwrap(),
-        ))
-        .unwrap();
-    let mut staged =
-        stage_receive_pack_update(&mut repo, receive_pack_update(vec![("/README.md", None)]))
-            .unwrap()
-            .unwrap();
-    staged.changes[0].visibility = Visibility::Public;
-
-    apply_staged_update_to_repo(&mut repo, staged).unwrap();
-
-    let projection = project_graph(
-        &repo.policy,
-        &repo.graph,
-        &repo.visibility_events,
-        ProjectionViewKey::Public,
-    );
-    assert!(
-        projection
-            .commits
-            .iter()
-            .flat_map(|commit| commit.changes.iter())
-            .all(|change| change.path.as_str() != "/README.md")
-    );
-}
-
-#[test]
 fn receive_pack_rejects_non_default_branches_and_tags() {
-    let mut repo = repo_with_readme();
+    let state = test_state_with_repo();
     let mut feature = receive_pack_update(vec![("/README.md", Some("feature"))]);
     feature.branch = "refs/heads/feature".to_string();
 
-    let error = stage_receive_pack_update(&mut repo, feature).unwrap_err();
+    let error =
+        persist_receive_pack_update(&state, TEST_REPO_OWNER, TEST_REPO_NAME, feature).unwrap_err();
     assert_eq!(error.status, StatusCode::BAD_REQUEST);
 
     let mut tag = receive_pack_update(vec![("/README.md", Some("tag"))]);
     tag.branch = "refs/tags/v1".to_string();
 
-    let error = stage_receive_pack_update(&mut repo, tag).unwrap_err();
+    let error =
+        persist_receive_pack_update(&state, TEST_REPO_OWNER, TEST_REPO_NAME, tag).unwrap_err();
     assert_eq!(error.status, StatusCode::BAD_REQUEST);
 }
 
