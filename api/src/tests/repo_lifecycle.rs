@@ -1,4 +1,7 @@
 use super::*;
+use crate::domain::requests::{
+    RequestActorRole, RequestBaseAudience, SubmitRequestInput, canonical_request_ref,
+};
 
 #[test]
 fn test_state_starts_without_repositories() {
@@ -33,7 +36,12 @@ async fn create_repo_route_creates_user_and_lists_repo() {
     assert_eq!(body["repo"]["lifecycle_state"], "Unpublished");
     assert_eq!(body["repo"]["default_visibility"], "Private");
     assert_eq!(body["repo"]["access"]["actor"], "Owner");
-    assert_eq!(body["repo"]["staged_update_pending"], false);
+    assert_eq!(body["repo"]["open_request_count"], 0);
+    assert_eq!(
+        body["repo"]["request_permissions"]["uses_credit_stake"],
+        false
+    );
+    assert!(body["repo"].get("staged_update_pending").is_none());
     assert_eq!(
         body["init"]["git_remote_url"],
         "http://localhost:8080/git/permissioned/owner/scope_app"
@@ -392,7 +400,7 @@ fn db_metadata_worker_rebuilds_projection_read_models_from_outbox() {
 }
 
 #[tokio::test]
-async fn list_repos_marks_published_repo_with_staged_update() {
+async fn list_repos_returns_request_summary_fields_without_staged_update_state() {
     let state = test_state_with_repo();
     cache_test_jwks(&state);
     {
@@ -441,7 +449,9 @@ async fn list_repos_marks_published_repo_with_staged_update() {
     let body = response_json(response).await;
     assert_eq!(body[0]["id"], TEST_REPO_ID);
     assert_eq!(body[0]["lifecycle_state"], "Published");
-    assert_eq!(body[0]["staged_update_pending"], true);
+    assert_eq!(body[0]["open_request_count"], 0);
+    assert_eq!(body[0]["request_permissions"]["uses_credit_stake"], false);
+    assert!(body[0].get("staged_update_pending").is_none());
 }
 
 #[tokio::test]
@@ -543,6 +553,79 @@ async fn member_management_hides_private_repo_from_unrelated_users() {
         .unwrap();
 
     assert_eq!(response.status(), StatusCode::NOT_FOUND);
+}
+
+#[tokio::test]
+async fn accept_invite_returns_open_request_count() {
+    let state = test_state_with_repo();
+    cache_test_jwks(&state);
+    state
+        .metadata
+        .submit_request(SubmitRequestInput {
+            id: "req_invite_count".to_string(),
+            repo_id: TEST_REPO_ID.to_string(),
+            author_user_id: test_owner_id(),
+            author_role: RequestActorRole::Owner,
+            base_audience: RequestBaseAudience::Private,
+            target_branch: DEFAULT_GIT_BRANCH.to_string(),
+            request_ref: canonical_request_ref("req_invite_count"),
+            base_main_oid: "base_main".to_string(),
+            head_oid: "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb".to_string(),
+            title: "Open owner request".to_string(),
+            stake_credits: 0,
+            stake_ledger_entry_id: None,
+            event_id: "event_invite_count_created".to_string(),
+            now_unix: 2,
+        })
+        .unwrap();
+    let app = router(state);
+    let invited_email = "invitee@example.com";
+    let create_response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/v1/repos/owner/repo/invites")
+                .header(AUTHORIZATION, bearer_header())
+                .header(CONTENT_TYPE, "application/json")
+                .body(Body::from(format!(
+                    r#"{{
+                        "email":"{invited_email}",
+                        "permissions":{{
+                            "can_push":false,
+                            "can_change_file_visibility":false,
+                            "can_apply_changes":false
+                        }}
+                    }}"#
+                )))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(create_response.status(), StatusCode::OK);
+    let create_body = response_json(create_response).await;
+    let invite_url = create_body["invite_url"].as_str().unwrap();
+    let token = invite_url.rsplit('/').next().unwrap();
+
+    let accept_response = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri(format!("/v1/repository-invites/{token}/accept"))
+                .header(
+                    AUTHORIZATION,
+                    bearer_header_for("user_invitee", invited_email),
+                )
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(accept_response.status(), StatusCode::OK);
+    let body = response_json(accept_response).await;
+    assert_eq!(body["repo"]["access"]["actor"], "Member");
+    assert_eq!(body["repo"]["open_request_count"], 1);
 }
 
 #[tokio::test]

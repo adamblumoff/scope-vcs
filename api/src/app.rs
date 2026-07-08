@@ -97,6 +97,34 @@ pub fn router(state: AppState) -> Router {
             get(http::repos::get_files),
         )
         .route(
+            "/v1/repos/{owner}/{repo}/requests",
+            get(http::requests::list_requests).post(http::requests::submit_request),
+        )
+        .route(
+            "/v1/repos/{owner}/{repo}/requests/{request_id}",
+            get(http::requests::get_request),
+        )
+        .route(
+            "/v1/repos/{owner}/{repo}/requests/{request_id}/comments",
+            post(http::requests::comment_request),
+        )
+        .route(
+            "/v1/repos/{owner}/{repo}/requests/{request_id}/needs-response",
+            post(http::requests::mark_needs_response),
+        )
+        .route(
+            "/v1/repos/{owner}/{repo}/requests/{request_id}/respond",
+            post(http::requests::respond_to_request),
+        )
+        .route(
+            "/v1/repos/{owner}/{repo}/requests/{request_id}/resolve",
+            post(http::requests::resolve_request),
+        )
+        .route(
+            "/v1/repos/{owner}/{repo}/requests/{request_id}/merge",
+            post(http::requests::merge_request),
+        )
+        .route(
             "/v1/repos/{owner}/{repo}/events",
             get(http::repo_events::repo_events),
         )

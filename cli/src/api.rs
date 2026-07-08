@@ -147,8 +147,6 @@ pub struct RepoSummaryResponse {
     pub lifecycle_state: RepoPublicationState,
     pub access: RepositoryAccessResponse,
     pub pending_import_pending: bool,
-    pub staged_update_pending: bool,
-    pub push_blocked_by_staged_update: bool,
 }
 
 #[derive(Deserialize)]

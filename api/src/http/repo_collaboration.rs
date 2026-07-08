@@ -1,5 +1,9 @@
-use crate::domain::store::{
-    RepositoryInvite, RepositoryInviteState, RepositoryMember, StoredRepository, UserAccount,
+use crate::domain::{
+    requests::{Request, RequestActorRole, RequestBaseAudience, RequestState},
+    store::{
+        RepositoryAccess, RepositoryActor, RepositoryInvite, RepositoryInviteState,
+        RepositoryMember, StoredRepository, UserAccount,
+    },
 };
 use crate::{
     auth::{
@@ -188,7 +192,9 @@ pub(crate) async fn accept_repository_invite(
         .metadata
         .accept_repository_invite(&token_hash, user.clone(), now)?;
     state.publish_repo_change(&repo.record.id, repo.record.change_version, "member-added");
-    let summary = repo_summary_for_user(&repo, &user.id)
+    let open_request_count =
+        open_request_count_for_access(&state, &repo, repo.access_for_user_id(&user.id))?;
+    let summary = repo_summary_for_user(&repo, &user.id, open_request_count)
         .ok_or_else(|| ApiError::internal_message("accepted invite member cannot read repo"))?;
     Ok(Json(AcceptRepositoryInviteResponse {
         repo: summary,
@@ -245,6 +251,31 @@ fn ensure_invite_can_be_used(invite: &RepositoryInvite, now_unix: u64) -> Result
         return Err(ApiError::conflict("repository invite expired"));
     }
     Ok(())
+}
+
+fn open_request_count_for_access(
+    state: &AppState,
+    repo: &StoredRepository,
+    access: RepositoryAccess,
+) -> Result<usize, ApiError> {
+    Ok(state
+        .metadata
+        .requests_by_repo_id(&repo.record.id)?
+        .into_iter()
+        .filter(|request| request_counts_for_access(request, access))
+        .count())
+}
+
+fn request_counts_for_access(request: &Request, access: RepositoryAccess) -> bool {
+    if matches!(
+        request.state,
+        RequestState::Resolved | RequestState::Withdrawn
+    ) {
+        return false;
+    }
+    access.actor != RepositoryActor::Public
+        || (request.author_role == RequestActorRole::Public
+            && request.base_audience == RequestBaseAudience::Public)
 }
 
 fn member_response_for_user(

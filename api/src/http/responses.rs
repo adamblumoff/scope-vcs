@@ -1,8 +1,10 @@
 mod projections;
 mod repo_collaboration;
+mod requests;
 
 pub(crate) use projections::*;
 pub(crate) use repo_collaboration::*;
+pub(crate) use requests::*;
 
 use crate::domain::commit_history::{CommitHistoryCommit, CommitHistoryView};
 use crate::domain::policy::{ScopePath, Visibility};
@@ -199,8 +201,8 @@ pub(crate) struct RepoSummaryResponse {
     pub(crate) change_version: u64,
     pub(crate) access: RepositoryAccessResponse,
     pub(crate) pending_import_pending: bool,
-    pub(crate) staged_update_pending: bool,
-    pub(crate) push_blocked_by_staged_update: bool,
+    pub(crate) open_request_count: usize,
+    pub(crate) request_permissions: RepoRequestPermissionsResponse,
 }
 
 #[derive(Debug, Serialize)]
@@ -379,6 +381,7 @@ pub(crate) struct CreateRepoRequest {
 pub(crate) fn repo_summary_for_user(
     repo: &StoredRepository,
     user_id: &str,
+    open_request_count: usize,
 ) -> Option<RepoSummaryResponse> {
     let access = repo.access_for_user_id(user_id);
     if access.actor == RepositoryActor::Public {
@@ -403,13 +406,18 @@ pub(crate) fn repo_summary_for_user(
         change_version: repo_change_version_for_access(repo, access),
         access: repository_access_response(access),
         pending_import_pending: repo.has_pending_import_review(),
-        staged_update_pending: can_review_staged_update(access) && repo.staged_update.is_some(),
-        push_blocked_by_staged_update: access.can_push && repo.staged_update.is_some(),
+        open_request_count,
+        request_permissions: repo_request_permissions_response(access),
     })
 }
 
-pub(crate) fn can_review_staged_update(access: RepositoryAccess) -> bool {
-    access.can_apply_changes || access.can_change_file_visibility
+pub(crate) fn repo_request_permissions_response(
+    access: RepositoryAccess,
+) -> RepoRequestPermissionsResponse {
+    RepoRequestPermissionsResponse {
+        can_submit_request: true,
+        uses_credit_stake: access.actor == RepositoryActor::Public,
+    }
 }
 
 pub(crate) fn repo_change_version_for_access(
@@ -461,7 +469,7 @@ pub(crate) fn repo_init_response(
     push_secret: Option<String>,
 ) -> Result<RepoInitResponse, ApiError> {
     ensure_repo_init_access(repo, user_id)?;
-    let repo_summary = repo_summary_for_user(repo, user_id)
+    let repo_summary = repo_summary_for_user(repo, user_id, 0)
         .ok_or_else(|| ApiError::internal_message("init repository is not readable"))?;
     let token = repo
         .first_push_token

@@ -1,8 +1,9 @@
 use crate::domain::policy::Visibility;
 use crate::domain::repo_actions::staged_update_api_error;
 use crate::domain::repo_config::is_repo_config_fingerprint;
+use crate::domain::requests::{Request, RequestActorRole, RequestBaseAudience, RequestState};
 use crate::domain::staged_updates::{ReviewedConfigUpdateInput, apply_reviewed_config_to_repo};
-use crate::domain::store::RepositoryActor;
+use crate::domain::store::{RepositoryAccess, RepositoryActor};
 use crate::{
     auth::{
         scope::{
@@ -40,8 +41,8 @@ pub(crate) async fn list_repos(
         .metadata
         .repo_summaries_for_user(&user_id)?
         .into_iter()
-        .map(repo_summary_response)
-        .collect::<Vec<_>>();
+        .map(|summary| repo_summary_response(&state, summary))
+        .collect::<Result<Vec<_>, _>>()?;
     repositories.sort_by(|left, right| left.id.cmp(&right.id));
 
     Ok(Json(repositories))
@@ -72,7 +73,7 @@ pub(crate) async fn create_repo(
     )?;
 
     let user_id = user.id.clone();
-    let summary = repo_summary_for_user(&repo, &user_id)
+    let summary = repo_summary_for_user(&repo, &user_id, 0)
         .ok_or_else(|| ApiError::internal_message("created repository is missing owner role"))?;
     let init = repo_init_response(
         &repo,
@@ -106,7 +107,7 @@ pub(crate) async fn get_repo(
         )?
         .ok_or_else(|| ApiError::not_found(format!("repo {owner}/{repo_name} not found")))?;
 
-    Ok(Json(repo_summary_response(summary)))
+    Ok(Json(repo_summary_response(&state, summary)?))
 }
 
 pub(crate) async fn delete_repo(
@@ -390,8 +391,18 @@ pub(crate) async fn get_files(
     Ok(Json(projection_file_responses(files)))
 }
 
-fn repo_summary_response(summary: RepoSummaryRead) -> RepoSummaryResponse {
-    RepoSummaryResponse {
+fn repo_summary_response(
+    state: &AppState,
+    summary: RepoSummaryRead,
+) -> Result<RepoSummaryResponse, ApiError> {
+    let open_request_count = state
+        .metadata
+        .requests_by_repo_id(&summary.id)?
+        .into_iter()
+        .filter(|request| request_visible_in_summary(request, summary.access))
+        .count();
+    let request_permissions = repo_request_permissions_response(summary.access);
+    Ok(RepoSummaryResponse {
         id: summary.id,
         owner_handle: summary.owner_handle,
         name: summary.name,
@@ -400,7 +411,23 @@ fn repo_summary_response(summary: RepoSummaryRead) -> RepoSummaryResponse {
         change_version: summary.change_version,
         access: repository_access_response(summary.access),
         pending_import_pending: summary.pending_import_pending,
-        staged_update_pending: summary.staged_update_pending,
-        push_blocked_by_staged_update: summary.push_blocked_by_staged_update,
+        open_request_count,
+        request_permissions,
+    })
+}
+
+fn request_visible_in_summary(request: &Request, access: RepositoryAccess) -> bool {
+    if matches!(
+        request.state,
+        RequestState::Resolved | RequestState::Withdrawn
+    ) {
+        return false;
+    }
+    match access.actor {
+        RepositoryActor::Owner | RepositoryActor::Member => true,
+        RepositoryActor::Public => {
+            request.author_role == RequestActorRole::Public
+                && request.base_audience == RequestBaseAudience::Public
+        }
     }
 }
