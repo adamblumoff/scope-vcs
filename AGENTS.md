@@ -12,7 +12,7 @@ Testing code should be seperate from source code, only combine if you have a goo
 
 Please don't use cards for ui, only use them if absolutely necessary.
 
-No file should be over 1000 lines of code, at that point do an audit of the file and modularize.
+Once you approach around 1000 LOC in a single file, do an audit of the file and modularize accordingly unless there is a good justification. 
 
 In general, I trust you with refactors as they don't effect the behavior of the application. However, on behavior making changes I want to be very involved and make sure we go slow and methodically. 
 

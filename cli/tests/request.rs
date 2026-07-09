@@ -42,9 +42,13 @@ fn request_help_exposes_branch_backed_commands() {
     assert_success(&output, "scope request --help");
     let stdout = String::from_utf8_lossy(&output.stdout);
     assert!(stdout.contains("start"), "{stdout}");
+    assert!(stdout.contains("join"), "{stdout}");
     assert!(stdout.contains("submit"), "{stdout}");
-    assert!(stdout.contains("update"), "{stdout}");
-    assert!(stdout.contains("sync"), "{stdout}");
+    assert!(stdout.contains("pull"), "{stdout}");
+    assert!(stdout.contains("push"), "{stdout}");
+    assert!(stdout.contains("sync-main"), "{stdout}");
+    assert!(stdout.contains("delete"), "{stdout}");
+    assert!(stdout.contains("share"), "{stdout}");
     assert!(stdout.contains("status"), "{stdout}");
     assert!(stdout.contains("comment"), "{stdout}");
     assert!(stdout.contains("needs-response"), "{stdout}");
@@ -54,7 +58,7 @@ fn request_help_exposes_branch_backed_commands() {
 }
 
 #[test]
-fn request_submit_help_exposes_title_and_stake() {
+fn request_submit_help_exposes_stake() {
     let output = Command::new(env!("CARGO_BIN_EXE_scope"))
         .args(["request", "submit", "--help"])
         .output()
@@ -62,7 +66,7 @@ fn request_submit_help_exposes_title_and_stake() {
 
     assert_success(&output, "scope request submit --help");
     let stdout = String::from_utf8_lossy(&output.stdout);
-    assert!(stdout.contains("--title <TITLE>"), "{stdout}");
+    assert!(!stdout.contains("--title <TITLE>"), "{stdout}");
     assert!(
         stdout.contains("--stake-credits <STAKE_CREDITS>"),
         "{stdout}"
@@ -74,7 +78,7 @@ fn request_submit_help_exposes_title_and_stake() {
 fn request_start_refuses_non_git_directory_before_login() {
     let dir = TempDir::new("non-git");
     let output = scope_command(dir.path())
-        .args(["request", "start"])
+        .args(["request", "start", "--title", "Example"])
         .output()
         .unwrap();
 
@@ -94,14 +98,14 @@ fn request_sync_refuses_dirty_worktree_before_login() {
     fs::write(dir.path().join("dirty.txt"), "uncommitted\n").unwrap();
 
     let output = scope_command(dir.path())
-        .args(["request", "sync"])
+        .args(["request", "sync-main"])
         .output()
         .unwrap();
 
-    assert_failure(&output, "scope request sync with dirty worktree");
+    assert_failure(&output, "scope request sync-main with dirty worktree");
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(
-        stderr.contains("commit or stash local changes before running scope request sync"),
+        stderr.contains("commit or stash local changes before running scope request sync-main"),
         "{stderr}"
     );
     assert!(!stderr.contains("start browser login"), "{stderr}");
@@ -113,51 +117,33 @@ fn request_sync_refuses_unattached_branch_before_login() {
     create_repo_with_head(dir.path());
 
     let output = scope_command(dir.path())
-        .args(["request", "sync"])
+        .args(["request", "sync-main"])
         .output()
         .unwrap();
 
-    assert_failure(&output, "scope request sync on non-request branch");
+    assert_failure(&output, "scope request sync-main on non-request branch");
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(
-        stderr.contains("scope request sync requires a Scope request branch"),
+        stderr.contains("scope request sync-main requires a Scope request branch"),
         "{stderr}"
     );
     assert!(!stderr.contains("start browser login"), "{stderr}");
 }
 
 #[test]
-fn request_submit_refuses_branch_already_attached_to_request_before_login() {
-    let dir = TempDir::new("attached");
+fn request_submit_refuses_unattached_branch_before_login() {
+    let dir = TempDir::new("submit-unattached");
     create_repo_with_head(dir.path());
-    run_git(
-        dir.path(),
-        [
-            "config",
-            "--local",
-            "branch.main.scopeRequestId",
-            "req_existing",
-        ],
-    );
 
     let output = scope_command(dir.path())
-        .args([
-            "request",
-            "submit",
-            "--title",
-            "second submit",
-            "--stake-credits",
-            "1",
-        ])
+        .args(["request", "submit", "--stake-credits", "1"])
         .output()
         .unwrap();
 
-    assert_failure(&output, "scope request submit on attached branch");
+    assert_failure(&output, "scope request submit on unattached branch");
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(
-        stderr.contains(
-            "current branch is already attached to request req_existing; run scope request update req_existing instead"
-        ),
+        stderr.contains("scope request submit requires a Scope request branch"),
         "{stderr}"
     );
     assert!(!stderr.contains("start browser login"), "{stderr}");
@@ -170,14 +156,7 @@ fn request_submit_refuses_detached_head_before_login() {
     run_git(dir.path(), ["checkout", "--detach"]);
 
     let output = scope_command(dir.path())
-        .args([
-            "request",
-            "submit",
-            "--title",
-            "detached submit",
-            "--stake-credits",
-            "1",
-        ])
+        .args(["request", "submit", "--stake-credits", "1"])
         .output()
         .unwrap();
 

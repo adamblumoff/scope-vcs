@@ -25,6 +25,7 @@ mod repo_mutation;
 mod repo_reads;
 mod repo_settings;
 mod repository_rows;
+mod request_access;
 mod request_merges;
 mod request_rows;
 mod requests;

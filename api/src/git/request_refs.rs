@@ -4,7 +4,7 @@ use crate::{
     domain::{
         projection::{ProjectionViewKey, project_graph},
         requests::{
-            REQUEST_REF_PREFIX, RecordRequestRevisionInput, RecordReservedRequestUploadInput,
+            REQUEST_REF_PREFIX, RecordRequestRevisionInput, RecordWorkingRequestUploadInput,
             Request, RequestActorRole, RequestBaseAudience, RequestState,
         },
         store::{RepoPublicationState, RepositoryActor, SourceBlob},
@@ -14,6 +14,7 @@ use crate::{
         import::{
             git_snapshot_from_ref, run_git, run_git_output, safe_repo_key, validate_pushed_tree,
         },
+        request_ref_public_safety::ensure_public_request_ref_is_public_safe,
         storage::{
             cached_raw_git_snapshot_repo, git_repo_storage_root, receive_pack_staging_repo_path,
             remove_dir_if_exists, request_ref_store_repo_path, write_receive_pack_hook,
@@ -114,24 +115,24 @@ pub(crate) fn non_request_refs_changed(
         .any(|refname| before.get(refname) != after.get(refname))
 }
 
-pub(crate) fn author_has_open_request(
+pub(crate) fn actor_has_open_editable_request(
     state: &AppState,
     repo_id: &str,
-    author_id: &str,
+    actor_user_id: &str,
     current_actor: RepositoryActor,
 ) -> Result<bool, ApiError> {
     Ok(state
         .metadata
-        .requests_by_repo_author(repo_id, author_id)?
+        .requests_by_repo_id(repo_id)?
         .into_iter()
-        .any(|request| request_is_open_for_current_actor(&request, current_actor)))
+        .any(|request| request_actor_can_edit_ref(&request, actor_user_id, current_actor)))
 }
 
 pub(crate) fn ensure_request_receive_pack_staging_repo(
     state: &AppState,
     owner: &str,
     repo_name: &str,
-    author_id: &str,
+    actor_user_id: &str,
 ) -> Result<PathBuf, ApiError> {
     let repo = find_repo(state, owner, repo_name)?;
     if repo.record.publication_state != RepoPublicationState::Published {
@@ -139,9 +140,9 @@ pub(crate) fn ensure_request_receive_pack_staging_repo(
             "repo {owner}/{repo_name} not found"
         )));
     }
-    let access = repo.access_for_user_id(author_id);
+    let access = repo.access_for_user_id(actor_user_id);
     if access.actor == RepositoryActor::Public
-        && !author_has_open_request(state, &repo.record.id, author_id, access.actor)?
+        && !actor_has_open_editable_request(state, &repo.record.id, actor_user_id, access.actor)?
     {
         return Err(ApiError::not_found(format!(
             "repo {owner}/{repo_name} not found"
@@ -162,7 +163,7 @@ pub(crate) fn ensure_request_receive_pack_staging_repo(
             if let Some(snapshot) = repo.git_snapshot.as_ref() {
                 cached_raw_git_snapshot_repo(state, snapshot)?
             } else {
-                let principal = principal_for_user_id(&repo, author_id);
+                let principal = principal_for_user_id(&repo, actor_user_id);
                 let projection = project_graph(
                     &repo.policy,
                     &repo.graph,
@@ -195,7 +196,7 @@ pub(crate) fn ensure_request_receive_pack_staging_repo(
             &["config", "http.receivepack", "true"],
             "enabling request receive-pack",
         )?;
-        seed_author_request_refs(state, owner, repo_name, author_id, &repo_root)?;
+        seed_editable_request_refs(state, owner, repo_name, actor_user_id, &repo_root)?;
         install_request_pre_receive_hook(&repo_root)
     })();
     if let Err(error) = setup_result {
@@ -205,20 +206,20 @@ pub(crate) fn ensure_request_receive_pack_staging_repo(
     Ok(repo_root)
 }
 
-pub(crate) fn seed_author_request_refs(
+pub(crate) fn seed_editable_request_refs(
     state: &AppState,
     owner: &str,
     repo_name: &str,
-    author_id: &str,
+    actor_user_id: &str,
     staging_repo: &FsPath,
 ) -> Result<(), ApiError> {
     let repo = find_repo(state, owner, repo_name)?;
-    let access = repo.access_for_user_id(author_id);
+    let access = repo.access_for_user_id(actor_user_id);
     let requests = state
         .metadata
-        .requests_by_repo_author(&repo.record.id, author_id)?
+        .requests_by_repo_id(&repo.record.id)?
         .into_iter()
-        .filter(|request| request_is_open_for_current_actor(request, access.actor))
+        .filter(|request| request_actor_can_edit_ref(request, actor_user_id, access.actor))
         .collect::<Vec<_>>();
     let has_durable_request_ref = requests
         .iter()
@@ -235,8 +236,7 @@ pub(crate) fn seed_author_request_refs(
             continue;
         };
         if request.repo_id != repo.record.id
-            || request.author_user_id != author_id
-            || !request_is_open_for_current_actor(&request, access.actor)
+            || !request_actor_can_edit_ref(&request, actor_user_id, access.actor)
         {
             continue;
         }
@@ -263,21 +263,23 @@ pub(crate) fn persist_request_ref_revision(
     state: &AppState,
     owner: &str,
     repo_name: &str,
-    author_id: &str,
+    actor_user_id: &str,
     staging_repo: &FsPath,
     update: RequestRefUpdate,
 ) -> Result<(), ApiError> {
     let _lock = acquire_request_ref_update_lock(state, owner, repo_name, &update.request_ref)?;
-    let request = ensure_request_ref_update_allowed(state, owner, repo_name, author_id, &update)?;
+    let request =
+        ensure_request_ref_update_allowed(state, owner, repo_name, actor_user_id, &update)?;
     let now_unix = unix_now()?;
     let persisted =
         persist_request_ref_to_store(state, owner, repo_name, staging_repo, &request, &update)?;
-    let mutation_result = if request.state == RequestState::Reserved {
+    let mutation_result = if request.state == RequestState::Working {
         state
             .metadata
-            .record_reserved_request_upload(RecordReservedRequestUploadInput {
+            .record_working_request_upload(RecordWorkingRequestUploadInput {
                 request_id: request.id,
-                actor_user_id: author_id.to_string(),
+                actor_user_id: actor_user_id.to_string(),
+                actor_can_edit: false,
                 expected_old_head_oid: update.old_head_oid.clone(),
                 new_head_oid: update.new_head_oid.clone(),
                 git_snapshot: persisted.git_snapshot.clone(),
@@ -289,7 +291,8 @@ pub(crate) fn persist_request_ref_revision(
             .metadata
             .record_request_revision(RecordRequestRevisionInput {
                 request_id: request.id,
-                actor_user_id: author_id.to_string(),
+                actor_user_id: actor_user_id.to_string(),
+                actor_can_edit: false,
                 expected_old_head_oid: update.old_head_oid.clone(),
                 new_head_oid: update.new_head_oid.clone(),
                 git_snapshot: Some(persisted.git_snapshot.clone()),
@@ -314,6 +317,72 @@ pub(crate) fn persist_request_ref_revision(
         return Err(error);
     }
     crate::state::best_effort_drain_pending_source_blob_deletions(state);
+    Ok(())
+}
+
+pub(crate) fn request_ref_bundle_bytes(
+    state: &AppState,
+    owner: &str,
+    repo_name: &str,
+    request: &Request,
+) -> Result<Vec<u8>, ApiError> {
+    if request.git_snapshot.is_none() {
+        return Err(ApiError::conflict("request branch has not been pushed"));
+    }
+    let _update_lock =
+        acquire_request_ref_update_lock(state, owner, repo_name, &request.request_ref)?;
+    let _store_lock = acquire_request_ref_store_lock(state, owner, repo_name)?;
+    let store_repo = ensure_request_ref_store_repo_locked(state, owner, repo_name)?;
+    ensure_request_ref_available_in_store_locked(state, &store_repo, request)?;
+    let mut hasher = Sha256::new();
+    hasher.update(request.request_ref.as_bytes());
+    hasher.update(request.head_oid.as_bytes());
+    let bundle_path = store_repo.with_extension(format!(
+        "request-{}.bundle.tmp",
+        hex::encode(&hasher.finalize()[..8])
+    ));
+    let result = (|| {
+        let output = run_git_output(
+            Some(&store_repo),
+            &[
+                "bundle",
+                "create",
+                bundle_path.to_string_lossy().as_ref(),
+                &request.request_ref,
+            ],
+            "creating request branch bundle",
+        )?;
+        if !output.status.success() {
+            return Err(ApiError::service_unavailable(format!(
+                "creating request branch bundle: {}",
+                String::from_utf8_lossy(&output.stderr).trim()
+            )));
+        }
+        fs::read(&bundle_path).map_err(ApiError::internal)
+    })();
+    let _ = fs::remove_file(&bundle_path);
+    result
+}
+
+pub(crate) fn delete_request_ref_from_store(
+    state: &AppState,
+    owner: &str,
+    repo_name: &str,
+    request_ref: &str,
+) -> Result<(), ApiError> {
+    let _update_lock = acquire_request_ref_update_lock(state, owner, repo_name, request_ref)?;
+    let store_repo = request_ref_store_repo_path(state, owner, repo_name);
+    if !store_repo.exists() {
+        return Ok(());
+    }
+    let _store_lock = acquire_request_ref_store_lock(state, owner, repo_name)?;
+    if request_ref_exists(&store_repo, request_ref)? {
+        run_git(
+            Some(&store_repo),
+            &["update-ref", "-d", request_ref],
+            "deleting request ref",
+        )?;
+    }
     Ok(())
 }
 
@@ -368,6 +437,23 @@ fn request_is_open_for_current_actor(request: &Request, current_actor: Repositor
     }
 }
 
+fn request_actor_can_edit_ref(
+    request: &Request,
+    actor_user_id: &str,
+    current_actor: RepositoryActor,
+) -> bool {
+    if !request_is_open_for_current_actor(request, current_actor) {
+        return false;
+    }
+    match current_actor {
+        RepositoryActor::Public => {
+            request.author_user_id == actor_user_id
+                || request.editor_user_ids.contains(actor_user_id)
+        }
+        RepositoryActor::Member | RepositoryActor::Owner => true,
+    }
+}
+
 fn install_request_pre_receive_hook(repo_root: &FsPath) -> Result<(), ApiError> {
     let hook = repo_root.join("hooks").join("pre-receive");
     let script = format!(
@@ -380,7 +466,7 @@ fn ensure_request_ref_update_allowed(
     state: &AppState,
     owner: &str,
     repo_name: &str,
-    author_id: &str,
+    actor_user_id: &str,
     update: &RequestRefUpdate,
 ) -> Result<Request, ApiError> {
     let repo = find_repo(state, owner, repo_name)?;
@@ -391,14 +477,17 @@ fn ensure_request_ref_update_allowed(
     if request.repo_id != repo.record.id {
         return Err(ApiError::not_found("request not found"));
     }
-    let current_actor = repo.access_for_user_id(author_id).actor;
+    let current_actor = repo.access_for_user_id(actor_user_id).actor;
     if !request_is_open_for_current_actor(&request, current_actor) {
-        if request_is_closed(&request) && request.author_user_id == author_id {
+        if request_is_closed(&request)
+            && (request.author_user_id == actor_user_id
+                || request.editor_user_ids.contains(actor_user_id))
+        {
             return Err(ApiError::conflict("request is closed"));
         }
         return Err(ApiError::not_found("request not found"));
     }
-    if request.author_user_id != author_id {
+    if !request_actor_can_edit_ref(&request, actor_user_id, current_actor) {
         return Err(ApiError::not_found("request not found"));
     }
     Ok(request)
@@ -419,6 +508,10 @@ fn persist_request_ref_to_store(
 ) -> Result<PersistedRequestRef, ApiError> {
     ensure_request_ref_oid_is_commit(staging_repo, &update.new_head_oid)?;
     validate_pushed_tree(staging_repo, &update.new_head_oid)?;
+    let repo = find_repo(state, owner, repo_name)?;
+    if request.base_audience == RequestBaseAudience::Public {
+        ensure_public_request_ref_is_public_safe(&repo, state, staging_repo, &update.new_head_oid)?;
+    }
     let _store_lock = acquire_request_ref_store_lock(state, owner, repo_name)?;
     let store_repo = ensure_request_ref_store_repo_locked(state, owner, repo_name)?;
     let previous_head = request_ref_head(&store_repo, &update.request_ref)?;
@@ -810,128 +903,4 @@ fn request_revision_event_id() -> Result<String, ApiError> {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn request_ref_store_head_must_match_advertised_old_head() {
-        ensure_request_ref_store_head_matches_push(None, None).unwrap();
-        ensure_request_ref_store_head_matches_push(Some("a"), Some("a")).unwrap();
-
-        let create_error = ensure_request_ref_store_head_matches_push(Some("a"), None).unwrap_err();
-        assert!(create_error.message.contains("fetch and retry"));
-
-        let update_error =
-            ensure_request_ref_store_head_matches_push(Some("b"), Some("a")).unwrap_err();
-        assert!(update_error.message.contains("fetch and retry"));
-
-        let missing_error =
-            ensure_request_ref_store_head_matches_push(None, Some("a")).unwrap_err();
-        assert!(missing_error.message.contains("fetch and retry"));
-    }
-
-    #[test]
-    fn git_lock_with_current_owner_is_not_stale() {
-        let path = temp_lock_path("current-owner");
-        fs::write(
-            &path,
-            format!(
-                "pid={}\ncreated_at_unix={}",
-                std::process::id(),
-                unix_now().unwrap()
-            ),
-        )
-        .unwrap();
-
-        assert!(!git_lock_is_stale(&path).unwrap());
-        let _ = fs::remove_file(path);
-    }
-
-    #[test]
-    fn git_lock_with_old_timestamp_is_stale() {
-        let path = temp_lock_path("old-timestamp");
-        fs::write(
-            &path,
-            format!("pid={}\ncreated_at_unix=1", std::process::id()),
-        )
-        .unwrap();
-
-        assert!(git_lock_is_stale(&path).unwrap());
-        let _ = fs::remove_file(path);
-    }
-
-    #[test]
-    fn request_ref_head_must_be_commit_object_not_annotated_tag() {
-        let repo = temp_repo_path("tag-object");
-        run_git(
-            None,
-            &["init", repo.to_string_lossy().as_ref()],
-            "init test repo",
-        )
-        .unwrap();
-        run_git(
-            Some(&repo),
-            &[
-                "-c",
-                "user.name=Scope Test",
-                "-c",
-                "user.email=scope@example.com",
-                "commit",
-                "--allow-empty",
-                "-m",
-                "initial",
-            ],
-            "create test commit",
-        )
-        .unwrap();
-        run_git(
-            Some(&repo),
-            &[
-                "-c",
-                "user.name=Scope Test",
-                "-c",
-                "user.email=scope@example.com",
-                "tag",
-                "-a",
-                "request-tag",
-                "-m",
-                "tag",
-            ],
-            "create annotated tag",
-        )
-        .unwrap();
-        let head = git_stdout(&repo, &["rev-parse", "HEAD"]);
-        let tag = git_stdout(&repo, &["rev-parse", "request-tag^{tag}"]);
-
-        ensure_request_ref_oid_is_commit(&repo, head.trim()).unwrap();
-        let error = ensure_request_ref_oid_is_commit(&repo, tag.trim()).unwrap_err();
-        assert!(error.message.contains("must point at commits"));
-        let _ = fs::remove_dir_all(repo);
-    }
-
-    fn git_stdout(repo: &FsPath, args: &[&str]) -> String {
-        let output = run_git_output(Some(repo), args, "read test git stdout").unwrap();
-        assert!(output.status.success());
-        String::from_utf8(output.stdout).unwrap()
-    }
-
-    fn temp_lock_path(label: &str) -> PathBuf {
-        let path = std::env::temp_dir().join(format!(
-            "scope-vcs-request-ref-{label}-{}-{}.lock",
-            std::process::id(),
-            unix_now().unwrap()
-        ));
-        let _ = fs::remove_file(&path);
-        path
-    }
-
-    fn temp_repo_path(label: &str) -> PathBuf {
-        let path = std::env::temp_dir().join(format!(
-            "scope-vcs-request-ref-{label}-{}-{}",
-            std::process::id(),
-            unix_now().unwrap()
-        ));
-        let _ = fs::remove_dir_all(&path);
-        path
-    }
-}
+mod tests;

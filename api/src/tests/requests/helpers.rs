@@ -1,6 +1,6 @@
 use super::*;
 use crate::domain::requests::{
-    FinalizeReservedRequestInput, RequestActorRole, RequestBaseAudience, ReserveRequestInput,
+    RequestActorRole, RequestBaseAudience, StartRequestInput, SubmitRequestInput,
 };
 
 pub(super) fn create_public_request(
@@ -14,10 +14,11 @@ pub(super) fn create_public_request(
 ) {
     state
         .metadata
-        .reserve_request(ReserveRequestInput {
+        .start_request(StartRequestInput {
             id: request_id.to_string(),
             repo_id: TEST_REPO_ID.to_string(),
             author_user_id: public_user_id(),
+            title: title.to_string(),
             author_role: RequestActorRole::Public,
             base_audience: RequestBaseAudience::Public,
             target_branch: DEFAULT_GIT_BRANCH.to_string(),
@@ -28,9 +29,10 @@ pub(super) fn create_public_request(
         .unwrap();
     state
         .metadata
-        .record_reserved_request_upload(RecordReservedRequestUploadInput {
+        .record_working_request_upload(RecordWorkingRequestUploadInput {
             request_id: request_id.to_string(),
             actor_user_id: public_user_id(),
+            actor_can_edit: true,
             expected_old_head_oid: None,
             new_head_oid: head_oid.to_string(),
             git_snapshot: source_blob("public request git snapshot"),
@@ -39,10 +41,9 @@ pub(super) fn create_public_request(
         .unwrap();
     state
         .metadata
-        .finalize_reserved_request(FinalizeReservedRequestInput {
+        .submit_request(SubmitRequestInput {
             request_id: request_id.to_string(),
             actor_user_id: public_user_id(),
-            title: title.to_string(),
             expected_head_oid: head_oid.to_string(),
             stake_credits: 10,
             stake_ledger_entry_id: Some(stake_ledger_entry_id.to_string()),
@@ -55,10 +56,11 @@ pub(super) fn create_public_request(
 pub(super) fn create_owner_request(state: &AppState, request_id: &str, head_oid: &str) {
     state
         .metadata
-        .reserve_request(ReserveRequestInput {
+        .start_request(StartRequestInput {
             id: request_id.to_string(),
             repo_id: TEST_REPO_ID.to_string(),
             author_user_id: test_owner_id(),
+            title: "Owner request".to_string(),
             author_role: RequestActorRole::Owner,
             base_audience: RequestBaseAudience::Private,
             target_branch: DEFAULT_GIT_BRANCH.to_string(),
@@ -69,9 +71,10 @@ pub(super) fn create_owner_request(state: &AppState, request_id: &str, head_oid:
         .unwrap();
     state
         .metadata
-        .record_reserved_request_upload(RecordReservedRequestUploadInput {
+        .record_working_request_upload(RecordWorkingRequestUploadInput {
             request_id: request_id.to_string(),
             actor_user_id: test_owner_id(),
+            actor_can_edit: true,
             expected_old_head_oid: None,
             new_head_oid: head_oid.to_string(),
             git_snapshot: source_blob("owner request git snapshot"),
@@ -80,10 +83,9 @@ pub(super) fn create_owner_request(state: &AppState, request_id: &str, head_oid:
         .unwrap();
     state
         .metadata
-        .finalize_reserved_request(FinalizeReservedRequestInput {
+        .submit_request(SubmitRequestInput {
             request_id: request_id.to_string(),
             actor_user_id: test_owner_id(),
-            title: "Owner request".to_string(),
             expected_head_oid: head_oid.to_string(),
             stake_credits: 0,
             stake_ledger_entry_id: None,
@@ -93,14 +95,15 @@ pub(super) fn create_owner_request(state: &AppState, request_id: &str, head_oid:
         .unwrap();
 }
 
-pub(super) async fn reserve_request_via_http(app: axum::Router, bearer: &str) -> serde_json::Value {
+pub(super) async fn start_request_via_http(app: axum::Router, bearer: &str) -> serde_json::Value {
     let response = app
         .oneshot(
             Request::builder()
                 .method("POST")
-                .uri("/v1/repos/owner/repo/requests/reservations")
+                .uri("/v1/repos/owner/repo/requests")
                 .header(AUTHORIZATION, bearer)
-                .body(Body::empty())
+                .header(CONTENT_TYPE, "application/json")
+                .body(Body::from(r#"{"title":"Fix parser crash"}"#))
                 .unwrap(),
         )
         .await
@@ -109,7 +112,7 @@ pub(super) async fn reserve_request_via_http(app: axum::Router, bearer: &str) ->
     response_json(response).await
 }
 
-pub(super) async fn finalize_request_via_http(
+pub(super) async fn submit_request_via_http(
     app: axum::Router,
     bearer: &str,
     request_id: &str,
@@ -128,15 +131,16 @@ pub(super) async fn finalize_request_via_http(
     .unwrap()
 }
 
-pub(super) fn mark_reserved_request_uploaded(state: &AppState, request_id: &str, head_oid: &str) {
+pub(super) fn mark_working_request_uploaded(state: &AppState, request_id: &str, head_oid: &str) {
     state
         .metadata
-        .record_reserved_request_upload(RecordReservedRequestUploadInput {
+        .record_working_request_upload(RecordWorkingRequestUploadInput {
             request_id: request_id.to_string(),
             actor_user_id: request_author_id(state, request_id),
+            actor_can_edit: true,
             expected_old_head_oid: None,
             new_head_oid: head_oid.to_string(),
-            git_snapshot: source_blob("reserved request git snapshot"),
+            git_snapshot: source_blob("working request git snapshot"),
             now_unix: 2,
         })
         .unwrap();

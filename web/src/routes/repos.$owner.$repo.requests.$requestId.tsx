@@ -1,19 +1,28 @@
+import { HttpError } from '@/api/client'
 import {
+  addRequestEditorForRequest,
   commentRequestForRequest,
+  deleteRequestForRequest,
   loadRepoLiveStateForRequest,
   loadRequestForRequest,
   markRequestNeedsResponseForRequest,
   mergeRequestForRequest,
+  parseAddRequestEditorInput,
   parseCommentRequestInput,
   parseMergeRequestInput,
   parseNeedsResponseInput,
   parseRequestParams,
+  parseRemoveRequestEditorInput,
   parseResolveRequestInput,
   parseRespondRequestInput,
+  removeRequestEditorForRequest,
   resolveRequestForRequest,
   respondToRequestForRequest,
 } from '@/api/repos'
-import { RequestDetailPage } from '@/features/requests/request-detail-page'
+import {
+  RequestDetailPage,
+  RequestUnavailablePage,
+} from '@/features/requests/request-detail-page'
 import { createFileRoute } from '@tanstack/react-router'
 import { createServerFn } from '@tanstack/react-start'
 
@@ -22,7 +31,7 @@ const loadRequestPage = createServerFn({ method: 'GET' })
   .handler(async ({ data }) => {
     const [live, detail] = await Promise.all([
       loadRepoLiveStateForRequest(data),
-      loadRequestForRequest(data),
+      loadOptionalRequestForRequest(data),
     ])
 
     return { detail, live }
@@ -48,6 +57,18 @@ const mergeRequest = createServerFn({ method: 'POST' })
   .validator(parseMergeRequestInput)
   .handler(({ data }) => mergeRequestForRequest(data))
 
+const deleteRequest = createServerFn({ method: 'POST' })
+  .validator(parseRequestParams)
+  .handler(({ data }) => deleteRequestForRequest(data))
+
+const addRequestEditor = createServerFn({ method: 'POST' })
+  .validator(parseAddRequestEditorInput)
+  .handler(({ data }) => addRequestEditorForRequest(data))
+
+const removeRequestEditor = createServerFn({ method: 'POST' })
+  .validator(parseRemoveRequestEditorInput)
+  .handler(({ data }) => removeRequestEditorForRequest(data))
+
 export const Route = createFileRoute('/repos/$owner/$repo/requests/$requestId')({
   loader: ({ params }) =>
     loadRequestPage({
@@ -64,14 +85,21 @@ function RequestRoute() {
     repo: params.repo,
   }
 
+  if (!detail) {
+    return <RequestUnavailablePage params={requestParams} />
+  }
+
   return (
     <RequestDetailPage
+      addRequestEditor={(data) => addRequestEditor({ data })}
       commentRequest={(data) => commentRequest({ data })}
       detail={detail}
+      deleteRequest={(data) => deleteRequest({ data })}
       live={live}
       markNeedsResponse={(data) => markNeedsResponse({ data })}
       mergeRequest={(data) => mergeRequest({ data })}
       params={requestParams}
+      removeRequestEditor={(data) => removeRequestEditor({ data })}
       resolveRequest={(data) => resolveRequest({ data })}
       respondToRequest={(data) => respondToRequest({ data })}
     />
@@ -87,5 +115,18 @@ function requestParamsForRoute(params: {
     owner: params.owner,
     repo: params.repo,
     request_id: params.requestId,
+  }
+}
+
+async function loadOptionalRequestForRequest(
+  data: ReturnType<typeof requestParamsForRoute>,
+) {
+  try {
+    return await loadRequestForRequest(data)
+  } catch (error) {
+    if (error instanceof HttpError && [403, 404].includes(error.status)) {
+      return null
+    }
+    throw error
   }
 }

@@ -1,5 +1,6 @@
 mod credentials;
 pub(crate) mod import;
+mod request_ref_public_safety;
 pub(crate) mod request_refs;
 pub(crate) mod storage;
 pub(crate) mod upload;
@@ -17,9 +18,9 @@ use crate::{
             reviewed_update_from_staging_repo,
         },
         request_refs::{
-            author_has_open_request, ensure_request_receive_pack_staging_repo,
+            actor_has_open_editable_request, ensure_request_receive_pack_staging_repo,
             non_request_refs_changed, persist_request_ref_revision, receive_pack_refs,
-            request_ref_update_from_refs, seed_author_request_refs,
+            request_ref_update_from_refs, seed_editable_request_refs,
         },
         storage::*,
         upload::*,
@@ -55,7 +56,7 @@ pub(crate) enum ReceivePackAccess {
         author_id: String,
         push_intent: ValidatedPushIntent,
     },
-    RequestAuthor {
+    RequestEditor {
         author_id: String,
     },
 }
@@ -373,7 +374,7 @@ pub(crate) async fn receive_pack_access(
             }
             if !access.can_push {
                 if repo.record.publication_state == RepoPublicationState::Published
-                    && author_can_receive_request_push(
+                    && actor_can_receive_request_push(
                         state,
                         &repo,
                         &principal,
@@ -381,7 +382,7 @@ pub(crate) async fn receive_pack_access(
                         access.actor,
                     )?
                 {
-                    return Ok(ReceivePackAccess::RequestAuthor { author_id });
+                    return Ok(ReceivePackAccess::RequestEditor { author_id });
                 }
                 return Err(ApiError::not_found(format!(
                     "repo {owner}/{repo_name} not found"
@@ -402,27 +403,27 @@ pub(crate) async fn receive_pack_access(
                                 });
                             }
                             Err(error) => {
-                                if author_can_receive_request_push(
+                                if actor_can_receive_request_push(
                                     state,
                                     &repo,
                                     &principal,
                                     &author_id,
                                     access.actor,
                                 )? {
-                                    return Ok(ReceivePackAccess::RequestAuthor { author_id });
+                                    return Ok(ReceivePackAccess::RequestEditor { author_id });
                                 }
                                 return Err(error);
                             }
                         }
                     }
-                    if author_can_receive_request_push(
+                    if actor_can_receive_request_push(
                         state,
                         &repo,
                         &principal,
                         &author_id,
                         access.actor,
                     )? {
-                        Ok(ReceivePackAccess::RequestAuthor { author_id })
+                        Ok(ReceivePackAccess::RequestEditor { author_id })
                     } else {
                         Err(ApiError::forbidden("valid Scope push intent required"))
                     }
@@ -440,7 +441,7 @@ fn required_push_intent(
     state.validate_push_intent_secret(secret)
 }
 
-fn author_can_receive_request_push(
+fn actor_can_receive_request_push(
     state: &AppState,
     repo: &crate::domain::store::StoredRepository,
     principal: &crate::domain::policy::Principal,
@@ -448,7 +449,7 @@ fn author_can_receive_request_push(
     actor: RepositoryActor,
 ) -> Result<bool, ApiError> {
     ensure_repo_read(state, repo, principal)?;
-    author_has_open_request(state, &repo.record.id, author_id, actor)
+    actor_has_open_editable_request(state, &repo.record.id, author_id, actor)
 }
 
 fn optional_push_intent_from_headers(headers: &HeaderMap) -> Result<Option<String>, ApiError> {
@@ -482,13 +483,13 @@ pub(crate) fn handle_git_receive_pack(
         ReceivePackAccess::PublishedMember { author_id, .. } => {
             ensure_published_receive_pack_staging_repo(state, owner, repo_name, author_id)?
         }
-        ReceivePackAccess::RequestAuthor { author_id } => {
+        ReceivePackAccess::RequestEditor { author_id } => {
             ensure_request_receive_pack_staging_repo(state, owner, repo_name, author_id)?
         }
     };
     if let ReceivePackAccess::PublishedMember { author_id, .. } = &access
         && let Err(error) =
-            seed_author_request_refs(state, owner, repo_name, author_id, &staging_repo)
+            seed_editable_request_refs(state, owner, repo_name, author_id, &staging_repo)
     {
         let _ = fs::remove_dir_all(&staging_repo);
         return Err(error);
@@ -496,7 +497,7 @@ pub(crate) fn handle_git_receive_pack(
     let remote_user = match &access {
         ReceivePackAccess::FirstPush { author_id, .. } => author_id.as_str(),
         ReceivePackAccess::PublishedMember { author_id, .. } => author_id.as_str(),
-        ReceivePackAccess::RequestAuthor { author_id } => author_id.as_str(),
+        ReceivePackAccess::RequestEditor { author_id } => author_id.as_str(),
     };
     let receive_started_at = Instant::now();
     let refs_before_receive = if method == "POST" {
@@ -586,7 +587,7 @@ pub(crate) fn handle_git_receive_pack(
                     ));
                 }
                 ReceivePackAccess::PublishedMember { author_id, .. }
-                | ReceivePackAccess::RequestAuthor { author_id } => author_id,
+                | ReceivePackAccess::RequestEditor { author_id } => author_id,
             };
             if let Err(error) = persist_request_ref_revision(
                 state,
@@ -609,18 +610,18 @@ pub(crate) fn handle_git_receive_pack(
             return Ok(cgi.into_response());
         }
 
-        if matches!(&access, ReceivePackAccess::RequestAuthor { .. }) {
+        if matches!(&access, ReceivePackAccess::RequestEditor { .. }) {
             let _ = fs::remove_dir_all(&staging_repo);
             return Err(ApiError::bad_request(
-                "request authors can only push request refs",
+                "request editors can only push request refs",
             ));
         }
 
         match access {
-            ReceivePackAccess::RequestAuthor { .. } => {
+            ReceivePackAccess::RequestEditor { .. } => {
                 let _ = fs::remove_dir_all(&staging_repo);
                 return Err(ApiError::bad_request(
-                    "request authors can only push request refs",
+                    "request editors can only push request refs",
                 ));
             }
             ReceivePackAccess::FirstPush {

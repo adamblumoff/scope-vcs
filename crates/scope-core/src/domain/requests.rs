@@ -7,10 +7,9 @@ pub use settlement::settlement_for;
 mod submission;
 use settlement::{CreditSettlementIds, settle_request_credits, settlement_event_body, u32_to_i32};
 pub use submission::{
-    FinalizeReservedRequestInput, FinalizeReservedRequestMutation,
-    RecordReservedRequestUploadInput, ReserveRequestInput, ReserveRequestMutation,
-    ReservedRequestUploadMutation, finalize_reserved_request, record_reserved_request_upload,
-    reserve_request,
+    RecordWorkingRequestUploadInput, StartRequestInput, StartRequestMutation, SubmitRequestInput,
+    SubmitRequestMutation, WorkingRequestUploadMutation, record_working_request_upload,
+    start_request, submit_request,
 };
 
 const MAIN_BRANCH: &str = "main";
@@ -35,7 +34,7 @@ pub enum RequestBaseAudience {
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(any(test, feature = "ts"), derive(ts_rs::TS))]
 pub enum RequestState {
-    Reserved,
+    Working,
     Submitted,
     NeedsResponse,
     Resolved,
@@ -69,6 +68,7 @@ pub struct Request {
     pub id: String,
     pub repo_id: String,
     pub author_user_id: String,
+    pub editor_user_ids: BTreeSet<String>,
     pub author_role: RequestActorRole,
     pub base_audience: RequestBaseAudience,
     pub target_branch: String,
@@ -89,7 +89,8 @@ pub struct Request {
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(any(test, feature = "ts"), derive(ts_rs::TS))]
 pub enum RequestEventKind {
-    Created,
+    Started,
+    Submitted,
     RevisionPushed,
     Commented,
     NeedsResponse,
@@ -156,6 +157,7 @@ pub struct CreditAccountMutation {
 pub struct RecordRequestRevisionInput {
     pub request_id: String,
     pub actor_user_id: String,
+    pub actor_can_edit: bool,
     pub expected_old_head_oid: Option<String>,
     pub new_head_oid: String,
     pub git_snapshot: Option<SourceBlob>,
@@ -169,6 +171,27 @@ pub struct RequestRevisionMutation {
     pub request: Request,
     pub event: RequestEvent,
     pub source_blobs_to_delete: Vec<SourceBlob>,
+}
+
+#[derive(Clone, Debug)]
+pub struct AddRequestEditorInput {
+    pub request_id: String,
+    pub actor_user_id: String,
+    pub editor_user_id: String,
+    pub now_unix: u64,
+}
+
+#[derive(Clone, Debug)]
+pub struct RemoveRequestEditorInput {
+    pub request_id: String,
+    pub actor_user_id: String,
+    pub editor_user_id: String,
+    pub now_unix: u64,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct RequestEditorMutation {
+    pub request: Request,
 }
 
 #[derive(Clone, Debug)]
@@ -250,6 +273,31 @@ pub struct MergeRequestMutation {
     pub ledger_entries: Vec<CreditLedgerEntry>,
 }
 
+#[derive(Clone, Debug)]
+pub struct DeleteRequestInput {
+    pub request_id: String,
+    pub actor_user_id: String,
+    pub actor_can_delete: bool,
+    pub event_id: String,
+    pub refund_ledger_entry_id: Option<String>,
+    pub now_unix: u64,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum DeleteRequestMutation {
+    DeletedWorking {
+        request: Request,
+        events: Vec<RequestEvent>,
+        source_blobs_to_delete: Vec<SourceBlob>,
+    },
+    Withdrawn {
+        request: Box<Request>,
+        event: RequestEvent,
+        account: Option<UserCreditAccount>,
+        ledger_entry: Option<CreditLedgerEntry>,
+    },
+}
+
 pub fn grant_user_credits(
     accounts: &mut BTreeMap<String, UserCreditAccount>,
     ledger_entries: &mut BTreeMap<String, CreditLedgerEntry>,
@@ -307,8 +355,8 @@ pub fn record_request_revision(
     let request = requests
         .get_mut(&input.request_id)
         .ok_or_else(|| ApiError::not_found("request not found"))?;
-    if request.author_user_id != input.actor_user_id {
-        return Err(ApiError::forbidden("request author required"));
+    if !input.actor_can_edit {
+        return Err(ApiError::forbidden("request branch edit access required"));
     }
     if matches!(
         request.state,
@@ -362,6 +410,159 @@ pub fn record_request_revision(
     })
 }
 
+pub fn add_request_editor(
+    requests: &mut BTreeMap<String, Request>,
+    input: AddRequestEditorInput,
+) -> Result<RequestEditorMutation, ApiError> {
+    validate_required_id("request id", &input.request_id)?;
+    validate_required_id("actor user id", &input.actor_user_id)?;
+    validate_required_id("editor user id", &input.editor_user_id)?;
+    if input.actor_user_id == input.editor_user_id {
+        return Err(ApiError::bad_request(
+            "request author does not need an editor invite",
+        ));
+    }
+    let request = open_request_mut(requests, &input.request_id)?;
+    if request.author_user_id == input.editor_user_id {
+        return Err(ApiError::bad_request(
+            "request author does not need an editor invite",
+        ));
+    }
+    request.editor_user_ids.insert(input.editor_user_id);
+    request.updated_at_unix = input.now_unix;
+    Ok(RequestEditorMutation {
+        request: request.clone(),
+    })
+}
+
+pub fn remove_request_editor(
+    requests: &mut BTreeMap<String, Request>,
+    input: RemoveRequestEditorInput,
+) -> Result<RequestEditorMutation, ApiError> {
+    validate_required_id("request id", &input.request_id)?;
+    validate_required_id("actor user id", &input.actor_user_id)?;
+    validate_required_id("editor user id", &input.editor_user_id)?;
+    let request = open_request_mut(requests, &input.request_id)?;
+    request.editor_user_ids.remove(&input.editor_user_id);
+    request.updated_at_unix = input.now_unix;
+    Ok(RequestEditorMutation {
+        request: request.clone(),
+    })
+}
+
+pub fn delete_request(
+    requests: &mut BTreeMap<String, Request>,
+    events: &mut BTreeMap<String, RequestEvent>,
+    accounts: &mut BTreeMap<String, UserCreditAccount>,
+    ledger_entries: &mut BTreeMap<String, CreditLedgerEntry>,
+    input: DeleteRequestInput,
+) -> Result<DeleteRequestMutation, ApiError> {
+    validate_required_id("request id", &input.request_id)?;
+    validate_required_id("actor user id", &input.actor_user_id)?;
+    validate_required_id("event id", &input.event_id)?;
+    let request = requests
+        .get(&input.request_id)
+        .ok_or_else(|| ApiError::not_found("request not found"))?;
+    if !input.actor_can_delete {
+        return Err(ApiError::forbidden("request delete access required"));
+    }
+    if matches!(
+        request.state,
+        RequestState::Resolved | RequestState::Withdrawn
+    ) {
+        return Err(ApiError::conflict("request is already closed"));
+    }
+    if request.state == RequestState::Working {
+        let request = requests
+            .remove(&input.request_id)
+            .ok_or_else(|| ApiError::not_found("request not found"))?;
+        let removed_events = events
+            .keys()
+            .filter(|event_id| {
+                events
+                    .get(*event_id)
+                    .is_some_and(|event| event.request_id == request.id)
+            })
+            .cloned()
+            .collect::<Vec<_>>();
+        let events = removed_events
+            .into_iter()
+            .filter_map(|event_id| events.remove(&event_id))
+            .collect::<Vec<_>>();
+        return Ok(DeleteRequestMutation::DeletedWorking {
+            source_blobs_to_delete: request.git_snapshot.clone().into_iter().collect(),
+            request,
+            events,
+        });
+    }
+
+    ensure_event_id_available(events, &input.event_id)?;
+    let refund = if request.stake_credits == 0 {
+        None
+    } else {
+        let refund_ledger_entry_id = input
+            .refund_ledger_entry_id
+            .clone()
+            .ok_or_else(|| ApiError::bad_request("refund ledger entry id is required"))?;
+        ensure_ledger_entry_id_available(ledger_entries, &refund_ledger_entry_id)?;
+        let refund_amount = u32_to_i32(request.stake_credits)?;
+        let current_balance = accounts
+            .get(&request.author_user_id)
+            .map(|account| account.balance_credits)
+            .unwrap_or(0);
+        let balance_credits = current_balance
+            .checked_add(request.stake_credits)
+            .ok_or_else(|| ApiError::bad_request("credit balance overflow"))?;
+        u32_to_i32(balance_credits)?;
+        let account = UserCreditAccount {
+            user_id: request.author_user_id.clone(),
+            balance_credits,
+        };
+        let ledger_entry = CreditLedgerEntry {
+            id: refund_ledger_entry_id,
+            user_id: request.author_user_id.clone(),
+            request_id: Some(request.id.clone()),
+            kind: CreditLedgerEntryKind::StakeRefund,
+            amount_credits: refund_amount,
+            created_at_unix: input.now_unix,
+        };
+        Some((account, ledger_entry))
+    };
+
+    let request = requests
+        .get_mut(&input.request_id)
+        .ok_or_else(|| ApiError::not_found("request not found"))?;
+    request.state = RequestState::Withdrawn;
+    request.updated_at_unix = input.now_unix;
+    request.resolved_at_unix = Some(input.now_unix);
+    let request = request.clone();
+    let event = RequestEvent {
+        id: input.event_id,
+        request_id: request.id.clone(),
+        actor_user_id: input.actor_user_id,
+        kind: RequestEventKind::Withdrawn,
+        body: None,
+        old_head_oid: None,
+        new_head_oid: Some(request.head_oid.clone()),
+        created_at_unix: input.now_unix,
+    };
+    events.insert(event.id.clone(), event.clone());
+    let (account, ledger_entry) = match refund {
+        Some((account, ledger_entry)) => {
+            accounts.insert(account.user_id.clone(), account.clone());
+            ledger_entries.insert(ledger_entry.id.clone(), ledger_entry.clone());
+            (Some(account), Some(ledger_entry))
+        }
+        None => (None, None),
+    };
+    Ok(DeleteRequestMutation::Withdrawn {
+        request: Box::new(request),
+        event,
+        account,
+        ledger_entry,
+    })
+}
+
 pub fn comment_request(
     requests: &mut BTreeMap<String, Request>,
     events: &mut BTreeMap<String, RequestEvent>,
@@ -400,6 +601,11 @@ pub fn mark_request_needs_response(
     validate_required_body("needs-response body", &input.body)?;
     ensure_event_id_available(events, &input.event_id)?;
     let request = open_request_mut(requests, &input.request_id)?;
+    if request.state != RequestState::Submitted {
+        return Err(ApiError::conflict(
+            "request must be submitted before asking for a response",
+        ));
+    }
     request.state = RequestState::NeedsResponse;
     request.updated_at_unix = input.now_unix;
     let request = request.clone();
@@ -477,6 +683,14 @@ pub fn resolve_request(
         RequestState::Resolved | RequestState::Withdrawn
     ) {
         return Err(ApiError::conflict("request is already closed"));
+    }
+    if !matches!(
+        request.state,
+        RequestState::Submitted | RequestState::NeedsResponse
+    ) {
+        return Err(ApiError::conflict(
+            "request must be submitted before it can be resolved",
+        ));
     }
     if request.settlement.is_some() {
         return Err(ApiError::conflict("request is already settled"));
@@ -580,6 +794,11 @@ pub fn merge_request(
         RequestState::Resolved | RequestState::Withdrawn
     ) {
         return Err(ApiError::conflict("request is already closed"));
+    }
+    if request.state != RequestState::Submitted {
+        return Err(ApiError::conflict(
+            "request must be submitted before it can be merged",
+        ));
     }
     if request.settlement.is_some() {
         return Err(ApiError::conflict("request is already settled"));
@@ -715,7 +934,7 @@ fn ensure_ledger_entry_id_available(
     validate_required_id("credit ledger entry id", ledger_entry_id)?;
     if ledger_entry_id.starts_with(REPO_DELETE_REFUND_LEDGER_ENTRY_PREFIX) {
         return Err(ApiError::bad_request(
-            "credit ledger entry id uses a reserved internal prefix",
+            "credit ledger entry id uses a working internal prefix",
         ));
     }
     if ledger_entries.contains_key(ledger_entry_id) {

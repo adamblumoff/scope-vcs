@@ -26,10 +26,12 @@ import type {
   CreateRepositoryInviteResponse,
   RequestActorRole,
   RequestBaseAudience,
+  RequestDeleteResponse,
   RequestDetailResponse,
   RequestDisposition,
   RequestEventKind,
   RequestEventResponse,
+  RequestEditorRequest,
   RequestListResponse,
   RequestMergeabilityResponse,
   RequestMergeabilityStatus,
@@ -104,6 +106,7 @@ export type ProjectionPreview = ProjectionPreviewResponse
 export type RequestList = RequestListResponse
 export type RequestDetail = RequestDetailResponse
 export type RequestMutation = RequestMutationResponse
+export type RequestDelete = RequestDeleteResponse
 export type RequestSummary = RequestSummaryResponse
 export type RequestPermissions = RequestPermissionsResponse
 export type RequestMergeability = RequestMergeabilityResponse
@@ -206,3 +209,8 @@ export type NeedsResponseInput = RequestParams & NeedsResponseRequest
 export type RespondRequestInput = RequestParams & RespondRequestRequest
 export type ResolveRequestInput = RequestParams & ResolveRequestRequest
 export type MergeRequestInput = RequestParams & MergeRequestRequest
+export type DeleteRequestInput = RequestParams
+export type AddRequestEditorInput = RequestParams & RequestEditorRequest
+export type RemoveRequestEditorInput = RequestParams & {
+  editor_user_id: string
+}

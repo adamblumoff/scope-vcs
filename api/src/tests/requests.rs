@@ -1,14 +1,15 @@
 use super::*;
 use crate::domain::requests::{
     CreditLedgerEntryKind, GrantUserCreditsInput, RecordRequestRevisionInput,
-    RecordReservedRequestUploadInput, canonical_request_ref,
+    RecordWorkingRequestUploadInput, canonical_request_ref,
 };
 use tokio_stream::StreamExt;
 
+mod editors;
 mod helpers;
 use helpers::{
-    create_owner_request, create_public_request, finalize_request_via_http,
-    mark_reserved_request_uploaded, reserve_request_via_http,
+    create_owner_request, create_public_request, mark_working_request_uploaded,
+    start_request_via_http, submit_request_via_http,
 };
 
 const PUBLIC_SUBJECT: &str = "public_requester";
@@ -29,14 +30,14 @@ async fn public_submit_stakes_credits_and_uses_public_base() {
         .unwrap();
 
     let app = router(state.clone());
-    let reservation = reserve_request_via_http(
+    let start = start_request_via_http(
         app.clone(),
         &bearer_header_for(PUBLIC_SUBJECT, PUBLIC_EMAIL),
     )
     .await;
     assert_eq!(
-        reservation["request_ref"],
-        canonical_request_ref(reservation["id"].as_str().unwrap())
+        start["request"]["request_ref"],
+        canonical_request_ref(start["request"]["id"].as_str().unwrap())
     );
     let hidden = app
         .clone()
@@ -59,15 +60,19 @@ async fn public_submit_stakes_credits_and_uses_public_base() {
             .as_array()
             .unwrap()
             .len(),
-        0
+        1
     );
-    mark_reserved_request_uploaded(&state, reservation["id"].as_str().unwrap(), REQUEST_HEAD);
+    mark_working_request_uploaded(
+        &state,
+        start["request"]["id"].as_str().unwrap(),
+        REQUEST_HEAD,
+    );
 
-    let response = finalize_request_via_http(
+    let response = submit_request_via_http(
         app,
         &bearer_header_for(PUBLIC_SUBJECT, PUBLIC_EMAIL),
-        reservation["id"].as_str().unwrap(),
-        r#"{"title":"Fix parser crash","head_oid":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","stake_credits":10}"#,
+        start["request"]["id"].as_str().unwrap(),
+        r#"{"head_oid":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","stake_credits":10}"#,
     )
     .await;
 
@@ -77,7 +82,7 @@ async fn public_submit_stakes_credits_and_uses_public_base() {
     assert_eq!(body["request"]["author_role"], "Public");
     assert_eq!(body["request"]["base_audience"], "Public");
     assert_eq!(body["request"]["stake_credits"], 10);
-    assert_eq!(body["request"]["permissions"]["can_update_branch"], true);
+    assert_eq!(body["request"]["permissions"]["can_push_branch"], true);
     assert_eq!(body["request"]["mergeability"]["status"], "NotMaintainer");
 
     state
@@ -106,14 +111,18 @@ async fn public_submit_stakes_credits_and_uses_public_base() {
 async fn owner_submit_uses_private_base_without_credit_stake() {
     let state = test_state_with_repo_with_readme();
     let app = router(state.clone());
-    let reservation = reserve_request_via_http(app.clone(), &bearer_header()).await;
-    mark_reserved_request_uploaded(&state, reservation["id"].as_str().unwrap(), REQUEST_HEAD);
+    let start = start_request_via_http(app.clone(), &bearer_header()).await;
+    mark_working_request_uploaded(
+        &state,
+        start["request"]["id"].as_str().unwrap(),
+        REQUEST_HEAD,
+    );
 
-    let response = finalize_request_via_http(
+    let response = submit_request_via_http(
         app,
         &bearer_header(),
-        reservation["id"].as_str().unwrap(),
-        r#"{"title":"Owner maintenance","head_oid":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}"#,
+        start["request"]["id"].as_str().unwrap(),
+        r#"{"head_oid":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}"#,
     )
     .await;
 
@@ -134,6 +143,62 @@ async fn owner_submit_uses_private_base_without_credit_stake() {
 }
 
 #[tokio::test]
+async fn working_request_is_visible_but_not_maintainer_decision_ready() {
+    let state = test_state_with_repo_with_readme();
+    let app = router(state.clone());
+    let start = start_request_via_http(app.clone(), &bearer_header()).await;
+
+    assert_eq!(start["request"]["state"], "Working");
+    assert_eq!(start["request"]["permissions"]["can_push_branch"], true);
+    assert_eq!(
+        start["request"]["permissions"]["can_mark_needs_response"],
+        false
+    );
+    assert_eq!(start["request"]["permissions"]["can_resolve"], false);
+    assert_eq!(start["request"]["permissions"]["can_merge"], false);
+    assert_eq!(start["request"]["mergeability"]["status"], "NotReady");
+
+    let resolve = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri(format!(
+                    "/v1/repos/owner/repo/requests/{}/resolve",
+                    start["request"]["id"].as_str().unwrap()
+                ))
+                .header(AUTHORIZATION, bearer_header())
+                .header(CONTENT_TYPE, "application/json")
+                .body(Body::from(
+                    r#"{"disposition":"UsefulNotMerged","body":"Not ready."}"#,
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resolve.status(), StatusCode::CONFLICT);
+
+    let merge = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri(format!(
+                    "/v1/repos/owner/repo/requests/{}/merge",
+                    start["request"]["id"].as_str().unwrap()
+                ))
+                .header(AUTHORIZATION, bearer_header())
+                .header(CONTENT_TYPE, "application/json")
+                .body(Body::from(format!(
+                    r#"{{"expected_main_oid":"{REQUEST_HEAD}","expected_head_oid":"{REQUEST_HEAD}"}}"#
+                )))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(merge.status(), StatusCode::CONFLICT);
+}
+
+#[tokio::test]
 async fn finalizing_without_uploaded_request_ref_does_not_stake_credits() {
     let state = state_with_public_user();
     state
@@ -146,17 +211,17 @@ async fn finalizing_without_uploaded_request_ref_does_not_stake_credits() {
         })
         .unwrap();
     let app = router(state.clone());
-    let reservation = reserve_request_via_http(
+    let start = start_request_via_http(
         app.clone(),
         &bearer_header_for(PUBLIC_SUBJECT, PUBLIC_EMAIL),
     )
     .await;
 
-    let response = finalize_request_via_http(
+    let response = submit_request_via_http(
         app,
         &bearer_header_for(PUBLIC_SUBJECT, PUBLIC_EMAIL),
-        reservation["id"].as_str().unwrap(),
-        r#"{"title":"Fix parser crash","head_oid":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","stake_credits":10}"#,
+        start["request"]["id"].as_str().unwrap(),
+        r#"{"head_oid":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","stake_credits":10}"#,
     )
     .await;
 
@@ -208,13 +273,25 @@ async fn request_submit_publishes_summary_refresh_event() {
             .contains(r#""reason":"connected""#)
     );
 
-    let reservation = reserve_request_via_http(app.clone(), &bearer_header()).await;
-    mark_reserved_request_uploaded(&state, reservation["id"].as_str().unwrap(), REQUEST_HEAD);
-    let submit = finalize_request_via_http(
+    let start = start_request_via_http(app.clone(), &bearer_header()).await;
+    let started_event = tokio::time::timeout(std::time::Duration::from_secs(1), stream.next())
+        .await
+        .unwrap()
+        .unwrap()
+        .unwrap();
+    let started_event = String::from_utf8(started_event.to_vec()).unwrap();
+    assert!(started_event.contains(r#""reason":"request-started""#));
+
+    mark_working_request_uploaded(
+        &state,
+        start["request"]["id"].as_str().unwrap(),
+        REQUEST_HEAD,
+    );
+    let submit = submit_request_via_http(
         app,
         &bearer_header(),
-        reservation["id"].as_str().unwrap(),
-        r#"{"title":"Owner maintenance","head_oid":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}"#,
+        start["request"]["id"].as_str().unwrap(),
+        r#"{"head_oid":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}"#,
     )
     .await;
     assert_eq!(submit.status(), StatusCode::OK);
@@ -373,72 +450,6 @@ async fn needs_response_respond_and_resolution_settle_public_stake() {
 }
 
 #[tokio::test]
-async fn unrelated_public_reader_cannot_comment_on_public_request() {
-    let state = state_with_public_request();
-    let unrelated_user_id = crate::db::scope_user_id_for_auth_identity("clerk", "public_other");
-    state
-        .metadata
-        .update(|catalog| {
-            catalog.users.insert(
-                unrelated_user_id.clone(),
-                UserAccount {
-                    id: unrelated_user_id,
-                    handle: "public-other".to_string(),
-                    email: "public-other@example.com".to_string(),
-                    email_verified: true,
-                },
-            );
-            Ok(())
-        })
-        .unwrap();
-    let app = router(state.clone());
-
-    let visible = app
-        .clone()
-        .oneshot(
-            Request::builder()
-                .method("GET")
-                .uri("/v1/repos/owner/repo/requests/req_public")
-                .header(
-                    AUTHORIZATION,
-                    bearer_header_for("public_other", "public-other@example.com"),
-                )
-                .body(Body::empty())
-                .unwrap(),
-        )
-        .await
-        .unwrap();
-    assert_eq!(visible.status(), StatusCode::OK);
-    let body = response_json(visible).await;
-    assert_eq!(body["request"]["permissions"]["can_comment"], false);
-
-    let comment = app
-        .oneshot(
-            Request::builder()
-                .method("POST")
-                .uri("/v1/repos/owner/repo/requests/req_public/comments")
-                .header(
-                    AUTHORIZATION,
-                    bearer_header_for("public_other", "public-other@example.com"),
-                )
-                .header(CONTENT_TYPE, "application/json")
-                .body(Body::from(r#"{"body":"drive-by comment"}"#))
-                .unwrap(),
-        )
-        .await
-        .unwrap();
-
-    assert_eq!(comment.status(), StatusCode::FORBIDDEN);
-    state
-        .metadata
-        .read(|catalog| {
-            assert_eq!(catalog.request_events.len(), 1);
-            Ok(())
-        })
-        .unwrap();
-}
-
-#[tokio::test]
 async fn clean_merge_applies_repo_update_and_resolves_as_accepted() {
     let state = test_state_with_repo();
     cache_test_jwks(&state);
@@ -496,6 +507,7 @@ async fn clean_merge_applies_repo_update_and_resolves_as_accepted() {
         .record_request_revision(RecordRequestRevisionInput {
             request_id: "req_merge".to_string(),
             actor_user_id: test_owner_id(),
+            actor_can_edit: true,
             expected_old_head_oid: Some(request_head.clone()),
             new_head_oid: request_head.clone(),
             git_snapshot: Some(request_snapshot),
@@ -652,6 +664,7 @@ async fn public_request_merge_replays_public_delta_without_deleting_private_file
         .record_request_revision(RecordRequestRevisionInput {
             request_id: "req_public_merge".to_string(),
             actor_user_id: public_user_id(),
+            actor_can_edit: true,
             expected_old_head_oid: Some(request_head.clone()),
             new_head_oid: request_head.clone(),
             git_snapshot: Some(request_snapshot),
@@ -808,6 +821,7 @@ async fn public_request_merge_rejects_private_path_collision() {
         .record_request_revision(RecordRequestRevisionInput {
             request_id: "req_private_collision".to_string(),
             actor_user_id: public_user_id(),
+            actor_can_edit: true,
             expected_old_head_oid: Some(request_head.clone()),
             new_head_oid: request_head.clone(),
             git_snapshot: Some(request_snapshot),

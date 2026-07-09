@@ -15,14 +15,14 @@ fn public_submission_debits_stake_once() {
     )]);
     let mut ledger_entries = BTreeMap::new();
 
-    reserve_request(&mut requests, public_reserve_input()).unwrap();
-    record_reserved_request_upload(&mut requests, public_upload_input()).unwrap();
-    let mutation = finalize_reserved_request(
+    start_request(&mut requests, public_start_input()).unwrap();
+    record_working_request_upload(&mut requests, public_upload_input()).unwrap();
+    let mutation = submit_request(
         &mut requests,
         &mut events,
         &mut accounts,
         &mut ledger_entries,
-        public_finalize_input(),
+        public_submit_input(),
     )
     .unwrap();
 
@@ -57,7 +57,7 @@ fn credit_grant_failure_does_not_mutate_accounts() {
 }
 
 #[test]
-fn reserved_internal_ledger_prefixes_are_rejected() {
+fn internal_ledger_prefixes_are_rejected() {
     let mut accounts = BTreeMap::from([(
         "user_public".to_string(),
         UserCreditAccount {
@@ -78,22 +78,22 @@ fn reserved_internal_ledger_prefixes_are_rejected() {
         },
     )
     .unwrap_err();
-    assert!(grant_error.message.contains("reserved internal prefix"));
+    assert!(grant_error.message.contains("working internal prefix"));
 
     let mut requests = BTreeMap::new();
-    reserve_request(&mut requests, public_reserve_input()).unwrap();
-    record_reserved_request_upload(&mut requests, public_upload_input()).unwrap();
-    let mut finalize_input = public_finalize_input();
-    finalize_input.stake_ledger_entry_id = Some("repo_delete_refund:stake".to_string());
-    let submit_error = finalize_reserved_request(
+    start_request(&mut requests, public_start_input()).unwrap();
+    record_working_request_upload(&mut requests, public_upload_input()).unwrap();
+    let mut submit_input = public_submit_input();
+    submit_input.stake_ledger_entry_id = Some("repo_delete_refund:stake".to_string());
+    let submit_error = submit_request(
         &mut requests,
         &mut BTreeMap::new(),
         &mut accounts,
         &mut ledger_entries,
-        finalize_input,
+        submit_input,
     )
     .unwrap_err();
-    assert!(submit_error.message.contains("reserved internal prefix"));
+    assert!(submit_error.message.contains("working internal prefix"));
 
     let mut requests = BTreeMap::from([("req_1".to_string(), submitted_request())]);
     let resolve_error = resolve_request(
@@ -114,21 +114,21 @@ fn reserved_internal_ledger_prefixes_are_rejected() {
         },
     )
     .unwrap_err();
-    assert!(resolve_error.message.contains("reserved internal prefix"));
+    assert!(resolve_error.message.contains("working internal prefix"));
 
     assert!(ledger_entries.is_empty());
 }
 
 #[test]
-fn duplicate_request_ref_is_rejected_before_reservation() {
+fn duplicate_request_ref_is_rejected_before_start() {
     let mut existing = submitted_request();
     existing.request_ref = "refs/scope/requests/req_2".to_string();
     let mut requests = BTreeMap::from([("req_1".to_string(), existing)]);
-    let mut input = public_reserve_input();
+    let mut input = public_start_input();
     input.id = "req_2".to_string();
     input.request_ref = "refs/scope/requests/req_2".to_string();
 
-    let error = reserve_request(&mut requests, input).unwrap_err();
+    let error = start_request(&mut requests, input).unwrap_err();
 
     assert!(error.message.contains("request ref already exists"));
     assert!(!requests.contains_key("req_2"));
@@ -146,12 +146,12 @@ fn invalid_stake_amount_does_not_debit_account() {
         },
     )]);
     let mut ledger_entries = BTreeMap::new();
-    reserve_request(&mut requests, public_reserve_input()).unwrap();
-    record_reserved_request_upload(&mut requests, public_upload_input()).unwrap();
-    let mut input = public_finalize_input();
+    start_request(&mut requests, public_start_input()).unwrap();
+    record_working_request_upload(&mut requests, public_upload_input()).unwrap();
+    let mut input = public_submit_input();
     input.stake_credits = i32::MAX as u32 + 1;
 
-    let error = finalize_reserved_request(
+    let error = submit_request(
         &mut requests,
         &mut events,
         &mut accounts,
@@ -161,7 +161,7 @@ fn invalid_stake_amount_does_not_debit_account() {
     .unwrap_err();
 
     assert!(error.message.contains("exceeds i32 range"));
-    assert_eq!(requests.get("req_1").unwrap().state, RequestState::Reserved);
+    assert_eq!(requests.get("req_1").unwrap().state, RequestState::Working);
     assert!(events.is_empty());
     assert!(ledger_entries.is_empty());
     assert_eq!(
@@ -171,7 +171,7 @@ fn invalid_stake_amount_does_not_debit_account() {
 }
 
 #[test]
-fn public_submission_reserves_room_for_maximum_reward() {
+fn public_submission_keeps_room_for_maximum_reward() {
     let mut requests = BTreeMap::new();
     let mut events = BTreeMap::new();
     let mut accounts = BTreeMap::from([(
@@ -183,19 +183,19 @@ fn public_submission_reserves_room_for_maximum_reward() {
     )]);
     let mut ledger_entries = BTreeMap::new();
 
-    reserve_request(&mut requests, public_reserve_input()).unwrap();
-    record_reserved_request_upload(&mut requests, public_upload_input()).unwrap();
-    let error = finalize_reserved_request(
+    start_request(&mut requests, public_start_input()).unwrap();
+    record_working_request_upload(&mut requests, public_upload_input()).unwrap();
+    let error = submit_request(
         &mut requests,
         &mut events,
         &mut accounts,
         &mut ledger_entries,
-        public_finalize_input(),
+        public_submit_input(),
     )
     .unwrap_err();
 
     assert!(error.message.contains("exceeds i32 range"));
-    assert_eq!(requests.get("req_1").unwrap().state, RequestState::Reserved);
+    assert_eq!(requests.get("req_1").unwrap().state, RequestState::Working);
     assert!(events.is_empty());
     assert!(ledger_entries.is_empty());
     assert_eq!(
@@ -208,20 +208,20 @@ fn public_submission_reserves_room_for_maximum_reward() {
 fn owner_submission_rejects_credit_stake() {
     let mut requests = BTreeMap::new();
     let mut events = BTreeMap::new();
-    let mut input = public_reserve_input();
+    let mut input = public_start_input();
     input.author_role = RequestActorRole::Owner;
     input.base_audience = RequestBaseAudience::Private;
-    reserve_request(&mut requests, input).unwrap();
-    record_reserved_request_upload(&mut requests, public_upload_input()).unwrap();
-    let mut finalize_input = public_finalize_input();
-    finalize_input.stake_credits = 10;
+    start_request(&mut requests, input).unwrap();
+    record_working_request_upload(&mut requests, public_upload_input()).unwrap();
+    let mut submit_input = public_submit_input();
+    submit_input.stake_credits = 10;
 
-    let error = finalize_reserved_request(
+    let error = submit_request(
         &mut requests,
         &mut events,
         &mut BTreeMap::new(),
         &mut BTreeMap::new(),
-        finalize_input,
+        submit_input,
     )
     .unwrap_err();
 
@@ -240,6 +240,7 @@ fn revision_reopens_needs_response_request() {
         RecordRequestRevisionInput {
             request_id: "req_1".to_string(),
             actor_user_id: "user_public".to_string(),
+            actor_can_edit: true,
             expected_old_head_oid: Some("head".to_string()),
             new_head_oid: "new_head".to_string(),
             git_snapshot: None,
@@ -266,6 +267,7 @@ fn revision_rejects_stale_expected_head() {
         RecordRequestRevisionInput {
             request_id: "req_1".to_string(),
             actor_user_id: "user_public".to_string(),
+            actor_can_edit: true,
             expected_old_head_oid: Some("stale_head".to_string()),
             new_head_oid: "new_head".to_string(),
             git_snapshot: None,
@@ -357,6 +359,76 @@ fn accepted_resolution_requires_merge_flow() {
         RequestState::Submitted
     );
     assert_eq!(accounts.get("user_public").unwrap().balance_credits, 0);
+    assert!(events.is_empty());
+    assert!(ledger_entries.is_empty());
+}
+
+#[test]
+fn working_request_cannot_enter_maintainer_decision_flow() {
+    let working_request = {
+        let mut request = submitted_request();
+        request.state = RequestState::Working;
+        request.stake_credits = 0;
+        request
+    };
+
+    let mut requests = BTreeMap::from([("req_1".to_string(), working_request.clone())]);
+    let mut events = BTreeMap::new();
+    let needs_response_error = mark_request_needs_response(
+        &mut requests,
+        &mut events,
+        MarkRequestNeedsResponseInput {
+            request_id: "req_1".to_string(),
+            actor_user_id: "maintainer".to_string(),
+            event_id: "event_needs_response".to_string(),
+            body: "Please add tests.".to_string(),
+            now_unix: 20,
+        },
+    )
+    .unwrap_err();
+    assert!(needs_response_error.message.contains("submitted"));
+    assert_eq!(requests.get("req_1").unwrap().state, RequestState::Working);
+    assert!(events.is_empty());
+
+    let mut requests = BTreeMap::from([("req_1".to_string(), working_request.clone())]);
+    let mut events = BTreeMap::new();
+    let mut accounts = BTreeMap::new();
+    let mut ledger_entries = BTreeMap::new();
+    let resolve_error = resolve_request(
+        &mut requests,
+        &mut events,
+        &mut accounts,
+        &mut ledger_entries,
+        ResolveRequestInput {
+            request_id: "req_1".to_string(),
+            actor_user_id: "maintainer".to_string(),
+            disposition: RequestDisposition::UsefulNotMerged,
+            event_id: "event_resolved".to_string(),
+            settlement_event_id: "event_settled".to_string(),
+            refund_ledger_entry_id: None,
+            reward_ledger_entry_id: None,
+            body: None,
+            now_unix: 30,
+        },
+    )
+    .unwrap_err();
+    assert!(resolve_error.message.contains("submitted"));
+    assert_eq!(requests.get("req_1").unwrap().state, RequestState::Working);
+    assert!(events.is_empty());
+    assert!(ledger_entries.is_empty());
+
+    let mut requests = BTreeMap::from([("req_1".to_string(), working_request)]);
+    let mut events = BTreeMap::new();
+    let merge_error = merge_request(
+        &mut requests,
+        &mut events,
+        &mut accounts,
+        &mut ledger_entries,
+        clean_merge_input(),
+    )
+    .unwrap_err();
+    assert!(merge_error.message.contains("submitted"));
+    assert_eq!(requests.get("req_1").unwrap().state, RequestState::Working);
     assert!(events.is_empty());
     assert!(ledger_entries.is_empty());
 }
@@ -643,11 +715,12 @@ fn settlement_cannot_run_twice() {
     assert!(error.message.contains("already closed"));
 }
 
-fn public_reserve_input() -> ReserveRequestInput {
-    ReserveRequestInput {
+fn public_start_input() -> StartRequestInput {
+    StartRequestInput {
         id: "req_1".to_string(),
         repo_id: "owner/repo".to_string(),
         author_user_id: "user_public".to_string(),
+        title: "Fix parser crash".to_string(),
         author_role: RequestActorRole::Public,
         base_audience: RequestBaseAudience::Public,
         target_branch: "main".to_string(),
@@ -657,10 +730,11 @@ fn public_reserve_input() -> ReserveRequestInput {
     }
 }
 
-fn public_upload_input() -> RecordReservedRequestUploadInput {
-    RecordReservedRequestUploadInput {
+fn public_upload_input() -> RecordWorkingRequestUploadInput {
+    RecordWorkingRequestUploadInput {
         request_id: "req_1".to_string(),
         actor_user_id: "user_public".to_string(),
+        actor_can_edit: true,
         expected_old_head_oid: None,
         new_head_oid: "head".to_string(),
         git_snapshot: source_blob("head"),
@@ -668,11 +742,10 @@ fn public_upload_input() -> RecordReservedRequestUploadInput {
     }
 }
 
-fn public_finalize_input() -> FinalizeReservedRequestInput {
-    FinalizeReservedRequestInput {
+fn public_submit_input() -> SubmitRequestInput {
+    SubmitRequestInput {
         request_id: "req_1".to_string(),
         actor_user_id: "user_public".to_string(),
-        title: "Fix parser crash".to_string(),
         expected_head_oid: "head".to_string(),
         stake_credits: 10,
         stake_ledger_entry_id: Some("ledger_stake".to_string()),
@@ -712,6 +785,7 @@ fn submitted_request() -> Request {
         id: "req_1".to_string(),
         repo_id: "owner/repo".to_string(),
         author_user_id: "user_public".to_string(),
+        editor_user_ids: Default::default(),
         author_role: RequestActorRole::Public,
         base_audience: RequestBaseAudience::Public,
         target_branch: "main".to_string(),

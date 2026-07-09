@@ -241,6 +241,22 @@ where
     Ok(())
 }
 
+pub async fn delete_request_rows<C>(conn: &C, request_id: &str) -> Result<(), ApiError>
+where
+    C: ConnectionTrait,
+{
+    entities::request_event::Entity::delete_many()
+        .filter(entities::request_event::Column::RequestId.eq(request_id.to_string()))
+        .exec(conn)
+        .await
+        .map_err(ApiError::internal)?;
+    entities::request::Entity::delete_by_id(request_id.to_string())
+        .exec(conn)
+        .await
+        .map_err(ApiError::internal)?;
+    Ok(())
+}
+
 fn encode_credit_ledger_entry_kind(kind: CreditLedgerEntryKind) -> Result<String, ApiError> {
     match serde_json::to_value(kind).map_err(ApiError::internal)? {
         serde_json::Value::String(value) => Ok(value),
@@ -258,6 +274,10 @@ where
     let result = entities::request::Entity::update_many()
         .filter(entities::request::Column::Id.eq(row.id))
         .col_expr(entities::request::Column::Title, Expr::value(row.title))
+        .col_expr(
+            entities::request::Column::EditorUserIds,
+            Expr::value(row.editor_user_ids),
+        )
         .col_expr(
             entities::request::Column::HeadOid,
             Expr::value(row.head_oid),

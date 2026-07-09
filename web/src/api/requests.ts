@@ -1,22 +1,28 @@
 import { createApiClient } from '@/api/client'
 import type {
+  AddRequestEditorInput,
   CommentRequestInput,
+  DeleteRequestInput,
   MergeRequestInput,
   NeedsResponseInput,
   RepoParams,
   RequestDetail,
+  RequestDelete,
   RequestList,
   RequestMutation,
   RequestParams,
+  RemoveRequestEditorInput,
   ResolveRequestInput,
   RespondRequestInput,
 } from './types'
 
 export {
+  parseAddRequestEditorInput,
   parseCommentRequestInput,
   parseMergeRequestInput,
   parseNeedsResponseInput,
   parseRequestParams,
+  parseRemoveRequestEditorInput,
   parseResolveRequestInput,
   parseRespondRequestInput,
 } from './request-inputs'
@@ -90,6 +96,34 @@ export async function mergeRequestForRequest(
       expected_main_oid: data.expected_main_oid,
     },
   })
+}
+
+export async function deleteRequestForRequest(
+  data: DeleteRequestInput,
+): Promise<RequestDelete> {
+  return createApiClient().delete<RequestDelete>(requestPath(data), {
+    auth: 'required',
+  })
+}
+
+export async function addRequestEditorForRequest(
+  data: AddRequestEditorInput,
+): Promise<RequestMutation> {
+  return createApiClient().post<RequestMutation>(`${requestPath(data)}/editors`, {
+    auth: 'required',
+    body: { user_id: data.user_id },
+  })
+}
+
+export async function removeRequestEditorForRequest(
+  data: RemoveRequestEditorInput,
+): Promise<RequestMutation> {
+  return createApiClient().delete<RequestMutation>(
+    `${requestPath(data)}/editors/${encodeURIComponent(data.editor_user_id)}`,
+    {
+      auth: 'required',
+    },
+  )
 }
 
 function requestCollectionPath(data: RepoParams) {

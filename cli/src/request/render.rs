@@ -152,6 +152,11 @@ fn mergeability_label(request: &RequestSummaryResponse) -> String {
             .reason
             .clone()
             .unwrap_or_else(|| "closed".to_string()),
+        RequestMergeabilityStatus::NotReady => request
+            .mergeability
+            .reason
+            .clone()
+            .unwrap_or_else(|| "request is not ready to merge".to_string()),
         RequestMergeabilityStatus::NotMaintainer => request
             .mergeability
             .reason
@@ -182,7 +187,7 @@ fn base_audience_label(audience: RequestBaseAudience) -> &'static str {
 
 fn state_label(state: RequestState) -> &'static str {
     match state {
-        RequestState::Reserved => "reserved",
+        RequestState::Working => "working",
         RequestState::Submitted => "submitted",
         RequestState::NeedsResponse => "needs-response",
         RequestState::Resolved => "resolved",
@@ -192,7 +197,8 @@ fn state_label(state: RequestState) -> &'static str {
 
 fn event_kind_label(kind: RequestEventKind) -> &'static str {
     match kind {
-        RequestEventKind::Created => "created",
+        RequestEventKind::Started => "started",
+        RequestEventKind::Submitted => "submitted",
         RequestEventKind::RevisionPushed => "revision-pushed",
         RequestEventKind::Commented => "commented",
         RequestEventKind::NeedsResponse => "needs-response",

@@ -5,12 +5,12 @@ use super::{
     cleanup_queue::queue_pending_source_blob_deletion_rows,
     entities, repository_from_model,
     repository_rows::save_repository_row,
+    request_access::{ensure_request_maintainer, ensure_user_exists},
     request_rows::{
         credit_account_by_user_id, credit_ledger_entry_by_id, insert_credit_ledger_entry_row,
         insert_request_event_row, request_by_id, request_event_by_id, save_credit_account_row,
         save_request_row,
     },
-    requests::{ensure_request_maintainer, ensure_user_exists},
     run_api_db_on,
 };
 use crate::{
@@ -180,8 +180,8 @@ mod tests {
     use crate::domain::{
         policy::Visibility,
         requests::{
-            FinalizeReservedRequestInput, RecordReservedRequestUploadInput, RequestActorRole,
-            RequestBaseAudience, RequestState, ReserveRequestInput, canonical_request_ref,
+            RecordWorkingRequestUploadInput, RequestActorRole, RequestBaseAudience, RequestState,
+            StartRequestInput, SubmitRequestInput, canonical_request_ref,
         },
         store::{
             AppCatalog, DEFAULT_GIT_FILE_MODE, RepoPublicationState, SourceBlob, StoredRepository,
@@ -244,13 +244,11 @@ mod tests {
 
     fn store_with_owner_request() -> MetadataStore {
         let store = MetadataStore::memory(catalog_with_repo());
-        store.reserve_request(owner_reserve_input()).unwrap();
+        store.start_request(owner_start_input()).unwrap();
         store
-            .record_reserved_request_upload(owner_upload_input())
+            .record_working_request_upload(owner_upload_input())
             .unwrap();
-        store
-            .finalize_reserved_request(owner_finalize_input())
-            .unwrap();
+        store.submit_request(owner_submit_input()).unwrap();
         store
     }
 
@@ -270,11 +268,12 @@ mod tests {
         catalog
     }
 
-    fn owner_reserve_input() -> ReserveRequestInput {
-        ReserveRequestInput {
+    fn owner_start_input() -> StartRequestInput {
+        StartRequestInput {
             id: "req_1".to_string(),
             repo_id: "owner/repo".to_string(),
             author_user_id: "user_owner".to_string(),
+            title: "Owner request".to_string(),
             author_role: RequestActorRole::Owner,
             base_audience: RequestBaseAudience::Private,
             target_branch: "main".to_string(),
@@ -284,10 +283,11 @@ mod tests {
         }
     }
 
-    fn owner_upload_input() -> RecordReservedRequestUploadInput {
-        RecordReservedRequestUploadInput {
+    fn owner_upload_input() -> RecordWorkingRequestUploadInput {
+        RecordWorkingRequestUploadInput {
             request_id: "req_1".to_string(),
             actor_user_id: "user_owner".to_string(),
+            actor_can_edit: true,
             expected_old_head_oid: None,
             new_head_oid: "head_a".to_string(),
             git_snapshot: SourceBlob {
@@ -301,11 +301,10 @@ mod tests {
         }
     }
 
-    fn owner_finalize_input() -> FinalizeReservedRequestInput {
-        FinalizeReservedRequestInput {
+    fn owner_submit_input() -> SubmitRequestInput {
+        SubmitRequestInput {
             request_id: "req_1".to_string(),
             actor_user_id: "user_owner".to_string(),
-            title: "Owner request".to_string(),
             expected_head_oid: "head_a".to_string(),
             stake_credits: 0,
             stake_ledger_entry_id: None,
