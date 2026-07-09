@@ -22,17 +22,22 @@ export {
   parseUpdateRepoMemberInput,
 } from './repo-inputs'
 export {
+  addRequestEditorForRequest,
   commentRequestForRequest,
+  deleteRequestForRequest,
   loadRequestForRequest,
   loadRequestsForRequest,
   markRequestNeedsResponseForRequest,
   mergeRequestForRequest,
+  parseAddRequestEditorInput,
   parseCommentRequestInput,
   parseMergeRequestInput,
   parseNeedsResponseInput,
   parseRequestParams,
+  parseRemoveRequestEditorInput,
   parseResolveRequestInput,
   parseRespondRequestInput,
+  removeRequestEditorForRequest,
   resolveRequestForRequest,
   respondToRequestForRequest,
 } from './requests'

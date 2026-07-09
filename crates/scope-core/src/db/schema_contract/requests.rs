@@ -6,6 +6,7 @@ const REQUEST_COLUMNS: &[ColumnSpec] = &[
     required_column(REQUEST_ID, ColumnType::String),
     required_column("repo_id", ColumnType::String),
     required_column("author_user_id", ColumnType::String),
+    required_column("editor_user_ids", ColumnType::JsonBinary),
     required_column("author_role", ColumnType::String),
     required_column("base_audience", ColumnType::String),
     required_column("target_branch", ColumnType::String),

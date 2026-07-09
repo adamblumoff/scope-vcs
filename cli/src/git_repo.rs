@@ -298,6 +298,15 @@ pub fn run_git_in_repo(repo: &GitRepo, args: &[&str]) -> anyhow::Result<()> {
     Ok(())
 }
 
+pub fn try_run_git_in_repo(repo: &GitRepo, args: &[&str]) -> anyhow::Result<bool> {
+    let status = Command::new("git")
+        .current_dir(&repo.root)
+        .args(args)
+        .status()
+        .with_context(|| format!("run git {}", args.join(" ")))?;
+    Ok(status.success())
+}
+
 pub fn git_text_in_repo(repo: &GitRepo, args: &[&str]) -> anyhow::Result<String> {
     let output = git_output_in_repo(repo, args)?;
     if !output.status.success() {

@@ -32,11 +32,21 @@ pub(crate) struct RequestMutationResponse {
 
 #[derive(Debug, Serialize)]
 #[cfg_attr(test, derive(ts_rs::TS))]
-pub(crate) struct RequestReservationResponse {
-    pub(crate) id: String,
-    pub(crate) request_ref: String,
-    pub(crate) base_audience: RequestBaseAudience,
-    pub(crate) base_main_oid: String,
+pub(crate) struct RequestDeleteResponse {
+    pub(crate) deleted: bool,
+    pub(crate) request: Option<RequestSummaryResponse>,
+}
+
+#[derive(Debug, Deserialize)]
+#[cfg_attr(test, derive(ts_rs::TS))]
+pub(crate) struct StartRequestRequest {
+    pub(crate) title: String,
+}
+
+#[derive(Debug, Deserialize)]
+#[cfg_attr(test, derive(ts_rs::TS))]
+pub(crate) struct RequestEditorRequest {
+    pub(crate) user_id: String,
 }
 
 #[derive(Debug, Serialize)]
@@ -45,6 +55,7 @@ pub(crate) struct RequestSummaryResponse {
     pub(crate) id: String,
     pub(crate) title: String,
     pub(crate) author_user_id: String,
+    pub(crate) editor_user_ids: Vec<String>,
     pub(crate) author_role: RequestActorRole,
     pub(crate) base_audience: RequestBaseAudience,
     pub(crate) target_branch: String,
@@ -66,7 +77,10 @@ pub(crate) struct RequestSummaryResponse {
 #[cfg_attr(test, derive(ts_rs::TS))]
 pub(crate) struct RequestPermissionsResponse {
     pub(crate) can_comment: bool,
-    pub(crate) can_update_branch: bool,
+    pub(crate) can_pull_branch: bool,
+    pub(crate) can_push_branch: bool,
+    pub(crate) can_delete: bool,
+    pub(crate) can_invite_editor: bool,
     pub(crate) can_mark_needs_response: bool,
     pub(crate) can_respond: bool,
     pub(crate) can_resolve: bool,
@@ -78,6 +92,7 @@ pub(crate) struct RequestPermissionsResponse {
 pub(crate) enum RequestMergeabilityStatus {
     Ready,
     Closed,
+    NotReady,
     NotMaintainer,
     MissingRequestBranch,
 }
@@ -143,8 +158,7 @@ impl From<RequestEvent> for RequestEventResponse {
 
 #[derive(Debug, Deserialize)]
 #[cfg_attr(test, derive(ts_rs::TS))]
-pub(crate) struct FinalizeRequestSubmissionRequest {
-    pub(crate) title: String,
+pub(crate) struct SubmitRequestRequest {
     pub(crate) head_oid: String,
     pub(crate) stake_credits: Option<u32>,
 }
@@ -191,6 +205,7 @@ pub(crate) fn request_summary_response(
         id: request.id,
         title: request.title,
         author_user_id: request.author_user_id,
+        editor_user_ids: request.editor_user_ids.into_iter().collect(),
         author_role: request.author_role,
         base_audience: request.base_audience,
         target_branch: request.target_branch,

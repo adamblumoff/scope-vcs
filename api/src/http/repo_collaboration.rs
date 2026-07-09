@@ -269,7 +269,7 @@ fn open_request_count_for_access(
 fn request_counts_for_access(request: &Request, access: RepositoryAccess) -> bool {
     if matches!(
         request.state,
-        RequestState::Reserved | RequestState::Resolved | RequestState::Withdrawn
+        RequestState::Working | RequestState::Resolved | RequestState::Withdrawn
     ) {
         return false;
     }

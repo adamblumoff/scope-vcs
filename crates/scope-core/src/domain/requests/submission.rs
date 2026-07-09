@@ -9,10 +9,11 @@ use crate::{domain::store::SourceBlob, error::ApiError};
 use std::collections::BTreeMap;
 
 #[derive(Clone, Debug)]
-pub struct ReserveRequestInput {
+pub struct StartRequestInput {
     pub id: String,
     pub repo_id: String,
     pub author_user_id: String,
+    pub title: String,
     pub author_role: RequestActorRole,
     pub base_audience: RequestBaseAudience,
     pub target_branch: String,
@@ -22,14 +23,15 @@ pub struct ReserveRequestInput {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub struct ReserveRequestMutation {
+pub struct StartRequestMutation {
     pub request: Request,
 }
 
 #[derive(Clone, Debug)]
-pub struct RecordReservedRequestUploadInput {
+pub struct RecordWorkingRequestUploadInput {
     pub request_id: String,
     pub actor_user_id: String,
+    pub actor_can_edit: bool,
     pub expected_old_head_oid: Option<String>,
     pub new_head_oid: String,
     pub git_snapshot: SourceBlob,
@@ -37,16 +39,15 @@ pub struct RecordReservedRequestUploadInput {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub struct ReservedRequestUploadMutation {
+pub struct WorkingRequestUploadMutation {
     pub request: Request,
     pub source_blobs_to_delete: Vec<SourceBlob>,
 }
 
 #[derive(Clone, Debug)]
-pub struct FinalizeReservedRequestInput {
+pub struct SubmitRequestInput {
     pub request_id: String,
     pub actor_user_id: String,
-    pub title: String,
     pub expected_head_oid: String,
     pub stake_credits: u32,
     pub stake_ledger_entry_id: Option<String>,
@@ -55,18 +56,18 @@ pub struct FinalizeReservedRequestInput {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub struct FinalizeReservedRequestMutation {
+pub struct SubmitRequestMutation {
     pub request: Request,
     pub event: RequestEvent,
     pub account: Option<UserCreditAccount>,
     pub ledger_entry: Option<CreditLedgerEntry>,
 }
 
-pub fn reserve_request(
+pub fn start_request(
     requests: &mut BTreeMap<String, Request>,
-    input: ReserveRequestInput,
-) -> Result<ReserveRequestMutation, ApiError> {
-    validate_reserve_request_input(&input)?;
+    input: StartRequestInput,
+) -> Result<StartRequestMutation, ApiError> {
+    validate_start_request_input(&input)?;
     if requests.contains_key(&input.id) {
         return Err(ApiError::conflict("request already exists"));
     }
@@ -76,6 +77,7 @@ pub fn reserve_request(
         id: input.id,
         repo_id: input.repo_id,
         author_user_id: input.author_user_id,
+        editor_user_ids: Default::default(),
         author_role: input.author_role,
         base_audience: input.base_audience,
         target_branch: input.target_branch,
@@ -83,8 +85,8 @@ pub fn reserve_request(
         base_main_oid: input.base_main_oid.clone(),
         head_oid: input.base_main_oid,
         git_snapshot: None,
-        title: String::new(),
-        state: RequestState::Reserved,
+        title: input.title,
+        state: RequestState::Working,
         stake_credits: 0,
         disposition: None,
         settlement: None,
@@ -93,23 +95,23 @@ pub fn reserve_request(
         resolved_at_unix: None,
     };
     requests.insert(request.id.clone(), request.clone());
-    Ok(ReserveRequestMutation { request })
+    Ok(StartRequestMutation { request })
 }
 
-pub fn record_reserved_request_upload(
+pub fn record_working_request_upload(
     requests: &mut BTreeMap<String, Request>,
-    input: RecordReservedRequestUploadInput,
-) -> Result<ReservedRequestUploadMutation, ApiError> {
+    input: RecordWorkingRequestUploadInput,
+) -> Result<WorkingRequestUploadMutation, ApiError> {
     validate_required_id("request id", &input.request_id)?;
     validate_required_id("actor user id", &input.actor_user_id)?;
     validate_required_id("head oid", &input.new_head_oid)?;
     let request = requests
         .get_mut(&input.request_id)
         .ok_or_else(|| ApiError::not_found("request not found"))?;
-    if request.author_user_id != input.actor_user_id {
-        return Err(ApiError::forbidden("request author required"));
+    if !input.actor_can_edit {
+        return Err(ApiError::forbidden("request branch edit access required"));
     }
-    if request.state != RequestState::Reserved {
+    if request.state != RequestState::Working {
         return Err(ApiError::conflict("request is already submitted"));
     }
     match input.expected_old_head_oid.as_deref() {
@@ -131,20 +133,20 @@ pub fn record_reserved_request_upload(
     request.git_snapshot = Some(input.git_snapshot);
     request.updated_at_unix = input.now_unix;
     let request = request.clone();
-    Ok(ReservedRequestUploadMutation {
+    Ok(WorkingRequestUploadMutation {
         request,
         source_blobs_to_delete: old_git_snapshot.into_iter().collect(),
     })
 }
 
-pub fn finalize_reserved_request(
+pub fn submit_request(
     requests: &mut BTreeMap<String, Request>,
     events: &mut BTreeMap<String, RequestEvent>,
     accounts: &mut BTreeMap<String, UserCreditAccount>,
     ledger_entries: &mut BTreeMap<String, CreditLedgerEntry>,
-    input: FinalizeReservedRequestInput,
-) -> Result<FinalizeReservedRequestMutation, ApiError> {
-    validate_finalize_reserved_request_input(&input)?;
+    input: SubmitRequestInput,
+) -> Result<SubmitRequestMutation, ApiError> {
+    validate_submit_request_input(&input)?;
     ensure_event_id_available(events, &input.event_id)?;
     let request = requests
         .get(&input.request_id)
@@ -152,7 +154,7 @@ pub fn finalize_reserved_request(
     if request.author_user_id != input.actor_user_id {
         return Err(ApiError::forbidden("request author required"));
     }
-    if request.state != RequestState::Reserved {
+    if request.state != RequestState::Working {
         return Err(ApiError::conflict("request is already submitted"));
     }
     if request.git_snapshot.is_none() {
@@ -210,7 +212,6 @@ pub fn finalize_reserved_request(
     let request = requests
         .get_mut(&input.request_id)
         .ok_or_else(|| ApiError::not_found("request not found"))?;
-    request.title = input.title;
     request.stake_credits = input.stake_credits;
     request.state = RequestState::Submitted;
     request.updated_at_unix = input.now_unix;
@@ -219,7 +220,7 @@ pub fn finalize_reserved_request(
         id: input.event_id,
         request_id: request.id.clone(),
         actor_user_id: input.actor_user_id,
-        kind: RequestEventKind::Created,
+        kind: RequestEventKind::Submitted,
         body: None,
         old_head_oid: None,
         new_head_oid: Some(request.head_oid.clone()),
@@ -236,7 +237,7 @@ pub fn finalize_reserved_request(
         ledger_entries.insert(entry.id.clone(), entry);
     }
     events.insert(event.id.clone(), event.clone());
-    Ok(FinalizeReservedRequestMutation {
+    Ok(SubmitRequestMutation {
         request,
         event,
         account,
@@ -244,10 +245,11 @@ pub fn finalize_reserved_request(
     })
 }
 
-fn validate_reserve_request_input(input: &ReserveRequestInput) -> Result<(), ApiError> {
+fn validate_start_request_input(input: &StartRequestInput) -> Result<(), ApiError> {
     validate_required_id("request id", &input.id)?;
     validate_required_id("repo id", &input.repo_id)?;
     validate_required_id("author user id", &input.author_user_id)?;
+    validate_required_id("title", &input.title)?;
     validate_required_id("target branch", &input.target_branch)?;
     validate_required_id("request ref", &input.request_ref)?;
     validate_required_id("base main oid", &input.base_main_oid)?;
@@ -262,12 +264,9 @@ fn validate_reserve_request_input(input: &ReserveRequestInput) -> Result<(), Api
     validate_request_base_rules(input.author_role, input.base_audience)
 }
 
-fn validate_finalize_reserved_request_input(
-    input: &FinalizeReservedRequestInput,
-) -> Result<(), ApiError> {
+fn validate_submit_request_input(input: &SubmitRequestInput) -> Result<(), ApiError> {
     validate_required_id("request id", &input.request_id)?;
     validate_required_id("actor user id", &input.actor_user_id)?;
-    validate_required_id("title", &input.title)?;
     validate_required_id("expected head oid", &input.expected_head_oid)?;
     validate_required_id("event id", &input.event_id)?;
     Ok(())

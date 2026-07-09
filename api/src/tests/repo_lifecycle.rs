@@ -1,7 +1,7 @@
 use super::*;
 use crate::domain::requests::{
-    FinalizeReservedRequestInput, RecordReservedRequestUploadInput, RequestActorRole,
-    RequestBaseAudience, ReserveRequestInput, canonical_request_ref,
+    RecordWorkingRequestUploadInput, RequestActorRole, RequestBaseAudience, StartRequestInput,
+    SubmitRequestInput, canonical_request_ref,
 };
 
 #[test]
@@ -532,10 +532,11 @@ async fn accept_invite_returns_open_request_count() {
     cache_test_jwks(&state);
     state
         .metadata
-        .reserve_request(ReserveRequestInput {
+        .start_request(StartRequestInput {
             id: "req_invite_count".to_string(),
             repo_id: TEST_REPO_ID.to_string(),
             author_user_id: test_owner_id(),
+            title: "Open owner request".to_string(),
             author_role: RequestActorRole::Owner,
             base_audience: RequestBaseAudience::Private,
             target_branch: DEFAULT_GIT_BRANCH.to_string(),
@@ -546,9 +547,10 @@ async fn accept_invite_returns_open_request_count() {
         .unwrap();
     state
         .metadata
-        .record_reserved_request_upload(RecordReservedRequestUploadInput {
+        .record_working_request_upload(RecordWorkingRequestUploadInput {
             request_id: "req_invite_count".to_string(),
             actor_user_id: test_owner_id(),
+            actor_can_edit: true,
             expected_old_head_oid: None,
             new_head_oid: "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb".to_string(),
             git_snapshot: source_blob("invite count request"),
@@ -557,10 +559,9 @@ async fn accept_invite_returns_open_request_count() {
         .unwrap();
     state
         .metadata
-        .finalize_reserved_request(FinalizeReservedRequestInput {
+        .submit_request(SubmitRequestInput {
             request_id: "req_invite_count".to_string(),
             actor_user_id: test_owner_id(),
-            title: "Open owner request".to_string(),
             expected_head_oid: "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb".to_string(),
             stake_credits: 0,
             stake_ledger_entry_id: None,

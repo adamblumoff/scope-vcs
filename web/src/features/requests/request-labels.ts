@@ -62,8 +62,8 @@ const RESOLUTION_OPTIONS = [
 
 export function requestStateLabel(state: RequestWorkflowState) {
   switch (state) {
-    case 'Reserved':
-      return 'Reserved'
+    case 'Working':
+      return 'Working'
     case 'Submitted':
       return 'Submitted'
     case 'NeedsResponse':
@@ -83,7 +83,7 @@ export function requestStateTone(state: RequestWorkflowState): BadgeTone {
       return 'warning'
     case 'Resolved':
       return 'success'
-    case 'Reserved':
+    case 'Working':
     case 'Withdrawn':
       return 'neutral'
   }
@@ -145,8 +145,10 @@ export function requestAuthorRoleLabel(request: RequestSummary) {
 
 export function eventKindLabel(kind: RequestWorkflowEventKind) {
   switch (kind) {
-    case 'Created':
-      return 'Created'
+    case 'Started':
+      return 'Started'
+    case 'Submitted':
+      return 'Submitted'
     case 'RevisionPushed':
       return 'Revision pushed'
     case 'Commented':
@@ -172,6 +174,8 @@ export function requestMergeabilityLabel(request: RequestSummary) {
       return 'Clean merge available'
     case 'Closed':
       return 'Closed'
+    case 'NotReady':
+      return 'Not ready'
     case 'NotMaintainer':
       return 'Maintainer required'
     case 'MissingRequestBranch':
@@ -183,6 +187,7 @@ export function requestMergeabilityTone(request: RequestSummary): BadgeTone {
   switch (request.mergeability.status) {
     case 'Ready':
       return 'success'
+    case 'NotReady':
     case 'MissingRequestBranch':
       return 'warning'
     case 'Closed':

@@ -10,9 +10,13 @@ pub struct RequestArgs {
 #[derive(Subcommand)]
 pub(super) enum RequestCommand {
     Start(RequestStartArgs),
+    Join(RequestJoinArgs),
     Submit(RequestSubmitArgs),
-    Update(RequestUpdateArgs),
-    Sync(RequestSyncArgs),
+    Pull(RequestPullArgs),
+    Push(RequestPushArgs),
+    SyncMain(RequestSyncMainArgs),
+    Delete(RequestDeleteArgs),
+    Share(RequestShareArgs),
     Status(RequestStatusArgs),
     Comment(RequestCommentArgs),
     NeedsResponse(RequestNeedsResponseArgs),
@@ -27,6 +31,15 @@ pub(super) struct RequestStartArgs {
     pub(super) remote: Option<String>,
     #[arg(long)]
     pub(super) branch: Option<String>,
+    #[arg(long)]
+    pub(super) title: String,
+}
+
+#[derive(Parser)]
+pub(super) struct RequestJoinArgs {
+    #[arg(long)]
+    pub(super) remote: Option<String>,
+    pub(super) id: String,
 }
 
 #[derive(Parser)]
@@ -34,22 +47,41 @@ pub(super) struct RequestSubmitArgs {
     #[arg(long)]
     pub(super) remote: Option<String>,
     #[arg(long)]
-    pub(super) title: String,
-    #[arg(long)]
     pub(super) stake_credits: Option<u32>,
 }
 
 #[derive(Parser)]
-pub(super) struct RequestUpdateArgs {
+pub(super) struct RequestPullArgs {
     #[arg(long)]
     pub(super) remote: Option<String>,
     pub(super) id: Option<String>,
 }
 
 #[derive(Parser)]
-pub(super) struct RequestSyncArgs {
+pub(super) struct RequestPushArgs {
     #[arg(long)]
     pub(super) remote: Option<String>,
+    pub(super) id: Option<String>,
+}
+
+#[derive(Parser)]
+pub(super) struct RequestSyncMainArgs {
+    #[arg(long)]
+    pub(super) remote: Option<String>,
+}
+
+#[derive(Parser)]
+pub(super) struct RequestDeleteArgs {
+    #[arg(long)]
+    pub(super) remote: Option<String>,
+    pub(super) id: Option<String>,
+}
+
+#[derive(Parser)]
+pub(super) struct RequestShareArgs {
+    #[arg(long)]
+    pub(super) remote: Option<String>,
+    pub(super) id: Option<String>,
 }
 
 #[derive(Parser)]

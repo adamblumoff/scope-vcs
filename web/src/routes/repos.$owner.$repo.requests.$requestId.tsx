@@ -1,15 +1,20 @@
 import {
+  addRequestEditorForRequest,
   commentRequestForRequest,
+  deleteRequestForRequest,
   loadRepoLiveStateForRequest,
   loadRequestForRequest,
   markRequestNeedsResponseForRequest,
   mergeRequestForRequest,
+  parseAddRequestEditorInput,
   parseCommentRequestInput,
   parseMergeRequestInput,
   parseNeedsResponseInput,
   parseRequestParams,
+  parseRemoveRequestEditorInput,
   parseResolveRequestInput,
   parseRespondRequestInput,
+  removeRequestEditorForRequest,
   resolveRequestForRequest,
   respondToRequestForRequest,
 } from '@/api/repos'
@@ -48,6 +53,18 @@ const mergeRequest = createServerFn({ method: 'POST' })
   .validator(parseMergeRequestInput)
   .handler(({ data }) => mergeRequestForRequest(data))
 
+const deleteRequest = createServerFn({ method: 'POST' })
+  .validator(parseRequestParams)
+  .handler(({ data }) => deleteRequestForRequest(data))
+
+const addRequestEditor = createServerFn({ method: 'POST' })
+  .validator(parseAddRequestEditorInput)
+  .handler(({ data }) => addRequestEditorForRequest(data))
+
+const removeRequestEditor = createServerFn({ method: 'POST' })
+  .validator(parseRemoveRequestEditorInput)
+  .handler(({ data }) => removeRequestEditorForRequest(data))
+
 export const Route = createFileRoute('/repos/$owner/$repo/requests/$requestId')({
   loader: ({ params }) =>
     loadRequestPage({
@@ -66,12 +83,15 @@ function RequestRoute() {
 
   return (
     <RequestDetailPage
+      addRequestEditor={(data) => addRequestEditor({ data })}
       commentRequest={(data) => commentRequest({ data })}
       detail={detail}
+      deleteRequest={(data) => deleteRequest({ data })}
       live={live}
       markNeedsResponse={(data) => markNeedsResponse({ data })}
       mergeRequest={(data) => mergeRequest({ data })}
       params={requestParams}
+      removeRequestEditor={(data) => removeRequestEditor({ data })}
       resolveRequest={(data) => resolveRequest({ data })}
       respondToRequest={(data) => respondToRequest({ data })}
     />

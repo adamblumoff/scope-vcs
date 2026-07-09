@@ -419,7 +419,7 @@ fn repo_summary_response(
 fn request_visible_in_summary(request: &Request, access: RepositoryAccess) -> bool {
     if matches!(
         request.state,
-        RequestState::Reserved | RequestState::Resolved | RequestState::Withdrawn
+        RequestState::Working | RequestState::Resolved | RequestState::Withdrawn
     ) {
         return false;
     }

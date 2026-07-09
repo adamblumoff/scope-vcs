@@ -75,6 +75,7 @@ function requestWithState(state: RequestSummary['state']): RequestSummary {
   return {
     author_role: 'Public',
     author_user_id: 'user_public',
+    editor_user_ids: [],
     base_audience: 'Public',
     base_main_oid: 'a'.repeat(40),
     created_at_unix: 1,
@@ -89,11 +90,14 @@ function requestWithState(state: RequestSummary['state']): RequestSummary {
     },
     permissions: {
       can_comment: true,
+      can_delete: true,
+      can_invite_editor: true,
       can_mark_needs_response: true,
       can_merge: true,
+      can_pull_branch: true,
+      can_push_branch: true,
       can_resolve: true,
       can_respond: false,
-      can_update_branch: true,
     },
     request_ref: 'refs/scope/requests/req_1',
     resolved_at_unix: null,

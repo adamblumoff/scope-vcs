@@ -20,7 +20,7 @@ fn memory_request_submission_and_resolution_update_credit_facts() {
             now_unix: 1,
         })
         .unwrap();
-    finalize_public_request(&store);
+    submit_public_request(&store);
     let mutation = store
         .resolve_request(ResolveRequestInput {
             request_id: "req_1".to_string(),
@@ -60,15 +60,15 @@ fn memory_request_submission_and_resolution_update_credit_facts() {
 #[test]
 fn memory_public_user_cannot_choose_owner_role_to_skip_stake() {
     let store = MetadataStore::memory(catalog_with_repo());
-    store.reserve_request(public_reserve_input()).unwrap();
+    store.start_request(public_start_input()).unwrap();
     store
-        .record_reserved_request_upload(public_upload_input())
+        .record_working_request_upload(public_upload_input())
         .unwrap();
-    let mut input = public_finalize_input();
+    let mut input = public_submit_input();
     input.stake_credits = 0;
     input.stake_ledger_entry_id = None;
 
-    let error = store.finalize_reserved_request(input).unwrap_err();
+    let error = store.submit_request(input).unwrap_err();
 
     assert!(
         error
@@ -79,7 +79,7 @@ fn memory_public_user_cannot_choose_owner_role_to_skip_stake() {
         .read(|catalog| {
             assert_eq!(
                 catalog.requests.get("req_1").unwrap().state,
-                RequestState::Reserved
+                RequestState::Working
             );
             assert!(catalog.request_events.is_empty());
             assert!(catalog.credit_ledger_entries.is_empty());
@@ -91,17 +91,18 @@ fn memory_public_user_cannot_choose_owner_role_to_skip_stake() {
 #[test]
 fn memory_owner_submission_derives_private_base_without_credits() {
     let store = MetadataStore::memory(catalog_with_repo());
-    let mut input = public_reserve_input();
+    let mut input = public_start_input();
     input.id = "req_owner".to_string();
     input.request_ref = "refs/scope/requests/req_owner".to_string();
     input.author_user_id = "user_owner".to_string();
     input.author_role = RequestActorRole::Public;
     input.base_audience = RequestBaseAudience::Public;
-    let reservation = store.reserve_request(input).unwrap();
+    let start = store.start_request(input).unwrap();
     store
-        .record_reserved_request_upload(RecordReservedRequestUploadInput {
-            request_id: reservation.request.id.clone(),
+        .record_working_request_upload(RecordWorkingRequestUploadInput {
+            request_id: start.request.id.clone(),
             actor_user_id: "user_owner".to_string(),
+            actor_can_edit: true,
             expected_old_head_oid: None,
             new_head_oid: "head".to_string(),
             git_snapshot: source_blob("head"),
@@ -109,10 +110,9 @@ fn memory_owner_submission_derives_private_base_without_credits() {
         })
         .unwrap();
     let mutation = store
-        .finalize_reserved_request(FinalizeReservedRequestInput {
-            request_id: reservation.request.id,
+        .submit_request(SubmitRequestInput {
+            request_id: start.request.id,
             actor_user_id: "user_owner".to_string(),
-            title: "Fix parser crash".to_string(),
             expected_head_oid: "head".to_string(),
             stake_credits: 0,
             stake_ledger_entry_id: None,
@@ -138,7 +138,7 @@ fn memory_non_maintainer_cannot_resolve_request() {
             now_unix: 1,
         })
         .unwrap();
-    finalize_public_request(&store);
+    submit_public_request(&store);
 
     let error = store
         .resolve_request(ResolveRequestInput {
@@ -192,11 +192,12 @@ fn postgres_request_facts_round_trip_when_database_is_configured() {
             now_unix: 1,
         })
         .unwrap();
-    finalize_public_request(&store);
+    submit_public_request(&store);
     store
         .record_request_revision(RecordRequestRevisionInput {
             request_id: "req_1".to_string(),
             actor_user_id: "user_public".to_string(),
+            actor_can_edit: true,
             expected_old_head_oid: Some("head".to_string()),
             new_head_oid: "head_2".to_string(),
             git_snapshot: None,
@@ -205,9 +206,9 @@ fn postgres_request_facts_round_trip_when_database_is_configured() {
             now_unix: 2,
         })
         .unwrap();
-    let mut invalid_ref = public_reserve_input();
+    let mut invalid_ref = public_start_input();
     invalid_ref.id = "req_2".to_string();
-    let error = store.reserve_request(invalid_ref).unwrap_err();
+    let error = store.start_request(invalid_ref).unwrap_err();
     assert!(error.message.contains("request ref must match"));
 
     store
@@ -250,21 +251,20 @@ fn catalog_with_repo() -> AppCatalog {
     catalog
 }
 
-fn finalize_public_request(store: &MetadataStore) {
-    store.reserve_request(public_reserve_input()).unwrap();
+fn submit_public_request(store: &MetadataStore) {
+    store.start_request(public_start_input()).unwrap();
     store
-        .record_reserved_request_upload(public_upload_input())
+        .record_working_request_upload(public_upload_input())
         .unwrap();
-    store
-        .finalize_reserved_request(public_finalize_input())
-        .unwrap();
+    store.submit_request(public_submit_input()).unwrap();
 }
 
-fn public_reserve_input() -> ReserveRequestInput {
-    ReserveRequestInput {
+fn public_start_input() -> StartRequestInput {
+    StartRequestInput {
         id: "req_1".to_string(),
         repo_id: "owner/repo".to_string(),
         author_user_id: "user_public".to_string(),
+        title: "Fix parser crash".to_string(),
         author_role: RequestActorRole::Public,
         base_audience: RequestBaseAudience::Public,
         target_branch: "main".to_string(),
@@ -274,10 +274,11 @@ fn public_reserve_input() -> ReserveRequestInput {
     }
 }
 
-fn public_upload_input() -> RecordReservedRequestUploadInput {
-    RecordReservedRequestUploadInput {
+fn public_upload_input() -> RecordWorkingRequestUploadInput {
+    RecordWorkingRequestUploadInput {
         request_id: "req_1".to_string(),
         actor_user_id: "user_public".to_string(),
+        actor_can_edit: true,
         expected_old_head_oid: None,
         new_head_oid: "head".to_string(),
         git_snapshot: source_blob("head"),
@@ -285,11 +286,10 @@ fn public_upload_input() -> RecordReservedRequestUploadInput {
     }
 }
 
-fn public_finalize_input() -> FinalizeReservedRequestInput {
-    FinalizeReservedRequestInput {
+fn public_submit_input() -> SubmitRequestInput {
+    SubmitRequestInput {
         request_id: "req_1".to_string(),
         actor_user_id: "user_public".to_string(),
-        title: "Fix parser crash".to_string(),
         expected_head_oid: "head".to_string(),
         stake_credits: 10,
         stake_ledger_entry_id: Some("ledger_stake".to_string()),

@@ -34,11 +34,11 @@ export type RequestActorRole = "Public" | "Member" | "Owner";
 
 export type RequestBaseAudience = "Public" | "Private";
 
-export type RequestState = "Reserved" | "Submitted" | "NeedsResponse" | "Resolved" | "Withdrawn";
+export type RequestState = "Working" | "Submitted" | "NeedsResponse" | "Resolved" | "Withdrawn";
 
 export type RequestDisposition = "Accepted" | "UsefulNotMerged" | "HiddenContext" | "NotAligned" | "Duplicate" | "Abandoned" | "LowQuality";
 
-export type RequestEventKind = "Created" | "RevisionPushed" | "Commented" | "NeedsResponse" | "ContributorResponded" | "Merged" | "Resolved" | "Settled" | "Withdrawn";
+export type RequestEventKind = "Started" | "Submitted" | "RevisionPushed" | "Commented" | "NeedsResponse" | "ContributorResponded" | "Merged" | "Resolved" | "Settled" | "Withdrawn";
 
 export type ProjectionPreviewAudience = "private" | "public";
 
@@ -162,11 +162,11 @@ export type RequestDetailResponse = { request: RequestSummaryResponse, events: A
 
 export type RequestMutationResponse = { request: RequestSummaryResponse, };
 
-export type RequestSummaryResponse = { id: string, title: string, author_user_id: string, author_role: RequestActorRole, base_audience: RequestBaseAudience, target_branch: string, request_ref: string, base_main_oid: string, head_oid: string, state: RequestState, stake_credits: number, disposition: RequestDisposition | null, settlement: RequestSettlementResponse | null, created_at_unix: number, updated_at_unix: number, resolved_at_unix: number | null, permissions: RequestPermissionsResponse, mergeability: RequestMergeabilityResponse, };
+export type RequestSummaryResponse = { id: string, title: string, author_user_id: string, editor_user_ids: Array<string>, author_role: RequestActorRole, base_audience: RequestBaseAudience, target_branch: string, request_ref: string, base_main_oid: string, head_oid: string, state: RequestState, stake_credits: number, disposition: RequestDisposition | null, settlement: RequestSettlementResponse | null, created_at_unix: number, updated_at_unix: number, resolved_at_unix: number | null, permissions: RequestPermissionsResponse, mergeability: RequestMergeabilityResponse, };
 
-export type RequestPermissionsResponse = { can_comment: boolean, can_update_branch: boolean, can_mark_needs_response: boolean, can_respond: boolean, can_resolve: boolean, can_merge: boolean, };
+export type RequestPermissionsResponse = { can_comment: boolean, can_pull_branch: boolean, can_push_branch: boolean, can_delete: boolean, can_invite_editor: boolean, can_mark_needs_response: boolean, can_respond: boolean, can_resolve: boolean, can_merge: boolean, };
 
-export type RequestMergeabilityStatus = "Ready" | "Closed" | "NotMaintainer" | "MissingRequestBranch";
+export type RequestMergeabilityStatus = "Ready" | "Closed" | "NotReady" | "NotMaintainer" | "MissingRequestBranch";
 
 export type RequestMergeabilityResponse = { status: RequestMergeabilityStatus, current_main_oid: string | null, request_head_oid: string, reason: string | null, };
 
@@ -174,9 +174,13 @@ export type RequestSettlementResponse = { disposition: RequestDisposition, stake
 
 export type RequestEventResponse = { id: string, actor_user_id: string, kind: RequestEventKind, body: string | null, old_head_oid: string | null, new_head_oid: string | null, created_at_unix: number, };
 
-export type RequestReservationResponse = { id: string, request_ref: string, base_audience: RequestBaseAudience, base_main_oid: string, };
+export type RequestDeleteResponse = { deleted: boolean, request: RequestSummaryResponse | null, };
 
-export type FinalizeRequestSubmissionRequest = { title: string, head_oid: string, stake_credits: number | null, };
+export type StartRequestRequest = { title: string, };
+
+export type RequestEditorRequest = { user_id: string, };
+
+export type SubmitRequestRequest = { head_oid: string, stake_credits: number | null, };
 
 export type CommentRequestRequest = { body: string, };
 

@@ -1,13 +1,17 @@
 import type {
+  AddRequestEditorInput,
   CommentRequestInput,
+  DeleteRequestInput,
   MergeRequestInput,
   NeedsResponseInput,
   RepoLiveState,
   RepoParams,
   RequestDetail,
+  RequestDelete,
   RequestMutation,
   RequestSummary,
   RequestWorkflowDisposition,
+  RemoveRequestEditorInput,
   ResolveRequestInput,
   RespondRequestInput,
 } from '@/api/types'
@@ -30,8 +34,10 @@ import {
   Reply,
   Send,
   ShieldQuestion,
+  Trash2,
 } from 'lucide-react'
 import { type FormEvent, type ReactNode, useReducer } from 'react'
+import { RequestCollaborationSection } from './request-collaboration-section'
 import { RequestMergeDialog } from './request-merge-dialog'
 import {
   dispositionLabel,
@@ -54,8 +60,17 @@ import {
 } from './request-labels'
 
 type RequestMutationAction<TInput> = (input: TInput) => Promise<RequestMutation>
+type RequestDeleteAction = (input: DeleteRequestInput) => Promise<RequestDelete>
 
-type ActionKey = 'comment' | 'merge' | 'needs-response' | 'resolve' | 'respond'
+type ActionKey =
+  | 'add-editor'
+  | 'comment'
+  | 'delete'
+  | 'merge'
+  | 'needs-response'
+  | 'remove-editor'
+  | 'resolve'
+  | 'respond'
 
 type ActionError = {
   key: ActionKey
@@ -64,6 +79,7 @@ type ActionError = {
 
 type RequestBodyField =
   | 'commentBody'
+  | 'editorUserId'
   | 'needsResponseBody'
   | 'resolveBody'
   | 'responseBody'
@@ -71,6 +87,7 @@ type RequestBodyField =
 type RequestDetailUiState = {
   actionError: ActionError | null
   commentBody: string
+  editorUserId: string
   mergeOpen: boolean
   needsResponseBody: string
   pendingAction: ActionKey | null
@@ -94,6 +111,7 @@ type RequestDetailUiAction =
 const initialRequestDetailUiState: RequestDetailUiState = {
   actionError: null,
   commentBody: '',
+  editorUserId: '',
   mergeOpen: false,
   needsResponseBody: '',
   pendingAction: null,
@@ -103,21 +121,27 @@ const initialRequestDetailUiState: RequestDetailUiState = {
 }
 
 export function RequestDetailPage({
+  addRequestEditor,
   commentRequest,
+  deleteRequest,
   detail,
   live,
   markNeedsResponse,
   mergeRequest,
   params,
+  removeRequestEditor,
   resolveRequest,
   respondToRequest,
 }: {
+  addRequestEditor: RequestMutationAction<AddRequestEditorInput>
   commentRequest: RequestMutationAction<CommentRequestInput>
+  deleteRequest: RequestDeleteAction
   detail: RequestDetail
   live: RepoLiveState
   markNeedsResponse: RequestMutationAction<NeedsResponseInput>
   mergeRequest: RequestMutationAction<MergeRequestInput>
   params: RepoParams
+  removeRequestEditor: RequestMutationAction<RemoveRequestEditorInput>
   resolveRequest: RequestMutationAction<ResolveRequestInput>
   respondToRequest: RequestMutationAction<RespondRequestInput>
 }) {
@@ -227,6 +251,60 @@ export function RequestDetailPage({
     )
   }
 
+  async function submitDelete() {
+    const isWorking = request.state === 'Working'
+    const confirmed = window.confirm(
+      isWorking
+        ? `Delete working request "${request.title}"? This removes the request branch from Scope. Local Git branches will not be deleted.`
+        : `Withdraw request "${request.title}"? This closes it and removes it from maintainer review. The timeline will remain visible.`,
+    )
+    if (!confirmed) {
+      return
+    }
+    dispatch({ key: 'delete', type: 'actionStarted' })
+    try {
+      const result = await deleteRequest(requestParams)
+      if (result.deleted) {
+        await router.navigate({
+          params,
+          to: '/repos/$owner/$repo/requests',
+        })
+        return
+      }
+      await router.invalidate()
+      dispatch({ type: 'actionSucceeded' })
+    } catch (error) {
+      dispatch({
+        key: 'delete',
+        message:
+          error instanceof Error ? error.message : 'request delete failed',
+        type: 'actionFailed',
+      })
+    }
+  }
+
+  async function submitAddEditor(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault()
+    await runAction(
+      'add-editor',
+      () =>
+        addRequestEditor({
+          ...requestParams,
+          user_id: uiState.editorUserId,
+        }),
+      { resetField: 'editorUserId' },
+    )
+  }
+
+  async function removeEditor(editorUserId: string) {
+    await runAction('remove-editor', () =>
+      removeRequestEditor({
+        ...requestParams,
+        editor_user_id: editorUserId,
+      }),
+    )
+  }
+
   return (
     <main className="min-h-screen bg-background text-foreground">
       <AppHeader
@@ -234,38 +312,27 @@ export function RequestDetailPage({
       />
 
       <PageContent>
-        <PageHeader
-          actions={() => (
-            <Button asChild size="sm" variant="secondary">
-              <Link params={params} to="/repos/$owner/$repo/requests">
-                Requests
-              </Link>
-            </Button>
-          )}
-          badges={() => (
-            <>
-              <LifecycleBadge state={live.repo.lifecycle_state} />
-              <Badge variant={requestStateTone(request.state)}>
-                {requestStateLabel(request.state)}
-              </Badge>
-              <Badge variant={requestMergeabilityTone(request)}>
-                {requestMergeabilityLabel(request)}
-              </Badge>
-              <Badge variant="neutral">
-                <Coins className="size-3" />
-                <span>{request.stake_credits}</span>
-              </Badge>
-            </>
-          )}
-          description={() => (
-            <span className="font-mono text-sm">
-              {live.repo.id} / {request.id}
-            </span>
-          )}
-          title={request.title}
+        <RequestDetailHeader
+          live={live}
+          onDelete={submitDelete}
+          params={params}
+          pendingAction={uiState.pendingAction}
+          request={request}
         />
 
         <RequestFacts request={request} />
+
+        <RequestCollaborationSection
+          actionError={uiState.actionError}
+          editorUserId={uiState.editorUserId}
+          onAddEditor={submitAddEditor}
+          onEditorUserIdChange={(value) =>
+            dispatch({ field: 'editorUserId', type: 'bodyChanged', value })
+          }
+          onRemoveEditor={removeEditor}
+          pendingAction={uiState.pendingAction}
+          request={request}
+        />
 
         <RequestActions
           activeResolveDisposition={activeResolveDisposition}
@@ -350,6 +417,66 @@ function requestDetailUiReducer(
   }
 }
 
+function RequestDetailHeader({
+  live,
+  onDelete,
+  params,
+  pendingAction,
+  request,
+}: {
+  live: RepoLiveState
+  onDelete: () => void
+  params: RepoParams
+  pendingAction: ActionKey | null
+  request: RequestSummary
+}) {
+  return (
+    <PageHeader
+      actions={() => (
+        <div className="flex flex-wrap items-center gap-2">
+          {request.permissions.can_delete ? (
+            <Button
+              disabled={pendingAction === 'delete'}
+              onClick={onDelete}
+              size="sm"
+              variant="destructive"
+            >
+              <Trash2 className="size-4" />
+              Delete
+            </Button>
+          ) : null}
+          <Button asChild size="sm" variant="secondary">
+            <Link params={params} to="/repos/$owner/$repo/requests">
+              Requests
+            </Link>
+          </Button>
+        </div>
+      )}
+      badges={() => (
+        <>
+          <LifecycleBadge state={live.repo.lifecycle_state} />
+          <Badge variant={requestStateTone(request.state)}>
+            {requestStateLabel(request.state)}
+          </Badge>
+          <Badge variant={requestMergeabilityTone(request)}>
+            {requestMergeabilityLabel(request)}
+          </Badge>
+          <Badge variant="neutral">
+            <Coins className="size-3" />
+            <span>{request.stake_credits}</span>
+          </Badge>
+        </>
+      )}
+      description={() => (
+        <span className="font-mono text-sm">
+          {live.repo.id} / {request.id}
+        </span>
+      )}
+      title={request.title}
+    />
+  )
+}
+
 function RequestFacts({ request }: { request: RequestSummary }) {
   return (
     <SectionRows>
@@ -361,7 +488,6 @@ function RequestFacts({ request }: { request: RequestSummary }) {
       >
         <div className="grid gap-2 text-sm leading-5">
           <KeyValue label="Target" value={request.target_branch} />
-          <KeyValue label="Request ref" value={request.request_ref} />
           <div className="flex flex-wrap gap-1.5">
             <Badge variant="outline">{requestBaseAudienceLabel(request)}</Badge>
             <Badge variant="outline">{requestAuthorRoleLabel(request)}</Badge>

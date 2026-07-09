@@ -4,9 +4,10 @@ use crate::{
     domain::{
         projection::{ProjectionViewKey, project_graph},
         requests::{
-            CommentRequestInput, FinalizeReservedRequestInput, MarkRequestNeedsResponseInput,
-            MergeRequestInput, Request, RequestActorRole, RequestDisposition, RequestState,
-            ReserveRequestInput, ResolveRequestInput, RespondToRequestInput, canonical_request_ref,
+            AddRequestEditorInput, CommentRequestInput, DeleteRequestInput, DeleteRequestMutation,
+            MarkRequestNeedsResponseInput, MergeRequestInput, RemoveRequestEditorInput, Request,
+            RequestActorRole, RequestDisposition, RequestState, ResolveRequestInput,
+            RespondToRequestInput, StartRequestInput, SubmitRequestInput, canonical_request_ref,
             settlement_for,
         },
         store::{RepositoryAccess, RepositoryActor, StoredRepository},
@@ -14,6 +15,7 @@ use crate::{
     error::ApiError,
     git::{
         import::{apply_request_merge_update, git_refs},
+        request_refs::{delete_request_ref_from_store, request_ref_bundle_bytes},
         storage::cached_raw_git_snapshot_repo,
         upload::projection_bare_repo_for_state,
     },
@@ -26,8 +28,10 @@ use crate::{
 };
 use axum::{
     Json,
+    body::Body,
     extract::{Path, State},
-    http::HeaderMap,
+    http::{HeaderMap, header},
+    response::Response,
 };
 
 const REQUEST_SUMMARY_REFRESH_VERSION: u64 = 0;
@@ -78,11 +82,135 @@ pub(crate) async fn get_request(
     Ok(Json(RequestDetailResponse { request, events }))
 }
 
-pub(crate) async fn reserve_request(
+pub(crate) async fn download_request_branch_bundle(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path((owner, repo_name, request_id)): Path<(String, String, String)>,
+) -> Result<Response, ApiError> {
+    let user = require_scope_user(&state, &headers).await?;
+    let (repo, access, _) = repo_and_access(&state, &headers, &owner, &repo_name).await?;
+    let request = visible_request(&state, &repo, access, &request_id)?;
+    if !request_permissions(&request, access, Some(&user.id)).can_pull_branch {
+        return Err(ApiError::forbidden("request branch edit access required"));
+    }
+    let bytes = request_ref_bundle_bytes(&state, &owner, &repo_name, &request)?;
+    Response::builder()
+        .header(header::CONTENT_TYPE, "application/x-git-bundle")
+        .body(Body::from(bytes))
+        .map_err(ApiError::internal)
+}
+
+pub(crate) async fn add_request_editor(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path((owner, repo_name, request_id)): Path<(String, String, String)>,
+    Json(input): Json<RequestEditorRequest>,
+) -> Result<Json<RequestMutationResponse>, ApiError> {
+    let user = require_scope_user(&state, &headers).await?;
+    let (repo, access, _) = repo_and_access(&state, &headers, &owner, &repo_name).await?;
+    ensure_maintainer(access)?;
+    let request = visible_request(&state, &repo, access, &request_id)?;
+    if !request_permissions(&request, access, Some(&user.id)).can_invite_editor {
+        return Err(ApiError::forbidden("request editor invite access required"));
+    }
+    let editor_user_id = input.user_id.trim().to_string();
+    if editor_user_id.is_empty() {
+        return Err(ApiError::bad_request("editor user id is required"));
+    }
+    if matches!(
+        repo.access_for_user_id(&editor_user_id).actor,
+        RepositoryActor::Owner | RepositoryActor::Member
+    ) {
+        return Err(ApiError::bad_request(
+            "repo maintainers already can edit requests",
+        ));
+    }
+    let mutation = state.metadata.add_request_editor(AddRequestEditorInput {
+        request_id,
+        actor_user_id: user.id.clone(),
+        editor_user_id,
+        now_unix: unix_now()?,
+    })?;
+    let current_main_oid = current_main_oid_for_access(&state, &repo, access)?;
+    let request = request_response(mutation.request, access, current_main_oid, Some(&user.id));
+    publish_request_summary_refresh(&state, &repo, "request-editor-added");
+    Ok(Json(RequestMutationResponse { request }))
+}
+
+pub(crate) async fn remove_request_editor(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path((owner, repo_name, request_id, editor_user_id)): Path<(String, String, String, String)>,
+) -> Result<Json<RequestMutationResponse>, ApiError> {
+    let user = require_scope_user(&state, &headers).await?;
+    let (repo, access, _) = repo_and_access(&state, &headers, &owner, &repo_name).await?;
+    ensure_maintainer(access)?;
+    let request = visible_request(&state, &repo, access, &request_id)?;
+    if !request_permissions(&request, access, Some(&user.id)).can_invite_editor {
+        return Err(ApiError::forbidden("request editor invite access required"));
+    }
+    let mutation = state
+        .metadata
+        .remove_request_editor(RemoveRequestEditorInput {
+            request_id,
+            actor_user_id: user.id.clone(),
+            editor_user_id,
+            now_unix: unix_now()?,
+        })?;
+    let current_main_oid = current_main_oid_for_access(&state, &repo, access)?;
+    let request = request_response(mutation.request, access, current_main_oid, Some(&user.id));
+    publish_request_summary_refresh(&state, &repo, "request-editor-removed");
+    Ok(Json(RequestMutationResponse { request }))
+}
+
+pub(crate) async fn delete_request(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path((owner, repo_name, request_id)): Path<(String, String, String)>,
+) -> Result<Json<RequestDeleteResponse>, ApiError> {
+    let user = require_scope_user(&state, &headers).await?;
+    let (repo, access, _) = repo_and_access(&state, &headers, &owner, &repo_name).await?;
+    let request = visible_request(&state, &repo, access, &request_id)?;
+    if !request_permissions(&request, access, Some(&user.id)).can_delete {
+        return Err(ApiError::forbidden("request delete access required"));
+    }
+    let refund_ledger_entry_id = (request.stake_credits > 0)
+        .then(|| random_id("ledger_request_withdraw_refund"))
+        .transpose()?;
+    let request_ref = request.request_ref.clone();
+    let mutation = state.metadata.delete_request(DeleteRequestInput {
+        request_id,
+        actor_user_id: user.id.clone(),
+        actor_can_delete: false,
+        event_id: random_id("event_request_withdrawn")?,
+        refund_ledger_entry_id,
+        now_unix: unix_now()?,
+    })?;
+    delete_request_ref_from_store(&state, &owner, &repo_name, &request_ref)?;
+    best_effort_drain_pending_source_blob_deletions(&state);
+    publish_request_summary_refresh(&state, &repo, "request-deleted");
+    match mutation {
+        DeleteRequestMutation::DeletedWorking { .. } => Ok(Json(RequestDeleteResponse {
+            deleted: true,
+            request: None,
+        })),
+        DeleteRequestMutation::Withdrawn { request, .. } => {
+            let current_main_oid = current_main_oid_for_access(&state, &repo, access)?;
+            let request = request_response(*request, access, current_main_oid, Some(&user.id));
+            Ok(Json(RequestDeleteResponse {
+                deleted: false,
+                request: Some(request),
+            }))
+        }
+    }
+}
+
+pub(crate) async fn start_request(
     State(state): State<AppState>,
     headers: HeaderMap,
     Path((owner, repo_name)): Path<(String, String)>,
-) -> Result<Json<RequestReservationResponse>, ApiError> {
+    Json(input): Json<StartRequestRequest>,
+) -> Result<Json<RequestMutationResponse>, ApiError> {
     let user = require_scope_user(&state, &headers).await?;
     let repo = find_repo(&state, &owner, &repo_name)?;
     let principal = principal_for_scope_user(&repo, Some(&user));
@@ -92,10 +220,11 @@ pub(crate) async fn reserve_request(
         .ok_or_else(|| ApiError::conflict("repo has no main branch to base a request on"))?;
     let request_id = random_id("req")?;
     let now_unix = unix_now()?;
-    let mutation = state.metadata.reserve_request(ReserveRequestInput {
+    let mutation = state.metadata.start_request(StartRequestInput {
         id: request_id.clone(),
         repo_id: repo.record.id.clone(),
         author_user_id: user.id.clone(),
+        title: input.title,
         author_role: actor_role_for_access(access),
         base_audience: base_audience_for_access(access),
         target_branch: DEFAULT_GIT_BRANCH.to_string(),
@@ -103,19 +232,17 @@ pub(crate) async fn reserve_request(
         base_main_oid,
         now_unix,
     })?;
-    Ok(Json(RequestReservationResponse {
-        id: mutation.request.id,
-        request_ref: mutation.request.request_ref,
-        base_audience: mutation.request.base_audience,
-        base_main_oid: mutation.request.base_main_oid,
-    }))
+    let current_main_oid = current_main_oid_for_access(&state, &repo, access)?;
+    let request = request_response(mutation.request, access, current_main_oid, Some(&user.id));
+    publish_request_summary_refresh(&state, &repo, "request-started");
+    Ok(Json(RequestMutationResponse { request }))
 }
 
-pub(crate) async fn finalize_request_submission(
+pub(crate) async fn submit_request(
     State(state): State<AppState>,
     headers: HeaderMap,
     Path((owner, repo_name, request_id)): Path<(String, String, String)>,
-    Json(input): Json<FinalizeRequestSubmissionRequest>,
+    Json(input): Json<SubmitRequestRequest>,
 ) -> Result<Json<RequestMutationResponse>, ApiError> {
     let user = require_scope_user(&state, &headers).await?;
     let repo = find_repo(&state, &owner, &repo_name)?;
@@ -136,27 +263,24 @@ pub(crate) async fn finalize_request_submission(
         )
     {
         return Err(ApiError::forbidden(
-            "repo maintainer required to finalize this request",
+            "repo maintainer required to submit this request",
         ));
     }
     let head_oid = normalize_git_oid("head_oid", &input.head_oid)?;
     let stake_credits = input.stake_credits.unwrap_or(0);
-    let mutation = state
-        .metadata
-        .finalize_reserved_request(FinalizeReservedRequestInput {
-            request_id,
-            actor_user_id: user.id.clone(),
-            title: input.title,
-            expected_head_oid: head_oid,
-            stake_credits,
-            stake_ledger_entry_id: if stake_credits == 0 {
-                None
-            } else {
-                Some(random_id("ledger_request_stake")?)
-            },
-            event_id: random_id("event_request_created")?,
-            now_unix: unix_now()?,
-        })?;
+    let mutation = state.metadata.submit_request(SubmitRequestInput {
+        request_id,
+        actor_user_id: user.id.clone(),
+        expected_head_oid: head_oid,
+        stake_credits,
+        stake_ledger_entry_id: if stake_credits == 0 {
+            None
+        } else {
+            Some(random_id("ledger_request_stake")?)
+        },
+        event_id: random_id("event_request_created")?,
+        now_unix: unix_now()?,
+    })?;
     let current_main_oid = current_main_oid_for_access(&state, &repo, access)?;
     let request = request_response(mutation.request, access, current_main_oid, Some(&user.id));
     publish_request_summary_refresh(&state, &repo, "request-submitted");
@@ -242,6 +366,14 @@ pub(crate) async fn resolve_request(
     let (repo, access, _) = repo_and_access(&state, &headers, &owner, &repo_name).await?;
     ensure_maintainer(access)?;
     let request = visible_request(&state, &repo, access, &request_id)?;
+    if !matches!(
+        request.state,
+        RequestState::Submitted | RequestState::NeedsResponse
+    ) {
+        return Err(ApiError::conflict(
+            "request must be submitted before it can be resolved",
+        ));
+    }
     let now_unix = unix_now()?;
     let settlement = settlement_for(request.stake_credits, input.disposition, now_unix);
     let mutation = state.metadata.resolve_request(ResolveRequestInput {
@@ -271,6 +403,11 @@ pub(crate) async fn merge_request(
     let (repo, access, _) = repo_and_access(&state, &headers, &owner, &repo_name).await?;
     ensure_maintainer(access)?;
     let request = visible_request(&state, &repo, access, &request_id)?;
+    if request.state != RequestState::Submitted {
+        return Err(ApiError::conflict(
+            "request must be submitted before it can be merged",
+        ));
+    }
     let expected_main_oid = normalize_git_oid("expected_main_oid", &input.expected_main_oid)?;
     let expected_head_oid = normalize_git_oid("expected_head_oid", &input.expected_head_oid)?;
     let current_main_oid = current_main_oid_for_access(&state, &repo, access)?
@@ -398,9 +535,6 @@ fn publish_request_summary_refresh(
 }
 
 fn request_visible_to_access(request: &Request, access: RepositoryAccess) -> bool {
-    if request.state == RequestState::Reserved {
-        return false;
-    }
     match access.actor {
         RepositoryActor::Owner | RepositoryActor::Member => true,
         RepositoryActor::Public => {
@@ -431,17 +565,29 @@ fn request_permissions(
         RepositoryActor::Owner | RepositoryActor::Member
     );
     let author = viewer_user_id == Some(request.author_user_id.as_str());
+    let editor = viewer_user_id
+        .map(|user_id| request.editor_user_ids.contains(user_id))
+        .unwrap_or(false);
+    let can_edit_branch = author || editor || maintainer;
     let open = !matches!(
         request.state,
         RequestState::Resolved | RequestState::Withdrawn
     );
+    let submitted = request.state == RequestState::Submitted;
+    let submitted_or_waiting = matches!(
+        request.state,
+        RequestState::Submitted | RequestState::NeedsResponse
+    );
     RequestPermissionsResponse {
-        can_comment: open && (author || maintainer),
-        can_update_branch: open && author,
-        can_mark_needs_response: open && maintainer,
+        can_comment: open && can_edit_branch,
+        can_pull_branch: open && can_edit_branch && request.git_snapshot.is_some(),
+        can_push_branch: open && can_edit_branch,
+        can_delete: open && (author || maintainer),
+        can_invite_editor: open && maintainer,
+        can_mark_needs_response: submitted && maintainer,
         can_respond: open && author && request.state == RequestState::NeedsResponse,
-        can_resolve: open && maintainer,
-        can_merge: open && maintainer,
+        can_resolve: submitted_or_waiting && maintainer,
+        can_merge: submitted && maintainer,
     }
 }
 
@@ -465,6 +611,16 @@ fn request_mergeability(
         (
             RequestMergeabilityStatus::NotMaintainer,
             Some("repo maintainer required".to_string()),
+        )
+    } else if request.state == RequestState::Working {
+        (
+            RequestMergeabilityStatus::NotReady,
+            Some("request has not been submitted".to_string()),
+        )
+    } else if request.state == RequestState::NeedsResponse {
+        (
+            RequestMergeabilityStatus::NotReady,
+            Some("request is waiting on contributor response".to_string()),
         )
     } else if request.git_snapshot.is_none() {
         (

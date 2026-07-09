@@ -98,19 +98,27 @@ pub fn router(state: AppState) -> Router {
         )
         .route(
             "/v1/repos/{owner}/{repo}/requests",
-            get(http::requests::list_requests),
-        )
-        .route(
-            "/v1/repos/{owner}/{repo}/requests/reservations",
-            post(http::requests::reserve_request),
+            get(http::requests::list_requests).post(http::requests::start_request),
         )
         .route(
             "/v1/repos/{owner}/{repo}/requests/{request_id}",
-            get(http::requests::get_request),
+            get(http::requests::get_request).delete(http::requests::delete_request),
+        )
+        .route(
+            "/v1/repos/{owner}/{repo}/requests/{request_id}/branch.bundle",
+            get(http::requests::download_request_branch_bundle),
+        )
+        .route(
+            "/v1/repos/{owner}/{repo}/requests/{request_id}/editors",
+            post(http::requests::add_request_editor),
+        )
+        .route(
+            "/v1/repos/{owner}/{repo}/requests/{request_id}/editors/{editor_user_id}",
+            delete(http::requests::remove_request_editor),
         )
         .route(
             "/v1/repos/{owner}/{repo}/requests/{request_id}/submit",
-            post(http::requests::finalize_request_submission),
+            post(http::requests::submit_request),
         )
         .route(
             "/v1/repos/{owner}/{repo}/requests/{request_id}/comments",
