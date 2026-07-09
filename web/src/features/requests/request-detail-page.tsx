@@ -45,8 +45,8 @@ import {
   requestBaseAudienceLabel,
   requestMergeabilityLabel,
   requestMergeabilityTone,
-  requestStateLabel,
-  requestStateTone,
+  requestStatusLabel,
+  requestStatusTone,
   resolutionOptionsFor,
   settlementPreviewFor,
   settlementPreviewText,
@@ -287,8 +287,8 @@ function RequestDetailHeader({
       badges={() => (
         <>
           <LifecycleBadge state={live.repo.lifecycle_state} />
-          <Badge variant={requestStateTone(request.state)}>
-            {requestStateLabel(request.state)}
+          <Badge variant={requestStatusTone(request)}>
+            {requestStatusLabel(request)}
           </Badge>
           <Badge variant={requestMergeabilityTone(request)}>
             {requestMergeabilityLabel(request)}

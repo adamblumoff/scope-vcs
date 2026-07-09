@@ -5,6 +5,7 @@ import {
   formatUnixDate,
   normalizedBody,
   resolutionOptionsFor,
+  requestStatusLabel,
   settlementPreviewFor,
   settlementPreviewText,
 } from './request-labels'
@@ -68,6 +69,13 @@ describe('request labels', () => {
     assert.equal(formatUnixDate(null), 'Not set')
     assert.equal(normalizedBody('  hello  '), 'hello')
     assert.equal(normalizedBody('   '), null)
+    assert.equal(
+      requestStatusLabel({
+        ...requestWithState('Resolved'),
+        disposition: 'Accepted',
+      }),
+      'Accepted',
+    )
   })
 })
 

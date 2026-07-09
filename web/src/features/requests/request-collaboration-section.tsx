@@ -55,9 +55,11 @@ export function RequestCollaborationSection({
               </code>
             ) : (
               <p className="text-pretty text-sm leading-5 text-muted-foreground">
-                {request.permissions.can_push_branch
-                  ? 'The request branch has not been pushed yet.'
-                  : 'You need edit access before joining this request branch.'}
+                {request.state === 'Resolved' || request.state === 'Withdrawn'
+                  ? 'This request is closed; its branch can no longer be joined.'
+                  : request.permissions.can_push_branch
+                    ? 'The request branch has not been pushed yet.'
+                    : 'You need edit access before joining this request branch.'}
               </p>
             )}
             <div className="flex flex-wrap gap-1.5">
