@@ -8,8 +8,10 @@ import type {
   RepoParams,
   RequestDetail,
   RequestDelete,
+  RequestChanges,
   RequestList,
   RequestMutation,
+  ReviewFileDiff,
   RequestParams,
   RemoveRequestEditorInput,
   ResolveRequestInput,
@@ -41,6 +43,23 @@ export async function loadRequestForRequest(
   return createApiClient().get<RequestDetail>(requestPath(data), {
     auth: 'optional',
   })
+}
+
+export async function loadRequestChangesForRequest(
+  data: RequestParams,
+): Promise<RequestChanges> {
+  return createApiClient().get<RequestChanges>(`${requestPath(data)}/changes`, {
+    auth: 'optional',
+  })
+}
+
+export async function loadRequestFileDiffForRequest(
+  data: RequestParams & { path: string },
+): Promise<ReviewFileDiff> {
+  return createApiClient().get<ReviewFileDiff>(
+    `${requestPath(data)}/file-diff?path=${encodeURIComponent(data.path)}`,
+    { auth: 'optional' },
+  )
 }
 
 export async function commentRequestForRequest(

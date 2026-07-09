@@ -1,29 +1,20 @@
 import type {
-  AddRequestEditorInput,
-  CommentRequestInput,
-  DeleteRequestInput,
-  MergeRequestInput,
-  NeedsResponseInput,
   RepoLiveState,
   RepoParams,
-  RequestDetail,
-  RequestDelete,
-  RequestMutation,
+  RequestChanges,
   RequestSummary,
   RequestWorkflowDisposition,
-  RemoveRequestEditorInput,
-  ResolveRequestInput,
-  RespondRequestInput,
+  ReviewFileDiff,
 } from '@/api/types'
-import { AppHeader } from '@/components/app-header'
 import { LifecycleBadge } from '@/components/lifecycle-badge'
+import { DestructiveActionDialog } from '@/components/destructive-action-dialog'
 import { PageContent, PageHeader } from '@/components/page-header'
-import { RepoBreadcrumb } from '@/components/repo-breadcrumb'
+import { RepoShell } from '@/components/repo-shell'
 import { SectionRow, SectionRows } from '@/components/section-rows'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { cn } from '@/lib/utils'
-import { Link, useRouter } from '@tanstack/react-router'
+import { Link } from '@tanstack/react-router'
 import {
   CheckCircle2,
   Coins,
@@ -36,19 +27,22 @@ import {
   ShieldQuestion,
   Trash2,
 } from 'lucide-react'
-import { type FormEvent, type ReactNode, useReducer } from 'react'
+import { type FormEvent, type ReactNode } from 'react'
 import { RequestCollaborationSection } from './request-collaboration-section'
+import { RequestChangesSection } from './request-changes-section'
 import { RequestMergeDialog } from './request-merge-dialog'
+import {
+  RequestReviewNavigation,
+  type RequestReviewView,
+} from './request-review-navigation'
+import { RequestTimeline } from './request-timeline'
 import {
   dispositionLabel,
   dispositionTone,
-  eventKindLabel,
   formatUnixDate,
   fullOid,
-  normalizedBody,
   requestAuthorRoleLabel,
   requestBaseAudienceLabel,
-  requestEventBody,
   requestMergeabilityLabel,
   requestMergeabilityTone,
   requestStateLabel,
@@ -58,75 +52,16 @@ import {
   settlementPreviewText,
   shortOid,
 } from './request-labels'
-
-type RequestMutationAction<TInput> = (input: TInput) => Promise<RequestMutation>
-type RequestDeleteAction = (input: DeleteRequestInput) => Promise<RequestDelete>
-
-type ActionKey =
-  | 'add-editor'
-  | 'comment'
-  | 'delete'
-  | 'merge'
-  | 'needs-response'
-  | 'remove-editor'
-  | 'resolve'
-  | 'respond'
-
-type ActionError = {
-  key: ActionKey
-  message: string
-}
-
-type RequestBodyField =
-  | 'commentBody'
-  | 'editorUserId'
-  | 'needsResponseBody'
-  | 'resolveBody'
-  | 'responseBody'
-
-type RequestDetailUiState = {
-  actionError: ActionError | null
-  commentBody: string
-  editorUserId: string
-  mergeOpen: boolean
-  needsResponseBody: string
-  pendingAction: ActionKey | null
-  resolveBody: string
-  resolveDisposition: RequestWorkflowDisposition
-  responseBody: string
-}
-
-type RequestDetailUiAction =
-  | { field: RequestBodyField; type: 'bodyChanged'; value: string }
-  | { disposition: RequestWorkflowDisposition; type: 'resolveDispositionChanged' }
-  | { open: boolean; type: 'mergeOpenChanged' }
-  | { key: ActionKey; type: 'actionStarted' }
-  | {
-      closeMerge?: boolean
-      resetField?: RequestBodyField
-      type: 'actionSucceeded'
-    }
-  | { key: ActionKey; message: string; type: 'actionFailed' }
-
-const initialRequestDetailUiState: RequestDetailUiState = {
-  actionError: null,
-  commentBody: '',
-  editorUserId: '',
-  mergeOpen: false,
-  needsResponseBody: '',
-  pendingAction: null,
-  resolveBody: '',
-  resolveDisposition: 'UsefulNotMerged',
-  responseBody: '',
-}
+import {
+  type RequestActionError,
+  type RequestActionKey,
+  type RequestDetailControllerProps,
+  useRequestDetailController,
+} from './use-request-detail-controller'
 
 export function RequestUnavailablePage({ params }: { params: RepoParams }) {
   return (
-    <main className="min-h-screen bg-background text-foreground">
-      <AppHeader
-        breadcrumb={() => <RepoBreadcrumb params={params} section="requests" />}
-      />
-
+    <RepoShell active="requests" canManage={false} params={params}>
       <PageContent>
         <PageHeader
           actions={() => (
@@ -152,263 +87,138 @@ export function RequestUnavailablePage({ params }: { params: RepoParams }) {
           </div>
         </section>
       </PageContent>
-    </main>
+    </RepoShell>
   )
 }
 
-export function RequestDetailPage({
-  addRequestEditor,
-  commentRequest,
-  deleteRequest,
-  detail,
-  live,
-  markNeedsResponse,
-  mergeRequest,
-  params,
-  removeRequestEditor,
-  resolveRequest,
-  respondToRequest,
-}: {
-  addRequestEditor: RequestMutationAction<AddRequestEditorInput>
-  commentRequest: RequestMutationAction<CommentRequestInput>
-  deleteRequest: RequestDeleteAction
-  detail: RequestDetail
+type RequestDetailPageProps = RequestDetailControllerProps & {
+  changes: RequestChanges | null
+  changesError: string | null
   live: RepoLiveState
-  markNeedsResponse: RequestMutationAction<NeedsResponseInput>
-  mergeRequest: RequestMutationAction<MergeRequestInput>
-  params: RepoParams
-  removeRequestEditor: RequestMutationAction<RemoveRequestEditorInput>
-  resolveRequest: RequestMutationAction<ResolveRequestInput>
-  respondToRequest: RequestMutationAction<RespondRequestInput>
-}) {
-  const router = useRouter()
-  const { request } = detail
-  const [uiState, dispatch] = useReducer(
-    requestDetailUiReducer,
-    initialRequestDetailUiState,
-  )
-  const resolutionOptions = resolutionOptionsFor(request)
-  const activeResolveDisposition = resolutionOptions.some(
-    (option) => option.disposition === uiState.resolveDisposition,
-  )
-    ? uiState.resolveDisposition
-    : resolutionOptions[0]?.disposition ?? 'UsefulNotMerged'
-  const requestParams = { ...params, request_id: request.id }
+  onSelectFile: (path: string) => void
+  onViewChange: (view: RequestReviewView) => void
+  selectedDiff: ReviewFileDiff | null
+  selectedDiffError: string | null
+  selectedPath: string | null
+  view: RequestReviewView
+}
 
-  async function runAction(
-    key: ActionKey,
-    action: () => Promise<unknown>,
-    success?: { closeMerge?: boolean; resetField?: RequestBodyField },
-  ) {
-    dispatch({ key, type: 'actionStarted' })
-    try {
-      await action()
-      await router.invalidate()
-      dispatch({ type: 'actionSucceeded', ...success })
-    } catch (error) {
-      dispatch({
-        key,
-        message: error instanceof Error ? error.message : 'request action failed',
-        type: 'actionFailed',
-      })
-    }
-  }
-
-  async function submitComment(event: FormEvent<HTMLFormElement>) {
-    event.preventDefault()
-    await runAction(
-      'comment',
-      () => commentRequest({ ...requestParams, body: uiState.commentBody }),
-      { resetField: 'commentBody' },
-    )
-  }
-
-  async function submitNeedsResponse(event: FormEvent<HTMLFormElement>) {
-    event.preventDefault()
-    await runAction(
-      'needs-response',
-      () =>
-        markNeedsResponse({
-          ...requestParams,
-          body: uiState.needsResponseBody,
-        }),
-      { resetField: 'needsResponseBody' },
-    )
-  }
-
-  async function submitResponse(event: FormEvent<HTMLFormElement>) {
-    event.preventDefault()
-    await runAction(
-      'respond',
-      () =>
-        respondToRequest({
-          ...requestParams,
-          body: normalizedBody(uiState.responseBody),
-        }),
-      { resetField: 'responseBody' },
-    )
-  }
-
-  async function submitResolution(event: FormEvent<HTMLFormElement>) {
-    event.preventDefault()
-    await runAction(
-      'resolve',
-      () =>
-        resolveRequest({
-          ...requestParams,
-          body: normalizedBody(uiState.resolveBody),
-          disposition: activeResolveDisposition,
-        }),
-      { resetField: 'resolveBody' },
-    )
-  }
-
-  async function submitMerge(body: string | null) {
-    const currentMainOid = request.mergeability.current_main_oid
-    if (!currentMainOid) {
-      dispatch({
-        key: 'merge',
-        message: 'Request has no current main OID to merge into.',
-        type: 'actionFailed',
-      })
-      return
-    }
-
-    await runAction(
-      'merge',
-      () =>
-        mergeRequest({
-          ...requestParams,
-          body,
-          expected_head_oid: request.mergeability.request_head_oid,
-          expected_main_oid: currentMainOid,
-        }),
-      { closeMerge: true },
-    )
-  }
-
-  async function submitDelete() {
-    const isWorking = request.state === 'Working'
-    const confirmed = window.confirm(
-      isWorking
-        ? `Delete working request "${request.title}"? This removes the request branch from Scope. Local Git branches will not be deleted.`
-        : `Withdraw request "${request.title}"? This closes it and removes it from maintainer review. The timeline will remain visible.`,
-    )
-    if (!confirmed) {
-      return
-    }
-    dispatch({ key: 'delete', type: 'actionStarted' })
-    try {
-      const result = await deleteRequest(requestParams)
-      if (result.deleted) {
-        await router.navigate({
-          params,
-          to: '/repos/$owner/$repo/requests',
-        })
-        return
-      }
-      await router.invalidate()
-      dispatch({ type: 'actionSucceeded' })
-    } catch (error) {
-      dispatch({
-        key: 'delete',
-        message:
-          error instanceof Error ? error.message : 'request delete failed',
-        type: 'actionFailed',
-      })
-    }
-  }
-
-  async function submitAddEditor(event: FormEvent<HTMLFormElement>) {
-    event.preventDefault()
-    await runAction(
-      'add-editor',
-      () =>
-        addRequestEditor({
-          ...requestParams,
-          user_id: uiState.editorUserId,
-        }),
-      { resetField: 'editorUserId' },
-    )
-  }
-
-  async function removeEditor(editorUserId: string) {
-    await runAction('remove-editor', () =>
-      removeRequestEditor({
-        ...requestParams,
-        editor_user_id: editorUserId,
-      }),
-    )
-  }
+export function RequestDetailPage(props: RequestDetailPageProps) {
+  const {
+    changes,
+    changesError,
+    detail,
+    live,
+    onSelectFile,
+    onViewChange,
+    params,
+    selectedDiff,
+    selectedDiffError,
+    selectedPath,
+    view,
+  } = props
+  const {
+    activeResolveDisposition,
+    deleteOpen,
+    dispatch,
+    removeEditor,
+    request,
+    resolutionOptions,
+    setDeleteOpen,
+    submitAddEditor,
+    submitComment,
+    submitDelete,
+    submitMerge,
+    submitNeedsResponse,
+    submitResolution,
+    submitResponse,
+    uiState,
+  } = useRequestDetailController(props)
 
   return (
-    <main className="min-h-screen bg-background text-foreground">
-      <AppHeader
-        breadcrumb={() => <RepoBreadcrumb params={params} section="requests" />}
-      />
-
+    <RepoShell
+      active="requests"
+      canManage={live.repo.access.actor !== 'Public'}
+      params={params}
+    >
       <PageContent>
         <RequestDetailHeader
           live={live}
-          onDelete={submitDelete}
+          onDelete={() => setDeleteOpen(true)}
           params={params}
           pendingAction={uiState.pendingAction}
           request={request}
         />
+        <RequestReviewNavigation onChange={onViewChange} view={view} />
 
-        <RequestFacts request={request} />
+        {view === 'overview' && (
+          <>
+            <RequestFacts request={request} />
 
-        <RequestCollaborationSection
-          actionError={uiState.actionError}
-          editorUserId={uiState.editorUserId}
-          onAddEditor={submitAddEditor}
-          onEditorUserIdChange={(value) =>
-            dispatch({ field: 'editorUserId', type: 'bodyChanged', value })
-          }
-          onRemoveEditor={removeEditor}
-          pendingAction={uiState.pendingAction}
-          request={request}
-        />
+            <RequestCollaborationSection
+              actionError={uiState.actionError}
+              editorUserId={uiState.editorUserId}
+              onAddEditor={submitAddEditor}
+              onEditorUserIdChange={(value) =>
+                dispatch({ field: 'editorUserId', type: 'bodyChanged', value })
+              }
+              onRemoveEditor={removeEditor}
+              pendingAction={uiState.pendingAction}
+              request={request}
+            />
 
-        <RequestActions
-          activeResolveDisposition={activeResolveDisposition}
-          actionError={uiState.actionError}
-          commentBody={uiState.commentBody}
-          needsResponseBody={uiState.needsResponseBody}
-          onCommentBodyChange={(value) =>
-            dispatch({ field: 'commentBody', type: 'bodyChanged', value })
-          }
-          onMergeOpen={() =>
-            dispatch({ open: true, type: 'mergeOpenChanged' })
-          }
-          onNeedsResponseBodyChange={(value) =>
-            dispatch({
-              field: 'needsResponseBody',
-              type: 'bodyChanged',
-              value,
-            })
-          }
-          onResolveBodyChange={(value) =>
-            dispatch({ field: 'resolveBody', type: 'bodyChanged', value })
-          }
-          onResolveDispositionChange={(disposition) =>
-            dispatch({ disposition, type: 'resolveDispositionChanged' })
-          }
-          onResponseBodyChange={(value) =>
-            dispatch({ field: 'responseBody', type: 'bodyChanged', value })
-          }
-          onSubmitComment={submitComment}
-          onSubmitNeedsResponse={submitNeedsResponse}
-          onSubmitResolution={submitResolution}
-          onSubmitResponse={submitResponse}
-          pendingAction={uiState.pendingAction}
-          request={request}
-          resolutionOptions={resolutionOptions}
-          resolveBody={uiState.resolveBody}
-          responseBody={uiState.responseBody}
-        />
+            <RequestActions
+              activeResolveDisposition={activeResolveDisposition}
+              actionError={uiState.actionError}
+              commentBody={uiState.commentBody}
+              needsResponseBody={uiState.needsResponseBody}
+              onCommentBodyChange={(value) =>
+                dispatch({ field: 'commentBody', type: 'bodyChanged', value })
+              }
+              onMergeOpen={() =>
+                dispatch({ open: true, type: 'mergeOpenChanged' })
+              }
+              onNeedsResponseBodyChange={(value) =>
+                dispatch({
+                  field: 'needsResponseBody',
+                  type: 'bodyChanged',
+                  value,
+                })
+              }
+              onResolveBodyChange={(value) =>
+                dispatch({ field: 'resolveBody', type: 'bodyChanged', value })
+              }
+              onResolveDispositionChange={(disposition) =>
+                dispatch({ disposition, type: 'resolveDispositionChanged' })
+              }
+              onResponseBodyChange={(value) =>
+                dispatch({ field: 'responseBody', type: 'bodyChanged', value })
+              }
+              onSubmitComment={submitComment}
+              onSubmitNeedsResponse={submitNeedsResponse}
+              onSubmitResolution={submitResolution}
+              onSubmitResponse={submitResponse}
+              pendingAction={uiState.pendingAction}
+              request={request}
+              resolutionOptions={resolutionOptions}
+              resolveBody={uiState.resolveBody}
+              responseBody={uiState.responseBody}
+            />
+          </>
+        )}
 
-        <RequestTimeline detail={detail} />
+        {view === 'changes' && (
+          <RequestChangesSection
+            changes={changes}
+            error={changesError}
+            onSelectFile={onSelectFile}
+            selectedDiff={selectedDiff}
+            selectedDiffError={selectedDiffError}
+            selectedPath={selectedPath}
+          />
+        )}
+
+        {view === 'activity' && <RequestTimeline detail={detail} />}
       </PageContent>
 
       <RequestMergeDialog
@@ -419,38 +229,24 @@ export function RequestDetailPage({
         pending={uiState.pendingAction === 'merge'}
         request={request}
       />
-    </main>
+      <DestructiveActionDialog
+        confirmLabel={request.state === 'Working' ? 'Delete request' : 'Withdraw request'}
+        description={
+          request.state === 'Working'
+            ? 'This removes the request branch from Scope. Local Git branches are not deleted.'
+            : 'This closes the request and removes it from maintainer review. Its activity remains visible.'
+        }
+        onConfirm={() => void submitDelete()}
+        onOpenChange={(open) => {
+          if (uiState.pendingAction !== 'delete') setDeleteOpen(open)
+        }}
+        open={deleteOpen}
+        pending={uiState.pendingAction === 'delete'}
+        subject={request.title}
+        title={request.state === 'Working' ? 'Delete working request?' : 'Withdraw request?'}
+      />
+    </RepoShell>
   )
-}
-
-function requestDetailUiReducer(
-  state: RequestDetailUiState,
-  action: RequestDetailUiAction,
-): RequestDetailUiState {
-  switch (action.type) {
-    case 'bodyChanged':
-      return { ...state, [action.field]: action.value }
-    case 'resolveDispositionChanged':
-      return { ...state, resolveDisposition: action.disposition }
-    case 'mergeOpenChanged':
-      return { ...state, mergeOpen: action.open }
-    case 'actionStarted':
-      return { ...state, actionError: null, pendingAction: action.key }
-    case 'actionSucceeded':
-      return {
-        ...state,
-        ...(action.resetField ? { [action.resetField]: '' } : {}),
-        actionError: null,
-        mergeOpen: action.closeMerge ? false : state.mergeOpen,
-        pendingAction: null,
-      }
-    case 'actionFailed':
-      return {
-        ...state,
-        actionError: { key: action.key, message: action.message },
-        pendingAction: null,
-      }
-  }
 }
 
 function RequestDetailHeader({
@@ -463,7 +259,7 @@ function RequestDetailHeader({
   live: RepoLiveState
   onDelete: () => void
   params: RepoParams
-  pendingAction: ActionKey | null
+  pendingAction: RequestActionKey | null
   request: RequestSummary
 }) {
   return (
@@ -604,7 +400,7 @@ function RequestActions({
   responseBody,
 }: {
   activeResolveDisposition: RequestWorkflowDisposition
-  actionError: ActionError | null
+  actionError: RequestActionError | null
   commentBody: string
   needsResponseBody: string
   onCommentBodyChange: (value: string) => void
@@ -617,7 +413,7 @@ function RequestActions({
   onSubmitNeedsResponse: (event: FormEvent<HTMLFormElement>) => void
   onSubmitResolution: (event: FormEvent<HTMLFormElement>) => void
   onSubmitResponse: (event: FormEvent<HTMLFormElement>) => void
-  pendingAction: ActionKey | null
+  pendingAction: RequestActionKey | null
   request: RequestSummary
   resolutionOptions: ReturnType<typeof resolutionOptionsFor>
   resolveBody: string
@@ -835,7 +631,7 @@ function MergeActionRow({
             variant="success"
           >
             <GitMerge className="size-3.5" />
-            <span>{pending ? 'Merging' : 'Merge request'}</span>
+            <span>{pending ? 'Merging…' : 'Merge request'}</span>
           </Button>
           <Badge variant={requestMergeabilityTone(request)}>
             {requestMergeabilityLabel(request)}
@@ -849,42 +645,6 @@ function MergeActionRow({
         {error && <ActionErrorMessage>{error}</ActionErrorMessage>}
       </div>
     </SectionRow>
-  )
-}
-
-function RequestTimeline({ detail }: { detail: RequestDetail }) {
-  return (
-    <section className="mt-8">
-      <div className="flex items-center justify-between gap-3">
-        <h2 className="text-balance text-lg font-semibold leading-7">
-          Timeline
-        </h2>
-        <Badge variant="neutral">{detail.events.length} events</Badge>
-      </div>
-      <div className="mt-2 divide-y divide-border border-t border-border">
-        {detail.events.map((event) => {
-          const body = requestEventBody(event)
-          return (
-            <article className="grid gap-2 py-4" key={event.id}>
-              <div className="flex flex-wrap items-center gap-2">
-                <Badge variant="outline">{eventKindLabel(event.kind)}</Badge>
-                <span className="font-mono text-xs tabular-nums text-muted-foreground">
-                  {formatUnixDate(event.created_at_unix)}
-                </span>
-                <span className="truncate font-mono text-xs text-muted-foreground">
-                  {event.actor_user_id}
-                </span>
-              </div>
-              {body && (
-                <p className="text-pretty whitespace-pre-wrap text-sm leading-6">
-                  {body}
-                </p>
-              )}
-            </article>
-          )
-        })}
-      </div>
-    </section>
   )
 }
 
@@ -951,7 +711,7 @@ function ActionFooter({
       <div>
         <Button disabled={disabled || pending} size="sm" type="submit" variant={variant}>
           {icon}
-          <span>{pending ? pendingLabel : label}</span>
+          <span>{pending ? `${pendingLabel}…` : label}</span>
         </Button>
       </div>
       {error && <ActionErrorMessage>{error}</ActionErrorMessage>}
@@ -960,7 +720,7 @@ function ActionFooter({
 }
 
 function ActionErrorMessage({ children }: { children: ReactNode }) {
-  return <p className="text-sm leading-5 text-destructive">{children}</p>
+  return <p className="text-sm leading-5 text-destructive" role="alert">{children}</p>
 }
 
 function KeyValue({ label, value }: { label: string; value: string }) {
@@ -972,6 +732,9 @@ function KeyValue({ label, value }: { label: string; value: string }) {
   )
 }
 
-function errorFor(actionError: ActionError | null, key: ActionKey) {
+function errorFor(
+  actionError: RequestActionError | null,
+  key: RequestActionKey,
+) {
   return actionError?.key === key ? actionError.message : null
 }

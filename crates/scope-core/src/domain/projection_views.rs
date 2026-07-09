@@ -1,8 +1,8 @@
 use super::{
     policy::{Principal, ScopePath, Visibility},
     projection::{Projection, ProjectionViewKey, project_graph},
-    store::StoredRepository,
     store::pending_import_scope_path,
+    store::{SourceBlob, StoredRepository},
 };
 use crate::error::ApiError;
 use sha1::{Digest, Sha1};
@@ -77,6 +77,12 @@ pub struct ProjectionViewFile {
     pub oid: String,
     pub tracked: bool,
     pub visibility: Visibility,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ProjectionViewFileContent {
+    pub file: ProjectionViewFile,
+    pub blob: SourceBlob,
 }
 
 pub fn repo_for_projection_preview(
@@ -201,6 +207,30 @@ pub fn projected_files(repo: &StoredRepository, principal: &Principal) -> Vec<Pr
         .collect()
 }
 
+pub fn projected_file_content(
+    repo: &StoredRepository,
+    principal: &Principal,
+    path: &ScopePath,
+) -> Option<ProjectionViewFileContent> {
+    let access = repo.access_for_principal(principal);
+    let projection = project_graph(
+        &repo.policy,
+        &repo.graph,
+        &repo.visibility_events,
+        ProjectionViewKey::from_access(access),
+    );
+    let blob = projection_content_tree(&projection).remove(path)?;
+    Some(ProjectionViewFileContent {
+        file: ProjectionViewFile {
+            path: path.clone(),
+            oid: blob.git_oid.clone(),
+            tracked: true,
+            visibility: repo.policy.effective_visibility(path),
+        },
+        blob,
+    })
+}
+
 pub fn pending_import_files(
     repo: &StoredRepository,
     principal: &Principal,
@@ -290,6 +320,13 @@ fn hidden_logical_commit_count(owner_projection: &Projection, projection: &Proje
 }
 
 fn projection_tree(projection: &Projection) -> BTreeMap<ScopePath, String> {
+    projection_content_tree(projection)
+        .into_iter()
+        .map(|(path, blob)| (path, blob.git_oid))
+        .collect()
+}
+
+fn projection_content_tree(projection: &Projection) -> BTreeMap<ScopePath, SourceBlob> {
     let mut tree = BTreeMap::new();
     for change in projection
         .commits
@@ -298,7 +335,7 @@ fn projection_tree(projection: &Projection) -> BTreeMap<ScopePath, String> {
     {
         match &change.new_content {
             Some(blob) => {
-                tree.insert(change.path.clone(), blob.git_oid.clone());
+                tree.insert(change.path.clone(), blob.clone());
             }
             None => {
                 tree.remove(&change.path);

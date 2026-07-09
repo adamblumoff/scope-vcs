@@ -1,5 +1,9 @@
 import { AuthLayout } from '@/features/auth/auth-layout'
-import { SignUp } from '@clerk/tanstack-react-start'
+import {
+  AuthLoadingState,
+  AuthSurface,
+} from '@/features/auth/auth-loading-state'
+import { SignUp, useAuth } from '@clerk/tanstack-react-start'
 import { createFileRoute } from '@tanstack/react-router'
 
 export const Route = createFileRoute('/sign-up/$')({
@@ -7,9 +11,15 @@ export const Route = createFileRoute('/sign-up/$')({
 })
 
 function Page() {
+  const { isLoaded } = useAuth()
   return (
     <AuthLayout>
-      <SignUp />
+      <AuthSurface
+        description="Create an account for permissioned repository collaboration."
+        title="Create your Scope account"
+      >
+        {isLoaded ? <SignUp /> : <AuthLoadingState label="Loading sign up…" />}
+      </AuthSurface>
     </AuthLayout>
   )
 }

@@ -308,6 +308,24 @@ pub(crate) struct CommitFileDiffRequest {
     pub(crate) path: String,
 }
 
+#[derive(Debug, Deserialize)]
+#[cfg_attr(test, derive(ts_rs::TS))]
+pub(crate) struct RequestFileDiffRequest {
+    pub(crate) path: String,
+}
+
+#[derive(Debug, Serialize)]
+#[cfg_attr(test, derive(ts_rs::TS))]
+pub(crate) struct RequestChangesResponse {
+    pub(crate) files: Vec<CommitFileResponse>,
+}
+
+#[derive(Debug, Deserialize)]
+#[cfg_attr(test, derive(ts_rs::TS))]
+pub(crate) struct RepoFileContentRequest {
+    pub(crate) path: String,
+}
+
 #[derive(Debug, Serialize)]
 #[cfg_attr(test, derive(ts_rs::TS))]
 pub(crate) struct ReviewFileDiffResponse {

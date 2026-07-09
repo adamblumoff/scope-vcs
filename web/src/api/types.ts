@@ -36,6 +36,7 @@ import type {
   RequestMergeabilityResponse,
   RequestMergeabilityStatus,
   RequestMutationResponse,
+  RequestChangesResponse,
   RequestPermissionsResponse,
   RequestSettlementResponse,
   RequestState,
@@ -44,6 +45,7 @@ import type {
   RespondRequestRequest,
   ReviewFileDiffResponse,
   RepoFileResponse,
+  RepoFileContentResponse,
   RepoPublicationState as GeneratedRepoPublicationState,
   RepoSummaryResponse,
   RepositoryAccessResponse,
@@ -89,6 +91,7 @@ export type CreateRepoInviteResponse = CreateRepositoryInviteResponse
 export type RepoInviteLookup = RepositoryInviteLookupResponse
 export type AcceptRepoInviteResponse = AcceptRepositoryInviteResponse
 export type RepoFile = RepoFileResponse
+export type RepoFileContent = RepoFileContentResponse
 export type RepoCapabilities = SessionCapabilities
 export type SessionRepo = GeneratedSessionRepo
 export type RepoSession = SessionResponse
@@ -106,6 +109,7 @@ export type ProjectionPreview = ProjectionPreviewResponse
 export type RequestList = RequestListResponse
 export type RequestDetail = RequestDetailResponse
 export type RequestMutation = RequestMutationResponse
+export type RequestChanges = RequestChangesResponse
 export type RequestDelete = RequestDeleteResponse
 export type RequestSummary = RequestSummaryResponse
 export type RequestPermissions = RequestPermissionsResponse

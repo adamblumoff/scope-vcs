@@ -9,7 +9,8 @@ use crate::{
     domain::{
         policy::{Policy, Principal, PrincipalKind, ScopePath, Visibility},
         projection_views::{
-            ProjectionViewFile, has_visible_projected_history,
+            ProjectionViewFile, ProjectionViewFileContent, has_visible_projected_history,
+            projected_file_content as domain_projected_file_content,
             projected_files as domain_projected_files,
         },
         store::{
@@ -208,6 +209,52 @@ impl MetadataStore {
             }
         }
     }
+
+    pub fn repo_live_file_content(
+        &self,
+        owner: &str,
+        name: &str,
+        viewer_user_id: Option<&str>,
+        path: &ScopePath,
+    ) -> Result<Option<ProjectionViewFileContent>, ApiError> {
+        let owner = owner.to_string();
+        let name = name.to_string();
+        let viewer_user_id = viewer_user_id.map(str::to_string);
+        let path = path.clone();
+        match self.inner.as_ref() {
+            MetadataStoreInner::Postgres { db, runtime } => {
+                let db = Arc::clone(db);
+                run_api_db_on(runtime, async move {
+                    let tx = begin_metadata_read_snapshot(db.as_ref()).await?;
+                    let content = repo_live_file_content_tx(
+                        &tx,
+                        &owner,
+                        &name,
+                        viewer_user_id.as_deref(),
+                        &path,
+                    )
+                    .await?;
+                    tx.commit().await.map_err(ApiError::internal)?;
+                    Ok(content)
+                })
+            }
+            #[cfg(any(test, feature = "memory-metadata"))]
+            MetadataStoreInner::Memory(memory) => {
+                let catalog = memory
+                    .catalog
+                    .lock()
+                    .map_err(|_| ApiError::internal_message("catalog lock is poisoned"))?;
+                let Some(repo) = catalog.repository(&owner, &name) else {
+                    return Ok(None);
+                };
+                if !repo_is_readable_for_viewer(repo, viewer_user_id.as_deref()) {
+                    return Ok(None);
+                }
+                let principal = principal_for_repo_viewer(repo, viewer_user_id.as_deref());
+                Ok(domain_projected_file_content(repo, &principal, &path))
+            }
+        }
+    }
 }
 
 async fn repo_summaries_for_user_tx<C>(
@@ -353,6 +400,29 @@ where
         return Ok(None);
     }
     Ok(Some(domain_projected_files(&repo, &principal)))
+}
+
+async fn repo_live_file_content_tx<C>(
+    conn: &C,
+    owner: &str,
+    name: &str,
+    viewer_user_id: Option<&str>,
+    path: &ScopePath,
+) -> Result<Option<ProjectionViewFileContent>, ApiError>
+where
+    C: ConnectionTrait,
+{
+    let Some(row) = repo_read_row_by_owner_name(conn, owner, name).await? else {
+        return Ok(None);
+    };
+    let permissions = member_permissions_for_viewer(conn, &row, viewer_user_id).await?;
+    let access = access_for_row(&row, viewer_user_id, permissions)?;
+    if !row_is_readable_for_viewer(conn, &row, viewer_user_id, access).await? {
+        return Ok(None);
+    }
+    let repo = hydrate_repo_from_row_id(conn, &row.id).await?;
+    let principal = principal_for_access(viewer_user_id, access);
+    Ok(domain_projected_file_content(&repo, &principal, path))
 }
 
 async fn repo_read_row_by_owner_name<C>(

@@ -326,6 +326,45 @@ pub(crate) fn request_ref_bundle_bytes(
     repo_name: &str,
     request: &Request,
 ) -> Result<Vec<u8>, ApiError> {
+    with_request_ref_store_repo(state, owner, repo_name, request, |store_repo| {
+        let mut hasher = Sha256::new();
+        hasher.update(request.request_ref.as_bytes());
+        hasher.update(request.head_oid.as_bytes());
+        let bundle_path = store_repo.with_extension(format!(
+            "request-{}.bundle.tmp",
+            hex::encode(&hasher.finalize()[..8])
+        ));
+        let result = (|| {
+            let output = run_git_output(
+                Some(store_repo),
+                &[
+                    "bundle",
+                    "create",
+                    bundle_path.to_string_lossy().as_ref(),
+                    &request.request_ref,
+                ],
+                "creating request branch bundle",
+            )?;
+            if !output.status.success() {
+                return Err(ApiError::service_unavailable(format!(
+                    "creating request branch bundle: {}",
+                    String::from_utf8_lossy(&output.stderr).trim()
+                )));
+            }
+            fs::read(&bundle_path).map_err(ApiError::internal)
+        })();
+        let _ = fs::remove_file(&bundle_path);
+        result
+    })
+}
+
+pub(crate) fn with_request_ref_store_repo<T>(
+    state: &AppState,
+    owner: &str,
+    repo_name: &str,
+    request: &Request,
+    action: impl FnOnce(&FsPath) -> Result<T, ApiError>,
+) -> Result<T, ApiError> {
     if request.git_snapshot.is_none() {
         return Err(ApiError::conflict("request branch has not been pushed"));
     }
@@ -334,34 +373,7 @@ pub(crate) fn request_ref_bundle_bytes(
     let _store_lock = acquire_request_ref_store_lock(state, owner, repo_name)?;
     let store_repo = ensure_request_ref_store_repo_locked(state, owner, repo_name)?;
     ensure_request_ref_available_in_store_locked(state, &store_repo, request)?;
-    let mut hasher = Sha256::new();
-    hasher.update(request.request_ref.as_bytes());
-    hasher.update(request.head_oid.as_bytes());
-    let bundle_path = store_repo.with_extension(format!(
-        "request-{}.bundle.tmp",
-        hex::encode(&hasher.finalize()[..8])
-    ));
-    let result = (|| {
-        let output = run_git_output(
-            Some(&store_repo),
-            &[
-                "bundle",
-                "create",
-                bundle_path.to_string_lossy().as_ref(),
-                &request.request_ref,
-            ],
-            "creating request branch bundle",
-        )?;
-        if !output.status.success() {
-            return Err(ApiError::service_unavailable(format!(
-                "creating request branch bundle: {}",
-                String::from_utf8_lossy(&output.stderr).trim()
-            )));
-        }
-        fs::read(&bundle_path).map_err(ApiError::internal)
-    })();
-    let _ = fs::remove_file(&bundle_path);
-    result
+    action(&store_repo)
 }
 
 pub(crate) fn delete_request_ref_from_store(
@@ -508,6 +520,11 @@ fn persist_request_ref_to_store(
 ) -> Result<PersistedRequestRef, ApiError> {
     ensure_request_ref_oid_is_commit(staging_repo, &update.new_head_oid)?;
     validate_pushed_tree(staging_repo, &update.new_head_oid)?;
+    ensure_request_ref_descends_from_base(
+        staging_repo,
+        &request.base_main_oid,
+        &update.new_head_oid,
+    )?;
     let repo = find_repo(state, owner, repo_name)?;
     if request.base_audience == RequestBaseAudience::Public {
         ensure_public_request_ref_is_public_safe(&repo, state, staging_repo, &update.new_head_oid)?;
@@ -537,6 +554,24 @@ fn persist_request_ref_to_store(
         previous_head,
         git_snapshot,
     })
+}
+
+fn ensure_request_ref_descends_from_base(
+    repo: &FsPath,
+    base_oid: &str,
+    head_oid: &str,
+) -> Result<(), ApiError> {
+    let output = run_git_output(
+        Some(repo),
+        &["merge-base", "--is-ancestor", base_oid, head_oid],
+        "checking request branch ancestry",
+    )?;
+    if output.status.success() {
+        return Ok(());
+    }
+    Err(ApiError::conflict(
+        "request branch must descend from its recorded base",
+    ))
 }
 
 fn ensure_request_ref_oid_is_commit(repo: &FsPath, oid: &str) -> Result<(), ApiError> {

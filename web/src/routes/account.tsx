@@ -6,7 +6,9 @@ import {
 import { parseRevokeCliSessionInput } from '@/api/cli-login-input'
 import type { CliExchangeGrant, CliSession } from '@/api/types'
 import { AppHeader } from '@/components/app-header'
+import { AppShell } from '@/components/app-shell'
 import { CopyableCodeBlock } from '@/components/copyable-code-block'
+import { DestructiveActionDialog } from '@/components/destructive-action-dialog'
 import { PageContent, PageHeader } from '@/components/page-header'
 import { PageErrorAlert } from '@/components/page-error-alert'
 import { SectionRow, SectionRows } from '@/components/section-rows'
@@ -84,8 +86,9 @@ function AccountRoute() {
   }
 
   return (
-    <main className="min-h-screen bg-background text-foreground">
-      <AppHeader action={() => <UserButton />} subtitle="Account" />
+    <AppShell
+      header={() => <AppHeader action={() => <UserButton />} subtitle="Account" />}
+    >
       <PageContent>
         <PageHeader
           description="Manage Scope CLI access for this account."
@@ -142,7 +145,7 @@ function AccountRoute() {
           </SectionRow>
         </SectionRows>
       </PageContent>
-    </main>
+    </AppShell>
   )
 }
 
@@ -155,47 +158,68 @@ function CliSessionList({
   revokeSession: (sessionId: string) => void
   sessions: CliSession[]
 }) {
+  const [confirmSession, setConfirmSession] = useState<CliSession | null>(null)
+
   if (sessions.length === 0) {
     return <p className="text-sm leading-5 text-muted-foreground">No active CLI sessions.</p>
   }
 
   return (
-    <ul className="divide-y divide-border border-y border-border">
-      {sessions.map((session) => (
-        <li
-          className="flex flex-col gap-3 py-3 sm:flex-row sm:items-center sm:justify-between"
-          key={session.id}
-        >
-          <div className="min-w-0">
-            <div className="truncate text-sm font-medium leading-5">
-              {session.label}
-            </div>
-            <div className="mt-1 flex flex-wrap gap-x-3 gap-y-1 text-xs leading-4 text-muted-foreground">
-              <span>Created {formatUnixTime(session.created_at_unix)}</span>
-              {session.last_used_at_unix && (
-                <span>Used {formatUnixTime(session.last_used_at_unix)}</span>
-              )}
-              <span>Expires {formatUnixTime(session.expires_at_unix)}</span>
-            </div>
-          </div>
-          <Button
-            aria-label={`Revoke ${session.label}`}
-            disabled={pending === session.id}
-            onClick={() => revokeSession(session.id)}
-            size="icon-sm"
-            title={`Revoke ${session.label}`}
-            type="button"
-            variant="destructive"
+    <>
+      <ul className="divide-y divide-border border-y border-border">
+        {sessions.map((session) => (
+          <li
+            className="flex flex-col gap-3 py-3 sm:flex-row sm:items-center sm:justify-between"
+            key={session.id}
           >
-            {pending === session.id ? (
-              <LoaderCircle className="size-3.5 animate-spin" />
-            ) : (
-              <Trash2 className="size-3.5" />
-            )}
-          </Button>
-        </li>
-      ))}
-    </ul>
+            <div className="min-w-0">
+              <div className="truncate text-sm font-medium leading-5">
+                {session.label}
+              </div>
+              <div className="mt-1 flex flex-wrap gap-x-3 gap-y-1 text-xs leading-4 text-muted-foreground">
+                <span>Created {formatUnixTime(session.created_at_unix)}</span>
+                {session.last_used_at_unix && (
+                  <span>Used {formatUnixTime(session.last_used_at_unix)}</span>
+                )}
+                <span>Expires {formatUnixTime(session.expires_at_unix)}</span>
+              </div>
+            </div>
+            <Button
+              aria-label={`Revoke ${session.label}`}
+              disabled={pending === session.id}
+              onClick={() => setConfirmSession(session)}
+              size="icon-sm"
+              title={`Revoke ${session.label}`}
+              type="button"
+              variant="destructive"
+            >
+              {pending === session.id ? (
+                <LoaderCircle className="size-3.5 animate-spin" />
+              ) : (
+                <Trash2 className="size-3.5" />
+              )}
+            </Button>
+          </li>
+        ))}
+      </ul>
+      <DestructiveActionDialog
+        confirmLabel="Revoke session"
+        description="This CLI session will lose access immediately."
+        onConfirm={() => {
+          if (confirmSession) {
+            revokeSession(confirmSession.id)
+            setConfirmSession(null)
+          }
+        }}
+        onOpenChange={(open) => {
+          if (!open && !pending) setConfirmSession(null)
+        }}
+        open={Boolean(confirmSession)}
+        pending={Boolean(confirmSession && pending === confirmSession.id)}
+        subject={confirmSession?.label ?? ''}
+        title="Revoke CLI session?"
+      />
+    </>
   )
 }
 

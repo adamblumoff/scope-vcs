@@ -19,7 +19,8 @@
     "konsistent:validate": "konsistent validate",
     "start": "node .output/server/index.mjs",
     "test": "node -e \"const fs=require('node:fs'); fs.rmSync('.test-output',{recursive:true,force:true}); fs.mkdirSync('.test-output',{recursive:true}); fs.writeFileSync('.test-output/package.json','{\\\"type\\\":\\\"commonjs\\\"}')\" && tsc -p tsconfig.test.json && node --test \".test-output/**/*.test.js\"",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "ui:audit": "node scripts/ui-audit.mjs"
   },
   "dependencies": {
     "@clerk/tanstack-react-start": "^1.4.5",
@@ -48,6 +49,7 @@
     "@vitejs/plugin-react": "^6.0.1",
     "konsistent": "1.0.0-beta.1",
     "nitro": "^3.0.260311-beta",
+    "playwright": "1.61.1",
     "react-doctor": "^0.5.8",
     "typescript": "^6.0.2",
     "vite": "^8.0.14"

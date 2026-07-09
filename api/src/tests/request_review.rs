@@ -1,0 +1,120 @@
+use super::*;
+use crate::domain::requests::{
+    RecordWorkingRequestUploadInput, RequestActorRole, RequestBaseAudience, StartRequestInput,
+    SubmitRequestInput, canonical_request_ref,
+};
+
+#[tokio::test]
+async fn reads_the_uploaded_request_ref_bundle() {
+    let state = test_state_with_repo();
+    cache_test_jwks(&state);
+    let main_repo = temp_git_repo("request-review-main");
+    fs::write(main_repo.join("README.md"), "hello\n").unwrap();
+    run_git(Some(&main_repo), &["add", "."], "stage review main").unwrap();
+    commit_all(&main_repo, "initial");
+    let main_oid = git_head_oid(&main_repo);
+    let main_snapshot =
+        git_snapshot_from_ref(&state, TEST_REPO_ID, &main_repo, "refs/heads/main").unwrap();
+
+    let request_repo = temp_git_repo("request-review-branch");
+    run_git(
+        Some(&request_repo),
+        &["pull", main_repo.to_str().unwrap(), "main"],
+        "seed review request branch",
+    )
+    .unwrap();
+    fs::write(request_repo.join("README.md"), "hello from request\n").unwrap();
+    run_git(Some(&request_repo), &["add", "."], "stage review request").unwrap();
+    commit_all(&request_repo, "request change");
+    let request_head = git_head_oid(&request_repo);
+    let request_ref = canonical_request_ref("req_review");
+    run_git(
+        Some(&request_repo),
+        &["update-ref", &request_ref, &request_head],
+        "create review request ref",
+    )
+    .unwrap();
+    let request_snapshot =
+        git_snapshot_from_ref(&state, TEST_REPO_ID, &request_repo, &request_ref).unwrap();
+
+    {
+        let mut repo = repo_with_readme();
+        repo.git_snapshot = Some(main_snapshot);
+        let mut catalog = lock_catalog(&state).unwrap();
+        catalog.repositories.insert(TEST_REPO_ID.to_string(), repo);
+    }
+    state
+        .metadata
+        .start_request(StartRequestInput {
+            id: "req_review".to_string(),
+            repo_id: TEST_REPO_ID.to_string(),
+            author_user_id: test_owner_id(),
+            title: "Review request".to_string(),
+            author_role: RequestActorRole::Owner,
+            base_audience: RequestBaseAudience::Private,
+            target_branch: DEFAULT_GIT_BRANCH.to_string(),
+            request_ref,
+            base_main_oid: main_oid,
+            now_unix: 2,
+        })
+        .unwrap();
+    state
+        .metadata
+        .record_working_request_upload(RecordWorkingRequestUploadInput {
+            request_id: "req_review".to_string(),
+            actor_user_id: test_owner_id(),
+            actor_can_edit: true,
+            expected_old_head_oid: None,
+            new_head_oid: request_head.clone(),
+            git_snapshot: request_snapshot,
+            now_unix: 3,
+        })
+        .unwrap();
+    state
+        .metadata
+        .submit_request(SubmitRequestInput {
+            request_id: "req_review".to_string(),
+            actor_user_id: test_owner_id(),
+            expected_head_oid: request_head,
+            stake_credits: 0,
+            stake_ledger_entry_id: None,
+            event_id: "event_req_review_created".to_string(),
+            now_unix: 4,
+        })
+        .unwrap();
+
+    let app = router(state);
+    let changes = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/v1/repos/owner/repo/requests/req_review/changes")
+                .header(AUTHORIZATION, bearer_header())
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(changes.status(), StatusCode::OK);
+    let changes = response_json(changes).await;
+    assert_eq!(changes["files"][0]["path"], "README.md");
+    assert_eq!(changes["files"][0]["kind"], "Modified");
+
+    let diff = app
+        .oneshot(
+            Request::builder()
+                .uri("/v1/repos/owner/repo/requests/req_review/file-diff?path=README.md")
+                .header(AUTHORIZATION, bearer_header())
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(diff.status(), StatusCode::OK);
+    let diff = response_json(diff).await;
+    assert_text_content(&diff["old_content"], "hello\n");
+    assert_text_content(&diff["new_content"], "hello from request\n");
+
+    let _ = fs::remove_dir_all(main_repo);
+    let _ = fs::remove_dir_all(request_repo);
+}

@@ -391,6 +391,37 @@ pub(crate) async fn get_files(
     Ok(Json(projection_file_responses(files)))
 }
 
+pub(crate) async fn get_file_content(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path((owner, repo_name)): Path<(String, String)>,
+    Query(input): Query<RepoFileContentRequest>,
+) -> Result<Json<RepoFileContentResponse>, ApiError> {
+    let path = crate::domain::policy::ScopePath::parse(format!("/{}", input.path))
+        .map_err(ApiError::bad_request)?;
+    let user = optional_scope_user(&state, &headers).await?;
+    let projected = state
+        .metadata
+        .repo_live_file_content(
+            &owner,
+            &repo_name,
+            user.as_ref().map(|user| user.id.as_str()),
+            &path,
+        )?
+        .ok_or_else(|| ApiError::not_found("file not found"))?;
+    let content = crate::http::file_diffs::review_content_response_for_blob(
+        state.object_store.as_ref(),
+        &projected.blob,
+    )?;
+
+    Ok(Json(RepoFileContentResponse {
+        path: projected.file.path.as_str().to_string(),
+        oid: projected.file.oid,
+        visibility: projected.file.visibility,
+        content,
+    }))
+}
+
 fn repo_summary_response(
     state: &AppState,
     summary: RepoSummaryRead,

@@ -36,7 +36,7 @@ export function ReviewFileDiffDrawer({
   diff: ReviewFileDiff | null
   error: string | null
   loading: boolean
-  onClose: () => void
+  onClose?: () => void
   selectedPath: string | null
 }) {
   const themeType = useThemeType()
@@ -71,25 +71,27 @@ export function ReviewFileDiffDrawer({
               {displayName || 'Diff'}
             </div>
             <div className="text-xs leading-4 text-muted-foreground">
-              {loading ? 'Loading diff' : error ? 'Diff unavailable' : 'Diff'}
+              {loading ? 'Loading diff…' : error ? 'Diff unavailable' : 'Diff'}
             </div>
           </div>
-          <Button
-            aria-label="Close diff viewer"
-            onClick={onClose}
-            size="icon-xs"
-            type="button"
-            variant="ghost"
-          >
-            <X className="size-3.5" />
-          </Button>
+          {onClose && (
+            <Button
+              aria-label="Close diff viewer"
+              onClick={onClose}
+              size="icon-xs"
+              type="button"
+              variant="ghost"
+            >
+              <X className="size-3.5" />
+            </Button>
+          )}
         </div>
 
         <div className="min-h-0 flex-1 overflow-auto">
           {loading ? (
             <DiffSkeleton />
           ) : error ? (
-            <DiffState tone="error">
+            <DiffState role="alert" tone="error">
               <TriangleAlert className="size-4 text-destructive" />
               <span>{error}</span>
             </DiffState>
@@ -298,9 +300,11 @@ function DiffSkeleton() {
 
 function DiffState({
   children,
+  role,
   tone = 'muted',
 }: {
   children: ReactNode
+  role?: 'alert'
   tone?: 'error' | 'muted'
 }) {
   return (
@@ -309,6 +313,7 @@ function DiffState({
         'flex min-h-[220px] items-center justify-center gap-2 px-4 text-sm leading-5',
         tone === 'error' ? 'text-destructive' : 'text-muted-foreground',
       )}
+      role={role}
     >
       {children}
     </div>

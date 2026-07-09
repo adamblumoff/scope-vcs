@@ -8,6 +8,7 @@ import { gitRemoteUrl } from './repo-urls'
 import type {
   RepoDetail,
   RepoFile,
+  RepoFileContent,
   RepoLiveState,
   RepoParams,
   RepoSession,
@@ -55,6 +56,16 @@ export async function loadRepoLiveStateForRequest(data: RepoParams) {
     auth: 'optional',
   })
   return repoLiveState(data, repo)
+}
+
+export async function loadRepoFileForRequest(
+  data: RepoParams & { path: string },
+) {
+  const api = createApiClient()
+  return api.get<RepoFileContent>(
+    `/v1/repos/${encodeURIComponent(data.owner)}/${encodeURIComponent(data.repo)}/files/content?path=${encodeURIComponent(data.path)}`,
+    { auth: 'optional' },
+  )
 }
 
 function repoLiveState(data: RepoParams, repo: RepoSummary): RepoLiveState {

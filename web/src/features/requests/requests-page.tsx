@@ -1,8 +1,7 @@
 import type { RepoLiveState, RepoParams, RequestSummary } from '@/api/types'
-import { AppHeader } from '@/components/app-header'
 import { LifecycleBadge } from '@/components/lifecycle-badge'
 import { PageContent, PageHeader } from '@/components/page-header'
-import { RepoBreadcrumb } from '@/components/repo-breadcrumb'
+import { RepoShell } from '@/components/repo-shell'
 import { SectionRow, SectionRows } from '@/components/section-rows'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
@@ -31,45 +30,20 @@ export function RequestsPage({
   const { repo } = live
 
   return (
-    <main className="min-h-screen bg-background text-foreground">
-      <AppHeader
-        breadcrumb={() => <RepoBreadcrumb params={params} section="requests" />}
-      />
-
+    <RepoShell
+      active="requests"
+      canManage={repo.access.actor !== 'Public'}
+      params={params}
+    >
       <PageContent>
         <PageHeader
-          actions={() => (
-            <>
-              <Button asChild size="sm" variant="secondary">
-                <Link params={params} to="/repos/$owner/$repo">
-                  Repository
-                </Link>
-              </Button>
-              <Button asChild size="sm" variant="secondary">
-                <Link params={params} to="/repos/$owner/$repo/history">
-                  History
-                </Link>
-              </Button>
-            </>
-          )}
           badges={() => (
             <>
               <LifecycleBadge state={repo.lifecycle_state} />
               <Badge variant="neutral">{repo.access.actor}</Badge>
-              <Badge variant={requests.length ? 'info' : 'neutral'}>
-                {requests.length} requests
-              </Badge>
             </>
           )}
-          description={() => (
-            <Link
-              className="font-mono underline underline-offset-4 hover:text-foreground"
-              params={params}
-              to="/repos/$owner/$repo"
-            >
-              {repo.id}
-            </Link>
-          )}
+          description="Review and settle proposed branch updates."
           title="Requests"
         />
 
@@ -87,7 +61,7 @@ export function RequestsPage({
           <EmptyRequests params={params} />
         )}
       </PageContent>
-    </main>
+    </RepoShell>
   )
 }
 

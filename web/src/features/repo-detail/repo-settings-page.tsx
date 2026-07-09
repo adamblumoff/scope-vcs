@@ -12,11 +12,10 @@ import type {
   RepoSummary,
   UpdateRepoMemberInput,
 } from '@/api/types'
-import { AppHeader } from '@/components/app-header'
 import { LifecycleBadge } from '@/components/lifecycle-badge'
 import { PageContent, PageHeader } from '@/components/page-header'
 import { PageErrorAlert } from '@/components/page-error-alert'
-import { RepoBreadcrumb } from '@/components/repo-breadcrumb'
+import { RepoShell } from '@/components/repo-shell'
 import { Badge } from '@/components/ui/badge'
 import { storeHomeFlash } from '@/lib/home-flash'
 import { Link, useNavigate, useRouter } from '@tanstack/react-router'
@@ -174,11 +173,11 @@ export function RepoSettingsPage({
   }
 
   return (
-    <main className="min-h-screen bg-background text-foreground">
-      <AppHeader
-        breadcrumb={() => <RepoBreadcrumb params={params} section="settings" />}
-      />
-
+    <RepoShell
+      active="settings"
+      canManage={repo.access.actor !== 'Public'}
+      params={params}
+    >
       <PageContent>
         <PageHeader
           badges={() => (
@@ -246,6 +245,6 @@ export function RepoSettingsPage({
           repo={deleteTarget}
         />
       )}
-    </main>
+    </RepoShell>
   )
 }

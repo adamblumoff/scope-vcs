@@ -110,6 +110,10 @@ export type GitPushTokenResponse = { created_at_unix: number, secret: string | n
 
 export type RepoFileResponse = { path: string, oid: string, tracked: boolean, visibility: Visibility, };
 
+export type RepoFileContentRequest = { path: string, };
+
+export type RepoFileContentResponse = { path: string, oid: string, visibility: Visibility, content: ReviewFileContentResponse, };
+
 export type RepositoryAccessResponse = { actor: RepositoryActor, can_read_private_files: boolean, can_push: boolean, can_change_file_visibility: boolean, can_apply_changes: boolean, can_update_repo_settings: boolean, can_manage_members: boolean, can_delete_repo: boolean, };
 
 export type RepositoryCollaborationResponse = { members: Array<RepositoryMemberResponse>, invites: Array<RepositoryInviteResponse>, };
@@ -131,6 +135,10 @@ export type AcceptRepositoryInviteResponse = { repo: RepoSummaryResponse, member
 export type CommitHistoryRequest = { audience: ProjectionPreviewAudience | null, };
 
 export type CommitFileDiffRequest = { audience: ProjectionPreviewAudience | null, path: string, };
+
+export type RequestFileDiffRequest = { path: string, };
+
+export type RequestChangesResponse = { files: Array<CommitFileResponse>, };
 
 export type ReviewFileContentResponse = { "kind": "text", text: string, } | { "kind": "binary", oid: string, size_bytes: number, };
 
