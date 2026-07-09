@@ -201,6 +201,24 @@ pub(super) fn store_request_metadata(
     Ok(())
 }
 
+pub(super) fn track_request_branch_ref(
+    git_repo: &GitRepo,
+    branch: &str,
+    target: &RequestRemoteTarget,
+    request_id: &str,
+    request_head_oid: &str,
+) -> anyhow::Result<()> {
+    let remote_ref = request_remote_ref(&target.remote, request_id);
+    run_git_in_repo(git_repo, &["update-ref", &remote_ref, request_head_oid])?;
+    set_branch_config_value(git_repo, branch, "remote", &target.remote)?;
+    set_branch_config_value(
+        git_repo,
+        branch,
+        "merge",
+        &format!("refs/heads/scope/requests/{request_id}"),
+    )
+}
+
 pub(super) fn print_change_summary(
     git_repo: &GitRepo,
     target: &RequestRemoteTarget,

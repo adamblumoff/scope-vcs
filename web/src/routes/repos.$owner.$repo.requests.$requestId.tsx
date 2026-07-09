@@ -1,3 +1,4 @@
+import { HttpError } from '@/api/client'
 import {
   addRequestEditorForRequest,
   commentRequestForRequest,
@@ -18,7 +19,10 @@ import {
   resolveRequestForRequest,
   respondToRequestForRequest,
 } from '@/api/repos'
-import { RequestDetailPage } from '@/features/requests/request-detail-page'
+import {
+  RequestDetailPage,
+  RequestUnavailablePage,
+} from '@/features/requests/request-detail-page'
 import { createFileRoute } from '@tanstack/react-router'
 import { createServerFn } from '@tanstack/react-start'
 
@@ -27,7 +31,7 @@ const loadRequestPage = createServerFn({ method: 'GET' })
   .handler(async ({ data }) => {
     const [live, detail] = await Promise.all([
       loadRepoLiveStateForRequest(data),
-      loadRequestForRequest(data),
+      loadOptionalRequestForRequest(data),
     ])
 
     return { detail, live }
@@ -81,6 +85,10 @@ function RequestRoute() {
     repo: params.repo,
   }
 
+  if (!detail) {
+    return <RequestUnavailablePage params={requestParams} />
+  }
+
   return (
     <RequestDetailPage
       addRequestEditor={(data) => addRequestEditor({ data })}
@@ -107,5 +115,18 @@ function requestParamsForRoute(params: {
     owner: params.owner,
     repo: params.repo,
     request_id: params.requestId,
+  }
+}
+
+async function loadOptionalRequestForRequest(
+  data: ReturnType<typeof requestParamsForRoute>,
+) {
+  try {
+    return await loadRequestForRequest(data)
+  } catch (error) {
+    if (error instanceof HttpError && [403, 404].includes(error.status)) {
+      return null
+    }
+    throw error
   }
 }

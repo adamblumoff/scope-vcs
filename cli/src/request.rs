@@ -31,6 +31,7 @@ use local::{
     maybe_current_or_explicit_request_id, maybe_request_branch_base_audience,
     normalized_submit_stake, print_change_summary, projection_label_for_repo, push_request_head,
     remote_main_ref, request_branch_base_audience, request_remote_ref, store_request_metadata,
+    track_request_branch_ref,
 };
 use render::{
     confirm_merge, ensure_mergeable, print_mutation_receipt, print_repo_access,
@@ -214,7 +215,10 @@ fn start_request_branch(
     let remote_main = remote_main_ref(&context.target.remote);
     let base_oid = scope_remote_head_oid(&git_repo, &context.target.remote, DEFAULT_SCOPE_BRANCH)?
         .context("Scope main projection did not produce a local remote ref")?;
-    run_git_in_repo(&git_repo, &["switch", "-c", &branch, &remote_main])?;
+    run_git_in_repo(
+        &git_repo,
+        &["switch", "--no-track", "-c", &branch, &remote_main],
+    )?;
     let response = api_start_request(
         client,
         api_url,
@@ -233,6 +237,13 @@ fn start_request_branch(
         &request_head_oid,
         &response.request.id,
         &response.request.request_ref,
+    )?;
+    track_request_branch_ref(
+        &git_repo,
+        &branch,
+        &context.target,
+        &response.request.id,
+        &request_head_oid,
     )?;
 
     println!(
@@ -296,6 +307,14 @@ fn submit_request_branch(
             detail.request.id
         )
     })?;
+    let branch = current_branch(&git_repo)?;
+    track_request_branch_ref(
+        &git_repo,
+        &branch,
+        &context.target,
+        &detail.request.id,
+        &request_head_oid,
+    )?;
     let response = submit_request(
         client,
         api_url,
@@ -308,7 +327,6 @@ fn submit_request_branch(
             stake_credits,
         },
     )?;
-    let branch = current_branch(&git_repo)?;
     store_request_metadata(&git_repo, &branch, &context, &response.request)?;
 
     println!(
@@ -362,6 +380,13 @@ fn push_request_branch(
         &detail.request.request_ref,
     )?;
     let branch = current_branch(&git_repo)?;
+    track_request_branch_ref(
+        &git_repo,
+        &branch,
+        &context.target,
+        &detail.request.id,
+        &request_head_oid,
+    )?;
     store_request_metadata(&git_repo, &branch, &context, &detail.request)?;
     let detail = get_request(
         client,

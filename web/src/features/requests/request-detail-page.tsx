@@ -120,6 +120,42 @@ const initialRequestDetailUiState: RequestDetailUiState = {
   responseBody: '',
 }
 
+export function RequestUnavailablePage({ params }: { params: RepoParams }) {
+  return (
+    <main className="min-h-screen bg-background text-foreground">
+      <AppHeader
+        breadcrumb={() => <RepoBreadcrumb params={params} section="requests" />}
+      />
+
+      <PageContent>
+        <PageHeader
+          actions={() => (
+            <Button asChild size="sm" variant="secondary">
+              <Link params={params} to="/repos/$owner/$repo/requests">
+                Requests
+              </Link>
+            </Button>
+          )}
+          badges={() => <Badge variant="warning">Unavailable</Badge>}
+          description="This request does not exist, was deleted, or is only visible to signed-in collaborators."
+          title="Request not found"
+        />
+
+        <section className="mt-8 border-t border-border py-8">
+          <div className="flex max-w-2xl items-start gap-3 text-sm leading-6 text-muted-foreground">
+            <ShieldQuestion className="mt-0.5 size-4 shrink-0 text-muted-foreground" />
+            <p>
+              Request branches can be private to contributors and maintainers.
+              Sign in with an account that has access, or return to the request
+              list for visible requests.
+            </p>
+          </div>
+        </section>
+      </PageContent>
+    </main>
+  )
+}
+
 export function RequestDetailPage({
   addRequestEditor,
   commentRequest,

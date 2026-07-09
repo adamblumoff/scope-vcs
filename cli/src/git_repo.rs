@@ -408,11 +408,16 @@ pub fn push_head_to_ref_with_bearer(
         format!("Authorization: Bearer {bearer_token}"),
     );
 
-    let status = command
-        .status()
+    let output = command
+        .output()
         .context("run authenticated Scope request branch push")?;
-    if !status.success() {
-        bail!("git push to Scope request ref failed");
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        let stderr = stderr.trim();
+        if stderr.is_empty() {
+            bail!("git push to Scope request ref failed");
+        }
+        bail!("git push to Scope request ref failed: {stderr}");
     }
     Ok(())
 }
@@ -525,11 +530,16 @@ pub fn fetch_scope_remote_with_bearer(
         command.env(key, value);
     }
 
-    let status = command
-        .status()
+    let output = command
+        .output()
         .context("refresh Scope Git remote before push review")?;
-    if !status.success() {
-        bail!("refresh Scope Git remote before push review failed");
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        let stderr = stderr.trim();
+        if stderr.is_empty() {
+            bail!("refresh Scope Git remote before push review failed");
+        }
+        bail!("refresh Scope Git remote before push review failed: {stderr}");
     }
     Ok(())
 }
@@ -669,8 +679,8 @@ fn git_success_in_repo(repo: &GitRepo, args: &[&str]) -> bool {
     Command::new("git")
         .current_dir(&repo.root)
         .args(args)
-        .status()
-        .is_ok_and(|status| status.success())
+        .output()
+        .is_ok_and(|output| output.status.success())
 }
 
 fn parse_name_status(output: &[u8]) -> Vec<GitChangedPath> {
