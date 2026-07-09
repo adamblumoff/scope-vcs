@@ -17,6 +17,8 @@ pub(crate) fn review_file_diff_response_for_blobs(
     Ok(ReviewFileDiffResponse {
         path,
         kind,
+        old_mode: old_content.map(|blob| blob.git_file_mode.clone()),
+        new_mode: new_content.map(|blob| blob.git_file_mode.clone()),
         old_content: old_content
             .map(|blob| review_content_response_for_blob(store, blob))
             .transpose()?,

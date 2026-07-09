@@ -10,6 +10,7 @@ async fn reads_the_uploaded_request_ref_bundle() {
     cache_test_jwks(&state);
     let main_repo = temp_git_repo("request-review-main");
     fs::write(main_repo.join("README.md"), "hello\n").unwrap();
+    fs::write(main_repo.join("script.sh"), "#!/bin/sh\necho hello\n").unwrap();
     run_git(Some(&main_repo), &["add", "."], "stage review main").unwrap();
     commit_all(&main_repo, "initial");
     let main_oid = git_head_oid(&main_repo);
@@ -25,6 +26,12 @@ async fn reads_the_uploaded_request_ref_bundle() {
     .unwrap();
     fs::write(request_repo.join("README.md"), "hello from request\n").unwrap();
     run_git(Some(&request_repo), &["add", "."], "stage review request").unwrap();
+    run_git(
+        Some(&request_repo),
+        &["update-index", "--chmod=+x", "script.sh"],
+        "make review script executable",
+    )
+    .unwrap();
     commit_all(&request_repo, "request change");
     let request_head = git_head_oid(&request_repo);
     let request_ref = canonical_request_ref("req_review");
@@ -99,8 +106,12 @@ async fn reads_the_uploaded_request_ref_bundle() {
     let changes = response_json(changes).await;
     assert_eq!(changes["files"][0]["path"], "README.md");
     assert_eq!(changes["files"][0]["kind"], "Modified");
+    assert_eq!(changes["files"][1]["path"], "script.sh");
+    assert_eq!(changes["files"][1]["old_mode"], "100644");
+    assert_eq!(changes["files"][1]["new_mode"], "100755");
 
     let diff = app
+        .clone()
         .oneshot(
             Request::builder()
                 .uri("/v1/repos/owner/repo/requests/req_review/file-diff?path=README.md")
@@ -114,6 +125,23 @@ async fn reads_the_uploaded_request_ref_bundle() {
     let diff = response_json(diff).await;
     assert_text_content(&diff["old_content"], "hello\n");
     assert_text_content(&diff["new_content"], "hello from request\n");
+
+    let mode_diff = app
+        .oneshot(
+            Request::builder()
+                .uri("/v1/repos/owner/repo/requests/req_review/file-diff?path=script.sh")
+                .header(AUTHORIZATION, bearer_header())
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(mode_diff.status(), StatusCode::OK);
+    let mode_diff = response_json(mode_diff).await;
+    assert_eq!(mode_diff["old_mode"], "100644");
+    assert_eq!(mode_diff["new_mode"], "100755");
+    assert_text_content(&mode_diff["old_content"], "#!/bin/sh\necho hello\n");
+    assert_text_content(&mode_diff["new_content"], "#!/bin/sh\necho hello\n");
 
     let _ = fs::remove_dir_all(main_repo);
     let _ = fs::remove_dir_all(request_repo);

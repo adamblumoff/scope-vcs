@@ -331,6 +331,8 @@ pub(crate) struct RepoFileContentRequest {
 pub(crate) struct ReviewFileDiffResponse {
     pub(crate) path: String,
     pub(crate) kind: FileChangeKind,
+    pub(crate) old_mode: Option<String>,
+    pub(crate) new_mode: Option<String>,
     pub(crate) old_content: Option<ReviewFileContentResponse>,
     pub(crate) new_content: Option<ReviewFileContentResponse>,
 }
@@ -384,6 +386,8 @@ pub(crate) struct CommitDetailResponse {
 pub(crate) struct CommitFileResponse {
     pub(crate) path: String,
     pub(crate) kind: FileChangeKind,
+    pub(crate) old_mode: Option<String>,
+    pub(crate) new_mode: Option<String>,
     pub(crate) old_oid: Option<String>,
     pub(crate) new_oid: Option<String>,
     pub(crate) visibility: Visibility,
@@ -606,6 +610,14 @@ fn commit_file_response(
     CommitFileResponse {
         path: file.path.as_str().to_string(),
         kind: file.kind,
+        old_mode: file
+            .old_content
+            .as_ref()
+            .map(|blob| blob.git_file_mode.clone()),
+        new_mode: file
+            .new_content
+            .as_ref()
+            .map(|blob| blob.git_file_mode.clone()),
         old_oid: file.old_content.as_ref().map(|blob| blob.git_oid.clone()),
         new_oid: file.new_content.as_ref().map(|blob| blob.git_oid.clone()),
         visibility: file.visibility,

@@ -92,6 +92,14 @@ export function RequestChangesSection({
 }
 
 function changeKind(file: CommitFile) {
+  if (
+    file.old_mode &&
+    file.new_mode &&
+    file.old_mode !== file.new_mode &&
+    file.old_oid === file.new_oid
+  ) {
+    return <Badge variant="neutral">Mode</Badge>
+  }
   const variant =
     file.kind === 'Added'
       ? 'success'

@@ -69,6 +69,8 @@ pub(crate) async fn get_request_file_diff(
     Ok(Json(ReviewFileDiffResponse {
         path,
         kind: file.kind,
+        old_mode: file.old_mode,
+        new_mode: file.new_mode,
         old_content,
         new_content,
     }))
@@ -160,6 +162,8 @@ fn request_changes_from_repo(
         files.push(CommitFileResponse {
             path,
             kind,
+            old_mode: git_mode(columns[0].trim_start_matches(':')),
+            new_mode: git_mode(columns[1]),
             old_oid,
             new_oid,
             visibility: repo.policy.effective_visibility(&scope_path),
@@ -167,6 +171,10 @@ fn request_changes_from_repo(
     }
     files.sort_by(|left, right| left.path.cmp(&right.path));
     Ok(files)
+}
+
+fn git_mode(mode: &str) -> Option<String> {
+    (mode != "000000").then(|| mode.to_string())
 }
 
 fn git_blob_content(repo: &FsPath, oid: &str) -> Result<ReviewFileContentResponse, ApiError> {
