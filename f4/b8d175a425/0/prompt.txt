@@ -1,0 +1,6 @@
+# Files mentioned by the user:
+
+## ## Current status I found it. The latest active work is **PR #99, “Complete mai…: /home/adam-blumoff/.codex/attachments/ef9dd058-adf3-46ce-a2cc-6a51aca53abe/pasted-text.txt
+
+## My request for Codex:
+go ahead and look at this feedback and tell me what is worth fixing and what is wrong, also go ahead and also fix the regression you found if it isn't too much trouble:
