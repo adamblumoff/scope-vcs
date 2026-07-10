@@ -1,0 +1,1 @@
+ok so fix 2 and 3 then also fix the codex p1 and then run the benches and tell me the results
