@@ -1,0 +1,1 @@
+looks great, go ahead and ab-implement this in a new branch and open up a pr. then wait for greptile and codex feedback and address accordingly. then manual qa with local dev (change dev setup as needed) and if all green merge to main and then pull main local.
