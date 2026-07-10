@@ -1,0 +1,23 @@
+adam-blumoff@adam-blumoff-surface-book-2:~/code/scope-vcs$ scope init
+7ab3645946cfa569dc1a8f30e0d9fc8137186184
+Repository name [scope-vcs]: 
+Default visibility [Private]: 
+
+Opening browser to sign in:
+https://scopevcs.com/cli-login?request_id=cli_browser_c678ea1aa2247bf50d0cf400161f3c0f8b39e83ddda7e4c35db643650766edeb
+Waiting for browser confirmation...
+Signed in as @adamblumoff <adamblumoff@gmail.com>
+Enumerating objects: 4035, done.
+Counting objects: 100% (4035/4035), done.
+Delta compression using up to 8 threads
+Compressing objects: 100% (1502/1502), done.
+Writing objects: 100% (4035/4035), 2.08 MiB | 6.81 MiB/s, done.
+Total 4035 (delta 2671), reused 3511 (delta 2331), pack-reused 0
+error: RPC failed; HTTP 400 curl 22 The requested URL returned error: 400
+send-pack: unexpected disconnect while reading sideband packet
+fatal: the remote end hung up unexpectedly
+Everything up-to-date
+Deleted Scope repository after failed init
+Error: git push to Scope failed
+
+what happened?
