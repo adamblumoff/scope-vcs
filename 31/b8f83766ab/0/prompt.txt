@@ -1,0 +1,79 @@
+bro why did you merge, you have to wait for the comments. wait for the comments/ci run on the pr, then fix accordingly, then merge. also github cli should be working, but i did find this bug that might be tripping you up idk:
+
+I traced it and found the exact bug. It's in your API's Git smart HTTP handlers, and it's a spec-compliance gap, not a config problem.
+
+**Diagnosis.** The packet trace shows the fetch working through two negotiation rounds, then failing on the third POST to `/git-upload-pack`. The difference in that third request: Git sent it with `Content-Encoding: gzip`. Git's smart HTTP client gzips request bodies once negotiation payloads get large (many `have` lines — my clone has 357 commits of origin history to advertise), and the Git HTTP protocol spec requires servers to accept gzip-encoded requests. Your handler doesn't. In `git_upload_pack_rpc`, the body goes straight from the wire into `git upload-pack --stateless-rpc` stdin:
+
+```160:167:api/src/git/mod.rs
+    let body = match to_bytes(request.into_body(), MAX_UPLOAD_PACK_BYTES).await {
+        Ok(body) => body,
+        Err(error) => {
+            return git_upload_pack_error(format!("git upload-pack body is too large: {error}"));
+        }
+    };
+
+    match git_upload_pack_response(&repo_path, &body).await {
+```
+
+So `upload-pack` receives gzip bytes where it expects pkt-lines. The `?�?` in the error is the gzip magic number (`1f 8b 08`) rendered as text. Your error surfacing actually worked correctly — the ERR pkt-line came back properly wrapped, which is why the client showed "remote error:" instead of choking.
+
+This explains why dogfooding worked until now: fresh clones and small fetches send tiny uncompressed negotiation bodies. It only bites when a client with substantial local history fetches — which is exactly the everyday incremental-fetch case, so any real user would hit this quickly.
+
+**The solution** is to decompress request bodies when `Content-Encoding: gzip` is present, on both Git POST endpoints (`git_upload_pack_rpc` and the receive-pack handler — clients may gzip either). Two ways to do it:
+
+1. **Handler-level (my recommendation):** after `to_bytes`, check the request's `Content-Encoding` header; if it's `gzip`, decompress with `flate2::read::GzDecoder` before passing along. A small shared helper covers both handlers, it's explicit at the Git boundary where the protocol quirk lives, and you can enforce the size cap on *decompressed* output so a tiny gzip bomb can't blow past `MAX_UPLOAD_PACK_BYTES`.
+2. **Middleware-level:** tower-http's `RequestDecompressionLayer` on the Git routes. Less code, but it applies decompression semantics route-wide and its size-limit interaction is less explicit than doing it by hand at this boundary.
+
+Reject anything other than identity/gzip with a proper ERR pkt-line (Git only ever sends gzip, so that branch is just correctness hygiene).
+
+Verification is easy since I can reproduce on demand: `git fetch scope` from this machine fails now and should succeed after the fix. A regression test fits your existing `api/src/tests/git_http.rs` pattern — gzip a valid upload-pack request body, POST it with the header set, assert a valid result.
+
+Given your rule about being involved in behavior changes: this one's a clear-cut protocol bug fix, but it does change request handling. Want me to implement it?
+
+11:04 PM
+
+don't implement, just tell me how you would
+
+11:07 PM
+
+Here's exactly how I'd do it.
+
+**1. Add the dependency.** `flate2` in `api/Cargo.toml` (it's almost certainly already in your tree transitively via git-related crates, so this costs nothing at build time).
+
+**2. Write one decoding helper in `api/src/git/mod.rs`.** Something like:
+
+```rust
+fn decode_git_request_body(headers: &HeaderMap, body: Bytes, max_bytes: usize) -> Result<Vec<u8>, ApiError> {
+    match headers.get(CONTENT_ENCODING).map(|v| v.to_str()) {
+        None => Ok(body.to_vec()),
+        Some(Ok("gzip")) => {
+            let mut decoded = Vec::new();
+            GzDecoder::new(body.as_ref())
+                .take(max_bytes as u64 + 1)
+                .read_to_end(&mut decoded)
+                .map_err(|e| ApiError::bad_request(format!("invalid gzip request body: {e}")))?;
+            if decoded.len() > max_bytes {
+                return Err(ApiError::bad_request("git request body is too large"));
+            }
+            Ok(decoded)
+        }
+        Some(_) => Err(ApiError::bad_request("unsupported content-encoding")),
+    }
+}
+```
+
+The `take(max + 1)` is the important detail: it bounds the *decompressed* size during streaming, so a 1 KB gzip bomb can't expand to gigabytes in memory before you check the length. The existing `to_bytes(..., MAX_*_BYTES)` cap stays as-is for the wire size.
+
+**3. Call it from both POST handlers.** In `git_upload_pack_rpc` (`api/src/git/mod.rs` around line 160) and the receive-pack handler above it (around line 122), insert the helper between `to_bytes` and the downstream call, passing `MAX_UPLOAD_PACK_BYTES` / `MAX_RECEIVE_PACK_BYTES` respectively. Errors go through the existing `git_upload_pack_error` / `git_error_response` paths so the client always gets a proper ERR pkt-line rather than a bare 4xx.
+
+One design note on why handler-level rather than `RequestDecompressionLayer`: the info/refs GET and the JSON API don't need request decompression, the layer's decompressed-size limiting is less explicit, and this quirk is Git-protocol-specific — it belongs at the Git boundary where someone reading the handler can see why it exists. It also keeps error responses in pkt-line format, which middleware wouldn't know to do.
+
+**4. Regression tests in `api/src/tests/git_http.rs`.** Three cases, following the existing request-building patterns there:
+
+- Gzip a valid upload-pack request body (compress the same bytes an existing happy-path test sends), POST with `Content-Encoding: gzip`, assert the response is a valid upload-pack result identical to the uncompressed path.
+- Same for receive-pack if there's a convenient existing fixture; otherwise upload-pack alone covers the helper.
+- A garbage-gzip body (or one that inflates past the cap) returns an ERR pkt-line, not a 500.
+
+**5. Verify end-to-end.** After deploy, `git fetch scope` from this machine is the live reproduction — it fails today and should complete cleanly after. That's the whole change: one helper, two call sites, three tests, no schema or domain impact.
+
+One adjacent thing worth checking while you're in there (not part of this fix): whether the CLI's own push/clone paths ever send gzip — if you ever switch the CLI from shelling out to `git` to using a library, this same requirement follows it.
