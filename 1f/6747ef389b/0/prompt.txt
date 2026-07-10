@@ -1,0 +1,1 @@
+ok so i want you to use the same reviewpanel design, but it should just be the default repo view, not just a list of file paths. no review panel, tabs, publish action, visibility toggoels, or web side visibility mutation, just read only for all repo views.
