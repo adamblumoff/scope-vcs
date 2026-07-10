@@ -26,8 +26,14 @@ pub mod repository_member {
                 repo_id: member.repo_id.clone(),
                 user_id: member.user_id.clone(),
                 permissions: encode_json(&member.permissions)?,
-                created_at_unix: member.created_at_unix.min(i64::MAX as u64) as i64,
-                updated_at_unix: member.updated_at_unix.min(i64::MAX as u64) as i64,
+                created_at_unix: u64_to_i64(
+                    member.created_at_unix,
+                    "repository member creation time",
+                )?,
+                updated_at_unix: u64_to_i64(
+                    member.updated_at_unix,
+                    "repository member update time",
+                )?,
             })
         }
 
@@ -36,8 +42,11 @@ pub mod repository_member {
                 repo_id: self.repo_id,
                 user_id: self.user_id,
                 permissions: decode_json::<RepositoryMemberPermissions>(self.permissions)?,
-                created_at_unix: self.created_at_unix.max(0) as u64,
-                updated_at_unix: self.updated_at_unix.max(0) as u64,
+                created_at_unix: i64_to_u64(
+                    self.created_at_unix,
+                    "repository member creation time",
+                )?,
+                updated_at_unix: i64_to_u64(self.updated_at_unix, "repository member update time")?,
             })
         }
     }
@@ -81,16 +90,27 @@ pub mod repository_invite {
                 invited_by_user_id: invite.invited_by_user_id.clone(),
                 state: encode_enum(invite.state)?,
                 token_hash: invite.token_hash.clone(),
-                created_at_unix: invite.created_at_unix.min(i64::MAX as u64) as i64,
-                updated_at_unix: invite.updated_at_unix.min(i64::MAX as u64) as i64,
-                expires_at_unix: invite.expires_at_unix.min(i64::MAX as u64) as i64,
+                created_at_unix: u64_to_i64(
+                    invite.created_at_unix,
+                    "repository invite creation time",
+                )?,
+                updated_at_unix: u64_to_i64(
+                    invite.updated_at_unix,
+                    "repository invite update time",
+                )?,
+                expires_at_unix: u64_to_i64(
+                    invite.expires_at_unix,
+                    "repository invite expiry time",
+                )?,
                 accepted_by_user_id: invite.accepted_by_user_id.clone(),
                 accepted_at_unix: invite
                     .accepted_at_unix
-                    .map(|value| value.min(i64::MAX as u64) as i64),
+                    .map(|value| u64_to_i64(value, "repository invite acceptance time"))
+                    .transpose()?,
                 revoked_at_unix: invite
                     .revoked_at_unix
-                    .map(|value| value.min(i64::MAX as u64) as i64),
+                    .map(|value| u64_to_i64(value, "repository invite revocation time"))
+                    .transpose()?,
             })
         }
 
@@ -104,12 +124,21 @@ pub mod repository_invite {
                 invited_by_user_id: self.invited_by_user_id,
                 state: decode_enum::<RepositoryInviteState>(self.state)?,
                 token_hash: self.token_hash,
-                created_at_unix: self.created_at_unix.max(0) as u64,
-                updated_at_unix: self.updated_at_unix.max(0) as u64,
-                expires_at_unix: self.expires_at_unix.max(0) as u64,
+                created_at_unix: i64_to_u64(
+                    self.created_at_unix,
+                    "repository invite creation time",
+                )?,
+                updated_at_unix: i64_to_u64(self.updated_at_unix, "repository invite update time")?,
+                expires_at_unix: i64_to_u64(self.expires_at_unix, "repository invite expiry time")?,
                 accepted_by_user_id: self.accepted_by_user_id,
-                accepted_at_unix: self.accepted_at_unix.map(|value| value.max(0) as u64),
-                revoked_at_unix: self.revoked_at_unix.map(|value| value.max(0) as u64),
+                accepted_at_unix: self
+                    .accepted_at_unix
+                    .map(|value| i64_to_u64(value, "repository invite acceptance time"))
+                    .transpose()?,
+                revoked_at_unix: self
+                    .revoked_at_unix
+                    .map(|value| i64_to_u64(value, "repository invite revocation time"))
+                    .transpose()?,
             })
         }
     }

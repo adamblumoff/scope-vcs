@@ -27,7 +27,8 @@ pub(crate) async fn start_cli_browser_login(
     let app_origin = public_app_origin("build CLI browser login URL")?;
     let login = state
         .metadata
-        .start_cli_browser_login(&app_origin, &request.callback_url)?;
+        .start_cli_browser_login(&app_origin, &request.callback_url)
+        .await?;
 
     Ok(Json(BrowserLoginStartResponse {
         request_id: login.request_id,
@@ -45,7 +46,8 @@ pub(crate) async fn complete_cli_browser_login(
     let user = require_reconciled_clerk_scope_user(&state, &headers).await?;
     let callback_url = state
         .metadata
-        .complete_cli_browser_login(&request_id, &user)?;
+        .complete_cli_browser_login(&request_id, &user)
+        .await?;
 
     Ok(Json(BrowserLoginCompleteResponse { callback_url }))
 }
@@ -55,11 +57,10 @@ pub(crate) async fn exchange_cli_browser_login(
     Path(request_id): Path<String>,
     Json(request): Json<BrowserLoginExchangeRequest>,
 ) -> Result<Json<CliSessionTokenResponse>, ApiError> {
-    let token = state.metadata.exchange_cli_browser_login(
-        &request_id,
-        &request.request_secret,
-        &request.callback_code,
-    )?;
+    let token = state
+        .metadata
+        .exchange_cli_browser_login(&request_id, &request.request_secret, &request.callback_code)
+        .await?;
 
     Ok(Json(CliSessionTokenResponse {
         session_token: token.session_token,
@@ -73,7 +74,7 @@ pub(crate) async fn create_cli_exchange_grant(
     headers: HeaderMap,
 ) -> Result<Json<CliExchangeGrantResponse>, ApiError> {
     let user = require_reconciled_clerk_scope_user(&state, &headers).await?;
-    let grant = state.metadata.create_cli_exchange_grant(&user)?;
+    let grant = state.metadata.create_cli_exchange_grant(&user).await?;
 
     Ok(Json(CliExchangeGrantResponse {
         exchange_token: grant.exchange_token,
@@ -85,7 +86,10 @@ pub(crate) async fn exchange_cli_grant(
     State(state): State<AppState>,
     Json(request): Json<CliExchangeGrantExchangeRequest>,
 ) -> Result<Json<CliSessionTokenResponse>, ApiError> {
-    let token = state.metadata.exchange_cli_grant(&request.exchange_token)?;
+    let token = state
+        .metadata
+        .exchange_cli_grant(&request.exchange_token)
+        .await?;
 
     Ok(Json(CliSessionTokenResponse {
         session_token: token.session_token,
@@ -101,7 +105,8 @@ pub(crate) async fn list_cli_sessions(
     let user = require_clerk_scope_user(&state, &headers).await?;
     let sessions = state
         .metadata
-        .list_cli_sessions_for_user(&user)?
+        .list_cli_sessions_for_user(&user)
+        .await?
         .into_iter()
         .map(cli_session_response)
         .collect();
@@ -117,7 +122,8 @@ pub(crate) async fn revoke_cli_session(
     let user = require_reconciled_clerk_scope_user(&state, &headers).await?;
     state
         .metadata
-        .revoke_cli_session_for_user(&user, &session_id)?;
+        .revoke_cli_session_for_user(&user, &session_id)
+        .await?;
     Ok(StatusCode::NO_CONTENT)
 }
 

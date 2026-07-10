@@ -1,36 +1,7 @@
-use std::{
-    env, fs,
-    path::{Path, PathBuf},
-    process::{Command, Output},
-    time::{SystemTime, UNIX_EPOCH},
-};
+mod support;
 
-struct TempDir {
-    path: PathBuf,
-}
-
-impl TempDir {
-    fn new(label: &str) -> Self {
-        let mut path = env::temp_dir();
-        path.push(format!(
-            "scope-cli-init-{label}-{}-{}",
-            std::process::id(),
-            unix_nanos()
-        ));
-        fs::create_dir_all(&path).unwrap();
-        Self { path }
-    }
-
-    fn path(&self) -> &Path {
-        &self.path
-    }
-}
-
-impl Drop for TempDir {
-    fn drop(&mut self) {
-        let _ = fs::remove_dir_all(&self.path);
-    }
-}
+use std::{fs, process::Command};
+use support::*;
 
 #[test]
 fn init_help_exposes_name_and_omits_visibility_flags() {
@@ -120,67 +91,4 @@ fn init_warns_on_dirty_working_tree_and_continues_to_auth() {
         "{stderr}"
     );
     assert!(stderr.contains("start browser login"), "{stderr}");
-}
-
-fn scope_command(cwd: &Path) -> Command {
-    let mut command = Command::new(env!("CARGO_BIN_EXE_scope"));
-    command.current_dir(cwd);
-    command.env("SCOPE_API_URL", unique_api_url());
-    command
-}
-
-fn create_repo_with_head(cwd: &Path) {
-    run_git(cwd, ["-c", "init.defaultBranch=main", "init"]);
-    fs::write(cwd.join("README.md"), "initial\n").unwrap();
-    run_git(cwd, ["add", "README.md"]);
-    run_git(
-        cwd,
-        [
-            "-c",
-            "user.email=scope@example.test",
-            "-c",
-            "user.name=Scope Test",
-            "commit",
-            "-m",
-            "initial",
-        ],
-    );
-}
-
-fn run_git<const N: usize>(cwd: &Path, args: [&str; N]) {
-    let output = Command::new("git")
-        .current_dir(cwd)
-        .args(args)
-        .output()
-        .unwrap();
-    assert_success(&output, "git");
-}
-
-fn assert_success(output: &Output, command: &str) {
-    assert!(
-        output.status.success(),
-        "{command} failed\nstdout:\n{}\nstderr:\n{}",
-        String::from_utf8_lossy(&output.stdout),
-        String::from_utf8_lossy(&output.stderr)
-    );
-}
-
-fn assert_failure(output: &Output, command: &str) {
-    assert!(
-        !output.status.success(),
-        "{command} succeeded unexpectedly\nstdout:\n{}\nstderr:\n{}",
-        String::from_utf8_lossy(&output.stdout),
-        String::from_utf8_lossy(&output.stderr)
-    );
-}
-
-fn unique_api_url() -> String {
-    format!("http://127.0.0.1:9/scope-cli-test-{}", unix_nanos())
-}
-
-fn unix_nanos() -> u128 {
-    SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .unwrap()
-        .as_nanos()
 }

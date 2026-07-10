@@ -53,13 +53,10 @@ Use the committed dev entrypoint instead of pulling Railway variables by hand:
 
 The local stack runs the web app at `http://localhost:3000` and the API at
 `http://localhost:8080`. The API is started with `--features local-dev`, uses
-ephemeral in-memory metadata by default, seeds local demo repositories, and
-stores encrypted local objects under `.scope/dev`. The worker process is
-started by `dev/scope-dev up` when local dev is configured with
-`SCOPE_METADATA_STORE=postgres` and `DATABASE_URL`; memory metadata stays API
-local and therefore skips the separate worker. The dev launcher strips
-inherited Railway variables and refuses production-looking Clerk or database
-settings.
+Postgres metadata, seeds local demo repositories, and stores encrypted local
+objects under `.scope/dev`. The worker starts with the rest of the stack. The
+dev launcher strips inherited Railway variables and refuses production-looking
+Clerk or database settings.
 
 `web/.env.local` must contain Clerk development keys (`pk_test_` and
 `sk_test_`). The launcher derives the local API Clerk issuer from
@@ -68,8 +65,8 @@ development instance.
 
 Root `.env.local` must contain `SCOPE_DEV_USER_EMAIL` matching the Clerk dev
 account you sign in with. `SCOPE_DEV_USER_HANDLE` is optional and controls the
-owner handle for seeded repositories. Copy `.env.example` when setting this up
-on a new machine.
+owner handle for seeded repositories. It must also define a safe local
+`DATABASE_URL`. Copy `.env.example` when setting this up on a new machine.
 
 `./dev/scope-dev bench` runs the Phase 0 local data-architecture benchmark from
 `bench/` against the seeded repos and writes ignored JSON/Markdown reports under

@@ -1,6 +1,6 @@
 export { loadHomeForRequest } from './home'
 export {
-  loadRepoForRequest,
+  loadRepoContentForRequest,
   loadRepoFileForRequest,
   loadRepoLiveStateForRequest,
   parseRepoParams,

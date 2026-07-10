@@ -15,12 +15,15 @@ use tower_http::{
 
 pub fn router(state: AppState) -> Router {
     let router = Router::new()
-        .route("/healthz", get(http::account::healthz))
-        .route("/readyz", get(http::account::readyz))
-        .route("/v1/admin/cleanup", get(http::admin::get_cleanup_status))
-        .route("/v1/admin/cleanup/drain", post(http::admin::drain_cleanup))
+        .route(routes::HEALTH, get(http::account::healthz))
+        .route(routes::READINESS, get(http::account::readyz))
+        .route(routes::ADMIN_CLEANUP, get(http::admin::get_cleanup_status))
         .route(
-            "/v1/admin/metadata/reset",
+            routes::ADMIN_CLEANUP_DRAIN,
+            post(http::admin::drain_cleanup),
+        )
+        .route(
+            routes::ADMIN_METADATA_RESET,
             post(http::admin::reset_metadata),
         )
         .route(
@@ -69,150 +72,123 @@ pub fn router(state: AppState) -> Router {
             get(http::account::get_account_session),
         )
         .route(
-            "/v1/repos",
+            routes::REPOS,
             get(http::repos::list_repos).post(http::repos::create_repo),
         )
         .route(
-            "/v1/repos/{owner}/{repo}",
+            routes::REPO,
             get(http::repos::get_repo).delete(http::repos::delete_repo),
         )
+        .route(routes::REPO_CONFIG, get(http::repos::get_repo_config))
         .route(
-            "/v1/repos/{owner}/{repo}/config",
-            get(http::repos::get_repo_config),
-        )
-        .route(
-            "/v1/repos/{owner}/{repo}/push-intents",
+            routes::REPO_PUSH_INTENTS,
             post(http::repos::create_push_intent),
         )
         .route(
-            "/v1/repos/{owner}/{repo}/push-intents/complete",
+            routes::REPO_PUSH_INTENTS_COMPLETE,
             post(http::repos::complete_push_intent),
         )
+        .route(routes::REPO_SESSION, get(http::account::get_session))
+        .route(routes::REPO_FILES, get(http::repos::get_files))
         .route(
-            "/v1/repos/{owner}/{repo}/session",
-            get(http::account::get_session),
-        )
-        .route(
-            "/v1/repos/{owner}/{repo}/files",
-            get(http::repos::get_files),
-        )
-        .route(
-            "/v1/repos/{owner}/{repo}/files/content",
+            routes::REPO_FILE_CONTENT,
             get(http::repos::get_file_content),
         )
         .route(
-            "/v1/repos/{owner}/{repo}/requests",
+            routes::REPO_REQUESTS,
             get(http::requests::list_requests).post(http::requests::start_request),
         )
         .route(
-            "/v1/repos/{owner}/{repo}/requests/{request_id}",
+            routes::REPO_REQUEST,
             get(http::requests::get_request).delete(http::requests::delete_request),
         )
         .route(
-            "/v1/repos/{owner}/{repo}/requests/{request_id}/changes",
+            routes::REPO_REQUEST_CHANGES,
             get(http::request_review::get_request_changes),
         )
         .route(
-            "/v1/repos/{owner}/{repo}/requests/{request_id}/file-diff",
+            routes::REPO_REQUEST_FILE_DIFF,
             get(http::request_review::get_request_file_diff),
         )
         .route(
-            "/v1/repos/{owner}/{repo}/requests/{request_id}/branch.bundle",
+            routes::REPO_REQUEST_BUNDLE,
             get(http::requests::download_request_branch_bundle),
         )
         .route(
-            "/v1/repos/{owner}/{repo}/requests/{request_id}/editors",
+            routes::REPO_REQUEST_EDITORS,
             post(http::requests::add_request_editor),
         )
         .route(
-            "/v1/repos/{owner}/{repo}/requests/{request_id}/editors/{editor_user_id}",
+            routes::REPO_REQUEST_EDITOR,
             delete(http::requests::remove_request_editor),
         )
         .route(
-            "/v1/repos/{owner}/{repo}/requests/{request_id}/submit",
+            routes::REPO_REQUEST_SUBMIT,
             post(http::requests::submit_request),
         )
         .route(
-            "/v1/repos/{owner}/{repo}/requests/{request_id}/comments",
+            routes::REPO_REQUEST_COMMENTS,
             post(http::requests::comment_request),
         )
         .route(
-            "/v1/repos/{owner}/{repo}/requests/{request_id}/needs-response",
+            routes::REPO_REQUEST_NEEDS_RESPONSE,
             post(http::requests::mark_needs_response),
         )
         .route(
-            "/v1/repos/{owner}/{repo}/requests/{request_id}/respond",
+            routes::REPO_REQUEST_RESPOND,
             post(http::requests::respond_to_request),
         )
         .route(
-            "/v1/repos/{owner}/{repo}/requests/{request_id}/resolve",
+            routes::REPO_REQUEST_RESOLVE,
             post(http::requests::resolve_request),
         )
         .route(
-            "/v1/repos/{owner}/{repo}/requests/{request_id}/merge",
+            routes::REPO_REQUEST_MERGE,
             post(http::requests::merge_request),
         )
+        .route(routes::REPO_EVENTS, get(http::repo_events::repo_events))
+        .route(routes::REPO_COMMITS, get(http::history::get_commit_history))
+        .route(routes::REPO_COMMIT, get(http::history::get_commit_detail))
         .route(
-            "/v1/repos/{owner}/{repo}/events",
-            get(http::repo_events::repo_events),
-        )
-        .route(
-            "/v1/repos/{owner}/{repo}/commits",
-            get(http::history::get_commit_history),
-        )
-        .route(
-            "/v1/repos/{owner}/{repo}/commits/{commit_id}",
-            get(http::history::get_commit_detail),
-        )
-        .route(
-            "/v1/repos/{owner}/{repo}/commits/{commit_id}/file-diff",
+            routes::REPO_COMMIT_FILE_DIFF,
             get(http::history::get_commit_file_diff),
         )
         .route(
-            "/v1/repos/{owner}/{repo}/members",
+            routes::REPO_MEMBERS,
             get(http::repo_collaboration::list_repository_collaboration),
         )
         .route(
-            "/v1/repos/{owner}/{repo}/invites",
+            routes::REPO_INVITES,
             post(http::repo_collaboration::create_repository_invite),
         )
         .route(
-            "/v1/repos/{owner}/{repo}/invites/{invite_id}",
+            routes::REPO_INVITE,
             delete(http::repo_collaboration::delete_repository_invite),
         )
         .route(
-            "/v1/repos/{owner}/{repo}/members/{member_user_id}",
+            routes::REPO_MEMBER,
             patch(http::repo_collaboration::update_repository_member)
                 .delete(http::repo_collaboration::delete_repository_member),
         )
         .route(
-            "/v1/repository-invites/{token}",
+            routes::REPOSITORY_INVITE,
             get(http::repo_collaboration::get_repository_invite),
         )
         .route(
-            "/v1/repository-invites/{token}/accept",
+            routes::REPOSITORY_INVITE_ACCEPT,
             post(http::repo_collaboration::accept_repository_invite),
         )
         .route(
-            "/v1/repos/{owner}/{repo}/projection-preview",
+            routes::REPO_PROJECTION_PREVIEW,
             get(http::repos::get_projection_preview),
         )
-        .route(
-            "/git/{mode}/{org}/{repo}/info/refs",
-            get(git::git_info_refs),
-        )
-        .route(
-            "/git/{mode}/{org}/{repo}/git-receive-pack",
-            post(git::git_receive_pack),
-        )
-        .route(
-            "/git/{mode}/{org}/{repo}/git-upload-pack",
-            post(git::git_upload_pack_rpc),
-        );
+        .route(routes::GIT_INFO_REFS, get(git::git_info_refs))
+        .route(routes::GIT_RECEIVE_PACK, post(git::git_receive_pack))
+        .route(routes::GIT_UPLOAD_PACK, post(git::git_upload_pack_rpc));
 
     #[cfg(feature = "local-dev")]
     let router = router.route(
-        "/v1/dev/bench/cli-session",
+        routes::DEV_BENCH_CLI_SESSION,
         post(crate::dev::create_bench_cli_session),
     );
 

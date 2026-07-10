@@ -1,4 +1,4 @@
-import type { RepoDetail, RepoFile, RepoFileContent, RepoParams } from '@/api/types'
+import type { RepoContent, RepoFile, RepoFileContent, RepoParams } from '@/api/types'
 import { LifecycleBadge } from '@/components/lifecycle-badge'
 import { PageContent, PageHeader } from '@/components/page-header'
 import { RepoPrimaryActionButton } from '@/components/repo-primary-action'
@@ -6,36 +6,35 @@ import { RepoShell } from '@/components/repo-shell'
 import { RouteErrorPage } from '@/components/route-error-page'
 import { Badge } from '@/components/ui/badge'
 import { RepoCloneDropdown } from './repo-clone-dropdown'
+import { useRepoLayout } from './repo-layout-context'
 import { RepositoryCodeView } from './repository-code-view'
 
 export function RepoDetailPage({
-  detail,
+  content,
   onSelectFile,
   params,
   selectedFile,
   selectedFileError,
   selectedPath,
 }: {
-  detail: RepoDetail
+  content: RepoContent
   onSelectFile: (file: RepoFile) => void
   params: RepoParams
   selectedFile: RepoFileContent | null
   selectedFileError: string | null
   selectedPath: string | null
 }) {
-  const { repo } = detail
-  const files = detail.files
-  const publicOnlyView = repo.access.actor === 'Public'
-
+  const { repo } = useRepoLayout()
+  const files = content.files
   return (
-    <RepoShell active="code" canManage={!publicOnlyView} params={params}>
+    <RepoShell params={params}>
       <PageContent>
         <PageHeader
-          actions={() => (
+          actions={(
             <>
               {repo.lifecycle_state === 'Published' && (
                 <RepoCloneDropdown
-                  cloneRemoteUrl={detail.clone_remote_url}
+                  cloneRemoteUrl={content.clone_remote_url}
                   repo={repo}
                 />
               )}
@@ -47,7 +46,7 @@ export function RepoDetailPage({
               />
             </>
           )}
-          badges={() => (
+          badges={(
             <>
               <LifecycleBadge state={repo.lifecycle_state} />
               <Badge variant="neutral">{repo.access.actor}</Badge>

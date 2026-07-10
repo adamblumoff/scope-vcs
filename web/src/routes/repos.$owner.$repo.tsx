@@ -3,6 +3,7 @@ import {
   parseRepoParams,
 } from '@/api/repos'
 import { RepoDetailError } from '@/features/repo-detail/repo-detail-page'
+import { RepoLayoutProvider } from '@/features/repo-detail/repo-layout-context'
 import { useRepoLiveRefresh } from '@/features/repo-detail/repo-live-refresh'
 import { Outlet, createFileRoute, useRouter } from '@tanstack/react-router'
 import { createServerFn } from '@tanstack/react-start'
@@ -23,5 +24,9 @@ function RepoLayoutRoute() {
   const router = useRouter()
   const invalidate = useCallback(() => router.invalidate(), [router])
   useRepoLiveRefresh(live, invalidate)
-  return <Outlet />
+  return (
+    <RepoLayoutProvider live={live}>
+      <Outlet />
+    </RepoLayoutProvider>
+  )
 }

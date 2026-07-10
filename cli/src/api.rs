@@ -1,202 +1,31 @@
 use anyhow::Context;
 use reqwest::{StatusCode, blocking::Client};
+pub use scope_api_contract::routes::{
+    cli_browser_login_exchange as cli_browser_login_exchange_path,
+    cli_device_login_poll as cli_device_login_poll_path,
+};
+pub use scope_api_contract::*;
 use scope_core::domain::repo_config::RepoConfig;
-use serde::{Deserialize, Serialize};
 use std::{env, time::Duration};
 
 mod requests;
 pub use requests::*;
 
 const DEFAULT_API_URL: &str = "https://scope-api-production-0251.up.railway.app";
-pub const ACCOUNT_SESSION_PATH: &str = "/v1/session";
-pub const CLI_BROWSER_LOGIN_PATH: &str = "/v1/cli/browser-login";
+pub const ACCOUNT_SESSION_PATH: &str = scope_api_contract::routes::ACCOUNT_SESSION;
+pub const CLI_BROWSER_LOGIN_PATH: &str = scope_api_contract::routes::CLI_BROWSER_LOGIN;
 pub const CLI_BROWSER_LOGIN_EXCHANGE_PATH_TEMPLATE: &str =
-    "/v1/cli/browser-login/{request_id}/exchange";
-pub const CLI_DEVICE_LOGIN_PATH: &str = "/v1/cli/device-login";
-pub const CLI_DEVICE_LOGIN_POLL_PATH_TEMPLATE: &str = "/v1/cli/device-login/{device_code}/poll";
-pub const CLI_EXCHANGE_GRANTS_EXCHANGE_PATH: &str = "/v1/cli/exchange-grants/exchange";
-pub const CLI_SESSION_PATH: &str = "/v1/cli/session";
-
-pub fn cli_browser_login_exchange_path(request_id: &str) -> String {
-    format!("/v1/cli/browser-login/{request_id}/exchange")
-}
-
-pub fn cli_device_login_poll_path(device_code: &str) -> String {
-    format!("/v1/cli/device-login/{device_code}/poll")
-}
-
-#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq)]
-#[cfg_attr(test, derive(ts_rs::TS))]
-pub enum RepositoryActor {
-    Public,
-    Member,
-    Owner,
-}
-
-#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq)]
-#[cfg_attr(test, derive(ts_rs::TS))]
-pub enum RepoPublicationState {
-    Unpublished,
-    Published,
-}
-
-#[derive(Deserialize)]
-#[cfg_attr(test, derive(ts_rs::TS))]
-pub struct DeviceLoginStartResponse {
-    pub device_code: String,
-    pub user_code: String,
-    pub verification_url: String,
-    pub expires_at_unix: u64,
-    pub poll_interval_secs: u64,
-}
-
-#[derive(Deserialize)]
-#[cfg_attr(test, derive(ts_rs::TS))]
-pub struct DeviceLoginPollResponse {
-    pub status: DeviceLoginStatus,
-    pub session_token: Option<String>,
-    pub expires_at_unix: u64,
-    pub identity: Option<SessionIdentity>,
-}
-
-#[derive(Serialize)]
-#[cfg_attr(test, derive(ts_rs::TS))]
-pub struct BrowserLoginStartRequest {
-    pub callback_url: String,
-}
-
-#[derive(Deserialize)]
-#[cfg_attr(test, derive(ts_rs::TS))]
-pub struct BrowserLoginStartResponse {
-    pub request_id: String,
-    pub request_secret: String,
-    pub authorization_url: String,
-    pub expires_at_unix: u64,
-}
-
-#[derive(Serialize)]
-#[cfg_attr(test, derive(ts_rs::TS))]
-pub struct BrowserLoginExchangeRequest {
-    pub request_secret: String,
-    pub callback_code: String,
-}
-
-#[derive(Serialize)]
-#[cfg_attr(test, derive(ts_rs::TS))]
-pub struct CliExchangeGrantExchangeRequest {
-    pub exchange_token: String,
-}
-
-#[derive(Deserialize)]
-#[cfg_attr(test, derive(ts_rs::TS))]
-pub struct CliSessionTokenResponse {
-    pub session_token: String,
-    pub expires_at_unix: u64,
-    pub identity: SessionIdentity,
-}
-
-#[derive(Deserialize)]
-#[cfg_attr(test, derive(ts_rs::TS))]
-pub enum DeviceLoginStatus {
-    Pending,
-    Complete,
-}
-
-#[derive(Deserialize)]
-#[cfg_attr(test, derive(ts_rs::TS))]
-pub struct SessionIdentity {
-    pub user_id: String,
-    pub email: Option<String>,
-    pub email_verified: bool,
-}
+    scope_api_contract::routes::CLI_BROWSER_LOGIN_EXCHANGE;
+pub const CLI_DEVICE_LOGIN_PATH: &str = scope_api_contract::routes::CLI_DEVICE_LOGIN;
+pub const CLI_DEVICE_LOGIN_POLL_PATH_TEMPLATE: &str =
+    scope_api_contract::routes::CLI_DEVICE_LOGIN_POLL;
+pub const CLI_EXCHANGE_GRANTS_EXCHANGE_PATH: &str =
+    scope_api_contract::routes::CLI_EXCHANGE_GRANTS_EXCHANGE;
+pub const CLI_SESSION_PATH: &str = scope_api_contract::routes::CLI_SESSION;
 
 pub struct AuthenticatedSession {
     pub token: String,
     pub user: UserResponse,
-}
-
-#[derive(Deserialize)]
-#[cfg_attr(test, derive(ts_rs::TS))]
-struct AccountSessionResponse {
-    identity: Option<SessionIdentity>,
-    user: Option<UserResponse>,
-}
-
-#[derive(Deserialize)]
-#[cfg_attr(test, derive(ts_rs::TS))]
-pub struct UserResponse {
-    pub id: String,
-    pub handle: String,
-    pub email: String,
-    pub email_verified: bool,
-}
-
-#[derive(Serialize)]
-struct CreateRepoRequest {
-    name: String,
-}
-
-#[derive(Deserialize)]
-pub struct CreateRepoResponse {
-    pub repo: RepoSummaryResponse,
-    pub init: RepoInitResponse,
-}
-
-#[derive(Deserialize)]
-pub struct RepoSummaryResponse {
-    pub id: String,
-    pub owner_handle: String,
-    pub name: String,
-    pub lifecycle_state: RepoPublicationState,
-    pub access: RepositoryAccessResponse,
-    pub pending_import_pending: bool,
-    pub open_request_count: usize,
-    pub request_permissions: RepoRequestPermissionsResponse,
-}
-
-#[derive(Deserialize)]
-pub struct RepositoryAccessResponse {
-    pub actor: RepositoryActor,
-    pub can_push: bool,
-}
-
-#[derive(Deserialize)]
-pub struct RepoRequestPermissionsResponse {
-    pub can_submit_request: bool,
-    pub uses_credit_stake: bool,
-}
-
-#[derive(Deserialize)]
-pub struct RepoInitResponse {
-    pub git_remote_url: String,
-    pub remote_name: String,
-    pub push_branch: String,
-    pub push_token: Option<GitPushTokenResponse>,
-}
-
-#[derive(Deserialize)]
-pub struct GitPushTokenResponse {
-    pub secret: Option<String>,
-}
-
-#[derive(Deserialize)]
-pub struct RepoConfigResponse {
-    pub config: RepoConfig,
-    pub config_hash: String,
-}
-
-#[derive(Serialize)]
-struct CreatePushIntentRequest {
-    head_oid: String,
-    base_config_hash: String,
-    config: RepoConfig,
-}
-
-#[derive(Deserialize)]
-pub struct CreatePushIntentResponse {
-    pub token: String,
-    pub base_head_oid: Option<String>,
-    pub expires_at_unix: u64,
 }
 
 pub struct CreatePushIntentParams<'a> {
@@ -205,11 +34,6 @@ pub struct CreatePushIntentParams<'a> {
     pub head_oid: &'a str,
     pub base_config_hash: &'a str,
     pub config: &'a RepoConfig,
-}
-
-#[derive(Serialize)]
-struct CompletePushIntentRequest {
-    token: String,
 }
 
 pub fn api_url() -> String {
@@ -280,9 +104,12 @@ pub fn create_repo(
     session_token: &str,
     name: String,
 ) -> anyhow::Result<CreateRepoResponse> {
-    let request = CreateRepoRequest { name };
+    let request = CreateRepoRequest {
+        name,
+        visibility: None,
+    };
     let response = client
-        .post(format!("{api_url}/v1/repos"))
+        .post(format!("{api_url}{}", scope_api_contract::routes::REPOS))
         .bearer_auth(session_token)
         .json(&request)
         .send()
@@ -312,7 +139,10 @@ pub fn get_repo(
     repo: &str,
 ) -> anyhow::Result<RepoSummaryResponse> {
     let response = client
-        .get(format!("{api_url}/v1/repos/{owner}/{repo}"))
+        .get(format!(
+            "{api_url}{}",
+            scope_api_contract::routes::repo(owner, repo)
+        ))
         .bearer_auth(session_token)
         .send()
         .with_context(|| format!("load Scope repo {owner}/{repo}"))?;
@@ -341,7 +171,10 @@ pub fn get_repo_config(
     repo: &str,
 ) -> anyhow::Result<RepoConfigResponse> {
     let response = client
-        .get(format!("{api_url}/v1/repos/{owner}/{repo}/config"))
+        .get(format!(
+            "{api_url}{}",
+            scope_api_contract::routes::repo_config(owner, repo)
+        ))
         .bearer_auth(session_token)
         .send()
         .with_context(|| format!("get repo config for {owner}/{repo}"))?;
@@ -373,8 +206,8 @@ pub fn create_push_intent(
 ) -> anyhow::Result<CreatePushIntentResponse> {
     let response = client
         .post(format!(
-            "{api_url}/v1/repos/{}/{}/push-intents",
-            params.owner, params.repo
+            "{api_url}{}",
+            scope_api_contract::routes::repo_push_intents(params.owner, params.repo)
         ))
         .bearer_auth(session_token)
         .json(&CreatePushIntentRequest {
@@ -418,7 +251,8 @@ pub fn complete_push_intent(
 ) -> anyhow::Result<()> {
     let response = client
         .post(format!(
-            "{api_url}/v1/repos/{owner}/{repo}/push-intents/complete"
+            "{api_url}{}",
+            scope_api_contract::routes::repo_push_intents_complete(owner, repo)
         ))
         .bearer_auth(session_token)
         .json(&CompletePushIntentRequest {
@@ -453,8 +287,8 @@ pub fn rollback_created_repo(
 ) {
     let result = client
         .delete(format!(
-            "{api_url}/v1/repos/{}/{}",
-            repo.owner_handle, repo.name
+            "{api_url}{}",
+            scope_api_contract::routes::repo(&repo.owner_handle, &repo.name)
         ))
         .bearer_auth(session_token)
         .send();

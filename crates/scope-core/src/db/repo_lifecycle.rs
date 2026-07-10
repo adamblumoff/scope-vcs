@@ -1,13 +1,10 @@
-#[cfg(any(test, feature = "memory-metadata"))]
-use super::cleanup_queue::{
-    queue_pending_source_blob_deletions, remove_matching_pending_repo_storage_cleanup,
-};
-#[cfg(any(test, feature = "memory-metadata"))]
-use super::repo_effects::apply_repo_effects;
 use super::{
-    MetadataStore, MetadataStoreInner, acquire_metadata_write_lock,
+    MetadataStore, acquire_aggregate_lock,
     cleanup_queue::queue_pending_source_blob_deletion_rows,
-    cleanup_queue::{complete_pending_repo_storage_cleanup, pending_repo_storage_cleanup_exists},
+    cleanup_queue::{
+        claim_pending_repo_storage_cleanup, complete_claimed_repo_storage_cleanup,
+        pending_repo_storage_cleanup_exists,
+    },
     entities,
     repo_effects::save_repo_effects,
     repository_from_model,
@@ -16,7 +13,6 @@ use super::{
         credit_account_by_user_id, credit_ledger_entry_by_id, insert_credit_ledger_entry_row,
         request_stake_debit_entry_for_request_id, requests_by_repo_id, save_credit_account_row,
     },
-    run_api_db_on,
 };
 use crate::domain::{
     policy::Visibility,
@@ -29,7 +25,7 @@ use sea_orm::{ColumnTrait, EntityTrait, QueryFilter, TransactionTrait};
 use std::sync::Arc;
 
 impl MetadataStore {
-    pub fn create_repo_with_init_tokens<F>(
+    pub async fn create_repo_with_init_tokens<F>(
         &self,
         owner_user_id: &str,
         name: &str,
@@ -43,168 +39,128 @@ impl MetadataStore {
     {
         let owner_user_id = owner_user_id.to_string();
         let name = name.to_string();
-        match self.inner.as_ref() {
-            MetadataStoreInner::Postgres { db, runtime } => {
-                let db = Arc::clone(db);
-                run_api_db_on(runtime, async move {
-                    let tx = db.as_ref().begin().await.map_err(ApiError::internal)?;
-                    acquire_metadata_write_lock(&tx).await?;
-                    let owner = entities::user::Entity::find_by_id(owner_user_id)
-                        .one(&tx)
-                        .await
-                        .map_err(ApiError::internal)?
-                        .ok_or_else(|| {
-                            ApiError::internal_message("signed-in user was not persisted")
-                        })?
-                        .try_into_domain()?;
-                    let mutation = create_repo_command(
-                        &owner,
-                        &name,
-                        default_visibility,
-                        first_push_token,
-                        git_push_token,
-                    )?;
-                    let repo = mutation.result;
-                    if entities::repository::Entity::find_by_id(repo.record.id.clone())
-                        .one(&tx)
-                        .await
-                        .map_err(ApiError::internal)?
-                        .is_some()
-                    {
-                        return Err(ApiError::conflict(format!(
-                            "repo {} already exists",
-                            repo.record.id
-                        )));
-                    }
+        let owner = entities::user::Entity::find_by_id(owner_user_id)
+            .one(self.db.as_ref())
+            .await
+            .map_err(ApiError::internal)?
+            .ok_or_else(|| ApiError::internal_message("signed-in user was not persisted"))?
+            .try_into_domain()?;
+        let mutation = create_repo_command(
+            &owner,
+            &name,
+            default_visibility,
+            first_push_token,
+            git_push_token,
+        )?;
+        let repo = mutation.result;
+        let db = Arc::clone(&self.db);
+        let repo_id = repo.record.id.clone();
+        self.with_repo_storage_lock(&repo_id, move || async move {
+            let claim_tx = db.as_ref().begin().await.map_err(ApiError::internal)?;
+            acquire_aggregate_lock(&claim_tx, "repository", &repo.record.id).await?;
+            ensure_repository_absent(&claim_tx, &repo.record.id).await?;
+            let cleanup_claim =
+                claim_pending_repo_storage_cleanup(&claim_tx, &repo.record.id).await?;
+            claim_tx.commit().await.map_err(ApiError::internal)?;
 
-                    if pending_repo_storage_cleanup_exists(&tx, &repo.record.id).await? {
-                        cleanup_pending_storage(&repo.record.owner_handle, &repo.record.name)?;
-                        complete_pending_repo_storage_cleanup(&tx, &repo.record.id).await?;
-                    }
-
-                    insert_repository(&tx, &repo).await?;
-                    save_repo_effects(&tx, &mutation.effects).await?;
-                    tx.commit().await.map_err(ApiError::internal)?;
-                    Ok(repo)
-                })
+            if cleanup_claim.is_some() {
+                cleanup_pending_storage(&repo.record.owner_handle, &repo.record.name)?;
             }
-            #[cfg(any(test, feature = "memory-metadata"))]
-            MetadataStoreInner::Memory(_) => self.update(move |catalog| {
-                let owner = catalog.users.get(&owner_user_id).cloned().ok_or_else(|| {
-                    ApiError::internal_message("signed-in user was not persisted")
-                })?;
-                let mutation = create_repo_command(
-                    &owner,
-                    &name,
-                    default_visibility,
-                    first_push_token,
-                    git_push_token,
-                )?;
-                let repo = mutation.result;
-                if catalog.repositories.contains_key(&repo.record.id) {
-                    return Err(ApiError::conflict(format!(
-                        "repo {} already exists",
-                        repo.record.id
-                    )));
-                }
 
-                let had_pending_cleanup = remove_matching_pending_repo_storage_cleanup(
-                    &mut catalog.pending_repo_storage_deletions,
-                    &repo.record.id,
-                );
-                if had_pending_cleanup {
-                    cleanup_pending_storage(&repo.record.owner_handle, &repo.record.name)?;
+            let tx = db.as_ref().begin().await.map_err(ApiError::internal)?;
+            acquire_aggregate_lock(&tx, "repository", &repo.record.id).await?;
+            ensure_repository_absent(&tx, &repo.record.id).await?;
+            match cleanup_claim {
+                Some(claim) => {
+                    complete_claimed_repo_storage_cleanup(&tx, &repo.record.id, &claim).await?
                 }
+                None if pending_repo_storage_cleanup_exists(&tx, &repo.record.id).await? => {
+                    return Err(ApiError::conflict(
+                        "repository storage cleanup changed during creation; retry",
+                    ));
+                }
+                None => {}
+            }
 
-                catalog
-                    .repositories
-                    .insert(repo.record.id.clone(), repo.clone());
-                apply_repo_effects(catalog, mutation.effects);
-                Ok(repo)
-            }),
-        }
+            insert_repository(&tx, &repo).await?;
+            save_repo_effects(&tx, &mutation.effects).await?;
+            tx.commit().await.map_err(ApiError::internal)?;
+            Ok(repo)
+        })
+        .await
     }
 
-    pub fn delete_repo(&self, owner: &str, name: &str, user_id: &str) -> Result<String, ApiError> {
+    pub async fn delete_repo(
+        &self,
+        owner: &str,
+        name: &str,
+        user_id: &str,
+    ) -> Result<String, ApiError> {
         let repo_id = repo_id(owner, name);
         let owner = owner.to_string();
         let name = name.to_string();
         let user_id = user_id.to_string();
-        match self.inner.as_ref() {
-            MetadataStoreInner::Postgres { db, runtime } => {
-                let db = Arc::clone(db);
-                run_api_db_on(runtime, async move {
-                    let tx = db.as_ref().begin().await.map_err(ApiError::internal)?;
-                    acquire_metadata_write_lock(&tx).await?;
-                    let repo = entities::repository::Entity::find_by_id(repo_id.clone())
-                        .one(&tx)
-                        .await
-                        .map_err(ApiError::internal)?
-                        .ok_or_else(|| {
-                            crate::domain::repo_actions::hidden_repo_not_found(&owner, &name)
-                        })?;
-                    let repo = repository_from_model(&tx, repo).await?;
-                    let mutation = delete_repo_command(&repo, &user_id, &owner, &name)?;
-                    refund_open_request_stakes_for_repo_postgres(&tx, &repo_id, unix_now()).await?;
-                    let request_git_snapshots =
-                        request_git_snapshots_for_repo_postgres(&tx, &repo_id).await?;
+        let db = Arc::clone(&self.db);
+        let tx = db.as_ref().begin().await.map_err(ApiError::internal)?;
+        acquire_aggregate_lock(&tx, "repository", &repo_id).await?;
+        let repo = entities::repository::Entity::find_by_id(repo_id.clone())
+            .one(&tx)
+            .await
+            .map_err(ApiError::internal)?
+            .ok_or_else(|| crate::domain::repo_actions::hidden_repo_not_found(&owner, &name))?;
+        let repo = repository_from_model(&tx, repo).await?;
+        let mutation = delete_repo_command(&repo, &user_id, &owner, &name)?;
+        let requests = lock_requests_for_repo_postgres(&tx, &repo_id).await?;
+        lock_request_credit_accounts_for_repo_postgres(&tx, &requests).await?;
+        refund_open_request_stakes_for_repo_postgres(&tx, &requests, unix_now()).await?;
+        let request_git_snapshots = request_git_snapshots_for_repo(&requests);
 
-                    entities::repository_invite::Entity::delete_many()
-                        .filter(entities::repository_invite::Column::RepoId.eq(repo_id.clone()))
-                        .exec(&tx)
-                        .await
-                        .map_err(ApiError::internal)?;
-                    entities::repository_member::Entity::delete_many()
-                        .filter(entities::repository_member::Column::RepoId.eq(repo_id.clone()))
-                        .exec(&tx)
-                        .await
-                        .map_err(ApiError::internal)?;
-                    entities::repository::Entity::delete_by_id(repo_id.clone())
-                        .exec(&tx)
-                        .await
-                        .map_err(ApiError::internal)?;
+        entities::repository_invite::Entity::delete_many()
+            .filter(entities::repository_invite::Column::RepoId.eq(repo_id.clone()))
+            .exec(&tx)
+            .await
+            .map_err(ApiError::internal)?;
+        entities::repository_member::Entity::delete_many()
+            .filter(entities::repository_member::Column::RepoId.eq(repo_id.clone()))
+            .exec(&tx)
+            .await
+            .map_err(ApiError::internal)?;
+        entities::repository::Entity::delete_by_id(repo_id.clone())
+            .exec(&tx)
+            .await
+            .map_err(ApiError::internal)?;
 
-                    save_repo_effects(&tx, &mutation.effects).await?;
-                    queue_pending_source_blob_deletion_rows(&tx, request_git_snapshots).await?;
-                    tx.commit().await.map_err(ApiError::internal)?;
-                    Ok(mutation.result)
-                })
-            }
-            #[cfg(any(test, feature = "memory-metadata"))]
-            MetadataStoreInner::Memory(_) => self.update(move |catalog| {
-                let repo = catalog.repositories.get(&repo_id).ok_or_else(|| {
-                    crate::domain::repo_actions::hidden_repo_not_found(&owner, &name)
-                })?;
-                let mutation = delete_repo_command(repo, &user_id, &owner, &name)?;
+        save_repo_effects(&tx, &mutation.effects).await?;
+        queue_pending_source_blob_deletion_rows(&tx, request_git_snapshots).await?;
+        tx.commit().await.map_err(ApiError::internal)?;
+        Ok(mutation.result)
+    }
+}
 
-                refund_open_request_stakes_for_repo_memory(catalog, &repo_id, unix_now())?;
-                let request_git_snapshots =
-                    request_git_snapshots_for_repo_memory(catalog, &repo_id);
-                catalog
-                    .repositories
-                    .remove(&repo_id)
-                    .expect("repo was already checked");
-                remove_request_facts_for_repo(catalog, &repo_id);
-                apply_repo_effects(catalog, mutation.effects);
-                queue_pending_source_blob_deletions(
-                    &mut catalog.pending_source_blob_deletions,
-                    request_git_snapshots,
-                );
-                Ok(mutation.result)
-            }),
-        }
+async fn ensure_repository_absent<C>(conn: &C, repo_id: &str) -> Result<(), ApiError>
+where
+    C: sea_orm::ConnectionTrait,
+{
+    if entities::repository::Entity::find_by_id(repo_id.to_string())
+        .one(conn)
+        .await
+        .map_err(ApiError::internal)?
+        .is_some()
+    {
+        Err(ApiError::conflict(format!("repo {repo_id} already exists")))
+    } else {
+        Ok(())
     }
 }
 
 async fn refund_open_request_stakes_for_repo_postgres<C>(
     conn: &C,
-    repo_id: &str,
+    requests: &[Request],
     now_unix: u64,
 ) -> Result<(), ApiError>
 where
     C: sea_orm::ConnectionTrait,
 {
-    let requests = requests_by_repo_id(conn, repo_id).await?;
     for request in requests
         .iter()
         .filter(|request| should_refund_on_repo_delete(request))
@@ -229,85 +185,57 @@ where
     Ok(())
 }
 
-async fn request_git_snapshots_for_repo_postgres<C>(
+async fn lock_request_credit_accounts_for_repo_postgres<C>(
     conn: &C,
-    repo_id: &str,
-) -> Result<Vec<SourceBlob>, ApiError>
+    requests: &[Request],
+) -> Result<(), ApiError>
 where
     C: sea_orm::ConnectionTrait,
 {
-    Ok(requests_by_repo_id(conn, repo_id)
-        .await?
-        .into_iter()
-        .filter_map(|request| request.git_snapshot)
-        .collect())
-}
-
-#[cfg(any(test, feature = "memory-metadata"))]
-fn request_git_snapshots_for_repo_memory(
-    catalog: &crate::domain::store::AppCatalog,
-    repo_id: &str,
-) -> Vec<SourceBlob> {
-    catalog
-        .requests
-        .values()
-        .filter(|request| request.repo_id == repo_id)
-        .filter_map(|request| request.git_snapshot.clone())
-        .collect()
-}
-
-#[cfg(any(test, feature = "memory-metadata"))]
-fn refund_open_request_stakes_for_repo_memory(
-    catalog: &mut crate::domain::store::AppCatalog,
-    repo_id: &str,
-    now_unix: u64,
-) -> Result<(), ApiError> {
-    let requests = catalog
-        .requests
-        .values()
-        .filter(|request| request.repo_id == repo_id)
-        .cloned()
-        .collect::<Vec<_>>();
-    for request in requests
+    let mut author_ids = requests
         .iter()
         .filter(|request| should_refund_on_repo_delete(request))
-    {
-        let stake_entry_id = request_stake_debit_entry_id_for_request_memory(catalog, &request.id)?;
-        let ledger_entry_id = repo_delete_refund_ledger_entry_id(&stake_entry_id);
-        ensure_repo_delete_refund_ledger_entry_available_memory(catalog, &ledger_entry_id)?;
-        let account = catalog
-            .user_credit_accounts
-            .get(&request.author_user_id)
-            .ok_or_else(|| {
-                ApiError::internal_message("request author credit account is missing")
-            })?;
-        let (account, ledger_entry) =
-            refund_open_request_stake(account, request, ledger_entry_id, now_unix)?;
-        catalog
-            .user_credit_accounts
-            .insert(account.user_id.clone(), account);
-        catalog
-            .credit_ledger_entries
-            .insert(ledger_entry.id.clone(), ledger_entry);
+        .map(|request| request.author_user_id.as_str())
+        .collect::<Vec<_>>();
+    author_ids.sort_unstable();
+    author_ids.dedup();
+    for author_id in author_ids {
+        acquire_aggregate_lock(conn, "user-credit", author_id).await?;
     }
     Ok(())
 }
 
-#[cfg(any(test, feature = "memory-metadata"))]
-fn request_stake_debit_entry_id_for_request_memory(
-    catalog: &crate::domain::store::AppCatalog,
-    request_id: &str,
-) -> Result<String, ApiError> {
-    catalog
-        .credit_ledger_entries
-        .values()
-        .filter(|entry| {
-            entry.request_id.as_deref() == Some(request_id)
-                && entry.kind == CreditLedgerEntryKind::RequestStakeDebit
-        })
-        .map(|entry| entry.id.clone())
-        .next()
-        .ok_or_else(|| ApiError::internal_message("request stake debit ledger entry is missing"))
+async fn lock_requests_for_repo_postgres<C>(
+    conn: &C,
+    repo_id: &str,
+) -> Result<Vec<Request>, ApiError>
+where
+    C: sea_orm::ConnectionTrait,
+{
+    let mut request_ids = requests_by_repo_id(conn, repo_id)
+        .await?
+        .into_iter()
+        .map(|request| request.id)
+        .collect::<Vec<_>>();
+    request_ids.sort();
+
+    let mut requests = Vec::with_capacity(request_ids.len());
+    for request_id in request_ids {
+        acquire_aggregate_lock(conn, "request", &request_id).await?;
+        if let Some(request) = super::request_rows::request_by_id(conn, &request_id).await?
+            && request.repo_id == repo_id
+        {
+            requests.push(request);
+        }
+    }
+    Ok(requests)
+}
+
+fn request_git_snapshots_for_repo(requests: &[Request]) -> Vec<SourceBlob> {
+    requests
+        .iter()
+        .filter_map(|request| request.git_snapshot.clone())
+        .collect()
 }
 
 fn should_refund_on_repo_delete(request: &Request) -> bool {
@@ -359,18 +287,6 @@ where
     }
 }
 
-#[cfg(any(test, feature = "memory-metadata"))]
-fn ensure_repo_delete_refund_ledger_entry_available_memory(
-    catalog: &crate::domain::store::AppCatalog,
-    ledger_entry_id: &str,
-) -> Result<(), ApiError> {
-    if catalog.credit_ledger_entries.contains_key(ledger_entry_id) {
-        Err(ApiError::conflict("credit ledger entry already exists"))
-    } else {
-        Ok(())
-    }
-}
-
 fn repo_delete_refund_ledger_entry_id(stake_ledger_entry_id: &str) -> String {
     format!("repo_delete_refund:{stake_ledger_entry_id}")
 }
@@ -386,293 +302,154 @@ fn unix_now() -> u64 {
         .unwrap_or(0)
 }
 
-#[cfg(any(test, feature = "memory-metadata"))]
-fn remove_request_facts_for_repo(catalog: &mut crate::domain::store::AppCatalog, repo_id: &str) {
-    let request_ids = catalog
-        .requests
-        .values()
-        .filter(|request| request.repo_id == repo_id)
-        .map(|request| request.id.clone())
-        .collect::<std::collections::BTreeSet<_>>();
-    if request_ids.is_empty() {
-        return;
-    }
-
-    catalog
-        .requests
-        .retain(|_, request| !request_ids.contains(&request.id));
-    catalog
-        .request_events
-        .retain(|_, event| !request_ids.contains(&event.request_id));
-    for entry in catalog.credit_ledger_entries.values_mut() {
-        if entry
-            .request_id
-            .as_ref()
-            .is_some_and(|request_id| request_ids.contains(request_id))
-        {
-            entry.request_id = None;
-        }
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::domain::{
-        requests::{
-            CreditLedgerEntry, CreditLedgerEntryKind, Request, RequestActorRole,
-            RequestBaseAudience, RequestEvent, RequestEventKind, RequestState, UserCreditAccount,
-        },
-        store::{AppCatalog, RepoPublicationState, UserAccount, app_catalog},
+    use crate::{
+        auth::tokens::{generate_first_push_token, generate_git_push_token},
+        domain::store::{RepoStorageCleanup, UserAccount, app_catalog},
+    };
+    use std::sync::{
+        Arc,
+        atomic::{AtomicBool, Ordering},
     };
 
-    #[test]
-    fn memory_delete_repo_refunds_open_request_stake() {
-        let request_git_snapshot = source_blob("request-git-snapshot");
-        let mut catalog = catalog_with_open_request(0, "ledger_stake");
-        catalog.requests.get_mut("req_1").unwrap().git_snapshot =
-            Some(request_git_snapshot.clone());
-        let store = MetadataStore::memory(catalog);
-        store
-            .delete_repo("owner", "repo", "user_owner")
-            .expect("repo deletes");
-
-        store
-            .read(|catalog: &AppCatalog| {
-                assert!(catalog.repositories.is_empty());
-                assert!(catalog.requests.is_empty());
-                assert!(catalog.request_events.is_empty());
-                assert_eq!(
-                    catalog
-                        .user_credit_accounts
-                        .get("user_public")
-                        .unwrap()
-                        .balance_credits,
-                    10
-                );
-                assert_eq!(
-                    catalog
-                        .credit_ledger_entries
-                        .get("ledger_stake")
-                        .unwrap()
-                        .request_id,
-                    None
-                );
-                let refund = catalog
-                    .credit_ledger_entries
-                    .get("repo_delete_refund:ledger_stake")
-                    .expect("refund ledger entry is written");
-                assert_eq!(refund.kind, CreditLedgerEntryKind::StakeRefund);
-                assert_eq!(refund.amount_credits, 10);
-                assert_eq!(refund.request_id, None);
-                assert_eq!(
-                    catalog
-                        .pending_source_blob_deletions
-                        .iter()
-                        .map(|blob| blob.object_key.as_str())
-                        .collect::<Vec<_>>(),
-                    vec![request_git_snapshot.object_key.as_str()]
-                );
-                Ok(())
-            })
-            .unwrap();
-    }
-
-    #[test]
-    fn memory_delete_repo_rejects_refund_ledger_collision_without_mutating_metadata() {
-        let mut catalog = catalog_with_open_request(0, "ledger_stake");
-        catalog.credit_ledger_entries.insert(
-            "repo_delete_refund:ledger_stake".to_string(),
-            CreditLedgerEntry {
-                id: "repo_delete_refund:ledger_stake".to_string(),
-                user_id: "user_public".to_string(),
-                request_id: None,
-                kind: CreditLedgerEntryKind::AdminAdjustment,
-                amount_credits: 99,
-                created_at_unix: 9,
-            },
-        );
-
-        let store = MetadataStore::memory(catalog);
-        assert!(store.delete_repo("owner", "repo", "user_owner").is_err());
-
-        store
-            .read(|catalog: &AppCatalog| {
-                assert!(catalog.repositories.contains_key("owner/repo"));
-                assert!(catalog.requests.contains_key("req_1"));
-                assert_eq!(
-                    catalog
-                        .user_credit_accounts
-                        .get("user_public")
-                        .unwrap()
-                        .balance_credits,
-                    0
-                );
-                assert_eq!(
-                    catalog
-                        .credit_ledger_entries
-                        .get("repo_delete_refund:ledger_stake")
-                        .unwrap()
-                        .amount_credits,
-                    99
-                );
-                Ok(())
-            })
-            .unwrap();
-    }
-
-    #[test]
-    fn memory_delete_repo_rejects_refund_balance_above_persisted_range() {
-        let store =
-            MetadataStore::memory(catalog_with_open_request(i32::MAX as u32, "ledger_stake"));
-
-        assert!(store.delete_repo("owner", "repo", "user_owner").is_err());
-
-        store
-            .read(|catalog: &AppCatalog| {
-                assert!(catalog.repositories.contains_key("owner/repo"));
-                assert!(catalog.requests.contains_key("req_1"));
-                assert_eq!(
-                    catalog
-                        .user_credit_accounts
-                        .get("user_public")
-                        .unwrap()
-                        .balance_credits,
-                    i32::MAX as u32
-                );
-                assert!(
-                    !catalog
-                        .credit_ledger_entries
-                        .contains_key("repo_delete_refund:ledger_stake")
-                );
-                Ok(())
-            })
-            .unwrap();
-    }
-
-    #[test]
-    fn memory_delete_repo_refund_id_survives_request_id_reuse_history() {
-        let mut catalog = catalog_with_open_request(0, "ledger_stake_2");
-        catalog.credit_ledger_entries.insert(
-            "repo_delete_refund:req_1".to_string(),
-            CreditLedgerEntry {
-                id: "repo_delete_refund:req_1".to_string(),
-                user_id: "user_public".to_string(),
-                request_id: None,
-                kind: CreditLedgerEntryKind::StakeRefund,
-                amount_credits: 10,
-                created_at_unix: 8,
-            },
-        );
-
-        let store = MetadataStore::memory(catalog);
-        store
-            .delete_repo("owner", "repo", "user_owner")
-            .expect("repo deletes despite old request-id-shaped refund");
-
-        store
-            .read(|catalog: &AppCatalog| {
-                assert!(
-                    catalog
-                        .credit_ledger_entries
-                        .contains_key("repo_delete_refund:req_1")
-                );
-                assert!(
-                    catalog
-                        .credit_ledger_entries
-                        .contains_key("repo_delete_refund:ledger_stake_2")
-                );
-                Ok(())
-            })
-            .unwrap();
-    }
-
-    fn catalog_with_open_request(balance_credits: u32, stake_ledger_entry_id: &str) -> AppCatalog {
-        let owner = UserAccount {
-            id: "user_owner".to_string(),
-            handle: "owner".to_string(),
-            email: "owner@example.com".to_string(),
-            email_verified: true,
-        };
-        let public_user = UserAccount {
-            id: "user_public".to_string(),
-            handle: "public".to_string(),
-            email: "public@example.com".to_string(),
-            email_verified: true,
-        };
-        let mut repo = StoredRepository::new(&owner, "repo", Visibility::Public).unwrap();
-        repo.record.publication_state = RepoPublicationState::Published;
-
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn pending_storage_cleanup_reserves_repo_name_until_recreation_commits() {
+        let target = super::super::TestDatabaseTarget::required().unwrap();
+        let store = MetadataStore::connect_fresh_for_tests(&target).unwrap();
         let mut catalog = app_catalog();
-        catalog.users.insert(owner.id.clone(), owner);
-        catalog.users.insert(public_user.id.clone(), public_user);
-        catalog.repositories.insert(repo.record.id.clone(), repo);
-        catalog.requests.insert("req_1".to_string(), open_request());
-        catalog.request_events.insert(
-            "event_created".to_string(),
-            RequestEvent {
-                id: "event_created".to_string(),
-                request_id: "req_1".to_string(),
-                actor_user_id: "user_public".to_string(),
-                kind: RequestEventKind::Submitted,
-                body: None,
-                old_head_oid: None,
-                new_head_oid: Some("head".to_string()),
-                created_at_unix: 10,
+        catalog.users.insert(
+            "user_owner".to_string(),
+            UserAccount {
+                id: "user_owner".to_string(),
+                handle: "owner".to_string(),
+                email: "owner@example.com".to_string(),
+                email_verified: true,
             },
         );
-        catalog.user_credit_accounts.insert(
-            "user_public".to_string(),
-            UserCreditAccount {
-                user_id: "user_public".to_string(),
-                balance_credits,
+        store.seed_catalog_for_tests(catalog).unwrap();
+        super::super::cleanup_queue::queue_pending_repo_storage_cleanup_row(
+            store.db.as_ref(),
+            RepoStorageCleanup {
+                owner_handle: "owner".to_string(),
+                repo_name: "repo".to_string(),
             },
+        )
+        .await
+        .unwrap();
+
+        let (cleanup_started_tx, cleanup_started_rx) = tokio::sync::oneshot::channel();
+        let (release_cleanup_tx, release_cleanup_rx) = std::sync::mpsc::channel();
+        let first_store = store.clone();
+        let first = tokio::spawn(async move {
+            let (_, first_push_token) = generate_first_push_token("user_owner").unwrap();
+            let (_, git_push_token) = generate_git_push_token("user_owner").unwrap();
+            first_store
+                .create_repo_with_init_tokens(
+                    "user_owner",
+                    "repo",
+                    Visibility::Private,
+                    first_push_token,
+                    git_push_token,
+                    move |_, _| {
+                        cleanup_started_tx.send(()).unwrap();
+                        release_cleanup_rx.recv().unwrap();
+                        Ok(())
+                    },
+                )
+                .await
+        });
+        cleanup_started_rx.await.unwrap();
+
+        let competing_cleanup_called = Arc::new(AtomicBool::new(false));
+        let second_cleanup_called = Arc::clone(&competing_cleanup_called);
+        let second_store = store.clone();
+        let second = tokio::spawn(async move {
+            let (_, first_push_token) = generate_first_push_token("user_owner").unwrap();
+            let (_, git_push_token) = generate_git_push_token("user_owner").unwrap();
+            second_store
+                .create_repo_with_init_tokens(
+                    "user_owner",
+                    "repo",
+                    Visibility::Private,
+                    first_push_token,
+                    git_push_token,
+                    move |_, _| {
+                        second_cleanup_called.store(true, Ordering::SeqCst);
+                        Ok(())
+                    },
+                )
+                .await
+        });
+        tokio::time::sleep(std::time::Duration::from_millis(25)).await;
+        assert!(
+            !second.is_finished(),
+            "competing creator must wait for the storage path lock"
         );
-        catalog.credit_ledger_entries.insert(
-            stake_ledger_entry_id.to_string(),
-            CreditLedgerEntry {
-                id: stake_ledger_entry_id.to_string(),
-                user_id: "user_public".to_string(),
-                request_id: Some("req_1".to_string()),
-                kind: CreditLedgerEntryKind::RequestStakeDebit,
-                amount_credits: -10,
-                created_at_unix: 10,
-            },
+        release_cleanup_tx.send(()).unwrap();
+        let first_result = first.await.unwrap();
+        let second_result = second.await.unwrap();
+
+        first_result.unwrap();
+        assert!(
+            second_result
+                .unwrap_err()
+                .message
+                .contains("already exists")
         );
-        catalog
+        assert!(!competing_cleanup_called.load(Ordering::SeqCst));
+        assert!(
+            entities::repository::Entity::find_by_id("owner/repo")
+                .one(store.db.as_ref())
+                .await
+                .unwrap()
+                .is_some()
+        );
     }
 
-    fn open_request() -> Request {
-        Request {
-            id: "req_1".to_string(),
-            repo_id: "owner/repo".to_string(),
-            author_user_id: "user_public".to_string(),
-            editor_user_ids: Default::default(),
-            author_role: RequestActorRole::Public,
-            base_audience: RequestBaseAudience::Public,
-            target_branch: "main".to_string(),
-            request_ref: "refs/scope/requests/req_1".to_string(),
-            base_main_oid: "base".to_string(),
-            head_oid: "head".to_string(),
-            git_snapshot: None,
-            title: "Fix parser crash".to_string(),
-            state: RequestState::Submitted,
-            stake_credits: 10,
-            disposition: None,
-            settlement: None,
-            created_at_unix: 10,
-            updated_at_unix: 10,
-            resolved_at_unix: None,
-        }
-    }
+    #[tokio::test]
+    async fn expired_creation_cleanup_claim_cannot_commit_after_worker_reclaims_it() {
+        let target = super::super::TestDatabaseTarget::required().unwrap();
+        let store = MetadataStore::connect_fresh_for_tests(&target).unwrap();
+        super::super::cleanup_queue::queue_pending_repo_storage_cleanup_row(
+            store.db.as_ref(),
+            RepoStorageCleanup {
+                owner_handle: "owner".to_string(),
+                repo_name: "repo".to_string(),
+            },
+        )
+        .await
+        .unwrap();
 
-    fn source_blob(label: &str) -> SourceBlob {
-        SourceBlob {
-            object_key: format!("objects/test/{label}"),
-            sha256: format!("sha256-{label}"),
-            git_oid: format!("git-{label}"),
-            git_file_mode: "100644".to_string(),
-            size_bytes: label.len() as u64,
-        }
+        let claim_tx = store.db.begin().await.unwrap();
+        acquire_aggregate_lock(&claim_tx, "repository", "owner/repo")
+            .await
+            .unwrap();
+        let claim = claim_pending_repo_storage_cleanup(&claim_tx, "owner/repo")
+            .await
+            .unwrap()
+            .unwrap();
+        claim_tx.commit().await.unwrap();
+
+        entities::repo_storage_cleanup_job::Entity::update_many()
+            .filter(entities::repo_storage_cleanup_job::Column::RepoId.eq("owner/repo"))
+            .col_expr(
+                entities::repo_storage_cleanup_job::Column::NextRunAtUnix,
+                sea_orm::sea_query::Expr::value(0_i64),
+            )
+            .exec(store.db.as_ref())
+            .await
+            .unwrap();
+        let _worker_batch = store.repo_storage_cleanup_batch().await.unwrap();
+
+        let create_tx = store.db.begin().await.unwrap();
+        acquire_aggregate_lock(&create_tx, "repository", "owner/repo")
+            .await
+            .unwrap();
+        let error = complete_claimed_repo_storage_cleanup(&create_tx, "owner/repo", &claim)
+            .await
+            .unwrap_err();
+        assert!(error.message.contains("changed during creation"));
     }
 }

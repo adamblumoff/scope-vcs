@@ -42,7 +42,7 @@ export function RequestMergeDialog({
     request.mergeability.status === 'Ready' &&
     Boolean(currentMainOid) &&
     Boolean(requestHeadOid)
-  const preview = settlementPreviewFor(request.stake_credits, 'Accepted')
+  const preview = settlementPreviewFor(request, 'Accepted')
 
   async function confirmMerge() {
     await onConfirm(normalizedBody(body))

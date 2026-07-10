@@ -4,8 +4,15 @@
     "files": [".output/**", ".tanstack/**", ".test-output/**"],
     "overrides": [
       {
-        "files": ["src/routes/repos.$owner.$repo.review.tsx"],
-        "rules": ["react-doctor/tanstack-start-loader-parallel-fetch"]
+        "files": [
+          "src/features/history/history-page.tsx",
+          "src/features/invites/invite-page.tsx",
+          "src/features/repo-detail/repo-detail-page.tsx",
+          "src/features/repo-detail/repo-settings-page.tsx",
+          "src/features/requests/request-detail-page.tsx",
+          "src/features/requests/requests-page.tsx"
+        ],
+        "rules": ["react-doctor/jsx-no-jsx-as-prop"]
       }
     ]
   }

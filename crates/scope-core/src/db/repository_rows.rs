@@ -1,33 +1,28 @@
 use super::{entities, outbox::enqueue_projection_read_model_rebuild};
 use crate::{
-    domain::store::{FirstPushToken, GitPushToken, RepoSettings, SourceBlob, StoredRepository},
+    domain::store::{FirstPushToken, GitPushToken, SourceBlob, StoredRepository},
     error::ApiError,
 };
 use sea_orm::{
-    ActiveModelTrait, ColumnTrait, ConnectionTrait, EntityTrait, IntoActiveModel, QueryFilter,
-    QueryOrder, sea_query::Expr,
+    ActiveModelTrait, ActiveValue::Set, ColumnTrait, ConnectionTrait, EntityTrait, IntoActiveModel,
+    QueryFilter, QueryOrder,
 };
 use std::collections::BTreeMap;
 
 #[derive(Default)]
 pub struct RepositoryFactRows {
-    pub settings: Option<RepoSettings>,
     pub first_push_token: Option<FirstPushToken>,
     pub git_push_token: Option<GitPushToken>,
     pub git_snapshot: Option<SourceBlob>,
 }
 
 impl RepositoryFactRows {
-    pub fn into_required(self, repo_id: &str) -> Result<entities::RepositoryFacts, ApiError> {
-        let settings = self.settings.ok_or_else(|| {
-            ApiError::internal_message(format!("repository settings missing for {repo_id}"))
-        })?;
-        Ok(entities::RepositoryFacts {
-            settings,
+    pub fn into_facts(self) -> entities::RepositoryFacts {
+        entities::RepositoryFacts {
             first_push_token: self.first_push_token,
             git_push_token: self.git_push_token,
             git_snapshot: self.git_snapshot,
-        })
+        }
     }
 }
 
@@ -40,95 +35,96 @@ where
         .insert(conn)
         .await
         .map_err(ApiError::internal)?;
-    save_repository_fact_rows(conn, repo).await?;
-    save_repository_relations(conn, repo).await?;
+    insert_repository_fact_rows(conn, repo).await?;
+    insert_repository_relations(conn, repo).await?;
     enqueue_projection_read_model_rebuild(conn, repo).await?;
     Ok(())
 }
 
-pub async fn save_repository_row<C>(conn: &C, repo: &StoredRepository) -> Result<(), ApiError>
+pub async fn save_repository_delta<C>(
+    conn: &C,
+    before: &StoredRepository,
+    after: &StoredRepository,
+) -> Result<(), ApiError>
 where
     C: ConnectionTrait,
 {
-    let row = entities::repository::Model::from_domain(repo)?;
-    entities::repository::Entity::update_many()
-        .filter(entities::repository::Column::Id.eq(row.id))
-        .col_expr(
-            entities::repository::Column::OwnerHandle,
-            Expr::value(row.owner_handle),
-        )
-        .col_expr(entities::repository::Column::Name, Expr::value(row.name))
-        .col_expr(
-            entities::repository::Column::OwnerUserId,
-            Expr::value(row.owner_user_id),
-        )
-        .col_expr(
-            entities::repository::Column::PublicationState,
-            Expr::value(row.publication_state),
-        )
-        .col_expr(
-            entities::repository::Column::DefaultVisibility,
-            Expr::value(row.default_visibility),
-        )
-        .col_expr(
-            entities::repository::Column::ChangeVersion,
-            Expr::value(row.change_version),
-        )
-        .col_expr(
-            entities::repository::Column::RepoConfig,
-            Expr::value(row.repo_config),
-        )
-        .col_expr(
-            entities::repository::Column::PendingImport,
-            Expr::value(row.pending_import),
-        )
-        .col_expr(
-            entities::repository::Column::Policy,
-            Expr::value(row.policy),
-        )
-        .col_expr(entities::repository::Column::Graph, Expr::value(row.graph))
-        .col_expr(
-            entities::repository::Column::VisibilityEvents,
-            Expr::value(row.visibility_events),
-        )
-        .exec(conn)
-        .await
-        .map_err(ApiError::internal)?;
-    save_repository_fact_rows(conn, repo).await?;
-    save_repository_relations(conn, repo).await?;
-    enqueue_projection_read_model_rebuild(conn, repo).await?;
+    if before.record.id != after.record.id {
+        return Err(ApiError::internal_message(
+            "repository mutation cannot change repository identity",
+        ));
+    }
+
+    let before_row = entities::repository::Model::from_domain(before)?;
+    let row = entities::repository::Model::from_domain(after)?;
+    let mut active = row.clone().into_active_model();
+    let mut row_changed = false;
+    macro_rules! set_if_changed {
+        ($field:ident, $before:expr, $after:expr) => {
+            if $before != $after {
+                active.$field = Set(row.$field.clone());
+                row_changed = true;
+            }
+        };
+    }
+    set_if_changed!(owner_handle, before_row.owner_handle, row.owner_handle);
+    set_if_changed!(name, before_row.name, row.name);
+    set_if_changed!(owner_user_id, before_row.owner_user_id, row.owner_user_id);
+    set_if_changed!(
+        publication_state,
+        before_row.publication_state,
+        row.publication_state
+    );
+    set_if_changed!(
+        default_visibility,
+        before_row.default_visibility,
+        row.default_visibility
+    );
+    set_if_changed!(
+        change_version,
+        before_row.change_version,
+        row.change_version
+    );
+    set_if_changed!(repo_config, before_row.repo_config, row.repo_config);
+    set_if_changed!(policy, before_row.policy, row.policy);
+    set_if_changed!(graph, before_row.graph, row.graph);
+    set_if_changed!(
+        visibility_events,
+        before_row.visibility_events,
+        row.visibility_events
+    );
+    if row_changed {
+        active.update(conn).await.map_err(ApiError::internal)?;
+    }
+
+    save_repository_fact_delta(conn, before, after).await?;
+    save_repository_relation_delta(conn, before, after).await?;
+    enqueue_projection_read_model_rebuild(conn, after).await?;
     Ok(())
 }
 
-pub async fn save_repository_fact_rows<C>(conn: &C, repo: &StoredRepository) -> Result<(), ApiError>
+async fn insert_repository_fact_rows<C>(conn: &C, repo: &StoredRepository) -> Result<(), ApiError>
 where
     C: ConnectionTrait,
 {
     let repo_id = repo.record.id.clone();
-    delete_repository_fact_rows(conn, &repo_id).await?;
-
-    entities::repository_setting::Model::from_domain(&repo_id, repo.settings)
-        .into_active_model()
-        .insert(conn)
-        .await
-        .map_err(ApiError::internal)?;
 
     if let Some(token) = repo.first_push_token.as_ref() {
-        entities::repository_first_push_token::Model::from_domain(&repo_id, token)
+        entities::repository_first_push_token::Model::from_domain(&repo_id, token)?
             .into_active_model()
             .insert(conn)
             .await
             .map_err(ApiError::internal)?;
     }
     if let Some(token) = repo.git_push_token.as_ref() {
-        entities::repository_git_push_token::Model::from_domain(&repo_id, token)
+        entities::repository_git_push_token::Model::from_domain(&repo_id, token)?
             .into_active_model()
             .insert(conn)
             .await
             .map_err(ApiError::internal)?;
     }
     if let Some(snapshot) = repo.git_snapshot.as_ref() {
-        entities::repository_git_snapshot::Model::from_domain(&repo_id, snapshot)
+        entities::repository_git_snapshot::Model::from_domain(&repo_id, snapshot)?
             .into_active_model()
             .insert(conn)
             .await
@@ -138,42 +134,61 @@ where
     Ok(())
 }
 
-async fn delete_repository_fact_rows<C>(conn: &C, repo_id: &str) -> Result<(), ApiError>
+async fn save_repository_fact_delta<C>(
+    conn: &C,
+    before: &StoredRepository,
+    after: &StoredRepository,
+) -> Result<(), ApiError>
 where
     C: ConnectionTrait,
 {
-    entities::repository_setting::Entity::delete_many()
-        .filter(entities::repository_setting::Column::RepoId.eq(repo_id.to_string()))
-        .exec(conn)
-        .await
-        .map_err(ApiError::internal)?;
-    entities::repository_first_push_token::Entity::delete_many()
-        .filter(entities::repository_first_push_token::Column::RepoId.eq(repo_id.to_string()))
-        .exec(conn)
-        .await
-        .map_err(ApiError::internal)?;
-    entities::repository_git_push_token::Entity::delete_many()
-        .filter(entities::repository_git_push_token::Column::RepoId.eq(repo_id.to_string()))
-        .exec(conn)
-        .await
-        .map_err(ApiError::internal)?;
-    entities::repository_git_snapshot::Entity::delete_many()
-        .filter(entities::repository_git_snapshot::Column::RepoId.eq(repo_id.to_string()))
-        .exec(conn)
-        .await
-        .map_err(ApiError::internal)?;
+    let repo_id = &after.record.id;
+    if before.first_push_token != after.first_push_token {
+        entities::repository_first_push_token::Entity::delete_by_id(repo_id.clone())
+            .exec(conn)
+            .await
+            .map_err(ApiError::internal)?;
+        if let Some(token) = &after.first_push_token {
+            entities::repository_first_push_token::Model::from_domain(repo_id, token)?
+                .into_active_model()
+                .insert(conn)
+                .await
+                .map_err(ApiError::internal)?;
+        }
+    }
+    if before.git_push_token != after.git_push_token {
+        entities::repository_git_push_token::Entity::delete_by_id(repo_id.clone())
+            .exec(conn)
+            .await
+            .map_err(ApiError::internal)?;
+        if let Some(token) = &after.git_push_token {
+            entities::repository_git_push_token::Model::from_domain(repo_id, token)?
+                .into_active_model()
+                .insert(conn)
+                .await
+                .map_err(ApiError::internal)?;
+        }
+    }
+    if before.git_snapshot != after.git_snapshot {
+        entities::repository_git_snapshot::Entity::delete_by_id(repo_id.clone())
+            .exec(conn)
+            .await
+            .map_err(ApiError::internal)?;
+        if let Some(snapshot) = &after.git_snapshot {
+            entities::repository_git_snapshot::Model::from_domain(repo_id, snapshot)?
+                .into_active_model()
+                .insert(conn)
+                .await
+                .map_err(ApiError::internal)?;
+        }
+    }
     Ok(())
 }
 
-pub async fn save_repository_relations<C>(conn: &C, repo: &StoredRepository) -> Result<(), ApiError>
+async fn insert_repository_relations<C>(conn: &C, repo: &StoredRepository) -> Result<(), ApiError>
 where
     C: ConnectionTrait,
 {
-    entities::repository_member::Entity::delete_many()
-        .filter(entities::repository_member::Column::RepoId.eq(repo.record.id.clone()))
-        .exec(conn)
-        .await
-        .map_err(ApiError::internal)?;
     for member in &repo.members {
         entities::repository_member::Model::from_domain(member)?
             .into_active_model()
@@ -182,11 +197,6 @@ where
             .map_err(ApiError::internal)?;
     }
 
-    entities::repository_invite::Entity::delete_many()
-        .filter(entities::repository_invite::Column::RepoId.eq(repo.record.id.clone()))
-        .exec(conn)
-        .await
-        .map_err(ApiError::internal)?;
     for invite in &repo.invitations {
         entities::repository_invite::Model::from_domain(invite)?
             .into_active_model()
@@ -195,6 +205,94 @@ where
             .map_err(ApiError::internal)?;
     }
 
+    Ok(())
+}
+
+async fn save_repository_relation_delta<C>(
+    conn: &C,
+    before: &StoredRepository,
+    after: &StoredRepository,
+) -> Result<(), ApiError>
+where
+    C: ConnectionTrait,
+{
+    let before_members = before
+        .members
+        .iter()
+        .map(|member| (member.user_id.as_str(), member))
+        .collect::<BTreeMap<_, _>>();
+    let after_members = after
+        .members
+        .iter()
+        .map(|member| (member.user_id.as_str(), member))
+        .collect::<BTreeMap<_, _>>();
+    for user_id in before_members.keys() {
+        if !after_members.contains_key(user_id) {
+            entities::repository_member::Entity::delete_by_id((
+                after.record.id.clone(),
+                (*user_id).to_string(),
+            ))
+            .exec(conn)
+            .await
+            .map_err(ApiError::internal)?;
+        }
+    }
+    for (user_id, member) in after_members {
+        if before_members
+            .get(user_id)
+            .is_some_and(|old| *old == member)
+        {
+            continue;
+        }
+        entities::repository_member::Entity::delete_by_id((
+            after.record.id.clone(),
+            user_id.to_string(),
+        ))
+        .exec(conn)
+        .await
+        .map_err(ApiError::internal)?;
+        entities::repository_member::Model::from_domain(member)?
+            .into_active_model()
+            .insert(conn)
+            .await
+            .map_err(ApiError::internal)?;
+    }
+
+    let before_invites = before
+        .invitations
+        .iter()
+        .map(|invite| (invite.id.as_str(), invite))
+        .collect::<BTreeMap<_, _>>();
+    let after_invites = after
+        .invitations
+        .iter()
+        .map(|invite| (invite.id.as_str(), invite))
+        .collect::<BTreeMap<_, _>>();
+    for invite_id in before_invites.keys() {
+        if !after_invites.contains_key(invite_id) {
+            entities::repository_invite::Entity::delete_by_id((*invite_id).to_string())
+                .exec(conn)
+                .await
+                .map_err(ApiError::internal)?;
+        }
+    }
+    for (invite_id, invite) in after_invites {
+        if before_invites
+            .get(invite_id)
+            .is_some_and(|old| *old == invite)
+        {
+            continue;
+        }
+        entities::repository_invite::Entity::delete_by_id(invite_id.to_string())
+            .exec(conn)
+            .await
+            .map_err(ApiError::internal)?;
+        entities::repository_invite::Model::from_domain(invite)?
+            .into_active_model()
+            .insert(conn)
+            .await
+            .map_err(ApiError::internal)?;
+    }
     Ok(())
 }
 
@@ -213,18 +311,6 @@ where
         return Ok(facts);
     }
 
-    let settings = entities::repository_setting::Entity::find()
-        .filter(entities::repository_setting::Column::RepoId.is_in(repo_ids.to_vec()))
-        .order_by_asc(entities::repository_setting::Column::RepoId)
-        .all(conn)
-        .await
-        .map_err(ApiError::internal)?;
-    for row in settings {
-        if let Some(fact) = facts.get_mut(&row.repo_id) {
-            fact.settings = Some(row.into_domain());
-        }
-    }
-
     let first_push_tokens = entities::repository_first_push_token::Entity::find()
         .filter(entities::repository_first_push_token::Column::RepoId.is_in(repo_ids.to_vec()))
         .order_by_asc(entities::repository_first_push_token::Column::RepoId)
@@ -233,7 +319,7 @@ where
         .map_err(ApiError::internal)?;
     for row in first_push_tokens {
         if let Some(fact) = facts.get_mut(&row.repo_id) {
-            fact.first_push_token = Some(row.into_domain());
+            fact.first_push_token = Some(row.try_into_domain()?);
         }
     }
 
@@ -245,7 +331,7 @@ where
         .map_err(ApiError::internal)?;
     for row in git_push_tokens {
         if let Some(fact) = facts.get_mut(&row.repo_id) {
-            fact.git_push_token = Some(row.into_domain());
+            fact.git_push_token = Some(row.try_into_domain()?);
         }
     }
 
@@ -257,7 +343,7 @@ where
         .map_err(ApiError::internal)?;
     for row in git_snapshots {
         if let Some(fact) = facts.get_mut(&row.repo_id) {
-            fact.git_snapshot = Some(row.into_domain());
+            fact.git_snapshot = Some(row.try_into_domain()?);
         }
     }
 

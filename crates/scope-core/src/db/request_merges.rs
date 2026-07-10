@@ -1,17 +1,14 @@
-#[cfg(any(test, feature = "memory-metadata"))]
-use super::cleanup_queue::queue_pending_source_blob_deletions;
 use super::{
-    MetadataStore, MetadataStoreInner, RepositoryMutation, acquire_metadata_write_lock,
+    MetadataStore, RepositoryMutation, acquire_aggregate_lock,
     cleanup_queue::queue_pending_source_blob_deletion_rows,
     entities, repository_from_model,
-    repository_rows::save_repository_row,
+    repository_rows::save_repository_delta,
     request_access::{ensure_request_maintainer, ensure_user_exists},
     request_rows::{
         credit_account_by_user_id, credit_ledger_entry_by_id, insert_credit_ledger_entry_row,
         insert_request_event_row, request_by_id, request_event_by_id, save_credit_account_row,
         save_request_row,
     },
-    run_api_db_on,
 };
 use crate::{
     domain::{
@@ -30,7 +27,7 @@ pub struct RequestMergeRepositoryMutation<R> {
 }
 
 impl MetadataStore {
-    pub fn merge_request_with_repository_mutation<R, F>(
+    pub async fn merge_request_with_repository_mutation<R, F>(
         &self,
         owner: &str,
         name: &str,
@@ -47,130 +44,84 @@ impl MetadataStore {
         let owner = owner.to_string();
         let name = name.to_string();
 
-        match self.inner.as_ref() {
-            MetadataStoreInner::Postgres { db, runtime } => {
-                let db = Arc::clone(db);
-                run_api_db_on(runtime, async move {
-                    let tx = db.as_ref().begin().await.map_err(ApiError::internal)?;
-                    acquire_metadata_write_lock(&tx).await?;
+        let db = Arc::clone(&self.db);
+        let tx = db.as_ref().begin().await.map_err(ApiError::internal)?;
+        acquire_aggregate_lock(&tx, "repository", &repo_id).await?;
 
-                    let repo = entities::repository::Entity::find_by_id(repo_id)
-                        .one(&tx)
-                        .await
-                        .map_err(ApiError::internal)?
-                        .ok_or_else(|| {
-                            ApiError::not_found(format!("repo {owner}/{name} not found"))
-                        })?;
-                    let mut repo = repository_from_model(&tx, repo).await?;
+        let repo = entities::repository::Entity::find_by_id(repo_id)
+            .one(&tx)
+            .await
+            .map_err(ApiError::internal)?
+            .ok_or_else(|| ApiError::not_found(format!("repo {owner}/{name} not found")))?;
+        let mut repo = repository_from_model(&tx, repo).await?;
+        let before_repo = repo.clone();
 
-                    let request = request_by_id(&tx, &input.request_id)
-                        .await?
-                        .ok_or_else(|| ApiError::not_found("request not found"))?;
-                    if request.repo_id != repo.record.id {
-                        return Err(ApiError::not_found("request not found"));
-                    }
-                    ensure_user_exists(&tx, &input.actor_user_id).await?;
-                    ensure_request_maintainer(&repo, &input.actor_user_id)?;
+        acquire_aggregate_lock(&tx, "request", &input.request_id).await?;
+        let request = request_by_id(&tx, &input.request_id)
+            .await?
+            .ok_or_else(|| ApiError::not_found("request not found"))?;
+        if request.repo_id != repo.record.id {
+            return Err(ApiError::not_found("request not found"));
+        }
+        acquire_aggregate_lock(&tx, "user-credit", &request.author_user_id).await?;
+        ensure_user_exists(&tx, &input.actor_user_id).await?;
+        ensure_request_maintainer(&repo, &input.actor_user_id)?;
 
-                    let mut requests = BTreeMap::from([(request.id.clone(), request.clone())]);
-                    let mut events = BTreeMap::new();
-                    for event_id in [&input.event_id, &input.settlement_event_id] {
-                        if let Some(event) = request_event_by_id(&tx, event_id).await? {
-                            events.insert(event.id.clone(), event);
-                        }
-                    }
-                    let mut accounts = BTreeMap::new();
-                    if let Some(account) =
-                        credit_account_by_user_id(&tx, &request.author_user_id).await?
-                    {
-                        accounts.insert(account.user_id.clone(), account);
-                    }
-                    let mut ledger_entries = BTreeMap::new();
-                    for entry_id in [
-                        input.refund_ledger_entry_id.as_deref(),
-                        input.reward_ledger_entry_id.as_deref(),
-                    ]
-                    .into_iter()
-                    .flatten()
-                    {
-                        if let Some(entry) = credit_ledger_entry_by_id(&tx, entry_id).await? {
-                            ledger_entries.insert(entry.id.clone(), entry);
-                        }
-                    }
-
-                    let request_mutation = merge_request(
-                        &mut requests,
-                        &mut events,
-                        &mut accounts,
-                        &mut ledger_entries,
-                        input,
-                    )?;
-                    let repository_mutation = repo_op(&mut repo)?;
-
-                    save_repository_row(&tx, &repo).await?;
-                    save_request_row(&tx, &request_mutation.request).await?;
-                    insert_request_event_row(&tx, &request_mutation.merged_event).await?;
-                    insert_request_event_row(&tx, &request_mutation.settled_event).await?;
-                    if let Some(account) = &request_mutation.account {
-                        save_credit_account_row(&tx, account).await?;
-                    }
-                    for entry in &request_mutation.ledger_entries {
-                        insert_credit_ledger_entry_row(&tx, entry).await?;
-                    }
-                    if !repository_mutation.source_blobs_to_delete.is_empty() {
-                        queue_pending_source_blob_deletion_rows(
-                            &tx,
-                            repository_mutation.source_blobs_to_delete,
-                        )
-                        .await?;
-                    }
-                    tx.commit().await.map_err(ApiError::internal)?;
-                    Ok(RequestMergeRepositoryMutation {
-                        repository_result: repository_mutation.result,
-                        request: request_mutation,
-                    })
-                })
-            }
-            #[cfg(any(test, feature = "memory-metadata"))]
-            MetadataStoreInner::Memory(_) => {
-                self.update(move |catalog| {
-                    let request = catalog
-                        .requests
-                        .get(&input.request_id)
-                        .ok_or_else(|| ApiError::not_found("request not found"))?;
-                    if request.repo_id != repo_id {
-                        return Err(ApiError::not_found("request not found"));
-                    }
-                    if !catalog.users.contains_key(&input.actor_user_id) {
-                        return Err(ApiError::not_found("user not found"));
-                    }
-                    let repo = catalog.repositories.get(&repo_id).ok_or_else(|| {
-                        ApiError::not_found(format!("repo {owner}/{name} not found"))
-                    })?;
-                    ensure_request_maintainer(repo, &input.actor_user_id)?;
-
-                    let request_mutation = merge_request(
-                        &mut catalog.requests,
-                        &mut catalog.request_events,
-                        &mut catalog.user_credit_accounts,
-                        &mut catalog.credit_ledger_entries,
-                        input,
-                    )?;
-                    let repo = catalog.repositories.get_mut(&repo_id).ok_or_else(|| {
-                        ApiError::not_found(format!("repo {owner}/{name} not found"))
-                    })?;
-                    let repository_mutation = repo_op(repo)?;
-                    queue_pending_source_blob_deletions(
-                        &mut catalog.pending_source_blob_deletions,
-                        repository_mutation.source_blobs_to_delete,
-                    );
-                    Ok(RequestMergeRepositoryMutation {
-                        repository_result: repository_mutation.result,
-                        request: request_mutation,
-                    })
-                })
+        let mut requests = BTreeMap::from([(request.id.clone(), request.clone())]);
+        let mut events = BTreeMap::new();
+        for event_id in [&input.event_id, &input.settlement_event_id] {
+            if let Some(event) = request_event_by_id(&tx, event_id).await? {
+                events.insert(event.id.clone(), event);
             }
         }
+        let mut accounts = BTreeMap::new();
+        if let Some(account) = credit_account_by_user_id(&tx, &request.author_user_id).await? {
+            accounts.insert(account.user_id.clone(), account);
+        }
+        let mut ledger_entries = BTreeMap::new();
+        for entry_id in [
+            input.refund_ledger_entry_id.as_deref(),
+            input.reward_ledger_entry_id.as_deref(),
+        ]
+        .into_iter()
+        .flatten()
+        {
+            if let Some(entry) = credit_ledger_entry_by_id(&tx, entry_id).await? {
+                ledger_entries.insert(entry.id.clone(), entry);
+            }
+        }
+
+        let request_mutation = merge_request(
+            &mut requests,
+            &mut events,
+            &mut accounts,
+            &mut ledger_entries,
+            input,
+        )?;
+        let repository_mutation = repo_op(&mut repo)?;
+
+        save_repository_delta(&tx, &before_repo, &repo).await?;
+        save_request_row(&tx, &request_mutation.request).await?;
+        insert_request_event_row(&tx, &request_mutation.merged_event).await?;
+        insert_request_event_row(&tx, &request_mutation.settled_event).await?;
+        if let Some(account) = &request_mutation.account {
+            save_credit_account_row(&tx, account).await?;
+        }
+        for entry in &request_mutation.ledger_entries {
+            insert_credit_ledger_entry_row(&tx, entry).await?;
+        }
+        if !repository_mutation.source_blobs_to_delete.is_empty() {
+            queue_pending_source_blob_deletion_rows(
+                &tx,
+                repository_mutation.source_blobs_to_delete,
+            )
+            .await?;
+        }
+        tx.commit().await.map_err(ApiError::internal)?;
+        Ok(RequestMergeRepositoryMutation {
+            repository_result: repository_mutation.result,
+            request: request_mutation,
+        })
     }
 }
 
@@ -189,9 +140,9 @@ mod tests {
         },
     };
 
-    #[test]
-    fn combined_merge_rolls_back_request_when_repo_mutation_fails() {
-        let store = store_with_owner_request();
+    #[tokio::test]
+    async fn combined_merge_rolls_back_request_when_repo_mutation_fails() {
+        let store = store_with_owner_request().await;
 
         let error = store
             .merge_request_with_repository_mutation("owner", "repo", merge_input(), |repo| {
@@ -200,6 +151,7 @@ mod tests {
                     "simulated repo conflict",
                 ))
             })
+            .await
             .unwrap_err();
 
         assert!(error.message.contains("simulated repo conflict"));
@@ -214,18 +166,20 @@ mod tests {
                 assert_eq!(catalog.request_events.len(), 1);
                 Ok(())
             })
+            .await
             .unwrap();
     }
 
-    #[test]
-    fn combined_merge_commits_repo_and_request_together() {
-        let store = store_with_owner_request();
+    #[tokio::test]
+    async fn combined_merge_commits_repo_and_request_together() {
+        let store = store_with_owner_request().await;
 
         let mutation = store
             .merge_request_with_repository_mutation("owner", "repo", merge_input(), |repo| {
                 repo.record.change_version = 2;
                 Ok(RepositoryMutation::new("applied"))
             })
+            .await
             .unwrap();
 
         assert_eq!(mutation.repository_result, "applied");
@@ -239,16 +193,20 @@ mod tests {
                 assert_eq!(catalog.request_events.len(), 3);
                 Ok(())
             })
+            .await
             .unwrap();
     }
 
-    fn store_with_owner_request() -> MetadataStore {
-        let store = MetadataStore::memory(catalog_with_repo());
-        store.start_request(owner_start_input()).unwrap();
+    async fn store_with_owner_request() -> MetadataStore {
+        let target = super::super::TestDatabaseTarget::required().unwrap();
+        let store = MetadataStore::connect_fresh_for_tests(&target).unwrap();
+        store.seed_catalog_for_tests(catalog_with_repo()).unwrap();
+        store.start_request(owner_start_input()).await.unwrap();
         store
             .record_working_request_upload(owner_upload_input())
+            .await
             .unwrap();
-        store.submit_request(owner_submit_input()).unwrap();
+        store.submit_request(owner_submit_input()).await.unwrap();
         store
     }
 

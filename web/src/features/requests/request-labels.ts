@@ -2,21 +2,17 @@ import type {
   RequestEvent,
   RequestSummary,
   RequestWorkflowDisposition,
+  RequestWorkflowResolutionDisposition,
   RequestWorkflowEventKind,
   RequestWorkflowState,
 } from '@/api/types'
+import type { BadgeVariant } from '@/components/ui/badge'
 
-export type BadgeTone =
-  | 'danger'
-  | 'info'
-  | 'neutral'
-  | 'outline'
-  | 'success'
-  | 'warning'
+export type BadgeTone = BadgeVariant
 
 export type ResolutionOption = {
   description: string
-  disposition: Exclude<RequestWorkflowDisposition, 'Accepted'>
+  disposition: RequestWorkflowResolutionDisposition
   label: string
 }
 
@@ -60,84 +56,59 @@ const RESOLUTION_OPTIONS = [
   },
 ] as const satisfies ResolutionOption[]
 
-function requestStateLabel(state: RequestWorkflowState) {
-  switch (state) {
-    case 'Working':
-      return 'Working'
-    case 'Submitted':
-      return 'Submitted'
-    case 'NeedsResponse':
-      return 'Needs response'
-    case 'Resolved':
-      return 'Resolved'
-    case 'Withdrawn':
-      return 'Withdrawn'
-  }
-}
+const REQUEST_STATES = {
+  Working: { label: 'Working', tone: 'neutral' },
+  Submitted: { label: 'Submitted', tone: 'info' },
+  NeedsResponse: { label: 'Needs response', tone: 'warning' },
+  Resolved: { label: 'Resolved', tone: 'success' },
+  Withdrawn: { label: 'Withdrawn', tone: 'neutral' },
+} as const satisfies Record<RequestWorkflowState, { label: string; tone: BadgeTone }>
 
-function requestStateTone(state: RequestWorkflowState): BadgeTone {
-  switch (state) {
-    case 'Submitted':
-      return 'info'
-    case 'NeedsResponse':
-      return 'warning'
-    case 'Resolved':
-      return 'success'
-    case 'Working':
-    case 'Withdrawn':
-      return 'neutral'
-  }
-}
+const DISPOSITIONS = {
+  Accepted: { label: 'Accepted', tone: 'success' },
+  UsefulNotMerged: { label: 'Useful, not merged', tone: 'success' },
+  HiddenContext: { label: 'Blocked by hidden context', tone: 'success' },
+  NotAligned: { label: 'Reasonable, not aligned', tone: 'neutral' },
+  Duplicate: { label: 'Duplicate or obvious miss', tone: 'warning' },
+  Abandoned: { label: 'Abandoned', tone: 'danger' },
+  LowQuality: { label: 'Low quality', tone: 'danger' },
+} as const satisfies Record<RequestWorkflowDisposition, { label: string; tone: BadgeTone }>
+
+const EVENT_LABELS = {
+  Started: 'Started', Submitted: 'Submitted', RevisionPushed: 'Revision pushed',
+  Commented: 'Commented', NeedsResponse: 'Needs response',
+  ContributorResponded: 'Contributor responded', Merged: 'Merged',
+  Resolved: 'Resolved', Settled: 'Settled', Withdrawn: 'Withdrawn',
+} as const satisfies Record<RequestWorkflowEventKind, string>
+
+const MERGEABILITY = {
+  Ready: { label: 'Clean merge available', tone: 'success' },
+  Closed: { label: 'Closed', tone: 'neutral' },
+  NotReady: { label: 'Not ready', tone: 'warning' },
+  NotMaintainer: { label: 'Maintainer required', tone: 'neutral' },
+  MissingRequestBranch: { label: 'Branch missing', tone: 'warning' },
+} as const satisfies Record<RequestSummary['mergeability']['status'], { label: string; tone: BadgeTone }>
 
 export function requestStatusLabel(request: RequestSummary) {
   return request.state === 'Resolved' && request.disposition
     ? dispositionLabel(request.disposition)
-    : requestStateLabel(request.state)
+    : REQUEST_STATES[request.state].label
 }
 
 export function requestStatusTone(request: RequestSummary): BadgeTone {
   return request.state === 'Resolved'
     ? dispositionTone(request.disposition)
-    : requestStateTone(request.state)
+    : REQUEST_STATES[request.state].tone
 }
 
 export function dispositionLabel(disposition: RequestWorkflowDisposition) {
-  switch (disposition) {
-    case 'Accepted':
-      return 'Accepted'
-    case 'UsefulNotMerged':
-      return 'Useful, not merged'
-    case 'HiddenContext':
-      return 'Blocked by hidden context'
-    case 'NotAligned':
-      return 'Reasonable, not aligned'
-    case 'Duplicate':
-      return 'Duplicate or obvious miss'
-    case 'Abandoned':
-      return 'Abandoned'
-    case 'LowQuality':
-      return 'Low quality'
-  }
+  return DISPOSITIONS[disposition].label
 }
 
 export function dispositionTone(
   disposition: RequestWorkflowDisposition | null,
 ): BadgeTone {
-  switch (disposition) {
-    case 'Accepted':
-    case 'UsefulNotMerged':
-    case 'HiddenContext':
-      return 'success'
-    case 'NotAligned':
-      return 'neutral'
-    case 'Duplicate':
-      return 'warning'
-    case 'Abandoned':
-    case 'LowQuality':
-      return 'danger'
-    case null:
-      return 'outline'
-  }
+  return disposition ? DISPOSITIONS[disposition].tone : 'outline'
 }
 
 export function requestBaseAudienceLabel(request: RequestSummary) {
@@ -156,79 +127,37 @@ export function requestAuthorRoleLabel(request: RequestSummary) {
 }
 
 export function eventKindLabel(kind: RequestWorkflowEventKind) {
-  switch (kind) {
-    case 'Started':
-      return 'Started'
-    case 'Submitted':
-      return 'Submitted'
-    case 'RevisionPushed':
-      return 'Revision pushed'
-    case 'Commented':
-      return 'Commented'
-    case 'NeedsResponse':
-      return 'Needs response'
-    case 'ContributorResponded':
-      return 'Contributor responded'
-    case 'Merged':
-      return 'Merged'
-    case 'Resolved':
-      return 'Resolved'
-    case 'Settled':
-      return 'Settled'
-    case 'Withdrawn':
-      return 'Withdrawn'
-  }
+  return EVENT_LABELS[kind]
 }
 
 export function requestMergeabilityLabel(request: RequestSummary) {
-  switch (request.mergeability.status) {
-    case 'Ready':
-      return 'Clean merge available'
-    case 'Closed':
-      return 'Closed'
-    case 'NotReady':
-      return 'Not ready'
-    case 'NotMaintainer':
-      return 'Maintainer required'
-    case 'MissingRequestBranch':
-      return 'Branch missing'
-  }
+  return MERGEABILITY[request.mergeability.status].label
 }
 
 export function requestMergeabilityTone(request: RequestSummary): BadgeTone {
-  switch (request.mergeability.status) {
-    case 'Ready':
-      return 'success'
-    case 'NotReady':
-    case 'MissingRequestBranch':
-      return 'warning'
-    case 'Closed':
-    case 'NotMaintainer':
-      return 'neutral'
-  }
+  return MERGEABILITY[request.mergeability.status].tone
 }
 
 export function resolutionOptionsFor(
   request: RequestSummary,
 ): ResolutionOption[] {
-  return RESOLUTION_OPTIONS.filter(
-    (option) =>
-      option.disposition !== 'Abandoned' || request.state === 'NeedsResponse',
-  )
+  const allowed = new Set(request.resolution_options.map(({ disposition }) => disposition))
+  return RESOLUTION_OPTIONS.filter(({ disposition }) => allowed.has(disposition))
 }
 
 export function settlementPreviewFor(
-  stakeCredits: number,
+  request: RequestSummary,
   disposition: RequestWorkflowDisposition,
 ): SettlementPreview {
-  const refundedCredits = refundedCreditsFor(stakeCredits, disposition)
-  const rewardCredits = rewardCreditsFor(stakeCredits, disposition)
-
+  const preview = disposition === 'Accepted'
+    ? request.merge_settlement_preview
+    : request.resolution_options.find((option) => option.disposition === disposition)?.settlement
+  if (!preview) throw new Error(`resolution ${disposition} is not allowed`)
   return {
-    burnedCredits: Math.max(0, stakeCredits - refundedCredits),
-    refundedCredits,
-    rewardCredits,
-    stakeCredits,
+    burnedCredits: preview.burned_credits,
+    refundedCredits: preview.refunded_credits,
+    rewardCredits: preview.reward_credits,
+    stakeCredits: preview.stake_credits,
   }
 }
 
@@ -280,40 +209,4 @@ export function formatUnixDate(unixSeconds: number | null) {
 export function normalizedBody(body: string) {
   const trimmed = body.trim()
   return trimmed ? trimmed : null
-}
-
-function refundedCreditsFor(
-  stakeCredits: number,
-  disposition: RequestWorkflowDisposition,
-) {
-  switch (disposition) {
-    case 'Accepted':
-    case 'UsefulNotMerged':
-    case 'HiddenContext':
-    case 'NotAligned':
-      return stakeCredits
-    case 'Duplicate':
-      return Math.floor(stakeCredits / 2)
-    case 'Abandoned':
-    case 'LowQuality':
-      return 0
-  }
-}
-
-function rewardCreditsFor(
-  stakeCredits: number,
-  disposition: RequestWorkflowDisposition,
-) {
-  switch (disposition) {
-    case 'Accepted':
-      return Math.floor(stakeCredits / 2)
-    case 'UsefulNotMerged':
-      return Math.floor(stakeCredits / 5)
-    case 'HiddenContext':
-    case 'NotAligned':
-    case 'Duplicate':
-    case 'Abandoned':
-    case 'LowQuality':
-      return 0
-  }
 }

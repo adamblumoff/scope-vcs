@@ -3,7 +3,12 @@ use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
 
 mod settlement;
-pub use settlement::settlement_for;
+pub use settlement::{ResolutionDisposition, allowed_resolution_dispositions, settlement_for};
+mod policy;
+pub use policy::{
+    RequestMergeability, RequestMergeabilityStatus, RequestPermissions, request_actor_role,
+    request_base_audience, request_mergeability, request_permissions, request_visible_to_access,
+};
 mod submission;
 use settlement::{CreditSettlementIds, settle_request_credits, settlement_event_body, u32_to_i32};
 pub use submission::{

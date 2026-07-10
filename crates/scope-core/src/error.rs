@@ -1,92 +1,49 @@
-use axum::{
-    Json,
-    http::StatusCode,
-    response::{IntoResponse, Response},
-};
-use serde::Serialize;
-
-#[derive(Debug, Serialize)]
-pub struct ErrorResponse {
-    pub error: String,
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ErrorKind {
+    BadRequest,
+    Conflict,
+    Forbidden,
+    Internal,
+    NotFound,
+    PayloadTooLarge,
+    ServiceUnavailable,
+    TooManyRequests,
+    Unauthorized,
 }
 
 #[derive(Debug)]
 pub struct ApiError {
-    pub status: StatusCode,
+    pub kind: ErrorKind,
     pub message: String,
 }
-
+macro_rules! message_errors {
+    ($($name:ident => $kind:ident),+ $(,)?) => {$(
+        pub fn $name(message: impl Into<String>) -> Self {
+            Self::new(ErrorKind::$kind, message)
+        }
+    )+};
+}
 impl ApiError {
     pub fn bad_request(error: impl std::fmt::Display) -> Self {
-        Self {
-            status: StatusCode::BAD_REQUEST,
-            message: error.to_string(),
-        }
-    }
-    pub fn forbidden(message: impl Into<String>) -> Self {
-        Self {
-            status: StatusCode::FORBIDDEN,
-            message: message.into(),
-        }
-    }
-    pub fn conflict(message: impl Into<String>) -> Self {
-        Self {
-            status: StatusCode::CONFLICT,
-            message: message.into(),
-        }
-    }
-    pub fn payload_too_large(message: impl Into<String>) -> Self {
-        Self {
-            status: StatusCode::PAYLOAD_TOO_LARGE,
-            message: message.into(),
-        }
-    }
-    pub fn too_many_requests(message: impl Into<String>) -> Self {
-        Self {
-            status: StatusCode::TOO_MANY_REQUESTS,
-            message: message.into(),
-        }
-    }
-    pub fn unauthorized(message: impl Into<String>) -> Self {
-        Self {
-            status: StatusCode::UNAUTHORIZED,
-            message: message.into(),
-        }
-    }
-    pub fn not_found(message: impl Into<String>) -> Self {
-        Self {
-            status: StatusCode::NOT_FOUND,
-            message: message.into(),
-        }
+        Self::new(ErrorKind::BadRequest, error.to_string())
     }
     pub fn internal(error: impl std::error::Error) -> Self {
-        Self {
-            status: StatusCode::INTERNAL_SERVER_ERROR,
-            message: error.to_string(),
-        }
+        Self::new(ErrorKind::Internal, error.to_string())
     }
-    pub fn internal_message(message: impl Into<String>) -> Self {
+    message_errors! {
+        forbidden => Forbidden,
+        conflict => Conflict,
+        payload_too_large => PayloadTooLarge,
+        too_many_requests => TooManyRequests,
+        unauthorized => Unauthorized,
+        not_found => NotFound,
+        internal_message => Internal,
+        service_unavailable => ServiceUnavailable,
+    }
+    fn new(kind: ErrorKind, message: impl Into<String>) -> Self {
         Self {
-            status: StatusCode::INTERNAL_SERVER_ERROR,
+            kind,
             message: message.into(),
         }
-    }
-    pub fn service_unavailable(message: impl Into<String>) -> Self {
-        Self {
-            status: StatusCode::SERVICE_UNAVAILABLE,
-            message: message.into(),
-        }
-    }
-}
-
-impl IntoResponse for ApiError {
-    fn into_response(self) -> Response {
-        (
-            self.status,
-            Json(ErrorResponse {
-                error: self.message,
-            }),
-        )
-            .into_response()
     }
 }

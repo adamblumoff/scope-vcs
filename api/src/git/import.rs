@@ -2,8 +2,6 @@ mod artifacts;
 mod repo_io;
 mod staging;
 
-#[cfg(test)]
-pub(crate) use self::artifacts::pending_import_from_staging_repo;
 pub(crate) use self::artifacts::{
     receive_pack_update_from_staging_repo, reviewed_update_from_staging_repo,
 };
@@ -16,7 +14,7 @@ pub(crate) use self::repo_io::{git_stdout_text, git_tree_files, validate_pushed_
 pub(crate) use self::staging::ReceivePackFileChange;
 pub(crate) use self::staging::ReceivePackUpdate;
 use self::staging::{apply_receive_pack_update, receive_pack_update_changes_visibility};
-use crate::domain::store::{RepositoryActor, StoredRepository};
+use crate::domain::store::{MainPushMode, RepositoryActor, StoredRepository};
 use crate::{
     db::RepositoryMutation,
     error::ApiError,
@@ -25,22 +23,23 @@ use crate::{
 };
 
 #[cfg(test)]
-pub(crate) fn persist_receive_pack_update(
+pub(crate) async fn persist_receive_pack_update(
     state: &AppState,
     owner: &str,
     repo_name: &str,
     update: ReceivePackUpdate,
 ) -> Result<PersistedReceivePackUpdate, ApiError> {
-    state
+    Ok(state
         .metadata
         .mutate_repository(owner, repo_name, move |repo| {
             ensure_receive_pack_base_matches(repo, &update)?;
             apply_receive_pack_update(repo, update)?;
             Ok(RepositoryMutation::new(PersistedReceivePackUpdate::Applied))
         })
+        .await?)
 }
 
-pub(crate) fn persist_receive_pack_update_and_promote(
+pub(crate) async fn persist_receive_pack_update_and_promote(
     state: &AppState,
     owner: &str,
     repo_name: &str,
@@ -56,23 +55,21 @@ pub(crate) fn persist_receive_pack_update_and_promote(
             let old_snapshot = repo.git_snapshot.clone();
             let mut cleanup_blobs = uploaded_blobs;
             let mut update = update;
-            let access = repo.access_for_user_id(&author_id);
-            let can_receive_push = access.can_push
-                || repo.is_waiting_for_first_push() && repo.is_owner_user(&author_id);
-            if !can_receive_push {
-                let message = if access.actor == RepositoryActor::Public {
+            let push_policy = repo.push_policy_for_user_id(&author_id);
+            if push_policy.mode == MainPushMode::Denied {
+                let message = if push_policy.access.actor == RepositoryActor::Public {
                     "repo membership required"
                 } else {
                     "push permission required"
                 };
-                return Err(ApiError::forbidden(message));
+                return Err(ApiError::forbidden(message).into());
             }
             ensure_receive_pack_config_base_matches(repo, &update)?;
             let previous_config = Some(repo.repo_config.clone());
-            if !access.can_change_file_visibility
+            if !push_policy.access.can_change_file_visibility
                 && receive_pack_update_changes_visibility(repo, previous_config.as_ref(), &update)
             {
-                return Err(ApiError::forbidden("file visibility permission required"));
+                return Err(ApiError::forbidden("file visibility permission required").into());
             }
             update.previous_config = previous_config;
             ensure_receive_pack_base_matches(repo, &update)?;
@@ -83,8 +80,9 @@ pub(crate) fn persist_receive_pack_update_and_promote(
                 persisted,
                 cleanup_blobs,
             ))
-        })?;
-    crate::state::best_effort_drain_pending_source_blob_deletions(state);
+        })
+        .await?;
+    crate::state::best_effort_drain_pending_source_blob_deletions(state).await;
     Ok(persisted)
 }
 
@@ -96,13 +94,10 @@ pub(crate) fn apply_request_merge_update(
     let old_snapshot = repo.git_snapshot.clone();
     let mut cleanup_blobs = update.uploaded_blobs.clone();
     let mut update = update;
-    let access = repo.access_for_user_id(maintainer_id);
-    if !matches!(
-        access.actor,
-        RepositoryActor::Owner | RepositoryActor::Member
-    ) {
+    if !repo.is_maintainer_user_id(maintainer_id) {
         return Err(ApiError::forbidden("repo maintainer required"));
     }
+    let access = repo.access_for_user_id(maintainer_id);
     ensure_receive_pack_config_base_matches(repo, &update)?;
     let previous_config = Some(repo.repo_config.clone());
     if !access.can_change_file_visibility

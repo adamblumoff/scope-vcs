@@ -58,13 +58,13 @@ export function InvitePage({
     <AppShell header={() => <AppHeader />}>
       <PageContent>
         <PageHeader
-          badges={() => (
+          badges={(
             <>
               <Badge variant="info">Invite</Badge>
               <Badge variant="neutral">{invite.invited_email}</Badge>
             </>
           )}
-          description={() => (
+          description={(
             <span className="font-mono text-muted-foreground">
               {invite.repo_id}
             </span>

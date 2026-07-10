@@ -19,11 +19,15 @@ pub(crate) async fn optional_scope_user(
     };
 
     if token.starts_with(CLI_SESSION_TOKEN_PREFIX) {
-        return state.metadata.verify_cli_session_token(token).map(Some);
+        return Ok(state
+            .metadata
+            .verify_cli_session_token(token)
+            .await
+            .map(Some)?);
     }
 
     let identity = state.clerk.verify(token).await?;
-    resolve_clerk_scope_user(state, &identity).map(Some)
+    resolve_clerk_scope_user(state, &identity).await.map(Some)
 }
 
 pub(crate) async fn require_scope_user(
@@ -40,7 +44,7 @@ pub(crate) async fn require_clerk_scope_user(
     headers: &HeaderMap,
 ) -> Result<UserAccount, ApiError> {
     let identity = require_clerk_identity(state, headers).await?;
-    resolve_clerk_scope_user(state, &identity)
+    resolve_clerk_scope_user(state, &identity).await
 }
 
 pub(crate) async fn require_reconciled_clerk_scope_user(
@@ -48,7 +52,7 @@ pub(crate) async fn require_reconciled_clerk_scope_user(
     headers: &HeaderMap,
 ) -> Result<UserAccount, ApiError> {
     let identity = require_clerk_identity(state, headers).await?;
-    state.metadata.resolve_clerk_user(&identity)
+    Ok(state.metadata.resolve_clerk_user(&identity).await?)
 }
 
 pub(crate) async fn require_clerk_identity(
@@ -59,16 +63,16 @@ pub(crate) async fn require_clerk_identity(
     if token.starts_with(CLI_SESSION_TOKEN_PREFIX) {
         return Err(ApiError::unauthorized("Clerk auth required"));
     }
-    state.clerk.verify(token).await
+    Ok(state.clerk.verify(token).await?)
 }
 
-fn resolve_clerk_scope_user(
+async fn resolve_clerk_scope_user(
     state: &AppState,
     identity: &ClerkIdentity,
 ) -> Result<UserAccount, ApiError> {
-    match state.metadata.resolve_existing_clerk_user(identity)? {
+    match state.metadata.resolve_existing_clerk_user(identity).await? {
         Some(user) => Ok(user),
-        None => state.metadata.resolve_clerk_user(identity),
+        None => Ok(state.metadata.resolve_clerk_user(identity).await?),
     }
 }
 

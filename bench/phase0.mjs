@@ -1,945 +1,249 @@
 #!/usr/bin/env node
 import { spawn } from 'node:child_process';
-import { existsSync, readFileSync } from 'node:fs';
 import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
-import { dirname, join, resolve } from 'node:path';
+import { join, resolve } from 'node:path';
 import { performance } from 'node:perf_hooks';
-import { fileURLToPath } from 'node:url';
 
-const SCRIPT_DIR = dirname(fileURLToPath(import.meta.url));
-const ROOT = resolve(SCRIPT_DIR, '..');
-const ROOT_ENV = readDotenv(join(ROOT, '.env.local'));
-const apiUrl = trimTrailingSlash(
-  envValue('SCOPE_BENCH_API_URL') || 'http://localhost:8080',
-);
-const explicitAuthToken = envValue('SCOPE_BENCH_AUTH_TOKEN');
-const cliSessionToken = explicitAuthToken ? '' : readStoredCliSessionToken(apiUrl);
-let fixtureCounter = 0;
+const api = (process.env.SCOPE_BENCH_API_URL || 'http://localhost:8080').replace(/\/$/, '');
+const token = process.env.SCOPE_BENCH_AUTH_TOKEN || '';
+const count = number('SCOPE_BENCH_SAMPLES', 12);
+const warmup = number('SCOPE_BENCH_WARMUP', 2);
+const concurrency = number('SCOPE_BENCH_CONCURRENCY', 6);
+const timeout = number('SCOPE_BENCH_TIMEOUT_MS', 15_000);
+const outputRoot = resolve(process.env.SCOPE_BENCH_OUTPUT_DIR || '.tmp/bench/phase0');
+const owner = handle(process.env.SCOPE_BENCH_OWNER || process.env.SCOPE_DEV_USER_HANDLE || 'dev');
 
-const config = {
-  apiUrl,
-  warmup: intEnv('SCOPE_BENCH_WARMUP', 2),
-  samples: intEnv('SCOPE_BENCH_SAMPLES', 12),
-  concurrency: intEnv('SCOPE_BENCH_CONCURRENCY', 6),
-  timeoutMs: intEnv('SCOPE_BENCH_TIMEOUT_MS', 15_000),
-  pushFiles: intEnv('SCOPE_BENCH_PUSH_FILES', 4),
-  pushCommits: intEnv('SCOPE_BENCH_PUSH_COMMITS', 2),
-  pushBurst: boolEnv('SCOPE_BENCH_PUSH_BURST', false),
-  authToken: explicitAuthToken || cliSessionToken,
-  authTokenSource: explicitAuthToken
-    ? 'SCOPE_BENCH_AUTH_TOKEN'
-    : cliSessionToken
-      ? 'local Scope CLI session'
-      : 'none',
-  outputRoot: envValue('SCOPE_BENCH_OUTPUT_DIR')
-    ? resolve(envValue('SCOPE_BENCH_OUTPUT_DIR'))
-    : join(ROOT, '.tmp', 'bench', 'phase0'),
+await ready();
+const results = [];
+for (const entry of cases()) {
+  process.stdout.write(`running ${entry.name}... `);
+  const result = await measure(entry);
+  results.push(result);
+  console.log(result.ok ? 'ok' : 'failed');
+}
+
+const generatedAt = new Date().toISOString();
+const report = {
+  version: 2,
+  phase: 'phase-0',
+  generatedAt,
+  apiUrl: api,
+  owner,
+  config: { count, warmup, concurrency, timeout, authenticated: Boolean(token) },
+  cases: results,
+  skipped: token ? [] : [{ name: 'authenticated reads and receive-pack', reason: 'auth token is not set' }],
 };
+const output = join(outputRoot, generatedAt.replaceAll(':', '-'));
+await mkdir(output, { recursive: true });
+await writeFile(join(output, 'results.json'), `${JSON.stringify(report, null, 2)}\n`);
+await writeFile(join(output, 'summary.md'), markdown(report));
+console.log(`results: ${join(output, 'results.json')}\nsummary: ${join(output, 'summary.md')}`);
+if (results.some((result) => !result.ok)) process.exitCode = 1;
 
-main().catch((error) => {
-  console.error(error instanceof Error ? error.message : String(error));
-  process.exitCode = 1;
-});
-
-async function main() {
-  validateConfig(config);
-
-  await requireReady(config.apiUrl);
-  await validateAuthToken();
-  const owner = await discoverOwner(config.apiUrl, ownerCandidates());
-  const cases = benchmarkCases(owner);
-  const skipped = skippedCases();
-  const startedAt = new Date();
-  const results = [];
-
-  for (const benchCase of cases) {
-    process.stdout.write(`running ${benchCase.name}... `);
-    const result = await runCase(benchCase);
-    results.push(result);
-    process.stdout.write(`${result.ok ? 'ok' : 'failed'}\n`);
-  }
-
-  const report = {
-    version: 1,
-    phase: 'phase-0',
-    generatedAt: startedAt.toISOString(),
-    apiUrl: config.apiUrl,
-    owner,
-    config: {
-      warmup: config.warmup,
-      samples: config.samples,
-      concurrency: config.concurrency,
-      timeoutMs: config.timeoutMs,
-      pushFiles: config.pushFiles,
-      pushCommits: config.pushCommits,
-      pushBurst: config.pushBurst,
-      authenticatedCases: Boolean(config.authToken),
-      authTokenSource: config.authTokenSource,
-    },
-    environment: {
-      node: process.version,
-      platform: process.platform,
-      arch: process.arch,
-    },
-    cases: results,
-    skipped,
-    instrumentationGaps: [
-      'Object-store byte counters are not exposed by the local API.',
-      'Projection cache hit rates are not exposed by the local API.',
-      'Internal API Git subprocess counts are not exposed by the local API.',
-    ],
-  };
-
-  const outputDir = join(config.outputRoot, timestampSlug(startedAt));
-  await mkdir(outputDir, { recursive: true });
-  const jsonPath = join(outputDir, 'results.json');
-  const markdownPath = join(outputDir, 'summary.md');
-  await writeFile(jsonPath, `${JSON.stringify(report, null, 2)}\n`);
-  await writeFile(markdownPath, markdownSummary(report));
-
-  printSummary(report, jsonPath, markdownPath);
-
-  if (results.some((result) => !result.ok)) {
-    process.exitCode = 1;
-  }
-}
-
-function validateConfig(input) {
-  for (const [name, value] of [
-    ['SCOPE_BENCH_WARMUP', input.warmup],
-    ['SCOPE_BENCH_SAMPLES', input.samples],
-    ['SCOPE_BENCH_CONCURRENCY', input.concurrency],
-    ['SCOPE_BENCH_TIMEOUT_MS', input.timeoutMs],
-  ]) {
-    if (!Number.isInteger(value) || value < 1) {
-      throw new Error(`${name} must be a positive integer`);
-    }
-  }
-
-  if (!Number.isInteger(input.pushFiles) || input.pushFiles < 1) {
-    throw new Error('SCOPE_BENCH_PUSH_FILES must be a positive integer');
-  }
-  if (!Number.isInteger(input.pushCommits) || input.pushCommits < 1) {
-    throw new Error('SCOPE_BENCH_PUSH_COMMITS must be a positive integer');
-  }
-}
-
-async function requireReady(apiUrl) {
-  const result = await sampleFetch({
-    name: 'readyz',
-    method: 'GET',
-    url: `${apiUrl}/readyz`,
-    expectedStatuses: [200],
-  });
-  if (!result.ok) {
-    throw new Error(
-      `local API is not ready at ${apiUrl}/readyz; run ./dev/scope-dev up first`,
-    );
-  }
-}
-
-async function validateAuthToken() {
-  if (!config.authToken) {
-    return;
-  }
-
-  const result = await sampleFetch({
-    name: 'auth token validation',
-    method: 'GET',
-    url: `${config.apiUrl}/v1/repos`,
-    expectedStatuses: [200],
-    auth: true,
-    burst: false,
-  });
-  if (result.ok) {
-    config.authTokenSource = `${config.authTokenSource} (validated)`;
-    return;
-  }
-  if (config.authTokenSource === 'local Scope CLI session') {
-    config.authToken = '';
-    config.authTokenSource = 'none (stale local Scope CLI session ignored)';
-    return;
-  }
-  throw new Error(
-    `SCOPE_BENCH_AUTH_TOKEN did not validate against ${config.apiUrl}/v1/repos: ${result.error}`,
-  );
-}
-
-async function discoverOwner(apiUrl, candidates) {
-  for (const owner of candidates) {
-    const result = await sampleFetch({
-      name: 'owner discovery',
-      method: 'GET',
-      url: `${apiUrl}/v1/repos/${encodeURIComponent(owner)}/public-demo`,
-      expectedStatuses: [200],
-    });
-    if (result.ok) {
-      return owner;
-    }
-  }
-
-  throw new Error(
-    `could not find seeded public-demo owner; tried ${candidates.join(', ')}`,
-  );
-}
-
-function ownerCandidates() {
-  const explicitOwner = normalizeHandle(envValue('SCOPE_BENCH_OWNER'));
-  if (explicitOwner) {
-    return [explicitOwner];
-  }
-
-  const candidates = [];
-  addCandidate(candidates, normalizeHandle(envValue('SCOPE_DEV_USER_HANDLE')));
-  const email = envValue('SCOPE_DEV_USER_EMAIL');
-  if (email.includes('@')) {
-    addCandidate(candidates, normalizeHandle(email.split('@')[0]));
-  }
-  addCandidate(candidates, 'dev-user');
-  addCandidate(candidates, 'dev');
-  return candidates;
-}
-
-function addCandidate(candidates, value) {
-  if (value && !candidates.includes(value)) {
-    candidates.push(value);
-  }
-}
-
-function benchmarkCases(owner) {
-  const publicRepo = 'public-demo';
-  const updateRepo = 'update-demo';
-  const publicBase = `/v1/repos/${segment(owner)}/${segment(publicRepo)}`;
-  const updateBase = `/v1/repos/${segment(owner)}/${segment(updateRepo)}`;
-
-  const cases = [
-    httpCase('repo summary public-demo', publicBase),
-    httpCase('repo files public-demo', `${publicBase}/files`),
-    httpCase(
-      'projection preview public-demo',
-      `${publicBase}/projection-preview?audience=public&source=live`,
-    ),
-    httpCase('commit history public-demo', `${publicBase}/commits?audience=public`),
-    httpCase(
-      'git info refs public-demo',
-      `/git/public/${segment(owner)}/${segment(publicRepo)}/info/refs?service=git-upload-pack`,
-    ),
-    httpCase('repo summary update-demo', updateBase),
-    httpCase(
-      'projection preview update-demo',
-      `${updateBase}/projection-preview?audience=public&source=live`,
-    ),
-    {
-      name: 'git ls-remote public-demo',
-      kind: 'command',
-      command: 'git',
-      args: ['ls-remote', `${config.apiUrl}/git/public/${owner}/${publicRepo}`],
-      burst: false,
-    },
+function cases() {
+  const publicRepo = `/v1/repos/${encodeURIComponent(owner)}/public-demo`;
+  const updateRepo = `/v1/repos/${encodeURIComponent(owner)}/update-demo`;
+  const entries = [
+    http('repo summary', publicRepo),
+    http('repo files', `${publicRepo}/files`),
+    http('projection preview', `${publicRepo}/projection-preview?audience=public&source=live`),
+    http('commit history', `${publicRepo}/commits?audience=public`),
+    { name: 'git ls-remote', command: ['git', 'ls-remote', `${api}/git/public/${owner}/public-demo`] },
   ];
-
-  if (config.authToken) {
-    cases.push(
-      httpCase('auth list repos', '/v1/repos', { auth: true }),
-      httpCase('auth settings public-demo', `${publicBase}/settings`, { auth: true }),
-      httpCase('auth staged update update-demo', `${updateBase}/staged-update`, {
-        auth: true,
-      }),
-      httpCase(
-        'auth private projection preview update-demo',
-        `${updateBase}/projection-preview?audience=private&source=live`,
-        { auth: true },
-      ),
-      {
-        name: 'git receive-pack first push',
-        kind: 'push-fixture',
-        burst: config.pushBurst,
-      },
-    );
-  }
-
-  return cases;
-}
-
-function skippedCases() {
-  if (config.authToken) {
-    return [];
-  }
-
-  return [
-    {
-      name: 'owner/review API routes',
-      reason: unauthenticatedSkipReason('include authenticated read-only cases'),
-    },
-    {
-      name: 'git receive-pack push benchmark',
-      reason: unauthenticatedSkipReason('create disposable push fixtures'),
-    },
-  ];
-}
-
-function unauthenticatedSkipReason(action) {
-  const stalePrefix = config.authTokenSource.includes('stale')
-    ? 'cached local session was rejected; '
-    : '';
-  if (process.platform === 'darwin' || process.platform === 'win32') {
-    return `${stalePrefix}set SCOPE_BENCH_AUTH_TOKEN to ${action}; local CLI session auto-detection is only supported for Linux file-backed sessions`;
-  }
-  return `${stalePrefix}run scope login against the local API or set SCOPE_BENCH_AUTH_TOKEN to ${action}`;
-}
-
-function httpCase(name, path, options = {}) {
-  return {
-    name,
-    kind: 'http',
-    method: 'GET',
-    url: `${config.apiUrl}${path}`,
-    expectedStatuses: options.expectedStatuses || [200],
-    auth: Boolean(options.auth),
-    burst: options.burst !== false,
-  };
-}
-
-async function runCase(benchCase) {
-  const warmup = [];
-  for (let index = 0; index < config.warmup; index += 1) {
-    warmup.push(await runSample(benchCase));
-  }
-
-  const sequential = [];
-  for (let index = 0; index < config.samples; index += 1) {
-    sequential.push(await runSample(benchCase));
-  }
-
-  let burst = [];
-  if (benchCase.burst) {
-    for (let round = 0; round < config.samples; round += 1) {
-      const samples = await Promise.all(
-        Array.from({ length: config.concurrency }, () => runSample(benchCase)),
-      );
-      burst = burst.concat(samples);
-    }
-  }
-
-  return {
-    name: benchCase.name,
-    kind: benchCase.kind,
-    target: targetForCase(benchCase),
-    ok:
-      warmup.every((sample) => sample.ok) &&
-      sequential.every((sample) => sample.ok) &&
-      burst.every((sample) => sample.ok),
-    warmup: summarizeSamples(warmup),
-    sequential: summarizeSamples(sequential),
-    burst: benchCase.burst ? summarizeSamples(burst) : null,
-    failures: warmup
-      .concat(sequential, burst)
-      .filter((sample) => !sample.ok)
-      .slice(0, 5),
-  };
-}
-
-function runSample(benchCase) {
-  if (benchCase.kind === 'http') {
-    return sampleFetch(benchCase);
-  }
-  if (benchCase.kind === 'push-fixture') {
-    return samplePushFixture(benchCase);
-  }
-  return sampleCommand(benchCase);
-}
-
-async function sampleFetch(benchCase) {
-  const started = performance.now();
-  try {
-    const headers = { accept: 'application/json' };
-    if (benchCase.auth) {
-      headers.authorization = `Bearer ${config.authToken}`;
-    }
-    const response = await fetch(benchCase.url, {
-      method: benchCase.method,
-      headers,
-      signal: timeoutSignal(config.timeoutMs),
-    });
-    const body = Buffer.from(await response.arrayBuffer());
-    const durationMs = performance.now() - started;
-    const ok = benchCase.expectedStatuses.includes(response.status);
-
-    return {
-      ok,
-      durationMs,
-      status: response.status,
-      bytes: body.length,
-      error: ok ? null : `expected ${benchCase.expectedStatuses.join('/')} got ${response.status}`,
-    };
-  } catch (error) {
-    return {
-      ok: false,
-      durationMs: performance.now() - started,
-      status: null,
-      bytes: 0,
-      error: error instanceof Error ? error.message : String(error),
-    };
-  }
-}
-
-function sampleCommand(benchCase) {
-  const started = performance.now();
-  return new Promise((resolveSample) => {
-    const child = spawn(benchCase.command, benchCase.args, {
-      cwd: benchCase.cwd,
-      env: benchCase.env ? { ...process.env, ...benchCase.env } : process.env,
-      stdio: ['ignore', 'pipe', 'pipe'],
-    });
-    let stdoutBytes = 0;
-    let stderr = '';
-    let finished = false;
-    const timeout = setTimeout(() => {
-      if (!finished) {
-        child.kill('SIGKILL');
-      }
-    }, config.timeoutMs);
-    timeout.unref?.();
-
-    child.stdout.on('data', (chunk) => {
-      stdoutBytes += chunk.length;
-    });
-    child.stderr.on('data', (chunk) => {
-      stderr = `${stderr}${chunk.toString('utf8')}`.slice(-2000);
-    });
-    child.on('error', (error) => {
-      finished = true;
-      clearTimeout(timeout);
-      resolveSample({
-        ok: false,
-        durationMs: performance.now() - started,
-        status: null,
-        bytes: stdoutBytes + Buffer.byteLength(stderr),
-        error: error.message,
-      });
-    });
-    child.on('close', (code, signal) => {
-      finished = true;
-      clearTimeout(timeout);
-      const ok = code === 0;
-      resolveSample({
-        ok,
-        durationMs: performance.now() - started,
-        status: code,
-        signal,
-        bytes: stdoutBytes + Buffer.byteLength(stderr),
-        error: ok ? null : stderr.trim() || `process exited with ${code ?? signal}`,
-      });
-    });
-  });
-}
-
-async function samplePushFixture() {
-  let fixture = null;
-  try {
-    fixture = await createPushFixture();
-    const pushSample = await sampleCommand({
-      name: 'git receive-pack first push',
-      kind: 'command',
-      command: 'git',
-      args: [
-        '-c',
-        'push.recurseSubmodules=no',
-        'push',
-        fixture.remoteUrl,
-        `HEAD:${fixture.branch}`,
-      ],
-      cwd: fixture.dir,
-      env: gitPushAuthEnv(fixture.remoteUrl, fixture.pushToken),
-    });
-    const cleanupErrors = await cleanupPushFixture(fixture);
-    if (cleanupErrors.length > 0) {
-      const cleanupMessage = `push fixture cleanup failed: ${cleanupErrors.join('; ')}`;
-      return {
-        ...pushSample,
-        ok: false,
-        error: pushSample.error
-          ? `${pushSample.error}; ${cleanupMessage}`
-          : cleanupMessage,
-      };
-    }
-    return pushSample;
-  } catch (error) {
-    const cleanupErrors = fixture ? await cleanupPushFixture(fixture) : [];
-    const message = error instanceof Error ? error.message : String(error);
-    return {
-      ok: false,
-      durationMs: 0,
-      status: null,
-      bytes: 0,
-      error: cleanupErrors.length
-        ? `${message}; cleanup failed: ${cleanupErrors.join('; ')}`
-        : message,
-    };
-  }
-}
-
-async function createPushFixture() {
-  if (!config.authToken) {
-    throw new Error('auth token required for git receive-pack benchmark');
-  }
-
-  await mkdir(config.outputRoot, { recursive: true });
-  const repoName = nextFixtureRepoName();
-  const fixture = {
-    owner: '',
-    repo: '',
-    remoteUrl: '',
-    branch: 'main',
-    pushToken: '',
-    dir: '',
-  };
-
-  try {
-    const created = await apiJson('/v1/repos', {
-      method: 'POST',
-      auth: true,
-      body: {
-        name: repoName,
-        visibility: 'Public',
-      },
-    });
-    fixture.owner = created?.repo?.owner_handle || '';
-    fixture.repo = created?.repo?.name || '';
-    fixture.remoteUrl = created?.init?.git_remote_url || '';
-    fixture.branch = created?.init?.push_branch || 'main';
-    fixture.pushToken = created?.init?.push_token?.secret || '';
-    fixture.dir = await mkdtemp(join(config.outputRoot, 'push-work-'));
-    if (
-      !fixture.owner ||
-      !fixture.repo ||
-      !fixture.remoteUrl ||
-      !fixture.pushToken
-    ) {
-      throw new Error('create repo response did not include push fixture details');
-    }
-
-    await initializePushFixtureRepo(fixture.dir, fixture.repo);
-    return fixture;
-  } catch (error) {
-    await cleanupPushFixture(fixture);
-    throw error;
-  }
-}
-
-function nextFixtureRepoName() {
-  fixtureCounter += 1;
-  return `phase0-push-${Date.now()}-${process.pid}-${fixtureCounter}`;
-}
-
-async function initializePushFixtureRepo(dir, repoName) {
-  await checkedCommand('git', ['init'], dir);
-  await checkedCommand('git', ['symbolic-ref', 'HEAD', 'refs/heads/main'], dir);
-  await checkedCommand('git', ['config', 'user.email', 'bench@scope.local'], dir);
-  await checkedCommand('git', ['config', 'user.name', 'Scope Bench'], dir);
-  await checkedCommand('git', ['config', 'commit.gpgsign', 'false'], dir);
-
-  for (let commitIndex = 0; commitIndex < config.pushCommits; commitIndex += 1) {
-    await writePushFixtureFiles(dir, repoName, commitIndex);
-    await checkedCommand('git', ['add', '--all'], dir);
-    await checkedCommand(
-      'git',
-      ['commit', '-m', `Phase 0 push fixture ${commitIndex + 1}`],
-      dir,
-    );
-  }
-}
-
-async function writePushFixtureFiles(dir, repoName, commitIndex) {
-  await mkdir(join(dir, 'src'), { recursive: true });
-  await writeFile(
-    join(dir, 'README.md'),
-    [
-      `# ${repoName}`,
-      '',
-      'Disposable Phase 0 push benchmark fixture.',
-      `Commit: ${commitIndex + 1}`,
-      '',
-    ].join('\n'),
+  if (token) entries.push(
+    http('authenticated repo list', '/v1/repos', true),
+    http('private projection preview', `${updateRepo}/projection-preview?audience=private&source=live`, true),
+    { name: 'git receive-pack first push', push: true },
   );
-
-  for (let fileIndex = 0; fileIndex < config.pushFiles; fileIndex += 1) {
-    await writeFile(
-      join(dir, 'src', `file-${fileIndex + 1}.txt`),
-      [
-        `repo=${repoName}`,
-        `commit=${commitIndex + 1}`,
-        `file=${fileIndex + 1}`,
-        `payload=${'x'.repeat(128)}`,
-        '',
-      ].join('\n'),
-    );
-  }
+  return entries;
 }
 
-async function checkedCommand(command, args, cwd) {
-  const sample = await sampleCommand({
-    name: `${command} ${args.join(' ')}`,
-    kind: 'command',
-    command,
-    args,
-    cwd,
-  });
-  if (!sample.ok) {
-    throw new Error(sample.error || `${command} ${args.join(' ')} failed`);
-  }
+function http(name, path, auth = false) {
+  return { name, url: `${api}${path}`, auth };
 }
 
-async function cleanupPushFixture(fixture) {
-  const errors = [];
-  if (fixture.owner && fixture.repo) {
-    try {
-      await apiJson(`/v1/repos/${segment(fixture.owner)}/${segment(fixture.repo)}`, {
-        method: 'DELETE',
-        auth: true,
-      });
-    } catch (error) {
-      errors.push(error instanceof Error ? error.message : String(error));
-    }
-  }
-  if (fixture.dir) {
-    try {
-      await rm(fixture.dir, { recursive: true, force: true });
-    } catch (error) {
-      errors.push(error instanceof Error ? error.message : String(error));
-    }
-  }
-  return errors;
-}
-
-async function apiJson(path, options = {}) {
-  const headers = { accept: 'application/json' };
-  if (options.auth) {
-    headers.authorization = `Bearer ${config.authToken}`;
-  }
-  if (options.body !== undefined) {
-    headers['content-type'] = 'application/json';
-  }
-
-  const response = await fetch(`${config.apiUrl}${path}`, {
-    method: options.method || 'GET',
-    headers,
-    body: options.body === undefined ? undefined : JSON.stringify(options.body),
-    signal: timeoutSignal(config.timeoutMs),
-  });
-  const text = await response.text();
-  if (!response.ok) {
-    throw new Error(
-      `${options.method || 'GET'} ${path} returned HTTP ${response.status}: ${text.slice(0, 300)}`,
-    );
-  }
-  return text ? JSON.parse(text) : null;
-}
-
-function gitPushAuthEnv(destination, bearerToken) {
-  const inheritedConfigCount = Number.parseInt(
-    process.env.GIT_CONFIG_COUNT || '0',
-    10,
-  );
-  const configIndex = Number.isInteger(inheritedConfigCount)
-    ? inheritedConfigCount
-    : 0;
+async function measure(entry) {
+  const sample = () => entry.push ? push() : entry.url ? request(entry) : command(entry.command);
+  await many(warmup, sample);
+  const sequential = await many(count, sample);
+  const burst = entry.url
+    ? (await many(count, () => Promise.all(Array.from({ length: concurrency }, sample)))).flat()
+    : [];
+  const values = [...sequential, ...burst];
   return {
-    GIT_CONFIG_COUNT: String(configIndex + 1),
-    [`GIT_CONFIG_KEY_${configIndex}`]: `http.${destination}.extraHeader`,
-    [`GIT_CONFIG_VALUE_${configIndex}`]: `Authorization: Bearer ${bearerToken}`,
+    name: entry.name,
+    ok: values.every((value) => value.ok),
+    sequential: stats(sequential),
+    burst: entry.url ? stats(burst) : null,
+    failures: values.filter((value) => !value.ok).slice(0, 5),
   };
 }
 
-function summarizeSamples(samples) {
-  const okSamples = samples.filter((sample) => sample.ok);
-  const durations = okSamples
-    .map((sample) => sample.durationMs)
-    .sort((left, right) => left - right);
-  const bytes = okSamples.map((sample) => sample.bytes);
-
-  return {
-    requests: samples.length,
-    ok: okSamples.length,
-    failed: samples.length - okSamples.length,
-    minMs: percentile(durations, 0),
-    p50Ms: percentile(durations, 0.5),
-    p95Ms: percentile(durations, 0.95),
-    maxMs: percentile(durations, 1),
-    meanMs: mean(durations),
-    meanBytes: mean(bytes),
-    statuses: statusCounts(samples),
-  };
-}
-
-function percentile(sortedValues, point) {
-  if (sortedValues.length === 0) {
-    return null;
-  }
-  if (point === 0) {
-    return round(sortedValues[0]);
-  }
-  const index = Math.min(
-    sortedValues.length - 1,
-    Math.max(0, Math.ceil(sortedValues.length * point) - 1),
-  );
-  return round(sortedValues[index]);
-}
-
-function mean(values) {
-  if (values.length === 0) {
-    return null;
-  }
-  return round(values.reduce((sum, value) => sum + value, 0) / values.length);
-}
-
-function statusCounts(samples) {
-  const counts = {};
-  for (const sample of samples) {
-    const key = sample.status === null ? 'error' : String(sample.status);
-    counts[key] = (counts[key] || 0) + 1;
-  }
-  return counts;
-}
-
-function markdownSummary(report) {
-  const lines = [
-    '# Phase 0 Benchmark Summary',
-    '',
-    `Generated: ${report.generatedAt}`,
-    `API: ${report.apiUrl}`,
-    `Owner: ${report.owner}`,
-    `Config: warmup ${report.config.warmup}, samples ${report.config.samples}, concurrency ${report.config.concurrency}, timeout ${report.config.timeoutMs}ms`,
-    `Push fixture: ${report.config.pushCommits} commits, ${report.config.pushFiles} files, burst ${report.config.pushBurst ? 'on' : 'off'}`,
-    `Auth token source: ${report.config.authTokenSource}`,
-    '',
-    '| Case | Mode | OK | p50 ms | p95 ms | Mean ms | Mean bytes | Statuses |',
-    '| --- | --- | ---: | ---: | ---: | ---: | ---: | --- |',
-  ];
-
-  for (const benchCase of report.cases) {
-    lines.push(summaryRow(benchCase.name, 'sequential', benchCase.sequential));
-    if (benchCase.burst) {
-      lines.push(summaryRow(benchCase.name, 'burst', benchCase.burst));
-    }
-  }
-
-  lines.push('', '## Skipped');
-  if (report.skipped.length === 0) {
-    lines.push('- None');
-  } else {
-    for (const skipped of report.skipped) {
-      lines.push(`- ${skipped.name}: ${skipped.reason}`);
-    }
-  }
-
-  lines.push('', '## Instrumentation Gaps');
-  for (const gap of report.instrumentationGaps) {
-    lines.push(`- ${gap}`);
-  }
-
-  return `${lines.join('\n')}\n`;
-}
-
-function summaryRow(name, mode, summary) {
-  return [
-    escapePipe(name),
-    mode,
-    `${summary.ok}/${summary.requests}`,
-    value(summary.p50Ms),
-    value(summary.p95Ms),
-    value(summary.meanMs),
-    value(summary.meanBytes),
-    escapePipe(JSON.stringify(summary.statuses)),
-  ].join(' | ').replace(/^/, '| ').replace(/$/, ' |');
-}
-
-function printSummary(report, jsonPath, markdownPath) {
-  console.log('');
-  console.log(`Phase 0 benchmark complete for ${report.owner} at ${report.apiUrl}`);
-  console.log('');
-  console.log('Case | Mode | OK | p50 ms | p95 ms | Mean ms | Mean bytes | Statuses');
-  console.log('--- | --- | ---: | ---: | ---: | ---: | ---: | ---');
-  for (const benchCase of report.cases) {
-    console.log(summaryRow(benchCase.name, 'sequential', benchCase.sequential));
-    if (benchCase.burst) {
-      console.log(summaryRow(benchCase.name, 'burst', benchCase.burst));
-    }
-  }
-
-  if (report.skipped.length > 0) {
-    console.log('');
-    console.log('Skipped:');
-    for (const skipped of report.skipped) {
-      console.log(`- ${skipped.name}: ${skipped.reason}`);
-    }
-  }
-
-  console.log('');
-  console.log(`JSON: ${jsonPath}`);
-  console.log(`Markdown: ${markdownPath}`);
-}
-
-function readDotenv(path) {
-  const values = new Map();
-  if (!existsSync(path)) {
-    return values;
-  }
-
-  const lines = readFileSync(path, 'utf8').split(/\r?\n/);
-  for (const line of lines) {
-    const trimmed = line.trim();
-    if (!trimmed || trimmed.startsWith('#')) {
-      continue;
-    }
-    const match = trimmed.match(/^([A-Za-z_][A-Za-z0-9_]*)\s*=\s*(.*)$/);
-    if (!match) {
-      continue;
-    }
-    values.set(match[1], unquote(match[2].trim()));
-  }
+async function many(size, operation) {
+  const values = [];
+  for (let index = 0; index < size; index += 1) values.push(await operation());
   return values;
 }
 
-function unquote(value) {
-  if (
-    (value.startsWith('"') && value.endsWith('"')) ||
-    (value.startsWith("'") && value.endsWith("'"))
-  ) {
-    return value.slice(1, -1);
+async function request(entry) {
+  const started = performance.now();
+  try {
+    const headers = { accept: 'application/json' };
+    if (entry.auth) headers.authorization = `Bearer ${token}`;
+    const response = await fetch(entry.url, { headers, signal: AbortSignal.timeout(timeout) });
+    const bytes = (await response.arrayBuffer()).byteLength;
+    return sample(response.ok, started, response.status, bytes, response.ok ? null : `HTTP ${response.status}`);
+  } catch (error) {
+    return sample(false, started, null, 0, message(error));
   }
+}
+
+async function push() {
+  let fixture;
+  try {
+    fixture = await pushFixture();
+    const result = await command(
+      ['git', '-c', 'push.recurseSubmodules=no', 'push', fixture.remote, `HEAD:${fixture.branch}`],
+      fixture.dir,
+      authEnvironment(fixture.remote, fixture.pushToken, fixture.pushIntent),
+    );
+    if (result.ok) await apiJson(`/v1/repos/${fixture.owner}/${fixture.repo}/push-intents/complete`, {
+      method: 'POST', body: { token: fixture.pushIntent },
+    });
+    return result;
+  } catch (error) {
+    return sample(false, performance.now(), null, 0, message(error));
+  } finally {
+    if (fixture) await Promise.allSettled([
+      apiJson(`/v1/repos/${encodeURIComponent(fixture.owner)}/${encodeURIComponent(fixture.repo)}`, { method: 'DELETE' }),
+      rm(fixture.dir, { recursive: true, force: true }),
+    ]);
+  }
+}
+
+async function pushFixture() {
+  await mkdir(outputRoot, { recursive: true });
+  const created = await apiJson('/v1/repos', {
+    method: 'POST',
+    body: { name: `bench-${Date.now()}-${Math.random().toString(16).slice(2)}`, visibility: 'Public' },
+  });
+  const fixture = {
+    owner: created.repo.owner_handle,
+    repo: created.repo.name,
+    remote: new URL(new URL(created.init.git_remote_url).pathname, `${api}/`).toString(),
+    branch: created.init.push_branch || 'main',
+    pushToken: created.init.token?.secret ?? created.init.push_token?.secret,
+    dir: await mkdtemp(join(outputRoot, 'push-')),
+  };
+  for (const args of [
+    ['init'],
+    ['symbolic-ref', 'HEAD', 'refs/heads/main'],
+    ['config', 'user.email', 'bench@scope.local'],
+    ['config', 'user.name', 'Scope Bench'],
+  ]) await checkedGit(args, fixture.dir);
+  await writeFile(join(fixture.dir, 'README.md'), '# Scope benchmark\n');
+  await checkedGit(['add', '--all'], fixture.dir);
+  await checkedGit(['commit', '-m', 'Benchmark fixture'], fixture.dir);
+  const config = await apiJson(`/v1/repos/${fixture.owner}/${fixture.repo}/config`);
+  const headOid = await gitOutput(['rev-parse', 'HEAD'], fixture.dir);
+  const intent = await apiJson(`/v1/repos/${fixture.owner}/${fixture.repo}/push-intents`, {
+    method: 'POST',
+    body: { head_oid: headOid, base_config_hash: config.config_hash, config: config.config },
+  });
+  fixture.pushIntent = intent.token;
+  return fixture;
+}
+
+async function checkedGit(args, cwd) {
+  const result = await command(['git', ...args], cwd);
+  if (!result.ok) throw new Error(result.error || `git ${args.join(' ')} failed`);
+}
+
+async function gitOutput(args, cwd) {
+  const result = await new Promise((resolve, reject) => {
+    const child = spawn('git', args, { cwd, stdio: ['ignore', 'pipe', 'pipe'] });
+    const chunks = [];
+    child.stdout.on('data', (chunk) => chunks.push(chunk));
+    child.on('error', reject);
+    child.on('close', (code) => code === 0 ? resolve(Buffer.concat(chunks).toString('utf8').trim()) : reject(new Error(`git ${args.join(' ')} failed`)));
+  });
+  return result;
+}
+
+function command([program, ...args], cwd, extraEnv) {
+  const started = performance.now();
+  return new Promise((resolveSample) => {
+    const child = spawn(program, args, { cwd, env: { ...process.env, ...extraEnv }, stdio: ['ignore', 'pipe', 'pipe'] });
+    const chunks = [];
+    child.stdout.on('data', (chunk) => chunks.push(chunk));
+    child.stderr.on('data', (chunk) => chunks.push(chunk));
+    const timer = setTimeout(() => child.kill('SIGKILL'), timeout);
+    child.on('error', (error) => resolveSample(sample(false, started, null, 0, error.message)));
+    child.on('close', (code, signal) => {
+      clearTimeout(timer);
+      const bytes = chunks.reduce((total, chunk) => total + chunk.length, 0);
+      const error = code === 0 ? null : Buffer.concat(chunks).toString('utf8').slice(-1000) || String(signal);
+      resolveSample(sample(code === 0, started, code, bytes, error));
+    });
+  });
+}
+
+async function apiJson(path, options = {}) {
+  const headers = { accept: 'application/json', authorization: `Bearer ${token}` };
+  if (options.body) headers['content-type'] = 'application/json';
+  const response = await fetch(`${api}${path}`, {
+    method: options.method || 'GET', headers,
+    body: options.body ? JSON.stringify(options.body) : undefined,
+    signal: AbortSignal.timeout(timeout),
+  });
+  const body = await response.text();
+  if (!response.ok) throw new Error(`${options.method || 'GET'} ${path}: HTTP ${response.status} ${body.slice(0, 300)}`);
+  return body ? JSON.parse(body) : null;
+}
+
+function authEnvironment(destination, secret, pushIntent) {
+  const index = Number.parseInt(process.env.GIT_CONFIG_COUNT || '0', 10) || 0;
+  return {
+    GIT_CONFIG_COUNT: String(index + 2),
+    [`GIT_CONFIG_KEY_${index}`]: `http.${destination}.extraHeader`,
+    [`GIT_CONFIG_VALUE_${index}`]: `Authorization: Bearer ${secret}`,
+    [`GIT_CONFIG_KEY_${index + 1}`]: `http.${destination}.extraHeader`,
+    [`GIT_CONFIG_VALUE_${index + 1}`]: `X-Scope-Push-Intent: ${pushIntent}`,
+  };
+}
+
+function sample(ok, started, status, bytes, error) {
+  return { ok, durationMs: performance.now() - started, status, bytes, error };
+}
+
+function stats(values) {
+  const durations = values.map(({ durationMs }) => durationMs).sort((a, b) => a - b);
+  const at = (point) => round(durations[Math.max(0, Math.ceil(durations.length * point) - 1)] || 0);
+  return {
+    count: values.length,
+    ok: values.filter(({ ok }) => ok).length,
+    meanMs: round(durations.reduce((sum, value) => sum + value, 0) / durations.length),
+    p50Ms: at(0.5), p95Ms: at(0.95),
+    bytes: values.reduce((sum, value) => sum + value.bytes, 0),
+  };
+}
+
+function markdown(value) {
+  const rows = value.cases.map((entry) => `| ${entry.name} | ${entry.ok ? 'yes' : 'no'} | ${entry.sequential.meanMs} | ${entry.sequential.p95Ms} |`).join('\n');
+  return `# Scope benchmark\n\nGenerated: ${value.generatedAt}\n\n| Case | OK | Mean ms | p95 ms |\n|---|---:|---:|---:|\n${rows}\n`;
+}
+
+async function ready() {
+  const response = await fetch(`${api}/readyz`, { signal: AbortSignal.timeout(timeout) });
+  if (!response.ok) throw new Error(`API is not ready at ${api}`);
+}
+
+function number(name, fallback) {
+  const value = Number.parseInt(process.env[name] || String(fallback), 10);
+  if (!Number.isInteger(value) || value < 1) throw new Error(`${name} must be positive`);
   return value;
 }
 
-function envValue(name) {
-  return process.env[name] || ROOT_ENV.get(name) || '';
-}
-
-function readStoredCliSessionToken(apiUrl) {
-  if (process.platform === 'darwin' || process.platform === 'win32') {
-    // The CLI stores sessions in the OS keychain on macOS/Windows. Keep this
-    // harness dependency-free and use SCOPE_BENCH_AUTH_TOKEN on those systems.
-    return '';
-  }
-
-  const configDir = localConfigDir();
-  if (!configDir) {
-    return '';
-  }
-
-  const sessionPath = join(
-    configDir,
-    'scope',
-    'sessions',
-    sessionStorageKey(apiUrl),
-  );
-  try {
-    const token = readFileSync(sessionPath, 'utf8').trim();
-    return token.startsWith('scope_cli_') ? token : '';
-  } catch {
-    return '';
-  }
-}
-
-function localConfigDir() {
-  if (process.env.XDG_CONFIG_HOME) {
-    return process.env.XDG_CONFIG_HOME;
-  }
-  if (process.env.HOME) {
-    return join(process.env.HOME, '.config');
-  }
-  if (process.env.USERPROFILE) {
-    return join(process.env.USERPROFILE, '.config');
-  }
-  return '';
-}
-
-function sessionStorageKey(apiUrl) {
-  return `cli-session-${Buffer.from(apiUrl, 'utf8').toString('hex')}`;
-}
-
-function normalizeHandle(value) {
-  let handle = '';
-  let lastWasSeparator = false;
-  for (const char of value.trim()) {
-    const code = char.charCodeAt(0);
-    if (
-      (code >= 48 && code <= 57) ||
-      (code >= 65 && code <= 90) ||
-      (code >= 97 && code <= 122)
-    ) {
-      handle += char.toLowerCase();
-      lastWasSeparator = false;
-    } else if ((char === '-' || char === '_') && !lastWasSeparator) {
-      handle += '-';
-      lastWasSeparator = true;
-    }
-  }
-
-  handle = handle.replace(/^-+|-+$/g, '');
-  return handle && handle.length <= 40 ? handle : null;
-}
-
-function intEnv(name, fallback) {
-  const raw = envValue(name);
-  if (!raw) {
-    return fallback;
-  }
-  return Number.parseInt(raw, 10);
-}
-
-function boolEnv(name, fallback) {
-  const raw = envValue(name).trim().toLowerCase();
-  if (!raw) {
-    return fallback;
-  }
-  return ['1', 'true', 'yes', 'on'].includes(raw);
-}
-
-function timeoutSignal(ms) {
-  if (typeof AbortSignal.timeout === 'function') {
-    return AbortSignal.timeout(ms);
-  }
-  const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), ms);
-  timeout.unref?.();
-  return controller.signal;
-}
-
-function timestampSlug(date) {
-  return date.toISOString().replace(/[:.]/g, '-');
-}
-
-function trimTrailingSlash(value) {
-  return value.replace(/\/+$/, '');
-}
-
-function segment(value) {
-  return encodeURIComponent(value);
-}
-
-function commandString(benchCase) {
-  return [benchCase.command, ...benchCase.args].join(' ');
-}
-
-function targetForCase(benchCase) {
-  if (benchCase.kind === 'http') {
-    return benchCase.url;
-  }
-  if (benchCase.kind === 'push-fixture') {
-    return 'disposable repo first push via git receive-pack';
-  }
-  return commandString(benchCase);
-}
-
-function value(input) {
-  return input === null ? 'n/a' : String(input);
-}
-
-function escapePipe(input) {
-  return String(input).replace(/\|/g, '\\|');
-}
-
-function round(value) {
-  return Math.round(value * 100) / 100;
-}
+function handle(value) { return value.toLowerCase().replace(/[^a-z0-9_-]+/g, '-').replace(/^-|-$/g, '') || 'dev'; }
+function round(value) { return Math.round(value * 100) / 100; }
+function message(error) { return error instanceof Error ? error.message : String(error); }

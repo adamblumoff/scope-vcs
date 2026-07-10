@@ -4,8 +4,7 @@ use crate::domain::repo_config::{
     RepoConfig, repo_config_fingerprint as core_repo_config_fingerprint,
 };
 use crate::domain::store::{
-    AppCatalog, RepoPublicationState, RepositoryAccess, RepositoryActor, SourceBlob,
-    StoredRepository, repo_id,
+    RepoPublicationState, RepositoryAccess, SourceBlob, StoredRepository, repo_id,
 };
 use crate::{
     auth::clerk::ClerkVerifier,
@@ -164,7 +163,7 @@ impl SourceBlobCleanupFailure {
             sha256: blob.sha256.clone(),
             git_oid: blob.git_oid.clone(),
             size_bytes: blob.size_bytes,
-            error: error.message,
+            error: error.into_message(),
         }
     }
 }
@@ -187,13 +186,13 @@ impl SourceBlobStorageDeleteReport {
 }
 
 impl AppState {
-    pub fn from_env() -> anyhow::Result<Self> {
+    pub async fn from_env() -> anyhow::Result<Self> {
         let repo_root = git_repo_root();
         let data_dir = data_dir(&repo_root);
         ensure_private_dir(&data_dir).map_err(|error| anyhow::anyhow!(error.message))?;
-        let push_intent_signing_key =
-            push_intent_signing_key(&data_dir).map_err(|error| anyhow::anyhow!(error.message))?;
-        let metadata = MetadataStore::connect_from_env()?;
+        let push_intent_signing_key = push_intent_signing_key(&data_dir)
+            .map_err(|error| anyhow::anyhow!(error.into_message()))?;
+        let metadata = MetadataStore::connect_from_env().await?;
         let repo_events = RepoChangeBus::default();
         let runtime_budgets = Arc::new(RuntimeBudgets::from_env()?);
         let object_store = Arc::new(BudgetedObjectStore::new(
@@ -214,18 +213,20 @@ impl AppState {
             repo_events,
             push_intent_signing_key,
         };
-        best_effort_drain_pending_repo_storage_deletions(&state);
-        best_effort_drain_pending_source_blob_deletions(&state);
+        best_effort_drain_pending_repo_storage_deletions(&state).await;
+        best_effort_drain_pending_source_blob_deletions(&state).await;
         Ok(state)
     }
 
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-support"))]
     pub(crate) fn test_state() -> Self {
-        use crate::{domain::store::app_catalog, persistence::test_data_dir};
+        use crate::persistence::test_data_dir;
 
         let runtime_budgets = Arc::new(RuntimeBudgets::from_config(Default::default()));
+        let target = crate::db::TestDatabaseTarget::required().unwrap();
+        let metadata = MetadataStore::connect_fresh_for_tests(&target).unwrap();
         Self {
-            metadata: MetadataStore::memory(app_catalog()),
+            metadata,
             data_dir: Arc::new(test_data_dir()),
             clerk: ClerkVerifier::new_with_policy(
                 Some("https://clerk.test".to_string()),
@@ -297,12 +298,18 @@ impl AppState {
         Ok(cache_root)
     }
 
-    pub(crate) fn publish_repo_change(&self, repo_id: &str, version: u64, reason: &'static str) {
+    pub(crate) async fn publish_repo_change(
+        &self,
+        repo_id: &str,
+        version: u64,
+        reason: &'static str,
+    ) {
         let event = RepoChangeEvent::new(repo_id, version, reason);
         self.repo_events.publish_event(event.clone());
         if let Err(error) = self
             .metadata
             .notify_repo_change(self.repo_events.origin_id(), &event)
+            .await
         {
             tracing::warn!(
                 repo_id,
@@ -416,14 +423,15 @@ fn verify_push_intent_signature(
         .map_err(|_| ApiError::forbidden("valid Scope push intent required"))
 }
 
-pub(crate) fn find_repo(
+pub(crate) async fn find_repo(
     state: &AppState,
     owner: &str,
     name: &str,
 ) -> Result<StoredRepository, ApiError> {
     state
         .metadata
-        .repository(owner, name)?
+        .repository(owner, name)
+        .await?
         .ok_or_else(|| ApiError::not_found(format!("repo {owner}/{name} not found")))
 }
 
@@ -459,57 +467,22 @@ pub(crate) fn can_read_path(
     principal: &Principal,
     path: &ScopePath,
 ) -> Result<bool, ApiError> {
-    if principal.kind == crate::domain::policy::PrincipalKind::Public {
-        return Ok(
-            repo.record.publication_state == RepoPublicationState::Published
-                && repo.policy.can_read(path, false),
-        );
-    }
-
-    let access = access_for_principal(_state, repo, principal)?;
-    Ok(match access.actor {
-        RepositoryActor::Owner => repo.policy.can_read(path, true),
-        RepositoryActor::Member => {
-            repo.record.publication_state == RepoPublicationState::Published
-                && repo.policy.can_read(path, access.can_read_private_files)
-        }
-        RepositoryActor::Public => false,
-    })
+    Ok(repo.can_read_path(principal, path))
 }
 
-pub(crate) fn repo_source_blobs(repo: &StoredRepository) -> Vec<SourceBlob> {
-    repo.source_blobs()
-}
-
-pub(crate) fn delete_unreferenced_source_blobs(
+pub(crate) async fn delete_unreferenced_source_blobs(
     state: &AppState,
     blobs: &[SourceBlob],
 ) -> Result<(), ApiError> {
-    let blobs = blobs.to_vec();
     let blobs = state
         .metadata
-        .read(move |catalog| Ok(unreferenced_source_blobs(catalog, &blobs)))?;
+        .unreferenced_source_blobs(blobs.to_vec())
+        .await?;
     let report = delete_source_blob_storage(state, &blobs);
     match report.first_error() {
         Some(error) => Err(error),
         None => Ok(()),
     }
-}
-
-fn unreferenced_source_blobs(catalog: &AppCatalog, blobs: &[SourceBlob]) -> Vec<SourceBlob> {
-    let referenced = catalog
-        .repositories
-        .values()
-        .flat_map(repo_source_blobs)
-        .chain(
-            catalog
-                .requests
-                .values()
-                .filter_map(|request| request.git_snapshot.clone()),
-        )
-        .map(|blob| blob.object_key)
-        .collect::<std::collections::BTreeSet<_>>();
-    unreferenced_source_blobs_by_key(&referenced, blobs)
 }
 
 fn unreferenced_source_blobs_by_key(
@@ -552,62 +525,72 @@ fn delete_source_blob_storage(
 
 fn delete_source_blob_storage_entry(state: &AppState, blob: &SourceBlob) -> Result<(), ApiError> {
     crate::git::storage::delete_raw_git_snapshot_cache(state, blob)?;
-    state.object_store.delete(&blob.object_key)
+    Ok(state.object_store.delete(&blob.object_key)?)
 }
 
-pub(crate) fn drain_pending_cleanup(state: &AppState) -> Result<CleanupDrainReport, ApiError> {
+pub(crate) async fn drain_pending_cleanup(
+    state: &AppState,
+) -> Result<CleanupDrainReport, ApiError> {
     Ok(CleanupDrainReport {
-        repo_storage: drain_pending_repo_storage_deletions_report(state)?,
-        source_blobs: drain_pending_source_blob_deletions_report(state)?,
+        repo_storage: drain_pending_repo_storage_deletions_report(state).await?,
+        source_blobs: drain_pending_source_blob_deletions_report(state).await?,
     })
 }
 
-pub(crate) fn drain_pending_repo_storage_deletions_report(
+pub(crate) async fn drain_pending_repo_storage_deletions_report(
     state: &AppState,
 ) -> Result<RepoStorageCleanupDrainReport, ApiError> {
     let metadata = state.metadata.clone();
     let state = state.clone();
-    metadata.update_pending_repo_storage_deletions(move |pending, live_repo_ids| {
-        let mut report = RepoStorageCleanupDrainReport::default();
-        let mut retained = Vec::new();
-        for cleanup in pending {
-            if live_repo_ids.contains(&repo_id(&cleanup.owner_handle, &cleanup.repo_name)) {
-                retained.push(cleanup);
-                continue;
-            }
-
-            report.attempted += 1;
-            match crate::git::storage::delete_repo_storage(
-                &state,
-                &cleanup.owner_handle,
-                &cleanup.repo_name,
-            ) {
-                Ok(()) => {
-                    report.deleted += 1;
+    let batch = metadata.repo_storage_cleanup_batch().await?;
+    let mut report = RepoStorageCleanupDrainReport::default();
+    let mut retained = Vec::new();
+    for cleanup in &batch.pending {
+        let cleanup_repo_id = repo_id(&cleanup.owner_handle, &cleanup.repo_name);
+        let metadata = metadata.clone();
+        let state = state.clone();
+        let (live_repo, delete_result) = metadata
+            .with_repo_storage_lock(&cleanup_repo_id, || async {
+                if metadata.repository_exists(&cleanup_repo_id).await? {
+                    return Ok((true, Ok(())));
                 }
-                Err(error) => {
-                    tracing::warn!(
-                        ?error,
-                        owner = %cleanup.owner_handle,
-                        repo = %cleanup.repo_name,
-                        "failed to clean deleted repo filesystem storage"
-                    );
-                    report.failed.push(RepoStorageCleanupFailure {
-                        owner_handle: cleanup.owner_handle.clone(),
-                        repo_name: cleanup.repo_name.clone(),
-                        error: error.message,
-                    });
-                    retained.push(cleanup);
-                }
+                Ok((
+                    false,
+                    crate::git::storage::delete_repo_storage(
+                        &state,
+                        &cleanup.owner_handle,
+                        &cleanup.repo_name,
+                    ),
+                ))
+            })
+            .await?;
+        if live_repo {
+            retained.push(cleanup.clone());
+            continue;
+        }
+        report.attempted += 1;
+        match delete_result {
+            Ok(()) => report.deleted += 1,
+            Err(error) => {
+                tracing::warn!(?error, owner = %cleanup.owner_handle, repo = %cleanup.repo_name, "failed to clean deleted repo filesystem storage");
+                report.failed.push(RepoStorageCleanupFailure {
+                    owner_handle: cleanup.owner_handle.clone(),
+                    repo_name: cleanup.repo_name.clone(),
+                    error: error.into_message(),
+                });
+                retained.push(cleanup.clone());
             }
         }
-        report.retained = retained.len();
-        Ok((report, retained))
-    })
+    }
+    report.retained = retained.len();
+    metadata
+        .finish_repo_storage_cleanup(batch, &retained)
+        .await?;
+    Ok(report)
 }
 
-pub(crate) fn drain_pending_repo_storage_deletions(state: &AppState) -> Result<(), ApiError> {
-    let report = drain_pending_repo_storage_deletions_report(state)?;
+pub(crate) async fn drain_pending_repo_storage_deletions(state: &AppState) -> Result<(), ApiError> {
+    let report = drain_pending_repo_storage_deletions_report(state).await?;
     match report.failed.first() {
         Some(failure) => Err(ApiError::service_unavailable(format!(
             "failed to clean deleted repo storage {}/{}: {}",
@@ -617,13 +600,13 @@ pub(crate) fn drain_pending_repo_storage_deletions(state: &AppState) -> Result<(
     }
 }
 
-pub(crate) fn best_effort_drain_pending_repo_storage_deletions(state: &AppState) {
-    if let Err(error) = drain_pending_repo_storage_deletions(state) {
+pub(crate) async fn best_effort_drain_pending_repo_storage_deletions(state: &AppState) {
+    if let Err(error) = drain_pending_repo_storage_deletions(state).await {
         tracing::warn!(?error, "failed to drain pending repo storage deletions");
     }
 }
 
-pub(crate) fn persist_pending_source_blob_deletions(
+pub(crate) async fn persist_pending_source_blob_deletions(
     state: &AppState,
     blobs: &[SourceBlob],
 ) -> Result<(), ApiError> {
@@ -631,18 +614,24 @@ pub(crate) fn persist_pending_source_blob_deletions(
         return Ok(());
     }
     let blobs = blobs.to_vec();
-    state.metadata.queue_pending_source_blob_deletions(blobs)
+    Ok(state
+        .metadata
+        .queue_pending_source_blob_deletions(blobs)
+        .await?)
 }
 
-pub(crate) fn best_effort_cleanup_rollback_source_blobs(state: &AppState, blobs: &[SourceBlob]) {
+pub(crate) async fn best_effort_cleanup_rollback_source_blobs(
+    state: &AppState,
+    blobs: &[SourceBlob],
+) {
     if blobs.is_empty() {
         return;
     }
-    match persist_pending_source_blob_deletions(state, blobs) {
-        Ok(()) => best_effort_drain_pending_source_blob_deletions(state),
+    match persist_pending_source_blob_deletions(state, blobs).await {
+        Ok(()) => best_effort_drain_pending_source_blob_deletions(state).await,
         Err(queue_error) => {
             tracing::warn!(?queue_error, "failed to queue rollback source blob cleanup");
-            if let Err(delete_error) = delete_unreferenced_source_blobs(state, blobs) {
+            if let Err(delete_error) = delete_unreferenced_source_blobs(state, blobs).await {
                 tracing::warn!(
                     ?delete_error,
                     "failed to delete rollback source blobs without queued retry"
@@ -652,34 +641,35 @@ pub(crate) fn best_effort_cleanup_rollback_source_blobs(state: &AppState, blobs:
     }
 }
 
-pub(crate) fn drain_pending_source_blob_deletions_report(
+pub(crate) async fn drain_pending_source_blob_deletions_report(
     state: &AppState,
 ) -> Result<SourceBlobCleanupDrainReport, ApiError> {
     let metadata = state.metadata.clone();
     let state = state.clone();
-    metadata.update_pending_source_blob_deletions(move |pending, referenced_blob_keys| {
-        let mut report = SourceBlobCleanupDrainReport::default();
-        if pending.is_empty() {
-            return Ok((report, pending));
-        }
-
-        let unreferenced = unreferenced_source_blobs_by_key(referenced_blob_keys, &pending);
-        report.skipped_referenced = pending.len().saturating_sub(unreferenced.len());
-        report.attempted = unreferenced.len();
-        let delete_report = delete_source_blob_storage(&state, &unreferenced);
-        report.deleted = delete_report.deleted_keys.len();
-        report.failed_object_deletes = delete_report.failed;
-        let retained = unreferenced
-            .into_iter()
-            .filter(|blob| !delete_report.deleted_keys.contains(&blob.object_key))
-            .collect::<Vec<_>>();
-        report.retained = retained.len();
-        Ok((report, retained))
-    })
+    let batch = metadata.source_blob_cleanup_batch().await?;
+    let unreferenced =
+        unreferenced_source_blobs_by_key(&batch.referenced_blob_keys, &batch.pending);
+    let mut report = SourceBlobCleanupDrainReport {
+        skipped_referenced: batch.pending.len().saturating_sub(unreferenced.len()),
+        attempted: unreferenced.len(),
+        ..Default::default()
+    };
+    let delete_report = delete_source_blob_storage(&state, &unreferenced);
+    report.deleted = delete_report.deleted_keys.len();
+    report.failed_object_deletes = delete_report.failed;
+    let retained = unreferenced
+        .into_iter()
+        .filter(|blob| !delete_report.deleted_keys.contains(&blob.object_key))
+        .collect::<Vec<_>>();
+    report.retained = retained.len();
+    metadata
+        .finish_source_blob_cleanup(batch, &retained)
+        .await?;
+    Ok(report)
 }
 
-pub(crate) fn drain_pending_source_blob_deletions(state: &AppState) -> Result<(), ApiError> {
-    let report = drain_pending_source_blob_deletions_report(state)?;
+pub(crate) async fn drain_pending_source_blob_deletions(state: &AppState) -> Result<(), ApiError> {
+    let report = drain_pending_source_blob_deletions_report(state).await?;
     match report.failed_object_deletes.first().map(|failure| {
         ApiError::service_unavailable(format!(
             "failed to clean source blob storage {}: {}",
@@ -691,8 +681,8 @@ pub(crate) fn drain_pending_source_blob_deletions(state: &AppState) -> Result<()
     }
 }
 
-pub(crate) fn best_effort_drain_pending_source_blob_deletions(state: &AppState) {
-    if let Err(error) = drain_pending_source_blob_deletions(state) {
+pub(crate) async fn best_effort_drain_pending_source_blob_deletions(state: &AppState) {
+    if let Err(error) = drain_pending_source_blob_deletions(state).await {
         tracing::warn!(?error, "failed to drain pending source blob deletions");
     }
 }
@@ -720,7 +710,7 @@ mod tests {
         let token = encode_push_intent(&state.push_intent_signing_key, &expired).unwrap();
 
         let error = state.validate_push_intent_secret(&token).unwrap_err();
-        assert_eq!(error.status, StatusCode::FORBIDDEN);
+        assert_eq!(error.status(), StatusCode::FORBIDDEN);
 
         let validated = state.validate_completed_push_intent_secret(&token).unwrap();
         assert_eq!(validated.repo_id, expired.repo_id);

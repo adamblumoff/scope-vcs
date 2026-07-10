@@ -4,6 +4,8 @@ use sea_orm::{
     ConnectionTrait, EntityTrait, QuerySelect, Set, TryInsertResult,
     sea_query::{LockType, OnConflict},
 };
+#[cfg(test)]
+use sea_orm::{DatabaseBackend, Statement};
 
 pub async fn ensure_metadata_lock_row(
     db: &sea_orm::DatabaseConnection,
@@ -25,31 +27,41 @@ pub async fn ensure_metadata_lock_row(
     Ok(())
 }
 
-pub async fn acquire_metadata_read_lock<C>(conn: &C) -> Result<(), ApiError>
+pub async fn acquire_aggregate_lock<C>(conn: &C, namespace: &str, id: &str) -> Result<(), ApiError>
 where
     C: ConnectionTrait,
 {
-    acquire_metadata_lock(conn, LockType::Share).await
-}
+    #[cfg(test)]
+    conn.execute(Statement::from_sql_and_values(
+        DatabaseBackend::Postgres,
+        "SELECT set_config('application_name', $1, true)",
+        [format!("scope-test-lock:{namespace}").into()],
+    ))
+    .await
+    .map_err(ApiError::internal)?;
 
-pub async fn acquire_metadata_write_lock<C>(conn: &C) -> Result<(), ApiError>
-where
-    C: ConnectionTrait,
-{
-    acquire_metadata_lock(conn, LockType::Update).await
-}
-
-async fn acquire_metadata_lock<C>(conn: &C, lock: LockType) -> Result<(), ApiError>
-where
-    C: ConnectionTrait,
-{
-    let row = entities::metadata_lock::Entity::find_by_id(METADATA_LOCK_KEY.to_string())
-        .lock(lock)
+    let key = format!("{namespace}:{id}");
+    entities::metadata_lock::Entity::insert(entities::metadata_lock::ActiveModel {
+        key: Set(key.clone()),
+    })
+    .on_conflict(
+        OnConflict::column(entities::metadata_lock::Column::Key)
+            .do_nothing()
+            .to_owned(),
+    )
+    .do_nothing()
+    .exec(conn)
+    .await
+    .map_err(ApiError::internal)?;
+    let row = entities::metadata_lock::Entity::find_by_id(key)
+        .lock(LockType::Update)
         .one(conn)
         .await
         .map_err(ApiError::internal)?;
     if row.is_none() {
-        return Err(ApiError::internal_message("metadata lock row is missing"));
+        return Err(ApiError::internal_message(
+            "aggregate lock row disappeared during acquisition",
+        ));
     }
     Ok(())
 }

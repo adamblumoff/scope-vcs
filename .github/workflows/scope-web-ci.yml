@@ -61,20 +61,13 @@ jobs:
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
 
-      - name: Check line limit
-        run: pnpm check:line-limit
-
       - name: Test
         run: pnpm test
 
-      - name: Typecheck
-        run: pnpm typecheck
-
-      - name: React Doctor
-        run: pnpm check:react-doctor
+      - name: Check
+        run: pnpm check
 
       - name: Build
-        if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main'
         run: pnpm build
 
   deploy:
@@ -97,8 +90,6 @@ jobs:
           rm -rf .railway-upload
           mkdir -p .railway-upload
           cp -a web/. .railway-upload/
-          mkdir -p .railway-upload/web
-          cp -a web/. .railway-upload/web/
 
       - name: Install Railway CLI
         run: npm install -g @railway/cli@5.23.1

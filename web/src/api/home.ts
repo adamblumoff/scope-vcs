@@ -9,6 +9,7 @@ import type {
   HomeState,
   RepoSummary,
 } from './types'
+import { ApiRouteTemplates, buildApiPath } from './types.generated'
 
 export async function loadHomeForRequest(): Promise<HomeState> {
   const cliInstallCommands = buildCliInstallCommands()
@@ -16,8 +17,12 @@ export async function loadHomeForRequest(): Promise<HomeState> {
 
   try {
     const [account, repositories] = await Promise.all([
-      api.get<AccountSession>('/v1/session', { auth: 'required' }),
-      api.get<RepoSummary[]>('/v1/repos', { auth: 'required' }),
+      api.get<AccountSession>(buildApiPath(ApiRouteTemplates.accountSession), {
+        auth: 'required',
+      }),
+      api.get<RepoSummary[]>(buildApiPath(ApiRouteTemplates.repos), {
+        auth: 'required',
+      }),
     ])
 
     return {

@@ -18,18 +18,12 @@ The command starts:
 
 - web at `http://localhost:3000`
 - API at `http://localhost:8080`
-- worker when `SCOPE_METADATA_STORE=postgres`
+- worker
 
-Local API runs with `cargo run -p api --features local-dev`, in-memory metadata
-seeded with demo repositories by default, and filesystem object storage under
-`.scope/dev`. The script strips inherited Railway variables and refuses
-production-looking Clerk or database settings.
-
-The worker is skipped for the default in-memory metadata mode because a
-separate process cannot share that in-memory catalog. To exercise worker-owned
-outbox jobs locally, set `SCOPE_METADATA_STORE=postgres` and a safe local
-`DATABASE_URL` in the environment or root `.env.local` before running
-`./dev/scope-dev up`.
+Local API runs with `cargo run -p api --features local-dev`, Postgres metadata
+seeded with demo repositories, and filesystem object storage under `.scope/dev`.
+Set a safe local `DATABASE_URL` in root `.env.local`. The script strips inherited
+Railway variables and refuses production-looking Clerk or database settings.
 
 `web/.env.local` must contain Clerk development keys. The script derives
 `CLERK_ISSUER` for the local API from `VITE_CLERK_PUBLISHABLE_KEY`.
@@ -45,3 +39,13 @@ Run `./dev/scope-dev bench` while the stack is up to collect the Phase 0 local
 data-architecture baseline. The benchmark harness lives under `bench/`, uses
 the seeded local repos, reuses the local Scope CLI session when available, and
 writes ignored reports to `.tmp/bench/phase0/`.
+
+With the stack running, exercise the highest-value anonymous web routes with:
+
+```bash
+(cd web && pnpm test:smoke)
+```
+
+The smoke suite defaults to `http://localhost:3000` and `dev/public-demo`.
+Set `SCOPE_WEB_BASE_URL` to a Tailscale URL or `SCOPE_SMOKE_REPO` to the
+`owner/public-demo` pair seeded by another development stack.

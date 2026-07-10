@@ -5,7 +5,7 @@ use crate::{
         projection::{ProjectionViewKey, project_graph},
         requests::{
             REQUEST_REF_PREFIX, RecordRequestRevisionInput, RecordWorkingRequestUploadInput,
-            Request, RequestActorRole, RequestBaseAudience, RequestState,
+            Request, RequestBaseAudience, RequestState,
         },
         store::{RepoPublicationState, RepositoryActor, SourceBlob},
     },
@@ -25,6 +25,7 @@ use crate::{
     persistence::unix_now,
     state::{AppState, find_repo},
 };
+use access::{ensure_request_ref_update_allowed, request_actor_can_edit_ref};
 use sha2::{Digest, Sha256};
 use std::{
     collections::{BTreeMap, BTreeSet},
@@ -40,6 +41,8 @@ const REQUEST_REF_LOCK_TIMEOUT: Duration = Duration::from_secs(10);
 const REQUEST_REF_LOCK_RETRY: Duration = Duration::from_millis(10);
 const REQUEST_REF_STALE_LOCK_AFTER_SECS: u64 = 30 * 60;
 static STALE_GIT_LOCK_REMOVAL: Mutex<()> = Mutex::new(());
+
+mod access;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct RequestRefUpdate {
@@ -115,7 +118,7 @@ pub(crate) fn non_request_refs_changed(
         .any(|refname| before.get(refname) != after.get(refname))
 }
 
-pub(crate) fn actor_has_open_editable_request(
+pub(crate) async fn actor_has_open_editable_request(
     state: &AppState,
     repo_id: &str,
     actor_user_id: &str,
@@ -123,18 +126,19 @@ pub(crate) fn actor_has_open_editable_request(
 ) -> Result<bool, ApiError> {
     Ok(state
         .metadata
-        .requests_by_repo_id(repo_id)?
+        .requests_by_repo_id(repo_id)
+        .await?
         .into_iter()
         .any(|request| request_actor_can_edit_ref(&request, actor_user_id, current_actor)))
 }
 
-pub(crate) fn ensure_request_receive_pack_staging_repo(
+pub(crate) async fn ensure_request_receive_pack_staging_repo(
     state: &AppState,
     owner: &str,
     repo_name: &str,
     actor_user_id: &str,
 ) -> Result<PathBuf, ApiError> {
-    let repo = find_repo(state, owner, repo_name)?;
+    let repo = find_repo(state, owner, repo_name).await?;
     if repo.record.publication_state != RepoPublicationState::Published {
         return Err(ApiError::not_found(format!(
             "repo {owner}/{repo_name} not found"
@@ -142,7 +146,8 @@ pub(crate) fn ensure_request_receive_pack_staging_repo(
     }
     let access = repo.access_for_user_id(actor_user_id);
     if access.actor == RepositoryActor::Public
-        && !actor_has_open_editable_request(state, &repo.record.id, actor_user_id, access.actor)?
+        && !actor_has_open_editable_request(state, &repo.record.id, actor_user_id, access.actor)
+            .await?
     {
         return Err(ApiError::not_found(format!(
             "repo {owner}/{repo_name} not found"
@@ -190,15 +195,16 @@ pub(crate) fn ensure_request_receive_pack_staging_repo(
         ],
         "cloning request receive-pack staging repo",
     )?;
-    let setup_result = (|| {
+    let setup_result = async {
         run_git(
             Some(&repo_root),
             &["config", "http.receivepack", "true"],
             "enabling request receive-pack",
         )?;
-        seed_editable_request_refs(state, owner, repo_name, actor_user_id, &repo_root)?;
+        seed_editable_request_refs(state, owner, repo_name, actor_user_id, &repo_root).await?;
         install_request_pre_receive_hook(&repo_root)
-    })();
+    }
+    .await;
     if let Err(error) = setup_result {
         let _ = fs::remove_dir_all(&repo_root);
         return Err(error);
@@ -206,18 +212,19 @@ pub(crate) fn ensure_request_receive_pack_staging_repo(
     Ok(repo_root)
 }
 
-pub(crate) fn seed_editable_request_refs(
+pub(crate) async fn seed_editable_request_refs(
     state: &AppState,
     owner: &str,
     repo_name: &str,
     actor_user_id: &str,
     staging_repo: &FsPath,
 ) -> Result<(), ApiError> {
-    let repo = find_repo(state, owner, repo_name)?;
+    let repo = find_repo(state, owner, repo_name).await?;
     let access = repo.access_for_user_id(actor_user_id);
     let requests = state
         .metadata
-        .requests_by_repo_id(&repo.record.id)?
+        .requests_by_repo_id(&repo.record.id)
+        .await?
         .into_iter()
         .filter(|request| request_actor_can_edit_ref(request, actor_user_id, access.actor))
         .collect::<Vec<_>>();
@@ -232,7 +239,7 @@ pub(crate) fn seed_editable_request_refs(
     for request in requests {
         let _update_lock =
             acquire_request_ref_update_lock(state, owner, repo_name, &request.request_ref)?;
-        let Some(request) = state.metadata.request_by_ref(&request.request_ref)? else {
+        let Some(request) = state.metadata.request_by_ref(&request.request_ref).await? else {
             continue;
         };
         if request.repo_id != repo.record.id
@@ -259,7 +266,7 @@ pub(crate) fn seed_editable_request_refs(
     Ok(())
 }
 
-pub(crate) fn persist_request_ref_revision(
+pub(crate) async fn persist_request_ref_revision(
     state: &AppState,
     owner: &str,
     repo_name: &str,
@@ -268,11 +275,18 @@ pub(crate) fn persist_request_ref_revision(
     update: RequestRefUpdate,
 ) -> Result<(), ApiError> {
     let _lock = acquire_request_ref_update_lock(state, owner, repo_name, &update.request_ref)?;
-    let request =
-        ensure_request_ref_update_allowed(state, owner, repo_name, actor_user_id, &update)?;
+    let request = ensure_request_ref_update_allowed(
+        state,
+        owner,
+        repo_name,
+        actor_user_id,
+        &update.request_ref,
+    )
+    .await?;
     let now_unix = unix_now()?;
     let persisted =
-        persist_request_ref_to_store(state, owner, repo_name, staging_repo, &request, &update)?;
+        persist_request_ref_to_store(state, owner, repo_name, staging_repo, &request, &update)
+            .await?;
     let mutation_result = if request.state == RequestState::Working {
         state
             .metadata
@@ -285,6 +299,7 @@ pub(crate) fn persist_request_ref_revision(
                 git_snapshot: persisted.git_snapshot.clone(),
                 now_unix,
             })
+            .await
             .map(|mutation| mutation.source_blobs_to_delete)
     } else {
         state
@@ -300,6 +315,7 @@ pub(crate) fn persist_request_ref_revision(
                 body: None,
                 now_unix,
             })
+            .await
             .map(|mutation| mutation.source_blobs_to_delete)
     };
     if let Err(error) = mutation_result {
@@ -313,10 +329,11 @@ pub(crate) fn persist_request_ref_revision(
         crate::state::best_effort_cleanup_rollback_source_blobs(
             state,
             std::slice::from_ref(&persisted.git_snapshot),
-        );
-        return Err(error);
+        )
+        .await;
+        return Err(error.into());
     }
-    crate::state::best_effort_drain_pending_source_blob_deletions(state);
+    crate::state::best_effort_drain_pending_source_blob_deletions(state).await;
     Ok(())
 }
 
@@ -429,43 +446,6 @@ fn refs_by_name(refs: &[(String, String)]) -> BTreeMap<String, String> {
         .collect()
 }
 
-fn request_is_closed(request: &Request) -> bool {
-    matches!(
-        request.state,
-        RequestState::Resolved | RequestState::Withdrawn
-    )
-}
-
-fn request_is_open_for_current_actor(request: &Request, current_actor: RepositoryActor) -> bool {
-    if request_is_closed(request) {
-        return false;
-    }
-    match current_actor {
-        RepositoryActor::Public => {
-            request.author_role == RequestActorRole::Public
-                && request.base_audience == RequestBaseAudience::Public
-        }
-        RepositoryActor::Member | RepositoryActor::Owner => true,
-    }
-}
-
-fn request_actor_can_edit_ref(
-    request: &Request,
-    actor_user_id: &str,
-    current_actor: RepositoryActor,
-) -> bool {
-    if !request_is_open_for_current_actor(request, current_actor) {
-        return false;
-    }
-    match current_actor {
-        RepositoryActor::Public => {
-            request.author_user_id == actor_user_id
-                || request.editor_user_ids.contains(actor_user_id)
-        }
-        RepositoryActor::Member | RepositoryActor::Owner => true,
-    }
-}
-
 fn install_request_pre_receive_hook(repo_root: &FsPath) -> Result<(), ApiError> {
     let hook = repo_root.join("hooks").join("pre-receive");
     let script = format!(
@@ -474,43 +454,12 @@ fn install_request_pre_receive_hook(repo_root: &FsPath) -> Result<(), ApiError> 
     write_receive_pack_hook(&hook, &script)
 }
 
-fn ensure_request_ref_update_allowed(
-    state: &AppState,
-    owner: &str,
-    repo_name: &str,
-    actor_user_id: &str,
-    update: &RequestRefUpdate,
-) -> Result<Request, ApiError> {
-    let repo = find_repo(state, owner, repo_name)?;
-    let request = state
-        .metadata
-        .request_by_ref(&update.request_ref)?
-        .ok_or_else(|| ApiError::not_found("request not found"))?;
-    if request.repo_id != repo.record.id {
-        return Err(ApiError::not_found("request not found"));
-    }
-    let current_actor = repo.access_for_user_id(actor_user_id).actor;
-    if !request_is_open_for_current_actor(&request, current_actor) {
-        if request_is_closed(&request)
-            && (request.author_user_id == actor_user_id
-                || request.editor_user_ids.contains(actor_user_id))
-        {
-            return Err(ApiError::conflict("request is closed"));
-        }
-        return Err(ApiError::not_found("request not found"));
-    }
-    if !request_actor_can_edit_ref(&request, actor_user_id, current_actor) {
-        return Err(ApiError::not_found("request not found"));
-    }
-    Ok(request)
-}
-
 struct PersistedRequestRef {
     previous_head: Option<String>,
     git_snapshot: SourceBlob,
 }
 
-fn persist_request_ref_to_store(
+async fn persist_request_ref_to_store(
     state: &AppState,
     owner: &str,
     repo_name: &str,
@@ -525,7 +474,7 @@ fn persist_request_ref_to_store(
         &request.base_main_oid,
         &update.new_head_oid,
     )?;
-    let repo = find_repo(state, owner, repo_name)?;
+    let repo = find_repo(state, owner, repo_name).await?;
     if request.base_audience == RequestBaseAudience::Public {
         ensure_public_request_ref_is_public_safe(&repo, state, staging_repo, &update.new_head_oid)?;
     }
@@ -742,7 +691,7 @@ fn rollback_request_ref(
             owner,
             repo = repo_name,
             request_ref,
-            error = %error.message,
+            error = error.message(),
             "failed to roll back request ref after metadata rejection"
         );
     }

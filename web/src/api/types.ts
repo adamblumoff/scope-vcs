@@ -14,11 +14,6 @@ import type {
   FirstPushTokenResponse,
   FirstPushTokenStatus,
   ProjectionPreviewAudience as GeneratedProjectionPreviewAudience,
-  ProjectionPreviewCommitResponse,
-  ProjectionPreviewFileResponse,
-  ProjectionPreviewResponse,
-  ProjectionPreviewSource as GeneratedProjectionPreviewSource,
-  ProjectionPreviewSummaryResponse,
   CommentRequestRequest,
   MergeRequestRequest,
   NeedsResponseRequest,
@@ -29,6 +24,7 @@ import type {
   RequestDeleteResponse,
   RequestDetailResponse,
   RequestDisposition,
+  ResolutionDisposition,
   RequestEventKind,
   RequestEventResponse,
   RequestEditorRequest,
@@ -39,6 +35,7 @@ import type {
   RequestChangesResponse,
   RequestPermissionsResponse,
   RequestSettlementResponse,
+  RequestSettlementPreviewResponse,
   RequestState,
   RequestSummaryResponse,
   ResolveRequestRequest,
@@ -55,10 +52,7 @@ import type {
   RepositoryInviteResponse,
   RepositoryMemberPermissions,
   RepositoryMemberResponse,
-  SessionCapabilities,
   SessionIdentity as GeneratedSessionIdentity,
-  SessionResponse,
-  SessionRepo as GeneratedSessionRepo,
   FileChangeKind as GeneratedFileChangeKind,
   UserResponse,
   Visibility as GeneratedVisibility,
@@ -72,7 +66,6 @@ export type RepoLifecycleState = RepoPublicationState
 export type TokenStatus = FirstPushTokenStatus
 export type FileChangeKind = GeneratedFileChangeKind
 export type ProjectionPreviewAudience = GeneratedProjectionPreviewAudience
-export type ProjectionPreviewSource = GeneratedProjectionPreviewSource
 
 export type SessionIdentity = GeneratedSessionIdentity
 export type User = UserResponse
@@ -92,9 +85,6 @@ export type RepoInviteLookup = RepositoryInviteLookupResponse
 export type AcceptRepoInviteResponse = AcceptRepositoryInviteResponse
 export type RepoFile = RepoFileResponse
 export type RepoFileContent = RepoFileContentResponse
-export type RepoCapabilities = SessionCapabilities
-export type SessionRepo = GeneratedSessionRepo
-export type RepoSession = SessionResponse
 export type FirstPushToken = FirstPushTokenResponse
 export type DeleteRepoResponse = GeneratedDeleteRepoResponse
 export type CommitHistory = CommitHistoryResponse
@@ -102,10 +92,6 @@ export type CommitSummary = CommitSummaryResponse
 export type CommitDetail = CommitDetailResponse
 export type CommitFile = CommitFileResponse
 export type ReviewFileDiff = ReviewFileDiffResponse
-export type ProjectionPreviewFile = ProjectionPreviewFileResponse
-export type ProjectionPreviewCommit = ProjectionPreviewCommitResponse
-export type ProjectionPreviewSummary = ProjectionPreviewSummaryResponse
-export type ProjectionPreview = ProjectionPreviewResponse
 export type RequestList = RequestListResponse
 export type RequestDetail = RequestDetailResponse
 export type RequestMutation = RequestMutationResponse
@@ -119,18 +105,15 @@ export type RequestSettlement = RequestSettlementResponse
 export type RequestEvent = RequestEventResponse
 export type RequestWorkflowState = RequestState
 export type RequestWorkflowDisposition = RequestDisposition
+export type RequestWorkflowResolutionDisposition = ResolutionDisposition
+export type RequestSettlementPreview = RequestSettlementPreviewResponse
 export type RequestWorkflowEventKind = RequestEventKind
 export type RequestWorkflowActorRole = RequestActorRole
 export type RequestWorkflowBaseAudience = RequestBaseAudience
 
-export type RepoDetail = {
-  capabilities: RepoCapabilities
+export type RepoContent = {
   clone_remote_url: string
   files: RepoFile[]
-  kind: 'repo'
-  live: RepoLiveState
-  projection_previews: ProjectionPreviews
-  repo: RepoSummary
 }
 
 export type RepoLiveState = {
@@ -184,17 +167,6 @@ export type RepoInviteTokenInput = {
 }
 
 export type ReviewFile = RepoFile | CommitFile
-
-export type ProjectionPreviews = {
-  source: ProjectionPreviewSource
-  private: ProjectionPreview | null
-  public: ProjectionPreview | null
-}
-
-export type ProjectionPreviewInput = RepoParams & {
-  audience: ProjectionPreviewAudience
-  source: ProjectionPreviewSource
-}
 
 export type CommitHistoryInput = RepoParams & CommitHistoryRequest
 export type CommitDetailInput = CommitHistoryInput & {

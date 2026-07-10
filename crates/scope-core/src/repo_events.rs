@@ -9,6 +9,7 @@ use tokio::sync::broadcast;
 const REPO_CHANGE_CHANNEL_CAPACITY: usize = 128;
 pub const POSTGRES_REPO_CHANGE_CHANNEL: &str = "scope_repo_changes";
 
+#[cfg_attr(any(test, feature = "ts"), derive(ts_rs::TS))]
 #[derive(Clone, Debug, Deserialize, PartialEq, Eq, Serialize)]
 pub struct RepoChangeEvent {
     pub repo_id: String,

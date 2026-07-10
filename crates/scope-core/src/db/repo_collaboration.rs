@@ -1,6 +1,6 @@
 use super::{
-    MetadataStore, MetadataStoreInner, acquire_metadata_write_lock, entities,
-    repo_effects::save_repo_mutation, repository_from_model, run_api_db_on,
+    MetadataStore, acquire_aggregate_lock, auth::load_user_by_id, entities,
+    repo_effects::save_repo_mutation, repository_from_model,
 };
 use crate::domain::{
     repo_collaboration::{
@@ -15,7 +15,7 @@ use crate::domain::{
 };
 use crate::error::ApiError;
 use sea_orm::{ColumnTrait, EntityTrait, QueryFilter, TransactionTrait};
-use std::sync::Arc;
+use std::{collections::BTreeMap, sync::Arc};
 
 pub struct CreateRepositoryInviteMutation {
     pub owner: String,
@@ -29,72 +29,77 @@ pub struct CreateRepositoryInviteMutation {
 }
 
 impl MetadataStore {
-    pub fn create_repository_invite(
+    pub async fn repository_collaboration(
+        &self,
+        owner: &str,
+        name: &str,
+    ) -> Result<Option<(StoredRepository, BTreeMap<String, UserAccount>)>, ApiError> {
+        let Some(repo) = self.repository(owner, name).await? else {
+            return Ok(None);
+        };
+        let user_ids = repo
+            .members
+            .iter()
+            .map(|member| member.user_id.clone())
+            .collect::<Vec<_>>();
+        let users = if user_ids.is_empty() {
+            BTreeMap::new()
+        } else {
+            entities::user::Entity::find()
+                .filter(entities::user::Column::Id.is_in(user_ids))
+                .all(self.db.as_ref())
+                .await
+                .map_err(ApiError::internal)?
+                .into_iter()
+                .map(|row| {
+                    let user = row.try_into_domain()?;
+                    Ok((user.id.clone(), user))
+                })
+                .collect::<Result<_, ApiError>>()?
+        };
+        Ok(Some((repo, users)))
+    }
+
+    pub async fn user(&self, user_id: &str) -> Result<UserAccount, ApiError> {
+        load_user_by_id(self.db.as_ref(), user_id).await
+    }
+
+    pub async fn create_repository_invite(
         &self,
         command: CreateRepositoryInviteMutation,
     ) -> Result<RepositoryInvite, ApiError> {
         let repo_id = repo_id(&command.owner, &command.name);
         let owner_name = command.owner.clone();
         let name = command.name.clone();
-        match self.inner.as_ref() {
-            MetadataStoreInner::Postgres { db, runtime } => {
-                let db = Arc::clone(db);
-                run_api_db_on(runtime, async move {
-                    let tx = db.as_ref().begin().await.map_err(ApiError::internal)?;
-                    acquire_metadata_write_lock(&tx).await?;
-                    let row = entities::repository::Entity::find_by_id(repo_id)
-                        .one(&tx)
-                        .await
-                        .map_err(ApiError::internal)?
-                        .ok_or_else(|| {
-                            ApiError::not_found(format!("repo {owner_name}/{name} not found"))
-                        })?;
-                    let mut repo = repository_from_model(&tx, row).await?;
-                    let invitee = user_by_normalized_email(&tx, &command.invited_email).await?;
-                    let mutation = create_or_refresh_repository_invite(
-                        &mut repo,
-                        CreateRepositoryInviteCommand {
-                            id: command.invite_id,
-                            owner: &command.owner_user,
-                            invited_email: command.invited_email,
-                            invitee: invitee.as_ref(),
-                            permissions: command.permissions,
-                            token_hash: command.token_hash,
-                            now_unix: command.now_unix,
-                        },
-                    )?;
-                    save_repo_mutation(&tx, &repo, &mutation_effects_none()).await?;
-                    tx.commit().await.map_err(ApiError::internal)?;
-                    Ok(mutation)
-                })
-            }
-            #[cfg(any(test, feature = "memory-metadata"))]
-            MetadataStoreInner::Memory(_) => self.update(move |catalog| {
-                let invitee = catalog.users.values().find(|user| {
-                    normalize_repository_invite_email(&user.email)
-                        == normalize_repository_invite_email(&command.invited_email)
-                });
-                let repo = catalog.repositories.get_mut(&repo_id).ok_or_else(|| {
-                    ApiError::not_found(format!("repo {owner_name}/{name} not found"))
-                })?;
-                let invite = create_or_refresh_repository_invite(
-                    repo,
-                    CreateRepositoryInviteCommand {
-                        id: command.invite_id,
-                        owner: &command.owner_user,
-                        invited_email: command.invited_email,
-                        invitee,
-                        permissions: command.permissions,
-                        token_hash: command.token_hash,
-                        now_unix: command.now_unix,
-                    },
-                )?;
-                Ok(invite)
-            }),
-        }
+        let db = Arc::clone(&self.db);
+        let tx = db.as_ref().begin().await.map_err(ApiError::internal)?;
+        acquire_aggregate_lock(&tx, "repository", &repo_id).await?;
+        let row = entities::repository::Entity::find_by_id(repo_id)
+            .one(&tx)
+            .await
+            .map_err(ApiError::internal)?
+            .ok_or_else(|| ApiError::not_found(format!("repo {owner_name}/{name} not found")))?;
+        let mut repo = repository_from_model(&tx, row).await?;
+        let before = repo.clone();
+        let invitee = user_by_normalized_email(&tx, &command.invited_email).await?;
+        let mutation = create_or_refresh_repository_invite(
+            &mut repo,
+            CreateRepositoryInviteCommand {
+                id: command.invite_id,
+                owner: &command.owner_user,
+                invited_email: command.invited_email,
+                invitee: invitee.as_ref(),
+                permissions: command.permissions,
+                token_hash: command.token_hash,
+                now_unix: command.now_unix,
+            },
+        )?;
+        save_repo_mutation(&tx, &before, &repo, &mutation_effects_none()).await?;
+        tx.commit().await.map_err(ApiError::internal)?;
+        Ok(mutation)
     }
 
-    pub fn update_repository_member_permissions(
+    pub async fn update_repository_member_permissions(
         &self,
         owner: &str,
         name: &str,
@@ -114,9 +119,10 @@ impl MetadataStore {
                 now_unix,
             )
         })
+        .await
     }
 
-    pub fn revoke_repository_invite(
+    pub async fn revoke_repository_invite(
         &self,
         owner: &str,
         name: &str,
@@ -129,9 +135,10 @@ impl MetadataStore {
         mutate_repository_collaboration(self, owner, name, move |repo| {
             revoke_repository_invite(repo, &owner_user_id, &invite_id, now_unix)
         })
+        .await
     }
 
-    pub fn remove_repository_member(
+    pub async fn remove_repository_member(
         &self,
         owner: &str,
         name: &str,
@@ -143,99 +150,68 @@ impl MetadataStore {
         mutate_repository_collaboration(self, owner, name, move |repo| {
             remove_repository_member(repo, &owner_user_id, &member_user_id)
         })
+        .await
     }
 
-    pub fn repository_invite_by_token_hash(
+    pub async fn repository_invite_by_token_hash(
         &self,
         token_hash: &str,
     ) -> Result<(crate::domain::store::StoredRepository, RepositoryInvite), ApiError> {
-        let token_hash = token_hash.to_string();
-        self.read(move |catalog| {
-            for repo in catalog.repositories.values() {
-                if let Some(invite) = repo
-                    .invitations
-                    .iter()
-                    .find(|invite| invite.token_hash == token_hash)
-                {
-                    return Ok((repo.clone(), invite.clone()));
-                }
-            }
-            Err(ApiError::not_found("repository invite not found"))
-        })
+        let invite = entities::repository_invite::Entity::find()
+            .filter(entities::repository_invite::Column::TokenHash.eq(token_hash.to_string()))
+            .one(self.db.as_ref())
+            .await
+            .map_err(ApiError::internal)?
+            .ok_or_else(|| ApiError::not_found("repository invite not found"))?;
+        let repo_row = entities::repository::Entity::find_by_id(invite.repo_id.clone())
+            .one(self.db.as_ref())
+            .await
+            .map_err(ApiError::internal)?
+            .ok_or_else(|| ApiError::internal_message("repository invite repo is missing"))?;
+        Ok((
+            repository_from_model(self.db.as_ref(), repo_row).await?,
+            invite.try_into_domain()?,
+        ))
     }
 
-    pub fn accept_repository_invite(
+    pub async fn accept_repository_invite(
         &self,
         token_hash: &str,
         user: UserAccount,
         now_unix: u64,
     ) -> Result<(crate::domain::store::StoredRepository, RepositoryMember), ApiError> {
         let token_hash = token_hash.to_string();
-        match self.inner.as_ref() {
-            MetadataStoreInner::Postgres { db, runtime } => {
-                let db = Arc::clone(db);
-                run_api_db_on(runtime, async move {
-                    let tx = db.as_ref().begin().await.map_err(ApiError::internal)?;
-                    acquire_metadata_write_lock(&tx).await?;
-                    let invite = entities::repository_invite::Entity::find()
-                        .filter(
-                            entities::repository_invite::Column::TokenHash.eq(token_hash.clone()),
-                        )
-                        .one(&tx)
-                        .await
-                        .map_err(ApiError::internal)?
-                        .ok_or_else(|| ApiError::not_found("repository invite not found"))?;
-                    let row = entities::repository::Entity::find_by_id(invite.repo_id)
-                        .one(&tx)
-                        .await
-                        .map_err(ApiError::internal)?
-                        .ok_or_else(|| ApiError::not_found("repository invite not found"))?;
-                    let mut repo = repository_from_model(&tx, row).await?;
-                    let outcome =
-                        accept_repository_invite(&mut repo, &user, &token_hash, now_unix)?;
-                    save_repo_mutation(&tx, &repo, &mutation_effects_none()).await?;
-                    let result = match outcome {
-                        AcceptRepositoryInviteOutcome::Accepted(member) => Ok((repo, member)),
-                        AcceptRepositoryInviteOutcome::Expired => {
-                            Err(ApiError::conflict("repository invite expired"))
-                        }
-                    };
-                    tx.commit().await.map_err(ApiError::internal)?;
-                    result
-                })
+        let db = Arc::clone(&self.db);
+        let tx = db.as_ref().begin().await.map_err(ApiError::internal)?;
+        acquire_aggregate_lock(&tx, "repository-invite-token", &token_hash).await?;
+        let invite = entities::repository_invite::Entity::find()
+            .filter(entities::repository_invite::Column::TokenHash.eq(token_hash.clone()))
+            .one(&tx)
+            .await
+            .map_err(ApiError::internal)?
+            .ok_or_else(|| ApiError::not_found("repository invite not found"))?;
+        acquire_aggregate_lock(&tx, "repository", &invite.repo_id).await?;
+        let row = entities::repository::Entity::find_by_id(invite.repo_id)
+            .one(&tx)
+            .await
+            .map_err(ApiError::internal)?
+            .ok_or_else(|| ApiError::not_found("repository invite not found"))?;
+        let mut repo = repository_from_model(&tx, row).await?;
+        let before = repo.clone();
+        let outcome = accept_repository_invite(&mut repo, &user, &token_hash, now_unix)?;
+        save_repo_mutation(&tx, &before, &repo, &mutation_effects_none()).await?;
+        let result = match outcome {
+            AcceptRepositoryInviteOutcome::Accepted(member) => Ok((repo, member)),
+            AcceptRepositoryInviteOutcome::Expired => {
+                Err(ApiError::conflict("repository invite expired"))
             }
-            #[cfg(any(test, feature = "memory-metadata"))]
-            MetadataStoreInner::Memory(_) => {
-                let (repo, outcome) = self.update(move |catalog| {
-                    let repo_id = catalog
-                        .repositories
-                        .values()
-                        .find(|repo| {
-                            repo.invitations
-                                .iter()
-                                .any(|invite| invite.token_hash == token_hash)
-                        })
-                        .map(|repo| repo.record.id.clone())
-                        .ok_or_else(|| ApiError::not_found("repository invite not found"))?;
-                    let repo = catalog
-                        .repositories
-                        .get_mut(&repo_id)
-                        .ok_or_else(|| ApiError::not_found("repository invite not found"))?;
-                    let outcome = accept_repository_invite(repo, &user, &token_hash, now_unix)?;
-                    Ok((repo.clone(), outcome))
-                })?;
-                match outcome {
-                    AcceptRepositoryInviteOutcome::Accepted(member) => Ok((repo, member)),
-                    AcceptRepositoryInviteOutcome::Expired => {
-                        Err(ApiError::conflict("repository invite expired"))
-                    }
-                }
-            }
-        }
+        };
+        tx.commit().await.map_err(ApiError::internal)?;
+        result
     }
 }
 
-fn mutate_repository_collaboration<T, F>(
+async fn mutate_repository_collaboration<T, F>(
     store: &MetadataStore,
     owner: &str,
     name: &str,
@@ -248,33 +224,20 @@ where
     let repo_id = repo_id(owner, name);
     let owner = owner.to_string();
     let name = name.to_string();
-    match store.inner.as_ref() {
-        MetadataStoreInner::Postgres { db, runtime } => {
-            let db = Arc::clone(db);
-            run_api_db_on(runtime, async move {
-                let tx = db.as_ref().begin().await.map_err(ApiError::internal)?;
-                acquire_metadata_write_lock(&tx).await?;
-                let row = entities::repository::Entity::find_by_id(repo_id)
-                    .one(&tx)
-                    .await
-                    .map_err(ApiError::internal)?
-                    .ok_or_else(|| ApiError::not_found(format!("repo {owner}/{name} not found")))?;
-                let mut repo = repository_from_model(&tx, row).await?;
-                let result = op(&mut repo)?;
-                save_repo_mutation(&tx, &repo, &mutation_effects_none()).await?;
-                tx.commit().await.map_err(ApiError::internal)?;
-                Ok(result)
-            })
-        }
-        #[cfg(any(test, feature = "memory-metadata"))]
-        MetadataStoreInner::Memory(_) => store.update(move |catalog| {
-            let repo = catalog
-                .repositories
-                .get_mut(&repo_id)
-                .ok_or_else(|| ApiError::not_found(format!("repo {owner}/{name} not found")))?;
-            op(repo)
-        }),
-    }
+    let db = Arc::clone(&store.db);
+    let tx = db.as_ref().begin().await.map_err(ApiError::internal)?;
+    acquire_aggregate_lock(&tx, "repository", &repo_id).await?;
+    let row = entities::repository::Entity::find_by_id(repo_id)
+        .one(&tx)
+        .await
+        .map_err(ApiError::internal)?
+        .ok_or_else(|| ApiError::not_found(format!("repo {owner}/{name} not found")))?;
+    let mut repo = repository_from_model(&tx, row).await?;
+    let before = repo.clone();
+    let result = op(&mut repo)?;
+    save_repo_mutation(&tx, &before, &repo, &mutation_effects_none()).await?;
+    tx.commit().await.map_err(ApiError::internal)?;
+    Ok(result)
 }
 
 async fn user_by_normalized_email<C>(conn: &C, email: &str) -> Result<Option<UserAccount>, ApiError>

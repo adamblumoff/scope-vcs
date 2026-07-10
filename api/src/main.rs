@@ -3,7 +3,8 @@ use api::{AppState, router};
 use std::net::{Ipv6Addr, SocketAddr};
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 
-fn main() -> anyhow::Result<()> {
+#[tokio::main]
+async fn main() -> anyhow::Result<()> {
     tracing_subscriber::registry()
         .with(
             tracing_subscriber::EnvFilter::try_from_default_env()
@@ -17,18 +18,16 @@ fn main() -> anyhow::Result<()> {
         .and_then(|value| value.parse::<u16>().ok())
         .unwrap_or(8080);
     let addr = SocketAddr::from((Ipv6Addr::UNSPECIFIED, port));
-    let state = app_state_from_env()?;
+    let state = app_state_from_env().await?;
 
-    tokio::runtime::Runtime::new()
-        .context("creating tokio runtime")?
-        .block_on(serve(addr, state))
+    serve(addr, state).await
 }
 
-fn app_state_from_env() -> anyhow::Result<AppState> {
+async fn app_state_from_env() -> anyhow::Result<AppState> {
     #[cfg(feature = "local-dev")]
     {
         if api::dev::is_local_dev_env() {
-            return api::dev::app_state_from_env();
+            return api::dev::app_state_from_env().await;
         }
     }
 
@@ -39,7 +38,7 @@ fn app_state_from_env() -> anyhow::Result<AppState> {
         }
     }
 
-    AppState::from_env()
+    AppState::from_env().await
 }
 
 async fn serve(addr: SocketAddr, state: AppState) -> anyhow::Result<()> {

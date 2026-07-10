@@ -1,9 +1,58 @@
 use super::{
     CreditLedgerEntry, CreditLedgerEntryKind, Request, RequestDisposition, RequestSettlement,
-    UserCreditAccount, ensure_new_ledger_entry_id,
+    RequestState, UserCreditAccount, ensure_new_ledger_entry_id,
 };
 use crate::error::ApiError;
+use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(any(test, feature = "ts"), derive(ts_rs::TS))]
+pub enum ResolutionDisposition {
+    UsefulNotMerged,
+    HiddenContext,
+    NotAligned,
+    Duplicate,
+    Abandoned,
+    LowQuality,
+}
+
+impl From<ResolutionDisposition> for RequestDisposition {
+    fn from(value: ResolutionDisposition) -> Self {
+        match value {
+            ResolutionDisposition::UsefulNotMerged => Self::UsefulNotMerged,
+            ResolutionDisposition::HiddenContext => Self::HiddenContext,
+            ResolutionDisposition::NotAligned => Self::NotAligned,
+            ResolutionDisposition::Duplicate => Self::Duplicate,
+            ResolutionDisposition::Abandoned => Self::Abandoned,
+            ResolutionDisposition::LowQuality => Self::LowQuality,
+        }
+    }
+}
+
+pub fn allowed_resolution_dispositions(state: RequestState) -> &'static [ResolutionDisposition] {
+    use ResolutionDisposition::*;
+    const STANDARD: &[ResolutionDisposition] = &[
+        UsefulNotMerged,
+        HiddenContext,
+        NotAligned,
+        Duplicate,
+        LowQuality,
+    ];
+    const WAITING: &[ResolutionDisposition] = &[
+        UsefulNotMerged,
+        HiddenContext,
+        NotAligned,
+        Duplicate,
+        Abandoned,
+        LowQuality,
+    ];
+    if state == RequestState::NeedsResponse {
+        WAITING
+    } else {
+        STANDARD
+    }
+}
 
 pub fn settlement_for(
     stake_credits: u32,

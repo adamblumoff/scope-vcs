@@ -4,8 +4,8 @@ use crate::{
     error::ApiError,
     http::responses::{
         AccountSessionResponse, HealthResponse, ReadinessCheckResponse, ReadinessResponse,
-        SessionIdentity, SessionRepo, SessionResponse, UserResponse, repository_access_response,
-        session_capabilities_response,
+        SessionIdentity, SessionRepo, SessionResponse, repository_access_response,
+        session_capabilities_response, user_response,
     },
     state::AppState,
     state::{access_for_principal, can_read_path, ensure_repo_read, find_repo},
@@ -24,7 +24,7 @@ pub(crate) async fn healthz() -> Json<HealthResponse> {
 }
 
 pub(crate) async fn readyz(State(state): State<AppState>) -> (StatusCode, Json<ReadinessResponse>) {
-    let database_ready = state.metadata.readiness_check().is_ok();
+    let database_ready = state.metadata.readiness_check().await.is_ok();
     let object_store_ready = state.object_store.readiness_check().is_ok();
     let ready = database_ready && object_store_ready;
 
@@ -63,7 +63,7 @@ pub(crate) async fn get_account_session(
 
     Ok(Json(AccountSessionResponse {
         identity: user.as_ref().map(SessionIdentity::from),
-        user: user.map(UserResponse::from),
+        user: user.map(user_response),
     }))
 }
 
@@ -72,7 +72,7 @@ pub(crate) async fn get_session(
     headers: HeaderMap,
     Path((owner, repo_name)): Path<(String, String)>,
 ) -> Result<Json<SessionResponse>, ApiError> {
-    let repo = find_repo(&state, &owner, &repo_name)?;
+    let repo = find_repo(&state, &owner, &repo_name).await?;
     let user = optional_scope_user(&state, &headers).await?;
     let principal = principal_for_scope_user(&repo, user.as_ref());
     ensure_repo_read(&state, &repo, &principal)?;

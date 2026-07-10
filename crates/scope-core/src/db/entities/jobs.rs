@@ -36,7 +36,7 @@ pub mod outbox_job {
             repo: &StoredRepository,
             now: u64,
         ) -> Result<Self, ApiError> {
-            let repo_version = u64_to_i64_saturating(repo.record.change_version);
+            let repo_version = u64_to_i64(repo.record.change_version, "repository change version")?;
             Ok(Self {
                 id,
                 idempotency_key: projection_read_model_rebuild_idempotency_key(
@@ -49,16 +49,16 @@ pub mod outbox_job {
                 payload: encode_json(&serde_json::json!({
                     "repo_id": repo.record.id.clone(),
                     "repo_version": repo.record.change_version,
-                    "source": "live",
+                    "source": ProjectionSource::Live.as_str(),
                 }))?,
                 state: "ready".to_string(),
                 attempts: 0,
-                next_run_at_unix: u64_to_i64_saturating(now),
+                next_run_at_unix: u64_to_i64(now, "outbox next run time")?,
                 lease_owner: None,
                 lease_expires_at_unix: None,
                 last_error: None,
-                created_at_unix: u64_to_i64_saturating(now),
-                updated_at_unix: u64_to_i64_saturating(now),
+                created_at_unix: u64_to_i64(now, "outbox creation time")?,
+                updated_at_unix: u64_to_i64(now, "outbox update time")?,
                 completed_at_unix: None,
             })
         }
@@ -115,10 +115,10 @@ pub mod repo_storage_cleanup_job {
             cleanup: &RepoStorageCleanup,
             generation: String,
             now_unix: u64,
-        ) -> Self {
+        ) -> Result<Self, ApiError> {
             let repo_id = crate::domain::store::repo_id(&cleanup.owner_handle, &cleanup.repo_name);
-            let now_unix = now_unix.min(i64::MAX as u64) as i64;
-            Self {
+            let now_unix = u64_to_i64(now_unix, "cleanup creation time")?;
+            Ok(Self {
                 repo_id,
                 generation,
                 owner_handle: cleanup.owner_handle.clone(),
@@ -129,7 +129,7 @@ pub mod repo_storage_cleanup_job {
                 completed_at_unix: None,
                 created_at_unix: now_unix,
                 updated_at_unix: now_unix,
-            }
+            })
         }
 
         pub fn into_domain(self) -> RepoStorageCleanup {
@@ -166,31 +166,35 @@ pub mod source_blob_cleanup_job {
     impl ActiveModelBehavior for ActiveModel {}
 
     impl Model {
-        pub fn from_domain(blob: &SourceBlob, generation: String, now_unix: u64) -> Self {
-            let now_unix = now_unix.min(i64::MAX as u64) as i64;
-            Self {
+        pub fn from_domain(
+            blob: &SourceBlob,
+            generation: String,
+            now_unix: u64,
+        ) -> Result<Self, ApiError> {
+            let now_unix = u64_to_i64(now_unix, "cleanup creation time")?;
+            Ok(Self {
                 object_key: blob.object_key.clone(),
                 generation,
                 sha256: blob.sha256.clone(),
                 git_oid: blob.git_oid.clone(),
-                size_bytes: blob.size_bytes.min(i64::MAX as u64) as i64,
+                size_bytes: u64_to_i64(blob.size_bytes, "source blob size")?,
                 attempts: 0,
                 next_run_at_unix: now_unix,
                 last_error: None,
                 completed_at_unix: None,
                 created_at_unix: now_unix,
                 updated_at_unix: now_unix,
-            }
+            })
         }
 
-        pub fn into_domain(self) -> SourceBlob {
-            SourceBlob {
+        pub fn try_into_domain(self) -> Result<SourceBlob, ApiError> {
+            Ok(SourceBlob {
                 object_key: self.object_key,
                 sha256: self.sha256,
                 git_oid: self.git_oid,
                 git_file_mode: DEFAULT_GIT_FILE_MODE.to_string(),
-                size_bytes: self.size_bytes.max(0) as u64,
-            }
+                size_bytes: i64_to_u64(self.size_bytes, "source blob size")?,
+            })
         }
     }
 }

@@ -2,6 +2,7 @@ use super::cleanup_queue::{
     complete_pending_repo_storage_cleanup_at, complete_pending_source_blob_cleanup_at,
     queue_pending_repo_storage_cleanup_row, queue_pending_source_blob_deletion_rows,
 };
+use crate::db::{MetadataStore, TestDatabaseTarget};
 use crate::domain::store::{DEFAULT_GIT_FILE_MODE, RepoStorageCleanup, SourceBlob};
 use sea_orm::{DbBackend, MockDatabase, MockExecResult};
 
@@ -103,6 +104,55 @@ async fn source_blob_cleanup_completion_is_generation_fenced() {
         sql.iter()
             .any(|statement| statement.contains("\"generation\"")),
         "completion must filter by cleanup row generation: {sql:?}"
+    );
+}
+
+#[tokio::test]
+async fn cleanup_claims_are_bounded_and_failed_work_is_backed_off() {
+    let target = TestDatabaseTarget::required().unwrap();
+    let store = MetadataStore::connect_fresh_for_tests(&target).unwrap();
+    let blob = SourceBlob {
+        object_key: "objects/retry-blob".to_string(),
+        sha256: "sha".to_string(),
+        git_oid: "oid".to_string(),
+        git_file_mode: DEFAULT_GIT_FILE_MODE.to_string(),
+        size_bytes: 10,
+    };
+    store
+        .queue_pending_source_blob_deletions(vec![blob.clone()])
+        .await
+        .unwrap();
+
+    let claimed = store.source_blob_cleanup_batch().await.unwrap();
+    assert_eq!(claimed.pending, vec![blob.clone()]);
+    assert!(
+        store
+            .source_blob_cleanup_batch()
+            .await
+            .unwrap()
+            .pending
+            .is_empty(),
+        "an active claim must hide work from concurrent drains"
+    );
+
+    store
+        .finish_source_blob_cleanup(claimed, std::slice::from_ref(&blob))
+        .await
+        .unwrap();
+    let immediate_retry = store.source_blob_cleanup_batch().await.unwrap();
+    assert_eq!(immediate_retry.pending, vec![blob.clone()]);
+    store
+        .finish_source_blob_cleanup(immediate_retry, std::slice::from_ref(&blob))
+        .await
+        .unwrap();
+    assert!(
+        store
+            .source_blob_cleanup_batch()
+            .await
+            .unwrap()
+            .pending
+            .is_empty(),
+        "failed cleanup must wait for its retry backoff"
     );
 }
 

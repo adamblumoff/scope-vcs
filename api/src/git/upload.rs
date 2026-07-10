@@ -79,7 +79,7 @@ pub(crate) async fn git_upload_pack_repo_for_request(
     let projection = match git_projection_for_request(state, headers, owner, repo_name, mode).await
     {
         Ok(projection) => projection,
-        Err(error) if mode == GitRemoteMode::Public && error.status == StatusCode::NOT_FOUND => {
+        Err(error) if mode == GitRemoteMode::Public && error.status() == StatusCode::NOT_FOUND => {
             return Err(git_upload_pack_auth_required());
         }
         Err(error) => return Err(error),
@@ -126,12 +126,12 @@ async fn git_read_principal_for_request(
 ) -> Result<(crate::domain::store::StoredRepository, Principal), ApiError> {
     match mode {
         GitRemoteMode::Public => {
-            let repo = find_repo(state, owner, repo_name)?;
+            let repo = find_repo(state, owner, repo_name).await?;
             Ok((repo, Principal::public()))
         }
         GitRemoteMode::Permissioned => {
             let user = git_read_scope_user(state, headers).await?;
-            let repo = find_repo(state, owner, repo_name)?;
+            let repo = find_repo(state, owner, repo_name).await?;
             let principal = principal_for_user_id(&repo, &user.id);
             Ok((repo, principal))
         }
@@ -709,7 +709,7 @@ pub(crate) fn git_upload_pack_advertisement(repo_path: &FsPath, timeout: Duratio
             body.extend(advertisement);
             git_response("application/x-git-upload-pack-advertisement", body)
         }
-        Err(error) => git_advertisement_error(error.message),
+        Err(error) => git_advertisement_error(error.into_message()),
     }
 }
 
@@ -771,8 +771,8 @@ mod tests {
         let error = git_command_output_with_timeout(&mut command, None, Duration::from_millis(25))
             .unwrap_err();
 
-        assert_eq!(error.status, StatusCode::SERVICE_UNAVAILABLE);
-        assert!(error.message.contains("timed out"));
+        assert_eq!(error.status(), StatusCode::SERVICE_UNAVAILABLE);
+        assert!(error.message().contains("timed out"));
         assert!(started_at.elapsed() < Duration::from_secs(2));
     }
 }

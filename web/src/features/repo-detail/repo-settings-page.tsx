@@ -5,7 +5,6 @@ import type {
   DeleteRepoMemberInput,
   DeleteRepoResponse,
   RepoCollaboration,
-  RepoDetail,
   RepoInvite,
   RepoMember,
   RepoParams,
@@ -19,13 +18,14 @@ import { RepoShell } from '@/components/repo-shell'
 import { Badge } from '@/components/ui/badge'
 import { storeHomeFlash } from '@/lib/home-flash'
 import { Link, useNavigate, useRouter } from '@tanstack/react-router'
-import { useReducer, useState } from 'react'
+import { useReducer } from 'react'
 import { DeleteRepositoryDialog } from './delete-repository-dialog'
 import {
   MemberAccessSections,
   RepositoryMembersSection,
 } from './repo-members-section'
 import { SettingsSections } from './repo-settings-sections'
+import { useRepoLayout } from './repo-layout-context'
 import {
   initialRepoSettingsPageState,
   repoSettingsPageReducer,
@@ -36,7 +36,6 @@ export function RepoSettingsPage({
   deleteInvite,
   deleteMember,
   deleteRepo,
-  detail,
   initialCollaboration,
   params,
   updateMember,
@@ -47,33 +46,24 @@ export function RepoSettingsPage({
   deleteInvite: (input: DeleteRepoInviteInput) => Promise<RepoInvite>
   deleteMember: (input: DeleteRepoMemberInput) => Promise<RepoMember>
   deleteRepo: (params: RepoParams) => Promise<DeleteRepoResponse>
-  detail: RepoDetail
   initialCollaboration: RepoCollaboration | null
   params: RepoParams
   updateMember: (input: UpdateRepoMemberInput) => Promise<RepoMember>
 }) {
   const navigate = useNavigate()
   const router = useRouter()
-  const { repo } = detail
+  const { repo } = useRepoLayout()
   const [state, dispatch] = useReducer(
     repoSettingsPageReducer,
     initialRepoSettingsPageState,
   )
-  const [collaborationState, setCollaborationState] = useState(() => ({
-    base: initialCollaboration,
-    value: initialCollaboration,
-  }))
-  const collaboration =
-    collaborationState.base === initialCollaboration
-      ? collaborationState.value
-      : initialCollaboration
+  const collaboration = initialCollaboration
   const { deleteError, deleteTarget } = state
 
-  if (collaborationState.base !== initialCollaboration) {
-    setCollaborationState({
-      base: initialCollaboration,
-      value: initialCollaboration,
-    })
+  async function mutateAndRefresh<T>(mutation: Promise<T>) {
+    const result = await mutation
+    await router.invalidate()
+    return result
   }
 
   async function deleteRepository(target: RepoSummary) {
@@ -97,96 +87,34 @@ export function RepoSettingsPage({
   }
 
   async function createMemberInvite(input: CreateRepoInviteInput) {
-    const response = await createInvite(input)
-    setCollaborationState((current) => ({
-      base: current.base,
-      value: current.value
-        ? {
-            ...current.value,
-            invites: [
-              response.invite,
-              ...current.value.invites.filter(
-                (invite) => invite.id !== response.invite.id,
-              ),
-            ],
-          }
-        : current.value,
-    }))
-    return response
+    return mutateAndRefresh(createInvite(input))
   }
 
   async function updateRepositoryMember(input: UpdateRepoMemberInput) {
-    const member = await updateMember(input)
-    setCollaborationState((current) => ({
-      base: current.base,
-      value: current.value
-        ? {
-            ...current.value,
-            members: current.value.members.map((candidate) =>
-              candidate.user_id === member.user_id ? member : candidate,
-            ),
-          }
-        : current.value,
-    }))
-    await router.invalidate()
-    return member
+    return mutateAndRefresh(updateMember(input))
   }
 
   async function removeRepositoryMember(memberUserId: string) {
-    const member = await deleteMember({
-      ...params,
-      member_user_id: memberUserId,
-    })
-    setCollaborationState((current) => ({
-      base: current.base,
-      value: current.value
-        ? {
-            ...current.value,
-            members: current.value.members.filter(
-              (candidate) => candidate.user_id !== member.user_id,
-            ),
-          }
-        : current.value,
-    }))
-    await router.invalidate()
-    return member
+    return mutateAndRefresh(
+      deleteMember({ ...params, member_user_id: memberUserId }),
+    )
   }
 
   async function removeRepositoryInvite(inviteId: string) {
-    const invite = await deleteInvite({
-      ...params,
-      invite_id: inviteId,
-    })
-    setCollaborationState((current) => ({
-      base: current.base,
-      value: current.value
-        ? {
-            ...current.value,
-            invites: current.value.invites.map((candidate) =>
-              candidate.id === invite.id ? invite : candidate,
-            ),
-          }
-        : current.value,
-    }))
-    await router.invalidate()
-    return invite
+    return mutateAndRefresh(deleteInvite({ ...params, invite_id: inviteId }))
   }
 
   return (
-    <RepoShell
-      active="settings"
-      canManage={repo.access.actor !== 'Public'}
-      params={params}
-    >
+    <RepoShell params={params}>
       <PageContent>
         <PageHeader
-          badges={() => (
+          badges={(
             <>
               <LifecycleBadge state={repo.lifecycle_state} />
               <Badge variant="neutral">{repo.access.actor}</Badge>
             </>
           )}
-          description={() => (
+          description={(
             <Link
               className="font-mono underline underline-offset-4 hover:text-foreground"
               params={{ owner: repo.owner_handle, repo: repo.name }}

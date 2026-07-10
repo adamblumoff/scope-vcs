@@ -1,6 +1,6 @@
 import {
   loadRepoFileForRequest,
-  loadRepoForRequest,
+  loadRepoContentForRequest,
   parseRepoParams,
 } from '@/api/repos'
 import type { RepoParams } from '@/api/types'
@@ -14,9 +14,9 @@ import {
 import { createFileRoute, useNavigate } from '@tanstack/react-router'
 import { createServerFn } from '@tanstack/react-start'
 
-const loadRepo = createServerFn({ method: 'GET' })
+const loadRepoContent = createServerFn({ method: 'GET' })
   .validator(parseRepoParams)
-  .handler(({ data }) => loadRepoForRequest(data))
+  .handler(({ data }) => loadRepoContentForRequest(data))
 
 const loadRepoFile = createServerFn({ method: 'GET' })
   .validator((data: RepoFileInput) => data)
@@ -26,8 +26,8 @@ export const Route = createFileRoute('/repos/$owner/$repo/')({
   validateSearch: parseRepoCodeSearch,
   loaderDeps: ({ search }) => search,
   loader: async ({ deps: search, params }) => {
-    const detail = await loadRepo({ data: params })
-    const selectedPath = selectedRouteFilePath(detail.files, search.file)
+    const content = await loadRepoContent({ data: params })
+    const selectedPath = selectedRouteFilePath(content.files, search.file)
     let selectedFile = null
     let selectedFileError = null
     if (selectedPath) {
@@ -39,20 +39,20 @@ export const Route = createFileRoute('/repos/$owner/$repo/')({
         selectedFileError = routeErrorMessage(error, 'File content is unavailable.')
       }
     }
-    return { detail, selectedFile, selectedFileError, selectedPath }
+    return { content, selectedFile, selectedFileError, selectedPath }
   },
   component: RepoIndexRoute,
 })
 
 function RepoIndexRoute() {
-  const { detail, selectedFile, selectedFileError, selectedPath } =
+  const { content, selectedFile, selectedFileError, selectedPath } =
     Route.useLoaderData()
   const params = Route.useParams()
   const navigate = useNavigate({ from: Route.fullPath })
 
   return (
     <RepoDetailPage
-      detail={detail}
+      content={content}
       onSelectFile={(file) => {
         void navigate({ search: { file: displayRouteFilePath(file.path) } })
       }}

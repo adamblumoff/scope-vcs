@@ -10,6 +10,7 @@ on:
       - "api/src/http/routes.rs"
       - "api/src/http/type_exports.rs"
       - "cli/**"
+      - "crates/scope-api-contract/**"
       - "crates/scope-core/**"
       - "rust-toolchain.toml"
       - "web/src/api/types.generated.ts"
@@ -24,6 +25,7 @@ on:
       - "api/src/http/routes.rs"
       - "api/src/http/type_exports.rs"
       - "cli/**"
+      - "crates/scope-api-contract/**"
       - "crates/scope-core/**"
       - "rust-toolchain.toml"
       - "web/src/api/types.generated.ts"
@@ -41,6 +43,23 @@ env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
 
 jobs:
+  prepare:
+    name: Prepare distribution matrix
+    if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    outputs:
+      matrix: ${{ steps.targets.outputs.matrix }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Read distribution targets
+        id: targets
+        shell: bash
+        run: |
+          matrix="$(jq -c '{include: [.targets[] | {label, runner, target: .triple, artifact, binary, builder, smoke}]}' cli/distribution/targets.json)"
+          echo "matrix=$matrix" >> "$GITHUB_OUTPUT"
+
   checks:
     name: Check scope-cli
     runs-on: ubuntu-latest
@@ -49,7 +68,7 @@ jobs:
         uses: actions/checkout@v7
 
       - name: Install Rust
-        uses: dtolnay/rust-toolchain@master
+        uses: dtolnay/rust-toolchain@fa04a1451ff1842e2626ccb99004d0195b455a88
         with:
           toolchain: 1.94.0
           components: rustfmt, clippy
@@ -87,62 +106,19 @@ jobs:
 
   build:
     name: Build ${{ matrix.label }}
-    needs: checks
+    needs: [checks, prepare]
     if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main'
     runs-on: ${{ matrix.runner }}
     strategy:
       fail-fast: false
-      matrix:
-        include:
-          - label: Linux x64
-            runner: ubuntu-latest
-            target: x86_64-unknown-linux-gnu
-            artifact: scope-x86_64-unknown-linux-gnu
-            binary: target/x86_64-unknown-linux-gnu/release/scope
-            builder: cargo
-            smoke: true
-          - label: Linux ARM64
-            runner: ubuntu-latest
-            target: aarch64-unknown-linux-gnu
-            artifact: scope-aarch64-unknown-linux-gnu
-            binary: target/aarch64-unknown-linux-gnu/release/scope
-            builder: cross
-            smoke: false
-          - label: macOS Intel
-            runner: macos-15-intel
-            target: x86_64-apple-darwin
-            artifact: scope-x86_64-apple-darwin
-            binary: target/x86_64-apple-darwin/release/scope
-            builder: cargo
-            smoke: true
-          - label: macOS Apple Silicon
-            runner: macos-15
-            target: aarch64-apple-darwin
-            artifact: scope-aarch64-apple-darwin
-            binary: target/aarch64-apple-darwin/release/scope
-            builder: cargo
-            smoke: true
-          - label: Windows x64
-            runner: windows-latest
-            target: x86_64-pc-windows-msvc
-            artifact: scope-x86_64-pc-windows-msvc.exe
-            binary: target/x86_64-pc-windows-msvc/release/scope.exe
-            builder: cargo
-            smoke: true
-          - label: Windows ARM64
-            runner: windows-latest
-            target: aarch64-pc-windows-msvc
-            artifact: scope-aarch64-pc-windows-msvc.exe
-            binary: target/aarch64-pc-windows-msvc/release/scope.exe
-            builder: cargo
-            smoke: false
+      matrix: ${{ fromJSON(needs.prepare.outputs.matrix) }}
 
     steps:
       - name: Checkout
         uses: actions/checkout@v7
 
       - name: Install Rust
-        uses: dtolnay/rust-toolchain@master
+        uses: dtolnay/rust-toolchain@fa04a1451ff1842e2626ccb99004d0195b455a88
         with:
           toolchain: 1.94.0
           targets: ${{ matrix.target }}
@@ -214,14 +190,7 @@ jobs:
       - name: Verify artifacts and write checksums
         shell: bash
         run: |
-          expected=(
-            scope-x86_64-unknown-linux-gnu
-            scope-aarch64-unknown-linux-gnu
-            scope-x86_64-apple-darwin
-            scope-aarch64-apple-darwin
-            scope-x86_64-pc-windows-msvc.exe
-            scope-aarch64-pc-windows-msvc.exe
-          )
+          mapfile -t expected < <(jq -r '.targets[].artifact' cli/distribution/targets.json)
 
           for artifact in "${expected[@]}"; do
             test -s "cli/dist/$artifact"
@@ -247,19 +216,15 @@ jobs:
           cp -a cli/. .railway-upload/
           cp rust-toolchain.toml .railway-upload/rust-toolchain.toml
           mkdir -p .railway-upload/crates
+          cp -a crates/scope-api-contract .railway-upload/crates/scope-api-contract
           cp -a crates/scope-core .railway-upload/crates/scope-core
+          perl -0pi -e 's#path = "\.\./crates/scope-api-contract"#path = "crates/scope-api-contract"#' .railway-upload/Cargo.toml
           perl -0pi -e 's#path = "\.\./crates/scope-core"#path = "crates/scope-core"#' .railway-upload/Cargo.toml
-          mkdir -p .railway-upload/cli
-          cp -a cli/. .railway-upload/cli/
-          mkdir -p .railway-upload/cli/crates
-          cp rust-toolchain.toml .railway-upload/cli/rust-toolchain.toml
-          cp -a crates/scope-core .railway-upload/cli/crates/scope-core
-          perl -0pi -e 's#path = "\.\./crates/scope-core"#path = "crates/scope-core"#' .railway-upload/cli/Cargo.toml
-          for root in .railway-upload .railway-upload/cli; do
-            grep -F 'path = "crates/scope-core"' "$root/Cargo.toml"
-            test -s "$root/railpack.json"
-            test -s "$root/crates/scope-core/Cargo.toml"
-          done
+          grep -F 'path = "crates/scope-api-contract"' .railway-upload/Cargo.toml
+          grep -F 'path = "crates/scope-core"' .railway-upload/Cargo.toml
+          test -s .railway-upload/railpack.json
+          test -s .railway-upload/crates/scope-api-contract/Cargo.toml
+          test -s .railway-upload/crates/scope-core/Cargo.toml
 
       - name: Install Railway CLI
         run: npm install -g @railway/cli@5.23.1

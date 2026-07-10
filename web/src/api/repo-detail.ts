@@ -3,56 +3,40 @@ import {
   clerkApiTokenTemplate,
   getPublicApiConnection,
 } from '@/api/client'
-import { loadProjectionPreviewsForRequest } from './projection-preview'
 import { gitRemoteUrl } from './repo-urls'
 import type {
-  RepoDetail,
+  RepoContent,
   RepoFile,
   RepoFileContent,
   RepoLiveState,
   RepoParams,
-  RepoSession,
   RepoSummary,
 } from './types'
+import { ApiRouteTemplates, buildApiPath } from './types.generated'
 export { parseRepoParams } from './repo-params'
 
-export async function loadRepoForRequest(data: RepoParams) {
+export async function loadRepoContentForRequest(data: RepoParams) {
   const api = createApiClient()
-  const [repo, session] = await Promise.all([
-    api.get<RepoSummary>(`/v1/repos/${data.owner}/${data.repo}`, {
-      auth: 'optional',
-    }),
-    api.get<RepoSession>(`/v1/repos/${data.owner}/${data.repo}/session`, {
-      auth: 'optional',
-    }),
-  ])
-  const [files, projectionPreviews] = await Promise.all([
-    api.get<RepoFile[]>(`/v1/repos/${data.owner}/${data.repo}/files`, {
-      auth: 'optional',
-    }),
-    loadProjectionPreviewsForRequest(data, 'live', {
-      api,
-      includePrivate: repo.access.actor !== 'Public',
-    }),
-  ])
+  const files = await api.get<RepoFile[]>(repoPath(ApiRouteTemplates.repoFiles, data), {
+    auth: 'optional',
+  })
 
   return {
-    capabilities: session.capabilities,
     clone_remote_url: gitRemoteUrl(
       getPublicApiConnection('building clone command'),
-      `/git/public/${repo.owner_handle}/${repo.name}`,
+      buildApiPath(ApiRouteTemplates.gitRepo, {
+        mode: 'public',
+        org: data.owner,
+        repo: data.repo,
+      }),
     ),
     files,
-    kind: 'repo',
-    live: repoLiveState(data, repo),
-    projection_previews: projectionPreviews,
-    repo,
-  } satisfies RepoDetail
+  } satisfies RepoContent
 }
 
 export async function loadRepoLiveStateForRequest(data: RepoParams) {
   const api = createApiClient()
-  const repo = await api.get<RepoSummary>(`/v1/repos/${data.owner}/${data.repo}`, {
+  const repo = await api.get<RepoSummary>(repoPath(ApiRouteTemplates.repo, data), {
     auth: 'optional',
   })
   return repoLiveState(data, repo)
@@ -63,7 +47,7 @@ export async function loadRepoFileForRequest(
 ) {
   const api = createApiClient()
   return api.get<RepoFileContent>(
-    `/v1/repos/${encodeURIComponent(data.owner)}/${encodeURIComponent(data.repo)}/files/content?path=${encodeURIComponent(data.path)}`,
+    `${repoPath(ApiRouteTemplates.repoFileContent, data)}?path=${encodeURIComponent(data.path)}`,
     { auth: 'optional' },
   )
 }
@@ -73,8 +57,12 @@ function repoLiveState(data: RepoParams, repo: RepoSummary): RepoLiveState {
     clerk_token_template: clerkApiTokenTemplate(),
     event_stream_url: gitRemoteUrl(
       getPublicApiConnection('building repo event stream URL'),
-      `/v1/repos/${encodeURIComponent(data.owner)}/${encodeURIComponent(data.repo)}/events`,
+      repoPath(ApiRouteTemplates.repoEvents, data),
     ),
     repo,
   }
+}
+
+function repoPath(template: string, data: RepoParams) {
+  return buildApiPath(template, { owner: data.owner, repo: data.repo })
 }

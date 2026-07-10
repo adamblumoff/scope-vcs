@@ -3,7 +3,6 @@ import { test } from 'node:test'
 
 import type { RepoLiveState } from '@/api/types'
 import {
-  canUseRepoLiveRefresh,
   parseRepoChangeEvent,
   takeSseMessages,
   usesVersionedRepoChangeEvents,
@@ -36,14 +35,12 @@ test('takeSseMessages keeps partial message buffered', () => {
 test('public repo readers keep a live refresh stream without versioned events', () => {
   const live = repoLiveState('Public', 0)
 
-  assert.equal(canUseRepoLiveRefresh(live), true)
   assert.equal(usesVersionedRepoChangeEvents(live), false)
 })
 
 test('members use versioned repo change events', () => {
   const live = repoLiveState('Member', 2)
 
-  assert.equal(canUseRepoLiveRefresh(live), true)
   assert.equal(usesVersionedRepoChangeEvents(live), true)
 })
 
@@ -61,7 +58,6 @@ function repoLiveState(
       lifecycle_state: 'Published',
       name: 'repo',
       owner_handle: 'owner',
-      pending_import_pending: false,
       open_request_count: 0,
       request_permissions: {
         can_submit_request: true,
@@ -75,7 +71,6 @@ function repoLiveState(
         can_manage_members: actor === 'Owner',
         can_push: false,
         can_read_private_files: actor !== 'Public',
-        can_update_repo_settings: actor === 'Owner',
       },
     },
   }

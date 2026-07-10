@@ -25,7 +25,7 @@ pub(crate) async fn repo_events(
     let repo_id = repo_id(&owner, &repo_name);
     let receiver = state.repo_events.subscribe(&repo_id);
 
-    let repo = match find_repo(&state, &owner, &repo_name) {
+    let repo = match find_repo(&state, &owner, &repo_name).await {
         Ok(repo) => repo,
         Err(error) => {
             drop(receiver);
@@ -72,7 +72,9 @@ pub(crate) async fn repo_events(
                 &stream_state.repo_name,
                 stream_state.user.as_ref(),
                 event,
-            ) {
+            )
+            .await
+            {
                 Ok(event) => event,
                 Err(_) => return None,
             };
@@ -99,14 +101,14 @@ struct RepoEventStreamState {
     user: Option<UserAccount>,
 }
 
-fn stream_event_for_user(
+async fn stream_event_for_user(
     state: &AppState,
     owner: &str,
     repo_name: &str,
     user: Option<&UserAccount>,
     event: RepoChangeEvent,
 ) -> Result<RepoChangeEvent, ApiError> {
-    let repo = find_repo(state, owner, repo_name)?;
+    let repo = find_repo(state, owner, repo_name).await?;
     let principal = principal_for_scope_user(&repo, user);
     ensure_repo_events_allowed(state, &repo, &principal)?;
     event_for_principal(state, &repo, &principal, event)

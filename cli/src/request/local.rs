@@ -18,7 +18,7 @@ use reqwest::blocking::Client;
 use scope_core::domain::requests::RequestBaseAudience;
 use std::{
     fs,
-    path::PathBuf,
+    path::{Path, PathBuf},
     time::{SystemTime, UNIX_EPOCH},
 };
 
@@ -47,17 +47,16 @@ pub(super) fn load_context(
 }
 
 pub(super) fn load_context_and_request_id(
+    git_repo: &GitRepo,
     client: &Client,
     api_url: &str,
     session_token: &str,
     remote: Option<String>,
     request_id: Option<String>,
-    command_name: &str,
 ) -> anyhow::Result<(RequestContext, String)> {
-    let git_repo = crate::git_repo::ensure_git_repo_ready(command_name)?;
-    let context = load_context(&git_repo, client, api_url, session_token, remote.as_deref())?;
+    let context = load_context(git_repo, client, api_url, session_token, remote.as_deref())?;
     crate::request::render::print_repo_access(&context.repo);
-    let request_id = current_or_explicit_request_id(&git_repo, request_id)?;
+    let request_id = current_or_explicit_request_id(git_repo, request_id)?;
     Ok((context, request_id))
 }
 
@@ -261,24 +260,42 @@ pub(super) fn fetch_request_branch_bundle(
         &context.target.repo,
         &request.id,
     )?;
-    let bundle_path = request_bundle_path(git_repo, &request.id)?;
-    if let Some(parent) = bundle_path.parent() {
+    let bundle = TemporaryFile::new(request_bundle_path(git_repo, &request.id)?);
+    if let Some(parent) = bundle.path().parent() {
         fs::create_dir_all(parent)
             .with_context(|| format!("create {}", parent.to_string_lossy()))?;
     }
-    fs::write(&bundle_path, bytes)
-        .with_context(|| format!("write {}", bundle_path.to_string_lossy()))?;
+    fs::write(bundle.path(), bytes)
+        .with_context(|| format!("write {}", bundle.path().to_string_lossy()))?;
     let remote_ref = request_remote_ref(&context.target.remote, &request.id);
-    let fetch_result = run_git_in_repo(
+    run_git_in_repo(
         git_repo,
         &[
             "fetch",
-            bundle_path.to_string_lossy().as_ref(),
+            bundle.path().to_string_lossy().as_ref(),
             &format!("+{}:{remote_ref}", request.request_ref),
         ],
-    );
-    let _ = fs::remove_file(&bundle_path);
-    fetch_result
+    )
+}
+
+struct TemporaryFile {
+    path: PathBuf,
+}
+
+impl TemporaryFile {
+    fn new(path: PathBuf) -> Self {
+        Self { path }
+    }
+
+    fn path(&self) -> &Path {
+        &self.path
+    }
+}
+
+impl Drop for TemporaryFile {
+    fn drop(&mut self) {
+        let _ = fs::remove_file(&self.path);
+    }
 }
 
 pub(super) fn projection_label_for_repo(repo: &RepoSummaryResponse) -> &'static str {

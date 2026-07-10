@@ -1,5 +1,5 @@
 use crate::{config::FIRST_PUSH_TOKEN_BYTES, domain::store::UserAccount, error::ApiError};
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 
 const USER_CODE_BYTES: usize = 8;
 pub const MAX_PENDING_DEVICE_LOGINS: u64 = 1024;
@@ -54,7 +54,7 @@ pub struct CliSessionSummary {
     pub expires_at_unix: u64,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Deserialize, Serialize)]
 #[cfg_attr(any(test, feature = "ts"), derive(ts_rs::TS))]
 pub struct SessionIdentity {
     pub user_id: String,

@@ -1,15 +1,9 @@
-#[cfg(any(test, feature = "memory-metadata"))]
-use super::cleanup_queue::{
-    queue_pending_repo_storage_deletion, queue_pending_source_blob_deletions,
-};
 use super::{
     cleanup_queue::{
         queue_pending_repo_storage_cleanup_row, queue_pending_source_blob_deletion_rows,
     },
-    repository_rows::save_repository_row,
+    repository_rows::save_repository_delta,
 };
-#[cfg(any(test, feature = "memory-metadata"))]
-use crate::domain::store::AppCatalog;
 use crate::{
     domain::{
         repo_actions::{RepoEffect, RepoEffects},
@@ -21,13 +15,14 @@ use sea_orm::ConnectionTrait;
 
 pub async fn save_repo_mutation<C>(
     conn: &C,
+    before: &StoredRepository,
     repo: &StoredRepository,
     effects: &RepoEffects,
 ) -> Result<(), ApiError>
 where
     C: ConnectionTrait,
 {
-    save_repository_row(conn, repo).await?;
+    save_repository_delta(conn, before, repo).await?;
     save_repo_effects(conn, effects).await
 }
 
@@ -51,24 +46,4 @@ where
     }
 
     Ok(())
-}
-
-#[cfg(any(test, feature = "memory-metadata"))]
-pub fn apply_repo_effects(catalog: &mut AppCatalog, effects: RepoEffects) {
-    for effect in effects.iter() {
-        match effect {
-            RepoEffect::DeleteRepoStorage(cleanup) => {
-                queue_pending_repo_storage_deletion(
-                    &mut catalog.pending_repo_storage_deletions,
-                    cleanup.clone(),
-                );
-            }
-            RepoEffect::DeleteSourceBlobs(blobs) => {
-                queue_pending_source_blob_deletions(
-                    &mut catalog.pending_source_blob_deletions,
-                    blobs.clone(),
-                );
-            }
-        }
-    }
 }

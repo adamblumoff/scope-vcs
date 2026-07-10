@@ -7,7 +7,8 @@ const DEFAULT_POLL_INTERVAL_MS: u64 = 1_000;
 const DEFAULT_SCHEMA_WAIT_SECS: u64 = 300;
 const SCHEMA_WAIT_RETRY_SECS: u64 = 2;
 
-fn main() -> anyhow::Result<()> {
+#[tokio::main]
+async fn main() -> anyhow::Result<()> {
     tracing_subscriber::registry()
         .with(
             tracing_subscriber::EnvFilter::try_from_default_env()
@@ -16,7 +17,7 @@ fn main() -> anyhow::Result<()> {
         .with(tracing_subscriber::fmt::layer())
         .init();
 
-    tokio::runtime::Runtime::new()?.block_on(run())
+    run().await
 }
 
 async fn run() -> anyhow::Result<()> {
@@ -32,14 +33,17 @@ async fn run() -> anyhow::Result<()> {
     let metadata = MetadataStore::connect_worker_from_env_with_schema_wait(
         settings.schema_wait_timeout,
         Duration::from_secs(SCHEMA_WAIT_RETRY_SECS),
-    )?;
+    )
+    .await?;
     metadata
         .readiness_check()
+        .await
         .map_err(|error| anyhow::anyhow!("metadata readiness check failed: {}", error.message))?;
 
     loop {
         let summary = metadata
             .run_ready_outbox_jobs(&settings.worker_id, settings.batch_size)
+            .await
             .map_err(|error| anyhow::anyhow!("running outbox jobs: {}", error.message))?;
         if summary.claimed > 0 {
             tracing::info!(

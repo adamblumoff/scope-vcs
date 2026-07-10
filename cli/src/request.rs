@@ -6,14 +6,13 @@ use crate::{
         start_request as api_start_request, submit_request,
     },
     git_repo::{
-        current_branch, ensure_clean_working_tree, ensure_git_repo_ready, head_oid,
+        GitRepo, current_branch, ensure_clean_working_tree, ensure_git_repo_ready, head_oid,
         run_git_in_repo, scope_remote_head_oid, try_run_git_in_repo, warn_if_dirty_working_tree,
     },
     push::DEFAULT_SCOPE_BRANCH,
 };
 use anyhow::{Context, bail};
 use reqwest::blocking::Client;
-use scope_core::domain::requests::RequestDisposition;
 
 mod args;
 mod local;
@@ -23,7 +22,7 @@ mod render;
 mod tests;
 mod text;
 pub use args::RequestArgs;
-use args::RequestCommand;
+use args::{RequestCommand, RequestMergeArgs, RequestResolveArgs};
 use local::{
     base_audience_for_repo, current_or_explicit_request_id, default_join_branch_name,
     default_request_branch_name, ensure_request_branch_context, fetch_main_projection,
@@ -39,14 +38,48 @@ use render::{
 };
 use text::short_oid;
 
-pub fn run_request_command(
+pub struct PreparedRequestCommand {
     args: RequestArgs,
+    git_repo: GitRepo,
+}
+
+pub fn prepare_request_command(args: RequestArgs) -> anyhow::Result<PreparedRequestCommand> {
+    let (command_name, needs_clean_tree, needs_request_branch) = match &args.command {
+        RequestCommand::Start(_) => ("scope request start", true, false),
+        RequestCommand::Join(_) => ("scope request join", true, false),
+        RequestCommand::Pull(_) => ("scope request pull", true, true),
+        RequestCommand::SyncMain(_) => ("scope request sync-main", true, true),
+        RequestCommand::Submit(_) => ("scope request submit", false, true),
+        RequestCommand::Push(_) => ("scope request push", false, false),
+        RequestCommand::Delete(_) => ("scope request delete", false, false),
+        RequestCommand::Share(_) => ("scope request share", false, false),
+        RequestCommand::Status(_) => ("scope request status", false, false),
+        RequestCommand::Comment(_) => ("scope request comment", false, false),
+        RequestCommand::NeedsResponse(_) => ("scope request needs-response", false, false),
+        RequestCommand::Respond(_) => ("scope request respond", false, false),
+        RequestCommand::Resolve(_) => ("scope request resolve", false, false),
+        RequestCommand::Merge(_) => ("scope request merge", false, false),
+    };
+    let git_repo = ensure_git_repo_ready(command_name)?;
+    if needs_clean_tree {
+        ensure_clean_working_tree(&git_repo, command_name)?;
+    }
+    if needs_request_branch {
+        ensure_request_branch_context(&git_repo, command_name)?;
+    }
+    Ok(PreparedRequestCommand { args, git_repo })
+}
+
+pub fn run_request_command(
+    command: PreparedRequestCommand,
     client: &Client,
     api_url: &str,
     session_token: &str,
 ) -> anyhow::Result<()> {
+    let PreparedRequestCommand { args, git_repo } = command;
     match args.command {
         RequestCommand::Start(args) => start_request_branch(
+            &git_repo,
             client,
             api_url,
             session_token,
@@ -54,35 +87,67 @@ pub fn run_request_command(
             args.branch,
             args.title,
         ),
-        RequestCommand::Join(args) => {
-            join_request_branch(client, api_url, session_token, args.remote, args.id)
-        }
+        RequestCommand::Join(args) => join_request_branch(
+            &git_repo,
+            client,
+            api_url,
+            session_token,
+            args.remote,
+            args.id,
+        ),
         RequestCommand::Submit(args) => submit_request_branch(
+            &git_repo,
             client,
             api_url,
             session_token,
             args.remote,
             args.stake_credits,
         ),
-        RequestCommand::Pull(args) => {
-            pull_request_branch(client, api_url, session_token, args.remote, args.id)
-        }
-        RequestCommand::Push(args) => {
-            push_request_branch(client, api_url, session_token, args.remote, args.id)
-        }
+        RequestCommand::Pull(args) => pull_request_branch(
+            &git_repo,
+            client,
+            api_url,
+            session_token,
+            args.remote,
+            args.id,
+        ),
+        RequestCommand::Push(args) => push_request_branch(
+            &git_repo,
+            client,
+            api_url,
+            session_token,
+            args.remote,
+            args.id,
+        ),
         RequestCommand::SyncMain(args) => {
-            sync_main_request_branch(client, api_url, session_token, args.remote)
+            sync_main_request_branch(&git_repo, client, api_url, session_token, args.remote)
         }
-        RequestCommand::Delete(args) => {
-            delete_request_branch(client, api_url, session_token, args.remote, args.id)
-        }
-        RequestCommand::Share(args) => {
-            share_request_branch(client, api_url, session_token, args.remote, args.id)
-        }
-        RequestCommand::Status(args) => {
-            show_request_status(client, api_url, session_token, args.remote, args.id)
-        }
+        RequestCommand::Delete(args) => delete_request_branch(
+            &git_repo,
+            client,
+            api_url,
+            session_token,
+            args.remote,
+            args.id,
+        ),
+        RequestCommand::Share(args) => share_request_branch(
+            &git_repo,
+            client,
+            api_url,
+            session_token,
+            args.remote,
+            args.id,
+        ),
+        RequestCommand::Status(args) => show_request_status(
+            &git_repo,
+            client,
+            api_url,
+            session_token,
+            args.remote,
+            args.id,
+        ),
         RequestCommand::Comment(args) => comment_on_request(
+            &git_repo,
             client,
             api_url,
             session_token,
@@ -91,6 +156,7 @@ pub fn run_request_command(
             args.body,
         ),
         RequestCommand::NeedsResponse(args) => mark_needs_response(
+            &git_repo,
             client,
             api_url,
             session_token,
@@ -99,6 +165,7 @@ pub fn run_request_command(
             args.body,
         ),
         RequestCommand::Respond(args) => respond_to_request_thread(
+            &git_repo,
             client,
             api_url,
             session_token,
@@ -106,91 +173,17 @@ pub fn run_request_command(
             args.id,
             args.body,
         ),
-        RequestCommand::Resolve(args) => resolve_request_thread(
-            client,
-            api_url,
-            session_token,
-            args.remote,
-            args.id,
-            args.disposition.into(),
-            args.body,
-        ),
-        RequestCommand::Merge(args) => merge_request_thread(
-            client,
-            api_url,
-            session_token,
-            args.remote,
-            args.id,
-            args.body,
-            args.yes,
-        ),
-    }
-}
-
-pub fn preflight_request_command(args: &RequestArgs) -> anyhow::Result<()> {
-    match &args.command {
-        RequestCommand::Start(_) => {
-            let git_repo = ensure_git_repo_ready("scope request start")?;
-            ensure_clean_working_tree(&git_repo, "scope request start")
+        RequestCommand::Resolve(args) => {
+            resolve_request_thread(&git_repo, client, api_url, session_token, args)
         }
-        RequestCommand::Join(_) => {
-            let git_repo = ensure_git_repo_ready("scope request join")?;
-            ensure_clean_working_tree(&git_repo, "scope request join")
-        }
-        RequestCommand::Pull(_) => {
-            let git_repo = ensure_git_repo_ready("scope request pull")?;
-            ensure_clean_working_tree(&git_repo, "scope request pull")?;
-            ensure_request_branch_context(&git_repo, "scope request pull")
-        }
-        RequestCommand::SyncMain(_) => {
-            let git_repo = ensure_git_repo_ready("scope request sync-main")?;
-            ensure_clean_working_tree(&git_repo, "scope request sync-main")?;
-            ensure_request_branch_context(&git_repo, "scope request sync-main")
-        }
-        RequestCommand::Submit(_) => {
-            let git_repo = ensure_git_repo_ready("scope request submit")?;
-            ensure_request_branch_context(&git_repo, "scope request submit")
-        }
-        RequestCommand::Push(_) => {
-            ensure_git_repo_ready("scope request push")?;
-            Ok(())
-        }
-        RequestCommand::Delete(_) => {
-            ensure_git_repo_ready("scope request delete")?;
-            Ok(())
-        }
-        RequestCommand::Share(_) => {
-            ensure_git_repo_ready("scope request share")?;
-            Ok(())
-        }
-        RequestCommand::Status(_) => {
-            ensure_git_repo_ready("scope request status")?;
-            Ok(())
-        }
-        RequestCommand::Comment(_) => {
-            ensure_git_repo_ready("scope request comment")?;
-            Ok(())
-        }
-        RequestCommand::NeedsResponse(_) => {
-            ensure_git_repo_ready("scope request needs-response")?;
-            Ok(())
-        }
-        RequestCommand::Respond(_) => {
-            ensure_git_repo_ready("scope request respond")?;
-            Ok(())
-        }
-        RequestCommand::Resolve(_) => {
-            ensure_git_repo_ready("scope request resolve")?;
-            Ok(())
-        }
-        RequestCommand::Merge(_) => {
-            ensure_git_repo_ready("scope request merge")?;
-            Ok(())
+        RequestCommand::Merge(args) => {
+            merge_request_thread(&git_repo, client, api_url, session_token, args)
         }
     }
 }
 
 fn start_request_branch(
+    git_repo: &GitRepo,
     client: &Client,
     api_url: &str,
     session_token: &str,
@@ -198,12 +191,10 @@ fn start_request_branch(
     branch: Option<String>,
     title: String,
 ) -> anyhow::Result<()> {
-    let git_repo = ensure_git_repo_ready("scope request start")?;
-    ensure_clean_working_tree(&git_repo, "scope request start")?;
-    let context = load_context(&git_repo, client, api_url, session_token, remote.as_deref())?;
+    let context = load_context(git_repo, client, api_url, session_token, remote.as_deref())?;
     print_repo_access(&context.repo);
     fetch_main_projection(
-        &git_repo,
+        git_repo,
         &context,
         base_audience_for_repo(&context.repo),
         session_token,
@@ -213,10 +204,10 @@ fn start_request_branch(
         .filter(|value| !value.is_empty())
         .unwrap_or_else(default_request_branch_name);
     let remote_main = remote_main_ref(&context.target.remote);
-    let base_oid = scope_remote_head_oid(&git_repo, &context.target.remote, DEFAULT_SCOPE_BRANCH)?
+    let base_oid = scope_remote_head_oid(git_repo, &context.target.remote, DEFAULT_SCOPE_BRANCH)?
         .context("Scope main projection did not produce a local remote ref")?;
     run_git_in_repo(
-        &git_repo,
+        git_repo,
         &["switch", "--no-track", "-c", &branch, &remote_main],
     )?;
     let response = api_start_request(
@@ -229,8 +220,8 @@ fn start_request_branch(
             title,
         },
     )?;
-    store_request_metadata(&git_repo, &branch, &context, &response.request)?;
-    let request_head_oid = head_oid(&git_repo)?;
+    store_request_metadata(git_repo, &branch, &context, &response.request)?;
+    let request_head_oid = head_oid(git_repo)?;
     push_request_head(
         &context.target,
         session_token,
@@ -239,7 +230,7 @@ fn start_request_branch(
         &response.request.request_ref,
     )?;
     track_request_branch_ref(
-        &git_repo,
+        git_repo,
         &branch,
         &context.target,
         &response.request.id,
@@ -260,18 +251,17 @@ fn start_request_branch(
 }
 
 fn submit_request_branch(
+    git_repo: &GitRepo,
     client: &Client,
     api_url: &str,
     session_token: &str,
     remote: Option<String>,
     stake_credits: Option<u32>,
 ) -> anyhow::Result<()> {
-    let git_repo = ensure_git_repo_ready("scope request submit")?;
-    ensure_request_branch_context(&git_repo, "scope request submit")?;
-    warn_if_dirty_working_tree(&git_repo)?;
-    let context = load_context(&git_repo, client, api_url, session_token, remote.as_deref())?;
+    warn_if_dirty_working_tree(git_repo)?;
+    let context = load_context(git_repo, client, api_url, session_token, remote.as_deref())?;
     print_repo_access(&context.repo);
-    let request_id = current_or_explicit_request_id(&git_repo, None)?;
+    let request_id = current_or_explicit_request_id(git_repo, None)?;
     let detail = get_request(
         client,
         api_url,
@@ -288,11 +278,11 @@ fn submit_request_branch(
     }
     let stake_credits = normalized_submit_stake(&context.repo, stake_credits)?;
     print_submit_stake(stake_credits);
-    let base_audience = maybe_request_branch_base_audience(&git_repo)?
+    let base_audience = maybe_request_branch_base_audience(git_repo)?
         .unwrap_or_else(|| base_audience_for_repo(&context.repo));
-    fetch_main_projection(&git_repo, &context, base_audience, session_token)?;
-    let request_head_oid = head_oid(&git_repo)?;
-    print_change_summary(&git_repo, &context.target, &request_head_oid)?;
+    fetch_main_projection(git_repo, &context, base_audience, session_token)?;
+    let request_head_oid = head_oid(git_repo)?;
+    print_change_summary(git_repo, &context.target, &request_head_oid)?;
 
     push_request_head(
         &context.target,
@@ -307,9 +297,9 @@ fn submit_request_branch(
             detail.request.id
         )
     })?;
-    let branch = current_branch(&git_repo)?;
+    let branch = current_branch(git_repo)?;
     track_request_branch_ref(
-        &git_repo,
+        git_repo,
         &branch,
         &context.target,
         &detail.request.id,
@@ -327,7 +317,7 @@ fn submit_request_branch(
             stake_credits,
         },
     )?;
-    store_request_metadata(&git_repo, &branch, &context, &response.request)?;
+    store_request_metadata(git_repo, &branch, &context, &response.request)?;
 
     println!(
         "Submitted request {} at {}",
@@ -346,17 +336,17 @@ fn submit_request_branch(
 }
 
 fn push_request_branch(
+    git_repo: &GitRepo,
     client: &Client,
     api_url: &str,
     session_token: &str,
     remote: Option<String>,
     request_id: Option<String>,
 ) -> anyhow::Result<()> {
-    let git_repo = ensure_git_repo_ready("scope request push")?;
-    warn_if_dirty_working_tree(&git_repo)?;
-    let context = load_context(&git_repo, client, api_url, session_token, remote.as_deref())?;
+    warn_if_dirty_working_tree(git_repo)?;
+    let context = load_context(git_repo, client, api_url, session_token, remote.as_deref())?;
     print_repo_access(&context.repo);
-    let request_id = current_or_explicit_request_id(&git_repo, request_id)?;
+    let request_id = current_or_explicit_request_id(git_repo, request_id)?;
     let detail = get_request(
         client,
         api_url,
@@ -371,7 +361,7 @@ fn push_request_branch(
             detail.request.id
         );
     }
-    let request_head_oid = head_oid(&git_repo)?;
+    let request_head_oid = head_oid(git_repo)?;
     push_request_head(
         &context.target,
         session_token,
@@ -379,15 +369,15 @@ fn push_request_branch(
         &detail.request.id,
         &detail.request.request_ref,
     )?;
-    let branch = current_branch(&git_repo)?;
+    let branch = current_branch(git_repo)?;
     track_request_branch_ref(
-        &git_repo,
+        git_repo,
         &branch,
         &context.target,
         &detail.request.id,
         &request_head_oid,
     )?;
-    store_request_metadata(&git_repo, &branch, &context, &detail.request)?;
+    store_request_metadata(git_repo, &branch, &context, &detail.request)?;
     let detail = get_request(
         client,
         api_url,
@@ -401,15 +391,14 @@ fn push_request_branch(
 }
 
 fn join_request_branch(
+    git_repo: &GitRepo,
     client: &Client,
     api_url: &str,
     session_token: &str,
     remote: Option<String>,
     request_id: String,
 ) -> anyhow::Result<()> {
-    let git_repo = ensure_git_repo_ready("scope request join")?;
-    ensure_clean_working_tree(&git_repo, "scope request join")?;
-    let context = load_context(&git_repo, client, api_url, session_token, remote.as_deref())?;
+    let context = load_context(git_repo, client, api_url, session_token, remote.as_deref())?;
     print_repo_access(&context.repo);
     let detail = get_request(
         client,
@@ -426,13 +415,13 @@ fn join_request_branch(
         );
     }
     fetch_main_projection(
-        &git_repo,
+        git_repo,
         &context,
         detail.request.base_audience,
         session_token,
     )?;
     fetch_request_branch_bundle(
-        &git_repo,
+        git_repo,
         client,
         api_url,
         session_token,
@@ -441,25 +430,23 @@ fn join_request_branch(
     )?;
     let branch = default_join_branch_name(&detail.request.id);
     let request_ref = request_remote_ref(&context.target.remote, &detail.request.id);
-    run_git_in_repo(&git_repo, &["switch", "-c", &branch, &request_ref])?;
-    store_request_metadata(&git_repo, &branch, &context, &detail.request)?;
+    run_git_in_repo(git_repo, &["switch", "-c", &branch, &request_ref])?;
+    store_request_metadata(git_repo, &branch, &context, &detail.request)?;
     println!("Joined request {} on branch {branch}", detail.request.id);
     Ok(())
 }
 
 fn pull_request_branch(
+    git_repo: &GitRepo,
     client: &Client,
     api_url: &str,
     session_token: &str,
     remote: Option<String>,
     request_id: Option<String>,
 ) -> anyhow::Result<()> {
-    let git_repo = ensure_git_repo_ready("scope request pull")?;
-    ensure_clean_working_tree(&git_repo, "scope request pull")?;
-    ensure_request_branch_context(&git_repo, "scope request pull")?;
-    let context = load_context(&git_repo, client, api_url, session_token, remote.as_deref())?;
+    let context = load_context(git_repo, client, api_url, session_token, remote.as_deref())?;
     print_repo_access(&context.repo);
-    let request_id = current_or_explicit_request_id(&git_repo, request_id)?;
+    let request_id = current_or_explicit_request_id(git_repo, request_id)?;
     let detail = get_request(
         client,
         api_url,
@@ -475,7 +462,7 @@ fn pull_request_branch(
         );
     }
     fetch_request_branch_bundle(
-        &git_repo,
+        git_repo,
         client,
         api_url,
         session_token,
@@ -483,40 +470,38 @@ fn pull_request_branch(
         &detail.request,
     )?;
     let remote_ref = request_remote_ref(&context.target.remote, &detail.request.id);
-    if try_run_git_in_repo(&git_repo, &["merge", "--ff-only", &remote_ref])? {
+    if try_run_git_in_repo(git_repo, &["merge", "--ff-only", &remote_ref])? {
         println!("Pulled request {} by fast-forward", detail.request.id);
     } else {
-        run_git_in_repo(&git_repo, &["rebase", &remote_ref])?;
+        run_git_in_repo(git_repo, &["rebase", &remote_ref])?;
         println!(
             "Pulled request {} by rebasing local commits",
             detail.request.id
         );
     }
-    let branch = current_branch(&git_repo)?;
-    store_request_metadata(&git_repo, &branch, &context, &detail.request)?;
+    let branch = current_branch(git_repo)?;
+    store_request_metadata(git_repo, &branch, &context, &detail.request)?;
     Ok(())
 }
 
 fn sync_main_request_branch(
+    git_repo: &GitRepo,
     client: &Client,
     api_url: &str,
     session_token: &str,
     remote: Option<String>,
 ) -> anyhow::Result<()> {
-    let git_repo = ensure_git_repo_ready("scope request sync-main")?;
-    ensure_clean_working_tree(&git_repo, "scope request sync-main")?;
-    ensure_request_branch_context(&git_repo, "scope request sync-main")?;
-    let context = load_context(&git_repo, client, api_url, session_token, remote.as_deref())?;
+    let context = load_context(git_repo, client, api_url, session_token, remote.as_deref())?;
     print_repo_access(&context.repo);
-    let base_audience = request_branch_base_audience(&git_repo)?;
-    fetch_main_projection(&git_repo, &context, base_audience, session_token)?;
+    let base_audience = request_branch_base_audience(git_repo)?;
+    fetch_main_projection(git_repo, &context, base_audience, session_token)?;
     let remote_main = remote_main_ref(&context.target.remote);
-    run_git_in_repo(&git_repo, &["rebase", &remote_main])?;
-    let base_oid = scope_remote_head_oid(&git_repo, &context.target.remote, DEFAULT_SCOPE_BRANCH)?
+    run_git_in_repo(git_repo, &["rebase", &remote_main])?;
+    let base_oid = scope_remote_head_oid(git_repo, &context.target.remote, DEFAULT_SCOPE_BRANCH)?
         .context("Scope main projection did not produce a local remote ref")?;
     println!(
         "Rebased {} onto latest {} ({})",
-        current_branch(&git_repo)?,
+        current_branch(git_repo)?,
         projection_label_for_repo(&context.repo),
         short_oid(&base_oid)
     );
@@ -524,16 +509,16 @@ fn sync_main_request_branch(
 }
 
 fn show_request_status(
+    git_repo: &GitRepo,
     client: &Client,
     api_url: &str,
     session_token: &str,
     remote: Option<String>,
     request_id: Option<String>,
 ) -> anyhow::Result<()> {
-    let git_repo = ensure_git_repo_ready("scope request status")?;
-    let context = load_context(&git_repo, client, api_url, session_token, remote.as_deref())?;
+    let context = load_context(git_repo, client, api_url, session_token, remote.as_deref())?;
     print_repo_access(&context.repo);
-    if let Some(request_id) = maybe_current_or_explicit_request_id(&git_repo, request_id)? {
+    if let Some(request_id) = maybe_current_or_explicit_request_id(git_repo, request_id)? {
         let detail = get_request(
             client,
             api_url,
@@ -565,6 +550,7 @@ fn show_request_status(
 }
 
 fn comment_on_request(
+    git_repo: &GitRepo,
     client: &Client,
     api_url: &str,
     session_token: &str,
@@ -572,14 +558,8 @@ fn comment_on_request(
     request_id: Option<String>,
     body: String,
 ) -> anyhow::Result<()> {
-    let (context, request_id) = load_context_and_request_id(
-        client,
-        api_url,
-        session_token,
-        remote,
-        request_id,
-        "scope request comment",
-    )?;
+    let (context, request_id) =
+        load_context_and_request_id(git_repo, client, api_url, session_token, remote, request_id)?;
     let response = comment_request(
         client,
         api_url,
@@ -594,6 +574,7 @@ fn comment_on_request(
 }
 
 fn mark_needs_response(
+    git_repo: &GitRepo,
     client: &Client,
     api_url: &str,
     session_token: &str,
@@ -601,14 +582,8 @@ fn mark_needs_response(
     request_id: Option<String>,
     body: String,
 ) -> anyhow::Result<()> {
-    let (context, request_id) = load_context_and_request_id(
-        client,
-        api_url,
-        session_token,
-        remote,
-        request_id,
-        "scope request needs-response",
-    )?;
+    let (context, request_id) =
+        load_context_and_request_id(git_repo, client, api_url, session_token, remote, request_id)?;
     let response = mark_request_needs_response(
         client,
         api_url,
@@ -623,6 +598,7 @@ fn mark_needs_response(
 }
 
 fn respond_to_request_thread(
+    git_repo: &GitRepo,
     client: &Client,
     api_url: &str,
     session_token: &str,
@@ -630,14 +606,8 @@ fn respond_to_request_thread(
     request_id: Option<String>,
     body: Option<String>,
 ) -> anyhow::Result<()> {
-    let (context, request_id) = load_context_and_request_id(
-        client,
-        api_url,
-        session_token,
-        remote,
-        request_id,
-        "scope request respond",
-    )?;
+    let (context, request_id) =
+        load_context_and_request_id(git_repo, client, api_url, session_token, remote, request_id)?;
     let response = respond_to_request(
         client,
         api_url,
@@ -652,21 +622,19 @@ fn respond_to_request_thread(
 }
 
 fn resolve_request_thread(
+    git_repo: &GitRepo,
     client: &Client,
     api_url: &str,
     session_token: &str,
-    remote: Option<String>,
-    request_id: Option<String>,
-    disposition: RequestDisposition,
-    body: Option<String>,
+    args: RequestResolveArgs,
 ) -> anyhow::Result<()> {
     let (context, request_id) = load_context_and_request_id(
+        git_repo,
         client,
         api_url,
         session_token,
-        remote,
-        request_id,
-        "scope request resolve",
+        args.remote,
+        args.id,
     )?;
     let response = resolve_request(
         client,
@@ -676,8 +644,8 @@ fn resolve_request_thread(
             owner: &context.target.owner,
             repo: &context.target.repo,
             request_id: &request_id,
-            disposition,
-            body,
+            disposition: args.disposition.into(),
+            body: args.body,
         },
     )?;
     print_mutation_receipt("Request resolved", &response);
@@ -685,21 +653,19 @@ fn resolve_request_thread(
 }
 
 fn merge_request_thread(
+    git_repo: &GitRepo,
     client: &Client,
     api_url: &str,
     session_token: &str,
-    remote: Option<String>,
-    request_id: Option<String>,
-    body: Option<String>,
-    yes: bool,
+    args: RequestMergeArgs,
 ) -> anyhow::Result<()> {
     let (context, request_id) = load_context_and_request_id(
+        git_repo,
         client,
         api_url,
         session_token,
-        remote,
-        request_id,
-        "scope request merge",
+        args.remote,
+        args.id,
     )?;
     let detail = get_request(
         client,
@@ -710,14 +676,14 @@ fn merge_request_thread(
         &request_id,
     )?;
     ensure_mergeable(&detail.request)?;
-    if !yes {
+    if !args.yes {
         confirm_merge(&detail.request)?;
     }
     let expected_main_oid = detail
         .request
         .mergeability
         .current_main_oid
-        .clone()
+        .as_ref()
         .context("request has no current main oid to merge into")?;
     let response = merge_request(
         client,
@@ -727,9 +693,9 @@ fn merge_request_thread(
             owner: &context.target.owner,
             repo: &context.target.repo,
             request_id: &request_id,
-            expected_main_oid,
-            expected_head_oid: detail.request.mergeability.request_head_oid.clone(),
-            body,
+            expected_main_oid: expected_main_oid.to_string(),
+            expected_head_oid: detail.request.mergeability.request_head_oid.to_string(),
+            body: args.body,
         },
     )?;
     print_mutation_receipt("Request merged", &response);
@@ -737,16 +703,16 @@ fn merge_request_thread(
 }
 
 fn delete_request_branch(
+    git_repo: &GitRepo,
     client: &Client,
     api_url: &str,
     session_token: &str,
     remote: Option<String>,
     request_id: Option<String>,
 ) -> anyhow::Result<()> {
-    let git_repo = ensure_git_repo_ready("scope request delete")?;
-    let context = load_context(&git_repo, client, api_url, session_token, remote.as_deref())?;
+    let context = load_context(git_repo, client, api_url, session_token, remote.as_deref())?;
     print_repo_access(&context.repo);
-    let request_id = current_or_explicit_request_id(&git_repo, request_id)?;
+    let request_id = current_or_explicit_request_id(git_repo, request_id)?;
     let response = api_delete_request(
         client,
         api_url,
@@ -764,15 +730,15 @@ fn delete_request_branch(
 }
 
 fn share_request_branch(
+    git_repo: &GitRepo,
     client: &Client,
     api_url: &str,
     session_token: &str,
     remote: Option<String>,
     request_id: Option<String>,
 ) -> anyhow::Result<()> {
-    let git_repo = ensure_git_repo_ready("scope request share")?;
-    let context = load_context(&git_repo, client, api_url, session_token, remote.as_deref())?;
-    let request_id = current_or_explicit_request_id(&git_repo, request_id)?;
+    let context = load_context(git_repo, client, api_url, session_token, remote.as_deref())?;
+    let request_id = current_or_explicit_request_id(git_repo, request_id)?;
     let detail = get_request(
         client,
         api_url,

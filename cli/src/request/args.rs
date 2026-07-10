@@ -1,5 +1,5 @@
 use clap::{Parser, Subcommand, ValueEnum};
-use scope_core::domain::requests::RequestDisposition;
+use scope_core::domain::requests::ResolutionDisposition;
 
 #[derive(Parser)]
 pub struct RequestArgs {
@@ -150,15 +150,15 @@ pub(super) enum RequestResolveDisposition {
     LowQuality,
 }
 
-impl From<RequestResolveDisposition> for RequestDisposition {
+impl From<RequestResolveDisposition> for ResolutionDisposition {
     fn from(disposition: RequestResolveDisposition) -> Self {
         match disposition {
-            RequestResolveDisposition::UsefulNotMerged => RequestDisposition::UsefulNotMerged,
-            RequestResolveDisposition::HiddenContext => RequestDisposition::HiddenContext,
-            RequestResolveDisposition::NotAligned => RequestDisposition::NotAligned,
-            RequestResolveDisposition::Duplicate => RequestDisposition::Duplicate,
-            RequestResolveDisposition::Abandoned => RequestDisposition::Abandoned,
-            RequestResolveDisposition::LowQuality => RequestDisposition::LowQuality,
+            RequestResolveDisposition::UsefulNotMerged => ResolutionDisposition::UsefulNotMerged,
+            RequestResolveDisposition::HiddenContext => ResolutionDisposition::HiddenContext,
+            RequestResolveDisposition::NotAligned => ResolutionDisposition::NotAligned,
+            RequestResolveDisposition::Duplicate => ResolutionDisposition::Duplicate,
+            RequestResolveDisposition::Abandoned => ResolutionDisposition::Abandoned,
+            RequestResolveDisposition::LowQuality => ResolutionDisposition::LowQuality,
         }
     }
 }

@@ -6,6 +6,7 @@ use crate::domain::{
     },
     requests::{
         RequestActorRole, RequestBaseAudience, RequestDisposition, RequestEventKind, RequestState,
+        ResolutionDisposition,
     },
     store::{
         FileChangeKind, FirstPushTokenStatus, RepoPublicationState, RepositoryActor,
@@ -13,6 +14,7 @@ use crate::domain::{
     },
 };
 use crate::http::{responses::*, routes};
+use crate::repo_events::RepoChangeEvent;
 use std::{fs, path::PathBuf};
 use ts_rs::TS;
 
@@ -31,6 +33,7 @@ fn export_api_types() {
         declaration::<RepositoryMemberPermissions>(&ts_config),
         declaration::<RepositoryInviteState>(&ts_config),
         declaration::<RepoPublicationState>(&ts_config),
+        declaration::<RepoChangeEvent>(&ts_config),
         declaration::<FirstPushTokenStatus>(&ts_config),
         declaration::<FileChangeKind>(&ts_config),
         declaration::<ConfigVisibility>(&ts_config),
@@ -44,6 +47,8 @@ fn export_api_types() {
         declaration::<RequestBaseAudience>(&ts_config),
         declaration::<RequestState>(&ts_config),
         declaration::<RequestDisposition>(&ts_config),
+        declaration::<ResolutionDisposition>(&ts_config),
+        declaration::<GitOid>(&ts_config),
         declaration::<RequestEventKind>(&ts_config),
         declaration::<ProjectionPreviewAudience>(&ts_config),
         declaration::<ProjectionPreviewSource>(&ts_config),
@@ -115,6 +120,8 @@ fn export_api_types() {
         declaration::<RequestMergeabilityStatus>(&ts_config),
         declaration::<RequestMergeabilityResponse>(&ts_config),
         declaration::<RequestSettlementResponse>(&ts_config),
+        declaration::<RequestSettlementPreviewResponse>(&ts_config),
+        declaration::<RequestResolutionOptionResponse>(&ts_config),
         declaration::<RequestEventResponse>(&ts_config),
         declaration::<RequestDeleteResponse>(&ts_config),
         declaration::<StartRequestRequest>(&ts_config),
@@ -125,11 +132,83 @@ fn export_api_types() {
         declaration::<RespondRequestRequest>(&ts_config),
         declaration::<ResolveRequestRequest>(&ts_config),
         declaration::<MergeRequestRequest>(&ts_config),
-        cli_auth_endpoint_declarations(),
+        api_route_template_declarations(),
+        api_path_builder_declaration(),
     ]
     .join("\n\n");
 
     fs::write(output_path, format!("{declarations}\n")).expect("write generated API types");
+}
+
+fn api_route_template_declarations() -> String {
+    let routes = [
+        ("accountSession", routes::ACCOUNT_SESSION),
+        ("cliDeviceLoginComplete", routes::CLI_DEVICE_LOGIN_COMPLETE),
+        (
+            "cliBrowserLoginComplete",
+            routes::CLI_BROWSER_LOGIN_COMPLETE,
+        ),
+        ("cliExchangeGrants", routes::CLI_EXCHANGE_GRANTS),
+        ("cliSessions", routes::CLI_SESSIONS),
+        ("cliSessionById", routes::CLI_SESSION_BY_ID),
+        ("repos", routes::REPOS),
+        ("repo", routes::REPO),
+        ("repoConfig", routes::REPO_CONFIG),
+        ("repoPushIntents", routes::REPO_PUSH_INTENTS),
+        (
+            "repoPushIntentsComplete",
+            routes::REPO_PUSH_INTENTS_COMPLETE,
+        ),
+        ("repoRequests", routes::REPO_REQUESTS),
+        ("repoRequest", routes::REPO_REQUEST),
+        ("repoSession", routes::REPO_SESSION),
+        ("repoFiles", routes::REPO_FILES),
+        ("repoFileContent", routes::REPO_FILE_CONTENT),
+        ("repoRequestChanges", routes::REPO_REQUEST_CHANGES),
+        ("repoRequestFileDiff", routes::REPO_REQUEST_FILE_DIFF),
+        ("repoRequestEditors", routes::REPO_REQUEST_EDITORS),
+        ("repoRequestEditor", routes::REPO_REQUEST_EDITOR),
+        ("repoRequestComments", routes::REPO_REQUEST_COMMENTS),
+        (
+            "repoRequestNeedsResponse",
+            routes::REPO_REQUEST_NEEDS_RESPONSE,
+        ),
+        ("repoRequestRespond", routes::REPO_REQUEST_RESPOND),
+        ("repoRequestResolve", routes::REPO_REQUEST_RESOLVE),
+        ("repoRequestMerge", routes::REPO_REQUEST_MERGE),
+        ("repoEvents", routes::REPO_EVENTS),
+        ("repoCommits", routes::REPO_COMMITS),
+        ("repoCommit", routes::REPO_COMMIT),
+        ("repoCommitFileDiff", routes::REPO_COMMIT_FILE_DIFF),
+        ("repoMembers", routes::REPO_MEMBERS),
+        ("repoInvites", routes::REPO_INVITES),
+        ("repoInvite", routes::REPO_INVITE),
+        ("repoMember", routes::REPO_MEMBER),
+        ("repositoryInvite", routes::REPOSITORY_INVITE),
+        ("repositoryInviteAccept", routes::REPOSITORY_INVITE_ACCEPT),
+        ("repoProjectionPreview", routes::REPO_PROJECTION_PREVIEW),
+        ("gitRepo", routes::GIT_REPO),
+    ];
+    let body = routes
+        .into_iter()
+        .map(|(name, path)| format!("  {name}: \"{path}\","))
+        .collect::<Vec<_>>()
+        .join("\n");
+    format!("export const ApiRouteTemplates = {{\n{body}\n}} as const;")
+}
+
+fn api_path_builder_declaration() -> String {
+    r#"export function buildApiPath(
+  template: string,
+  params: Readonly<Record<string, string>> = {},
+): string {
+  return template.replace(/\{([^}]+)\}/g, (_match, key: string) => {
+    const value = params[key]
+    if (value === undefined) throw new Error(`Missing API route parameter: ${key}`)
+    return encodeURIComponent(value)
+  })
+}"#
+    .to_string()
 }
 
 fn declaration<T: TS>(config: &ts_rs::Config) -> String {
@@ -143,25 +222,4 @@ fn generated_header() -> String {
         "// Do not edit this file by hand.",
     ]
     .join("\n")
-}
-
-fn cli_auth_endpoint_declarations() -> String {
-    let endpoints = [
-        ("accountSession", routes::ACCOUNT_SESSION),
-        ("cliSession", routes::CLI_SESSION),
-        ("deviceLoginStart", routes::CLI_DEVICE_LOGIN),
-        ("deviceLoginPoll", routes::CLI_DEVICE_LOGIN_POLL),
-        ("browserLoginStart", routes::CLI_BROWSER_LOGIN),
-        ("browserLoginExchange", routes::CLI_BROWSER_LOGIN_EXCHANGE),
-        (
-            "exchangeGrantExchange",
-            routes::CLI_EXCHANGE_GRANTS_EXCHANGE,
-        ),
-    ];
-    let body = endpoints
-        .into_iter()
-        .map(|(name, path)| format!("  {name}: \"{path}\","))
-        .collect::<Vec<_>>()
-        .join("\n");
-    format!("export const CliAuthApiEndpoints = {{\n{body}\n}} as const;")
 }

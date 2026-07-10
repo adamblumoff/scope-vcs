@@ -181,7 +181,6 @@ pub fn apply_reviewed_update_to_repo(
     repo.repo_config = next_config;
     repo.visibility_events.extend(visibility_events);
     repo.git_snapshot = Some(update.git_snapshot);
-    repo.pending_import = None;
     repo.first_push_token = None;
     repo.record.publication_state = RepoPublicationState::Published;
     repo.bump_change_version();

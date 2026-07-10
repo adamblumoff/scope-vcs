@@ -29,14 +29,10 @@ export function RequestsPage({
   const { repo } = live
 
   return (
-    <RepoShell
-      active="requests"
-      canManage={repo.access.actor !== 'Public'}
-      params={params}
-    >
+    <RepoShell params={params}>
       <PageContent>
         <PageHeader
-          badges={() => (
+          badges={(
             <>
               <LifecycleBadge state={repo.lifecycle_state} />
               <Badge variant="neutral">{repo.access.actor}</Badge>
