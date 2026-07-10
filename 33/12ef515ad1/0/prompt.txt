@@ -1,0 +1,1 @@
+ok so for this whole data architecture plan, did we expect a performance increasee?
