@@ -1,0 +1,1 @@
+that's fine we want to be on latest vite. thank you so much. do you think we should add more to the konsisten.json file?
