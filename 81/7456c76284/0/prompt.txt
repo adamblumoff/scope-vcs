@@ -1,0 +1,7 @@
+why is this happening?
+
+❯ scope login
+Opening browser to sign in:
+https://scopevcs.com/cli-login?request_id=cli_browser_723ea7aecb4e4ebf0c37f4951d3a46d5a08d61689ab5c8706a7634f8c978af56
+Waiting for browser confirmation...
+Ignoring invalid browser callback: local Scope login callback timed out
