@@ -1,0 +1,1 @@
+alright so what i want you to do is look at [Staged Push Domain Boundary](https://linear.app/scope-vcs/project/staged-push-domain-boundary-ffdd862423a3/overview) and compare to the current state of the codebase and tell me what you think about this
