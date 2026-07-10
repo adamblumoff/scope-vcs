@@ -1,0 +1,1 @@
+this file should be always private btw, even the owner can't make this public. also needs a unique identifier instead of just the name, because another file could be called "scope.json" i like your proposed direction but i don't understand why there's a tradeoff, please explain
