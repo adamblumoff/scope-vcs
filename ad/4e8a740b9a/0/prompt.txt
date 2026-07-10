@@ -1,0 +1,1 @@
+oh nvm then rename it scope-vcs if it collides with a native rust lib
