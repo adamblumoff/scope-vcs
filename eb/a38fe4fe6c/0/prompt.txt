@@ -1,0 +1,1 @@
+ok so this is the question, right. initial requests should just be through the cli, that's fine. but we do need a way for people to communicate back and forth on these requests. do you think we should do this via just the cli at first, or should we do this in the ui? i think both to start.
