@@ -1,0 +1,1 @@
+amazing, go ahead and ab-implement phase 1 in a new branch, go ahead and also commit the changes in the AGENTS.md alongside it.
