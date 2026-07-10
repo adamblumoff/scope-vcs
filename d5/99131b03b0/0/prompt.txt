@@ -1,0 +1,1 @@
+ok we can just change those to bash scripts or whatever you want, then you can uninstall powershell
