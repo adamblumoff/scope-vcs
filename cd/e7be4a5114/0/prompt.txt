@@ -1,0 +1,1 @@
+no so basically i changed my mind, i actually just want a very simple skill (maybe a few paragraphs) that starts with the talked about plan in the thread and then implements the plan, and then does the review loop, so this should actually be called ab-implement. go ahead and traverse my chat threads and tell me how i like agents to implement and review.
