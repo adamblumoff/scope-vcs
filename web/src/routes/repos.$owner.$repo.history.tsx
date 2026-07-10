@@ -12,6 +12,7 @@ import {
   loadCommitDetail,
   loadCommitFileDiff,
   loadCommitHistory,
+  loadOptionalPrivateCommitHistory,
 } from '@/routes/-repo-history-actions'
 import { createFileRoute } from '@tanstack/react-router'
 
@@ -140,16 +141,9 @@ async function loadInitialFileDiff(
 }
 
 async function loadOptionalPrivateHistory(params: RepoParams) {
-  try {
-    return await loadCommitHistory({
-      data: { ...params, audience: 'private' },
-    })
-  } catch (error) {
-    if (isForbiddenOrNotFound(error)) {
-      return null
-    }
-    throw error
-  }
+  return loadOptionalPrivateCommitHistory({
+    data: { ...params, audience: 'private' },
+  })
 }
 
 async function loadPublicHistory(params: RepoParams): Promise<{
@@ -189,13 +183,4 @@ function selectedCommitId(history: CommitHistory | null, commitId?: string) {
 
 function latestCommitId(history: CommitHistory | null) {
   return history?.commits.at(-1)?.projected_id ?? null
-}
-
-function isForbiddenOrNotFound(error: unknown) {
-  return (
-    typeof error === 'object' &&
-    error !== null &&
-    'status' in error &&
-    [403, 404].includes(Number((error as { status: unknown }).status))
-  )
 }

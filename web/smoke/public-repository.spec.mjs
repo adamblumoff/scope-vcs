@@ -38,6 +38,30 @@ test('public repository history renders its seeded commit', async () => {
   })
 })
 
+test('public repository navigates to history after client hydration', async () => {
+  await withPage(repoPath, async (page) => {
+    await page.getByRole('heading', { level: 1, name: repoId }).waitFor()
+    await page.waitForFunction(() => {
+      const link = document.querySelector('a[href$="/history"]')
+      return link && Object.keys(link).some((key) => key.startsWith('__reactProps$'))
+    })
+    const documentSentinel = 'scope-history-client-navigation'
+    await page.evaluate((sentinel) => {
+      window.__scopeSmokeDocument = sentinel
+    }, documentSentinel)
+    await page
+      .getByRole('navigation', { name: 'Repository' })
+      .getByRole('link', { name: 'History', exact: true })
+      .click()
+    await page.getByRole('heading', { level: 1, name: 'History' }).waitFor()
+    await page.getByText('Projected public update', { exact: true }).first().waitFor()
+    assert.equal(
+      await page.evaluate(() => window.__scopeSmokeDocument),
+      documentSentinel,
+    )
+  })
+})
+
 test('public repository requests route is anonymously readable', async () => {
   await withPage(`${repoPath}/requests`, async (page) => {
     await page.getByRole('heading', { level: 1, name: 'Requests' }).waitFor()
