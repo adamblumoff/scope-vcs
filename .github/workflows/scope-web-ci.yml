@@ -88,8 +88,10 @@ jobs:
         shell: bash
         run: |
           rm -rf .railway-upload
-          mkdir -p .railway-upload
-          cp -a web/. .railway-upload/
+          mkdir -p .railway-upload/web
+          cp -a web/. .railway-upload/web/
+          test -s .railway-upload/web/package.json
+          test ! -e .railway-upload/package.json
 
       - name: Install Railway CLI
         run: npm install -g @railway/cli@5.23.1
