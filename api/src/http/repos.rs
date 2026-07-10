@@ -1,4 +1,4 @@
-use crate::domain::policy::Visibility;
+use crate::domain::policy::{ScopePath, Visibility};
 use crate::domain::repo_actions::reviewed_update_api_error;
 use crate::domain::repo_config::is_repo_config_fingerprint;
 use crate::domain::requests::{Request, RequestActorRole, RequestBaseAudience, RequestState};
@@ -397,8 +397,10 @@ pub(crate) async fn get_file_content(
     Path((owner, repo_name)): Path<(String, String)>,
     Query(input): Query<RepoFileContentRequest>,
 ) -> Result<Json<RepoFileContentResponse>, ApiError> {
-    let path = crate::domain::policy::ScopePath::parse(format!("/{}", input.path))
-        .map_err(ApiError::bad_request)?;
+    let path = ScopePath::parse(format!("/{}", input.path)).map_err(ApiError::bad_request)?;
+    if path == ScopePath::root() {
+        return Err(ApiError::bad_request("file path is required"));
+    }
     let user = optional_scope_user(&state, &headers).await?;
     let projected = state
         .metadata

@@ -3,8 +3,14 @@ import {
   loadRepoForRequest,
   parseRepoParams,
 } from '@/api/repos'
-import type { RepoDetail, RepoParams } from '@/api/types'
+import type { RepoParams } from '@/api/types'
 import { RepoDetailPage } from '@/features/repo-detail/repo-detail-page'
+import {
+  displayRouteFilePath,
+  parseRouteFileSearch,
+  routeErrorMessage,
+  selectedRouteFilePath,
+} from '@/lib/route-file'
 import { createFileRoute, useNavigate } from '@tanstack/react-router'
 import { createServerFn } from '@tanstack/react-start'
 
@@ -21,7 +27,7 @@ export const Route = createFileRoute('/repos/$owner/$repo/')({
   loaderDeps: ({ search }) => search,
   loader: async ({ deps: search, params }) => {
     const detail = await loadRepo({ data: params })
-    const selectedPath = selectedRepoPath(detail.files, search.file)
+    const selectedPath = selectedRouteFilePath(detail.files, search.file)
     let selectedFile = null
     let selectedFileError = null
     if (selectedPath) {
@@ -30,7 +36,7 @@ export const Route = createFileRoute('/repos/$owner/$repo/')({
           data: { ...params, path: selectedPath },
         })
       } catch (error) {
-        selectedFileError = errorMessage(error, 'File content is unavailable.')
+        selectedFileError = routeErrorMessage(error, 'File content is unavailable.')
       }
     }
     return { detail, selectedFile, selectedFileError, selectedPath }
@@ -48,7 +54,7 @@ function RepoIndexRoute() {
     <RepoDetailPage
       detail={detail}
       onSelectFile={(file) => {
-        void navigate({ search: { file: displayRepoPath(file.path) } })
+        void navigate({ search: { file: displayRouteFilePath(file.path) } })
       }}
       params={params}
       selectedFile={selectedFile}
@@ -62,26 +68,5 @@ type RepoCodeSearch = { file?: string }
 type RepoFileInput = RepoParams & { path: string }
 
 function parseRepoCodeSearch(search: Record<string, unknown>): RepoCodeSearch {
-  return { file: searchFilePath(search.file) }
-}
-
-function searchFilePath(value: unknown) {
-  if (typeof value !== 'string') return undefined
-  const path = displayRepoPath(value)
-  return path && !path.split('/').some((segment) => segment === '..' || segment === '.')
-    ? path
-    : undefined
-}
-
-function selectedRepoPath(files: RepoDetail['files'], selected?: string) {
-  if (!selected) return null
-  return files.find((file) => displayRepoPath(file.path) === selected)?.path ?? null
-}
-
-function displayRepoPath(path: string) {
-  return path.replace(/^\/+/, '')
-}
-
-function errorMessage(error: unknown, fallback: string) {
-  return error instanceof Error && error.message.trim() ? error.message : fallback
+  return { file: parseRouteFileSearch(search.file) }
 }

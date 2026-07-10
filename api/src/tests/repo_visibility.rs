@@ -112,6 +112,22 @@ async fn public_file_content_uses_the_projected_blob() {
 }
 
 #[tokio::test]
+async fn file_content_rejects_empty_path() {
+    let response = router(test_state_with_repo())
+        .oneshot(
+            Request::builder()
+                .method("GET")
+                .uri("/v1/repos/owner/repo/files/content?path=")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+}
+
+#[tokio::test]
 async fn published_repo_projection_preview_serves_public_file_subset() {
     let state = test_state_with_repo();
     {

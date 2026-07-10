@@ -25,6 +25,12 @@ import {
   RequestDetailPage,
   RequestUnavailablePage,
 } from '@/features/requests/request-detail-page'
+import {
+  displayRouteFilePath,
+  parseRouteFileSearch,
+  routeErrorMessage,
+  selectedRouteFilePath,
+} from '@/lib/route-file'
 import { createFileRoute } from '@tanstack/react-router'
 import { useNavigate } from '@tanstack/react-router'
 import { createServerFn } from '@tanstack/react-start'
@@ -42,11 +48,11 @@ const loadRequestPage = createServerFn({ method: 'GET' })
       try {
         changes = await loadRequestChangesForRequest(data)
       } catch (error) {
-        changesError = errorMessage(error, 'Request changes are unavailable.')
+        changesError = routeErrorMessage(error, 'Request changes are unavailable.')
       }
     }
     const selectedPath = changes
-      ? selectedRequestPath(changes.files, data.file)
+      ? selectedRouteFilePath(changes.files, data.file)
       : null
     let selectedDiff = null
     let selectedDiffError = null
@@ -57,7 +63,7 @@ const loadRequestPage = createServerFn({ method: 'GET' })
           path: selectedPath,
         })
       } catch (error) {
-        selectedDiffError = errorMessage(error, 'File diff is unavailable.')
+        selectedDiffError = routeErrorMessage(error, 'File diff is unavailable.')
       }
     }
 
@@ -153,7 +159,9 @@ function RequestRoute() {
       mergeRequest={(data) => mergeRequest({ data })}
       params={requestParams}
       onSelectFile={(path) => {
-        void navigate({ search: { file: displayPath(path), view: 'changes' } })
+        void navigate({
+          search: { file: displayRouteFilePath(path), view: 'changes' },
+        })
       }}
       onViewChange={(view) => {
         void navigate({ search: { file: undefined, view } })
@@ -211,31 +219,7 @@ function parseRequestReviewSearch(
       ? search.view
       : undefined
   return {
-    file: view === 'changes' ? searchPath(search.file) : undefined,
+    file: view === 'changes' ? parseRouteFileSearch(search.file) : undefined,
     view,
   }
-}
-
-function searchPath(value: unknown) {
-  if (typeof value !== 'string') return undefined
-  const path = displayPath(value)
-  return path && !path.split('/').some((part) => part === '.' || part === '..')
-    ? path
-    : undefined
-}
-
-function displayPath(path: string) {
-  return path.replace(/^\/+/, '')
-}
-
-function selectedRequestPath(
-  files: Array<{ path: string }>,
-  selected?: string,
-) {
-  if (!selected) return null
-  return files.find((file) => displayPath(file.path) === selected)?.path ?? null
-}
-
-function errorMessage(error: unknown, fallback: string) {
-  return error instanceof Error && error.message.trim() ? error.message : fallback
 }

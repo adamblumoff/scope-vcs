@@ -219,7 +219,14 @@ pub fn projected_file_content(
         &repo.visibility_events,
         ProjectionViewKey::from_access(access),
     );
-    let blob = projection_content_tree(&projection).remove(path)?;
+    let blob = projection
+        .commits
+        .iter()
+        .rev()
+        .flat_map(|commit| commit.changes.iter().rev())
+        .find(|change| &change.path == path)?
+        .new_content
+        .clone()?;
     Some(ProjectionViewFileContent {
         file: ProjectionViewFile {
             path: path.clone(),
