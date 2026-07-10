@@ -1,0 +1,1 @@
+ok go ahead and commit and push all the code, then run a local autoreview (skill) loop until green, then go ahead and open the pr and wait for greptile/codex to respond, fix their issues, then go ahead and merge the pr.
