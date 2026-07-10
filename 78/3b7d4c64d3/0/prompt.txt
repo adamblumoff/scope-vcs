@@ -1,0 +1,1 @@
+ok so it mostly works. one ux thing, so after we review the .scope/repo.json file obviously changes, so we need a way to make this ux better so we don't have to commit after every change, what do you think we should do about this?
