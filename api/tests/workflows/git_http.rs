@@ -56,8 +56,17 @@ async fn create_push_intent_hides_repo_before_head_validation_for_non_writer() {
 }
 
 #[tokio::test]
-async fn create_push_intent_returns_null_base_when_repo_has_no_git_snapshot() {
+async fn owner_can_create_first_push_intent_for_unpublished_repo() {
     let state = test_state_with_repo();
+    {
+        let mut catalog = lock_catalog(&state).unwrap();
+        catalog
+            .repositories
+            .get_mut(TEST_REPO_ID)
+            .unwrap()
+            .record
+            .publication_state = RepoPublicationState::Unpublished;
+    }
     let response = request_push_intent(state, &bearer_header(), TEST_PUSH_HEAD_OID).await;
 
     assert_eq!(response.status(), StatusCode::OK);
