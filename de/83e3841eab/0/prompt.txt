@@ -1,0 +1,10 @@
+please make this duplicate error more explicit, then just commit and push to main since it's a small change:
+
+adam-blumoff@adam-blumoff-surface-book-2:~/code/scope-vcs$ scope init
+8c8cc565af5d0f77c54e9f192315c8efcf3bf78c
+Repository name [scope-vcs]:
+Signed in as @adamblumoff <adamblumoff@gmail.com>
+Error: create Scope repository
+
+Caused by:
+    HTTP status client error (409 Conflict) for url (https://scope-api-production-0251.up.railway.app/v1/repos)
