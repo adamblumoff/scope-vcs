@@ -1,0 +1,1 @@
+ok this sounds like a good plan, go ahead and implement on main and make sure to delete dead code along the way. then commit and do an autoreview loop and let me know what you did
