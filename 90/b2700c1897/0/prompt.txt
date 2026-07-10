@@ -1,0 +1,1 @@
+ok does this align with react best practices? if so go ahead and implement as a commit, otherwise modify your plan. also need to delete stuff that is dead along the way
