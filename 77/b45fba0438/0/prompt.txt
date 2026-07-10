@@ -1,0 +1,1 @@
+ok go ahead and merge and then come up with an html plan to make the db schema canonical.
