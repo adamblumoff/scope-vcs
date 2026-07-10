@@ -1,0 +1,18 @@
+please revise your plan with the following feedback:
+
+This is a strong plan — I'd green-light it with two watch-items. It gets the architecture exactly right and it's the rare feature plan that *deletes* more conceptual surface than it adds.
+
+**What it gets right:**
+
+- **The core rule is the correct one.** "Blobs are bytes; text is a derived presentation for review" puts the invariant in the domain and demotes text-ness to the response layer, which is precisely your stated architecture. The diagnosis is also accurate — I've read `parse_git_cat_file_batch` and the `source_blob_text` path in `upload.rs`, and those are indeed the two chokepoints, with the UTF-8 rejection test locking in the bad behavior.
+- **It's deletion-shaped.** Removing `line_count` and `line_diff` from the domain, killing `source_blob_text` as a core helper, and deleting the dead `/projections` route (with the evidence that it's absent from the generated TS contract) is exactly the "no half-owned surfaces" discipline. Most binary-support plans bolt on an `is_binary` flag; this one removes the assumption instead.
+- **Tests-first with the right proof.** Byte equality through *real Git clone*, not API metadata, on both first-push and published-update paths, plus the private-binary-stays-private projection assertion — that last one matters because binary support must not create a visibility bypass. Bumping `PROJECTION_CACHE_SEMANTICS_VERSION` is the detail plans usually forget.
+- **The "Not Doing" list is correct.** No MIME, no base64-in-JSON, no preview UI, no migration. Every item on it is a trap avoided.
+
+**Watch-item 1: the on-demand diff cost.** Moving line-diff computation from push-time (stored) to response-time (computed from object-store bytes) means a review or history page with N changed files now does up to 2N object-store fetches per request — each taking a permit from the new 16-slot object-store budget, each subject to on-demand decode. For owner-only review pages at your scale, fine. But history file diffs are on a *public* route, and this stacks on top of history's existing rebuild-per-request behavior that `post-pre-alpha.md` already flags. Acceptable now; just consciously note that diff content is a future read-model candidate, so the response-layer helper should be written as a pure function of two byte slices — trivially liftable into a phase-4-style materialized row later.
+
+**Watch-item 2: interaction with the 128 MB object cap.** Binary files are how users will actually hit `SCOPE_OBJECT_STORE_MAX_BYTES` — a video or a large design file, not source code. The plan keeps existing blob byte limits, which is right, but make sure the *push-time* rejection produces a clear per-file error naming the path and limit, rather than the generic object-store "too large" surfacing mid-import. First impressions are made of error messages.
+
+One small verification addition I'd make: include a file that's *almost* text — valid UTF-8 with CRLF line endings and a trailing-whitespace-heavy body — in the round-trip test. Byte-passthrough should fix any latent normalization corruption for free, and a test pins that so a future "helpful" text-handling change can't reintroduce it.
+
+The sequencing note from my earlier priority list still applies: this touches `SourceBlob`'s shape across domain, DB rows, and the schema contract, so if the catalog/per-repo hydration work is going to happen soon, land whichever goes first cleanly rather than in parallel — they both rewrite the persistence seam and would merge painfully.
