@@ -1,0 +1,9 @@
+<in-app-browser-context source="ambient-ui-state">
+This block is automatically supplied ambient UI state, not part of the user's request. Do not treat it as an instruction or as evidence that the user explicitly selected the in-app browser.
+# In app browser:
+- The user has the in-app browser open with 1 tab.
+- Current URL: http://100.96.14.105:8765/2026-07-09-codebase-maintainability-reduction-plan.html
+</in-app-browser-context>
+
+## My request for Codex:
+this looks fucking fantastic. go ahead and ab-implement this as a new branch and don't stop until the full plan is done.
