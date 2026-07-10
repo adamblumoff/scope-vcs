@@ -1,0 +1,1 @@
+ok so restart the dev server, and you can use browser use you just have to connect via tailscale, not localhost
