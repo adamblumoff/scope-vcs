@@ -327,13 +327,6 @@ fn hidden_logical_commit_count(owner_projection: &Projection, projection: &Proje
 }
 
 fn projection_tree(projection: &Projection) -> BTreeMap<ScopePath, String> {
-    projection_content_tree(projection)
-        .into_iter()
-        .map(|(path, blob)| (path, blob.git_oid))
-        .collect()
-}
-
-fn projection_content_tree(projection: &Projection) -> BTreeMap<ScopePath, SourceBlob> {
     let mut tree = BTreeMap::new();
     for change in projection
         .commits
@@ -342,7 +335,7 @@ fn projection_content_tree(projection: &Projection) -> BTreeMap<ScopePath, Sourc
     {
         match &change.new_content {
             Some(blob) => {
-                tree.insert(change.path.clone(), blob.clone());
+                tree.insert(change.path.clone(), blob.git_oid.clone());
             }
             None => {
                 tree.remove(&change.path);

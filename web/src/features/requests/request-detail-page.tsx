@@ -120,11 +120,17 @@ export function RequestDetailPage(props: RequestDetailPageProps) {
   const {
     activeResolveDisposition,
     deleteOpen,
-    dispatch,
     removeEditor,
     request,
     resolutionOptions,
+    setCommentBody,
     setDeleteOpen,
+    setEditorUserId,
+    setMergeOpen,
+    setNeedsResponseBody,
+    setResolveBody,
+    setResolveDisposition,
+    setResponseBody,
     submitAddEditor,
     submitComment,
     submitDelete,
@@ -159,9 +165,7 @@ export function RequestDetailPage(props: RequestDetailPageProps) {
               actionError={uiState.actionError}
               editorUserId={uiState.editorUserId}
               onAddEditor={submitAddEditor}
-              onEditorUserIdChange={(value) =>
-                dispatch({ field: 'editorUserId', type: 'bodyChanged', value })
-              }
+              onEditorUserIdChange={setEditorUserId}
               onRemoveEditor={removeEditor}
               pendingAction={uiState.pendingAction}
               request={request}
@@ -172,28 +176,12 @@ export function RequestDetailPage(props: RequestDetailPageProps) {
               actionError={uiState.actionError}
               commentBody={uiState.commentBody}
               needsResponseBody={uiState.needsResponseBody}
-              onCommentBodyChange={(value) =>
-                dispatch({ field: 'commentBody', type: 'bodyChanged', value })
-              }
-              onMergeOpen={() =>
-                dispatch({ open: true, type: 'mergeOpenChanged' })
-              }
-              onNeedsResponseBodyChange={(value) =>
-                dispatch({
-                  field: 'needsResponseBody',
-                  type: 'bodyChanged',
-                  value,
-                })
-              }
-              onResolveBodyChange={(value) =>
-                dispatch({ field: 'resolveBody', type: 'bodyChanged', value })
-              }
-              onResolveDispositionChange={(disposition) =>
-                dispatch({ disposition, type: 'resolveDispositionChanged' })
-              }
-              onResponseBodyChange={(value) =>
-                dispatch({ field: 'responseBody', type: 'bodyChanged', value })
-              }
+              onCommentBodyChange={setCommentBody}
+              onMergeOpen={() => setMergeOpen(true)}
+              onNeedsResponseBodyChange={setNeedsResponseBody}
+              onResolveBodyChange={setResolveBody}
+              onResolveDispositionChange={setResolveDisposition}
+              onResponseBodyChange={setResponseBody}
               onSubmitComment={submitComment}
               onSubmitNeedsResponse={submitNeedsResponse}
               onSubmitResolution={submitResolution}
@@ -224,7 +212,7 @@ export function RequestDetailPage(props: RequestDetailPageProps) {
       <RequestMergeDialog
         error={errorFor(uiState.actionError, 'merge')}
         onConfirm={submitMerge}
-        onOpenChange={(open) => dispatch({ open, type: 'mergeOpenChanged' })}
+        onOpenChange={setMergeOpen}
         open={uiState.mergeOpen}
         pending={uiState.pendingAction === 'merge'}
         request={request}

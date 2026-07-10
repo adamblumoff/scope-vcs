@@ -21,54 +21,40 @@ import {
 
 const FULL_TREE_COLUMNS = 'sm:grid-cols-[minmax(0,1fr)_110px_120px]'
 const COMPACT_TREE_COLUMNS = 'sm:grid-cols-[minmax(0,1fr)_84px_28px]'
-const META_ONLY_TREE_COLUMNS = 'sm:grid-cols-[minmax(0,1fr)_110px]'
-const VISIBILITY_ONLY_TREE_COLUMNS = 'sm:grid-cols-[minmax(0,1fr)_120px]'
-const PATH_ONLY_TREE_COLUMNS = 'sm:grid-cols-[minmax(0,1fr)]'
 
 export function FileSystemTree<TFile extends FileSystemTreeFileBase>({
   compactVisibility = false,
   files,
   getFileMeta,
-  getFolderMeta = defaultFolderMeta,
   metaColumnLabel = 'Status',
   onSelectFile,
   selectedFilePath = null,
-  showMeta = true,
-  showVisibility = true,
 }: {
   compactVisibility?: boolean
   files: TFile[]
   getFileMeta?: (file: TFile) => ReactNode
-  getFolderMeta?: (files: TFile[]) => ReactNode
   metaColumnLabel?: ReactNode
   onSelectFile?: (file: TFile) => void
   selectedFilePath?: string | null
-  showMeta?: boolean
-  showVisibility?: boolean
 }) {
   const root = useMemo(() => buildFileSystemTree(files), [files])
   const treeKey = useMemo(
     () => files.map((file) => displayPath(file.path)).join('\0'),
     [files],
   )
-  const columnsClassName = treeColumns({
-    compactVisibility,
-    showMeta,
-    showVisibility,
-  })
+  const columnsClassName = compactVisibility
+    ? COMPACT_TREE_COLUMNS
+    : FULL_TREE_COLUMNS
 
   return (
     <FileSystemTreeRows
       columnsClassName={columnsClassName}
       compactVisibility={compactVisibility}
       getFileMeta={getFileMeta}
-      getFolderMeta={getFolderMeta}
       key={treeKey}
       onSelectFile={onSelectFile}
       root={root}
       selectedFilePath={selectedFilePath}
-      showMeta={showMeta}
-      showVisibility={showVisibility}
       metaColumnLabel={metaColumnLabel}
     />
   )
@@ -78,24 +64,18 @@ function FileSystemTreeRows<TFile extends FileSystemTreeFileBase>({
   columnsClassName,
   compactVisibility,
   getFileMeta,
-  getFolderMeta,
   metaColumnLabel,
   onSelectFile,
   root,
   selectedFilePath,
-  showMeta,
-  showVisibility,
 }: {
   columnsClassName: string
   compactVisibility: boolean
   getFileMeta?: (file: TFile) => ReactNode
-  getFolderMeta: (files: TFile[]) => ReactNode
   metaColumnLabel: ReactNode
   onSelectFile?: (file: TFile) => void
   root: Extract<FileSystemTreeNode<TFile>, { type: 'folder' }>
   selectedFilePath: string | null
-  showMeta: boolean
-  showVisibility: boolean
 }) {
   const [collapsed, setCollapsed] = useState<Set<string>>(
     () => new Set(folderCollapseKeys(root)),
@@ -122,16 +102,14 @@ function FileSystemTreeRows<TFile extends FileSystemTreeFileBase>({
         )}
       >
         <div>Path</div>
-        {showMeta && <div>{metaColumnLabel}</div>}
-        {showVisibility && (
-          <div className={compactVisibility ? 'text-center' : undefined}>
-            {compactVisibility ? (
-              <span className="sr-only">Visibility</span>
-            ) : (
-              'Visibility'
-            )}
-          </div>
-        )}
+        <div>{metaColumnLabel}</div>
+        <div className={compactVisibility ? 'text-center' : undefined}>
+          {compactVisibility ? (
+            <span className="sr-only">Visibility</span>
+          ) : (
+            'Visibility'
+          )}
+        </div>
       </div>
       <ul className="divide-y divide-border">
         {root.children.map((node) => (
@@ -141,14 +119,11 @@ function FileSystemTreeRows<TFile extends FileSystemTreeFileBase>({
             compactVisibility={compactVisibility}
             depth={0}
             getFileMeta={getFileMeta}
-            getFolderMeta={getFolderMeta}
             key={node.key}
             node={node}
             onSelectFile={onSelectFile}
             onToggleFolder={toggleFolder}
             selectedFilePath={selectedFilePath}
-            showMeta={showMeta}
-            showVisibility={showVisibility}
           />
         ))}
       </ul>
@@ -162,26 +137,20 @@ function FileSystemTreeNodeRow<TFile extends FileSystemTreeFileBase>({
   compactVisibility,
   depth,
   getFileMeta,
-  getFolderMeta,
   node,
   onSelectFile,
   onToggleFolder,
   selectedFilePath,
-  showMeta,
-  showVisibility,
 }: {
   collapsed: Set<string>
   columnsClassName: string
   compactVisibility: boolean
   depth: number
   getFileMeta?: (file: TFile) => ReactNode
-  getFolderMeta: (files: TFile[]) => ReactNode
   node: FileSystemTreeNode<TFile>
   onSelectFile?: (file: TFile) => void
   onToggleFolder: (key: string) => void
   selectedFilePath: string | null
-  showMeta: boolean
-  showVisibility: boolean
 }) {
   if (node.type === 'file') {
     const selected =
@@ -214,30 +183,26 @@ function FileSystemTreeNodeRow<TFile extends FileSystemTreeFileBase>({
             </div>
           )}
         </div>
-        {showMeta && (
-          <div className="flex flex-wrap items-center gap-1.5 text-xs leading-4">
-            <span className="font-medium text-muted-foreground sm:hidden">
-              Status
-            </span>
-            {getFileMeta?.(node.file)}
-          </div>
-        )}
-        {showVisibility && (
-          <div
-            className={cn(
-              'flex items-center gap-1.5',
-              compactVisibility && 'sm:justify-center',
-            )}
-          >
-            <span className="text-xs font-medium text-muted-foreground sm:hidden">
-              Visibility
-            </span>
-            <VisibilityBadge
-              compact={compactVisibility}
-              visibility={node.file.visibility}
-            />
-          </div>
-        )}
+        <div className="flex flex-wrap items-center gap-1.5 text-xs leading-4">
+          <span className="font-medium text-muted-foreground sm:hidden">
+            Status
+          </span>
+          {getFileMeta?.(node.file)}
+        </div>
+        <div
+          className={cn(
+            'flex items-center gap-1.5',
+            compactVisibility && 'sm:justify-center',
+          )}
+        >
+          <span className="text-xs font-medium text-muted-foreground sm:hidden">
+            Visibility
+          </span>
+          <VisibilityBadge
+            compact={compactVisibility}
+            visibility={node.file.visibility}
+          />
+        </div>
       </li>
     )
   }
@@ -280,25 +245,21 @@ function FileSystemTreeNodeRow<TFile extends FileSystemTreeFileBase>({
             {node.name}
           </span>
         </div>
-        {showMeta && (
-          <div className="flex items-center gap-1.5 text-xs leading-4 text-muted-foreground">
-            <span className="font-medium sm:hidden">Status</span>
-            {getFolderMeta(node.files)}
-          </div>
-        )}
-        {showVisibility && (
-          <div
-            className={cn(
-              'flex items-center gap-1.5',
-              compactVisibility && 'sm:justify-center',
-            )}
-          >
-            <span className="text-xs font-medium text-muted-foreground sm:hidden">
-              Visibility
-            </span>
-            <VisibilityBadge compact={compactVisibility} visibility={visibility} />
-          </div>
-        )}
+        <div className="flex items-center gap-1.5 text-xs leading-4 text-muted-foreground">
+          <span className="font-medium sm:hidden">Status</span>
+          {node.files.length} {node.files.length === 1 ? 'file' : 'files'}
+        </div>
+        <div
+          className={cn(
+            'flex items-center gap-1.5',
+            compactVisibility && 'sm:justify-center',
+          )}
+        >
+          <span className="text-xs font-medium text-muted-foreground sm:hidden">
+            Visibility
+          </span>
+          <VisibilityBadge compact={compactVisibility} visibility={visibility} />
+        </div>
       </li>
       {!isCollapsed &&
         node.children.map((child) => (
@@ -308,14 +269,11 @@ function FileSystemTreeNodeRow<TFile extends FileSystemTreeFileBase>({
             compactVisibility={compactVisibility}
             depth={depth + 1}
             getFileMeta={getFileMeta}
-            getFolderMeta={getFolderMeta}
             key={child.key}
             node={child}
             onSelectFile={onSelectFile}
             onToggleFolder={onToggleFolder}
             selectedFilePath={selectedFilePath}
-            showMeta={showMeta}
-            showVisibility={showVisibility}
           />
         ))}
     </>
@@ -332,33 +290,4 @@ function FilePathLabel({ path }: { path: string }) {
       </span>
     </>
   )
-}
-
-function defaultFolderMeta(files: FileSystemTreeFileBase[]) {
-  return (
-    <>
-      {files.length} {files.length === 1 ? 'file' : 'files'}
-    </>
-  )
-}
-
-function treeColumns({
-  compactVisibility,
-  showMeta,
-  showVisibility,
-}: {
-  compactVisibility: boolean
-  showMeta: boolean
-  showVisibility: boolean
-}) {
-  if (showMeta && showVisibility) {
-    return compactVisibility ? COMPACT_TREE_COLUMNS : FULL_TREE_COLUMNS
-  }
-  if (showMeta) {
-    return META_ONLY_TREE_COLUMNS
-  }
-  if (showVisibility) {
-    return VISIBILITY_ONLY_TREE_COLUMNS
-  }
-  return PATH_ONLY_TREE_COLUMNS
 }

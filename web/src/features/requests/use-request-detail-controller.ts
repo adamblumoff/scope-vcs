@@ -14,7 +14,7 @@ import type {
   RespondRequestInput,
 } from '@/api/types'
 import { useRouter } from '@tanstack/react-router'
-import { type FormEvent, useReducer, useState } from 'react'
+import { type FormEvent, useState } from 'react'
 import {
   normalizedBody,
   resolutionOptionsFor,
@@ -36,49 +36,6 @@ export type RequestActionKey =
 export type RequestActionError = {
   key: RequestActionKey
   message: string
-}
-
-type RequestBodyField =
-  | 'commentBody'
-  | 'editorUserId'
-  | 'needsResponseBody'
-  | 'resolveBody'
-  | 'responseBody'
-
-type RequestDetailUiState = {
-  actionError: RequestActionError | null
-  commentBody: string
-  editorUserId: string
-  mergeOpen: boolean
-  needsResponseBody: string
-  pendingAction: RequestActionKey | null
-  resolveBody: string
-  resolveDisposition: RequestWorkflowDisposition
-  responseBody: string
-}
-
-type RequestDetailUiAction =
-  | { field: RequestBodyField; type: 'bodyChanged'; value: string }
-  | { disposition: RequestWorkflowDisposition; type: 'resolveDispositionChanged' }
-  | { open: boolean; type: 'mergeOpenChanged' }
-  | { key: RequestActionKey; type: 'actionStarted' }
-  | {
-      closeMerge?: boolean
-      resetField?: RequestBodyField
-      type: 'actionSucceeded'
-    }
-  | { key: RequestActionKey; message: string; type: 'actionFailed' }
-
-const initialRequestDetailUiState: RequestDetailUiState = {
-  actionError: null,
-  commentBody: '',
-  editorUserId: '',
-  mergeOpen: false,
-  needsResponseBody: '',
-  pendingAction: null,
-  resolveBody: '',
-  resolveDisposition: 'UsefulNotMerged',
-  responseBody: '',
 }
 
 export type RequestDetailControllerProps = {
@@ -108,35 +65,43 @@ export function useRequestDetailController({
 }: RequestDetailControllerProps) {
   const router = useRouter()
   const { request } = detail
+  const [actionError, setActionError] = useState<RequestActionError | null>(null)
+  const [commentBody, setCommentBody] = useState('')
   const [deleteOpen, setDeleteOpen] = useState(false)
-  const [uiState, dispatch] = useReducer(
-    requestDetailUiReducer,
-    initialRequestDetailUiState,
-  )
+  const [editorUserId, setEditorUserId] = useState('')
+  const [mergeOpen, setMergeOpen] = useState(false)
+  const [needsResponseBody, setNeedsResponseBody] = useState('')
+  const [pendingAction, setPendingAction] = useState<RequestActionKey | null>(null)
+  const [resolveBody, setResolveBody] = useState('')
+  const [resolveDisposition, setResolveDisposition] =
+    useState<RequestWorkflowDisposition>('UsefulNotMerged')
+  const [responseBody, setResponseBody] = useState('')
   const resolutionOptions = resolutionOptionsFor(request)
   const activeResolveDisposition = resolutionOptions.some(
-    (option) => option.disposition === uiState.resolveDisposition,
+    (option) => option.disposition === resolveDisposition,
   )
-    ? uiState.resolveDisposition
+    ? resolveDisposition
     : resolutionOptions[0]?.disposition ?? 'UsefulNotMerged'
   const requestParams = { ...params, request_id: request.id }
 
   async function runAction(
     key: RequestActionKey,
     action: () => Promise<unknown>,
-    success?: { closeMerge?: boolean; resetField?: RequestBodyField },
+    onSuccess?: () => void,
   ) {
-    dispatch({ key, type: 'actionStarted' })
+    setActionError(null)
+    setPendingAction(key)
     try {
       await action()
       await router.invalidate()
-      dispatch({ type: 'actionSucceeded', ...success })
+      onSuccess?.()
     } catch (error) {
-      dispatch({
+      setActionError({
         key,
         message: error instanceof Error ? error.message : 'request action failed',
-        type: 'actionFailed',
       })
+    } finally {
+      setPendingAction(null)
     }
   }
 
@@ -144,8 +109,8 @@ export function useRequestDetailController({
     event.preventDefault()
     await runAction(
       'comment',
-      () => commentRequest({ ...requestParams, body: uiState.commentBody }),
-      { resetField: 'commentBody' },
+      () => commentRequest({ ...requestParams, body: commentBody }),
+      () => setCommentBody(''),
     )
   }
 
@@ -156,9 +121,9 @@ export function useRequestDetailController({
       () =>
         markNeedsResponse({
           ...requestParams,
-          body: uiState.needsResponseBody,
+          body: needsResponseBody,
         }),
-      { resetField: 'needsResponseBody' },
+      () => setNeedsResponseBody(''),
     )
   }
 
@@ -169,9 +134,9 @@ export function useRequestDetailController({
       () =>
         respondToRequest({
           ...requestParams,
-          body: normalizedBody(uiState.responseBody),
+          body: normalizedBody(responseBody),
         }),
-      { resetField: 'responseBody' },
+      () => setResponseBody(''),
     )
   }
 
@@ -182,21 +147,21 @@ export function useRequestDetailController({
       () =>
         resolveRequest({
           ...requestParams,
-          body: normalizedBody(uiState.resolveBody),
+          body: normalizedBody(resolveBody),
           disposition: activeResolveDisposition,
         }),
-      { resetField: 'resolveBody' },
+      () => setResolveBody(''),
     )
   }
 
   async function submitMerge(body: string | null) {
     const currentMainOid = request.mergeability.current_main_oid
     if (!currentMainOid) {
-      dispatch({
+      setActionError({
         key: 'merge',
         message: 'Request has no current main OID to merge into.',
-        type: 'actionFailed',
       })
+      setPendingAction(null)
       return
     }
 
@@ -209,12 +174,13 @@ export function useRequestDetailController({
           expected_head_oid: request.mergeability.request_head_oid,
           expected_main_oid: currentMainOid,
         }),
-      { closeMerge: true },
+      () => setMergeOpen(false),
     )
   }
 
   async function submitDelete() {
-    dispatch({ key: 'delete', type: 'actionStarted' })
+    setActionError(null)
+    setPendingAction('delete')
     try {
       const result = await deleteRequest(requestParams)
       if (result.deleted) {
@@ -226,14 +192,14 @@ export function useRequestDetailController({
       }
       await router.invalidate()
       setDeleteOpen(false)
-      dispatch({ type: 'actionSucceeded' })
     } catch (error) {
-      dispatch({
+      setActionError({
         key: 'delete',
         message:
           error instanceof Error ? error.message : 'request delete failed',
-        type: 'actionFailed',
       })
+    } finally {
+      setPendingAction(null)
     }
   }
 
@@ -244,9 +210,9 @@ export function useRequestDetailController({
       () =>
         addRequestEditor({
           ...requestParams,
-          user_id: uiState.editorUserId,
+          user_id: editorUserId,
         }),
-      { resetField: 'editorUserId' },
+      () => setEditorUserId(''),
     )
   }
 
@@ -262,11 +228,17 @@ export function useRequestDetailController({
   return {
     activeResolveDisposition,
     deleteOpen,
-    dispatch,
     removeEditor,
     request,
     resolutionOptions,
+    setCommentBody,
     setDeleteOpen,
+    setEditorUserId,
+    setMergeOpen,
+    setNeedsResponseBody,
+    setResolveBody,
+    setResolveDisposition,
+    setResponseBody,
     submitAddEditor,
     submitComment,
     submitDelete,
@@ -274,36 +246,15 @@ export function useRequestDetailController({
     submitNeedsResponse,
     submitResolution,
     submitResponse,
-    uiState,
-  }
-}
-
-function requestDetailUiReducer(
-  state: RequestDetailUiState,
-  action: RequestDetailUiAction,
-): RequestDetailUiState {
-  switch (action.type) {
-    case 'bodyChanged':
-      return { ...state, [action.field]: action.value }
-    case 'resolveDispositionChanged':
-      return { ...state, resolveDisposition: action.disposition }
-    case 'mergeOpenChanged':
-      return { ...state, mergeOpen: action.open }
-    case 'actionStarted':
-      return { ...state, actionError: null, pendingAction: action.key }
-    case 'actionSucceeded':
-      return {
-        ...state,
-        ...(action.resetField ? { [action.resetField]: '' } : {}),
-        actionError: null,
-        mergeOpen: action.closeMerge ? false : state.mergeOpen,
-        pendingAction: null,
-      }
-    case 'actionFailed':
-      return {
-        ...state,
-        actionError: { key: action.key, message: action.message },
-        pendingAction: null,
-      }
+    uiState: {
+      actionError,
+      commentBody,
+      editorUserId,
+      mergeOpen,
+      needsResponseBody,
+      pendingAction,
+      resolveBody,
+      responseBody,
+    },
   }
 }
