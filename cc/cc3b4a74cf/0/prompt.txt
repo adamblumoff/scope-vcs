@@ -1,0 +1,17 @@
+what happened here?
+
+Apply this Scope push? [y/N]: y
+error: The destination you provided is not a full refname (i.e.,
+starting with "refs/"). We tried to guess what you meant by:
+
+- Looking for a ref that matches 'main' on the remote side.
+- Checking if the <src> being pushed ('dfdd0fb24b99fc4ee0d2fcee8ad309163e047bd2')
+  is a ref in "refs/{heads,tags}/". If so we add a corresponding
+  refs/{heads,tags}/ prefix on the remote side.
+
+Neither worked, so we gave up. You must fully qualify the ref.
+hint: The <src> part of the refspec is a commit object.
+hint: Did you mean to create a new branch by pushing to
+hint: 'dfdd0fb24b99fc4ee0d2fcee8ad309163e047bd2:refs/heads/main'?
+error: failed to push some refs to 'https://scope-api-production-0251.up.railway.app/git/adamblumoff/scope-vcs'
+Error: git push to Scope failed
