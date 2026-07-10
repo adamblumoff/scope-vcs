@@ -1,0 +1,1 @@
+ok if it's not actually being used in any apis, go ahead and delete the column, otherwise just rename the access to "private" or "public"
