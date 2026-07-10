@@ -1,0 +1,15 @@
+ok cool, go ahead and tell me why this is failing:
+
+adam-blumoff@adam-blumoff-surface-book-2:~/code/scope-vcs$ scope push
+6a1f7dd013564797556ee2a77847a48350298885
+Enumerating objects: 4812, done.
+Counting objects: 100% (4812/4812), done.
+Delta compression using up to 8 threads
+Compressing objects: 100% (2234/2234), done.
+Writing objects: 100% (4812/4812), 2.27 MiB | 1.44 MiB/s, done.
+Total 4812 (delta 3266), reused 3426 (delta 2331), pack-reused 0
+error: RPC failed; HTTP 400 curl 22 The requested URL returned error: 400
+send-pack: unexpected disconnect while reading sideband packet
+fatal: the remote end hung up unexpectedly
+Everything up-to-date
+Error: git push to Scope failed
