@@ -1,0 +1,1 @@
+ok i want to build an ab-review skill where you go through all of the threads i have and have a repeated workflow for how i like the agents to review work. tell me first and then i'll give you feedback and you can make the skill. don't actually make the skill rn
