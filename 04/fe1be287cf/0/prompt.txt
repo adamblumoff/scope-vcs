@@ -1,0 +1,1 @@
+ok go ahead and make the pr open and then wait for greptile/codex comments and address thier feedback as necessary then wait until green and then local manual qa until green then go ahead and merge into main and then pull local ainm
