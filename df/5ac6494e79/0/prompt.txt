@@ -1,0 +1,1 @@
+how would you suggest i test the auth flow on prod even though i don't have another email to test with?
