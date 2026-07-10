@@ -1,0 +1,1 @@
+check via the tailscale ip, not localhost
