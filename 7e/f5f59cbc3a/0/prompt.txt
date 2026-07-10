@@ -1,0 +1,3 @@
+ok this actually looks really good, make this a skill in .agents/skills but take out this sentence:
+
+Keep test code separate from source code unless there is a real reason not to.
