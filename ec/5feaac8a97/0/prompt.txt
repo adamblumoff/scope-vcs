@@ -1,0 +1,1 @@
+ok very cool. off topic but can you explain to me sse's and how they work in the context of this repo,
