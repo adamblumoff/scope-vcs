@@ -1,0 +1,72 @@
+# AGENTS.md instructions for /home/adam-blumoff/code/scope-vcs
+
+<INSTRUCTIONS>
+These AGENTS.md instructions replace all previously provided AGENTS.md instructions.
+
+# Global Agent Preferences
+
+These are durable preferences distilled from local agent history. Project instructions and the current user request always take precedence.
+
+## Working Style
+
+- Prefer action once direction is clear. When the user says to go ahead, implement and verify instead of stopping at another proposal.
+- For complex, destructive, architectural, or ambiguous work, first explain the root cause or tradeoff, give a concrete plan, and ask targeted questions if the answer changes the approach.
+- Do not assume. Inspect the repo, running app, logs, screenshots, or device state directly when the user asks what is happening.
+- Keep the user updated with concrete findings, not generic status. Use simple language when explaining failures or architecture.
+
+## Engineering Taste
+
+- Keep implementations as simple as the scope allows. Less is better than more unless there is a strong reason to add machinery.
+- Favor long-term maintainable fixes over local patches. Remove dead code, collapse duplicated logic, and simplify tangled flows while fixing bugs.
+- When a system feels strung together, consider subtracting or redesigning the flow instead of layering another workaround on top.
+- Tests should be useful regression protection, not coverage theater. Prefer the test level that catches real failures quickly, including E2E for important UI, IPC, connection, or workflow behavior.
+
+## Frontend And Product Work
+
+- Check UI work in the running app yourself. Use browser/Playwright/screenshots or available visual tools to verify layout, alignment, interaction, and loading states.
+- Strongly prefer polished, minimal, fast interfaces. Avoid boxy/card-heavy layouts when a clean text, list, or section treatment will work.
+- Alignment and spacing matter. Fix visible UI details before calling work done, especially responsive wrapping, centered/left-aligned elements, hover states, and clipped content.
+- For redesigns, be willing to be bold and creative, but keep the product usable and wired to existing behavior unless the user explicitly allows backend changes.
+- Use named frontend/design/performance skills when the user calls them out, and apply them before implementing.
+
+## Git And Delivery
+
+- Commit, push, merge, or create branches only when the user asks. When asked to commit, verify first and report anything left uncommitted.
+- Use a new branch for risky, destructive, or experimental work when requested. Keep focused fixes on the smallest reasonable change surface.
+- If CI matters for the request, keep going until it is green or explain the blocker with the exact failing check.
+- For firmware, hardware, or device workflows, upload/run/monitor directly when possible and report what happened, including verification gaps.
+
+## Output Expectations
+
+- Summaries should lead with what changed, what was verified, and what remains risky.
+- For bug investigations, include the root cause and why the previous behavior failed before describing the fix.
+- For plans, make them concrete enough to execute: files or areas to inspect, implementation steps, validation steps, and rollback or migration notes when relevant.
+
+--- project-doc ---
+
+This product is still in pre-alpha and we have zero users and zero valuable data. Every change should be destructive, no legacy or backwards compatible bullshit, this application has no users or releases, treat it as such. If you add backwards compatibility, I will go apeshit on your dumbass.
+
+Maintainer = owner or members
+
+When coding, feel free to spin up medium-level subagents to get non-overlapping code work done and then review outputs at the end. If the work is larger, go ahead and split into worktrees accordingly and coordinate their efforts. Before doing this though please inform the user how you're going to use these subagents.
+
+We want the architecture centered around durable domain code: the layer that defines the core concepts, rules, allowed transitions, invariants, and required side effects independent of any delivery mechanism. Outer layers should stay thin and predictable: translate inputs and outputs, call domain behavior, persist or render results, and surface errors without inventing their own rules.
+
+Keep sources of truth singular, make side effects explicit, and prefer small behavior-owned modules over broad catch-all files. When ownership gets blurry, refactor toward clearer boundaries; when code exists only for speculation, compatibility, or half-owned future surfaces, delete it.
+
+
+Please don't use cards for ui, only use them if absolutely necessary.
+
+Once you approach around 1000 LOC in a single file, do an audit of the file and modularize accordingly unless there is a good justification. 
+
+In general, I trust you with refactors as they don't effect the behavior of the application. However, on behavior making changes I want to be very involved and make sure we go slow and methodically. 
+
+Autoreview timeout should be set to 15 minutes
+
+</INSTRUCTIONS>
+
+<environment_context>
+  <current_date>2026-07-10</current_date>
+  <timezone>America/Chicago</timezone>
+  <filesystem><workspace_roots><root>/home/adam-blumoff/code/scope-vcs</root></workspace_roots><permission_profile type="disabled"><file_system type="unrestricted" /></permission_profile></filesystem>
+</environment_context>
