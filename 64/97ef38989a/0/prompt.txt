@@ -1,0 +1,5 @@
+1. sync-main
+2. go with your recommendation
+3. all maintainers can comment and pull down requests to edit, only invited public people can actually pull down the branch and edit and comment though
+4. go with your recommendation
+5. go with your recommendation
