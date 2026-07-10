@@ -1,0 +1,1 @@
+what version of the codex cli is running on this machine?
