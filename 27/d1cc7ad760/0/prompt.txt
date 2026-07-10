@@ -1,0 +1,15 @@
+remeber this:
+
+**1. Canonical repo read foundation.**
+
+Do the read-path work, but make it explicitly about removing the broad aggregate as the default read unit:
+
+- drop the global metadata read lock from normal Postgres reads; `repository()` and `repositories_for_user()` still acquire it today in [mod.rs](/home/adam-blumoff/code/scope-vcs/crates/scope-core/src/db/mod.rs:186)
+- add narrow read APIs for repo summary/access/settings/files instead of returning `StoredRepository` everywhere
+- keep full `StoredRepository` hydration for mutation paths only
+- do not normalize the entire commit graph yet unless the read work proves it is necessary
+
+I would not jump straight to full `logical_commits` / `file_changes` / `visibility_events` tables as the next big thing. That is probably correct eventually, but it delays dogfooding. The first canonical schema slice I would consider is `source_blobs`, because it connects directly to binary correctness.
+
+
+go ahead and gather more recent context for this plan and tell me what you think
