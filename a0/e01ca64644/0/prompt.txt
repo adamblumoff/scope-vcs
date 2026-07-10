@@ -1,0 +1,1 @@
+please explain the remaining blocker in simpler language and give me the system design tradeoffs of each decision
