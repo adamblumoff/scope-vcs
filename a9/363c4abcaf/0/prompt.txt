@@ -1,0 +1,1 @@
+these threads have to be created every automation though, and they also have to be either in a worktree or in a local checkout depending on the config
