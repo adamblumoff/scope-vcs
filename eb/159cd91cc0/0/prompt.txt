@@ -1,0 +1,3 @@
+please tell me if this lighthouse report is valid and what we can do to patch it? 
+
+the json file is in ~/Downloads
