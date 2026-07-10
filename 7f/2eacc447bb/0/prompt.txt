@@ -1,0 +1,7 @@
+<user_action>
+  <context>User initiated a review task. Here's the full review output from reviewer model. User may select one or more comments to resolve.</context>
+  <action>review</action>
+  <results>
+  The changes are a mostly mechanical extraction of repository collaboration handlers and response types, with behavior preserved. `cargo check`, `cargo test`, and the ignored TypeScript export test pass.
+  </results>
+  </user_action>
