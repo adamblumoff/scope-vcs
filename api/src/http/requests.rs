@@ -280,7 +280,7 @@ pub(crate) async fn submit_request(
             "repo maintainer required to submit this request",
         ));
     }
-    let head_oid = normalize_git_oid("head_oid", &input.head_oid)?;
+    let head_oid = git_oid_request("head_oid", &input.head_oid)?;
     let stake_credits = input.stake_credits.unwrap_or(0);
     let mutation = state
         .metadata
@@ -436,8 +436,8 @@ pub(crate) async fn merge_request(
             "request must be submitted before it can be merged",
         ));
     }
-    let expected_main_oid = normalize_git_oid("expected_main_oid", &input.expected_main_oid)?;
-    let expected_head_oid = normalize_git_oid("expected_head_oid", &input.expected_head_oid)?;
+    let expected_main_oid = git_oid_request("expected_main_oid", &input.expected_main_oid)?;
+    let expected_head_oid = git_oid_request("expected_head_oid", &input.expected_head_oid)?;
     let current_main_oid = current_main_oid_for_access(&state, &repo, access)?
         .ok_or_else(|| ApiError::conflict("repo has no main branch to merge into"))?;
     if current_main_oid != expected_main_oid {
@@ -658,15 +658,4 @@ fn random_id(prefix: &str) -> Result<String, ApiError> {
         ApiError::internal_message(format!("failed to create {prefix} id: {error}"))
     })?;
     Ok(format!("{prefix}_{}", hex::encode(bytes)))
-}
-
-fn normalize_git_oid(label: &str, value: &str) -> Result<String, ApiError> {
-    let oid = value.trim();
-    if oid.len() == 40 && oid.bytes().all(|byte| byte.is_ascii_hexdigit()) {
-        Ok(oid.to_ascii_lowercase())
-    } else {
-        Err(ApiError::bad_request(format!(
-            "{label} must be a full SHA-1 Git object id"
-        )))
-    }
 }

@@ -4,7 +4,6 @@ import {
   deleteRepoMemberForRequest,
   deleteRepoForRequest,
   loadRepoCollaborationForRequest,
-  loadRepoForRequest,
   parseCreateRepoInviteInput,
   parseDeleteRepoInviteInput,
   parseDeleteRepoMemberInput,
@@ -12,6 +11,7 @@ import {
   parseUpdateRepoMemberInput,
   updateRepoMemberForRequest,
 } from '@/api/repos'
+import { HttpError } from '@/api/client'
 import { RepoSettingsPage } from '@/features/repo-detail/repo-settings-page'
 import { createFileRoute } from '@tanstack/react-router'
 import { createServerFn } from '@tanstack/react-start'
@@ -19,11 +19,14 @@ import { createServerFn } from '@tanstack/react-start'
 const loadRepoSettings = createServerFn({ method: 'GET' })
   .validator(parseRepoParams)
   .handler(async ({ data }) => {
-    const detail = await loadRepoForRequest(data)
-    const collaboration = detail.repo.access.can_manage_members
-      ? await loadRepoCollaborationForRequest(data)
-      : null
-    return { collaboration, detail }
+    try {
+      return await loadRepoCollaborationForRequest(data)
+    } catch (error) {
+      if (error instanceof HttpError && [403, 404].includes(error.status)) {
+        return null
+      }
+      throw error
+    }
   })
 
 const deleteRepo = createServerFn({ method: 'POST' })
@@ -53,14 +56,13 @@ export const Route = createFileRoute('/repos/$owner/$repo/settings')({
 
 function RepoSettingsRoute() {
   const params = Route.useParams()
-  const { collaboration, detail } = Route.useLoaderData()
+  const collaboration = Route.useLoaderData()
   return (
     <RepoSettingsPage
       createInvite={(data) => createRepoInvite({ data })}
       deleteInvite={(data) => deleteRepoInvite({ data })}
       deleteRepo={(data) => deleteRepo({ data })}
       deleteMember={(data) => deleteRepoMember({ data })}
-      detail={detail}
       initialCollaboration={collaboration}
       params={params}
       updateMember={(data) => updateRepoMember({ data })}

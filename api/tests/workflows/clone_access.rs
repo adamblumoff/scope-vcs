@@ -166,7 +166,7 @@ async fn permissioned_git_projection_rejects_scope_session_without_target_repo_m
     .await
     .unwrap_err();
 
-    assert_eq!(error.status, StatusCode::FORBIDDEN);
+    assert_eq!(error.status(), StatusCode::FORBIDDEN);
 }
 
 #[tokio::test]

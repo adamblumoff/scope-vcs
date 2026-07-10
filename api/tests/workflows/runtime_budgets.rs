@@ -152,8 +152,8 @@ fn git_command_timeout_returns_service_unavailable() {
     let error =
         git_command_output_with_timeout(&mut command, None, Duration::from_millis(25)).unwrap_err();
 
-    assert_eq!(error.status, StatusCode::SERVICE_UNAVAILABLE);
-    assert!(error.message.contains("timed out"));
+    assert_eq!(error.status(), StatusCode::SERVICE_UNAVAILABLE);
+    assert!(error.message().contains("timed out"));
 }
 
 #[test]
@@ -167,8 +167,8 @@ fn git_command_timeout_covers_blocked_stdin_write() {
         git_command_output_with_timeout(&mut command, Some(input), Duration::from_millis(25))
             .unwrap_err();
 
-    assert_eq!(error.status, StatusCode::SERVICE_UNAVAILABLE);
-    assert!(error.message.contains("timed out"));
+    assert_eq!(error.status(), StatusCode::SERVICE_UNAVAILABLE);
+    assert!(error.message().contains("timed out"));
     assert!(started_at.elapsed() < Duration::from_secs(2));
 }
 
@@ -183,8 +183,8 @@ fn git_command_broken_pipe_preserves_child_failure() {
     let error = git_command_output_with_timeout(&mut command, Some(input), Duration::from_secs(2))
         .unwrap_err();
 
-    assert_eq!(error.status, StatusCode::SERVICE_UNAVAILABLE);
-    assert_eq!(error.message, "real git failure");
+    assert_eq!(error.status(), StatusCode::SERVICE_UNAVAILABLE);
+    assert_eq!(error.message(), "real git failure");
 }
 
 #[test]

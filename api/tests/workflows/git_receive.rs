@@ -15,8 +15,8 @@ async fn receive_pack_same_content_with_new_object_key_is_noop() {
 
     let error = persist_test_update(&state, update).await.unwrap_err();
 
-    assert_eq!(error.status, StatusCode::BAD_REQUEST);
-    assert!(error.message.contains("did not change"));
+    assert_eq!(error.status(), StatusCode::BAD_REQUEST);
+    assert!(error.message().contains("did not change"));
 }
 
 #[tokio::test]
@@ -128,9 +128,9 @@ async fn receive_pack_apply_rejects_stale_reviewed_base() {
 
     let error = persist_test_update(&state, update).await.unwrap_err();
 
-    assert_eq!(error.status, StatusCode::CONFLICT);
+    assert_eq!(error.status(), StatusCode::CONFLICT);
     assert_eq!(
-        error.message,
+        error.message(),
         "repo changed since push was reviewed; rerun scope push"
     );
     assert_eq!(
@@ -150,9 +150,9 @@ async fn receive_pack_apply_rejects_reviewed_empty_base_after_snapshot_appears()
 
     let error = persist_test_update(&state, update).await.unwrap_err();
 
-    assert_eq!(error.status, StatusCode::CONFLICT);
+    assert_eq!(error.status(), StatusCode::CONFLICT);
     assert_eq!(
-        error.message,
+        error.message(),
         "repo changed since push was reviewed; rerun scope push"
     );
     assert_eq!(
@@ -266,7 +266,7 @@ async fn published_push_rechecks_member_permission_before_persisting() {
     .await
     .unwrap_err();
 
-    assert_eq!(error.status, StatusCode::FORBIDDEN);
+    assert_eq!(error.status(), StatusCode::FORBIDDEN);
     assert_eq!(
         live_file_content(&state, "/README.md").await.as_deref(),
         Some("hello")
@@ -280,13 +280,13 @@ async fn receive_pack_rejects_non_default_branches_and_tags() {
     feature.branch = "refs/heads/feature".to_string();
 
     let error = persist_test_update(&state, feature).await.unwrap_err();
-    assert_eq!(error.status, StatusCode::BAD_REQUEST);
+    assert_eq!(error.status(), StatusCode::BAD_REQUEST);
 
     let mut tag = receive_pack_update(vec![("/README.md", Some("tag"))]);
     tag.branch = "refs/tags/v1".to_string();
 
     let error = persist_test_update(&state, tag).await.unwrap_err();
-    assert_eq!(error.status, StatusCode::BAD_REQUEST);
+    assert_eq!(error.status(), StatusCode::BAD_REQUEST);
 }
 
 #[tokio::test]

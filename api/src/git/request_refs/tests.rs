@@ -6,14 +6,14 @@ fn request_ref_store_head_must_match_advertised_old_head() {
     ensure_request_ref_store_head_matches_push(Some("a"), Some("a")).unwrap();
 
     let create_error = ensure_request_ref_store_head_matches_push(Some("a"), None).unwrap_err();
-    assert!(create_error.message.contains("fetch and retry"));
+    assert!(create_error.message().contains("fetch and retry"));
 
     let update_error =
         ensure_request_ref_store_head_matches_push(Some("b"), Some("a")).unwrap_err();
-    assert!(update_error.message.contains("fetch and retry"));
+    assert!(update_error.message().contains("fetch and retry"));
 
     let missing_error = ensure_request_ref_store_head_matches_push(None, Some("a")).unwrap_err();
-    assert!(missing_error.message.contains("fetch and retry"));
+    assert!(missing_error.message().contains("fetch and retry"));
 }
 
 #[test]
@@ -91,7 +91,7 @@ fn request_ref_head_must_be_commit_object_not_annotated_tag() {
 
     ensure_request_ref_oid_is_commit(&repo, head.trim()).unwrap();
     let error = ensure_request_ref_oid_is_commit(&repo, tag.trim()).unwrap_err();
-    assert!(error.message.contains("must point at commits"));
+    assert!(error.message().contains("must point at commits"));
     let _ = fs::remove_dir_all(repo);
 }
 

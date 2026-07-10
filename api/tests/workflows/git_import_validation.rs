@@ -28,8 +28,8 @@ async fn pushed_tree_rejects_gitlinks_instead_of_dropping_them() {
         .await
         .unwrap_err();
 
-    assert_eq!(error.status, StatusCode::BAD_REQUEST);
-    assert!(error.message.contains("unsupported Git tree entry"));
+    assert_eq!(error.status(), StatusCode::BAD_REQUEST);
+    assert!(error.message().contains("unsupported Git tree entry"));
 }
 
 #[tokio::test]
@@ -67,11 +67,11 @@ async fn oversized_binary_push_names_path_and_limit() {
         .await
         .unwrap_err();
 
-    assert_eq!(error.status, StatusCode::BAD_REQUEST);
-    assert!(error.message.contains("video.bin"));
+    assert_eq!(error.status(), StatusCode::BAD_REQUEST);
+    assert!(error.message().contains("video.bin"));
     assert!(
         error
-            .message
+            .message()
             .contains(&MAX_PENDING_IMPORT_BLOB_BYTES.to_string())
     );
 }
@@ -113,6 +113,6 @@ fn pushed_tree_rejects_paths_scope_would_normalize_or_git_cannot_serve() {
         ".scope/anything.json",
     ] {
         let error = validate_pushed_file_path(path).unwrap_err();
-        assert_eq!(error.status, StatusCode::BAD_REQUEST);
+        assert_eq!(error.status(), StatusCode::BAD_REQUEST);
     }
 }

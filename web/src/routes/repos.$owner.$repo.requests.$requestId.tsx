@@ -3,7 +3,6 @@ import {
   addRequestEditorForRequest,
   commentRequestForRequest,
   deleteRequestForRequest,
-  loadRepoLiveStateForRequest,
   loadRequestChangesForRequest,
   loadRequestFileDiffForRequest,
   loadRequestForRequest,
@@ -25,6 +24,7 @@ import {
   RequestDetailPage,
   RequestUnavailablePage,
 } from '@/features/requests/request-detail-page'
+import { useRepoLayout } from '@/features/repo-detail/repo-layout-context'
 import {
   displayRouteFilePath,
   parseRouteFileSearch,
@@ -38,10 +38,7 @@ import { createServerFn } from '@tanstack/react-start'
 const loadRequestPage = createServerFn({ method: 'GET' })
   .validator((data: RequestPageInput) => data)
   .handler(async ({ data }) => {
-    const [live, detail] = await Promise.all([
-      loadRepoLiveStateForRequest(data),
-      loadOptionalRequestForRequest(data),
-    ])
+    const detail = await loadOptionalRequestForRequest(data)
     let changes = null
     let changesError = null
     if (detail && data.view === 'changes') {
@@ -71,7 +68,6 @@ const loadRequestPage = createServerFn({ method: 'GET' })
       changes,
       changesError,
       detail,
-      live,
       selectedDiff,
       selectedDiffError,
       selectedPath,
@@ -131,12 +127,12 @@ function RequestRoute() {
     changes,
     changesError,
     detail,
-    live,
     selectedDiff,
     selectedDiffError,
     selectedPath,
     view,
   } = Route.useLoaderData()
+  const live = useRepoLayout()
   const navigate = useNavigate({ from: Route.fullPath })
   const requestParams = {
     owner: params.owner,

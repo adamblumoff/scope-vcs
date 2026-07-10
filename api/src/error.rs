@@ -3,46 +3,41 @@ use axum::{
     http::StatusCode,
     response::{IntoResponse, Response},
 };
+use scope_core::error::{ApiError as CoreApiError, ErrorKind};
+
 #[derive(Debug)]
-pub struct ApiError {
-    pub status: StatusCode,
-    pub message: String,
-}
+pub struct ApiError(CoreApiError);
+
 macro_rules! message_errors {
-    ($($name:ident => $status:ident),+ $(,)?) => {$(
+    ($($name:ident),+ $(,)?) => {$(
         pub fn $name(message: impl Into<String>) -> Self {
-            Self::new(StatusCode::$status, message)
+            CoreApiError::$name(message).into()
         }
     )+};
 }
+
 impl ApiError {
     pub fn bad_request(error: impl std::fmt::Display) -> Self {
-        Self::new(StatusCode::BAD_REQUEST, error.to_string())
+        CoreApiError::bad_request(error).into()
     }
+
     pub fn internal(error: impl std::error::Error) -> Self {
-        Self::new(StatusCode::INTERNAL_SERVER_ERROR, error.to_string())
+        CoreApiError::internal(error).into()
     }
+
     message_errors! {
-        forbidden => FORBIDDEN,
-        conflict => CONFLICT,
-        payload_too_large => PAYLOAD_TOO_LARGE,
-        too_many_requests => TOO_MANY_REQUESTS,
-        unauthorized => UNAUTHORIZED,
-        not_found => NOT_FOUND,
-        internal_message => INTERNAL_SERVER_ERROR,
-        service_unavailable => SERVICE_UNAVAILABLE,
+        forbidden,
+        conflict,
+        payload_too_large,
+        too_many_requests,
+        unauthorized,
+        not_found,
+        internal_message,
+        service_unavailable,
     }
-    fn new(status: StatusCode, message: impl Into<String>) -> Self {
-        Self {
-            status,
-            message: message.into(),
-        }
-    }
-}
-impl From<scope_core::error::ApiError> for ApiError {
-    fn from(error: scope_core::error::ApiError) -> Self {
-        use scope_core::error::ErrorKind;
-        let status = match error.kind {
+
+    pub fn status(&self) -> StatusCode {
+        match self.0.kind {
             ErrorKind::BadRequest => StatusCode::BAD_REQUEST,
             ErrorKind::Conflict => StatusCode::CONFLICT,
             ErrorKind::Forbidden => StatusCode::FORBIDDEN,
@@ -52,33 +47,34 @@ impl From<scope_core::error::ApiError> for ApiError {
             ErrorKind::ServiceUnavailable => StatusCode::SERVICE_UNAVAILABLE,
             ErrorKind::TooManyRequests => StatusCode::TOO_MANY_REQUESTS,
             ErrorKind::Unauthorized => StatusCode::UNAUTHORIZED,
-        };
-        Self::new(status, error.message)
-    }
-}
-impl From<ApiError> for scope_core::error::ApiError {
-    fn from(error: ApiError) -> Self {
-        use scope_core::error::ErrorKind;
-        let kind = match error.status {
-            StatusCode::BAD_REQUEST => ErrorKind::BadRequest,
-            StatusCode::CONFLICT => ErrorKind::Conflict,
-            StatusCode::FORBIDDEN => ErrorKind::Forbidden,
-            StatusCode::NOT_FOUND => ErrorKind::NotFound,
-            StatusCode::PAYLOAD_TOO_LARGE => ErrorKind::PayloadTooLarge,
-            StatusCode::SERVICE_UNAVAILABLE => ErrorKind::ServiceUnavailable,
-            StatusCode::TOO_MANY_REQUESTS => ErrorKind::TooManyRequests,
-            StatusCode::UNAUTHORIZED => ErrorKind::Unauthorized,
-            _ => ErrorKind::Internal,
-        };
-        Self {
-            kind,
-            message: error.message,
         }
     }
+
+    pub fn message(&self) -> &str {
+        &self.0.message
+    }
+
+    pub fn into_message(self) -> String {
+        self.0.message
+    }
 }
+
+impl From<CoreApiError> for ApiError {
+    fn from(error: CoreApiError) -> Self {
+        Self(error)
+    }
+}
+
+impl From<ApiError> for CoreApiError {
+    fn from(error: ApiError) -> Self {
+        error.0
+    }
+}
+
 impl IntoResponse for ApiError {
     fn into_response(self) -> Response {
-        let body = serde_json::json!({ "error": self.message });
-        (self.status, Json(body)).into_response()
+        let status = self.status();
+        let body = serde_json::json!({ "error": self.into_message() });
+        (status, Json(body)).into_response()
     }
 }

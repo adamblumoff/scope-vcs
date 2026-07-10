@@ -3,56 +3,35 @@ import {
   clerkApiTokenTemplate,
   getPublicApiConnection,
 } from '@/api/client'
-import { loadProjectionPreviewsForRequest } from './projection-preview'
 import { gitRemoteUrl } from './repo-urls'
 import type {
-  RepoDetail,
+  RepoContent,
   RepoFile,
   RepoFileContent,
   RepoLiveState,
   RepoParams,
-  RepoSession,
   RepoSummary,
 } from './types'
 import { ApiRouteTemplates, buildApiPath } from './types.generated'
 export { parseRepoParams } from './repo-params'
 
-export async function loadRepoForRequest(data: RepoParams) {
+export async function loadRepoContentForRequest(data: RepoParams) {
   const api = createApiClient()
-  const [repo, session] = await Promise.all([
-    api.get<RepoSummary>(repoPath(ApiRouteTemplates.repo, data), {
-      auth: 'optional',
-    }),
-    api.get<RepoSession>(repoPath(ApiRouteTemplates.repoSession, data), {
-      auth: 'optional',
-    }),
-  ])
-  const [files, projectionPreviews] = await Promise.all([
-    api.get<RepoFile[]>(repoPath(ApiRouteTemplates.repoFiles, data), {
-      auth: 'optional',
-    }),
-    loadProjectionPreviewsForRequest(data, 'live', {
-      api,
-      includePrivate: repo.access.actor !== 'Public',
-    }),
-  ])
+  const files = await api.get<RepoFile[]>(repoPath(ApiRouteTemplates.repoFiles, data), {
+    auth: 'optional',
+  })
 
   return {
-    capabilities: session.capabilities,
     clone_remote_url: gitRemoteUrl(
       getPublicApiConnection('building clone command'),
       buildApiPath(ApiRouteTemplates.gitRepo, {
         mode: 'public',
-        org: repo.owner_handle,
-        repo: repo.name,
+        org: data.owner,
+        repo: data.repo,
       }),
     ),
     files,
-    kind: 'repo',
-    live: repoLiveState(data, repo),
-    projection_previews: projectionPreviews,
-    repo,
-  } satisfies RepoDetail
+  } satisfies RepoContent
 }
 
 export async function loadRepoLiveStateForRequest(data: RepoParams) {

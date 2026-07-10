@@ -49,6 +49,12 @@ pub(crate) fn git_oid_response(value: String) -> Result<GitOid, ApiError> {
         .map_err(|error| ApiError::internal_message(format!("persisted {error}")))
 }
 
+pub(crate) fn git_oid_request(label: &str, value: &str) -> Result<String, ApiError> {
+    GitOid::try_from(value.trim())
+        .map(String::from)
+        .map_err(|_| ApiError::bad_request(format!("{label} must be a full SHA-1 Git object id")))
+}
+
 #[derive(Debug, Serialize)]
 #[cfg_attr(test, derive(ts_rs::TS))]
 pub(crate) struct SessionResponse {
@@ -224,13 +230,6 @@ pub(crate) struct CommitFileResponse {
     pub(crate) visibility: Visibility,
 }
 
-#[derive(Debug, Deserialize)]
-#[cfg_attr(test, derive(ts_rs::TS))]
-pub(crate) struct CreateRepoRequest {
-    pub(crate) name: String,
-    pub(crate) visibility: Option<Visibility>,
-}
-
 pub(crate) fn repo_summary_for_user(
     repo: &StoredRepository,
     user_id: &str,
@@ -330,9 +329,10 @@ pub(crate) fn repo_init_response(
         .as_ref()
         .map(|stored_token| git_push_token_response(stored_token, push_secret));
 
-    let git_remote_path = format!(
-        "/git/permissioned/{}/{}",
-        repo_summary.owner_handle, repo_summary.name
+    let git_remote_path = scope_api_contract::routes::git_repo(
+        "permissioned",
+        &repo_summary.owner_handle,
+        &repo_summary.name,
     );
     Ok(RepoInitResponse {
         git_remote_url: format!("{}{}", api_origin.trim_end_matches('/'), git_remote_path),

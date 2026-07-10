@@ -136,8 +136,8 @@ async fn receive_pack_rejects_git_push_without_push_intent() {
         .await
         .unwrap_err();
 
-    assert_eq!(error.status, StatusCode::FORBIDDEN);
-    assert_eq!(error.message, "valid Scope push intent required");
+    assert_eq!(error.status(), StatusCode::FORBIDDEN);
+    assert_eq!(error.message(), "valid Scope push intent required");
 }
 
 #[tokio::test]
@@ -502,7 +502,7 @@ async fn unpublished_upload_pack_member_scope_session_stays_hidden() {
     .await
     .unwrap_err();
 
-    assert_eq!(error.status, StatusCode::NOT_FOUND);
+    assert_eq!(error.status(), StatusCode::NOT_FOUND);
 }
 #[tokio::test]
 async fn receive_pack_staging_key_does_not_collapse_valid_repo_names() {

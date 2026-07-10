@@ -103,6 +103,15 @@ pub fn repo_request_action(owner: &str, repo: &str, request_id: &str, action: &s
     )
 }
 
+pub fn git_repo(mode: &str, owner: &str, repo: &str) -> String {
+    format!(
+        "/git/{}/{}/{}",
+        path_segment(mode),
+        path_segment(owner),
+        path_segment(repo)
+    )
+}
+
 pub fn path_segment(value: &str) -> String {
     let mut encoded = String::with_capacity(value.len());
     for byte in value.bytes() {
@@ -134,6 +143,10 @@ mod tests {
         assert_eq!(
             cli_device_login_poll("code/with space"),
             "/v1/cli/device-login/code%2Fwith%20space/poll"
+        );
+        assert_eq!(
+            git_repo("permissioned", "an owner", "r/name"),
+            "/git/permissioned/an%20owner/r%2Fname"
         );
     }
 }

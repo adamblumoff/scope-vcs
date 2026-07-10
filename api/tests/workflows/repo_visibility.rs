@@ -481,7 +481,7 @@ async fn unreadable_repo_is_hidden_from_public_requests() {
 
     let error = ensure_repo_read(&state, &repo, &Principal::public()).unwrap_err();
 
-    assert_eq!(error.status, StatusCode::NOT_FOUND);
+    assert_eq!(error.status(), StatusCode::NOT_FOUND);
 }
 
 #[test]

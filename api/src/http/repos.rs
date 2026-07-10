@@ -180,7 +180,7 @@ pub(crate) async fn create_push_intent(
         )));
     }
 
-    let head_oid = normalize_git_oid(&input.head_oid)?;
+    let head_oid = git_oid_request("head_oid", &input.head_oid)?;
     validate_push_intent_config_transport(&input.config)?;
     let base_config_hash = repo_config_fingerprint(&repo.repo_config)?;
     if !is_repo_config_fingerprint(&input.base_config_hash) {
@@ -331,18 +331,6 @@ fn git_snapshot_head_oid(
             None
         }
     }))
-}
-
-fn normalize_git_oid(value: &str) -> Result<String, ApiError> {
-    let oid = value.trim();
-    // Scope stores raw Git snapshots as SHA-1 repositories today.
-    if oid.len() == 40 && oid.bytes().all(|byte| byte.is_ascii_hexdigit()) {
-        Ok(oid.to_ascii_lowercase())
-    } else {
-        Err(ApiError::bad_request(
-            "head_oid must be a full SHA-1 Git object id",
-        ))
-    }
 }
 
 pub(crate) async fn get_projection_preview(

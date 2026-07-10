@@ -115,7 +115,7 @@ pub(crate) enum PersistedReceivePackUpdate {
 }
 
 pub(crate) fn git_error_response(error: ApiError) -> Response {
-    if error.status == StatusCode::UNAUTHORIZED {
+    if error.status() == StatusCode::UNAUTHORIZED {
         let mut response = error.into_response();
         response.headers_mut().insert(
             WWW_AUTHENTICATE,
@@ -158,15 +158,17 @@ pub(crate) async fn git_info_refs(
         Some(GIT_UPLOAD_PACK) => {
             let _permit = match state.runtime_budgets.try_upload_pack() {
                 Ok(permit) => permit,
-                Err(error) => return git_advertisement_error(error.message),
+                Err(error) => return git_advertisement_error(error.into_message()),
             };
             match git_upload_pack_repo_for_request(&state, &headers, &org, &repo, mode).await {
                 Ok(repo_path) => git_upload_pack_advertisement(
                     &repo_path,
                     state.runtime_budgets.git_command_timeout(),
                 ),
-                Err(error) if error.status == StatusCode::UNAUTHORIZED => git_error_response(error),
-                Err(error) => git_advertisement_error(error.message),
+                Err(error) if error.status() == StatusCode::UNAUTHORIZED => {
+                    git_error_response(error)
+                }
+                Err(error) => git_advertisement_error(error.into_message()),
             }
         }
         Some(service) => (
@@ -241,16 +243,16 @@ pub(crate) async fn git_upload_pack_rpc(
 ) -> Response {
     let mode = match GitRemoteMode::parse(&mode) {
         Ok(mode) => mode,
-        Err(error) => return git_upload_pack_error(error.message),
+        Err(error) => return git_upload_pack_error(error.into_message()),
     };
     let permit = match state.runtime_budgets.try_upload_pack() {
         Ok(permit) => permit,
-        Err(error) => return git_upload_pack_error(error.message),
+        Err(error) => return git_upload_pack_error(error.into_message()),
     };
     let repo_path =
         match git_upload_pack_repo_for_request(&state, &headers, &org, &repo_name, mode).await {
             Ok(repo_path) => repo_path,
-            Err(error) => return git_upload_pack_error(error.message),
+            Err(error) => return git_upload_pack_error(error.into_message()),
         };
     let body = match to_bytes(request.into_body(), MAX_UPLOAD_PACK_BYTES).await {
         Ok(body) => body,
@@ -260,7 +262,7 @@ pub(crate) async fn git_upload_pack_rpc(
     };
     let body = match decode_git_request_body(&headers, body, MAX_UPLOAD_PACK_BYTES) {
         Ok(body) => body,
-        Err(error) => return git_upload_pack_error(error.message),
+        Err(error) => return git_upload_pack_error(error.into_message()),
     };
 
     match git_upload_pack_response(
@@ -272,7 +274,7 @@ pub(crate) async fn git_upload_pack_rpc(
     .await
     {
         Ok(response) => response,
-        Err(error) => git_upload_pack_error(error.message),
+        Err(error) => git_upload_pack_error(error.into_message()),
     }
 }
 

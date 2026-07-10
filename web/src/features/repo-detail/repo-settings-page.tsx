@@ -5,7 +5,6 @@ import type {
   DeleteRepoMemberInput,
   DeleteRepoResponse,
   RepoCollaboration,
-  RepoDetail,
   RepoInvite,
   RepoMember,
   RepoParams,
@@ -26,6 +25,7 @@ import {
   RepositoryMembersSection,
 } from './repo-members-section'
 import { SettingsSections } from './repo-settings-sections'
+import { useRepoLayout } from './repo-layout-context'
 import {
   initialRepoSettingsPageState,
   repoSettingsPageReducer,
@@ -36,7 +36,6 @@ export function RepoSettingsPage({
   deleteInvite,
   deleteMember,
   deleteRepo,
-  detail,
   initialCollaboration,
   params,
   updateMember,
@@ -47,14 +46,13 @@ export function RepoSettingsPage({
   deleteInvite: (input: DeleteRepoInviteInput) => Promise<RepoInvite>
   deleteMember: (input: DeleteRepoMemberInput) => Promise<RepoMember>
   deleteRepo: (params: RepoParams) => Promise<DeleteRepoResponse>
-  detail: RepoDetail
   initialCollaboration: RepoCollaboration | null
   params: RepoParams
   updateMember: (input: UpdateRepoMemberInput) => Promise<RepoMember>
 }) {
   const navigate = useNavigate()
   const router = useRouter()
-  const { repo } = detail
+  const { repo } = useRepoLayout()
   const [state, dispatch] = useReducer(
     repoSettingsPageReducer,
     initialRepoSettingsPageState,

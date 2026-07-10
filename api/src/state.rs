@@ -163,7 +163,7 @@ impl SourceBlobCleanupFailure {
             sha256: blob.sha256.clone(),
             git_oid: blob.git_oid.clone(),
             size_bytes: blob.size_bytes,
-            error: error.message,
+            error: error.into_message(),
         }
     }
 }
@@ -190,8 +190,8 @@ impl AppState {
         let repo_root = git_repo_root();
         let data_dir = data_dir(&repo_root);
         ensure_private_dir(&data_dir).map_err(|error| anyhow::anyhow!(error.message))?;
-        let push_intent_signing_key =
-            push_intent_signing_key(&data_dir).map_err(|error| anyhow::anyhow!(error.message))?;
+        let push_intent_signing_key = push_intent_signing_key(&data_dir)
+            .map_err(|error| anyhow::anyhow!(error.into_message()))?;
         let metadata = MetadataStore::connect_from_env().await?;
         let repo_events = RepoChangeBus::default();
         let runtime_budgets = Arc::new(RuntimeBudgets::from_env()?);
@@ -576,7 +576,7 @@ pub(crate) async fn drain_pending_repo_storage_deletions_report(
                 report.failed.push(RepoStorageCleanupFailure {
                     owner_handle: cleanup.owner_handle.clone(),
                     repo_name: cleanup.repo_name.clone(),
-                    error: error.message,
+                    error: error.into_message(),
                 });
                 retained.push(cleanup.clone());
             }
@@ -710,7 +710,7 @@ mod tests {
         let token = encode_push_intent(&state.push_intent_signing_key, &expired).unwrap();
 
         let error = state.validate_push_intent_secret(&token).unwrap_err();
-        assert_eq!(error.status, StatusCode::FORBIDDEN);
+        assert_eq!(error.status(), StatusCode::FORBIDDEN);
 
         let validated = state.validate_completed_push_intent_secret(&token).unwrap();
         assert_eq!(validated.repo_id, expired.repo_id);

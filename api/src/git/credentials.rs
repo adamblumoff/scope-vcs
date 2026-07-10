@@ -174,7 +174,7 @@ pub(crate) async fn find_repo_after_git_scope_token(
 ) -> Result<StoredRepository, ApiError> {
     match find_repo(state, owner, repo_name).await {
         Ok(repo) => Ok(repo),
-        Err(error) if error.status == StatusCode::NOT_FOUND => Err(invalid_git_credentials()),
+        Err(error) if error.status() == StatusCode::NOT_FOUND => Err(invalid_git_credentials()),
         Err(error) => Err(error),
     }
 }
@@ -184,7 +184,7 @@ pub(crate) fn invalid_git_credentials() -> ApiError {
 }
 
 pub(crate) fn git_credential_error(error: ApiError) -> ApiError {
-    if error.status == StatusCode::UNAUTHORIZED {
+    if error.status() == StatusCode::UNAUTHORIZED {
         invalid_git_credentials()
     } else {
         error

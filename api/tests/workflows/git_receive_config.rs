@@ -150,8 +150,8 @@ async fn push_only_member_cannot_publish_private_path_via_config() {
         .await
         .unwrap_err();
 
-    assert_eq!(error.status, StatusCode::FORBIDDEN);
-    assert_eq!(error.message, "file visibility permission required");
+    assert_eq!(error.status(), StatusCode::FORBIDDEN);
+    assert_eq!(error.message(), "file visibility permission required");
     let repo = find_repo(&state, TEST_REPO_OWNER, TEST_REPO_NAME)
         .await
         .unwrap();
@@ -188,8 +188,8 @@ async fn push_only_member_cannot_restore_stale_public_config_after_visibility_ch
     .await
     .unwrap_err();
 
-    assert_eq!(error.status, StatusCode::FORBIDDEN);
-    assert_eq!(error.message, "file visibility permission required");
+    assert_eq!(error.status(), StatusCode::FORBIDDEN);
+    assert_eq!(error.message(), "file visibility permission required");
     let repo = find_repo(&state, TEST_REPO_OWNER, TEST_REPO_NAME)
         .await
         .unwrap();
@@ -215,8 +215,8 @@ async fn push_only_member_cannot_persist_non_visibility_config_metadata() {
             .await
             .unwrap_err();
 
-    assert_eq!(error.status, StatusCode::FORBIDDEN);
-    assert_eq!(error.message, "file visibility permission required");
+    assert_eq!(error.status(), StatusCode::FORBIDDEN);
+    assert_eq!(error.message(), "file visibility permission required");
     let repo = find_repo(&state, TEST_REPO_OWNER, TEST_REPO_NAME)
         .await
         .unwrap();
@@ -245,8 +245,8 @@ async fn push_only_member_cannot_bootstrap_future_public_config_rule() {
     .await
     .unwrap_err();
 
-    assert_eq!(error.status, StatusCode::FORBIDDEN);
-    assert_eq!(error.message, "file visibility permission required");
+    assert_eq!(error.status(), StatusCode::FORBIDDEN);
+    assert_eq!(error.message(), "file visibility permission required");
 }
 
 #[tokio::test]
@@ -262,8 +262,8 @@ async fn push_only_member_cannot_erase_existing_private_policy_with_default_conf
     .await
     .unwrap_err();
 
-    assert_eq!(error.status, StatusCode::FORBIDDEN);
-    assert_eq!(error.message, "file visibility permission required");
+    assert_eq!(error.status(), StatusCode::FORBIDDEN);
+    assert_eq!(error.message(), "file visibility permission required");
 }
 
 #[tokio::test]
@@ -282,8 +282,8 @@ async fn push_only_member_cannot_weaken_deleted_private_path_during_config_boots
     .await
     .unwrap_err();
 
-    assert_eq!(error.status, StatusCode::FORBIDDEN);
-    assert_eq!(error.message, "file visibility permission required");
+    assert_eq!(error.status(), StatusCode::FORBIDDEN);
+    assert_eq!(error.message(), "file visibility permission required");
     let repo = find_repo(&state, TEST_REPO_OWNER, TEST_REPO_NAME)
         .await
         .unwrap();

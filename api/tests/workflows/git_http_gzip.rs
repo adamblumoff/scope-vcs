@@ -162,8 +162,8 @@ fn git_request_decoder_rejects_invalid_gzip_body() {
     let error =
         decode_git_request_body(&headers, Bytes::from_static(b"not gzip"), 1024).unwrap_err();
 
-    assert_eq!(error.status, StatusCode::BAD_REQUEST);
-    assert!(error.message.contains("invalid gzip Git request body"));
+    assert_eq!(error.status(), StatusCode::BAD_REQUEST);
+    assert!(error.message().contains("invalid gzip Git request body"));
 }
 
 #[test]
@@ -174,8 +174,8 @@ fn git_request_decoder_rejects_unsupported_content_encoding() {
     let error =
         decode_git_request_body(&headers, Bytes::from_static(b"plain git body"), 1024).unwrap_err();
 
-    assert_eq!(error.status, StatusCode::BAD_REQUEST);
-    assert_eq!(error.message, "unsupported Git content-encoding br");
+    assert_eq!(error.status(), StatusCode::BAD_REQUEST);
+    assert_eq!(error.message(), "unsupported Git content-encoding br");
 }
 
 #[test]
@@ -186,9 +186,9 @@ fn git_request_decoder_limits_decompressed_body_size() {
     let error =
         decode_git_request_body(&headers, Bytes::from(gzip_bytes(b"12345")), 4).unwrap_err();
 
-    assert_eq!(error.status, StatusCode::PAYLOAD_TOO_LARGE);
+    assert_eq!(error.status(), StatusCode::PAYLOAD_TOO_LARGE);
     assert_eq!(
-        error.message,
+        error.message(),
         "git request body is too large after decompression"
     );
 }

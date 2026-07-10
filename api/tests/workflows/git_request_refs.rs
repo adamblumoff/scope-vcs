@@ -56,7 +56,7 @@ async fn request_editor_receive_pack_requires_current_repo_read() {
         .await
         .unwrap_err();
 
-    assert_eq!(error.status, StatusCode::NOT_FOUND);
+    assert_eq!(error.status(), StatusCode::NOT_FOUND);
 }
 
 #[tokio::test]
@@ -86,7 +86,7 @@ async fn uninvited_public_user_cannot_receive_pack_for_request_refs() {
         .await
         .unwrap_err();
 
-    assert_eq!(error.status, StatusCode::NOT_FOUND);
+    assert_eq!(error.status(), StatusCode::NOT_FOUND);
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

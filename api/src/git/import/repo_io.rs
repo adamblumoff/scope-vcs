@@ -494,7 +494,7 @@ pub(crate) fn run_git_output(
         None,
         RuntimeBudgets::default_git_command_timeout(),
     )
-    .map_err(|error| ApiError::service_unavailable(format!("failed {action}: {}", error.message)))
+    .map_err(|error| ApiError::service_unavailable(format!("failed {action}: {}", error.message())))
 }
 
 pub(crate) fn safe_repo_key(owner: &str, repo_name: &str) -> String {

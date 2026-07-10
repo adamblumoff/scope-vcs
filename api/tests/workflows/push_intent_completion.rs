@@ -408,9 +408,9 @@ async fn content_push_rejects_stale_reviewed_config() {
     .await
     .unwrap_err();
 
-    assert_eq!(error.status, StatusCode::CONFLICT);
+    assert_eq!(error.status(), StatusCode::CONFLICT);
     assert_eq!(
-        error.message,
+        error.message(),
         "repo config changed since review; rerun scope push"
     );
     let repo = find_repo(&state, TEST_REPO_OWNER, TEST_REPO_NAME)

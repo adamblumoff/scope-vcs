@@ -691,7 +691,7 @@ fn rollback_request_ref(
             owner,
             repo = repo_name,
             request_ref,
-            error = %error.message,
+            error = error.message(),
             "failed to roll back request ref after metadata rejection"
         );
     }
