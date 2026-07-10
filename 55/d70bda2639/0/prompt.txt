@@ -1,0 +1,1 @@
+seems to work great, thank you. one edge case i'm running into is that sometimes when i'm go to the regular repo page, it just turns up blank and i have to refresh. this mostly happens when i'm deeper in the tree like in the settings or in review or something that is one level lower than that, and you investigate and tell me why this sometimes happens?
