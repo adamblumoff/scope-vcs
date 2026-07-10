@@ -1,0 +1,1 @@
+please look at [Repository Collaboration Surface Cleanup](https://linear.app/scope-vcs/project/repository-collaboration-surface-cleanup-173e16d3b33f/overview) and tell me what you think and your plan to implement this project.
