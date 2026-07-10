@@ -67,7 +67,7 @@ jobs:
             features=()
           fi
           cargo fmt --all --check
-          cargo test "${packages[@]}" "${features[@]}" --locked -- --test-threads=4
+          cargo test "${packages[@]}" "${features[@]}" --locked -- --test-threads=1
           cargo clippy "${packages[@]}" "${features[@]}" --all-targets --locked -- -D warnings
 
       - name: Install Node
