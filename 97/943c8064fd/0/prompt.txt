@@ -1,0 +1,1 @@
+also it seems like our data schema is not canonical, go ahead and also invesigate that as well
