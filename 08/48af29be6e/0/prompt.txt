@@ -1,0 +1,1 @@
+go ahead and install all of the deps that you need for this project to run local dev. tell me what they are and how you're going to install them
