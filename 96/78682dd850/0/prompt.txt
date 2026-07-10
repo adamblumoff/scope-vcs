@@ -1,0 +1,1 @@
+this all looks good, go ahead and build phase zero out in a new branch and tell me the results of the benchmarking. should be under a new folder like /bench or something like that, don't interveave with src code if you can help it and make it a part of the local dev process.
