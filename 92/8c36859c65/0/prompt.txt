@@ -1,0 +1,1 @@
+ok go ahead and make an html plan for this implementation. make sure to keep it simple, scoped, and also make sure you note what code you're going to delete along the way.
