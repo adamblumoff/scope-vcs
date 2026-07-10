@@ -1,0 +1,1 @@
+ok cool, go ahead and commit and push to main since this slice is small, then go ahead and modify the plan accordingly for phase 2, please update what is added/deleted to the html plan as well according to the current version
