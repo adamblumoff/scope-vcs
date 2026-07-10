@@ -1,0 +1,1 @@
+ok go ahead and do a local autoreview loop of the changes, then open up the pr and wait for the codex/greptile comments then address until all green (including ci) then give me a report of what changed. also go ahead and update this shell's node to 24.x.
