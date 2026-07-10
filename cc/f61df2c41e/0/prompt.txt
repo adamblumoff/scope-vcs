@@ -1,0 +1,1 @@
+ok great, database url is in there already and rename all references of scope-worker to scope-core since we don't want the names to drift
