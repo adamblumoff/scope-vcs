@@ -1,0 +1,1 @@
+rename scope-core to just core
