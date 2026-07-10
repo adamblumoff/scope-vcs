@@ -1,0 +1,1011 @@
+ok so right now i really want to start building out the "requests" part of this app. we really need to talk about this feature before building it out and i want you to ask a lot of questions. we need to start with the correct data/api model. here's an html file with the first kind of broad idea of what i want it to look like, let me know what you think. 
+
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Requests: A Credit-Staked Market for Maintainer Attention</title>
+  <style>
+    :root {
+      --bg: #f6f7f9;
+      --paper: #ffffff;
+      --ink: #14171a;
+      --muted: #5d6875;
+      --line: #dfe5ec;
+      --accent: #2457a6;
+      --accent-dark: #173d74;
+      --soft: #eef5ff;
+      --success: #edf8f1;
+      --warning: #fff7e6;
+      --danger: #fff0f0;
+      --neutral: #f4f6f8;
+      --purple: #f3f0ff;
+      --cyan: #ebfbff;
+      --radius: 18px;
+      --shadow: 0 20px 60px rgba(20, 23, 26, 0.08);
+      --mono: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace;
+      --sans: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    }
+
+    * { box-sizing: border-box; }
+
+    html { scroll-behavior: smooth; }
+
+    body {
+      margin: 0;
+      background:
+        radial-gradient(circle at top left, #e8f0ff 0, transparent 35rem),
+        radial-gradient(circle at 85% 10%, #f3eaff 0, transparent 28rem),
+        var(--bg);
+      color: var(--ink);
+      font-family: var(--sans);
+      line-height: 1.55;
+    }
+
+    .page {
+      max-width: 1160px;
+      margin: 0 auto;
+      padding: 48px 24px 72px;
+    }
+
+    .hero {
+      background: linear-gradient(135deg, #ffffff 0%, #f7faff 100%);
+      border: 1px solid var(--line);
+      border-radius: 30px;
+      box-shadow: var(--shadow);
+      padding: 56px;
+      margin-bottom: 28px;
+      position: relative;
+      overflow: hidden;
+    }
+
+    .hero::after {
+      content: "";
+      position: absolute;
+      width: 280px;
+      height: 280px;
+      border-radius: 999px;
+      right: -100px;
+      top: -110px;
+      background: radial-gradient(circle, rgba(36, 87, 166, 0.14), transparent 68%);
+      pointer-events: none;
+    }
+
+    .eyebrow {
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      font-size: 13px;
+      font-weight: 800;
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+      color: var(--accent-dark);
+      background: var(--soft);
+      padding: 8px 12px;
+      border-radius: 999px;
+      margin-bottom: 24px;
+      position: relative;
+      z-index: 1;
+    }
+
+    h1 {
+      font-size: clamp(40px, 7vw, 74px);
+      line-height: 0.95;
+      letter-spacing: -0.06em;
+      margin: 0 0 24px;
+      max-width: 980px;
+      position: relative;
+      z-index: 1;
+    }
+
+    h2 {
+      font-size: clamp(27px, 4vw, 42px);
+      line-height: 1.06;
+      letter-spacing: -0.045em;
+      margin: 0 0 18px;
+    }
+
+    h3 {
+      font-size: 20px;
+      line-height: 1.25;
+      letter-spacing: -0.02em;
+      margin: 0 0 10px;
+    }
+
+    p { margin: 0 0 16px; }
+    strong { font-weight: 780; }
+
+    .lede {
+      max-width: 850px;
+      font-size: 22px;
+      line-height: 1.42;
+      color: #26303b;
+      margin-bottom: 0;
+      position: relative;
+      z-index: 1;
+    }
+
+    .thesis {
+      margin-top: 32px;
+      border-left: 5px solid var(--accent);
+      background: #f1f6ff;
+      padding: 22px 26px;
+      border-radius: 0 var(--radius) var(--radius) 0;
+      font-size: 20px;
+      font-weight: 680;
+      max-width: 940px;
+      position: relative;
+      z-index: 1;
+    }
+
+    .grid {
+      display: grid;
+      grid-template-columns: repeat(12, 1fr);
+      gap: 20px;
+    }
+
+    .card {
+      background: var(--paper);
+      border: 1px solid var(--line);
+      border-radius: var(--radius);
+      box-shadow: 0 12px 34px rgba(20, 23, 26, 0.045);
+      padding: 28px;
+    }
+
+    .span-12 { grid-column: span 12; }
+    .span-8 { grid-column: span 8; }
+    .span-7 { grid-column: span 7; }
+    .span-6 { grid-column: span 6; }
+    .span-5 { grid-column: span 5; }
+    .span-4 { grid-column: span 4; }
+
+    .muted { color: var(--muted); }
+
+    .kicker {
+      color: var(--accent-dark);
+      font-size: 13px;
+      font-weight: 800;
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+      margin-bottom: 10px;
+    }
+
+    .section { margin: 28px 0; }
+
+    .quote {
+      background: #101828;
+      color: #ffffff;
+      border-radius: 22px;
+      padding: 34px;
+      font-size: 26px;
+      line-height: 1.25;
+      letter-spacing: -0.035em;
+      font-weight: 760;
+    }
+
+    .quote small {
+      display: block;
+      margin-top: 14px;
+      color: #aab6c5;
+      font-size: 15px;
+      font-weight: 500;
+      letter-spacing: 0;
+    }
+
+    .comparison {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 16px;
+      margin-top: 20px;
+    }
+
+    .comparison.three { grid-template-columns: repeat(3, 1fr); }
+    .comparison.four { grid-template-columns: repeat(4, 1fr); }
+
+    .box {
+      border-radius: 16px;
+      padding: 20px;
+      border: 1px solid var(--line);
+      background: #fafbfc;
+    }
+
+    .box.bad { background: var(--danger); border-color: #ffd3d3; }
+    .box.good { background: var(--success); border-color: #cfe9d8; }
+    .box.warn { background: var(--warning); border-color: #ffe0a6; }
+    .box.neutral { background: var(--neutral); }
+    .box.purple { background: var(--purple); border-color: #ded6ff; }
+    .box.cyan { background: var(--cyan); border-color: #cceef7; }
+
+    .pill-row {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 10px;
+      margin-top: 18px;
+    }
+
+    .pill {
+      border: 1px solid var(--line);
+      background: #fafbfc;
+      border-radius: 999px;
+      padding: 8px 12px;
+      font-size: 14px;
+      font-weight: 650;
+      color: #2d3640;
+    }
+
+    .formula {
+      font-family: var(--mono);
+      background: #111827;
+      color: #e5ecf6;
+      border-radius: 16px;
+      padding: 22px;
+      overflow-x: auto;
+      font-size: 15px;
+      line-height: 1.7;
+      margin: 16px 0 0;
+    }
+
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      font-size: 15px;
+      margin-top: 12px;
+      overflow: hidden;
+      border-radius: 14px;
+    }
+
+    th, td {
+      border-bottom: 1px solid var(--line);
+      padding: 14px 12px;
+      text-align: left;
+      vertical-align: top;
+    }
+
+    th {
+      background: #f4f6f8;
+      color: #303946;
+      font-size: 13px;
+      letter-spacing: 0.04em;
+      text-transform: uppercase;
+    }
+
+    tr:last-child td { border-bottom: none; }
+
+    .callout {
+      background: var(--warning);
+      border: 1px solid #ffe0a6;
+      border-radius: var(--radius);
+      padding: 26px;
+    }
+
+    .diagram {
+      border: 1px solid var(--line);
+      background: linear-gradient(180deg, #ffffff 0%, #fbfcfe 100%);
+      border-radius: 22px;
+      padding: 24px;
+      margin-top: 18px;
+      overflow: hidden;
+    }
+
+    .equation {
+      display: grid;
+      grid-template-columns: 1fr auto 1fr auto 1fr;
+      gap: 12px;
+      align-items: stretch;
+      margin-top: 20px;
+    }
+
+    .eq-card {
+      min-height: 120px;
+      border-radius: 18px;
+      border: 1px solid var(--line);
+      padding: 18px;
+      display: flex;
+      flex-direction: column;
+      justify-content: center;
+      background: #fbfcfe;
+    }
+
+    .eq-card strong {
+      font-size: 24px;
+      letter-spacing: -0.03em;
+      line-height: 1.05;
+    }
+
+    .eq-symbol {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      color: var(--accent-dark);
+      font-weight: 900;
+      font-size: 30px;
+      min-width: 28px;
+    }
+
+    .flowline {
+      display: grid;
+      grid-template-columns: repeat(5, 1fr);
+      gap: 12px;
+      align-items: stretch;
+      margin-top: 18px;
+      position: relative;
+    }
+
+    .flow-node {
+      background: #fbfcfe;
+      border: 1px solid var(--line);
+      border-radius: 18px;
+      padding: 18px;
+      min-height: 144px;
+      position: relative;
+    }
+
+    .flow-node::after {
+      content: "→";
+      position: absolute;
+      right: -17px;
+      top: 50%;
+      transform: translateY(-50%);
+      color: var(--accent);
+      font-size: 25px;
+      font-weight: 900;
+      z-index: 2;
+    }
+
+    .flow-node:last-child::after { display: none; }
+
+    .node-num {
+      width: 34px;
+      height: 34px;
+      border-radius: 999px;
+      display: grid;
+      place-items: center;
+      background: var(--accent);
+      color: #ffffff;
+      font-weight: 850;
+      margin-bottom: 12px;
+    }
+
+    .cycle {
+      display: grid;
+      grid-template-columns: repeat(3, 1fr);
+      gap: 16px;
+      margin-top: 18px;
+      align-items: stretch;
+    }
+
+    .cycle-card {
+      border: 1px solid var(--line);
+      background: #fbfcfe;
+      border-radius: 18px;
+      padding: 18px;
+      position: relative;
+    }
+
+    .cycle-card:nth-child(1)::after,
+    .cycle-card:nth-child(2)::after {
+      content: "→";
+      position: absolute;
+      right: -17px;
+      top: 42%;
+      color: var(--accent);
+      font-size: 26px;
+      font-weight: 900;
+    }
+
+    .stacked-flow {
+      display: grid;
+      gap: 12px;
+      margin-top: 18px;
+    }
+
+    .stack-step {
+      display: grid;
+      grid-template-columns: 44px 1fr auto;
+      gap: 16px;
+      align-items: center;
+      background: #f9fafb;
+      border: 1px solid var(--line);
+      border-radius: 16px;
+      padding: 16px;
+    }
+
+    .stack-step .num {
+      width: 36px;
+      height: 36px;
+      display: grid;
+      place-items: center;
+      border-radius: 50%;
+      background: var(--accent);
+      color: white;
+      font-weight: 820;
+    }
+
+    .tag {
+      display: inline-flex;
+      white-space: nowrap;
+      border-radius: 999px;
+      background: var(--soft);
+      color: var(--accent-dark);
+      padding: 7px 10px;
+      font-size: 13px;
+      font-weight: 760;
+    }
+
+    .word-blob {
+      min-height: 260px;
+      display: flex;
+      flex-wrap: wrap;
+      gap: 12px;
+      align-content: center;
+      justify-content: center;
+      padding: 14px;
+      background:
+        radial-gradient(circle at 20% 25%, rgba(36, 87, 166, 0.12), transparent 25%),
+        radial-gradient(circle at 80% 80%, rgba(109, 75, 207, 0.11), transparent 28%),
+        #fbfcfe;
+      border: 1px solid var(--line);
+      border-radius: 22px;
+      margin-top: 18px;
+    }
+
+    .blob {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      text-align: center;
+      border-radius: 999px;
+      padding: 13px 17px;
+      background: #ffffff;
+      border: 1px solid var(--line);
+      box-shadow: 0 10px 24px rgba(20, 23, 26, 0.05);
+      color: #26303b;
+      font-weight: 790;
+      letter-spacing: -0.02em;
+    }
+
+    .blob.big { font-size: 30px; padding: 20px 25px; background: var(--soft); color: var(--accent-dark); }
+    .blob.med { font-size: 21px; padding: 16px 20px; }
+    .blob.small { font-size: 14px; padding: 9px 12px; color: var(--muted); }
+    .blob.good { background: var(--success); }
+    .blob.warn { background: var(--warning); }
+    .blob.bad { background: var(--danger); }
+    .blob.purple { background: var(--purple); }
+    .blob.cyan { background: var(--cyan); }
+
+    .two-lane {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 16px;
+      margin-top: 18px;
+    }
+
+    .lane {
+      border: 1px solid var(--line);
+      border-radius: 20px;
+      padding: 22px;
+      background: #fbfcfe;
+    }
+
+    .lane.good { background: var(--success); border-color: #cfe9d8; }
+    .lane.bad { background: var(--danger); border-color: #ffd3d3; }
+
+    .mini-matrix {
+      display: grid;
+      grid-template-columns: repeat(2, 1fr);
+      gap: 12px;
+      margin-top: 18px;
+    }
+
+    .matrix-cell {
+      border: 1px solid var(--line);
+      border-radius: 16px;
+      padding: 18px;
+      background: #fbfcfe;
+    }
+
+    .matrix-cell.good { background: var(--success); border-color: #cfe9d8; }
+    .matrix-cell.warn { background: var(--warning); border-color: #ffe0a6; }
+    .matrix-cell.bad { background: var(--danger); border-color: #ffd3d3; }
+    .matrix-cell.cyan { background: var(--cyan); border-color: #cceef7; }
+
+    .footer {
+      color: var(--muted);
+      font-size: 14px;
+      text-align: center;
+      margin-top: 40px;
+    }
+
+    @media (max-width: 960px) {
+      .page { padding: 24px 16px 48px; }
+      .hero { padding: 34px 24px; }
+      .span-8, .span-7, .span-6, .span-5, .span-4 { grid-column: span 12; }
+      .comparison, .comparison.three, .comparison.four, .two-lane, .mini-matrix, .cycle { grid-template-columns: 1fr; }
+      .equation { grid-template-columns: 1fr; }
+      .eq-symbol { transform: rotate(90deg); }
+      .flowline { grid-template-columns: 1fr; }
+      .flow-node::after { right: 50%; top: auto; bottom: -24px; transform: translateX(50%) rotate(90deg); }
+      .flow-node { min-height: auto; }
+      .cycle-card:nth-child(1)::after, .cycle-card:nth-child(2)::after { display: none; }
+      .stack-step { grid-template-columns: 44px 1fr; }
+      .stack-step .tag { grid-column: 2; justify-self: start; }
+    }
+
+    @media print {
+      body { background: #ffffff; }
+      .page { max-width: none; padding: 0; }
+      .hero, .card, .callout { box-shadow: none; break-inside: avoid; }
+    }
+  </style>
+</head>
+<body>
+  <main class="page">
+    <section class="hero">
+      <div class="eyebrow">Simplified MVP Thesis</div>
+      <h1>Requests: A Credit-Staked Market for Maintainer Attention</h1>
+      <p class="lede">
+        AI makes ideas, issues, and patches cheap to generate. Maintainer review remains scarce. The first version should not try to solve every reputation, rating, permission, or visibility edge case. It should make maintainer-facing submission cost something, then refund or reward good-faith work.
+      </p>
+      <div class="thesis">
+        Minimal rule: <strong>drafts are free, submitted Requests require credit stake, good-faith work is refunded or rewarded, and low-quality or abandoned work burns stake.</strong>
+      </div>
+    </section>
+
+    <section class="grid section">
+      <article class="card span-7">
+        <div class="kicker">Problem Statement</div>
+        <h2>Open source now has an attention market problem.</h2>
+        <p>
+          The core issue is not that AI agents can generate code. The issue is that the cost of producing repo-facing work has collapsed, while the cost of reviewing that work still sits with maintainers.
+        </p>
+        <p>
+          GitHub lets anyone create issues and pull requests for almost zero marginal cost. That was tolerable when contribution required meaningful effort. In an AI-heavy world, it creates the wrong equilibrium: contributors can spray ideas and patches, while maintainers pay the evaluation cost.
+        </p>
+        <p>
+          The product should move the cost boundary to the moment a contributor asks for maintainer attention.
+        </p>
+      </article>
+
+      <aside class="card span-5">
+        <div class="kicker">One Sentence</div>
+        <div class="quote">
+          Generation can be free. Submission cannot be free.
+          <small>Good contributors should compound access. Slop generators should price themselves out.</small>
+        </div>
+      </aside>
+    </section>
+
+    <section class="grid section">
+      <article class="card span-12">
+        <div class="kicker">System Equation</div>
+        <h2>The broken equilibrium is simple.</h2>
+        <div class="equation" aria-label="Problem equation diagram">
+          <div class="eq-card box cyan">
+            <strong>AI generation cost falls</strong>
+            <p class="muted">Ideas, patches, bug reports, and drive-by refactors become cheap to produce.</p>
+          </div>
+          <div class="eq-symbol">+</div>
+          <div class="eq-card box warn">
+            <strong>Review cost stays human</strong>
+            <p class="muted">Maintainers still need to read, reason, test, reject, explain, and clean up.</p>
+          </div>
+          <div class="eq-symbol">=</div>
+          <div class="eq-card box bad">
+            <strong>Slop becomes rational</strong>
+            <p class="muted">If submission is free, low-quality volume has positive expected value for the submitter.</p>
+          </div>
+        </div>
+      </article>
+    </section>
+
+    <section class="grid section">
+      <article class="card span-12">
+        <div class="kicker">Unified Primitive</div>
+        <h2>Collapse issues and pull requests into one object: the Request.</h2>
+        <p>
+          An issue and a pull request are both requests for maintainer attention. One may contain a patch and one may not, but the underlying economic object is the same.
+        </p>
+        <p>
+          The product should expose a single object: <strong>Request</strong>. A Request can be a bug report, feature idea, patch, failing test, design proposal, reproduction, bounty, security report, or question. The point is not the format. The point is that it consumes maintainer attention once submitted.
+        </p>
+        <div class="word-blob" aria-label="Request object word blob">
+          <span class="blob big">Request</span>
+          <span class="blob med cyan">bug report</span>
+          <span class="blob med good">patch</span>
+          <span class="blob med purple">feature idea</span>
+          <span class="blob med warn">failing test</span>
+          <span class="blob small">reproduction</span>
+          <span class="blob small">benchmark</span>
+          <span class="blob small">design note</span>
+          <span class="blob small">bounty</span>
+          <span class="blob small">security report</span>
+          <span class="blob small">question</span>
+          <span class="blob small">branch attached</span>
+        </div>
+      </article>
+    </section>
+
+    <section class="grid section">
+      <article class="card span-12">
+        <div class="kicker">MVP Flow</div>
+        <h2>The first version only needs one loop.</h2>
+        <p>
+          Avoid starting with a complex credit economy, explicit ratings, public/private strategy, AI detection, or maintainer-authored policy engine. The initial product should prove that staking changes submission behavior.
+        </p>
+        <div class="flowline" aria-label="Credit staking request lifecycle diagram">
+          <div class="flow-node">
+            <div class="node-num">1</div>
+            <h3>Draft</h3>
+            <p class="muted">The contributor can generate, edit, test, and compare ideas privately for free.</p>
+          </div>
+          <div class="flow-node">
+            <div class="node-num">2</div>
+            <h3>Stake</h3>
+            <p class="muted">Submitting to maintainers requires credits. The user chooses what is worth backing.</p>
+          </div>
+          <div class="flow-node">
+            <div class="node-num">3</div>
+            <h3>Review</h3>
+            <p class="muted">Maintainers evaluate project fit using lightweight dispositions, not manual credit assignment.</p>
+          </div>
+          <div class="flow-node">
+            <div class="node-num">4</div>
+            <h3>Resolve</h3>
+            <p class="muted">The Request is accepted, declined, marked useful, marked duplicate, or closed as low-quality.</p>
+          </div>
+          <div class="flow-node">
+            <div class="node-num">5</div>
+            <h3>Settle</h3>
+            <p class="muted">The platform refunds, rewards, partially refunds, or burns stake based on good-faith quality.</p>
+          </div>
+        </div>
+      </article>
+    </section>
+
+    <section class="grid section">
+      <article class="card span-6">
+        <div class="kicker">Core Mechanism</div>
+        <h2>Credits are enough to stop the bleeding at first.</h2>
+        <p>
+          A visible ratings system may be useful later, but it is not required to change the immediate incentive. The immediate problem is that a user can submit low-quality maintainer-facing work for free.
+        </p>
+        <p>
+          Credits solve the first-order problem because they create a marginal cost at submission time. A user must decide: “Is this Request worth staking on?” That decision alone filters out a large amount of AI slop.
+        </p>
+        <div class="formula">
+MVP rule:<br />
+Draft = free<br />
+Submitted Request = requires stake<br />
+Good-faith Request = refund or reward<br />
+Low-quality / abandoned Request = stake burn
+        </div>
+      </article>
+
+      <article class="card span-6">
+        <div class="kicker">What Credits Buy</div>
+        <h2>Credits buy access to maintainer attention, not trust.</h2>
+        <p>
+          The payoff of credits is simple: they allow a contributor to submit Requests into maintainer-facing queues. They are not a status token and they should not guarantee acceptance, visibility, or merge rights.
+        </p>
+        <p>
+          Good work earns credits back. Bad work loses them. Over time, serious contributors accumulate capacity and slop generators lose capacity.
+        </p>
+        <div class="word-blob" aria-label="Credit payoff word blob">
+          <span class="blob big good">submit</span>
+          <span class="blob med">stake</span>
+          <span class="blob med cyan">refund</span>
+          <span class="blob med purple">reward</span>
+          <span class="blob med bad">burn</span>
+          <span class="blob small">attention</span>
+          <span class="blob small">scarcity</span>
+          <span class="blob small">earned capacity</span>
+          <span class="blob small">future access</span>
+        </div>
+      </article>
+    </section>
+
+    <section class="grid section">
+      <article class="card span-12">
+        <div class="kicker">Quality vs. Adoption</div>
+        <h2>Good work should be rewarded even when it is not accepted.</h2>
+        <p>
+          This is the main fairness constraint. A Request may be valid, well-researched, tested, and helpful, but still not fit the project because of context the contributor could not see: private roadmap, upcoming rewrite, release freeze, maintainer taste, licensing issue, architectural direction, or an old conversation.
+        </p>
+        <p>
+          Therefore the platform must not use “merged” as the only success condition. The question is not only “did the project adopt this?” The question is also “did this Request reduce uncertainty and represent good-faith work?”
+        </p>
+        <div class="mini-matrix" aria-label="Quality and adoption matrix">
+          <div class="matrix-cell good">
+            <h3>Good + accepted</h3>
+            <p class="muted">Refund stake, reward credits, and lower future friction.</p>
+          </div>
+          <div class="matrix-cell cyan">
+            <h3>Good + not accepted</h3>
+            <p class="muted">Refund stake, possibly reward small credit, and avoid reputation harm.</p>
+          </div>
+          <div class="matrix-cell warn">
+            <h3>Incomplete but good-faith</h3>
+            <p class="muted">Partial refund or hold stake while contributor responds.</p>
+          </div>
+          <div class="matrix-cell bad">
+            <h3>Low-quality or abandoned</h3>
+            <p class="muted">Burn stake and raise future friction if repeated.</p>
+          </div>
+        </div>
+      </article>
+    </section>
+
+    <section class="grid section">
+      <article class="card span-8">
+        <div class="kicker">Maintainer Power</div>
+        <h2>Do not make maintainers assign credits.</h2>
+        <p>
+          Maintainers should not become credit judges. That adds complexity, makes outcomes inconsistent, creates resentment, and can produce bad incentives. If maintainers directly control refund amounts, contributors may feel punished for hidden context or rejected for economic reasons.
+        </p>
+        <p>
+          The clean split is: maintainers judge project fit; the platform settles the stake. Maintainers use lightweight labels, and the platform maps those labels plus Request quality signals into refund, reward, or burn outcomes.
+        </p>
+        <div class="stacked-flow" aria-label="Maintainer and platform responsibility split">
+          <div class="stack-step">
+            <div class="num">M</div>
+            <div>
+              <h3>Maintainer decides project disposition</h3>
+              <p class="muted">Accepted, useful but not used, duplicate, not aligned, needs work, abandoned, low-quality.</p>
+            </div>
+            <span class="tag">project fit</span>
+          </div>
+          <div class="stack-step">
+            <div class="num">P</div>
+            <div>
+              <h3>Platform decides credit settlement</h3>
+              <p class="muted">Refund, reward, partial refund, burn, and future pricing adjustments.</p>
+            </div>
+            <span class="tag">market treatment</span>
+          </div>
+        </div>
+      </article>
+
+      <aside class="card span-4">
+        <div class="kicker">Anti-Abuse</div>
+        <h2>No rejection farming.</h2>
+        <p>
+          Maintainers can be compensated for attention, but rejection should not become a profit center. The platform should avoid direct “reject more, earn more” mechanics.
+        </p>
+        <p>
+          For MVP, compensation can be minimal or routed to a repo treasury. The more important first-order goal is reducing bad submissions.
+        </p>
+      </aside>
+    </section>
+
+    <section class="grid section">
+      <article class="card span-12">
+        <div class="kicker">Settlement Table</div>
+        <h2>The credit outcomes should be understandable.</h2>
+        <table aria-label="Request outcome and credit settlement table">
+          <thead>
+            <tr>
+              <th>Maintainer disposition</th>
+              <th>What it means</th>
+              <th>Default credit outcome</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td><strong>Accepted / merged</strong></td>
+              <td>The Request fits the project and is acted on.</td>
+              <td>Stake refunded plus reward credits.</td>
+            </tr>
+            <tr>
+              <td><strong>Useful but not used</strong></td>
+              <td>The work helped, but the project chose another path.</td>
+              <td>Stake refunded; small reward possible.</td>
+            </tr>
+            <tr>
+              <td><strong>Blocked by hidden context</strong></td>
+              <td>The contributor could not reasonably know the Request was not actionable.</td>
+              <td>Full or near-full refund; no penalty.</td>
+            </tr>
+            <tr>
+              <td><strong>Reasonable but not aligned</strong></td>
+              <td>Good-faith work, but not a project priority.</td>
+              <td>Mostly refunded; small review cost may be deducted.</td>
+            </tr>
+            <tr>
+              <td><strong>Duplicate / missing obvious context</strong></td>
+              <td>The contributor missed information that was reasonably visible.</td>
+              <td>Partial refund; repeated pattern raises future cost.</td>
+            </tr>
+            <tr>
+              <td><strong>Needs response</strong></td>
+              <td>The Request may be good, but the contributor must clarify or revise.</td>
+              <td>Stake held; refund/reward depends on follow-through.</td>
+            </tr>
+            <tr>
+              <td><strong>Abandoned</strong></td>
+              <td>The contributor consumed review then disappeared.</td>
+              <td>Partial or full burn.</td>
+            </tr>
+            <tr>
+              <td><strong>Slop / spam / misleading</strong></td>
+              <td>Low-signal, mass-generated, deceptive, or no-repro work.</td>
+              <td>Stake burned; future Requests cost more.</td>
+            </tr>
+          </tbody>
+        </table>
+      </article>
+    </section>
+
+    <section class="grid section">
+      <article class="card span-6">
+        <div class="kicker">Ratings</div>
+        <h2>Ratings can wait.</h2>
+        <p>
+          Ratings for contributors and maintainers are useful, but they are not necessary for the initial product. Early explicit ratings can create social friction and noisy data, especially with few users.
+        </p>
+        <p>
+          The MVP can use implicit signals privately: completion rate, abandonment, repeated slop, accepted Requests, useful-but-not-used Requests, and maintainer resolution behavior. These signals can tune stake prices later without exposing a public rating system on day one.
+        </p>
+        <div class="comparison">
+          <div class="box good">
+            <h3>Now</h3>
+            <p class="muted">Use credits, stakes, dispositions, refunds, and simple hidden quality signals.</p>
+          </div>
+          <div class="box neutral">
+            <h3>Later</h3>
+            <p class="muted">Add visible contributor and maintainer ratings once enough activity exists to make them meaningful.</p>
+          </div>
+        </div>
+      </article>
+
+      <article class="card span-6">
+        <div class="kicker">Public vs. Private</div>
+        <h2>Do not over-index on public/private pricing.</h2>
+        <p>
+          Public Requests have extra externalities: repo clutter, status, pressure, and visibility. But they are not the core problem. The core problem is maintainer attention.
+        </p>
+        <p>
+          For MVP, both public and private submitted Requests should require stake. A public premium can be small or deferred. The important distinction is simpler: drafts are free; submitted Requests cost credits.
+        </p>
+        <div class="formula">
+Not the main axis:<br />
+public vs. private<br /><br />
+Main axis:<br />
+private draft vs. maintainer-facing submission
+        </div>
+      </article>
+    </section>
+
+    <section class="grid section">
+      <article class="card span-12">
+        <div class="kicker">Nash Equilibrium</div>
+        <h2>The system should make curation the dominant strategy.</h2>
+        <p>
+          AI does not need to be blocked. It needs to be made economically accountable. If generating twenty candidate patches is free but submitting each one costs stake, the rational user filters before submitting. That is the desired behavior.
+        </p>
+        <div class="two-lane" aria-label="Equilibrium lanes diagram">
+          <div class="lane good">
+            <h3>Good contributor path</h3>
+            <p><strong>Strategy:</strong> submit fewer, better Requests with evidence, tests, reproduction, or a scoped patch.</p>
+            <p><strong>Payoff:</strong> stake refunded, reward credits earned, future friction falls.</p>
+            <p><strong>Result:</strong> contribution capacity compounds.</p>
+          </div>
+          <div class="lane bad">
+            <h3>Slop generator path</h3>
+            <p><strong>Strategy:</strong> submit many vague, public, AI-generated Requests with weak context.</p>
+            <p><strong>Payoff:</strong> stakes burn, future Requests cost more, volume becomes expensive.</p>
+            <p><strong>Result:</strong> slop becomes negative expected value.</p>
+          </div>
+        </div>
+      </article>
+    </section>
+
+    <section class="grid section">
+      <article class="card span-12">
+        <div class="kicker">What to Defer</div>
+        <h2>Remove distractions from the first build.</h2>
+        <div class="comparison four">
+          <div class="box neutral">
+            <h3>Visible ratings</h3>
+            <p class="muted">Useful later after enough data exists. Too noisy at launch.</p>
+          </div>
+          <div class="box neutral">
+            <h3>Large public/private spread</h3>
+            <p class="muted">Can be added later. Submission itself is the core cost boundary.</p>
+          </div>
+          <div class="box neutral">
+            <h3>Direct credit purchases</h3>
+            <p class="muted">Possible later. Early credits can come from starter grants, earned rewards, and sponsorship pools.</p>
+          </div>
+          <div class="box neutral">
+            <h3>Complex repo rules</h3>
+            <p class="muted">Avoid maintainer configuration burden. The market mechanism should do the first cut.</p>
+          </div>
+        </div>
+      </article>
+    </section>
+
+    <section class="grid section">
+      <article class="card span-7">
+        <div class="kicker">MVP Spec</div>
+        <h2>The simplest robust product.</h2>
+        <div class="stacked-flow" aria-label="MVP specification diagram">
+          <div class="stack-step">
+            <div class="num">1</div>
+            <div>
+              <h3>One object: Request</h3>
+              <p class="muted">No separate issues and PRs. A Request may or may not include a patch.</p>
+            </div>
+            <span class="tag">surface</span>
+          </div>
+          <div class="stack-step">
+            <div class="num">2</div>
+            <div>
+              <h3>One boundary: submitted to maintainer</h3>
+              <p class="muted">Drafting is free. Maintainer-facing submission requires stake.</p>
+            </div>
+            <span class="tag">cost</span>
+          </div>
+          <div class="stack-step">
+            <div class="num">3</div>
+            <div>
+              <h3>One unit: credits</h3>
+              <p class="muted">Credits are staked to submit and returned, rewarded, partially refunded, or burned.</p>
+            </div>
+            <span class="tag">incentive</span>
+          </div>
+          <div class="stack-step">
+            <div class="num">4</div>
+            <div>
+              <h3>One fairness rule: quality is separate from adoption</h3>
+              <p class="muted">Good work can earn a refund or reward even when the maintainer says no.</p>
+            </div>
+            <span class="tag">trust</span>
+          </div>
+          <div class="stack-step">
+            <div class="num">5</div>
+            <div>
+              <h3>One maintainer action: disposition</h3>
+              <p class="muted">Maintainers classify the outcome; the platform handles credit settlement.</p>
+            </div>
+            <span class="tag">workflow</span>
+          </div>
+        </div>
+      </article>
+
+      <aside class="card span-5">
+        <div class="kicker">Word Blob</div>
+        <h2>The concept in primitives.</h2>
+        <div class="word-blob" aria-label="MVP concept word blob">
+          <span class="blob big">Requests</span>
+          <span class="blob big good">credits</span>
+          <span class="blob med cyan">stake</span>
+          <span class="blob med purple">refund</span>
+          <span class="blob med warn">good-faith</span>
+          <span class="blob med bad">burn</span>
+          <span class="blob small">draft free</span>
+          <span class="blob small">submit costly</span>
+          <span class="blob small">quality ≠ merge</span>
+          <span class="blob small">maintainer disposition</span>
+          <span class="blob small">platform settlement</span>
+          <span class="blob small">fewer, better asks</span>
+        </div>
+      </aside>
+    </section>
+
+    <section class="section callout">
+      <h2>Final Position</h2>
+      <p>
+        The first version should be brutally simple: replace issues and pull requests with <strong>Requests</strong>, require <strong>credit stake</strong> for any maintainer-facing submission, and let outcomes settle the stake.
+      </p>
+      <p>
+        Do not start with visible ratings, heavy public/private pricing, maintainer-assigned credits, direct credit purchases, or elaborate repo rules. Those are later layers. The MVP only needs to prove that when submission has a cost and good-faith work is protected, serious contributors curate their work and slop generators lose the economic game.
+      </p>
+    </section>
+
+    <div class="footer">
+      Standalone concept document for a credit-staked Request market for open-source contribution.
+    </div>
+  </main>
+</body>
+</html>
