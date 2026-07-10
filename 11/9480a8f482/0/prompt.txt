@@ -1,0 +1,1 @@
+ok great, go ahead and merge this pr into main and then pull main. then i want you to modify the html plan accordingly for phase 3, making sure to highlight what was changed in the plan
