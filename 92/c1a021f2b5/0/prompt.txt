@@ -1,0 +1,17 @@
+why did this happen? it should have cloned the whole repo
+
+adam-blumoff@adam-blumoff-surface-book-2:~/code$ mkdir .tmp
+adam-blumoff@adam-blumoff-surface-book-2:~/code$ cd .tmp
+adam-blumoff@adam-blumoff-surface-book-2:~/code/.tmp$ scope clone adamblumoff/scope-vcs
+Cloning into 'scope-vcs'...
+remote: Enumerating objects: 75, done.
+remote: Counting objects: 100% (75/75), done.
+remote: Compressing objects: 100% (75/75), done.
+remote: Total 75 (delta 5), reused 0 (delta 0), pack-reused 0
+Unpacking objects: 100% (75/75), 114.42 KiB | 1.59 MiB/s, done.
+adam-blumoff@adam-blumoff-surface-book-2:~/code/.tmp$ scope whoami
+@adamblumoff <adamblumoff@gmail.com>
+adam-blumoff@adam-blumoff-surface-book-2:~/code/.tmp$ ls
+scope-vcs
+adam-blumoff@adam-blumoff-surface-book-2:~/code/.tmp$ cd scope-vcs
+adam-blumoff@adam-blumoff-surface-book-2:~/code/.tmp/scope-vcs$ ls
