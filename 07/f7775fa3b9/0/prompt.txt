@@ -1,0 +1,1 @@
+ok since we're working with another branch rn, port these changes into a worktree and base from main then make the pr for that branch. wait for greptile and codex reviews then address accordingly, then do an autoreview loop until green, then go ahead and give me a report of what happened. make sure you don't interfere with the current local checkout.
