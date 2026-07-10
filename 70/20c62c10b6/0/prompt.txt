@@ -1,0 +1,1 @@
+cli deployment failed and also the web page ui isn't just a list of files and is the collapsable file-system ui that we had earlier. let me know if you have any questions before re-implementing that
