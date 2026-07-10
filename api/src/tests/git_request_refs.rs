@@ -21,7 +21,7 @@ mod privacy;
 
 #[tokio::test]
 async fn request_editor_receive_pack_does_not_require_push_intent() {
-    let state = test_state_with_request();
+    let state = test_state_with_request().await;
     let mut headers = HeaderMap::new();
     headers.insert(
         AUTHORIZATION,
@@ -46,7 +46,7 @@ async fn request_editor_receive_pack_does_not_require_push_intent() {
 
 #[tokio::test]
 async fn request_editor_receive_pack_requires_current_repo_read() {
-    let state = test_state_with_request();
+    let state = test_state_with_request().await;
     state
         .metadata
         .update(|catalog| {
@@ -73,9 +73,9 @@ async fn request_editor_receive_pack_requires_current_repo_read() {
 
 #[tokio::test]
 async fn invited_public_editor_receive_pack_does_not_require_push_intent() {
-    let state = test_state_with_request();
+    let state = test_state_with_request().await;
     insert_editor_user(&state);
-    invite_editor_to_request(&state);
+    invite_editor_to_request(&state).await;
     let mut headers = HeaderMap::new();
     headers.insert(
         AUTHORIZATION,
@@ -96,7 +96,7 @@ async fn invited_public_editor_receive_pack_does_not_require_push_intent() {
 
 #[tokio::test]
 async fn uninvited_public_user_cannot_receive_pack_for_request_refs() {
-    let state = test_state_with_request();
+    let state = test_state_with_request().await;
     insert_stranger_user(&state);
     let mut headers = HeaderMap::new();
     headers.insert(
@@ -115,7 +115,7 @@ async fn uninvited_public_user_cannot_receive_pack_for_request_refs() {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn real_git_request_ref_push_records_revision_without_touching_main() {
-    let state = test_state_with_request();
+    let state = test_state_with_request().await;
     let state_for_server = state.clone();
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();
@@ -163,6 +163,7 @@ async fn real_git_request_ref_push_records_revision_without_touching_main() {
             event_id: "event_created".to_string(),
             now_unix: 4,
         })
+        .await
         .unwrap();
     fs::write(source.join("request.txt"), "request branch content v2\n").unwrap();
     run_git(Some(&source), &["add", "-A"], "add second request change").unwrap();
@@ -179,7 +180,9 @@ async fn real_git_request_ref_push_records_revision_without_touching_main() {
     )
     .unwrap();
 
-    let repo = find_repo(&state, TEST_REPO_OWNER, TEST_REPO_NAME).unwrap();
+    let repo = find_repo(&state, TEST_REPO_OWNER, TEST_REPO_NAME)
+        .await
+        .unwrap();
     assert_eq!(
         repo.live_tree()
             .get(&ScopePath::parse("/README.md").unwrap())
@@ -202,6 +205,7 @@ async fn real_git_request_ref_push_records_revision_without_touching_main() {
             assert_eq!(catalog.request_events.len(), 2);
             Ok(())
         })
+        .await
         .unwrap();
     let store_repo =
         crate::git::storage::request_ref_store_repo_path(&state, TEST_REPO_OWNER, TEST_REPO_NAME);
@@ -222,6 +226,7 @@ async fn real_git_request_ref_push_records_revision_without_touching_main() {
         TEST_REPO_NAME,
         &public_user_id(),
     )
+    .await
     .unwrap();
     let restored_head = git_stdout_text(
         &staging_repo,
@@ -240,6 +245,7 @@ async fn real_git_request_ref_push_records_revision_without_touching_main() {
         TEST_REPO_NAME,
         &public_user_id(),
     )
+    .await
     .unwrap();
     let restored_head = git_stdout_text(
         &staging_repo,
@@ -258,9 +264,9 @@ async fn real_git_request_ref_push_records_revision_without_touching_main() {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn invited_public_editor_can_push_request_ref() {
-    let state = test_state_with_request();
+    let state = test_state_with_request().await;
     insert_editor_user(&state);
-    invite_editor_to_request(&state);
+    invite_editor_to_request(&state).await;
     let state_for_server = state.clone();
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();
@@ -305,6 +311,7 @@ async fn invited_public_editor_can_push_request_ref() {
             assert!(catalog.request_events.is_empty());
             Ok(())
         })
+        .await
         .unwrap();
 
     server.abort();
@@ -313,7 +320,7 @@ async fn invited_public_editor_can_push_request_ref() {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn maintainer_can_push_request_ref_without_being_author_or_editor() {
-    let state = test_state_with_request();
+    let state = test_state_with_request().await;
     insert_member_user(&state);
     let state_for_server = state.clone();
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
@@ -368,6 +375,7 @@ async fn maintainer_can_push_request_ref_without_being_author_or_editor() {
             assert!(catalog.request_events.is_empty());
             Ok(())
         })
+        .await
         .unwrap();
 
     server.abort();
@@ -376,7 +384,7 @@ async fn maintainer_can_push_request_ref_without_being_author_or_editor() {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn request_ref_push_rejects_history_unrelated_to_recorded_base() {
-    let state = test_state_with_request();
+    let state = test_state_with_request().await;
     state
         .metadata
         .update(|catalog| {
@@ -390,6 +398,7 @@ async fn request_ref_push_rejects_history_unrelated_to_recorded_base() {
     let original_head = state
         .metadata
         .request_by_id(REQUEST_ID)
+        .await
         .unwrap()
         .unwrap()
         .head_oid;
@@ -454,6 +463,7 @@ async fn request_ref_push_rejects_history_unrelated_to_recorded_base() {
             assert!(catalog.request_events.is_empty());
             Ok(())
         })
+        .await
         .unwrap();
 
     server.abort();
@@ -462,7 +472,7 @@ async fn request_ref_push_rejects_history_unrelated_to_recorded_base() {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn request_ref_push_rejects_unsupported_tree_entries() {
-    let state = test_state_with_request();
+    let state = test_state_with_request().await;
     let state_for_server = state.clone();
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();
@@ -518,6 +528,7 @@ async fn request_ref_push_rejects_unsupported_tree_entries() {
             assert!(catalog.request_events.is_empty());
             Ok(())
         })
+        .await
         .unwrap();
 
     server.abort();
@@ -526,7 +537,7 @@ async fn request_ref_push_rejects_unsupported_tree_entries() {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn public_request_author_cannot_push_main() {
-    let state = test_state_with_request();
+    let state = test_state_with_request().await;
     let state_for_server = state.clone();
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();
@@ -566,7 +577,9 @@ async fn public_request_author_cannot_push_main() {
         String::from_utf8_lossy(&output.stderr)
             .contains("Scope request pushes only accept refs/scope/requests/*")
     );
-    let repo = find_repo(&state, TEST_REPO_OWNER, TEST_REPO_NAME).unwrap();
+    let repo = find_repo(&state, TEST_REPO_OWNER, TEST_REPO_NAME)
+        .await
+        .unwrap();
     assert_eq!(
         repo.live_tree()
             .get(&ScopePath::parse("/README.md").unwrap())
@@ -583,6 +596,7 @@ async fn public_request_author_cannot_push_main() {
             assert!(catalog.request_events.is_empty());
             Ok(())
         })
+        .await
         .unwrap();
 
     server.abort();
@@ -591,7 +605,7 @@ async fn public_request_author_cannot_push_main() {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn public_actor_cannot_push_private_request_after_membership_loss() {
-    let state = test_state_with_request();
+    let state = test_state_with_request().await;
     insert_private_request_for_public_user(&state);
     let state_for_server = state.clone();
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
@@ -645,13 +659,14 @@ async fn public_actor_cannot_push_private_request_after_membership_loss() {
             );
             Ok(())
         })
+        .await
         .unwrap();
 
     server.abort();
     let _ = fs::remove_dir_all(source);
 }
 
-fn test_state_with_request() -> AppState {
+async fn test_state_with_request() -> AppState {
     let state = test_state_with_repo();
     cache_test_jwks(&state);
     let public_user = UserAccount {
@@ -667,7 +682,9 @@ fn test_state_with_request() -> AppState {
             .repositories
             .insert(TEST_REPO_ID.to_string(), repo_with_readme());
     }
-    let repo = find_repo(&state, TEST_REPO_OWNER, TEST_REPO_NAME).unwrap();
+    let repo = find_repo(&state, TEST_REPO_OWNER, TEST_REPO_NAME)
+        .await
+        .unwrap();
     let projection = project_graph(
         &repo.policy,
         &repo.graph,
@@ -691,6 +708,7 @@ fn test_state_with_request() -> AppState {
             amount_credits: 20,
             now_unix: 1,
         })
+        .await
         .unwrap();
     state
         .metadata
@@ -706,6 +724,7 @@ fn test_state_with_request() -> AppState {
             base_main_oid,
             now_unix: 2,
         })
+        .await
         .unwrap();
     state
 }
@@ -801,7 +820,7 @@ fn insert_member_user(state: &AppState) {
         .unwrap();
 }
 
-fn invite_editor_to_request(state: &AppState) {
+async fn invite_editor_to_request(state: &AppState) {
     state
         .metadata
         .add_request_editor(AddRequestEditorInput {
@@ -810,6 +829,7 @@ fn invite_editor_to_request(state: &AppState) {
             editor_user_id: editor_user_id(),
             now_unix: 3,
         })
+        .await
         .unwrap();
 }
 

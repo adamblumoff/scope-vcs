@@ -1,6 +1,7 @@
 use crate::domain::requests::{
     Request, RequestActorRole, RequestBaseAudience, RequestDisposition, RequestEvent,
-    RequestEventKind, RequestSettlement, RequestState,
+    RequestEventKind, RequestSettlement, RequestState, ResolutionDisposition,
+    allowed_resolution_dispositions, settlement_for,
 };
 use serde::{Deserialize, Serialize};
 
@@ -71,6 +72,8 @@ pub(crate) struct RequestSummaryResponse {
     pub(crate) resolved_at_unix: Option<u64>,
     pub(crate) permissions: RequestPermissionsResponse,
     pub(crate) mergeability: RequestMergeabilityResponse,
+    pub(crate) resolution_options: Vec<RequestResolutionOptionResponse>,
+    pub(crate) merge_settlement_preview: RequestSettlementPreviewResponse,
 }
 
 #[derive(Debug, Serialize)]
@@ -115,6 +118,35 @@ pub(crate) struct RequestSettlementResponse {
     pub(crate) reward_credits: u32,
     pub(crate) burned_credits: u32,
     pub(crate) settled_at_unix: u64,
+}
+
+#[derive(Debug, Serialize)]
+#[cfg_attr(test, derive(ts_rs::TS))]
+pub(crate) struct RequestSettlementPreviewResponse {
+    pub(crate) stake_credits: u32,
+    pub(crate) refunded_credits: u32,
+    pub(crate) reward_credits: u32,
+    pub(crate) burned_credits: u32,
+}
+
+#[derive(Debug, Serialize)]
+#[cfg_attr(test, derive(ts_rs::TS))]
+pub(crate) struct RequestResolutionOptionResponse {
+    pub(crate) disposition: ResolutionDisposition,
+    pub(crate) settlement: RequestSettlementPreviewResponse,
+}
+
+fn settlement_preview(
+    stake_credits: u32,
+    disposition: RequestDisposition,
+) -> RequestSettlementPreviewResponse {
+    let settlement = settlement_for(stake_credits, disposition, 0);
+    RequestSettlementPreviewResponse {
+        stake_credits,
+        refunded_credits: settlement.refunded_credits,
+        reward_credits: settlement.reward_credits,
+        burned_credits: settlement.burned_credits,
+    }
 }
 
 impl From<RequestSettlement> for RequestSettlementResponse {
@@ -184,7 +216,7 @@ pub(crate) struct RespondRequestRequest {
 #[derive(Debug, Deserialize)]
 #[cfg_attr(test, derive(ts_rs::TS))]
 pub(crate) struct ResolveRequestRequest {
-    pub(crate) disposition: RequestDisposition,
+    pub(crate) disposition: ResolutionDisposition,
     pub(crate) body: Option<String>,
 }
 
@@ -201,6 +233,16 @@ pub(crate) fn request_summary_response(
     permissions: RequestPermissionsResponse,
     mergeability: RequestMergeabilityResponse,
 ) -> RequestSummaryResponse {
+    let resolution_options = allowed_resolution_dispositions(request.state)
+        .iter()
+        .copied()
+        .map(|disposition| RequestResolutionOptionResponse {
+            disposition,
+            settlement: settlement_preview(request.stake_credits, disposition.into()),
+        })
+        .collect();
+    let merge_settlement_preview =
+        settlement_preview(request.stake_credits, RequestDisposition::Accepted);
     RequestSummaryResponse {
         id: request.id,
         title: request.title,
@@ -221,5 +263,7 @@ pub(crate) fn request_summary_response(
         resolved_at_unix: request.resolved_at_unix,
         permissions,
         mergeability,
+        resolution_options,
+        merge_settlement_preview,
     }
 }

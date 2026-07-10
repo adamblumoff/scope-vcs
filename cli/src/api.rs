@@ -149,7 +149,6 @@ pub struct RepoSummaryResponse {
     pub name: String,
     pub lifecycle_state: RepoPublicationState,
     pub access: RepositoryAccessResponse,
-    pub pending_import_pending: bool,
     pub open_request_count: usize,
     pub request_permissions: RepoRequestPermissionsResponse,
 }

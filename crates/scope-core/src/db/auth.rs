@@ -1,8 +1,6 @@
-#[cfg(any(test, feature = "memory-metadata"))]
-use super::cli_sessions::create_cli_session_token_in_memory;
 use super::{
-    MetadataStore, MetadataStoreInner, acquire_metadata_read_lock, acquire_metadata_write_lock,
-    cli_sessions::create_cli_session_token_in_tx, entities, run_api_db_on,
+    MetadataStore, acquire_metadata_read_lock, acquire_metadata_write_lock,
+    cli_sessions::create_cli_session_token_in_tx, entities,
 };
 use crate::{
     auth::{
@@ -21,174 +19,69 @@ use sea_orm::{
     ActiveModelTrait, ColumnTrait, EntityTrait, IntoActiveModel, PaginatorTrait, QueryFilter,
     TransactionTrait, sea_query::Expr,
 };
-#[cfg(any(test, feature = "memory-metadata"))]
-use std::collections::BTreeMap;
 use std::sync::Arc;
 
-#[cfg(any(test, feature = "memory-metadata"))]
-#[derive(Default)]
-pub struct MemoryAuthState {
-    pub auth_identities: BTreeMap<String, String>,
-    cli_device_logins: BTreeMap<String, MemoryDeviceLogin>,
-    cli_device_code_by_user_code_hash: BTreeMap<String, String>,
-    pub cli_browser_logins: BTreeMap<String, MemoryBrowserLogin>,
-    pub cli_exchange_grants: BTreeMap<String, MemoryExchangeGrant>,
-    pub cli_sessions: BTreeMap<String, MemoryCliSession>,
-}
-
-#[cfg(any(test, feature = "memory-metadata"))]
-struct MemoryDeviceLogin {
-    user_code_hash: String,
-    created_at_unix: u64,
-    expires_at_unix: u64,
-    completed_user_id: Option<String>,
-    completed_at_unix: Option<u64>,
-    consumed_at_unix: Option<u64>,
-}
-
-#[cfg(any(test, feature = "memory-metadata"))]
-pub struct MemoryBrowserLogin {
-    pub request_secret_hash: String,
-    pub callback_url: String,
-    pub callback_code_hash: Option<String>,
-    pub created_at_unix: u64,
-    pub expires_at_unix: u64,
-    pub completed_user_id: Option<String>,
-    pub completed_at_unix: Option<u64>,
-    pub consumed_at_unix: Option<u64>,
-}
-
-#[cfg(any(test, feature = "memory-metadata"))]
-pub struct MemoryExchangeGrant {
-    pub user_id: String,
-    pub expires_at_unix: u64,
-    pub consumed_at_unix: Option<u64>,
-}
-
-#[cfg(any(test, feature = "memory-metadata"))]
-pub struct MemoryCliSession {
-    pub id: String,
-    pub user_id: String,
-    pub label: String,
-    pub created_at_unix: u64,
-    pub last_used_at_unix: Option<u64>,
-    pub expires_at_unix: u64,
-    pub revoked_at_unix: Option<u64>,
-}
-
 impl MetadataStore {
-    pub fn start_cli_device_login(&self, app_origin: &str) -> Result<DeviceLoginStart, ApiError> {
+    pub async fn start_cli_device_login(
+        &self,
+        app_origin: &str,
+    ) -> Result<DeviceLoginStart, ApiError> {
         let app_origin = app_origin.trim_end_matches('/').to_string();
         let now = unix_now()?;
         let expires_at_unix = now + CLI_DEVICE_LOGIN_TTL_SECS;
 
-        match self.inner.as_ref() {
-            MetadataStoreInner::Postgres { db, runtime } => {
-                let db = Arc::clone(db);
-                run_api_db_on(runtime, async move {
-                    let tx = db.as_ref().begin().await.map_err(ApiError::internal)?;
-                    acquire_metadata_write_lock(&tx).await?;
-                    cleanup_expired_cli_rows(&tx, now).await?;
-                    enforce_device_login_start_limits(&tx, now).await?;
+        let db = Arc::clone(&self.db);
+        let tx = db.as_ref().begin().await.map_err(ApiError::internal)?;
+        acquire_metadata_write_lock(&tx).await?;
+        cleanup_expired_cli_rows(&tx, now).await?;
+        enforce_device_login_start_limits(&tx, now).await?;
 
-                    let (device_code, user_code) = loop {
-                        let device_code = random_prefixed_token(CLI_DEVICE_CODE_PREFIX)?;
-                        let user_code = random_user_code()?;
-                        let device_code_hash = token_hash(&device_code);
-                        let user_code_hash = token_hash(&normalize_user_code(&user_code));
-                        let device_exists =
-                            entities::cli_device_login::Entity::find_by_id(device_code_hash)
-                                .one(&tx)
-                                .await
-                                .map_err(ApiError::internal)?
-                                .is_some();
-                        let user_exists = entities::cli_device_login::Entity::find()
-                            .filter(
-                                entities::cli_device_login::Column::UserCodeHash.eq(user_code_hash),
-                            )
-                            .one(&tx)
-                            .await
-                            .map_err(ApiError::internal)?
-                            .is_some();
-                        if !device_exists && !user_exists {
-                            break (device_code, user_code);
-                        }
-                    };
-
-                    entities::cli_device_login::Model {
-                        device_code_hash: token_hash(&device_code),
-                        user_code_hash: token_hash(&normalize_user_code(&user_code)),
-                        created_at_unix: u64_to_i64(now)?,
-                        expires_at_unix: u64_to_i64(expires_at_unix)?,
-                        completed_user_id: None,
-                        completed_at_unix: None,
-                        consumed_at_unix: None,
-                    }
-                    .into_active_model()
-                    .insert(&tx)
-                    .await
-                    .map_err(ApiError::internal)?;
-                    tx.commit().await.map_err(ApiError::internal)?;
-
-                    Ok(DeviceLoginStart {
-                        device_code,
-                        user_code,
-                        verification_url: format!("{app_origin}/cli-login"),
-                        expires_at_unix,
-                        poll_interval_secs: CLI_DEVICE_LOGIN_POLL_INTERVAL_SECS,
-                    })
-                })
+        let (device_code, user_code) = loop {
+            let device_code = random_prefixed_token(CLI_DEVICE_CODE_PREFIX)?;
+            let user_code = random_user_code()?;
+            let device_code_hash = token_hash(&device_code);
+            let user_code_hash = token_hash(&normalize_user_code(&user_code));
+            let device_exists = entities::cli_device_login::Entity::find_by_id(device_code_hash)
+                .one(&tx)
+                .await
+                .map_err(ApiError::internal)?
+                .is_some();
+            let user_exists = entities::cli_device_login::Entity::find()
+                .filter(entities::cli_device_login::Column::UserCodeHash.eq(user_code_hash))
+                .one(&tx)
+                .await
+                .map_err(ApiError::internal)?
+                .is_some();
+            if !device_exists && !user_exists {
+                break (device_code, user_code);
             }
-            #[cfg(any(test, feature = "memory-metadata"))]
-            MetadataStoreInner::Memory(memory) => {
-                let mut auth = memory
-                    .auth
-                    .lock()
-                    .map_err(|_| ApiError::internal_message("auth lock is poisoned"))?;
-                auth.cleanup_expired(now);
-                auth.enforce_start_limits(now)?;
+        };
 
-                let (device_code, user_code) = loop {
-                    let device_code = random_prefixed_token(CLI_DEVICE_CODE_PREFIX)?;
-                    let user_code = random_user_code()?;
-                    let device_code_hash = token_hash(&device_code);
-                    let user_code_hash = token_hash(&normalize_user_code(&user_code));
-                    if !auth.cli_device_logins.contains_key(&device_code_hash)
-                        && !auth
-                            .cli_device_code_by_user_code_hash
-                            .contains_key(&user_code_hash)
-                    {
-                        break (device_code, user_code);
-                    }
-                };
-                let device_code_hash = token_hash(&device_code);
-                let user_code_hash = token_hash(&normalize_user_code(&user_code));
-                auth.cli_device_code_by_user_code_hash
-                    .insert(user_code_hash.clone(), device_code_hash.clone());
-                auth.cli_device_logins.insert(
-                    device_code_hash,
-                    MemoryDeviceLogin {
-                        user_code_hash,
-                        created_at_unix: now,
-                        expires_at_unix,
-                        completed_user_id: None,
-                        completed_at_unix: None,
-                        consumed_at_unix: None,
-                    },
-                );
-
-                Ok(DeviceLoginStart {
-                    device_code,
-                    user_code,
-                    verification_url: format!("{app_origin}/cli-login"),
-                    expires_at_unix,
-                    poll_interval_secs: CLI_DEVICE_LOGIN_POLL_INTERVAL_SECS,
-                })
-            }
+        entities::cli_device_login::Model {
+            device_code_hash: token_hash(&device_code),
+            user_code_hash: token_hash(&normalize_user_code(&user_code)),
+            created_at_unix: u64_to_i64(now)?,
+            expires_at_unix: u64_to_i64(expires_at_unix)?,
+            completed_user_id: None,
+            completed_at_unix: None,
+            consumed_at_unix: None,
         }
+        .into_active_model()
+        .insert(&tx)
+        .await
+        .map_err(ApiError::internal)?;
+        tx.commit().await.map_err(ApiError::internal)?;
+
+        Ok(DeviceLoginStart {
+            device_code,
+            user_code,
+            verification_url: format!("{app_origin}/cli-login"),
+            expires_at_unix,
+            poll_interval_secs: CLI_DEVICE_LOGIN_POLL_INTERVAL_SECS,
+        })
     }
 
-    pub fn complete_cli_device_login(
+    pub async fn complete_cli_device_login(
         &self,
         raw_user_code: &str,
         user: &UserAccount,
@@ -196,335 +89,185 @@ impl MetadataStore {
         let user_code_hash = token_hash(&normalize_user_code(raw_user_code));
         let user_id = user.id.clone();
         let now = unix_now()?;
-        match self.inner.as_ref() {
-            MetadataStoreInner::Postgres { db, runtime } => {
-                let db = Arc::clone(db);
-                run_api_db_on(runtime, async move {
-                    let tx = db.as_ref().begin().await.map_err(ApiError::internal)?;
-                    acquire_metadata_write_lock(&tx).await?;
+        let db = Arc::clone(&self.db);
+        let tx = db.as_ref().begin().await.map_err(ApiError::internal)?;
+        acquire_metadata_write_lock(&tx).await?;
 
-                    let Some(login) = entities::cli_device_login::Entity::find()
-                        .filter(entities::cli_device_login::Column::UserCodeHash.eq(user_code_hash))
-                        .one(&tx)
-                        .await
-                        .map_err(ApiError::internal)?
-                    else {
-                        return Err(ApiError::not_found("CLI login code not found"));
-                    };
+        let Some(login) = entities::cli_device_login::Entity::find()
+            .filter(entities::cli_device_login::Column::UserCodeHash.eq(user_code_hash))
+            .one(&tx)
+            .await
+            .map_err(ApiError::internal)?
+        else {
+            return Err(ApiError::not_found("CLI login code not found"));
+        };
 
-                    match cli_auth_rules::decide_device_login_completion(
-                        cli_auth_rules::DeviceLoginCompletionState {
-                            expires_at_unix: i64_to_u64(login.expires_at_unix)?,
-                            completed: login.completed_user_id.is_some(),
-                        },
-                        now,
-                    )? {
-                        cli_auth_rules::DeviceLoginCompletionDecision::Expired => {
-                            entities::cli_device_login::Entity::delete_by_id(
-                                login.device_code_hash,
-                            )
-                            .exec(&tx)
-                            .await
-                            .map_err(ApiError::internal)?;
-                            return Err(ApiError::conflict("CLI login code expired"));
-                        }
-                        cli_auth_rules::DeviceLoginCompletionDecision::Complete => {}
-                    }
-
-                    cleanup_expired_cli_rows(&tx, now).await?;
-                    entities::cli_device_login::Entity::update_many()
-                        .filter(
-                            entities::cli_device_login::Column::DeviceCodeHash
-                                .eq(login.device_code_hash),
-                        )
-                        .col_expr(
-                            entities::cli_device_login::Column::CompletedUserId,
-                            Expr::value(user_id),
-                        )
-                        .col_expr(
-                            entities::cli_device_login::Column::CompletedAtUnix,
-                            Expr::value(u64_to_i64(now)?),
-                        )
-                        .exec(&tx)
-                        .await
-                        .map_err(ApiError::internal)?;
-                    tx.commit().await.map_err(ApiError::internal)?;
-                    Ok(())
-                })
+        match cli_auth_rules::decide_device_login_completion(
+            cli_auth_rules::DeviceLoginCompletionState {
+                expires_at_unix: i64_to_u64(login.expires_at_unix)?,
+                completed: login.completed_user_id.is_some(),
+            },
+            now,
+        )? {
+            cli_auth_rules::DeviceLoginCompletionDecision::Expired => {
+                entities::cli_device_login::Entity::delete_by_id(login.device_code_hash)
+                    .exec(&tx)
+                    .await
+                    .map_err(ApiError::internal)?;
+                return Err(ApiError::conflict("CLI login code expired"));
             }
-            #[cfg(any(test, feature = "memory-metadata"))]
-            MetadataStoreInner::Memory(memory) => {
-                let mut auth = memory
-                    .auth
-                    .lock()
-                    .map_err(|_| ApiError::internal_message("auth lock is poisoned"))?;
-                let Some(device_code_hash) = auth
-                    .cli_device_code_by_user_code_hash
-                    .get(&user_code_hash)
-                    .cloned()
-                else {
-                    return Err(ApiError::not_found("CLI login code not found"));
-                };
-                let Some(login) = auth.cli_device_logins.get_mut(&device_code_hash) else {
-                    return Err(ApiError::not_found("CLI login code not found"));
-                };
-                match cli_auth_rules::decide_device_login_completion(
-                    cli_auth_rules::DeviceLoginCompletionState {
-                        expires_at_unix: login.expires_at_unix,
-                        completed: login.completed_user_id.is_some(),
-                    },
-                    now,
-                )? {
-                    cli_auth_rules::DeviceLoginCompletionDecision::Expired => {
-                        auth.remove_device_login(&device_code_hash);
-                        return Err(ApiError::conflict("CLI login code expired"));
-                    }
-                    cli_auth_rules::DeviceLoginCompletionDecision::Complete => {}
-                }
-
-                login.completed_user_id = Some(user_id);
-                login.completed_at_unix = Some(now);
-                Ok(())
-            }
+            cli_auth_rules::DeviceLoginCompletionDecision::Complete => {}
         }
+
+        cleanup_expired_cli_rows(&tx, now).await?;
+        entities::cli_device_login::Entity::update_many()
+            .filter(entities::cli_device_login::Column::DeviceCodeHash.eq(login.device_code_hash))
+            .col_expr(
+                entities::cli_device_login::Column::CompletedUserId,
+                Expr::value(user_id),
+            )
+            .col_expr(
+                entities::cli_device_login::Column::CompletedAtUnix,
+                Expr::value(u64_to_i64(now)?),
+            )
+            .exec(&tx)
+            .await
+            .map_err(ApiError::internal)?;
+        tx.commit().await.map_err(ApiError::internal)?;
+        Ok(())
     }
 
-    pub fn poll_cli_device_login(&self, device_code: &str) -> Result<DeviceLoginPoll, ApiError> {
+    pub async fn poll_cli_device_login(
+        &self,
+        device_code: &str,
+    ) -> Result<DeviceLoginPoll, ApiError> {
         let device_code_hash = token_hash(device_code);
         let now = unix_now()?;
-        match self.inner.as_ref() {
-            MetadataStoreInner::Postgres { db, runtime } => {
-                let db = Arc::clone(db);
-                run_api_db_on(runtime, async move {
-                    let tx = db.as_ref().begin().await.map_err(ApiError::internal)?;
-                    acquire_metadata_write_lock(&tx).await?;
+        let db = Arc::clone(&self.db);
+        let tx = db.as_ref().begin().await.map_err(ApiError::internal)?;
+        acquire_metadata_write_lock(&tx).await?;
 
-                    let Some(login) =
-                        entities::cli_device_login::Entity::find_by_id(device_code_hash)
-                            .one(&tx)
-                            .await
-                            .map_err(ApiError::internal)?
-                    else {
-                        return Err(ApiError::not_found("CLI device login not found"));
-                    };
-                    match cli_auth_rules::decide_device_login_poll(
-                        cli_auth_rules::DeviceLoginPollState {
-                            expires_at_unix: i64_to_u64(login.expires_at_unix)?,
-                            consumed: login.consumed_at_unix.is_some(),
-                            completed_user_id: login.completed_user_id.clone(),
-                        },
-                        now,
-                    )? {
-                        cli_auth_rules::DeviceLoginPollDecision::Expired => {
-                            entities::cli_device_login::Entity::delete_by_id(
-                                login.device_code_hash,
-                            )
-                            .exec(&tx)
-                            .await
-                            .map_err(ApiError::internal)?;
-                            Err(ApiError::conflict("CLI device login expired"))
-                        }
-                        cli_auth_rules::DeviceLoginPollDecision::Pending { expires_at_unix } => {
-                            tx.commit().await.map_err(ApiError::internal)?;
-                            Ok(DeviceLoginPoll::Pending { expires_at_unix })
-                        }
-                        cli_auth_rules::DeviceLoginPollDecision::Complete { user_id } => {
-                            cleanup_expired_cli_rows(&tx, now).await?;
-                            let token = create_cli_session_token_in_tx(&tx, &user_id, now).await?;
-                            entities::cli_device_login::Entity::update_many()
-                                .filter(
-                                    entities::cli_device_login::Column::DeviceCodeHash
-                                        .eq(login.device_code_hash),
-                                )
-                                .col_expr(
-                                    entities::cli_device_login::Column::ConsumedAtUnix,
-                                    Expr::value(u64_to_i64(now)?),
-                                )
-                                .exec(&tx)
-                                .await
-                                .map_err(ApiError::internal)?;
-                            tx.commit().await.map_err(ApiError::internal)?;
-                            Ok(DeviceLoginPoll::Complete {
-                                session_token: token.session_token,
-                                expires_at_unix: token.expires_at_unix,
-                                identity: token.identity,
-                            })
-                        }
-                    }
-                })
+        let Some(login) = entities::cli_device_login::Entity::find_by_id(device_code_hash)
+            .one(&tx)
+            .await
+            .map_err(ApiError::internal)?
+        else {
+            return Err(ApiError::not_found("CLI device login not found"));
+        };
+        match cli_auth_rules::decide_device_login_poll(
+            cli_auth_rules::DeviceLoginPollState {
+                expires_at_unix: i64_to_u64(login.expires_at_unix)?,
+                consumed: login.consumed_at_unix.is_some(),
+                completed_user_id: login.completed_user_id.clone(),
+            },
+            now,
+        )? {
+            cli_auth_rules::DeviceLoginPollDecision::Expired => {
+                entities::cli_device_login::Entity::delete_by_id(login.device_code_hash)
+                    .exec(&tx)
+                    .await
+                    .map_err(ApiError::internal)?;
+                Err(ApiError::conflict("CLI device login expired"))
             }
-            #[cfg(any(test, feature = "memory-metadata"))]
-            MetadataStoreInner::Memory(memory) => {
-                let mut auth = memory
-                    .auth
-                    .lock()
-                    .map_err(|_| ApiError::internal_message("auth lock is poisoned"))?;
-                let Some(login) = auth.cli_device_logins.get_mut(&device_code_hash) else {
-                    return Err(ApiError::not_found("CLI device login not found"));
-                };
-                match cli_auth_rules::decide_device_login_poll(
-                    cli_auth_rules::DeviceLoginPollState {
-                        expires_at_unix: login.expires_at_unix,
-                        consumed: login.consumed_at_unix.is_some(),
-                        completed_user_id: login.completed_user_id.clone(),
-                    },
-                    now,
-                )? {
-                    cli_auth_rules::DeviceLoginPollDecision::Expired => {
-                        auth.remove_device_login(&device_code_hash);
-                        Err(ApiError::conflict("CLI device login expired"))
-                    }
-                    cli_auth_rules::DeviceLoginPollDecision::Pending { expires_at_unix } => {
-                        Ok(DeviceLoginPoll::Pending { expires_at_unix })
-                    }
-                    cli_auth_rules::DeviceLoginPollDecision::Complete { user_id } => {
-                        login.consumed_at_unix = Some(now);
-                        let token = create_cli_session_token_in_memory(memory, auth, user_id, now)?;
-                        Ok(DeviceLoginPoll::Complete {
-                            session_token: token.session_token,
-                            expires_at_unix: token.expires_at_unix,
-                            identity: token.identity,
-                        })
-                    }
-                }
+            cli_auth_rules::DeviceLoginPollDecision::Pending { expires_at_unix } => {
+                tx.commit().await.map_err(ApiError::internal)?;
+                Ok(DeviceLoginPoll::Pending { expires_at_unix })
+            }
+            cli_auth_rules::DeviceLoginPollDecision::Complete { user_id } => {
+                cleanup_expired_cli_rows(&tx, now).await?;
+                let token = create_cli_session_token_in_tx(&tx, &user_id, now).await?;
+                entities::cli_device_login::Entity::update_many()
+                    .filter(
+                        entities::cli_device_login::Column::DeviceCodeHash
+                            .eq(login.device_code_hash),
+                    )
+                    .col_expr(
+                        entities::cli_device_login::Column::ConsumedAtUnix,
+                        Expr::value(u64_to_i64(now)?),
+                    )
+                    .exec(&tx)
+                    .await
+                    .map_err(ApiError::internal)?;
+                tx.commit().await.map_err(ApiError::internal)?;
+                Ok(DeviceLoginPoll::Complete {
+                    session_token: token.session_token,
+                    expires_at_unix: token.expires_at_unix,
+                    identity: token.identity,
+                })
             }
         }
     }
 
-    pub fn verify_cli_session_token(&self, session_token: &str) -> Result<UserAccount, ApiError> {
+    pub async fn verify_cli_session_token(
+        &self,
+        session_token: &str,
+    ) -> Result<UserAccount, ApiError> {
         let token_hash = token_hash(session_token);
         let now = unix_now()?;
-        match self.inner.as_ref() {
-            MetadataStoreInner::Postgres { db, runtime } => {
-                let db = Arc::clone(db);
-                run_api_db_on(runtime, async move {
-                    let tx = db.as_ref().begin().await.map_err(ApiError::internal)?;
-                    acquire_metadata_read_lock(&tx).await?;
-                    let Some(session) = entities::cli_session::Entity::find()
-                        .filter(entities::cli_session::Column::TokenHash.eq(token_hash))
-                        .one(&tx)
-                        .await
-                        .map_err(ApiError::internal)?
-                    else {
-                        return Err(ApiError::unauthorized("invalid CLI token"));
-                    };
-                    let user_id = match cli_auth_rules::decide_cli_session_use(
-                        cli_auth_rules::CliSessionState {
-                            expires_at_unix: i64_to_u64(session.expires_at_unix)?,
-                            revoked: session.revoked_at_unix.is_some(),
-                            user_id: session.user_id.clone(),
-                        },
-                        now,
-                    )? {
-                        cli_auth_rules::CliSessionUseDecision::Expired => {
-                            return Err(ApiError::unauthorized("CLI token expired"));
-                        }
-                        cli_auth_rules::CliSessionUseDecision::Active { user_id } => user_id,
-                    };
-                    let user = load_user_by_id(&tx, &user_id).await?;
-                    tx.commit().await.map_err(ApiError::internal)?;
-                    Ok(user)
-                })
+        let db = Arc::clone(&self.db);
+        let tx = db.as_ref().begin().await.map_err(ApiError::internal)?;
+        acquire_metadata_read_lock(&tx).await?;
+        let Some(session) = entities::cli_session::Entity::find()
+            .filter(entities::cli_session::Column::TokenHash.eq(token_hash))
+            .one(&tx)
+            .await
+            .map_err(ApiError::internal)?
+        else {
+            return Err(ApiError::unauthorized("invalid CLI token"));
+        };
+        let user_id = match cli_auth_rules::decide_cli_session_use(
+            cli_auth_rules::CliSessionState {
+                expires_at_unix: i64_to_u64(session.expires_at_unix)?,
+                revoked: session.revoked_at_unix.is_some(),
+                user_id: session.user_id.clone(),
+            },
+            now,
+        )? {
+            cli_auth_rules::CliSessionUseDecision::Expired => {
+                return Err(ApiError::unauthorized("CLI token expired"));
             }
-            #[cfg(any(test, feature = "memory-metadata"))]
-            MetadataStoreInner::Memory(memory) => {
-                let auth = memory
-                    .auth
-                    .lock()
-                    .map_err(|_| ApiError::internal_message("auth lock is poisoned"))?;
-                let Some(session) = auth.cli_sessions.get(&token_hash) else {
-                    return Err(ApiError::unauthorized("invalid CLI token"));
-                };
-                let user_id = match cli_auth_rules::decide_cli_session_use(
-                    cli_auth_rules::CliSessionState {
-                        expires_at_unix: session.expires_at_unix,
-                        revoked: session.revoked_at_unix.is_some(),
-                        user_id: session.user_id.clone(),
-                    },
-                    now,
-                )? {
-                    cli_auth_rules::CliSessionUseDecision::Expired => {
-                        return Err(ApiError::unauthorized("CLI token expired"));
-                    }
-                    cli_auth_rules::CliSessionUseDecision::Active { user_id } => user_id,
-                };
-                drop(auth);
-                let catalog = memory
-                    .catalog
-                    .lock()
-                    .map_err(|_| ApiError::internal_message("catalog lock is poisoned"))?;
-                catalog
-                    .users
-                    .get(&user_id)
-                    .cloned()
-                    .ok_or_else(|| ApiError::unauthorized("invalid CLI token"))
-            }
-        }
+            cli_auth_rules::CliSessionUseDecision::Active { user_id } => user_id,
+        };
+        let user = load_user_by_id(&tx, &user_id).await?;
+        tx.commit().await.map_err(ApiError::internal)?;
+        Ok(user)
     }
 
-    pub fn revoke_cli_session_token(&self, session_token: &str) -> Result<(), ApiError> {
+    pub async fn revoke_cli_session_token(&self, session_token: &str) -> Result<(), ApiError> {
         let token_hash = token_hash(session_token);
         let now = unix_now()?;
-        match self.inner.as_ref() {
-            MetadataStoreInner::Postgres { db, runtime } => {
-                let db = Arc::clone(db);
-                run_api_db_on(runtime, async move {
-                    let tx = db.as_ref().begin().await.map_err(ApiError::internal)?;
-                    acquire_metadata_write_lock(&tx).await?;
-                    let Some(session) = entities::cli_session::Entity::find()
-                        .filter(entities::cli_session::Column::TokenHash.eq(token_hash))
-                        .one(&tx)
-                        .await
-                        .map_err(ApiError::internal)?
-                    else {
-                        return Err(ApiError::unauthorized("invalid CLI token"));
-                    };
-                    match cli_auth_rules::decide_cli_session_revoke(
-                        i64_to_u64(session.expires_at_unix)?,
-                        now,
-                    ) {
-                        cli_auth_rules::CliSessionRevokeDecision::Expired => {
-                            entities::cli_session::Entity::delete_by_id(session.id)
-                                .exec(&tx)
-                                .await
-                                .map_err(ApiError::internal)?;
-                            return Err(ApiError::unauthorized("CLI token expired"));
-                        }
-                        cli_auth_rules::CliSessionRevokeDecision::Revoke => {}
-                    }
-                    entities::cli_session::Entity::update_many()
-                        .filter(entities::cli_session::Column::Id.eq(session.id))
-                        .col_expr(
-                            entities::cli_session::Column::RevokedAtUnix,
-                            Expr::value(u64_to_i64(now)?),
-                        )
-                        .exec(&tx)
-                        .await
-                        .map_err(ApiError::internal)?;
-                    tx.commit().await.map_err(ApiError::internal)?;
-                    Ok(())
-                })
+        let db = Arc::clone(&self.db);
+        let tx = db.as_ref().begin().await.map_err(ApiError::internal)?;
+        acquire_metadata_write_lock(&tx).await?;
+        let Some(session) = entities::cli_session::Entity::find()
+            .filter(entities::cli_session::Column::TokenHash.eq(token_hash))
+            .one(&tx)
+            .await
+            .map_err(ApiError::internal)?
+        else {
+            return Err(ApiError::unauthorized("invalid CLI token"));
+        };
+        match cli_auth_rules::decide_cli_session_revoke(i64_to_u64(session.expires_at_unix)?, now) {
+            cli_auth_rules::CliSessionRevokeDecision::Expired => {
+                entities::cli_session::Entity::delete_by_id(session.id)
+                    .exec(&tx)
+                    .await
+                    .map_err(ApiError::internal)?;
+                return Err(ApiError::unauthorized("CLI token expired"));
             }
-            #[cfg(any(test, feature = "memory-metadata"))]
-            MetadataStoreInner::Memory(memory) => {
-                let mut auth = memory
-                    .auth
-                    .lock()
-                    .map_err(|_| ApiError::internal_message("auth lock is poisoned"))?;
-                let Some(session) = auth.cli_sessions.get_mut(&token_hash) else {
-                    return Err(ApiError::unauthorized("invalid CLI token"));
-                };
-                match cli_auth_rules::decide_cli_session_revoke(session.expires_at_unix, now) {
-                    cli_auth_rules::CliSessionRevokeDecision::Expired => {
-                        auth.cli_sessions.remove(&token_hash);
-                        return Err(ApiError::unauthorized("CLI token expired"));
-                    }
-                    cli_auth_rules::CliSessionRevokeDecision::Revoke => {}
-                }
-                session.revoked_at_unix = Some(now);
-                Ok(())
-            }
+            cli_auth_rules::CliSessionRevokeDecision::Revoke => {}
         }
+        entities::cli_session::Entity::update_many()
+            .filter(entities::cli_session::Column::Id.eq(session.id))
+            .col_expr(
+                entities::cli_session::Column::RevokedAtUnix,
+                Expr::value(u64_to_i64(now)?),
+            )
+            .exec(&tx)
+            .await
+            .map_err(ApiError::internal)?;
+        tx.commit().await.map_err(ApiError::internal)?;
+        Ok(())
     }
 }
 
@@ -571,45 +314,6 @@ where
         .await
         .map_err(ApiError::internal)?;
     cli_auth_rules::enforce_device_login_start_rate_limit(pending_count, window_count)
-}
-
-#[cfg(any(test, feature = "memory-metadata"))]
-impl MemoryAuthState {
-    fn enforce_start_limits(&self, now: u64) -> Result<(), ApiError> {
-        let pending_count = self.cli_device_logins.len() as u64;
-        let window_start = cli_auth_rules::device_login_start_window_start(now);
-        let window_count = self
-            .cli_device_logins
-            .values()
-            .filter(|login| login.created_at_unix >= window_start)
-            .count() as u64;
-        cli_auth_rules::enforce_device_login_start_rate_limit(pending_count, window_count)
-    }
-
-    pub fn cleanup_expired(&mut self, now: u64) {
-        let expired_device_codes = self
-            .cli_device_logins
-            .iter()
-            .filter(|(_, login)| now >= login.expires_at_unix)
-            .map(|(device_code_hash, _)| device_code_hash.clone())
-            .collect::<Vec<_>>();
-        for device_code_hash in expired_device_codes {
-            self.remove_device_login(&device_code_hash);
-        }
-        self.cli_browser_logins
-            .retain(|_, login| now < login.expires_at_unix);
-        self.cli_exchange_grants
-            .retain(|_, grant| now < grant.expires_at_unix);
-        self.cli_sessions
-            .retain(|_, session| now < session.expires_at_unix);
-    }
-
-    fn remove_device_login(&mut self, device_code_hash: &str) {
-        if let Some(login) = self.cli_device_logins.remove(device_code_hash) {
-            self.cli_device_code_by_user_code_hash
-                .remove(&login.user_code_hash);
-        }
-    }
 }
 
 pub async fn load_user_by_id<C>(conn: &C, user_id: &str) -> Result<UserAccount, ApiError>

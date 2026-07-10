@@ -125,15 +125,6 @@ get_dev_user_handle() {
   read_dotenv_value "$ROOT/.env.local" "SCOPE_DEV_USER_HANDLE"
 }
 
-local_metadata_store() {
-  local value
-  value="${SCOPE_METADATA_STORE:-}"
-  if [[ -z "$value" ]]; then
-    value="$(read_dotenv_value "$ROOT/.env.local" "SCOPE_METADATA_STORE")"
-  fi
-  printf '%s\n' "${value:-memory}"
-}
-
 local_database_url() {
   local value
   value="${DATABASE_URL:-}"
@@ -141,10 +132,6 @@ local_database_url() {
     value="$(read_dotenv_value "$ROOT/.env.local" "DATABASE_URL")"
   fi
   printf '%s\n' "$value"
-}
-
-worker_enabled() {
-  [[ "$(local_metadata_store)" == "postgres" ]]
 }
 
 get_object_key() {
@@ -209,17 +196,12 @@ write_api_runner() {
   local dev_email="$2"
   local dev_handle="$3"
   local object_key="$4"
-  local metadata_store database_url
-  metadata_store="$(local_metadata_store)"
+  local database_url
   database_url="$(local_database_url)"
   local runner="$STATE_DIR/api.sh"
 
-  if [[ "$metadata_store" != "memory" && "$metadata_store" != "postgres" ]]; then
-    echo "unsupported SCOPE_METADATA_STORE=$metadata_store" >&2
-    exit 1
-  fi
-  if [[ "$metadata_store" == "postgres" && -z "$database_url" ]]; then
-    echo "DATABASE_URL is required when SCOPE_METADATA_STORE=postgres" >&2
+  if [[ -z "$database_url" ]]; then
+    echo "DATABASE_URL is required for local development" >&2
     exit 1
   fi
 
@@ -232,7 +214,6 @@ while IFS='=' read -r name _; do
   [[ "\$name" == SCOPE_BUCKET_* ]] && unset "\$name"
 done < <(env)
 export SCOPE_ENV="local"
-export SCOPE_METADATA_STORE="$metadata_store"
 export SCOPE_OBJECT_STORE="filesystem"
 export SCOPE_DATA_DIR="$DATA_DIR"
 export SCOPE_OBJECT_STORE_DIR="$OBJECT_DIR"
@@ -245,11 +226,7 @@ export CLERK_JWKS_URL="$issuer/.well-known/jwks.json"
 export CLERK_AUTHORIZED_PARTIES="$CLERK_AUTHORIZED_PARTIES_VALUE"
 export SCOPE_DEV_USER_EMAIL="$dev_email"
 EOF
-  if [[ "$metadata_store" == "postgres" ]]; then
-    printf 'export DATABASE_URL=%q\n' "$database_url" >> "$runner"
-  else
-    printf 'unset DATABASE_URL\n' >> "$runner"
-  fi
+  printf 'export DATABASE_URL=%q\n' "$database_url" >> "$runner"
   if [[ -n "$dev_handle" ]]; then
     printf 'export SCOPE_DEV_USER_HANDLE=%q\n' "$dev_handle" >> "$runner"
   else
@@ -266,7 +243,7 @@ write_worker_runner() {
   database_url="$(local_database_url)"
   runner="$STATE_DIR/worker.sh"
   if [[ -z "$database_url" ]]; then
-    echo "DATABASE_URL is required for the worker (SCOPE_METADATA_STORE=postgres)" >&2
+    echo "DATABASE_URL is required for the worker" >&2
     exit 1
   fi
 
@@ -316,7 +293,6 @@ start_api() {
 }
 
 start_worker() {
-  worker_enabled || return 0
   write_worker_runner
   setsid "$STATE_DIR/worker.sh" > "$WORKER_OUT_LOG" 2> "$WORKER_ERR_LOG" &
   echo "$!" > "$WORKER_PID_FILE"
@@ -376,7 +352,7 @@ doctor() {
   fi
 
   echo "doctor ok"
-  echo "metadata: $(local_metadata_store)"
+  echo "metadata: postgres"
   echo "clerk issuer: $issuer"
   echo "seed user: $dev_email"
   echo "api: $LOCAL_API_ORIGIN"
@@ -469,11 +445,7 @@ up() {
 
 status() {
   echo "api process: $(pid_status "$API_PID_FILE")"
-  if worker_enabled; then
-    echo "worker process: $(pid_status "$WORKER_PID_FILE")"
-  else
-    echo "worker process: skipped (memory metadata)"
-  fi
+  echo "worker process: $(pid_status "$WORKER_PID_FILE")"
   echo "web process: $(pid_status "$WEB_PID_FILE")"
   if body="$(curl -fsS --max-time 3 "http://localhost:8080/readyz" 2>/dev/null)"; then
     echo "api readyz: $body"

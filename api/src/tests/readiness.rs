@@ -1,5 +1,4 @@
 use super::*;
-use crate::error::ApiError;
 
 #[tokio::test]
 async fn healthz_stays_cheap_and_readyz_checks_dependencies() {
@@ -82,20 +81,20 @@ async fn readyz_reports_unavailable_without_leaking_dependency_errors() {
 struct UnavailableObjectStore;
 
 impl crate::object_store::ObjectStore for UnavailableObjectStore {
-    fn put(&self, _key: &str, _bytes: &[u8]) -> Result<(), ApiError> {
+    fn put(&self, _key: &str, _bytes: &[u8]) -> Result<(), scope_core::error::ApiError> {
         Ok(())
     }
 
-    fn get(&self, _key: &str) -> Result<Vec<u8>, ApiError> {
+    fn get(&self, _key: &str) -> Result<Vec<u8>, scope_core::error::ApiError> {
         Ok(Vec::new())
     }
 
-    fn delete(&self, _key: &str) -> Result<(), ApiError> {
+    fn delete(&self, _key: &str) -> Result<(), scope_core::error::ApiError> {
         Ok(())
     }
 
-    fn readiness_check(&self) -> Result<(), ApiError> {
-        Err(ApiError::service_unavailable(
+    fn readiness_check(&self) -> Result<(), scope_core::error::ApiError> {
+        Err(scope_core::error::ApiError::service_unavailable(
             "secret internal object-store hostname is unavailable",
         ))
     }

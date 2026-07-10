@@ -3,7 +3,7 @@ use crate::domain::{
     projection_views::{
         ProjectionAudience, ProjectionPreviewCommit, ProjectionPreviewCommitVisibility,
         ProjectionPreviewFile, ProjectionPreviewSummary, ProjectionSource, ProjectionViewFile,
-        pending_scope_path as domain_pending_scope_path, projection_preview,
+        projection_preview, repo_scope_path as domain_repo_scope_path,
     },
     store::StoredRepository,
 };
@@ -151,8 +151,8 @@ pub(crate) fn projection_file_responses(files: Vec<ProjectionViewFile>) -> Vec<R
     files.into_iter().map(repo_file_response).collect()
 }
 
-pub(crate) fn pending_scope_path(path: &str) -> Result<ScopePath, ApiError> {
-    domain_pending_scope_path(path)
+pub(crate) fn repo_scope_path(path: &str) -> Result<ScopePath, ApiError> {
+    Ok(domain_repo_scope_path(path)?)
 }
 
 fn projection_preview_file_response(file: ProjectionPreviewFile) -> ProjectionPreviewFileResponse {

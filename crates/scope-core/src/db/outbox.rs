@@ -1,6 +1,6 @@
 use super::{
-    MetadataStore, MetadataStoreInner, acquire_metadata_write_lock, entities,
-    projection_read_models::save_live_projection_read_models, repository_from_model, run_api_db_on,
+    MetadataStore, acquire_metadata_write_lock, entities,
+    projection_read_models::save_live_projection_read_models, repository_from_model,
 };
 use crate::{error::ApiError, persistence::unix_now};
 #[cfg(any(test, feature = "test-support"))]
@@ -48,7 +48,7 @@ struct ClaimedOutboxJob {
 }
 
 impl MetadataStore {
-    pub fn run_ready_outbox_jobs(
+    pub async fn run_ready_outbox_jobs(
         &self,
         worker_id: &str,
         limit: usize,
@@ -57,96 +57,76 @@ impl MetadataStore {
             return Ok(OutboxRunSummary::default());
         }
 
-        match self.inner.as_ref() {
-            MetadataStoreInner::Postgres { db, runtime } => {
-                let db = Arc::clone(db);
-                let worker_id = worker_id.to_string();
-                run_api_db_on(runtime, async move {
-                    let mut summary = OutboxRunSummary::default();
-                    for _ in 0..limit {
-                        let Some(job) =
-                            claim_next_ready_job(db.as_ref(), &worker_id, DEFAULT_JOB_LEASE_SECS)
-                                .await?
-                        else {
-                            break;
-                        };
-                        summary.claimed += 1;
+        let db = Arc::clone(&self.db);
+        let worker_id = worker_id.to_string();
+        let mut summary = OutboxRunSummary::default();
+        for _ in 0..limit {
+            let Some(job) =
+                claim_next_ready_job(db.as_ref(), &worker_id, DEFAULT_JOB_LEASE_SECS).await?
+            else {
+                break;
+            };
+            summary.claimed += 1;
 
-                        match execute_outbox_job(db.as_ref(), &job).await {
-                            Ok(()) => {
-                                complete_outbox_job(db.as_ref(), &job, &worker_id).await?;
-                                summary.completed += 1;
-                            }
-                            Err(error) => {
-                                let message = error.message;
-                                let attempts = next_retry_attempt(job.attempts);
-                                if is_terminal_retry_attempt(attempts) {
-                                    tracing::error!(
-                                        job_id = %job.id,
-                                        kind = %job.kind,
-                                        attempts,
-                                        max_attempts = MAX_JOB_ATTEMPTS,
-                                        error = %message,
-                                        "outbox job exhausted retries; marking failed"
-                                    );
-                                } else {
-                                    tracing::warn!(
-                                        job_id = %job.id,
-                                        kind = %job.kind,
-                                        attempts,
-                                        max_attempts = MAX_JOB_ATTEMPTS,
-                                        next_retry_delay_secs = retry_delay_seconds(attempts),
-                                        error = %message,
-                                        "outbox job failed; scheduling retry"
-                                    );
-                                }
-                                fail_outbox_job(db.as_ref(), &job, &worker_id, message).await?;
-                                summary.failed += 1;
-                            }
-                        }
+            match execute_outbox_job(db.as_ref(), &job).await {
+                Ok(()) => {
+                    complete_outbox_job(db.as_ref(), &job, &worker_id).await?;
+                    summary.completed += 1;
+                }
+                Err(error) => {
+                    let message = error.message;
+                    let attempts = next_retry_attempt(job.attempts);
+                    if is_terminal_retry_attempt(attempts) {
+                        tracing::error!(
+                            job_id = %job.id,
+                            kind = %job.kind,
+                            attempts,
+                            max_attempts = MAX_JOB_ATTEMPTS,
+                            error = %message,
+                            "outbox job exhausted retries; marking failed"
+                        );
+                    } else {
+                        tracing::warn!(
+                            job_id = %job.id,
+                            kind = %job.kind,
+                            attempts,
+                            max_attempts = MAX_JOB_ATTEMPTS,
+                            next_retry_delay_secs = retry_delay_seconds(attempts),
+                            error = %message,
+                            "outbox job failed; scheduling retry"
+                        );
                     }
-                    Ok(summary)
-                })
+                    fail_outbox_job(db.as_ref(), &job, &worker_id, message).await?;
+                    summary.failed += 1;
+                }
             }
-            #[cfg(any(test, feature = "memory-metadata"))]
-            MetadataStoreInner::Memory(_) => Ok(OutboxRunSummary::default()),
         }
+        Ok(summary)
     }
 
     #[cfg(any(test, feature = "test-support"))]
-    pub fn outbox_job_counts_for_tests(&self) -> Result<OutboxJobCounts, ApiError> {
-        match self.inner.as_ref() {
-            MetadataStoreInner::Postgres { db, runtime } => {
-                let db = Arc::clone(db);
-                run_api_db_on(runtime, async move {
-                    let rows = entities::outbox_job::Entity::find()
-                        .all(db.as_ref())
-                        .await
-                        .map_err(ApiError::internal)?;
-                    Ok(outbox_job_counts(rows))
-                })
-            }
-            MetadataStoreInner::Memory(_) => Ok(OutboxJobCounts::default()),
-        }
+    pub async fn outbox_job_counts_for_tests(&self) -> Result<OutboxJobCounts, ApiError> {
+        let db = Arc::clone(&self.db);
+        let rows = entities::outbox_job::Entity::find()
+            .all(db.as_ref())
+            .await
+            .map_err(ApiError::internal)?;
+        Ok(outbox_job_counts(rows))
     }
 
     #[cfg(any(test, feature = "test-support"))]
-    pub fn projection_read_model_count_for_tests(&self, repo_id: &str) -> Result<usize, ApiError> {
+    pub async fn projection_read_model_count_for_tests(
+        &self,
+        repo_id: &str,
+    ) -> Result<usize, ApiError> {
         let repo_id = repo_id.to_string();
-        match self.inner.as_ref() {
-            MetadataStoreInner::Postgres { db, runtime } => {
-                let db = Arc::clone(db);
-                run_api_db_on(runtime, async move {
-                    entities::projection_read_model::Entity::find()
-                        .filter(entities::projection_read_model::Column::RepoId.eq(repo_id))
-                        .count(db.as_ref())
-                        .await
-                        .map(|count| count as usize)
-                        .map_err(ApiError::internal)
-                })
-            }
-            MetadataStoreInner::Memory(_) => Ok(0),
-        }
+        let db = Arc::clone(&self.db);
+        entities::projection_read_model::Entity::find()
+            .filter(entities::projection_read_model::Column::RepoId.eq(repo_id))
+            .count(db.as_ref())
+            .await
+            .map(|count| count as usize)
+            .map_err(ApiError::internal)
     }
 }
 
@@ -216,7 +196,7 @@ where
         return Ok(None);
     };
 
-    entities::outbox_job::Entity::update_many()
+    let claimed = entities::outbox_job::Entity::update_many()
         .filter(entities::outbox_job::Column::Id.eq(job.id.clone()))
         .filter(entities::outbox_job::Column::CompletedAtUnix.is_null())
         .col_expr(
@@ -238,6 +218,10 @@ where
         .exec(&tx)
         .await
         .map_err(ApiError::internal)?;
+    if claimed.rows_affected != 1 {
+        tx.rollback().await.map_err(ApiError::internal)?;
+        return Ok(None);
+    }
     tx.commit().await.map_err(ApiError::internal)?;
 
     Ok(Some(ClaimedOutboxJob {
@@ -299,7 +283,7 @@ where
     C: ConnectionTrait,
 {
     let now = now_i64()?;
-    entities::outbox_job::Entity::update_many()
+    let completed = entities::outbox_job::Entity::update_many()
         .filter(entities::outbox_job::Column::Id.eq(job.id.clone()))
         .filter(entities::outbox_job::Column::LeaseOwner.eq(worker_id.to_string()))
         .col_expr(
@@ -329,6 +313,11 @@ where
         .exec(conn)
         .await
         .map_err(ApiError::internal)?;
+    if completed.rows_affected != 1 {
+        return Err(ApiError::conflict(
+            "outbox job lease was lost before completion",
+        ));
+    }
     prune_succeeded_outbox_jobs(conn, now).await?;
     Ok(())
 }
@@ -352,7 +341,7 @@ where
     };
     let completed_at_unix = terminal.then_some(now);
     let state = if terminal { JOB_FAILED } else { JOB_READY };
-    entities::outbox_job::Entity::update_many()
+    let failed = entities::outbox_job::Entity::update_many()
         .filter(entities::outbox_job::Column::Id.eq(job.id.clone()))
         .filter(entities::outbox_job::Column::LeaseOwner.eq(worker_id.to_string()))
         .filter(entities::outbox_job::Column::CompletedAtUnix.is_null())
@@ -388,6 +377,11 @@ where
         .exec(conn)
         .await
         .map_err(ApiError::internal)?;
+    if failed.rows_affected != 1 {
+        return Err(ApiError::conflict(
+            "outbox job lease was lost before failure handling",
+        ));
+    }
     Ok(())
 }
 

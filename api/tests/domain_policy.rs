@@ -1,15 +1,21 @@
 use api::domain::policy::{Policy, PolicyError, ScopePath, Visibility, VisibilityRule};
 
-#[test]
-fn private_parent_hides_children() {
+fn path(value: &str) -> ScopePath {
+    ScopePath::parse(value).unwrap()
+}
+
+fn policy_with_private_internal() -> Policy {
     let mut policy = Policy::new(Visibility::Public);
     policy
-        .add_rule(VisibilityRule::private(
-            ScopePath::parse("/internal").unwrap(),
-        ))
+        .add_rule(VisibilityRule::private(path("/internal")))
         .unwrap();
+    policy
+}
 
-    let path = ScopePath::parse("/internal/model.rs").unwrap();
+#[test]
+fn private_parent_hides_children() {
+    let policy = policy_with_private_internal();
+    let path = path("/internal/model.rs");
 
     assert!(!policy.can_read(&path, false));
     assert!(policy.can_read(&path, true));
@@ -17,17 +23,10 @@ fn private_parent_hides_children() {
 
 #[test]
 fn rejects_public_island_under_private_parent() {
-    let mut policy = Policy::new(Visibility::Public);
-    policy
-        .add_rule(VisibilityRule::private(
-            ScopePath::parse("/internal").unwrap(),
-        ))
-        .unwrap();
+    let mut policy = policy_with_private_internal();
 
     let error = policy
-        .add_rule(VisibilityRule::public(
-            ScopePath::parse("/internal/readme.md").unwrap(),
-        ))
+        .add_rule(VisibilityRule::public(path("/internal/readme.md")))
         .unwrap_err();
 
     assert!(matches!(error, PolicyError::PublicIsland { .. }));

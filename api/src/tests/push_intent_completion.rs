@@ -219,15 +219,7 @@ async fn complete_push_intent_rejects_stale_config_only_review() {
         .unwrap()
         .trim()
         .to_string();
-    let pending =
-        pending_import_from_staging_repo(&state, TEST_REPO_OWNER, TEST_REPO_NAME, &bare).unwrap();
-    {
-        let mut catalog = lock_catalog(&state).unwrap();
-        let repo = catalog.repositories.get_mut(TEST_REPO_ID).unwrap();
-        repo.record.publication_state = RepoPublicationState::Unpublished;
-        repo.pending_import = Some(pending);
-        preview_publish_import(repo).unwrap();
-    }
+    apply_first_push_from_staging_repo(&state, &bare, repo_config(Visibility::Public)).await;
 
     let app = router(state.clone());
     let old_response = app
@@ -320,7 +312,9 @@ async fn complete_push_intent_rejects_stale_config_only_review() {
         .await
         .unwrap();
     assert_eq!(stale.status(), StatusCode::CONFLICT);
-    let repo = find_repo(&state, TEST_REPO_OWNER, TEST_REPO_NAME).unwrap();
+    let repo = find_repo(&state, TEST_REPO_OWNER, TEST_REPO_NAME)
+        .await
+        .unwrap();
     assert_eq!(repo.repo_config, readme_private_config);
     let _ = fs::remove_dir_all(source);
     let _ = fs::remove_dir_all(bare);
@@ -355,16 +349,9 @@ async fn complete_push_intent_rejects_content_changed_since_review() {
         .unwrap()
         .trim()
         .to_string();
-    let pending =
-        pending_import_from_staging_repo(&state, TEST_REPO_OWNER, TEST_REPO_NAME, &bare).unwrap();
-    {
-        let mut catalog = lock_catalog(&state).unwrap();
-        let repo = catalog.repositories.get_mut(TEST_REPO_ID).unwrap();
-        repo.record.publication_state = RepoPublicationState::Unpublished;
-        repo.pending_import = Some(pending);
-        preview_publish_import(repo).unwrap();
-    }
+    apply_first_push_from_staging_repo(&state, &bare, repo_config(Visibility::Public)).await;
     let base_config = find_repo(&state, TEST_REPO_OWNER, TEST_REPO_NAME)
+        .await
         .unwrap()
         .repo_config;
     let token = state
@@ -402,7 +389,9 @@ async fn complete_push_intent_rejects_content_changed_since_review() {
         response_json(response).await["error"],
         "repo content changed since review; rerun scope push"
     );
-    let repo = find_repo(&state, TEST_REPO_OWNER, TEST_REPO_NAME).unwrap();
+    let repo = find_repo(&state, TEST_REPO_OWNER, TEST_REPO_NAME)
+        .await
+        .unwrap();
     assert_eq!(repo.repo_config, repo_config(Visibility::Public));
     let _ = fs::remove_dir_all(source);
     let _ = fs::remove_dir_all(bare);
@@ -448,8 +437,8 @@ async fn complete_push_intent_hides_repo_before_token_claim_mismatch() {
     assert_eq!(response.status(), StatusCode::NOT_FOUND);
 }
 
-#[test]
-fn content_push_rejects_stale_reviewed_config() {
+#[tokio::test]
+async fn content_push_rejects_stale_reviewed_config() {
     let state = test_state_with_repo();
     let source = temp_git_repo("stale-config-content-push");
     fs::write(source.join("README.md"), "hello\n").unwrap();
@@ -472,15 +461,7 @@ fn content_push_rejects_stale_reviewed_config() {
         "clone stale config content base repo",
     )
     .unwrap();
-    let pending =
-        pending_import_from_staging_repo(&state, TEST_REPO_OWNER, TEST_REPO_NAME, &bare).unwrap();
-    {
-        let mut catalog = lock_catalog(&state).unwrap();
-        let repo = catalog.repositories.get_mut(TEST_REPO_ID).unwrap();
-        repo.record.publication_state = RepoPublicationState::Unpublished;
-        repo.pending_import = Some(pending);
-        preview_publish_import(repo).unwrap();
-    }
+    apply_first_push_from_staging_repo(&state, &bare, repo_config(Visibility::Public)).await;
 
     fs::write(source.join("README.md"), "content from old review\n").unwrap();
     run_git(Some(&source), &["add", "README.md"], "add stale update").unwrap();
@@ -510,6 +491,7 @@ fn content_push_rejects_stale_reviewed_config() {
         &test_owner_id(),
         repo_config(Visibility::Public),
     )
+    .await
     .unwrap();
 
     let newer_config = readme_private_config();
@@ -533,6 +515,7 @@ fn content_push_rejects_stale_reviewed_config() {
         update,
         &test_owner_id(),
     )
+    .await
     .unwrap_err();
 
     assert_eq!(error.status, StatusCode::CONFLICT);
@@ -540,7 +523,9 @@ fn content_push_rejects_stale_reviewed_config() {
         error.message,
         "repo config changed since review; rerun scope push"
     );
-    let repo = find_repo(&state, TEST_REPO_OWNER, TEST_REPO_NAME).unwrap();
+    let repo = find_repo(&state, TEST_REPO_OWNER, TEST_REPO_NAME)
+        .await
+        .unwrap();
     assert_eq!(repo.repo_config, newer_config);
     let _ = fs::remove_dir_all(source);
     let _ = fs::remove_dir_all(bare);

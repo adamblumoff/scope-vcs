@@ -1,14 +1,9 @@
 import type { RepoLiveState } from '@/api/types'
+import type { RepoChangeEvent } from '@/api/types.generated'
 import { useAuth } from '@clerk/tanstack-react-start'
 import { useEffect } from 'react'
 
 const RECONNECT_DELAY_MS = 2000
-
-type RepoChangeEvent = {
-  repo_id: string
-  version: number
-  reason: string
-}
 
 type AuthTokenGetter = (options: { template: string }) => Promise<string | null>
 type StreamRepoEventsResult = 'closed'
@@ -20,7 +15,7 @@ export function useRepoLiveRefresh(
   const { getToken, isLoaded } = useAuth()
 
   useEffect(() => {
-    if (!live || !isLoaded || !canUseRepoLiveRefresh(live)) {
+    if (!live || !isLoaded) {
       return
     }
 
@@ -148,10 +143,6 @@ export function useRepoLiveRefresh(
       controller.abort()
     }
   }, [getToken, invalidate, isLoaded, live])
-}
-
-export function canUseRepoLiveRefresh(_live: RepoLiveState) {
-  return true
 }
 
 export function usesVersionedRepoChangeEvents(live: RepoLiveState) {

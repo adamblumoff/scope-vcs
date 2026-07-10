@@ -126,12 +126,12 @@ async fn git_read_principal_for_request(
 ) -> Result<(crate::domain::store::StoredRepository, Principal), ApiError> {
     match mode {
         GitRemoteMode::Public => {
-            let repo = find_repo(state, owner, repo_name)?;
+            let repo = find_repo(state, owner, repo_name).await?;
             Ok((repo, Principal::public()))
         }
         GitRemoteMode::Permissioned => {
             let user = git_read_scope_user(state, headers).await?;
-            let repo = find_repo(state, owner, repo_name)?;
+            let repo = find_repo(state, owner, repo_name).await?;
             let principal = principal_for_user_id(&repo, &user.id);
             Ok((repo, principal))
         }

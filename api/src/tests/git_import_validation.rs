@@ -1,7 +1,7 @@
 use super::*;
 
-#[test]
-fn pushed_tree_rejects_gitlinks_instead_of_dropping_them() {
+#[tokio::test]
+async fn pushed_tree_rejects_gitlinks_instead_of_dropping_them() {
     let repo = temp_git_repo("gitlink-test");
     fs::write(repo.join("README.md"), "hello").unwrap();
     run_git(Some(&repo), &["add", "README.md"], "add readme").unwrap();
@@ -24,15 +24,17 @@ fn pushed_tree_rejects_gitlinks_instead_of_dropping_them() {
     commit_all(&repo, "add gitlink");
 
     let state = test_state_with_repo();
-    let error = git_tree_files(&state, TEST_REPO_ID, &repo, "HEAD").unwrap_err();
+    let error = git_tree_files(&state, TEST_REPO_ID, &repo, "HEAD")
+        .await
+        .unwrap_err();
 
     assert_eq!(error.status, StatusCode::BAD_REQUEST);
     assert!(error.message.contains("unsupported Git tree entry"));
     let _ = fs::remove_dir_all(&repo);
 }
 
-#[test]
-fn pushed_tree_accepts_binary_blobs() {
+#[tokio::test]
+async fn pushed_tree_accepts_binary_blobs() {
     let repo = temp_git_repo("binary-test");
     let binary = [0xff, 0x00, 0x61];
     fs::write(repo.join("image.bin"), binary).unwrap();
@@ -40,16 +42,18 @@ fn pushed_tree_accepts_binary_blobs() {
     commit_all(&repo, "binary");
 
     let state = test_state_with_repo();
-    let files = git_tree_files(&state, TEST_REPO_ID, &repo, "HEAD").unwrap();
+    let files = git_tree_files(&state, TEST_REPO_ID, &repo, "HEAD")
+        .await
+        .unwrap();
 
     assert_eq!(files.len(), 1);
-    assert_eq!(files[0].path, "image.bin");
+    assert_eq!(files[0].0.path, "image.bin");
     assert!(MemoryObjectStore::new().contains_bytes(&binary));
     let _ = fs::remove_dir_all(&repo);
 }
 
-#[test]
-fn oversized_binary_push_names_path_and_limit() {
+#[tokio::test]
+async fn oversized_binary_push_names_path_and_limit() {
     let repo = temp_git_repo("oversized-binary-test");
     let large_path = repo.join("video.bin");
     let large = fs::File::create(&large_path).unwrap();
@@ -61,7 +65,9 @@ fn oversized_binary_push_names_path_and_limit() {
     commit_all(&repo, "oversized binary");
 
     let state = test_state_with_repo();
-    let error = git_tree_files(&state, TEST_REPO_ID, &repo, "HEAD").unwrap_err();
+    let error = git_tree_files(&state, TEST_REPO_ID, &repo, "HEAD")
+        .await
+        .unwrap_err();
 
     assert_eq!(error.status, StatusCode::BAD_REQUEST);
     assert!(error.message.contains("video.bin"));
@@ -73,8 +79,8 @@ fn oversized_binary_push_names_path_and_limit() {
     let _ = fs::remove_dir_all(&repo);
 }
 
-#[test]
-fn pushed_tree_accepts_executable_text_files() {
+#[tokio::test]
+async fn pushed_tree_accepts_executable_text_files() {
     let repo = temp_git_repo("mode-test");
     fs::write(repo.join("script.sh"), "#!/bin/sh\necho hi\n").unwrap();
     run_git(Some(&repo), &["add", "script.sh"], "add script").unwrap();
@@ -87,11 +93,13 @@ fn pushed_tree_accepts_executable_text_files() {
     commit_all(&repo, "executable");
 
     let state = test_state_with_repo();
-    let files = git_tree_files(&state, TEST_REPO_ID, &repo, "HEAD").unwrap();
+    let files = git_tree_files(&state, TEST_REPO_ID, &repo, "HEAD")
+        .await
+        .unwrap();
 
     assert_eq!(files.len(), 1);
-    assert_eq!(files[0].path, "script.sh");
-    assert_eq!(files[0].mode, "100755");
+    assert_eq!(files[0].0.path, "script.sh");
+    assert_eq!(files[0].0.mode, "100755");
     let _ = fs::remove_dir_all(&repo);
 }
 

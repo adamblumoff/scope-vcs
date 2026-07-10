@@ -50,7 +50,7 @@ function repoPrimaryAction(
 function repoAttentionAction(
   repo: RepoSummary,
 ): RepoAttentionAction | null {
-  if (repo.lifecycle_state === 'Unpublished' && !repo.pending_import_pending) {
+  if (repo.lifecycle_state === 'Unpublished') {
     if (repo.access.actor !== 'Owner') {
       return null
     }

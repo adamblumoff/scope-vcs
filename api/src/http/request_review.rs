@@ -31,7 +31,7 @@ pub(crate) async fn get_request_changes(
     Path((owner, repo_name, request_id)): Path<(String, String, String)>,
 ) -> Result<Json<RequestChangesResponse>, ApiError> {
     let (repo, access, _) = repo_and_access(&state, &headers, &owner, &repo_name).await?;
-    let request = visible_request(&state, &repo, access, &request_id)?;
+    let request = visible_request(&state, &repo, access, &request_id).await?;
     let files = request_changes(&state, &owner, &repo_name, &repo, access, &request)?;
     Ok(Json(RequestChangesResponse { files }))
 }
@@ -43,7 +43,7 @@ pub(crate) async fn get_request_file_diff(
     Query(input): Query<RequestFileDiffRequest>,
 ) -> Result<Json<ReviewFileDiffResponse>, ApiError> {
     let (repo, access, _) = repo_and_access(&state, &headers, &owner, &repo_name).await?;
-    let request = visible_request(&state, &repo, access, &request_id)?;
+    let request = visible_request(&state, &repo, access, &request_id).await?;
     let path = normalized_path(&input.path)?;
     if request.git_snapshot.is_none() {
         return Err(ApiError::not_found("request has no uploaded changes"));

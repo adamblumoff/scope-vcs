@@ -31,7 +31,6 @@ async fn real_git_binary_published_push_round_trips_through_clone() {
     let updated = b"\x89PNG\r\n\x1a\nscope-binary-v2\0\x02\xff";
     {
         let mut repo = repo_with_readme();
-        repo.settings.review_pushes_before_applying = false;
         repo.git_push_token = Some(GitPushToken {
             token_hash: git_push_token_hash(secret),
             owner_user_id: repo.record.owner_user_id.clone(),
@@ -69,7 +68,7 @@ async fn real_git_binary_published_push_round_trips_through_clone() {
     fs::write(source.join("image.png"), updated).unwrap();
     run_git(Some(&source), &["add", "-A"], "add binary update").unwrap();
     commit_all(&source, "update binary image");
-    configure_push_intent_header(&state, &source, &remote, &test_owner_id());
+    configure_push_intent_header(&state, &source, &remote, &test_owner_id()).await;
     run_git(
         Some(&source),
         &["push", "origin", "HEAD:main"],
@@ -160,7 +159,7 @@ async fn first_push_publish_clone_round_trip(label: &str, files: &[(&str, &[u8])
         "add scope remote",
     )
     .unwrap();
-    configure_push_intent_header(&state, &source, &remote, &test_owner_id());
+    configure_push_intent_header(&state, &source, &remote, &test_owner_id()).await;
     run_git(
         Some(&source),
         &["push", "-u", "scope", "HEAD:main"],

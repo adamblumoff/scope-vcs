@@ -5,6 +5,7 @@ on:
     paths:
       - ".github/scripts/deploy-railway.sh"
       - ".github/workflows/scope-api-ci.yml"
+      - ".github/workflows/rust-workspace-checks.yml"
       - "Cargo.lock"
       - "Cargo.toml"
       - "api/**"
@@ -18,6 +19,7 @@ on:
     paths:
       - ".github/scripts/deploy-railway.sh"
       - ".github/workflows/scope-api-ci.yml"
+      - ".github/workflows/rust-workspace-checks.yml"
       - "Cargo.lock"
       - "Cargo.toml"
       - "api/**"
@@ -33,59 +35,19 @@ concurrency:
 permissions:
   contents: read
 
-env:
-  CARGO_TERM_COLOR: always
-  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
-
 jobs:
   checks:
-    name: Check scope-api
-    runs-on: ubuntu-latest
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v7
-
-      - name: Install Rust
-        uses: dtolnay/rust-toolchain@master
-        with:
-          toolchain: 1.94.0
-          components: rustfmt, clippy
-
-      - name: Cache Rust build outputs
-        uses: actions/cache@v6
-        with:
-          path: |
-            ~/.cargo/git
-            ~/.cargo/registry
-            target
-          key: ${{ runner.os }}-api-cargo-${{ hashFiles('Cargo.lock') }}-${{ github.sha }}
-          restore-keys: |
-            ${{ runner.os }}-api-cargo-${{ hashFiles('Cargo.lock') }}
-            ${{ runner.os }}-api-cargo-
-
-      - name: Check formatting
-        run: cargo fmt --all --check
-
-      - name: Test
-        run: cargo test -p scope-core -p api -p worker --locked
-
-      - name: Lint
-        run: cargo clippy -p scope-core -p api -p worker --all-targets --locked -- -D warnings
-
-      - name: Install Node
-        uses: actions/setup-node@v6
-        with:
-          node-version: 24
-
-      - name: Check API TypeScript contract
-        working-directory: web
-        run: node scripts/check-api-contract.mjs
+    uses: ./.github/workflows/rust-workspace-checks.yml
+    with:
+      include_api: true
 
   deploy:
     name: Deploy scope-api
     needs: checks
     runs-on: ubuntu-latest
     if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main'
+    env:
+      FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
     steps:
       - name: Checkout
         uses: actions/checkout@v7

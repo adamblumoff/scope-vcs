@@ -1,15 +1,14 @@
 use super::*;
 use crate::domain::store::{RepositoryAccess, RepositoryActor};
 
-#[test]
-fn projection_view_key_treats_owner_as_private_view() {
+#[tokio::test]
+async fn projection_view_key_treats_owner_as_private_view() {
     let access = RepositoryAccess {
         actor: RepositoryActor::Owner,
         can_read_private_files: false,
         can_push: false,
         can_change_file_visibility: false,
         can_apply_changes: false,
-        can_update_repo_settings: false,
         can_manage_members: false,
         can_delete_repo: false,
     };
@@ -122,21 +121,26 @@ async fn permissioned_scope_sessions_share_raw_live_head() {
     .unwrap();
     let expected_head =
         git_stdout_text(&bare, &["rev-parse", DEFAULT_GIT_BRANCH], "snapshot head").unwrap();
-    let pending =
-        pending_import_from_staging_repo(&state, TEST_REPO_OWNER, TEST_REPO_NAME, &bare).unwrap();
     {
         let mut catalog = lock_catalog(&state).unwrap();
         let repo = catalog.repositories.get_mut(TEST_REPO_ID).unwrap();
         repo.record.publication_state = RepoPublicationState::Unpublished;
         repo.record.default_visibility = Visibility::Private;
         repo.policy = Policy::new(Visibility::Private);
-        repo.pending_import = Some(pending);
-        preview_publish_import(repo).unwrap();
-        repo.members.push(test_repository_member(
-            TEST_REPO_ID,
-            member_id.clone(),
-            RepositoryMemberPermissions::default(),
-        ));
+    }
+    apply_first_push_from_staging_repo(&state, &bare, repo_config(Visibility::Private)).await;
+    {
+        let mut catalog = lock_catalog(&state).unwrap();
+        catalog
+            .repositories
+            .get_mut(TEST_REPO_ID)
+            .unwrap()
+            .members
+            .push(test_repository_member(
+                TEST_REPO_ID,
+                member_id.clone(),
+                RepositoryMemberPermissions::default(),
+            ));
     }
 
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();

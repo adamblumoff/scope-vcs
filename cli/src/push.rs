@@ -1,13 +1,25 @@
 use crate::{
     api::{
         CreatePushIntentParams, RepoPublicationState, RepoSummaryResponse, RepositoryActor,
-        complete_push_intent, create_push_intent, get_repo,
+        api_url, complete_push_intent, create_push_intent, get_repo, get_repo_config, http_client,
     },
-    git_repo::{git_remote_push_url, push_head_with_bearer},
+    git_repo::{
+        GitRepo, changed_paths_since_scope_base_at_commit, ensure_git_repo_ready,
+        fetch_scope_remote_with_bearer, git_remote_push_url, head_oid, mark_scope_remote_pushed,
+        push_head_with_bearer, scope_remote_head_oid, warn_if_dirty_working_tree,
+    },
+    login::session_from_cache_or_browser,
+    repo_config::{
+        ensure_scope_repo_config_exists, load_worktree_scope_repo_config,
+        load_worktree_scope_repo_config_base_hash, mark_worktree_scope_repo_config_synced,
+        repo_config_path, write_worktree_scope_repo_config_with_base,
+    },
+    review::{ensure_review_terminal_available, run_push_review},
 };
 use anyhow::{Context, bail};
 use reqwest::{Url, blocking::Client};
-use scope_core::domain::repo_config::RepoConfig;
+use scope_core::domain::repo_config::repo_config_fingerprint;
+use std::time::{SystemTime, UNIX_EPOCH};
 
 pub const DEFAULT_SCOPE_REMOTE: &str = "scope";
 pub const DEFAULT_SCOPE_BRANCH: &str = "main";
@@ -26,6 +38,213 @@ pub struct ScopePushOutcome {
     pub repo: String,
 }
 
+pub fn run(remote: &str, no_review: bool) -> anyhow::Result<()> {
+    let git_repo = ensure_git_repo_ready("scope push")?;
+    let reviewed_head_oid = head_oid(&git_repo)?;
+    let config_created = ensure_scope_repo_config_exists(&git_repo.root)?;
+    let mut config = load_worktree_scope_repo_config(&git_repo.root)?;
+    warn_if_dirty_working_tree(&git_repo)?;
+    if !no_review {
+        ensure_review_terminal_available("scope push review")?;
+    }
+
+    let api_url = api_url();
+    let target = load_scope_remote(&api_url, remote)?;
+    let client = http_client()?;
+    let session = session_from_cache_or_browser(&client, &api_url)?;
+    let repo = get_repo(
+        &client,
+        &api_url,
+        &session.token,
+        &target.owner,
+        &target.repo,
+    )?;
+    ensure_scope_remote_can_receive_push(&target, &repo)?;
+    let repo_config = get_repo_config(
+        &client,
+        &api_url,
+        &session.token,
+        &target.owner,
+        &target.repo,
+    )?;
+    if config_created {
+        write_worktree_scope_repo_config_with_base(&git_repo.root, &repo_config.config)?;
+        config = repo_config.config;
+        eprintln!("Created {}", repo_config_path());
+    } else {
+        let local_config_hash = repo_config_fingerprint(&config)?;
+        match load_worktree_scope_repo_config_base_hash(&git_repo.root) {
+            Ok(hash) if hash == repo_config.config_hash => {}
+            Ok(_) if local_config_hash == repo_config.config_hash => {
+                mark_worktree_scope_repo_config_synced(&git_repo.root, &config)?;
+            }
+            Ok(hash) if hash == local_config_hash => {
+                write_worktree_scope_repo_config_with_base(&git_repo.root, &repo_config.config)?;
+                config = repo_config.config;
+                eprintln!(
+                    "Scope repo config changed; refreshed {}",
+                    repo_config_path()
+                );
+            }
+            Ok(_) => bail!(
+                "Scope repo config changed, and local {} has unsynced edits. Run scope review, resolve the config, then retry scope push.",
+                repo_config_path()
+            ),
+            Err(_) if local_config_hash == repo_config.config_hash => {
+                mark_worktree_scope_repo_config_synced(&git_repo.root, &config)?;
+            }
+            Err(error) => bail!(
+                "{error}. Local {} has unsynced edits, so Scope will not overwrite it.",
+                repo_config_path()
+            ),
+        }
+    }
+    if repo.lifecycle_state == RepoPublicationState::Published {
+        fetch_scope_remote_with_bearer(
+            &git_repo,
+            &target.push_url,
+            remote,
+            DEFAULT_SCOPE_BRANCH,
+            &session.token,
+        )?;
+    }
+    let reviewed_base_oid = if no_review {
+        None
+    } else if repo.lifecycle_state == RepoPublicationState::Published {
+        Some(scope_remote_head_oid(
+            &git_repo,
+            remote,
+            DEFAULT_SCOPE_BRANCH,
+        )?)
+    } else {
+        Some(None)
+    };
+    if let Some(review_base_oid) = &reviewed_base_oid {
+        let changed_paths = changed_paths_since_scope_base_at_commit(
+            &git_repo,
+            review_base_oid.as_deref(),
+            &reviewed_head_oid,
+        )?;
+        config = run_push_review(&git_repo, &reviewed_head_oid, &changed_paths)?;
+    }
+    let base_config_hash = load_worktree_scope_repo_config_base_hash(&git_repo.root)?;
+    let intent = create_push_intent(
+        &client,
+        &api_url,
+        &session.token,
+        CreatePushIntentParams {
+            owner: &target.owner,
+            repo: &target.repo,
+            head_oid: &reviewed_head_oid,
+            base_config_hash: &base_config_hash,
+            config: &config,
+        },
+    )?;
+    if let Some(review_base_oid) = &reviewed_base_oid {
+        ensure_reviewed_base_matches_intent(
+            review_base_oid.as_deref(),
+            intent.base_head_oid.as_deref(),
+        )?;
+    }
+    ensure_review_base_matches_intent(
+        &git_repo,
+        &target.push_url,
+        remote,
+        &session.token,
+        intent.base_head_oid.as_deref(),
+    )?;
+    ensure_push_intent_not_expired(intent.expires_at_unix)?;
+
+    let outcome = match push_reviewed_head_with_intent(
+        &client,
+        &api_url,
+        &session.token,
+        &target,
+        &reviewed_head_oid,
+        &intent.token,
+    ) {
+        Ok(outcome) => outcome,
+        Err(_) if push_intent_expired(intent.expires_at_unix) => {
+            bail!("Scope push review expired; rerun scope push")
+        }
+        Err(error) => return Err(error),
+    };
+    complete_push_intent(
+        &client,
+        &api_url,
+        &session.token,
+        &target.owner,
+        &target.repo,
+        &intent.token,
+    )?;
+    mark_scope_remote_pushed(&git_repo, remote, DEFAULT_SCOPE_BRANCH, &reviewed_head_oid)?;
+    mark_worktree_scope_repo_config_synced(&git_repo.root, &config)?;
+    println!(
+        "Pushed to Scope: {}/{}\nPush applied by Scope.",
+        outcome.owner, outcome.repo
+    );
+    Ok(())
+}
+
+fn ensure_push_intent_not_expired(expires_at_unix: u64) -> anyhow::Result<()> {
+    if push_intent_expired(expires_at_unix) {
+        bail!("Scope push review expired; rerun scope push");
+    }
+    Ok(())
+}
+
+fn push_intent_expired(expires_at_unix: u64) -> bool {
+    unix_now() >= expires_at_unix
+}
+
+fn ensure_review_base_matches_intent(
+    git_repo: &GitRepo,
+    push_url: &str,
+    remote: &str,
+    session_token: &str,
+    intent_base_head_oid: Option<&str>,
+) -> anyhow::Result<()> {
+    let Some(intent_base_head_oid) = intent_base_head_oid else {
+        return Ok(());
+    };
+    if scope_remote_head_oid(git_repo, remote, DEFAULT_SCOPE_BRANCH)?.as_deref()
+        == Some(intent_base_head_oid)
+    {
+        return Ok(());
+    }
+
+    fetch_scope_remote_with_bearer(
+        git_repo,
+        push_url,
+        remote,
+        DEFAULT_SCOPE_BRANCH,
+        session_token,
+    )?;
+    if scope_remote_head_oid(git_repo, remote, DEFAULT_SCOPE_BRANCH)?.as_deref()
+        == Some(intent_base_head_oid)
+    {
+        return Ok(());
+    }
+    bail!("Scope changed while preparing push review; rerun scope push")
+}
+
+fn ensure_reviewed_base_matches_intent(
+    reviewed_base_oid: Option<&str>,
+    intent_base_head_oid: Option<&str>,
+) -> anyhow::Result<()> {
+    if reviewed_base_oid != intent_base_head_oid {
+        bail!("Scope changed while preparing push review; rerun scope push");
+    }
+    Ok(())
+}
+
+fn unix_now() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs()
+}
+
 pub fn load_scope_remote(api_url: &str, remote: &str) -> anyhow::Result<ScopePushTarget> {
     let push_url = git_remote_push_url(remote)?;
     let (owner, repo) = parse_scope_git_remote(api_url, &push_url)?;
@@ -38,100 +257,6 @@ pub fn load_scope_remote(api_url: &str, remote: &str) -> anyhow::Result<ScopePus
     })
 }
 
-pub fn push_authenticated_remote(
-    client: &Client,
-    api_url: &str,
-    session_token: &str,
-    target: &ScopePushTarget,
-    reviewed_head_oid: &str,
-    base_config_hash: &str,
-    config: &RepoConfig,
-) -> anyhow::Result<ScopePushOutcome> {
-    let repo = get_repo(client, api_url, session_token, &target.owner, &target.repo)?;
-    if repo.lifecycle_state == RepoPublicationState::Unpublished {
-        ensure_unpublished_repo_can_receive_first_push(
-            &target.owner,
-            &target.repo,
-            repo.pending_import_pending,
-            repo.access.actor,
-        )?;
-        let intent = create_push_intent(
-            client,
-            api_url,
-            session_token,
-            CreatePushIntentParams {
-                owner: &target.owner,
-                repo: &target.repo,
-                head_oid: reviewed_head_oid,
-                base_config_hash,
-                config,
-            },
-        )?;
-        push_head_with_bearer(
-            &target.push_url,
-            reviewed_head_oid,
-            DEFAULT_SCOPE_BRANCH,
-            session_token,
-            &intent.token,
-        )?;
-        complete_push_intent(
-            client,
-            api_url,
-            session_token,
-            &target.owner,
-            &target.repo,
-            &intent.token,
-        )?;
-        let repo = get_repo(client, api_url, session_token, &target.owner, &target.repo)?;
-        return Ok(ScopePushOutcome {
-            owner: repo.owner_handle,
-            repo: repo.name,
-        });
-    }
-
-    ensure_published_repo_can_receive_push(
-        &target.owner,
-        &target.repo,
-        repo.lifecycle_state,
-        repo.pending_import_pending,
-        repo.access.can_push,
-    )?;
-
-    let intent = create_push_intent(
-        client,
-        api_url,
-        session_token,
-        CreatePushIntentParams {
-            owner: &target.owner,
-            repo: &target.repo,
-            head_oid: reviewed_head_oid,
-            base_config_hash,
-            config,
-        },
-    )?;
-    push_head_with_bearer(
-        &target.push_url,
-        reviewed_head_oid,
-        DEFAULT_SCOPE_BRANCH,
-        session_token,
-        &intent.token,
-    )?;
-    complete_push_intent(
-        client,
-        api_url,
-        session_token,
-        &target.owner,
-        &target.repo,
-        &intent.token,
-    )?;
-
-    let repo = get_repo(client, api_url, session_token, &target.owner, &target.repo)?;
-    Ok(ScopePushOutcome {
-        owner: repo.owner_handle,
-        repo: repo.name,
-    })
-}
-
 pub fn ensure_scope_remote_can_receive_push(
     target: &ScopePushTarget,
     repo: &RepoSummaryResponse,
@@ -140,7 +265,6 @@ pub fn ensure_scope_remote_can_receive_push(
         ensure_unpublished_repo_can_receive_first_push(
             &target.owner,
             &target.repo,
-            repo.pending_import_pending,
             repo.access.actor,
         )
     } else {
@@ -148,7 +272,6 @@ pub fn ensure_scope_remote_can_receive_push(
             &target.owner,
             &target.repo,
             repo.lifecycle_state,
-            repo.pending_import_pending,
             repo.access.can_push,
         )
     }
@@ -227,12 +350,8 @@ fn redacted_url(url: &Url) -> String {
 fn ensure_unpublished_repo_can_receive_first_push(
     owner: &str,
     repo: &str,
-    pending_import_pending: bool,
     actor: RepositoryActor,
 ) -> anyhow::Result<()> {
-    if pending_import_pending {
-        bail!("repo {owner}/{repo} is blocked by stale pending import state");
-    }
     if actor != RepositoryActor::Owner {
         bail!("you do not have owner access to first-push {owner}/{repo}");
     }
@@ -243,14 +362,10 @@ fn ensure_published_repo_can_receive_push(
     owner: &str,
     repo: &str,
     lifecycle_state: RepoPublicationState,
-    pending_import_pending: bool,
     can_push: bool,
 ) -> anyhow::Result<()> {
     match lifecycle_state {
         RepoPublicationState::Unpublished => {
-            if pending_import_pending {
-                bail!("repo {owner}/{repo} is blocked by stale pending import state");
-            }
             bail!("repo {owner}/{repo} is waiting for its first push. Run: scope init");
         }
         RepoPublicationState::Published => {}
@@ -273,6 +388,31 @@ fn scope_git_url_without_userinfo(remote_url: &str) -> anyhow::Result<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn expired_push_intent_reports_rerun_message() {
+        let error = ensure_push_intent_not_expired(0).unwrap_err();
+        assert!(
+            error
+                .to_string()
+                .contains("Scope push review expired; rerun scope push")
+        );
+        ensure_push_intent_not_expired(unix_now().saturating_add(60)).unwrap();
+    }
+
+    #[test]
+    fn reviewed_base_must_match_push_intent_base() {
+        ensure_reviewed_base_matches_intent(None, None).unwrap();
+        ensure_reviewed_base_matches_intent(Some("abc"), Some("abc")).unwrap();
+        let error = ensure_reviewed_base_matches_intent(Some("abc"), Some("def")).unwrap_err();
+        assert!(
+            error
+                .to_string()
+                .contains("Scope changed while preparing push review; rerun scope push")
+        );
+        assert!(ensure_reviewed_base_matches_intent(None, Some("def")).is_err());
+        assert!(ensure_reviewed_base_matches_intent(Some("abc"), None).is_err());
+    }
 
     #[test]
     fn parse_scope_git_remote_accepts_matching_scope_remote() {

@@ -1,5 +1,6 @@
 use super::env::SCOPE_OBJECT_STORE_DIR_ENV;
-use crate::{config::non_empty_env, error::ApiError, object_store::ObjectStore};
+use crate::{config::non_empty_env, object_store::ObjectStore};
+use scope_core::error::ApiError;
 use sha2::{Digest, Sha256};
 use std::path::{Path, PathBuf};
 

@@ -2,6 +2,7 @@ use crate::{
     error::ApiError,
     object_store::{ObjectStore, ensure_object_size},
 };
+use scope_core::error::ApiError as CoreError;
 use std::{
     sync::{Arc, OnceLock},
     time::Duration,
@@ -155,7 +156,12 @@ impl RuntimeBudgets {
     }
 
     fn check_object_size(&self, operation: &str, key: &str, bytes: usize) -> Result<(), ApiError> {
-        ensure_object_size(operation, key, bytes, self.object_store_max_bytes)
+        Ok(ensure_object_size(
+            operation,
+            key,
+            bytes,
+            self.object_store_max_bytes,
+        )?)
     }
 }
 
@@ -175,13 +181,13 @@ impl BudgetedObjectStore {
 }
 
 impl ObjectStore for BudgetedObjectStore {
-    fn put(&self, key: &str, bytes: &[u8]) -> Result<(), ApiError> {
+    fn put(&self, key: &str, bytes: &[u8]) -> Result<(), CoreError> {
         self.budgets.check_object_size("write", key, bytes.len())?;
         let _permit = self.budgets.try_object_store("object store write")?;
         self.inner.put(key, bytes)
     }
 
-    fn get(&self, key: &str) -> Result<Vec<u8>, ApiError> {
+    fn get(&self, key: &str) -> Result<Vec<u8>, CoreError> {
         let _permit = self.budgets.try_object_store("object store read")?;
         let bytes = self
             .inner
@@ -189,12 +195,12 @@ impl ObjectStore for BudgetedObjectStore {
         Ok(bytes)
     }
 
-    fn delete(&self, key: &str) -> Result<(), ApiError> {
+    fn delete(&self, key: &str) -> Result<(), CoreError> {
         let _permit = self.budgets.try_object_store("object store delete")?;
         self.inner.delete(key)
     }
 
-    fn readiness_check(&self) -> Result<(), ApiError> {
+    fn readiness_check(&self) -> Result<(), CoreError> {
         self.inner.readiness_check()
     }
 }

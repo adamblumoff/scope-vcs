@@ -2,7 +2,7 @@ use super::*;
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn maintainer_cannot_push_private_history_to_public_request_ref() {
-    let state = test_state_with_request_repo(repo_with_public_readme_and_private_secret());
+    let state = test_state_with_request_repo(repo_with_public_readme_and_private_secret()).await;
     insert_member_user(&state);
     let state_for_server = state.clone();
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
@@ -43,7 +43,7 @@ async fn maintainer_cannot_push_private_history_to_public_request_ref() {
         "private-history push unexpectedly succeeded: {}",
         String::from_utf8_lossy(&output.stderr)
     );
-    assert_request_branch_unchanged(&state);
+    assert_request_branch_unchanged(&state).await;
 
     server.abort();
     let _ = fs::remove_dir_all(source);
@@ -74,7 +74,7 @@ async fn assert_private_side_history_push_rejected(
     source_label: &str,
     push_action: &str,
 ) {
-    let state = test_state_with_request_repo(repo);
+    let state = test_state_with_request_repo(repo).await;
     insert_member_user(&state);
     let state_for_server = state.clone();
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
@@ -151,15 +151,15 @@ async fn assert_private_side_history_push_rejected(
         "private-history side branch push unexpectedly succeeded: {}",
         String::from_utf8_lossy(&output.stderr)
     );
-    assert_request_branch_unchanged(&state);
+    assert_request_branch_unchanged(&state).await;
 
     server.abort();
     let _ = fs::remove_dir_all(source);
     let _ = fs::remove_dir_all(private_source);
 }
 
-fn test_state_with_request_repo(repo: StoredRepository) -> AppState {
-    let state = test_state_with_request();
+async fn test_state_with_request_repo(repo: StoredRepository) -> AppState {
+    let state = test_state_with_request().await;
     state
         .metadata
         .update(|catalog| {
@@ -170,7 +170,7 @@ fn test_state_with_request_repo(repo: StoredRepository) -> AppState {
     state
 }
 
-fn assert_request_branch_unchanged(state: &AppState) {
+async fn assert_request_branch_unchanged(state: &AppState) {
     state
         .metadata
         .read(|catalog| {
@@ -181,6 +181,7 @@ fn assert_request_branch_unchanged(state: &AppState) {
             assert!(catalog.request_events.is_empty());
             Ok(())
         })
+        .await
         .unwrap();
 }
 

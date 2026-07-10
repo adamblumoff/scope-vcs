@@ -244,13 +244,13 @@ pub(crate) fn ensure_first_push_receive_pack_staging_repo(
     Ok(repo_root)
 }
 
-pub(crate) fn ensure_published_receive_pack_staging_repo(
+pub(crate) async fn ensure_published_receive_pack_staging_repo(
     state: &AppState,
     owner: &str,
     repo_name: &str,
     author_id: &str,
 ) -> Result<PathBuf, ApiError> {
-    let repo = find_repo(state, owner, repo_name)?;
+    let repo = find_repo(state, owner, repo_name).await?;
     if repo.record.publication_state != RepoPublicationState::Published {
         return Err(ApiError::conflict("repo must be published before push"));
     }

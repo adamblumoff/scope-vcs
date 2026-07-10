@@ -109,7 +109,9 @@ async fn repo_events_stream_permission_changes_to_members() {
         repo.bump_change_version();
         repo.record.change_version
     };
-    state.publish_repo_change(TEST_REPO_ID, change_version, "visibility-changed");
+    state
+        .publish_repo_change(TEST_REPO_ID, change_version, "visibility-changed")
+        .await;
 
     let event = tokio::time::timeout(std::time::Duration::from_secs(1), stream.next())
         .await

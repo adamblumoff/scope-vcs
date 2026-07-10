@@ -1,7 +1,4 @@
-use super::{
-    MetadataStore, MetadataStoreInner, acquire_metadata_write_lock, entities,
-    repositories_from_models, run_api_db_on,
-};
+use super::{MetadataStore, acquire_metadata_write_lock, entities, repositories_from_models};
 use crate::domain::store::{RepoStorageCleanup, SourceBlob, repo_id};
 use crate::{error::ApiError, persistence::unix_now};
 use sea_orm::{
@@ -26,8 +23,43 @@ struct LoadedSourceBlobCleanup {
     generation: String,
 }
 
+pub struct RepoStorageCleanupBatch {
+    pub pending: Vec<RepoStorageCleanup>,
+    pub live_repo_ids: BTreeSet<String>,
+    loaded: Vec<LoadedRepoStorageCleanup>,
+}
+
+pub struct SourceBlobCleanupBatch {
+    pub pending: Vec<SourceBlob>,
+    pub referenced_blob_keys: BTreeSet<String>,
+    loaded: Vec<LoadedSourceBlobCleanup>,
+}
+
 impl MetadataStore {
-    pub fn queue_pending_source_blob_deletions(
+    pub async fn pending_cleanup_queues(
+        &self,
+    ) -> Result<(Vec<RepoStorageCleanup>, Vec<SourceBlob>), ApiError> {
+        Ok((
+            load_pending_repo_storage_deletions(self.db.as_ref()).await?,
+            load_pending_source_blob_deletions(self.db.as_ref()).await?,
+        ))
+    }
+
+    pub async fn unreferenced_source_blobs(
+        &self,
+        blobs: Vec<SourceBlob>,
+    ) -> Result<Vec<SourceBlob>, ApiError> {
+        let referenced = referenced_source_blob_keys(self.db.as_ref()).await?;
+        let mut unreferenced = std::collections::BTreeMap::new();
+        for blob in blobs {
+            if !referenced.contains(&blob.object_key) {
+                unreferenced.entry(blob.object_key.clone()).or_insert(blob);
+            }
+        }
+        Ok(unreferenced.into_values().collect())
+    }
+
+    pub async fn queue_pending_source_blob_deletions(
         &self,
         blobs: Vec<SourceBlob>,
     ) -> Result<(), ApiError> {
@@ -35,146 +67,70 @@ impl MetadataStore {
             return Ok(());
         }
 
-        match self.inner.as_ref() {
-            MetadataStoreInner::Postgres { db, runtime } => {
-                let db = Arc::clone(db);
-                run_api_db_on(runtime, async move {
-                    let tx = db.as_ref().begin().await.map_err(ApiError::internal)?;
-                    queue_pending_source_blob_deletion_rows(&tx, blobs).await?;
-                    tx.commit().await.map_err(ApiError::internal)?;
-                    Ok(())
-                })
-            }
-            #[cfg(any(test, feature = "memory-metadata"))]
-            MetadataStoreInner::Memory(_) => self.update(move |catalog| {
-                queue_pending_source_blob_deletions(
-                    &mut catalog.pending_source_blob_deletions,
-                    blobs,
-                );
-                Ok(())
-            }),
-        }
+        let db = Arc::clone(&self.db);
+        let tx = db.as_ref().begin().await.map_err(ApiError::internal)?;
+        queue_pending_source_blob_deletion_rows(&tx, blobs).await?;
+        tx.commit().await.map_err(ApiError::internal)?;
+        Ok(())
     }
 
-    pub fn update_pending_repo_storage_deletions<R, F>(&self, op: F) -> Result<R, ApiError>
-    where
-        R: Send + 'static,
-        F: FnOnce(
-                Vec<RepoStorageCleanup>,
-                &BTreeSet<String>,
-            ) -> Result<(R, Vec<RepoStorageCleanup>), ApiError>
-            + Send
-            + 'static,
-    {
-        match self.inner.as_ref() {
-            MetadataStoreInner::Postgres { db, runtime } => {
-                let db = Arc::clone(db);
-                run_api_db_on(runtime, async move {
-                    let tx = db.as_ref().begin().await.map_err(ApiError::internal)?;
-                    acquire_metadata_write_lock(&tx).await?;
-                    let loaded = load_pending_repo_storage_cleanup_rows(&tx).await?;
-                    let pending = loaded
-                        .iter()
-                        .map(|row| row.cleanup.clone())
-                        .collect::<Vec<_>>();
-                    let live_repo_ids = live_repo_ids_for_cleanups(&tx, &pending).await?;
-                    let (result, retained) = op(pending.clone(), &live_repo_ids)?;
-                    reconcile_repo_storage_cleanup_rows(&tx, &loaded, &retained, &live_repo_ids)
-                        .await?;
-                    tx.commit().await.map_err(ApiError::internal)?;
-                    Ok(result)
-                })
-            }
-            #[cfg(any(test, feature = "memory-metadata"))]
-            MetadataStoreInner::Memory(_) => self.update(move |catalog| {
-                let live_repo_ids = catalog
-                    .repositories
-                    .keys()
-                    .cloned()
-                    .collect::<BTreeSet<_>>();
-                let pending = std::mem::take(&mut catalog.pending_repo_storage_deletions);
-                let (result, retained) = op(pending, &live_repo_ids)?;
-                catalog.pending_repo_storage_deletions = retained;
-                Ok(result)
-            }),
-        }
+    pub async fn repo_storage_cleanup_batch(&self) -> Result<RepoStorageCleanupBatch, ApiError> {
+        let db = Arc::clone(&self.db);
+        let tx = db.as_ref().begin().await.map_err(ApiError::internal)?;
+        acquire_metadata_write_lock(&tx).await?;
+        let loaded = load_pending_repo_storage_cleanup_rows(&tx).await?;
+        let pending = loaded
+            .iter()
+            .map(|row| row.cleanup.clone())
+            .collect::<Vec<_>>();
+        let live_repo_ids = live_repo_ids_for_cleanups(&tx, &pending).await?;
+        tx.commit().await.map_err(ApiError::internal)?;
+        Ok(RepoStorageCleanupBatch {
+            pending,
+            live_repo_ids,
+            loaded,
+        })
     }
 
-    pub fn update_pending_source_blob_deletions<R, F>(&self, op: F) -> Result<R, ApiError>
-    where
-        R: Send + 'static,
-        F: FnOnce(Vec<SourceBlob>, &BTreeSet<String>) -> Result<(R, Vec<SourceBlob>), ApiError>
-            + Send
-            + 'static,
-    {
-        match self.inner.as_ref() {
-            MetadataStoreInner::Postgres { db, runtime } => {
-                let db = Arc::clone(db);
-                run_api_db_on(runtime, async move {
-                    let tx = db.as_ref().begin().await.map_err(ApiError::internal)?;
-                    acquire_metadata_write_lock(&tx).await?;
-                    let loaded = load_pending_source_blob_cleanup_rows(&tx).await?;
-                    let pending = loaded
-                        .iter()
-                        .map(|row| row.blob.clone())
-                        .collect::<Vec<_>>();
-                    let referenced_blob_keys = referenced_source_blob_keys(&tx).await?;
-                    let (result, retained) = op(pending.clone(), &referenced_blob_keys)?;
-                    reconcile_source_blob_cleanup_rows(&tx, &loaded, &retained).await?;
-                    tx.commit().await.map_err(ApiError::internal)?;
-                    Ok(result)
-                })
-            }
-            #[cfg(any(test, feature = "memory-metadata"))]
-            MetadataStoreInner::Memory(_) => self.update(move |catalog| {
-                let referenced_blob_keys = catalog
-                    .repositories
-                    .values()
-                    .flat_map(|repo| repo.source_blobs())
-                    .chain(
-                        catalog
-                            .requests
-                            .values()
-                            .filter_map(|request| request.git_snapshot.clone()),
-                    )
-                    .map(|blob| blob.object_key)
-                    .collect::<BTreeSet<_>>();
-                let pending = std::mem::take(&mut catalog.pending_source_blob_deletions);
-                let (result, retained) = op(pending, &referenced_blob_keys)?;
-                catalog.pending_source_blob_deletions = retained;
-                Ok(result)
-            }),
-        }
+    pub async fn finish_repo_storage_cleanup(
+        &self,
+        batch: RepoStorageCleanupBatch,
+        retained: &[RepoStorageCleanup],
+    ) -> Result<(), ApiError> {
+        let tx = self.db.begin().await.map_err(ApiError::internal)?;
+        acquire_metadata_write_lock(&tx).await?;
+        reconcile_repo_storage_cleanup_rows(&tx, &batch.loaded, retained, &batch.live_repo_ids)
+            .await?;
+        tx.commit().await.map_err(ApiError::internal)
     }
-}
 
-#[cfg(any(test, feature = "memory-metadata"))]
-pub fn queue_pending_source_blob_deletions(
-    pending: &mut Vec<SourceBlob>,
-    blobs: impl IntoIterator<Item = SourceBlob>,
-) {
-    let mut queued = pending
-        .iter()
-        .map(|blob| blob.object_key.clone())
-        .collect::<std::collections::BTreeSet<_>>();
-    for blob in blobs {
-        if queued.insert(blob.object_key.clone()) {
-            pending.push(blob);
-        }
+    pub async fn source_blob_cleanup_batch(&self) -> Result<SourceBlobCleanupBatch, ApiError> {
+        let db = Arc::clone(&self.db);
+        let tx = db.as_ref().begin().await.map_err(ApiError::internal)?;
+        acquire_metadata_write_lock(&tx).await?;
+        let loaded = load_pending_source_blob_cleanup_rows(&tx).await?;
+        let pending = loaded
+            .iter()
+            .map(|row| row.blob.clone())
+            .collect::<Vec<_>>();
+        let referenced_blob_keys = referenced_source_blob_keys(&tx).await?;
+        tx.commit().await.map_err(ApiError::internal)?;
+        Ok(SourceBlobCleanupBatch {
+            pending,
+            referenced_blob_keys,
+            loaded,
+        })
     }
-}
 
-#[cfg(any(test, feature = "memory-metadata"))]
-pub fn queue_pending_repo_storage_deletion(
-    pending: &mut Vec<RepoStorageCleanup>,
-    cleanup: RepoStorageCleanup,
-) {
-    let cleanup_repo_id = repo_id(&cleanup.owner_handle, &cleanup.repo_name);
-    let already_queued = pending
-        .iter()
-        .any(|pending| repo_id(&pending.owner_handle, &pending.repo_name) == cleanup_repo_id);
-    if !already_queued {
-        pending.push(cleanup);
+    pub async fn finish_source_blob_cleanup(
+        &self,
+        batch: SourceBlobCleanupBatch,
+        retained: &[SourceBlob],
+    ) -> Result<(), ApiError> {
+        let tx = self.db.begin().await.map_err(ApiError::internal)?;
+        acquire_metadata_write_lock(&tx).await?;
+        reconcile_source_blob_cleanup_rows(&tx, &batch.loaded, retained).await?;
+        tx.commit().await.map_err(ApiError::internal)
     }
 }
 
@@ -283,7 +239,7 @@ where
     Ok(pending)
 }
 
-#[cfg(any(test, feature = "test-support"))]
+#[cfg(any(test, feature = "local-dev", feature = "test-support"))]
 pub async fn save_pending_repo_storage_deletions<C>(
     conn: &C,
     pending_repo_storage_deletions: &[RepoStorageCleanup],
@@ -370,7 +326,7 @@ where
     Ok(pending)
 }
 
-#[cfg(any(test, feature = "test-support"))]
+#[cfg(any(test, feature = "local-dev", feature = "test-support"))]
 pub async fn save_pending_source_blob_deletions<C>(
     conn: &C,
     pending_source_blob_deletions: &[SourceBlob],
@@ -380,17 +336,6 @@ where
 {
     queue_pending_source_blob_deletion_rows(conn, pending_source_blob_deletions.iter().cloned())
         .await
-}
-
-#[cfg(any(test, feature = "memory-metadata"))]
-pub fn remove_matching_pending_repo_storage_cleanup(
-    cleanups: &mut Vec<RepoStorageCleanup>,
-    cleanup_repo_id: &str,
-) -> bool {
-    let original_len = cleanups.len();
-    cleanups
-        .retain(|cleanup| repo_id(&cleanup.owner_handle, &cleanup.repo_name) != cleanup_repo_id);
-    cleanups.len() != original_len
 }
 
 async fn reconcile_repo_storage_cleanup_rows<C>(

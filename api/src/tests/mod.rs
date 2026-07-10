@@ -5,13 +5,11 @@ use crate::domain::projection::{
     AuthorVisibility, FileChange, LogicalCommit, ProjectionViewKey, SourceGraph, VisibilityEvent,
     project_graph,
 };
-use crate::domain::repo_actions::preview_publish_import;
 use crate::domain::repo_config::{ConfigVisibility, RepoConfig};
 use crate::domain::store::{
-    AppCatalog, EXECUTABLE_GIT_FILE_MODE, GitPushToken, PendingImport, PendingImportFile,
-    RepoPublicationState, RepoRecord, RepoSettings, RepoStorageCleanup, RepositoryInvite,
-    RepositoryInviteState, RepositoryMember, RepositoryMemberPermissions, StoredRepository,
-    UserAccount,
+    AppCatalog, EXECUTABLE_GIT_FILE_MODE, GitPushToken, RepoPublicationState, RepoRecord,
+    RepoStorageCleanup, RepositoryInvite, RepositoryInviteState, RepositoryMember,
+    RepositoryMemberPermissions, StoredRepository, UserAccount,
 };
 use crate::{
     app::router,
@@ -59,7 +57,6 @@ mod git_projection_identity;
 mod git_receive;
 mod git_receive_config;
 mod git_request_refs;
-mod obsolete_routes;
 mod push_intent_completion;
 mod readiness;
 mod repo_cleanup;
@@ -188,6 +185,15 @@ fn test_owner_id() -> String {
     crate::db::scope_user_id_for_auth_identity("clerk", TEST_CLERK_USER_ID)
 }
 
+fn test_user(id: impl Into<String>, handle: &str, email: &str) -> UserAccount {
+    UserAccount {
+        id: id.into(),
+        handle: handle.to_string(),
+        email: email.to_string(),
+        email_verified: true,
+    }
+}
+
 fn test_state_with_repo() -> AppState {
     let owner_id = test_owner_id();
     let owner = UserAccount {
@@ -198,9 +204,10 @@ fn test_state_with_repo() -> AppState {
     };
     let repo = test_repo(&owner_id);
     let runtime_budgets = Arc::new(RuntimeBudgets::from_config(Default::default()));
-
-    AppState {
-        metadata: crate::db::MetadataStore::memory(AppCatalog {
+    let target = crate::db::TestDatabaseTarget::required().unwrap();
+    let metadata = crate::db::MetadataStore::connect_fresh_for_tests(&target).unwrap();
+    metadata
+        .seed_catalog_for_tests(AppCatalog {
             users: BTreeMap::from([(owner.id.clone(), owner)]),
             repositories: BTreeMap::from([(repo.record.id.clone(), repo)]),
             requests: BTreeMap::new(),
@@ -209,7 +216,11 @@ fn test_state_with_repo() -> AppState {
             credit_ledger_entries: BTreeMap::new(),
             pending_repo_storage_deletions: Vec::new(),
             pending_source_blob_deletions: Vec::new(),
-        }),
+        })
+        .unwrap();
+
+    AppState {
+        metadata,
         data_dir: Arc::new(test_data_dir()),
         clerk: ClerkVerifier::new_with_policy(
             Some(TEST_CLERK_ISSUER.to_string()),
@@ -229,29 +240,6 @@ fn test_state_with_repo() -> AppState {
 
 fn test_state_with_jwks() -> AppState {
     let state = AppState::test_state();
-    cache_test_jwks(&state);
-    state
-}
-
-fn test_state_with_metadata(metadata: crate::db::MetadataStore) -> AppState {
-    let runtime_budgets = Arc::new(RuntimeBudgets::from_config(Default::default()));
-    let state = AppState {
-        metadata,
-        data_dir: Arc::new(test_data_dir()),
-        clerk: ClerkVerifier::new_with_policy(
-            Some(TEST_CLERK_ISSUER.to_string()),
-            Some("http://127.0.0.1/.well-known/jwks.json".to_string()),
-            test_clerk_policy(),
-        ),
-        object_store: Arc::new(BudgetedObjectStore::new(
-            Arc::new(MemoryObjectStore::new()),
-            runtime_budgets.clone(),
-        )),
-        runtime_budgets,
-        operator_token: None,
-        repo_events: crate::repo_events::RepoChangeBus::default(),
-        push_intent_signing_key: Arc::from(b"scope-test-push-intent-signing-key".as_slice()),
-    };
     cache_test_jwks(&state);
     state
 }
@@ -347,19 +335,24 @@ fn clone_with_bearer(remote: &str, destination: &FsPath, bearer_header_value: &s
 
 const TEST_PUSH_HEAD_OID: &str = "1111111111111111111111111111111111111111";
 
-fn insert_push_intent_header(
+async fn insert_push_intent_header(
     state: &AppState,
     headers: &mut HeaderMap,
     user_id: &str,
     head_oid: &str,
 ) {
-    let token = create_test_push_intent(state, user_id, head_oid);
+    let token = create_test_push_intent(state, user_id, head_oid).await;
     headers.insert("x-scope-push-intent", token.parse().unwrap());
 }
 
-fn configure_push_intent_header(state: &AppState, repo: &FsPath, remote: &str, user_id: &str) {
+async fn configure_push_intent_header(
+    state: &AppState,
+    repo: &FsPath,
+    remote: &str,
+    user_id: &str,
+) {
     let head_oid = git_head_oid(repo);
-    let token = create_test_push_intent(state, user_id, &head_oid);
+    let token = create_test_push_intent(state, user_id, &head_oid).await;
     let key = format!("http.{remote}.extraHeader");
     run_git(
         Some(repo),
@@ -373,8 +366,10 @@ fn configure_push_intent_header(state: &AppState, repo: &FsPath, remote: &str, u
     .unwrap();
 }
 
-fn create_test_push_intent(state: &AppState, user_id: &str, head_oid: &str) -> String {
-    let repo = find_repo(state, TEST_REPO_OWNER, TEST_REPO_NAME).unwrap();
+async fn create_test_push_intent(state: &AppState, user_id: &str, head_oid: &str) -> String {
+    let repo = find_repo(state, TEST_REPO_OWNER, TEST_REPO_NAME)
+        .await
+        .unwrap();
     let config = repo.repo_config.clone();
     state
         .create_push_intent(
@@ -409,11 +404,9 @@ fn test_repo(owner_id: &str) -> StoredRepository {
             default_visibility: Visibility::Public,
             change_version: 1,
         },
-        settings: RepoSettings::default(),
         repo_config: RepoConfig::with_default_visibility(ConfigVisibility::Public),
         first_push_token: None,
         git_push_token: None,
-        pending_import: None,
         policy: Policy::new(Visibility::Public),
         graph: SourceGraph {
             repo_id: TEST_REPO_ID.to_string(),
@@ -452,24 +445,30 @@ fn member_permissions(
     }
 }
 
-fn pending_import_fixture(files: Vec<(&str, &str)>) -> PendingImport {
-    let store = MemoryObjectStore::new();
-    PendingImport {
-        default_branch: "main".to_string(),
-        head_oid: "1111111111111111111111111111111111111111".to_string(),
-        tree_oid: "2222222222222222222222222222222222222222".to_string(),
-        imported_at_unix: unix_now(),
-        git_snapshot: source_blob("test git snapshot"),
-        files: files
-            .into_iter()
-            .map(|(path, content)| PendingImportFile {
-                path: path.to_string(),
-                mode: "100644".to_string(),
-                oid: format!("oid-{path}"),
-                blob: put_source_blob(&store, TEST_REPO_ID, content.as_bytes()).unwrap(),
-            })
-            .collect(),
-    }
+async fn apply_first_push_from_staging_repo(
+    state: &AppState,
+    staging_repo: &FsPath,
+    config: RepoConfig,
+) {
+    let update = reviewed_update_from_staging_repo(
+        state,
+        TEST_REPO_OWNER,
+        TEST_REPO_NAME,
+        staging_repo,
+        &test_owner_id(),
+        config,
+    )
+    .await
+    .unwrap();
+    persist_receive_pack_update_and_promote(
+        state,
+        TEST_REPO_OWNER,
+        TEST_REPO_NAME,
+        update,
+        &test_owner_id(),
+    )
+    .await
+    .unwrap();
 }
 
 fn source_blob(content: &str) -> crate::domain::store::SourceBlob {
@@ -522,7 +521,7 @@ fn receive_pack_update(changes: Vec<(&str, Option<&str>)>) -> ReceivePackUpdate 
         changes: changes
             .into_iter()
             .map(|(path, content)| ReceivePackFileChange {
-                path: pending_scope_path(path).unwrap(),
+                path: repo_scope_path(path).unwrap(),
                 content: content.map(source_blob),
             })
             .collect(),

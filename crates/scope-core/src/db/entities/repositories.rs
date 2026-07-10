@@ -15,7 +15,6 @@ pub mod repository {
         pub default_visibility: String,
         pub change_version: i64,
         pub repo_config: Json,
-        pub pending_import: Option<Json>,
         pub policy: Json,
         pub graph: Json,
         pub visibility_events: Json,
@@ -37,7 +36,6 @@ pub mod repository {
                 default_visibility: encode_enum(repo.record.default_visibility)?,
                 change_version: repo.record.change_version.min(i64::MAX as u64) as i64,
                 repo_config: encode_json(&repo.repo_config)?,
-                pending_import: repo.pending_import.as_ref().map(encode_json).transpose()?,
                 policy: encode_json(&repo.policy)?,
                 graph: encode_json(&repo.graph)?,
                 visibility_events: encode_json(&repo.visibility_events)?,
@@ -62,14 +60,9 @@ pub mod repository {
                     default_visibility,
                     change_version: self.change_version.max(0) as u64,
                 },
-                settings: facts.settings,
                 repo_config: decode_json(self.repo_config)?,
                 first_push_token: facts.first_push_token,
                 git_push_token: facts.git_push_token,
-                pending_import: self
-                    .pending_import
-                    .map(decode_json::<PendingImport>)
-                    .transpose()?,
                 policy: decode_json::<Policy>(self.policy)?,
                 graph: decode_json::<SourceGraph>(self.graph)?,
                 visibility_events: decode_json(self.visibility_events)?,
@@ -77,40 +70,6 @@ pub mod repository {
                 members,
                 invitations,
             })
-        }
-    }
-}
-pub mod repository_setting {
-    use super::*;
-
-    #[derive(Clone, Debug, PartialEq, DeriveEntityModel)]
-    #[sea_orm(table_name = "scope_repository_settings")]
-    pub struct Model {
-        #[sea_orm(primary_key, auto_increment = false)]
-        pub repo_id: String,
-        pub include_ignored_files: bool,
-        pub review_pushes_before_applying: bool,
-    }
-
-    #[derive(Copy, Clone, Debug, EnumIter, DeriveRelation)]
-    pub enum Relation {}
-
-    impl ActiveModelBehavior for ActiveModel {}
-
-    impl Model {
-        pub fn from_domain(repo_id: &str, settings: RepoSettings) -> Self {
-            Self {
-                repo_id: repo_id.to_string(),
-                include_ignored_files: settings.include_ignored_files,
-                review_pushes_before_applying: settings.review_pushes_before_applying,
-            }
-        }
-
-        pub fn into_domain(self) -> RepoSettings {
-            RepoSettings {
-                include_ignored_files: self.include_ignored_files,
-                review_pushes_before_applying: self.review_pushes_before_applying,
-            }
         }
     }
 }

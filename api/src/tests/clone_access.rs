@@ -10,7 +10,7 @@ async fn permissioned_git_projection_accepts_scope_session_for_repo_member() {
         let mut repo = repo_with_readme();
         repo.members.push(test_repository_member(
             TEST_REPO_ID,
-            member_id,
+            member_id.clone(),
             RepositoryMemberPermissions::default(),
         ));
         repo.policy
@@ -26,6 +26,10 @@ async fn permissioned_git_projection_accepts_scope_session_for_repo_member() {
         });
 
         let mut catalog = lock_catalog(&state).unwrap();
+        catalog.users.insert(
+            member_id.clone(),
+            test_user(member_id, "member", "member@example.com"),
+        );
         catalog.repositories.insert(TEST_REPO_ID.to_string(), repo);
     }
     let mut headers = HeaderMap::new();
@@ -83,10 +87,15 @@ async fn permissioned_git_projection_accepts_basic_scope_cli_session_for_repo_ow
         email: TEST_OWNER_EMAIL.to_string(),
         email_verified: true,
     };
-    let grant = state.metadata.create_cli_exchange_grant(&owner).unwrap();
+    let grant = state
+        .metadata
+        .create_cli_exchange_grant(&owner)
+        .await
+        .unwrap();
     let cli_session = state
         .metadata
         .exchange_cli_grant(&grant.exchange_token)
+        .await
         .unwrap()
         .session_token;
     let mut headers = HeaderMap::new();
@@ -131,6 +140,10 @@ async fn permissioned_git_projection_rejects_scope_session_without_target_repo_m
         other_repo.record.name = "owned".to_string();
         other_repo.graph.repo_id = other_repo.record.id.clone();
         let mut catalog = lock_catalog(&state).unwrap();
+        catalog.users.insert(
+            other_id.clone(),
+            test_user(other_id, "other", "other@example.com"),
+        );
         catalog
             .repositories
             .insert(other_repo.record.id.clone(), other_repo);

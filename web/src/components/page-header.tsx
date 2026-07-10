@@ -1,8 +1,6 @@
 import { cn } from '@/lib/utils'
 import type { ReactNode } from 'react'
 
-type RenderSlot = ReactNode | (() => ReactNode)
-
 export function PageContent({
   children,
   className,
@@ -27,21 +25,19 @@ export function PageHeader({
   title,
   titleClassName,
 }: {
-  actions?: () => ReactNode
-  badges?: () => ReactNode
+  actions?: ReactNode
+  badges?: ReactNode
   children?: ReactNode
-  description?: RenderSlot
+  description?: ReactNode
   title: ReactNode
   titleClassName?: string
 }) {
-  const renderedDescription = renderSlot(description)
-
   return (
     <div className="flex flex-col gap-4 md:flex-row md:items-end md:justify-between">
       <div className="min-w-0">
         {badges && (
           <div className="mb-3 flex flex-wrap items-center gap-2">
-            {badges()}
+            {badges}
           </div>
         )}
         <h1
@@ -52,22 +48,18 @@ export function PageHeader({
         >
           {title}
         </h1>
-        {renderedDescription && (
+        {description && (
           <p className="mt-2.5 max-w-[680px] text-[15px] leading-6 text-muted-foreground">
-            {renderedDescription}
+            {description}
           </p>
         )}
         {children}
       </div>
       {actions && (
         <div className="flex w-full shrink-0 flex-wrap items-center justify-end gap-2 md:w-auto">
-          {actions()}
+          {actions}
         </div>
       )}
     </div>
   )
-}
-
-function renderSlot(slot: RenderSlot | undefined) {
-  return typeof slot === 'function' ? slot() : slot
 }

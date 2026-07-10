@@ -27,6 +27,7 @@ async fn public_submit_stakes_credits_and_uses_public_base() {
             amount_credits: 20,
             now_unix: 1,
         })
+        .await
         .unwrap();
 
     let app = router(state.clone());
@@ -66,7 +67,8 @@ async fn public_submit_stakes_credits_and_uses_public_base() {
         &state,
         start["request"]["id"].as_str().unwrap(),
         REQUEST_HEAD,
-    );
+    )
+    .await;
 
     let response = submit_request_via_http(
         app,
@@ -104,6 +106,7 @@ async fn public_submit_stakes_credits_and_uses_public_base() {
             assert_eq!(stake_entries, 1);
             Ok(())
         })
+        .await
         .unwrap();
 }
 
@@ -116,7 +119,8 @@ async fn owner_submit_uses_private_base_without_credit_stake() {
         &state,
         start["request"]["id"].as_str().unwrap(),
         REQUEST_HEAD,
-    );
+    )
+    .await;
 
     let response = submit_request_via_http(
         app,
@@ -139,6 +143,7 @@ async fn owner_submit_uses_private_base_without_credit_stake() {
             assert!(catalog.credit_ledger_entries.is_empty());
             Ok(())
         })
+        .await
         .unwrap();
 }
 
@@ -209,6 +214,7 @@ async fn finalizing_without_uploaded_request_ref_does_not_stake_credits() {
             amount_credits: 20,
             now_unix: 1,
         })
+        .await
         .unwrap();
     let app = router(state.clone());
     let start = start_request_via_http(
@@ -245,6 +251,7 @@ async fn finalizing_without_uploaded_request_ref_does_not_stake_credits() {
             );
             Ok(())
         })
+        .await
         .unwrap();
 }
 
@@ -286,7 +293,8 @@ async fn request_submit_publishes_summary_refresh_event() {
         &state,
         start["request"]["id"].as_str().unwrap(),
         REQUEST_HEAD,
-    );
+    )
+    .await;
     let submit = submit_request_via_http(
         app,
         &bearer_header(),
@@ -310,7 +318,7 @@ async fn request_submit_publishes_summary_refresh_event() {
 async fn public_readers_do_not_see_private_request_branches() {
     let state = test_state_with_repo();
     cache_test_jwks(&state);
-    create_owner_request(&state, "req_private", REQUEST_HEAD);
+    create_owner_request(&state, "req_private", REQUEST_HEAD).await;
     let app = router(state);
 
     let public_response = app
@@ -365,7 +373,7 @@ async fn public_readers_do_not_see_private_request_branches() {
 
 #[tokio::test]
 async fn needs_response_respond_and_resolution_settle_public_stake() {
-    let state = state_with_public_request();
+    let state = state_with_public_request().await;
     let app = router(state.clone());
 
     let needs_response = app
@@ -446,6 +454,7 @@ async fn needs_response_respond_and_resolution_settle_public_stake() {
             );
             Ok(())
         })
+        .await
         .unwrap();
 }
 
@@ -501,7 +510,7 @@ async fn clean_merge_applies_repo_update_and_resolves_as_accepted() {
         let mut catalog = lock_catalog(&state).unwrap();
         catalog.repositories.insert(TEST_REPO_ID.to_string(), repo);
     }
-    create_owner_request(&state, "req_merge", &request_head);
+    create_owner_request(&state, "req_merge", &request_head).await;
     state
         .metadata
         .record_request_revision(RecordRequestRevisionInput {
@@ -515,6 +524,7 @@ async fn clean_merge_applies_repo_update_and_resolves_as_accepted() {
             body: None,
             now_unix: 3,
         })
+        .await
         .unwrap();
     let merge_worktree =
         receive_pack_staging_repo_path(&state, TEST_REPO_OWNER, TEST_REPO_NAME).unwrap();
@@ -542,7 +552,9 @@ async fn clean_merge_applies_repo_update_and_resolves_as_accepted() {
     assert_eq!(body["request"]["state"], "Resolved");
     assert_eq!(body["request"]["disposition"], "Accepted");
 
-    let repo = find_repo(&state, TEST_REPO_OWNER, TEST_REPO_NAME).unwrap();
+    let repo = find_repo(&state, TEST_REPO_OWNER, TEST_REPO_NAME)
+        .await
+        .unwrap();
     let live_tree = repo.live_tree();
     let readme = live_tree
         .get(&ScopePath::parse("/README.md").unwrap())
@@ -569,6 +581,7 @@ async fn public_request_merge_replays_public_delta_without_deleting_private_file
             amount_credits: 20,
             now_unix: 1,
         })
+        .await
         .unwrap();
 
     let raw_repo = temp_git_repo("public-request-raw-main");
@@ -588,7 +601,9 @@ async fn public_request_merge_replays_public_delta_without_deleting_private_file
         catalog.repositories.insert(TEST_REPO_ID.to_string(), repo);
     }
 
-    let repo = find_repo(&state, TEST_REPO_OWNER, TEST_REPO_NAME).unwrap();
+    let repo = find_repo(&state, TEST_REPO_OWNER, TEST_REPO_NAME)
+        .await
+        .unwrap();
     let public_projection = project_graph(
         &repo.policy,
         &repo.graph,
@@ -658,7 +673,8 @@ async fn public_request_merge_replays_public_delta_without_deleting_private_file
         "Public request merge",
         "ledger_public_merge_stake",
         "event_public_merge_created",
-    );
+    )
+    .await;
     state
         .metadata
         .record_request_revision(RecordRequestRevisionInput {
@@ -672,6 +688,7 @@ async fn public_request_merge_replays_public_delta_without_deleting_private_file
             body: None,
             now_unix: 3,
         })
+        .await
         .unwrap();
 
     let response = router(state.clone())
@@ -694,7 +711,9 @@ async fn public_request_merge_replays_public_delta_without_deleting_private_file
     assert_eq!(body["request"]["state"], "Resolved");
     assert_eq!(body["request"]["disposition"], "Accepted");
 
-    let repo = find_repo(&state, TEST_REPO_OWNER, TEST_REPO_NAME).unwrap();
+    let repo = find_repo(&state, TEST_REPO_OWNER, TEST_REPO_NAME)
+        .await
+        .unwrap();
     let live_tree = repo.live_tree();
     let readme = live_tree
         .get(&ScopePath::parse("/README.md").unwrap())
@@ -724,6 +743,7 @@ async fn public_request_merge_rejects_private_path_collision() {
             amount_credits: 20,
             now_unix: 1,
         })
+        .await
         .unwrap();
 
     let raw_repo = temp_git_repo("public-request-private-collision-raw");
@@ -747,7 +767,9 @@ async fn public_request_merge_rejects_private_path_collision() {
         catalog.repositories.insert(TEST_REPO_ID.to_string(), repo);
     }
 
-    let repo = find_repo(&state, TEST_REPO_OWNER, TEST_REPO_NAME).unwrap();
+    let repo = find_repo(&state, TEST_REPO_OWNER, TEST_REPO_NAME)
+        .await
+        .unwrap();
     let public_projection = project_graph(
         &repo.policy,
         &repo.graph,
@@ -815,7 +837,8 @@ async fn public_request_merge_rejects_private_path_collision() {
         "Private collision request",
         "ledger_private_collision_stake",
         "event_private_collision_created",
-    );
+    )
+    .await;
     state
         .metadata
         .record_request_revision(RecordRequestRevisionInput {
@@ -829,6 +852,7 @@ async fn public_request_merge_rejects_private_path_collision() {
             body: None,
             now_unix: 3,
         })
+        .await
         .unwrap();
 
     let response = router(state.clone())
@@ -847,7 +871,9 @@ async fn public_request_merge_rejects_private_path_collision() {
         .unwrap();
 
     assert_eq!(response.status(), StatusCode::CONFLICT);
-    let repo = find_repo(&state, TEST_REPO_OWNER, TEST_REPO_NAME).unwrap();
+    let repo = find_repo(&state, TEST_REPO_OWNER, TEST_REPO_NAME)
+        .await
+        .unwrap();
     let live_tree = repo.live_tree();
     let secret = live_tree
         .get(&ScopePath::parse("/SECRET.md").unwrap())
@@ -863,33 +889,10 @@ async fn public_request_merge_rejects_private_path_collision() {
             );
             Ok(())
         })
+        .await
         .unwrap();
     let _ = fs::remove_dir_all(raw_repo);
     let _ = fs::remove_dir_all(request_repo);
-}
-
-#[tokio::test]
-async fn request_revision_rest_route_is_removed() {
-    let state = state_with_public_request();
-    let response = router(state)
-        .oneshot(
-            Request::builder()
-                .method("POST")
-                .uri("/v1/repos/owner/repo/requests/req_public/revisions")
-                .header(
-                    AUTHORIZATION,
-                    bearer_header_for(PUBLIC_SUBJECT, PUBLIC_EMAIL),
-                )
-                .header(CONTENT_TYPE, "application/json")
-                .body(Body::from(format!(
-                    r#"{{"head_oid":"{REQUEST_HEAD}","body":null}}"#
-                )))
-                .unwrap(),
-        )
-        .await
-        .unwrap();
-
-    assert_eq!(response.status(), StatusCode::NOT_FOUND);
 }
 
 fn state_with_public_user() -> AppState {
@@ -925,7 +928,7 @@ fn test_state_with_repo_with_readme() -> AppState {
     state
 }
 
-fn state_with_public_request() -> AppState {
+async fn state_with_public_request() -> AppState {
     let state = state_with_public_user();
     state
         .metadata
@@ -935,6 +938,7 @@ fn state_with_public_request() -> AppState {
             amount_credits: 20,
             now_unix: 1,
         })
+        .await
         .unwrap();
     create_public_request(
         &state,
@@ -944,7 +948,8 @@ fn state_with_public_request() -> AppState {
         "Public request",
         "ledger_stake",
         "event_created",
-    );
+    )
+    .await;
     state
 }
 

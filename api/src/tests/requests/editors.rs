@@ -2,7 +2,7 @@ use super::*;
 
 #[tokio::test]
 async fn unrelated_public_reader_cannot_comment_on_public_request() {
-    let state = state_with_public_request();
+    let state = state_with_public_request().await;
     let unrelated_user_id = crate::db::scope_user_id_for_auth_identity("clerk", "public_other");
     state
         .metadata
@@ -63,12 +63,13 @@ async fn unrelated_public_reader_cannot_comment_on_public_request() {
             assert_eq!(catalog.request_events.len(), 1);
             Ok(())
         })
+        .await
         .unwrap();
 }
 
 #[tokio::test]
 async fn maintainer_can_add_and_remove_public_request_editor() {
-    let state = state_with_public_request();
+    let state = state_with_public_request().await;
     let editor_subject = "public_editor";
     let editor_email = "public-editor@example.com";
     let editor_user_id = crate::db::scope_user_id_for_auth_identity("clerk", editor_subject);

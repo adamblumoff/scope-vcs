@@ -24,7 +24,7 @@ pub(crate) async fn healthz() -> Json<HealthResponse> {
 }
 
 pub(crate) async fn readyz(State(state): State<AppState>) -> (StatusCode, Json<ReadinessResponse>) {
-    let database_ready = state.metadata.readiness_check().is_ok();
+    let database_ready = state.metadata.readiness_check().await.is_ok();
     let object_store_ready = state.object_store.readiness_check().is_ok();
     let ready = database_ready && object_store_ready;
 
@@ -72,7 +72,7 @@ pub(crate) async fn get_session(
     headers: HeaderMap,
     Path((owner, repo_name)): Path<(String, String)>,
 ) -> Result<Json<SessionResponse>, ApiError> {
-    let repo = find_repo(&state, &owner, &repo_name)?;
+    let repo = find_repo(&state, &owner, &repo_name).await?;
     let user = optional_scope_user(&state, &headers).await?;
     let principal = principal_for_scope_user(&repo, user.as_ref());
     ensure_repo_read(&state, &repo, &principal)?;

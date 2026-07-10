@@ -3,7 +3,7 @@ use crate::domain::requests::{
     RequestActorRole, RequestBaseAudience, StartRequestInput, SubmitRequestInput,
 };
 
-pub(super) fn create_public_request(
+pub(super) async fn create_public_request(
     state: &AppState,
     request_id: &str,
     base_main_oid: &str,
@@ -26,6 +26,7 @@ pub(super) fn create_public_request(
             base_main_oid: base_main_oid.to_string(),
             now_unix: 2,
         })
+        .await
         .unwrap();
     state
         .metadata
@@ -38,6 +39,7 @@ pub(super) fn create_public_request(
             git_snapshot: source_blob("public request git snapshot"),
             now_unix: 3,
         })
+        .await
         .unwrap();
     state
         .metadata
@@ -50,10 +52,11 @@ pub(super) fn create_public_request(
             event_id: event_id.to_string(),
             now_unix: 4,
         })
+        .await
         .unwrap();
 }
 
-pub(super) fn create_owner_request(state: &AppState, request_id: &str, head_oid: &str) {
+pub(super) async fn create_owner_request(state: &AppState, request_id: &str, head_oid: &str) {
     state
         .metadata
         .start_request(StartRequestInput {
@@ -68,6 +71,7 @@ pub(super) fn create_owner_request(state: &AppState, request_id: &str, head_oid:
             base_main_oid: "base_main".to_string(),
             now_unix: 2,
         })
+        .await
         .unwrap();
     state
         .metadata
@@ -80,6 +84,7 @@ pub(super) fn create_owner_request(state: &AppState, request_id: &str, head_oid:
             git_snapshot: source_blob("owner request git snapshot"),
             now_unix: 3,
         })
+        .await
         .unwrap();
     state
         .metadata
@@ -92,6 +97,7 @@ pub(super) fn create_owner_request(state: &AppState, request_id: &str, head_oid:
             event_id: format!("event_created_{request_id}"),
             now_unix: 4,
         })
+        .await
         .unwrap();
 }
 
@@ -131,25 +137,31 @@ pub(super) async fn submit_request_via_http(
     .unwrap()
 }
 
-pub(super) fn mark_working_request_uploaded(state: &AppState, request_id: &str, head_oid: &str) {
+pub(super) async fn mark_working_request_uploaded(
+    state: &AppState,
+    request_id: &str,
+    head_oid: &str,
+) {
     state
         .metadata
         .record_working_request_upload(RecordWorkingRequestUploadInput {
             request_id: request_id.to_string(),
-            actor_user_id: request_author_id(state, request_id),
+            actor_user_id: request_author_id(state, request_id).await,
             actor_can_edit: true,
             expected_old_head_oid: None,
             new_head_oid: head_oid.to_string(),
             git_snapshot: source_blob("working request git snapshot"),
             now_unix: 2,
         })
+        .await
         .unwrap();
 }
 
-fn request_author_id(state: &AppState, request_id: &str) -> String {
+async fn request_author_id(state: &AppState, request_id: &str) -> String {
     state
         .metadata
         .request_by_id(request_id)
+        .await
         .unwrap()
         .unwrap()
         .author_user_id

@@ -2,8 +2,6 @@ mod artifacts;
 mod repo_io;
 mod staging;
 
-#[cfg(test)]
-pub(crate) use self::artifacts::pending_import_from_staging_repo;
 pub(crate) use self::artifacts::{
     receive_pack_update_from_staging_repo, reviewed_update_from_staging_repo,
 };
@@ -25,22 +23,23 @@ use crate::{
 };
 
 #[cfg(test)]
-pub(crate) fn persist_receive_pack_update(
+pub(crate) async fn persist_receive_pack_update(
     state: &AppState,
     owner: &str,
     repo_name: &str,
     update: ReceivePackUpdate,
 ) -> Result<PersistedReceivePackUpdate, ApiError> {
-    state
+    Ok(state
         .metadata
         .mutate_repository(owner, repo_name, move |repo| {
             ensure_receive_pack_base_matches(repo, &update)?;
             apply_receive_pack_update(repo, update)?;
             Ok(RepositoryMutation::new(PersistedReceivePackUpdate::Applied))
         })
+        .await?)
 }
 
-pub(crate) fn persist_receive_pack_update_and_promote(
+pub(crate) async fn persist_receive_pack_update_and_promote(
     state: &AppState,
     owner: &str,
     repo_name: &str,
@@ -65,14 +64,14 @@ pub(crate) fn persist_receive_pack_update_and_promote(
                 } else {
                     "push permission required"
                 };
-                return Err(ApiError::forbidden(message));
+                return Err(ApiError::forbidden(message).into());
             }
             ensure_receive_pack_config_base_matches(repo, &update)?;
             let previous_config = Some(repo.repo_config.clone());
             if !access.can_change_file_visibility
                 && receive_pack_update_changes_visibility(repo, previous_config.as_ref(), &update)
             {
-                return Err(ApiError::forbidden("file visibility permission required"));
+                return Err(ApiError::forbidden("file visibility permission required").into());
             }
             update.previous_config = previous_config;
             ensure_receive_pack_base_matches(repo, &update)?;
@@ -83,8 +82,9 @@ pub(crate) fn persist_receive_pack_update_and_promote(
                 persisted,
                 cleanup_blobs,
             ))
-        })?;
-    crate::state::best_effort_drain_pending_source_blob_deletions(state);
+        })
+        .await?;
+    crate::state::best_effort_drain_pending_source_blob_deletions(state).await;
     Ok(persisted)
 }
 

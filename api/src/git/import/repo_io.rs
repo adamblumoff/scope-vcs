@@ -1,5 +1,3 @@
-#[cfg(test)]
-use crate::domain::store::PendingImportFile;
 use crate::domain::store::{SourceBlob, is_supported_git_file_mode};
 use crate::domain::{policy::ScopePath, repo_config::is_reserved_config_path};
 use crate::{
@@ -80,12 +78,12 @@ pub(super) fn describe_refs(refs: &[(String, String)]) -> String {
 }
 
 #[cfg(test)]
-pub(crate) fn git_tree_files(
+pub(crate) async fn git_tree_files(
     state: &AppState,
     repo_id: &str,
     staging_repo: &FsPath,
     head_oid: &str,
-) -> Result<Vec<PendingImportFile>, ApiError> {
+) -> Result<Vec<(GitTreeFile, SourceBlob)>, ApiError> {
     let pending_files = git_tree_entries(staging_repo, head_oid)?;
     let contents = git_tree_blob_contents(staging_repo, &pending_files)?;
     let mut files = Vec::with_capacity(pending_files.len());
@@ -99,26 +97,21 @@ pub(crate) fn git_tree_files(
     ) {
         Ok(blobs) => blobs,
         Err(error) => {
-            crate::state::best_effort_cleanup_rollback_source_blobs(state, &uploaded_blobs);
+            crate::state::best_effort_cleanup_rollback_source_blobs(state, &uploaded_blobs).await;
             return Err(error);
         }
     };
     for (pending, blob) in pending_files.into_iter().zip(blobs) {
-        files.push(PendingImportFile {
-            path: pending.path,
-            mode: pending.mode,
-            oid: pending.oid,
-            blob,
-        });
+        files.push((pending, blob));
     }
-    files.sort_by(|left, right| left.path.cmp(&right.path));
+    files.sort_by(|left, right| left.0.path.cmp(&right.0.path));
     Ok(files)
 }
 
 pub(super) fn git_tree_entries(
     staging_repo: &FsPath,
     head_oid: &str,
-) -> Result<Vec<PendingGitTreeFile>, ApiError> {
+) -> Result<Vec<GitTreeFile>, ApiError> {
     let output = run_git_output(
         Some(staging_repo),
         &["ls-tree", "-rz", "-r", "-l", head_oid],
@@ -179,7 +172,7 @@ pub(super) fn git_tree_entries(
                 "pending import exceeds {MAX_PENDING_IMPORT_TOTAL_BYTES} bytes"
             )));
         }
-        pending_files.push(PendingGitTreeFile {
+        pending_files.push(GitTreeFile {
             path: path.to_string(),
             mode: mode.to_string(),
             oid: oid.to_string(),
@@ -196,7 +189,7 @@ pub(crate) fn validate_pushed_tree(staging_repo: &FsPath, head_oid: &str) -> Res
 
 pub(super) fn git_tree_blob_contents(
     staging_repo: &FsPath,
-    pending_files: &[PendingGitTreeFile],
+    pending_files: &[GitTreeFile],
 ) -> Result<Vec<Vec<u8>>, ApiError> {
     if pending_files.is_empty() {
         return Ok(Vec::new());
@@ -220,7 +213,7 @@ pub(super) fn git_tree_blob_contents(
             for pending in pending_files {
                 writeln!(stdin, "{}", pending.oid).map_err(ApiError::internal)?;
             }
-            Ok(())
+            Ok::<(), ApiError>(())
         });
         let output = child.wait_with_output().map_err(ApiError::internal);
         let write_result = writer
@@ -246,7 +239,7 @@ pub(super) fn git_tree_blob_contents(
 pub(super) fn put_git_blob_contents(
     state: &AppState,
     repo_id: &str,
-    pending_files: &[PendingGitTreeFile],
+    pending_files: &[GitTreeFile],
     contents: &[Vec<u8>],
     uploaded_blobs: &mut Vec<SourceBlob>,
 ) -> Result<Vec<SourceBlob>, ApiError> {
@@ -311,7 +304,7 @@ pub(super) fn put_git_blob_contents(
 
 fn parse_git_cat_file_batch(
     output: &[u8],
-    pending_files: &[PendingGitTreeFile],
+    pending_files: &[GitTreeFile],
 ) -> Result<Vec<Vec<u8>>, ApiError> {
     let mut cursor = 0usize;
     let mut contents = Vec::with_capacity(pending_files.len());
@@ -408,7 +401,12 @@ fn git_snapshot_from_refs(
     run_git(Some(repo), &args, "creating Git snapshot bundle")?;
     let bytes = std::fs::read(&bundle_path).map_err(ApiError::internal)?;
     let _ = std::fs::remove_file(&bundle_path);
-    put_repo_object(state.object_store.as_ref(), repo_id, "git-bundles", &bytes)
+    Ok(put_repo_object(
+        state.object_store.as_ref(),
+        repo_id,
+        "git-bundles",
+        &bytes,
+    )?)
 }
 
 fn random_bundle_id() -> Result<String, ApiError> {
@@ -419,11 +417,12 @@ fn random_bundle_id() -> Result<String, ApiError> {
     Ok(format!("{}-{}", std::process::id(), hex::encode(bytes)))
 }
 
-pub(super) struct PendingGitTreeFile {
-    pub(super) path: String,
-    pub(super) mode: String,
-    pub(super) oid: String,
-    pub(super) size_bytes: usize,
+#[derive(Debug)]
+pub(crate) struct GitTreeFile {
+    pub(crate) path: String,
+    pub(crate) mode: String,
+    pub(crate) oid: String,
+    pub(crate) size_bytes: usize,
 }
 
 pub(crate) fn validate_pushed_file_path(path: &str) -> Result<(), ApiError> {

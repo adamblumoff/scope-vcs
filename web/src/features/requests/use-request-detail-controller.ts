@@ -8,7 +8,7 @@ import type {
   RequestDelete,
   RequestDetail,
   RequestMutation,
-  RequestWorkflowDisposition,
+  RequestWorkflowResolutionDisposition,
   RemoveRequestEditorInput,
   ResolveRequestInput,
   RespondRequestInput,
@@ -74,7 +74,7 @@ export function useRequestDetailController({
   const [pendingAction, setPendingAction] = useState<RequestActionKey | null>(null)
   const [resolveBody, setResolveBody] = useState('')
   const [resolveDisposition, setResolveDisposition] =
-    useState<RequestWorkflowDisposition>('UsefulNotMerged')
+    useState<RequestWorkflowResolutionDisposition>('UsefulNotMerged')
   const [responseBody, setResponseBody] = useState('')
   const resolutionOptions = resolutionOptionsFor(request)
   const activeResolveDisposition = resolutionOptions.some(

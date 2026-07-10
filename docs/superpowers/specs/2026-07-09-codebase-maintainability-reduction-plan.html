@@ -1,0 +1,1162 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Codebase Maintainability and Line Reduction Plan</title>
+    <style>
+      :root {
+        color-scheme: light;
+        --paper: #f6f3ec;
+        --surface: #fffdf8;
+        --ink: #15181c;
+        --muted: #62676e;
+        --line: #d5d0c5;
+        --strong-line: #9f998d;
+        --accent: #075f59;
+        --accent-soft: #dcefeb;
+        --delete: #a5362f;
+        --delete-soft: #f8e4e1;
+        --warn: #8b5c00;
+        --warn-soft: #f7ebce;
+        --good: #18643d;
+        --good-soft: #dff0e5;
+        --mono: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas,
+          "Liberation Mono", monospace;
+        --sans: Inter, ui-sans-serif, system-ui, -apple-system,
+          BlinkMacSystemFont, "Segoe UI", sans-serif;
+        --serif: Iowan Old Style, Baskerville, Georgia, Cambria,
+          "Times New Roman", serif;
+      }
+
+      * { box-sizing: border-box; }
+      html { scroll-behavior: smooth; }
+
+      body {
+        margin: 0;
+        background: var(--paper);
+        color: var(--ink);
+        font-family: var(--sans);
+        font-size: 17px;
+        line-height: 1.58;
+      }
+
+      a {
+        color: var(--accent);
+        text-decoration-color: color-mix(in srgb, var(--accent), transparent 55%);
+        text-underline-offset: 0.18em;
+      }
+
+      code, pre { font-family: var(--mono); }
+      code { font-size: 0.91em; }
+
+      pre {
+        margin: 16px 0 0;
+        overflow-x: auto;
+        border-left: 3px solid var(--accent);
+        background: #eeece6;
+        padding: 16px 18px;
+        font-size: 0.82rem;
+        line-height: 1.5;
+      }
+
+      .topbar {
+        position: sticky;
+        top: 0;
+        z-index: 10;
+        border-bottom: 1px solid var(--line);
+        background: color-mix(in srgb, var(--paper), transparent 4%);
+        backdrop-filter: blur(10px);
+      }
+
+      .topbar-inner,
+      .masthead,
+      .layout,
+      footer {
+        width: min(1220px, calc(100vw - 48px));
+        margin: 0 auto;
+      }
+
+      .topbar-inner {
+        min-height: 58px;
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 24px;
+      }
+
+      .brand {
+        font-size: 0.76rem;
+        font-weight: 850;
+        letter-spacing: 0.1em;
+        text-transform: uppercase;
+      }
+
+      nav {
+        display: flex;
+        flex-wrap: wrap;
+        justify-content: flex-end;
+        gap: 9px 18px;
+        font-size: 0.82rem;
+        font-weight: 700;
+      }
+
+      nav a {
+        color: var(--muted);
+        text-decoration: none;
+      }
+
+      nav a:hover { color: var(--accent); }
+
+      .masthead {
+        display: grid;
+        grid-template-columns: minmax(0, 1fr) 330px;
+        gap: 58px;
+        padding: 68px 0 46px;
+        border-bottom: 2px solid var(--ink);
+      }
+
+      .eyebrow,
+      .kicker {
+        margin: 0 0 16px;
+        color: var(--accent);
+        font-size: 0.76rem;
+        font-weight: 850;
+        letter-spacing: 0.1em;
+        text-transform: uppercase;
+      }
+
+      h1, h2, h3, p { margin-top: 0; }
+
+      h1 {
+        max-width: 900px;
+        margin-bottom: 0;
+        font-family: var(--serif);
+        font-size: clamp(3.2rem, 7vw, 6.8rem);
+        font-weight: 900;
+        line-height: 0.91;
+        letter-spacing: -0.055em;
+      }
+
+      h2 {
+        margin-bottom: 14px;
+        font-family: var(--serif);
+        font-size: clamp(2.1rem, 4vw, 3.7rem);
+        line-height: 1;
+        letter-spacing: -0.035em;
+      }
+
+      h3 {
+        margin-bottom: 8px;
+        font-size: 1.08rem;
+        line-height: 1.28;
+      }
+
+      p { margin-bottom: 14px; }
+
+      .subtitle {
+        max-width: 830px;
+        margin: 24px 0 0;
+        color: #363b42;
+        font-size: 1.23rem;
+        line-height: 1.45;
+      }
+
+      .headline-metric {
+        align-self: end;
+        border-left: 4px solid var(--delete);
+        padding: 5px 0 8px 22px;
+      }
+
+      .headline-metric .number {
+        display: block;
+        color: var(--delete);
+        font-family: var(--serif);
+        font-size: 4rem;
+        font-weight: 900;
+        line-height: 0.95;
+        letter-spacing: -0.045em;
+      }
+
+      .headline-metric .label {
+        display: block;
+        margin-top: 8px;
+        font-size: 0.82rem;
+        font-weight: 850;
+        letter-spacing: 0.08em;
+        text-transform: uppercase;
+      }
+
+      .headline-metric p {
+        margin: 12px 0 0;
+        color: var(--muted);
+        font-size: 0.9rem;
+      }
+
+      .layout {
+        display: grid;
+        grid-template-columns: 245px minmax(0, 1fr);
+        gap: 52px;
+        padding: 42px 0 84px;
+      }
+
+      aside {
+        position: sticky;
+        top: 80px;
+        align-self: start;
+        border-right: 1px solid var(--line);
+        padding-right: 26px;
+      }
+
+      aside h2 {
+        margin-bottom: 12px;
+        font-family: var(--sans);
+        font-size: 0.75rem;
+        letter-spacing: 0.1em;
+        text-transform: uppercase;
+      }
+
+      aside a {
+        display: block;
+        padding: 5px 0;
+        color: var(--muted);
+        font-size: 0.88rem;
+        text-decoration: none;
+      }
+
+      aside a:hover { color: var(--accent); }
+
+      main { min-width: 0; }
+
+      section {
+        scroll-margin-top: 84px;
+        margin-bottom: 68px;
+      }
+
+      .lead {
+        max-width: 900px;
+        color: var(--muted);
+        font-size: 1.08rem;
+      }
+
+      .rule-line {
+        border-top: 1px solid var(--strong-line);
+        margin: 24px 0;
+      }
+
+      .statement {
+        border-left: 4px solid var(--accent);
+        background: var(--accent-soft);
+        padding: 20px 22px;
+        font-size: 1.06rem;
+        font-weight: 680;
+      }
+
+      .warning {
+        border-left-color: var(--warn);
+        background: var(--warn-soft);
+      }
+
+      .delete-statement {
+        border-left-color: var(--delete);
+        background: var(--delete-soft);
+      }
+
+      table {
+        width: 100%;
+        margin-top: 22px;
+        border-collapse: collapse;
+        font-size: 0.9rem;
+      }
+
+      th, td {
+        border-bottom: 1px solid var(--line);
+        padding: 12px 10px;
+        text-align: left;
+        vertical-align: top;
+      }
+
+      th {
+        color: var(--muted);
+        font-size: 0.72rem;
+        font-weight: 850;
+        letter-spacing: 0.08em;
+        text-transform: uppercase;
+      }
+
+      td.number, th.number {
+        text-align: right;
+        white-space: nowrap;
+        font-variant-numeric: tabular-nums;
+      }
+
+      .total-row td {
+        border-top: 2px solid var(--ink);
+        border-bottom: 0;
+        color: var(--ink);
+        font-weight: 850;
+      }
+
+      .phase {
+        padding: 30px 0 32px;
+        border-top: 2px solid var(--ink);
+      }
+
+      .phase:first-of-type { margin-top: 26px; }
+
+      .phase-head {
+        display: grid;
+        grid-template-columns: 72px minmax(0, 1fr) 210px;
+        gap: 18px;
+        align-items: start;
+      }
+
+      .phase-number {
+        color: var(--accent);
+        font-family: var(--serif);
+        font-size: 3.1rem;
+        font-weight: 900;
+        line-height: 0.9;
+      }
+
+      .phase h3 {
+        margin-bottom: 5px;
+        font-family: var(--serif);
+        font-size: 1.9rem;
+        letter-spacing: -0.025em;
+      }
+
+      .phase-summary {
+        color: var(--muted);
+      }
+
+      .phase-budget {
+        border-left: 2px solid var(--delete);
+        padding-left: 14px;
+        font-variant-numeric: tabular-nums;
+      }
+
+      .phase-budget strong {
+        display: block;
+        color: var(--delete);
+        font-size: 1.25rem;
+      }
+
+      .phase-budget span {
+        display: block;
+        color: var(--muted);
+        font-size: 0.76rem;
+      }
+
+      .phase-body {
+        margin-left: 90px;
+        padding-top: 20px;
+      }
+
+      .phase-body h4 {
+        margin: 22px 0 6px;
+        font-size: 0.75rem;
+        letter-spacing: 0.1em;
+        text-transform: uppercase;
+      }
+
+      ul, ol {
+        margin: 10px 0 0;
+        padding-left: 1.25rem;
+      }
+
+      li { margin: 0.42rem 0; }
+
+      .checks {
+        display: grid;
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+        gap: 0 32px;
+        margin-top: 16px;
+      }
+
+      .checks p {
+        border-top: 1px solid var(--line);
+        margin: 0;
+        padding: 10px 0;
+        font-size: 0.9rem;
+      }
+
+      .checks strong { color: var(--good); }
+
+      .sequence {
+        display: grid;
+        grid-template-columns: repeat(7, minmax(0, 1fr));
+        margin-top: 22px;
+        border-top: 1px solid var(--strong-line);
+        border-bottom: 1px solid var(--strong-line);
+      }
+
+      .sequence div {
+        min-height: 122px;
+        border-right: 1px solid var(--line);
+        padding: 14px 12px;
+      }
+
+      .sequence div:last-child { border-right: 0; }
+
+      .sequence b {
+        display: block;
+        margin-bottom: 7px;
+        color: var(--accent);
+        font-size: 0.72rem;
+        letter-spacing: 0.07em;
+        text-transform: uppercase;
+      }
+
+      .sequence span {
+        display: block;
+        font-size: 0.82rem;
+        line-height: 1.35;
+      }
+
+      .pill {
+        display: inline-block;
+        border-radius: 999px;
+        padding: 4px 9px;
+        font-size: 0.7rem;
+        font-weight: 850;
+        letter-spacing: 0.06em;
+        text-transform: uppercase;
+      }
+
+      .pill.keep { background: var(--good-soft); color: var(--good); }
+      .pill.delete { background: var(--delete-soft); color: var(--delete); }
+      .pill.gate { background: var(--warn-soft); color: var(--warn); }
+
+      footer {
+        border-top: 2px solid var(--ink);
+        padding: 26px 0 54px;
+        color: var(--muted);
+        font-size: 0.86rem;
+      }
+
+      @media (max-width: 940px) {
+        .masthead { grid-template-columns: 1fr; }
+        .headline-metric { max-width: 520px; }
+        .layout { grid-template-columns: 1fr; }
+        aside { display: none; }
+        .sequence { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+        .sequence div:nth-child(2n) { border-right: 0; }
+      }
+
+      @media (max-width: 700px) {
+        body { font-size: 16px; }
+        .topbar-inner { align-items: flex-start; padding: 12px 0; }
+        nav { display: none; }
+        .masthead { padding-top: 44px; }
+        .phase-head { grid-template-columns: 52px minmax(0, 1fr); }
+        .phase-budget { grid-column: 2; }
+        .phase-body { margin-left: 0; }
+        .checks { grid-template-columns: 1fr; }
+        .sequence { grid-template-columns: 1fr; }
+        .sequence div { border-right: 0; }
+        table { font-size: 0.78rem; }
+        th, td { padding: 9px 6px; }
+      }
+    </style>
+  </head>
+  <body>
+    <header class="topbar">
+      <div class="topbar-inner">
+        <div class="brand">Scope VCS · Maintainability Campaign</div>
+        <nav aria-label="Plan sections">
+          <a href="#outcome">Outcome</a>
+          <a href="#measurement">LOC contract</a>
+          <a href="#sequence">Sequence</a>
+          <a href="#phases">Phases</a>
+          <a href="#verification">Verification</a>
+          <a href="#closeout">Closeout</a>
+        </nav>
+      </div>
+    </header>
+
+    <header class="masthead">
+      <div>
+        <p class="eyebrow">Deletion-first implementation plan · July 9, 2026</p>
+        <h1>Make the codebase smaller by making ownership obvious.</h1>
+        <p class="subtitle">
+          Remove dead vertical slices, collapse duplicate persistence and policy
+          implementations, and leave each behavior with one durable owner. The
+          campaign is successful only if Scope behaves the same and the hand-owned
+          codebase becomes materially smaller.
+        </p>
+      </div>
+      <div class="headline-metric">
+        <span class="number">−8k to −10k</span>
+        <span class="label">Expected net line reduction</span>
+        <p>
+          Baseline: 66,594 hand-owned source and test lines. Minimum successful
+          reduction: 7,000 lines. Expected finish: 56,500–58,500 lines.
+        </p>
+      </div>
+    </header>
+
+    <div class="layout">
+      <aside aria-label="Document navigation">
+        <h2>Contents</h2>
+        <a href="#outcome">1. Outcome</a>
+        <a href="#principles">2. Operating rules</a>
+        <a href="#measurement">3. LOC contract</a>
+        <a href="#baseline">4. Baseline</a>
+        <a href="#sequence">5. Dependency order</a>
+        <a href="#phases">6. Execution phases</a>
+        <a href="#verification">7. Verification</a>
+        <a href="#risk">8. Risk and rollback</a>
+        <a href="#preserve">9. Preserve</a>
+        <a href="#closeout">10. Closeout</a>
+      </aside>
+
+      <main>
+        <section id="outcome">
+          <p class="kicker">Outcome</p>
+          <h2>One behavior, one owner, fewer lines.</h2>
+          <p class="lead">
+            This is an architecture reduction campaign, not a formatting pass. It
+            removes unreachable product surfaces and parallel implementations before
+            reorganizing what remains. File splitting alone does not satisfy the plan;
+            code moved from one file to another contributes zero to the reduction.
+          </p>
+          <div class="statement delete-statement">
+            Target a net deletion of 8,000–10,000 hand-owned lines while retaining
+            API behavior, authorization semantics, Git protocol behavior, CLI flows,
+            request settlement outcomes, and visible web behavior.
+          </div>
+          <table aria-label="Success conditions">
+            <thead>
+              <tr>
+                <th>Dimension</th>
+                <th>Required result</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td>Line reduction</td>
+                <td>At least 7,000 net lines; expected 8,000–10,000.</td>
+              </tr>
+              <tr>
+                <td>Behavior</td>
+                <td>Existing supported workflows and externally observable contracts remain unchanged.</td>
+              </tr>
+              <tr>
+                <td>Architecture</td>
+                <td>Domain rules are delivery-independent; persistence has one production implementation.</td>
+              </tr>
+              <tr>
+                <td>Tests</td>
+                <td>Regression value is preserved or improved; duplicate mechanics and fixtures are consolidated.</td>
+              </tr>
+              <tr>
+                <td>Operations</td>
+                <td>External I/O no longer runs while a global metadata transaction is held.</td>
+              </tr>
+            </tbody>
+          </table>
+        </section>
+
+        <section id="principles">
+          <p class="kicker">Operating rules</p>
+          <h2>Reduction without games.</h2>
+          <div class="checks">
+            <p><strong>Delete vertically.</strong> Remove model, persistence, API, CLI, UI, and tests together.</p>
+            <p><strong>Keep one source of truth.</strong> Consolidate rules before deleting their copies.</p>
+            <p><strong>Do not minify.</strong> Compressed, generated, macro-hidden, or unreadable code does not count.</p>
+            <p><strong>Do not weaken coverage.</strong> Tests count only when redundant mechanics are removed.</p>
+            <p><strong>No compatibility layer.</strong> This is pre-alpha; destructive schema resets are preferred.</p>
+            <p><strong>Stop on behavior change.</strong> Any intended product change requires owner approval.</p>
+            <p><strong>Prefer subtraction.</strong> New abstractions must delete more machinery than they add.</p>
+            <p><strong>Verify each phase.</strong> Do not stack a later cleanup on an unverified earlier phase.</p>
+          </div>
+          <div class="statement warning">
+            The LOC target is a constraint on architecture quality, not permission to
+            erase meaningful tests, combine unrelated responsibilities, or replace
+            clear code with clever code.
+          </div>
+        </section>
+
+        <section id="measurement">
+          <p class="kicker">Measurement contract</p>
+          <h2>Count hand-owned source and tests.</h2>
+          <p class="lead">
+            The baseline includes tracked Rust, TypeScript, TSX, JavaScript, and CSS
+            in production, test, development, benchmark, and repository tooling paths.
+            Generated code and documentation are excluded.
+          </p>
+          <table aria-label="Line count inclusion rules">
+            <thead>
+              <tr>
+                <th>Counted</th>
+                <th>Excluded</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td><code>*.rs</code>, <code>*.ts</code>, <code>*.tsx</code>, <code>*.mjs</code>, <code>*.css</code></td>
+                <td>Markdown, HTML plans, lockfiles, manifests, and vendored/build output</td>
+              </tr>
+              <tr>
+                <td>Production code, tests, fixtures, dev tooling, benchmarks, CI helper source</td>
+                <td><code>web/src/routeTree.gen.ts</code> and <code>web/src/api/types.generated.ts</code></td>
+              </tr>
+              <tr>
+                <td>New shared helpers and replacement regression tests</td>
+                <td>Generated output changes caused by source-contract changes</td>
+              </tr>
+            </tbody>
+          </table>
+          <pre><code># Reproducible headline metric
+files=$(git ls-files '*.rs' '*.ts' '*.tsx' '*.mjs' '*.css' \
+  | rg -v '(^|/)(routeTree\.gen\.ts|types\.generated\.ts)$')
+printf '%s\n' "$files" | tr '\n' '\0' | xargs -0 wc -l | tail -1
+
+# Baseline captured for this plan: 66,594 lines</code></pre>
+          <p>
+            Every phase closeout records its starting count, lines deleted, lines
+            added, net change, and cumulative change. Moving a file is reported as a
+            move and contributes no claimed deletion.
+          </p>
+        </section>
+
+        <section id="baseline">
+          <p class="kicker">Baseline</p>
+          <h2>Most of the opportunity is in API and core.</h2>
+          <table aria-label="Current line count by area">
+            <thead>
+              <tr>
+                <th>Area</th>
+                <th class="number">Current lines</th>
+                <th>Primary reduction source</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td><code>api</code></td>
+                <td class="number">23,071</td>
+                <td>Dead pending-import paths, source-mixed tests, Git staging choreography, adapter-owned policy</td>
+              </tr>
+              <tr>
+                <td><code>crates/scope-core</code></td>
+                <td class="number">19,782</td>
+                <td>Memory/Postgres duplication, runtime bridge, full-catalog loading, duplicate schema machinery</td>
+              </tr>
+              <tr>
+                <td><code>web</code></td>
+                <td class="number">11,460</td>
+                <td>Duplicate settlement policy, competing data owners, render-slot and formatting copies</td>
+              </tr>
+              <tr>
+                <td><code>cli</code></td>
+                <td class="number">9,106</td>
+                <td>Copied contracts, dead push workflow, duplicate preflight/dispatch, Git plan duplication</td>
+              </tr>
+              <tr>
+                <td><code>dev</code></td>
+                <td class="number">1,442</td>
+                <td>Replace memory metadata setup with disposable Postgres setup</td>
+              </tr>
+              <tr>
+                <td><code>bench</code></td>
+                <td class="number">945</td>
+                <td>Preserve unless persistence changes expose obsolete harness logic</td>
+              </tr>
+              <tr>
+                <td><code>worker</code></td>
+                <td class="number">141</td>
+                <td>Preserve thin worker boundary</td>
+              </tr>
+              <tr>
+                <td>Other tracked source</td>
+                <td class="number">647</td>
+                <td>CI and repository helper consolidation</td>
+              </tr>
+              <tr class="total-row">
+                <td>Total</td>
+                <td class="number">66,594</td>
+                <td>Expected finish: 56,500–58,500</td>
+              </tr>
+            </tbody>
+          </table>
+        </section>
+
+        <section id="sequence">
+          <p class="kicker">Dependency order</p>
+          <h2>Shrink first, then straighten boundaries.</h2>
+          <p class="lead">
+            Dead code is removed before persistence and domain boundaries are rebuilt,
+            so later work does not preserve or migrate unreachable concepts. Behavior
+            locks are established before any deletion.
+          </p>
+          <div class="sequence" aria-label="Execution sequence">
+            <div><b>Phase 0</b><span>Capture behavior and count baseline</span></div>
+            <div><b>Phase 1</b><span>Delete dead vertical slices</span></div>
+            <div><b>Phase 2</b><span>Collapse persistence</span></div>
+            <div><b>Phase 3</b><span>Centralize domain and contracts</span></div>
+            <div><b>Phase 4</b><span>Simplify side effects, Git, and CLI</span></div>
+            <div><b>Phase 5</b><span>Remove competing web state</span></div>
+            <div><b>Phase 6</b><span>Consolidate tests and tooling</span></div>
+          </div>
+          <table aria-label="Expected reduction by phase">
+            <thead>
+              <tr>
+                <th>Phase</th>
+                <th class="number">Delete</th>
+                <th class="number">Add</th>
+                <th class="number">Expected net</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr><td>0. Behavior locks</td><td class="number">0–100</td><td class="number">0–200</td><td class="number">+0 to +200</td></tr>
+              <tr><td>1. Dead surfaces</td><td class="number">1,250–1,850</td><td class="number">50–150</td><td class="number">−1,100 to −1,800</td></tr>
+              <tr><td>2. Persistence collapse</td><td class="number">4,800–6,500</td><td class="number">1,300–2,000</td><td class="number">−3,500 to −4,500</td></tr>
+              <tr><td>3. Domain and contracts</td><td class="number">1,200–1,700</td><td class="number">700–1,000</td><td class="number">−500 to −900</td></tr>
+              <tr><td>4. Side effects, Git, CLI</td><td class="number">1,300–1,900</td><td class="number">500–800</td><td class="number">−800 to −1,200</td></tr>
+              <tr><td>5. Web state ownership</td><td class="number">900–1,300</td><td class="number">250–450</td><td class="number">−600 to −900</td></tr>
+              <tr><td>6. Tests and tooling</td><td class="number">1,200–1,700</td><td class="number">450–700</td><td class="number">−700 to −1,000</td></tr>
+              <tr class="total-row"><td>Campaign total</td><td class="number">10,650–15,050</td><td class="number">3,250–5,300</td><td class="number">−7,000 to −10,300</td></tr>
+            </tbody>
+          </table>
+          <p>
+            Delete/add ranges are paired estimates within each phase; crossing the
+            most conservative gross endpoints does not produce the expected net.
+            The planning target is 8,000–10,000 net lines. The lower bound absorbs
+            replacement code and behavior-lock tests. Falling below 7,000 requires
+            an explicit explanation and a new approved plan.
+          </p>
+        </section>
+
+        <section id="phases">
+          <p class="kicker">Execution phases</p>
+          <h2>Delete in behavior-owned slices.</h2>
+
+          <article class="phase" id="phase-0">
+            <div class="phase-head">
+              <div class="phase-number">0</div>
+              <div>
+                <h3>Freeze behavior and establish the ledger</h3>
+                <p class="phase-summary">Prove what must remain before deleting its current implementation.</p>
+              </div>
+              <div class="phase-budget">
+                <strong>+0 to +200</strong>
+                <span>Net line budget</span>
+              </div>
+            </div>
+            <div class="phase-body">
+              <h4>Work</h4>
+              <ul>
+                <li>Capture the exact LOC baseline using the command in this document.</li>
+                <li>Record supported route, DTO, CLI, Git protocol, visibility, request-transition, settlement, and SSE behavior.</li>
+                <li>Add only missing high-value characterization tests required to refactor safely.</li>
+                <li>Record representative local benchmark timings for repo reads, request reads, push receive, and projection rebuild.</li>
+              </ul>
+              <h4>Exit gate</h4>
+              <ul>
+                <li>All existing checks pass.</li>
+                <li>Behavior locks cover every surface scheduled for consolidation.</li>
+                <li>The line ledger is checked in with the implementation work or included in every change summary.</li>
+              </ul>
+            </div>
+          </article>
+
+          <article class="phase" id="phase-1">
+            <div class="phase-head">
+              <div class="phase-number">1</div>
+              <div>
+                <h3>Delete unreachable product surfaces</h3>
+                <p class="phase-summary">Remove concepts that production cannot create or consume.</p>
+              </div>
+              <div class="phase-budget">
+                <strong>−1,100 to −1,800</strong>
+                <span>Expected net deletion</span>
+              </div>
+            </div>
+            <div class="phase-body">
+              <h4>Pending-import vertical deletion</h4>
+              <ul>
+                <li>Remove <code>PendingImport</code>, <code>PendingImportFile</code>, and <code>StoredRepository.pending_import</code>.</li>
+                <li>Remove persistence columns, entity conversion, publish/apply paths, read-model booleans, API/CLI DTO fields, web branching, and tests that manufacture the state.</li>
+                <li>Keep the currently supported direct first-push publication flow.</li>
+              </ul>
+              <h4>Unowned backend settings deletion</h4>
+              <ul>
+                <li>Remove backend <code>RepoSettings</code>, its table/entity/read/update modules, and tests for the nonexistent endpoint.</li>
+                <li>Retain repository collaboration/settings UI; it is a separate live feature.</li>
+                <li>Keep default visibility in <code>RepoConfig</code>, its actual owner.</li>
+              </ul>
+              <h4>Small deletions</h4>
+              <ul>
+                <li>Delete obsolete-route tombstone tests, stale suppressions, dead CLI Git helpers, stale React Doctor configuration, and verified-unused dependencies.</li>
+                <li>Simplify redundant feature aliases and duplicate script names.</li>
+              </ul>
+              <h4>Exit gate</h4>
+              <p>No production or test reference remains to the deleted domain concepts, schema resets cleanly, and supported first-push/settings workflows pass.</p>
+            </div>
+          </article>
+
+          <article class="phase" id="phase-2">
+            <div class="phase-head">
+              <div class="phase-number">2</div>
+              <div>
+                <h3>Collapse persistence to one implementation</h3>
+                <p class="phase-summary">Make Postgres the sole metadata runtime and remove catalog-era machinery.</p>
+              </div>
+              <div class="phase-budget">
+                <strong>−3,500 to −4,500</strong>
+                <span>Expected net deletion</span>
+              </div>
+            </div>
+            <div class="phase-body">
+              <h4>Postgres only</h4>
+              <ul>
+                <li>Delete <code>memory-metadata</code>, <code>MemoryMetadataStore</code>, and every memory/Postgres match branch.</li>
+                <li>Run local development and integration tests against disposable Postgres.</li>
+                <li>Keep pure domain tests on in-memory domain values without pretending they are a second database.</li>
+              </ul>
+              <h4>Native async API</h4>
+              <ul>
+                <li>Make <code>MetadataStore</code> methods async and await SeaORM on the server runtime.</li>
+                <li>Delete <code>DbRuntime</code>, <code>run_api_db_on</code>, <code>run_db_on</code>, the blocking sync channel, and leaked runtime.</li>
+              </ul>
+              <h4>Focused persistence</h4>
+              <ul>
+                <li>Delete production <code>MetadataStore::read</code> and full-catalog hydration.</li>
+                <li>Add focused queue, collaboration, user, request, repository, and blob-reference reads.</li>
+                <li>Replace the global catalog lock with affected-row or aggregate locks and database constraints.</li>
+                <li>Persist mutation-owned deltas instead of rewriting the whole repository aggregate.</li>
+              </ul>
+              <h4>Schema ownership</h4>
+              <ul>
+                <li>Choose one schema source; remove duplicated schema-contract machinery and unreachable preservation branches.</li>
+                <li>Use destructive pre-alpha reset rather than compatibility migration code.</li>
+                <li>Replace saturating row/domain conversion with checked fallible conversion.</li>
+              </ul>
+              <h4>Exit gate</h4>
+              <p>Local dev, API, worker, and tests use Postgres; no synchronous DB bridge or full-catalog production read remains; benchmark results do not regress materially.</p>
+            </div>
+          </article>
+
+          <article class="phase" id="phase-3">
+            <div class="phase-head">
+              <div class="phase-number">3</div>
+              <div>
+                <h3>Give policy and contracts one owner</h3>
+                <p class="phase-summary">Make adapters translate decisions instead of reimplementing them.</p>
+              </div>
+              <div class="phase-budget">
+                <strong>−500 to −900</strong>
+                <span>Expected net deletion</span>
+              </div>
+            </div>
+            <div class="phase-body">
+              <h4>Domain independence</h4>
+              <ul>
+                <li>Replace Axum-coupled <code>ApiError</code> in <code>scope-core</code> with typed domain/application errors.</li>
+                <li>Map errors to status codes, public messages, and diagnostic sources only in the API boundary.</li>
+                <li>Structurally enforce the crate boundary so the handwritten source lexer can later be deleted.</li>
+              </ul>
+              <h4>Policy consolidation</h4>
+              <ul>
+                <li>Create domain-owned request visibility, actor role, permissions, mergeability, and push-authorization decisions.</li>
+                <li>Move repository discoverability/readability to one domain capability owner and delete API/catalog copies.</li>
+                <li>Return allowed resolution options and settlement previews computed by the domain; delete TypeScript math.</li>
+              </ul>
+              <h4>Transport contract</h4>
+              <ul>
+                <li>Create a small API transport-contract crate shared by API and CLI; keep it separate from durable domain code.</li>
+                <li>Generate TypeScript from the shared contract and preserve the existing stale-contract check.</li>
+                <li>Add a six-variant resolution disposition, a typed Git OID, typed projection persistence encodings, and a generated SSE payload.</li>
+                <li>Centralize route templates and path-parameter encoding.</li>
+              </ul>
+              <h4>Exit gate</h4>
+              <p>Authorization and settlement decision tables have exactly one executable implementation, <code>scope-core</code> has no Axum dependency, and API/CLI/web contracts are drift-checked.</p>
+            </div>
+          </article>
+
+          <article class="phase" id="phase-4">
+            <div class="phase-head">
+              <div class="phase-number">4</div>
+              <div>
+                <h3>Simplify side effects, Git, and CLI orchestration</h3>
+                <p class="phase-summary">Replace manual cleanup and duplicate workflow owners with explicit lifecycles.</p>
+              </div>
+              <div class="phase-budget">
+                <strong>−800 to −1,200</strong>
+                <span>Expected net deletion</span>
+              </div>
+            </div>
+            <div class="phase-body">
+              <h4>External side effects</h4>
+              <ul>
+                <li>Change cleanup to claim in a short transaction, perform filesystem/S3 work outside it, then generation-check and reconcile.</li>
+                <li>Either implement due-time filtering/backoff/bounds for cleanup jobs or delete unused retry fields.</li>
+                <li>Require outbox completion to verify lease ownership and affected-row count.</li>
+              </ul>
+              <h4>Git receive</h4>
+              <ul>
+                <li>Wrap receive-pack staging repositories in one RAII cleanup guard.</li>
+                <li>Remove repeated <code>remove_dir_all</code> branches and extract shared upload/base-validation/persist/rollback choreography.</li>
+                <li>Keep bounded stderr, timeout, process-group kill, and child-wait behavior.</li>
+              </ul>
+              <h4>CLI</h4>
+              <ul>
+                <li>Delete the unused alternate push-intent workflow.</li>
+                <li>Thin <code>bin/scope.rs</code> into parse-and-dispatch with behavior-owned init, push, and login modules.</li>
+                <li>Preflight once into a prepared request rather than dispatching every request command twice.</li>
+                <li>Unify remote URL parsing, Git command/auth plans, header injection, execution, and temporary bundle ownership.</li>
+                <li>Use Git's config command and locking instead of appending raw config syntax.</li>
+              </ul>
+              <h4>Exit gate</h4>
+              <p>Temp resources are owned by guards, external I/O is outside metadata transactions, one CLI push flow remains, and Git/auth security tests pass.</p>
+            </div>
+          </article>
+
+          <article class="phase" id="phase-5">
+            <div class="phase-head">
+              <div class="phase-number">5</div>
+              <div>
+                <h3>Remove competing frontend state owners</h3>
+                <p class="phase-summary">Let routes own server state and focused components own local interaction state.</p>
+              </div>
+              <div class="phase-budget">
+                <strong>−600 to −900</strong>
+                <span>Expected net deletion</span>
+              </div>
+            </div>
+            <div class="phase-body">
+              <h4>Immediate correction</h4>
+              <ul>
+                <li>Remove the settings child live-refresh hook; the parent repository layout owns one SSE connection.</li>
+                <li>Delete the no-op <code>canUseRepoLiveRefresh</code> seam and its no-op test.</li>
+              </ul>
+              <h4>Data ownership</h4>
+              <ul>
+                <li>Choose route loader/search state as the single history owner and delete the parallel client fetch/reducer synchronization path.</li>
+                <li>Use loader data as repository collaboration source; mutate, then invalidate. Do not maintain a shadow copy unless a single explicit optimistic reducer is justified.</li>
+                <li>Move repository navigation/access derivation to the parent layout.</li>
+              </ul>
+              <h4>Component reduction</h4>
+              <ul>
+                <li>Split history and request detail only along behavior boundaries while deleting mega-prop and render-phase synchronization code.</li>
+                <li>Replace render-callback slots with direct <code>ReactNode</code> props.</li>
+                <li>Consolidate exact formatting/status helpers and derive badge tone types from the badge component.</li>
+              </ul>
+              <h4>Exit gate</h4>
+              <p>One SSE connection and one server-data owner exist per route tree, browser smoke tests pass, and component splits produce net deletion rather than file shuffling.</p>
+            </div>
+          </article>
+
+          <article class="phase" id="phase-6">
+            <div class="phase-head">
+              <div class="phase-number">6</div>
+              <div>
+                <h3>Consolidate test and tooling machinery</h3>
+                <p class="phase-summary">Preserve regression protection while deleting copied harnesses and duplicated automation.</p>
+              </div>
+              <div class="phase-budget">
+                <strong>−700 to −1,000</strong>
+                <span>Expected net deletion</span>
+              </div>
+            </div>
+            <div class="phase-body">
+              <h4>Test ownership</h4>
+              <ul>
+                <li>Move durable domain behavior tests to <code>scope-core</code> and import it directly.</li>
+                <li>Move API workflow tests out of <code>api/src</code> behind a narrow public integration-test harness.</li>
+                <li>Delete the handwritten Rust source lexer after crate dependencies enforce the boundary.</li>
+                <li>Replace copied/manual temporary-directory and Git fixture code with shared RAII fixtures.</li>
+                <li>Keep real Git protocol, binary roundtrip, projection privacy, auth, request-transition, and CLI boundary tests.</li>
+                <li>Add only a small Playwright smoke layer for the highest-value web workflows.</li>
+              </ul>
+              <h4>CI and deployment</h4>
+              <ul>
+                <li>Generate the CLI build matrix and expected artifacts from <code>targets.json</code>.</li>
+                <li>Run the web production build on pull requests and make CI invoke the canonical <code>pnpm check</code>.</li>
+                <li>Remove duplicated Railway upload trees and redundant toolchain version declarations.</li>
+                <li>Combine repeated workspace Rust checks where deployment dependencies permit.</li>
+              </ul>
+              <h4>Exit gate</h4>
+              <p>The full suite remains green, critical test scenarios remain discoverable, CI has one owner per check/target list, and final LOC is measured from the same baseline command.</p>
+            </div>
+          </article>
+        </section>
+
+        <section id="verification">
+          <p class="kicker">Verification strategy</p>
+          <h2>Every deletion must prove its replacement—or its irrelevance.</h2>
+          <table aria-label="Verification matrix">
+            <thead>
+              <tr>
+                <th>Boundary</th>
+                <th>Required verification</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td>Domain</td>
+                <td>Request transitions, settlement decision table, repository access, projection visibility, mutation effects</td>
+              </tr>
+              <tr>
+                <td>Persistence</td>
+                <td>Disposable Postgres integration tests, transaction/concurrency tests, schema reset, focused query semantics</td>
+              </tr>
+              <tr>
+                <td>API</td>
+                <td>Route/status/body contracts, auth concealment, SSE event contract, cleanup/admin behavior</td>
+              </tr>
+              <tr>
+                <td>Git</td>
+                <td>Clone/fetch/push, first push, member push, request refs, binary files, gzip, timeouts and cleanup</td>
+              </tr>
+              <tr>
+                <td>CLI</td>
+                <td>Init, auth, push, request lifecycle, review, token redaction and Git header injection</td>
+              </tr>
+              <tr>
+                <td>Web</td>
+                <td>Typecheck, generated contract, helper tests, one-SSE assertion, route smoke tests and production build</td>
+              </tr>
+              <tr>
+                <td>Operations</td>
+                <td>Worker outbox ownership, cleanup retry/reconcile, local dev boot/reset, Railway packaging checks</td>
+              </tr>
+            </tbody>
+          </table>
+          <pre><code>cargo fmt --all --check
+cargo test -p api -p scope-core -p worker --locked
+cargo clippy -p api -p scope-core -p worker --all-targets --locked -- -D warnings
+
+(cd cli && cargo fmt -- --check)
+(cd cli && cargo test)
+(cd cli && cargo clippy --all-targets --locked -- -D warnings)
+(cd cli && cargo build --release --locked)
+
+(cd web && pnpm check)
+(cd web && pnpm test)
+(cd web && pnpm build)
+
+./dev/scope-dev doctor
+./dev/scope-dev up
+./dev/scope-dev bench
+./dev/scope-dev down</code></pre>
+          <p>
+            Use focused checks during development, then run the complete matrix at each
+            phase boundary. Autoreview uses the repository-required 15-minute timeout.
+          </p>
+        </section>
+
+        <section id="risk">
+          <p class="kicker">Risk and rollback</p>
+          <h2>Sequence makes the campaign reversible.</h2>
+          <table aria-label="Risk controls">
+            <thead>
+              <tr>
+                <th>Risk</th>
+                <th>Control</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td>Deleting behavior disguised as dead code</td>
+                <td>Prove no production constructor/caller, then retain supported behavior characterization tests.</td>
+              </tr>
+              <tr>
+                <td>Memory/Postgres semantic drift during removal</td>
+                <td>Make Postgres tests authoritative before deleting memory branches; compare ordering and error behavior.</td>
+              </tr>
+              <tr>
+                <td>Async conversion spreads too broadly</td>
+                <td>Convert one persistence behavior family at a time; adapters await directly without sync wrappers.</td>
+              </tr>
+              <tr>
+                <td>Authorization drift</td>
+                <td>Decision-table tests precede consolidation; API concealment tests remain at the boundary.</td>
+              </tr>
+              <tr>
+                <td>LOC pressure weakens readability</td>
+                <td>Reject minification, giant files, hidden generated logic, or abstractions whose only purpose is reducing count.</td>
+              </tr>
+              <tr>
+                <td>Schema incompatibility</td>
+                <td>Use explicit destructive pre-alpha reset; do not add compatibility migrations.</td>
+              </tr>
+            </tbody>
+          </table>
+          <div class="statement warning">
+            Each phase should land independently. If a phase changes supported behavior,
+            stop and ask the owner rather than carrying an unapproved change into later
+            refactors. Rollback is phase-level revert plus disposable database reset.
+          </div>
+        </section>
+
+        <section id="preserve">
+          <p class="kicker">Preserve</p>
+          <h2>Good foundations stay.</h2>
+          <table aria-label="Patterns to preserve">
+            <thead>
+              <tr>
+                <th>Pattern</th>
+                <th>Decision</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td><code>RepoMutation</code> / <code>RepoEffects</code></td>
+                <td><span class="pill keep">Keep</span> Expand the explicit-side-effect pattern to notifications and cleanup receipts.</td>
+              </tr>
+              <tr>
+                <td>Generated Rust → TypeScript contract check</td>
+                <td><span class="pill keep">Keep</span> Extend it to the CLI/shared contract and SSE payload.</td>
+              </tr>
+              <tr>
+                <td>Durable cleanup/outbox rows</td>
+                <td><span class="pill keep">Keep</span> Repair claiming, retry, and ownership rather than returning to fire-and-forget work.</td>
+              </tr>
+              <tr>
+                <td>Git subprocess safety</td>
+                <td><span class="pill keep">Keep</span> Preserve bounded stderr, timeout, process-group termination, wait, and redaction.</td>
+              </tr>
+              <tr>
+                <td>Pure file-tree and diff parsing models</td>
+                <td><span class="pill keep">Keep</span> They already have focused ownership and tests.</td>
+              </tr>
+              <tr>
+                <td>Cross-platform CLI distribution</td>
+                <td><span class="pill keep">Keep</span> Consolidate metadata; do not reduce supported targets.</td>
+              </tr>
+            </tbody>
+          </table>
+        </section>
+
+        <section id="closeout">
+          <p class="kicker">Campaign closeout</p>
+          <h2>Definition of done.</h2>
+          <ol>
+            <li>The headline metric is 59,594 lines or fewer; 58,500 or fewer is the expected result.</li>
+            <li>The full verification matrix is green, including local Postgres development and browser smoke tests.</li>
+            <li>No pending-import or backend repository-settings concept remains.</li>
+            <li>No memory metadata backend, synchronous DB runtime bridge, or production full-catalog read remains.</li>
+            <li>Domain code has no Axum dependency and policy decision tables have one implementation.</li>
+            <li>External filesystem/S3 work occurs outside metadata transactions.</li>
+            <li>API, CLI, and web contracts are derived or drift-checked from one transport owner.</li>
+            <li>Frontend routes have one server-state owner and repository layout has one SSE subscription.</li>
+            <li>The final summary reports deleted, added, net, and cumulative lines per phase.</li>
+          </ol>
+          <div class="statement">
+            Expected finish: 56,500–58,500 hand-owned lines, approximately 12–15%
+            smaller than the July 9 baseline, with unchanged supported behavior and
+            materially clearer domain, persistence, adapter, and test ownership.
+          </div>
+        </section>
+      </main>
+    </div>
+
+    <footer>
+      <strong>Scope VCS maintainability and line reduction plan.</strong>
+      Baseline measured July 9, 2026. This plan intentionally excludes generated
+      code and documentation from its LOC reward metric.
+    </footer>
+  </body>
+</html>

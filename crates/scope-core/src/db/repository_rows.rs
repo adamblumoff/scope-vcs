@@ -1,6 +1,6 @@
 use super::{entities, outbox::enqueue_projection_read_model_rebuild};
 use crate::{
-    domain::store::{FirstPushToken, GitPushToken, RepoSettings, SourceBlob, StoredRepository},
+    domain::store::{FirstPushToken, GitPushToken, SourceBlob, StoredRepository},
     error::ApiError,
 };
 use sea_orm::{
@@ -11,23 +11,18 @@ use std::collections::BTreeMap;
 
 #[derive(Default)]
 pub struct RepositoryFactRows {
-    pub settings: Option<RepoSettings>,
     pub first_push_token: Option<FirstPushToken>,
     pub git_push_token: Option<GitPushToken>,
     pub git_snapshot: Option<SourceBlob>,
 }
 
 impl RepositoryFactRows {
-    pub fn into_required(self, repo_id: &str) -> Result<entities::RepositoryFacts, ApiError> {
-        let settings = self.settings.ok_or_else(|| {
-            ApiError::internal_message(format!("repository settings missing for {repo_id}"))
-        })?;
-        Ok(entities::RepositoryFacts {
-            settings,
+    pub fn into_facts(self) -> entities::RepositoryFacts {
+        entities::RepositoryFacts {
             first_push_token: self.first_push_token,
             git_push_token: self.git_push_token,
             git_snapshot: self.git_snapshot,
-        })
+        }
     }
 }
 
@@ -79,10 +74,6 @@ where
             Expr::value(row.repo_config),
         )
         .col_expr(
-            entities::repository::Column::PendingImport,
-            Expr::value(row.pending_import),
-        )
-        .col_expr(
             entities::repository::Column::Policy,
             Expr::value(row.policy),
         )
@@ -106,12 +97,6 @@ where
 {
     let repo_id = repo.record.id.clone();
     delete_repository_fact_rows(conn, &repo_id).await?;
-
-    entities::repository_setting::Model::from_domain(&repo_id, repo.settings)
-        .into_active_model()
-        .insert(conn)
-        .await
-        .map_err(ApiError::internal)?;
 
     if let Some(token) = repo.first_push_token.as_ref() {
         entities::repository_first_push_token::Model::from_domain(&repo_id, token)
@@ -142,11 +127,6 @@ async fn delete_repository_fact_rows<C>(conn: &C, repo_id: &str) -> Result<(), A
 where
     C: ConnectionTrait,
 {
-    entities::repository_setting::Entity::delete_many()
-        .filter(entities::repository_setting::Column::RepoId.eq(repo_id.to_string()))
-        .exec(conn)
-        .await
-        .map_err(ApiError::internal)?;
     entities::repository_first_push_token::Entity::delete_many()
         .filter(entities::repository_first_push_token::Column::RepoId.eq(repo_id.to_string()))
         .exec(conn)
@@ -211,18 +191,6 @@ where
         .collect::<BTreeMap<_, _>>();
     if repo_ids.is_empty() {
         return Ok(facts);
-    }
-
-    let settings = entities::repository_setting::Entity::find()
-        .filter(entities::repository_setting::Column::RepoId.is_in(repo_ids.to_vec()))
-        .order_by_asc(entities::repository_setting::Column::RepoId)
-        .all(conn)
-        .await
-        .map_err(ApiError::internal)?;
-    for row in settings {
-        if let Some(fact) = facts.get_mut(&row.repo_id) {
-            fact.settings = Some(row.into_domain());
-        }
     }
 
     let first_push_tokens = entities::repository_first_push_token::Entity::find()

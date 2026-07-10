@@ -36,7 +36,7 @@ export function RequestsPage({
     >
       <PageContent>
         <PageHeader
-          badges={() => (
+          badges={(
             <>
               <LifecycleBadge state={repo.lifecycle_state} />
               <Badge variant="neutral">{repo.access.actor}</Badge>

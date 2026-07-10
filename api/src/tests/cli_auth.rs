@@ -293,7 +293,7 @@ async fn list_cli_sessions_does_not_refresh_clerk_user_snapshot() {
         email: Some(TEST_OWNER_EMAIL.to_string()),
         email_verified: true,
     };
-    state.metadata.resolve_clerk_user(&identity).unwrap();
+    state.metadata.resolve_clerk_user(&identity).await.unwrap();
 
     let response = router(state.clone())
         .oneshot(
@@ -324,7 +324,7 @@ async fn cli_exchange_grant_reconciles_clerk_snapshot_before_minting_session() {
         email: Some(TEST_OWNER_EMAIL.to_string()),
         email_verified: true,
     };
-    state.metadata.resolve_clerk_user(&identity).unwrap();
+    state.metadata.resolve_clerk_user(&identity).await.unwrap();
     let app = router(state.clone());
 
     let grant = app

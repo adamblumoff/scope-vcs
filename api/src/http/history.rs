@@ -12,7 +12,7 @@ use crate::{
         responses::{
             CommitFileDiffRequest, CommitHistoryRequest, ProjectionPreviewAudience,
             ProjectionPreviewSource, ReviewFileDiffResponse, commit_detail_response,
-            commit_history_response, pending_scope_path,
+            commit_history_response, repo_scope_path,
         },
     },
     object_store::ObjectStore,
@@ -76,7 +76,7 @@ pub(crate) async fn get_commit_file_diff(
         history_view_key(audience),
     );
     let commit = commit_for_id(&view.commits, &commit_id)?;
-    let path = pending_scope_path(&input.path)?;
+    let path = repo_scope_path(&input.path)?;
     let file = commit
         .files
         .iter()
@@ -96,7 +96,7 @@ async fn repo_and_audience(
     repo_name: &str,
     input: CommitHistoryRequest,
 ) -> Result<(StoredRepository, ProjectionPreviewAudience), ApiError> {
-    let repo = find_repo(state, owner, repo_name)?;
+    let repo = find_repo(state, owner, repo_name).await?;
     let audience = input.audience.unwrap_or(ProjectionPreviewAudience::Public);
     let user = optional_scope_user(state, headers).await?;
     let requester = principal_for_scope_user(&repo, user.as_ref());

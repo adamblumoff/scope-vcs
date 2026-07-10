@@ -1,8 +1,7 @@
 use super::{
     policy::{Principal, ScopePath, Visibility},
     projection::{Projection, ProjectionViewKey, project_graph},
-    store::pending_import_scope_path,
-    store::{SourceBlob, StoredRepository},
+    store::{SourceBlob, StoredRepository, repo_relative_scope_path},
 };
 use crate::error::ApiError;
 use sha1::{Digest, Sha1};
@@ -238,44 +237,15 @@ pub fn projected_file_content(
     })
 }
 
-pub fn pending_import_files(
-    repo: &StoredRepository,
-    principal: &Principal,
-) -> Result<Vec<ProjectionViewFile>, ApiError> {
-    let Some(pending) = repo.pending_import.as_ref() else {
-        return Ok(Vec::new());
-    };
-    let mut files = Vec::new();
-    for file in &pending.files {
-        let path = pending_scope_path(&file.path)?;
-        let access = repo.access_for_principal(principal);
-        if !repo.policy.can_read(&path, access.can_read_private_files) {
-            continue;
-        }
-        files.push(ProjectionViewFile {
-            oid: file.oid.clone(),
-            tracked: true,
-            visibility: repo.policy.effective_visibility(&path),
-            path,
-        });
-    }
-    files.sort_by(|left, right| left.path.cmp(&right.path));
-    Ok(files)
-}
-
 pub fn files_for_visibility_update(
     repo: &StoredRepository,
     principal: &Principal,
 ) -> Result<Vec<ProjectionViewFile>, ApiError> {
-    if repo.has_pending_import_review() {
-        pending_import_files(repo, principal)
-    } else {
-        Ok(projected_files(repo, principal))
-    }
+    Ok(projected_files(repo, principal))
 }
 
-pub fn pending_scope_path(path: &str) -> Result<ScopePath, ApiError> {
-    pending_import_scope_path(path).map_err(ApiError::bad_request)
+pub fn repo_scope_path(path: &str) -> Result<ScopePath, ApiError> {
+    repo_relative_scope_path(path).map_err(ApiError::bad_request)
 }
 
 pub fn has_visible_projected_files(repo: &StoredRepository, principal: &Principal) -> bool {

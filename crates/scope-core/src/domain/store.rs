@@ -45,7 +45,6 @@ pub struct RepositoryAccess {
     pub can_push: bool,
     pub can_change_file_visibility: bool,
     pub can_apply_changes: bool,
-    pub can_update_repo_settings: bool,
     pub can_manage_members: bool,
     pub can_delete_repo: bool,
 }
@@ -58,7 +57,6 @@ impl RepositoryAccess {
             can_push: false,
             can_change_file_visibility: false,
             can_apply_changes: false,
-            can_update_repo_settings: false,
             can_manage_members: false,
             can_delete_repo: false,
         }
@@ -125,24 +123,6 @@ pub struct RepoStorageCleanup {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub struct PendingImportFile {
-    pub path: String,
-    pub mode: String,
-    pub oid: String,
-    pub blob: SourceBlob,
-}
-
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub struct PendingImport {
-    pub default_branch: String,
-    pub head_oid: String,
-    pub tree_oid: String,
-    pub imported_at_unix: u64,
-    pub git_snapshot: SourceBlob,
-    pub files: Vec<PendingImportFile>,
-}
-
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct RepoRecord {
     pub id: String,
     pub owner_handle: String,
@@ -151,21 +131,6 @@ pub struct RepoRecord {
     pub publication_state: RepoPublicationState,
     pub default_visibility: Visibility,
     pub change_version: u64,
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub struct RepoSettings {
-    pub include_ignored_files: bool,
-    pub review_pushes_before_applying: bool,
-}
-
-impl Default for RepoSettings {
-    fn default() -> Self {
-        Self {
-            include_ignored_files: false,
-            review_pushes_before_applying: true,
-        }
-    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -215,11 +180,9 @@ pub struct RepositoryInvite {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct StoredRepository {
     pub record: RepoRecord,
-    pub settings: RepoSettings,
     pub repo_config: RepoConfig,
     pub first_push_token: Option<FirstPushToken>,
     pub git_push_token: Option<GitPushToken>,
-    pub pending_import: Option<PendingImport>,
     pub policy: Policy,
     pub graph: SourceGraph,
     pub visibility_events: Vec<VisibilityEvent>,
@@ -247,11 +210,9 @@ impl StoredRepository {
                 default_visibility,
                 change_version: 1,
             },
-            settings: RepoSettings::default(),
             repo_config: RepoConfig::with_default_visibility(config_default),
             first_push_token: None,
             git_push_token: None,
-            pending_import: None,
             policy: Policy::new(default_visibility),
             graph: SourceGraph {
                 repo_id: id.clone(),
@@ -289,7 +250,6 @@ impl StoredRepository {
                 can_push: published,
                 can_change_file_visibility: true,
                 can_apply_changes: true,
-                can_update_repo_settings: true,
                 can_manage_members: published,
                 can_delete_repo: true,
             };
@@ -305,7 +265,6 @@ impl StoredRepository {
             can_push: published && permissions.can_push,
             can_change_file_visibility: published && permissions.can_change_file_visibility,
             can_apply_changes: published && permissions.can_apply_changes,
-            can_update_repo_settings: false,
             can_manage_members: false,
             can_delete_repo: false,
         }
@@ -313,12 +272,6 @@ impl StoredRepository {
 
     pub fn is_waiting_for_first_push(&self) -> bool {
         self.record.publication_state == RepoPublicationState::Unpublished
-            && self.pending_import.is_none()
-    }
-
-    pub fn has_pending_import_review(&self) -> bool {
-        self.record.publication_state == RepoPublicationState::Unpublished
-            && self.pending_import.is_some()
     }
 
     pub fn graph_has_file(&self, path: &ScopePath) -> bool {
@@ -352,10 +305,6 @@ impl StoredRepository {
 
     pub fn source_blobs(&self) -> Vec<SourceBlob> {
         let mut blobs = Vec::new();
-        if let Some(pending) = &self.pending_import {
-            blobs.push(pending.git_snapshot.clone());
-            blobs.extend(pending.files.iter().map(|file| file.blob.clone()));
-        }
         blobs.extend(self.git_snapshot.clone());
         for change in self.graph.commits.iter().flat_map(|commit| &commit.changes) {
             blobs.extend(change.old_content.clone());
@@ -368,21 +317,7 @@ impl StoredRepository {
     }
 
     pub fn has_file_for_visibility_update(&self, path: &ScopePath) -> bool {
-        if self.has_pending_import_review() {
-            self.pending_import_has_file(path)
-        } else {
-            self.graph_has_file(path)
-        }
-    }
-
-    fn pending_import_has_file(&self, path: &ScopePath) -> bool {
-        self.pending_import.as_ref().is_some_and(|pending| {
-            pending.files.iter().any(|file| {
-                pending_import_scope_path(&file.path)
-                    .map(|pending_path| pending_path.as_str() == path.as_str())
-                    .unwrap_or(false)
-            })
-        })
+        self.graph_has_file(path)
     }
 }
 
@@ -484,7 +419,7 @@ pub fn repo_id(owner: &str, name: &str) -> String {
     )
 }
 
-pub fn pending_import_scope_path(path: &str) -> Result<ScopePath, PolicyError> {
+pub fn repo_relative_scope_path(path: &str) -> Result<ScopePath, PolicyError> {
     let path = if path.starts_with('/') {
         path.to_string()
     } else {

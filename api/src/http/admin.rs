@@ -82,7 +82,7 @@ pub(crate) async fn get_cleanup_status(
     headers: HeaderMap,
 ) -> Result<Json<AdminCleanupStatusResponse>, ApiError> {
     ensure_operator(&state, &headers)?;
-    cleanup_status(&state).map(Json)
+    cleanup_status(&state).await.map(Json)
 }
 
 pub(crate) async fn drain_cleanup(
@@ -90,7 +90,7 @@ pub(crate) async fn drain_cleanup(
     headers: HeaderMap,
 ) -> Result<(StatusCode, Json<CleanupDrainResponse>), ApiError> {
     ensure_operator(&state, &headers)?;
-    let report = drain_pending_cleanup(&state)?;
+    let report = drain_pending_cleanup(&state).await?;
     let has_failures = report.has_failures();
     Ok((
         if has_failures {
@@ -123,19 +123,14 @@ pub(crate) async fn reset_metadata(
         .map(str::trim)
         .filter(|value| !value.is_empty())
         .unwrap_or("operator requested pre-alpha metadata reset");
-    let event = state.metadata.reset_catalog(reason)?;
+    let event = state.metadata.reset_catalog(reason).await?;
     Ok(Json(MetadataResetResponse { event }))
 }
 
-fn cleanup_status(state: &AppState) -> Result<AdminCleanupStatusResponse, ApiError> {
-    let (repo_storage, source_blob_deletes) = state.metadata.read(|catalog| {
-        Ok((
-            catalog.pending_repo_storage_deletions.clone(),
-            catalog.pending_source_blob_deletions.clone(),
-        ))
-    })?;
+async fn cleanup_status(state: &AppState) -> Result<AdminCleanupStatusResponse, ApiError> {
+    let (repo_storage, source_blob_deletes) = state.metadata.pending_cleanup_queues().await?;
     let source_blob_deletes = SourceBlobCleanupQueueResponse::from_blobs(&source_blob_deletes);
-    let reset_events = state.metadata.metadata_reset_events()?;
+    let reset_events = state.metadata.metadata_reset_events().await?;
     Ok(AdminCleanupStatusResponse {
         pending_cleanup: PendingCleanupResponse {
             repo_storage: RepoStorageCleanupQueueResponse::from_cleanups(&repo_storage),

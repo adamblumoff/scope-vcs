@@ -45,7 +45,7 @@ async fn admin_cleanup_requires_configured_operator_token() {
 #[tokio::test]
 async fn admin_cleanup_status_shows_pending_cleanup_and_reset_events() {
     let state = operator_state();
-    let reset_event = state.metadata.reset_catalog("test reset").unwrap();
+    let reset_event = state.metadata.reset_catalog("test reset").await.unwrap();
     let pending_blob = put_source_blob(state.object_store.as_ref(), TEST_REPO_ID, b"pending")
         .expect("pending blob is stored");
     let pending_blob_key = pending_blob.object_key.clone();
@@ -121,6 +121,7 @@ async fn admin_cleanup_drain_deletes_pending_source_blobs() {
         state
             .metadata
             .read(|catalog| Ok(catalog.pending_source_blob_deletions.is_empty()))
+            .await
             .unwrap()
     );
 }
@@ -166,6 +167,7 @@ async fn admin_cleanup_drain_reports_failed_object_deletes() {
                 .pending_source_blob_deletions
                 .iter()
                 .any(|blob| blob.object_key == pending_blob_key)))
+            .await
             .unwrap()
     );
 }
@@ -193,6 +195,7 @@ async fn admin_metadata_reset_requires_confirmation_and_clears_catalog() {
         state
             .metadata
             .read(|catalog| Ok(catalog.repositories.contains_key(TEST_REPO_ID)))
+            .await
             .unwrap()
     );
 
@@ -220,9 +223,13 @@ async fn admin_metadata_reset_requires_confirmation_and_clears_catalog() {
             .read(|catalog| Ok(catalog.repositories.is_empty()
                 && catalog.pending_repo_storage_deletions.is_empty()
                 && catalog.pending_source_blob_deletions.is_empty()))
+            .await
             .unwrap()
     );
-    assert_eq!(state.metadata.metadata_reset_events().unwrap().len(), 1);
+    assert_eq!(
+        state.metadata.metadata_reset_events().await.unwrap().len(),
+        1
+    );
 }
 
 fn operator_state() -> AppState {
@@ -238,17 +245,19 @@ fn operator_auth() -> String {
 struct DeleteFailsObjectStore;
 
 impl crate::object_store::ObjectStore for DeleteFailsObjectStore {
-    fn put(&self, _key: &str, _bytes: &[u8]) -> Result<(), crate::error::ApiError> {
+    fn put(&self, _key: &str, _bytes: &[u8]) -> Result<(), scope_core::error::ApiError> {
         Ok(())
     }
 
-    fn get(&self, key: &str) -> Result<Vec<u8>, crate::error::ApiError> {
-        Err(crate::error::ApiError::not_found(format!(
+    fn get(&self, key: &str) -> Result<Vec<u8>, scope_core::error::ApiError> {
+        Err(scope_core::error::ApiError::not_found(format!(
             "object {key} not found"
         )))
     }
 
-    fn delete(&self, _key: &str) -> Result<(), crate::error::ApiError> {
-        Err(crate::error::ApiError::service_unavailable("delete failed"))
+    fn delete(&self, _key: &str) -> Result<(), scope_core::error::ApiError> {
+        Err(scope_core::error::ApiError::service_unavailable(
+            "delete failed",
+        ))
     }
 }

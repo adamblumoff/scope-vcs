@@ -180,13 +180,13 @@ export function RepoSettingsPage({
     >
       <PageContent>
         <PageHeader
-          badges={() => (
+          badges={(
             <>
               <LifecycleBadge state={repo.lifecycle_state} />
               <Badge variant="neutral">{repo.access.actor}</Badge>
             </>
           )}
-          description={() => (
+          description={(
             <Link
               className="font-mono underline underline-offset-4 hover:text-foreground"
               params={{ owner: repo.owner_handle, repo: repo.name }}

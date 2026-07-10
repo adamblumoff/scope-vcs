@@ -6,42 +6,66 @@
       "artifact": "scope-x86_64-unknown-linux-gnu",
       "os": "linux",
       "arch": "x64",
-      "label": "Linux x64"
+      "label": "Linux x64",
+      "runner": "ubuntu-latest",
+      "binary": "target/x86_64-unknown-linux-gnu/release/scope",
+      "builder": "cargo",
+      "smoke": true
     },
     {
       "triple": "aarch64-unknown-linux-gnu",
       "artifact": "scope-aarch64-unknown-linux-gnu",
       "os": "linux",
       "arch": "arm64",
-      "label": "Linux ARM64"
+      "label": "Linux ARM64",
+      "runner": "ubuntu-latest",
+      "binary": "target/aarch64-unknown-linux-gnu/release/scope",
+      "builder": "cross",
+      "smoke": false
     },
     {
       "triple": "x86_64-apple-darwin",
       "artifact": "scope-x86_64-apple-darwin",
       "os": "macos",
       "arch": "x64",
-      "label": "macOS Intel"
+      "label": "macOS Intel",
+      "runner": "macos-15-intel",
+      "binary": "target/x86_64-apple-darwin/release/scope",
+      "builder": "cargo",
+      "smoke": true
     },
     {
       "triple": "aarch64-apple-darwin",
       "artifact": "scope-aarch64-apple-darwin",
       "os": "macos",
       "arch": "arm64",
-      "label": "macOS Apple Silicon"
+      "label": "macOS Apple Silicon",
+      "runner": "macos-15",
+      "binary": "target/aarch64-apple-darwin/release/scope",
+      "builder": "cargo",
+      "smoke": true
     },
     {
       "triple": "x86_64-pc-windows-msvc",
       "artifact": "scope-x86_64-pc-windows-msvc.exe",
       "os": "windows",
       "arch": "x64",
-      "label": "Windows x64"
+      "label": "Windows x64",
+      "runner": "windows-latest",
+      "binary": "target/x86_64-pc-windows-msvc/release/scope.exe",
+      "builder": "cargo",
+      "smoke": true
     },
     {
       "triple": "aarch64-pc-windows-msvc",
       "artifact": "scope-aarch64-pc-windows-msvc.exe",
       "os": "windows",
       "arch": "arm64",
-      "label": "Windows ARM64"
+      "label": "Windows ARM64",
+      "runner": "windows-latest",
+      "binary": "target/aarch64-pc-windows-msvc/release/scope.exe",
+      "builder": "cargo",
+      "smoke": false
     }
   ]
 }

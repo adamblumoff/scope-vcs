@@ -5,13 +5,13 @@ import type {
   MergeRequestInput,
   NeedsResponseInput,
   RequestParams,
-  RequestWorkflowDisposition,
+  RequestWorkflowResolutionDisposition,
   ResolveRequestInput,
   RespondRequestInput,
   RemoveRequestEditorInput,
 } from './types'
 
-const RESOLVE_DISPOSITIONS = new Set<RequestWorkflowDisposition>([
+const RESOLVE_DISPOSITIONS = new Set<RequestWorkflowResolutionDisposition>([
   'UsefulNotMerged',
   'HiddenContext',
   'NotAligned',
@@ -60,14 +60,14 @@ export function parseResolveRequestInput(input: unknown): ResolveRequestInput {
   const data = input as Partial<ResolveRequestInput> | null
   const disposition = data?.disposition
 
-  if (!RESOLVE_DISPOSITIONS.has(disposition as RequestWorkflowDisposition)) {
+  if (!RESOLVE_DISPOSITIONS.has(disposition as RequestWorkflowResolutionDisposition)) {
     throw new Error('Unsupported request disposition.')
   }
 
   return {
     ...parseRequestParams(input),
     body: parseOptionalBody(input),
-    disposition: disposition as RequestWorkflowDisposition,
+    disposition: disposition as RequestWorkflowResolutionDisposition,
   }
 }
 

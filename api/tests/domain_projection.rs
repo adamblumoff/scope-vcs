@@ -4,17 +4,83 @@ use api::domain::{
         AuthorVisibility, FileChange, LogicalCommit, ProjectionViewKey, SourceGraph,
         VisibilityEvent, project_graph,
     },
-    repo_config::RepoConfig,
+    repo_config::{
+        ConfigVisibility, HistoryRewriteAction, HistoryRewriteRequest, RepoConfig,
+        RepoConfigVisibilityRule,
+    },
     reviewed_updates::{
         ReviewedConfigUpdateInput, ReviewedContentChange, ReviewedUpdateInput,
         apply_reviewed_config_to_repo, apply_reviewed_update_to_repo,
     },
-    store::{RepoPublicationState, StoredRepository, UserAccount},
+    store::{RepoPublicationState, SourceBlob, StoredRepository, UserAccount},
 };
 use api::object_store::{MemoryObjectStore, put_source_blob};
 
-fn blob(content: &str) -> api::domain::store::SourceBlob {
+fn blob(content: &str) -> SourceBlob {
     put_source_blob(&MemoryObjectStore::new(), "scope", content.as_bytes()).unwrap()
+}
+
+fn path(value: &str) -> ScopePath {
+    ScopePath::parse(value).unwrap()
+}
+
+fn change(
+    path_value: &str,
+    visibility: Visibility,
+    old_content: Option<SourceBlob>,
+    new_content: Option<SourceBlob>,
+) -> FileChange {
+    FileChange {
+        visibility,
+        path: path(path_value),
+        old_content,
+        new_content,
+    }
+}
+
+fn added(path_value: &str, visibility: Visibility, content: &str) -> FileChange {
+    change(path_value, visibility, None, Some(blob(content)))
+}
+
+fn commit(id: &str, parent_id: Option<&str>, message: &str, change: FileChange) -> LogicalCommit {
+    LogicalCommit {
+        id: id.to_string(),
+        parent_ids: parent_id.into_iter().map(str::to_string).collect(),
+        author_id: "owner".to_string(),
+        author_visibility: AuthorVisibility::Visible,
+        message: message.to_string(),
+        changes: vec![change],
+    }
+}
+
+fn graph(commits: Vec<LogicalCommit>) -> SourceGraph {
+    SourceGraph {
+        repo_id: "scope".to_string(),
+        commits,
+    }
+}
+
+fn visibility_event(
+    id: &str,
+    after_commit_id: Option<&str>,
+    source_commit_id: Option<&str>,
+    path_value: &str,
+    new_visibility: Visibility,
+    current_content: SourceBlob,
+) -> VisibilityEvent {
+    VisibilityEvent {
+        id: id.to_string(),
+        after_commit_id: after_commit_id.map(str::to_string),
+        source_commit_id: source_commit_id.map(str::to_string),
+        author_id: "owner".to_string(),
+        path: path(path_value),
+        old_visibility: match new_visibility {
+            Visibility::Public => Visibility::Private,
+            Visibility::Private => Visibility::Public,
+        },
+        new_visibility,
+        current_content: Some(current_content),
+    }
 }
 
 fn fixture_policy() -> Policy {
@@ -42,45 +108,95 @@ fn published_test_repo(default_visibility: Visibility) -> StoredRepository {
     repo
 }
 
-fn parse_config(json: &[u8]) -> RepoConfig {
-    RepoConfig::parse_json(json).unwrap()
+fn published_repo_with_public_file(message: &str, path: &str, content: &str) -> StoredRepository {
+    let mut repo = published_test_repo(Visibility::Public);
+    repo.graph.commits.push(commit(
+        "rv1",
+        None,
+        message,
+        added(path, Visibility::Public, content),
+    ));
+    repo
+}
+
+fn config(
+    default: Visibility,
+    rule: Option<(&str, Visibility)>,
+    rewrite_path: Option<&str>,
+) -> RepoConfig {
+    let mut config = RepoConfig::with_default_visibility(ConfigVisibility::from(default));
+    config.visibility.rules = rule
+        .into_iter()
+        .map(|(path, visibility)| RepoConfigVisibilityRule {
+            path: path.to_string(),
+            visibility: ConfigVisibility::from(visibility),
+        })
+        .collect();
+    config.history.rewrites = rewrite_path
+        .into_iter()
+        .map(|path| HistoryRewriteRequest {
+            path: path.to_string(),
+            action: HistoryRewriteAction::RedactPublicHistory,
+        })
+        .collect();
+    config.validate().unwrap();
+    config
+}
+
+fn project_repo(
+    repo: &StoredRepository,
+    view_key: ProjectionViewKey,
+) -> api::domain::projection::Projection {
+    project_graph(&repo.policy, &repo.graph, &repo.visibility_events, view_key)
+}
+
+fn reviewed_change(path_value: &str, content: Option<&str>) -> ReviewedContentChange {
+    ReviewedContentChange {
+        path: path(path_value),
+        content: content.map(blob),
+    }
+}
+
+fn apply_update(
+    repo: &mut StoredRepository,
+    message: &str,
+    changes: Vec<ReviewedContentChange>,
+    previous_config: Option<RepoConfig>,
+    config: RepoConfig,
+) {
+    apply_reviewed_update_to_repo(
+        repo,
+        ReviewedUpdateInput {
+            branch: "main".to_string(),
+            author_id: "owner".to_string(),
+            message: message.to_string(),
+            git_snapshot: blob("snapshot v2"),
+            changes,
+            previous_config,
+            config,
+        },
+    )
+    .unwrap();
 }
 
 #[test]
 fn config_only_update_changes_policy_without_content_commit() {
     let mut repo = published_test_repo(Visibility::Private);
-    repo.graph.commits.push(LogicalCommit {
-        id: "rv1".to_string(),
-        parent_ids: Vec::new(),
-        author_id: "owner".to_string(),
-        author_visibility: AuthorVisibility::Visible,
-        message: "initial".to_string(),
-        changes: vec![FileChange {
-            visibility: Visibility::Private,
-            path: ScopePath::parse("/README.md").unwrap(),
-            old_content: None,
-            new_content: Some(blob("hello")),
-        }],
-    });
+    repo.graph.commits.push(commit(
+        "rv1",
+        None,
+        "initial",
+        added("/README.md", Visibility::Private, "hello"),
+    ));
 
     let changed = apply_reviewed_config_to_repo(
         &mut repo,
         ReviewedConfigUpdateInput {
             author_id: "owner".to_string(),
-            config: parse_config(
-                br#"{
-                    "kind": "scope.repo-config",
-                    "version": 1,
-                    "visibility": {
-                        "default": "private",
-                        "rules": [
-                            { "path": "/README.md", "visibility": "public" }
-                        ]
-                    },
-                    "history": {
-                        "rewrites": []
-                    }
-                }"#,
+            config: config(
+                Visibility::Private,
+                Some(("/README.md", Visibility::Public)),
+                None,
             ),
         },
     )
@@ -89,45 +205,30 @@ fn config_only_update_changes_policy_without_content_commit() {
     assert!(changed);
     assert_eq!(repo.graph.commits.len(), 1);
     assert_eq!(
-        repo.policy
-            .effective_visibility(&ScopePath::parse("/README.md").unwrap()),
+        repo.policy.effective_visibility(&path("/README.md")),
         Visibility::Public
     );
     assert_eq!(repo.visibility_events.len(), 1);
     assert_eq!(repo.visibility_events[0].source_commit_id, None);
     assert_eq!(
-        repo.repo_config
-            .visibility_for_path(&ScopePath::parse("/README.md").unwrap()),
+        repo.repo_config.visibility_for_path(&path("/README.md")),
         Visibility::Public
     );
 }
 
 #[test]
 fn public_projection_contains_only_visible_paths_from_mixed_commit() {
-    let graph = SourceGraph {
-        repo_id: "scope".to_string(),
-        commits: vec![LogicalCommit {
-            id: "rv1".to_string(),
-            parent_ids: vec![],
-            author_id: "owner".to_string(),
-            author_visibility: AuthorVisibility::Hidden,
-            message: "mixed".to_string(),
-            changes: vec![
-                FileChange {
-                    visibility: Visibility::Public,
-                    path: ScopePath::parse("/README.md").unwrap(),
-                    old_content: None,
-                    new_content: Some(blob("hello")),
-                },
-                FileChange {
-                    visibility: Visibility::Private,
-                    path: ScopePath::parse("/internal/model.rs").unwrap(),
-                    old_content: None,
-                    new_content: Some(blob("secret")),
-                },
-            ],
-        }],
-    };
+    let mut mixed = commit(
+        "rv1",
+        None,
+        "mixed",
+        added("/README.md", Visibility::Public, "hello"),
+    );
+    mixed.author_visibility = AuthorVisibility::Hidden;
+    mixed
+        .changes
+        .push(added("/internal/model.rs", Visibility::Private, "secret"));
+    let graph = graph(vec![mixed]);
 
     let projection = project_graph(&fixture_policy(), &graph, &[], ProjectionViewKey::Public);
 
@@ -145,23 +246,12 @@ fn public_projection_keeps_public_history_when_policy_later_marks_path_private()
             ScopePath::parse("/README.md").unwrap(),
         ))
         .unwrap();
-    let public_blob = blob("public readme");
-    let graph = SourceGraph {
-        repo_id: "scope".to_string(),
-        commits: vec![LogicalCommit {
-            id: "rv1".to_string(),
-            parent_ids: vec![],
-            author_id: "owner".to_string(),
-            author_visibility: AuthorVisibility::Visible,
-            message: "public readme".to_string(),
-            changes: vec![FileChange {
-                visibility: Visibility::Public,
-                path: ScopePath::parse("/README.md").unwrap(),
-                old_content: None,
-                new_content: Some(public_blob),
-            }],
-        }],
-    };
+    let graph = graph(vec![commit(
+        "rv1",
+        None,
+        "public readme",
+        added("/README.md", Visibility::Public, "public readme"),
+    )]);
 
     let projection = project_graph(&policy, &graph, &[], ProjectionViewKey::Public);
 
@@ -172,76 +262,25 @@ fn public_projection_keeps_public_history_when_policy_later_marks_path_private()
 
 #[test]
 fn destructive_rewrite_removes_old_public_history_for_changed_path() {
-    let mut repo = published_test_repo(Visibility::Public);
-    let leaked = blob("leaked secret");
-    repo.graph.commits.push(LogicalCommit {
-        id: "rv1".to_string(),
-        parent_ids: Vec::new(),
-        author_id: "owner".to_string(),
-        author_visibility: AuthorVisibility::Visible,
-        message: "leaked".to_string(),
-        changes: vec![FileChange {
-            visibility: Visibility::Public,
-            path: ScopePath::parse("/leaked.txt").unwrap(),
-            old_content: None,
-            new_content: Some(leaked.clone()),
-        }],
-    });
+    let mut repo = published_repo_with_public_file("leaked", "/leaked.txt", "leaked secret");
 
-    apply_reviewed_update_to_repo(
+    apply_update(
         &mut repo,
-        ReviewedUpdateInput {
-            branch: "main".to_string(),
-            author_id: "owner".to_string(),
-            message: "sanitize leaked file".to_string(),
-            git_snapshot: blob("snapshot v2"),
-            changes: vec![
-                ReviewedContentChange {
-                    path: ScopePath::parse("/leaked.txt").unwrap(),
-                    content: Some(blob("sanitized public content")),
-                },
-                ReviewedContentChange {
-                    path: ScopePath::parse("/.scope/repo.json").unwrap(),
-                    content: Some(blob("config v2")),
-                },
-            ],
-            previous_config: None,
-            config: parse_config(
-                br#"{
-                    "kind": "scope.repo-config",
-                    "version": 1,
-                    "visibility": {
-                        "default": "private",
-                        "rules": [
-                            { "path": "/leaked.txt", "visibility": "public" }
-                        ]
-                    },
-                    "history": {
-                        "rewrites": [
-                            {
-                                "path": "/leaked.txt",
-                                "action": "redact-public-history"
-                            }
-                        ]
-                    }
-                }"#,
-            ),
-        },
-    )
-    .unwrap();
+        "sanitize leaked file",
+        vec![
+            reviewed_change("/leaked.txt", Some("sanitized public content")),
+            reviewed_change("/.scope/repo.json", Some("config v2")),
+        ],
+        None,
+        config(
+            Visibility::Private,
+            Some(("/leaked.txt", Visibility::Public)),
+            Some("/leaked.txt"),
+        ),
+    );
 
-    let public_projection = project_graph(
-        &repo.policy,
-        &repo.graph,
-        &repo.visibility_events,
-        ProjectionViewKey::Public,
-    );
-    let private_projection = project_graph(
-        &repo.policy,
-        &repo.graph,
-        &repo.visibility_events,
-        ProjectionViewKey::Private,
-    );
+    let public_projection = project_repo(&repo, ProjectionViewKey::Public);
+    let private_projection = project_repo(&repo, ProjectionViewKey::Private);
 
     assert_eq!(public_projection.commits.len(), 1);
     assert_eq!(public_projection.commits[0].logical_commit_id, "rv_push_2");
@@ -261,64 +300,25 @@ fn destructive_rewrite_removes_old_public_history_for_changed_path() {
 
 #[test]
 fn destructive_rewrite_replaces_unchanged_public_history_with_baseline() {
-    let mut repo = published_test_repo(Visibility::Public);
-    let readme = blob("current public readme");
-    repo.graph.commits.push(LogicalCommit {
-        id: "rv1".to_string(),
-        parent_ids: Vec::new(),
-        author_id: "owner".to_string(),
-        author_visibility: AuthorVisibility::Visible,
-        message: "old public readme history".to_string(),
-        changes: vec![FileChange {
-            visibility: Visibility::Public,
-            path: ScopePath::parse("/README.md").unwrap(),
-            old_content: None,
-            new_content: Some(readme),
-        }],
-    });
-
-    apply_reviewed_update_to_repo(
-        &mut repo,
-        ReviewedUpdateInput {
-            branch: "main".to_string(),
-            author_id: "owner".to_string(),
-            message: "redact readme history".to_string(),
-            git_snapshot: blob("snapshot v2"),
-            changes: vec![ReviewedContentChange {
-                path: ScopePath::parse("/.scope/repo.json").unwrap(),
-                content: Some(blob("config v2")),
-            }],
-            previous_config: None,
-            config: parse_config(
-                br#"{
-                    "kind": "scope.repo-config",
-                    "version": 1,
-                    "visibility": {
-                        "default": "private",
-                        "rules": [
-                            { "path": "/README.md", "visibility": "public" }
-                        ]
-                    },
-                    "history": {
-                        "rewrites": [
-                            {
-                                "path": "/README.md",
-                                "action": "redact-public-history"
-                            }
-                        ]
-                    }
-                }"#,
-            ),
-        },
-    )
-    .unwrap();
-
-    let public_projection = project_graph(
-        &repo.policy,
-        &repo.graph,
-        &repo.visibility_events,
-        ProjectionViewKey::Public,
+    let mut repo = published_repo_with_public_file(
+        "old public readme history",
+        "/README.md",
+        "current public readme",
     );
+
+    apply_update(
+        &mut repo,
+        "redact readme history",
+        vec![reviewed_change("/.scope/repo.json", Some("config v2"))],
+        None,
+        config(
+            Visibility::Private,
+            Some(("/README.md", Visibility::Public)),
+            Some("/README.md"),
+        ),
+    );
+
+    let public_projection = project_repo(&repo, ProjectionViewKey::Public);
 
     assert_eq!(public_projection.commits.len(), 1);
     assert_eq!(public_projection.commits[0].logical_commit_id, "vis_1");
@@ -328,61 +328,18 @@ fn destructive_rewrite_replaces_unchanged_public_history_with_baseline() {
 
 #[test]
 fn destructive_rewrite_to_private_leaves_no_public_boundary_commit() {
-    let mut repo = published_test_repo(Visibility::Public);
-    repo.graph.commits.push(LogicalCommit {
-        id: "rv1".to_string(),
-        parent_ids: Vec::new(),
-        author_id: "owner".to_string(),
-        author_visibility: AuthorVisibility::Visible,
-        message: "leaked public history".to_string(),
-        changes: vec![FileChange {
-            visibility: Visibility::Public,
-            path: ScopePath::parse("/leaked.txt").unwrap(),
-            old_content: None,
-            new_content: Some(blob("leaked secret")),
-        }],
-    });
+    let mut repo =
+        published_repo_with_public_file("leaked public history", "/leaked.txt", "leaked secret");
 
-    apply_reviewed_update_to_repo(
+    apply_update(
         &mut repo,
-        ReviewedUpdateInput {
-            branch: "main".to_string(),
-            author_id: "owner".to_string(),
-            message: "make leaked file private".to_string(),
-            git_snapshot: blob("snapshot v2"),
-            changes: vec![ReviewedContentChange {
-                path: ScopePath::parse("/.scope/repo.json").unwrap(),
-                content: Some(blob("config v2")),
-            }],
-            previous_config: None,
-            config: parse_config(
-                br#"{
-                    "kind": "scope.repo-config",
-                    "version": 1,
-                    "visibility": {
-                        "default": "private",
-                        "rules": []
-                    },
-                    "history": {
-                        "rewrites": [
-                            {
-                                "path": "/leaked.txt",
-                                "action": "redact-public-history"
-                            }
-                        ]
-                    }
-                }"#,
-            ),
-        },
-    )
-    .unwrap();
-
-    let public_projection = project_graph(
-        &repo.policy,
-        &repo.graph,
-        &repo.visibility_events,
-        ProjectionViewKey::Public,
+        "make leaked file private",
+        vec![reviewed_change("/.scope/repo.json", Some("config v2"))],
+        None,
+        config(Visibility::Private, None, Some("/leaked.txt")),
     );
+
+    let public_projection = project_repo(&repo, ProjectionViewKey::Public);
 
     assert!(public_projection.commits.is_empty());
     assert!(public_projection.visible_paths().is_empty());
@@ -390,67 +347,21 @@ fn destructive_rewrite_to_private_leaves_no_public_boundary_commit() {
 
 #[test]
 fn destructive_rewrite_delete_does_not_create_public_delete_commit() {
-    let mut repo = published_test_repo(Visibility::Public);
-    repo.graph.commits.push(LogicalCommit {
-        id: "rv1".to_string(),
-        parent_ids: Vec::new(),
-        author_id: "owner".to_string(),
-        author_visibility: AuthorVisibility::Visible,
-        message: "leaked public history".to_string(),
-        changes: vec![FileChange {
-            visibility: Visibility::Public,
-            path: ScopePath::parse("/leaked.txt").unwrap(),
-            old_content: None,
-            new_content: Some(blob("leaked secret")),
-        }],
-    });
+    let mut repo =
+        published_repo_with_public_file("leaked public history", "/leaked.txt", "leaked secret");
 
-    apply_reviewed_update_to_repo(
+    apply_update(
         &mut repo,
-        ReviewedUpdateInput {
-            branch: "main".to_string(),
-            author_id: "owner".to_string(),
-            message: "delete leaked file".to_string(),
-            git_snapshot: blob("snapshot v2"),
-            changes: vec![
-                ReviewedContentChange {
-                    path: ScopePath::parse("/leaked.txt").unwrap(),
-                    content: None,
-                },
-                ReviewedContentChange {
-                    path: ScopePath::parse("/.scope/repo.json").unwrap(),
-                    content: Some(blob("config v2")),
-                },
-            ],
-            previous_config: None,
-            config: parse_config(
-                br#"{
-                    "kind": "scope.repo-config",
-                    "version": 1,
-                    "visibility": {
-                        "default": "private",
-                        "rules": []
-                    },
-                    "history": {
-                        "rewrites": [
-                            {
-                                "path": "/leaked.txt",
-                                "action": "redact-public-history"
-                            }
-                        ]
-                    }
-                }"#,
-            ),
-        },
-    )
-    .unwrap();
-
-    let public_projection = project_graph(
-        &repo.policy,
-        &repo.graph,
-        &repo.visibility_events,
-        ProjectionViewKey::Public,
+        "delete leaked file",
+        vec![
+            reviewed_change("/leaked.txt", None),
+            reviewed_change("/.scope/repo.json", Some("config v2")),
+        ],
+        None,
+        config(Visibility::Private, None, Some("/leaked.txt")),
     );
+
+    let public_projection = project_repo(&repo, ProjectionViewKey::Public);
 
     assert!(public_projection.commits.is_empty());
     assert!(public_projection.visible_paths().is_empty());
@@ -458,62 +369,22 @@ fn destructive_rewrite_delete_does_not_create_public_delete_commit() {
 
 #[test]
 fn unchanged_history_rewrite_is_not_reapplied_on_later_push() {
-    let config = parse_config(
-        br#"{
-            "kind": "scope.repo-config",
-            "version": 1,
-            "visibility": {
-                "default": "public",
-                "rules": []
-            },
-            "history": {
-                "rewrites": [
-                    {
-                        "path": "/leaked.txt",
-                        "action": "redact-public-history"
-                    }
-                ]
-            }
-        }"#,
+    let config = config(Visibility::Public, None, Some("/leaked.txt"));
+    let mut repo = published_repo_with_public_file(
+        "existing public history",
+        "/leaked.txt",
+        "existing public content",
     );
-    let mut repo = published_test_repo(Visibility::Public);
-    repo.graph.commits.push(LogicalCommit {
-        id: "rv1".to_string(),
-        parent_ids: Vec::new(),
-        author_id: "owner".to_string(),
-        author_visibility: AuthorVisibility::Visible,
-        message: "existing public history".to_string(),
-        changes: vec![FileChange {
-            visibility: Visibility::Public,
-            path: ScopePath::parse("/leaked.txt").unwrap(),
-            old_content: None,
-            new_content: Some(blob("existing public content")),
-        }],
-    });
 
-    apply_reviewed_update_to_repo(
+    apply_update(
         &mut repo,
-        ReviewedUpdateInput {
-            branch: "main".to_string(),
-            author_id: "owner".to_string(),
-            message: "later config-only push".to_string(),
-            git_snapshot: blob("snapshot v2"),
-            changes: vec![ReviewedContentChange {
-                path: ScopePath::parse("/.scope/repo.json").unwrap(),
-                content: Some(blob("same config")),
-            }],
-            previous_config: Some(config.clone()),
-            config,
-        },
-    )
-    .unwrap();
-
-    let public_projection = project_graph(
-        &repo.policy,
-        &repo.graph,
-        &repo.visibility_events,
-        ProjectionViewKey::Public,
+        "later config-only push",
+        vec![reviewed_change("/.scope/repo.json", Some("same config"))],
+        Some(config.clone()),
+        config,
     );
+
+    let public_projection = project_repo(&repo, ProjectionViewKey::Public);
 
     assert_eq!(public_projection.commits.len(), 1);
     assert_eq!(public_projection.commits[0].logical_commit_id, "rv1");
@@ -524,42 +395,27 @@ fn unchanged_history_rewrite_is_not_reapplied_on_later_push() {
 fn private_to_public_source_change_starts_public_history_at_reveal() {
     let mut policy = Policy::new(Visibility::Private);
     policy
-        .add_rule(VisibilityRule::public(
-            ScopePath::parse("/notes.md").unwrap(),
-        ))
+        .add_rule(VisibilityRule::public(path("/notes.md")))
         .unwrap();
-    let private_blob = blob("private draft");
-    let graph = SourceGraph {
-        repo_id: "scope".to_string(),
-        commits: vec![
-            LogicalCommit {
-                id: "rv1".to_string(),
-                parent_ids: vec![],
-                author_id: "owner".to_string(),
-                author_visibility: AuthorVisibility::Visible,
-                message: "private draft".to_string(),
-                changes: vec![FileChange {
-                    visibility: Visibility::Private,
-                    path: ScopePath::parse("/notes.md").unwrap(),
-                    old_content: None,
-                    new_content: Some(private_blob.clone()),
-                }],
-            },
-            LogicalCommit {
-                id: "rv2".to_string(),
-                parent_ids: vec!["rv1".to_string()],
-                author_id: "owner".to_string(),
-                author_visibility: AuthorVisibility::Visible,
-                message: "public release".to_string(),
-                changes: vec![FileChange {
-                    visibility: Visibility::Public,
-                    path: ScopePath::parse("/notes.md").unwrap(),
-                    old_content: Some(private_blob),
-                    new_content: Some(blob("public release")),
-                }],
-            },
-        ],
-    };
+    let graph = graph(vec![
+        commit(
+            "rv1",
+            None,
+            "private draft",
+            added("/notes.md", Visibility::Private, "private draft"),
+        ),
+        commit(
+            "rv2",
+            Some("rv1"),
+            "public release",
+            change(
+                "/notes.md",
+                Visibility::Public,
+                Some(blob("private draft")),
+                Some(blob("public release")),
+            ),
+        ),
+    ]);
 
     let projection = project_graph(&policy, &graph, &[], ProjectionViewKey::Public);
 
@@ -572,37 +428,22 @@ fn private_to_public_source_change_starts_public_history_at_reveal() {
 fn private_to_public_visibility_event_adds_safe_projection_baseline() {
     let mut policy = Policy::new(Visibility::Private);
     policy
-        .add_rule(VisibilityRule::public(
-            ScopePath::parse("/notes.md").unwrap(),
-        ))
+        .add_rule(VisibilityRule::public(path("/notes.md")))
         .unwrap();
-    let private_blob = blob("private draft");
-    let graph = SourceGraph {
-        repo_id: "scope".to_string(),
-        commits: vec![LogicalCommit {
-            id: "rv1".to_string(),
-            parent_ids: vec![],
-            author_id: "owner".to_string(),
-            author_visibility: AuthorVisibility::Visible,
-            message: "private draft".to_string(),
-            changes: vec![FileChange {
-                visibility: Visibility::Private,
-                path: ScopePath::parse("/notes.md").unwrap(),
-                old_content: None,
-                new_content: Some(private_blob.clone()),
-            }],
-        }],
-    };
-    let visibility_events = vec![VisibilityEvent {
-        id: "vis_1".to_string(),
-        after_commit_id: Some("rv1".to_string()),
-        source_commit_id: None,
-        author_id: "owner".to_string(),
-        path: ScopePath::parse("/notes.md").unwrap(),
-        old_visibility: Visibility::Private,
-        new_visibility: Visibility::Public,
-        current_content: Some(private_blob),
-    }];
+    let graph = graph(vec![commit(
+        "rv1",
+        None,
+        "private draft",
+        added("/notes.md", Visibility::Private, "private draft"),
+    )]);
+    let visibility_events = vec![visibility_event(
+        "vis_1",
+        Some("rv1"),
+        None,
+        "/notes.md",
+        Visibility::Public,
+        blob("private draft"),
+    )];
 
     let projection = project_graph(
         &policy,
@@ -620,74 +461,53 @@ fn private_to_public_visibility_event_adds_safe_projection_baseline() {
 #[test]
 fn public_projection_restarts_after_private_gap() {
     let policy = Policy::new(Visibility::Public);
-    let public_v1 = blob("public v1");
-    let private_v2 = blob("private v2");
-    let graph = SourceGraph {
-        repo_id: "scope".to_string(),
-        commits: vec![
-            LogicalCommit {
-                id: "rv1".to_string(),
-                parent_ids: vec![],
-                author_id: "owner".to_string(),
-                author_visibility: AuthorVisibility::Visible,
-                message: "public v1".to_string(),
-                changes: vec![FileChange {
-                    visibility: Visibility::Public,
-                    path: ScopePath::parse("/README.md").unwrap(),
-                    old_content: None,
-                    new_content: Some(public_v1.clone()),
-                }],
-            },
-            LogicalCommit {
-                id: "rv2".to_string(),
-                parent_ids: vec!["rv1".to_string()],
-                author_id: "owner".to_string(),
-                author_visibility: AuthorVisibility::Visible,
-                message: "private v2".to_string(),
-                changes: vec![FileChange {
-                    visibility: Visibility::Private,
-                    path: ScopePath::parse("/README.md").unwrap(),
-                    old_content: Some(public_v1),
-                    new_content: Some(private_v2.clone()),
-                }],
-            },
-            LogicalCommit {
-                id: "rv3".to_string(),
-                parent_ids: vec!["rv2".to_string()],
-                author_id: "owner".to_string(),
-                author_visibility: AuthorVisibility::Visible,
-                message: "public v3".to_string(),
-                changes: vec![FileChange {
-                    visibility: Visibility::Public,
-                    path: ScopePath::parse("/README.md").unwrap(),
-                    old_content: Some(private_v2),
-                    new_content: Some(blob("public v3")),
-                }],
-            },
-        ],
-    };
-    let path = ScopePath::parse("/README.md").unwrap();
+    let graph = graph(vec![
+        commit(
+            "rv1",
+            None,
+            "public v1",
+            added("/README.md", Visibility::Public, "public v1"),
+        ),
+        commit(
+            "rv2",
+            Some("rv1"),
+            "private v2",
+            change(
+                "/README.md",
+                Visibility::Private,
+                Some(blob("public v1")),
+                Some(blob("private v2")),
+            ),
+        ),
+        commit(
+            "rv3",
+            Some("rv2"),
+            "public v3",
+            change(
+                "/README.md",
+                Visibility::Public,
+                Some(blob("private v2")),
+                Some(blob("public v3")),
+            ),
+        ),
+    ]);
     let visibility_events = vec![
-        VisibilityEvent {
-            id: "vis_1".to_string(),
-            after_commit_id: Some("rv1".to_string()),
-            source_commit_id: Some("rv2".to_string()),
-            author_id: "owner".to_string(),
-            path: path.clone(),
-            old_visibility: Visibility::Public,
-            new_visibility: Visibility::Private,
-            current_content: Some(blob("private v2")),
-        },
-        VisibilityEvent {
-            id: "vis_2".to_string(),
-            after_commit_id: None,
-            source_commit_id: Some("rv3".to_string()),
-            author_id: "owner".to_string(),
-            path,
-            old_visibility: Visibility::Private,
-            new_visibility: Visibility::Public,
-            current_content: Some(blob("public v3")),
-        },
+        visibility_event(
+            "vis_1",
+            Some("rv1"),
+            Some("rv2"),
+            "/README.md",
+            Visibility::Private,
+            blob("private v2"),
+        ),
+        visibility_event(
+            "vis_2",
+            None,
+            Some("rv3"),
+            "/README.md",
+            Visibility::Public,
+            blob("public v3"),
+        ),
     ];
 
     let projection = project_graph(
@@ -712,45 +532,29 @@ fn public_projection_restarts_after_private_gap() {
 #[test]
 fn pure_visibility_toggle_keeps_public_history_and_restores_current_content() {
     let policy = Policy::new(Visibility::Public);
-    let readme = blob("public readme");
-    let graph = SourceGraph {
-        repo_id: "scope".to_string(),
-        commits: vec![LogicalCommit {
-            id: "rv1".to_string(),
-            parent_ids: vec![],
-            author_id: "owner".to_string(),
-            author_visibility: AuthorVisibility::Visible,
-            message: "original public commit".to_string(),
-            changes: vec![FileChange {
-                visibility: Visibility::Public,
-                path: ScopePath::parse("/README.md").unwrap(),
-                old_content: None,
-                new_content: Some(readme.clone()),
-            }],
-        }],
-    };
-    let path = ScopePath::parse("/README.md").unwrap();
+    let graph = graph(vec![commit(
+        "rv1",
+        None,
+        "original public commit",
+        added("/README.md", Visibility::Public, "public readme"),
+    )]);
     let visibility_events = vec![
-        VisibilityEvent {
-            id: "vis_1".to_string(),
-            after_commit_id: Some("rv1".to_string()),
-            source_commit_id: None,
-            author_id: "owner".to_string(),
-            path: path.clone(),
-            old_visibility: Visibility::Public,
-            new_visibility: Visibility::Private,
-            current_content: Some(readme.clone()),
-        },
-        VisibilityEvent {
-            id: "vis_2".to_string(),
-            after_commit_id: Some("rv1".to_string()),
-            source_commit_id: None,
-            author_id: "owner".to_string(),
-            path,
-            old_visibility: Visibility::Private,
-            new_visibility: Visibility::Public,
-            current_content: Some(readme),
-        },
+        visibility_event(
+            "vis_1",
+            Some("rv1"),
+            None,
+            "/README.md",
+            Visibility::Private,
+            blob("public readme"),
+        ),
+        visibility_event(
+            "vis_2",
+            Some("rv1"),
+            None,
+            "/README.md",
+            Visibility::Public,
+            blob("public readme"),
+        ),
     ];
 
     let projection = project_graph(
@@ -774,22 +578,12 @@ fn pure_visibility_toggle_keeps_public_history_and_restores_current_content() {
 
 #[test]
 fn authorized_collaborator_sees_private_paths() {
-    let graph = SourceGraph {
-        repo_id: "scope".to_string(),
-        commits: vec![LogicalCommit {
-            id: "rv1".to_string(),
-            parent_ids: vec![],
-            author_id: "owner".to_string(),
-            author_visibility: AuthorVisibility::Visible,
-            message: "private".to_string(),
-            changes: vec![FileChange {
-                visibility: Visibility::Private,
-                path: ScopePath::parse("/internal/model.rs").unwrap(),
-                old_content: None,
-                new_content: Some(blob("secret")),
-            }],
-        }],
-    };
+    let graph = graph(vec![commit(
+        "rv1",
+        None,
+        "private",
+        added("/internal/model.rs", Visibility::Private, "secret"),
+    )]);
 
     let projection = project_graph(&fixture_policy(), &graph, &[], ProjectionViewKey::Private);
 

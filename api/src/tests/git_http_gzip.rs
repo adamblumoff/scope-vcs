@@ -20,7 +20,8 @@ async fn receive_pack_accepts_gzip_encoded_request_body() {
     fs::write(source.join("README.md"), "hello over gzip receive-pack\n").unwrap();
     run_git(Some(&source), &["add", "-A"], "add readme").unwrap();
     commit_all(&source, "initial");
-    let push_intent = create_test_push_intent(&state, &test_owner_id(), &git_head_oid(&source));
+    let push_intent =
+        create_test_push_intent(&state, &test_owner_id(), &git_head_oid(&source)).await;
 
     let response = router(state.clone())
         .oneshot(
@@ -49,12 +50,13 @@ async fn receive_pack_accepts_gzip_encoded_request_body() {
             .any(|window| window == b"unpack ok")
     );
 
-    let repo = find_repo(&state, TEST_REPO_OWNER, TEST_REPO_NAME).unwrap();
+    let repo = find_repo(&state, TEST_REPO_OWNER, TEST_REPO_NAME)
+        .await
+        .unwrap();
     assert_eq!(
         repo.record.publication_state,
         RepoPublicationState::Published
     );
-    assert!(repo.pending_import.is_none());
     assert!(repo.first_push_token.is_none());
     assert_eq!(
         repo.live_tree()
@@ -82,7 +84,7 @@ async fn receive_pack_cleans_uploaded_blobs_when_push_intent_does_not_match_head
     fs::write(source.join("README.md"), readme).unwrap();
     run_git(Some(&source), &["add", "-A"], "add readme").unwrap();
     commit_all(&source, "initial");
-    let push_intent = create_test_push_intent(&state, &test_owner_id(), TEST_PUSH_HEAD_OID);
+    let push_intent = create_test_push_intent(&state, &test_owner_id(), TEST_PUSH_HEAD_OID).await;
 
     let response = router(state.clone())
         .oneshot(

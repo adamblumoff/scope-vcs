@@ -11,10 +11,7 @@ use crate::{
             mark_request_needs_response, merge_request, record_working_request_upload,
             start_request, submit_request,
         },
-        store::{
-            AppCatalog, PendingImport, PendingImportFile, RepoPublicationState, RepoSettings,
-            SourceBlob, StoredRepository, UserAccount,
-        },
+        store::{AppCatalog, RepoPublicationState, SourceBlob, StoredRepository, UserAccount},
     },
     error::ApiError,
     object_store::{ObjectStore, put_repo_object, put_source_blob},
@@ -28,10 +25,6 @@ const PUBLIC_DEMO_APP: &str =
     "export function greet(name: string) {\n  return `hello ${name}`\n}\n";
 const PUBLIC_DEMO_PLAN: &str =
     "# Internal Plan\n\nPrivate content stays out of public projections.\n";
-const REVIEW_DEMO_README: &str =
-    "# Review Demo\n\nThis repo is waiting on a first publish review.\n";
-const REVIEW_DEMO_LIB: &str = "pub fn seeded_answer() -> usize {\n    42\n}\n";
-const REVIEW_DEMO_ROADMAP: &str = "# Private Roadmap\n\nReview can decide what becomes public.\n";
 const UPDATE_DEMO_INITIAL_README: &str =
     "# Update Demo\n\nThis repository has a clean published baseline.\n";
 const UPDATE_DEMO_RELEASE_GUIDE: &str =
@@ -52,11 +45,7 @@ pub(super) fn catalog(
     catalog.users.insert(owner.id.clone(), owner.clone());
 
     let (update_demo, request_gallery) = update_demo(object_store, &owner)?;
-    for repo in [
-        published_demo(object_store, &owner)?,
-        pending_publish_demo(object_store, &owner)?,
-        update_demo,
-    ] {
+    for repo in [published_demo(object_store, &owner)?, update_demo] {
         catalog.repositories.insert(repo.record.id.clone(), repo);
     }
     seed_request_gallery(&mut catalog, &owner, request_gallery)?;
@@ -97,10 +86,6 @@ fn published_demo(
         ],
     ));
     repo.record.publication_state = RepoPublicationState::Published;
-    repo.settings = RepoSettings {
-        include_ignored_files: false,
-        review_pushes_before_applying: false,
-    };
     repo.git_snapshot = Some(git_snapshot(
         object_store,
         &repo,
@@ -114,47 +99,6 @@ fn published_demo(
             message: "Seed public demo",
         }],
     )?);
-    Ok(repo)
-}
-
-fn pending_publish_demo(
-    object_store: &dyn ObjectStore,
-    owner: &UserAccount,
-) -> Result<StoredRepository, ApiError> {
-    let mut repo = repo(owner, "review-demo", Visibility::Private)?;
-    let files = [
-        ("README.md", REVIEW_DEMO_README),
-        ("src/lib.rs", REVIEW_DEMO_LIB),
-        ("docs/private-roadmap.md", REVIEW_DEMO_ROADMAP),
-    ];
-    repo.pending_import = Some(PendingImport {
-        default_branch: "main".to_string(),
-        head_oid: "1111111111111111111111111111111111111111".to_string(),
-        tree_oid: "2222222222222222222222222222222222222222".to_string(),
-        imported_at_unix: 1_800_000_000,
-        git_snapshot: git_snapshot(
-            object_store,
-            &repo,
-            "review-demo-pending",
-            &[SeedGitCommit {
-                files: &files,
-                message: "Seed review demo",
-            }],
-        )?,
-        files: files
-            .into_iter()
-            .map(|(path, content)| {
-                let blob = blob(object_store, &repo, content)?;
-                Ok(PendingImportFile {
-                    path: path.to_string(),
-                    mode: "100644".to_string(),
-                    oid: blob.git_oid.clone(),
-                    blob,
-                })
-            })
-            .collect::<Result<Vec<_>, ApiError>>()?,
-    });
-    repo.record.publication_state = RepoPublicationState::Unpublished;
     Ok(repo)
 }
 
@@ -396,7 +340,11 @@ fn blob(
     repo: &StoredRepository,
     content: &str,
 ) -> Result<SourceBlob, ApiError> {
-    put_source_blob(object_store, &repo.record.id, content.as_bytes())
+    Ok(put_source_blob(
+        object_store,
+        &repo.record.id,
+        content.as_bytes(),
+    )?)
 }
 
 #[derive(Clone, Copy)]
@@ -634,7 +582,12 @@ fn store_seed_bundle(
     args.extend_from_slice(refs);
     seed_git(Some(repo_path), &args, "creating seeded Git bundle")?;
     let bytes = fs::read(&bundle_path).map_err(ApiError::internal)?;
-    put_repo_object(object_store, &repo.record.id, "git-bundles", &bytes)
+    Ok(put_repo_object(
+        object_store,
+        &repo.record.id,
+        "git-bundles",
+        &bytes,
+    )?)
 }
 
 fn seed_git_head(repo_path: &FsPath) -> Result<String, ApiError> {
@@ -704,8 +657,8 @@ mod tests {
     use crate::object_store::{EncryptedObjectStore, MemoryObjectStore, source_blob_bytes};
     use std::sync::Arc;
 
-    #[test]
-    fn seed_catalog_contains_owned_repos_with_readable_blobs() {
+    #[tokio::test]
+    async fn seed_catalog_contains_owned_repos_with_readable_blobs() {
         let store = EncryptedObjectStore::new(Arc::new(MemoryObjectStore::new()), [9; 32]);
 
         let catalog = super::catalog(
@@ -718,9 +671,8 @@ mod tests {
         .unwrap();
 
         let repos = catalog.repositories_for_user(DEV_SEED_USER_ID);
-        assert_eq!(repos.len(), 3);
+        assert_eq!(repos.len(), 2);
         assert!(catalog.repository("dev", "public-demo").is_some());
-        assert!(catalog.repository("dev", "review-demo").is_some());
         assert!(catalog.repository("dev", "update-demo").is_some());
 
         let public_demo = catalog.repository("dev", "public-demo").unwrap();
@@ -753,8 +705,8 @@ mod tests {
         );
     }
 
-    #[test]
-    fn seed_catalog_git_snapshots_restore_as_bundles() {
+    #[tokio::test]
+    async fn seed_catalog_git_snapshots_restore_as_bundles() {
         let store = Arc::new(EncryptedObjectStore::new(
             Arc::new(MemoryObjectStore::new()),
             [9; 32],
@@ -769,7 +721,12 @@ mod tests {
         .unwrap();
         let mut state = AppState::test_state();
         state.object_store = store;
-        state.metadata = crate::db::MetadataStore::memory(catalog.clone());
+        let target = crate::db::TestDatabaseTarget::required().unwrap();
+        state.metadata = crate::db::MetadataStore::connect_fresh_for_tests(&target).unwrap();
+        state
+            .metadata
+            .seed_catalog_for_tests(catalog.clone())
+            .unwrap();
         state.data_dir = Arc::new(seed_snapshot_test_data_dir());
 
         let public_demo = catalog.repository("dev", "public-demo").unwrap();
@@ -779,15 +736,6 @@ mod tests {
             "public-demo-live",
             "README.md",
             PUBLIC_DEMO_README,
-        );
-
-        let review_demo = catalog.repository("dev", "review-demo").unwrap();
-        assert_snapshot_file(
-            &state,
-            &review_demo.pending_import.as_ref().unwrap().git_snapshot,
-            "review-demo-pending",
-            "src/lib.rs",
-            REVIEW_DEMO_LIB,
         );
 
         let update_demo = catalog.repository("dev", "update-demo").unwrap();

@@ -2,8 +2,6 @@ use anyhow::{Context, bail};
 use std::{
     collections::BTreeSet,
     env,
-    fs::OpenOptions,
-    io::Write,
     path::{Path, PathBuf},
     process::{Command, Output},
 };
@@ -106,28 +104,6 @@ fn has_dirty_paths_outside_scope_config(status: &[u8]) -> bool {
         path != ".scope/repo.json" && path != ".scope/repo-state.json"
     })
 }
-pub fn changed_paths_since_last_scope_push(
-    repo: &GitRepo,
-    remote: &str,
-    branch: &str,
-) -> anyhow::Result<Vec<GitChangedPath>> {
-    changed_paths_since_last_scope_push_at_commit(repo, remote, branch, "HEAD")
-}
-
-pub fn changed_paths_since_last_scope_push_at_commit(
-    repo: &GitRepo,
-    remote: &str,
-    branch: &str,
-    commit_oid: &str,
-) -> anyhow::Result<Vec<GitChangedPath>> {
-    let remote_ref = format!("refs/remotes/{remote}/{branch}");
-    if git_success_in_repo(repo, &["show-ref", "--verify", "--quiet", &remote_ref]) {
-        changed_paths_since_scope_base_at_commit(repo, Some(&remote_ref), commit_oid)
-    } else {
-        changed_paths_since_scope_base_at_commit(repo, None, commit_oid)
-    }
-}
-
 pub fn changed_paths_since_scope_base_at_commit(
     repo: &GitRepo,
     base_oid_or_ref: Option<&str>,
@@ -452,58 +428,43 @@ pub fn clone_with_bearer(
 }
 
 pub fn install_scope_fetch_auth(repo_root: &Path, remote_url: &str) -> anyhow::Result<()> {
-    let git_dir = git_dir_for_repo(repo_root)?;
-    let config_path = git_dir.join("config");
-    let auth_config = scope_fetch_auth_config(remote_url)?;
-    let mut config = OpenOptions::new()
-        .create(true)
-        .append(true)
-        .open(&config_path)
-        .with_context(|| format!("open {}", config_path.display()))?;
-    config
-        .write_all(auth_config.as_bytes())
-        .with_context(|| format!("write {}", config_path.display()))?;
+    let helper_key = credential_config_key(remote_url, "helper")?;
+    let use_http_path_key = credential_config_key(remote_url, "useHttpPath")?;
+    let unset = Command::new("git")
+        .current_dir(repo_root)
+        .args(["config", "--local", "--unset-all", &helper_key])
+        .status()
+        .context("clear existing Scope Git credential helpers")?;
+    if !unset.success() && unset.code() != Some(5) {
+        bail!("clear existing Scope Git credential helpers failed");
+    }
+    run_git_config(repo_root, &["--add", &helper_key, ""])?;
+    run_git_config(
+        repo_root,
+        &["--add", &helper_key, SCOPE_GIT_CREDENTIAL_HELPER],
+    )?;
+    run_git_config(repo_root, &["--replace-all", &use_http_path_key, "true"])?;
     Ok(())
 }
 
-fn git_dir_for_repo(repo_root: &Path) -> anyhow::Result<PathBuf> {
-    let output = Command::new("git")
+fn run_git_config(repo_root: &Path, args: &[&str]) -> anyhow::Result<()> {
+    let status = Command::new("git")
         .current_dir(repo_root)
-        .args(["rev-parse", "--git-dir"])
-        .output()
-        .context("inspect cloned Git directory")?;
-    if !output.status.success() {
-        bail!("inspect cloned Git directory failed");
+        .args(["config", "--local"])
+        .args(args)
+        .status()
+        .context("configure Scope Git credential helper")?;
+    if !status.success() {
+        bail!("configure Scope Git credential helper failed");
     }
-
-    let git_dir = String::from_utf8(output.stdout).context("Git directory path was not UTF-8")?;
-    let git_dir = git_dir.trim();
-    if git_dir.is_empty() {
-        bail!("Git directory path could not be determined");
-    }
-
-    let git_dir = PathBuf::from(git_dir);
-    Ok(if git_dir.is_absolute() {
-        git_dir
-    } else {
-        repo_root.join(git_dir)
-    })
+    Ok(())
 }
 
-fn scope_fetch_auth_config(remote_url: &str) -> anyhow::Result<String> {
-    let remote_url = git_config_quoted(remote_url, "Scope Git remote URL")?;
-    let helper = git_config_quoted(SCOPE_GIT_CREDENTIAL_HELPER, "Scope Git credential helper")?;
-    Ok(format!(
-        "\n[credential \"{remote_url}\"]\n\thelper =\n\thelper = \"{helper}\"\n\tuseHttpPath = true\n"
-    ))
-}
-
-fn git_config_quoted(value: &str, description: &str) -> anyhow::Result<String> {
-    if value.chars().any(char::is_control) {
-        bail!("{description} cannot contain control characters");
+fn credential_config_key(remote_url: &str, name: &str) -> anyhow::Result<String> {
+    if remote_url.chars().any(char::is_control) {
+        bail!("Scope Git remote URL cannot contain control characters");
     }
-
-    Ok(value.replace('\\', "\\\\").replace('"', "\\\""))
+    Ok(format!("credential.{remote_url}.{name}"))
 }
 
 pub fn fetch_scope_remote_with_bearer(

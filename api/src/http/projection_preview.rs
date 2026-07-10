@@ -39,5 +39,5 @@ pub(crate) fn projection_preview_repo(
     repo: &StoredRepository,
     source: ProjectionPreviewSource,
 ) -> Result<StoredRepository, ApiError> {
-    repo_for_projection_preview(repo, source.into())
+    Ok(repo_for_projection_preview(repo, source.into())?)
 }

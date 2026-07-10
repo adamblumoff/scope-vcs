@@ -44,7 +44,8 @@ pub(crate) async fn git_read_scope_user(
         return state
             .metadata
             .verify_cli_session_token(token)
-            .map_err(git_credential_error);
+            .await
+            .map_err(|error| git_credential_error(error.into()));
     }
 
     require_scope_user(state, headers)
@@ -156,10 +157,6 @@ pub(crate) fn authorize_initial_push_for_repo(
             "repo is not waiting for an initial Git push",
         ));
     }
-    if repo.pending_import.is_some() {
-        return Err(ApiError::conflict("repo already has a pending import"));
-    }
-
     match credential {
         InitialPushCredential::FirstPushToken { secret } => {
             authorize_first_push_token_for_repo(repo, secret)
@@ -170,26 +167,12 @@ pub(crate) fn authorize_initial_push_for_repo(
     }
 }
 
-pub(crate) fn authorize_receive_pack_scope_token_for_repo(
-    repo: &StoredRepository,
-    credential: &InitialPushCredential,
-) -> Result<(), ApiError> {
-    match credential {
-        InitialPushCredential::FirstPushToken { secret } => {
-            authorize_first_push_token_for_repo(repo, secret)
-        }
-        InitialPushCredential::GitPushToken { secret } => {
-            authorize_git_push_token_for_repo(repo, secret).map(|_| ())
-        }
-    }
-}
-
-pub(crate) fn find_repo_after_git_scope_token(
+pub(crate) async fn find_repo_after_git_scope_token(
     state: &AppState,
     owner: &str,
     repo_name: &str,
 ) -> Result<StoredRepository, ApiError> {
-    match find_repo(state, owner, repo_name) {
+    match find_repo(state, owner, repo_name).await {
         Ok(repo) => Ok(repo),
         Err(error) if error.status == StatusCode::NOT_FOUND => Err(invalid_git_credentials()),
         Err(error) => Err(error),

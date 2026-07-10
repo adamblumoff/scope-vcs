@@ -3,7 +3,7 @@ import type {
   RepoParams,
   RequestChanges,
   RequestSummary,
-  RequestWorkflowDisposition,
+  RequestWorkflowResolutionDisposition,
   ReviewFileDiff,
 } from '@/api/types'
 import { LifecycleBadge } from '@/components/lifecycle-badge'
@@ -64,14 +64,14 @@ export function RequestUnavailablePage({ params }: { params: RepoParams }) {
     <RepoShell active="requests" canManage={false} params={params}>
       <PageContent>
         <PageHeader
-          actions={() => (
+          actions={(
             <Button asChild size="sm" variant="secondary">
               <Link params={params} to="/repos/$owner/$repo/requests">
                 Requests
               </Link>
             </Button>
           )}
-          badges={() => <Badge variant="warning">Unavailable</Badge>}
+          badges={<Badge variant="warning">Unavailable</Badge>}
           description="This request does not exist, was deleted, or is only visible to signed-in collaborators."
           title="Request not found"
         />
@@ -252,7 +252,7 @@ function RequestDetailHeader({
 }) {
   return (
     <PageHeader
-      actions={() => (
+      actions={(
         <div className="flex flex-wrap items-center gap-2">
           {request.permissions.can_delete ? (
             <Button
@@ -272,7 +272,7 @@ function RequestDetailHeader({
           </Button>
         </div>
       )}
-      badges={() => (
+      badges={(
         <>
           <LifecycleBadge state={live.repo.lifecycle_state} />
           <Badge variant={requestStatusTone(request)}>
@@ -287,7 +287,7 @@ function RequestDetailHeader({
           </Badge>
         </>
       )}
-      description={() => (
+      description={(
         <span className="font-mono text-sm">
           {live.repo.id} / {request.id}
         </span>
@@ -387,7 +387,7 @@ function RequestActions({
   resolveBody,
   responseBody,
 }: {
-  activeResolveDisposition: RequestWorkflowDisposition
+  activeResolveDisposition: RequestWorkflowResolutionDisposition
   actionError: RequestActionError | null
   commentBody: string
   needsResponseBody: string
@@ -395,7 +395,7 @@ function RequestActions({
   onMergeOpen: () => void
   onNeedsResponseBodyChange: (value: string) => void
   onResolveBodyChange: (value: string) => void
-  onResolveDispositionChange: (value: RequestWorkflowDisposition) => void
+  onResolveDispositionChange: (value: RequestWorkflowResolutionDisposition) => void
   onResponseBodyChange: (value: string) => void
   onSubmitComment: (event: FormEvent<HTMLFormElement>) => void
   onSubmitNeedsResponse: (event: FormEvent<HTMLFormElement>) => void
@@ -526,7 +526,7 @@ function RequestActions({
                   )}
                   onChange={(event) =>
                     onResolveDispositionChange(
-                      event.target.value as RequestWorkflowDisposition,
+                      event.target.value as RequestWorkflowResolutionDisposition,
                     )
                   }
                   value={activeResolveDisposition}
@@ -550,10 +550,7 @@ function RequestActions({
                 </p>
                 <div className="font-mono text-xs tabular-nums text-muted-foreground">
                   {settlementPreviewText(
-                    settlementPreviewFor(
-                      request.stake_credits,
-                      activeResolveDisposition,
-                    ),
+                    settlementPreviewFor(request, activeResolveDisposition),
                   )}
                 </div>
                 <ActionTextarea

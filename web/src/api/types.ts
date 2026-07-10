@@ -29,6 +29,7 @@ import type {
   RequestDeleteResponse,
   RequestDetailResponse,
   RequestDisposition,
+  ResolutionDisposition,
   RequestEventKind,
   RequestEventResponse,
   RequestEditorRequest,
@@ -39,6 +40,7 @@ import type {
   RequestChangesResponse,
   RequestPermissionsResponse,
   RequestSettlementResponse,
+  RequestSettlementPreviewResponse,
   RequestState,
   RequestSummaryResponse,
   ResolveRequestRequest,
@@ -119,6 +121,8 @@ export type RequestSettlement = RequestSettlementResponse
 export type RequestEvent = RequestEventResponse
 export type RequestWorkflowState = RequestState
 export type RequestWorkflowDisposition = RequestDisposition
+export type RequestWorkflowResolutionDisposition = ResolutionDisposition
+export type RequestSettlementPreview = RequestSettlementPreviewResponse
 export type RequestWorkflowEventKind = RequestEventKind
 export type RequestWorkflowActorRole = RequestActorRole
 export type RequestWorkflowBaseAudience = RequestBaseAudience

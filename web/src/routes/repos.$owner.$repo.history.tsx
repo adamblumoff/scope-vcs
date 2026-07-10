@@ -64,6 +64,7 @@ function HistoryRoute() {
       histories={histories}
       initialAudience={initialAudience}
       initialCommit={initialCommit}
+      key={`${initialAudience}:${initialCommit?.projected_id ?? ''}`}
       params={params}
     />
   )

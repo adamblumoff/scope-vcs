@@ -69,7 +69,6 @@ fn request_context_for_actor(actor: RepositoryActor) -> RequestContext {
                 actor,
                 can_push: true,
             },
-            pending_import_pending: false,
             open_request_count: 1,
             request_permissions: RepoRequestPermissionsResponse {
                 can_submit_request: true,

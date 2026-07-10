@@ -64,6 +64,7 @@ async fn reads_the_uploaded_request_ref_bundle() {
             base_main_oid: main_oid,
             now_unix: 2,
         })
+        .await
         .unwrap();
     state
         .metadata
@@ -76,6 +77,7 @@ async fn reads_the_uploaded_request_ref_bundle() {
             git_snapshot: request_snapshot,
             now_unix: 3,
         })
+        .await
         .unwrap();
     state
         .metadata
@@ -88,6 +90,7 @@ async fn reads_the_uploaded_request_ref_bundle() {
             event_id: "event_req_review_created".to_string(),
             now_unix: 4,
         })
+        .await
         .unwrap();
 
     let app = router(state);

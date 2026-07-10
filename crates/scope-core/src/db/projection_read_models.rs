@@ -1,4 +1,4 @@
-use super::{MetadataStore, MetadataStoreInner, entities, run_api_db_on};
+use super::{MetadataStore, entities};
 use crate::{
     domain::{
         policy::{Principal, PrincipalKind},
@@ -213,28 +213,18 @@ fn live_projection_audience(repo: &StoredRepository, principal: &Principal) -> &
 }
 
 impl MetadataStore {
-    pub fn live_projection_files(
+    pub async fn live_projection_files(
         &self,
         repo: &StoredRepository,
         principal: &Principal,
     ) -> Result<Vec<ProjectionViewFile>, ApiError> {
-        match self.inner.as_ref() {
-            MetadataStoreInner::Postgres { db, runtime } => {
-                let db = Arc::clone(db);
-                let repo = repo.clone();
-                let principal = principal.clone();
-                run_api_db_on(runtime, async move {
-                    if let Some(files) =
-                        load_live_projection_files(db.as_ref(), &repo, &principal).await?
-                    {
-                        return Ok(files);
-                    }
-                    Ok(domain_projected_files(&repo, &principal))
-                })
-            }
-            #[cfg(any(test, feature = "memory-metadata"))]
-            MetadataStoreInner::Memory(_) => Ok(domain_projected_files(repo, principal)),
+        let db = Arc::clone(&self.db);
+        let repo = repo.clone();
+        let principal = principal.clone();
+        if let Some(files) = load_live_projection_files(db.as_ref(), &repo, &principal).await? {
+            return Ok(files);
         }
+        Ok(domain_projected_files(&repo, &principal))
     }
 }
 
@@ -244,7 +234,7 @@ mod tests {
     use crate::domain::{
         policy::{Policy, ScopePath, Visibility},
         projection::{AuthorVisibility, FileChange, LogicalCommit, SourceGraph},
-        store::{RepoPublicationState, RepoRecord, RepoSettings},
+        store::{RepoPublicationState, RepoRecord},
     };
 
     #[test]
@@ -304,13 +294,11 @@ mod tests {
                 default_visibility: Visibility::Private,
                 change_version: 7,
             },
-            settings: RepoSettings::default(),
             repo_config: crate::domain::repo_config::RepoConfig::with_default_visibility(
                 crate::domain::repo_config::ConfigVisibility::Private,
             ),
             first_push_token: None,
             git_push_token: None,
-            pending_import: None,
             policy,
             graph: SourceGraph {
                 repo_id: "owner/repo".to_string(),

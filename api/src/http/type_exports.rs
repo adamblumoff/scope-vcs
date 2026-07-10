@@ -6,6 +6,7 @@ use crate::domain::{
     },
     requests::{
         RequestActorRole, RequestBaseAudience, RequestDisposition, RequestEventKind, RequestState,
+        ResolutionDisposition,
     },
     store::{
         FileChangeKind, FirstPushTokenStatus, RepoPublicationState, RepositoryActor,
@@ -13,6 +14,7 @@ use crate::domain::{
     },
 };
 use crate::http::{responses::*, routes};
+use crate::repo_events::RepoChangeEvent;
 use std::{fs, path::PathBuf};
 use ts_rs::TS;
 
@@ -31,6 +33,7 @@ fn export_api_types() {
         declaration::<RepositoryMemberPermissions>(&ts_config),
         declaration::<RepositoryInviteState>(&ts_config),
         declaration::<RepoPublicationState>(&ts_config),
+        declaration::<RepoChangeEvent>(&ts_config),
         declaration::<FirstPushTokenStatus>(&ts_config),
         declaration::<FileChangeKind>(&ts_config),
         declaration::<ConfigVisibility>(&ts_config),
@@ -44,6 +47,7 @@ fn export_api_types() {
         declaration::<RequestBaseAudience>(&ts_config),
         declaration::<RequestState>(&ts_config),
         declaration::<RequestDisposition>(&ts_config),
+        declaration::<ResolutionDisposition>(&ts_config),
         declaration::<RequestEventKind>(&ts_config),
         declaration::<ProjectionPreviewAudience>(&ts_config),
         declaration::<ProjectionPreviewSource>(&ts_config),
@@ -115,6 +119,8 @@ fn export_api_types() {
         declaration::<RequestMergeabilityStatus>(&ts_config),
         declaration::<RequestMergeabilityResponse>(&ts_config),
         declaration::<RequestSettlementResponse>(&ts_config),
+        declaration::<RequestSettlementPreviewResponse>(&ts_config),
+        declaration::<RequestResolutionOptionResponse>(&ts_config),
         declaration::<RequestEventResponse>(&ts_config),
         declaration::<RequestDeleteResponse>(&ts_config),
         declaration::<StartRequestRequest>(&ts_config),

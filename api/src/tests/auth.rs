@@ -1,7 +1,7 @@
 use super::*;
 
-#[test]
-fn clerk_token_verifies_issuer_signature_expiration_and_subject() {
+#[tokio::test]
+async fn clerk_token_verifies_issuer_signature_expiration_and_subject() {
     let jwt = token_with_audience(TEST_CLERK_USER_ID, serde_json::json!(TEST_CLERK_AUDIENCE));
     let identity =
         verify_clerk_token(&jwt, &test_jwks(), TEST_CLERK_ISSUER, &test_clerk_policy()).unwrap();
@@ -11,8 +11,8 @@ fn clerk_token_verifies_issuer_signature_expiration_and_subject() {
     assert!(identity.email_verified);
 }
 
-#[test]
-fn clerk_token_rejects_wrong_issuer() {
+#[tokio::test]
+async fn clerk_token_rejects_wrong_issuer() {
     let jwt = token_with_audience(TEST_CLERK_USER_ID, serde_json::json!(TEST_CLERK_AUDIENCE));
     let error = verify_clerk_token(
         &jwt,
@@ -22,25 +22,25 @@ fn clerk_token_rejects_wrong_issuer() {
     )
     .unwrap_err();
 
-    assert_eq!(error.status, StatusCode::UNAUTHORIZED);
+    assert_eq!(error.kind, scope_core::error::ErrorKind::Unauthorized);
 }
 
-#[test]
-fn clerk_token_requires_issuer_and_subject_claims() {
+#[tokio::test]
+async fn clerk_token_requires_issuer_and_subject_claims() {
     let jwt = token_without_required_claims();
     let error = verify_clerk_token(&jwt, &test_jwks(), TEST_CLERK_ISSUER, &test_clerk_policy())
         .unwrap_err();
 
-    assert_eq!(error.status, StatusCode::UNAUTHORIZED);
+    assert_eq!(error.kind, scope_core::error::ErrorKind::Unauthorized);
 }
 
-#[test]
-fn clerk_token_requires_subject() {
+#[tokio::test]
+async fn clerk_token_requires_subject() {
     let jwt = token_with_audience("", serde_json::json!(TEST_CLERK_AUDIENCE));
     let error = verify_clerk_token(&jwt, &test_jwks(), TEST_CLERK_ISSUER, &test_clerk_policy())
         .unwrap_err();
 
-    assert_eq!(error.status, StatusCode::UNAUTHORIZED);
+    assert_eq!(error.kind, scope_core::error::ErrorKind::Unauthorized);
 }
 
 #[test]
@@ -55,7 +55,7 @@ fn clerk_token_rejects_wrong_authorized_party() {
     let error = verify_clerk_token(&jwt, &test_jwks(), TEST_CLERK_ISSUER, &test_clerk_policy())
         .unwrap_err();
 
-    assert_eq!(error.status, StatusCode::UNAUTHORIZED);
+    assert_eq!(error.kind, scope_core::error::ErrorKind::Unauthorized);
 }
 
 #[test]
@@ -64,7 +64,7 @@ fn clerk_token_without_authorized_party_requires_matching_audience() {
     let error = verify_clerk_token(&jwt, &test_jwks(), TEST_CLERK_ISSUER, &test_clerk_policy())
         .unwrap_err();
 
-    assert_eq!(error.status, StatusCode::UNAUTHORIZED);
+    assert_eq!(error.kind, scope_core::error::ErrorKind::Unauthorized);
 
     let policy = ClerkTokenPolicy {
         authorized_parties: vec![LOCAL_APP_ORIGIN.to_string()],
@@ -96,7 +96,7 @@ fn clerk_token_rejects_authorized_party_when_policy_is_missing() {
     )
     .unwrap_err();
 
-    assert_eq!(error.status, StatusCode::SERVICE_UNAVAILABLE);
+    assert_eq!(error.kind, scope_core::error::ErrorKind::ServiceUnavailable);
 }
 
 #[test]
@@ -110,7 +110,7 @@ fn clerk_default_policy_requires_scope_api_audience() {
     )
     .unwrap_err();
 
-    assert_eq!(error.status, StatusCode::UNAUTHORIZED);
+    assert_eq!(error.kind, scope_core::error::ErrorKind::Unauthorized);
 
     let api_token = token_with_audience(TEST_CLERK_USER_ID, serde_json::json!(TEST_CLERK_AUDIENCE));
     let identity = verify_clerk_token(
@@ -140,11 +140,11 @@ fn clerk_token_audience_is_checked_when_configured() {
     let error =
         verify_clerk_token(&rejected, &test_jwks(), TEST_CLERK_ISSUER, &policy).unwrap_err();
 
-    assert_eq!(error.status, StatusCode::UNAUTHORIZED);
+    assert_eq!(error.kind, scope_core::error::ErrorKind::Unauthorized);
 }
 
-#[test]
-fn clerk_subject_resolves_to_internal_scope_user_id() {
+#[tokio::test]
+async fn clerk_subject_resolves_to_internal_scope_user_id() {
     let state = AppState::test_state();
     let identity = ClerkIdentity {
         user_id: "user_123".to_string(),
@@ -152,19 +152,19 @@ fn clerk_subject_resolves_to_internal_scope_user_id() {
         email_verified: true,
     };
 
-    let user = state.metadata.resolve_clerk_user(&identity).unwrap();
+    let user = state.metadata.resolve_clerk_user(&identity).await.unwrap();
 
     assert!(user.id.starts_with("scope_usr_"));
     assert_ne!(user.id, "user_123");
     assert_eq!(user.handle, "owner");
     assert_eq!(user.email, TEST_OWNER_EMAIL);
 
-    let again = state.metadata.resolve_clerk_user(&identity).unwrap();
+    let again = state.metadata.resolve_clerk_user(&identity).await.unwrap();
     assert_eq!(again.id, user.id);
 }
 
-#[test]
-fn clerk_user_ids_merge_by_verified_email() {
+#[tokio::test]
+async fn clerk_user_ids_merge_by_verified_email() {
     let state = AppState::test_state();
     let first_identity = ClerkIdentity {
         user_id: "user_first".to_string(),
@@ -177,8 +177,16 @@ fn clerk_user_ids_merge_by_verified_email() {
         email_verified: true,
     };
 
-    let first = state.metadata.resolve_clerk_user(&first_identity).unwrap();
-    let second = state.metadata.resolve_clerk_user(&second_identity).unwrap();
+    let first = state
+        .metadata
+        .resolve_clerk_user(&first_identity)
+        .await
+        .unwrap();
+    let second = state
+        .metadata
+        .resolve_clerk_user(&second_identity)
+        .await
+        .unwrap();
 
     assert_eq!(first.id, second.id);
     assert_eq!(second.email, TEST_OWNER_EMAIL);
@@ -187,8 +195,8 @@ fn clerk_user_ids_merge_by_verified_email() {
     assert!(catalog.users.contains_key(&first.id));
 }
 
-#[test]
-fn clerk_user_requires_verified_email() {
+#[tokio::test]
+async fn clerk_user_requires_verified_email() {
     let state = AppState::test_state();
     let identity = ClerkIdentity {
         user_id: "user_unverified".to_string(),
@@ -196,9 +204,13 @@ fn clerk_user_requires_verified_email() {
         email_verified: false,
     };
 
-    let error = state.metadata.resolve_clerk_user(&identity).unwrap_err();
+    let error = state
+        .metadata
+        .resolve_clerk_user(&identity)
+        .await
+        .unwrap_err();
 
-    assert_eq!(error.status, StatusCode::UNAUTHORIZED);
+    assert_eq!(error.kind, scope_core::error::ErrorKind::Unauthorized);
 }
 
 #[tokio::test]
@@ -209,7 +221,7 @@ async fn known_clerk_session_uses_current_identity_without_persisting_snapshot()
         email: Some(TEST_OWNER_EMAIL.to_string()),
         email_verified: true,
     };
-    state.metadata.resolve_clerk_user(&identity).unwrap();
+    state.metadata.resolve_clerk_user(&identity).await.unwrap();
 
     let response = router(state.clone())
         .oneshot(
@@ -267,5 +279,5 @@ async fn clerk_verifier_requires_configured_issuer() {
     let jwt = token(TEST_CLERK_USER_ID, true);
     let error = verifier.verify(&jwt).await.unwrap_err();
 
-    assert_eq!(error.status, StatusCode::SERVICE_UNAVAILABLE);
+    assert_eq!(error.kind, scope_core::error::ErrorKind::ServiceUnavailable);
 }

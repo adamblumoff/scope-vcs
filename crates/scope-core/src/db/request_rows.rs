@@ -9,8 +9,10 @@ use sea_orm::{
     ActiveModelTrait, ColumnTrait, ConnectionTrait, EntityTrait, IntoActiveModel, QueryFilter,
     QueryOrder, sea_query::Expr,
 };
+#[cfg(any(test, feature = "test-support"))]
 use std::collections::BTreeMap;
 
+#[cfg(any(test, feature = "test-support"))]
 pub struct RequestCatalogRows {
     pub requests: BTreeMap<String, Request>,
     pub request_events: BTreeMap<String, RequestEvent>,
@@ -18,6 +20,7 @@ pub struct RequestCatalogRows {
     pub credit_ledger_entries: BTreeMap<String, CreditLedgerEntry>,
 }
 
+#[cfg(any(test, feature = "test-support"))]
 pub async fn load_request_catalog_rows<C>(conn: &C) -> Result<RequestCatalogRows, ApiError>
 where
     C: ConnectionTrait,

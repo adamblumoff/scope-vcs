@@ -5,17 +5,10 @@ use crate::config::{
 
 pub(super) const SCOPE_ENV_ENV: &str = "SCOPE_ENV";
 pub(super) const LOCAL_SCOPE_ENV: &str = "local";
-pub(super) const SCOPE_METADATA_STORE_ENV: &str = "SCOPE_METADATA_STORE";
 pub(super) const SCOPE_OBJECT_STORE_ENV: &str = "SCOPE_OBJECT_STORE";
 pub(super) const SCOPE_OBJECT_STORE_DIR_ENV: &str = "SCOPE_OBJECT_STORE_DIR";
 pub(super) const SCOPE_DEV_USER_EMAIL_ENV: &str = "SCOPE_DEV_USER_EMAIL";
 pub(super) const SCOPE_DEV_USER_HANDLE_ENV: &str = "SCOPE_DEV_USER_HANDLE";
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(super) enum DevMetadataStore {
-    Memory,
-    Postgres,
-}
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(super) struct DevSeedUser {
@@ -25,7 +18,6 @@ pub(super) struct DevSeedUser {
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(super) struct LocalDevSettings {
-    pub(super) metadata_store: DevMetadataStore,
     pub(super) seed_user: DevSeedUser,
 }
 
@@ -41,7 +33,6 @@ pub(super) fn validate_local_dev_environment() -> anyhow::Result<LocalDevSetting
 #[derive(Default)]
 struct DevEnvSnapshot {
     scope_env: Option<String>,
-    metadata_store: Option<String>,
     database_url: Option<String>,
     app_origin: Option<String>,
     api_public_url: Option<String>,
@@ -58,7 +49,6 @@ impl DevEnvSnapshot {
     fn from_env() -> Self {
         Self {
             scope_env: non_empty_env(SCOPE_ENV_ENV),
-            metadata_store: non_empty_env(SCOPE_METADATA_STORE_ENV),
             database_url: non_empty_env(DATABASE_URL_ENV),
             app_origin: non_empty_env(SCOPE_APP_ORIGIN_ENV),
             api_public_url: non_empty_env(SCOPE_API_PUBLIC_URL_ENV),
@@ -99,16 +89,11 @@ fn validate_snapshot(snapshot: &DevEnvSnapshot) -> anyhow::Result<LocalDevSettin
         anyhow::bail!("{SCOPE_ENV_ENV}=local requires {SCOPE_OBJECT_STORE_ENV}=filesystem");
     }
 
-    let metadata_store = dev_metadata_store(snapshot.metadata_store.as_deref())?;
-    if metadata_store == DevMetadataStore::Postgres {
-        let database_url = snapshot
-            .database_url
-            .as_deref()
-            .ok_or_else(|| anyhow::anyhow!("{DATABASE_URL_ENV} is required for local Postgres"))?;
-        validate_local_database_url(database_url)?;
-    } else if let Some(database_url) = snapshot.database_url.as_deref() {
-        reject_production_database_url(database_url)?;
-    }
+    let database_url = snapshot
+        .database_url
+        .as_deref()
+        .ok_or_else(|| anyhow::anyhow!("{DATABASE_URL_ENV} is required in local dev"))?;
+    validate_local_database_url(database_url)?;
 
     let clerk_issuer = snapshot
         .clerk_issuer
@@ -123,17 +108,8 @@ fn validate_snapshot(snapshot: &DevEnvSnapshot) -> anyhow::Result<LocalDevSettin
     }
 
     Ok(LocalDevSettings {
-        metadata_store,
         seed_user: dev_seed_user(snapshot)?,
     })
-}
-
-fn dev_metadata_store(value: Option<&str>) -> anyhow::Result<DevMetadataStore> {
-    match value.map(str::trim).filter(|value| !value.is_empty()) {
-        None | Some("memory") => Ok(DevMetadataStore::Memory),
-        Some("postgres") => Ok(DevMetadataStore::Postgres),
-        Some(value) => anyhow::bail!("unsupported {SCOPE_METADATA_STORE_ENV}={value}"),
-    }
 }
 
 fn require_exact(name: &str, actual: Option<&str>, expected: &str) -> anyhow::Result<()> {
@@ -300,16 +276,21 @@ mod tests {
     use super::*;
 
     #[test]
-    fn local_runtime_defaults_to_memory_metadata() {
+    fn local_runtime_accepts_safe_postgres_config() {
         let settings = validate_snapshot(&local_snapshot()).unwrap();
-        assert_eq!(settings.metadata_store, DevMetadataStore::Memory);
         assert_eq!(settings.seed_user.email, "dev@example.com");
         assert_eq!(settings.seed_user.handle, "dev");
     }
 
     #[test]
-    fn local_runtime_accepts_safe_memory_config_without_database() {
-        validate_snapshot(&local_snapshot()).unwrap();
+    fn local_runtime_requires_database() {
+        let snapshot = DevEnvSnapshot {
+            database_url: None,
+            ..local_snapshot()
+        };
+
+        let error = validate_snapshot(&snapshot).unwrap_err();
+        assert!(error.to_string().contains(DATABASE_URL_ENV));
     }
 
     #[test]
@@ -325,7 +306,7 @@ mod tests {
     }
 
     #[test]
-    fn local_runtime_rejects_production_database_even_when_memory_backed() {
+    fn local_runtime_rejects_production_database() {
         let snapshot = DevEnvSnapshot {
             database_url: Some(
                 "postgres://user:pass@scope-postgres.railway.internal:5432/railway".to_string(),
@@ -401,6 +382,7 @@ mod tests {
             clerk_issuer: Some("https://scope-dev.clerk.accounts.dev".to_string()),
             clerk_authorized_parties: Some(LOCAL_APP_ORIGIN.to_string()),
             object_store: Some("filesystem".to_string()),
+            database_url: Some("postgres://scope:scope@127.0.0.1:5432/scope_dev".to_string()),
             dev_user_email: Some("dev@example.com".to_string()),
             dev_user_handle: Some("dev".to_string()),
             ..DevEnvSnapshot::default()

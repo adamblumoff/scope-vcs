@@ -88,7 +88,6 @@ pub(crate) struct SessionCapabilities {
     pub(crate) can_push: bool,
     pub(crate) can_change_file_visibility: bool,
     pub(crate) can_apply_changes: bool,
-    pub(crate) can_update_repo_settings: bool,
     pub(crate) can_manage_members: bool,
     pub(crate) can_delete_repo: bool,
 }
@@ -200,7 +199,6 @@ pub(crate) struct RepoSummaryResponse {
     pub(crate) default_visibility: Visibility,
     pub(crate) change_version: u64,
     pub(crate) access: RepositoryAccessResponse,
-    pub(crate) pending_import_pending: bool,
     pub(crate) open_request_count: usize,
     pub(crate) request_permissions: RepoRequestPermissionsResponse,
 }
@@ -213,7 +211,6 @@ pub(crate) struct RepositoryAccessResponse {
     pub(crate) can_push: bool,
     pub(crate) can_change_file_visibility: bool,
     pub(crate) can_apply_changes: bool,
-    pub(crate) can_update_repo_settings: bool,
     pub(crate) can_manage_members: bool,
     pub(crate) can_delete_repo: bool,
 }
@@ -427,7 +424,6 @@ pub(crate) fn repo_summary_for_user(
         default_visibility: repo.record.default_visibility,
         change_version: repo_change_version_for_access(repo, access),
         access: repository_access_response(access),
-        pending_import_pending: repo.has_pending_import_review(),
         open_request_count,
         request_permissions: repo_request_permissions_response(access),
     })
@@ -460,7 +456,6 @@ pub(crate) fn repository_access_response(access: RepositoryAccess) -> Repository
         can_push: access.can_push,
         can_change_file_visibility: access.can_change_file_visibility,
         can_apply_changes: access.can_apply_changes,
-        can_update_repo_settings: access.can_update_repo_settings,
         can_manage_members: access.can_manage_members,
         can_delete_repo: access.can_delete_repo,
     }
@@ -476,7 +471,6 @@ pub(crate) fn session_capabilities_response(
         can_push: access.can_push,
         can_change_file_visibility: access.can_change_file_visibility,
         can_apply_changes: access.can_apply_changes,
-        can_update_repo_settings: access.can_update_repo_settings,
         can_manage_members: access.can_manage_members,
         can_delete_repo: access.can_delete_repo,
     }

@@ -483,19 +483,23 @@ async fn deleted_public_file_keeps_public_history_readable_with_empty_tree() {
     assert!(response_json(response).await.as_array().unwrap().is_empty());
 }
 
-#[test]
-fn anonymous_request_uses_public_principal() {
+#[tokio::test]
+async fn anonymous_request_uses_public_principal() {
     let state = test_state_with_repo();
-    let repo = find_repo(&state, TEST_REPO_OWNER, TEST_REPO_NAME).unwrap();
+    let repo = find_repo(&state, TEST_REPO_OWNER, TEST_REPO_NAME)
+        .await
+        .unwrap();
     let principal = principal_for_scope_user(&repo, None);
 
     assert_eq!(principal, Principal::public());
 }
 
-#[test]
-fn scope_owner_uses_repo_principal() {
+#[tokio::test]
+async fn scope_owner_uses_repo_principal() {
     let state = test_state_with_repo();
-    let repo = find_repo(&state, TEST_REPO_OWNER, TEST_REPO_NAME).unwrap();
+    let repo = find_repo(&state, TEST_REPO_OWNER, TEST_REPO_NAME)
+        .await
+        .unwrap();
     let user = UserAccount {
         id: test_owner_id(),
         handle: TEST_REPO_OWNER.to_string(),
@@ -508,10 +512,12 @@ fn scope_owner_uses_repo_principal() {
     assert_eq!(principal.kind, PrincipalKind::User);
 }
 
-#[test]
-fn non_member_scope_user_uses_public_principal() {
+#[tokio::test]
+async fn non_member_scope_user_uses_public_principal() {
     let state = test_state_with_repo();
-    let repo = find_repo(&state, TEST_REPO_OWNER, TEST_REPO_NAME).unwrap();
+    let repo = find_repo(&state, TEST_REPO_OWNER, TEST_REPO_NAME)
+        .await
+        .unwrap();
     let user = UserAccount {
         id: "scope_usr_other".to_string(),
         handle: "other".to_string(),
@@ -523,10 +529,11 @@ fn non_member_scope_user_uses_public_principal() {
     assert_eq!(principal, Principal::public());
 }
 
-#[test]
-fn unreadable_repo_is_hidden_from_public_requests() {
+#[tokio::test]
+async fn unreadable_repo_is_hidden_from_public_requests() {
     let state = test_state_with_repo();
     let mut repo = find_repo(&state, TEST_REPO_OWNER, TEST_REPO_NAME)
+        .await
         .unwrap()
         .clone();
     repo.record.publication_state = RepoPublicationState::Unpublished;

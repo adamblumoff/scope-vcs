@@ -31,7 +31,7 @@ export function RepoDetailPage({
     <RepoShell active="code" canManage={!publicOnlyView} params={params}>
       <PageContent>
         <PageHeader
-          actions={() => (
+          actions={(
             <>
               {repo.lifecycle_state === 'Published' && (
                 <RepoCloneDropdown
@@ -47,7 +47,7 @@ export function RepoDetailPage({
               />
             </>
           )}
-          badges={() => (
+          badges={(
             <>
               <LifecycleBadge state={repo.lifecycle_state} />
               <Badge variant="neutral">{repo.access.actor}</Badge>

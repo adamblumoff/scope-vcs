@@ -1,12 +1,11 @@
 use super::{
     policy::{ScopePath, Visibility, VisibilityRule},
-    projection::{AuthorVisibility, FileChange, LogicalCommit, VisibilityEvent},
+    projection::VisibilityEvent,
     repo_config::repo_config_from_policy,
     reviewed_updates::ReviewedUpdateError,
     store::{
-        CatalogError, FirstPushToken, GitPushToken, PendingImport, RepoPublicationState,
-        RepoRecord, RepoSettings, RepoStorageCleanup, SourceBlob, StoredRepository, UserAccount,
-        pending_import_scope_path,
+        CatalogError, FirstPushToken, GitPushToken, RepoPublicationState, RepoStorageCleanup,
+        SourceBlob, StoredRepository, UserAccount,
     },
 };
 use crate::error::ApiError;
@@ -203,88 +202,6 @@ pub fn set_visibility(
     Ok(RepoMutation::new(()))
 }
 
-pub fn update_settings(
-    repo: &mut StoredRepository,
-    user_id: &str,
-    settings: RepoSettings,
-    default_visibility: Visibility,
-) -> Result<RepoMutation<()>, ApiError> {
-    ensure_repo_owner(repo, user_id)?;
-    let changed = repo.settings != settings || repo.record.default_visibility != default_visibility;
-    repo.settings = settings;
-    if repo.record.default_visibility != default_visibility {
-        preserve_existing_visibility_for_new_default(repo, default_visibility)?;
-        repo.repo_config = repo_config_from_policy(
-            &repo.policy,
-            default_visibility,
-            repo.repo_config.history.clone(),
-        )
-        .map_err(ApiError::bad_request)?;
-    }
-    repo.record.default_visibility = default_visibility;
-    if changed {
-        repo.bump_change_version();
-    }
-    Ok(RepoMutation::new(()))
-}
-
-pub fn publish_import(
-    repo: &mut StoredRepository,
-    user_id: &str,
-) -> Result<RepoMutation<RepoRecord>, ApiError> {
-    ensure_repo_owner(repo, user_id)?;
-    preview_publish_import(repo)
-}
-
-pub fn preview_publish_import(
-    repo: &mut StoredRepository,
-) -> Result<RepoMutation<RepoRecord>, ApiError> {
-    ensure_pending_publish(repo)?;
-    let pending = repo
-        .pending_import
-        .take()
-        .ok_or_else(|| ApiError::bad_request("repo has no pending import to publish"))?;
-    let changes = pending_import_changes(&repo.policy, &pending);
-    let parent_ids = repo
-        .graph
-        .commits
-        .last()
-        .map(|commit| vec![commit.id.clone()])
-        .unwrap_or_default();
-    let logical_id = format!(
-        "rv_git_{}",
-        pending
-            .head_oid
-            .get(..12)
-            .unwrap_or(pending.head_oid.as_str())
-    );
-    repo.graph.commits.push(LogicalCommit {
-        id: logical_id,
-        parent_ids,
-        author_id: repo.record.owner_user_id.clone(),
-        author_visibility: AuthorVisibility::Visible,
-        message: format!("Import pushed {}", pending.default_branch),
-        changes,
-    });
-    repo.git_snapshot = Some(pending.git_snapshot);
-    repo.record.publication_state = RepoPublicationState::Published;
-    repo.first_push_token = None;
-    repo.bump_change_version();
-    Ok(RepoMutation::new(repo.record.clone()))
-}
-
-pub fn ensure_pending_publish(repo: &StoredRepository) -> Result<(), ApiError> {
-    if !repo.has_pending_import_review() {
-        return Err(ApiError::bad_request("repo is not pending publish"));
-    }
-    if repo.pending_import.is_none() {
-        return Err(ApiError::bad_request(
-            "repo has no pending import to publish",
-        ));
-    }
-    Ok(())
-}
-
 pub fn delete_repo(
     repo: &StoredRepository,
     user_id: &str,
@@ -299,69 +216,6 @@ pub fn delete_repo(
     });
     effects.delete_source_blobs(repo.source_blobs());
     Ok(RepoMutation::with_effects(repo.record.id.clone(), effects))
-}
-
-fn preserve_existing_visibility_for_new_default(
-    repo: &mut StoredRepository,
-    default_visibility: Visibility,
-) -> Result<(), ApiError> {
-    let existing_visibility = existing_repo_paths(repo)?
-        .into_iter()
-        .map(|path| {
-            let visibility = repo.policy.effective_visibility(&path);
-            (path, visibility)
-        })
-        .collect::<Vec<_>>();
-    repo.policy.set_default_visibility(default_visibility);
-    for (path, visibility) in existing_visibility {
-        if repo.policy.effective_visibility(&path) == visibility {
-            continue;
-        }
-
-        let rule = match visibility {
-            Visibility::Public => VisibilityRule::public(path),
-            Visibility::Private => VisibilityRule::private(path),
-        };
-        repo.policy.add_rule(rule).map_err(ApiError::bad_request)?;
-    }
-    Ok(())
-}
-
-fn existing_repo_paths(repo: &StoredRepository) -> Result<Vec<ScopePath>, ApiError> {
-    if repo.has_pending_import_review() {
-        let Some(pending_import) = repo.pending_import.as_ref() else {
-            return Ok(Vec::new());
-        };
-        return pending_import
-            .files
-            .iter()
-            .map(|file| pending_import_scope_path(&file.path).map_err(ApiError::bad_request))
-            .collect();
-    }
-
-    Ok(repo.live_tree().into_keys().collect())
-}
-
-fn pending_import_changes(
-    policy: &super::policy::Policy,
-    pending: &PendingImport,
-) -> Vec<FileChange> {
-    pending
-        .files
-        .iter()
-        .map(|file| {
-            let path = pending_import_scope_path(&file.path)
-                .expect("pending import paths were validated before persistence");
-            let mut blob = file.blob.clone();
-            blob.git_file_mode = file.mode.clone();
-            FileChange {
-                visibility: policy.effective_visibility(&path),
-                path,
-                old_content: None,
-                new_content: Some(blob),
-            }
-        })
-        .collect()
 }
 
 #[cfg(test)]

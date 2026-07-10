@@ -370,7 +370,7 @@ mod tests {
 
         let error = store.get_bounded("objects/too-large", 4).unwrap_err();
 
-        assert_eq!(error.status, axum::http::StatusCode::PAYLOAD_TOO_LARGE);
+        assert_eq!(error.kind, crate::error::ErrorKind::PayloadTooLarge);
         assert!(error.message.contains("exceeds 4 bytes"));
         let request = server.recv();
         assert_eq!(request.method, "GET");

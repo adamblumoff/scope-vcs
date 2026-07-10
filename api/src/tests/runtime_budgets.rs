@@ -22,7 +22,7 @@ async fn receive_pack_capacity_exhaustion_returns_backpressure() {
         });
     }
 
-    let push_intent = create_test_push_intent(&state, &test_owner_id(), TEST_PUSH_HEAD_OID);
+    let push_intent = create_test_push_intent(&state, &test_owner_id(), TEST_PUSH_HEAD_OID).await;
     let response = router(state)
         .oneshot(
             Request::builder()
@@ -74,8 +74,8 @@ async fn upload_pack_capacity_exhaustion_happens_before_projection_build() {
     assert!(!body.contains("Git projection build capacity"));
 }
 
-#[test]
-fn object_store_capacity_exhaustion_returns_backpressure() {
+#[tokio::test]
+async fn object_store_capacity_exhaustion_returns_backpressure() {
     let raw = Arc::new(MemoryObjectStore::new());
     let store = BudgetedObjectStore::new(
         raw,
@@ -87,15 +87,15 @@ fn object_store_capacity_exhaustion_returns_backpressure() {
 
     let error = store.get("tests/budget/backpressure").unwrap_err();
 
-    assert_eq!(error.status, StatusCode::TOO_MANY_REQUESTS);
+    assert_eq!(error.kind, scope_core::error::ErrorKind::TooManyRequests);
     assert_eq!(
         error.message,
         "object store read capacity is exhausted; retry later"
     );
 }
 
-#[test]
-fn object_store_readiness_bypasses_operation_capacity() {
+#[tokio::test]
+async fn object_store_readiness_bypasses_operation_capacity() {
     let store = BudgetedObjectStore::new(
         Arc::new(MemoryObjectStore::new()),
         Arc::new(RuntimeBudgets::from_config(RuntimeBudgetConfig {
@@ -121,7 +121,7 @@ fn object_store_write_size_limit_returns_payload_too_large() {
         .put("tests/budget/write-too-large", b"12345")
         .unwrap_err();
 
-    assert_eq!(error.status, StatusCode::PAYLOAD_TOO_LARGE);
+    assert_eq!(error.kind, scope_core::error::ErrorKind::PayloadTooLarge);
     assert!(error.message.contains("exceeds 4 bytes"));
 }
 
@@ -140,7 +140,7 @@ fn object_store_read_size_limit_returns_payload_too_large() {
 
     let error = store.get(key).unwrap_err();
 
-    assert_eq!(error.status, StatusCode::PAYLOAD_TOO_LARGE);
+    assert_eq!(error.kind, scope_core::error::ErrorKind::PayloadTooLarge);
     assert!(error.message.contains("exceeds 4 bytes"));
 }
 

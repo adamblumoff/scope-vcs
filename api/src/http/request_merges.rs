@@ -19,7 +19,7 @@ use crate::{
 };
 use std::{fs, path::Path as FsPath};
 
-pub(crate) fn clean_merge_update(
+pub(crate) async fn clean_merge_update(
     state: &AppState,
     owner: &str,
     repo_name: &str,
@@ -37,7 +37,8 @@ pub(crate) fn clean_merge_update(
             request,
             maintainer_id,
             current_main_oid,
-        );
+        )
+        .await;
     }
     clean_private_request_merge_update(
         state,
@@ -48,9 +49,10 @@ pub(crate) fn clean_merge_update(
         maintainer_id,
         current_main_oid,
     )
+    .await
 }
 
-fn clean_private_request_merge_update(
+async fn clean_private_request_merge_update(
     state: &AppState,
     owner: &str,
     repo_name: &str,
@@ -68,7 +70,7 @@ fn clean_private_request_merge_update(
     if work_repo.exists() {
         fs::remove_dir_all(&work_repo).map_err(ApiError::internal)?;
     }
-    let result = (|| {
+    let result = async {
         ensure_merge_work_parent(&work_repo)?;
         run_git(
             None,
@@ -90,12 +92,14 @@ fn clean_private_request_merge_update(
             maintainer_id,
             repo.repo_config.clone(),
         )
-    })();
+        .await
+    }
+    .await;
     let _ = fs::remove_dir_all(&work_repo);
     result
 }
 
-fn clean_public_request_merge_update(
+async fn clean_public_request_merge_update(
     state: &AppState,
     owner: &str,
     repo_name: &str,
@@ -116,7 +120,7 @@ fn clean_public_request_merge_update(
     if work_root.exists() {
         fs::remove_dir_all(&work_root).map_err(ApiError::internal)?;
     }
-    let result = (|| {
+    let result = async {
         ensure_private_dir(&work_root)?;
         run_git(
             None,
@@ -160,7 +164,9 @@ fn clean_public_request_merge_update(
             maintainer_id,
             repo.repo_config.clone(),
         )
-    })();
+        .await
+    }
+    .await;
     let _ = fs::remove_dir_all(&work_root);
     result
 }

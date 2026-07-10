@@ -1,9 +1,9 @@
 use super::{
-    MetadataStore, MetadataStoreInner, begin_metadata_read_snapshot, entities,
+    MetadataStore, begin_metadata_read_snapshot, entities,
     projection_read_models::{
         load_live_projection_file_count_for_audience, load_live_projection_files_for_audience,
     },
-    repository_from_model, run_api_db_on,
+    repository_from_model,
 };
 use crate::{
     domain::{
@@ -14,15 +14,15 @@ use crate::{
             projected_files as domain_projected_files,
         },
         store::{
-            RepoPublicationState, RepoSettings, RepositoryAccess, RepositoryActor,
-            RepositoryMemberPermissions, StoredRepository, repo_id,
+            RepoPublicationState, RepositoryAccess, RepositoryActor, RepositoryMemberPermissions,
+            StoredRepository, repo_id,
         },
     },
     error::ApiError,
 };
 use sea_orm::{
     ColumnTrait, ConnectionTrait, EntityTrait, FromQueryResult, QueryFilter, QueryOrder,
-    QuerySelect, prelude::Json, sea_query::Expr,
+    QuerySelect, prelude::Json,
 };
 use std::{collections::BTreeMap, sync::Arc};
 
@@ -38,13 +38,6 @@ pub struct RepoSummaryRead {
     pub default_visibility: Visibility,
     pub change_version: u64,
     pub access: RepositoryAccess,
-    pub pending_import_pending: bool,
-}
-
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct RepoSettingsRead {
-    pub default_new_file_visibility: Visibility,
-    pub review_pushes_before_applying: bool,
 }
 
 #[derive(Clone, Debug, FromQueryResult)]
@@ -57,40 +50,22 @@ struct RepoReadRow {
     default_visibility: String,
     change_version: i64,
     policy: Json,
-    pending_import_pending: bool,
 }
 
 impl MetadataStore {
-    pub fn repo_summaries_for_user(&self, user_id: &str) -> Result<Vec<RepoSummaryRead>, ApiError> {
+    pub async fn repo_summaries_for_user(
+        &self,
+        user_id: &str,
+    ) -> Result<Vec<RepoSummaryRead>, ApiError> {
         let user_id = user_id.to_string();
-        match self.inner.as_ref() {
-            MetadataStoreInner::Postgres { db, runtime } => {
-                let db = Arc::clone(db);
-                run_api_db_on(runtime, async move {
-                    let tx = begin_metadata_read_snapshot(db.as_ref()).await?;
-                    let summaries = repo_summaries_for_user_tx(&tx, &user_id).await?;
-                    tx.commit().await.map_err(ApiError::internal)?;
-                    Ok(summaries)
-                })
-            }
-            #[cfg(any(test, feature = "memory-metadata"))]
-            MetadataStoreInner::Memory(memory) => {
-                let catalog = memory
-                    .catalog
-                    .lock()
-                    .map_err(|_| ApiError::internal_message("catalog lock is poisoned"))?;
-                let mut summaries = catalog
-                    .repositories_for_user(&user_id)
-                    .into_iter()
-                    .filter_map(|repo| repo_summary_for_user(repo, &user_id))
-                    .collect::<Vec<_>>();
-                summaries.sort_by(|left, right| left.id.cmp(&right.id));
-                Ok(summaries)
-            }
-        }
+        let db = Arc::clone(&self.db);
+        let tx = begin_metadata_read_snapshot(db.as_ref()).await?;
+        let summaries = repo_summaries_for_user_tx(&tx, &user_id).await?;
+        tx.commit().await.map_err(ApiError::internal)?;
+        Ok(summaries)
     }
 
-    pub fn repo_summary(
+    pub async fn repo_summary(
         &self,
         owner: &str,
         name: &str,
@@ -99,80 +74,14 @@ impl MetadataStore {
         let owner = owner.to_string();
         let name = name.to_string();
         let viewer_user_id = viewer_user_id.map(str::to_string);
-        match self.inner.as_ref() {
-            MetadataStoreInner::Postgres { db, runtime } => {
-                let db = Arc::clone(db);
-                run_api_db_on(runtime, async move {
-                    let tx = begin_metadata_read_snapshot(db.as_ref()).await?;
-                    let summary =
-                        repo_summary_tx(&tx, &owner, &name, viewer_user_id.as_deref()).await?;
-                    tx.commit().await.map_err(ApiError::internal)?;
-                    Ok(summary)
-                })
-            }
-            #[cfg(any(test, feature = "memory-metadata"))]
-            MetadataStoreInner::Memory(memory) => {
-                let catalog = memory
-                    .catalog
-                    .lock()
-                    .map_err(|_| ApiError::internal_message("catalog lock is poisoned"))?;
-                Ok(catalog
-                    .repository(&owner, &name)
-                    .and_then(|repo| repo_summary_for_viewer(repo, viewer_user_id.as_deref())))
-            }
-        }
+        let db = Arc::clone(&self.db);
+        let tx = begin_metadata_read_snapshot(db.as_ref()).await?;
+        let summary = repo_summary_tx(&tx, &owner, &name, viewer_user_id.as_deref()).await?;
+        tx.commit().await.map_err(ApiError::internal)?;
+        Ok(summary)
     }
 
-    pub fn repo_settings(
-        &self,
-        owner: &str,
-        name: &str,
-        viewer_user_id: Option<&str>,
-    ) -> Result<Option<RepoSettingsRead>, ApiError> {
-        let owner = owner.to_string();
-        let name = name.to_string();
-        let viewer_user_id = viewer_user_id.map(str::to_string);
-        match self.inner.as_ref() {
-            MetadataStoreInner::Postgres { db, runtime } => {
-                let db = Arc::clone(db);
-                run_api_db_on(runtime, async move {
-                    let tx = begin_metadata_read_snapshot(db.as_ref()).await?;
-                    let settings =
-                        repo_settings_tx(&tx, &owner, &name, viewer_user_id.as_deref()).await?;
-                    tx.commit().await.map_err(ApiError::internal)?;
-                    Ok(settings)
-                })
-            }
-            #[cfg(any(test, feature = "memory-metadata"))]
-            MetadataStoreInner::Memory(memory) => {
-                let catalog = memory
-                    .catalog
-                    .lock()
-                    .map_err(|_| ApiError::internal_message("catalog lock is poisoned"))?;
-                let Some(repo) = catalog.repository(&owner, &name) else {
-                    return Ok(None);
-                };
-                if viewer_user_id
-                    .as_deref()
-                    .is_some_and(|user_id| repo.is_owner_user(user_id))
-                {
-                    if !repo_is_readable_for_viewer(repo, viewer_user_id.as_deref()) {
-                        return Ok(None);
-                    }
-                    return Ok(Some(repo_settings_read(
-                        repo.record.default_visibility,
-                        repo.settings,
-                    )));
-                }
-                if repo_is_readable_for_viewer(repo, viewer_user_id.as_deref()) {
-                    return Err(ApiError::forbidden("owner role required"));
-                }
-                Ok(None)
-            }
-        }
-    }
-
-    pub fn repo_live_files(
+    pub async fn repo_live_files(
         &self,
         owner: &str,
         name: &str,
@@ -181,36 +90,14 @@ impl MetadataStore {
         let owner = owner.to_string();
         let name = name.to_string();
         let viewer_user_id = viewer_user_id.map(str::to_string);
-        match self.inner.as_ref() {
-            MetadataStoreInner::Postgres { db, runtime } => {
-                let db = Arc::clone(db);
-                run_api_db_on(runtime, async move {
-                    let tx = begin_metadata_read_snapshot(db.as_ref()).await?;
-                    let files =
-                        repo_live_files_tx(&tx, &owner, &name, viewer_user_id.as_deref()).await?;
-                    tx.commit().await.map_err(ApiError::internal)?;
-                    Ok(files)
-                })
-            }
-            #[cfg(any(test, feature = "memory-metadata"))]
-            MetadataStoreInner::Memory(memory) => {
-                let catalog = memory
-                    .catalog
-                    .lock()
-                    .map_err(|_| ApiError::internal_message("catalog lock is poisoned"))?;
-                let Some(repo) = catalog.repository(&owner, &name) else {
-                    return Ok(None);
-                };
-                if !repo_is_readable_for_viewer(repo, viewer_user_id.as_deref()) {
-                    return Ok(None);
-                }
-                let principal = principal_for_repo_viewer(repo, viewer_user_id.as_deref());
-                Ok(Some(domain_projected_files(repo, &principal)))
-            }
-        }
+        let db = Arc::clone(&self.db);
+        let tx = begin_metadata_read_snapshot(db.as_ref()).await?;
+        let files = repo_live_files_tx(&tx, &owner, &name, viewer_user_id.as_deref()).await?;
+        tx.commit().await.map_err(ApiError::internal)?;
+        Ok(files)
     }
 
-    pub fn repo_live_file_content(
+    pub async fn repo_live_file_content(
         &self,
         owner: &str,
         name: &str,
@@ -221,39 +108,12 @@ impl MetadataStore {
         let name = name.to_string();
         let viewer_user_id = viewer_user_id.map(str::to_string);
         let path = path.clone();
-        match self.inner.as_ref() {
-            MetadataStoreInner::Postgres { db, runtime } => {
-                let db = Arc::clone(db);
-                run_api_db_on(runtime, async move {
-                    let tx = begin_metadata_read_snapshot(db.as_ref()).await?;
-                    let content = repo_live_file_content_tx(
-                        &tx,
-                        &owner,
-                        &name,
-                        viewer_user_id.as_deref(),
-                        &path,
-                    )
-                    .await?;
-                    tx.commit().await.map_err(ApiError::internal)?;
-                    Ok(content)
-                })
-            }
-            #[cfg(any(test, feature = "memory-metadata"))]
-            MetadataStoreInner::Memory(memory) => {
-                let catalog = memory
-                    .catalog
-                    .lock()
-                    .map_err(|_| ApiError::internal_message("catalog lock is poisoned"))?;
-                let Some(repo) = catalog.repository(&owner, &name) else {
-                    return Ok(None);
-                };
-                if !repo_is_readable_for_viewer(repo, viewer_user_id.as_deref()) {
-                    return Ok(None);
-                }
-                let principal = principal_for_repo_viewer(repo, viewer_user_id.as_deref());
-                Ok(domain_projected_file_content(repo, &principal, &path))
-            }
-        }
+        let db = Arc::clone(&self.db);
+        let tx = begin_metadata_read_snapshot(db.as_ref()).await?;
+        let content =
+            repo_live_file_content_tx(&tx, &owner, &name, viewer_user_id.as_deref(), &path).await?;
+        tx.commit().await.map_err(ApiError::internal)?;
+        Ok(content)
     }
 }
 
@@ -317,43 +177,6 @@ where
     let permissions = member_permissions_for_viewer(conn, &row, viewer_user_id).await?;
     let access = access_for_row(&row, viewer_user_id, permissions)?;
     summary_for_viewer_row(conn, row, viewer_user_id, access).await
-}
-
-async fn repo_settings_tx<C>(
-    conn: &C,
-    owner: &str,
-    name: &str,
-    viewer_user_id: Option<&str>,
-) -> Result<Option<RepoSettingsRead>, ApiError>
-where
-    C: ConnectionTrait,
-{
-    let Some(row) = repo_read_row_by_owner_name(conn, owner, name).await? else {
-        return Ok(None);
-    };
-    if viewer_user_id.is_some_and(|user_id| user_id == row.owner_user_id) {
-        let repo_id = row.id.clone();
-        let default_visibility = row.default_visibility()?;
-        if !row.policy()?.can_read(&ScopePath::root(), true) {
-            return Ok(None);
-        }
-        let settings = entities::repository_setting::Entity::find_by_id(repo_id)
-            .one(conn)
-            .await
-            .map_err(ApiError::internal)?
-            .ok_or_else(|| ApiError::internal_message("repository settings row is missing"))?;
-        return Ok(Some(repo_settings_read(
-            default_visibility,
-            settings.into_domain(),
-        )));
-    }
-
-    let permissions = member_permissions_for_viewer(conn, &row, viewer_user_id).await?;
-    let access = access_for_row(&row, viewer_user_id, permissions)?;
-    if row_is_readable_for_viewer(conn, &row, viewer_user_id, access).await? {
-        return Err(ApiError::forbidden("owner role required"));
-    }
-    Ok(None)
 }
 
 async fn repo_live_files_tx<C>(
@@ -485,10 +308,6 @@ fn repo_read_query() -> sea_orm::Select<entities::repository::Entity> {
         .column(entities::repository::Column::DefaultVisibility)
         .column(entities::repository::Column::ChangeVersion)
         .column(entities::repository::Column::Policy)
-        .column_as(
-            Expr::col(entities::repository::Column::PendingImport).is_not_null(),
-            "pending_import_pending",
-        )
 }
 
 async fn member_permissions_for_viewer<C>(
@@ -619,8 +438,6 @@ fn summary_from_row(
     let lifecycle_state = row.publication_state()?;
     let default_visibility = row.default_visibility()?;
     let change_version = repo_change_version_for_access(row.change_version(), access);
-    let pending_import_pending =
-        lifecycle_state == RepoPublicationState::Unpublished && row.pending_import_pending;
     Ok(RepoSummaryRead {
         id: row.id,
         owner_handle: row.owner_handle,
@@ -629,7 +446,6 @@ fn summary_from_row(
         default_visibility,
         change_version,
         access,
-        pending_import_pending,
     })
 }
 
@@ -664,7 +480,6 @@ fn access_for_user_id(
             can_push: published,
             can_change_file_visibility: true,
             can_apply_changes: true,
-            can_update_repo_settings: true,
             can_manage_members: published,
             can_delete_repo: true,
         };
@@ -678,7 +493,6 @@ fn access_for_user_id(
         can_push: published && permissions.can_push,
         can_change_file_visibility: published && permissions.can_change_file_visibility,
         can_apply_changes: published && permissions.can_apply_changes,
-        can_update_repo_settings: false,
         can_manage_members: false,
         can_delete_repo: false,
     }
@@ -717,72 +531,6 @@ fn needs_public_projection_visibility(
     !policy.can_read(&ScopePath::root(), false)
 }
 
-#[cfg(any(test, feature = "memory-metadata"))]
-fn repo_summary_for_user(repo: &StoredRepository, user_id: &str) -> Option<RepoSummaryRead> {
-    let access = repo.access_for_user_id(user_id);
-    if access.actor == RepositoryActor::Public {
-        return None;
-    }
-    let lifecycle_allows_read = repo.record.publication_state == RepoPublicationState::Published
-        || access.actor == RepositoryActor::Owner;
-    if !lifecycle_allows_read
-        || !repo
-            .policy
-            .can_read(&ScopePath::root(), access.can_read_private_files)
-    {
-        return None;
-    }
-    Some(summary_from_repo(repo, access))
-}
-
-#[cfg(any(test, feature = "memory-metadata"))]
-fn repo_summary_for_viewer(
-    repo: &StoredRepository,
-    viewer_user_id: Option<&str>,
-) -> Option<RepoSummaryRead> {
-    let principal = principal_for_repo_viewer(repo, viewer_user_id);
-    if !repo_is_readable_for_principal(repo, &principal) {
-        return None;
-    }
-    Some(summary_from_repo(
-        repo,
-        repo.access_for_principal(&principal),
-    ))
-}
-
-#[cfg(any(test, feature = "memory-metadata"))]
-fn summary_from_repo(repo: &StoredRepository, access: RepositoryAccess) -> RepoSummaryRead {
-    RepoSummaryRead {
-        id: repo.record.id.clone(),
-        owner_handle: repo.record.owner_handle.clone(),
-        name: repo.record.name.clone(),
-        lifecycle_state: repo.record.publication_state,
-        default_visibility: repo.record.default_visibility,
-        change_version: repo_change_version_for_access(repo.record.change_version, access),
-        access,
-        pending_import_pending: repo.has_pending_import_review(),
-    }
-}
-
-#[cfg(any(test, feature = "memory-metadata"))]
-fn repo_is_readable_for_viewer(repo: &StoredRepository, viewer_user_id: Option<&str>) -> bool {
-    let principal = principal_for_repo_viewer(repo, viewer_user_id);
-    repo_is_readable_for_principal(repo, &principal)
-}
-
-#[cfg(any(test, feature = "memory-metadata"))]
-fn repo_is_readable_for_principal(repo: &StoredRepository, principal: &Principal) -> bool {
-    let access = repo.access_for_principal(principal);
-    readable_from_facts(
-        repo.record.publication_state,
-        &repo.policy,
-        access.actor == RepositoryActor::Public,
-        access,
-        repo.record.publication_state == RepoPublicationState::Published
-            && has_visible_projected_history(repo, principal),
-    )
-}
-
 fn readable_from_facts(
     publication_state: RepoPublicationState,
     policy: &Policy,
@@ -801,13 +549,6 @@ fn readable_from_facts(
             publication_state == RepoPublicationState::Published
                 && ((principal_is_public && policy.can_read(&root, false)) || visible_projection)
         }
-    }
-}
-
-fn repo_settings_read(default_visibility: Visibility, settings: RepoSettings) -> RepoSettingsRead {
-    RepoSettingsRead {
-        default_new_file_visibility: default_visibility,
-        review_pushes_before_applying: settings.review_pushes_before_applying,
     }
 }
 
@@ -834,20 +575,6 @@ fn principal_for_access(viewer_user_id: Option<&str>, access: RepositoryAccess) 
         return Principal::public();
     }
     principal_for_viewer(viewer_user_id)
-}
-
-#[cfg(any(test, feature = "memory-metadata"))]
-fn principal_for_repo_viewer(repo: &StoredRepository, viewer_user_id: Option<&str>) -> Principal {
-    let Some(user_id) = viewer_user_id else {
-        return Principal::public();
-    };
-    if repo.is_owner_user(user_id) || repo.member_for_user(user_id).is_some() {
-        return Principal {
-            id: user_id.to_string(),
-            kind: PrincipalKind::User,
-        };
-    }
-    Principal::public()
 }
 
 fn repo_change_version_for_access(change_version: u64, access: RepositoryAccess) -> u64 {
@@ -896,14 +623,6 @@ mod tests {
         assert!(
             !sql.contains("\"scope_repositories\".\"visibility_events\""),
             "narrow repo reads must not select visibility event JSON: {sql}"
-        );
-        assert!(
-            !sql.contains("\"scope_repositories\".\"pending_import\","),
-            "narrow repo reads should only test pending import presence: {sql}"
-        );
-        assert!(
-            sql.contains("\"pending_import\" IS NOT NULL"),
-            "pending import state should be a SQL null check: {sql}"
         );
     }
 }

@@ -46,6 +46,25 @@ fn install_scope_fetch_auth_writes_secret_free_credential_helper_for_permissione
     let remote_url = "https://scope.example/git/permissioned/adam/random";
 
     install_scope_fetch_auth(&root, remote_url).unwrap();
+    install_scope_fetch_auth(&root, remote_url).unwrap();
+
+    let helpers = Command::new("git")
+        .current_dir(&root)
+        .args([
+            "config",
+            "--local",
+            "--get-all",
+            &format!("credential.{remote_url}.helper"),
+        ])
+        .output()
+        .unwrap();
+    assert!(helpers.status.success());
+    assert_eq!(
+        String::from_utf8_lossy(&helpers.stdout)
+            .lines()
+            .collect::<Vec<_>>(),
+        vec!["", SCOPE_GIT_CREDENTIAL_HELPER]
+    );
 
     let helper = Command::new("git")
         .current_dir(&root)
@@ -80,7 +99,6 @@ fn install_scope_fetch_auth_writes_secret_free_credential_helper_for_permissione
         "true"
     );
     let config = fs::read_to_string(root.join(".git/config")).unwrap();
-    assert!(config.contains("\thelper =\n\thelper = \"!scope git-credential\""));
     assert!(
         !config.contains("scope_cli_secret"),
         "repo config must not persist Scope session tokens"
@@ -90,11 +108,16 @@ fn install_scope_fetch_auth_writes_secret_free_credential_helper_for_permissione
 }
 
 #[test]
-fn scope_fetch_auth_config_rejects_config_injection() {
+fn install_scope_fetch_auth_rejects_config_injection() {
+    let root = temporary_git_repo("scope-fetch-auth-injection");
     assert!(
-        scope_fetch_auth_config("https://scope.example/git/permissioned/adam/random\n[alias]",)
-            .is_err()
+        install_scope_fetch_auth(
+            &root,
+            "https://scope.example/git/permissioned/adam/random\n[alias]",
+        )
+        .is_err()
     );
+    let _ = fs::remove_dir_all(root);
 }
 
 #[test]

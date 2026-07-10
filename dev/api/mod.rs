@@ -20,7 +20,7 @@ use std::sync::Arc;
 
 pub use env::is_local_dev_env;
 
-pub fn app_state_from_env() -> anyhow::Result<AppState> {
+pub async fn app_state_from_env() -> anyhow::Result<AppState> {
     let settings = env::validate_local_dev_environment()?;
     let repo_root = git_repo_root();
     let data_dir = data_dir(&repo_root);
@@ -31,14 +31,13 @@ pub fn app_state_from_env() -> anyhow::Result<AppState> {
     let raw_object_store = Arc::new(EncryptedObjectStore::from_env(Arc::new(
         file_object_store::FileObjectStore::from_env(&data_dir),
     ))?);
-    let metadata = match settings.metadata_store {
-        env::DevMetadataStore::Memory => {
-            let catalog = seed::catalog(raw_object_store.as_ref(), settings.seed_user)
-                .map_err(|error| anyhow::anyhow!("seeding local dev catalog: {}", error.message))?;
-            MetadataStore::memory(catalog)
-        }
-        env::DevMetadataStore::Postgres => MetadataStore::connect_from_env()?,
-    };
+    let catalog = seed::catalog(raw_object_store.as_ref(), settings.seed_user)
+        .map_err(|error| anyhow::anyhow!("building local dev catalog: {}", error.message))?;
+    let metadata = MetadataStore::connect_from_env().await?;
+    metadata
+        .replace_catalog_for_local_dev(catalog)
+        .await
+        .map_err(|error| anyhow::anyhow!("seeding local dev database: {}", error.message))?;
     let repo_events = RepoChangeBus::default();
     metadata.start_repo_change_listener(repo_events.clone())?;
     let runtime_budgets = Arc::new(RuntimeBudgets::from_env()?);
@@ -72,8 +71,11 @@ pub(crate) async fn create_bench_cli_session(
         ApiError::internal_message(format!("validating local dev benchmark auth: {error}"))
     })?;
     let user = seed::seed_user_account(settings.seed_user);
-    let grant = state.metadata.create_cli_exchange_grant(&user)?;
-    let token = state.metadata.exchange_cli_grant(&grant.exchange_token)?;
+    let grant = state.metadata.create_cli_exchange_grant(&user).await?;
+    let token = state
+        .metadata
+        .exchange_cli_grant(&grant.exchange_token)
+        .await?;
 
     Ok(Json(CliSessionTokenResponse {
         session_token: token.session_token,

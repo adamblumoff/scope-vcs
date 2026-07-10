@@ -5,7 +5,7 @@ use crate::{
     },
     error::ApiError,
 };
-use axum::http::{HeaderMap, header::AUTHORIZATION};
+use http::{HeaderMap, header::AUTHORIZATION};
 use jsonwebtoken::{
     Algorithm, DecodingKey, Validation, decode, decode_header,
     jwk::{Jwk, JwkSet},

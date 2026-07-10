@@ -13,7 +13,6 @@ pub(crate) struct ReceivePackFileChange {
     pub(crate) content: Option<SourceBlob>,
 }
 
-#[allow(dead_code)]
 pub(crate) fn ensure_default_branch(branch: &str) -> Result<(), ApiError> {
     let branch = branch.trim();
     match branch {
@@ -29,7 +28,6 @@ pub(crate) fn ensure_default_branch(branch: &str) -> Result<(), ApiError> {
 }
 
 #[derive(Clone, Debug)]
-#[allow(dead_code)]
 pub(crate) struct ReceivePackUpdate {
     pub(crate) branch: String,
     pub(crate) head_oid: String,

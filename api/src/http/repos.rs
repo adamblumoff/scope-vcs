@@ -37,12 +37,10 @@ pub(crate) async fn list_repos(
 ) -> Result<Json<Vec<RepoSummaryResponse>>, ApiError> {
     let user = require_scope_user(&state, &headers).await?;
     let user_id = user.id.clone();
-    let mut repositories = state
-        .metadata
-        .repo_summaries_for_user(&user_id)?
-        .into_iter()
-        .map(|summary| repo_summary_response(&state, summary))
-        .collect::<Result<Vec<_>, _>>()?;
+    let mut repositories = Vec::new();
+    for summary in state.metadata.repo_summaries_for_user(&user_id).await? {
+        repositories.push(repo_summary_response(&state, summary).await?);
+    }
     repositories.sort_by(|left, right| left.id.cmp(&right.id));
 
     Ok(Json(repositories))
@@ -61,16 +59,20 @@ pub(crate) async fn create_repo(
     let (push_secret, push_token) = generate_git_push_token(&user.id)?;
     let now = unix_now()?;
 
-    let repo = state.metadata.create_repo_with_init_tokens(
-        &user.id,
-        &input.name,
-        default_visibility,
-        token,
-        push_token,
-        move |owner_handle, repo_name| {
-            crate::git::storage::delete_repo_storage(&cleanup_state, owner_handle, repo_name)
-        },
-    )?;
+    let repo = state
+        .metadata
+        .create_repo_with_init_tokens(
+            &user.id,
+            &input.name,
+            default_visibility,
+            token,
+            push_token,
+            move |owner_handle, repo_name| {
+                crate::git::storage::delete_repo_storage(&cleanup_state, owner_handle, repo_name)
+                    .map_err(Into::into)
+            },
+        )
+        .await?;
 
     let user_id = user.id.clone();
     let summary = repo_summary_for_user(&repo, &user_id, 0)
@@ -104,10 +106,11 @@ pub(crate) async fn get_repo(
             &owner,
             &repo_name,
             user.as_ref().map(|user| user.id.as_str()),
-        )?
+        )
+        .await?
         .ok_or_else(|| ApiError::not_found(format!("repo {owner}/{repo_name} not found")))?;
 
-    Ok(Json(repo_summary_response(&state, summary)?))
+    Ok(Json(repo_summary_response(&state, summary).await?))
 }
 
 pub(crate) async fn delete_repo(
@@ -116,13 +119,18 @@ pub(crate) async fn delete_repo(
     Path((owner, repo_name)): Path<(String, String)>,
 ) -> Result<Json<DeleteRepoResponse>, ApiError> {
     let user = require_scope_user(&state, &headers).await?;
-    let repo = find_repo(&state, &owner, &repo_name)?;
+    let repo = find_repo(&state, &owner, &repo_name).await?;
     let delete_version = repo.record.change_version.saturating_add(1);
-    let repo_id = state.metadata.delete_repo(&owner, &repo_name, &user.id)?;
-    state.publish_repo_change(&repo_id, delete_version, "repo-deleted");
+    let repo_id = state
+        .metadata
+        .delete_repo(&owner, &repo_name, &user.id)
+        .await?;
+    state
+        .publish_repo_change(&repo_id, delete_version, "repo-deleted")
+        .await;
 
-    crate::state::best_effort_drain_pending_repo_storage_deletions(&state);
-    crate::state::best_effort_drain_pending_source_blob_deletions(&state);
+    crate::state::best_effort_drain_pending_repo_storage_deletions(&state).await;
+    crate::state::best_effort_drain_pending_source_blob_deletions(&state).await;
 
     Ok(Json(DeleteRepoResponse {
         id: repo_id,
@@ -136,7 +144,7 @@ pub(crate) async fn get_repo_config(
     Path((owner, repo_name)): Path<(String, String)>,
 ) -> Result<Json<RepoConfigResponse>, ApiError> {
     let user = require_scope_user(&state, &headers).await?;
-    let repo = find_repo(&state, &owner, &repo_name)?;
+    let repo = find_repo(&state, &owner, &repo_name).await?;
     let principal = principal_for_user_id(&repo, &user.id);
     ensure_repo_read(&state, &repo, &principal)?;
     if repo.access_for_principal(&principal).actor == RepositoryActor::Public {
@@ -156,7 +164,7 @@ pub(crate) async fn create_push_intent(
     Json(input): Json<CreatePushIntentRequest>,
 ) -> Result<Json<CreatePushIntentResponse>, ApiError> {
     let user = require_scope_user(&state, &headers).await?;
-    let repo = find_repo(&state, &owner, &repo_name)?;
+    let repo = find_repo(&state, &owner, &repo_name).await?;
     let principal = principal_for_user_id(&repo, &user.id);
     let access = repo.access_for_principal(&principal);
 
@@ -166,28 +174,10 @@ pub(crate) async fn create_push_intent(
                 "repo {owner}/{repo_name} not found"
             )));
         }
-    } else if repo.record.publication_state == crate::domain::store::RepoPublicationState::Published
-    {
-        if !access.can_push {
-            return Err(ApiError::not_found(format!(
-                "repo {owner}/{repo_name} not found"
-            )));
-        }
-    } else {
-        if access.actor != RepositoryActor::Owner {
-            return Err(ApiError::not_found(format!(
-                "repo {owner}/{repo_name} not found"
-            )));
-        }
-        return Err(ApiError::conflict(
-            "repo has a stale pending import; resolve it before creating a push intent",
-        ));
-    }
-
-    if repo.has_pending_import_review() {
-        return Err(ApiError::conflict(
-            "repo has a pending import review; publish it before creating a push intent",
-        ));
+    } else if !access.can_push {
+        return Err(ApiError::not_found(format!(
+            "repo {owner}/{repo_name} not found"
+        )));
     }
 
     let head_oid = normalize_git_oid(&input.head_oid)?;
@@ -243,7 +233,7 @@ pub(crate) async fn complete_push_intent(
 ) -> Result<Json<CompletePushIntentResponse>, ApiError> {
     let user = require_scope_user(&state, &headers).await?;
     let push_intent = state.validate_completed_push_intent_secret(&input.token)?;
-    let repo = find_repo(&state, &owner, &repo_name)?;
+    let repo = find_repo(&state, &owner, &repo_name).await?;
     if !repo.access_for_user_id(&user.id).can_push {
         return Err(ApiError::not_found(format!(
             "repo {owner}/{repo_name} not found"
@@ -276,10 +266,10 @@ pub(crate) async fn complete_push_intent(
         .mutate_repository(&owner, &repo_name, move |repo| {
             let access = repo.access_for_user_id(&author_id);
             if !access.can_push {
-                return Err(ApiError::forbidden("push permission required"));
+                return Err(ApiError::forbidden("push permission required").into());
             }
             if !access.can_change_file_visibility && repo.repo_config != config {
-                return Err(ApiError::forbidden("file visibility permission required"));
+                return Err(ApiError::forbidden("file visibility permission required").into());
             }
             if repo.repo_config != config
                 && repo
@@ -290,14 +280,16 @@ pub(crate) async fn complete_push_intent(
             {
                 return Err(ApiError::conflict(
                     "repo content changed since review; rerun scope push",
-                ));
+                )
+                .into());
             }
             if repo.repo_config != config
                 && repo_config_fingerprint(&repo.repo_config)? != base_config_hash
             {
                 return Err(ApiError::conflict(
                     "repo config changed since review; rerun scope push",
-                ));
+                )
+                .into());
             }
             let changed = apply_reviewed_config_to_repo(
                 repo,
@@ -305,14 +297,17 @@ pub(crate) async fn complete_push_intent(
             )
             .map_err(reviewed_update_api_error)?;
             Ok(RepositoryMutation::new(changed))
-        })?;
+        })
+        .await?;
     if config_applied {
-        let repo = find_repo(&state, &owner, &repo_name)?;
-        state.publish_repo_change(
-            &repo.record.id,
-            repo.record.change_version,
-            "config-applied",
-        );
+        let repo = find_repo(&state, &owner, &repo_name).await?;
+        state
+            .publish_repo_change(
+                &repo.record.id,
+                repo.record.change_version,
+                "config-applied",
+            )
+            .await;
     }
 
     Ok(Json(CompletePushIntentResponse { config_applied }))
@@ -356,7 +351,7 @@ pub(crate) async fn get_projection_preview(
     Path((owner, repo_name)): Path<(String, String)>,
     Query(input): Query<ProjectionPreviewRequest>,
 ) -> Result<Json<ProjectionPreviewResponse>, ApiError> {
-    let repo = find_repo(&state, &owner, &repo_name)?;
+    let repo = find_repo(&state, &owner, &repo_name).await?;
     let source = input.source.unwrap_or(ProjectionPreviewSource::Live);
     let user = optional_scope_user(&state, &headers).await?;
     let requester = principal_for_scope_user(&repo, user.as_ref());
@@ -385,7 +380,8 @@ pub(crate) async fn get_files(
             &owner,
             &repo_name,
             user.as_ref().map(|user| user.id.as_str()),
-        )?
+        )
+        .await?
         .ok_or_else(|| ApiError::not_found(format!("repo {owner}/{repo_name} not found")))?;
 
     Ok(Json(projection_file_responses(files)))
@@ -409,7 +405,8 @@ pub(crate) async fn get_file_content(
             &repo_name,
             user.as_ref().map(|user| user.id.as_str()),
             &path,
-        )?
+        )
+        .await?
         .ok_or_else(|| ApiError::not_found("file not found"))?;
     let content = crate::http::file_diffs::review_content_response_for_blob(
         state.object_store.as_ref(),
@@ -424,13 +421,14 @@ pub(crate) async fn get_file_content(
     }))
 }
 
-fn repo_summary_response(
+async fn repo_summary_response(
     state: &AppState,
     summary: RepoSummaryRead,
 ) -> Result<RepoSummaryResponse, ApiError> {
     let open_request_count = state
         .metadata
-        .requests_by_repo_id(&summary.id)?
+        .requests_by_repo_id(&summary.id)
+        .await?
         .into_iter()
         .filter(|request| request_visible_in_summary(request, summary.access))
         .count();
@@ -443,7 +441,6 @@ fn repo_summary_response(
         default_visibility: summary.default_visibility,
         change_version: summary.change_version,
         access: repository_access_response(summary.access),
-        pending_import_pending: summary.pending_import_pending,
         open_request_count,
         request_permissions,
     })
