@@ -1,0 +1,1 @@
+Ok I'm extremely confused. Which service are we trying to deploy? Are we trying to deploy Creates/scope core or are we trying to deploy /worker?
