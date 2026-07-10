@@ -1,0 +1,1 @@
+Okay, you believe that this is the simplest and best way to do the COI login, then let's go ahead and do this. After you implement it, go ahead and do an auto-review locally. And then, once that screened, go ahead and test it in dev if you can, otherwise just go ahead and commit and push
