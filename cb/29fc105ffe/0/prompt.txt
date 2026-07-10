@@ -1,0 +1,1 @@
+yes this all looks good. i want this plan to be in an html plan format, and you can exceed 1000 lines if necessary that's no problem, but the document should really break stuff down into small steps that start on a solid foundation, then open up an linear project to reflect this plan.
