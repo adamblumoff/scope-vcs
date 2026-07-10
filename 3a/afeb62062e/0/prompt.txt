@@ -1,0 +1,1 @@
+yeah i agree, option 2 is the best way forward, and reserved refs shouldn't be visible unless we get an error, but you can be the judge on how that should go. go ahead and modify the pr accordingly and let me know how it goes, make sure to delete the old flow as well along the way
