@@ -1,0 +1,21 @@
+please tell me if you think is the next direction we should go down?
+
+11:03 AM
+
+
+
+
++2 previous tool calls
+Given everything we've established, here's what I'd focus on, in order.
+
+1. The catalog read path (1–2 weeks of work). You told me it's already your felt perf blocker, and it's also the top item on my list — when those two agree, that's the priority. Scope it tightly: per-repo hydration entry points on MetadataStore, drop the global read lock in favor of plain transaction snapshots, and stop there. Skip the version-checked cache and the commits-as-rows work until dogfooding says otherwise. This unblocks everything after it, because every feature you ship makes the whole-catalog read a little worse.
+
+2. Two product decisions that cost nothing to make now and a rework later (an afternoon, not weeks). First: projections keyed by audience class, so same-access users share SHAs — write it down as the design constraint even if you don't migrate the Git projection path yet. Second: visibility changes apply forward-only by default, with retroactive rewrite as an explicit destructive operation. Both decisions shape the data model, and you're about to touch the data model in item 1. Deciding them now means the catalog work lands in the right shape; deciding them in three months means redoing read models.
+
+3. Binary file round-tripping. The last table-stakes gap between you and showing this to anyone. A repo with a PNG has to survive push → projection → clone byte-for-byte. Until this works, every demo has a trapdoor in it.
+
+4. Then the demo wedge: scoped agent tokens plus the view-as toggle. With the above done, these two together are your two-minute pitch — "here's my repo, here's what the agent's token can see, watch me clone with it." That's the point where showing Scope to another human starts producing signal instead of embarrassment, and their feedback should drive everything after.
+
+What I'd explicitly not do right now: more infra phases (the plan is complete, resist inventing phase 7), the GitHub mirror (adoption lever — pointless before someone wants to adopt), branches (until your own dogfooding hurts), orgs/teams, and any perf work beyond item 1.
+
+The shape of this ordering: one week of paying down the debt that taxes everything, one afternoon of decisions that prevent future rework, then straight to the shortest path to putting Scope in front of a second human. Everything on the list serves that last goal — the biggest risk in this project was never the code, it's that it stays a beautifully engineered product with zero users.
