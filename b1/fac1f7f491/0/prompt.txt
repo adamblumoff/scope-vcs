@@ -1,0 +1,1 @@
+ok i want you to add to the plan how we're going to actually structure the codebase as a "start" phase.
