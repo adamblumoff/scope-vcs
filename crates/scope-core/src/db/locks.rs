@@ -4,6 +4,8 @@ use sea_orm::{
     ConnectionTrait, EntityTrait, QuerySelect, Set, TryInsertResult,
     sea_query::{LockType, OnConflict},
 };
+#[cfg(test)]
+use sea_orm::{DatabaseBackend, Statement};
 
 pub async fn ensure_metadata_lock_row(
     db: &sea_orm::DatabaseConnection,
@@ -29,6 +31,15 @@ pub async fn acquire_aggregate_lock<C>(conn: &C, namespace: &str, id: &str) -> R
 where
     C: ConnectionTrait,
 {
+    #[cfg(test)]
+    conn.execute(Statement::from_sql_and_values(
+        DatabaseBackend::Postgres,
+        "SELECT set_config('application_name', $1, true)",
+        [format!("scope-test-lock:{namespace}").into()],
+    ))
+    .await
+    .map_err(ApiError::internal)?;
+
     let key = format!("{namespace}:{id}");
     entities::metadata_lock::Entity::insert(entities::metadata_lock::ActiveModel {
         key: Set(key.clone()),

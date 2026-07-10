@@ -283,7 +283,7 @@ async fn repo_delete_waits_for_resolution_and_does_not_refund_settled_stake_twic
             .delete_repo("owner", "repo", "user_owner")
             .await
     });
-    tokio::task::yield_now().await;
+    wait_until_aggregate_lock_is_waited_on(&store, "repository").await;
 
     assert!(
         !resolve.is_finished(),
@@ -355,7 +355,7 @@ async fn repo_delete_waits_for_submission_and_refunds_the_committed_stake() {
             .delete_repo("owner", "repo", "user_owner")
             .await
     });
-    tokio::task::yield_now().await;
+    wait_until_aggregate_lock_is_waited_on(&store, "repository").await;
 
     assert!(
         !submit.is_finished(),
@@ -430,6 +430,38 @@ async fn wait_until_aggregate_lock_is_held(store: &MetadataStore, namespace: &st
                 panic!("failed to probe {namespace}:{id} lock: {}", error.message);
             }
         }
+    }
+}
+
+async fn wait_until_aggregate_lock_is_waited_on(store: &MetadataStore, namespace: &str) {
+    let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(2);
+    loop {
+        let waiting = store
+            .db
+            .query_one(Statement::from_sql_and_values(
+                DatabaseBackend::Postgres,
+                "SELECT EXISTS (\
+                    SELECT 1 FROM pg_stat_activity AS activity \
+                    JOIN pg_locks AS relation_lock ON relation_lock.pid = activity.pid \
+                    WHERE activity.application_name = $1 \
+                      AND activity.wait_event_type = 'Lock' \
+                      AND relation_lock.relation = to_regclass('scope_metadata_locks')::oid\
+                ) AS waiting",
+                [format!("scope-test-lock:{namespace}").into()],
+            ))
+            .await
+            .unwrap()
+            .unwrap()
+            .try_get::<bool>("", "waiting")
+            .unwrap();
+        if waiting {
+            return;
+        }
+        assert!(
+            tokio::time::Instant::now() < deadline,
+            "timed out waiting for a blocked {namespace} aggregate lock"
+        );
+        tokio::task::yield_now().await;
     }
 }
 
