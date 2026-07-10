@@ -114,10 +114,10 @@ function FileSystemTreeRows<TFile extends FileSystemTreeFileBase>({
   }
 
   return (
-    <div className="divide-y divide-border" role="tree">
+    <div>
       <div
         className={cn(
-          'hidden gap-3 px-2 py-2 text-xs font-medium leading-4 text-muted-foreground sm:grid',
+          'hidden gap-3 border-b border-border px-2 py-2 text-xs font-medium leading-4 text-muted-foreground sm:grid',
           columnsClassName,
         )}
       >
@@ -133,23 +133,25 @@ function FileSystemTreeRows<TFile extends FileSystemTreeFileBase>({
           </div>
         )}
       </div>
-      {root.children.map((node) => (
-        <FileSystemTreeNodeRow
-          collapsed={collapsed}
-          columnsClassName={columnsClassName}
-          compactVisibility={compactVisibility}
-          depth={0}
-          getFileMeta={getFileMeta}
-          getFolderMeta={getFolderMeta}
-          key={node.key}
-          node={node}
-          onSelectFile={onSelectFile}
-          onToggleFolder={toggleFolder}
-          selectedFilePath={selectedFilePath}
-          showMeta={showMeta}
-          showVisibility={showVisibility}
-        />
-      ))}
+      <ul className="divide-y divide-border">
+        {root.children.map((node) => (
+          <FileSystemTreeNodeRow
+            collapsed={collapsed}
+            columnsClassName={columnsClassName}
+            compactVisibility={compactVisibility}
+            depth={0}
+            getFileMeta={getFileMeta}
+            getFolderMeta={getFolderMeta}
+            key={node.key}
+            node={node}
+            onSelectFile={onSelectFile}
+            onToggleFolder={toggleFolder}
+            selectedFilePath={selectedFilePath}
+            showMeta={showMeta}
+            showVisibility={showVisibility}
+          />
+        ))}
+      </ul>
     </div>
   )
 }
@@ -186,14 +188,12 @@ function FileSystemTreeNodeRow<TFile extends FileSystemTreeFileBase>({
       selectedFilePath !== null &&
       displayPath(selectedFilePath) === displayPath(node.file.path)
     return (
-      <div
-        aria-selected={selected}
+      <li
         className={cn(
           'grid gap-2 px-2 py-2.5 text-sm sm:items-center',
           selected && 'bg-brand-muted shadow-[inset_2px_0_0_0_var(--brand)]',
           columnsClassName,
         )}
-        role="treeitem"
       >
         <div
           className="flex min-w-0 items-center gap-2"
@@ -201,6 +201,7 @@ function FileSystemTreeNodeRow<TFile extends FileSystemTreeFileBase>({
         >
           {onSelectFile ? (
             <button
+              aria-current={selected ? 'true' : undefined}
               className="flex min-w-0 flex-1 items-center gap-2 rounded-md text-left transition-colors hover:bg-muted/70"
               onClick={() => onSelectFile(node.file)}
               type="button"
@@ -237,7 +238,7 @@ function FileSystemTreeNodeRow<TFile extends FileSystemTreeFileBase>({
             />
           </div>
         )}
-      </div>
+      </li>
     )
   }
 
@@ -246,19 +247,18 @@ function FileSystemTreeNodeRow<TFile extends FileSystemTreeFileBase>({
 
   return (
     <>
-      <div
-        aria-expanded={!isCollapsed}
+      <li
         className={cn(
           'grid gap-2 bg-muted/20 px-2 py-2.5 text-sm sm:items-center',
           columnsClassName,
         )}
-        role="treeitem"
       >
         <div
           className="flex min-w-0 items-center gap-2"
           style={{ paddingLeft: `${depth * 18}px` }}
         >
           <Button
+            aria-expanded={!isCollapsed}
             aria-label={`${isCollapsed ? 'Expand' : 'Collapse'} ${node.name}`}
             onClick={() => onToggleFolder(node.key)}
             size="icon-xs"
@@ -299,7 +299,7 @@ function FileSystemTreeNodeRow<TFile extends FileSystemTreeFileBase>({
             <VisibilityBadge compact={compactVisibility} visibility={visibility} />
           </div>
         )}
-      </div>
+      </li>
       {!isCollapsed &&
         node.children.map((child) => (
           <FileSystemTreeNodeRow

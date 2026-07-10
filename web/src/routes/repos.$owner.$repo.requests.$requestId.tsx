@@ -75,6 +75,7 @@ const loadRequestPage = createServerFn({ method: 'GET' })
       selectedDiff,
       selectedDiffError,
       selectedPath,
+      view: data.view,
     }
   })
 
@@ -134,8 +135,8 @@ function RequestRoute() {
     selectedDiff,
     selectedDiffError,
     selectedPath,
+    view,
   } = Route.useLoaderData()
-  const search = Route.useSearch()
   const navigate = useNavigate({ from: Route.fullPath })
   const requestParams = {
     owner: params.owner,
@@ -172,7 +173,7 @@ function RequestRoute() {
       selectedDiff={selectedDiff}
       selectedDiffError={selectedDiffError}
       selectedPath={selectedPath}
-      view={search.view ?? 'overview'}
+      view={view}
     />
   )
 }

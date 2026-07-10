@@ -24,7 +24,7 @@ export function AppShell({
       {subheader?.()}
       <main
         className={cn(
-          'min-h-0 flex-1 overflow-y-auto overscroll-contain outline-none',
+          'min-h-0 flex-1 overflow-y-auto overscroll-contain outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring',
           className,
         )}
         id="main-content"
