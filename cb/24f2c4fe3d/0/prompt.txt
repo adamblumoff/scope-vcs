@@ -1,0 +1,1 @@
+i want you to go through the codebase with 10 different code-reaper subagents and tell me what we should clean up in this codebase to make it more maintainable.
