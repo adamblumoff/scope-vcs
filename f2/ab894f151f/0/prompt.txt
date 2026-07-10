@@ -1,0 +1,1 @@
+ok so are we simplifying the clone process or making it more complicated? i would like to make it as simple as possible and rely on scope auth only unless that is too unsafe.
