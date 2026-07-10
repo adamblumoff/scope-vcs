@@ -493,7 +493,7 @@ pub(crate) async fn merge_request(
     Ok(Json(RequestMutationResponse { request }))
 }
 
-async fn repo_and_access(
+pub(crate) async fn repo_and_access(
     state: &AppState,
     headers: &HeaderMap,
     owner: &str,
@@ -510,7 +510,7 @@ async fn repo_and_access(
     Ok((repo, access, user.map(|user| user.id)))
 }
 
-fn visible_request(
+pub(crate) fn visible_request(
     state: &AppState,
     repo: &StoredRepository,
     access: RepositoryAccess,

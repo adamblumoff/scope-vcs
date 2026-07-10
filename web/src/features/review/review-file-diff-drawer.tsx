@@ -13,6 +13,12 @@ import { Skeleton } from '@/components/ui/skeleton'
 import { useThemeType } from '@/lib/use-theme-type'
 import { File, FileText, TriangleAlert, X } from 'lucide-react'
 import { type ReactNode, useMemo } from 'react'
+import {
+  type BinaryContentSide,
+  type ReviewFileContent,
+  reviewContentSides,
+  type TextContentSide,
+} from './review-file-content'
 
 const PIERRE_DIFF_OPTIONS = {
   diffStyle: 'unified',
@@ -36,7 +42,7 @@ export function ReviewFileDiffDrawer({
   diff: ReviewFileDiff | null
   error: string | null
   loading: boolean
-  onClose: () => void
+  onClose?: () => void
   selectedPath: string | null
 }) {
   const themeType = useThemeType()
@@ -44,8 +50,8 @@ export function ReviewFileDiffDrawer({
     () => (diff ? diffMetadataForReviewFile(diff) : null),
     [diff],
   )
-  const binarySides = useMemo(
-    () => (diff ? binaryContentSides(diff) : []),
+  const contentSides = useMemo(
+    () => (diff ? reviewContentSides(diff) : { binary: [], text: [] }),
     [diff],
   )
   const diffOptions = useMemo(
@@ -71,30 +77,41 @@ export function ReviewFileDiffDrawer({
               {displayName || 'Diff'}
             </div>
             <div className="text-xs leading-4 text-muted-foreground">
-              {loading ? 'Loading diff' : error ? 'Diff unavailable' : 'Diff'}
+              {loading
+                ? 'Loading diff…'
+                : error
+                  ? 'Diff unavailable'
+                  : modeChangeLabel(diff) ?? 'Diff'}
             </div>
           </div>
-          <Button
-            aria-label="Close diff viewer"
-            onClick={onClose}
-            size="icon-xs"
-            type="button"
-            variant="ghost"
-          >
-            <X className="size-3.5" />
-          </Button>
+          {onClose && (
+            <Button
+              aria-label="Close diff viewer"
+              onClick={onClose}
+              size="icon-xs"
+              type="button"
+              variant="ghost"
+            >
+              <X className="size-3.5" />
+            </Button>
+          )}
         </div>
 
         <div className="min-h-0 flex-1 overflow-auto">
           {loading ? (
             <DiffSkeleton />
           ) : error ? (
-            <DiffState tone="error">
+            <DiffState role="alert" tone="error">
               <TriangleAlert className="size-4 text-destructive" />
               <span>{error}</span>
             </DiffState>
-          ) : binarySides.length > 0 ? (
-            <BinaryDiffState sides={binarySides} />
+          ) : contentSides.binary.length > 0 && contentSides.text.length > 0 ? (
+            <MixedContentDiffState
+              binary={contentSides.binary}
+              text={contentSides.text}
+            />
+          ) : contentSides.binary.length > 0 ? (
+            <BinaryDiffState sides={contentSides.binary} />
           ) : fileDiff && fileDiff.hunks.length > 0 ? (
             <div className="review-diff-viewer">
               <PierreFileDiff
@@ -187,14 +204,6 @@ function diffMetadataForReviewFile(diff: ReviewFileDiff): FileDiffMetadata | nul
   )
 }
 
-type ReviewFileContent = NonNullable<ReviewFileDiff['old_content']>
-
-type BinaryContentSide = {
-  label: string
-  oid: string
-  sizeBytes: number
-}
-
 function textContents(content: ReviewFileContent | null) {
   if (!content) {
     return ''
@@ -202,48 +211,59 @@ function textContents(content: ReviewFileContent | null) {
   return content.kind === 'text' ? content.text : null
 }
 
-function binaryContentSides(diff: ReviewFileDiff): BinaryContentSide[] {
-  return [
-    binarySide('Old', diff.old_content),
-    binarySide('New', diff.new_content),
-  ].filter((side): side is BinaryContentSide => Boolean(side))
-}
-
-function binarySide(
-  label: string,
-  content: ReviewFileContent | null,
-): BinaryContentSide | null {
-  if (!content || content.kind !== 'binary') {
-    return null
-  }
-  return {
-    label,
-    oid: content.oid,
-    sizeBytes: content.size_bytes,
-  }
-}
-
 function BinaryDiffState({ sides }: { sides: BinaryContentSide[] }) {
   return (
     <div className="flex min-h-[220px] items-center justify-center px-4 py-6 text-sm text-muted-foreground">
-      <div className="w-full max-w-md space-y-3">
-        <div className="flex items-center gap-2 text-foreground">
-          <File className="size-4" />
-          <span className="font-medium">Binary file not rendered</span>
-        </div>
-        <div className="space-y-2 font-mono text-xs leading-5">
-          {sides.map((side) => (
-            <div
-              className="grid grid-cols-[44px_minmax(0,1fr)] gap-x-3"
-              key={`${side.label}-${side.oid}`}
-            >
-              <span className="text-muted-foreground">{side.label}</span>
-              <span className="min-w-0 break-all">
-                {formatBytes(side.sizeBytes)} - {abbreviateOid(side.oid)}
-              </span>
-            </div>
-          ))}
-        </div>
+      <BinarySummary sides={sides} />
+    </div>
+  )
+}
+
+function MixedContentDiffState({
+  binary,
+  text,
+}: {
+  binary: BinaryContentSide[]
+  text: TextContentSide[]
+}) {
+  return (
+    <div className="min-h-[220px]">
+      <div className="border-b border-border px-4 py-4 text-sm text-muted-foreground">
+        <BinarySummary sides={binary} />
+      </div>
+      {text.map((side) => (
+        <section key={side.label}>
+          <div className="border-b border-border px-4 py-2 text-xs font-medium text-muted-foreground">
+            {side.label} text
+          </div>
+          <pre className="overflow-auto whitespace-pre-wrap break-words px-4 py-3 font-mono text-xs leading-5 text-foreground">
+            {side.text || 'Empty text file'}
+          </pre>
+        </section>
+      ))}
+    </div>
+  )
+}
+
+function BinarySummary({ sides }: { sides: BinaryContentSide[] }) {
+  return (
+    <div className="w-full max-w-md space-y-3">
+      <div className="flex items-center gap-2 text-foreground">
+        <File className="size-4" />
+        <span className="font-medium">Binary file not rendered</span>
+      </div>
+      <div className="space-y-2 font-mono text-xs leading-5">
+        {sides.map((side) => (
+          <div
+            className="grid grid-cols-[44px_minmax(0,1fr)] gap-x-3"
+            key={`${side.label}-${side.oid}`}
+          >
+            <span className="text-muted-foreground">{side.label}</span>
+            <span className="min-w-0 break-all">
+              {formatBytes(side.sizeBytes)} - {abbreviateOid(side.oid)}
+            </span>
+          </div>
+        ))}
       </div>
     </div>
   )
@@ -264,6 +284,10 @@ function formatBytes(bytes: number) {
 }
 
 function emptyDiffLabel(diff: ReviewFileDiff | null) {
+  const modeChange = modeChangeLabel(diff)
+  if (modeChange) {
+    return modeChange
+  }
   if (diff?.kind === 'Added') {
     return 'Empty file added'
   }
@@ -271,6 +295,13 @@ function emptyDiffLabel(diff: ReviewFileDiff | null) {
     return 'Empty file deleted'
   }
   return 'No content changes'
+}
+
+function modeChangeLabel(diff: ReviewFileDiff | null) {
+  if (!diff?.old_mode || !diff.new_mode || diff.old_mode === diff.new_mode) {
+    return null
+  }
+  return `Mode ${diff.old_mode} → ${diff.new_mode}`
 }
 
 const DIFF_SKELETON_WIDTHS = [
@@ -298,9 +329,11 @@ function DiffSkeleton() {
 
 function DiffState({
   children,
+  role,
   tone = 'muted',
 }: {
   children: ReactNode
+  role?: 'alert'
   tone?: 'error' | 'muted'
 }) {
   return (
@@ -309,6 +342,7 @@ function DiffState({
         'flex min-h-[220px] items-center justify-center gap-2 px-4 text-sm leading-5',
         tone === 'error' ? 'text-destructive' : 'text-muted-foreground',
       )}
+      role={role}
     >
       {children}
     </div>

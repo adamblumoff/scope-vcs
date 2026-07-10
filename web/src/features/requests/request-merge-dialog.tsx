@@ -98,7 +98,7 @@ export function RequestMergeDialog({
             />
           </label>
           {error && (
-            <p className="text-sm leading-5 text-destructive">{error}</p>
+            <p className="text-sm leading-5 text-destructive" role="alert">{error}</p>
           )}
         </div>
 
@@ -114,7 +114,7 @@ export function RequestMergeDialog({
             variant="success"
           >
             <GitMerge className="size-3.5" />
-            <span>{pending ? 'Merging' : 'Merge'}</span>
+            <span>{pending ? 'Merging…' : 'Merge'}</span>
           </Button>
         </AlertDialogFooter>
       </AlertDialogContent>

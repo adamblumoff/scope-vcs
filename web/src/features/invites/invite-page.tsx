@@ -4,6 +4,7 @@ import type {
   RepoInviteTokenInput,
 } from '@/api/types'
 import { AppHeader } from '@/components/app-header'
+import { AppShell } from '@/components/app-shell'
 import { PageContent, PageHeader } from '@/components/page-header'
 import { PageErrorAlert } from '@/components/page-error-alert'
 import { Badge } from '@/components/ui/badge'
@@ -54,9 +55,7 @@ export function InvitePage({
   }
 
   return (
-    <main className="min-h-screen bg-background text-foreground">
-      <AppHeader />
-
+    <AppShell header={() => <AppHeader />}>
       <PageContent>
         <PageHeader
           badges={() => (
@@ -143,7 +142,7 @@ export function InvitePage({
           </PageErrorAlert>
         )}
       </PageContent>
-    </main>
+    </AppShell>
   )
 }
 

@@ -1,4 +1,4 @@
-use crate::domain::policy::Visibility;
+use crate::domain::policy::{ScopePath, Visibility};
 use crate::domain::repo_actions::reviewed_update_api_error;
 use crate::domain::repo_config::is_repo_config_fingerprint;
 use crate::domain::requests::{Request, RequestActorRole, RequestBaseAudience, RequestState};
@@ -389,6 +389,39 @@ pub(crate) async fn get_files(
         .ok_or_else(|| ApiError::not_found(format!("repo {owner}/{repo_name} not found")))?;
 
     Ok(Json(projection_file_responses(files)))
+}
+
+pub(crate) async fn get_file_content(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path((owner, repo_name)): Path<(String, String)>,
+    Query(input): Query<RepoFileContentRequest>,
+) -> Result<Json<RepoFileContentResponse>, ApiError> {
+    let path = ScopePath::parse(format!("/{}", input.path)).map_err(ApiError::bad_request)?;
+    if path == ScopePath::root() {
+        return Err(ApiError::bad_request("file path is required"));
+    }
+    let user = optional_scope_user(&state, &headers).await?;
+    let projected = state
+        .metadata
+        .repo_live_file_content(
+            &owner,
+            &repo_name,
+            user.as_ref().map(|user| user.id.as_str()),
+            &path,
+        )?
+        .ok_or_else(|| ApiError::not_found("file not found"))?;
+    let content = crate::http::file_diffs::review_content_response_for_blob(
+        state.object_store.as_ref(),
+        &projected.blob,
+    )?;
+
+    Ok(Json(RepoFileContentResponse {
+        path: projected.file.path.as_str().to_string(),
+        oid: projected.file.oid,
+        visibility: projected.file.visibility,
+        content,
+    }))
 }
 
 fn repo_summary_response(

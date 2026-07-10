@@ -176,7 +176,7 @@ fn assert_request_branch_unchanged(state: &AppState) {
         .read(|catalog| {
             let request = catalog.requests.get(REQUEST_ID).unwrap();
             assert_eq!(request.state, RequestState::Working);
-            assert_eq!(request.head_oid, "base_main");
+            assert_eq!(request.head_oid, request.base_main_oid);
             assert!(request.git_snapshot.is_none());
             assert!(catalog.request_events.is_empty());
             Ok(())

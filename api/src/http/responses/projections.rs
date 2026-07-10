@@ -110,6 +110,15 @@ pub(crate) struct RepoFileResponse {
     pub(crate) visibility: Visibility,
 }
 
+#[derive(Debug, Serialize)]
+#[cfg_attr(test, derive(ts_rs::TS))]
+pub(crate) struct RepoFileContentResponse {
+    pub(crate) path: String,
+    pub(crate) oid: String,
+    pub(crate) visibility: Visibility,
+    pub(crate) content: super::ReviewFileContentResponse,
+}
+
 pub(crate) fn projection_preview_response(
     repo: &StoredRepository,
     audience: ProjectionPreviewAudience,

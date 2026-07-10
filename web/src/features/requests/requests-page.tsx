@@ -1,9 +1,8 @@
 import type { RepoLiveState, RepoParams, RequestSummary } from '@/api/types'
-import { AppHeader } from '@/components/app-header'
 import { LifecycleBadge } from '@/components/lifecycle-badge'
 import { PageContent, PageHeader } from '@/components/page-header'
-import { RepoBreadcrumb } from '@/components/repo-breadcrumb'
-import { SectionRow, SectionRows } from '@/components/section-rows'
+import { RepoShell } from '@/components/repo-shell'
+import { SectionRows } from '@/components/section-rows'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Link } from '@tanstack/react-router'
@@ -13,9 +12,8 @@ import {
   requestAuthorRoleLabel,
   requestBaseAudienceLabel,
   requestMergeabilityLabel,
-  requestMergeabilityTone,
-  requestStateLabel,
-  requestStateTone,
+  requestStatusLabel,
+  requestStatusTone,
   shortOid,
 } from './request-labels'
 
@@ -31,50 +29,25 @@ export function RequestsPage({
   const { repo } = live
 
   return (
-    <main className="min-h-screen bg-background text-foreground">
-      <AppHeader
-        breadcrumb={() => <RepoBreadcrumb params={params} section="requests" />}
-      />
-
+    <RepoShell
+      active="requests"
+      canManage={repo.access.actor !== 'Public'}
+      params={params}
+    >
       <PageContent>
         <PageHeader
-          actions={() => (
-            <>
-              <Button asChild size="sm" variant="secondary">
-                <Link params={params} to="/repos/$owner/$repo">
-                  Repository
-                </Link>
-              </Button>
-              <Button asChild size="sm" variant="secondary">
-                <Link params={params} to="/repos/$owner/$repo/history">
-                  History
-                </Link>
-              </Button>
-            </>
-          )}
           badges={() => (
             <>
               <LifecycleBadge state={repo.lifecycle_state} />
               <Badge variant="neutral">{repo.access.actor}</Badge>
-              <Badge variant={requests.length ? 'info' : 'neutral'}>
-                {requests.length} requests
-              </Badge>
             </>
           )}
-          description={() => (
-            <Link
-              className="font-mono underline underline-offset-4 hover:text-foreground"
-              params={params}
-              to="/repos/$owner/$repo"
-            >
-              {repo.id}
-            </Link>
-          )}
+          description="Review and settle proposed branch updates."
           title="Requests"
         />
 
         {requests.length > 0 ? (
-          <SectionRows>
+          <SectionRows className="mt-8">
             {requests.map((request) => (
               <RequestListRow
                 key={request.id}
@@ -87,7 +60,7 @@ export function RequestsPage({
           <EmptyRequests params={params} />
         )}
       </PageContent>
-    </main>
+    </RepoShell>
   )
 }
 
@@ -99,56 +72,58 @@ function RequestListRow({
   request: RequestSummary
 }) {
   return (
-    <SectionRow
-      columns="compact"
-      description={
-        <span className="font-mono tabular-nums">
-          {shortOid(request.head_oid)} updated {formatUnixDate(request.updated_at_unix)}
-        </span>
-      }
-      icon={<GitPullRequest className="size-4 text-muted-foreground" />}
-      title={
-        <span className="inline-flex min-w-0 max-w-full items-center gap-2">
-          <span className="truncate">{request.id}</span>
-          <Badge variant={requestStateTone(request.state)}>
-            {requestStateLabel(request.state)}
-          </Badge>
-        </span>
-      }
+    <Link
+      className="group grid min-w-0 gap-3 py-5 sm:grid-cols-[minmax(0,1fr)_auto] sm:items-start"
+      params={{ ...params, requestId: request.id }}
+      to="/repos/$owner/$repo/requests/$requestId"
     >
-      <div className="flex min-w-0 flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+      <div className="flex min-w-0 items-start gap-3">
+        <GitPullRequest className="mt-1 size-4 shrink-0 text-muted-foreground" />
         <div className="min-w-0">
-          <Link
-            className="block truncate text-base font-medium leading-6 hover:underline"
-            params={{ ...params, requestId: request.id }}
-            to="/repos/$owner/$repo/requests/$requestId"
-          >
+          <h2 className="truncate text-base font-semibold leading-6 group-hover:underline">
             {request.title}
-          </Link>
-          <div className="mt-1.5 flex flex-wrap items-center gap-1.5">
-            <Badge variant="outline">{requestBaseAudienceLabel(request)}</Badge>
-            <Badge variant="outline">{requestAuthorRoleLabel(request)}</Badge>
-            <Badge variant={requestMergeabilityTone(request)}>
-              {requestMergeabilityLabel(request)}
-            </Badge>
-            <Badge variant="neutral">
-              <Coins className="size-3" />
-              <span>{request.stake_credits}</span>
-            </Badge>
+          </h2>
+          <div className="mt-1 flex flex-wrap items-center gap-x-2 gap-y-1 text-xs leading-5 text-muted-foreground">
+            <span className="font-mono">{request.id}</span>
+            <MetadataSeparator />
+            <span>{requestBaseAudienceLabel(request)}</span>
+            <MetadataSeparator />
+            <span>{requestAuthorRoleLabel(request)}</span>
+            <MetadataSeparator />
+            <span className="font-mono tabular-nums">
+              {shortOid(request.head_oid)}
+            </span>
+            <MetadataSeparator />
+            <span className="tabular-nums">
+              Updated {formatUnixDate(request.updated_at_unix)}
+            </span>
+            {request.stake_credits > 0 ? (
+              <>
+                <MetadataSeparator />
+                <span className="inline-flex items-center gap-1 tabular-nums">
+                  <Coins className="size-3" />
+                  {request.stake_credits} staked
+                </span>
+              </>
+            ) : null}
           </div>
         </div>
-        <Button asChild size="sm" variant="ghost">
-          <Link
-            params={{ ...params, requestId: request.id }}
-            to="/repos/$owner/$repo/requests/$requestId"
-          >
-            <span>Open</span>
-            <ArrowRight className="size-3.5" />
-          </Link>
-        </Button>
       </div>
-    </SectionRow>
+      <div className="flex shrink-0 items-center gap-2 pl-7 sm:justify-end sm:pl-0">
+        <Badge variant={requestStatusTone(request)}>
+          {requestStatusLabel(request)}
+        </Badge>
+        <span className="text-xs text-muted-foreground">
+          {requestMergeabilityLabel(request)}
+        </span>
+        <ArrowRight className="size-4 text-muted-foreground" />
+      </div>
+    </Link>
   )
+}
+
+function MetadataSeparator() {
+  return <span aria-hidden="true">·</span>
 }
 
 function EmptyRequests({ params }: { params: RepoParams }) {

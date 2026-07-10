@@ -60,7 +60,7 @@ const RESOLUTION_OPTIONS = [
   },
 ] as const satisfies ResolutionOption[]
 
-export function requestStateLabel(state: RequestWorkflowState) {
+function requestStateLabel(state: RequestWorkflowState) {
   switch (state) {
     case 'Working':
       return 'Working'
@@ -75,7 +75,7 @@ export function requestStateLabel(state: RequestWorkflowState) {
   }
 }
 
-export function requestStateTone(state: RequestWorkflowState): BadgeTone {
+function requestStateTone(state: RequestWorkflowState): BadgeTone {
   switch (state) {
     case 'Submitted':
       return 'info'
@@ -87,6 +87,18 @@ export function requestStateTone(state: RequestWorkflowState): BadgeTone {
     case 'Withdrawn':
       return 'neutral'
   }
+}
+
+export function requestStatusLabel(request: RequestSummary) {
+  return request.state === 'Resolved' && request.disposition
+    ? dispositionLabel(request.disposition)
+    : requestStateLabel(request.state)
+}
+
+export function requestStatusTone(request: RequestSummary): BadgeTone {
+  return request.state === 'Resolved'
+    ? dispositionTone(request.disposition)
+    : requestStateTone(request.state)
 }
 
 export function dispositionLabel(disposition: RequestWorkflowDisposition) {

@@ -7,10 +7,9 @@ import type {
   RepoParams,
   ReviewFileDiff,
 } from '@/api/types'
-import { AppHeader } from '@/components/app-header'
 import { FileSystemTree } from '@/components/file-system-tree'
-import { RepoBreadcrumb } from '@/components/repo-breadcrumb'
 import { PageContent, PageHeader } from '@/components/page-header'
+import { RepoShell } from '@/components/repo-shell'
 import { RouteErrorPage } from '@/components/route-error-page'
 import { Badge } from '@/components/ui/badge'
 import { Skeleton } from '@/components/ui/skeleton'
@@ -20,7 +19,7 @@ import {
   loadCommitDetail,
   loadCommitFileDiff,
 } from '@/routes/-repo-history-actions'
-import { Link, useNavigate } from '@tanstack/react-router'
+import { useNavigate } from '@tanstack/react-router'
 import {
   Globe2,
   GitCommit,
@@ -65,12 +64,12 @@ export function HistoryPage(props: HistoryPageProps) {
   } = useHistoryPageModel(props)
 
   return (
-    <main className="min-h-screen bg-background text-foreground">
-      <AppHeader
-        breadcrumb={() => <RepoBreadcrumb params={params} section="history" />}
-        contentClassName={pageWidthClassName}
-      />
-
+    <RepoShell
+      active="history"
+      canManage={props.histories.private !== null}
+      contentClassName={pageWidthClassName}
+      params={params}
+    >
       <PageContent className={pageWidthClassName}>
         <PageHeader
           badges={() => (
@@ -86,19 +85,8 @@ export function HistoryPage(props: HistoryPageProps) {
               )}
             </>
           )}
-          title={
-            <>
-              <Link
-                className="underline decoration-muted-foreground/50 underline-offset-4 transition-colors hover:decoration-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-4 focus-visible:ring-offset-background"
-                params={params}
-                to="/repos/$owner/$repo"
-              >
-                {repoId}
-              </Link>{' '}
-              history
-            </>
-          }
-          titleClassName="font-mono"
+          description={`Projected commit history for ${repoId}.`}
+          title="History"
         />
 
         <section className="mt-8">
@@ -135,7 +123,7 @@ export function HistoryPage(props: HistoryPageProps) {
           ) : (
             <div
               className={cn(
-                'grid grid-cols-1 transition-[grid-template-columns] duration-300 ease-out lg:grid-cols-[minmax(260px,0.62fr)_minmax(0,1.38fr)]',
+                'grid grid-cols-1 lg:grid-cols-[minmax(260px,0.62fr)_minmax(0,1.38fr)]',
                 selectedFilePath &&
                   'xl:grid-cols-[minmax(260px,0.46fr)_minmax(0,1.54fr)]',
               )}
@@ -156,7 +144,7 @@ export function HistoryPage(props: HistoryPageProps) {
           )}
         </section>
       </PageContent>
-    </main>
+    </RepoShell>
   )
 }
 
@@ -194,8 +182,8 @@ function useHistoryPageModel({
   const selectedCommit =
     commitState.status === 'loaded' ? commitState.commit : null
   const pageWidthClassName = selectedFilePath
-    ? 'max-w-[1320px] transition-[max-width] duration-300 ease-out'
-    : 'max-w-[1040px] transition-[max-width] duration-300 ease-out'
+    ? 'max-w-[1320px]'
+    : 'max-w-[1040px]'
   const repoId = `${params.owner}/${params.repo}`
   const initialSelectedCommitId =
     initialCommit?.projected_id ??
@@ -532,7 +520,7 @@ function CommitDetailPanel({
 
       <div
         className={cn(
-          'grid grid-cols-1 transition-[grid-template-columns] duration-300 ease-out xl:grid-cols-[minmax(0,0.9fr)_minmax(360px,1.1fr)]',
+          'grid grid-cols-1 xl:grid-cols-[minmax(0,0.9fr)_minmax(360px,1.1fr)]',
           !diffOpen && 'xl:grid-cols-[minmax(0,1fr)_minmax(0,0fr)]',
         )}
       >
@@ -554,7 +542,7 @@ function CommitDetailPanel({
         </div>
         <div
           className={cn(
-            'min-w-0 overflow-hidden border-border transition-[max-height,opacity,transform,border-color] duration-300 ease-out xl:border-l',
+            'min-w-0 overflow-hidden border-border xl:border-l',
             diffOpen
               ? 'max-h-[70vh] translate-y-0 opacity-100 xl:max-h-none xl:translate-x-0'
               : 'pointer-events-none max-h-0 -translate-y-1 border-transparent opacity-0 xl:translate-x-3',

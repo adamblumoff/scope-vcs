@@ -110,6 +110,10 @@ export type GitPushTokenResponse = { created_at_unix: number, secret: string | n
 
 export type RepoFileResponse = { path: string, oid: string, tracked: boolean, visibility: Visibility, };
 
+export type RepoFileContentRequest = { path: string, };
+
+export type RepoFileContentResponse = { path: string, oid: string, visibility: Visibility, content: ReviewFileContentResponse, };
+
 export type RepositoryAccessResponse = { actor: RepositoryActor, can_read_private_files: boolean, can_push: boolean, can_change_file_visibility: boolean, can_apply_changes: boolean, can_update_repo_settings: boolean, can_manage_members: boolean, can_delete_repo: boolean, };
 
 export type RepositoryCollaborationResponse = { members: Array<RepositoryMemberResponse>, invites: Array<RepositoryInviteResponse>, };
@@ -132,9 +136,13 @@ export type CommitHistoryRequest = { audience: ProjectionPreviewAudience | null,
 
 export type CommitFileDiffRequest = { audience: ProjectionPreviewAudience | null, path: string, };
 
+export type RequestFileDiffRequest = { path: string, };
+
+export type RequestChangesResponse = { files: Array<CommitFileResponse>, };
+
 export type ReviewFileContentResponse = { "kind": "text", text: string, } | { "kind": "binary", oid: string, size_bytes: number, };
 
-export type ReviewFileDiffResponse = { path: string, kind: FileChangeKind, old_content: ReviewFileContentResponse | null, new_content: ReviewFileContentResponse | null, };
+export type ReviewFileDiffResponse = { path: string, kind: FileChangeKind, old_mode: string | null, new_mode: string | null, old_content: ReviewFileContentResponse | null, new_content: ReviewFileContentResponse | null, };
 
 export type CommitHistoryResponse = { audience: ProjectionPreviewAudience, repo_id: string, view_key: string, commits: Array<CommitSummaryResponse>, };
 
@@ -142,7 +150,7 @@ export type CommitSummaryResponse = { projected_id: string, logical_commit_id: s
 
 export type CommitDetailResponse = { audience: ProjectionPreviewAudience, repo_id: string, view_key: string, projected_id: string, logical_commit_id: string, parent_projected_id: string | null, author: string | null, message: string, change_count: number, files: Array<CommitFileResponse>, };
 
-export type CommitFileResponse = { path: string, kind: FileChangeKind, old_oid: string | null, new_oid: string | null, visibility: Visibility, };
+export type CommitFileResponse = { path: string, kind: FileChangeKind, old_mode: string | null, new_mode: string | null, old_oid: string | null, new_oid: string | null, visibility: Visibility, };
 
 export type ProjectionPreviewRequest = { audience: ProjectionPreviewAudience, source: ProjectionPreviewSource | null, };
 

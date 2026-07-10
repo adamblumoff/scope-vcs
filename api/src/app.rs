@@ -97,12 +97,24 @@ pub fn router(state: AppState) -> Router {
             get(http::repos::get_files),
         )
         .route(
+            "/v1/repos/{owner}/{repo}/files/content",
+            get(http::repos::get_file_content),
+        )
+        .route(
             "/v1/repos/{owner}/{repo}/requests",
             get(http::requests::list_requests).post(http::requests::start_request),
         )
         .route(
             "/v1/repos/{owner}/{repo}/requests/{request_id}",
             get(http::requests::get_request).delete(http::requests::delete_request),
+        )
+        .route(
+            "/v1/repos/{owner}/{repo}/requests/{request_id}/changes",
+            get(http::request_review::get_request_changes),
+        )
+        .route(
+            "/v1/repos/{owner}/{repo}/requests/{request_id}/file-diff",
+            get(http::request_review::get_request_file_diff),
         )
         .route(
             "/v1/repos/{owner}/{repo}/requests/{request_id}/branch.bundle",

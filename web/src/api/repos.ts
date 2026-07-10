@@ -1,6 +1,7 @@
 export { loadHomeForRequest } from './home'
 export {
   loadRepoForRequest,
+  loadRepoFileForRequest,
   loadRepoLiveStateForRequest,
   parseRepoParams,
 } from './repo-detail'
@@ -26,6 +27,8 @@ export {
   commentRequestForRequest,
   deleteRequestForRequest,
   loadRequestForRequest,
+  loadRequestChangesForRequest,
+  loadRequestFileDiffForRequest,
   loadRequestsForRequest,
   markRequestNeedsResponseForRequest,
   mergeRequestForRequest,

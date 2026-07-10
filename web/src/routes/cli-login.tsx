@@ -7,6 +7,7 @@ import {
   parseCompleteCliLoginInput,
 } from '@/api/cli-login-input'
 import { AppHeader } from '@/components/app-header'
+import { AppShell } from '@/components/app-shell'
 import { PageContent, PageHeader } from '@/components/page-header'
 import { PageErrorAlert } from '@/components/page-error-alert'
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert'
@@ -118,8 +119,7 @@ function CliLoginRoute() {
   }
 
   return (
-    <main className="min-h-screen bg-background text-foreground">
-      <AppHeader subtitle="CLI login" />
+    <AppShell header={() => <AppHeader subtitle="CLI login" />}>
       <PageContent>
         <PageHeader
           description={
@@ -238,7 +238,7 @@ function CliLoginRoute() {
           </form>
         )}
       </PageContent>
-    </main>
+    </AppShell>
   )
 }
 
@@ -276,7 +276,7 @@ function CliLoginAction({
     return (
       <Button disabled size="sm" type="button">
         <LoaderCircle className="size-3.5 animate-spin" />
-        <span>Loading</span>
+        <span>Loading…</span>
       </Button>
     )
   }
@@ -304,7 +304,7 @@ function CliLoginAction({
       ) : (
         <ShieldCheck className="size-3.5" />
       )}
-      <span>{isPending ? pendingLabel : 'Authorize'}</span>
+      <span>{isPending ? `${pendingLabel}…` : 'Authorize'}</span>
     </Button>
   )
 }

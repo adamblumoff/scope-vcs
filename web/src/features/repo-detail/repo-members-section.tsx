@@ -10,6 +10,7 @@ import type {
   UpdateRepoMemberInput,
 } from '@/api/types'
 import { CopyableCodeBlock } from '@/components/copyable-code-block'
+import { DestructiveActionDialog } from '@/components/destructive-action-dialog'
 import { SectionRow, SectionRows } from '@/components/section-rows'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
@@ -256,7 +257,7 @@ function InviteMemberForm({
         permissions={state.permissions}
       />
 
-      {state.error && <p className="text-sm text-destructive">{state.error}</p>}
+      {state.error && <p className="text-sm text-destructive" role="alert">{state.error}</p>}
       {state.inviteUrl && (
         <div className="space-y-2">
           <p className="text-sm text-muted-foreground">
@@ -284,6 +285,7 @@ function MemberList({
   updateMember: (input: UpdateRepoMemberInput) => Promise<RepoMember>
 }) {
   const [error, setError] = useState<string | null>(null)
+  const [confirmMember, setConfirmMember] = useState<RepoMember | null>(null)
   const [pendingKey, setPendingKey] = useState<string | null>(null)
 
   if (members.length === 0) {
@@ -322,6 +324,7 @@ function MemberList({
       setError(error instanceof Error ? error.message : 'member removal failed')
     } finally {
       setPendingKey(null)
+      setConfirmMember(null)
     }
   }
 
@@ -343,7 +346,7 @@ function MemberList({
                 </div>
                 <Button
                   disabled={pending}
-                  onClick={() => void remove(member)}
+                  onClick={() => setConfirmMember(member)}
                   size="sm"
                   type="button"
                   variant="secondary"
@@ -366,7 +369,21 @@ function MemberList({
           )
         })}
       </ul>
-      {error && <p className="text-sm text-destructive">{error}</p>}
+      <DestructiveActionDialog
+        confirmLabel="Remove member"
+        description="This immediately removes repository access for this member."
+        onConfirm={() => {
+          if (confirmMember) void remove(confirmMember)
+        }}
+        onOpenChange={(open) => {
+          if (!open && !pendingKey) setConfirmMember(null)
+        }}
+        open={Boolean(confirmMember)}
+        pending={Boolean(confirmMember && pendingKey === confirmMember.user_id)}
+        subject={confirmMember ? `@${confirmMember.handle} · ${confirmMember.email}` : ''}
+        title="Remove repository member?"
+      />
+      {error && <p className="text-sm text-destructive" role="alert">{error}</p>}
     </div>
   )
 }
@@ -379,6 +396,7 @@ function InviteList({
   invites: RepoInvite[]
 }) {
   const [error, setError] = useState<string | null>(null)
+  const [confirmInvite, setConfirmInvite] = useState<RepoInvite | null>(null)
   const [pendingId, setPendingId] = useState<string | null>(null)
 
   async function revoke(invite: RepoInvite) {
@@ -390,6 +408,7 @@ function InviteList({
       setError(error instanceof Error ? error.message : 'invite revoke failed')
     } finally {
       setPendingId(null)
+      setConfirmInvite(null)
     }
   }
 
@@ -415,7 +434,7 @@ function InviteList({
                 <Badge variant="warning">{invite.state}</Badge>
                 <Button
                   disabled={pending}
-                  onClick={() => void revoke(invite)}
+                  onClick={() => setConfirmInvite(invite)}
                   size="sm"
                   type="button"
                   variant="secondary"
@@ -432,7 +451,21 @@ function InviteList({
           )
         })}
       </ul>
-      {error && <p className="text-sm text-destructive">{error}</p>}
+      <DestructiveActionDialog
+        confirmLabel="Revoke invite"
+        description="The current invite link will stop working immediately."
+        onConfirm={() => {
+          if (confirmInvite) void revoke(confirmInvite)
+        }}
+        onOpenChange={(open) => {
+          if (!open && !pendingId) setConfirmInvite(null)
+        }}
+        open={Boolean(confirmInvite)}
+        pending={Boolean(confirmInvite && pendingId === confirmInvite.id)}
+        subject={confirmInvite?.invited_email ?? ''}
+        title="Revoke pending invite?"
+      />
+      {error && <p className="text-sm text-destructive" role="alert">{error}</p>}
     </div>
   )
 }

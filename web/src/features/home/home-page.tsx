@@ -1,5 +1,6 @@
 import type { HomeState } from '@/api/types'
 import { AppHeader } from '@/components/app-header'
+import { AppShell } from '@/components/app-shell'
 import { PageContent, PageHeader } from '@/components/page-header'
 import { PageErrorAlert } from '@/components/page-error-alert'
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert'
@@ -31,9 +32,10 @@ export function HomePage({ home }: { home: HomeState }) {
   }
 
   return (
-    <main className="min-h-screen bg-background text-foreground">
-      <AppHeader
-        action={() => (
+    <AppShell
+      header={() => (
+        <AppHeader
+          action={() => (
           <div className="flex min-w-0 items-center gap-2">
             <Button
               aria-label="CLI sessions"
@@ -50,11 +52,12 @@ export function HomePage({ home }: { home: HomeState }) {
             <UserButton />
             <ThemeToggle theme={theme} toggleTheme={toggleTheme} />
           </div>
-        )}
-        homeLink={false}
-        subtitle={account?.user?.handle ?? 'Repositories'}
-      />
-
+          )}
+          homeLink={false}
+          subtitle={account?.user?.handle ?? 'Repositories'}
+        />
+      )}
+    >
       <PageContent>
         <PageHeader
           description={account?.identity?.email ?? account?.identity?.user_id}
@@ -80,7 +83,7 @@ export function HomePage({ home }: { home: HomeState }) {
           repositories={repositories}
         />
       </PageContent>
-    </main>
+    </AppShell>
   )
 }
 

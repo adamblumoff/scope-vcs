@@ -375,6 +375,92 @@ async fn maintainer_can_push_request_ref_without_being_author_or_editor() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn request_ref_push_rejects_history_unrelated_to_recorded_base() {
+    let state = test_state_with_request();
+    state
+        .metadata
+        .update(|catalog| {
+            let request = catalog.requests.get_mut(REQUEST_ID).unwrap();
+            request.author_user_id = test_owner_id();
+            request.author_role = RequestActorRole::Owner;
+            request.base_audience = RequestBaseAudience::Private;
+            Ok(())
+        })
+        .unwrap();
+    let original_head = state
+        .metadata
+        .request_by_id(REQUEST_ID)
+        .unwrap()
+        .unwrap()
+        .head_oid;
+    let state_for_server = state.clone();
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    let server = tokio::spawn(async move {
+        axum::serve(listener, router(state_for_server))
+            .await
+            .unwrap();
+    });
+
+    let source = temp_checkout_dir("request-ref-unrelated-history");
+    let public_remote = format!("http://{addr}/git/public/{TEST_REPO_ID}");
+    run_git(
+        None,
+        &["clone", &public_remote, source.to_str().unwrap()],
+        "clone public repo for unrelated request",
+    )
+    .unwrap();
+    run_git(
+        Some(&source),
+        &["checkout", "--orphan", "unrelated-request"],
+        "create unrelated request history",
+    )
+    .unwrap();
+    run_git(
+        Some(&source),
+        &["rm", "-rf", "."],
+        "clear unrelated request tree",
+    )
+    .unwrap();
+    fs::write(source.join("unrelated.txt"), "unrelated history\n").unwrap();
+    run_git(
+        Some(&source),
+        &["add", "-A"],
+        "add unrelated request changes",
+    )
+    .unwrap();
+    commit_all(&source, "unrelated request change");
+    let permissioned_remote = format!("http://{addr}/git/permissioned/{TEST_REPO_ID}");
+    configure_bearer_header(
+        &source,
+        &permissioned_remote,
+        &bearer_header_for(TEST_CLERK_USER_ID, TEST_OWNER_EMAIL),
+    );
+
+    let output = run_git_output(
+        Some(&source),
+        &["push", &permissioned_remote, &format!("HEAD:{REQUEST_REF}")],
+        "push unrelated request ref",
+    )
+    .unwrap();
+
+    assert!(!output.status.success());
+    state
+        .metadata
+        .read(|catalog| {
+            let request = catalog.requests.get(REQUEST_ID).unwrap();
+            assert_eq!(request.head_oid, original_head);
+            assert!(request.git_snapshot.is_none());
+            assert!(catalog.request_events.is_empty());
+            Ok(())
+        })
+        .unwrap();
+
+    server.abort();
+    let _ = fs::remove_dir_all(source);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn request_ref_push_rejects_unsupported_tree_entries() {
     let state = test_state_with_request();
     let state_for_server = state.clone();
@@ -427,7 +513,7 @@ async fn request_ref_push_rejects_unsupported_tree_entries() {
         .read(|catalog| {
             let request = catalog.requests.get(REQUEST_ID).unwrap();
             assert_eq!(request.state, RequestState::Working);
-            assert_eq!(request.head_oid, "base_main");
+            assert_eq!(request.head_oid, request.base_main_oid);
             assert!(request.git_snapshot.is_none());
             assert!(catalog.request_events.is_empty());
             Ok(())
@@ -493,7 +579,7 @@ async fn public_request_author_cannot_push_main() {
         .read(|catalog| {
             let request = catalog.requests.get(REQUEST_ID).unwrap();
             assert_eq!(request.state, RequestState::Working);
-            assert_eq!(request.head_oid, "base_main");
+            assert_eq!(request.head_oid, request.base_main_oid);
             assert!(catalog.request_events.is_empty());
             Ok(())
         })
@@ -581,6 +667,22 @@ fn test_state_with_request() -> AppState {
             .repositories
             .insert(TEST_REPO_ID.to_string(), repo_with_readme());
     }
+    let repo = find_repo(&state, TEST_REPO_OWNER, TEST_REPO_NAME).unwrap();
+    let projection = project_graph(
+        &repo.policy,
+        &repo.graph,
+        &repo.visibility_events,
+        ProjectionViewKey::Public,
+    );
+    let projection_repo = projection_bare_repo_for_state(&state, &projection).unwrap();
+    let base_main_oid = git_stdout_text(
+        &projection_repo,
+        &["rev-parse", &format!("refs/heads/{DEFAULT_GIT_BRANCH}")],
+        "read request base",
+    )
+    .unwrap()
+    .trim()
+    .to_string();
     state
         .metadata
         .grant_user_credits(GrantUserCreditsInput {
@@ -601,7 +703,7 @@ fn test_state_with_request() -> AppState {
             base_audience: RequestBaseAudience::Public,
             target_branch: DEFAULT_GIT_BRANCH.to_string(),
             request_ref: REQUEST_REF.to_string(),
-            base_main_oid: "base_main".to_string(),
+            base_main_oid,
             now_unix: 2,
         })
         .unwrap();

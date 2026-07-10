@@ -46,7 +46,7 @@ export function PageHeader({
         )}
         <h1
           className={cn(
-            'truncate text-2xl font-semibold tracking-tight leading-8 sm:text-[32px] sm:leading-10',
+            'break-words text-2xl font-semibold tracking-tight leading-8 sm:text-[32px] sm:leading-10',
             titleClassName,
           )}
         >

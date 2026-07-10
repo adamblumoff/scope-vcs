@@ -1,8 +1,8 @@
 use super::{
     policy::{Principal, ScopePath, Visibility},
     projection::{Projection, ProjectionViewKey, project_graph},
-    store::StoredRepository,
     store::pending_import_scope_path,
+    store::{SourceBlob, StoredRepository},
 };
 use crate::error::ApiError;
 use sha1::{Digest, Sha1};
@@ -77,6 +77,12 @@ pub struct ProjectionViewFile {
     pub oid: String,
     pub tracked: bool,
     pub visibility: Visibility,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ProjectionViewFileContent {
+    pub file: ProjectionViewFile,
+    pub blob: SourceBlob,
 }
 
 pub fn repo_for_projection_preview(
@@ -199,6 +205,37 @@ pub fn projected_files(repo: &StoredRepository, principal: &Principal) -> Vec<Pr
             tracked: true,
         })
         .collect()
+}
+
+pub fn projected_file_content(
+    repo: &StoredRepository,
+    principal: &Principal,
+    path: &ScopePath,
+) -> Option<ProjectionViewFileContent> {
+    let access = repo.access_for_principal(principal);
+    let projection = project_graph(
+        &repo.policy,
+        &repo.graph,
+        &repo.visibility_events,
+        ProjectionViewKey::from_access(access),
+    );
+    let blob = projection
+        .commits
+        .iter()
+        .rev()
+        .flat_map(|commit| commit.changes.iter().rev())
+        .find(|change| &change.path == path)?
+        .new_content
+        .clone()?;
+    Some(ProjectionViewFileContent {
+        file: ProjectionViewFile {
+            path: path.clone(),
+            oid: blob.git_oid.clone(),
+            tracked: true,
+            visibility: repo.policy.effective_visibility(path),
+        },
+        blob,
+    })
 }
 
 pub fn pending_import_files(

@@ -57,6 +57,77 @@ async fn published_default_private_repo_serves_public_file_subset() {
 }
 
 #[tokio::test]
+async fn public_file_content_uses_the_projected_blob() {
+    let state = test_state_with_repo();
+    {
+        let mut repo = test_repo(&test_owner_id());
+        let public_blob = source_blob("public readme");
+        repo.graph.commits.push(LogicalCommit {
+            id: "rv1".to_string(),
+            parent_ids: Vec::new(),
+            author_id: repo.record.owner_user_id.clone(),
+            author_visibility: AuthorVisibility::Visible,
+            message: "public version".to_string(),
+            changes: vec![FileChange {
+                visibility: Visibility::Public,
+                path: ScopePath::parse("/README.md").unwrap(),
+                old_content: None,
+                new_content: Some(public_blob.clone()),
+            }],
+        });
+        repo.graph.commits.push(LogicalCommit {
+            id: "rv2".to_string(),
+            parent_ids: vec!["rv1".to_string()],
+            author_id: repo.record.owner_user_id.clone(),
+            author_visibility: AuthorVisibility::Visible,
+            message: "private draft".to_string(),
+            changes: vec![FileChange {
+                visibility: Visibility::Private,
+                path: ScopePath::parse("/README.md").unwrap(),
+                old_content: Some(public_blob),
+                new_content: Some(source_blob("private draft")),
+            }],
+        });
+
+        let mut catalog = lock_catalog(&state).unwrap();
+        catalog.repositories.insert(TEST_REPO_ID.to_string(), repo);
+    }
+
+    let response = router(state)
+        .oneshot(
+            Request::builder()
+                .method("GET")
+                .uri("/v1/repos/owner/repo/files/content?path=README.md")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = response_json(response).await;
+    assert_eq!(body["path"], "/README.md");
+    assert_eq!(body["content"]["kind"], "text");
+    assert_eq!(body["content"]["text"], "public readme");
+}
+
+#[tokio::test]
+async fn file_content_rejects_empty_path() {
+    let response = router(test_state_with_repo())
+        .oneshot(
+            Request::builder()
+                .method("GET")
+                .uri("/v1/repos/owner/repo/files/content?path=")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+}
+
+#[tokio::test]
 async fn published_repo_projection_preview_serves_public_file_subset() {
     let state = test_state_with_repo();
     {

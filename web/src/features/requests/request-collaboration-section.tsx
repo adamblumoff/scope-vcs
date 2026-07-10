@@ -55,9 +55,11 @@ export function RequestCollaborationSection({
               </code>
             ) : (
               <p className="text-pretty text-sm leading-5 text-muted-foreground">
-                {request.permissions.can_push_branch
-                  ? 'The request branch has not been pushed yet.'
-                  : 'You need edit access before joining this request branch.'}
+                {request.state === 'Resolved' || request.state === 'Withdrawn'
+                  ? 'This request is closed; its branch can no longer be joined.'
+                  : request.permissions.can_push_branch
+                    ? 'The request branch has not been pushed yet.'
+                    : 'You need edit access before joining this request branch.'}
               </p>
             )}
             <div className="flex flex-wrap gap-1.5">
@@ -121,7 +123,7 @@ export function RequestCollaborationSection({
                   >
                     <UserPlus className="size-3.5" />
                     <span>
-                      {pendingAction === 'add-editor' ? 'Adding' : 'Add editor'}
+                      {pendingAction === 'add-editor' ? 'Adding…' : 'Add editor'}
                     </span>
                   </Button>
                 </div>
@@ -130,6 +132,9 @@ export function RequestCollaborationSection({
                     {errorFor(actionError, 'add-editor')}
                   </CollaborationError>
                 )}
+                <p className="text-xs leading-5 text-muted-foreground">
+                  Scope currently accepts a stable user ID here. Handle lookup is not available yet.
+                </p>
               </form>
             ) : null}
 
@@ -164,7 +169,7 @@ export function RequestCollaborationSection({
 }
 
 function CollaborationError({ children }: { children: ReactNode }) {
-  return <p className="text-sm leading-5 text-destructive">{children}</p>
+  return <p className="text-sm leading-5 text-destructive" role="alert">{children}</p>
 }
 
 function errorFor(
