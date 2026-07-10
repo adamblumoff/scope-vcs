@@ -1,0 +1,3 @@
+for the schema divergence, this is what i meant by the way, go ahead and revise accordinlgy
+
+The strongest example is the persistence layer: the same shape exists as raw SQL schema, sea-orm entities, domain structs, and mapping glue — four representations, three ~850-line files, and roughly 30 modules under `db/`. That's ceremony, not domain complexity, and it taxes every schema change. The phased data-architecture program itself, while executed with unusual discipline, is also a form of complexity: six phases of planning artifacts for a system whose load is one developer dogfooding.
