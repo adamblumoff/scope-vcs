@@ -1,0 +1,9 @@
+ok this is a great start. to answer your questions
+
+1. default
+2. default
+3. default
+4. we can make workers their own service in railway, but need to refactor how the codebase looks and figure out how we deploy this on railway via ci like the other services. 
+5. default 
+
+next thing i want you to do is modify this document that addresses these questions and highlight stuff that was added/deleted in the plan. at the bottom tell me how you're going to start phase 0.
