@@ -1,0 +1,1 @@
+ok now i want to do binary file support, go back in this conversation to gather context then go ahead and read the repo and come up with an html plan to get this working, please explain how you are going to do this simply and effectively and delete a lot of dead code in the process
