@@ -10,6 +10,7 @@ use crate::domain::{
         UserAccount, app_catalog,
     },
 };
+use sea_orm::{ConnectionTrait, DatabaseBackend, Statement};
 
 #[tokio::test]
 async fn request_submission_and_resolution_update_credit_facts() {
@@ -253,10 +254,6 @@ async fn repo_delete_waits_for_resolution_and_does_not_refund_settled_stake_twic
         .unwrap();
     submit_public_request(&store).await;
 
-    let repo_guard = store.db.begin().await.unwrap();
-    acquire_aggregate_lock(&repo_guard, "repository", "owner/repo")
-        .await
-        .unwrap();
     let credit_guard = store.db.begin().await.unwrap();
     acquire_aggregate_lock(&credit_guard, "user-credit", "user_public")
         .await
@@ -278,7 +275,7 @@ async fn repo_delete_waits_for_resolution_and_does_not_refund_settled_stake_twic
             })
             .await
     });
-    tokio::time::sleep(std::time::Duration::from_millis(25)).await;
+    wait_until_aggregate_lock_is_held(&store, "repository", "owner/repo").await;
 
     let delete_store = store.clone();
     let delete = tokio::spawn(async move {
@@ -286,9 +283,7 @@ async fn repo_delete_waits_for_resolution_and_does_not_refund_settled_stake_twic
             .delete_repo("owner", "repo", "user_owner")
             .await
     });
-    tokio::time::sleep(std::time::Duration::from_millis(25)).await;
-    repo_guard.commit().await.unwrap();
-    tokio::time::sleep(std::time::Duration::from_millis(25)).await;
+    tokio::task::yield_now().await;
 
     assert!(
         !resolve.is_finished(),
@@ -345,10 +340,6 @@ async fn repo_delete_waits_for_submission_and_refunds_the_committed_stake() {
         .await
         .unwrap();
 
-    let repo_guard = store.db.begin().await.unwrap();
-    acquire_aggregate_lock(&repo_guard, "repository", "owner/repo")
-        .await
-        .unwrap();
     let credit_guard = store.db.begin().await.unwrap();
     acquire_aggregate_lock(&credit_guard, "user-credit", "user_public")
         .await
@@ -357,16 +348,14 @@ async fn repo_delete_waits_for_submission_and_refunds_the_committed_stake() {
     let submit_store = store.clone();
     let submit =
         tokio::spawn(async move { submit_store.submit_request(public_submit_input()).await });
-    tokio::time::sleep(std::time::Duration::from_millis(25)).await;
+    wait_until_aggregate_lock_is_held(&store, "repository", "owner/repo").await;
     let delete_store = store.clone();
     let delete = tokio::spawn(async move {
         delete_store
             .delete_repo("owner", "repo", "user_owner")
             .await
     });
-    tokio::time::sleep(std::time::Duration::from_millis(25)).await;
-    repo_guard.commit().await.unwrap();
-    tokio::time::sleep(std::time::Duration::from_millis(25)).await;
+    tokio::task::yield_now().await;
 
     assert!(
         !submit.is_finished(),
@@ -410,6 +399,38 @@ fn postgres_store() -> MetadataStore {
     let store = MetadataStore::connect_fresh_for_tests(&target).unwrap();
     store.seed_catalog_for_tests(catalog_with_repo()).unwrap();
     store
+}
+
+async fn wait_until_aggregate_lock_is_held(store: &MetadataStore, namespace: &str, id: &str) {
+    let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(2);
+    loop {
+        let probe = store.db.begin().await.unwrap();
+        probe
+            .execute(Statement::from_string(
+                DatabaseBackend::Postgres,
+                "SET LOCAL lock_timeout = '10ms'",
+            ))
+            .await
+            .unwrap();
+        match acquire_aggregate_lock(&probe, namespace, id).await {
+            Ok(()) => {
+                probe.rollback().await.unwrap();
+                assert!(
+                    tokio::time::Instant::now() < deadline,
+                    "timed out waiting for {namespace}:{id} to be locked"
+                );
+                tokio::task::yield_now().await;
+            }
+            Err(error) if error.message.contains("lock timeout") => {
+                probe.rollback().await.unwrap();
+                return;
+            }
+            Err(error) => {
+                let _ = probe.rollback().await;
+                panic!("failed to probe {namespace}:{id} lock: {}", error.message);
+            }
+        }
+    }
 }
 
 fn catalog_with_repo() -> AppCatalog {
