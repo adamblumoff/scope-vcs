@@ -1,0 +1,7 @@
+ok the no-review flag should be all the files + whatever files are added with the default repo file config (public or private), but i think that's obvious just make sure you don't overlook that. 
+
+1. save and stop
+2. yeah go ahead and delete it
+3. visibility only first, destructive edits should probably be their own cli command, since it should be a relatively rare occurrence. 
+
+go ahead and modify the plan accordingly
