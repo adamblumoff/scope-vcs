@@ -1,0 +1,1 @@
+ok our ci is costing us a lot of money, so we want to reduce this by only building on main merges and then only keeping api, web, and cli ci checks on prs, got it? any other ways we can reduce ci costs are also welcome. go ahead and ammend this to the current pr as well
