@@ -1,5 +1,6 @@
 use super::{
     MetadataStore, begin_metadata_read_snapshot, entities,
+    projection_encoding::ProjectionAudience,
     projection_read_models::{
         load_live_projection_file_count_for_audience, load_live_projection_files_for_audience,
     },
@@ -25,9 +26,6 @@ use sea_orm::{
     QuerySelect, prelude::Json,
 };
 use std::{collections::BTreeMap, sync::Arc};
-
-const LIVE_PRIVATE_AUDIENCE: &str = "private";
-const LIVE_PUBLIC_AUDIENCE: &str = "public";
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct RepoSummaryRead {
@@ -196,7 +194,7 @@ where
     let audience = live_projection_audience(access);
 
     if let Some(files) =
-        load_live_projection_files_for_audience(conn, &row.id, row.change_version(), audience)
+        load_live_projection_files_for_audience(conn, &row.id, row.change_version()?, audience)
             .await?
     {
         let visible_projection = if !files.is_empty() {
@@ -361,8 +359,8 @@ where
         match load_live_projection_file_count_for_audience(
             conn,
             &row.id,
-            row.change_version(),
-            LIVE_PUBLIC_AUDIENCE,
+            row.change_version()?,
+            ProjectionAudience::Public,
         )
         .await?
         {
@@ -398,8 +396,8 @@ where
     let visible_projection = match load_live_projection_file_count_for_audience(
         conn,
         &row.id,
-        row.change_version(),
-        LIVE_PUBLIC_AUDIENCE,
+        row.change_version()?,
+        ProjectionAudience::Public,
     )
     .await?
     {
@@ -437,7 +435,7 @@ fn summary_from_row(
 ) -> Result<RepoSummaryRead, ApiError> {
     let lifecycle_state = row.publication_state()?;
     let default_visibility = row.default_visibility()?;
-    let change_version = repo_change_version_for_access(row.change_version(), access);
+    let change_version = repo_change_version_for_access(row.change_version()?, access);
     Ok(RepoSummaryRead {
         id: row.id,
         owner_handle: row.owner_handle,
@@ -552,11 +550,11 @@ fn readable_from_facts(
     }
 }
 
-fn live_projection_audience(access: RepositoryAccess) -> &'static str {
+fn live_projection_audience(access: RepositoryAccess) -> ProjectionAudience {
     if access.actor != RepositoryActor::Public && access.can_read_private_files {
-        LIVE_PRIVATE_AUDIENCE
+        ProjectionAudience::Private
     } else {
-        LIVE_PUBLIC_AUDIENCE
+        ProjectionAudience::Public
     }
 }
 
@@ -602,8 +600,9 @@ impl RepoReadRow {
         serde_json::from_value(self.policy.clone()).map_err(ApiError::internal)
     }
 
-    fn change_version(&self) -> u64 {
-        self.change_version.max(0) as u64
+    fn change_version(&self) -> Result<u64, ApiError> {
+        u64::try_from(self.change_version)
+            .map_err(|_| ApiError::internal_message("repository change version cannot be negative"))
     }
 }
 

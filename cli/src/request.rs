@@ -683,7 +683,7 @@ fn merge_request_thread(
         .request
         .mergeability
         .current_main_oid
-        .clone()
+        .as_ref()
         .context("request has no current main oid to merge into")?;
     let response = merge_request(
         client,
@@ -693,8 +693,8 @@ fn merge_request_thread(
             owner: &context.target.owner,
             repo: &context.target.repo,
             request_id: &request_id,
-            expected_main_oid,
-            expected_head_oid: detail.request.mergeability.request_head_oid.clone(),
+            expected_main_oid: expected_main_oid.to_string(),
+            expected_head_oid: detail.request.mergeability.request_head_oid.to_string(),
             body: args.body,
         },
     )?;

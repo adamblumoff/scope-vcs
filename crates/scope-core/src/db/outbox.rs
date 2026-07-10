@@ -1,5 +1,5 @@
 use super::{
-    MetadataStore, acquire_metadata_write_lock, entities,
+    MetadataStore, acquire_aggregate_lock, entities,
     projection_read_models::save_live_projection_read_models, repository_from_model,
 };
 use crate::{error::ApiError, persistence::unix_now};
@@ -7,8 +7,8 @@ use crate::{error::ApiError, persistence::unix_now};
 use sea_orm::PaginatorTrait;
 use sea_orm::{
     ColumnTrait, Condition, ConnectionTrait, EntityTrait, IntoActiveModel, QueryFilter, QueryOrder,
-    TransactionTrait, TryInsertResult,
-    sea_query::{Expr, OnConflict},
+    QuerySelect, TransactionTrait, TryInsertResult,
+    sea_query::{Expr, LockBehavior, LockType, OnConflict},
 };
 use std::sync::Arc;
 
@@ -75,7 +75,7 @@ impl MetadataStore {
                 }
                 Err(error) => {
                     let message = error.message;
-                    let attempts = next_retry_attempt(job.attempts);
+                    let attempts = next_retry_attempt(job.attempts)?;
                     if is_terminal_retry_attempt(attempts) {
                         tracing::error!(
                             job_id = %job.id,
@@ -125,8 +125,12 @@ impl MetadataStore {
             .filter(entities::projection_read_model::Column::RepoId.eq(repo_id))
             .count(db.as_ref())
             .await
-            .map(|count| count as usize)
             .map_err(ApiError::internal)
+            .and_then(|count| {
+                usize::try_from(count).map_err(|_| {
+                    ApiError::internal_message("projection read-model count exceeds usize range")
+                })
+            })
     }
 }
 
@@ -168,7 +172,6 @@ where
     C: ConnectionTrait + TransactionTrait,
 {
     let tx = conn.begin().await.map_err(ApiError::internal)?;
-    acquire_metadata_write_lock(&tx).await?;
     let now = now_i64()?;
     let runnable = Condition::any()
         .add(
@@ -188,6 +191,7 @@ where
         .order_by_asc(entities::outbox_job::Column::NextRunAtUnix)
         .order_by_asc(entities::outbox_job::Column::CreatedAtUnix)
         .order_by_asc(entities::outbox_job::Column::Id)
+        .lock_with_behavior(LockType::Update, LockBehavior::SkipLocked)
         .one(&tx)
         .await
         .map_err(ApiError::internal)?
@@ -209,7 +213,9 @@ where
         )
         .col_expr(
             entities::outbox_job::Column::LeaseExpiresAtUnix,
-            Expr::value(Some(now.saturating_add(lease_seconds))),
+            Expr::value(Some(now.checked_add(lease_seconds).ok_or_else(|| {
+                ApiError::internal_message("outbox lease expiry exceeds i64 range")
+            })?)),
         )
         .col_expr(
             entities::outbox_job::Column::UpdatedAtUnix,
@@ -255,7 +261,7 @@ where
     C: ConnectionTrait + TransactionTrait,
 {
     let tx = conn.begin().await.map_err(ApiError::internal)?;
-    acquire_metadata_write_lock(&tx).await?;
+    acquire_aggregate_lock(&tx, "repository", &job.repo_id).await?;
     let Some(repo) = entities::repository::Entity::find_by_id(job.repo_id.clone())
         .one(&tx)
         .await
@@ -314,6 +320,19 @@ where
         .await
         .map_err(ApiError::internal)?;
     if completed.rows_affected != 1 {
+        let job_is_missing = entities::outbox_job::Entity::find_by_id(job.id.clone())
+            .one(conn)
+            .await
+            .map_err(ApiError::internal)?
+            .is_none();
+        let repository_is_missing = entities::repository::Entity::find_by_id(job.repo_id.clone())
+            .one(conn)
+            .await
+            .map_err(ApiError::internal)?
+            .is_none();
+        if job_is_missing && repository_is_missing {
+            return Ok(());
+        }
         return Err(ApiError::conflict(
             "outbox job lease was lost before completion",
         ));
@@ -332,12 +351,13 @@ where
     C: ConnectionTrait,
 {
     let now = now_i64()?;
-    let attempts = next_retry_attempt(job.attempts);
+    let attempts = next_retry_attempt(job.attempts)?;
     let terminal = is_terminal_retry_attempt(attempts);
     let next_run_at = if terminal {
         now
     } else {
-        now.saturating_add(retry_delay_seconds(attempts))
+        now.checked_add(retry_delay_seconds(attempts))
+            .ok_or_else(|| ApiError::internal_message("outbox retry time exceeds i64 range"))?
     };
     let completed_at_unix = terminal.then_some(now);
     let state = if terminal { JOB_FAILED } else { JOB_READY };
@@ -389,7 +409,7 @@ async fn prune_succeeded_outbox_jobs<C>(conn: &C, now: i64) -> Result<(), ApiErr
 where
     C: ConnectionTrait,
 {
-    let cutoff = now.saturating_sub(SUCCEEDED_JOB_RETENTION_SECS);
+    let cutoff = now.checked_sub(SUCCEEDED_JOB_RETENTION_SECS).unwrap_or(0);
     entities::outbox_job::Entity::delete_many()
         .filter(entities::outbox_job::Column::State.eq(JOB_SUCCEEDED))
         .filter(entities::outbox_job::Column::CompletedAtUnix.lte(cutoff))
@@ -418,12 +438,19 @@ fn outbox_job_counts(rows: Vec<entities::outbox_job::Model>) -> OutboxJobCounts 
 }
 
 fn retry_delay_seconds(attempts: i64) -> i64 {
-    let exponent = attempts.saturating_sub(1).clamp(0, 6) as u32;
-    (5_i64.saturating_mul(2_i64.saturating_pow(exponent))).min(MAX_RETRY_DELAY_SECS)
+    let exponent =
+        u32::try_from(attempts.checked_sub(1).unwrap_or_default().clamp(0, 6)).unwrap_or_default();
+    5_i64
+        .checked_mul(2_i64.pow(exponent))
+        .unwrap_or(MAX_RETRY_DELAY_SECS)
+        .min(MAX_RETRY_DELAY_SECS)
 }
 
-fn next_retry_attempt(previous_attempts: i64) -> i64 {
-    previous_attempts.saturating_add(1).max(1)
+fn next_retry_attempt(previous_attempts: i64) -> Result<i64, ApiError> {
+    previous_attempts
+        .checked_add(1)
+        .filter(|attempts| *attempts >= 1)
+        .ok_or_else(|| ApiError::internal_message("outbox attempt count is outside valid range"))
 }
 
 fn is_terminal_retry_attempt(attempts: i64) -> bool {
@@ -440,10 +467,7 @@ fn truncate_error(error: String) -> String {
 
 fn now_i64() -> Result<i64, ApiError> {
     let now = unix_now()?;
-    if now > i64::MAX as u64 {
-        return Err(ApiError::internal_message("timestamp exceeds i64 range"));
-    }
-    Ok(now as i64)
+    i64::try_from(now).map_err(|_| ApiError::internal_message("timestamp exceeds i64 range"))
 }
 
 fn new_outbox_job_id() -> Result<String, ApiError> {
@@ -457,6 +481,10 @@ fn new_outbox_job_id() -> Result<String, ApiError> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::domain::{
+        policy::Visibility,
+        store::{UserAccount, app_catalog},
+    };
 
     #[test]
     fn retry_backoff_is_bounded() {
@@ -468,9 +496,91 @@ mod tests {
 
     #[test]
     fn retry_policy_stops_at_max_attempts() {
-        assert_eq!(next_retry_attempt(0), 1);
+        assert_eq!(next_retry_attempt(0).unwrap(), 1);
         assert!(!is_terminal_retry_attempt(MAX_JOB_ATTEMPTS - 1));
         assert!(is_terminal_retry_attempt(MAX_JOB_ATTEMPTS));
         assert!(is_terminal_retry_attempt(MAX_JOB_ATTEMPTS + 10));
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn repository_deletion_makes_claimed_outbox_job_obsolete() {
+        let target = super::super::TestDatabaseTarget::required().unwrap();
+        let store = MetadataStore::connect_fresh_for_tests(&target).unwrap();
+        seed_outbox_repo(&store).await;
+
+        let (claimed_tx, claimed_rx) = tokio::sync::oneshot::channel();
+        let (deleted_tx, deleted_rx) = tokio::sync::oneshot::channel();
+        let worker_store = store.clone();
+        let worker = tokio::spawn(async move {
+            let job = claim_next_ready_job(worker_store.db.as_ref(), "worker", 60)
+                .await?
+                .expect("the rebuild job should be ready");
+            claimed_tx.send(job.id.clone()).unwrap();
+            deleted_rx.await.unwrap();
+            execute_outbox_job(worker_store.db.as_ref(), &job).await?;
+            complete_outbox_job(worker_store.db.as_ref(), &job, "worker").await
+        });
+
+        let job_id = claimed_rx.await.unwrap();
+        store
+            .delete_repo("owner", "repo", "user_owner")
+            .await
+            .unwrap();
+        assert!(
+            entities::outbox_job::Entity::find_by_id(job_id)
+                .one(store.db.as_ref())
+                .await
+                .unwrap()
+                .is_none(),
+            "repository deletion should cascade the claimed outbox job"
+        );
+        deleted_tx.send(()).unwrap();
+
+        worker.await.unwrap().unwrap();
+    }
+
+    #[tokio::test]
+    async fn live_repository_still_reports_a_stolen_outbox_lease() {
+        let target = super::super::TestDatabaseTarget::required().unwrap();
+        let store = MetadataStore::connect_fresh_for_tests(&target).unwrap();
+        seed_outbox_repo(&store).await;
+        let job = claim_next_ready_job(store.db.as_ref(), "worker", 60)
+            .await
+            .unwrap()
+            .unwrap();
+        entities::outbox_job::Entity::update_many()
+            .filter(entities::outbox_job::Column::Id.eq(job.id.clone()))
+            .col_expr(
+                entities::outbox_job::Column::LeaseOwner,
+                Expr::value(Some("other-worker".to_string())),
+            )
+            .exec(store.db.as_ref())
+            .await
+            .unwrap();
+
+        let error = complete_outbox_job(store.db.as_ref(), &job, "worker")
+            .await
+            .unwrap_err();
+        assert!(error.message.contains("lease was lost"));
+        assert!(store.repository("owner", "repo").await.unwrap().is_some());
+    }
+
+    async fn seed_outbox_repo(store: &MetadataStore) {
+        let owner = UserAccount {
+            id: "user_owner".to_string(),
+            handle: "owner".to_string(),
+            email: "owner@example.com".to_string(),
+            email_verified: true,
+        };
+        let mut catalog = app_catalog();
+        let repo = catalog
+            .create_repository(&owner, "repo", Visibility::Private)
+            .unwrap()
+            .clone();
+        catalog.users.insert(owner.id.clone(), owner);
+        store.seed_catalog_for_tests(catalog).unwrap();
+        enqueue_projection_read_model_rebuild(store.db.as_ref(), &repo)
+            .await
+            .unwrap();
     }
 }

@@ -1,8 +1,8 @@
 use super::{
-    MetadataStore, RepositoryMutation, acquire_metadata_write_lock,
+    MetadataStore, RepositoryMutation, acquire_aggregate_lock,
     cleanup_queue::queue_pending_source_blob_deletion_rows,
     entities, repository_from_model,
-    repository_rows::save_repository_row,
+    repository_rows::save_repository_delta,
     request_access::{ensure_request_maintainer, ensure_user_exists},
     request_rows::{
         credit_account_by_user_id, credit_ledger_entry_by_id, insert_credit_ledger_entry_row,
@@ -46,7 +46,7 @@ impl MetadataStore {
 
         let db = Arc::clone(&self.db);
         let tx = db.as_ref().begin().await.map_err(ApiError::internal)?;
-        acquire_metadata_write_lock(&tx).await?;
+        acquire_aggregate_lock(&tx, "repository", &repo_id).await?;
 
         let repo = entities::repository::Entity::find_by_id(repo_id)
             .one(&tx)
@@ -54,13 +54,16 @@ impl MetadataStore {
             .map_err(ApiError::internal)?
             .ok_or_else(|| ApiError::not_found(format!("repo {owner}/{name} not found")))?;
         let mut repo = repository_from_model(&tx, repo).await?;
+        let before_repo = repo.clone();
 
+        acquire_aggregate_lock(&tx, "request", &input.request_id).await?;
         let request = request_by_id(&tx, &input.request_id)
             .await?
             .ok_or_else(|| ApiError::not_found("request not found"))?;
         if request.repo_id != repo.record.id {
             return Err(ApiError::not_found("request not found"));
         }
+        acquire_aggregate_lock(&tx, "user-credit", &request.author_user_id).await?;
         ensure_user_exists(&tx, &input.actor_user_id).await?;
         ensure_request_maintainer(&repo, &input.actor_user_id)?;
 
@@ -97,7 +100,7 @@ impl MetadataStore {
         )?;
         let repository_mutation = repo_op(&mut repo)?;
 
-        save_repository_row(&tx, &repo).await?;
+        save_repository_delta(&tx, &before_repo, &repo).await?;
         save_request_row(&tx, &request_mutation.request).await?;
         insert_request_event_row(&tx, &request_mutation.merged_event).await?;
         insert_request_event_row(&tx, &request_mutation.settled_event).await?;

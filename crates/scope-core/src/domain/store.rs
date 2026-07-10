@@ -49,6 +49,19 @@ pub struct RepositoryAccess {
     pub can_delete_repo: bool,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum MainPushMode {
+    Denied,
+    FirstPush,
+    Published,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct RepositoryPushPolicy {
+    pub access: RepositoryAccess,
+    pub mode: MainPushMode,
+}
+
 impl RepositoryAccess {
     pub fn public() -> Self {
         Self {
@@ -319,6 +332,48 @@ impl StoredRepository {
     pub fn has_file_for_visibility_update(&self, path: &ScopePath) -> bool {
         self.graph_has_file(path)
     }
+
+    pub fn can_read_path(&self, principal: &Principal, path: &ScopePath) -> bool {
+        if principal.kind == PrincipalKind::Public {
+            return self.record.publication_state == RepoPublicationState::Published
+                && self.policy.can_read(path, false);
+        }
+
+        let access = self.access_for_principal(principal);
+        match access.actor {
+            RepositoryActor::Owner => self.policy.can_read(path, true),
+            RepositoryActor::Member => {
+                self.record.publication_state == RepoPublicationState::Published
+                    && self.policy.can_read(path, access.can_read_private_files)
+            }
+            RepositoryActor::Public => false,
+        }
+    }
+
+    pub fn can_push(&self, principal: &Principal) -> bool {
+        self.access_for_principal(principal).can_push
+    }
+
+    pub fn push_policy_for_user_id(&self, user_id: &str) -> RepositoryPushPolicy {
+        let access = self.access_for_user_id(user_id);
+        let mode = if self.is_waiting_for_first_push() && self.is_owner_user(user_id) {
+            MainPushMode::FirstPush
+        } else if self.record.publication_state == RepoPublicationState::Published
+            && access.can_push
+        {
+            MainPushMode::Published
+        } else {
+            MainPushMode::Denied
+        };
+        RepositoryPushPolicy { access, mode }
+    }
+
+    pub fn is_maintainer_user_id(&self, user_id: &str) -> bool {
+        matches!(
+            self.access_for_user_id(user_id).actor,
+            RepositoryActor::Owner | RepositoryActor::Member
+        )
+    }
 }
 
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
@@ -346,32 +401,6 @@ impl AppCatalog {
                     || repo.members.iter().any(|member| member.user_id == user_id)
             })
             .collect()
-    }
-
-    pub fn can_read_path(
-        &self,
-        repo: &StoredRepository,
-        principal: &Principal,
-        path: &ScopePath,
-    ) -> bool {
-        if principal.kind == PrincipalKind::Public {
-            return repo.record.publication_state == RepoPublicationState::Published
-                && repo.policy.can_read(path, false);
-        }
-
-        let access = repo.access_for_principal(principal);
-        match access.actor {
-            RepositoryActor::Owner => repo.policy.can_read(path, true),
-            RepositoryActor::Member => {
-                repo.record.publication_state == RepoPublicationState::Published
-                    && repo.policy.can_read(path, access.can_read_private_files)
-            }
-            RepositoryActor::Public => false,
-        }
-    }
-
-    pub fn can_push(&self, repo: &StoredRepository, principal: &Principal) -> bool {
-        repo.access_for_principal(principal).can_push
     }
 }
 

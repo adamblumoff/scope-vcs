@@ -1,6 +1,5 @@
 use super::{
-    MetadataStore, acquire_metadata_read_lock, acquire_metadata_write_lock,
-    cli_sessions::create_cli_session_token_in_tx, entities,
+    MetadataStore, acquire_aggregate_lock, cli_sessions::create_cli_session_token_in_tx, entities,
 };
 use crate::{
     auth::{
@@ -32,7 +31,7 @@ impl MetadataStore {
 
         let db = Arc::clone(&self.db);
         let tx = db.as_ref().begin().await.map_err(ApiError::internal)?;
-        acquire_metadata_write_lock(&tx).await?;
+        acquire_aggregate_lock(&tx, "cli-auth", "start").await?;
         cleanup_expired_cli_rows(&tx, now).await?;
         enforce_device_login_start_limits(&tx, now).await?;
 
@@ -91,7 +90,7 @@ impl MetadataStore {
         let now = unix_now()?;
         let db = Arc::clone(&self.db);
         let tx = db.as_ref().begin().await.map_err(ApiError::internal)?;
-        acquire_metadata_write_lock(&tx).await?;
+        acquire_aggregate_lock(&tx, "cli-device-user-code", &user_code_hash).await?;
 
         let Some(login) = entities::cli_device_login::Entity::find()
             .filter(entities::cli_device_login::Column::UserCodeHash.eq(user_code_hash))
@@ -145,7 +144,7 @@ impl MetadataStore {
         let now = unix_now()?;
         let db = Arc::clone(&self.db);
         let tx = db.as_ref().begin().await.map_err(ApiError::internal)?;
-        acquire_metadata_write_lock(&tx).await?;
+        acquire_aggregate_lock(&tx, "cli-device-code", &device_code_hash).await?;
 
         let Some(login) = entities::cli_device_login::Entity::find_by_id(device_code_hash)
             .one(&tx)
@@ -206,7 +205,6 @@ impl MetadataStore {
         let now = unix_now()?;
         let db = Arc::clone(&self.db);
         let tx = db.as_ref().begin().await.map_err(ApiError::internal)?;
-        acquire_metadata_read_lock(&tx).await?;
         let Some(session) = entities::cli_session::Entity::find()
             .filter(entities::cli_session::Column::TokenHash.eq(token_hash))
             .one(&tx)
@@ -238,7 +236,7 @@ impl MetadataStore {
         let now = unix_now()?;
         let db = Arc::clone(&self.db);
         let tx = db.as_ref().begin().await.map_err(ApiError::internal)?;
-        acquire_metadata_write_lock(&tx).await?;
+        acquire_aggregate_lock(&tx, "cli-session-token", &token_hash).await?;
         let Some(session) = entities::cli_session::Entity::find()
             .filter(entities::cli_session::Column::TokenHash.eq(token_hash))
             .one(&tx)

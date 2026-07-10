@@ -207,7 +207,7 @@ pub(crate) async fn create_push_intent(
 
     Ok(Json(CreatePushIntentResponse {
         token: intent.token,
-        base_head_oid,
+        base_head_oid: base_head_oid.map(git_oid_response).transpose()?,
         expires_at_unix: intent.expires_at_unix,
     }))
 }

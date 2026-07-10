@@ -5,7 +5,7 @@ use crate::{
         projection::{ProjectionViewKey, project_graph},
         requests::{
             REQUEST_REF_PREFIX, RecordRequestRevisionInput, RecordWorkingRequestUploadInput,
-            Request, RequestActorRole, RequestBaseAudience, RequestState,
+            Request, RequestBaseAudience, RequestState,
         },
         store::{RepoPublicationState, RepositoryActor, SourceBlob},
     },
@@ -25,6 +25,7 @@ use crate::{
     persistence::unix_now,
     state::{AppState, find_repo},
 };
+use access::{ensure_request_ref_update_allowed, request_actor_can_edit_ref};
 use sha2::{Digest, Sha256};
 use std::{
     collections::{BTreeMap, BTreeSet},
@@ -40,6 +41,8 @@ const REQUEST_REF_LOCK_TIMEOUT: Duration = Duration::from_secs(10);
 const REQUEST_REF_LOCK_RETRY: Duration = Duration::from_millis(10);
 const REQUEST_REF_STALE_LOCK_AFTER_SECS: u64 = 30 * 60;
 static STALE_GIT_LOCK_REMOVAL: Mutex<()> = Mutex::new(());
+
+mod access;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct RequestRefUpdate {
@@ -272,8 +275,14 @@ pub(crate) async fn persist_request_ref_revision(
     update: RequestRefUpdate,
 ) -> Result<(), ApiError> {
     let _lock = acquire_request_ref_update_lock(state, owner, repo_name, &update.request_ref)?;
-    let request =
-        ensure_request_ref_update_allowed(state, owner, repo_name, actor_user_id, &update).await?;
+    let request = ensure_request_ref_update_allowed(
+        state,
+        owner,
+        repo_name,
+        actor_user_id,
+        &update.request_ref,
+    )
+    .await?;
     let now_unix = unix_now()?;
     let persisted =
         persist_request_ref_to_store(state, owner, repo_name, staging_repo, &request, &update)
@@ -437,81 +446,12 @@ fn refs_by_name(refs: &[(String, String)]) -> BTreeMap<String, String> {
         .collect()
 }
 
-fn request_is_closed(request: &Request) -> bool {
-    matches!(
-        request.state,
-        RequestState::Resolved | RequestState::Withdrawn
-    )
-}
-
-fn request_is_open_for_current_actor(request: &Request, current_actor: RepositoryActor) -> bool {
-    if request_is_closed(request) {
-        return false;
-    }
-    match current_actor {
-        RepositoryActor::Public => {
-            request.author_role == RequestActorRole::Public
-                && request.base_audience == RequestBaseAudience::Public
-        }
-        RepositoryActor::Member | RepositoryActor::Owner => true,
-    }
-}
-
-fn request_actor_can_edit_ref(
-    request: &Request,
-    actor_user_id: &str,
-    current_actor: RepositoryActor,
-) -> bool {
-    if !request_is_open_for_current_actor(request, current_actor) {
-        return false;
-    }
-    match current_actor {
-        RepositoryActor::Public => {
-            request.author_user_id == actor_user_id
-                || request.editor_user_ids.contains(actor_user_id)
-        }
-        RepositoryActor::Member | RepositoryActor::Owner => true,
-    }
-}
-
 fn install_request_pre_receive_hook(repo_root: &FsPath) -> Result<(), ApiError> {
     let hook = repo_root.join("hooks").join("pre-receive");
     let script = format!(
         "#!/bin/sh\ncount=0\nwhile read old new ref; do\n  count=$((count + 1))\n  case \"$ref\" in\n    refs/scope/requests/*) ;;\n    *)\n      echo \"Scope request pushes only accept refs/scope/requests/*\" >&2\n      exit 1\n      ;;\n  esac\n  if [ \"$new\" = \"{EMPTY_GIT_OID}\" ]; then\n    echo \"Scope does not accept request branch deletes\" >&2\n    exit 1\n  fi\n  if [ \"$(git cat-file -t \"$new\" 2>/dev/null)\" != \"commit\" ]; then\n    echo \"Scope request refs must point at commits\" >&2\n    exit 1\n  fi\ndone\nif [ \"$count\" -ne 1 ]; then\n  echo \"Scope accepts exactly one request ref update\" >&2\n  exit 1\nfi\n"
     );
     write_receive_pack_hook(&hook, &script)
-}
-
-async fn ensure_request_ref_update_allowed(
-    state: &AppState,
-    owner: &str,
-    repo_name: &str,
-    actor_user_id: &str,
-    update: &RequestRefUpdate,
-) -> Result<Request, ApiError> {
-    let repo = find_repo(state, owner, repo_name).await?;
-    let request = state
-        .metadata
-        .request_by_ref(&update.request_ref)
-        .await?
-        .ok_or_else(|| ApiError::not_found("request not found"))?;
-    if request.repo_id != repo.record.id {
-        return Err(ApiError::not_found("request not found"));
-    }
-    let current_actor = repo.access_for_user_id(actor_user_id).actor;
-    if !request_is_open_for_current_actor(&request, current_actor) {
-        if request_is_closed(&request)
-            && (request.author_user_id == actor_user_id
-                || request.editor_user_ids.contains(actor_user_id))
-        {
-            return Err(ApiError::conflict("request is closed"));
-        }
-        return Err(ApiError::not_found("request not found"));
-    }
-    if !request_actor_can_edit_ref(&request, actor_user_id, current_actor) {
-        return Err(ApiError::not_found("request not found"));
-    }
-    Ok(request)
 }
 
 struct PersistedRequestRef {

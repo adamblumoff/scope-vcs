@@ -58,10 +58,10 @@ where
         .map_err(ApiError::internal)?
         .into_iter()
         .map(|row| {
-            let account = row.into_domain();
-            (account.user_id.clone(), account)
+            let account = row.try_into_domain()?;
+            Ok((account.user_id.clone(), account))
         })
-        .collect();
+        .collect::<Result<BTreeMap<_, _>, ApiError>>()?;
 
     let credit_ledger_entries = entities::credit_ledger_entry::Entity::find()
         .order_by_asc(entities::credit_ledger_entry::Column::UserId)
@@ -186,13 +186,12 @@ pub async fn credit_account_by_user_id<C>(
 where
     C: ConnectionTrait,
 {
-    Ok(
-        entities::user_credit_account::Entity::find_by_id(user_id.to_string())
-            .one(conn)
-            .await
-            .map_err(ApiError::internal)?
-            .map(entities::user_credit_account::Model::into_domain),
-    )
+    entities::user_credit_account::Entity::find_by_id(user_id.to_string())
+        .one(conn)
+        .await
+        .map_err(ApiError::internal)?
+        .map(entities::user_credit_account::Model::try_into_domain)
+        .transpose()
 }
 
 pub async fn credit_ledger_entry_by_id<C>(
@@ -328,7 +327,7 @@ pub async fn save_credit_account_row<C>(
 where
     C: ConnectionTrait,
 {
-    let row = entities::user_credit_account::Model::from_domain(account);
+    let row = entities::user_credit_account::Model::from_domain(account)?;
     if entities::user_credit_account::Entity::find_by_id(row.user_id.clone())
         .one(conn)
         .await

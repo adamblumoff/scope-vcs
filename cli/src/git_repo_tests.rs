@@ -1,10 +1,6 @@
 use super::*;
-use std::{
-    fs,
-    path::{Path, PathBuf},
-    process::Command,
-    time::{SystemTime, UNIX_EPOCH},
-};
+use crate::test_support::TestDir;
+use std::{fs, path::Path, process::Command};
 
 #[test]
 fn git_clone_auth_plan_keeps_bearer_token_out_of_process_args() {
@@ -42,14 +38,15 @@ fn git_clone_auth_plan_keeps_bearer_token_out_of_process_args() {
 
 #[test]
 fn install_scope_fetch_auth_writes_secret_free_credential_helper_for_permissioned_remote() {
-    let root = temporary_git_repo("scope-fetch-auth");
+    let dir = TestDir::git_repo("scope-fetch-auth", "main");
+    let root = dir.path();
     let remote_url = "https://scope.example/git/permissioned/adam/random";
 
-    install_scope_fetch_auth(&root, remote_url).unwrap();
-    install_scope_fetch_auth(&root, remote_url).unwrap();
+    install_scope_fetch_auth(root, remote_url).unwrap();
+    install_scope_fetch_auth(root, remote_url).unwrap();
 
     let helpers = Command::new("git")
-        .current_dir(&root)
+        .current_dir(root)
         .args([
             "config",
             "--local",
@@ -67,7 +64,7 @@ fn install_scope_fetch_auth_writes_secret_free_credential_helper_for_permissione
     );
 
     let helper = Command::new("git")
-        .current_dir(&root)
+        .current_dir(root)
         .args([
             "config",
             "--local",
@@ -83,7 +80,7 @@ fn install_scope_fetch_auth_writes_secret_free_credential_helper_for_permissione
         SCOPE_GIT_CREDENTIAL_HELPER
     );
     let use_http_path = Command::new("git")
-        .current_dir(&root)
+        .current_dir(root)
         .args([
             "config",
             "--local",
@@ -103,21 +100,19 @@ fn install_scope_fetch_auth_writes_secret_free_credential_helper_for_permissione
         !config.contains("scope_cli_secret"),
         "repo config must not persist Scope session tokens"
     );
-
-    let _ = fs::remove_dir_all(root);
 }
 
 #[test]
 fn install_scope_fetch_auth_rejects_config_injection() {
-    let root = temporary_git_repo("scope-fetch-auth-injection");
+    let dir = TestDir::git_repo("scope-fetch-auth-injection", "main");
+    let root = dir.path();
     assert!(
         install_scope_fetch_auth(
-            &root,
+            root,
             "https://scope.example/git/permissioned/adam/random\n[alias]",
         )
         .is_err()
     );
-    let _ = fs::remove_dir_all(root);
 }
 
 #[test]
@@ -164,22 +159,6 @@ fn git_push_auth_plan_keeps_bearer_token_out_of_process_args() {
             ),
         ]
     );
-}
-
-fn temporary_git_repo(name: &str) -> PathBuf {
-    let now = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .unwrap()
-        .as_nanos();
-    let root = std::env::temp_dir().join(format!("scope-cli-{name}-{}-{now}", std::process::id()));
-    fs::create_dir_all(&root).unwrap();
-    let status = Command::new("git")
-        .args(["init", "-q"])
-        .arg(&root)
-        .status()
-        .unwrap();
-    assert!(status.success());
-    root
 }
 
 #[test]

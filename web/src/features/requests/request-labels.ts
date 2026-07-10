@@ -6,14 +6,9 @@ import type {
   RequestWorkflowEventKind,
   RequestWorkflowState,
 } from '@/api/types'
+import type { BadgeVariant } from '@/components/ui/badge'
 
-export type BadgeTone =
-  | 'danger'
-  | 'info'
-  | 'neutral'
-  | 'outline'
-  | 'success'
-  | 'warning'
+export type BadgeTone = BadgeVariant
 
 export type ResolutionOption = {
   description: string

@@ -1,4 +1,5 @@
 use super::entities;
+use crate::error::ApiError;
 use sea_orm::{ActiveModelTrait, Set};
 use serde::Serialize;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -24,7 +25,11 @@ pub async fn insert_metadata_reset_event(
 ) -> Result<(), sea_orm::DbErr> {
     entities::metadata_reset_event::ActiveModel {
         id: Set(event.id.clone()),
-        reset_at_unix: Set(event.reset_at_unix as i64),
+        reset_at_unix: Set(i64::try_from(event.reset_at_unix).map_err(|_| {
+            sea_orm::DbErr::Custom(
+                "metadata reset time exceeds PostgreSQL bigint range".to_string(),
+            )
+        })?),
         trigger: Set(event.trigger.clone()),
         reason: Set(event.reason.clone()),
     }
@@ -35,13 +40,14 @@ pub async fn insert_metadata_reset_event(
 
 pub fn metadata_reset_event_from_model(
     model: entities::metadata_reset_event::Model,
-) -> MetadataResetEvent {
-    MetadataResetEvent {
+) -> Result<MetadataResetEvent, ApiError> {
+    Ok(MetadataResetEvent {
         id: model.id,
-        reset_at_unix: model.reset_at_unix.max(0) as u64,
+        reset_at_unix: u64::try_from(model.reset_at_unix)
+            .map_err(|_| ApiError::internal_message("metadata reset time cannot be negative"))?,
         trigger: model.trigger,
         reason: model.reason,
-    }
+    })
 }
 
 fn new_metadata_reset_event(

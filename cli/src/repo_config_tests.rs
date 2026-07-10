@@ -1,36 +1,6 @@
 use super::*;
-use std::{
-    env,
-    path::PathBuf,
-    process::{Command, Output},
-    time::{SystemTime, UNIX_EPOCH},
-};
-
-struct TempDir {
-    path: PathBuf,
-}
-
-impl TempDir {
-    fn new(label: &str) -> Self {
-        let mut path = env::temp_dir();
-        path.push(format!(
-            "scope-repo-config-{label}-{}-{}",
-            std::process::id(),
-            SystemTime::now()
-                .duration_since(UNIX_EPOCH)
-                .unwrap()
-                .as_nanos()
-        ));
-        fs::create_dir_all(&path).unwrap();
-        Self { path }
-    }
-}
-
-impl Drop for TempDir {
-    fn drop(&mut self) {
-        let _ = fs::remove_dir_all(&self.path);
-    }
-}
+use crate::test_support::TestDir as TempDir;
+use std::process::{Command, Output};
 
 #[cfg(unix)]
 #[test]

@@ -4,8 +4,8 @@ use crate::{
     error::ApiError,
     http::responses::{
         AccountSessionResponse, HealthResponse, ReadinessCheckResponse, ReadinessResponse,
-        SessionIdentity, SessionRepo, SessionResponse, UserResponse, repository_access_response,
-        session_capabilities_response,
+        SessionIdentity, SessionRepo, SessionResponse, repository_access_response,
+        session_capabilities_response, user_response,
     },
     state::AppState,
     state::{access_for_principal, can_read_path, ensure_repo_read, find_repo},
@@ -63,7 +63,7 @@ pub(crate) async fn get_account_session(
 
     Ok(Json(AccountSessionResponse {
         identity: user.as_ref().map(SessionIdentity::from),
-        user: user.map(UserResponse::from),
+        user: user.map(user_response),
     }))
 }
 

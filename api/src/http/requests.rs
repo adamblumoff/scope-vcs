@@ -8,7 +8,8 @@ use crate::{
             MarkRequestNeedsResponseInput, MergeRequestInput, RemoveRequestEditorInput, Request,
             RequestActorRole, RequestDisposition, RequestState, ResolveRequestInput,
             RespondToRequestInput, StartRequestInput, SubmitRequestInput, canonical_request_ref,
-            settlement_for,
+            request_actor_role, request_base_audience, request_mergeability, request_permissions,
+            request_visible_to_access, settlement_for,
         },
         store::{RepositoryAccess, RepositoryActor, StoredRepository},
     },
@@ -58,7 +59,7 @@ pub(crate) async fn list_requests(
                 viewer_user_id.as_deref(),
             )
         })
-        .collect();
+        .collect::<Result<Vec<_>, ApiError>>()?;
 
     Ok(Json(RequestListResponse { requests }))
 }
@@ -77,9 +78,9 @@ pub(crate) async fn get_request(
         .request_events_by_request_id(&request.id)
         .await?
         .into_iter()
-        .map(Into::into)
-        .collect();
-    let request = request_response(request, access, current_main_oid, viewer_user_id.as_deref());
+        .map(request_event_response)
+        .collect::<Result<Vec<_>, ApiError>>()?;
+    let request = request_response(request, access, current_main_oid, viewer_user_id.as_deref())?;
 
     Ok(Json(RequestDetailResponse { request, events }))
 }
@@ -137,7 +138,7 @@ pub(crate) async fn add_request_editor(
         })
         .await?;
     let current_main_oid = current_main_oid_for_access(&state, &repo, access)?;
-    let request = request_response(mutation.request, access, current_main_oid, Some(&user.id));
+    let request = request_response(mutation.request, access, current_main_oid, Some(&user.id))?;
     publish_request_summary_refresh(&state, &repo, "request-editor-added").await;
     Ok(Json(RequestMutationResponse { request }))
 }
@@ -164,7 +165,7 @@ pub(crate) async fn remove_request_editor(
         })
         .await?;
     let current_main_oid = current_main_oid_for_access(&state, &repo, access)?;
-    let request = request_response(mutation.request, access, current_main_oid, Some(&user.id));
+    let request = request_response(mutation.request, access, current_main_oid, Some(&user.id))?;
     publish_request_summary_refresh(&state, &repo, "request-editor-removed").await;
     Ok(Json(RequestMutationResponse { request }))
 }
@@ -205,7 +206,7 @@ pub(crate) async fn delete_request(
         })),
         DeleteRequestMutation::Withdrawn { request, .. } => {
             let current_main_oid = current_main_oid_for_access(&state, &repo, access)?;
-            let request = request_response(*request, access, current_main_oid, Some(&user.id));
+            let request = request_response(*request, access, current_main_oid, Some(&user.id))?;
             Ok(Json(RequestDeleteResponse {
                 deleted: false,
                 request: Some(request),
@@ -236,8 +237,8 @@ pub(crate) async fn start_request(
             repo_id: repo.record.id.clone(),
             author_user_id: user.id.clone(),
             title: input.title,
-            author_role: actor_role_for_access(access),
-            base_audience: base_audience_for_access(access),
+            author_role: request_actor_role(access),
+            base_audience: request_base_audience(access),
             target_branch: DEFAULT_GIT_BRANCH.to_string(),
             request_ref: canonical_request_ref(&request_id),
             base_main_oid,
@@ -245,7 +246,7 @@ pub(crate) async fn start_request(
         })
         .await?;
     let current_main_oid = current_main_oid_for_access(&state, &repo, access)?;
-    let request = request_response(mutation.request, access, current_main_oid, Some(&user.id));
+    let request = request_response(mutation.request, access, current_main_oid, Some(&user.id))?;
     publish_request_summary_refresh(&state, &repo, "request-started").await;
     Ok(Json(RequestMutationResponse { request }))
 }
@@ -298,7 +299,7 @@ pub(crate) async fn submit_request(
         })
         .await?;
     let current_main_oid = current_main_oid_for_access(&state, &repo, access)?;
-    let request = request_response(mutation.request, access, current_main_oid, Some(&user.id));
+    let request = request_response(mutation.request, access, current_main_oid, Some(&user.id))?;
     publish_request_summary_refresh(&state, &repo, "request-submitted").await;
     Ok(Json(RequestMutationResponse { request }))
 }
@@ -326,7 +327,7 @@ pub(crate) async fn comment_request(
         })
         .await?;
     let current_main_oid = current_main_oid_for_access(&state, &repo, access)?;
-    let request = request_response(mutation.request, access, current_main_oid, Some(&user.id));
+    let request = request_response(mutation.request, access, current_main_oid, Some(&user.id))?;
     Ok(Json(RequestMutationResponse { request }))
 }
 
@@ -351,7 +352,7 @@ pub(crate) async fn mark_needs_response(
         })
         .await?;
     let current_main_oid = current_main_oid_for_access(&state, &repo, access)?;
-    let request = request_response(mutation.request, access, current_main_oid, Some(&user.id));
+    let request = request_response(mutation.request, access, current_main_oid, Some(&user.id))?;
     Ok(Json(RequestMutationResponse { request }))
 }
 
@@ -375,7 +376,7 @@ pub(crate) async fn respond_to_request(
         })
         .await?;
     let current_main_oid = current_main_oid_for_access(&state, &repo, access)?;
-    let request = request_response(mutation.request, access, current_main_oid, Some(&user.id));
+    let request = request_response(mutation.request, access, current_main_oid, Some(&user.id))?;
     Ok(Json(RequestMutationResponse { request }))
 }
 
@@ -415,7 +416,7 @@ pub(crate) async fn resolve_request(
         })
         .await?;
     let current_main_oid = current_main_oid_for_access(&state, &repo, access)?;
-    let request = request_response(mutation.request, access, current_main_oid, Some(&user.id));
+    let request = request_response(mutation.request, access, current_main_oid, Some(&user.id))?;
     publish_request_summary_refresh(&state, &repo, "request-resolved").await;
     Ok(Json(RequestMutationResponse { request }))
 }
@@ -519,7 +520,7 @@ pub(crate) async fn merge_request(
         access,
         Some(current_main_oid),
         Some(&user.id),
-    );
+    )?;
     Ok(Json(RequestMutationResponse { request }))
 }
 
@@ -567,108 +568,32 @@ async fn publish_request_summary_refresh(
         .await;
 }
 
-fn request_visible_to_access(request: &Request, access: RepositoryAccess) -> bool {
-    match access.actor {
-        RepositoryActor::Owner | RepositoryActor::Member => true,
-        RepositoryActor::Public => {
-            request.author_role == RequestActorRole::Public
-                && request.base_audience == base_audience_for_access(access)
-        }
-    }
-}
-
 fn request_response(
     request: Request,
     access: RepositoryAccess,
     current_main_oid: Option<String>,
     viewer_user_id: Option<&str>,
-) -> RequestSummaryResponse {
-    let permissions = request_permissions(&request, access, viewer_user_id);
-    let mergeability = request_mergeability(&request, access, current_main_oid);
-    request_summary_response(request, permissions, mergeability)
-}
-
-fn request_permissions(
-    request: &Request,
-    access: RepositoryAccess,
-    viewer_user_id: Option<&str>,
-) -> RequestPermissionsResponse {
-    let maintainer = matches!(
-        access.actor,
-        RepositoryActor::Owner | RepositoryActor::Member
-    );
-    let author = viewer_user_id == Some(request.author_user_id.as_str());
-    let editor = viewer_user_id
-        .map(|user_id| request.editor_user_ids.contains(user_id))
-        .unwrap_or(false);
-    let can_edit_branch = author || editor || maintainer;
-    let open = !matches!(
-        request.state,
-        RequestState::Resolved | RequestState::Withdrawn
-    );
-    let submitted = request.state == RequestState::Submitted;
-    let submitted_or_waiting = matches!(
-        request.state,
-        RequestState::Submitted | RequestState::NeedsResponse
-    );
-    RequestPermissionsResponse {
-        can_comment: open && can_edit_branch,
-        can_pull_branch: open && can_edit_branch && request.git_snapshot.is_some(),
-        can_push_branch: open && can_edit_branch,
-        can_delete: open && (author || maintainer),
-        can_invite_editor: open && maintainer,
-        can_mark_needs_response: submitted && maintainer,
-        can_respond: open && author && request.state == RequestState::NeedsResponse,
-        can_resolve: submitted_or_waiting && maintainer,
-        can_merge: submitted && maintainer,
-    }
-}
-
-fn request_mergeability(
-    request: &Request,
-    access: RepositoryAccess,
-    current_main_oid: Option<String>,
-) -> RequestMergeabilityResponse {
-    let (status, reason) = if matches!(
-        request.state,
-        RequestState::Resolved | RequestState::Withdrawn
-    ) {
-        (
-            RequestMergeabilityStatus::Closed,
-            Some("request is closed".to_string()),
-        )
-    } else if !matches!(
-        access.actor,
-        RepositoryActor::Owner | RepositoryActor::Member
-    ) {
-        (
-            RequestMergeabilityStatus::NotMaintainer,
-            Some("repo maintainer required".to_string()),
-        )
-    } else if request.state == RequestState::Working {
-        (
-            RequestMergeabilityStatus::NotReady,
-            Some("request has not been submitted".to_string()),
-        )
-    } else if request.state == RequestState::NeedsResponse {
-        (
-            RequestMergeabilityStatus::NotReady,
-            Some("request is waiting on contributor response".to_string()),
-        )
-    } else if request.git_snapshot.is_none() {
-        (
-            RequestMergeabilityStatus::MissingRequestBranch,
-            Some("request branch has not been pushed".to_string()),
-        )
-    } else {
-        (RequestMergeabilityStatus::Ready, None)
+) -> Result<RequestSummaryResponse, ApiError> {
+    let decision = request_permissions(&request, access, viewer_user_id);
+    let permissions = RequestPermissionsResponse {
+        can_comment: decision.can_comment,
+        can_pull_branch: decision.can_pull_branch,
+        can_push_branch: decision.can_push_branch,
+        can_delete: decision.can_delete,
+        can_invite_editor: decision.can_invite_editor,
+        can_mark_needs_response: decision.can_mark_needs_response,
+        can_respond: decision.can_respond,
+        can_resolve: decision.can_resolve,
+        can_merge: decision.can_merge,
     };
-    RequestMergeabilityResponse {
-        status,
-        current_main_oid,
-        request_head_oid: request.head_oid.clone(),
-        reason,
-    }
+    let decision = request_mergeability(&request, access);
+    let mergeability = RequestMergeabilityResponse {
+        status: decision.status,
+        current_main_oid: current_main_oid.map(git_oid_response).transpose()?,
+        request_head_oid: git_oid_response(request.head_oid.clone())?,
+        reason: decision.reason.map(str::to_string),
+    };
+    request_summary_response(request, permissions, mergeability)
 }
 
 fn current_main_oid_for_access(
@@ -716,25 +641,6 @@ fn ensure_maintainer(access: RepositoryAccess) -> Result<(), ApiError> {
         Ok(())
     } else {
         Err(ApiError::forbidden("repo maintainer required"))
-    }
-}
-
-fn base_audience_for_access(
-    access: RepositoryAccess,
-) -> crate::domain::requests::RequestBaseAudience {
-    match access.actor {
-        RepositoryActor::Owner | RepositoryActor::Member => {
-            crate::domain::requests::RequestBaseAudience::Private
-        }
-        RepositoryActor::Public => crate::domain::requests::RequestBaseAudience::Public,
-    }
-}
-
-fn actor_role_for_access(access: RepositoryAccess) -> RequestActorRole {
-    match access.actor {
-        RepositoryActor::Owner => RequestActorRole::Owner,
-        RepositoryActor::Member => RequestActorRole::Member,
-        RepositoryActor::Public => RequestActorRole::Public,
     }
 }
 

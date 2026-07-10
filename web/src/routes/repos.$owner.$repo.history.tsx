@@ -10,6 +10,7 @@ import {
 } from '@/features/history/history-page'
 import {
   loadCommitDetail,
+  loadCommitFileDiff,
   loadCommitHistory,
 } from '@/routes/-repo-history-actions'
 import { createFileRoute } from '@tanstack/react-router'
@@ -44,11 +45,15 @@ export const Route = createFileRoute('/repos/$owner/$repo/history')({
           },
         })
       : null
+    const initialFile = initialCommit && search.path
+      ? await loadInitialFileDiff(params, initialAudience, initialCommit.projected_id, search.path)
+      : { error: null, path: null, value: null }
 
     return {
       histories,
       initialAudience,
       initialCommit,
+      initialFile,
     }
   },
   errorComponent: HistoryError,
@@ -57,14 +62,15 @@ export const Route = createFileRoute('/repos/$owner/$repo/history')({
 
 function HistoryRoute() {
   const params = Route.useParams()
-  const { histories, initialAudience, initialCommit } = Route.useLoaderData()
+  const { histories, initialAudience, initialCommit, initialFile } = Route.useLoaderData()
 
   return (
     <HistoryPage
       histories={histories}
       initialAudience={initialAudience}
       initialCommit={initialCommit}
-      key={`${initialAudience}:${initialCommit?.projected_id ?? ''}`}
+      initialFile={initialFile}
+      key={`${initialAudience}:${initialCommit?.projected_id ?? ''}:${initialFile.path ?? ''}`}
       params={params}
     />
   )
@@ -73,12 +79,14 @@ function HistoryRoute() {
 type HistorySearch = {
   audience?: ProjectionPreviewAudience
   commit?: string
+  path?: string
 }
 
 function parseHistorySearch(search: Record<string, unknown>): HistorySearch {
   return {
     audience: searchHistoryAudience(search.audience),
     commit: searchCommitId(search.commit),
+    path: searchString(search.path),
   }
 }
 
@@ -103,6 +111,32 @@ function searchCommitId(value: unknown) {
   }
 
   return undefined
+}
+
+function searchString(value: unknown) {
+  if (typeof value !== 'string') return undefined
+  return value.trim() || undefined
+}
+
+async function loadInitialFileDiff(
+  params: RepoParams,
+  audience: ProjectionPreviewAudience,
+  commit: string,
+  path: string,
+) {
+  try {
+    return {
+      error: null,
+      path,
+      value: await loadCommitFileDiff({ data: { ...params, audience, commit, path } }),
+    }
+  } catch (error) {
+    return {
+      error: error instanceof Error ? error.message : 'diff load failed',
+      path,
+      value: null,
+    }
+  }
 }
 
 async function loadOptionalPrivateHistory(params: RepoParams) {

@@ -908,5 +908,71 @@ ALTER TABLE ONLY scope_user_credit_accounts
 
 
 --
+-- Domain/persistence boundary constraints. The application converts these
+-- values fallibly as well; constraints keep invalid rows from entering through
+-- operator SQL or future adapters.
+ALTER TABLE scope_repositories
+    ADD CONSTRAINT scope_repositories_nonnegative_version CHECK (change_version >= 0);
+ALTER TABLE scope_repository_first_push_tokens
+    ADD CONSTRAINT scope_first_push_token_times CHECK (
+        created_at_unix >= 0 AND expires_at_unix >= 0 AND
+        (used_at_unix IS NULL OR used_at_unix >= 0)
+    );
+ALTER TABLE scope_repository_git_push_tokens
+    ADD CONSTRAINT scope_git_push_token_time CHECK (created_at_unix >= 0);
+ALTER TABLE scope_repository_git_snapshots
+    ADD CONSTRAINT scope_git_snapshot_size CHECK (size_bytes >= 0);
+ALTER TABLE scope_repository_members
+    ADD CONSTRAINT scope_repository_member_times CHECK (
+        created_at_unix >= 0 AND updated_at_unix >= 0
+    );
+ALTER TABLE scope_repository_invites
+    ADD CONSTRAINT scope_repository_invite_times CHECK (
+        created_at_unix >= 0 AND updated_at_unix >= 0 AND expires_at_unix >= 0 AND
+        (accepted_at_unix IS NULL OR accepted_at_unix >= 0) AND
+        (revoked_at_unix IS NULL OR revoked_at_unix >= 0)
+    );
+ALTER TABLE scope_requests
+    ADD CONSTRAINT scope_request_nonnegative_values CHECK (
+        stake_credits >= 0 AND created_at_unix >= 0 AND updated_at_unix >= 0 AND
+        (resolved_at_unix IS NULL OR resolved_at_unix >= 0)
+    );
+ALTER TABLE scope_request_events
+    ADD CONSTRAINT scope_request_event_time CHECK (created_at_unix >= 0);
+ALTER TABLE scope_user_credit_accounts
+    ADD CONSTRAINT scope_user_credit_balance CHECK (balance_credits >= 0);
+ALTER TABLE scope_credit_ledger_entries
+    ADD CONSTRAINT scope_credit_ledger_entry_time CHECK (created_at_unix >= 0);
+ALTER TABLE scope_projection_read_models
+    ADD CONSTRAINT scope_projection_read_model_values CHECK (
+        repo_version >= 0 AND rebuilt_at_unix >= 0 AND file_count >= 0 AND
+        source = 'live' AND audience IN ('private', 'public')
+    );
+ALTER TABLE scope_projection_files
+    ADD CONSTRAINT scope_projection_file_values CHECK (
+        repo_version >= 0 AND source = 'live' AND audience IN ('private', 'public')
+    );
+ALTER TABLE scope_repo_storage_cleanup_jobs
+    ADD CONSTRAINT scope_repo_cleanup_values CHECK (
+        attempts >= 0 AND next_run_at_unix >= 0 AND created_at_unix >= 0 AND
+        updated_at_unix >= 0 AND (completed_at_unix IS NULL OR completed_at_unix >= 0)
+    );
+ALTER TABLE scope_source_blob_cleanup_jobs
+    ADD CONSTRAINT scope_blob_cleanup_values CHECK (
+        size_bytes >= 0 AND attempts >= 0 AND next_run_at_unix >= 0 AND
+        created_at_unix >= 0 AND updated_at_unix >= 0 AND
+        (completed_at_unix IS NULL OR completed_at_unix >= 0)
+    );
+ALTER TABLE scope_outbox_jobs
+    ADD CONSTRAINT scope_outbox_values CHECK (
+        repo_version >= 0 AND attempts >= 0 AND next_run_at_unix >= 0 AND
+        created_at_unix >= 0 AND updated_at_unix >= 0 AND
+        state IN ('ready', 'running', 'succeeded', 'failed') AND
+        (lease_expires_at_unix IS NULL OR lease_expires_at_unix >= 0) AND
+        (completed_at_unix IS NULL OR completed_at_unix >= 0)
+    );
+ALTER TABLE scope_metadata_reset_events
+    ADD CONSTRAINT scope_metadata_reset_event_time CHECK (reset_at_unix >= 0);
+
 -- PostgreSQL database dump complete
 --

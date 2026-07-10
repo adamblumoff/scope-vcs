@@ -1,7 +1,10 @@
 use super::{
-    MetadataStore, acquire_metadata_write_lock,
+    MetadataStore, acquire_aggregate_lock,
     cleanup_queue::queue_pending_source_blob_deletion_rows,
-    cleanup_queue::{complete_pending_repo_storage_cleanup, pending_repo_storage_cleanup_exists},
+    cleanup_queue::{
+        claim_pending_repo_storage_cleanup, complete_claimed_repo_storage_cleanup,
+        pending_repo_storage_cleanup_exists,
+    },
     entities,
     repo_effects::save_repo_effects,
     repository_from_model,
@@ -36,11 +39,8 @@ impl MetadataStore {
     {
         let owner_user_id = owner_user_id.to_string();
         let name = name.to_string();
-        let db = Arc::clone(&self.db);
-        let tx = db.as_ref().begin().await.map_err(ApiError::internal)?;
-        acquire_metadata_write_lock(&tx).await?;
         let owner = entities::user::Entity::find_by_id(owner_user_id)
-            .one(&tx)
+            .one(self.db.as_ref())
             .await
             .map_err(ApiError::internal)?
             .ok_or_else(|| ApiError::internal_message("signed-in user was not persisted"))?
@@ -53,27 +53,41 @@ impl MetadataStore {
             git_push_token,
         )?;
         let repo = mutation.result;
-        if entities::repository::Entity::find_by_id(repo.record.id.clone())
-            .one(&tx)
-            .await
-            .map_err(ApiError::internal)?
-            .is_some()
-        {
-            return Err(ApiError::conflict(format!(
-                "repo {} already exists",
-                repo.record.id
-            )));
-        }
+        let db = Arc::clone(&self.db);
+        let repo_id = repo.record.id.clone();
+        self.with_repo_storage_lock(&repo_id, move || async move {
+            let claim_tx = db.as_ref().begin().await.map_err(ApiError::internal)?;
+            acquire_aggregate_lock(&claim_tx, "repository", &repo.record.id).await?;
+            ensure_repository_absent(&claim_tx, &repo.record.id).await?;
+            let cleanup_claim =
+                claim_pending_repo_storage_cleanup(&claim_tx, &repo.record.id).await?;
+            claim_tx.commit().await.map_err(ApiError::internal)?;
 
-        if pending_repo_storage_cleanup_exists(&tx, &repo.record.id).await? {
-            cleanup_pending_storage(&repo.record.owner_handle, &repo.record.name)?;
-            complete_pending_repo_storage_cleanup(&tx, &repo.record.id).await?;
-        }
+            if cleanup_claim.is_some() {
+                cleanup_pending_storage(&repo.record.owner_handle, &repo.record.name)?;
+            }
 
-        insert_repository(&tx, &repo).await?;
-        save_repo_effects(&tx, &mutation.effects).await?;
-        tx.commit().await.map_err(ApiError::internal)?;
-        Ok(repo)
+            let tx = db.as_ref().begin().await.map_err(ApiError::internal)?;
+            acquire_aggregate_lock(&tx, "repository", &repo.record.id).await?;
+            ensure_repository_absent(&tx, &repo.record.id).await?;
+            match cleanup_claim {
+                Some(claim) => {
+                    complete_claimed_repo_storage_cleanup(&tx, &repo.record.id, &claim).await?
+                }
+                None if pending_repo_storage_cleanup_exists(&tx, &repo.record.id).await? => {
+                    return Err(ApiError::conflict(
+                        "repository storage cleanup changed during creation; retry",
+                    ));
+                }
+                None => {}
+            }
+
+            insert_repository(&tx, &repo).await?;
+            save_repo_effects(&tx, &mutation.effects).await?;
+            tx.commit().await.map_err(ApiError::internal)?;
+            Ok(repo)
+        })
+        .await
     }
 
     pub async fn delete_repo(
@@ -88,7 +102,7 @@ impl MetadataStore {
         let user_id = user_id.to_string();
         let db = Arc::clone(&self.db);
         let tx = db.as_ref().begin().await.map_err(ApiError::internal)?;
-        acquire_metadata_write_lock(&tx).await?;
+        acquire_aggregate_lock(&tx, "repository", &repo_id).await?;
         let repo = entities::repository::Entity::find_by_id(repo_id.clone())
             .one(&tx)
             .await
@@ -96,8 +110,10 @@ impl MetadataStore {
             .ok_or_else(|| crate::domain::repo_actions::hidden_repo_not_found(&owner, &name))?;
         let repo = repository_from_model(&tx, repo).await?;
         let mutation = delete_repo_command(&repo, &user_id, &owner, &name)?;
-        refund_open_request_stakes_for_repo_postgres(&tx, &repo_id, unix_now()).await?;
-        let request_git_snapshots = request_git_snapshots_for_repo_postgres(&tx, &repo_id).await?;
+        let requests = lock_requests_for_repo_postgres(&tx, &repo_id).await?;
+        lock_request_credit_accounts_for_repo_postgres(&tx, &requests).await?;
+        refund_open_request_stakes_for_repo_postgres(&tx, &requests, unix_now()).await?;
+        let request_git_snapshots = request_git_snapshots_for_repo(&requests);
 
         entities::repository_invite::Entity::delete_many()
             .filter(entities::repository_invite::Column::RepoId.eq(repo_id.clone()))
@@ -121,15 +137,30 @@ impl MetadataStore {
     }
 }
 
+async fn ensure_repository_absent<C>(conn: &C, repo_id: &str) -> Result<(), ApiError>
+where
+    C: sea_orm::ConnectionTrait,
+{
+    if entities::repository::Entity::find_by_id(repo_id.to_string())
+        .one(conn)
+        .await
+        .map_err(ApiError::internal)?
+        .is_some()
+    {
+        Err(ApiError::conflict(format!("repo {repo_id} already exists")))
+    } else {
+        Ok(())
+    }
+}
+
 async fn refund_open_request_stakes_for_repo_postgres<C>(
     conn: &C,
-    repo_id: &str,
+    requests: &[Request],
     now_unix: u64,
 ) -> Result<(), ApiError>
 where
     C: sea_orm::ConnectionTrait,
 {
-    let requests = requests_by_repo_id(conn, repo_id).await?;
     for request in requests
         .iter()
         .filter(|request| should_refund_on_repo_delete(request))
@@ -154,18 +185,57 @@ where
     Ok(())
 }
 
-async fn request_git_snapshots_for_repo_postgres<C>(
+async fn lock_request_credit_accounts_for_repo_postgres<C>(
     conn: &C,
-    repo_id: &str,
-) -> Result<Vec<SourceBlob>, ApiError>
+    requests: &[Request],
+) -> Result<(), ApiError>
 where
     C: sea_orm::ConnectionTrait,
 {
-    Ok(requests_by_repo_id(conn, repo_id)
+    let mut author_ids = requests
+        .iter()
+        .filter(|request| should_refund_on_repo_delete(request))
+        .map(|request| request.author_user_id.as_str())
+        .collect::<Vec<_>>();
+    author_ids.sort_unstable();
+    author_ids.dedup();
+    for author_id in author_ids {
+        acquire_aggregate_lock(conn, "user-credit", author_id).await?;
+    }
+    Ok(())
+}
+
+async fn lock_requests_for_repo_postgres<C>(
+    conn: &C,
+    repo_id: &str,
+) -> Result<Vec<Request>, ApiError>
+where
+    C: sea_orm::ConnectionTrait,
+{
+    let mut request_ids = requests_by_repo_id(conn, repo_id)
         .await?
         .into_iter()
-        .filter_map(|request| request.git_snapshot)
-        .collect())
+        .map(|request| request.id)
+        .collect::<Vec<_>>();
+    request_ids.sort();
+
+    let mut requests = Vec::with_capacity(request_ids.len());
+    for request_id in request_ids {
+        acquire_aggregate_lock(conn, "request", &request_id).await?;
+        if let Some(request) = super::request_rows::request_by_id(conn, &request_id).await?
+            && request.repo_id == repo_id
+        {
+            requests.push(request);
+        }
+    }
+    Ok(requests)
+}
+
+fn request_git_snapshots_for_repo(requests: &[Request]) -> Vec<SourceBlob> {
+    requests
+        .iter()
+        .filter_map(|request| request.git_snapshot.clone())
+        .collect()
 }
 
 fn should_refund_on_repo_delete(request: &Request) -> bool {
@@ -230,4 +300,156 @@ fn unix_now() -> u64 {
         .duration_since(std::time::UNIX_EPOCH)
         .map(|duration| duration.as_secs())
         .unwrap_or(0)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::{
+        auth::tokens::{generate_first_push_token, generate_git_push_token},
+        domain::store::{RepoStorageCleanup, UserAccount, app_catalog},
+    };
+    use std::sync::{
+        Arc,
+        atomic::{AtomicBool, Ordering},
+    };
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn pending_storage_cleanup_reserves_repo_name_until_recreation_commits() {
+        let target = super::super::TestDatabaseTarget::required().unwrap();
+        let store = MetadataStore::connect_fresh_for_tests(&target).unwrap();
+        let mut catalog = app_catalog();
+        catalog.users.insert(
+            "user_owner".to_string(),
+            UserAccount {
+                id: "user_owner".to_string(),
+                handle: "owner".to_string(),
+                email: "owner@example.com".to_string(),
+                email_verified: true,
+            },
+        );
+        store.seed_catalog_for_tests(catalog).unwrap();
+        super::super::cleanup_queue::queue_pending_repo_storage_cleanup_row(
+            store.db.as_ref(),
+            RepoStorageCleanup {
+                owner_handle: "owner".to_string(),
+                repo_name: "repo".to_string(),
+            },
+        )
+        .await
+        .unwrap();
+
+        let (cleanup_started_tx, cleanup_started_rx) = tokio::sync::oneshot::channel();
+        let (release_cleanup_tx, release_cleanup_rx) = std::sync::mpsc::channel();
+        let first_store = store.clone();
+        let first = tokio::spawn(async move {
+            let (_, first_push_token) = generate_first_push_token("user_owner").unwrap();
+            let (_, git_push_token) = generate_git_push_token("user_owner").unwrap();
+            first_store
+                .create_repo_with_init_tokens(
+                    "user_owner",
+                    "repo",
+                    Visibility::Private,
+                    first_push_token,
+                    git_push_token,
+                    move |_, _| {
+                        cleanup_started_tx.send(()).unwrap();
+                        release_cleanup_rx.recv().unwrap();
+                        Ok(())
+                    },
+                )
+                .await
+        });
+        cleanup_started_rx.await.unwrap();
+
+        let competing_cleanup_called = Arc::new(AtomicBool::new(false));
+        let second_cleanup_called = Arc::clone(&competing_cleanup_called);
+        let second_store = store.clone();
+        let second = tokio::spawn(async move {
+            let (_, first_push_token) = generate_first_push_token("user_owner").unwrap();
+            let (_, git_push_token) = generate_git_push_token("user_owner").unwrap();
+            second_store
+                .create_repo_with_init_tokens(
+                    "user_owner",
+                    "repo",
+                    Visibility::Private,
+                    first_push_token,
+                    git_push_token,
+                    move |_, _| {
+                        second_cleanup_called.store(true, Ordering::SeqCst);
+                        Ok(())
+                    },
+                )
+                .await
+        });
+        tokio::time::sleep(std::time::Duration::from_millis(25)).await;
+        assert!(
+            !second.is_finished(),
+            "competing creator must wait for the storage path lock"
+        );
+        release_cleanup_tx.send(()).unwrap();
+        let first_result = first.await.unwrap();
+        let second_result = second.await.unwrap();
+
+        first_result.unwrap();
+        assert!(
+            second_result
+                .unwrap_err()
+                .message
+                .contains("already exists")
+        );
+        assert!(!competing_cleanup_called.load(Ordering::SeqCst));
+        assert!(
+            entities::repository::Entity::find_by_id("owner/repo")
+                .one(store.db.as_ref())
+                .await
+                .unwrap()
+                .is_some()
+        );
+    }
+
+    #[tokio::test]
+    async fn expired_creation_cleanup_claim_cannot_commit_after_worker_reclaims_it() {
+        let target = super::super::TestDatabaseTarget::required().unwrap();
+        let store = MetadataStore::connect_fresh_for_tests(&target).unwrap();
+        super::super::cleanup_queue::queue_pending_repo_storage_cleanup_row(
+            store.db.as_ref(),
+            RepoStorageCleanup {
+                owner_handle: "owner".to_string(),
+                repo_name: "repo".to_string(),
+            },
+        )
+        .await
+        .unwrap();
+
+        let claim_tx = store.db.begin().await.unwrap();
+        acquire_aggregate_lock(&claim_tx, "repository", "owner/repo")
+            .await
+            .unwrap();
+        let claim = claim_pending_repo_storage_cleanup(&claim_tx, "owner/repo")
+            .await
+            .unwrap()
+            .unwrap();
+        claim_tx.commit().await.unwrap();
+
+        entities::repo_storage_cleanup_job::Entity::update_many()
+            .filter(entities::repo_storage_cleanup_job::Column::RepoId.eq("owner/repo"))
+            .col_expr(
+                entities::repo_storage_cleanup_job::Column::NextRunAtUnix,
+                sea_orm::sea_query::Expr::value(0_i64),
+            )
+            .exec(store.db.as_ref())
+            .await
+            .unwrap();
+        let _worker_batch = store.repo_storage_cleanup_batch().await.unwrap();
+
+        let create_tx = store.db.begin().await.unwrap();
+        acquire_aggregate_lock(&create_tx, "repository", "owner/repo")
+            .await
+            .unwrap();
+        let error = complete_claimed_repo_storage_cleanup(&create_tx, "owner/repo", &claim)
+            .await
+            .unwrap_err();
+        assert!(error.message.contains("changed during creation"));
+    }
 }

@@ -1,7 +1,7 @@
 #[cfg(any(test, feature = "test-support"))]
 use super::load_catalog;
 use super::{
-    MetadataStore, acquire_metadata_write_lock,
+    MetadataStore, acquire_aggregate_lock,
     cleanup_queue::{save_pending_repo_storage_deletions, save_pending_source_blob_deletions},
     ensure_metadata_lock_row, entities,
     repository_rows::insert_repository,
@@ -221,7 +221,7 @@ async fn seed_catalog(
 ) -> Result<(), ApiError> {
     complete_test_users(&mut catalog);
     let tx = conn.begin().await.map_err(ApiError::internal)?;
-    acquire_metadata_write_lock(&tx).await?;
+    acquire_aggregate_lock(&tx, "test", "catalog").await?;
     for user in catalog.users.values() {
         entities::user::Model::from_domain(user)
             .into_active_model()

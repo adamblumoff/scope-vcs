@@ -55,12 +55,15 @@ pub mod request {
                 git_snapshot: request.git_snapshot.as_ref().map(encode_json).transpose()?,
                 title: request.title.clone(),
                 state: encode_enum(request.state)?,
-                stake_credits: u32_to_i32_saturating(request.stake_credits),
+                stake_credits: u32_to_i32(request.stake_credits, "request stake credits")?,
                 disposition: request.disposition.map(encode_enum).transpose()?,
                 settlement: request.settlement.as_ref().map(encode_json).transpose()?,
-                created_at_unix: u64_to_i64_saturating(request.created_at_unix),
-                updated_at_unix: u64_to_i64_saturating(request.updated_at_unix),
-                resolved_at_unix: request.resolved_at_unix.map(u64_to_i64_saturating),
+                created_at_unix: u64_to_i64(request.created_at_unix, "request creation time")?,
+                updated_at_unix: u64_to_i64(request.updated_at_unix, "request update time")?,
+                resolved_at_unix: request
+                    .resolved_at_unix
+                    .map(|value| u64_to_i64(value, "request resolution time"))
+                    .transpose()?,
             })
         }
 
@@ -84,7 +87,7 @@ pub mod request {
                     .transpose()?,
                 title: self.title,
                 state: decode_enum::<RequestState>(self.state)?,
-                stake_credits: i32_to_u32_floor(self.stake_credits),
+                stake_credits: i32_to_u32(self.stake_credits, "request stake credits")?,
                 disposition: self
                     .disposition
                     .map(decode_enum::<RequestDisposition>)
@@ -93,9 +96,12 @@ pub mod request {
                     .settlement
                     .map(decode_json::<RequestSettlement>)
                     .transpose()?,
-                created_at_unix: i64_to_u64_floor(self.created_at_unix),
-                updated_at_unix: i64_to_u64_floor(self.updated_at_unix),
-                resolved_at_unix: self.resolved_at_unix.map(i64_to_u64_floor),
+                created_at_unix: i64_to_u64(self.created_at_unix, "request creation time")?,
+                updated_at_unix: i64_to_u64(self.updated_at_unix, "request update time")?,
+                resolved_at_unix: self
+                    .resolved_at_unix
+                    .map(|value| i64_to_u64(value, "request resolution time"))
+                    .transpose()?,
             })
         }
     }
@@ -133,7 +139,7 @@ pub mod request_event {
                 body: event.body.clone(),
                 old_head_oid: event.old_head_oid.clone(),
                 new_head_oid: event.new_head_oid.clone(),
-                created_at_unix: u64_to_i64_saturating(event.created_at_unix),
+                created_at_unix: u64_to_i64(event.created_at_unix, "request event creation time")?,
             })
         }
 
@@ -146,7 +152,7 @@ pub mod request_event {
                 body: self.body,
                 old_head_oid: self.old_head_oid,
                 new_head_oid: self.new_head_oid,
-                created_at_unix: i64_to_u64_floor(self.created_at_unix),
+                created_at_unix: i64_to_u64(self.created_at_unix, "request event creation time")?,
             })
         }
     }
@@ -169,18 +175,18 @@ pub mod user_credit_account {
     impl ActiveModelBehavior for ActiveModel {}
 
     impl Model {
-        pub fn from_domain(account: &UserCreditAccount) -> Self {
-            Self {
+        pub fn from_domain(account: &UserCreditAccount) -> Result<Self, ApiError> {
+            Ok(Self {
                 user_id: account.user_id.clone(),
-                balance_credits: u32_to_i32_saturating(account.balance_credits),
-            }
+                balance_credits: u32_to_i32(account.balance_credits, "user credit balance")?,
+            })
         }
 
-        pub fn into_domain(self) -> UserCreditAccount {
-            UserCreditAccount {
+        pub fn try_into_domain(self) -> Result<UserCreditAccount, ApiError> {
+            Ok(UserCreditAccount {
                 user_id: self.user_id,
-                balance_credits: i32_to_u32_floor(self.balance_credits),
-            }
+                balance_credits: i32_to_u32(self.balance_credits, "user credit balance")?,
+            })
         }
     }
 }
@@ -213,7 +219,10 @@ pub mod credit_ledger_entry {
                 request_id: entry.request_id.clone(),
                 kind: encode_enum(entry.kind)?,
                 amount_credits: entry.amount_credits,
-                created_at_unix: u64_to_i64_saturating(entry.created_at_unix),
+                created_at_unix: u64_to_i64(
+                    entry.created_at_unix,
+                    "credit ledger entry creation time",
+                )?,
             })
         }
 
@@ -224,7 +233,10 @@ pub mod credit_ledger_entry {
                 request_id: self.request_id,
                 kind: decode_enum::<CreditLedgerEntryKind>(self.kind)?,
                 amount_credits: self.amount_credits,
-                created_at_unix: i64_to_u64_floor(self.created_at_unix),
+                created_at_unix: i64_to_u64(
+                    self.created_at_unix,
+                    "credit ledger entry creation time",
+                )?,
             })
         }
     }

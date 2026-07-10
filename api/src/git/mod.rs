@@ -7,7 +7,7 @@ pub(crate) mod upload;
 
 pub(crate) use credentials::*;
 
-use crate::domain::store::{RepoPublicationState, RepositoryActor};
+use crate::domain::store::{MainPushMode, RepoPublicationState, RepositoryActor};
 use crate::{
     auth::scope::principal_for_user_id,
     config::*,
@@ -369,14 +369,9 @@ pub(crate) async fn receive_pack_access(
         ReceivePackAuthorization::ScopeUser(user) => {
             let repo = find_repo(state, owner, repo_name).await?;
             let principal = principal_for_user_id(&repo, &user.id);
-            let access = repo.access_for_principal(&principal);
+            let push_policy = repo.push_policy_for_user_id(&user.id);
             let author_id = user.id.clone();
-            if repo.is_waiting_for_first_push() {
-                if access.actor != RepositoryActor::Owner {
-                    return Err(ApiError::not_found(format!(
-                        "repo {owner}/{repo_name} not found"
-                    )));
-                }
+            if push_policy.mode == MainPushMode::FirstPush {
                 let push_intent = required_push_intent(state, push_intent_secret.as_deref())?;
                 push_intent.ensure_repo_user(&repo.record.id, &author_id)?;
                 return Ok(ReceivePackAccess::FirstPush {
@@ -384,14 +379,14 @@ pub(crate) async fn receive_pack_access(
                     push_intent,
                 });
             }
-            if !access.can_push {
+            if push_policy.mode == MainPushMode::Denied {
                 if repo.record.publication_state == RepoPublicationState::Published
                     && actor_can_receive_request_push(
                         state,
                         &repo,
                         &principal,
                         &author_id,
-                        access.actor,
+                        push_policy.access.actor,
                     )
                     .await?
                 {
@@ -421,7 +416,7 @@ pub(crate) async fn receive_pack_access(
                                     &repo,
                                     &principal,
                                     &author_id,
-                                    access.actor,
+                                    push_policy.access.actor,
                                 )
                                 .await?
                                 {
@@ -436,7 +431,7 @@ pub(crate) async fn receive_pack_access(
                         &repo,
                         &principal,
                         &author_id,
-                        access.actor,
+                        push_policy.access.actor,
                     )
                     .await?
                     {

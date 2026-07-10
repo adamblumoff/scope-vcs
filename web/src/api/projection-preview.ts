@@ -10,6 +10,7 @@ import type {
   ProjectionPreviews,
   RepoParams,
 } from './types'
+import { ApiRouteTemplates, buildApiPath } from './types.generated'
 
 export async function loadProjectionPreviewsForRequest(
   data: RepoParams,
@@ -43,7 +44,7 @@ async function loadProjectionPreview(
   })
 
   return api.get<ProjectionPreview>(
-    `/v1/repos/${data.owner}/${data.repo}/projection-preview?${query}`,
+    `${buildApiPath(ApiRouteTemplates.repoProjectionPreview, data)}?${query}`,
     { auth: 'optional' },
   )
 }

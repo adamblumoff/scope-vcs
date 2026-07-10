@@ -14,7 +14,7 @@ pub(crate) use self::repo_io::{git_stdout_text, git_tree_files, validate_pushed_
 pub(crate) use self::staging::ReceivePackFileChange;
 pub(crate) use self::staging::ReceivePackUpdate;
 use self::staging::{apply_receive_pack_update, receive_pack_update_changes_visibility};
-use crate::domain::store::{RepositoryActor, StoredRepository};
+use crate::domain::store::{MainPushMode, RepositoryActor, StoredRepository};
 use crate::{
     db::RepositoryMutation,
     error::ApiError,
@@ -55,11 +55,9 @@ pub(crate) async fn persist_receive_pack_update_and_promote(
             let old_snapshot = repo.git_snapshot.clone();
             let mut cleanup_blobs = uploaded_blobs;
             let mut update = update;
-            let access = repo.access_for_user_id(&author_id);
-            let can_receive_push = access.can_push
-                || repo.is_waiting_for_first_push() && repo.is_owner_user(&author_id);
-            if !can_receive_push {
-                let message = if access.actor == RepositoryActor::Public {
+            let push_policy = repo.push_policy_for_user_id(&author_id);
+            if push_policy.mode == MainPushMode::Denied {
+                let message = if push_policy.access.actor == RepositoryActor::Public {
                     "repo membership required"
                 } else {
                     "push permission required"
@@ -68,7 +66,7 @@ pub(crate) async fn persist_receive_pack_update_and_promote(
             }
             ensure_receive_pack_config_base_matches(repo, &update)?;
             let previous_config = Some(repo.repo_config.clone());
-            if !access.can_change_file_visibility
+            if !push_policy.access.can_change_file_visibility
                 && receive_pack_update_changes_visibility(repo, previous_config.as_ref(), &update)
             {
                 return Err(ApiError::forbidden("file visibility permission required").into());
@@ -96,13 +94,10 @@ pub(crate) fn apply_request_merge_update(
     let old_snapshot = repo.git_snapshot.clone();
     let mut cleanup_blobs = update.uploaded_blobs.clone();
     let mut update = update;
-    let access = repo.access_for_user_id(maintainer_id);
-    if !matches!(
-        access.actor,
-        RepositoryActor::Owner | RepositoryActor::Member
-    ) {
+    if !repo.is_maintainer_user_id(maintainer_id) {
         return Err(ApiError::forbidden("repo maintainer required"));
     }
+    let access = repo.access_for_user_id(maintainer_id);
     ensure_receive_pack_config_base_matches(repo, &update)?;
     let previous_config = Some(repo.repo_config.clone());
     if !access.can_change_file_visibility

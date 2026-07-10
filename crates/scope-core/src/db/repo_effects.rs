@@ -2,7 +2,7 @@ use super::{
     cleanup_queue::{
         queue_pending_repo_storage_cleanup_row, queue_pending_source_blob_deletion_rows,
     },
-    repository_rows::save_repository_row,
+    repository_rows::save_repository_delta,
 };
 use crate::{
     domain::{
@@ -15,13 +15,14 @@ use sea_orm::ConnectionTrait;
 
 pub async fn save_repo_mutation<C>(
     conn: &C,
+    before: &StoredRepository,
     repo: &StoredRepository,
     effects: &RepoEffects,
 ) -> Result<(), ApiError>
 where
     C: ConnectionTrait,
 {
-    save_repository_row(conn, repo).await?;
+    save_repository_delta(conn, before, repo).await?;
     save_repo_effects(conn, effects).await
 }
 

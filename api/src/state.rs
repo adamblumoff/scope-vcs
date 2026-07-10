@@ -4,7 +4,7 @@ use crate::domain::repo_config::{
     RepoConfig, repo_config_fingerprint as core_repo_config_fingerprint,
 };
 use crate::domain::store::{
-    RepoPublicationState, RepositoryAccess, RepositoryActor, SourceBlob, StoredRepository, repo_id,
+    RepoPublicationState, RepositoryAccess, SourceBlob, StoredRepository, repo_id,
 };
 use crate::{
     auth::clerk::ClerkVerifier,
@@ -218,7 +218,7 @@ impl AppState {
         Ok(state)
     }
 
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-support"))]
     pub(crate) fn test_state() -> Self {
         use crate::persistence::test_data_dir;
 
@@ -467,22 +467,7 @@ pub(crate) fn can_read_path(
     principal: &Principal,
     path: &ScopePath,
 ) -> Result<bool, ApiError> {
-    if principal.kind == crate::domain::policy::PrincipalKind::Public {
-        return Ok(
-            repo.record.publication_state == RepoPublicationState::Published
-                && repo.policy.can_read(path, false),
-        );
-    }
-
-    let access = access_for_principal(_state, repo, principal)?;
-    Ok(match access.actor {
-        RepositoryActor::Owner => repo.policy.can_read(path, true),
-        RepositoryActor::Member => {
-            repo.record.publication_state == RepoPublicationState::Published
-                && repo.policy.can_read(path, access.can_read_private_files)
-        }
-        RepositoryActor::Public => false,
-    })
+    Ok(repo.can_read_path(principal, path))
 }
 
 pub(crate) async fn delete_unreferenced_source_blobs(
@@ -561,19 +546,30 @@ pub(crate) async fn drain_pending_repo_storage_deletions_report(
     let mut report = RepoStorageCleanupDrainReport::default();
     let mut retained = Vec::new();
     for cleanup in &batch.pending {
-        if batch
-            .live_repo_ids
-            .contains(&repo_id(&cleanup.owner_handle, &cleanup.repo_name))
-        {
+        let cleanup_repo_id = repo_id(&cleanup.owner_handle, &cleanup.repo_name);
+        let metadata = metadata.clone();
+        let state = state.clone();
+        let (live_repo, delete_result) = metadata
+            .with_repo_storage_lock(&cleanup_repo_id, || async {
+                if metadata.repository_exists(&cleanup_repo_id).await? {
+                    return Ok((true, Ok(())));
+                }
+                Ok((
+                    false,
+                    crate::git::storage::delete_repo_storage(
+                        &state,
+                        &cleanup.owner_handle,
+                        &cleanup.repo_name,
+                    ),
+                ))
+            })
+            .await?;
+        if live_repo {
             retained.push(cleanup.clone());
             continue;
         }
         report.attempted += 1;
-        match crate::git::storage::delete_repo_storage(
-            &state,
-            &cleanup.owner_handle,
-            &cleanup.repo_name,
-        ) {
+        match delete_result {
             Ok(()) => report.deleted += 1,
             Err(error) => {
                 tracing::warn!(?error, owner = %cleanup.owner_handle, repo = %cleanup.repo_name, "failed to clean deleted repo filesystem storage");

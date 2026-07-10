@@ -8,6 +8,7 @@ use crate::{
         fetch_scope_remote_with_bearer, git_remote_push_url, head_oid, mark_scope_remote_pushed,
         push_head_with_bearer, scope_remote_head_oid, warn_if_dirty_working_tree,
     },
+    git_transport::{GitAccess, ScopeRemote},
     login::session_from_cache_or_browser,
     repo_config::{
         ensure_scope_repo_config_exists, load_worktree_scope_repo_config,
@@ -16,21 +17,13 @@ use crate::{
     },
     review::{ensure_review_terminal_available, run_push_review},
 };
-use anyhow::{Context, bail};
-use reqwest::{Url, blocking::Client};
+use anyhow::bail;
+use reqwest::blocking::Client;
 use scope_core::domain::repo_config::repo_config_fingerprint;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 pub const DEFAULT_SCOPE_REMOTE: &str = "scope";
 pub const DEFAULT_SCOPE_BRANCH: &str = "main";
-
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub struct ScopePushTarget {
-    pub remote: String,
-    pub push_url: String,
-    pub owner: String,
-    pub repo: String,
-}
 
 #[derive(Debug, Eq, PartialEq)]
 pub struct ScopePushOutcome {
@@ -102,7 +95,7 @@ pub fn run(remote: &str, no_review: bool) -> anyhow::Result<()> {
     if repo.lifecycle_state == RepoPublicationState::Published {
         fetch_scope_remote_with_bearer(
             &git_repo,
-            &target.push_url,
+            &target.permissioned_url,
             remote,
             DEFAULT_SCOPE_BRANCH,
             &session.token,
@@ -148,7 +141,7 @@ pub fn run(remote: &str, no_review: bool) -> anyhow::Result<()> {
     }
     ensure_review_base_matches_intent(
         &git_repo,
-        &target.push_url,
+        &target.permissioned_url,
         remote,
         &session.token,
         intent.base_head_oid.as_deref(),
@@ -245,20 +238,17 @@ fn unix_now() -> u64 {
         .as_secs()
 }
 
-pub fn load_scope_remote(api_url: &str, remote: &str) -> anyhow::Result<ScopePushTarget> {
+pub fn load_scope_remote(api_url: &str, remote: &str) -> anyhow::Result<ScopeRemote> {
     let push_url = git_remote_push_url(remote)?;
-    let (owner, repo) = parse_scope_git_remote(api_url, &push_url)?;
-    let push_url = scope_git_url_without_userinfo(&push_url)?;
-    Ok(ScopePushTarget {
-        remote: remote.to_string(),
-        push_url,
-        owner,
-        repo,
-    })
+    let target = ScopeRemote::parse(api_url, remote, &push_url)?;
+    if target.access != GitAccess::Permissioned {
+        bail!("Scope remote must have path /git/permissioned/owner/repo");
+    }
+    Ok(target)
 }
 
 pub fn ensure_scope_remote_can_receive_push(
-    target: &ScopePushTarget,
+    target: &ScopeRemote,
     repo: &RepoSummaryResponse,
 ) -> anyhow::Result<()> {
     if repo.lifecycle_state == RepoPublicationState::Unpublished {
@@ -281,12 +271,12 @@ pub fn push_reviewed_head_with_intent(
     client: &Client,
     api_url: &str,
     session_token: &str,
-    target: &ScopePushTarget,
+    target: &ScopeRemote,
     reviewed_head_oid: &str,
     push_intent_token: &str,
 ) -> anyhow::Result<ScopePushOutcome> {
     push_head_with_bearer(
-        &target.push_url,
+        &target.permissioned_url,
         reviewed_head_oid,
         DEFAULT_SCOPE_BRANCH,
         session_token,
@@ -298,53 +288,6 @@ pub fn push_reviewed_head_with_intent(
         owner: repo.owner_handle,
         repo: repo.name,
     })
-}
-
-pub fn parse_scope_git_remote(api_url: &str, remote_url: &str) -> anyhow::Result<(String, String)> {
-    let api = Url::parse(api_url).context("parse Scope API URL")?;
-    let remote = Url::parse(remote_url).context("parse Scope Git remote URL")?;
-
-    if api.scheme() != remote.scheme()
-        || api.host_str() != remote.host_str()
-        || api.port_or_known_default() != remote.port_or_known_default()
-    {
-        bail!(
-            "Scope remote points at {}, but this CLI is configured for {}",
-            redacted_url(&remote),
-            api.as_str().trim_end_matches('/')
-        );
-    }
-
-    if remote.password().is_some() {
-        bail!("Scope Git remote URL cannot include a password");
-    }
-
-    let segments = remote
-        .path_segments()
-        .map(|segments| segments.collect::<Vec<_>>())
-        .unwrap_or_default();
-    if segments.len() != 4 || segments[0] != "git" || segments[1] != "permissioned" {
-        bail!("Scope remote must have path /git/permissioned/owner/repo");
-    }
-
-    let owner = segments[2].trim();
-    let repo = segments[3].trim();
-    if owner.is_empty() || repo.is_empty() {
-        bail!("Scope remote must have path /git/permissioned/owner/repo");
-    }
-
-    Ok((owner.to_string(), repo.to_string()))
-}
-
-fn redacted_url(url: &Url) -> String {
-    let mut redacted = url.clone();
-    if !redacted.username().is_empty() {
-        let _ = redacted.set_username("redacted");
-    }
-    if redacted.password().is_some() {
-        let _ = redacted.set_password(Some("redacted"));
-    }
-    redacted.to_string()
 }
 
 fn ensure_unpublished_repo_can_receive_first_push(
@@ -378,13 +321,6 @@ fn ensure_published_repo_can_receive_push(
     Ok(())
 }
 
-fn scope_git_url_without_userinfo(remote_url: &str) -> anyhow::Result<String> {
-    let mut url = Url::parse(remote_url).context("parse Scope Git remote URL")?;
-    let _ = url.set_username("");
-    let _ = url.set_password(None);
-    Ok(url.to_string())
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -412,78 +348,5 @@ mod tests {
         );
         assert!(ensure_reviewed_base_matches_intent(None, Some("def")).is_err());
         assert!(ensure_reviewed_base_matches_intent(Some("abc"), None).is_err());
-    }
-
-    #[test]
-    fn parse_scope_git_remote_accepts_matching_scope_remote() {
-        assert_eq!(
-            parse_scope_git_remote(
-                "https://scope-api-production-0251.up.railway.app",
-                "https://scope-api-production-0251.up.railway.app/git/permissioned/adam/random"
-            )
-            .unwrap(),
-            ("adam".to_string(), "random".to_string())
-        );
-    }
-
-    #[test]
-    fn parse_scope_git_remote_accepts_username_without_treating_it_as_auth() {
-        assert_eq!(
-            parse_scope_git_remote(
-                "https://scope.example",
-                "https://scope@scope.example/git/permissioned/adam/random"
-            )
-            .unwrap(),
-            ("adam".to_string(), "random".to_string())
-        );
-    }
-
-    #[test]
-    fn parse_scope_git_remote_rejects_different_origins() {
-        assert!(
-            parse_scope_git_remote(
-                "https://scope.example",
-                "https://evil.example/git/permissioned/a/b"
-            )
-            .is_err()
-        );
-    }
-
-    #[test]
-    fn parse_scope_git_remote_rejects_passwords() {
-        assert!(
-            parse_scope_git_remote(
-                "https://scope.example",
-                "https://scope:secret@scope.example/git/permissioned/a/b"
-            )
-            .is_err()
-        );
-    }
-
-    #[test]
-    fn parse_scope_git_remote_redacts_userinfo_in_mismatch_errors() {
-        let error = parse_scope_git_remote(
-            "https://scope.example",
-            "https://scope:secret@evil.example/git/permissioned/a/b",
-        )
-        .unwrap_err()
-        .to_string();
-
-        assert!(!error.contains("scope:secret"), "{error}");
-        assert!(!error.contains("secret"), "{error}");
-        assert!(error.contains("redacted:redacted"), "{error}");
-    }
-
-    #[test]
-    fn parse_scope_git_remote_rejects_non_scope_paths() {
-        for remote in [
-            "https://scope.example/adam/random",
-            "https://scope.example/git/adam/random",
-            "https://scope.example/git/public/adam/random",
-            "https://scope.example/git/permissioned/adam",
-            "https://scope.example/git/permissioned/adam/random/extra",
-        ] {
-            assert!(parse_scope_git_remote("https://scope.example", remote).is_err());
-        }
     }
 }

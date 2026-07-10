@@ -1,4 +1,7 @@
-use super::{MetadataStore, entities};
+use super::{
+    MetadataStore, entities,
+    projection_encoding::{ProjectionAudience, ProjectionSource},
+};
 use crate::{
     domain::{
         policy::{Principal, PrincipalKind},
@@ -14,9 +17,6 @@ use sea_orm::{
 };
 use std::sync::Arc;
 
-const LIVE_SOURCE: &str = "live";
-const PRIVATE_AUDIENCE: &str = "private";
-const PUBLIC_AUDIENCE: &str = "public";
 const PROJECTION_FILE_INSERT_BATCH_SIZE: usize = 1_000;
 
 pub async fn save_live_projection_read_models<C>(
@@ -29,7 +29,7 @@ where
     delete_live_projection_read_models(conn, &repo.record.id).await?;
 
     let rebuilt_at_unix = unix_now()?;
-    for audience in [PRIVATE_AUDIENCE, PUBLIC_AUDIENCE] {
+    for audience in [ProjectionAudience::Private, ProjectionAudience::Public] {
         let files = projected_files_for_audience(repo, audience);
         entities::projection_read_model::Model::live(
             &repo.record.id,
@@ -37,7 +37,7 @@ where
             audience,
             rebuilt_at_unix,
             files.len(),
-        )
+        )?
         .into_active_model()
         .insert(conn)
         .await
@@ -74,13 +74,19 @@ where
 {
     entities::projection_file::Entity::delete_many()
         .filter(entities::projection_file::Column::RepoId.eq(repo_id.to_string()))
-        .filter(entities::projection_file::Column::Source.eq(LIVE_SOURCE.to_string()))
+        .filter(
+            entities::projection_file::Column::Source
+                .eq(ProjectionSource::Live.as_str().to_string()),
+        )
         .exec(conn)
         .await
         .map_err(ApiError::internal)?;
     entities::projection_read_model::Entity::delete_many()
         .filter(entities::projection_read_model::Column::RepoId.eq(repo_id.to_string()))
-        .filter(entities::projection_read_model::Column::Source.eq(LIVE_SOURCE.to_string()))
+        .filter(
+            entities::projection_read_model::Column::Source
+                .eq(ProjectionSource::Live.as_str().to_string()),
+        )
         .exec(conn)
         .await
         .map_err(ApiError::internal)?;
@@ -91,17 +97,22 @@ pub(super) async fn load_live_projection_file_count_for_audience<C>(
     conn: &C,
     repo_id: &str,
     repo_version: u64,
-    audience: &str,
+    audience: ProjectionAudience,
 ) -> Result<Option<usize>, ApiError>
 where
     C: ConnectionTrait,
 {
-    let expected_version = repo_version.min(i64::MAX as u64) as i64;
+    let expected_version = i64::try_from(repo_version).map_err(|_| {
+        ApiError::internal_message("projection repository version exceeds PostgreSQL bigint range")
+    })?;
     let Some(model) = entities::projection_read_model::Entity::find()
         .filter(entities::projection_read_model::Column::RepoId.eq(repo_id.to_string()))
         .filter(entities::projection_read_model::Column::RepoVersion.eq(expected_version))
-        .filter(entities::projection_read_model::Column::Source.eq(LIVE_SOURCE.to_string()))
-        .filter(entities::projection_read_model::Column::Audience.eq(audience.to_string()))
+        .filter(
+            entities::projection_read_model::Column::Source
+                .eq(ProjectionSource::Live.as_str().to_string()),
+        )
+        .filter(entities::projection_read_model::Column::Audience.eq(audience.as_str().to_string()))
         .one(conn)
         .await
         .map_err(ApiError::internal)?
@@ -109,24 +120,31 @@ where
         return Ok(None);
     };
 
-    Ok(Some(model.file_count.max(0) as usize))
+    Ok(Some(usize::try_from(model.file_count).map_err(|_| {
+        ApiError::internal_message("projection file count cannot be negative")
+    })?))
 }
 
 pub(super) async fn load_live_projection_files_for_audience<C>(
     conn: &C,
     repo_id: &str,
     repo_version: u64,
-    audience: &str,
+    audience: ProjectionAudience,
 ) -> Result<Option<Vec<ProjectionViewFile>>, ApiError>
 where
     C: ConnectionTrait,
 {
-    let expected_version = repo_version.min(i64::MAX as u64) as i64;
+    let expected_version = i64::try_from(repo_version).map_err(|_| {
+        ApiError::internal_message("projection repository version exceeds PostgreSQL bigint range")
+    })?;
     let Some(model) = entities::projection_read_model::Entity::find()
         .filter(entities::projection_read_model::Column::RepoId.eq(repo_id.to_string()))
         .filter(entities::projection_read_model::Column::RepoVersion.eq(expected_version))
-        .filter(entities::projection_read_model::Column::Source.eq(LIVE_SOURCE.to_string()))
-        .filter(entities::projection_read_model::Column::Audience.eq(audience.to_string()))
+        .filter(
+            entities::projection_read_model::Column::Source
+                .eq(ProjectionSource::Live.as_str().to_string()),
+        )
+        .filter(entities::projection_read_model::Column::Audience.eq(audience.as_str().to_string()))
         .one(conn)
         .await
         .map_err(ApiError::internal)?
@@ -137,14 +155,19 @@ where
     let rows = entities::projection_file::Entity::find()
         .filter(entities::projection_file::Column::RepoId.eq(repo_id.to_string()))
         .filter(entities::projection_file::Column::RepoVersion.eq(expected_version))
-        .filter(entities::projection_file::Column::Source.eq(LIVE_SOURCE.to_string()))
-        .filter(entities::projection_file::Column::Audience.eq(audience.to_string()))
+        .filter(
+            entities::projection_file::Column::Source
+                .eq(ProjectionSource::Live.as_str().to_string()),
+        )
+        .filter(entities::projection_file::Column::Audience.eq(audience.as_str().to_string()))
         .order_by_asc(entities::projection_file::Column::Path)
         .all(conn)
         .await
         .map_err(ApiError::internal)?;
 
-    if rows.len() != model.file_count.max(0) as usize {
+    let expected_file_count = usize::try_from(model.file_count)
+        .map_err(|_| ApiError::internal_message("projection file count cannot be negative"))?;
+    if rows.len() != expected_file_count {
         return Ok(None);
     }
 
@@ -188,27 +211,26 @@ where
 
 fn projected_files_for_audience(
     repo: &StoredRepository,
-    audience: &str,
+    audience: ProjectionAudience,
 ) -> Vec<ProjectionViewFile> {
     let principal = match audience {
         // Current visibility is binary: private readers all see the same file
         // tree. If policy becomes per-user, this audience key must split too.
-        PRIVATE_AUDIENCE => Principal {
+        ProjectionAudience::Private => Principal {
             id: repo.record.owner_user_id.clone(),
             kind: PrincipalKind::User,
         },
-        PUBLIC_AUDIENCE => Principal::public(),
-        _ => unreachable!("projection read-model audience is fixed"),
+        ProjectionAudience::Public => Principal::public(),
     };
     domain_projected_files(repo, &principal)
 }
 
-fn live_projection_audience(repo: &StoredRepository, principal: &Principal) -> &'static str {
+fn live_projection_audience(repo: &StoredRepository, principal: &Principal) -> ProjectionAudience {
     let access = repo.access_for_principal(principal);
     if access.actor != RepositoryActor::Public && access.can_read_private_files {
-        PRIVATE_AUDIENCE
+        ProjectionAudience::Private
     } else {
-        PUBLIC_AUDIENCE
+        ProjectionAudience::Public
     }
 }
 
@@ -240,7 +262,7 @@ mod tests {
     #[test]
     fn private_audience_read_model_keeps_private_files() {
         let repo = read_model_repo();
-        let files = projected_files_for_audience(&repo, PRIVATE_AUDIENCE);
+        let files = projected_files_for_audience(&repo, ProjectionAudience::Private);
         let paths = files
             .into_iter()
             .map(|file| file.path.as_str().to_string())
@@ -252,7 +274,7 @@ mod tests {
     #[test]
     fn public_audience_read_model_omits_private_files() {
         let repo = read_model_repo();
-        let files = projected_files_for_audience(&repo, PUBLIC_AUDIENCE);
+        let files = projected_files_for_audience(&repo, ProjectionAudience::Public);
         let paths = files
             .into_iter()
             .map(|file| file.path.as_str().to_string())

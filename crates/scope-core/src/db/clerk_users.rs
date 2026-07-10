@@ -1,4 +1,4 @@
-use super::{MetadataStore, acquire_metadata_write_lock, auth::load_user_by_id, entities};
+use super::{MetadataStore, acquire_aggregate_lock, auth::load_user_by_id, entities};
 use crate::{auth::clerk::ClerkIdentity, domain::store::UserAccount, error::ApiError};
 use sea_orm::{
     ActiveModelTrait, ActiveValue::Set, ColumnTrait, EntityTrait, IntoActiveModel, QueryFilter,
@@ -24,10 +24,13 @@ impl MetadataStore {
         identity: &ClerkIdentity,
     ) -> Result<UserAccount, ApiError> {
         let identity = identity.clone();
+        let verified_email = verified_identity_email(&identity)?;
         let db = Arc::clone(&self.db);
         let tx = db.as_ref().begin().await.map_err(ApiError::internal)?;
-        acquire_metadata_write_lock(&tx).await?;
-        let user = resolve_clerk_user_in_tx(&tx, &identity).await?;
+        let identity_key = format!("{CLERK_PROVIDER}:{}", identity.user_id);
+        acquire_aggregate_lock(&tx, "auth-identity", &identity_key).await?;
+        acquire_aggregate_lock(&tx, "auth-email", &verified_email).await?;
+        let user = resolve_clerk_user_in_tx(&tx, &identity, &verified_email).await?;
         tx.commit().await.map_err(ApiError::internal)?;
         Ok(user)
     }
@@ -67,11 +70,11 @@ where
 async fn resolve_clerk_user_in_tx<C>(
     conn: &C,
     identity: &ClerkIdentity,
+    verified_email: &str,
 ) -> Result<UserAccount, ApiError>
 where
     C: sea_orm::ConnectionTrait,
 {
-    let verified_email = verified_identity_email(identity)?;
     if let Some(auth_identity) = entities::auth_identity::Entity::find()
         .filter(entities::auth_identity::Column::Provider.eq(CLERK_PROVIDER))
         .filter(entities::auth_identity::Column::Subject.eq(identity.user_id.clone()))
@@ -80,7 +83,7 @@ where
         .map_err(ApiError::internal)?
     {
         let mut user = load_user_by_id(conn, &auth_identity.user_id).await?;
-        if let Some(email_owner) = load_user_by_email(conn, &verified_email).await?
+        if let Some(email_owner) = load_user_by_email(conn, verified_email).await?
             && email_owner.id != user.id
         {
             return Err(ApiError::conflict(
@@ -92,31 +95,33 @@ where
         return Ok(user);
     }
 
-    let users = entities::user::Entity::find()
-        .all(conn)
-        .await
-        .map_err(ApiError::internal)?
-        .into_iter()
-        .map(|user| user.try_into_domain())
-        .collect::<Result<Vec<_>, _>>()?;
     let user_id = scope_user_id_for_auth_identity(CLERK_PROVIDER, &identity.user_id);
-    let mut user = users
-        .iter()
-        .find(|user| user.email.as_str() == verified_email)
-        .or_else(|| users.iter().find(|user| user.id == user_id))
-        .cloned()
-        .unwrap_or_else(|| {
+    let existing_user = match load_user_by_email(conn, verified_email).await? {
+        Some(user) => Some(user),
+        None => entities::user::Entity::find_by_id(user_id.clone())
+            .one(conn)
+            .await
+            .map_err(ApiError::internal)?
+            .map(entities::user::Model::try_into_domain)
+            .transpose()?,
+    };
+    let is_existing = existing_user.is_some();
+    let mut user = match existing_user {
+        Some(user) => user,
+        None => {
             let preferred = preferred_user_handle(identity);
+            acquire_aggregate_lock(conn, "auth-handle-allocation", "global").await?;
             UserAccount {
                 id: user_id.clone(),
-                handle: unique_user_handle(users.iter(), &preferred, &user_id),
+                handle: unique_user_handle(conn, &preferred, &user_id).await?,
                 email: String::new(),
                 email_verified: false,
             }
-        });
+        }
+    };
     update_user_snapshot(&mut user, identity);
 
-    if users.iter().any(|existing| existing.id == user.id) {
+    if is_existing {
         update_user(conn, &user).await?;
     } else {
         entities::user::Model::from_domain(&user)
@@ -222,31 +227,35 @@ fn handle_suffix(user_id: &str) -> String {
     }
 }
 
-fn unique_user_handle<'a>(
-    users: impl IntoIterator<Item = &'a UserAccount>,
-    preferred: &str,
-    user_id: &str,
-) -> String {
-    let users = users.into_iter().collect::<Vec<_>>();
+async fn unique_user_handle<C>(conn: &C, preferred: &str, user_id: &str) -> Result<String, ApiError>
+where
+    C: sea_orm::ConnectionTrait,
+{
     let base = normalize_handle(preferred).unwrap_or_else(|| "user".to_string());
-    if handle_is_available(&users, &base, user_id) {
-        return base;
+    if handle_is_available(conn, &base, user_id).await? {
+        return Ok(base);
     }
 
     for suffix in 2.. {
         let candidate = format!("{base}-{suffix}");
-        if handle_is_available(&users, &candidate, user_id) {
-            return candidate;
+        if handle_is_available(conn, &candidate, user_id).await? {
+            return Ok(candidate);
         }
     }
 
     unreachable!("infinite suffix search must find an available handle")
 }
 
-fn handle_is_available(users: &[&UserAccount], handle: &str, user_id: &str) -> bool {
-    users
-        .iter()
-        .all(|user| user.id == user_id || user.handle != handle)
+async fn handle_is_available<C>(conn: &C, handle: &str, user_id: &str) -> Result<bool, ApiError>
+where
+    C: sea_orm::ConnectionTrait,
+{
+    let owner = entities::user::Entity::find()
+        .filter(entities::user::Column::Handle.eq(handle.to_string()))
+        .one(conn)
+        .await
+        .map_err(ApiError::internal)?;
+    Ok(owner.is_none_or(|user| user.id == user_id))
 }
 
 fn normalize_handle(value: &str) -> Option<String> {
@@ -278,4 +287,83 @@ fn normalize_handle(value: &str) -> Option<String> {
 
 fn normalize_email(email: &str) -> String {
     email.trim().to_ascii_lowercase()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::db::TestDatabaseTarget;
+    use std::collections::HashSet;
+    use tokio::{sync::Barrier, task::JoinSet};
+
+    async fn resolve_concurrently(
+        store: MetadataStore,
+        identities: Vec<ClerkIdentity>,
+    ) -> Vec<UserAccount> {
+        let barrier = Arc::new(Barrier::new(identities.len()));
+        let mut tasks = JoinSet::new();
+        for identity in identities {
+            let store = store.clone();
+            let barrier = Arc::clone(&barrier);
+            tasks.spawn(async move {
+                barrier.wait().await;
+                store.resolve_clerk_user(&identity).await
+            });
+        }
+
+        let mut users = Vec::new();
+        while let Some(result) = tasks.join_next().await {
+            users.push(result.unwrap().unwrap());
+        }
+        users
+    }
+
+    #[tokio::test]
+    async fn concurrent_subjects_merge_the_same_verified_email() {
+        let target = TestDatabaseTarget::required().unwrap();
+        let store = MetadataStore::connect_fresh_for_tests(&target).unwrap();
+        let identities = (0..6)
+            .map(|index| ClerkIdentity {
+                user_id: format!("subject-{index}"),
+                email: Some("Shared@Example.com".to_string()),
+                email_verified: true,
+            })
+            .collect();
+
+        let users = resolve_concurrently(store.clone(), identities).await;
+
+        assert!(users.iter().all(|user| user.id == users[0].id));
+        store
+            .read(|catalog| {
+                assert_eq!(catalog.users.len(), 1);
+                Ok(())
+            })
+            .await
+            .unwrap();
+    }
+
+    #[tokio::test]
+    async fn concurrent_subjects_allocate_unique_preferred_handles() {
+        let target = TestDatabaseTarget::required().unwrap();
+        let store = MetadataStore::connect_fresh_for_tests(&target).unwrap();
+        let identities = (0..6)
+            .map(|index| ClerkIdentity {
+                user_id: format!("subject-{index}"),
+                email: Some(format!("shared@{index}.example.com")),
+                email_verified: true,
+            })
+            .collect();
+
+        let users = resolve_concurrently(store, identities).await;
+        let user_ids = users.iter().map(|user| &user.id).collect::<HashSet<_>>();
+        let handles = users
+            .iter()
+            .map(|user| &user.handle)
+            .collect::<HashSet<_>>();
+
+        assert_eq!(user_ids.len(), users.len());
+        assert_eq!(handles.len(), users.len());
+        assert!(handles.contains(&"shared".to_string()));
+        assert!(handles.iter().all(|handle| handle.starts_with("shared")));
+    }
 }

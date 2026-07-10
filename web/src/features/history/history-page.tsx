@@ -15,7 +15,6 @@ import { Badge } from '@/components/ui/badge'
 import { Skeleton } from '@/components/ui/skeleton'
 import { ToggleGroup, ToggleGroupItem } from '@/components/ui/toggle-group'
 import { cn } from '@/lib/utils'
-import { loadCommitFileDiff } from '@/routes/-repo-history-actions'
 import { useNavigate } from '@tanstack/react-router'
 import {
   Globe2,
@@ -24,7 +23,7 @@ import {
   LockKeyhole,
   TriangleAlert,
 } from 'lucide-react'
-import { type ReactNode, useEffect, useMemo, useState } from 'react'
+import { type ReactNode, useMemo } from 'react'
 import { ReviewFileDiffDrawer } from '../review/review-file-diff-drawer'
 import { audienceLabel, changeCountLabel } from '../review/review-labels'
 
@@ -37,6 +36,11 @@ type HistoryPageProps = {
   histories: CommitHistories
   initialAudience: ProjectionPreviewAudience
   initialCommit: CommitDetail | null
+  initialFile: {
+    error: string | null
+    path: string | null
+    value: ReviewFileDiff | null
+  }
   params: RepoParams
 }
 
@@ -61,12 +65,7 @@ export function HistoryPage(props: HistoryPageProps) {
   } = useHistoryPageModel(props)
 
   return (
-    <RepoShell
-      active="history"
-      canManage={props.histories.private !== null}
-      contentClassName={pageWidthClassName}
-      params={params}
-    >
+    <RepoShell contentClassName={pageWidthClassName} params={params}>
       <PageContent className={pageWidthClassName}>
         <PageHeader
           badges={(
@@ -149,12 +148,16 @@ function useHistoryPageModel({
   histories,
   initialAudience: audience,
   initialCommit,
+  initialFile,
   params,
 }: HistoryPageProps) {
   const navigate = useNavigate()
-  const [selectedFilePath, setSelectedFilePath] = useState<string | null>(null)
-  const [fileDiffState, setFileDiffState] =
-    useState<CommitFileDiffState>(emptyFileDiffState)
+  const selectedFilePath = initialFile.path
+  const fileDiffState: CommitFileDiffState = initialFile.error
+    ? { diff: null, error: initialFile.error, status: 'failed' }
+    : initialFile.value
+      ? { diff: initialFile.value, error: null, status: 'loaded' }
+      : emptyFileDiffState
   const availableAudiences = useMemo(
     () =>
       (['private', 'public'] as const).filter(
@@ -177,45 +180,10 @@ function useHistoryPageModel({
     : 'max-w-[1040px]'
   const repoId = `${params.owner}/${params.repo}`
 
-  useEffect(() => {
-    if (!selectedCommit || !selectedFilePath) {
-      return
-    }
-
-    let active = true
-    loadCommitFileDiff({
-      data: {
-        audience,
-        commit: selectedCommit.projected_id,
-        owner: params.owner,
-        path: selectedFilePath,
-        repo: params.repo,
-      },
-    }).then(
-      (diff) => {
-        if (active) {
-          setFileDiffState({ diff, error: null, status: 'loaded' })
-        }
-      },
-      (error) => {
-        if (active) {
-          setFileDiffState({
-            diff: null,
-            error: error instanceof Error ? error.message : 'diff load failed',
-            status: 'failed',
-          })
-        }
-      },
-    )
-
-    return () => {
-      active = false
-    }
-  }, [audience, params.owner, params.repo, selectedCommit, selectedFilePath])
-
   function replaceHistorySearch(
     nextAudience: ProjectionPreviewAudience,
     nextCommitId: string | null,
+    nextPath: string | null = null,
   ) {
     void navigate({
       params,
@@ -223,6 +191,7 @@ function useHistoryPageModel({
       search: {
         audience: nextAudience,
         commit: nextCommitId ?? undefined,
+        path: nextPath ?? undefined,
       },
       to: '/repos/$owner/$repo/history',
     })
@@ -231,7 +200,7 @@ function useHistoryPageModel({
   return {
     audience,
     availableAudiences,
-    closeFileDiff: () => setSelectedFilePath(null),
+    closeFileDiff: () => replaceHistorySearch(audience, selectedCommitId),
     commitState,
     commits,
     fileDiffState,
@@ -248,12 +217,7 @@ function useHistoryPageModel({
       replaceHistorySearch(audience, commit.projected_id),
     selectFile: (file: CommitFile) => {
       const nextPath = selectedFilePath === file.path ? null : file.path
-      setFileDiffState(
-        nextPath
-          ? { diff: null, error: null, status: 'loading' }
-          : emptyFileDiffState,
-      )
-      setSelectedFilePath(nextPath)
+      replaceHistorySearch(audience, selectedCommitId, nextPath)
     },
     selectedCommit,
     selectedCommitId,

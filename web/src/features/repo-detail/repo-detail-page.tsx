@@ -25,10 +25,8 @@ export function RepoDetailPage({
 }) {
   const { repo } = detail
   const files = detail.files
-  const publicOnlyView = repo.access.actor === 'Public'
-
   return (
-    <RepoShell active="code" canManage={!publicOnlyView} params={params}>
+    <RepoShell params={params}>
       <PageContent>
         <PageHeader
           actions={(

@@ -29,11 +29,7 @@ export function RequestsPage({
   const { repo } = live
 
   return (
-    <RepoShell
-      active="requests"
-      canManage={repo.access.actor !== 'Public'}
-      params={params}
-    >
+    <RepoShell params={params}>
       <PageContent>
         <PageHeader
           badges={(

@@ -1,6 +1,6 @@
 use super::cli_sessions::{cli_session_summary_from_model, create_cli_session_token_in_tx};
 use super::{
-    MetadataStore, acquire_metadata_read_lock, acquire_metadata_write_lock,
+    MetadataStore, acquire_aggregate_lock,
     auth::{cleanup_expired_cli_rows, i64_to_u64, u64_to_i64},
     entities,
 };
@@ -54,7 +54,7 @@ impl MetadataStore {
             consumed_at_unix: None,
         };
         let tx = db.as_ref().begin().await.map_err(ApiError::internal)?;
-        acquire_metadata_write_lock(&tx).await?;
+        acquire_aggregate_lock(&tx, "cli-auth", "start").await?;
         cleanup_expired_cli_rows(&tx, now).await?;
         enforce_browser_login_start_limits(&tx, now).await?;
         row.into_active_model()
@@ -85,7 +85,7 @@ impl MetadataStore {
         let request_id = request_id.to_string();
         let user_id = user.id.clone();
         let tx = db.as_ref().begin().await.map_err(ApiError::internal)?;
-        acquire_metadata_write_lock(&tx).await?;
+        acquire_aggregate_lock(&tx, "cli-browser-request", &request_id).await?;
         let Some(login) = entities::cli_browser_login::Entity::find_by_id(request_id.clone())
             .one(&tx)
             .await
@@ -145,7 +145,7 @@ impl MetadataStore {
         let db = Arc::clone(&self.db);
         let request_id = request_id.to_string();
         let tx = db.as_ref().begin().await.map_err(ApiError::internal)?;
-        acquire_metadata_write_lock(&tx).await?;
+        acquire_aggregate_lock(&tx, "cli-browser-request", &request_id).await?;
         let Some(login) = entities::cli_browser_login::Entity::find_by_id(request_id.clone())
             .one(&tx)
             .await
@@ -206,7 +206,7 @@ impl MetadataStore {
             consumed_at_unix: None,
         };
         let tx = db.as_ref().begin().await.map_err(ApiError::internal)?;
-        acquire_metadata_write_lock(&tx).await?;
+        acquire_aggregate_lock(&tx, "cli-exchange-grant", &row.grant_hash).await?;
         cleanup_expired_cli_rows(&tx, now).await?;
         row.into_active_model()
             .insert(&tx)
@@ -230,7 +230,7 @@ impl MetadataStore {
 
         let db = Arc::clone(&self.db);
         let tx = db.as_ref().begin().await.map_err(ApiError::internal)?;
-        acquire_metadata_write_lock(&tx).await?;
+        acquire_aggregate_lock(&tx, "cli-exchange-grant", &grant_hash).await?;
         let Some(grant) = entities::cli_exchange_grant::Entity::find_by_id(grant_hash)
             .one(&tx)
             .await
@@ -278,7 +278,6 @@ impl MetadataStore {
         let now = unix_now()?;
         let db = Arc::clone(&self.db);
         let tx = db.as_ref().begin().await.map_err(ApiError::internal)?;
-        acquire_metadata_read_lock(&tx).await?;
         let sessions = entities::cli_session::Entity::find()
             .filter(entities::cli_session::Column::UserId.eq(user_id))
             .filter(entities::cli_session::Column::RevokedAtUnix.is_null())
@@ -304,7 +303,7 @@ impl MetadataStore {
         let now = unix_now()?;
         let db = Arc::clone(&self.db);
         let tx = db.as_ref().begin().await.map_err(ApiError::internal)?;
-        acquire_metadata_write_lock(&tx).await?;
+        acquire_aggregate_lock(&tx, "cli-session", &session_id).await?;
         cleanup_expired_cli_rows(&tx, now).await?;
         let result = entities::cli_session::Entity::update_many()
             .filter(entities::cli_session::Column::Id.eq(session_id))

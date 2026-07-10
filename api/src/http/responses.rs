@@ -5,16 +5,15 @@ mod requests;
 pub(crate) use projections::*;
 pub(crate) use repo_collaboration::*;
 pub(crate) use requests::*;
+pub(crate) use scope_api_contract::*;
 
 use crate::domain::commit_history::{CommitHistoryCommit, CommitHistoryView};
 use crate::domain::policy::{ScopePath, Visibility};
-use crate::domain::repo_config::RepoConfig;
 use crate::domain::store::{
-    FileChangeKind, FirstPushToken, FirstPushTokenStatus, GitPushToken, RepoPublicationState,
-    RepositoryAccess, RepositoryActor, StoredRepository, UserAccount,
+    FileChangeKind, FirstPushToken, GitPushToken, RepoPublicationState, RepositoryAccess,
+    RepositoryActor, StoredRepository, UserAccount,
 };
 use crate::{config::DEFAULT_GIT_BRANCH, error::ApiError};
-pub(crate) use scope_core::auth::device::SessionIdentity;
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Serialize)]
@@ -36,31 +35,18 @@ pub(crate) struct ReadinessCheckResponse {
     pub(crate) status: &'static str,
 }
 
-#[derive(Debug, Serialize)]
-#[cfg_attr(test, derive(ts_rs::TS))]
-pub(crate) struct AccountSessionResponse {
-    pub(crate) identity: Option<SessionIdentity>,
-    pub(crate) user: Option<UserResponse>,
-}
-
-#[derive(Debug, Serialize)]
-#[cfg_attr(test, derive(ts_rs::TS))]
-pub(crate) struct UserResponse {
-    pub(crate) id: String,
-    pub(crate) handle: String,
-    pub(crate) email: String,
-    pub(crate) email_verified: bool,
-}
-
-impl From<UserAccount> for UserResponse {
-    fn from(user: UserAccount) -> Self {
-        Self {
-            id: user.id,
-            handle: user.handle,
-            email: user.email,
-            email_verified: user.email_verified,
-        }
+pub(crate) fn user_response(user: UserAccount) -> UserResponse {
+    UserResponse {
+        id: user.id,
+        handle: user.handle,
+        email: user.email,
+        email_verified: user.email_verified,
     }
+}
+
+pub(crate) fn git_oid_response(value: String) -> Result<GitOid, ApiError> {
+    GitOid::try_from(value)
+        .map_err(|error| ApiError::internal_message(format!("persisted {error}")))
 }
 
 #[derive(Debug, Serialize)]
@@ -92,51 +78,10 @@ pub(crate) struct SessionCapabilities {
     pub(crate) can_delete_repo: bool,
 }
 
-#[derive(Clone, Copy, Debug, Serialize)]
-#[cfg_attr(test, derive(ts_rs::TS))]
-pub(crate) enum DeviceLoginStatus {
-    Pending,
-    Complete,
-}
-
-#[derive(Debug, Serialize)]
-#[cfg_attr(test, derive(ts_rs::TS))]
-pub(crate) struct DeviceLoginStartResponse {
-    pub(crate) device_code: String,
-    pub(crate) user_code: String,
-    pub(crate) verification_url: String,
-    pub(crate) expires_at_unix: u64,
-    pub(crate) poll_interval_secs: u64,
-}
-
-#[derive(Debug, Serialize)]
-#[cfg_attr(test, derive(ts_rs::TS))]
-pub(crate) struct DeviceLoginPollResponse {
-    pub(crate) status: DeviceLoginStatus,
-    pub(crate) session_token: Option<String>,
-    pub(crate) expires_at_unix: u64,
-    pub(crate) identity: Option<SessionIdentity>,
-}
-
 #[derive(Debug, Serialize)]
 #[cfg_attr(test, derive(ts_rs::TS))]
 pub(crate) struct DeviceLoginCompleteResponse {
     pub(crate) status: DeviceLoginStatus,
-}
-
-#[derive(Debug, Deserialize)]
-#[cfg_attr(test, derive(ts_rs::TS))]
-pub(crate) struct BrowserLoginStartRequest {
-    pub(crate) callback_url: String,
-}
-
-#[derive(Debug, Serialize)]
-#[cfg_attr(test, derive(ts_rs::TS))]
-pub(crate) struct BrowserLoginStartResponse {
-    pub(crate) request_id: String,
-    pub(crate) request_secret: String,
-    pub(crate) authorization_url: String,
-    pub(crate) expires_at_unix: u64,
 }
 
 #[derive(Debug, Serialize)]
@@ -145,32 +90,11 @@ pub(crate) struct BrowserLoginCompleteResponse {
     pub(crate) callback_url: String,
 }
 
-#[derive(Debug, Deserialize)]
-#[cfg_attr(test, derive(ts_rs::TS))]
-pub(crate) struct BrowserLoginExchangeRequest {
-    pub(crate) request_secret: String,
-    pub(crate) callback_code: String,
-}
-
-#[derive(Debug, Serialize)]
-#[cfg_attr(test, derive(ts_rs::TS))]
-pub(crate) struct CliSessionTokenResponse {
-    pub(crate) session_token: String,
-    pub(crate) expires_at_unix: u64,
-    pub(crate) identity: SessionIdentity,
-}
-
 #[derive(Debug, Serialize)]
 #[cfg_attr(test, derive(ts_rs::TS))]
 pub(crate) struct CliExchangeGrantResponse {
     pub(crate) exchange_token: String,
     pub(crate) expires_at_unix: u64,
-}
-
-#[derive(Debug, Deserialize)]
-#[cfg_attr(test, derive(ts_rs::TS))]
-pub(crate) struct CliExchangeGrantExchangeRequest {
-    pub(crate) exchange_token: String,
 }
 
 #[derive(Debug, Serialize)]
@@ -191,105 +115,15 @@ pub(crate) struct CliSessionResponse {
 
 #[derive(Debug, Serialize)]
 #[cfg_attr(test, derive(ts_rs::TS))]
-pub(crate) struct RepoSummaryResponse {
-    pub(crate) id: String,
-    pub(crate) owner_handle: String,
-    pub(crate) name: String,
-    pub(crate) lifecycle_state: RepoPublicationState,
-    pub(crate) default_visibility: Visibility,
-    pub(crate) change_version: u64,
-    pub(crate) access: RepositoryAccessResponse,
-    pub(crate) open_request_count: usize,
-    pub(crate) request_permissions: RepoRequestPermissionsResponse,
-}
-
-#[derive(Debug, Serialize)]
-#[cfg_attr(test, derive(ts_rs::TS))]
-pub(crate) struct RepositoryAccessResponse {
-    pub(crate) actor: RepositoryActor,
-    pub(crate) can_read_private_files: bool,
-    pub(crate) can_push: bool,
-    pub(crate) can_change_file_visibility: bool,
-    pub(crate) can_apply_changes: bool,
-    pub(crate) can_manage_members: bool,
-    pub(crate) can_delete_repo: bool,
-}
-
-#[derive(Debug, Serialize)]
-#[cfg_attr(test, derive(ts_rs::TS))]
-pub(crate) struct CreateRepoResponse {
-    pub(crate) repo: RepoSummaryResponse,
-    pub(crate) init: RepoInitResponse,
-}
-
-#[derive(Debug, Serialize)]
-#[cfg_attr(test, derive(ts_rs::TS))]
 pub(crate) struct DeleteRepoResponse {
     pub(crate) id: String,
     pub(crate) deleted: bool,
-}
-
-#[derive(Debug, Deserialize)]
-#[cfg_attr(test, derive(ts_rs::TS))]
-pub(crate) struct CreatePushIntentRequest {
-    pub(crate) head_oid: String,
-    pub(crate) base_config_hash: String,
-    pub(crate) config: RepoConfig,
-}
-
-#[derive(Debug, Serialize)]
-#[cfg_attr(test, derive(ts_rs::TS))]
-pub(crate) struct CreatePushIntentResponse {
-    pub(crate) token: String,
-    pub(crate) base_head_oid: Option<String>,
-    pub(crate) expires_at_unix: u64,
-}
-
-#[derive(Debug, Deserialize)]
-#[cfg_attr(test, derive(ts_rs::TS))]
-pub(crate) struct CompletePushIntentRequest {
-    pub(crate) token: String,
 }
 
 #[derive(Debug, Serialize)]
 #[cfg_attr(test, derive(ts_rs::TS))]
 pub(crate) struct CompletePushIntentResponse {
     pub(crate) config_applied: bool,
-}
-
-#[derive(Debug, Serialize)]
-#[cfg_attr(test, derive(ts_rs::TS))]
-pub(crate) struct RepoInitResponse {
-    pub(crate) repo: RepoSummaryResponse,
-    pub(crate) git_remote_url: String,
-    pub(crate) remote_name: &'static str,
-    pub(crate) push_branch: &'static str,
-    pub(crate) token: Option<FirstPushTokenResponse>,
-    pub(crate) push_token: Option<GitPushTokenResponse>,
-}
-
-#[derive(Debug, Serialize)]
-#[cfg_attr(test, derive(ts_rs::TS))]
-pub(crate) struct RepoConfigResponse {
-    pub(crate) config: RepoConfig,
-    pub(crate) config_hash: String,
-}
-
-#[derive(Debug, Serialize)]
-#[cfg_attr(test, derive(ts_rs::TS))]
-pub(crate) struct FirstPushTokenResponse {
-    pub(crate) status: FirstPushTokenStatus,
-    pub(crate) created_at_unix: u64,
-    pub(crate) expires_at_unix: u64,
-    pub(crate) used_at_unix: Option<u64>,
-    pub(crate) secret: Option<String>,
-}
-
-#[derive(Debug, Serialize)]
-#[cfg_attr(test, derive(ts_rs::TS))]
-pub(crate) struct GitPushTokenResponse {
-    pub(crate) created_at_unix: u64,
-    pub(crate) secret: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -502,8 +336,8 @@ pub(crate) fn repo_init_response(
     );
     Ok(RepoInitResponse {
         git_remote_url: format!("{}{}", api_origin.trim_end_matches('/'), git_remote_path),
-        remote_name: "scope",
-        push_branch: DEFAULT_GIT_BRANCH,
+        remote_name: "scope".to_string(),
+        push_branch: DEFAULT_GIT_BRANCH.to_string(),
         repo: repo_summary,
         token,
         push_token,

@@ -1,5 +1,5 @@
 use super::{
-    MetadataStore, acquire_metadata_write_lock, entities, repo_effects::save_repo_mutation,
+    MetadataStore, acquire_aggregate_lock, entities, repo_effects::save_repo_mutation,
     repository_from_model,
 };
 use crate::domain::{
@@ -26,15 +26,16 @@ impl MetadataStore {
         let user_id = user_id.to_string();
         let db = Arc::clone(&self.db);
         let tx = db.as_ref().begin().await.map_err(ApiError::internal)?;
-        acquire_metadata_write_lock(&tx).await?;
+        acquire_aggregate_lock(&tx, "repository", &repo_id).await?;
         let repo = entities::repository::Entity::find_by_id(repo_id.clone())
             .one(&tx)
             .await
             .map_err(ApiError::internal)?
             .ok_or_else(|| ApiError::not_found(format!("repo {owner}/{name} not found")))?;
         let mut repo = repository_from_model(&tx, repo).await?;
+        let before = repo.clone();
         let mutation = set_visibility(&mut repo, &user_id, &update_paths, visibility)?;
-        save_repo_mutation(&tx, &repo, &mutation.effects).await?;
+        save_repo_mutation(&tx, &before, &repo, &mutation.effects).await?;
         tx.commit().await.map_err(ApiError::internal)?;
         Ok(repo)
     }

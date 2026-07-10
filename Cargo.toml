@@ -1,6 +1,7 @@
 [workspace]
 members = [
     "api",
+    "crates/scope-api-contract",
     "crates/scope-core",
     "worker",
 ]

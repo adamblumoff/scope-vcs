@@ -62,10 +62,13 @@ jobs:
           packages=(-p scope-core -p worker)
           if [[ "${{ inputs.include_api }}" == "true" ]]; then
             packages+=(-p api)
+            features=(--features api/test-support)
+          else
+            features=()
           fi
           cargo fmt --all --check
-          cargo test "${packages[@]}" --locked
-          cargo clippy "${packages[@]}" --all-targets --locked -- -D warnings
+          cargo test "${packages[@]}" "${features[@]}" --locked
+          cargo clippy "${packages[@]}" "${features[@]}" --all-targets --locked -- -D warnings
 
       - name: Install Node
         if: inputs.include_api

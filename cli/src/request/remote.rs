@@ -2,21 +2,14 @@ use crate::{
     git_repo::{
         GitRepo, branch_config_value, current_branch, git_remote_fetch_url, git_remote_names,
     },
+    git_transport::ScopeRemote,
     push::DEFAULT_SCOPE_REMOTE,
 };
-use anyhow::{Context, bail};
-use reqwest::Url;
+use anyhow::bail;
 
 pub(super) const REQUEST_REMOTE_KEY: &str = "scopeRequestRemote";
 
-#[derive(Clone, Debug)]
-pub(super) struct RequestRemoteTarget {
-    pub(super) remote: String,
-    pub(super) public_url: String,
-    pub(super) permissioned_url: String,
-    pub(super) owner: String,
-    pub(super) repo: String,
-}
+pub(super) type RequestRemoteTarget = ScopeRemote;
 
 pub(super) fn request_remote_name(
     git_repo: &GitRepo,
@@ -42,71 +35,7 @@ pub(super) fn load_request_remote(
     remote: &str,
 ) -> anyhow::Result<RequestRemoteTarget> {
     let fetch_url = git_remote_fetch_url(git_repo, remote)?;
-    parse_request_git_remote(api_url, remote, &fetch_url)
-}
-
-fn parse_request_git_remote(
-    api_url: &str,
-    remote_name: &str,
-    remote_url: &str,
-) -> anyhow::Result<RequestRemoteTarget> {
-    let api = Url::parse(api_url).context("parse Scope API URL")?;
-    let remote = Url::parse(remote_url).context("parse Scope Git remote URL")?;
-
-    if api.scheme() != remote.scheme()
-        || api.host_str() != remote.host_str()
-        || api.port_or_known_default() != remote.port_or_known_default()
-    {
-        bail!(
-            "Scope remote points at {}, but this CLI is configured for {}",
-            redacted_url(&remote),
-            api.as_str().trim_end_matches('/')
-        );
-    }
-    if remote.password().is_some() {
-        bail!("Scope Git remote URL cannot include a password");
-    }
-
-    let segments = remote
-        .path_segments()
-        .map(|segments| segments.collect::<Vec<_>>())
-        .unwrap_or_default();
-    if segments.len() != 4
-        || segments[0] != "git"
-        || (segments[1] != "permissioned" && segments[1] != "public")
-    {
-        bail!(
-            "Scope request remote must have path /git/public/owner/repo or /git/permissioned/owner/repo"
-        );
-    }
-
-    let owner = segments[2].trim();
-    let repo = segments[3].trim();
-    if owner.is_empty() || repo.is_empty() {
-        bail!("Scope request remote must include owner and repo");
-    }
-
-    Ok(RequestRemoteTarget {
-        remote: remote_name.to_string(),
-        public_url: git_url_for_mode(&remote, "public", owner, repo)?,
-        permissioned_url: git_url_for_mode(&remote, "permissioned", owner, repo)?,
-        owner: owner.to_string(),
-        repo: repo.to_string(),
-    })
-}
-
-fn git_url_for_mode(remote: &Url, mode: &str, owner: &str, repo: &str) -> anyhow::Result<String> {
-    let mut url = remote.clone();
-    if !url.username().is_empty() {
-        let _ = url.set_username("");
-    }
-    if url.password().is_some() {
-        let _ = url.set_password(None);
-    }
-    url.set_path(&format!("/git/{mode}/{owner}/{repo}"));
-    url.set_query(None);
-    url.set_fragment(None);
-    Ok(url.to_string())
+    ScopeRemote::parse(api_url, remote, &fetch_url)
 }
 
 fn normalized_remote_arg(remote: Option<&str>) -> Option<String> {
@@ -142,34 +71,23 @@ fn default_request_remote_name(git_repo: &GitRepo, api_url: &str) -> anyhow::Res
 
 fn remote_points_to_scope_repo(git_repo: &GitRepo, api_url: &str, remote: &str) -> bool {
     git_remote_fetch_url(git_repo, remote)
-        .and_then(|remote_url| parse_request_git_remote(api_url, remote, &remote_url).map(|_| ()))
+        .and_then(|remote_url| ScopeRemote::parse(api_url, remote, &remote_url).map(|_| ()))
         .is_ok()
-}
-
-fn redacted_url(url: &Url) -> String {
-    let mut redacted = url.clone();
-    if !redacted.username().is_empty() {
-        let _ = redacted.set_username("redacted");
-    }
-    if redacted.password().is_some() {
-        let _ = redacted.set_password(Some("redacted"));
-    }
-    redacted.to_string()
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::test_support::TestDir as TempDir;
     use std::{
-        env, fs,
+        fs,
         path::{Path, PathBuf},
         process::{Command, Output},
-        time::{SystemTime, UNIX_EPOCH},
     };
 
     #[test]
     fn request_remote_accepts_public_git_remote_and_derives_permissioned_push_url() {
-        let target = parse_request_git_remote(
+        let target = ScopeRemote::parse(
             "https://scope.example",
             "origin",
             "https://scope.example/git/public/adam/repo",
@@ -190,7 +108,7 @@ mod tests {
 
     #[test]
     fn request_remote_accepts_permissioned_git_remote_and_derives_public_fetch_url() {
-        let target = parse_request_git_remote(
+        let target = ScopeRemote::parse(
             "https://scope.example",
             "scope",
             "https://scope@scope.example/git/permissioned/adam/repo",
@@ -312,33 +230,6 @@ mod tests {
         (dir, repo)
     }
 
-    struct TempDir {
-        path: PathBuf,
-    }
-
-    impl TempDir {
-        fn new(label: &str) -> Self {
-            let mut path = env::temp_dir();
-            path.push(format!(
-                "scope-cli-request-remote-{label}-{}-{}",
-                std::process::id(),
-                unix_nanos()
-            ));
-            fs::create_dir_all(&path).unwrap();
-            Self { path }
-        }
-
-        fn path(&self) -> &Path {
-            &self.path
-        }
-    }
-
-    impl Drop for TempDir {
-        fn drop(&mut self) {
-            let _ = fs::remove_dir_all(&self.path);
-        }
-    }
-
     fn run_git<const N: usize>(path: &Path, args: [&str; N]) {
         let output = Command::new("git")
             .current_dir(path)
@@ -355,12 +246,5 @@ mod tests {
             String::from_utf8_lossy(&output.stdout),
             String::from_utf8_lossy(&output.stderr)
         );
-    }
-
-    fn unix_nanos() -> u128 {
-        SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .unwrap()
-            .as_nanos()
     }
 }

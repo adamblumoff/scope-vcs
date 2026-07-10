@@ -8,6 +8,7 @@ import type {
   CommitHistoryInput,
   ReviewFileDiff,
 } from './types'
+import { ApiRouteTemplates, buildApiPath } from './types.generated'
 export {
   parseCommitDetailInput,
   parseCommitFileDiffInput,
@@ -22,7 +23,10 @@ export async function loadCommitHistoryForRequest(
   })
 
   return createApiClient().get<CommitHistory>(
-    `/v1/repos/${data.owner}/${data.repo}/commits?${query}`,
+    `${buildApiPath(ApiRouteTemplates.repoCommits, {
+      owner: data.owner,
+      repo: data.repo,
+    })}?${query}`,
     { auth: 'optional' },
   )
 }
@@ -35,7 +39,11 @@ export async function loadCommitDetailForRequest(
   })
 
   return createApiClient().get<CommitDetail>(
-    `/v1/repos/${data.owner}/${data.repo}/commits/${encodeURIComponent(data.commit)}?${query}`,
+    `${buildApiPath(ApiRouteTemplates.repoCommit, {
+      owner: data.owner,
+      repo: data.repo,
+      commit_id: data.commit,
+    })}?${query}`,
     { auth: 'optional' },
   )
 }
@@ -49,7 +57,11 @@ export async function loadCommitFileDiffForRequest(
   })
 
   return createApiClient().get<ReviewFileDiff>(
-    `/v1/repos/${data.owner}/${data.repo}/commits/${encodeURIComponent(data.commit)}/file-diff?${query}`,
+    `${buildApiPath(ApiRouteTemplates.repoCommitFileDiff, {
+      owner: data.owner,
+      repo: data.repo,
+      commit_id: data.commit,
+    })}?${query}`,
     { auth: 'optional' },
   )
 }

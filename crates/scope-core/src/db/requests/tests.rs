@@ -1,7 +1,10 @@
 use super::*;
 use crate::domain::{
     policy::Visibility,
-    requests::{RequestActorRole, RequestBaseAudience, RequestDisposition, RequestState},
+    requests::{
+        CreditLedgerEntryKind, RequestActorRole, RequestBaseAudience, RequestDisposition,
+        RequestState,
+    },
     store::{
         AppCatalog, DEFAULT_GIT_FILE_MODE, RepoPublicationState, SourceBlob, StoredRepository,
         UserAccount, app_catalog,
@@ -230,6 +233,172 @@ async fn request_facts_round_trip() {
                 10
             );
             assert_eq!(catalog.request_events.len(), 2);
+            Ok(())
+        })
+        .await
+        .unwrap();
+}
+
+#[tokio::test]
+async fn repo_delete_waits_for_resolution_and_does_not_refund_settled_stake_twice() {
+    let store = postgres_store();
+    store
+        .grant_user_credits(GrantUserCreditsInput {
+            ledger_entry_id: "ledger_grant".to_string(),
+            user_id: "user_public".to_string(),
+            amount_credits: 20,
+            now_unix: 1,
+        })
+        .await
+        .unwrap();
+    submit_public_request(&store).await;
+
+    let repo_guard = store.db.begin().await.unwrap();
+    acquire_aggregate_lock(&repo_guard, "repository", "owner/repo")
+        .await
+        .unwrap();
+    let credit_guard = store.db.begin().await.unwrap();
+    acquire_aggregate_lock(&credit_guard, "user-credit", "user_public")
+        .await
+        .unwrap();
+
+    let resolve_store = store.clone();
+    let resolve = tokio::spawn(async move {
+        resolve_store
+            .resolve_request(ResolveRequestInput {
+                request_id: "req_1".to_string(),
+                actor_user_id: "user_owner".to_string(),
+                disposition: RequestDisposition::UsefulNotMerged,
+                event_id: "event_resolved".to_string(),
+                settlement_event_id: "event_settled".to_string(),
+                refund_ledger_entry_id: Some("ledger_refund".to_string()),
+                reward_ledger_entry_id: Some("ledger_reward".to_string()),
+                body: None,
+                now_unix: 5,
+            })
+            .await
+    });
+    tokio::time::sleep(std::time::Duration::from_millis(25)).await;
+
+    let delete_store = store.clone();
+    let delete = tokio::spawn(async move {
+        delete_store
+            .delete_repo("owner", "repo", "user_owner")
+            .await
+    });
+    tokio::time::sleep(std::time::Duration::from_millis(25)).await;
+    repo_guard.commit().await.unwrap();
+    tokio::time::sleep(std::time::Duration::from_millis(25)).await;
+
+    assert!(
+        !resolve.is_finished(),
+        "resolution should wait for credit lock"
+    );
+    assert!(
+        !delete.is_finished(),
+        "deletion should wait behind the resolving repository lock"
+    );
+    credit_guard.commit().await.unwrap();
+
+    resolve.await.unwrap().unwrap();
+    delete.await.unwrap().unwrap();
+    store
+        .read(|catalog| {
+            assert!(!catalog.repositories.contains_key("owner/repo"));
+            assert_eq!(
+                catalog
+                    .user_credit_accounts
+                    .get("user_public")
+                    .unwrap()
+                    .balance_credits,
+                22
+            );
+            assert_eq!(
+                catalog
+                    .credit_ledger_entries
+                    .values()
+                    .filter(|entry| entry.kind == CreditLedgerEntryKind::StakeRefund)
+                    .count(),
+                1
+            );
+            Ok(())
+        })
+        .await
+        .unwrap();
+}
+
+#[tokio::test]
+async fn repo_delete_waits_for_submission_and_refunds_the_committed_stake() {
+    let store = postgres_store();
+    store
+        .grant_user_credits(GrantUserCreditsInput {
+            ledger_entry_id: "ledger_grant".to_string(),
+            user_id: "user_public".to_string(),
+            amount_credits: 20,
+            now_unix: 1,
+        })
+        .await
+        .unwrap();
+    store.start_request(public_start_input()).await.unwrap();
+    store
+        .record_working_request_upload(public_upload_input())
+        .await
+        .unwrap();
+
+    let repo_guard = store.db.begin().await.unwrap();
+    acquire_aggregate_lock(&repo_guard, "repository", "owner/repo")
+        .await
+        .unwrap();
+    let credit_guard = store.db.begin().await.unwrap();
+    acquire_aggregate_lock(&credit_guard, "user-credit", "user_public")
+        .await
+        .unwrap();
+
+    let submit_store = store.clone();
+    let submit =
+        tokio::spawn(async move { submit_store.submit_request(public_submit_input()).await });
+    tokio::time::sleep(std::time::Duration::from_millis(25)).await;
+    let delete_store = store.clone();
+    let delete = tokio::spawn(async move {
+        delete_store
+            .delete_repo("owner", "repo", "user_owner")
+            .await
+    });
+    tokio::time::sleep(std::time::Duration::from_millis(25)).await;
+    repo_guard.commit().await.unwrap();
+    tokio::time::sleep(std::time::Duration::from_millis(25)).await;
+
+    assert!(
+        !submit.is_finished(),
+        "submission should wait for credit lock"
+    );
+    assert!(
+        !delete.is_finished(),
+        "deletion should wait behind the submitting repository lock"
+    );
+    credit_guard.commit().await.unwrap();
+
+    submit.await.unwrap().unwrap();
+    delete.await.unwrap().unwrap();
+    store
+        .read(|catalog| {
+            assert!(!catalog.repositories.contains_key("owner/repo"));
+            assert_eq!(
+                catalog
+                    .user_credit_accounts
+                    .get("user_public")
+                    .unwrap()
+                    .balance_credits,
+                20
+            );
+            assert_eq!(
+                catalog
+                    .credit_ledger_entries
+                    .values()
+                    .filter(|entry| entry.kind == CreditLedgerEntryKind::StakeRefund)
+                    .count(),
+                1
+            );
             Ok(())
         })
         .await

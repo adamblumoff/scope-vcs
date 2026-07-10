@@ -1,5 +1,5 @@
 use super::{
-    MetadataStore, acquire_metadata_write_lock,
+    MetadataStore, acquire_aggregate_lock,
     cleanup_queue::queue_pending_source_blob_deletion_rows,
     request_access::{
         authorize_start_request, ensure_request_editor, ensure_request_maintainer,
@@ -27,7 +27,7 @@ use crate::{
             record_request_revision, record_working_request_upload, remove_request_editor,
             resolve_request, respond_to_request, start_request, submit_request,
         },
-        store::RepositoryActor,
+        store::{RepositoryActor, StoredRepository},
     },
     error::ApiError,
 };
@@ -79,7 +79,7 @@ impl MetadataStore {
     ) -> Result<CreditAccountMutation, ApiError> {
         let db = Arc::clone(&self.db);
         let tx = db.as_ref().begin().await.map_err(ApiError::internal)?;
-        acquire_metadata_write_lock(&tx).await?;
+        acquire_aggregate_lock(&tx, "user-credit", &input.user_id).await?;
         ensure_user_exists(&tx, &input.user_id).await?;
 
         let mut accounts = BTreeMap::new();
@@ -104,7 +104,8 @@ impl MetadataStore {
     ) -> Result<StartRequestMutation, ApiError> {
         let db = Arc::clone(&self.db);
         let tx = db.as_ref().begin().await.map_err(ApiError::internal)?;
-        acquire_metadata_write_lock(&tx).await?;
+        acquire_aggregate_lock(&tx, "repository", &input.repo_id).await?;
+        acquire_aggregate_lock(&tx, "request", &input.id).await?;
         ensure_user_exists(&tx, &input.author_user_id).await?;
         let input = authorize_start_request(&repo_by_id(&tx, &input.repo_id).await?, input)?;
 
@@ -128,7 +129,7 @@ impl MetadataStore {
     ) -> Result<WorkingRequestUploadMutation, ApiError> {
         let db = Arc::clone(&self.db);
         let tx = db.as_ref().begin().await.map_err(ApiError::internal)?;
-        acquire_metadata_write_lock(&tx).await?;
+        acquire_aggregate_lock(&tx, "request", &input.request_id).await?;
         ensure_user_exists(&tx, &input.actor_user_id).await?;
 
         let mut requests = BTreeMap::new();
@@ -159,17 +160,15 @@ impl MetadataStore {
     ) -> Result<SubmitRequestMutation, ApiError> {
         let db = Arc::clone(&self.db);
         let tx = db.as_ref().begin().await.map_err(ApiError::internal)?;
-        acquire_metadata_write_lock(&tx).await?;
+        let (_, request) = lock_request_repository(&tx, &input.request_id).await?;
         ensure_user_exists(&tx, &input.actor_user_id).await?;
 
-        let mut requests = BTreeMap::new();
-        if let Some(request) = request_by_id(&tx, &input.request_id).await? {
-            requests.insert(request.id.clone(), request);
-        }
+        let mut requests = BTreeMap::from([(request.id.clone(), request)]);
         let mut events = BTreeMap::new();
         if let Some(event) = request_event_by_id(&tx, &input.event_id).await? {
             events.insert(event.id.clone(), event);
         }
+        acquire_aggregate_lock(&tx, "user-credit", &input.actor_user_id).await?;
         let mut accounts = BTreeMap::new();
         if let Some(account) = credit_account_by_user_id(&tx, &input.actor_user_id).await? {
             accounts.insert(account.user_id.clone(), account);
@@ -206,7 +205,7 @@ impl MetadataStore {
     ) -> Result<RequestRevisionMutation, ApiError> {
         let db = Arc::clone(&self.db);
         let tx = db.as_ref().begin().await.map_err(ApiError::internal)?;
-        acquire_metadata_write_lock(&tx).await?;
+        acquire_aggregate_lock(&tx, "request", &input.request_id).await?;
         ensure_user_exists(&tx, &input.actor_user_id).await?;
 
         let mut requests = BTreeMap::new();
@@ -242,7 +241,7 @@ impl MetadataStore {
     ) -> Result<RequestTimelineMutation, ApiError> {
         let db = Arc::clone(&self.db);
         let tx = db.as_ref().begin().await.map_err(ApiError::internal)?;
-        acquire_metadata_write_lock(&tx).await?;
+        acquire_aggregate_lock(&tx, "request", &input.request_id).await?;
         ensure_user_exists(&tx, &input.actor_user_id).await?;
 
         let mut requests = BTreeMap::new();
@@ -270,7 +269,7 @@ impl MetadataStore {
     ) -> Result<RequestTimelineMutation, ApiError> {
         let db = Arc::clone(&self.db);
         let tx = db.as_ref().begin().await.map_err(ApiError::internal)?;
-        acquire_metadata_write_lock(&tx).await?;
+        acquire_aggregate_lock(&tx, "request", &input.request_id).await?;
         ensure_user_exists(&tx, &input.actor_user_id).await?;
 
         let mut requests = BTreeMap::new();
@@ -298,7 +297,7 @@ impl MetadataStore {
     ) -> Result<RequestTimelineMutation, ApiError> {
         let db = Arc::clone(&self.db);
         let tx = db.as_ref().begin().await.map_err(ApiError::internal)?;
-        acquire_metadata_write_lock(&tx).await?;
+        acquire_aggregate_lock(&tx, "request", &input.request_id).await?;
         ensure_user_exists(&tx, &input.actor_user_id).await?;
 
         let mut requests = BTreeMap::new();
@@ -324,16 +323,11 @@ impl MetadataStore {
     ) -> Result<ResolveRequestMutation, ApiError> {
         let db = Arc::clone(&self.db);
         let tx = db.as_ref().begin().await.map_err(ApiError::internal)?;
-        acquire_metadata_write_lock(&tx).await?;
-
-        let mut requests = BTreeMap::new();
-        let request = request_by_id(&tx, &input.request_id)
-            .await?
-            .ok_or_else(|| ApiError::not_found("request not found"))?;
+        let (repo, request) = lock_request_repository(&tx, &input.request_id).await?;
+        acquire_aggregate_lock(&tx, "user-credit", &request.author_user_id).await?;
         ensure_user_exists(&tx, &input.actor_user_id).await?;
-        let repo = repo_by_id(&tx, &request.repo_id).await?;
         ensure_request_maintainer(&repo, &input.actor_user_id)?;
-        requests.insert(request.id.clone(), request.clone());
+        let mut requests = BTreeMap::from([(request.id.clone(), request.clone())]);
         let mut events = BTreeMap::new();
         for event_id in [&input.event_id, &input.settlement_event_id] {
             if let Some(event) = request_event_by_id(&tx, event_id).await? {
@@ -383,16 +377,11 @@ impl MetadataStore {
     ) -> Result<MergeRequestMutation, ApiError> {
         let db = Arc::clone(&self.db);
         let tx = db.as_ref().begin().await.map_err(ApiError::internal)?;
-        acquire_metadata_write_lock(&tx).await?;
-
-        let mut requests = BTreeMap::new();
-        let request = request_by_id(&tx, &input.request_id)
-            .await?
-            .ok_or_else(|| ApiError::not_found("request not found"))?;
+        let (repo, request) = lock_request_repository(&tx, &input.request_id).await?;
+        acquire_aggregate_lock(&tx, "user-credit", &request.author_user_id).await?;
         ensure_user_exists(&tx, &input.actor_user_id).await?;
-        let repo = repo_by_id(&tx, &request.repo_id).await?;
         ensure_request_maintainer(&repo, &input.actor_user_id)?;
-        requests.insert(request.id.clone(), request.clone());
+        let mut requests = BTreeMap::from([(request.id.clone(), request.clone())]);
         let mut events = BTreeMap::new();
         for event_id in [&input.event_id, &input.settlement_event_id] {
             if let Some(event) = request_event_by_id(&tx, event_id).await? {
@@ -442,7 +431,7 @@ impl MetadataStore {
     ) -> Result<RequestEditorMutation, ApiError> {
         let db = Arc::clone(&self.db);
         let tx = db.as_ref().begin().await.map_err(ApiError::internal)?;
-        acquire_metadata_write_lock(&tx).await?;
+        acquire_aggregate_lock(&tx, "request", &input.request_id).await?;
         ensure_user_exists(&tx, &input.actor_user_id).await?;
         ensure_user_exists(&tx, &input.editor_user_id).await?;
         let request = request_by_id(&tx, &input.request_id)
@@ -463,7 +452,7 @@ impl MetadataStore {
     ) -> Result<RequestEditorMutation, ApiError> {
         let db = Arc::clone(&self.db);
         let tx = db.as_ref().begin().await.map_err(ApiError::internal)?;
-        acquire_metadata_write_lock(&tx).await?;
+        acquire_aggregate_lock(&tx, "request", &input.request_id).await?;
         ensure_user_exists(&tx, &input.actor_user_id).await?;
         let request = request_by_id(&tx, &input.request_id)
             .await?
@@ -483,12 +472,9 @@ impl MetadataStore {
     ) -> Result<DeleteRequestMutation, ApiError> {
         let db = Arc::clone(&self.db);
         let tx = db.as_ref().begin().await.map_err(ApiError::internal)?;
-        acquire_metadata_write_lock(&tx).await?;
+        let (repo, request) = lock_request_repository(&tx, &input.request_id).await?;
         ensure_user_exists(&tx, &input.actor_user_id).await?;
-        let request = request_by_id(&tx, &input.request_id)
-            .await?
-            .ok_or_else(|| ApiError::not_found("request not found"))?;
-        let repo = repo_by_id(&tx, &request.repo_id).await?;
+        acquire_aggregate_lock(&tx, "user-credit", &request.author_user_id).await?;
         let mut input = input;
         input.actor_can_delete = request.author_user_id == input.actor_user_id
             || matches!(
@@ -549,6 +535,26 @@ impl MetadataStore {
         tx.commit().await.map_err(ApiError::internal)?;
         Ok(mutation)
     }
+}
+
+async fn lock_request_repository<C>(
+    conn: &C,
+    request_id: &str,
+) -> Result<(StoredRepository, Request), ApiError>
+where
+    C: sea_orm::ConnectionTrait,
+{
+    let observed = request_by_id(conn, request_id)
+        .await?
+        .ok_or_else(|| ApiError::not_found("request not found"))?;
+    acquire_aggregate_lock(conn, "repository", &observed.repo_id).await?;
+    acquire_aggregate_lock(conn, "request", request_id).await?;
+    let request = request_by_id(conn, request_id)
+        .await?
+        .filter(|request| request.repo_id == observed.repo_id)
+        .ok_or_else(|| ApiError::not_found("request not found"))?;
+    let repo = repo_by_id(conn, &request.repo_id).await?;
+    Ok((repo, request))
 }
 
 #[cfg(test)]

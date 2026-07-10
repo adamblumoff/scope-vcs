@@ -14,20 +14,21 @@ import type {
   RepoSession,
   RepoSummary,
 } from './types'
+import { ApiRouteTemplates, buildApiPath } from './types.generated'
 export { parseRepoParams } from './repo-params'
 
 export async function loadRepoForRequest(data: RepoParams) {
   const api = createApiClient()
   const [repo, session] = await Promise.all([
-    api.get<RepoSummary>(`/v1/repos/${data.owner}/${data.repo}`, {
+    api.get<RepoSummary>(repoPath(ApiRouteTemplates.repo, data), {
       auth: 'optional',
     }),
-    api.get<RepoSession>(`/v1/repos/${data.owner}/${data.repo}/session`, {
+    api.get<RepoSession>(repoPath(ApiRouteTemplates.repoSession, data), {
       auth: 'optional',
     }),
   ])
   const [files, projectionPreviews] = await Promise.all([
-    api.get<RepoFile[]>(`/v1/repos/${data.owner}/${data.repo}/files`, {
+    api.get<RepoFile[]>(repoPath(ApiRouteTemplates.repoFiles, data), {
       auth: 'optional',
     }),
     loadProjectionPreviewsForRequest(data, 'live', {
@@ -40,7 +41,11 @@ export async function loadRepoForRequest(data: RepoParams) {
     capabilities: session.capabilities,
     clone_remote_url: gitRemoteUrl(
       getPublicApiConnection('building clone command'),
-      `/git/public/${repo.owner_handle}/${repo.name}`,
+      buildApiPath(ApiRouteTemplates.gitRepo, {
+        mode: 'public',
+        org: repo.owner_handle,
+        repo: repo.name,
+      }),
     ),
     files,
     kind: 'repo',
@@ -52,7 +57,7 @@ export async function loadRepoForRequest(data: RepoParams) {
 
 export async function loadRepoLiveStateForRequest(data: RepoParams) {
   const api = createApiClient()
-  const repo = await api.get<RepoSummary>(`/v1/repos/${data.owner}/${data.repo}`, {
+  const repo = await api.get<RepoSummary>(repoPath(ApiRouteTemplates.repo, data), {
     auth: 'optional',
   })
   return repoLiveState(data, repo)
@@ -63,7 +68,7 @@ export async function loadRepoFileForRequest(
 ) {
   const api = createApiClient()
   return api.get<RepoFileContent>(
-    `/v1/repos/${encodeURIComponent(data.owner)}/${encodeURIComponent(data.repo)}/files/content?path=${encodeURIComponent(data.path)}`,
+    `${repoPath(ApiRouteTemplates.repoFileContent, data)}?path=${encodeURIComponent(data.path)}`,
     { auth: 'optional' },
   )
 }
@@ -73,8 +78,12 @@ function repoLiveState(data: RepoParams, repo: RepoSummary): RepoLiveState {
     clerk_token_template: clerkApiTokenTemplate(),
     event_stream_url: gitRemoteUrl(
       getPublicApiConnection('building repo event stream URL'),
-      `/v1/repos/${encodeURIComponent(data.owner)}/${encodeURIComponent(data.repo)}/events`,
+      repoPath(ApiRouteTemplates.repoEvents, data),
     ),
     repo,
   }
+}
+
+function repoPath(template: string, data: RepoParams) {
+  return buildApiPath(template, { owner: data.owner, repo: data.repo })
 }

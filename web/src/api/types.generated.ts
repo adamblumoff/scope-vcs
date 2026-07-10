@@ -42,6 +42,8 @@ export type RequestDisposition = "Accepted" | "UsefulNotMerged" | "HiddenContext
 
 export type ResolutionDisposition = "UsefulNotMerged" | "HiddenContext" | "NotAligned" | "Duplicate" | "Abandoned" | "LowQuality";
 
+export type GitOid = string;
+
 export type RequestEventKind = "Started" | "Submitted" | "RevisionPushed" | "Commented" | "NeedsResponse" | "ContributorResponded" | "Merged" | "Resolved" | "Settled" | "Withdrawn";
 
 export type ProjectionPreviewAudience = "private" | "public";
@@ -98,7 +100,7 @@ export type DeleteRepoResponse = { id: string, deleted: boolean, };
 
 export type CreatePushIntentRequest = { head_oid: string, base_config_hash: string, config: RepoConfig, };
 
-export type CreatePushIntentResponse = { token: string, base_head_oid: string | null, expires_at_unix: number, };
+export type CreatePushIntentResponse = { token: string, base_head_oid: GitOid | null, expires_at_unix: number, };
 
 export type CompletePushIntentRequest = { token: string, };
 
@@ -174,13 +176,13 @@ export type RequestDetailResponse = { request: RequestSummaryResponse, events: A
 
 export type RequestMutationResponse = { request: RequestSummaryResponse, };
 
-export type RequestSummaryResponse = { id: string, title: string, author_user_id: string, editor_user_ids: Array<string>, author_role: RequestActorRole, base_audience: RequestBaseAudience, target_branch: string, request_ref: string, base_main_oid: string, head_oid: string, state: RequestState, stake_credits: number, disposition: RequestDisposition | null, settlement: RequestSettlementResponse | null, created_at_unix: number, updated_at_unix: number, resolved_at_unix: number | null, permissions: RequestPermissionsResponse, mergeability: RequestMergeabilityResponse, resolution_options: Array<RequestResolutionOptionResponse>, merge_settlement_preview: RequestSettlementPreviewResponse, };
+export type RequestSummaryResponse = { id: string, title: string, author_user_id: string, editor_user_ids: Array<string>, author_role: RequestActorRole, base_audience: RequestBaseAudience, target_branch: string, request_ref: string, base_main_oid: GitOid, head_oid: GitOid, state: RequestState, stake_credits: number, disposition: RequestDisposition | null, settlement: RequestSettlementResponse | null, created_at_unix: number, updated_at_unix: number, resolved_at_unix: number | null, permissions: RequestPermissionsResponse, mergeability: RequestMergeabilityResponse, resolution_options: Array<RequestResolutionOptionResponse>, merge_settlement_preview: RequestSettlementPreviewResponse, };
 
 export type RequestPermissionsResponse = { can_comment: boolean, can_pull_branch: boolean, can_push_branch: boolean, can_delete: boolean, can_invite_editor: boolean, can_mark_needs_response: boolean, can_respond: boolean, can_resolve: boolean, can_merge: boolean, };
 
 export type RequestMergeabilityStatus = "Ready" | "Closed" | "NotReady" | "NotMaintainer" | "MissingRequestBranch";
 
-export type RequestMergeabilityResponse = { status: RequestMergeabilityStatus, current_main_oid: string | null, request_head_oid: string, reason: string | null, };
+export type RequestMergeabilityResponse = { status: RequestMergeabilityStatus, current_main_oid: GitOid | null, request_head_oid: GitOid, reason: string | null, };
 
 export type RequestSettlementResponse = { disposition: RequestDisposition, stake_credits: number, refunded_credits: number, reward_credits: number, burned_credits: number, settled_at_unix: number, };
 
@@ -188,7 +190,7 @@ export type RequestSettlementPreviewResponse = { stake_credits: number, refunded
 
 export type RequestResolutionOptionResponse = { disposition: ResolutionDisposition, settlement: RequestSettlementPreviewResponse, };
 
-export type RequestEventResponse = { id: string, actor_user_id: string, kind: RequestEventKind, body: string | null, old_head_oid: string | null, new_head_oid: string | null, created_at_unix: number, };
+export type RequestEventResponse = { id: string, actor_user_id: string, kind: RequestEventKind, body: string | null, old_head_oid: GitOid | null, new_head_oid: GitOid | null, created_at_unix: number, };
 
 export type RequestDeleteResponse = { deleted: boolean, request: RequestSummaryResponse | null, };
 
@@ -208,12 +210,53 @@ export type ResolveRequestRequest = { disposition: ResolutionDisposition, body: 
 
 export type MergeRequestRequest = { expected_main_oid: string, expected_head_oid: string, body: string | null, };
 
-export const CliAuthApiEndpoints = {
+export const ApiRouteTemplates = {
   accountSession: "/v1/session",
-  cliSession: "/v1/cli/session",
-  deviceLoginStart: "/v1/cli/device-login",
-  deviceLoginPoll: "/v1/cli/device-login/{device_code}/poll",
-  browserLoginStart: "/v1/cli/browser-login",
-  browserLoginExchange: "/v1/cli/browser-login/{request_id}/exchange",
-  exchangeGrantExchange: "/v1/cli/exchange-grants/exchange",
+  cliDeviceLoginComplete: "/v1/cli/device-login/{user_code}/complete",
+  cliBrowserLoginComplete: "/v1/cli/browser-login/{request_id}/complete",
+  cliExchangeGrants: "/v1/cli/exchange-grants",
+  cliSessions: "/v1/cli/sessions",
+  cliSessionById: "/v1/cli/sessions/{session_id}",
+  repos: "/v1/repos",
+  repo: "/v1/repos/{owner}/{repo}",
+  repoConfig: "/v1/repos/{owner}/{repo}/config",
+  repoPushIntents: "/v1/repos/{owner}/{repo}/push-intents",
+  repoPushIntentsComplete: "/v1/repos/{owner}/{repo}/push-intents/complete",
+  repoRequests: "/v1/repos/{owner}/{repo}/requests",
+  repoRequest: "/v1/repos/{owner}/{repo}/requests/{request_id}",
+  repoSession: "/v1/repos/{owner}/{repo}/session",
+  repoFiles: "/v1/repos/{owner}/{repo}/files",
+  repoFileContent: "/v1/repos/{owner}/{repo}/files/content",
+  repoRequestChanges: "/v1/repos/{owner}/{repo}/requests/{request_id}/changes",
+  repoRequestFileDiff: "/v1/repos/{owner}/{repo}/requests/{request_id}/file-diff",
+  repoRequestEditors: "/v1/repos/{owner}/{repo}/requests/{request_id}/editors",
+  repoRequestEditor: "/v1/repos/{owner}/{repo}/requests/{request_id}/editors/{editor_user_id}",
+  repoRequestComments: "/v1/repos/{owner}/{repo}/requests/{request_id}/comments",
+  repoRequestNeedsResponse: "/v1/repos/{owner}/{repo}/requests/{request_id}/needs-response",
+  repoRequestRespond: "/v1/repos/{owner}/{repo}/requests/{request_id}/respond",
+  repoRequestResolve: "/v1/repos/{owner}/{repo}/requests/{request_id}/resolve",
+  repoRequestMerge: "/v1/repos/{owner}/{repo}/requests/{request_id}/merge",
+  repoEvents: "/v1/repos/{owner}/{repo}/events",
+  repoCommits: "/v1/repos/{owner}/{repo}/commits",
+  repoCommit: "/v1/repos/{owner}/{repo}/commits/{commit_id}",
+  repoCommitFileDiff: "/v1/repos/{owner}/{repo}/commits/{commit_id}/file-diff",
+  repoMembers: "/v1/repos/{owner}/{repo}/members",
+  repoInvites: "/v1/repos/{owner}/{repo}/invites",
+  repoInvite: "/v1/repos/{owner}/{repo}/invites/{invite_id}",
+  repoMember: "/v1/repos/{owner}/{repo}/members/{member_user_id}",
+  repositoryInvite: "/v1/repository-invites/{token}",
+  repositoryInviteAccept: "/v1/repository-invites/{token}/accept",
+  repoProjectionPreview: "/v1/repos/{owner}/{repo}/projection-preview",
+  gitRepo: "/git/{mode}/{org}/{repo}",
 } as const;
+
+export function buildApiPath(
+  template: string,
+  params: Readonly<Record<string, string>> = {},
+): string {
+  return template.replace(/\{([^}]+)\}/g, (_match, key: string) => {
+    const value = params[key]
+    if (value === undefined) throw new Error(`Missing API route parameter: ${key}`)
+    return encodeURIComponent(value)
+  })
+}

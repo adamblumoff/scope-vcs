@@ -1,36 +1,7 @@
-use std::{
-    env, fs,
-    path::{Path, PathBuf},
-    process::{Command, Output},
-    time::{SystemTime, UNIX_EPOCH},
-};
+mod support;
 
-struct TempDir {
-    path: PathBuf,
-}
-
-impl TempDir {
-    fn new(label: &str) -> Self {
-        let mut path = env::temp_dir();
-        path.push(format!(
-            "scope-cli-request-{label}-{}-{}",
-            std::process::id(),
-            unix_nanos()
-        ));
-        fs::create_dir_all(&path).unwrap();
-        Self { path }
-    }
-
-    fn path(&self) -> &Path {
-        &self.path
-    }
-}
-
-impl Drop for TempDir {
-    fn drop(&mut self) {
-        let _ = fs::remove_dir_all(&self.path);
-    }
-}
+use std::{fs, process::Command};
+use support::*;
 
 #[test]
 fn request_help_exposes_branch_backed_commands() {
@@ -167,66 +138,4 @@ fn request_submit_refuses_detached_head_before_login() {
         "{stderr}"
     );
     assert!(!stderr.contains("start browser login"), "{stderr}");
-}
-
-fn scope_command(dir: &Path) -> Command {
-    let mut command = Command::new(env!("CARGO_BIN_EXE_scope"));
-    command.current_dir(dir);
-    command
-}
-
-fn create_repo_with_head(path: &Path) {
-    run_git(path, ["-c", "init.defaultBranch=main", "init"]);
-    fs::write(path.join("README.md"), "# sample\n").unwrap();
-    run_git(path, ["add", "README.md"]);
-    commit_all(path, "initial commit");
-}
-
-fn commit_all(path: &Path, message: &str) {
-    run_git(
-        path,
-        [
-            "-c",
-            "user.name=Scope Tests",
-            "-c",
-            "user.email=scope-tests@example.com",
-            "commit",
-            "-m",
-            message,
-        ],
-    );
-}
-
-fn run_git<const N: usize>(path: &Path, args: [&str; N]) {
-    let output = Command::new("git")
-        .current_dir(path)
-        .args(args)
-        .output()
-        .unwrap();
-    assert_success(&output, "git command");
-}
-
-fn assert_success(output: &Output, action: &str) {
-    assert!(
-        output.status.success(),
-        "{action} failed\nstdout:\n{}\nstderr:\n{}",
-        String::from_utf8_lossy(&output.stdout),
-        String::from_utf8_lossy(&output.stderr)
-    );
-}
-
-fn assert_failure(output: &Output, action: &str) {
-    assert!(
-        !output.status.success(),
-        "{action} unexpectedly succeeded\nstdout:\n{}\nstderr:\n{}",
-        String::from_utf8_lossy(&output.stdout),
-        String::from_utf8_lossy(&output.stderr)
-    );
-}
-
-fn unix_nanos() -> u128 {
-    SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .unwrap()
-        .as_nanos()
 }

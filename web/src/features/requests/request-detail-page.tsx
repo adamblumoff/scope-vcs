@@ -61,7 +61,7 @@ import {
 
 export function RequestUnavailablePage({ params }: { params: RepoParams }) {
   return (
-    <RepoShell active="requests" canManage={false} params={params}>
+    <RepoShell params={params}>
       <PageContent>
         <PageHeader
           actions={(
@@ -142,11 +142,7 @@ export function RequestDetailPage(props: RequestDetailPageProps) {
   } = useRequestDetailController(props)
 
   return (
-    <RepoShell
-      active="requests"
-      canManage={live.repo.access.actor !== 'Public'}
-      params={params}
-    >
+    <RepoShell params={params}>
       <PageContent>
         <RequestDetailHeader
           live={live}

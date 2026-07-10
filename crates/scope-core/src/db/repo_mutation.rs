@@ -1,7 +1,6 @@
 use super::{
-    MetadataStore, acquire_metadata_write_lock,
-    cleanup_queue::queue_pending_source_blob_deletion_rows, entities, repository_from_model,
-    repository_rows::save_repository_row,
+    MetadataStore, acquire_aggregate_lock, cleanup_queue::queue_pending_source_blob_deletion_rows,
+    entities, repository_from_model, repository_rows::save_repository_delta,
 };
 use crate::{
     domain::store::{SourceBlob, StoredRepository, repo_id},
@@ -49,15 +48,16 @@ impl MetadataStore {
         let name = name.to_string();
         let db = Arc::clone(&self.db);
         let tx = db.as_ref().begin().await.map_err(ApiError::internal)?;
-        acquire_metadata_write_lock(&tx).await?;
+        acquire_aggregate_lock(&tx, "repository", &repo_id).await?;
         let repo = entities::repository::Entity::find_by_id(repo_id)
             .one(&tx)
             .await
             .map_err(ApiError::internal)?
             .ok_or_else(|| ApiError::not_found(format!("repo {owner}/{name} not found")))?;
         let mut repo = repository_from_model(&tx, repo).await?;
+        let before = repo.clone();
         let mutation = op(&mut repo)?;
-        save_repository_row(&tx, &repo).await?;
+        save_repository_delta(&tx, &before, &repo).await?;
         if !mutation.source_blobs_to_delete.is_empty() {
             queue_pending_source_blob_deletion_rows(&tx, mutation.source_blobs_to_delete).await?;
         }

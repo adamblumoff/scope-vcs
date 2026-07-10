@@ -15,6 +15,7 @@ mod entities;
 mod locks;
 mod metadata_reset;
 mod outbox;
+mod projection_encoding;
 mod projection_read_models;
 mod repo_change_notifications;
 mod repo_collaboration;
@@ -38,7 +39,7 @@ use crate::domain::store::{RepositoryInvite, RepositoryMember, StoredRepository,
 use crate::error::ApiError;
 #[cfg(any(test, feature = "test-support"))]
 pub use clerk_users::scope_user_id_for_auth_identity;
-use locks::{acquire_metadata_read_lock, acquire_metadata_write_lock, ensure_metadata_lock_row};
+use locks::{acquire_aggregate_lock, ensure_metadata_lock_row};
 pub use metadata_reset::MetadataResetEvent;
 use metadata_reset::{
     insert_metadata_reset_event, metadata_reset_event_from_model, new_operator_metadata_reset_event,
@@ -145,10 +146,10 @@ impl MetadataStore {
             .all(self.db.as_ref())
             .await
             .map_err(ApiError::internal)?;
-        Ok(events
+        events
             .into_iter()
             .map(metadata_reset_event_from_model)
-            .collect())
+            .collect::<Result<Vec<_>, _>>()
     }
 
     pub async fn reset_catalog(&self, reason: &str) -> Result<MetadataResetEvent, ApiError> {

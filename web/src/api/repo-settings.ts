@@ -15,10 +15,11 @@ import type {
   RepoParams,
   UpdateRepoMemberInput,
 } from './types'
+import { ApiRouteTemplates, buildApiPath } from './types.generated'
 
 export async function deleteRepoForRequest(data: DeleteRepoInput) {
   return createApiClient().delete<DeleteRepoResponse>(
-    `/v1/repos/${data.owner}/${data.repo}`,
+    repoRoute(ApiRouteTemplates.repo, data),
     { auth: 'required' },
   )
 }
@@ -27,7 +28,7 @@ export async function loadRepoCollaborationForRequest(
   data: RepoParams,
 ): Promise<RepoCollaboration> {
   return createApiClient().get<RepoCollaboration>(
-    `/v1/repos/${data.owner}/${data.repo}/members`,
+    repoRoute(ApiRouteTemplates.repoMembers, data),
     { auth: 'required' },
   )
 }
@@ -36,7 +37,7 @@ export async function createRepoInviteForRequest(
   data: CreateRepoInviteInput,
 ): Promise<CreateRepoInviteResponse> {
   return createApiClient().post<CreateRepoInviteResponse>(
-    `/v1/repos/${data.owner}/${data.repo}/invites`,
+    repoRoute(ApiRouteTemplates.repoInvites, data),
     {
       auth: 'required',
       body: {
@@ -51,7 +52,11 @@ export async function updateRepoMemberForRequest(
   data: UpdateRepoMemberInput,
 ): Promise<RepoMember> {
   return createApiClient().patch<RepoMember>(
-    `/v1/repos/${data.owner}/${data.repo}/members/${data.member_user_id}`,
+    buildApiPath(ApiRouteTemplates.repoMember, {
+      owner: data.owner,
+      repo: data.repo,
+      member_user_id: data.member_user_id,
+    }),
     {
       auth: 'required',
       body: {
@@ -65,7 +70,11 @@ export async function deleteRepoMemberForRequest(
   data: DeleteRepoMemberInput,
 ): Promise<RepoMember> {
   return createApiClient().delete<RepoMember>(
-    `/v1/repos/${data.owner}/${data.repo}/members/${data.member_user_id}`,
+    buildApiPath(ApiRouteTemplates.repoMember, {
+      owner: data.owner,
+      repo: data.repo,
+      member_user_id: data.member_user_id,
+    }),
     { auth: 'required' },
   )
 }
@@ -74,7 +83,11 @@ export async function deleteRepoInviteForRequest(
   data: DeleteRepoInviteInput,
 ): Promise<RepoInvite> {
   return createApiClient().delete<RepoInvite>(
-    `/v1/repos/${data.owner}/${data.repo}/invites/${data.invite_id}`,
+    buildApiPath(ApiRouteTemplates.repoInvite, {
+      owner: data.owner,
+      repo: data.repo,
+      invite_id: data.invite_id,
+    }),
     { auth: 'required' },
   )
 }
@@ -83,7 +96,7 @@ export async function loadRepoInviteForRequest(
   data: RepoInviteTokenInput,
 ): Promise<RepoInviteLookup> {
   return createApiClient().get<RepoInviteLookup>(
-    `/v1/repository-invites/${data.token}`,
+    buildApiPath(ApiRouteTemplates.repositoryInvite, { token: data.token }),
     { auth: 'optional' },
   )
 }
@@ -92,7 +105,13 @@ export async function acceptRepoInviteForRequest(
   data: RepoInviteTokenInput,
 ): Promise<AcceptRepoInviteResponse> {
   return createApiClient().post<AcceptRepoInviteResponse>(
-    `/v1/repository-invites/${data.token}/accept`,
+    buildApiPath(ApiRouteTemplates.repositoryInviteAccept, {
+      token: data.token,
+    }),
     { auth: 'required' },
   )
+}
+
+function repoRoute(template: string, data: RepoParams) {
+  return buildApiPath(template, { owner: data.owner, repo: data.repo })
 }

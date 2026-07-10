@@ -26,18 +26,18 @@ pub mod projection_read_model {
         pub fn live(
             repo_id: &str,
             repo_version: u64,
-            audience: &str,
+            audience: ProjectionAudience,
             rebuilt_at_unix: u64,
             file_count: usize,
-        ) -> Self {
-            Self {
+        ) -> Result<Self, ApiError> {
+            Ok(Self {
                 repo_id: repo_id.to_string(),
-                repo_version: u64_to_i64_saturating(repo_version),
-                source: "live".to_string(),
-                audience: audience.to_string(),
-                rebuilt_at_unix: u64_to_i64_saturating(rebuilt_at_unix),
-                file_count: usize_to_i64_saturating(file_count),
-            }
+                repo_version: u64_to_i64(repo_version, "projection repository version")?,
+                source: ProjectionSource::Live.as_str().to_string(),
+                audience: audience.as_str().to_string(),
+                rebuilt_at_unix: u64_to_i64(rebuilt_at_unix, "projection rebuild time")?,
+                file_count: usize_to_i64(file_count, "projection file count")?,
+            })
         }
     }
 }
@@ -75,15 +75,15 @@ pub mod projection_file {
         pub fn live(
             repo_id: &str,
             repo_version: u64,
-            audience: &str,
+            audience: ProjectionAudience,
             file: ProjectionViewFile,
         ) -> Result<Self, ApiError> {
             let path_key = projection_file_path_key(&file.path);
             Ok(Self {
                 repo_id: repo_id.to_string(),
-                repo_version: u64_to_i64_saturating(repo_version),
-                source: "live".to_string(),
-                audience: audience.to_string(),
+                repo_version: u64_to_i64(repo_version, "projection repository version")?,
+                source: ProjectionSource::Live.as_str().to_string(),
+                audience: audience.as_str().to_string(),
                 path_key,
                 path: file.path.as_str().to_string(),
                 oid: file.oid,
