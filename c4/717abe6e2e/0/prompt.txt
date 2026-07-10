@@ -1,0 +1,1 @@
+Okay, so I deleted that service that you worked through because it's not how I want to configure. So I set up a new scope core service that you need to work with and monitor and change accordingly. If I have something configured wrong, just tell me and I'll change it.
