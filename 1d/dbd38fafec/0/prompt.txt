@@ -1,0 +1,1 @@
+i'm viewing this from a remote machine, so the plan needs to be via the tailscale ip
