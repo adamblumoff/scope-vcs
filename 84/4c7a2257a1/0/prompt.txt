@@ -1,0 +1,1 @@
+it should merge but only after a pop up that says something like "are you sure you want to merge this into 'whatever main is now'" kind of dialog.
