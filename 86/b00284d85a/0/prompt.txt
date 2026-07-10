@@ -1,0 +1,33 @@
+You are running a scheduled Codex automation on Linux.
+
+Automation metadata:
+- id: update-linear-completed-projects
+- name: update linear completed projects
+- rrule: RRULE:FREQ=WEEKLY;BYHOUR=9;BYMINUTE=0;BYDAY=SU,MO,TU,WE,TH,FR,SA
+- manual/scheduler run time: 2026-06-30T09:41:37.510419-05:00
+- workspace: /home/adam-blumoff/code/scope-vcs
+- memory file: /home/adam-blumoff/.codex/automations/update-linear-completed-projects/memory.md
+
+Original automation prompt:
+<automation_prompt>
+go through the [@linear](plugin://linear@openai-curated-remote) completed projects in the last day. if there are no completed projects in the last 24 hours, just stop. otherwise, for each completed project please go through the codex session logs that correspond to each completed project and update that project with the final state of how it was implemented. Also check T3 Code chat history for matching project names, issue IDs, PRs, commits, and dates; use ${T3CODE_HOME:-$HOME/.t3}/userdata/state.sqlite first, especially projection_threads, projection_thread_messages, projection_thread_activities, and projection_turns, and only fall back to .t3/userdata/logs/provider/<thread_id>.log* if needed. if you can't find the relevant context, go onto the next project and i'll help you find the context.
+</automation_prompt>
+
+Prior automation memory:
+<automation_memory>
+# Update Linear Completed Projects Automation Memory
+
+- Last run: 2026-06-29T09:06:26.6978220-05:00.
+- Linear query: listed projects updated in the last day and filtered completed projects.
+- Completed projects found and processed:
+  - `Object Store Module Split` (`completedAt` 2026-06-28T16:29:59.695Z): matched to Codex session `rollout-2026-06-28T10-09-46-019f0ec7-899e-7ff2-96ac-59cf9db77868.jsonl`; added final project status update `4158267e-27ce-4a2e-9b18-676ffaee43a6` covering PR #66, merge commit `a2a4a22`, object-store module split, preserved behavior, verification, and `ADA-41` closure.
+  - `Visibility & Projection Semantics` (`completedAt` 2026-06-28T23:13:54.093Z): matched to Codex session `rollout-2026-06-28T10-28-41-019f0ed8-cc29-7d00-b262-204691642c5a.jsonl`; added final project status update `8969c5eb-e750-4215-a874-7586ef75625c` covering PR #67, projection semantics, PR #69 live refresh/`ADA-28`, public redacted invalidation follow-up, verification, and `ADA-20`/`ADA-28`/`ADA-29` closure.
+- Existing project comments were empty for both projects; final state was recorded as project status updates.
+
+</automation_memory>
+
+Run this automation to completion now for today's scheduled run. Keep the
+workspace and user instructions in force. Before your final response, update
+the memory file above with a concise latest-run summary including the run time,
+important actions taken, verification, and any blockers or gaps that matter for
+the next run.
