@@ -1,0 +1,1 @@
+can you transfer the two automations i have on windows onto this remote linux box? after you set them up and make sure they're going to run, go ahead and manually trigger once to make sure that we have our automations done for today
