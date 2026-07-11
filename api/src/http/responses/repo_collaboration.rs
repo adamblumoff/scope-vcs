@@ -6,14 +6,14 @@ use crate::domain::store::{
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Serialize)]
-#[cfg_attr(test, derive(ts_rs::TS))]
+#[cfg_attr(feature = "type-export", derive(ts_rs::TS))]
 pub(crate) struct RepositoryCollaborationResponse {
     pub(crate) members: Vec<RepositoryMemberResponse>,
     pub(crate) invites: Vec<RepositoryInviteResponse>,
 }
 
 #[derive(Debug, Serialize)]
-#[cfg_attr(test, derive(ts_rs::TS))]
+#[cfg_attr(feature = "type-export", derive(ts_rs::TS))]
 pub(crate) struct RepositoryMemberResponse {
     pub(crate) user_id: String,
     pub(crate) handle: String,
@@ -24,7 +24,7 @@ pub(crate) struct RepositoryMemberResponse {
 }
 
 #[derive(Debug, Serialize)]
-#[cfg_attr(test, derive(ts_rs::TS))]
+#[cfg_attr(feature = "type-export", derive(ts_rs::TS))]
 pub(crate) struct RepositoryInviteResponse {
     pub(crate) id: String,
     pub(crate) invited_email: String,
@@ -34,27 +34,27 @@ pub(crate) struct RepositoryInviteResponse {
 }
 
 #[derive(Debug, Deserialize)]
-#[cfg_attr(test, derive(ts_rs::TS))]
+#[cfg_attr(feature = "type-export", derive(ts_rs::TS))]
 pub(crate) struct CreateRepositoryInviteRequest {
     pub(crate) email: String,
     pub(crate) permissions: RepositoryMemberPermissions,
 }
 
 #[derive(Debug, Serialize)]
-#[cfg_attr(test, derive(ts_rs::TS))]
+#[cfg_attr(feature = "type-export", derive(ts_rs::TS))]
 pub(crate) struct CreateRepositoryInviteResponse {
     pub(crate) invite: RepositoryInviteResponse,
     pub(crate) invite_url: String,
 }
 
 #[derive(Debug, Deserialize)]
-#[cfg_attr(test, derive(ts_rs::TS))]
+#[cfg_attr(feature = "type-export", derive(ts_rs::TS))]
 pub(crate) struct UpdateRepositoryMemberRequest {
     pub(crate) permissions: RepositoryMemberPermissions,
 }
 
 #[derive(Debug, Serialize)]
-#[cfg_attr(test, derive(ts_rs::TS))]
+#[cfg_attr(feature = "type-export", derive(ts_rs::TS))]
 pub(crate) struct RepositoryInviteLookupResponse {
     pub(crate) repo_id: String,
     pub(crate) owner_handle: String,
@@ -65,7 +65,7 @@ pub(crate) struct RepositoryInviteLookupResponse {
 }
 
 #[derive(Debug, Serialize)]
-#[cfg_attr(test, derive(ts_rs::TS))]
+#[cfg_attr(feature = "type-export", derive(ts_rs::TS))]
 pub(crate) struct AcceptRepositoryInviteResponse {
     pub(crate) repo: RepoSummaryResponse,
     pub(crate) member: RepositoryMemberResponse,

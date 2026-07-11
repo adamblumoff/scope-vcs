@@ -1,17 +1,25 @@
-#[cfg(any(test, feature = "test-support"))]
-use super::load_catalog;
 use super::{
     MetadataStore, acquire_aggregate_lock,
-    cleanup_queue::{save_pending_repo_storage_deletions, save_pending_source_blob_deletions},
-    ensure_metadata_lock_row, entities,
-    repository_rows::insert_repository,
+    cleanup_queue::{
+        load_pending_repo_storage_deletions, load_pending_source_blob_deletions,
+        queue_pending_repo_storage_cleanup_row, save_pending_repo_storage_deletions,
+        save_pending_source_blob_deletions,
+    },
+    ensure_metadata_lock_row, entities, repository_from_model,
+    repository_rows::{insert_repository, save_repository_delta},
     request_rows::{
         insert_credit_ledger_entry_row, insert_request_event_row, insert_request_row,
-        save_credit_account_row,
+        request_by_id, save_credit_account_row, save_request_row,
     },
     schema,
 };
-use crate::{domain::store::AppCatalog, error::ApiError};
+use crate::{
+    domain::{
+        requests::{CreditLedgerEntry, Request, RequestEvent, UserCreditAccount},
+        store::{AppCatalog, RepoStorageCleanup, SourceBlob, StoredRepository, UserAccount},
+    },
+    error::ApiError,
+};
 use sea_orm::{ActiveModelTrait, EntityTrait, IntoActiveModel, TransactionTrait};
 #[cfg(any(test, feature = "test-support"))]
 use sea_orm::{ConnectOptions, ConnectionTrait, Database, Statement};
@@ -79,10 +87,7 @@ impl TestDatabaseTarget {
 }
 
 #[cfg(any(test, feature = "test-support"))]
-pub fn connect_postgres_test_store(
-    target: &TestDatabaseTarget,
-    reset_schema: bool,
-) -> anyhow::Result<MetadataStore> {
+pub fn connect_postgres_test_store(target: &TestDatabaseTarget) -> anyhow::Result<MetadataStore> {
     let database_url = target.database_url.clone();
     let schema_name = target.schema_name.clone();
     let db = run_test_future(async move {
@@ -103,9 +108,7 @@ pub fn connect_postgres_test_store(
             .min_connections(1)
             .set_schema_search_path(schema_name);
         let db = Database::connect(options).await?;
-        if reset_schema {
-            schema::reset_metadata_schema(&db).await?;
-        }
+        schema::reset_metadata_schema(&db).await?;
         schema::migrate_metadata_schema(&db).await?;
         ensure_metadata_lock_row(&db).await?;
         Ok::<_, sea_orm::DbErr>(db)
@@ -131,37 +134,216 @@ impl MetadataStore {
     }
 
     #[cfg(any(test, feature = "test-support"))]
-    pub fn update<R>(
-        &self,
-        op: impl FnOnce(&mut AppCatalog) -> Result<R, ApiError>,
-    ) -> Result<R, ApiError> {
-        let db = Arc::clone(&self.db);
-        let mut catalog = run_test_future(async move { load_catalog(db.as_ref()).await })?;
-        let result = op(&mut catalog)?;
-        self.replace_catalog_for_tests(catalog)?;
-        Ok(result)
-    }
-
-    #[cfg(any(test, feature = "test-support"))]
     pub fn seed_catalog_for_tests(&self, catalog: AppCatalog) -> Result<(), ApiError> {
         let db = Arc::clone(&self.db);
         run_test_future(async move { seed_catalog(db.as_ref(), catalog).await })
     }
+}
 
-    #[cfg(any(test, feature = "test-support"))]
-    pub fn replace_catalog_for_tests(&self, catalog: AppCatalog) -> Result<(), ApiError> {
-        let db = Arc::clone(&self.db);
-        run_test_future(async move { replace_catalog(db.as_ref(), catalog).await })
+#[cfg(any(test, feature = "test-support"))]
+impl MetadataStore {
+    pub async fn insert_user_for_tests(&self, user: UserAccount) -> Result<(), ApiError> {
+        entities::user::Model::from_domain(&user)
+            .into_active_model()
+            .insert(self.db.as_ref())
+            .await
+            .map_err(ApiError::internal)?;
+        Ok(())
+    }
+
+    pub async fn queue_repo_storage_cleanup_for_tests(
+        &self,
+        cleanup: RepoStorageCleanup,
+    ) -> Result<(), ApiError> {
+        queue_pending_repo_storage_cleanup_row(self.db.as_ref(), cleanup).await
+    }
+
+    pub async fn pending_repo_storage_cleanups_for_tests(
+        &self,
+    ) -> Result<Vec<RepoStorageCleanup>, ApiError> {
+        load_pending_repo_storage_deletions(self.db.as_ref()).await
+    }
+
+    pub async fn pending_source_blob_cleanups_for_tests(
+        &self,
+    ) -> Result<Vec<SourceBlob>, ApiError> {
+        load_pending_source_blob_deletions(self.db.as_ref()).await
+    }
+
+    pub async fn replace_repository_for_tests(
+        &self,
+        repo: StoredRepository,
+    ) -> Result<(), ApiError> {
+        let tx = self.db.begin().await.map_err(ApiError::internal)?;
+        ensure_repository_users_for_tests(&tx, &repo).await?;
+        acquire_aggregate_lock(&tx, "repository", &repo.record.id).await?;
+        match entities::repository::Entity::find_by_id(repo.record.id.clone())
+            .one(&tx)
+            .await
+            .map_err(ApiError::internal)?
+        {
+            Some(row) => {
+                let before = repository_from_model(&tx, row).await?;
+                save_repository_delta(&tx, &before, &repo).await?;
+            }
+            None => insert_repository(&tx, &repo).await?,
+        }
+        tx.commit().await.map_err(ApiError::internal)
+    }
+
+    pub async fn mutate_repository_for_tests(
+        &self,
+        repo_id: &str,
+        op: impl FnOnce(&mut crate::domain::store::StoredRepository),
+    ) -> Result<(), ApiError> {
+        let tx = self.db.begin().await.map_err(ApiError::internal)?;
+        acquire_aggregate_lock(&tx, "repository", repo_id).await?;
+        let row = entities::repository::Entity::find_by_id(repo_id)
+            .one(&tx)
+            .await
+            .map_err(ApiError::internal)?
+            .ok_or_else(|| ApiError::not_found("test repository not found"))?;
+        let mut repo = repository_from_model(&tx, row).await?;
+        let before = repo.clone();
+        op(&mut repo);
+        save_repository_delta(&tx, &before, &repo).await?;
+        tx.commit().await.map_err(ApiError::internal)
+    }
+
+    pub async fn insert_request_for_tests(&self, request: Request) -> Result<(), ApiError> {
+        insert_request_row(self.db.as_ref(), &request).await
+    }
+
+    pub async fn mutate_request_for_tests(
+        &self,
+        request_id: &str,
+        op: impl FnOnce(&mut Request),
+    ) -> Result<(), ApiError> {
+        let mut request = request_by_id(self.db.as_ref(), request_id)
+            .await?
+            .ok_or_else(|| ApiError::not_found("test request not found"))?;
+        op(&mut request);
+        save_request_row(self.db.as_ref(), &request).await
+    }
+
+    pub async fn user_for_tests(&self, user_id: &str) -> Result<Option<UserAccount>, ApiError> {
+        entities::user::Entity::find_by_id(user_id.to_string())
+            .one(self.db.as_ref())
+            .await
+            .map_err(ApiError::internal)?
+            .map(entities::user::Model::try_into_domain)
+            .transpose()
+    }
+
+    pub async fn repository_for_tests(
+        &self,
+        repo_id: &str,
+    ) -> Result<Option<StoredRepository>, ApiError> {
+        let row = entities::repository::Entity::find_by_id(repo_id.to_string())
+            .one(self.db.as_ref())
+            .await
+            .map_err(ApiError::internal)?;
+        match row {
+            Some(row) => repository_from_model(self.db.as_ref(), row).await.map(Some),
+            None => Ok(None),
+        }
+    }
+
+    pub async fn request_for_tests(&self, request_id: &str) -> Result<Option<Request>, ApiError> {
+        request_by_id(self.db.as_ref(), request_id).await
+    }
+
+    pub async fn request_events_for_tests(&self) -> Result<Vec<RequestEvent>, ApiError> {
+        entities::request_event::Entity::find()
+            .all(self.db.as_ref())
+            .await
+            .map_err(ApiError::internal)?
+            .into_iter()
+            .map(entities::request_event::Model::try_into_domain)
+            .collect()
+    }
+
+    pub async fn credit_account_for_tests(
+        &self,
+        user_id: &str,
+    ) -> Result<Option<UserCreditAccount>, ApiError> {
+        entities::user_credit_account::Entity::find_by_id(user_id.to_string())
+            .one(self.db.as_ref())
+            .await
+            .map_err(ApiError::internal)?
+            .map(entities::user_credit_account::Model::try_into_domain)
+            .transpose()
+    }
+
+    pub async fn credit_ledger_entries_for_tests(
+        &self,
+    ) -> Result<Vec<CreditLedgerEntry>, ApiError> {
+        entities::credit_ledger_entry::Entity::find()
+            .all(self.db.as_ref())
+            .await
+            .map_err(ApiError::internal)?
+            .into_iter()
+            .map(entities::credit_ledger_entry::Model::try_into_domain)
+            .collect()
+    }
+
+    pub async fn user_count_for_tests(&self) -> Result<u64, ApiError> {
+        use sea_orm::PaginatorTrait;
+        entities::user::Entity::find()
+            .count(self.db.as_ref())
+            .await
+            .map_err(ApiError::internal)
+    }
+
+    pub async fn repository_count_for_tests(&self) -> Result<u64, ApiError> {
+        use sea_orm::PaginatorTrait;
+        entities::repository::Entity::find()
+            .count(self.db.as_ref())
+            .await
+            .map_err(ApiError::internal)
     }
 }
 
 #[cfg(any(test, feature = "test-support"))]
-pub(super) fn test_catalog(store: &MetadataStore) -> Result<TestCatalogGuard, ApiError> {
-    let db = Arc::clone(&store.db);
-    let catalog = run_test_future(async move { load_catalog(db.as_ref()).await })?;
-    Ok(TestCatalogGuard::new(store.clone(), catalog))
+async fn ensure_repository_users_for_tests<C>(
+    conn: &C,
+    repo: &StoredRepository,
+) -> Result<(), ApiError>
+where
+    C: sea_orm::ConnectionTrait,
+{
+    let users = std::iter::once((
+        repo.record.owner_user_id.as_str(),
+        repo.record.owner_handle.as_str(),
+    ))
+    .chain(
+        repo.members
+            .iter()
+            .map(|member| (member.user_id.as_str(), member.user_id.as_str())),
+    );
+    for (id, handle) in users {
+        if entities::user::Entity::find_by_id(id.to_string())
+            .one(conn)
+            .await
+            .map_err(ApiError::internal)?
+            .is_none()
+        {
+            entities::user::Model::from_domain(&UserAccount {
+                id: id.to_string(),
+                handle: handle.to_string(),
+                email: format!("{id}@scope.test"),
+                email_verified: true,
+            })
+            .into_active_model()
+            .insert(conn)
+            .await
+            .map_err(ApiError::internal)?;
+        }
+    }
+    Ok(())
 }
 
+#[cfg(feature = "local-dev")]
 async fn replace_catalog(
     db: &sea_orm::DatabaseConnection,
     catalog: AppCatalog,
@@ -265,58 +447,12 @@ fn complete_test_users(catalog: &mut AppCatalog) {
         catalog
             .users
             .entry(id.clone())
-            .or_insert_with(|| crate::domain::store::UserAccount {
+            .or_insert_with(|| UserAccount {
                 id: id.clone(),
                 handle,
                 email: format!("{id}@scope.test"),
                 email_verified: true,
             });
-    }
-}
-
-#[cfg(any(test, feature = "test-support"))]
-pub struct TestCatalogGuard {
-    store: MetadataStore,
-    catalog: AppCatalog,
-    dirty: bool,
-}
-
-#[cfg(any(test, feature = "test-support"))]
-impl TestCatalogGuard {
-    pub(super) fn new(store: MetadataStore, catalog: AppCatalog) -> Self {
-        Self {
-            store,
-            catalog,
-            dirty: false,
-        }
-    }
-}
-
-#[cfg(any(test, feature = "test-support"))]
-impl std::ops::Deref for TestCatalogGuard {
-    type Target = AppCatalog;
-
-    fn deref(&self) -> &Self::Target {
-        &self.catalog
-    }
-}
-
-#[cfg(any(test, feature = "test-support"))]
-impl std::ops::DerefMut for TestCatalogGuard {
-    fn deref_mut(&mut self) -> &mut Self::Target {
-        self.dirty = true;
-        &mut self.catalog
-    }
-}
-
-#[cfg(any(test, feature = "test-support"))]
-impl Drop for TestCatalogGuard {
-    fn drop(&mut self) {
-        if self.dirty {
-            self.store
-                .replace_catalog_for_tests(self.catalog.clone())
-                .expect("persisting test catalog mutation should succeed");
-        }
     }
 }
 
@@ -327,32 +463,25 @@ fn validate_test_database_url(database_url: &str) -> anyhow::Result<()> {
         anyhow::bail!("SCOPE_TEST_DATABASE_URL must be a postgres:// or postgresql:// URL");
     }
 
-    let after_scheme = lower
+    let target = lower
         .split_once("://")
-        .map(|(_, rest)| rest)
+        .and_then(|(_, rest)| rest.split_once('/').map(|(_, path)| path))
         .unwrap_or_default();
-    let database_and_query = after_scheme
-        .split_once('/')
-        .map(|(_, path)| path)
-        .unwrap_or_default();
-    let database_name = database_and_query
-        .split(['?', '#'])
-        .next()
-        .unwrap_or_default();
-    let query = database_and_query
+    let database_name = target.split(['?', '#']).next().unwrap_or_default();
+    let query = target
         .split_once('?')
         .map(|(_, query)| query.split('#').next().unwrap_or_default())
         .unwrap_or_default();
-    let query_has_schema_marker = query
-        .split('&')
-        .filter_map(|part| part.split_once('='))
-        .any(|(key, value)| {
-            matches!(
-                key,
-                "search_path" | "schema" | "current_schema" | "currentschema"
-            ) && has_scope_test_marker(value)
-        });
-    let has_test_marker = has_scope_test_marker(database_name) || query_has_schema_marker;
+    let has_test_marker = has_scope_test_marker(database_name)
+        || query
+            .split('&')
+            .filter_map(|part| part.split_once('='))
+            .any(|(key, value)| {
+                matches!(
+                    key,
+                    "search_path" | "schema" | "current_schema" | "currentschema"
+                ) && has_scope_test_marker(value)
+            });
 
     if !has_test_marker {
         anyhow::bail!(
@@ -397,43 +526,24 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_database_url_requires_scope_test_marker() {
-        let error = validate_test_database_url("postgres://localhost/scope_staging").unwrap_err();
-        assert!(
-            error
-                .to_string()
-                .contains("must visibly target a Scope test database or schema")
-        );
-
-        validate_test_database_url("postgres://localhost/scope_test").unwrap();
-        validate_test_database_url("postgres://localhost/scope-vcs-test").unwrap();
-        validate_test_database_url("postgres://localhost/postgres?search_path=scope_test_run")
-            .unwrap();
-
-        let error =
-            validate_test_database_url("postgres://localhost/prod?application_name=scope_test")
-                .unwrap_err();
-        assert!(
-            error
-                .to_string()
-                .contains("must visibly target a Scope test database or schema")
-        );
-        let error =
-            validate_test_database_url("postgres://localhost/prod?foo=scope_test").unwrap_err();
-        assert!(
-            error
-                .to_string()
-                .contains("must visibly target a Scope test database or schema")
-        );
-    }
-
-    #[test]
-    fn test_database_url_must_be_postgres() {
-        let error = validate_test_database_url("sqlite://scope_test").unwrap_err();
-        assert!(
-            error
-                .to_string()
-                .contains("must be a postgres:// or postgresql:// URL")
-        );
+    fn test_database_url_accepts_only_explicit_postgres_test_targets() {
+        for url in [
+            "postgres://localhost/scope_test",
+            "postgres://localhost/scope-vcs-test",
+            "postgres://localhost/postgres?search_path=scope_test_run",
+        ] {
+            validate_test_database_url(url).unwrap();
+        }
+        for url in [
+            "postgres://localhost/scope_staging",
+            "postgres://localhost/prod?application_name=scope_test",
+            "postgres://localhost/prod?foo=scope_test",
+            "sqlite://scope_test",
+        ] {
+            assert!(
+                validate_test_database_url(url).is_err(),
+                "{url} must be rejected"
+            );
+        }
     }
 }

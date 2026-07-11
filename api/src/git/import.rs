@@ -9,7 +9,7 @@ pub(crate) use self::repo_io::{
     git_refs, git_snapshot_from_ref, run_git, run_git_output, safe_repo_key, validate_pushed_tree,
 };
 #[cfg(test)]
-pub(crate) use self::repo_io::{git_stdout_text, git_tree_files, validate_pushed_file_path};
+pub(crate) use self::repo_io::{git_stdout_text, validate_pushed_file_path};
 #[cfg(test)]
 pub(crate) use self::staging::ReceivePackFileChange;
 pub(crate) use self::staging::ReceivePackUpdate;
@@ -21,23 +21,6 @@ use crate::{
     git::PersistedReceivePackUpdate,
     state::{AppState, repo_config_fingerprint},
 };
-
-#[cfg(test)]
-pub(crate) async fn persist_receive_pack_update(
-    state: &AppState,
-    owner: &str,
-    repo_name: &str,
-    update: ReceivePackUpdate,
-) -> Result<PersistedReceivePackUpdate, ApiError> {
-    Ok(state
-        .metadata
-        .mutate_repository(owner, repo_name, move |repo| {
-            ensure_receive_pack_base_matches(repo, &update)?;
-            apply_receive_pack_update(repo, update)?;
-            Ok(RepositoryMutation::new(PersistedReceivePackUpdate::Applied))
-        })
-        .await?)
-}
 
 pub(crate) async fn persist_receive_pack_update_and_promote(
     state: &AppState,

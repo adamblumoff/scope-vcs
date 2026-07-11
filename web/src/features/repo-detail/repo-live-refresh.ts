@@ -7,6 +7,13 @@ const RECONNECT_DELAY_MS = 2000
 
 type AuthTokenGetter = (options: { template: string }) => Promise<string | null>
 type StreamRepoEventsResult = 'closed'
+type RetryScheduler = (retry: () => void) => () => void
+
+export type RepoRefreshCoordinator = {
+  onEvent: (event: RepoChangeEvent) => void
+  onStreamInterrupted: () => void
+  stop: () => void
+}
 
 export function useRepoLiveRefresh(
   live: RepoLiveState | null,
@@ -20,113 +27,32 @@ export function useRepoLiveRefresh(
     }
 
     const controller = new AbortController()
+    const coordinator = createRepoRefreshCoordinator({
+      initialVersion: live.repo.change_version,
+      invalidate,
+      repoId: live.repo.id,
+      scheduleRetry: browserRetryScheduler,
+      versioned: usesVersionedRepoChangeEvents(live),
+    })
+
     let stopped = false
-    let highestAppliedVersion = live.repo.change_version
-    let forceRefreshPending = false
-    let pendingVersion: number | null = null
-    let refreshInFlight = false
-    let retryTimeout: number | null = null
-
-    const scheduleRetry = () => {
-      if (stopped || retryTimeout !== null) {
-        return
-      }
-      retryTimeout = window.setTimeout(() => {
-        retryTimeout = null
-        void flushRefresh()
-      }, RECONNECT_DELAY_MS)
-    }
-
-    const flushRefresh = async () => {
-      if (
-        stopped ||
-        refreshInFlight ||
-        (pendingVersion === null && !forceRefreshPending)
-      ) {
-        return
-      }
-
-      const version = pendingVersion
-      const forceRefresh = forceRefreshPending
-      pendingVersion = null
-      forceRefreshPending = false
-      refreshInFlight = true
-      let shouldRetry = false
-      try {
-        await invalidate()
-        if (version !== null) {
-          highestAppliedVersion = Math.max(highestAppliedVersion, version)
-        }
-      } catch (error) {
-        if (version !== null) {
-          pendingVersion = Math.max(pendingVersion ?? version, version)
-        }
-        forceRefreshPending ||= forceRefresh
-        shouldRetry = true
-      } finally {
-        refreshInFlight = false
-        if (stopped || (pendingVersion === null && !forceRefreshPending)) {
-          return
-        }
-        if (shouldRetry) {
-          scheduleRetry()
-        } else {
-          void flushRefresh()
-        }
-      }
-    }
-
-    const onEvent = (event: RepoChangeEvent) => {
-      if (event.repo_id !== live.repo.id) {
-        return
-      }
-      if (event.reason === 'connected') {
-        return
-      }
-      if (event.reason === 'lagged') {
-        forceRefreshPending = true
-        void flushRefresh()
-        return
-      }
-      if (event.version === 0 && usesVersionedRepoChangeEvents(live)) {
-        forceRefreshPending = true
-        void flushRefresh()
-        return
-      }
-      if (!usesVersionedRepoChangeEvents(live)) {
-        forceRefreshPending = true
-        void flushRefresh()
-        return
-      }
-      if (event.version <= highestAppliedVersion) {
-        return
-      }
-      pendingVersion = Math.max(pendingVersion ?? event.version, event.version)
-      void flushRefresh()
-    }
-
-    const onStreamInterrupted = () => {
-      forceRefreshPending = true
-      void flushRefresh()
-    }
-
     const run = async () => {
       while (!stopped) {
         try {
           const result = await streamRepoEvents(
             live,
             getToken,
-            onEvent,
+            coordinator.onEvent,
             controller.signal,
           )
           if (!controller.signal.aborted && result === 'closed') {
-            onStreamInterrupted()
+            coordinator.onStreamInterrupted()
           }
         } catch (error) {
           if (controller.signal.aborted) {
             return
           }
-          onStreamInterrupted()
+          coordinator.onStreamInterrupted()
         }
         if (!stopped) {
           await delay(RECONNECT_DELAY_MS, controller.signal)
@@ -137,15 +63,96 @@ export function useRepoLiveRefresh(
     void run()
     return () => {
       stopped = true
-      if (retryTimeout !== null) {
-        window.clearTimeout(retryTimeout)
-      }
+      coordinator.stop()
       controller.abort()
     }
   }, [getToken, invalidate, isLoaded, live])
 }
 
-export function usesVersionedRepoChangeEvents(live: RepoLiveState) {
+export function createRepoRefreshCoordinator({
+  initialVersion,
+  invalidate,
+  repoId,
+  scheduleRetry,
+  versioned,
+}: {
+  initialVersion: number
+  invalidate: () => Promise<unknown>
+  repoId: string
+  scheduleRetry: RetryScheduler
+  versioned: boolean
+}): RepoRefreshCoordinator {
+  let stopped = false
+  let highestAppliedVersion = initialVersion
+  let forceRefreshPending = false
+  let pendingVersion: number | null = null
+  let refreshInFlight = false
+  let cancelRetry: (() => void) | null = null
+
+  const flushRefresh = async () => {
+    if (stopped || refreshInFlight || (pendingVersion === null && !forceRefreshPending)) return
+
+    const version = pendingVersion
+    const forceRefresh = forceRefreshPending
+    pendingVersion = null
+    forceRefreshPending = false
+    refreshInFlight = true
+    try {
+      await invalidate()
+      if (version !== null) {
+        highestAppliedVersion = Math.max(highestAppliedVersion, version)
+        if (pendingVersion !== null && pendingVersion <= highestAppliedVersion) {
+          pendingVersion = null
+        }
+      }
+    } catch {
+      if (version !== null) pendingVersion = Math.max(pendingVersion ?? version, version)
+      forceRefreshPending ||= forceRefresh
+      if (!stopped && cancelRetry === null) {
+        cancelRetry = scheduleRetry(() => {
+          cancelRetry = null
+          void flushRefresh()
+        })
+      }
+      return
+    } finally {
+      refreshInFlight = false
+    }
+    if (!stopped && (pendingVersion !== null || forceRefreshPending)) void flushRefresh()
+  }
+
+  const requestRefresh = (version: number | null) => {
+    if (version === null) forceRefreshPending = true
+    else pendingVersion = Math.max(pendingVersion ?? version, version)
+    void flushRefresh()
+  }
+
+  return {
+    onEvent(event) {
+      if (stopped || event.repo_id !== repoId || event.reason === 'connected') return
+      if (event.reason === 'lagged' || !versioned || event.version === 0) {
+        requestRefresh(null)
+      } else if (event.version > highestAppliedVersion) {
+        requestRefresh(event.version)
+      }
+    },
+    onStreamInterrupted() {
+      if (!stopped) requestRefresh(null)
+    },
+    stop() {
+      stopped = true
+      cancelRetry?.()
+      cancelRetry = null
+    },
+  }
+}
+
+function browserRetryScheduler(retry: () => void) {
+  const timeout = window.setTimeout(retry, RECONNECT_DELAY_MS)
+  return () => window.clearTimeout(timeout)
+}
+
+function usesVersionedRepoChangeEvents(live: RepoLiveState) {
   return live.repo.access.actor !== 'Public'
 }
 

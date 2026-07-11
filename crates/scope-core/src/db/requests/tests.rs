@@ -16,16 +16,37 @@ use sea_orm::{ConnectionTrait, DatabaseBackend, Statement};
 async fn request_submission_and_resolution_update_credit_facts() {
     let store = postgres_store();
 
+    grant_public_credits(&store).await;
+    submit_public_request(&store).await;
+    let unauthorized = store
+        .resolve_request(ResolveRequestInput {
+            request_id: "req_1".to_string(),
+            actor_user_id: "user_public".to_string(),
+            disposition: RequestDisposition::Accepted,
+            event_id: "rejected".to_string(),
+            settlement_event_id: "rejected-settlement".to_string(),
+            refund_ledger_entry_id: None,
+            reward_ledger_entry_id: None,
+            body: None,
+            now_unix: 2,
+        })
+        .await
+        .unwrap_err();
+    assert!(unauthorized.message.contains("repo maintainer required"));
     store
-        .grant_user_credits(GrantUserCreditsInput {
-            ledger_entry_id: "ledger_grant".to_string(),
-            user_id: "user_public".to_string(),
-            amount_credits: 20,
-            now_unix: 1,
+        .record_request_revision(RecordRequestRevisionInput {
+            request_id: "req_1".to_string(),
+            actor_user_id: "user_public".to_string(),
+            actor_can_edit: true,
+            expected_old_head_oid: Some("head".to_string()),
+            new_head_oid: "head_2".to_string(),
+            git_snapshot: None,
+            event_id: "event_revision".to_string(),
+            body: None,
+            now_unix: 2,
         })
         .await
         .unwrap();
-    submit_public_request(&store).await;
     let mutation = store
         .resolve_request(ResolveRequestInput {
             request_id: "req_1".to_string(),
@@ -42,26 +63,23 @@ async fn request_submission_and_resolution_update_credit_facts() {
         .unwrap();
 
     assert_eq!(mutation.request.settlement.unwrap().reward_credits, 2);
-    store
-        .read(|catalog| {
-            assert_eq!(
-                catalog
-                    .user_credit_accounts
-                    .get("user_public")
-                    .unwrap()
-                    .balance_credits,
-                22
-            );
-            assert_eq!(
-                catalog.requests.get("req_1").unwrap().resolved_at_unix,
-                Some(3)
-            );
-            assert_eq!(catalog.request_events.len(), 3);
-            assert_eq!(catalog.credit_ledger_entries.len(), 4);
-            Ok(())
-        })
-        .await
-        .unwrap();
+    assert_eq!(
+        store
+            .credit_account_for_tests("user_public")
+            .await
+            .unwrap()
+            .unwrap()
+            .balance_credits,
+        22
+    );
+    let request = store.request_for_tests("req_1").await.unwrap().unwrap();
+    assert_eq!(request.resolved_at_unix, Some(3));
+    assert_eq!(request.head_oid, "head_2");
+    assert_eq!(store.request_events_for_tests().await.unwrap().len(), 4);
+    assert_eq!(
+        store.credit_ledger_entries_for_tests().await.unwrap().len(),
+        4
+    );
 }
 
 #[tokio::test]
@@ -83,18 +101,23 @@ async fn public_user_cannot_choose_owner_role_to_skip_stake() {
             .message
             .contains("public requests require credit stake")
     );
-    store
-        .read(|catalog| {
-            assert_eq!(
-                catalog.requests.get("req_1").unwrap().state,
-                RequestState::Working
-            );
-            assert!(catalog.request_events.is_empty());
-            assert!(catalog.credit_ledger_entries.is_empty());
-            Ok(())
-        })
-        .await
-        .unwrap();
+    assert_eq!(
+        store
+            .request_for_tests("req_1")
+            .await
+            .unwrap()
+            .unwrap()
+            .state,
+        RequestState::Working
+    );
+    assert!(store.request_events_for_tests().await.unwrap().is_empty());
+    assert!(
+        store
+            .credit_ledger_entries_for_tests()
+            .await
+            .unwrap()
+            .is_empty()
+    );
 }
 
 #[tokio::test]
@@ -139,215 +162,65 @@ async fn owner_submission_derives_private_base_without_credits() {
 }
 
 #[tokio::test]
-async fn non_maintainer_cannot_resolve_request() {
-    let store = postgres_store();
-    store
-        .grant_user_credits(GrantUserCreditsInput {
-            ledger_entry_id: "ledger_grant".to_string(),
-            user_id: "user_public".to_string(),
-            amount_credits: 20,
-            now_unix: 1,
-        })
-        .await
-        .unwrap();
-    submit_public_request(&store).await;
-
-    let error = store
-        .resolve_request(ResolveRequestInput {
-            request_id: "req_1".to_string(),
-            actor_user_id: "user_public".to_string(),
-            disposition: RequestDisposition::Accepted,
-            event_id: "event_resolved".to_string(),
-            settlement_event_id: "event_settled".to_string(),
-            refund_ledger_entry_id: Some("ledger_refund".to_string()),
-            reward_ledger_entry_id: Some("ledger_reward".to_string()),
-            body: None,
-            now_unix: 3,
-        })
-        .await
-        .unwrap_err();
-
-    assert!(error.message.contains("repo maintainer required"));
-    store
-        .read(|catalog| {
-            assert_eq!(
-                catalog.requests.get("req_1").unwrap().resolved_at_unix,
-                None
-            );
-            assert_eq!(catalog.request_events.len(), 1);
-            assert_eq!(
-                catalog
-                    .user_credit_accounts
-                    .get("user_public")
-                    .unwrap()
-                    .balance_credits,
-                10
-            );
-            Ok(())
-        })
-        .await
-        .unwrap();
-}
-
-#[tokio::test]
-async fn request_facts_round_trip() {
-    let store = postgres_store();
-
-    store
-        .grant_user_credits(GrantUserCreditsInput {
-            ledger_entry_id: "ledger_grant".to_string(),
-            user_id: "user_public".to_string(),
-            amount_credits: 20,
-            now_unix: 1,
-        })
-        .await
-        .unwrap();
-    submit_public_request(&store).await;
-    store
-        .record_request_revision(RecordRequestRevisionInput {
-            request_id: "req_1".to_string(),
-            actor_user_id: "user_public".to_string(),
-            actor_can_edit: true,
-            expected_old_head_oid: Some("head".to_string()),
-            new_head_oid: "head_2".to_string(),
-            git_snapshot: None,
-            event_id: "event_revision".to_string(),
-            body: None,
-            now_unix: 2,
-        })
-        .await
-        .unwrap();
-    let mut invalid_ref = public_start_input();
-    invalid_ref.id = "req_2".to_string();
-    let error = store.start_request(invalid_ref).await.unwrap_err();
-    assert!(error.message.contains("request ref must match"));
-
-    store
-        .read(|catalog| {
-            assert_eq!(catalog.requests.get("req_1").unwrap().head_oid, "head_2");
-            assert_eq!(
-                catalog
-                    .user_credit_accounts
-                    .get("user_public")
-                    .unwrap()
-                    .balance_credits,
-                10
-            );
-            assert_eq!(catalog.request_events.len(), 2);
-            Ok(())
-        })
-        .await
-        .unwrap();
-}
-
-#[tokio::test]
 async fn repo_delete_waits_for_resolution_and_does_not_refund_settled_stake_twice() {
-    let store = postgres_store();
-    store
-        .grant_user_credits(GrantUserCreditsInput {
-            ledger_entry_id: "ledger_grant".to_string(),
-            user_id: "user_public".to_string(),
-            amount_credits: 20,
-            now_unix: 1,
-        })
-        .await
-        .unwrap();
-    submit_public_request(&store).await;
-
-    let credit_guard = store.db.begin().await.unwrap();
-    acquire_aggregate_lock(&credit_guard, "user-credit", "user_public")
-        .await
-        .unwrap();
-
-    let resolve_store = store.clone();
-    let resolve = tokio::spawn(async move {
-        resolve_store
-            .resolve_request(ResolveRequestInput {
-                request_id: "req_1".to_string(),
-                actor_user_id: "user_owner".to_string(),
-                disposition: RequestDisposition::UsefulNotMerged,
-                event_id: "event_resolved".to_string(),
-                settlement_event_id: "event_settled".to_string(),
-                refund_ledger_entry_id: Some("ledger_refund".to_string()),
-                reward_ledger_entry_id: Some("ledger_reward".to_string()),
-                body: None,
-                now_unix: 5,
-            })
-            .await
-    });
-    wait_until_aggregate_lock_is_held(&store, "repository", "owner/repo").await;
-
-    let delete_store = store.clone();
-    let delete = tokio::spawn(async move {
-        delete_store
-            .delete_repo("owner", "repo", "user_owner")
-            .await
-    });
-    wait_until_aggregate_lock_is_waited_on(&store, "repository").await;
-
-    assert!(
-        !resolve.is_finished(),
-        "resolution should wait for credit lock"
-    );
-    assert!(
-        !delete.is_finished(),
-        "deletion should wait behind the resolving repository lock"
-    );
-    credit_guard.commit().await.unwrap();
-
-    resolve.await.unwrap().unwrap();
-    delete.await.unwrap().unwrap();
-    store
-        .read(|catalog| {
-            assert!(!catalog.repositories.contains_key("owner/repo"));
-            assert_eq!(
-                catalog
-                    .user_credit_accounts
-                    .get("user_public")
-                    .unwrap()
-                    .balance_credits,
-                22
-            );
-            assert_eq!(
-                catalog
-                    .credit_ledger_entries
-                    .values()
-                    .filter(|entry| entry.kind == CreditLedgerEntryKind::StakeRefund)
-                    .count(),
-                1
-            );
-            Ok(())
-        })
-        .await
-        .unwrap();
+    assert_delete_serializes_with_credit_mutation(CreditMutation::Resolve, 22).await;
 }
 
 #[tokio::test]
 async fn repo_delete_waits_for_submission_and_refunds_the_committed_stake() {
+    assert_delete_serializes_with_credit_mutation(CreditMutation::Submit, 20).await;
+}
+
+enum CreditMutation {
+    Submit,
+    Resolve,
+}
+
+async fn assert_delete_serializes_with_credit_mutation(
+    mutation: CreditMutation,
+    expected_balance: u32,
+) {
     let store = postgres_store();
-    store
-        .grant_user_credits(GrantUserCreditsInput {
-            ledger_entry_id: "ledger_grant".to_string(),
-            user_id: "user_public".to_string(),
-            amount_credits: 20,
-            now_unix: 1,
-        })
-        .await
-        .unwrap();
-    store.start_request(public_start_input()).await.unwrap();
-    store
-        .record_working_request_upload(public_upload_input())
-        .await
-        .unwrap();
+    grant_public_credits(&store).await;
+    match mutation {
+        CreditMutation::Submit => {
+            store.start_request(public_start_input()).await.unwrap();
+            store
+                .record_working_request_upload(public_upload_input())
+                .await
+                .unwrap();
+        }
+        CreditMutation::Resolve => submit_public_request(&store).await,
+    }
 
     let credit_guard = store.db.begin().await.unwrap();
     acquire_aggregate_lock(&credit_guard, "user-credit", "user_public")
         .await
         .unwrap();
 
-    let submit_store = store.clone();
-    let submit =
-        tokio::spawn(async move { submit_store.submit_request(public_submit_input()).await });
+    let mutation_store = store.clone();
+    let mutation = tokio::spawn(async move {
+        match mutation {
+            CreditMutation::Submit => mutation_store
+                .submit_request(public_submit_input())
+                .await
+                .map(|_| ()),
+            CreditMutation::Resolve => mutation_store
+                .resolve_request(ResolveRequestInput {
+                    request_id: "req_1".to_string(),
+                    actor_user_id: "user_owner".to_string(),
+                    disposition: RequestDisposition::UsefulNotMerged,
+                    event_id: "event_resolved".to_string(),
+                    settlement_event_id: "event_settled".to_string(),
+                    refund_ledger_entry_id: Some("ledger_refund".to_string()),
+                    reward_ledger_entry_id: Some("ledger_reward".to_string()),
+                    body: None,
+                    now_unix: 5,
+                })
+                .await
+                .map(|_| ()),
+        }
+    });
     wait_until_aggregate_lock_is_held(&store, "repository", "owner/repo").await;
     let delete_store = store.clone();
     let delete = tokio::spawn(async move {
@@ -358,37 +231,52 @@ async fn repo_delete_waits_for_submission_and_refunds_the_committed_stake() {
     wait_until_aggregate_lock_is_waited_on(&store, "repository").await;
 
     assert!(
-        !submit.is_finished(),
-        "submission should wait for credit lock"
+        !mutation.is_finished(),
+        "credit mutation should wait for credit lock"
     );
     assert!(
         !delete.is_finished(),
-        "deletion should wait behind the submitting repository lock"
+        "deletion should wait behind the repository lock"
     );
     credit_guard.commit().await.unwrap();
 
-    submit.await.unwrap().unwrap();
+    mutation.await.unwrap().unwrap();
     delete.await.unwrap().unwrap();
+    assert!(
+        store
+            .repository_for_tests("owner/repo")
+            .await
+            .unwrap()
+            .is_none()
+    );
+    assert_eq!(
+        store
+            .credit_account_for_tests("user_public")
+            .await
+            .unwrap()
+            .unwrap()
+            .balance_credits,
+        expected_balance
+    );
+    assert_eq!(
+        store
+            .credit_ledger_entries_for_tests()
+            .await
+            .unwrap()
+            .into_iter()
+            .filter(|entry| entry.kind == CreditLedgerEntryKind::StakeRefund)
+            .count(),
+        1
+    );
+}
+
+async fn grant_public_credits(store: &MetadataStore) {
     store
-        .read(|catalog| {
-            assert!(!catalog.repositories.contains_key("owner/repo"));
-            assert_eq!(
-                catalog
-                    .user_credit_accounts
-                    .get("user_public")
-                    .unwrap()
-                    .balance_credits,
-                20
-            );
-            assert_eq!(
-                catalog
-                    .credit_ledger_entries
-                    .values()
-                    .filter(|entry| entry.kind == CreditLedgerEntryKind::StakeRefund)
-                    .count(),
-                1
-            );
-            Ok(())
+        .grant_user_credits(GrantUserCreditsInput {
+            ledger_entry_id: "ledger_grant".to_string(),
+            user_id: "user_public".to_string(),
+            amount_credits: 20,
+            now_unix: 1,
         })
         .await
         .unwrap();

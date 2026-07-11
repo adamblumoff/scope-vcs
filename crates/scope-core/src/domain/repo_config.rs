@@ -300,22 +300,17 @@ mod tests {
         )
         .unwrap();
 
-        assert_eq!(
-            config.visibility_for_path(&ScopePath::parse("/README.md").unwrap()),
-            Visibility::Public
-        );
-        assert_eq!(
-            config.visibility_for_path(&ScopePath::parse("/src/lib.rs").unwrap()),
-            Visibility::Public
-        );
-        assert_eq!(
-            config.visibility_for_path(&ScopePath::parse("/src/secrets/key.txt").unwrap()),
-            Visibility::Private
-        );
-        assert_eq!(
-            config.visibility_for_path(&ScopePath::parse("/notes.txt").unwrap()),
-            Visibility::Private
-        );
+        for (path, expected) in [
+            ("/README.md", Visibility::Public),
+            ("/src/lib.rs", Visibility::Public),
+            ("/src/secrets/key.txt", Visibility::Private),
+            ("/notes.txt", Visibility::Private),
+        ] {
+            assert_eq!(
+                config.visibility_for_path(&ScopePath::parse(path).unwrap()),
+                expected
+            );
+        }
     }
 
     #[test]
@@ -332,14 +327,12 @@ mod tests {
         )
         .unwrap();
 
-        assert_eq!(
-            config.visibility_for_path(&ScopePath::parse("/.scope/repo.json").unwrap()),
-            Visibility::Private
-        );
-        assert_eq!(
-            config.visibility_for_path(&ScopePath::parse("/.scope").unwrap()),
-            Visibility::Private
-        );
+        for path in ["/.scope/repo.json", "/.scope"] {
+            assert_eq!(
+                config.visibility_for_path(&ScopePath::parse(path).unwrap()),
+                Visibility::Private
+            );
+        }
     }
 
     #[test]
@@ -362,61 +355,26 @@ mod tests {
     }
 
     #[test]
-    fn non_canonical_rule_paths_are_rejected() {
+    fn non_canonical_paths_are_rejected_in_rules_and_rewrites() {
         for path in ["/secrets//**", "/secrets/** ", "/README.md "] {
-            let config = format!(
-                r#"{{
-                    "kind": "scope.repo-config",
-                    "version": 1,
-                    "visibility": {{
-                        "default": "public",
-                        "rules": [
-                            {{ "path": "{path}", "visibility": "private" }}
-                        ]
-                    }}
-                }}"#
-            );
-
-            let error = RepoConfig::parse_json(config.as_bytes()).unwrap_err();
-
-            assert!(
-                matches!(
-                    error,
-                    RepoConfigError::InvalidSegment | RepoConfigError::RelativePath
+            for section in [
+                format!(r#""rules":[{{"path":"{path}","visibility":"private"}}]"#),
+                format!(
+                    r#""rules":[]}},"history":{{"rewrites":[{{"path":"{path}","action":"redact-public-history"}}]"#
                 ),
-                "{path} should be rejected, got {error:?}"
-            );
-        }
-    }
-
-    #[test]
-    fn non_canonical_rewrite_paths_are_rejected() {
-        for path in ["/secrets//**", "/secrets/** ", "/README.md "] {
-            let config = format!(
-                r#"{{
-                    "kind": "scope.repo-config",
-                    "version": 1,
-                    "visibility": {{
-                        "default": "public",
-                        "rules": []
-                    }},
-                    "history": {{
-                        "rewrites": [
-                            {{ "path": "{path}", "action": "redact-public-history" }}
-                        ]
-                    }}
-                }}"#
-            );
-
-            let error = RepoConfig::parse_json(config.as_bytes()).unwrap_err();
-
-            assert!(
-                matches!(
-                    error,
-                    RepoConfigError::InvalidSegment | RepoConfigError::RelativePath
-                ),
-                "{path} should be rejected, got {error:?}"
-            );
+            ] {
+                let json = format!(
+                    r#"{{"kind":"scope.repo-config","version":1,"visibility":{{"default":"public",{section}}}}}"#
+                );
+                let error = RepoConfig::parse_json(json.as_bytes()).unwrap_err();
+                assert!(
+                    matches!(
+                        error,
+                        RepoConfigError::InvalidSegment | RepoConfigError::RelativePath
+                    ),
+                    "{path} should be rejected, got {error:?}"
+                );
+            }
         }
     }
 

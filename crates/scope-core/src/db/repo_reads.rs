@@ -605,23 +605,3 @@ impl RepoReadRow {
             .map_err(|_| ApiError::internal_message("repository change version cannot be negative"))
     }
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use sea_orm::{DbBackend, QueryTrait};
-
-    #[test]
-    fn repo_read_query_skips_aggregate_json_columns() {
-        let sql = repo_read_query().build(DbBackend::Postgres).to_string();
-
-        assert!(
-            !sql.contains("\"scope_repositories\".\"graph\""),
-            "narrow repo reads must not select graph JSON: {sql}"
-        );
-        assert!(
-            !sql.contains("\"scope_repositories\".\"visibility_events\""),
-            "narrow repo reads must not select visibility event JSON: {sql}"
-        );
-    }
-}

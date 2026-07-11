@@ -2,7 +2,7 @@ use super::ObjectStore;
 use crate::error::ApiError;
 use std::{
     collections::BTreeMap,
-    sync::{Arc, Mutex, OnceLock},
+    sync::{Arc, Mutex},
 };
 
 type MemoryObjects = Arc<Mutex<BTreeMap<String, Vec<u8>>>>;
@@ -14,11 +14,8 @@ pub struct MemoryObjectStore {
 
 impl MemoryObjectStore {
     pub fn new() -> Self {
-        static OBJECTS: OnceLock<MemoryObjects> = OnceLock::new();
         Self {
-            objects: OBJECTS
-                .get_or_init(|| Arc::new(Mutex::new(BTreeMap::new())))
-                .clone(),
+            objects: Arc::new(Mutex::new(BTreeMap::new())),
         }
     }
 

@@ -1,77 +1,119 @@
 import * as assert from 'node:assert/strict'
 import { test } from 'node:test'
 
-import type { RepoLiveState } from '@/api/types'
+import type { RepoChangeEvent } from '@/api/types.generated'
 import {
+  createRepoRefreshCoordinator,
   parseRepoChangeEvent,
   takeSseMessages,
-  usesVersionedRepoChangeEvents,
 } from './repo-live-refresh'
 
-test('parseRepoChangeEvent reads repo change SSE payloads', () => {
+const event = (version: number, reason = 'changed', repo_id = 'owner/repo') =>
+  ({ reason, repo_id, version }) satisfies RepoChangeEvent
+const tick = () => new Promise((resolve) => setImmediate(resolve))
+
+test('SSE parsing validates events and retains partial messages', () => {
   assert.deepEqual(
     parseRepoChangeEvent(
       'event: repo-change\ndata: {"repo_id":"owner/repo","version":2,"reason":"visibility-changed"}',
     ),
-    {
-      reason: 'visibility-changed',
-      repo_id: 'owner/repo',
-      version: 2,
-    },
+    event(2, 'visibility-changed'),
   )
-})
-
-test('parseRepoChangeEvent ignores keepalive comments', () => {
-  assert.equal(parseRepoChangeEvent(': keep-alive'), null)
-})
-
-test('takeSseMessages keeps partial message buffered', () => {
+  for (const message of [
+    ': keep-alive',
+    'event: other\ndata: {}',
+    'event: repo-change\ndata: {"repo_id":1,"version":2,"reason":"changed"}',
+  ]) assert.equal(parseRepoChangeEvent(message), null)
   assert.deepEqual(takeSseMessages('event: one\n\nevent: two'), {
     messages: ['event: one'],
     rest: 'event: two',
   })
 })
 
-test('public repo readers keep a live refresh stream without versioned events', () => {
-  const live = repoLiveState('Public', 0)
-
-  assert.equal(usesVersionedRepoChangeEvents(live), false)
+test('coordinator ignores stale, connected, and wrong-repo events', async () => {
+  let refreshes = 0
+  const coordinator = coordinatorFor(async () => { refreshes += 1 }, 2)
+  coordinator.onEvent(event(2))
+  coordinator.onEvent(event(3, 'connected'))
+  coordinator.onEvent(event(3, 'changed', 'other/repo'))
+  await tick()
+  assert.equal(refreshes, 0)
 })
 
-test('members use versioned repo change events', () => {
-  const live = repoLiveState('Member', 2)
-
-  assert.equal(usesVersionedRepoChangeEvents(live), true)
+test('coordinator coalesces versions received during refresh', async () => {
+  const releases: Array<() => void> = []
+  let refreshes = 0
+  const coordinator = coordinatorFor(() => new Promise<void>((resolve) => {
+    refreshes += 1
+    releases.push(resolve)
+  }))
+  coordinator.onEvent(event(2))
+  coordinator.onEvent(event(2))
+  coordinator.onEvent(event(3))
+  assert.equal(refreshes, 1)
+  releases.shift()?.()
+  await tick()
+  assert.equal(refreshes, 2)
+  releases.shift()?.()
+  await tick()
+  coordinator.onEvent(event(3))
+  await tick()
+  assert.equal(refreshes, 2)
 })
 
-function repoLiveState(
-  actor: RepoLiveState['repo']['access']['actor'],
-  changeVersion: number,
-): RepoLiveState {
-  return {
-    clerk_token_template: 'scope-api',
-    event_stream_url: 'http://localhost.test/v1/repos/owner/repo/events',
-    repo: {
-      change_version: changeVersion,
-      default_visibility: 'Public',
-      id: 'owner/repo',
-      lifecycle_state: 'Published',
-      name: 'repo',
-      owner_handle: 'owner',
-      open_request_count: 0,
-      request_permissions: {
-        can_submit_request: true,
-        uses_credit_stake: actor === 'Public',
-      },
-      access: {
-        actor,
-        can_apply_changes: false,
-        can_change_file_visibility: false,
-        can_delete_repo: actor === 'Owner',
-        can_manage_members: actor === 'Owner',
-        can_push: false,
-        can_read_private_files: actor !== 'Public',
-      },
-    },
+test('lagged, unversioned, version-zero, and interrupted streams force refresh', async () => {
+  for (const trigger of [
+    (value: ReturnType<typeof coordinatorFor>) => value.onEvent(event(7, 'lagged')),
+    (value: ReturnType<typeof coordinatorFor>) => value.onEvent(event(0)),
+    (value: ReturnType<typeof coordinatorFor>) => value.onStreamInterrupted(),
+  ]) {
+    let refreshes = 0
+    const coordinator = coordinatorFor(async () => { refreshes += 1 }, 5)
+    trigger(coordinator)
+    await tick()
+    assert.equal(refreshes, 1)
   }
+  let publicRefreshes = 0
+  const publicCoordinator = coordinatorFor(async () => { publicRefreshes += 1 }, 5, false)
+  publicCoordinator.onEvent(event(1))
+  await tick()
+  assert.equal(publicRefreshes, 1)
+})
+
+test('failed refresh retries once and stop cancels pending retry', async () => {
+  const retries: Array<() => void> = []
+  let attempts = 0
+  const coordinator = coordinatorFor(async () => {
+    attempts += 1
+    if (attempts === 1) throw new Error('temporary')
+  }, 0, true, (retry) => { retries.push(retry); return () => {} })
+  coordinator.onEvent(event(1))
+  await tick()
+  assert.equal(retries.length, 1)
+  retries[0]()
+  await tick()
+  assert.equal(attempts, 2)
+
+  let cancelled = false
+  const stopped = coordinatorFor(async () => { throw new Error('temporary') }, 0, true,
+    () => () => { cancelled = true })
+  stopped.onEvent(event(1))
+  await tick()
+  stopped.stop()
+  assert.equal(cancelled, true)
+})
+
+function coordinatorFor(
+  invalidate: () => Promise<unknown>,
+  initialVersion = 0,
+  versioned = true,
+  scheduleRetry = (_retry: () => void) => () => {},
+) {
+  return createRepoRefreshCoordinator({
+    initialVersion,
+    invalidate,
+    repoId: 'owner/repo',
+    scheduleRetry,
+    versioned,
+  })
 }

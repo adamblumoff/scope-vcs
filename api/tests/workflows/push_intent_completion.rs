@@ -1,26 +1,50 @@
 use super::*;
+use crate::domain::repo_config::RepoConfigVisibilityRule;
 
-async fn request(
-    state: AppState,
-    method: &str,
-    uri: &str,
-    authorization: String,
-    body: Option<String>,
-) -> Response {
-    let mut request = Request::builder()
-        .method(method)
-        .uri(uri)
-        .header(AUTHORIZATION, authorization);
-    let body = if let Some(body) = body {
-        request = request.header(CONTENT_TYPE, "application/json");
-        Body::from(body)
-    } else {
-        Body::empty()
-    };
+async fn post(state: AppState, uri: &str, authorization: String, body: String) -> Response {
     router(state)
-        .oneshot(request.body(body).unwrap())
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri(uri)
+                .header(AUTHORIZATION, authorization)
+                .header(CONTENT_TYPE, "application/json")
+                .body(Body::from(body))
+                .unwrap(),
+        )
         .await
         .unwrap()
+}
+
+async fn owner_post(state: AppState, uri: &str, body: String) -> Response {
+    post(
+        state,
+        uri,
+        bearer_header_for(&test_owner_id(), TEST_OWNER_EMAIL),
+        body,
+    )
+    .await
+}
+
+async fn mint_intent(state: AppState, head_oid: &str, config: RepoConfig) -> String {
+    let response = owner_post(
+        state,
+        "/v1/repos/owner/repo/push-intents",
+        push_intent_request_json(head_oid, config),
+    )
+    .await;
+    assert_eq!(response.status(), StatusCode::OK);
+    response_json(response).await["token"]
+        .as_str()
+        .unwrap()
+        .to_string()
+}
+
+async fn stored_config(state: &AppState) -> RepoConfig {
+    find_repo(state, TEST_REPO_OWNER, TEST_REPO_NAME)
+        .await
+        .unwrap()
+        .repo_config
 }
 
 fn bare_clone(source: &FsPath, label: &str) -> TempGitRepo {
@@ -66,62 +90,49 @@ fn push_intent_request_json_with_base(
 }
 
 fn readme_private_config() -> RepoConfig {
-    RepoConfig::parse_json(
-        br#"{
-            "kind": "scope.repo-config",
-            "version": 1,
-            "visibility": {
-                "default": "public",
-                "rules": [
-                    { "path": "/README.md", "visibility": "private" }
-                ]
-            }
-        }"#,
-    )
-    .unwrap()
+    let mut config = repo_config(Visibility::Public);
+    config.visibility.rules.push(RepoConfigVisibilityRule {
+        path: "/README.md".into(),
+        visibility: ConfigVisibility::Private,
+    });
+    config
 }
 
-#[tokio::test]
-async fn create_push_intent_uses_server_config_as_saved_local_config_base() {
+async fn published_git_fixture(label: &str) -> (AppState, TempGitRepo, String) {
     let state = test_state_with_repo();
     cache_test_jwks(&state);
-    let desired_config = repo_config(Visibility::Private);
-
-    let response = request(
-        state,
-        "POST",
-        "/v1/repos/owner/repo/push-intents",
-        bearer_header_for(&test_owner_id(), TEST_OWNER_EMAIL),
-        Some(push_intent_request_json(TEST_PUSH_HEAD_OID, desired_config)),
-    )
-    .await;
-
-    assert_eq!(response.status(), StatusCode::OK);
-    assert!(response_json(response).await["token"].is_string());
+    let source = temp_git_repo(label);
+    fs::write(source.join("README.md"), "hello\n").unwrap();
+    run_git(Some(&source), &["add", "README.md"], "add readme").unwrap();
+    commit_all(&source, "initial");
+    let bare = bare_clone(&source, &format!("{label}-bare"));
+    let head = git_head_oid(&bare);
+    apply_first_push_from_staging_repo(&state, &bare, repo_config(Visibility::Public)).await;
+    (state, source, head)
 }
 
 #[tokio::test]
 async fn create_push_intent_rejects_stale_local_config_base_hash() {
     let state = test_state_with_repo();
     cache_test_jwks(&state);
-    {
-        let mut catalog = lock_catalog(&state).unwrap();
-        let repo = catalog.repositories.get_mut(TEST_REPO_ID).unwrap();
-        repo.record.default_visibility = Visibility::Private;
-        repo.policy = Policy::new(Visibility::Private);
-        repo.repo_config = repo_config(Visibility::Private);
-    }
+    state
+        .metadata
+        .mutate_repository_for_tests(TEST_REPO_ID, |repo| {
+            repo.record.default_visibility = Visibility::Private;
+            repo.policy = Policy::new(Visibility::Private);
+            repo.repo_config = repo_config(Visibility::Private);
+        })
+        .await
+        .unwrap();
 
-    let response = request(
+    let response = owner_post(
         state.clone(),
-        "POST",
         "/v1/repos/owner/repo/push-intents",
-        bearer_header_for(&test_owner_id(), TEST_OWNER_EMAIL),
-        Some(push_intent_request_json_with_base(
+        push_intent_request_json_with_base(
             TEST_PUSH_HEAD_OID,
             repo_config_fingerprint(&repo_config(Visibility::Public)).unwrap(),
             readme_private_config(),
-        )),
+        ),
     )
     .await;
 
@@ -131,24 +142,9 @@ async fn create_push_intent_rejects_stale_local_config_base_hash() {
         "repo config changed since review; rerun scope review"
     );
 
-    let response = request(
-        state,
-        "GET",
-        "/v1/repos/owner/repo/config",
-        bearer_header_for(&test_owner_id(), TEST_OWNER_EMAIL),
-        None,
-    )
-    .await;
-
-    assert_eq!(response.status(), StatusCode::OK);
-    let body = response_json(response).await;
     assert_eq!(
-        body["config"],
-        serde_json::json!(repo_config(Visibility::Private))
-    );
-    assert_eq!(
-        body["config_hash"],
-        repo_config_fingerprint(&repo_config(Visibility::Private)).unwrap()
+        stored_config(&state).await,
+        repo_config(Visibility::Private)
     );
 }
 
@@ -156,40 +152,18 @@ async fn create_push_intent_rejects_stale_local_config_base_hash() {
 async fn create_push_intent_rejects_oversized_config_for_git_header_transport() {
     let state = test_state_with_repo();
     cache_test_jwks(&state);
-    let rules = (0..300)
-        .map(|index| {
-            serde_json::json!({
-                "path": format!("/private/path-{index}.txt"),
-                "visibility": "private",
-            })
+    let mut oversized_config = repo_config(Visibility::Public);
+    oversized_config.visibility.rules = (0..300)
+        .map(|index| RepoConfigVisibilityRule {
+            path: format!("/private/path-{index}.txt"),
+            visibility: ConfigVisibility::Private,
         })
         .collect::<Vec<_>>();
-    let oversized_config = RepoConfig::parse_json(
-        serde_json::json!({
-            "kind": "scope.repo-config",
-            "version": 1,
-            "visibility": {
-                "default": "public",
-                "rules": rules,
-            },
-            "history": {
-                "rewrites": [],
-            },
-        })
-        .to_string()
-        .as_bytes(),
-    )
-    .unwrap();
 
-    let response = request(
+    let response = owner_post(
         state,
-        "POST",
         "/v1/repos/owner/repo/push-intents",
-        bearer_header_for(&test_owner_id(), TEST_OWNER_EMAIL),
-        Some(push_intent_request_json(
-            TEST_PUSH_HEAD_OID,
-            oversized_config,
-        )),
+        push_intent_request_json(TEST_PUSH_HEAD_OID, oversized_config),
     )
     .await;
 
@@ -204,98 +178,36 @@ async fn create_push_intent_rejects_oversized_config_for_git_header_transport() 
 
 #[tokio::test]
 async fn complete_push_intent_rejects_stale_config_only_review() {
-    let state = test_state_with_repo();
-    cache_test_jwks(&state);
-    let source = temp_git_repo("stale-config-complete");
-    fs::write(source.join("README.md"), "hello\n").unwrap();
-    run_git(Some(&source), &["add", "README.md"], "add readme").unwrap();
-    commit_all(&source, "initial");
-    let bare = bare_clone(&source, "stale-config-complete-bare");
-    let head_oid = git_stdout_text(&bare, &["rev-parse", DEFAULT_GIT_BRANCH], "read head")
-        .unwrap()
-        .trim()
-        .to_string();
-    apply_first_push_from_staging_repo(&state, &bare, repo_config(Visibility::Public)).await;
+    let (state, _source, head_oid) = published_git_fixture("stale-config-complete").await;
 
-    let old_response = request(
-        state.clone(),
-        "POST",
-        "/v1/repos/owner/repo/push-intents",
-        bearer_header_for(&test_owner_id(), TEST_OWNER_EMAIL),
-        Some(push_intent_request_json(
-            &head_oid,
-            repo_config(Visibility::Private),
-        )),
-    )
-    .await;
-    assert_eq!(old_response.status(), StatusCode::OK);
-    let old_token = response_json(old_response).await["token"]
-        .as_str()
-        .unwrap()
-        .to_string();
+    let old_token = mint_intent(state.clone(), &head_oid, repo_config(Visibility::Private)).await;
 
     let readme_private_config = readme_private_config();
-    let new_response = request(
-        state.clone(),
-        "POST",
-        "/v1/repos/owner/repo/push-intents",
-        bearer_header_for(&test_owner_id(), TEST_OWNER_EMAIL),
-        Some(push_intent_request_json(
-            &head_oid,
-            readme_private_config.clone(),
-        )),
-    )
-    .await;
-    assert_eq!(new_response.status(), StatusCode::OK);
-    let new_token = response_json(new_response).await["token"]
-        .as_str()
-        .unwrap()
-        .to_string();
+    let new_token = mint_intent(state.clone(), &head_oid, readme_private_config.clone()).await;
 
-    let applied = request(
+    let applied = owner_post(
         state.clone(),
-        "POST",
         "/v1/repos/owner/repo/push-intents/complete",
-        bearer_header_for(&test_owner_id(), TEST_OWNER_EMAIL),
-        Some(serde_json::json!({ "token": new_token }).to_string()),
+        serde_json::json!({ "token": new_token }).to_string(),
     )
     .await;
     assert_eq!(applied.status(), StatusCode::OK);
     assert_eq!(response_json(applied).await["config_applied"], true);
 
-    let stale = request(
+    let stale = owner_post(
         state.clone(),
-        "POST",
         "/v1/repos/owner/repo/push-intents/complete",
-        bearer_header_for(&test_owner_id(), TEST_OWNER_EMAIL),
-        Some(serde_json::json!({ "token": old_token }).to_string()),
+        serde_json::json!({ "token": old_token }).to_string(),
     )
     .await;
     assert_eq!(stale.status(), StatusCode::CONFLICT);
-    let repo = find_repo(&state, TEST_REPO_OWNER, TEST_REPO_NAME)
-        .await
-        .unwrap();
-    assert_eq!(repo.repo_config, readme_private_config);
+    assert_eq!(stored_config(&state).await, readme_private_config);
 }
 
 #[tokio::test]
 async fn complete_push_intent_rejects_content_changed_since_review() {
-    let state = test_state_with_repo();
-    cache_test_jwks(&state);
-    let source = temp_git_repo("stale-content-complete");
-    fs::write(source.join("README.md"), "hello\n").unwrap();
-    run_git(Some(&source), &["add", "README.md"], "add readme").unwrap();
-    commit_all(&source, "initial");
-    let bare = bare_clone(&source, "stale-content-complete-bare");
-    let head_oid = git_stdout_text(&bare, &["rev-parse", DEFAULT_GIT_BRANCH], "read head")
-        .unwrap()
-        .trim()
-        .to_string();
-    apply_first_push_from_staging_repo(&state, &bare, repo_config(Visibility::Public)).await;
-    let base_config = find_repo(&state, TEST_REPO_OWNER, TEST_REPO_NAME)
-        .await
-        .unwrap()
-        .repo_config;
+    let (state, _source, head_oid) = published_git_fixture("stale-content-complete").await;
+    let base_config = stored_config(&state).await;
     let token = state
         .create_push_intent(
             TEST_REPO_ID,
@@ -308,12 +220,10 @@ async fn complete_push_intent_rejects_content_changed_since_review() {
         .unwrap()
         .token;
 
-    let response = request(
+    let response = owner_post(
         state.clone(),
-        "POST",
         "/v1/repos/owner/repo/push-intents/complete",
-        bearer_header_for(&test_owner_id(), TEST_OWNER_EMAIL),
-        Some(serde_json::json!({ "token": token }).to_string()),
+        serde_json::json!({ "token": token }).to_string(),
     )
     .await;
 
@@ -322,10 +232,7 @@ async fn complete_push_intent_rejects_content_changed_since_review() {
         response_json(response).await["error"],
         "repo content changed since review; rerun scope push"
     );
-    let repo = find_repo(&state, TEST_REPO_OWNER, TEST_REPO_NAME)
-        .await
-        .unwrap();
-    assert_eq!(repo.repo_config, repo_config(Visibility::Public));
+    assert_eq!(stored_config(&state).await, repo_config(Visibility::Public));
 }
 
 #[tokio::test]
@@ -347,12 +254,11 @@ async fn complete_push_intent_hides_repo_before_token_claim_mismatch() {
         .unwrap()
         .token;
 
-    let response = request(
+    let response = post(
         state,
-        "POST",
         "/v1/repos/owner/repo/push-intents/complete",
         bearer_header_for(other_subject, "other@example.com"),
-        Some(serde_json::json!({ "token": token }).to_string()),
+        serde_json::json!({ "token": token }).to_string(),
     )
     .await;
 
@@ -361,13 +267,7 @@ async fn complete_push_intent_hides_repo_before_token_claim_mismatch() {
 
 #[tokio::test]
 async fn content_push_rejects_stale_reviewed_config() {
-    let state = test_state_with_repo();
-    let source = temp_git_repo("stale-config-content-push");
-    fs::write(source.join("README.md"), "hello\n").unwrap();
-    run_git(Some(&source), &["add", "README.md"], "add readme").unwrap();
-    commit_all(&source, "initial");
-    let bare = bare_clone(&source, "stale-config-content-base-bare");
-    apply_first_push_from_staging_repo(&state, &bare, repo_config(Visibility::Public)).await;
+    let (state, source, _head_oid) = published_git_fixture("stale-config-content-push").await;
 
     fs::write(source.join("README.md"), "content from old review\n").unwrap();
     run_git(Some(&source), &["add", "README.md"], "add stale update").unwrap();
@@ -385,18 +285,20 @@ async fn content_push_rejects_stale_reviewed_config() {
     .unwrap();
 
     let newer_config = readme_private_config();
-    {
-        let mut catalog = lock_catalog(&state).unwrap();
-        let repo = catalog.repositories.get_mut(TEST_REPO_ID).unwrap();
-        crate::domain::reviewed_updates::apply_reviewed_config_to_repo(
-            repo,
-            crate::domain::reviewed_updates::ReviewedConfigUpdateInput {
-                author_id: test_owner_id(),
-                config: newer_config.clone(),
-            },
-        )
+    state
+        .metadata
+        .mutate_repository_for_tests(TEST_REPO_ID, |repo| {
+            crate::domain::reviewed_updates::apply_reviewed_config_to_repo(
+                repo,
+                crate::domain::reviewed_updates::ReviewedConfigUpdateInput {
+                    author_id: test_owner_id(),
+                    config: newer_config.clone(),
+                },
+            )
+            .unwrap();
+        })
+        .await
         .unwrap();
-    }
 
     let error = persist_receive_pack_update_and_promote(
         &state,
@@ -413,8 +315,5 @@ async fn content_push_rejects_stale_reviewed_config() {
         error.message(),
         "repo config changed since review; rerun scope push"
     );
-    let repo = find_repo(&state, TEST_REPO_OWNER, TEST_REPO_NAME)
-        .await
-        .unwrap();
-    assert_eq!(repo.repo_config, newer_config);
+    assert_eq!(stored_config(&state).await, newer_config);
 }

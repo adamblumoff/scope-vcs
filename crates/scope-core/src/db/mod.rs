@@ -33,8 +33,6 @@ mod schema;
 mod test_support;
 mod visibility_changes;
 
-#[cfg(any(test, feature = "test-support"))]
-use crate::domain::store::AppCatalog;
 use crate::domain::store::{RepositoryInvite, RepositoryMember, StoredRepository, repo_id};
 use crate::error::ApiError;
 #[cfg(any(test, feature = "test-support"))]
@@ -49,8 +47,6 @@ pub use repo_collaboration::CreateRepositoryInviteMutation;
 pub use repo_mutation::RepositoryMutation;
 pub use repo_reads::RepoSummaryRead;
 use repository_rows::load_repository_facts;
-#[cfg(any(test, feature = "test-support"))]
-use request_rows::load_request_catalog_rows;
 use sea_orm::{
     AccessMode, ColumnTrait, ConnectionTrait, Database, DatabaseConnection, DatabaseTransaction,
     EntityTrait, IsolationLevel, QueryFilter, QueryOrder, Statement, TransactionTrait,
@@ -58,7 +54,7 @@ use sea_orm::{
 use serde::{Serialize, de::DeserializeOwned};
 use std::{sync::Arc, time::Duration};
 #[cfg(any(test, feature = "test-support"))]
-pub use test_support::{TestCatalogGuard, TestDatabaseTarget};
+pub use test_support::TestDatabaseTarget;
 
 const METADATA_LOCK_KEY: &str = "catalog";
 
@@ -88,25 +84,8 @@ impl MetadataStore {
     }
 
     #[cfg(any(test, feature = "test-support"))]
-    pub fn connect_for_tests(target: &TestDatabaseTarget) -> anyhow::Result<Self> {
-        test_support::connect_postgres_test_store(target, false)
-    }
-
-    #[cfg(any(test, feature = "test-support"))]
     pub fn connect_fresh_for_tests(target: &TestDatabaseTarget) -> anyhow::Result<Self> {
-        test_support::connect_postgres_test_store(target, true)
-    }
-
-    #[cfg(any(test, feature = "test-support"))]
-    pub async fn read<R>(
-        &self,
-        op: impl FnOnce(&AppCatalog) -> Result<R, ApiError>,
-    ) -> Result<R, ApiError>
-    where
-        R: Send + 'static,
-    {
-        let catalog = load_catalog(&self.db).await?;
-        op(&catalog)
+        test_support::connect_postgres_test_store(target)
     }
 
     pub async fn repository(
@@ -168,11 +147,6 @@ impl MetadataStore {
             .map_err(ApiError::internal)?;
         Ok(event)
     }
-
-    #[cfg(any(test, feature = "test-support"))]
-    pub fn test_catalog(&self) -> Result<TestCatalogGuard, ApiError> {
-        test_support::test_catalog(self)
-    }
 }
 
 async fn connect_postgres_store(database_url: String) -> anyhow::Result<MetadataStore> {
@@ -228,14 +202,6 @@ async fn connect_worker_database_once(
     Ok(db)
 }
 
-#[cfg(any(test, feature = "test-support"))]
-async fn load_catalog(db: &DatabaseConnection) -> Result<AppCatalog, ApiError> {
-    let tx = begin_metadata_read_snapshot(db).await?;
-    let catalog = load_catalog_async(&tx).await?;
-    tx.commit().await.map_err(ApiError::internal)?;
-    Ok(catalog)
-}
-
 pub(super) async fn begin_metadata_read_snapshot(
     db: &DatabaseConnection,
 ) -> Result<DatabaseTransaction, ApiError> {
@@ -245,98 +211,6 @@ pub(super) async fn begin_metadata_read_snapshot(
     )
     .await
     .map_err(ApiError::internal)
-}
-
-#[cfg(any(test, feature = "test-support"))]
-async fn load_catalog_async<C>(conn: &C) -> Result<AppCatalog, ApiError>
-where
-    C: ConnectionTrait,
-{
-    let users = entities::user::Entity::find()
-        .order_by_asc(entities::user::Column::Id)
-        .all(conn)
-        .await
-        .map_err(ApiError::internal)?;
-    let repositories = entities::repository::Entity::find()
-        .order_by_asc(entities::repository::Column::Id)
-        .all(conn)
-        .await
-        .map_err(ApiError::internal)?;
-    let members = entities::repository_member::Entity::find()
-        .order_by_asc(entities::repository_member::Column::RepoId)
-        .order_by_asc(entities::repository_member::Column::UserId)
-        .all(conn)
-        .await
-        .map_err(ApiError::internal)?;
-    let invites = entities::repository_invite::Entity::find()
-        .order_by_asc(entities::repository_invite::Column::RepoId)
-        .order_by_asc(entities::repository_invite::Column::InvitedEmailNormalized)
-        .order_by_asc(entities::repository_invite::Column::Id)
-        .all(conn)
-        .await
-        .map_err(ApiError::internal)?;
-    let pending_repo_storage_deletions =
-        cleanup_queue::load_pending_repo_storage_deletions(conn).await?;
-    let pending_source_blob_deletions =
-        cleanup_queue::load_pending_source_blob_deletions(conn).await?;
-
-    let users = users
-        .into_iter()
-        .map(|user| Ok((user.id.clone(), user.try_into_domain()?)))
-        .collect::<Result<_, ApiError>>()?;
-    let members_by_repo = members.into_iter().try_fold(
-        std::collections::BTreeMap::<String, Vec<RepositoryMember>>::new(),
-        |mut by_repo, member| {
-            let repo_id = member.repo_id.clone();
-            by_repo
-                .entry(repo_id)
-                .or_default()
-                .push(member.try_into_domain()?);
-            Ok::<_, ApiError>(by_repo)
-        },
-    )?;
-    let invites_by_repo = invites.into_iter().try_fold(
-        std::collections::BTreeMap::<String, Vec<RepositoryInvite>>::new(),
-        |mut by_repo, invite| {
-            let repo_id = invite.repo_id.clone();
-            by_repo
-                .entry(repo_id)
-                .or_default()
-                .push(invite.try_into_domain()?);
-            Ok::<_, ApiError>(by_repo)
-        },
-    )?;
-    let repo_ids = repositories
-        .iter()
-        .map(|repo| repo.id.clone())
-        .collect::<Vec<_>>();
-    let mut facts_by_repo = load_repository_facts(conn, &repo_ids).await?;
-    let repositories = repositories
-        .into_iter()
-        .map(|repo| {
-            let repo_id = repo.id.clone();
-            let members = members_by_repo.get(&repo_id).cloned().unwrap_or_default();
-            let invitations = invites_by_repo.get(&repo_id).cloned().unwrap_or_default();
-            let facts = facts_by_repo.remove(&repo_id).ok_or_else(|| {
-                ApiError::internal_message(format!("repository facts missing for {repo_id}"))
-            })?;
-            let repo = repo.try_into_domain(facts.into_facts(), members, invitations)?;
-            Ok((repo.record.id.clone(), repo))
-        })
-        .collect::<Result<_, ApiError>>()?;
-
-    let request_rows = load_request_catalog_rows(conn).await?;
-
-    Ok(AppCatalog {
-        users,
-        repositories,
-        requests: request_rows.requests,
-        request_events: request_rows.request_events,
-        user_credit_accounts: request_rows.user_credit_accounts,
-        credit_ledger_entries: request_rows.credit_ledger_entries,
-        pending_repo_storage_deletions,
-        pending_source_blob_deletions,
-    })
 }
 
 async fn repositories_from_models<C>(

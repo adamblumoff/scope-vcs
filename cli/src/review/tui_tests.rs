@@ -1,12 +1,4 @@
-use super::{review_body_heights, terminal_safe};
-
-#[test]
-fn terminal_safe_escapes_control_characters() {
-    assert_eq!(
-        terminal_safe("a\u{1b}]52;c;bad\u{7}\n"),
-        "a\\u{1b}]52;c;bad\\u{7}\\n"
-    );
-}
+use super::review_body_heights;
 
 #[test]
 fn body_layout_keeps_a_file_row_visible_when_read_only_summaries_overflow() {

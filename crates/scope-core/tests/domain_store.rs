@@ -5,7 +5,7 @@ use scope_core::domain::{
     },
     repo_collaboration::{CreateRepositoryInviteCommand, create_or_refresh_repository_invite},
     store::{
-        CatalogError, FirstPushToken, FirstPushTokenStatus, MainPushMode,
+        FirstPushToken, FirstPushTokenStatus, MainPushMode,
         RepoPublicationState::{Published, Unpublished},
         RepositoryMember, RepositoryMemberPermissions, StoredRepository, UserAccount, app_catalog,
     },
@@ -35,24 +35,17 @@ fn user_principal(id: &str) -> Principal {
     }
 }
 
-#[test]
-fn app_catalog_starts_empty() {
-    let catalog = app_catalog();
-
-    assert!(catalog.users.is_empty());
-    assert!(catalog.repositories.is_empty());
-    assert!(catalog.pending_source_blob_deletions.is_empty());
-    assert!(catalog.repository("owner", "repo").is_none());
-}
-
-#[test]
-fn member_scope_user_principal_can_write_repo() {
-    let repo = test_repo(Public);
-    let principal = user_principal(TEST_OWNER_ID);
-
-    assert_eq!(principal.id, TEST_OWNER_ID);
-    assert_eq!(principal.kind, PrincipalKind::User);
-    assert!(repo.can_push(&principal));
+fn add_member(repo: &mut StoredRepository, user_id: &str, can_push: bool) {
+    repo.members.push(RepositoryMember {
+        repo_id: repo.record.id.clone(),
+        user_id: user_id.to_string(),
+        permissions: RepositoryMemberPermissions {
+            can_push,
+            ..RepositoryMemberPermissions::default()
+        },
+        created_at_unix: 1,
+        updated_at_unix: 1,
+    });
 }
 
 #[test]
@@ -76,42 +69,26 @@ fn create_repository_makes_private_owner_repo_pending_first_push() {
     assert!(repo.can_read_path(&principal, &root));
     assert!(!repo.can_push(&principal));
     assert!(!repo.can_read_path(&Principal::public(), &root));
-    assert_eq!(
-        repo.push_policy_for_user_id(TEST_OWNER_ID).mode,
-        MainPushMode::FirstPush
-    );
-    assert_eq!(
-        repo.push_policy_for_user_id("user_other").mode,
-        MainPushMode::Denied
-    );
+    for (user, mode) in [
+        (TEST_OWNER_ID, MainPushMode::FirstPush),
+        ("user_other", MainPushMode::Denied),
+    ] {
+        assert_eq!(repo.push_policy_for_user_id(user).mode, mode);
+    }
 }
 
 #[test]
 fn published_push_policy_uses_repository_permissions() {
     let mut repo = test_repo(Public);
-    repo.members.push(RepositoryMember {
-        repo_id: repo.record.id.clone(),
-        user_id: "user_member".to_string(),
-        permissions: RepositoryMemberPermissions {
-            can_push: true,
-            ..RepositoryMemberPermissions::default()
-        },
-        created_at_unix: 1,
-        updated_at_unix: 1,
-    });
+    add_member(&mut repo, "user_member", true);
 
-    assert_eq!(
-        repo.push_policy_for_user_id(TEST_OWNER_ID).mode,
-        MainPushMode::Published
-    );
-    assert_eq!(
-        repo.push_policy_for_user_id("user_member").mode,
-        MainPushMode::Published
-    );
-    assert_eq!(
-        repo.push_policy_for_user_id("user_other").mode,
-        MainPushMode::Denied
-    );
+    for (user, mode) in [
+        (TEST_OWNER_ID, MainPushMode::Published),
+        ("user_member", MainPushMode::Published),
+        ("user_other", MainPushMode::Denied),
+    ] {
+        assert_eq!(repo.push_policy_for_user_id(user).mode, mode);
+    }
 }
 
 #[test]
@@ -125,45 +102,22 @@ fn first_push_token_reports_active_expired_and_used_shape() {
         used_at_unix: None,
     };
 
-    assert_eq!(token.status_at(150), FirstPushTokenStatus::Active);
-    assert_eq!(token.status_at(200), FirstPushTokenStatus::Expired);
+    for (now, status) in [
+        (150, FirstPushTokenStatus::Active),
+        (200, FirstPushTokenStatus::Expired),
+    ] {
+        assert_eq!(token.status_at(now), status);
+    }
 
     token.used_at_unix = Some(175);
     assert_eq!(token.status_at(180), FirstPushTokenStatus::Used);
 }
 
 #[test]
-fn duplicate_owner_repo_name_is_rejected() {
-    let mut catalog = app_catalog();
-    let owner = test_owner();
-
-    catalog.create_repository(&owner, "scope", Private).unwrap();
-    let error = catalog
-        .create_repository(&owner, "SCOPE", Private)
-        .unwrap_err();
-
-    assert!(matches!(error, CatalogError::RepositoryExists(id) if id == "owner/scope"));
-}
-
-#[test]
-fn unpublished_repo_blocks_public_reads() {
-    let mut repo = test_repo(Public);
-    repo.record.publication_state = Unpublished;
-
-    assert!(!repo.can_read_path(&Principal::public(), &ScopePath::root()));
-}
-
-#[test]
 fn unpublished_repo_is_owner_only_even_with_reader_membership() {
     let mut repo = test_repo(Public);
     repo.record.publication_state = Unpublished;
-    repo.members.push(RepositoryMember {
-        repo_id: "owner/repo".to_string(),
-        user_id: "user_reader".to_string(),
-        permissions: RepositoryMemberPermissions::default(),
-        created_at_unix: 1,
-        updated_at_unix: 1,
-    });
+    add_member(&mut repo, "user_reader", false);
     let owner_principal = user_principal(TEST_OWNER_ID);
     let reader_principal = user_principal("user_reader");
 

@@ -315,7 +315,7 @@ mod tests {
 
     #[test]
     fn s3_store_checks_bucket_with_signed_head_request() {
-        let server = TestS3Server::start(vec![TestS3Response::empty()]);
+        let server = TestS3Server::start(vec![(vec![], None)]);
         let store = test_s3_store(&server.endpoint);
 
         store.readiness_check().unwrap();
@@ -333,9 +333,9 @@ mod tests {
     #[test]
     fn s3_store_put_get_delete_use_signed_local_s3_compatible_requests() {
         let server = TestS3Server::start(vec![
-            TestS3Response::empty(),
-            TestS3Response::body(b"stored payload"),
-            TestS3Response::empty(),
+            (vec![], None),
+            (b"stored payload".to_vec(), None),
+            (vec![], None),
         ]);
         let store = test_s3_store(&server.endpoint);
         let key = "objects/blob-1";
@@ -344,28 +344,22 @@ mod tests {
         assert_eq!(store.get(key).unwrap(), b"stored payload");
         store.delete(key).unwrap();
 
-        let put = server.recv();
-        assert_eq!(put.method, "PUT");
-        assert_eq!(put.path, "/scope-bucket/objects/blob-1");
-        assert_eq!(put.body, b"stored payload");
-        assert_signed_s3_headers(&put);
-
-        let get = server.recv();
-        assert_eq!(get.method, "GET");
-        assert_eq!(get.path, "/scope-bucket/objects/blob-1");
-        assert!(get.body.is_empty());
-        assert_signed_s3_headers(&get);
-
-        let delete = server.recv();
-        assert_eq!(delete.method, "DELETE");
-        assert_eq!(delete.path, "/scope-bucket/objects/blob-1");
-        assert!(delete.body.is_empty());
-        assert_signed_s3_headers(&delete);
+        for (method, body) in [
+            ("PUT", b"stored payload".as_slice()),
+            ("GET", b"".as_slice()),
+            ("DELETE", b"".as_slice()),
+        ] {
+            let request = server.recv();
+            assert_eq!(request.method, method);
+            assert_eq!(request.path, "/scope-bucket/objects/blob-1");
+            assert_eq!(request.body, body);
+            assert_signed_s3_headers(&request);
+        }
     }
 
     #[test]
     fn s3_store_bounded_get_rejects_declared_oversized_body_before_reading() {
-        let server = TestS3Server::start(vec![TestS3Response::declared_length(5)]);
+        let server = TestS3Server::start(vec![(vec![], Some(5))]);
         let store = test_s3_store(&server.endpoint);
 
         let error = store.get_bounded("objects/too-large", 4).unwrap_err();
@@ -416,34 +410,6 @@ mod tests {
         body: Vec<u8>,
     }
 
-    struct TestS3Response {
-        body: Vec<u8>,
-        content_length: Option<usize>,
-    }
-
-    impl TestS3Response {
-        fn empty() -> Self {
-            Self {
-                body: Vec::new(),
-                content_length: None,
-            }
-        }
-
-        fn body(body: &[u8]) -> Self {
-            Self {
-                body: body.to_vec(),
-                content_length: None,
-            }
-        }
-
-        fn declared_length(content_length: usize) -> Self {
-            Self {
-                body: Vec::new(),
-                content_length: Some(content_length),
-            }
-        }
-    }
-
     struct TestS3Server {
         endpoint: String,
         host: String,
@@ -451,25 +417,25 @@ mod tests {
     }
 
     impl TestS3Server {
-        fn start(responses: Vec<TestS3Response>) -> Self {
+        fn start(responses: Vec<(Vec<u8>, Option<usize>)>) -> Self {
             let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
             let addr = listener.local_addr().unwrap();
             let host = format!("127.0.0.1:{}", addr.port());
             let endpoint = format!("http://{host}");
             let (sender, requests) = std::sync::mpsc::channel();
             std::thread::spawn(move || {
-                for response in responses {
+                for (body, declared_length) in responses {
                     let (mut stream, _) = listener.accept().unwrap();
                     let request = read_request(&mut stream);
                     sender.send(request).unwrap();
-                    let content_length = response.content_length.unwrap_or(response.body.len());
+                    let content_length = declared_length.unwrap_or(body.len());
                     let headers = format!(
                         "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
                         content_length
                     );
                     use std::io::Write as _;
                     stream.write_all(headers.as_bytes()).unwrap();
-                    stream.write_all(&response.body).unwrap();
+                    stream.write_all(&body).unwrap();
                 }
             });
             Self {
@@ -487,43 +453,30 @@ mod tests {
     }
 
     fn read_request(stream: &mut std::net::TcpStream) -> CapturedRequest {
-        use std::io::Read as _;
+        use std::io::{BufRead as _, Read as _};
 
-        let mut received = Vec::new();
-        let mut buffer = [0_u8; 1024];
-        let header_end = loop {
-            let count = stream.read(&mut buffer).unwrap();
-            assert!(count > 0, "connection closed before headers");
-            received.extend_from_slice(&buffer[..count]);
-            if let Some(index) = received.windows(4).position(|window| window == b"\r\n\r\n") {
-                break index + 4;
-            }
-        };
-
-        let headers_text = String::from_utf8(received[..header_end].to_vec()).unwrap();
-        let mut lines = headers_text.split("\r\n");
-        let request_line = lines.next().unwrap();
-        let mut request_parts = request_line.split_whitespace();
+        let mut reader = std::io::BufReader::new(stream);
+        let mut line = String::new();
+        reader.read_line(&mut line).unwrap();
+        let mut request_parts = line.split_whitespace();
         let method = request_parts.next().unwrap().to_string();
         let path = request_parts.next().unwrap().to_string();
-        let headers = lines
-            .filter(|line| !line.is_empty())
-            .map(|line| {
-                let (name, value) = line.split_once(':').unwrap();
-                (name.to_ascii_lowercase(), value.trim().to_string())
-            })
-            .collect::<BTreeMap<_, _>>();
+        let mut headers = BTreeMap::new();
+        loop {
+            line.clear();
+            reader.read_line(&mut line).unwrap();
+            if line == "\r\n" {
+                break;
+            }
+            let (name, value) = line.split_once(':').unwrap();
+            headers.insert(name.to_ascii_lowercase(), value.trim().to_string());
+        }
         let content_length = headers
             .get("content-length")
             .and_then(|value| value.parse::<usize>().ok())
             .unwrap_or(0);
-        let mut body = received[header_end..].to_vec();
-        while body.len() < content_length {
-            let count = stream.read(&mut buffer).unwrap();
-            assert!(count > 0, "connection closed before body");
-            body.extend_from_slice(&buffer[..count]);
-        }
-        body.truncate(content_length);
+        let mut body = vec![0; content_length];
+        reader.read_exact(&mut body).unwrap();
 
         CapturedRequest {
             method,

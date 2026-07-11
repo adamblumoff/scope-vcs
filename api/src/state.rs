@@ -45,6 +45,8 @@ pub struct AppState {
     pub(crate) operator_token: Option<Arc<str>>,
     pub(crate) repo_events: RepoChangeBus,
     pub(crate) push_intent_signing_key: Arc<[u8]>,
+    #[cfg(test)]
+    pub(crate) test_object_store: Arc<crate::object_store::MemoryObjectStore>,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -212,6 +214,8 @@ impl AppState {
             operator_token: non_empty_env(SCOPE_OPERATOR_TOKEN_ENV).map(Arc::from),
             repo_events,
             push_intent_signing_key,
+            #[cfg(test)]
+            test_object_store: Arc::new(crate::object_store::MemoryObjectStore::new()),
         };
         best_effort_drain_pending_repo_storage_deletions(&state).await;
         best_effort_drain_pending_source_blob_deletions(&state).await;
@@ -223,6 +227,7 @@ impl AppState {
         use crate::persistence::test_data_dir;
 
         let runtime_budgets = Arc::new(RuntimeBudgets::from_config(Default::default()));
+        let test_object_store = Arc::new(crate::object_store::MemoryObjectStore::new());
         let target = crate::db::TestDatabaseTarget::required().unwrap();
         let metadata = MetadataStore::connect_fresh_for_tests(&target).unwrap();
         Self {
@@ -237,13 +242,15 @@ impl AppState {
                 },
             ),
             object_store: Arc::new(BudgetedObjectStore::new(
-                Arc::new(crate::object_store::MemoryObjectStore::new()),
+                test_object_store.clone(),
                 runtime_budgets.clone(),
             )),
             runtime_budgets,
             operator_token: None,
             repo_events: RepoChangeBus::default(),
             push_intent_signing_key: Arc::from(b"scope-test-push-intent-signing-key".as_slice()),
+            #[cfg(test)]
+            test_object_store,
         }
     }
 

@@ -14,7 +14,12 @@ const tempTypesPath = path.join(tempDir, 'types.generated.ts')
 try {
   const result = spawnSync(
     'cargo',
-    ['test', '--manifest-path', apiManifest, 'export_api_types', '--', '--ignored'],
+    [
+      'run',
+      '--manifest-path', apiManifest,
+      '--features', 'type-export',
+      '--bin', 'export-api-types',
+    ],
     {
       cwd: repoRoot,
       env: {
@@ -37,7 +42,7 @@ try {
   if (normalizeLineEndings(checkedIn) !== normalizeLineEndings(generated)) {
     console.error('Generated API types are stale.')
     console.error(
-      'Run `cargo test --manifest-path api/Cargo.toml export_api_types -- --ignored` from the repo root.',
+      'Run `SCOPE_API_TS_EXPORT_PATH=web/src/api/types.generated.ts cargo run --manifest-path api/Cargo.toml --features type-export --bin export-api-types` from the repo root.',
     )
     process.exit(1)
   }

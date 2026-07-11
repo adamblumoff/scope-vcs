@@ -39,11 +39,17 @@ pub fn scope_command(cwd: &Path) -> Command {
     command
 }
 
-pub fn create_repo_with_head(cwd: &Path) {
-    create_repo_with_readme(cwd);
+#[allow(dead_code)]
+pub fn scope_failure<const N: usize>(cwd: &Path, args: [&str; N], expected: &str) -> String {
+    let output = scope_command(cwd).args(args).output().unwrap();
+    assert_failure(&output, "scope command");
+    let stderr = String::from_utf8(output.stderr).unwrap();
+    assert!(stderr.contains(expected), "{stderr}");
+    assert!(!stderr.contains("start browser login"), "{stderr}");
+    stderr
 }
 
-pub fn create_repo_with_readme(cwd: &Path) {
+pub fn create_repo_with_head(cwd: &Path) {
     run_git(cwd, ["-c", "init.defaultBranch=main", "init"]);
     fs::write(cwd.join("README.md"), "initial\n").unwrap();
     run_git(cwd, ["add", "README.md"]);
@@ -71,13 +77,9 @@ pub fn run_git<const N: usize>(cwd: &Path, args: [&str; N]) {
         .args(args)
         .output()
         .unwrap();
-    assert_success(&output, "git");
-}
-
-pub fn assert_success(output: &Output, action: &str) {
     assert!(
         output.status.success(),
-        "{action} failed\nstdout:\n{}\nstderr:\n{}",
+        "git failed\nstdout:\n{}\nstderr:\n{}",
         String::from_utf8_lossy(&output.stdout),
         String::from_utf8_lossy(&output.stderr)
     );

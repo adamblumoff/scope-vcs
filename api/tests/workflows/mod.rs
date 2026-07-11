@@ -1,24 +1,20 @@
-use crate::domain::policy::{
-    Policy, Principal, PrincipalKind, ScopePath, Visibility, VisibilityRule,
-};
+use crate::domain::policy::{Policy, ScopePath, Visibility, VisibilityRule};
 use crate::domain::projection::{
-    AuthorVisibility, FileChange, LogicalCommit, ProjectionViewKey, SourceGraph, VisibilityEvent,
-    project_graph,
+    AuthorVisibility, FileChange, LogicalCommit, ProjectionViewKey, SourceGraph, project_graph,
 };
 use crate::domain::repo_config::{ConfigVisibility, RepoConfig};
 use crate::domain::store::{
-    AppCatalog, EXECUTABLE_GIT_FILE_MODE, GitPushToken, RepoPublicationState, RepoRecord,
-    RepoStorageCleanup, RepositoryInvite, RepositoryInviteState, RepositoryMember,
-    RepositoryMemberPermissions, StoredRepository, UserAccount,
+    AppCatalog, GitPushToken, RepoPublicationState, RepoRecord, RepoStorageCleanup,
+    RepositoryInvite, RepositoryInviteState, RepositoryMember, RepositoryMemberPermissions,
+    StoredRepository, UserAccount,
 };
 use crate::{
     app::router,
-    auth::{clerk::*, scope::*, tokens::*},
+    auth::{clerk::*, tokens::*},
     config::*,
     git::{import::*, storage::*, upload::*, *},
     http::responses::*,
     object_store::{MemoryObjectStore, put_source_blob, source_blob_bytes},
-    persistence::*,
     runtime_budgets::{BudgetedObjectStore, RuntimeBudgetConfig, RuntimeBudgets},
     state::*,
 };
@@ -37,7 +33,6 @@ use std::{
     fs,
     ops::Deref,
     path::{Path as FsPath, PathBuf},
-    process::Command,
     sync::Arc,
     time::{SystemTime, UNIX_EPOCH},
 };
@@ -96,16 +91,25 @@ fn test_jwks() -> JwkSet {
     serde_json::from_str(TEST_JWKS).unwrap()
 }
 
+fn sign_claims(claims: serde_json::Value) -> String {
+    let mut header = Header::new(Algorithm::ES256);
+    header.kid = Some("test-key".into());
+    encode(
+        &header,
+        &claims,
+        &EncodingKey::from_ec_pem(TEST_PRIVATE_KEY.as_bytes()).unwrap(),
+    )
+    .unwrap()
+}
+
 fn token(user_id: &str, email_verified: bool) -> String {
-    token_for(user_id, Some(TEST_OWNER_EMAIL.to_string()), email_verified)
-}
-
-fn token_for(user_id: &str, email: Option<String>, email_verified: bool) -> String {
-    token_for_claims(user_id, email, email_verified, Some(LOCAL_APP_ORIGIN), None)
-}
-
-fn token_with_authorized_party(user_id: &str, azp: Option<&str>) -> String {
-    token_for_claims(user_id, Some(TEST_OWNER_EMAIL.to_string()), true, azp, None)
+    token_for_claims(
+        user_id,
+        Some(TEST_OWNER_EMAIL.to_string()),
+        email_verified,
+        Some(LOCAL_APP_ORIGIN),
+        None,
+    )
 }
 
 fn token_with_audience(user_id: &str, aud: serde_json::Value) -> String {
@@ -125,8 +129,6 @@ fn token_for_claims(
     azp: Option<&str>,
     aud: Option<serde_json::Value>,
 ) -> String {
-    let mut header = Header::new(Algorithm::ES256);
-    header.kid = Some("test-key".to_string());
     let mut claims = serde_json::json!({
         "iss": TEST_CLERK_ISSUER,
         "exp": unix_now() + 300,
@@ -141,12 +143,7 @@ fn token_for_claims(
         claims["aud"] = aud;
     }
 
-    encode(
-        &header,
-        &claims,
-        &EncodingKey::from_ec_pem(TEST_PRIVATE_KEY.as_bytes()).unwrap(),
-    )
-    .unwrap()
+    sign_claims(claims)
 }
 
 fn test_clerk_policy() -> ClerkTokenPolicy {
@@ -157,20 +154,11 @@ fn test_clerk_policy() -> ClerkTokenPolicy {
 }
 
 fn token_without_required_claims() -> String {
-    let mut header = Header::new(Algorithm::ES256);
-    header.kid = Some("test-key".to_string());
-    let claims = serde_json::json!({
+    sign_claims(serde_json::json!({
         "exp": unix_now() + 300,
         "email": TEST_OWNER_EMAIL,
         "email_verified": true,
-    });
-
-    encode(
-        &header,
-        &claims,
-        &EncodingKey::from_ec_pem(TEST_PRIVATE_KEY.as_bytes()).unwrap(),
-    )
-    .unwrap()
+    }))
 }
 
 fn unix_now() -> u64 {
@@ -195,81 +183,57 @@ fn test_user(id: impl Into<String>, handle: &str, email: &str) -> UserAccount {
 
 fn test_state_with_repo() -> AppState {
     let owner_id = test_owner_id();
-    let owner = UserAccount {
-        id: owner_id.clone(),
-        handle: TEST_REPO_OWNER.to_string(),
-        email: TEST_OWNER_EMAIL.to_string(),
-        email_verified: true,
-    };
+    let owner = test_user(&owner_id, TEST_REPO_OWNER, TEST_OWNER_EMAIL);
     let repo = test_repo(&owner_id);
-    let runtime_budgets = Arc::new(RuntimeBudgets::from_config(Default::default()));
-    let target = crate::db::TestDatabaseTarget::required().unwrap();
-    let metadata = crate::db::MetadataStore::connect_fresh_for_tests(&target).unwrap();
-    metadata
+    let state = AppState::test_state();
+    state
+        .metadata
         .seed_catalog_for_tests(AppCatalog {
             users: BTreeMap::from([(owner.id.clone(), owner)]),
             repositories: BTreeMap::from([(repo.record.id.clone(), repo)]),
-            requests: BTreeMap::new(),
-            request_events: BTreeMap::new(),
-            user_credit_accounts: BTreeMap::new(),
-            credit_ledger_entries: BTreeMap::new(),
-            pending_repo_storage_deletions: Vec::new(),
-            pending_source_blob_deletions: Vec::new(),
+            ..Default::default()
         })
         .unwrap();
-
-    AppState {
-        metadata,
-        data_dir: Arc::new(test_data_dir()),
-        clerk: ClerkVerifier::new_with_policy(
-            Some(TEST_CLERK_ISSUER.to_string()),
-            Some("http://127.0.0.1/.well-known/jwks.json".to_string()),
-            test_clerk_policy(),
-        ),
-        object_store: Arc::new(BudgetedObjectStore::new(
-            Arc::new(MemoryObjectStore::new()),
-            runtime_budgets.clone(),
-        )),
-        runtime_budgets,
-        operator_token: None,
-        repo_events: crate::repo_events::RepoChangeBus::default(),
-        push_intent_signing_key: Arc::from(b"scope-test-push-intent-signing-key".as_slice()),
-    }
-}
-
-fn replace_test_repo(state: &AppState, repo: StoredRepository) {
-    lock_catalog(state)
-        .unwrap()
-        .repositories
-        .insert(TEST_REPO_ID.to_string(), repo);
-}
-
-fn test_state_with_readme() -> AppState {
-    let state = test_state_with_repo();
-    replace_test_repo(&state, repo_with_readme());
     state
 }
 
-fn test_state_with_git_push_token(secret: &str) -> AppState {
+async fn replace_test_repo(state: &AppState, repo: StoredRepository) {
+    state
+        .metadata
+        .replace_repository_for_tests(repo)
+        .await
+        .unwrap();
+}
+
+async fn test_state_with_readme() -> AppState {
     let state = test_state_with_repo();
-    let mut repo = repo_with_readme();
+    replace_test_repo(&state, repo_with_readme(&state)).await;
+    state
+}
+
+async fn test_state_with_git_push_token(secret: &str) -> AppState {
+    let state = test_state_with_repo();
+    let mut repo = repo_with_readme(&state);
     repo.git_push_token = Some(GitPushToken {
         token_hash: git_push_token_hash(secret),
         owner_user_id: repo.record.owner_user_id.clone(),
         created_at_unix: unix_now(),
     });
-    replace_test_repo(&state, repo);
+    replace_test_repo(&state, repo).await;
     state
 }
 
-fn test_state_with_first_push_token() -> (AppState, String) {
+async fn test_state_with_first_push_token() -> (AppState, String) {
     let state = test_state_with_repo();
     let (secret, token) = generate_first_push_token(&test_owner_id()).unwrap();
-    let mut catalog = lock_catalog(&state).unwrap();
-    let repo = catalog.repositories.get_mut(TEST_REPO_ID).unwrap();
-    repo.record.publication_state = RepoPublicationState::Unpublished;
-    repo.first_push_token = Some(token);
-    drop(catalog);
+    state
+        .metadata
+        .mutate_repository_for_tests(TEST_REPO_ID, |repo| {
+            repo.record.publication_state = RepoPublicationState::Unpublished;
+            repo.first_push_token = Some(token);
+        })
+        .await
+        .unwrap();
     (state, secret)
 }
 
@@ -388,22 +352,19 @@ fn commit_all(repo: &FsPath, message: &str) {
 }
 
 fn clone_with_bearer(remote: &str, destination: &FsPath, bearer_header_value: &str, action: &str) {
-    let output = Command::new("git")
-        .args(["clone", remote, destination.to_str().unwrap()])
-        .env("GIT_CONFIG_COUNT", "1")
-        .env("GIT_CONFIG_KEY_0", format!("http.{remote}.extraHeader"))
-        .env(
-            "GIT_CONFIG_VALUE_0",
-            format!("Authorization: {bearer_header_value}"),
-        )
-        .output()
-        .unwrap_or_else(|error| panic!("{action}: failed to run git clone: {error}"));
-    if !output.status.success() {
-        panic!(
-            "{action}: {}",
-            String::from_utf8_lossy(&output.stderr).trim()
-        );
-    }
+    let header = format!("http.{remote}.extraHeader=Authorization: {bearer_header_value}");
+    run_git(
+        None,
+        &[
+            "-c",
+            &header,
+            "clone",
+            remote,
+            destination.to_str().unwrap(),
+        ],
+        action,
+    )
+    .unwrap();
 }
 
 const TEST_PUSH_HEAD_OID: &str = "1111111111111111111111111111111111111111";
@@ -472,14 +433,22 @@ fn git_push_token_headers(secret: &str) -> HeaderMap {
     ))
 }
 
-async fn spawn_test_server(state: &AppState) -> (String, tokio::task::JoinHandle<()>) {
+struct TestServer(tokio::task::JoinHandle<()>);
+
+impl Drop for TestServer {
+    fn drop(&mut self) {
+        self.0.abort();
+    }
+}
+
+async fn spawn_test_server(state: &AppState) -> (String, TestServer) {
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let origin = format!("http://{}", listener.local_addr().unwrap());
     let state = state.clone();
     let server = tokio::spawn(async move {
         axum::serve(listener, router(state)).await.unwrap();
     });
-    (origin, server)
+    (origin, TestServer(server))
 }
 
 async fn live_file_content(state: &AppState, path: &str) -> Option<String> {
@@ -488,14 +457,14 @@ async fn live_file_content(state: &AppState, path: &str) -> Option<String> {
         .unwrap()
         .live_tree()
         .get(&ScopePath::parse(path).unwrap())
-        .map(blob_content)
+        .map(|blob| blob_content(state, blob))
 }
 
 async fn persist_test_update(
     state: &AppState,
     update: ReceivePackUpdate,
 ) -> Result<PersistedReceivePackUpdate, crate::error::ApiError> {
-    persist_receive_pack_update(state, TEST_REPO_OWNER, TEST_REPO_NAME, update).await
+    persist_and_promote_test_update(state, update, &test_owner_id()).await
 }
 
 async fn persist_and_promote_test_update(
@@ -598,35 +567,22 @@ async fn apply_first_push_from_staging_repo(
     )
     .await
     .unwrap();
-    persist_receive_pack_update_and_promote(
-        state,
-        TEST_REPO_OWNER,
-        TEST_REPO_NAME,
-        update,
-        &test_owner_id(),
-    )
-    .await
-    .unwrap();
+    persist_test_update(state, update).await.unwrap();
 }
 
-fn source_blob(content: &str) -> crate::domain::store::SourceBlob {
-    source_blob_from_bytes(content.as_bytes())
+fn source_blob(state: &AppState, content: &str) -> crate::domain::store::SourceBlob {
+    source_blob_from_bytes(state, content.as_bytes())
 }
 
-fn source_blob_from_bytes(bytes: &[u8]) -> crate::domain::store::SourceBlob {
-    put_source_blob(
-        AppState::test_state().object_store.as_ref(),
-        TEST_REPO_ID,
-        bytes,
-    )
-    .unwrap()
+fn source_blob_from_bytes(state: &AppState, bytes: &[u8]) -> crate::domain::store::SourceBlob {
+    put_source_blob(state.object_store.as_ref(), TEST_REPO_ID, bytes).unwrap()
 }
 
-fn blob_content(blob: &crate::domain::store::SourceBlob) -> String {
-    String::from_utf8(source_blob_bytes(&MemoryObjectStore::new(), blob).unwrap()).unwrap()
+fn blob_content(state: &AppState, blob: &crate::domain::store::SourceBlob) -> String {
+    String::from_utf8(source_blob_bytes(state.object_store.as_ref(), blob).unwrap()).unwrap()
 }
 
-fn repo_with_readme() -> StoredRepository {
+fn repo_with_readme(state: &AppState) -> StoredRepository {
     let mut repo = test_repo(&test_owner_id());
     repo.graph.commits.push(LogicalCommit {
         id: "rv1".to_string(),
@@ -638,51 +594,35 @@ fn repo_with_readme() -> StoredRepository {
             visibility: Visibility::Public,
             path: ScopePath::parse("/README.md").unwrap(),
             old_content: None,
-            new_content: Some(source_blob("hello")),
+            new_content: Some(source_blob(state, "hello")),
         }],
     });
     repo
 }
 
-fn receive_pack_update(changes: Vec<(&str, Option<&str>)>) -> ReceivePackUpdate {
+fn receive_pack_update(state: &AppState, changes: Vec<(&str, Option<&str>)>) -> ReceivePackUpdate {
+    let config = repo_config(Visibility::Public);
     ReceivePackUpdate {
         branch: format!("refs/heads/{DEFAULT_GIT_BRANCH}"),
         head_oid: "1111111111111111111111111111111111111111".to_string(),
         base_git_snapshot_key: None,
         author_id: test_owner_id(),
         message: "owner push".to_string(),
-        git_snapshot: source_blob("test staged git snapshot"),
+        git_snapshot: source_blob(state, "test staged git snapshot"),
         uploaded_blobs: Vec::new(),
         previous_config: None,
-        base_config_hash: repo_config_fingerprint(&repo_config(Visibility::Public)).unwrap(),
-        config: repo_config(Visibility::Public),
+        base_config_hash: repo_config_fingerprint(&config).unwrap(),
+        config,
         changes: changes
             .into_iter()
             .map(|(path, content)| ReceivePackFileChange {
                 path: repo_scope_path(path).unwrap(),
-                content: content.map(source_blob),
+                content: content.map(|content| source_blob(state, content)),
             })
             .collect(),
     }
 }
 
 fn repo_config(default_visibility: Visibility) -> RepoConfig {
-    let default = match default_visibility {
-        Visibility::Private => "private",
-        Visibility::Public => "public",
-    };
-    RepoConfig::parse_json(
-        format!(
-            r#"{{
-                "kind": "scope.repo-config",
-                "version": 1,
-                "visibility": {{
-                    "default": "{default}",
-                    "rules": []
-                }}
-            }}"#
-        )
-        .as_bytes(),
-    )
-    .unwrap()
+    RepoConfig::with_default_visibility(default_visibility.into())
 }

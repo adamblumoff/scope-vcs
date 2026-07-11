@@ -6,7 +6,7 @@ use scope_api_contract::*;
 use serde::Deserialize;
 
 #[derive(Debug, Deserialize)]
-#[cfg_attr(test, derive(ts_rs::TS))]
+#[cfg_attr(feature = "type-export", derive(ts_rs::TS))]
 pub(crate) struct RequestEditorRequest {
     pub(crate) user_id: String,
 }

@@ -504,7 +504,9 @@ where
             DatabaseBackend::Postgres,
             r#"
                 UPDATE scope_source_blob_cleanup_jobs AS job
-                SET next_run_at_unix = $2, updated_at_unix = $1
+                SET generation = md5(job.generation || ':' || txid_current()::text),
+                    next_run_at_unix = $2,
+                    updated_at_unix = $1
                 FROM (
                     SELECT object_key
                     FROM scope_source_blob_cleanup_jobs

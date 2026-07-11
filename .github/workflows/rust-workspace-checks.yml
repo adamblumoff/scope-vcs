@@ -67,7 +67,10 @@ jobs:
             features=()
           fi
           cargo fmt --all --check
-          cargo test "${packages[@]}" "${features[@]}" --locked -- --test-threads=1
+          cargo test "${packages[@]}" "${features[@]}" --locked
+          if [[ "${{ inputs.include_api }}" == "true" ]]; then
+            cargo test -p api --features local-dev --locked dev::
+          fi
           cargo clippy "${packages[@]}" "${features[@]}" --all-targets --locked -- -D warnings
 
       - name: Install Node

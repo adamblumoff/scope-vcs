@@ -189,13 +189,29 @@ pub(super) fn store_request_metadata(
     request: &RequestSummaryResponse,
 ) -> anyhow::Result<()> {
     store_branch_context(git_repo, branch, context)?;
-    set_branch_config_value(git_repo, branch, REQUEST_ID_KEY, &request.id)?;
-    set_branch_config_value(git_repo, branch, REQUEST_REF_KEY, &request.request_ref)?;
+    store_request_metadata_fields(
+        git_repo,
+        branch,
+        &request.id,
+        &request.request_ref,
+        request.base_audience,
+    )
+}
+
+pub(super) fn store_request_metadata_fields(
+    git_repo: &GitRepo,
+    branch: &str,
+    request_id: &str,
+    request_ref: &str,
+    base_audience: RequestBaseAudience,
+) -> anyhow::Result<()> {
+    set_branch_config_value(git_repo, branch, REQUEST_ID_KEY, request_id)?;
+    set_branch_config_value(git_repo, branch, REQUEST_REF_KEY, request_ref)?;
     set_branch_config_value(
         git_repo,
         branch,
         REQUEST_BASE_AUDIENCE_KEY,
-        base_audience_config_value(request.base_audience),
+        base_audience_config_value(base_audience),
     )?;
     Ok(())
 }

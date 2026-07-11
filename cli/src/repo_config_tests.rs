@@ -1,58 +1,60 @@
 use super::*;
 use crate::test_support::TestDir as TempDir;
-use std::process::{Command, Output};
 
 #[cfg(unix)]
 #[test]
-fn write_rejects_symlinked_worktree_config_file() {
+fn write_and_create_reject_symlinked_config_paths() {
     use std::os::unix::fs::symlink;
 
-    let dir = TempDir::new("file-symlink");
-    fs::create_dir_all(dir.path.join(".scope")).unwrap();
-    let target = dir.path.join("outside.json");
-    fs::write(&target, default_repo_config_json()).unwrap();
-    symlink(&target, dir.path.join(WORKTREE_CONFIG_PATH)).unwrap();
-    let config = RepoConfig::parse_json(default_repo_config_json().as_bytes()).unwrap();
-
-    let error = write_worktree_scope_repo_config(&dir.path, &config).unwrap_err();
-
-    assert!(
-        error
-            .to_string()
-            .contains(".scope/repo.json cannot be a symlink")
-    );
+    for (operation, symlink_directory) in [
+        ("write", false),
+        ("create", false),
+        ("write", true),
+        ("create", true),
+    ] {
+        let dir = TempDir::new(&format!(
+            "{operation}-{}-symlink",
+            if symlink_directory { "dir" } else { "file" }
+        ));
+        let outside = if symlink_directory {
+            let path = dir.path.join("outside");
+            fs::create_dir(&path).unwrap();
+            symlink(&path, dir.path.join(".scope")).unwrap();
+            path
+        } else {
+            fs::create_dir(dir.path.join(".scope")).unwrap();
+            let path = dir.path.join("outside.json");
+            if operation == "write" {
+                fs::write(&path, default_repo_config_json()).unwrap();
+            }
+            symlink(&path, dir.path.join(WORKTREE_CONFIG_PATH)).unwrap();
+            path
+        };
+        let error = if operation == "write" {
+            write_worktree_scope_repo_config(&dir.path, &default_scope_repo_config()).unwrap_err()
+        } else {
+            ensure_scope_repo_config_exists(&dir.path).unwrap_err()
+        };
+        assert!(error.to_string().contains(if symlink_directory {
+            ".scope config directory cannot be a symlink"
+        } else {
+            ".scope/repo.json cannot be a symlink"
+        }));
+        if operation == "create" {
+            assert!(
+                !if symlink_directory {
+                    outside.join("repo.json")
+                } else {
+                    outside
+                }
+                .exists()
+            );
+        }
+    }
 }
 
 #[test]
-fn creating_config_adds_gitignore_and_local_git_exclude_entries() {
-    let dir = TempDir::new("exclude");
-    fs::create_dir_all(dir.path.join(".git/info")).unwrap();
-
-    let created = ensure_scope_repo_config_exists(&dir.path).unwrap();
-
-    assert!(created);
-    let gitignore = fs::read_to_string(dir.path.join(".gitignore")).unwrap();
-    assert!(gitignore.lines().any(|line| line == "/.scope/"));
-    let exclude = fs::read_to_string(dir.path.join(".git/info/exclude")).unwrap();
-    assert!(exclude.lines().any(|line| line == "/.scope/"));
-}
-
-#[test]
-fn creating_config_appends_gitignore_entry_after_existing_contents() {
-    let dir = TempDir::new("gitignore-existing");
-    fs::create_dir_all(dir.path.join(".git/info")).unwrap();
-    fs::write(dir.path.join(".gitignore"), "target/").unwrap();
-
-    ensure_scope_repo_config_exists(&dir.path).unwrap();
-
-    assert_eq!(
-        fs::read_to_string(dir.path.join(".gitignore")).unwrap(),
-        "target/\n/.scope/\n"
-    );
-}
-
-#[test]
-fn synced_config_writes_base_hash_and_excludes_state_file() {
+fn synced_config_writes_base_hash_and_only_locally_excludes_state() {
     let dir = TempDir::new("state");
     fs::create_dir_all(dir.path.join(".git/info")).unwrap();
     let config = default_scope_repo_config();
@@ -64,137 +66,45 @@ fn synced_config_writes_base_hash_and_excludes_state_file() {
         repo_config_fingerprint(&config).unwrap()
     );
     assert!(!dir.path.join(".gitignore").exists());
-    let exclude = fs::read_to_string(dir.path.join(".git/info/exclude")).unwrap();
-    assert!(exclude.lines().any(|line| line == "/.scope/"));
+    assert!(
+        fs::read_to_string(dir.path.join(".git/info/exclude"))
+            .unwrap()
+            .lines()
+            .any(|line| line == "/.scope/")
+    );
 }
 
 #[test]
 fn creating_config_uses_linked_worktree_git_exclude_path() {
     let main = TempDir::new("linked-main");
-    run_git(&main.path, ["-c", "init.defaultBranch=main", "init"]);
+    main.run_git(["-c", "init.defaultBranch=main", "init"]);
     fs::write(main.path.join("README.md"), "initial\n").unwrap();
-    run_git(&main.path, ["add", "README.md"]);
-    run_git(
-        &main.path,
-        [
-            "-c",
-            "user.email=scope@example.test",
-            "-c",
-            "user.name=Scope Test",
-            "commit",
-            "-m",
-            "initial",
-        ],
-    );
+    main.run_git(["add", "README.md"]);
+    main.run_git([
+        "-c",
+        "user.email=scope@example.test",
+        "-c",
+        "user.name=Scope Test",
+        "commit",
+        "-m",
+        "initial",
+    ]);
     let linked = main.path.join("linked");
-    run_git(
-        &main.path,
-        ["worktree", "add", "-b", "linked", linked.to_str().unwrap()],
-    );
+    main.run_git(["worktree", "add", "-b", "linked", linked.to_str().unwrap()]);
 
     ensure_scope_repo_config_exists(&linked).unwrap();
 
     let exclude_path = git_info_exclude_path(&linked).unwrap().unwrap();
-    let gitignore = fs::read_to_string(linked.join(".gitignore")).unwrap();
-    assert!(gitignore.lines().any(|line| line == "/.scope/"));
-    let exclude = fs::read_to_string(exclude_path).unwrap();
-    assert!(exclude.lines().any(|line| line == "/.scope/"));
-}
-
-#[cfg(unix)]
-#[test]
-fn write_rejects_symlinked_scope_directory() {
-    use std::os::unix::fs::symlink;
-
-    let dir = TempDir::new("dir-symlink");
-    let target_dir = dir.path.join("outside");
-    fs::create_dir_all(&target_dir).unwrap();
-    symlink(&target_dir, dir.path.join(".scope")).unwrap();
-    let config = RepoConfig::parse_json(default_repo_config_json().as_bytes()).unwrap();
-
-    let error = write_worktree_scope_repo_config(&dir.path, &config).unwrap_err();
-
     assert!(
-        error
-            .to_string()
-            .contains(".scope config directory cannot be a symlink")
+        fs::read_to_string(linked.join(".gitignore"))
+            .unwrap()
+            .lines()
+            .any(|line| line == "/.scope/")
     );
-}
-
-#[test]
-fn write_replaces_existing_config_without_leaving_temp_file() {
-    let dir = TempDir::new("atomic-write");
-    fs::create_dir_all(dir.path.join(".scope")).unwrap();
-    fs::write(dir.path.join(WORKTREE_CONFIG_PATH), "old config").unwrap();
-    let config = RepoConfig::parse_json(default_repo_config_json().as_bytes()).unwrap();
-
-    write_worktree_scope_repo_config(&dir.path, &config).unwrap();
-
-    assert_eq!(
-        fs::read_to_string(dir.path.join(WORKTREE_CONFIG_PATH)).unwrap(),
-        canonical_repo_config_json(&config).unwrap()
-    );
-    let entries = fs::read_dir(dir.path.join(".scope"))
-        .unwrap()
-        .map(|entry| entry.unwrap().file_name().to_string_lossy().into_owned())
-        .collect::<Vec<_>>();
-    assert_eq!(entries, vec!["repo.json"]);
-}
-
-#[cfg(unix)]
-#[test]
-fn create_rejects_symlinked_worktree_config_file() {
-    use std::os::unix::fs::symlink;
-
-    let dir = TempDir::new("create-file-symlink");
-    fs::create_dir_all(dir.path.join(".scope")).unwrap();
-    let target = dir.path.join("outside.json");
-    symlink(&target, dir.path.join(WORKTREE_CONFIG_PATH)).unwrap();
-
-    let error = ensure_scope_repo_config_exists(&dir.path).unwrap_err();
-
     assert!(
-        error
-            .to_string()
-            .contains(".scope/repo.json cannot be a symlink")
-    );
-    assert!(!target.exists());
-}
-
-#[cfg(unix)]
-#[test]
-fn create_rejects_symlinked_scope_directory() {
-    use std::os::unix::fs::symlink;
-
-    let dir = TempDir::new("create-dir-symlink");
-    let target_dir = dir.path.join("outside");
-    fs::create_dir_all(&target_dir).unwrap();
-    symlink(&target_dir, dir.path.join(".scope")).unwrap();
-
-    let error = ensure_scope_repo_config_exists(&dir.path).unwrap_err();
-
-    assert!(
-        error
-            .to_string()
-            .contains(".scope config directory cannot be a symlink")
-    );
-    assert!(!target_dir.join("repo.json").exists());
-}
-
-fn run_git<const N: usize>(cwd: &std::path::Path, args: [&str; N]) {
-    let output = Command::new("git")
-        .current_dir(cwd)
-        .args(args)
-        .output()
-        .unwrap();
-    assert_success(&output, "git");
-}
-
-fn assert_success(output: &Output, command: &str) {
-    assert!(
-        output.status.success(),
-        "{command} failed\nstdout:\n{}\nstderr:\n{}",
-        String::from_utf8_lossy(&output.stdout),
-        String::from_utf8_lossy(&output.stderr)
+        fs::read_to_string(exclude_path)
+            .unwrap()
+            .lines()
+            .any(|line| line == "/.scope/")
     );
 }

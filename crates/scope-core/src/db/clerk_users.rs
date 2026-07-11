@@ -333,13 +333,7 @@ mod tests {
         let users = resolve_concurrently(store.clone(), identities).await;
 
         assert!(users.iter().all(|user| user.id == users[0].id));
-        store
-            .read(|catalog| {
-                assert_eq!(catalog.users.len(), 1);
-                Ok(())
-            })
-            .await
-            .unwrap();
+        assert_eq!(store.user_count_for_tests().await.unwrap(), 1);
     }
 
     #[tokio::test]

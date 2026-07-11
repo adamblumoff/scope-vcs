@@ -53,36 +53,6 @@ pub(crate) async fn git_read_scope_user(
         .map_err(git_credential_error)
 }
 
-#[cfg(test)]
-pub(crate) fn first_push_token_from_headers(headers: &HeaderMap) -> Result<String, ApiError> {
-    let Some(value) = headers.get(AUTHORIZATION) else {
-        return Err(ApiError::unauthorized("first-push token required"));
-    };
-    let value = value
-        .to_str()
-        .map_err(|_| ApiError::unauthorized("invalid authorization header"))?;
-
-    if let Some(token) = value.strip_prefix("Bearer ") {
-        let token = token.trim();
-        if token.is_empty() {
-            return Err(ApiError::unauthorized("empty first-push token"));
-        }
-        return Ok(token.to_string());
-    }
-
-    if let Some(encoded) = value.strip_prefix("Basic ") {
-        let token = basic_auth_secret(encoded)?;
-        if token.is_empty() {
-            return Err(ApiError::unauthorized("empty first-push token"));
-        }
-        return Ok(token);
-    }
-
-    Err(ApiError::unauthorized(
-        "expected Authorization: Basic or Bearer first-push token",
-    ))
-}
-
 pub(crate) async fn receive_pack_authorization(
     state: &AppState,
     headers: &HeaderMap,

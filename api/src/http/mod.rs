@@ -14,5 +14,5 @@ pub(crate) mod request_review;
 pub(crate) mod requests;
 pub(crate) mod responses;
 pub(crate) mod routes;
-#[cfg(test)]
-mod type_exports;
+#[cfg(feature = "type-export")]
+pub(crate) mod type_exports;

@@ -9,6 +9,12 @@ repository = "https://github.com/adamblumoff/scope-vcs"
 default = []
 local-dev = ["scope_core/local-dev"]
 test-support = ["scope_core/test-support"]
+type-export = ["dep:ts-rs"]
+
+[[bin]]
+name = "export-api-types"
+path = "src/bin/export_api_types.rs"
+required-features = ["type-export"]
 
 [[test]]
 name = "workflows"
@@ -39,8 +45,8 @@ tokio-stream = { version = "0.1.17", features = ["sync"] }
 tower-http = { version = "0.6.8", features = ["cors", "trace"] }
 tracing = "0.1.44"
 tracing-subscriber = { version = "0.3.22", features = ["env-filter", "fmt"] }
+ts-rs = { version = "12.0.1", optional = true }
 
 [dev-dependencies]
 scope_core = { package = "scope-core", path = "../crates/scope-core", features = ["test-support", "ts"] }
 tower = { version = "0.5.3", features = ["util"] }
-ts-rs = "12.0.1"
