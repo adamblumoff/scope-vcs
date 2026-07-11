@@ -1,9 +1,9 @@
 use super::{
-    local::{maybe_request_branch_base_audience, store_request_metadata_fields},
+    local::{maybe_request_branch_audience, store_request_metadata_fields},
     text::terminal_text,
 };
 use crate::{git_repo::GitRepo, test_support::TestDir};
-use scope_core::domain::requests::RequestBaseAudience;
+use scope_core::domain::requests::RequestAudience;
 
 #[test]
 fn terminal_text_replaces_control_characters() {
@@ -11,22 +11,15 @@ fn terminal_text_replaces_control_characters() {
 }
 
 #[test]
-fn request_metadata_stores_the_request_base_audience() {
+fn request_metadata_stores_the_request_audience() {
     let dir = TestDir::git_repo("request-audience", "request");
     let git_repo = GitRepo {
         root: dir.path.clone(),
     };
-    store_request_metadata_fields(
-        &git_repo,
-        "request",
-        "req_1",
-        "refs/scope/requests/req_1",
-        RequestBaseAudience::Public,
-    )
-    .unwrap();
+    store_request_metadata_fields(&git_repo, "request", "req_1", RequestAudience::Public).unwrap();
 
     assert_eq!(
-        maybe_request_branch_base_audience(&git_repo).unwrap(),
-        Some(RequestBaseAudience::Public)
+        maybe_request_branch_audience(&git_repo).unwrap(),
+        Some(RequestAudience::Public)
     );
 }

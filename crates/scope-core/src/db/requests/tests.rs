@@ -2,8 +2,7 @@ use super::*;
 use crate::domain::{
     policy::Visibility,
     requests::{
-        CreditLedgerEntryKind, RequestActorRole, RequestBaseAudience, RequestDisposition,
-        RequestState,
+        CreditLedgerEntryKind, RequestActorRole, RequestAudience, RequestDisposition, RequestState,
     },
     store::{
         AppCatalog, DEFAULT_GIT_FILE_MODE, RepoPublicationState, SourceBlob, StoredRepository,
@@ -85,7 +84,11 @@ async fn request_submission_and_resolution_update_credit_facts() {
 #[tokio::test]
 async fn public_user_cannot_choose_owner_role_to_skip_stake() {
     let store = postgres_store();
-    store.start_request(public_start_input()).await.unwrap();
+    let mut start_input = public_start_input();
+    start_input.audience = RequestAudience::Private;
+    let started = store.start_request(start_input).await.unwrap();
+    assert_eq!(started.request.author_role, RequestActorRole::Public);
+    assert_eq!(started.request.audience, RequestAudience::Public);
     store
         .record_working_request_upload(public_upload_input())
         .await
@@ -121,14 +124,14 @@ async fn public_user_cannot_choose_owner_role_to_skip_stake() {
 }
 
 #[tokio::test]
-async fn owner_submission_derives_private_base_without_credits() {
+async fn owner_submission_preserves_explicit_public_audience_without_credits() {
     let store = postgres_store();
     let mut input = public_start_input();
     input.id = "req_owner".to_string();
-    input.request_ref = "refs/scope/requests/req_owner".to_string();
+    input.name = "owner-request".to_string();
     input.author_user_id = "user_owner".to_string();
     input.author_role = RequestActorRole::Public;
-    input.base_audience = RequestBaseAudience::Public;
+    input.audience = RequestAudience::Public;
     let start = store.start_request(input).await.unwrap();
     store
         .record_working_request_upload(RecordWorkingRequestUploadInput {
@@ -156,9 +159,18 @@ async fn owner_submission_derives_private_base_without_credits() {
         .unwrap();
 
     assert_eq!(mutation.request.author_role, RequestActorRole::Owner);
-    assert_eq!(mutation.request.base_audience, RequestBaseAudience::Private);
+    assert_eq!(mutation.request.audience, RequestAudience::Public);
     assert!(mutation.account.is_none());
     assert!(mutation.ledger_entry.is_none());
+    assert_eq!(
+        store
+            .request_by_name("owner/repo", "owner-request")
+            .await
+            .unwrap()
+            .unwrap()
+            .id,
+        "req_owner"
+    );
 }
 
 #[tokio::test]
@@ -389,12 +401,11 @@ fn public_start_input() -> StartRequestInput {
     StartRequestInput {
         id: "req_1".to_string(),
         repo_id: "owner/repo".to_string(),
+        name: "fix-parser".to_string(),
         author_user_id: "user_public".to_string(),
-        title: "Fix parser crash".to_string(),
+        title: Some("Fix parser crash".to_string()),
         author_role: RequestActorRole::Public,
-        base_audience: RequestBaseAudience::Public,
-        target_branch: "main".to_string(),
-        request_ref: "refs/scope/requests/req_1".to_string(),
+        audience: RequestAudience::Public,
         base_main_oid: "base".to_string(),
         now_unix: 2,
     }

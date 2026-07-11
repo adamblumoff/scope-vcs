@@ -130,9 +130,7 @@ mod tests {
     use super::*;
     use crate::domain::{
         policy::Visibility,
-        requests::{
-            Request, RequestActorRole, RequestBaseAudience, RequestState, canonical_request_ref,
-        },
+        requests::{Request, RequestActorRole, RequestAudience, RequestState},
         store::{AppCatalog, RepoPublicationState, StoredRepository, UserAccount, app_catalog},
     };
 
@@ -214,12 +212,10 @@ mod tests {
             Request {
                 id: "req_1".to_string(),
                 repo_id: "owner/repo".to_string(),
+                name: "owner-request".to_string(),
                 author_user_id: "user_owner".to_string(),
-                editor_user_ids: Default::default(),
                 author_role: RequestActorRole::Owner,
-                base_audience: RequestBaseAudience::Private,
-                target_branch: "main".to_string(),
-                request_ref: canonical_request_ref("req_1"),
+                audience: RequestAudience::Private,
                 base_main_oid: "main_a".to_string(),
                 head_oid: "head_a".to_string(),
                 git_snapshot: None,

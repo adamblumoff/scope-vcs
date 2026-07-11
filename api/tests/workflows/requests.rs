@@ -1,15 +1,12 @@
 use super::*;
-use crate::domain::requests::{
-    GrantUserCreditsInput, RecordWorkingRequestUploadInput, canonical_request_ref,
-};
+use crate::domain::requests::{GrantUserCreditsInput, RecordWorkingRequestUploadInput};
 use tokio_stream::StreamExt;
 
-mod editors;
 mod helpers;
 pub(super) use helpers::create_owner_request;
 use helpers::{
-    create_public_request, mark_working_request_uploaded, public_merge_fixture,
-    start_request_via_http, submit_request_via_http,
+    mark_working_request_uploaded, public_merge_fixture, start_request_via_http,
+    submit_request_via_http,
 };
 
 const PUBLIC_SUBJECT: &str = "public_requester";
@@ -27,10 +24,7 @@ async fn public_submit_stakes_credits_and_uses_public_base() {
         &bearer_header_for(PUBLIC_SUBJECT, PUBLIC_EMAIL),
     )
     .await;
-    assert_eq!(
-        start["request"]["request_ref"],
-        canonical_request_ref(start["request"]["id"].as_str().unwrap())
-    );
+    assert_eq!(start["request"]["name"], "fix-parser-crash");
     mark_working_request_uploaded(
         &state,
         start["request"]["id"].as_str().unwrap(),
@@ -49,7 +43,7 @@ async fn public_submit_stakes_credits_and_uses_public_base() {
     assert_eq!(response.status(), StatusCode::OK);
     let body = response_json(response).await;
     assert_eq!(body["request"]["author_role"], "Public");
-    assert_eq!(body["request"]["base_audience"], "Public");
+    assert_eq!(body["request"]["audience"], "Public");
     assert_eq!(body["request"]["stake_credits"], 10);
 }
 
@@ -141,7 +135,7 @@ async fn public_readers_do_not_see_private_request_branches() {
     assert_eq!(owner_response.status(), StatusCode::OK);
     let owner_body = response_json(owner_response).await;
     assert_eq!(owner_body["requests"].as_array().unwrap().len(), 1);
-    assert_eq!(owner_body["requests"][0]["base_audience"], "Private");
+    assert_eq!(owner_body["requests"][0]["audience"], "Private");
 }
 
 #[tokio::test]
@@ -250,22 +244,6 @@ async fn test_state_with_repo_with_readme() -> AppState {
         .replace_repository_for_tests(repo_with_readme(&state))
         .await
         .unwrap();
-    state
-}
-
-async fn state_with_public_request() -> AppState {
-    let state = state_with_public_user().await;
-    grant_public_credits(&state, "ledger_grant").await;
-    create_public_request(
-        &state,
-        "req_public",
-        "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
-        REQUEST_HEAD,
-        "Public request",
-        "ledger_stake",
-        "event_created",
-    )
-    .await;
     state
 }
 

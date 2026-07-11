@@ -2,7 +2,7 @@ use crate::{
     domain::{
         policy::{ScopePath, Visibility},
         projection::{ProjectionViewKey, project_graph},
-        requests::{Request, RequestBaseAudience},
+        requests::{Request, RequestAudience, canonical_request_ref},
         store::StoredRepository,
     },
     error::ApiError,
@@ -28,7 +28,7 @@ pub(crate) async fn clean_merge_update(
     maintainer_id: &str,
     current_main_oid: &str,
 ) -> Result<ReceivePackUpdate, ApiError> {
-    if request.base_audience == RequestBaseAudience::Public {
+    if request.audience == RequestAudience::Public {
         return clean_public_request_merge_update(
             state,
             owner,
@@ -230,7 +230,8 @@ fn fetch_and_merge_request_branch(
     let request_bundle = work_repo.join(".git").join("scope-request.bundle.tmp");
     let request_bytes = source_blob_bytes(state.object_store.as_ref(), request_snapshot)?;
     fs::write(&request_bundle, request_bytes).map_err(ApiError::internal)?;
-    let refspec = format!("{}:refs/remotes/scope/request", request.request_ref);
+    let request_ref = canonical_request_ref(&request.name);
+    let refspec = format!("{request_ref}:refs/remotes/scope/request");
     run_git(
         Some(work_repo),
         &["fetch", request_bundle.to_string_lossy().as_ref(), &refspec],

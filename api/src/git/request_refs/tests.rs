@@ -1,6 +1,49 @@
 use super::*;
 
 #[test]
+fn named_request_refs_are_top_level_branches_other_than_main() {
+    assert!(is_request_ref("refs/heads/railway-upload"));
+    assert!(!is_request_ref("refs/heads/main"));
+    assert!(!is_request_ref("refs/heads/head"));
+    assert!(!is_request_ref("refs/heads/scope"));
+    assert!(!is_request_ref("refs/heads/UPPER-CASE"));
+    assert!(!is_request_ref("refs/heads/requests/nested"));
+    assert!(!is_request_ref("refs/tags/railway-upload"));
+}
+
+#[test]
+fn request_ref_diff_rejects_invalid_request_names_before_lookup() {
+    for name in ["head", "scope", "UPPER-CASE"] {
+        let after = vec![(
+            format!("refs/heads/{name}"),
+            "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb".to_string(),
+        )];
+        let error = request_ref_update_from_refs(&[], &after).unwrap_err();
+        assert!(error.message().contains("invalid request branch"));
+    }
+}
+
+#[test]
+fn request_ref_diff_rejects_delete_and_tracks_name() {
+    let before = vec![(
+        "refs/heads/railway-upload".to_string(),
+        "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa".to_string(),
+    )];
+    let after = vec![(
+        "refs/heads/railway-upload".to_string(),
+        "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb".to_string(),
+    )];
+    let update = request_ref_update_from_refs(&before, &after)
+        .unwrap()
+        .unwrap();
+    assert_eq!(update.request_name, "railway-upload");
+    assert_eq!(update.request_ref, "refs/heads/railway-upload");
+
+    let error = request_ref_update_from_refs(&before, &[]).unwrap_err();
+    assert!(error.message().contains("deletes"));
+}
+
+#[test]
 fn request_ref_store_head_must_match_advertised_old_head() {
     ensure_request_ref_store_head_matches_push(None, None).unwrap();
     ensure_request_ref_store_head_matches_push(Some("a"), Some("a")).unwrap();
@@ -51,7 +94,7 @@ fn request_ref_head_must_be_commit_object_not_annotated_tag() {
     let repo = temp_repo_path("tag-object");
     run_git(
         None,
-        &["init", repo.to_string_lossy().as_ref()],
+        &["init", "-b", "main", repo.to_string_lossy().as_ref()],
         "init test repo",
     )
     .unwrap();
@@ -92,6 +135,44 @@ fn request_ref_head_must_be_commit_object_not_annotated_tag() {
     ensure_request_ref_oid_is_commit(&repo, head.trim()).unwrap();
     let error = ensure_request_ref_oid_is_commit(&repo, tag.trim()).unwrap_err();
     assert!(error.message().contains("must point at commits"));
+    let _ = fs::remove_dir_all(repo);
+}
+
+#[test]
+fn main_import_ref_listing_ignores_seeded_named_requests() {
+    let repo = temp_repo_path("main-import-named-requests");
+    run_git(
+        None,
+        &["init", "-b", "main", repo.to_string_lossy().as_ref()],
+        "init test repo",
+    )
+    .unwrap();
+    run_git(
+        Some(&repo),
+        &[
+            "-c",
+            "user.name=Scope Test",
+            "-c",
+            "user.email=scope@example.com",
+            "commit",
+            "--allow-empty",
+            "-m",
+            "initial",
+        ],
+        "create main commit",
+    )
+    .unwrap();
+    let head = git_stdout(&repo, &["rev-parse", "HEAD"]);
+    run_git(
+        Some(&repo),
+        &["branch", "railway-upload", head.trim()],
+        "seed named request",
+    )
+    .unwrap();
+
+    let refs = crate::git::import::git_refs(&repo).unwrap();
+    assert_eq!(refs.len(), 1);
+    assert_eq!(refs[0].0, "refs/heads/main");
     let _ = fs::remove_dir_all(repo);
 }
 

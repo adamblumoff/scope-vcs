@@ -1,4 +1,4 @@
-use super::{Request, RequestActorRole, RequestBaseAudience, RequestState};
+use super::{Request, RequestActorRole, RequestAudience, RequestState};
 use crate::domain::store::{RepositoryAccess, RepositoryActor};
 use serde::{Deserialize, Serialize};
 
@@ -8,7 +8,6 @@ pub struct RequestPermissions {
     pub can_pull_branch: bool,
     pub can_push_branch: bool,
     pub can_delete: bool,
-    pub can_invite_editor: bool,
     pub can_mark_needs_response: bool,
     pub can_respond: bool,
     pub can_resolve: bool,
@@ -39,20 +38,10 @@ pub fn request_actor_role(access: RepositoryAccess) -> RequestActorRole {
     }
 }
 
-pub fn request_base_audience(access: RepositoryAccess) -> RequestBaseAudience {
-    match access.actor {
-        RepositoryActor::Owner | RepositoryActor::Member => RequestBaseAudience::Private,
-        RepositoryActor::Public => RequestBaseAudience::Public,
-    }
-}
-
 pub fn request_visible_to_access(request: &Request, access: RepositoryAccess) -> bool {
     match access.actor {
         RepositoryActor::Owner | RepositoryActor::Member => true,
-        RepositoryActor::Public => {
-            request.author_role == RequestActorRole::Public
-                && request.base_audience == request_base_audience(access)
-        }
+        RepositoryActor::Public => request.audience == RequestAudience::Public,
     }
 }
 
@@ -65,9 +54,9 @@ pub fn request_permissions(
         access.actor,
         RepositoryActor::Owner | RepositoryActor::Member
     );
+    let authenticated = viewer_user_id.is_some();
     let author = viewer_user_id == Some(request.author_user_id.as_str());
-    let editor = viewer_user_id.is_some_and(|id| request.editor_user_ids.contains(id));
-    let can_edit_branch = author || editor || maintainer;
+    let visible = request_visible_to_access(request, access);
     let open = !matches!(
         request.state,
         RequestState::Resolved | RequestState::Withdrawn
@@ -77,16 +66,19 @@ pub fn request_permissions(
         request.state,
         RequestState::Submitted | RequestState::NeedsResponse
     );
+    let can_collaborate = match request.audience {
+        RequestAudience::Public => authenticated,
+        RequestAudience::Private => maintainer,
+    };
     RequestPermissions {
-        can_comment: open && can_edit_branch,
-        can_pull_branch: open && can_edit_branch && request.git_snapshot.is_some(),
-        can_push_branch: open && can_edit_branch,
-        can_delete: open && (author || maintainer),
-        can_invite_editor: open && maintainer,
-        can_mark_needs_response: submitted && maintainer,
-        can_respond: open && author && request.state == RequestState::NeedsResponse,
-        can_resolve: submitted_or_waiting && maintainer,
-        can_merge: submitted && maintainer,
+        can_comment: visible && open && can_collaborate,
+        can_pull_branch: visible,
+        can_push_branch: visible && open && can_collaborate,
+        can_delete: visible && open && (author || maintainer),
+        can_mark_needs_response: visible && submitted && maintainer,
+        can_respond: visible && open && author && request.state == RequestState::NeedsResponse,
+        can_resolve: visible && submitted_or_waiting && maintainer,
+        can_merge: visible && submitted && maintainer,
     }
 }
 

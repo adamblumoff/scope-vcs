@@ -10,7 +10,7 @@ import { ArrowRight, Coins, GitBranch, GitPullRequest } from 'lucide-react'
 import {
   formatUnixDate,
   requestAuthorRoleLabel,
-  requestBaseAudienceLabel,
+  requestAudienceLabel,
   requestMergeabilityLabel,
   requestStatusLabel,
   requestStatusTone,
@@ -77,12 +77,18 @@ function RequestListRow({
         <GitPullRequest className="mt-1 size-4 shrink-0 text-muted-foreground" />
         <div className="min-w-0">
           <h2 className="truncate text-base font-semibold leading-6 group-hover:underline">
-            {request.title}
+            {request.name}
           </h2>
           <div className="mt-1 flex flex-wrap items-center gap-x-2 gap-y-1 text-xs leading-5 text-muted-foreground">
+            {request.title !== request.name ? (
+              <>
+                <span>{request.title}</span>
+                <MetadataSeparator />
+              </>
+            ) : null}
             <span className="font-mono">{request.id}</span>
             <MetadataSeparator />
-            <span>{requestBaseAudienceLabel(request)}</span>
+            <span>{requestAudienceLabel(request)}</span>
             <MetadataSeparator />
             <span>{requestAuthorRoleLabel(request)}</span>
             <MetadataSeparator />
@@ -136,7 +142,7 @@ function EmptyRequests({ params }: { params: RepoParams }) {
           is ready for maintainer attention.
         </p>
         <div className="mt-4 inline-flex rounded-lg border border-border bg-muted px-3 py-2 font-mono text-xs leading-5 text-foreground">
-          scope request start
+          scope request start &lt;request-name&gt;
         </div>
         <div className="mt-4">
           <Button asChild size="sm" variant="secondary">

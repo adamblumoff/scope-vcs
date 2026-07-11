@@ -1,7 +1,7 @@
 use crate::domain::policy::{ScopePath, Visibility};
 use crate::domain::repo_actions::reviewed_update_api_error;
 use crate::domain::repo_config::is_repo_config_fingerprint;
-use crate::domain::requests::{Request, RequestActorRole, RequestBaseAudience, RequestState};
+use crate::domain::requests::{Request, RequestState, request_visible_to_access};
 use crate::domain::reviewed_updates::{ReviewedConfigUpdateInput, apply_reviewed_config_to_repo};
 use crate::domain::store::{RepositoryAccess, RepositoryActor};
 use crate::{
@@ -441,11 +441,5 @@ fn request_visible_in_summary(request: &Request, access: RepositoryAccess) -> bo
     ) {
         return false;
     }
-    match access.actor {
-        RepositoryActor::Owner | RepositoryActor::Member => true,
-        RepositoryActor::Public => {
-            request.author_role == RequestActorRole::Public
-                && request.base_audience == RequestBaseAudience::Public
-        }
-    }
+    request_visible_to_access(request, access)
 }

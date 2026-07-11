@@ -39,12 +39,13 @@ pub(super) fn pushed_commit_message(
 }
 
 pub(crate) fn git_refs(staging_repo: &FsPath) -> Result<Vec<(String, String)>, ApiError> {
+    let main_ref = format!("refs/heads/{DEFAULT_GIT_BRANCH}");
     let output = run_git_output(
         Some(staging_repo),
         &[
             "for-each-ref",
             "--format=%(refname)%00%(objectname)",
-            "refs/heads",
+            &main_ref,
             "refs/tags",
         ],
         "reading pushed refs",

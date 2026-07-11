@@ -1,13 +1,10 @@
-use super::{
-    projection_label_for_repo,
-    text::{short_oid, terminal_text},
-};
+use super::text::{short_oid, terminal_text};
 use crate::api::{
     RepoSummaryResponse, RepositoryActor, RequestDetailResponse, RequestEventResponse,
     RequestMergeabilityStatus, RequestMutationResponse, RequestSummaryResponse,
 };
 use anyhow::{Context, bail};
-use scope_core::domain::requests::{RequestBaseAudience, RequestEventKind, RequestState};
+use scope_core::domain::requests::{RequestAudience, RequestEventKind, RequestState};
 use std::io::{self, Write};
 
 pub(super) fn print_repo_access(repo: &RepoSummaryResponse) {
@@ -17,7 +14,6 @@ pub(super) fn print_repo_access(repo: &RepoSummaryResponse) {
         repo.name.as_str()
     );
     println!("Permission: {}", access_label(repo.access.actor));
-    println!("Request base: {}", projection_label_for_repo(repo));
     if repo.request_permissions.uses_credit_stake {
         println!("Credit stake: required on first submit");
     } else {
@@ -36,13 +32,13 @@ pub(super) fn print_request_detail(detail: &RequestDetailResponse) {
     println!("{}", request_line(&detail.request));
     println!(
         "  base: {} {}",
-        base_audience_label(detail.request.base_audience),
+        audience_label(detail.request.audience),
         short_oid(&detail.request.base_main_oid)
     );
     println!(
-        "  head: {} at {}",
+        "  head: {} at origin/{}",
         short_oid(&detail.request.head_oid),
-        detail.request.request_ref
+        detail.request.name
     );
     println!("  mergeability: {}", mergeability_label(&detail.request));
     if let Some(settlement) = &detail.request.settlement {
@@ -91,9 +87,8 @@ pub(super) fn confirm_merge(request: &RequestSummaryResponse) -> anyhow::Result<
         .as_deref()
         .context("request has no current main oid to merge into")?;
     println!(
-        "Are you sure you want to merge request {} into '{}' at {}?",
+        "Are you sure you want to merge request {} into main at {}?",
         request.id,
-        request.target_branch,
         short_oid(current_main_oid)
     );
     print!("Type 'merge' to continue: ");
@@ -120,7 +115,8 @@ pub(super) fn request_line(request: &RequestSummaryResponse) -> String {
         })
         .unwrap_or_default();
     format!(
-        "{} [{}] {} stake={} head={}{}",
+        "{} ({}) [{}] {} stake={} head={}{}",
+        request.name,
         request.id,
         state_label(request.state),
         terminal_text(&request.title),
@@ -178,10 +174,10 @@ fn access_label(actor: RepositoryActor) -> &'static str {
     }
 }
 
-fn base_audience_label(audience: RequestBaseAudience) -> &'static str {
+fn audience_label(audience: RequestAudience) -> &'static str {
     match audience {
-        RequestBaseAudience::Public => "public main",
-        RequestBaseAudience::Private => "private main",
+        RequestAudience::Public => "public main",
+        RequestAudience::Private => "private main",
     }
 }
 

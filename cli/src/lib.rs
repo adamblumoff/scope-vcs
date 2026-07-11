@@ -8,6 +8,7 @@ pub mod git_transport;
 pub mod init;
 pub mod installers;
 pub mod login;
+pub mod pull;
 pub mod push;
 pub mod repo_config;
 pub mod request;

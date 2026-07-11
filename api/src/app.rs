@@ -111,18 +111,6 @@ pub fn router(state: AppState) -> Router {
             get(http::request_review::get_request_file_diff),
         )
         .route(
-            routes::REPO_REQUEST_BUNDLE,
-            get(http::requests::download_request_branch_bundle),
-        )
-        .route(
-            routes::REPO_REQUEST_EDITORS,
-            post(http::requests::add_request_editor),
-        )
-        .route(
-            routes::REPO_REQUEST_EDITOR,
-            delete(http::requests::remove_request_editor),
-        )
-        .route(
             routes::REPO_REQUEST_SUBMIT,
             post(http::requests::submit_request),
         )

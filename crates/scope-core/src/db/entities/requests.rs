@@ -1,6 +1,6 @@
 use super::*;
 use crate::domain::requests::{
-    CreditLedgerEntry, CreditLedgerEntryKind, Request, RequestActorRole, RequestBaseAudience,
+    CreditLedgerEntry, CreditLedgerEntryKind, Request, RequestActorRole, RequestAudience,
     RequestDisposition, RequestEvent, RequestEventKind, RequestSettlement, RequestState,
     UserCreditAccount,
 };
@@ -15,12 +15,10 @@ pub mod request {
         #[sea_orm(primary_key, auto_increment = false)]
         pub id: String,
         pub repo_id: String,
+        pub name: String,
         pub author_user_id: String,
-        pub editor_user_ids: Json,
         pub author_role: String,
-        pub base_audience: String,
-        pub target_branch: String,
-        pub request_ref: String,
+        pub audience: String,
         pub base_main_oid: String,
         pub head_oid: String,
         pub git_snapshot: Option<Json>,
@@ -44,12 +42,10 @@ pub mod request {
             Ok(Self {
                 id: request.id.clone(),
                 repo_id: request.repo_id.clone(),
+                name: request.name.clone(),
                 author_user_id: request.author_user_id.clone(),
-                editor_user_ids: encode_json(&request.editor_user_ids)?,
                 author_role: encode_enum(request.author_role)?,
-                base_audience: encode_enum(request.base_audience)?,
-                target_branch: request.target_branch.clone(),
-                request_ref: request.request_ref.clone(),
+                audience: encode_enum(request.audience)?,
                 base_main_oid: request.base_main_oid.clone(),
                 head_oid: request.head_oid.clone(),
                 git_snapshot: request.git_snapshot.as_ref().map(encode_json).transpose()?,
@@ -71,14 +67,10 @@ pub mod request {
             Ok(Request {
                 id: self.id,
                 repo_id: self.repo_id,
+                name: self.name,
                 author_user_id: self.author_user_id,
-                editor_user_ids: decode_json::<std::collections::BTreeSet<String>>(
-                    self.editor_user_ids,
-                )?,
                 author_role: decode_enum::<RequestActorRole>(self.author_role)?,
-                base_audience: decode_enum::<RequestBaseAudience>(self.base_audience)?,
-                target_branch: self.target_branch,
-                request_ref: self.request_ref,
+                audience: decode_enum::<RequestAudience>(self.audience)?,
                 base_main_oid: self.base_main_oid,
                 head_oid: self.head_oid,
                 git_snapshot: self

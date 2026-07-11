@@ -346,7 +346,7 @@ pub fn push_head_to_ref_with_bearer(
             "push.recurseSubmodules=no".to_string(),
             "push".to_string(),
             destination.to_string(),
-            format!("+{commit_oid}:{refname}"),
+            format!("{commit_oid}:{refname}"),
         ],
         destination,
         &[format!("Authorization: Bearer {bearer_token}")],

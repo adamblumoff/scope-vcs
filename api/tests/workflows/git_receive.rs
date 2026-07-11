@@ -102,8 +102,7 @@ async fn published_receive_pack_rejects_non_fast_forward_push() {
 
     assert!(!output.status.success());
     assert!(
-        String::from_utf8_lossy(&output.stderr)
-            .contains("Scope rejects non-fast-forward pushes in v0")
+        String::from_utf8_lossy(&output.stderr).contains("Scope rejects non-fast-forward pushes")
     );
     let current_head = git_stdout_text(
         &staging_repo,

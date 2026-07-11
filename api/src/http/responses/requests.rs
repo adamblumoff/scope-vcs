@@ -3,13 +3,6 @@ use crate::domain::requests::{
     settlement_for,
 };
 use scope_api_contract::*;
-use serde::Deserialize;
-
-#[derive(Debug, Deserialize)]
-#[cfg_attr(feature = "type-export", derive(ts_rs::TS))]
-pub(crate) struct RequestEditorRequest {
-    pub(crate) user_id: String,
-}
 
 fn settlement_preview(
     stake_credits: u32,
@@ -41,13 +34,11 @@ pub(crate) fn request_summary_response(
         settlement_preview(request.stake_credits, RequestDisposition::Accepted);
     Ok(RequestSummaryResponse {
         id: request.id,
+        name: request.name,
         title: request.title,
         author_user_id: request.author_user_id,
-        editor_user_ids: request.editor_user_ids.into_iter().collect(),
         author_role: request.author_role,
-        base_audience: request.base_audience,
-        target_branch: request.target_branch,
-        request_ref: request.request_ref,
+        audience: request.audience,
         base_main_oid: super::git_oid_response(request.base_main_oid)?,
         head_oid: super::git_oid_response(request.head_oid)?,
         state: request.state,

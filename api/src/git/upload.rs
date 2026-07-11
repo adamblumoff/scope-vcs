@@ -5,7 +5,10 @@ use crate::{
     auth::scope::principal_for_user_id,
     config::{DEFAULT_GIT_BRANCH, GIT_UPLOAD_PACK, UNPUBLISHED_GIT_ERROR},
     error::ApiError,
-    git::{GitRemoteMode, git_read_scope_user, storage::cached_raw_git_snapshot_repo},
+    git::{
+        GitRemoteMode, git_read_scope_user, request_refs::attach_visible_request_refs,
+        storage::cached_raw_git_snapshot_repo,
+    },
     object_store::source_blob_bytes,
     runtime_budgets::{RuntimeBudgets, RuntimePermit},
     state::AppState,
@@ -32,9 +35,11 @@ use std::{
     time::{Duration, Instant},
 };
 const PROJECTION_CACHE_SEMANTICS_VERSION: &str = "shared-projection-view-v1";
+const GIT_READ_VIEW_CACHE_SEMANTICS_VERSION: &str = "named-request-read-view-v1";
 const GIT_STDERR_DIAGNOSTIC_BYTES: usize = 8 * 1024;
 static GIT_CACHE_ATTEMPT: AtomicU64 = AtomicU64::new(1);
 
+#[cfg(test)]
 pub(crate) async fn git_projection_for_request(
     state: &AppState,
     headers: &HeaderMap,
@@ -45,14 +50,13 @@ pub(crate) async fn git_projection_for_request(
     let (repo, principal) =
         git_read_principal_for_request(state, headers, owner, repo_name, mode).await?;
     if repo.record.publication_state != RepoPublicationState::Published {
-        return unpublished_git_read_error(&repo, owner, repo_name, &principal);
+        return Err(unpublished_git_read_error(
+            &repo, owner, repo_name, &principal,
+        ));
     }
 
     ensure_repo_read(state, &repo, &principal)?;
     let access = repo.access_for_principal(&principal);
-    if mode == GitRemoteMode::Permissioned && access.actor == RepositoryActor::Public {
-        return Err(ApiError::forbidden("repo membership required"));
-    }
     let view_key = ProjectionViewKey::from_access(access);
     Ok(project_graph(
         &repo.policy,
@@ -69,52 +73,156 @@ pub(crate) async fn git_upload_pack_repo_for_request(
     repo_name: &str,
     mode: GitRemoteMode,
 ) -> Result<PathBuf, ApiError> {
-    if mode == GitRemoteMode::Permissioned
-        && let Some(repo_path) =
-            private_live_repo_for_request(state, headers, owner, repo_name, mode).await?
-    {
+    let (repo, principal) =
+        match git_read_principal_for_request(state, headers, owner, repo_name, mode).await {
+            Ok(value) => value,
+            Err(error)
+                if mode == GitRemoteMode::Public && error.status() == StatusCode::NOT_FOUND =>
+            {
+                return Err(git_upload_pack_auth_required());
+            }
+            Err(error) => return Err(error),
+        };
+    if repo.record.publication_state != RepoPublicationState::Published {
+        return Err(unpublished_git_read_error(
+            &repo, owner, repo_name, &principal,
+        ));
+    }
+    ensure_repo_read(state, &repo, &principal)?;
+    let access = repo.access_for_principal(&principal);
+    let private_view = ProjectionViewKey::from_access(access) == ProjectionViewKey::Private;
+    let base_repo = if private_view {
+        match repo.git_snapshot.as_ref() {
+            Some(snapshot) => cached_raw_git_snapshot_repo(state, snapshot)?,
+            None => {
+                let projection = project_graph(
+                    &repo.policy,
+                    &repo.graph,
+                    &repo.visibility_events,
+                    ProjectionViewKey::Private,
+                );
+                projection_bare_repo_for_state(state, &projection)?
+            }
+        }
+    } else {
+        let projection = project_graph(
+            &repo.policy,
+            &repo.graph,
+            &repo.visibility_events,
+            ProjectionViewKey::Public,
+        );
+        projection_bare_repo_for_state(state, &projection)?
+    };
+    let mut requests = state
+        .metadata
+        .requests_by_repo_id(&repo.record.id)
+        .await?
+        .into_iter()
+        .filter(|request| crate::domain::requests::request_visible_to_access(request, access))
+        .collect::<Vec<_>>();
+    requests.sort_by(|left, right| left.name.cmp(&right.name));
+    let public_base_repo = if private_view
+        && requests.iter().any(|request| {
+            request.audience == crate::domain::requests::RequestAudience::Public
+                && request.git_snapshot.is_none()
+        }) {
+        let projection = project_graph(
+            &repo.policy,
+            &repo.graph,
+            &repo.visibility_events,
+            ProjectionViewKey::Public,
+        );
+        Some(projection_bare_repo_for_state(state, &projection)?)
+    } else {
+        None
+    };
+    git_read_view_repo(state, &base_repo, public_base_repo.as_deref(), &requests)
+}
+
+fn git_read_view_repo(
+    state: &AppState,
+    base_repo: &FsPath,
+    public_base_repo: Option<&FsPath>,
+    requests: &[crate::domain::requests::Request],
+) -> Result<PathBuf, ApiError> {
+    if requests.is_empty() {
+        return Ok(base_repo.to_path_buf());
+    }
+    let main_oid = git_command_output(
+        Command::new("git")
+            .arg("--git-dir")
+            .arg(base_repo)
+            .arg("rev-parse")
+            .arg(format!("refs/heads/{DEFAULT_GIT_BRANCH}")),
+        None,
+    )?;
+    let mut hasher = Sha1::new();
+    hash_field(
+        &mut hasher,
+        b"semantics",
+        GIT_READ_VIEW_CACHE_SEMANTICS_VERSION.as_bytes(),
+    );
+    hash_field(&mut hasher, b"main", &main_oid);
+    for request in requests {
+        hash_field(&mut hasher, b"name", request.name.as_bytes());
+        hash_field(&mut hasher, b"head", request.head_oid.as_bytes());
+        hash_field(
+            &mut hasher,
+            b"audience",
+            format!("{:?}", request.audience).as_bytes(),
+        );
+        hash_field(
+            &mut hasher,
+            b"state",
+            format!("{:?}", request.state).as_bytes(),
+        );
+        if let Some(snapshot) = request.git_snapshot.as_ref() {
+            hash_field(&mut hasher, b"snapshot", snapshot.sha256.as_bytes());
+        }
+    }
+    let cache_key = hex::encode(hasher.finalize());
+    let cache_root = state.git_cache_root()?;
+    let repo_path = cache_root.join(format!("read-view-{cache_key}.git"));
+    if repo_path.join("objects").is_dir() {
         return Ok(repo_path);
     }
 
-    let projection = match git_projection_for_request(state, headers, owner, repo_name, mode).await
-    {
-        Ok(projection) => projection,
-        Err(error) if mode == GitRemoteMode::Public && error.status() == StatusCode::NOT_FOUND => {
-            return Err(git_upload_pack_auth_required());
+    let _permit = state.runtime_budgets.try_projection_build()?;
+    let attempt = GIT_CACHE_ATTEMPT.fetch_add(1, Ordering::Relaxed);
+    let temp_path = cache_root.join(format!(
+        "read-view-{cache_key}.{}.{}.tmp",
+        std::process::id(),
+        attempt
+    ));
+    if temp_path.exists() {
+        fs::remove_dir_all(&temp_path).map_err(ApiError::internal)?;
+    }
+    git_command_output(
+        Command::new("git")
+            .arg("clone")
+            .arg("--bare")
+            .arg("--no-hardlinks")
+            .arg(base_repo)
+            .arg(&temp_path),
+        None,
+    )?;
+    if let Err(error) = attach_visible_request_refs(state, requests, &temp_path, public_base_repo) {
+        let _ = fs::remove_dir_all(&temp_path);
+        return Err(error);
+    }
+    match fs::rename(&temp_path, &repo_path) {
+        Ok(()) => Ok(repo_path),
+        Err(error) if repo_path.exists() => {
+            let _ = fs::remove_dir_all(&temp_path);
+            tracing::debug!(%error, path = %repo_path.display(), "using concurrently-created Git read view cache");
+            Ok(repo_path)
         }
-        Err(error) => return Err(error),
-    };
-    projection_bare_repo_for_state(state, &projection)
+        Err(error) => Err(ApiError::internal(error)),
+    }
 }
 
 pub(crate) fn git_upload_pack_auth_required() -> ApiError {
     ApiError::unauthorized("Git credentials required")
-}
-
-pub(crate) async fn private_live_repo_for_request(
-    state: &AppState,
-    headers: &HeaderMap,
-    owner: &str,
-    repo_name: &str,
-    mode: GitRemoteMode,
-) -> Result<Option<PathBuf>, ApiError> {
-    let (repo, principal) =
-        git_read_principal_for_request(state, headers, owner, repo_name, mode).await?;
-    if repo.record.publication_state != RepoPublicationState::Published {
-        if repo.access_for_principal(&principal).actor == RepositoryActor::Owner {
-            return Err(ApiError::forbidden(UNPUBLISHED_GIT_ERROR));
-        }
-        return Ok(None);
-    }
-    ensure_repo_read(state, &repo, &principal)?;
-    let access = repo.access_for_principal(&principal);
-    if ProjectionViewKey::from_access(access) != ProjectionViewKey::Private {
-        return Ok(None);
-    }
-    let Some(snapshot) = repo.git_snapshot.as_ref() else {
-        return Ok(None);
-    };
-    cached_raw_git_snapshot_repo(state, snapshot).map(Some)
 }
 
 async fn git_read_principal_for_request(
@@ -143,13 +251,11 @@ fn unpublished_git_read_error(
     owner: &str,
     repo_name: &str,
     principal: &Principal,
-) -> Result<Projection, ApiError> {
+) -> ApiError {
     if repo.access_for_principal(principal).actor == RepositoryActor::Owner {
-        Err(ApiError::forbidden(UNPUBLISHED_GIT_ERROR))
+        ApiError::forbidden(UNPUBLISHED_GIT_ERROR)
     } else {
-        Err(ApiError::not_found(format!(
-            "repo {owner}/{repo_name} not found"
-        )))
+        ApiError::not_found(format!("repo {owner}/{repo_name} not found"))
     }
 }
 

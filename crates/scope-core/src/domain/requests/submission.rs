@@ -1,9 +1,8 @@
 use super::settlement::{maximum_request_reward, u32_to_i32};
 use super::{
-    CreditLedgerEntry, CreditLedgerEntryKind, MAIN_BRANCH, Request, RequestActorRole,
-    RequestBaseAudience, RequestEvent, RequestEventKind, RequestState, UserCreditAccount,
-    canonical_request_ref, ensure_event_id_available, ensure_ledger_entry_id_available,
-    ensure_request_ref_available, validate_required_id,
+    CreditLedgerEntry, CreditLedgerEntryKind, Request, RequestActorRole, RequestAudience,
+    RequestEvent, RequestEventKind, RequestState, UserCreditAccount, ensure_event_id_available,
+    ensure_ledger_entry_id_available, ensure_request_name_available, validate_required_id,
 };
 use crate::{domain::store::SourceBlob, error::ApiError};
 use std::collections::BTreeMap;
@@ -12,12 +11,11 @@ use std::collections::BTreeMap;
 pub struct StartRequestInput {
     pub id: String,
     pub repo_id: String,
+    pub name: String,
     pub author_user_id: String,
-    pub title: String,
+    pub title: Option<String>,
     pub author_role: RequestActorRole,
-    pub base_audience: RequestBaseAudience,
-    pub target_branch: String,
-    pub request_ref: String,
+    pub audience: RequestAudience,
     pub base_main_oid: String,
     pub now_unix: u64,
 }
@@ -71,21 +69,21 @@ pub fn start_request(
     if requests.contains_key(&input.id) {
         return Err(ApiError::conflict("request already exists"));
     }
-    ensure_request_ref_available(requests, &input.request_ref)?;
+    ensure_request_name_available(requests, &input.repo_id, &input.name)?;
+
+    let title = input.title.unwrap_or_else(|| input.name.clone());
 
     let request = Request {
         id: input.id,
         repo_id: input.repo_id,
+        name: input.name,
         author_user_id: input.author_user_id,
-        editor_user_ids: Default::default(),
         author_role: input.author_role,
-        base_audience: input.base_audience,
-        target_branch: input.target_branch,
-        request_ref: input.request_ref,
+        audience: input.audience,
         base_main_oid: input.base_main_oid.clone(),
         head_oid: input.base_main_oid,
         git_snapshot: None,
-        title: input.title,
+        title,
         state: RequestState::Working,
         stake_credits: 0,
         disposition: None,
@@ -167,11 +165,7 @@ pub fn submit_request(
             "request branch changed before submit finalization; retry submit",
         ));
     }
-    validate_request_stake_rules(
-        request.author_role,
-        request.base_audience,
-        input.stake_credits,
-    )?;
+    validate_request_stake_rules(request.author_role, request.audience, input.stake_credits)?;
 
     let account_and_ledger_entry = if input.stake_credits == 0 {
         None
@@ -249,19 +243,12 @@ fn validate_start_request_input(input: &StartRequestInput) -> Result<(), ApiErro
     validate_required_id("request id", &input.id)?;
     validate_required_id("repo id", &input.repo_id)?;
     validate_required_id("author user id", &input.author_user_id)?;
-    validate_required_id("title", &input.title)?;
-    validate_required_id("target branch", &input.target_branch)?;
-    validate_required_id("request ref", &input.request_ref)?;
+    validate_request_name(&input.name)?;
+    if let Some(title) = &input.title {
+        validate_required_id("title", title)?;
+    }
     validate_required_id("base main oid", &input.base_main_oid)?;
-    if input.target_branch != MAIN_BRANCH {
-        return Err(ApiError::bad_request("requests must target main"));
-    }
-    if input.request_ref != canonical_request_ref(&input.id) {
-        return Err(ApiError::bad_request(
-            "request ref must match refs/scope/requests/{request_id}",
-        ));
-    }
-    validate_request_base_rules(input.author_role, input.base_audience)
+    validate_request_audience_rules(input.author_role, input.audience)
 }
 
 fn validate_submit_request_input(input: &SubmitRequestInput) -> Result<(), ApiError> {
@@ -274,10 +261,10 @@ fn validate_submit_request_input(input: &SubmitRequestInput) -> Result<(), ApiEr
 
 fn validate_request_stake_rules(
     author_role: RequestActorRole,
-    base_audience: RequestBaseAudience,
+    audience: RequestAudience,
     stake_credits: u32,
 ) -> Result<(), ApiError> {
-    validate_request_base_rules(author_role, base_audience)?;
+    validate_request_audience_rules(author_role, audience)?;
     if author_role == RequestActorRole::Public && stake_credits == 0 {
         return Err(ApiError::bad_request(
             "public requests require credit stake",
@@ -291,19 +278,31 @@ fn validate_request_stake_rules(
     Ok(())
 }
 
-fn validate_request_base_rules(
+fn validate_request_audience_rules(
     author_role: RequestActorRole,
-    base_audience: RequestBaseAudience,
+    audience: RequestAudience,
 ) -> Result<(), ApiError> {
-    if author_role == RequestActorRole::Public && base_audience != RequestBaseAudience::Public {
+    if author_role == RequestActorRole::Public && audience != RequestAudience::Public {
         return Err(ApiError::bad_request(
-            "public requests must be based on public main",
+            "public contributors can only create public requests",
         ));
     }
-    if author_role != RequestActorRole::Public && base_audience != RequestBaseAudience::Private {
+    Ok(())
+}
+
+pub fn validate_request_name(name: &str) -> Result<(), ApiError> {
+    validate_required_id("request name", name)?;
+    if name.len() > 48
+        || !name.bytes().enumerate().all(|(index, byte)| {
+            byte.is_ascii_lowercase() || byte.is_ascii_digit() || (index > 0 && byte == b'-')
+        })
+    {
         return Err(ApiError::bad_request(
-            "member and owner requests must be based on private main",
+            "request name must match [a-z0-9][a-z0-9-]{0,47}",
         ));
+    }
+    if matches!(name, "main" | "head" | "scope") {
+        return Err(ApiError::bad_request("request name is reserved"));
     }
     Ok(())
 }

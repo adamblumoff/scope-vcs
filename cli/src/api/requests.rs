@@ -4,7 +4,9 @@ use serde::Serialize;
 pub struct StartRequestParams<'a> {
     pub owner: &'a str,
     pub repo: &'a str,
-    pub title: String,
+    pub name: String,
+    pub title: Option<String>,
+    pub audience: RequestAudience,
 }
 
 pub struct SubmitRequestParams<'a> {
@@ -79,42 +81,6 @@ pub fn get_request(
         .context("parse request detail response")
 }
 
-pub fn download_request_branch_bundle(
-    client: &Client,
-    api_url: &str,
-    session_token: &str,
-    owner: &str,
-    repo: &str,
-    request_id: &str,
-) -> anyhow::Result<Vec<u8>> {
-    let response = client
-        .get(format!(
-            "{api_url}{}",
-            scope_api_contract::routes::repo_request_action(
-                owner,
-                repo,
-                request_id,
-                "branch.bundle"
-            )
-        ))
-        .bearer_auth(session_token)
-        .send()
-        .with_context(|| format!("download request branch for {owner}/{repo}#{request_id}"))?;
-    handle_request_status(
-        response.status(),
-        owner,
-        repo,
-        request_id,
-        "download request branch",
-    )?;
-    Ok(response
-        .error_for_status()
-        .with_context(|| format!("download request branch for {owner}/{repo}#{request_id}"))?
-        .bytes()
-        .context("read request branch bundle")?
-        .to_vec())
-}
-
 pub fn delete_request(
     client: &Client,
     api_url: &str,
@@ -152,7 +118,9 @@ pub fn start_request(
         ))
         .bearer_auth(session_token)
         .json(&StartRequestRequest {
+            name: params.name,
             title: params.title,
+            audience: params.audience,
         })
         .send()
         .with_context(|| format!("start request for {}/{}", params.owner, params.repo))?;

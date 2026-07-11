@@ -20,14 +20,13 @@ import type {
   AcceptRepositoryInviteResponse,
   CreateRepositoryInviteResponse,
   RequestActorRole,
-  RequestBaseAudience,
+  RequestAudience,
   RequestDeleteResponse,
   RequestDetailResponse,
   RequestDisposition,
   ResolutionDisposition,
   RequestEventKind,
   RequestEventResponse,
-  RequestEditorRequest,
   RequestListResponse,
   RequestMergeabilityResponse,
   RequestMergeabilityStatus,
@@ -109,7 +108,7 @@ export type RequestWorkflowResolutionDisposition = ResolutionDisposition
 export type RequestSettlementPreview = RequestSettlementPreviewResponse
 export type RequestWorkflowEventKind = RequestEventKind
 export type RequestWorkflowActorRole = RequestActorRole
-export type RequestWorkflowBaseAudience = RequestBaseAudience
+export type RequestWorkflowAudience = RequestAudience
 
 export type RepoContent = {
   clone_remote_url: string
@@ -186,7 +185,3 @@ export type RespondRequestInput = RequestParams & RespondRequestRequest
 export type ResolveRequestInput = RequestParams & ResolveRequestRequest
 export type MergeRequestInput = RequestParams & MergeRequestRequest
 export type DeleteRequestInput = RequestParams
-export type AddRequestEditorInput = RequestParams & RequestEditorRequest
-export type RemoveRequestEditorInput = RequestParams & {
-  editor_user_id: string
-}

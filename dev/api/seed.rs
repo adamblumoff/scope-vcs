@@ -6,10 +6,9 @@ use crate::{
         projection::{AuthorVisibility, FileChange, LogicalCommit},
         requests::{
             DeleteRequestInput, MarkRequestNeedsResponseInput, MergeRequestInput,
-            RecordWorkingRequestUploadInput, RequestActorRole, RequestBaseAudience,
-            StartRequestInput, SubmitRequestInput, canonical_request_ref, delete_request,
-            mark_request_needs_response, merge_request, record_working_request_upload,
-            start_request, submit_request,
+            RecordWorkingRequestUploadInput, RequestActorRole, RequestAudience, StartRequestInput,
+            SubmitRequestInput, canonical_request_ref, delete_request, mark_request_needs_response,
+            merge_request, record_working_request_upload, start_request, submit_request,
         },
         store::{AppCatalog, RepoPublicationState, SourceBlob, StoredRepository, UserAccount},
     },
@@ -149,6 +148,7 @@ type SeedRequestGallery = Vec<SeedRequest>;
 
 struct SeedRequest {
     id: &'static str,
+    name: &'static str,
     title: &'static str,
     base_oid: String,
     head_oid: String,
@@ -189,6 +189,7 @@ fn seed_owner_request(
 ) -> Result<(), ApiError> {
     let SeedRequest {
         id,
+        name,
         title,
         base_oid,
         head_oid,
@@ -202,11 +203,10 @@ fn seed_owner_request(
             id: id.to_string(),
             repo_id: repo_id.to_string(),
             author_user_id: owner.id.clone(),
-            title: title.to_string(),
+            name: name.to_string(),
+            title: Some(title.to_string()),
             author_role: RequestActorRole::Owner,
-            base_audience: RequestBaseAudience::Private,
-            target_branch: DEFAULT_GIT_BRANCH.to_string(),
-            request_ref: canonical_request_ref(id),
+            audience: RequestAudience::Private,
             base_main_oid: base_oid.clone(),
             now_unix,
         },
@@ -376,7 +376,7 @@ fn update_demo_git_snapshot(
         let initial_oid = seed_git_head(repo_path)?;
         apply_seed_commits(repo_path, &[accepted])?;
         let main_oid = seed_git_head(repo_path)?;
-        let accepted_ref = canonical_request_ref("req_demo_accepted");
+        let accepted_ref = canonical_request_ref("document-release-flow");
         seed_git(
             Some(repo_path),
             &["update-ref", &accepted_ref, &main_oid],
@@ -385,7 +385,7 @@ fn update_demo_git_snapshot(
 
         let submitted_oid = seed_request_branch(
             repo_path,
-            "req_demo_submitted",
+            "bounded-retry-timing",
             SeedGitCommit {
                 files: &[("src/retry.ts", UPDATE_DEMO_RETRY_HELPER)],
                 message: "Add bounded retry timing",
@@ -394,7 +394,7 @@ fn update_demo_git_snapshot(
         )?;
         let needs_response_oid = seed_request_branch(
             repo_path,
-            "req_demo_needs_response",
+            "remote-troubleshooting",
             SeedGitCommit {
                 files: &[("docs/troubleshooting.md", UPDATE_DEMO_TROUBLESHOOTING)],
                 message: "Add remote troubleshooting",
@@ -403,7 +403,7 @@ fn update_demo_git_snapshot(
         )?;
         let withdrawn_oid = seed_request_branch(
             repo_path,
-            "req_demo_withdrawn",
+            "verbose-cli-output",
             SeedGitCommit {
                 files: &[("experiments/cli-output.txt", UPDATE_DEMO_CLI_EXPERIMENT)],
                 message: "Try verbose CLI output",
@@ -422,14 +422,14 @@ fn update_demo_git_snapshot(
             repo,
             repo_path,
             "req_demo_submitted",
-            &[&canonical_request_ref("req_demo_submitted")],
+            &[&canonical_request_ref("bounded-retry-timing")],
         )?;
         let needs_response_snapshot = store_seed_bundle(
             object_store,
             repo,
             repo_path,
             "req_demo_needs_response",
-            &[&canonical_request_ref("req_demo_needs_response")],
+            &[&canonical_request_ref("remote-troubleshooting")],
         )?;
         let accepted_snapshot = store_seed_bundle(
             object_store,
@@ -443,11 +443,12 @@ fn update_demo_git_snapshot(
             repo,
             repo_path,
             "req_demo_withdrawn",
-            &[&canonical_request_ref("req_demo_withdrawn")],
+            &[&canonical_request_ref("verbose-cli-output")],
         )?;
         let gallery = vec![
             SeedRequest {
                 id: "req_demo_submitted",
+                name: "bounded-retry-timing",
                 title: "Add bounded retry timing",
                 base_oid: main_oid.clone(),
                 head_oid: submitted_oid,
@@ -457,6 +458,7 @@ fn update_demo_git_snapshot(
             },
             SeedRequest {
                 id: "req_demo_needs_response",
+                name: "remote-troubleshooting",
                 title: "Add remote troubleshooting",
                 base_oid: main_oid.clone(),
                 head_oid: needs_response_oid,
@@ -466,6 +468,7 @@ fn update_demo_git_snapshot(
             },
             SeedRequest {
                 id: "req_demo_accepted",
+                name: "document-release-flow",
                 title: "Document the release flow",
                 base_oid: initial_oid,
                 head_oid: main_oid.clone(),
@@ -475,6 +478,7 @@ fn update_demo_git_snapshot(
             },
             SeedRequest {
                 id: "req_demo_withdrawn",
+                name: "verbose-cli-output",
                 title: "Try verbose CLI output",
                 base_oid: main_oid,
                 head_oid: withdrawn_oid,
@@ -652,7 +656,6 @@ mod tests {
     use crate::AppState;
     use crate::domain::requests::{RequestDisposition, RequestState};
     use crate::git::import::git_stdout_text;
-    use crate::git::request_refs::request_ref_bundle_bytes;
     use crate::git::storage::restore_git_snapshot;
     use crate::object_store::{EncryptedObjectStore, MemoryObjectStore, source_blob_bytes};
     use std::sync::Arc;
@@ -747,8 +750,46 @@ mod tests {
             UPDATE_DEMO_INITIAL_README,
         );
         for request in catalog.requests.values() {
-            let bundle = request_ref_bundle_bytes(&state, "dev", "update-demo", request).unwrap();
-            assert!(!bundle.is_empty());
+            let snapshot = request
+                .git_snapshot
+                .as_ref()
+                .expect("seeded requests have Git snapshots");
+            let repo_root = state.data_dir.join(format!("request-{}.git", request.name));
+            let bundle_path = state
+                .data_dir
+                .join(format!("request-{}.bundle", request.name));
+            fs::create_dir_all(state.data_dir.as_ref()).unwrap();
+            fs::write(
+                &bundle_path,
+                source_blob_bytes(state.object_store.as_ref(), snapshot).unwrap(),
+            )
+            .unwrap();
+            seed_git(
+                None,
+                &["init", "--bare", repo_root.to_str().unwrap()],
+                "initializing seeded request snapshot test repo",
+            )
+            .unwrap();
+            let request_ref = canonical_request_ref(&request.name);
+            seed_git(
+                Some(&repo_root),
+                &[
+                    "fetch",
+                    bundle_path.to_str().unwrap(),
+                    &format!("{request_ref}:{request_ref}"),
+                ],
+                "restoring seeded named request snapshot",
+            )
+            .unwrap();
+            let actual_head = git_stdout_text(
+                &repo_root,
+                &["rev-parse", &request_ref],
+                "reading seeded named request ref",
+            )
+            .unwrap();
+            assert_eq!(actual_head.trim(), request.head_oid);
+            let _ = fs::remove_dir_all(repo_root);
+            let _ = fs::remove_file(bundle_path);
         }
 
         let _ = fs::remove_dir_all(state.data_dir.as_ref());

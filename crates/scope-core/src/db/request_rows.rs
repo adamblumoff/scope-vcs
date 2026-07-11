@@ -21,12 +21,17 @@ where
         .transpose()
 }
 
-pub async fn request_by_ref<C>(conn: &C, request_ref: &str) -> Result<Option<Request>, ApiError>
+pub async fn request_by_name<C>(
+    conn: &C,
+    repo_id: &str,
+    request_name: &str,
+) -> Result<Option<Request>, ApiError>
 where
     C: ConnectionTrait,
 {
     entities::request::Entity::find()
-        .filter(entities::request::Column::RequestRef.eq(request_ref.to_string()))
+        .filter(entities::request::Column::RepoId.eq(repo_id.to_string()))
+        .filter(entities::request::Column::Name.eq(request_name.to_string()))
         .one(conn)
         .await
         .map_err(ApiError::internal)?
@@ -200,10 +205,6 @@ where
     let result = entities::request::Entity::update_many()
         .filter(entities::request::Column::Id.eq(row.id))
         .col_expr(entities::request::Column::Title, Expr::value(row.title))
-        .col_expr(
-            entities::request::Column::EditorUserIds,
-            Expr::value(row.editor_user_ids),
-        )
         .col_expr(
             entities::request::Column::HeadOid,
             Expr::value(row.head_oid),

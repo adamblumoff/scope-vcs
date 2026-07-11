@@ -1,6 +1,6 @@
 use super::*;
 use crate::domain::requests::{
-    RecordWorkingRequestUploadInput, RequestActorRole, RequestBaseAudience, StartRequestInput,
+    RecordWorkingRequestUploadInput, RequestActorRole, RequestAudience, StartRequestInput,
     SubmitRequestInput, canonical_request_ref,
 };
 
@@ -34,7 +34,7 @@ async fn reads_the_uploaded_request_ref_bundle() {
     .unwrap();
     commit_all(&request_repo, "request change");
     let request_head = git_head_oid(&request_repo);
-    let request_ref = canonical_request_ref("req_review");
+    let request_ref = canonical_request_ref("review");
     run_git(
         Some(&request_repo),
         &["update-ref", &request_ref, &request_head],
@@ -52,12 +52,11 @@ async fn reads_the_uploaded_request_ref_bundle() {
         .start_request(StartRequestInput {
             id: "req_review".to_string(),
             repo_id: TEST_REPO_ID.to_string(),
+            name: "review".to_string(),
             author_user_id: test_owner_id(),
-            title: "Review request".to_string(),
+            title: Some("Review request".to_string()),
             author_role: RequestActorRole::Owner,
-            base_audience: RequestBaseAudience::Private,
-            target_branch: DEFAULT_GIT_BRANCH.to_string(),
-            request_ref,
+            audience: RequestAudience::Private,
             base_main_oid: main_oid,
             now_unix: 2,
         })

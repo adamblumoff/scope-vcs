@@ -4,11 +4,11 @@ use crate::{
     domain::{
         projection::{ProjectionViewKey, project_graph},
         requests::{
-            AddRequestEditorInput, CommentRequestInput, DeleteRequestInput, DeleteRequestMutation,
-            MarkRequestNeedsResponseInput, MergeRequestInput, RemoveRequestEditorInput, Request,
-            RequestActorRole, RequestDisposition, RequestState, ResolveRequestInput,
+            CommentRequestInput, DeleteRequestInput, DeleteRequestMutation,
+            MarkRequestNeedsResponseInput, MergeRequestInput, Request, RequestActorRole,
+            RequestAudience, RequestDisposition, RequestState, ResolveRequestInput,
             RespondToRequestInput, StartRequestInput, SubmitRequestInput, canonical_request_ref,
-            request_actor_role, request_base_audience, request_mergeability, request_permissions,
+            request_actor_role, request_mergeability, request_permissions,
             request_visible_to_access, settlement_for,
         },
         store::{RepositoryAccess, RepositoryActor, StoredRepository},
@@ -16,7 +16,7 @@ use crate::{
     error::ApiError,
     git::{
         import::{apply_request_merge_update, git_refs},
-        request_refs::{delete_request_ref_from_store, request_ref_bundle_bytes},
+        request_refs::delete_request_ref_from_store,
         storage::cached_raw_git_snapshot_repo,
         upload::projection_bare_repo_for_state,
     },
@@ -29,10 +29,8 @@ use crate::{
 };
 use axum::{
     Json,
-    body::Body,
     extract::{Path, State},
-    http::{HeaderMap, header},
-    response::Response,
+    http::HeaderMap,
 };
 
 const REQUEST_SUMMARY_REFRESH_VERSION: u64 = 0;
@@ -85,91 +83,6 @@ pub(crate) async fn get_request(
     Ok(Json(RequestDetailResponse { request, events }))
 }
 
-pub(crate) async fn download_request_branch_bundle(
-    State(state): State<AppState>,
-    headers: HeaderMap,
-    Path((owner, repo_name, request_id)): Path<(String, String, String)>,
-) -> Result<Response, ApiError> {
-    let user = require_scope_user(&state, &headers).await?;
-    let (repo, access, _) = repo_and_access(&state, &headers, &owner, &repo_name).await?;
-    let request = visible_request(&state, &repo, access, &request_id).await?;
-    if !request_permissions(&request, access, Some(&user.id)).can_pull_branch {
-        return Err(ApiError::forbidden("request branch edit access required"));
-    }
-    let bytes = request_ref_bundle_bytes(&state, &owner, &repo_name, &request)?;
-    Response::builder()
-        .header(header::CONTENT_TYPE, "application/x-git-bundle")
-        .body(Body::from(bytes))
-        .map_err(ApiError::internal)
-}
-
-pub(crate) async fn add_request_editor(
-    State(state): State<AppState>,
-    headers: HeaderMap,
-    Path((owner, repo_name, request_id)): Path<(String, String, String)>,
-    Json(input): Json<RequestEditorRequest>,
-) -> Result<Json<RequestMutationResponse>, ApiError> {
-    let user = require_scope_user(&state, &headers).await?;
-    let (repo, access, _) = repo_and_access(&state, &headers, &owner, &repo_name).await?;
-    ensure_maintainer(access)?;
-    let request = visible_request(&state, &repo, access, &request_id).await?;
-    if !request_permissions(&request, access, Some(&user.id)).can_invite_editor {
-        return Err(ApiError::forbidden("request editor invite access required"));
-    }
-    let editor_user_id = input.user_id.trim().to_string();
-    if editor_user_id.is_empty() {
-        return Err(ApiError::bad_request("editor user id is required"));
-    }
-    if matches!(
-        repo.access_for_user_id(&editor_user_id).actor,
-        RepositoryActor::Owner | RepositoryActor::Member
-    ) {
-        return Err(ApiError::bad_request(
-            "repo maintainers already can edit requests",
-        ));
-    }
-    let mutation = state
-        .metadata
-        .add_request_editor(AddRequestEditorInput {
-            request_id,
-            actor_user_id: user.id.clone(),
-            editor_user_id,
-            now_unix: unix_now()?,
-        })
-        .await?;
-    let current_main_oid = current_main_oid_for_access(&state, &repo, access)?;
-    let request = request_response(mutation.request, access, current_main_oid, Some(&user.id))?;
-    publish_request_summary_refresh(&state, &repo, "request-editor-added").await;
-    Ok(Json(RequestMutationResponse { request }))
-}
-
-pub(crate) async fn remove_request_editor(
-    State(state): State<AppState>,
-    headers: HeaderMap,
-    Path((owner, repo_name, request_id, editor_user_id)): Path<(String, String, String, String)>,
-) -> Result<Json<RequestMutationResponse>, ApiError> {
-    let user = require_scope_user(&state, &headers).await?;
-    let (repo, access, _) = repo_and_access(&state, &headers, &owner, &repo_name).await?;
-    ensure_maintainer(access)?;
-    let request = visible_request(&state, &repo, access, &request_id).await?;
-    if !request_permissions(&request, access, Some(&user.id)).can_invite_editor {
-        return Err(ApiError::forbidden("request editor invite access required"));
-    }
-    let mutation = state
-        .metadata
-        .remove_request_editor(RemoveRequestEditorInput {
-            request_id,
-            actor_user_id: user.id.clone(),
-            editor_user_id,
-            now_unix: unix_now()?,
-        })
-        .await?;
-    let current_main_oid = current_main_oid_for_access(&state, &repo, access)?;
-    let request = request_response(mutation.request, access, current_main_oid, Some(&user.id))?;
-    publish_request_summary_refresh(&state, &repo, "request-editor-removed").await;
-    Ok(Json(RequestMutationResponse { request }))
-}
-
 pub(crate) async fn delete_request(
     State(state): State<AppState>,
     headers: HeaderMap,
@@ -184,11 +97,11 @@ pub(crate) async fn delete_request(
     let refund_ledger_entry_id = (request.stake_credits > 0)
         .then(|| random_id("ledger_request_withdraw_refund"))
         .transpose()?;
-    let request_ref = request.request_ref.clone();
+    let request_ref = canonical_request_ref(&request.name);
     let mutation = state
         .metadata
         .delete_request(DeleteRequestInput {
-            request_id,
+            request_id: request.id,
             actor_user_id: user.id.clone(),
             actor_can_delete: false,
             event_id: random_id("event_request_withdrawn")?,
@@ -196,17 +109,20 @@ pub(crate) async fn delete_request(
             now_unix: unix_now()?,
         })
         .await?;
-    delete_request_ref_from_store(&state, &owner, &repo_name, &request_ref)?;
-    best_effort_drain_pending_source_blob_deletions(&state).await;
-    publish_request_summary_refresh(&state, &repo, "request-deleted").await;
     match mutation {
-        DeleteRequestMutation::DeletedWorking { .. } => Ok(Json(RequestDeleteResponse {
-            deleted: true,
-            request: None,
-        })),
+        DeleteRequestMutation::DeletedWorking { .. } => {
+            delete_request_ref_from_store(&state, &owner, &repo_name, &request_ref)?;
+            best_effort_drain_pending_source_blob_deletions(&state).await;
+            publish_request_summary_refresh(&state, &repo, "request-deleted").await;
+            Ok(Json(RequestDeleteResponse {
+                deleted: true,
+                request: None,
+            }))
+        }
         DeleteRequestMutation::Withdrawn { request, .. } => {
             let current_main_oid = current_main_oid_for_access(&state, &repo, access)?;
             let request = request_response(*request, access, current_main_oid, Some(&user.id))?;
+            publish_request_summary_refresh(&state, &repo, "request-withdrawn").await;
             Ok(Json(RequestDeleteResponse {
                 deleted: false,
                 request: Some(request),
@@ -226,7 +142,12 @@ pub(crate) async fn start_request(
     let principal = principal_for_scope_user(&repo, Some(&user));
     ensure_repo_read(&state, &repo, &principal)?;
     let access = repo.access_for_principal(&principal);
-    let base_main_oid = current_main_oid_for_access(&state, &repo, access)?
+    if access.actor == RepositoryActor::Public && input.audience != RequestAudience::Public {
+        return Err(ApiError::forbidden(
+            "public contributors can only create public requests",
+        ));
+    }
+    let base_main_oid = current_main_oid_for_audience(&state, &repo, input.audience)?
         .ok_or_else(|| ApiError::conflict("repo has no main branch to base a request on"))?;
     let request_id = random_id("req")?;
     let now_unix = unix_now()?;
@@ -235,12 +156,11 @@ pub(crate) async fn start_request(
         .start_request(StartRequestInput {
             id: request_id.clone(),
             repo_id: repo.record.id.clone(),
+            name: input.name,
             author_user_id: user.id.clone(),
             title: input.title,
             author_role: request_actor_role(access),
-            base_audience: request_base_audience(access),
-            target_branch: DEFAULT_GIT_BRANCH.to_string(),
-            request_ref: canonical_request_ref(&request_id),
+            audience: input.audience,
             base_main_oid,
             now_unix,
         })
@@ -580,7 +500,6 @@ fn request_response(
         can_pull_branch: decision.can_pull_branch,
         can_push_branch: decision.can_push_branch,
         can_delete: decision.can_delete,
-        can_invite_editor: decision.can_invite_editor,
         can_mark_needs_response: decision.can_mark_needs_response,
         can_respond: decision.can_respond,
         can_resolve: decision.can_resolve,
@@ -610,6 +529,23 @@ fn current_main_oid_for_access(
             projection_main_oid(state, repo, ProjectionViewKey::Private)
         }
         RepositoryActor::Public => projection_main_oid(state, repo, ProjectionViewKey::Public),
+    }
+}
+
+fn current_main_oid_for_audience(
+    state: &AppState,
+    repo: &StoredRepository,
+    audience: RequestAudience,
+) -> Result<Option<String>, ApiError> {
+    match audience {
+        RequestAudience::Public => projection_main_oid(state, repo, ProjectionViewKey::Public),
+        RequestAudience::Private => {
+            if let Some(snapshot) = repo.git_snapshot.as_ref() {
+                let repo_path = cached_raw_git_snapshot_repo(state, snapshot)?;
+                return main_oid_from_git_repo(&repo_path);
+            }
+            projection_main_oid(state, repo, ProjectionViewKey::Private)
+        }
     }
 }
 

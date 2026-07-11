@@ -111,8 +111,8 @@ export function dispositionTone(
   return disposition ? DISPOSITIONS[disposition].tone : 'outline'
 }
 
-export function requestBaseAudienceLabel(request: RequestSummary) {
-  return request.base_audience === 'Private' ? 'Private base' : 'Public base'
+export function requestAudienceLabel(request: RequestSummary) {
+  return request.audience === 'Private' ? 'Private request' : 'Public request'
 }
 
 export function requestAuthorRoleLabel(request: RequestSummary) {

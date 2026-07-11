@@ -5,7 +5,7 @@ use crate::domain::{
         RepoConfigHistory, RepoConfigVisibility, RepoConfigVisibilityRule,
     },
     requests::{
-        RequestActorRole, RequestBaseAudience, RequestDisposition, RequestEventKind, RequestState,
+        RequestActorRole, RequestAudience, RequestDisposition, RequestEventKind, RequestState,
         ResolutionDisposition,
     },
     store::{
@@ -38,7 +38,7 @@ pub(crate) fn export_api_types(output_path: &Path) {
         declaration::<HistoryRewriteRequest>(&ts_config),
         declaration::<HistoryRewriteAction>(&ts_config),
         declaration::<RequestActorRole>(&ts_config),
-        declaration::<RequestBaseAudience>(&ts_config),
+        declaration::<RequestAudience>(&ts_config),
         declaration::<RequestState>(&ts_config),
         declaration::<RequestDisposition>(&ts_config),
         declaration::<ResolutionDisposition>(&ts_config),
@@ -119,7 +119,6 @@ pub(crate) fn export_api_types(output_path: &Path) {
         declaration::<RequestEventResponse>(&ts_config),
         declaration::<RequestDeleteResponse>(&ts_config),
         declaration::<StartRequestRequest>(&ts_config),
-        declaration::<RequestEditorRequest>(&ts_config),
         declaration::<SubmitRequestRequest>(&ts_config),
         declaration::<CommentRequestRequest>(&ts_config),
         declaration::<NeedsResponseRequest>(&ts_config),
@@ -160,8 +159,6 @@ fn api_route_template_declarations() -> String {
         ("repoFileContent", routes::REPO_FILE_CONTENT),
         ("repoRequestChanges", routes::REPO_REQUEST_CHANGES),
         ("repoRequestFileDiff", routes::REPO_REQUEST_FILE_DIFF),
-        ("repoRequestEditors", routes::REPO_REQUEST_EDITORS),
-        ("repoRequestEditor", routes::REPO_REQUEST_EDITOR),
         ("repoRequestComments", routes::REPO_REQUEST_COMMENTS),
         (
             "repoRequestNeedsResponse",

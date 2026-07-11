@@ -11,7 +11,21 @@ fn request_policy_keeps_public_visibility_and_maintainer_decisions_in_domain() {
         &request,
         RepositoryAccess::public()
     ));
-    assert!(!request_permissions(&request, RepositoryAccess::public(), None).can_merge);
+    let anonymous = request_permissions(&request, RepositoryAccess::public(), None);
+    assert!(anonymous.can_pull_branch);
+    assert!(!anonymous.can_push_branch);
+    assert!(!anonymous.can_comment);
+    assert!(!anonymous.can_merge);
+
+    let contributor = request_permissions(
+        &request,
+        RepositoryAccess::public(),
+        Some("another-contributor"),
+    );
+    assert!(contributor.can_pull_branch);
+    assert!(contributor.can_push_branch);
+    assert!(contributor.can_comment);
+    assert!(!contributor.can_merge);
 
     let maintainer = maintainer_access();
     assert!(request_permissions(&request, maintainer, Some("maintainer")).can_merge);
@@ -22,14 +36,6 @@ fn request_policy_keeps_public_visibility_and_maintainer_decisions_in_domain() {
     assert_eq!(
         request_actor_role(maintainer_access()),
         RequestActorRole::Member
-    );
-    assert_eq!(
-        request_base_audience(maintainer_access()),
-        RequestBaseAudience::Private
-    );
-    assert_eq!(
-        request_base_audience(RepositoryAccess::public()),
-        RequestBaseAudience::Public
     );
 }
 
@@ -77,18 +83,103 @@ fn invalid_credit_grants_do_not_mutate_accounts() {
 }
 
 #[test]
-fn duplicate_request_ref_is_rejected_before_start() {
+fn duplicate_request_name_in_same_repo_is_rejected_before_start() {
     let mut existing = submitted_request();
-    existing.request_ref = "refs/scope/requests/req_2".to_string();
+    existing.name = "fix-parser".to_string();
     let mut requests = BTreeMap::from([("req_1".to_string(), existing)]);
     let mut input = public_start_input();
     input.id = "req_2".to_string();
-    input.request_ref = "refs/scope/requests/req_2".to_string();
+    input.name = "fix-parser".to_string();
 
     let error = start_request(&mut requests, input).unwrap_err();
 
-    assert!(error.message.contains("request ref already exists"));
+    assert!(error.message.contains("request name already exists"));
     assert!(!requests.contains_key("req_2"));
+}
+
+#[test]
+fn request_name_is_unique_per_repository_and_derives_branch_ref() {
+    let mut existing = submitted_request();
+    existing.name = "fix-parser".to_string();
+    let mut requests = BTreeMap::from([("req_1".to_string(), existing)]);
+    let mut input = public_start_input();
+    input.id = "req_2".to_string();
+    input.repo_id = "another/repo".to_string();
+    input.name = "fix-parser".to_string();
+
+    let mutation = start_request(&mut requests, input).unwrap();
+
+    assert_eq!(mutation.request.name, "fix-parser");
+    assert_eq!(
+        canonical_request_ref(&mutation.request.name),
+        "refs/heads/fix-parser"
+    );
+}
+
+#[test]
+fn omitted_title_defaults_to_request_name() {
+    let mut input = public_start_input();
+    input.title = None;
+
+    let request = start_request(&mut BTreeMap::new(), input).unwrap().request;
+
+    assert_eq!(request.title, "fix-parser");
+}
+
+#[test]
+fn request_names_reject_reserved_and_git_unsafe_values() {
+    for invalid in [
+        "main",
+        "HEAD",
+        "two words",
+        "nested/name",
+        "-leading",
+        "UPPER",
+        "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    ] {
+        let mut input = public_start_input();
+        input.name = invalid.to_string();
+        let error = start_request(&mut BTreeMap::new(), input).unwrap_err();
+        assert!(
+            error.message.contains("request name"),
+            "unexpected error for {invalid}: {}",
+            error.message
+        );
+    }
+}
+
+#[test]
+fn closed_requests_remain_readable_but_are_never_writable() {
+    let mut request = submitted_request();
+    request.state = RequestState::Resolved;
+    for (access, viewer) in [
+        (RepositoryAccess::public(), None),
+        (RepositoryAccess::public(), Some("contributor")),
+        (maintainer_access(), Some("maintainer")),
+    ] {
+        let permissions = request_permissions(&request, access, viewer);
+        assert!(permissions.can_pull_branch);
+        assert!(!permissions.can_push_branch);
+        assert!(!permissions.can_comment);
+    }
+}
+
+#[test]
+fn private_requests_are_invisible_to_public_access_and_writable_by_maintainers() {
+    let mut request = submitted_request();
+    request.audience = RequestAudience::Private;
+
+    assert!(!request_visible_to_access(
+        &request,
+        RepositoryAccess::public()
+    ));
+    let public = request_permissions(&request, RepositoryAccess::public(), Some("contributor"));
+    assert!(!public.can_pull_branch);
+    assert!(!public.can_push_branch);
+
+    let maintainer = request_permissions(&request, maintainer_access(), Some("maintainer"));
+    assert!(maintainer.can_pull_branch);
+    assert!(maintainer.can_push_branch);
 }
 
 #[test]
@@ -109,7 +200,7 @@ fn owner_submission_rejects_credit_stake() {
     let mut events = BTreeMap::new();
     let mut input = public_start_input();
     input.author_role = RequestActorRole::Owner;
-    input.base_audience = RequestBaseAudience::Private;
+    input.audience = RequestAudience::Private;
     start_request(&mut requests, input).unwrap();
     record_working_request_upload(&mut requests, public_upload_input()).unwrap();
     let mut submit_input = public_submit_input();
@@ -262,7 +353,7 @@ fn owner_clean_merge_does_not_touch_credit_accounts() {
     let mut request = submitted_request();
     request.author_user_id = "user_owner".to_string();
     request.author_role = RequestActorRole::Owner;
-    request.base_audience = RequestBaseAudience::Private;
+    request.audience = RequestAudience::Private;
     request.stake_credits = 0;
     let mut fixture = RequestFixture::default();
     fixture.requests.insert("req_1".to_string(), request);
@@ -397,12 +488,11 @@ fn public_start_input() -> StartRequestInput {
     StartRequestInput {
         id: "req_1".to_string(),
         repo_id: "owner/repo".to_string(),
+        name: "fix-parser".to_string(),
         author_user_id: "user_public".to_string(),
-        title: "Fix parser crash".to_string(),
+        title: Some("Fix parser crash".to_string()),
         author_role: RequestActorRole::Public,
-        base_audience: RequestBaseAudience::Public,
-        target_branch: "main".to_string(),
-        request_ref: "refs/scope/requests/req_1".to_string(),
+        audience: RequestAudience::Public,
         base_main_oid: "base".to_string(),
         now_unix: 10,
     }
