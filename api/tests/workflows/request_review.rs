@@ -44,12 +44,9 @@ async fn reads_the_uploaded_request_ref_bundle() {
     let request_snapshot =
         git_snapshot_from_ref(&state, TEST_REPO_ID, &request_repo, &request_ref).unwrap();
 
-    {
-        let mut repo = repo_with_readme();
-        repo.git_snapshot = Some(main_snapshot);
-        let mut catalog = lock_catalog(&state).unwrap();
-        catalog.repositories.insert(TEST_REPO_ID.to_string(), repo);
-    }
+    let mut repo = repo_with_readme(&state);
+    repo.git_snapshot = Some(main_snapshot);
+    replace_test_repo(&state, repo).await;
     state
         .metadata
         .start_request(StartRequestInput {

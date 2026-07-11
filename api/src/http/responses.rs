@@ -56,7 +56,7 @@ pub(crate) fn git_oid_request(label: &str, value: &str) -> Result<String, ApiErr
 }
 
 #[derive(Debug, Serialize)]
-#[cfg_attr(test, derive(ts_rs::TS))]
+#[cfg_attr(feature = "type-export", derive(ts_rs::TS))]
 pub(crate) struct SessionResponse {
     pub(crate) identity: Option<SessionIdentity>,
     pub(crate) repo: SessionRepo,
@@ -65,7 +65,7 @@ pub(crate) struct SessionResponse {
 }
 
 #[derive(Debug, Serialize)]
-#[cfg_attr(test, derive(ts_rs::TS))]
+#[cfg_attr(feature = "type-export", derive(ts_rs::TS))]
 pub(crate) struct SessionRepo {
     pub(crate) id: String,
     pub(crate) publication_state: RepoPublicationState,
@@ -73,7 +73,7 @@ pub(crate) struct SessionRepo {
 }
 
 #[derive(Debug, Serialize)]
-#[cfg_attr(test, derive(ts_rs::TS))]
+#[cfg_attr(feature = "type-export", derive(ts_rs::TS))]
 pub(crate) struct SessionCapabilities {
     pub(crate) read: bool,
     pub(crate) can_read_private_files: bool,
@@ -85,32 +85,32 @@ pub(crate) struct SessionCapabilities {
 }
 
 #[derive(Debug, Serialize)]
-#[cfg_attr(test, derive(ts_rs::TS))]
+#[cfg_attr(feature = "type-export", derive(ts_rs::TS))]
 pub(crate) struct DeviceLoginCompleteResponse {
     pub(crate) status: DeviceLoginStatus,
 }
 
 #[derive(Debug, Serialize)]
-#[cfg_attr(test, derive(ts_rs::TS))]
+#[cfg_attr(feature = "type-export", derive(ts_rs::TS))]
 pub(crate) struct BrowserLoginCompleteResponse {
     pub(crate) callback_url: String,
 }
 
 #[derive(Debug, Serialize)]
-#[cfg_attr(test, derive(ts_rs::TS))]
+#[cfg_attr(feature = "type-export", derive(ts_rs::TS))]
 pub(crate) struct CliExchangeGrantResponse {
     pub(crate) exchange_token: String,
     pub(crate) expires_at_unix: u64,
 }
 
 #[derive(Debug, Serialize)]
-#[cfg_attr(test, derive(ts_rs::TS))]
+#[cfg_attr(feature = "type-export", derive(ts_rs::TS))]
 pub(crate) struct CliSessionsResponse {
     pub(crate) sessions: Vec<CliSessionResponse>,
 }
 
 #[derive(Debug, Serialize)]
-#[cfg_attr(test, derive(ts_rs::TS))]
+#[cfg_attr(feature = "type-export", derive(ts_rs::TS))]
 pub(crate) struct CliSessionResponse {
     pub(crate) id: String,
     pub(crate) label: String,
@@ -120,51 +120,51 @@ pub(crate) struct CliSessionResponse {
 }
 
 #[derive(Debug, Serialize)]
-#[cfg_attr(test, derive(ts_rs::TS))]
+#[cfg_attr(feature = "type-export", derive(ts_rs::TS))]
 pub(crate) struct DeleteRepoResponse {
     pub(crate) id: String,
     pub(crate) deleted: bool,
 }
 
 #[derive(Debug, Serialize)]
-#[cfg_attr(test, derive(ts_rs::TS))]
+#[cfg_attr(feature = "type-export", derive(ts_rs::TS))]
 pub(crate) struct CompletePushIntentResponse {
     pub(crate) config_applied: bool,
 }
 
 #[derive(Debug, Deserialize)]
-#[cfg_attr(test, derive(ts_rs::TS))]
+#[cfg_attr(feature = "type-export", derive(ts_rs::TS))]
 pub(crate) struct CommitHistoryRequest {
     pub(crate) audience: Option<ProjectionPreviewAudience>,
 }
 
 #[derive(Debug, Deserialize)]
-#[cfg_attr(test, derive(ts_rs::TS))]
+#[cfg_attr(feature = "type-export", derive(ts_rs::TS))]
 pub(crate) struct CommitFileDiffRequest {
     pub(crate) audience: Option<ProjectionPreviewAudience>,
     pub(crate) path: String,
 }
 
 #[derive(Debug, Deserialize)]
-#[cfg_attr(test, derive(ts_rs::TS))]
+#[cfg_attr(feature = "type-export", derive(ts_rs::TS))]
 pub(crate) struct RequestFileDiffRequest {
     pub(crate) path: String,
 }
 
 #[derive(Debug, Serialize)]
-#[cfg_attr(test, derive(ts_rs::TS))]
+#[cfg_attr(feature = "type-export", derive(ts_rs::TS))]
 pub(crate) struct RequestChangesResponse {
     pub(crate) files: Vec<CommitFileResponse>,
 }
 
 #[derive(Debug, Deserialize)]
-#[cfg_attr(test, derive(ts_rs::TS))]
+#[cfg_attr(feature = "type-export", derive(ts_rs::TS))]
 pub(crate) struct RepoFileContentRequest {
     pub(crate) path: String,
 }
 
 #[derive(Debug, Serialize)]
-#[cfg_attr(test, derive(ts_rs::TS))]
+#[cfg_attr(feature = "type-export", derive(ts_rs::TS))]
 pub(crate) struct ReviewFileDiffResponse {
     pub(crate) path: String,
     pub(crate) kind: FileChangeKind,
@@ -176,15 +176,15 @@ pub(crate) struct ReviewFileDiffResponse {
 
 #[derive(Debug, Serialize)]
 #[serde(tag = "kind", rename_all = "lowercase")]
-#[cfg_attr(test, derive(ts_rs::TS))]
-#[cfg_attr(test, ts(rename_all = "lowercase"))]
+#[cfg_attr(feature = "type-export", derive(ts_rs::TS))]
+#[cfg_attr(feature = "type-export", ts(rename_all = "lowercase"))]
 pub(crate) enum ReviewFileContentResponse {
     Text { text: String },
     Binary { oid: String, size_bytes: u64 },
 }
 
 #[derive(Debug, Serialize)]
-#[cfg_attr(test, derive(ts_rs::TS))]
+#[cfg_attr(feature = "type-export", derive(ts_rs::TS))]
 pub(crate) struct CommitHistoryResponse {
     pub(crate) audience: ProjectionPreviewAudience,
     pub(crate) repo_id: String,
@@ -193,7 +193,7 @@ pub(crate) struct CommitHistoryResponse {
 }
 
 #[derive(Debug, Serialize)]
-#[cfg_attr(test, derive(ts_rs::TS))]
+#[cfg_attr(feature = "type-export", derive(ts_rs::TS))]
 pub(crate) struct CommitSummaryResponse {
     pub(crate) projected_id: String,
     pub(crate) logical_commit_id: String,
@@ -204,7 +204,7 @@ pub(crate) struct CommitSummaryResponse {
 }
 
 #[derive(Debug, Serialize)]
-#[cfg_attr(test, derive(ts_rs::TS))]
+#[cfg_attr(feature = "type-export", derive(ts_rs::TS))]
 pub(crate) struct CommitDetailResponse {
     pub(crate) audience: ProjectionPreviewAudience,
     pub(crate) repo_id: String,
@@ -219,7 +219,7 @@ pub(crate) struct CommitDetailResponse {
 }
 
 #[derive(Debug, Serialize)]
-#[cfg_attr(test, derive(ts_rs::TS))]
+#[cfg_attr(feature = "type-export", derive(ts_rs::TS))]
 pub(crate) struct CommitFileResponse {
     pub(crate) path: String,
     pub(crate) kind: FileChangeKind,

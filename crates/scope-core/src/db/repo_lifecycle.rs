@@ -309,6 +309,7 @@ mod tests {
         auth::tokens::{generate_first_push_token, generate_git_push_token},
         domain::store::{RepoStorageCleanup, UserAccount, app_catalog},
     };
+    use sea_orm::{ConnectionTrait, DatabaseBackend, Statement};
     use std::sync::{
         Arc,
         atomic::{AtomicBool, Ordering},
@@ -382,7 +383,7 @@ mod tests {
                 )
                 .await
         });
-        tokio::time::sleep(std::time::Duration::from_millis(25)).await;
+        wait_until_repository_lock_is_waited_on(&store).await;
         assert!(
             !second.is_finished(),
             "competing creator must wait for the storage path lock"
@@ -451,5 +452,29 @@ mod tests {
             .await
             .unwrap_err();
         assert!(error.message.contains("changed during creation"));
+    }
+
+    async fn wait_until_repository_lock_is_waited_on(store: &MetadataStore) {
+        tokio::time::timeout(std::time::Duration::from_secs(2), async {
+            loop {
+                let waiting = store
+                    .db
+                    .query_one(Statement::from_string(
+                        DatabaseBackend::Postgres,
+                        "SELECT EXISTS (SELECT 1 FROM pg_stat_activity WHERE wait_event_type = 'Lock' AND wait_event = 'advisory') AS waiting".to_string(),
+                    ))
+                    .await
+                    .unwrap()
+                    .unwrap()
+                    .try_get::<bool>("", "waiting")
+                    .unwrap();
+                if waiting {
+                    break;
+                }
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .expect("competing creator should wait for repository lock");
     }
 }

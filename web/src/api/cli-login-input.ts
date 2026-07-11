@@ -46,6 +46,6 @@ export function parseRevokeCliSessionInput(
   return { sessionId }
 }
 
-export function normalizeCliLoginCode(value: string) {
+function normalizeCliLoginCode(value: string) {
   return value.trim().replaceAll('-', '').replace(/\s/g, '').toUpperCase()
 }

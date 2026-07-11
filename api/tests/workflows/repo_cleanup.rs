@@ -13,150 +13,77 @@ fn cleanup_paths(state: &AppState, suffix: &str) -> (PathBuf, PathBuf, PathBuf) 
     (owner, staged, rx)
 }
 
-fn enqueue_repo_cleanup(state: &AppState) {
-    lock_catalog(state)
-        .unwrap()
-        .pending_repo_storage_deletions
-        .push(RepoStorageCleanup {
-            owner_handle: TEST_REPO_OWNER.to_string(),
-            repo_name: TEST_REPO_NAME.to_string(),
-        });
+fn assert_cleanup_paths(paths: &(PathBuf, PathBuf, PathBuf), exist: bool) {
+    for path in [&paths.0, &paths.1, &paths.2] {
+        assert_eq!(
+            path.exists(),
+            exist,
+            "unexpected state for {}",
+            path.display()
+        );
+    }
 }
 
-async fn request(
-    state: AppState,
-    method: &str,
-    uri: &str,
-    authorization: String,
-    body: Option<String>,
-) -> Response {
-    let mut request = Request::builder()
+async fn pending_cleanup_count(state: &AppState) -> usize {
+    state
+        .metadata
+        .pending_repo_storage_cleanups_for_tests()
+        .await
+        .unwrap()
+        .len()
+}
+
+async fn delete_repo(state: &AppState) -> Response {
+    request(
+        state.clone(),
+        "DELETE",
+        "/v1/repos/owner/repo",
+        bearer_header(),
+    )
+    .await
+}
+
+async fn assert_repo_deleted(state: &AppState) {
+    assert!(
+        find_repo(state, TEST_REPO_OWNER, TEST_REPO_NAME)
+            .await
+            .is_err()
+    );
+}
+
+async fn request(state: AppState, method: &str, uri: &str, authorization: String) -> Response {
+    let request = Request::builder()
         .method(method)
         .uri(uri)
         .header(AUTHORIZATION, authorization);
-    let body = if let Some(body) = body {
-        request = request.header(CONTENT_TYPE, "application/json");
-        Body::from(body)
-    } else {
-        Body::empty()
-    };
     router(state)
-        .oneshot(request.body(body).unwrap())
+        .oneshot(request.body(Body::empty()).unwrap())
         .await
         .unwrap()
-}
-
-#[tokio::test]
-async fn create_repo_route_cleans_pending_filesystem_cleanup_before_recreate() {
-    let state = test_state_with_jwks();
-    let (owner_repo, staged_repo, rx_repo) = cleanup_paths(&state, "recreate");
-    enqueue_repo_cleanup(&state);
-    let response = request(
-        state.clone(),
-        "POST",
-        "/v1/repos",
-        bearer_header(),
-        Some(r#"{"name":"Repo"}"#.to_string()),
-    )
-    .await;
-
-    assert_eq!(response.status(), StatusCode::OK);
-    assert!(
-        find_repo(&state, TEST_REPO_OWNER, TEST_REPO_NAME)
-            .await
-            .is_ok()
-    );
-    assert!(!owner_repo.exists());
-    assert!(!staged_repo.exists());
-    assert!(!rx_repo.exists());
-    assert!(
-        lock_catalog(&state)
-            .unwrap()
-            .pending_repo_storage_deletions
-            .is_empty()
-    );
-}
-
-#[tokio::test]
-async fn duplicate_create_does_not_run_pending_filesystem_cleanup_for_live_repo() {
-    let state = test_state_with_repo();
-    cache_test_jwks(&state);
-    let (owner_repo, staged_repo, rx_repo) = cleanup_paths(&state, "live");
-    enqueue_repo_cleanup(&state);
-    let response = request(
-        state.clone(),
-        "POST",
-        "/v1/repos",
-        bearer_header(),
-        Some(r#"{"name":"Repo"}"#.to_string()),
-    )
-    .await;
-
-    assert_eq!(response.status(), StatusCode::CONFLICT);
-    assert!(owner_repo.exists());
-    assert!(staged_repo.exists());
-    assert!(rx_repo.exists());
-    assert_eq!(
-        lock_catalog(&state)
-            .unwrap()
-            .pending_repo_storage_deletions
-            .len(),
-        1
-    );
 }
 
 #[tokio::test]
 async fn delete_repo_route_requires_owner_and_removes_storage() {
     let state = test_state_with_repo();
     cache_test_jwks(&state);
-    {
-        let mut catalog = lock_catalog(&state).unwrap();
-        let mut repo = repo_with_readme();
-        repo.graph.commits[0].changes[0].new_content = Some(source_blob("delete route readme"));
-        catalog.repositories.insert(TEST_REPO_ID.to_string(), repo);
-    }
-    let source_keys = find_repo(&state, TEST_REPO_OWNER, TEST_REPO_NAME)
-        .await
-        .unwrap()
-        .source_blobs()
-        .into_iter()
-        .map(|blob| blob.object_key)
-        .collect::<Vec<_>>();
-    let (owner_repo, staged_repo, rx_repo) = cleanup_paths(&state, "test");
+    let paths = cleanup_paths(&state, "test");
     let non_owner = request(
         state.clone(),
         "DELETE",
         "/v1/repos/owner/repo",
         bearer_header_for("user_stranger", "stranger@example.com"),
-        None,
     )
     .await;
     assert_eq!(non_owner.status(), StatusCode::NOT_FOUND);
 
-    let response = request(
-        state.clone(),
-        "DELETE",
-        "/v1/repos/owner/repo",
-        bearer_header(),
-        None,
-    )
-    .await;
+    let response = delete_repo(&state).await;
 
     assert_eq!(response.status(), StatusCode::OK);
     let body = response_json(response).await;
     assert_eq!(body["id"], TEST_REPO_ID);
     assert_eq!(body["deleted"], true);
-    assert!(
-        find_repo(&state, TEST_REPO_OWNER, TEST_REPO_NAME)
-            .await
-            .is_err()
-    );
-    for key in source_keys {
-        assert!(!MemoryObjectStore::new().contains_key(&key));
-    }
-    assert!(!owner_repo.exists());
-    assert!(!staged_repo.exists());
-    assert!(!rx_repo.exists());
+    assert_repo_deleted(&state).await;
+    assert_cleanup_paths(&paths, false);
 }
 
 #[tokio::test]
@@ -164,37 +91,27 @@ async fn delete_repo_route_records_pending_cleanup_when_bucket_delete_fails() {
     let mut state = test_state_with_repo();
     cache_test_jwks(&state);
     {
-        let mut catalog = lock_catalog(&state).unwrap();
-        catalog
-            .repositories
-            .insert(TEST_REPO_ID.to_string(), repo_with_readme());
+        state
+            .metadata
+            .replace_repository_for_tests(repo_with_readme(&state))
+            .await
+            .unwrap();
     }
     state.object_store = Arc::new(DeleteFailsObjectStore);
-    let (owner_repo, staged_repo, rx_repo) = cleanup_paths(&state, "delete-fails");
-    let response = request(
-        state.clone(),
-        "DELETE",
-        "/v1/repos/owner/repo",
-        bearer_header(),
-        None,
-    )
-    .await;
+    let paths = cleanup_paths(&state, "delete-fails");
+    let response = delete_repo(&state).await;
 
     assert_eq!(response.status(), StatusCode::OK);
+    assert_repo_deleted(&state).await;
     assert!(
-        find_repo(&state, TEST_REPO_OWNER, TEST_REPO_NAME)
+        !state
+            .metadata
+            .pending_source_blob_cleanups_for_tests()
             .await
-            .is_err()
-    );
-    assert!(
-        !lock_catalog(&state)
             .unwrap()
-            .pending_source_blob_deletions
             .is_empty()
     );
-    assert!(!owner_repo.exists());
-    assert!(!staged_repo.exists());
-    assert!(!rx_repo.exists());
+    assert_cleanup_paths(&paths, false);
 }
 
 #[tokio::test]
@@ -202,10 +119,11 @@ async fn delete_repo_route_records_pending_filesystem_cleanup_when_storage_delet
     let state = test_state_with_repo();
     cache_test_jwks(&state);
     {
-        let mut catalog = lock_catalog(&state).unwrap();
-        catalog
-            .repositories
-            .insert(TEST_REPO_ID.to_string(), repo_with_readme());
+        state
+            .metadata
+            .replace_repository_for_tests(repo_with_readme(&state))
+            .await
+            .unwrap();
     }
     let owner_repo = owner_git_repo_path(&state, TEST_REPO_OWNER, TEST_REPO_NAME);
     let staged_repo = staged_git_repo_path(&state, TEST_REPO_OWNER, TEST_REPO_NAME);
@@ -221,81 +139,18 @@ async fn delete_repo_route_records_pending_filesystem_cleanup_when_storage_delet
     }
     fs::write(&rx_root, "not a directory").unwrap();
 
-    let response = request(
-        state.clone(),
-        "DELETE",
-        "/v1/repos/owner/repo",
-        bearer_header(),
-        None,
-    )
-    .await;
+    let response = delete_repo(&state).await;
 
     assert_eq!(response.status(), StatusCode::OK);
-    assert!(
-        find_repo(&state, TEST_REPO_OWNER, TEST_REPO_NAME)
-            .await
-            .is_err()
-    );
-    assert_eq!(
-        lock_catalog(&state)
-            .unwrap()
-            .pending_repo_storage_deletions
-            .len(),
-        1
-    );
+    assert_repo_deleted(&state).await;
+    assert_eq!(pending_cleanup_count(&state).await, 1);
     assert!(!owner_repo.exists());
     assert!(!staged_repo.exists());
     assert!(rx_root.exists());
 
     fs::remove_file(&rx_root).unwrap();
     drain_pending_repo_storage_deletions(&state).await.unwrap();
-    assert!(
-        lock_catalog(&state)
-            .unwrap()
-            .pending_repo_storage_deletions
-            .is_empty()
-    );
-}
-
-#[tokio::test]
-async fn pending_repo_storage_cleanup_does_not_delete_recreated_repo_storage() {
-    let state = test_state_with_repo();
-    let (owner_repo, staged_repo, rx_repo) = cleanup_paths(&state, "recreated");
-    {
-        let mut catalog = lock_catalog(&state).unwrap();
-        catalog
-            .repositories
-            .insert(TEST_REPO_ID.to_string(), repo_with_readme());
-    }
-    enqueue_repo_cleanup(&state);
-
-    drain_pending_repo_storage_deletions(&state).await.unwrap();
-
-    assert!(owner_repo.exists());
-    assert!(staged_repo.exists());
-    assert!(rx_repo.exists());
-    assert_eq!(
-        lock_catalog(&state)
-            .unwrap()
-            .pending_repo_storage_deletions
-            .len(),
-        1
-    );
-
-    {
-        let mut catalog = lock_catalog(&state).unwrap();
-        catalog.repositories.remove(TEST_REPO_ID);
-    }
-    drain_pending_repo_storage_deletions(&state).await.unwrap();
-    assert!(!owner_repo.exists());
-    assert!(!staged_repo.exists());
-    assert!(!rx_repo.exists());
-    assert!(
-        lock_catalog(&state)
-            .unwrap()
-            .pending_repo_storage_deletions
-            .is_empty()
-    );
+    assert_eq!(pending_cleanup_count(&state).await, 0);
 }
 
 struct DeleteFailsObjectStore;

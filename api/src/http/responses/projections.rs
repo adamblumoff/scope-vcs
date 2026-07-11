@@ -12,8 +12,8 @@ use serde::{Deserialize, Serialize};
 
 #[derive(Clone, Copy, Debug, Deserialize, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "lowercase")]
-#[cfg_attr(test, derive(ts_rs::TS))]
-#[cfg_attr(test, ts(rename_all = "lowercase"))]
+#[cfg_attr(feature = "type-export", derive(ts_rs::TS))]
+#[cfg_attr(feature = "type-export", ts(rename_all = "lowercase"))]
 pub(crate) enum ProjectionPreviewAudience {
     Private,
     Public,
@@ -30,8 +30,8 @@ impl From<ProjectionPreviewAudience> for ProjectionAudience {
 
 #[derive(Clone, Copy, Debug, Deserialize, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "lowercase")]
-#[cfg_attr(test, derive(ts_rs::TS))]
-#[cfg_attr(test, ts(rename_all = "lowercase"))]
+#[cfg_attr(feature = "type-export", derive(ts_rs::TS))]
+#[cfg_attr(feature = "type-export", ts(rename_all = "lowercase"))]
 pub(crate) enum ProjectionPreviewSource {
     Live,
 }
@@ -45,14 +45,14 @@ impl From<ProjectionPreviewSource> for ProjectionSource {
 }
 
 #[derive(Debug, Deserialize)]
-#[cfg_attr(test, derive(ts_rs::TS))]
+#[cfg_attr(feature = "type-export", derive(ts_rs::TS))]
 pub(crate) struct ProjectionPreviewRequest {
     pub(crate) audience: ProjectionPreviewAudience,
     pub(crate) source: Option<ProjectionPreviewSource>,
 }
 
 #[derive(Debug, Serialize)]
-#[cfg_attr(test, derive(ts_rs::TS))]
+#[cfg_attr(feature = "type-export", derive(ts_rs::TS))]
 pub(crate) struct ProjectionPreviewResponse {
     pub(crate) audience: ProjectionPreviewAudience,
     pub(crate) source: ProjectionPreviewSource,
@@ -65,7 +65,7 @@ pub(crate) struct ProjectionPreviewResponse {
 }
 
 #[derive(Debug, Serialize)]
-#[cfg_attr(test, derive(ts_rs::TS))]
+#[cfg_attr(feature = "type-export", derive(ts_rs::TS))]
 pub(crate) struct ProjectionPreviewFileResponse {
     pub(crate) path: String,
     pub(crate) oid: String,
@@ -73,7 +73,7 @@ pub(crate) struct ProjectionPreviewFileResponse {
 }
 
 #[derive(Debug, Serialize)]
-#[cfg_attr(test, derive(ts_rs::TS))]
+#[cfg_attr(feature = "type-export", derive(ts_rs::TS))]
 pub(crate) struct ProjectionPreviewCommitResponse {
     pub(crate) projected_id: String,
     pub(crate) logical_commit_id: String,
@@ -85,7 +85,7 @@ pub(crate) struct ProjectionPreviewCommitResponse {
 }
 
 #[derive(Debug, Serialize)]
-#[cfg_attr(test, derive(ts_rs::TS))]
+#[cfg_attr(feature = "type-export", derive(ts_rs::TS))]
 pub(crate) enum ProjectionPreviewCommitVisibilityResponse {
     FullyPublic,
     Mixed,
@@ -93,7 +93,7 @@ pub(crate) enum ProjectionPreviewCommitVisibilityResponse {
 }
 
 #[derive(Debug, Serialize)]
-#[cfg_attr(test, derive(ts_rs::TS))]
+#[cfg_attr(feature = "type-export", derive(ts_rs::TS))]
 pub(crate) struct ProjectionPreviewSummaryResponse {
     pub(crate) visible_files: usize,
     pub(crate) hidden_files: usize,
@@ -102,7 +102,7 @@ pub(crate) struct ProjectionPreviewSummaryResponse {
 }
 
 #[derive(Debug, Serialize)]
-#[cfg_attr(test, derive(ts_rs::TS))]
+#[cfg_attr(feature = "type-export", derive(ts_rs::TS))]
 pub(crate) struct RepoFileResponse {
     pub(crate) path: String,
     pub(crate) oid: String,
@@ -111,7 +111,7 @@ pub(crate) struct RepoFileResponse {
 }
 
 #[derive(Debug, Serialize)]
-#[cfg_attr(test, derive(ts_rs::TS))]
+#[cfg_attr(feature = "type-export", derive(ts_rs::TS))]
 pub(crate) struct RepoFileContentResponse {
     pub(crate) path: String,
     pub(crate) oid: String,

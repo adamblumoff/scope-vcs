@@ -19,7 +19,16 @@ pub fn run_git_credential(operation: &str) -> anyhow::Result<()> {
 fn write_git_credential_response(
     operation: &str,
     reader: impl BufRead,
+    writer: impl Write,
+) -> anyhow::Result<()> {
+    write_git_credential_response_with(operation, reader, writer, read_stored_session_token)
+}
+
+fn write_git_credential_response_with(
+    operation: &str,
+    reader: impl BufRead,
     mut writer: impl Write,
+    read_token: impl FnOnce(&str) -> anyhow::Result<Option<String>>,
 ) -> anyhow::Result<()> {
     let request = parse_git_credential_request(reader)?;
     if operation != "get" {
@@ -29,7 +38,7 @@ fn write_git_credential_response(
     let Some(api_url) = scope_api_url_for_credential_request(&request) else {
         return Ok(());
     };
-    let Some(session_token) = read_stored_session_token(&api_url)? else {
+    let Some(session_token) = read_token(&api_url)? else {
         return Ok(());
     };
 
@@ -147,5 +156,27 @@ mod tests {
         .unwrap();
 
         assert!(output.is_empty());
+    }
+
+    #[test]
+    fn get_returns_the_session_for_the_derived_api_url() {
+        let mut output = Vec::new();
+        write_git_credential_response_with(
+            "get",
+            Cursor::new(
+                "protocol=https\nhost=scope.example\npath=api/git/permissioned/adam/repo\n\n",
+            ),
+            &mut output,
+            |api_url| {
+                assert_eq!(api_url, "https://scope.example/api");
+                Ok(Some("scope_cli_secret".to_string()))
+            },
+        )
+        .unwrap();
+
+        assert_eq!(
+            String::from_utf8(output).unwrap(),
+            "username=scope\npassword=scope_cli_secret\n\n"
+        );
     }
 }

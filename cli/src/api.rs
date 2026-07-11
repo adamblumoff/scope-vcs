@@ -316,6 +316,3 @@ pub fn display_user(user: &UserResponse) -> String {
         format!("@{} <{}>", user.handle, user.email)
     }
 }
-
-#[cfg(test)]
-mod tests;

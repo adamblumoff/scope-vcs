@@ -53,3 +53,36 @@ pub async fn reset_metadata_schema(db: &DatabaseConnection) -> Result<(), DbErr>
         .await?;
     Ok(())
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::db::{MetadataStore, TestDatabaseTarget};
+    use std::collections::BTreeSet;
+
+    #[tokio::test]
+    async fn reset_list_matches_owned_schema_tables() {
+        let store =
+            MetadataStore::connect_fresh_for_tests(&TestDatabaseTarget::required().unwrap())
+                .unwrap();
+        let actual = store
+            .db
+            .query_all(Statement::from_string(
+                store.db.get_database_backend(),
+                "SELECT tablename FROM pg_tables WHERE schemaname = current_schema()".to_string(),
+            ))
+            .await
+            .unwrap()
+            .into_iter()
+            .map(|row| row.try_get::<String>("", "tablename").unwrap())
+            .collect::<BTreeSet<_>>();
+        let expected = RESET_TABLES
+            .split(',')
+            .map(str::trim)
+            .filter(|name| !name.is_empty())
+            .map(str::to_string)
+            .collect::<BTreeSet<_>>();
+
+        assert_eq!(actual, expected);
+    }
+}

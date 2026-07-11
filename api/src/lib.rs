@@ -24,3 +24,8 @@ mod workflow_tests;
 
 pub use app::router;
 pub use state::AppState;
+
+#[cfg(feature = "type-export")]
+pub fn export_api_types(output_path: &std::path::Path) {
+    http::type_exports::export_api_types(output_path);
+}

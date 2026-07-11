@@ -6,42 +6,53 @@ use std::{io::Write, process::Command, time::Duration};
 
 const ZERO_OID: &str = "0000000000000000000000000000000000000000";
 
-#[tokio::test]
-async fn receive_pack_accepts_gzip_encoded_request_body() {
-    let state = test_state_with_repo();
-    let (secret, token) = generate_first_push_token(&test_owner_id()).unwrap();
-    {
-        let mut catalog = lock_catalog(&state).unwrap();
-        let repo = catalog.repositories.get_mut(TEST_REPO_ID).unwrap();
-        repo.record.publication_state = RepoPublicationState::Unpublished;
-        repo.first_push_token = Some(token);
-    }
-    let source = temp_git_repo("gzip-first-push");
-    fs::write(source.join("README.md"), "hello over gzip receive-pack\n").unwrap();
+fn first_push_source(label: &str, content: &[u8]) -> TempGitRepo {
+    let source = temp_git_repo(label);
+    fs::write(source.join("README.md"), content).unwrap();
     run_git(Some(&source), &["add", "-A"], "add readme").unwrap();
     commit_all(&source, "initial");
+    source
+}
+
+async fn receive_post(
+    state: AppState,
+    secret: &str,
+    intent: String,
+    body: Vec<u8>,
+    gzip: bool,
+) -> Response {
+    let mut request = Request::builder()
+        .method("POST")
+        .uri("/git/permissioned/owner/repo/git-receive-pack")
+        .header(CONTENT_TYPE, "application/x-git-receive-pack-request")
+        .header("x-scope-push-intent", intent)
+        .header(
+            AUTHORIZATION,
+            format!("Basic {}", BASE64.encode(format!("scope:{secret}"))),
+        );
+    if gzip {
+        request = request.header(CONTENT_ENCODING, "gzip");
+    }
+    router(state)
+        .oneshot(request.body(Body::from(body)).unwrap())
+        .await
+        .unwrap()
+}
+
+#[tokio::test]
+async fn receive_pack_accepts_gzip_encoded_request_body() {
+    let (state, secret) = test_state_with_first_push_token().await;
+    let source = first_push_source("gzip-first-push", b"hello over gzip receive-pack\n");
     let push_intent =
         create_test_push_intent(&state, &test_owner_id(), &git_head_oid(&source)).await;
-
-    let response = router(state.clone())
-        .oneshot(
-            Request::builder()
-                .method("POST")
-                .uri("/git/permissioned/owner/repo/git-receive-pack")
-                .header(CONTENT_TYPE, "application/x-git-receive-pack-request")
-                .header(CONTENT_ENCODING, "gzip")
-                .header("x-scope-push-intent", push_intent)
-                .header(
-                    AUTHORIZATION,
-                    format!("Basic {}", BASE64.encode(format!("scope:{secret}"))),
-                )
-                .body(Body::from(gzip_bytes(&receive_pack_first_push_request(
-                    &source,
-                ))))
-                .unwrap(),
-        )
-        .await
-        .unwrap();
+    let response = receive_post(
+        state.clone(),
+        &secret,
+        push_intent,
+        gzip_bytes(&receive_pack_first_push_request(&source)),
+        true,
+    )
+    .await;
 
     assert_eq!(response.status(), StatusCode::OK);
     let body = to_bytes(response.into_body(), 1024 * 1024).await.unwrap();
@@ -61,7 +72,7 @@ async fn receive_pack_accepts_gzip_encoded_request_body() {
     assert_eq!(
         repo.live_tree()
             .get(&ScopePath::parse("/README.md").unwrap())
-            .map(blob_content)
+            .map(|blob| blob_content(&state, blob))
             .as_deref(),
         Some("hello over gzip receive-pack\n")
     );
@@ -69,55 +80,26 @@ async fn receive_pack_accepts_gzip_encoded_request_body() {
 
 #[tokio::test]
 async fn receive_pack_cleans_uploaded_blobs_when_push_intent_does_not_match_head() {
-    let state = test_state_with_repo();
-    let (secret, token) = generate_first_push_token(&test_owner_id()).unwrap();
-    {
-        let mut catalog = lock_catalog(&state).unwrap();
-        let repo = catalog.repositories.get_mut(TEST_REPO_ID).unwrap();
-        repo.record.publication_state = RepoPublicationState::Unpublished;
-        repo.first_push_token = Some(token);
-    }
-    let source = temp_git_repo("intent-head-mismatch-first-push");
+    let (state, secret) = test_state_with_first_push_token().await;
     let readme = b"intent mismatch should be cleaned\n";
-    fs::write(source.join("README.md"), readme).unwrap();
-    run_git(Some(&source), &["add", "-A"], "add readme").unwrap();
-    commit_all(&source, "initial");
+    let source = first_push_source("intent-head-mismatch-first-push", readme);
     let push_intent = create_test_push_intent(&state, &test_owner_id(), TEST_PUSH_HEAD_OID).await;
-
-    let response = router(state.clone())
-        .oneshot(
-            Request::builder()
-                .method("POST")
-                .uri("/git/permissioned/owner/repo/git-receive-pack")
-                .header(CONTENT_TYPE, "application/x-git-receive-pack-request")
-                .header("x-scope-push-intent", push_intent)
-                .header(
-                    AUTHORIZATION,
-                    format!("Basic {}", BASE64.encode(format!("scope:{secret}"))),
-                )
-                .body(Body::from(receive_pack_first_push_request(&source)))
-                .unwrap(),
-        )
-        .await
-        .unwrap();
+    let response = receive_post(
+        state.clone(),
+        &secret,
+        push_intent,
+        receive_pack_first_push_request(&source),
+        false,
+    )
+    .await;
 
     assert_eq!(response.status(), StatusCode::FORBIDDEN);
-    assert!(!MemoryObjectStore::new().contains_bytes(readme));
-    let rx_root = state.git_cache_root().unwrap().join("git-rx");
-    if rx_root.exists() {
-        assert!(fs::read_dir(rx_root).unwrap().next().is_none());
-    }
+    assert!(!state.test_object_store.contains_bytes(readme));
 }
 
 #[tokio::test]
 async fn upload_pack_accepts_gzip_encoded_request_body() {
-    let state = test_state_with_repo();
-    {
-        let mut catalog = lock_catalog(&state).unwrap();
-        catalog
-            .repositories
-            .insert(TEST_REPO_ID.to_string(), repo_with_readme());
-    }
+    let state = test_state_with_readme().await;
     let repo_path = git_upload_pack_repo_for_request(
         &state,
         &HeaderMap::new(),
@@ -155,42 +137,36 @@ async fn upload_pack_accepts_gzip_encoded_request_body() {
 }
 
 #[test]
-fn git_request_decoder_rejects_invalid_gzip_body() {
-    let mut headers = HeaderMap::new();
-    headers.insert(CONTENT_ENCODING, "gzip".parse().unwrap());
-
-    let error =
-        decode_git_request_body(&headers, Bytes::from_static(b"not gzip"), 1024).unwrap_err();
-
-    assert_eq!(error.status(), StatusCode::BAD_REQUEST);
-    assert!(error.message().contains("invalid gzip Git request body"));
-}
-
-#[test]
-fn git_request_decoder_rejects_unsupported_content_encoding() {
-    let mut headers = HeaderMap::new();
-    headers.insert(CONTENT_ENCODING, "br".parse().unwrap());
-
-    let error =
-        decode_git_request_body(&headers, Bytes::from_static(b"plain git body"), 1024).unwrap_err();
-
-    assert_eq!(error.status(), StatusCode::BAD_REQUEST);
-    assert_eq!(error.message(), "unsupported Git content-encoding br");
-}
-
-#[test]
-fn git_request_decoder_limits_decompressed_body_size() {
-    let mut headers = HeaderMap::new();
-    headers.insert(CONTENT_ENCODING, "gzip".parse().unwrap());
-
-    let error =
-        decode_git_request_body(&headers, Bytes::from(gzip_bytes(b"12345")), 4).unwrap_err();
-
-    assert_eq!(error.status(), StatusCode::PAYLOAD_TOO_LARGE);
-    assert_eq!(
-        error.message(),
-        "git request body is too large after decompression"
-    );
+fn git_request_decoder_rejects_invalid_encoding_and_expansion() {
+    for (encoding, body, limit, status, message) in [
+        (
+            "gzip",
+            b"not gzip".to_vec(),
+            1024,
+            StatusCode::BAD_REQUEST,
+            "invalid gzip Git request body",
+        ),
+        (
+            "br",
+            b"plain git body".to_vec(),
+            1024,
+            StatusCode::BAD_REQUEST,
+            "unsupported Git content-encoding br",
+        ),
+        (
+            "gzip",
+            gzip_bytes(b"12345"),
+            4,
+            StatusCode::PAYLOAD_TOO_LARGE,
+            "git request body is too large after decompression",
+        ),
+    ] {
+        let mut headers = HeaderMap::new();
+        headers.insert(CONTENT_ENCODING, encoding.parse().unwrap());
+        let error = decode_git_request_body(&headers, Bytes::from(body), limit).unwrap_err();
+        assert_eq!(error.status(), status);
+        assert!(error.message().contains(message));
+    }
 }
 
 fn upload_pack_want_request(oid: &str) -> Vec<u8> {

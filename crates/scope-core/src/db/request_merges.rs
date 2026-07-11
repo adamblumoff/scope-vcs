@@ -131,13 +131,9 @@ mod tests {
     use crate::domain::{
         policy::Visibility,
         requests::{
-            RecordWorkingRequestUploadInput, RequestActorRole, RequestBaseAudience, RequestState,
-            StartRequestInput, SubmitRequestInput, canonical_request_ref,
+            Request, RequestActorRole, RequestBaseAudience, RequestState, canonical_request_ref,
         },
-        store::{
-            AppCatalog, DEFAULT_GIT_FILE_MODE, RepoPublicationState, SourceBlob, StoredRepository,
-            UserAccount, app_catalog,
-        },
+        store::{AppCatalog, RepoPublicationState, StoredRepository, UserAccount, app_catalog},
     };
 
     #[tokio::test]
@@ -155,19 +151,17 @@ mod tests {
             .unwrap_err();
 
         assert!(error.message.contains("simulated repo conflict"));
-        store
-            .read(|catalog| {
-                let repo = catalog.repositories.get("owner/repo").unwrap();
-                assert_eq!(repo.record.change_version, 1);
-                let request = catalog.requests.get("req_1").unwrap();
-                assert_eq!(request.state, RequestState::Submitted);
-                assert!(request.disposition.is_none());
-                assert!(request.settlement.is_none());
-                assert_eq!(catalog.request_events.len(), 1);
-                Ok(())
-            })
+        let repo = store
+            .repository_for_tests("owner/repo")
             .await
+            .unwrap()
             .unwrap();
+        assert_eq!(repo.record.change_version, 1);
+        let request = store.request_for_tests("req_1").await.unwrap().unwrap();
+        assert_eq!(request.state, RequestState::Submitted);
+        assert!(request.disposition.is_none());
+        assert!(request.settlement.is_none());
+        assert!(store.request_events_for_tests().await.unwrap().is_empty());
     }
 
     #[tokio::test]
@@ -184,29 +178,21 @@ mod tests {
 
         assert_eq!(mutation.repository_result, "applied");
         assert_eq!(mutation.request.request.state, RequestState::Resolved);
-        store
-            .read(|catalog| {
-                let repo = catalog.repositories.get("owner/repo").unwrap();
-                assert_eq!(repo.record.change_version, 2);
-                let request = catalog.requests.get("req_1").unwrap();
-                assert_eq!(request.state, RequestState::Resolved);
-                assert_eq!(catalog.request_events.len(), 3);
-                Ok(())
-            })
+        let repo = store
+            .repository_for_tests("owner/repo")
             .await
+            .unwrap()
             .unwrap();
+        assert_eq!(repo.record.change_version, 2);
+        let request = store.request_for_tests("req_1").await.unwrap().unwrap();
+        assert_eq!(request.state, RequestState::Resolved);
+        assert_eq!(store.request_events_for_tests().await.unwrap().len(), 2);
     }
 
     async fn store_with_owner_request() -> MetadataStore {
         let target = super::super::TestDatabaseTarget::required().unwrap();
         let store = MetadataStore::connect_fresh_for_tests(&target).unwrap();
         store.seed_catalog_for_tests(catalog_with_repo()).unwrap();
-        store.start_request(owner_start_input()).await.unwrap();
-        store
-            .record_working_request_upload(owner_upload_input())
-            .await
-            .unwrap();
-        store.submit_request(owner_submit_input()).await.unwrap();
         store
     }
 
@@ -223,52 +209,31 @@ mod tests {
         let mut catalog = app_catalog();
         catalog.users.insert(owner.id.clone(), owner);
         catalog.repositories.insert(repo.record.id.clone(), repo);
-        catalog
-    }
-
-    fn owner_start_input() -> StartRequestInput {
-        StartRequestInput {
-            id: "req_1".to_string(),
-            repo_id: "owner/repo".to_string(),
-            author_user_id: "user_owner".to_string(),
-            title: "Owner request".to_string(),
-            author_role: RequestActorRole::Owner,
-            base_audience: RequestBaseAudience::Private,
-            target_branch: "main".to_string(),
-            request_ref: canonical_request_ref("req_1"),
-            base_main_oid: "main_a".to_string(),
-            now_unix: 1,
-        }
-    }
-
-    fn owner_upload_input() -> RecordWorkingRequestUploadInput {
-        RecordWorkingRequestUploadInput {
-            request_id: "req_1".to_string(),
-            actor_user_id: "user_owner".to_string(),
-            actor_can_edit: true,
-            expected_old_head_oid: None,
-            new_head_oid: "head_a".to_string(),
-            git_snapshot: SourceBlob {
-                object_key: "objects/head_a".to_string(),
-                sha256: "sha256-head_a".to_string(),
-                git_oid: "head_a".to_string(),
-                git_file_mode: DEFAULT_GIT_FILE_MODE.to_string(),
-                size_bytes: 1,
+        catalog.requests.insert(
+            "req_1".to_string(),
+            Request {
+                id: "req_1".to_string(),
+                repo_id: "owner/repo".to_string(),
+                author_user_id: "user_owner".to_string(),
+                editor_user_ids: Default::default(),
+                author_role: RequestActorRole::Owner,
+                base_audience: RequestBaseAudience::Private,
+                target_branch: "main".to_string(),
+                request_ref: canonical_request_ref("req_1"),
+                base_main_oid: "main_a".to_string(),
+                head_oid: "head_a".to_string(),
+                git_snapshot: None,
+                title: "Owner request".to_string(),
+                state: RequestState::Submitted,
+                stake_credits: 0,
+                disposition: None,
+                settlement: None,
+                created_at_unix: 1,
+                updated_at_unix: 1,
+                resolved_at_unix: None,
             },
-            now_unix: 2,
-        }
-    }
-
-    fn owner_submit_input() -> SubmitRequestInput {
-        SubmitRequestInput {
-            request_id: "req_1".to_string(),
-            actor_user_id: "user_owner".to_string(),
-            expected_head_oid: "head_a".to_string(),
-            stake_credits: 0,
-            stake_ledger_entry_id: None,
-            event_id: "event_created".to_string(),
-            now_unix: 3,
-        }
+        );
+        catalog
     }
 
     fn merge_input() -> MergeRequestInput {

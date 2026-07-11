@@ -349,4 +349,29 @@ mod tests {
         assert!(ensure_reviewed_base_matches_intent(None, Some("def")).is_err());
         assert!(ensure_reviewed_base_matches_intent(Some("abc"), None).is_err());
     }
+
+    #[test]
+    fn first_push_requires_owner_access() {
+        ensure_unpublished_repo_can_receive_first_push("owner", "repo", RepositoryActor::Owner)
+            .unwrap();
+        for actor in [RepositoryActor::Member, RepositoryActor::Public] {
+            assert!(
+                ensure_unpublished_repo_can_receive_first_push("owner", "repo", actor).is_err()
+            );
+        }
+    }
+
+    #[test]
+    fn published_push_requires_write_access() {
+        for (state, can_push, allowed) in [
+            (RepoPublicationState::Published, true, true),
+            (RepoPublicationState::Published, false, false),
+            (RepoPublicationState::Unpublished, true, false),
+        ] {
+            assert_eq!(
+                ensure_published_repo_can_receive_push("owner", "repo", state, can_push).is_ok(),
+                allowed,
+            );
+        }
+    }
 }

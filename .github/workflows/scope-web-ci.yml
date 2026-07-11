@@ -5,14 +5,26 @@ on:
     paths:
       - ".github/scripts/deploy-railway.sh"
       - ".github/workflows/scope-web-ci.yml"
+      - "Cargo.lock"
+      - "Cargo.toml"
+      - "api/**"
+      - "crates/**"
+      - "dev/**"
       - "web/**"
+      - "worker/**"
   push:
     branches:
       - main
     paths:
       - ".github/scripts/deploy-railway.sh"
       - ".github/workflows/scope-web-ci.yml"
+      - "Cargo.lock"
+      - "Cargo.toml"
+      - "api/**"
+      - "crates/**"
+      - "dev/**"
       - "web/**"
+      - "worker/**"
   workflow_dispatch:
 
 concurrency:
@@ -70,9 +82,123 @@ jobs:
       - name: Build
         run: pnpm build
 
+  smoke:
+    name: Browser smoke against seeded local stack
+    if: >-
+      github.event_name != 'pull_request' ||
+      (github.event.pull_request.head.repo.full_name == github.repository &&
+      github.actor != 'dependabot[bot]')
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_DB: scope_dev
+          POSTGRES_PASSWORD: scope
+          POSTGRES_USER: scope
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U scope -d scope_dev"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@fa04a1451ff1842e2626ccb99004d0195b455a88
+        with:
+          toolchain: 1.94.0
+
+      - name: Cache Rust build outputs
+        uses: actions/cache@v6
+        with:
+          path: |
+            ~/.cargo/git
+            ~/.cargo/registry
+            target
+          key: ${{ runner.os }}-web-smoke-cargo-${{ hashFiles('Cargo.lock') }}-${{ github.sha }}
+          restore-keys: |
+            ${{ runner.os }}-web-smoke-cargo-${{ hashFiles('Cargo.lock') }}
+            ${{ runner.os }}-web-smoke-cargo-
+
+      - name: Install Node
+        uses: actions/setup-node@v6
+        with:
+          node-version: 24
+
+      - name: Enable pnpm
+        run: |
+          corepack enable
+          corepack prepare pnpm@11.1.0 --activate
+
+      - name: Install web dependencies
+        working-directory: web
+        run: pnpm install --frozen-lockfile
+
+      - name: Install Chromium
+        working-directory: web
+        run: pnpm exec playwright install --with-deps chromium
+
+      # Required repository secrets: a matching Clerk development key pair.
+      - name: Configure isolated local stack
+        env:
+          CLERK_DEVELOPMENT_PUBLISHABLE_KEY: ${{ secrets.CLERK_DEVELOPMENT_PUBLISHABLE_KEY }}
+          CLERK_DEVELOPMENT_SECRET_KEY: ${{ secrets.CLERK_DEVELOPMENT_SECRET_KEY }}
+        shell: bash
+        run: |
+          if [[ "$CLERK_DEVELOPMENT_PUBLISHABLE_KEY" != pk_test_* ]]; then
+            echo "::error::Repository secret CLERK_DEVELOPMENT_PUBLISHABLE_KEY must contain a Clerk development publishable key (pk_test_*)."
+            exit 1
+          fi
+          if [[ "$CLERK_DEVELOPMENT_SECRET_KEY" != sk_test_* ]]; then
+            echo "::error::Repository secret CLERK_DEVELOPMENT_SECRET_KEY must contain the matching Clerk development secret key (sk_test_*)."
+            exit 1
+          fi
+          printf '%s\n' \
+            'DATABASE_URL=postgres://scope:scope@127.0.0.1:5432/scope_dev' \
+            'SCOPE_DEV_USER_EMAIL=smoke@example.test' \
+            'SCOPE_DEV_USER_HANDLE=dev' > .env.local
+          printf 'VITE_CLERK_PUBLISHABLE_KEY=%s\nCLERK_SECRET_KEY=%s\n' \
+            "$CLERK_DEVELOPMENT_PUBLISHABLE_KEY" \
+            "$CLERK_DEVELOPMENT_SECRET_KEY" > web/.env.local
+
+      - name: Prebuild local API and worker
+        run: |
+          cargo build -p api --features local-dev --locked
+          cargo build -p worker --locked
+
+      - name: Start seeded local stack
+        run: ./dev/scope-dev up
+
+      - name: Run browser smoke
+        working-directory: web
+        env:
+          SCOPE_SMOKE_REPO: dev/public-demo
+          SCOPE_WEB_BASE_URL: http://localhost:3000
+        run: pnpm test:smoke
+
+      - name: Print local stack logs
+        if: failure()
+        shell: bash
+        run: |
+          for log in .tmp/local-dev/*.log; do
+            [[ -f "$log" ]] || continue
+            echo "::group::$log"
+            tail -n 300 "$log"
+            echo "::endgroup::"
+          done
+
+      - name: Stop local stack
+        if: always()
+        run: ./dev/scope-dev down
+
   deploy:
     name: Deploy scope-web
-    needs: checks
+    needs: [checks, smoke]
     runs-on: ubuntu-latest
     if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main'
     steps:

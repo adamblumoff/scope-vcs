@@ -77,37 +77,6 @@ pub(super) fn describe_refs(refs: &[(String, String)]) -> String {
         .join(", ")
 }
 
-#[cfg(test)]
-pub(crate) async fn git_tree_files(
-    state: &AppState,
-    repo_id: &str,
-    staging_repo: &FsPath,
-    head_oid: &str,
-) -> Result<Vec<(GitTreeFile, SourceBlob)>, ApiError> {
-    let pending_files = git_tree_entries(staging_repo, head_oid)?;
-    let contents = git_tree_blob_contents(staging_repo, &pending_files)?;
-    let mut files = Vec::with_capacity(pending_files.len());
-    let mut uploaded_blobs = Vec::with_capacity(pending_files.len());
-    let blobs = match put_git_blob_contents(
-        state,
-        repo_id,
-        &pending_files,
-        &contents,
-        &mut uploaded_blobs,
-    ) {
-        Ok(blobs) => blobs,
-        Err(error) => {
-            crate::state::best_effort_cleanup_rollback_source_blobs(state, &uploaded_blobs).await;
-            return Err(error);
-        }
-    };
-    for (pending, blob) in pending_files.into_iter().zip(blobs) {
-        files.push((pending, blob));
-    }
-    files.sort_by(|left, right| left.0.path.cmp(&right.0.path));
-    Ok(files)
-}
-
 pub(super) fn git_tree_entries(
     staging_repo: &FsPath,
     head_oid: &str,

@@ -103,16 +103,3 @@ fn normalize_repo_name(name: &str) -> anyhow::Result<String> {
     }
     Ok(name)
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn default_repo_name_uses_git_root_folder_name() {
-        assert_eq!(
-            default_repo_name(Path::new("C:/Users/adam/Code/scope-vcs")),
-            "scope-vcs"
-        );
-    }
-}

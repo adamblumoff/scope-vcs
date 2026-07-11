@@ -65,3 +65,50 @@ where
     }
     Ok(())
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::db::{MetadataStore, TestDatabaseTarget};
+    use sea_orm::TransactionTrait;
+    use std::time::Duration;
+
+    #[tokio::test]
+    async fn aggregate_locks_serialize_same_key_without_blocking_other_keys() {
+        let store =
+            MetadataStore::connect_fresh_for_tests(&TestDatabaseTarget::required().unwrap())
+                .unwrap();
+        let held = store.db.begin().await.unwrap();
+        acquire_aggregate_lock(&held, "repository", "owner/one")
+            .await
+            .unwrap();
+
+        let same_store = store.clone();
+        let same = tokio::spawn(async move {
+            let tx = same_store.db.begin().await.unwrap();
+            acquire_aggregate_lock(&tx, "repository", "owner/one")
+                .await
+                .unwrap();
+            tx.commit().await.unwrap();
+        });
+        let other_store = store.clone();
+        let other = tokio::spawn(async move {
+            let tx = other_store.db.begin().await.unwrap();
+            acquire_aggregate_lock(&tx, "repository", "owner/two")
+                .await
+                .unwrap();
+            tx.commit().await.unwrap();
+        });
+
+        tokio::time::timeout(Duration::from_secs(2), other)
+            .await
+            .expect("different aggregate key should not block")
+            .unwrap();
+        assert!(!same.is_finished());
+        held.commit().await.unwrap();
+        tokio::time::timeout(Duration::from_secs(2), same)
+            .await
+            .expect("same aggregate key should proceed after release")
+            .unwrap();
+    }
+}

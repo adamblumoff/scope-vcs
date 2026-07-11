@@ -79,72 +79,22 @@ fn remote_points_to_scope_repo(git_repo: &GitRepo, api_url: &str, remote: &str) 
 mod tests {
     use super::*;
     use crate::test_support::TestDir as TempDir;
-    use std::{
-        fs,
-        path::{Path, PathBuf},
-        process::{Command, Output},
-    };
+    use std::{fs, path::PathBuf};
 
     #[test]
-    fn request_remote_accepts_public_git_remote_and_derives_permissioned_push_url() {
-        let target = ScopeRemote::parse(
-            "https://scope.example",
-            "origin",
-            "https://scope.example/git/public/adam/repo",
-        )
-        .unwrap();
-
-        assert_eq!(target.owner, "adam");
-        assert_eq!(target.repo, "repo");
-        assert_eq!(
-            target.public_url,
-            "https://scope.example/git/public/adam/repo"
-        );
-        assert_eq!(
-            target.permissioned_url,
-            "https://scope.example/git/permissioned/adam/repo"
-        );
-    }
-
-    #[test]
-    fn request_remote_accepts_permissioned_git_remote_and_derives_public_fetch_url() {
-        let target = ScopeRemote::parse(
-            "https://scope.example",
-            "scope",
-            "https://scope@scope.example/git/permissioned/adam/repo",
-        )
-        .unwrap();
-
-        assert_eq!(
-            target.public_url,
-            "https://scope.example/git/public/adam/repo"
-        );
-        assert_eq!(
-            target.permissioned_url,
-            "https://scope.example/git/permissioned/adam/repo"
-        );
-    }
-
-    #[test]
-    fn selected_remote_prefers_explicit_remote() {
-        assert_eq!(
-            selected_remote_name(Some("upstream"), Some("scope".to_string())),
-            Some("upstream".to_string())
-        );
-    }
-
-    #[test]
-    fn selected_remote_uses_branch_remote_before_default() {
-        assert_eq!(
-            selected_remote_name(None, Some("upstream".to_string())),
-            Some("upstream".to_string())
-        );
-    }
-
-    #[test]
-    fn selected_remote_returns_none_without_explicit_or_branch_remote() {
-        assert_eq!(selected_remote_name(None, None), None);
-        assert_eq!(selected_remote_name(Some(" "), Some(" ".to_string())), None);
+    fn selected_remote_prefers_explicit_then_branch_remote() {
+        for (explicit, branch, expected) in [
+            (
+                Some("upstream"),
+                Some("scope".to_string()),
+                Some("upstream"),
+            ),
+            (None, Some("upstream".to_string()), Some("upstream")),
+            (None, None, None),
+            (Some(" "), Some(" ".to_string()), None),
+        ] {
+            assert_eq!(selected_remote_name(explicit, branch).as_deref(), expected);
+        }
     }
 
     #[test]
@@ -160,91 +110,58 @@ mod tests {
     }
 
     #[test]
-    fn default_remote_discovers_origin_scope_remote() {
-        let (_dir, repo) = repo_with_remotes(
-            "origin",
-            &[("origin", "https://scope.example/git/public/adam/repo")],
-        );
-
-        assert_eq!(
-            request_remote_name(&repo, "https://scope.example", None).unwrap(),
-            "origin"
-        );
-    }
-
-    #[test]
-    fn default_remote_prefers_scope_before_origin() {
-        let (_dir, repo) = repo_with_remotes(
-            "scope-first",
-            &[
-                ("origin", "https://scope.example/git/public/adam/repo"),
-                ("scope", "https://scope.example/git/permissioned/adam/repo"),
-            ],
-        );
-
-        assert_eq!(
-            request_remote_name(&repo, "https://scope.example", None).unwrap(),
-            DEFAULT_SCOPE_REMOTE
-        );
-    }
-
-    #[test]
-    fn default_remote_finds_nonstandard_scope_remote() {
-        let (_dir, repo) = repo_with_remotes(
-            "renamed",
-            &[
-                ("origin", "https://github.com/adam/repo"),
-                ("upstream", "https://scope.example/git/public/adam/repo"),
-            ],
-        );
-
-        assert_eq!(
-            request_remote_name(&repo, "https://scope.example", None).unwrap(),
-            "upstream"
-        );
+    fn default_remote_discovers_scope_remotes_in_priority_order() {
+        for (label, remotes, expected) in [
+            (
+                "origin",
+                vec![("origin", "https://scope.example/git/public/adam/repo")],
+                "origin",
+            ),
+            (
+                "scope-first",
+                vec![
+                    ("origin", "https://scope.example/git/public/adam/repo"),
+                    ("scope", "https://scope.example/git/permissioned/adam/repo"),
+                ],
+                DEFAULT_SCOPE_REMOTE,
+            ),
+            (
+                "renamed",
+                vec![
+                    ("origin", "https://github.com/adam/repo"),
+                    ("upstream", "https://scope.example/git/public/adam/repo"),
+                ],
+                "upstream",
+            ),
+        ] {
+            let (_dir, repo) = repo_with_remotes(label, &remotes);
+            assert_eq!(
+                request_remote_name(&repo, "https://scope.example", None).unwrap(),
+                expected
+            );
+        }
     }
 
     fn repo_with_remotes(label: &str, remotes: &[(&str, &str)]) -> (TempDir, GitRepo) {
         let dir = TempDir::new(label);
-        run_git(dir.path(), ["-c", "init.defaultBranch=main", "init"]);
+        dir.run_git(["-c", "init.defaultBranch=main", "init"]);
         fs::write(dir.path().join("README.md"), "# sample\n").unwrap();
-        run_git(dir.path(), ["add", "README.md"]);
-        run_git(
-            dir.path(),
-            [
-                "-c",
-                "user.name=Scope Tests",
-                "-c",
-                "user.email=scope-tests@example.com",
-                "commit",
-                "-m",
-                "initial commit",
-            ],
-        );
+        dir.run_git(["add", "README.md"]);
+        dir.run_git([
+            "-c",
+            "user.name=Scope Tests",
+            "-c",
+            "user.email=scope-tests@example.com",
+            "commit",
+            "-m",
+            "initial commit",
+        ]);
         for (remote, url) in remotes {
-            run_git(dir.path(), ["remote", "add", remote, url]);
+            dir.run_git(["remote", "add", remote, url]);
         }
         let repo = GitRepo {
             root: dir.path().to_path_buf(),
         };
         (dir, repo)
-    }
-
-    fn run_git<const N: usize>(path: &Path, args: [&str; N]) {
-        let output = Command::new("git")
-            .current_dir(path)
-            .args(args)
-            .output()
-            .unwrap();
-        assert_success(&output, "git command");
-    }
-
-    fn assert_success(output: &Output, action: &str) {
-        assert!(
-            output.status.success(),
-            "{action} failed\nstdout:\n{}\nstderr:\n{}",
-            String::from_utf8_lossy(&output.stdout),
-            String::from_utf8_lossy(&output.stderr)
-        );
     }
 }

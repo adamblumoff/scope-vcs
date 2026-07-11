@@ -1,21 +1,10 @@
 use super::*;
-use scope_core::domain::repo_config::RepoConfig;
+use crate::repo_config::default_scope_repo_config;
+use scope_core::domain::repo_config::{HistoryRewriteAction, HistoryRewriteRequest};
 
 fn state_with_mode(mode: ReviewMode) -> ReviewState {
     let tree = ReviewTree::from_paths(&["src/lib.rs".to_string(), "README.md".to_string()], &[]);
-    let config = RepoConfig::parse_json(
-        br#"{
-  "kind": "scope.repo-config",
-  "version": 1,
-  "visibility": {
-    "default": "private",
-    "rules": []
-  },
-  "history": { "rewrites": [] }
-}"#,
-    )
-    .unwrap();
-    ReviewState::new(tree, config, mode)
+    ReviewState::new(tree, default_scope_repo_config(), mode)
 }
 
 fn state() -> ReviewState {
@@ -41,10 +30,9 @@ fn right_arrow_expands_folder_and_moves_to_first_child_when_already_expanded() {
 }
 
 #[test]
-fn quit_with_dirty_config_requires_save_or_cancel() {
+fn quit_respects_dirty_state_and_push_mode() {
     let mut state = state();
     state.handle_input(ReviewInput::Toggle);
-
     assert_eq!(
         state.handle_input(ReviewInput::Quit),
         ReviewStateAction::None
@@ -54,15 +42,9 @@ fn quit_with_dirty_config_requires_save_or_cancel() {
         state.handle_input(ReviewInput::Escape),
         ReviewStateAction::Cancel
     );
-}
-
-#[test]
-fn quit_cancels_push_review_even_when_clean() {
-    let mut state = state_with_mode(ReviewMode::Push);
-
     assert_eq!(
-        state.handle_input(ReviewInput::Quit),
-        ReviewStateAction::Cancel
+        state_with_mode(ReviewMode::Push).handle_input(ReviewInput::Quit),
+        ReviewStateAction::Cancel,
     );
 }
 
@@ -98,22 +80,11 @@ fn escape_clears_closed_filter_before_canceling() {
 #[test]
 fn initial_message_surfaces_read_only_history_rewrites() {
     let tree = ReviewTree::from_paths(&["README.md".to_string()], &[]);
-    let config = RepoConfig::parse_json(
-        br#"{
-  "kind": "scope.repo-config",
-  "version": 1,
-  "visibility": {
-    "default": "private",
-    "rules": []
-  },
-  "history": {
-    "rewrites": [
-      { "path": "/secret.txt", "action": "redact-public-history" }
-    ]
-  }
-}"#,
-    )
-    .unwrap();
+    let mut config = default_scope_repo_config();
+    config.history.rewrites.push(HistoryRewriteRequest {
+        path: "/secret.txt".into(),
+        action: HistoryRewriteAction::RedactPublicHistory,
+    });
 
     let state = ReviewState::new(tree, config, ReviewMode::Push);
 
@@ -128,22 +99,10 @@ fn initial_message_surfaces_read_only_history_rewrites() {
 #[test]
 fn deleted_paths_are_exposed_as_read_only_summaries() {
     let tree = ReviewTree::from_paths(&["README.md".to_string()], &[]);
-    let config = RepoConfig::parse_json(
-        br#"{
-  "kind": "scope.repo-config",
-  "version": 1,
-  "visibility": {
-    "default": "private",
-    "rules": []
-  },
-  "history": { "rewrites": [] }
-}"#,
-    )
-    .unwrap();
 
     let state = ReviewState::new_with_deleted_paths(
         tree,
-        config,
+        default_scope_repo_config(),
         ReviewMode::Push,
         vec!["Deleted path: D old.txt".to_string()],
     );

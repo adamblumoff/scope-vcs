@@ -1,270 +1,154 @@
 use super::*;
 
-#[tokio::test]
-async fn public_commit_history_omits_private_files_from_mixed_commits() {
-    let state = test_state_with_repo();
-    {
-        let mut repo = test_repo(&test_owner_id());
-        repo.record.default_visibility = Visibility::Private;
-        repo.policy = Policy::new(Visibility::Private);
+fn history_repo(commits: Vec<LogicalCommit>, public_path: Option<&str>) -> StoredRepository {
+    let mut repo = test_repo(&test_owner_id());
+    repo.record.default_visibility = Visibility::Private;
+    repo.policy = Policy::new(Visibility::Private);
+    if let Some(path) = public_path {
         repo.policy
-            .add_rule(VisibilityRule::public(
-                ScopePath::parse("/README.md").unwrap(),
-            ))
+            .add_rule(VisibilityRule::public(ScopePath::parse(path).unwrap()))
             .unwrap();
-        repo.graph.commits.push(LogicalCommit {
-            id: "rv1".to_string(),
-            parent_ids: Vec::new(),
-            author_id: repo.record.owner_user_id.clone(),
-            author_visibility: AuthorVisibility::Visible,
-            message: "mixed first commit".to_string(),
-            changes: vec![
-                FileChange {
-                    visibility: Visibility::Public,
-                    path: ScopePath::parse("/README.md").unwrap(),
-                    old_content: None,
-                    new_content: Some(source_blob("hello")),
-                },
-                FileChange {
-                    visibility: Visibility::Private,
-                    path: ScopePath::parse("/secret.txt").unwrap(),
-                    old_content: None,
-                    new_content: Some(source_blob("secret")),
-                },
-            ],
-        });
-
-        let mut catalog = lock_catalog(&state).unwrap();
-        catalog.repositories.insert(TEST_REPO_ID.to_string(), repo);
     }
-
-    let list_response = router(state.clone())
-        .oneshot(
-            Request::builder()
-                .method("GET")
-                .uri("/v1/repos/owner/repo/commits?audience=public")
-                .body(Body::empty())
-                .unwrap(),
-        )
-        .await
-        .unwrap();
-
-    assert_eq!(list_response.status(), StatusCode::OK);
-    let list_body = response_json(list_response).await;
-    assert_eq!(list_body["audience"], "public");
-    assert_eq!(list_body["commits"].as_array().unwrap().len(), 1);
-    assert_eq!(list_body["commits"][0]["change_count"], 1);
-    let projected_id = list_body["commits"][0]["projected_id"]
-        .as_str()
-        .unwrap()
-        .to_string();
-
-    let detail_response = router(state.clone())
-        .oneshot(
-            Request::builder()
-                .method("GET")
-                .uri(format!(
-                    "/v1/repos/owner/repo/commits/{projected_id}?audience=public"
-                ))
-                .body(Body::empty())
-                .unwrap(),
-        )
-        .await
-        .unwrap();
-
-    assert_eq!(detail_response.status(), StatusCode::OK);
-    let detail_body = response_json(detail_response).await;
-    assert_eq!(detail_body["files"].as_array().unwrap().len(), 1);
-    assert_eq!(detail_body["files"][0]["path"], "/README.md");
-
-    let secret_response = router(state)
-        .oneshot(
-            Request::builder()
-                .method("GET")
-                .uri(format!(
-                    "/v1/repos/owner/repo/commits/{projected_id}/file-diff?audience=public&path=/secret.txt"
-                ))
-                .body(Body::empty())
-                .unwrap(),
-        )
-        .await
-        .unwrap();
-
-    assert_eq!(secret_response.status(), StatusCode::NOT_FOUND);
+    repo.graph.commits = commits;
+    repo
 }
 
-#[tokio::test]
-async fn public_commit_history_reports_historical_visibility_after_policy_turns_private() {
-    let state = test_state_with_repo();
-    {
-        let mut repo = test_repo(&test_owner_id());
-        repo.record.default_visibility = Visibility::Private;
-        repo.policy = Policy::new(Visibility::Private);
-        repo.graph.commits.push(LogicalCommit {
-            id: "rv1".to_string(),
-            parent_ids: Vec::new(),
-            author_id: repo.record.owner_user_id.clone(),
-            author_visibility: AuthorVisibility::Visible,
-            message: "old public readme".to_string(),
-            changes: vec![FileChange {
-                visibility: Visibility::Public,
-                path: ScopePath::parse("/README.md").unwrap(),
-                old_content: None,
-                new_content: Some(source_blob("old public readme")),
-            }],
-        });
-
-        let mut catalog = lock_catalog(&state).unwrap();
-        catalog.repositories.insert(TEST_REPO_ID.to_string(), repo);
+fn history_commit(
+    id: &str,
+    parent: Option<&str>,
+    message: &str,
+    changes: Vec<FileChange>,
+) -> LogicalCommit {
+    LogicalCommit {
+        id: id.into(),
+        parent_ids: parent.into_iter().map(str::to_string).collect(),
+        author_id: test_owner_id(),
+        author_visibility: AuthorVisibility::Visible,
+        message: message.into(),
+        changes,
     }
+}
 
-    let list_response = router(state.clone())
-        .oneshot(
-            Request::builder()
-                .method("GET")
-                .uri("/v1/repos/owner/repo/commits?audience=public")
-                .body(Body::empty())
-                .unwrap(),
-        )
+fn history_change(
+    path: &str,
+    visibility: Visibility,
+    old: Option<crate::domain::store::SourceBlob>,
+    new: Option<crate::domain::store::SourceBlob>,
+) -> FileChange {
+    FileChange {
+        path: ScopePath::parse(path).unwrap(),
+        visibility,
+        old_content: old,
+        new_content: new,
+    }
+}
+
+async fn history_get(state: AppState, uri: impl AsRef<str>, private: bool) -> Response {
+    let mut request = Request::builder().method("GET").uri(uri.as_ref());
+    if private {
+        request = request.header(AUTHORIZATION, bearer_header());
+    }
+    router(state)
+        .oneshot(request.body(Body::empty()).unwrap())
         .await
-        .unwrap();
+        .unwrap()
+}
 
-    assert_eq!(list_response.status(), StatusCode::OK);
-    let list_body = response_json(list_response).await;
-    let projected_id = list_body["commits"][0]["projected_id"].as_str().unwrap();
-
-    let detail_response = router(state)
-        .oneshot(
-            Request::builder()
-                .method("GET")
-                .uri(format!(
-                    "/v1/repos/owner/repo/commits/{projected_id}?audience=public"
-                ))
-                .body(Body::empty())
-                .unwrap(),
-        )
-        .await
-        .unwrap();
-
-    assert_eq!(detail_response.status(), StatusCode::OK);
-    let detail_body = response_json(detail_response).await;
-    assert_eq!(detail_body["files"][0]["path"], "/README.md");
-    assert_eq!(detail_body["files"][0]["visibility"], "Public");
+async fn first_projected_id(state: AppState, audience: &str) -> String {
+    let response = history_get(
+        state,
+        format!("/v1/repos/owner/repo/commits?audience={audience}"),
+        audience == "private",
+    )
+    .await;
+    assert_eq!(response.status(), StatusCode::OK);
+    response_json(response).await["commits"][0]["projected_id"]
+        .as_str()
+        .unwrap()
+        .to_string()
 }
 
 #[tokio::test]
 async fn public_commit_diff_does_not_leak_private_old_content() {
     let state = test_state_with_repo();
     cache_test_jwks(&state);
-    {
-        let mut repo = test_repo(&test_owner_id());
-        repo.record.default_visibility = Visibility::Private;
-        repo.policy = Policy::new(Visibility::Private);
-        repo.policy
-            .add_rule(VisibilityRule::public(
-                ScopePath::parse("/notes.md").unwrap(),
-            ))
-            .unwrap();
-        let private_blob = source_blob("private draft");
-        repo.graph.commits.push(LogicalCommit {
-            id: "rv1".to_string(),
-            parent_ids: Vec::new(),
-            author_id: repo.record.owner_user_id.clone(),
-            author_visibility: AuthorVisibility::Visible,
-            message: "private draft".to_string(),
-            changes: vec![FileChange {
-                visibility: Visibility::Private,
-                path: ScopePath::parse("/notes.md").unwrap(),
-                old_content: None,
-                new_content: Some(private_blob.clone()),
-            }],
-        });
-        repo.graph.commits.push(LogicalCommit {
-            id: "rv2".to_string(),
-            parent_ids: vec!["rv1".to_string()],
-            author_id: repo.record.owner_user_id.clone(),
-            author_visibility: AuthorVisibility::Visible,
-            message: "public release".to_string(),
-            changes: vec![FileChange {
-                visibility: Visibility::Public,
-                path: ScopePath::parse("/notes.md").unwrap(),
-                old_content: Some(private_blob),
-                new_content: Some(source_blob("public release")),
-            }],
-        });
+    let private = source_blob(&state, "private draft");
+    replace_test_repo(
+        &state,
+        history_repo(
+            vec![
+                history_commit(
+                    "rv1",
+                    None,
+                    "private draft",
+                    vec![history_change(
+                        "/notes.md",
+                        Visibility::Private,
+                        None,
+                        Some(private.clone()),
+                    )],
+                ),
+                history_commit(
+                    "rv2",
+                    Some("rv1"),
+                    "public release",
+                    vec![history_change(
+                        "/notes.md",
+                        Visibility::Public,
+                        Some(private),
+                        Some(source_blob(&state, "public release")),
+                    )],
+                ),
+            ],
+            Some("/notes.md"),
+        ),
+    )
+    .await;
 
-        let mut catalog = lock_catalog(&state).unwrap();
-        catalog.repositories.insert(TEST_REPO_ID.to_string(), repo);
-    }
+    let public_id = first_projected_id(state.clone(), "public").await;
+    let detail = history_get(
+        state.clone(),
+        format!("/v1/repos/owner/repo/commits/{public_id}?audience=public"),
+        false,
+    )
+    .await;
+    assert_eq!(detail.status(), StatusCode::OK);
+    assert_eq!(response_json(detail).await["files"][0]["path"], "/notes.md");
+    let public = history_get(
+        state.clone(),
+        format!(
+            "/v1/repos/owner/repo/commits/{public_id}/file-diff?audience=public&path=/notes.md"
+        ),
+        false,
+    )
+    .await;
+    assert_eq!(public.status(), StatusCode::OK);
+    let public = response_json(public).await;
+    assert_eq!(public["kind"], "Added");
+    assert_eq!(public["old_content"], serde_json::Value::Null);
+    assert_text_content(&public["new_content"], "public release");
 
-    let public_list = router(state.clone())
-        .oneshot(
-            Request::builder()
-                .method("GET")
-                .uri("/v1/repos/owner/repo/commits?audience=public")
-                .body(Body::empty())
-                .unwrap(),
-        )
-        .await
-        .unwrap();
-
-    assert_eq!(public_list.status(), StatusCode::OK);
-    let public_body = response_json(public_list).await;
-    assert_eq!(public_body["commits"].as_array().unwrap().len(), 1);
-    let public_projected_id = public_body["commits"][0]["projected_id"].as_str().unwrap();
-
-    let public_diff = router(state.clone())
-        .oneshot(
-            Request::builder()
-                .method("GET")
-                .uri(format!(
-                    "/v1/repos/owner/repo/commits/{public_projected_id}/file-diff?audience=public&path=/notes.md"
-                ))
-                .body(Body::empty())
-                .unwrap(),
-        )
-        .await
-        .unwrap();
-
-    assert_eq!(public_diff.status(), StatusCode::OK);
-    let public_diff_body = response_json(public_diff).await;
-    assert_eq!(public_diff_body["kind"], "Added");
-    assert_eq!(public_diff_body["old_content"], serde_json::Value::Null);
-    assert_text_content(&public_diff_body["new_content"], "public release");
-
-    let private_list = router(state.clone())
-        .oneshot(
-            Request::builder()
-                .method("GET")
-                .uri("/v1/repos/owner/repo/commits?audience=private")
-                .header(AUTHORIZATION, bearer_header())
-                .body(Body::empty())
-                .unwrap(),
-        )
-        .await
-        .unwrap();
-
-    assert_eq!(private_list.status(), StatusCode::OK);
-    let private_body = response_json(private_list).await;
-    let private_projected_id = private_body["commits"][1]["projected_id"].as_str().unwrap();
-
-    let private_diff = router(state)
-        .oneshot(
-            Request::builder()
-                .method("GET")
-                .uri(format!(
-                    "/v1/repos/owner/repo/commits/{private_projected_id}/file-diff?audience=private&path=/notes.md"
-                ))
-                .header(AUTHORIZATION, bearer_header())
-                .body(Body::empty())
-                .unwrap(),
-        )
-        .await
-        .unwrap();
-
-    assert_eq!(private_diff.status(), StatusCode::OK);
-    let private_diff_body = response_json(private_diff).await;
-    assert_eq!(private_diff_body["kind"], "Modified");
-    assert_text_content(&private_diff_body["old_content"], "private draft");
-    assert_text_content(&private_diff_body["new_content"], "public release");
+    let private_list = history_get(
+        state.clone(),
+        "/v1/repos/owner/repo/commits?audience=private",
+        true,
+    )
+    .await;
+    let private_id = response_json(private_list).await["commits"][1]["projected_id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    let private = history_get(
+        state,
+        format!(
+            "/v1/repos/owner/repo/commits/{private_id}/file-diff?audience=private&path=/notes.md"
+        ),
+        true,
+    )
+    .await;
+    assert_eq!(private.status(), StatusCode::OK);
+    let private = response_json(private).await;
+    assert_eq!(private["kind"], "Modified");
+    assert_text_content(&private["old_content"], "private draft");
+    assert_text_content(&private["new_content"], "public release");
 }

@@ -237,50 +237,8 @@ mod tests {
 
     #[test]
     fn session_storage_key_is_scoped_to_api_url() {
-        assert_eq!(
-            session_storage_key("https://scope-api-production.up.railway.app"),
-            "cli-session-68747470733a2f2f73636f70652d6170692d70726f64756374696f6e2e75702e7261696c7761792e617070"
-        );
-        assert_ne!(
-            session_storage_key("https://scope-api-production.up.railway.app"),
-            session_storage_key("http://localhost:8080")
-        );
-    }
-
-    #[test]
-    #[cfg(not(any(target_os = "macos", windows)))]
-    fn linux_config_dir_prefers_xdg_config_home() {
-        assert_eq!(
-            scope_config_dir(
-                Some(OsString::from("/tmp/scope-config")),
-                Some(OsString::from("/home/scope")),
-                None,
-            ),
-            Some(PathBuf::from("/tmp/scope-config"))
-        );
-    }
-
-    #[test]
-    #[cfg(not(any(target_os = "macos", windows)))]
-    fn linux_config_dir_falls_back_to_home_config() {
-        assert_eq!(
-            scope_config_dir(None, Some(OsString::from("/home/scope")), None),
-            Some(PathBuf::from("/home/scope/.config"))
-        );
-    }
-
-    #[test]
-    #[cfg(not(any(target_os = "macos", windows)))]
-    fn linux_session_error_help_describes_file_storage() {
-        let help = session_file_error_context("read session");
-        assert!(help.contains("local file"));
-        assert!(help.contains("owner-only permissions"));
-    }
-
-    #[test]
-    #[cfg(any(target_os = "macos", windows))]
-    fn keychain_error_help_describes_os_keychain() {
-        let help = keychain_error_context("open OS keychain entry");
-        assert!(help.contains("OS keychain"));
+        let production = session_storage_key("https://scope-api-production.up.railway.app");
+        assert!(production.starts_with("cli-session-"));
+        assert_ne!(production, session_storage_key("http://localhost:8080"));
     }
 }

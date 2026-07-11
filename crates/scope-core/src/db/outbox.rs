@@ -565,6 +565,81 @@ mod tests {
         assert!(store.repository("owner", "repo").await.unwrap().is_some());
     }
 
+    #[tokio::test]
+    async fn claims_are_exclusive_and_expired_leases_are_reclaimed() {
+        let target = super::super::TestDatabaseTarget::required().unwrap();
+        let store = MetadataStore::connect_fresh_for_tests(&target).unwrap();
+        seed_outbox_repo(&store).await;
+        let barrier = Arc::new(tokio::sync::Barrier::new(2));
+        let mut tasks = tokio::task::JoinSet::new();
+        for worker in ["one", "two"] {
+            let store = store.clone();
+            let barrier = Arc::clone(&barrier);
+            tasks.spawn(async move {
+                barrier.wait().await;
+                (
+                    worker,
+                    claim_next_ready_job(store.db.as_ref(), worker, 60)
+                        .await
+                        .unwrap(),
+                )
+            });
+        }
+        let mut claims = Vec::new();
+        while let Some(result) = tasks.join_next().await {
+            let (worker, claim) = result.unwrap();
+            if let Some(claim) = claim {
+                claims.push((worker, claim));
+            }
+        }
+        assert_eq!(claims.len(), 1);
+        let (stale_owner, stale) = claims.pop().unwrap();
+
+        entities::outbox_job::Entity::update_many()
+            .filter(entities::outbox_job::Column::Id.eq(stale.id.clone()))
+            .col_expr(
+                entities::outbox_job::Column::LeaseExpiresAtUnix,
+                Expr::value(Some(0_i64)),
+            )
+            .exec(store.db.as_ref())
+            .await
+            .unwrap();
+        let current = claim_next_ready_job(store.db.as_ref(), "replacement", 60)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(current.id, stale.id);
+        assert!(
+            complete_outbox_job(store.db.as_ref(), &stale, stale_owner)
+                .await
+                .is_err()
+        );
+    }
+
+    #[tokio::test]
+    async fn terminal_retry_marks_job_failed() {
+        let target = super::super::TestDatabaseTarget::required().unwrap();
+        let store = MetadataStore::connect_fresh_for_tests(&target).unwrap();
+        seed_outbox_repo(&store).await;
+        let mut job = claim_next_ready_job(store.db.as_ref(), "worker", 60)
+            .await
+            .unwrap()
+            .unwrap();
+        job.attempts = MAX_JOB_ATTEMPTS - 1;
+
+        fail_outbox_job(store.db.as_ref(), &job, "worker", "failed".to_string())
+            .await
+            .unwrap();
+        let row = entities::outbox_job::Entity::find_by_id(job.id)
+            .one(store.db.as_ref())
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(row.state, JOB_FAILED);
+        assert_eq!(row.attempts, MAX_JOB_ATTEMPTS);
+        assert!(row.completed_at_unix.is_some());
+    }
+
     async fn seed_outbox_repo(store: &MetadataStore) {
         let owner = UserAccount {
             id: "user_owner".to_string(),

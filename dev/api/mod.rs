@@ -55,6 +55,8 @@ pub async fn app_state_from_env() -> anyhow::Result<AppState> {
         operator_token: non_empty_env(SCOPE_OPERATOR_TOKEN_ENV).map(Arc::from),
         repo_events,
         push_intent_signing_key,
+        #[cfg(test)]
+        test_object_store: Arc::new(crate::object_store::MemoryObjectStore::new()),
     })
 }
 

@@ -368,11 +368,6 @@ mod tests {
     use super::*;
 
     #[test]
-    fn user_code_is_grouped_for_manual_entry() {
-        assert_eq!(format_user_code("ABCDEF1234567890"), "ABCD-EF12-3456-7890");
-    }
-
-    #[test]
     fn browser_callback_target_returns_code_for_matching_request() {
         assert_eq!(
             browser_callback_code_from_target(

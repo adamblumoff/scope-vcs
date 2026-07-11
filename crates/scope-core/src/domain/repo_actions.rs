@@ -237,15 +237,16 @@ mod tests {
 
         assert_eq!(mutation.result, repo.record.id);
         assert_eq!(
-            repo_storage_effects(&mutation.effects),
-            vec![RepoStorageCleanup {
-                owner_handle: owner.handle,
-                repo_name: "repo".to_string(),
-            }]
-        );
-        assert_eq!(
-            source_blob_effect_keys(&mutation.effects),
-            vec![snapshot.object_key]
+            mutation.effects,
+            RepoEffects {
+                effects: vec![
+                    RepoEffect::DeleteRepoStorage(RepoStorageCleanup {
+                        owner_handle: owner.handle,
+                        repo_name: "repo".to_string(),
+                    }),
+                    RepoEffect::DeleteSourceBlobs(vec![snapshot]),
+                ],
+            }
         );
     }
 
@@ -268,29 +269,6 @@ mod tests {
             repo.repo_config.visibility_for_path(&path),
             Visibility::Private
         );
-    }
-
-    fn repo_storage_effects(effects: &RepoEffects) -> Vec<RepoStorageCleanup> {
-        effects
-            .iter()
-            .filter_map(|effect| match effect {
-                RepoEffect::DeleteRepoStorage(cleanup) => Some(cleanup.clone()),
-                RepoEffect::DeleteSourceBlobs(_) => None,
-            })
-            .collect()
-    }
-
-    fn source_blob_effect_keys(effects: &RepoEffects) -> Vec<String> {
-        effects
-            .iter()
-            .flat_map(|effect| match effect {
-                RepoEffect::DeleteRepoStorage(_) => Vec::new(),
-                RepoEffect::DeleteSourceBlobs(blobs) => blobs
-                    .iter()
-                    .map(|blob| blob.object_key.clone())
-                    .collect::<Vec<_>>(),
-            })
-            .collect()
     }
 
     fn test_owner() -> UserAccount {

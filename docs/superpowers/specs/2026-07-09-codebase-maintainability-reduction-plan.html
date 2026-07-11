@@ -3,7 +3,7 @@
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>Codebase Maintainability and Line Reduction Plan</title>
+    <title>Codebase Maintainability and Test Reduction Plan</title>
     <style>
       :root {
         color-scheme: light;
@@ -466,6 +466,7 @@
         <div class="brand">Scope VCS · Maintainability Campaign</div>
         <nav aria-label="Plan sections">
           <a href="#outcome">Outcome</a>
+          <a href="#rebaseline">Post-merge audit</a>
           <a href="#measurement">LOC contract</a>
           <a href="#sequence">Sequence</a>
           <a href="#phases">Phases</a>
@@ -477,21 +478,23 @@
 
     <header class="masthead">
       <div>
-        <p class="eyebrow">Deletion-first implementation plan · July 9, 2026</p>
+        <p class="eyebrow">Campaign completed · July 10, 2026</p>
         <h1>Make the codebase smaller by making ownership obvious.</h1>
         <p class="subtitle">
-          Remove dead vertical slices, collapse duplicate persistence and policy
-          implementations, and leave each behavior with one durable owner. The
-          campaign is successful only if Scope behaves the same and the hand-owned
-          codebase becomes materially smaller.
+          PR #99 completed the first deletion campaign and removed the major
+          persistence, policy, contract, and workflow duplicates. This revision
+          records that result and narrows the remaining work to test ownership:
+          delete false confidence, collapse copied fixtures, and reinvest a small
+          portion of the savings in missing boundary coverage.
         </p>
       </div>
       <div class="headline-metric">
-        <span class="number">−8k to −10k</span>
-        <span class="label">Expected net line reduction</span>
+          <span class="number">−12,845</span>
+          <span class="label">Cumulative net reduction delivered</span>
         <p>
-          Baseline: 66,594 hand-owned source and test lines. Minimum successful
-          reduction: 7,000 lines. Expected finish: 56,500–58,500 lines.
+          July 9 baseline: 66,594 lines. PR #99 rebaseline: 59,258 lines.
+          Completed Phase 7: 53,749 lines after replacement coverage and generator
+          rehoming, a further 5,509-line net reduction.
         </p>
       </div>
     </header>
@@ -500,31 +503,34 @@
       <aside aria-label="Document navigation">
         <h2>Contents</h2>
         <a href="#outcome">1. Outcome</a>
-        <a href="#principles">2. Operating rules</a>
-        <a href="#measurement">3. LOC contract</a>
-        <a href="#baseline">4. Baseline</a>
-        <a href="#sequence">5. Dependency order</a>
-        <a href="#phases">6. Execution phases</a>
-        <a href="#verification">7. Verification</a>
-        <a href="#risk">8. Risk and rollback</a>
-        <a href="#preserve">9. Preserve</a>
-        <a href="#closeout">10. Closeout</a>
+        <a href="#rebaseline">2. Post-merge audit</a>
+        <a href="#principles">3. Operating rules</a>
+        <a href="#measurement">4. LOC contract</a>
+        <a href="#baseline">5. Original baseline</a>
+        <a href="#sequence">6. Dependency order</a>
+        <a href="#phases">7. Execution phases</a>
+        <a href="#verification">8. Verification</a>
+        <a href="#risk">9. Risk and rollback</a>
+        <a href="#preserve">10. Preserve</a>
+        <a href="#closeout">11. Closeout</a>
       </aside>
 
       <main>
         <section id="outcome">
           <p class="kicker">Outcome</p>
-          <h2>One behavior, one owner, fewer lines.</h2>
+          <h2>Both campaigns landed. The retained suite now has one job per regression.</h2>
           <p class="lead">
-            This is an architecture reduction campaign, not a formatting pass. It
-            removes unreachable product surfaces and parallel implementations before
-            reorganizing what remains. File splitting alone does not satisfy the plan;
-            code moved from one file to another contributes zero to the reduction.
+            PR #99 reduced the measured codebase from 66,594 to 59,258 lines and
+            completed the plan's 7,000-line minimum. Phase 7 then reduced the
+            17,200-line test-owned rebaseline to approximately 11,280 lines by
+            deleting copied fixtures, delivery tests that re-proved domain rules,
+            and tests of test-only implementations.
           </p>
           <div class="statement delete-statement">
-            Target a net deletion of 8,000–10,000 hand-owned lines while retaining
-            API behavior, authorization semantics, Git protocol behavior, CLI flows,
-            request settlement outcomes, and visible web behavior.
+            Delivered: test-owned code is approximately 11,280 lines and the
+            headline reduction is 5,509 lines while preserving security,
+            privacy, transaction, concurrency, Git protocol, CLI, and visible web
+            behavior.
           </div>
           <table aria-label="Success conditions">
             <thead>
@@ -536,7 +542,7 @@
             <tbody>
               <tr>
                 <td>Line reduction</td>
-                <td>At least 7,000 net lines; expected 8,000–10,000.</td>
+                <td>First campaign delivered 7,336 lines; Phase 7 delivered another 5,509 net lines.</td>
               </tr>
               <tr>
                 <td>Behavior</td>
@@ -548,7 +554,7 @@
               </tr>
               <tr>
                 <td>Tests</td>
-                <td>Regression value is preserved or improved; duplicate mechanics and fixtures are consolidated.</td>
+                <td>Test-owned code fell from ~17,200 to ~11,280 lines while the missing high-value boundary coverage was added.</td>
               </tr>
               <tr>
                 <td>Operations</td>
@@ -556,6 +562,67 @@
               </tr>
             </tbody>
           </table>
+        </section>
+
+        <section id="rebaseline">
+          <p class="kicker">Post-merge testing audit</p>
+          <h2>Keep the hard regressions. Delete the scaffolding and false confidence.</h2>
+          <p class="lead">
+            The July 10 audit re-read every current core, contract, API, CLI, web,
+            smoke, and local-development test on <code>main@6c48f7b</code>. The
+            code-reaper standard was applied per behavior: a test stays only when it
+            catches a distinct reachable regression at the narrowest useful boundary.
+          </p>
+          <table aria-label="Post-merge test audit targets">
+            <thead>
+              <tr>
+                <th>Area</th>
+                <th class="number">Current test-owned LOC</th>
+                <th class="number">Final LOC</th>
+                <th>Delivered action</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td>API, Git, and local dev</td>
+                <td class="number">~10,224</td>
+                <td class="number">~6,200</td>
+                <td>Removed test-only Git shortcuts, collapsed workflow fixtures, isolated stores and servers, and rehomed the ignored type generator.</td>
+              </tr>
+              <tr>
+                <td>Core and API contract</td>
+                <td class="number">~4,271</td>
+                <td class="number">~3,570</td>
+                <td>Table-drove domain scenarios, consolidated Postgres fixtures, and retained the lock, lease, fence, schema, and concurrency contracts.</td>
+              </tr>
+              <tr>
+                <td>CLI and web</td>
+                <td class="number">~2,705</td>
+                <td class="number">~1,510</td>
+                <td>Deleted copy/interpolation tests, consolidated harnesses, and transferred web coverage to the live-refresh coordinator.</td>
+              </tr>
+              <tr class="total-row">
+                <td>Total</td>
+                <td class="number">~17,200</td>
+                <td class="number">~11,280</td>
+                <td>Approximately 5,920 test-owned lines removed while adding higher-value schema, race, Git, CLI, and live-refresh coverage.</td>
+              </tr>
+            </tbody>
+          </table>
+
+          <div class="checks">
+            <p><strong>Completed by PR #99.</strong> Postgres tests are mandatory and isolated; API workflows live outside <code>api/src</code>; the architecture lexer fell from 491 to 25 lines; obsolete route tests and the no-op live-refresh seam are gone; shared CLI fixtures and a public web smoke test exist.</p>
+            <p><strong>Delete now.</strong> Remove trivial catalog/principal/interpolation/help-copy tests, duplicate binary and non-chunked Git cases, impossible settlement corruption, and tests whose only subject is a <code>#[cfg(test)]</code> helper.</p>
+            <p><strong>Collapse next.</strong> Table-drive projection, visibility, request, auth, Git receive, request-ref, CLI preflight, and callback matrices. Replace repeated raw servers, temporary directories, lock probes, and oversized DTO fixtures with behavior-local RAII support.</p>
+            <p><strong>Reinvest carefully.</strong> Add compact contracts for schema/reset drift, aggregate-lock independence, outbox claim/reclaim, cleanup generation fencing, live-refresh coordination, CLI credential <code>get</code>, push access, clone orchestration, and metadata-first deletion failure.</p>
+          </div>
+
+          <div class="statement warning">
+            Do not delete the new Postgres race tests merely because they are long.
+            They replaced false-green memory coverage and prove lock ordering,
+            transaction rollback, lease ownership, and generation fences. Shorten
+            their fixtures; preserve their concurrency semantics.
+          </div>
         </section>
 
         <section id="principles">
@@ -613,7 +680,8 @@ files=$(git ls-files '*.rs' '*.ts' '*.tsx' '*.mjs' '*.css' \
   | rg -v '(^|/)(routeTree\.gen\.ts|types\.generated\.ts)$')
 printf '%s\n' "$files" | tr '\n' '\0' | xargs -0 wc -l | tail -1
 
-# Baseline captured for this plan: 66,594 lines</code></pre>
+# Original baseline captured July 9: 66,594 lines
+# Post-merge rebaseline captured July 10: 59,258 lines</code></pre>
           <p>
             Every phase closeout records its starting count, lines deleted, lines
             added, net change, and cumulative change. Moving a file is reported as a
@@ -622,8 +690,8 @@ printf '%s\n' "$files" | tr '\n' '\0' | xargs -0 wc -l | tail -1
         </section>
 
         <section id="baseline">
-          <p class="kicker">Baseline</p>
-          <h2>Most of the opportunity is in API and core.</h2>
+          <p class="kicker">Original baseline</p>
+          <h2>The July 9 baseline explains what PR #99 removed.</h2>
           <table aria-label="Current line count by area">
             <thead>
               <tr>
@@ -684,11 +752,12 @@ printf '%s\n' "$files" | tr '\n' '\0' | xargs -0 wc -l | tail -1
 
         <section id="sequence">
           <p class="kicker">Dependency order</p>
-          <h2>Shrink first, then straighten boundaries.</h2>
+          <h2>The original campaign landed; the residual test pass follows it.</h2>
           <p class="lead">
-            Dead code is removed before persistence and domain boundaries are rebuilt,
-            so later work does not preserve or migrate unreachable concepts. Behavior
-            locks are established before any deletion.
+            Phases 0–6 below are retained as the implementation record for PR #99.
+            The post-merge audit adds Phase 7, which must preserve the new Postgres
+            and concurrency behavior locks while removing the remaining duplicated
+            test mechanics.
           </p>
           <div class="sequence" aria-label="Execution sequence">
             <div><b>Phase 0</b><span>Capture behavior and count baseline</span></div>
@@ -698,6 +767,7 @@ printf '%s\n' "$files" | tr '\n' '\0' | xargs -0 wc -l | tail -1
             <div><b>Phase 4</b><span>Simplify side effects, Git, and CLI</span></div>
             <div><b>Phase 5</b><span>Remove competing web state</span></div>
             <div><b>Phase 6</b><span>Consolidate tests and tooling</span></div>
+            <div><b>Phase 7</b><span>Reap residual test machinery</span></div>
           </div>
           <table aria-label="Expected reduction by phase">
             <thead>
@@ -716,15 +786,16 @@ printf '%s\n' "$files" | tr '\n' '\0' | xargs -0 wc -l | tail -1
               <tr><td>4. Side effects, Git, CLI</td><td class="number">1,300–1,900</td><td class="number">500–800</td><td class="number">−800 to −1,200</td></tr>
               <tr><td>5. Web state ownership</td><td class="number">900–1,300</td><td class="number">250–450</td><td class="number">−600 to −900</td></tr>
               <tr><td>6. Tests and tooling</td><td class="number">1,200–1,700</td><td class="number">450–700</td><td class="number">−700 to −1,000</td></tr>
-              <tr class="total-row"><td>Campaign total</td><td class="number">10,650–15,050</td><td class="number">3,250–5,300</td><td class="number">−7,000 to −10,300</td></tr>
+              <tr><td>7. Residual test reduction</td><td class="number">9,525</td><td class="number">4,016</td><td class="number">−5,509</td></tr>
+              <tr class="total-row"><td>Both campaigns delivered</td><td class="number">—</td><td class="number">—</td><td class="number">−12,845</td></tr>
             </tbody>
           </table>
           <p>
-            Delete/add ranges are paired estimates within each phase; crossing the
-            most conservative gross endpoints does not produce the expected net.
-            The planning target is 8,000–10,000 net lines. The lower bound absorbs
-            replacement code and behavior-lock tests. Falling below 7,000 requires
-            an explicit explanation and a new approved plan.
+            PR #99 delivered a measured 7,336-line reduction. Phase 7 deleted 9,525
+            source lines and added 4,016 lines of consolidated fixtures, explicit
+            tooling, missing boundary coverage, and production-path migrations. The
+            reproducible headline metric therefore fell another 5,509 lines without
+            compressed formatting or deleted regression value.
           </p>
         </section>
 
@@ -981,6 +1052,57 @@ printf '%s\n' "$files" | tr '\n' '\0' | xargs -0 wc -l | tail -1
               <p>The full suite remains green, critical test scenarios remain discoverable, CI has one owner per check/target list, and final LOC is measured from the same baseline command.</p>
             </div>
           </article>
+
+          <article class="phase" id="phase-7">
+            <div class="phase-head">
+              <div class="phase-number">7</div>
+              <div>
+                <h3>Reap residual test machinery</h3>
+                <p class="phase-summary">Keep distinct regressions, delete false confidence, and make every fixture behavior-owned.</p>
+              </div>
+              <div class="phase-budget">
+                <strong>−5,509</strong>
+                <span>Delivered net deletion</span>
+              </div>
+            </div>
+            <div class="phase-body">
+              <h4>1. Remove misleading and zero-value tests first</h4>
+              <ul>
+                <li>Delete tests of API <code>#[cfg(test)]</code> Git credential, tree-import, and persistence shortcuts; replace necessary cases through production validation, promotion, authorization, or receive routes.</li>
+                <li>Delete trivial catalog construction, direct principal fields, clone/path interpolation, help-copy, default-folder, no-op wrapper, duplicated binary omission, and duplicated non-chunked first-push assertions.</li>
+                <li>Move the ignored Rust-to-TypeScript generator to an explicit tool or task. It remains counted source, but it stops pretending to be regression coverage.</li>
+              </ul>
+              <h4>2. Collapse by behavioral owner</h4>
+              <ul>
+                <li>Domain owns projection timelines, visibility canonicalization, request transitions, settlement, and side-effect declarations through compact scenario builders and decision tables.</li>
+                <li>Persistence owns mapping, transaction, lock, lease, generation-fence, and rollback behavior. Share isolated-schema setup and deterministic lock probes without hiding which aggregate a test exercises.</li>
+                <li>API owns translation, authentication, non-disclosure, protocol fidelity, and orchestration. Merge CLI/device auth matrices, request-ref servers, receive/config scenarios, visibility fixtures, and request workflow setup.</li>
+                <li>CLI owns command preflight, filesystem safety, credential scoping, and secret-free Git plans. Merge the two test-support layers and remove local Git-runner copies.</li>
+                <li>Web owns parsing and interaction coordination. Delete literal-template tests and transfer live-refresh coverage from trivial actor predicates to stale-event rejection, coalescing, retry, interruption, and cleanup.</li>
+              </ul>
+              <h4>3. Fix test infrastructure rather than serializing around it</h4>
+              <ul>
+                <li>Replace the process-global <code>MemoryObjectStore</code> with isolated test instances; do not rely on <code>--test-threads=1</code> to mask cross-test interference.</li>
+                <li>Provide RAII Git servers, temporary repositories, and process coordination. Replace 25ms sleeps and one-second correctness deadlines with deterministic signals plus generous outer watchdogs.</li>
+                <li>Run the 11 <code>local-dev</code> tests in CI and wire the public web smoke test to a seeded CI environment; tests that never run do not count as protection.</li>
+              </ul>
+              <h4>4. Spend a small coverage budget on real gaps</h4>
+              <ul>
+                <li>Add one schema/reset introspection contract, one same-vs-different aggregate lock scenario, and compact outbox double-claim, expired-lease, and terminal-retry coverage.</li>
+                <li>Add one real cleanup generation-fence completion race and restore metadata-first deletion failure atomicity.</li>
+                <li>Add live-refresh coordinator coverage plus CLI credential <code>get</code>, push access matrix, and clone orchestration coverage.</li>
+                <li>Do not add per-DTO snapshots, happy-path copies at every layer, or new generalized fixture frameworks.</li>
+              </ul>
+              <h4>Exit gate</h4>
+              <p>
+                Passed: test-owned code is approximately 11,280 lines, the headline
+                metric is 53,749 lines, all mandatory
+                Postgres, API, CLI, web, local-dev, and smoke checks run in CI, and
+                no retained test reaches a production behavior through a test-only
+                alternate implementation.
+              </p>
+            </div>
+          </article>
         </section>
 
         <section id="verification">
@@ -1025,7 +1147,9 @@ printf '%s\n' "$files" | tr '\n' '\0' | xargs -0 wc -l | tail -1
             </tbody>
           </table>
           <pre><code>cargo fmt --all --check
-cargo test -p api -p scope-core -p worker --locked
+cargo test -p scope-core -p scope-api-contract -p worker --locked -- --test-threads=1
+cargo test -p api --features test-support --tests --locked -- --test-threads=1
+cargo test -p api --features local-dev dev:: --locked -- --test-threads=1
 cargo clippy -p api -p scope-core -p worker --all-targets --locked -- -D warnings
 
 (cd cli && cargo fmt -- --check)
@@ -1035,6 +1159,7 @@ cargo clippy -p api -p scope-core -p worker --all-targets --locked -- -D warning
 
 (cd web && pnpm check)
 (cd web && pnpm test)
+(cd web && pnpm test:smoke)
 (cd web && pnpm build)
 
 ./dev/scope-dev doctor
@@ -1132,31 +1257,37 @@ cargo clippy -p api -p scope-core -p worker --all-targets --locked -- -D warning
 
         <section id="closeout">
           <p class="kicker">Campaign closeout</p>
-          <h2>Definition of done.</h2>
+          <h2>Definition of done—completed and verified.</h2>
           <ol>
-            <li>The headline metric is 59,594 lines or fewer; 58,500 or fewer is the expected result.</li>
-            <li>The full verification matrix is green, including local Postgres development and browser smoke tests.</li>
+            <li>PR #99's 59,258-line rebaseline is recorded and the residual headline metric reached 53,749 lines.</li>
+            <li>Test-owned code reached approximately 11,280 lines after adding the approved high-value coverage.</li>
+            <li>The full verification matrix is green in CI, including mandatory isolated Postgres, <code>local-dev</code>, and seeded browser smoke tests.</li>
             <li>No pending-import or backend repository-settings concept remains.</li>
             <li>No memory metadata backend, synchronous DB runtime bridge, or production full-catalog read remains.</li>
             <li>Domain code has no Axum dependency and policy decision tables have one implementation.</li>
             <li>External filesystem/S3 work occurs outside metadata transactions.</li>
             <li>API, CLI, and web contracts are derived or drift-checked from one transport owner.</li>
             <li>Frontend routes have one server-state owner and repository layout has one SSE subscription.</li>
-            <li>The final summary reports deleted, added, net, and cumulative lines per phase.</li>
+            <li>No test exercises a test-only alternate implementation of production Git authorization, import, persistence, or promotion behavior.</li>
+            <li>Global stores, raw server handles, temporary repositories, and timing-sensitive race probes are isolated or RAII-owned.</li>
+            <li>The final summary reports deleted, added, replacement coverage, net, and cumulative lines for Phase 7.</li>
           </ol>
           <div class="statement">
-            Expected finish: 56,500–58,500 hand-owned lines, approximately 12–15%
-            smaller than the July 9 baseline, with unchanged supported behavior and
-            materially clearer domain, persistence, adapter, and test ownership.
+            Delivered: 53,749 hand-owned lines, approximately 19.3%
+            smaller than the July 9 baseline, with stronger coverage of concurrency,
+            schema drift, production Git paths, live refresh, and CLI authorization
+            despite materially less test machinery.
           </div>
         </section>
       </main>
     </div>
 
     <footer>
-      <strong>Scope VCS maintainability and line reduction plan.</strong>
-      Baseline measured July 9, 2026. This plan intentionally excludes generated
-      code and documentation from its LOC reward metric.
+      <strong>Scope VCS maintainability and test reduction plan.</strong>
+      Original baseline measured July 9, 2026; post-merge audit measured July 10 on
+      <code>main@6c48f7b</code>; Phase 7 completed on
+      <code>codex/test-reduction-phase7</code>. Generated code and documentation
+      remain excluded from the LOC reward metric.
     </footer>
   </body>
 </html>

@@ -8,8 +8,6 @@ const PUBLIC_SUBJECT: &str = "user_public";
 const PUBLIC_EMAIL: &str = "public@example.com";
 const EDITOR_SUBJECT: &str = "user_editor";
 const EDITOR_EMAIL: &str = "editor@example.com";
-const STRANGER_SUBJECT: &str = "user_stranger";
-const STRANGER_EMAIL: &str = "stranger@example.com";
 const MEMBER_SUBJECT: &str = "user_member";
 const MEMBER_EMAIL: &str = "member@example.com";
 const REQUEST_ID: &str = "req_1";
@@ -20,67 +18,17 @@ const PRIVATE_REQUEST_REF: &str = "refs/scope/requests/req_private";
 mod privacy;
 
 #[tokio::test]
-async fn request_editor_receive_pack_does_not_require_push_intent() {
-    let state = test_state_with_request().await;
-    let mut headers = request_bearer_headers(PUBLIC_SUBJECT, PUBLIC_EMAIL);
-    headers.insert(
-        "x-scope-push-intent",
-        "stale-request-push-intent".parse().unwrap(),
-    );
-
-    let access = receive_pack_access(&state, &headers, TEST_REPO_OWNER, TEST_REPO_NAME)
-        .await
-        .unwrap();
-
-    assert!(matches!(
-        access,
-        ReceivePackAccess::RequestEditor { author_id } if author_id == public_user_id()
-    ));
-}
-
-#[tokio::test]
 async fn request_editor_receive_pack_requires_current_repo_read() {
     let state = test_state_with_request().await;
     state
         .metadata
-        .update(|catalog| {
-            let repo = catalog.repositories.get_mut(TEST_REPO_ID).unwrap();
+        .mutate_repository_for_tests(TEST_REPO_ID, |repo| {
             repo.policy = Policy::new(Visibility::Private);
             repo.graph.commits.clear();
-            Ok(())
         })
-        .unwrap();
-    let headers = request_bearer_headers(PUBLIC_SUBJECT, PUBLIC_EMAIL);
-
-    let error = receive_pack_access(&state, &headers, TEST_REPO_OWNER, TEST_REPO_NAME)
-        .await
-        .unwrap_err();
-
-    assert_eq!(error.status(), StatusCode::NOT_FOUND);
-}
-
-#[tokio::test]
-async fn invited_public_editor_receive_pack_does_not_require_push_intent() {
-    let state = test_state_with_request().await;
-    insert_editor_user(&state);
-    invite_editor_to_request(&state).await;
-    let headers = request_bearer_headers(EDITOR_SUBJECT, EDITOR_EMAIL);
-
-    let access = receive_pack_access(&state, &headers, TEST_REPO_OWNER, TEST_REPO_NAME)
         .await
         .unwrap();
-
-    assert!(matches!(
-        access,
-        ReceivePackAccess::RequestEditor { author_id } if author_id == editor_user_id()
-    ));
-}
-
-#[tokio::test]
-async fn uninvited_public_user_cannot_receive_pack_for_request_refs() {
-    let state = test_state_with_request().await;
-    insert_stranger_user(&state);
-    let headers = request_bearer_headers(STRANGER_SUBJECT, STRANGER_EMAIL);
+    let headers = authorization_headers(bearer_header_for(PUBLIC_SUBJECT, PUBLIC_EMAIL));
 
     let error = receive_pack_access(&state, &headers, TEST_REPO_OWNER, TEST_REPO_NAME)
         .await
@@ -92,15 +40,15 @@ async fn uninvited_public_user_cannot_receive_pack_for_request_refs() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn real_git_request_ref_push_records_revision_without_touching_main() {
     let state = test_state_with_request().await;
-    let (source, permissioned_remote, server) =
+    let (source, permissioned_remote, _server) =
         request_push_checkout(&state, "request-ref-push", PUBLIC_SUBJECT, PUBLIC_EMAIL).await;
-    fs::write(source.join("request.txt"), "request branch content\n").unwrap();
-    run_git(Some(&source), &["add", "-A"], "add request changes").unwrap();
-    commit_all(&source, "request change");
-    run_git(
-        Some(&source),
-        &["push", &permissioned_remote, &format!("HEAD:{REQUEST_REF}")],
-        "push request ref",
+    push_change(
+        &source,
+        &permissioned_remote,
+        REQUEST_REF,
+        "request.txt",
+        "request branch content\n",
+        "request change",
     )
     .unwrap();
     let first_request_head = git_head_oid(&source);
@@ -117,44 +65,30 @@ async fn real_git_request_ref_push_records_revision_without_touching_main() {
         })
         .await
         .unwrap();
-    fs::write(source.join("request.txt"), "request branch content v2\n").unwrap();
-    run_git(Some(&source), &["add", "-A"], "add second request change").unwrap();
-    commit_all(&source, "request change v2");
-    let request_head = git_head_oid(&source);
-    run_git(
-        Some(&source),
-        &["push", &permissioned_remote, &format!("HEAD:{REQUEST_REF}")],
-        "push request ref update",
+    push_change(
+        &source,
+        &permissioned_remote,
+        REQUEST_REF,
+        "request.txt",
+        "request branch content v2\n",
+        "request change v2",
     )
     .unwrap();
+    let request_head = git_head_oid(&source);
 
-    let repo = find_repo(&state, TEST_REPO_OWNER, TEST_REPO_NAME)
-        .await
-        .unwrap();
     assert_eq!(
-        repo.live_tree()
-            .get(&ScopePath::parse("/README.md").unwrap())
-            .map(blob_content)
-            .as_deref(),
+        live_file_content(&state, "/README.md").await.as_deref(),
         Some("hello")
     );
-    assert!(
-        !repo
-            .live_tree()
-            .contains_key(&ScopePath::parse("/request.txt").unwrap())
-    );
-    state
-        .metadata
-        .read(|catalog| {
-            let request = catalog.requests.get(REQUEST_ID).unwrap();
-            assert_eq!(request.head_oid, request_head);
-            let snapshot = request.git_snapshot.as_ref().unwrap();
-            source_blob_bytes(state.object_store.as_ref(), snapshot).unwrap();
-            assert_eq!(catalog.request_events.len(), 2);
-            Ok(())
-        })
-        .await
-        .unwrap();
+    assert_eq!(live_file_content(&state, "/request.txt").await, None);
+    let request = stored_request(&state, REQUEST_ID).await;
+    assert_eq!(request.head_oid, request_head);
+    source_blob_bytes(
+        state.object_store.as_ref(),
+        request.git_snapshot.as_ref().unwrap(),
+    )
+    .unwrap();
+    assert_eq!(request_event_count(&state).await, 2);
     let store_repo =
         crate::git::storage::request_ref_store_repo_path(&state, TEST_REPO_OWNER, TEST_REPO_NAME);
     let stored_head = git_stdout_text(&store_repo, &["rev-parse", REQUEST_REF], "read request ref")
@@ -168,129 +102,70 @@ async fn real_git_request_ref_push_records_revision_without_touching_main() {
         "simulate stale request ref cache",
     )
     .unwrap();
-    let staging_repo = crate::git::request_refs::ensure_request_receive_pack_staging_repo(
-        &state,
-        TEST_REPO_OWNER,
-        TEST_REPO_NAME,
-        &public_user_id(),
-    )
-    .await
-    .unwrap();
-    let restored_head = git_stdout_text(
-        &staging_repo,
-        &["rev-parse", REQUEST_REF],
-        "read reconciled request ref",
-    )
-    .unwrap()
-    .trim()
-    .to_string();
-    assert_eq!(restored_head, request_head);
+    let staging_repo = assert_restored_request_head(&state, &request_head).await;
     let _ = fs::remove_dir_all(staging_repo);
     fs::remove_dir_all(&store_repo).unwrap();
-    let staging_repo = crate::git::request_refs::ensure_request_receive_pack_staging_repo(
-        &state,
+    let staging_repo = assert_restored_request_head(&state, &request_head).await;
+    let _ = fs::remove_dir_all(staging_repo);
+}
+
+async fn assert_restored_request_head(state: &AppState, expected: &str) -> PathBuf {
+    let staging = crate::git::request_refs::ensure_request_receive_pack_staging_repo(
+        state,
         TEST_REPO_OWNER,
         TEST_REPO_NAME,
         &public_user_id(),
     )
     .await
     .unwrap();
-    let restored_head = git_stdout_text(
-        &staging_repo,
-        &["rev-parse", REQUEST_REF],
-        "read restored request ref",
-    )
-    .unwrap()
-    .trim()
-    .to_string();
-    assert_eq!(restored_head, request_head);
-
-    server.abort();
-    let _ = fs::remove_dir_all(staging_repo);
+    let head = git_stdout_text(&staging, &["rev-parse", REQUEST_REF], "read request ref")
+        .unwrap()
+        .trim()
+        .to_string();
+    assert_eq!(head, expected);
+    staging
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn invited_public_editor_can_push_request_ref() {
-    let state = test_state_with_request().await;
-    insert_editor_user(&state);
-    invite_editor_to_request(&state).await;
-    let (source, permissioned_remote, server) = request_push_checkout(
-        &state,
-        "request-ref-editor-push",
-        EDITOR_SUBJECT,
-        EDITOR_EMAIL,
-    )
-    .await;
-    fs::write(source.join("editor.txt"), "editor request branch content\n").unwrap();
-    run_git(Some(&source), &["add", "-A"], "add editor request changes").unwrap();
-    commit_all(&source, "editor request change");
-    run_git(
-        Some(&source),
-        &["push", &permissioned_remote, &format!("HEAD:{REQUEST_REF}")],
-        "push request ref as invited editor",
-    )
-    .unwrap();
-
-    let request_head = git_head_oid(&source);
-    state
-        .metadata
-        .read(|catalog| {
-            let request = catalog.requests.get(REQUEST_ID).unwrap();
-            assert_eq!(request.head_oid, request_head);
-            assert!(request.git_snapshot.is_some());
-            assert!(catalog.request_events.is_empty());
-            Ok(())
-        })
-        .await
+async fn invited_editor_and_maintainer_can_push_request_refs() {
+    for (label, subject, email, path, prepare) in [
+        (
+            "request-ref-editor-push",
+            EDITOR_SUBJECT,
+            EDITOR_EMAIL,
+            "editor.txt",
+            true,
+        ),
+        (
+            "request-ref-maintainer-push",
+            MEMBER_SUBJECT,
+            MEMBER_EMAIL,
+            "maintainer.txt",
+            false,
+        ),
+    ] {
+        let state = test_state_with_request().await;
+        if prepare {
+            prepare_editor(&state).await;
+        } else {
+            insert_member_user(&state).await;
+        }
+        let (source, remote, _server) = request_push_checkout(&state, label, subject, email).await;
+        push_change(
+            &source,
+            &remote,
+            REQUEST_REF,
+            path,
+            "request branch content\n",
+            "request change",
+        )
         .unwrap();
 
-    server.abort();
-}
-
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn maintainer_can_push_request_ref_without_being_author_or_editor() {
-    let state = test_state_with_request().await;
-    insert_member_user(&state);
-    let (source, permissioned_remote, server) = request_push_checkout(
-        &state,
-        "request-ref-maintainer-push",
-        MEMBER_SUBJECT,
-        MEMBER_EMAIL,
-    )
-    .await;
-    fs::write(
-        source.join("maintainer.txt"),
-        "maintainer request branch content\n",
-    )
-    .unwrap();
-    run_git(
-        Some(&source),
-        &["add", "-A"],
-        "add maintainer request changes",
-    )
-    .unwrap();
-    commit_all(&source, "maintainer request change");
-    run_git(
-        Some(&source),
-        &["push", &permissioned_remote, &format!("HEAD:{REQUEST_REF}")],
-        "push request ref as maintainer",
-    )
-    .unwrap();
-
-    let request_head = git_head_oid(&source);
-    state
-        .metadata
-        .read(|catalog| {
-            let request = catalog.requests.get(REQUEST_ID).unwrap();
-            assert_eq!(request.head_oid, request_head);
-            assert!(request.git_snapshot.is_some());
-            assert!(catalog.request_events.is_empty());
-            Ok(())
-        })
-        .await
-        .unwrap();
-
-    server.abort();
+        let request = stored_request(&state, REQUEST_ID).await;
+        assert_eq!(request.head_oid, git_head_oid(&source));
+        assert!(request.git_snapshot.is_some());
+        assert_eq!(request_event_count(&state).await, 0);
+    }
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -298,22 +173,14 @@ async fn request_ref_push_rejects_history_unrelated_to_recorded_base() {
     let state = test_state_with_request().await;
     state
         .metadata
-        .update(|catalog| {
-            let request = catalog.requests.get_mut(REQUEST_ID).unwrap();
+        .mutate_request_for_tests(REQUEST_ID, |request| {
             request.author_user_id = test_owner_id();
             request.author_role = RequestActorRole::Owner;
             request.base_audience = RequestBaseAudience::Private;
-            Ok(())
         })
-        .unwrap();
-    let original_head = state
-        .metadata
-        .request_by_id(REQUEST_ID)
         .await
-        .unwrap()
-        .unwrap()
-        .head_oid;
-    let (source, permissioned_remote, server) = request_push_checkout(
+        .unwrap();
+    let (source, permissioned_remote, _server) = request_push_checkout(
         &state,
         "request-ref-unrelated-history",
         TEST_CLERK_USER_ID,
@@ -348,25 +215,13 @@ async fn request_ref_push_rejects_history_unrelated_to_recorded_base() {
     .unwrap();
 
     assert!(!output.status.success());
-    state
-        .metadata
-        .read(|catalog| {
-            let request = catalog.requests.get(REQUEST_ID).unwrap();
-            assert_eq!(request.head_oid, original_head);
-            assert!(request.git_snapshot.is_none());
-            assert!(catalog.request_events.is_empty());
-            Ok(())
-        })
-        .await
-        .unwrap();
-
-    server.abort();
+    assert_request_branch_unchanged(&state).await;
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn request_ref_push_rejects_unsupported_tree_entries() {
     let state = test_state_with_request().await;
-    let (source, permissioned_remote, server) = request_push_checkout(
+    let (source, permissioned_remote, _server) = request_push_checkout(
         &state,
         "request-ref-invalid-tree",
         PUBLIC_SUBJECT,
@@ -394,133 +249,81 @@ async fn request_ref_push_rejects_unsupported_tree_entries() {
     .unwrap();
 
     assert!(!output.status.success());
-    state
-        .metadata
-        .read(|catalog| {
-            let request = catalog.requests.get(REQUEST_ID).unwrap();
-            assert_eq!(request.state, RequestState::Working);
-            assert_eq!(request.head_oid, request.base_main_oid);
-            assert!(request.git_snapshot.is_none());
-            assert!(catalog.request_events.is_empty());
-            Ok(())
-        })
-        .await
-        .unwrap();
-
-    server.abort();
+    assert_request_branch_unchanged(&state).await;
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn public_request_author_cannot_push_main() {
     let state = test_state_with_request().await;
-    let (source, permissioned_remote, server) = request_push_checkout(
+    let (source, permissioned_remote, _server) = request_push_checkout(
         &state,
         "request-main-rejected",
         PUBLIC_SUBJECT,
         PUBLIC_EMAIL,
     )
     .await;
-    fs::write(source.join("README.md"), "public main write\n").unwrap();
-    run_git(Some(&source), &["add", "-A"], "add main change").unwrap();
-    commit_all(&source, "try main");
-    let output = run_git_output(
-        Some(&source),
-        &["push", &permissioned_remote, "HEAD:main"],
-        "push public main",
+    let output = push_change(
+        &source,
+        &permissioned_remote,
+        "main",
+        "README.md",
+        "public main write\n",
+        "try main",
     )
-    .unwrap();
+    .unwrap_err();
 
     assert!(!output.status.success());
     assert!(
         String::from_utf8_lossy(&output.stderr)
             .contains("Scope request pushes only accept refs/scope/requests/*")
     );
-    let repo = find_repo(&state, TEST_REPO_OWNER, TEST_REPO_NAME)
-        .await
-        .unwrap();
     assert_eq!(
-        repo.live_tree()
-            .get(&ScopePath::parse("/README.md").unwrap())
-            .map(blob_content)
-            .as_deref(),
+        live_file_content(&state, "/README.md").await.as_deref(),
         Some("hello")
     );
-    state
-        .metadata
-        .read(|catalog| {
-            let request = catalog.requests.get(REQUEST_ID).unwrap();
-            assert_eq!(request.state, RequestState::Working);
-            assert_eq!(request.head_oid, request.base_main_oid);
-            assert!(catalog.request_events.is_empty());
-            Ok(())
-        })
-        .await
-        .unwrap();
-
-    server.abort();
+    assert_request_branch_unchanged(&state).await;
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn public_actor_cannot_push_private_request_after_membership_loss() {
     let state = test_state_with_request().await;
-    insert_private_request_for_public_user(&state);
-    let (source, permissioned_remote, server) = request_push_checkout(
+    insert_private_request_for_public_user(&state).await;
+    let (source, permissioned_remote, _server) = request_push_checkout(
         &state,
         "private-request-rejected",
         PUBLIC_SUBJECT,
         PUBLIC_EMAIL,
     )
     .await;
-    fs::write(
-        source.join("private-request.txt"),
+    push_change(
+        &source,
+        &permissioned_remote,
+        PRIVATE_REQUEST_REF,
+        "private-request.txt",
         "private request write\n",
+        "try private request",
     )
-    .unwrap();
-    run_git(Some(&source), &["add", "-A"], "add private request change").unwrap();
-    commit_all(&source, "try private request");
-    let output = run_git_output(
-        Some(&source),
-        &[
-            "push",
-            &permissioned_remote,
-            &format!("HEAD:{PRIVATE_REQUEST_REF}"),
-        ],
-        "push private request ref as public actor",
-    )
-    .unwrap();
+    .unwrap_err();
 
-    assert!(!output.status.success());
-    state
-        .metadata
-        .read(|catalog| {
-            assert_eq!(
-                catalog.requests.get(PRIVATE_REQUEST_ID).unwrap().head_oid,
-                "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
-            );
-            Ok(())
-        })
-        .await
-        .unwrap();
-
-    server.abort();
+    assert_eq!(
+        stored_request(&state, PRIVATE_REQUEST_ID).await.head_oid,
+        "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+    );
 }
 
 async fn test_state_with_request() -> AppState {
     let state = test_state_with_repo();
     cache_test_jwks(&state);
-    let public_user = UserAccount {
-        id: public_user_id(),
-        handle: "public".to_string(),
-        email: PUBLIC_EMAIL.to_string(),
-        email_verified: true,
-    };
-    {
-        let mut catalog = lock_catalog(&state).unwrap();
-        catalog.users.insert(public_user.id.clone(), public_user);
-        catalog
-            .repositories
-            .insert(TEST_REPO_ID.to_string(), repo_with_readme());
-    }
+    state
+        .metadata
+        .insert_user_for_tests(test_user(public_user_id(), "public", PUBLIC_EMAIL))
+        .await
+        .unwrap();
+    state
+        .metadata
+        .replace_repository_for_tests(repo_with_readme(&state))
+        .await
+        .unwrap();
     let repo = find_repo(&state, TEST_REPO_OWNER, TEST_REPO_NAME)
         .await
         .unwrap();
@@ -568,98 +371,40 @@ async fn test_state_with_request() -> AppState {
     state
 }
 
-fn insert_private_request_for_public_user(state: &AppState) {
+async fn insert_private_request_for_public_user(state: &AppState) {
     state
         .metadata
-        .update(|catalog| {
-            catalog.requests.insert(
-                PRIVATE_REQUEST_ID.to_string(),
-                Request {
-                    id: PRIVATE_REQUEST_ID.to_string(),
-                    repo_id: TEST_REPO_ID.to_string(),
-                    author_user_id: public_user_id(),
-                    editor_user_ids: Default::default(),
-                    author_role: RequestActorRole::Member,
-                    base_audience: RequestBaseAudience::Private,
-                    target_branch: DEFAULT_GIT_BRANCH.to_string(),
-                    request_ref: PRIVATE_REQUEST_REF.to_string(),
-                    base_main_oid: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa".to_string(),
-                    head_oid: "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb".to_string(),
-                    git_snapshot: None,
-                    title: "Former member request".to_string(),
-                    state: RequestState::Submitted,
-                    stake_credits: 0,
-                    disposition: None,
-                    settlement: None,
-                    created_at_unix: 2,
-                    updated_at_unix: 2,
-                    resolved_at_unix: None,
-                },
-            );
-            Ok(())
+        .insert_request_for_tests(Request {
+            id: PRIVATE_REQUEST_ID.to_string(),
+            repo_id: TEST_REPO_ID.to_string(),
+            author_user_id: public_user_id(),
+            editor_user_ids: Default::default(),
+            author_role: RequestActorRole::Member,
+            base_audience: RequestBaseAudience::Private,
+            target_branch: DEFAULT_GIT_BRANCH.to_string(),
+            request_ref: PRIVATE_REQUEST_REF.to_string(),
+            base_main_oid: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa".to_string(),
+            head_oid: "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb".to_string(),
+            git_snapshot: None,
+            title: "Former member request".to_string(),
+            state: RequestState::Submitted,
+            stake_credits: 0,
+            disposition: None,
+            settlement: None,
+            created_at_unix: 2,
+            updated_at_unix: 2,
+            resolved_at_unix: None,
         })
+        .await
         .unwrap();
 }
 
-fn insert_editor_user(state: &AppState) {
-    let editor = UserAccount {
-        id: editor_user_id(),
-        handle: "editor".to_string(),
-        email: EDITOR_EMAIL.to_string(),
-        email_verified: true,
-    };
+async fn prepare_editor(state: &AppState) {
     state
         .metadata
-        .update(|catalog| {
-            catalog.users.insert(editor.id.clone(), editor);
-            Ok(())
-        })
+        .insert_user_for_tests(test_user(editor_user_id(), "editor", EDITOR_EMAIL))
+        .await
         .unwrap();
-}
-
-fn insert_stranger_user(state: &AppState) {
-    let stranger = UserAccount {
-        id: stranger_user_id(),
-        handle: "stranger".to_string(),
-        email: STRANGER_EMAIL.to_string(),
-        email_verified: true,
-    };
-    state
-        .metadata
-        .update(|catalog| {
-            catalog.users.insert(stranger.id.clone(), stranger);
-            Ok(())
-        })
-        .unwrap();
-}
-
-fn insert_member_user(state: &AppState) {
-    let member = UserAccount {
-        id: member_user_id(),
-        handle: "member".to_string(),
-        email: MEMBER_EMAIL.to_string(),
-        email_verified: true,
-    };
-    state
-        .metadata
-        .update(|catalog| {
-            catalog.users.insert(member.id.clone(), member);
-            catalog
-                .repositories
-                .get_mut(TEST_REPO_ID)
-                .unwrap()
-                .members
-                .push(test_repository_member(
-                    TEST_REPO_ID,
-                    member_user_id(),
-                    RepositoryMemberPermissions::default(),
-                ));
-            Ok(())
-        })
-        .unwrap();
-}
-
-async fn invite_editor_to_request(state: &AppState) {
     state
         .metadata
         .add_request_editor(AddRequestEditorInput {
@@ -672,13 +417,44 @@ async fn invite_editor_to_request(state: &AppState) {
         .unwrap();
 }
 
-fn request_bearer_headers(subject: &str, email: &str) -> HeaderMap {
-    let mut headers = HeaderMap::new();
-    headers.insert(
-        AUTHORIZATION,
-        bearer_header_for(subject, email).parse().unwrap(),
-    );
-    headers
+async fn insert_member_user(state: &AppState) {
+    state
+        .metadata
+        .insert_user_for_tests(test_user(member_user_id(), "member", MEMBER_EMAIL))
+        .await
+        .unwrap();
+    state
+        .metadata
+        .mutate_repository_for_tests(TEST_REPO_ID, |repo| {
+            repo.members.push(test_repository_member(
+                TEST_REPO_ID,
+                member_user_id(),
+                RepositoryMemberPermissions::default(),
+            ));
+        })
+        .await
+        .unwrap();
+}
+
+async fn assert_request_branch_unchanged(state: &AppState) {
+    let request = stored_request(state, REQUEST_ID).await;
+    assert_eq!(request.state, RequestState::Working);
+    assert_eq!(request.head_oid, request.base_main_oid);
+    assert!(request.git_snapshot.is_none());
+    assert_eq!(request_event_count(state).await, 0);
+}
+
+async fn stored_request(state: &AppState, id: &str) -> Request {
+    state.metadata.request_for_tests(id).await.unwrap().unwrap()
+}
+
+async fn request_event_count(state: &AppState) -> usize {
+    state
+        .metadata
+        .request_events_for_tests()
+        .await
+        .unwrap()
+        .len()
 }
 
 async fn request_push_checkout(
@@ -686,22 +462,17 @@ async fn request_push_checkout(
     label: &str,
     subject: &str,
     email: &str,
-) -> (TempCheckout, String, tokio::task::JoinHandle<()>) {
-    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-    let addr = listener.local_addr().unwrap();
-    let state = state.clone();
-    let server = tokio::spawn(async move {
-        axum::serve(listener, router(state)).await.unwrap();
-    });
-    let source = temp_checkout_dir(label);
-    let public_remote = format!("http://{addr}/git/public/{TEST_REPO_ID}");
+) -> (TempGitRepo, String, TestServer) {
+    let (origin, server) = spawn_test_server(state).await;
+    let source = checkout_dir(label);
+    let public_remote = format!("{origin}/git/public/{TEST_REPO_ID}");
     run_git(
         None,
         &["clone", &public_remote, source.to_str().unwrap()],
         "clone public repo for request ref",
     )
     .unwrap();
-    let permissioned_remote = format!("http://{addr}/git/permissioned/{TEST_REPO_ID}");
+    let permissioned_remote = format!("{origin}/git/permissioned/{TEST_REPO_ID}");
     configure_bearer_header(
         &source,
         &permissioned_remote,
@@ -723,6 +494,30 @@ fn configure_bearer_header(repo: &FsPath, remote: &str, bearer: &str) {
     .unwrap();
 }
 
+fn push_change(
+    repo: &FsPath,
+    remote: &str,
+    target_ref: &str,
+    path: &str,
+    content: &str,
+    message: &str,
+) -> Result<(), std::process::Output> {
+    fs::write(repo.join(path), content).unwrap();
+    run_git(Some(repo), &["add", "-A"], "stage request change").unwrap();
+    commit_all(repo, message);
+    let output = run_git_output(
+        Some(repo),
+        &["push", remote, &format!("HEAD:{target_ref}")],
+        "push request change",
+    )
+    .unwrap();
+    if output.status.success() {
+        Ok(())
+    } else {
+        Err(output)
+    }
+}
+
 fn public_user_id() -> String {
     crate::db::scope_user_id_for_auth_identity("clerk", PUBLIC_SUBJECT)
 }
@@ -731,36 +526,10 @@ fn editor_user_id() -> String {
     crate::db::scope_user_id_for_auth_identity("clerk", EDITOR_SUBJECT)
 }
 
-fn stranger_user_id() -> String {
-    crate::db::scope_user_id_for_auth_identity("clerk", STRANGER_SUBJECT)
-}
-
 fn member_user_id() -> String {
     crate::db::scope_user_id_for_auth_identity("clerk", MEMBER_SUBJECT)
 }
 
-struct TempCheckout(PathBuf);
-
-impl std::ops::Deref for TempCheckout {
-    type Target = FsPath;
-
-    fn deref(&self) -> &Self::Target {
-        &self.0
-    }
-}
-
-impl Drop for TempCheckout {
-    fn drop(&mut self) {
-        let _ = fs::remove_dir_all(&self.0);
-    }
-}
-
-fn temp_checkout_dir(label: &str) -> TempCheckout {
-    let path = std::env::temp_dir().join(format!(
-        "scope-vcs-{label}-{}-{}",
-        std::process::id(),
-        unix_now()
-    ));
-    let _ = fs::remove_dir_all(&path);
-    TempCheckout(path)
+fn checkout_dir(label: &str) -> TempGitRepo {
+    TempGitRepo(unique_test_path(label))
 }

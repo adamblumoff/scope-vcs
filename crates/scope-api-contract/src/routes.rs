@@ -136,17 +136,22 @@ mod tests {
 
     #[test]
     fn dynamic_routes_encode_each_path_segment() {
-        assert_eq!(
-            repo_request("an owner", "r/name", "request?#1"),
-            "/v1/repos/an%20owner/r%2Fname/requests/request%3F%231"
-        );
-        assert_eq!(
-            cli_device_login_poll("code/with space"),
-            "/v1/cli/device-login/code%2Fwith%20space/poll"
-        );
-        assert_eq!(
-            git_repo("permissioned", "an owner", "r/name"),
-            "/git/permissioned/an%20owner/r%2Fname"
-        );
+        let routes = [
+            (
+                repo_request("an owner", "r/name", "request?#1"),
+                "/v1/repos/an%20owner/r%2Fname/requests/request%3F%231",
+            ),
+            (
+                cli_device_login_poll("code/with space"),
+                "/v1/cli/device-login/code%2Fwith%20space/poll",
+            ),
+            (
+                git_repo("permissioned", "an owner", "r/name"),
+                "/git/permissioned/an%20owner/r%2Fname",
+            ),
+        ];
+        for (actual, expected) in routes {
+            assert_eq!(actual, expected);
+        }
     }
 }
