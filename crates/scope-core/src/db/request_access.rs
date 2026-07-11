@@ -47,7 +47,7 @@ pub(super) fn request_actor_can_edit(
         RepositoryActor::Owner | RepositoryActor::Member
     );
     match request.audience {
-        RequestAudience::Public => true,
+        RequestAudience::Public => !user_id.is_empty(),
         RequestAudience::Private => maintainer,
     }
 }

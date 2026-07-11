@@ -180,10 +180,27 @@ fn start_request_branch(
             audience,
         },
     )?;
-    run_git_in_repo(
+    if let Err(switch_error) = run_git_in_repo(
         git_repo,
         &["switch", "--no-track", "-c", &branch, &remote_main],
-    )?;
+    ) {
+        let cleanup = api_delete_request(
+            client,
+            api_url,
+            session_token,
+            &context.target.owner,
+            &context.target.repo,
+            &response.request.id,
+        );
+        return match cleanup {
+            Ok(_) => Err(switch_error).context(
+                "create local request branch failed; the empty request was deleted, so it is safe to retry",
+            ),
+            Err(cleanup_error) => Err(switch_error).context(format!(
+                "create local request branch failed and cleanup also failed ({cleanup_error}); run `scope request delete {branch}` before retrying"
+            )),
+        };
+    }
     store_request_metadata(git_repo, &branch, &context, &response.request)?;
     let request_head_oid = head_oid(git_repo)?;
     push_request_head(

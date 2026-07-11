@@ -4,8 +4,23 @@ use super::*;
 fn named_request_refs_are_top_level_branches_other_than_main() {
     assert!(is_request_ref("refs/heads/railway-upload"));
     assert!(!is_request_ref("refs/heads/main"));
+    assert!(!is_request_ref("refs/heads/head"));
+    assert!(!is_request_ref("refs/heads/scope"));
+    assert!(!is_request_ref("refs/heads/UPPER-CASE"));
     assert!(!is_request_ref("refs/heads/requests/nested"));
     assert!(!is_request_ref("refs/tags/railway-upload"));
+}
+
+#[test]
+fn request_ref_diff_rejects_invalid_request_names_before_lookup() {
+    for name in ["head", "scope", "UPPER-CASE"] {
+        let after = vec![(
+            format!("refs/heads/{name}"),
+            "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb".to_string(),
+        )];
+        let error = request_ref_update_from_refs(&[], &after).unwrap_err();
+        assert!(error.message().contains("invalid request branch"));
+    }
 }
 
 #[test]

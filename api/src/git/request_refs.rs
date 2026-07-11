@@ -46,12 +46,17 @@ pub(crate) struct RequestRefUpdate {
 }
 
 pub(crate) fn is_request_ref(refname: &str) -> bool {
-    request_name_from_ref(refname).is_some()
+    request_name_from_ref(refname)
+        .is_some_and(|name| crate::domain::requests::validate_request_name(name).is_ok())
 }
 
 fn request_name_from_ref(refname: &str) -> Option<&str> {
     let name = refname.strip_prefix("refs/heads/")?;
     (!name.is_empty() && name != DEFAULT_GIT_BRANCH && !name.contains('/')).then_some(name)
+}
+
+fn is_request_ref_candidate(refname: &str) -> bool {
+    request_name_from_ref(refname).is_some()
 }
 
 pub(crate) fn receive_pack_refs(staging_repo: &FsPath) -> Result<Vec<(String, String)>, ApiError> {
@@ -71,7 +76,7 @@ pub(crate) fn request_ref_update_from_refs(
     let mut changed = Vec::new();
 
     for refname in before.keys().chain(after.keys()).collect::<BTreeSet<_>>() {
-        if !is_request_ref(refname) {
+        if !is_request_ref_candidate(refname) {
             continue;
         }
         let old = before.get(refname);
@@ -84,11 +89,19 @@ pub(crate) fn request_ref_update_from_refs(
                 "Scope does not accept request branch deletes",
             ));
         };
+        let request_name =
+            request_name_from_ref(refname).expect("request ref was classified above");
+        if !is_request_ref(refname) {
+            crate::domain::requests::validate_request_name(request_name).map_err(|error| {
+                ApiError::bad_request(format!(
+                    "invalid request branch '{request_name}': {}",
+                    error.message
+                ))
+            })?;
+        }
         changed.push(RequestRefUpdate {
             request_ref: refname.clone(),
-            request_name: request_name_from_ref(refname)
-                .expect("request ref was classified above")
-                .to_string(),
+            request_name: request_name.to_string(),
             old_head_oid: old.cloned(),
             new_head_oid: new_head_oid.clone(),
         });
@@ -112,7 +125,7 @@ pub(crate) fn non_request_refs_changed(
     before
         .keys()
         .chain(after.keys())
-        .filter(|refname| !is_request_ref(refname))
+        .filter(|refname| !is_request_ref_candidate(refname))
         .collect::<BTreeSet<_>>()
         .into_iter()
         .any(|refname| before.get(refname) != after.get(refname))
