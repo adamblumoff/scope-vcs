@@ -22,7 +22,9 @@ mod render;
 mod tests;
 mod text;
 pub use args::RequestArgs;
-use args::{RequestAudienceArg, RequestCommand, RequestMergeArgs, RequestResolveArgs};
+use args::{
+    RequestAudienceArg, RequestCommand, RequestMergeArgs, RequestResolveArgs, RequestStartArgs,
+};
 use local::{
     fetch_main_projection, load_context, load_context_and_request_id,
     maybe_request_branch_audience, maybe_request_id_for_context, normalized_submit_stake,
@@ -68,16 +70,9 @@ pub fn run_request_command(
 ) -> anyhow::Result<()> {
     let PreparedRequestCommand { args, git_repo } = command;
     match args.command {
-        RequestCommand::Start(args) => start_request_branch(
-            &git_repo,
-            client,
-            api_url,
-            session_token,
-            args.remote,
-            args.name,
-            args.title,
-            args.audience,
-        ),
+        RequestCommand::Start(args) => {
+            start_request_branch(&git_repo, client, api_url, session_token, args)
+        }
         RequestCommand::Submit(args) => submit_request_branch(
             &git_repo,
             client,
@@ -151,16 +146,19 @@ fn start_request_branch(
     client: &Client,
     api_url: &str,
     session_token: &str,
-    remote: Option<String>,
-    name: String,
-    title: Option<String>,
-    audience: Option<RequestAudienceArg>,
+    args: RequestStartArgs,
 ) -> anyhow::Result<()> {
-    let context = load_context(git_repo, client, api_url, session_token, remote.as_deref())?;
+    let context = load_context(
+        git_repo,
+        client,
+        api_url,
+        session_token,
+        args.remote.as_deref(),
+    )?;
     print_repo_access(&context.repo);
-    let audience = start_audience(&context.repo, audience)?;
+    let audience = start_audience(&context.repo, args.audience)?;
     fetch_main_projection(git_repo, &context, audience, session_token)?;
-    let branch = name.trim().to_string();
+    let branch = args.name.trim().to_string();
     scope_core::domain::requests::validate_request_name(&branch)
         .map_err(|error| anyhow::anyhow!(error.message))?;
     let local_ref = format!("refs/heads/{branch}");
@@ -178,7 +176,7 @@ fn start_request_branch(
             owner: &context.target.owner,
             repo: &context.target.repo,
             name: branch.clone(),
-            title,
+            title: args.title,
             audience,
         },
     )?;
