@@ -84,6 +84,10 @@ jobs:
 
   smoke:
     name: Browser smoke against seeded local stack
+    if: >-
+      github.event_name != 'pull_request' ||
+      (github.event.pull_request.head.repo.full_name == github.repository &&
+      github.actor != 'dependabot[bot]')
     runs-on: ubuntu-latest
     timeout-minutes: 20
     services:
@@ -139,26 +143,33 @@ jobs:
         working-directory: web
         run: pnpm exec playwright install --with-deps chromium
 
-      # Required repository secret: CLERK_DEVELOPMENT_PUBLISHABLE_KEY (pk_test_*).
-      # These smoke routes are anonymous, so they do not use a Clerk secret key.
+      # Required repository secrets: a matching Clerk development key pair.
       - name: Configure isolated local stack
         env:
           CLERK_DEVELOPMENT_PUBLISHABLE_KEY: ${{ secrets.CLERK_DEVELOPMENT_PUBLISHABLE_KEY }}
+          CLERK_DEVELOPMENT_SECRET_KEY: ${{ secrets.CLERK_DEVELOPMENT_SECRET_KEY }}
         shell: bash
         run: |
           if [[ "$CLERK_DEVELOPMENT_PUBLISHABLE_KEY" != pk_test_* ]]; then
             echo "::error::Repository secret CLERK_DEVELOPMENT_PUBLISHABLE_KEY must contain a Clerk development publishable key (pk_test_*)."
             exit 1
           fi
+          if [[ "$CLERK_DEVELOPMENT_SECRET_KEY" != sk_test_* ]]; then
+            echo "::error::Repository secret CLERK_DEVELOPMENT_SECRET_KEY must contain the matching Clerk development secret key (sk_test_*)."
+            exit 1
+          fi
           printf '%s\n' \
             'DATABASE_URL=postgres://scope:scope@127.0.0.1:5432/scope_dev' \
             'SCOPE_DEV_USER_EMAIL=smoke@example.test' \
             'SCOPE_DEV_USER_HANDLE=dev' > .env.local
-          printf 'VITE_CLERK_PUBLISHABLE_KEY=%s\nCLERK_SECRET_KEY=sk_test_anonymous_smoke_not_used\n' \
-            "$CLERK_DEVELOPMENT_PUBLISHABLE_KEY" > web/.env.local
+          printf 'VITE_CLERK_PUBLISHABLE_KEY=%s\nCLERK_SECRET_KEY=%s\n' \
+            "$CLERK_DEVELOPMENT_PUBLISHABLE_KEY" \
+            "$CLERK_DEVELOPMENT_SECRET_KEY" > web/.env.local
 
       - name: Prebuild local API and worker
-        run: cargo build -p api -p worker --features api/local-dev --locked
+        run: |
+          cargo build -p api --features local-dev --locked
+          cargo build -p worker --locked
 
       - name: Start seeded local stack
         run: ./dev/scope-dev up
