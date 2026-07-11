@@ -23,6 +23,7 @@ async fn private_history_shapes_cannot_enter_public_request_refs() {
             "request-ref-public-base-deleted-private-side-history",
         ),
     ] {
+        eprintln!("privacy history case: {label}");
         assert_private_history_push_rejected(history, label).await;
     }
 }
@@ -110,7 +111,7 @@ async fn assert_private_history_push_rejected(history: PrivacyHistory, source_la
 
     assert!(
         !output.status.success(),
-        "private-history side branch push unexpectedly succeeded: {}",
+        "{source_label}: private-history side branch push unexpectedly succeeded: {}",
         String::from_utf8_lossy(&output.stderr)
     );
     assert_request_branch_unchanged(&state).await;
