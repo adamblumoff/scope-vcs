@@ -2,6 +2,7 @@
 name = "api"
 version = "0.1.0"
 edition = "2024"
+default-run = "api"
 license = "UNLICENSED"
 repository = "https://github.com/adamblumoff/scope-vcs"
 

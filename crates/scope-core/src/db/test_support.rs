@@ -1,23 +1,31 @@
 use super::{
     MetadataStore, acquire_aggregate_lock,
-    cleanup_queue::{
-        load_pending_repo_storage_deletions, load_pending_source_blob_deletions,
-        queue_pending_repo_storage_cleanup_row, save_pending_repo_storage_deletions,
-        save_pending_source_blob_deletions,
-    },
-    ensure_metadata_lock_row, entities, repository_from_model,
-    repository_rows::{insert_repository, save_repository_delta},
+    cleanup_queue::{save_pending_repo_storage_deletions, save_pending_source_blob_deletions},
+    ensure_metadata_lock_row, entities,
+    repository_rows::insert_repository,
     request_rows::{
         insert_credit_ledger_entry_row, insert_request_event_row, insert_request_row,
-        request_by_id, save_credit_account_row, save_request_row,
+        save_credit_account_row,
     },
     schema,
 };
-use crate::{
-    domain::{
-        requests::{CreditLedgerEntry, Request, RequestEvent, UserCreditAccount},
-        store::{AppCatalog, RepoStorageCleanup, SourceBlob, StoredRepository, UserAccount},
+#[cfg(any(test, feature = "test-support"))]
+use super::{
+    cleanup_queue::{
+        load_pending_repo_storage_deletions, load_pending_source_blob_deletions,
+        queue_pending_repo_storage_cleanup_row,
     },
+    repository_from_model,
+    repository_rows::save_repository_delta,
+    request_rows::{request_by_id, save_request_row},
+};
+#[cfg(any(test, feature = "test-support"))]
+use crate::domain::{
+    requests::{CreditLedgerEntry, Request, RequestEvent, UserCreditAccount},
+    store::{RepoStorageCleanup, SourceBlob, StoredRepository},
+};
+use crate::{
+    domain::store::{AppCatalog, UserAccount},
     error::ApiError,
 };
 use sea_orm::{ActiveModelTrait, EntityTrait, IntoActiveModel, TransactionTrait};
