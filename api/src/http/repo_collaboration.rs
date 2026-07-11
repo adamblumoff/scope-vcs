@@ -1,8 +1,8 @@
 use crate::domain::{
-    requests::{Request, RequestActorRole, RequestBaseAudience, RequestState},
+    requests::{Request, RequestState, request_visible_to_access},
     store::{
-        RepositoryAccess, RepositoryActor, RepositoryInvite, RepositoryInviteState,
-        RepositoryMember, StoredRepository, UserAccount,
+        RepositoryAccess, RepositoryInvite, RepositoryInviteState, RepositoryMember,
+        StoredRepository, UserAccount,
     },
 };
 use crate::{
@@ -303,9 +303,7 @@ fn request_counts_for_access(request: &Request, access: RepositoryAccess) -> boo
     ) {
         return false;
     }
-    access.actor != RepositoryActor::Public
-        || (request.author_role == RequestActorRole::Public
-            && request.base_audience == RequestBaseAudience::Public)
+    request_visible_to_access(request, access)
 }
 
 async fn member_response_for_user(

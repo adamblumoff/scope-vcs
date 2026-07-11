@@ -28,7 +28,6 @@ import {
   Trash2,
 } from 'lucide-react'
 import { type FormEvent, type ReactNode } from 'react'
-import { RequestCollaborationSection } from './request-collaboration-section'
 import { RequestChangesSection } from './request-changes-section'
 import { RequestMergeDialog } from './request-merge-dialog'
 import {
@@ -42,7 +41,7 @@ import {
   formatUnixDate,
   fullOid,
   requestAuthorRoleLabel,
-  requestBaseAudienceLabel,
+  requestAudienceLabel,
   requestMergeabilityLabel,
   requestMergeabilityTone,
   requestStatusLabel,
@@ -72,7 +71,7 @@ export function RequestUnavailablePage({ params }: { params: RepoParams }) {
             </Button>
           )}
           badges={<Badge variant="warning">Unavailable</Badge>}
-          description="This request does not exist, was deleted, or is only visible to signed-in collaborators."
+          description="This request does not exist, was deleted, or is private to repository maintainers."
           title="Request not found"
         />
 
@@ -80,9 +79,9 @@ export function RequestUnavailablePage({ params }: { params: RepoParams }) {
           <div className="flex max-w-2xl items-start gap-3 text-sm leading-6 text-muted-foreground">
             <ShieldQuestion className="mt-0.5 size-4 shrink-0 text-muted-foreground" />
             <p>
-              Request branches can be private to contributors and maintainers.
-              Sign in with an account that has access, or return to the request
-              list for visible requests.
+              Private request branches are available only to repository
+              maintainers. Sign in with an account that has access, or return
+              to the request list for visible requests.
             </p>
           </div>
         </section>
@@ -120,18 +119,15 @@ export function RequestDetailPage(props: RequestDetailPageProps) {
   const {
     activeResolveDisposition,
     deleteOpen,
-    removeEditor,
     request,
     resolutionOptions,
     setCommentBody,
     setDeleteOpen,
-    setEditorUserId,
     setMergeOpen,
     setNeedsResponseBody,
     setResolveBody,
     setResolveDisposition,
     setResponseBody,
-    submitAddEditor,
     submitComment,
     submitDelete,
     submitMerge,
@@ -157,15 +153,7 @@ export function RequestDetailPage(props: RequestDetailPageProps) {
           <>
             <RequestFacts request={request} />
 
-            <RequestCollaborationSection
-              actionError={uiState.actionError}
-              editorUserId={uiState.editorUserId}
-              onAddEditor={submitAddEditor}
-              onEditorUserIdChange={setEditorUserId}
-              onRemoveEditor={removeEditor}
-              pendingAction={uiState.pendingAction}
-              request={request}
-            />
+            <RequestGitInstructions request={request} />
 
             <RequestActions
               activeResolveDisposition={activeResolveDisposition}
@@ -285,7 +273,7 @@ function RequestDetailHeader({
       )}
       description={(
         <span className="font-mono text-sm">
-          {live.repo.id} / {request.id}
+          {request.name} / {request.id}
         </span>
       )}
       title={request.title}
@@ -298,14 +286,14 @@ function RequestFacts({ request }: { request: RequestSummary }) {
     <SectionRows>
       <SectionRow
         columns="compact"
-        description="The branch and target this request is asking maintainers to evaluate."
+        description="The stable named branch carried by every authorized clone and pull."
         icon={<GitBranch className="size-4 text-muted-foreground" />}
         title="Branch"
       >
         <div className="grid gap-2 text-sm leading-5">
-          <KeyValue label="Target" value={request.target_branch} />
+          <KeyValue label="Remote branch" value={`origin/${request.name}`} />
           <div className="flex flex-wrap gap-1.5">
-            <Badge variant="outline">{requestBaseAudienceLabel(request)}</Badge>
+            <Badge variant="outline">{requestAudienceLabel(request)}</Badge>
             <Badge variant="outline">{requestAuthorRoleLabel(request)}</Badge>
           </div>
         </div>
@@ -359,6 +347,26 @@ function RequestFacts({ request }: { request: RequestSummary }) {
         )}
       </SectionRow>
     </SectionRows>
+  )
+}
+
+function RequestGitInstructions({ request }: { request: RequestSummary }) {
+  return (
+    <section className="mt-8 border-t border-border pt-6">
+      <div className="flex items-start gap-3">
+        <GitBranch className="mt-1 size-4 shrink-0 text-muted-foreground" />
+        <div className="min-w-0">
+          <h2 className="text-balance text-lg font-semibold leading-7">
+            Work on this request
+          </h2>
+          <p className="mt-1 max-w-2xl text-sm leading-6 text-muted-foreground">
+            Scope clone and pull include every request available to you. Fetch,
+            then check out the named remote branch with ordinary Git.
+          </p>
+          <pre className="mt-3 overflow-x-auto rounded-md bg-muted px-3 py-2 text-xs leading-5 text-foreground"><code>{`git fetch origin\ngit switch --track origin/${request.name}`}</code></pre>
+        </div>
+      </div>
+    </section>
   )
 }
 

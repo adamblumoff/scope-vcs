@@ -288,12 +288,10 @@ CREATE TABLE scope_request_events (
 CREATE TABLE scope_requests (
     id character varying NOT NULL,
     repo_id character varying NOT NULL,
+    name character varying NOT NULL,
     author_user_id character varying NOT NULL,
-    editor_user_ids jsonb NOT NULL,
     author_role character varying NOT NULL,
-    base_audience character varying NOT NULL,
-    target_branch character varying NOT NULL,
-    request_ref character varying NOT NULL,
+    audience character varying NOT NULL,
     base_main_oid character varying NOT NULL,
     head_oid character varying NOT NULL,
     git_snapshot jsonb,
@@ -534,11 +532,11 @@ ALTER TABLE ONLY scope_requests
 
 
 --
--- Name: scope_requests scope_requests_request_ref_key; Type: CONSTRAINT; Schema: scope_test_2249234_1783653779131957768; Owner: -
+-- Name: scope_requests scope_requests_repo_name_key; Type: CONSTRAINT; Schema: scope_test_2249234_1783653779131957768; Owner: -
 --
 
 ALTER TABLE ONLY scope_requests
-    ADD CONSTRAINT scope_requests_request_ref_key UNIQUE (request_ref);
+    ADD CONSTRAINT scope_requests_repo_name_key UNIQUE (repo_id, name);
 
 
 --
@@ -936,6 +934,11 @@ ALTER TABLE scope_requests
     ADD CONSTRAINT scope_request_nonnegative_values CHECK (
         stake_credits >= 0 AND created_at_unix >= 0 AND updated_at_unix >= 0 AND
         (resolved_at_unix IS NULL OR resolved_at_unix >= 0)
+    ),
+    ADD CONSTRAINT scope_request_identity_values CHECK (
+        name ~ '^[a-z0-9][a-z0-9-]{0,47}$' AND
+        name NOT IN ('main', 'head', 'scope') AND
+        audience IN ('Public', 'Private')
     );
 ALTER TABLE scope_request_events
     ADD CONSTRAINT scope_request_event_time CHECK (created_at_unix >= 0);

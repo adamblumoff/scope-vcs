@@ -1,24 +1,93 @@
 use super::*;
 use crate::domain::requests::{
-    AddRequestEditorInput, GrantUserCreditsInput, Request, RequestActorRole, RequestBaseAudience,
-    RequestState, StartRequestInput, SubmitRequestInput,
+    GrantUserCreditsInput, Request, RequestActorRole, RequestAudience, RequestState,
+    StartRequestInput, SubmitRequestInput,
 };
 
 const PUBLIC_SUBJECT: &str = "user_public";
 const PUBLIC_EMAIL: &str = "public@example.com";
-const EDITOR_SUBJECT: &str = "user_editor";
-const EDITOR_EMAIL: &str = "editor@example.com";
+const CONTRIBUTOR_SUBJECT: &str = "user_contributor";
+const CONTRIBUTOR_EMAIL: &str = "contributor@example.com";
 const MEMBER_SUBJECT: &str = "user_member";
 const MEMBER_EMAIL: &str = "member@example.com";
 const REQUEST_ID: &str = "req_1";
-const REQUEST_REF: &str = "refs/scope/requests/req_1";
+const REQUEST_NAME: &str = "request-branch";
+const REQUEST_REF: &str = "refs/heads/request-branch";
 const PRIVATE_REQUEST_ID: &str = "req_private";
-const PRIVATE_REQUEST_REF: &str = "refs/scope/requests/req_private";
+const PRIVATE_REQUEST_REF: &str = "refs/heads/private-request";
 
 mod privacy;
 
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn permissioned_clone_fetches_named_public_requests_without_joining() {
+    let state = test_state_with_request().await;
+    insert_public_contributor(&state).await;
+    let (origin, _server) = spawn_test_server(&state).await;
+    let checkout = checkout_dir("named-request-clone");
+    let permissioned_remote = format!("{origin}/git/permissioned/{TEST_REPO_ID}");
+    clone_with_bearer(
+        &permissioned_remote,
+        &checkout,
+        &bearer_header_for(CONTRIBUTOR_SUBJECT, CONTRIBUTOR_EMAIL),
+        "clone all public request refs",
+    );
+
+    let request_head = git_stdout_text(
+        &checkout,
+        &["rev-parse", "refs/remotes/origin/request-branch"],
+        "read fetched request ref",
+    )
+    .unwrap();
+    assert_eq!(
+        request_head.trim(),
+        stored_request(&state, REQUEST_ID).await.head_oid
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn closed_public_request_remains_fetchable_as_read_only_history() {
+    let state = test_state_with_request().await;
+    insert_public_contributor(&state).await;
+    state
+        .metadata
+        .mutate_request_for_tests(REQUEST_ID, |request| {
+            request.state = RequestState::Resolved;
+            request.resolved_at_unix = Some(3);
+        })
+        .await
+        .unwrap();
+    let (origin, _server) = spawn_test_server(&state).await;
+    let checkout = checkout_dir("closed-named-request-clone");
+    let permissioned_remote = format!("{origin}/git/permissioned/{TEST_REPO_ID}");
+    clone_with_bearer(
+        &permissioned_remote,
+        &checkout,
+        &bearer_header_for(CONTRIBUTOR_SUBJECT, CONTRIBUTOR_EMAIL),
+        "clone closed public request ref",
+    );
+
+    assert!(
+        git_stdout_text(
+            &checkout,
+            &["rev-parse", "refs/remotes/origin/request-branch"],
+            "read closed request ref",
+        )
+        .is_ok()
+    );
+    fs::write(checkout.join("closed.txt"), "closed request edit\n").unwrap();
+    run_git(Some(&checkout), &["add", "closed.txt"], "stage closed edit").unwrap();
+    commit_all(&checkout, "closed request edit");
+    let output = run_git_output(
+        Some(&checkout),
+        &["push", &permissioned_remote, &format!("HEAD:{REQUEST_REF}")],
+        "reject closed request push",
+    )
+    .unwrap();
+    assert!(!output.status.success());
+}
+
 #[tokio::test]
-async fn request_editor_receive_pack_requires_current_repo_read() {
+async fn public_request_receive_pack_requires_current_repo_read() {
     let state = test_state_with_request().await;
     state
         .metadata
@@ -127,13 +196,13 @@ async fn assert_restored_request_head(state: &AppState, expected: &str) -> PathB
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn invited_editor_and_maintainer_can_push_request_refs() {
+async fn any_public_contributor_and_maintainer_can_push_request_refs() {
     for (label, subject, email, path, prepare) in [
         (
-            "request-ref-editor-push",
-            EDITOR_SUBJECT,
-            EDITOR_EMAIL,
-            "editor.txt",
+            "request-ref-contributor-push",
+            CONTRIBUTOR_SUBJECT,
+            CONTRIBUTOR_EMAIL,
+            "contributor.txt",
             true,
         ),
         (
@@ -146,7 +215,7 @@ async fn invited_editor_and_maintainer_can_push_request_refs() {
     ] {
         let state = test_state_with_request().await;
         if prepare {
-            prepare_editor(&state).await;
+            insert_public_contributor(&state).await;
         } else {
             insert_member_user(&state).await;
         }
@@ -176,7 +245,7 @@ async fn request_ref_push_rejects_history_unrelated_to_recorded_base() {
         .mutate_request_for_tests(REQUEST_ID, |request| {
             request.author_user_id = test_owner_id();
             request.author_role = RequestActorRole::Owner;
-            request.base_audience = RequestBaseAudience::Private;
+            request.audience = RequestAudience::Private;
         })
         .await
         .unwrap();
@@ -274,8 +343,7 @@ async fn public_request_author_cannot_push_main() {
 
     assert!(!output.status.success());
     assert!(
-        String::from_utf8_lossy(&output.stderr)
-            .contains("Scope request pushes only accept refs/scope/requests/*")
+        String::from_utf8_lossy(&output.stderr).contains("Scope contributors cannot update main")
     );
     assert_eq!(
         live_file_content(&state, "/README.md").await.as_deref(),
@@ -357,12 +425,11 @@ async fn test_state_with_request() -> AppState {
         .start_request(StartRequestInput {
             id: REQUEST_ID.to_string(),
             repo_id: TEST_REPO_ID.to_string(),
+            name: REQUEST_NAME.to_string(),
             author_user_id: public_user_id(),
-            title: "Request branch".to_string(),
+            title: Some("Request branch".to_string()),
             author_role: RequestActorRole::Public,
-            base_audience: RequestBaseAudience::Public,
-            target_branch: DEFAULT_GIT_BRANCH.to_string(),
-            request_ref: REQUEST_REF.to_string(),
+            audience: RequestAudience::Public,
             base_main_oid,
             now_unix: 2,
         })
@@ -377,12 +444,10 @@ async fn insert_private_request_for_public_user(state: &AppState) {
         .insert_request_for_tests(Request {
             id: PRIVATE_REQUEST_ID.to_string(),
             repo_id: TEST_REPO_ID.to_string(),
+            name: "private-request".to_string(),
             author_user_id: public_user_id(),
-            editor_user_ids: Default::default(),
             author_role: RequestActorRole::Member,
-            base_audience: RequestBaseAudience::Private,
-            target_branch: DEFAULT_GIT_BRANCH.to_string(),
-            request_ref: PRIVATE_REQUEST_REF.to_string(),
+            audience: RequestAudience::Private,
             base_main_oid: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa".to_string(),
             head_oid: "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb".to_string(),
             git_snapshot: None,
@@ -394,24 +459,6 @@ async fn insert_private_request_for_public_user(state: &AppState) {
             created_at_unix: 2,
             updated_at_unix: 2,
             resolved_at_unix: None,
-        })
-        .await
-        .unwrap();
-}
-
-async fn prepare_editor(state: &AppState) {
-    state
-        .metadata
-        .insert_user_for_tests(test_user(editor_user_id(), "editor", EDITOR_EMAIL))
-        .await
-        .unwrap();
-    state
-        .metadata
-        .add_request_editor(AddRequestEditorInput {
-            request_id: REQUEST_ID.to_string(),
-            actor_user_id: test_owner_id(),
-            editor_user_id: editor_user_id(),
-            now_unix: 3,
         })
         .await
         .unwrap();
@@ -432,6 +479,18 @@ async fn insert_member_user(state: &AppState) {
                 RepositoryMemberPermissions::default(),
             ));
         })
+        .await
+        .unwrap();
+}
+
+async fn insert_public_contributor(state: &AppState) {
+    state
+        .metadata
+        .insert_user_for_tests(test_user(
+            contributor_user_id(),
+            "contributor",
+            CONTRIBUTOR_EMAIL,
+        ))
         .await
         .unwrap();
 }
@@ -522,8 +581,8 @@ fn public_user_id() -> String {
     crate::db::scope_user_id_for_auth_identity("clerk", PUBLIC_SUBJECT)
 }
 
-fn editor_user_id() -> String {
-    crate::db::scope_user_id_for_auth_identity("clerk", EDITOR_SUBJECT)
+fn contributor_user_id() -> String {
+    crate::db::scope_user_id_for_auth_identity("clerk", CONTRIBUTOR_SUBJECT)
 }
 
 fn member_user_id() -> String {

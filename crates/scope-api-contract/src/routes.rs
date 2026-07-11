@@ -27,11 +27,6 @@ pub const REPO_FILES: &str = "/v1/repos/{owner}/{repo}/files";
 pub const REPO_FILE_CONTENT: &str = "/v1/repos/{owner}/{repo}/files/content";
 pub const REPO_REQUEST_CHANGES: &str = "/v1/repos/{owner}/{repo}/requests/{request_id}/changes";
 pub const REPO_REQUEST_FILE_DIFF: &str = "/v1/repos/{owner}/{repo}/requests/{request_id}/file-diff";
-pub const REPO_REQUEST_BUNDLE: &str =
-    "/v1/repos/{owner}/{repo}/requests/{request_id}/branch.bundle";
-pub const REPO_REQUEST_EDITORS: &str = "/v1/repos/{owner}/{repo}/requests/{request_id}/editors";
-pub const REPO_REQUEST_EDITOR: &str =
-    "/v1/repos/{owner}/{repo}/requests/{request_id}/editors/{editor_user_id}";
 pub const REPO_REQUEST_SUBMIT: &str = "/v1/repos/{owner}/{repo}/requests/{request_id}/submit";
 pub const REPO_REQUEST_COMMENTS: &str = "/v1/repos/{owner}/{repo}/requests/{request_id}/comments";
 pub const REPO_REQUEST_NEEDS_RESPONSE: &str =

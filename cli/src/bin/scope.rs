@@ -22,9 +22,11 @@ struct Cli {
 enum CommandKind {
     Init(InitArgs),
     Push(PushArgs),
+    #[command(about = "Pull main and every visible request from Scope")]
+    Pull(PullArgs),
     #[command(about = "Review repo visibility config locally")]
     Review,
-    #[command(about = "Work with branch-backed maintainer requests")]
+    #[command(about = "Work with named Scope requests")]
     Request(RequestArgs),
     Clone(CloneArgs),
     Login(LoginArgs),
@@ -52,6 +54,12 @@ struct PushArgs {
 }
 
 #[derive(Parser)]
+struct PullArgs {
+    #[arg(long, help = "Scope Git remote to fetch (auto-detected by default)")]
+    remote: Option<String>,
+}
+
+#[derive(Parser)]
 struct CloneArgs {
     repository: String,
     destination: Option<PathBuf>,
@@ -74,6 +82,7 @@ fn main() -> anyhow::Result<()> {
     match Cli::parse().command {
         CommandKind::Init(args) => scope_cli::init::run(args.name),
         CommandKind::Push(args) => scope_cli::push::run(&args.remote, args.no_review),
+        CommandKind::Pull(args) => scope_cli::pull::run(args.remote.as_deref()),
         CommandKind::Review => {
             let repo = discover_git_repo("scope review")?;
             run_standalone_review(&repo)

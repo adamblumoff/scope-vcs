@@ -57,11 +57,7 @@ export function RequestMergeDialog({
             <AlertDialogTitle>Merge request</AlertDialogTitle>
           </div>
           <AlertDialogDescription>
-            Are you sure you want to merge this into{' '}
-            <span className="font-mono text-foreground">
-              {request.target_branch}
-            </span>{' '}
-            at{' '}
+            Are you sure you want to merge this into main at{' '}
             <span className="font-mono text-foreground">
               {shortOid(currentMainOid)}
             </span>

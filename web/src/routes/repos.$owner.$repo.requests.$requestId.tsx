@@ -1,6 +1,5 @@
 import { HttpError } from '@/api/client'
 import {
-  addRequestEditorForRequest,
   commentRequestForRequest,
   deleteRequestForRequest,
   loadRequestChangesForRequest,
@@ -8,15 +7,12 @@ import {
   loadRequestForRequest,
   markRequestNeedsResponseForRequest,
   mergeRequestForRequest,
-  parseAddRequestEditorInput,
   parseCommentRequestInput,
   parseMergeRequestInput,
   parseNeedsResponseInput,
   parseRequestParams,
-  parseRemoveRequestEditorInput,
   parseResolveRequestInput,
   parseRespondRequestInput,
-  removeRequestEditorForRequest,
   resolveRequestForRequest,
   respondToRequestForRequest,
 } from '@/api/repos'
@@ -99,14 +95,6 @@ const deleteRequest = createServerFn({ method: 'POST' })
   .validator(parseRequestParams)
   .handler(({ data }) => deleteRequestForRequest(data))
 
-const addRequestEditor = createServerFn({ method: 'POST' })
-  .validator(parseAddRequestEditorInput)
-  .handler(({ data }) => addRequestEditorForRequest(data))
-
-const removeRequestEditor = createServerFn({ method: 'POST' })
-  .validator(parseRemoveRequestEditorInput)
-  .handler(({ data }) => removeRequestEditorForRequest(data))
-
 export const Route = createFileRoute('/repos/$owner/$repo/requests/$requestId')({
   validateSearch: parseRequestReviewSearch,
   loaderDeps: ({ search }) => search,
@@ -145,7 +133,6 @@ function RequestRoute() {
 
   return (
     <RequestDetailPage
-      addRequestEditor={(data) => addRequestEditor({ data })}
       commentRequest={(data) => commentRequest({ data })}
       changes={changes}
       changesError={changesError}
@@ -163,7 +150,6 @@ function RequestRoute() {
       onViewChange={(view) => {
         void navigate({ search: { file: undefined, view } })
       }}
-      removeRequestEditor={(data) => removeRequestEditor({ data })}
       resolveRequest={(data) => resolveRequest({ data })}
       respondToRequest={(data) => respondToRequest({ data })}
       selectedDiff={selectedDiff}

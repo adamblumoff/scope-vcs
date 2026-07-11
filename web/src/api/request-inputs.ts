@@ -1,6 +1,5 @@
 import { parseRepoParams } from './repo-params'
 import type {
-  AddRequestEditorInput,
   CommentRequestInput,
   MergeRequestInput,
   NeedsResponseInput,
@@ -8,7 +7,6 @@ import type {
   RequestWorkflowResolutionDisposition,
   ResolveRequestInput,
   RespondRequestInput,
-  RemoveRequestEditorInput,
 } from './types'
 
 const RESOLVE_DISPOSITIONS = new Set<RequestWorkflowResolutionDisposition>([
@@ -87,29 +85,6 @@ export function parseMergeRequestInput(input: unknown): MergeRequestInput {
     body: parseOptionalBody(input),
     expected_head_oid: expectedHeadOid,
     expected_main_oid: expectedMainOid,
-  }
-}
-
-export function parseAddRequestEditorInput(
-  input: unknown,
-): AddRequestEditorInput {
-  const data = input as Partial<AddRequestEditorInput> | null
-  return {
-    ...parseRequestParams(input),
-    user_id: requiredString(data?.user_id, 'Editor user id is required.'),
-  }
-}
-
-export function parseRemoveRequestEditorInput(
-  input: unknown,
-): RemoveRequestEditorInput {
-  const data = input as Partial<RemoveRequestEditorInput> | null
-  return {
-    ...parseRequestParams(input),
-    editor_user_id: requiredString(
-      data?.editor_user_id,
-      'Editor user id is required.',
-    ),
   }
 }
 

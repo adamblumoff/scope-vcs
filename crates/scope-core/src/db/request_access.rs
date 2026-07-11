@@ -1,7 +1,7 @@
 use super::{entities, repository_from_model};
 use crate::{
     domain::{
-        requests::{Request, RequestActorRole, RequestBaseAudience, StartRequestInput},
+        requests::{Request, RequestActorRole, RequestAudience, StartRequestInput},
         store::{RepoPublicationState, RepositoryActor, StoredRepository},
     },
     error::ApiError,
@@ -12,18 +12,18 @@ pub(super) fn authorize_start_request(
     repo: &StoredRepository,
     mut input: StartRequestInput,
 ) -> Result<StartRequestInput, ApiError> {
-    let (author_role, base_audience) = match repo.access_for_user_id(&input.author_user_id).actor {
-        RepositoryActor::Owner => (RequestActorRole::Owner, RequestBaseAudience::Private),
-        RepositoryActor::Member => (RequestActorRole::Member, RequestBaseAudience::Private),
+    let author_role = match repo.access_for_user_id(&input.author_user_id).actor {
+        RepositoryActor::Owner => RequestActorRole::Owner,
+        RepositoryActor::Member => RequestActorRole::Member,
         RepositoryActor::Public => {
             if repo.record.publication_state != RepoPublicationState::Published {
                 return Err(ApiError::forbidden("published repository required"));
             }
-            (RequestActorRole::Public, RequestBaseAudience::Public)
+            input.audience = RequestAudience::Public;
+            RequestActorRole::Public
         }
     };
     input.author_role = author_role;
-    input.base_audience = base_audience;
     Ok(input)
 }
 
@@ -42,16 +42,17 @@ pub(super) fn request_actor_can_edit(
     request: &Request,
     user_id: &str,
 ) -> bool {
-    if request.author_user_id == user_id || request.editor_user_ids.contains(user_id) {
-        return true;
-    }
-    matches!(
+    let maintainer = matches!(
         repo.access_for_user_id(user_id).actor,
         RepositoryActor::Owner | RepositoryActor::Member
-    )
+    );
+    match request.audience {
+        RequestAudience::Public => true,
+        RequestAudience::Private => maintainer,
+    }
 }
 
-pub(super) fn ensure_request_editor(
+pub(super) fn ensure_request_collaborator(
     repo: &StoredRepository,
     request: &Request,
     user_id: &str,
@@ -59,7 +60,7 @@ pub(super) fn ensure_request_editor(
     if request_actor_can_edit(repo, request, user_id) {
         Ok(())
     } else {
-        Err(ApiError::forbidden("request edit access required"))
+        Err(ApiError::forbidden("request collaboration access required"))
     }
 }
 

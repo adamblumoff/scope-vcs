@@ -1,54 +1,29 @@
 mod support;
 
-use std::fs;
 use support::*;
 
 #[test]
-fn request_sync_refuses_dirty_worktree_before_login() {
-    let dir = TempDir::new("dirty");
+fn request_start_requires_a_name_before_login() {
+    let dir = TempDir::new("start-name");
     create_repo_with_head(dir.path());
-    fs::write(dir.path().join("dirty.txt"), "uncommitted\n").unwrap();
 
     scope_failure(
         dir.path(),
-        ["request", "sync-main"],
-        "commit or stash local changes before running scope request sync-main",
+        ["request", "start"],
+        "the following required arguments were not provided",
     );
 }
 
 #[test]
-fn request_sync_refuses_unattached_branch_before_login() {
-    let dir = TempDir::new("sync-unattached");
+fn obsolete_request_transport_commands_are_removed() {
+    let dir = TempDir::new("removed-request-transport");
     create_repo_with_head(dir.path());
 
-    scope_failure(
-        dir.path(),
-        ["request", "sync-main"],
-        "scope request sync-main requires a Scope request branch",
-    );
-}
-
-#[test]
-fn request_submit_refuses_unattached_branch_before_login() {
-    let dir = TempDir::new("submit-unattached");
-    create_repo_with_head(dir.path());
-
-    scope_failure(
-        dir.path(),
-        ["request", "submit", "--stake-credits", "1"],
-        "scope request submit requires a Scope request branch",
-    );
-}
-
-#[test]
-fn request_submit_refuses_detached_head_before_login() {
-    let dir = TempDir::new("detached");
-    create_repo_with_head(dir.path());
-    run_git(dir.path(), ["checkout", "--detach"]);
-
-    scope_failure(
-        dir.path(),
-        ["request", "submit", "--stake-credits", "1"],
-        "request commands require a named local branch",
-    );
+    for command in ["join", "pull", "share", "sync-main"] {
+        scope_failure(
+            dir.path(),
+            ["request", command],
+            &format!("unrecognized subcommand '{command}'"),
+        );
+    }
 }

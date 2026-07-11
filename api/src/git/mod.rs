@@ -7,7 +7,7 @@ pub(crate) mod upload;
 
 pub(crate) use credentials::*;
 
-use crate::domain::store::{MainPushMode, RepoPublicationState, RepositoryActor};
+use crate::domain::store::{MainPushMode, RepoPublicationState};
 use crate::{
     auth::scope::principal_for_user_id,
     config::*,
@@ -84,7 +84,7 @@ pub(crate) enum ReceivePackAccess {
         author_id: String,
         push_intent: ValidatedPushIntent,
     },
-    RequestEditor {
+    RequestContributor {
         author_id: String,
     },
 }
@@ -388,11 +388,11 @@ pub(crate) async fn receive_pack_access(
                         &repo,
                         &principal,
                         &author_id,
-                        push_policy.access.actor,
+                        push_policy.access,
                     )
                     .await?
                 {
-                    return Ok(ReceivePackAccess::RequestEditor { author_id });
+                    return Ok(ReceivePackAccess::RequestContributor { author_id });
                 }
                 return Err(ApiError::not_found(format!(
                     "repo {owner}/{repo_name} not found"
@@ -418,11 +418,11 @@ pub(crate) async fn receive_pack_access(
                                     &repo,
                                     &principal,
                                     &author_id,
-                                    push_policy.access.actor,
+                                    push_policy.access,
                                 )
                                 .await?
                                 {
-                                    return Ok(ReceivePackAccess::RequestEditor { author_id });
+                                    return Ok(ReceivePackAccess::RequestContributor { author_id });
                                 }
                                 return Err(error);
                             }
@@ -433,11 +433,11 @@ pub(crate) async fn receive_pack_access(
                         &repo,
                         &principal,
                         &author_id,
-                        push_policy.access.actor,
+                        push_policy.access,
                     )
                     .await?
                     {
-                        Ok(ReceivePackAccess::RequestEditor { author_id })
+                        Ok(ReceivePackAccess::RequestContributor { author_id })
                     } else {
                         Err(ApiError::forbidden("valid Scope push intent required"))
                     }
@@ -460,10 +460,10 @@ async fn actor_can_receive_request_push(
     repo: &crate::domain::store::StoredRepository,
     principal: &crate::domain::policy::Principal,
     author_id: &str,
-    actor: RepositoryActor,
+    access: crate::domain::store::RepositoryAccess,
 ) -> Result<bool, ApiError> {
     ensure_repo_read(state, repo, principal)?;
-    actor_has_open_editable_request(state, &repo.record.id, author_id, actor).await
+    actor_has_open_editable_request(state, &repo.record.id, author_id, access).await
 }
 
 fn optional_push_intent_from_headers(headers: &HeaderMap) -> Result<Option<String>, ApiError> {
@@ -497,7 +497,7 @@ pub(crate) async fn handle_git_receive_pack(
         ReceivePackAccess::PublishedMember { author_id, .. } => {
             ensure_published_receive_pack_staging_repo(state, owner, repo_name, author_id).await?
         }
-        ReceivePackAccess::RequestEditor { author_id } => {
+        ReceivePackAccess::RequestContributor { author_id } => {
             ensure_request_receive_pack_staging_repo(state, owner, repo_name, author_id).await?
         }
     });
@@ -510,7 +510,7 @@ pub(crate) async fn handle_git_receive_pack(
     let remote_user = match &access {
         ReceivePackAccess::FirstPush { author_id, .. } => author_id.as_str(),
         ReceivePackAccess::PublishedMember { author_id, .. } => author_id.as_str(),
-        ReceivePackAccess::RequestEditor { author_id } => author_id.as_str(),
+        ReceivePackAccess::RequestContributor { author_id } => author_id.as_str(),
     };
     let receive_started_at = Instant::now();
     let refs_before_receive = if method == "POST" {
@@ -592,7 +592,7 @@ pub(crate) async fn handle_git_receive_pack(
                     ));
                 }
                 ReceivePackAccess::PublishedMember { author_id, .. }
-                | ReceivePackAccess::RequestEditor { author_id } => author_id,
+                | ReceivePackAccess::RequestContributor { author_id } => author_id,
             };
             persist_request_ref_revision(
                 state,
@@ -612,16 +612,16 @@ pub(crate) async fn handle_git_receive_pack(
             return Ok(cgi.into_response());
         }
 
-        if matches!(&access, ReceivePackAccess::RequestEditor { .. }) {
+        if matches!(&access, ReceivePackAccess::RequestContributor { .. }) {
             return Err(ApiError::bad_request(
-                "request editors can only push request refs",
+                "public contributors can only push named request branches",
             ));
         }
 
         match access {
-            ReceivePackAccess::RequestEditor { .. } => {
+            ReceivePackAccess::RequestContributor { .. } => {
                 return Err(ApiError::bad_request(
-                    "request editors can only push request refs",
+                    "public contributors can only push named request branches",
                 ));
             }
             ReceivePackAccess::FirstPush {

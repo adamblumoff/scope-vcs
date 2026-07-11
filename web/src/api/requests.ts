@@ -1,6 +1,5 @@
 import { createApiClient } from '@/api/client'
 import type {
-  AddRequestEditorInput,
   CommentRequestInput,
   DeleteRequestInput,
   MergeRequestInput,
@@ -13,19 +12,16 @@ import type {
   RequestMutation,
   ReviewFileDiff,
   RequestParams,
-  RemoveRequestEditorInput,
   ResolveRequestInput,
   RespondRequestInput,
 } from './types'
 import { ApiRouteTemplates, buildApiPath } from './types.generated'
 
 export {
-  parseAddRequestEditorInput,
   parseCommentRequestInput,
   parseMergeRequestInput,
   parseNeedsResponseInput,
   parseRequestParams,
-  parseRemoveRequestEditorInput,
   parseResolveRequestInput,
   parseRespondRequestInput,
 } from './request-inputs'
@@ -131,31 +127,6 @@ export async function deleteRequestForRequest(
   return createApiClient().delete<RequestDelete>(requestPath(data), {
     auth: 'required',
   })
-}
-
-export async function addRequestEditorForRequest(
-  data: AddRequestEditorInput,
-): Promise<RequestMutation> {
-  return createApiClient().post<RequestMutation>(
-    requestRoute(ApiRouteTemplates.repoRequestEditors, data),
-    { auth: 'required', body: { user_id: data.user_id } },
-  )
-}
-
-export async function removeRequestEditorForRequest(
-  data: RemoveRequestEditorInput,
-): Promise<RequestMutation> {
-  return createApiClient().delete<RequestMutation>(
-    buildApiPath(ApiRouteTemplates.repoRequestEditor, {
-      owner: data.owner,
-      repo: data.repo,
-      request_id: data.request_id,
-      editor_user_id: data.editor_user_id,
-    }),
-    {
-      auth: 'required',
-    },
-  )
 }
 
 function requestCollectionPath(data: RepoParams) {

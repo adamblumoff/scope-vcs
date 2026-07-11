@@ -7,18 +7,17 @@ pub use settlement::{ResolutionDisposition, allowed_resolution_dispositions, set
 mod policy;
 pub use policy::{
     RequestMergeability, RequestMergeabilityStatus, RequestPermissions, request_actor_role,
-    request_base_audience, request_mergeability, request_permissions, request_visible_to_access,
+    request_mergeability, request_permissions, request_visible_to_access,
 };
 mod submission;
 use settlement::{CreditSettlementIds, settle_request_credits, settlement_event_body, u32_to_i32};
 pub use submission::{
     RecordWorkingRequestUploadInput, StartRequestInput, StartRequestMutation, SubmitRequestInput,
     SubmitRequestMutation, WorkingRequestUploadMutation, record_working_request_upload,
-    start_request, submit_request,
+    start_request, submit_request, validate_request_name,
 };
 
-const MAIN_BRANCH: &str = "main";
-pub const REQUEST_REF_PREFIX: &str = "refs/scope/requests/";
+pub const REQUEST_REF_PREFIX: &str = "refs/heads/";
 const REPO_DELETE_REFUND_LEDGER_ENTRY_PREFIX: &str = "repo_delete_refund:";
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -31,7 +30,7 @@ pub enum RequestActorRole {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(any(test, feature = "ts"), derive(ts_rs::TS))]
-pub enum RequestBaseAudience {
+pub enum RequestAudience {
     Public,
     Private,
 }
@@ -72,12 +71,10 @@ pub struct RequestSettlement {
 pub struct Request {
     pub id: String,
     pub repo_id: String,
+    pub name: String,
     pub author_user_id: String,
-    pub editor_user_ids: BTreeSet<String>,
     pub author_role: RequestActorRole,
-    pub base_audience: RequestBaseAudience,
-    pub target_branch: String,
-    pub request_ref: String,
+    pub audience: RequestAudience,
     pub base_main_oid: String,
     pub head_oid: String,
     pub git_snapshot: Option<SourceBlob>,
@@ -176,27 +173,6 @@ pub struct RequestRevisionMutation {
     pub request: Request,
     pub event: RequestEvent,
     pub source_blobs_to_delete: Vec<SourceBlob>,
-}
-
-#[derive(Clone, Debug)]
-pub struct AddRequestEditorInput {
-    pub request_id: String,
-    pub actor_user_id: String,
-    pub editor_user_id: String,
-    pub now_unix: u64,
-}
-
-#[derive(Clone, Debug)]
-pub struct RemoveRequestEditorInput {
-    pub request_id: String,
-    pub actor_user_id: String,
-    pub editor_user_id: String,
-    pub now_unix: u64,
-}
-
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct RequestEditorMutation {
-    pub request: Request,
 }
 
 #[derive(Clone, Debug)]
@@ -412,46 +388,6 @@ pub fn record_request_revision(
         request,
         event,
         source_blobs_to_delete: old_git_snapshot.into_iter().collect(),
-    })
-}
-
-pub fn add_request_editor(
-    requests: &mut BTreeMap<String, Request>,
-    input: AddRequestEditorInput,
-) -> Result<RequestEditorMutation, ApiError> {
-    validate_required_id("request id", &input.request_id)?;
-    validate_required_id("actor user id", &input.actor_user_id)?;
-    validate_required_id("editor user id", &input.editor_user_id)?;
-    if input.actor_user_id == input.editor_user_id {
-        return Err(ApiError::bad_request(
-            "request author does not need an editor invite",
-        ));
-    }
-    let request = open_request_mut(requests, &input.request_id)?;
-    if request.author_user_id == input.editor_user_id {
-        return Err(ApiError::bad_request(
-            "request author does not need an editor invite",
-        ));
-    }
-    request.editor_user_ids.insert(input.editor_user_id);
-    request.updated_at_unix = input.now_unix;
-    Ok(RequestEditorMutation {
-        request: request.clone(),
-    })
-}
-
-pub fn remove_request_editor(
-    requests: &mut BTreeMap<String, Request>,
-    input: RemoveRequestEditorInput,
-) -> Result<RequestEditorMutation, ApiError> {
-    validate_required_id("request id", &input.request_id)?;
-    validate_required_id("actor user id", &input.actor_user_id)?;
-    validate_required_id("editor user id", &input.editor_user_id)?;
-    let request = open_request_mut(requests, &input.request_id)?;
-    request.editor_user_ids.remove(&input.editor_user_id);
-    request.updated_at_unix = input.now_unix;
-    Ok(RequestEditorMutation {
-        request: request.clone(),
     })
 }
 
@@ -873,8 +809,8 @@ pub fn merge_request(
     })
 }
 
-pub fn canonical_request_ref(request_id: &str) -> String {
-    format!("{REQUEST_REF_PREFIX}{request_id}")
+pub fn canonical_request_ref(request_name: &str) -> String {
+    format!("{REQUEST_REF_PREFIX}{request_name}")
 }
 
 fn validate_required_id(label: &str, value: &str) -> Result<(), ApiError> {
@@ -918,15 +854,16 @@ fn ensure_event_id_available(
     }
 }
 
-fn ensure_request_ref_available(
+fn ensure_request_name_available(
     requests: &BTreeMap<String, Request>,
-    request_ref: &str,
+    repo_id: &str,
+    request_name: &str,
 ) -> Result<(), ApiError> {
     if requests
         .values()
-        .any(|request| request.request_ref == request_ref)
+        .any(|request| request.repo_id == repo_id && request.name == request_name)
     {
-        Err(ApiError::conflict("request ref already exists"))
+        Err(ApiError::conflict("request name already exists"))
     } else {
         Ok(())
     }

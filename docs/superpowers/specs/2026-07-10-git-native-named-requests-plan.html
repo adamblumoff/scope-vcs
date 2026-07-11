@@ -1,0 +1,625 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Implementation plan — Git-native named requests</title>
+  <script>
+    (() => {
+      const saved = localStorage.getItem('scope-plan-theme');
+      const dark = saved ? saved === 'dark' : matchMedia('(prefers-color-scheme: dark)').matches;
+      if (dark) document.documentElement.classList.add('dark');
+    })();
+  </script>
+  <style>
+    :root {
+      --bg: #faf9f5;
+      --surface: #ffffff;
+      --surface-soft: #f0eee6;
+      --ink: #171716;
+      --text: #41413e;
+      --muted: #7b7a74;
+      --line: #d5d2c8;
+      --accent: #d76f50;
+      --accent-soft: #f4ddd4;
+      --green: #71865a;
+      --green-soft: #e3e9da;
+      --code-bg: #1d1d1b;
+      --code-text: #eeeae0;
+      --shadow: 0 10px 30px rgba(30, 28, 22, .06);
+      --serif: ui-serif, Georgia, "Times New Roman", serif;
+      --sans: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+      --mono: ui-monospace, "SFMono-Regular", Menlo, Monaco, Consolas, monospace;
+    }
+
+    html.dark {
+      --bg: #181817;
+      --surface: #222220;
+      --surface-soft: #2a2926;
+      --ink: #f4f0e7;
+      --text: #d0cdc5;
+      --muted: #96938b;
+      --line: #403e39;
+      --accent: #e58a6d;
+      --accent-soft: #4b3028;
+      --green: #a5b88a;
+      --green-soft: #303a2a;
+      --code-bg: #0f0f0e;
+      --code-text: #f1ede3;
+      --shadow: none;
+    }
+
+    * { box-sizing: border-box; }
+    html { scroll-behavior: smooth; }
+    body {
+      margin: 0;
+      padding: 54px 30px 100px;
+      color: var(--text);
+      background: var(--bg);
+      font-family: var(--sans);
+      line-height: 1.55;
+      -webkit-font-smoothing: antialiased;
+    }
+    button, input { font: inherit; }
+    code { font-family: var(--mono); font-size: .92em; }
+    .page { width: min(1080px, 100%); margin: 0 auto; }
+
+    .theme-toggle {
+      position: fixed;
+      z-index: 10;
+      top: 16px;
+      right: 18px;
+      display: inline-flex;
+      align-items: center;
+      gap: 7px;
+      padding: 7px 10px;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      color: var(--muted);
+      background: color-mix(in srgb, var(--surface) 92%, transparent);
+      box-shadow: var(--shadow);
+      cursor: pointer;
+      font: 650 11px/1 var(--mono);
+    }
+    .theme-toggle:hover { color: var(--ink); border-color: var(--muted); }
+
+    .page-head { max-width: 840px; margin-bottom: 44px; }
+    .eyebrow {
+      margin-bottom: 11px;
+      color: var(--muted);
+      font: 700 12px/1 var(--mono);
+      letter-spacing: .08em;
+      text-transform: uppercase;
+    }
+    h1, h2, h3 { color: var(--ink); }
+    h1 {
+      margin: 0 0 18px;
+      font: 500 clamp(36px, 5vw, 52px)/1.08 var(--serif);
+      letter-spacing: -.025em;
+    }
+    h2 { margin: 0; font: 500 27px/1.15 var(--serif); letter-spacing: -.015em; }
+    h3 { margin: 0 0 5px; font: 600 17px/1.3 var(--serif); }
+    p { margin: 0 0 12px; }
+
+    .prompt-box {
+      padding: 16px 19px;
+      border: 1.5px solid var(--line);
+      border-radius: 11px;
+      color: var(--text);
+      background: var(--surface-soft);
+      font-size: 14px;
+    }
+    .prompt-box .label {
+      display: block;
+      margin-bottom: 5px;
+      color: var(--muted);
+      font: 700 10px/1 var(--mono);
+      letter-spacing: .07em;
+      text-transform: uppercase;
+    }
+
+    .summary {
+      display: grid;
+      grid-template-columns: repeat(4, 1fr);
+      gap: 13px;
+      margin-bottom: 62px;
+    }
+    .summary-cell {
+      padding: 17px 18px;
+      border: 1.5px solid var(--line);
+      border-radius: 11px;
+      background: var(--surface);
+    }
+    .summary-key {
+      margin-bottom: 5px;
+      color: var(--muted);
+      font: 700 10px/1 var(--mono);
+      letter-spacing: .06em;
+      text-transform: uppercase;
+    }
+    .summary-value { color: var(--ink); font-size: 16px; font-weight: 650; }
+    .summary-value.accent { color: var(--accent); }
+
+    section { margin-bottom: 62px; scroll-margin-top: 28px; }
+    .section-head { display: flex; align-items: baseline; gap: 13px; margin-bottom: 7px; }
+    .section-number {
+      padding: 3px 8px;
+      border-radius: 7px;
+      color: var(--ink);
+      background: var(--accent-soft);
+      font: 700 11px/1.2 var(--mono);
+    }
+    .section-intro { max-width: 760px; margin-bottom: 25px; color: var(--muted); font-size: 14.5px; }
+
+    .decision {
+      max-width: 850px;
+      padding: 19px 22px;
+      border: 1.5px solid var(--line);
+      border-left: 4px solid var(--accent);
+      border-radius: 10px;
+      background: var(--surface);
+    }
+    .decision strong { color: var(--ink); }
+
+    .terminal {
+      overflow: hidden;
+      border: 1.5px solid var(--line);
+      border-radius: 11px;
+      background: var(--code-bg);
+      box-shadow: var(--shadow);
+    }
+    .terminal-head {
+      padding: 10px 15px;
+      border-bottom: 1px solid #3c3a35;
+      color: #969187;
+      background: #292825;
+      font: 650 11px/1 var(--mono);
+    }
+    .terminal pre {
+      margin: 0;
+      padding: 20px;
+      color: var(--code-text);
+      white-space: pre-wrap;
+      overflow-wrap: anywhere;
+      font: 600 13px/1.65 var(--mono);
+    }
+    .terminal .prompt { color: #aabf8e; }
+    .terminal .new { color: #e6ad83; }
+    .terminal .muted { color: #969187; }
+
+    .mapping {
+      display: grid;
+      grid-template-columns: 1fr 38px 1fr 38px 1fr;
+      align-items: stretch;
+      margin-top: 18px;
+    }
+    .mapping-box {
+      padding: 17px;
+      border: 1.5px solid var(--line);
+      border-radius: 10px;
+      background: var(--surface);
+    }
+    .mapping-label { color: var(--muted); font: 700 10px/1 var(--mono); text-transform: uppercase; }
+    .mapping-value { margin-top: 7px; color: var(--ink); font: 700 15px/1.4 var(--mono); overflow-wrap: anywhere; }
+    .mapping-arrow { display: grid; place-items: center; color: var(--accent); font-size: 19px; }
+
+    .rules {
+      margin-top: 20px;
+      overflow: hidden;
+      border: 1.5px solid var(--line);
+      border-radius: 11px;
+      background: var(--surface);
+    }
+    .rule {
+      display: grid;
+      grid-template-columns: 145px 1fr;
+      gap: 18px;
+      padding: 13px 17px;
+      border-bottom: 1px solid var(--line);
+      font-size: 13.5px;
+    }
+    .rule:last-child { border-bottom: 0; }
+    .rule strong { color: var(--ink); }
+    .rule span { color: var(--muted); }
+
+    .flow {
+      padding: 25px;
+      overflow-x: auto;
+      border: 1.5px solid var(--line);
+      border-radius: 11px;
+      background: var(--surface);
+    }
+    .flow svg { display: block; min-width: 790px; width: 100%; }
+    .caption { margin: 11px 0 0; color: var(--muted); font-size: 12.5px; }
+
+    .access {
+      overflow: hidden;
+      border: 1.5px solid var(--line);
+      border-radius: 11px;
+      background: var(--surface);
+    }
+    .access-row {
+      display: grid;
+      grid-template-columns: 1.05fr 1.1fr 1.35fr 1.15fr;
+      border-bottom: 1px solid var(--line);
+    }
+    .access-row:last-child { border-bottom: 0; }
+    .access-cell { padding: 13px 15px; font-size: 13px; }
+    .access-cell + .access-cell { border-left: 1px solid var(--line); }
+    .access-row.head { color: var(--ink); background: var(--surface-soft); font: 700 10px/1 var(--mono); letter-spacing: .05em; text-transform: uppercase; }
+    .yes { color: var(--green); font-weight: 750; }
+    .no { color: var(--accent); font-weight: 750; }
+
+    .schema-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 20px; }
+    .code-block .file {
+      margin-bottom: 8px;
+      color: var(--muted);
+      font: 650 11px/1 var(--mono);
+    }
+    .code {
+      min-height: 100%;
+      padding: 18px 20px;
+      overflow-x: auto;
+      border-radius: 11px;
+      color: var(--code-text);
+      background: var(--code-bg);
+    }
+    .code pre { margin: 0; white-space: pre; font: 12px/1.65 var(--mono); }
+    .code .kw { color: #e58a6d; }
+    .code .str { color: #aabf8e; }
+    .code .cm { color: #8e8980; }
+
+    .milestones { display: flex; flex-direction: column; }
+    .milestone {
+      display: grid;
+      grid-template-columns: 105px 27px 1fr;
+      gap: 0 16px;
+    }
+    .milestone .phase { padding-top: 3px; color: var(--muted); text-align: right; font: 650 11px/1.4 var(--mono); }
+    .rail { display: flex; flex-direction: column; align-items: center; }
+    .dot { width: 13px; height: 13px; margin-top: 4px; border: 3px solid var(--accent); border-radius: 50%; background: var(--surface); }
+    .line { width: 2px; flex: 1; margin: 5px 0; background: var(--line); }
+    .milestone:last-child .line { display: none; }
+    .milestone-body { padding-bottom: 31px; }
+    .milestone-body p { max-width: 690px; color: var(--muted); font-size: 13.5px; }
+    .tags { display: flex; flex-wrap: wrap; gap: 7px; }
+    .tag { padding: 3px 7px; border: 1px solid var(--line); border-radius: 5px; background: var(--surface-soft); font: 650 10.5px/1.2 var(--mono); }
+
+    .delete-list { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; }
+    .delete-item {
+      padding: 13px 15px;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      color: var(--muted);
+      background: var(--surface);
+      font: 650 12px/1.35 var(--mono);
+    }
+    .delete-item::before { content: "− "; color: var(--accent); font-weight: 900; }
+
+    .checks { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+    .check {
+      padding: 15px 17px;
+      border: 1.5px solid var(--line);
+      border-left: 4px solid var(--green);
+      border-radius: 9px;
+      background: var(--surface);
+    }
+    .check strong { display: block; margin-bottom: 3px; color: var(--ink); font-size: 13.5px; }
+    .check span { color: var(--muted); font-size: 12.5px; }
+
+    .note {
+      margin-top: 20px;
+      padding: 16px 19px;
+      border-radius: 10px;
+      color: var(--text);
+      background: var(--green-soft);
+      font-size: 13.5px;
+    }
+    .note strong { color: var(--ink); }
+
+    footer { padding-top: 12px; border-top: 1px solid var(--line); color: var(--muted); font: 11px/1.4 var(--mono); }
+
+    @media (max-width: 860px) {
+      .summary { grid-template-columns: 1fr 1fr; }
+      .schema-grid { grid-template-columns: 1fr; }
+      .delete-list { grid-template-columns: 1fr 1fr; }
+    }
+    @media (max-width: 680px) {
+      body { padding: 64px 18px 70px; }
+      .summary, .checks, .delete-list { grid-template-columns: 1fr; }
+      .mapping { grid-template-columns: 1fr; gap: 8px; }
+      .mapping-arrow { transform: rotate(90deg); }
+      .rule { grid-template-columns: 1fr; gap: 3px; }
+      .access { overflow-x: auto; }
+      .access-row { min-width: 700px; }
+      .milestone { grid-template-columns: 72px 22px 1fr; gap: 0 10px; }
+      .theme-toggle { top: 12px; right: 12px; }
+    }
+  </style>
+</head>
+<body>
+  <button class="theme-toggle" id="theme-toggle" type="button" aria-label="Toggle color theme"><span id="theme-icon">◐</span><span id="theme-label">Theme</span></button>
+
+  <main class="page">
+    <header class="page-head">
+      <div class="eyebrow">Implementation plan · Scope VCS</div>
+      <h1>Git-native named requests</h1>
+      <div class="prompt-box">
+        <span class="label">Product direction</span>
+        A clone or pull of the Scope origin should include every request available to that user.
+        Requests should have required human names and appear directly as <code>origin/&lt;name&gt;</code>.
+        There should be no join or sharing flow. A small <code>scope pull</code> command may handle
+        authentication and provide clearer output, but normal Git should continue to work.
+      </div>
+    </header>
+
+    <div class="summary" aria-label="Plan summary">
+      <div class="summary-cell"><div class="summary-key">Core transport</div><div class="summary-value accent">Standard Git refs</div></div>
+      <div class="summary-cell"><div class="summary-key">Visible branch</div><div class="summary-value">origin/&lt;name&gt;</div></div>
+      <div class="summary-cell"><div class="summary-key">Access classes</div><div class="summary-value">Public · Maintainer</div></div>
+      <div class="summary-cell"><div class="summary-key">Special join flow</div><div class="summary-value">None</div></div>
+    </div>
+
+    <section>
+      <div class="section-head"><span class="section-number">01</span><h2>Decision</h2></div>
+      <p class="section-intro">Requests are repository refs, not resources that users separately join or download.</p>
+      <div class="decision">
+        <p><strong>Every request the current user can access is advertised by the Git remote as a normal branch.</strong></p>
+        <p>
+          Clone and pull transfer main plus those request branches in one upload-pack negotiation.
+          REST continues to own request metadata and lifecycle; Git owns code and history transport.
+        </p>
+      </div>
+    </section>
+
+    <section>
+      <div class="section-head"><span class="section-number">02</span><h2>Request naming</h2></div>
+      <p class="section-intro">The request name is the required, stable Git identity. The title is optional, defaults to the request name, and may change later.</p>
+
+      <div class="terminal">
+        <div class="terminal-head">Create a request</div>
+        <pre><span class="prompt">$</span> scope request start railway-upload
+
+Created public request <span class="new">railway-upload</span>
+Title: railway-upload
+Branch: railway-upload
+Remote: origin/railway-upload
+Base: public main at 6c48f7b
+
+<span class="muted">Optional: --title "Restore Railway CLI uploads"</span></pre>
+      </div>
+
+      <div class="mapping" aria-label="Name to Git ref mapping">
+        <div class="mapping-box"><div class="mapping-label">Request name</div><div class="mapping-value">railway-upload</div></div>
+        <div class="mapping-arrow">→</div>
+        <div class="mapping-box"><div class="mapping-label">Server ref</div><div class="mapping-value">refs/heads/railway-upload</div></div>
+        <div class="mapping-arrow">→</div>
+        <div class="mapping-box"><div class="mapping-label">Local remote ref</div><div class="mapping-value">origin/railway-upload</div></div>
+      </div>
+
+      <div class="rules">
+        <div class="rule"><strong>Required</strong><span>A request name is required by <code>scope request start</code>.</span></div>
+        <div class="rule"><strong>Optional title</strong><span><code>--title</code> defaults to the request name when omitted.</span></div>
+        <div class="rule"><strong>Format</strong><span>Lowercase kebab case: <code>[a-z0-9][a-z0-9-]{0,47}</code>.</span></div>
+        <div class="rule"><strong>Reserved</strong><span><code>main</code>, <code>HEAD</code>, and future platform branch names are rejected.</span></div>
+        <div class="rule"><strong>Unique</strong><span>Names are unique across the repository’s complete request history.</span></div>
+        <div class="rule"><strong>Immutable</strong><span>The name never changes. The title remains editable.</span></div>
+        <div class="rule"><strong>Internal ID</strong><span><code>req_…</code> remains the database identity for URLs, events, and foreign keys.</span></div>
+      </div>
+    </section>
+
+    <section>
+      <div class="section-head"><span class="section-number">03</span><h2>Clone and pull flow</h2></div>
+      <p class="section-intro">A single authenticated Git negotiation returns main and every visible request. There is no N+1 bundle fetch.</p>
+
+      <div class="flow">
+        <svg viewBox="0 0 900 260" role="img" aria-labelledby="flow-title flow-desc" xmlns="http://www.w3.org/2000/svg">
+          <title id="flow-title">Named request clone and pull flow</title>
+          <desc id="flow-desc">The CLI authenticates, the API resolves the access class, the read-view builder assembles visible refs, and Git fetch stores remote-tracking branches.</desc>
+          <defs>
+            <marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10z" fill="var(--muted)"/></marker>
+          </defs>
+          <g font-family="var(--mono)" text-anchor="middle">
+            <rect x="20" y="70" width="175" height="76" rx="10" fill="var(--surface-soft)" stroke="var(--line)" stroke-width="1.5"/>
+            <text x="108" y="101" fill="var(--ink)" font-size="13" font-weight="700">scope clone / pull</text>
+            <text x="108" y="122" fill="var(--muted)" font-size="10.5">credential helper</text>
+
+            <rect x="255" y="70" width="175" height="76" rx="10" fill="var(--surface)" stroke="var(--line)" stroke-width="1.5"/>
+            <text x="343" y="101" fill="var(--ink)" font-size="13" font-weight="700">Authenticate</text>
+            <text x="343" y="122" fill="var(--muted)" font-size="10.5">public or maintainer</text>
+
+            <rect x="490" y="45" width="190" height="126" rx="10" fill="var(--code-bg)" stroke="var(--code-bg)"/>
+            <text x="585" y="82" fill="var(--code-text)" font-size="13" font-weight="700">Git read-view builder</text>
+            <text x="585" y="105" fill="#aabf8e" font-size="10.5">refs/heads/main</text>
+            <text x="585" y="124" fill="#e6ad83" font-size="10.5">refs/heads/railway-upload</text>
+            <text x="585" y="143" fill="#e6ad83" font-size="10.5">refs/heads/auth-timeout</text>
+
+            <rect x="740" y="70" width="140" height="76" rx="10" fill="var(--surface-soft)" stroke="var(--line)" stroke-width="1.5"/>
+            <text x="810" y="101" fill="var(--ink)" font-size="13" font-weight="700">Git fetch</text>
+            <text x="810" y="122" fill="var(--muted)" font-size="10.5">origin/* updated</text>
+          </g>
+          <g fill="none" stroke="var(--muted)" stroke-width="1.5" marker-end="url(#arrow)">
+            <path d="M195 108 H255"/><path d="M430 108 H490"/><path d="M680 108 H740"/>
+          </g>
+          <g fill="var(--muted)" font-family="var(--mono)" font-size="9.5" text-anchor="middle">
+            <text x="225" y="96">bearer</text><text x="460" y="96">view key</text><text x="710" y="96">upload-pack</text>
+          </g>
+        </svg>
+        <p class="caption">The public view is assembled without private objects. Hidden refs are not the security boundary; physically absent objects are.</p>
+      </div>
+
+      <div class="terminal" style="margin-top:20px">
+        <div class="terminal-head">Incremental pull</div>
+        <pre><span class="prompt">$</span> scope pull
+Fetching origin as @public-contributor…
+  <span class="new">[new request]</span> railway-upload → origin/railway-upload
+  <span class="new">[updated]</span> auth-timeout   81a0e1c..9e73b24
+Main is already up to date.
+
+<span class="prompt">$</span> git switch --track origin/railway-upload
+Switched to a new branch 'railway-upload'</pre>
+      </div>
+
+      <div class="note">
+        <strong><code>scope pull</code> is optional.</strong> It repairs Scope credential configuration when needed,
+        runs a normal fast-forward-only Git pull, and summarizes request changes. A repository created with
+        <code>scope clone</code> must also work with ordinary <code>git fetch</code> and <code>git pull</code>.
+      </div>
+    </section>
+
+    <section>
+      <div class="section-head"><span class="section-number">04</span><h2>Access model</h2></div>
+      <p class="section-intro">Access changes which refs the remote advertises and accepts. It does not create a second collaboration workflow.</p>
+
+      <div class="access" role="table" aria-label="Request access matrix">
+        <div class="access-row head" role="row"><div class="access-cell">Viewer</div><div class="access-cell">Main</div><div class="access-cell">Requests fetched</div><div class="access-cell">Request push</div></div>
+        <div class="access-row" role="row"><div class="access-cell">Anonymous</div><div class="access-cell">Public projection</div><div class="access-cell">Public</div><div class="access-cell no">No</div></div>
+        <div class="access-row" role="row"><div class="access-cell">Signed-in contributor</div><div class="access-cell">Public projection</div><div class="access-cell">Public</div><div class="access-cell yes">Open public</div></div>
+        <div class="access-row" role="row"><div class="access-cell">Maintainer</div><div class="access-cell">Private/raw</div><div class="access-cell">Public + private</div><div class="access-cell yes">All open</div></div>
+      </div>
+
+      <div class="rules">
+        <div class="rule"><strong>Public push</strong><span>Authenticated contributors may fast-forward an open public request.</span></div>
+        <div class="rule"><strong>Private push</strong><span>Only maintainers may read or update private requests.</span></div>
+        <div class="rule"><strong>Concurrency</strong><span>The current request head must match; stale pushes fetch and rebase.</span></div>
+        <div class="rule"><strong>History</strong><span>Force-push and ref deletion are rejected. Every revision records its actor.</span></div>
+        <div class="rule"><strong>Closed requests</strong><span>Remain fetchable as read-only refs so unmerged history does not disappear.</span></div>
+      </div>
+    </section>
+
+    <section>
+      <div class="section-head"><span class="section-number">05</span><h2>Data and API shape</h2></div>
+      <p class="section-intro">The domain stores request identity and policy. The Git ref is derived; the filesystem read view remains disposable.</p>
+
+      <div class="schema-grid">
+        <div class="code-block">
+          <div class="file">scope-core · request identity</div>
+          <div class="code"><pre><span class="kw">struct</span> Request {
+  id: RequestId,          <span class="cm">// req_…</span>
+  repo_id: RepoId,
+  name: RequestName,      <span class="cm">// railway-upload</span>
+  title: String,
+  audience: Audience,     <span class="cm">// Public | Private</span>
+  author_user_id: UserId,
+  base_main_oid: GitOid,
+  head_oid: GitOid,
+  state: RequestState,
+}
+
+<span class="kw">fn</span> request_ref(name: &amp;RequestName) -&gt; String {
+  format!(<span class="str">"refs/heads/{name}"</span>)
+}</pre></div>
+        </div>
+        <div class="code-block">
+          <div class="file">upload-pack · visible ref manifest</div>
+          <div class="code"><pre><span class="kw">struct</span> GitReadView {
+  main: MainSnapshot,
+  requests: Vec&lt;VisibleRequestRef&gt;,
+}
+
+<span class="kw">struct</span> VisibleRequestRef {
+  name: RequestName,
+  head_oid: GitOid,
+  snapshot: GitSnapshot,
+  writable: bool,
+}
+
+<span class="cm">// Cache key:</span>
+<span class="cm">// main fingerprint + sorted request</span>
+<span class="cm">// name/head/state + semantics version</span></pre></div>
+        </div>
+      </div>
+
+      <div class="note">
+        <strong>No compatibility layer.</strong> This pre-alpha change replaces old
+        <code>refs/scope/requests/*</code> refs and request bundle transport. Existing disposable requests may be recreated.
+      </div>
+    </section>
+
+    <section>
+      <div class="section-head"><span class="section-number">06</span><h2>Implementation milestones</h2></div>
+      <p class="section-intro">Build from the domain boundary outward. Each slice has one observable outcome.</p>
+
+      <div class="milestones">
+        <div class="milestone">
+          <div class="phase">Slice 1</div><div class="rail"><span class="dot"></span><span class="line"></span></div>
+          <div class="milestone-body"><h3>Name and audience invariants</h3><p>Add required immutable request names, uniqueness and reserved-name validation, explicit maintainer audience choice, and canonical named-ref derivation.</p><div class="tags"><span class="tag">scope-core</span><span class="tag">database</span><span class="tag">API contract</span></div></div>
+        </div>
+        <div class="milestone">
+          <div class="phase">Slice 2</div><div class="rail"><span class="dot"></span><span class="line"></span></div>
+          <div class="milestone-body"><h3>One access decision</h3><p>Replace author/editor branch permissions with public/private request policy consumed by HTTP, upload-pack, and receive-pack.</p><div class="tags"><span class="tag">domain policy</span><span class="tag">negative tests</span></div></div>
+        </div>
+        <div class="milestone">
+          <div class="phase">Slice 3</div><div class="rail"><span class="dot"></span><span class="line"></span></div>
+          <div class="milestone-body"><h3>Multi-ref Git read views</h3><p>Build public and maintainer repositories containing main plus all visible named request refs. Permit signed-in public users on the permissioned read endpoint.</p><div class="tags"><span class="tag">upload-pack</span><span class="tag">view cache</span><span class="tag">projection safety</span></div></div>
+        </div>
+        <div class="milestone">
+          <div class="phase">Slice 4</div><div class="rail"><span class="dot"></span><span class="line"></span></div>
+          <div class="milestone-body"><h3>Named request receive-pack</h3><p>Route <code>main</code> separately and resolve every other accepted branch name to a request. Enforce audience, state, fast-forward ancestry, expected head, and public safety.</p><div class="tags"><span class="tag">receive-pack</span><span class="tag">revision events</span></div></div>
+        </div>
+        <div class="milestone">
+          <div class="phase">Slice 5</div><div class="rail"><span class="dot"></span><span class="line"></span></div>
+          <div class="milestone-body"><h3>CLI and web simplification</h3><p>Require a request name at start, default an omitted title to that name, add thin <code>scope pull</code>, show <code>origin/&lt;name&gt;</code>, and remove join, share, editor, bundle, and request-specific pull surfaces.</p><div class="tags"><span class="tag">CLI</span><span class="tag">web</span><span class="tag">generated types</span></div></div>
+        </div>
+        <div class="milestone">
+          <div class="phase">Slice 6</div><div class="rail"><span class="dot"></span><span class="line"></span></div>
+          <div class="milestone-body"><h3>End-to-end verification</h3><p>Exercise contributor and maintainer clones, incremental pulls, concurrent request pushes, closed history, and private-object non-reachability in production-shaped tests.</p><div class="tags"><span class="tag">CLI workflow</span><span class="tag">Git protocol</span><span class="tag">security</span></div></div>
+        </div>
+      </div>
+    </section>
+
+    <section>
+      <div class="section-head"><span class="section-number">07</span><h2>Delete with the old model</h2></div>
+      <p class="section-intro">The new transport should leave the system smaller, not preserve two ways to acquire a request branch.</p>
+      <div class="delete-list">
+        <div class="delete-item">scope request join</div>
+        <div class="delete-item">scope request pull</div>
+        <div class="delete-item">scope request share</div>
+        <div class="delete-item">editor_user_ids</div>
+        <div class="delete-item">editor API endpoints</div>
+        <div class="delete-item">branch.bundle endpoint</div>
+        <div class="delete-item">local join metadata</div>
+        <div class="delete-item">bundle temp files</div>
+        <div class="delete-item">special fetch orchestration</div>
+      </div>
+    </section>
+
+    <section>
+      <div class="section-head"><span class="section-number">08</span><h2>Acceptance checks</h2></div>
+      <p class="section-intro">The change is complete when plain Git accurately reflects the user’s Scope access.</p>
+      <div class="checks">
+        <div class="check"><strong>Contributor clone</strong><span>Public main and every public request arrive as <code>origin/&lt;name&gt;</code>; private objects are unreachable.</span></div>
+        <div class="check"><strong>Maintainer clone</strong><span>Private main plus public and private request branches arrive in one negotiation.</span></div>
+        <div class="check"><strong>Incremental pull</strong><span>Normal <code>git pull</code> discovers new requests and updates changed request refs.</span></div>
+        <div class="check"><strong>Scope pull equivalence</strong><span><code>scope pull</code> produces the same refs and adds only auth repair and readable output.</span></div>
+        <div class="check"><strong>Named checkout</strong><span><code>git switch --track origin/railway-upload</code> works without a join call.</span></div>
+        <div class="check"><strong>Concurrent update</strong><span>A stale public push is rejected until the contributor fetches and rebases.</span></div>
+        <div class="check"><strong>Closed history</strong><span>Closed request refs remain readable and reject all subsequent pushes.</span></div>
+        <div class="check"><strong>Name safety</strong><span>Invalid, duplicate, reserved, and ref-injection names fail before persistence.</span></div>
+      </div>
+    </section>
+
+    <footer>Scope VCS · Git-native named requests · Implementation plan · 2026-07-10</footer>
+  </main>
+
+  <script>
+    const button = document.getElementById('theme-toggle');
+    const label = document.getElementById('theme-label');
+
+    function syncThemeLabel() {
+      const dark = document.documentElement.classList.contains('dark');
+      label.textContent = dark ? 'Light' : 'Dark';
+      button.setAttribute('aria-pressed', String(dark));
+    }
+
+    button.addEventListener('click', () => {
+      document.documentElement.classList.toggle('dark');
+      const dark = document.documentElement.classList.contains('dark');
+      localStorage.setItem('scope-plan-theme', dark ? 'dark' : 'light');
+      syncThemeLabel();
+    });
+
+    syncThemeLabel();
+  </script>
+</body>
+</html>

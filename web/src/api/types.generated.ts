@@ -34,7 +34,7 @@ export type HistoryRewriteAction = "redact-public-history";
 
 export type RequestActorRole = "Public" | "Member" | "Owner";
 
-export type RequestBaseAudience = "Public" | "Private";
+export type RequestAudience = "Public" | "Private";
 
 export type RequestState = "Working" | "Submitted" | "NeedsResponse" | "Resolved" | "Withdrawn";
 
@@ -176,9 +176,9 @@ export type RequestDetailResponse = { request: RequestSummaryResponse, events: A
 
 export type RequestMutationResponse = { request: RequestSummaryResponse, };
 
-export type RequestSummaryResponse = { id: string, title: string, author_user_id: string, editor_user_ids: Array<string>, author_role: RequestActorRole, base_audience: RequestBaseAudience, target_branch: string, request_ref: string, base_main_oid: GitOid, head_oid: GitOid, state: RequestState, stake_credits: number, disposition: RequestDisposition | null, settlement: RequestSettlementResponse | null, created_at_unix: number, updated_at_unix: number, resolved_at_unix: number | null, permissions: RequestPermissionsResponse, mergeability: RequestMergeabilityResponse, resolution_options: Array<RequestResolutionOptionResponse>, merge_settlement_preview: RequestSettlementPreviewResponse, };
+export type RequestSummaryResponse = { id: string, name: string, title: string, author_user_id: string, author_role: RequestActorRole, audience: RequestAudience, base_main_oid: GitOid, head_oid: GitOid, state: RequestState, stake_credits: number, disposition: RequestDisposition | null, settlement: RequestSettlementResponse | null, created_at_unix: number, updated_at_unix: number, resolved_at_unix: number | null, permissions: RequestPermissionsResponse, mergeability: RequestMergeabilityResponse, resolution_options: Array<RequestResolutionOptionResponse>, merge_settlement_preview: RequestSettlementPreviewResponse, };
 
-export type RequestPermissionsResponse = { can_comment: boolean, can_pull_branch: boolean, can_push_branch: boolean, can_delete: boolean, can_invite_editor: boolean, can_mark_needs_response: boolean, can_respond: boolean, can_resolve: boolean, can_merge: boolean, };
+export type RequestPermissionsResponse = { can_comment: boolean, can_pull_branch: boolean, can_push_branch: boolean, can_delete: boolean, can_mark_needs_response: boolean, can_respond: boolean, can_resolve: boolean, can_merge: boolean, };
 
 export type RequestMergeabilityStatus = "Ready" | "Closed" | "NotReady" | "NotMaintainer" | "MissingRequestBranch";
 
@@ -194,9 +194,7 @@ export type RequestEventResponse = { id: string, actor_user_id: string, kind: Re
 
 export type RequestDeleteResponse = { deleted: boolean, request: RequestSummaryResponse | null, };
 
-export type StartRequestRequest = { title: string, };
-
-export type RequestEditorRequest = { user_id: string, };
+export type StartRequestRequest = { name: string, title: string | null, audience: RequestAudience, };
 
 export type SubmitRequestRequest = { head_oid: string, stake_credits: number | null, };
 
@@ -229,8 +227,6 @@ export const ApiRouteTemplates = {
   repoFileContent: "/v1/repos/{owner}/{repo}/files/content",
   repoRequestChanges: "/v1/repos/{owner}/{repo}/requests/{request_id}/changes",
   repoRequestFileDiff: "/v1/repos/{owner}/{repo}/requests/{request_id}/file-diff",
-  repoRequestEditors: "/v1/repos/{owner}/{repo}/requests/{request_id}/editors",
-  repoRequestEditor: "/v1/repos/{owner}/{repo}/requests/{request_id}/editors/{editor_user_id}",
   repoRequestComments: "/v1/repos/{owner}/{repo}/requests/{request_id}/comments",
   repoRequestNeedsResponse: "/v1/repos/{owner}/{repo}/requests/{request_id}/needs-response",
   repoRequestRespond: "/v1/repos/{owner}/{repo}/requests/{request_id}/respond",

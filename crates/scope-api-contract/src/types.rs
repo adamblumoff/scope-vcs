@@ -4,7 +4,7 @@ use scope_core::{
         policy::Visibility,
         repo_config::RepoConfig,
         requests::{
-            RequestActorRole, RequestBaseAudience, RequestDisposition, RequestEventKind,
+            RequestActorRole, RequestAudience, RequestDisposition, RequestEventKind,
             RequestMergeabilityStatus, RequestState, ResolutionDisposition,
         },
         store::{FirstPushTokenStatus, RepoPublicationState, RepositoryActor},
@@ -319,13 +319,11 @@ pub struct RequestDeleteResponse {
 #[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 pub struct RequestSummaryResponse {
     pub id: String,
+    pub name: String,
     pub title: String,
     pub author_user_id: String,
-    pub editor_user_ids: Vec<String>,
     pub author_role: RequestActorRole,
-    pub base_audience: RequestBaseAudience,
-    pub target_branch: String,
-    pub request_ref: String,
+    pub audience: RequestAudience,
     pub base_main_oid: GitOid,
     pub head_oid: GitOid,
     pub state: RequestState,
@@ -348,7 +346,6 @@ pub struct RequestPermissionsResponse {
     pub can_pull_branch: bool,
     pub can_push_branch: bool,
     pub can_delete: bool,
-    pub can_invite_editor: bool,
     pub can_mark_needs_response: bool,
     pub can_respond: bool,
     pub can_resolve: bool,
@@ -413,7 +410,9 @@ pub struct SubmitRequestRequest {
 #[derive(Debug, Deserialize, Serialize)]
 #[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 pub struct StartRequestRequest {
-    pub title: String,
+    pub name: String,
+    pub title: Option<String>,
+    pub audience: RequestAudience,
 }
 
 #[derive(Debug, Deserialize, Serialize)]

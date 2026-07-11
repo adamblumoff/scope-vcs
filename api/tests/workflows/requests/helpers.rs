@@ -1,7 +1,7 @@
 use super::*;
 use crate::domain::requests::{
-    RecordRequestRevisionInput, RequestActorRole, RequestBaseAudience, StartRequestInput,
-    SubmitRequestInput,
+    RecordRequestRevisionInput, RequestActorRole, RequestAudience, StartRequestInput,
+    SubmitRequestInput, canonical_request_ref,
 };
 
 pub(super) struct PublicMergeFixture {
@@ -63,7 +63,8 @@ pub(super) async fn public_merge_fixture(
     }
     commit_all(&request_repo, "public request change");
     let request_head = git_head_oid(&request_repo);
-    let request_ref = canonical_request_ref(request_id);
+    let request_name = request_name(request_id);
+    let request_ref = canonical_request_ref(&request_name);
     run_git(
         Some(&request_repo),
         &["update-ref", &request_ref, &request_head],
@@ -120,7 +121,7 @@ pub(super) async fn create_public_request(
         author_user_id: public_user_id(),
         title,
         role: RequestActorRole::Public,
-        audience: RequestBaseAudience::Public,
+        audience: RequestAudience::Public,
         base_main_oid,
         head_oid,
         stake_credits: 10,
@@ -139,7 +140,7 @@ pub(crate) async fn create_owner_request(state: &AppState, request_id: &str, hea
         author_user_id: test_owner_id(),
         title: "Owner request",
         role: RequestActorRole::Owner,
-        audience: RequestBaseAudience::Private,
+        audience: RequestAudience::Private,
         base_main_oid: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
         head_oid,
         stake_credits: 0,
@@ -156,7 +157,7 @@ struct RequestFixture<'a> {
     author_user_id: String,
     title: &'a str,
     role: RequestActorRole,
-    audience: RequestBaseAudience,
+    audience: RequestAudience,
     base_main_oid: &'a str,
     head_oid: &'a str,
     stake_credits: u32,
@@ -172,12 +173,11 @@ async fn create_request(fixture: RequestFixture<'_>) {
         .start_request(StartRequestInput {
             id: fixture.request_id.to_string(),
             repo_id: TEST_REPO_ID.to_string(),
+            name: request_name(fixture.request_id),
             author_user_id: fixture.author_user_id.clone(),
-            title: fixture.title.to_string(),
+            title: Some(fixture.title.to_string()),
             author_role: fixture.role,
-            base_audience: fixture.audience,
-            target_branch: DEFAULT_GIT_BRANCH.to_string(),
-            request_ref: canonical_request_ref(fixture.request_id),
+            audience: fixture.audience,
             base_main_oid: fixture.base_main_oid.to_string(),
             now_unix: 2,
         })
@@ -219,11 +219,15 @@ pub(super) async fn start_request_via_http(app: axum::Router, bearer: &str) -> s
         "POST",
         "/v1/repos/owner/repo/requests",
         Some(bearer),
-        Some(r#"{"title":"Fix parser crash"}"#),
+        Some(r#"{"name":"fix-parser-crash","audience":"Public"}"#),
     )
     .await;
     assert_eq!(response.status(), StatusCode::OK);
     response_json(response).await
+}
+
+fn request_name(request_id: &str) -> String {
+    request_id.replace('_', "-")
 }
 
 pub(super) async fn submit_request_via_http(

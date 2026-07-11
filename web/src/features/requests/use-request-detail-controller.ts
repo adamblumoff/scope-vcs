@@ -1,5 +1,4 @@
 import type {
-  AddRequestEditorInput,
   CommentRequestInput,
   DeleteRequestInput,
   MergeRequestInput,
@@ -9,7 +8,6 @@ import type {
   RequestDetail,
   RequestMutation,
   RequestWorkflowResolutionDisposition,
-  RemoveRequestEditorInput,
   ResolveRequestInput,
   RespondRequestInput,
 } from '@/api/types'
@@ -24,12 +22,10 @@ type RequestMutationAction<TInput> = (input: TInput) => Promise<RequestMutation>
 type RequestDeleteAction = (input: DeleteRequestInput) => Promise<RequestDelete>
 
 export type RequestActionKey =
-  | 'add-editor'
   | 'comment'
   | 'delete'
   | 'merge'
   | 'needs-response'
-  | 'remove-editor'
   | 'resolve'
   | 'respond'
 
@@ -39,27 +35,23 @@ export type RequestActionError = {
 }
 
 export type RequestDetailControllerProps = {
-  addRequestEditor: RequestMutationAction<AddRequestEditorInput>
   commentRequest: RequestMutationAction<CommentRequestInput>
   deleteRequest: RequestDeleteAction
   detail: RequestDetail
   markNeedsResponse: RequestMutationAction<NeedsResponseInput>
   mergeRequest: RequestMutationAction<MergeRequestInput>
   params: RepoParams
-  removeRequestEditor: RequestMutationAction<RemoveRequestEditorInput>
   resolveRequest: RequestMutationAction<ResolveRequestInput>
   respondToRequest: RequestMutationAction<RespondRequestInput>
 }
 
 export function useRequestDetailController({
-  addRequestEditor,
   commentRequest,
   deleteRequest,
   detail,
   markNeedsResponse,
   mergeRequest,
   params,
-  removeRequestEditor,
   resolveRequest,
   respondToRequest,
 }: RequestDetailControllerProps) {
@@ -68,7 +60,6 @@ export function useRequestDetailController({
   const [actionError, setActionError] = useState<RequestActionError | null>(null)
   const [commentBody, setCommentBody] = useState('')
   const [deleteOpen, setDeleteOpen] = useState(false)
-  const [editorUserId, setEditorUserId] = useState('')
   const [mergeOpen, setMergeOpen] = useState(false)
   const [needsResponseBody, setNeedsResponseBody] = useState('')
   const [pendingAction, setPendingAction] = useState<RequestActionKey | null>(null)
@@ -203,43 +194,18 @@ export function useRequestDetailController({
     }
   }
 
-  async function submitAddEditor(event: FormEvent<HTMLFormElement>) {
-    event.preventDefault()
-    await runAction(
-      'add-editor',
-      () =>
-        addRequestEditor({
-          ...requestParams,
-          user_id: editorUserId,
-        }),
-      () => setEditorUserId(''),
-    )
-  }
-
-  async function removeEditor(editorUserId: string) {
-    await runAction('remove-editor', () =>
-      removeRequestEditor({
-        ...requestParams,
-        editor_user_id: editorUserId,
-      }),
-    )
-  }
-
   return {
     activeResolveDisposition,
     deleteOpen,
-    removeEditor,
     request,
     resolutionOptions,
     setCommentBody,
     setDeleteOpen,
-    setEditorUserId,
     setMergeOpen,
     setNeedsResponseBody,
     setResolveBody,
     setResolveDisposition,
     setResponseBody,
-    submitAddEditor,
     submitComment,
     submitDelete,
     submitMerge,
@@ -249,7 +215,6 @@ export function useRequestDetailController({
     uiState: {
       actionError,
       commentBody,
-      editorUserId,
       mergeOpen,
       needsResponseBody,
       pendingAction,

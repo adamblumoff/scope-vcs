@@ -1,5 +1,5 @@
 use clap::{Parser, Subcommand, ValueEnum};
-use scope_core::domain::requests::ResolutionDisposition;
+use scope_core::domain::requests::{RequestAudience, ResolutionDisposition};
 
 #[derive(Parser)]
 pub struct RequestArgs {
@@ -10,13 +10,9 @@ pub struct RequestArgs {
 #[derive(Subcommand)]
 pub(super) enum RequestCommand {
     Start(RequestStartArgs),
-    Join(RequestJoinArgs),
     Submit(RequestSubmitArgs),
-    Pull(RequestPullArgs),
     Push(RequestPushArgs),
-    SyncMain(RequestSyncMainArgs),
     Delete(RequestDeleteArgs),
-    Share(RequestShareArgs),
     Status(RequestStatusArgs),
     Comment(RequestCommentArgs),
     NeedsResponse(RequestNeedsResponseArgs),
@@ -27,19 +23,18 @@ pub(super) enum RequestCommand {
 
 #[derive(Parser)]
 pub(super) struct RequestStartArgs {
+    #[arg(help = "Stable kebab-case request name used as the Git branch")]
+    pub(super) name: String,
     #[arg(long)]
     pub(super) remote: Option<String>,
-    #[arg(long)]
-    pub(super) branch: Option<String>,
-    #[arg(long)]
-    pub(super) title: String,
-}
-
-#[derive(Parser)]
-pub(super) struct RequestJoinArgs {
-    #[arg(long)]
-    pub(super) remote: Option<String>,
-    pub(super) id: String,
+    #[arg(long, help = "Display title (defaults to the request name)")]
+    pub(super) title: Option<String>,
+    #[arg(
+        long,
+        value_enum,
+        help = "Public or private request audience (required for maintainers)"
+    )]
+    pub(super) audience: Option<RequestAudienceArg>,
 }
 
 #[derive(Parser)]
@@ -51,51 +46,35 @@ pub(super) struct RequestSubmitArgs {
 }
 
 #[derive(Parser)]
-pub(super) struct RequestPullArgs {
-    #[arg(long)]
-    pub(super) remote: Option<String>,
-    pub(super) id: Option<String>,
-}
-
-#[derive(Parser)]
 pub(super) struct RequestPushArgs {
     #[arg(long)]
     pub(super) remote: Option<String>,
-    pub(super) id: Option<String>,
-}
-
-#[derive(Parser)]
-pub(super) struct RequestSyncMainArgs {
-    #[arg(long)]
-    pub(super) remote: Option<String>,
+    #[arg(help = "Request name or req_ ID (defaults to the current branch)")]
+    pub(super) request: Option<String>,
 }
 
 #[derive(Parser)]
 pub(super) struct RequestDeleteArgs {
     #[arg(long)]
     pub(super) remote: Option<String>,
-    pub(super) id: Option<String>,
-}
-
-#[derive(Parser)]
-pub(super) struct RequestShareArgs {
-    #[arg(long)]
-    pub(super) remote: Option<String>,
-    pub(super) id: Option<String>,
+    #[arg(help = "Request name or req_ ID (defaults to the current branch)")]
+    pub(super) request: Option<String>,
 }
 
 #[derive(Parser)]
 pub(super) struct RequestStatusArgs {
     #[arg(long)]
     pub(super) remote: Option<String>,
-    pub(super) id: Option<String>,
+    #[arg(help = "Request name or req_ ID (defaults to the current branch)")]
+    pub(super) request: Option<String>,
 }
 
 #[derive(Parser)]
 pub(super) struct RequestCommentArgs {
     #[arg(long)]
     pub(super) remote: Option<String>,
-    pub(super) id: Option<String>,
+    #[arg(help = "Request name or req_ ID (defaults to the current branch)")]
+    pub(super) request: Option<String>,
     #[arg(long)]
     pub(super) body: String,
 }
@@ -104,7 +83,8 @@ pub(super) struct RequestCommentArgs {
 pub(super) struct RequestNeedsResponseArgs {
     #[arg(long)]
     pub(super) remote: Option<String>,
-    pub(super) id: Option<String>,
+    #[arg(help = "Request name or req_ ID (defaults to the current branch)")]
+    pub(super) request: Option<String>,
     #[arg(long)]
     pub(super) body: String,
 }
@@ -113,7 +93,8 @@ pub(super) struct RequestNeedsResponseArgs {
 pub(super) struct RequestRespondArgs {
     #[arg(long)]
     pub(super) remote: Option<String>,
-    pub(super) id: Option<String>,
+    #[arg(help = "Request name or req_ ID (defaults to the current branch)")]
+    pub(super) request: Option<String>,
     #[arg(long)]
     pub(super) body: Option<String>,
 }
@@ -122,7 +103,8 @@ pub(super) struct RequestRespondArgs {
 pub(super) struct RequestResolveArgs {
     #[arg(long)]
     pub(super) remote: Option<String>,
-    pub(super) id: Option<String>,
+    #[arg(help = "Request name or req_ ID (defaults to the current branch)")]
+    pub(super) request: Option<String>,
     #[arg(long, value_enum)]
     pub(super) disposition: RequestResolveDisposition,
     #[arg(long)]
@@ -133,7 +115,8 @@ pub(super) struct RequestResolveArgs {
 pub(super) struct RequestMergeArgs {
     #[arg(long)]
     pub(super) remote: Option<String>,
-    pub(super) id: Option<String>,
+    #[arg(help = "Request name or req_ ID (defaults to the current branch)")]
+    pub(super) request: Option<String>,
     #[arg(long)]
     pub(super) body: Option<String>,
     #[arg(long)]
@@ -159,6 +142,21 @@ impl From<RequestResolveDisposition> for ResolutionDisposition {
             RequestResolveDisposition::Duplicate => ResolutionDisposition::Duplicate,
             RequestResolveDisposition::Abandoned => ResolutionDisposition::Abandoned,
             RequestResolveDisposition::LowQuality => ResolutionDisposition::LowQuality,
+        }
+    }
+}
+
+#[derive(Clone, Copy, ValueEnum)]
+pub(super) enum RequestAudienceArg {
+    Public,
+    Private,
+}
+
+impl From<RequestAudienceArg> for RequestAudience {
+    fn from(audience: RequestAudienceArg) -> Self {
+        match audience {
+            RequestAudienceArg::Public => RequestAudience::Public,
+            RequestAudienceArg::Private => RequestAudience::Private,
         }
     }
 }
