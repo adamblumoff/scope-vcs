@@ -34,15 +34,36 @@ pub fn run(explicit_remote: Option<&str>) -> anyhow::Result<()> {
 
     let branch = current_branch(&repo)?;
     let tracked = format!("refs/remotes/{remote}/{branch}");
-    if after.contains_key(&branch) {
+    if after.contains_key(&branch) && current_branch_tracks(&repo, &remote, &branch)? {
         run_git_in_repo(&repo, &["merge", "--ff-only", &tracked])?;
         println!("{branch} is up to date with {remote}/{branch}.");
+    } else if after.contains_key(&branch) {
+        println!(
+            "Fetched every visible Scope ref; local branch {branch} does not track {remote}/{branch}, so it was not moved."
+        );
     } else {
         println!(
             "Fetched every visible Scope ref; local branch {branch} has no {remote}/{branch} counterpart."
         );
     }
     Ok(())
+}
+
+fn current_branch_tracks(repo: &GitRepo, remote: &str, branch: &str) -> anyhow::Result<bool> {
+    let output = Command::new("git")
+        .current_dir(&repo.root)
+        .args([
+            "rev-parse",
+            "--abbrev-ref",
+            "--symbolic-full-name",
+            "@{upstream}",
+        ])
+        .output()
+        .context("inspect current branch upstream")?;
+    if !output.status.success() {
+        return Ok(false);
+    }
+    Ok(String::from_utf8_lossy(&output.stdout).trim() == format!("{remote}/{branch}"))
 }
 
 fn select_scope_remote(
@@ -141,10 +162,37 @@ fn short_oid(oid: &str) -> &str {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::test_support::TestDir;
+    use std::fs;
 
     #[test]
     fn short_oid_handles_short_values() {
         assert_eq!(short_oid("0123456789"), "0123456");
         assert_eq!(short_oid("abc"), "abc");
+    }
+
+    #[test]
+    fn current_branch_must_track_the_selected_remote_before_merge() {
+        let dir = TestDir::git_repo("pull-upstream", "main");
+        dir.run_git(["config", "user.name", "Scope Test"]);
+        dir.run_git(["config", "user.email", "scope@example.invalid"]);
+        fs::write(dir.path().join("README.md"), "test\n").unwrap();
+        dir.run_git(["add", "README.md"]);
+        dir.run_git(["commit", "--quiet", "-m", "initial"]);
+        dir.run_git([
+            "remote",
+            "add",
+            "origin",
+            "https://example.invalid/repo.git",
+        ]);
+        dir.run_git(["update-ref", "refs/remotes/origin/main", "HEAD"]);
+        dir.run_git(["config", "branch.main.remote", "origin"]);
+        dir.run_git(["config", "branch.main.merge", "refs/heads/main"]);
+        let repo = GitRepo {
+            root: dir.path().to_path_buf(),
+        };
+
+        assert!(current_branch_tracks(&repo, "origin", "main").unwrap());
+        assert!(!current_branch_tracks(&repo, "scope", "main").unwrap());
     }
 }
