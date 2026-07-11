@@ -2,6 +2,8 @@ This product is still in pre-alpha and we have zero users and zero valuable data
 
 Maintainer = owner or members
 
+Do not modify the root `README.md` unless the user explicitly asks you to.
+
 When coding, feel free to spin up medium-level subagents to get non-overlapping code work done and then review outputs at the end. If the work is larger, go ahead and split into worktrees accordingly and coordinate their efforts. Before doing this though please inform the user how you're going to use these subagents.
 
 We want the architecture centered around durable domain code: the layer that defines the core concepts, rules, allowed transitions, invariants, and required side effects independent of any delivery mechanism. Outer layers should stay thin and predictable: translate inputs and outputs, call domain behavior, persist or render results, and surface errors without inventing their own rules.
