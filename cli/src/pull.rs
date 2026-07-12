@@ -1,12 +1,12 @@
 use crate::{
     api::{api_url, http_client},
     git_repo::{
-        GitRepo, current_branch, ensure_git_repo_ready, git_remote_fetch_url, git_remote_names,
+        GitRepo, current_branch, ensure_git_repo_ready, git_remote_fetch_url,
         install_scope_fetch_auth, run_git_in_repo,
     },
-    git_transport::ScopeRemote,
+    git_transport::{ScopeRemote, select_scope_fetch_remote},
     login::session_from_cache_or_browser,
-    push::{DEFAULT_SCOPE_BRANCH, DEFAULT_SCOPE_REMOTE},
+    push::DEFAULT_SCOPE_BRANCH,
 };
 use anyhow::{Context, bail};
 use std::{collections::BTreeMap, process::Command};
@@ -14,7 +14,7 @@ use std::{collections::BTreeMap, process::Command};
 pub fn run(explicit_remote: Option<&str>) -> anyhow::Result<()> {
     let repo = ensure_git_repo_ready("scope pull")?;
     let api_url = api_url();
-    let remote = select_scope_remote(&repo, &api_url, explicit_remote)?;
+    let remote = select_scope_fetch_remote(&repo, &api_url, explicit_remote)?;
     let target = ScopeRemote::parse(&api_url, &remote, &git_remote_fetch_url(&repo, &remote)?)?;
     let client = http_client()?;
     let _session = session_from_cache_or_browser(&client, &api_url)?;
@@ -64,36 +64,6 @@ fn current_branch_tracks(repo: &GitRepo, remote: &str, branch: &str) -> anyhow::
         return Ok(false);
     }
     Ok(String::from_utf8_lossy(&output.stdout).trim() == format!("{remote}/{branch}"))
-}
-
-fn select_scope_remote(
-    repo: &GitRepo,
-    api_url: &str,
-    explicit_remote: Option<&str>,
-) -> anyhow::Result<String> {
-    if let Some(remote) = explicit_remote
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-    {
-        ScopeRemote::parse(api_url, remote, &git_remote_fetch_url(repo, remote)?)?;
-        return Ok(remote.to_string());
-    }
-    let remotes = git_remote_names(repo)?;
-    for candidate in [DEFAULT_SCOPE_REMOTE, "origin"]
-        .into_iter()
-        .chain(remotes.iter().map(String::as_str))
-    {
-        if !remotes.iter().any(|remote| remote == candidate) {
-            continue;
-        }
-        let Ok(url) = git_remote_fetch_url(repo, candidate) else {
-            continue;
-        };
-        if ScopeRemote::parse(api_url, candidate, &url).is_ok() {
-            return Ok(candidate.to_string());
-        }
-    }
-    bail!("no Scope Git remote found; pass --remote <name> or run scope init")
 }
 
 fn remote_refs(repo: &GitRepo, remote: &str) -> anyhow::Result<BTreeMap<String, String>> {

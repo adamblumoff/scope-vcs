@@ -1,11 +1,7 @@
 use crate::{
-    git_repo::{
-        GitRepo, branch_config_value, current_branch, git_remote_fetch_url, git_remote_names,
-    },
-    git_transport::ScopeRemote,
-    push::DEFAULT_SCOPE_REMOTE,
+    git_repo::{GitRepo, branch_config_value, current_branch, git_remote_fetch_url},
+    git_transport::{ScopeRemote, select_scope_fetch_remote},
 };
-use anyhow::bail;
 
 pub(super) const REQUEST_REMOTE_KEY: &str = "scopeRequestRemote";
 
@@ -26,7 +22,7 @@ pub(super) fn request_remote_name(
     ) {
         return Ok(remote);
     }
-    default_request_remote_name(git_repo, api_url)
+    select_scope_fetch_remote(git_repo, api_url, None)
 }
 
 pub(super) fn load_request_remote(
@@ -50,29 +46,6 @@ fn selected_remote_name(
 ) -> Option<String> {
     normalized_remote_arg(explicit_remote)
         .or_else(|| normalized_remote_arg(branch_remote.as_deref()))
-}
-
-fn default_request_remote_name(git_repo: &GitRepo, api_url: &str) -> anyhow::Result<String> {
-    let remotes = git_remote_names(git_repo)?;
-    for candidate in [DEFAULT_SCOPE_REMOTE, "origin"] {
-        if remotes.iter().any(|remote| remote == candidate)
-            && remote_points_to_scope_repo(git_repo, api_url, candidate)
-        {
-            return Ok(candidate.to_string());
-        }
-    }
-    for remote in remotes {
-        if remote_points_to_scope_repo(git_repo, api_url, &remote) {
-            return Ok(remote);
-        }
-    }
-    bail!("no Scope Git remote found; pass --remote <name> or run scope init")
-}
-
-fn remote_points_to_scope_repo(git_repo: &GitRepo, api_url: &str, remote: &str) -> bool {
-    git_remote_fetch_url(git_repo, remote)
-        .and_then(|remote_url| ScopeRemote::parse(api_url, remote, &remote_url).map(|_| ()))
-        .is_ok()
 }
 
 #[cfg(test)]
@@ -123,7 +96,7 @@ mod tests {
                     ("origin", "https://scope.example/git/public/adam/repo"),
                     ("scope", "https://scope.example/git/permissioned/adam/repo"),
                 ],
-                DEFAULT_SCOPE_REMOTE,
+                "scope",
             ),
             (
                 "renamed",

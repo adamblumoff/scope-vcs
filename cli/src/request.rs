@@ -156,7 +156,11 @@ fn start_request_branch(
         args.remote.as_deref(),
     )?;
     print_repo_access(&context.repo);
-    let audience = start_audience(&context.repo, args.audience)?;
+    let audience = start_audience(
+        context.repo.access.actor,
+        context.repo.default_visibility,
+        args.audience,
+    )?;
     fetch_main_projection(git_repo, &context, audience, session_token)?;
     let branch = args.name.trim().to_string();
     scope_core::domain::requests::validate_request_name(&branch)
@@ -617,21 +621,73 @@ fn delete_request_branch(
 }
 
 fn start_audience(
-    repo: &crate::api::RepoSummaryResponse,
+    actor: crate::api::RepositoryActor,
+    default_visibility: crate::api::Visibility,
     requested: Option<RequestAudienceArg>,
 ) -> anyhow::Result<scope_core::domain::requests::RequestAudience> {
-    use crate::api::RepositoryActor;
+    use crate::api::{RepositoryActor, Visibility};
     use scope_core::domain::requests::RequestAudience;
 
-    match repo.access.actor {
+    match actor {
         RepositoryActor::Public => match requested.map(Into::into) {
             None | Some(RequestAudience::Public) => Ok(RequestAudience::Public),
             Some(RequestAudience::Private) => {
                 bail!("public contributors can only start public requests")
             }
         },
-        RepositoryActor::Owner | RepositoryActor::Member => requested
+        RepositoryActor::Owner | RepositoryActor::Member => Ok(requested
             .map(Into::into)
-            .context("maintainers must choose --audience public or --audience private"),
+            .unwrap_or(match default_visibility {
+                Visibility::Public => RequestAudience::Public,
+                Visibility::Private => RequestAudience::Private,
+            })),
+    }
+}
+
+#[cfg(test)]
+mod audience_tests {
+    use super::*;
+    use crate::api::{RepositoryActor, Visibility};
+    use scope_core::domain::requests::RequestAudience;
+
+    #[test]
+    fn maintainers_default_request_audience_from_repo_visibility() {
+        for (actor, visibility, expected) in [
+            (
+                RepositoryActor::Owner,
+                Visibility::Public,
+                RequestAudience::Public,
+            ),
+            (
+                RepositoryActor::Owner,
+                Visibility::Private,
+                RequestAudience::Private,
+            ),
+            (
+                RepositoryActor::Member,
+                Visibility::Public,
+                RequestAudience::Public,
+            ),
+            (
+                RepositoryActor::Member,
+                Visibility::Private,
+                RequestAudience::Private,
+            ),
+        ] {
+            assert_eq!(start_audience(actor, visibility, None).unwrap(), expected);
+        }
+    }
+
+    #[test]
+    fn explicit_maintainer_audience_overrides_repo_visibility() {
+        assert_eq!(
+            start_audience(
+                RepositoryActor::Owner,
+                Visibility::Private,
+                Some(RequestAudienceArg::Public),
+            )
+            .unwrap(),
+            RequestAudience::Public
+        );
     }
 }

@@ -28,7 +28,7 @@ fn push_creates_missing_config_before_remote_lookup() {
     let stderr = scope_failure(
         dir.path(),
         ["push", "--no-review"],
-        "Scope remote 'scope' is not configured. Run: scope init",
+        "no Scope Git remote found; pass --remote <name> or run scope init",
     );
     assert!(dir.path().join(".scope/repo.json").is_file());
     assert!(stderr.contains("Working tree has uncommitted changes."));
@@ -65,7 +65,7 @@ fn push_warns_about_dirty_state_before_remote_lookup() {
     let stderr = scope_failure(
         dir.path(),
         ["push", "--no-review"],
-        "Scope remote 'scope' is not configured. Run: scope init",
+        "no Scope Git remote found; pass --remote <name> or run scope init",
     );
     assert!(stderr.contains("Working tree has uncommitted changes."));
     assert!(stderr.contains("Only committed HEAD will be pushed to Scope."));
