@@ -4,6 +4,18 @@ export type WorkspaceTabItem = {
   title?: string
 }
 
+export function workspaceTabDomIds(tabSetId: string, tabId: string) {
+  const encodedTabId = encodeURIComponent(tabId)
+  return {
+    panelId: workspaceTabPanelId(tabSetId),
+    tabId: `${tabSetId}-tab-${encodedTabId}`,
+  }
+}
+
+export function workspaceTabPanelId(tabSetId: string) {
+  return `${tabSetId}-panel`
+}
+
 export function normalizeWorkspaceTabIds(
   openIds: readonly string[],
   availableIds: ReadonlySet<string>,

@@ -12,7 +12,11 @@ import { RepoShell } from '@/components/repo-shell'
 import { RouteErrorPage } from '@/components/route-error-page'
 import { useWorkspaceTabs } from '@/components/use-workspace-tabs'
 import { WorkspaceTabStrip } from '@/components/workspace-tab-strip'
-import type { WorkspaceTabItem } from '@/components/workspace-tab-model'
+import {
+  workspaceTabDomIds,
+  workspaceTabPanelId,
+  type WorkspaceTabItem,
+} from '@/components/workspace-tab-model'
 import { Badge } from '@/components/ui/badge'
 import { Skeleton } from '@/components/ui/skeleton'
 import { ToggleGroup, ToggleGroupItem } from '@/components/ui/toggle-group'
@@ -29,6 +33,8 @@ import {
 import { type ReactNode, useMemo, useRef } from 'react'
 import { ReviewFileDiffDrawer } from '../review/review-file-diff-drawer'
 import { audienceLabel, changeCountLabel } from '../review/review-labels'
+
+const HISTORY_TAB_SET_ID = 'history-file-diffs'
 
 export type CommitHistories = {
   private: CommitHistory | null
@@ -340,6 +346,9 @@ function CommitDetailPanel({
 
   const commit = commitState.commit
   const diffOpen = selectedFilePath !== null
+  const activeTabDomIds = selectedFilePath && fileTabs.some((tab) => tab.id === selectedFilePath)
+    ? workspaceTabDomIds(HISTORY_TAB_SET_ID, selectedFilePath)
+    : null
   const tabPaneOpen = fileTabs.length > 0 || diffOpen
 
   function closeUnavailableDiff() {
@@ -403,23 +412,33 @@ function CommitDetailPanel({
                 onActivate={onActivateFileTab}
                 onClose={onCloseFileTab}
                 onEmptyFocus={() => fileNavigatorRef.current?.focus()}
+                tabSetId={HISTORY_TAB_SET_ID}
                 tabs={fileTabs}
               />
-              {diffOpen ? (
-                <ReviewFileDiffDrawer
-                  className="min-h-0 flex-1"
-                  diff={fileDiffState.diff}
-                  error={fileDiffState.error}
-                  loading={fileDiffState.status === 'loading'}
-                  onClose={fileTabs.length === 0 ? closeUnavailableDiff : undefined}
-                  selectedPath={selectedFilePath}
-                  showHeader={fileTabs.length === 0}
-                />
-              ) : (
-                <PanelState>
-                  <span>Select an open diff tab</span>
-                </PanelState>
-              )}
+              <div
+                aria-label={fileTabs.length > 0 && !activeTabDomIds ? 'History diff viewer' : undefined}
+                aria-labelledby={activeTabDomIds?.tabId}
+                className="min-h-0 flex-1 outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring"
+                id={workspaceTabPanelId(HISTORY_TAB_SET_ID)}
+                role={fileTabs.length > 0 ? 'tabpanel' : undefined}
+                tabIndex={fileTabs.length > 0 ? 0 : undefined}
+              >
+                {diffOpen ? (
+                  <ReviewFileDiffDrawer
+                    className="min-h-0"
+                    diff={fileDiffState.diff}
+                    error={fileDiffState.error}
+                    loading={fileDiffState.status === 'loading'}
+                    onClose={fileTabs.length === 0 ? closeUnavailableDiff : undefined}
+                    selectedPath={selectedFilePath}
+                    showHeader={fileTabs.length === 0}
+                  />
+                ) : (
+                  <PanelState>
+                    <span>Select an open diff tab</span>
+                  </PanelState>
+                )}
+              </div>
             </div>
           ) : null}
         </div>

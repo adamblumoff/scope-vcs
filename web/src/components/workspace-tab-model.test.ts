@@ -3,8 +3,22 @@ import test from 'node:test'
 import {
   closeWorkspaceTab,
   normalizeWorkspaceTabIds,
+  workspaceTabDomIds,
+  workspaceTabPanelId,
   workspaceTabVisibleLabels,
 } from './workspace-tab-model'
+
+test('creates stable linked tab and panel ids for repository paths', () => {
+  assert.deepEqual(workspaceTabDomIds('code-files', 'src/hello world.ts'), {
+    panelId: 'code-files-panel',
+    tabId: 'code-files-tab-src%2Fhello%20world.ts',
+  })
+  assert.equal(workspaceTabPanelId('code-files'), 'code-files-panel')
+  assert.equal(
+    workspaceTabDomIds('code-files', 'README.md').panelId,
+    workspaceTabDomIds('code-files', 'src/app.ts').panelId,
+  )
+})
 
 test('normalizes tabs against available items and appends the active item once', () => {
   assert.deepEqual(

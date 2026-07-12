@@ -4,8 +4,14 @@ import { ReadmeRenderer } from '@/components/readme-renderer'
 import { useWorkspaceTabs } from '@/components/use-workspace-tabs'
 import { VisibilityBadge } from '@/components/visibility-badge'
 import { WorkspaceTabStrip } from '@/components/workspace-tab-strip'
+import {
+  workspaceTabDomIds,
+  workspaceTabPanelId,
+} from '@/components/workspace-tab-model'
 import { FileQuestion, TriangleAlert } from 'lucide-react'
 import { useMemo, useRef } from 'react'
+
+const CODE_TAB_SET_ID = 'repository-code-files'
 
 export function RepositoryCodeView({
   files,
@@ -106,6 +112,10 @@ function SourcePane({
   selectedPath: string | null
   tabs: Array<{ id: string; label: string; title?: string }>
 }) {
+  const activeTabDomIds = selectedPath && tabs.some((tab) => tab.id === selectedPath)
+    ? workspaceTabDomIds(CODE_TAB_SET_ID, selectedPath)
+    : null
+
   return (
     <div className="min-w-0">
       <WorkspaceTabStrip
@@ -114,14 +124,24 @@ function SourcePane({
         onActivate={onActivateTab}
         onClose={onCloseTab}
         onEmptyFocus={onEmptyTabFocus}
+        tabSetId={CODE_TAB_SET_ID}
         tabs={tabs}
       />
-      <SourceContent
-        error={error}
-        file={file}
-        params={params}
-        selectedPath={selectedPath}
-      />
+      <div
+        aria-label={activeTabDomIds ? undefined : 'Repository file viewer'}
+        aria-labelledby={activeTabDomIds?.tabId}
+        className="outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring"
+        id={workspaceTabPanelId(CODE_TAB_SET_ID)}
+        role={tabs.length > 0 ? 'tabpanel' : undefined}
+        tabIndex={tabs.length > 0 ? 0 : undefined}
+      >
+        <SourceContent
+          error={error}
+          file={file}
+          params={params}
+          selectedPath={selectedPath}
+        />
+      </div>
     </div>
   )
 }

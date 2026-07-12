@@ -2,6 +2,7 @@ import { cn } from '@/lib/utils'
 import { FileCode2, X } from 'lucide-react'
 import { useRef } from 'react'
 import {
+  workspaceTabDomIds,
   workspaceTabVisibleLabels,
   type WorkspaceTabItem,
 } from './workspace-tab-model'
@@ -12,6 +13,7 @@ export function WorkspaceTabStrip({
   onActivate,
   onClose,
   onEmptyFocus,
+  tabSetId,
   tabs,
 }: {
   activeId: string | null
@@ -19,6 +21,7 @@ export function WorkspaceTabStrip({
   onActivate: (id: string) => void
   onClose: (id: string) => string | null
   onEmptyFocus: () => void
+  tabSetId: string
   tabs: WorkspaceTabItem[]
 }) {
   const tabRefs = useRef<Map<string, HTMLButtonElement> | null>(null)
@@ -64,6 +67,7 @@ export function WorkspaceTabStrip({
       {tabs.map((tab) => {
         const active = tab.id === activeId
         const accessibleLabel = tab.title ?? tab.label
+        const domIds = workspaceTabDomIds(tabSetId, tab.id)
         const visibleLabel = visibleLabels.get(tab.id) ?? tab.label
         return (
           <div
@@ -75,11 +79,13 @@ export function WorkspaceTabStrip({
             key={tab.id}
           >
             <button
+              aria-controls={domIds.panelId}
               aria-label={accessibleLabel}
               aria-selected={active}
               className="flex h-10 min-w-0 flex-1 items-center gap-2 px-3 text-left font-mono text-xs font-medium focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-[-2px] focus-visible:outline-ring"
               onClick={() => onActivate(tab.id)}
               onKeyDown={(event) => moveFocus(event, tab.id)}
+              id={domIds.tabId}
               ref={(node) => {
                 if (node) {
                   tabRefs.current?.set(tab.id, node)
