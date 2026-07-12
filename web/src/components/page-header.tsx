@@ -10,7 +10,7 @@ export function PageContent({
 }) {
   return (
     <section
-      className={cn('mx-auto max-w-[1040px] px-4 py-6 sm:px-6 lg:py-8', className)}
+      className={cn('mx-auto max-w-[1200px] px-4 py-7 sm:px-6 lg:px-8 lg:py-10', className)}
     >
       {children}
     </section>
@@ -33,7 +33,7 @@ export function PageHeader({
   titleClassName?: string
 }) {
   return (
-    <div className="flex flex-col gap-4 md:flex-row md:items-end md:justify-between">
+    <header className="flex flex-col gap-4 border-b border-border pb-6 md:flex-row md:items-end md:justify-between">
       <div className="min-w-0">
         {badges && (
           <div className="mb-3 flex flex-wrap items-center gap-2">
@@ -42,7 +42,7 @@ export function PageHeader({
         )}
         <h1
           className={cn(
-            'break-words text-2xl font-semibold tracking-tight leading-8 sm:text-[32px] sm:leading-10',
+            'break-words text-2xl font-semibold leading-8 tracking-[-0.03em] sm:text-[30px] sm:leading-10',
             titleClassName,
           )}
         >
@@ -60,6 +60,6 @@ export function PageHeader({
           {actions}
         </div>
       )}
-    </div>
+    </header>
   )
 }

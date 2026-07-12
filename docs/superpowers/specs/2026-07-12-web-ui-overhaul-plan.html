@@ -1,0 +1,616 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Implementation plan — Scope web UI overhaul</title>
+  <script>
+    (() => {
+      const saved = localStorage.getItem('scope-plan-theme');
+      const dark = saved
+        ? saved === 'dark'
+        : window.matchMedia('(prefers-color-scheme: dark)').matches;
+      if (dark) document.documentElement.classList.add('dark');
+    })();
+  </script>
+  <style>
+    :root {
+      --canvas: #f4f3ef;
+      --surface: #fffefa;
+      --surface-raised: #f8f7f3;
+      --surface-selected: #e8eaed;
+      --ink: #17191d;
+      --text: #3f444c;
+      --muted: #747b86;
+      --line: #d5d8dd;
+      --line-strong: #aeb4bf;
+      --platinum: #747c89;
+      --platinum-bright: #4e5662;
+      --success: #4f8561;
+      --danger: #bc5965;
+      --warning: #8b7044;
+      --info: #667a96;
+      --code: #171a20;
+      --code-ink: #eceae5;
+      --shadow: 0 12px 30px rgba(20, 22, 27, .07);
+      --sans: Inter, ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+      --mono: "SFMono-Regular", Consolas, "Liberation Mono", ui-monospace, monospace;
+    }
+
+    html.dark {
+      --canvas: #0d0f12;
+      --surface: #12151a;
+      --surface-raised: #171a20;
+      --surface-selected: #1c2027;
+      --ink: #f1f0ec;
+      --text: #c8cbd0;
+      --muted: #9ea3ae;
+      --line: #292d36;
+      --line-strong: #3a3f4a;
+      --platinum: #aeb4bf;
+      --platinum-bright: #d8dbe1;
+      --success: #6fa27c;
+      --danger: #d96c75;
+      --warning: #b49a6b;
+      --info: #8293aa;
+      --code: #090b0e;
+      --code-ink: #eceae5;
+      --shadow: none;
+    }
+
+    * { box-sizing: border-box; }
+    html { scroll-behavior: smooth; }
+    body {
+      margin: 0;
+      padding: 48px 28px 96px;
+      color: var(--text);
+      background: var(--canvas);
+      font-family: var(--sans);
+      font-size: 15px;
+      line-height: 1.58;
+      -webkit-font-smoothing: antialiased;
+    }
+    button { font: inherit; }
+    code, pre { font-family: var(--mono); }
+    a { color: inherit; text-underline-offset: 3px; }
+    .page { width: min(1180px, 100%); margin: 0 auto; }
+    .theme-toggle {
+      position: fixed;
+      z-index: 20;
+      top: 16px;
+      right: 18px;
+      padding: 8px 11px;
+      border: 1px solid var(--line);
+      border-radius: 7px;
+      color: var(--muted);
+      background: color-mix(in srgb, var(--surface) 94%, transparent);
+      box-shadow: var(--shadow);
+      cursor: pointer;
+      font: 650 11px/1 var(--mono);
+    }
+    .theme-toggle:hover { color: var(--ink); border-color: var(--line-strong); }
+
+    .hero { max-width: 920px; margin-bottom: 42px; }
+    .eyebrow, .micro {
+      color: var(--muted);
+      font: 700 11px/1.2 var(--mono);
+      letter-spacing: .11em;
+      text-transform: uppercase;
+    }
+    h1, h2, h3, h4 { margin: 0; color: var(--ink); }
+    h1 { margin-top: 13px; font-size: clamp(40px, 6vw, 68px); font-weight: 580; line-height: .98; letter-spacing: -.045em; }
+    h2 { font-size: 28px; font-weight: 620; line-height: 1.18; letter-spacing: -.025em; }
+    h3 { font-size: 18px; font-weight: 650; line-height: 1.3; letter-spacing: -.012em; }
+    h4 { font-size: 14px; font-weight: 700; line-height: 1.35; }
+    p { margin: 0 0 12px; }
+    .lede { max-width: 820px; margin-top: 20px; color: var(--muted); font-size: 17px; line-height: 1.65; }
+
+    .summary {
+      display: grid;
+      grid-template-columns: repeat(4, minmax(0, 1fr));
+      border: 1px solid var(--line);
+      border-radius: 9px;
+      overflow: hidden;
+      background: var(--surface);
+      margin-bottom: 64px;
+    }
+    .summary > div { min-height: 94px; padding: 17px 18px; border-right: 1px solid var(--line); }
+    .summary > div:last-child { border-right: 0; }
+    .summary dt { margin-bottom: 8px; color: var(--muted); font: 700 10px/1 var(--mono); letter-spacing: .08em; text-transform: uppercase; }
+    .summary dd { margin: 0; color: var(--ink); font-size: 15px; font-weight: 650; }
+    .summary small { display: block; margin-top: 4px; color: var(--muted); font-size: 12px; font-weight: 450; }
+
+    section { margin-bottom: 70px; scroll-margin-top: 30px; }
+    .section-head { display: grid; grid-template-columns: 50px minmax(0, 1fr); gap: 16px; align-items: start; margin-bottom: 28px; }
+    .section-no { padding-top: 7px; color: var(--platinum); font: 750 12px/1 var(--mono); }
+    .section-intro { max-width: 820px; margin-top: 8px; color: var(--muted); }
+
+    .decision {
+      max-width: 920px;
+      padding: 18px 20px;
+      border: 1px solid var(--line);
+      border-left: 3px solid var(--platinum);
+      border-radius: 8px;
+      background: var(--surface);
+    }
+    .decision + .decision { margin-top: 12px; }
+    .decision strong { color: var(--ink); }
+    .decision.warn { border-left-color: var(--warning); }
+
+    .workbench {
+      overflow: hidden;
+      border: 1px solid var(--line-strong);
+      border-radius: 10px;
+      background: #0d0f12;
+      color: #c8cbd0;
+      box-shadow: var(--shadow);
+    }
+    .wb-top {
+      display: grid;
+      grid-template-columns: auto 240px minmax(280px, 1fr) auto;
+      gap: 22px;
+      align-items: center;
+      min-height: 62px;
+      padding: 0 18px;
+      border-bottom: 1px solid #292d36;
+      background: linear-gradient(180deg, #181b21 0%, #111419 100%);
+      box-shadow: inset 0 1px rgba(255,255,255,.055), 0 8px 24px rgba(0,0,0,.18);
+    }
+    .wb-brand { color: #f1f0ec; font-weight: 750; font-size: 18px; }
+    .wb-search, .wb-button {
+      min-height: 36px;
+      display: flex;
+      align-items: center;
+      padding: 0 12px;
+      border: 1px solid #3a3f4a;
+      border-radius: 7px;
+      background: #171a20;
+      color: #d8dbe1;
+      font-size: 12px;
+    }
+    .wb-switch { display: flex; min-width: 0; align-items: baseline; gap: 6px; color: #8f96a1; font-size: 12px; }
+    .wb-switch strong { overflow: hidden; color: #f1f0ec; font-size: 14px; text-overflow: ellipsis; white-space: nowrap; }
+    .wb-nav { display: flex; justify-self: center; gap: 3px; align-items: center; padding: 4px; border: 1px solid #292d36; border-radius: 8px; background: rgba(9,11,14,.58); box-shadow: inset 0 1px rgba(255,255,255,.035); }
+    .wb-nav span { min-height: 32px; display: flex; align-items: center; padding: 0 12px; border-radius: 5px; color: #8f96a1; font-size: 12.5px; font-weight: 590; }
+    .wb-nav .active { color: #f1f0ec; background: linear-gradient(180deg, #252a32, #1b1f26); box-shadow: inset 0 1px rgba(255,255,255,.07), 0 1px 3px rgba(0,0,0,.35); }
+    .wb-actions { display: flex; gap: 9px; }
+    .wb-search { width: 150px; color: #747c89; }
+    .wb-button { border-color: #4a505c; color: #f1f0ec; background: linear-gradient(180deg, #292e36, #1a1e24); box-shadow: inset 0 1px rgba(255,255,255,.08), 0 2px 6px rgba(0,0,0,.28); font-weight: 680; }
+    .wb-meta { display: flex; gap: 18px; align-items: center; min-height: 48px; padding: 0 20px; border-bottom: 1px solid #292d36; font-size: 11px; color: #9ea3ae; }
+    .wb-meta span + span { padding-left: 18px; border-left: 1px solid #3a3f4a; }
+    .dot { display: inline-block; width: 6px; height: 6px; margin-left: 6px; border-radius: 50%; background: #6fa27c; }
+    .wb-title { display: flex; align-items: end; justify-content: space-between; gap: 20px; padding: 22px 20px 14px; border-bottom: 1px solid #292d36; }
+    .wb-title strong { display: block; margin-top: 8px; color: #f1f0ec; font-size: 22px; }
+    .wb-main { display: grid; grid-template-columns: minmax(250px, .36fr) minmax(0, .64fr); min-height: 390px; }
+    .wb-tree { border-right: 1px solid #3a3f4a; padding: 14px 14px; }
+    .wb-tree-head, .wb-row { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 14px; align-items: center; min-height: 44px; padding: 0 12px; font-size: 12px; }
+    .wb-tree-head { min-height: 34px; color: #747c89; }
+    .wb-row.selected { border: 1px solid #747c89; border-left: 3px solid #d8dbe1; border-radius: 6px; color: #f1f0ec; background: #1c2027; }
+    .wb-row small { color: #9ea3ae; }
+    .wb-file { padding: 0 24px 30px; }
+    .wb-tabs { display: flex; min-height: 40px; margin: 0 -24px; overflow-x: auto; border-bottom: 1px solid #292d36; background: #0a0c0f; }
+    .wb-tab { display: flex; flex: 0 0 auto; align-items: center; gap: 9px; min-width: 128px; max-width: 220px; padding: 0 12px; border-right: 1px solid #292d36; color: #747c89; font: 650 11px/1 var(--mono); }
+    .wb-tab.active { color: #f1f0ec; background: #12151a; box-shadow: inset 0 2px #d8dbe1; }
+    .wb-tab b { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .wb-tab i { margin-left: auto; color: #9ea3ae; font-style: normal; }
+    .wb-file-head { display: flex; align-items: center; justify-content: space-between; min-height: 72px; border-bottom: 1px solid #292d36; }
+    .wb-file-head strong { color: #f1f0ec; }
+    .wb-prose { max-width: 640px; padding-top: 26px; }
+    .wb-prose h3 { color: #f1f0ec; font-size: 28px; }
+    .wb-prose p { margin-top: 18px; color: #c8cbd0; font-size: 13px; }
+    .wb-code { margin-top: 20px; padding: 13px 15px; border: 1px solid #292d36; border-left: 2px solid #aeb4bf; border-radius: 6px; background: #090b0e; color: #eceae5; font: 11px/1.6 var(--mono); }
+
+    .grid-2, .grid-3 { display: grid; gap: 16px; }
+    .grid-2 { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+    .grid-3 { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+    .panel { padding: 19px 20px; border: 1px solid var(--line); border-radius: 8px; background: var(--surface); }
+    .panel p { margin-top: 8px; color: var(--muted); font-size: 13.5px; }
+    .panel ul, .panel ol { margin: 12px 0 0; padding-left: 19px; }
+    .panel li { margin: 7px 0; font-size: 13.5px; }
+    .panel code, td code { color: var(--ink); font-size: .9em; }
+
+    .table-wrap { overflow-x: auto; border: 1px solid var(--line); border-radius: 8px; background: var(--surface); }
+    table { width: 100%; border-collapse: collapse; min-width: 760px; }
+    th, td { padding: 12px 14px; border-bottom: 1px solid var(--line); text-align: left; vertical-align: top; font-size: 13px; }
+    th { color: var(--muted); background: var(--surface-raised); font: 700 10px/1.2 var(--mono); letter-spacing: .06em; text-transform: uppercase; }
+    tr:last-child td { border-bottom: 0; }
+    td:first-child { color: var(--ink); font-weight: 650; }
+    .keep { color: var(--success); font-weight: 700; }
+    .replace { color: var(--danger); font-weight: 700; }
+    .gate { color: var(--warning); font-weight: 700; }
+
+    .steps { border-top: 1px solid var(--line-strong); }
+    .step { display: grid; grid-template-columns: 76px 240px minmax(0, 1fr); gap: 18px; padding: 22px 0; border-bottom: 1px solid var(--line); }
+    .step-no { color: var(--platinum); font: 750 12px/1 var(--mono); }
+    .step h3 { font-size: 16px; }
+    .step p { color: var(--muted); font-size: 13.5px; }
+    .step ul { margin: 8px 0 0; padding-left: 18px; }
+    .step li { margin: 6px 0; font-size: 13px; }
+
+    .files { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+    .file-change { padding: 15px 16px; border: 1px solid var(--line); border-radius: 7px; background: var(--surface); }
+    .file-change .path { color: var(--ink); font: 650 12px/1.45 var(--mono); overflow-wrap: anywhere; }
+    .file-change p { margin-top: 7px; color: var(--muted); font-size: 12.5px; }
+    .tag { display: inline-block; margin-bottom: 8px; padding: 3px 6px; border-radius: 4px; background: var(--surface-selected); color: var(--platinum-bright); font: 750 9px/1 var(--mono); letter-spacing: .06em; text-transform: uppercase; }
+    .tag.delete { color: var(--danger); }
+
+    .checks { columns: 2; column-gap: 26px; padding: 0; list-style: none; }
+    .checks li { break-inside: avoid; position: relative; margin: 0 0 10px; padding-left: 22px; font-size: 13.5px; }
+    .checks li::before { content: "✓"; position: absolute; left: 0; color: var(--success); font-weight: 800; }
+
+    .code-block { overflow: hidden; border: 1px solid var(--line); border-radius: 8px; background: var(--code); }
+    .code-head { padding: 9px 13px; border-bottom: 1px solid #30343c; color: #9ea3ae; background: #12151a; font: 650 10px/1 var(--mono); }
+    .code-block pre { margin: 0; padding: 16px; color: var(--code-ink); white-space: pre-wrap; overflow-wrap: anywhere; font-size: 12px; line-height: 1.7; }
+
+    .open-questions { border: 1px solid var(--line-strong); border-radius: 8px; overflow: hidden; }
+    .question { display: grid; grid-template-columns: 180px minmax(0, 1fr); gap: 18px; padding: 15px 17px; border-bottom: 1px solid var(--line); background: var(--surface); }
+    .question:last-child { border-bottom: 0; }
+    .question strong { color: var(--ink); }
+    .question span { color: var(--muted); font-size: 13.5px; }
+
+    footer { padding-top: 26px; border-top: 1px solid var(--line-strong); color: var(--muted); font-size: 12px; }
+
+    @media (max-width: 900px) {
+      body { padding-inline: 18px; }
+      .summary, .grid-3 { grid-template-columns: 1fr 1fr; }
+      .summary > div:nth-child(2) { border-right: 0; }
+      .summary > div:nth-child(-n+2) { border-bottom: 1px solid var(--line); }
+      .step { grid-template-columns: 54px minmax(0, 1fr); }
+      .step > div:last-child { grid-column: 2; }
+      .wb-top { grid-template-columns: auto minmax(0, 1fr) auto; }
+      .wb-nav { grid-column: 1 / -1; order: 4; min-height: 42px; }
+      .wb-search { display: none; }
+      .wb-main { grid-template-columns: 1fr; }
+      .wb-tree { border-right: 0; border-bottom: 1px solid #3a3f4a; }
+    }
+    @media (max-width: 640px) {
+      body { padding: 34px 14px 70px; }
+      h1 { font-size: 42px; }
+      .summary, .grid-2, .grid-3, .files { grid-template-columns: 1fr; }
+      .summary > div { border-right: 0; border-bottom: 1px solid var(--line); }
+      .summary > div:last-child { border-bottom: 0; }
+      .section-head { grid-template-columns: 1fr; gap: 6px; }
+      .workbench { font-size: 12px; }
+      .wb-top { gap: 10px; padding: 10px 12px 0; }
+      .wb-brand { font-size: 15px; }
+      .wb-switch { min-width: 0; }
+      .wb-button { display: none; }
+      .wb-meta { overflow-x: auto; white-space: nowrap; }
+      .wb-file { padding-inline: 16px; }
+      .step { grid-template-columns: 1fr; gap: 7px; }
+      .step > div:last-child { grid-column: auto; }
+      .checks { columns: 1; }
+      .question { grid-template-columns: 1fr; gap: 5px; }
+    }
+  </style>
+</head>
+<body>
+  <button class="theme-toggle" type="button" onclick="toggleTheme()">Toggle plan theme</button>
+  <main class="page">
+    <header class="hero">
+      <div class="eyebrow">Implementation plan · July 12, 2026</div>
+      <h1>Overhaul the entire Scope web interface.</h1>
+      <p class="lede">
+        Replace the current gray/blue, page-header-led interface with the approved top-navigation
+        workbench: graphite surfaces, platinum interaction states, precise component craft, and
+        content-first repository workflows. Preserve domain behavior and API contracts while
+        destructively replacing the presentation layer.
+      </p>
+    </header>
+
+    <dl class="summary">
+      <div><dt>Scope</dt><dd>Every web route<small>Desktop, mobile, auth, errors, loading, and dialogs</small></dd></div>
+      <div><dt>Behavior</dt><dd>Preserved by default<small>Domain rules and workflow transitions remain unchanged</small></dd></div>
+      <div><dt>Visual source</dt><dd>Approved neutral mock<small>Top nav, no sidebar, platinum/steel accent</small></dd></div>
+      <div><dt>Migration</dt><dd>Destructive replacement<small>No compatibility layer or parallel legacy shell</small></dd></div>
+    </dl>
+
+    <section id="outcome">
+      <div class="section-head">
+        <div class="section-no">01</div>
+        <div><h2>Outcome and boundaries</h2><p class="section-intro">A single visual system should make Scope feel like one deliberate product rather than a set of route-specific utility pages.</p></div>
+      </div>
+      <div class="decision"><strong>Outcome.</strong> Repository identity and primary navigation live in one persistent top bar. Repository facts occupy a compact metadata strip. Each route renders a border-led workbench beneath it, with typography and interaction—not cards or chromatic decoration—creating hierarchy.</div>
+      <div class="decision"><strong>Domain boundary.</strong> Visibility, permissions, request states, mergeability, settlement, invitations, deletion, clone availability, and live refresh remain owned by existing API/domain code. UI modules translate those facts; they do not infer new rules.</div>
+      <div class="decision"><strong>Theme boundary.</strong> Dark mode is canonical because it is the approved direction. Light mode remains supported with a derived neutral palette and identical component geometry. The existing theme toggle moves into the global user menu.</div>
+      <div class="decision"><strong>Resolved presentation behavior.</strong> README files render with <code>react-markdown</code> and <code>remark-gfm</code>; raw HTML remains disabled and links pass through an explicit safe-URL policy. Search is omitted from the shipped top bar. A reusable search-control component may be built and visually verified for future use, but it remains unmounted and has no product affordance until real search behavior exists.</div>
+      <div class="decision"><strong>Resolved workspace-tab behavior.</strong> Code files and History diffs use one shared tab-strip interaction. Selecting a file opens it once and activates it; selecting an open file reactivates its existing tab. The active item remains URL-owned for reload and deep linking, while the wider open-tab collection is ephemeral repository-scoped session state. History tab collections are additionally scoped by audience and commit so diffs from different projections never mix.</div>
+      <div class="decision"><strong>Resolved top-bar craft.</strong> The top bar is one layered, machined surface rather than a row of outlined boxes. Repository identity becomes an unboxed breadcrumb with subdued owner and emphasized repository. Route navigation becomes a compact raised rail with a dimensional active item. Keep its geometry stable across Code, Requests, and History by placing route-specific controls in the route workbench header. Clone becomes a dark satin split control aligned with the Repository title instead of a disconnected light rectangle in the persistent shell. Load the selected variable interface and mono fonts locally—never merely name an unavailable font—and use restrained 120–160ms surface/icon transitions.</div>
+    </section>
+
+    <section id="visual-contract">
+      <div class="section-head">
+        <div class="section-no">02</div>
+        <div><h2>Visual contract</h2><p class="section-intro">This schematic records the approved layout so implementation does not drift back toward the current two-header shell or generic dashboard patterns.</p></div>
+      </div>
+      <figure class="workbench" aria-label="Target Scope repository workbench schematic">
+        <div class="wb-top">
+          <div class="wb-brand">⌘ Scope</div>
+          <div class="wb-switch"><span>adamblumoff　/</span><strong>public-demo</strong></div>
+          <div class="wb-nav"><span class="active">Code</span><span>Requests</span><span>History</span><span>Settings</span></div>
+        </div>
+        <div class="wb-meta"><span>Published <i class="dot"></i></span><span>Public</span><span>main</span><span>Projected public update</span><span>2 files</span></div>
+        <div class="wb-title"><div><span class="micro">Browse</span><strong>Repository</strong></div><div class="wb-actions"><div class="wb-button">Clone⌄</div></div></div>
+        <div class="wb-main">
+          <div class="wb-tree">
+            <div class="wb-tree-head"><span>Path</span><span>Status</span></div>
+            <div class="wb-row selected"><span>⌄　▱ src</span><small>Tracked　<span class="dot"></span></small></div>
+            <div class="wb-row"><span>　　▧ README.md</span><small>Tracked　<span class="dot"></span></small></div>
+          </div>
+          <div class="wb-file">
+            <div class="wb-tabs" aria-label="Open file tabs"><div class="wb-tab"><b>src/app.ts</b><i>×</i></div><div class="wb-tab active"><b>README.md</b><i>×</i></div></div>
+            <div class="wb-file-head"><div><strong>▧　README.md</strong><br><small>310 B　·　Markdown　·　Updated 3 minutes ago</small></div><div>Copy　 Raw</div></div>
+            <div class="wb-prose"><h3>Scope public demo</h3><p>This is a minimal public repository used to demonstrate Scope.</p><h3 style="margin-top:30px;font-size:21px">What’s inside</h3><p>Readable repository documentation is the primary artifact.</p><div class="wb-code">Clone<br>git clone https://example.com/adamblumoff/public-demo.git</div></div>
+          </div>
+        </div>
+      </figure>
+    </section>
+
+    <section id="principles">
+      <div class="section-head">
+        <div class="section-no">03</div>
+        <div><h2>Design principles</h2><p class="section-intro">These rules apply across routes and are more important than copying any isolated pixel from the mock.</p></div>
+      </div>
+      <div class="grid-3">
+        <article class="panel"><h3>Content is the surface</h3><p>Use rows, panes, type, and rules. Avoid wrapping every section in a card. Repository files, diffs, requests, members, and sessions should remain visibly connected.</p></article>
+        <article class="panel"><h3>Neutral interaction</h3><p>Platinum communicates selection, focus, and primary action through luminance. Red, green, warning, and info colors remain sparse and semantic.</p></article>
+        <article class="panel"><h3>Craft over decoration</h3><p>Distinctiveness comes from spacing, icon consistency, layered one-pixel borders, typography, and complete states—not glows, gradients, or ornamental panels.</p></article>
+        <article class="panel"><h3>One navigation model</h3><p>Global identity, repository context, and primary sections stay in the top system on every repository route. Never introduce side navigation.</p></article>
+        <article class="panel"><h3>Dense, not cramped</h3><p>Use 44–48px rows, readable 14–16px copy, consistent baselines, and 24–32px section rhythm. Preserve scan speed without shrinking important text.</p></article>
+        <article class="panel"><h3>States are first-class</h3><p>Every component specifies default, hover, focus, active, selected, disabled, pending, success, empty, and error behavior before route migration.</p></article>
+      </div>
+    </section>
+
+    <section id="tokens">
+      <div class="section-head">
+        <div class="section-no">04</div>
+        <div><h2>Design system foundation</h2><p class="section-intro">Replace the broad imported color ramps with semantic product tokens. Tailwind utilities should consume these variables; route components should not hard-code palette values.</p></div>
+      </div>
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>Token family</th><th>Dark</th><th>Light</th><th>Usage</th></tr></thead>
+          <tbody>
+            <tr><td>Canvas</td><td><code>#0D0F12</code></td><td><code>#F4F3EF</code></td><td>Viewport and uninterrupted work areas</td></tr>
+            <tr><td>Surface</td><td><code>#12151A</code></td><td><code>#FFFEFA</code></td><td>Top bar, dialogs, menus</td></tr>
+            <tr><td>Raised</td><td><code>#171A20</code></td><td><code>#F8F7F3</code></td><td>Inputs and interactive controls</td></tr>
+            <tr><td>Selected</td><td><code>#1C2027</code></td><td><code>#E8EAED</code></td><td>Selected row and active work item</td></tr>
+            <tr><td>Text</td><td><code>#F1F0EC</code> / <code>#9EA3AE</code></td><td><code>#17191D</code> / <code>#747B86</code></td><td>Primary and supporting type</td></tr>
+            <tr><td>Rules</td><td><code>#292D36</code> / <code>#3A3F4A</code></td><td><code>#D5D8DD</code> / <code>#AEB4BF</code></td><td>Structural and interactive borders</td></tr>
+            <tr><td>Platinum</td><td><code>#AEB4BF</code> / <code>#D8DBE1</code></td><td><code>#747C89</code> / <code>#4E5662</code></td><td>Focus, active nav, selection rail</td></tr>
+            <tr><td>Semantic</td><td colspan="2"><code>#6FA27C</code> success · <code>#D96C75</code> danger · <code>#B49A6B</code> warning · <code>#8293AA</code> info</td><td>Small status indicators and feedback only</td></tr>
+          </tbody>
+        </table>
+      </div>
+      <div class="grid-2" style="margin-top:16px">
+        <article class="panel"><h3>Typography</h3><ul><li>Bundle and actually load a neutral variable interface face such as Geist Sans or Inter Tight plus a matching mono face; do not rely on an unavailable <code>Inter</code> declaration falling back to Segoe UI.</li><li>Fonts must be local build assets with <code>font-display: swap</code>; no runtime request to a third-party font service.</li><li>Use mono only for paths, branch names, hashes, code, shortcut keys, and machine identifiers.</li><li>Brand: 17–18px. Repository identity/body: 14–15px. Route navigation: 12.5–13px. Metadata: 11–12px. Page titles: 28–36px.</li><li>Prefer variable medium and semibold weights; reserve bold for critical labels.</li></ul></article>
+        <article class="panel"><h3>Geometry</h3><ul><li>4px base spacing; primary rhythm at 8, 12, 16, 24, 32, and 48px.</li><li>Controls: 36px compact, 40px normal, 44px coarse pointer.</li><li>Radii: 4px tags/keycaps, 6–7px controls, 9px dialogs. No decorative 16–24px rounding.</li><li>Shadows are limited to menus, dialogs, and primary floating layers.</li></ul></article>
+      </div>
+    </section>
+
+    <section id="shell">
+      <div class="section-head">
+        <div class="section-no">05</div>
+        <div><h2>Application shell and responsive model</h2><p class="section-intro">The shell is the highest-leverage replacement. Complete it before migrating route bodies.</p></div>
+      </div>
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>Viewport</th><th>Identity row</th><th>Route navigation</th><th>Actions</th><th>Workbench</th></tr></thead>
+          <tbody>
+            <tr><td>≥ 1200px</td><td>Scope + repository switcher</td><td>Inline in 64px top bar</td><td>Account in top bar; Clone and route actions in workbench header</td><td>Two- or three-pane when the route needs it</td></tr>
+            <tr><td>768–1199px</td><td>Scope + flexible repository identity</td><td>Same bar with tighter gaps</td><td>Account in top bar; Clone and route actions in workbench header</td><td>Two-pane with constrained tree; diff can replace detail pane</td></tr>
+            <tr><td>390–767px</td><td>First row: Scope mark, repository identity, account</td><td>Second row: horizontally scrollable tabs with active indicator</td><td>Clone and secondary actions in contextual workbench row or overflow</td><td>Stacked panes; selection navigates to content and exposes Back to files</td></tr>
+            <tr><td>320–389px</td><td>Truncated identity with accessible full title</td><td>Scrollable tabs, 44px targets</td><td>Overflow only</td><td>Single-pane route state; never horizontal page overflow</td></tr>
+          </tbody>
+        </table>
+      </div>
+      <div class="decision" style="margin-top:16px"><strong>Repository switcher.</strong> Signed-in users may load choices through the existing repository list API. Public visitors see a static repository identity linked to the public repository root. The control never implies unavailable access.</div>
+      <div class="decision"><strong>Metadata strip.</strong> Render only facts already available on the route: lifecycle, audience/access, default visibility, file/change counts, request counts, or selected history audience. Do not fabricate branch or latest-commit facts to match the mock.</div>
+      <div class="decision"><strong>Header material and interaction.</strong> Use a restrained vertical surface gradient, one-pixel inner highlight, and soft lower shadow to separate the persistent shell from content. Repository identity has no enclosing border. Active route treatment uses both a raised surface and luminance; hover/focus may shift icon or surface by at most 1px. All animation is 120–160ms and respects reduced motion.</div>
+    </section>
+
+    <section id="components">
+      <div class="section-head">
+        <div class="section-no">06</div>
+        <div><h2>Component architecture</h2><p class="section-intro">Create small behavior-owned modules. Shared components encode presentation and interaction contracts; route modules supply data and domain-permitted actions.</p></div>
+      </div>
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>Component</th><th>Responsibility</th><th>Replaces</th></tr></thead>
+          <tbody>
+            <tr><td><code>ApplicationTopbar</code></td><td>Brand, repository identity, route tabs, and account menu with route-invariant geometry</td><td><code>AppHeader</code> + repository subheader</td></tr>
+            <tr><td><code>RepositoryBreadcrumb</code> / <code>RouteNavRail</code></td><td>Unboxed owner/repository hierarchy and dimensional route navigation with precise hover, focus, active, and responsive states</td><td>Outlined <code>RepositoryIdentity</code> and flat underline-only navigation</td></tr>
+            <tr><td><code>RepositoryContextStrip</code></td><td>Route-owned facts separated by editorial rules</td><td>Scattered page badges and duplicated metadata</td></tr>
+            <tr><td><code>WorkbenchHeader</code></td><td>Eyebrow, title, count, contextual actions</td><td>Generic <code>PageHeader</code> on repository routes</td></tr>
+            <tr><td><code>SplitWorkbench</code></td><td>Resizable desktop panes, stacked mobile state, persistent selection</td><td>Route-specific grid strings and border logic</td></tr>
+            <tr><td><code>ResourceList</code></td><td>Column headers, rows, selection rail, keyboard navigation, empty/loading states</td><td>Duplicated list/table row styling</td></tr>
+            <tr><td><code>FileBrowser</code></td><td>Tree semantics and file metadata on top of <code>ResourceList</code></td><td>Visual portions of <code>FileSystemTree</code></td></tr>
+            <tr><td><code>WorkspaceTabStrip</code> / <code>useWorkspaceTabs</code></td><td>Shared read-only Code-file and History-diff tabs, activation, close selection, overflow, keyboard behavior, and session restoration. Route modules provide stable item identity and URL navigation.</td><td>Single-file headers and route-specific close controls</td></tr>
+            <tr><td><code>FileViewer</code></td><td>File chrome, text/binary/README modes, copy/raw controls</td><td><code>SourcePane</code></td></tr>
+            <tr><td><code>SectionList</code></td><td>Settings, account, invite, facts, and action rows without cards</td><td><code>SectionRows</code> with refined responsive behavior</td></tr>
+            <tr><td><code>StatusIndicator</code></td><td>Dot + label, compact tag, or inline state with strict semantic colors</td><td>Overused badges</td></tr>
+            <tr><td><code>ActionMenu</code> / <code>SplitButton</code></td><td>Clone and contextual action grouping</td><td>One-off dropdown/button combinations</td></tr>
+            <tr><td><code>SearchControl</code></td><td>Visually complete future search input with icon, shortcut keycap, and all control states; exported but not mounted in production navigation</td><td>No current product control</td></tr>
+            <tr><td><code>FeedbackState</code></td><td>Loading, empty, success, error, unavailable, binary</td><td>Repeated centered icon/message markup</td></tr>
+            <tr><td><code>ConfirmationDialog</code></td><td>Shared destructive confirmation with object identity and pending state</td><td>Dialog wrappers with inconsistent spacing</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </section>
+
+    <section id="routes">
+      <div class="section-head">
+        <div class="section-no">07</div>
+        <div><h2>Route-by-route overhaul</h2><p class="section-intro">Each route adopts the same shell and primitives while preserving its own behavior and information architecture.</p></div>
+      </div>
+      <div class="grid-2">
+        <article class="panel"><h3>Repositories / home</h3><p>Global top bar with Repositories active. Replace rounded repository cards with a dense resource list: repository identity, visibility, actor access, request count, lifecycle exceptions, and contextual primary action. Empty state presents CLI installation as one guided sequence.</p></article>
+        <article class="panel"><h3>Repository / Code</h3><p>Exact approved workbench. File browser left; open-file tab strip and active viewer right. Clicking a tree file opens it once or reactivates its existing tab. Render safe README Markdown; code remains mono and scrollable; binary/unavailable states preserve the surrounding browser. The root README is the initial tab when available. Clone is the right-aligned Repository workbench-header action so switching routes never shifts the persistent top bar.</p></article>
+        <article class="panel"><h3>Requests list</h3><p>Requests becomes a resource list with stable columns at desktop and labeled stacked metadata on mobile. Status and mergeability use compact semantic indicators. Preserve title, request name/ID, audience, role, OID, update time, and stake.</p></article>
+        <article class="panel"><h3>Request review</h3><p>Keep Overview / Changes / Activity as a local tab row below the request header. Overview uses section rows for facts and workflow actions. Changes adopts the file-browser/diff workbench. Activity becomes a clean chronological rail without card bubbles.</p></article>
+        <article class="panel"><h3>History</h3><p>Use a commit list + commit files + tabbed diff viewer workbench. Selecting a changed file opens one diff tab keyed by audience + projected commit ID + path; selecting it again activates the existing tab. Tabs never mix files from different commits or audiences. Closing the active tab activates the nearest remaining tab and updates <code>path</code>; closing the last clears <code>path</code>. Audience selection belongs in the context strip or workbench header. Mobile moves through commit → files → horizontally scrollable tabs → diff as explicit route state while preserving URL search state.</p></article>
+        <article class="panel"><h3>Settings and collaboration</h3><p>Settings remains a top-level repository tab only for allowed actors. Access, invite, member, pending invite, and danger sections use border-led rows. Permission switches retain domain values; destructive actions remain visually isolated.</p></article>
+        <article class="panel"><h3>Account and CLI sessions</h3><p>Global top bar with account context. One-time login and sessions become two workbench sections. Session rows prioritize label and recency; revoke remains a semantic destructive icon with confirmation.</p></article>
+        <article class="panel"><h3>CLI authorization</h3><p>Use the standard shell for browser-initiated flows and a focused single-column workbench. Preserve all callback handoff states, timers, fallback link, sign-in gate, code entry, and terminal return messaging.</p></article>
+        <article class="panel"><h3>Invitations</h3><p>Public-compatible top bar and a focused invitation document. Show repository identity, target email, permissions, authentication requirement, acceptance action, pending, and failure states without a promotional card.</p></article>
+        <article class="panel"><h3>Authentication</h3><p>Replace the large gradient marketing split with a quiet, balanced identity surface that matches the product. Style Clerk through <code>scopeClerkAppearance</code>; do not fight Clerk’s interaction behavior or inject a fake sidebar.</p></article>
+        <article class="panel"><h3>Errors and unavailable routes</h3><p>Route errors use the same top shell when repository context is known. Preserve recovery links and object identity. Errors use a red icon/rule, not a fully red panel.</p></article>
+        <article class="panel"><h3>Dialogs, menus, toasts</h3><p>Use one elevated surface language: strong border, restrained shadow, 7–9px radius, clear heading, concise copy, and aligned footer. Toast color is semantic only; routine success remains neutral with a small green marker.</p></article>
+      </div>
+    </section>
+
+    <section id="behavior">
+      <div class="section-head">
+        <div class="section-no">08</div>
+        <div><h2>Behavior and data contract audit</h2><p class="section-intro">Visual work must not silently change permissions or create false affordances.</p></div>
+      </div>
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>Area</th><th>Decision</th><th>Classification</th></tr></thead>
+          <tbody>
+            <tr><td>Domain/API contracts</td><td>Unchanged. Reuse existing route loaders and mutations.</td><td class="keep">Preserve</td></tr>
+            <tr><td>Live repository refresh</td><td>Keep current event-stream invalidation and stable loader ownership.</td><td class="keep">Preserve</td></tr>
+            <tr><td>URL state</td><td>Keep file, request view, history audience/commit/path in URL search params.</td><td class="keep">Preserve</td></tr>
+            <tr><td>Open workspace tabs</td><td>The active Code file or History diff remains canonical in URL search. Store only the wider open-tab order in <code>sessionStorage</code>, keyed by repository and surface; History adds audience + commit to the key. Never eager-load every tab. Activating a tab uses the existing route loader, and unavailable/deleted paths reconcile out of the session list.</td><td class="keep">Approved UI state</td></tr>
+            <tr><td>README rendering</td><td>Use <code>react-markdown</code> + <code>remark-gfm</code>. Do not add <code>rehype-raw</code>. Allow relative repository links plus safe <code>http</code>, <code>https</code>, and <code>mailto</code> URLs; reject executable or unknown schemes.</td><td class="keep">Approved</td></tr>
+            <tr><td>Search control</td><td>Build the visual component for the component system, but do not mount it or imply search exists in the shipped interface.</td><td class="keep">Resolved</td></tr>
+            <tr><td>Repository switcher</td><td>Use existing repository list endpoint for authenticated users; static for public.</td><td class="keep">Existing data</td></tr>
+            <tr><td>Pane resizing</td><td>Desktop-only local UI state; sensible defaults and reset; no persistence initially.</td><td class="gate">Optional</td></tr>
+            <tr><td>Old shell/primitives</td><td>Delete once all routes migrate; do not retain compatibility wrappers.</td><td class="replace">Delete</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </section>
+
+    <section id="accessibility">
+      <div class="section-head">
+        <div class="section-no">09</div>
+        <div><h2>Accessibility and interaction contract</h2><p class="section-intro">The visual overhaul is incomplete unless keyboard, screen-reader, reduced-motion, and coarse-pointer behavior are designed alongside it.</p></div>
+      </div>
+      <ul class="checks">
+        <li>Retain skip link, banner, navigation, main, section, list/tree, dialog, and status semantics.</li>
+        <li>Active route and selected resource use shape/position in addition to color.</li>
+        <li>All interactive controls have visible platinum focus rings at 3:1 against adjacent surfaces.</li>
+        <li>Text reaches WCAG AA; small muted text is audited separately in both themes.</li>
+        <li>Coarse-pointer targets are at least 44×44px without inflating desktop density.</li>
+        <li>File trees support arrow navigation, Enter/Space selection, and correct expanded state.</li>
+        <li>Scrollable tab rows expose labels and do not trap horizontal scrolling.</li>
+        <li>Workspace tabs use <code>tablist</code>/<code>tab</code> semantics, roving focus, Left/Right/Home/End navigation, and a separately named close button. Close remains available on focus and coarse pointers even when hover-only chrome is visually reduced on desktop.</li>
+        <li>Closing an active workspace tab moves focus and selection predictably to the nearest remaining tab; closing the last returns focus to the file navigator and clears the active URL path.</li>
+        <li>Async errors remain adjacent to the action and use live-region announcements.</li>
+        <li>Pending buttons preserve width and expose loading text, not spinner-only status.</li>
+        <li>Reduced motion disables pane transitions, hover translation, and loading animation beyond essential progress.</li>
+        <li>Destructive dialogs name the target and restore focus to the initiating control.</li>
+        <li>Mobile stacked workbenches provide an explicit, keyboard-accessible way back to the resource list.</li>
+      </ul>
+    </section>
+
+    <section id="files">
+      <div class="section-head">
+        <div class="section-no">10</div>
+        <div><h2>Expected code changes</h2><p class="section-intro">Names may adjust during implementation, but ownership should remain this explicit. Keep every file comfortably below the project’s 1000-line audit threshold.</p></div>
+      </div>
+      <div class="files">
+        <div class="file-change"><span class="tag">Replace</span><div class="path">web/src/styles.css</div><p>Remove broad borrowed ramps and background glow; install semantic product tokens, typography, base focus, motion, and diff integration.</p></div>
+        <div class="file-change"><span class="tag">Create</span><div class="path">web/src/components/application-topbar.tsx</div><p>Global/repository variants, responsive tabs, identity, action slots, account menu.</p></div>
+        <div class="file-change"><span class="tag">Refactor</span><div class="path">web/src/components/application-topbar.tsx, web/src/features/repo-detail/repo-clone-dropdown.tsx</div><p>Replace outlined repository identity with an unboxed breadcrumb, introduce the raised route-nav rail, give the shell a layered material surface, and redesign Clone as a cohesive dark satin split control with complete interaction states.</p></div>
+        <div class="file-change"><span class="tag">Create</span><div class="path">web/src/assets/fonts/*, web/src/styles/fonts.css</div><p>Bundle the selected variable sans and mono WOFF2 assets, declare explicit ranges/weights with <code>font-display: swap</code>, preload only the primary interface face, and verify the loaded family in the browser.</p></div>
+        <div class="file-change"><span class="tag">Create</span><div class="path">web/src/components/repository-context-strip.tsx</div><p>Typed route-owned metadata facts with separators and semantic dots.</p></div>
+        <div class="file-change"><span class="tag">Create</span><div class="path">web/src/components/workbench/*</div><p>Header, split panes, resource list, feedback state, file chrome, mobile pane navigation.</p></div>
+        <div class="file-change"><span class="tag">Create</span><div class="path">web/src/components/workbench/workspace-tab-strip.tsx, use-workspace-tabs.ts</div><p>Shared controlled tab strip and repository-scoped session controller for Code files and History diffs. Include stable identity, activation/close selection, overflow scrolling, keyboard semantics, coarse-pointer behavior, reconciliation, and focused tests.</p></div>
+        <div class="file-change"><span class="tag">Create</span><div class="path">web/src/components/readme-renderer.tsx</div><p>Safe Markdown/GFM presentation with custom headings, tables, task lists, code, links, and tests for rejected HTML and URL schemes.</p></div>
+        <div class="file-change"><span class="tag">Refactor</span><div class="path">web/src/components/file-system-tree.tsx</div><p>Keep behavior/model; replace presentation through workbench row primitives and keyboard contract.</p></div>
+        <div class="file-change"><span class="tag">Create</span><div class="path">web/src/components/status-indicator.tsx</div><p>Central semantic status vocabulary; reduce badge dependence.</p></div>
+        <div class="file-change"><span class="tag">Refactor</span><div class="path">web/src/components/ui/*</div><p>Buttons, inputs, switches, dialogs, tooltips, skeletons, toggles, alerts, and badges adopt the neutral component language.</p></div>
+        <div class="file-change"><span class="tag">Refactor</span><div class="path">web/src/features/repo-detail/*</div><p>Approved tabbed Code workbench, clone split button, settings/collaboration sections, and responsive behavior. Tree selection opens or activates a tab without changing file-domain behavior.</p></div>
+        <div class="file-change"><span class="tag">Refactor</span><div class="path">web/src/features/requests/*</div><p>Split the 729-line request detail module into header, overview, actions, and activity modules while preserving controller ownership.</p></div>
+        <div class="file-change"><span class="tag">Refactor</span><div class="path">web/src/features/history/*</div><p>Commit/files/tabbed-diff workbench and mobile pane state; retain audience/commit/path URL ownership and scope open tabs to the selected audience + commit.</p></div>
+        <div class="file-change"><span class="tag">Refactor</span><div class="path">web/src/features/home/*, auth/*, invites/*</div><p>Global shell variants, resource lists, focused documents, and complete states.</p></div>
+        <div class="file-change"><span class="tag">Refactor</span><div class="path">web/src/routes/account.tsx, cli-login.tsx</div><p>Extract route UI into feature modules; leave server functions and state machines thin.</p></div>
+        <div class="file-change"><span class="tag">Update</span><div class="path">web/src/clerk-appearance.ts</div><p>Map Clerk to the neutral tokens and component geometry; verify sign-in/sign-up/account popovers.</p></div>
+        <div class="file-change"><span class="tag">Update</span><div class="path">web/package.json, web/pnpm-lock.yaml</div><p>Add only <code>react-markdown</code> and <code>remark-gfm</code> for README rendering; do not add a raw-HTML plugin.</p></div>
+        <div class="file-change"><span class="tag delete">Delete</span><div class="path">app-header.tsx, repo-shell.tsx, page-header.tsx</div><p>Delete only after every consumer migrates. Do not preserve wrappers that imitate the old hierarchy.</p></div>
+      </div>
+    </section>
+
+    <section id="sequence">
+      <div class="section-head">
+        <div class="section-no">11</div>
+        <div><h2>Implementation sequence</h2><p class="section-intro">Each phase is independently reviewable and verified in the running app. Do not attempt a single blind CSS rewrite.</p></div>
+      </div>
+      <div class="steps">
+        <div class="step"><div class="step-no">P0</div><div><h3>Baseline and fixtures</h3></div><div><p>Open the running local app, capture the current authenticated/public routes, and write a manual QA checklist before visual changes.</p><ul><li>Desktop 1440×1000, tablet 900×900, mobile 390×844, narrow 320×720.</li><li>Public and authenticated repository access; populated and empty data.</li><li>Record all current route/URL behavior that must survive.</li></ul></div></div>
+        <div class="step"><div class="step-no">P1</div><div><h3>Tokens and primitives</h3></div><div><p>Replace palette, load real local variable fonts, refine typography, radii, focus, motion, and shared controls. Build Storybook-free local primitive test route only if needed, then remove it.</p><ul><li>Verify computed font families and eliminate silent system fallback.</li><li>Validate dark and light contrast.</li><li>Component states first; no route migration yet.</li></ul></div></div>
+        <div class="step"><div class="step-no">P2</div><div><h3>Shell migration</h3></div><div><p>Build the layered top-bar surface, unboxed repository breadcrumb, raised route-nav rail, route-invariant top-bar geometry, satin Clone split control in the Repository workbench header, repository context strip, responsive navigation row, account menu, and global skip/main structure.</p><ul><li>Migrate home and repository shell first.</li><li>Verify public visitor, member, owner, and unauthenticated variants.</li><li>Inspect all hover/focus/active transitions at reduced and normal motion settings.</li></ul></div></div>
+        <div class="step"><div class="step-no">P3</div><div><h3>Workbench foundation</h3></div><div><p>Build split workbench, resource list, file browser, shared workspace tabs, file viewer, status, feedback, and action primitives.</p><ul><li>Preserve active file/diff selection in URL state and keep open-tab order in scoped session state.</li><li>Test activation, duplicate prevention, close-neighbor selection, last-tab clearing, overflow, keyboard focus, storage reconciliation, and mobile/coarse-pointer behavior.</li><li>Add safe README Markdown/GFM rendering with raw HTML disabled.</li><li>Build and visually verify the unmounted future <code>SearchControl</code>.</li><li>Verify binary, missing, error, empty, and large text files.</li></ul></div></div>
+        <div class="step"><div class="step-no">P4</div><div><h3>Repository workflows</h3></div><div><p>Migrate Code, Requests list/detail, Changes/diffs, History, Settings, members, and invite management.</p><ul><li>Adopt the same workspace-tab primitive in Code and History; History identity must include audience + commit + path.</li><li>Split request detail and member modules by behavior while touching them.</li><li>Verify every permission-gated action before moving on.</li></ul></div></div>
+        <div class="step"><div class="step-no">P5</div><div><h3>Global workflows</h3></div><div><p>Migrate repositories home, account/CLI sessions, CLI login, invitations, auth, errors, loading, toasts, dialogs, and empty states.</p><ul><li>Validate Clerk’s hosted components and popovers in both themes.</li><li>Confirm callback handoff timing is unchanged.</li></ul></div></div>
+        <div class="step"><div class="step-no">P6</div><div><h3>Subtraction and polish</h3></div><div><p>Delete legacy shell/primitives, remove unused tokens and classes, audit file sizes, and resolve visual inconsistency.</p><ul><li>No compatibility wrappers.</li><li>No dead alternate theme or route-specific style islands.</li></ul></div></div>
+        <div class="step"><div class="step-no">P7</div><div><h3>Review and closeout</h3></div><div><p>Run functional checks, then manually inspect and exercise every route in the running local development app across the target viewports. Keep fixing visual, responsive, keyboard, and interaction defects until the manual QA checklist is clean. Run autoreview with a 15-minute timeout while manual verification continues.</p></div></div>
+      </div>
+    </section>
+
+    <section id="verification">
+      <div class="section-head">
+        <div class="section-no">12</div>
+        <div><h2>Verification plan</h2><p class="section-intro">Automated checks protect interaction and route behavior. Visual completion is determined by hands-on QA in the running local development app.</p></div>
+      </div>
+      <div class="grid-2">
+        <article class="panel"><h3>Automated behavior checks</h3><ul><li><code>pnpm check</code></li><li><code>pnpm test</code></li><li><code>pnpm test:smoke</code></li><li>Focused tests for workspace-tab identity/scoping, duplicate prevention, close-neighbor selection, URL synchronization, session reconciliation, mobile pane state, keyboard file navigation, theme persistence, safe README rendering, rejected raw HTML, and rejected unsafe URL schemes.</li></ul></article>
+        <article class="panel"><h3>Manual local-dev QA</h3><ul><li>Open and exercise every route in dark and light themes.</li><li>Inspect desktop, tablet, 390px, and 320px widths.</li><li>Confirm the intended sans/mono assets are actually loaded in computed styles on Windows and Linux; reject silent Segoe/system fallback.</li><li>Inspect the top-bar surface, unboxed breadcrumb, raised route rail, Clone split control, and their hover/focus/active/reduced-motion states at every breakpoint.</li><li>Test hover, focus, selected, disabled, pending, success, empty, and error states.</li><li>Open, reactivate, overflow, and close multiple Code files and History diffs; switch History commits/audiences and confirm tab sets never mix.</li><li>Exercise Clerk sign-in/up, user menu, dialogs, dropdowns, toasts, README rendering, diffs, and long content.</li><li>Run request lifecycle actions and live repository refresh without losing layout or selection.</li><li>Repeat the pass after fixes until there are no known visual defects.</li></ul></article>
+      </div>
+      <div class="code-block" style="margin-top:16px"><div class="code-head">Required closeout commands</div><pre>cd web
+pnpm check
+pnpm test
+pnpm test:smoke</pre></div>
+    </section>
+
+    <section id="acceptance">
+      <div class="section-head">
+        <div class="section-no">13</div>
+        <div><h2>Acceptance criteria</h2><p class="section-intro">The overhaul is complete only when the whole product—not just the Code screenshot—meets the approved standard.</p></div>
+      </div>
+      <ul class="checks">
+        <li>Every route uses the new top-navigation system; no legacy two-row app/repository shell remains.</li>
+        <li>The top bar reads as one crafted, route-invariant surface: repository identity is unboxed, route navigation has dimensional active treatment, Clone is visually integrated with the Repository workbench header, and no silent font fallback flattens the typography.</li>
+        <li>No route introduces a persistent sidebar or dashboard-card layout.</li>
+        <li>Platinum/steel owns interaction; semantic red and green never indicate ordinary selection.</li>
+        <li>Code, requests, history, and diffs use one coherent workbench and resource-row language.</li>
+        <li>Code and History share one polished workspace-tab interaction: no duplicate tabs, active URL state survives reload/navigation, open order survives the session, close behavior is deterministic, and History tabs are isolated by audience + commit.</li>
+        <li>Settings, account, auth, invites, dialogs, errors, loading, and empty states feel like the same product.</li>
+        <li>Public, owner, and member views expose exactly the actions allowed by existing domain permissions.</li>
+        <li>URL-driven file/view/audience/commit selections still survive reload and browser navigation.</li>
+        <li>No horizontal page overflow at 320px; coarse-pointer controls meet 44px targets.</li>
+        <li>Dark and light themes pass contrast review and preserve identical hierarchy.</li>
+        <li>No inert search, fake metadata, speculative action, compatibility layer, or dead style system ships.</li>
+        <li>All automated behavior checks pass and the completed manual local-dev QA checklist has no known console errors, page errors, overflow, clipped content, broken states, or unresolved visual defects.</li>
+        <li>The running application matches the approved mock’s restraint, hierarchy, and component quality.</li>
+      </ul>
+    </section>
+
+    <section id="questions">
+      <div class="section-head">
+        <div class="section-no">14</div>
+        <div><h2>Resolved presentation decisions</h2><p class="section-intro">These decisions are part of the approved implementation scope and no longer block execution.</p></div>
+      </div>
+      <div class="open-questions">
+        <div class="question"><strong>README rendering</strong><span>Use <code>react-markdown</code> with <code>remark-gfm</code> inside the file viewer. Do not enable raw HTML. Preserve fenced code, tables, task lists, safe links, relative repository links, and readable document typography.</span></div>
+        <div class="question"><strong>Search</strong><span>Do not render search or a command palette in the shipped top bar. Build the reusable control for visual/component-system purposes only and keep it unmounted until real search behavior is approved.</span></div>
+        <div class="question"><strong>Workspace tabs</strong><span>Use one shared tab system for Code files and History diffs. Keep the active item in route search, store the wider open set only for the browser session, scope History sets by repository + audience + commit, lazy-load through existing route loaders, and make close/overflow/keyboard/mobile behavior first-class.</span></div>
+        <div class="question"><strong>Top-bar craft</strong><span>Replace the outlined identity box and underline-only navigation with an unboxed owner/repository breadcrumb, layered shell surface, and compact raised route rail. Keep the persistent shell geometry invariant across repository routes and place the dark satin Clone control in the Repository workbench header. Bundle and verify a real variable sans/mono pair; use restrained material and motion rather than adding cards.</span></div>
+      </div>
+    </section>
+
+    <footer>
+      Plan artifact: <code>docs/superpowers/specs/2026-07-12-web-ui-overhaul-plan.html</code>. This plan intentionally does not modify the root README, domain code, persistence, API contracts, or production data.
+    </footer>
+  </main>
+  <script>
+    function toggleTheme() {
+      const root = document.documentElement;
+      const dark = !root.classList.contains('dark');
+      root.classList.toggle('dark', dark);
+      localStorage.setItem('scope-plan-theme', dark ? 'dark' : 'light');
+    }
+  </script>
+</body>
+</html>

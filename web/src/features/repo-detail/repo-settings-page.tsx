@@ -11,13 +11,12 @@ import type {
   RepoSummary,
   UpdateRepoMemberInput,
 } from '@/api/types'
-import { LifecycleBadge } from '@/components/lifecycle-badge'
-import { PageContent, PageHeader } from '@/components/page-header'
+import { PageContent } from '@/components/page-header'
 import { PageErrorAlert } from '@/components/page-error-alert'
 import { RepoShell } from '@/components/repo-shell'
-import { Badge } from '@/components/ui/badge'
+import { WorkbenchHeader } from '@/components/workbench-header'
 import { storeHomeFlash } from '@/lib/home-flash'
-import { Link, useNavigate, useRouter } from '@tanstack/react-router'
+import { useNavigate, useRouter } from '@tanstack/react-router'
 import { useReducer } from 'react'
 import { DeleteRepositoryDialog } from './delete-repository-dialog'
 import {
@@ -106,26 +105,12 @@ export function RepoSettingsPage({
 
   return (
     <RepoShell params={params}>
+      <WorkbenchHeader
+        description={repo.id}
+        eyebrow="Manage"
+        title="Settings"
+      />
       <PageContent>
-        <PageHeader
-          badges={(
-            <>
-              <LifecycleBadge state={repo.lifecycle_state} />
-              <Badge variant="neutral">{repo.access.actor}</Badge>
-            </>
-          )}
-          description={(
-            <Link
-              className="font-mono underline underline-offset-4 hover:text-foreground"
-              params={{ owner: repo.owner_handle, repo: repo.name }}
-              to="/repos/$owner/$repo"
-            >
-              {repo.id}
-            </Link>
-          )}
-          title="Settings"
-        />
-
         {deleteError && (
           <PageErrorAlert title="Repository deletion failed">
             {deleteError}

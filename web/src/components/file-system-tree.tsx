@@ -12,8 +12,8 @@ import {
 } from 'lucide-react'
 import {
   buildFileSystemTree,
+  ancestorFolderKeys,
   displayPath,
-  folderCollapseKeys,
   folderVisibility,
   type FileSystemTreeFileBase,
   type FileSystemTreeNode,
@@ -77,17 +77,30 @@ function FileSystemTreeRows<TFile extends FileSystemTreeFileBase>({
   root: Extract<FileSystemTreeNode<TFile>, { type: 'folder' }>
   selectedFilePath: string | null
 }) {
-  const [collapsed, setCollapsed] = useState<Set<string>>(
-    () => new Set(folderCollapseKeys(root)),
+  const [folderState, setFolderState] = useState<FolderState>(() => ({
+    collapsedForSelection: new Map(),
+    expanded: new Set(),
+  }))
+  const selectedPath = displayPath(selectedFilePath ?? '')
+  const selectedAncestorKeys = useMemo(
+    () => new Set(ancestorFolderKeys(selectedPath)),
+    [selectedPath],
   )
 
   function toggleFolder(key: string) {
-    setCollapsed((current) => {
-      const next = new Set(current)
-      if (next.has(key)) {
-        next.delete(key)
+    setFolderState((current) => {
+      const next: FolderState = {
+        collapsedForSelection: new Map(current.collapsedForSelection),
+        expanded: new Set(current.expanded),
+      }
+      if (folderIsCollapsed(current, key, selectedAncestorKeys, selectedPath)) {
+        next.expanded.add(key)
+        next.collapsedForSelection.delete(key)
       } else {
-        next.add(key)
+        next.expanded.delete(key)
+        if (selectedAncestorKeys.has(key)) {
+          next.collapsedForSelection.set(key, selectedPath)
+        }
       }
       return next
     })
@@ -97,7 +110,7 @@ function FileSystemTreeRows<TFile extends FileSystemTreeFileBase>({
     <div>
       <div
         className={cn(
-          'hidden gap-3 border-b border-border px-2 py-2 text-xs font-medium leading-4 text-muted-foreground sm:grid',
+          'hidden min-h-10 gap-3 px-3 py-2 font-mono text-[10px] font-semibold uppercase tracking-[0.12em] text-muted-foreground sm:grid sm:items-center',
           columnsClassName,
         )}
       >
@@ -111,10 +124,10 @@ function FileSystemTreeRows<TFile extends FileSystemTreeFileBase>({
           )}
         </div>
       </div>
-      <ul className="divide-y divide-border">
+      <ul className="space-y-1">
         {root.children.map((node) => (
           <FileSystemTreeNodeRow
-            collapsed={collapsed}
+            folderState={folderState}
             columnsClassName={columnsClassName}
             compactVisibility={compactVisibility}
             depth={0}
@@ -123,6 +136,7 @@ function FileSystemTreeRows<TFile extends FileSystemTreeFileBase>({
             node={node}
             onSelectFile={onSelectFile}
             onToggleFolder={toggleFolder}
+            selectedAncestorKeys={selectedAncestorKeys}
             selectedFilePath={selectedFilePath}
           />
         ))}
@@ -132,7 +146,7 @@ function FileSystemTreeRows<TFile extends FileSystemTreeFileBase>({
 }
 
 function FileSystemTreeNodeRow<TFile extends FileSystemTreeFileBase>({
-  collapsed,
+  folderState,
   columnsClassName,
   compactVisibility,
   depth,
@@ -140,9 +154,10 @@ function FileSystemTreeNodeRow<TFile extends FileSystemTreeFileBase>({
   node,
   onSelectFile,
   onToggleFolder,
+  selectedAncestorKeys,
   selectedFilePath,
 }: {
-  collapsed: Set<string>
+  folderState: FolderState
   columnsClassName: string
   compactVisibility: boolean
   depth: number
@@ -150,6 +165,7 @@ function FileSystemTreeNodeRow<TFile extends FileSystemTreeFileBase>({
   node: FileSystemTreeNode<TFile>
   onSelectFile?: (file: TFile) => void
   onToggleFolder: (key: string) => void
+  selectedAncestorKeys: ReadonlySet<string>
   selectedFilePath: string | null
 }) {
   if (node.type === 'file') {
@@ -159,8 +175,9 @@ function FileSystemTreeNodeRow<TFile extends FileSystemTreeFileBase>({
     return (
       <li
         className={cn(
-          'grid gap-2 px-2 py-2.5 text-sm sm:items-center',
-          selected && 'bg-brand-muted shadow-[inset_2px_0_0_0_var(--brand)]',
+          'relative grid min-h-12 gap-2 rounded-md border border-transparent px-3 py-2.5 text-sm transition-[background-color,border-color] hover:bg-muted/55 sm:items-center',
+          selected &&
+            'border-[var(--border-strong)] bg-muted shadow-[inset_2px_0_0_0_var(--platinum-bright)] hover:bg-muted',
           columnsClassName,
         )}
       >
@@ -171,7 +188,7 @@ function FileSystemTreeNodeRow<TFile extends FileSystemTreeFileBase>({
           {onSelectFile ? (
             <button
               aria-current={selected ? 'true' : undefined}
-              className="flex min-w-0 flex-1 items-center gap-2 rounded-md text-left transition-colors hover:bg-muted/70"
+              className="flex min-w-0 flex-1 items-center gap-2 rounded text-left focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring"
               onClick={() => onSelectFile(node.file)}
               type="button"
             >
@@ -207,14 +224,19 @@ function FileSystemTreeNodeRow<TFile extends FileSystemTreeFileBase>({
     )
   }
 
-  const isCollapsed = collapsed.has(node.key)
+  const isCollapsed = folderIsCollapsed(
+    folderState,
+    node.key,
+    selectedAncestorKeys,
+    displayPath(selectedFilePath ?? ''),
+  )
   const visibility = folderVisibility(node.files)
 
   return (
     <>
       <li
         className={cn(
-          'grid gap-2 bg-muted/20 px-2 py-2.5 text-sm sm:items-center',
+          'grid min-h-12 gap-2 rounded-md border border-transparent px-3 py-2.5 text-sm transition-colors hover:bg-muted/40 sm:items-center',
           columnsClassName,
         )}
       >
@@ -228,7 +250,7 @@ function FileSystemTreeNodeRow<TFile extends FileSystemTreeFileBase>({
             onClick={() => onToggleFolder(node.key)}
             size="icon-xs"
             type="button"
-            variant="secondary"
+            variant="ghost"
           >
             {isCollapsed ? (
               <ChevronRight className="size-3" />
@@ -237,9 +259,9 @@ function FileSystemTreeNodeRow<TFile extends FileSystemTreeFileBase>({
             )}
           </Button>
           {isCollapsed ? (
-            <Folder className="size-4 shrink-0 text-muted-foreground" />
+            <Folder className="size-4 shrink-0 text-[var(--platinum)]" strokeWidth={1.7} />
           ) : (
-            <FolderOpen className="size-4 shrink-0 text-muted-foreground" />
+            <FolderOpen className="size-4 shrink-0 text-[var(--platinum)]" strokeWidth={1.7} />
           )}
           <span className="min-w-0 truncate font-mono text-xs" title={node.path}>
             {node.name}
@@ -264,7 +286,7 @@ function FileSystemTreeNodeRow<TFile extends FileSystemTreeFileBase>({
       {!isCollapsed &&
         node.children.map((child) => (
           <FileSystemTreeNodeRow
-            collapsed={collapsed}
+            folderState={folderState}
             columnsClassName={columnsClassName}
             compactVisibility={compactVisibility}
             depth={depth + 1}
@@ -273,6 +295,7 @@ function FileSystemTreeNodeRow<TFile extends FileSystemTreeFileBase>({
             node={child}
             onSelectFile={onSelectFile}
             onToggleFolder={onToggleFolder}
+            selectedAncestorKeys={selectedAncestorKeys}
             selectedFilePath={selectedFilePath}
           />
         ))}
@@ -280,11 +303,29 @@ function FileSystemTreeNodeRow<TFile extends FileSystemTreeFileBase>({
   )
 }
 
+type FolderState = {
+  collapsedForSelection: Map<string, string>
+  expanded: Set<string>
+}
+
+function folderIsCollapsed(
+  state: FolderState,
+  key: string,
+  selectedAncestorKeys: ReadonlySet<string>,
+  selectedPath: string,
+) {
+  if (state.expanded.has(key)) return false
+  return !(
+    selectedAncestorKeys.has(key) &&
+    state.collapsedForSelection.get(key) !== selectedPath
+  )
+}
+
 function FilePathLabel({ path }: { path: string }) {
   return (
     <>
       <span className="size-6 shrink-0" />
-      <File className="size-4 shrink-0 text-muted-foreground" />
+      <File className="size-4 shrink-0 text-[var(--platinum)]" strokeWidth={1.7} />
       <span className="min-w-0 truncate font-mono text-xs" title={path}>
         {displayPath(path)}
       </span>

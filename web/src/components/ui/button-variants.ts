@@ -1,14 +1,16 @@
 import { cva } from "class-variance-authority"
 
 const buttonVariants = cva(
-  "group/button inline-flex shrink-0 items-center justify-center rounded-lg border border-transparent bg-clip-padding text-sm font-medium whitespace-nowrap transition-[color,background-color,border-color,box-shadow,transform,opacity] outline-none select-none focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/50 active:not-aria-[haspopup]:translate-y-px disabled:pointer-events-none disabled:cursor-not-allowed disabled:opacity-50 aria-invalid:border-destructive aria-invalid:ring-3 aria-invalid:ring-destructive/20 dark:aria-invalid:border-destructive/50 dark:aria-invalid:ring-destructive/40 [&_svg]:pointer-events-none [&_svg]:shrink-0 [&_svg:not([class*='size-'])]:size-4",
+  "group/button inline-flex shrink-0 items-center justify-center rounded-lg border border-transparent bg-clip-padding text-sm font-medium whitespace-nowrap transition-[color,background-color,border-color,box-shadow,transform,opacity] select-none focus-visible:border-ring focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring active:not-aria-[haspopup]:translate-y-px disabled:pointer-events-none disabled:cursor-not-allowed disabled:opacity-45 aria-invalid:border-destructive aria-invalid:outline-destructive/60 [&_svg]:pointer-events-none [&_svg]:shrink-0 [&_svg:not([class*='size-'])]:size-4",
   {
     variants: {
       variant: {
         default:
           "bg-primary text-primary-foreground shadow-[var(--shadow-card)] hover:bg-primary/90",
+        chrome:
+          "border-[var(--chrome-border)] bg-[linear-gradient(180deg,var(--chrome-start),var(--chrome-end))] text-[#f4f3ef] shadow-[inset_0_1px_rgba(255,255,255,0.08),0_2px_6px_rgba(0,0,0,0.28)] hover:bg-[linear-gradient(180deg,var(--chrome-hover-start),var(--chrome-hover-end))]",
         secondary:
-          "border-border bg-secondary text-secondary-foreground shadow-[var(--shadow-card)] hover:bg-muted hover:border-border aria-expanded:bg-muted aria-expanded:text-secondary-foreground",
+          "border-[var(--border-strong)] bg-secondary text-secondary-foreground shadow-[var(--shadow-card)] hover:bg-muted aria-expanded:bg-muted aria-expanded:text-secondary-foreground",
         ghost:
           "hover:bg-muted hover:text-foreground aria-expanded:bg-muted aria-expanded:text-foreground dark:hover:bg-muted/50",
         destructive:

@@ -18,11 +18,11 @@ const repoPath = `/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)
 
 test('public repository exposes only its projected source', async () => {
   await withPage(repoPath, async (page) => {
-    await page.getByRole('heading', { level: 1, name: repoId }).waitFor()
+    await page.getByRole('heading', { level: 1, name: 'Repository' }).waitFor()
     await assertCurrentRepoSection(page, 'Code')
-    await page.getByRole('heading', { level: 2, name: 'Source' }).waitFor()
     await page.getByText('2 files', { exact: true }).waitFor()
-    await page.getByText('README.md', { exact: true }).waitFor()
+    await page.getByRole('tab', { name: 'README.md' }).waitFor()
+    await page.getByRole('button', { name: 'README.md', exact: true }).waitFor()
     assert.equal(await page.getByText('internal', { exact: true }).count(), 0)
     assert.equal(await page.getByText('plan.md', { exact: true }).count(), 0)
   })
@@ -40,7 +40,7 @@ test('public repository history renders its seeded commit', async () => {
 
 test('public repository navigates to history after client hydration', async () => {
   await withPage(repoPath, async (page) => {
-    await page.getByRole('heading', { level: 1, name: repoId }).waitFor()
+    await page.getByRole('heading', { level: 1, name: 'Repository' }).waitFor()
     await page.waitForFunction(() => {
       const link = document.querySelector('a[href$="/history"]')
       return link && Object.keys(link).some((key) => key.startsWith('__reactProps$'))
@@ -50,7 +50,7 @@ test('public repository navigates to history after client hydration', async () =
       window.__scopeSmokeDocument = sentinel
     }, documentSentinel)
     await page
-      .getByRole('navigation', { name: 'Repository' })
+      .getByRole('navigation', { name: 'Primary' })
       .getByRole('link', { name: 'History', exact: true })
       .click()
     await page.getByRole('heading', { level: 1, name: 'History' }).waitFor()
@@ -92,7 +92,7 @@ async function withPage(path, assertion) {
 
 async function assertCurrentRepoSection(page, section) {
   const link = page
-    .getByRole('navigation', { name: 'Repository' })
+    .getByRole('navigation', { name: 'Primary' })
     .getByRole('link', { name: section, exact: true })
   await link.waitFor()
   assert.equal(await link.getAttribute('aria-current'), 'page')

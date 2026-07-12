@@ -5,7 +5,7 @@ import {
 } from '@/api/cli-login'
 import { parseRevokeCliSessionInput } from '@/api/cli-login-input'
 import type { CliExchangeGrant, CliSession } from '@/api/types'
-import { AppHeader } from '@/components/app-header'
+import { ApplicationTopbar } from '@/components/application-topbar'
 import { AppShell } from '@/components/app-shell'
 import { CopyableCodeBlock } from '@/components/copyable-code-block'
 import { DestructiveActionDialog } from '@/components/destructive-action-dialog'
@@ -87,7 +87,11 @@ function AccountRoute() {
 
   return (
     <AppShell
-      header={() => <AppHeader action={() => <UserButton />} subtitle="Account" />}
+      header={() => (
+        <ApplicationTopbar contextLabel="Account">
+          <UserButton />
+        </ApplicationTopbar>
+      )}
     >
       <PageContent>
         <PageHeader

@@ -8,13 +8,20 @@ import type {
   ReviewFileDiff,
 } from '@/api/types'
 import { FileSystemTree } from '@/components/file-system-tree'
-import { PageContent, PageHeader } from '@/components/page-header'
 import { RepoShell } from '@/components/repo-shell'
 import { RouteErrorPage } from '@/components/route-error-page'
+import { useWorkspaceTabs } from '@/components/use-workspace-tabs'
+import { WorkspaceTabStrip } from '@/components/workspace-tab-strip'
+import {
+  workspaceTabDomIds,
+  workspaceTabPanelId,
+  type WorkspaceTabItem,
+} from '@/components/workspace-tab-model'
 import { Badge } from '@/components/ui/badge'
 import { Skeleton } from '@/components/ui/skeleton'
 import { ToggleGroup, ToggleGroupItem } from '@/components/ui/toggle-group'
 import { cn } from '@/lib/utils'
+import { WorkbenchHeader } from '@/components/workbench-header'
 import { useNavigate } from '@tanstack/react-router'
 import {
   Globe2,
@@ -23,9 +30,11 @@ import {
   LockKeyhole,
   TriangleAlert,
 } from 'lucide-react'
-import { type ReactNode, useMemo } from 'react'
+import { type ReactNode, useMemo, useRef } from 'react'
 import { ReviewFileDiffDrawer } from '../review/review-file-diff-drawer'
 import { audienceLabel, changeCountLabel } from '../review/review-labels'
+
+const HISTORY_TAB_SET_ID = 'history-file-diffs'
 
 export type CommitHistories = {
   private: CommitHistory | null
@@ -48,11 +57,13 @@ export function HistoryPage(props: HistoryPageProps) {
   const { params } = props
   const {
     audience,
+    activateFileTab,
     availableAudiences,
-    closeFileDiff,
+    closeFileTab,
     commitState,
     commits,
     fileDiffState,
+    fileTabs,
     history,
     pageWidthClassName,
     repoId,
@@ -66,26 +77,20 @@ export function HistoryPage(props: HistoryPageProps) {
 
   return (
     <RepoShell contentClassName={pageWidthClassName} params={params}>
-      <PageContent className={pageWidthClassName}>
-        <PageHeader
-          badges={(
-            <>
-              <Badge variant="info">{audienceLabel(audience)} view</Badge>
-              <Badge variant="neutral">
-                {commits.length} {commits.length === 1 ? 'commit' : 'commits'}
-              </Badge>
-              {selectedCommit && (
-                <Badge variant="neutral">
-                  {changeCountLabel(selectedCommit.change_count)}
-                </Badge>
-              )}
-            </>
-          )}
+        <WorkbenchHeader
+          actions={availableAudiences.length > 1 ? (
+            <AudienceToggle
+              audience={audience}
+              availableAudiences={availableAudiences}
+              onSelect={selectAudience}
+            />
+          ) : undefined}
+          count={`${commits.length} ${commits.length === 1 ? 'commit' : 'commits'}${selectedCommit ? ` · ${changeCountLabel(selectedCommit.change_count)}` : ''}`}
           description={`Projected commit history for ${repoId}.`}
+          eyebrow={`${audienceLabel(audience)} view`}
           title="History"
         />
-
-        <section className="mt-8">
+        <section className="px-4 pb-10 sm:px-6 lg:px-8">
           <div className="flex flex-col gap-3 border-b border-border py-4 sm:flex-row sm:items-center sm:justify-between">
             <div className="min-w-0">
               <div className="flex flex-wrap items-center gap-2">
@@ -93,13 +98,6 @@ export function HistoryPage(props: HistoryPageProps) {
                 <h2 className="text-sm font-semibold leading-5">Commits</h2>
               </div>
             </div>
-            {availableAudiences.length > 1 && (
-              <AudienceToggle
-                audience={audience}
-                availableAudiences={availableAudiences}
-                onSelect={selectAudience}
-              />
-            )}
           </div>
 
           {!history || commits.length === 0 ? (
@@ -132,14 +130,15 @@ export function HistoryPage(props: HistoryPageProps) {
               <CommitDetailPanel
                 commitState={commitState}
                 fileDiffState={fileDiffState}
-                onCloseFileDiff={closeFileDiff}
+                fileTabs={fileTabs}
+                onActivateFileTab={activateFileTab}
+                onCloseFileTab={closeFileTab}
                 onSelectFile={selectFile}
                 selectedFilePath={selectedFilePath}
               />
             </div>
           )}
         </section>
-      </PageContent>
     </RepoShell>
   )
 }
@@ -179,6 +178,20 @@ function useHistoryPageModel({
     ? 'max-w-[1320px]'
     : 'max-w-[1040px]'
   const repoId = `${params.owner}/${params.repo}`
+  const fileTabItems = useMemo(
+    () =>
+      (selectedCommit?.files ?? []).map((file) => ({
+        id: file.path,
+        label: fileName(file.path),
+        title: file.path.replace(/^\/+/, ''),
+      })),
+    [selectedCommit?.files],
+  )
+  const fileTabs = useWorkspaceTabs({
+    activeId: selectedFilePath,
+    items: fileTabItems,
+    storageKey: `history:${repoId}:${audience}:${selectedCommitId ?? 'none'}`,
+  })
 
   function replaceHistorySearch(
     nextAudience: ProjectionPreviewAudience,
@@ -198,12 +211,25 @@ function useHistoryPageModel({
   }
 
   return {
+    activateFileTab: (path: string) =>
+      replaceHistorySearch(audience, selectedCommitId, path),
     audience,
     availableAudiences,
-    closeFileDiff: () => replaceHistorySearch(audience, selectedCommitId),
+    closeFileTab: (path: string) => {
+      if (!fileTabs.tabs.some((tab) => tab.id === path)) {
+        replaceHistorySearch(audience, selectedCommitId)
+        return null
+      }
+      const result = fileTabs.close(path)
+      if (path === selectedFilePath) {
+        replaceHistorySearch(audience, selectedCommitId, result.activeId)
+      }
+      return result.focusId
+    },
     commitState,
     commits,
     fileDiffState,
+    fileTabs: fileTabs.tabs,
     history,
     pageWidthClassName,
     repoId,
@@ -216,8 +242,8 @@ function useHistoryPageModel({
     selectCommit: (commit: CommitSummary) =>
       replaceHistorySearch(audience, commit.projected_id),
     selectFile: (file: CommitFile) => {
-      const nextPath = selectedFilePath === file.path ? null : file.path
-      replaceHistorySearch(audience, selectedCommitId, nextPath)
+      fileTabs.open(file.path)
+      replaceHistorySearch(audience, selectedCommitId, file.path)
     },
     selectedCommit,
     selectedCommitId,
@@ -280,16 +306,22 @@ function CommitList({
 function CommitDetailPanel({
   commitState,
   fileDiffState,
-  onCloseFileDiff,
+  fileTabs,
+  onActivateFileTab,
+  onCloseFileTab,
   onSelectFile,
   selectedFilePath,
 }: {
   commitState: CommitDetailState
   fileDiffState: CommitFileDiffState
-  onCloseFileDiff: () => void
+  fileTabs: WorkspaceTabItem[]
+  onActivateFileTab: (path: string) => void
+  onCloseFileTab: (path: string) => string | null
   onSelectFile: (file: CommitFile) => void
   selectedFilePath: string | null
 }) {
+  const fileNavigatorRef = useRef<HTMLDivElement>(null)
+
   if (commitState.status === 'loading') {
     return <CommitDetailSkeleton />
   }
@@ -314,6 +346,16 @@ function CommitDetailPanel({
 
   const commit = commitState.commit
   const diffOpen = selectedFilePath !== null
+  const activeTabDomIds = selectedFilePath && fileTabs.some((tab) => tab.id === selectedFilePath)
+    ? workspaceTabDomIds(HISTORY_TAB_SET_ID, selectedFilePath)
+    : null
+  const tabPaneOpen = fileTabs.length > 0 || diffOpen
+
+  function closeUnavailableDiff() {
+    if (!selectedFilePath) return
+    onCloseFileTab(selectedFilePath)
+    requestAnimationFrame(() => fileNavigatorRef.current?.focus())
+  }
 
   return (
     <div className="min-w-0">
@@ -330,10 +372,15 @@ function CommitDetailPanel({
       <div
         className={cn(
           'grid grid-cols-1 xl:grid-cols-[minmax(0,0.9fr)_minmax(360px,1.1fr)]',
-          !diffOpen && 'xl:grid-cols-[minmax(0,1fr)_minmax(0,0fr)]',
+          !tabPaneOpen && 'xl:grid-cols-[minmax(0,1fr)_minmax(0,0fr)]',
         )}
       >
-        <div className="min-w-0">
+        <div
+          aria-label="Commit file navigator"
+          className="min-w-0 outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring"
+          ref={fileNavigatorRef}
+          tabIndex={-1}
+        >
           {commit.files.length === 0 ? (
             <div className="px-2 py-10 text-sm text-muted-foreground">
               No file changes in this commit.
@@ -352,19 +399,47 @@ function CommitDetailPanel({
         <div
           className={cn(
             'min-w-0 overflow-hidden border-border xl:border-l',
-            diffOpen
+            tabPaneOpen
               ? 'max-h-[70vh] translate-y-0 opacity-100 xl:max-h-none xl:translate-x-0'
               : 'pointer-events-none max-h-0 -translate-y-1 border-transparent opacity-0 xl:translate-x-3',
           )}
         >
-          {diffOpen ? (
-            <ReviewFileDiffDrawer
-              diff={fileDiffState.diff}
-              error={fileDiffState.error}
-              loading={fileDiffState.status === 'loading'}
-              onClose={onCloseFileDiff}
-              selectedPath={selectedFilePath}
-            />
+          {tabPaneOpen ? (
+            <div className="flex h-full min-h-[340px] min-w-0 flex-col">
+              <WorkspaceTabStrip
+                activeId={selectedFilePath}
+                ariaLabel="Open history diffs"
+                onActivate={onActivateFileTab}
+                onClose={onCloseFileTab}
+                onEmptyFocus={() => fileNavigatorRef.current?.focus()}
+                tabSetId={HISTORY_TAB_SET_ID}
+                tabs={fileTabs}
+              />
+              <div
+                aria-label={fileTabs.length > 0 && !activeTabDomIds ? 'History diff viewer' : undefined}
+                aria-labelledby={activeTabDomIds?.tabId}
+                className="min-h-0 flex-1 outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring"
+                id={workspaceTabPanelId(HISTORY_TAB_SET_ID)}
+                role={fileTabs.length > 0 ? 'tabpanel' : undefined}
+                tabIndex={fileTabs.length > 0 ? 0 : undefined}
+              >
+                {diffOpen ? (
+                  <ReviewFileDiffDrawer
+                    className="min-h-0"
+                    diff={fileDiffState.diff}
+                    error={fileDiffState.error}
+                    loading={fileDiffState.status === 'loading'}
+                    onClose={fileTabs.length === 0 ? closeUnavailableDiff : undefined}
+                    selectedPath={selectedFilePath}
+                    showHeader={fileTabs.length === 0}
+                  />
+                ) : (
+                  <PanelState>
+                    <span>Select an open diff tab</span>
+                  </PanelState>
+                )}
+              </div>
+            </div>
           ) : null}
         </div>
       </div>
@@ -481,6 +556,11 @@ function latestCommitId(history: CommitHistory | null) {
 
 function commitTitle(commit: Pick<CommitSummary, 'message'>) {
   return commit.message.split(/\r?\n/, 1)[0]?.trim() || '(no message)'
+}
+
+function fileName(path: string) {
+  const displayPath = path.replace(/^\/+/, '')
+  return displayPath.split('/').at(-1) ?? displayPath
 }
 
 function commitFileStatus(file: CommitFile) {

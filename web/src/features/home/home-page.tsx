@@ -1,5 +1,5 @@
 import type { HomeState } from '@/api/types'
-import { AppHeader } from '@/components/app-header'
+import { ApplicationTopbar } from '@/components/application-topbar'
 import { AppShell } from '@/components/app-shell'
 import { PageContent, PageHeader } from '@/components/page-header'
 import { PageErrorAlert } from '@/components/page-error-alert'
@@ -34,28 +34,24 @@ export function HomePage({ home }: { home: HomeState }) {
   return (
     <AppShell
       header={() => (
-        <AppHeader
-          action={() => (
+        <ApplicationTopbar contextLabel={account?.user?.handle ?? 'Repositories'}>
           <div className="flex min-w-0 items-center gap-2">
-            <Button
-              aria-label="CLI sessions"
-              asChild
-              size="icon-sm"
-              title="CLI sessions"
-              type="button"
-              variant="secondary"
-            >
-              <Link to="/account">
-                <KeyRound className="size-3.5" />
-              </Link>
-            </Button>
-            <UserButton />
-            <ThemeToggle theme={theme} toggleTheme={toggleTheme} />
+              <Button
+                aria-label="CLI sessions"
+                asChild
+                size="icon-sm"
+                title="CLI sessions"
+                type="button"
+                variant="secondary"
+              >
+                <Link to="/account">
+                  <KeyRound className="size-3.5" />
+                </Link>
+              </Button>
+              <UserButton />
+              <ThemeToggle theme={theme} toggleTheme={toggleTheme} />
           </div>
-          )}
-          homeLink={false}
-          subtitle={account?.user?.handle ?? 'Repositories'}
-        />
+        </ApplicationTopbar>
       )}
     >
       <PageContent>

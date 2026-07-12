@@ -15,8 +15,8 @@ export function RepoList({
 }) {
   if (repositories.length === 0) {
     return (
-      <div className="mt-8 flex flex-col items-center gap-4 rounded-2xl border border-dashed border-border px-6 py-12 text-center text-sm">
-        <div className="flex size-11 items-center justify-center rounded-xl bg-brand-muted text-brand">
+      <div className="mt-8 flex flex-col items-center gap-4 border-y border-border px-6 py-14 text-center text-sm">
+        <div className="flex size-10 items-center justify-center rounded-lg border border-[var(--border-strong)] bg-secondary text-[var(--platinum)] shadow-[var(--shadow-card)]">
           <GitBranch className="size-5" />
         </div>
         <div className="max-w-[420px]">
@@ -44,12 +44,12 @@ export function RepoList({
   }
 
   return (
-    <div className="mt-6">
-      <div className="mb-2 px-1 text-xs font-medium uppercase tracking-wide text-muted-foreground">
+    <div className="mt-7 border-y border-border">
+      <div className="border-b border-border px-3 py-3 font-mono text-[10px] font-semibold uppercase tracking-[0.14em] text-muted-foreground">
         {repositories.length}{' '}
         {repositories.length === 1 ? 'repository' : 'repositories'}
       </div>
-      <ul className="flex flex-col gap-1">
+      <ul className="divide-y divide-border">
         {repositories.map((repo) => (
           <li key={repo.id}>
             <RepoListRow repo={repo} />
@@ -64,19 +64,19 @@ function RepoListRow({ repo }: { repo: RepoSummary }) {
   const showLifecycle = repo.lifecycle_state !== 'Published'
 
   return (
-    <div className="group relative flex items-center gap-3 rounded-xl border border-transparent px-3 py-3 transition-colors hover:border-border hover:bg-muted/40">
-      <div className="flex size-9 shrink-0 items-center justify-center rounded-lg border border-border bg-card text-muted-foreground transition-colors group-hover:text-brand">
+    <div className="group relative flex min-h-16 items-center gap-3 px-3 py-3 transition-colors hover:bg-muted/45">
+      <div className="flex size-9 shrink-0 items-center justify-center rounded-lg border border-[var(--border-strong)] bg-secondary text-[var(--platinum)] shadow-[var(--shadow-card)]">
         <GitBranch className="size-4" />
       </div>
 
       <div className="min-w-0 flex-1">
         <Link
-          className="font-mono text-sm leading-5 tracking-tight outline-none after:absolute after:inset-0 after:rounded-xl"
+          className="font-mono text-sm leading-5 tracking-tight outline-none after:absolute after:inset-0"
           params={{ owner: repo.owner_handle, repo: repo.name }}
           to="/repos/$owner/$repo"
         >
           <span className="text-muted-foreground">{repo.owner_handle}/</span>
-          <span className="font-semibold text-foreground group-hover:text-brand">
+          <span className="font-semibold text-foreground">
             {repo.name}
           </span>
         </Link>

@@ -71,7 +71,7 @@ function HistoryRoute() {
       initialAudience={initialAudience}
       initialCommit={initialCommit}
       initialFile={initialFile}
-      key={`${initialAudience}:${initialCommit?.projected_id ?? ''}:${initialFile.path ?? ''}`}
+      key={`${initialAudience}:${initialCommit?.projected_id ?? ''}`}
       params={params}
     />
   )

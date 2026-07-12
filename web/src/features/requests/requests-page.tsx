@@ -1,10 +1,9 @@
 import type { RepoLiveState, RepoParams, RequestSummary } from '@/api/types'
-import { LifecycleBadge } from '@/components/lifecycle-badge'
-import { PageContent, PageHeader } from '@/components/page-header'
 import { RepoShell } from '@/components/repo-shell'
 import { SectionRows } from '@/components/section-rows'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
+import { WorkbenchHeader } from '@/components/workbench-header'
 import { Link } from '@tanstack/react-router'
 import { ArrowRight, Coins, GitBranch, GitPullRequest } from 'lucide-react'
 import {
@@ -18,7 +17,6 @@ import {
 } from './request-labels'
 
 export function RequestsPage({
-  live,
   params,
   requests,
 }: {
@@ -26,24 +24,17 @@ export function RequestsPage({
   params: RepoParams
   requests: RequestSummary[]
 }) {
-  const { repo } = live
-
   return (
     <RepoShell params={params}>
-      <PageContent>
-        <PageHeader
-          badges={(
-            <>
-              <LifecycleBadge state={repo.lifecycle_state} />
-              <Badge variant="neutral">{repo.access.actor}</Badge>
-            </>
-          )}
+        <WorkbenchHeader
+          count={`${requests.length} ${requests.length === 1 ? 'request' : 'requests'}`}
           description="Review and settle proposed branch updates."
+          eyebrow="Review"
           title="Requests"
         />
-
+      <div className="px-4 pb-10 sm:px-6 lg:px-8">
         {requests.length > 0 ? (
-          <SectionRows className="mt-8">
+          <SectionRows className="mt-4">
             {requests.map((request) => (
               <RequestListRow
                 key={request.id}
@@ -55,7 +46,7 @@ export function RequestsPage({
         ) : (
           <EmptyRequests params={params} />
         )}
-      </PageContent>
+      </div>
     </RepoShell>
   )
 }
@@ -69,14 +60,14 @@ function RequestListRow({
 }) {
   return (
     <Link
-      className="group grid min-w-0 gap-3 py-5 sm:grid-cols-[minmax(0,1fr)_auto] sm:items-start"
+      className="group grid min-w-0 gap-3 px-3 py-5 transition-colors hover:bg-muted/45 sm:grid-cols-[minmax(0,1fr)_auto] sm:items-start"
       params={{ ...params, requestId: request.id }}
       to="/repos/$owner/$repo/requests/$requestId"
     >
       <div className="flex min-w-0 items-start gap-3">
         <GitPullRequest className="mt-1 size-4 shrink-0 text-muted-foreground" />
         <div className="min-w-0">
-          <h2 className="truncate text-base font-semibold leading-6 group-hover:underline">
+          <h2 className="truncate text-base font-semibold leading-6 tracking-[-0.012em] group-hover:underline">
             {request.name}
           </h2>
           <div className="mt-1 flex flex-wrap items-center gap-x-2 gap-y-1 text-xs leading-5 text-muted-foreground">
