@@ -28,10 +28,12 @@ export const Route = createFileRoute('/repos/$owner/$repo/')({
   loaderDeps: ({ search }) => search,
   loader: async ({ deps: search, params }) => {
     const content = await loadRepoContent({ data: params })
-    const selectedPath = selectedRouteFilePath(
-      content.files,
-      search.file ?? defaultReadmePath(content.files),
-    )
+    const selectedPath = search.empty
+      ? null
+      : selectedRouteFilePath(
+          content.files,
+          search.file ?? defaultReadmePath(content.files),
+        )
     let selectedFile = null
     let selectedFileError = null
     if (selectedPath) {
@@ -57,8 +59,12 @@ function RepoIndexRoute() {
   return (
     <RepoDetailPage
       content={content}
-      onSelectFile={(file) => {
-        void navigate({ search: { file: displayRouteFilePath(file.path) } })
+      onSelectFilePath={(path) => {
+        void navigate({
+          search: path
+            ? { empty: undefined, file: displayRouteFilePath(path) }
+            : { empty: true, file: undefined },
+        })
       }}
       params={params}
       selectedFile={selectedFile}
@@ -68,9 +74,12 @@ function RepoIndexRoute() {
   )
 }
 
-type RepoCodeSearch = { file?: string }
+type RepoCodeSearch = { empty?: true; file?: string }
 type RepoFileInput = RepoParams & { path: string }
 
 function parseRepoCodeSearch(search: Record<string, unknown>): RepoCodeSearch {
-  return { file: parseRouteFileSearch(search.file) }
+  return {
+    empty: search.empty === true || search.empty === 'true' ? true : undefined,
+    file: parseRouteFileSearch(search.file),
+  }
 }

@@ -12,8 +12,8 @@ import {
 } from 'lucide-react'
 import {
   buildFileSystemTree,
+  ancestorFolderKeys,
   displayPath,
-  folderCollapseKeys,
   folderVisibility,
   type FileSystemTreeFileBase,
   type FileSystemTreeNode,
@@ -77,17 +77,30 @@ function FileSystemTreeRows<TFile extends FileSystemTreeFileBase>({
   root: Extract<FileSystemTreeNode<TFile>, { type: 'folder' }>
   selectedFilePath: string | null
 }) {
-  const [collapsed, setCollapsed] = useState<Set<string>>(
-    () => new Set(folderCollapseKeys(root)),
+  const [folderState, setFolderState] = useState<FolderState>(() => ({
+    collapsedForSelection: new Map(),
+    expanded: new Set(),
+  }))
+  const selectedPath = displayPath(selectedFilePath ?? '')
+  const selectedAncestorKeys = useMemo(
+    () => new Set(ancestorFolderKeys(selectedPath)),
+    [selectedPath],
   )
 
   function toggleFolder(key: string) {
-    setCollapsed((current) => {
-      const next = new Set(current)
-      if (next.has(key)) {
-        next.delete(key)
+    setFolderState((current) => {
+      const next: FolderState = {
+        collapsedForSelection: new Map(current.collapsedForSelection),
+        expanded: new Set(current.expanded),
+      }
+      if (folderIsCollapsed(current, key, selectedAncestorKeys, selectedPath)) {
+        next.expanded.add(key)
+        next.collapsedForSelection.delete(key)
       } else {
-        next.add(key)
+        next.expanded.delete(key)
+        if (selectedAncestorKeys.has(key)) {
+          next.collapsedForSelection.set(key, selectedPath)
+        }
       }
       return next
     })
@@ -114,7 +127,7 @@ function FileSystemTreeRows<TFile extends FileSystemTreeFileBase>({
       <ul className="space-y-1">
         {root.children.map((node) => (
           <FileSystemTreeNodeRow
-            collapsed={collapsed}
+            folderState={folderState}
             columnsClassName={columnsClassName}
             compactVisibility={compactVisibility}
             depth={0}
@@ -123,6 +136,7 @@ function FileSystemTreeRows<TFile extends FileSystemTreeFileBase>({
             node={node}
             onSelectFile={onSelectFile}
             onToggleFolder={toggleFolder}
+            selectedAncestorKeys={selectedAncestorKeys}
             selectedFilePath={selectedFilePath}
           />
         ))}
@@ -132,7 +146,7 @@ function FileSystemTreeRows<TFile extends FileSystemTreeFileBase>({
 }
 
 function FileSystemTreeNodeRow<TFile extends FileSystemTreeFileBase>({
-  collapsed,
+  folderState,
   columnsClassName,
   compactVisibility,
   depth,
@@ -140,9 +154,10 @@ function FileSystemTreeNodeRow<TFile extends FileSystemTreeFileBase>({
   node,
   onSelectFile,
   onToggleFolder,
+  selectedAncestorKeys,
   selectedFilePath,
 }: {
-  collapsed: Set<string>
+  folderState: FolderState
   columnsClassName: string
   compactVisibility: boolean
   depth: number
@@ -150,6 +165,7 @@ function FileSystemTreeNodeRow<TFile extends FileSystemTreeFileBase>({
   node: FileSystemTreeNode<TFile>
   onSelectFile?: (file: TFile) => void
   onToggleFolder: (key: string) => void
+  selectedAncestorKeys: ReadonlySet<string>
   selectedFilePath: string | null
 }) {
   if (node.type === 'file') {
@@ -208,7 +224,12 @@ function FileSystemTreeNodeRow<TFile extends FileSystemTreeFileBase>({
     )
   }
 
-  const isCollapsed = collapsed.has(node.key)
+  const isCollapsed = folderIsCollapsed(
+    folderState,
+    node.key,
+    selectedAncestorKeys,
+    displayPath(selectedFilePath ?? ''),
+  )
   const visibility = folderVisibility(node.files)
 
   return (
@@ -265,7 +286,7 @@ function FileSystemTreeNodeRow<TFile extends FileSystemTreeFileBase>({
       {!isCollapsed &&
         node.children.map((child) => (
           <FileSystemTreeNodeRow
-            collapsed={collapsed}
+            folderState={folderState}
             columnsClassName={columnsClassName}
             compactVisibility={compactVisibility}
             depth={depth + 1}
@@ -274,10 +295,29 @@ function FileSystemTreeNodeRow<TFile extends FileSystemTreeFileBase>({
             node={child}
             onSelectFile={onSelectFile}
             onToggleFolder={onToggleFolder}
+            selectedAncestorKeys={selectedAncestorKeys}
             selectedFilePath={selectedFilePath}
           />
         ))}
     </>
+  )
+}
+
+type FolderState = {
+  collapsedForSelection: Map<string, string>
+  expanded: Set<string>
+}
+
+function folderIsCollapsed(
+  state: FolderState,
+  key: string,
+  selectedAncestorKeys: ReadonlySet<string>,
+  selectedPath: string,
+) {
+  if (state.expanded.has(key)) return false
+  return !(
+    selectedAncestorKeys.has(key) &&
+    state.collapsedForSelection.get(key) !== selectedPath
   )
 }
 

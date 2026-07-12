@@ -43,7 +43,7 @@ export function RepoShell({
       node: (
         <Link
           aria-current={active === section.key ? 'page' : undefined}
-          className="flex h-full items-center focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring"
+          className="flex h-full items-center px-0 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring sm:px-3"
           params={params}
           to={section.to}
         >

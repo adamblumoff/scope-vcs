@@ -153,10 +153,11 @@
       min-height: 62px;
       padding: 0 18px;
       border-bottom: 1px solid #292d36;
-      background: #12151a;
+      background: linear-gradient(180deg, #181b21 0%, #111419 100%);
+      box-shadow: inset 0 1px rgba(255,255,255,.055), 0 8px 24px rgba(0,0,0,.18);
     }
     .wb-brand { color: #f1f0ec; font-weight: 750; font-size: 18px; }
-    .wb-switch, .wb-search, .wb-button {
+    .wb-search, .wb-button {
       min-height: 36px;
       display: flex;
       align-items: center;
@@ -167,16 +168,18 @@
       color: #d8dbe1;
       font-size: 12px;
     }
-    .wb-nav { display: flex; align-self: stretch; gap: 26px; align-items: center; }
-    .wb-nav span { height: 100%; display: flex; align-items: center; color: #9ea3ae; font-size: 13px; }
-    .wb-nav .active { color: #f1f0ec; box-shadow: inset 0 -2px #d8dbe1; }
+    .wb-switch { display: flex; min-width: 0; align-items: baseline; gap: 6px; color: #8f96a1; font-size: 12px; }
+    .wb-switch strong { overflow: hidden; color: #f1f0ec; font-size: 14px; text-overflow: ellipsis; white-space: nowrap; }
+    .wb-nav { display: flex; justify-self: center; gap: 3px; align-items: center; padding: 4px; border: 1px solid #292d36; border-radius: 8px; background: rgba(9,11,14,.58); box-shadow: inset 0 1px rgba(255,255,255,.035); }
+    .wb-nav span { min-height: 32px; display: flex; align-items: center; padding: 0 12px; border-radius: 5px; color: #8f96a1; font-size: 12.5px; font-weight: 590; }
+    .wb-nav .active { color: #f1f0ec; background: linear-gradient(180deg, #252a32, #1b1f26); box-shadow: inset 0 1px rgba(255,255,255,.07), 0 1px 3px rgba(0,0,0,.35); }
     .wb-actions { display: flex; gap: 9px; }
     .wb-search { width: 150px; color: #747c89; }
-    .wb-button { color: #121417; background: #eceae5; font-weight: 700; }
+    .wb-button { border-color: #4a505c; color: #f1f0ec; background: linear-gradient(180deg, #292e36, #1a1e24); box-shadow: inset 0 1px rgba(255,255,255,.08), 0 2px 6px rgba(0,0,0,.28); font-weight: 680; }
     .wb-meta { display: flex; gap: 18px; align-items: center; min-height: 48px; padding: 0 20px; border-bottom: 1px solid #292d36; font-size: 11px; color: #9ea3ae; }
     .wb-meta span + span { padding-left: 18px; border-left: 1px solid #3a3f4a; }
     .dot { display: inline-block; width: 6px; height: 6px; margin-left: 6px; border-radius: 50%; background: #6fa27c; }
-    .wb-title { padding: 22px 20px 14px; border-bottom: 1px solid #292d36; }
+    .wb-title { display: flex; align-items: end; justify-content: space-between; gap: 20px; padding: 22px 20px 14px; border-bottom: 1px solid #292d36; }
     .wb-title strong { display: block; margin-top: 8px; color: #f1f0ec; font-size: 22px; }
     .wb-main { display: grid; grid-template-columns: minmax(250px, .36fr) minmax(0, .64fr); min-height: 390px; }
     .wb-tree { border-right: 1px solid #3a3f4a; padding: 14px 14px; }
@@ -185,6 +188,11 @@
     .wb-row.selected { border: 1px solid #747c89; border-left: 3px solid #d8dbe1; border-radius: 6px; color: #f1f0ec; background: #1c2027; }
     .wb-row small { color: #9ea3ae; }
     .wb-file { padding: 0 24px 30px; }
+    .wb-tabs { display: flex; min-height: 40px; margin: 0 -24px; overflow-x: auto; border-bottom: 1px solid #292d36; background: #0a0c0f; }
+    .wb-tab { display: flex; flex: 0 0 auto; align-items: center; gap: 9px; min-width: 128px; max-width: 220px; padding: 0 12px; border-right: 1px solid #292d36; color: #747c89; font: 650 11px/1 var(--mono); }
+    .wb-tab.active { color: #f1f0ec; background: #12151a; box-shadow: inset 0 2px #d8dbe1; }
+    .wb-tab b { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .wb-tab i { margin-left: auto; color: #9ea3ae; font-style: normal; }
     .wb-file-head { display: flex; align-items: center; justify-content: space-between; min-height: 72px; border-bottom: 1px solid #292d36; }
     .wb-file-head strong { color: #f1f0ec; }
     .wb-prose { max-width: 640px; padding-top: 26px; }
@@ -306,6 +314,8 @@
       <div class="decision"><strong>Domain boundary.</strong> Visibility, permissions, request states, mergeability, settlement, invitations, deletion, clone availability, and live refresh remain owned by existing API/domain code. UI modules translate those facts; they do not infer new rules.</div>
       <div class="decision"><strong>Theme boundary.</strong> Dark mode is canonical because it is the approved direction. Light mode remains supported with a derived neutral palette and identical component geometry. The existing theme toggle moves into the global user menu.</div>
       <div class="decision"><strong>Resolved presentation behavior.</strong> README files render with <code>react-markdown</code> and <code>remark-gfm</code>; raw HTML remains disabled and links pass through an explicit safe-URL policy. Search is omitted from the shipped top bar. A reusable search-control component may be built and visually verified for future use, but it remains unmounted and has no product affordance until real search behavior exists.</div>
+      <div class="decision"><strong>Resolved workspace-tab behavior.</strong> Code files and History diffs use one shared tab-strip interaction. Selecting a file opens it once and activates it; selecting an open file reactivates its existing tab. The active item remains URL-owned for reload and deep linking, while the wider open-tab collection is ephemeral repository-scoped session state. History tab collections are additionally scoped by audience and commit so diffs from different projections never mix.</div>
+      <div class="decision"><strong>Resolved top-bar craft.</strong> The top bar is one layered, machined surface rather than a row of outlined boxes. Repository identity becomes an unboxed breadcrumb with subdued owner and emphasized repository. Route navigation becomes a compact raised rail with a dimensional active item. Keep its geometry stable across Code, Requests, and History by placing route-specific controls in the route workbench header. Clone becomes a dark satin split control aligned with the Repository title instead of a disconnected light rectangle in the persistent shell. Load the selected variable interface and mono fonts locally—never merely name an unavailable font—and use restrained 120–160ms surface/icon transitions.</div>
     </section>
 
     <section id="visual-contract">
@@ -316,12 +326,11 @@
       <figure class="workbench" aria-label="Target Scope repository workbench schematic">
         <div class="wb-top">
           <div class="wb-brand">⌘ Scope</div>
-          <div class="wb-switch">adamblumoff / public-demo⌄</div>
+          <div class="wb-switch"><span>adamblumoff　/</span><strong>public-demo</strong></div>
           <div class="wb-nav"><span class="active">Code</span><span>Requests</span><span>History</span><span>Settings</span></div>
-          <div class="wb-actions"><div class="wb-button">Clone⌄</div></div>
         </div>
         <div class="wb-meta"><span>Published <i class="dot"></i></span><span>Public</span><span>main</span><span>Projected public update</span><span>2 files</span></div>
-        <div class="wb-title"><span class="micro">Browse</span><strong>Repository</strong></div>
+        <div class="wb-title"><div><span class="micro">Browse</span><strong>Repository</strong></div><div class="wb-actions"><div class="wb-button">Clone⌄</div></div></div>
         <div class="wb-main">
           <div class="wb-tree">
             <div class="wb-tree-head"><span>Path</span><span>Status</span></div>
@@ -329,6 +338,7 @@
             <div class="wb-row"><span>　　▧ README.md</span><small>Tracked　<span class="dot"></span></small></div>
           </div>
           <div class="wb-file">
+            <div class="wb-tabs" aria-label="Open file tabs"><div class="wb-tab"><b>src/app.ts</b><i>×</i></div><div class="wb-tab active"><b>README.md</b><i>×</i></div></div>
             <div class="wb-file-head"><div><strong>▧　README.md</strong><br><small>310 B　·　Markdown　·　Updated 3 minutes ago</small></div><div>Copy　 Raw</div></div>
             <div class="wb-prose"><h3>Scope public demo</h3><p>This is a minimal public repository used to demonstrate Scope.</p><h3 style="margin-top:30px;font-size:21px">What’s inside</h3><p>Readable repository documentation is the primary artifact.</p><div class="wb-code">Clone<br>git clone https://example.com/adamblumoff/public-demo.git</div></div>
           </div>
@@ -372,7 +382,7 @@
         </table>
       </div>
       <div class="grid-2" style="margin-top:16px">
-        <article class="panel"><h3>Typography</h3><ul><li>Use a high-quality bundled or system humanist grotesk; avoid a runtime font dependency.</li><li>Use mono only for paths, branch names, hashes, code, shortcut keys, and machine identifiers.</li><li>Body: 14–15px / 1.5–1.65. Workbench labels: 12–13px. Page titles: 28–36px.</li><li>Prefer medium and semibold weights; reserve bold for critical labels.</li></ul></article>
+        <article class="panel"><h3>Typography</h3><ul><li>Bundle and actually load a neutral variable interface face such as Geist Sans or Inter Tight plus a matching mono face; do not rely on an unavailable <code>Inter</code> declaration falling back to Segoe UI.</li><li>Fonts must be local build assets with <code>font-display: swap</code>; no runtime request to a third-party font service.</li><li>Use mono only for paths, branch names, hashes, code, shortcut keys, and machine identifiers.</li><li>Brand: 17–18px. Repository identity/body: 14–15px. Route navigation: 12.5–13px. Metadata: 11–12px. Page titles: 28–36px.</li><li>Prefer variable medium and semibold weights; reserve bold for critical labels.</li></ul></article>
         <article class="panel"><h3>Geometry</h3><ul><li>4px base spacing; primary rhythm at 8, 12, 16, 24, 32, and 48px.</li><li>Controls: 36px compact, 40px normal, 44px coarse pointer.</li><li>Radii: 4px tags/keycaps, 6–7px controls, 9px dialogs. No decorative 16–24px rounding.</li><li>Shadows are limited to menus, dialogs, and primary floating layers.</li></ul></article>
       </div>
     </section>
@@ -386,15 +396,16 @@
         <table>
           <thead><tr><th>Viewport</th><th>Identity row</th><th>Route navigation</th><th>Actions</th><th>Workbench</th></tr></thead>
           <tbody>
-            <tr><td>≥ 1200px</td><td>Scope + repository switcher</td><td>Inline in 64px top bar</td><td>Command trigger, Clone, user</td><td>Two- or three-pane when the route needs it</td></tr>
-            <tr><td>768–1199px</td><td>Scope + flexible repository identity</td><td>Same bar with tighter gaps</td><td>Clone + overflow; command trigger may become icon</td><td>Two-pane with constrained tree; diff can replace detail pane</td></tr>
-            <tr><td>390–767px</td><td>First row: Scope mark, repository identity, overflow</td><td>Second row: horizontally scrollable tabs with active indicator</td><td>Clone and secondary actions in overflow or contextual action row</td><td>Stacked panes; selection navigates to content and exposes Back to files</td></tr>
+            <tr><td>≥ 1200px</td><td>Scope + repository switcher</td><td>Inline in 64px top bar</td><td>Account in top bar; Clone and route actions in workbench header</td><td>Two- or three-pane when the route needs it</td></tr>
+            <tr><td>768–1199px</td><td>Scope + flexible repository identity</td><td>Same bar with tighter gaps</td><td>Account in top bar; Clone and route actions in workbench header</td><td>Two-pane with constrained tree; diff can replace detail pane</td></tr>
+            <tr><td>390–767px</td><td>First row: Scope mark, repository identity, account</td><td>Second row: horizontally scrollable tabs with active indicator</td><td>Clone and secondary actions in contextual workbench row or overflow</td><td>Stacked panes; selection navigates to content and exposes Back to files</td></tr>
             <tr><td>320–389px</td><td>Truncated identity with accessible full title</td><td>Scrollable tabs, 44px targets</td><td>Overflow only</td><td>Single-pane route state; never horizontal page overflow</td></tr>
           </tbody>
         </table>
       </div>
       <div class="decision" style="margin-top:16px"><strong>Repository switcher.</strong> Signed-in users may load choices through the existing repository list API. Public visitors see a static repository identity linked to the public repository root. The control never implies unavailable access.</div>
       <div class="decision"><strong>Metadata strip.</strong> Render only facts already available on the route: lifecycle, audience/access, default visibility, file/change counts, request counts, or selected history audience. Do not fabricate branch or latest-commit facts to match the mock.</div>
+      <div class="decision"><strong>Header material and interaction.</strong> Use a restrained vertical surface gradient, one-pixel inner highlight, and soft lower shadow to separate the persistent shell from content. Repository identity has no enclosing border. Active route treatment uses both a raised surface and luminance; hover/focus may shift icon or surface by at most 1px. All animation is 120–160ms and respects reduced motion.</div>
     </section>
 
     <section id="components">
@@ -406,12 +417,14 @@
         <table>
           <thead><tr><th>Component</th><th>Responsibility</th><th>Replaces</th></tr></thead>
           <tbody>
-            <tr><td><code>ApplicationTopbar</code></td><td>Brand, repository identity, route tabs, Clone, and account menu</td><td><code>AppHeader</code> + repository subheader</td></tr>
+            <tr><td><code>ApplicationTopbar</code></td><td>Brand, repository identity, route tabs, and account menu with route-invariant geometry</td><td><code>AppHeader</code> + repository subheader</td></tr>
+            <tr><td><code>RepositoryBreadcrumb</code> / <code>RouteNavRail</code></td><td>Unboxed owner/repository hierarchy and dimensional route navigation with precise hover, focus, active, and responsive states</td><td>Outlined <code>RepositoryIdentity</code> and flat underline-only navigation</td></tr>
             <tr><td><code>RepositoryContextStrip</code></td><td>Route-owned facts separated by editorial rules</td><td>Scattered page badges and duplicated metadata</td></tr>
             <tr><td><code>WorkbenchHeader</code></td><td>Eyebrow, title, count, contextual actions</td><td>Generic <code>PageHeader</code> on repository routes</td></tr>
             <tr><td><code>SplitWorkbench</code></td><td>Resizable desktop panes, stacked mobile state, persistent selection</td><td>Route-specific grid strings and border logic</td></tr>
             <tr><td><code>ResourceList</code></td><td>Column headers, rows, selection rail, keyboard navigation, empty/loading states</td><td>Duplicated list/table row styling</td></tr>
             <tr><td><code>FileBrowser</code></td><td>Tree semantics and file metadata on top of <code>ResourceList</code></td><td>Visual portions of <code>FileSystemTree</code></td></tr>
+            <tr><td><code>WorkspaceTabStrip</code> / <code>useWorkspaceTabs</code></td><td>Shared read-only Code-file and History-diff tabs, activation, close selection, overflow, keyboard behavior, and session restoration. Route modules provide stable item identity and URL navigation.</td><td>Single-file headers and route-specific close controls</td></tr>
             <tr><td><code>FileViewer</code></td><td>File chrome, text/binary/README modes, copy/raw controls</td><td><code>SourcePane</code></td></tr>
             <tr><td><code>SectionList</code></td><td>Settings, account, invite, facts, and action rows without cards</td><td><code>SectionRows</code> with refined responsive behavior</td></tr>
             <tr><td><code>StatusIndicator</code></td><td>Dot + label, compact tag, or inline state with strict semantic colors</td><td>Overused badges</td></tr>
@@ -431,10 +444,10 @@
       </div>
       <div class="grid-2">
         <article class="panel"><h3>Repositories / home</h3><p>Global top bar with Repositories active. Replace rounded repository cards with a dense resource list: repository identity, visibility, actor access, request count, lifecycle exceptions, and contextual primary action. Empty state presents CLI installation as one guided sequence.</p></article>
-        <article class="panel"><h3>Repository / Code</h3><p>Exact approved workbench. File browser left; selected file right. Render safe README Markdown; code remains mono and scrollable; binary/unavailable states preserve the surrounding browser. Clone is the top-right primary action.</p></article>
+        <article class="panel"><h3>Repository / Code</h3><p>Exact approved workbench. File browser left; open-file tab strip and active viewer right. Clicking a tree file opens it once or reactivates its existing tab. Render safe README Markdown; code remains mono and scrollable; binary/unavailable states preserve the surrounding browser. The root README is the initial tab when available. Clone is the right-aligned Repository workbench-header action so switching routes never shifts the persistent top bar.</p></article>
         <article class="panel"><h3>Requests list</h3><p>Requests becomes a resource list with stable columns at desktop and labeled stacked metadata on mobile. Status and mergeability use compact semantic indicators. Preserve title, request name/ID, audience, role, OID, update time, and stake.</p></article>
         <article class="panel"><h3>Request review</h3><p>Keep Overview / Changes / Activity as a local tab row below the request header. Overview uses section rows for facts and workflow actions. Changes adopts the file-browser/diff workbench. Activity becomes a clean chronological rail without card bubbles.</p></article>
-        <article class="panel"><h3>History</h3><p>Use a commit list + commit files + diff viewer workbench. Audience selection belongs in the context strip or workbench header. Mobile moves through commit → files → diff as explicit route state while preserving URL search state.</p></article>
+        <article class="panel"><h3>History</h3><p>Use a commit list + commit files + tabbed diff viewer workbench. Selecting a changed file opens one diff tab keyed by audience + projected commit ID + path; selecting it again activates the existing tab. Tabs never mix files from different commits or audiences. Closing the active tab activates the nearest remaining tab and updates <code>path</code>; closing the last clears <code>path</code>. Audience selection belongs in the context strip or workbench header. Mobile moves through commit → files → horizontally scrollable tabs → diff as explicit route state while preserving URL search state.</p></article>
         <article class="panel"><h3>Settings and collaboration</h3><p>Settings remains a top-level repository tab only for allowed actors. Access, invite, member, pending invite, and danger sections use border-led rows. Permission switches retain domain values; destructive actions remain visually isolated.</p></article>
         <article class="panel"><h3>Account and CLI sessions</h3><p>Global top bar with account context. One-time login and sessions become two workbench sections. Session rows prioritize label and recency; revoke remains a semantic destructive icon with confirmation.</p></article>
         <article class="panel"><h3>CLI authorization</h3><p>Use the standard shell for browser-initiated flows and a focused single-column workbench. Preserve all callback handoff states, timers, fallback link, sign-in gate, code entry, and terminal return messaging.</p></article>
@@ -457,6 +470,7 @@
             <tr><td>Domain/API contracts</td><td>Unchanged. Reuse existing route loaders and mutations.</td><td class="keep">Preserve</td></tr>
             <tr><td>Live repository refresh</td><td>Keep current event-stream invalidation and stable loader ownership.</td><td class="keep">Preserve</td></tr>
             <tr><td>URL state</td><td>Keep file, request view, history audience/commit/path in URL search params.</td><td class="keep">Preserve</td></tr>
+            <tr><td>Open workspace tabs</td><td>The active Code file or History diff remains canonical in URL search. Store only the wider open-tab order in <code>sessionStorage</code>, keyed by repository and surface; History adds audience + commit to the key. Never eager-load every tab. Activating a tab uses the existing route loader, and unavailable/deleted paths reconcile out of the session list.</td><td class="keep">Approved UI state</td></tr>
             <tr><td>README rendering</td><td>Use <code>react-markdown</code> + <code>remark-gfm</code>. Do not add <code>rehype-raw</code>. Allow relative repository links plus safe <code>http</code>, <code>https</code>, and <code>mailto</code> URLs; reject executable or unknown schemes.</td><td class="keep">Approved</td></tr>
             <tr><td>Search control</td><td>Build the visual component for the component system, but do not mount it or imply search exists in the shipped interface.</td><td class="keep">Resolved</td></tr>
             <tr><td>Repository switcher</td><td>Use existing repository list endpoint for authenticated users; static for public.</td><td class="keep">Existing data</td></tr>
@@ -480,6 +494,8 @@
         <li>Coarse-pointer targets are at least 44×44px without inflating desktop density.</li>
         <li>File trees support arrow navigation, Enter/Space selection, and correct expanded state.</li>
         <li>Scrollable tab rows expose labels and do not trap horizontal scrolling.</li>
+        <li>Workspace tabs use <code>tablist</code>/<code>tab</code> semantics, roving focus, Left/Right/Home/End navigation, and a separately named close button. Close remains available on focus and coarse pointers even when hover-only chrome is visually reduced on desktop.</li>
+        <li>Closing an active workspace tab moves focus and selection predictably to the nearest remaining tab; closing the last returns focus to the file navigator and clears the active URL path.</li>
         <li>Async errors remain adjacent to the action and use live-region announcements.</li>
         <li>Pending buttons preserve width and expose loading text, not spinner-only status.</li>
         <li>Reduced motion disables pane transitions, hover translation, and loading animation beyond essential progress.</li>
@@ -496,15 +512,18 @@
       <div class="files">
         <div class="file-change"><span class="tag">Replace</span><div class="path">web/src/styles.css</div><p>Remove broad borrowed ramps and background glow; install semantic product tokens, typography, base focus, motion, and diff integration.</p></div>
         <div class="file-change"><span class="tag">Create</span><div class="path">web/src/components/application-topbar.tsx</div><p>Global/repository variants, responsive tabs, identity, action slots, account menu.</p></div>
+        <div class="file-change"><span class="tag">Refactor</span><div class="path">web/src/components/application-topbar.tsx, web/src/features/repo-detail/repo-clone-dropdown.tsx</div><p>Replace outlined repository identity with an unboxed breadcrumb, introduce the raised route-nav rail, give the shell a layered material surface, and redesign Clone as a cohesive dark satin split control with complete interaction states.</p></div>
+        <div class="file-change"><span class="tag">Create</span><div class="path">web/src/assets/fonts/*, web/src/styles/fonts.css</div><p>Bundle the selected variable sans and mono WOFF2 assets, declare explicit ranges/weights with <code>font-display: swap</code>, preload only the primary interface face, and verify the loaded family in the browser.</p></div>
         <div class="file-change"><span class="tag">Create</span><div class="path">web/src/components/repository-context-strip.tsx</div><p>Typed route-owned metadata facts with separators and semantic dots.</p></div>
         <div class="file-change"><span class="tag">Create</span><div class="path">web/src/components/workbench/*</div><p>Header, split panes, resource list, feedback state, file chrome, mobile pane navigation.</p></div>
+        <div class="file-change"><span class="tag">Create</span><div class="path">web/src/components/workbench/workspace-tab-strip.tsx, use-workspace-tabs.ts</div><p>Shared controlled tab strip and repository-scoped session controller for Code files and History diffs. Include stable identity, activation/close selection, overflow scrolling, keyboard semantics, coarse-pointer behavior, reconciliation, and focused tests.</p></div>
         <div class="file-change"><span class="tag">Create</span><div class="path">web/src/components/readme-renderer.tsx</div><p>Safe Markdown/GFM presentation with custom headings, tables, task lists, code, links, and tests for rejected HTML and URL schemes.</p></div>
         <div class="file-change"><span class="tag">Refactor</span><div class="path">web/src/components/file-system-tree.tsx</div><p>Keep behavior/model; replace presentation through workbench row primitives and keyboard contract.</p></div>
         <div class="file-change"><span class="tag">Create</span><div class="path">web/src/components/status-indicator.tsx</div><p>Central semantic status vocabulary; reduce badge dependence.</p></div>
         <div class="file-change"><span class="tag">Refactor</span><div class="path">web/src/components/ui/*</div><p>Buttons, inputs, switches, dialogs, tooltips, skeletons, toggles, alerts, and badges adopt the neutral component language.</p></div>
-        <div class="file-change"><span class="tag">Refactor</span><div class="path">web/src/features/repo-detail/*</div><p>Approved code workbench, clone split button, settings/collaboration sections, and responsive behavior.</p></div>
+        <div class="file-change"><span class="tag">Refactor</span><div class="path">web/src/features/repo-detail/*</div><p>Approved tabbed Code workbench, clone split button, settings/collaboration sections, and responsive behavior. Tree selection opens or activates a tab without changing file-domain behavior.</p></div>
         <div class="file-change"><span class="tag">Refactor</span><div class="path">web/src/features/requests/*</div><p>Split the 729-line request detail module into header, overview, actions, and activity modules while preserving controller ownership.</p></div>
-        <div class="file-change"><span class="tag">Refactor</span><div class="path">web/src/features/history/*</div><p>Commit/files/diff workbench and mobile pane state; retain URL-driven loader behavior.</p></div>
+        <div class="file-change"><span class="tag">Refactor</span><div class="path">web/src/features/history/*</div><p>Commit/files/tabbed-diff workbench and mobile pane state; retain audience/commit/path URL ownership and scope open tabs to the selected audience + commit.</p></div>
         <div class="file-change"><span class="tag">Refactor</span><div class="path">web/src/features/home/*, auth/*, invites/*</div><p>Global shell variants, resource lists, focused documents, and complete states.</p></div>
         <div class="file-change"><span class="tag">Refactor</span><div class="path">web/src/routes/account.tsx, cli-login.tsx</div><p>Extract route UI into feature modules; leave server functions and state machines thin.</p></div>
         <div class="file-change"><span class="tag">Update</span><div class="path">web/src/clerk-appearance.ts</div><p>Map Clerk to the neutral tokens and component geometry; verify sign-in/sign-up/account popovers.</p></div>
@@ -520,10 +539,10 @@
       </div>
       <div class="steps">
         <div class="step"><div class="step-no">P0</div><div><h3>Baseline and fixtures</h3></div><div><p>Open the running local app, capture the current authenticated/public routes, and write a manual QA checklist before visual changes.</p><ul><li>Desktop 1440×1000, tablet 900×900, mobile 390×844, narrow 320×720.</li><li>Public and authenticated repository access; populated and empty data.</li><li>Record all current route/URL behavior that must survive.</li></ul></div></div>
-        <div class="step"><div class="step-no">P1</div><div><h3>Tokens and primitives</h3></div><div><p>Replace palette, typography, radii, focus, and shared controls. Build Storybook-free local primitive test route only if needed, then remove it.</p><ul><li>Validate dark and light contrast.</li><li>Component states first; no route migration yet.</li></ul></div></div>
-        <div class="step"><div class="step-no">P2</div><div><h3>Shell migration</h3></div><div><p>Build the top bar, repository context strip, responsive tab row, account menu, and global skip/main structure.</p><ul><li>Migrate home and repository shell first.</li><li>Verify public visitor, member, owner, and unauthenticated variants.</li></ul></div></div>
-        <div class="step"><div class="step-no">P3</div><div><h3>Workbench foundation</h3></div><div><p>Build split workbench, resource list, file browser, file viewer, status, feedback, and action primitives.</p><ul><li>Preserve file selection URL state.</li><li>Add safe README Markdown/GFM rendering with raw HTML disabled.</li><li>Build and visually verify the unmounted future <code>SearchControl</code>.</li><li>Verify binary, missing, error, empty, and large text files.</li></ul></div></div>
-        <div class="step"><div class="step-no">P4</div><div><h3>Repository workflows</h3></div><div><p>Migrate Code, Requests list/detail, Changes/diffs, History, Settings, members, and invite management.</p><ul><li>Split request detail and member modules by behavior while touching them.</li><li>Verify every permission-gated action before moving on.</li></ul></div></div>
+        <div class="step"><div class="step-no">P1</div><div><h3>Tokens and primitives</h3></div><div><p>Replace palette, load real local variable fonts, refine typography, radii, focus, motion, and shared controls. Build Storybook-free local primitive test route only if needed, then remove it.</p><ul><li>Verify computed font families and eliminate silent system fallback.</li><li>Validate dark and light contrast.</li><li>Component states first; no route migration yet.</li></ul></div></div>
+        <div class="step"><div class="step-no">P2</div><div><h3>Shell migration</h3></div><div><p>Build the layered top-bar surface, unboxed repository breadcrumb, raised route-nav rail, route-invariant top-bar geometry, satin Clone split control in the Repository workbench header, repository context strip, responsive navigation row, account menu, and global skip/main structure.</p><ul><li>Migrate home and repository shell first.</li><li>Verify public visitor, member, owner, and unauthenticated variants.</li><li>Inspect all hover/focus/active transitions at reduced and normal motion settings.</li></ul></div></div>
+        <div class="step"><div class="step-no">P3</div><div><h3>Workbench foundation</h3></div><div><p>Build split workbench, resource list, file browser, shared workspace tabs, file viewer, status, feedback, and action primitives.</p><ul><li>Preserve active file/diff selection in URL state and keep open-tab order in scoped session state.</li><li>Test activation, duplicate prevention, close-neighbor selection, last-tab clearing, overflow, keyboard focus, storage reconciliation, and mobile/coarse-pointer behavior.</li><li>Add safe README Markdown/GFM rendering with raw HTML disabled.</li><li>Build and visually verify the unmounted future <code>SearchControl</code>.</li><li>Verify binary, missing, error, empty, and large text files.</li></ul></div></div>
+        <div class="step"><div class="step-no">P4</div><div><h3>Repository workflows</h3></div><div><p>Migrate Code, Requests list/detail, Changes/diffs, History, Settings, members, and invite management.</p><ul><li>Adopt the same workspace-tab primitive in Code and History; History identity must include audience + commit + path.</li><li>Split request detail and member modules by behavior while touching them.</li><li>Verify every permission-gated action before moving on.</li></ul></div></div>
         <div class="step"><div class="step-no">P5</div><div><h3>Global workflows</h3></div><div><p>Migrate repositories home, account/CLI sessions, CLI login, invitations, auth, errors, loading, toasts, dialogs, and empty states.</p><ul><li>Validate Clerk’s hosted components and popovers in both themes.</li><li>Confirm callback handoff timing is unchanged.</li></ul></div></div>
         <div class="step"><div class="step-no">P6</div><div><h3>Subtraction and polish</h3></div><div><p>Delete legacy shell/primitives, remove unused tokens and classes, audit file sizes, and resolve visual inconsistency.</p><ul><li>No compatibility wrappers.</li><li>No dead alternate theme or route-specific style islands.</li></ul></div></div>
         <div class="step"><div class="step-no">P7</div><div><h3>Review and closeout</h3></div><div><p>Run functional checks, then manually inspect and exercise every route in the running local development app across the target viewports. Keep fixing visual, responsive, keyboard, and interaction defects until the manual QA checklist is clean. Run autoreview with a 15-minute timeout while manual verification continues.</p></div></div>
@@ -536,8 +555,8 @@
         <div><h2>Verification plan</h2><p class="section-intro">Automated checks protect interaction and route behavior. Visual completion is determined by hands-on QA in the running local development app.</p></div>
       </div>
       <div class="grid-2">
-        <article class="panel"><h3>Automated behavior checks</h3><ul><li><code>pnpm check</code></li><li><code>pnpm test</code></li><li><code>pnpm test:smoke</code></li><li>Focused tests for mobile pane state, keyboard file navigation, theme persistence, safe README rendering, rejected raw HTML, and rejected unsafe URL schemes.</li></ul></article>
-        <article class="panel"><h3>Manual local-dev QA</h3><ul><li>Open and exercise every route in dark and light themes.</li><li>Inspect desktop, tablet, 390px, and 320px widths.</li><li>Test hover, focus, selected, disabled, pending, success, empty, and error states.</li><li>Exercise Clerk sign-in/up, user menu, dialogs, dropdowns, toasts, README rendering, diffs, and long content.</li><li>Run request lifecycle actions and live repository refresh without losing layout or selection.</li><li>Repeat the pass after fixes until there are no known visual defects.</li></ul></article>
+        <article class="panel"><h3>Automated behavior checks</h3><ul><li><code>pnpm check</code></li><li><code>pnpm test</code></li><li><code>pnpm test:smoke</code></li><li>Focused tests for workspace-tab identity/scoping, duplicate prevention, close-neighbor selection, URL synchronization, session reconciliation, mobile pane state, keyboard file navigation, theme persistence, safe README rendering, rejected raw HTML, and rejected unsafe URL schemes.</li></ul></article>
+        <article class="panel"><h3>Manual local-dev QA</h3><ul><li>Open and exercise every route in dark and light themes.</li><li>Inspect desktop, tablet, 390px, and 320px widths.</li><li>Confirm the intended sans/mono assets are actually loaded in computed styles on Windows and Linux; reject silent Segoe/system fallback.</li><li>Inspect the top-bar surface, unboxed breadcrumb, raised route rail, Clone split control, and their hover/focus/active/reduced-motion states at every breakpoint.</li><li>Test hover, focus, selected, disabled, pending, success, empty, and error states.</li><li>Open, reactivate, overflow, and close multiple Code files and History diffs; switch History commits/audiences and confirm tab sets never mix.</li><li>Exercise Clerk sign-in/up, user menu, dialogs, dropdowns, toasts, README rendering, diffs, and long content.</li><li>Run request lifecycle actions and live repository refresh without losing layout or selection.</li><li>Repeat the pass after fixes until there are no known visual defects.</li></ul></article>
       </div>
       <div class="code-block" style="margin-top:16px"><div class="code-head">Required closeout commands</div><pre>cd web
 pnpm check
@@ -552,9 +571,11 @@ pnpm test:smoke</pre></div>
       </div>
       <ul class="checks">
         <li>Every route uses the new top-navigation system; no legacy two-row app/repository shell remains.</li>
+        <li>The top bar reads as one crafted, route-invariant surface: repository identity is unboxed, route navigation has dimensional active treatment, Clone is visually integrated with the Repository workbench header, and no silent font fallback flattens the typography.</li>
         <li>No route introduces a persistent sidebar or dashboard-card layout.</li>
         <li>Platinum/steel owns interaction; semantic red and green never indicate ordinary selection.</li>
         <li>Code, requests, history, and diffs use one coherent workbench and resource-row language.</li>
+        <li>Code and History share one polished workspace-tab interaction: no duplicate tabs, active URL state survives reload/navigation, open order survives the session, close behavior is deterministic, and History tabs are isolated by audience + commit.</li>
         <li>Settings, account, auth, invites, dialogs, errors, loading, and empty states feel like the same product.</li>
         <li>Public, owner, and member views expose exactly the actions allowed by existing domain permissions.</li>
         <li>URL-driven file/view/audience/commit selections still survive reload and browser navigation.</li>
@@ -574,6 +595,8 @@ pnpm test:smoke</pre></div>
       <div class="open-questions">
         <div class="question"><strong>README rendering</strong><span>Use <code>react-markdown</code> with <code>remark-gfm</code> inside the file viewer. Do not enable raw HTML. Preserve fenced code, tables, task lists, safe links, relative repository links, and readable document typography.</span></div>
         <div class="question"><strong>Search</strong><span>Do not render search or a command palette in the shipped top bar. Build the reusable control for visual/component-system purposes only and keep it unmounted until real search behavior is approved.</span></div>
+        <div class="question"><strong>Workspace tabs</strong><span>Use one shared tab system for Code files and History diffs. Keep the active item in route search, store the wider open set only for the browser session, scope History sets by repository + audience + commit, lazy-load through existing route loaders, and make close/overflow/keyboard/mobile behavior first-class.</span></div>
+        <div class="question"><strong>Top-bar craft</strong><span>Replace the outlined identity box and underline-only navigation with an unboxed owner/repository breadcrumb, layered shell surface, and compact raised route rail. Keep the persistent shell geometry invariant across repository routes and place the dark satin Clone control in the Repository workbench header. Bundle and verify a real variable sans/mono pair; use restrained material and motion rather than adding cards.</span></div>
       </div>
     </section>
 

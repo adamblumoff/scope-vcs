@@ -103,6 +103,13 @@ export function folderCollapseKeys<TFile extends FileSystemTreeFileBase>(
   })
 }
 
+export function ancestorFolderKeys(path: string) {
+  const parts = pathParts(normalizeFilePath(path)).slice(0, -1)
+  return parts.map(
+    (_, index) => `folder:/${parts.slice(0, index + 1).join('/')}`,
+  )
+}
+
 export function displayPath(path: string) {
   return normalizeFilePath(path)
 }

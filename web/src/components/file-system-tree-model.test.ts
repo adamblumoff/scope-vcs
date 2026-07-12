@@ -1,6 +1,7 @@
 import * as assert from 'node:assert/strict'
 import { test } from 'node:test'
 import {
+  ancestorFolderKeys,
   buildFileSystemTree,
   displayPath,
   folderCollapseKeys,
@@ -32,6 +33,10 @@ test('file tree normalizes, nests, sorts, and summarizes paths', () => {
   ])
   assert.deepEqual(folderCollapseKeys(tree), [
     'folder:/docs', 'folder:/src', 'folder:/src/components',
+  ])
+  assert.deepEqual(ancestorFolderKeys('/src/components/Button.tsx'), [
+    'folder:/src',
+    'folder:/src/components',
   ])
   assert.equal(folderVisibility(src.files), 'Mixed')
   assert.equal(folderVisibility([{ path: 'a', visibility: 'Public' }]), 'Public')

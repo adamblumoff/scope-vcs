@@ -1,4 +1,4 @@
-import type { RepoContent, RepoFile, RepoFileContent, RepoParams } from '@/api/types'
+import type { RepoContent, RepoFileContent, RepoParams } from '@/api/types'
 import { RepoPrimaryActionButton } from '@/components/repo-primary-action'
 import { RepoShell } from '@/components/repo-shell'
 import { RouteErrorPage } from '@/components/route-error-page'
@@ -9,14 +9,14 @@ import { RepositoryCodeView } from './repository-code-view'
 
 export function RepoDetailPage({
   content,
-  onSelectFile,
+  onSelectFilePath,
   params,
   selectedFile,
   selectedFileError,
   selectedPath,
 }: {
   content: RepoContent
-  onSelectFile: (file: RepoFile) => void
+  onSelectFilePath: (path: string | null) => void
   params: RepoParams
   selectedFile: RepoFileContent | null
   selectedFileError: string | null
@@ -25,39 +25,37 @@ export function RepoDetailPage({
   const { repo } = useRepoLayout()
   const files = content.files
   return (
-    <RepoShell
-      actions={(
-        <>
-          {repo.lifecycle_state === 'Published' && (
-            <RepoCloneDropdown
-              cloneRemoteUrl={content.clone_remote_url}
+    <RepoShell params={params}>
+      <WorkbenchHeader
+        actions={(
+          <>
+            {repo.lifecycle_state === 'Published' && (
+              <RepoCloneDropdown
+                cloneRemoteUrl={content.clone_remote_url}
+                repo={repo}
+              />
+            )}
+            <RepoPrimaryActionButton
+              includeOpen={false}
               repo={repo}
+              requireOwner
+              variant="default"
             />
-          )}
-          <RepoPrimaryActionButton
-            includeOpen={false}
-            repo={repo}
-            requireOwner
-            variant="default"
-          />
-        </>
-      )}
-      params={params}
-    >
-        <WorkbenchHeader
-          count={`${files.length} ${files.length === 1 ? 'file' : 'files'}`}
-          description="Browse the latest scoped repository view."
-          eyebrow="Browse"
-          title="Repository"
-        />
-        <RepositoryCodeView
-          files={files}
-          onSelectFile={onSelectFile}
-          params={params}
-          selectedFile={selectedFile}
-          selectedFileError={selectedFileError}
-          selectedPath={selectedPath}
-        />
+          </>
+        )}
+        count={`${files.length} ${files.length === 1 ? 'file' : 'files'}`}
+        description="Browse the latest scoped repository view."
+        eyebrow="Browse"
+        title="Repository"
+      />
+      <RepositoryCodeView
+        files={files}
+        onSelectFilePath={onSelectFilePath}
+        params={params}
+        selectedFile={selectedFile}
+        selectedFileError={selectedFileError}
+        selectedPath={selectedPath}
+      />
     </RepoShell>
   )
 }

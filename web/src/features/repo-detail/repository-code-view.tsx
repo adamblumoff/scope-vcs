@@ -1,24 +1,49 @@
 import type { RepoFile, RepoFileContent, RepoParams } from '@/api/types'
 import { FileSystemTree } from '@/components/file-system-tree'
 import { ReadmeRenderer } from '@/components/readme-renderer'
+import { useWorkspaceTabs } from '@/components/use-workspace-tabs'
 import { VisibilityBadge } from '@/components/visibility-badge'
-import { FileCode2, FileQuestion, TriangleAlert } from 'lucide-react'
+import { WorkspaceTabStrip } from '@/components/workspace-tab-strip'
+import { FileQuestion, TriangleAlert } from 'lucide-react'
+import { useMemo, useRef } from 'react'
 
 export function RepositoryCodeView({
   files,
-  onSelectFile,
+  onSelectFilePath,
   params,
   selectedFile,
   selectedFileError,
   selectedPath,
 }: {
   files: RepoFile[]
-  onSelectFile: (file: RepoFile) => void
+  onSelectFilePath: (path: string | null) => void
   params: RepoParams
   selectedFile: RepoFileContent | null
   selectedFileError: string | null
   selectedPath: string | null
 }) {
+  const tabItems = useMemo(
+    () =>
+      files.map((file) => ({
+        id: file.path,
+        label: fileName(file.path),
+        title: displayPath(file.path),
+      })),
+    [files],
+  )
+  const workspaceTabs = useWorkspaceTabs({
+    activeId: selectedPath,
+    items: tabItems,
+    storageKey: `code:${params.owner}/${params.repo}`,
+  })
+  const fileNavigatorRef = useRef<HTMLDivElement>(null)
+
+  function closeTab(id: string) {
+    const result = workspaceTabs.close(id)
+    if (id === selectedPath) onSelectFilePath(result.activeId)
+    return result.focusId
+  }
+
   return (
     <section>
       {files.length === 0 ? (
@@ -28,21 +53,33 @@ export function RepositoryCodeView({
         />
       ) : (
         <div className="grid min-w-0 lg:min-h-[calc(100dvh-225px)] lg:grid-cols-[minmax(300px,0.36fr)_minmax(0,0.64fr)]">
-          <div className="min-w-0 border-b border-border px-3 py-3 lg:border-b-0 lg:border-r lg:px-5">
+          <div
+            aria-label="Repository file navigator"
+            className="min-w-0 border-b border-border px-3 py-3 outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring lg:border-b-0 lg:border-r lg:px-5"
+            ref={fileNavigatorRef}
+            tabIndex={-1}
+          >
             <FileSystemTree
               compactVisibility
               files={files}
               getFileMeta={fileStatus}
               metaColumnLabel="Status"
-              onSelectFile={onSelectFile}
+              onSelectFile={(file) => {
+                workspaceTabs.open(file.path)
+                onSelectFilePath(file.path)
+              }}
               selectedFilePath={selectedPath}
             />
           </div>
           <SourcePane
             error={selectedFileError}
             file={selectedFile}
+            onActivateTab={onSelectFilePath}
+            onCloseTab={closeTab}
+            onEmptyTabFocus={() => fileNavigatorRef.current?.focus()}
             params={params}
             selectedPath={selectedPath}
+            tabs={workspaceTabs.tabs}
           />
         </div>
       )}
@@ -51,6 +88,45 @@ export function RepositoryCodeView({
 }
 
 function SourcePane({
+  file,
+  error,
+  onActivateTab,
+  onCloseTab,
+  onEmptyTabFocus,
+  params,
+  selectedPath,
+  tabs,
+}: {
+  file: RepoFileContent | null
+  error: string | null
+  onActivateTab: (path: string) => void
+  onCloseTab: (path: string) => string | null
+  onEmptyTabFocus: () => void
+  params: RepoParams
+  selectedPath: string | null
+  tabs: Array<{ id: string; label: string; title?: string }>
+}) {
+  return (
+    <div className="min-w-0">
+      <WorkspaceTabStrip
+        activeId={selectedPath}
+        ariaLabel="Open repository files"
+        onActivate={onActivateTab}
+        onClose={onCloseTab}
+        onEmptyFocus={onEmptyTabFocus}
+        tabs={tabs}
+      />
+      <SourceContent
+        error={error}
+        file={file}
+        params={params}
+        selectedPath={selectedPath}
+      />
+    </div>
+  )
+}
+
+function SourceContent({
   file,
   error,
   params,
@@ -93,15 +169,9 @@ function SourcePane({
 
   return (
     <div className="min-w-0">
-      <div className="flex min-h-[74px] min-w-0 flex-wrap items-center gap-3 border-b border-border px-5 py-3 sm:px-8">
-        <FileCode2 className="size-[18px] shrink-0 text-[var(--platinum)]" strokeWidth={1.7} />
-        <div className="min-w-0 flex-1">
-          <h3 className="min-w-0 break-all font-mono text-sm font-semibold">
-            {displayPath(file.path)}
-          </h3>
-          <div className="mt-1 text-xs text-muted-foreground">
-            {file.content.kind === 'text' ? formatBytes(new TextEncoder().encode(file.content.text).length) : formatBytes(file.content.size_bytes)}
-          </div>
+      <div className="flex min-h-11 min-w-0 items-center gap-3 border-b border-border px-5 py-2 sm:px-8">
+        <div className="min-w-0 flex-1 font-mono text-[11px] text-muted-foreground">
+          {file.content.kind === 'text' ? formatBytes(new TextEncoder().encode(file.content.text).length) : formatBytes(file.content.size_bytes)}
         </div>
         <VisibilityBadge compact visibility={file.visibility} />
       </div>
@@ -144,6 +214,10 @@ function fileStatus(file: RepoFile) {
 
 function displayPath(path: string) {
   return path.replace(/^\/+/, '') || '/'
+}
+
+function fileName(path: string) {
+  return displayPath(path).split('/').at(-1) ?? displayPath(path)
 }
 
 function isReadme(path: string) {

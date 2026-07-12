@@ -58,14 +58,14 @@ export function RepoCloneDropdown({
         onClick={toggleOpen}
         size="sm"
         type="button"
-        variant="default"
+        variant="chrome"
       >
         <Code2 className="size-3.5" />
         <span>Clone</span>
-        <span className="-my-2 ml-1 flex h-8 items-center border-l border-black/15 pl-2">
+        <span className="-my-2 ml-1 flex h-8 items-center border-l border-white/10 pl-2">
           <ChevronDown
             className={cn(
-            'size-3.5 text-primary-foreground/70 transition-transform',
+            'size-3.5 text-white/70 transition-transform',
             open && 'rotate-180',
           )}
           />

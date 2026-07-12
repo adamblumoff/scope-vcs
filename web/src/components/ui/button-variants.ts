@@ -7,6 +7,8 @@ const buttonVariants = cva(
       variant: {
         default:
           "bg-primary text-primary-foreground shadow-[var(--shadow-card)] hover:bg-primary/90",
+        chrome:
+          "border-[var(--chrome-border)] bg-[linear-gradient(180deg,var(--chrome-start),var(--chrome-end))] text-[#f4f3ef] shadow-[inset_0_1px_rgba(255,255,255,0.08),0_2px_6px_rgba(0,0,0,0.28)] hover:bg-[linear-gradient(180deg,var(--chrome-hover-start),var(--chrome-hover-end))]",
         secondary:
           "border-[var(--border-strong)] bg-secondary text-secondary-foreground shadow-[var(--shadow-card)] hover:bg-muted aria-expanded:bg-muted aria-expanded:text-secondary-foreground",
         ghost:
