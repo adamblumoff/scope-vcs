@@ -8,7 +8,7 @@ use crate::{
         fetch_scope_remote_with_bearer, git_remote_push_url, head_oid, mark_scope_remote_pushed,
         push_head_with_bearer, scope_remote_head_oid, warn_if_dirty_working_tree,
     },
-    git_transport::{GitAccess, ScopeRemote},
+    git_transport::{GitAccess, ScopeRemote, select_scope_push_remote},
     login::session_from_cache_or_browser,
     repo_config::{
         ensure_scope_repo_config_exists, load_worktree_scope_repo_config,
@@ -22,7 +22,6 @@ use reqwest::blocking::Client;
 use scope_core::domain::repo_config::repo_config_fingerprint;
 use std::time::{SystemTime, UNIX_EPOCH};
 
-pub const DEFAULT_SCOPE_REMOTE: &str = "scope";
 pub const DEFAULT_SCOPE_BRANCH: &str = "main";
 
 #[derive(Debug, Eq, PartialEq)]
@@ -31,7 +30,7 @@ pub struct ScopePushOutcome {
     pub repo: String,
 }
 
-pub fn run(remote: &str, no_review: bool) -> anyhow::Result<()> {
+pub fn run(explicit_remote: Option<&str>, no_review: bool) -> anyhow::Result<()> {
     let git_repo = ensure_git_repo_ready("scope push")?;
     let reviewed_head_oid = head_oid(&git_repo)?;
     let config_created = ensure_scope_repo_config_exists(&git_repo.root)?;
@@ -42,7 +41,8 @@ pub fn run(remote: &str, no_review: bool) -> anyhow::Result<()> {
     }
 
     let api_url = api_url();
-    let target = load_scope_remote(&api_url, remote)?;
+    let remote = select_scope_push_remote(&git_repo, &api_url, explicit_remote)?;
+    let target = load_scope_remote(&git_repo, &api_url, &remote)?;
     let client = http_client()?;
     let session = session_from_cache_or_browser(&client, &api_url)?;
     let repo = get_repo(
@@ -96,7 +96,7 @@ pub fn run(remote: &str, no_review: bool) -> anyhow::Result<()> {
         fetch_scope_remote_with_bearer(
             &git_repo,
             &target.permissioned_url,
-            remote,
+            &remote,
             DEFAULT_SCOPE_BRANCH,
             &session.token,
         )?;
@@ -106,7 +106,7 @@ pub fn run(remote: &str, no_review: bool) -> anyhow::Result<()> {
     } else if repo.lifecycle_state == RepoPublicationState::Published {
         Some(scope_remote_head_oid(
             &git_repo,
-            remote,
+            &remote,
             DEFAULT_SCOPE_BRANCH,
         )?)
     } else {
@@ -142,7 +142,7 @@ pub fn run(remote: &str, no_review: bool) -> anyhow::Result<()> {
     ensure_review_base_matches_intent(
         &git_repo,
         &target.permissioned_url,
-        remote,
+        &remote,
         &session.token,
         intent.base_head_oid.as_deref(),
     )?;
@@ -170,7 +170,7 @@ pub fn run(remote: &str, no_review: bool) -> anyhow::Result<()> {
         &target.repo,
         &intent.token,
     )?;
-    mark_scope_remote_pushed(&git_repo, remote, DEFAULT_SCOPE_BRANCH, &reviewed_head_oid)?;
+    mark_scope_remote_pushed(&git_repo, &remote, DEFAULT_SCOPE_BRANCH, &reviewed_head_oid)?;
     mark_worktree_scope_repo_config_synced(&git_repo.root, &config)?;
     println!(
         "Pushed to Scope: {}/{}\nPush applied by Scope.",
@@ -238,8 +238,12 @@ fn unix_now() -> u64 {
         .as_secs()
 }
 
-pub fn load_scope_remote(api_url: &str, remote: &str) -> anyhow::Result<ScopeRemote> {
-    let push_url = git_remote_push_url(remote)?;
+pub fn load_scope_remote(
+    git_repo: &GitRepo,
+    api_url: &str,
+    remote: &str,
+) -> anyhow::Result<ScopeRemote> {
+    let push_url = git_remote_push_url(git_repo, remote)?;
     let target = ScopeRemote::parse(api_url, remote, &push_url)?;
     if target.access != GitAccess::Permissioned {
         bail!("Scope remote must have path /git/permissioned/owner/repo");

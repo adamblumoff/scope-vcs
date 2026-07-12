@@ -4,7 +4,6 @@ use scope_cli::{
     git_credential::run_git_credential,
     git_repo::discover_git_repo,
     login::session_from_cache_or_browser,
-    push::DEFAULT_SCOPE_REMOTE,
     request::{RequestArgs, prepare_request_command, run_request_command},
     review::run_standalone_review,
 };
@@ -44,8 +43,8 @@ struct InitArgs {
 
 #[derive(Parser)]
 struct PushArgs {
-    #[arg(long, default_value = DEFAULT_SCOPE_REMOTE)]
-    remote: String,
+    #[arg(long, help = "Scope Git remote to push (auto-detected by default)")]
+    remote: Option<String>,
     #[arg(
         long,
         help = "Skip local visibility review and push using committed config"
@@ -81,7 +80,7 @@ struct GitCredentialArgs {
 fn main() -> anyhow::Result<()> {
     match Cli::parse().command {
         CommandKind::Init(args) => scope_cli::init::run(args.name),
-        CommandKind::Push(args) => scope_cli::push::run(&args.remote, args.no_review),
+        CommandKind::Push(args) => scope_cli::push::run(args.remote.as_deref(), args.no_review),
         CommandKind::Pull(args) => scope_cli::pull::run(args.remote.as_deref()),
         CommandKind::Review => {
             let repo = discover_git_repo("scope review")?;

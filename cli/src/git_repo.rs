@@ -199,8 +199,8 @@ pub fn mark_scope_remote_pushed(
     Ok(())
 }
 
-pub fn git_remote_push_url(remote: &str) -> anyhow::Result<String> {
-    let output = git_output(&["remote", "get-url", "--push", remote])?;
+pub fn git_remote_push_url(repo: &GitRepo, remote: &str) -> anyhow::Result<String> {
+    let output = git_output_in_repo(repo, &["remote", "get-url", "--push", remote])?;
     if !output.status.success() {
         bail!("Scope remote '{remote}' is not configured. Run: scope init");
     }
@@ -587,13 +587,6 @@ pub fn head_oid(repo: &GitRepo) -> anyhow::Result<String> {
     }
 
     Ok(String::from_utf8_lossy(&output.stdout).trim().to_string())
-}
-
-fn git_output(args: &[&str]) -> anyhow::Result<Output> {
-    Command::new("git")
-        .args(args)
-        .output()
-        .with_context(|| format!("run git {}", args.join(" ")))
 }
 
 fn git_output_in_repo(repo: &GitRepo, args: &[&str]) -> anyhow::Result<Output> {

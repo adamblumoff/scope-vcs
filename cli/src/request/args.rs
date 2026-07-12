@@ -32,7 +32,7 @@ pub(super) struct RequestStartArgs {
     #[arg(
         long,
         value_enum,
-        help = "Public or private request audience (required for maintainers)"
+        help = "Public or private request audience (defaults to repository visibility)"
     )]
     pub(super) audience: Option<RequestAudienceArg>,
 }
