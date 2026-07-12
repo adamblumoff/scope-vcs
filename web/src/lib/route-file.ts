@@ -21,6 +21,13 @@ export function selectedRouteFilePath(
   )
 }
 
+export function defaultReadmePath(files: ReadonlyArray<{ path: string }>) {
+  const readme = files.find((file) =>
+    /^\/?readme(?:\.[^/]+)?$/i.test(file.path),
+  )
+  return readme ? displayRouteFilePath(readme.path) : undefined
+}
+
 export function routeErrorMessage(error: unknown, fallback: string) {
   return error instanceof Error && error.message.trim() ? error.message : fallback
 }

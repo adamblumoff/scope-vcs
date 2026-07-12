@@ -7,6 +7,7 @@ import { defineConfig } from 'vite'
 
 export default defineConfig({
   server: {
+    allowedHosts: ['adam-blumoff-surface-book-2.tail93abb2.ts.net'],
     port: 3000,
   },
   resolve: {

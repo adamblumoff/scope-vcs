@@ -6,6 +6,7 @@ import {
 import type { RepoParams } from '@/api/types'
 import { RepoDetailPage } from '@/features/repo-detail/repo-detail-page'
 import {
+  defaultReadmePath,
   displayRouteFilePath,
   parseRouteFileSearch,
   routeErrorMessage,
@@ -27,7 +28,10 @@ export const Route = createFileRoute('/repos/$owner/$repo/')({
   loaderDeps: ({ search }) => search,
   loader: async ({ deps: search, params }) => {
     const content = await loadRepoContent({ data: params })
-    const selectedPath = selectedRouteFilePath(content.files, search.file)
+    const selectedPath = selectedRouteFilePath(
+      content.files,
+      search.file ?? defaultReadmePath(content.files),
+    )
     let selectedFile = null
     let selectedFileError = null
     if (selectedPath) {

@@ -6,7 +6,7 @@ import {
   parseCompleteBrowserCliLoginInput,
   parseCompleteCliLoginInput,
 } from '@/api/cli-login-input'
-import { AppHeader } from '@/components/app-header'
+import { ApplicationTopbar } from '@/components/application-topbar'
 import { AppShell } from '@/components/app-shell'
 import { PageContent, PageHeader } from '@/components/page-header'
 import { PageErrorAlert } from '@/components/page-error-alert'
@@ -119,7 +119,11 @@ function CliLoginRoute() {
   }
 
   return (
-    <AppShell header={() => <AppHeader subtitle="CLI login" />}>
+    <AppShell
+      header={() => (
+        <ApplicationTopbar contextLabel="CLI login" />
+      )}
+    >
       <PageContent>
         <PageHeader
           description={

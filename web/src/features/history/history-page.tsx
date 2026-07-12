@@ -8,13 +8,13 @@ import type {
   ReviewFileDiff,
 } from '@/api/types'
 import { FileSystemTree } from '@/components/file-system-tree'
-import { PageContent, PageHeader } from '@/components/page-header'
 import { RepoShell } from '@/components/repo-shell'
 import { RouteErrorPage } from '@/components/route-error-page'
 import { Badge } from '@/components/ui/badge'
 import { Skeleton } from '@/components/ui/skeleton'
 import { ToggleGroup, ToggleGroupItem } from '@/components/ui/toggle-group'
 import { cn } from '@/lib/utils'
+import { WorkbenchHeader } from '@/components/workbench-header'
 import { useNavigate } from '@tanstack/react-router'
 import {
   Globe2,
@@ -66,26 +66,20 @@ export function HistoryPage(props: HistoryPageProps) {
 
   return (
     <RepoShell contentClassName={pageWidthClassName} params={params}>
-      <PageContent className={pageWidthClassName}>
-        <PageHeader
-          badges={(
-            <>
-              <Badge variant="info">{audienceLabel(audience)} view</Badge>
-              <Badge variant="neutral">
-                {commits.length} {commits.length === 1 ? 'commit' : 'commits'}
-              </Badge>
-              {selectedCommit && (
-                <Badge variant="neutral">
-                  {changeCountLabel(selectedCommit.change_count)}
-                </Badge>
-              )}
-            </>
-          )}
+        <WorkbenchHeader
+          actions={availableAudiences.length > 1 ? (
+            <AudienceToggle
+              audience={audience}
+              availableAudiences={availableAudiences}
+              onSelect={selectAudience}
+            />
+          ) : undefined}
+          count={`${commits.length} ${commits.length === 1 ? 'commit' : 'commits'}${selectedCommit ? ` · ${changeCountLabel(selectedCommit.change_count)}` : ''}`}
           description={`Projected commit history for ${repoId}.`}
+          eyebrow={`${audienceLabel(audience)} view`}
           title="History"
         />
-
-        <section className="mt-8">
+        <section className="px-4 pb-10 sm:px-6 lg:px-8">
           <div className="flex flex-col gap-3 border-b border-border py-4 sm:flex-row sm:items-center sm:justify-between">
             <div className="min-w-0">
               <div className="flex flex-wrap items-center gap-2">
@@ -93,13 +87,6 @@ export function HistoryPage(props: HistoryPageProps) {
                 <h2 className="text-sm font-semibold leading-5">Commits</h2>
               </div>
             </div>
-            {availableAudiences.length > 1 && (
-              <AudienceToggle
-                audience={audience}
-                availableAudiences={availableAudiences}
-                onSelect={selectAudience}
-              />
-            )}
           </div>
 
           {!history || commits.length === 0 ? (
@@ -139,7 +126,6 @@ export function HistoryPage(props: HistoryPageProps) {
             </div>
           )}
         </section>
-      </PageContent>
     </RepoShell>
   )
 }

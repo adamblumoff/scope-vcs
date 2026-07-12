@@ -1,44 +1,34 @@
-import type { RepoFile, RepoFileContent } from '@/api/types'
+import type { RepoFile, RepoFileContent, RepoParams } from '@/api/types'
 import { FileSystemTree } from '@/components/file-system-tree'
+import { ReadmeRenderer } from '@/components/readme-renderer'
 import { VisibilityBadge } from '@/components/visibility-badge'
-import { Badge } from '@/components/ui/badge'
 import { FileCode2, FileQuestion, TriangleAlert } from 'lucide-react'
 
 export function RepositoryCodeView({
   files,
   onSelectFile,
+  params,
   selectedFile,
   selectedFileError,
   selectedPath,
 }: {
   files: RepoFile[]
   onSelectFile: (file: RepoFile) => void
+  params: RepoParams
   selectedFile: RepoFileContent | null
   selectedFileError: string | null
   selectedPath: string | null
 }) {
   return (
-    <section className="mt-8 border-y border-border">
-      <div className="flex flex-wrap items-baseline justify-between gap-2 border-b border-border py-3">
-        <div>
-          <h2 className="text-sm font-semibold">Source</h2>
-          <p className="mt-0.5 text-sm text-muted-foreground">
-            Browse the latest scoped repository view.
-          </p>
-        </div>
-        <Badge variant="neutral">
-          {files.length} {files.length === 1 ? 'file' : 'files'}
-        </Badge>
-      </div>
-
+    <section>
       {files.length === 0 ? (
         <EmptySource
           description="Run scope push from the CLI to add files to this repository."
           title="No files yet"
         />
       ) : (
-        <div className="grid min-w-0 lg:grid-cols-[minmax(280px,0.42fr)_minmax(0,1fr)]">
-          <div className="min-w-0 border-b border-border py-2 lg:border-r lg:border-b-0 lg:pr-3">
+        <div className="grid min-w-0 lg:min-h-[calc(100dvh-225px)] lg:grid-cols-[minmax(300px,0.36fr)_minmax(0,0.64fr)]">
+          <div className="min-w-0 border-b border-border px-3 py-3 lg:border-b-0 lg:border-r lg:px-5">
             <FileSystemTree
               compactVisibility
               files={files}
@@ -51,6 +41,7 @@ export function RepositoryCodeView({
           <SourcePane
             error={selectedFileError}
             file={selectedFile}
+            params={params}
             selectedPath={selectedPath}
           />
         </div>
@@ -62,10 +53,12 @@ export function RepositoryCodeView({
 function SourcePane({
   file,
   error,
+  params,
   selectedPath,
 }: {
   file: RepoFileContent | null
   error: string | null
+  params: RepoParams
   selectedPath: string | null
 }) {
   if (!selectedPath) {
@@ -100,20 +93,26 @@ function SourcePane({
 
   return (
     <div className="min-w-0">
-      <div className="flex min-w-0 flex-wrap items-center gap-2 border-b border-border px-4 py-3">
-        <FileCode2 className="size-4 shrink-0 text-muted-foreground" />
-        <h3 className="min-w-0 flex-1 break-all font-mono text-xs font-medium">
-          {displayPath(file.path)}
-        </h3>
-        <VisibilityBadge visibility={file.visibility} />
+      <div className="flex min-h-[74px] min-w-0 flex-wrap items-center gap-3 border-b border-border px-5 py-3 sm:px-8">
+        <FileCode2 className="size-[18px] shrink-0 text-[var(--platinum)]" strokeWidth={1.7} />
+        <div className="min-w-0 flex-1">
+          <h3 className="min-w-0 break-all font-mono text-sm font-semibold">
+            {displayPath(file.path)}
+          </h3>
+          <div className="mt-1 text-xs text-muted-foreground">
+            {file.content.kind === 'text' ? formatBytes(new TextEncoder().encode(file.content.text).length) : formatBytes(file.content.size_bytes)}
+          </div>
+        </div>
+        <VisibilityBadge compact visibility={file.visibility} />
       </div>
       {file.content.kind === 'text' ? (
         isReadme(file.path) ? (
-          <pre className="max-h-[70vh] overflow-auto p-5 font-sans text-sm leading-6 whitespace-pre-wrap text-pretty">
-            {file.content.text}
-          </pre>
+          <ReadmeRenderer
+            repository={{ ...params, readmePath: file.path }}
+            source={file.content.text}
+          />
         ) : (
-          <pre className="max-h-[70vh] overflow-auto p-4 font-mono text-xs leading-5 whitespace-pre">
+          <pre className="max-h-[calc(100dvh-300px)] overflow-auto bg-[#090b0e] p-5 font-mono text-xs leading-5 whitespace-pre text-[#eceae5] sm:p-7">
             <code>{file.content.text}</code>
           </pre>
         )

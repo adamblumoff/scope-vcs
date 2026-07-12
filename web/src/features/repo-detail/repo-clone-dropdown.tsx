@@ -58,22 +58,24 @@ export function RepoCloneDropdown({
         onClick={toggleOpen}
         size="sm"
         type="button"
-        variant="secondary"
+        variant="default"
       >
         <Code2 className="size-3.5" />
         <span>Clone</span>
-        <ChevronDown
-          className={cn(
-            'size-3.5 text-muted-foreground transition-transform',
+        <span className="-my-2 ml-1 flex h-8 items-center border-l border-black/15 pl-2">
+          <ChevronDown
+            className={cn(
+            'size-3.5 text-primary-foreground/70 transition-transform',
             open && 'rotate-180',
           )}
-        />
+          />
+        </span>
       </Button>
 
       {open && (
         <dialog
           aria-label={`${cloneLabel} clone command`}
-          className="absolute left-auto right-0 top-full z-50 m-0 mt-2 w-[min(420px,calc(100vw-2rem))] rounded-xl border border-border bg-popover p-3 text-popover-foreground shadow-[var(--shadow-pop)]"
+          className="absolute left-auto right-0 top-full z-50 m-0 mt-2 w-[min(420px,calc(100vw-2rem))] rounded-lg border border-[var(--border-strong)] bg-popover p-3 text-popover-foreground shadow-[var(--shadow-pop)]"
           open
         >
           <div className="mb-2 flex h-6 items-center justify-between text-xs font-semibold leading-4">

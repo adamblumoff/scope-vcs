@@ -55,7 +55,7 @@ export function CopyableCodeBlock({
   return (
     <div
       className={cn(
-        'relative rounded-lg border border-border bg-muted',
+        'relative rounded-lg border border-border border-l-2 border-l-[var(--platinum)] bg-[#090b0e] text-[#eceae5] shadow-[var(--shadow-card)]',
         className,
       )}
     >
@@ -67,7 +67,7 @@ export function CopyableCodeBlock({
           <TooltipTrigger asChild>
             <Button
               aria-label={copied ? 'Copied' : copyLabel}
-              className="absolute right-2 top-2 bg-background/80 text-muted-foreground hover:bg-background hover:text-foreground"
+              className="absolute right-2 top-2 border-white/15 bg-white/5 text-[#aeb4bf] hover:bg-white/10 hover:text-white"
               onClick={() => void copyToClipboard()}
               size="icon-sm"
               type="button"

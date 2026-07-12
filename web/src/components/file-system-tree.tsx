@@ -97,7 +97,7 @@ function FileSystemTreeRows<TFile extends FileSystemTreeFileBase>({
     <div>
       <div
         className={cn(
-          'hidden gap-3 border-b border-border px-2 py-2 text-xs font-medium leading-4 text-muted-foreground sm:grid',
+          'hidden min-h-10 gap-3 px-3 py-2 font-mono text-[10px] font-semibold uppercase tracking-[0.12em] text-muted-foreground sm:grid sm:items-center',
           columnsClassName,
         )}
       >
@@ -111,7 +111,7 @@ function FileSystemTreeRows<TFile extends FileSystemTreeFileBase>({
           )}
         </div>
       </div>
-      <ul className="divide-y divide-border">
+      <ul className="space-y-1">
         {root.children.map((node) => (
           <FileSystemTreeNodeRow
             collapsed={collapsed}
@@ -159,8 +159,9 @@ function FileSystemTreeNodeRow<TFile extends FileSystemTreeFileBase>({
     return (
       <li
         className={cn(
-          'grid gap-2 px-2 py-2.5 text-sm sm:items-center',
-          selected && 'bg-brand-muted shadow-[inset_2px_0_0_0_var(--brand)]',
+          'relative grid min-h-12 gap-2 rounded-md border border-transparent px-3 py-2.5 text-sm transition-[background-color,border-color] hover:bg-muted/55 sm:items-center',
+          selected &&
+            'border-[var(--border-strong)] bg-muted shadow-[inset_2px_0_0_0_var(--platinum-bright)] hover:bg-muted',
           columnsClassName,
         )}
       >
@@ -171,7 +172,7 @@ function FileSystemTreeNodeRow<TFile extends FileSystemTreeFileBase>({
           {onSelectFile ? (
             <button
               aria-current={selected ? 'true' : undefined}
-              className="flex min-w-0 flex-1 items-center gap-2 rounded-md text-left transition-colors hover:bg-muted/70"
+              className="flex min-w-0 flex-1 items-center gap-2 rounded text-left focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring"
               onClick={() => onSelectFile(node.file)}
               type="button"
             >
@@ -214,7 +215,7 @@ function FileSystemTreeNodeRow<TFile extends FileSystemTreeFileBase>({
     <>
       <li
         className={cn(
-          'grid gap-2 bg-muted/20 px-2 py-2.5 text-sm sm:items-center',
+          'grid min-h-12 gap-2 rounded-md border border-transparent px-3 py-2.5 text-sm transition-colors hover:bg-muted/40 sm:items-center',
           columnsClassName,
         )}
       >
@@ -228,7 +229,7 @@ function FileSystemTreeNodeRow<TFile extends FileSystemTreeFileBase>({
             onClick={() => onToggleFolder(node.key)}
             size="icon-xs"
             type="button"
-            variant="secondary"
+            variant="ghost"
           >
             {isCollapsed ? (
               <ChevronRight className="size-3" />
@@ -237,9 +238,9 @@ function FileSystemTreeNodeRow<TFile extends FileSystemTreeFileBase>({
             )}
           </Button>
           {isCollapsed ? (
-            <Folder className="size-4 shrink-0 text-muted-foreground" />
+            <Folder className="size-4 shrink-0 text-[var(--platinum)]" strokeWidth={1.7} />
           ) : (
-            <FolderOpen className="size-4 shrink-0 text-muted-foreground" />
+            <FolderOpen className="size-4 shrink-0 text-[var(--platinum)]" strokeWidth={1.7} />
           )}
           <span className="min-w-0 truncate font-mono text-xs" title={node.path}>
             {node.name}
@@ -284,7 +285,7 @@ function FilePathLabel({ path }: { path: string }) {
   return (
     <>
       <span className="size-6 shrink-0" />
-      <File className="size-4 shrink-0 text-muted-foreground" />
+      <File className="size-4 shrink-0 text-[var(--platinum)]" strokeWidth={1.7} />
       <span className="min-w-0 truncate font-mono text-xs" title={path}>
         {displayPath(path)}
       </span>
