@@ -33,10 +33,11 @@ export function MarketingLandingPage(): ReactElement {
               <span className="block whitespace-nowrap text-muted-foreground">On your terms.</span>
             </h1>
 
-            <p className="mt-8 max-w-[540px] text-[clamp(1rem,1.4vw,1.1875rem)] leading-[1.62] tracking-[-0.015em] text-muted-foreground">
+            <p className="mt-8 max-w-[540px] text-[clamp(0.9375rem,1.4vw,1.1875rem)] leading-[1.62] tracking-[-0.015em] text-muted-foreground">
               Decide exactly what the public can see without splitting your repository or changing
-              how your team works. Yes, you can safely commit and push your .env files—no
-              third-party tooling required.
+              how your team works. Yes, you can safely commit and push your .env files with no
+              third-party tooling required. We also have a lot in the works to disincentivize
+              AI-slop spam PRs.
             </p>
 
             <div className="mt-9 flex flex-wrap items-center gap-3">
