@@ -21,7 +21,7 @@ const baseUrl = (
 test('signed-out root presents the Scope marketing page', async () => {
   await withPage({ width: 1440, height: 900 }, async (page, response) => {
     assert.equal(response.url(), `${baseUrl}/`)
-    await page.getByRole('heading', { level: 1, name: 'Open source. On your terms.' }).waitFor()
+    await page.getByRole('heading', { level: 1, name: 'Open source needs a reset.' }).waitFor()
 
     assert.equal(
       await page.getByRole('heading', { level: 1 }).count(),
@@ -122,7 +122,7 @@ test('projection remains separated and reachable across responsive layouts', asy
 
   for (const viewport of viewports) {
     await withPage(viewport, async (page) => {
-      await page.getByRole('heading', { level: 1, name: 'Open source. On your terms.' }).waitFor()
+      await page.getByRole('heading', { level: 1, name: 'Open source needs a reset.' }).waitFor()
       await assertProjectionLayout(page, viewport)
     })
   }

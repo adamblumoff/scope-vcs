@@ -28,17 +28,17 @@ export function MarketingLandingPage(): ReactElement {
           tabIndex={-1}
         >
           <section className="marketing-copy relative z-10 max-w-[610px]">
-            <h1 className="max-w-[680px] text-[clamp(2.6rem,13vw,3.2rem)] font-semibold leading-[0.95] tracking-[-0.067em] sm:text-[clamp(3.2rem,6.1vw,5.75rem)]">
-              <span className="block whitespace-nowrap">Open source.</span>
-              <span className="block whitespace-nowrap text-muted-foreground">On your terms.</span>
+            <h1 className="max-w-[680px] text-[clamp(2.6rem,13vw,3.2rem)] font-semibold leading-[0.95] tracking-[-0.067em] sm:text-[clamp(3.2rem,5.4vw,4rem)] min-[1200px]:text-[clamp(3.2rem,6.1vw,5.75rem)]">
+              <span className="block whitespace-nowrap">Open source</span>
+              <span className="block whitespace-nowrap text-muted-foreground">needs a reset.</span>
             </h1>
 
             <ul className="mt-8 max-w-[540px] list-disc space-y-2 pl-5 text-[clamp(0.9375rem,1.4vw,1.1875rem)] leading-[1.62] tracking-[-0.015em] text-muted-foreground marker:text-foreground/45">
               <li>
-                Control exactly what the public sees, and safely commit .env files without
-                third-party tooling.
+                Build in public. Keep control. Choose exactly what the public sees, and safely
+                commit secret files without third-party tooling.
               </li>
-              <li>AI-slop PR deterrents are coming.</li>
+              <li>Your repository is not a public inbox. AI-slop PR deterrents are coming.</li>
             </ul>
 
             <div className="mt-9 flex flex-wrap items-center gap-3">
