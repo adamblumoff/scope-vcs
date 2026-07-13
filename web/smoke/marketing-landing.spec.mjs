@@ -392,6 +392,7 @@ async function withPage(viewport, assertion, contextOptions = {}) {
     })
     assert(response, 'navigation to / did not produce a response')
     assert(response.status() < 400, `navigation to / returned ${response.status()}`)
+    await page.evaluate(() => document.fonts.ready)
     await assertion(page, response)
     assert.deepEqual(pageErrors, [])
     assert.deepEqual(consoleErrors, [])
