@@ -28,10 +28,9 @@ export function MarketingLandingPage(): ReactElement {
           tabIndex={-1}
         >
           <section className="marketing-copy relative z-10 max-w-[610px]">
-            <h1 className="max-w-[680px] text-[clamp(3.2rem,6.1vw,5.75rem)] font-semibold leading-[0.95] tracking-[-0.067em] text-balance">
-              Open source.
-              <br />
-              <span className="text-muted-foreground">On your terms.</span>
+            <h1 className="max-w-[680px] text-[clamp(2.6rem,13vw,3.2rem)] font-semibold leading-[0.95] tracking-[-0.067em] sm:text-[clamp(3.2rem,6.1vw,5.75rem)]">
+              <span className="block whitespace-nowrap">Open source.</span>
+              <span className="block whitespace-nowrap text-muted-foreground">On your terms.</span>
             </h1>
 
             <p className="mt-8 max-w-[540px] text-[clamp(1rem,1.4vw,1.1875rem)] leading-[1.62] tracking-[-0.015em] text-muted-foreground">
