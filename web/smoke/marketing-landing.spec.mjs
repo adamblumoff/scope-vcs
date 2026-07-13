@@ -129,6 +129,8 @@ test('projection remains separated and reachable across responsive layouts', asy
 
 test('mobile CTA reveals the projection without horizontal clipping', async () => {
   await withPage({ width: 390, height: 844 }, async (page) => {
+    await page.waitForLoadState('networkidle')
+    await hideClerkDevelopmentPrompt(page)
     const { privateView, publicView, repository } = projectionLocators(page)
     await page.getByRole('link', { name: 'See how it works' }).click()
     await page.waitForFunction(() => window.location.hash === '#repository-source')
