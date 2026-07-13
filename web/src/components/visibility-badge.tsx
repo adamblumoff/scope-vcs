@@ -14,6 +14,7 @@ export function VisibilityBadge({
     <Badge
       aria-label={compact ? `${visibility} visibility` : undefined}
       className={cn(compact && 'w-5 gap-0 px-0')}
+      role={compact ? 'img' : undefined}
       title={compact ? `${visibility} visibility` : undefined}
       variant={
         visibility === 'Private'
