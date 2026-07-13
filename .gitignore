@@ -9,6 +9,7 @@ web/.screenshots/
 web/.tanstack/tmp/
 .tmp/
 .agents/
+/.claude/
 .entire/
 .codex/
 .railway/
