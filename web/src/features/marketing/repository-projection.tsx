@@ -93,9 +93,7 @@ const projectionViews = [
 
 export function RepositoryProjection(): ReactElement {
   const [hoveredRow, setHoveredRow] = useState<ProjectionRow | null>(null)
-  const sourceContext = hoveredRow
-    ? projectionSourcePath(hoveredRow)
-    : 'repository root'
+  const sourceContext = hoveredRow ? projectionSourcePath(hoveredRow) : null
 
   return (
     <section
@@ -112,7 +110,7 @@ export function RepositoryProjection(): ReactElement {
         className="marketing-source-node"
         data-hover-visibility={hoveredRow?.visibility}
         data-projection-node="repository"
-        data-source-context={sourceContext}
+        data-source-context={sourceContext ?? undefined}
         id="repository-source"
       >
         <span aria-hidden className="marketing-source-icon">
@@ -120,7 +118,7 @@ export function RepositoryProjection(): ReactElement {
         </span>
         <span className="marketing-source-copy">
           <strong>scope/</strong>
-          <span title={sourceContext}>{sourceContext}</span>
+          {sourceContext && <span title={sourceContext}>{sourceContext}</span>}
         </span>
         <span className="marketing-source-branch">main</span>
         <span aria-hidden className="marketing-source-junction" />

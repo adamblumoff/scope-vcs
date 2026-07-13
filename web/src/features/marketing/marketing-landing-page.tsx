@@ -34,9 +34,9 @@ export function MarketingLandingPage(): ReactElement {
             </h1>
 
             <p className="mt-8 max-w-[540px] text-[clamp(1rem,1.4vw,1.1875rem)] leading-[1.62] tracking-[-0.015em] text-muted-foreground">
-              Take back control of your open-source repository through letting people see what
-              you want them to see. Easily share files with your team that you don't want exposed
-              to the public without .gitignoring them.
+              Decide exactly what the public can see without splitting your repository or changing
+              how your team works. Yes, you can safely commit and push your .env files—no
+              third-party tooling required.
             </p>
 
             <div className="mt-9 flex flex-wrap items-center gap-3">

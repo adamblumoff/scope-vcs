@@ -87,6 +87,7 @@ test('hovering projection rows previews linked permissions', async () => {
       '.marketing-connection-public.marketing-connection-desktop',
     )
 
+    assert.equal(await repository.getAttribute('data-source-context'), null)
     await publicCli.hover()
     await waitForAttribute(publicCli, 'data-highlighted', 'true')
     await waitForAttribute(privateCli, 'data-highlighted', 'true')
@@ -102,7 +103,7 @@ test('hovering projection rows previews linked permissions', async () => {
 
     await page.mouse.move(0, 0)
     await waitForAttribute(projection, 'data-private-only', null)
-    await waitForAttribute(repository, 'data-source-context', 'repository root')
+    await waitForAttribute(repository, 'data-source-context', null)
     await waitForOpacity(publicView, 'above', 0.95)
     await waitForOpacity(publicConnector, 'above', 0.95)
   })
