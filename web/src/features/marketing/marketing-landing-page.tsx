@@ -34,18 +34,17 @@ export function MarketingLandingPage(): ReactElement {
             </h1>
 
             <p className="mt-8 max-w-[540px] text-[clamp(1rem,1.4vw,1.1875rem)] leading-[1.62] tracking-[-0.015em] text-muted-foreground">
-              Keep one repository public where it should be and private where it must be.
+              Take back control of your open-source repository through letting people see what
+              you want them to see. Easily share files with your team that you don't want exposed
+              to the public without .gitignoring them.
             </p>
 
             <div className="mt-9 flex flex-wrap items-center gap-3">
               <Button asChild className="h-12 gap-3.5 px-5 text-sm font-semibold">
                 <Link params={authParams} search={authRedirect} to="/sign-up/$">
-                  Create your Scope
+                  Try it out
                   <ArrowRight className="size-[17px] transition-transform group-hover/button:translate-x-0.5 motion-reduce:transform-none" />
                 </Link>
-              </Button>
-              <Button asChild className="h-12 px-5 text-muted-foreground hover:text-foreground" variant="secondary">
-                <a href="#repository-source">See how it works</a>
               </Button>
             </div>
           </section>
@@ -73,15 +72,10 @@ function MarketingHeader(): ReactElement {
         <span className="text-[17px] font-semibold tracking-[-0.025em]">Scope</span>
       </Link>
 
-      <nav aria-label="Account" className="flex items-center gap-1 sm:gap-3">
+      <nav aria-label="Account">
         <Button asChild className="h-10 px-3 sm:px-4" variant="ghost">
           <Link params={authParams} search={authRedirect} to="/sign-in/$">
             Sign in
-          </Link>
-        </Button>
-        <Button asChild className="h-10 px-3 sm:px-4">
-          <Link params={authParams} search={authRedirect} to="/sign-up/$">
-            Create account
           </Link>
         </Button>
       </nav>

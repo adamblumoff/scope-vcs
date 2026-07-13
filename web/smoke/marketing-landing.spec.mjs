@@ -30,8 +30,9 @@ test('signed-out root presents the Scope marketing page', async () => {
     )
 
     await assertAuthLink(page, 'Sign in', '/sign-in')
-    await assertAuthLink(page, 'Create account', '/sign-up')
-    await assertAuthLink(page, 'Create your Scope', '/sign-up')
+    await assertAuthLink(page, 'Try it out', '/sign-up')
+    assert.equal(await page.getByRole('link', { name: 'Create account' }).count(), 0)
+    assert.equal(await page.getByRole('link', { name: 'See how it works' }).count(), 0)
 
     const { connectors, privateView, projection, publicView } = projectionLocators(page)
     await publicView.waitFor()
@@ -68,10 +69,9 @@ test('signed-out root presents the Scope marketing page', async () => {
     assert.equal(await privateView.getByText('README.md', { exact: true }).count(), 1)
     await assertProjectionTreeAlignment(publicView)
     await assertProjectionTreeAlignment(privateView)
-    const secondaryCta = page.getByRole('link', { name: 'See how it works' })
-    assert.equal(await secondaryCta.getAttribute('href'), '#repository-source')
-    await secondaryCta.focus()
-    assert.equal(await secondaryCta.evaluate((node) => node === document.activeElement), true)
+    const primaryCta = page.getByRole('link', { name: 'Try it out' })
+    await primaryCta.focus()
+    assert.equal(await primaryCta.evaluate((node) => node === document.activeElement), true)
   })
 })
 
@@ -127,14 +127,9 @@ test('projection remains separated and reachable across responsive layouts', asy
   }
 })
 
-test('mobile CTA reveals the projection without horizontal clipping', async () => {
+test('mobile projection remains visible without horizontal clipping', async () => {
   await withPage({ width: 390, height: 844 }, async (page) => {
-    await page.waitForLoadState('networkidle')
-    await hideClerkDevelopmentPrompt(page)
     const { privateView, publicView, repository } = projectionLocators(page)
-    await page.getByRole('link', { name: 'See how it works' }).click()
-    await page.waitForFunction(() => window.location.hash === '#repository-source')
-
     const repositoryBox = await requiredBoundingBox(repository)
     assert(repositoryBox.y >= 0 && repositoryBox.y + repositoryBox.height <= 844)
 
