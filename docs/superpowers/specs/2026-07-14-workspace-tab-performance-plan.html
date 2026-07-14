@@ -1,0 +1,767 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Implementation plan — Buttery-smooth workspace tabs</title>
+  <script>
+    (() => {
+      const saved = localStorage.getItem('scope-tab-plan-theme');
+      const dark = saved
+        ? saved === 'dark'
+        : window.matchMedia('(prefers-color-scheme: dark)').matches;
+      if (dark) document.documentElement.classList.add('dark');
+    })();
+  </script>
+  <style>
+    :root {
+      --canvas: #f3f2ee;
+      --surface: #fffefa;
+      --surface-raised: #f8f7f3;
+      --surface-selected: #e8eaed;
+      --ink: #17191d;
+      --text: #40454d;
+      --muted: #737a85;
+      --line: #d5d8dd;
+      --line-strong: #aeb4bf;
+      --accent: #5c6675;
+      --accent-bright: #353d49;
+      --success: #4f8561;
+      --warning: #8b7044;
+      --danger: #b55361;
+      --info: #607895;
+      --code: #15181d;
+      --code-ink: #eceae5;
+      --shadow: 0 14px 34px rgba(20, 22, 27, .07);
+      --sans: Inter, ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+      --serif: ui-serif, Georgia, "Times New Roman", serif;
+      --mono: "SFMono-Regular", Consolas, "Liberation Mono", ui-monospace, monospace;
+    }
+
+    html.dark {
+      --canvas: #0c0e11;
+      --surface: #12151a;
+      --surface-raised: #171a20;
+      --surface-selected: #1c2027;
+      --ink: #f1f0ec;
+      --text: #c8cbd0;
+      --muted: #9ea3ae;
+      --line: #292d36;
+      --line-strong: #3a3f4a;
+      --accent: #aeb4bf;
+      --accent-bright: #d8dbe1;
+      --success: #72a381;
+      --warning: #b49a6b;
+      --danger: #da6e79;
+      --info: #8293aa;
+      --code: #090b0e;
+      --code-ink: #eceae5;
+      --shadow: none;
+    }
+
+    * { box-sizing: border-box; }
+    html { scroll-behavior: smooth; }
+    body {
+      margin: 0;
+      padding: 48px 28px 96px;
+      color: var(--text);
+      background: var(--canvas);
+      font-family: var(--sans);
+      font-size: 15px;
+      line-height: 1.58;
+      -webkit-font-smoothing: antialiased;
+    }
+    button { font: inherit; }
+    a { color: inherit; text-underline-offset: 3px; }
+    code, pre { font-family: var(--mono); }
+    code { font-size: .91em; }
+    .page { width: min(1180px, 100%); margin: 0 auto; }
+
+    .theme-toggle {
+      position: fixed;
+      z-index: 50;
+      top: 16px;
+      right: 18px;
+      min-height: 34px;
+      padding: 8px 11px;
+      border: 1px solid var(--line);
+      border-radius: 7px;
+      color: var(--muted);
+      background: color-mix(in srgb, var(--surface) 94%, transparent);
+      box-shadow: var(--shadow);
+      cursor: pointer;
+      font: 700 11px/1 var(--mono);
+    }
+    .theme-toggle:hover { color: var(--ink); border-color: var(--line-strong); }
+    .theme-toggle:focus-visible, a:focus-visible, summary:focus-visible {
+      outline: 3px solid color-mix(in srgb, var(--accent) 60%, transparent);
+      outline-offset: 3px;
+    }
+
+    .hero { max-width: 970px; margin-bottom: 38px; }
+    .eyebrow, .micro {
+      color: var(--muted);
+      font: 750 11px/1.2 var(--mono);
+      letter-spacing: .11em;
+      text-transform: uppercase;
+    }
+    h1, h2, h3, h4 { margin: 0; color: var(--ink); }
+    h1 {
+      margin-top: 13px;
+      max-width: 940px;
+      font-family: var(--serif);
+      font-size: clamp(42px, 6.2vw, 72px);
+      font-weight: 500;
+      line-height: .98;
+      letter-spacing: -.045em;
+    }
+    h2 { font-family: var(--serif); font-size: 29px; font-weight: 500; line-height: 1.16; letter-spacing: -.02em; }
+    h3 { font-size: 17px; font-weight: 700; line-height: 1.3; letter-spacing: -.012em; }
+    h4 { font-size: 14px; font-weight: 750; line-height: 1.35; }
+    p { margin: 0 0 12px; }
+    .lede { max-width: 880px; margin-top: 20px; color: var(--muted); font-size: 17px; line-height: 1.65; }
+
+    .summary {
+      display: grid;
+      grid-template-columns: repeat(4, minmax(0, 1fr));
+      margin: 0 0 34px;
+      overflow: hidden;
+      border: 1px solid var(--line);
+      border-radius: 9px;
+      background: var(--surface);
+    }
+    .summary > div { min-height: 102px; padding: 17px 18px; border-right: 1px solid var(--line); }
+    .summary > div:last-child { border-right: 0; }
+    .summary dt { margin-bottom: 8px; color: var(--muted); font: 750 10px/1 var(--mono); letter-spacing: .08em; text-transform: uppercase; }
+    .summary dd { margin: 0; color: var(--ink); font-size: 15px; font-weight: 700; }
+    .summary small { display: block; margin-top: 5px; color: var(--muted); font-size: 12px; font-weight: 450; line-height: 1.45; }
+
+    .toc {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+      margin: 0 0 64px;
+      padding: 11px;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: var(--surface-raised);
+    }
+    .toc a {
+      padding: 6px 9px;
+      border-radius: 5px;
+      color: var(--muted);
+      text-decoration: none;
+      font: 700 11px/1.2 var(--mono);
+    }
+    .toc a:hover { color: var(--ink); background: var(--surface-selected); }
+
+    section { margin-bottom: 72px; scroll-margin-top: 28px; }
+    .section-head { display: grid; grid-template-columns: 50px minmax(0, 1fr); gap: 16px; align-items: start; margin-bottom: 27px; }
+    .section-no { padding-top: 7px; color: var(--accent); font: 800 12px/1 var(--mono); }
+    .section-intro { max-width: 850px; margin-top: 8px; color: var(--muted); }
+
+    .decision {
+      max-width: 980px;
+      padding: 18px 20px;
+      border: 1px solid var(--line);
+      border-left: 3px solid var(--accent);
+      border-radius: 8px;
+      background: var(--surface);
+    }
+    .decision + .decision { margin-top: 12px; }
+    .decision strong { color: var(--ink); }
+    .decision.warn { border-left-color: var(--warning); }
+    .decision.danger { border-left-color: var(--danger); }
+    .decision.success { border-left-color: var(--success); }
+
+    .flow {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) 54px minmax(0, 1fr);
+      gap: 18px;
+      align-items: stretch;
+    }
+    .flow-panel {
+      overflow: hidden;
+      border: 1px solid var(--line-strong);
+      border-radius: 9px;
+      background: var(--surface);
+    }
+    .flow-head { padding: 13px 16px; border-bottom: 1px solid var(--line); background: var(--surface-raised); }
+    .flow-head strong { color: var(--ink); }
+    .flow-head small { display: block; margin-top: 3px; color: var(--muted); }
+    .flow-list { margin: 0; padding: 0; list-style: none; counter-reset: flow; }
+    .flow-list li {
+      counter-increment: flow;
+      display: grid;
+      grid-template-columns: 31px minmax(0, 1fr);
+      gap: 10px;
+      padding: 12px 16px;
+      border-bottom: 1px solid var(--line);
+      font-size: 13px;
+    }
+    .flow-list li:last-child { border-bottom: 0; }
+    .flow-list li::before {
+      content: counter(flow);
+      display: grid;
+      width: 24px;
+      height: 24px;
+      place-items: center;
+      border: 1px solid var(--line-strong);
+      border-radius: 50%;
+      color: var(--muted);
+      font: 750 10px/1 var(--mono);
+    }
+    .flow-list li.hot::before { color: var(--danger); border-color: var(--danger); }
+    .flow-list li.good::before { color: var(--success); border-color: var(--success); }
+    .flow-arrow { display: grid; place-items: center; color: var(--accent); font: 800 26px/1 var(--mono); }
+
+    .grid-2, .grid-3 { display: grid; gap: 16px; }
+    .grid-2 { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+    .grid-3 { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+    .panel { padding: 19px 20px; border: 1px solid var(--line); border-radius: 8px; background: var(--surface); }
+    .panel p { margin-top: 8px; color: var(--muted); font-size: 13.5px; }
+    .panel ul, .panel ol { margin: 12px 0 0; padding-left: 19px; }
+    .panel li { margin: 7px 0; font-size: 13.5px; }
+    .panel code, td code { color: var(--ink); }
+    .panel .label { display: inline-block; margin-bottom: 9px; color: var(--accent); font: 800 10px/1 var(--mono); letter-spacing: .08em; text-transform: uppercase; }
+
+    .table-wrap { overflow-x: auto; border: 1px solid var(--line); border-radius: 8px; background: var(--surface); }
+    table { width: 100%; min-width: 760px; border-collapse: collapse; }
+    th, td { padding: 12px 14px; border-bottom: 1px solid var(--line); text-align: left; vertical-align: top; font-size: 13px; }
+    th { color: var(--muted); background: var(--surface-raised); font: 750 10px/1.2 var(--mono); letter-spacing: .06em; text-transform: uppercase; }
+    tr:last-child td { border-bottom: 0; }
+    td:first-child { color: var(--ink); font-weight: 680; }
+    .status { white-space: nowrap; font: 800 10px/1.2 var(--mono); letter-spacing: .05em; text-transform: uppercase; }
+    .status.delete { color: var(--danger); }
+    .status.create { color: var(--success); }
+    .status.refactor { color: var(--warning); }
+    .status.move { color: var(--info); }
+
+    .phases { border-top: 1px solid var(--line-strong); }
+    .phase {
+      display: grid;
+      grid-template-columns: 74px 230px minmax(0, 1fr);
+      gap: 18px;
+      padding: 25px 0;
+      border-bottom: 1px solid var(--line);
+    }
+    .phase-no { color: var(--accent); font: 800 12px/1 var(--mono); }
+    .phase h3 { font-size: 16px; }
+    .phase .goal { margin-top: 7px; color: var(--muted); font-size: 12.5px; }
+    .phase p { color: var(--muted); font-size: 13.5px; }
+    .phase ul { margin: 9px 0 0; padding-left: 18px; }
+    .phase li { margin: 6px 0; font-size: 13px; }
+    .gate {
+      margin-top: 13px;
+      padding: 10px 12px;
+      border-left: 2px solid var(--success);
+      background: var(--surface-raised);
+      color: var(--text);
+      font-size: 12.5px;
+    }
+    .gate strong { color: var(--ink); }
+
+    .cache-map {
+      display: grid;
+      grid-template-columns: 1fr 58px 1fr 58px 1fr;
+      gap: 12px;
+      align-items: center;
+    }
+    .cache-node {
+      min-height: 142px;
+      padding: 16px;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: var(--surface);
+    }
+    .cache-node strong { color: var(--ink); }
+    .cache-node code { display: block; margin-top: 9px; color: var(--muted); font-size: 11px; overflow-wrap: anywhere; }
+    .cache-node p { margin-top: 8px; color: var(--muted); font-size: 12.5px; }
+    .cache-edge { text-align: center; color: var(--accent); font: 800 21px/1 var(--mono); }
+
+    .code-block { overflow: hidden; border: 1px solid var(--line); border-radius: 8px; background: var(--code); }
+    .code-head { padding: 9px 13px; border-bottom: 1px solid #30343c; color: #9ea3ae; background: #12151a; font: 700 10px/1 var(--mono); }
+    .code-block pre { margin: 0; padding: 16px; color: var(--code-ink); white-space: pre-wrap; overflow-wrap: anywhere; font-size: 12px; line-height: 1.7; }
+
+    .checks { columns: 2; column-gap: 28px; padding: 0; list-style: none; }
+    .checks li { break-inside: avoid; position: relative; margin: 0 0 10px; padding-left: 23px; font-size: 13.5px; }
+    .checks li::before { content: "□"; position: absolute; left: 0; color: var(--accent); font-weight: 800; }
+    .checks.done li::before { content: "✓"; color: var(--success); }
+
+    details {
+      margin-top: 12px;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: var(--surface);
+    }
+    summary { padding: 13px 15px; color: var(--ink); cursor: pointer; font-weight: 700; }
+    details > div { padding: 0 15px 15px; color: var(--muted); font-size: 13.5px; }
+
+    .risk-list { overflow: hidden; border: 1px solid var(--line); border-radius: 8px; background: var(--surface); }
+    .risk-row { display: grid; grid-template-columns: minmax(0, 1.25fr) 92px minmax(0, 1.6fr); }
+    .risk-row + .risk-row { border-top: 1px solid var(--line); }
+    .risk-row > div { padding: 13px 15px; font-size: 13px; }
+    .risk-row > div + div { border-left: 1px solid var(--line); }
+    .risk-row.head { color: var(--muted); background: var(--surface-raised); font: 750 10px/1.2 var(--mono); letter-spacing: .06em; text-transform: uppercase; }
+    .severity { display: inline-block; padding: 3px 7px; border-radius: 4px; font: 800 10px/1 var(--mono); }
+    .severity.high { color: var(--danger); background: color-mix(in srgb, var(--danger) 12%, transparent); }
+    .severity.med { color: var(--warning); background: color-mix(in srgb, var(--warning) 13%, transparent); }
+    .severity.low { color: var(--info); background: color-mix(in srgb, var(--info) 13%, transparent); }
+
+    footer { padding-top: 26px; border-top: 1px solid var(--line-strong); color: var(--muted); font-size: 12px; }
+
+    @media (max-width: 920px) {
+      .summary { grid-template-columns: 1fr 1fr; }
+      .summary > div:nth-child(2) { border-right: 0; }
+      .summary > div:nth-child(-n+2) { border-bottom: 1px solid var(--line); }
+      .flow { grid-template-columns: 1fr; }
+      .flow-arrow { transform: rotate(90deg); min-height: 34px; }
+      .cache-map { grid-template-columns: 1fr; }
+      .cache-edge { transform: rotate(90deg); min-height: 30px; }
+      .phase { grid-template-columns: 54px minmax(0, 1fr); }
+      .phase > div:last-child { grid-column: 2; }
+      .grid-3 { grid-template-columns: 1fr 1fr; }
+    }
+
+    @media (max-width: 660px) {
+      body { padding: 35px 14px 70px; }
+      h1 { font-size: 43px; }
+      .summary, .grid-2, .grid-3 { grid-template-columns: 1fr; }
+      .summary > div { border-right: 0; border-bottom: 1px solid var(--line); }
+      .summary > div:last-child { border-bottom: 0; }
+      .section-head { grid-template-columns: 1fr; gap: 6px; }
+      .phase { grid-template-columns: 1fr; gap: 7px; }
+      .phase > div:last-child { grid-column: auto; }
+      .checks { columns: 1; }
+      .risk-row { grid-template-columns: 1fr; }
+      .risk-row.head { display: none; }
+      .risk-row > div + div { border-left: 0; border-top: 1px dashed var(--line); }
+      .theme-toggle { position: absolute; }
+    }
+
+    @media (prefers-reduced-motion: reduce) {
+      html { scroll-behavior: auto; }
+      *, *::before, *::after { transition-duration: .01ms !important; animation-duration: .01ms !important; }
+    }
+  </style>
+</head>
+<body>
+  <button class="theme-toggle" type="button" aria-label="Toggle light and dark theme" onclick="toggleTheme()">Toggle theme</button>
+
+  <main class="page">
+    <header class="hero">
+      <div class="eyebrow">Implementation plan · July 14, 2026</div>
+      <h1>Make workspace tabs feel instantaneous.</h1>
+      <p class="lede">
+        Replace route-wide reloads with a bounded, version-aware workspace cache; cancel stale work;
+        resolve one file without rebuilding the repository; and stabilize the Code and History layouts.
+        Ten or more open files should behave like an editor workspace, not ten repeated repository loads.
+      </p>
+    </header>
+
+    <dl class="summary">
+      <div><dt>Primary outcome</dt><dd>Warm switch: zero requests<small>Loaded files reactivate locally with preserved scroll state.</small></dd></div>
+      <div><dt>Delivery shape</dt><dd>Five reviewable slices<small>Frontend lifecycle first, backend read-path reduction second.</small></dd></div>
+      <div><dt>Rendering policy</dt><dd>Cache data, mount one panel<small>Do not retain ten heavy diff DOM trees.</small></dd></div>
+      <div><dt>Critical deletion</dt><dd>Path-dependent broad loaders<small>File selection must not reload tree, history, or request metadata.</small></dd></div>
+    </dl>
+
+    <nav class="toc" aria-label="Plan sections">
+      <a href="#decision">Decision</a>
+      <a href="#flow">Current → target</a>
+      <a href="#architecture">Architecture</a>
+      <a href="#cache">Cache contracts</a>
+      <a href="#sequence">Implementation</a>
+      <a href="#files">File map</a>
+      <a href="#verification">Verification</a>
+      <a href="#risks">Risks</a>
+      <a href="#acceptance">Acceptance</a>
+    </nav>
+
+    <section id="decision">
+      <div class="section-head">
+        <div class="section-no">01</div>
+        <div><h2>Decision and boundaries</h2><p class="section-intro">This plan supersedes the workspace-tab loading strategy in the July 12 UI overhaul plan. The visual system and URL ownership remain intact.</p></div>
+      </div>
+      <div class="decision success"><strong>Core decision.</strong> Open tabs become a bounded workspace cache, not a list of bookmarks. The URL remains canonical for the requested active path, while loaded data, request status, error state, and scroll position live in a keyed client workspace store.</div>
+      <div class="decision"><strong>Rendering decision.</strong> Keep only the active file or diff panel mounted. Retain data and explicit scroll state for at least ten open tabs. This avoids the memory and worker cost of ten mounted diff renderers while preserving instant reactivation.</div>
+      <div class="decision"><strong>Backend decision.</strong> A selected file must resolve through an indexed projection-file locator. Do not hydrate and reproject the complete repository merely to locate one path.</div>
+      <div class="decision"><strong>Cancellation decision.</strong> Selection is latest-wins. A → B → C immediately aborts A and B through every layer that supports cancellation; stale completions never update C’s panel.</div>
+      <div class="decision warn"><strong>Not the first fix.</strong> Do not begin with tab virtualization, extra animations, or mounting every tab panel. Ten tab elements are cheap. Repeated loaders, repository hydration, object reads, parsing, and layout reconstruction are expensive.</div>
+    </section>
+
+    <section id="flow">
+      <div class="section-head">
+        <div class="section-no">02</div>
+        <div><h2>Delete the current hot path</h2><p class="section-intro">There is no per-selection process or Git command to kill. The latency is duplicated application work across the browser, web server, API, database, and object store.</p></div>
+      </div>
+
+      <div class="flow">
+        <article class="flow-panel">
+          <div class="flow-head"><strong>Current selection</strong><small>One click reloads repository-wide state.</small></div>
+          <ol class="flow-list">
+            <li class="hot">Write the tab ID to <code>sessionStorage</code>.</li>
+            <li class="hot">Navigate the route search parameter.</li>
+            <li class="hot">Reload the complete repository file list.</li>
+            <li class="hot">Authenticate again through a second server function.</li>
+            <li class="hot">Hydrate the full repository and recompute its projection.</li>
+            <li class="hot">Read, decrypt, hash, copy, and JSON-serialize the blob.</li>
+            <li class="hot">Rebuild the file tree and active content DOM.</li>
+          </ol>
+        </article>
+
+        <div class="flow-arrow" aria-hidden="true">→</div>
+
+        <article class="flow-panel">
+          <div class="flow-head"><strong>Target selection</strong><small>Local first; one narrow cold-miss request.</small></div>
+          <ol class="flow-list">
+            <li class="good">Set <code>requestedId</code> immediately and synchronize the URL.</li>
+            <li class="good">Read the workspace entry by immutable content identity.</li>
+            <li class="good">Warm hit: restore data and scroll state with zero requests.</li>
+            <li class="good">Cold miss: issue one direct, cancellable content request.</li>
+            <li class="good">Resolve one indexed projection-file locator.</li>
+            <li class="good">Read through immutable blob cache and singleflight.</li>
+            <li class="good">Commit only if the request generation is still current.</li>
+          </ol>
+        </article>
+      </div>
+    </section>
+
+    <section id="architecture">
+      <div class="section-head">
+        <div class="section-no">03</div>
+        <div><h2>Workspace architecture</h2><p class="section-intro">Separate stable collection data, active selection, cached resource data, and mounted UI. Each concern changes at a different frequency.</p></div>
+      </div>
+
+      <div class="grid-3">
+        <article class="panel"><span class="label">Stable collection</span><h3>Repository tree</h3><p>Owned above path selection and keyed by repository projection generation plus audience. Switching tabs does not reload it or change its object identity.</p></article>
+        <article class="panel"><span class="label">Immediate state</span><h3>Requested selection</h3><p>Updates synchronously on click. Drives active tab styling, pending indication, URL synchronization, and latest-wins request generation.</p></article>
+        <article class="panel"><span class="label">Bounded cache</span><h3>Workspace entries</h3><p>Stores status, immutable identity, data, error, scroll position, approximate bytes, and last access. LRU eviction prevents unbounded memory.</p></article>
+        <article class="panel"><span class="label">Render boundary</span><h3>One mounted panel</h3><p>The active file or diff is mounted. Hidden tabs retain data and view state, not expensive DOM and worker-owned renderers.</p></article>
+        <article class="panel"><span class="label">Server lookup</span><h3>Projection locator</h3><p>An indexed row provides path, OID, object key, SHA-256, size, and mode without hydrating the domain graph.</p></article>
+        <article class="panel"><span class="label">Immutable bytes</span><h3>Blob cache</h3><p>Small renderable blobs are cached by hash with singleflight. Mutation creates new keys rather than invalidating immutable content.</p></article>
+      </div>
+
+      <div class="code-block" style="margin-top:16px">
+        <div class="code-head">Target client workspace model</div>
+        <pre>type WorkspaceEntry&lt;T&gt; = {
+  id: string
+  identity: string                 // repo generation + audience + path + OID
+  status: 'idle' | 'loading' | 'loaded' | 'error'
+  data?: T
+  error?: string
+  scrollTop: number
+  approximateBytes: number
+  lastAccessed: number
+  requestGeneration?: number
+}
+
+type WorkspaceState&lt;T&gt; = {
+  openIds: string[]
+  requestedId: string | null       // optimistic visual selection
+  settledId: string | null         // data currently shown
+  entries: Map&lt;string, WorkspaceEntry&lt;T&gt;&gt;
+}</pre>
+      </div>
+
+      <details>
+        <summary>Required selection state machine</summary>
+        <div>
+          <ol>
+            <li>Save the current panel scroll position.</li>
+            <li>Set the clicked tab as <code>requestedId</code> immediately.</li>
+            <li>Open the tab once if it is not already present.</li>
+            <li>Synchronize the URL without waiting for resource data.</li>
+            <li>On a valid loaded entry, set <code>settledId</code> and restore scroll position.</li>
+            <li>On a miss, abort the prior request, increment the generation, and start one request.</li>
+            <li>Commit success or error only when both tab ID and request generation still match.</li>
+            <li>Closing the active tab computes the next requested ID atomically; normalization must not resurrect the closed tab.</li>
+          </ol>
+        </div>
+      </details>
+    </section>
+
+    <section id="cache">
+      <div class="section-head">
+        <div class="section-no">04</div>
+        <div><h2>Cache contracts and invalidation</h2><p class="section-intro">Use immutable identities whenever possible. Never cache private and public projections under the same key.</p></div>
+      </div>
+
+      <div class="cache-map" aria-label="Three-level cache flow">
+        <article class="cache-node"><strong>Browser workspace</strong><code>repo_id + projection_generation + audience + normalized_path + oid</code><p>Data, status, error, scroll state, byte estimate. Bounded by entry count and approximate bytes.</p></article>
+        <div class="cache-edge" aria-hidden="true">→</div>
+        <article class="cache-node"><strong>Projection locator</strong><code>repo_id + repo_version + source + audience + path_key</code><p>Indexed metadata lookup. Returns OID, object key, SHA-256, size, and Git mode.</p></article>
+        <div class="cache-edge" aria-hidden="true">→</div>
+        <article class="cache-node"><strong>Blob bytes</strong><code>sha256</code><p>Immutable decrypted bytes with singleflight. Eviction is capacity-based; repository mutation does not invalidate existing hashes.</p></article>
+      </div>
+
+      <div class="table-wrap" style="margin-top:18px">
+        <table>
+          <thead><tr><th>Resource</th><th>Key</th><th>Invalidate when</th><th>Budget</th></tr></thead>
+          <tbody>
+            <tr><td>Repository tree</td><td><code>repo + projection generation + audience</code></td><td>Projection or visibility generation changes.</td><td>One current generation per mounted repository.</td></tr>
+            <tr><td>Source file</td><td><code>repo + generation + audience + path + OID</code></td><td>Identity changes; old entry remains immutable and evictable.</td><td>Start with 32 entries or 24 MiB, whichever comes first.</td></tr>
+            <tr><td>History diff</td><td><code>repo + audience + commit + path + old/new OID</code></td><td>Commit/audience/path identity changes.</td><td>Separate smaller byte budget; parsed diffs are expensive.</td></tr>
+            <tr><td>Blob bytes</td><td><code>SHA-256</code></td><td>Never for mutation; evict by capacity/age.</td><td>Measured bounded in-process cache.</td></tr>
+            <tr><td>Parsed diff</td><td><code>old OID + new OID + diff options</code></td><td>Options or immutable OIDs change.</td><td>LRU; do not retain rendered DOM.</td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <div class="decision warn" style="margin-top:16px"><strong>Public event caveat.</strong> Public repository events currently expose version <code>0</code>. Do not use that value as a durable public generation. Purge public metadata on repository events or introduce an opaque public projection ETag that reveals no private version information.</div>
+    </section>
+
+    <section id="sequence">
+      <div class="section-head">
+        <div class="section-no">05</div>
+        <div><h2>Implementation sequence</h2><p class="section-intro">Land the user-visible latency fix before the deeper storage refactor. Every phase has a measurable exit gate and can be reviewed independently.</p></div>
+      </div>
+
+      <div class="phases">
+        <article class="phase">
+          <div class="phase-no">PR 1</div>
+          <div><h3>Measure and protect</h3><p class="goal">Establish failing performance and race tests before changing ownership.</p></div>
+          <div>
+            <p>Add deterministic fixtures and instrumentation for the current Code and History tab flows.</p>
+            <ul>
+              <li>Count tree, content, history, commit-detail, and diff requests per activation.</li>
+              <li>Add delayed and out-of-order request controls for A → B → C.</li>
+              <li>Capture React commits, tree-row renders, layout-shift entries, and scroll offsets.</li>
+              <li>Cover active-tab close, final-tab close, and multiple rapid closes.</li>
+              <li>Record cold and warm traces with 10 files and a large repository fixture.</li>
+            </ul>
+            <div class="gate"><strong>Exit gate:</strong> tests reproduce redundant collection requests, stale work, tab resurrection, and layout shift.</div>
+          </div>
+        </article>
+
+        <article class="phase">
+          <div class="phase-no">PR 2</div>
+          <div><h3>Frontend lifecycle</h3><p class="goal">Make warm Code-file switching local and immediate.</p></div>
+          <div>
+            <p>Separate the repository tree from selected-file loading and introduce the bounded workspace resource store.</p>
+            <ul>
+              <li>Remove <code>search.file</code> from the stable tree resource dependency.</li>
+              <li>Add <code>requestedId</code>, <code>settledId</code>, resource entries, byte accounting, and LRU eviction.</li>
+              <li>Make selection optimistic; retain stale content visibly while a cold tab loads.</li>
+              <li>Pass the router abort signal through the selected-content client.</li>
+              <li>Persist only open-tab ordering in <code>sessionStorage</code>; keep file bodies in memory.</li>
+              <li>Save and restore scroll state explicitly by tab ID.</li>
+              <li>Partition workspace listeners by storage key.</li>
+            </ul>
+            <div class="gate"><strong>Exit gate:</strong> cycling through ten loaded Code tabs performs zero network requests, zero tree rebuilds, and no incorrect scroll carryover.</div>
+          </div>
+        </article>
+
+        <article class="phase">
+          <div class="phase-no">PR 3</div>
+          <div><h3>Stable layout and races</h3><p class="goal">Remove visible jumps and deterministic close/select defects.</p></div>
+          <div>
+            <p>Decouple tab-strip geometry and panel layout from resource arrival.</p>
+            <ul>
+              <li>Reserve the tab-strip row even when the workspace is empty or hydrating.</li>
+              <li>Compute active close + neighbor selection as one atomic workspace transition.</li>
+              <li>Move active-tab reveal into a <code>useLayoutEffect</code> keyed by <code>activeId</code>.</li>
+              <li>Use stable tab refs and avoid callback-ref layout reads on every strip render.</li>
+              <li>Keep History’s outer width and split tracks stable while opening or closing a diff.</li>
+              <li>Use compact parent suffixes within fixed tab widths for duplicate filenames.</li>
+            </ul>
+            <div class="gate"><strong>Exit gate:</strong> repeated tab switching has approximately zero CLS; closing under delayed navigation never resurrects a tab.</div>
+          </div>
+        </article>
+
+        <article class="phase">
+          <div class="phase-no">PR 4</div>
+          <div><h3>Indexed backend read</h3><p class="goal">Turn a cold file load into one narrow metadata lookup plus one cached blob read.</p></div>
+          <div>
+            <p>Extend the projection read model so file content no longer requires repository hydration and projection recomputation.</p>
+            <ul>
+              <li>Add <code>object_key</code>, <code>sha256</code>, <code>size_bytes</code>, and <code>git_file_mode</code> to projection-file rows.</li>
+              <li>Index the complete repository-version, source, audience, and path lookup.</li>
+              <li>Publish versioned projection rows atomically before marking a generation ready.</li>
+              <li>Replace <code>hydrate_repo_from_row_id</code> in the selected-file hot path.</li>
+              <li>Return text <code>size_bytes</code> so the browser deletes its full-string <code>TextEncoder</code> pass.</li>
+              <li>Add an immutable small-blob cache and per-hash singleflight.</li>
+            </ul>
+            <div class="gate"><strong>Exit gate:</strong> a cold file request does not hydrate the repository or run <code>project_graph</code>; duplicate concurrent blob reads collapse to one object-store GET.</div>
+          </div>
+        </article>
+
+        <article class="phase">
+          <div class="phase-no">PR 5</div>
+          <div><h3>History and large-content path</h3><p class="goal">Apply the same cache model to diffs and remove main-thread stalls.</p></div>
+          <div>
+            <p>Separate history lists, commit detail, selected diff data, parsed diff state, and worker lifetime.</p>
+            <ul>
+              <li>Cache history by repository/audience and commit detail by projected commit ID.</li>
+              <li>Cache diff data by commit, path, and immutable old/new OIDs.</li>
+              <li>Hoist the Pierre worker provider to a stable review-workbench boundary.</li>
+              <li>Move initial diff parsing off React’s render path or return server-computed hunks.</li>
+              <li>Use line-level diffing beyond measured file/line thresholds.</li>
+              <li>Virtualize large source or diff output only after profiling demonstrates the threshold.</li>
+              <li>Narrow live refresh so unrelated repository events do not reload the active content path.</li>
+            </ul>
+            <div class="gate"><strong>Exit gate:</strong> warm diff switching is request-free and responsive; large diffs do not block input during the initial render.</div>
+          </div>
+        </article>
+      </div>
+    </section>
+
+    <section id="files">
+      <div class="section-head">
+        <div class="section-no">06</div>
+        <div><h2>Expected code changes</h2><p class="section-intro">Names may evolve, but ownership should remain explicit. Prefer deleting broad reload behavior over wrapping it in another cache layer.</p></div>
+      </div>
+
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>Action</th><th>File or area</th><th>Responsibility</th></tr></thead>
+          <tbody>
+            <tr><td><span class="status refactor">Refactor</span></td><td><code>web/src/routes/repos.$owner.$repo.index.tsx</code></td><td>Separate stable tree data from path-keyed content. Consume cancellation and stop reloading the tree on file changes.</td></tr>
+            <tr><td><span class="status create">Create</span></td><td><code>web/src/components/use-workspace-resources.ts</code></td><td>Bounded entries, requested/settled IDs, latest-wins generation, byte accounting, LRU, and scroll-state APIs.</td></tr>
+            <tr><td><span class="status refactor">Refactor</span></td><td><code>web/src/components/use-workspace-tabs.ts</code></td><td>Keep ordering/session persistence only; partition listeners by storage key and support atomic close selection.</td></tr>
+            <tr><td><span class="status refactor">Refactor</span></td><td><code>web/src/components/workspace-tab-strip.tsx</code></td><td>Stable refs, effect-owned reveal, pending state, predictable widths, and no commit-time ref churn.</td></tr>
+            <tr><td><span class="status refactor">Refactor</span></td><td><code>web/src/features/repo-detail/repository-code-view.tsx</code></td><td>Isolate the tree, render the requested resource state, save/restore scroll, and delete the browser byte-size encoding pass.</td></tr>
+            <tr><td><span class="status refactor">Refactor</span></td><td><code>web/src/api/client.ts</code></td><td>Accept and forward <code>AbortSignal</code>; support narrow resource requests and request deduplication.</td></tr>
+            <tr><td><span class="status refactor">Refactor</span></td><td><code>web/src/routes/repos.$owner.$repo.history.tsx</code></td><td>Split histories, commit detail, and selected diff dependencies; stop reloading all three on path changes.</td></tr>
+            <tr><td><span class="status refactor">Refactor</span></td><td><code>web/src/features/history/history-page.tsx</code></td><td>Stable split geometry, workspace resource entries, explicit scroll state, and no whole-page commit remount.</td></tr>
+            <tr><td><span class="status move">Move</span></td><td><code>WorkerPoolContextProvider</code></td><td>Hoist from individual text-diff content to a stable repository/review workbench boundary.</td></tr>
+            <tr><td><span class="status refactor">Refactor</span></td><td><code>crates/scope-core/src/db/entities/read_models.rs</code></td><td>Add immutable content-locator metadata to projection-file rows.</td></tr>
+            <tr><td><span class="status refactor">Refactor</span></td><td><code>crates/scope-core/src/db/projection_read_models.rs</code></td><td>Publish/query versioned projection-file locators with an indexed path lookup.</td></tr>
+            <tr><td><span class="status delete">Delete hot path</span></td><td><code>crates/scope-core/src/db/repo_reads.rs</code></td><td>Remove full repository hydration and <code>project_graph</code> from selected-file reads.</td></tr>
+            <tr><td><span class="status create">Create</span></td><td><code>crates/scope-core/src/object_store/*</code></td><td>Bounded immutable-byte cache and singleflight around decrypted, verified blobs.</td></tr>
+            <tr><td><span class="status refactor">Refactor</span></td><td><code>api/src/http/file_diffs.rs</code> and response types</td><td>Return known text size and preserve immutable identity metadata needed by browser caches.</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </section>
+
+    <section id="verification">
+      <div class="section-head">
+        <div class="section-no">07</div>
+        <div><h2>Verification and performance budgets</h2><p class="section-intro">A passing typecheck is not proof of smoothness. Exercise the real flows under latency, large inputs, and out-of-order completion.</p></div>
+      </div>
+
+      <div class="grid-2">
+        <article class="panel">
+          <span class="label">Correctness</span>
+          <h3>Deterministic interaction tests</h3>
+          <ul>
+            <li>Rapid A → B → C with responses completing C → A → B.</li>
+            <li>Close active B from A/B/C while navigation is deferred.</li>
+            <li>Close the final tab and assert no tree/content request.</li>
+            <li>Close several tabs before previous transitions settle.</li>
+            <li>Restore exact scroll positions across text, README, binary, and diff tabs.</li>
+            <li>Invalidate a repository generation and reject stale cache identities.</li>
+          </ul>
+        </article>
+        <article class="panel">
+          <span class="label">Runtime</span>
+          <h3>Browser profiling</h3>
+          <ul>
+            <li>Network request count per activation.</li>
+            <li>Click-to-active and click-to-content p50/p95.</li>
+            <li>React commit duration and file-tree row renders.</li>
+            <li>Main-thread time in diff parsing and Markdown rendering.</li>
+            <li>Worker initialization count and retained heap after eviction.</li>
+            <li>CLS and nested scroll offsets during first open, switching, and final close.</li>
+          </ul>
+        </article>
+      </div>
+
+      <div class="table-wrap" style="margin-top:16px">
+        <table>
+          <thead><tr><th>Metric</th><th>Target</th><th>Required fixture</th></tr></thead>
+          <tbody>
+            <tr><td>Click → active indicator</td><td>&lt; 50 ms</td><td>10, 50, and 200 open tabs</td></tr>
+            <tr><td>Warm source switch</td><td>&lt; 100 ms; zero requests</td><td>Ten previously loaded files</td></tr>
+            <tr><td>Warm diff switch</td><td>Responsive; zero collection requests</td><td>Ten diffs in one commit</td></tr>
+            <tr><td>Cold source switch</td><td>One selected-resource request</td><td>10 KB and near-limit files</td></tr>
+            <tr><td>Tree work on switch</td><td>Zero model rebuilds</td><td>1,000 and 10,000 paths</td></tr>
+            <tr><td>Obsolete work</td><td>A and B aborted in A → B → C</td><td>500–1,500 ms artificial latency</td></tr>
+            <tr><td>Repeated switch CLS</td><td>Approximately 0</td><td>1440, 900, 390, and 320 px</td></tr>
+            <tr><td>Heap</td><td>Returns to bounded plateau after eviction</td><td>Cycle through 200 files/diffs</td></tr>
+            <tr><td>Backend selected-file lookup</td><td>No repository hydration or projection recompute</td><td>Owner, member, and public audiences</td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <div class="code-block" style="margin-top:16px">
+        <div class="code-head">Closeout checks</div>
+        <pre>cd web
+pnpm check
+pnpm test
+pnpm test:smoke
+
+# Then drive Code and History in the running app with:
+# - throttled network
+# - 10+ open tabs
+# - large repository and large diff fixtures
+# - desktop, tablet, 390px, and 320px viewports</pre>
+      </div>
+    </section>
+
+    <section id="risks">
+      <div class="section-head">
+        <div class="section-no">08</div>
+        <div><h2>Risks and mitigations</h2><p class="section-intro">The largest risks are stale authorization identities, cache memory growth, and fixing latency by retaining too much rendered state.</p></div>
+      </div>
+
+      <div class="risk-list">
+        <div class="risk-row head"><div>Risk</div><div>Severity</div><div>Mitigation</div></div>
+        <div class="risk-row"><div>Private content is reused for a public audience.</div><div><span class="severity high">HIGH</span></div><div>Audience is mandatory in every metadata and browser cache key. Authorization remains server-side before locator/blob access.</div></div>
+        <div class="risk-row"><div>A stale request overwrites the latest selected file.</div><div><span class="severity high">HIGH</span></div><div>Abort previous work and verify both tab identity and request generation before committing a result.</div></div>
+        <div class="risk-row"><div>The cache grows without bound when hundreds of files are opened.</div><div><span class="severity high">HIGH</span></div><div>Use entry and approximate-byte budgets, separate source/diff budgets, LRU eviction, and heap plateau tests.</div></div>
+        <div class="risk-row"><div>Keeping every panel mounted improves switching but exhausts DOM/worker memory.</div><div><span class="severity high">HIGH</span></div><div>Cache data and explicit view state; mount only the active panel. Add selective parsed-result caching only after profiling.</div></div>
+        <div class="risk-row"><div>Projection read-model publication exposes a partially rebuilt generation.</div><div><span class="severity high">HIGH</span></div><div>Write immutable versioned rows, mark a generation ready atomically, then retire older generations asynchronously.</div></div>
+        <div class="risk-row"><div>Object-store singleflight makes cancellation or errors sticky.</div><div><span class="severity med">MED</span></div><div>Share only in-flight work, remove entries on completion, never cache failures, and allow individual waiters to cancel.</div></div>
+        <div class="risk-row"><div>Stale-while-loading UI displays the wrong path as current content.</div><div><span class="severity med">MED</span></div><div>Show requested-tab identity and a visible pending/stale treatment; distinguish <code>requestedId</code> from <code>settledId</code>.</div></div>
+        <div class="risk-row"><div>Public event version zero prevents safe version-keyed caching.</div><div><span class="severity med">MED</span></div><div>Purge public metadata on events or add an opaque public ETag; never infer a generation from zero.</div></div>
+        <div class="risk-row"><div>Line-level fallback reduces diff detail on large files.</div><div><span class="severity low">LOW</span></div><div>Use measured thresholds, disclose the fallback in the UI, and allow an explicit word-diff opt-in when safe.</div></div>
+      </div>
+    </section>
+
+    <section id="acceptance">
+      <div class="section-head">
+        <div class="section-no">09</div>
+        <div><h2>Definition of done</h2><p class="section-intro">The work is complete only when the real app behaves like a stable reader workspace under rapid interaction.</p></div>
+      </div>
+
+      <ul class="checks">
+        <li>Ten or more previously loaded Code files can be cycled without network requests or visible input lag.</li>
+        <li>Ten previously loaded History diffs can be cycled without reloading histories or commit detail.</li>
+        <li>File selection never reloads the complete repository tree.</li>
+        <li>A cold selected-file request does not hydrate or reproject the complete repository.</li>
+        <li>Rapid A → B → C selection aborts obsolete work and can never display A or B as C.</li>
+        <li>Closing an active tab is immediate and never temporarily restores the closed tab.</li>
+        <li>Closing the final tab performs no backend read and returns focus to the file navigator.</li>
+        <li>Each tab restores its explicit nested scroll position across source, README, binary, and diff modes.</li>
+        <li>Repeated switches produce approximately zero layout shift at desktop and mobile widths.</li>
+        <li>The tab strip reserves stable geometry and does not force layout reads for every attached tab ref.</li>
+        <li>Cache keys always include audience and immutable content identity.</li>
+        <li>Source and diff caches remain within measured byte/entry budgets after cycling 200 resources.</li>
+        <li>Concurrent requests for one immutable blob perform at most one object-store GET.</li>
+        <li>Large diffs do not synchronously block the main thread during React render.</li>
+        <li>Live repository events invalidate only affected generations/resources, not the entire matched route tree.</li>
+        <li>Keyboard tab navigation, close controls, focus restoration, reduced motion, and 44px coarse-pointer targets remain correct.</li>
+        <li>Automated checks pass and browser traces confirm the request, render, memory, and CLS budgets above.</li>
+      </ul>
+
+      <div class="decision success" style="margin-top:18px"><strong>Final user-visible standard.</strong> Opening a cold file may show a brief local pending state. Returning to any of the last ten or more loaded files must feel immediate, preserve reading position, and leave the surrounding workbench completely still.</div>
+    </section>
+
+    <footer>
+      Plan artifact: <code>docs/superpowers/specs/2026-07-14-workspace-tab-performance-plan.html</code>.
+      Static audit basis: repository state reviewed July 14, 2026. This plan modifies no production data and makes no claim that runtime budgets have passed before implementation and profiling.
+    </footer>
+  </main>
+
+  <script>
+    function toggleTheme() {
+      const root = document.documentElement;
+      const dark = !root.classList.contains('dark');
+      root.classList.toggle('dark', dark);
+      localStorage.setItem('scope-tab-plan-theme', dark ? 'dark' : 'light');
+    }
+  </script>
+</body>
+</html>

@@ -13,6 +13,9 @@ export function RepoDetailPage({
   params,
   selectedFile,
   selectedFileError,
+  selectedFileIdentity,
+  selectedFileLoading,
+  selectedFileRetry,
   selectedPath,
 }: {
   content: RepoContent
@@ -20,6 +23,9 @@ export function RepoDetailPage({
   params: RepoParams
   selectedFile: RepoFileContent | null
   selectedFileError: string | null
+  selectedFileIdentity: string | null
+  selectedFileLoading: boolean
+  selectedFileRetry: () => void
   selectedPath: string | null
 }) {
   const { repo } = useRepoLayout()
@@ -54,6 +60,9 @@ export function RepoDetailPage({
         params={params}
         selectedFile={selectedFile}
         selectedFileError={selectedFileError}
+        selectedFileIdentity={selectedFileIdentity}
+        selectedFileLoading={selectedFileLoading}
+        selectedFileRetry={selectedFileRetry}
         selectedPath={selectedPath}
       />
     </RepoShell>

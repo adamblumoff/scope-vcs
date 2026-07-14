@@ -118,7 +118,7 @@ export type RepoFileResponse = { path: string, oid: string, tracked: boolean, vi
 
 export type RepoFileContentRequest = { path: string, };
 
-export type RepoFileContentResponse = { path: string, oid: string, visibility: Visibility, content: ReviewFileContentResponse, };
+export type RepoFileContentResponse = { path: string, oid: string, visibility: Visibility, size_bytes: number, content: ReviewFileContentResponse, };
 
 export type RepositoryAccessResponse = { actor: RepositoryActor, can_read_private_files: boolean, can_push: boolean, can_change_file_visibility: boolean, can_apply_changes: boolean, can_manage_members: boolean, can_delete_repo: boolean, };
 

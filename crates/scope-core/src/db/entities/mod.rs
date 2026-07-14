@@ -2,11 +2,12 @@ use crate::db::projection_encoding::{ProjectionAudience, ProjectionSource};
 use crate::db::{decode_json, encode_json};
 use crate::domain::policy::{Policy, ScopePath, Visibility};
 use crate::domain::projection::SourceGraph;
-use crate::domain::projection_views::ProjectionViewFile;
+use crate::domain::projection_views::{ProjectionViewFile, ProjectionViewFileContent};
 use crate::domain::store::{
     DEFAULT_GIT_FILE_MODE, FirstPushToken, GitPushToken, RepoPublicationState, RepoRecord,
     RepoStorageCleanup, RepositoryInvite, RepositoryInviteState, RepositoryMember,
     RepositoryMemberPermissions, SourceBlob, StoredRepository, UserAccount,
+    is_supported_git_file_mode,
 };
 use crate::error::ApiError;
 use sea_orm::entity::prelude::*;
@@ -111,11 +112,20 @@ mod tests {
             "owner/repo",
             1,
             ProjectionAudience::Public,
-            ProjectionViewFile {
-                path: ScopePath::parse(&path).unwrap(),
-                oid: "1111111111111111111111111111111111111111".to_string(),
-                tracked: true,
-                visibility: Visibility::Public,
+            ProjectionViewFileContent {
+                file: ProjectionViewFile {
+                    path: ScopePath::parse(&path).unwrap(),
+                    oid: "1111111111111111111111111111111111111111".to_string(),
+                    tracked: true,
+                    visibility: Visibility::Public,
+                },
+                blob: SourceBlob {
+                    object_key: "objects/file".to_string(),
+                    sha256: "sha256".to_string(),
+                    git_oid: "1111111111111111111111111111111111111111".to_string(),
+                    git_file_mode: DEFAULT_GIT_FILE_MODE.to_string(),
+                    size_bytes: 10,
+                },
             },
         )
         .unwrap();
@@ -123,6 +133,61 @@ mod tests {
         assert_eq!(model.path, path);
         assert_eq!(model.path_key.len(), "sha256:".len() + 64);
         assert!(model.path_key.starts_with("sha256:"));
+
+        let content = model.try_into_content().unwrap();
+        assert_eq!(content.blob.object_key, "objects/file");
+        assert_eq!(content.blob.git_oid, content.file.oid);
+        assert_eq!(content.blob.size_bytes, 10);
+    }
+
+    #[test]
+    fn projection_file_rejects_inconsistent_domain_content() {
+        let content = ProjectionViewFileContent {
+            file: ProjectionViewFile {
+                path: ScopePath::parse("/README.md").unwrap(),
+                oid: "1111111111111111111111111111111111111111".to_string(),
+                tracked: true,
+                visibility: Visibility::Public,
+            },
+            blob: SourceBlob {
+                object_key: "objects/file".to_string(),
+                sha256: "sha256".to_string(),
+                git_oid: "1111111111111111111111111111111111111111".to_string(),
+                git_file_mode: DEFAULT_GIT_FILE_MODE.to_string(),
+                size_bytes: 10,
+            },
+        };
+
+        let mut untracked = content.clone();
+        untracked.file.tracked = false;
+        assert!(
+            projection_file::Model::live("owner/repo", 1, ProjectionAudience::Public, untracked,)
+                .is_err()
+        );
+
+        let mut mismatched_oid = content.clone();
+        mismatched_oid.blob.git_oid = "2222222222222222222222222222222222222222".to_string();
+        assert!(
+            projection_file::Model::live(
+                "owner/repo",
+                1,
+                ProjectionAudience::Public,
+                mismatched_oid,
+            )
+            .is_err()
+        );
+
+        let mut unsupported_mode = content;
+        unsupported_mode.blob.git_file_mode = "120000".to_string();
+        assert!(
+            projection_file::Model::live(
+                "owner/repo",
+                1,
+                ProjectionAudience::Public,
+                unsupported_mode,
+            )
+            .is_err()
+        );
     }
 
     #[test]

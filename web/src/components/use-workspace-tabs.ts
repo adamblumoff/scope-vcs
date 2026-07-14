@@ -1,4 +1,4 @@
-import { useMemo, useSyncExternalStore } from 'react'
+import { useCallback, useEffect, useMemo, useState, useSyncExternalStore } from 'react'
 import {
   closeWorkspaceTab,
   normalizeWorkspaceTabIds,
@@ -7,7 +7,7 @@ import {
 
 const STORAGE_PREFIX = 'scope-workspace-tabs:'
 const EMPTY_IDS: string[] = []
-const listeners = new Set<() => void>()
+const listenersByKey = new Map<string, Set<() => void>>()
 const memoryOnlyKeys = new Set<string>()
 const storedSnapshots = new Map<string, { ids: string[]; raw: string | null }>()
 
@@ -25,15 +25,30 @@ export function useWorkspaceTabs({
     [items],
   )
   const availableIds = useMemo(() => new Set(itemById.keys()), [itemById])
+  const [suppressedId, setSuppressedId] = useState<string | null>(null)
+  const subscribeToStorage = useCallback(
+    (listener: () => void) => subscribe(storageKey, listener),
+    [storageKey],
+  )
   const storedIds = useSyncExternalStore(
-    subscribe,
+    subscribeToStorage,
     () => readStoredIds(storageKey),
     () => EMPTY_IDS,
   )
+  const normalizedActiveId = activeId === suppressedId ? null : activeId
   const openIds = useMemo(
-    () => normalizeWorkspaceTabIds(storedIds, availableIds, activeId),
-    [activeId, availableIds, storedIds],
+    () => normalizeWorkspaceTabIds(
+      storedIds.filter((id) => id !== suppressedId),
+      availableIds,
+      normalizedActiveId,
+    ),
+    [availableIds, normalizedActiveId, storedIds, suppressedId],
   )
+
+  useEffect(() => {
+    if (suppressedId === null || activeId === suppressedId) return
+    setSuppressedId(null)
+  }, [activeId, suppressedId])
   const tabs = useMemo(
     () =>
       openIds.flatMap((id) => {
@@ -45,17 +60,19 @@ export function useWorkspaceTabs({
 
   return {
     close(id: string) {
-      const result = closeWorkspaceTab(openIds, activeId, id)
+      const result = closeWorkspaceTab(openIds, normalizedActiveId, id)
+      if (id === normalizedActiveId) setSuppressedId(id)
       writeStoredIds(storageKey, result.openIds)
       return result
     },
-    open(id: string) {
+    prepareOpen(id: string) {
+      setSuppressedId((current) => (current === id ? null : current))
       const nextIds = normalizeWorkspaceTabIds(
         [...openIds, id],
         availableIds,
         id,
       )
-      writeStoredIds(storageKey, nextIds)
+      writeStoredIds(storageKey, nextIds, false)
     },
     tabs,
   }
@@ -84,7 +101,7 @@ function readStoredIds(storageKey: string) {
   }
 }
 
-function writeStoredIds(storageKey: string, ids: string[]) {
+function writeStoredIds(storageKey: string, ids: string[], notify = true) {
   const key = `${STORAGE_PREFIX}${storageKey}`
   const raw = JSON.stringify(ids)
   try {
@@ -95,10 +112,21 @@ function writeStoredIds(storageKey: string, ids: string[]) {
     // Session persistence is optional when browser storage is unavailable.
   }
   storedSnapshots.set(key, { ids, raw })
-  for (const listener of listeners) listener()
+  if (notify) {
+    for (const listener of listenersByKey.get(key) ?? []) listener()
+  }
 }
 
-function subscribe(listener: () => void) {
+function subscribe(storageKey: string, listener: () => void) {
+  const key = `${STORAGE_PREFIX}${storageKey}`
+  let listeners = listenersByKey.get(key)
+  if (!listeners) {
+    listeners = new Set()
+    listenersByKey.set(key, listeners)
+  }
   listeners.add(listener)
-  return () => listeners.delete(listener)
+  return () => {
+    listeners.delete(listener)
+    if (listeners.size === 0) listenersByKey.delete(key)
+  }
 }

@@ -405,6 +405,7 @@ pub(crate) async fn get_file_content(
         path: projected.file.path.as_str().to_string(),
         oid: projected.file.oid,
         visibility: projected.file.visibility,
+        size_bytes: projected.blob.size_bytes,
         content,
     }))
 }

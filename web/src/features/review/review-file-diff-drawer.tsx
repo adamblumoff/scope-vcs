@@ -12,7 +12,7 @@ import {
 import { Skeleton } from '@/components/ui/skeleton'
 import { useThemeType } from '@/lib/use-theme-type'
 import { File, FileText, TriangleAlert, X } from 'lucide-react'
-import { type ReactNode, useMemo } from 'react'
+import { type ReactNode, useLayoutEffect, useMemo, useRef } from 'react'
 import {
   type BinaryContentSide,
   type ReviewFileContent,
@@ -29,28 +29,48 @@ const PIERRE_DIFF_OPTIONS = {
 } as const
 
 const PIERRE_WORKER_HIGHLIGHTER_OPTIONS = {} satisfies WorkerInitializationRenderOptions
+const MAX_PARSED_DIFF_ENTRIES = 12
+const MAX_PARSED_DIFF_BYTES = 16 * 1024 * 1024
+
+type ParsedDiffEntry = {
+  approximateBytes: number
+  lastAccessed: number
+  value: FileDiffMetadata
+}
+
+const parsedDiffEntries = new Map<string, ParsedDiffEntry>()
+let parsedDiffAccessClock = 0
+let parsedDiffBytes = 0
 
 export function ReviewFileDiffDrawer({
+  cacheKey,
   className,
   diff,
   error,
   loading,
   onClose,
+  onRetry,
+  onScrollTopChange,
+  scrollTop = 0,
   selectedPath,
   showHeader = true,
 }: {
+  cacheKey?: string | null
   className?: string
   diff: ReviewFileDiff | null
   error: string | null
   loading: boolean
   onClose?: () => void
+  onRetry?: () => void
+  onScrollTopChange?: (scrollTop: number) => void
+  scrollTop?: number
   selectedPath: string | null
   showHeader?: boolean
 }) {
   const themeType = useThemeType()
   const fileDiff = useMemo(
-    () => (diff ? diffMetadataForReviewFile(diff) : null),
-    [diff],
+    () => (diff ? parsedDiffForReviewFile(diff, cacheKey) : null),
+    [cacheKey, diff],
   )
   const contentSides = useMemo(
     () => (diff ? reviewContentSides(diff) : { binary: [], text: [] }),
@@ -62,6 +82,11 @@ export function ReviewFileDiffDrawer({
   )
   const workerPoolOptions = useMemo(createPierreWorkerPoolOptions, [])
   const displayName = displayPath(diff?.path ?? selectedPath ?? '')
+  const scrollRef = useRef<HTMLDivElement>(null)
+
+  useLayoutEffect(() => {
+    if (scrollRef.current) scrollRef.current.scrollTop = scrollTop
+  }, [diff, scrollTop, selectedPath])
 
   return (
     <aside
@@ -101,13 +126,22 @@ export function ReviewFileDiffDrawer({
           </div>
         ) : null}
 
-        <div className="min-h-0 flex-1 overflow-auto">
+        <div
+          className="min-h-0 flex-1 overflow-auto"
+          onScroll={(event) => onScrollTopChange?.(event.currentTarget.scrollTop)}
+          ref={scrollRef}
+        >
           {loading ? (
             <DiffSkeleton />
           ) : error ? (
             <DiffState role="alert" tone="error">
               <TriangleAlert className="size-4 text-destructive" />
               <span>{error}</span>
+              {onRetry && (
+                <Button onClick={onRetry} size="sm" type="button" variant="secondary">
+                  Retry
+                </Button>
+              )}
             </DiffState>
           ) : contentSides.binary.length > 0 && contentSides.text.length > 0 ? (
             <MixedContentDiffState
@@ -187,6 +221,53 @@ function pierreWorkerPoolSize() {
     return 2
   }
   return Math.min(4, Math.max(1, navigator.hardwareConcurrency))
+}
+
+function parsedDiffForReviewFile(
+  diff: ReviewFileDiff,
+  cacheKey?: string | null,
+): FileDiffMetadata | null {
+  if (!cacheKey) return diffMetadataForReviewFile(diff)
+  const cached = parsedDiffEntries.get(cacheKey)
+  if (cached) {
+    cached.lastAccessed = nextParsedDiffAccess()
+    return cached.value
+  }
+
+  const value = diffMetadataForReviewFile(diff)
+  if (!value) return null
+  const entry = {
+    approximateBytes: JSON.stringify(diff).length * 2,
+    lastAccessed: nextParsedDiffAccess(),
+    value,
+  }
+  parsedDiffEntries.set(cacheKey, entry)
+  parsedDiffBytes += entry.approximateBytes
+  evictParsedDiffEntries(cacheKey)
+  return value
+}
+
+function evictParsedDiffEntries(protectedKey: string) {
+  while (
+    parsedDiffEntries.size > MAX_PARSED_DIFF_ENTRIES ||
+    parsedDiffBytes > MAX_PARSED_DIFF_BYTES
+  ) {
+    let oldest: [string, ParsedDiffEntry] | null = null
+    for (const entry of parsedDiffEntries) {
+      if (entry[0] === protectedKey && parsedDiffEntries.size > 1) continue
+      if (!oldest || entry[1].lastAccessed < oldest[1].lastAccessed) {
+        oldest = entry
+      }
+    }
+    if (!oldest) return
+    parsedDiffEntries.delete(oldest[0])
+    parsedDiffBytes -= oldest[1].approximateBytes
+  }
+}
+
+function nextParsedDiffAccess() {
+  parsedDiffAccessClock += 1
+  return parsedDiffAccessClock
 }
 
 function diffMetadataForReviewFile(diff: ReviewFileDiff): FileDiffMetadata | null {
