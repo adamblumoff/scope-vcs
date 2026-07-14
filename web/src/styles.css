@@ -300,25 +300,10 @@ a {
   isolation: isolate;
 }
 
-.marketing-cli-next-steps {
-  animation: marketing-cli-reveal 180ms ease-out;
-}
-
-@keyframes marketing-cli-reveal {
-  from {
-    opacity: 0;
-    transform: translateY(-6px);
-  }
-
-  to {
-    opacity: 1;
-    transform: translateY(0);
-  }
-}
-
 .marketing-projection {
   z-index: 2;
   isolation: isolate;
+  overflow-anchor: none;
 }
 
 .marketing-projection::after {
@@ -619,6 +604,10 @@ a {
   .marketing-copy {
     top: 50%;
     transform: translateY(-50%);
+  }
+
+  .marketing-cli-onboarding {
+    min-height: 430px;
   }
 
   .marketing-source-node {

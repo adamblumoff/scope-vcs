@@ -80,7 +80,7 @@ export function CopyableCodeBlock({
           <TooltipTrigger asChild>
             <Button
               aria-label={copied ? 'Copied' : copyLabel}
-              className="absolute right-2 top-2 border-white/15 bg-white/5 text-[#aeb4bf] hover:bg-white/10 hover:text-white"
+              className="absolute inset-y-0 right-2 my-auto border-white/15 bg-white/5 text-[#aeb4bf] hover:bg-white/10 hover:text-white"
               onClick={() => void copyToClipboard()}
               size="icon-sm"
               type="button"

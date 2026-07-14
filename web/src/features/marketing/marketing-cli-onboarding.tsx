@@ -2,6 +2,7 @@ import type { CliInstallCommands, CliPlatform } from '@/api/types'
 import { CopyableCodeBlock } from '@/components/copyable-code-block'
 import { ToggleGroup, ToggleGroupItem } from '@/components/ui/toggle-group'
 import { CheckCircle2 } from 'lucide-react'
+import { AnimatePresence, motion, MotionConfig } from 'motion/react'
 import { useRef, useState, type ReactElement } from 'react'
 
 const platformOptions = [
@@ -55,7 +56,10 @@ export function MarketingCliOnboarding({
   }
 
   return (
-    <section aria-labelledby="install-scope" className="mt-9 max-w-[570px]">
+    <section
+      aria-labelledby="install-scope"
+      className="marketing-cli-onboarding mt-9 max-w-[570px]"
+    >
       <div className="mb-3 flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between">
         <div>
           <h2 className="text-sm font-semibold" id="install-scope">
@@ -96,56 +100,73 @@ export function MarketingCliOnboarding({
         value={installCommand}
       />
 
-      {!showNextSteps && (
-        <button
-          className="mt-3 text-xs text-muted-foreground underline decoration-border-strong underline-offset-4 transition-colors hover:text-foreground"
-          onClick={() => revealNextSteps(true)}
-          type="button"
-        >
-          Already installed? Show next steps
-        </button>
-      )}
-
-      {showNextSteps && (
-        <div
-          aria-live="polite"
-          className="marketing-cli-next-steps mt-5 border-t border-border pt-5"
-        >
-          <div className="mb-4 flex items-center gap-2 font-mono text-[11px] font-semibold text-[var(--success-strong)]">
-            <CheckCircle2 className="size-3.5" />
-            Ready for the next step
-          </div>
-          <h3
-            className="text-sm font-semibold outline-none"
-            ref={nextStepsHeadingRef}
-            tabIndex={-1}
-          >
-            Connect a repository
-          </h3>
-          <div className="mt-4 space-y-4">
-            {nextSteps.map((step, index) => (
-              <div
-                className="grid grid-cols-[22px_minmax(0,1fr)] gap-2.5"
-                key={step.command}
+      <MotionConfig reducedMotion="user">
+        <AnimatePresence initial={false}>
+          {!showNextSteps && (
+            <motion.div
+              className="mt-3 overflow-hidden"
+              exit={{ height: 0, marginTop: 0, opacity: 0 }}
+              key="manual-reveal"
+              transition={{ duration: 0.2, ease: 'easeOut' }}
+            >
+              <button
+                className="text-xs text-muted-foreground underline decoration-border-strong underline-offset-4 transition-colors hover:text-foreground"
+                onClick={() => revealNextSteps(true)}
+                type="button"
               >
-                <span className="mt-0.5 grid size-[22px] place-items-center rounded-full border border-border font-mono text-[9px] text-muted-foreground">
-                  {index + 1}
-                </span>
-                <div className="min-w-0">
-                  <p className="mb-2 text-xs leading-5 text-muted-foreground">
-                    {step.description}
-                  </p>
-                  <CopyableCodeBlock
-                    className="shadow-none"
-                    copyLabel={step.copyLabel}
-                    value={step.command}
-                  />
+                Already installed? Show next steps
+              </button>
+            </motion.div>
+          )}
+
+          {showNextSteps && (
+            <motion.div
+              animate={{ height: 'auto', opacity: 1 }}
+              aria-live="polite"
+              className="overflow-hidden"
+              initial={{ height: 0, opacity: 0 }}
+              key="next-steps"
+              transition={{ duration: 0.24, ease: 'easeOut' }}
+            >
+              <div className="mt-5 border-t border-border pt-5">
+                <div className="mb-4 flex items-center gap-2 font-mono text-[11px] font-semibold text-[var(--success-strong)]">
+                  <CheckCircle2 className="size-3.5" />
+                  Ready for the next step
+                </div>
+                <h3
+                  className="text-sm font-semibold outline-none"
+                  ref={nextStepsHeadingRef}
+                  tabIndex={-1}
+                >
+                  Connect a repository
+                </h3>
+                <div className="mt-4 space-y-4">
+                  {nextSteps.map((step, index) => (
+                    <div
+                      className="grid grid-cols-[22px_minmax(0,1fr)] gap-2.5"
+                      key={step.command}
+                    >
+                      <span className="mt-0.5 grid size-[22px] place-items-center rounded-full border border-border font-mono text-[9px] text-muted-foreground">
+                        {index + 1}
+                      </span>
+                      <div className="min-w-0">
+                        <p className="mb-2 text-xs leading-5 text-muted-foreground">
+                          {step.description}
+                        </p>
+                        <CopyableCodeBlock
+                          className="shadow-none"
+                          copyLabel={step.copyLabel}
+                          value={step.command}
+                        />
+                      </div>
+                    </div>
+                  ))}
                 </div>
               </div>
-            ))}
-          </div>
-        </div>
-      )}
+            </motion.div>
+          )}
+        </AnimatePresence>
+      </MotionConfig>
     </section>
   )
 }
