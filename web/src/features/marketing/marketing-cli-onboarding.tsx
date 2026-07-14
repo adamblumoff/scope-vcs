@@ -9,7 +9,7 @@ import {
   m,
   MotionConfig,
 } from 'motion/react'
-import { useRef, useState, type ReactElement } from 'react'
+import { useEffect, useRef, useState, type ReactElement } from 'react'
 
 const platformOptions = [
   { copyName: 'macOS and Linux', label: 'macOS / Linux', value: 'posix' },
@@ -48,17 +48,23 @@ export function MarketingCliOnboarding({
   const [platform, setPlatform] = useState<CliPlatform>(initialPlatform)
   const [showNextSteps, setShowNextSteps] = useState(false)
   const nextStepsHeadingRef = useRef<HTMLHeadingElement>(null)
+  const shouldFocusNextStepsRef = useRef(false)
 
   const installCommand = commands[platform]
   const platformOption = platformOptions.find(
     (option) => option.value === platform,
   ) ?? platformOptions[0]
 
-  function revealNextSteps(moveFocus = false) {
-    setShowNextSteps(true)
-    if (moveFocus) {
-      window.requestAnimationFrame(() => nextStepsHeadingRef.current?.focus())
+  useEffect(() => {
+    if (showNextSteps && shouldFocusNextStepsRef.current) {
+      shouldFocusNextStepsRef.current = false
+      nextStepsHeadingRef.current?.focus()
     }
+  }, [showNextSteps])
+
+  function revealNextSteps(moveFocus = false) {
+    shouldFocusNextStepsRef.current = moveFocus
+    setShowNextSteps(true)
   }
 
   return (
