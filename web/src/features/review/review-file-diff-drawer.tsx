@@ -83,10 +83,14 @@ export function ReviewFileDiffDrawer({
   const workerPoolOptions = useMemo(createPierreWorkerPoolOptions, [])
   const displayName = displayPath(diff?.path ?? selectedPath ?? '')
   const scrollRef = useRef<HTMLDivElement>(null)
+  const restoredScrollKeyRef = useRef<string | null>(null)
+  const scrollKey = cacheKey ?? selectedPath
 
   useLayoutEffect(() => {
+    if (restoredScrollKeyRef.current === scrollKey) return
+    restoredScrollKeyRef.current = scrollKey
     if (scrollRef.current) scrollRef.current.scrollTop = scrollTop
-  }, [diff, scrollTop, selectedPath])
+  })
 
   return (
     <aside

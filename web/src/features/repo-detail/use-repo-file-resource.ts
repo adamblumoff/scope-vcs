@@ -45,7 +45,7 @@ export function useRepoFileResource({
 
     void load(controller.signal).then(
       (file) => {
-        if (!active) return
+        if (!active || controller.signal.aborted) return
         writeRepoFileCache(identity, file)
         setResource({ error: null, file, identity, status: 'loaded' })
       },
