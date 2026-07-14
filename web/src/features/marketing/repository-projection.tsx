@@ -147,20 +147,12 @@ function ProjectionConnections(): ReactElement {
       viewBox="0 0 100 100"
     >
       <path
-        className="marketing-connection marketing-connection-public marketing-connection-compact"
-        d="M 50 50.5 C 50 51.5, 50 52, 50 53"
-      />
-      <path
-        className="marketing-connection marketing-connection-private marketing-connection-compact"
-        d="M 50 50.5 C 68 56, 68 68, 55 73.5"
-      />
-      <path
         className="marketing-connection marketing-connection-public marketing-connection-stacked"
-        d="M 50 45.5 C 50 46, 50 46.5, 50 47"
+        d="M 50 9 C 50 10, 50 10.5, 50 11.5"
       />
       <path
         className="marketing-connection marketing-connection-private marketing-connection-stacked"
-        d="M 50 45.5 C 66 51, 66 63, 55 69"
+        d="M 50 9 C 66 16, 66 35, 55 48.5"
       />
       <path
         className="marketing-connection marketing-connection-public marketing-connection-desktop"
