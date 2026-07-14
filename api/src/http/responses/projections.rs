@@ -116,6 +116,7 @@ pub(crate) struct RepoFileContentResponse {
     pub(crate) path: String,
     pub(crate) oid: String,
     pub(crate) visibility: Visibility,
+    pub(crate) size_bytes: u64,
     pub(crate) content: super::ReviewFileContentResponse,
 }
 

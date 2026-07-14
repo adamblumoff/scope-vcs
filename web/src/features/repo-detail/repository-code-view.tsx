@@ -1,6 +1,7 @@
 import type { RepoFile, RepoFileContent, RepoParams } from '@/api/types'
 import { FileSystemTree } from '@/components/file-system-tree'
 import { ReadmeRenderer } from '@/components/readme-renderer'
+import { Button } from '@/components/ui/button'
 import { useWorkspaceTabs } from '@/components/use-workspace-tabs'
 import { VisibilityBadge } from '@/components/visibility-badge'
 import { WorkspaceTabStrip } from '@/components/workspace-tab-strip'
@@ -8,8 +9,11 @@ import {
   workspaceTabDomIds,
   workspaceTabPanelId,
 } from '@/components/workspace-tab-model'
-import { FileQuestion, TriangleAlert } from 'lucide-react'
-import { useMemo, useRef } from 'react'
+import { FileQuestion, LoaderCircle, TriangleAlert } from 'lucide-react'
+import { useLayoutEffect, useMemo, useRef } from 'react'
+
+const MAX_SOURCE_SCROLL_POSITIONS = 64
+const sourceScrollPositions = new Map<string, number>()
 
 const CODE_TAB_SET_ID = 'repository-code-files'
 
@@ -19,6 +23,9 @@ export function RepositoryCodeView({
   params,
   selectedFile,
   selectedFileError,
+  selectedFileIdentity,
+  selectedFileLoading,
+  selectedFileRetry,
   selectedPath,
 }: {
   files: RepoFile[]
@@ -26,6 +33,9 @@ export function RepositoryCodeView({
   params: RepoParams
   selectedFile: RepoFileContent | null
   selectedFileError: string | null
+  selectedFileIdentity: string | null
+  selectedFileLoading: boolean
+  selectedFileRetry: () => void
   selectedPath: string | null
 }) {
   const tabItems = useMemo(
@@ -71,7 +81,7 @@ export function RepositoryCodeView({
               getFileMeta={fileStatus}
               metaColumnLabel="Status"
               onSelectFile={(file) => {
-                workspaceTabs.open(file.path)
+                workspaceTabs.prepareOpen(file.path)
                 onSelectFilePath(file.path)
               }}
               selectedFilePath={selectedPath}
@@ -80,10 +90,13 @@ export function RepositoryCodeView({
           <SourcePane
             error={selectedFileError}
             file={selectedFile}
+            loading={selectedFileLoading}
             onActivateTab={onSelectFilePath}
             onCloseTab={closeTab}
             onEmptyTabFocus={() => fileNavigatorRef.current?.focus()}
             params={params}
+            retry={selectedFileRetry}
+            scrollKey={selectedFileIdentity}
             selectedPath={selectedPath}
             tabs={workspaceTabs.tabs}
           />
@@ -96,25 +109,40 @@ export function RepositoryCodeView({
 function SourcePane({
   file,
   error,
+  loading,
   onActivateTab,
   onCloseTab,
   onEmptyTabFocus,
   params,
+  retry,
+  scrollKey,
   selectedPath,
   tabs,
 }: {
   file: RepoFileContent | null
   error: string | null
+  loading: boolean
   onActivateTab: (path: string) => void
   onCloseTab: (path: string) => string | null
   onEmptyTabFocus: () => void
   params: RepoParams
+  retry: () => void
+  scrollKey: string | null
   selectedPath: string | null
   tabs: Array<{ id: string; label: string; title?: string }>
 }) {
   const activeTabDomIds = selectedPath && tabs.some((tab) => tab.id === selectedPath)
     ? workspaceTabDomIds(CODE_TAB_SET_ID, selectedPath)
     : null
+  const contentRef = useRef<HTMLDivElement>(null)
+
+  useLayoutEffect(() => {
+    if (contentRef.current) {
+      contentRef.current.scrollTop = scrollKey
+        ? (sourceScrollPositions.get(scrollKey) ?? 0)
+        : 0
+    }
+  }, [scrollKey])
 
   return (
     <div className="min-w-0">
@@ -130,15 +158,23 @@ function SourcePane({
       <div
         aria-label={activeTabDomIds ? undefined : 'Repository file viewer'}
         aria-labelledby={activeTabDomIds?.tabId}
-        className="outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring"
+        className="max-h-[calc(100dvh-300px)] overflow-auto outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring"
         id={workspaceTabPanelId(CODE_TAB_SET_ID)}
+        onScroll={(event) => {
+          if (scrollKey) {
+            saveSourceScrollPosition(scrollKey, event.currentTarget.scrollTop)
+          }
+        }}
+        ref={contentRef}
         role={tabs.length > 0 ? 'tabpanel' : undefined}
         tabIndex={tabs.length > 0 ? 0 : undefined}
       >
         <SourceContent
           error={error}
           file={file}
+          loading={loading}
           params={params}
+          retry={retry}
           selectedPath={selectedPath}
         />
       </div>
@@ -149,12 +185,16 @@ function SourcePane({
 function SourceContent({
   file,
   error,
+  loading,
   params,
+  retry,
   selectedPath,
 }: {
   file: RepoFileContent | null
   error: string | null
+  loading: boolean
   params: RepoParams
+  retry: () => void
   selectedPath: string | null
 }) {
   if (!selectedPath) {
@@ -166,6 +206,23 @@ function SourceContent({
     )
   }
 
+  if (loading) {
+    return (
+      <div
+        aria-busy="true"
+        className="flex min-h-52 items-center justify-center px-5 py-10 text-center"
+      >
+        <div className="max-w-sm">
+          <LoaderCircle className="mx-auto size-5 animate-spin text-muted-foreground" />
+          <h3 className="mt-3 text-sm font-semibold">Loading source</h3>
+          <p className="mt-1 text-sm leading-5 text-muted-foreground">
+            Fetching {displayPath(selectedPath)}.
+          </p>
+        </div>
+      </div>
+    )
+  }
+
   if (error) {
     return (
       <div className="flex min-h-52 items-center justify-center px-5 py-10 text-center" role="alert">
@@ -173,6 +230,9 @@ function SourceContent({
           <TriangleAlert className="mx-auto size-5 text-destructive" />
           <h3 className="mt-3 text-sm font-semibold">Source unavailable</h3>
           <p className="mt-1 text-sm leading-5 text-muted-foreground">{error}</p>
+          <Button className="mt-4" onClick={retry} size="sm" type="button" variant="secondary">
+            Retry
+          </Button>
         </div>
       </div>
     )
@@ -191,28 +251,44 @@ function SourceContent({
     <div className="min-w-0">
       <div className="flex min-h-11 min-w-0 items-center gap-3 border-b border-border px-5 py-2 sm:px-8">
         <div className="min-w-0 flex-1 font-mono text-[11px] text-muted-foreground">
-          {file.content.kind === 'text' ? formatBytes(new TextEncoder().encode(file.content.text).length) : formatBytes(file.content.size_bytes)}
+          {formatBytes(file.size_bytes)} · {file.oid.slice(0, 12)}
         </div>
         <VisibilityBadge compact visibility={file.visibility} />
       </div>
-      {file.content.kind === 'text' ? (
-        isReadme(file.path) ? (
-          <ReadmeRenderer
-            repository={{ ...params, readmePath: file.path }}
-            source={file.content.text}
-          />
-        ) : (
-          <pre className="max-h-[calc(100dvh-300px)] overflow-auto bg-[#090b0e] p-5 font-mono text-xs leading-5 whitespace-pre text-[#eceae5] sm:p-7">
-            <code>{file.content.text}</code>
-          </pre>
-        )
-      ) : (
-        <EmptySource
-          description={`${formatBytes(file.content.size_bytes)} · ${file.content.oid.slice(0, 12)}`}
-          title="Binary file not rendered"
-        />
-      )}
+      <SourceFileContent file={file} params={params} />
     </div>
+  )
+}
+
+function SourceFileContent({
+  file,
+  params,
+}: {
+  file: RepoFileContent
+  params: RepoParams
+}) {
+  if (file.content.kind !== 'text') {
+    return (
+      <EmptySource
+        description={`${formatBytes(file.content.size_bytes)} · ${file.content.oid.slice(0, 12)}`}
+        title="Binary file not rendered"
+      />
+    )
+  }
+
+  if (isReadme(file.path)) {
+    return (
+      <ReadmeRenderer
+        repository={{ ...params, readmePath: file.path }}
+        source={file.content.text}
+      />
+    )
+  }
+
+  return (
+    <pre className="min-h-full bg-[#090b0e] p-5 font-mono text-xs leading-5 whitespace-pre text-[#eceae5] sm:p-7">
+      <code>{file.content.text}</code>
+    </pre>
   )
 }
 
@@ -226,6 +302,17 @@ function EmptySource({ description, title }: { description: string; title: strin
       </div>
     </div>
   )
+}
+
+function saveSourceScrollPosition(key: string, scrollTop: number) {
+  sourceScrollPositions.delete(key)
+  sourceScrollPositions.set(key, scrollTop)
+
+  while (sourceScrollPositions.size > MAX_SOURCE_SCROLL_POSITIONS) {
+    const oldestKey = sourceScrollPositions.keys().next().value
+    if (oldestKey === undefined) return
+    sourceScrollPositions.delete(oldestKey)
+  }
 }
 
 function fileStatus(file: RepoFile) {

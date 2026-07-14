@@ -186,7 +186,10 @@ fn projection_preview_commit_visibility(
     ProjectionPreviewCommitVisibility::Mixed
 }
 
-pub fn projected_files(repo: &StoredRepository, principal: &Principal) -> Vec<ProjectionViewFile> {
+pub fn projected_file_contents(
+    repo: &StoredRepository,
+    principal: &Principal,
+) -> Vec<ProjectionViewFileContent> {
     let access = repo.access_for_principal(principal);
     let projection = project_graph(
         &repo.policy,
@@ -194,15 +197,36 @@ pub fn projected_files(repo: &StoredRepository, principal: &Principal) -> Vec<Pr
         &repo.visibility_events,
         ProjectionViewKey::from_access(access),
     );
+    let mut live_files = BTreeMap::new();
+    for change in projection.commits.iter().flat_map(|commit| &commit.changes) {
+        match &change.new_content {
+            Some(blob) => {
+                live_files.insert(change.path.clone(), blob.clone());
+            }
+            None => {
+                live_files.remove(&change.path);
+            }
+        }
+    }
 
-    projection_tree(&projection)
+    live_files
         .into_iter()
-        .map(|(path, oid)| ProjectionViewFile {
-            visibility: repo.policy.effective_visibility(&path),
-            path,
-            oid,
-            tracked: true,
+        .map(|(path, blob)| ProjectionViewFileContent {
+            file: ProjectionViewFile {
+                visibility: repo.policy.effective_visibility(&path),
+                path,
+                oid: blob.git_oid.clone(),
+                tracked: true,
+            },
+            blob,
         })
+        .collect()
+}
+
+pub fn projected_files(repo: &StoredRepository, principal: &Principal) -> Vec<ProjectionViewFile> {
+    projected_file_contents(repo, principal)
+        .into_iter()
+        .map(|content| content.file)
         .collect()
 }
 
@@ -211,12 +235,11 @@ pub fn projected_file_content(
     principal: &Principal,
     path: &ScopePath,
 ) -> Option<ProjectionViewFileContent> {
-    let access = repo.access_for_principal(principal);
     let projection = project_graph(
         &repo.policy,
         &repo.graph,
         &repo.visibility_events,
-        ProjectionViewKey::from_access(access),
+        ProjectionViewKey::from_access(repo.access_for_principal(principal)),
     );
     let blob = projection
         .commits
@@ -226,6 +249,7 @@ pub fn projected_file_content(
         .find(|change| &change.path == path)?
         .new_content
         .clone()?;
+
     Some(ProjectionViewFileContent {
         file: ProjectionViewFile {
             path: path.clone(),

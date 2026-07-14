@@ -1,6 +1,6 @@
 import { cn } from '@/lib/utils'
 import { FileCode2, X } from 'lucide-react'
-import { useRef } from 'react'
+import { useLayoutEffect, useMemo, useRef } from 'react'
 import {
   workspaceTabDomIds,
   workspaceTabVisibleLabels,
@@ -24,14 +24,34 @@ export function WorkspaceTabStrip({
   tabSetId: string
   tabs: WorkspaceTabItem[]
 }) {
-  const tabRefs = useRef<Map<string, HTMLButtonElement> | null>(null)
-  if (tabRefs.current === null) tabRefs.current = new Map()
-
-  if (tabs.length === 0) return null
+  const tabListRef = useRef<HTMLDivElement>(null)
+  const tabRefs = useMemo(() => new Map<string, HTMLButtonElement>(), [])
+  const refCallbacks = useMemo(
+    () => new Map<string, (node: HTMLButtonElement | null) => void>(),
+    [],
+  )
   const tabStopId = tabs.some((tab) => tab.id === activeId)
     ? activeId
-    : tabs[0].id
-  const visibleLabels = workspaceTabVisibleLabels(tabs)
+    : tabs[0]?.id
+  const visibleLabels = useMemo(() => workspaceTabVisibleLabels(tabs), [tabs])
+
+  useLayoutEffect(() => {
+    if (!activeId) return
+    const button = tabRefs.get(activeId)
+    if (button && tabListRef.current) revealTab(button, tabListRef.current)
+  }, [activeId, tabRefs, tabs])
+
+  function tabRef(id: string) {
+    let callback = refCallbacks.get(id)
+    if (!callback) {
+      callback = (node) => {
+        if (node) tabRefs.set(id, node)
+        else tabRefs.delete(id)
+      }
+      refCallbacks.set(id, callback)
+    }
+    return callback
+  }
 
   function moveFocus(event: React.KeyboardEvent, id: string) {
     const currentIndex = tabs.findIndex((tab) => tab.id === id)
@@ -47,13 +67,13 @@ export function WorkspaceTabStrip({
     }
     if (nextIndex === null) return
     event.preventDefault()
-    tabRefs.current?.get(tabs[nextIndex].id)?.focus()
+    tabRefs?.get(tabs[nextIndex].id)?.focus()
   }
 
   function closeTab(id: string) {
     const focusId = onClose(id)
     requestAnimationFrame(() => {
-      if (focusId) tabRefs.current?.get(focusId)?.focus()
+      if (focusId) tabRefs?.get(focusId)?.focus()
       else onEmptyFocus()
     })
   }
@@ -62,6 +82,7 @@ export function WorkspaceTabStrip({
     <div
       aria-label={ariaLabel}
       className="scrollbar-none flex min-h-10 min-w-0 overflow-x-auto border-b border-border bg-[var(--workspace-tabs)]"
+      ref={tabListRef}
       role="tablist"
     >
       {tabs.map((tab) => {
@@ -72,7 +93,7 @@ export function WorkspaceTabStrip({
         return (
           <div
             className={cn(
-              'group/tab relative flex min-w-[132px] max-w-[240px] shrink-0 items-center border-r border-border text-muted-foreground transition-[background-color,color,box-shadow] duration-150',
+              'group/tab relative flex w-[180px] shrink-0 items-center border-r border-border text-muted-foreground transition-[background-color,color,box-shadow] duration-150 sm:w-[200px]',
               active &&
                 'bg-card text-foreground shadow-[inset_0_2px_0_0_var(--platinum-bright)]',
             )}
@@ -86,16 +107,7 @@ export function WorkspaceTabStrip({
               onClick={() => onActivate(tab.id)}
               onKeyDown={(event) => moveFocus(event, tab.id)}
               id={domIds.tabId}
-              ref={(node) => {
-                if (node) {
-                  tabRefs.current?.set(tab.id, node)
-                  if (active) {
-                    revealTab(node)
-                  }
-                } else {
-                  tabRefs.current?.delete(tab.id)
-                }
-              }}
+              ref={tabRef(tab.id)}
               role="tab"
               tabIndex={tab.id === tabStopId ? 0 : -1}
               title={accessibleLabel}
@@ -122,10 +134,9 @@ export function WorkspaceTabStrip({
   )
 }
 
-function revealTab(button: HTMLButtonElement) {
+function revealTab(button: HTMLButtonElement, tabList: HTMLDivElement) {
   const tab = button.parentElement
-  const tabList = tab?.parentElement
-  if (!tab || !tabList) return
+  if (!tab) return
 
   if (tab.offsetLeft < tabList.scrollLeft) {
     tabList.scrollLeft = tab.offsetLeft

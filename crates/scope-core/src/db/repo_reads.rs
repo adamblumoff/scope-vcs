@@ -2,7 +2,8 @@ use super::{
     MetadataStore, begin_metadata_read_snapshot, entities,
     projection_encoding::ProjectionAudience,
     projection_read_models::{
-        load_live_projection_file_count_for_audience, load_live_projection_files_for_audience,
+        ProjectionFileLookup, load_live_projection_file_count_for_audience,
+        load_live_projection_file_for_audience, load_live_projection_files_for_audience,
     },
     repository_from_model,
 };
@@ -11,7 +12,6 @@ use crate::{
         policy::{Policy, Principal, PrincipalKind, ScopePath, Visibility},
         projection_views::{
             ProjectionViewFile, ProjectionViewFileContent, has_visible_projected_history,
-            projected_file_content as domain_projected_file_content,
             projected_files as domain_projected_files,
         },
         store::{
@@ -238,12 +238,42 @@ where
     };
     let permissions = member_permissions_for_viewer(conn, &row, viewer_user_id).await?;
     let access = access_for_row(&row, viewer_user_id, permissions)?;
-    if !row_is_readable_for_viewer(conn, &row, viewer_user_id, access).await? {
+    let visibility_depends_on_projection =
+        needs_public_projection_visibility(&row, viewer_user_id, access);
+    if !visibility_depends_on_projection
+        && !row_is_readable_with_visible_projection(&row, access, false)?
+    {
         return Ok(None);
     }
-    let repo = hydrate_repo_from_row_id(conn, &row.id).await?;
-    let principal = principal_for_access(viewer_user_id, access);
-    Ok(domain_projected_file_content(&repo, &principal, path))
+    let audience = live_projection_audience(access);
+    let lookup = load_live_projection_file_for_audience(
+        conn,
+        &row.id,
+        row.change_version()?,
+        audience,
+        path,
+    )
+    .await?;
+    let content = match lookup {
+        ProjectionFileLookup::Found(content) => Some(content),
+        ProjectionFileLookup::Missing => None,
+        ProjectionFileLookup::NotReady => {
+            if visibility_depends_on_projection {
+                let repo = hydrate_repo_from_row_id(conn, &row.id).await?;
+                let principal = principal_for_access(viewer_user_id, access);
+                if !has_visible_projected_history(&repo, &principal) {
+                    return Ok(None);
+                }
+            }
+            return Err(ApiError::service_unavailable(
+                "repository projection is rebuilding; retry shortly",
+            ));
+        }
+    };
+    if !row_is_readable_with_visible_projection(&row, access, content.is_some())? {
+        return Ok(None);
+    }
+    Ok(content)
 }
 
 async fn repo_read_row_by_owner_name<C>(
@@ -379,36 +409,6 @@ where
         return Ok(None);
     }
     Ok(Some(summary_from_row(row, access)?))
-}
-
-async fn row_is_readable_for_viewer<C>(
-    conn: &C,
-    row: &RepoReadRow,
-    viewer_user_id: Option<&str>,
-    access: RepositoryAccess,
-) -> Result<bool, ApiError>
-where
-    C: ConnectionTrait,
-{
-    if !needs_public_projection_visibility(row, viewer_user_id, access) {
-        return row_is_readable_with_visible_projection(row, access, false);
-    }
-    let visible_projection = match load_live_projection_file_count_for_audience(
-        conn,
-        &row.id,
-        row.change_version()?,
-        ProjectionAudience::Public,
-    )
-    .await?
-    {
-        Some(count) if count > 0 => true,
-        Some(_) | None => {
-            let repo = hydrate_repo_from_row_id(conn, &row.id).await?;
-            let principal = principal_for_access(viewer_user_id, access);
-            has_visible_projected_history(&repo, &principal)
-        }
-    };
-    row_is_readable_with_visible_projection(row, access, visible_projection)
 }
 
 fn summary_for_user_list_row(

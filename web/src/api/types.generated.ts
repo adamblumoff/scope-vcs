@@ -118,7 +118,7 @@ export type RepoFileResponse = { path: string, oid: string, tracked: boolean, vi
 
 export type RepoFileContentRequest = { path: string, };
 
-export type RepoFileContentResponse = { path: string, oid: string, visibility: Visibility, content: ReviewFileContentResponse, };
+export type RepoFileContentResponse = { path: string, oid: string, visibility: Visibility, size_bytes: number, content: ReviewFileContentResponse, };
 
 export type RepositoryAccessResponse = { actor: RepositoryActor, can_read_private_files: boolean, can_push: boolean, can_change_file_visibility: boolean, can_apply_changes: boolean, can_manage_members: boolean, can_delete_repo: boolean, };
 
@@ -150,7 +150,7 @@ export type ReviewFileContentResponse = { "kind": "text", text: string, } | { "k
 
 export type ReviewFileDiffResponse = { path: string, kind: FileChangeKind, old_mode: string | null, new_mode: string | null, old_content: ReviewFileContentResponse | null, new_content: ReviewFileContentResponse | null, };
 
-export type CommitHistoryResponse = { audience: ProjectionPreviewAudience, repo_id: string, view_key: string, commits: Array<CommitSummaryResponse>, };
+export type CommitHistoryResponse = { audience: ProjectionPreviewAudience, repo_id: string, view_key: string, generation: string, commits: Array<CommitSummaryResponse>, };
 
 export type CommitSummaryResponse = { projected_id: string, logical_commit_id: string, parent_projected_id: string | null, author: string | null, message: string, change_count: number, };
 

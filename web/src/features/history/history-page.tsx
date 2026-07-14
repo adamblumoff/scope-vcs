@@ -11,17 +11,36 @@ import { FileSystemTree } from '@/components/file-system-tree'
 import { RepoShell } from '@/components/repo-shell'
 import { RouteErrorPage } from '@/components/route-error-page'
 import { useWorkspaceTabs } from '@/components/use-workspace-tabs'
-import { WorkspaceTabStrip } from '@/components/workspace-tab-strip'
 import {
   workspaceTabDomIds,
   workspaceTabPanelId,
   type WorkspaceTabItem,
 } from '@/components/workspace-tab-model'
+import { WorkspaceTabStrip } from '@/components/workspace-tab-strip'
+import { WorkbenchHeader } from '@/components/workbench-header'
 import { Badge } from '@/components/ui/badge'
+import { Button } from '@/components/ui/button'
 import { Skeleton } from '@/components/ui/skeleton'
 import { ToggleGroup, ToggleGroupItem } from '@/components/ui/toggle-group'
+import {
+  historyCommitCacheKey,
+  historyDiffCacheKey,
+  readHistoryCommitCache,
+  readHistoryDiffCache,
+  readHistoryDiffScroll,
+  writeHistoryCommitCache,
+  writeHistoryDiffCache,
+  writeHistoryDiffScroll,
+} from '@/features/history/history-resource-cache'
+import {
+  useHistoryResource,
+  type HistoryResource,
+} from '@/features/history/use-history-resource'
 import { cn } from '@/lib/utils'
-import { WorkbenchHeader } from '@/components/workbench-header'
+import {
+  loadCommitDetail,
+  loadCommitFileDiff,
+} from '@/routes/-repo-history-actions'
 import { useNavigate } from '@tanstack/react-router'
 import {
   Globe2,
@@ -30,7 +49,7 @@ import {
   LockKeyhole,
   TriangleAlert,
 } from 'lucide-react'
-import { type ReactNode, useMemo, useRef } from 'react'
+import { type ReactNode, useCallback, useMemo, useRef } from 'react'
 import { ReviewFileDiffDrawer } from '../review/review-file-diff-drawer'
 import { audienceLabel, changeCountLabel } from '../review/review-labels'
 
@@ -43,14 +62,12 @@ export type CommitHistories = {
 
 type HistoryPageProps = {
   histories: CommitHistories
-  initialAudience: ProjectionPreviewAudience
-  initialCommit: CommitDetail | null
-  initialFile: {
-    error: string | null
-    path: string | null
-    value: ReviewFileDiff | null
-  }
   params: RepoParams
+  search: {
+    audience?: ProjectionPreviewAudience
+    commit?: string
+    path?: string
+  }
 }
 
 export function HistoryPage(props: HistoryPageProps) {
@@ -62,11 +79,13 @@ export function HistoryPage(props: HistoryPageProps) {
     closeFileTab,
     commitState,
     commits,
+    diffIdentity,
     fileDiffState,
     fileTabs,
     history,
-    pageWidthClassName,
     repoId,
+    retryCommit,
+    retryDiff,
     selectAudience,
     selectCommit,
     selectFile,
@@ -76,87 +95,74 @@ export function HistoryPage(props: HistoryPageProps) {
   } = useHistoryPageModel(props)
 
   return (
-    <RepoShell contentClassName={pageWidthClassName} params={params}>
-        <WorkbenchHeader
-          actions={availableAudiences.length > 1 ? (
-            <AudienceToggle
-              audience={audience}
-              availableAudiences={availableAudiences}
-              onSelect={selectAudience}
-            />
-          ) : undefined}
-          count={`${commits.length} ${commits.length === 1 ? 'commit' : 'commits'}${selectedCommit ? ` · ${changeCountLabel(selectedCommit.change_count)}` : ''}`}
-          description={`Projected commit history for ${repoId}.`}
-          eyebrow={`${audienceLabel(audience)} view`}
-          title="History"
-        />
-        <section className="px-4 pb-10 sm:px-6 lg:px-8">
-          <div className="flex flex-col gap-3 border-b border-border py-4 sm:flex-row sm:items-center sm:justify-between">
-            <div className="min-w-0">
-              <div className="flex flex-wrap items-center gap-2">
-                <History className="size-4 text-muted-foreground" />
-                <h2 className="text-sm font-semibold leading-5">Commits</h2>
-              </div>
+    <RepoShell contentClassName="max-w-[1320px]" params={params}>
+      <WorkbenchHeader
+        actions={availableAudiences.length > 1 ? (
+          <AudienceToggle
+            audience={audience}
+            availableAudiences={availableAudiences}
+            onSelect={selectAudience}
+          />
+        ) : undefined}
+        count={`${commits.length} ${commits.length === 1 ? 'commit' : 'commits'}${selectedCommit ? ` · ${changeCountLabel(selectedCommit.change_count)}` : ''}`}
+        description={`Projected commit history for ${repoId}.`}
+        eyebrow={`${audienceLabel(audience)} view`}
+        title="History"
+      />
+      <section className="px-4 pb-10 sm:px-6 lg:px-8">
+        <div className="flex flex-col gap-3 border-b border-border py-4 sm:flex-row sm:items-center sm:justify-between">
+          <div className="min-w-0">
+            <div className="flex flex-wrap items-center gap-2">
+              <History className="size-4 text-muted-foreground" />
+              <h2 className="text-sm font-semibold leading-5">Commits</h2>
             </div>
           </div>
+        </div>
 
-          {!history || commits.length === 0 ? (
-            <div className="flex flex-col items-center gap-3 py-16 text-center">
-              <div className="flex size-11 items-center justify-center rounded-xl bg-brand-muted text-brand">
-                <History className="size-5" />
-              </div>
-              <div className="text-sm">
-                <div className="text-base font-semibold leading-6">
-                  No commits yet
-                </div>
-                <p className="mt-0.5 text-muted-foreground">
-                  History appears here once Scope has applied commits.
-                </p>
-              </div>
+        {!history || commits.length === 0 ? (
+          <div className="flex flex-col items-center gap-3 py-16 text-center">
+            <div className="flex size-11 items-center justify-center rounded-xl bg-brand-muted text-brand">
+              <History className="size-5" />
             </div>
-          ) : (
-            <div
-              className={cn(
-                'grid grid-cols-1 lg:grid-cols-[minmax(260px,0.62fr)_minmax(0,1.38fr)]',
-                selectedFilePath &&
-                  'xl:grid-cols-[minmax(260px,0.46fr)_minmax(0,1.54fr)]',
-              )}
-            >
-              <CommitList
-                commits={commits}
-                onSelectCommit={selectCommit}
-                selectedCommitId={selectedCommitId}
-              />
-              <CommitDetailPanel
-                commitState={commitState}
-                fileDiffState={fileDiffState}
-                fileTabs={fileTabs}
-                onActivateFileTab={activateFileTab}
-                onCloseFileTab={closeFileTab}
-                onSelectFile={selectFile}
-                selectedFilePath={selectedFilePath}
-              />
+            <div className="text-sm">
+              <div className="text-base font-semibold leading-6">
+                No commits yet
+              </div>
+              <p className="mt-0.5 text-muted-foreground">
+                History appears here once Scope has applied commits.
+              </p>
             </div>
-          )}
-        </section>
+          </div>
+        ) : (
+          <div className="grid grid-cols-1 lg:grid-cols-[minmax(260px,0.46fr)_minmax(0,1.54fr)]">
+            <CommitList
+              commits={commits}
+              onSelectCommit={selectCommit}
+              selectedCommitId={selectedCommitId}
+            />
+            <CommitDetailPanel
+              commitState={commitState}
+              diffIdentity={diffIdentity}
+              diffScrollTop={readHistoryDiffScroll(diffIdentity)}
+              fileDiffState={fileDiffState}
+              fileTabs={fileTabs}
+              onActivateFileTab={activateFileTab}
+              onCloseFileTab={closeFileTab}
+              onDiffScroll={(scrollTop) => writeHistoryDiffScroll(diffIdentity, scrollTop)}
+              onRetryCommit={retryCommit}
+              onRetryDiff={retryDiff}
+              onSelectFile={selectFile}
+              selectedFilePath={selectedFilePath}
+            />
+          </div>
+        )}
+      </section>
     </RepoShell>
   )
 }
 
-function useHistoryPageModel({
-  histories,
-  initialAudience: audience,
-  initialCommit,
-  initialFile,
-  params,
-}: HistoryPageProps) {
+function useHistoryPageModel({ histories, params, search }: HistoryPageProps) {
   const navigate = useNavigate()
-  const selectedFilePath = initialFile.path
-  const fileDiffState: CommitFileDiffState = initialFile.error
-    ? { diff: null, error: initialFile.error, status: 'failed' }
-    : initialFile.value
-      ? { diff: initialFile.value, error: null, status: 'loaded' }
-      : emptyFileDiffState
   const availableAudiences = useMemo(
     () =>
       (['private', 'public'] as const).filter(
@@ -164,20 +170,91 @@ function useHistoryPageModel({
       ),
     [histories],
   )
+  const audience = selectedAudience(histories, search.audience)
   const history = histories[audience] ?? histories.public ?? histories.private
   const commits = useMemo(
     () => [...(history?.commits ?? [])].reverse(),
     [history?.commits],
   )
-  const selectedCommit = initialCommit
-  const selectedCommitId = selectedCommit?.projected_id ?? null
-  const commitState: CommitDetailState = selectedCommit
-    ? { commit: selectedCommit, error: null, status: 'loaded' }
-    : emptyCommitState
-  const pageWidthClassName = selectedFilePath
-    ? 'max-w-[1320px]'
-    : 'max-w-[1040px]'
-  const repoId = `${params.owner}/${params.repo}`
+  const requestedCommitUnavailable = Boolean(
+    search.commit && history && !history.commits.some(
+      (commit) => commit.projected_id === search.commit,
+    ),
+  )
+  const selectedCommitId = requestedCommitUnavailable
+    ? null
+    : search.commit ?? latestCommitId(history)
+  const repoId = history?.repo_id ?? `${params.owner}/${params.repo}`
+  const commitIdentity = selectedCommitId && history
+    ? historyCommitCacheKey({
+        audience,
+        commit: selectedCommitId,
+        generation: history.generation,
+        repoId: history.repo_id,
+        viewKey: history.view_key,
+      })
+    : null
+  const loadSelectedCommit = useCallback(
+    (signal: AbortSignal) => loadCommitDetail({
+      data: {
+        audience,
+        commit: selectedCommitId ?? '',
+        owner: params.owner,
+        repo: params.repo,
+      },
+      signal,
+    }),
+    [audience, params.owner, params.repo, selectedCommitId],
+  )
+  const commitResource = useHistoryResource({
+    identity: commitIdentity,
+    load: loadSelectedCommit,
+    read: readHistoryCommitCache,
+    write: writeHistoryCommitCache,
+  })
+  const selectedCommit = commitResource.value
+  const selectedFilePath = search.path ?? null
+  const selectedFile = selectedCommit?.files.find(
+    (file) => file.path === selectedFilePath,
+  ) ?? null
+  const diffIdentity = selectedCommitId && selectedFile && history
+    ? historyDiffCacheKey({
+        audience,
+        commit: selectedCommitId,
+        generation: history.generation,
+        newOid: selectedFile.new_oid,
+        oldOid: selectedFile.old_oid,
+        path: selectedFile.path,
+        repoId,
+        viewKey: history.view_key,
+      })
+    : null
+  const loadSelectedDiff = useCallback(
+    (signal: AbortSignal) => loadCommitFileDiff({
+      data: {
+        audience,
+        commit: selectedCommitId ?? '',
+        owner: params.owner,
+        path: selectedFilePath ?? '',
+        repo: params.repo,
+      },
+      signal,
+    }),
+    [audience, params.owner, params.repo, selectedCommitId, selectedFilePath],
+  )
+  const diffResource = useHistoryResource({
+    identity: diffIdentity,
+    load: loadSelectedDiff,
+    read: readHistoryDiffCache,
+    write: writeHistoryDiffCache,
+  })
+  const commitState: CommitDetailState = requestedCommitUnavailable
+    ? { commit: null, error: 'The requested commit is not available in this history view.', status: 'failed' }
+    : resourceToCommitState(commitResource)
+  const fileDiffState: CommitFileDiffState =
+    selectedFilePath && selectedCommit && !selectedFile
+      ? { diff: null, error: 'This file is not part of the selected commit.', status: 'failed' }
+      : resourceToDiffState(diffResource)
   const fileTabItems = useMemo(
     () =>
       (selectedCommit?.files ?? []).map((file) => ({
@@ -201,6 +278,7 @@ function useHistoryPageModel({
     void navigate({
       params,
       replace: true,
+      resetScroll: false,
       search: {
         audience: nextAudience,
         commit: nextCommitId ?? undefined,
@@ -228,11 +306,15 @@ function useHistoryPageModel({
     },
     commitState,
     commits,
+    diffIdentity,
     fileDiffState,
     fileTabs: fileTabs.tabs,
     history,
-    pageWidthClassName,
     repoId,
+    retryCommit: requestedCommitUnavailable ? undefined : commitResource.retry,
+    retryDiff: selectedFilePath && selectedCommit && !selectedFile
+      ? undefined
+      : diffResource.retry,
     selectAudience: (nextAudience: ProjectionPreviewAudience) => {
       const nextHistory = histories[nextAudience]
       if (nextHistory) {
@@ -242,7 +324,7 @@ function useHistoryPageModel({
     selectCommit: (commit: CommitSummary) =>
       replaceHistorySearch(audience, commit.projected_id),
     selectFile: (file: CommitFile) => {
-      fileTabs.open(file.path)
+      fileTabs.prepareOpen(file.path)
       replaceHistorySearch(audience, selectedCommitId, file.path)
     },
     selectedCommit,
@@ -305,18 +387,28 @@ function CommitList({
 
 function CommitDetailPanel({
   commitState,
+  diffIdentity,
+  diffScrollTop,
   fileDiffState,
   fileTabs,
   onActivateFileTab,
   onCloseFileTab,
+  onDiffScroll,
+  onRetryCommit,
+  onRetryDiff,
   onSelectFile,
   selectedFilePath,
 }: {
   commitState: CommitDetailState
+  diffIdentity: string | null
+  diffScrollTop: number
   fileDiffState: CommitFileDiffState
   fileTabs: WorkspaceTabItem[]
   onActivateFileTab: (path: string) => void
   onCloseFileTab: (path: string) => string | null
+  onDiffScroll: (scrollTop: number) => void
+  onRetryCommit?: () => void
+  onRetryDiff?: () => void
   onSelectFile: (file: CommitFile) => void
   selectedFilePath: string | null
 }) {
@@ -331,6 +423,11 @@ function CommitDetailPanel({
       <PanelState tone="error">
         <TriangleAlert className="size-4 text-destructive" />
         <span>{commitState.error}</span>
+        {onRetryCommit && (
+          <Button onClick={onRetryCommit} size="sm" type="button" variant="secondary">
+            Retry
+          </Button>
+        )}
       </PanelState>
     )
   }
@@ -349,8 +446,6 @@ function CommitDetailPanel({
   const activeTabDomIds = selectedFilePath && fileTabs.some((tab) => tab.id === selectedFilePath)
     ? workspaceTabDomIds(HISTORY_TAB_SET_ID, selectedFilePath)
     : null
-  const tabPaneOpen = fileTabs.length > 0 || diffOpen
-
   function closeUnavailableDiff() {
     if (!selectedFilePath) return
     onCloseFileTab(selectedFilePath)
@@ -369,12 +464,7 @@ function CommitDetailPanel({
         </h3>
       </div>
 
-      <div
-        className={cn(
-          'grid grid-cols-1 xl:grid-cols-[minmax(0,0.9fr)_minmax(360px,1.1fr)]',
-          !tabPaneOpen && 'xl:grid-cols-[minmax(0,1fr)_minmax(0,0fr)]',
-        )}
-      >
+      <div className="grid grid-cols-1 xl:grid-cols-[minmax(0,0.9fr)_minmax(360px,1.1fr)]">
         <div
           aria-label="Commit file navigator"
           className="min-w-0 outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring"
@@ -396,51 +486,46 @@ function CommitDetailPanel({
             />
           )}
         </div>
-        <div
-          className={cn(
-            'min-w-0 overflow-hidden border-border xl:border-l',
-            tabPaneOpen
-              ? 'max-h-[70vh] translate-y-0 opacity-100 xl:max-h-none xl:translate-x-0'
-              : 'pointer-events-none max-h-0 -translate-y-1 border-transparent opacity-0 xl:translate-x-3',
-          )}
-        >
-          {tabPaneOpen ? (
-            <div className="flex h-full min-h-[340px] min-w-0 flex-col">
-              <WorkspaceTabStrip
-                activeId={selectedFilePath}
-                ariaLabel="Open history diffs"
-                onActivate={onActivateFileTab}
-                onClose={onCloseFileTab}
-                onEmptyFocus={() => fileNavigatorRef.current?.focus()}
-                tabSetId={HISTORY_TAB_SET_ID}
-                tabs={fileTabs}
-              />
-              <div
-                aria-label={fileTabs.length > 0 && !activeTabDomIds ? 'History diff viewer' : undefined}
-                aria-labelledby={activeTabDomIds?.tabId}
-                className="min-h-0 flex-1 outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring"
-                id={workspaceTabPanelId(HISTORY_TAB_SET_ID)}
-                role={fileTabs.length > 0 ? 'tabpanel' : undefined}
-                tabIndex={fileTabs.length > 0 ? 0 : undefined}
-              >
-                {diffOpen ? (
-                  <ReviewFileDiffDrawer
-                    className="min-h-0"
-                    diff={fileDiffState.diff}
-                    error={fileDiffState.error}
-                    loading={fileDiffState.status === 'loading'}
-                    onClose={fileTabs.length === 0 ? closeUnavailableDiff : undefined}
-                    selectedPath={selectedFilePath}
-                    showHeader={fileTabs.length === 0}
-                  />
-                ) : (
-                  <PanelState>
-                    <span>Select an open diff tab</span>
-                  </PanelState>
-                )}
-              </div>
+        <div className="h-[70vh] min-h-[340px] max-h-[720px] min-w-0 overflow-hidden border-border xl:border-l">
+          <div className="flex h-full min-h-[340px] min-w-0 flex-col">
+            <WorkspaceTabStrip
+              activeId={selectedFilePath}
+              ariaLabel="Open history diffs"
+              onActivate={onActivateFileTab}
+              onClose={onCloseFileTab}
+              onEmptyFocus={() => fileNavigatorRef.current?.focus()}
+              tabSetId={HISTORY_TAB_SET_ID}
+              tabs={fileTabs}
+            />
+            <div
+              aria-label={fileTabs.length > 0 && !activeTabDomIds ? 'History diff viewer' : undefined}
+              aria-labelledby={activeTabDomIds?.tabId}
+              className="min-h-0 flex-1 outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring"
+              id={workspaceTabPanelId(HISTORY_TAB_SET_ID)}
+              role={fileTabs.length > 0 ? 'tabpanel' : undefined}
+              tabIndex={fileTabs.length > 0 ? 0 : undefined}
+            >
+              {diffOpen ? (
+                <ReviewFileDiffDrawer
+                  cacheKey={diffIdentity}
+                  className="min-h-0"
+                  diff={fileDiffState.diff}
+                  error={fileDiffState.error}
+                  loading={fileDiffState.status === 'loading'}
+                  onClose={fileTabs.length === 0 ? closeUnavailableDiff : undefined}
+                  onRetry={fileDiffState.status === 'failed' ? onRetryDiff : undefined}
+                  onScrollTopChange={onDiffScroll}
+                  scrollTop={diffScrollTop}
+                  selectedPath={selectedFilePath}
+                  showHeader={fileTabs.length === 0}
+                />
+              ) : (
+                <PanelState>
+                  <span>Select a changed file</span>
+                </PanelState>
+              )}
             </div>
-          ) : null}
+          </div>
         </div>
       </div>
     </div>
@@ -537,18 +622,45 @@ type CommitFileDiffState =
   | { diff: ReviewFileDiff; error: null; status: 'loaded' }
   | { diff: null; error: string; status: 'failed' }
 
-const emptyFileDiffState: CommitFileDiffState = {
-  diff: null,
-  error: null,
-  status: 'idle',
+function resourceToCommitState(
+  resource: HistoryResource<CommitDetail>,
+): CommitDetailState {
+  switch (resource.status) {
+    case 'idle':
+      return { commit: null, error: null, status: 'idle' }
+    case 'loading':
+      return { commit: null, error: null, status: 'loading' }
+    case 'loaded':
+      return { commit: resource.value, error: null, status: 'loaded' }
+    case 'failed':
+      return { commit: null, error: resource.error, status: 'failed' }
+  }
 }
 
-const emptyCommitState: CommitDetailState = {
-  commit: null,
-  error: null,
-  status: 'idle',
+function resourceToDiffState(
+  resource: HistoryResource<ReviewFileDiff>,
+): CommitFileDiffState {
+  switch (resource.status) {
+    case 'idle':
+      return { diff: null, error: null, status: 'idle' }
+    case 'loading':
+      return { diff: null, error: null, status: 'loading' }
+    case 'loaded':
+      return { diff: resource.value, error: null, status: 'loaded' }
+    case 'failed':
+      return { diff: null, error: resource.error, status: 'failed' }
+  }
 }
 
+function selectedAudience(
+  histories: CommitHistories,
+  requestedAudience?: ProjectionPreviewAudience,
+): ProjectionPreviewAudience {
+  if (requestedAudience && histories[requestedAudience]) {
+    return requestedAudience
+  }
+  return histories.private ? 'private' : 'public'
+}
 
 function latestCommitId(history: CommitHistory | null) {
   return history?.commits.at(-1)?.projected_id ?? null

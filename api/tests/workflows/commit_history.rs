@@ -152,3 +152,81 @@ async fn public_commit_diff_does_not_leak_private_old_content() {
     assert_text_content(&private["old_content"], "private draft");
     assert_text_content(&private["new_content"], "public release");
 }
+
+#[tokio::test]
+async fn public_commit_history_generation_tracks_visible_history() {
+    let state = test_state_with_repo();
+    let first = source_blob(&state, "first");
+    replace_test_repo(
+        &state,
+        history_repo(
+            vec![history_commit(
+                "rv1",
+                None,
+                "first",
+                vec![history_change(
+                    "/README.md",
+                    Visibility::Public,
+                    None,
+                    Some(first.clone()),
+                )],
+            )],
+            Some("/README.md"),
+        ),
+    )
+    .await;
+
+    let response = history_get(
+        state.clone(),
+        "/v1/repos/owner/repo/commits?audience=public",
+        false,
+    )
+    .await;
+    assert_eq!(response.status(), StatusCode::OK);
+    let first_generation = response_json(response).await["generation"]
+        .as_str()
+        .unwrap()
+        .to_string();
+
+    replace_test_repo(
+        &state,
+        history_repo(
+            vec![
+                history_commit(
+                    "rv1",
+                    None,
+                    "first",
+                    vec![history_change(
+                        "/README.md",
+                        Visibility::Public,
+                        None,
+                        Some(first.clone()),
+                    )],
+                ),
+                history_commit(
+                    "rv2",
+                    Some("rv1"),
+                    "second",
+                    vec![history_change(
+                        "/README.md",
+                        Visibility::Public,
+                        Some(first),
+                        Some(source_blob(&state, "second")),
+                    )],
+                ),
+            ],
+            Some("/README.md"),
+        ),
+    )
+    .await;
+
+    let response = history_get(state, "/v1/repos/owner/repo/commits?audience=public", false).await;
+    assert_eq!(response.status(), StatusCode::OK);
+    let second_generation = response_json(response).await["generation"]
+        .as_str()
+        .unwrap()
+        .to_string();
+
+    assert_eq!(first_generation.len(), 64);
+    assert_ne!(first_generation, second_generation);
+}

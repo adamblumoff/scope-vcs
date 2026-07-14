@@ -4,8 +4,12 @@ use super::{
 };
 use crate::{
     domain::{
-        policy::{Principal, PrincipalKind},
-        projection_views::{ProjectionViewFile, projected_files as domain_projected_files},
+        policy::{Principal, PrincipalKind, ScopePath},
+        projection_views::{
+            ProjectionViewFile, ProjectionViewFileContent,
+            projected_file_contents as domain_projected_file_contents,
+            projected_files as domain_projected_files,
+        },
         store::{RepositoryActor, StoredRepository},
     },
     error::ApiError,
@@ -19,6 +23,18 @@ use std::sync::Arc;
 
 const PROJECTION_FILE_INSERT_BATCH_SIZE: usize = 1_000;
 
+fn projection_repo_version(repo_version: u64) -> Result<i64, ApiError> {
+    i64::try_from(repo_version).map_err(|_| {
+        ApiError::internal_message("projection repository version exceeds PostgreSQL bigint range")
+    })
+}
+
+pub(super) enum ProjectionFileLookup {
+    Found(ProjectionViewFileContent),
+    Missing,
+    NotReady,
+}
+
 pub async fn save_live_projection_read_models<C>(
     conn: &C,
     repo: &StoredRepository,
@@ -31,18 +47,7 @@ where
     let rebuilt_at_unix = unix_now()?;
     for audience in [ProjectionAudience::Private, ProjectionAudience::Public] {
         let files = projected_files_for_audience(repo, audience);
-        entities::projection_read_model::Model::live(
-            &repo.record.id,
-            repo.record.change_version,
-            audience,
-            rebuilt_at_unix,
-            files.len(),
-        )?
-        .into_active_model()
-        .insert(conn)
-        .await
-        .map_err(ApiError::internal)?;
-
+        let file_count = files.len();
         let file_rows = files
             .into_iter()
             .map(|file| {
@@ -55,14 +60,24 @@ where
                 .map(IntoActiveModel::into_active_model)
             })
             .collect::<Result<Vec<_>, ApiError>>()?;
-        if !file_rows.is_empty() {
-            for batch in file_rows.chunks(PROJECTION_FILE_INSERT_BATCH_SIZE) {
-                entities::projection_file::Entity::insert_many(batch.iter().cloned())
-                    .exec(conn)
-                    .await
-                    .map_err(ApiError::internal)?;
-            }
+        for batch in file_rows.chunks(PROJECTION_FILE_INSERT_BATCH_SIZE) {
+            entities::projection_file::Entity::insert_many(batch.iter().cloned())
+                .exec(conn)
+                .await
+                .map_err(ApiError::internal)?;
         }
+
+        entities::projection_read_model::Model::live(
+            &repo.record.id,
+            repo.record.change_version,
+            audience,
+            rebuilt_at_unix,
+            file_count,
+        )?
+        .into_active_model()
+        .insert(conn)
+        .await
+        .map_err(ApiError::internal)?;
     }
 
     Ok(())
@@ -102,9 +117,7 @@ pub(super) async fn load_live_projection_file_count_for_audience<C>(
 where
     C: ConnectionTrait,
 {
-    let expected_version = i64::try_from(repo_version).map_err(|_| {
-        ApiError::internal_message("projection repository version exceeds PostgreSQL bigint range")
-    })?;
+    let expected_version = projection_repo_version(repo_version)?;
     let Some(model) = entities::projection_read_model::Entity::find()
         .filter(entities::projection_read_model::Column::RepoId.eq(repo_id.to_string()))
         .filter(entities::projection_read_model::Column::RepoVersion.eq(expected_version))
@@ -125,6 +138,54 @@ where
     })?))
 }
 
+pub(super) async fn load_live_projection_file_for_audience<C>(
+    conn: &C,
+    repo_id: &str,
+    repo_version: u64,
+    audience: ProjectionAudience,
+    path: &ScopePath,
+) -> Result<ProjectionFileLookup, ApiError>
+where
+    C: ConnectionTrait,
+{
+    let expected_version = projection_repo_version(repo_version)?;
+    let read_model_exists = entities::projection_read_model::Entity::find()
+        .filter(entities::projection_read_model::Column::RepoId.eq(repo_id.to_string()))
+        .filter(entities::projection_read_model::Column::RepoVersion.eq(expected_version))
+        .filter(
+            entities::projection_read_model::Column::Source
+                .eq(ProjectionSource::Live.as_str().to_string()),
+        )
+        .filter(entities::projection_read_model::Column::Audience.eq(audience.as_str().to_string()))
+        .one(conn)
+        .await
+        .map_err(ApiError::internal)?
+        .is_some();
+    if !read_model_exists {
+        return Ok(ProjectionFileLookup::NotReady);
+    }
+    let row = entities::projection_file::Entity::find()
+        .filter(entities::projection_file::Column::RepoId.eq(repo_id.to_string()))
+        .filter(entities::projection_file::Column::RepoVersion.eq(expected_version))
+        .filter(
+            entities::projection_file::Column::Source
+                .eq(ProjectionSource::Live.as_str().to_string()),
+        )
+        .filter(entities::projection_file::Column::Audience.eq(audience.as_str().to_string()))
+        .filter(
+            entities::projection_file::Column::PathKey
+                .eq(entities::projection_file::projection_file_path_key(path)),
+        )
+        .filter(entities::projection_file::Column::Path.eq(path.as_str().to_string()))
+        .one(conn)
+        .await
+        .map_err(ApiError::internal)?;
+    match row {
+        Some(row) => Ok(ProjectionFileLookup::Found(row.try_into_content()?)),
+        None => Ok(ProjectionFileLookup::Missing),
+    }
+}
+
 pub(super) async fn load_live_projection_files_for_audience<C>(
     conn: &C,
     repo_id: &str,
@@ -134,9 +195,7 @@ pub(super) async fn load_live_projection_files_for_audience<C>(
 where
     C: ConnectionTrait,
 {
-    let expected_version = i64::try_from(repo_version).map_err(|_| {
-        ApiError::internal_message("projection repository version exceeds PostgreSQL bigint range")
-    })?;
+    let expected_version = projection_repo_version(repo_version)?;
     let Some(model) = entities::projection_read_model::Entity::find()
         .filter(entities::projection_read_model::Column::RepoId.eq(repo_id.to_string()))
         .filter(entities::projection_read_model::Column::RepoVersion.eq(expected_version))
@@ -212,7 +271,7 @@ where
 fn projected_files_for_audience(
     repo: &StoredRepository,
     audience: ProjectionAudience,
-) -> Vec<ProjectionViewFile> {
+) -> Vec<ProjectionViewFileContent> {
     let principal = match audience {
         // Current visibility is binary: private readers all see the same file
         // tree. If policy becomes per-user, this audience key must split too.
@@ -222,7 +281,7 @@ fn projected_files_for_audience(
         },
         ProjectionAudience::Public => Principal::public(),
     };
-    domain_projected_files(repo, &principal)
+    domain_projected_file_contents(repo, &principal)
 }
 
 fn live_projection_audience(repo: &StoredRepository, principal: &Principal) -> ProjectionAudience {

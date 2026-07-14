@@ -189,6 +189,7 @@ pub(crate) struct CommitHistoryResponse {
     pub(crate) audience: ProjectionPreviewAudience,
     pub(crate) repo_id: String,
     pub(crate) view_key: String,
+    pub(crate) generation: String,
     pub(crate) commits: Vec<CommitSummaryResponse>,
 }
 
@@ -398,6 +399,7 @@ pub(crate) fn commit_history_response(
         audience,
         repo_id: view.repo_id,
         view_key: view.view_key,
+        generation: view.generation,
         commits: view.commits.iter().map(commit_summary_response).collect(),
     }
 }

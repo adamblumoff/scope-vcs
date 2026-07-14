@@ -136,7 +136,11 @@ CREATE TABLE scope_projection_files (
     path_key character varying NOT NULL,
     path character varying NOT NULL,
     oid character varying NOT NULL,
-    visibility character varying NOT NULL
+    visibility character varying NOT NULL,
+    object_key character varying NOT NULL,
+    sha256 character varying NOT NULL,
+    size_bytes bigint NOT NULL,
+    git_file_mode character varying NOT NULL
 );
 
 
@@ -953,7 +957,8 @@ ALTER TABLE scope_projection_read_models
     );
 ALTER TABLE scope_projection_files
     ADD CONSTRAINT scope_projection_file_values CHECK (
-        repo_version >= 0 AND source = 'live' AND audience IN ('private', 'public')
+        repo_version >= 0 AND source = 'live' AND audience IN ('private', 'public') AND
+        size_bytes >= 0 AND git_file_mode IN ('100644', '100755')
     );
 ALTER TABLE scope_repo_storage_cleanup_jobs
     ADD CONSTRAINT scope_repo_cleanup_values CHECK (

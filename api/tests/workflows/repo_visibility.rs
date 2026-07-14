@@ -112,6 +112,13 @@ async fn public_files_use_the_projected_blob() {
         ]);
     })
     .await;
+    let rebuilt = state
+        .metadata
+        .run_ready_outbox_jobs("repo-visibility-test", 10)
+        .await
+        .unwrap();
+    assert_eq!(rebuilt.failed, 0);
+    assert!(rebuilt.completed > 0);
 
     let files = get(state.clone(), "/v1/repos/owner/repo/files", None).await;
     assert_eq!(files.status(), StatusCode::OK);
@@ -125,8 +132,82 @@ async fn public_files_use_the_projected_blob() {
     assert_eq!(response.status(), StatusCode::OK);
     let body = response_json(response).await;
     assert_eq!(body["path"], "/README.md");
+    assert_eq!(body["size_bytes"], "public readme".len());
     assert_eq!(body["content"]["kind"], "text");
     assert_eq!(body["content"]["text"], "public readme");
+}
+
+#[tokio::test]
+async fn file_content_reports_projection_rebuilds() {
+    let state = test_state_with_repo();
+    mutate_repo(&state, |repo| {
+        repo.graph.commits.push(commit(
+            "rv1",
+            None,
+            "public version",
+            vec![change(
+                Visibility::Public,
+                "/README.md",
+                None,
+                Some(source_blob(&state, "public readme")),
+            )],
+        ));
+    })
+    .await;
+
+    let response = get(
+        state,
+        "/v1/repos/owner/repo/files/content?path=README.md",
+        None,
+    )
+    .await;
+    assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
+}
+
+#[tokio::test]
+async fn public_file_content_reports_visible_projection_rebuilds() {
+    let state = test_state_with_repo();
+    mutate_repo(&state, |repo| {
+        set_private(repo, Some("/README.md"));
+        add_mixed_commit(&state, repo);
+    })
+    .await;
+
+    let response = get(
+        state,
+        "/v1/repos/owner/repo/files/content?path=README.md",
+        None,
+    )
+    .await;
+    assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
+}
+
+#[tokio::test]
+async fn file_content_hides_unpublished_repo_during_projection_rebuild() {
+    let state = test_state_with_repo();
+    mutate_repo(&state, |repo| {
+        repo.record.publication_state = RepoPublicationState::Unpublished;
+        repo.graph.commits.push(commit(
+            "rv1",
+            None,
+            "private version",
+            vec![change(
+                Visibility::Private,
+                "/secret.txt",
+                None,
+                Some(source_blob(&state, "secret")),
+            )],
+        ));
+    })
+    .await;
+
+    let response = get(
+        state,
+        "/v1/repos/owner/repo/files/content?path=secret.txt",
+        None,
+    )
+    .await;
+    assert_eq!(response.status(), StatusCode::NOT_FOUND);
 }
 
 #[tokio::test]
@@ -208,9 +289,19 @@ async fn published_default_private_repo_without_public_files_stays_hidden() {
     })
     .await;
     assert_eq!(
-        get(state, "/v1/repos/owner/repo/files", None)
+        get(state.clone(), "/v1/repos/owner/repo/files", None)
             .await
             .status(),
+        StatusCode::NOT_FOUND
+    );
+    assert_eq!(
+        get(
+            state,
+            "/v1/repos/owner/repo/files/content?path=secret.txt",
+            None,
+        )
+        .await
+        .status(),
         StatusCode::NOT_FOUND
     );
 }
