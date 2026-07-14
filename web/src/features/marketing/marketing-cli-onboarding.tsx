@@ -2,7 +2,13 @@ import type { CliInstallCommands, CliPlatform } from '@/api/types'
 import { CopyableCodeBlock } from '@/components/copyable-code-block'
 import { ToggleGroup, ToggleGroupItem } from '@/components/ui/toggle-group'
 import { CheckCircle2 } from 'lucide-react'
-import { AnimatePresence, motion, MotionConfig } from 'motion/react'
+import {
+  AnimatePresence,
+  domAnimation,
+  LazyMotion,
+  m,
+  MotionConfig,
+} from 'motion/react'
 import { useRef, useState, type ReactElement } from 'react'
 
 const platformOptions = [
@@ -101,9 +107,10 @@ export function MarketingCliOnboarding({
       />
 
       <MotionConfig reducedMotion="user">
-        <AnimatePresence initial={false}>
+        <LazyMotion features={domAnimation}>
+          <AnimatePresence initial={false}>
           {!showNextSteps && (
-            <motion.div
+            <m.div
               className="mt-3 overflow-hidden"
               exit={{ height: 0, marginTop: 0, opacity: 0 }}
               key="manual-reveal"
@@ -116,11 +123,11 @@ export function MarketingCliOnboarding({
               >
                 Already installed? Show next steps
               </button>
-            </motion.div>
+            </m.div>
           )}
 
           {showNextSteps && (
-            <motion.div
+            <m.div
               animate={{ height: 'auto', opacity: 1 }}
               aria-live="polite"
               className="overflow-hidden"
@@ -163,9 +170,10 @@ export function MarketingCliOnboarding({
                   ))}
                 </div>
               </div>
-            </motion.div>
+            </m.div>
           )}
-        </AnimatePresence>
+          </AnimatePresence>
+        </LazyMotion>
       </MotionConfig>
     </section>
   )
