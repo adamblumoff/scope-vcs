@@ -8,6 +8,7 @@ import {
   HistoryPage,
   type CommitHistories,
 } from '@/features/history/history-page'
+import { parseRouteFileSearch } from '@/lib/route-file'
 import {
   loadCommitHistory,
   loadOptionalPrivateCommitHistory,
@@ -56,7 +57,7 @@ function parseHistorySearch(search: Record<string, unknown>): HistorySearch {
   return {
     audience: searchHistoryAudience(search.audience),
     commit: searchCommitId(search.commit),
-    path: searchString(search.path),
+    path: searchHistoryPath(search.path),
   }
 }
 
@@ -70,6 +71,11 @@ function searchHistoryAudience(value: unknown): ProjectionPreviewAudience | unde
   throw new Error(`Unsupported history audience: ${String(value)}`)
 }
 
+function searchHistoryPath(value: unknown) {
+  const path = parseRouteFileSearch(value)
+  return path ? `/${path}` : undefined
+}
+
 function searchCommitId(value: unknown) {
   if (typeof value === 'string') {
     const commitId = value.trim()
@@ -81,11 +87,6 @@ function searchCommitId(value: unknown) {
   }
 
   return undefined
-}
-
-function searchString(value: unknown) {
-  if (typeof value !== 'string') return undefined
-  return value.trim() || undefined
 }
 
 async function loadOptionalPrivateHistory(params: RepoParams) {

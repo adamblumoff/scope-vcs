@@ -165,6 +165,24 @@ async fn file_content_reports_projection_rebuilds() {
 }
 
 #[tokio::test]
+async fn public_file_content_reports_visible_projection_rebuilds() {
+    let state = test_state_with_repo();
+    mutate_repo(&state, |repo| {
+        set_private(repo, Some("/README.md"));
+        add_mixed_commit(&state, repo);
+    })
+    .await;
+
+    let response = get(
+        state,
+        "/v1/repos/owner/repo/files/content?path=README.md",
+        None,
+    )
+    .await;
+    assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
+}
+
+#[tokio::test]
 async fn file_content_hides_unpublished_repo_during_projection_rebuild() {
     let state = test_state_with_repo();
     mutate_repo(&state, |repo| {

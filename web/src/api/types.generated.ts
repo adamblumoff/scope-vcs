@@ -150,7 +150,7 @@ export type ReviewFileContentResponse = { "kind": "text", text: string, } | { "k
 
 export type ReviewFileDiffResponse = { path: string, kind: FileChangeKind, old_mode: string | null, new_mode: string | null, old_content: ReviewFileContentResponse | null, new_content: ReviewFileContentResponse | null, };
 
-export type CommitHistoryResponse = { audience: ProjectionPreviewAudience, repo_id: string, view_key: string, commits: Array<CommitSummaryResponse>, };
+export type CommitHistoryResponse = { audience: ProjectionPreviewAudience, repo_id: string, view_key: string, generation: string, commits: Array<CommitSummaryResponse>, };
 
 export type CommitSummaryResponse = { projected_id: string, logical_commit_id: string, parent_projected_id: string | null, author: string | null, message: string, change_count: number, };
 

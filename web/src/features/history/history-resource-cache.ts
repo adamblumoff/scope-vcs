@@ -28,31 +28,48 @@ let diffBytes = 0
 export function historyCommitCacheKey({
   audience,
   commit,
+  generation,
   repoId,
+  viewKey,
 }: {
   audience: ProjectionPreviewAudience
   commit: string
+  generation: string
   repoId: string
+  viewKey: string
 }) {
-  return [repoId, audience, commit].join('\0')
+  return [repoId, generation, viewKey, audience, commit].join('\0')
 }
 
 export function historyDiffCacheKey({
   audience,
   commit,
+  generation,
   newOid,
   oldOid,
   path,
   repoId,
+  viewKey,
 }: {
   audience: ProjectionPreviewAudience
   commit: string
+  generation: string
   newOid: string | null
   oldOid: string | null
   path: string
   repoId: string
+  viewKey: string
 }) {
-  return [repoId, audience, commit, path, oldOid ?? '', newOid ?? ''].join('\0')
+  return [
+    repoId,
+    generation,
+    viewKey,
+    audience,
+    commit,
+    path,
+    oldOid ?? '',
+    newOid ?? '',
+  ].join('\0')
 }
 
 export function readHistoryCommitCache(key: string) {

@@ -259,7 +259,11 @@ where
         ProjectionFileLookup::Missing => None,
         ProjectionFileLookup::NotReady => {
             if visibility_depends_on_projection {
-                return Ok(None);
+                let repo = hydrate_repo_from_row_id(conn, &row.id).await?;
+                let principal = principal_for_access(viewer_user_id, access);
+                if !has_visible_projected_history(&repo, &principal) {
+                    return Ok(None);
+                }
             }
             return Err(ApiError::service_unavailable(
                 "repository projection is rebuilding; retry shortly",

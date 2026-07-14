@@ -186,7 +186,13 @@ function useHistoryPageModel({ histories, params, search }: HistoryPageProps) {
     : search.commit ?? latestCommitId(history)
   const repoId = history?.repo_id ?? `${params.owner}/${params.repo}`
   const commitIdentity = selectedCommitId && history
-    ? historyCommitCacheKey({ audience, commit: selectedCommitId, repoId: history.repo_id })
+    ? historyCommitCacheKey({
+        audience,
+        commit: selectedCommitId,
+        generation: history.generation,
+        repoId: history.repo_id,
+        viewKey: history.view_key,
+      })
     : null
   const loadSelectedCommit = useCallback(
     (signal: AbortSignal) => loadCommitDetail({
@@ -211,14 +217,16 @@ function useHistoryPageModel({ histories, params, search }: HistoryPageProps) {
   const selectedFile = selectedCommit?.files.find(
     (file) => file.path === selectedFilePath,
   ) ?? null
-  const diffIdentity = selectedCommitId && selectedFile
+  const diffIdentity = selectedCommitId && selectedFile && history
     ? historyDiffCacheKey({
         audience,
         commit: selectedCommitId,
+        generation: history.generation,
         newOid: selectedFile.new_oid,
         oldOid: selectedFile.old_oid,
         path: selectedFile.path,
         repoId,
+        viewKey: history.view_key,
       })
     : null
   const loadSelectedDiff = useCallback(

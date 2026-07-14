@@ -41,10 +41,20 @@ function diff(path: string, text = 'content'): ReviewFileDiff {
 }
 
 test('keys resources by immutable audience-aware identities', () => {
-  const commitBase = { audience: 'public' as const, commit: 'c1', repoId: 'scope/demo' }
+  const commitBase = {
+    audience: 'public' as const,
+    commit: 'c1',
+    generation: 'generation-1',
+    repoId: 'scope/demo',
+    viewKey: 'public',
+  }
   assert.notEqual(
     historyCommitCacheKey(commitBase),
     historyCommitCacheKey({ ...commitBase, audience: 'private' }),
+  )
+  assert.notEqual(
+    historyCommitCacheKey(commitBase),
+    historyCommitCacheKey({ ...commitBase, generation: 'generation-2' }),
   )
 
   const diffBase = {

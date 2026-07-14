@@ -16,8 +16,8 @@ use crate::{
     persistence::unix_now,
 };
 use sea_orm::{
-    ActiveModelTrait, ColumnTrait, ConnectionTrait, EntityTrait, IntoActiveModel, PaginatorTrait,
-    QueryFilter, QueryOrder,
+    ActiveModelTrait, ColumnTrait, ConnectionTrait, EntityTrait, IntoActiveModel, QueryFilter,
+    QueryOrder,
 };
 use std::sync::Arc;
 
@@ -47,18 +47,7 @@ where
     let rebuilt_at_unix = unix_now()?;
     for audience in [ProjectionAudience::Private, ProjectionAudience::Public] {
         let files = projected_files_for_audience(repo, audience);
-        entities::projection_read_model::Model::live(
-            &repo.record.id,
-            repo.record.change_version,
-            audience,
-            rebuilt_at_unix,
-            files.len(),
-        )?
-        .into_active_model()
-        .insert(conn)
-        .await
-        .map_err(ApiError::internal)?;
-
+        let file_count = files.len();
         let file_rows = files
             .into_iter()
             .map(|file| {
@@ -71,14 +60,24 @@ where
                 .map(IntoActiveModel::into_active_model)
             })
             .collect::<Result<Vec<_>, ApiError>>()?;
-        if !file_rows.is_empty() {
-            for batch in file_rows.chunks(PROJECTION_FILE_INSERT_BATCH_SIZE) {
-                entities::projection_file::Entity::insert_many(batch.iter().cloned())
-                    .exec(conn)
-                    .await
-                    .map_err(ApiError::internal)?;
-            }
+        for batch in file_rows.chunks(PROJECTION_FILE_INSERT_BATCH_SIZE) {
+            entities::projection_file::Entity::insert_many(batch.iter().cloned())
+                .exec(conn)
+                .await
+                .map_err(ApiError::internal)?;
         }
+
+        entities::projection_read_model::Model::live(
+            &repo.record.id,
+            repo.record.change_version,
+            audience,
+            rebuilt_at_unix,
+            file_count,
+        )?
+        .into_active_model()
+        .insert(conn)
+        .await
+        .map_err(ApiError::internal)?;
     }
 
     Ok(())
@@ -150,7 +149,7 @@ where
     C: ConnectionTrait,
 {
     let expected_version = projection_repo_version(repo_version)?;
-    let Some(model) = entities::projection_read_model::Entity::find()
+    let read_model_exists = entities::projection_read_model::Entity::find()
         .filter(entities::projection_read_model::Column::RepoId.eq(repo_id.to_string()))
         .filter(entities::projection_read_model::Column::RepoVersion.eq(expected_version))
         .filter(
@@ -161,26 +160,10 @@ where
         .one(conn)
         .await
         .map_err(ApiError::internal)?
-    else {
-        return Ok(ProjectionFileLookup::NotReady);
-    };
-    let stored_file_count = entities::projection_file::Entity::find()
-        .filter(entities::projection_file::Column::RepoId.eq(repo_id.to_string()))
-        .filter(entities::projection_file::Column::RepoVersion.eq(expected_version))
-        .filter(
-            entities::projection_file::Column::Source
-                .eq(ProjectionSource::Live.as_str().to_string()),
-        )
-        .filter(entities::projection_file::Column::Audience.eq(audience.as_str().to_string()))
-        .count(conn)
-        .await
-        .map_err(ApiError::internal)?;
-    let expected_file_count = u64::try_from(model.file_count)
-        .map_err(|_| ApiError::internal_message("projection file count cannot be negative"))?;
-    if stored_file_count != expected_file_count {
+        .is_some();
+    if !read_model_exists {
         return Ok(ProjectionFileLookup::NotReady);
     }
-
     let row = entities::projection_file::Entity::find()
         .filter(entities::projection_file::Column::RepoId.eq(repo_id.to_string()))
         .filter(entities::projection_file::Column::RepoVersion.eq(expected_version))
