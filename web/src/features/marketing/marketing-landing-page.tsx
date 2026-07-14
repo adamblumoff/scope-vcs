@@ -33,7 +33,7 @@ export function MarketingLandingPage(): ReactElement {
               <span className="block whitespace-nowrap text-muted-foreground">needs a reset.</span>
             </h1>
 
-            <ul className="mt-8 max-w-[540px] list-disc space-y-2 pl-5 text-[clamp(0.9375rem,1.4vw,1.1875rem)] leading-[1.62] tracking-[-0.015em] text-muted-foreground marker:text-foreground/45">
+            <ul className="mt-8 max-w-[540px] list-none space-y-2 pl-5 text-[clamp(0.9375rem,1.4vw,1.1875rem)] leading-[1.62] tracking-[-0.015em] text-muted-foreground">
               <li>
                 Build in public. Keep control. Choose exactly what the public sees, and safely
                 commit secret files without third-party tooling.
