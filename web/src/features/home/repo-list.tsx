@@ -24,8 +24,8 @@ export function RepoList({
             No repositories yet
           </div>
           <p className="mt-1 leading-6 text-muted-foreground">
-            Install the CLI, then initialize this folder from your terminal to
-            create your first repository.
+            Install the CLI, then initialize an existing Git repository with at
+            least one commit.
           </p>
         </div>
         <div className="mt-1 w-full max-w-[460px] space-y-2.5 text-left">
@@ -38,6 +38,7 @@ export function RepoList({
             value={cliInstallCommands.windows}
           />
           <CopyableCodeBlock copyLabel="Copy init command" value="scope init" />
+          <CopyableCodeBlock copyLabel="Copy push command" value="scope push" />
         </div>
       </div>
     )

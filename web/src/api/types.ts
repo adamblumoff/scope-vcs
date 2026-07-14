@@ -138,6 +138,8 @@ export type CliInstallCommands = {
   windows: string
 }
 
+export type CliPlatform = keyof CliInstallCommands
+
 export type DeleteRepoInput = {
   owner: string
   repo: string

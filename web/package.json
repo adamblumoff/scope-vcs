@@ -40,6 +40,7 @@
     "clsx": "^2.1.1",
     "github-slugger": "2.0.0",
     "lucide-react": "^0.562.0",
+    "motion": "^12.42.2",
     "react": "^19.0.0",
     "react-dom": "^19.0.0",
     "react-markdown": "^10.1.0",

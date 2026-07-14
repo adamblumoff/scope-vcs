@@ -1,14 +1,6 @@
-import {
-  HttpError,
-  createApiClient,
-  getCliInstallConnection,
-} from '@/api/client'
-import type {
-  AccountSession,
-  CliInstallCommands,
-  HomeState,
-  RepoSummary,
-} from './types'
+import { HttpError, createApiClient } from '@/api/client'
+import { buildCliInstallCommands } from '@/api/cli-install'
+import type { AccountSession, HomeState, RepoSummary } from './types'
 import { ApiRouteTemplates, buildApiPath } from './types.generated'
 
 export async function loadHomeForRequest(): Promise<HomeState> {
@@ -42,13 +34,5 @@ export async function loadHomeForRequest(): Promise<HomeState> {
       error: error instanceof Error ? error.message : 'request failed',
       repositories: [],
     }
-  }
-}
-
-function buildCliInstallCommands(): CliInstallCommands {
-  const baseUrl = getCliInstallConnection()
-  return {
-    posix: `curl -fsSL ${baseUrl}/install.sh | sh`,
-    windows: `irm ${baseUrl}/install.ps1 | iex`,
   }
 }

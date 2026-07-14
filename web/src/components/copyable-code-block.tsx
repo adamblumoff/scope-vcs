@@ -13,12 +13,14 @@ import { toast } from 'sonner'
 type CopyableCodeBlockProps = {
   className?: string
   copyLabel?: string
+  onCopy?: () => void
   value: string
 }
 
 export function CopyableCodeBlock({
   className,
   copyLabel = 'Copy',
+  onCopy,
   value,
 }: CopyableCodeBlockProps) {
   const [copied, setCopied] = useState(false)
@@ -33,23 +35,34 @@ export function CopyableCodeBlock({
   }, [copied])
 
   async function copyToClipboard() {
-    try {
-      if (navigator.clipboard?.writeText) {
+    let clipboardError: unknown
+
+    if (navigator.clipboard?.writeText) {
+      try {
         await navigator.clipboard.writeText(value)
-      } else if (!copyWithFallback(value)) {
-        throw new Error('clipboard unavailable')
-      }
-      setCopied(true)
-      toast.success('Copied')
-    } catch (error) {
-      if (copyWithFallback(value)) {
-        setCopied(true)
-        toast.success('Copied')
+        markCopied()
         return
+      } catch (error) {
+        clipboardError = error
       }
-      console.error('copy failed', error)
-      toast.error('Copy failed')
     }
+
+    if (copyWithFallback(value)) {
+      markCopied()
+      return
+    }
+
+    console.error(
+      'copy failed',
+      clipboardError ?? new Error('clipboard unavailable'),
+    )
+    toast.error('Copy failed')
+  }
+
+  function markCopied() {
+    setCopied(true)
+    toast.success('Copied')
+    onCopy?.()
   }
 
   return (
@@ -67,7 +80,7 @@ export function CopyableCodeBlock({
           <TooltipTrigger asChild>
             <Button
               aria-label={copied ? 'Copied' : copyLabel}
-              className="absolute right-2 top-2 border-white/15 bg-white/5 text-[#aeb4bf] hover:bg-white/10 hover:text-white"
+              className="absolute inset-y-0 right-2 my-auto border-white/15 bg-white/5 text-[#aeb4bf] hover:bg-white/10 hover:text-white"
               onClick={() => void copyToClipboard()}
               size="icon-sm"
               type="button"

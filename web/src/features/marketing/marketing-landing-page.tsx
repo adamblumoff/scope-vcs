@@ -1,7 +1,9 @@
+import type { CliInstallCommands, CliPlatform } from '@/api/types'
 import { Button } from '@/components/ui/button'
 import { Link } from '@tanstack/react-router'
-import { ArrowRight, GitBranch } from 'lucide-react'
+import { GitBranch } from 'lucide-react'
 import type { ReactElement } from 'react'
+import { MarketingCliOnboarding } from './marketing-cli-onboarding'
 import { RepositoryProjection } from './repository-projection'
 
 const authParams = { _splat: '' }
@@ -9,7 +11,13 @@ const authRedirect = { redirect_url: '/' }
 const marketingContainerClassName =
   'mx-auto w-[min(calc(100%-2rem),1280px)] sm:w-[min(calc(100%-3rem),1280px)]'
 
-export function MarketingLandingPage(): ReactElement {
+export function MarketingLandingPage({
+  cliInstallCommands,
+  initialCliPlatform,
+}: {
+  cliInstallCommands: CliInstallCommands
+  initialCliPlatform: CliPlatform
+}): ReactElement {
   return (
     <div className="dark marketing-page min-h-dvh text-foreground">
       <a
@@ -41,14 +49,10 @@ export function MarketingLandingPage(): ReactElement {
               <li>Your repository is not a public inbox. AI-slop PR deterrents are coming.</li>
             </ul>
 
-            <div className="mt-9 flex flex-wrap items-center gap-3">
-              <Button asChild className="h-12 gap-3.5 px-5 text-sm font-semibold">
-                <Link params={authParams} search={authRedirect} to="/sign-up/$">
-                  Try it out
-                  <ArrowRight className="size-[17px] transition-transform group-hover/button:translate-x-0.5 motion-reduce:transform-none" />
-                </Link>
-              </Button>
-            </div>
+            <MarketingCliOnboarding
+              commands={cliInstallCommands}
+              initialPlatform={initialCliPlatform}
+            />
           </section>
 
           <RepositoryProjection />
