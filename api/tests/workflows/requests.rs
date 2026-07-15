@@ -269,6 +269,7 @@ fn repo_with_public_readme_and_private_secret(state: &AppState) -> StoredReposit
         })
         .collect(),
     });
+    populate_test_live_files(&mut repo);
     repo
 }
 

@@ -1,0 +1,978 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Scope push performance — implementation plan</title>
+  <script>
+    (() => {
+      let stored = null;
+      try {
+        stored = localStorage.getItem('scope-plan-theme');
+      } catch {
+        // Storage can be unavailable for local files or locked-down browsers.
+      }
+      const dark = stored === 'dark'
+        || (stored !== 'light' && window.matchMedia('(prefers-color-scheme: dark)').matches);
+      document.documentElement.classList.toggle('dark', dark);
+    })();
+  </script>
+  <style>
+    :root {
+      color-scheme: light;
+      --paper: #faf9f5;
+      --surface: #ffffff;
+      --surface-soft: #f0eee6;
+      --ink: #141413;
+      --text: #3d3d3a;
+      --muted: #77766f;
+      --line: #d1cfc5;
+      --line-strong: #aaa79d;
+      --accent: #d97757;
+      --accent-soft: #f3ddd4;
+      --success: #667c4e;
+      --success-soft: #e4e9dc;
+      --warning: #a46d24;
+      --warning-soft: #f3e7cf;
+      --danger: #a6463c;
+      --danger-soft: #f4deda;
+      --code: #1b1b19;
+      --code-text: #ece9df;
+      --shadow: 0 18px 44px rgba(20, 20, 19, 0.07);
+      --serif: ui-serif, Georgia, 'Times New Roman', serif;
+      --sans: system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+      --mono: ui-monospace, 'SFMono-Regular', Consolas, 'Liberation Mono', monospace;
+    }
+
+    html.dark {
+      color-scheme: dark;
+      --paper: #111210;
+      --surface: #181916;
+      --surface-soft: #20211e;
+      --ink: #f1eee5;
+      --text: #d4d0c7;
+      --muted: #9d9a92;
+      --line: #343530;
+      --line-strong: #50514b;
+      --accent: #e38a68;
+      --accent-soft: #3d2821;
+      --success: #9eb67e;
+      --success-soft: #273021;
+      --warning: #d5a85f;
+      --warning-soft: #352c1e;
+      --danger: #df8177;
+      --danger-soft: #3a2421;
+      --code: #0c0d0b;
+      --code-text: #efede6;
+      --shadow: 0 18px 48px rgba(0, 0, 0, 0.28);
+    }
+
+    * { box-sizing: border-box; }
+    html { scroll-behavior: smooth; }
+    body {
+      margin: 0;
+      background: var(--paper);
+      color: var(--text);
+      font-family: var(--sans);
+      font-size: 15px;
+      line-height: 1.58;
+      -webkit-font-smoothing: antialiased;
+    }
+    button, input { font: inherit; }
+    a { color: inherit; }
+    code, .mono { font-family: var(--mono); }
+    code {
+      padding: 0.12rem 0.34rem;
+      border-radius: 4px;
+      background: var(--surface-soft);
+      color: var(--ink);
+      font-size: 0.88em;
+    }
+    .page {
+      width: min(1160px, calc(100% - 40px));
+      margin: 0 auto;
+      padding: 32px 0 104px;
+    }
+
+    .utility {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 16px;
+      min-height: 42px;
+      margin-bottom: 46px;
+      border-bottom: 1px solid var(--line);
+    }
+    .utility-name {
+      padding-bottom: 12px;
+      color: var(--muted);
+      font-family: var(--mono);
+      font-size: 11px;
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+    }
+    .theme-toggle {
+      margin-bottom: 10px;
+      padding: 5px 9px;
+      border: 1px solid var(--line);
+      border-radius: 7px;
+      background: transparent;
+      color: var(--muted);
+      cursor: pointer;
+      font-family: var(--mono);
+      font-size: 11px;
+    }
+    .theme-toggle:hover,
+    .theme-toggle:focus-visible {
+      border-color: var(--line-strong);
+      color: var(--ink);
+      outline: none;
+    }
+
+    .hero {
+      display: grid;
+      grid-template-columns: minmax(0, 1.5fr) minmax(280px, 0.7fr);
+      gap: 56px;
+      align-items: end;
+      margin-bottom: 48px;
+    }
+    .eyebrow {
+      margin-bottom: 12px;
+      color: var(--accent);
+      font-family: var(--mono);
+      font-size: 11px;
+      font-weight: 700;
+      letter-spacing: 0.09em;
+      text-transform: uppercase;
+    }
+    h1, h2, h3 { color: var(--ink); }
+    h1 {
+      max-width: 760px;
+      margin: 0;
+      font-family: var(--serif);
+      font-size: clamp(42px, 6vw, 70px);
+      font-weight: 500;
+      letter-spacing: -0.045em;
+      line-height: 0.98;
+    }
+    .lede {
+      max-width: 720px;
+      margin: 24px 0 0;
+      color: var(--muted);
+      font-size: 17px;
+    }
+    .hero-meta {
+      border-top: 1px solid var(--line-strong);
+    }
+    .meta-row {
+      display: grid;
+      grid-template-columns: 100px 1fr;
+      gap: 12px;
+      padding: 11px 0;
+      border-bottom: 1px solid var(--line);
+      font-size: 13px;
+    }
+    .meta-row dt {
+      color: var(--muted);
+      font-family: var(--mono);
+      font-size: 10px;
+      letter-spacing: 0.07em;
+      text-transform: uppercase;
+    }
+    .meta-row dd { margin: 0; color: var(--ink); }
+
+    .decision {
+      display: grid;
+      grid-template-columns: 180px 1fr;
+      gap: 24px;
+      margin: 0 0 68px;
+      padding: 24px 0;
+      border-top: 2px solid var(--ink);
+      border-bottom: 1px solid var(--line);
+    }
+    .decision-label {
+      color: var(--ink);
+      font-family: var(--mono);
+      font-size: 11px;
+      font-weight: 700;
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+    }
+    .decision-copy {
+      max-width: 820px;
+      margin: 0;
+      color: var(--ink);
+      font-family: var(--serif);
+      font-size: 23px;
+      line-height: 1.35;
+    }
+
+    .summary-strip {
+      display: grid;
+      grid-template-columns: repeat(4, 1fr);
+      margin-bottom: 76px;
+      border-top: 1px solid var(--line);
+      border-bottom: 1px solid var(--line);
+    }
+    .summary-item {
+      min-height: 112px;
+      padding: 20px 22px;
+      border-right: 1px solid var(--line);
+    }
+    .summary-item:last-child { border-right: 0; }
+    .summary-key {
+      margin-bottom: 8px;
+      color: var(--muted);
+      font-family: var(--mono);
+      font-size: 10px;
+      letter-spacing: 0.07em;
+      text-transform: uppercase;
+    }
+    .summary-value {
+      color: var(--ink);
+      font-size: 18px;
+      font-weight: 650;
+      line-height: 1.25;
+    }
+    .summary-value.accent { color: var(--accent); }
+
+    section { margin-bottom: 78px; scroll-margin-top: 20px; }
+    .section-head {
+      display: grid;
+      grid-template-columns: 54px minmax(0, 1fr);
+      gap: 18px;
+      align-items: baseline;
+      margin-bottom: 28px;
+    }
+    .section-num {
+      color: var(--muted);
+      font-family: var(--mono);
+      font-size: 11px;
+    }
+    h2 {
+      margin: 0;
+      font-family: var(--serif);
+      font-size: 32px;
+      font-weight: 500;
+      letter-spacing: -0.025em;
+      line-height: 1.16;
+    }
+    .section-intro {
+      max-width: 760px;
+      margin: -14px 0 30px 72px;
+      color: var(--muted);
+    }
+    h3 {
+      margin: 0 0 7px;
+      font-size: 16px;
+      font-weight: 700;
+      letter-spacing: -0.01em;
+    }
+
+    .cause-list {
+      border-top: 1px solid var(--line-strong);
+    }
+    .cause-row {
+      display: grid;
+      grid-template-columns: 52px minmax(220px, 0.85fr) minmax(0, 1.6fr) 120px;
+      gap: 18px;
+      align-items: start;
+      padding: 18px 0;
+      border-bottom: 1px solid var(--line);
+    }
+    .cause-index {
+      color: var(--accent);
+      font-family: var(--mono);
+      font-size: 11px;
+      font-weight: 700;
+    }
+    .cause-row p { margin: 0; color: var(--muted); font-size: 13.5px; }
+    .cost {
+      justify-self: end;
+      padding: 3px 7px;
+      border-radius: 5px;
+      background: var(--danger-soft);
+      color: var(--danger);
+      font-family: var(--mono);
+      font-size: 10px;
+      font-weight: 700;
+      letter-spacing: 0.04em;
+      text-transform: uppercase;
+    }
+
+    .equation {
+      margin-top: 28px;
+      padding: 20px 22px;
+      border-left: 4px solid var(--accent);
+      background: var(--surface-soft);
+    }
+    .equation-line {
+      color: var(--ink);
+      font-family: var(--mono);
+      font-size: clamp(13px, 2vw, 16px);
+      line-height: 1.7;
+    }
+    .equation-line + .equation-line { margin-top: 7px; }
+    .bad { color: var(--danger); }
+    .good { color: var(--success); }
+
+    .flow {
+      padding: 28px;
+      border: 1px solid var(--line);
+      background: var(--surface);
+      box-shadow: var(--shadow);
+      overflow-x: auto;
+    }
+    .flow-track {
+      display: grid;
+      grid-template-columns: repeat(6, minmax(142px, 1fr));
+      min-width: 940px;
+      align-items: stretch;
+    }
+    .flow-step {
+      position: relative;
+      min-height: 124px;
+      padding: 16px 24px 16px 14px;
+      border-top: 2px solid var(--line-strong);
+      border-bottom: 1px solid var(--line);
+    }
+    .flow-step:not(:last-child)::after {
+      content: '→';
+      position: absolute;
+      top: 42px;
+      right: 5px;
+      color: var(--line-strong);
+      font-size: 18px;
+    }
+    .flow-step strong {
+      display: block;
+      margin-bottom: 6px;
+      color: var(--ink);
+      font-size: 13px;
+    }
+    .flow-step span {
+      display: block;
+      color: var(--muted);
+      font-size: 11.5px;
+      line-height: 1.45;
+    }
+    .flow-step.focus { border-top-color: var(--accent); }
+    .flow-step.async { border-top-color: var(--success); background: var(--success-soft); }
+    .caption { margin: 13px 0 0; color: var(--muted); font-size: 12px; }
+
+    .milestones { border-top: 1px solid var(--line-strong); }
+    .milestone {
+      display: grid;
+      grid-template-columns: 130px 34px minmax(0, 1fr);
+      gap: 0 16px;
+      min-height: 166px;
+    }
+    .milestone-label {
+      padding-top: 24px;
+      text-align: right;
+      color: var(--muted);
+      font-family: var(--mono);
+      font-size: 11px;
+    }
+    .rail {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+    }
+    .rail-dot {
+      width: 14px;
+      height: 14px;
+      margin-top: 26px;
+      border: 3px solid var(--accent);
+      border-radius: 50%;
+      background: var(--paper);
+      flex: 0 0 auto;
+    }
+    .rail-line { width: 1px; flex: 1; background: var(--line); }
+    .milestone:last-child .rail-line { display: none; }
+    .milestone-body {
+      padding: 21px 0 34px;
+      border-bottom: 1px solid var(--line);
+    }
+    .milestone-body p { max-width: 790px; margin: 0 0 12px; color: var(--muted); }
+    .deliverables {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 7px;
+    }
+    .deliverable {
+      padding: 3px 7px;
+      border: 1px solid var(--line);
+      border-radius: 5px;
+      color: var(--text);
+      font-family: var(--mono);
+      font-size: 10.5px;
+    }
+
+    .contract {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 0 34px;
+      border-top: 1px solid var(--line-strong);
+    }
+    .contract-column { padding-top: 22px; }
+    .contract-column + .contract-column { border-left: 1px solid var(--line); padding-left: 34px; }
+    .contract-list { margin: 16px 0 0; padding: 0; list-style: none; }
+    .contract-list li {
+      position: relative;
+      padding: 11px 0 11px 24px;
+      border-bottom: 1px solid var(--line);
+      color: var(--muted);
+      font-size: 13.5px;
+    }
+    .contract-list li::before {
+      content: '✓';
+      position: absolute;
+      left: 0;
+      color: var(--success);
+      font-weight: 800;
+    }
+    .contract-list.avoid li::before { content: '×'; color: var(--danger); }
+
+    .table-wrap { overflow-x: auto; border-top: 1px solid var(--line-strong); }
+    table {
+      width: 100%;
+      min-width: 760px;
+      border-collapse: collapse;
+      text-align: left;
+    }
+    th, td {
+      padding: 13px 14px;
+      border-bottom: 1px solid var(--line);
+      vertical-align: top;
+      font-size: 13px;
+    }
+    th {
+      color: var(--muted);
+      font-family: var(--mono);
+      font-size: 10px;
+      letter-spacing: 0.07em;
+      text-transform: uppercase;
+    }
+    td:first-child { color: var(--ink); font-weight: 650; }
+    td code { white-space: nowrap; }
+    .status {
+      display: inline-block;
+      padding: 2px 6px;
+      border-radius: 4px;
+      font-family: var(--mono);
+      font-size: 10px;
+      font-weight: 700;
+      text-transform: uppercase;
+    }
+    .status.sync { background: var(--accent-soft); color: var(--accent); }
+    .status.async { background: var(--success-soft); color: var(--success); }
+
+    .file-groups {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 28px 38px;
+      border-top: 1px solid var(--line-strong);
+      padding-top: 24px;
+    }
+    .file-group h3 { padding-bottom: 10px; border-bottom: 1px solid var(--line); }
+    .file-list { margin: 0; padding: 0; list-style: none; }
+    .file-list li {
+      padding: 10px 0;
+      border-bottom: 1px solid var(--line);
+      color: var(--muted);
+      font-size: 13px;
+    }
+    .file-list code { display: block; margin-bottom: 3px; width: fit-content; }
+
+    .checks {
+      columns: 2;
+      column-gap: 42px;
+      margin: 0;
+      padding: 0;
+      list-style: none;
+      border-top: 1px solid var(--line-strong);
+    }
+    .checks li {
+      position: relative;
+      break-inside: avoid;
+      padding: 14px 0 14px 28px;
+      border-bottom: 1px solid var(--line);
+      color: var(--muted);
+      font-size: 13.5px;
+    }
+    .checks li::before {
+      content: '';
+      position: absolute;
+      left: 2px;
+      top: 19px;
+      width: 10px;
+      height: 10px;
+      border: 2px solid var(--success);
+      border-radius: 50%;
+    }
+
+    .risk-grid { border-top: 1px solid var(--line-strong); }
+    .risk-row {
+      display: grid;
+      grid-template-columns: minmax(200px, 1fr) 86px minmax(260px, 1.35fr);
+      gap: 22px;
+      padding: 16px 0;
+      border-bottom: 1px solid var(--line);
+      align-items: start;
+    }
+    .risk-row p { margin: 0; color: var(--muted); font-size: 13.5px; }
+    .severity {
+      width: fit-content;
+      padding: 2px 7px;
+      border-radius: 5px;
+      font-family: var(--mono);
+      font-size: 10px;
+      font-weight: 700;
+      text-transform: uppercase;
+    }
+    .severity.high { color: var(--danger); background: var(--danger-soft); }
+    .severity.med { color: var(--warning); background: var(--warning-soft); }
+
+    .question-list { border-top: 1px solid var(--line-strong); }
+    .question {
+      display: grid;
+      grid-template-columns: 1fr minmax(240px, 0.9fr);
+      gap: 36px;
+      padding: 20px 0;
+      border-bottom: 1px solid var(--line);
+    }
+    .question p { margin: 0; color: var(--muted); font-size: 13.5px; }
+    .recommendation {
+      padding-left: 16px;
+      border-left: 3px solid var(--accent);
+    }
+    .recommendation b { display: block; margin-bottom: 4px; color: var(--ink); }
+
+    .handoff {
+      margin-top: 90px;
+      padding-top: 26px;
+      border-top: 2px solid var(--ink);
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 44px;
+    }
+    .handoff p { margin: 0; color: var(--muted); }
+    .handoff strong { color: var(--ink); }
+
+    @media (max-width: 900px) {
+      .hero { grid-template-columns: 1fr; gap: 30px; }
+      .hero-meta { max-width: 560px; }
+      .summary-strip { grid-template-columns: repeat(2, 1fr); }
+      .summary-item:nth-child(2) { border-right: 0; }
+      .summary-item:nth-child(-n + 2) { border-bottom: 1px solid var(--line); }
+      .cause-row { grid-template-columns: 42px 1fr 110px; }
+      .cause-row p { grid-column: 2 / -1; }
+      .contract { grid-template-columns: 1fr; }
+      .contract-column + .contract-column { border-left: 0; padding-left: 0; margin-top: 32px; }
+      .file-groups { grid-template-columns: 1fr; }
+    }
+
+    @media (max-width: 640px) {
+      .page { width: min(100% - 28px, 1160px); padding-top: 18px; }
+      .utility { margin-bottom: 34px; }
+      h1 { font-size: 42px; }
+      .decision { grid-template-columns: 1fr; gap: 10px; }
+      .decision-copy { font-size: 20px; }
+      .summary-strip { grid-template-columns: 1fr; }
+      .summary-item { border-right: 0; border-bottom: 1px solid var(--line); min-height: auto; }
+      .summary-item:last-child { border-bottom: 0; }
+      .section-head { grid-template-columns: 34px 1fr; gap: 10px; }
+      .section-intro { margin-left: 44px; }
+      h2 { font-size: 27px; }
+      .cause-row { grid-template-columns: 34px 1fr; gap: 10px; }
+      .cause-row p, .cost { grid-column: 2; justify-self: start; }
+      .milestone { grid-template-columns: 1fr; min-height: 0; }
+      .milestone-label { text-align: left; padding: 18px 0 0; }
+      .rail { display: none; }
+      .milestone-body { padding-top: 7px; }
+      .checks { columns: 1; }
+      .risk-row { grid-template-columns: 1fr; gap: 8px; }
+      .question { grid-template-columns: 1fr; gap: 14px; }
+      .handoff { grid-template-columns: 1fr; gap: 22px; }
+    }
+
+    @media (prefers-reduced-motion: reduce) {
+      html { scroll-behavior: auto; }
+    }
+  </style>
+</head>
+<body>
+  <main class="page">
+    <div class="utility">
+      <div class="utility-name">Scope · engineering plan</div>
+      <button class="theme-toggle" id="theme-toggle" type="button" aria-label="Toggle color theme">Theme</button>
+    </div>
+
+    <header class="hero">
+      <div>
+        <div class="eyebrow">Implementation plan · 14 July 2026</div>
+        <h1>Make large pushes proportional to the delta.</h1>
+        <p class="lede">
+          Replace repository-wide work in <code>scope push</code> with a durable incremental Git path,
+          delta-owned domain behavior, and asynchronous derived work. First push pays for the repository
+          once; later pushes pay for changed objects and paths.
+        </p>
+      </div>
+      <dl class="hero-meta">
+        <div class="meta-row"><dt>Status</dt><dd>Approved for implementation</dd></div>
+        <div class="meta-row"><dt>Scope</dt><dd>CLI, Git HTTP, object storage, domain persistence</dd></div>
+        <div class="meta-row"><dt>Migration</dt><dd>Destructive; no legacy readers or dual writes</dd></div>
+        <div class="meta-row"><dt>Primary risk</dt><dd>Durability at the Git/domain commit boundary</dd></div>
+      </dl>
+    </header>
+
+    <div class="decision">
+      <div class="decision-label">Decision</div>
+      <p class="decision-copy">
+        A push succeeds only after its incoming Git segment is durable and the reviewed domain transition
+        is committed. Projection rebuilds, snapshot compaction, and garbage collection happen afterward
+        and never hold the CLI open.
+      </p>
+    </div>
+
+    <div class="summary-strip" aria-label="Plan summary">
+      <div class="summary-item"><div class="summary-key">Target complexity</div><div class="summary-value accent">O(delta)</div></div>
+      <div class="summary-item"><div class="summary-key">Delivery slices</div><div class="summary-value">4 focused changes</div></div>
+      <div class="summary-item"><div class="summary-key">Compatibility</div><div class="summary-value">None</div></div>
+      <div class="summary-item"><div class="summary-key">Source of truth</div><div class="summary-value">Domain rows + durable Git segments</div></div>
+    </div>
+
+    <section id="root-cause">
+      <div class="section-head"><span class="section-num">01</span><h2>Why the current path slows down</h2></div>
+      <p class="section-intro">
+        Git already sends an incremental pack. Scope then turns that efficient delta into repeated
+        whole-repository work before it returns success.
+      </p>
+      <div class="cause-list">
+        <div class="cause-row">
+          <div class="cause-index">01</div><h3>Full worktree and review scans</h3>
+          <p>The CLI scans every untracked path, always fetches Scope main, and builds review state from the complete tracked tree.</p><span class="cost">repo files</span>
+        </div>
+        <div class="cause-row">
+          <div class="cause-index">02</div><h3>Buffered Git transport</h3>
+          <p>The API collects the complete receive-pack body before starting Git, so upload and unpacking cannot overlap and memory scales with pack size.</p><span class="cost">pack bytes</span>
+        </div>
+        <div class="cause-row">
+          <div class="cause-index">03</div><h3>Two full temporary clones</h3>
+          <p>Receive-pack advertisement and POST each clone the current bare repository with <code>--no-hardlinks</code>, then delete it.</p><span class="cost">git history</span>
+        </div>
+        <div class="cause-row">
+          <div class="cause-index">04</div><h3>Every live blob is materialized</h3>
+          <p>Import runs <code>cat-file</code> over the complete pushed tree before it compares OID, mode, and size and discards unchanged files.</p><span class="cost">live bytes</span>
+        </div>
+        <div class="cause-row">
+          <div class="cause-index">05</div><h3>Full Git bundle on every push</h3>
+          <p>Scope repacks all reachable history, reads it into memory, encrypts it, and uploads the whole bundle under a new object key.</p><span class="cost">git history</span>
+        </div>
+        <div class="cause-row">
+          <div class="cause-index">06</div><h3>Growing aggregate JSON</h3>
+          <p>The repository graph is repeatedly loaded, cloned, replayed into a live tree, serialized twice, compared, and written as one value.</p><span class="cost">scope history</span>
+        </div>
+        <div class="cause-row">
+          <div class="cause-index">07</div><h3>Cleanup runs in the request</h3>
+          <p>Referenced new blobs are queued one row at a time, then push synchronously scans every repository graph to decide what can be deleted.</p><span class="cost">global data</span>
+        </div>
+        <div class="cause-row">
+          <div class="cause-index">08</div><h3>Completion restores the bundle</h3>
+          <p>The post-push API downloads and restores the new full bundle to rediscover its head, then performs a usually no-op aggregate mutation.</p><span class="cost">git history</span>
+        </div>
+      </div>
+      <div class="equation">
+        <div class="equation-line bad">today = delta upload + live tree + Git history + Scope history + global cleanup</div>
+        <div class="equation-line good">target = delta upload + changed paths + one transactional domain apply</div>
+      </div>
+    </section>
+
+    <section id="target-flow">
+      <div class="section-head"><span class="section-num">02</span><h2>Target push flow</h2></div>
+      <p class="section-intro">
+        The synchronous path ends after durability and the domain transaction. Everything derived is
+        represented by an outbox job and may safely retry.
+      </p>
+      <div class="flow" role="img" aria-label="Target Scope push flow">
+        <div class="flow-track">
+          <div class="flow-step"><strong>1 · Push context</strong><span>One lightweight read returns access, config hash, current head, and cache identity.</span></div>
+          <div class="flow-step"><strong>2 · Review</strong><span>Fetch only when the remote head changed. Review changed paths; expand the full tree on demand.</span></div>
+          <div class="flow-step focus"><strong>3 · Stream receive-pack</strong><span>Pipe the bounded request into Git quarantine while the client is uploading.</span></div>
+          <div class="flow-step focus"><strong>4 · Persist segment</strong><span>Upload the incoming pack segment once with base/head/integrity metadata.</span></div>
+          <div class="flow-step focus"><strong>5 · Apply domain delta</strong><span>Validate intent and commit head, logical commit, file changes, live rows, refs, and outbox atomically.</span></div>
+          <div class="flow-step async"><strong>6 · Return, then derive</strong><span>CLI succeeds. Worker updates projections, compacts segments, and collects orphaned objects.</span></div>
+        </div>
+        <p class="caption">Accent = synchronous durability boundary. Olive = asynchronous, retryable work.</p>
+      </div>
+    </section>
+
+    <section id="milestones">
+      <div class="section-head"><span class="section-num">03</span><h2>Delivery sequence</h2></div>
+      <p class="section-intro">
+        Four reviewable slices. Each removes old machinery in the same change; no feature flag, compatibility
+        adapter, or dual-write period survives the slice.
+      </p>
+      <div class="milestones">
+        <div class="milestone">
+          <div class="milestone-label">Slice 0</div><div class="rail"><span class="rail-dot"></span><span class="rail-line"></span></div>
+          <div class="milestone-body">
+            <h3>Measure the real push phases</h3>
+            <p>Expand the benchmark harness before optimizing. Record CLI phase timings, server subphase spans, byte counts, file counts, cache state, and peak memory for first and incremental pushes.</p>
+            <div class="deliverables"><span class="deliverable">large fixtures</span><span class="deliverable">cold + warm cache</span><span class="deliverable">encrypted object store</span><span class="deliverable">baseline report</span></div>
+          </div>
+        </div>
+        <div class="milestone">
+          <div class="milestone-label">Slice 1</div><div class="rail"><span class="rail-dot"></span><span class="rail-line"></span></div>
+          <div class="milestone-body">
+            <h3>Remove accidental synchronous work</h3>
+            <p>Extract only changed blobs, persist head OID directly, delete the redundant completion mutation and repo GET, stop queuing referenced uploads, batch cleanup writes, and move cleanup drains to the worker.</p>
+            <div class="deliverables"><span class="deliverable">git diff-tree</span><span class="deliverable">head_oid metadata</span><span class="deliverable">worker-only cleanup</span><span class="deliverable">CLI preflight trim</span></div>
+          </div>
+        </div>
+        <div class="milestone">
+          <div class="milestone-label">Slice 2</div><div class="rail"><span class="rail-dot"></span><span class="rail-line"></span></div>
+          <div class="milestone-body">
+            <h3>Replace full snapshots with incremental Git segments</h3>
+            <p>Make the received pack the durable artifact. Advertise from a stable local bare cache, receive into quarantine/shared objects, upload only the new segment, then atomically advance the persisted head.</p>
+            <div class="deliverables"><span class="deliverable">streaming body</span><span class="deliverable">segment manifest</span><span class="deliverable">stable raw cache</span><span class="deliverable">async compaction</span></div>
+          </div>
+        </div>
+        <div class="milestone">
+          <div class="milestone-label">Slice 3</div><div class="rail"><span class="rail-dot"></span><span class="rail-line"></span></div>
+          <div class="milestone-body">
+            <h3>Persist the domain as deltas, not aggregate JSON</h3>
+            <p>Normalize logical commits, file changes, live files, visibility events, and object references. The domain command returns explicit effects; the database appends and upserts only those effects.</p>
+            <div class="deliverables"><span class="deliverable">normalized schema</span><span class="deliverable">behavior-owned command</span><span class="deliverable">transactional live tree</span><span class="deliverable">delete legacy columns</span></div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <section id="contract">
+      <div class="section-head"><span class="section-num">04</span><h2>Architectural contract</h2></div>
+      <p class="section-intro">
+        Keep policy and transition rules in durable domain code. Git HTTP, S3, Postgres, the CLI, and the
+        projection worker remain thin delivery mechanisms around that behavior.
+      </p>
+      <div class="contract">
+        <div class="contract-column">
+          <h3>Must remain true</h3>
+          <ul class="contract-list">
+            <li>The push intent binds repository, user, reviewed head, base head, base config, and proposed config.</li>
+            <li>Only a fast-forward update to <code>refs/heads/main</code> is accepted.</li>
+            <li>Git bytes are durable before database rows reference them.</li>
+            <li>The head, logical commit, changed paths, visibility events, object references, and outbox entry commit together.</li>
+            <li>Visibility changes and history rewrites use the existing domain permission rules.</li>
+            <li>A failed transaction leaves an orphan segment that cleanup may safely delete; it never advances the visible head.</li>
+            <li>Public/private projection tables remain derived and may report NotReady until the worker catches up.</li>
+          </ul>
+        </div>
+        <div class="contract-column">
+          <h3>Must be removed</h3>
+          <ul class="contract-list avoid">
+            <li>Full Git bundle creation on every push.</li>
+            <li>Full receive-pack body buffering and duplicate temporary clones.</li>
+            <li>Complete-tree blob materialization for incremental pushes.</li>
+            <li>Repository graph and visibility history stored as growing JSON columns.</li>
+            <li>Inline object cleanup and repository-wide reference discovery.</li>
+            <li>The post-push completion endpoint and its bundle restore.</li>
+            <li>Legacy snapshot readers, dual writes, migration shims, or fallback branches.</li>
+          </ul>
+        </div>
+      </div>
+    </section>
+
+    <section id="schema">
+      <div class="section-head"><span class="section-num">05</span><h2>Destructive data model</h2></div>
+      <p class="section-intro">
+        Reset the pre-alpha database and object store. Introduce the final tables directly and delete the
+        snapshot/graph JSON path rather than migrating or backfilling data with no value.
+      </p>
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>Table</th><th>Owns</th><th>Key fields</th><th>Write pattern</th></tr></thead>
+          <tbody>
+            <tr><td><code>scope_git_heads</code></td><td>Accepted raw Git position</td><td>repo_id, head_oid, segment_sequence, change_version</td><td>One conditional update per push</td></tr>
+            <tr><td><code>scope_git_segments</code></td><td>Durable incoming pack chain</td><td>repo_id, sequence, base_oid, head_oid, object_key, sha256, size_bytes</td><td>One append per push</td></tr>
+            <tr><td><code>scope_logical_commits</code></td><td>Scope commit identity and authorship</td><td>id, repo_id, parent_id, author_id, message, ordinal</td><td>One append per push</td></tr>
+            <tr><td><code>scope_file_changes</code></td><td>Per-commit domain changes</td><td>commit_id, path, old/new Git object metadata, visibility</td><td>Append changed paths only</td></tr>
+            <tr><td><code>scope_live_files</code></td><td>Current private source tree</td><td>repo_id, path, git_oid, mode, size_bytes</td><td>Upsert/delete changed paths</td></tr>
+            <tr><td><code>scope_visibility_events</code></td><td>Visibility transition history</td><td>repo_id, event_id, path, boundary commit, old/new visibility</td><td>Append domain-emitted events</td></tr>
+            <tr><td><code>scope_object_references</code></td><td>Safe garbage-collection reachability</td><td>object_key, ref_kind, ref_id</td><td>Insert/delete in owning transaction</td></tr>
+            <tr><td><code>scope_projection_*</code></td><td>Public/private read models</td><td>existing audience/version keys</td><td>Worker-owned and derived</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </section>
+
+    <section id="deletions">
+      <div class="section-head"><span class="section-num">06</span><h2>Deletion ledger</h2></div>
+      <p class="section-intro">
+        Each replacement deletes its old owner in the same slice. A slice is incomplete while any route,
+        schema field, helper, fallback, fixture, or test still preserves the snapshot-era path.
+      </p>
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>Delete</th><th>Concrete owners</th><th>Replacement</th><th>Proof it is gone</th></tr></thead>
+          <tbody>
+            <tr><td>Post-push completion flow</td><td><code>REPO_PUSH_INTENTS_COMPLETE</code>, <code>complete_push_intent</code> in API/CLI, its app route, completion-token validation, CLI and benchmark calls</td><td>Receive-pack returns only after segment durability and the domain transaction</td><td>Route is 404, symbols have no matches, real <code>git push</code> needs no follow-up API call</td></tr>
+            <tr><td>Full main-repo snapshots</td><td><code>git_snapshot_from_repo</code>, <code>scope_repository_git_snapshots</code>, main-repo <code>StoredRepository.git_snapshot</code>, snapshot cache/restore/delete helpers</td><td><code>scope_git_segments</code> plus <code>scope_git_heads</code>; stable local bare cache is disposable</td><td>No main push runs <code>git bundle create</code>; object bytes written equal the incoming delta, not reachable history</td></tr>
+            <tr><td>Per-file object copies on import</td><td><code>git_tree_blob_contents</code>, <code>put_git_blob_contents</code>, <code>uploaded_blobs</code>, and <code>SourceBlob</code> payloads in receive-pack changes</td><td>Changed-path rows store Git OID, mode, and size; content is read from the raw Git cache</td><td>A 10,000-file first push performs one segment write and zero per-file object-store PUTs</td></tr>
+            <tr><td>Aggregate repository history</td><td><code>scope_repositories.graph</code>, <code>scope_repositories.visibility_events</code>, entity JSON encode/decode, repository-row clone/compare/write logic</td><td>Normalized logical commits, file changes, live files, and visibility events</td><td>Columns and entity fields do not exist; incremental push statements and serialized bytes are O(changed paths)</td></tr>
+            <tr><td>Replay-owned live tree</td><td><code>repo.live_tree()</code> reconstruction and graph-wide path scans in push/import persistence</td><td><code>scope_live_files</code> queried and updated by affected path</td><td>One-file push in a 10,000-file repository does not walk or materialize 10,000 file contents</td></tr>
+            <tr><td>Global SourceBlob cleanup system</td><td><code>scope_source_blob_cleanup_jobs</code>, <code>referenced_source_blob_keys</code>, <code>source_blobs_to_delete</code> plumbing, inline <code>best_effort_drain_pending_source_blob_deletions</code></td><td>Transactional <code>scope_object_references</code> plus worker-owned orphan segment collection</td><td>No request path scans repositories or drains cleanup; remaining request snapshot references move to reference rows in the same cutover</td></tr>
+            <tr><td>Disposable clone and bundle staging</td><td><code>cached_raw_git_snapshot_repo</code>, <code>raw_git_snapshot_cache_*</code>, <code>restore_git_snapshot</code>, and per-request full clone paths</td><td>Repo-keyed bare cache hydrated from immutable segment manifests; receive-pack uses quarantine/shared objects</td><td>Advertisement and POST reuse the same cache identity and do not copy reachable history</td></tr>
+            <tr><td>Snapshot-era seeds and tests</td><td><code>dev/api/seed.rs</code> bundle builders/assertions, old snapshot fixtures, completion and cleanup queue tests</td><td>Segment manifests, normalized rows, crash-boundary fixtures, and reference-GC tests</td><td>Fresh destructive seed contains no main-repo bundle or legacy table; tests pass with old schema/types deleted</td></tr>
+            <tr><td>Compatibility scaffolding</td><td>Any dual read, dual write, snapshot fallback, backfill, feature flag, or legacy object-key branch introduced during the work</td><td>Single segment + normalized-domain path</td><td>Final review searches for old symbols and storage prefixes; the database/object store are reset instead of migrated</td></tr>
+          </tbody>
+        </table>
+      </div>
+      <p class="caption">Deletion gate: code search, schema generation, seed inspection, object-store request counts, and end-to-end push traces must all agree that the old path is absent.</p>
+    </section>
+
+    <section id="files">
+      <div class="section-head"><span class="section-num">07</span><h2>Primary code changes</h2></div>
+      <p class="section-intro">Ownership follows the flow: CLI prepares, API transports, domain decides, persistence records, worker derives.</p>
+      <div class="file-groups">
+        <div class="file-group">
+          <h3>CLI and review</h3>
+          <ul class="file-list">
+            <li><code>cli/src/push.rs</code>Collapse repo/config/head preflight, remove completion and post-push GET, report phase timings.</li>
+            <li><code>cli/src/git_repo.rs</code>Skip the full untracked scan; fetch only when the persisted remote head differs.</li>
+            <li><code>cli/src/review/git_paths.rs</code>Build the default review from changed paths and lazily expand the full tree.</li>
+          </ul>
+        </div>
+        <div class="file-group">
+          <h3>Git transport and durable segments</h3>
+          <ul class="file-list">
+            <li><code>api/src/git/mod.rs</code>Stream receive-pack and make success end at the committed domain transition.</li>
+            <li><code>api/src/git/storage.rs</code>Replace full clones with stable bare cache + quarantine/shared object staging.</li>
+            <li><code>api/src/git/import/repo_io.rs</code>Persist incoming segments; delete full-bundle snapshot creation.</li>
+            <li><code>api/src/http/repos.rs</code>Replace separate preflight reads; delete push-intent completion.</li>
+          </ul>
+        </div>
+        <div class="file-group">
+          <h3>Domain and persistence</h3>
+          <ul class="file-list">
+            <li><code>crates/scope-core/src/domain/reviewed_updates.rs</code>Return an explicit accepted-push delta and required side effects.</li>
+            <li><code>crates/scope-core/src/domain/store.rs</code>Delete replay-owned live tree and aggregate graph storage.</li>
+            <li><code>crates/scope-core/src/db/repo_mutation.rs</code>Persist accepted-push effects directly under the repository lock.</li>
+            <li><code>crates/scope-core/src/db/repository_rows.rs</code>Remove graph/visibility JSON updates and unconditional projection rebuilds.</li>
+            <li><code>crates/scope-core/src/db/cleanup_queue.rs</code>Use normalized references and worker-only batch cleanup.</li>
+          </ul>
+        </div>
+        <div class="file-group">
+          <h3>Schema, worker, and measurement</h3>
+          <ul class="file-list">
+            <li><code>crates/scope-core/src/db/schema.sql</code>Replace legacy snapshot/graph columns with normalized tables.</li>
+            <li><code>crates/scope-core/src/db/outbox.rs</code>Coalesce projection jobs and update affected paths where safe.</li>
+            <li><code>bench/phase0.mjs</code>Replace the one-file fixture with a push-performance matrix and phase report.</li>
+            <li><code>dev/scope-dev</code>Expose the new benchmark mode against filesystem and encrypted S3-compatible storage.</li>
+          </ul>
+        </div>
+      </div>
+    </section>
+
+    <section id="benchmarks">
+      <div class="section-head"><span class="section-num">08</span><h2>Benchmark and acceptance matrix</h2></div>
+      <p class="section-intro">
+        Set numeric latency budgets from Slice 0, then require the algorithmic gates below. The current
+        benchmark's one-file filesystem push is useful as a smoke test but cannot represent this work.
+      </p>
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>Fixture</th><th>Push case</th><th>Measure</th><th>Acceptance</th></tr></thead>
+          <tbody>
+            <tr><td>Small</td><td>100 files / 1 MiB first push</td><td>End-to-end and each server phase</td><td>Establish control; no regression after each slice</td></tr>
+            <tr><td>Many small files</td><td>10,000 files / 50 MiB first push</td><td>PUT count, DB statements, RSS, post-receive time</td><td>Constant-count durable segment writes; no per-file cleanup inserts</td></tr>
+            <tr><td>Large live tree</td><td>One-file update in 10,000-file repo</td><td>Blob bytes read and object bytes written</td><td>Changed content only; p95 stays within 2× the small incremental case</td></tr>
+            <tr><td>Deep history</td><td>One-file update after 1,000 commits</td><td>Pack/bundle CPU, DB JSON bytes, restore work</td><td>No full bundle, graph serialization, or history-proportional step</td></tr>
+            <tr><td>Wide delta</td><td>1,000 changed files</td><td>Changed-path extraction and transaction duration</td><td>Linear in changed paths with bounded object-store concurrency</td></tr>
+            <tr><td>Cold cache</td><td>Incremental push after cache eviction</td><td>Segment restore and advertisement latency</td><td>Restore only required pack segments; correctness matches warm cache</td></tr>
+            <tr><td>Failure matrix</td><td>Disconnect, S3 failure, DB conflict, worker failure</td><td>Visible head, orphan segments, retries</td><td>No acknowledged partial push; every orphan is collectible</td></tr>
+          </tbody>
+        </table>
+      </div>
+      <ul class="checks" style="margin-top: 28px">
+        <li>Record <code>client_preflight_ms</code>, <code>fetch_ms</code>, <code>review_build_ms</code>, <code>push_ms</code>.</li>
+        <li>Record request bytes, new pack bytes, changed files, live files, history depth, and cache hit state.</li>
+        <li>Split server timing into receive, quarantine, diff, segment put, domain apply, database commit, and response.</li>
+        <li>Capture peak RSS and temporary disk bytes; receiving a large pack must not require a full in-memory copy.</li>
+        <li>Run filesystem storage for deterministic CI and encrypted S3-compatible storage for realistic latency.</li>
+        <li>Keep the existing full workspace test suite plus dedicated crash-boundary integration tests.</li>
+      </ul>
+    </section>
+
+    <section id="verification">
+      <div class="section-head"><span class="section-num">09</span><h2>Verification gates</h2></div>
+      <ul class="checks">
+        <li>Domain unit tests cover first push, fast-forward update, config change, permission denial, history rewrite, and stale base.</li>
+        <li>Git HTTP integration tests use real <code>git push</code> with streamed bodies, binary blobs, many files, and compressed requests.</li>
+        <li>Crash tests stop after segment upload, after transaction commit, and before response; restart proves recovery behavior.</li>
+        <li>Concurrency tests race two push intents against one base and prove exactly one head advances.</li>
+        <li>Authorization tests prove raw private Git objects are never reachable through public upload-pack or file endpoints.</li>
+        <li>Projection tests prove NotReady is explicit, latest-version jobs win, and retries converge without blocking push.</li>
+        <li>Cleanup tests prove referenced segments survive, orphaned segments are reclaimed, and no request path scans all repositories.</li>
+        <li>Run <code>cargo fmt --all -- --check</code>, <code>cargo test --workspace</code>, CLI tests, web checks, and the benchmark matrix.</li>
+      </ul>
+    </section>
+
+    <section id="risks">
+      <div class="section-head"><span class="section-num">10</span><h2>Risks and mitigations</h2></div>
+      <div class="risk-grid">
+        <div class="risk-row"><h3>Database head advances before Git bytes are durable</h3><span class="severity high">High</span><p>Upload and verify the segment first. The transaction references an immutable object key; on failure, leave an orphan cleanup job and do not advance the head.</p></div>
+        <div class="risk-row"><h3>Shared raw cache exposes private objects</h3><span class="severity high">High</span><p>Permissioned raw repositories never back public upload-pack directly. Public reads use derived public projections with tests that attempt explicit private OID wants.</p></div>
+        <div class="risk-row"><h3>Segment chains make cold restore slower</h3><span class="severity med">Medium</span><p>Compact asynchronously after a bounded segment count or byte threshold. Manifests make compaction replaceable without changing accepted domain history.</p></div>
+        <div class="risk-row"><h3>Normalized transaction becomes too wide</h3><span class="severity med">Medium</span><p>Use batch inserts/upserts for changed paths, keep the repository aggregate lock, and benchmark 1,000-file deltas before finalizing batch sizes.</p></div>
+        <div class="risk-row"><h3>Worker lag leaves projections unavailable</h3><span class="severity med">Medium</span><p>Keep explicit generation-aware NotReady responses, coalesce obsolete jobs, expose queue age, and alert on failed latest-version rebuilds.</p></div>
+      </div>
+    </section>
+
+    <section id="decisions">
+      <div class="section-head"><span class="section-num">11</span><h2>Locked architectural decisions</h2></div>
+      <p class="section-intro">These choices are approved. Slice 0 tunes thresholds and budgets; it does not reopen the storage or acknowledgement model.</p>
+      <div class="question-list">
+        <div class="question">
+          <div><h3>Durable raw Git store</h3><p>A persistent volume is fast but couples correctness to one runtime. Object storage is already the durable boundary and supports immutable segments.</p></div>
+          <div class="recommendation"><b>Chosen</b><p>S3-backed immutable pack segments are authoritative; the local bare repository is a disposable cache.</p></div>
+        </div>
+        <div class="question">
+          <div><h3>Push success contract</h3><p>Waiting for projection and garbage collection makes latency unpredictable and mixes derived work into the write contract.</p></div>
+          <div class="recommendation"><b>Chosen</b><p>Promise durable Git bytes plus committed domain state. Repository browsing may briefly return generation-aware NotReady.</p></div>
+        </div>
+        <div class="question">
+          <div><h3>File content source</h3><p>Keeping a random S3 object per file duplicates the incoming Git pack and creates thousands of first-push requests.</p></div>
+          <div class="recommendation"><b>Chosen</b><p>Reference Git blobs by OID/mode/size in domain rows and read them from the restored raw cache; do not maintain a second per-file blob store.</p></div>
+        </div>
+      </div>
+    </section>
+
+    <footer class="handoff">
+      <p><strong>Implementation order.</strong> Land measurement first, then remove accidental work. Use benchmark evidence to tune limits and compaction thresholds without reopening the approved architecture.</p>
+      <p><strong>Rollback.</strong> Because the product has no valuable data, rollback means redeploy the previous commit and reset the pre-alpha database/object store—never keep two storage models alive.</p>
+    </footer>
+  </main>
+
+  <script>
+    const button = document.getElementById('theme-toggle');
+    const syncLabel = () => {
+      const dark = document.documentElement.classList.contains('dark');
+      button.textContent = dark ? 'Light theme' : 'Dark theme';
+      button.setAttribute('aria-pressed', String(dark));
+    };
+    syncLabel();
+    button.addEventListener('click', () => {
+      const dark = !document.documentElement.classList.contains('dark');
+      document.documentElement.classList.toggle('dark', dark);
+      try {
+        localStorage.setItem('scope-plan-theme', dark ? 'dark' : 'light');
+      } catch {
+        // The current page still changes theme even when persistence is blocked.
+      }
+      syncLabel();
+    });
+  </script>
+</body>
+</html>

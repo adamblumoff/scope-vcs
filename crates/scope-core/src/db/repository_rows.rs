@@ -1,6 +1,16 @@
-use super::{entities, outbox::enqueue_projection_read_model_rebuild};
+use super::{
+    entities,
+    history_rows::{
+        RepositoryHistoryDelta, insert_repository_history, insert_repository_live_files,
+        save_repository_history_delta,
+    },
+    object_references::{
+        delete_object_reference, insert_object_reference, replace_object_reference,
+    },
+    outbox::enqueue_projection_read_model_rebuild,
+};
 use crate::{
-    domain::store::{FirstPushToken, GitPushToken, SourceBlob, StoredRepository},
+    domain::store::{FirstPushToken, GitHead, GitPushToken, GitSegment, StoredRepository},
     error::ApiError,
 };
 use sea_orm::{
@@ -13,7 +23,8 @@ use std::collections::BTreeMap;
 pub struct RepositoryFactRows {
     pub first_push_token: Option<FirstPushToken>,
     pub git_push_token: Option<GitPushToken>,
-    pub git_snapshot: Option<SourceBlob>,
+    pub git_head: Option<GitHead>,
+    pub git_segments: Vec<GitSegment>,
 }
 
 impl RepositoryFactRows {
@@ -21,7 +32,8 @@ impl RepositoryFactRows {
         entities::RepositoryFacts {
             first_push_token: self.first_push_token,
             git_push_token: self.git_push_token,
-            git_snapshot: self.git_snapshot,
+            git_head: self.git_head,
+            git_segments: self.git_segments,
         }
     }
 }
@@ -36,6 +48,8 @@ where
         .await
         .map_err(ApiError::internal)?;
     insert_repository_fact_rows(conn, repo).await?;
+    insert_repository_history(conn, &repo.graph, &repo.visibility_events).await?;
+    insert_repository_live_files(conn, &repo.record.id, &repo.live_files).await?;
     insert_repository_relations(conn, repo).await?;
     enqueue_projection_read_model_rebuild(conn, repo).await?;
     Ok(())
@@ -87,17 +101,25 @@ where
     );
     set_if_changed!(repo_config, before_row.repo_config, row.repo_config);
     set_if_changed!(policy, before_row.policy, row.policy);
-    set_if_changed!(graph, before_row.graph, row.graph);
-    set_if_changed!(
-        visibility_events,
-        before_row.visibility_events,
-        row.visibility_events
-    );
     if row_changed {
         active.update(conn).await.map_err(ApiError::internal)?;
     }
 
     save_repository_fact_delta(conn, before, after).await?;
+    save_repository_history_delta(
+        conn,
+        RepositoryHistoryDelta {
+            before_graph: &before.graph,
+            after_graph: &after.graph,
+            before_events: &before.visibility_events,
+            after_events: &after.visibility_events,
+            before_live_files: &before.live_files,
+            after_live_files: &after.live_files,
+            history_rewritten: before.repo_config.history.rewrites
+                != after.repo_config.history.rewrites,
+        },
+    )
+    .await?;
     save_repository_relation_delta(conn, before, after).await?;
     enqueue_projection_read_model_rebuild(conn, after).await?;
     Ok(())
@@ -123,12 +145,34 @@ where
             .await
             .map_err(ApiError::internal)?;
     }
-    if let Some(snapshot) = repo.git_snapshot.as_ref() {
-        entities::repository_git_snapshot::Model::from_domain(&repo_id, snapshot)?
+    if let Some(head) = repo.git_head.as_ref() {
+        entities::git_head::Model::from_domain(&repo_id, head)?
             .into_active_model()
             .insert(conn)
             .await
             .map_err(ApiError::internal)?;
+        insert_object_reference(conn, "git_manifest", &repo_id, &head.manifest).await?;
+    }
+    for segment in &repo.git_segments {
+        entities::git_segment::Model::from_domain(&repo_id, segment)?
+            .into_active_model()
+            .insert(conn)
+            .await
+            .map_err(ApiError::internal)?;
+        insert_object_reference(
+            conn,
+            "git_segment",
+            &format!("{repo_id}:{}", segment.sequence),
+            &segment.object,
+        )
+        .await?;
+        insert_object_reference(
+            conn,
+            "git_segment_manifest",
+            &format!("{repo_id}:{}", segment.sequence),
+            &segment.manifest,
+        )
+        .await?;
     }
 
     Ok(())
@@ -169,17 +213,90 @@ where
                 .map_err(ApiError::internal)?;
         }
     }
-    if before.git_snapshot != after.git_snapshot {
-        entities::repository_git_snapshot::Entity::delete_by_id(repo_id.clone())
+    if before.git_head != after.git_head {
+        entities::git_head::Entity::delete_by_id(repo_id.clone())
             .exec(conn)
             .await
             .map_err(ApiError::internal)?;
-        if let Some(snapshot) = &after.git_snapshot {
-            entities::repository_git_snapshot::Model::from_domain(repo_id, snapshot)?
+        if let Some(head) = &after.git_head {
+            entities::git_head::Model::from_domain(repo_id, head)?
                 .into_active_model()
                 .insert(conn)
                 .await
                 .map_err(ApiError::internal)?;
+        }
+        replace_object_reference(
+            conn,
+            "git_manifest",
+            repo_id,
+            after.git_head.as_ref().map(|head| &head.manifest),
+        )
+        .await?;
+    }
+    let segments_are_append_only = after.git_segments.len() >= before.git_segments.len()
+        && after.git_segments[..before.git_segments.len()] == before.git_segments[..];
+    if !segments_are_append_only {
+        for segment in &before.git_segments {
+            delete_object_reference(
+                conn,
+                "git_segment",
+                &format!("{repo_id}:{}", segment.sequence),
+            )
+            .await?;
+            delete_object_reference(
+                conn,
+                "git_segment_manifest",
+                &format!("{repo_id}:{}", segment.sequence),
+            )
+            .await?;
+        }
+        entities::git_segment::Entity::delete_many()
+            .filter(entities::git_segment::Column::RepoId.eq(repo_id.clone()))
+            .exec(conn)
+            .await
+            .map_err(ApiError::internal)?;
+        for segment in &after.git_segments {
+            entities::git_segment::Model::from_domain(repo_id, segment)?
+                .into_active_model()
+                .insert(conn)
+                .await
+                .map_err(ApiError::internal)?;
+            insert_object_reference(
+                conn,
+                "git_segment",
+                &format!("{repo_id}:{}", segment.sequence),
+                &segment.object,
+            )
+            .await?;
+            insert_object_reference(
+                conn,
+                "git_segment_manifest",
+                &format!("{repo_id}:{}", segment.sequence),
+                &segment.manifest,
+            )
+            .await?;
+        }
+    } else {
+        for segment in &after.git_segments[before.git_segments.len()..] {
+            entities::git_segment::Model::from_domain(repo_id, segment)?
+                .into_active_model()
+                .insert(conn)
+                .await
+                .map_err(ApiError::internal)?;
+            insert_object_reference(
+                conn,
+                "git_segment",
+                &format!("{repo_id}:{}", segment.sequence),
+                &segment.object,
+            )
+            .await?;
+            insert_object_reference(
+                conn,
+                "git_segment_manifest",
+                &format!("{repo_id}:{}", segment.sequence),
+                &segment.manifest,
+            )
+            .await?;
         }
     }
     Ok(())
@@ -335,15 +452,27 @@ where
         }
     }
 
-    let git_snapshots = entities::repository_git_snapshot::Entity::find()
-        .filter(entities::repository_git_snapshot::Column::RepoId.is_in(repo_ids.to_vec()))
-        .order_by_asc(entities::repository_git_snapshot::Column::RepoId)
+    let git_heads = entities::git_head::Entity::find()
+        .filter(entities::git_head::Column::RepoId.is_in(repo_ids.to_vec()))
+        .order_by_asc(entities::git_head::Column::RepoId)
         .all(conn)
         .await
         .map_err(ApiError::internal)?;
-    for row in git_snapshots {
+    for row in git_heads {
         if let Some(fact) = facts.get_mut(&row.repo_id) {
-            fact.git_snapshot = Some(row.try_into_domain()?);
+            fact.git_head = Some(row.try_into_domain()?);
+        }
+    }
+    let git_segments = entities::git_segment::Entity::find()
+        .filter(entities::git_segment::Column::RepoId.is_in(repo_ids.to_vec()))
+        .order_by_asc(entities::git_segment::Column::RepoId)
+        .order_by_asc(entities::git_segment::Column::Sequence)
+        .all(conn)
+        .await
+        .map_err(ApiError::internal)?;
+    for row in git_segments {
+        if let Some(fact) = facts.get_mut(&row.repo_id) {
+            fact.git_segments.push(row.try_into_domain()?);
         }
     }
 

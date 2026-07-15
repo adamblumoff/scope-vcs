@@ -31,7 +31,7 @@ fn push_creates_missing_config_before_remote_lookup() {
         "no Scope Git remote found; pass --remote <name> or run scope init",
     );
     assert!(dir.path().join(".scope/repo.json").is_file());
-    assert!(stderr.contains("Working tree has uncommitted changes."));
+    assert!(!stderr.contains("Working tree has uncommitted changes."));
 }
 
 #[test]
@@ -61,7 +61,7 @@ fn push_validates_config_before_remote_lookup() {
 #[test]
 fn push_warns_about_dirty_state_before_remote_lookup() {
     let dir = configured_repo("dirty");
-    fs::write(dir.path().join("dirty.txt"), "uncommitted\n").unwrap();
+    fs::write(dir.path().join("README.md"), "uncommitted\n").unwrap();
     let stderr = scope_failure(
         dir.path(),
         ["push", "--no-review"],

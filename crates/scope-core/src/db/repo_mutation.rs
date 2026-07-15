@@ -11,21 +11,21 @@ use std::sync::Arc;
 
 pub struct RepositoryMutation<R> {
     pub result: R,
-    pub source_blobs_to_delete: Vec<SourceBlob>,
+    pub orphan_objects: Vec<SourceBlob>,
 }
 
 impl<R> RepositoryMutation<R> {
     pub fn new(result: R) -> Self {
         Self {
             result,
-            source_blobs_to_delete: Vec::new(),
+            orphan_objects: Vec::new(),
         }
     }
 
-    pub fn with_source_blob_deletions(result: R, source_blobs_to_delete: Vec<SourceBlob>) -> Self {
+    pub fn with_source_blob_deletions(result: R, orphan_objects: Vec<SourceBlob>) -> Self {
         Self {
             result,
-            source_blobs_to_delete,
+            orphan_objects,
         }
     }
 }
@@ -58,8 +58,8 @@ impl MetadataStore {
         let before = repo.clone();
         let mutation = op(&mut repo)?;
         save_repository_delta(&tx, &before, &repo).await?;
-        if !mutation.source_blobs_to_delete.is_empty() {
-            queue_pending_source_blob_deletion_rows(&tx, mutation.source_blobs_to_delete).await?;
+        if !mutation.orphan_objects.is_empty() {
+            queue_pending_source_blob_deletion_rows(&tx, mutation.orphan_objects).await?;
         }
         tx.commit().await.map_err(ApiError::internal)?;
         Ok(mutation.result)

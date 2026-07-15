@@ -102,13 +102,9 @@ export type CreatePushIntentRequest = { head_oid: string, base_config_hash: stri
 
 export type CreatePushIntentResponse = { token: string, base_head_oid: GitOid | null, expires_at_unix: number, };
 
-export type CompletePushIntentRequest = { token: string, };
-
-export type CompletePushIntentResponse = { config_applied: boolean, };
-
 export type RepoInitResponse = { repo: RepoSummaryResponse, git_remote_url: string, remote_name: string, push_branch: string, token: FirstPushTokenResponse | null, push_token: GitPushTokenResponse | null, };
 
-export type RepoConfigResponse = { config: RepoConfig, config_hash: string, };
+export type RepoConfigResponse = { config: RepoConfig, config_hash: string, lifecycle_state: RepoPublicationState, access: RepositoryAccessResponse, head_oid: string | null, };
 
 export type FirstPushTokenResponse = { status: FirstPushTokenStatus, created_at_unix: number, expires_at_unix: number, used_at_unix: number | null, secret: string | null, };
 
@@ -219,7 +215,6 @@ export const ApiRouteTemplates = {
   repo: "/v1/repos/{owner}/{repo}",
   repoConfig: "/v1/repos/{owner}/{repo}/config",
   repoPushIntents: "/v1/repos/{owner}/{repo}/push-intents",
-  repoPushIntentsComplete: "/v1/repos/{owner}/{repo}/push-intents/complete",
   repoRequests: "/v1/repos/{owner}/{repo}/requests",
   repoRequest: "/v1/repos/{owner}/{repo}/requests/{request_id}",
   repoSession: "/v1/repos/{owner}/{repo}/session",

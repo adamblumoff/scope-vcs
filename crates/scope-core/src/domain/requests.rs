@@ -172,7 +172,7 @@ pub struct RecordRequestRevisionInput {
 pub struct RequestRevisionMutation {
     pub request: Request,
     pub event: RequestEvent,
-    pub source_blobs_to_delete: Vec<SourceBlob>,
+    pub orphan_objects: Vec<SourceBlob>,
 }
 
 #[derive(Clone, Debug)]
@@ -269,7 +269,7 @@ pub enum DeleteRequestMutation {
     DeletedWorking {
         request: Request,
         events: Vec<RequestEvent>,
-        source_blobs_to_delete: Vec<SourceBlob>,
+        orphan_objects: Vec<SourceBlob>,
     },
     Withdrawn {
         request: Box<Request>,
@@ -387,7 +387,7 @@ pub fn record_request_revision(
     Ok(RequestRevisionMutation {
         request,
         event,
-        source_blobs_to_delete: old_git_snapshot.into_iter().collect(),
+        orphan_objects: old_git_snapshot.into_iter().collect(),
     })
 }
 
@@ -431,7 +431,7 @@ pub fn delete_request(
             .filter_map(|event_id| events.remove(&event_id))
             .collect::<Vec<_>>();
         return Ok(DeleteRequestMutation::DeletedWorking {
-            source_blobs_to_delete: request.git_snapshot.clone().into_iter().collect(),
+            orphan_objects: request.git_snapshot.clone().into_iter().collect(),
             request,
             events,
         });

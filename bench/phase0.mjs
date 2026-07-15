@@ -12,10 +12,12 @@ const concurrency = number('SCOPE_BENCH_CONCURRENCY', 6);
 const timeout = number('SCOPE_BENCH_TIMEOUT_MS', 15_000);
 const outputRoot = resolve(process.env.SCOPE_BENCH_OUTPUT_DIR || '.tmp/bench/phase0');
 const owner = handle(process.env.SCOPE_BENCH_OWNER || process.env.SCOPE_DEV_USER_HANDLE || 'dev');
+const pushMatrix = process.env.SCOPE_BENCH_PUSH_MATRIX || 'smoke';
+const caseFilter = process.env.SCOPE_BENCH_CASE || '';
 
 await ready();
 const results = [];
-for (const entry of cases()) {
+for (const entry of cases().filter((entry) => !caseFilter || entry.name.includes(caseFilter))) {
   process.stdout.write(`running ${entry.name}... `);
   const result = await measure(entry);
   results.push(result);
@@ -29,7 +31,7 @@ const report = {
   generatedAt,
   apiUrl: api,
   owner,
-  config: { count, warmup, concurrency, timeout, authenticated: Boolean(token) },
+  config: { count, warmup, concurrency, timeout, authenticated: Boolean(token), pushMatrix, caseFilter },
   cases: results,
   skipped: token ? [] : [{ name: 'authenticated reads and receive-pack', reason: 'auth token is not set' }],
 };
@@ -50,12 +52,24 @@ function cases() {
     http('commit history', `${publicRepo}/commits?audience=public`),
     { name: 'git ls-remote', command: ['git', 'ls-remote', `${api}/git/public/${owner}/public-demo`] },
   ];
-  if (token) entries.push(
-    http('authenticated repo list', '/v1/repos', true),
-    http('private projection preview', `${updateRepo}/projection-preview?audience=private&source=live`, true),
-    { name: 'git receive-pack first push', push: true },
-  );
+  if (token) {
+    entries.push(
+      http('authenticated repo list', '/v1/repos', true),
+      http('private projection preview', `${updateRepo}/projection-preview?audience=private&source=live`, true),
+      pushCase('git push small first', { files: 100, bytesPerFile: 10 * 1024 }),
+    );
+    if (pushMatrix === 'full') entries.push(
+      pushCase('git push many small first', { files: 10_000, bytesPerFile: 5 * 1024 }),
+      pushCase('git push one-file large-tree delta', { files: 10_000, bytesPerFile: 256, changedFiles: 1 }),
+      pushCase('git push deep-history delta', { files: 10, bytesPerFile: 256, history: 1_000, changedFiles: 1 }),
+      pushCase('git push wide delta', { files: 2_000, bytesPerFile: 256, changedFiles: 1_000 }),
+    );
+  }
   return entries;
+}
+
+function pushCase(name, fixture) {
+  return { name, push: fixture };
 }
 
 function http(name, path, auth = false) {
@@ -63,7 +77,7 @@ function http(name, path, auth = false) {
 }
 
 async function measure(entry) {
-  const sample = () => entry.push ? push() : entry.url ? request(entry) : command(entry.command);
+  const sample = () => entry.push ? push(entry.push) : entry.url ? request(entry) : command(entry.command);
   await many(warmup, sample);
   const sequential = await many(count, sample);
   const burst = entry.url
@@ -98,18 +112,15 @@ async function request(entry) {
   }
 }
 
-async function push() {
+async function push(spec) {
   let fixture;
   try {
-    fixture = await pushFixture();
+    fixture = await pushFixture(spec);
     const result = await command(
       ['git', '-c', 'push.recurseSubmodules=no', 'push', fixture.remote, `HEAD:${fixture.branch}`],
       fixture.dir,
       authEnvironment(fixture.remote, fixture.pushToken, fixture.pushIntent),
     );
-    if (result.ok) await apiJson(`/v1/repos/${fixture.owner}/${fixture.repo}/push-intents/complete`, {
-      method: 'POST', body: { token: fixture.pushIntent },
-    });
     return result;
   } catch (error) {
     return sample(false, performance.now(), null, 0, message(error));
@@ -121,7 +132,7 @@ async function push() {
   }
 }
 
-async function pushFixture() {
+async function pushFixture(spec) {
   await mkdir(outputRoot, { recursive: true });
   const created = await apiJson('/v1/repos', {
     method: 'POST',
@@ -141,9 +152,21 @@ async function pushFixture() {
     ['config', 'user.email', 'bench@scope.local'],
     ['config', 'user.name', 'Scope Bench'],
   ]) await checkedGit(args, fixture.dir);
-  await writeFile(join(fixture.dir, 'README.md'), '# Scope benchmark\n');
+  const payload = 'x'.repeat(Math.max(1, spec.bytesPerFile - 1)) + '\n';
+  for (let offset = 0; offset < spec.files; offset += 250) {
+    const writes = [];
+    for (let index = offset; index < Math.min(spec.files, offset + 250); index += 1) {
+      const dir = join(fixture.dir, 'fixture', String(Math.floor(index / 100)));
+      await mkdir(dir, { recursive: true });
+      writes.push(writeFile(join(dir, `${String(index).padStart(6, '0')}.txt`), payload));
+    }
+    await Promise.all(writes);
+  }
   await checkedGit(['add', '--all'], fixture.dir);
   await checkedGit(['commit', '-m', 'Benchmark fixture'], fixture.dir);
+  for (let index = 0; index < (spec.history || 0); index += 1) {
+    await checkedGit(['commit', '--allow-empty', '-m', `History ${index + 1}`], fixture.dir);
+  }
   const config = await apiJson(`/v1/repos/${fixture.owner}/${fixture.repo}/config`);
   const headOid = await gitOutput(['rev-parse', 'HEAD'], fixture.dir);
   const intent = await apiJson(`/v1/repos/${fixture.owner}/${fixture.repo}/push-intents`, {
@@ -151,6 +174,28 @@ async function pushFixture() {
     body: { head_oid: headOid, base_config_hash: config.config_hash, config: config.config },
   });
   fixture.pushIntent = intent.token;
+  if (spec.changedFiles) {
+    const initial = await command(
+      ['git', '-c', 'push.recurseSubmodules=no', 'push', fixture.remote, `HEAD:${fixture.branch}`],
+      fixture.dir,
+      authEnvironment(fixture.remote, fixture.pushToken, fixture.pushIntent),
+    );
+    if (!initial.ok) throw new Error(initial.error || 'initial benchmark push failed');
+    fixture.pushToken = token;
+    for (let index = 0; index < spec.changedFiles; index += 1) {
+      const path = join(fixture.dir, 'fixture', String(Math.floor(index / 100)), `${String(index).padStart(6, '0')}.txt`);
+      await writeFile(path, `${payload.trimEnd()} updated\n`);
+    }
+    await checkedGit(['add', '--all'], fixture.dir);
+    await checkedGit(['commit', '-m', `Update ${spec.changedFiles} files`], fixture.dir);
+    const nextConfig = await apiJson(`/v1/repos/${fixture.owner}/${fixture.repo}/config`);
+    const nextHead = await gitOutput(['rev-parse', 'HEAD'], fixture.dir);
+    const nextIntent = await apiJson(`/v1/repos/${fixture.owner}/${fixture.repo}/push-intents`, {
+      method: 'POST',
+      body: { head_oid: nextHead, base_config_hash: nextConfig.config_hash, config: nextConfig.config },
+    });
+    fixture.pushIntent = nextIntent.token;
+  }
   return fixture;
 }
 

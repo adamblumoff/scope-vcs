@@ -17,15 +17,12 @@ use crate::{
     git::{
         import::{apply_request_merge_update, git_refs},
         request_refs::delete_request_ref_from_store,
-        storage::cached_raw_git_snapshot_repo,
+        storage::cached_raw_git_repo,
         upload::projection_bare_repo_for_state,
     },
     http::{request_merges::clean_merge_update, responses::*},
     persistence::unix_now,
-    state::{
-        AppState, best_effort_drain_pending_source_blob_deletions, ensure_repo_read, find_repo,
-        repo_config_fingerprint,
-    },
+    state::{AppState, ensure_repo_read, find_repo, repo_config_fingerprint},
 };
 use axum::{
     Json,
@@ -112,7 +109,6 @@ pub(crate) async fn delete_request(
     match mutation {
         DeleteRequestMutation::DeletedWorking { .. } => {
             delete_request_ref_from_store(&state, &owner, &repo_name, &request_ref)?;
-            best_effort_drain_pending_source_blob_deletions(&state).await;
             publish_request_summary_refresh(&state, &repo, "request-deleted").await;
             Ok(Json(RequestDeleteResponse {
                 deleted: true,
@@ -378,18 +374,13 @@ pub(crate) async fn merge_request(
         &current_main_oid,
     )
     .await?;
-    update.base_git_snapshot_key = Some(
-        repo.git_snapshot
+    update.base_git_manifest_key = Some(
+        repo.git_head
             .as_ref()
-            .map(|blob| blob.object_key.clone()),
+            .map(|head| head.manifest.object_key.clone()),
     );
     update.base_config_hash = repo_config_fingerprint(&repo.repo_config)?;
-    let uploaded_blobs = update
-        .uploaded_blobs
-        .iter()
-        .cloned()
-        .chain(std::iter::once(update.git_snapshot.clone()))
-        .collect::<Vec<_>>();
+    let durable_objects = update.durable_objects.clone();
     let now_unix = unix_now()?;
     let settlement = settlement_for(
         request.stake_credits,
@@ -422,11 +413,10 @@ pub(crate) async fn merge_request(
             mutation.request
         }
         Err(error) => {
-            crate::state::best_effort_cleanup_rollback_source_blobs(&state, &uploaded_blobs).await;
+            crate::state::best_effort_cleanup_rollback_source_blobs(&state, &durable_objects).await;
             return Err(error.into());
         }
     };
-    best_effort_drain_pending_source_blob_deletions(&state).await;
     let repo = find_repo(&state, &owner, &repo_name).await?;
     state
         .publish_repo_change(
@@ -522,8 +512,8 @@ fn current_main_oid_for_access(
 ) -> Result<Option<String>, ApiError> {
     match access.actor {
         RepositoryActor::Owner | RepositoryActor::Member => {
-            if let Some(snapshot) = repo.git_snapshot.as_ref() {
-                let repo_path = cached_raw_git_snapshot_repo(state, snapshot)?;
+            if let Some(head) = repo.git_head.as_ref() {
+                let repo_path = cached_raw_git_repo(state, &head.manifest)?;
                 return main_oid_from_git_repo(&repo_path);
             }
             projection_main_oid(state, repo, ProjectionViewKey::Private)
@@ -540,8 +530,8 @@ fn current_main_oid_for_audience(
     match audience {
         RequestAudience::Public => projection_main_oid(state, repo, ProjectionViewKey::Public),
         RequestAudience::Private => {
-            if let Some(snapshot) = repo.git_snapshot.as_ref() {
-                let repo_path = cached_raw_git_snapshot_repo(state, snapshot)?;
+            if let Some(head) = repo.git_head.as_ref() {
+                let repo_path = cached_raw_git_repo(state, &head.manifest)?;
                 return main_oid_from_git_repo(&repo_path);
             }
             projection_main_oid(state, repo, ProjectionViewKey::Private)

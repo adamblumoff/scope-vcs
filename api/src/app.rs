@@ -84,10 +84,6 @@ pub fn router(state: AppState) -> Router {
             routes::REPO_PUSH_INTENTS,
             post(http::repos::create_push_intent),
         )
-        .route(
-            routes::REPO_PUSH_INTENTS_COMPLETE,
-            post(http::repos::complete_push_intent),
-        )
         .route(routes::REPO_SESSION, get(http::account::get_session))
         .route(routes::REPO_FILES, get(http::repos::get_files))
         .route(

@@ -189,10 +189,63 @@ CREATE TABLE scope_repositories (
     default_visibility character varying NOT NULL,
     change_version bigint NOT NULL,
     repo_config jsonb NOT NULL,
-    policy jsonb NOT NULL,
-    graph jsonb NOT NULL,
-    visibility_events jsonb NOT NULL
+    policy jsonb NOT NULL
 );
+
+CREATE TABLE scope_logical_commits (
+    id character varying NOT NULL,
+    repo_id character varying NOT NULL,
+    ordinal bigint NOT NULL,
+    parent_ids jsonb NOT NULL,
+    author_id character varying NOT NULL,
+    author_visibility character varying NOT NULL,
+    message text NOT NULL,
+    PRIMARY KEY (repo_id, id),
+    UNIQUE (repo_id, ordinal)
+);
+
+CREATE TABLE scope_file_changes (
+    repo_id character varying NOT NULL,
+    commit_id character varying NOT NULL,
+    ordinal bigint NOT NULL,
+    path text NOT NULL,
+    old_content jsonb,
+    new_content jsonb,
+    visibility character varying NOT NULL,
+    PRIMARY KEY (repo_id, commit_id, ordinal)
+);
+
+CREATE TABLE scope_visibility_events (
+    repo_id character varying NOT NULL,
+    id character varying NOT NULL,
+    ordinal bigint NOT NULL,
+    after_commit_id character varying,
+    source_commit_id character varying,
+    author_id character varying NOT NULL,
+    path text NOT NULL,
+    old_visibility character varying NOT NULL,
+    new_visibility character varying NOT NULL,
+    current_content jsonb,
+    PRIMARY KEY (repo_id, id),
+    UNIQUE (repo_id, ordinal)
+);
+
+CREATE TABLE scope_live_files (
+    repo_id character varying NOT NULL,
+    path text NOT NULL,
+    content jsonb NOT NULL,
+    PRIMARY KEY (repo_id, path)
+);
+
+CREATE TABLE scope_object_references (
+    object_key character varying NOT NULL,
+    ref_kind character varying NOT NULL,
+    ref_id character varying NOT NULL,
+    PRIMARY KEY (object_key, ref_kind, ref_id)
+);
+
+CREATE INDEX scope_object_references_owner
+    ON scope_object_references (ref_kind, ref_id);
 
 
 --
@@ -222,15 +275,30 @@ CREATE TABLE scope_repository_git_push_tokens (
 
 
 --
--- Name: scope_repository_git_snapshots; Type: TABLE; Schema: scope_test_2249234_1783653779131957768; Owner: -
+-- Name: scope_git_heads; Type: TABLE; Schema: public; Owner: -
 --
 
-CREATE TABLE scope_repository_git_snapshots (
+CREATE TABLE scope_git_heads (
     repo_id character varying NOT NULL,
+    head_oid character varying NOT NULL,
+    segment_sequence bigint NOT NULL,
+    change_version bigint NOT NULL,
+    manifest_object_key character varying NOT NULL,
+    manifest_sha256 character varying NOT NULL,
+    manifest_size_bytes bigint NOT NULL
+);
+
+CREATE TABLE scope_git_segments (
+    repo_id character varying NOT NULL,
+    sequence bigint NOT NULL,
+    base_oid character varying,
+    head_oid character varying NOT NULL,
     object_key character varying NOT NULL,
     sha256 character varying NOT NULL,
-    git_oid character varying NOT NULL,
-    size_bytes bigint NOT NULL
+    size_bytes bigint NOT NULL,
+    manifest_object_key character varying NOT NULL,
+    manifest_sha256 character varying NOT NULL,
+    manifest_size_bytes bigint NOT NULL
 );
 
 
@@ -311,10 +379,10 @@ CREATE TABLE scope_requests (
 
 
 --
--- Name: scope_source_blob_cleanup_jobs; Type: TABLE; Schema: scope_test_2249234_1783653779131957768; Owner: -
+-- Name: scope_orphan_object_jobs; Type: TABLE; Schema: public; Owner: -
 --
 
-CREATE TABLE scope_source_blob_cleanup_jobs (
+CREATE TABLE scope_orphan_object_jobs (
     object_key character varying NOT NULL,
     generation character varying NOT NULL,
     sha256 character varying NOT NULL,
@@ -504,11 +572,14 @@ ALTER TABLE ONLY scope_repository_git_push_tokens
 
 
 --
--- Name: scope_repository_git_snapshots scope_repository_git_snapshots_pkey; Type: CONSTRAINT; Schema: scope_test_2249234_1783653779131957768; Owner: -
+-- Name: scope_git_heads scope_git_heads_pkey; Type: CONSTRAINT; Schema: public; Owner: -
 --
 
-ALTER TABLE ONLY scope_repository_git_snapshots
-    ADD CONSTRAINT scope_repository_git_snapshots_pkey PRIMARY KEY (repo_id);
+ALTER TABLE ONLY scope_git_heads
+    ADD CONSTRAINT scope_git_heads_pkey PRIMARY KEY (repo_id);
+
+ALTER TABLE ONLY scope_git_segments
+    ADD CONSTRAINT scope_git_segments_pkey PRIMARY KEY (repo_id, sequence);
 
 
 --
@@ -544,11 +615,11 @@ ALTER TABLE ONLY scope_requests
 
 
 --
--- Name: scope_source_blob_cleanup_jobs scope_source_blob_cleanup_jobs_pkey; Type: CONSTRAINT; Schema: scope_test_2249234_1783653779131957768; Owner: -
+-- Name: scope_orphan_object_jobs scope_orphan_object_jobs_pkey; Type: CONSTRAINT; Schema: public; Owner: -
 --
 
-ALTER TABLE ONLY scope_source_blob_cleanup_jobs
-    ADD CONSTRAINT scope_source_blob_cleanup_jobs_pkey PRIMARY KEY (object_key);
+ALTER TABLE ONLY scope_orphan_object_jobs
+    ADD CONSTRAINT scope_orphan_object_jobs_pkey PRIMARY KEY (object_key);
 
 
 --
@@ -688,10 +759,10 @@ CREATE INDEX idx_scope_requests_repo_state ON scope_requests USING btree (repo_i
 
 
 --
--- Name: idx_scope_source_blob_cleanup_jobs_pending; Type: INDEX; Schema: scope_test_2249234_1783653779131957768; Owner: -
+-- Name: idx_scope_orphan_object_jobs_pending; Type: INDEX; Schema: public; Owner: -
 --
 
-CREATE INDEX idx_scope_source_blob_cleanup_jobs_pending ON scope_source_blob_cleanup_jobs USING btree (completed_at_unix, next_run_at_unix);
+CREATE INDEX idx_scope_orphan_object_jobs_pending ON scope_orphan_object_jobs USING btree (completed_at_unix, next_run_at_unix);
 
 
 --
@@ -822,11 +893,14 @@ ALTER TABLE ONLY scope_repository_git_push_tokens
 
 
 --
--- Name: scope_repository_git_snapshots fk_scope_repository_git_snapshots_repo; Type: FK CONSTRAINT; Schema: scope_test_2249234_1783653779131957768; Owner: -
+-- Name: scope_git_heads fk_scope_git_heads_repo; Type: FK CONSTRAINT; Schema: public; Owner: -
 --
 
-ALTER TABLE ONLY scope_repository_git_snapshots
-    ADD CONSTRAINT fk_scope_repository_git_snapshots_repo FOREIGN KEY (repo_id) REFERENCES scope_repositories(id) ON DELETE CASCADE;
+ALTER TABLE ONLY scope_git_heads
+    ADD CONSTRAINT fk_scope_git_heads_repo FOREIGN KEY (repo_id) REFERENCES scope_repositories(id) ON DELETE CASCADE;
+
+ALTER TABLE ONLY scope_git_segments
+    ADD CONSTRAINT fk_scope_git_segments_repo FOREIGN KEY (repo_id) REFERENCES scope_repositories(id) ON DELETE CASCADE;
 
 
 --
@@ -922,8 +996,14 @@ ALTER TABLE scope_repository_first_push_tokens
     );
 ALTER TABLE scope_repository_git_push_tokens
     ADD CONSTRAINT scope_git_push_token_time CHECK (created_at_unix >= 0);
-ALTER TABLE scope_repository_git_snapshots
-    ADD CONSTRAINT scope_git_snapshot_size CHECK (size_bytes >= 0);
+ALTER TABLE scope_git_heads
+    ADD CONSTRAINT scope_git_head_values CHECK (
+        segment_sequence >= 0 AND change_version >= 0 AND manifest_size_bytes >= 0
+    );
+ALTER TABLE scope_git_segments
+    ADD CONSTRAINT scope_git_segment_values CHECK (
+        sequence > 0 AND size_bytes >= 0 AND manifest_size_bytes >= 0
+    );
 ALTER TABLE scope_repository_members
     ADD CONSTRAINT scope_repository_member_times CHECK (
         created_at_unix >= 0 AND updated_at_unix >= 0
@@ -965,7 +1045,7 @@ ALTER TABLE scope_repo_storage_cleanup_jobs
         attempts >= 0 AND next_run_at_unix >= 0 AND created_at_unix >= 0 AND
         updated_at_unix >= 0 AND (completed_at_unix IS NULL OR completed_at_unix >= 0)
     );
-ALTER TABLE scope_source_blob_cleanup_jobs
+ALTER TABLE scope_orphan_object_jobs
     ADD CONSTRAINT scope_blob_cleanup_values CHECK (
         size_bytes >= 0 AND attempts >= 0 AND next_run_at_unix >= 0 AND
         created_at_unix >= 0 AND updated_at_unix >= 0 AND
@@ -981,6 +1061,17 @@ ALTER TABLE scope_outbox_jobs
     );
 ALTER TABLE scope_metadata_reset_events
     ADD CONSTRAINT scope_metadata_reset_event_time CHECK (reset_at_unix >= 0);
+ALTER TABLE scope_logical_commits
+    ADD CONSTRAINT fk_scope_logical_commits_repo FOREIGN KEY (repo_id) REFERENCES scope_repositories(id) ON DELETE CASCADE,
+    ADD CONSTRAINT scope_logical_commit_ordinal CHECK (ordinal >= 0);
+ALTER TABLE scope_file_changes
+    ADD CONSTRAINT fk_scope_file_changes_commit FOREIGN KEY (repo_id, commit_id) REFERENCES scope_logical_commits(repo_id, id) ON DELETE CASCADE,
+    ADD CONSTRAINT scope_file_change_ordinal CHECK (ordinal >= 0);
+ALTER TABLE scope_visibility_events
+    ADD CONSTRAINT fk_scope_visibility_events_repo FOREIGN KEY (repo_id) REFERENCES scope_repositories(id) ON DELETE CASCADE,
+    ADD CONSTRAINT scope_visibility_event_ordinal CHECK (ordinal >= 0);
+ALTER TABLE scope_live_files
+    ADD CONSTRAINT fk_scope_live_files_repo FOREIGN KEY (repo_id) REFERENCES scope_repositories(id) ON DELETE CASCADE;
 
 -- PostgreSQL database dump complete
 --

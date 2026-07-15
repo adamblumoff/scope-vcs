@@ -241,44 +241,6 @@ pub fn create_push_intent(
         .context("parse push intent response")
 }
 
-pub fn complete_push_intent(
-    client: &Client,
-    api_url: &str,
-    session_token: &str,
-    owner: &str,
-    repo: &str,
-    token: &str,
-) -> anyhow::Result<()> {
-    let response = client
-        .post(format!(
-            "{api_url}{}",
-            scope_api_contract::routes::repo_push_intents_complete(owner, repo)
-        ))
-        .bearer_auth(session_token)
-        .json(&CompletePushIntentRequest {
-            token: token.to_string(),
-        })
-        .send()
-        .with_context(|| format!("complete push intent for {owner}/{repo}"))?;
-    match response.status() {
-        StatusCode::UNAUTHORIZED => {
-            anyhow::bail!("not signed in; run scope login")
-        }
-        StatusCode::FORBIDDEN => {
-            anyhow::bail!("you do not have write access to {owner}/{repo}")
-        }
-        StatusCode::NOT_FOUND => {
-            anyhow::bail!("repo {owner}/{repo} not found")
-        }
-        _ => {}
-    }
-
-    response
-        .error_for_status()
-        .with_context(|| format!("complete push intent for {owner}/{repo}"))?;
-    Ok(())
-}
-
 pub fn rollback_created_repo(
     client: &Client,
     api_url: &str,

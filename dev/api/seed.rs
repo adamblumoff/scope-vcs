@@ -10,12 +10,20 @@ use crate::{
             SubmitRequestInput, canonical_request_ref, delete_request, mark_request_needs_response,
             merge_request, record_working_request_upload, start_request, submit_request,
         },
-        store::{AppCatalog, RepoPublicationState, SourceBlob, StoredRepository, UserAccount},
+        store::{
+            AppCatalog, GitHead, GitSegment, RepoPublicationState, SourceBlob, StoredRepository,
+            UserAccount,
+        },
     },
     error::ApiError,
     object_store::{ObjectStore, put_repo_object, put_source_blob},
 };
-use std::{fs, path::Path as FsPath, process::Command};
+use std::{
+    fs,
+    io::Write,
+    path::Path as FsPath,
+    process::{Command, Stdio},
+};
 
 pub(super) const DEV_SEED_USER_ID: &str = "scope_usr_dev_seed";
 const PUBLIC_DEMO_README: &str =
@@ -84,8 +92,9 @@ fn published_demo(
             add_change(private_path.as_str(), private_plan, Visibility::Private)?,
         ],
     ));
+    populate_seed_live_files(&mut repo);
     repo.record.publication_state = RepoPublicationState::Published;
-    repo.git_snapshot = Some(git_snapshot(
+    let (head, segment) = git_segment_state(
         object_store,
         &repo,
         "public-demo-live",
@@ -97,7 +106,9 @@ fn published_demo(
             ],
             message: "Seed public demo",
         }],
-    )?);
+    )?;
+    repo.git_head = Some(head);
+    repo.git_segments.push(segment);
     Ok(repo)
 }
 
@@ -130,6 +141,7 @@ fn update_demo(
             Visibility::Public,
         )?],
     ));
+    populate_seed_live_files(&mut repo);
     repo.record.publication_state = RepoPublicationState::Published;
     let initial = SeedGitCommit {
         files: &[("README.md", UPDATE_DEMO_INITIAL_README)],
@@ -139,9 +151,25 @@ fn update_demo(
         files: &[("docs/release.md", UPDATE_DEMO_RELEASE_GUIDE)],
         message: "Document release flow",
     };
-    let (snapshot, gallery) = update_demo_git_snapshot(object_store, &repo, initial, accepted)?;
-    repo.git_snapshot = Some(snapshot);
+    let (head, segment, gallery) =
+        update_demo_git_snapshot(object_store, &repo, initial, accepted)?;
+    repo.git_head = Some(head);
+    repo.git_segments.push(segment);
     Ok((repo, gallery))
+}
+
+fn populate_seed_live_files(repo: &mut StoredRepository) {
+    repo.live_files.clear();
+    for change in repo.graph.commits.iter().flat_map(|commit| &commit.changes) {
+        match &change.new_content {
+            Some(content) => {
+                repo.live_files.insert(change.path.clone(), content.clone());
+            }
+            None => {
+                repo.live_files.remove(&change.path);
+            }
+        }
+    }
 }
 
 type SeedRequestGallery = Vec<SeedRequest>;
@@ -353,15 +381,15 @@ struct SeedGitCommit<'a> {
     message: &'a str,
 }
 
-fn git_snapshot(
+fn git_segment_state(
     object_store: &dyn ObjectStore,
     repo: &StoredRepository,
     label: &str,
     commits: &[SeedGitCommit<'_>],
-) -> Result<SourceBlob, ApiError> {
+) -> Result<(GitHead, GitSegment), ApiError> {
     with_seed_git_repo(label, |repo_path| {
         apply_seed_commits(repo_path, commits)?;
-        store_seed_bundle(object_store, repo, repo_path, "scope-seed", &["--all"])
+        store_seed_git_segment(object_store, repo, repo_path)
     })
 }
 
@@ -370,7 +398,7 @@ fn update_demo_git_snapshot(
     repo: &StoredRepository,
     initial: SeedGitCommit<'_>,
     accepted: SeedGitCommit<'_>,
-) -> Result<(SourceBlob, SeedRequestGallery), ApiError> {
+) -> Result<(GitHead, GitSegment, SeedRequestGallery), ApiError> {
     with_seed_git_repo("update-demo-live", |repo_path| {
         apply_seed_commits(repo_path, &[initial])?;
         let initial_oid = seed_git_head(repo_path)?;
@@ -410,13 +438,7 @@ fn update_demo_git_snapshot(
             },
             &main_oid,
         )?;
-        let main_snapshot = store_seed_bundle(
-            object_store,
-            repo,
-            repo_path,
-            "update-demo",
-            &["refs/heads/main"],
-        )?;
+        let (main_head, main_segment) = store_seed_git_segment(object_store, repo, repo_path)?;
         let submitted_snapshot = store_seed_bundle(
             object_store,
             repo,
@@ -487,8 +509,71 @@ fn update_demo_git_snapshot(
                 now_unix: 1_800_000_400,
             },
         ];
-        Ok((main_snapshot, gallery))
+        Ok((main_head, main_segment, gallery))
     })
+}
+
+fn store_seed_git_segment(
+    object_store: &dyn ObjectStore,
+    repo: &StoredRepository,
+    repo_path: &FsPath,
+) -> Result<(GitHead, GitSegment), ApiError> {
+    let head_oid = seed_git_head(repo_path)?;
+    let mut child = Command::new("git")
+        .arg("-C")
+        .arg(repo_path)
+        .args(["pack-objects", "--revs", "--stdout"])
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .map_err(ApiError::internal)?;
+    child
+        .stdin
+        .take()
+        .ok_or_else(|| ApiError::internal_message("seed pack stdin unavailable"))?
+        .write_all(format!("{head_oid}\n").as_bytes())
+        .map_err(ApiError::internal)?;
+    let output = child.wait_with_output().map_err(ApiError::internal)?;
+    if !output.status.success() {
+        return Err(ApiError::service_unavailable(format!(
+            "creating seeded Git segment: {}",
+            String::from_utf8_lossy(&output.stderr).trim()
+        )));
+    }
+    let segment_object = put_repo_object(
+        object_store,
+        &repo.record.id,
+        "git-segments",
+        &output.stdout,
+    )?;
+    let manifest = scope_core::git_segments::GitSegmentManifest::new(
+        head_oid.clone(),
+        None,
+        segment_object.clone(),
+    );
+    let mut manifest_object = put_repo_object(
+        object_store,
+        &repo.record.id,
+        "git-manifests",
+        &manifest.encode()?,
+    )?;
+    manifest_object.git_oid = head_oid.clone();
+    Ok((
+        GitHead {
+            head_oid: head_oid.clone(),
+            segment_sequence: 1,
+            change_version: 1,
+            manifest: manifest_object.clone(),
+        },
+        GitSegment {
+            sequence: 1,
+            base_oid: None,
+            head_oid,
+            object: segment_object,
+            manifest: manifest_object,
+        },
+    ))
 }
 
 fn seed_request_branch(
@@ -656,7 +741,7 @@ mod tests {
     use crate::AppState;
     use crate::domain::requests::{RequestDisposition, RequestState};
     use crate::git::import::git_stdout_text;
-    use crate::git::storage::restore_git_snapshot;
+    use crate::git::storage::restore_git_segments;
     use crate::object_store::{EncryptedObjectStore, MemoryObjectStore, source_blob_bytes};
     use std::sync::Arc;
 
@@ -709,7 +794,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn seed_catalog_git_snapshots_restore_as_bundles() {
+    async fn seed_catalog_git_segments_restore_raw_repositories() {
         let store = Arc::new(EncryptedObjectStore::new(
             Arc::new(MemoryObjectStore::new()),
             [9; 32],
@@ -735,7 +820,7 @@ mod tests {
         let public_demo = catalog.repository("dev", "public-demo").unwrap();
         assert_snapshot_file(
             &state,
-            public_demo.git_snapshot.as_ref().unwrap(),
+            &public_demo.git_head.as_ref().unwrap().manifest,
             "public-demo-live",
             "README.md",
             PUBLIC_DEMO_README,
@@ -744,7 +829,7 @@ mod tests {
         let update_demo = catalog.repository("dev", "update-demo").unwrap();
         assert_snapshot_file(
             &state,
-            update_demo.git_snapshot.as_ref().unwrap(),
+            &update_demo.git_head.as_ref().unwrap().manifest,
             "update-demo-live",
             "README.md",
             UPDATE_DEMO_INITIAL_README,
@@ -807,7 +892,7 @@ mod tests {
         expected: &str,
     ) {
         let repo_root = state.data_dir.join(format!("{label}.git"));
-        restore_git_snapshot(state, snapshot, &repo_root).unwrap();
+        restore_git_segments(state, snapshot, &repo_root).unwrap();
         let actual = git_stdout_text(
             &repo_root,
             &["show", &format!("{DEFAULT_GIT_BRANCH}:{path}")],

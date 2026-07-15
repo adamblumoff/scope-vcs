@@ -39,7 +39,7 @@ pub struct RecordWorkingRequestUploadInput {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct WorkingRequestUploadMutation {
     pub request: Request,
-    pub source_blobs_to_delete: Vec<SourceBlob>,
+    pub orphan_objects: Vec<SourceBlob>,
 }
 
 #[derive(Clone, Debug)]
@@ -133,7 +133,7 @@ pub fn record_working_request_upload(
     let request = request.clone();
     Ok(WorkingRequestUploadMutation {
         request,
-        source_blobs_to_delete: old_git_snapshot.into_iter().collect(),
+        orphan_objects: old_git_snapshot.into_iter().collect(),
     })
 }
 

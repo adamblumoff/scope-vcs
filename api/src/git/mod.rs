@@ -1,3 +1,5 @@
+pub(crate) mod cache;
+pub(crate) mod content;
 mod credentials;
 pub(crate) mod import;
 mod request_ref_public_safety;
@@ -13,6 +15,7 @@ use crate::{
     config::*,
     error::ApiError,
     git::{
+        cache::sanitize_raw_git_cache_repo,
         import::{
             persist_receive_pack_update_and_promote, receive_pack_update_from_staging_repo,
             reviewed_update_from_staging_repo,
@@ -29,11 +32,11 @@ use crate::{
 };
 use axum::{
     Json,
-    body::{Bytes, to_bytes},
+    body::{Body, Bytes, to_bytes},
     extract::{Path, Query, Request, State},
     http::{
         HeaderMap, HeaderValue, StatusCode,
-        header::{CONTENT_ENCODING, CONTENT_TYPE, WWW_AUTHENTICATE},
+        header::{CONTENT_ENCODING, CONTENT_LENGTH, CONTENT_TYPE, WWW_AUTHENTICATE},
     },
     response::{IntoResponse, Response},
 };
@@ -47,11 +50,33 @@ use std::{
     time::Instant,
 };
 
-struct TemporaryRepository(PathBuf);
+struct TemporaryRepository(Option<PathBuf>);
+
+enum ReceivePackBody {
+    Buffered(Vec<u8>),
+    Streaming {
+        body: Body,
+        content_length: Option<u64>,
+    },
+}
 
 impl TemporaryRepository {
     fn new(path: PathBuf) -> Self {
-        Self(path)
+        Self(Some(path))
+    }
+
+    fn promote_to(&mut self, target: &FsPath) -> Result<(), ApiError> {
+        let source = self
+            .0
+            .as_ref()
+            .ok_or_else(|| ApiError::internal_message("temporary Git repository is missing"))?;
+        if target.exists() {
+            fs::remove_dir_all(source).map_err(ApiError::internal)?;
+        } else {
+            fs::rename(source, target).map_err(ApiError::internal)?;
+        }
+        self.0 = None;
+        Ok(())
     }
 }
 
@@ -59,13 +84,15 @@ impl Deref for TemporaryRepository {
     type Target = FsPath;
 
     fn deref(&self) -> &Self::Target {
-        &self.0
+        self.0.as_deref().expect("temporary repository is present")
     }
 }
 
 impl Drop for TemporaryRepository {
     fn drop(&mut self) {
-        let _ = fs::remove_dir_all(&self.0);
+        if let Some(path) = self.0.as_ref() {
+            let _ = fs::remove_dir_all(path);
+        }
     }
 }
 
@@ -109,9 +136,9 @@ impl GitRemoteMode {
 
 const PUSH_INTENT_HEADER: &str = "x-scope-push-intent";
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum PersistedReceivePackUpdate {
-    Applied,
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct PersistedReceivePackUpdate {
+    pub(crate) git_head: crate::domain::store::GitHead,
 }
 
 pub(crate) fn git_error_response(error: ApiError) -> Response {
@@ -216,20 +243,62 @@ pub(crate) async fn git_receive_pack(
         .get(CONTENT_TYPE)
         .and_then(|value| value.to_str().ok())
         .map(str::to_string);
-    let body = match to_bytes(request.into_body(), MAX_RECEIVE_PACK_BYTES).await {
-        Ok(body) => body,
-        Err(error) => {
-            return git_error_response(ApiError::payload_too_large(format!(
-                "git receive-pack body is too large: {error}"
-            )));
-        }
+    let mut encodings = headers.get_all(CONTENT_ENCODING).iter();
+    let encoding = match encodings.next() {
+        Some(value) => match value.to_str() {
+            Ok(value) => Some(value.trim().to_string()),
+            Err(_) => {
+                return git_error_response(ApiError::bad_request(
+                    "invalid Git content-encoding header",
+                ));
+            }
+        },
+        None => None,
     };
-    let body = match decode_git_request_body(&headers, body, MAX_RECEIVE_PACK_BYTES) {
-        Ok(body) => body,
-        Err(error) => return git_error_response(error),
+    if encodings.next().is_some() {
+        return git_error_response(ApiError::bad_request(
+            "multiple Git content-encoding headers are unsupported",
+        ));
+    }
+    let request_body = request.into_body();
+    let body = if encoding
+        .as_deref()
+        .is_some_and(|value| value.eq_ignore_ascii_case("gzip"))
+    {
+        let buffered = match to_bytes(request_body, MAX_RECEIVE_PACK_BYTES).await {
+            Ok(body) => body,
+            Err(error) => {
+                return git_error_response(ApiError::payload_too_large(format!(
+                    "git receive-pack body is too large: {error}"
+                )));
+            }
+        };
+        match decode_git_request_body(&headers, buffered, MAX_RECEIVE_PACK_BYTES) {
+            Ok(body) => ReceivePackBody::Buffered(body),
+            Err(error) => return git_error_response(error),
+        }
+    } else if encoding
+        .as_deref()
+        .is_none_or(|value| value.is_empty() || value.eq_ignore_ascii_case("identity"))
+    {
+        let content_length = headers
+            .get(CONTENT_LENGTH)
+            .and_then(|value| value.to_str().ok())
+            .and_then(|value| value.parse::<u64>().ok());
+        ReceivePackBody::Streaming {
+            body: request_body,
+            content_length,
+        }
+    } else {
+        return git_error_response(ApiError::bad_request(format!(
+            "unsupported Git content-encoding {}",
+            encoding.as_deref().unwrap_or_default()
+        )));
     };
 
-    match handle_git_receive_pack(&state, &org, &repo, "POST", body, content_type, access).await {
+    match handle_git_receive_pack_body(&state, &org, &repo, "POST", body, content_type, access)
+        .await
+    {
         Ok(response) => response,
         Err(error) => git_error_response(error),
     }
@@ -369,6 +438,21 @@ pub(crate) async fn receive_pack_access(
             }
         }
         ReceivePackAuthorization::ScopeUser(user) => {
+            if let Some(secret) = push_intent_secret.as_deref()
+                && let Ok(push_intent) = state.validate_push_intent_secret(secret)
+                && let Some(context) = state
+                    .metadata
+                    .git_push_context(owner, repo_name, &user.id)
+                    .await?
+                && context.publication_state == RepoPublicationState::Published
+                && context.access.can_push
+            {
+                push_intent.ensure_repo_user(&context.repo_id, &user.id)?;
+                return Ok(ReceivePackAccess::PublishedMember {
+                    author_id: user.id,
+                    push_intent,
+                });
+            }
             let repo = find_repo(state, owner, repo_name).await?;
             let principal = principal_for_user_id(&repo, &user.id);
             let push_policy = repo.push_policy_for_user_id(&user.id);
@@ -490,7 +574,28 @@ pub(crate) async fn handle_git_receive_pack(
     content_type: Option<String>,
     access: ReceivePackAccess,
 ) -> Result<Response, ApiError> {
-    let staging_repo = TemporaryRepository::new(match &access {
+    handle_git_receive_pack_body(
+        state,
+        owner,
+        repo_name,
+        method,
+        ReceivePackBody::Buffered(body),
+        content_type,
+        access,
+    )
+    .await
+}
+
+async fn handle_git_receive_pack_body(
+    state: &AppState,
+    owner: &str,
+    repo_name: &str,
+    method: &str,
+    body: ReceivePackBody,
+    content_type: Option<String>,
+    access: ReceivePackAccess,
+) -> Result<Response, ApiError> {
+    let mut staging_repo = TemporaryRepository::new(match &access {
         ReceivePackAccess::FirstPush { .. } => {
             ensure_first_push_receive_pack_staging_repo(state, owner, repo_name)?
         }
@@ -512,6 +617,7 @@ pub(crate) async fn handle_git_receive_pack(
         ReceivePackAccess::PublishedMember { author_id, .. } => author_id.as_str(),
         ReceivePackAccess::RequestContributor { author_id } => author_id.as_str(),
     };
+    let main_push_author_id = remote_user.to_string();
     let receive_started_at = Instant::now();
     let refs_before_receive = if method == "POST" {
         match receive_pack_refs(&staging_repo) {
@@ -523,26 +629,38 @@ pub(crate) async fn handle_git_receive_pack(
     } else {
         None
     };
-    let cgi = match git_http_backend(
-        &staging_repo,
-        method,
-        if method == "GET" {
-            "info/refs"
-        } else {
-            "git-receive-pack"
-        },
-        if method == "GET" {
-            "service=git-receive-pack"
-        } else {
-            ""
-        },
-        body,
-        content_type,
-        remote_user,
-    ) {
-        Ok(cgi) => cgi,
-        Err(error) => {
-            return Err(error);
+    let cgi = match body {
+        ReceivePackBody::Buffered(body) => git_http_backend(
+            &staging_repo,
+            method,
+            if method == "GET" {
+                "info/refs"
+            } else {
+                "git-receive-pack"
+            },
+            if method == "GET" {
+                "service=git-receive-pack"
+            } else {
+                ""
+            },
+            body,
+            content_type,
+            remote_user,
+        )?,
+        ReceivePackBody::Streaming {
+            body,
+            content_length,
+        } => {
+            git_http_backend_streaming(
+                &staging_repo,
+                "git-receive-pack",
+                body,
+                content_length,
+                MAX_RECEIVE_PACK_BYTES,
+                content_type,
+                remote_user,
+            )
+            .await?
         }
     };
     let receive_elapsed = receive_started_at.elapsed();
@@ -618,6 +736,8 @@ pub(crate) async fn handle_git_receive_pack(
             ));
         }
 
+        let main_push_event;
+        let committed_git_head;
         match access {
             ReceivePackAccess::RequestContributor { .. } => {
                 return Err(ApiError::bad_request(
@@ -644,19 +764,14 @@ pub(crate) async fn handle_git_receive_pack(
                         return Err(error);
                     }
                 };
-                let uploaded_blobs = update
-                    .uploaded_blobs
-                    .iter()
-                    .cloned()
-                    .chain(std::iter::once(update.git_snapshot.clone()))
-                    .collect::<Vec<_>>();
-                update.base_git_snapshot_key =
+                let durable_objects = update.durable_objects.clone();
+                update.base_git_manifest_key =
                     Some(match push_intent.base_for_head(&update.head_oid) {
                         Ok(base) => base,
                         Err(error) => {
                             crate::state::best_effort_cleanup_rollback_source_blobs(
                                 state,
-                                &uploaded_blobs,
+                                &durable_objects,
                             )
                             .await;
                             return Err(error);
@@ -664,23 +779,22 @@ pub(crate) async fn handle_git_receive_pack(
                     });
                 update.base_config_hash = push_intent.base_config_hash;
                 let file_count = update.changes.len();
-                if let Err(error) = persist_receive_pack_update_and_promote(
+                committed_git_head = match persist_receive_pack_update_and_promote(
                     state, owner, repo_name, update, &author_id,
                 )
                 .await
                 {
-                    crate::state::best_effort_cleanup_rollback_source_blobs(state, &uploaded_blobs)
+                    Ok(persisted) => persisted.git_head,
+                    Err(error) => {
+                        crate::state::best_effort_cleanup_rollback_source_blobs(
+                            state,
+                            &durable_objects,
+                        )
                         .await;
-                    return Err(error);
-                }
-                let repo = find_repo(state, owner, repo_name).await?;
-                state
-                    .publish_repo_change(
-                        &crate::domain::store::repo_id(owner, repo_name),
-                        repo.record.change_version,
-                        "first-push-applied",
-                    )
-                    .await;
+                        return Err(error);
+                    }
+                };
+                main_push_event = "first-push-applied";
                 tracing::info!(
                     owner,
                     repo = repo_name,
@@ -710,19 +824,14 @@ pub(crate) async fn handle_git_receive_pack(
                         return Err(error);
                     }
                 };
-                let uploaded_blobs = update
-                    .uploaded_blobs
-                    .iter()
-                    .cloned()
-                    .chain(std::iter::once(update.git_snapshot.clone()))
-                    .collect::<Vec<_>>();
-                update.base_git_snapshot_key =
+                let durable_objects = update.durable_objects.clone();
+                update.base_git_manifest_key =
                     Some(match push_intent.base_for_head(&update.head_oid) {
                         Ok(base) => base,
                         Err(error) => {
                             crate::state::best_effort_cleanup_rollback_source_blobs(
                                 state,
-                                &uploaded_blobs,
+                                &durable_objects,
                             )
                             .await;
                             return Err(error);
@@ -730,23 +839,22 @@ pub(crate) async fn handle_git_receive_pack(
                     });
                 update.base_config_hash = push_intent.base_config_hash;
                 let change_count = update.changes.len();
-                if let Err(error) = persist_receive_pack_update_and_promote(
+                committed_git_head = match persist_receive_pack_update_and_promote(
                     state, owner, repo_name, update, &author_id,
                 )
                 .await
                 {
-                    crate::state::best_effort_cleanup_rollback_source_blobs(state, &uploaded_blobs)
+                    Ok(persisted) => persisted.git_head,
+                    Err(error) => {
+                        crate::state::best_effort_cleanup_rollback_source_blobs(
+                            state,
+                            &durable_objects,
+                        )
                         .await;
-                    return Err(error);
-                }
-                let repo = find_repo(state, owner, repo_name).await?;
-                state
-                    .publish_repo_change(
-                        &repo.record.id,
-                        repo.record.change_version,
-                        "push-received",
-                    )
-                    .await;
+                        return Err(error);
+                    }
+                };
+                main_push_event = "push-received";
                 tracing::info!(
                     owner,
                     repo = repo_name,
@@ -756,6 +864,55 @@ pub(crate) async fn handle_git_receive_pack(
                     "git receive-pack published update persisted"
                 );
             }
+        }
+        state
+            .publish_repo_change(
+                &crate::domain::store::repo_id(owner, repo_name),
+                committed_git_head.change_version,
+                main_push_event,
+            )
+            .await;
+        match state
+            .metadata
+            .git_push_context(owner, repo_name, &main_push_author_id)
+            .await
+        {
+            Ok(Some(repo)) => {
+                let is_still_current = repo.git_head.as_ref().is_some_and(|head| {
+                    head.manifest.object_key == committed_git_head.manifest.object_key
+                });
+                if is_still_current {
+                    match raw_git_cache_path(state, &committed_git_head.manifest).and_then(
+                        |cache_path| {
+                            sanitize_raw_git_cache_repo(
+                                &staging_repo,
+                                &committed_git_head.head_oid,
+                            )?;
+                            staging_repo.promote_to(&cache_path)?;
+                            state.raw_git_cache.note_materialized(&cache_path)
+                        },
+                    ) {
+                        Ok(()) => {}
+                        Err(error) => tracing::warn!(
+                            owner,
+                            repo = repo_name,
+                            error = %error.message(),
+                            "push committed but raw Git cache promotion failed"
+                        ),
+                    }
+                }
+            }
+            Ok(None) => tracing::warn!(
+                owner,
+                repo = repo_name,
+                "push committed but repository context was unavailable"
+            ),
+            Err(error) => tracing::warn!(
+                owner,
+                repo = repo_name,
+                error = %error.message,
+                "push committed but post-commit context refresh failed"
+            ),
         }
     }
 

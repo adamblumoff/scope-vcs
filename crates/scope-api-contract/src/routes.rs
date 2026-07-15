@@ -19,7 +19,6 @@ pub const REPOS: &str = "/v1/repos";
 pub const REPO: &str = "/v1/repos/{owner}/{repo}";
 pub const REPO_CONFIG: &str = "/v1/repos/{owner}/{repo}/config";
 pub const REPO_PUSH_INTENTS: &str = "/v1/repos/{owner}/{repo}/push-intents";
-pub const REPO_PUSH_INTENTS_COMPLETE: &str = "/v1/repos/{owner}/{repo}/push-intents/complete";
 pub const REPO_REQUESTS: &str = "/v1/repos/{owner}/{repo}/requests";
 pub const REPO_REQUEST: &str = "/v1/repos/{owner}/{repo}/requests/{request_id}";
 pub const REPO_SESSION: &str = "/v1/repos/{owner}/{repo}/session";
@@ -72,10 +71,6 @@ pub fn repo_config(owner: &str, repo: &str) -> String {
 
 pub fn repo_push_intents(owner: &str, repo: &str) -> String {
     format!("{}/push-intents", self::repo(owner, repo))
-}
-
-pub fn repo_push_intents_complete(owner: &str, repo: &str) -> String {
-    format!("{}/push-intents/complete", self::repo(owner, repo))
 }
 
 pub fn repo_requests(owner: &str, repo: &str) -> String {

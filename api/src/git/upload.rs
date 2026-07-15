@@ -6,10 +6,9 @@ use crate::{
     config::{DEFAULT_GIT_BRANCH, GIT_UPLOAD_PACK, UNPUBLISHED_GIT_ERROR},
     error::ApiError,
     git::{
-        GitRemoteMode, git_read_scope_user, request_refs::attach_visible_request_refs,
-        storage::cached_raw_git_snapshot_repo,
+        GitRemoteMode, cache::GitRepoHandle, content::source_content_bytes, git_read_scope_user,
+        request_refs::attach_visible_request_refs, storage::cached_raw_git_repo,
     },
-    object_store::source_blob_bytes,
     runtime_budgets::{RuntimeBudgets, RuntimePermit},
     state::AppState,
     state::{ensure_repo_read, find_repo},
@@ -72,7 +71,7 @@ pub(crate) async fn git_upload_pack_repo_for_request(
     owner: &str,
     repo_name: &str,
     mode: GitRemoteMode,
-) -> Result<PathBuf, ApiError> {
+) -> Result<GitRepoHandle, ApiError> {
     let (repo, principal) =
         match git_read_principal_for_request(state, headers, owner, repo_name, mode).await {
             Ok(value) => value,
@@ -92,8 +91,8 @@ pub(crate) async fn git_upload_pack_repo_for_request(
     let access = repo.access_for_principal(&principal);
     let private_view = ProjectionViewKey::from_access(access) == ProjectionViewKey::Private;
     let base_repo = if private_view {
-        match repo.git_snapshot.as_ref() {
-            Some(snapshot) => cached_raw_git_snapshot_repo(state, snapshot)?,
+        match repo.git_head.as_ref() {
+            Some(head) => cached_raw_git_repo(state, &head.manifest)?,
             None => {
                 let projection = project_graph(
                     &repo.policy,
@@ -101,7 +100,7 @@ pub(crate) async fn git_upload_pack_repo_for_request(
                     &repo.visibility_events,
                     ProjectionViewKey::Private,
                 );
-                projection_bare_repo_for_state(state, &projection)?
+                GitRepoHandle::from_path(projection_bare_repo_for_state(state, &projection)?)
             }
         }
     } else {
@@ -111,7 +110,7 @@ pub(crate) async fn git_upload_pack_repo_for_request(
             &repo.visibility_events,
             ProjectionViewKey::Public,
         );
-        projection_bare_repo_for_state(state, &projection)?
+        GitRepoHandle::from_path(projection_bare_repo_for_state(state, &projection)?)
     };
     let mut requests = state
         .metadata
@@ -136,22 +135,22 @@ pub(crate) async fn git_upload_pack_repo_for_request(
     } else {
         None
     };
-    git_read_view_repo(state, &base_repo, public_base_repo.as_deref(), &requests)
+    git_read_view_repo(state, base_repo, public_base_repo.as_deref(), &requests)
 }
 
 fn git_read_view_repo(
     state: &AppState,
-    base_repo: &FsPath,
+    base_repo: GitRepoHandle,
     public_base_repo: Option<&FsPath>,
     requests: &[crate::domain::requests::Request],
-) -> Result<PathBuf, ApiError> {
+) -> Result<GitRepoHandle, ApiError> {
     if requests.is_empty() {
-        return Ok(base_repo.to_path_buf());
+        return Ok(base_repo);
     }
     let main_oid = git_command_output(
         Command::new("git")
             .arg("--git-dir")
-            .arg(base_repo)
+            .arg(base_repo.as_ref())
             .arg("rev-parse")
             .arg(format!("refs/heads/{DEFAULT_GIT_BRANCH}")),
         None,
@@ -184,7 +183,7 @@ fn git_read_view_repo(
     let cache_root = state.git_cache_root()?;
     let repo_path = cache_root.join(format!("read-view-{cache_key}.git"));
     if repo_path.join("objects").is_dir() {
-        return Ok(repo_path);
+        return Ok(GitRepoHandle::from_path(repo_path));
     }
 
     let _permit = state.runtime_budgets.try_projection_build()?;
@@ -202,7 +201,7 @@ fn git_read_view_repo(
             .arg("clone")
             .arg("--bare")
             .arg("--no-hardlinks")
-            .arg(base_repo)
+            .arg(base_repo.as_ref())
             .arg(&temp_path),
         None,
     )?;
@@ -211,11 +210,11 @@ fn git_read_view_repo(
         return Err(error);
     }
     match fs::rename(&temp_path, &repo_path) {
-        Ok(()) => Ok(repo_path),
+        Ok(()) => Ok(GitRepoHandle::from_path(repo_path)),
         Err(error) if repo_path.exists() => {
             let _ = fs::remove_dir_all(&temp_path);
             tracing::debug!(%error, path = %repo_path.display(), "using concurrently-created Git read view cache");
-            Ok(repo_path)
+            Ok(GitRepoHandle::from_path(repo_path))
         }
         Err(error) => Err(ApiError::internal(error)),
     }
@@ -259,10 +258,10 @@ fn unpublished_git_read_error(
     }
 }
 
-pub(crate) fn projection_bare_repo(
-    store: &dyn crate::object_store::ObjectStore,
+fn projection_bare_repo_with_loader(
     cache_root: &FsPath,
     projection: &Projection,
+    load_content: impl Fn(&crate::domain::store::SourceBlob) -> Result<Vec<u8>, ApiError>,
 ) -> Result<PathBuf, ApiError> {
     let cache_key = projection_cache_key(projection);
     let repo_path = cache_root.join(format!("{cache_key}.git"));
@@ -331,7 +330,7 @@ pub(crate) fn projection_bare_repo(
                     visible_tree.insert(
                         path,
                         ProjectionTreeFile {
-                            bytes: source_blob_bytes(store, blob)?,
+                            bytes: load_content(blob)?,
                             git_file_mode: blob.git_file_mode.clone(),
                         },
                     );
@@ -391,7 +390,9 @@ pub(crate) fn projection_bare_repo_for_state(
     }
 
     let _permit = state.runtime_budgets.try_projection_build()?;
-    projection_bare_repo(state.object_store.as_ref(), &cache_root, projection)
+    projection_bare_repo_with_loader(&cache_root, projection, |blob| {
+        source_content_bytes(state, blob)
+    })
 }
 
 pub(crate) fn projection_cache_key(projection: &Projection) -> String {

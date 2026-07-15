@@ -79,7 +79,7 @@ async fn receive_pack_accepts_gzip_encoded_request_body() {
 }
 
 #[tokio::test]
-async fn receive_pack_cleans_uploaded_blobs_when_push_intent_does_not_match_head() {
+async fn receive_pack_queues_orphan_objects_when_push_intent_does_not_match_head() {
     let (state, secret) = test_state_with_first_push_token().await;
     let readme = b"intent mismatch should be cleaned\n";
     let source = first_push_source("intent-head-mismatch-first-push", readme);

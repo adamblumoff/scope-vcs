@@ -128,7 +128,7 @@ async fn push_only_member_can_apply_content_without_visibility_changes() {
     .await
     .unwrap();
 
-    assert_eq!(persisted, PersistedReceivePackUpdate::Applied);
+    assert!(!persisted.git_head.head_oid.is_empty());
     assert_eq!(
         live_file_content(&state, "/README.md").await.as_deref(),
         Some("hello\nextra line")
@@ -195,23 +195,28 @@ async fn published_receive_pack_staging_restores_accepted_git_head_from_bucket_s
 }
 
 #[tokio::test]
-async fn applying_push_deletes_replaced_git_snapshot_bundle() {
+async fn applying_push_does_not_delete_segment_predecessors_inline() {
     let state = test_state_with_repo();
     let old_snapshot = source_blob(&state, "old live git snapshot");
     let old_key = old_snapshot.object_key.clone();
     let update = receive_pack_update(&state, vec![("/README.md", Some("updated"))]);
-    let new_key = update.git_snapshot.object_key.clone();
+    let new_key = update.git_head.manifest.object_key.clone();
     let mut repo = repo_with_readme(&state);
-    repo.git_snapshot = Some(old_snapshot);
+    repo.git_head = Some(crate::domain::store::GitHead {
+        head_oid: old_snapshot.git_oid.clone(),
+        segment_sequence: 1,
+        change_version: 1,
+        manifest: old_snapshot,
+    });
     replace_test_repo(&state, repo).await;
 
     let persisted = persist_and_promote_test_update(&state, update, &test_owner_id())
         .await
         .unwrap();
 
-    assert_eq!(persisted, PersistedReceivePackUpdate::Applied);
+    assert!(!persisted.git_head.head_oid.is_empty());
     let store = &state.test_object_store;
-    assert!(!store.contains_key(&old_key));
+    assert!(store.contains_key(&old_key));
     assert!(store.contains_key(&new_key));
 }
 
@@ -235,25 +240,7 @@ fn bearer_token_rejects_non_bearer_authorization() {
 }
 
 #[tokio::test]
-async fn rollback_cleanup_keeps_blobs_still_referenced_by_catalog() {
-    let state = test_state_with_repo();
-    let live_blob = source_blob(&state, "hello");
-    let unreferenced_blob = source_blob(&state, "rollback-only-content");
-    let mut repo = repo_with_readme(&state);
-    repo.graph.commits[0].changes[0].new_content = Some(live_blob.clone());
-    replace_test_repo(&state, repo).await;
-
-    delete_unreferenced_source_blobs(&state, &[live_blob.clone(), unreferenced_blob.clone()])
-        .await
-        .unwrap();
-
-    let store = &state.test_object_store;
-    assert!(store.contains_key(&live_blob.object_key));
-    assert!(!store.contains_key(&unreferenced_blob.object_key));
-}
-
-#[tokio::test]
-async fn pending_source_blob_cleanup_drops_referenced_entries_after_scan() {
+async fn pending_object_cleanup_uses_transactional_reference_rows() {
     let state = test_state_with_repo();
     let live_blob = source_blob(&state, "referenced pending content");
     {
@@ -267,7 +254,7 @@ async fn pending_source_blob_cleanup_drops_referenced_entries_after_scan() {
             .unwrap();
     }
 
-    drain_pending_source_blob_deletions(&state).await.unwrap();
+    drain_pending_orphan_objects(&state).await.unwrap();
 
     assert!(state.test_object_store.contains_key(&live_blob.object_key));
     assert!(
@@ -278,57 +265,4 @@ async fn pending_source_blob_cleanup_drops_referenced_entries_after_scan() {
             .unwrap()
             .is_empty()
     );
-}
-
-#[tokio::test]
-async fn applied_push_survives_obsolete_snapshot_cleanup_failure() {
-    let mut state = test_state_with_repo();
-    state.object_store = Arc::new(DeleteFailsObjectStore(state.test_object_store.clone()));
-    let old_snapshot = source_blob(&state, "old live git snapshot");
-    let mut repo = repo_with_readme(&state);
-    repo.git_snapshot = Some(old_snapshot);
-    replace_test_repo(&state, repo).await;
-
-    let persisted = persist_and_promote_test_update(
-        &state,
-        receive_pack_update(
-            &state,
-            vec![("/README.md", Some("cleanup failure still lands"))],
-        ),
-        &test_owner_id(),
-    )
-    .await
-    .unwrap();
-
-    assert_eq!(persisted, PersistedReceivePackUpdate::Applied);
-    assert_eq!(
-        live_file_content(&state, "/README.md").await.as_deref(),
-        Some("cleanup failure still lands")
-    );
-    assert!(
-        !state
-            .metadata
-            .pending_source_blob_cleanups_for_tests()
-            .await
-            .unwrap()
-            .is_empty()
-    );
-}
-
-struct DeleteFailsObjectStore(Arc<MemoryObjectStore>);
-
-impl crate::object_store::ObjectStore for DeleteFailsObjectStore {
-    fn put(&self, key: &str, bytes: &[u8]) -> Result<(), scope_core::error::ApiError> {
-        crate::object_store::ObjectStore::put(self.0.as_ref(), key, bytes)
-    }
-
-    fn get(&self, key: &str) -> Result<Vec<u8>, scope_core::error::ApiError> {
-        crate::object_store::ObjectStore::get(self.0.as_ref(), key)
-    }
-
-    fn delete(&self, _key: &str) -> Result<(), scope_core::error::ApiError> {
-        Err(scope_core::error::ApiError::service_unavailable(
-            "delete failed",
-        ))
-    }
 }

@@ -1,13 +1,9 @@
 use super::{MetadataStore, entities};
-use crate::domain::{
-    projection::{SourceGraph, VisibilityEvent},
-    store::{RepoStorageCleanup, SourceBlob, repo_id},
-};
+use crate::domain::store::{RepoStorageCleanup, SourceBlob, repo_id};
 use crate::{error::ApiError, persistence::unix_now};
 use sea_orm::{
     ActiveModelTrait, ColumnTrait, ConnectionTrait, DatabaseBackend, EntityTrait, FromQueryResult,
     IntoActiveModel, QueryFilter, QueryOrder, QuerySelect, Set, Statement, TransactionTrait,
-    prelude::Json,
     sea_query::{Expr, LockType, OnConflict},
 };
 use std::future::Future;
@@ -18,6 +14,10 @@ const RETAINED_SOURCE_BLOB_ERROR: &str = "source blob cleanup retained after dra
 const CLEANUP_BATCH_SIZE: u64 = 100;
 const CLEANUP_CLAIM_SECONDS: i64 = 300;
 const MAX_CLEANUP_RETRY_SECONDS: i64 = 3_600;
+#[cfg(not(feature = "test-support"))]
+const SOURCE_BLOB_DELETE_GRACE_SECONDS: u64 = 300;
+#[cfg(feature = "test-support")]
+const SOURCE_BLOB_DELETE_GRACE_SECONDS: u64 = 0;
 
 #[derive(Clone)]
 struct LoadedRepoStorageCleanup {
@@ -29,17 +29,6 @@ struct LoadedRepoStorageCleanup {
 struct LoadedSourceBlobCleanup {
     blob: SourceBlob,
     generation: String,
-}
-
-#[derive(FromQueryResult)]
-struct RepositoryBlobReferencesRow {
-    graph: Json,
-    visibility_events: Json,
-}
-
-#[derive(FromQueryResult)]
-struct RequestBlobReferenceRow {
-    git_snapshot: Option<Json>,
 }
 
 pub struct RepoStorageCleanupBatch {
@@ -117,20 +106,6 @@ impl MetadataStore {
         ))
     }
 
-    pub async fn unreferenced_source_blobs(
-        &self,
-        blobs: Vec<SourceBlob>,
-    ) -> Result<Vec<SourceBlob>, ApiError> {
-        let referenced = referenced_source_blob_keys(self.db.as_ref()).await?;
-        let mut unreferenced = std::collections::BTreeMap::new();
-        for blob in blobs {
-            if !referenced.contains(&blob.object_key) {
-                unreferenced.entry(blob.object_key.clone()).or_insert(blob);
-            }
-        }
-        Ok(unreferenced.into_values().collect())
-    }
-
     pub async fn queue_pending_source_blob_deletions(
         &self,
         blobs: Vec<SourceBlob>,
@@ -182,7 +157,7 @@ impl MetadataStore {
             .iter()
             .map(|row| row.blob.clone())
             .collect::<Vec<_>>();
-        let referenced_blob_keys = referenced_source_blob_keys(&tx).await?;
+        let referenced_blob_keys = referenced_object_keys(&tx).await?;
         tx.commit().await.map_err(ApiError::internal)?;
         Ok(SourceBlobCleanupBatch {
             pending,
@@ -243,31 +218,36 @@ where
     C: ConnectionTrait,
 {
     let now = unix_now()?;
+    let first_attempt = now
+        .checked_add(SOURCE_BLOB_DELETE_GRACE_SECONDS)
+        .ok_or_else(|| ApiError::internal_message("source blob cleanup time exceeds u64 range"))?;
+    let first_attempt = u64_to_i64(first_attempt)?;
     for blob in blobs {
         u64_to_i64(blob.size_bytes)?;
         let generation = new_cleanup_generation()?;
-        entities::source_blob_cleanup_job::Entity::insert(
+        let mut cleanup =
             entities::source_blob_cleanup_job::Model::from_domain(&blob, generation, now)?
-                .into_active_model(),
-        )
-        .on_conflict(
-            OnConflict::column(entities::source_blob_cleanup_job::Column::ObjectKey)
-                .update_columns([
-                    entities::source_blob_cleanup_job::Column::Generation,
-                    entities::source_blob_cleanup_job::Column::Sha256,
-                    entities::source_blob_cleanup_job::Column::GitOid,
-                    entities::source_blob_cleanup_job::Column::SizeBytes,
-                    entities::source_blob_cleanup_job::Column::Attempts,
-                    entities::source_blob_cleanup_job::Column::NextRunAtUnix,
-                    entities::source_blob_cleanup_job::Column::LastError,
-                    entities::source_blob_cleanup_job::Column::CompletedAtUnix,
-                    entities::source_blob_cleanup_job::Column::UpdatedAtUnix,
-                ])
-                .to_owned(),
-        )
-        .exec(conn)
-        .await
-        .map_err(ApiError::internal)?;
+                .into_active_model();
+        cleanup.next_run_at_unix = Set(first_attempt);
+        entities::source_blob_cleanup_job::Entity::insert(cleanup)
+            .on_conflict(
+                OnConflict::column(entities::source_blob_cleanup_job::Column::ObjectKey)
+                    .update_columns([
+                        entities::source_blob_cleanup_job::Column::Generation,
+                        entities::source_blob_cleanup_job::Column::Sha256,
+                        entities::source_blob_cleanup_job::Column::GitOid,
+                        entities::source_blob_cleanup_job::Column::SizeBytes,
+                        entities::source_blob_cleanup_job::Column::Attempts,
+                        entities::source_blob_cleanup_job::Column::NextRunAtUnix,
+                        entities::source_blob_cleanup_job::Column::LastError,
+                        entities::source_blob_cleanup_job::Column::CompletedAtUnix,
+                        entities::source_blob_cleanup_job::Column::UpdatedAtUnix,
+                    ])
+                    .to_owned(),
+            )
+            .exec(conn)
+            .await
+            .map_err(ApiError::internal)?;
     }
     Ok(())
 }
@@ -503,13 +483,13 @@ where
         Statement::from_sql_and_values(
             DatabaseBackend::Postgres,
             r#"
-                UPDATE scope_source_blob_cleanup_jobs AS job
+                UPDATE scope_orphan_object_jobs AS job
                 SET generation = md5(job.generation || ':' || txid_current()::text),
                     next_run_at_unix = $2,
                     updated_at_unix = $1
                 FROM (
                     SELECT object_key
-                    FROM scope_source_blob_cleanup_jobs
+                    FROM scope_orphan_object_jobs
                     WHERE completed_at_unix IS NULL AND next_run_at_unix <= $1
                     ORDER BY next_run_at_unix, object_key
                     FOR UPDATE SKIP LOCKED
@@ -852,64 +832,11 @@ where
     Ok(repositories.into_iter().map(|repo| repo.id).collect())
 }
 
-async fn referenced_source_blob_keys<C>(conn: &C) -> Result<BTreeSet<String>, ApiError>
+async fn referenced_object_keys<C>(conn: &C) -> Result<BTreeSet<String>, ApiError>
 where
     C: ConnectionTrait,
 {
-    let mut keys = entities::repository_git_snapshot::Entity::find()
-        .select_only()
-        .column(entities::repository_git_snapshot::Column::ObjectKey)
-        .into_tuple::<String>()
-        .all(conn)
-        .await
-        .map_err(ApiError::internal)?
-        .into_iter()
-        .collect::<BTreeSet<_>>();
-
-    let repositories = entities::repository::Entity::find()
-        .select_only()
-        .column(entities::repository::Column::Graph)
-        .column(entities::repository::Column::VisibilityEvents)
-        .into_model::<RepositoryBlobReferencesRow>()
-        .all(conn)
-        .await
-        .map_err(ApiError::internal)?;
-    for repository in repositories {
-        let graph =
-            serde_json::from_value::<SourceGraph>(repository.graph).map_err(ApiError::internal)?;
-        for change in graph.commits.into_iter().flat_map(|commit| commit.changes) {
-            keys.extend(change.old_content.into_iter().map(|blob| blob.object_key));
-            keys.extend(change.new_content.into_iter().map(|blob| blob.object_key));
-        }
-        let visibility_events =
-            serde_json::from_value::<Vec<VisibilityEvent>>(repository.visibility_events)
-                .map_err(ApiError::internal)?;
-        keys.extend(
-            visibility_events
-                .into_iter()
-                .filter_map(|event| event.current_content)
-                .map(|blob| blob.object_key),
-        );
-    }
-
-    let requests = entities::request::Entity::find()
-        .select_only()
-        .column(entities::request::Column::GitSnapshot)
-        .into_model::<RequestBlobReferenceRow>()
-        .all(conn)
-        .await
-        .map_err(ApiError::internal)?;
-    for request in requests {
-        if let Some(snapshot) = request
-            .git_snapshot
-            .map(serde_json::from_value::<SourceBlob>)
-            .transpose()
-            .map_err(ApiError::internal)?
-        {
-            keys.insert(snapshot.object_key);
-        }
-    }
-    Ok(keys)
+    super::object_references::referenced_object_keys(conn).await
 }
 
 fn u64_to_i64(value: u64) -> Result<i64, ApiError> {

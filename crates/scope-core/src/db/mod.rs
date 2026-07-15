@@ -12,8 +12,13 @@ mod clerk_users;
 mod cli_auth;
 mod cli_sessions;
 mod entities;
+mod fast_push;
+mod git_compaction;
+mod git_push_reads;
+mod history_rows;
 mod locks;
 mod metadata_reset;
+mod object_references;
 mod outbox;
 mod projection_encoding;
 mod projection_read_models;
@@ -37,6 +42,9 @@ use crate::domain::store::{RepositoryInvite, RepositoryMember, StoredRepository,
 use crate::error::ApiError;
 #[cfg(any(test, feature = "test-support"))]
 pub use clerk_users::scope_user_id_for_auth_identity;
+pub use git_compaction::GitCompactionCandidate;
+pub use git_push_reads::GitPushContext;
+use history_rows::load_repository_histories;
 use locks::{acquire_aggregate_lock, ensure_metadata_lock_row};
 pub use metadata_reset::MetadataResetEvent;
 use metadata_reset::{
@@ -225,6 +233,7 @@ where
         .map(|repo| repo.id.clone())
         .collect::<Vec<_>>();
     let mut facts_by_repo = load_repository_facts(conn, &repo_ids).await?;
+    let mut histories_by_repo = load_repository_histories(conn, &repo_ids).await?;
     let members = if repo_ids.is_empty() {
         Vec::new()
     } else {
@@ -280,7 +289,10 @@ where
             let facts = facts_by_repo.remove(&repo_id).ok_or_else(|| {
                 ApiError::internal_message(format!("repository facts missing for {repo_id}"))
             })?;
-            repo.try_into_domain(facts.into_facts(), members, invitations)
+            let history = histories_by_repo.remove(&repo_id).ok_or_else(|| {
+                ApiError::internal_message(format!("repository history missing for {repo_id}"))
+            })?;
+            repo.try_into_domain(facts.into_facts(), members, invitations, history)
         })
         .collect()
 }

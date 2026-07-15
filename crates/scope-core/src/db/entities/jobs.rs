@@ -144,7 +144,7 @@ pub mod source_blob_cleanup_job {
     use super::*;
 
     #[derive(Clone, Debug, PartialEq, DeriveEntityModel)]
-    #[sea_orm(table_name = "scope_source_blob_cleanup_jobs")]
+    #[sea_orm(table_name = "scope_orphan_object_jobs")]
     pub struct Model {
         #[sea_orm(primary_key, auto_increment = false)]
         pub object_key: String,

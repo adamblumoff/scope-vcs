@@ -145,12 +145,9 @@ impl MetadataStore {
 
             let mutation = record_working_request_upload(&mut requests, input)?;
             save_request_row(&tx, &mutation.request).await?;
-            if !mutation.source_blobs_to_delete.is_empty() {
-                queue_pending_source_blob_deletion_rows(
-                    &tx,
-                    mutation.source_blobs_to_delete.clone(),
-                )
-                .await?;
+            if !mutation.orphan_objects.is_empty() {
+                queue_pending_source_blob_deletion_rows(&tx, mutation.orphan_objects.clone())
+                    .await?;
             }
             tx.commit().await.map_err(ApiError::internal)?;
             return Ok(mutation);
@@ -226,12 +223,9 @@ impl MetadataStore {
             let mutation = record_request_revision(&mut requests, &mut events, input)?;
             save_request_row(&tx, &mutation.request).await?;
             insert_request_event_row(&tx, &mutation.event).await?;
-            if !mutation.source_blobs_to_delete.is_empty() {
-                queue_pending_source_blob_deletion_rows(
-                    &tx,
-                    mutation.source_blobs_to_delete.clone(),
-                )
-                .await?;
+            if !mutation.orphan_objects.is_empty() {
+                queue_pending_source_blob_deletion_rows(&tx, mutation.orphan_objects.clone())
+                    .await?;
             }
             tx.commit().await.map_err(ApiError::internal)?;
             return Ok(mutation);
@@ -470,13 +464,12 @@ impl MetadataStore {
         match &mutation {
             DeleteRequestMutation::DeletedWorking {
                 request,
-                source_blobs_to_delete,
+                orphan_objects,
                 ..
             } => {
                 delete_request_rows(&tx, &request.id).await?;
-                if !source_blobs_to_delete.is_empty() {
-                    queue_pending_source_blob_deletion_rows(&tx, source_blobs_to_delete.clone())
-                        .await?;
+                if !orphan_objects.is_empty() {
+                    queue_pending_source_blob_deletion_rows(&tx, orphan_objects.clone()).await?;
                 }
             }
             DeleteRequestMutation::Withdrawn {

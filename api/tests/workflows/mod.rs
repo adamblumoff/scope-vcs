@@ -412,9 +412,9 @@ async fn create_test_push_intent(state: &AppState, user_id: &str, head_oid: &str
             head_oid,
             config.clone(),
             repo_config_fingerprint(&config).unwrap(),
-            repo.git_snapshot
+            repo.git_head
                 .as_ref()
-                .map(|snapshot| snapshot.object_key.clone()),
+                .map(|head| head.manifest.object_key.clone()),
         )
         .unwrap()
         .token
@@ -520,7 +520,9 @@ fn test_repo(owner_id: &str) -> StoredRepository {
             commits: Vec::new(),
         },
         visibility_events: Vec::new(),
-        git_snapshot: None,
+        live_files: BTreeMap::new(),
+        git_head: None,
+        git_segments: Vec::new(),
         members: Vec::new(),
         invitations: Vec::new(),
     }
@@ -579,11 +581,13 @@ fn source_blob_from_bytes(state: &AppState, bytes: &[u8]) -> crate::domain::stor
 }
 
 fn blob_content(state: &AppState, blob: &crate::domain::store::SourceBlob) -> String {
-    String::from_utf8(source_blob_bytes(state.object_store.as_ref(), blob).unwrap()).unwrap()
+    String::from_utf8(crate::git::content::source_content_bytes(state, blob).unwrap()).unwrap()
 }
 
 fn repo_with_readme(state: &AppState) -> StoredRepository {
     let mut repo = test_repo(&test_owner_id());
+    let path = ScopePath::parse("/README.md").unwrap();
+    let content = source_blob(state, "hello");
     repo.graph.commits.push(LogicalCommit {
         id: "rv1".to_string(),
         parent_ids: Vec::new(),
@@ -592,24 +596,53 @@ fn repo_with_readme(state: &AppState) -> StoredRepository {
         message: "initial".to_string(),
         changes: vec![FileChange {
             visibility: Visibility::Public,
-            path: ScopePath::parse("/README.md").unwrap(),
+            path: path.clone(),
             old_content: None,
-            new_content: Some(source_blob(state, "hello")),
+            new_content: Some(content.clone()),
         }],
     });
+    repo.live_files.insert(path, content);
     repo
+}
+
+fn populate_test_live_files(repo: &mut StoredRepository) {
+    repo.live_files.clear();
+    for change in repo.graph.commits.iter().flat_map(|commit| &commit.changes) {
+        match &change.new_content {
+            Some(content) => {
+                repo.live_files.insert(change.path.clone(), content.clone());
+            }
+            None => {
+                repo.live_files.remove(&change.path);
+            }
+        }
+    }
 }
 
 fn receive_pack_update(state: &AppState, changes: Vec<(&str, Option<&str>)>) -> ReceivePackUpdate {
     let config = repo_config(Visibility::Public);
+    let manifest = source_blob(state, "test staged Git manifest");
+    let segment_object = source_blob(state, "test staged Git segment");
     ReceivePackUpdate {
         branch: format!("refs/heads/{DEFAULT_GIT_BRANCH}"),
         head_oid: "1111111111111111111111111111111111111111".to_string(),
-        base_git_snapshot_key: None,
+        base_git_manifest_key: None,
         author_id: test_owner_id(),
         message: "owner push".to_string(),
-        git_snapshot: source_blob(state, "test staged git snapshot"),
-        uploaded_blobs: Vec::new(),
+        git_head: crate::domain::store::GitHead {
+            head_oid: "1111111111111111111111111111111111111111".to_string(),
+            segment_sequence: 1,
+            change_version: 1,
+            manifest,
+        },
+        git_segment: crate::domain::store::GitSegment {
+            sequence: 1,
+            base_oid: None,
+            head_oid: "1111111111111111111111111111111111111111".to_string(),
+            object: segment_object,
+            manifest: source_blob(state, "test staged Git segment manifest"),
+        },
+        durable_objects: Vec::new(),
         previous_config: None,
         base_config_hash: repo_config_fingerprint(&config).unwrap(),
         config,

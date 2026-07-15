@@ -153,12 +153,14 @@ fn published_test_repo(default_visibility: Visibility) -> StoredRepository {
 
 fn published_repo_with_public_file(message: &str, path: &str, content: &str) -> StoredRepository {
     let mut repo = published_test_repo(Visibility::Public);
+    let content = blob(content);
     repo.graph.commits.push(commit(
         "rv1",
         None,
         message,
-        added(path, Visibility::Public, content),
+        change(path, Visibility::Public, None, Some(content.clone())),
     ));
+    repo.live_files.insert(self::path(path), content);
     repo
 }
 
@@ -207,19 +209,90 @@ fn apply_update(
     previous_config: Option<RepoConfig>,
     config: RepoConfig,
 ) {
+    apply_update_with_head(
+        repo,
+        "2222222222222222222222222222222222222222",
+        message,
+        changes,
+        previous_config,
+        config,
+    );
+}
+
+fn apply_update_with_head(
+    repo: &mut StoredRepository,
+    head_oid: &str,
+    message: &str,
+    changes: Vec<ReviewedContentChange>,
+    previous_config: Option<RepoConfig>,
+    config: RepoConfig,
+) {
     apply_reviewed_update_to_repo(
         repo,
         ReviewedUpdateInput {
             branch: "main".to_string(),
             author_id: "owner".to_string(),
             message: message.to_string(),
-            git_snapshot: blob("snapshot v2"),
+            git_head: scope_core::domain::store::GitHead {
+                head_oid: head_oid.to_string(),
+                segment_sequence: 1,
+                change_version: 1,
+                manifest: blob("manifest v2"),
+            },
+            git_segment: scope_core::domain::store::GitSegment {
+                sequence: 1,
+                base_oid: None,
+                head_oid: head_oid.to_string(),
+                object: blob("segment v2"),
+                manifest: blob("manifest segment v2"),
+            },
             changes,
             previous_config,
             config,
         },
     )
     .unwrap();
+}
+
+#[test]
+fn content_only_updates_keep_policy_and_commit_identity_in_sync() {
+    let mut repo = published_repo_with_public_file("initial", "/README.md", "hello");
+    let config = config(
+        Visibility::Public,
+        Some(("/secret.txt", Visibility::Private)),
+        None,
+    );
+    repo.repo_config = config.clone();
+
+    apply_update_with_head(
+        &mut repo,
+        "3333333333333333333333333333333333333333",
+        "add secret",
+        vec![reviewed_change("/secret.txt", Some("secret"))],
+        Some(config.clone()),
+        config.clone(),
+    );
+    apply_update_with_head(
+        &mut repo,
+        "4444444444444444444444444444444444444444",
+        "update readme",
+        vec![reviewed_change("/README.md", Some("updated"))],
+        Some(config.clone()),
+        config,
+    );
+
+    assert_eq!(
+        repo.policy.effective_visibility(&path("/secret.txt")),
+        Visibility::Private
+    );
+    assert_eq!(
+        repo.graph.commits[repo.graph.commits.len() - 2].id,
+        "rv_push_3333333333333333333333333333333333333333"
+    );
+    assert_eq!(
+        repo.graph.commits.last().unwrap().id,
+        "rv_push_4444444444444444444444444444444444444444"
+    );
 }
 
 #[test]
@@ -231,6 +304,7 @@ fn config_only_update_changes_policy_without_content_commit() {
         "initial",
         added("/README.md", Visibility::Private, "hello"),
     ));
+    repo.live_files.insert(path("/README.md"), blob("hello"));
 
     let changed = apply_reviewed_config_to_repo(
         &mut repo,
@@ -310,7 +384,12 @@ fn public_projection_keeps_public_history_when_policy_later_marks_path_private()
 #[test]
 fn destructive_rewrite_rebuilds_each_public_boundary_safely() {
     for (name, next_content, stays_public, expected_commit) in [
-        ("changed", Some(Some("sanitized")), true, Some("rv_push_2")),
+        (
+            "changed",
+            Some(Some("sanitized")),
+            true,
+            Some("rv_push_2222222222222222222222222222222222222222"),
+        ),
         ("unchanged", None, true, Some("vis_1")),
         ("private", None, false, None),
         ("deleted", Some(None), false, None),

@@ -30,10 +30,12 @@ pub(super) async fn public_merge_fixture(
     run_git(Some(&raw_repo), &["add", "."], "stage raw main").unwrap();
     commit_all(&raw_repo, "initial raw main");
     let raw_main_oid = git_head_oid(&raw_repo);
-    let raw_snapshot =
-        git_snapshot_from_ref(&state, TEST_REPO_ID, &raw_repo, "refs/heads/main").unwrap();
+    let raw_git = git_segment_manifest_from_repo(&state, TEST_REPO_ID, &raw_repo, None)
+        .await
+        .unwrap();
     let mut repo = repo_with_public_readme_and_private_secret(&state);
-    repo.git_snapshot = Some(raw_snapshot);
+    repo.git_head = Some(raw_git.head);
+    repo.git_segments.push(raw_git.segment);
     replace_test_repo(&state, repo).await;
 
     let repo = find_repo(&state, TEST_REPO_OWNER, TEST_REPO_NAME)

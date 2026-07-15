@@ -14,8 +14,9 @@ async fn reads_the_uploaded_request_ref_bundle() {
     run_git(Some(&main_repo), &["add", "."], "stage review main").unwrap();
     commit_all(&main_repo, "initial");
     let main_oid = git_head_oid(&main_repo);
-    let main_snapshot =
-        git_snapshot_from_ref(&state, TEST_REPO_ID, &main_repo, "refs/heads/main").unwrap();
+    let main_git = git_segment_manifest_from_repo(&state, TEST_REPO_ID, &main_repo, None)
+        .await
+        .unwrap();
 
     let request_repo = temp_git_repo("request-review-branch");
     run_git(
@@ -45,7 +46,8 @@ async fn reads_the_uploaded_request_ref_bundle() {
         git_snapshot_from_ref(&state, TEST_REPO_ID, &request_repo, &request_ref).unwrap();
 
     let mut repo = repo_with_readme(&state);
-    repo.git_snapshot = Some(main_snapshot);
+    repo.git_head = Some(main_git.head);
+    repo.git_segments.push(main_git.segment);
     replace_test_repo(&state, repo).await;
     state
         .metadata

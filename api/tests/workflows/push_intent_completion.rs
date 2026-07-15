@@ -26,20 +26,6 @@ async fn owner_post(state: AppState, uri: &str, body: String) -> Response {
     .await
 }
 
-async fn mint_intent(state: AppState, head_oid: &str, config: RepoConfig) -> String {
-    let response = owner_post(
-        state,
-        "/v1/repos/owner/repo/push-intents",
-        push_intent_request_json(head_oid, config),
-    )
-    .await;
-    assert_eq!(response.status(), StatusCode::OK);
-    response_json(response).await["token"]
-        .as_str()
-        .unwrap()
-        .to_string()
-}
-
 async fn stored_config(state: &AppState) -> RepoConfig {
     find_repo(state, TEST_REPO_OWNER, TEST_REPO_NAME)
         .await
@@ -177,92 +163,109 @@ async fn create_push_intent_rejects_oversized_config_for_git_header_transport() 
 }
 
 #[tokio::test]
-async fn complete_push_intent_rejects_stale_config_only_review() {
-    let (state, _source, head_oid) = published_git_fixture("stale-config-complete").await;
+async fn create_push_intent_applies_config_when_reviewed_head_is_current() {
+    let (state, _source, head_oid) = published_git_fixture("config-only-intent").await;
+    let config = readme_private_config();
+    let response = owner_post(
+        state.clone(),
+        "/v1/repos/owner/repo/push-intents",
+        push_intent_request_json(&head_oid, config.clone()),
+    )
+    .await;
 
-    let old_token = mint_intent(state.clone(), &head_oid, repo_config(Visibility::Private)).await;
+    assert_eq!(response.status(), StatusCode::OK);
+    assert_eq!(stored_config(&state).await, config);
+}
 
-    let readme_private_config = readme_private_config();
-    let new_token = mint_intent(state.clone(), &head_oid, readme_private_config.clone()).await;
-
+#[tokio::test]
+async fn create_push_intent_rejects_stale_config_only_review() {
+    let (state, _source, head_oid) = published_git_fixture("stale-config-intent").await;
+    let old_base_hash = repo_config_fingerprint(&repo_config(Visibility::Public)).unwrap();
     let applied = owner_post(
         state.clone(),
-        "/v1/repos/owner/repo/push-intents/complete",
-        serde_json::json!({ "token": new_token }).to_string(),
+        "/v1/repos/owner/repo/push-intents",
+        push_intent_request_json_with_base(
+            &head_oid,
+            old_base_hash.clone(),
+            repo_config(Visibility::Private),
+        ),
     )
     .await;
     assert_eq!(applied.status(), StatusCode::OK);
-    assert_eq!(response_json(applied).await["config_applied"], true);
 
     let stale = owner_post(
         state.clone(),
-        "/v1/repos/owner/repo/push-intents/complete",
-        serde_json::json!({ "token": old_token }).to_string(),
+        "/v1/repos/owner/repo/push-intents",
+        push_intent_request_json_with_base(&head_oid, old_base_hash, readme_private_config()),
     )
     .await;
+
     assert_eq!(stale.status(), StatusCode::CONFLICT);
-    assert_eq!(stored_config(&state).await, readme_private_config);
-}
-
-#[tokio::test]
-async fn complete_push_intent_rejects_content_changed_since_review() {
-    let (state, _source, head_oid) = published_git_fixture("stale-content-complete").await;
-    let base_config = stored_config(&state).await;
-    let token = state
-        .create_push_intent(
-            TEST_REPO_ID,
-            &test_owner_id(),
-            &head_oid,
-            readme_private_config(),
-            repo_config_fingerprint(&base_config).unwrap(),
-            Some("stale-git-snapshot-key".to_string()),
-        )
-        .unwrap()
-        .token;
-
-    let response = owner_post(
-        state.clone(),
-        "/v1/repos/owner/repo/push-intents/complete",
-        serde_json::json!({ "token": token }).to_string(),
-    )
-    .await;
-
-    assert_eq!(response.status(), StatusCode::CONFLICT);
     assert_eq!(
-        response_json(response).await["error"],
-        "repo content changed since review; rerun scope push"
+        stored_config(&state).await,
+        repo_config(Visibility::Private)
     );
-    assert_eq!(stored_config(&state).await, repo_config(Visibility::Public));
 }
 
 #[tokio::test]
-async fn complete_push_intent_hides_repo_before_token_claim_mismatch() {
-    let state = test_state_with_repo();
-    cache_test_jwks(&state);
-    let other_subject = "user_other";
-    let other_id = crate::db::scope_user_id_for_auth_identity("clerk", other_subject);
-    let base_config = repo_config(Visibility::Public);
-    let token = state
-        .create_push_intent(
-            "other/repo",
-            &other_id,
-            TEST_PUSH_HEAD_OID,
-            base_config.clone(),
-            repo_config_fingerprint(&base_config).unwrap(),
-            None,
-        )
+async fn incremental_git_segment_restores_after_cache_loss() {
+    let (state, source, _head_oid) = published_git_fixture("segment-restore").await;
+    let first_snapshot = find_repo(&state, TEST_REPO_OWNER, TEST_REPO_NAME)
+        .await
         .unwrap()
-        .token;
+        .git_head
+        .unwrap();
 
-    let response = post(
-        state,
-        "/v1/repos/owner/repo/push-intents/complete",
-        bearer_header_for(other_subject, "other@example.com"),
-        serde_json::json!({ "token": token }).to_string(),
+    fs::write(source.join("README.md"), "incremental content\n").unwrap();
+    run_git(
+        Some(&source),
+        &["add", "README.md"],
+        "add incremental update",
     )
-    .await;
+    .unwrap();
+    commit_all(&source, "incremental update");
+    let expected_head = git_head_oid(&source);
+    let bare = bare_clone(&source, "segment-restore-update-bare");
+    let update = receive_pack_update_from_staging_repo(
+        &state,
+        TEST_REPO_OWNER,
+        TEST_REPO_NAME,
+        &bare,
+        &test_owner_id(),
+        repo_config(Visibility::Public),
+    )
+    .await
+    .unwrap();
+    let snapshot = update.git_head.manifest.clone();
+    persist_receive_pack_update_and_promote(
+        &state,
+        TEST_REPO_OWNER,
+        TEST_REPO_NAME,
+        update,
+        &test_owner_id(),
+    )
+    .await
+    .unwrap();
 
-    assert_eq!(response.status(), StatusCode::NOT_FOUND);
+    let manifest_bytes =
+        crate::object_store::source_blob_bytes(state.object_store.as_ref(), &snapshot).unwrap();
+    let manifest = scope_core::git_segments::GitSegmentManifest::decode(&manifest_bytes).unwrap();
+    assert_eq!(manifest.head_oid, expected_head);
+    assert_eq!(manifest.previous, Some(first_snapshot.manifest));
+    assert!(
+        manifest
+            .segment
+            .object_key
+            .starts_with("objects/git-segments/")
+    );
+
+    let restored = TempGitRepo(std::env::temp_dir().join(format!(
+        "scope-vcs-segment-restore-{}-{}",
+        std::process::id(),
+        unix_now()
+    )));
+    crate::git::storage::restore_git_segments(&state, &snapshot, &restored).unwrap();
+    assert_eq!(git_head_oid(&restored), expected_head);
 }
 
 #[tokio::test]

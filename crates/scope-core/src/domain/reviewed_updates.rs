@@ -2,7 +2,7 @@ use super::{
     policy::{Policy, PolicyError, ScopePath, Visibility, VisibilityRule},
     projection::{AuthorVisibility, FileChange, LogicalCommit, VisibilityEvent},
     repo_config::{HistoryRewriteAction, HistoryRewriteRequest, RepoConfig},
-    store::{RepoPublicationState, SourceBlob, StoredRepository},
+    store::{GitHead, GitSegment, RepoPublicationState, SourceBlob, StoredRepository},
 };
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -26,7 +26,8 @@ pub struct ReviewedUpdateInput {
     pub branch: String,
     pub author_id: String,
     pub message: String,
-    pub git_snapshot: SourceBlob,
+    pub git_head: GitHead,
+    pub git_segment: GitSegment,
     pub changes: Vec<ReviewedContentChange>,
     pub previous_config: Option<RepoConfig>,
     pub config: RepoConfig,
@@ -59,6 +60,14 @@ pub fn apply_reviewed_update_to_repo(
         return Err(ReviewedUpdateError::BadRequest(
             "update must include file changes",
         ));
+    }
+    if update.config == repo.repo_config
+        && update
+            .previous_config
+            .as_ref()
+            .is_some_and(|previous| previous == &repo.repo_config)
+    {
+        return apply_content_only_update(repo, update);
     }
     let old_tree = repo.live_tree();
     let mut new_tree = old_tree.clone();
@@ -101,7 +110,7 @@ pub fn apply_reviewed_update_to_repo(
         .iter()
         .map(|change| change.path.clone())
         .collect::<BTreeSet<_>>();
-    let logical_id = format!("rv_push_{}", repo.graph.commits.len() + 1);
+    let logical_id = format!("rv_push_{}", update.git_head.head_oid);
     let after_commit_id = repo.graph.commits.last().map(|commit| commit.id.clone());
     let mut next_visibility_event_id = repo.visibility_events.len() + 1;
     let history_rewrites = update
@@ -176,11 +185,85 @@ pub fn apply_reviewed_update_to_repo(
         message: update.message,
         changes: file_changes,
     });
+    repo.live_files = new_tree;
     repo.policy = next_policy;
     repo.record.default_visibility = next_default_visibility;
     repo.repo_config = next_config;
     repo.visibility_events.extend(visibility_events);
-    repo.git_snapshot = Some(update.git_snapshot);
+    repo.git_segments.push(update.git_segment);
+    repo.git_head = Some(update.git_head);
+    repo.first_push_token = None;
+    repo.record.publication_state = RepoPublicationState::Published;
+    repo.bump_change_version();
+    Ok(())
+}
+
+fn apply_content_only_update(
+    repo: &mut StoredRepository,
+    update: ReviewedUpdateInput,
+) -> ReviewedUpdateResult<()> {
+    let mut file_changes = Vec::with_capacity(update.changes.len());
+    for change in update.changes {
+        let old_content = repo.live_files.get(&change.path).cloned();
+        if source_content_matches(old_content.as_ref(), change.content.as_ref()) {
+            continue;
+        }
+        file_changes.push(FileChange {
+            visibility: change.content.as_ref().map_or_else(
+                || repo.policy.effective_visibility(&change.path),
+                |_| update.config.visibility_for_path(&change.path),
+            ),
+            path: change.path,
+            old_content,
+            new_content: change.content,
+        });
+    }
+    if file_changes.is_empty() {
+        return Err(ReviewedUpdateError::BadRequest(
+            "update did not change the live tree",
+        ));
+    }
+    for change in &file_changes {
+        match &change.new_content {
+            Some(content) => {
+                repo.live_files.insert(change.path.clone(), content.clone());
+            }
+            None => {
+                repo.live_files.remove(&change.path);
+            }
+        }
+    }
+    for change in &file_changes {
+        if change.new_content.is_some() {
+            let rule = match update.config.visibility_for_path(&change.path) {
+                Visibility::Public => VisibilityRule::public(change.path.clone()),
+                Visibility::Private => VisibilityRule::private(change.path.clone()),
+            };
+            repo.policy
+                .add_rule(rule)
+                .map_err(ReviewedUpdateError::InvalidPolicy)?;
+        } else {
+            repo.policy.remove_rule(&change.path);
+        }
+    }
+    let logical_id = format!("rv_push_{}", update.git_head.head_oid);
+    let parent_ids = repo
+        .graph
+        .commits
+        .last()
+        .map(|commit| commit.id.clone())
+        .into_iter()
+        .collect();
+    repo.graph.commits.push(LogicalCommit {
+        id: logical_id,
+        parent_ids,
+        author_id: update.author_id,
+        author_visibility: AuthorVisibility::Visible,
+        message: update.message,
+        changes: file_changes,
+    });
+    repo.git_segments.push(update.git_segment);
+    repo.git_head = Some(update.git_head);
     repo.first_push_token = None;
     repo.record.publication_state = RepoPublicationState::Published;
     repo.bump_change_version();

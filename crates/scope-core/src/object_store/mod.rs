@@ -1,4 +1,5 @@
 mod encrypted;
+mod filesystem;
 mod memory;
 mod s3;
 mod source_blobs;
@@ -6,6 +7,7 @@ mod source_blobs;
 use crate::{config::non_empty_env, error::ApiError};
 
 pub use encrypted::EncryptedObjectStore;
+pub use filesystem::FileObjectStore;
 pub use memory::MemoryObjectStore;
 pub use s3::S3ObjectStore;
 pub use source_blobs::{

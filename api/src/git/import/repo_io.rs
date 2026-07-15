@@ -1,4 +1,4 @@
-use crate::domain::store::{SourceBlob, is_supported_git_file_mode};
+use crate::domain::store::{GitHead, GitSegment, SourceBlob, is_supported_git_file_mode};
 use crate::domain::{policy::ScopePath, repo_config::is_reserved_config_path};
 use crate::{
     config::{
@@ -11,15 +11,9 @@ use crate::{
     runtime_budgets::RuntimeBudgets,
     state::AppState,
 };
+use scope_core::git_segments::GitSegmentManifest;
 use sha2::{Digest, Sha256};
-use std::{
-    io::Write,
-    path::Path as FsPath,
-    process::{Command, Stdio},
-    thread,
-};
-
-const MAX_PARALLEL_BLOB_PUTS: usize = 8;
+use std::{path::Path as FsPath, process::Command};
 
 pub(super) fn pushed_commit_message(
     staging_repo: &FsPath,
@@ -153,200 +147,242 @@ pub(super) fn git_tree_entries(
     Ok(pending_files)
 }
 
+pub(super) fn git_changed_tree_entries(
+    staging_repo: &FsPath,
+    base_oid: Option<&str>,
+    head_oid: &str,
+) -> Result<Vec<(ScopePath, Option<GitTreeFile>)>, ApiError> {
+    let Some(base_oid) = base_oid else {
+        return git_tree_entries(staging_repo, head_oid)?
+            .into_iter()
+            .map(|entry| {
+                let path =
+                    ScopePath::parse(format!("/{}", entry.path)).map_err(ApiError::bad_request)?;
+                Ok((path, Some(entry)))
+            })
+            .collect();
+    };
+    let output = run_git_output(
+        Some(staging_repo),
+        &[
+            "diff-tree",
+            "--no-commit-id",
+            "--raw",
+            "-r",
+            "-z",
+            "--no-renames",
+            base_oid,
+            head_oid,
+        ],
+        "reading pushed Git delta",
+    )?;
+    if !output.status.success() {
+        return Err(ApiError::service_unavailable(format!(
+            "reading pushed Git delta: {}",
+            String::from_utf8_lossy(&output.stderr).trim()
+        )));
+    }
+
+    let mut fields = output.stdout.split(|byte| *byte == 0);
+    let mut pending = Vec::new();
+    while let Some(header) = fields.next() {
+        if header.is_empty() {
+            continue;
+        }
+        let path = fields
+            .next()
+            .ok_or_else(|| ApiError::internal_message("Git delta is missing a path"))?;
+        let header = std::str::from_utf8(header).map_err(ApiError::bad_request)?;
+        let path = std::str::from_utf8(path).map_err(ApiError::bad_request)?;
+        validate_pushed_file_path(path)?;
+        let values = header.split_whitespace().collect::<Vec<_>>();
+        if values.len() != 5 || !values[0].starts_with(':') {
+            return Err(ApiError::internal_message("invalid Git delta record"));
+        }
+        let new_mode = values[1];
+        let new_oid = values[3];
+        let status = values[4];
+        let scope_path = ScopePath::parse(format!("/{path}")).map_err(ApiError::bad_request)?;
+        if status == "D" {
+            pending.push((scope_path, None));
+            continue;
+        }
+        if !is_supported_git_file_mode(new_mode) {
+            return Err(ApiError::bad_request(format!(
+                "unsupported Git file mode {path}: {new_mode}"
+            )));
+        }
+        pending.push((
+            scope_path,
+            Some(GitTreeFile {
+                path: path.to_string(),
+                mode: new_mode.to_string(),
+                oid: new_oid.to_string(),
+                size_bytes: 0,
+            }),
+        ));
+    }
+
+    let requested_oids = pending
+        .iter()
+        .filter_map(|(_, entry)| entry.as_ref().map(|entry| entry.oid.as_str()))
+        .map(|oid| format!("{oid}\n"))
+        .collect::<String>();
+    if !requested_oids.is_empty() {
+        let output = git_process_output_with_timeout(
+            Command::new("git").current_dir(staging_repo).args([
+                "cat-file",
+                "--batch-check=%(objectname) %(objecttype) %(objectsize)",
+            ]),
+            Some(requested_oids.into_bytes()),
+            RuntimeBudgets::default_git_command_timeout(),
+        )?;
+        if !output.status.success() {
+            return Err(ApiError::service_unavailable(format!(
+                "reading pushed blob sizes: {}",
+                String::from_utf8_lossy(&output.stderr).trim()
+            )));
+        }
+        let size_output = String::from_utf8(output.stdout).map_err(ApiError::bad_request)?;
+        let mut sizes = size_output.lines().map(|line| {
+            let values = line.split_whitespace().collect::<Vec<_>>();
+            if values.len() != 3 || values[1] != "blob" {
+                return Err(ApiError::bad_request("pushed path is not a Git blob"));
+            }
+            values[2]
+                .parse::<usize>()
+                .map_err(|_| ApiError::internal_message("invalid Git blob size"))
+        });
+        for (_, entry) in &mut pending {
+            if let Some(entry) = entry {
+                entry.size_bytes = sizes
+                    .next()
+                    .ok_or_else(|| ApiError::internal_message("missing Git blob size"))??;
+                if entry.size_bytes > MAX_PENDING_IMPORT_BLOB_BYTES {
+                    return Err(ApiError::bad_request(format!(
+                        "blob {} is larger than {MAX_PENDING_IMPORT_BLOB_BYTES} bytes",
+                        entry.path
+                    )));
+                }
+            }
+        }
+    }
+    if pending.len() > MAX_PENDING_IMPORT_FILES {
+        return Err(ApiError::bad_request(format!(
+            "pending import exceeds {MAX_PENDING_IMPORT_FILES} files"
+        )));
+    }
+    let total_bytes = pending
+        .iter()
+        .filter_map(|(_, entry)| entry.as_ref())
+        .try_fold(0usize, |total, entry| total.checked_add(entry.size_bytes))
+        .ok_or_else(|| ApiError::bad_request("pending import is too large"))?;
+    if total_bytes > MAX_PENDING_IMPORT_TOTAL_BYTES {
+        return Err(ApiError::bad_request(format!(
+            "pending import exceeds {MAX_PENDING_IMPORT_TOTAL_BYTES} bytes"
+        )));
+    }
+    Ok(pending)
+}
+
 pub(crate) fn validate_pushed_tree(staging_repo: &FsPath, head_oid: &str) -> Result<(), ApiError> {
     git_tree_entries(staging_repo, head_oid).map(|_| ())
 }
 
-pub(super) fn git_tree_blob_contents(
-    staging_repo: &FsPath,
-    pending_files: &[GitTreeFile],
-) -> Result<Vec<Vec<u8>>, ApiError> {
-    if pending_files.is_empty() {
-        return Ok(Vec::new());
-    }
-
-    let mut child = Command::new("git")
-        .current_dir(staging_repo)
-        .args(["cat-file", "--batch"])
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
-        .map_err(ApiError::internal)?;
-    let mut stdin = child
-        .stdin
-        .take()
-        .ok_or_else(|| ApiError::internal_message("opening git cat-file stdin failed"))?;
-
-    let (output, write_result) = thread::scope(|scope| {
-        let writer = scope.spawn(move || {
-            for pending in pending_files {
-                writeln!(stdin, "{}", pending.oid).map_err(ApiError::internal)?;
-            }
-            Ok::<(), ApiError>(())
-        });
-        let output = child.wait_with_output().map_err(ApiError::internal);
-        let write_result = writer
-            .join()
-            .map_err(|_| ApiError::internal_message("git cat-file input writer panicked"));
-        (output, write_result)
-    });
-    let output = output?;
-    if !output.status.success() {
-        return Err(ApiError::service_unavailable(format!(
-            "reading pushed blobs: {}",
-            String::from_utf8_lossy(&output.stderr).trim()
-        )));
-    }
-    match write_result {
-        Ok(result) => result?,
-        Err(error) => return Err(error),
-    }
-
-    parse_git_cat_file_batch(&output.stdout, pending_files)
+pub(crate) struct CreatedGitSegment {
+    pub(crate) head: GitHead,
+    pub(crate) segment: GitSegment,
 }
 
-pub(super) fn put_git_blob_contents(
-    state: &AppState,
-    repo_id: &str,
-    pending_files: &[GitTreeFile],
-    contents: &[Vec<u8>],
-    uploaded_blobs: &mut Vec<SourceBlob>,
-) -> Result<Vec<SourceBlob>, ApiError> {
-    if pending_files.len() != contents.len() {
-        return Err(ApiError::internal_message(
-            "Git tree entry count did not match blob content count",
-        ));
-    }
-    let store = state.object_store.as_ref();
-    let blob_put_parallelism = state
-        .runtime_budgets
-        .object_store_concurrency()
-        .clamp(1, MAX_PARALLEL_BLOB_PUTS);
-    let mut blobs = Vec::with_capacity(contents.len());
-    for chunk in pending_files
-        .iter()
-        .zip(contents)
-        .collect::<Vec<_>>()
-        .chunks(blob_put_parallelism)
-    {
-        let results = thread::scope(|scope| {
-            let handles = chunk
-                .iter()
-                .map(|(pending, content)| {
-                    scope.spawn(move || {
-                        let mut blob = put_repo_object(store, repo_id, "blobs", content)?;
-                        blob.git_file_mode = pending.mode.clone();
-                        Ok(blob)
-                    })
-                })
-                .collect::<Vec<_>>();
-            handles
-                .into_iter()
-                .map(|handle| handle.join())
-                .collect::<Vec<_>>()
-        });
-
-        let mut first_error = None;
-        for result in results {
-            match result {
-                Ok(Ok(blob)) => {
-                    uploaded_blobs.push(blob.clone());
-                    blobs.push(blob);
-                }
-                Ok(Err(error)) => {
-                    first_error.get_or_insert(error);
-                }
-                Err(_) => {
-                    first_error.get_or_insert_with(|| {
-                        ApiError::internal_message("blob upload worker panicked")
-                    });
-                }
-            }
-        }
-        if let Some(error) = first_error {
-            return Err(error);
-        }
-    }
-
-    Ok(blobs)
-}
-
-fn parse_git_cat_file_batch(
-    output: &[u8],
-    pending_files: &[GitTreeFile],
-) -> Result<Vec<Vec<u8>>, ApiError> {
-    let mut cursor = 0usize;
-    let mut contents = Vec::with_capacity(pending_files.len());
-
-    for pending in pending_files {
-        let header_end = output[cursor..]
-            .iter()
-            .position(|byte| *byte == b'\n')
-            .map(|offset| cursor + offset)
-            .ok_or_else(|| ApiError::internal_message("git cat-file batch header missing"))?;
-        let header = std::str::from_utf8(&output[cursor..header_end])
-            .map_err(|_| ApiError::internal_message("git cat-file batch header is invalid"))?;
-        cursor = header_end + 1;
-
-        let mut fields = header.split_whitespace();
-        let oid = fields
-            .next()
-            .ok_or_else(|| ApiError::internal_message("git cat-file batch header missing oid"))?;
-        let kind = fields
-            .next()
-            .ok_or_else(|| ApiError::internal_message("git cat-file batch header missing kind"))?;
-        let size = fields
-            .next()
-            .ok_or_else(|| ApiError::internal_message("git cat-file batch header missing size"))?
-            .parse::<usize>()
-            .map_err(|_| ApiError::internal_message("git cat-file batch size is invalid"))?;
-        if oid != pending.oid || kind != "blob" || size != pending.size_bytes {
-            return Err(ApiError::internal_message(
-                "git cat-file batch output mismatch",
-            ));
-        }
-
-        let content_end = cursor
-            .checked_add(size)
-            .ok_or_else(|| ApiError::internal_message("git cat-file batch output is too large"))?;
-        if content_end >= output.len() {
-            return Err(ApiError::internal_message(
-                "git cat-file batch content is truncated",
-            ));
-        }
-        let content = output[cursor..content_end].to_vec();
-        cursor = content_end;
-        if output.get(cursor) != Some(&b'\n') {
-            return Err(ApiError::internal_message(
-                "git cat-file batch content delimiter missing",
-            ));
-        }
-        cursor += 1;
-
-        contents.push(content);
-    }
-
-    if cursor != output.len() {
-        return Err(ApiError::internal_message(
-            "git cat-file batch output has trailing data",
-        ));
-    }
-
-    Ok(contents)
-}
-
-pub(crate) fn git_snapshot_from_repo(
+pub(crate) async fn git_segment_manifest_from_repo(
     state: &AppState,
     repo_id: &str,
     repo: &FsPath,
-) -> Result<SourceBlob, ApiError> {
-    git_snapshot_from_refs(
-        state,
+    previous: Option<&GitHead>,
+) -> Result<CreatedGitSegment, ApiError> {
+    let refname = format!("refs/heads/{DEFAULT_GIT_BRANCH}");
+    let head_oid = git_stdout_text(repo, &["rev-parse", &refname], "reading pushed Git head")?
+        .trim()
+        .to_string();
+    let mut revisions = format!("{head_oid}\n");
+    if let Some(previous) = previous {
+        revisions.push('^');
+        revisions.push_str(&previous.head_oid);
+        revisions.push('\n');
+    }
+    let output = git_process_output_with_timeout(
+        Command::new("git")
+            .current_dir(repo)
+            .args(["pack-objects", "--revs", "--stdout"]),
+        Some(revisions.into_bytes()),
+        state.runtime_budgets.git_command_timeout(),
+    )?;
+    if !output.status.success() {
+        return Err(ApiError::service_unavailable(format!(
+            "creating incremental Git segment: {}",
+            String::from_utf8_lossy(&output.stderr).trim()
+        )));
+    }
+    let bytes = output.stdout;
+    let segment = put_repo_object(state.object_store.as_ref(), repo_id, "git-segments", &bytes)?;
+    let manifest = GitSegmentManifest::new(
+        head_oid.clone(),
+        previous.map(|head| head.manifest.clone()),
+        segment.clone(),
+    );
+    let manifest_bytes = match manifest.encode() {
+        Ok(bytes) => bytes,
+        Err(error) => {
+            queue_failed_segment(state, segment.clone()).await?;
+            return Err(error.into());
+        }
+    };
+    let mut snapshot = match put_repo_object(
+        state.object_store.as_ref(),
         repo_id,
-        repo,
-        &[format!("refs/heads/{DEFAULT_GIT_BRANCH}")],
-    )
+        "git-manifests",
+        &manifest_bytes,
+    ) {
+        Ok(snapshot) => snapshot,
+        Err(error) => {
+            queue_failed_segment(state, segment.clone()).await?;
+            return Err(error.into());
+        }
+    };
+    snapshot.git_oid = head_oid.clone();
+    let sequence = previous.map_or(1, |head| head.segment_sequence.saturating_add(1));
+    Ok(CreatedGitSegment {
+        head: GitHead {
+            head_oid: head_oid.clone(),
+            segment_sequence: sequence,
+            change_version: previous.map_or(1, |head| head.change_version.saturating_add(1)),
+            manifest: snapshot.clone(),
+        },
+        segment: GitSegment {
+            sequence,
+            base_oid: previous.map(|head| head.head_oid.clone()),
+            head_oid,
+            object: segment.clone(),
+            manifest: snapshot,
+        },
+    })
+}
+
+async fn queue_failed_segment(state: &AppState, segment: SourceBlob) -> Result<(), ApiError> {
+    match state
+        .metadata
+        .queue_pending_source_blob_deletions(vec![segment.clone()])
+        .await
+    {
+        Ok(()) => Ok(()),
+        Err(queue_error) => match state.object_store.delete(&segment.object_key) {
+            Ok(()) => Ok(()),
+            Err(delete_error) => Err(ApiError::service_unavailable(format!(
+                "failed to queue or delete incomplete Git segment: {}; {}",
+                queue_error.message, delete_error.message
+            ))),
+        },
+    }
 }
 
 pub(crate) fn git_snapshot_from_ref(
@@ -364,6 +400,12 @@ fn git_snapshot_from_refs(
     repo: &FsPath,
     refs: &[String],
 ) -> Result<SourceBlob, ApiError> {
+    let [refname] = refs else {
+        return Err(ApiError::internal_message(
+            "Git snapshots must contain exactly one ref",
+        ));
+    };
+    let head_oid = git_stdout_text(repo, &["rev-parse", refname], "reading Git snapshot head")?;
     let bundle_path = repo.join(format!("scope-snapshot-{}.bundle", random_bundle_id()?));
     let bundle = bundle_path.to_string_lossy().to_string();
     let mut args = vec!["bundle", "create", bundle.as_str()];
@@ -371,12 +413,10 @@ fn git_snapshot_from_refs(
     run_git(Some(repo), &args, "creating Git snapshot bundle")?;
     let bytes = std::fs::read(&bundle_path).map_err(ApiError::internal)?;
     let _ = std::fs::remove_file(&bundle_path);
-    Ok(put_repo_object(
-        state.object_store.as_ref(),
-        repo_id,
-        "git-bundles",
-        &bytes,
-    )?)
+    let mut snapshot =
+        put_repo_object(state.object_store.as_ref(), repo_id, "git-bundles", &bytes)?;
+    snapshot.git_oid = head_oid.trim().to_string();
+    Ok(snapshot)
 }
 
 fn random_bundle_id() -> Result<String, ApiError> {

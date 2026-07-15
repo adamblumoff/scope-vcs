@@ -239,8 +239,9 @@ EOF
 }
 
 write_worker_runner() {
-  local database_url runner
+  local database_url object_key runner
   database_url="$(local_database_url)"
+  object_key="$(get_object_key)"
   runner="$STATE_DIR/worker.sh"
   if [[ -z "$database_url" ]]; then
     echo "DATABASE_URL is required for the worker" >&2
@@ -256,6 +257,10 @@ while IFS='=' read -r name _; do
   [[ "\$name" == SCOPE_BUCKET_* ]] && unset "\$name"
 done < <(env)
 export SCOPE_WORKER_ID="local-dev-worker"
+export SCOPE_OBJECT_STORE="filesystem"
+export SCOPE_DATA_DIR="$DATA_DIR"
+export SCOPE_OBJECT_STORE_DIR="$OBJECT_DIR"
+export SCOPE_OBJECT_ENCRYPTION_KEY="$object_key"
 EOF
   printf 'export DATABASE_URL=%q\n' "$database_url" >> "$runner"
   cat >> "$runner" <<'EOF'

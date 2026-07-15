@@ -126,12 +126,6 @@ pub(crate) struct DeleteRepoResponse {
     pub(crate) deleted: bool,
 }
 
-#[derive(Debug, Serialize)]
-#[cfg_attr(feature = "type-export", derive(ts_rs::TS))]
-pub(crate) struct CompletePushIntentResponse {
-    pub(crate) config_applied: bool,
-}
-
 #[derive(Debug, Deserialize)]
 #[cfg_attr(feature = "type-export", derive(ts_rs::TS))]
 pub(crate) struct CommitHistoryRequest {
