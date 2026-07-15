@@ -255,11 +255,7 @@ pub fn ensure_scope_remote_can_receive_push(
     access: &RepositoryAccessResponse,
 ) -> anyhow::Result<()> {
     if lifecycle_state == RepoPublicationState::Unpublished {
-        ensure_unpublished_repo_can_receive_first_push(
-            &target.owner,
-            &target.repo,
-            access.actor,
-        )
+        ensure_unpublished_repo_can_receive_first_push(&target.owner, &target.repo, access.actor)
     } else {
         ensure_published_repo_can_receive_push(
             &target.owner,
