@@ -269,9 +269,7 @@ pub fn accept_content_push(
             "update must include file changes",
         ));
     }
-    if update.config != state.repo_config
-        || update.previous_config.as_ref() != Some(&state.repo_config)
-    {
+    if update.config != state.repo_config {
         return Err(ReviewedUpdateError::Conflict(
             "repo config changed since review; rerun scope push",
         ));

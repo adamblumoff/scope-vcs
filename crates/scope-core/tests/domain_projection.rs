@@ -266,7 +266,7 @@ fn reviewed_update(
 }
 
 #[test]
-fn content_push_command_returns_normalized_effects() {
+fn content_push_command_returns_normalized_effects_without_previous_config() {
     let repo = published_repo_with_public_file("initial", "/README.md", "hello");
     let config = config(
         Visibility::Public,
@@ -285,7 +285,7 @@ fn content_push_command_returns_normalized_effects() {
             "3333333333333333333333333333333333333333",
             "add secret",
             vec![reviewed_change("/secret.txt", Some("secret"))],
-            Some(config.clone()),
+            None,
             config,
         ),
     )
