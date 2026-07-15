@@ -19,7 +19,7 @@ use crate::{
 };
 use anyhow::bail;
 use scope_core::domain::repo_config::repo_config_fingerprint;
-use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
+use std::time::{SystemTime, UNIX_EPOCH};
 
 pub const DEFAULT_SCOPE_BRANCH: &str = "main";
 
@@ -30,7 +30,6 @@ pub struct ScopePushOutcome {
 }
 
 pub fn run(explicit_remote: Option<&str>, no_review: bool) -> anyhow::Result<()> {
-    let started = Instant::now();
     let git_repo = ensure_git_repo_ready("scope push")?;
     let reviewed_head_oid = head_oid(&git_repo)?;
     let config_created = ensure_scope_repo_config_exists(&git_repo.root)?;
@@ -57,7 +56,6 @@ pub fn run(explicit_remote: Option<&str>, no_review: bool) -> anyhow::Result<()>
         push_context.lifecycle_state,
         &push_context.access,
     )?;
-    let preflight_ms = started.elapsed();
     if config_created {
         write_worktree_scope_repo_config_with_base(&git_repo.root, &push_context.config)?;
         config = push_context.config.clone();
@@ -90,7 +88,6 @@ pub fn run(explicit_remote: Option<&str>, no_review: bool) -> anyhow::Result<()>
             ),
         }
     }
-    let fetch_started = Instant::now();
     let local_remote_head = scope_remote_head_oid(&git_repo, &remote, DEFAULT_SCOPE_BRANCH)?;
     if push_context.lifecycle_state == RepoPublicationState::Published
         && local_remote_head.as_deref() != push_context.head_oid.as_deref()
@@ -103,7 +100,6 @@ pub fn run(explicit_remote: Option<&str>, no_review: bool) -> anyhow::Result<()>
             &session.token,
         )?;
     }
-    let fetch_ms = fetch_started.elapsed();
     let reviewed_base_oid = if no_review {
         None
     } else if push_context.lifecycle_state == RepoPublicationState::Published {
@@ -115,7 +111,6 @@ pub fn run(explicit_remote: Option<&str>, no_review: bool) -> anyhow::Result<()>
     } else {
         Some(None)
     };
-    let review_started = Instant::now();
     if let Some(review_base_oid) = &reviewed_base_oid {
         let changed_paths = changed_paths_since_scope_base_at_commit(
             &git_repo,
@@ -124,7 +119,6 @@ pub fn run(explicit_remote: Option<&str>, no_review: bool) -> anyhow::Result<()>
         )?;
         config = run_push_review(&git_repo, &reviewed_head_oid, &changed_paths)?;
     }
-    let review_ms = review_started.elapsed();
     let base_config_hash = load_worktree_scope_repo_config_base_hash(&git_repo.root)?;
     let intent = create_push_intent(
         &client,
@@ -153,7 +147,6 @@ pub fn run(explicit_remote: Option<&str>, no_review: bool) -> anyhow::Result<()>
     )?;
     ensure_push_intent_not_expired(intent.expires_at_unix)?;
 
-    let push_started = Instant::now();
     let outcome = match push_reviewed_head_with_intent(
         &session.token,
         &target,
@@ -166,14 +159,12 @@ pub fn run(explicit_remote: Option<&str>, no_review: bool) -> anyhow::Result<()>
         }
         Err(error) => return Err(error),
     };
-    let push_ms = push_started.elapsed();
     mark_scope_remote_pushed(&git_repo, &remote, DEFAULT_SCOPE_BRANCH, &reviewed_head_oid)?;
     mark_worktree_scope_repo_config_synced(&git_repo.root, &config)?;
     println!(
         "Pushed to Scope: {}/{}\nPush applied by Scope.",
         outcome.owner, outcome.repo
     );
-    report_push_timings(preflight_ms, fetch_ms, review_ms, push_ms);
     Ok(())
 }
 
@@ -284,16 +275,6 @@ pub fn push_reviewed_head_with_intent(
         owner: target.owner.clone(),
         repo: target.repo.clone(),
     })
-}
-
-fn report_push_timings(preflight: Duration, fetch: Duration, review: Duration, push: Duration) {
-    eprintln!(
-        "Scope push timings: client_preflight_ms={} fetch_ms={} review_build_ms={} push_ms={}",
-        preflight.as_millis(),
-        fetch.as_millis(),
-        review.as_millis(),
-        push.as_millis(),
-    );
 }
 
 fn ensure_unpublished_repo_can_receive_first_push(
