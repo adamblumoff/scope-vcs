@@ -33,22 +33,23 @@ pub mod outbox_job {
     impl Model {
         pub fn projection_read_model_rebuild(
             id: String,
-            repo: &StoredRepository,
+            repo_id: &str,
+            repo_version: u64,
             now: u64,
         ) -> Result<Self, ApiError> {
-            let repo_version = u64_to_i64(repo.record.change_version, "repository change version")?;
+            let persisted_repo_version = u64_to_i64(repo_version, "repository change version")?;
             Ok(Self {
                 id,
                 idempotency_key: projection_read_model_rebuild_idempotency_key(
-                    &repo.record.id,
-                    repo.record.change_version,
+                    repo_id,
+                    repo_version,
                 ),
                 kind: "projection_read_model_rebuild".to_string(),
-                repo_id: repo.record.id.clone(),
-                repo_version,
+                repo_id: repo_id.to_string(),
+                repo_version: persisted_repo_version,
                 payload: encode_json(&serde_json::json!({
-                    "repo_id": repo.record.id.clone(),
-                    "repo_version": repo.record.change_version,
+                    "repo_id": repo_id,
+                    "repo_version": repo_version,
                     "source": ProjectionSource::Live.as_str(),
                 }))?,
                 state: "ready".to_string(),

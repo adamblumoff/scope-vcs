@@ -51,7 +51,8 @@ where
     insert_repository_history(conn, &repo.graph, &repo.visibility_events).await?;
     insert_repository_live_files(conn, &repo.record.id, &repo.live_files).await?;
     insert_repository_relations(conn, repo).await?;
-    enqueue_projection_read_model_rebuild(conn, repo).await?;
+    enqueue_projection_read_model_rebuild(conn, &repo.record.id, repo.record.change_version)
+        .await?;
     Ok(())
 }
 
@@ -121,7 +122,8 @@ where
     )
     .await?;
     save_repository_relation_delta(conn, before, after).await?;
-    enqueue_projection_read_model_rebuild(conn, after).await?;
+    enqueue_projection_read_model_rebuild(conn, &after.record.id, after.record.change_version)
+        .await?;
     Ok(())
 }
 

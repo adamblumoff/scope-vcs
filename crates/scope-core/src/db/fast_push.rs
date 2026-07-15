@@ -1,21 +1,26 @@
 use super::{
     MetadataStore, acquire_aggregate_lock, entities,
-    history_rows::{RepositoryHistory, insert_commits, save_live_file},
+    history_rows::{insert_commits, save_live_file},
     object_references::{insert_object_reference, replace_object_reference},
     outbox::enqueue_projection_read_model_rebuild,
 };
 use crate::{
     domain::{
-        projection::{AuthorVisibility, LogicalCommit, SourceGraph},
+        policy::Policy,
         repo_actions::reviewed_update_api_error,
-        reviewed_updates::{ReviewedUpdateInput, apply_reviewed_update_to_repo},
-        store::{MainPushMode, RepoPublicationState, RepositoryActor},
+        repo_config::RepoConfig,
+        reviewed_updates::{
+            AcceptedContentPush, ContentPushState, ReviewedUpdateInput, accept_content_push,
+        },
+        store::{
+            MainPushMode, RepoPublicationState, RepositoryActor, repository_push_policy_for_user_id,
+        },
     },
     error::ApiError,
 };
 use sea_orm::{
-    ActiveModelTrait, ColumnTrait, EntityTrait, IntoActiveModel, QueryFilter, QueryOrder,
-    TransactionTrait,
+    ActiveModelTrait, ActiveValue::Set, ColumnTrait, EntityTrait, IntoActiveModel, QueryFilter,
+    QueryOrder, TransactionTrait,
 };
 use std::collections::BTreeMap;
 
@@ -36,7 +41,11 @@ impl MetadataStore {
             .await
             .map_err(ApiError::internal)?
             .ok_or_else(|| ApiError::not_found(format!("repo {owner}/{name} not found")))?;
-        if repo_row.publication_state != "Published" {
+        let publication_state: RepoPublicationState = serde_json::from_value(
+            serde_json::Value::String(repo_row.publication_state.clone()),
+        )
+        .map_err(ApiError::internal)?;
+        if publication_state != RepoPublicationState::Published {
             return Ok(None);
         }
         let head = entities::git_head::Entity::find_by_id(repo_id.clone())
@@ -50,14 +59,29 @@ impl MetadataStore {
                 "repo changed since push was reviewed; rerun scope push",
             ));
         }
-        let members = entities::repository_member::Entity::find()
+        let member_permissions = entities::repository_member::Entity::find()
             .filter(entities::repository_member::Column::RepoId.eq(repo_id.clone()))
-            .all(&tx)
+            .filter(entities::repository_member::Column::UserId.eq(author_id.to_string()))
+            .one(&tx)
             .await
             .map_err(ApiError::internal)?
-            .into_iter()
             .map(entities::repository_member::Model::try_into_domain)
-            .collect::<Result<Vec<_>, _>>()?;
+            .transpose()?
+            .map(|member| member.permissions);
+        let push_policy = repository_push_policy_for_user_id(
+            &repo_row.owner_user_id,
+            publication_state,
+            member_permissions,
+            author_id,
+        );
+        if push_policy.mode != MainPushMode::Published {
+            let message = if push_policy.access.actor == RepositoryActor::Public {
+                "repo membership required"
+            } else {
+                "push permission required"
+            };
+            return Err(ApiError::forbidden(message));
+        }
         let changed_paths = update
             .changes
             .iter()
@@ -87,109 +111,78 @@ impl MetadataStore {
         let next_ordinal = previous_commit
             .as_ref()
             .map_or(0, |commit| commit.ordinal.saturating_add(1));
-        let history = RepositoryHistory {
-            graph: SourceGraph {
-                repo_id: repo_id.clone(),
-                commits: previous_commit
-                    .map(|commit| LogicalCommit {
-                        id: commit.id,
-                        parent_ids: Vec::new(),
-                        author_id: String::new(),
-                        author_visibility: AuthorVisibility::Visible,
-                        message: String::new(),
-                        changes: Vec::new(),
-                    })
-                    .into_iter()
-                    .collect(),
+        let repo_config: RepoConfig =
+            serde_json::from_value(repo_row.repo_config.clone()).map_err(ApiError::internal)?;
+        let policy: Policy =
+            serde_json::from_value(repo_row.policy.clone()).map_err(ApiError::internal)?;
+        let change_version = u64::try_from(repo_row.change_version).map_err(|_| {
+            ApiError::internal_message("repository change version cannot be negative")
+        })?;
+        update.previous_config = Some(repo_config.clone());
+        let accepted = accept_content_push(
+            ContentPushState {
+                change_version,
+                policy,
+                repo_config,
+                previous_commit_id: previous_commit.map(|commit| commit.id),
+                live_files,
             },
-            visibility_events: Vec::new(),
-            live_files,
-        };
-        let mut repo = repo_row.try_into_domain(
-            super::repository_rows::RepositoryFactRows {
-                git_head: Some(head),
-                ..Default::default()
-            }
-            .into_facts(),
-            members,
-            Vec::new(),
-            history,
-        )?;
-        if repo.record.publication_state != RepoPublicationState::Published {
-            return Ok(None);
-        }
-        let push_policy = repo.push_policy_for_user_id(author_id);
-        if push_policy.mode != MainPushMode::Published {
-            let message = if push_policy.access.actor == RepositoryActor::Public {
-                "repo membership required"
-            } else {
-                "push permission required"
-            };
-            return Err(ApiError::forbidden(message));
-        }
-        if repo.repo_config != update.config {
-            return Err(ApiError::conflict(
-                "repo config changed since review; rerun scope push",
-            ));
-        }
-        update.previous_config = Some(repo.repo_config.clone());
-        update.git_head.change_version = repo.record.change_version.saturating_add(1);
-        apply_reviewed_update_to_repo(&mut repo, update).map_err(reviewed_update_api_error)?;
+            update,
+        )
+        .map_err(reviewed_update_api_error)?;
+        let AcceptedContentPush {
+            change_version,
+            policy,
+            git_head,
+            git_segment,
+            logical_commit,
+        } = accepted;
 
-        entities::repository::Model::from_domain(&repo)?
-            .into_active_model()
-            .update(&tx)
-            .await
-            .map_err(ApiError::internal)?;
-        let new_head = repo
-            .git_head
-            .as_ref()
-            .ok_or_else(|| ApiError::internal_message("content push did not produce a Git head"))?;
+        let persisted_change_version = i64::try_from(change_version).map_err(|_| {
+            ApiError::internal_message("repository change version exceeds PostgreSQL bigint range")
+        })?;
+        let mut repo_update = repo_row.into_active_model();
+        repo_update.change_version = Set(persisted_change_version);
+        repo_update.policy = Set(serde_json::to_value(&policy).map_err(ApiError::internal)?);
+        repo_update.update(&tx).await.map_err(ApiError::internal)?;
         entities::git_head::Entity::delete_by_id(repo_id.clone())
             .exec(&tx)
             .await
             .map_err(ApiError::internal)?;
-        entities::git_head::Model::from_domain(&repo_id, new_head)?
+        entities::git_head::Model::from_domain(&repo_id, &git_head)?
             .into_active_model()
             .insert(&tx)
             .await
             .map_err(ApiError::internal)?;
-        replace_object_reference(&tx, "git_manifest", &repo_id, Some(&new_head.manifest)).await?;
-        let segment = repo.git_segments.last().ok_or_else(|| {
-            ApiError::internal_message("content push did not produce a Git segment")
-        })?;
-        entities::git_segment::Model::from_domain(&repo_id, segment)?
+        replace_object_reference(&tx, "git_manifest", &repo_id, Some(&git_head.manifest)).await?;
+        entities::git_segment::Model::from_domain(&repo_id, &git_segment)?
             .into_active_model()
             .insert(&tx)
             .await
             .map_err(ApiError::internal)?;
-        let segment_ref_id = format!("{repo_id}:{}", segment.sequence);
-        insert_object_reference(&tx, "git_segment", &segment_ref_id, &segment.object).await?;
+        let segment_ref_id = format!("{repo_id}:{}", git_segment.sequence);
+        insert_object_reference(&tx, "git_segment", &segment_ref_id, &git_segment.object).await?;
         insert_object_reference(
             &tx,
             "git_segment_manifest",
             &segment_ref_id,
-            &segment.manifest,
+            &git_segment.manifest,
         )
         .await?;
-        let commit = repo.graph.commits.last().ok_or_else(|| {
-            ApiError::internal_message("content push did not produce a logical commit")
-        })?;
         let ordinal = usize::try_from(next_ordinal)
             .map_err(|_| ApiError::internal_message("logical commit ordinal is invalid"))?;
-        insert_commits(&tx, &repo_id, ordinal, std::slice::from_ref(commit)).await?;
-        for change in &commit.changes {
-            save_live_file(
-                &tx,
-                &repo_id,
-                &change.path,
-                repo.live_files.get(&change.path),
-            )
-            .await?;
+        insert_commits(
+            &tx,
+            &repo_id,
+            ordinal,
+            std::slice::from_ref(&logical_commit),
+        )
+        .await?;
+        for change in &logical_commit.changes {
+            save_live_file(&tx, &repo_id, &change.path, change.new_content.as_ref()).await?;
         }
-        enqueue_projection_read_model_rebuild(&tx, &repo).await?;
-        let committed_head = new_head.clone();
+        enqueue_projection_read_model_rebuild(&tx, &repo_id, change_version).await?;
         tx.commit().await.map_err(ApiError::internal)?;
-        Ok(Some(committed_head))
+        Ok(Some(git_head))
     }
 }

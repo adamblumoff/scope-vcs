@@ -9,12 +9,13 @@ use scope_core::domain::{
         RepoConfigVisibilityRule,
     },
     reviewed_updates::{
-        ReviewedConfigUpdateInput, ReviewedContentChange, ReviewedUpdateInput,
-        apply_reviewed_config_to_repo, apply_reviewed_update_to_repo,
+        ContentPushState, ReviewedConfigUpdateInput, ReviewedContentChange, ReviewedUpdateInput,
+        accept_content_push, apply_reviewed_config_to_repo, apply_reviewed_update_to_repo,
     },
     store::{RepoPublicationState, SourceBlob, StoredRepository, UserAccount},
 };
 use scope_core::object_store::{MemoryObjectStore, put_source_blob};
+use std::collections::BTreeMap;
 
 fn blob(content: &str) -> SourceBlob {
     put_source_blob(&MemoryObjectStore::new(), "scope", content.as_bytes()).unwrap()
@@ -229,29 +230,77 @@ fn apply_update_with_head(
 ) {
     apply_reviewed_update_to_repo(
         repo,
-        ReviewedUpdateInput {
-            branch: "main".to_string(),
-            author_id: "owner".to_string(),
-            message: message.to_string(),
-            git_head: scope_core::domain::store::GitHead {
-                head_oid: head_oid.to_string(),
-                segment_sequence: 1,
-                change_version: 1,
-                manifest: blob("manifest v2"),
-            },
-            git_segment: scope_core::domain::store::GitSegment {
-                sequence: 1,
-                base_oid: None,
-                head_oid: head_oid.to_string(),
-                object: blob("segment v2"),
-                manifest: blob("manifest segment v2"),
-            },
-            changes,
-            previous_config,
-            config,
-        },
+        reviewed_update(head_oid, message, changes, previous_config, config),
     )
     .unwrap();
+}
+
+fn reviewed_update(
+    head_oid: &str,
+    message: &str,
+    changes: Vec<ReviewedContentChange>,
+    previous_config: Option<RepoConfig>,
+    config: RepoConfig,
+) -> ReviewedUpdateInput {
+    ReviewedUpdateInput {
+        branch: "main".to_string(),
+        author_id: "owner".to_string(),
+        message: message.to_string(),
+        git_head: scope_core::domain::store::GitHead {
+            head_oid: head_oid.to_string(),
+            segment_sequence: 1,
+            change_version: 1,
+            manifest: blob("manifest v2"),
+        },
+        git_segment: scope_core::domain::store::GitSegment {
+            sequence: 1,
+            base_oid: None,
+            head_oid: head_oid.to_string(),
+            object: blob("segment v2"),
+            manifest: blob("manifest segment v2"),
+        },
+        changes,
+        previous_config,
+        config,
+    }
+}
+
+#[test]
+fn content_push_command_returns_normalized_effects_without_previous_config() {
+    let repo = published_repo_with_public_file("initial", "/README.md", "hello");
+    let config = config(
+        Visibility::Public,
+        Some(("/secret.txt", Visibility::Private)),
+        None,
+    );
+    let accepted = accept_content_push(
+        ContentPushState {
+            change_version: repo.record.change_version,
+            policy: repo.policy.clone(),
+            repo_config: config.clone(),
+            previous_commit_id: repo.graph.commits.last().map(|commit| commit.id.clone()),
+            live_files: BTreeMap::new(),
+        },
+        reviewed_update(
+            "3333333333333333333333333333333333333333",
+            "add secret",
+            vec![reviewed_change("/secret.txt", Some("secret"))],
+            None,
+            config,
+        ),
+    )
+    .unwrap();
+
+    assert_eq!(accepted.change_version, 2);
+    assert_eq!(accepted.git_head.change_version, 2);
+    assert_eq!(accepted.logical_commit.parent_ids, ["rv1"]);
+    assert_eq!(accepted.logical_commit.changes.len(), 1);
+    assert_eq!(
+        accepted.policy.effective_visibility(&path("/secret.txt")),
+        Visibility::Private
+    );
+    assert_eq!(repo.record.change_version, 1);
+    assert_eq!(repo.graph.commits.len(), 1);
 }
 
 #[test]

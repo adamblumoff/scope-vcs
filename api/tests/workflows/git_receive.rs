@@ -67,6 +67,100 @@ async fn published_receive_pack_push_applies_from_seeded_git_repo() {
 }
 
 #[tokio::test]
+async fn consecutive_content_only_pushes_advance_the_live_projection() {
+    let state = test_state_with_repo();
+    let mut repo = repo_with_readme(&state);
+    let mut base_manifest = source_blob(&state, "base Git manifest");
+    let base_head_oid = "0000000000000000000000000000000000000001".to_string();
+    base_manifest.git_oid = base_head_oid.clone();
+    let base_segment = crate::domain::store::GitSegment {
+        sequence: 1,
+        base_oid: None,
+        head_oid: base_head_oid.clone(),
+        object: source_blob(&state, "base Git segment"),
+        manifest: base_manifest.clone(),
+    };
+    repo.git_head = Some(crate::domain::store::GitHead {
+        head_oid: base_head_oid.clone(),
+        segment_sequence: 1,
+        change_version: repo.record.change_version,
+        manifest: base_manifest.clone(),
+    });
+    repo.git_segments.push(base_segment);
+    replace_test_repo(&state, repo).await;
+
+    let initial_rebuild = state
+        .metadata
+        .run_ready_outbox_jobs("content-push-test", 10)
+        .await
+        .unwrap();
+    assert_eq!(initial_rebuild.failed, 0);
+    assert_eq!(initial_rebuild.completed, 1);
+
+    let mut previous_head_oid = base_head_oid;
+    let mut previous_manifest_key = base_manifest.object_key;
+    for (index, expected_content) in ["second version", "third version"].into_iter().enumerate() {
+        let sequence = u64::try_from(index + 2).unwrap();
+        let head_oid = format!("{sequence:040x}");
+        let mut manifest = source_blob(&state, &format!("Git manifest {sequence}"));
+        manifest.git_oid = head_oid.clone();
+        let next_manifest_key = manifest.object_key.clone();
+        let mut update = receive_pack_update(&state, vec![("/README.md", Some(expected_content))]);
+        update.previous_config = Some(update.config.clone());
+        update.base_git_manifest_key = Some(Some(previous_manifest_key));
+        update.head_oid = head_oid.clone();
+        update.git_head = crate::domain::store::GitHead {
+            head_oid: head_oid.clone(),
+            segment_sequence: sequence,
+            change_version: sequence,
+            manifest: manifest.clone(),
+        };
+        update.git_segment = crate::domain::store::GitSegment {
+            sequence,
+            base_oid: Some(previous_head_oid),
+            head_oid: head_oid.clone(),
+            object: source_blob(&state, &format!("Git segment {sequence}")),
+            manifest,
+        };
+
+        let persisted = persist_test_update(&state, update).await.unwrap();
+        assert_eq!(persisted.git_head.change_version, sequence);
+        let stored = find_repo(&state, TEST_REPO_OWNER, TEST_REPO_NAME)
+            .await
+            .unwrap();
+        assert_eq!(stored.record.change_version, sequence);
+        assert_eq!(stored.git_head.unwrap().change_version, sequence);
+
+        let rebuilt = state
+            .metadata
+            .run_ready_outbox_jobs("content-push-test", 10)
+            .await
+            .unwrap();
+        assert_eq!(rebuilt.failed, 0);
+        assert_eq!(rebuilt.completed, 1);
+        let projected = state
+            .metadata
+            .repo_live_file_content(
+                TEST_REPO_OWNER,
+                TEST_REPO_NAME,
+                None,
+                &ScopePath::parse("/README.md").unwrap(),
+            )
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(blob_content(&state, &projected.blob), expected_content);
+
+        previous_head_oid = head_oid;
+        previous_manifest_key = next_manifest_key;
+    }
+
+    let jobs = state.metadata.outbox_job_counts_for_tests().await.unwrap();
+    assert_eq!(jobs.succeeded, 3);
+    assert_eq!(jobs.total, 3);
+}
+
+#[tokio::test]
 async fn published_receive_pack_rejects_non_fast_forward_push() {
     let state = test_state_with_repo();
     let staging_repo = published_staging_repo(&state).await;
