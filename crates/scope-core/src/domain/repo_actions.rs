@@ -223,7 +223,7 @@ mod tests {
     use super::*;
     use crate::domain::{
         policy::{ScopePath, Visibility},
-        store::{DEFAULT_GIT_FILE_MODE, UserAccount},
+        store::{DEFAULT_GIT_FILE_MODE, GitHead, UserAccount},
     };
 
     #[test]
@@ -231,7 +231,12 @@ mod tests {
         let owner = test_owner();
         let mut repo = StoredRepository::new(&owner, "repo", Visibility::Private).unwrap();
         let snapshot = source_blob("live-snapshot");
-        repo.git_snapshot = Some(snapshot.clone());
+        repo.git_head = Some(GitHead {
+            head_oid: snapshot.git_oid.clone(),
+            segment_sequence: 1,
+            change_version: 1,
+            manifest: snapshot.clone(),
+        });
 
         let mutation = delete_repo(&repo, &owner.id, &owner.handle, &repo.record.name).unwrap();
 

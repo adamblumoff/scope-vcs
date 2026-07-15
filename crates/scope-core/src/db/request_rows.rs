@@ -1,4 +1,5 @@
 use super::entities;
+use super::object_references::{delete_object_reference, replace_object_reference};
 use crate::{
     domain::requests::{
         CreditLedgerEntry, CreditLedgerEntryKind, Request, RequestEvent, UserCreditAccount,
@@ -169,6 +170,13 @@ where
         .insert(conn)
         .await
         .map_err(ApiError::internal)?;
+    replace_object_reference(
+        conn,
+        "request_snapshot",
+        &request.id,
+        request.git_snapshot.as_ref(),
+    )
+    .await?;
     Ok(())
 }
 
@@ -185,6 +193,7 @@ where
         .exec(conn)
         .await
         .map_err(ApiError::internal)?;
+    delete_object_reference(conn, "request_snapshot", request_id).await?;
     Ok(())
 }
 
@@ -242,6 +251,13 @@ where
             "request row missing during update",
         ));
     }
+    replace_object_reference(
+        conn,
+        "request_snapshot",
+        &request.id,
+        request.git_snapshot.as_ref(),
+    )
+    .await?;
     Ok(())
 }
 

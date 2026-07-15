@@ -122,6 +122,23 @@ pub struct SourceBlob {
     pub size_bytes: u64,
 }
 
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct GitHead {
+    pub head_oid: String,
+    pub segment_sequence: u64,
+    pub change_version: u64,
+    pub manifest: SourceBlob,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct GitSegment {
+    pub sequence: u64,
+    pub base_oid: Option<String>,
+    pub head_oid: String,
+    pub object: SourceBlob,
+    pub manifest: SourceBlob,
+}
+
 pub const DEFAULT_GIT_FILE_MODE: &str = "100644";
 pub const EXECUTABLE_GIT_FILE_MODE: &str = "100755";
 
@@ -199,7 +216,9 @@ pub struct StoredRepository {
     pub policy: Policy,
     pub graph: SourceGraph,
     pub visibility_events: Vec<VisibilityEvent>,
-    pub git_snapshot: Option<SourceBlob>,
+    pub live_files: BTreeMap<ScopePath, SourceBlob>,
+    pub git_head: Option<GitHead>,
+    pub git_segments: Vec<GitSegment>,
     pub members: Vec<RepositoryMember>,
     pub invitations: Vec<RepositoryInvite>,
 }
@@ -232,7 +251,9 @@ impl StoredRepository {
                 commits: Vec::new(),
             },
             visibility_events: Vec::new(),
-            git_snapshot: None,
+            live_files: BTreeMap::new(),
+            git_head: None,
+            git_segments: Vec::new(),
             members: Vec::new(),
             invitations: Vec::new(),
         })
@@ -288,13 +309,7 @@ impl StoredRepository {
     }
 
     pub fn graph_has_file(&self, path: &ScopePath) -> bool {
-        let mut present = false;
-        for change in self.graph.commits.iter().flat_map(|commit| &commit.changes) {
-            if change.path.as_str() == path.as_str() {
-                present = change.new_content.is_some();
-            }
-        }
-        present
+        self.live_files.contains_key(path)
     }
 
     pub fn bump_change_version(&mut self) {
@@ -302,23 +317,17 @@ impl StoredRepository {
     }
 
     pub fn live_tree(&self) -> BTreeMap<ScopePath, SourceBlob> {
-        let mut tree = BTreeMap::new();
-        for change in self.graph.commits.iter().flat_map(|commit| &commit.changes) {
-            match &change.new_content {
-                Some(blob) => {
-                    tree.insert(change.path.clone(), blob.clone());
-                }
-                None => {
-                    tree.remove(&change.path);
-                }
-            }
-        }
-        tree
+        self.live_files.clone()
     }
 
     pub fn source_blobs(&self) -> Vec<SourceBlob> {
         let mut blobs = Vec::new();
-        blobs.extend(self.git_snapshot.clone());
+        blobs.extend(self.git_head.iter().map(|head| head.manifest.clone()));
+        blobs.extend(
+            self.git_segments
+                .iter()
+                .flat_map(|segment| [segment.object.clone(), segment.manifest.clone()]),
+        );
         for change in self.graph.commits.iter().flat_map(|commit| &commit.changes) {
             blobs.extend(change.old_content.clone());
             blobs.extend(change.new_content.clone());

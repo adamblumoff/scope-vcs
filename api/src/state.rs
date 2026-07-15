@@ -11,6 +11,7 @@ use crate::{
     config::{SCOPE_OPERATOR_TOKEN_ENV, data_dir, git_repo_root, non_empty_env},
     db::MetadataStore,
     error::ApiError,
+    git::cache::RawGitCacheRegistry,
     object_store::{EncryptedObjectStore, ObjectStore, S3ObjectStore},
     persistence::{ensure_private_dir, unix_now},
     repo_events::{RepoChangeBus, RepoChangeEvent},
@@ -25,6 +26,7 @@ use std::{
     fs,
     path::{Path, PathBuf},
     sync::Arc,
+    time::Duration,
 };
 
 const PUSH_INTENT_TTL_SECS: u64 = 10 * 60;
@@ -45,6 +47,7 @@ pub struct AppState {
     pub(crate) operator_token: Option<Arc<str>>,
     pub(crate) repo_events: RepoChangeBus,
     pub(crate) push_intent_signing_key: Arc<[u8]>,
+    pub(crate) raw_git_cache: Arc<RawGitCacheRegistry>,
     #[cfg(test)]
     pub(crate) test_object_store: Arc<crate::object_store::MemoryObjectStore>,
 }
@@ -58,7 +61,7 @@ struct PushIntentClaims {
     head_oid: String,
     config: RepoConfig,
     base_config_hash: String,
-    base_git_snapshot_key: Option<String>,
+    base_git_manifest_key: Option<String>,
     expires_at_unix: u64,
 }
 
@@ -69,7 +72,7 @@ pub(crate) struct ValidatedPushIntent {
     pub(crate) head_oid: String,
     pub(crate) config: RepoConfig,
     pub(crate) base_config_hash: String,
-    pub(crate) base_git_snapshot_key: Option<String>,
+    pub(crate) base_git_manifest_key: Option<String>,
     pub(crate) expires_at_unix: u64,
 }
 
@@ -92,7 +95,7 @@ impl ValidatedPushIntent {
 
     pub(crate) fn base_for_head(&self, head_oid: &str) -> Result<Option<String>, ApiError> {
         if self.head_oid == head_oid {
-            Ok(self.base_git_snapshot_key.clone())
+            Ok(self.base_git_manifest_key.clone())
         } else {
             Err(ApiError::forbidden(
                 "Scope push intent does not match received Git push",
@@ -176,17 +179,6 @@ struct SourceBlobStorageDeleteReport {
     failed: Vec<SourceBlobCleanupFailure>,
 }
 
-impl SourceBlobStorageDeleteReport {
-    fn first_error(&self) -> Option<ApiError> {
-        self.failed.first().map(|failure| {
-            ApiError::service_unavailable(format!(
-                "failed to clean source blob storage {}: {}",
-                failure.object_key, failure.error
-            ))
-        })
-    }
-}
-
 impl AppState {
     pub async fn from_env() -> anyhow::Result<Self> {
         let repo_root = git_repo_root();
@@ -204,6 +196,8 @@ impl AppState {
             runtime_budgets.clone(),
         ));
         metadata.start_repo_change_listener(repo_events.clone())?;
+        let raw_git_cache = RawGitCacheRegistry::new(data_dir.join("git-cache"))
+            .map_err(|error| anyhow::anyhow!(error.into_message()))?;
 
         let state = Self {
             metadata,
@@ -214,11 +208,12 @@ impl AppState {
             operator_token: non_empty_env(SCOPE_OPERATOR_TOKEN_ENV).map(Arc::from),
             repo_events,
             push_intent_signing_key,
+            raw_git_cache: raw_git_cache.clone(),
             #[cfg(test)]
             test_object_store: Arc::new(crate::object_store::MemoryObjectStore::new()),
         };
+        state.start_raw_git_cache_reaper();
         best_effort_drain_pending_repo_storage_deletions(&state).await;
-        best_effort_drain_pending_source_blob_deletions(&state).await;
         Ok(state)
     }
 
@@ -226,13 +221,14 @@ impl AppState {
     pub(crate) fn test_state() -> Self {
         use crate::persistence::test_data_dir;
 
+        let data_dir = test_data_dir();
         let runtime_budgets = Arc::new(RuntimeBudgets::from_config(Default::default()));
         let test_object_store = Arc::new(crate::object_store::MemoryObjectStore::new());
         let target = crate::db::TestDatabaseTarget::required().unwrap();
         let metadata = MetadataStore::connect_fresh_for_tests(&target).unwrap();
         Self {
             metadata,
-            data_dir: Arc::new(test_data_dir()),
+            data_dir: Arc::new(data_dir.clone()),
             clerk: ClerkVerifier::new_with_policy(
                 Some("https://clerk.test".to_string()),
                 Some("http://127.0.0.1/.well-known/jwks.json".to_string()),
@@ -249,6 +245,7 @@ impl AppState {
             operator_token: None,
             repo_events: RepoChangeBus::default(),
             push_intent_signing_key: Arc::from(b"scope-test-push-intent-signing-key".as_slice()),
+            raw_git_cache: RawGitCacheRegistry::new(data_dir.join("git-cache")).unwrap(),
             #[cfg(test)]
             test_object_store,
         }
@@ -261,7 +258,7 @@ impl AppState {
         head_oid: &str,
         config: RepoConfig,
         base_config_hash: String,
-        base_git_snapshot_key: Option<String>,
+        base_git_manifest_key: Option<String>,
     ) -> Result<CreatedPushIntent, ApiError> {
         let expires_at_unix = unix_now()?.saturating_add(PUSH_INTENT_TTL_SECS);
         let intent = PushIntentClaims {
@@ -272,7 +269,7 @@ impl AppState {
             head_oid: head_oid.to_string(),
             config,
             base_config_hash,
-            base_git_snapshot_key,
+            base_git_manifest_key,
             expires_at_unix,
         };
         let token = encode_push_intent(&self.push_intent_signing_key, &intent)?;
@@ -290,19 +287,21 @@ impl AppState {
             .map(validated_push_intent_from_claims)
     }
 
-    pub(crate) fn validate_completed_push_intent_secret(
-        &self,
-        secret: &str,
-    ) -> Result<ValidatedPushIntent, ApiError> {
-        decode_push_intent(&self.push_intent_signing_key, secret, false)
-            .map(validated_push_intent_from_claims)
+    pub(crate) fn git_cache_root(&self) -> Result<PathBuf, ApiError> {
+        Ok(self.raw_git_cache.root().to_path_buf())
     }
 
-    pub(crate) fn git_cache_root(&self) -> Result<PathBuf, ApiError> {
-        ensure_private_dir(&self.data_dir)?;
-        let cache_root = self.data_dir.join("git-cache");
-        ensure_private_dir(&cache_root)?;
-        Ok(cache_root)
+    pub(crate) fn start_raw_git_cache_reaper(&self) {
+        let raw_git_cache = self.raw_git_cache.clone();
+        tokio::spawn(async move {
+            let mut interval = tokio::time::interval(Duration::from_secs(5 * 60));
+            loop {
+                interval.tick().await;
+                if let Err(error) = raw_git_cache.prune() {
+                    tracing::warn!(error = %error.message(), "failed to prune local raw Git caches");
+                }
+            }
+        });
     }
 
     pub(crate) async fn publish_repo_change(
@@ -379,7 +378,7 @@ fn validated_push_intent_from_claims(intent: PushIntentClaims) -> ValidatedPushI
         head_oid: intent.head_oid,
         config: intent.config,
         base_config_hash: intent.base_config_hash,
-        base_git_snapshot_key: intent.base_git_snapshot_key,
+        base_git_manifest_key: intent.base_git_manifest_key,
         expires_at_unix: intent.expires_at_unix,
     }
 }
@@ -477,21 +476,6 @@ pub(crate) fn can_read_path(
     Ok(repo.can_read_path(principal, path))
 }
 
-pub(crate) async fn delete_unreferenced_source_blobs(
-    state: &AppState,
-    blobs: &[SourceBlob],
-) -> Result<(), ApiError> {
-    let blobs = state
-        .metadata
-        .unreferenced_source_blobs(blobs.to_vec())
-        .await?;
-    let report = delete_source_blob_storage(state, &blobs);
-    match report.first_error() {
-        Some(error) => Err(error),
-        None => Ok(()),
-    }
-}
-
 fn unreferenced_source_blobs_by_key(
     referenced: &std::collections::BTreeSet<String>,
     blobs: &[SourceBlob],
@@ -531,7 +515,6 @@ fn delete_source_blob_storage(
 }
 
 fn delete_source_blob_storage_entry(state: &AppState, blob: &SourceBlob) -> Result<(), ApiError> {
-    crate::git::storage::delete_raw_git_snapshot_cache(state, blob)?;
     Ok(state.object_store.delete(&blob.object_key)?)
 }
 
@@ -634,17 +617,8 @@ pub(crate) async fn best_effort_cleanup_rollback_source_blobs(
     if blobs.is_empty() {
         return;
     }
-    match persist_pending_source_blob_deletions(state, blobs).await {
-        Ok(()) => best_effort_drain_pending_source_blob_deletions(state).await,
-        Err(queue_error) => {
-            tracing::warn!(?queue_error, "failed to queue rollback source blob cleanup");
-            if let Err(delete_error) = delete_unreferenced_source_blobs(state, blobs).await {
-                tracing::warn!(
-                    ?delete_error,
-                    "failed to delete rollback source blobs without queued retry"
-                );
-            }
-        }
+    if let Err(queue_error) = persist_pending_source_blob_deletions(state, blobs).await {
+        tracing::warn!(?queue_error, "failed to queue rollback source blob cleanup");
     }
 }
 
@@ -675,7 +649,8 @@ pub(crate) async fn drain_pending_source_blob_deletions_report(
     Ok(report)
 }
 
-pub(crate) async fn drain_pending_source_blob_deletions(state: &AppState) -> Result<(), ApiError> {
+#[cfg(test)]
+pub(crate) async fn drain_pending_orphan_objects(state: &AppState) -> Result<(), ApiError> {
     let report = drain_pending_source_blob_deletions_report(state).await?;
     match report.failed_object_deletes.first().map(|failure| {
         ApiError::service_unavailable(format!(
@@ -685,44 +660,5 @@ pub(crate) async fn drain_pending_source_blob_deletions(state: &AppState) -> Res
     }) {
         Some(error) => Err(error),
         None => Ok(()),
-    }
-}
-
-pub(crate) async fn best_effort_drain_pending_source_blob_deletions(state: &AppState) {
-    if let Err(error) = drain_pending_source_blob_deletions(state).await {
-        tracing::warn!(?error, "failed to drain pending source blob deletions");
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::domain::repo_config::{ConfigVisibility, RepoConfig};
-    use axum::http::StatusCode;
-
-    #[test]
-    fn completion_validation_accepts_expired_signed_push_intent() {
-        let state = AppState::test_state();
-        let expired = PushIntentClaims {
-            kind: PUSH_INTENT_KIND.to_string(),
-            version: PUSH_INTENT_VERSION,
-            repo_id: "repo-id".to_string(),
-            user_id: "user-id".to_string(),
-            head_oid: "1111111111111111111111111111111111111111".to_string(),
-            config: RepoConfig::with_default_visibility(ConfigVisibility::Private),
-            base_config_hash: "0".repeat(64),
-            base_git_snapshot_key: None,
-            expires_at_unix: unix_now().unwrap().saturating_sub(1),
-        };
-        let token = encode_push_intent(&state.push_intent_signing_key, &expired).unwrap();
-
-        let error = state.validate_push_intent_secret(&token).unwrap_err();
-        assert_eq!(error.status(), StatusCode::FORBIDDEN);
-
-        let validated = state.validate_completed_push_intent_secret(&token).unwrap();
-        assert_eq!(validated.repo_id, expired.repo_id);
-        assert_eq!(validated.user_id, expired.user_id);
-        assert_eq!(validated.head_oid, expired.head_oid);
-        assert_eq!(validated.expires_at_unix, expired.expires_at_unix);
     }
 }

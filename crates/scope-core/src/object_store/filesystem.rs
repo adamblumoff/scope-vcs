@@ -1,23 +1,23 @@
-use super::env::SCOPE_OBJECT_STORE_DIR_ENV;
-use crate::{config::non_empty_env, object_store::ObjectStore};
-use scope_core::error::ApiError;
+use super::ObjectStore;
+use crate::{config::SCOPE_OBJECT_STORE_DIR_ENV, error::ApiError};
 use sha2::{Digest, Sha256};
 use std::path::{Path, PathBuf};
 
-pub(super) struct FileObjectStore {
+pub struct FileObjectStore {
     root: PathBuf,
 }
 
 impl FileObjectStore {
-    pub(super) fn from_env(data_dir: &Path) -> Self {
-        let root = non_empty_env(SCOPE_OBJECT_STORE_DIR_ENV)
+    pub fn from_env(default_root: &Path) -> Self {
+        let root = std::env::var(SCOPE_OBJECT_STORE_DIR_ENV)
+            .ok()
+            .filter(|value| !value.is_empty())
             .map(PathBuf::from)
-            .unwrap_or_else(|| data_dir.join("objects"));
+            .unwrap_or_else(|| default_root.to_path_buf());
         Self { root }
     }
 
-    #[cfg(test)]
-    fn new(root: PathBuf) -> Self {
+    pub fn new(root: PathBuf) -> Self {
         Self { root }
     }
 

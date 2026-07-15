@@ -110,12 +110,9 @@ impl MetadataStore {
         for entry in &request_mutation.ledger_entries {
             insert_credit_ledger_entry_row(&tx, entry).await?;
         }
-        if !repository_mutation.source_blobs_to_delete.is_empty() {
-            queue_pending_source_blob_deletion_rows(
-                &tx,
-                repository_mutation.source_blobs_to_delete,
-            )
-            .await?;
+        if !repository_mutation.orphan_objects.is_empty() {
+            queue_pending_source_blob_deletion_rows(&tx, repository_mutation.orphan_objects)
+                .await?;
         }
         tx.commit().await.map_err(ApiError::internal)?;
         Ok(RequestMergeRepositoryMutation {

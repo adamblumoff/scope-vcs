@@ -265,6 +265,9 @@ pub struct GitPushTokenResponse {
 pub struct RepoConfigResponse {
     pub config: RepoConfig,
     pub config_hash: String,
+    pub lifecycle_state: RepoPublicationState,
+    pub access: RepositoryAccessResponse,
+    pub head_oid: Option<String>,
 }
 
 #[derive(Debug, Deserialize, Serialize)]
@@ -281,12 +284,6 @@ pub struct CreatePushIntentResponse {
     pub token: String,
     pub base_head_oid: Option<GitOid>,
     pub expires_at_unix: u64,
-}
-
-#[derive(Debug, Deserialize, Serialize)]
-#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
-pub struct CompletePushIntentRequest {
-    pub token: String,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]

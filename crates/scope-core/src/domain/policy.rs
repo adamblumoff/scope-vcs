@@ -167,6 +167,10 @@ impl Policy {
         self.default_visibility = visibility;
     }
 
+    pub fn remove_rule(&mut self, path: &ScopePath) {
+        self.rules.retain(|rule| &rule.path != path);
+    }
+
     pub fn can_read(&self, path: &ScopePath, can_read_private_files: bool) -> bool {
         match self.effective_visibility(path) {
             Visibility::Public => true,

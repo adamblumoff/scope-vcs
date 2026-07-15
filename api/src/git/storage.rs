@@ -2,7 +2,9 @@ use crate::domain::policy::Principal;
 use crate::domain::projection::{ProjectionViewKey, project_graph};
 use crate::domain::store::{RepoPublicationState, SourceBlob};
 use crate::{
-    config::{DEFAULT_GIT_BRANCH, EMPTY_GIT_OID, RECEIVE_PACK_STAGING_BYTES},
+    config::{
+        DEFAULT_GIT_BRANCH, EMPTY_GIT_OID, MAX_GIT_SEGMENT_CHAIN_DEPTH, RECEIVE_PACK_STAGING_BYTES,
+    },
     error::ApiError,
     git::import::{run_git, safe_repo_key},
     git::upload::{git_command_output_with_timeout, projection_bare_repo_for_state},
@@ -12,13 +14,17 @@ use crate::{
     state::{AppState, find_repo},
 };
 use axum::{body::Body, http::StatusCode, response::Response};
+use futures_util::StreamExt;
+use scope_core::git_segments::{GitSegmentManifest, is_git_segment_manifest};
 use sha2::{Digest, Sha256};
+use std::time::Instant;
 use std::{
     fs,
     path::{Path as FsPath, PathBuf},
     process::{Command, Stdio},
     sync::atomic::{AtomicU64, Ordering},
 };
+use tokio::io::AsyncWriteExt;
 
 static RAW_GIT_CACHE_ATTEMPT: AtomicU64 = AtomicU64::new(1);
 
@@ -76,39 +82,38 @@ pub(crate) fn git_repo_storage_root(state: &AppState) -> PathBuf {
     state.data_dir.as_ref().clone()
 }
 
-pub(crate) fn raw_git_snapshot_cache_key(snapshot: &SourceBlob) -> String {
-    snapshot
+pub(crate) fn raw_git_cache_key(manifest: &SourceBlob) -> String {
+    manifest
         .sha256
         .get(..16)
-        .unwrap_or(snapshot.sha256.as_str())
+        .unwrap_or(manifest.sha256.as_str())
         .to_string()
 }
 
-pub(crate) fn raw_git_snapshot_cache_path(
+pub(crate) fn raw_git_cache_path(
     state: &AppState,
     snapshot: &SourceBlob,
 ) -> Result<PathBuf, ApiError> {
-    Ok(state
-        .git_cache_root()?
-        .join(format!("raw-{}.git", raw_git_snapshot_cache_key(snapshot))))
+    Ok(state.raw_git_cache.path_for(snapshot))
 }
 
-pub(crate) fn cached_raw_git_snapshot_repo(
+pub(crate) fn cached_raw_git_repo(
     state: &AppState,
     snapshot: &SourceBlob,
-) -> Result<PathBuf, ApiError> {
-    let repo_path = raw_git_snapshot_cache_path(state, snapshot)?;
+) -> Result<crate::git::cache::GitRepoHandle, ApiError> {
+    let repo = state.raw_git_cache.lease(snapshot)?;
+    let repo_path = repo.as_ref().to_path_buf();
     if repo_path
         .join("refs")
         .join("heads")
         .join(DEFAULT_GIT_BRANCH)
         .is_file()
     {
-        return Ok(repo_path);
+        return Ok(repo);
     }
 
     let cache_root = state.git_cache_root()?;
-    let cache_key = raw_git_snapshot_cache_key(snapshot);
+    let cache_key = raw_git_cache_key(snapshot);
     let attempt = RAW_GIT_CACHE_ATTEMPT.fetch_add(1, Ordering::Relaxed);
     let temp_path = cache_root.join(format!(
         "raw-{cache_key}.{}.{}.tmp",
@@ -116,38 +121,26 @@ pub(crate) fn cached_raw_git_snapshot_repo(
         attempt
     ));
     let _permit = state.runtime_budgets.try_projection_build()?;
-    restore_git_snapshot(state, snapshot, &temp_path)?;
+    if let Err(error) = restore_git_segments(state, snapshot, &temp_path) {
+        let _ = fs::remove_dir_all(&temp_path);
+        return Err(error);
+    }
     match fs::rename(&temp_path, &repo_path) {
-        Ok(()) => Ok(repo_path),
+        Ok(()) => {
+            state.raw_git_cache.note_materialized(&repo_path)?;
+            Ok(repo)
+        }
         Err(error) if repo_path.exists() => {
             let _ = fs::remove_dir_all(&temp_path);
             tracing::debug!(%error, path = %repo_path.display(), "using concurrently-created raw Git snapshot cache");
-            Ok(repo_path)
+            state.raw_git_cache.note_materialized(&repo_path)?;
+            Ok(repo)
         }
-        Err(error) => Err(ApiError::internal(error)),
-    }
-}
-
-pub(crate) fn delete_raw_git_snapshot_cache(
-    state: &AppState,
-    snapshot: &SourceBlob,
-) -> Result<(), ApiError> {
-    let cache_root = state.git_cache_root()?;
-    let cache_key = raw_git_snapshot_cache_key(snapshot);
-    remove_dir_if_exists(&cache_root.join(format!("raw-{cache_key}.git")))?;
-
-    let entries = fs::read_dir(&cache_root).map_err(ApiError::internal)?;
-    let temp_prefix = format!("raw-{cache_key}.");
-    for entry in entries {
-        let entry = entry.map_err(ApiError::internal)?;
-        let file_name = entry.file_name();
-        let file_name = file_name.to_string_lossy();
-        if file_name.starts_with(&temp_prefix) && file_name.ends_with(".tmp") {
-            remove_dir_if_exists(&entry.path())?;
+        Err(error) => {
+            let _ = fs::remove_dir_all(&temp_path);
+            Err(ApiError::internal(error))
         }
     }
-
-    Ok(())
 }
 
 pub(crate) fn delete_repo_storage(
@@ -250,28 +243,33 @@ pub(crate) async fn ensure_published_receive_pack_staging_repo(
     repo_name: &str,
     author_id: &str,
 ) -> Result<PathBuf, ApiError> {
-    let repo = find_repo(state, owner, repo_name).await?;
-    if repo.record.publication_state != RepoPublicationState::Published {
+    let repo = state
+        .metadata
+        .git_push_context(owner, repo_name, author_id)
+        .await?
+        .ok_or_else(|| ApiError::not_found(format!("repo {owner}/{repo_name} not found")))?;
+    if repo.publication_state != RepoPublicationState::Published {
         return Err(ApiError::conflict("repo must be published before push"));
     }
-    let principal = Principal {
-        id: author_id.to_string(),
-        kind: crate::domain::policy::PrincipalKind::User,
-    };
     let repo_root = receive_pack_staging_repo_path(state, owner, repo_name)?;
     if let Some(parent) = repo_root.parent() {
         ensure_private_dir(parent)?;
     }
-    if let Some(snapshot) = repo.git_snapshot.as_ref() {
-        let seed_repo = cached_raw_git_snapshot_repo(state, snapshot)?;
+    if let Some(head) = repo.git_head.as_ref() {
+        let seed_repo = cached_raw_git_repo(state, &head.manifest)?;
         let seed = seed_repo.to_string_lossy().to_string();
         let target = repo_root.to_string_lossy().to_string();
         run_git(
             None,
-            &["clone", "--bare", "--no-hardlinks", &seed, &target],
+            &["clone", "--bare", "--local", &seed, &target],
             "cloning receive-pack staging repo",
         )?;
     } else {
+        let repo = find_repo(state, owner, repo_name).await?;
+        let principal = Principal {
+            id: author_id.to_string(),
+            kind: crate::domain::policy::PrincipalKind::User,
+        };
         let view_key = ProjectionViewKey::from_access(repo.access_for_principal(&principal));
         let projection =
             project_graph(&repo.policy, &repo.graph, &repo.visibility_events, view_key);
@@ -280,7 +278,7 @@ pub(crate) async fn ensure_published_receive_pack_staging_repo(
         let target = repo_root.to_string_lossy().to_string();
         run_git(
             None,
-            &["clone", "--bare", "--no-hardlinks", &seed, &target],
+            &["clone", "--bare", "--shared", &seed, &target],
             "cloning receive-pack staging repo",
         )?;
     }
@@ -293,7 +291,7 @@ pub(crate) async fn ensure_published_receive_pack_staging_repo(
     Ok(repo_root)
 }
 
-pub(crate) fn restore_git_snapshot(
+pub(crate) fn restore_git_segments(
     state: &AppState,
     snapshot: &crate::domain::store::SourceBlob,
     repo_root: &FsPath,
@@ -306,23 +304,52 @@ pub(crate) fn restore_git_snapshot(
         &["init", "--bare", repo_root.to_string_lossy().as_ref()],
         "initializing Git snapshot repo",
     )?;
-    let bundle_path = repo_root.with_extension(format!(
-        "bundle.{}.tmp",
-        hex::encode(&snapshot.sha256.as_bytes()[..8])
-    ));
-    let bytes = source_blob_bytes(state.object_store.as_ref(), snapshot)?;
-    fs::write(&bundle_path, bytes).map_err(ApiError::internal)?;
-    let bundle = bundle_path.to_string_lossy().to_string();
+    let mut segments = Vec::new();
+    let mut restored_head = None;
+    let mut cursor = Some(snapshot.clone());
+    while let Some(current) = cursor {
+        if segments.len() >= MAX_GIT_SEGMENT_CHAIN_DEPTH {
+            return Err(ApiError::internal_message(format!(
+                "Git segment chain exceeds maximum depth of {MAX_GIT_SEGMENT_CHAIN_DEPTH}"
+            )));
+        }
+        if is_git_segment_manifest(&current) {
+            let bytes = source_blob_bytes(state.object_store.as_ref(), &current)?;
+            let manifest = GitSegmentManifest::decode(&bytes)?;
+            if !current.git_oid.is_empty() && manifest.head_oid != current.git_oid {
+                return Err(ApiError::internal_message(
+                    "Git segment manifest head does not match persisted head",
+                ));
+            }
+            restored_head.get_or_insert(manifest.head_oid.clone());
+            segments.push(manifest.segment);
+            cursor = manifest.previous;
+        } else {
+            return Err(ApiError::internal_message(
+                "raw Git cache requires a segment manifest",
+            ));
+        }
+    }
+    segments.reverse();
+    for segment in segments {
+        index_git_pack(state, repo_root, &segment)?;
+    }
+    let head_oid = restored_head
+        .ok_or_else(|| ApiError::internal_message("Git segment chain did not contain a head"))?;
     run_git(
         Some(repo_root),
         &[
-            "fetch",
-            &bundle,
-            &format!("refs/heads/{DEFAULT_GIT_BRANCH}:refs/heads/{DEFAULT_GIT_BRANCH}"),
+            "update-ref",
+            &format!("refs/heads/{DEFAULT_GIT_BRANCH}"),
+            &head_oid,
         ],
-        "restoring Git snapshot",
+        "restoring Git segment head",
     )?;
-    let _ = fs::remove_file(&bundle_path);
+    run_git(
+        Some(repo_root),
+        &["fsck", "--connectivity-only", &head_oid],
+        "verifying restored Git segment chain",
+    )?;
     run_git(
         Some(repo_root),
         &[
@@ -332,6 +359,29 @@ pub(crate) fn restore_git_snapshot(
         ],
         "setting restored Git snapshot head",
     )?;
+    Ok(())
+}
+
+fn index_git_pack(
+    state: &AppState,
+    repo_root: &FsPath,
+    segment: &SourceBlob,
+) -> Result<(), ApiError> {
+    let bytes = source_blob_bytes(state.object_store.as_ref(), segment)?;
+    let output = crate::git::upload::git_process_output_with_timeout(
+        Command::new("git")
+            .arg("--git-dir")
+            .arg(repo_root)
+            .args(["index-pack", "--stdin"]),
+        Some(bytes),
+        state.runtime_budgets.git_command_timeout(),
+    )?;
+    if !output.status.success() {
+        return Err(ApiError::service_unavailable(format!(
+            "restoring Git segment: {}",
+            String::from_utf8_lossy(&output.stderr).trim()
+        )));
+    }
     Ok(())
 }
 
@@ -404,6 +454,117 @@ pub(crate) fn git_http_backend(
         RuntimeBudgets::default_git_command_timeout(),
     )?;
     CgiResponse::parse(output)
+}
+
+#[allow(clippy::too_many_arguments)]
+pub(crate) async fn git_http_backend_streaming(
+    staging_repo: &FsPath,
+    path_suffix: &str,
+    body: Body,
+    content_length: Option<u64>,
+    max_bytes: usize,
+    content_type: Option<String>,
+    remote_user: &str,
+) -> Result<CgiResponse, ApiError> {
+    let receive_started = Instant::now();
+    if content_length.is_some_and(|length| length > max_bytes as u64) {
+        return Err(ApiError::payload_too_large(
+            "git receive-pack body is too large",
+        ));
+    }
+    let staging_parent = staging_repo
+        .parent()
+        .ok_or_else(|| ApiError::internal_message("staging repo is missing a parent"))?;
+    let repo_name = staging_repo
+        .file_name()
+        .and_then(|value| value.to_str())
+        .ok_or_else(|| ApiError::internal_message("staging repo has invalid path"))?;
+    let mut command = tokio::process::Command::new("git");
+    command
+        .arg("http-backend")
+        .env("GIT_PROJECT_ROOT", staging_parent)
+        .env("GIT_HTTP_EXPORT_ALL", "1")
+        .env("REQUEST_METHOD", "POST")
+        .env("PATH_INFO", format!("/{repo_name}/{path_suffix}"))
+        .env("QUERY_STRING", "")
+        .env("REMOTE_USER", remote_user)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .kill_on_drop(true);
+    if let Some(content_length) = content_length {
+        command.env("CONTENT_LENGTH", content_length.to_string());
+    }
+    if let Some(content_type) = content_type {
+        command.env("CONTENT_TYPE", content_type);
+    }
+
+    let mut child = command.spawn().map_err(ApiError::internal)?;
+    let mut stdin = child
+        .stdin
+        .take()
+        .ok_or_else(|| ApiError::internal_message("opening git http-backend stdin failed"))?;
+    let mut output_task = tokio::spawn(async move { child.wait_with_output().await });
+    let writer = async move {
+        let mut stream = body.into_data_stream();
+        let mut written = 0usize;
+        loop {
+            let next =
+                tokio::time::timeout(RuntimeBudgets::default_git_command_timeout(), stream.next())
+                    .await
+                    .map_err(|_| ApiError::service_unavailable("git request upload stalled"))?;
+            let Some(chunk) = next else {
+                break;
+            };
+            let chunk = chunk.map_err(ApiError::bad_request)?;
+            written = written
+                .checked_add(chunk.len())
+                .ok_or_else(|| ApiError::payload_too_large("git receive-pack body is too large"))?;
+            if written > max_bytes {
+                return Err(ApiError::payload_too_large(
+                    "git receive-pack body is too large",
+                ));
+            }
+            stdin.write_all(&chunk).await.map_err(ApiError::internal)?;
+        }
+        stdin.shutdown().await.map_err(ApiError::internal)?;
+        Ok::<usize, ApiError>(written)
+    };
+    let request_bytes = match writer.await {
+        Ok(written) => written,
+        Err(error) => {
+            output_task.abort();
+            let _ = output_task.await;
+            return Err(error);
+        }
+    };
+    let output = match tokio::time::timeout(
+        RuntimeBudgets::default_git_command_timeout(),
+        &mut output_task,
+    )
+    .await
+    {
+        Ok(output) => output
+            .map_err(|_| ApiError::internal_message("git http-backend task panicked"))?
+            .map_err(ApiError::internal)?,
+        Err(_) => {
+            output_task.abort();
+            let _ = output_task.await;
+            return Err(ApiError::service_unavailable("git http-backend timed out"));
+        }
+    };
+    if !output.status.success() {
+        return Err(ApiError::service_unavailable(format!(
+            "git http-backend failed: {}",
+            String::from_utf8_lossy(&output.stderr).trim()
+        )));
+    }
+    tracing::info!(
+        request_bytes,
+        receive_ms = receive_started.elapsed().as_millis(),
+        "streamed Git receive-pack body"
+    );
+    CgiResponse::parse(output.stdout)
 }
 
 pub(crate) struct CgiResponse {

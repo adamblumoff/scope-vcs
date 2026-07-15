@@ -15,7 +15,6 @@ use crate::{
             commit_history_response, repo_scope_path,
         },
     },
-    object_store::ObjectStore,
     state::{AppState, find_repo},
 };
 use axum::{
@@ -83,10 +82,7 @@ pub(crate) async fn get_commit_file_diff(
         .find(|file| file.path.as_str() == path.as_str())
         .ok_or_else(|| ApiError::not_found(format!("file {} not found", path.as_str())))?;
 
-    Ok(Json(commit_file_diff_response(
-        state.object_store.as_ref(),
-        file,
-    )?))
+    Ok(Json(commit_file_diff_response(&state, file)?))
 }
 
 async fn repo_and_audience(
@@ -129,11 +125,11 @@ fn commit_for_id<'a>(
 }
 
 fn commit_file_diff_response(
-    store: &dyn ObjectStore,
+    state: &AppState,
     file: &CommitHistoryFile,
 ) -> Result<ReviewFileDiffResponse, ApiError> {
     review_file_diff_response_for_blobs(
-        store,
+        state,
         file.path.as_str().to_string(),
         file.kind,
         file.old_content.as_ref(),

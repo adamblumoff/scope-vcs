@@ -7,7 +7,7 @@ use support::*;
 fn init_warns_on_dirty_working_tree_and_continues_to_auth() {
     let dir = TempDir::new("dirty");
     create_repo_with_head(dir.path());
-    fs::write(dir.path().join("dirty.txt"), "uncommitted\n").unwrap();
+    fs::write(dir.path().join("README.md"), "uncommitted\n").unwrap();
 
     let output = scope_command(dir.path())
         .args(["init", "--name", "sample"])

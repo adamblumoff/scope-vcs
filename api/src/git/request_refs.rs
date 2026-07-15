@@ -11,10 +11,11 @@ use crate::{
     },
     error::ApiError,
     git::{
+        cache::GitRepoHandle,
         import::{git_snapshot_from_ref, run_git, run_git_output, validate_pushed_tree},
         request_ref_public_safety::ensure_public_request_ref_is_public_safe,
         storage::{
-            cached_raw_git_snapshot_repo, receive_pack_staging_repo_path, remove_dir_if_exists,
+            cached_raw_git_repo, receive_pack_staging_repo_path, remove_dir_if_exists,
             request_ref_store_repo_path, write_receive_pack_hook,
         },
         upload::projection_bare_repo_for_state,
@@ -174,11 +175,11 @@ pub(crate) async fn ensure_request_receive_pack_staging_repo(
                 &repo.visibility_events,
                 ProjectionViewKey::Public,
             );
-            projection_bare_repo_for_state(state, &projection)?
+            GitRepoHandle::from_path(projection_bare_repo_for_state(state, &projection)?)
         }
         RepositoryActor::Owner | RepositoryActor::Member => {
-            if let Some(snapshot) = repo.git_snapshot.as_ref() {
-                cached_raw_git_snapshot_repo(state, snapshot)?
+            if let Some(head) = repo.git_head.as_ref() {
+                cached_raw_git_repo(state, &head.manifest)?
             } else {
                 let principal = principal_for_user_id(&repo, actor_user_id);
                 let projection = project_graph(
@@ -187,7 +188,7 @@ pub(crate) async fn ensure_request_receive_pack_staging_repo(
                     &repo.visibility_events,
                     ProjectionViewKey::from_access(repo.access_for_principal(&principal)),
                 );
-                projection_bare_repo_for_state(state, &projection)?
+                GitRepoHandle::from_path(projection_bare_repo_for_state(state, &projection)?)
             }
         }
     };
@@ -291,7 +292,7 @@ pub(crate) async fn persist_request_ref_revision(
                 now_unix,
             })
             .await
-            .map(|mutation| mutation.source_blobs_to_delete)
+            .map(|mutation| mutation.orphan_objects)
     } else {
         state
             .metadata
@@ -307,7 +308,7 @@ pub(crate) async fn persist_request_ref_revision(
                 now_unix,
             })
             .await
-            .map(|mutation| mutation.source_blobs_to_delete)
+            .map(|mutation| mutation.orphan_objects)
     };
     if let Err(error) = mutation_result {
         rollback_request_ref(
@@ -324,7 +325,6 @@ pub(crate) async fn persist_request_ref_revision(
         .await;
         return Err(error.into());
     }
-    crate::state::best_effort_drain_pending_source_blob_deletions(state).await;
     Ok(())
 }
 

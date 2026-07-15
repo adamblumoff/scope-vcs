@@ -9,6 +9,7 @@
     }
   },
   "deploy": {
+    "aptPackages": ["git"],
     "startCommand": "./bin/scope-worker"
   }
 }

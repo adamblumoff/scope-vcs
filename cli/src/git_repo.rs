@@ -58,7 +58,7 @@ pub fn ensure_git_repo_ready(command_name: &str) -> anyhow::Result<GitRepo> {
 pub fn warn_if_dirty_working_tree(repo: &GitRepo) -> anyhow::Result<()> {
     let output = Command::new("git")
         .current_dir(&repo.root)
-        .args(["status", "--porcelain", "--untracked-files=all"])
+        .args(["status", "--porcelain", "--untracked-files=no"])
         .output()
         .context("inspect Git working tree")?;
     if !output.status.success() {

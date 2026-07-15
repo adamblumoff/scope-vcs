@@ -1,14 +1,15 @@
 use crate::{
     domain::store::{FileChangeKind, SourceBlob},
     error::ApiError,
+    git::content::source_content_bytes,
     http::responses::{ReviewFileContentResponse, ReviewFileDiffResponse},
-    object_store::{ObjectStore, source_blob_bytes},
+    state::AppState,
 };
 
 pub(crate) const MAX_RENDERED_TEXT_BYTES: usize = 1024 * 1024;
 
 pub(crate) fn review_file_diff_response_for_blobs(
-    store: &dyn ObjectStore,
+    state: &AppState,
     path: String,
     kind: FileChangeKind,
     old_content: Option<&SourceBlob>,
@@ -20,23 +21,23 @@ pub(crate) fn review_file_diff_response_for_blobs(
         old_mode: old_content.map(|blob| blob.git_file_mode.clone()),
         new_mode: new_content.map(|blob| blob.git_file_mode.clone()),
         old_content: old_content
-            .map(|blob| review_content_response_for_blob(store, blob))
+            .map(|blob| review_content_response_for_blob(state, blob))
             .transpose()?,
         new_content: new_content
-            .map(|blob| review_content_response_for_blob(store, blob))
+            .map(|blob| review_content_response_for_blob(state, blob))
             .transpose()?,
     })
 }
 
 pub(crate) fn review_content_response_for_blob(
-    store: &dyn ObjectStore,
+    state: &AppState,
     blob: &SourceBlob,
 ) -> Result<ReviewFileContentResponse, ApiError> {
     if nonrenderable_blob(blob) {
         return Ok(binary_content(blob));
     }
 
-    let bytes = source_blob_bytes(store, blob)?;
+    let bytes = source_content_bytes(state, blob)?;
     Ok(review_content_from_bytes(blob, &bytes))
 }
 

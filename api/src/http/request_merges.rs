@@ -7,10 +7,11 @@ use crate::{
     },
     error::ApiError,
     git::{
+        cache::GitRepoHandle,
         import::{
             ReceivePackUpdate, receive_pack_update_from_staging_repo, run_git, run_git_output,
         },
-        storage::{cached_raw_git_snapshot_repo, receive_pack_staging_repo_path},
+        storage::{cached_raw_git_repo, receive_pack_staging_repo_path},
         upload::projection_bare_repo_for_state,
     },
     object_store::source_blob_bytes,
@@ -181,9 +182,9 @@ fn ensure_merge_work_parent(work_repo: &FsPath) -> Result<(), ApiError> {
 fn private_merge_seed_repo(
     state: &AppState,
     repo: &StoredRepository,
-) -> Result<std::path::PathBuf, ApiError> {
-    if let Some(snapshot) = repo.git_snapshot.as_ref() {
-        return cached_raw_git_snapshot_repo(state, snapshot);
+) -> Result<GitRepoHandle, ApiError> {
+    if let Some(head) = repo.git_head.as_ref() {
+        return cached_raw_git_repo(state, &head.manifest);
     }
     let projection = project_graph(
         &repo.policy,
@@ -191,7 +192,7 @@ fn private_merge_seed_repo(
         &repo.visibility_events,
         ProjectionViewKey::Private,
     );
-    projection_bare_repo_for_state(state, &projection)
+    projection_bare_repo_for_state(state, &projection).map(GitRepoHandle::from_path)
 }
 
 fn public_merge_seed_repo(

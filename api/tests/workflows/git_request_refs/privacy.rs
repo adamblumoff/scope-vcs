@@ -194,6 +194,7 @@ fn privacy_repo(state: &AppState, history: PrivacyHistory) -> StoredRepository {
             ),
         ],
     };
+    populate_test_live_files(&mut repo);
     repo
 }
 

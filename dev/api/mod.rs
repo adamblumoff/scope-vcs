@@ -1,5 +1,4 @@
 mod env;
-mod file_object_store;
 mod seed;
 
 use crate::{
@@ -8,8 +7,9 @@ use crate::{
     config::{SCOPE_OPERATOR_TOKEN_ENV, data_dir, git_repo_root, non_empty_env},
     db::MetadataStore,
     error::ApiError,
+    git::cache::RawGitCacheRegistry,
     http::responses::CliSessionTokenResponse,
-    object_store::{EncryptedObjectStore, ObjectStore},
+    object_store::{EncryptedObjectStore, FileObjectStore, ObjectStore},
     persistence::ensure_private_dir,
     repo_events::RepoChangeBus,
     runtime_budgets::{BudgetedObjectStore, RuntimeBudgets},
@@ -29,7 +29,7 @@ pub async fn app_state_from_env() -> anyhow::Result<AppState> {
         .map_err(|error| anyhow::anyhow!(error.into_message()))?;
 
     let raw_object_store = Arc::new(EncryptedObjectStore::from_env(Arc::new(
-        file_object_store::FileObjectStore::from_env(&data_dir),
+        FileObjectStore::from_env(&data_dir.join("objects")),
     ))?);
     let catalog = seed::catalog(raw_object_store.as_ref(), settings.seed_user)
         .map_err(|error| anyhow::anyhow!("building local dev catalog: {}", error.message()))?;
@@ -46,7 +46,9 @@ pub async fn app_state_from_env() -> anyhow::Result<AppState> {
         runtime_budgets.clone(),
     ));
 
-    Ok(AppState {
+    let raw_git_cache = RawGitCacheRegistry::new(data_dir.join("git-cache"))
+        .map_err(|error| anyhow::anyhow!(error.into_message()))?;
+    let state = AppState {
         metadata,
         data_dir: Arc::new(data_dir),
         clerk: ClerkVerifier::from_env(),
@@ -55,9 +57,12 @@ pub async fn app_state_from_env() -> anyhow::Result<AppState> {
         operator_token: non_empty_env(SCOPE_OPERATOR_TOKEN_ENV).map(Arc::from),
         repo_events,
         push_intent_signing_key,
+        raw_git_cache,
         #[cfg(test)]
         test_object_store: Arc::new(crate::object_store::MemoryObjectStore::new()),
-    })
+    };
+    state.start_raw_git_cache_reaper();
+    Ok(state)
 }
 
 pub(crate) async fn create_bench_cli_session(

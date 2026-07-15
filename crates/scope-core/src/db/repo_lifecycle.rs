@@ -6,6 +6,7 @@ use super::{
         pending_repo_storage_cleanup_exists,
     },
     entities,
+    object_references::delete_object_references_for_objects,
     repo_effects::save_repo_effects,
     repository_from_model,
     repository_rows::insert_repository,
@@ -110,10 +111,18 @@ impl MetadataStore {
             .ok_or_else(|| crate::domain::repo_actions::hidden_repo_not_found(&owner, &name))?;
         let repo = repository_from_model(&tx, repo).await?;
         let mutation = delete_repo_command(&repo, &user_id, &owner, &name)?;
+        let repository_objects = repo.source_blobs();
         let requests = lock_requests_for_repo_postgres(&tx, &repo_id).await?;
         lock_request_credit_accounts_for_repo_postgres(&tx, &requests).await?;
         refund_open_request_stakes_for_repo_postgres(&tx, &requests, unix_now()).await?;
         let request_git_snapshots = request_git_snapshots_for_repo(&requests);
+        delete_object_references_for_objects(
+            &tx,
+            repository_objects
+                .iter()
+                .chain(request_git_snapshots.iter()),
+        )
+        .await?;
 
         entities::repository_invite::Entity::delete_many()
             .filter(entities::repository_invite::Column::RepoId.eq(repo_id.clone()))

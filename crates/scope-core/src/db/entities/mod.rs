@@ -1,11 +1,10 @@
 use crate::db::projection_encoding::{ProjectionAudience, ProjectionSource};
 use crate::db::{decode_json, encode_json};
 use crate::domain::policy::{Policy, ScopePath, Visibility};
-use crate::domain::projection::SourceGraph;
 use crate::domain::projection_views::{ProjectionViewFile, ProjectionViewFileContent};
 use crate::domain::store::{
-    DEFAULT_GIT_FILE_MODE, FirstPushToken, GitPushToken, RepoPublicationState, RepoRecord,
-    RepoStorageCleanup, RepositoryInvite, RepositoryInviteState, RepositoryMember,
+    DEFAULT_GIT_FILE_MODE, FirstPushToken, GitHead, GitPushToken, GitSegment, RepoPublicationState,
+    RepoRecord, RepoStorageCleanup, RepositoryInvite, RepositoryInviteState, RepositoryMember,
     RepositoryMemberPermissions, SourceBlob, StoredRepository, UserAccount,
     is_supported_git_file_mode,
 };
@@ -55,11 +54,13 @@ fn usize_to_i64(value: usize, field: &str) -> Result<i64, ApiError> {
 pub struct RepositoryFacts {
     pub first_push_token: Option<FirstPushToken>,
     pub git_push_token: Option<GitPushToken>,
-    pub git_snapshot: Option<SourceBlob>,
+    pub git_head: Option<GitHead>,
+    pub git_segments: Vec<GitSegment>,
 }
 
 mod auth;
 mod collaboration;
+mod history;
 mod jobs;
 mod read_models;
 mod repositories;
@@ -69,13 +70,14 @@ pub use auth::{
     auth_identity, cli_browser_login, cli_device_login, cli_exchange_grant, cli_session, user,
 };
 pub use collaboration::{repository_invite, repository_member};
+pub use history::{file_change, live_file, logical_commit, object_reference, visibility_event};
 pub use jobs::{
     metadata_lock, metadata_reset_event, outbox_job, repo_storage_cleanup_job,
     source_blob_cleanup_job,
 };
 pub use read_models::{projection_file, projection_read_model};
 pub use repositories::{
-    repository, repository_first_push_token, repository_git_push_token, repository_git_snapshot,
+    git_head, git_segment, repository, repository_first_push_token, repository_git_push_token,
 };
 pub use requests::{credit_ledger_entry, request, request_event, user_credit_account};
 
@@ -206,12 +208,17 @@ mod tests {
 
     #[test]
     fn negative_persisted_values_are_rejected_instead_of_floored() {
-        let row = repository_git_snapshot::Model {
+        let row = git_segment::Model {
             repo_id: "repo-1".to_string(),
+            sequence: 1,
+            base_oid: None,
+            head_oid: "oid".to_string(),
             object_key: "objects/snapshot".to_string(),
             sha256: "sha".to_string(),
-            git_oid: "oid".to_string(),
             size_bytes: -1,
+            manifest_object_key: "objects/manifest".to_string(),
+            manifest_sha256: "manifest-sha".to_string(),
+            manifest_size_bytes: 1,
         };
 
         assert!(row.try_into_domain().is_err());

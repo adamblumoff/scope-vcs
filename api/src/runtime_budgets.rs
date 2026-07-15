@@ -82,7 +82,6 @@ pub(crate) struct RuntimeBudgets {
     upload_pack: Arc<Semaphore>,
     projection_build: Arc<Semaphore>,
     object_store: Arc<Semaphore>,
-    object_store_concurrency: usize,
     git_command_timeout: Duration,
     object_store_max_bytes: usize,
 }
@@ -98,7 +97,6 @@ impl RuntimeBudgets {
             upload_pack: Arc::new(Semaphore::new(config.upload_pack_concurrency)),
             projection_build: Arc::new(Semaphore::new(config.projection_build_concurrency)),
             object_store: Arc::new(Semaphore::new(config.object_store_concurrency)),
-            object_store_concurrency: config.object_store_concurrency,
             git_command_timeout: config.git_command_timeout,
             object_store_max_bytes: config.object_store_max_bytes,
         }
@@ -122,10 +120,6 @@ impl RuntimeBudgets {
 
     pub(crate) fn git_command_timeout(&self) -> Duration {
         self.git_command_timeout
-    }
-
-    pub(crate) fn object_store_concurrency(&self) -> usize {
-        self.object_store_concurrency
     }
 
     pub(crate) fn default_git_command_timeout() -> Duration {
