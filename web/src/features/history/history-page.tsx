@@ -95,7 +95,7 @@ export function HistoryPage(props: HistoryPageProps) {
   } = useHistoryPageModel(props)
 
   return (
-    <RepoShell contentClassName="max-w-[1320px]" params={params}>
+    <RepoShell params={params}>
       <WorkbenchHeader
         actions={availableAudiences.length > 1 ? (
           <AudienceToggle
@@ -354,7 +354,7 @@ function CommitList({
           return (
             <button
               className={cn(
-                'grid w-full grid-cols-[minmax(0,1fr)_80px] gap-x-3 gap-y-1 px-2 py-3 text-left text-sm transition-colors hover:bg-muted/70',
+                'grid w-full grid-cols-[minmax(0,1fr)_80px] gap-x-3 px-2 py-3 text-left text-sm transition-colors hover:bg-muted/70',
                 selected &&
                   'bg-brand-muted shadow-[inset_2px_0_0_0_var(--brand)] hover:bg-brand-muted',
               )}
@@ -370,16 +370,6 @@ function CommitList({
               </div>
               <div className="self-center text-right font-mono text-xs text-muted-foreground">
                 {commit.change_count}
-              </div>
-              <div className="col-span-2 flex min-w-0 flex-col gap-1 pl-6 font-mono text-xs leading-4 text-muted-foreground">
-                <span className="truncate" title={commit.logical_commit_id}>
-                  {commit.logical_commit_id}
-                </span>
-                {commit.author && (
-                  <span className="truncate" title={commit.author}>
-                    {commit.author}
-                  </span>
-                )}
               </div>
             </button>
           )
