@@ -20,12 +20,12 @@ same source without everyone receiving the same access.
 
 That means maintainers could:
 
-- choose which parts of a project are public;
-- collaborate without exposing the entire codebase;
-- set clear rules for how contributions enter the project;
+- choose which parts of a project are public
+- collaborate without exposing the entire codebase
+- set clear rules for how contributions enter the project
 - use signals such as contributor staking to protect maintainer attention and
-  disincentivize low-effort, mass-produced contributions; and
-- keep ownership of the project independent of any single hosting provider.
+  disincentivize low-effort, mass-produced contributions
+- keep ownership of the project independent of any single hosting provider
 
 ## Open collaboration, on the maintainer's terms
 
