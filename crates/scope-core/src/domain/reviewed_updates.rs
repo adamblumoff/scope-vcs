@@ -208,11 +208,13 @@ fn apply_content_only_update(
         if source_content_matches(old_content.as_ref(), change.content.as_ref()) {
             continue;
         }
+        let visibility = if old_content.is_some() || change.content.is_none() {
+            repo.policy.effective_visibility(&change.path)
+        } else {
+            update.config.visibility_for_path(&change.path)
+        };
         file_changes.push(FileChange {
-            visibility: change.content.as_ref().map_or_else(
-                || repo.policy.effective_visibility(&change.path),
-                |_| update.config.visibility_for_path(&change.path),
-            ),
+            visibility,
             path: change.path,
             old_content,
             new_content: change.content,
@@ -234,16 +236,18 @@ fn apply_content_only_update(
         }
     }
     for change in &file_changes {
-        if change.new_content.is_some() {
-            let rule = match update.config.visibility_for_path(&change.path) {
-                Visibility::Public => VisibilityRule::public(change.path.clone()),
-                Visibility::Private => VisibilityRule::private(change.path.clone()),
-            };
-            repo.policy
-                .add_rule(rule)
-                .map_err(ReviewedUpdateError::InvalidPolicy)?;
-        } else {
-            repo.policy.remove_rule(&change.path);
+        match (&change.old_content, &change.new_content) {
+            (None, Some(_)) => {
+                let rule = match update.config.visibility_for_path(&change.path) {
+                    Visibility::Public => VisibilityRule::public(change.path.clone()),
+                    Visibility::Private => VisibilityRule::private(change.path.clone()),
+                };
+                repo.policy
+                    .add_rule(rule)
+                    .map_err(ReviewedUpdateError::InvalidPolicy)?;
+            }
+            (Some(_), None) => repo.policy.remove_rule(&change.path),
+            _ => {}
         }
     }
     let logical_id = format!("rv_push_{}", update.git_head.head_oid);

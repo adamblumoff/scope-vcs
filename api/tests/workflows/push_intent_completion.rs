@@ -268,6 +268,53 @@ async fn incremental_git_segment_restores_after_cache_loss() {
     assert_eq!(git_head_oid(&restored), expected_head);
 }
 
+#[test]
+fn segment_restore_rejects_manifest_chains_over_the_limit() {
+    let state = test_state_with_repo();
+    let segment = scope_core::object_store::put_repo_object(
+        state.object_store.as_ref(),
+        TEST_REPO_ID,
+        "git-segments",
+        b"segment",
+    )
+    .unwrap();
+    let mut snapshot = None;
+    for index in 0..=scope_core::config::MAX_GIT_SEGMENT_CHAIN_DEPTH {
+        let head_oid = format!("{index:040x}");
+        let manifest = scope_core::git_segments::GitSegmentManifest::new(
+            head_oid.clone(),
+            snapshot,
+            segment.clone(),
+        );
+        let mut stored_manifest = scope_core::object_store::put_repo_object(
+            state.object_store.as_ref(),
+            TEST_REPO_ID,
+            "git-manifests",
+            &manifest.encode().unwrap(),
+        )
+        .unwrap();
+        stored_manifest.git_oid = head_oid;
+        snapshot = Some(stored_manifest);
+    }
+    let restored = TempGitRepo(std::env::temp_dir().join(format!(
+        "scope-vcs-segment-depth-{}-{}",
+        std::process::id(),
+        unix_now()
+    )));
+
+    let error =
+        crate::git::storage::restore_git_segments(&state, snapshot.as_ref().unwrap(), &restored)
+            .unwrap_err();
+
+    assert_eq!(
+        error.message(),
+        format!(
+            "Git segment chain exceeds maximum depth of {}",
+            scope_core::config::MAX_GIT_SEGMENT_CHAIN_DEPTH
+        )
+    );
+}
+
 #[tokio::test]
 async fn content_push_rejects_stale_reviewed_config() {
     let (state, source, _head_oid) = published_git_fixture("stale-config-content-push").await;

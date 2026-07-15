@@ -2,7 +2,9 @@ use crate::domain::policy::Principal;
 use crate::domain::projection::{ProjectionViewKey, project_graph};
 use crate::domain::store::{RepoPublicationState, SourceBlob};
 use crate::{
-    config::{DEFAULT_GIT_BRANCH, EMPTY_GIT_OID, RECEIVE_PACK_STAGING_BYTES},
+    config::{
+        DEFAULT_GIT_BRANCH, EMPTY_GIT_OID, MAX_GIT_SEGMENT_CHAIN_DEPTH, RECEIVE_PACK_STAGING_BYTES,
+    },
     error::ApiError,
     git::import::{run_git, safe_repo_key},
     git::upload::{git_command_output_with_timeout, projection_bare_repo_for_state},
@@ -306,6 +308,11 @@ pub(crate) fn restore_git_segments(
     let mut restored_head = None;
     let mut cursor = Some(snapshot.clone());
     while let Some(current) = cursor {
+        if segments.len() >= MAX_GIT_SEGMENT_CHAIN_DEPTH {
+            return Err(ApiError::internal_message(format!(
+                "Git segment chain exceeds maximum depth of {MAX_GIT_SEGMENT_CHAIN_DEPTH}"
+            )));
+        }
         if is_git_segment_manifest(&current) {
             let bytes = source_blob_bytes(state.object_store.as_ref(), &current)?;
             let manifest = GitSegmentManifest::decode(&bytes)?;

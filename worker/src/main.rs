@@ -1,6 +1,8 @@
 use scope_core::db::MetadataStore;
 use scope_core::{
-    config::{SCOPE_DATA_DIR_ENV, SCOPE_OBJECT_STORE_ENV, non_empty_env},
+    config::{
+        DEFAULT_GIT_COMPACTION_SEGMENTS, SCOPE_DATA_DIR_ENV, SCOPE_OBJECT_STORE_ENV, non_empty_env,
+    },
     db::GitCompactionCandidate,
     domain::store::{GitHead, GitSegment},
     git_segments::GitSegmentManifest,
@@ -23,7 +25,6 @@ use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 const DEFAULT_BATCH_SIZE: usize = 10;
 const DEFAULT_POLL_INTERVAL_MS: u64 = 1_000;
 const DEFAULT_SCHEMA_WAIT_SECS: u64 = 300;
-const DEFAULT_GIT_COMPACTION_SEGMENTS: usize = 32;
 const SCHEMA_WAIT_RETRY_SECS: u64 = 2;
 
 #[tokio::main]

@@ -296,6 +296,33 @@ fn content_only_updates_keep_policy_and_commit_identity_in_sync() {
 }
 
 #[test]
+fn content_only_update_preserves_existing_visibility_override() {
+    let mut repo = published_repo_with_public_file("initial", "/README.md", "hello");
+    repo.policy
+        .add_rule(VisibilityRule::private(path("/README.md")))
+        .unwrap();
+    let config = repo.repo_config.clone();
+
+    apply_update(
+        &mut repo,
+        "update readme",
+        vec![reviewed_change("/README.md", Some("updated"))],
+        Some(config.clone()),
+        config,
+    );
+
+    assert_eq!(
+        repo.policy.effective_visibility(&path("/README.md")),
+        Visibility::Private
+    );
+    assert_eq!(
+        repo.graph.commits.last().unwrap().changes[0].visibility,
+        Visibility::Private
+    );
+    assert!(repo.visibility_events.is_empty());
+}
+
+#[test]
 fn config_only_update_changes_policy_without_content_commit() {
     let mut repo = published_test_repo(Visibility::Private);
     repo.graph.commits.push(commit(
