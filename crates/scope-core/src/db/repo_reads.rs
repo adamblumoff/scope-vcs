@@ -16,7 +16,7 @@ use crate::{
         },
         store::{
             RepoPublicationState, RepositoryAccess, RepositoryActor, RepositoryMemberPermissions,
-            StoredRepository, repo_id,
+            StoredRepository, repo_id, repository_access_for_user_id,
         },
     },
     error::ApiError,
@@ -456,44 +456,12 @@ fn access_for_row(
         return Ok(RepositoryAccess::public());
     };
     let publication_state = row.publication_state()?;
-    Ok(access_for_user_id(
-        user_id,
+    Ok(repository_access_for_user_id(
         &row.owner_user_id,
         publication_state,
         member_permissions,
+        user_id,
     ))
-}
-
-fn access_for_user_id(
-    user_id: &str,
-    owner_user_id: &str,
-    publication_state: RepoPublicationState,
-    member_permissions: Option<RepositoryMemberPermissions>,
-) -> RepositoryAccess {
-    let published = publication_state == RepoPublicationState::Published;
-    if user_id == owner_user_id {
-        return RepositoryAccess {
-            actor: RepositoryActor::Owner,
-            can_read_private_files: true,
-            can_push: published,
-            can_change_file_visibility: true,
-            can_apply_changes: true,
-            can_manage_members: published,
-            can_delete_repo: true,
-        };
-    }
-    let Some(permissions) = member_permissions else {
-        return RepositoryAccess::public();
-    };
-    RepositoryAccess {
-        actor: RepositoryActor::Member,
-        can_read_private_files: published,
-        can_push: published && permissions.can_push,
-        can_change_file_visibility: published && permissions.can_change_file_visibility,
-        can_apply_changes: published && permissions.can_apply_changes,
-        can_manage_members: false,
-        can_delete_repo: false,
-    }
 }
 
 fn row_is_readable_with_visible_projection(

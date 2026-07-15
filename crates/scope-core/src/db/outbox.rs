@@ -136,7 +136,8 @@ impl MetadataStore {
 
 pub async fn enqueue_projection_read_model_rebuild<C>(
     conn: &C,
-    repo: &crate::domain::store::StoredRepository,
+    repo_id: &str,
+    repo_version: u64,
 ) -> Result<(), ApiError>
 where
     C: ConnectionTrait,
@@ -144,7 +145,8 @@ where
     let now = unix_now()?;
     let job = entities::outbox_job::Model::projection_read_model_rebuild(
         new_outbox_job_id()?,
-        repo,
+        repo_id,
+        repo_version,
         now,
     )?;
     match entities::outbox_job::Entity::insert(job.into_active_model())
@@ -654,8 +656,12 @@ mod tests {
             .clone();
         catalog.users.insert(owner.id.clone(), owner);
         store.seed_catalog_for_tests(catalog).unwrap();
-        enqueue_projection_read_model_rebuild(store.db.as_ref(), &repo)
-            .await
-            .unwrap();
+        enqueue_projection_read_model_rebuild(
+            store.db.as_ref(),
+            &repo.record.id,
+            repo.record.change_version,
+        )
+        .await
+        .unwrap();
     }
 }

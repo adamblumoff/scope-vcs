@@ -76,6 +76,62 @@ impl RepositoryAccess {
     }
 }
 
+pub fn repository_access_for_user_id(
+    owner_user_id: &str,
+    publication_state: RepoPublicationState,
+    member_permissions: Option<RepositoryMemberPermissions>,
+    user_id: &str,
+) -> RepositoryAccess {
+    let published = publication_state == RepoPublicationState::Published;
+    if owner_user_id == user_id {
+        return RepositoryAccess {
+            actor: RepositoryActor::Owner,
+            can_read_private_files: true,
+            can_push: published,
+            can_change_file_visibility: true,
+            can_apply_changes: true,
+            can_manage_members: published,
+            can_delete_repo: true,
+        };
+    }
+
+    let Some(permissions) = member_permissions else {
+        return RepositoryAccess::public();
+    };
+    RepositoryAccess {
+        actor: RepositoryActor::Member,
+        can_read_private_files: published,
+        can_push: published && permissions.can_push,
+        can_change_file_visibility: published && permissions.can_change_file_visibility,
+        can_apply_changes: published && permissions.can_apply_changes,
+        can_manage_members: false,
+        can_delete_repo: false,
+    }
+}
+
+pub fn repository_push_policy_for_user_id(
+    owner_user_id: &str,
+    publication_state: RepoPublicationState,
+    member_permissions: Option<RepositoryMemberPermissions>,
+    user_id: &str,
+) -> RepositoryPushPolicy {
+    let access = repository_access_for_user_id(
+        owner_user_id,
+        publication_state,
+        member_permissions,
+        user_id,
+    );
+    let mode = if publication_state == RepoPublicationState::Unpublished && owner_user_id == user_id
+    {
+        MainPushMode::FirstPush
+    } else if publication_state == RepoPublicationState::Published && access.can_push {
+        MainPushMode::Published
+    } else {
+        MainPushMode::Denied
+    };
+    RepositoryPushPolicy { access, mode }
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(any(test, feature = "ts"), derive(ts_rs::TS))]
 pub enum FirstPushTokenStatus {
@@ -276,32 +332,13 @@ impl StoredRepository {
     }
 
     pub fn access_for_user_id(&self, user_id: &str) -> RepositoryAccess {
-        let published = self.record.publication_state == RepoPublicationState::Published;
-        if self.is_owner_user(user_id) {
-            return RepositoryAccess {
-                actor: RepositoryActor::Owner,
-                can_read_private_files: true,
-                can_push: published,
-                can_change_file_visibility: true,
-                can_apply_changes: true,
-                can_manage_members: published,
-                can_delete_repo: true,
-            };
-        }
-
-        let Some(member) = self.member_for_user(user_id) else {
-            return RepositoryAccess::public();
-        };
-        let permissions = member.permissions;
-        RepositoryAccess {
-            actor: RepositoryActor::Member,
-            can_read_private_files: published,
-            can_push: published && permissions.can_push,
-            can_change_file_visibility: published && permissions.can_change_file_visibility,
-            can_apply_changes: published && permissions.can_apply_changes,
-            can_manage_members: false,
-            can_delete_repo: false,
-        }
+        repository_access_for_user_id(
+            &self.record.owner_user_id,
+            self.record.publication_state,
+            self.member_for_user(user_id)
+                .map(|member| member.permissions),
+            user_id,
+        )
     }
 
     pub fn is_waiting_for_first_push(&self) -> bool {
@@ -364,17 +401,13 @@ impl StoredRepository {
     }
 
     pub fn push_policy_for_user_id(&self, user_id: &str) -> RepositoryPushPolicy {
-        let access = self.access_for_user_id(user_id);
-        let mode = if self.is_waiting_for_first_push() && self.is_owner_user(user_id) {
-            MainPushMode::FirstPush
-        } else if self.record.publication_state == RepoPublicationState::Published
-            && access.can_push
-        {
-            MainPushMode::Published
-        } else {
-            MainPushMode::Denied
-        };
-        RepositoryPushPolicy { access, mode }
+        repository_push_policy_for_user_id(
+            &self.record.owner_user_id,
+            self.record.publication_state,
+            self.member_for_user(user_id)
+                .map(|member| member.permissions),
+            user_id,
+        )
     }
 
     pub fn is_maintainer_user_id(&self, user_id: &str) -> bool {
