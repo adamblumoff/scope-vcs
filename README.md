@@ -47,4 +47,4 @@ build around it.
 Scope is an early, experimental project. The product and its ideas are still
 taking shape in public.
 
-When this repository disappears from GitHub, you'll know Scope is ready.
+When updates stop happening here on GitHub, you'll know Scope is ready.
