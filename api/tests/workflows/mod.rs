@@ -57,6 +57,7 @@ mod repo_cleanup;
 mod repo_events;
 mod repo_lifecycle;
 mod repo_visibility;
+mod request_discussions;
 mod request_review;
 mod requests;
 mod runtime_budgets;

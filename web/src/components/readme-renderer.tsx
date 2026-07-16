@@ -2,7 +2,7 @@ import { cn } from '@/lib/utils'
 import type { ComponentProps } from 'react'
 import rehypeSlug from 'rehype-slug'
 import Markdown from 'react-markdown'
-import remarkGfm from 'remark-gfm'
+import { SafeMarkdown } from './safe-markdown'
 import { resolveReadmeUrl } from './readme-url'
 
 export function ReadmeRenderer({
@@ -21,15 +21,13 @@ export function ReadmeRenderer({
         className,
       )}
     >
-      <Markdown
+      <SafeMarkdown
         components={markdownComponents}
         rehypePlugins={[[rehypeSlug, { prefix: 'readme-' }]]}
-        remarkPlugins={[remarkGfm]}
-        skipHtml
         urlTransform={(url) => resolveReadmeUrl(url, repository)}
       >
         {source}
-      </Markdown>
+      </SafeMarkdown>
     </article>
   )
 }

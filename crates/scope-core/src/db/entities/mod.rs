@@ -79,7 +79,10 @@ pub use read_models::{projection_file, projection_read_model};
 pub use repositories::{
     git_head, git_segment, repository, repository_first_push_token, repository_git_push_token,
 };
-pub use requests::{credit_ledger_entry, request, request_event, user_credit_account};
+pub use requests::{
+    credit_ledger_entry, request, request_discussion, request_discussion_read_state,
+    request_discussion_reply, request_event, user_credit_account,
+};
 
 #[cfg(test)]
 mod tests {

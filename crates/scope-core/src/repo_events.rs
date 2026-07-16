@@ -14,7 +14,22 @@ pub const POSTGRES_REPO_CHANGE_CHANNEL: &str = "scope_repo_changes";
 pub struct RepoChangeEvent {
     pub repo_id: String,
     pub version: u64,
-    pub reason: String,
+    pub kind: RepoChangeKind,
+}
+
+#[cfg_attr(any(test, feature = "ts"), derive(ts_rs::TS))]
+#[derive(Clone, Debug, Deserialize, PartialEq, Eq, Serialize)]
+pub enum RepoChangeKind {
+    Connected,
+    Lagged,
+    RepositoryChanged {
+        reason: String,
+    },
+    RequestDiscussionChanged {
+        request_id: String,
+        discussion_id: String,
+        through_position: u64,
+    },
 }
 
 impl RepoChangeEvent {
@@ -22,7 +37,30 @@ impl RepoChangeEvent {
         Self {
             repo_id: repo_id.to_string(),
             version,
-            reason: reason.to_string(),
+            kind: match reason {
+                "connected" => RepoChangeKind::Connected,
+                "lagged" => RepoChangeKind::Lagged,
+                reason => RepoChangeKind::RepositoryChanged {
+                    reason: reason.to_string(),
+                },
+            },
+        }
+    }
+
+    pub fn request_discussion_changed(
+        repo_id: &str,
+        request_id: String,
+        discussion_id: String,
+        through_position: u64,
+    ) -> Self {
+        Self {
+            repo_id: repo_id.to_string(),
+            version: 0,
+            kind: RepoChangeKind::RequestDiscussionChanged {
+                request_id,
+                discussion_id,
+                through_position,
+            },
         }
     }
 }

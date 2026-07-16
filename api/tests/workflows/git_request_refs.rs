@@ -157,7 +157,7 @@ async fn real_git_request_ref_push_records_revision_without_touching_main() {
         request.git_snapshot.as_ref().unwrap(),
     )
     .unwrap();
-    assert_eq!(request_event_count(&state).await, 2);
+    assert_eq!(request_event_count(&state).await, 3);
     let store_repo =
         crate::git::storage::request_ref_store_repo_path(&state, TEST_REPO_OWNER, TEST_REPO_NAME);
     let stored_head = git_stdout_text(&store_repo, &["rev-parse", REQUEST_REF], "read request ref")
@@ -233,7 +233,7 @@ async fn any_public_contributor_and_maintainer_can_push_request_refs() {
         let request = stored_request(&state, REQUEST_ID).await;
         assert_eq!(request.head_oid, git_head_oid(&source));
         assert!(request.git_snapshot.is_some());
-        assert_eq!(request_event_count(&state).await, 0);
+        assert_eq!(request_event_count(&state).await, 1);
     }
 }
 
@@ -431,6 +431,7 @@ async fn test_state_with_request() -> AppState {
             author_role: RequestActorRole::Public,
             audience: RequestAudience::Public,
             base_main_oid,
+            event_id: "event_request_branch_started".to_string(),
             now_unix: 2,
         })
         .await
@@ -452,7 +453,9 @@ async fn insert_private_request_for_public_user(state: &AppState) {
             head_oid: "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb".to_string(),
             git_snapshot: None,
             title: "Former member request".to_string(),
+            description_markdown: String::new(),
             state: RequestState::Submitted,
+            activity_version: 0,
             stake_credits: 0,
             disposition: None,
             settlement: None,
@@ -500,7 +503,7 @@ async fn assert_request_branch_unchanged(state: &AppState) {
     assert_eq!(request.state, RequestState::Working);
     assert_eq!(request.head_oid, request.base_main_oid);
     assert!(request.git_snapshot.is_none());
-    assert_eq!(request_event_count(state).await, 0);
+    assert_eq!(request_event_count(state).await, 1);
 }
 
 async fn stored_request(state: &AppState, id: &str) -> Request {

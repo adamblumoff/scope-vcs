@@ -154,6 +154,7 @@ async fn permissioned_public_git_read_view_physically_excludes_private_objects()
             author_role: RequestActorRole::Public,
             audience: RequestAudience::Public,
             base_main_oid,
+            event_id: "event_req_public_read_view_started".to_string(),
             now_unix: 2,
         })
         .await

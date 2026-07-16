@@ -30,6 +30,11 @@ mod repo_mutation;
 mod repo_reads;
 mod repository_rows;
 mod request_access;
+mod request_discussion_rows;
+mod request_discussions;
+pub use request_discussions::{
+    RequestDiscussionReadBatch, RequestDiscussionReadModel, RequestDiscussionsPageQuery,
+};
 mod request_merges;
 mod request_rows;
 mod requests;

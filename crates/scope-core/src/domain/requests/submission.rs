@@ -1,8 +1,9 @@
 use super::settlement::{maximum_request_reward, u32_to_i32};
 use super::{
     CreditLedgerEntry, CreditLedgerEntryKind, Request, RequestActorRole, RequestAudience,
-    RequestEvent, RequestEventKind, RequestState, UserCreditAccount, ensure_event_id_available,
-    ensure_ledger_entry_id_available, ensure_request_name_available, validate_required_id,
+    RequestEvent, RequestEventKind, RequestEventPayload, RequestState, UserCreditAccount,
+    advance_request_activity, ensure_event_id_available, ensure_ledger_entry_id_available,
+    ensure_request_name_available, validate_required_id,
 };
 use crate::{domain::store::SourceBlob, error::ApiError};
 use std::collections::BTreeMap;
@@ -17,12 +18,14 @@ pub struct StartRequestInput {
     pub author_role: RequestActorRole,
     pub audience: RequestAudience,
     pub base_main_oid: String,
+    pub event_id: String,
     pub now_unix: u64,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct StartRequestMutation {
     pub request: Request,
+    pub event: RequestEvent,
 }
 
 #[derive(Clone, Debug)]
@@ -84,7 +87,9 @@ pub fn start_request(
         head_oid: input.base_main_oid,
         git_snapshot: None,
         title,
+        description_markdown: String::new(),
         state: RequestState::Working,
+        activity_version: 1,
         stake_credits: 0,
         disposition: None,
         settlement: None,
@@ -92,8 +97,20 @@ pub fn start_request(
         updated_at_unix: input.now_unix,
         resolved_at_unix: None,
     };
+    let event = RequestEvent {
+        id: input.event_id,
+        request_id: request.id.clone(),
+        actor_user_id: request.author_user_id.clone(),
+        kind: RequestEventKind::Started,
+        position: 1,
+        payload: RequestEventPayload::Started {
+            title: request.title.clone(),
+            description_markdown: request.description_markdown.clone(),
+        },
+        created_at_unix: input.now_unix,
+    };
     requests.insert(request.id.clone(), request.clone());
-    Ok(StartRequestMutation { request })
+    Ok(StartRequestMutation { request, event })
 }
 
 pub fn record_working_request_upload(
@@ -209,15 +226,17 @@ pub fn submit_request(
     request.stake_credits = input.stake_credits;
     request.state = RequestState::Submitted;
     request.updated_at_unix = input.now_unix;
+    let position = advance_request_activity(request)?;
     let request = request.clone();
     let event = RequestEvent {
         id: input.event_id,
         request_id: request.id.clone(),
         actor_user_id: input.actor_user_id,
         kind: RequestEventKind::Submitted,
-        body: None,
-        old_head_oid: None,
-        new_head_oid: Some(request.head_oid.clone()),
+        position,
+        payload: RequestEventPayload::Submitted {
+            head_oid: request.head_oid.clone(),
+        },
         created_at_unix: input.now_unix,
     };
     let account = account_and_ledger_entry
@@ -248,6 +267,7 @@ fn validate_start_request_input(input: &StartRequestInput) -> Result<(), ApiErro
         validate_required_id("title", title)?;
     }
     validate_required_id("base main oid", &input.base_main_oid)?;
+    validate_required_id("event id", &input.event_id)?;
     validate_request_audience_rules(input.author_role, input.audience)
 }
 

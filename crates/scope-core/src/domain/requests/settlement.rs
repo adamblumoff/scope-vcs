@@ -82,13 +82,6 @@ pub(super) fn maximum_request_reward(stake_credits: u32) -> u32 {
     stake_credits / 2
 }
 
-pub(super) fn settlement_event_body(settlement: &RequestSettlement) -> String {
-    format!(
-        "refunded={} reward={} burned={}",
-        settlement.refunded_credits, settlement.reward_credits, settlement.burned_credits
-    )
-}
-
 pub(super) struct CreditSettlementIds {
     pub(super) refund_ledger_entry_id: Option<String>,
     pub(super) reward_ledger_entry_id: Option<String>,

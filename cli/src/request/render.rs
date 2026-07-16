@@ -1,10 +1,11 @@
 use super::text::{short_oid, terminal_text};
 use crate::api::{
-    RepoSummaryResponse, RepositoryActor, RequestDetailResponse, RequestEventResponse,
-    RequestMergeabilityStatus, RequestMutationResponse, RequestSummaryResponse,
+    RepoSummaryResponse, RepositoryActor, RequestDetailResponse, RequestDiscussionMutationResponse,
+    RequestListItemResponse, RequestMergeabilityStatus, RequestMutationResponse,
+    RequestSummaryResponse,
 };
 use anyhow::{Context, bail};
-use scope_core::domain::requests::{RequestAudience, RequestEventKind, RequestState};
+use scope_core::domain::requests::{RequestAudience, RequestDiscussionStatus, RequestState};
 use std::io::{self, Write};
 
 pub(super) fn print_repo_access(repo: &RepoSummaryResponse) {
@@ -47,12 +48,6 @@ pub(super) fn print_request_detail(detail: &RequestDetailResponse) {
             settlement.refunded_credits, settlement.reward_credits, settlement.burned_credits
         );
     }
-    if !detail.events.is_empty() {
-        println!("  events:");
-        for event in &detail.events {
-            println!("    {}", event_line(event));
-        }
-    }
 }
 
 pub(super) fn print_mutation_receipt(action: &str, response: &RequestMutationResponse) {
@@ -62,6 +57,25 @@ pub(super) fn print_mutation_receipt(action: &str, response: &RequestMutationRes
             "Settlement: refunded={} reward={} burned={}",
             settlement.refunded_credits, settlement.reward_credits, settlement.burned_credits
         );
+    }
+}
+
+pub(super) fn print_discussion_receipt(response: &RequestDiscussionMutationResponse) {
+    let discussion = &response.discussion;
+    println!(
+        "Discussion opened: {} [{}] by @{}",
+        discussion.id,
+        discussion_status_label(discussion.status),
+        discussion.author.handle
+    );
+    println!("Replies: {}", discussion.reply_count);
+    println!("{}", terminal_text(&discussion.body_markdown));
+}
+
+fn discussion_status_label(status: RequestDiscussionStatus) -> &'static str {
+    match status {
+        RequestDiscussionStatus::Open => "open",
+        RequestDiscussionStatus::Resolved => "resolved",
     }
 }
 
@@ -104,9 +118,39 @@ pub(super) fn confirm_merge(request: &RequestSummaryResponse) -> anyhow::Result<
 }
 
 pub(super) fn request_line(request: &RequestSummaryResponse) -> String {
-    let settlement = request
-        .settlement
-        .as_ref()
+    format_request_line(
+        &request.name,
+        &request.id,
+        request.state,
+        &request.title,
+        request.stake_credits,
+        &request.head_oid,
+        request.settlement.as_ref(),
+    )
+}
+
+pub(super) fn request_list_line(request: &RequestListItemResponse) -> String {
+    format_request_line(
+        &request.name,
+        &request.id,
+        request.state,
+        &request.title,
+        request.stake_credits,
+        &request.head_oid,
+        request.settlement.as_ref(),
+    )
+}
+
+fn format_request_line(
+    name: &str,
+    id: &str,
+    state: RequestState,
+    title: &str,
+    stake_credits: u32,
+    head_oid: &str,
+    settlement: Option<&crate::api::RequestSettlementResponse>,
+) -> String {
+    let settlement = settlement
         .map(|settlement| {
             format!(
                 " settlement(refund={} reward={} burn={})",
@@ -116,28 +160,14 @@ pub(super) fn request_line(request: &RequestSummaryResponse) -> String {
         .unwrap_or_default();
     format!(
         "{} ({}) [{}] {} stake={} head={}{}",
-        request.name,
-        request.id,
-        state_label(request.state),
-        terminal_text(&request.title),
-        request.stake_credits,
-        short_oid(&request.head_oid),
+        name,
+        id,
+        state_label(state),
+        terminal_text(title),
+        stake_credits,
+        short_oid(head_oid),
         settlement
     )
-}
-
-fn event_line(event: &RequestEventResponse) -> String {
-    let body = event
-        .body
-        .as_deref()
-        .map(|body| format!(": {}", terminal_text(body)))
-        .unwrap_or_default();
-    let head = event
-        .new_head_oid
-        .as_deref()
-        .map(|oid| format!(" head={}", short_oid(oid)))
-        .unwrap_or_default();
-    format!("{}{}{}", event_kind_label(event.kind), head, body)
 }
 
 fn mergeability_label(request: &RequestSummaryResponse) -> String {
@@ -188,20 +218,5 @@ fn state_label(state: RequestState) -> &'static str {
         RequestState::NeedsResponse => "needs-response",
         RequestState::Resolved => "resolved",
         RequestState::Withdrawn => "withdrawn",
-    }
-}
-
-fn event_kind_label(kind: RequestEventKind) -> &'static str {
-    match kind {
-        RequestEventKind::Started => "started",
-        RequestEventKind::Submitted => "submitted",
-        RequestEventKind::RevisionPushed => "revision-pushed",
-        RequestEventKind::Commented => "commented",
-        RequestEventKind::NeedsResponse => "needs-response",
-        RequestEventKind::ContributorResponded => "contributor-responded",
-        RequestEventKind::Merged => "merged",
-        RequestEventKind::Resolved => "resolved",
-        RequestEventKind::Settled => "settled",
-        RequestEventKind::Withdrawn => "withdrawn",
     }
 }

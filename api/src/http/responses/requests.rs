@@ -36,12 +36,14 @@ pub(crate) fn request_summary_response(
         id: request.id,
         name: request.name,
         title: request.title,
+        description_markdown: request.description_markdown,
         author_user_id: request.author_user_id,
         author_role: request.author_role,
         audience: request.audience,
         base_main_oid: super::git_oid_response(request.base_main_oid)?,
         head_oid: super::git_oid_response(request.head_oid)?,
         state: request.state,
+        activity_version: request.activity_version,
         stake_credits: request.stake_credits,
         disposition: request.disposition,
         settlement: request.settlement.map(request_settlement_response),
@@ -55,24 +57,37 @@ pub(crate) fn request_summary_response(
     })
 }
 
+pub(crate) fn request_list_item_response(
+    request: RequestSummaryResponse,
+) -> RequestListItemResponse {
+    RequestListItemResponse {
+        id: request.id,
+        name: request.name,
+        title: request.title,
+        author_role: request.author_role,
+        audience: request.audience,
+        head_oid: request.head_oid,
+        state: request.state,
+        stake_credits: request.stake_credits,
+        disposition: request.disposition,
+        settlement: request.settlement,
+        updated_at_unix: request.updated_at_unix,
+        mergeability: request.mergeability,
+    }
+}
+
 pub(crate) fn request_event_response(
     event: RequestEvent,
-) -> Result<RequestEventResponse, crate::error::ApiError> {
-    Ok(RequestEventResponse {
+    actor: RequestActorSummaryResponse,
+) -> RequestEventResponse {
+    RequestEventResponse {
         id: event.id,
-        actor_user_id: event.actor_user_id,
+        position: event.position,
+        actor,
         kind: event.kind,
-        body: event.body,
-        old_head_oid: event
-            .old_head_oid
-            .map(super::git_oid_response)
-            .transpose()?,
-        new_head_oid: event
-            .new_head_oid
-            .map(super::git_oid_response)
-            .transpose()?,
+        payload: event.payload,
         created_at_unix: event.created_at_unix,
-    })
+    }
 }
 
 fn request_settlement_response(settlement: RequestSettlement) -> RequestSettlementResponse {

@@ -9,8 +9,21 @@ pub use policy::{
     RequestMergeability, RequestMergeabilityStatus, RequestPermissions, request_actor_role,
     request_mergeability, request_permissions, request_visible_to_access,
 };
+mod discussions;
 mod submission;
-use settlement::{CreditSettlementIds, settle_request_credits, settlement_event_body, u32_to_i32};
+pub use discussions::{
+    CreateRequestDiscussionInput, CreateRequestDiscussionMutation,
+    CreateRequestDiscussionReplyInput, CreateRequestDiscussionReplyMutation,
+    MarkRequestDiscussionReadInput, ReopenAndReplyToRequestDiscussionInput,
+    ReopenRequestDiscussionInput, RequestDiscussion, RequestDiscussionMutation,
+    RequestDiscussionReadState, RequestDiscussionReply, RequestDiscussionStatus,
+    ResolveRequestDiscussionInput, create_request_discussion, create_request_discussion_reply,
+    mark_request_discussion_read, reopen_and_reply_to_request_discussion,
+    reopen_request_discussion, resolve_request_discussion,
+};
+mod description;
+pub use description::{UpdateRequestDescriptionInput, update_request_description};
+use settlement::{CreditSettlementIds, settle_request_credits, u32_to_i32};
 pub use submission::{
     RecordWorkingRequestUploadInput, StartRequestInput, StartRequestMutation, SubmitRequestInput,
     SubmitRequestMutation, WorkingRequestUploadMutation, record_working_request_upload,
@@ -18,6 +31,9 @@ pub use submission::{
 };
 
 pub const REQUEST_REF_PREFIX: &str = "refs/heads/";
+pub const REQUEST_DISCUSSION_BODY_MAX_BYTES: usize = 64 * 1024;
+pub const REQUEST_DISCUSSION_CLIENT_ID_MAX_BYTES: usize = 128;
+pub const REQUEST_DESCRIPTION_MAX_BYTES: usize = 256 * 1024;
 const REPO_DELETE_REFUND_LEDGER_ENTRY_PREFIX: &str = "repo_delete_refund:";
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -58,6 +74,7 @@ pub enum RequestDisposition {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(any(test, feature = "ts"), derive(ts_rs::TS))]
 pub struct RequestSettlement {
     pub disposition: RequestDisposition,
     pub stake_credits: u32,
@@ -79,7 +96,9 @@ pub struct Request {
     pub head_oid: String,
     pub git_snapshot: Option<SourceBlob>,
     pub title: String,
+    pub description_markdown: String,
     pub state: RequestState,
+    pub activity_version: u64,
     pub stake_credits: u32,
     pub disposition: Option<RequestDisposition>,
     pub settlement: Option<RequestSettlement>,
@@ -94,13 +113,65 @@ pub enum RequestEventKind {
     Started,
     Submitted,
     RevisionPushed,
-    Commented,
     NeedsResponse,
     ContributorResponded,
     Merged,
     Resolved,
     Settled,
     Withdrawn,
+    DescriptionEdited,
+    DiscussionResolved,
+    DiscussionReopened,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(any(test, feature = "ts"), derive(ts_rs::TS))]
+pub enum RequestEventPayload {
+    Started {
+        title: String,
+        description_markdown: String,
+    },
+    Submitted {
+        head_oid: String,
+    },
+    RevisionPushed {
+        old_head_oid: String,
+        new_head_oid: String,
+        note: Option<String>,
+    },
+    NeedsResponse {
+        body: String,
+        head_oid: String,
+    },
+    ContributorResponded {
+        body: Option<String>,
+        head_oid: String,
+    },
+    Merged {
+        body: Option<String>,
+        head_oid: String,
+    },
+    Resolved {
+        body: Option<String>,
+        head_oid: String,
+        disposition: RequestDisposition,
+    },
+    Settled {
+        settlement: RequestSettlement,
+    },
+    Withdrawn {
+        head_oid: String,
+    },
+    DescriptionEdited {
+        previous_markdown: String,
+        new_markdown: String,
+    },
+    DiscussionResolved {
+        discussion_id: String,
+    },
+    DiscussionReopened {
+        discussion_id: String,
+    },
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -109,9 +180,8 @@ pub struct RequestEvent {
     pub request_id: String,
     pub actor_user_id: String,
     pub kind: RequestEventKind,
-    pub body: Option<String>,
-    pub old_head_oid: Option<String>,
-    pub new_head_oid: Option<String>,
+    pub position: u64,
+    pub payload: RequestEventPayload,
     pub created_at_unix: u64,
 }
 
@@ -173,15 +243,6 @@ pub struct RequestRevisionMutation {
     pub request: Request,
     pub event: RequestEvent,
     pub orphan_objects: Vec<SourceBlob>,
-}
-
-#[derive(Clone, Debug)]
-pub struct CommentRequestInput {
-    pub request_id: String,
-    pub actor_user_id: String,
-    pub event_id: String,
-    pub body: String,
-    pub now_unix: u64,
 }
 
 #[derive(Clone, Debug)]
@@ -372,15 +433,19 @@ pub fn record_request_revision(
     if request.state == RequestState::NeedsResponse {
         request.state = RequestState::Submitted;
     }
+    let position = advance_request_activity(request)?;
     let request = request.clone();
     let event = RequestEvent {
         id: input.event_id,
         request_id: request.id.clone(),
         actor_user_id: input.actor_user_id,
         kind: RequestEventKind::RevisionPushed,
-        body: input.body,
-        old_head_oid: Some(old_head_oid),
-        new_head_oid: Some(input.new_head_oid),
+        position,
+        payload: RequestEventPayload::RevisionPushed {
+            old_head_oid,
+            new_head_oid: input.new_head_oid,
+            note: input.body,
+        },
         created_at_unix: input.now_unix,
     };
     events.insert(event.id.clone(), event.clone());
@@ -476,15 +541,17 @@ pub fn delete_request(
     request.state = RequestState::Withdrawn;
     request.updated_at_unix = input.now_unix;
     request.resolved_at_unix = Some(input.now_unix);
+    let position = advance_request_activity(request)?;
     let request = request.clone();
     let event = RequestEvent {
         id: input.event_id,
         request_id: request.id.clone(),
         actor_user_id: input.actor_user_id,
         kind: RequestEventKind::Withdrawn,
-        body: None,
-        old_head_oid: None,
-        new_head_oid: Some(request.head_oid.clone()),
+        position,
+        payload: RequestEventPayload::Withdrawn {
+            head_oid: request.head_oid.clone(),
+        },
         created_at_unix: input.now_unix,
     };
     events.insert(event.id.clone(), event.clone());
@@ -502,33 +569,6 @@ pub fn delete_request(
         account,
         ledger_entry,
     })
-}
-
-pub fn comment_request(
-    requests: &mut BTreeMap<String, Request>,
-    events: &mut BTreeMap<String, RequestEvent>,
-    input: CommentRequestInput,
-) -> Result<RequestTimelineMutation, ApiError> {
-    validate_required_id("request id", &input.request_id)?;
-    validate_required_id("actor user id", &input.actor_user_id)?;
-    validate_required_id("event id", &input.event_id)?;
-    validate_required_body("comment body", &input.body)?;
-    ensure_event_id_available(events, &input.event_id)?;
-    let request = open_request_mut(requests, &input.request_id)?;
-    request.updated_at_unix = input.now_unix;
-    let request = request.clone();
-    let event = RequestEvent {
-        id: input.event_id,
-        request_id: request.id.clone(),
-        actor_user_id: input.actor_user_id,
-        kind: RequestEventKind::Commented,
-        body: Some(input.body),
-        old_head_oid: None,
-        new_head_oid: None,
-        created_at_unix: input.now_unix,
-    };
-    events.insert(event.id.clone(), event.clone());
-    Ok(RequestTimelineMutation { request, event })
 }
 
 pub fn mark_request_needs_response(
@@ -549,15 +589,18 @@ pub fn mark_request_needs_response(
     }
     request.state = RequestState::NeedsResponse;
     request.updated_at_unix = input.now_unix;
+    let position = advance_request_activity(request)?;
     let request = request.clone();
     let event = RequestEvent {
         id: input.event_id,
         request_id: request.id.clone(),
         actor_user_id: input.actor_user_id,
         kind: RequestEventKind::NeedsResponse,
-        body: Some(input.body),
-        old_head_oid: None,
-        new_head_oid: Some(request.head_oid.clone()),
+        position,
+        payload: RequestEventPayload::NeedsResponse {
+            body: input.body,
+            head_oid: request.head_oid.clone(),
+        },
         created_at_unix: input.now_unix,
     };
     events.insert(event.id.clone(), event.clone());
@@ -584,15 +627,18 @@ pub fn respond_to_request(
     }
     request.state = RequestState::Submitted;
     request.updated_at_unix = input.now_unix;
+    let position = advance_request_activity(request)?;
     let request = request.clone();
     let event = RequestEvent {
         id: input.event_id,
         request_id: request.id.clone(),
         actor_user_id: input.actor_user_id,
         kind: RequestEventKind::ContributorResponded,
-        body: input.body,
-        old_head_oid: None,
-        new_head_oid: Some(request.head_oid.clone()),
+        position,
+        payload: RequestEventPayload::ContributorResponded {
+            body: input.body,
+            head_oid: request.head_oid.clone(),
+        },
         created_at_unix: input.now_unix,
     };
     events.insert(event.id.clone(), event.clone());
@@ -670,6 +716,8 @@ pub fn resolve_request(
     request.settlement = Some(settlement.clone());
     request.updated_at_unix = input.now_unix;
     request.resolved_at_unix = Some(input.now_unix);
+    let resolved_position = advance_request_activity(request)?;
+    let settled_position = advance_request_activity(request)?;
     let request = request.clone();
 
     let resolved_event = RequestEvent {
@@ -677,9 +725,12 @@ pub fn resolve_request(
         request_id: request.id.clone(),
         actor_user_id: input.actor_user_id.clone(),
         kind: RequestEventKind::Resolved,
-        body: input.body,
-        old_head_oid: None,
-        new_head_oid: Some(request.head_oid.clone()),
+        position: resolved_position,
+        payload: RequestEventPayload::Resolved {
+            body: input.body,
+            head_oid: request.head_oid.clone(),
+            disposition: input.disposition,
+        },
         created_at_unix: input.now_unix,
     };
     let settled_event = RequestEvent {
@@ -687,9 +738,10 @@ pub fn resolve_request(
         request_id: request.id.clone(),
         actor_user_id: input.actor_user_id,
         kind: RequestEventKind::Settled,
-        body: Some(settlement_event_body(&settlement)),
-        old_head_oid: None,
-        new_head_oid: None,
+        position: settled_position,
+        payload: RequestEventPayload::Settled {
+            settlement: settlement.clone(),
+        },
         created_at_unix: input.now_unix,
     };
     events.insert(resolved_event.id.clone(), resolved_event.clone());
@@ -775,6 +827,8 @@ pub fn merge_request(
     request.settlement = Some(settlement.clone());
     request.updated_at_unix = input.now_unix;
     request.resolved_at_unix = Some(input.now_unix);
+    let merged_position = advance_request_activity(request)?;
+    let settled_position = advance_request_activity(request)?;
     let request = request.clone();
 
     let merged_event = RequestEvent {
@@ -782,9 +836,11 @@ pub fn merge_request(
         request_id: request.id.clone(),
         actor_user_id: input.actor_user_id.clone(),
         kind: RequestEventKind::Merged,
-        body: input.body,
-        old_head_oid: None,
-        new_head_oid: Some(request.head_oid.clone()),
+        position: merged_position,
+        payload: RequestEventPayload::Merged {
+            body: input.body,
+            head_oid: request.head_oid.clone(),
+        },
         created_at_unix: input.now_unix,
     };
     let settled_event = RequestEvent {
@@ -792,9 +848,10 @@ pub fn merge_request(
         request_id: request.id.clone(),
         actor_user_id: input.actor_user_id,
         kind: RequestEventKind::Settled,
-        body: Some(settlement_event_body(&settlement)),
-        old_head_oid: None,
-        new_head_oid: None,
+        position: settled_position,
+        payload: RequestEventPayload::Settled {
+            settlement: settlement.clone(),
+        },
         created_at_unix: input.now_unix,
     };
     events.insert(merged_event.id.clone(), merged_event.clone());
@@ -827,7 +884,28 @@ fn validate_required_body(label: &str, value: &str) -> Result<(), ApiError> {
     Ok(())
 }
 
-fn open_request_mut<'a>(
+pub(super) fn validate_body_size(
+    label: &str,
+    value: &str,
+    max_bytes: usize,
+) -> Result<(), ApiError> {
+    if value.len() > max_bytes {
+        return Err(ApiError::bad_request(format!(
+            "{label} exceeds {max_bytes} bytes"
+        )));
+    }
+    Ok(())
+}
+
+pub(super) fn advance_request_activity(request: &mut Request) -> Result<u64, ApiError> {
+    request.activity_version = request
+        .activity_version
+        .checked_add(1)
+        .ok_or_else(|| ApiError::conflict("request activity version overflow"))?;
+    Ok(request.activity_version)
+}
+
+pub(super) fn open_request_mut<'a>(
     requests: &'a mut BTreeMap<String, Request>,
     request_id: &str,
 ) -> Result<&'a mut Request, ApiError> {
@@ -843,7 +921,7 @@ fn open_request_mut<'a>(
     Ok(request)
 }
 
-fn ensure_event_id_available(
+pub(super) fn ensure_event_id_available(
     events: &BTreeMap<String, RequestEvent>,
     event_id: &str,
 ) -> Result<(), ApiError> {

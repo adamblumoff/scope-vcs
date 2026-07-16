@@ -27,3 +27,27 @@ fn obsolete_request_transport_commands_are_removed() {
         );
     }
 }
+
+#[test]
+fn request_comment_is_replaced_by_discuss() {
+    let dir = TempDir::new("removed-request-comment");
+    create_repo_with_head(dir.path());
+
+    scope_failure(
+        dir.path(),
+        ["request", "comment"],
+        "unrecognized subcommand 'comment'",
+    );
+}
+
+#[test]
+fn request_discuss_requires_a_body_before_login() {
+    let dir = TempDir::new("discuss-body");
+    create_repo_with_head(dir.path());
+
+    scope_failure(
+        dir.path(),
+        ["request", "discuss"],
+        "the following required arguments were not provided",
+    );
+}

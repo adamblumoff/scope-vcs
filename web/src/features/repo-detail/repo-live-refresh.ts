@@ -1,13 +1,17 @@
 import type { RepoLiveState } from '@/api/types'
 import type { RepoChangeEvent } from '@/api/types.generated'
 import { useAuth } from '@clerk/tanstack-react-start'
-import { useEffect } from 'react'
+import { useCallback, useEffect, useRef } from 'react'
 
 const RECONNECT_DELAY_MS = 2000
 
 type AuthTokenGetter = (options: { template: string }) => Promise<string | null>
 type StreamRepoEventsResult = 'closed'
 type RetryScheduler = (retry: () => void) => () => void
+export type RepoChangeListener = (event: RepoChangeEvent) => void
+export type SubscribeToRepoChanges = (
+  listener: RepoChangeListener,
+) => () => void
 
 export type RepoRefreshCoordinator = {
   onEvent: (event: RepoChangeEvent) => void
@@ -20,6 +24,11 @@ export function useRepoLiveRefresh(
   invalidate: () => Promise<unknown>,
 ) {
   const { getToken, isLoaded } = useAuth()
+  const listenersRef = useRef(new Set<RepoChangeListener>())
+  const subscribe = useCallback<SubscribeToRepoChanges>((listener) => {
+    listenersRef.current.add(listener)
+    return () => listenersRef.current.delete(listener)
+  }, [])
 
   useEffect(() => {
     if (!live || !isLoaded) {
@@ -34,6 +43,28 @@ export function useRepoLiveRefresh(
       scheduleRetry: browserRetryScheduler,
       versioned: usesVersionedRepoChangeEvents(live),
     })
+    const notifyListeners = (event: RepoChangeEvent) => {
+      for (const listener of listenersRef.current) {
+        try {
+          listener(event)
+        } catch {
+          // A broken page subscriber must not tear down the shared stream.
+        }
+      }
+    }
+    const onEvent = (event: RepoChangeEvent) => {
+      coordinator.onEvent(event)
+      notifyListeners(event)
+    }
+    const onStreamInterrupted = () => {
+      coordinator.onStreamInterrupted()
+      const event: RepoChangeEvent = {
+        kind: 'Lagged',
+        repo_id: live.repo.id,
+        version: 0,
+      }
+      notifyListeners(event)
+    }
 
     let stopped = false
     const run = async () => {
@@ -42,17 +73,17 @@ export function useRepoLiveRefresh(
           const result = await streamRepoEvents(
             live,
             getToken,
-            coordinator.onEvent,
+            onEvent,
             controller.signal,
           )
           if (!controller.signal.aborted && result === 'closed') {
-            coordinator.onStreamInterrupted()
+            onStreamInterrupted()
           }
         } catch (error) {
           if (controller.signal.aborted) {
             return
           }
-          coordinator.onStreamInterrupted()
+          onStreamInterrupted()
         }
         if (!stopped) {
           await delay(RECONNECT_DELAY_MS, controller.signal)
@@ -67,6 +98,8 @@ export function useRepoLiveRefresh(
       controller.abort()
     }
   }, [getToken, invalidate, isLoaded, live])
+
+  return subscribe
 }
 
 export function createRepoRefreshCoordinator({
@@ -129,8 +162,16 @@ export function createRepoRefreshCoordinator({
 
   return {
     onEvent(event) {
-      if (stopped || event.repo_id !== repoId || event.reason === 'connected') return
-      if (event.reason === 'lagged' || !versioned || event.version === 0) {
+      if (
+        stopped ||
+        event.repo_id !== repoId ||
+        event.kind === 'Connected' ||
+        typeof event.kind === 'object' &&
+          'RequestDiscussionChanged' in event.kind
+      ) {
+        return
+      }
+      if (event.kind === 'Lagged' || !versioned || event.version === 0) {
         requestRefresh(null)
       } else if (event.version > highestAppliedVersion) {
         requestRefresh(event.version)
@@ -210,20 +251,53 @@ export function parseRepoChangeEvent(message: string): RepoChangeEvent | null {
     return null
   }
 
-  const payload = JSON.parse(data.join('\n')) as Partial<RepoChangeEvent>
+  let payload: Partial<RepoChangeEvent>
+  try {
+    payload = JSON.parse(data.join('\n')) as Partial<RepoChangeEvent>
+  } catch {
+    return null
+  }
   if (
     typeof payload.repo_id !== 'string' ||
     typeof payload.version !== 'number' ||
-    typeof payload.reason !== 'string'
+    !isRepoChangeKind(payload.kind)
   ) {
     return null
   }
 
   return {
-    reason: payload.reason,
+    kind: payload.kind,
     repo_id: payload.repo_id,
     version: payload.version,
   }
+}
+
+function isRepoChangeKind(value: unknown): value is RepoChangeEvent['kind'] {
+  if (value === 'Connected' || value === 'Lagged') return true
+  if (!value || typeof value !== 'object') return false
+  if ('RepositoryChanged' in value) {
+    const changed = value.RepositoryChanged
+    return (
+      !!changed &&
+      typeof changed === 'object' &&
+      'reason' in changed &&
+      typeof changed.reason === 'string'
+    )
+  }
+  if ('RequestDiscussionChanged' in value) {
+    const changed = value.RequestDiscussionChanged
+    return (
+      !!changed &&
+      typeof changed === 'object' &&
+      'request_id' in changed &&
+      typeof changed.request_id === 'string' &&
+      'discussion_id' in changed &&
+      typeof changed.discussion_id === 'string' &&
+      'through_position' in changed &&
+      typeof changed.through_position === 'number'
+    )
+  }
+  return false
 }
 
 export function takeSseMessages(buffer: string) {

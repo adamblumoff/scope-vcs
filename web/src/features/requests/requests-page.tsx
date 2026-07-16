@@ -1,4 +1,4 @@
-import type { RepoLiveState, RepoParams, RequestSummary } from '@/api/types'
+import type { RepoLiveState, RepoParams, RequestListItem } from '@/api/types'
 import { RepoShell } from '@/components/repo-shell'
 import { SectionRows } from '@/components/section-rows'
 import { Badge } from '@/components/ui/badge'
@@ -22,7 +22,7 @@ export function RequestsPage({
 }: {
   live: RepoLiveState
   params: RepoParams
-  requests: RequestSummary[]
+  requests: RequestListItem[]
 }) {
   return (
     <RepoShell params={params}>
@@ -56,7 +56,7 @@ function RequestListRow({
   request,
 }: {
   params: RepoParams
-  request: RequestSummary
+  request: RequestListItem
 }) {
   return (
     <Link

@@ -1,5 +1,4 @@
 import type {
-  CommentRequestInput,
   DeleteRequestInput,
   MergeRequestInput,
   NeedsResponseInput,
@@ -13,16 +12,12 @@ import type {
 } from '@/api/types'
 import { useRouter } from '@tanstack/react-router'
 import { type FormEvent, useState } from 'react'
-import {
-  normalizedBody,
-  resolutionOptionsFor,
-} from './request-labels'
+import { normalizedBody, resolutionOptionsFor } from './request-labels'
 
 type RequestMutationAction<TInput> = (input: TInput) => Promise<RequestMutation>
 type RequestDeleteAction = (input: DeleteRequestInput) => Promise<RequestDelete>
 
 export type RequestActionKey =
-  | 'comment'
   | 'delete'
   | 'merge'
   | 'needs-response'
@@ -34,8 +29,7 @@ export type RequestActionError = {
   message: string
 }
 
-export type RequestDetailControllerProps = {
-  commentRequest: RequestMutationAction<CommentRequestInput>
+export type RequestActionsProps = {
   deleteRequest: RequestDeleteAction
   detail: RequestDetail
   markNeedsResponse: RequestMutationAction<NeedsResponseInput>
@@ -45,8 +39,7 @@ export type RequestDetailControllerProps = {
   respondToRequest: RequestMutationAction<RespondRequestInput>
 }
 
-export function useRequestDetailController({
-  commentRequest,
+export function useRequestActions({
   deleteRequest,
   detail,
   markNeedsResponse,
@@ -54,11 +47,10 @@ export function useRequestDetailController({
   params,
   resolveRequest,
   respondToRequest,
-}: RequestDetailControllerProps) {
+}: RequestActionsProps) {
   const router = useRouter()
   const { request } = detail
   const [actionError, setActionError] = useState<RequestActionError | null>(null)
-  const [commentBody, setCommentBody] = useState('')
   const [deleteOpen, setDeleteOpen] = useState(false)
   const [mergeOpen, setMergeOpen] = useState(false)
   const [needsResponseBody, setNeedsResponseBody] = useState('')
@@ -94,15 +86,6 @@ export function useRequestDetailController({
     } finally {
       setPendingAction(null)
     }
-  }
-
-  async function submitComment(event: FormEvent<HTMLFormElement>) {
-    event.preventDefault()
-    await runAction(
-      'comment',
-      () => commentRequest({ ...requestParams, body: commentBody }),
-      () => setCommentBody(''),
-    )
   }
 
   async function submitNeedsResponse(event: FormEvent<HTMLFormElement>) {
@@ -152,7 +135,6 @@ export function useRequestDetailController({
         key: 'merge',
         message: 'Request has no current main OID to merge into.',
       })
-      setPendingAction(null)
       return
     }
 
@@ -199,14 +181,12 @@ export function useRequestDetailController({
     deleteOpen,
     request,
     resolutionOptions,
-    setCommentBody,
     setDeleteOpen,
     setMergeOpen,
     setNeedsResponseBody,
     setResolveBody,
     setResolveDisposition,
     setResponseBody,
-    submitComment,
     submitDelete,
     submitMerge,
     submitNeedsResponse,
@@ -214,7 +194,6 @@ export function useRequestDetailController({
     submitResponse,
     uiState: {
       actionError,
-      commentBody,
       mergeOpen,
       needsResponseBody,
       pendingAction,

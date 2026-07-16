@@ -111,8 +111,42 @@ pub fn router(state: AppState) -> Router {
             post(http::requests::submit_request),
         )
         .route(
-            routes::REPO_REQUEST_COMMENTS,
-            post(http::requests::comment_request),
+            routes::REPO_REQUEST_DESCRIPTION,
+            axum::routing::patch(http::requests::update_request_description),
+        )
+        .route(
+            routes::REPO_REQUEST_DISCUSSIONS,
+            get(http::request_discussions::list_discussions)
+                .post(http::request_discussions::create_discussion),
+        )
+        .route(
+            routes::REPO_REQUEST_DISCUSSION_CHANGES,
+            get(http::request_discussions::changed_discussions),
+        )
+        .route(
+            routes::REPO_REQUEST_DISCUSSION_REPLIES,
+            get(http::request_discussions::list_replies)
+                .post(http::request_discussions::create_reply),
+        )
+        .route(
+            routes::REPO_REQUEST_DISCUSSION_RESOLVE,
+            post(http::request_discussions::resolve_discussion),
+        )
+        .route(
+            routes::REPO_REQUEST_DISCUSSION_REOPEN,
+            post(http::request_discussions::reopen_discussion),
+        )
+        .route(
+            routes::REPO_REQUEST_DISCUSSION_REOPEN_AND_REPLY,
+            post(http::request_discussions::reopen_and_reply),
+        )
+        .route(
+            routes::REPO_REQUEST_DISCUSSION_READ,
+            axum::routing::put(http::request_discussions::mark_read),
+        )
+        .route(
+            routes::REPO_REQUEST_ACTIVITY,
+            get(http::request_discussions::activity),
         )
         .route(
             routes::REPO_REQUEST_NEEDS_RESPONSE,
@@ -186,6 +220,7 @@ pub fn router(state: AppState) -> Router {
                     Method::HEAD,
                     Method::POST,
                     Method::PATCH,
+                    Method::PUT,
                     Method::DELETE,
                 ])
                 .allow_headers([AUTHORIZATION, CONTENT_TYPE]),

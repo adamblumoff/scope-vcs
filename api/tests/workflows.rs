@@ -54,7 +54,7 @@ async fn health_and_readiness_cover_live_and_unavailable_dependencies() {
 }
 
 #[tokio::test]
-async fn cors_preflight_explicitly_allows_authorization_and_get() {
+async fn cors_preflight_explicitly_allows_authorization_get_and_put() {
     let response = TestApp::new()
         .router()
         .oneshot(
@@ -83,6 +83,7 @@ async fn cors_preflight_explicitly_allows_authorization_and_get() {
         .unwrap();
     assert_ne!(allow_methods, "*");
     assert!(allow_methods.contains("GET"));
+    assert!(allow_methods.contains("PUT"));
 }
 
 fn request(method: &str, uri: &str) -> Request<Body> {

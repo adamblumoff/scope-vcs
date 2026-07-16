@@ -1,7 +1,8 @@
 use crate::{
     api::{
-        MergeRequestParams, ResolveRequestParams, StartRequestParams, SubmitRequestParams,
-        comment_request, delete_request as api_delete_request, get_request, list_requests,
+        CreateRequestDiscussionParams, MergeRequestParams, ResolveRequestParams,
+        StartRequestParams, SubmitRequestParams, create_request_discussion,
+        delete_request as api_delete_request, get_request, list_requests,
         mark_request_needs_response, merge_request, resolve_request, respond_to_request,
         start_request as api_start_request, submit_request,
     },
@@ -13,6 +14,10 @@ use crate::{
 };
 use anyhow::{Context, bail};
 use reqwest::blocking::Client;
+use std::{
+    sync::atomic::{AtomicU64, Ordering},
+    time::{SystemTime, UNIX_EPOCH},
+};
 
 mod args;
 mod local;
@@ -32,10 +37,12 @@ use local::{
     request_id_for_context, store_request_metadata, track_request_branch_ref,
 };
 use render::{
-    confirm_merge, ensure_mergeable, print_mutation_receipt, print_repo_access,
-    print_request_detail, print_submit_stake, request_line,
+    confirm_merge, ensure_mergeable, print_discussion_receipt, print_mutation_receipt,
+    print_repo_access, print_request_detail, print_submit_stake, request_list_line,
 };
 use text::short_oid;
+
+static CLIENT_DISCUSSION_SEQUENCE: AtomicU64 = AtomicU64::new(0);
 
 pub struct PreparedRequestCommand {
     args: RequestArgs,
@@ -49,7 +56,7 @@ pub fn prepare_request_command(args: RequestArgs) -> anyhow::Result<PreparedRequ
         RequestCommand::Push(_) => ("scope request push", false),
         RequestCommand::Delete(_) => ("scope request delete", false),
         RequestCommand::Status(_) => ("scope request status", false),
-        RequestCommand::Comment(_) => ("scope request comment", false),
+        RequestCommand::Discuss(_) => ("scope request discuss", false),
         RequestCommand::NeedsResponse(_) => ("scope request needs-response", false),
         RequestCommand::Respond(_) => ("scope request respond", false),
         RequestCommand::Resolve(_) => ("scope request resolve", false),
@@ -105,7 +112,7 @@ pub fn run_request_command(
             args.remote,
             args.request,
         ),
-        RequestCommand::Comment(args) => comment_on_request(
+        RequestCommand::Discuss(args) => start_request_discussion(
             &git_repo,
             client,
             api_url,
@@ -428,12 +435,12 @@ fn show_request_status(
     }
     println!("Visible requests:");
     for request in response.requests {
-        println!("  {}", request_line(&request));
+        println!("  {}", request_list_line(&request));
     }
     Ok(())
 }
 
-fn comment_on_request(
+fn start_request_discussion(
     git_repo: &GitRepo,
     client: &Client,
     api_url: &str,
@@ -444,17 +451,33 @@ fn comment_on_request(
 ) -> anyhow::Result<()> {
     let (context, request_id) =
         load_context_and_request_id(git_repo, client, api_url, session_token, remote, request_id)?;
-    let response = comment_request(
+    let response = create_request_discussion(
         client,
         api_url,
         session_token,
-        &context.target.owner,
-        &context.target.repo,
-        &request_id,
-        body,
+        CreateRequestDiscussionParams {
+            owner: &context.target.owner,
+            repo: &context.target.repo,
+            request_id: &request_id,
+            body_markdown: body,
+            client_discussion_id: new_client_discussion_id()?,
+        },
     )?;
-    print_mutation_receipt("Comment added", &response);
+    print_discussion_receipt(&response);
     Ok(())
+}
+
+fn new_client_discussion_id() -> anyhow::Result<String> {
+    let nanos = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .context("system clock is before Unix epoch")?
+        .as_nanos();
+    Ok(format!(
+        "client_discussion_{}_{}_{}",
+        std::process::id(),
+        nanos,
+        CLIENT_DISCUSSION_SEQUENCE.fetch_add(1, Ordering::Relaxed)
+    ))
 }
 
 fn mark_needs_response(

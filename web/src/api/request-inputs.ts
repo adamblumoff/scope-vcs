@@ -1,6 +1,5 @@
 import { parseRepoParams } from './repo-params'
 import type {
-  CommentRequestInput,
   MergeRequestInput,
   NeedsResponseInput,
   RequestParams,
@@ -30,13 +29,6 @@ export function parseRequestParams(input: unknown): RequestParams {
   return {
     ...parseRepoParams(input),
     request_id: requestId,
-  }
-}
-
-export function parseCommentRequestInput(input: unknown): CommentRequestInput {
-  return {
-    ...parseRequestParams(input),
-    body: parseRequiredBody(input, 'Comment body is required.'),
   }
 }
 

@@ -1,5 +1,6 @@
 import type {
   RequestEvent,
+  RequestListItem,
   RequestSummary,
   RequestWorkflowDisposition,
   RequestWorkflowResolutionDisposition,
@@ -76,9 +77,12 @@ const DISPOSITIONS = {
 
 const EVENT_LABELS = {
   Started: 'Started', Submitted: 'Submitted', RevisionPushed: 'Revision pushed',
-  Commented: 'Commented', NeedsResponse: 'Needs response',
+  NeedsResponse: 'Needs response',
   ContributorResponded: 'Contributor responded', Merged: 'Merged',
   Resolved: 'Resolved', Settled: 'Settled', Withdrawn: 'Withdrawn',
+  DescriptionEdited: 'Description edited',
+  DiscussionResolved: 'Discussion resolved',
+  DiscussionReopened: 'Discussion reopened',
 } as const satisfies Record<RequestWorkflowEventKind, string>
 
 const MERGEABILITY = {
@@ -89,33 +93,35 @@ const MERGEABILITY = {
   MissingRequestBranch: { label: 'Branch missing', tone: 'warning' },
 } as const satisfies Record<RequestSummary['mergeability']['status'], { label: string; tone: BadgeTone }>
 
-export function requestStatusLabel(request: RequestSummary) {
+type RequestLabelSource = RequestSummary | RequestListItem
+
+export function requestStatusLabel(request: RequestLabelSource) {
   return request.state === 'Resolved' && request.disposition
     ? dispositionLabel(request.disposition)
     : REQUEST_STATES[request.state].label
 }
 
-export function requestStatusTone(request: RequestSummary): BadgeTone {
+export function requestStatusTone(request: RequestLabelSource): BadgeTone {
   return request.state === 'Resolved'
     ? dispositionTone(request.disposition)
     : REQUEST_STATES[request.state].tone
 }
 
-export function dispositionLabel(disposition: RequestWorkflowDisposition) {
+function dispositionLabel(disposition: RequestWorkflowDisposition) {
   return DISPOSITIONS[disposition].label
 }
 
-export function dispositionTone(
+function dispositionTone(
   disposition: RequestWorkflowDisposition | null,
 ): BadgeTone {
   return disposition ? DISPOSITIONS[disposition].tone : 'outline'
 }
 
-export function requestAudienceLabel(request: RequestSummary) {
+export function requestAudienceLabel(request: RequestLabelSource) {
   return request.audience === 'Private' ? 'Private request' : 'Public request'
 }
 
-export function requestAuthorRoleLabel(request: RequestSummary) {
+export function requestAuthorRoleLabel(request: RequestLabelSource) {
   switch (request.author_role) {
     case 'Owner':
       return 'Owner'
@@ -130,11 +136,11 @@ export function eventKindLabel(kind: RequestWorkflowEventKind) {
   return EVENT_LABELS[kind]
 }
 
-export function requestMergeabilityLabel(request: RequestSummary) {
+export function requestMergeabilityLabel(request: RequestLabelSource) {
   return MERGEABILITY[request.mergeability.status].label
 }
 
-export function requestMergeabilityTone(request: RequestSummary): BadgeTone {
+export function requestMergeabilityTone(request: RequestLabelSource): BadgeTone {
   return MERGEABILITY[request.mergeability.status].tone
 }
 
@@ -170,16 +176,52 @@ export function settlementPreviewText(preview: SettlementPreview) {
 }
 
 export function requestEventBody(event: RequestEvent) {
-  if (event.body) {
-    return event.body
+  const payload = event.payload as unknown as Record<
+    string,
+    Record<string, unknown>
+  >
+  const value = payload[event.kind]
+  if (!value) return null
+  switch (event.kind) {
+    case 'Started':
+      return stringValue(value.title)
+    case 'Submitted':
+      return oidText(value.head_oid)
+    case 'RevisionPushed':
+      return [
+        `${oidText(value.old_head_oid)} → ${oidText(value.new_head_oid)}`,
+        stringValue(value.note),
+      ].filter(Boolean).join('\n')
+    case 'NeedsResponse':
+      return stringValue(value.body)
+    case 'ContributorResponded':
+    case 'Merged':
+      return stringValue(value.body) ?? oidText(value.head_oid)
+    case 'Resolved':
+      return [
+        stringValue(value.disposition),
+        stringValue(value.body),
+      ].filter(Boolean).join(' · ')
+    case 'Settled': {
+      const settlement = value.settlement as Record<string, unknown> | undefined
+      return settlement
+        ? [
+            `${numberValue(settlement.refunded_credits)} refunded`,
+            `${numberValue(settlement.reward_credits)} reward`,
+            `${numberValue(settlement.burned_credits)} burned`,
+          ].join(' / ')
+        : null
+    }
+    case 'Withdrawn':
+      return oidText(value.head_oid)
+    case 'DescriptionEdited':
+      return 'The request description was updated.'
+    case 'DiscussionResolved':
+    case 'DiscussionReopened':
+      return value.discussion_id
+        ? `Discussion ${stringValue(value.discussion_id)}`
+        : null
   }
-  if (event.old_head_oid && event.new_head_oid) {
-    return `${shortOid(event.old_head_oid)} -> ${shortOid(event.new_head_oid)}`
-  }
-  if (event.new_head_oid) {
-    return shortOid(event.new_head_oid)
-  }
-  return null
 }
 
 export function shortOid(oid: string | null | undefined) {
@@ -209,4 +251,16 @@ export function formatUnixDate(unixSeconds: number | null) {
 export function normalizedBody(body: string) {
   const trimmed = body.trim()
   return trimmed ? trimmed : null
+}
+
+function oidText(value: unknown) {
+  return typeof value === 'string' ? shortOid(value) : null
+}
+
+function stringValue(value: unknown) {
+  return typeof value === 'string' && value.trim() ? value : null
+}
+
+function numberValue(value: unknown) {
+  return typeof value === 'number' ? value : 0
 }

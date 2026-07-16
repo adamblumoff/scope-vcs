@@ -2,7 +2,10 @@ use super::{
     policy::{Policy, PolicyError, Principal, PrincipalKind, ScopePath, Visibility},
     projection::{SourceGraph, VisibilityEvent},
     repo_config::{ConfigVisibility, RepoConfig},
-    requests::{CreditLedgerEntry, Request, RequestEvent, UserCreditAccount},
+    requests::{
+        CreditLedgerEntry, Request, RequestDiscussion, RequestDiscussionReadState,
+        RequestDiscussionReply, RequestEvent, UserCreditAccount,
+    },
 };
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
@@ -423,6 +426,9 @@ pub struct AppCatalog {
     pub users: BTreeMap<String, UserAccount>,
     pub repositories: BTreeMap<String, StoredRepository>,
     pub requests: BTreeMap<String, Request>,
+    pub request_discussions: BTreeMap<String, RequestDiscussion>,
+    pub request_discussion_replies: BTreeMap<String, RequestDiscussionReply>,
+    pub request_discussion_read_states: BTreeMap<String, RequestDiscussionReadState>,
     pub request_events: BTreeMap<String, RequestEvent>,
     pub user_credit_accounts: BTreeMap<String, UserCreditAccount>,
     pub credit_ledger_entries: BTreeMap<String, CreditLedgerEntry>,

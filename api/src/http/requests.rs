@@ -4,10 +4,10 @@ use crate::{
     domain::{
         projection::{ProjectionViewKey, project_graph},
         requests::{
-            CommentRequestInput, DeleteRequestInput, DeleteRequestMutation,
-            MarkRequestNeedsResponseInput, MergeRequestInput, Request, RequestActorRole,
-            RequestAudience, RequestDisposition, RequestState, ResolveRequestInput,
-            RespondToRequestInput, StartRequestInput, SubmitRequestInput, canonical_request_ref,
+            DeleteRequestInput, DeleteRequestMutation, MarkRequestNeedsResponseInput,
+            MergeRequestInput, Request, RequestActorRole, RequestAudience, RequestDisposition,
+            RequestState, ResolveRequestInput, RespondToRequestInput, StartRequestInput,
+            SubmitRequestInput, UpdateRequestDescriptionInput, canonical_request_ref,
             request_actor_role, request_mergeability, request_permissions,
             request_visible_to_access, settlement_for,
         },
@@ -53,6 +53,7 @@ pub(crate) async fn list_requests(
                 current_main_oid.clone(),
                 viewer_user_id.as_deref(),
             )
+            .map(request_list_item_response)
         })
         .collect::<Result<Vec<_>, ApiError>>()?;
 
@@ -68,16 +69,9 @@ pub(crate) async fn get_request(
         repo_and_access(&state, &headers, &owner, &repo_name).await?;
     let request = visible_request(&state, &repo, access, &request_id).await?;
     let current_main_oid = current_main_oid_for_access(&state, &repo, access)?;
-    let events = state
-        .metadata
-        .request_events_by_request_id(&request.id)
-        .await?
-        .into_iter()
-        .map(request_event_response)
-        .collect::<Result<Vec<_>, ApiError>>()?;
     let request = request_response(request, access, current_main_oid, viewer_user_id.as_deref())?;
 
-    Ok(Json(RequestDetailResponse { request, events }))
+    Ok(Json(RequestDetailResponse { request }))
 }
 
 pub(crate) async fn delete_request(
@@ -158,6 +152,7 @@ pub(crate) async fn start_request(
             author_role: request_actor_role(access),
             audience: input.audience,
             base_main_oid,
+            event_id: random_id("event_request_started")?,
             now_unix,
         })
         .await?;
@@ -201,7 +196,7 @@ pub(crate) async fn submit_request(
     let mutation = state
         .metadata
         .submit_request(SubmitRequestInput {
-            request_id,
+            request_id: request.id,
             actor_user_id: user.id.clone(),
             expected_head_oid: head_oid,
             stake_credits,
@@ -220,30 +215,29 @@ pub(crate) async fn submit_request(
     Ok(Json(RequestMutationResponse { request }))
 }
 
-pub(crate) async fn comment_request(
+pub(crate) async fn update_request_description(
     State(state): State<AppState>,
     headers: HeaderMap,
     Path((owner, repo_name, request_id)): Path<(String, String, String)>,
-    Json(input): Json<CommentRequestRequest>,
+    Json(input): Json<UpdateRequestDescriptionRequest>,
 ) -> Result<Json<RequestMutationResponse>, ApiError> {
     let user = require_scope_user(&state, &headers).await?;
     let (repo, access, _) = repo_and_access(&state, &headers, &owner, &repo_name).await?;
     let request = visible_request(&state, &repo, access, &request_id).await?;
-    if !request_permissions(&request, access, Some(&user.id)).can_comment {
-        return Err(ApiError::forbidden("request author or maintainer required"));
-    }
     let mutation = state
         .metadata
-        .comment_request(CommentRequestInput {
-            request_id,
+        .update_request_description(UpdateRequestDescriptionInput {
+            request_id: request.id,
             actor_user_id: user.id.clone(),
-            event_id: random_id("event_request_comment")?,
-            body: input.body,
+            actor_can_edit_description: false,
+            event_id: random_id("event_request_description_edited")?,
+            description_markdown: input.description_markdown,
             now_unix: unix_now()?,
         })
         .await?;
     let current_main_oid = current_main_oid_for_access(&state, &repo, access)?;
     let request = request_response(mutation.request, access, current_main_oid, Some(&user.id))?;
+    publish_request_summary_refresh(&state, &repo, "request-description-edited").await;
     Ok(Json(RequestMutationResponse { request }))
 }
 
@@ -269,6 +263,7 @@ pub(crate) async fn mark_needs_response(
         .await?;
     let current_main_oid = current_main_oid_for_access(&state, &repo, access)?;
     let request = request_response(mutation.request, access, current_main_oid, Some(&user.id))?;
+    publish_request_summary_refresh(&state, &repo, "request-needs-response").await;
     Ok(Json(RequestMutationResponse { request }))
 }
 
@@ -293,6 +288,7 @@ pub(crate) async fn respond_to_request(
         .await?;
     let current_main_oid = current_main_oid_for_access(&state, &repo, access)?;
     let request = request_response(mutation.request, access, current_main_oid, Some(&user.id))?;
+    publish_request_summary_refresh(&state, &repo, "request-contributor-responded").await;
     Ok(Json(RequestMutationResponse { request }))
 }
 
@@ -486,7 +482,9 @@ fn request_response(
 ) -> Result<RequestSummaryResponse, ApiError> {
     let decision = request_permissions(&request, access, viewer_user_id);
     let permissions = RequestPermissionsResponse {
-        can_comment: decision.can_comment,
+        can_open_discussion: decision.can_open_discussion,
+        can_reply_to_discussion: decision.can_reply_to_discussion,
+        can_edit_description: decision.can_edit_description,
         can_pull_branch: decision.can_pull_branch,
         can_push_branch: decision.can_push_branch,
         can_delete: decision.can_delete,
@@ -578,7 +576,7 @@ fn ledger_id_for(amount: u32, kind: &str) -> Result<Option<String>, ApiError> {
     }
 }
 
-fn random_id(prefix: &str) -> Result<String, ApiError> {
+pub(crate) fn random_id(prefix: &str) -> Result<String, ApiError> {
     let mut bytes = [0_u8; 16];
     getrandom::fill(&mut bytes).map_err(|error| {
         ApiError::internal_message(format!("failed to create {prefix} id: {error}"))

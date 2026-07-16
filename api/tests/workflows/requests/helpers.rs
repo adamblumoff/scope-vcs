@@ -181,6 +181,7 @@ async fn create_request(fixture: RequestFixture<'_>) {
             author_role: fixture.role,
             audience: fixture.audience,
             base_main_oid: fixture.base_main_oid.to_string(),
+            event_id: format!("event_{}_started", fixture.request_id),
             now_unix: 2,
         })
         .await
