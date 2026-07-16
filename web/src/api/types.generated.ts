@@ -244,7 +244,7 @@ export type ResolveRequestRequest = { disposition: ResolutionDisposition, body: 
 
 export type MergeRequestRequest = { expected_main_oid: string, expected_head_oid: string, body: string | null, };
 
-export type RepoChangeKind = "Connected" | "Lagged" | { "RepositoryChanged": { reason: string, } } | { "RequestDiscussionChanged": { request_id: string, discussion_id: string, through_position: number, } };
+export type RepoChangeKind = "Connected" | "Lagged" | { "RepositoryChanged": { reason: string, } } | { "RequestDiscussionChanged": { request_id: string, discussion_id: string, through_position: number, audience: RequestAudience, } };
 
 export const ApiRouteTemplates = {
   accountSession: "/v1/session",

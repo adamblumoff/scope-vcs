@@ -1,5 +1,6 @@
 use crate::{
     auth::scope::{optional_scope_user, principal_for_scope_user},
+    domain::requests::RequestAudience,
     domain::store::{RepositoryActor, UserAccount, repo_id},
     error::ApiError,
     repo_events::{RepoChangeEvent, RepoChangeKind},
@@ -41,12 +42,10 @@ pub(crate) async fn repo_events(
     }
 
     let initial = event_for_principal(
-        &state,
         &repo,
         &principal,
         RepoChangeEvent::new(&repo_id, repo.record.change_version, "connected"),
     )
-    .await?
     .expect("connected event is always visible");
     let updates = stream::unfold(
         RepoEventStreamState {
@@ -114,7 +113,7 @@ async fn stream_event_for_user(
     let repo = find_repo(state, owner, repo_name).await?;
     let principal = principal_for_scope_user(&repo, user);
     ensure_repo_events_allowed(state, &repo, &principal)?;
-    event_for_principal(state, &repo, &principal, event).await
+    Ok(event_for_principal(&repo, &principal, event))
 }
 
 fn ensure_repo_events_allowed(
@@ -125,38 +124,26 @@ fn ensure_repo_events_allowed(
     ensure_repo_read(state, repo, principal)
 }
 
-async fn event_for_principal(
-    state: &AppState,
+fn event_for_principal(
     repo: &crate::domain::store::StoredRepository,
     principal: &crate::domain::policy::Principal,
     event: RepoChangeEvent,
-) -> Result<Option<RepoChangeEvent>, ApiError> {
+) -> Option<RepoChangeEvent> {
     if repo.access_for_principal(principal).actor != RepositoryActor::Public {
-        return Ok(Some(event));
+        return Some(event);
     }
 
-    if let RepoChangeKind::RequestDiscussionChanged { request_id, .. } = &event.kind {
-        let visible = state
-            .metadata
-            .request_by_id(request_id)
-            .await?
-            .is_some_and(|request| {
-                request.repo_id == repo.record.id
-                    && crate::domain::requests::request_visible_to_access(
-                        &request,
-                        repo.access_for_principal(principal),
-                    )
-            });
-        if visible {
-            return Ok(Some(RepoChangeEvent {
+    if let RepoChangeKind::RequestDiscussionChanged { audience, .. } = &event.kind {
+        if matches!(audience, RequestAudience::Public) {
+            return Some(RepoChangeEvent {
                 version: 0,
                 ..event
-            }));
+            });
         }
-        return Ok(None);
+        return None;
     }
 
-    Ok(Some(RepoChangeEvent {
+    Some(RepoChangeEvent {
         kind: match event.kind {
             RepoChangeKind::Connected => RepoChangeKind::Connected,
             RepoChangeKind::Lagged => RepoChangeKind::Lagged,
@@ -166,7 +153,7 @@ async fn event_for_principal(
         },
         repo_id: event.repo_id,
         version: 0,
-    }))
+    })
 }
 
 fn sse_event(event: RepoChangeEvent) -> Result<Event, Infallible> {

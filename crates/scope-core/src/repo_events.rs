@@ -6,6 +6,8 @@ use std::{
 };
 use tokio::sync::broadcast;
 
+use crate::domain::requests::RequestAudience;
+
 const REPO_CHANGE_CHANNEL_CAPACITY: usize = 128;
 pub const POSTGRES_REPO_CHANGE_CHANNEL: &str = "scope_repo_changes";
 
@@ -29,6 +31,7 @@ pub enum RepoChangeKind {
         request_id: String,
         discussion_id: String,
         through_position: u64,
+        audience: RequestAudience,
     },
 }
 
@@ -52,6 +55,7 @@ impl RepoChangeEvent {
         request_id: String,
         discussion_id: String,
         through_position: u64,
+        audience: RequestAudience,
     ) -> Self {
         Self {
             repo_id: repo_id.to_string(),
@@ -60,6 +64,7 @@ impl RepoChangeEvent {
                 request_id,
                 discussion_id,
                 through_position,
+                audience,
             },
         }
     }

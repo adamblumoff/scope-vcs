@@ -20,6 +20,7 @@ const discussionEvent = (version: number) =>
   ({
     kind: {
       RequestDiscussionChanged: {
+        audience: 'Public',
         discussion_id: 'discussion-1',
         request_id: 'request-1',
         through_position: version,

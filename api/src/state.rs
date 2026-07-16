@@ -333,13 +333,14 @@ impl AppState {
         request_id: String,
         discussion_id: String,
         through_position: u64,
-        _audience: crate::domain::requests::RequestAudience,
+        audience: crate::domain::requests::RequestAudience,
     ) {
         let event = RepoChangeEvent::request_discussion_changed(
             repo_id,
             request_id,
             discussion_id,
             through_position,
+            audience,
         );
         self.repo_events.publish_event(event.clone());
         if let Err(error) = self

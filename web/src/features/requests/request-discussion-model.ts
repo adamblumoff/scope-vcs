@@ -3,7 +3,6 @@ import type {
   RequestDiscussionFilter,
   RequestDiscussionPage,
   RequestDiscussionReplyView,
-  RequestDiscussionSort,
   RequestDiscussionView,
 } from './request-discussion-types'
 
@@ -156,23 +155,6 @@ export function orderedDiscussions(collection: DiscussionCollection) {
     const discussion = collection.byId.get(id)
     return discussion ? [discussion] : []
   })
-}
-
-export function reorderDiscussions(
-  collection: DiscussionCollection,
-  sort: RequestDiscussionSort,
-): DiscussionCollection {
-  const order = [...collection.order].sort((leftId, rightId) => {
-    const left = collection.byId.get(leftId)
-    const right = collection.byId.get(rightId)
-    if (!left || !right) return 0
-    const leftPosition =
-      sort === 'Recent' ? left.last_activity_position : left.opened_position
-    const rightPosition =
-      sort === 'Recent' ? right.last_activity_position : right.opened_position
-    return rightPosition - leftPosition
-  })
-  return { ...collection, order }
 }
 
 export function compactDiscussionSummary(body: string) {

@@ -11,7 +11,6 @@ import {
   patchDiscussionForFilter,
   patchDiscussionWithoutReordering,
   replaceDiscussion,
-  reorderDiscussions,
   upsertDiscussionReply,
 } from './request-discussion-model'
 import type {
@@ -47,7 +46,6 @@ test('realtime patches a discussion without moving it under the cursor', () => {
     9,
   )
   assert.deepEqual(patched.order, ['one', 'two'])
-  assert.deepEqual(reorderDiscussions(patched, 'Recent').order, ['two', 'one'])
 })
 
 test('realtime appends a new root without reordering visible roots', () => {
