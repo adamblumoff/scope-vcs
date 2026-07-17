@@ -15,6 +15,7 @@ import { Button } from '@/components/ui/button'
 import { WorkbenchHeader } from '@/components/workbench-header'
 import { Link } from '@tanstack/react-router'
 import { Coins, ShieldQuestion, Trash2 } from 'lucide-react'
+import type { ReactNode } from 'react'
 import { useCallback, useMemo, useState } from 'react'
 import { RequestActivityDrawer } from './request-activity-drawer'
 import { RequestChangesSection } from './request-changes-section'
@@ -252,13 +253,15 @@ export function RequestDetailPage(props: RequestDetailPageProps) {
     }
   }
 
-  return (
-    <RepoShell params={params}>
+  function requestHeader(discussionControls?: ReactNode) {
+    return (
       <WorkbenchHeader
         actions={(
-          <div className="flex flex-wrap items-center gap-2">
+          <div className="flex flex-wrap items-center justify-end gap-2">
+            {discussionControls}
             {request.permissions.can_delete ? (
               <Button
+                className="h-9"
                 disabled={controller.uiState.pendingAction === 'delete'}
                 onClick={() => controller.setDeleteOpen(true)}
                 size="sm"
@@ -268,7 +271,12 @@ export function RequestDetailPage(props: RequestDetailPageProps) {
                 Delete
               </Button>
             ) : null}
-            <Button asChild size="sm" variant="secondary">
+            <Button
+              asChild
+              className="h-9"
+              size="sm"
+              variant="secondary"
+            >
               <Link params={params} to="/repos/$owner/$repo/requests">
                 Requests
               </Link>
@@ -278,6 +286,7 @@ export function RequestDetailPage(props: RequestDetailPageProps) {
             />
           </div>
         )}
+        className="sm:flex-col sm:items-stretch xl:flex-row xl:items-end"
         count={(
           <span className="font-mono">
             {request.name} / {request.id}
@@ -301,10 +310,19 @@ export function RequestDetailPage(props: RequestDetailPageProps) {
         eyebrow="Request"
         title={request.title}
       />
+    )
+  }
+
+  function requestNavigation() {
+    return (
       <div className="px-5 lg:px-7">
         <RequestReviewNavigation onChange={onViewChange} view={view} />
       </div>
+    )
+  }
 
+  return (
+    <RepoShell params={params}>
       {view === 'discussion' && discussionPage ? (
         <RequestDiscussionWorkbench
           actions={discussionActions}
@@ -332,7 +350,9 @@ export function RequestDetailPage(props: RequestDetailPageProps) {
           )}
           description={description}
           filter={discussionFilter}
+          header={requestHeader}
           initialPage={discussionPage}
+          navigation={requestNavigation()}
           onDescriptionSave={saveDescription}
           onQueryChange={onDiscussionQueryChange}
           params={discussionParams}
@@ -349,17 +369,28 @@ export function RequestDetailPage(props: RequestDetailPageProps) {
         />
       ) : null}
 
+      {view === 'discussion' && !discussionPage ? (
+        <>
+          {requestHeader()}
+          {requestNavigation()}
+        </>
+      ) : null}
+
       {view === 'changes' ? (
-        <div className="px-5 pb-8 lg:px-7">
-          <RequestChangesSection
-            changes={changes}
-            error={changesError}
-            onSelectFile={onSelectFile}
-            selectedDiff={selectedDiff}
-            selectedDiffError={selectedDiffError}
-            selectedPath={selectedPath}
-          />
-        </div>
+        <>
+          {requestHeader()}
+          {requestNavigation()}
+          <div className="px-5 pb-8 lg:px-7">
+            <RequestChangesSection
+              changes={changes}
+              error={changesError}
+              onSelectFile={onSelectFile}
+              selectedDiff={selectedDiff}
+              selectedDiffError={selectedDiffError}
+              selectedPath={selectedPath}
+            />
+          </div>
+        </>
       ) : null}
 
       <RequestActivityDrawer

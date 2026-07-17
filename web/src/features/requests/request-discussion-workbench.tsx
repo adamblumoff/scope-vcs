@@ -41,7 +41,9 @@ export function RequestDiscussionWorkbench({
   contextRail,
   description,
   filter,
+  header,
   initialPage,
+  navigation,
   onDescriptionSave,
   onQueryChange,
   params,
@@ -57,7 +59,9 @@ export function RequestDiscussionWorkbench({
   contextRail: ReactNode
   description: string
   filter: RequestDiscussionFilter
+  header: (controls: ReactNode) => ReactNode
   initialPage: RequestDiscussionPage
+  navigation: ReactNode
   onDescriptionSave: (description: string) => Promise<boolean>
   onQueryChange: (query: {
     filter: RequestDiscussionFilter
@@ -94,139 +98,142 @@ export function RequestDiscussionWorkbench({
   }, [store.cacheKey])
 
   return (
-    <div className="grid min-h-0 xl:grid-cols-[minmax(0,1fr)_320px]">
-      <div className="min-w-0">
-        <RequestDescription
-          canEdit={permissions.canEditDescription}
-          description={description}
-          onSave={onDescriptionSave}
-        />
-
-        <section aria-label="Discussion">
-          <div className="flex flex-wrap justify-end gap-2 border-b border-border px-5 py-4 lg:px-7">
-            <div className="flex flex-wrap items-center gap-2">
-              {store.newActivity ? (
-                <Badge variant="info">New activity · order held</Badge>
-              ) : null}
-              <label className="sr-only" htmlFor="discussion-filter">
-                Discussion status
-              </label>
-              <SelectControl
-                className="min-w-24"
-                id="discussion-filter"
-                onChange={(event) =>
-                  onQueryChange({
-                    filter: event.target.value as RequestDiscussionFilter,
-                    sort,
-                  })
-                }
-                value={filter}
-              >
-                <option value="Open">Open</option>
-                <option value="All">All</option>
-              </SelectControl>
-              <label className="sr-only" htmlFor="discussion-sort">
-                Discussion sort
-              </label>
-              <SelectControl
-                className="min-w-40"
-                id="discussion-sort"
-                onChange={(event) =>
-                  onQueryChange({
-                    filter,
-                    sort: event.target.value as RequestDiscussionSort,
-                  })
-                }
-                value={sort}
-              >
-                <option value="Recent">Recently active</option>
-                <option value="Newest">Newest</option>
-              </SelectControl>
-              <Button
-                disabled={store.refreshing}
-                onClick={() => void store.refresh()}
-                size="sm"
-                type="button"
-                variant="secondary"
-              >
-                <RefreshCw
-                  className={cn(
-                    'size-3.5',
-                    store.refreshing && 'animate-spin',
-                  )}
-                />
-                Refresh
-              </Button>
-            </div>
-          </div>
-
-          {permissions.canOpenDiscussion && request.state !== 'Resolved' && request.state !== 'Withdrawn' ? (
-            <div className="border-b border-border px-5 py-5 lg:px-7">
-              <RequestDiscussionComposer onSubmit={store.create} />
-            </div>
+    <>
+      {header(
+        <div className="flex flex-wrap items-center gap-2">
+          {store.newActivity ? (
+            <Badge variant="info">New activity · order held</Badge>
           ) : null}
+          <label className="sr-only" htmlFor="discussion-filter">
+            Discussion status
+          </label>
+          <SelectControl
+            className="min-w-24"
+            id="discussion-filter"
+            onChange={(event) =>
+              onQueryChange({
+                filter: event.target.value as RequestDiscussionFilter,
+                sort,
+              })
+            }
+            value={filter}
+          >
+            <option value="Open">Open</option>
+            <option value="All">All</option>
+          </SelectControl>
+          <label className="sr-only" htmlFor="discussion-sort">
+            Discussion sort
+          </label>
+          <SelectControl
+            className="min-w-40"
+            id="discussion-sort"
+            onChange={(event) =>
+              onQueryChange({
+                filter,
+                sort: event.target.value as RequestDiscussionSort,
+              })
+            }
+            value={sort}
+          >
+            <option value="Recent">Recently active</option>
+            <option value="Newest">Newest</option>
+          </SelectControl>
+          <Button
+            className="h-9"
+            disabled={store.refreshing}
+            onClick={() => void store.refresh()}
+            size="sm"
+            type="button"
+            variant="secondary"
+          >
+            <RefreshCw
+              className={cn(
+                'size-3.5',
+                store.refreshing && 'animate-spin',
+              )}
+            />
+            Refresh
+          </Button>
+        </div>,
+      )}
+      {navigation}
+      <div className="grid min-h-0 xl:grid-cols-[minmax(0,1fr)_320px]">
+        <div className="min-w-0">
+          <RequestDescription
+            canEdit={permissions.canEditDescription}
+            description={description}
+            onSave={onDescriptionSave}
+          />
 
-          {store.error ? (
-            <div
-              className="flex items-center gap-2 border-b border-border px-5 py-3 text-sm text-destructive lg:px-7"
-              role="alert"
-            >
-              <CircleAlert className="size-4" />
-              {store.error}
-            </div>
-          ) : null}
+          <section aria-label="Discussion">
+            {permissions.canOpenDiscussion && request.state !== 'Resolved' && request.state !== 'Withdrawn' ? (
+              <div className="border-b border-border px-5 py-5 lg:px-7">
+                <RequestDiscussionComposer onSubmit={store.create} />
+              </div>
+            ) : null}
 
-          {store.discussions.length > 0 ? (
-            <div>
-              {store.discussions.map((discussion) => (
-                <RequestDiscussionThread
-                  actions={threadActions}
-                  actor={actor}
-                  canReply={permissions.canReply}
-                  canResolve={canResolve(discussion)}
-                  discussion={discussion}
-                  key={discussion.id}
-                  onExpandedChange={store.setExpanded}
-                  onMarkRead={store.markRead}
-                  onPatch={store.patch}
-                  onRetryRoot={store.retry}
-                  onSetResolved={store.setResolved}
-                  params={params}
-                />
-              ))}
-            </div>
-          ) : (
-            <div className="border-b border-border px-5 py-14 text-center lg:px-7">
-              <MessageSquare className="mx-auto size-5 text-muted-foreground" />
-              <h3 className="mt-3 text-sm font-semibold">
-                {filter === 'Open'
-                  ? 'No open discussions'
-                  : 'No discussions yet'}
-              </h3>
-              <p className="mx-auto mt-1 max-w-md text-sm leading-6 text-muted-foreground">
-                {filter === 'Open'
-                  ? 'Everything raised so far has been resolved.'
-                  : 'Start a focused topic about this request.'}
-              </p>
-            </div>
-          )}
-
-          {store.collection.nextCursor ? (
-            <div className="border-t border-border px-5 py-5 text-center lg:px-7">
-              <Button
-                disabled={store.loadingMore}
-                onClick={() => void store.loadMore()}
-                size="sm"
-                type="button"
-                variant="secondary"
+            {store.error ? (
+              <div
+                className="flex items-center gap-2 border-b border-border px-5 py-3 text-sm text-destructive lg:px-7"
+                role="alert"
               >
-                {store.loadingMore ? 'Loading…' : 'Load older discussions'}
-              </Button>
-            </div>
-          ) : null}
-        </section>
+                <CircleAlert className="size-4" />
+                {store.error}
+              </div>
+            ) : null}
+
+            {store.discussions.length > 0 ? (
+              <div>
+                {store.discussions.map((discussion) => (
+                  <RequestDiscussionThread
+                    actions={threadActions}
+                    actor={actor}
+                    canReply={permissions.canReply}
+                    canResolve={canResolve(discussion)}
+                    discussion={discussion}
+                    key={discussion.id}
+                    onExpandedChange={store.setExpanded}
+                    onMarkRead={store.markRead}
+                    onPatch={store.patch}
+                    onRetryRoot={store.retry}
+                    onSetResolved={store.setResolved}
+                    params={params}
+                  />
+                ))}
+              </div>
+            ) : (
+              <div className="border-b border-border px-5 py-14 text-center lg:px-7">
+                <MessageSquare className="mx-auto size-5 text-muted-foreground" />
+                <h3 className="mt-3 text-sm font-semibold">
+                  {filter === 'Open'
+                    ? 'No open discussions'
+                    : 'No discussions yet'}
+                </h3>
+                <p className="mx-auto mt-1 max-w-md text-sm leading-6 text-muted-foreground">
+                  {filter === 'Open'
+                    ? 'Everything raised so far has been resolved.'
+                    : 'Start a focused topic about this request.'}
+                </p>
+              </div>
+            )}
+
+            {store.collection.nextCursor ? (
+              <div className="border-t border-border px-5 py-5 text-center lg:px-7">
+                <Button
+                  disabled={store.loadingMore}
+                  onClick={() => void store.loadMore()}
+                  size="sm"
+                  type="button"
+                  variant="secondary"
+                >
+                  {store.loadingMore ? 'Loading…' : 'Load older discussions'}
+                </Button>
+              </div>
+            ) : null}
+          </section>
+        </div>
+        {contextRail}
       </div>
-      {contextRail}
-    </div>
+    </>
   )
 }

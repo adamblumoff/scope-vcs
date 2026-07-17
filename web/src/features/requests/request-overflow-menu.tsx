@@ -16,6 +16,7 @@ export function RequestOverflowMenu({
       <DropdownMenu.Trigger asChild>
         <Button
           aria-label="More request actions"
+          className="size-9 rounded-md"
           size="icon-sm"
           type="button"
           variant="secondary"
