@@ -16,13 +16,12 @@ import { WorkbenchHeader } from '@/components/workbench-header'
 import { Link } from '@tanstack/react-router'
 import { Coins, ShieldQuestion, Trash2 } from 'lucide-react'
 import { useCallback, useMemo, useState } from 'react'
-import { RequestActivity } from './request-activity'
+import { RequestActivityDrawer } from './request-activity-drawer'
 import { RequestChangesSection } from './request-changes-section'
 import { RequestContextRail } from './request-context-rail'
 import type {
   CreateDiscussionInput,
   CreateReplyInput,
-  LoadActivityInput,
   LoadDiscussionsInput,
   LoadRepliesInput,
   MarkDiscussionReadInput,
@@ -49,6 +48,7 @@ import {
   type RequestReviewView,
 } from './request-review-navigation'
 import { RequestMergeDialog } from './request-merge-dialog'
+import { RequestOverflowMenu } from './request-overflow-menu'
 import {
   requestMergeabilityLabel,
   requestMergeabilityTone,
@@ -59,6 +59,7 @@ import {
   type RequestActionsProps,
   useRequestActions,
 } from './use-request-actions'
+import { useRequestActivityHistory } from './use-request-activity-history'
 
 export function RequestUnavailablePage({ params }: { params: RepoParams }) {
   return (
@@ -93,7 +94,6 @@ export function RequestUnavailablePage({ params }: { params: RepoParams }) {
 
 type RequestDetailPageProps = RequestActionsProps & {
   actor: User | null
-  activity: RequestActivityPage | null
   changes: RequestChanges | null
   changesError: string | null
   createDiscussion: (
@@ -106,9 +106,7 @@ type RequestDetailPageProps = RequestActionsProps & {
   discussionPage: RequestDiscussionPage | null
   discussionSort: RequestDiscussionSort
   live: RepoLiveState
-  loadActivity: (
-    input: LoadActivityInput,
-  ) => Promise<RequestActivityPage>
+  loadActivity: () => Promise<RequestActivityPage>
   loadDiscussions: (
     input: LoadDiscussionsInput,
   ) => Promise<RequestDiscussionPage>
@@ -148,7 +146,6 @@ type RequestDetailPageProps = RequestActionsProps & {
 
 export function RequestDetailPage(props: RequestDetailPageProps) {
   const {
-    activity,
     actor: accountActor,
     changes,
     changesError,
@@ -180,6 +177,7 @@ export function RequestDetailPage(props: RequestDetailPageProps) {
   const controller = useRequestActions(props)
   const { request } = controller
   const serverDescription = request.description_markdown
+  const history = useRequestActivityHistory(loadActivity)
   const [descriptionOverride, setDescriptionOverride] = useState<{
     server: string
     value: string
@@ -275,6 +273,9 @@ export function RequestDetailPage(props: RequestDetailPageProps) {
                 Requests
               </Link>
             </Button>
+            <RequestOverflowMenu
+              onViewHistory={history.openHistory}
+            />
           </div>
         )}
         count={(
@@ -361,15 +362,14 @@ export function RequestDetailPage(props: RequestDetailPageProps) {
         </div>
       ) : null}
 
-      {view === 'activity' && activity ? (
-        <RequestActivity
-          activity={activity}
-          loadAfter={(after) =>
-            loadActivity({ ...discussionParams, after })
-          }
-          requestId={request.id}
-        />
-      ) : null}
+      <RequestActivityDrawer
+        activity={history.activity}
+        error={history.error}
+        load={history.retry}
+        loading={history.loading}
+        onOpenChange={history.onOpenChange}
+        open={history.open}
+      />
 
       <RequestMergeDialog
         error={

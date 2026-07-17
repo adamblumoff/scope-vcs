@@ -4,6 +4,7 @@ import type {
 } from '@/api/types'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
+import { SelectControl } from '@/components/ui/select-control'
 import { cn } from '@/lib/utils'
 import {
   CheckCircle2,
@@ -170,12 +171,10 @@ export function RequestContextRail({
           title="Resolve without merge"
           variant="secondary"
         >
-          <select
+          <SelectControl
             aria-label="Resolution disposition"
-            className={cn(
-              'h-9 w-full rounded-md border border-input bg-background px-3 text-sm',
-              'outline-none focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/50',
-            )}
+            className="w-full"
+            containerClassName="w-full"
             onChange={(event) =>
               onResolveDispositionChange(
                 event.target.value as RequestWorkflowResolutionDisposition,
@@ -188,7 +187,7 @@ export function RequestContextRail({
                 {option.label}
               </option>
             ))}
-          </select>
+          </SelectControl>
           <p className="text-xs leading-5 text-muted-foreground">
             {
               resolutionOptions.find(

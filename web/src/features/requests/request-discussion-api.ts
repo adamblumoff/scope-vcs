@@ -15,7 +15,6 @@ import type {
   RequestDiscussionReply,
   RequestDiscussionReadState,
 } from './request-discussion-types'
-import { collectRequestActivityPages } from './request-activity-model'
 
 export type LoadDiscussionsInput = RequestParams & {
   cursor?: string
@@ -28,9 +27,7 @@ export type LoadRepliesInput = RequestParams & {
   discussion_id: string
 }
 
-export type LoadActivityInput = RequestParams & {
-  after?: number
-}
+export type LoadActivityInput = RequestParams
 
 export type RequestDiscussionActionInput = RequestParams & {
   discussion_id: string
@@ -92,24 +89,12 @@ export async function loadRequestDiscussionChangesForRequest(
 export async function loadRequestActivityForRequest(
   data: LoadActivityInput,
 ) {
-  const client = createApiClient()
-  if (data.after === undefined) {
-    return client.get<RequestActivityPage>(
-      `${requestRoute(ApiRouteTemplates.repoRequestActivity, data)}${query({
-        latest: 'true',
-        limit: '1000',
-      })}`,
-      { auth: 'optional' },
-    )
-  }
-  return collectRequestActivityPages(data.after ?? 0, (after) =>
-    client.get<RequestActivityPage>(
-      `${requestRoute(ApiRouteTemplates.repoRequestActivity, data)}${query({
-        after: after.toString(),
-        limit: '100',
-      })}`,
-      { auth: 'optional' },
-    ),
+  return createApiClient().get<RequestActivityPage>(
+    `${requestRoute(ApiRouteTemplates.repoRequestActivity, data)}${query({
+      latest: 'true',
+      limit: '50',
+    })}`,
+    { auth: 'optional' },
   )
 }
 

@@ -77,22 +77,15 @@ const loadRequestPage = createServerFn({ method: 'GET' })
             }),
           )
         : Promise.resolve(null)
-    const activityPromise =
-      data.view === 'activity'
-        ? loadOptionalSelectedRequestResource(() =>
-            loadRequestActivityForRequest(data),
-          )
-        : Promise.resolve(null)
     const changesPromise =
       data.view === 'changes'
         ? loadChangesWithError(data)
         : Promise.resolve({ changes: null, changesError: null })
-    const [detail, account, discussionPage, activity, loadedChanges] =
+    const [detail, account, discussionPage, loadedChanges] =
       await Promise.all([
         loadOptionalRequestForRequest(data),
         loadOptionalAccountSession(),
         discussionPromise,
-        activityPromise,
         changesPromise,
       ])
     if (!detail) return unavailablePage(data)
@@ -119,7 +112,6 @@ const loadRequestPage = createServerFn({ method: 'GET' })
     }
 
     return {
-      activity,
       account,
       changes,
       changesError,
@@ -235,7 +227,6 @@ function RequestRoute() {
 
   return (
     <RequestDetailPage
-      activity={page.activity}
       actor={page.account?.user ?? null}
       changes={page.changes}
       changesError={page.changesError}
@@ -247,7 +238,9 @@ function RequestRoute() {
       discussionPage={page.discussionPage}
       discussionSort={page.discussionSort}
       live={live}
-      loadActivity={(data) => loadActivity({ data })}
+      loadActivity={() =>
+        loadActivity({ data: requestParamsForRoute(params) })
+      }
       loadDiscussions={(data) => loadDiscussions({ data })}
       loadDiscussionChanges={(data) => loadDiscussionChanges({ data })}
       loadReplies={(data) => loadReplies({ data })}
@@ -388,7 +381,6 @@ async function loadChangesWithError(
 
 function unavailablePage(data: RequestPageInput) {
   return {
-    activity: null,
     account: null,
     changes: null,
     changesError: null,
@@ -422,8 +414,7 @@ function parseRequestReviewSearch(
 ): RequestReviewSearch {
   const view: RequestReviewView | undefined =
     search.view === 'discussion' ||
-    search.view === 'changes' ||
-    search.view === 'activity'
+    search.view === 'changes'
       ? search.view
       : undefined
   return {

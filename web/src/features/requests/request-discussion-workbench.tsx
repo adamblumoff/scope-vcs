@@ -1,6 +1,7 @@
 import type { RequestParams, RequestSummary } from '@/api/types'
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
+import { SelectControl } from '@/components/ui/select-control'
 import { cn } from '@/lib/utils'
 import {
   CircleAlert,
@@ -110,8 +111,8 @@ export function RequestDiscussionWorkbench({
               <label className="sr-only" htmlFor="discussion-filter">
                 Discussion status
               </label>
-              <select
-                className={selectClass}
+              <SelectControl
+                className="min-w-24"
                 id="discussion-filter"
                 onChange={(event) =>
                   onQueryChange({
@@ -123,12 +124,12 @@ export function RequestDiscussionWorkbench({
               >
                 <option value="Open">Open</option>
                 <option value="All">All</option>
-              </select>
+              </SelectControl>
               <label className="sr-only" htmlFor="discussion-sort">
                 Discussion sort
               </label>
-              <select
-                className={selectClass}
+              <SelectControl
+                className="min-w-40"
                 id="discussion-sort"
                 onChange={(event) =>
                   onQueryChange({
@@ -140,7 +141,7 @@ export function RequestDiscussionWorkbench({
               >
                 <option value="Recent">Recently active</option>
                 <option value="Newest">Newest</option>
-              </select>
+              </SelectControl>
               <Button
                 disabled={store.refreshing}
                 onClick={() => void store.refresh()}
@@ -229,8 +230,3 @@ export function RequestDiscussionWorkbench({
     </div>
   )
 }
-
-const selectClass = cn(
-  'h-9 rounded-md border border-input bg-background px-3 text-sm outline-none',
-  'focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/50',
-)
