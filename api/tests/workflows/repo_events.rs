@@ -1,4 +1,5 @@
 use super::*;
+use crate::domain::requests::{RequestActorRole, RequestAudience, StartRequestInput};
 use std::time::Duration;
 use tokio_stream::StreamExt;
 
@@ -50,7 +51,7 @@ async fn repo_events_map_public_visibility_to_not_found_or_connected() {
         if public {
             let mut stream = response.into_body().into_data_stream();
             let initial = next_event(&mut stream).await;
-            assert!(initial.contains(r#""reason":"connected""#));
+            assert!(initial.contains(r#""kind":"Connected""#));
             assert!(initial.contains(r#""version":0"#));
         }
     }
@@ -78,7 +79,7 @@ async fn repo_events_stream_permission_changes_to_members() {
     assert!(
         next_event(&mut stream)
             .await
-            .contains(r#""reason":"connected""#)
+            .contains(r#""kind":"Connected""#)
     );
 
     state
@@ -123,7 +124,7 @@ async fn repo_events_close_when_repo_is_deleted() {
     assert!(
         next_event(&mut stream)
             .await
-            .contains(r#""reason":"connected""#)
+            .contains(r#""kind":"Connected""#)
     );
 
     let deleted = app
@@ -144,4 +145,79 @@ async fn repo_events_close_when_repo_is_deleted() {
             .unwrap()
             .is_none()
     );
+}
+
+#[tokio::test]
+async fn public_repo_stream_drops_private_discussion_identifiers() {
+    let state = test_state_with_readme().await;
+    state
+        .metadata
+        .start_request(StartRequestInput {
+            id: "req_private_stream".to_string(),
+            repo_id: TEST_REPO_ID.to_string(),
+            name: "private-stream".to_string(),
+            author_user_id: test_owner_id(),
+            title: Some("Private stream".to_string()),
+            author_role: RequestActorRole::Owner,
+            audience: RequestAudience::Private,
+            base_main_oid: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa".to_string(),
+            event_id: "event_private_stream_started".to_string(),
+            now_unix: 1,
+        })
+        .await
+        .unwrap();
+    state
+        .metadata
+        .start_request(StartRequestInput {
+            id: "req_public_stream".to_string(),
+            repo_id: TEST_REPO_ID.to_string(),
+            name: "public-stream".to_string(),
+            author_user_id: test_owner_id(),
+            title: Some("Public stream".to_string()),
+            author_role: RequestActorRole::Owner,
+            audience: RequestAudience::Public,
+            base_main_oid: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa".to_string(),
+            event_id: "event_public_stream_started".to_string(),
+            now_unix: 1,
+        })
+        .await
+        .unwrap();
+
+    let response = events(state.clone(), None).await;
+    assert_eq!(response.status(), StatusCode::OK);
+    let mut stream = response.into_body().into_data_stream();
+    assert!(
+        next_event(&mut stream)
+            .await
+            .contains(r#""kind":"Connected""#)
+    );
+
+    state
+        .publish_request_discussion_change(
+            TEST_REPO_ID,
+            "req_private_stream".to_string(),
+            "discussion_private".to_string(),
+            2,
+            RequestAudience::Private,
+        )
+        .await;
+    assert!(
+        tokio::time::timeout(std::time::Duration::from_millis(250), stream.next())
+            .await
+            .is_err()
+    );
+
+    state
+        .publish_request_discussion_change(
+            TEST_REPO_ID,
+            "req_public_stream".to_string(),
+            "discussion_public".to_string(),
+            2,
+            RequestAudience::Public,
+        )
+        .await;
+    let visible = next_event(&mut stream).await;
+    assert!(visible.contains("req_public_stream"));
+    assert!(visible.contains("discussion_public"));
+    assert!(!visible.contains("req_private_stream"));
 }

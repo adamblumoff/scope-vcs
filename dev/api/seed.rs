@@ -1,4 +1,12 @@
 use super::env::DevSeedUser;
+mod request_discussions;
+pub(super) use request_discussions::seed_request_discussion_gallery;
+#[cfg(test)]
+use request_discussions::{
+    CONTRIBUTOR_ID as DEV_SEED_CONTRIBUTOR_ID, MAINTAINER_ID as DEV_SEED_MAINTAINER_ID,
+    REQUEST_ID as DISCUSSION_REQUEST_ID,
+};
+
 use crate::{
     config::DEFAULT_GIT_BRANCH,
     domain::{
@@ -48,10 +56,18 @@ pub(super) fn catalog(
     seed_user: DevSeedUser,
 ) -> Result<AppCatalog, ApiError> {
     let owner = seed_user_account(seed_user);
+    let [contributor, maintainer] = request_discussions::collaborators();
     let mut catalog = AppCatalog::default();
     catalog.users.insert(owner.id.clone(), owner.clone());
+    catalog
+        .users
+        .insert(contributor.id.clone(), contributor.clone());
+    catalog
+        .users
+        .insert(maintainer.id.clone(), maintainer.clone());
 
-    let (update_demo, request_gallery) = update_demo(object_store, &owner)?;
+    let (mut update_demo, request_gallery) = update_demo(object_store, &owner)?;
+    request_discussions::add_maintainer(&mut update_demo);
     for repo in [published_demo(object_store, &owner)?, update_demo] {
         catalog.repositories.insert(repo.record.id.clone(), repo);
     }
@@ -182,6 +198,7 @@ struct SeedRequest {
     head_oid: String,
     snapshot: SourceBlob,
     outcome: SeedRequestOutcome,
+    audience: RequestAudience,
     now_unix: u64,
 }
 
@@ -223,9 +240,10 @@ fn seed_owner_request(
         head_oid,
         snapshot,
         outcome,
+        audience,
         now_unix,
     } = request;
-    start_request(
+    let started = start_request(
         &mut catalog.requests,
         StartRequestInput {
             id: id.to_string(),
@@ -234,11 +252,15 @@ fn seed_owner_request(
             name: name.to_string(),
             title: Some(title.to_string()),
             author_role: RequestActorRole::Owner,
-            audience: RequestAudience::Private,
+            audience,
             base_main_oid: base_oid.clone(),
+            event_id: format!("event_{id}_started"),
             now_unix,
         },
     )?;
+    catalog
+        .request_events
+        .insert(started.event.id.clone(), started.event);
     record_working_request_upload(
         &mut catalog.requests,
         RecordWorkingRequestUploadInput {
@@ -476,6 +498,7 @@ fn update_demo_git_snapshot(
                 head_oid: submitted_oid,
                 snapshot: submitted_snapshot,
                 outcome: SeedRequestOutcome::Submitted,
+                audience: RequestAudience::Public,
                 now_unix: 1_800_000_100,
             },
             SeedRequest {
@@ -486,6 +509,7 @@ fn update_demo_git_snapshot(
                 head_oid: needs_response_oid,
                 snapshot: needs_response_snapshot,
                 outcome: SeedRequestOutcome::NeedsResponse,
+                audience: RequestAudience::Private,
                 now_unix: 1_800_000_200,
             },
             SeedRequest {
@@ -496,6 +520,7 @@ fn update_demo_git_snapshot(
                 head_oid: main_oid.clone(),
                 snapshot: accepted_snapshot,
                 outcome: SeedRequestOutcome::Accepted,
+                audience: RequestAudience::Private,
                 now_unix: 1_800_000_300,
             },
             SeedRequest {
@@ -506,6 +531,7 @@ fn update_demo_git_snapshot(
                 head_oid: withdrawn_oid,
                 snapshot: withdrawn_snapshot,
                 outcome: SeedRequestOutcome::Withdrawn,
+                audience: RequestAudience::Private,
                 now_unix: 1_800_000_400,
             },
         ];
@@ -762,6 +788,14 @@ mod tests {
         assert_eq!(repos.len(), 2);
         assert!(catalog.repository("dev", "public-demo").is_some());
         assert!(catalog.repository("dev", "update-demo").is_some());
+        assert_eq!(
+            catalog.users.get(DEV_SEED_CONTRIBUTOR_ID).unwrap().handle,
+            "river-contributor"
+        );
+        assert_eq!(
+            catalog.users.get(DEV_SEED_MAINTAINER_ID).unwrap().handle,
+            "maya-maintainer"
+        );
 
         let public_demo = catalog.repository("dev", "public-demo").unwrap();
         let readme = public_demo.graph.commits[0].changes[0]
@@ -776,6 +810,14 @@ mod tests {
         );
 
         assert_eq!(catalog.requests.len(), 4);
+        assert_eq!(
+            catalog
+                .requests
+                .get(DISCUSSION_REQUEST_ID)
+                .unwrap()
+                .audience,
+            RequestAudience::Public
+        );
         assert_eq!(
             request_state(&catalog, "req_demo_submitted"),
             RequestState::Submitted

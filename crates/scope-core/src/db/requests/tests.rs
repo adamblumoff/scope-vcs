@@ -2,7 +2,9 @@ use super::*;
 use crate::domain::{
     policy::Visibility,
     requests::{
-        CreditLedgerEntryKind, RequestActorRole, RequestAudience, RequestDisposition, RequestState,
+        CreateRequestDiscussionInput, CreateRequestDiscussionReplyInput, CreditLedgerEntryKind,
+        ReopenAndReplyToRequestDiscussionInput, RequestActorRole, RequestAudience,
+        RequestDiscussionStatus, RequestDisposition, RequestEventKind, RequestState,
     },
     store::{
         AppCatalog, DEFAULT_GIT_FILE_MODE, RepoPublicationState, SourceBlob, StoredRepository,
@@ -74,7 +76,21 @@ async fn request_submission_and_resolution_update_credit_facts() {
     let request = store.request_for_tests("req_1").await.unwrap().unwrap();
     assert_eq!(request.resolved_at_unix, Some(3));
     assert_eq!(request.head_oid, "head_2");
-    assert_eq!(store.request_events_for_tests().await.unwrap().len(), 4);
+    let mut events = store.request_events_for_tests().await.unwrap();
+    events.sort_by_key(|event| event.position);
+    assert_eq!(
+        events
+            .into_iter()
+            .map(|event| event.kind)
+            .collect::<Vec<_>>(),
+        vec![
+            RequestEventKind::Started,
+            RequestEventKind::Submitted,
+            RequestEventKind::RevisionPushed,
+            RequestEventKind::Resolved,
+            RequestEventKind::Settled,
+        ]
+    );
     assert_eq!(
         store.credit_ledger_entries_for_tests().await.unwrap().len(),
         4
@@ -113,7 +129,9 @@ async fn public_user_cannot_choose_owner_role_to_skip_stake() {
             .state,
         RequestState::Working
     );
-    assert!(store.request_events_for_tests().await.unwrap().is_empty());
+    let events = store.request_events_for_tests().await.unwrap();
+    assert_eq!(events.len(), 1);
+    assert_eq!(events[0].kind, RequestEventKind::Started);
     assert!(
         store
             .credit_ledger_entries_for_tests()
@@ -121,6 +139,118 @@ async fn public_user_cannot_choose_owner_role_to_skip_stake() {
             .unwrap()
             .is_empty()
     );
+}
+
+#[tokio::test]
+async fn discussion_transactions_are_idempotent_atomic_and_self_read() {
+    let store = postgres_store();
+    grant_public_credits(&store).await;
+    submit_public_request(&store).await;
+
+    let first = store
+        .create_request_discussion(CreateRequestDiscussionInput {
+            request_id: "req_1".to_string(),
+            id: "discussion_1".to_string(),
+            actor_user_id: "user_public".to_string(),
+            actor_can_participate: false,
+            client_discussion_id: "client_root".to_string(),
+            body_markdown: "Parser ownership".to_string(),
+            now_unix: 10,
+        })
+        .await
+        .unwrap();
+    store
+        .create_request_discussion_reply(CreateRequestDiscussionReplyInput {
+            request_id: "req_1".to_string(),
+            discussion_id: first.discussion.id.clone(),
+            id: "reply_before_retry".to_string(),
+            actor_user_id: "user_owner".to_string(),
+            actor_can_participate: false,
+            client_reply_id: "client_before_retry".to_string(),
+            body_markdown: "Maintainer reply".to_string(),
+            reply_to_reply_id: None,
+            now_unix: 11,
+        })
+        .await
+        .unwrap();
+    let retried = store
+        .create_request_discussion(CreateRequestDiscussionInput {
+            request_id: "req_1".to_string(),
+            id: "discussion_retry_id".to_string(),
+            actor_user_id: "user_public".to_string(),
+            actor_can_participate: false,
+            client_discussion_id: "client_root".to_string(),
+            body_markdown: "Parser ownership".to_string(),
+            now_unix: 12,
+        })
+        .await
+        .unwrap();
+    assert_eq!(retried.discussion.id, first.discussion.id);
+    assert_eq!(
+        retried.read_state.read_through_position,
+        first.discussion.opened_position
+    );
+    let unread_after_retry = store
+        .request_discussion("req_1", &first.discussion.id, Some("user_public"))
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(unread_after_retry.0.unread_count, 1);
+
+    let resolved = store
+        .resolve_request_discussion(
+            "req_1".to_string(),
+            first.discussion.id.clone(),
+            "user_public".to_string(),
+            "event_discussion_resolved".to_string(),
+            13,
+        )
+        .await
+        .unwrap();
+    assert_eq!(resolved.status, RequestDiscussionStatus::Resolved);
+    let reply_error = store
+        .create_request_discussion_reply(CreateRequestDiscussionReplyInput {
+            request_id: "req_1".to_string(),
+            discussion_id: first.discussion.id.clone(),
+            id: "reply_rejected".to_string(),
+            actor_user_id: "user_public".to_string(),
+            actor_can_participate: false,
+            client_reply_id: "client_rejected".to_string(),
+            body_markdown: "One more point".to_string(),
+            reply_to_reply_id: None,
+            now_unix: 14,
+        })
+        .await
+        .unwrap_err();
+    assert_eq!(reply_error.kind, crate::error::ErrorKind::Conflict);
+
+    let reopened = store
+        .reopen_and_reply_to_request_discussion(ReopenAndReplyToRequestDiscussionInput {
+            request_id: "req_1".to_string(),
+            discussion_id: first.discussion.id,
+            reply_id: "reply_1".to_string(),
+            actor_user_id: "user_public".to_string(),
+            actor_is_maintainer: false,
+            actor_can_participate: false,
+            event_id: "event_discussion_reopened".to_string(),
+            client_reply_id: "client_reply".to_string(),
+            body_markdown: "One more point".to_string(),
+            reply_to_reply_id: None,
+            now_unix: 15,
+        })
+        .await
+        .unwrap();
+    assert_eq!(reopened.discussion.status, RequestDiscussionStatus::Open);
+    assert_eq!(
+        reopened.activity_event.as_ref().unwrap().position,
+        reopened.reply.position
+    );
+    let batch = store
+        .request_discussion("req_1", &reopened.discussion.id, Some("user_public"))
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(batch.0.unread_count, 0);
 }
 
 #[tokio::test]
@@ -407,6 +537,7 @@ fn public_start_input() -> StartRequestInput {
         author_role: RequestActorRole::Public,
         audience: RequestAudience::Public,
         base_main_oid: "base".to_string(),
+        event_id: "event_started".to_string(),
         now_unix: 2,
     }
 }

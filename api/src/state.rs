@@ -326,6 +326,36 @@ impl AppState {
             );
         }
     }
+
+    pub(crate) async fn publish_request_discussion_change(
+        &self,
+        repo_id: &str,
+        request_id: String,
+        discussion_id: String,
+        through_position: u64,
+        audience: crate::domain::requests::RequestAudience,
+    ) {
+        let event = RepoChangeEvent::request_discussion_changed(
+            repo_id,
+            request_id,
+            discussion_id,
+            through_position,
+            audience,
+        );
+        self.repo_events.publish_event(event.clone());
+        if let Err(error) = self
+            .metadata
+            .notify_repo_change(self.repo_events.origin_id(), &event)
+            .await
+        {
+            tracing::warn!(
+                repo_id,
+                through_position,
+                error = %error.message,
+                "failed to publish request discussion notification"
+            );
+        }
+    }
 }
 
 pub(crate) fn push_intent_signing_key(data_dir: &Path) -> Result<Arc<[u8]>, ApiError> {

@@ -1,0 +1,376 @@
+use super::*;
+use tokio_stream::StreamExt;
+
+#[tokio::test]
+async fn threaded_discussion_http_workflow_preserves_activity_and_read_contracts() {
+    let state = test_state_with_readme().await;
+    cache_test_jwks(&state);
+    let app = router(state.clone());
+    let bearer = bearer_header();
+    let started = api_request(
+        app.clone(),
+        "POST",
+        "/v1/repos/owner/repo/requests",
+        Some(&bearer),
+        Some(r#"{"name":"fix-parser-crash","audience":"Public"}"#),
+    )
+    .await;
+    assert_eq!(started.status(), StatusCode::OK);
+    let started = response_json(started).await;
+    let request_id = started["request"]["id"].as_str().unwrap();
+    let base = format!("/v1/repos/owner/repo/requests/{request_id}");
+
+    let anonymous_create = api_request(
+        app.clone(),
+        "POST",
+        &format!("{base}/discussions"),
+        None,
+        Some(r#"{"body_markdown":"No auth","client_discussion_id":"anonymous"}"#),
+    )
+    .await;
+    assert_eq!(anonymous_create.status(), StatusCode::UNAUTHORIZED);
+
+    let description = api_request(
+        app.clone(),
+        "PATCH",
+        &format!("{base}/description"),
+        Some(&bearer),
+        Some(r###"{"description_markdown":"## Intent\nFix parser ownership."}"###),
+    )
+    .await;
+    assert_eq!(description.status(), StatusCode::OK);
+    let description = response_json(description).await;
+    assert_eq!(
+        description["request"]["description_markdown"],
+        "## Intent\nFix parser ownership."
+    );
+
+    let events = api_request(
+        app.clone(),
+        "GET",
+        "/v1/repos/owner/repo/events",
+        Some(&bearer),
+        None,
+    )
+    .await;
+    assert_eq!(events.status(), StatusCode::OK);
+    let mut event_stream = events.into_body().into_data_stream();
+    let connected = event_stream.next().await.unwrap().unwrap();
+    assert!(
+        String::from_utf8(connected.to_vec())
+            .unwrap()
+            .contains("Connected")
+    );
+
+    let created = api_request(
+        app.clone(),
+        "POST",
+        &format!("{base}/discussions"),
+        Some(&bearer),
+        Some(r#"{"body_markdown":"Who owns parser recovery?","client_discussion_id":"root-1"}"#),
+    )
+    .await;
+    assert_eq!(created.status(), StatusCode::OK);
+    let created = response_json(created).await;
+    let discussion_id = created["discussion"]["id"].as_str().unwrap().to_string();
+    assert_eq!(created["discussion"]["unread_count"], 0);
+    let targeted = tokio::time::timeout(std::time::Duration::from_secs(5), event_stream.next())
+        .await
+        .unwrap()
+        .unwrap()
+        .unwrap();
+    let targeted = String::from_utf8(targeted.to_vec()).unwrap();
+    assert!(targeted.contains("RequestDiscussionChanged"));
+    assert!(targeted.contains(&discussion_id));
+    assert!(targeted.contains(request_id));
+
+    let retried = api_request(
+        app.clone(),
+        "POST",
+        &format!("{base}/discussions"),
+        Some(&bearer),
+        Some(r#"{"body_markdown":"Who owns parser recovery?","client_discussion_id":"root-1"}"#),
+    )
+    .await;
+    assert_eq!(retried.status(), StatusCode::OK);
+    let retried = response_json(retried).await;
+    assert_eq!(retried["discussion"]["id"], discussion_id);
+
+    let reply = api_request(
+        app.clone(),
+        "POST",
+        &format!("{base}/discussions/{discussion_id}/replies"),
+        Some(&bearer),
+        Some(r#"{"body_markdown":"The parser module should own it.","client_reply_id":"reply-1","reply_to_reply_id":null}"#),
+    )
+    .await;
+    assert_eq!(reply.status(), StatusCode::OK);
+    let reply = response_json(reply).await;
+    assert_eq!(reply["discussion"]["reply_count"], 1);
+    assert_eq!(reply["discussion"]["unread_count"], 0);
+
+    let resolved = api_request(
+        app.clone(),
+        "POST",
+        &format!("{base}/discussions/{discussion_id}/resolve"),
+        Some(&bearer),
+        None,
+    )
+    .await;
+    assert_eq!(resolved.status(), StatusCode::OK);
+    let resolved = response_json(resolved).await;
+    assert_eq!(resolved["discussion"]["status"], "Resolved");
+    assert_eq!(resolved["discussion"]["unread_count"], 0);
+
+    let rejected_reply = api_request(
+        app.clone(),
+        "POST",
+        &format!("{base}/discussions/{discussion_id}/replies"),
+        Some(&bearer),
+        Some(r#"{"body_markdown":"One more point.","client_reply_id":"reply-rejected","reply_to_reply_id":null}"#),
+    )
+    .await;
+    assert_eq!(rejected_reply.status(), StatusCode::CONFLICT);
+
+    let reopened = api_request(
+        app.clone(),
+        "POST",
+        &format!("{base}/discussions/{discussion_id}/reopen-and-reply"),
+        Some(&bearer),
+        Some(r#"{"body_markdown":"One more point.","client_reply_id":"reply-2","reply_to_reply_id":null}"#),
+    )
+    .await;
+    assert_eq!(reopened.status(), StatusCode::OK);
+    let reopened = response_json(reopened).await;
+    assert_eq!(reopened["discussion"]["status"], "Open");
+    assert_eq!(reopened["discussion"]["reply_count"], 2);
+    assert_eq!(reopened["discussion"]["unread_count"], 0);
+    let through_position = reopened["reply"]["position"].as_u64().unwrap();
+
+    let read = api_request(
+        app.clone(),
+        "PUT",
+        &format!("{base}/discussions/{discussion_id}/read"),
+        Some(&bearer),
+        Some(&format!(r#"{{"through_position":{through_position}}}"#)),
+    )
+    .await;
+    assert_eq!(read.status(), StatusCode::OK);
+    assert_eq!(
+        response_json(read).await["read_through_position"],
+        through_position
+    );
+
+    let discussions = api_request(
+        app.clone(),
+        "GET",
+        &format!("{base}/discussions?status=all&sort=recent&limit=25"),
+        Some(&bearer),
+        None,
+    )
+    .await;
+    assert_eq!(discussions.status(), StatusCode::OK);
+    let discussions = response_json(discussions).await;
+    assert_eq!(discussions["discussions"].as_array().unwrap().len(), 1);
+    assert_eq!(
+        discussions["discussions"][0]["latest_replies"]
+            .as_array()
+            .unwrap()
+            .len(),
+        2
+    );
+
+    let replies = api_request(
+        app.clone(),
+        "GET",
+        &format!("{base}/discussions/{discussion_id}/replies?limit=50"),
+        Some(&bearer),
+        None,
+    )
+    .await;
+    assert_eq!(replies.status(), StatusCode::OK);
+    assert_eq!(
+        response_json(replies).await["replies"]
+            .as_array()
+            .unwrap()
+            .len(),
+        2
+    );
+
+    let changes = api_request(
+        app.clone(),
+        "GET",
+        &format!("{base}/discussions/changes?after=0&limit=100"),
+        Some(&bearer),
+        None,
+    )
+    .await;
+    assert_eq!(changes.status(), StatusCode::OK);
+    assert_eq!(
+        response_json(changes).await["discussions"]
+            .as_array()
+            .unwrap()
+            .len(),
+        1
+    );
+
+    let activity = api_request(
+        app.clone(),
+        "GET",
+        &format!("{base}/activity?after=0&limit=100"),
+        Some(&bearer),
+        None,
+    )
+    .await;
+    assert_eq!(activity.status(), StatusCode::OK);
+    let activity = response_json(activity).await;
+    let kinds = activity["events"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|event| event["kind"].as_str().unwrap())
+        .collect::<Vec<_>>();
+    assert_eq!(
+        kinds,
+        vec![
+            "Started",
+            "DescriptionEdited",
+            "DiscussionResolved",
+            "DiscussionReopened",
+        ]
+    );
+
+    let latest_activity = api_request(
+        app,
+        "GET",
+        &format!("{base}/activity?latest=true&limit=2"),
+        Some(&bearer),
+        None,
+    )
+    .await;
+    assert_eq!(latest_activity.status(), StatusCode::OK);
+    let latest_activity = response_json(latest_activity).await;
+    let kinds = latest_activity["events"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|event| event["kind"].as_str().unwrap())
+        .collect::<Vec<_>>();
+    assert_eq!(kinds, vec!["DiscussionResolved", "DiscussionReopened"]);
+}
+
+#[tokio::test]
+async fn open_recent_cursor_is_stable_during_concurrent_discussion_changes() {
+    let state = test_state_with_readme().await;
+    cache_test_jwks(&state);
+    let app = router(state);
+    let bearer = bearer_header();
+    let started = api_request(
+        app.clone(),
+        "POST",
+        "/v1/repos/owner/repo/requests",
+        Some(&bearer),
+        Some(r#"{"name":"stable-discussion-pages","audience":"Public"}"#),
+    )
+    .await;
+    let started = response_json(started).await;
+    let request_id = started["request"]["id"].as_str().unwrap();
+    let base = format!("/v1/repos/owner/repo/requests/{request_id}");
+
+    let mut discussion_ids = Vec::new();
+    for index in 1..=4 {
+        let created = api_request(
+            app.clone(),
+            "POST",
+            &format!("{base}/discussions"),
+            Some(&bearer),
+            Some(&format!(
+                r#"{{"body_markdown":"Root {index}","client_discussion_id":"root-{index}"}}"#
+            )),
+        )
+        .await;
+        assert_eq!(created.status(), StatusCode::OK);
+        discussion_ids.push(
+            response_json(created).await["discussion"]["id"]
+                .as_str()
+                .unwrap()
+                .to_string(),
+        );
+    }
+
+    let first_page = api_request(
+        app.clone(),
+        "GET",
+        &format!("{base}/discussions?status=open&sort=recent&limit=2"),
+        Some(&bearer),
+        None,
+    )
+    .await;
+    assert_eq!(first_page.status(), StatusCode::OK);
+    let first_page = response_json(first_page).await;
+    let cursor = first_page["next_cursor"].as_str().unwrap();
+    assert_eq!(first_page["discussions"].as_array().unwrap().len(), 2);
+
+    let oldest_id = &discussion_ids[0];
+    let reply = api_request(
+        app.clone(),
+        "POST",
+        &format!("{base}/discussions/{oldest_id}/replies"),
+        Some(&bearer),
+        Some(
+            r#"{"body_markdown":"Concurrent activity","client_reply_id":"concurrent-reply","reply_to_reply_id":null}"#,
+        ),
+    )
+    .await;
+    assert_eq!(reply.status(), StatusCode::OK);
+
+    let resolved_id = &discussion_ids[1];
+    let resolved = api_request(
+        app.clone(),
+        "POST",
+        &format!("{base}/discussions/{resolved_id}/resolve"),
+        Some(&bearer),
+        None,
+    )
+    .await;
+    assert_eq!(resolved.status(), StatusCode::OK);
+
+    let second_page = api_request(
+        app,
+        "GET",
+        &format!("{base}/discussions?status=open&sort=recent&limit=2&cursor={cursor}"),
+        Some(&bearer),
+        None,
+    )
+    .await;
+    assert_eq!(second_page.status(), StatusCode::OK);
+    let second_page = response_json(second_page).await;
+    let ids = second_page["discussions"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|discussion| discussion["id"].as_str().unwrap())
+        .collect::<Vec<_>>();
+    assert_eq!(ids, vec![oldest_id.as_str()]);
+}
+
+async fn api_request(
+    app: axum::Router,
+    method: &str,
+    uri: &str,
+    bearer: Option<&str>,
+    body: Option<&str>,
+) -> Response {
+    let mut request = Request::builder().method(method).uri(uri);
+    if let Some(bearer) = bearer {
+        request = request.header(AUTHORIZATION, bearer);
+    }
+    let body = match body {
+        Some(json) => {
+            request = request.header(CONTENT_TYPE, "application/json");
+            Body::from(json.to_string())
+        }
+        None => Body::empty(),
+    };
+    app.oneshot(request.body(body).unwrap()).await.unwrap()
+}

@@ -14,6 +14,7 @@ export type ApiAuthMode = 'none' | 'optional' | 'required'
 type ApiRequestOptions = {
   auth?: ApiAuthMode
   body?: unknown
+  signal?: AbortSignal
 }
 
 export type ApiClient = ReturnType<typeof createApiClient>
@@ -47,6 +48,7 @@ export function createApiClient() {
         options.body === undefined ? undefined : JSON.stringify(options.body),
       headers,
       method,
+      signal: options.signal,
     })
   }
 
@@ -65,6 +67,8 @@ export function createApiClient() {
       request<T>('PATCH', path, options),
     post: <T>(path: string, options?: ApiRequestOptions) =>
       request<T>('POST', path, options),
+    put: <T>(path: string, options?: ApiRequestOptions) =>
+      request<T>('PUT', path, options),
   }
 }
 
@@ -125,4 +129,3 @@ function runtimeEnv(name: string) {
 
   return process.env[name]?.trim()
 }
-

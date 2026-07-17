@@ -66,7 +66,7 @@ async fn request_submit_publishes_summary_refresh_event() {
     assert!(
         String::from_utf8(initial.to_vec())
             .unwrap()
-            .contains(r#""reason":"connected""#)
+            .contains(r#""kind":"Connected""#)
     );
 
     let start = start_request_via_http(app.clone(), &bearer_header()).await;
@@ -84,10 +84,11 @@ async fn request_submit_publishes_summary_refresh_event() {
         REQUEST_HEAD,
     )
     .await;
+    let request_id = start["request"]["id"].as_str().unwrap();
     let submit = submit_request_via_http(
-        app,
+        app.clone(),
         &bearer_header(),
-        start["request"]["id"].as_str().unwrap(),
+        request_id,
         r#"{"head_oid":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}"#,
     )
     .await;
@@ -101,6 +102,46 @@ async fn request_submit_publishes_summary_refresh_event() {
     let event = String::from_utf8(event.to_vec()).unwrap();
     assert!(event.contains(r#""reason":"request-submitted""#));
     assert!(event.contains(r#""version":0"#));
+
+    let needs_response = api_request(
+        app.clone(),
+        "POST",
+        &format!("/v1/repos/owner/repo/requests/{request_id}/needs-response"),
+        Some(&owner_bearer),
+        Some(r#"{"body":"Please clarify ownership."}"#),
+    )
+    .await;
+    assert_eq!(needs_response.status(), StatusCode::OK);
+    let event = tokio::time::timeout(std::time::Duration::from_secs(5), stream.next())
+        .await
+        .unwrap()
+        .unwrap()
+        .unwrap();
+    assert!(
+        String::from_utf8(event.to_vec())
+            .unwrap()
+            .contains(r#""reason":"request-needs-response""#)
+    );
+
+    let response = api_request(
+        app,
+        "POST",
+        &format!("/v1/repos/owner/repo/requests/{request_id}/respond"),
+        Some(&owner_bearer),
+        Some(r#"{"body":"The parser module owns it."}"#),
+    )
+    .await;
+    assert_eq!(response.status(), StatusCode::OK);
+    let event = tokio::time::timeout(std::time::Duration::from_secs(5), stream.next())
+        .await
+        .unwrap()
+        .unwrap()
+        .unwrap();
+    assert!(
+        String::from_utf8(event.to_vec())
+            .unwrap()
+            .contains(r#""reason":"request-contributor-responded""#)
+    );
 }
 
 #[tokio::test]
@@ -136,6 +177,11 @@ async fn public_readers_do_not_see_private_request_branches() {
     let owner_body = response_json(owner_response).await;
     assert_eq!(owner_body["requests"].as_array().unwrap().len(), 1);
     assert_eq!(owner_body["requests"][0]["audience"], "Private");
+    assert!(
+        owner_body["requests"][0]
+            .get("description_markdown")
+            .is_none()
+    );
 }
 
 #[tokio::test]

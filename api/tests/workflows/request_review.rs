@@ -60,6 +60,7 @@ async fn reads_the_uploaded_request_ref_bundle() {
             author_role: RequestActorRole::Owner,
             audience: RequestAudience::Private,
             base_main_oid: main_oid,
+            event_id: "event_req_review_started".to_string(),
             now_unix: 2,
         })
         .await

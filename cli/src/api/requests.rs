@@ -1,5 +1,5 @@
 use super::*;
-use serde::Serialize;
+use serde::{Serialize, de::DeserializeOwned};
 
 pub struct StartRequestParams<'a> {
     pub owner: &'a str,
@@ -32,6 +32,14 @@ pub struct MergeRequestParams<'a> {
     pub expected_main_oid: String,
     pub expected_head_oid: String,
     pub body: Option<String>,
+}
+
+pub struct CreateRequestDiscussionParams<'a> {
+    pub owner: &'a str,
+    pub repo: &'a str,
+    pub request_id: &'a str,
+    pub body_markdown: String,
+    pub client_discussion_id: String,
 }
 
 pub fn list_requests(
@@ -183,27 +191,27 @@ pub fn submit_request(
         .context("parse submit request response")
 }
 
-pub fn comment_request(
+pub fn create_request_discussion(
     client: &Client,
     api_url: &str,
     session_token: &str,
-    owner: &str,
-    repo: &str,
-    request_id: &str,
-    body: String,
-) -> anyhow::Result<RequestMutationResponse> {
+    params: CreateRequestDiscussionParams<'_>,
+) -> anyhow::Result<RequestDiscussionMutationResponse> {
     request_mutation(
         client,
         api_url,
         session_token,
         RequestMutationEndpoint {
-            owner,
-            repo,
-            request_id,
-            action_path: "comments",
-            context: "comment request",
+            owner: params.owner,
+            repo: params.repo,
+            request_id: params.request_id,
+            action_path: "discussions",
+            context: "create request discussion",
         },
-        &CommentRequestRequest { body },
+        &CreateRequestDiscussionRequest {
+            body_markdown: params.body_markdown,
+            client_discussion_id: params.client_discussion_id,
+        },
     )
 }
 
@@ -312,13 +320,13 @@ struct RequestMutationEndpoint<'a> {
     context: &'static str,
 }
 
-fn request_mutation<T: Serialize>(
+fn request_mutation<T: Serialize, R: DeserializeOwned>(
     client: &Client,
     api_url: &str,
     session_token: &str,
     endpoint: RequestMutationEndpoint<'_>,
     body: &T,
-) -> anyhow::Result<RequestMutationResponse> {
+) -> anyhow::Result<R> {
     let response = client
         .post(format!(
             "{api_url}{}",

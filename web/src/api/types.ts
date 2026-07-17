@@ -14,7 +14,6 @@ import type {
   FirstPushTokenResponse,
   FirstPushTokenStatus,
   ProjectionPreviewAudience as GeneratedProjectionPreviewAudience,
-  CommentRequestRequest,
   MergeRequestRequest,
   NeedsResponseRequest,
   AcceptRepositoryInviteResponse,
@@ -28,6 +27,7 @@ import type {
   RequestEventKind,
   RequestEventResponse,
   RequestListResponse,
+  RequestListItemResponse,
   RequestMergeabilityResponse,
   RequestMergeabilityStatus,
   RequestMutationResponse,
@@ -92,6 +92,7 @@ export type CommitDetail = CommitDetailResponse
 export type CommitFile = CommitFileResponse
 export type ReviewFileDiff = ReviewFileDiffResponse
 export type RequestList = RequestListResponse
+export type RequestListItem = RequestListItemResponse
 export type RequestDetail = RequestDetailResponse
 export type RequestMutation = RequestMutationResponse
 export type RequestChanges = RequestChangesResponse
@@ -181,7 +182,6 @@ export type RequestParams = RepoParams & {
   request_id: string
 }
 
-export type CommentRequestInput = RequestParams & CommentRequestRequest
 export type NeedsResponseInput = RequestParams & NeedsResponseRequest
 export type RespondRequestInput = RequestParams & RespondRequestRequest
 export type ResolveRequestInput = RequestParams & ResolveRequestRequest

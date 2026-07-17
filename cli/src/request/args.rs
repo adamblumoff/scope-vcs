@@ -14,7 +14,8 @@ pub(super) enum RequestCommand {
     Push(RequestPushArgs),
     Delete(RequestDeleteArgs),
     Status(RequestStatusArgs),
-    Comment(RequestCommentArgs),
+    #[command(about = "Start a top-level discussion on a request")]
+    Discuss(RequestDiscussArgs),
     NeedsResponse(RequestNeedsResponseArgs),
     Respond(RequestRespondArgs),
     Resolve(RequestResolveArgs),
@@ -70,12 +71,12 @@ pub(super) struct RequestStatusArgs {
 }
 
 #[derive(Parser)]
-pub(super) struct RequestCommentArgs {
+pub(super) struct RequestDiscussArgs {
     #[arg(long)]
     pub(super) remote: Option<String>,
     #[arg(help = "Request name or req_ ID (defaults to the current branch)")]
     pub(super) request: Option<String>,
-    #[arg(long)]
+    #[arg(long, help = "Markdown body for the new discussion")]
     pub(super) body: String,
 }
 

@@ -276,6 +276,11 @@ a {
   min-width: 0;
 }
 
+.request-discussion-thread {
+  content-visibility: auto;
+  contain-intrinsic-size: 0 240px;
+}
+
 .marketing-page {
   position: relative;
   isolation: isolate;

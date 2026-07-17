@@ -2,29 +2,30 @@ use super::{
     MetadataStore, acquire_aggregate_lock,
     cleanup_queue::queue_pending_source_blob_deletion_rows,
     request_access::{
-        authorize_start_request, ensure_request_collaborator, ensure_request_maintainer,
-        ensure_user_exists, repo_by_id, request_actor_can_edit,
+        authorize_start_request, ensure_request_maintainer, ensure_user_exists, repo_by_id,
+        request_actor_can_edit,
     },
     request_rows::{
         credit_account_by_user_id, credit_ledger_entry_by_id, delete_request_rows,
         insert_credit_ledger_entry_row, insert_request_event_row, insert_request_row,
-        request_by_id, request_by_name, request_event_by_id, request_events_by_request_id,
-        requests_by_repo_author, requests_by_repo_id, save_credit_account_row, save_request_row,
+        latest_request_events, request_by_id, request_by_name, request_event_by_id,
+        request_events_after_position, request_events_by_request_id, requests_by_repo_author,
+        requests_by_repo_id, save_credit_account_row, save_request_row,
     },
 };
 use crate::{
     domain::{
         requests::{
-            CommentRequestInput, CreditAccountMutation, DeleteRequestInput, DeleteRequestMutation,
+            CreditAccountMutation, DeleteRequestInput, DeleteRequestMutation,
             GrantUserCreditsInput, MarkRequestNeedsResponseInput, MergeRequestInput,
             MergeRequestMutation, RecordRequestRevisionInput, RecordWorkingRequestUploadInput,
             Request, RequestEvent, RequestRevisionMutation, RequestTimelineMutation,
             ResolveRequestInput, ResolveRequestMutation, RespondToRequestInput, StartRequestInput,
             StartRequestMutation, SubmitRequestInput, SubmitRequestMutation,
-            WorkingRequestUploadMutation, comment_request, delete_request, grant_user_credits,
-            mark_request_needs_response, merge_request, record_request_revision,
-            record_working_request_upload, resolve_request, respond_to_request, start_request,
-            submit_request,
+            UpdateRequestDescriptionInput, WorkingRequestUploadMutation, delete_request,
+            grant_user_credits, mark_request_needs_response, merge_request,
+            record_request_revision, record_working_request_upload, resolve_request,
+            respond_to_request, start_request, submit_request, update_request_description,
         },
         store::{RepositoryActor, StoredRepository},
     },
@@ -77,6 +78,23 @@ impl MetadataStore {
         request_events_by_request_id(db.as_ref(), &request_id).await
     }
 
+    pub async fn request_events_after_position(
+        &self,
+        request_id: &str,
+        after_position: u64,
+        limit: u64,
+    ) -> Result<Vec<RequestEvent>, ApiError> {
+        request_events_after_position(self.db.as_ref(), request_id, after_position, limit).await
+    }
+
+    pub async fn latest_request_events(
+        &self,
+        request_id: &str,
+        limit: u64,
+    ) -> Result<Vec<RequestEvent>, ApiError> {
+        latest_request_events(self.db.as_ref(), request_id, limit).await
+    }
+
     pub async fn grant_user_credits(
         &self,
         input: GrantUserCreditsInput,
@@ -123,6 +141,7 @@ impl MetadataStore {
 
         let mutation = start_request(&mut requests, input)?;
         insert_request_row(&tx, &mutation.request).await?;
+        insert_request_event_row(&tx, &mutation.event).await?;
         tx.commit().await.map_err(ApiError::internal)?;
         Ok(mutation)
     }
@@ -233,34 +252,6 @@ impl MetadataStore {
         Err(ApiError::not_found("request not found"))
     }
 
-    pub async fn comment_request(
-        &self,
-        input: CommentRequestInput,
-    ) -> Result<RequestTimelineMutation, ApiError> {
-        let db = Arc::clone(&self.db);
-        let tx = db.as_ref().begin().await.map_err(ApiError::internal)?;
-        acquire_aggregate_lock(&tx, "request", &input.request_id).await?;
-        ensure_user_exists(&tx, &input.actor_user_id).await?;
-
-        let mut requests = BTreeMap::new();
-        let request = request_by_id(&tx, &input.request_id)
-            .await?
-            .ok_or_else(|| ApiError::not_found("request not found"))?;
-        let repo = repo_by_id(&tx, &request.repo_id).await?;
-        ensure_request_collaborator(&repo, &request, &input.actor_user_id)?;
-        requests.insert(request.id.clone(), request);
-        let mut events = BTreeMap::new();
-        if let Some(event) = request_event_by_id(&tx, &input.event_id).await? {
-            events.insert(event.id.clone(), event);
-        }
-
-        let mutation = comment_request(&mut requests, &mut events, input)?;
-        save_request_row(&tx, &mutation.request).await?;
-        insert_request_event_row(&tx, &mutation.event).await?;
-        tx.commit().await.map_err(ApiError::internal)?;
-        Ok(mutation)
-    }
-
     pub async fn mark_request_needs_response(
         &self,
         input: MarkRequestNeedsResponseInput,
@@ -283,6 +274,32 @@ impl MetadataStore {
         }
 
         let mutation = mark_request_needs_response(&mut requests, &mut events, input)?;
+        save_request_row(&tx, &mutation.request).await?;
+        insert_request_event_row(&tx, &mutation.event).await?;
+        tx.commit().await.map_err(ApiError::internal)?;
+        Ok(mutation)
+    }
+
+    pub async fn update_request_description(
+        &self,
+        mut input: UpdateRequestDescriptionInput,
+    ) -> Result<RequestTimelineMutation, ApiError> {
+        let db = Arc::clone(&self.db);
+        let tx = db.as_ref().begin().await.map_err(ApiError::internal)?;
+        acquire_aggregate_lock(&tx, "request", &input.request_id).await?;
+        ensure_user_exists(&tx, &input.actor_user_id).await?;
+        let request = request_by_id(&tx, &input.request_id)
+            .await?
+            .ok_or_else(|| ApiError::not_found("request not found"))?;
+        let repo = repo_by_id(&tx, &request.repo_id).await?;
+        input.actor_can_edit_description = request.author_user_id == input.actor_user_id
+            || repo.is_maintainer_user_id(&input.actor_user_id);
+        let mut requests = BTreeMap::from([(request.id.clone(), request)]);
+        let mut events = BTreeMap::new();
+        if let Some(event) = request_event_by_id(&tx, &input.event_id).await? {
+            events.insert(event.id.clone(), event);
+        }
+        let mutation = update_request_description(&mut requests, &mut events, input)?;
         save_request_row(&tx, &mutation.request).await?;
         insert_request_event_row(&tx, &mutation.event).await?;
         tx.commit().await.map_err(ApiError::internal)?;

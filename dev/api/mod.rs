@@ -38,6 +38,11 @@ pub async fn app_state_from_env() -> anyhow::Result<AppState> {
         .replace_catalog_for_local_dev(catalog)
         .await
         .map_err(|error| anyhow::anyhow!("seeding local dev database: {}", error.message))?;
+    seed::seed_request_discussion_gallery(&metadata)
+        .await
+        .map_err(|error| {
+            anyhow::anyhow!("seeding local dev request discussions: {}", error.message())
+        })?;
     let repo_events = RepoChangeBus::default();
     metadata.start_repo_change_listener(repo_events.clone())?;
     let runtime_budgets = Arc::new(RuntimeBudgets::from_env()?);

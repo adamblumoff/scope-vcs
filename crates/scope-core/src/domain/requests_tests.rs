@@ -14,7 +14,7 @@ fn request_policy_keeps_public_visibility_and_maintainer_decisions_in_domain() {
     let anonymous = request_permissions(&request, RepositoryAccess::public(), None);
     assert!(anonymous.can_pull_branch);
     assert!(!anonymous.can_push_branch);
-    assert!(!anonymous.can_comment);
+    assert!(!anonymous.can_open_discussion);
     assert!(!anonymous.can_merge);
 
     let contributor = request_permissions(
@@ -24,7 +24,7 @@ fn request_policy_keeps_public_visibility_and_maintainer_decisions_in_domain() {
     );
     assert!(contributor.can_pull_branch);
     assert!(contributor.can_push_branch);
-    assert!(contributor.can_comment);
+    assert!(contributor.can_open_discussion);
     assert!(!contributor.can_merge);
 
     let maintainer = maintainer_access();
@@ -160,7 +160,7 @@ fn closed_requests_remain_readable_but_are_never_writable() {
         let permissions = request_permissions(&request, access, viewer);
         assert!(permissions.can_pull_branch);
         assert!(!permissions.can_push_branch);
-        assert!(!permissions.can_comment);
+        assert!(!permissions.can_open_discussion);
     }
 }
 
@@ -228,8 +228,14 @@ fn revision_reopens_needs_response_request() {
         record_request_revision(&mut requests, &mut events, revision_input("head")).unwrap();
 
     assert_eq!(mutation.request.state, RequestState::Submitted);
-    assert_eq!(mutation.event.old_head_oid.as_deref(), Some("head"));
-    assert_eq!(mutation.event.new_head_oid.as_deref(), Some("new_head"));
+    assert!(matches!(
+        mutation.event.payload,
+        RequestEventPayload::RevisionPushed {
+            ref old_head_oid,
+            ref new_head_oid,
+            ..
+        } if old_head_oid == "head" && new_head_oid == "new_head"
+    ));
 }
 
 #[test]
@@ -409,6 +415,360 @@ fn settlement_cannot_run_twice() {
     assert!(error.message.contains("already closed"));
 }
 
+#[test]
+fn discussions_are_append_only_positioned_and_read_by_their_author() {
+    let request = submitted_request();
+    let starting_version = request.activity_version;
+    let starting_updated_at = request.updated_at_unix;
+    let mut requests = BTreeMap::from([(request.id.clone(), request)]);
+    let mut discussions = BTreeMap::new();
+    let mutation = create_request_discussion(
+        &mut requests,
+        &mut discussions,
+        CreateRequestDiscussionInput {
+            request_id: "req_1".to_string(),
+            id: "discussion_1".to_string(),
+            actor_user_id: "user_public".to_string(),
+            actor_can_participate: true,
+            client_discussion_id: "client_1".to_string(),
+            body_markdown: "Parser ownership".to_string(),
+            now_unix: 30,
+        },
+    )
+    .unwrap();
+
+    assert_eq!(mutation.discussion.opened_position, starting_version + 1);
+    assert_eq!(
+        mutation.read_state.read_through_position,
+        mutation.discussion.opened_position
+    );
+    assert_eq!(mutation.request.activity_version, starting_version + 1);
+    assert_eq!(mutation.request.updated_at_unix, starting_updated_at);
+}
+
+#[test]
+fn resolved_discussion_requires_atomic_reopen_and_reply() {
+    let request = submitted_request();
+    let mut requests = BTreeMap::from([(request.id.clone(), request)]);
+    let mut discussions = BTreeMap::new();
+    let root = create_request_discussion(
+        &mut requests,
+        &mut discussions,
+        CreateRequestDiscussionInput {
+            request_id: "req_1".to_string(),
+            id: "discussion_1".to_string(),
+            actor_user_id: "user_public".to_string(),
+            actor_can_participate: true,
+            client_discussion_id: "client_1".to_string(),
+            body_markdown: "Parser ownership".to_string(),
+            now_unix: 30,
+        },
+    )
+    .unwrap();
+    let resolved = resolve_request_discussion(
+        &mut requests,
+        &mut discussions,
+        ResolveRequestDiscussionInput {
+            request_id: "req_1".to_string(),
+            discussion_id: root.discussion.id.clone(),
+            actor_user_id: "maintainer".to_string(),
+            actor_is_maintainer: true,
+            event_id: "event_resolved_discussion".to_string(),
+            now_unix: 31,
+        },
+    )
+    .unwrap();
+    assert_eq!(
+        resolved.event.position,
+        resolved.discussion.last_activity_position
+    );
+
+    let mut replies = BTreeMap::new();
+    let ordinary = create_request_discussion_reply(
+        &mut requests,
+        &mut discussions,
+        &mut replies,
+        CreateRequestDiscussionReplyInput {
+            request_id: "req_1".to_string(),
+            discussion_id: root.discussion.id.clone(),
+            id: "reply_rejected".to_string(),
+            actor_user_id: "user_public".to_string(),
+            actor_can_participate: true,
+            client_reply_id: "client_rejected".to_string(),
+            body_markdown: "One more point".to_string(),
+            reply_to_reply_id: None,
+            now_unix: 32,
+        },
+    )
+    .unwrap_err();
+    assert_eq!(ordinary.kind, crate::error::ErrorKind::Conflict);
+
+    let reopened = reopen_and_reply_to_request_discussion(
+        &mut requests,
+        &mut discussions,
+        &mut replies,
+        ReopenAndReplyToRequestDiscussionInput {
+            request_id: "req_1".to_string(),
+            discussion_id: root.discussion.id,
+            reply_id: "reply_1".to_string(),
+            actor_user_id: "user_public".to_string(),
+            actor_is_maintainer: false,
+            actor_can_participate: true,
+            event_id: "event_reopened_discussion".to_string(),
+            client_reply_id: "client_reply_1".to_string(),
+            body_markdown: "One more point".to_string(),
+            reply_to_reply_id: None,
+            now_unix: 33,
+        },
+    )
+    .unwrap();
+    assert_eq!(reopened.discussion.status, RequestDiscussionStatus::Open);
+    assert_eq!(
+        reopened.reply.position,
+        reopened.discussion.last_activity_position
+    );
+    assert_eq!(
+        reopened.activity_event.as_ref().unwrap().position,
+        reopened.reply.position
+    );
+}
+
+#[test]
+fn discussion_read_markers_are_monotonic_and_bodies_are_bounded() {
+    let request = submitted_request();
+    let mut requests = BTreeMap::from([(request.id.clone(), request)]);
+    let mut discussions = BTreeMap::new();
+    let root = create_request_discussion(
+        &mut requests,
+        &mut discussions,
+        CreateRequestDiscussionInput {
+            request_id: "req_1".to_string(),
+            id: "discussion_1".to_string(),
+            actor_user_id: "user_public".to_string(),
+            actor_can_participate: true,
+            client_discussion_id: "client_1".to_string(),
+            body_markdown: "Parser ownership".to_string(),
+            now_unix: 30,
+        },
+    )
+    .unwrap();
+    let mut reads = BTreeMap::new();
+    let latest = mark_request_discussion_read(
+        &discussions,
+        &mut reads,
+        MarkRequestDiscussionReadInput {
+            discussion_id: root.discussion.id.clone(),
+            user_id: "maintainer".to_string(),
+            through_position: root.discussion.last_activity_position,
+            now_unix: 31,
+        },
+    )
+    .unwrap();
+    let stale = mark_request_discussion_read(
+        &discussions,
+        &mut reads,
+        MarkRequestDiscussionReadInput {
+            discussion_id: root.discussion.id,
+            user_id: "maintainer".to_string(),
+            through_position: 0,
+            now_unix: 32,
+        },
+    )
+    .unwrap();
+    assert_eq!(stale, latest);
+
+    let oversized = create_request_discussion(
+        &mut requests,
+        &mut discussions,
+        CreateRequestDiscussionInput {
+            request_id: "req_1".to_string(),
+            id: "discussion_oversized".to_string(),
+            actor_user_id: "user_public".to_string(),
+            actor_can_participate: true,
+            client_discussion_id: "client_oversized".to_string(),
+            body_markdown: "x".repeat(REQUEST_DISCUSSION_BODY_MAX_BYTES + 1),
+            now_unix: 33,
+        },
+    )
+    .unwrap_err();
+    assert_eq!(oversized.kind, crate::error::ErrorKind::BadRequest);
+
+    let oversized_client_id = create_request_discussion(
+        &mut requests,
+        &mut discussions,
+        CreateRequestDiscussionInput {
+            request_id: "req_1".to_string(),
+            id: "discussion_oversized_client_id".to_string(),
+            actor_user_id: "user_public".to_string(),
+            actor_can_participate: true,
+            client_discussion_id: "x".repeat(REQUEST_DISCUSSION_CLIENT_ID_MAX_BYTES + 1),
+            body_markdown: "Bound the idempotency key".to_string(),
+            now_unix: 34,
+        },
+    )
+    .unwrap_err();
+    assert_eq!(
+        oversized_client_id.kind,
+        crate::error::ErrorKind::BadRequest
+    );
+
+    let oversized_reply_client_id = create_request_discussion_reply(
+        &mut requests,
+        &mut discussions,
+        &mut BTreeMap::new(),
+        CreateRequestDiscussionReplyInput {
+            request_id: "req_1".to_string(),
+            discussion_id: "discussion_1".to_string(),
+            id: "reply_oversized_client_id".to_string(),
+            actor_user_id: "user_public".to_string(),
+            actor_can_participate: true,
+            client_reply_id: "x".repeat(REQUEST_DISCUSSION_CLIENT_ID_MAX_BYTES + 1),
+            body_markdown: "Bound the reply idempotency key".to_string(),
+            reply_to_reply_id: None,
+            now_unix: 35,
+        },
+    )
+    .unwrap_err();
+    assert_eq!(
+        oversized_reply_client_id.kind,
+        crate::error::ErrorKind::BadRequest
+    );
+}
+
+#[test]
+fn discussion_authority_and_activity_are_independent_from_request_lifecycle() {
+    let mut request = submitted_request();
+    request.state = RequestState::NeedsResponse;
+    let mut requests = BTreeMap::from([(request.id.clone(), request)]);
+    let mut discussions = BTreeMap::new();
+    let root = create_request_discussion(
+        &mut requests,
+        &mut discussions,
+        CreateRequestDiscussionInput {
+            request_id: "req_1".to_string(),
+            id: "discussion_1".to_string(),
+            actor_user_id: "topic_opener".to_string(),
+            actor_can_participate: true,
+            client_discussion_id: "client_1".to_string(),
+            body_markdown: "Parser ownership".to_string(),
+            now_unix: 30,
+        },
+    )
+    .unwrap();
+    assert_eq!(requests["req_1"].state, RequestState::NeedsResponse);
+
+    let unrelated = resolve_request_discussion(
+        &mut requests,
+        &mut discussions,
+        ResolveRequestDiscussionInput {
+            request_id: "req_1".to_string(),
+            discussion_id: root.discussion.id.clone(),
+            actor_user_id: "unrelated".to_string(),
+            actor_is_maintainer: false,
+            event_id: "event_forbidden".to_string(),
+            now_unix: 31,
+        },
+    )
+    .unwrap_err();
+    assert_eq!(unrelated.kind, crate::error::ErrorKind::Forbidden);
+
+    let author_resolved = resolve_request_discussion(
+        &mut requests,
+        &mut discussions,
+        ResolveRequestDiscussionInput {
+            request_id: "req_1".to_string(),
+            discussion_id: root.discussion.id.clone(),
+            actor_user_id: "user_public".to_string(),
+            actor_is_maintainer: false,
+            event_id: "event_author_resolved".to_string(),
+            now_unix: 32,
+        },
+    )
+    .unwrap();
+    assert_eq!(
+        author_resolved.event.kind,
+        RequestEventKind::DiscussionResolved
+    );
+    assert_eq!(requests["req_1"].state, RequestState::NeedsResponse);
+
+    let opener_reopened = reopen_request_discussion(
+        &mut requests,
+        &mut discussions,
+        ReopenRequestDiscussionInput {
+            request_id: "req_1".to_string(),
+            discussion_id: root.discussion.id,
+            actor_user_id: "topic_opener".to_string(),
+            actor_is_maintainer: false,
+            event_id: "event_opener_reopened".to_string(),
+            now_unix: 33,
+        },
+    )
+    .unwrap();
+    assert_eq!(
+        opener_reopened.event.kind,
+        RequestEventKind::DiscussionReopened
+    );
+    assert_eq!(requests["req_1"].state, RequestState::NeedsResponse);
+}
+
+#[test]
+fn description_edits_are_authorized_bounded_and_typed() {
+    let request = submitted_request();
+    let mut requests = BTreeMap::from([(request.id.clone(), request)]);
+    let mut events = BTreeMap::new();
+    let forbidden = update_request_description(
+        &mut requests,
+        &mut events,
+        UpdateRequestDescriptionInput {
+            request_id: "req_1".to_string(),
+            actor_user_id: "unrelated".to_string(),
+            actor_can_edit_description: false,
+            event_id: "event_forbidden".to_string(),
+            description_markdown: "No".to_string(),
+            now_unix: 30,
+        },
+    )
+    .unwrap_err();
+    assert_eq!(forbidden.kind, crate::error::ErrorKind::Forbidden);
+    assert!(events.is_empty());
+
+    let mutation = update_request_description(
+        &mut requests,
+        &mut events,
+        UpdateRequestDescriptionInput {
+            request_id: "req_1".to_string(),
+            actor_user_id: "user_public".to_string(),
+            actor_can_edit_description: true,
+            event_id: "event_description".to_string(),
+            description_markdown: "## Intent\nFix parsing.".to_string(),
+            now_unix: 31,
+        },
+    )
+    .unwrap();
+    assert!(matches!(
+        mutation.event.payload,
+        RequestEventPayload::DescriptionEdited {
+            ref new_markdown,
+            ..
+        } if new_markdown == "## Intent\nFix parsing."
+    ));
+
+    let oversized = update_request_description(
+        &mut requests,
+        &mut events,
+        UpdateRequestDescriptionInput {
+            request_id: "req_1".to_string(),
+            actor_user_id: "user_public".to_string(),
+            actor_can_edit_description: true,
+            event_id: "event_oversized".to_string(),
+            description_markdown: "x".repeat(REQUEST_DESCRIPTION_MAX_BYTES + 1),
+            now_unix: 32,
+        },
+    )
+    .unwrap_err();
+    assert_eq!(oversized.kind, crate::error::ErrorKind::BadRequest);
+}
+
 #[derive(Default)]
 struct RequestFixture {
     requests: BTreeMap<String, Request>,
@@ -494,6 +854,7 @@ fn public_start_input() -> StartRequestInput {
         author_role: RequestActorRole::Public,
         audience: RequestAudience::Public,
         base_main_oid: "base".to_string(),
+        event_id: "event_started".to_string(),
         now_unix: 10,
     }
 }

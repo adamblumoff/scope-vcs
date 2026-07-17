@@ -1,6 +1,5 @@
 import { createApiClient } from '@/api/client'
 import type {
-  CommentRequestInput,
   DeleteRequestInput,
   MergeRequestInput,
   NeedsResponseInput,
@@ -18,7 +17,6 @@ import type {
 import { ApiRouteTemplates, buildApiPath } from './types.generated'
 
 export {
-  parseCommentRequestInput,
   parseMergeRequestInput,
   parseNeedsResponseInput,
   parseRequestParams,
@@ -57,15 +55,6 @@ export async function loadRequestFileDiffForRequest(
   return createApiClient().get<ReviewFileDiff>(
     `${requestRoute(ApiRouteTemplates.repoRequestFileDiff, data)}?path=${encodeURIComponent(data.path)}`,
     { auth: 'optional' },
-  )
-}
-
-export async function commentRequestForRequest(
-  data: CommentRequestInput,
-): Promise<RequestMutation> {
-  return createApiClient().post<RequestMutation>(
-    requestRoute(ApiRouteTemplates.repoRequestComments, data),
-    { auth: 'required', body: { body: data.body } },
   )
 }
 

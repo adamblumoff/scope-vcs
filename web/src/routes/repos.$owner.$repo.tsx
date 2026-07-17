@@ -23,9 +23,9 @@ function RepoLayoutRoute() {
   const live = Route.useLoaderData()
   const router = useRouter()
   const invalidate = useCallback(() => router.invalidate(), [router])
-  useRepoLiveRefresh(live, invalidate)
+  const subscribe = useRepoLiveRefresh(live, invalidate)
   return (
-    <RepoLayoutProvider live={live}>
+    <RepoLayoutProvider live={live} subscribe={subscribe}>
       <Outlet />
     </RepoLayoutProvider>
   )

@@ -14,7 +14,7 @@ use crate::domain::{
     },
 };
 use crate::http::{responses::*, routes};
-use crate::repo_events::RepoChangeEvent;
+use crate::repo_events::{RepoChangeEvent, RepoChangeKind};
 use std::{fs, path::Path};
 use ts_rs::TS;
 
@@ -107,6 +107,7 @@ pub(crate) fn export_api_types(output_path: &Path) {
         declaration::<RequestListResponse>(&ts_config),
         declaration::<RequestDetailResponse>(&ts_config),
         declaration::<RequestMutationResponse>(&ts_config),
+        declaration::<RequestListItemResponse>(&ts_config),
         declaration::<RequestSummaryResponse>(&ts_config),
         declaration::<RequestPermissionsResponse>(&ts_config),
         declaration::<RequestMergeabilityStatus>(&ts_config),
@@ -115,14 +116,34 @@ pub(crate) fn export_api_types(output_path: &Path) {
         declaration::<RequestSettlementPreviewResponse>(&ts_config),
         declaration::<RequestResolutionOptionResponse>(&ts_config),
         declaration::<RequestEventResponse>(&ts_config),
+        declaration::<RequestEventPayload>(&ts_config),
+        declaration::<RequestSettlement>(&ts_config),
+        declaration::<RequestActorSummaryResponse>(&ts_config),
+        declaration::<RequestDiscussionStatus>(&ts_config),
+        declaration::<RequestDiscussionStatusFilter>(&ts_config),
+        declaration::<RequestDiscussionSort>(&ts_config),
+        declaration::<RequestDiscussionReplyResponse>(&ts_config),
+        declaration::<RequestDiscussionSummaryResponse>(&ts_config),
+        declaration::<RequestDiscussionPageResponse>(&ts_config),
+        declaration::<RequestDiscussionRepliesPageResponse>(&ts_config),
+        declaration::<RequestDiscussionMutationResponse>(&ts_config),
+        declaration::<RequestDiscussionReplyMutationResponse>(&ts_config),
+        declaration::<RequestDiscussionChangesResponse>(&ts_config),
+        declaration::<RequestDiscussionReadResponse>(&ts_config),
+        declaration::<RequestActivityPageResponse>(&ts_config),
         declaration::<RequestDeleteResponse>(&ts_config),
         declaration::<StartRequestRequest>(&ts_config),
         declaration::<SubmitRequestRequest>(&ts_config),
-        declaration::<CommentRequestRequest>(&ts_config),
+        declaration::<UpdateRequestDescriptionRequest>(&ts_config),
+        declaration::<CreateRequestDiscussionRequest>(&ts_config),
+        declaration::<CreateRequestDiscussionReplyRequest>(&ts_config),
+        declaration::<ReopenAndReplyRequest>(&ts_config),
+        declaration::<MarkRequestDiscussionReadRequest>(&ts_config),
         declaration::<NeedsResponseRequest>(&ts_config),
         declaration::<RespondRequestRequest>(&ts_config),
         declaration::<ResolveRequestRequest>(&ts_config),
         declaration::<MergeRequestRequest>(&ts_config),
+        declaration::<RepoChangeKind>(&ts_config),
         api_route_template_declarations(),
         api_path_builder_declaration(),
     ]
@@ -153,7 +174,33 @@ fn api_route_template_declarations() -> String {
         ("repoFileContent", routes::REPO_FILE_CONTENT),
         ("repoRequestChanges", routes::REPO_REQUEST_CHANGES),
         ("repoRequestFileDiff", routes::REPO_REQUEST_FILE_DIFF),
-        ("repoRequestComments", routes::REPO_REQUEST_COMMENTS),
+        ("repoRequestDescription", routes::REPO_REQUEST_DESCRIPTION),
+        ("repoRequestDiscussions", routes::REPO_REQUEST_DISCUSSIONS),
+        (
+            "repoRequestDiscussionChanges",
+            routes::REPO_REQUEST_DISCUSSION_CHANGES,
+        ),
+        (
+            "repoRequestDiscussionReplies",
+            routes::REPO_REQUEST_DISCUSSION_REPLIES,
+        ),
+        (
+            "repoRequestDiscussionResolve",
+            routes::REPO_REQUEST_DISCUSSION_RESOLVE,
+        ),
+        (
+            "repoRequestDiscussionReopen",
+            routes::REPO_REQUEST_DISCUSSION_REOPEN,
+        ),
+        (
+            "repoRequestDiscussionReopenAndReply",
+            routes::REPO_REQUEST_DISCUSSION_REOPEN_AND_REPLY,
+        ),
+        (
+            "repoRequestDiscussionRead",
+            routes::REPO_REQUEST_DISCUSSION_READ,
+        ),
+        ("repoRequestActivity", routes::REPO_REQUEST_ACTIVITY),
         (
             "repoRequestNeedsResponse",
             routes::REPO_REQUEST_NEEDS_RESPONSE,

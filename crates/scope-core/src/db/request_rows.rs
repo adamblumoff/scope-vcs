@@ -8,7 +8,7 @@ use crate::{
 };
 use sea_orm::{
     ActiveModelTrait, ColumnTrait, ConnectionTrait, EntityTrait, IntoActiveModel, QueryFilter,
-    QueryOrder, sea_query::Expr,
+    QueryOrder, QuerySelect, sea_query::Expr,
 };
 pub async fn request_by_id<C>(conn: &C, request_id: &str) -> Result<Option<Request>, ApiError>
 where
@@ -85,13 +85,60 @@ where
     entities::request_event::Entity::find()
         .filter(entities::request_event::Column::RequestId.eq(request_id.to_string()))
         .order_by_asc(entities::request_event::Column::CreatedAtUnix)
-        .order_by_asc(entities::request_event::Column::Id)
+        .order_by_asc(entities::request_event::Column::Position)
         .all(conn)
         .await
         .map_err(ApiError::internal)?
         .into_iter()
         .map(entities::request_event::Model::try_into_domain)
         .collect()
+}
+
+pub async fn request_events_after_position<C>(
+    conn: &C,
+    request_id: &str,
+    after_position: u64,
+    limit: u64,
+) -> Result<Vec<RequestEvent>, ApiError>
+where
+    C: ConnectionTrait,
+{
+    entities::request_event::Entity::find()
+        .filter(entities::request_event::Column::RequestId.eq(request_id))
+        .filter(
+            entities::request_event::Column::Position
+                .gt(i64::try_from(after_position).map_err(ApiError::internal)?),
+        )
+        .order_by_asc(entities::request_event::Column::Position)
+        .limit(limit)
+        .all(conn)
+        .await
+        .map_err(ApiError::internal)?
+        .into_iter()
+        .map(entities::request_event::Model::try_into_domain)
+        .collect()
+}
+
+pub async fn latest_request_events<C>(
+    conn: &C,
+    request_id: &str,
+    limit: u64,
+) -> Result<Vec<RequestEvent>, ApiError>
+where
+    C: ConnectionTrait,
+{
+    let mut events = entities::request_event::Entity::find()
+        .filter(entities::request_event::Column::RequestId.eq(request_id))
+        .order_by_desc(entities::request_event::Column::Position)
+        .limit(limit)
+        .all(conn)
+        .await
+        .map_err(ApiError::internal)?
+        .into_iter()
+        .map(entities::request_event::Model::try_into_domain)
+        .collect::<Result<Vec<_>, _>>()?;
+    events.reverse();
+    Ok(events)
 }
 
 pub async fn request_event_by_id<C>(
@@ -215,6 +262,10 @@ where
         .filter(entities::request::Column::Id.eq(row.id))
         .col_expr(entities::request::Column::Title, Expr::value(row.title))
         .col_expr(
+            entities::request::Column::DescriptionMarkdown,
+            Expr::value(row.description_markdown),
+        )
+        .col_expr(
             entities::request::Column::HeadOid,
             Expr::value(row.head_oid),
         )
@@ -223,6 +274,10 @@ where
             Expr::value(row.git_snapshot),
         )
         .col_expr(entities::request::Column::State, Expr::value(row.state))
+        .col_expr(
+            entities::request::Column::ActivityVersion,
+            Expr::value(row.activity_version),
+        )
         .col_expr(
             entities::request::Column::StakeCredits,
             Expr::value(row.stake_credits),

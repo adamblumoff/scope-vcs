@@ -9,20 +9,41 @@ import {
 } from './repo-live-refresh'
 
 const event = (version: number, reason = 'changed', repo_id = 'owner/repo') =>
-  ({ reason, repo_id, version }) satisfies RepoChangeEvent
+  ({
+    kind: { RepositoryChanged: { reason } },
+    repo_id,
+    version,
+  }) satisfies RepoChangeEvent
+const laggedEvent = (repo_id = 'owner/repo') =>
+  ({ kind: 'Lagged', repo_id, version: 0 }) satisfies RepoChangeEvent
+const discussionEvent = (version: number) =>
+  ({
+    kind: {
+      RequestDiscussionChanged: {
+        audience: 'Public',
+        discussion_id: 'discussion-1',
+        request_id: 'request-1',
+        through_position: version,
+      },
+    },
+    repo_id: 'owner/repo',
+    version,
+  }) satisfies RepoChangeEvent
 const tick = () => new Promise((resolve) => setImmediate(resolve))
 
 test('SSE parsing validates events and retains partial messages', () => {
   assert.deepEqual(
     parseRepoChangeEvent(
-      'event: repo-change\ndata: {"repo_id":"owner/repo","version":2,"reason":"visibility-changed"}',
+      'event: repo-change\ndata: {"repo_id":"owner/repo","version":2,"kind":{"RepositoryChanged":{"reason":"visibility-changed"}}}',
     ),
     event(2, 'visibility-changed'),
   )
   for (const message of [
     ': keep-alive',
     'event: other\ndata: {}',
-    'event: repo-change\ndata: {"repo_id":1,"version":2,"reason":"changed"}',
+    'event: repo-change\ndata: {',
+    'event: repo-change\ndata: {"repo_id":1,"version":2,"kind":"Connected"}',
+    'event: repo-change\ndata: {"repo_id":"owner/repo","version":2,"kind":{"RequestDiscussionChanged":{"request_id":"request-1"}}}',
   ]) assert.equal(parseRepoChangeEvent(message), null)
   assert.deepEqual(takeSseMessages('event: one\n\nevent: two'), {
     messages: ['event: one'],
@@ -34,7 +55,8 @@ test('coordinator ignores stale, connected, and wrong-repo events', async () => 
   let refreshes = 0
   const coordinator = coordinatorFor(async () => { refreshes += 1 }, 2)
   coordinator.onEvent(event(2))
-  coordinator.onEvent(event(3, 'connected'))
+  coordinator.onEvent({ kind: 'Connected', repo_id: 'owner/repo', version: 3 })
+  coordinator.onEvent(discussionEvent(3))
   coordinator.onEvent(event(3, 'changed', 'other/repo'))
   await tick()
   assert.equal(refreshes, 0)
@@ -63,7 +85,7 @@ test('coordinator coalesces versions received during refresh', async () => {
 
 test('lagged, unversioned, version-zero, and interrupted streams force refresh', async () => {
   for (const trigger of [
-    (value: ReturnType<typeof coordinatorFor>) => value.onEvent(event(7, 'lagged')),
+    (value: ReturnType<typeof coordinatorFor>) => value.onEvent(laggedEvent()),
     (value: ReturnType<typeof coordinatorFor>) => value.onEvent(event(0)),
     (value: ReturnType<typeof coordinatorFor>) => value.onStreamInterrupted(),
   ]) {

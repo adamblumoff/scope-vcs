@@ -1,5 +1,6 @@
 use super::{
     local::{maybe_request_branch_audience, store_request_metadata_fields},
+    new_client_discussion_id,
     text::terminal_text,
 };
 use crate::{git_repo::GitRepo, test_support::TestDir};
@@ -22,4 +23,14 @@ fn request_metadata_stores_the_request_audience() {
         maybe_request_branch_audience(&git_repo).unwrap(),
         Some(RequestAudience::Public)
     );
+}
+
+#[test]
+fn client_discussion_ids_are_opaque_and_unique() {
+    let first = new_client_discussion_id().unwrap();
+    let second = new_client_discussion_id().unwrap();
+
+    assert!(first.starts_with("client_discussion_"));
+    assert!(second.starts_with("client_discussion_"));
+    assert_ne!(first, second);
 }

@@ -4,8 +4,9 @@ use scope_core::{
         policy::Visibility,
         repo_config::RepoConfig,
         requests::{
-            RequestActorRole, RequestAudience, RequestDisposition, RequestEventKind,
-            RequestMergeabilityStatus, RequestState, ResolutionDisposition,
+            RequestActorRole, RequestAudience, RequestDiscussionStatus, RequestDisposition,
+            RequestEventKind, RequestEventPayload, RequestMergeabilityStatus, RequestState,
+            ResolutionDisposition,
         },
         store::{FirstPushTokenStatus, RepoPublicationState, RepositoryActor},
     },
@@ -289,14 +290,13 @@ pub struct CreatePushIntentResponse {
 #[derive(Clone, Debug, Deserialize, Serialize)]
 #[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 pub struct RequestListResponse {
-    pub requests: Vec<RequestSummaryResponse>,
+    pub requests: Vec<RequestListItemResponse>,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
 #[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 pub struct RequestDetailResponse {
     pub request: RequestSummaryResponse,
-    pub events: Vec<RequestEventResponse>,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -318,12 +318,14 @@ pub struct RequestSummaryResponse {
     pub id: String,
     pub name: String,
     pub title: String,
+    pub description_markdown: String,
     pub author_user_id: String,
     pub author_role: RequestActorRole,
     pub audience: RequestAudience,
     pub base_main_oid: GitOid,
     pub head_oid: GitOid,
     pub state: RequestState,
+    pub activity_version: u64,
     pub stake_credits: u32,
     pub disposition: Option<RequestDisposition>,
     pub settlement: Option<RequestSettlementResponse>,
@@ -338,8 +340,27 @@ pub struct RequestSummaryResponse {
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
 #[cfg_attr(feature = "ts", derive(ts_rs::TS))]
+pub struct RequestListItemResponse {
+    pub id: String,
+    pub name: String,
+    pub title: String,
+    pub author_role: RequestActorRole,
+    pub audience: RequestAudience,
+    pub head_oid: GitOid,
+    pub state: RequestState,
+    pub stake_credits: u32,
+    pub disposition: Option<RequestDisposition>,
+    pub settlement: Option<RequestSettlementResponse>,
+    pub updated_at_unix: u64,
+    pub mergeability: RequestMergeabilityResponse,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 pub struct RequestPermissionsResponse {
-    pub can_comment: bool,
+    pub can_open_discussion: bool,
+    pub can_reply_to_discussion: bool,
+    pub can_edit_description: bool,
     pub can_pull_branch: bool,
     pub can_push_branch: bool,
     pub can_delete: bool,
@@ -389,12 +410,113 @@ pub struct RequestResolutionOptionResponse {
 #[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 pub struct RequestEventResponse {
     pub id: String,
-    pub actor_user_id: String,
+    pub position: u64,
+    pub actor: RequestActorSummaryResponse,
     pub kind: RequestEventKind,
-    pub body: Option<String>,
-    pub old_head_oid: Option<GitOid>,
-    pub new_head_oid: Option<GitOid>,
+    pub payload: RequestEventPayload,
     pub created_at_unix: u64,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
+pub struct RequestActorSummaryResponse {
+    pub id: String,
+    pub handle: String,
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
+#[serde(rename_all = "snake_case")]
+pub enum RequestDiscussionStatusFilter {
+    Open,
+    Resolved,
+    All,
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
+#[serde(rename_all = "snake_case")]
+pub enum RequestDiscussionSort {
+    Recent,
+    Newest,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
+pub struct RequestDiscussionReplyResponse {
+    pub id: String,
+    pub discussion_id: String,
+    pub position: u64,
+    pub author: RequestActorSummaryResponse,
+    pub body_markdown: String,
+    pub reply_to_reply_id: Option<String>,
+    pub created_at_unix: u64,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
+pub struct RequestDiscussionSummaryResponse {
+    pub id: String,
+    pub request_id: String,
+    pub opened_position: u64,
+    pub last_activity_position: u64,
+    pub author: RequestActorSummaryResponse,
+    pub body_markdown: String,
+    pub status: RequestDiscussionStatus,
+    pub reply_count: u64,
+    pub unread_count: u64,
+    pub latest_replies: Vec<RequestDiscussionReplyResponse>,
+    pub created_at_unix: u64,
+    pub resolved_at_unix: Option<u64>,
+    pub resolved_by: Option<RequestActorSummaryResponse>,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
+pub struct RequestDiscussionPageResponse {
+    pub discussions: Vec<RequestDiscussionSummaryResponse>,
+    pub next_cursor: Option<String>,
+    pub snapshot_version: u64,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
+pub struct RequestDiscussionRepliesPageResponse {
+    pub replies: Vec<RequestDiscussionReplyResponse>,
+    pub next_before_position: Option<u64>,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
+pub struct RequestDiscussionMutationResponse {
+    pub discussion: RequestDiscussionSummaryResponse,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
+pub struct RequestDiscussionReplyMutationResponse {
+    pub discussion: RequestDiscussionSummaryResponse,
+    pub reply: RequestDiscussionReplyResponse,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
+pub struct RequestDiscussionChangesResponse {
+    pub discussions: Vec<RequestDiscussionSummaryResponse>,
+    pub through_position: u64,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
+pub struct RequestDiscussionReadResponse {
+    pub read_through_position: u64,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
+pub struct RequestActivityPageResponse {
+    pub events: Vec<RequestEventResponse>,
+    pub through_position: u64,
 }
 
 #[derive(Debug, Deserialize, Serialize)]
@@ -414,8 +536,37 @@ pub struct StartRequestRequest {
 
 #[derive(Debug, Deserialize, Serialize)]
 #[cfg_attr(feature = "ts", derive(ts_rs::TS))]
-pub struct CommentRequestRequest {
-    pub body: String,
+pub struct UpdateRequestDescriptionRequest {
+    pub description_markdown: String,
+}
+
+#[derive(Debug, Deserialize, Serialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
+pub struct CreateRequestDiscussionRequest {
+    pub body_markdown: String,
+    pub client_discussion_id: String,
+}
+
+#[derive(Debug, Deserialize, Serialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
+pub struct CreateRequestDiscussionReplyRequest {
+    pub body_markdown: String,
+    pub client_reply_id: String,
+    pub reply_to_reply_id: Option<String>,
+}
+
+#[derive(Debug, Deserialize, Serialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
+pub struct ReopenAndReplyRequest {
+    pub body_markdown: String,
+    pub client_reply_id: String,
+    pub reply_to_reply_id: Option<String>,
+}
+
+#[derive(Debug, Deserialize, Serialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
+pub struct MarkRequestDiscussionReadRequest {
+    pub through_position: u64,
 }
 
 #[derive(Debug, Deserialize, Serialize)]

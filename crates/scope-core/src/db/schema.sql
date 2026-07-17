@@ -346,10 +346,41 @@ CREATE TABLE scope_request_events (
     request_id character varying NOT NULL,
     actor_user_id character varying NOT NULL,
     kind character varying NOT NULL,
-    body text,
-    old_head_oid character varying,
-    new_head_oid character varying,
+    position bigint NOT NULL,
+    payload jsonb NOT NULL,
     created_at_unix bigint NOT NULL
+);
+
+CREATE TABLE scope_request_discussions (
+    id character varying NOT NULL,
+    request_id character varying NOT NULL,
+    opened_position bigint NOT NULL,
+    last_activity_position bigint NOT NULL,
+    author_user_id character varying NOT NULL,
+    body_markdown text NOT NULL,
+    status character varying NOT NULL,
+    client_discussion_id character varying NOT NULL,
+    created_at_unix bigint NOT NULL,
+    resolved_at_unix bigint,
+    resolved_by_user_id character varying
+);
+
+CREATE TABLE scope_request_discussion_replies (
+    id character varying NOT NULL,
+    discussion_id character varying NOT NULL,
+    position bigint NOT NULL,
+    author_user_id character varying NOT NULL,
+    body_markdown text NOT NULL,
+    reply_to_reply_id character varying,
+    client_reply_id character varying NOT NULL,
+    created_at_unix bigint NOT NULL
+);
+
+CREATE TABLE scope_request_discussion_read_states (
+    discussion_id character varying NOT NULL,
+    user_id character varying NOT NULL,
+    read_through_position bigint NOT NULL,
+    updated_at_unix bigint NOT NULL
 );
 
 
@@ -368,7 +399,9 @@ CREATE TABLE scope_requests (
     head_oid character varying NOT NULL,
     git_snapshot jsonb,
     title text NOT NULL,
+    description_markdown text NOT NULL,
     state character varying NOT NULL,
+    activity_version bigint NOT NULL,
     stake_credits integer NOT NULL,
     disposition character varying,
     settlement jsonb,
@@ -597,6 +630,21 @@ ALTER TABLE ONLY scope_repository_invites
 ALTER TABLE ONLY scope_request_events
     ADD CONSTRAINT scope_request_events_pkey PRIMARY KEY (id);
 
+ALTER TABLE ONLY scope_request_discussions
+    ADD CONSTRAINT scope_request_discussions_pkey PRIMARY KEY (id);
+ALTER TABLE ONLY scope_request_discussions
+    ADD CONSTRAINT scope_request_discussions_position_key UNIQUE (request_id, opened_position);
+ALTER TABLE ONLY scope_request_discussions
+    ADD CONSTRAINT scope_request_discussions_client_key UNIQUE (request_id, author_user_id, client_discussion_id);
+ALTER TABLE ONLY scope_request_discussion_replies
+    ADD CONSTRAINT scope_request_discussion_replies_pkey PRIMARY KEY (id);
+ALTER TABLE ONLY scope_request_discussion_replies
+    ADD CONSTRAINT scope_request_discussion_replies_position_key UNIQUE (discussion_id, position);
+ALTER TABLE ONLY scope_request_discussion_replies
+    ADD CONSTRAINT scope_request_discussion_replies_client_key UNIQUE (discussion_id, author_user_id, client_reply_id);
+ALTER TABLE ONLY scope_request_discussion_read_states
+    ADD CONSTRAINT scope_request_discussion_read_states_pkey PRIMARY KEY (discussion_id, user_id);
+
 
 --
 -- Name: scope_requests scope_requests_pkey; Type: CONSTRAINT; Schema: scope_test_2249234_1783653779131957768; Owner: -
@@ -741,7 +789,10 @@ CREATE INDEX idx_scope_repository_members_user ON scope_repository_members USING
 -- Name: idx_scope_request_events_request_time; Type: INDEX; Schema: scope_test_2249234_1783653779131957768; Owner: -
 --
 
-CREATE INDEX idx_scope_request_events_request_time ON scope_request_events USING btree (request_id, created_at_unix);
+CREATE UNIQUE INDEX idx_scope_request_events_request_position ON scope_request_events USING btree (request_id, position);
+CREATE INDEX idx_scope_request_discussions_recent ON scope_request_discussions USING btree (request_id, status, last_activity_position DESC, id);
+CREATE INDEX idx_scope_request_discussions_newest ON scope_request_discussions USING btree (request_id, opened_position DESC, id);
+CREATE INDEX idx_scope_request_discussion_replies_position ON scope_request_discussion_replies USING btree (discussion_id, position DESC, id);
 
 
 --
@@ -958,6 +1009,23 @@ ALTER TABLE ONLY scope_request_events
 ALTER TABLE ONLY scope_request_events
     ADD CONSTRAINT fk_scope_request_events_request FOREIGN KEY (request_id) REFERENCES scope_requests(id) ON DELETE CASCADE;
 
+ALTER TABLE ONLY scope_request_discussions
+    ADD CONSTRAINT fk_scope_request_discussions_request FOREIGN KEY (request_id) REFERENCES scope_requests(id) ON DELETE CASCADE;
+ALTER TABLE ONLY scope_request_discussions
+    ADD CONSTRAINT fk_scope_request_discussions_author FOREIGN KEY (author_user_id) REFERENCES scope_users(id) ON DELETE CASCADE;
+ALTER TABLE ONLY scope_request_discussions
+    ADD CONSTRAINT fk_scope_request_discussions_resolver FOREIGN KEY (resolved_by_user_id) REFERENCES scope_users(id) ON DELETE SET NULL;
+ALTER TABLE ONLY scope_request_discussion_replies
+    ADD CONSTRAINT fk_scope_request_discussion_replies_discussion FOREIGN KEY (discussion_id) REFERENCES scope_request_discussions(id) ON DELETE CASCADE;
+ALTER TABLE ONLY scope_request_discussion_replies
+    ADD CONSTRAINT fk_scope_request_discussion_replies_author FOREIGN KEY (author_user_id) REFERENCES scope_users(id) ON DELETE CASCADE;
+ALTER TABLE ONLY scope_request_discussion_replies
+    ADD CONSTRAINT fk_scope_request_discussion_replies_quoted_reply FOREIGN KEY (reply_to_reply_id) REFERENCES scope_request_discussion_replies(id) ON DELETE RESTRICT;
+ALTER TABLE ONLY scope_request_discussion_read_states
+    ADD CONSTRAINT fk_scope_request_discussion_read_states_discussion FOREIGN KEY (discussion_id) REFERENCES scope_request_discussions(id) ON DELETE CASCADE;
+ALTER TABLE ONLY scope_request_discussion_read_states
+    ADD CONSTRAINT fk_scope_request_discussion_read_states_user FOREIGN KEY (user_id) REFERENCES scope_users(id) ON DELETE CASCADE;
+
 
 --
 -- Name: scope_requests fk_scope_requests_author; Type: FK CONSTRAINT; Schema: scope_test_2249234_1783653779131957768; Owner: -
@@ -1016,7 +1084,7 @@ ALTER TABLE scope_repository_invites
     );
 ALTER TABLE scope_requests
     ADD CONSTRAINT scope_request_nonnegative_values CHECK (
-        stake_credits >= 0 AND created_at_unix >= 0 AND updated_at_unix >= 0 AND
+        stake_credits >= 0 AND activity_version >= 0 AND created_at_unix >= 0 AND updated_at_unix >= 0 AND
         (resolved_at_unix IS NULL OR resolved_at_unix >= 0)
     ),
     ADD CONSTRAINT scope_request_identity_values CHECK (
@@ -1025,7 +1093,21 @@ ALTER TABLE scope_requests
         audience IN ('Public', 'Private')
     );
 ALTER TABLE scope_request_events
-    ADD CONSTRAINT scope_request_event_time CHECK (created_at_unix >= 0);
+    ADD CONSTRAINT scope_request_event_values CHECK (position > 0 AND created_at_unix >= 0);
+ALTER TABLE scope_request_discussions
+    ADD CONSTRAINT scope_request_discussion_values CHECK (
+        opened_position > 0 AND last_activity_position >= opened_position AND
+        length(btrim(body_markdown)) > 0 AND status IN ('Open', 'Resolved') AND
+        created_at_unix >= 0 AND (resolved_at_unix IS NULL OR resolved_at_unix >= 0)
+    );
+ALTER TABLE scope_request_discussion_replies
+    ADD CONSTRAINT scope_request_discussion_reply_values CHECK (
+        position > 0 AND length(btrim(body_markdown)) > 0 AND created_at_unix >= 0
+    );
+ALTER TABLE scope_request_discussion_read_states
+    ADD CONSTRAINT scope_request_discussion_read_values CHECK (
+        read_through_position >= 0 AND updated_at_unix >= 0
+    );
 ALTER TABLE scope_user_credit_accounts
     ADD CONSTRAINT scope_user_credit_balance CHECK (balance_credits >= 0);
 ALTER TABLE scope_credit_ledger_entries

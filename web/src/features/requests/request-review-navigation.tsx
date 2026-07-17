@@ -1,11 +1,10 @@
 import { cn } from '@/lib/utils'
 
-export type RequestReviewView = 'overview' | 'changes' | 'activity'
+export type RequestReviewView = 'discussion' | 'changes'
 
 const items: Array<{ label: string; value: RequestReviewView }> = [
-  { label: 'Overview', value: 'overview' },
+  { label: 'Discussion', value: 'discussion' },
   { label: 'Changes', value: 'changes' },
-  { label: 'Activity', value: 'activity' },
 ]
 
 export function RequestReviewNavigation({

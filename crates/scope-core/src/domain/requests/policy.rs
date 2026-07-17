@@ -4,7 +4,9 @@ use serde::{Deserialize, Serialize};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct RequestPermissions {
-    pub can_comment: bool,
+    pub can_open_discussion: bool,
+    pub can_reply_to_discussion: bool,
+    pub can_edit_description: bool,
     pub can_pull_branch: bool,
     pub can_push_branch: bool,
     pub can_delete: bool,
@@ -71,7 +73,9 @@ pub fn request_permissions(
         RequestAudience::Private => maintainer,
     };
     RequestPermissions {
-        can_comment: visible && open && can_collaborate,
+        can_open_discussion: visible && open && can_collaborate,
+        can_reply_to_discussion: visible && open && can_collaborate,
+        can_edit_description: visible && open && (author || maintainer),
         can_pull_branch: visible,
         can_push_branch: visible && open && can_collaborate,
         can_delete: visible && open && (author || maintainer),

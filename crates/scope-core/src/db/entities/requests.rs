@@ -1,8 +1,9 @@
 use super::*;
 use crate::domain::requests::{
     CreditLedgerEntry, CreditLedgerEntryKind, Request, RequestActorRole, RequestAudience,
-    RequestDisposition, RequestEvent, RequestEventKind, RequestSettlement, RequestState,
-    UserCreditAccount,
+    RequestDiscussion, RequestDiscussionReadState, RequestDiscussionReply, RequestDiscussionStatus,
+    RequestDisposition, RequestEvent, RequestEventKind, RequestEventPayload, RequestSettlement,
+    RequestState, UserCreditAccount,
 };
 use crate::domain::store::SourceBlob;
 
@@ -23,7 +24,9 @@ pub mod request {
         pub head_oid: String,
         pub git_snapshot: Option<Json>,
         pub title: String,
+        pub description_markdown: String,
         pub state: String,
+        pub activity_version: i64,
         pub stake_credits: i32,
         pub disposition: Option<String>,
         pub settlement: Option<Json>,
@@ -50,7 +53,9 @@ pub mod request {
                 head_oid: request.head_oid.clone(),
                 git_snapshot: request.git_snapshot.as_ref().map(encode_json).transpose()?,
                 title: request.title.clone(),
+                description_markdown: request.description_markdown.clone(),
                 state: encode_enum(request.state)?,
+                activity_version: u64_to_i64(request.activity_version, "request activity version")?,
                 stake_credits: u32_to_i32(request.stake_credits, "request stake credits")?,
                 disposition: request.disposition.map(encode_enum).transpose()?,
                 settlement: request.settlement.as_ref().map(encode_json).transpose()?,
@@ -78,7 +83,9 @@ pub mod request {
                     .map(decode_json::<SourceBlob>)
                     .transpose()?,
                 title: self.title,
+                description_markdown: self.description_markdown,
                 state: decode_enum::<RequestState>(self.state)?,
+                activity_version: i64_to_u64(self.activity_version, "request activity version")?,
                 stake_credits: i32_to_u32(self.stake_credits, "request stake credits")?,
                 disposition: self
                     .disposition
@@ -110,9 +117,8 @@ pub mod request_event {
         pub request_id: String,
         pub actor_user_id: String,
         pub kind: String,
-        pub body: Option<String>,
-        pub old_head_oid: Option<String>,
-        pub new_head_oid: Option<String>,
+        pub position: i64,
+        pub payload: Json,
         pub created_at_unix: i64,
     }
 
@@ -128,9 +134,8 @@ pub mod request_event {
                 request_id: event.request_id.clone(),
                 actor_user_id: event.actor_user_id.clone(),
                 kind: encode_enum(event.kind)?,
-                body: event.body.clone(),
-                old_head_oid: event.old_head_oid.clone(),
-                new_head_oid: event.new_head_oid.clone(),
+                position: u64_to_i64(event.position, "request event position")?,
+                payload: encode_json(&event.payload)?,
                 created_at_unix: u64_to_i64(event.created_at_unix, "request event creation time")?,
             })
         }
@@ -141,10 +146,184 @@ pub mod request_event {
                 request_id: self.request_id,
                 actor_user_id: self.actor_user_id,
                 kind: decode_enum::<RequestEventKind>(self.kind)?,
-                body: self.body,
-                old_head_oid: self.old_head_oid,
-                new_head_oid: self.new_head_oid,
+                position: i64_to_u64(self.position, "request event position")?,
+                payload: decode_json::<RequestEventPayload>(self.payload)?,
                 created_at_unix: i64_to_u64(self.created_at_unix, "request event creation time")?,
+            })
+        }
+    }
+}
+
+pub mod request_discussion {
+    use super::*;
+
+    #[derive(Clone, Debug, PartialEq, DeriveEntityModel)]
+    #[sea_orm(table_name = "scope_request_discussions")]
+    pub struct Model {
+        #[sea_orm(primary_key, auto_increment = false)]
+        pub id: String,
+        pub request_id: String,
+        pub opened_position: i64,
+        pub last_activity_position: i64,
+        pub author_user_id: String,
+        pub body_markdown: String,
+        pub status: String,
+        pub client_discussion_id: String,
+        pub created_at_unix: i64,
+        pub resolved_at_unix: Option<i64>,
+        pub resolved_by_user_id: Option<String>,
+    }
+
+    #[derive(Copy, Clone, Debug, EnumIter, DeriveRelation)]
+    pub enum Relation {}
+
+    impl ActiveModelBehavior for ActiveModel {}
+
+    impl Model {
+        pub fn from_domain(value: &RequestDiscussion) -> Result<Self, ApiError> {
+            Ok(Self {
+                id: value.id.clone(),
+                request_id: value.request_id.clone(),
+                opened_position: u64_to_i64(value.opened_position, "discussion opened position")?,
+                last_activity_position: u64_to_i64(
+                    value.last_activity_position,
+                    "discussion last activity position",
+                )?,
+                author_user_id: value.author_user_id.clone(),
+                body_markdown: value.body_markdown.clone(),
+                status: encode_enum(value.status)?,
+                client_discussion_id: value.client_discussion_id.clone(),
+                created_at_unix: u64_to_i64(value.created_at_unix, "discussion creation time")?,
+                resolved_at_unix: value
+                    .resolved_at_unix
+                    .map(|time| u64_to_i64(time, "discussion resolution time"))
+                    .transpose()?,
+                resolved_by_user_id: value.resolved_by_user_id.clone(),
+            })
+        }
+
+        pub fn try_into_domain(self) -> Result<RequestDiscussion, ApiError> {
+            Ok(RequestDiscussion {
+                id: self.id,
+                request_id: self.request_id,
+                opened_position: i64_to_u64(self.opened_position, "discussion opened position")?,
+                last_activity_position: i64_to_u64(
+                    self.last_activity_position,
+                    "discussion last activity position",
+                )?,
+                author_user_id: self.author_user_id,
+                body_markdown: self.body_markdown,
+                status: decode_enum::<RequestDiscussionStatus>(self.status)?,
+                client_discussion_id: self.client_discussion_id,
+                created_at_unix: i64_to_u64(self.created_at_unix, "discussion creation time")?,
+                resolved_at_unix: self
+                    .resolved_at_unix
+                    .map(|time| i64_to_u64(time, "discussion resolution time"))
+                    .transpose()?,
+                resolved_by_user_id: self.resolved_by_user_id,
+            })
+        }
+    }
+}
+
+pub mod request_discussion_reply {
+    use super::*;
+
+    #[derive(Clone, Debug, PartialEq, DeriveEntityModel)]
+    #[sea_orm(table_name = "scope_request_discussion_replies")]
+    pub struct Model {
+        #[sea_orm(primary_key, auto_increment = false)]
+        pub id: String,
+        pub discussion_id: String,
+        pub position: i64,
+        pub author_user_id: String,
+        pub body_markdown: String,
+        pub reply_to_reply_id: Option<String>,
+        pub client_reply_id: String,
+        pub created_at_unix: i64,
+    }
+
+    #[derive(Copy, Clone, Debug, EnumIter, DeriveRelation)]
+    pub enum Relation {}
+
+    impl ActiveModelBehavior for ActiveModel {}
+
+    impl Model {
+        pub fn from_domain(value: &RequestDiscussionReply) -> Result<Self, ApiError> {
+            Ok(Self {
+                id: value.id.clone(),
+                discussion_id: value.discussion_id.clone(),
+                position: u64_to_i64(value.position, "discussion reply position")?,
+                author_user_id: value.author_user_id.clone(),
+                body_markdown: value.body_markdown.clone(),
+                reply_to_reply_id: value.reply_to_reply_id.clone(),
+                client_reply_id: value.client_reply_id.clone(),
+                created_at_unix: u64_to_i64(
+                    value.created_at_unix,
+                    "discussion reply creation time",
+                )?,
+            })
+        }
+
+        pub fn try_into_domain(self) -> Result<RequestDiscussionReply, ApiError> {
+            Ok(RequestDiscussionReply {
+                id: self.id,
+                discussion_id: self.discussion_id,
+                position: i64_to_u64(self.position, "discussion reply position")?,
+                author_user_id: self.author_user_id,
+                body_markdown: self.body_markdown,
+                reply_to_reply_id: self.reply_to_reply_id,
+                client_reply_id: self.client_reply_id,
+                created_at_unix: i64_to_u64(
+                    self.created_at_unix,
+                    "discussion reply creation time",
+                )?,
+            })
+        }
+    }
+}
+
+pub mod request_discussion_read_state {
+    use super::*;
+
+    #[derive(Clone, Debug, PartialEq, DeriveEntityModel)]
+    #[sea_orm(table_name = "scope_request_discussion_read_states")]
+    pub struct Model {
+        #[sea_orm(primary_key, auto_increment = false)]
+        pub discussion_id: String,
+        #[sea_orm(primary_key, auto_increment = false)]
+        pub user_id: String,
+        pub read_through_position: i64,
+        pub updated_at_unix: i64,
+    }
+
+    #[derive(Copy, Clone, Debug, EnumIter, DeriveRelation)]
+    pub enum Relation {}
+
+    impl ActiveModelBehavior for ActiveModel {}
+
+    impl Model {
+        pub fn from_domain(value: &RequestDiscussionReadState) -> Result<Self, ApiError> {
+            Ok(Self {
+                discussion_id: value.discussion_id.clone(),
+                user_id: value.user_id.clone(),
+                read_through_position: u64_to_i64(
+                    value.read_through_position,
+                    "discussion read position",
+                )?,
+                updated_at_unix: u64_to_i64(value.updated_at_unix, "discussion read time")?,
+            })
+        }
+
+        pub fn try_into_domain(self) -> Result<RequestDiscussionReadState, ApiError> {
+            Ok(RequestDiscussionReadState {
+                discussion_id: self.discussion_id,
+                user_id: self.user_id,
+                read_through_position: i64_to_u64(
+                    self.read_through_position,
+                    "discussion read position",
+                )?,
+                updated_at_unix: i64_to_u64(self.updated_at_unix, "discussion read time")?,
             })
         }
     }
