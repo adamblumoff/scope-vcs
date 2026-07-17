@@ -101,16 +101,8 @@ export function RequestDiscussionWorkbench({
           onSave={onDescriptionSave}
         />
 
-        <section aria-labelledby="discussion-heading">
-          <div className="flex flex-wrap items-end justify-between gap-4 border-b border-border px-5 py-4 lg:px-7">
-            <div>
-              <h2 className="text-base font-semibold" id="discussion-heading">
-                Discussion
-              </h2>
-              <p className="mt-1 text-sm text-muted-foreground">
-                Focused topics and one-level reply threads.
-              </p>
-            </div>
+        <section aria-label="Discussion">
+          <div className="flex flex-wrap justify-end gap-2 border-b border-border px-5 py-4 lg:px-7">
             <div className="flex flex-wrap items-center gap-2">
               {store.newActivity ? (
                 <Badge variant="info">New activity · order held</Badge>

@@ -1,6 +1,6 @@
 import { Button } from '@/components/ui/button'
 import { cn } from '@/lib/utils'
-import { Check, FileText, Pencil, X } from 'lucide-react'
+import { Check, Pencil, X } from 'lucide-react'
 import { type FormEvent, useState } from 'react'
 import { RequestDiscussionMarkdown } from './request-discussion-markdown'
 
@@ -32,12 +32,8 @@ export function RequestDescription({
 
   return (
     <section className="border-b border-border px-5 py-5 lg:px-7">
-      <div className="flex items-center justify-between gap-4">
-        <div className="flex items-center gap-2">
-          <FileText className="size-4 text-muted-foreground" />
-          <h2 className="text-sm font-semibold">Request description</h2>
-        </div>
-        {canEdit && !editing ? (
+      {canEdit && !editing ? (
+        <div className="flex justify-end">
           <Button
             onClick={() => {
               setDraft(description)
@@ -51,11 +47,11 @@ export function RequestDescription({
             <Pencil className="size-3.5" />
             Edit
           </Button>
-        ) : null}
-      </div>
+        </div>
+      ) : null}
 
       {editing ? (
-        <form className="mt-3" onSubmit={submit}>
+        <form onSubmit={submit}>
           <textarea
             aria-label="Request description"
             className={cn(
@@ -93,9 +89,9 @@ export function RequestDescription({
           ) : null}
         </form>
       ) : description ? (
-        <RequestDiscussionMarkdown className="mt-3 max-w-4xl" source={description} />
+        <RequestDiscussionMarkdown className="max-w-4xl" source={description} />
       ) : (
-        <p className="mt-3 text-sm leading-6 text-muted-foreground">
+        <p className="text-sm leading-6 text-muted-foreground">
           No description yet.
         </p>
       )}
