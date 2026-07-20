@@ -112,10 +112,10 @@ export function HistoryPage(props: HistoryPageProps) {
         ) : undefined}
         count={`${commits.length} ${commits.length === 1 ? 'commit' : 'commits'}${selectedCommit ? ` · ${changeCountLabel(selectedCommit.change_count)}` : ''}`}
         description={requestRevision
-          ? `Changed files for request ${requestRevision.request}.`
+          ? `Files for request ${requestRevision.request}.`
           : `Projected commit history for ${repoId}.`}
         eyebrow={requestRevision ? 'Request revision' : `${audienceLabel(audience)} view`}
-        title={requestRevision ? 'Code change' : 'History'}
+        title={requestRevision ? 'Revision' : 'History'}
       />
       <section className="px-4 pb-10 sm:px-6 lg:px-8">
         <div className="flex flex-col gap-3 border-b border-border py-4 sm:flex-row sm:items-center sm:justify-between">
@@ -736,7 +736,7 @@ function revisionCommitDetail(
       path: `/${file.path.replace(/^\/+/, '')}`,
     })),
     logical_commit_id: block.new_head_oid.slice(0, 12),
-    message: 'Request code change',
+    message: 'Request update',
     parent_projected_id: block.old_head_oid,
     projected_id: block.id,
     repo_id: repoId,

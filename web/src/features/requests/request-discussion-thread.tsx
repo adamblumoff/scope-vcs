@@ -6,6 +6,7 @@ import {
   ChevronDown,
   ChevronRight,
   CircleAlert,
+  GitCommitHorizontal,
   Link2,
   MessageSquare,
   Reply,
@@ -242,19 +243,35 @@ export const RequestDiscussionThread = memo(function RequestDiscussionThread({
 
   return (
     <article
-      className="request-discussion-thread scroll-mt-32 border-t border-border px-5 py-5 first:border-t-0 lg:px-7"
+      className={cn(
+        'request-discussion-thread scroll-mt-32 border-t px-5 first:border-t-0 lg:px-7',
+        discussion.change_block
+          ? 'border-brand/25 bg-brand-muted/45 py-4 shadow-[inset_3px_0_0_0_var(--brand)]'
+          : 'border-border py-5',
+      )}
       id={`discussion-${discussion.id}`}
       ref={articleRef}
     >
       <div className="flex min-w-0 items-start gap-3">
-        <ActorAvatar handle={discussion.author.handle} />
+        {discussion.change_block ? (
+          <ChangeEventMarker />
+        ) : (
+          <ActorAvatar handle={discussion.author.handle} />
+        )}
         <div className="min-w-0 flex-1">
           <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
             <span className="text-sm font-semibold">
               {discussion.author.handle}
             </span>
             {discussion.change_block ? (
-              <span className="text-sm text-muted-foreground">pushed a code change</span>
+              <>
+                <span className="text-sm text-muted-foreground">
+                  updated the request
+                </span>
+                <span className="font-mono text-xs font-medium tabular-nums text-foreground">
+                  {discussion.change_block.new_head_oid.slice(0, 8)}
+                </span>
+              </>
             ) : null}
             <span className="font-mono text-xs tabular-nums text-muted-foreground">
               {formatUnixDate(discussion.created_at_unix)}
@@ -536,6 +553,17 @@ function ActorAvatar({
       )}
     >
       {handle.slice(0, 2)}
+    </div>
+  )
+}
+
+function ChangeEventMarker() {
+  return (
+    <div
+      aria-hidden="true"
+      className="grid size-8 shrink-0 place-items-center rounded-md bg-brand text-brand-foreground shadow-sm"
+    >
+      <GitCommitHorizontal className="size-4" />
     </div>
   )
 }

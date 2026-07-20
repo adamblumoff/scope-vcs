@@ -204,6 +204,7 @@ test('mark read is monotonic in the client projection', () => {
 test('compact summary uses the first nonempty Markdown line', () => {
   assert.equal(compactDiscussionSummary('\n## Cache invalidation\nMore'), 'Cache invalidation')
   assert.equal(compactDiscussionSummary(' \n'), 'Untitled discussion')
+  assert.equal(compactDiscussionSummary(null), 'Update')
 })
 
 test('posting from a collapsed reply preview preserves existing replies', () => {

@@ -162,7 +162,7 @@ export function RequestDiscussionWorkbench({
                   No timeline activity yet
                 </h3>
                 <p className="mx-auto mt-1 max-w-md text-sm leading-6 text-muted-foreground">
-                  Code changes and conversations will appear here in order.
+                  Updates and conversations will appear here in order.
                 </p>
               </div>
             )}

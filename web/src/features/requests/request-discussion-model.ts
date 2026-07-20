@@ -180,7 +180,7 @@ export function orderedDiscussions(collection: DiscussionCollection) {
 }
 
 export function compactDiscussionSummary(body: string | null) {
-  if (!body) return 'Code change'
+  if (!body) return 'Update'
   return body
     .split('\n')
     .map((line) => line.trim().replace(/^#{1,6}\s+/, ''))
