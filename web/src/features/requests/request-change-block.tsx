@@ -1,6 +1,6 @@
 import type { RequestChangeBlockResponse } from '@/api/types.generated'
 import type { RequestChangeBlockFiles } from '@/api/types'
-import { loadRequestChangeBlockFilesForRequest } from '@/api/requests'
+import type { LoadRequestChangeBlockFilesInput } from '@/api/requests'
 import { Button } from '@/components/ui/button'
 import { cn } from '@/lib/utils'
 import { ChevronDown, ChevronRight, ExternalLink, FileCode2, LoaderCircle } from 'lucide-react'
@@ -8,9 +8,13 @@ import { useState } from 'react'
 
 export function RequestChangeBlock({
   block,
+  loadFiles: loadChangeBlockFiles,
   params,
 }: {
   block: RequestChangeBlockResponse
+  loadFiles: (
+    input: LoadRequestChangeBlockFilesInput,
+  ) => Promise<RequestChangeBlockFiles>
   params: { owner: string; repo: string; request_id: string }
 }) {
   const [expanded, setExpanded] = useState(false)
@@ -25,14 +29,14 @@ export function RequestChangeBlock({
     }
     setExpanded(true)
     if (files || loading) return
-    await loadFiles()
+    await fetchFiles()
   }
 
-  async function loadFiles() {
+  async function fetchFiles() {
     setLoading(true)
     setError(null)
     try {
-      setFiles(await loadRequestChangeBlockFilesForRequest({
+      setFiles(await loadChangeBlockFiles({
         ...params,
         block_id: block.id,
       }))
@@ -82,7 +86,7 @@ export function RequestChangeBlock({
           {error ? (
             <div className="flex items-center justify-between gap-3 text-sm text-destructive">
               <span>{error}</span>
-              <Button disabled={loading} onClick={() => void loadFiles()} size="sm" variant="secondary">
+              <Button disabled={loading} onClick={() => void fetchFiles()} size="sm" variant="secondary">
                 Retry
               </Button>
             </div>

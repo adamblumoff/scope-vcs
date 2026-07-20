@@ -61,6 +61,24 @@ test('realtime appends a new root without reordering visible roots', () => {
   assert.equal(patched.snapshotVersion, 8)
 })
 
+test('realtime inserts an unseen older root by its opened position', () => {
+  const collection = collectionFromPage({
+    discussions: [discussion('one', 5), discussion('two', 4)],
+    next_cursor: 'older',
+    snapshot_version: 5,
+  })
+  const older = {
+    ...discussion('older', 9),
+    opened_position: 3,
+  }
+  const patched = applyDiscussionChangesWithoutReordering(
+    collection,
+    [older],
+    9,
+  )
+  assert.deepEqual(patched.order, ['older', 'two', 'one'])
+})
+
 test('timeline keeps newly discovered resolved roots', () => {
   const collection = collectionFromPage({
     discussions: [discussion('one', 5)],

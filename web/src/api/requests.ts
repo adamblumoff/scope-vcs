@@ -41,12 +41,16 @@ export async function loadRequestForRequest(
 }
 
 export async function loadRequestChangeBlockFilesForRequest(
-  data: RequestParams & { block_id: string },
+  data: LoadRequestChangeBlockFilesInput,
 ): Promise<RequestChangeBlockFiles> {
   return createApiClient().get<RequestChangeBlockFiles>(
     requestChangeBlockRoute(ApiRouteTemplates.repoRequestChangeBlockFiles, data),
     { auth: 'optional' },
   )
+}
+
+export type LoadRequestChangeBlockFilesInput = RequestParams & {
+  block_id: string
 }
 
 export async function loadRequestChangeBlockFileDiffForRequest(

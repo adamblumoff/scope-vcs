@@ -48,6 +48,12 @@ async fn request_submission_and_resolution_update_credit_facts() {
         })
         .await
         .unwrap();
+    let revision_thread = store
+        .request_discussion("req_1", "thread_event_revision", Some("user_public"))
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(revision_thread.0.unread_count, 0);
     let mutation = store
         .resolve_request(ResolveRequestInput {
             request_id: "req_1".to_string(),
@@ -146,6 +152,12 @@ async fn discussion_transactions_are_idempotent_atomic_and_self_read() {
     let store = postgres_store();
     grant_public_credits(&store).await;
     submit_public_request(&store).await;
+    let submitted_thread = store
+        .request_discussion("req_1", "thread_event_created", Some("user_public"))
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(submitted_thread.0.unread_count, 0);
 
     let first = store
         .create_request_discussion(CreateRequestDiscussionInput {

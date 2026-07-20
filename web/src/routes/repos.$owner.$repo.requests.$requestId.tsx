@@ -15,6 +15,10 @@ import {
   respondToRequestForRequest,
 } from '@/api/repos'
 import {
+  type LoadRequestChangeBlockFilesInput,
+  loadRequestChangeBlockFilesForRequest,
+} from '@/api/requests'
+import {
   createRequestDiscussionForRequest,
   createRequestDiscussionReplyForRequest,
   type CreateDiscussionInput,
@@ -71,6 +75,10 @@ const loadReplies = createServerFn({ method: 'GET' })
 const loadDiscussionChanges = createServerFn({ method: 'GET' })
   .validator((data: ReturnType<typeof requestParamsForRoute> & { after: number }) => data)
   .handler(({ data }) => loadRequestDiscussionChangesForRequest(data))
+
+const loadChangeBlockFiles = createServerFn({ method: 'GET' })
+  .validator((data: LoadRequestChangeBlockFilesInput) => data)
+  .handler(({ data }) => loadRequestChangeBlockFilesForRequest(data))
 
 const createDiscussion = createServerFn({ method: 'POST' })
   .validator((data: CreateDiscussionInput) => data)
@@ -145,6 +153,7 @@ function RequestRoute() {
       discussionPage={page.discussionPage}
       live={live}
       loadActivity={() => loadActivity({ data: requestParamsForRoute(params) })}
+      loadChangeBlockFiles={(data) => loadChangeBlockFiles({ data })}
       loadDiscussions={(data) => loadDiscussions({ data })}
       loadDiscussionChanges={(data) => loadDiscussionChanges({ data })}
       loadReplies={(data) => loadReplies({ data })}

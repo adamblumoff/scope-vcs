@@ -91,12 +91,28 @@ export function replaceDiscussion(
   const found = collection.order.includes(previousId)
   const order = found
     ? collection.order.map((id) => id === previousId ? discussion.id : id)
-    : [...collection.order, discussion.id]
+    : insertByOpenedPosition(collection, discussion)
   return {
     ...collection,
     byId,
     order: unique(order),
   }
+}
+
+function insertByOpenedPosition(
+  collection: DiscussionCollection,
+  discussion: RequestDiscussionView,
+) {
+  const index = collection.order.findIndex((id) => {
+    const existing = collection.byId.get(id)
+    return existing && existing.opened_position > discussion.opened_position
+  })
+  if (index === -1) return [...collection.order, discussion.id]
+  return [
+    ...collection.order.slice(0, index),
+    discussion.id,
+    ...collection.order.slice(index),
+  ]
 }
 
 export function patchDiscussionWithoutReordering(

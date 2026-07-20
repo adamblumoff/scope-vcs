@@ -294,6 +294,13 @@ fn seed_owner_request(
     catalog
         .request_discussions
         .insert(submitted.discussion.id.clone(), submitted.discussion);
+    catalog.request_discussion_read_states.insert(
+        (
+            submitted.read_state.discussion_id.clone(),
+            submitted.read_state.user_id.clone(),
+        ),
+        submitted.read_state,
+    );
 
     match outcome {
         SeedRequestOutcome::Submitted => {}

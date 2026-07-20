@@ -1,4 +1,5 @@
-import type { RequestParams, RequestSummary } from '@/api/types'
+import type { RequestChangeBlockFiles, RequestParams, RequestSummary } from '@/api/types'
+import type { LoadRequestChangeBlockFilesInput } from '@/api/requests'
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
 import { cn } from '@/lib/utils'
@@ -38,6 +39,7 @@ export function RequestDiscussionWorkbench({
   description,
   header,
   initialPage,
+  loadChangeBlockFiles,
   onDescriptionSave,
   params,
   permissions,
@@ -52,6 +54,9 @@ export function RequestDiscussionWorkbench({
   description: string
   header: (controls: ReactNode) => ReactNode
   initialPage: RequestDiscussionPage
+  loadChangeBlockFiles: (
+    input: LoadRequestChangeBlockFilesInput,
+  ) => Promise<RequestChangeBlockFiles>
   onDescriptionSave: (description: string) => Promise<boolean>
   params: RequestParams
   permissions: {
@@ -143,6 +148,7 @@ export function RequestDiscussionWorkbench({
                     rootContent={discussion.change_block ? (
                       <RequestChangeBlock
                         block={discussion.change_block}
+                        loadFiles={loadChangeBlockFiles}
                         params={params}
                       />
                     ) : undefined}

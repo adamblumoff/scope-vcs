@@ -13,6 +13,11 @@ fn submission_creates_a_dormant_thread_that_opens_on_first_reply() {
     assert_eq!(mutation.change_block.git_snapshot, source_blob("head"));
     assert_eq!(mutation.discussion.opened_position, mutation.event.position);
     assert_eq!(mutation.discussion.status, RequestDiscussionStatus::Dormant);
+    assert_eq!(mutation.read_state.user_id, "author");
+    assert_eq!(
+        mutation.read_state.read_through_position,
+        mutation.discussion.opened_position
+    );
     assert!(matches!(
         mutation.discussion.subject,
         RequestDiscussionSubject::ChangeBlock { ref change_block_id }

@@ -1,9 +1,11 @@
 import type {
+  RequestChangeBlockFiles,
   User,
   RepoLiveState,
   RepoParams,
   RequestMutation,
 } from '@/api/types'
+import type { LoadRequestChangeBlockFilesInput } from '@/api/requests'
 import { DestructiveActionDialog } from '@/components/destructive-action-dialog'
 import { LifecycleBadge } from '@/components/lifecycle-badge'
 import { PageContent, PageHeader } from '@/components/page-header'
@@ -95,6 +97,9 @@ type RequestDetailPageProps = RequestActionsProps & {
   discussionPage: RequestDiscussionPage
   live: RepoLiveState
   loadActivity: () => Promise<RequestActivityPage>
+  loadChangeBlockFiles: (
+    input: LoadRequestChangeBlockFilesInput,
+  ) => Promise<RequestChangeBlockFiles>
   loadDiscussions: (
     input: LoadDiscussionsInput,
   ) => Promise<RequestDiscussionPage>
@@ -131,6 +136,7 @@ export function RequestDetailPage(props: RequestDetailPageProps) {
     discussionPage,
     live,
     loadActivity,
+    loadChangeBlockFiles,
     loadDiscussions,
     loadDiscussionChanges,
     loadReplies,
@@ -308,6 +314,7 @@ export function RequestDetailPage(props: RequestDetailPageProps) {
           description={description}
           header={requestHeader}
           initialPage={discussionPage}
+          loadChangeBlockFiles={loadChangeBlockFiles}
           onDescriptionSave={saveDescription}
           params={discussionParams}
           permissions={{

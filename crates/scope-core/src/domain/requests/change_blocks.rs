@@ -1,5 +1,6 @@
 use super::{
-    Request, RequestDiscussion, RequestDiscussionStatus, RequestDiscussionSubject, RequestEvent,
+    Request, RequestDiscussion, RequestDiscussionReadState, RequestDiscussionStatus,
+    RequestDiscussionSubject, RequestEvent,
 };
 use crate::{domain::store::SourceBlob, error::ApiError};
 use serde::{Deserialize, Serialize};
@@ -19,7 +20,14 @@ pub struct RequestChangeBlock {
 pub(super) fn submitted_change_block(
     request: &Request,
     event: &RequestEvent,
-) -> Result<(RequestChangeBlock, RequestDiscussion), ApiError> {
+) -> Result<
+    (
+        RequestChangeBlock,
+        RequestDiscussion,
+        RequestDiscussionReadState,
+    ),
+    ApiError,
+> {
     change_block(
         request,
         event,
@@ -33,7 +41,14 @@ pub(super) fn revision_change_block(
     event: &RequestEvent,
     old_head_oid: String,
     new_head_oid: String,
-) -> Result<(RequestChangeBlock, RequestDiscussion), ApiError> {
+) -> Result<
+    (
+        RequestChangeBlock,
+        RequestDiscussion,
+        RequestDiscussionReadState,
+    ),
+    ApiError,
+> {
     change_block(request, event, old_head_oid, new_head_oid)
 }
 
@@ -42,7 +57,14 @@ fn change_block(
     event: &RequestEvent,
     old_head_oid: String,
     new_head_oid: String,
-) -> Result<(RequestChangeBlock, RequestDiscussion), ApiError> {
+) -> Result<
+    (
+        RequestChangeBlock,
+        RequestDiscussion,
+        RequestDiscussionReadState,
+    ),
+    ApiError,
+> {
     let git_snapshot = request
         .git_snapshot
         .clone()
@@ -73,5 +95,11 @@ fn change_block(
         resolved_at_unix: None,
         resolved_by_user_id: None,
     };
-    Ok((block, discussion))
+    let read_state = RequestDiscussionReadState {
+        discussion_id: discussion.id.clone(),
+        user_id: block.actor_user_id.clone(),
+        read_through_position: block.position,
+        updated_at_unix: block.created_at_unix,
+    };
+    Ok((block, discussion, read_state))
 }

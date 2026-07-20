@@ -246,6 +246,7 @@ pub struct RequestRevisionMutation {
     pub event: RequestEvent,
     pub change_block: RequestChangeBlock,
     pub discussion: RequestDiscussion,
+    pub read_state: RequestDiscussionReadState,
 }
 
 #[derive(Clone, Debug)]
@@ -447,7 +448,7 @@ pub fn record_request_revision(
         },
         created_at_unix: input.now_unix,
     };
-    let (change_block, discussion) =
+    let (change_block, discussion, read_state) =
         change_blocks::revision_change_block(&request, &event, old_head_oid, input.new_head_oid)?;
     events.insert(event.id.clone(), event.clone());
     Ok(RequestRevisionMutation {
@@ -455,6 +456,7 @@ pub fn record_request_revision(
         event,
         change_block,
         discussion,
+        read_state,
     })
 }
 
