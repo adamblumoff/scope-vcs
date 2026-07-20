@@ -273,7 +273,7 @@ mod tests {
             })
             .await
             .unwrap();
-        assert_eq!(discussions.discussions.len(), 3);
+        assert_eq!(discussions.discussions.len(), 4);
         assert_eq!(
             discussions
                 .discussions
@@ -282,6 +282,13 @@ mod tests {
                 .count(),
             2
         );
+        let change_block = discussions
+            .discussions
+            .iter()
+            .find(|model| model.discussion.status == RequestDiscussionStatus::Dormant)
+            .unwrap();
+        assert!(change_block.change_block.is_some());
+        assert!(change_block.discussion.body_markdown.is_none());
         assert_eq!(
             discussions
                 .discussions
