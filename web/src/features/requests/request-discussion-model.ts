@@ -89,9 +89,19 @@ export function replaceDiscussion(
       previous?.initiallyResolved ?? discussion.status === 'Resolved',
   })
   const found = collection.order.includes(previousId)
-  const order = found
-    ? collection.order.map((id) => id === previousId ? discussion.id : id)
-    : insertByOpenedPosition(collection, discussion)
+  let order: string[]
+  if (found && previousId === discussion.id) {
+    order = collection.order
+  } else if (found) {
+    const withoutOptimistic = {
+      ...collection,
+      byId,
+      order: collection.order.filter((id) => id !== previousId),
+    }
+    order = insertByOpenedPosition(withoutOptimistic, discussion)
+  } else {
+    order = insertByOpenedPosition(collection, discussion)
+  }
   return {
     ...collection,
     byId,

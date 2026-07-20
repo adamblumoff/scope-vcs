@@ -154,6 +154,31 @@ test('optimistic roots are replaced in their visible position', () => {
   assert.deepEqual(pending.order, ['one', 'client-1'])
 })
 
+test('optimistic acknowledgement is ordered around concurrent roots', () => {
+  const collection = collectionFromPage({
+    discussions: [discussion('one', 5)],
+    next_cursor: null,
+    snapshot_version: 5,
+  })
+  const optimistic = {
+    ...discussion('client-1', Number.MAX_SAFE_INTEGER),
+    pending: 'sending' as const,
+  }
+  const pending = insertOptimisticDiscussion(collection, optimistic)
+  const withConcurrentRoot = replaceDiscussion(
+    pending,
+    discussion('later', 7),
+  )
+
+  const acknowledged = replaceDiscussion(
+    withConcurrentRoot,
+    discussion('acknowledged', 6),
+    'client-1',
+  )
+
+  assert.deepEqual(acknowledged.order, ['one', 'acknowledged', 'later'])
+})
+
 test('mutation responses do not advance the authoritative catch-up cursor', () => {
   const collection = collectionFromPage({
     discussions: [discussion('one', 5)],
