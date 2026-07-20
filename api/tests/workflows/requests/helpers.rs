@@ -93,7 +93,7 @@ pub(super) async fn public_merge_fixture(
             actor_can_edit: true,
             expected_old_head_oid: Some(request_head.clone()),
             new_head_oid: request_head.clone(),
-            git_snapshot: Some(request_snapshot),
+            git_snapshot: request_snapshot,
             event_id: format!("event_{request_id}_revision"),
             body: None,
             now_unix: 3,

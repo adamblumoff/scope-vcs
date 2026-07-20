@@ -234,7 +234,7 @@ pub struct RecordRequestRevisionInput {
     pub actor_can_edit: bool,
     pub expected_old_head_oid: Option<String>,
     pub new_head_oid: String,
-    pub git_snapshot: Option<SourceBlob>,
+    pub git_snapshot: SourceBlob,
     pub event_id: String,
     pub body: Option<String>,
     pub now_unix: u64,
@@ -423,12 +423,15 @@ pub fn record_request_revision(
         }
         _ => {}
     }
+    if input.git_snapshot.git_oid != input.new_head_oid {
+        return Err(ApiError::conflict(
+            "request revision snapshot does not match the new head",
+        ));
+    }
 
     let old_head_oid = request.head_oid.clone();
     request.head_oid = input.new_head_oid.clone();
-    if input.git_snapshot.is_some() {
-        request.git_snapshot = input.git_snapshot.clone();
-    }
+    request.git_snapshot = Some(input.git_snapshot.clone());
     request.updated_at_unix = input.now_unix;
     if request.state == RequestState::NeedsResponse {
         request.state = RequestState::Submitted;

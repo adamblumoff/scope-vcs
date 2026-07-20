@@ -41,7 +41,7 @@ async fn request_submission_and_resolution_update_credit_facts() {
             actor_can_edit: true,
             expected_old_head_oid: Some("head".to_string()),
             new_head_oid: "head_2".to_string(),
-            git_snapshot: None,
+            git_snapshot: source_blob("head_2"),
             event_id: "event_revision".to_string(),
             body: None,
             now_unix: 2,

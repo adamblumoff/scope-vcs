@@ -305,7 +305,7 @@ pub(crate) async fn persist_request_ref_revision(
                 actor_can_edit: false,
                 expected_old_head_oid: update.old_head_oid.clone(),
                 new_head_oid: update.new_head_oid.clone(),
-                git_snapshot: Some(persisted.git_snapshot.clone()),
+                git_snapshot: persisted.git_snapshot.clone(),
                 event_id: request_revision_event_id()?,
                 body: None,
                 now_unix,

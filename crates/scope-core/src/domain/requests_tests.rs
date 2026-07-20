@@ -225,7 +225,7 @@ fn revision_reopens_needs_response_request() {
     let mut events = BTreeMap::new();
 
     let mut input = revision_input("head");
-    input.git_snapshot = Some(source_blob("new_head"));
+    input.git_snapshot = source_blob("new_head");
     let mutation = record_request_revision(&mut requests, &mut events, input).unwrap();
 
     assert_eq!(mutation.request.state, RequestState::Submitted);
@@ -258,6 +258,20 @@ fn revision_rejects_stale_expected_head() {
         .unwrap_err();
 
     assert!(error.message.contains("fetch and retry"));
+    assert_eq!(requests.get("req_1").unwrap().head_oid, "head");
+    assert!(events.is_empty());
+}
+
+#[test]
+fn revision_rejects_a_snapshot_for_a_different_head() {
+    let mut requests = BTreeMap::from([("req_1".to_string(), submitted_request())]);
+    let mut events = BTreeMap::new();
+    let mut input = revision_input("head");
+    input.git_snapshot = source_blob("different_head");
+
+    let error = record_request_revision(&mut requests, &mut events, input).unwrap_err();
+
+    assert!(error.message.contains("snapshot does not match"));
     assert_eq!(requests.get("req_1").unwrap().head_oid, "head");
     assert!(events.is_empty());
 }
@@ -941,7 +955,7 @@ fn revision_input(expected_head: &str) -> RecordRequestRevisionInput {
         actor_can_edit: true,
         expected_old_head_oid: Some(expected_head.to_string()),
         new_head_oid: "new_head".to_string(),
-        git_snapshot: None,
+        git_snapshot: source_blob("new_head"),
         event_id: "event_revision".to_string(),
         body: None,
         now_unix: 20,
