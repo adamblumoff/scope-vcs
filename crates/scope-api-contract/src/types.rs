@@ -424,23 +424,6 @@ pub struct RequestActorSummaryResponse {
     pub handle: String,
 }
 
-#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
-#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
-#[serde(rename_all = "snake_case")]
-pub enum RequestDiscussionStatusFilter {
-    Open,
-    Resolved,
-    All,
-}
-
-#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
-#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
-#[serde(rename_all = "snake_case")]
-pub enum RequestDiscussionSort {
-    Recent,
-    Newest,
-}
-
 #[derive(Clone, Debug, Deserialize, Serialize)]
 #[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 pub struct RequestDiscussionReplyResponse {
@@ -461,7 +444,8 @@ pub struct RequestDiscussionSummaryResponse {
     pub opened_position: u64,
     pub last_activity_position: u64,
     pub author: RequestActorSummaryResponse,
-    pub body_markdown: String,
+    pub body_markdown: Option<String>,
+    pub change_block: Option<RequestChangeBlockResponse>,
     pub status: RequestDiscussionStatus,
     pub reply_count: u64,
     pub unread_count: u64,
@@ -469,6 +453,16 @@ pub struct RequestDiscussionSummaryResponse {
     pub created_at_unix: u64,
     pub resolved_at_unix: Option<u64>,
     pub resolved_by: Option<RequestActorSummaryResponse>,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
+pub struct RequestChangeBlockResponse {
+    pub id: String,
+    pub position: u64,
+    pub old_head_oid: String,
+    pub new_head_oid: String,
+    pub created_at_unix: u64,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]

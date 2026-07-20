@@ -224,8 +224,9 @@ fn revision_reopens_needs_response_request() {
     requests.get_mut("req_1").unwrap().state = RequestState::NeedsResponse;
     let mut events = BTreeMap::new();
 
-    let mutation =
-        record_request_revision(&mut requests, &mut events, revision_input("head")).unwrap();
+    let mut input = revision_input("head");
+    input.git_snapshot = Some(source_blob("new_head"));
+    let mutation = record_request_revision(&mut requests, &mut events, input).unwrap();
 
     assert_eq!(mutation.request.state, RequestState::Submitted);
     assert!(matches!(
@@ -236,6 +237,16 @@ fn revision_reopens_needs_response_request() {
             ..
         } if old_head_oid == "head" && new_head_oid == "new_head"
     ));
+    assert_eq!(mutation.change_block.old_head_oid, "head");
+    assert_eq!(mutation.change_block.new_head_oid, "new_head");
+    assert_eq!(mutation.change_block.git_snapshot, source_blob("new_head"));
+    assert!(matches!(
+        mutation.discussion.subject,
+        RequestDiscussionSubject::ChangeBlock { ref change_block_id }
+            if change_block_id == &mutation.change_block.id
+    ));
+    assert_eq!(mutation.discussion.status, RequestDiscussionStatus::Dormant);
+    assert_eq!(mutation.discussion.body_markdown, None);
 }
 
 #[test]

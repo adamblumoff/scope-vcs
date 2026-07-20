@@ -25,8 +25,6 @@ export {
 export {
   deleteRequestForRequest,
   loadRequestForRequest,
-  loadRequestChangesForRequest,
-  loadRequestFileDiffForRequest,
   loadRequestsForRequest,
   markRequestNeedsResponseForRequest,
   mergeRequestForRequest,

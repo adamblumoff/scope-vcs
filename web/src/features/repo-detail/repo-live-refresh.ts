@@ -167,7 +167,7 @@ export function createRepoRefreshCoordinator({
         event.repo_id !== repoId ||
         event.kind === 'Connected' ||
         typeof event.kind === 'object' &&
-          'RequestDiscussionChanged' in event.kind
+          'RequestTimelineChanged' in event.kind
       ) {
         return
       }
@@ -284,8 +284,8 @@ function isRepoChangeKind(value: unknown): value is RepoChangeEvent['kind'] {
       typeof changed.reason === 'string'
     )
   }
-  if ('RequestDiscussionChanged' in value) {
-    const changed = value.RequestDiscussionChanged
+  if ('RequestTimelineChanged' in value) {
+    const changed = value.RequestTimelineChanged
     return (
       !!changed &&
       typeof changed === 'object' &&

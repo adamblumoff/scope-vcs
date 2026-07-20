@@ -1,9 +1,9 @@
 use super::*;
 use crate::domain::requests::{
     CreditLedgerEntry, CreditLedgerEntryKind, Request, RequestActorRole, RequestAudience,
-    RequestDiscussion, RequestDiscussionReadState, RequestDiscussionReply, RequestDiscussionStatus,
-    RequestDisposition, RequestEvent, RequestEventKind, RequestEventPayload, RequestSettlement,
-    RequestState, UserCreditAccount,
+    RequestChangeBlock, RequestDiscussion, RequestDiscussionReadState, RequestDiscussionReply,
+    RequestDiscussionStatus, RequestDiscussionSubject, RequestDisposition, RequestEvent,
+    RequestEventKind, RequestEventPayload, RequestSettlement, RequestState, UserCreditAccount,
 };
 use crate::domain::store::SourceBlob;
 
@@ -106,6 +106,63 @@ pub mod request {
     }
 }
 
+pub mod request_change_block {
+    use super::*;
+
+    #[derive(Clone, Debug, PartialEq, DeriveEntityModel)]
+    #[sea_orm(table_name = "scope_request_change_blocks")]
+    pub struct Model {
+        #[sea_orm(primary_key, auto_increment = false)]
+        pub id: String,
+        pub request_id: String,
+        pub position: i64,
+        pub actor_user_id: String,
+        pub old_head_oid: String,
+        pub new_head_oid: String,
+        pub git_snapshot: Json,
+        pub created_at_unix: i64,
+    }
+
+    #[derive(Copy, Clone, Debug, EnumIter, DeriveRelation)]
+    pub enum Relation {}
+
+    impl ActiveModelBehavior for ActiveModel {}
+
+    impl Model {
+        pub fn from_domain(value: &RequestChangeBlock) -> Result<Self, ApiError> {
+            Ok(Self {
+                id: value.id.clone(),
+                request_id: value.request_id.clone(),
+                position: u64_to_i64(value.position, "request change block position")?,
+                actor_user_id: value.actor_user_id.clone(),
+                old_head_oid: value.old_head_oid.clone(),
+                new_head_oid: value.new_head_oid.clone(),
+                git_snapshot: encode_json(&value.git_snapshot)?,
+                created_at_unix: u64_to_i64(
+                    value.created_at_unix,
+                    "request change block creation time",
+                )?,
+            })
+        }
+
+        pub fn try_into_domain(self) -> Result<RequestChangeBlock, ApiError> {
+            Ok(RequestChangeBlock {
+                id: self.id,
+                request_id: self.request_id,
+                position: i64_to_u64(self.position, "request change block position")?,
+                actor_user_id: self.actor_user_id,
+                old_head_oid: self.old_head_oid,
+                new_head_oid: self.new_head_oid,
+                git_snapshot: decode_json::<SourceBlob>(self.git_snapshot)?,
+                created_at_unix: i64_to_u64(
+                    self.created_at_unix,
+                    "request change block creation time",
+                )?,
+            })
+        }
+    }
+}
+
 pub mod request_event {
     use super::*;
 
@@ -166,7 +223,8 @@ pub mod request_discussion {
         pub opened_position: i64,
         pub last_activity_position: i64,
         pub author_user_id: String,
-        pub body_markdown: String,
+        pub subject: Json,
+        pub body_markdown: Option<String>,
         pub status: String,
         pub client_discussion_id: String,
         pub created_at_unix: i64,
@@ -190,6 +248,7 @@ pub mod request_discussion {
                     "discussion last activity position",
                 )?,
                 author_user_id: value.author_user_id.clone(),
+                subject: encode_json(&value.subject)?,
                 body_markdown: value.body_markdown.clone(),
                 status: encode_enum(value.status)?,
                 client_discussion_id: value.client_discussion_id.clone(),
@@ -212,6 +271,7 @@ pub mod request_discussion {
                     "discussion last activity position",
                 )?,
                 author_user_id: self.author_user_id,
+                subject: decode_json::<RequestDiscussionSubject>(self.subject)?,
                 body_markdown: self.body_markdown,
                 status: decode_enum::<RequestDiscussionStatus>(self.status)?,
                 client_discussion_id: self.client_discussion_id,

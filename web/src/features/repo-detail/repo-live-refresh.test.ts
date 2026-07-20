@@ -19,7 +19,7 @@ const laggedEvent = (repo_id = 'owner/repo') =>
 const discussionEvent = (version: number) =>
   ({
     kind: {
-      RequestDiscussionChanged: {
+      RequestTimelineChanged: {
         audience: 'Public',
         discussion_id: 'discussion-1',
         request_id: 'request-1',
@@ -43,7 +43,7 @@ test('SSE parsing validates events and retains partial messages', () => {
     'event: other\ndata: {}',
     'event: repo-change\ndata: {',
     'event: repo-change\ndata: {"repo_id":1,"version":2,"kind":"Connected"}',
-    'event: repo-change\ndata: {"repo_id":"owner/repo","version":2,"kind":{"RequestDiscussionChanged":{"request_id":"request-1"}}}',
+    'event: repo-change\ndata: {"repo_id":"owner/repo","version":2,"kind":{"RequestTimelineChanged":{"request_id":"request-1"}}}',
   ]) assert.equal(parseRepoChangeEvent(message), null)
   assert.deepEqual(takeSseMessages('event: one\n\nevent: two'), {
     messages: ['event: one'],

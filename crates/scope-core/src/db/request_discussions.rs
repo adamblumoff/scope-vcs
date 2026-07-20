@@ -1,6 +1,7 @@
 use super::{
     MetadataStore, acquire_aggregate_lock,
     request_access::{ensure_request_collaborator, ensure_user_exists, repo_by_id},
+    request_change_block_rows::{change_block_by_id, change_blocks_by_ids},
     request_discussion_rows::{
         changed_discussions_for_request, discussion_by_client_id, discussion_by_id,
         discussions_page_for_request, insert_discussion, insert_reply, read_state,
@@ -16,9 +17,10 @@ use crate::{
         CreateRequestDiscussionInput, CreateRequestDiscussionMutation,
         CreateRequestDiscussionReplyInput, CreateRequestDiscussionReplyMutation,
         MarkRequestDiscussionReadInput, ReopenAndReplyToRequestDiscussionInput,
-        ReopenRequestDiscussionInput, RequestDiscussion, RequestDiscussionReadState,
-        RequestDiscussionReply, RequestDiscussionStatus, ResolveRequestDiscussionInput,
-        create_request_discussion, create_request_discussion_reply, mark_request_discussion_read,
+        ReopenRequestDiscussionInput, RequestChangeBlock, RequestDiscussion,
+        RequestDiscussionReadState, RequestDiscussionReply, RequestDiscussionStatus,
+        RequestDiscussionSubject, ResolveRequestDiscussionInput, create_request_discussion,
+        create_request_discussion_reply, mark_request_discussion_read,
         reopen_and_reply_to_request_discussion, reopen_request_discussion,
         resolve_request_discussion,
     },
@@ -31,6 +33,7 @@ use std::{collections::BTreeMap, sync::Arc};
 #[derive(Clone, Debug)]
 pub struct RequestDiscussionReadModel {
     pub discussion: RequestDiscussion,
+    pub change_block: Option<RequestChangeBlock>,
     pub reply_count: u64,
     pub latest_replies: Vec<RequestDiscussionReply>,
     pub unread_count: u64,
@@ -135,6 +138,16 @@ impl MetadataStore {
             None => BTreeMap::new(),
         };
         let previews = reply_previews_for_discussions(self.db.as_ref(), &ids).await?;
+        let change_block_ids = discussions
+            .iter()
+            .filter_map(|discussion| match &discussion.subject {
+                RequestDiscussionSubject::Comment => None,
+                RequestDiscussionSubject::ChangeBlock { change_block_id } => {
+                    Some(change_block_id.clone())
+                }
+            })
+            .collect::<Vec<_>>();
+        let change_blocks = change_blocks_by_ids(self.db.as_ref(), &change_block_ids).await?;
         let unread_counts = match viewer_user_id {
             Some(_) => unread_content_counts(self.db.as_ref(), &discussions, &read_states).await?,
             None => BTreeMap::new(),
@@ -160,6 +173,14 @@ impl MetadataStore {
             );
             let unread_count = unread_counts.get(&discussion.id).copied().unwrap_or(0);
             models.push(RequestDiscussionReadModel {
+                change_block: match &discussion.subject {
+                    RequestDiscussionSubject::Comment => None,
+                    RequestDiscussionSubject::ChangeBlock { change_block_id } => {
+                        Some(change_blocks.get(change_block_id).cloned().ok_or_else(|| {
+                            ApiError::internal_message("request change block subject is missing")
+                        })?)
+                    }
+                },
                 sort_position: discussion.last_activity_position,
                 discussion,
                 reply_count,
@@ -195,6 +216,16 @@ impl MetadataStore {
         user_ids: impl IntoIterator<Item = String>,
     ) -> Result<BTreeMap<String, UserAccount>, ApiError> {
         load_users_by_ids(self.db.as_ref(), user_ids).await
+    }
+
+    pub async fn request_change_block(
+        &self,
+        request_id: &str,
+        block_id: &str,
+    ) -> Result<Option<RequestChangeBlock>, ApiError> {
+        Ok(change_block_by_id(self.db.as_ref(), block_id)
+            .await?
+            .filter(|block| block.request_id == request_id))
     }
 
     pub async fn create_request_discussion(

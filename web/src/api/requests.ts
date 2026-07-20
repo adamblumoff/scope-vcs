@@ -6,7 +6,7 @@ import type {
   RepoParams,
   RequestDetail,
   RequestDelete,
-  RequestChanges,
+  RequestChangeBlockFiles,
   RequestList,
   RequestMutation,
   ReviewFileDiff,
@@ -40,20 +40,20 @@ export async function loadRequestForRequest(
   })
 }
 
-export async function loadRequestChangesForRequest(
-  data: RequestParams,
-): Promise<RequestChanges> {
-  return createApiClient().get<RequestChanges>(
-    requestRoute(ApiRouteTemplates.repoRequestChanges, data),
+export async function loadRequestChangeBlockFilesForRequest(
+  data: RequestParams & { block_id: string },
+): Promise<RequestChangeBlockFiles> {
+  return createApiClient().get<RequestChangeBlockFiles>(
+    requestChangeBlockRoute(ApiRouteTemplates.repoRequestChangeBlockFiles, data),
     { auth: 'optional' },
   )
 }
 
-export async function loadRequestFileDiffForRequest(
-  data: RequestParams & { path: string },
+export async function loadRequestChangeBlockFileDiffForRequest(
+  data: RequestParams & { block_id: string; path: string },
 ): Promise<ReviewFileDiff> {
   return createApiClient().get<ReviewFileDiff>(
-    `${requestRoute(ApiRouteTemplates.repoRequestFileDiff, data)}?path=${encodeURIComponent(data.path)}`,
+    `${requestChangeBlockRoute(ApiRouteTemplates.repoRequestChangeBlockFileDiff, data)}?path=${encodeURIComponent(data.path)}`,
     { auth: 'optional' },
   )
 }
@@ -131,6 +131,18 @@ function requestPath(data: RequestParams) {
 
 function requestRoute(template: string, data: RequestParams) {
   return buildApiPath(template, {
+    owner: data.owner,
+    repo: data.repo,
+    request_id: data.request_id,
+  })
+}
+
+function requestChangeBlockRoute(
+  template: string,
+  data: RequestParams & { block_id: string },
+) {
+  return buildApiPath(template, {
+    block_id: data.block_id,
     owner: data.owner,
     repo: data.repo,
     request_id: data.request_id,

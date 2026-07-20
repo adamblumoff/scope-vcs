@@ -1,6 +1,5 @@
 import type {
   RequestDiscussion,
-  RequestDiscussionFilter,
   RequestDiscussionPage,
   RequestDiscussionReplyView,
   RequestDiscussionView,
@@ -17,7 +16,8 @@ export function collectionFromPage(
   page: RequestDiscussionPage,
 ): DiscussionCollection {
   const byId = new Map<string, RequestDiscussionView>()
-  for (const discussion of page.discussions) {
+  const discussions = [...page.discussions].reverse()
+  for (const discussion of discussions) {
     byId.set(discussion.id, {
       ...discussion,
       initiallyResolved: discussion.status === 'Resolved',
@@ -26,7 +26,7 @@ export function collectionFromPage(
   return {
     byId,
     nextCursor: page.next_cursor,
-    order: page.discussions.map(({ id }) => id),
+    order: discussions.map(({ id }) => id),
     snapshotVersion: page.snapshot_version,
   }
 }
@@ -37,8 +37,9 @@ export function appendDiscussionPage(
 ): DiscussionCollection {
   const byId = new Map(collection.byId)
   const seen = new Set(collection.order)
-  const order = [...collection.order]
-  for (const discussion of page.discussions) {
+  const older = [...page.discussions].reverse()
+  const added: string[] = []
+  for (const discussion of older) {
     const previous = byId.get(discussion.id)
     byId.set(discussion.id, {
       ...discussion,
@@ -47,13 +48,13 @@ export function appendDiscussionPage(
     })
     if (!seen.has(discussion.id)) {
       seen.add(discussion.id)
-      order.push(discussion.id)
+      added.push(discussion.id)
     }
   }
   return {
     byId,
     nextCursor: page.next_cursor,
-    order,
+    order: [...added, ...collection.order],
     snapshotVersion: Math.max(
       collection.snapshotVersion,
       page.snapshot_version,
@@ -70,7 +71,7 @@ export function insertOptimisticDiscussion(
   return {
     ...collection,
     byId,
-    order: [discussion.id, ...collection.order.filter((id) => id !== discussion.id)],
+    order: [...collection.order.filter((id) => id !== discussion.id), discussion.id],
   }
 }
 
@@ -108,23 +109,18 @@ export function patchDiscussionWithoutReordering(
 export function patchDiscussionForFilter(
   collection: DiscussionCollection,
   discussion: RequestDiscussion,
-  filter: RequestDiscussionFilter,
 ): DiscussionCollection {
-  if (filter === 'Open' && discussion.status === 'Resolved') {
-    return removeDiscussion(collection, discussion.id)
-  }
   return patchDiscussionWithoutReordering(collection, discussion)
 }
 
 export function applyDiscussionChangesWithoutReordering(
   collection: DiscussionCollection,
   discussions: RequestDiscussion[],
-  filter: RequestDiscussionFilter,
   throughPosition: number,
 ): DiscussionCollection {
   let next = collection
   for (const discussion of discussions) {
-    next = patchDiscussionForFilter(next, discussion, filter)
+    next = patchDiscussionForFilter(next, discussion)
   }
   return {
     ...next,
@@ -157,7 +153,8 @@ export function orderedDiscussions(collection: DiscussionCollection) {
   })
 }
 
-export function compactDiscussionSummary(body: string) {
+export function compactDiscussionSummary(body: string | null) {
+  if (!body) return 'Code change'
   return body
     .split('\n')
     .map((line) => line.trim().replace(/^#{1,6}\s+/, ''))
@@ -198,18 +195,4 @@ export function mergeDiscussionReplies(
 
 function unique(values: string[]) {
   return [...new Set(values)]
-}
-
-function removeDiscussion(
-  collection: DiscussionCollection,
-  discussionId: string,
-): DiscussionCollection {
-  if (!collection.byId.has(discussionId)) return collection
-  const byId = new Map(collection.byId)
-  byId.delete(discussionId)
-  return {
-    ...collection,
-    byId,
-    order: collection.order.filter((id) => id !== discussionId),
-  }
 }

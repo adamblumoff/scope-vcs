@@ -3,6 +3,7 @@ import type {
   CreateRequestDiscussionRequest,
   RequestActivityPageResponse,
   RequestActorSummaryResponse,
+  RequestChangeBlockFilesResponse,
   RequestDiscussionChangesResponse,
   RequestDiscussionMutationResponse,
   RequestDiscussionPageResponse,
@@ -15,18 +16,27 @@ import type {
 
 export type RequestActorSummary = RequestActorSummaryResponse
 export type { RequestDiscussionStatus }
-export type RequestDiscussionSort = 'Newest' | 'Recent'
-export type RequestDiscussionFilter = 'All' | 'Open'
 
 export type RequestDiscussionReply = RequestDiscussionReplyResponse
-export type RequestDiscussion = RequestDiscussionSummaryResponse
-export type RequestDiscussionPage = RequestDiscussionPageResponse
-export type RequestDiscussionChanges = RequestDiscussionChangesResponse
+export type RequestDiscussion = Omit<RequestDiscussionSummaryResponse, 'change_block'> & {
+  change_block?: RequestDiscussionSummaryResponse['change_block']
+}
+export type RequestDiscussionPage = Omit<RequestDiscussionPageResponse, 'discussions'> & {
+  discussions: RequestDiscussion[]
+}
+export type RequestDiscussionChanges = Omit<RequestDiscussionChangesResponse, 'discussions'> & {
+  discussions: RequestDiscussion[]
+}
 export type RequestDiscussionReadState = RequestDiscussionReadResponse
-export type RequestDiscussionMutation = RequestDiscussionMutationResponse
+export type RequestDiscussionMutation = Omit<RequestDiscussionMutationResponse, 'discussion'> & {
+  discussion: RequestDiscussion
+}
 export type RequestDiscussionReplyMutation =
-  RequestDiscussionReplyMutationResponse
+  Omit<RequestDiscussionReplyMutationResponse, 'discussion'> & {
+    discussion: RequestDiscussion
+  }
 export type RequestActivityPage = RequestActivityPageResponse
+export type { RequestChangeBlockFilesResponse }
 
 export type DiscussionPendingState = 'failed' | 'sending'
 

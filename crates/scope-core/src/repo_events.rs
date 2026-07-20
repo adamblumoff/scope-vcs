@@ -27,7 +27,7 @@ pub enum RepoChangeKind {
     RepositoryChanged {
         reason: String,
     },
-    RequestDiscussionChanged {
+    RequestTimelineChanged {
         request_id: String,
         discussion_id: String,
         through_position: u64,
@@ -50,7 +50,7 @@ impl RepoChangeEvent {
         }
     }
 
-    pub fn request_discussion_changed(
+    pub fn request_timeline_changed(
         repo_id: &str,
         request_id: String,
         discussion_id: String,
@@ -60,7 +60,7 @@ impl RepoChangeEvent {
         Self {
             repo_id: repo_id.to_string(),
             version: 0,
-            kind: RepoChangeKind::RequestDiscussionChanged {
+            kind: RepoChangeKind::RequestTimelineChanged {
                 request_id,
                 discussion_id,
                 through_position,

@@ -6,6 +6,8 @@ pub mod repo_actions;
 pub mod repo_collaboration;
 pub mod repo_config;
 pub mod repo_visibility;
+#[cfg(test)]
+mod request_change_block_tests;
 pub mod requests;
 #[cfg(test)]
 mod requests_tests;

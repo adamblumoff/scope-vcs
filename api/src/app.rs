@@ -99,12 +99,12 @@ pub fn router(state: AppState) -> Router {
             get(http::requests::get_request).delete(http::requests::delete_request),
         )
         .route(
-            routes::REPO_REQUEST_CHANGES,
-            get(http::request_review::get_request_changes),
+            routes::REPO_REQUEST_CHANGE_BLOCK_FILES,
+            get(http::request_review::get_request_change_block_files),
         )
         .route(
-            routes::REPO_REQUEST_FILE_DIFF,
-            get(http::request_review::get_request_file_diff),
+            routes::REPO_REQUEST_CHANGE_BLOCK_FILE_DIFF,
+            get(http::request_review::get_request_change_block_file_diff),
         )
         .route(
             routes::REPO_REQUEST_SUBMIT,

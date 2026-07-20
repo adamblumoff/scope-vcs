@@ -1,9 +1,9 @@
 use super::settlement::{maximum_request_reward, u32_to_i32};
 use super::{
     CreditLedgerEntry, CreditLedgerEntryKind, Request, RequestActorRole, RequestAudience,
-    RequestEvent, RequestEventKind, RequestEventPayload, RequestState, UserCreditAccount,
-    advance_request_activity, ensure_event_id_available, ensure_ledger_entry_id_available,
-    ensure_request_name_available, validate_required_id,
+    RequestChangeBlock, RequestDiscussion, RequestEvent, RequestEventKind, RequestEventPayload,
+    RequestState, UserCreditAccount, advance_request_activity, ensure_event_id_available,
+    ensure_ledger_entry_id_available, ensure_request_name_available, validate_required_id,
 };
 use crate::{domain::store::SourceBlob, error::ApiError};
 use std::collections::BTreeMap;
@@ -60,6 +60,8 @@ pub struct SubmitRequestInput {
 pub struct SubmitRequestMutation {
     pub request: Request,
     pub event: RequestEvent,
+    pub change_block: RequestChangeBlock,
+    pub discussion: RequestDiscussion,
     pub account: Option<UserCreditAccount>,
     pub ledger_entry: Option<CreditLedgerEntry>,
 }
@@ -250,9 +252,13 @@ pub fn submit_request(
         ledger_entries.insert(entry.id.clone(), entry);
     }
     events.insert(event.id.clone(), event.clone());
+    let (change_block, discussion) =
+        super::change_blocks::submitted_change_block(&request, &event)?;
     Ok(SubmitRequestMutation {
         request,
         event,
+        change_block,
+        discussion,
         account,
         ledger_entry,
     })

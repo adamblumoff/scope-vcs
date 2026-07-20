@@ -10,8 +10,15 @@ use std::collections::BTreeMap;
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(any(test, feature = "ts"), derive(ts_rs::TS))]
 pub enum RequestDiscussionStatus {
+    Dormant,
     Open,
     Resolved,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub enum RequestDiscussionSubject {
+    Comment,
+    ChangeBlock { change_block_id: String },
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -21,7 +28,8 @@ pub struct RequestDiscussion {
     pub opened_position: u64,
     pub last_activity_position: u64,
     pub author_user_id: String,
-    pub body_markdown: String,
+    pub subject: RequestDiscussionSubject,
+    pub body_markdown: Option<String>,
     pub status: RequestDiscussionStatus,
     pub client_discussion_id: String,
     pub created_at_unix: u64,
@@ -175,7 +183,8 @@ pub fn create_request_discussion(
         opened_position: position,
         last_activity_position: position,
         author_user_id: input.actor_user_id.clone(),
-        body_markdown: input.body_markdown,
+        subject: RequestDiscussionSubject::Comment,
+        body_markdown: Some(input.body_markdown),
         status: RequestDiscussionStatus::Open,
         client_discussion_id: input.client_discussion_id,
         created_at_unix: input.now_unix,
@@ -225,6 +234,9 @@ pub fn create_request_discussion_reply(
         return Err(ApiError::conflict("request discussion is resolved"));
     }
     let position = advance_activity(request)?;
+    if discussion.status == RequestDiscussionStatus::Dormant {
+        discussion.status = RequestDiscussionStatus::Open;
+    }
     discussion.last_activity_position = position;
     let reply = RequestDiscussionReply {
         id: input.id,
@@ -411,9 +423,13 @@ fn transition_discussion(
     )?;
     if discussion.status == input.target {
         return Err(ApiError::conflict(match input.target {
+            RequestDiscussionStatus::Dormant => "request discussion is already dormant",
             RequestDiscussionStatus::Open => "request discussion is already open",
             RequestDiscussionStatus::Resolved => "request discussion is already resolved",
         }));
+    }
+    if discussion.status == RequestDiscussionStatus::Dormant {
+        return Err(ApiError::conflict("request discussion has no comments"));
     }
     let request = requests
         .get_mut(&input.request_id)
@@ -422,6 +438,7 @@ fn transition_discussion(
     discussion.status = input.target;
     discussion.last_activity_position = position;
     let (kind, payload) = match input.target {
+        RequestDiscussionStatus::Dormant => unreachable!("dormant is not a transition target"),
         RequestDiscussionStatus::Open => {
             discussion.resolved_at_unix = None;
             discussion.resolved_by_user_id = None;

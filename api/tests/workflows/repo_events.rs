@@ -193,7 +193,7 @@ async fn public_repo_stream_drops_private_discussion_identifiers() {
     );
 
     state
-        .publish_request_discussion_change(
+        .publish_request_timeline_change(
             TEST_REPO_ID,
             "req_private_stream".to_string(),
             "discussion_private".to_string(),
@@ -208,7 +208,7 @@ async fn public_repo_stream_drops_private_discussion_identifiers() {
     );
 
     state
-        .publish_request_discussion_change(
+        .publish_request_timeline_change(
             TEST_REPO_ID,
             "req_public_stream".to_string(),
             "discussion_public".to_string(),

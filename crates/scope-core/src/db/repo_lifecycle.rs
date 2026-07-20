@@ -10,6 +10,7 @@ use super::{
     repo_effects::save_repo_effects,
     repository_from_model,
     repository_rows::insert_repository,
+    request_change_block_rows::change_blocks_for_request_ids,
     request_rows::{
         credit_account_by_user_id, credit_ledger_entry_by_id, insert_credit_ledger_entry_row,
         request_stake_debit_entry_for_request_id, requests_by_repo_id, save_credit_account_row,
@@ -115,7 +116,12 @@ impl MetadataStore {
         let requests = lock_requests_for_repo_postgres(&tx, &repo_id).await?;
         lock_request_credit_accounts_for_repo_postgres(&tx, &requests).await?;
         refund_open_request_stakes_for_repo_postgres(&tx, &requests, unix_now()).await?;
-        let request_git_snapshots = request_git_snapshots_for_repo(&requests);
+        let request_ids = requests
+            .iter()
+            .map(|request| request.id.clone())
+            .collect::<Vec<_>>();
+        let change_blocks = change_blocks_for_request_ids(&tx, &request_ids).await?;
+        let request_git_snapshots = request_git_snapshots_for_repo(&requests, &change_blocks);
         delete_object_references_for_objects(
             &tx,
             repository_objects
@@ -240,11 +246,18 @@ where
     Ok(requests)
 }
 
-fn request_git_snapshots_for_repo(requests: &[Request]) -> Vec<SourceBlob> {
-    requests
+fn request_git_snapshots_for_repo(
+    requests: &[Request],
+    change_blocks: &[crate::domain::requests::RequestChangeBlock],
+) -> Vec<SourceBlob> {
+    let mut snapshots = requests
         .iter()
         .filter_map(|request| request.git_snapshot.clone())
-        .collect()
+        .chain(change_blocks.iter().map(|block| block.git_snapshot.clone()))
+        .collect::<Vec<_>>();
+    snapshots.sort_by(|left, right| left.object_key.cmp(&right.object_key));
+    snapshots.dedup_by(|left, right| left.object_key == right.object_key);
+    snapshots
 }
 
 fn should_refund_on_repo_delete(request: &Request) -> bool {

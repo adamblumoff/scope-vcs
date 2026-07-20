@@ -3,7 +3,7 @@ use crate::{
     domain::requests::{
         CreateRequestDiscussionInput, CreateRequestDiscussionReplyInput,
         MarkRequestDiscussionReadInput, ReopenAndReplyToRequestDiscussionInput,
-        RequestDiscussionStatus, request_permissions,
+        request_permissions,
     },
     error::ApiError,
     http::{requests::*, responses::*},
@@ -26,8 +26,6 @@ const MAX_REPLY_LIMIT: u64 = 100;
 
 #[derive(Debug, Deserialize)]
 pub(crate) struct DiscussionListQuery {
-    status: Option<RequestDiscussionStatusFilter>,
-    sort: Option<RequestDiscussionSort>,
     cursor: Option<String>,
     limit: Option<usize>,
 }
@@ -60,12 +58,6 @@ pub(crate) async fn list_discussions(
     let (repo, access, viewer_user_id) =
         repo_and_access(&state, &headers, &owner, &repo_name).await?;
     let request = visible_request(&state, &repo, access, &request_id).await?;
-    let status = match query.status.unwrap_or(RequestDiscussionStatusFilter::Open) {
-        RequestDiscussionStatusFilter::Open => Some(RequestDiscussionStatus::Open),
-        RequestDiscussionStatusFilter::Resolved => Some(RequestDiscussionStatus::Resolved),
-        RequestDiscussionStatusFilter::All => None,
-    };
-    let sort = query.sort.unwrap_or(RequestDiscussionSort::Recent);
     let limit = query
         .limit
         .unwrap_or(DEFAULT_DISCUSSION_LIMIT)
@@ -84,8 +76,8 @@ pub(crate) async fn list_discussions(
         .request_discussions_page(scope_core::db::RequestDiscussionsPageQuery {
             request_id: &request.id,
             viewer_user_id: viewer_user_id.as_deref(),
-            status,
-            recent: sort == RequestDiscussionSort::Recent,
+            status: None,
+            recent: false,
             snapshot_version,
             cursor: cursor
                 .as_ref()
@@ -148,7 +140,7 @@ pub(crate) async fn create_discussion(
     let discussion =
         load_one_summary(&state, &request.id, &discussion_id, Some(&actor_user_id)).await?;
     state
-        .publish_request_discussion_change(
+        .publish_request_timeline_change(
             &repo.record.id,
             request.id,
             discussion_id,
@@ -449,7 +441,7 @@ async fn transition_discussion(
     let discussion =
         load_one_summary(&state, &request.id, &discussion_id, Some(&actor_user_id)).await?;
     state
-        .publish_request_discussion_change(
+        .publish_request_timeline_change(
             &repo.record.id,
             request.id,
             discussion_id,
@@ -476,7 +468,7 @@ async fn reply_mutation_response(
         .await?;
     let response = reply_response(reply.clone(), &users)?;
     state
-        .publish_request_discussion_change(
+        .publish_request_timeline_change(
             &repo.record.id,
             request.id.clone(),
             discussion_id,
@@ -525,6 +517,13 @@ fn discussion_summary(
         last_activity_position: model.discussion.last_activity_position,
         author: actor_response(&model.discussion.author_user_id, users)?,
         body_markdown: model.discussion.body_markdown,
+        change_block: model.change_block.map(|block| RequestChangeBlockResponse {
+            id: block.id,
+            position: block.position,
+            old_head_oid: block.old_head_oid,
+            new_head_oid: block.new_head_oid,
+            created_at_unix: block.created_at_unix,
+        }),
         status: model.discussion.status,
         reply_count: model.reply_count,
         unread_count: model.unread_count,

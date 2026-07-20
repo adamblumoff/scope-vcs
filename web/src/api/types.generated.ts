@@ -140,7 +140,7 @@ export type CommitFileDiffRequest = { audience: ProjectionPreviewAudience | null
 
 export type RequestFileDiffRequest = { path: string, };
 
-export type RequestChangesResponse = { files: Array<CommitFileResponse>, };
+export type RequestChangeBlockFilesResponse = { change_block: RequestChangeBlockResponse, files: Array<CommitFileResponse>, };
 
 export type ReviewFileContentResponse = { "kind": "text", text: string, } | { "kind": "binary", oid: string, size_bytes: number, };
 
@@ -196,15 +196,13 @@ export type RequestSettlement = { disposition: RequestDisposition, stake_credits
 
 export type RequestActorSummaryResponse = { id: string, handle: string, };
 
-export type RequestDiscussionStatus = "Open" | "Resolved";
-
-export type RequestDiscussionStatusFilter = "open" | "resolved" | "all";
-
-export type RequestDiscussionSort = "recent" | "newest";
+export type RequestDiscussionStatus = "Dormant" | "Open" | "Resolved";
 
 export type RequestDiscussionReplyResponse = { id: string, discussion_id: string, position: number, author: RequestActorSummaryResponse, body_markdown: string, reply_to_reply_id: string | null, created_at_unix: number, };
 
-export type RequestDiscussionSummaryResponse = { id: string, request_id: string, opened_position: number, last_activity_position: number, author: RequestActorSummaryResponse, body_markdown: string, status: RequestDiscussionStatus, reply_count: number, unread_count: number, latest_replies: Array<RequestDiscussionReplyResponse>, created_at_unix: number, resolved_at_unix: number | null, resolved_by: RequestActorSummaryResponse | null, };
+export type RequestDiscussionSummaryResponse = { id: string, request_id: string, opened_position: number, last_activity_position: number, author: RequestActorSummaryResponse, body_markdown: string | null, change_block: RequestChangeBlockResponse | null, status: RequestDiscussionStatus, reply_count: number, unread_count: number, latest_replies: Array<RequestDiscussionReplyResponse>, created_at_unix: number, resolved_at_unix: number | null, resolved_by: RequestActorSummaryResponse | null, };
+
+export type RequestChangeBlockResponse = { id: string, position: number, old_head_oid: string, new_head_oid: string, created_at_unix: number, };
 
 export type RequestDiscussionPageResponse = { discussions: Array<RequestDiscussionSummaryResponse>, next_cursor: string | null, snapshot_version: number, };
 
@@ -244,7 +242,7 @@ export type ResolveRequestRequest = { disposition: ResolutionDisposition, body: 
 
 export type MergeRequestRequest = { expected_main_oid: string, expected_head_oid: string, body: string | null, };
 
-export type RepoChangeKind = "Connected" | "Lagged" | { "RepositoryChanged": { reason: string, } } | { "RequestDiscussionChanged": { request_id: string, discussion_id: string, through_position: number, audience: RequestAudience, } };
+export type RepoChangeKind = "Connected" | "Lagged" | { "RepositoryChanged": { reason: string, } } | { "RequestTimelineChanged": { request_id: string, discussion_id: string, through_position: number, audience: RequestAudience, } };
 
 export const ApiRouteTemplates = {
   accountSession: "/v1/session",
@@ -262,16 +260,16 @@ export const ApiRouteTemplates = {
   repoSession: "/v1/repos/{owner}/{repo}/session",
   repoFiles: "/v1/repos/{owner}/{repo}/files",
   repoFileContent: "/v1/repos/{owner}/{repo}/files/content",
-  repoRequestChanges: "/v1/repos/{owner}/{repo}/requests/{request_id}/changes",
-  repoRequestFileDiff: "/v1/repos/{owner}/{repo}/requests/{request_id}/file-diff",
+  repoRequestChangeBlockFiles: "/v1/repos/{owner}/{repo}/requests/{request_id}/changes/{block_id}",
+  repoRequestChangeBlockFileDiff: "/v1/repos/{owner}/{repo}/requests/{request_id}/changes/{block_id}/file-diff",
   repoRequestDescription: "/v1/repos/{owner}/{repo}/requests/{request_id}/description",
-  repoRequestDiscussions: "/v1/repos/{owner}/{repo}/requests/{request_id}/discussions",
-  repoRequestDiscussionChanges: "/v1/repos/{owner}/{repo}/requests/{request_id}/discussions/changes",
-  repoRequestDiscussionReplies: "/v1/repos/{owner}/{repo}/requests/{request_id}/discussions/{discussion_id}/replies",
-  repoRequestDiscussionResolve: "/v1/repos/{owner}/{repo}/requests/{request_id}/discussions/{discussion_id}/resolve",
-  repoRequestDiscussionReopen: "/v1/repos/{owner}/{repo}/requests/{request_id}/discussions/{discussion_id}/reopen",
-  repoRequestDiscussionReopenAndReply: "/v1/repos/{owner}/{repo}/requests/{request_id}/discussions/{discussion_id}/reopen-and-reply",
-  repoRequestDiscussionRead: "/v1/repos/{owner}/{repo}/requests/{request_id}/discussions/{discussion_id}/read",
+  repoRequestDiscussions: "/v1/repos/{owner}/{repo}/requests/{request_id}/timeline",
+  repoRequestDiscussionChanges: "/v1/repos/{owner}/{repo}/requests/{request_id}/timeline/changes",
+  repoRequestDiscussionReplies: "/v1/repos/{owner}/{repo}/requests/{request_id}/threads/{discussion_id}/replies",
+  repoRequestDiscussionResolve: "/v1/repos/{owner}/{repo}/requests/{request_id}/threads/{discussion_id}/resolve",
+  repoRequestDiscussionReopen: "/v1/repos/{owner}/{repo}/requests/{request_id}/threads/{discussion_id}/reopen",
+  repoRequestDiscussionReopenAndReply: "/v1/repos/{owner}/{repo}/requests/{request_id}/threads/{discussion_id}/reopen-and-reply",
+  repoRequestDiscussionRead: "/v1/repos/{owner}/{repo}/requests/{request_id}/threads/{discussion_id}/read",
   repoRequestActivity: "/v1/repos/{owner}/{repo}/requests/{request_id}/activity",
   repoRequestNeedsResponse: "/v1/repos/{owner}/{repo}/requests/{request_id}/needs-response",
   repoRequestRespond: "/v1/repos/{owner}/{repo}/requests/{request_id}/respond",

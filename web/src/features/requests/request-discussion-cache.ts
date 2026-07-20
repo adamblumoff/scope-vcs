@@ -13,17 +13,13 @@ const entries = new Map<string, CacheEntry>()
 let accessClock = 0
 
 export function requestDiscussionCacheKey({
-  filter,
   repoId,
   requestId,
-  sort,
 }: {
-  filter: string
   repoId: string
   requestId: string
-  sort: string
 }) {
-  return [repoId, requestId, filter, sort].join('\0')
+  return [repoId, requestId].join('\0')
 }
 
 export function readRequestDiscussionCache(key: string) {
@@ -72,7 +68,7 @@ export function requestDiscussionCacheStats() {
 
 function limitCollection(collection: DiscussionCollection): DiscussionCollection {
   if (collection.order.length <= MAX_DISCUSSIONS) return collection
-  const order = collection.order.slice(0, MAX_DISCUSSIONS)
+  const order = collection.order.slice(-MAX_DISCUSSIONS)
   const ids = new Set(order)
   return {
     ...collection,

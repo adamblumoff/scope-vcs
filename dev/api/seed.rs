@@ -273,7 +273,7 @@ fn seed_owner_request(
             now_unix: now_unix + 1,
         },
     )?;
-    submit_request(
+    let submitted = submit_request(
         &mut catalog.requests,
         &mut catalog.request_events,
         &mut catalog.user_credit_accounts,
@@ -288,6 +288,12 @@ fn seed_owner_request(
             now_unix: now_unix + 2,
         },
     )?;
+    catalog
+        .request_change_blocks
+        .insert(submitted.change_block.id.clone(), submitted.change_block);
+    catalog
+        .request_discussions
+        .insert(submitted.discussion.id.clone(), submitted.discussion);
 
     match outcome {
         SeedRequestOutcome::Submitted => {}

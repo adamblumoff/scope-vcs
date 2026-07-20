@@ -1,19 +1,18 @@
 use crate::{
     domain::{
         policy::ScopePath,
-        requests::Request,
         store::{FileChangeKind, RepositoryAccess, StoredRepository},
     },
     error::ApiError,
-    git::{import::run_git_output, request_refs::with_request_ref_store_repo},
+    git::{import::run_git_output, request_refs::with_request_change_block_store_repo},
     http::{
         file_diffs::{
             MAX_RENDERED_TEXT_BYTES, binary_content_response, review_content_response_for_bytes,
         },
         requests::{repo_and_access, visible_request},
         responses::{
-            CommitFileResponse, RequestChangesResponse, RequestFileDiffRequest,
-            ReviewFileContentResponse, ReviewFileDiffResponse,
+            CommitFileResponse, RequestChangeBlockFilesResponse, RequestChangeBlockResponse,
+            RequestFileDiffRequest, ReviewFileContentResponse, ReviewFileDiffResponse,
         },
     },
     state::AppState,
@@ -25,47 +24,92 @@ use axum::{
 };
 use std::path::Path as FsPath;
 
-pub(crate) async fn get_request_changes(
+pub(crate) async fn get_request_change_block_files(
     State(state): State<AppState>,
     headers: HeaderMap,
-    Path((owner, repo_name, request_id)): Path<(String, String, String)>,
-) -> Result<Json<RequestChangesResponse>, ApiError> {
+    Path((owner, repo_name, request_id, block_id)): Path<(String, String, String, String)>,
+) -> Result<Json<RequestChangeBlockFilesResponse>, ApiError> {
     let (repo, access, _) = repo_and_access(&state, &headers, &owner, &repo_name).await?;
     let request = visible_request(&state, &repo, access, &request_id).await?;
-    let files = request_changes(&state, &owner, &repo_name, &repo, access, &request)?;
-    Ok(Json(RequestChangesResponse { files }))
+    let block = state
+        .metadata
+        .request_change_block(&request.id, &block_id)
+        .await?
+        .ok_or_else(|| ApiError::not_found("request change block not found"))?;
+    let files = with_request_change_block_store_repo(
+        &state,
+        &owner,
+        &repo_name,
+        &request,
+        &block,
+        |raw_repo| {
+            request_changes_from_repo(
+                raw_repo,
+                &repo,
+                access,
+                &block.old_head_oid,
+                &block.new_head_oid,
+                None,
+            )
+        },
+    )?;
+    Ok(Json(RequestChangeBlockFilesResponse {
+        change_block: RequestChangeBlockResponse {
+            id: block.id,
+            position: block.position,
+            old_head_oid: block.old_head_oid,
+            new_head_oid: block.new_head_oid,
+            created_at_unix: block.created_at_unix,
+        },
+        files,
+    }))
 }
 
-pub(crate) async fn get_request_file_diff(
+pub(crate) async fn get_request_change_block_file_diff(
     State(state): State<AppState>,
     headers: HeaderMap,
-    Path((owner, repo_name, request_id)): Path<(String, String, String)>,
+    Path((owner, repo_name, request_id, block_id)): Path<(String, String, String, String)>,
     Query(input): Query<RequestFileDiffRequest>,
 ) -> Result<Json<ReviewFileDiffResponse>, ApiError> {
     let (repo, access, _) = repo_and_access(&state, &headers, &owner, &repo_name).await?;
     let request = visible_request(&state, &repo, access, &request_id).await?;
+    let block = state
+        .metadata
+        .request_change_block(&request.id, &block_id)
+        .await?
+        .ok_or_else(|| ApiError::not_found("request change block not found"))?;
     let path = normalized_path(&input.path)?;
-    if request.git_snapshot.is_none() {
-        return Err(ApiError::not_found("request has no uploaded changes"));
-    }
-    let (file, old_content, new_content) =
-        with_request_ref_store_repo(&state, &owner, &repo_name, &request, |raw_repo| {
-            let file =
-                request_changes_from_repo(raw_repo, &repo, access, &request, Some(path.as_str()))?
-                    .into_iter()
-                    .next()
-                    .ok_or_else(|| ApiError::not_found("request file not found"))?;
-            let old_content = match file.old_oid.as_deref() {
-                Some(oid) => Some(git_blob_content(raw_repo, oid)?),
-                None => None,
-            };
-            let new_content = match file.new_oid.as_deref() {
-                Some(oid) => Some(git_blob_content(raw_repo, oid)?),
-                None => None,
-            };
+    let (file, old_content, new_content) = with_request_change_block_store_repo(
+        &state,
+        &owner,
+        &repo_name,
+        &request,
+        &block,
+        |raw_repo| {
+            let file = request_changes_from_repo(
+                raw_repo,
+                &repo,
+                access,
+                &block.old_head_oid,
+                &block.new_head_oid,
+                Some(path.as_str()),
+            )?
+            .into_iter()
+            .next()
+            .ok_or_else(|| ApiError::not_found("request change block file not found"))?;
+            let old_content = file
+                .old_oid
+                .as_deref()
+                .map(|oid| git_blob_content(raw_repo, oid))
+                .transpose()?;
+            let new_content = file
+                .new_oid
+                .as_deref()
+                .map(|oid| git_blob_content(raw_repo, oid))
+                .transpose()?;
             Ok((file, old_content, new_content))
-        })?;
-
+        },
+    )?;
     Ok(Json(ReviewFileDiffResponse {
         path,
         kind: file.kind,
@@ -76,27 +120,12 @@ pub(crate) async fn get_request_file_diff(
     }))
 }
 
-fn request_changes(
-    state: &AppState,
-    owner: &str,
-    repo_name: &str,
-    repo: &StoredRepository,
-    access: RepositoryAccess,
-    request: &Request,
-) -> Result<Vec<CommitFileResponse>, ApiError> {
-    if request.git_snapshot.is_none() {
-        return Ok(Vec::new());
-    }
-    with_request_ref_store_repo(state, owner, repo_name, request, |raw_repo| {
-        request_changes_from_repo(raw_repo, repo, access, request, None)
-    })
-}
-
 fn request_changes_from_repo(
     raw_repo: &FsPath,
     repo: &StoredRepository,
     access: RepositoryAccess,
-    request: &Request,
+    old_head_oid: &str,
+    new_head_oid: &str,
     path: Option<&str>,
 ) -> Result<Vec<CommitFileResponse>, ApiError> {
     let mut args = vec![
@@ -106,8 +135,8 @@ fn request_changes_from_repo(
         "-z",
         "--no-renames",
         "--abbrev=64",
-        &request.base_main_oid,
-        &request.head_oid,
+        old_head_oid,
+        new_head_oid,
         "--",
     ];
     if let Some(path) = path {

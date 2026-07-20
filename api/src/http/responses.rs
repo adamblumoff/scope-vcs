@@ -147,7 +147,8 @@ pub(crate) struct RequestFileDiffRequest {
 
 #[derive(Debug, Serialize)]
 #[cfg_attr(feature = "type-export", derive(ts_rs::TS))]
-pub(crate) struct RequestChangesResponse {
+pub(crate) struct RequestChangeBlockFilesResponse {
+    pub(crate) change_block: RequestChangeBlockResponse,
     pub(crate) files: Vec<CommitFileResponse>,
 }
 

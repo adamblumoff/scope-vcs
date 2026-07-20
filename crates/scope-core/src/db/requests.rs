@@ -5,6 +5,8 @@ use super::{
         authorize_start_request, ensure_request_maintainer, ensure_user_exists, repo_by_id,
         request_actor_can_edit,
     },
+    request_change_block_rows::insert_change_block,
+    request_discussion_rows::insert_discussion,
     request_rows::{
         credit_account_by_user_id, credit_ledger_entry_by_id, delete_request_rows,
         insert_credit_ledger_entry_row, insert_request_event_row, insert_request_row,
@@ -209,6 +211,8 @@ impl MetadataStore {
         )?;
         save_request_row(&tx, &mutation.request).await?;
         insert_request_event_row(&tx, &mutation.event).await?;
+        insert_change_block(&tx, &mutation.change_block).await?;
+        insert_discussion(&tx, &mutation.discussion).await?;
         if let Some(account) = &mutation.account {
             save_credit_account_row(&tx, account).await?;
         }
@@ -242,10 +246,8 @@ impl MetadataStore {
             let mutation = record_request_revision(&mut requests, &mut events, input)?;
             save_request_row(&tx, &mutation.request).await?;
             insert_request_event_row(&tx, &mutation.event).await?;
-            if !mutation.orphan_objects.is_empty() {
-                queue_pending_source_blob_deletion_rows(&tx, mutation.orphan_objects.clone())
-                    .await?;
-            }
+            insert_change_block(&tx, &mutation.change_block).await?;
+            insert_discussion(&tx, &mutation.discussion).await?;
             tx.commit().await.map_err(ApiError::internal)?;
             return Ok(mutation);
         }

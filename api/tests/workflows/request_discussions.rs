@@ -23,7 +23,7 @@ async fn threaded_discussion_http_workflow_preserves_activity_and_read_contracts
     let anonymous_create = api_request(
         app.clone(),
         "POST",
-        &format!("{base}/discussions"),
+        &format!("{base}/timeline"),
         None,
         Some(r#"{"body_markdown":"No auth","client_discussion_id":"anonymous"}"#),
     )
@@ -65,7 +65,7 @@ async fn threaded_discussion_http_workflow_preserves_activity_and_read_contracts
     let created = api_request(
         app.clone(),
         "POST",
-        &format!("{base}/discussions"),
+        &format!("{base}/timeline"),
         Some(&bearer),
         Some(r#"{"body_markdown":"Who owns parser recovery?","client_discussion_id":"root-1"}"#),
     )
@@ -80,14 +80,14 @@ async fn threaded_discussion_http_workflow_preserves_activity_and_read_contracts
         .unwrap()
         .unwrap();
     let targeted = String::from_utf8(targeted.to_vec()).unwrap();
-    assert!(targeted.contains("RequestDiscussionChanged"));
+    assert!(targeted.contains("RequestTimelineChanged"));
     assert!(targeted.contains(&discussion_id));
     assert!(targeted.contains(request_id));
 
     let retried = api_request(
         app.clone(),
         "POST",
-        &format!("{base}/discussions"),
+        &format!("{base}/timeline"),
         Some(&bearer),
         Some(r#"{"body_markdown":"Who owns parser recovery?","client_discussion_id":"root-1"}"#),
     )
@@ -99,7 +99,7 @@ async fn threaded_discussion_http_workflow_preserves_activity_and_read_contracts
     let reply = api_request(
         app.clone(),
         "POST",
-        &format!("{base}/discussions/{discussion_id}/replies"),
+        &format!("{base}/threads/{discussion_id}/replies"),
         Some(&bearer),
         Some(r#"{"body_markdown":"The parser module should own it.","client_reply_id":"reply-1","reply_to_reply_id":null}"#),
     )
@@ -112,7 +112,7 @@ async fn threaded_discussion_http_workflow_preserves_activity_and_read_contracts
     let resolved = api_request(
         app.clone(),
         "POST",
-        &format!("{base}/discussions/{discussion_id}/resolve"),
+        &format!("{base}/threads/{discussion_id}/resolve"),
         Some(&bearer),
         None,
     )
@@ -125,7 +125,7 @@ async fn threaded_discussion_http_workflow_preserves_activity_and_read_contracts
     let rejected_reply = api_request(
         app.clone(),
         "POST",
-        &format!("{base}/discussions/{discussion_id}/replies"),
+        &format!("{base}/threads/{discussion_id}/replies"),
         Some(&bearer),
         Some(r#"{"body_markdown":"One more point.","client_reply_id":"reply-rejected","reply_to_reply_id":null}"#),
     )
@@ -135,7 +135,7 @@ async fn threaded_discussion_http_workflow_preserves_activity_and_read_contracts
     let reopened = api_request(
         app.clone(),
         "POST",
-        &format!("{base}/discussions/{discussion_id}/reopen-and-reply"),
+        &format!("{base}/threads/{discussion_id}/reopen-and-reply"),
         Some(&bearer),
         Some(r#"{"body_markdown":"One more point.","client_reply_id":"reply-2","reply_to_reply_id":null}"#),
     )
@@ -150,7 +150,7 @@ async fn threaded_discussion_http_workflow_preserves_activity_and_read_contracts
     let read = api_request(
         app.clone(),
         "PUT",
-        &format!("{base}/discussions/{discussion_id}/read"),
+        &format!("{base}/threads/{discussion_id}/read"),
         Some(&bearer),
         Some(&format!(r#"{{"through_position":{through_position}}}"#)),
     )
@@ -164,7 +164,7 @@ async fn threaded_discussion_http_workflow_preserves_activity_and_read_contracts
     let discussions = api_request(
         app.clone(),
         "GET",
-        &format!("{base}/discussions?status=all&sort=recent&limit=25"),
+        &format!("{base}/timeline?limit=25"),
         Some(&bearer),
         None,
     )
@@ -183,7 +183,7 @@ async fn threaded_discussion_http_workflow_preserves_activity_and_read_contracts
     let replies = api_request(
         app.clone(),
         "GET",
-        &format!("{base}/discussions/{discussion_id}/replies?limit=50"),
+        &format!("{base}/threads/{discussion_id}/replies?limit=50"),
         Some(&bearer),
         None,
     )
@@ -200,7 +200,7 @@ async fn threaded_discussion_http_workflow_preserves_activity_and_read_contracts
     let changes = api_request(
         app.clone(),
         "GET",
-        &format!("{base}/discussions/changes?after=0&limit=100"),
+        &format!("{base}/timeline/changes?after=0&limit=100"),
         Some(&bearer),
         None,
     )
@@ -260,7 +260,7 @@ async fn threaded_discussion_http_workflow_preserves_activity_and_read_contracts
 }
 
 #[tokio::test]
-async fn open_recent_cursor_is_stable_during_concurrent_discussion_changes() {
+async fn timeline_cursor_is_stable_during_concurrent_thread_changes() {
     let state = test_state_with_readme().await;
     cache_test_jwks(&state);
     let app = router(state);
@@ -282,7 +282,7 @@ async fn open_recent_cursor_is_stable_during_concurrent_discussion_changes() {
         let created = api_request(
             app.clone(),
             "POST",
-            &format!("{base}/discussions"),
+            &format!("{base}/timeline"),
             Some(&bearer),
             Some(&format!(
                 r#"{{"body_markdown":"Root {index}","client_discussion_id":"root-{index}"}}"#
@@ -301,7 +301,7 @@ async fn open_recent_cursor_is_stable_during_concurrent_discussion_changes() {
     let first_page = api_request(
         app.clone(),
         "GET",
-        &format!("{base}/discussions?status=open&sort=recent&limit=2"),
+        &format!("{base}/timeline?limit=2"),
         Some(&bearer),
         None,
     )
@@ -315,7 +315,7 @@ async fn open_recent_cursor_is_stable_during_concurrent_discussion_changes() {
     let reply = api_request(
         app.clone(),
         "POST",
-        &format!("{base}/discussions/{oldest_id}/replies"),
+        &format!("{base}/threads/{oldest_id}/replies"),
         Some(&bearer),
         Some(
             r#"{"body_markdown":"Concurrent activity","client_reply_id":"concurrent-reply","reply_to_reply_id":null}"#,
@@ -328,7 +328,7 @@ async fn open_recent_cursor_is_stable_during_concurrent_discussion_changes() {
     let resolved = api_request(
         app.clone(),
         "POST",
-        &format!("{base}/discussions/{resolved_id}/resolve"),
+        &format!("{base}/threads/{resolved_id}/resolve"),
         Some(&bearer),
         None,
     )
@@ -338,7 +338,7 @@ async fn open_recent_cursor_is_stable_during_concurrent_discussion_changes() {
     let second_page = api_request(
         app,
         "GET",
-        &format!("{base}/discussions?status=open&sort=recent&limit=2&cursor={cursor}"),
+        &format!("{base}/timeline?limit=2&cursor={cursor}"),
         Some(&bearer),
         None,
     )
@@ -351,7 +351,7 @@ async fn open_recent_cursor_is_stable_during_concurrent_discussion_changes() {
         .iter()
         .map(|discussion| discussion["id"].as_str().unwrap())
         .collect::<Vec<_>>();
-    assert_eq!(ids, vec![oldest_id.as_str()]);
+    assert_eq!(ids, vec![resolved_id.as_str(), oldest_id.as_str()]);
 }
 
 async fn api_request(

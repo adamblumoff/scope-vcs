@@ -351,13 +351,25 @@ CREATE TABLE scope_request_events (
     created_at_unix bigint NOT NULL
 );
 
+CREATE TABLE scope_request_change_blocks (
+    id character varying NOT NULL,
+    request_id character varying NOT NULL,
+    position bigint NOT NULL,
+    actor_user_id character varying NOT NULL,
+    old_head_oid character varying NOT NULL,
+    new_head_oid character varying NOT NULL,
+    git_snapshot jsonb NOT NULL,
+    created_at_unix bigint NOT NULL
+);
+
 CREATE TABLE scope_request_discussions (
     id character varying NOT NULL,
     request_id character varying NOT NULL,
     opened_position bigint NOT NULL,
     last_activity_position bigint NOT NULL,
     author_user_id character varying NOT NULL,
-    body_markdown text NOT NULL,
+    subject jsonb NOT NULL,
+    body_markdown text,
     status character varying NOT NULL,
     client_discussion_id character varying NOT NULL,
     created_at_unix bigint NOT NULL,
@@ -629,6 +641,10 @@ ALTER TABLE ONLY scope_repository_invites
 
 ALTER TABLE ONLY scope_request_events
     ADD CONSTRAINT scope_request_events_pkey PRIMARY KEY (id);
+ALTER TABLE ONLY scope_request_change_blocks
+    ADD CONSTRAINT scope_request_change_blocks_pkey PRIMARY KEY (id);
+ALTER TABLE ONLY scope_request_change_blocks
+    ADD CONSTRAINT scope_request_change_blocks_position_key UNIQUE (request_id, position);
 
 ALTER TABLE ONLY scope_request_discussions
     ADD CONSTRAINT scope_request_discussions_pkey PRIMARY KEY (id);
@@ -790,6 +806,7 @@ CREATE INDEX idx_scope_repository_members_user ON scope_repository_members USING
 --
 
 CREATE UNIQUE INDEX idx_scope_request_events_request_position ON scope_request_events USING btree (request_id, position);
+CREATE INDEX idx_scope_request_change_blocks_request_position ON scope_request_change_blocks USING btree (request_id, position DESC, id);
 CREATE INDEX idx_scope_request_discussions_recent ON scope_request_discussions USING btree (request_id, status, last_activity_position DESC, id);
 CREATE INDEX idx_scope_request_discussions_newest ON scope_request_discussions USING btree (request_id, opened_position DESC, id);
 CREATE INDEX idx_scope_request_discussion_replies_position ON scope_request_discussion_replies USING btree (discussion_id, position DESC, id);
@@ -1008,6 +1025,10 @@ ALTER TABLE ONLY scope_request_events
 
 ALTER TABLE ONLY scope_request_events
     ADD CONSTRAINT fk_scope_request_events_request FOREIGN KEY (request_id) REFERENCES scope_requests(id) ON DELETE CASCADE;
+ALTER TABLE ONLY scope_request_change_blocks
+    ADD CONSTRAINT fk_scope_request_change_blocks_request FOREIGN KEY (request_id) REFERENCES scope_requests(id) ON DELETE CASCADE;
+ALTER TABLE ONLY scope_request_change_blocks
+    ADD CONSTRAINT fk_scope_request_change_blocks_actor FOREIGN KEY (actor_user_id) REFERENCES scope_users(id) ON DELETE CASCADE;
 
 ALTER TABLE ONLY scope_request_discussions
     ADD CONSTRAINT fk_scope_request_discussions_request FOREIGN KEY (request_id) REFERENCES scope_requests(id) ON DELETE CASCADE;
@@ -1094,10 +1115,17 @@ ALTER TABLE scope_requests
     );
 ALTER TABLE scope_request_events
     ADD CONSTRAINT scope_request_event_values CHECK (position > 0 AND created_at_unix >= 0);
+ALTER TABLE scope_request_change_blocks
+    ADD CONSTRAINT scope_request_change_block_values CHECK (
+        position > 0 AND created_at_unix >= 0 AND
+        length(old_head_oid) > 0 AND length(new_head_oid) > 0
+    );
 ALTER TABLE scope_request_discussions
     ADD CONSTRAINT scope_request_discussion_values CHECK (
         opened_position > 0 AND last_activity_position >= opened_position AND
-        length(btrim(body_markdown)) > 0 AND status IN ('Open', 'Resolved') AND
+        status IN ('Dormant', 'Open', 'Resolved') AND
+        ((subject ? 'Comment' AND length(btrim(body_markdown)) > 0) OR
+         (subject ? 'ChangeBlock' AND body_markdown IS NULL)) AND
         created_at_unix >= 0 AND (resolved_at_unix IS NULL OR resolved_at_unix >= 0)
     );
 ALTER TABLE scope_request_discussion_replies

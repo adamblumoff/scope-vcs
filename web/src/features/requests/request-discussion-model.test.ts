@@ -8,7 +8,6 @@ import {
   insertOptimisticDiscussion,
   markDiscussionRead,
   mergeDiscussionReplies,
-  patchDiscussionForFilter,
   patchDiscussionWithoutReordering,
   replaceDiscussion,
   upsertDiscussionReply,
@@ -29,7 +28,7 @@ test('appends cursor pages without duplicating discussions', () => {
     next_cursor: null,
     snapshot_version: 5,
   })
-  assert.deepEqual(result.order, ['one', 'two', 'three'])
+  assert.deepEqual(result.order, ['three', 'two', 'one'])
   assert.equal(result.nextCursor, null)
 })
 
@@ -42,10 +41,9 @@ test('realtime patches a discussion without moving it under the cursor', () => {
   const patched = applyDiscussionChangesWithoutReordering(
     collection,
     [discussion('two', 9)],
-    'Open',
     9,
   )
-  assert.deepEqual(patched.order, ['one', 'two'])
+  assert.deepEqual(patched.order, ['two', 'one'])
 })
 
 test('realtime appends a new root without reordering visible roots', () => {
@@ -57,14 +55,13 @@ test('realtime appends a new root without reordering visible roots', () => {
   const patched = applyDiscussionChangesWithoutReordering(
     collection,
     [discussion('three', 8)],
-    'Open',
     8,
   )
-  assert.deepEqual(patched.order, ['one', 'two', 'three'])
+  assert.deepEqual(patched.order, ['two', 'one', 'three'])
   assert.equal(patched.snapshotVersion, 8)
 })
 
-test('open realtime view ignores newly discovered resolved roots', () => {
+test('timeline keeps newly discovered resolved roots', () => {
   const collection = collectionFromPage({
     discussions: [discussion('one', 5)],
     next_cursor: null,
@@ -78,14 +75,13 @@ test('open realtime view ignores newly discovered resolved roots', () => {
   const patched = applyDiscussionChangesWithoutReordering(
     collection,
     [resolved],
-    'Open',
     8,
   )
-  assert.deepEqual(patched.order, ['one'])
+  assert.deepEqual(patched.order, ['one', 'resolved'])
   assert.equal(patched.snapshotVersion, 8)
 })
 
-test('open realtime view removes roots that become resolved', () => {
+test('timeline keeps roots in place when they become resolved', () => {
   const collection = collectionFromPage({
     discussions: [discussion('one', 5), discussion('two', 4)],
     next_cursor: null,
@@ -99,41 +95,14 @@ test('open realtime view removes roots that become resolved', () => {
   const patched = applyDiscussionChangesWithoutReordering(
     collection,
     [resolved],
-    'Open',
     8,
   )
-  assert.deepEqual(patched.order, ['two'])
-  assert.equal(patched.byId.has('one'), false)
+  assert.deepEqual(patched.order, ['two', 'one'])
+  assert.equal(patched.byId.get('one')?.status, 'Resolved')
   assert.equal(patched.snapshotVersion, 8)
 })
 
-test('resolved mutation responses cannot reinsert an SSE-removed open root', () => {
-  const collection = collectionFromPage({
-    discussions: [discussion('one', 5)],
-    next_cursor: null,
-    snapshot_version: 5,
-  })
-  const resolved = {
-    ...discussion('one', 8),
-    resolved_at_unix: 8,
-    status: 'Resolved' as const,
-  }
-  const afterEvent = applyDiscussionChangesWithoutReordering(
-    collection,
-    [resolved],
-    'Open',
-    8,
-  )
-  const afterResponse = patchDiscussionForFilter(
-    afterEvent,
-    resolved,
-    'Open',
-  )
-  assert.deepEqual(afterResponse.order, [])
-  assert.equal(afterResponse.snapshotVersion, 8)
-})
-
-test('all realtime view keeps roots that become resolved', () => {
+test('realtime timeline keeps roots that become resolved', () => {
   const collection = collectionFromPage({
     discussions: [discussion('one', 5)],
     next_cursor: null,
@@ -147,7 +116,6 @@ test('all realtime view keeps roots that become resolved', () => {
   const patched = applyDiscussionChangesWithoutReordering(
     collection,
     [resolved],
-    'All',
     8,
   )
   assert.deepEqual(patched.order, ['one'])
@@ -165,7 +133,7 @@ test('optimistic roots are replaced in their visible position', () => {
     pending: 'sending',
   } satisfies RequestDiscussionView
   const pending = insertOptimisticDiscussion(collection, optimistic)
-  assert.deepEqual(pending.order, ['client-1', 'one'])
+  assert.deepEqual(pending.order, ['one', 'client-1'])
 })
 
 test('mutation responses do not advance the authoritative catch-up cursor', () => {

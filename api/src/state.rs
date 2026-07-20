@@ -327,7 +327,7 @@ impl AppState {
         }
     }
 
-    pub(crate) async fn publish_request_discussion_change(
+    pub(crate) async fn publish_request_timeline_change(
         &self,
         repo_id: &str,
         request_id: String,
@@ -335,7 +335,7 @@ impl AppState {
         through_position: u64,
         audience: crate::domain::requests::RequestAudience,
     ) {
-        let event = RepoChangeEvent::request_discussion_changed(
+        let event = RepoChangeEvent::request_timeline_changed(
             repo_id,
             request_id,
             discussion_id,

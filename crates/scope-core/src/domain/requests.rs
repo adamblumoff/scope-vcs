@@ -9,17 +9,19 @@ pub use policy::{
     RequestMergeability, RequestMergeabilityStatus, RequestPermissions, request_actor_role,
     request_mergeability, request_permissions, request_visible_to_access,
 };
+mod change_blocks;
 mod discussions;
 mod submission;
+pub use change_blocks::RequestChangeBlock;
 pub use discussions::{
     CreateRequestDiscussionInput, CreateRequestDiscussionMutation,
     CreateRequestDiscussionReplyInput, CreateRequestDiscussionReplyMutation,
     MarkRequestDiscussionReadInput, ReopenAndReplyToRequestDiscussionInput,
     ReopenRequestDiscussionInput, RequestDiscussion, RequestDiscussionMutation,
     RequestDiscussionReadState, RequestDiscussionReply, RequestDiscussionStatus,
-    ResolveRequestDiscussionInput, create_request_discussion, create_request_discussion_reply,
-    mark_request_discussion_read, reopen_and_reply_to_request_discussion,
-    reopen_request_discussion, resolve_request_discussion,
+    RequestDiscussionSubject, ResolveRequestDiscussionInput, create_request_discussion,
+    create_request_discussion_reply, mark_request_discussion_read,
+    reopen_and_reply_to_request_discussion, reopen_request_discussion, resolve_request_discussion,
 };
 mod description;
 pub use description::{UpdateRequestDescriptionInput, update_request_description};
@@ -242,7 +244,8 @@ pub struct RecordRequestRevisionInput {
 pub struct RequestRevisionMutation {
     pub request: Request,
     pub event: RequestEvent,
-    pub orphan_objects: Vec<SourceBlob>,
+    pub change_block: RequestChangeBlock,
+    pub discussion: RequestDiscussion,
 }
 
 #[derive(Clone, Debug)]
@@ -421,10 +424,6 @@ pub fn record_request_revision(
     }
 
     let old_head_oid = request.head_oid.clone();
-    let old_git_snapshot = input
-        .git_snapshot
-        .as_ref()
-        .and_then(|_| request.git_snapshot.clone());
     request.head_oid = input.new_head_oid.clone();
     if input.git_snapshot.is_some() {
         request.git_snapshot = input.git_snapshot.clone();
@@ -442,17 +441,20 @@ pub fn record_request_revision(
         kind: RequestEventKind::RevisionPushed,
         position,
         payload: RequestEventPayload::RevisionPushed {
-            old_head_oid,
-            new_head_oid: input.new_head_oid,
+            old_head_oid: old_head_oid.clone(),
+            new_head_oid: input.new_head_oid.clone(),
             note: input.body,
         },
         created_at_unix: input.now_unix,
     };
+    let (change_block, discussion) =
+        change_blocks::revision_change_block(&request, &event, old_head_oid, input.new_head_oid)?;
     events.insert(event.id.clone(), event.clone());
     Ok(RequestRevisionMutation {
         request,
         event,
-        orphan_objects: old_git_snapshot.into_iter().collect(),
+        change_block,
+        discussion,
     })
 }
 

@@ -35,10 +35,8 @@ import type {
   RequestActorSummary,
   RequestDiscussion,
   RequestDiscussionChanges,
-  RequestDiscussionFilter,
   RequestDiscussionMutation,
   RequestDiscussionPage,
-  RequestDiscussionSort,
   RequestDiscussionView,
 } from './request-discussion-types'
 
@@ -60,25 +58,19 @@ export type RequestDiscussionActions = {
 export function useRequestDiscussionStore({
   actions,
   actor,
-  filter,
   initialPage,
   params,
   repoId,
-  sort,
 }: {
   actions: RequestDiscussionActions
   actor: RequestActorSummary
-  filter: RequestDiscussionFilter
   initialPage: RequestDiscussionPage
   params: RequestParams
   repoId: string
-  sort: RequestDiscussionSort
 }) {
   const key = requestDiscussionCacheKey({
-    filter,
     repoId,
     requestId: params.request_id,
-    sort,
   })
   const [collection, setCollection] = useState(() =>
     collectionWithCachedUi(initialPage, readRequestDiscussionCache(key)),
@@ -122,14 +114,7 @@ export function useRequestDiscussionStore({
     writeRequestDiscussionCache(key, collection)
   }, [collection, key])
 
-  const requestQuery = useMemo(
-    () => ({
-      ...params,
-      sort,
-      status: filter,
-    }),
-    [filter, params, sort],
-  )
+  const requestQuery = useMemo(() => params, [params])
 
   const refresh = useCallback(async () => {
     setRefreshing(true)
@@ -166,7 +151,6 @@ export function useRequestDiscussionStore({
           const next = applyDiscussionChangesWithoutReordering(
             collectionRef.current,
             changes.discussions,
-            filter,
             changes.through_position,
           )
           collectionRef.current = next
@@ -206,7 +190,7 @@ export function useRequestDiscussionStore({
         void catchUp()
       }
     }
-  }, [actions, filter, params])
+  }, [actions, params])
 
   const onRepoChange = useCallback(
     (event: RepoChangeEvent) => {
@@ -217,14 +201,14 @@ export function useRequestDiscussionStore({
       }
       if (
         typeof event.kind === 'object' &&
-        'RequestDiscussionChanged' in event.kind &&
-        event.kind.RequestDiscussionChanged.request_id === params.request_id &&
-        event.kind.RequestDiscussionChanged.through_position >
+        'RequestTimelineChanged' in event.kind &&
+        event.kind.RequestTimelineChanged.request_id === params.request_id &&
+        event.kind.RequestTimelineChanged.through_position >
           collectionRef.current.snapshotVersion
       ) {
         catchUpTarget.current = Math.max(
           catchUpTarget.current,
-          event.kind.RequestDiscussionChanged.through_position,
+          event.kind.RequestTimelineChanged.through_position,
         )
         void catchUp()
       }
@@ -302,14 +286,16 @@ export function useRequestDiscussionStore({
 
   const retry = useCallback(
     (discussion: RequestDiscussionView) =>
-      create(discussion.body_markdown, discussion.id),
+      discussion.body_markdown
+        ? create(discussion.body_markdown, discussion.id)
+        : Promise.resolve(false),
     [create],
   )
 
   const patch = useCallback(
     (discussion: RequestDiscussion) => {
       updateCollection((current) =>
-        patchDiscussionForFilter(current, discussion, filter),
+        patchDiscussionForFilter(current, discussion),
       )
       catchUpTarget.current = Math.max(
         catchUpTarget.current,
@@ -317,7 +303,7 @@ export function useRequestDiscussionStore({
       )
       void catchUp()
     },
-    [catchUp, filter, updateCollection],
+    [catchUp, updateCollection],
   )
 
   const markRead = useCallback(
@@ -415,7 +401,7 @@ function collectionWithCachedUi(
   const byId = new Map(collection.byId)
   for (const [discussionId, discussion] of byId) {
     const cachedDiscussion = cached.byId.get(discussionId)
-    if (cachedDiscussion?.expanded) {
+    if (cachedDiscussion?.expanded && !discussion.change_block) {
       byId.set(discussionId, { ...discussion, expanded: true })
     }
   }
@@ -437,6 +423,7 @@ function optimisticDiscussion({
   return {
     author: actor,
     body_markdown: body,
+    change_block: null,
     created_at_unix: Math.floor(Date.now() / 1000),
     id: clientDiscussionId,
     last_activity_position: position,

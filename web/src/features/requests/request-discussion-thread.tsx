@@ -11,7 +11,7 @@ import {
   Reply,
   RotateCcw,
 } from 'lucide-react'
-import { memo, useEffect, useRef, useState } from 'react'
+import { memo, type ReactNode, useEffect, useRef, useState } from 'react'
 import type {
   CreateReplyInput,
   LoadRepliesInput,
@@ -57,6 +57,7 @@ export const RequestDiscussionThread = memo(function RequestDiscussionThread({
   onRetryRoot,
   onSetResolved,
   params,
+  rootContent,
 }: {
   actions: RequestDiscussionThreadActions
   actor: { handle: string; id: string }
@@ -72,6 +73,7 @@ export const RequestDiscussionThread = memo(function RequestDiscussionThread({
     resolved: boolean,
   ) => Promise<void>
   params: { owner: string; repo: string; request_id: string }
+  rootContent?: ReactNode
 }) {
   const [expandedReplies, setExpandedReplies] = useState(false)
   const [loadingReplies, setLoadingReplies] = useState(false)
@@ -233,6 +235,7 @@ export const RequestDiscussionThread = memo(function RequestDiscussionThread({
   const canPostReply =
     canReply &&
     (
+      discussion.status === 'Dormant' ||
       discussion.status === 'Open' ||
       canResolve
     )
@@ -250,6 +253,9 @@ export const RequestDiscussionThread = memo(function RequestDiscussionThread({
             <span className="text-sm font-semibold">
               {discussion.author.handle}
             </span>
+            {discussion.change_block ? (
+              <span className="text-sm text-muted-foreground">pushed a code change</span>
+            ) : null}
             <span className="font-mono text-xs tabular-nums text-muted-foreground">
               {formatUnixDate(discussion.created_at_unix)}
             </span>
@@ -275,7 +281,7 @@ export const RequestDiscussionThread = memo(function RequestDiscussionThread({
             ) : null}
           </div>
 
-          {collapsed ? (
+          {rootContent ?? (collapsed ? (
             <button
               className="mt-2 flex w-full min-w-0 items-start gap-2 text-left"
               onClick={() => {
@@ -290,11 +296,13 @@ export const RequestDiscussionThread = memo(function RequestDiscussionThread({
               </span>
             </button>
           ) : (
-            <RequestDiscussionMarkdown
-              className="mt-2"
-              source={discussion.body_markdown}
-            />
-          )}
+            discussion.body_markdown ? (
+              <RequestDiscussionMarkdown
+                className="mt-2"
+                source={discussion.body_markdown}
+              />
+            ) : null
+          ))}
 
           <div className="mt-3 flex flex-wrap items-center gap-2">
             {canPostReply || discussion.reply_count > 0 ? (
@@ -313,7 +321,7 @@ export const RequestDiscussionThread = memo(function RequestDiscussionThread({
                 ) : null}
               </Button>
             ) : null}
-            {canResolve && !discussion.pending ? (
+            {canResolve && discussion.status !== 'Dormant' && !discussion.pending ? (
               <Button
                 onClick={() =>
                   void onSetResolved(

@@ -5,7 +5,7 @@ use crate::{
         projection::{ProjectionViewKey, project_graph},
         requests::{
             RecordRequestRevisionInput, RecordWorkingRequestUploadInput, Request, RequestAudience,
-            RequestState, canonical_request_ref,
+            RequestChangeBlock, RequestState, canonical_request_ref,
         },
         store::{RepoPublicationState, RepositoryActor, SourceBlob},
     },
@@ -275,6 +275,9 @@ pub(crate) async fn persist_request_ref_revision(
         &update.request_name,
     )
     .await?;
+    let request_id = request.id.clone();
+    let request_repo_id = request.repo_id.clone();
+    let request_audience = request.audience;
     let now_unix = unix_now()?;
     let persisted =
         persist_request_ref_to_store(state, owner, repo_name, staging_repo, &request, &update)
@@ -294,7 +297,7 @@ pub(crate) async fn persist_request_ref_revision(
             .await
             .map(|mutation| mutation.orphan_objects)
     } else {
-        state
+        let mutation = state
             .metadata
             .record_request_revision(RecordRequestRevisionInput {
                 request_id: request.id,
@@ -307,8 +310,19 @@ pub(crate) async fn persist_request_ref_revision(
                 body: None,
                 now_unix,
             })
-            .await
-            .map(|mutation| mutation.orphan_objects)
+            .await;
+        if let Ok(mutation) = &mutation {
+            state
+                .publish_request_timeline_change(
+                    &request_repo_id,
+                    request_id,
+                    mutation.discussion.id.clone(),
+                    mutation.discussion.last_activity_position,
+                    request_audience,
+                )
+                .await;
+        }
+        mutation.map(|_| Vec::new())
     };
     if let Err(error) = mutation_result {
         rollback_request_ref(
@@ -328,22 +342,52 @@ pub(crate) async fn persist_request_ref_revision(
     Ok(())
 }
 
-pub(crate) fn with_request_ref_store_repo<T>(
+pub(crate) fn with_request_change_block_store_repo<T>(
     state: &AppState,
     owner: &str,
     repo_name: &str,
     request: &Request,
+    block: &RequestChangeBlock,
     action: impl FnOnce(&FsPath) -> Result<T, ApiError>,
 ) -> Result<T, ApiError> {
-    if request.git_snapshot.is_none() {
-        return Err(ApiError::conflict("request branch has not been pushed"));
-    }
     let request_ref = canonical_request_ref(&request.name);
     let _update_lock = acquire_request_ref_update_lock(state, owner, repo_name, &request_ref)?;
     let _store_lock = acquire_request_ref_store_lock(state, owner, repo_name)?;
     let store_repo = ensure_request_ref_store_repo_locked(state, owner, repo_name)?;
-    ensure_request_ref_available_in_store_locked(state, &store_repo, request)?;
-    action(&store_repo)
+    let bundle_path = store_repo.with_extension(format!("change-block-{}.bundle.tmp", block.id));
+    let temporary_ref = format!("refs/scope/internal/change-block/{}", block.id);
+    let bytes = source_blob_bytes(state.object_store.as_ref(), &block.git_snapshot)?;
+    fs::write(&bundle_path, bytes).map_err(ApiError::internal)?;
+    let bundle = bundle_path.to_string_lossy().to_string();
+    let refspec = format!("+{request_ref}:{temporary_ref}");
+    let imported = run_git(
+        Some(&store_repo),
+        &["fetch", &bundle, &refspec],
+        "attaching request change block",
+    );
+    let _ = fs::remove_file(&bundle_path);
+    imported?;
+    if !request_ref_oid_is_commit(&store_repo, &block.new_head_oid)? {
+        let _ = run_git(
+            Some(&store_repo),
+            &["update-ref", "-d", &temporary_ref],
+            "removing request change block ref",
+        );
+        return Err(ApiError::service_unavailable(
+            "request change block snapshot does not contain its head",
+        ));
+    }
+    let result = action(&store_repo);
+    let cleanup = run_git(
+        Some(&store_repo),
+        &["update-ref", "-d", &temporary_ref],
+        "removing request change block ref",
+    );
+    match (result, cleanup) {
+        (Ok(value), Ok(())) => Ok(value),
+        (Err(error), _) => Err(error),
+        (Ok(_), Err(error)) => Err(error),
+    }
 }
 
 /// Adds every already-authorized request snapshot to a disposable upload-pack repository.
