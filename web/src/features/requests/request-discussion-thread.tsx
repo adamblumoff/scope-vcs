@@ -665,14 +665,15 @@ function DiscussionReply({
         ) : null}
         {childCount > 0 ? (
           <button
+            aria-label={expanded
+              ? 'Hide replies'
+              : `Show ${childCount} ${childCount === 1 ? 'reply' : 'replies'}`}
             aria-expanded={expanded}
             className="text-xs font-medium text-brand hover:text-foreground"
             onClick={() => onToggleChildren(reply)}
             type="button"
           >
-            {expanded
-              ? `− Hide ${childCount === 1 ? 'reply' : 'replies'}`
-              : `+ ${childCount} ${childCount === 1 ? 'reply' : 'replies'}`}
+            {expanded ? '-' : `+${childCount}`}
           </button>
         ) : null}
       </div>
