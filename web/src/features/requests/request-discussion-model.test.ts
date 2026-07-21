@@ -5,10 +5,10 @@ import {
   applyDiscussionChangesWithoutReordering,
   collectionFromPage,
   compactDiscussionSummary,
+  directDiscussionReplies,
   insertOptimisticDiscussion,
   markDiscussionRead,
   mergeDiscussionReplies,
-  patchDiscussionForFilter,
   patchDiscussionWithoutReordering,
   replaceDiscussion,
   upsertDiscussionReply,
@@ -29,7 +29,7 @@ test('appends cursor pages without duplicating discussions', () => {
     next_cursor: null,
     snapshot_version: 5,
   })
-  assert.deepEqual(result.order, ['one', 'two', 'three'])
+  assert.deepEqual(result.order, ['three', 'two', 'one'])
   assert.equal(result.nextCursor, null)
 })
 
@@ -42,10 +42,9 @@ test('realtime patches a discussion without moving it under the cursor', () => {
   const patched = applyDiscussionChangesWithoutReordering(
     collection,
     [discussion('two', 9)],
-    'Open',
     9,
   )
-  assert.deepEqual(patched.order, ['one', 'two'])
+  assert.deepEqual(patched.order, ['two', 'one'])
 })
 
 test('realtime appends a new root without reordering visible roots', () => {
@@ -57,14 +56,31 @@ test('realtime appends a new root without reordering visible roots', () => {
   const patched = applyDiscussionChangesWithoutReordering(
     collection,
     [discussion('three', 8)],
-    'Open',
     8,
   )
-  assert.deepEqual(patched.order, ['one', 'two', 'three'])
+  assert.deepEqual(patched.order, ['two', 'one', 'three'])
   assert.equal(patched.snapshotVersion, 8)
 })
 
-test('open realtime view ignores newly discovered resolved roots', () => {
+test('realtime inserts an unseen older root by its opened position', () => {
+  const collection = collectionFromPage({
+    discussions: [discussion('one', 5), discussion('two', 4)],
+    next_cursor: 'older',
+    snapshot_version: 5,
+  })
+  const older = {
+    ...discussion('older', 9),
+    opened_position: 3,
+  }
+  const patched = applyDiscussionChangesWithoutReordering(
+    collection,
+    [older],
+    9,
+  )
+  assert.deepEqual(patched.order, ['older', 'two', 'one'])
+})
+
+test('timeline keeps newly discovered resolved roots', () => {
   const collection = collectionFromPage({
     discussions: [discussion('one', 5)],
     next_cursor: null,
@@ -78,14 +94,13 @@ test('open realtime view ignores newly discovered resolved roots', () => {
   const patched = applyDiscussionChangesWithoutReordering(
     collection,
     [resolved],
-    'Open',
     8,
   )
-  assert.deepEqual(patched.order, ['one'])
+  assert.deepEqual(patched.order, ['one', 'resolved'])
   assert.equal(patched.snapshotVersion, 8)
 })
 
-test('open realtime view removes roots that become resolved', () => {
+test('timeline keeps roots in place when they become resolved', () => {
   const collection = collectionFromPage({
     discussions: [discussion('one', 5), discussion('two', 4)],
     next_cursor: null,
@@ -99,41 +114,14 @@ test('open realtime view removes roots that become resolved', () => {
   const patched = applyDiscussionChangesWithoutReordering(
     collection,
     [resolved],
-    'Open',
     8,
   )
-  assert.deepEqual(patched.order, ['two'])
-  assert.equal(patched.byId.has('one'), false)
+  assert.deepEqual(patched.order, ['two', 'one'])
+  assert.equal(patched.byId.get('one')?.status, 'Resolved')
   assert.equal(patched.snapshotVersion, 8)
 })
 
-test('resolved mutation responses cannot reinsert an SSE-removed open root', () => {
-  const collection = collectionFromPage({
-    discussions: [discussion('one', 5)],
-    next_cursor: null,
-    snapshot_version: 5,
-  })
-  const resolved = {
-    ...discussion('one', 8),
-    resolved_at_unix: 8,
-    status: 'Resolved' as const,
-  }
-  const afterEvent = applyDiscussionChangesWithoutReordering(
-    collection,
-    [resolved],
-    'Open',
-    8,
-  )
-  const afterResponse = patchDiscussionForFilter(
-    afterEvent,
-    resolved,
-    'Open',
-  )
-  assert.deepEqual(afterResponse.order, [])
-  assert.equal(afterResponse.snapshotVersion, 8)
-})
-
-test('all realtime view keeps roots that become resolved', () => {
+test('realtime timeline keeps roots that become resolved', () => {
   const collection = collectionFromPage({
     discussions: [discussion('one', 5)],
     next_cursor: null,
@@ -147,7 +135,6 @@ test('all realtime view keeps roots that become resolved', () => {
   const patched = applyDiscussionChangesWithoutReordering(
     collection,
     [resolved],
-    'All',
     8,
   )
   assert.deepEqual(patched.order, ['one'])
@@ -165,7 +152,32 @@ test('optimistic roots are replaced in their visible position', () => {
     pending: 'sending',
   } satisfies RequestDiscussionView
   const pending = insertOptimisticDiscussion(collection, optimistic)
-  assert.deepEqual(pending.order, ['client-1', 'one'])
+  assert.deepEqual(pending.order, ['one', 'client-1'])
+})
+
+test('optimistic acknowledgement is ordered around concurrent roots', () => {
+  const collection = collectionFromPage({
+    discussions: [discussion('one', 5)],
+    next_cursor: null,
+    snapshot_version: 5,
+  })
+  const optimistic = {
+    ...discussion('client-1', Number.MAX_SAFE_INTEGER),
+    pending: 'sending' as const,
+  }
+  const pending = insertOptimisticDiscussion(collection, optimistic)
+  const withConcurrentRoot = replaceDiscussion(
+    pending,
+    discussion('later', 7),
+  )
+
+  const acknowledged = replaceDiscussion(
+    withConcurrentRoot,
+    discussion('acknowledged', 6),
+    'client-1',
+  )
+
+  assert.deepEqual(acknowledged.order, ['one', 'acknowledged', 'later'])
 })
 
 test('mutation responses do not advance the authoritative catch-up cursor', () => {
@@ -193,6 +205,7 @@ test('mark read is monotonic in the client projection', () => {
 test('compact summary uses the first nonempty Markdown line', () => {
   assert.equal(compactDiscussionSummary('\n## Cache invalidation\nMore'), 'Cache invalidation')
   assert.equal(compactDiscussionSummary(' \n'), 'Untitled discussion')
+  assert.equal(compactDiscussionSummary(null), 'Update')
 })
 
 test('posting from a collapsed reply preview preserves existing replies', () => {
@@ -233,6 +246,26 @@ test('expanded replies merge new realtime previews in order', () => {
   )
 })
 
+test('reply trees expose only the requested direct children', () => {
+  const root = reply('root', 1)
+  const child = { ...reply('child', 2), reply_to_reply_id: root.id }
+  const grandchild = { ...reply('grandchild', 3), reply_to_reply_id: child.id }
+  const replies = [root, child, grandchild]
+
+  assert.deepEqual(
+    directDiscussionReplies(replies, null).map(({ id }) => id),
+    ['root'],
+  )
+  assert.deepEqual(
+    directDiscussionReplies(replies, root.id).map(({ id }) => id),
+    ['child'],
+  )
+  assert.deepEqual(
+    directDiscussionReplies(replies, child.id).map(({ id }) => id),
+    ['grandchild'],
+  )
+})
+
 function discussion(id: string, lastActivity: number): RequestDiscussion {
   return {
     author: { handle: 'maya', id: 'user-maya' },
@@ -255,6 +288,8 @@ function reply(id: string, position: number) {
   return {
     author: { handle: 'maya', id: 'user-maya' },
     body_markdown: `Reply ${id}`,
+    child_reply_count: 0,
+    can_reply: true,
     created_at_unix: position,
     discussion_id: 'one',
     id,

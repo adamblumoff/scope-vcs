@@ -7,6 +7,10 @@ import {
   parseCommitHistoryInput,
 } from '@/api/history'
 import { HttpError } from '@/api/client'
+import {
+  loadRequestChangeBlockFileDiffForRequest,
+  loadRequestChangeBlockFilesForRequest,
+} from '@/api/requests'
 import { createServerFn } from '@tanstack/react-start'
 
 export const loadCommitHistory = createServerFn({ method: 'GET' })
@@ -33,3 +37,31 @@ export const loadCommitDetail = createServerFn({ method: 'GET' })
 export const loadCommitFileDiff = createServerFn({ method: 'GET' })
   .validator(parseCommitFileDiffInput)
   .handler(({ data }) => loadCommitFileDiffForRequest(data))
+
+export const loadRequestRevision = createServerFn({ method: 'GET' })
+  .validator((data: RequestRevisionInput) => data)
+  .handler(({ data }) => loadRequestChangeBlockFilesForRequest({
+    block_id: data.revision,
+    owner: data.owner,
+    repo: data.repo,
+    request_id: data.request,
+  }))
+
+export const loadRequestRevisionFileDiff = createServerFn({ method: 'GET' })
+  .validator((data: RequestRevisionFileInput) => data)
+  .handler(({ data }) => loadRequestChangeBlockFileDiffForRequest({
+    block_id: data.revision,
+    owner: data.owner,
+    path: data.path,
+    repo: data.repo,
+    request_id: data.request,
+  }))
+
+type RequestRevisionInput = {
+  owner: string
+  repo: string
+  request: string
+  revision: string
+}
+
+type RequestRevisionFileInput = RequestRevisionInput & { path: string }

@@ -78,7 +78,7 @@ async fn reads_the_uploaded_request_ref_bundle() {
         })
         .await
         .unwrap();
-    state
+    let submitted = state
         .metadata
         .submit_request(SubmitRequestInput {
             request_id: "req_review".to_string(),
@@ -91,47 +91,55 @@ async fn reads_the_uploaded_request_ref_bundle() {
         })
         .await
         .unwrap();
+    let change_block_id = submitted.change_block.id;
 
     let app = router(state);
-    let changes = app
+    let revision = app
         .clone()
         .oneshot(
             Request::builder()
-                .uri("/v1/repos/owner/repo/requests/req_review/changes")
+                .uri(format!(
+                    "/v1/repos/owner/repo/requests/req_review/changes/{change_block_id}"
+                ))
                 .header(AUTHORIZATION, bearer_header())
                 .body(Body::empty())
                 .unwrap(),
         )
         .await
         .unwrap();
-    assert_eq!(changes.status(), StatusCode::OK);
-    let changes = response_json(changes).await;
-    assert_eq!(changes["files"][0]["path"], "README.md");
-    assert_eq!(changes["files"][0]["kind"], "Modified");
-    assert_eq!(changes["files"][1]["path"], "script.sh");
-    assert_eq!(changes["files"][1]["old_mode"], "100644");
-    assert_eq!(changes["files"][1]["new_mode"], "100755");
+    assert_eq!(revision.status(), StatusCode::OK);
+    let revision = response_json(revision).await;
+    assert_eq!(revision["change_block"]["id"], change_block_id);
+    assert_eq!(revision["files"][0]["path"], "README.md");
+    assert_eq!(revision["files"][0]["kind"], "Modified");
+    assert_eq!(revision["files"][1]["path"], "script.sh");
+    assert_eq!(revision["files"][1]["old_mode"], "100644");
+    assert_eq!(revision["files"][1]["new_mode"], "100755");
 
-    let diff = app
+    let revision_diff = app
         .clone()
         .oneshot(
             Request::builder()
-                .uri("/v1/repos/owner/repo/requests/req_review/file-diff?path=README.md")
+                .uri(format!(
+                    "/v1/repos/owner/repo/requests/req_review/changes/{change_block_id}/file-diff?path=README.md"
+                ))
                 .header(AUTHORIZATION, bearer_header())
                 .body(Body::empty())
                 .unwrap(),
         )
         .await
         .unwrap();
-    assert_eq!(diff.status(), StatusCode::OK);
-    let diff = response_json(diff).await;
-    assert_text_content(&diff["old_content"], "hello\n");
-    assert_text_content(&diff["new_content"], "hello from request\n");
+    assert_eq!(revision_diff.status(), StatusCode::OK);
+    let revision_diff = response_json(revision_diff).await;
+    assert_text_content(&revision_diff["old_content"], "hello\n");
+    assert_text_content(&revision_diff["new_content"], "hello from request\n");
 
     let mode_diff = app
         .oneshot(
             Request::builder()
-                .uri("/v1/repos/owner/repo/requests/req_review/file-diff?path=script.sh")
+                .uri(format!(
+                    "/v1/repos/owner/repo/requests/req_review/changes/{change_block_id}/file-diff?path=script.sh"
+                ))
                 .header(AUTHORIZATION, bearer_header())
                 .body(Body::empty())
                 .unwrap(),

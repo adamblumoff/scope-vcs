@@ -1,7 +1,8 @@
 use super::settlement::{maximum_request_reward, u32_to_i32};
 use super::{
     CreditLedgerEntry, CreditLedgerEntryKind, Request, RequestActorRole, RequestAudience,
-    RequestEvent, RequestEventKind, RequestEventPayload, RequestState, UserCreditAccount,
+    RequestChangeBlock, RequestDiscussion, RequestDiscussionReadState, RequestEvent,
+    RequestEventKind, RequestEventPayload, RequestState, UserCreditAccount,
     advance_request_activity, ensure_event_id_available, ensure_ledger_entry_id_available,
     ensure_request_name_available, validate_required_id,
 };
@@ -60,6 +61,9 @@ pub struct SubmitRequestInput {
 pub struct SubmitRequestMutation {
     pub request: Request,
     pub event: RequestEvent,
+    pub change_block: RequestChangeBlock,
+    pub discussion: RequestDiscussion,
+    pub read_state: RequestDiscussionReadState,
     pub account: Option<UserCreditAccount>,
     pub ledger_entry: Option<CreditLedgerEntry>,
 }
@@ -250,9 +254,14 @@ pub fn submit_request(
         ledger_entries.insert(entry.id.clone(), entry);
     }
     events.insert(event.id.clone(), event.clone());
+    let (change_block, discussion, read_state) =
+        super::change_blocks::submitted_change_block(&request, &event)?;
     Ok(SubmitRequestMutation {
         request,
         event,
+        change_block,
+        discussion,
+        read_state,
         account,
         ledger_entry,
     })

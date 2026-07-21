@@ -24,25 +24,27 @@ pub const REPO_REQUEST: &str = "/v1/repos/{owner}/{repo}/requests/{request_id}";
 pub const REPO_SESSION: &str = "/v1/repos/{owner}/{repo}/session";
 pub const REPO_FILES: &str = "/v1/repos/{owner}/{repo}/files";
 pub const REPO_FILE_CONTENT: &str = "/v1/repos/{owner}/{repo}/files/content";
-pub const REPO_REQUEST_CHANGES: &str = "/v1/repos/{owner}/{repo}/requests/{request_id}/changes";
-pub const REPO_REQUEST_FILE_DIFF: &str = "/v1/repos/{owner}/{repo}/requests/{request_id}/file-diff";
+pub const REPO_REQUEST_CHANGE_BLOCK_FILES: &str =
+    "/v1/repos/{owner}/{repo}/requests/{request_id}/changes/{block_id}";
+pub const REPO_REQUEST_CHANGE_BLOCK_FILE_DIFF: &str =
+    "/v1/repos/{owner}/{repo}/requests/{request_id}/changes/{block_id}/file-diff";
 pub const REPO_REQUEST_SUBMIT: &str = "/v1/repos/{owner}/{repo}/requests/{request_id}/submit";
 pub const REPO_REQUEST_DESCRIPTION: &str =
     "/v1/repos/{owner}/{repo}/requests/{request_id}/description";
 pub const REPO_REQUEST_DISCUSSIONS: &str =
-    "/v1/repos/{owner}/{repo}/requests/{request_id}/discussions";
+    "/v1/repos/{owner}/{repo}/requests/{request_id}/timeline";
 pub const REPO_REQUEST_DISCUSSION_CHANGES: &str =
-    "/v1/repos/{owner}/{repo}/requests/{request_id}/discussions/changes";
+    "/v1/repos/{owner}/{repo}/requests/{request_id}/timeline/changes";
 pub const REPO_REQUEST_DISCUSSION_REPLIES: &str =
-    "/v1/repos/{owner}/{repo}/requests/{request_id}/discussions/{discussion_id}/replies";
+    "/v1/repos/{owner}/{repo}/requests/{request_id}/threads/{discussion_id}/replies";
 pub const REPO_REQUEST_DISCUSSION_RESOLVE: &str =
-    "/v1/repos/{owner}/{repo}/requests/{request_id}/discussions/{discussion_id}/resolve";
+    "/v1/repos/{owner}/{repo}/requests/{request_id}/threads/{discussion_id}/resolve";
 pub const REPO_REQUEST_DISCUSSION_REOPEN: &str =
-    "/v1/repos/{owner}/{repo}/requests/{request_id}/discussions/{discussion_id}/reopen";
+    "/v1/repos/{owner}/{repo}/requests/{request_id}/threads/{discussion_id}/reopen";
 pub const REPO_REQUEST_DISCUSSION_REOPEN_AND_REPLY: &str =
-    "/v1/repos/{owner}/{repo}/requests/{request_id}/discussions/{discussion_id}/reopen-and-reply";
+    "/v1/repos/{owner}/{repo}/requests/{request_id}/threads/{discussion_id}/reopen-and-reply";
 pub const REPO_REQUEST_DISCUSSION_READ: &str =
-    "/v1/repos/{owner}/{repo}/requests/{request_id}/discussions/{discussion_id}/read";
+    "/v1/repos/{owner}/{repo}/requests/{request_id}/threads/{discussion_id}/read";
 pub const REPO_REQUEST_ACTIVITY: &str = "/v1/repos/{owner}/{repo}/requests/{request_id}/activity";
 pub const REPO_REQUEST_NEEDS_RESPONSE: &str =
     "/v1/repos/{owner}/{repo}/requests/{request_id}/needs-response";

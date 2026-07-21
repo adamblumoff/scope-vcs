@@ -133,7 +133,7 @@ fn event_for_principal(
         return Some(event);
     }
 
-    if let RepoChangeKind::RequestDiscussionChanged { audience, .. } = &event.kind {
+    if let RepoChangeKind::RequestTimelineChanged { audience, .. } = &event.kind {
         if matches!(audience, RequestAudience::Public) {
             return Some(RepoChangeEvent {
                 version: 0,

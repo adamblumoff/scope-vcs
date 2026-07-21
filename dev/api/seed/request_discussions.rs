@@ -15,8 +15,22 @@ pub(super) const MAINTAINER_ID: &str = "scope_usr_dev_maintainer";
 pub(super) const REQUEST_ID: &str = "req_demo_submitted";
 pub(super) const RETRY_CAP_ID: &str = "discussion_demo_retry_cap";
 pub(super) const RETRY_CAP_MAINTAINER_REPLY_ID: &str = "discussion_reply_demo_retry_cap_maintainer";
+const RETRY_CAP_CONTRIBUTOR_REPLY_ID: &str = "discussion_reply_demo_retry_cap_quote";
 pub(super) const RESOLVED_DOCS_ID: &str = "discussion_demo_resolved_docs";
 const JITTER_ID: &str = "discussion_demo_jitter";
+const SUBMISSION_BLOCK_THREAD_ID: &str = "thread_event_req_demo_submitted_submitted";
+const JITTER_BLOCK_THREAD_ID: &str = "thread_event_req_demo_submitted_revision_2";
+const TEST_BLOCK_THREAD_ID: &str = "thread_event_req_demo_submitted_revision_3";
+const FINAL_BLOCK_THREAD_ID: &str = "thread_event_req_demo_submitted_revision_4";
+
+struct SeedChangeBlockReply {
+    discussion_id: &'static str,
+    id: &'static str,
+    actor_user_id: &'static str,
+    client_reply_id: &'static str,
+    body: &'static str,
+    reply_to_reply_id: Option<&'static str>,
+}
 
 pub(super) fn collaborators() -> [UserAccount; 2] {
     [
@@ -70,6 +84,7 @@ pub(crate) async fn seed_request_discussion_gallery(
     create_retry_cap_conversation(metadata).await?;
     create_jitter_conversation(metadata).await?;
     create_resolved_docs_conversation(metadata).await?;
+    create_change_block_conversations(metadata).await?;
 
     let resolved = metadata
         .request_discussion(REQUEST_ID, RESOLVED_DOCS_ID, Some(super::DEV_SEED_USER_ID))
@@ -79,6 +94,76 @@ pub(crate) async fn seed_request_discussion_gallery(
         return Err(ApiError::internal_message(
             "seeded resolved discussion did not resolve",
         ));
+    }
+    Ok(())
+}
+
+async fn create_change_block_conversations(metadata: &MetadataStore) -> Result<(), ApiError> {
+    let replies = [
+        SeedChangeBlockReply {
+            discussion_id: SUBMISSION_BLOCK_THREAD_ID,
+            id: "discussion_reply_demo_submission_review",
+            actor_user_id: MAINTAINER_ID,
+            client_reply_id: "seed_submission_review",
+            body: concat!(
+                "This is a good minimal starting point. Please name the two-second cap and ",
+                "make the milliseconds contract explicit before we build on it."
+            ),
+            reply_to_reply_id: None,
+        },
+        SeedChangeBlockReply {
+            discussion_id: SUBMISSION_BLOCK_THREAD_ID,
+            id: "discussion_reply_demo_submission_followup",
+            actor_user_id: CONTRIBUTOR_ID,
+            client_reply_id: "seed_submission_followup",
+            body: "Done in the next revision; the cap and unit are both named now.",
+            reply_to_reply_id: Some("discussion_reply_demo_submission_review"),
+        },
+        SeedChangeBlockReply {
+            discussion_id: JITTER_BLOCK_THREAD_ID,
+            id: "discussion_reply_demo_jitter_block",
+            actor_user_id: MAINTAINER_ID,
+            client_reply_id: "seed_jitter_block",
+            body: concat!(
+                "The bounded jitter looks right. A deterministic random source in the tests ",
+                "would make the boundary behavior easy to review."
+            ),
+            reply_to_reply_id: None,
+        },
+        SeedChangeBlockReply {
+            discussion_id: TEST_BLOCK_THREAD_ID,
+            id: "discussion_reply_demo_test_block",
+            actor_user_id: CONTRIBUTOR_ID,
+            client_reply_id: "seed_test_block",
+            body: "The tests now pin both the zero-jitter and maximum-jitter edges.",
+            reply_to_reply_id: None,
+        },
+        SeedChangeBlockReply {
+            discussion_id: FINAL_BLOCK_THREAD_ID,
+            id: "discussion_reply_demo_final_block",
+            actor_user_id: MAINTAINER_ID,
+            client_reply_id: "seed_final_block",
+            body: concat!(
+                "This closes the loop nicely: exported policy, implementation, tests, and ",
+                "contributor documentation all agree."
+            ),
+            reply_to_reply_id: None,
+        },
+    ];
+    for (index, reply) in replies.into_iter().enumerate() {
+        metadata
+            .create_request_discussion_reply(CreateRequestDiscussionReplyInput {
+                request_id: REQUEST_ID.to_string(),
+                discussion_id: reply.discussion_id.to_string(),
+                id: reply.id.to_string(),
+                actor_user_id: reply.actor_user_id.to_string(),
+                actor_can_participate: false,
+                client_reply_id: reply.client_reply_id.to_string(),
+                body_markdown: reply.body.to_string(),
+                reply_to_reply_id: reply.reply_to_reply_id.map(ToString::to_string),
+                now_unix: 1_800_000_150 + index as u64,
+            })
+            .await?;
     }
     Ok(())
 }
@@ -121,7 +206,7 @@ async fn create_retry_cap_conversation(metadata: &MetadataStore) -> Result<(), A
         .create_request_discussion_reply(CreateRequestDiscussionReplyInput {
             request_id: REQUEST_ID.to_string(),
             discussion_id: RETRY_CAP_ID.to_string(),
-            id: "discussion_reply_demo_retry_cap_quote".to_string(),
+            id: RETRY_CAP_CONTRIBUTOR_REPLY_ID.to_string(),
             actor_user_id: CONTRIBUTOR_ID.to_string(),
             actor_can_participate: false,
             client_reply_id: "seed_retry_cap_quote".to_string(),
@@ -132,6 +217,23 @@ async fn create_retry_cap_conversation(metadata: &MetadataStore) -> Result<(), A
             .to_string(),
             reply_to_reply_id: Some(RETRY_CAP_MAINTAINER_REPLY_ID.to_string()),
             now_unix: 1_800_000_122,
+        })
+        .await?;
+    metadata
+        .create_request_discussion_reply(CreateRequestDiscussionReplyInput {
+            request_id: REQUEST_ID.to_string(),
+            discussion_id: RETRY_CAP_ID.to_string(),
+            id: "discussion_reply_demo_retry_cap_nested".to_string(),
+            actor_user_id: MAINTAINER_ID.to_string(),
+            actor_can_participate: false,
+            client_reply_id: "seed_retry_cap_nested".to_string(),
+            body_markdown: concat!(
+                "Exactly. Keeping that decision nested here makes the implementation history ",
+                "easy to follow without expanding the whole conversation."
+            )
+            .to_string(),
+            reply_to_reply_id: Some(RETRY_CAP_CONTRIBUTOR_REPLY_ID.to_string()),
+            now_unix: 1_800_000_123,
         })
         .await?;
     Ok(())
@@ -273,14 +375,29 @@ mod tests {
             })
             .await
             .unwrap();
-        assert_eq!(discussions.discussions.len(), 3);
+        assert_eq!(discussions.discussions.len(), 8);
         assert_eq!(
             discussions
                 .discussions
                 .iter()
                 .filter(|model| model.discussion.status == RequestDiscussionStatus::Open)
                 .count(),
-            2
+            6
+        );
+        let change_block = discussions
+            .discussions
+            .iter()
+            .find(|model| model.discussion.status == RequestDiscussionStatus::Dormant)
+            .unwrap();
+        assert!(change_block.change_block.is_some());
+        assert!(change_block.discussion.body_markdown.is_none());
+        assert_eq!(
+            discussions
+                .discussions
+                .iter()
+                .filter(|model| model.change_block.is_some())
+                .count(),
+            5
         );
         assert_eq!(
             discussions
@@ -292,26 +409,55 @@ mod tests {
                 .status,
             RequestDiscussionStatus::Resolved
         );
+        let retry_cap = discussions
+            .discussions
+            .iter()
+            .find(|model| model.discussion.id == RETRY_CAP_ID)
+            .unwrap();
+        assert_eq!(retry_cap.reply_count, 3);
+        assert_eq!(retry_cap.latest_replies.len(), 3);
+        assert_eq!(retry_cap.latest_replies[0].child_reply_count, 1);
 
         let (replies, users) = metadata
-            .request_discussion_replies(RETRY_CAP_ID, None, 10)
+            .request_discussion_replies(RETRY_CAP_ID, None, None, 10)
             .await
             .unwrap();
-        assert_eq!(replies.len(), 2);
+        assert_eq!(replies.len(), 1);
+        assert_eq!(replies[0].child_reply_count, 1);
+        assert_eq!(replies[0].reply.id, RETRY_CAP_MAINTAINER_REPLY_ID);
+        let (child_replies, child_users) = metadata
+            .request_discussion_replies(RETRY_CAP_ID, Some(RETRY_CAP_MAINTAINER_REPLY_ID), None, 10)
+            .await
+            .unwrap();
+        assert_eq!(child_replies.len(), 1);
+        assert_eq!(child_replies[0].child_reply_count, 1);
         assert_eq!(
-            replies
-                .iter()
-                .find(|reply| reply.reply_to_reply_id.is_some())
-                .unwrap()
-                .reply_to_reply_id
-                .as_deref(),
+            child_replies[0].reply.reply_to_reply_id.as_deref(),
             Some(RETRY_CAP_MAINTAINER_REPLY_ID)
         );
+        let (grandchild_replies, _) = metadata
+            .request_discussion_replies(
+                RETRY_CAP_ID,
+                Some(RETRY_CAP_CONTRIBUTOR_REPLY_ID),
+                None,
+                10,
+            )
+            .await
+            .unwrap();
+        assert_eq!(grandchild_replies.len(), 1);
+        assert_eq!(grandchild_replies[0].child_reply_count, 0);
         assert_eq!(
-            users.get(CONTRIBUTOR_ID).unwrap().handle,
+            child_users.get(CONTRIBUTOR_ID).unwrap().handle,
             "river-contributor"
         );
         assert_eq!(users.get(MAINTAINER_ID).unwrap().handle, "maya-maintainer");
+
+        let (block_replies, _) = metadata
+            .request_discussion_replies(SUBMISSION_BLOCK_THREAD_ID, None, None, 10)
+            .await
+            .unwrap();
+        assert_eq!(block_replies.len(), 1);
+        assert_eq!(block_replies[0].child_reply_count, 1);
 
         let activity = metadata
             .request_events_by_request_id(REQUEST_ID)

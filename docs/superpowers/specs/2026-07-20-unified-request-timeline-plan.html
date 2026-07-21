@@ -1,0 +1,2351 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Unified Request Timeline — Implementation Plan</title>
+    <script>
+      (() => {
+        try {
+          const stored = localStorage.getItem("scope-plan-theme");
+          const dark = stored
+            ? stored === "dark"
+            : window.matchMedia("(prefers-color-scheme: dark)").matches;
+          document.documentElement.classList.toggle("dark", dark);
+        } catch (_) {
+          document.documentElement.classList.add("dark");
+        }
+      })();
+    </script>
+    <style>
+      :root {
+        --bg: #f5f5f2;
+        --surface: #ffffff;
+        --surface-2: #eeefeb;
+        --ink: #171a1d;
+        --muted: #656d76;
+        --faint: #8d949c;
+        --line: #d8dcd6;
+        --line-strong: #bcc3bc;
+        --accent: #486a57;
+        --accent-2: #32513f;
+        --accent-soft: #e1ede5;
+        --blue: #466a8e;
+        --blue-soft: #e6eef7;
+        --green: #347855;
+        --green-soft: #dfefe5;
+        --red: #a5534d;
+        --red-soft: #f7e6e4;
+        --amber: #8f6a2e;
+        --amber-soft: #f4ecd9;
+        --code: #e8eae5;
+        --shadow: 0 18px 60px rgba(28, 34, 30, 0.08);
+        --sans:
+          Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont,
+          "Segoe UI", sans-serif;
+        --serif: ui-serif, Georgia, Cambria, "Times New Roman", serif;
+        --mono:
+          ui-monospace, "SFMono-Regular", Menlo, Monaco, Consolas, monospace;
+      }
+
+      html.dark {
+        --bg: #0c0f11;
+        --surface: #121619;
+        --surface-2: #181d20;
+        --ink: #edf0ec;
+        --muted: #a1a9ae;
+        --faint: #778187;
+        --line: #293035;
+        --line-strong: #3a444a;
+        --accent: #8db99d;
+        --accent-2: #b6d6c0;
+        --accent-soft: #17251d;
+        --blue: #8db4db;
+        --blue-soft: #172536;
+        --green: #7fc79d;
+        --green-soft: #14271d;
+        --red: #df928b;
+        --red-soft: #2d1918;
+        --amber: #dfbd77;
+        --amber-soft: #2a2417;
+        --code: #191f22;
+        --shadow: 0 20px 72px rgba(0, 0, 0, 0.28);
+      }
+
+      * {
+        box-sizing: border-box;
+      }
+      html {
+        scroll-behavior: smooth;
+      }
+      body {
+        margin: 0;
+        background: var(--bg);
+        color: var(--ink);
+        font-family: var(--sans);
+        font-size: 15px;
+        line-height: 1.58;
+        -webkit-font-smoothing: antialiased;
+      }
+
+      a {
+        color: inherit;
+      }
+      button {
+        font: inherit;
+      }
+      code,
+      .mono {
+        font-family: var(--mono);
+      }
+      code {
+        padding: 0.12rem 0.3rem;
+        border: 1px solid var(--line);
+        border-radius: 4px;
+        background: var(--code);
+        font-size: 0.89em;
+      }
+
+      .topbar {
+        position: sticky;
+        top: 0;
+        z-index: 40;
+        border-bottom: 1px solid var(--line);
+        background: color-mix(in srgb, var(--bg) 88%, transparent);
+        backdrop-filter: blur(14px);
+      }
+
+      .topbar-inner,
+      .wrap {
+        width: min(1180px, calc(100% - 48px));
+        margin: 0 auto;
+      }
+
+      .topbar-inner {
+        min-height: 56px;
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 22px;
+      }
+
+      .brand {
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        font-weight: 760;
+        letter-spacing: -0.02em;
+        white-space: nowrap;
+      }
+
+      .brand-mark {
+        width: 10px;
+        height: 10px;
+        border-radius: 50%;
+        background: var(--accent);
+        box-shadow: 0 0 0 5px var(--accent-soft);
+      }
+
+      nav {
+        display: flex;
+        gap: 4px;
+        align-items: center;
+      }
+      nav a {
+        padding: 7px 9px;
+        border-radius: 6px;
+        color: var(--muted);
+        font-size: 12px;
+        font-weight: 680;
+        text-decoration: none;
+      }
+      nav a:hover {
+        color: var(--ink);
+        background: var(--surface-2);
+      }
+
+      .theme-toggle {
+        width: 34px;
+        height: 34px;
+        display: grid;
+        place-items: center;
+        margin-left: 8px;
+        border: 1px solid var(--line);
+        border-radius: 7px;
+        color: var(--muted);
+        background: var(--surface);
+        cursor: pointer;
+      }
+      .theme-toggle:hover {
+        color: var(--ink);
+        border-color: var(--line-strong);
+      }
+
+      .hero {
+        padding: 76px 0 56px;
+        border-bottom: 1px solid var(--line);
+        background:
+          radial-gradient(
+            circle at 82% 10%,
+            color-mix(in srgb, var(--accent) 14%, transparent),
+            transparent 26%
+          ),
+          linear-gradient(
+            180deg,
+            color-mix(in srgb, var(--surface) 52%, transparent),
+            transparent
+          );
+      }
+
+      .eyebrow {
+        margin-bottom: 15px;
+        color: var(--accent);
+        font-family: var(--mono);
+        font-size: 11px;
+        font-weight: 760;
+        letter-spacing: 0.12em;
+        text-transform: uppercase;
+      }
+
+      h1,
+      h2,
+      h3,
+      p {
+        margin-top: 0;
+      }
+      h1 {
+        max-width: 980px;
+        margin-bottom: 20px;
+        font-family: var(--serif);
+        font-size: clamp(44px, 7vw, 76px);
+        font-weight: 500;
+        letter-spacing: -0.052em;
+        line-height: 0.99;
+      }
+      h2 {
+        margin-bottom: 12px;
+        font-family: var(--serif);
+        font-size: clamp(29px, 4vw, 42px);
+        font-weight: 500;
+        letter-spacing: -0.035em;
+        line-height: 1.08;
+      }
+      h3 {
+        margin-bottom: 7px;
+        font-size: 17px;
+        letter-spacing: -0.018em;
+        line-height: 1.25;
+      }
+
+      .subtitle {
+        max-width: 900px;
+        margin-bottom: 0;
+        color: var(--muted);
+        font-size: clamp(18px, 2.2vw, 23px);
+        line-height: 1.48;
+      }
+
+      .thesis {
+        display: grid;
+        grid-template-columns: minmax(0, 1fr) 265px;
+        gap: 30px;
+        align-items: end;
+        margin-top: 38px;
+        padding-top: 26px;
+        border-top: 1px solid var(--line);
+      }
+
+      .thesis strong {
+        color: var(--accent-2);
+        font-size: 19px;
+        line-height: 1.45;
+      }
+
+      .meta {
+        display: grid;
+        gap: 7px;
+        color: var(--muted);
+        font-size: 12px;
+      }
+      .meta span {
+        display: flex;
+        justify-content: space-between;
+        gap: 16px;
+      }
+      .meta b {
+        color: var(--ink);
+        font-weight: 650;
+      }
+
+      main {
+        padding: 18px 0 100px;
+      }
+      section {
+        scroll-margin-top: 80px;
+        padding: 58px 0;
+        border-bottom: 1px solid var(--line);
+      }
+      section:last-child {
+        border-bottom: 0;
+      }
+
+      .section-head {
+        display: grid;
+        grid-template-columns: 72px minmax(0, 1fr);
+        gap: 22px;
+        margin-bottom: 28px;
+      }
+      .section-no {
+        padding-top: 7px;
+        color: var(--faint);
+        font-family: var(--mono);
+        font-size: 12px;
+      }
+      .section-intro {
+        max-width: 850px;
+        margin: 0;
+        color: var(--muted);
+        font-size: 17px;
+      }
+
+      .decision-strip {
+        display: grid;
+        grid-template-columns: repeat(4, minmax(0, 1fr));
+        border-block: 1px solid var(--line);
+      }
+      .decision-strip > div {
+        padding: 18px;
+        border-right: 1px solid var(--line);
+      }
+      .decision-strip > div:last-child {
+        border-right: 0;
+      }
+      .decision-strip small {
+        display: block;
+        margin-bottom: 5px;
+        color: var(--faint);
+        font-family: var(--mono);
+        font-size: 10px;
+        letter-spacing: 0.08em;
+        text-transform: uppercase;
+      }
+      .decision-strip strong {
+        display: block;
+        font-size: 14px;
+        line-height: 1.35;
+      }
+
+      .diagram {
+        overflow-x: auto;
+        padding: 28px;
+        border: 1px solid var(--line);
+        border-radius: 12px;
+        background: var(--surface);
+        box-shadow: var(--shadow);
+      }
+      .diagram svg {
+        display: block;
+        width: 100%;
+        min-width: 760px;
+        height: auto;
+      }
+      .diagram .box {
+        fill: var(--surface-2);
+        stroke: var(--line-strong);
+        stroke-width: 1.4;
+      }
+      .diagram .box-accent {
+        fill: var(--accent-soft);
+        stroke: var(--accent);
+        stroke-width: 1.6;
+      }
+      .diagram .box-blue {
+        fill: var(--blue-soft);
+        stroke: var(--blue);
+        stroke-width: 1.4;
+      }
+      .diagram .box-amber {
+        fill: var(--amber-soft);
+        stroke: var(--amber);
+        stroke-width: 1.4;
+      }
+      .diagram .edge {
+        fill: none;
+        stroke: var(--faint);
+        stroke-width: 1.6;
+      }
+      .diagram .edge-accent {
+        fill: none;
+        stroke: var(--accent);
+        stroke-width: 1.8;
+      }
+      .diagram text {
+        fill: var(--ink);
+        font-family: var(--sans);
+        font-size: 13px;
+      }
+      .diagram text.sub {
+        fill: var(--muted);
+        font-family: var(--mono);
+        font-size: 10.5px;
+      }
+      .caption {
+        margin: 14px 0 0;
+        color: var(--muted);
+        font-size: 12px;
+      }
+
+      .two-col {
+        display: grid;
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+        gap: 26px;
+      }
+      .three-col {
+        display: grid;
+        grid-template-columns: repeat(3, minmax(0, 1fr));
+        gap: 0;
+        border-block: 1px solid var(--line);
+      }
+      .three-col > article {
+        padding: 23px;
+        border-right: 1px solid var(--line);
+      }
+      .three-col > article:last-child {
+        border-right: 0;
+      }
+      .three-col p,
+      .two-col p {
+        color: var(--muted);
+      }
+
+      .callout {
+        padding: 20px 22px;
+        border-left: 3px solid var(--accent);
+        background: var(--accent-soft);
+      }
+      .callout p:last-child {
+        margin-bottom: 0;
+      }
+
+      .timeline-mock {
+        display: grid;
+        grid-template-columns: minmax(0, 1fr) 285px;
+        border: 1px solid var(--line);
+        border-radius: 12px;
+        background: var(--surface);
+        overflow: hidden;
+        box-shadow: var(--shadow);
+      }
+      .request-main {
+        min-width: 0;
+      }
+      .mock-header {
+        display: flex;
+        align-items: flex-end;
+        justify-content: space-between;
+        gap: 20px;
+        padding: 25px 27px 20px;
+        border-bottom: 1px solid var(--line);
+      }
+      .mock-header .title {
+        font-size: 19px;
+        font-weight: 720;
+        letter-spacing: -0.02em;
+      }
+      .mock-header .sub {
+        margin-top: 5px;
+        color: var(--muted);
+        font-family: var(--mono);
+        font-size: 10.5px;
+      }
+      .pill-row {
+        display: flex;
+        gap: 7px;
+        flex-wrap: wrap;
+      }
+      .pill {
+        padding: 4px 8px;
+        border: 1px solid var(--line);
+        border-radius: 999px;
+        color: var(--muted);
+        background: var(--surface-2);
+        font-size: 10.5px;
+        font-weight: 650;
+      }
+      .pill.open {
+        border-color: color-mix(in srgb, var(--green) 60%, var(--line));
+        color: var(--green);
+        background: var(--green-soft);
+      }
+
+      .opening-post {
+        padding: 24px 27px;
+        border-bottom: 1px solid var(--line);
+      }
+      .post-meta,
+      .thread-meta {
+        display: flex;
+        align-items: center;
+        gap: 9px;
+        margin-bottom: 10px;
+        font-size: 11px;
+        color: var(--muted);
+      }
+      .avatar {
+        width: 26px;
+        height: 26px;
+        display: grid;
+        place-items: center;
+        flex: 0 0 auto;
+        border-radius: 50%;
+        background: var(--accent-soft);
+        color: var(--accent-2);
+        font-size: 9px;
+        font-weight: 800;
+      }
+      .opening-post p {
+        max-width: 690px;
+        margin: 0;
+        color: var(--muted);
+      }
+
+      .review-thread {
+        position: relative;
+        padding: 14px 27px 30px 58px;
+      }
+      .review-thread::before {
+        content: "";
+        position: absolute;
+        top: 0;
+        bottom: 0;
+        left: 38px;
+        width: 1px;
+        background: var(--line);
+      }
+      .marker {
+        position: relative;
+        margin: 10px 0 18px;
+        color: var(--muted);
+        font-size: 11px;
+      }
+      .marker::before {
+        content: "";
+        position: absolute;
+        left: -25px;
+        top: 6px;
+        width: 7px;
+        height: 7px;
+        border: 2px solid var(--surface);
+        border-radius: 50%;
+        background: var(--faint);
+        box-shadow: 0 0 0 1px var(--line-strong);
+      }
+
+      .timeline-root {
+        position: relative;
+        padding: 0 0 25px;
+      }
+      .timeline-root::before {
+        content: "";
+        position: absolute;
+        left: -30px;
+        top: 4px;
+        width: 18px;
+        height: 18px;
+        border: 2px solid var(--surface);
+        border-radius: 50%;
+        background: var(--accent);
+        box-shadow: 0 0 0 1px var(--line-strong);
+      }
+      .timeline-root.change::before {
+        background: var(--blue);
+      }
+
+      .change-block {
+        border-block: 1px solid var(--line);
+        background: color-mix(in srgb, var(--blue-soft) 35%, var(--surface));
+      }
+      .change-head {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 16px;
+        padding: 13px 15px;
+        border-bottom: 1px solid var(--line);
+      }
+      .change-head strong {
+        font-size: 12.5px;
+      }
+      .change-stats {
+        font-family: var(--mono);
+        font-size: 10.5px;
+      }
+      .add {
+        color: var(--green);
+      }
+      .del {
+        color: var(--red);
+      }
+      .file-row {
+        display: grid;
+        grid-template-columns: minmax(0, 1fr) auto auto;
+        align-items: center;
+        gap: 12px;
+        padding: 8px 15px;
+        border-bottom: 1px solid var(--line);
+        color: var(--muted);
+        font-family: var(--mono);
+        font-size: 10px;
+      }
+      .file-row:last-child {
+        border-bottom: 0;
+      }
+      .diff-link {
+        padding: 4px 7px;
+        border: 1px solid color-mix(in srgb, var(--blue) 45%, var(--line));
+        border-radius: 5px;
+        color: var(--blue);
+        background: var(--surface);
+        font-family: var(--sans);
+        font-size: 9.5px;
+        font-weight: 720;
+        white-space: nowrap;
+      }
+      .change-actions {
+        display: flex;
+        justify-content: space-between;
+        padding: 10px 15px;
+        color: var(--blue);
+        font-size: 10.5px;
+        font-weight: 680;
+      }
+
+      .comment-body {
+        padding: 14px 15px;
+        border-block: 1px solid var(--line);
+        background: var(--surface);
+      }
+      .comment-body p {
+        margin: 0;
+        font-size: 12px;
+      }
+      .reply {
+        margin: 11px 0 0 24px;
+        padding: 10px 12px;
+        border-left: 2px solid var(--line-strong);
+        color: var(--muted);
+        font-size: 11.5px;
+      }
+      .reply b {
+        color: var(--ink);
+      }
+      .mini-composer {
+        margin-top: 10px;
+        padding: 10px 12px;
+        border: 1px solid var(--line);
+        border-radius: 6px;
+        color: var(--faint);
+        background: var(--surface-2);
+        font-size: 11px;
+      }
+      .root-composer {
+        margin-top: 4px;
+        padding: 16px;
+        border: 1px solid var(--line);
+        background: var(--surface-2);
+        color: var(--faint);
+        font-size: 11.5px;
+      }
+      .context-rail {
+        padding: 24px 20px;
+        border-left: 1px solid var(--line);
+        background: color-mix(in srgb, var(--surface-2) 42%, var(--surface));
+      }
+      .rail-label {
+        margin: 0 0 12px;
+        color: var(--faint);
+        font-family: var(--mono);
+        font-size: 9.5px;
+        letter-spacing: 0.08em;
+        text-transform: uppercase;
+      }
+      .rail-row {
+        padding: 10px 0;
+        border-bottom: 1px solid var(--line);
+        font-size: 11px;
+      }
+      .rail-row span {
+        display: block;
+        margin-top: 3px;
+        color: var(--muted);
+      }
+
+      .schema {
+        display: grid;
+        grid-template-columns: repeat(3, minmax(0, 1fr));
+        gap: 16px;
+      }
+      .entity {
+        padding: 18px;
+        border-top: 3px solid var(--line-strong);
+        background: var(--surface);
+      }
+      .entity.primary {
+        border-color: var(--accent);
+      }
+      .entity.change {
+        border-color: var(--blue);
+      }
+      .entity h3 {
+        font-family: var(--mono);
+        font-size: 13px;
+      }
+      .fields {
+        display: grid;
+        gap: 7px;
+        margin-top: 14px;
+      }
+      .field {
+        display: flex;
+        justify-content: space-between;
+        gap: 12px;
+        padding-top: 7px;
+        border-top: 1px solid var(--line);
+        font-family: var(--mono);
+        font-size: 10px;
+      }
+      .field span:last-child {
+        color: var(--muted);
+        text-align: right;
+      }
+
+      .contract {
+        width: 100%;
+        border-collapse: collapse;
+        background: var(--surface);
+        font-size: 13px;
+      }
+      .contract th,
+      .contract td {
+        padding: 13px 15px;
+        border-bottom: 1px solid var(--line);
+        text-align: left;
+        vertical-align: top;
+      }
+      .contract th {
+        color: var(--faint);
+        font-family: var(--mono);
+        font-size: 10px;
+        letter-spacing: 0.08em;
+        text-transform: uppercase;
+      }
+      .contract td:first-child {
+        width: 30%;
+        font-family: var(--mono);
+        font-size: 11px;
+      }
+      .contract td:nth-child(2) {
+        width: 28%;
+        color: var(--accent-2);
+        font-weight: 650;
+      }
+      .contract tr:last-child td {
+        border-bottom: 0;
+      }
+
+      .flow-list {
+        position: relative;
+        margin-top: 8px;
+      }
+      .phase {
+        display: grid;
+        grid-template-columns: 100px 34px minmax(0, 1fr) 180px;
+        gap: 14px;
+        align-items: start;
+        min-height: 120px;
+      }
+      .phase-kicker {
+        padding-top: 3px;
+        color: var(--faint);
+        font-family: var(--mono);
+        font-size: 10px;
+        text-transform: uppercase;
+      }
+      .phase-track {
+        position: relative;
+        height: 100%;
+      }
+      .phase-track::before {
+        content: "";
+        position: absolute;
+        top: 9px;
+        bottom: 0;
+        left: 9px;
+        width: 1px;
+        background: var(--line);
+      }
+      .phase:last-child .phase-track::before {
+        display: none;
+      }
+      .phase-dot {
+        position: relative;
+        z-index: 1;
+        width: 19px;
+        height: 19px;
+        border: 5px solid var(--bg);
+        border-radius: 50%;
+        background: var(--accent);
+        box-shadow: 0 0 0 1px var(--accent);
+      }
+      .phase-body {
+        padding-bottom: 34px;
+      }
+      .phase-body p {
+        margin-bottom: 9px;
+        color: var(--muted);
+      }
+      .phase-files {
+        padding-top: 1px;
+        color: var(--muted);
+        font-family: var(--mono);
+        font-size: 10px;
+        line-height: 1.7;
+      }
+
+      .risk-grid {
+        display: grid;
+        grid-template-columns: 1fr 110px 1.25fr;
+        border-top: 1px solid var(--line);
+      }
+      .risk-grid > div {
+        padding: 14px 16px;
+        border-right: 1px solid var(--line);
+        border-bottom: 1px solid var(--line);
+      }
+      .risk-grid > div:nth-child(3n) {
+        border-right: 0;
+      }
+      .risk-head {
+        color: var(--faint);
+        font-family: var(--mono);
+        font-size: 10px;
+        letter-spacing: 0.08em;
+        text-transform: uppercase;
+      }
+      .sev {
+        display: inline-block;
+        padding: 3px 7px;
+        border-radius: 4px;
+        font-family: var(--mono);
+        font-size: 9px;
+        font-weight: 800;
+      }
+      .sev.high {
+        color: var(--red);
+        background: var(--red-soft);
+      }
+      .sev.medium {
+        color: var(--amber);
+        background: var(--amber-soft);
+      }
+      .sev.low {
+        color: var(--green);
+        background: var(--green-soft);
+      }
+
+      .checks {
+        display: grid;
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+        gap: 18px 34px;
+      }
+      .check {
+        display: grid;
+        grid-template-columns: 24px 1fr;
+        gap: 10px;
+      }
+      .check-mark {
+        width: 20px;
+        height: 20px;
+        display: grid;
+        place-items: center;
+        border: 1px solid var(--accent);
+        border-radius: 50%;
+        color: var(--accent);
+        font-size: 11px;
+      }
+      .check p {
+        margin: 3px 0 0;
+        color: var(--muted);
+        font-size: 13px;
+      }
+
+      .out {
+        display: grid;
+        grid-template-columns: repeat(5, minmax(0, 1fr));
+        margin-top: 26px;
+        border-block: 1px solid var(--line);
+      }
+      .out div {
+        padding: 16px;
+        border-right: 1px solid var(--line);
+      }
+      .out div:last-child {
+        border-right: 0;
+      }
+      .out b {
+        display: block;
+        margin-bottom: 4px;
+        color: var(--red);
+        font-size: 12px;
+      }
+      .out span {
+        color: var(--muted);
+        font-size: 11px;
+      }
+
+      .final-rule {
+        max-width: 930px;
+        margin-top: 24px;
+        padding: 26px 0 0;
+        border-top: 1px solid var(--line);
+        color: var(--accent-2);
+        font-family: var(--serif);
+        font-size: clamp(23px, 3vw, 34px);
+        line-height: 1.25;
+      }
+
+      @media (max-width: 900px) {
+        .thesis,
+        .timeline-mock,
+        .two-col {
+          grid-template-columns: 1fr;
+        }
+        .context-rail {
+          border-top: 1px solid var(--line);
+          border-left: 0;
+        }
+        .decision-strip,
+        .schema {
+          grid-template-columns: repeat(2, minmax(0, 1fr));
+        }
+        .decision-strip > div:nth-child(2) {
+          border-right: 0;
+        }
+        .decision-strip > div:nth-child(-n + 2) {
+          border-bottom: 1px solid var(--line);
+        }
+        .phase {
+          grid-template-columns: 72px 28px minmax(0, 1fr);
+        }
+        .phase-files {
+          grid-column: 3;
+          padding: 0 0 28px;
+        }
+        nav a {
+          display: none;
+        }
+        .out {
+          grid-template-columns: 1fr;
+        }
+        .out div {
+          border-right: 0;
+          border-bottom: 1px solid var(--line);
+        }
+      }
+
+      @media (max-width: 620px) {
+        .topbar-inner,
+        .wrap {
+          width: min(100% - 28px, 1180px);
+        }
+        .hero {
+          padding-top: 56px;
+        }
+        .section-head {
+          grid-template-columns: 1fr;
+          gap: 4px;
+        }
+        .decision-strip,
+        .schema,
+        .three-col,
+        .checks {
+          grid-template-columns: 1fr;
+        }
+        .decision-strip > div,
+        .three-col > article {
+          border-right: 0;
+          border-bottom: 1px solid var(--line);
+        }
+        .risk-grid {
+          grid-template-columns: 1fr;
+        }
+        .risk-grid > div {
+          border-right: 0;
+        }
+        .risk-head:nth-child(2),
+        .risk-head:nth-child(3) {
+          display: none;
+        }
+        .mock-header {
+          align-items: flex-start;
+          flex-direction: column;
+        }
+        .review-thread {
+          padding-left: 48px;
+          padding-right: 18px;
+        }
+        .review-thread::before {
+          left: 29px;
+        }
+        .phase {
+          grid-template-columns: 28px minmax(0, 1fr);
+        }
+        .phase-kicker {
+          grid-column: 2;
+        }
+        .phase-track {
+          grid-row: 1 / span 3;
+        }
+        .phase-body,
+        .phase-files {
+          grid-column: 2;
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <header class="topbar">
+      <div class="topbar-inner">
+        <div class="brand">
+          <span class="brand-mark"></span> Unified Request Timeline
+        </div>
+        <nav aria-label="Plan sections">
+          <a href="#shape">Shape</a>
+          <a href="#ux">UX</a>
+          <a href="#domain">Domain</a>
+          <a href="#delivery">Delivery</a>
+          <a href="#validation">Validation</a>
+          <button
+            class="theme-toggle"
+            id="theme-toggle"
+            type="button"
+            aria-label="Toggle color theme"
+            title="Toggle color theme"
+          >
+            ◐
+          </button>
+        </nav>
+      </div>
+    </header>
+
+    <div class="hero">
+      <div class="wrap">
+        <div class="eyebrow">
+          Scope · Request review foundation · 20 July 2026
+        </div>
+        <h1>One request.<br />One review thread.</h1>
+        <p class="subtitle">
+          Replace the Discussion / Changes split with one stable, chronological
+          review timeline. A push becomes a first-class change block; a change
+          block can own the same nested conversation as any other root post.
+        </p>
+        <div class="thesis">
+          <strong
+            >Recommendation: build this as a domain-owned timeline, not a
+            browser-side merge. Generalize today’s discussion root into a
+            subject-backed thread and let revision events become commentable
+            subjects.</strong
+          >
+          <div class="meta">
+            <span>Surface <b>desktop web</b></span>
+            <span>Compatibility <b>none required</b></span>
+            <span>Ordering <b>immutable</b></span>
+            <span>Implementation <b>own components</b></span>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <main class="wrap">
+      <section id="shape">
+        <div class="section-head">
+          <div class="section-no">01 / SHAPE</div>
+          <div>
+            <h2>The decision in one screen</h2>
+            <p class="section-intro">
+              Keep Reddit-style nesting inside each root item, but order roots
+              by when they entered the request. Replies never pull an old root
+              to the bottom. That preserves chronology while still giving
+              focused review conversations a home.
+            </p>
+          </div>
+        </div>
+
+        <div class="decision-strip">
+          <div>
+            <small>Root type 01</small><strong>Free-standing discussion</strong>
+          </div>
+          <div>
+            <small>Root type 02</small
+            ><strong>Collapsed change block from a push</strong>
+          </div>
+          <div>
+            <small>Nested content</small
+            ><strong>Replies attached to either root</strong>
+          </div>
+          <div>
+            <small>Ordering law</small
+            ><strong>Root position never changes</strong>
+          </div>
+        </div>
+
+        <div class="diagram" style="margin-top: 30px">
+          <svg
+            viewBox="0 0 1030 420"
+            role="img"
+            aria-label="Current split architecture and proposed unified timeline architecture"
+          >
+            <defs>
+              <marker
+                id="arrow"
+                viewBox="0 0 10 10"
+                refX="9"
+                refY="5"
+                markerWidth="7"
+                markerHeight="7"
+                orient="auto"
+              >
+                <path d="M0 0 L10 5 L0 10 Z" fill="var(--faint)" />
+              </marker>
+              <marker
+                id="arrowAccent"
+                viewBox="0 0 10 10"
+                refX="9"
+                refY="5"
+                markerWidth="7"
+                markerHeight="7"
+                orient="auto"
+              >
+                <path d="M0 0 L10 5 L0 10 Z" fill="var(--accent)" />
+              </marker>
+            </defs>
+            <text x="22" y="29" class="sub">TODAY · THREE READ PATHS</text>
+            <rect class="box" x="22" y="48" width="210" height="58" rx="8" />
+            <text x="127" y="73" text-anchor="middle">
+              RequestReviewNavigation
+            </text>
+            <text x="127" y="91" text-anchor="middle" class="sub">
+              ?view=discussion | changes
+            </text>
+            <path
+              class="edge"
+              d="M127 106 L127 144 L68 144 L68 172"
+              marker-end="url(#arrow)"
+            />
+            <path
+              class="edge"
+              d="M127 144 L188 144 L188 172"
+              marker-end="url(#arrow)"
+            />
+            <rect class="box" x="22" y="172" width="92" height="76" rx="8" />
+            <text x="68" y="200" text-anchor="middle">Discussion</text>
+            <text x="68" y="218" text-anchor="middle" class="sub">
+              25 roots
+            </text>
+            <text x="68" y="234" text-anchor="middle" class="sub">
+              own cache
+            </text>
+            <rect class="box" x="142" y="172" width="92" height="76" rx="8" />
+            <text x="188" y="200" text-anchor="middle">Changes</text>
+            <text x="188" y="218" text-anchor="middle" class="sub">
+              base → head
+            </text>
+            <text x="188" y="234" text-anchor="middle" class="sub">
+              current only
+            </text>
+            <rect class="box" x="22" y="290" width="212" height="62" rx="8" />
+            <text x="128" y="316" text-anchor="middle">Activity drawer</text>
+            <text x="128" y="336" text-anchor="middle" class="sub">
+              RevisionPushed already lives here
+            </text>
+
+            <path
+              class="edge-accent"
+              d="M287 198 C332 198 343 198 386 198"
+              marker-end="url(#arrowAccent)"
+            />
+            <text x="337" y="184" text-anchor="middle" class="sub">
+              replace
+            </text>
+
+            <text x="407" y="29" class="sub">
+              TARGET · ONE REVIEW READ MODEL
+            </text>
+            <rect
+              class="box-accent"
+              x="407"
+              y="48"
+              width="265"
+              height="58"
+              rx="8"
+            />
+            <text x="539" y="72" text-anchor="middle">
+              GET /request/:id/timeline
+            </text>
+            <text x="539" y="91" text-anchor="middle" class="sub">
+              stable root position · one snapshot cursor
+            </text>
+            <path
+              class="edge-accent"
+              d="M539 106 L539 151"
+              marker-end="url(#arrowAccent)"
+            />
+            <rect
+              class="box-accent"
+              x="407"
+              y="151"
+              width="265"
+              height="201"
+              rx="8"
+            />
+            <text x="432" y="180">Opening post</text>
+            <line x1="431" y1="194" x2="648" y2="194" stroke="var(--line)" />
+            <circle cx="435" cy="224" r="7" fill="var(--blue)" />
+            <text x="457" y="229">ChangeBlock · push 1 · collapsed</text>
+            <circle cx="435" cy="266" r="7" fill="var(--accent)" />
+            <text x="457" y="271">CommentThread · topic</text>
+            <text x="478" y="292" class="sub">↳ reply ↳ quoted reply</text>
+            <circle cx="435" cy="326" r="7" fill="var(--blue)" />
+            <text x="457" y="331">ChangeBlock · push 2 · collapsed</text>
+
+            <path class="edge" d="M705 105 L754 105" marker-end="url(#arrow)" />
+            <path class="edge" d="M705 243 L754 243" marker-end="url(#arrow)" />
+            <path class="edge" d="M705 327 L754 327" marker-end="url(#arrow)" />
+            <rect
+              class="box-blue"
+              x="754"
+              y="63"
+              width="252"
+              height="84"
+              rx="8"
+            />
+            <text x="880" y="91" text-anchor="middle">
+              Request change blocks
+            </text>
+            <text x="880" y="111" text-anchor="middle" class="sub">
+              Submitted / RevisionPushed subjects
+            </text>
+            <text x="880" y="128" text-anchor="middle" class="sub">
+              old head · new head · snapshot
+            </text>
+            <rect
+              class="box-accent"
+              x="754"
+              y="201"
+              width="252"
+              height="84"
+              rx="8"
+            />
+            <text x="880" y="230" text-anchor="middle">Request threads</text>
+            <text x="880" y="250" text-anchor="middle" class="sub">
+              Comment | ChangeBlock subject
+            </text>
+            <text x="880" y="267" text-anchor="middle" class="sub">
+              status · read state · last activity
+            </text>
+            <rect
+              class="box-amber"
+              x="754"
+              y="315"
+              width="252"
+              height="72"
+              rx="8"
+            />
+            <text x="880" y="344" text-anchor="middle">
+              Request events stay audit-only
+            </text>
+            <text x="880" y="364" text-anchor="middle" class="sub">
+              Request audit history remains in overflow
+            </text>
+          </svg>
+          <p class="caption">
+            The key move is not visual. Today the browser chooses between
+            independent resources. The target API returns one ordered union
+            whose source positions are allocated by the request aggregate.
+          </p>
+        </div>
+
+        <div class="three-col" style="margin-top: 28px">
+          <article>
+            <h3>Build the UI ourselves</h3>
+            <p>
+              Reuse Scope’s markdown, composer, reply rendering, badges, and SSE
+              subscription. Reuse the repository History page for diffs. Chat
+              packages optimize for flat, inverted, high-frequency streams; this
+              is a domain-specific review document.
+            </p>
+          </article>
+          <article>
+            <h3>Comment at block level</h3>
+            <p>
+              A v1 comment targets a whole push. Line- and file-level anchors
+              require durable patch-coordinate semantics and can be added after
+              the block identity is stable.
+            </p>
+          </article>
+          <article>
+            <h3>Keep audit history quiet</h3>
+            <p>
+              Discussion and code changes join the main surface. Administrative
+              lifecycle events stay in the existing request-history overflow
+              drawer, preserving the earlier “available, not prominent”
+              decision. Repository commit History remains the independent code
+              inspection surface.
+            </p>
+          </article>
+        </div>
+      </section>
+
+      <section id="ux">
+        <div class="section-head">
+          <div class="section-no">02 / UX</div>
+          <div>
+            <h2>The desktop experience</h2>
+            <p class="section-intro">
+              Remove the tabs entirely. The request description is the opening
+              post, followed by an unbroken review timeline. Change blocks are
+              collapsed by default, but they occupy the same root hierarchy as
+              comments and expose the same reply affordance.
+            </p>
+          </div>
+        </div>
+
+        <div class="timeline-mock">
+          <div class="request-main">
+            <div class="mock-header">
+              <div>
+                <div class="title">Cap remote retry timing</div>
+                <div class="sub">bounded-retry / req_demo_submitted</div>
+              </div>
+              <div class="pill-row">
+                <span class="pill open">Open</span
+                ><span class="pill">Ready to merge</span
+                ><span class="pill">•••</span>
+              </div>
+            </div>
+            <div class="opening-post">
+              <div class="post-meta">
+                <span class="avatar">AB</span><b>adam</b
+                ><span>opened this request</span><span>2h</span>
+              </div>
+              <p>
+                This request adds bounded retry timing to the remote client.
+                Please focus review on the cap, jitter behavior, and whether the
+                exported API communicates units.
+              </p>
+            </div>
+            <div class="review-thread">
+              <div class="marker">Request submitted for review · 2h</div>
+
+              <div class="timeline-root change">
+                <div class="change-block">
+                  <div class="change-head">
+                    <strong>▸ adam pushed 3 commits</strong>
+                    <span class="change-stats"
+                      ><span class="add">+84</span>
+                      <span class="del">−19</span> · 4 files</span
+                    >
+                  </div>
+                  <div class="change-actions">
+                    <span>Show 4 changed files</span
+                    ><span>Comment on this change</span>
+                  </div>
+                </div>
+              </div>
+
+              <div class="timeline-root">
+                <div class="thread-meta">
+                  <span class="avatar">KM</span><b>kim</b><span>1h</span
+                  ><span class="pill">Open</span>
+                </div>
+                <div class="comment-body">
+                  <p>
+                    Should the two-second ceiling be a named constant? It feels
+                    like policy rather than an implementation detail.
+                  </p>
+                  <div class="reply">
+                    <b>adam · 42m</b><br />Agreed. I’ll name it and add the
+                    units in the public API.
+                  </div>
+                </div>
+              </div>
+
+              <div class="timeline-root change">
+                <div class="change-block">
+                  <div class="change-head">
+                    <strong>▾ adam pushed 1 commit</strong>
+                    <span class="change-stats"
+                      ><span class="add">+17</span>
+                      <span class="del">−6</span> · 2 files</span
+                    >
+                  </div>
+                  <div class="file-row">
+                    <span>web/src/lib/retry.ts</span
+                    ><span
+                      ><span class="add">+8</span>
+                      <span class="del">−4</span></span
+                    ><span class="diff-link">View diff ↗</span>
+                  </div>
+                  <div class="file-row">
+                    <span>web/src/lib/retry.test.ts</span
+                    ><span
+                      ><span class="add">+9</span>
+                      <span class="del">−2</span></span
+                    ><span class="diff-link">View diff ↗</span>
+                  </div>
+                  <div class="change-actions">
+                    <span>Hide changed files</span><span>1 conversation</span>
+                  </div>
+                </div>
+                <div class="reply">
+                  <b>kim · 12m</b><br />The constant and tests answer my
+                  concern. Resolving this.
+                </div>
+                <div class="mini-composer">Reply to this change…</div>
+              </div>
+
+              <div class="root-composer">Start a new discussion…</div>
+            </div>
+          </div>
+          <aside class="context-rail">
+            <p class="rail-label">Request context</p>
+            <div class="rail-row">
+              <b>Review state</b><span>Submitted · open</span>
+            </div>
+            <div class="rail-row">
+              <b>Source</b><span class="mono">bounded-retry</span>
+            </div>
+            <div class="rail-row">
+              <b>Target</b><span class="mono">main</span>
+            </div>
+            <div class="rail-row"><b>Stake</b><span>10 credits</span></div>
+            <div class="rail-row">
+              <b>Review</b><span>1 open conversation</span>
+            </div>
+          </aside>
+        </div>
+
+        <div class="two-col" style="margin-top: 28px">
+          <div class="callout">
+            <h3>Interaction rules</h3>
+            <p>
+              “New discussion” scrolls to and focuses the single root composer
+              at the bottom. “Comment on this change” opens an inline reply
+              composer under that block. Every code-change block starts
+              collapsed; expanding it reveals only the changed-file manifest.
+              Each file has a “View diff ↗” button that opens the repository
+              History page for that request revision and file in a separate
+              browser tab, leaving the conversation untouched. Expansion is
+              ephemeral local UI state: every block loaded, refreshed, or
+              received through catch-up starts collapsed.
+            </p>
+          </div>
+          <div class="callout">
+            <h3>Filtering without destroying context</h3>
+            <p>
+              Default is the full timeline. A compact “Unresolved only” toggle
+              may hide resolved comment roots and change blocks with resolved
+              conversations. Delete “Recently active” and “Newest”: roots always
+              render by ascending <code>root_position</code>.
+            </p>
+          </div>
+        </div>
+      </section>
+
+      <section id="domain">
+        <div class="section-head">
+          <div class="section-no">03 / DOMAIN</div>
+          <div>
+            <h2>Make “commentable” an explicit domain rule</h2>
+            <p class="section-intro">
+              Do not attach comments directly to a UI card or loosely
+              polymorphic URL. A request thread owns conversation behavior; its
+              subject determines what is rendered as the root. The request
+              aggregate allocates every position and performs push + block +
+              thread creation atomically.
+            </p>
+          </div>
+        </div>
+
+        <div class="schema">
+          <article class="entity change">
+            <h3>RequestChangeBlock</h3>
+            <div class="fields">
+              <div class="field">
+                <span>id</span><span>block + event identity</span>
+              </div>
+              <div class="field">
+                <span>position</span><span>request sequence</span>
+              </div>
+              <div class="field">
+                <span>old_head_oid</span><span>before push</span>
+              </div>
+              <div class="field">
+                <span>new_head_oid</span><span>after push</span>
+              </div>
+              <div class="field">
+                <span>git_snapshot</span><span>retained revision data</span>
+              </div>
+              <div class="field">
+                <span>summary</span><span>files / + / −</span>
+              </div>
+            </div>
+          </article>
+          <article class="entity primary">
+            <h3>RequestThread</h3>
+            <div class="fields">
+              <div class="field">
+                <span>id</span><span>conversation id</span>
+              </div>
+              <div class="field">
+                <span>root_position</span><span>immutable order</span>
+              </div>
+              <div class="field">
+                <span>subject</span><span>Comment | ChangeBlock(id)</span>
+              </div>
+              <div class="field">
+                <span>body_markdown</span><span>Comment only</span>
+              </div>
+              <div class="field">
+                <span>state</span><span>None | Open | Resolved</span>
+              </div>
+              <div class="field">
+                <span>last_activity</span><span>unread catch-up</span>
+              </div>
+              <div class="field">
+                <span>author_user_id</span><span>root actor</span>
+              </div>
+            </div>
+          </article>
+          <article class="entity">
+            <h3>RequestThreadReply</h3>
+            <div class="fields">
+              <div class="field"><span>id</span><span>reply id</span></div>
+              <div class="field">
+                <span>thread_id</span><span>either subject</span>
+              </div>
+              <div class="field">
+                <span>position</span><span>request sequence</span>
+              </div>
+              <div class="field">
+                <span>body_markdown</span><span>existing rules</span>
+              </div>
+              <div class="field">
+                <span>reply_to_reply_id</span><span>quote / nesting</span>
+              </div>
+              <div class="field">
+                <span>client_reply_id</span><span>idempotency</span>
+              </div>
+              <div class="field">
+                <span>created_at</span><span>display time</span>
+              </div>
+            </div>
+          </article>
+        </div>
+
+        <div class="diagram" style="margin-top: 30px">
+          <svg
+            viewBox="0 0 1030 390"
+            role="img"
+            aria-label="Atomic revision push transaction and realtime read flow"
+          >
+            <defs>
+              <marker
+                id="arrow2"
+                viewBox="0 0 10 10"
+                refX="9"
+                refY="5"
+                markerWidth="7"
+                markerHeight="7"
+                orient="auto"
+              >
+                <path d="M0 0 L10 5 L0 10 Z" fill="var(--faint)" />
+              </marker>
+              <marker
+                id="arrow2a"
+                viewBox="0 0 10 10"
+                refX="9"
+                refY="5"
+                markerWidth="7"
+                markerHeight="7"
+                orient="auto"
+              >
+                <path d="M0 0 L10 5 L0 10 Z" fill="var(--accent)" />
+              </marker>
+            </defs>
+            <text x="22" y="28" class="sub">
+              WRITE PATH · ONE AGGREGATE LOCK + ONE DB TRANSACTION
+            </text>
+            <rect class="box" x="22" y="52" width="156" height="54" rx="8" />
+            <text x="100" y="75" text-anchor="middle">Git push accepted</text>
+            <text x="100" y="92" text-anchor="middle" class="sub">
+              request_refs.rs
+            </text>
+            <path class="edge" d="M178 79 L222 79" marker-end="url(#arrow2)" />
+            <rect class="box" x="222" y="52" width="172" height="54" rx="8" />
+            <text x="308" y="75" text-anchor="middle">Persist snapshot</text>
+            <text x="308" y="92" text-anchor="middle" class="sub">
+              retain; do not orphan
+            </text>
+            <path class="edge" d="M394 79 L438 79" marker-end="url(#arrow2)" />
+            <rect
+              class="box-accent"
+              x="438"
+              y="52"
+              width="188"
+              height="54"
+              rx="8"
+            />
+            <text x="532" y="75" text-anchor="middle">advance_activity()</text>
+            <text x="532" y="92" text-anchor="middle" class="sub">
+              position = N exactly once
+            </text>
+            <path
+              class="edge-accent"
+              d="M532 106 L532 149"
+              marker-end="url(#arrow2a)"
+            />
+            <rect
+              class="box-blue"
+              x="405"
+              y="149"
+              width="254"
+              height="68"
+              rx="8"
+            />
+            <text x="532" y="176" text-anchor="middle">
+              Create ChangeBlock @ N
+            </text>
+            <text x="532" y="196" text-anchor="middle" class="sub">
+              old/new head · snapshot · manifest
+            </text>
+            <path
+              class="edge-accent"
+              d="M405 183 L346 183"
+              marker-end="url(#arrow2a)"
+            />
+            <path
+              class="edge-accent"
+              d="M659 183 L718 183"
+              marker-end="url(#arrow2a)"
+            />
+            <rect
+              class="box-accent"
+              x="124"
+              y="149"
+              width="222"
+              height="68"
+              rx="8"
+            />
+            <text x="235" y="176" text-anchor="middle">Create Thread @ N</text>
+            <text x="235" y="196" text-anchor="middle" class="sub">
+              subject = ChangeBlock(block_id)
+            </text>
+            <rect
+              class="box-amber"
+              x="718"
+              y="149"
+              width="272"
+              height="68"
+              rx="8"
+            />
+            <text x="854" y="176" text-anchor="middle">
+              Record audit event @ N
+            </text>
+            <text x="854" y="196" text-anchor="middle" class="sub">
+              payload = { change_block_id } only
+            </text>
+            <path
+              class="edge"
+              d="M532 217 L532 260"
+              marker-end="url(#arrow2)"
+            />
+            <rect class="box" x="405" y="260" width="254" height="58" rx="8" />
+            <text x="532" y="284" text-anchor="middle">
+              Commit, then publish
+            </text>
+            <text x="532" y="302" text-anchor="middle" class="sub">
+              RequestTimelineChanged through N
+            </text>
+            <path
+              class="edge"
+              d="M659 289 L731 289"
+              marker-end="url(#arrow2)"
+            />
+            <rect class="box" x="731" y="260" width="259" height="58" rx="8" />
+            <text x="860" y="284" text-anchor="middle">
+              Browser catches up after N−1
+            </text>
+            <text x="860" y="302" text-anchor="middle" class="sub">
+              patch by id; never reorder roots
+            </text>
+            <text x="22" y="368" class="sub">
+              INVARIANT · A visible change block cannot exist without its
+              thread, and a thread cannot point at a missing block.
+            </text>
+          </svg>
+          <p class="caption">
+            A change block is eager, not created on first comment. Its
+            conversation state begins <code>None</code>; the first reply
+            transitions it to <code>Open</code>. Empty blocks therefore do not
+            inflate the unresolved count.
+          </p>
+        </div>
+
+        <div class="two-col" style="margin-top: 28px">
+          <div>
+            <h3>Historical diffs need retained data</h3>
+            <p>
+              The current changes endpoint computes only
+              <code>base_main_oid → current head_oid</code>, and the revision
+              write queues the previous request snapshot for deletion. A real
+              historical change block cannot depend on those objects surviving
+              by accident.
+            </p>
+            <p>
+              <strong>Plan:</strong> add a revision-owned snapshot reference to
+              each block and stop orphaning a snapshot while a live block owns
+              it. Hydrate the adjacent snapshots on demand for
+              <code>old_head → new_head</code>. Persist file counts and the
+              path/kind manifest at push time so the collapsed block never needs
+              Git work. Only the request-revision mode of the History page
+              performs snapshot hydration, after a user opens a specific file in
+              its separate tab.
+            </p>
+          </div>
+          <div>
+            <h3>One source of order</h3>
+            <p>
+              <code>Request.activity_version</code> remains the only sequence
+              allocator. Root threads, replies, resolution transitions, and
+              revision blocks consume it through domain behavior. Timestamps are
+              display metadata only; they never determine ordering or cursors.
+            </p>
+            <p>
+              Revision details live only on <code>RequestChangeBlock</code>. The
+              audit event references the block id instead of repeating heads,
+              stats, or snapshot metadata.
+            </p>
+            <p>
+              The timeline query pages roots by <code>root_position</code>. A
+              reply changes <code>last_activity_position</code> for
+              unread/catch-up calculations but not <code>root_position</code>.
+            </p>
+          </div>
+        </div>
+      </section>
+
+      <section id="api">
+        <div class="section-head">
+          <div class="section-no">04 / WEB + API</div>
+          <div>
+            <h2>A smaller route and one bounded read model</h2>
+            <p class="section-intro">
+              The route loader fetches request detail, account, and one latest
+              timeline page in parallel. File manifests and older roots are
+              demand-loaded; file diffs belong to a separate History-page tab.
+              The existing repo SSE stream stays a hint channel; the timeline
+              endpoint remains authoritative.
+            </p>
+          </div>
+        </div>
+
+        <table class="contract">
+          <thead>
+            <tr>
+              <th>Surface</th>
+              <th>Recommendation</th>
+              <th>Behavior</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td>GET …/timeline</td>
+              <td>Latest 40 roots</td>
+              <td>
+                Return ascending for display, plus
+                <code>next_before_position</code> and
+                <code>snapshot_version</code>. “Load earlier” prepends without
+                moving the viewport.
+              </td>
+            </tr>
+            <tr>
+              <td>GET …/timeline/changes</td>
+              <td>Catch up after position</td>
+              <td>
+                Return roots created or patched after <code>after</code>, with
+                <code>through_position</code>. Adapt the current discussion
+                catch-up loop.
+              </td>
+            </tr>
+            <tr>
+              <td>POST …/threads</td>
+              <td>Create comment root</td>
+              <td>
+                Optimistic insert at the bottom using the existing client
+                idempotency key and composer.
+              </td>
+            </tr>
+            <tr>
+              <td>POST …/threads/:id/replies</td>
+              <td>Comment on either subject</td>
+              <td>
+                The same mutation handles a normal thread and a change block.
+                First block reply performs <code>None → Open</code>.
+              </td>
+            </tr>
+            <tr>
+              <td>GET …/changes/:block/files</td>
+              <td>Lazy block manifest</td>
+              <td>
+                Collapsed block uses persisted counts; expand fetches paths. No
+                all-diffs work in the initial loader.
+              </td>
+            </tr>
+            <tr>
+              <td>HistorySearch request + revision</td>
+              <td>Request-commit context</td>
+              <td>
+                Extend the existing History route beyond projected mainline
+                commits. A request id and block id select the retained
+                old-head-to-new-head revision while <code>path</code> selects
+                its file.
+              </td>
+            </tr>
+            <tr>
+              <td>View diff ↗</td>
+              <td>Open a separate tab</td>
+              <td>
+                Link to
+                <code
+                  >/repos/:owner/:repo/history?request=:id&amp;revision=:block&amp;path=:path</code
+                >
+                with <code>target="_blank"</code> and
+                <code>rel="noopener noreferrer"</code>. The timeline does not
+                mount or cache the diff.
+              </td>
+            </tr>
+            <tr>
+              <td>Repo SSE</td>
+              <td>RequestTimelineChanged</td>
+              <td>
+                Payload carries request id and through position only. Never
+                trust a push payload as the read model.
+              </td>
+            </tr>
+          </tbody>
+        </table>
+
+        <div class="diagram" style="margin-top: 30px">
+          <svg
+            viewBox="0 0 1030 340"
+            role="img"
+            aria-label="Timeline loading and realtime performance flow"
+          >
+            <defs>
+              <marker
+                id="arrow3"
+                viewBox="0 0 10 10"
+                refX="9"
+                refY="5"
+                markerWidth="7"
+                markerHeight="7"
+                orient="auto"
+              >
+                <path d="M0 0 L10 5 L0 10 Z" fill="var(--faint)" />
+              </marker>
+            </defs>
+            <text x="22" y="27" class="sub">
+              INITIAL LOAD · ONLY WHAT IS VISIBLE
+            </text>
+            <rect class="box" x="22" y="54" width="170" height="58" rx="8" />
+            <text x="107" y="79" text-anchor="middle">
+              TanStack route loader
+            </text>
+            <text x="107" y="96" text-anchor="middle" class="sub">
+              request page
+            </text>
+            <path class="edge" d="M192 83 L235 83" marker-end="url(#arrow3)" />
+            <rect
+              class="box-accent"
+              x="235"
+              y="43"
+              width="200"
+              height="80"
+              rx="8"
+            />
+            <text x="335" y="71" text-anchor="middle">Timeline latest 40</text>
+            <text x="335" y="91" text-anchor="middle" class="sub">
+              root summaries + 3 reply previews
+            </text>
+            <text x="335" y="108" text-anchor="middle" class="sub">
+              one snapshot version
+            </text>
+            <path class="edge" d="M435 83 L481 83" marker-end="url(#arrow3)" />
+            <rect class="box" x="481" y="54" width="184" height="58" rx="8" />
+            <text x="573" y="79" text-anchor="middle">
+              Timeline model/store
+            </text>
+            <text x="573" y="96" text-anchor="middle" class="sub">
+              Map by id + ordered ids
+            </text>
+            <path class="edge" d="M665 83 L711 83" marker-end="url(#arrow3)" />
+            <rect class="box" x="711" y="54" width="279" height="58" rx="8" />
+            <text x="850" y="79" text-anchor="middle">
+              Render opening post + roots
+            </text>
+            <text x="850" y="96" text-anchor="middle" class="sub">
+              no full diff, no full reply history
+            </text>
+
+            <text x="22" y="174" class="sub">ON DEMAND + REALTIME</text>
+            <rect
+              class="box-blue"
+              x="22"
+              y="199"
+              width="210"
+              height="66"
+              rx="8"
+            />
+            <text x="127" y="226" text-anchor="middle">
+              Expand change block
+            </text>
+            <text x="127" y="246" text-anchor="middle" class="sub">
+              fetch file manifest only
+            </text>
+            <path
+              class="edge"
+              d="M232 232 L291 232"
+              marker-end="url(#arrow3)"
+            />
+            <rect class="box" x="291" y="199" width="210" height="66" rx="8" />
+            <text x="396" y="226" text-anchor="middle">View diff ↗</text>
+            <text x="396" y="246" text-anchor="middle" class="sub">
+              new History tab · revision + path
+            </text>
+
+            <rect
+              class="box-amber"
+              x="555"
+              y="199"
+              width="180"
+              height="66"
+              rx="8"
+            />
+            <text x="645" y="226" text-anchor="middle">
+              SSE hint: through N
+            </text>
+            <text x="645" y="246" text-anchor="middle" class="sub">
+              may lag or coalesce
+            </text>
+            <path
+              class="edge"
+              d="M735 232 L781 232"
+              marker-end="url(#arrow3)"
+            />
+            <rect
+              class="box-accent"
+              x="781"
+              y="199"
+              width="209"
+              height="66"
+              rx="8"
+            />
+            <text x="885" y="226" text-anchor="middle">
+              GET changes after M
+            </text>
+            <text x="885" y="246" text-anchor="middle" class="sub">
+              dedupe + patch; order held
+            </text>
+            <text x="22" y="314" class="sub">
+              NO VIRTUALIZATION IN V1 · paginate roots, paginate replies,
+              collapse code changes, then measure before adding scroll
+              machinery.
+            </text>
+          </svg>
+        </div>
+
+        <div class="callout" style="margin-top: 28px">
+          <h3>URL model</h3>
+          <p>
+            Delete <code>?view=discussion|changes</code>,
+            <code>discussionSort</code>, and the separate changes route state.
+            The request conversation keeps only root anchors such as
+            <code>?thread=thread_id</code>. File inspection is an explicit link
+            to the existing repository History route in a new tab:
+            <code
+              >/repos/$owner/$repo/history?request=$requestId&amp;revision=$blockId&amp;path=$path</code
+            >. Extend <code>HistorySearch</code> and <code>HistoryPage</code> to
+            load an authorized request revision because today that page only
+            knows projected repository commits.
+          </p>
+        </div>
+      </section>
+
+      <section id="delivery">
+        <div class="section-head">
+          <div class="section-no">05 / DELIVERY</div>
+          <div>
+            <h2>Five implementation slices</h2>
+            <p class="section-intro">
+              Land vertical behavior in dependency order. Because Scope is
+              pre-alpha, use one destructive schema cut and delete the old
+              surface in the same implementation—no dual writes, adapters,
+              legacy endpoints, or feature flag.
+            </p>
+          </div>
+        </div>
+
+        <div class="flow-list">
+          <div class="phase">
+            <div class="phase-kicker">Slice 1</div>
+            <div class="phase-track"><div class="phase-dot"></div></div>
+            <div class="phase-body">
+              <h3>Domain vocabulary and invariants</h3>
+              <p>
+                Extract revision behavior from the near-1,000-line request
+                domain module. Add <code>RequestChangeBlock</code>,
+                <code>RequestThreadSubject</code>, the three-state conversation
+                lifecycle, and atomic submission/revision mutations.
+              </p>
+            </div>
+            <div class="phase-files">
+              domain/requests/revisions.rs<br />domain/requests/timeline.rs<br />domain/requests.rs
+              tests
+            </div>
+          </div>
+          <div class="phase">
+            <div class="phase-kicker">Slice 2</div>
+            <div class="phase-track"><div class="phase-dot"></div></div>
+            <div class="phase-body">
+              <h3>Destructive persistence replacement</h3>
+              <p>
+                Replace discussion-named tables with change blocks,
+                subject-backed threads, replies, and read states. Persist
+                revision snapshots as block-owned data; remove premature orphan
+                cleanup. Build one root-position cursor query and batch
+                hydration.
+              </p>
+            </div>
+            <div class="phase-files">
+              db/schema.rs + schema.sql<br />db/request_timeline*.rs<br />db/requests.rs
+            </div>
+          </div>
+          <div class="phase">
+            <div class="phase-kicker">Slice 3</div>
+            <div class="phase-track"><div class="phase-dot"></div></div>
+            <div class="phase-body">
+              <h3>Unified contract and API</h3>
+              <p>
+                Export the tagged timeline response, cursor, mutations, block
+                manifest, and request-revision history reads. Rename the repo
+                event to <code>RequestTimelineChanged</code>. Delete the
+                standalone discussions listing and current-only request changes
+                API once callers move.
+              </p>
+            </div>
+            <div class="phase-files">
+              scope-api-contract/types.rs<br />http/request_timeline.rs<br />http/request_review.rs
+            </div>
+          </div>
+          <div class="phase">
+            <div class="phase-kicker">Slice 4</div>
+            <div class="phase-track"><div class="phase-dot"></div></div>
+            <div class="phase-body">
+              <h3>Desktop timeline UI</h3>
+              <p>
+                Replace tabs with <code>RequestTimeline</code>. Reuse and rename
+                composer, markdown, reply, and cache/model behavior; add the
+                collapsed change-block root and lazy file manifest. Extend the
+                existing repository History page for request revisions, and open
+                every per-file diff link there in a new tab. Keep the context
+                rail and request-history overflow.
+              </p>
+            </div>
+            <div class="phase-files">
+              request-timeline*.tsx<br />request-change-block.tsx<br />request
+              route loader/search<br />history route + page model
+            </div>
+          </div>
+          <div class="phase">
+            <div class="phase-kicker">Slice 5</div>
+            <div class="phase-track"><div class="phase-dot"></div></div>
+            <div class="phase-body">
+              <h3>Realtime, accessibility, and deletion pass</h3>
+              <p>
+                Prove catch-up under lag, preserve scroll when prepending, focus
+                composers correctly, verify new-tab links and History-page
+                keyboard diff navigation, update demo seeds, then remove every
+                obsolete component, query parameter, type, and test fixture.
+              </p>
+            </div>
+            <div class="phase-files">
+              repo_events.rs<br />timeline model tests<br />request E2E + demo
+              seeds
+            </div>
+          </div>
+        </div>
+
+        <table class="contract">
+          <thead>
+            <tr>
+              <th>Current code</th>
+              <th>Action</th>
+              <th>Target ownership</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td>request-review-navigation.tsx</td>
+              <td>Delete</td>
+              <td>No review tabs remain.</td>
+            </tr>
+            <tr>
+              <td>request-discussion-workbench.tsx</td>
+              <td>Replace</td>
+              <td>
+                <code>RequestTimeline</code> owns roots, composer, catch-up, and
+                context rail layout.
+              </td>
+            </tr>
+            <tr>
+              <td>request-changes-section.tsx</td>
+              <td>Replace</td>
+              <td>
+                <code>RequestChangeBlock</code> renders each push; existing file
+                manifest primitives are reused, but no diff drawer mounts in the
+                conversation.
+              </td>
+            </tr>
+            <tr>
+              <td>repos.$owner.$repo.history.tsx</td>
+              <td>Extend</td>
+              <td>
+                Accept request + revision search context and render that
+                retained request commit/range with the existing History page and
+                diff viewer.
+              </td>
+            </tr>
+            <tr>
+              <td>request-discussion-store/model</td>
+              <td>Generalize</td>
+              <td>
+                One timeline collection keyed by root id, immutable root order,
+                optimistic comment roots, catch-up patches.
+              </td>
+            </tr>
+            <tr>
+              <td>request-discussion-thread.tsx</td>
+              <td>Split + rename</td>
+              <td>
+                Shared thread replies plus a normal-comment root. Keep quoted
+                replies and resolve behavior.
+              </td>
+            </tr>
+            <tr>
+              <td>request-activity-drawer.tsx</td>
+              <td>Keep</td>
+              <td>Header overflow remains the quiet audit surface.</td>
+            </tr>
+            <tr>
+              <td>domain/requests/discussions.rs</td>
+              <td>Replace</td>
+              <td>
+                Small <code>timeline.rs</code> and
+                <code>revisions.rs</code> modules own rules.
+              </td>
+            </tr>
+            <tr>
+              <td>http/request_discussions.rs</td>
+              <td>Replace</td>
+              <td>
+                Unified timeline read and mutation controller; outer layer stays
+                translation-only.
+              </td>
+            </tr>
+          </tbody>
+        </table>
+      </section>
+
+      <section id="validation">
+        <div class="section-head">
+          <div class="section-no">06 / PROOF</div>
+          <div>
+            <h2>What “solid working version” means</h2>
+            <p class="section-intro">
+              The implementation is done when ordering, durability, permissions,
+              and catch-up are proven—not when the mockup happens to look right
+              on one seeded request.
+            </p>
+          </div>
+        </div>
+
+        <div class="checks">
+          <div class="check">
+            <div class="check-mark">✓</div>
+            <div>
+              <h3>Atomic push invariant</h3>
+              <p>
+                A successful submitted-request push creates one revision event,
+                one change block, and one subject-backed thread at the same
+                position. A failed write creates none.
+              </p>
+            </div>
+          </div>
+          <div class="check">
+            <div class="check-mark">✓</div>
+            <div>
+              <h3>Stable chronology</h3>
+              <p>
+                New replies, resolution, unread updates, and realtime catch-up
+                never reorder existing roots. Older-page prepend keeps the
+                user’s viewport anchored.
+              </p>
+            </div>
+          </div>
+          <div class="check">
+            <div class="check-mark">✓</div>
+            <div>
+              <h3>Durable historical review</h3>
+              <p>
+                After three pushes, the first and second block still show
+                accurate manifests. Every file button opens the correct
+                old-head-to-new-head diff on the repository History page in a
+                separate tab, even after cleanup jobs run.
+              </p>
+            </div>
+          </div>
+          <div class="check">
+            <div class="check-mark">✓</div>
+            <div>
+              <h3>One conversation behavior</h3>
+              <p>
+                Comment roots and change blocks share reply, quote, unread,
+                resolve, reopen, authorization, idempotency, and realtime
+                behavior.
+              </p>
+            </div>
+          </div>
+          <div class="check">
+            <div class="check-mark">✓</div>
+            <div>
+              <h3>Bounded first render</h3>
+              <p>
+                The loader returns at most 40 roots and three reply previews per
+                root. Change blocks are collapsed by default. No historical Git
+                hydration or file content occurs when the user expands one; only
+                the separate History tab loads a selected diff.
+              </p>
+            </div>
+          </div>
+          <div class="check">
+            <div class="check-mark">✓</div>
+            <div>
+              <h3>Contributor → maintainer E2E</h3>
+              <p>
+                Submit, push twice, comment on push one, reply, resolve, push
+                again, expand a collapsed block, open a file diff in a new tab,
+                verify the History page selected the right request revision and
+                path, return to the untouched conversation, refresh, and verify
+                the same chronological timeline.
+              </p>
+            </div>
+          </div>
+        </div>
+
+        <div class="risk-grid" style="margin-top: 34px">
+          <div class="risk-head">Risk</div>
+          <div class="risk-head">Severity</div>
+          <div class="risk-head">Mitigation</div>
+          <div>
+            Historical Git objects disappear because the old snapshot is still
+            queued as orphaned.
+          </div>
+          <div><span class="sev high">HIGH</span></div>
+          <div>
+            Make snapshot ownership explicit on <code>RequestChangeBlock</code>;
+            integration-test diff access after cleanup drainage.
+          </div>
+          <div>
+            SSE response and optimistic mutation append the same thread twice.
+          </div>
+          <div><span class="sev high">HIGH</span></div>
+          <div>
+            Keep client idempotency keys, reconcile to server ids, and dedupe
+            catch-up by root/reply id.
+          </div>
+          <div>Replies make a chronological root timeline feel stale.</div>
+          <div><span class="sev medium">MED</span></div>
+          <div>
+            Show unread/open badges and a “Jump to next unresolved” control. Do
+            not silently convert chronology back into recent-activity sorting.
+          </div>
+          <div>Large pushes make the initial page slow.</div>
+          <div><span class="sev medium">MED</span></div>
+          <div>
+            Persist collapsed stats/manifest, cap preview rows, and lazy-load
+            historical Git diff data.
+          </div>
+          <div>
+            The repository History page rejects request commits because they are
+            not in the projected mainline history.
+          </div>
+          <div><span class="sev high">HIGH</span></div>
+          <div>
+            Add explicit request + revision context to
+            <code>HistorySearch</code>
+            and authorize it through request visibility. Never pretend the
+            request head is already a projected repository commit.
+          </div>
+          <div>Every empty change block appears as unresolved work.</div>
+          <div><span class="sev medium">MED</span></div>
+          <div>
+            Use <code>None | Open | Resolved</code>; only the first comment
+            activates the conversation.
+          </div>
+          <div>
+            Generic subject types become a speculative attachment system.
+          </div>
+          <div><span class="sev low">LOW</span></div>
+          <div>
+            Ship exactly two variants—<code>Comment</code> and
+            <code>ChangeBlock</code>. Add another only with a real product
+            requirement.
+          </div>
+        </div>
+
+        <div class="out">
+          <div><b>Not v1</b><span>Line comments</span></div>
+          <div><b>Not v1</b><span>File-level anchors</span></div>
+          <div><b>Not v1</b><span>Reactions / mentions</span></div>
+          <div><b>Not v1</b><span>Virtualized scrolling</span></div>
+          <div><b>Not v1</b><span>Mobile layout work</span></div>
+        </div>
+
+        <p class="final-rule">
+          The foundation is complete when a revision is not merely displayed
+          near a conversation—it is a durable, commentable subject inside the
+          request’s single ordered domain timeline.
+        </p>
+      </section>
+    </main>
+
+    <script>
+      const toggle = document.getElementById("theme-toggle");
+      toggle.addEventListener("click", () => {
+        const dark = document.documentElement.classList.toggle("dark");
+        localStorage.setItem("scope-plan-theme", dark ? "dark" : "light");
+      });
+    </script>
+  </body>
+</html>

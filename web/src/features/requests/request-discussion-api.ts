@@ -1,8 +1,5 @@
 import { createApiClient } from '@/api/client'
-import type {
-  RequestMutation,
-  RequestParams,
-} from '@/api/types'
+import type { RequestMutation, RequestParams } from '@/api/types'
 import { ApiRouteTemplates, buildApiPath } from '@/api/types.generated'
 import type {
   CreateRequestDiscussionInput,
@@ -16,18 +13,19 @@ import type {
   RequestDiscussionReadState,
 } from './request-discussion-types'
 
+
 export type LoadDiscussionsInput = RequestParams & {
   cursor?: string
-  sort: 'Newest' | 'Recent'
-  status: 'All' | 'Open' | 'Resolved'
 }
 
 export type LoadRepliesInput = RequestParams & {
   before?: number
   discussion_id: string
+  parent_reply_id?: string
 }
 
 export type LoadActivityInput = RequestParams
+
 
 export type RequestDiscussionActionInput = RequestParams & {
   discussion_id: string
@@ -55,12 +53,11 @@ export async function loadRequestDiscussionsForRequest(
     `${requestDiscussionsPath(data)}${query({
       cursor: data.cursor,
       limit: '25',
-      sort: data.sort.toLowerCase(),
-      status: data.status.toLowerCase(),
     })}`,
     { auth: 'optional' },
   )
 }
+
 
 export async function loadRequestDiscussionRepliesForRequest(
   data: LoadRepliesInput,
@@ -69,6 +66,7 @@ export async function loadRequestDiscussionRepliesForRequest(
     `${requestDiscussionRoute(ApiRouteTemplates.repoRequestDiscussionReplies, data)}${query({
       before: data.before?.toString(),
       limit: '50',
+      parent_reply_id: data.parent_reply_id,
     })}`,
     { auth: 'optional' },
   )
@@ -225,6 +223,7 @@ function requestDiscussionRoute(
     request_id: data.request_id,
   })
 }
+
 
 function query(values: Record<string, string | undefined>) {
   const params = new URLSearchParams()

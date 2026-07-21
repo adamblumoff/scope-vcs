@@ -27,7 +27,3 @@ export function defaultReadmePath(files: ReadonlyArray<{ path: string }>) {
   )
   return readme ? displayRouteFilePath(readme.path) : undefined
 }
-
-export function routeErrorMessage(error: unknown, fallback: string) {
-  return error instanceof Error && error.message.trim() ? error.message : fallback
-}

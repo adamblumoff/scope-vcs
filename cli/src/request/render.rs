@@ -69,11 +69,15 @@ pub(super) fn print_discussion_receipt(response: &RequestDiscussionMutationRespo
         discussion.author.handle
     );
     println!("Replies: {}", discussion.reply_count);
-    println!("{}", terminal_text(&discussion.body_markdown));
+    println!(
+        "{}",
+        terminal_text(discussion.body_markdown.as_deref().unwrap_or("Code change"))
+    );
 }
 
 fn discussion_status_label(status: RequestDiscussionStatus) -> &'static str {
     match status {
+        RequestDiscussionStatus::Dormant => "code-change",
         RequestDiscussionStatus::Open => "open",
         RequestDiscussionStatus::Resolved => "resolved",
     }

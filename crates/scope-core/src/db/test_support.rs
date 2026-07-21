@@ -3,6 +3,8 @@ use super::{
     cleanup_queue::{save_pending_repo_storage_deletions, save_pending_source_blob_deletions},
     ensure_metadata_lock_row, entities,
     repository_rows::insert_repository,
+    request_change_block_rows::insert_change_block,
+    request_discussion_rows::{insert_discussion, insert_reply, save_read_state},
     request_rows::{
         insert_credit_ledger_entry_row, insert_request_event_row, insert_request_row,
         save_credit_account_row,
@@ -424,6 +426,18 @@ async fn seed_catalog(
     }
     for request in catalog.requests.values() {
         insert_request_row(&tx, request).await?;
+    }
+    for change_block in catalog.request_change_blocks.values() {
+        insert_change_block(&tx, change_block).await?;
+    }
+    for discussion in catalog.request_discussions.values() {
+        insert_discussion(&tx, discussion).await?;
+    }
+    for reply in catalog.request_discussion_replies.values() {
+        insert_reply(&tx, reply).await?;
+    }
+    for read_state in catalog.request_discussion_read_states.values() {
+        save_read_state(&tx, read_state).await?;
     }
     for event in catalog.request_events.values() {
         insert_request_event_row(&tx, event).await?;

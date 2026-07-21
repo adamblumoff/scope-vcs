@@ -12,16 +12,14 @@ import {
 } from './request-discussion-cache'
 import type { RequestDiscussion } from './request-discussion-types'
 
-test('keys discussion views by request, filter, and sort', () => {
+test('keys timeline views by repository and request', () => {
   const base = {
-    filter: 'Open',
     repoId: 'scope/demo',
     requestId: 'request-1',
-    sort: 'Recent',
   }
-  assert.notEqual(
+  assert.equal(
     requestDiscussionCacheKey(base),
-    requestDiscussionCacheKey({ ...base, sort: 'Newest' }),
+    requestDiscussionCacheKey({ ...base }),
   )
   assert.notEqual(
     requestDiscussionCacheKey(base),

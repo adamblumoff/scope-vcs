@@ -102,6 +102,16 @@ async fn request_submit_publishes_summary_refresh_event() {
     let event = String::from_utf8(event.to_vec()).unwrap();
     assert!(event.contains(r#""reason":"request-submitted""#));
     assert!(event.contains(r#""version":0"#));
+    let timeline_event = tokio::time::timeout(std::time::Duration::from_secs(5), stream.next())
+        .await
+        .unwrap()
+        .unwrap()
+        .unwrap();
+    assert!(
+        String::from_utf8(timeline_event.to_vec())
+            .unwrap()
+            .contains("RequestTimelineChanged")
+    );
 
     let needs_response = api_request(
         app.clone(),

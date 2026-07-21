@@ -5,6 +5,7 @@ import type {
   CommitSummary,
   ProjectionPreviewAudience,
   RepoParams,
+  RequestChangeBlockFiles,
   ReviewFileDiff,
 } from '@/api/types'
 import { FileSystemTree } from '@/components/file-system-tree'
@@ -40,6 +41,8 @@ import { cn } from '@/lib/utils'
 import {
   loadCommitDetail,
   loadCommitFileDiff,
+  loadRequestRevision,
+  loadRequestRevisionFileDiff,
 } from '@/routes/-repo-history-actions'
 import { useNavigate } from '@tanstack/react-router'
 import {
@@ -67,6 +70,8 @@ type HistoryPageProps = {
     audience?: ProjectionPreviewAudience
     commit?: string
     path?: string
+    request?: string
+    revision?: string
   }
 }
 
@@ -84,6 +89,7 @@ export function HistoryPage(props: HistoryPageProps) {
     fileTabs,
     history,
     repoId,
+    requestRevision,
     retryCommit,
     retryDiff,
     selectAudience,
@@ -97,7 +103,7 @@ export function HistoryPage(props: HistoryPageProps) {
   return (
     <RepoShell params={params}>
       <WorkbenchHeader
-        actions={availableAudiences.length > 1 ? (
+        actions={!requestRevision && availableAudiences.length > 1 ? (
           <AudienceToggle
             audience={audience}
             availableAudiences={availableAudiences}
@@ -105,9 +111,11 @@ export function HistoryPage(props: HistoryPageProps) {
           />
         ) : undefined}
         count={`${commits.length} ${commits.length === 1 ? 'commit' : 'commits'}${selectedCommit ? ` · ${changeCountLabel(selectedCommit.change_count)}` : ''}`}
-        description={`Projected commit history for ${repoId}.`}
-        eyebrow={`${audienceLabel(audience)} view`}
-        title="History"
+        description={requestRevision
+          ? `Files for request ${requestRevision.request}.`
+          : `Projected commit history for ${repoId}.`}
+        eyebrow={requestRevision ? 'Request revision' : `${audienceLabel(audience)} view`}
+        title={requestRevision ? 'Revision' : 'History'}
       />
       <section className="px-4 pb-10 sm:px-6 lg:px-8">
         <div className="flex flex-col gap-3 border-b border-border py-4 sm:flex-row sm:items-center sm:justify-between">
@@ -119,7 +127,7 @@ export function HistoryPage(props: HistoryPageProps) {
           </div>
         </div>
 
-        {!history || commits.length === 0 ? (
+        {(!history || commits.length === 0) && !requestRevision ? (
           <div className="flex flex-col items-center gap-3 py-16 text-center">
             <div className="flex size-11 items-center justify-center rounded-xl bg-brand-muted text-brand">
               <History className="size-5" />
@@ -172,39 +180,54 @@ function useHistoryPageModel({ histories, params, search }: HistoryPageProps) {
   )
   const audience = selectedAudience(histories, search.audience)
   const history = histories[audience] ?? histories.public ?? histories.private
-  const commits = useMemo(
+  const baseCommits = useMemo(
     () => [...(history?.commits ?? [])].reverse(),
     [history?.commits],
   )
+  const requestRevision = useMemo(
+    () => search.request && search.revision
+      ? { request: search.request, revision: search.revision }
+      : null,
+    [search.request, search.revision],
+  )
   const requestedCommitUnavailable = Boolean(
-    search.commit && history && !history.commits.some(
+    !requestRevision && search.commit && history && !history.commits.some(
       (commit) => commit.projected_id === search.commit,
     ),
   )
   const selectedCommitId = requestedCommitUnavailable
     ? null
-    : search.commit ?? latestCommitId(history)
+    : requestRevision?.revision ?? search.commit ?? latestCommitId(history)
   const repoId = history?.repo_id ?? `${params.owner}/${params.repo}`
   const commitIdentity = selectedCommitId && history
     ? historyCommitCacheKey({
         audience,
         commit: selectedCommitId,
-        generation: history.generation,
+        generation: requestRevision?.revision ?? history.generation,
         repoId: history.repo_id,
-        viewKey: history.view_key,
+        viewKey: requestRevision ? `request:${requestRevision.request}` : history.view_key,
       })
     : null
   const loadSelectedCommit = useCallback(
-    (signal: AbortSignal) => loadCommitDetail({
-      data: {
-        audience,
-        commit: selectedCommitId ?? '',
-        owner: params.owner,
-        repo: params.repo,
-      },
-      signal,
-    }),
-    [audience, params.owner, params.repo, selectedCommitId],
+    async (signal: AbortSignal) => {
+      if (requestRevision) {
+        const result = await loadRequestRevision({
+          data: { ...params, ...requestRevision },
+          signal,
+        })
+        return revisionCommitDetail(result, audience, repoId, requestRevision.request)
+      }
+      return loadCommitDetail({
+        data: {
+          audience,
+          commit: selectedCommitId ?? '',
+          owner: params.owner,
+          repo: params.repo,
+        },
+        signal,
+      })
+    },
+    [audience, params, repoId, requestRevision, selectedCommitId],
   )
   const commitResource = useHistoryResource({
     identity: commitIdentity,
@@ -213,6 +236,12 @@ function useHistoryPageModel({ histories, params, search }: HistoryPageProps) {
     write: writeHistoryCommitCache,
   })
   const selectedCommit = commitResource.value
+  const commits = useMemo(() => {
+    if (!requestRevision || !selectedCommit) return baseCommits
+    return [selectedCommit, ...baseCommits.filter(
+      (commit) => commit.projected_id !== selectedCommit.projected_id,
+    )]
+  }, [baseCommits, requestRevision, selectedCommit])
   const selectedFilePath = search.path ?? null
   const selectedFile = selectedCommit?.files.find(
     (file) => file.path === selectedFilePath,
@@ -221,26 +250,35 @@ function useHistoryPageModel({ histories, params, search }: HistoryPageProps) {
     ? historyDiffCacheKey({
         audience,
         commit: selectedCommitId,
-        generation: history.generation,
+        generation: requestRevision?.revision ?? history.generation,
         newOid: selectedFile.new_oid,
         oldOid: selectedFile.old_oid,
         path: selectedFile.path,
         repoId,
-        viewKey: history.view_key,
+        viewKey: requestRevision ? `request:${requestRevision.request}` : history.view_key,
       })
     : null
   const loadSelectedDiff = useCallback(
-    (signal: AbortSignal) => loadCommitFileDiff({
-      data: {
-        audience,
-        commit: selectedCommitId ?? '',
-        owner: params.owner,
-        path: selectedFilePath ?? '',
-        repo: params.repo,
-      },
-      signal,
-    }),
-    [audience, params.owner, params.repo, selectedCommitId, selectedFilePath],
+    (signal: AbortSignal) => requestRevision
+      ? loadRequestRevisionFileDiff({
+          data: {
+            ...params,
+            ...requestRevision,
+            path: selectedFilePath ?? '',
+          },
+          signal,
+        })
+      : loadCommitFileDiff({
+          data: {
+            audience,
+            commit: selectedCommitId ?? '',
+            owner: params.owner,
+            path: selectedFilePath ?? '',
+            repo: params.repo,
+          },
+          signal,
+        }),
+    [audience, params, requestRevision, selectedCommitId, selectedFilePath],
   )
   const diffResource = useHistoryResource({
     identity: diffIdentity,
@@ -274,6 +312,7 @@ function useHistoryPageModel({ histories, params, search }: HistoryPageProps) {
     nextAudience: ProjectionPreviewAudience,
     nextCommitId: string | null,
     nextPath: string | null = null,
+    keepRevision = true,
   ) {
     void navigate({
       params,
@@ -283,6 +322,8 @@ function useHistoryPageModel({ histories, params, search }: HistoryPageProps) {
         audience: nextAudience,
         commit: nextCommitId ?? undefined,
         path: nextPath ?? undefined,
+        request: keepRevision ? requestRevision?.request : undefined,
+        revision: keepRevision ? requestRevision?.revision : undefined,
       },
       to: '/repos/$owner/$repo/history',
     })
@@ -311,6 +352,7 @@ function useHistoryPageModel({ histories, params, search }: HistoryPageProps) {
     fileTabs: fileTabs.tabs,
     history,
     repoId,
+    requestRevision,
     retryCommit: requestedCommitUnavailable ? undefined : commitResource.retry,
     retryDiff: selectedFilePath && selectedCommit && !selectedFile
       ? undefined
@@ -322,7 +364,12 @@ function useHistoryPageModel({ histories, params, search }: HistoryPageProps) {
       }
     },
     selectCommit: (commit: CommitSummary) =>
-      replaceHistorySearch(audience, commit.projected_id),
+      replaceHistorySearch(
+        audience,
+        commit.projected_id,
+        null,
+        commit.projected_id === requestRevision?.revision,
+      ),
     selectFile: (file: CommitFile) => {
       fileTabs.prepareOpen(file.path)
       replaceHistorySearch(audience, selectedCommitId, file.path)
@@ -671,6 +718,30 @@ function fileName(path: string) {
 
 function commitFileStatus(file: CommitFile) {
   return <Badge variant="neutral">{file.kind}</Badge>
+}
+
+function revisionCommitDetail(
+  result: RequestChangeBlockFiles,
+  audience: ProjectionPreviewAudience,
+  repoId: string,
+  requestId: string,
+): CommitDetail {
+  const block = result.change_block
+  return {
+    audience,
+    author: null,
+    change_count: result.files.length,
+    files: result.files.map((file) => ({
+      ...file,
+      path: `/${file.path.replace(/^\/+/, '')}`,
+    })),
+    logical_commit_id: block.new_head_oid.slice(0, 12),
+    message: 'Request update',
+    parent_projected_id: block.old_head_oid,
+    projected_id: block.id,
+    repo_id: repoId,
+    view_key: `request:${requestId}`,
+  }
 }
 
 export function HistoryError({ error }: { error: unknown }) {

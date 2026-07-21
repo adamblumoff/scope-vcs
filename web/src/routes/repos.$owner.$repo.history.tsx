@@ -51,6 +51,8 @@ export type HistorySearch = {
   audience?: ProjectionPreviewAudience
   commit?: string
   path?: string
+  request?: string
+  revision?: string
 }
 
 function parseHistorySearch(search: Record<string, unknown>): HistorySearch {
@@ -58,6 +60,8 @@ function parseHistorySearch(search: Record<string, unknown>): HistorySearch {
     audience: searchHistoryAudience(search.audience),
     commit: searchCommitId(search.commit),
     path: searchHistoryPath(search.path),
+    request: searchText(search.request),
+    revision: searchText(search.revision),
   }
 }
 
@@ -87,6 +91,10 @@ function searchCommitId(value: unknown) {
   }
 
   return undefined
+}
+
+function searchText(value: unknown) {
+  return typeof value === 'string' && value.trim() ? value.trim() : undefined
 }
 
 async function loadOptionalPrivateHistory(params: RepoParams) {

@@ -3,8 +3,8 @@ use super::{
     projection::{SourceGraph, VisibilityEvent},
     repo_config::{ConfigVisibility, RepoConfig},
     requests::{
-        CreditLedgerEntry, Request, RequestDiscussion, RequestDiscussionReadState,
-        RequestDiscussionReply, RequestEvent, UserCreditAccount,
+        CreditLedgerEntry, Request, RequestChangeBlock, RequestDiscussion,
+        RequestDiscussionReadState, RequestDiscussionReply, RequestEvent, UserCreditAccount,
     },
 };
 use serde::{Deserialize, Serialize};
@@ -426,6 +426,7 @@ pub struct AppCatalog {
     pub users: BTreeMap<String, UserAccount>,
     pub repositories: BTreeMap<String, StoredRepository>,
     pub requests: BTreeMap<String, Request>,
+    pub request_change_blocks: BTreeMap<String, RequestChangeBlock>,
     pub request_discussions: BTreeMap<String, RequestDiscussion>,
     pub request_discussion_replies: BTreeMap<String, RequestDiscussionReply>,
     pub request_discussion_read_states: BTreeMap<String, RequestDiscussionReadState>,

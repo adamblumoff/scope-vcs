@@ -1,11 +1,11 @@
 import type {
+  RequestChangeBlockFiles,
   User,
   RepoLiveState,
   RepoParams,
-  RequestChanges,
   RequestMutation,
-  ReviewFileDiff,
 } from '@/api/types'
+import type { LoadRequestChangeBlockFilesInput } from '@/api/requests'
 import { DestructiveActionDialog } from '@/components/destructive-action-dialog'
 import { LifecycleBadge } from '@/components/lifecycle-badge'
 import { PageContent, PageHeader } from '@/components/page-header'
@@ -18,7 +18,6 @@ import { Coins, ShieldQuestion, Trash2 } from 'lucide-react'
 import type { ReactNode } from 'react'
 import { useCallback, useMemo, useState } from 'react'
 import { RequestActivityDrawer } from './request-activity-drawer'
-import { RequestChangesSection } from './request-changes-section'
 import { RequestContextRail } from './request-context-rail'
 import type {
   CreateDiscussionInput,
@@ -38,16 +37,10 @@ import type {
   RequestActivityPage,
   RequestDiscussion,
   RequestDiscussionChanges,
-  RequestDiscussionFilter,
   RequestDiscussionMutation,
   RequestDiscussionPage,
   RequestDiscussionReplyMutation,
-  RequestDiscussionSort,
 } from './request-discussion-types'
-import {
-  RequestReviewNavigation,
-  type RequestReviewView,
-} from './request-review-navigation'
 import { RequestMergeDialog } from './request-merge-dialog'
 import { RequestOverflowMenu } from './request-overflow-menu'
 import {
@@ -95,19 +88,18 @@ export function RequestUnavailablePage({ params }: { params: RepoParams }) {
 
 type RequestDetailPageProps = RequestActionsProps & {
   actor: User | null
-  changes: RequestChanges | null
-  changesError: string | null
   createDiscussion: (
     input: CreateDiscussionInput,
   ) => Promise<RequestDiscussionMutation>
   createReply: (
     input: CreateReplyInput,
   ) => Promise<RequestDiscussionReplyMutation>
-  discussionFilter: RequestDiscussionFilter
-  discussionPage: RequestDiscussionPage | null
-  discussionSort: RequestDiscussionSort
+  discussionPage: RequestDiscussionPage
   live: RepoLiveState
   loadActivity: () => Promise<RequestActivityPage>
+  loadChangeBlockFiles: (
+    input: LoadRequestChangeBlockFilesInput,
+  ) => Promise<RequestChangeBlockFiles>
   loadDiscussions: (
     input: LoadDiscussionsInput,
   ) => Promise<RequestDiscussionPage>
@@ -123,12 +115,6 @@ type RequestDetailPageProps = RequestActionsProps & {
     input: LoadRepliesInput,
   ) => Promise<RequestDiscussionRepliesPage>
   markDiscussionRead: (input: MarkDiscussionReadInput) => Promise<unknown>
-  onDiscussionQueryChange: (query: {
-    filter: RequestDiscussionFilter
-    sort: RequestDiscussionSort
-  }) => void
-  onSelectFile: (path: string) => void
-  onViewChange: (view: RequestReviewView) => void
   reopenAndReply: (
     input: CreateReplyInput,
   ) => Promise<RequestDiscussionReplyMutation>
@@ -138,42 +124,28 @@ type RequestDetailPageProps = RequestActionsProps & {
   resolveDiscussion: (
     input: RequestDiscussionActionInput,
   ) => Promise<RequestDiscussionMutation>
-  selectedDiff: ReviewFileDiff | null
-  selectedDiffError: string | null
-  selectedPath: string | null
   updateDescription: (input: UpdateDescriptionInput) => Promise<RequestMutation>
-  view: RequestReviewView
 }
 
 export function RequestDetailPage(props: RequestDetailPageProps) {
   const {
     actor: accountActor,
-    changes,
-    changesError,
     createDiscussion,
     createReply,
     detail,
-    discussionFilter,
     discussionPage,
-    discussionSort,
     live,
     loadActivity,
+    loadChangeBlockFiles,
     loadDiscussions,
     loadDiscussionChanges,
     loadReplies,
     markDiscussionRead,
-    onDiscussionQueryChange,
-    onSelectFile,
-    onViewChange,
     params,
     reopenAndReply,
     reopenDiscussion,
     resolveDiscussion,
-    selectedDiff,
-    selectedDiffError,
-    selectedPath,
     updateDescription,
-    view,
   } = props
   const controller = useRequestActions(props)
   const { request } = controller
@@ -313,18 +285,9 @@ export function RequestDetailPage(props: RequestDetailPageProps) {
     )
   }
 
-  function requestNavigation() {
-    return (
-      <div className="px-5 lg:px-7">
-        <RequestReviewNavigation onChange={onViewChange} view={view} />
-      </div>
-    )
-  }
-
   return (
     <RepoShell params={params}>
-      {view === 'discussion' && discussionPage ? (
-        <RequestDiscussionWorkbench
+      <RequestDiscussionWorkbench
           actions={discussionActions}
           actor={actor}
           canResolve={canResolveDiscussion}
@@ -349,12 +312,10 @@ export function RequestDetailPage(props: RequestDetailPageProps) {
             />
           )}
           description={description}
-          filter={discussionFilter}
           header={requestHeader}
           initialPage={discussionPage}
-          navigation={requestNavigation()}
+          loadChangeBlockFiles={loadChangeBlockFiles}
           onDescriptionSave={saveDescription}
-          onQueryChange={onDiscussionQueryChange}
           params={discussionParams}
           permissions={{
             canEditDescription:
@@ -364,34 +325,8 @@ export function RequestDetailPage(props: RequestDetailPageProps) {
           }}
           repoId={live.repo.id}
           request={request}
-          sort={discussionSort}
           threadActions={threadActions}
-        />
-      ) : null}
-
-      {view === 'discussion' && !discussionPage ? (
-        <>
-          {requestHeader()}
-          {requestNavigation()}
-        </>
-      ) : null}
-
-      {view === 'changes' ? (
-        <>
-          {requestHeader()}
-          {requestNavigation()}
-          <div className="px-5 pb-8 lg:px-7">
-            <RequestChangesSection
-              changes={changes}
-              error={changesError}
-              onSelectFile={onSelectFile}
-              selectedDiff={selectedDiff}
-              selectedDiffError={selectedDiffError}
-              selectedPath={selectedPath}
-            />
-          </div>
-        </>
-      ) : null}
+      />
 
       <RequestActivityDrawer
         activity={history.activity}

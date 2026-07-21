@@ -1,7 +1,7 @@
-import type { RequestParams, RequestSummary } from '@/api/types'
+import type { RequestChangeBlockFiles, RequestParams, RequestSummary } from '@/api/types'
+import type { LoadRequestChangeBlockFilesInput } from '@/api/requests'
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
-import { SelectControl } from '@/components/ui/select-control'
 import { cn } from '@/lib/utils'
 import {
   CircleAlert,
@@ -22,17 +22,14 @@ import type {
   RequestDiscussionThreadActions,
 } from './request-discussion-thread'
 import { RequestDiscussionThread } from './request-discussion-thread'
-import type {
-  RequestDiscussionActions,
-} from './request-discussion-store'
+import type { RequestDiscussionActions } from './request-discussion-store'
 import { useRequestDiscussionStore } from './request-discussion-store'
 import type {
   RequestActorSummary,
   RequestDiscussion,
-  RequestDiscussionFilter,
   RequestDiscussionPage,
-  RequestDiscussionSort,
 } from './request-discussion-types'
+import { RequestChangeBlock } from './request-change-block'
 
 export function RequestDiscussionWorkbench({
   actions,
@@ -40,17 +37,14 @@ export function RequestDiscussionWorkbench({
   canResolve,
   contextRail,
   description,
-  filter,
   header,
   initialPage,
-  navigation,
+  loadChangeBlockFiles,
   onDescriptionSave,
-  onQueryChange,
   params,
   permissions,
   repoId,
   request,
-  sort,
   threadActions,
 }: {
   actions: RequestDiscussionActions
@@ -58,15 +52,12 @@ export function RequestDiscussionWorkbench({
   canResolve: (discussion: RequestDiscussion) => boolean
   contextRail: ReactNode
   description: string
-  filter: RequestDiscussionFilter
   header: (controls: ReactNode) => ReactNode
   initialPage: RequestDiscussionPage
-  navigation: ReactNode
+  loadChangeBlockFiles: (
+    input: LoadRequestChangeBlockFilesInput,
+  ) => Promise<RequestChangeBlockFiles>
   onDescriptionSave: (description: string) => Promise<boolean>
-  onQueryChange: (query: {
-    filter: RequestDiscussionFilter
-    sort: RequestDiscussionSort
-  }) => void
   params: RequestParams
   permissions: {
     canEditDescription: boolean
@@ -75,17 +66,14 @@ export function RequestDiscussionWorkbench({
   }
   repoId: string
   request: RequestSummary
-  sort: RequestDiscussionSort
   threadActions: RequestDiscussionThreadActions
 }) {
   const store = useRequestDiscussionStore({
     actions,
     actor,
-    filter,
     initialPage,
     params,
     repoId,
-    sort,
   })
 
   useEffect(() => {
@@ -104,40 +92,6 @@ export function RequestDiscussionWorkbench({
           {store.newActivity ? (
             <Badge variant="info">New activity · order held</Badge>
           ) : null}
-          <label className="sr-only" htmlFor="discussion-filter">
-            Discussion status
-          </label>
-          <SelectControl
-            className="min-w-24"
-            id="discussion-filter"
-            onChange={(event) =>
-              onQueryChange({
-                filter: event.target.value as RequestDiscussionFilter,
-                sort,
-              })
-            }
-            value={filter}
-          >
-            <option value="Open">Open</option>
-            <option value="All">All</option>
-          </SelectControl>
-          <label className="sr-only" htmlFor="discussion-sort">
-            Discussion sort
-          </label>
-          <SelectControl
-            className="min-w-40"
-            id="discussion-sort"
-            onChange={(event) =>
-              onQueryChange({
-                filter,
-                sort: event.target.value as RequestDiscussionSort,
-              })
-            }
-            value={sort}
-          >
-            <option value="Recent">Recently active</option>
-            <option value="Newest">Newest</option>
-          </SelectControl>
           <Button
             className="h-9"
             disabled={store.refreshing}
@@ -156,7 +110,6 @@ export function RequestDiscussionWorkbench({
           </Button>
         </div>,
       )}
-      {navigation}
       <div className="grid min-h-0 xl:grid-cols-[minmax(0,1fr)_320px]">
         <div className="min-w-0">
           <RequestDescription
@@ -165,13 +118,7 @@ export function RequestDiscussionWorkbench({
             onSave={onDescriptionSave}
           />
 
-          <section aria-label="Discussion">
-            {permissions.canOpenDiscussion && request.state !== 'Resolved' && request.state !== 'Withdrawn' ? (
-              <div className="border-b border-border px-5 py-5 lg:px-7">
-                <RequestDiscussionComposer onSubmit={store.create} />
-              </div>
-            ) : null}
-
+          <section aria-label="Request timeline">
             {store.error ? (
               <div
                 className="flex items-center gap-2 border-b border-border px-5 py-3 text-sm text-destructive lg:px-7"
@@ -198,6 +145,13 @@ export function RequestDiscussionWorkbench({
                     onRetryRoot={store.retry}
                     onSetResolved={store.setResolved}
                     params={params}
+                    rootContent={discussion.change_block ? (
+                      <RequestChangeBlock
+                        block={discussion.change_block}
+                        loadFiles={loadChangeBlockFiles}
+                        params={params}
+                      />
+                    ) : undefined}
                   />
                 ))}
               </div>
@@ -205,14 +159,10 @@ export function RequestDiscussionWorkbench({
               <div className="border-b border-border px-5 py-14 text-center lg:px-7">
                 <MessageSquare className="mx-auto size-5 text-muted-foreground" />
                 <h3 className="mt-3 text-sm font-semibold">
-                  {filter === 'Open'
-                    ? 'No open discussions'
-                    : 'No discussions yet'}
+                  No timeline activity yet
                 </h3>
                 <p className="mx-auto mt-1 max-w-md text-sm leading-6 text-muted-foreground">
-                  {filter === 'Open'
-                    ? 'Everything raised so far has been resolved.'
-                    : 'Start a focused topic about this request.'}
+                  Updates and conversations will appear here in order.
                 </p>
               </div>
             )}
@@ -226,8 +176,14 @@ export function RequestDiscussionWorkbench({
                   type="button"
                   variant="secondary"
                 >
-                  {store.loadingMore ? 'Loading…' : 'Load older discussions'}
+                  {store.loadingMore ? 'Loading…' : 'Load earlier activity'}
                 </Button>
+              </div>
+            ) : null}
+
+            {permissions.canOpenDiscussion && request.state !== 'Resolved' && request.state !== 'Withdrawn' ? (
+              <div className="border-t border-border px-5 py-5 lg:px-7">
+                <RequestDiscussionComposer onSubmit={store.create} />
               </div>
             ) : null}
           </section>

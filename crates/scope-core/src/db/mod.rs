@@ -30,7 +30,9 @@ mod repo_mutation;
 mod repo_reads;
 mod repository_rows;
 mod request_access;
+mod request_change_block_rows;
 mod request_discussion_rows;
+pub use request_discussion_rows::RequestDiscussionReplyReadModel;
 mod request_discussions;
 pub use request_discussions::{
     RequestDiscussionReadBatch, RequestDiscussionReadModel, RequestDiscussionsPageQuery,

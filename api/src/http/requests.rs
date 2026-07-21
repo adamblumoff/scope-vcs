@@ -209,9 +209,24 @@ pub(crate) async fn submit_request(
             now_unix: unix_now()?,
         })
         .await?;
+    let timeline_change = (
+        mutation.request.id.clone(),
+        mutation.discussion.id.clone(),
+        mutation.discussion.last_activity_position,
+        mutation.request.audience,
+    );
     let current_main_oid = current_main_oid_for_access(&state, &repo, access)?;
     let request = request_response(mutation.request, access, current_main_oid, Some(&user.id))?;
     publish_request_summary_refresh(&state, &repo, "request-submitted").await;
+    state
+        .publish_request_timeline_change(
+            &repo.record.id,
+            timeline_change.0,
+            timeline_change.1,
+            timeline_change.2,
+            timeline_change.3,
+        )
+        .await;
     Ok(Json(RequestMutationResponse { request }))
 }
 

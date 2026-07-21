@@ -6,12 +6,20 @@ import {
   ChevronDown,
   ChevronRight,
   CircleAlert,
+  GitCommitHorizontal,
   Link2,
   MessageSquare,
   Reply,
   RotateCcw,
 } from 'lucide-react'
-import { memo, useEffect, useRef, useState } from 'react'
+import {
+  memo,
+  type ReactNode,
+  useEffect,
+  useEffectEvent,
+  useRef,
+  useState,
+} from 'react'
 import type {
   CreateReplyInput,
   LoadRepliesInput,
@@ -30,6 +38,7 @@ import type {
 } from './request-discussion-types'
 import {
   compactDiscussionSummary,
+  directDiscussionReplies,
   mergeDiscussionReplies,
   upsertDiscussionReply,
 } from './request-discussion-model'
@@ -45,6 +54,14 @@ export type RequestDiscussionThreadActions = {
   ) => Promise<RequestDiscussionReplyMutation>
 }
 
+type ReplyBranchState = {
+  error: string | null
+  knownChildCount: number
+  loaded: boolean
+  loading: boolean
+  nextBeforePosition: number | null
+}
+
 export const RequestDiscussionThread = memo(function RequestDiscussionThread({
   actions,
   actor,
@@ -57,6 +74,7 @@ export const RequestDiscussionThread = memo(function RequestDiscussionThread({
   onRetryRoot,
   onSetResolved,
   params,
+  rootContent,
 }: {
   actions: RequestDiscussionThreadActions
   actor: { handle: string; id: string }
@@ -72,53 +90,51 @@ export const RequestDiscussionThread = memo(function RequestDiscussionThread({
     resolved: boolean,
   ) => Promise<void>
   params: { owner: string; repo: string; request_id: string }
+  rootContent?: ReactNode
 }) {
   const [expandedReplies, setExpandedReplies] = useState(false)
+  const [rootRepliesLoaded, setRootRepliesLoaded] = useState(false)
   const [loadingReplies, setLoadingReplies] = useState(false)
   const [nextBeforePosition, setNextBeforePosition] = useState<number | null>(
     null,
   )
   const [replies, setReplies] = useState<RequestDiscussionReplyView[]>([])
+  const [expandedReplyIds, setExpandedReplyIds] = useState<Set<string>>(
+    new Set(),
+  )
+  const [replyBranches, setReplyBranches] = useState<
+    Map<string, ReplyBranchState>
+  >(new Map())
   const [replyError, setReplyError] = useState<string | null>(null)
   const [quoteId, setQuoteId] = useState<string | null>(null)
-  const articleRef = useRef<HTMLElement>(null)
+  const [readMarkerVisible, setReadMarkerVisible] = useState(false)
+  const readMarkerRef = useRef<HTMLSpanElement>(null)
+  const markReadAttemptRef = useRef<number | null>(null)
   const collapsed =
     discussion.status === 'Resolved' &&
     Boolean(discussion.initiallyResolved) &&
     !discussion.expanded
 
   useEffect(() => {
-    const article = articleRef.current
-    if (
-      !article ||
-      collapsed ||
-      discussion.unread_count === 0 ||
-      discussion.reply_count > discussion.latest_replies.length ||
-      discussion.pending
-    ) return
+    const marker = readMarkerRef.current
+    if (!marker || collapsed) return
     const observer = new IntersectionObserver(
       ([entry]) => {
-        if (!entry?.isIntersecting) return
-        void onMarkRead(discussion)
-        observer.disconnect()
+        const visible = Boolean(entry?.isIntersecting)
+        if (!visible) markReadAttemptRef.current = null
+        setReadMarkerVisible(visible)
       },
-      { threshold: 0.6 },
+      { threshold: 1 },
     )
-    observer.observe(article)
+    observer.observe(marker)
     return () => observer.disconnect()
-  }, [collapsed, discussion, onMarkRead])
+  }, [collapsed])
 
   async function expandReplies() {
     onExpandedChange(discussion.id, true)
-    if (expandedReplies) {
-      return
-    }
-    if (discussion.reply_count <= discussion.latest_replies.length) {
-      setReplies(discussion.latest_replies)
-      setExpandedReplies(true)
-      void onMarkRead(discussion)
-      return
-    }
+    if (expandedReplies && (rootRepliesLoaded || loadingReplies)) return
+    setExpandedReplies(true)
+    if (rootRepliesLoaded || discussion.reply_count === 0) return
     setLoadingReplies(true)
     setReplyError(null)
     try {
@@ -126,10 +142,12 @@ export const RequestDiscussionThread = memo(function RequestDiscussionThread({
         ...params,
         discussion_id: discussion.id,
       })
-      setReplies(page.replies)
+      setReplies((current) => mergeDiscussionReplies(
+        current,
+        [...discussion.latest_replies, ...page.replies],
+      ))
       setNextBeforePosition(page.next_before_position)
-      setExpandedReplies(true)
-      void onMarkRead(discussion)
+      setRootRepliesLoaded(true)
     } catch (error) {
       setReplyError(messageFor(error, 'Replies could not be loaded.'))
     } finally {
@@ -147,19 +165,92 @@ export const RequestDiscussionThread = memo(function RequestDiscussionThread({
         before: nextBeforePosition,
         discussion_id: discussion.id,
       })
-      setReplies((current) => [
-        ...page.replies,
-        ...current.filter(
-          (reply) =>
-            !page.replies.some((olderReply) => olderReply.id === reply.id),
-        ),
-      ])
+      setReplies((current) => mergeDiscussionReplies(current, page.replies))
       setNextBeforePosition(page.next_before_position)
     } catch (error) {
       setReplyError(messageFor(error, 'Older replies could not be loaded.'))
     } finally {
       setLoadingReplies(false)
     }
+  }
+
+  function patchReplyBranch(
+    replyId: string,
+    patch: Partial<ReplyBranchState>,
+  ) {
+    setReplyBranches((current) => {
+      const next = new Map(current)
+      next.set(replyId, {
+        error: null,
+        knownChildCount: 0,
+        loaded: false,
+        loading: false,
+        nextBeforePosition: null,
+        ...current.get(replyId),
+        ...patch,
+      })
+      return next
+    })
+  }
+
+  async function loadReplyChildren(
+    parentReplyId: string,
+    before?: number,
+  ) {
+    patchReplyBranch(parentReplyId, { error: null, loading: true })
+    try {
+      const page = await actions.loadReplies({
+        ...params,
+        before,
+        discussion_id: discussion.id,
+        parent_reply_id: parentReplyId,
+      })
+      setReplies((current) => mergeDiscussionReplies(current, page.replies))
+      const parent = availableReplies.find(
+        (reply) => reply.id === parentReplyId,
+      )
+      const loadedChildCount = directDiscussionReplies(
+        mergeDiscussionReplies(availableReplies, page.replies),
+        parentReplyId,
+      ).length
+      const knownChildCount = Math.max(
+        parent?.child_reply_count ?? 0,
+        loadedChildCount,
+      )
+      const nextBranch = {
+        error: null,
+        knownChildCount,
+        loaded: true,
+        loading: false,
+        nextBeforePosition: page.next_before_position,
+      }
+      setReplyBranches((current) =>
+        new Map(current).set(parentReplyId, nextBranch),
+      )
+    } catch (error) {
+      patchReplyBranch(parentReplyId, {
+        error: messageFor(error, 'Replies could not be loaded.'),
+        loading: false,
+      })
+    }
+  }
+
+  async function toggleReplyChildren(reply: RequestDiscussionReplyView) {
+    if (expandedReplyIds.has(reply.id)) {
+      setExpandedReplyIds((current) => {
+        const next = new Set(current)
+        next.delete(reply.id)
+        return next
+      })
+      return
+    }
+    setExpandedReplyIds((current) => new Set(current).add(reply.id))
+    const branch = replyBranches.get(reply.id)
+    if (
+      branch?.loaded &&
+      branch.knownChildCount >= reply.child_reply_count
+    ) return
+    await loadReplyChildren(reply.id)
   }
 
   async function postReply(
@@ -174,13 +265,22 @@ export const RequestDiscussionThread = memo(function RequestDiscussionThread({
       replyToReplyId,
       actor,
     })
-    setReplies((current) =>
-      upsertDiscussionReply(
+    setReplies((current) => {
+      const merged = mergeDiscussionReplies(
         current,
         discussion.latest_replies,
-        optimistic,
-      ),
-    )
+      )
+      const alreadyPresent = merged.some((reply) => reply.id === clientReplyId)
+      const withParentCount = merged.map((reply) =>
+        !alreadyPresent && reply.id === replyToReplyId
+          ? { ...reply, child_reply_count: reply.child_reply_count + 1 }
+          : reply,
+      )
+      return upsertDiscussionReply(withParentCount, [], optimistic)
+    })
+    if (replyToReplyId) {
+      setExpandedReplyIds((current) => new Set(current).add(replyToReplyId))
+    }
     setExpandedReplies(true)
     setReplyError(null)
     const input = {
@@ -203,6 +303,7 @@ export const RequestDiscussionThread = memo(function RequestDiscussionThread({
       )
       onPatch(result.discussion)
       onExpandedChange(discussion.id, true)
+      setQuoteId(null)
       return true
     } catch (error) {
       setReplies((current) =>
@@ -224,32 +325,85 @@ export const RequestDiscussionThread = memo(function RequestDiscussionThread({
   const quotedReply = quoteId
     ? availableReplies.find((reply) => reply.id === quoteId) ?? null
     : null
-  const replyLookup = new Map(
-    availableReplies.map((reply) => [reply.id, reply]),
-  )
   const visibleReplies: RequestDiscussionReplyView[] = expandedReplies
-    ? availableReplies
-    : discussion.latest_replies
+    ? directDiscussionReplies(availableReplies, null)
+    : directDiscussionReplies(discussion.latest_replies, null)
   const canPostReply =
     canReply &&
     (
+      discussion.status === 'Dormant' ||
       discussion.status === 'Open' ||
       canResolve
     )
+  const entireReplyTreeExposed = replyTreeFullyExposed({
+    branches: replyBranches,
+    expandedReplyIds,
+    nextBeforePosition,
+    replies: availableReplies,
+    replyCount: discussion.reply_count,
+    rootRepliesLoaded:
+      rootRepliesLoaded ||
+      discussion.latest_replies.length >= discussion.reply_count,
+  })
+  const previewContentExposed =
+    discussion.reply_count <= discussion.latest_replies.length &&
+    discussion.latest_replies.every(
+      (reply) => reply.reply_to_reply_id === null,
+    )
+  const markRead = useEffectEvent(onMarkRead)
+
+  useEffect(() => {
+    if (
+      !readMarkerVisible ||
+      collapsed ||
+      discussion.unread_count === 0 ||
+      discussion.pending ||
+      (!previewContentExposed && !entireReplyTreeExposed)
+    ) return
+    if (
+      markReadAttemptRef.current === discussion.last_activity_position
+    ) return
+    markReadAttemptRef.current = discussion.last_activity_position
+    void markRead(discussion)
+  }, [
+    readMarkerVisible,
+    collapsed,
+    discussion,
+    entireReplyTreeExposed,
+    previewContentExposed,
+  ])
 
   return (
     <article
-      className="request-discussion-thread scroll-mt-32 border-t border-border px-5 py-5 first:border-t-0 lg:px-7"
+      className={cn(
+        'request-discussion-thread scroll-mt-32 border-t px-5 first:border-t-0 lg:px-7',
+        discussion.change_block
+          ? 'border-brand/25 bg-brand-muted/45 py-4 shadow-[inset_3px_0_0_0_var(--brand)]'
+          : 'border-border py-5',
+      )}
       id={`discussion-${discussion.id}`}
-      ref={articleRef}
     >
       <div className="flex min-w-0 items-start gap-3">
-        <ActorAvatar handle={discussion.author.handle} />
+        {discussion.change_block ? (
+          <ChangeEventMarker />
+        ) : (
+          <ActorAvatar handle={discussion.author.handle} />
+        )}
         <div className="min-w-0 flex-1">
           <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
             <span className="text-sm font-semibold">
               {discussion.author.handle}
             </span>
+            {discussion.change_block ? (
+              <>
+                <span className="text-sm text-muted-foreground">
+                  updated the request
+                </span>
+                <span className="font-mono text-xs font-medium tabular-nums text-foreground">
+                  {discussion.change_block.new_head_oid.slice(0, 8)}
+                </span>
+              </>
+            ) : null}
             <span className="font-mono text-xs tabular-nums text-muted-foreground">
               {formatUnixDate(discussion.created_at_unix)}
             </span>
@@ -275,12 +429,11 @@ export const RequestDiscussionThread = memo(function RequestDiscussionThread({
             ) : null}
           </div>
 
-          {collapsed ? (
+          {rootContent ?? (collapsed ? (
             <button
               className="mt-2 flex w-full min-w-0 items-start gap-2 text-left"
               onClick={() => {
                 onExpandedChange(discussion.id, true)
-                void onMarkRead(discussion)
               }}
               type="button"
             >
@@ -290,11 +443,13 @@ export const RequestDiscussionThread = memo(function RequestDiscussionThread({
               </span>
             </button>
           ) : (
-            <RequestDiscussionMarkdown
-              className="mt-2"
-              source={discussion.body_markdown}
-            />
-          )}
+            discussion.body_markdown ? (
+              <RequestDiscussionMarkdown
+                className="mt-2"
+                source={discussion.body_markdown}
+              />
+            ) : null
+          ))}
 
           <div className="mt-3 flex flex-wrap items-center gap-2">
             {canPostReply || discussion.reply_count > 0 ? (
@@ -313,7 +468,7 @@ export const RequestDiscussionThread = memo(function RequestDiscussionThread({
                 ) : null}
               </Button>
             ) : null}
-            {canResolve && !discussion.pending ? (
+            {canResolve && discussion.status !== 'Dormant' && !discussion.pending ? (
               <Button
                 onClick={() =>
                   void onSetResolved(
@@ -368,26 +523,26 @@ export const RequestDiscussionThread = memo(function RequestDiscussionThread({
               ) : null}
               {visibleReplies.map((reply) => (
                 <DiscussionReply
+                  branchStates={replyBranches}
                   canQuote={canPostReply}
+                  expandedReplyIds={expandedReplyIds}
                   key={reply.id}
-                  onQuote={() => setQuoteId(reply.id)}
-                  onRetry={
-                    reply.pending === 'failed'
-                      ? () =>
-                          void postReply(
-                            reply.body_markdown,
-                            reply.id,
-                            reply.reply_to_reply_id,
-                          )
-                      : undefined
+                  onLoadChildren={(replyId, before) =>
+                    void loadReplyChildren(replyId, before)
                   }
-                  quotedReply={
-                    reply.reply_to_reply_id
-                      ? replyLookup.get(reply.reply_to_reply_id) ?? null
-                      : null
+                  onQuote={(quoted) => setQuoteId(quoted.id)}
+                  onRetry={(failedReply) =>
+                    void postReply(
+                      failedReply.body_markdown,
+                      failedReply.id,
+                      failedReply.reply_to_reply_id,
+                    )
                   }
-                  quotedReplyId={reply.reply_to_reply_id}
+                  onToggleChildren={(parent) =>
+                    void toggleReplyChildren(parent)
+                  }
                   reply={reply}
+                  replies={availableReplies}
                 />
               ))}
             </div>
@@ -407,6 +562,12 @@ export const RequestDiscussionThread = memo(function RequestDiscussionThread({
               {replyError}
             </p>
           ) : null}
+
+          <span
+            aria-hidden="true"
+            className="block h-px"
+            ref={readMarkerRef}
+          />
 
           {!collapsed && canPostReply ? (
             <div className="mt-4">
@@ -434,20 +595,31 @@ export const RequestDiscussionThread = memo(function RequestDiscussionThread({
 })
 
 function DiscussionReply({
+  branchStates,
   canQuote,
+  expandedReplyIds,
+  onLoadChildren,
   onQuote,
   onRetry,
-  quotedReply,
-  quotedReplyId,
+  onToggleChildren,
   reply,
+  replies,
 }: {
+  branchStates: Map<string, ReplyBranchState>
   canQuote: boolean
-  onQuote: () => void
-  onRetry?: () => void
-  quotedReply: RequestDiscussionReplyView | null
-  quotedReplyId: string | null
+  expandedReplyIds: Set<string>
+  onLoadChildren: (replyId: string, before?: number) => void
+  onQuote: (reply: RequestDiscussionReplyView) => void
+  onRetry: (reply: RequestDiscussionReplyView) => void
+  onToggleChildren: (reply: RequestDiscussionReplyView) => void
   reply: RequestDiscussionReplyView
+  replies: RequestDiscussionReplyView[]
 }) {
+  const children = directDiscussionReplies(replies, reply.id)
+  const childCount = Math.max(reply.child_reply_count, children.length)
+  const expanded = expandedReplyIds.has(reply.id)
+  const branch = branchStates.get(reply.id)
+
   return (
     <div
       className="scroll-mt-32 border-t border-border/70 py-4 first:border-t-0 first:pt-0"
@@ -466,48 +638,99 @@ function DiscussionReply({
           <Badge variant="danger">Failed</Badge>
         ) : null}
       </div>
-      {quotedReply || quotedReplyId ? (
-        <div className="mt-2 border-l-2 border-border-strong pl-3 text-xs leading-5 text-muted-foreground">
-          {quotedReply ? (
-            <>
-              <span className="font-medium text-foreground">
-                {quotedReply.author.handle}
-              </span>
-              <span className="ml-1">
-                {compactDiscussionSummary(quotedReply.body_markdown)}
-              </span>
-            </>
-          ) : (
-            <span>Replying to an earlier message</span>
-          )}
-        </div>
-      ) : null}
       <RequestDiscussionMarkdown
         className="mt-1.5"
         source={reply.body_markdown}
       />
       <div className="mt-2 flex items-center gap-2">
-        {canQuote ? (
+        {canQuote && reply.can_reply ? (
           <button
             className="inline-flex items-center gap-1 text-xs text-muted-foreground hover:text-foreground"
-            onClick={onQuote}
+            onClick={() => onQuote(reply)}
             type="button"
           >
             <Reply className="size-3" />
             Reply
           </button>
         ) : null}
-        {onRetry ? (
+        {reply.pending === 'failed' ? (
           <button
             className="inline-flex items-center gap-1 text-xs text-destructive hover:text-foreground"
-            onClick={onRetry}
+            onClick={() => onRetry(reply)}
             type="button"
           >
             <RotateCcw className="size-3" />
             Retry
           </button>
         ) : null}
+        {childCount > 0 ? (
+          <button
+            aria-label={expanded
+              ? 'Hide replies'
+              : `Show ${childCount} ${childCount === 1 ? 'reply' : 'replies'}`}
+            aria-expanded={expanded}
+            className="text-xs font-medium text-brand hover:text-foreground"
+            onClick={() => onToggleChildren(reply)}
+            type="button"
+          >
+            {expanded ? '-' : `+${childCount}`}
+          </button>
+        ) : null}
       </div>
+
+      {expanded ? (
+        <div className="mt-3 border-l border-border pl-4">
+          {branch?.nextBeforePosition !== null &&
+          branch?.nextBeforePosition !== undefined ? (
+            <button
+              className="mb-3 text-xs font-medium text-muted-foreground hover:text-foreground"
+              disabled={branch.loading}
+              onClick={() =>
+                onLoadChildren(reply.id, branch.nextBeforePosition as number)
+              }
+              type="button"
+            >
+              {branch.loading ? 'Loading…' : 'Load older replies'}
+            </button>
+          ) : null}
+          {children.map((child) => (
+            <DiscussionReply
+              branchStates={branchStates}
+              canQuote={canQuote}
+              expandedReplyIds={expandedReplyIds}
+              key={child.id}
+              onLoadChildren={onLoadChildren}
+              onQuote={onQuote}
+              onRetry={onRetry}
+              onToggleChildren={onToggleChildren}
+              reply={child}
+              replies={replies}
+            />
+          ))}
+          {branch?.loading && children.length === 0 ? (
+            <p className="py-2 text-xs text-muted-foreground">
+              Loading replies…
+            </p>
+          ) : null}
+          {branch?.error ? (
+            <div className="flex items-center gap-2 py-2 text-xs" role="alert">
+              <span className="text-destructive">{branch.error}</span>
+              <button
+                className="font-medium text-foreground hover:underline"
+                onClick={() =>
+                  onLoadChildren(
+                    reply.id,
+                    branch.nextBeforePosition ?? undefined,
+                  )
+                }
+                type="button"
+              >
+                Retry
+              </button>
+            </div>
+          ) : null}
+        </div>
+      ) : null}
     </div>
   )
 }
@@ -532,6 +755,17 @@ function ActorAvatar({
   )
 }
 
+function ChangeEventMarker() {
+  return (
+    <div
+      aria-hidden="true"
+      className="grid size-8 shrink-0 place-items-center rounded-md bg-brand text-brand-foreground shadow-sm"
+    >
+      <GitCommitHorizontal className="size-4" />
+    </div>
+  )
+}
+
 function optimisticReply({
   body,
   clientReplyId,
@@ -548,6 +782,8 @@ function optimisticReply({
   return {
     author: actor,
     body_markdown: body,
+    child_reply_count: 0,
+    can_reply: false,
     created_at_unix: Math.floor(Date.now() / 1000),
     discussion_id: discussion.id,
     id: clientReplyId,
@@ -561,4 +797,34 @@ function messageFor(error: unknown, fallback: string) {
   return error instanceof Error && error.message.trim()
     ? error.message
     : fallback
+}
+
+function replyTreeFullyExposed({
+  branches,
+  expandedReplyIds,
+  nextBeforePosition,
+  replies,
+  replyCount,
+  rootRepliesLoaded,
+}: {
+  branches: Map<string, ReplyBranchState>
+  expandedReplyIds: Set<string>
+  nextBeforePosition: number | null
+  replies: RequestDiscussionReplyView[]
+  replyCount: number
+  rootRepliesLoaded: boolean
+}) {
+  return (
+    rootRepliesLoaded &&
+    nextBeforePosition === null &&
+    replies.length >= replyCount &&
+    replies.every((reply) =>
+      reply.child_reply_count === 0 ||
+      (
+        expandedReplyIds.has(reply.id) &&
+        branches.get(reply.id)?.loaded === true &&
+        branches.get(reply.id)?.nextBeforePosition === null
+      ),
+    )
+  )
 }
