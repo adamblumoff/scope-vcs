@@ -9,7 +9,10 @@ use super::{
 use crate::{
     domain::store::{GitHead, GitSegment, SourceBlob},
     error::ApiError,
-    git_segments::{GIT_BLOB_REFERENCE_PREFIX, git_blob_reference, repoint_git_blob_reference},
+    git_segments::{
+        GIT_BLOB_REFERENCE_PREFIX, git_blob_reference, repoint_git_blob_reference,
+        validate_compacted_replacement,
+    },
 };
 use sea_orm::{
     ActiveModelTrait, ColumnTrait, ConnectionTrait, EntityTrait, IntoActiveModel, QueryFilter,
@@ -76,6 +79,8 @@ impl MetadataStore {
         new_head: GitHead,
         new_segment: GitSegment,
     ) -> Result<bool, ApiError> {
+        validate_compacted_replacement(&new_head, &new_segment)
+            .map_err(|error| ApiError::internal_message(error.to_string()))?;
         let tx = self.db.begin().await.map_err(ApiError::internal)?;
         acquire_aggregate_lock(&tx, "repository", repo_id).await?;
         let current = entities::git_head::Entity::find_by_id(repo_id.to_string())

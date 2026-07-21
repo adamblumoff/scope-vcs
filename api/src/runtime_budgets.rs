@@ -2,7 +2,11 @@ use crate::{
     error::ApiError,
     object_store::{ObjectStore, ensure_object_size},
 };
-use scope_core::error::ApiError as CoreError;
+use scope_core::{
+    config::{default_git_storage_limits, git_storage_limits_from_env},
+    error::ApiError as CoreError,
+    git_segments::GitStorageLimits,
+};
 use std::{
     sync::{Arc, OnceLock},
     time::Duration,
@@ -14,14 +18,12 @@ const DEFAULT_UPLOAD_PACK_CONCURRENCY: usize = 8;
 const DEFAULT_PROJECTION_BUILD_CONCURRENCY: usize = 2;
 const DEFAULT_OBJECT_STORE_CONCURRENCY: usize = 16;
 const DEFAULT_GIT_COMMAND_TIMEOUT_SECS: u64 = 30;
-const DEFAULT_OBJECT_STORE_MAX_BYTES: usize = 128 * 1024 * 1024;
 
 const RECEIVE_PACK_CONCURRENCY_ENV: &str = "SCOPE_GIT_RECEIVE_PACK_CONCURRENCY";
 const UPLOAD_PACK_CONCURRENCY_ENV: &str = "SCOPE_GIT_UPLOAD_PACK_CONCURRENCY";
 const PROJECTION_BUILD_CONCURRENCY_ENV: &str = "SCOPE_GIT_PROJECTION_BUILD_CONCURRENCY";
 const OBJECT_STORE_CONCURRENCY_ENV: &str = "SCOPE_OBJECT_STORE_CONCURRENCY";
 const GIT_COMMAND_TIMEOUT_SECS_ENV: &str = "SCOPE_GIT_COMMAND_TIMEOUT_SECS";
-const OBJECT_STORE_MAX_BYTES_ENV: &str = "SCOPE_OBJECT_STORE_MAX_BYTES";
 
 #[derive(Clone, Debug)]
 pub(crate) struct RuntimeBudgetConfig {
@@ -30,7 +32,7 @@ pub(crate) struct RuntimeBudgetConfig {
     pub(crate) projection_build_concurrency: usize,
     pub(crate) object_store_concurrency: usize,
     pub(crate) git_command_timeout: Duration,
-    pub(crate) object_store_max_bytes: usize,
+    pub(crate) git_storage_limits: GitStorageLimits,
 }
 
 impl RuntimeBudgetConfig {
@@ -56,10 +58,7 @@ impl RuntimeBudgetConfig {
                 GIT_COMMAND_TIMEOUT_SECS_ENV,
                 DEFAULT_GIT_COMMAND_TIMEOUT_SECS,
             )?),
-            object_store_max_bytes: parse_usize_env(
-                OBJECT_STORE_MAX_BYTES_ENV,
-                DEFAULT_OBJECT_STORE_MAX_BYTES,
-            )?,
+            git_storage_limits: git_storage_limits_from_env()?,
         })
     }
 }
@@ -72,7 +71,7 @@ impl Default for RuntimeBudgetConfig {
             projection_build_concurrency: DEFAULT_PROJECTION_BUILD_CONCURRENCY,
             object_store_concurrency: DEFAULT_OBJECT_STORE_CONCURRENCY,
             git_command_timeout: Duration::from_secs(DEFAULT_GIT_COMMAND_TIMEOUT_SECS),
-            object_store_max_bytes: DEFAULT_OBJECT_STORE_MAX_BYTES,
+            git_storage_limits: default_git_storage_limits(),
         }
     }
 }
@@ -83,7 +82,7 @@ pub(crate) struct RuntimeBudgets {
     projection_build: Arc<Semaphore>,
     object_store: Arc<Semaphore>,
     git_command_timeout: Duration,
-    object_store_max_bytes: usize,
+    git_storage_limits: GitStorageLimits,
 }
 
 impl RuntimeBudgets {
@@ -98,7 +97,7 @@ impl RuntimeBudgets {
             projection_build: Arc::new(Semaphore::new(config.projection_build_concurrency)),
             object_store: Arc::new(Semaphore::new(config.object_store_concurrency)),
             git_command_timeout: config.git_command_timeout,
-            object_store_max_bytes: config.object_store_max_bytes,
+            git_storage_limits: config.git_storage_limits,
         }
     }
 
@@ -120,6 +119,10 @@ impl RuntimeBudgets {
 
     pub(crate) fn git_command_timeout(&self) -> Duration {
         self.git_command_timeout
+    }
+
+    pub(crate) fn git_storage_limits(&self) -> GitStorageLimits {
+        self.git_storage_limits
     }
 
     pub(crate) fn default_git_command_timeout() -> Duration {
@@ -154,7 +157,7 @@ impl RuntimeBudgets {
             operation,
             key,
             bytes,
-            self.object_store_max_bytes,
+            self.git_storage_limits.max_object_bytes(),
         )?)
     }
 }
@@ -185,7 +188,7 @@ impl ObjectStore for BudgetedObjectStore {
         let _permit = self.budgets.try_object_store("object store read")?;
         let bytes = self
             .inner
-            .get_bounded(key, self.budgets.object_store_max_bytes)?;
+            .get_bounded(key, self.budgets.git_storage_limits.max_object_bytes())?;
         Ok(bytes)
     }
 

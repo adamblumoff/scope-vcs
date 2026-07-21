@@ -279,7 +279,8 @@ fn segment_restore_rejects_manifest_chains_over_the_limit() {
     )
     .unwrap();
     let mut snapshot = None;
-    for index in 0..=scope_core::config::MAX_GIT_SEGMENT_CHAIN_DEPTH {
+    let max_chain_depth = scope_core::config::default_git_storage_limits().max_chain_depth();
+    for index in 0..=max_chain_depth {
         let head_oid = format!("{index:040x}");
         let manifest = scope_core::git_segments::GitSegmentManifest::new(
             head_oid.clone(),
@@ -310,9 +311,54 @@ fn segment_restore_rejects_manifest_chains_over_the_limit() {
         error.message(),
         format!(
             "Git segment chain exceeds maximum depth of {}",
-            scope_core::config::MAX_GIT_SEGMENT_CHAIN_DEPTH
+            max_chain_depth
         )
     );
+}
+
+#[tokio::test]
+async fn segment_creation_rejects_chain_at_limit_before_side_effects() {
+    use crate::domain::store::{DEFAULT_GIT_FILE_MODE, GitHead, SourceBlob};
+    use scope_core::git_segments::GitStorageLimits;
+
+    let mut state = test_state_with_repo();
+    let raw_store = Arc::new(MemoryObjectStore::new());
+    let budgets = Arc::new(RuntimeBudgets::from_config(RuntimeBudgetConfig {
+        git_storage_limits: GitStorageLimits::new(1024, 2).unwrap(),
+        ..Default::default()
+    }));
+    state.object_store = Arc::new(BudgetedObjectStore::new(raw_store.clone(), budgets.clone()));
+    state.runtime_budgets = budgets;
+    state.test_object_store = raw_store.clone();
+    let previous = GitHead {
+        head_oid: TEST_PUSH_HEAD_OID.to_string(),
+        segment_sequence: 2,
+        change_version: 2,
+        manifest: SourceBlob {
+            object_key: "objects/git-manifests/previous".to_string(),
+            sha256: "previous".to_string(),
+            git_oid: TEST_PUSH_HEAD_OID.to_string(),
+            git_file_mode: DEFAULT_GIT_FILE_MODE.to_string(),
+            size_bytes: 1,
+        },
+    };
+    let missing_repo = PathBuf::from("/scope-test-missing-git-repo");
+    let object_count = raw_store.object_count();
+
+    let error =
+        match git_segment_manifest_from_repo(&state, TEST_REPO_ID, &missing_repo, Some(&previous))
+            .await
+        {
+            Ok(_) => panic!("over-depth segment creation unexpectedly succeeded"),
+            Err(error) => error,
+        };
+
+    assert_eq!(error.status(), StatusCode::SERVICE_UNAVAILABLE);
+    assert_eq!(
+        error.message(),
+        "Git segment chain has reached maximum depth of 2; retry after compaction"
+    );
+    assert_eq!(raw_store.object_count(), object_count);
 }
 
 #[tokio::test]

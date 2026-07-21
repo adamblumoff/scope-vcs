@@ -3,6 +3,7 @@ members = [
     "api",
     "crates/scope-api-contract",
     "crates/scope-core",
+    "crates/scope-git-process",
     "worker",
 ]
 exclude = ["cli"]

@@ -21,21 +21,20 @@ use axum::{
     },
     response::{IntoResponse, Response},
 };
+use scope_git_process::{
+    ProcessLimits, STDERR_DIAGNOSTIC_BYTES, run as run_process, truncated_stderr,
+};
 use sha1::{Digest, Sha1};
 use std::{
     collections::BTreeMap,
     fs,
-    io::{ErrorKind, Read, Write},
     path::{Path as FsPath, PathBuf},
-    process::{Child, Output},
-    process::{Command, Stdio},
+    process::{Command, Output},
     sync::atomic::{AtomicU64, Ordering},
-    thread,
-    time::{Duration, Instant},
+    time::Duration,
 };
 const PROJECTION_CACHE_SEMANTICS_VERSION: &str = "shared-projection-view-v1";
 const GIT_READ_VIEW_CACHE_SEMANTICS_VERSION: &str = "named-request-read-view-v1";
-const GIT_STDERR_DIAGNOSTIC_BYTES: usize = 8 * 1024;
 static GIT_CACHE_ATTEMPT: AtomicU64 = AtomicU64::new(1);
 
 #[cfg(test)]
@@ -598,174 +597,41 @@ pub(crate) fn git_process_output_with_timeout(
     stdin: Option<Vec<u8>>,
     timeout: Duration,
 ) -> Result<Output, ApiError> {
-    if stdin.is_some() {
-        command.stdin(Stdio::piped());
-    }
-    configure_process_group(command);
-    let mut child = command
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
-        .map_err(|error| ApiError::service_unavailable(format!("failed to run Git: {error}")))?;
-    let stdin_writer = if let Some(input) = stdin {
-        let mut child_stdin = child
-            .stdin
-            .take()
-            .ok_or_else(|| ApiError::internal_message("failed to open Git stdin"))?;
-        Some(thread::spawn(move || {
-            child_stdin.write_all(&input)?;
-            child_stdin.flush()
-        }))
-    } else {
-        None
-    };
-    wait_with_timeout(child, stdin_writer, timeout, "Git command")
+    git_process_output(command, stdin, ProcessLimits::new(timeout))
 }
 
-fn wait_with_timeout(
-    mut child: std::process::Child,
-    stdin_writer: Option<thread::JoinHandle<std::io::Result<()>>>,
+pub(crate) fn git_process_output_with_limits(
+    command: &mut Command,
+    stdin: Option<Vec<u8>>,
     timeout: Duration,
-    action: &str,
+    max_stdout_bytes: usize,
 ) -> Result<Output, ApiError> {
-    let mut stdout = child
-        .stdout
-        .take()
-        .ok_or_else(|| ApiError::internal_message("failed to open Git stdout"))?;
-    let stderr = child
-        .stderr
-        .take()
-        .ok_or_else(|| ApiError::internal_message("failed to open Git stderr"))?;
-    let stdout_reader = thread::spawn(move || {
-        let mut bytes = Vec::new();
-        stdout.read_to_end(&mut bytes).map(|_| bytes)
-    });
-    let stderr_reader = thread::spawn(move || read_stderr_diagnostic(stderr));
-
-    let started_at = Instant::now();
-    let mut status = None;
-    let status = loop {
-        if status.is_none() {
-            status = child.try_wait().map_err(ApiError::internal)?;
+    run_process(
+        command,
+        stdin,
+        ProcessLimits::new(timeout).with_max_stdout_bytes(max_stdout_bytes),
+        "Git command",
+    )
+    .map_err(|error| {
+        if error.is_stdout_limit() {
+            ApiError::payload_too_large(error.to_string())
+        } else {
+            ApiError::service_unavailable(error.to_string())
         }
-        let stdin_done = stdin_writer
-            .as_ref()
-            .is_none_or(thread::JoinHandle::is_finished);
-        if stdout_reader.is_finished()
-            && stderr_reader.is_finished()
-            && stdin_done
-            && let Some(status) = status.take()
-        {
-            break status;
-        }
-        if started_at.elapsed() >= timeout {
-            kill_process_group(&mut child);
-            if status.is_none() {
-                let _status = child.wait().map_err(ApiError::internal)?;
-            }
-            drop(stdin_writer);
-            let _stdout = join_reader(stdout_reader)?;
-            let stderr = join_reader(stderr_reader)?;
-            let message = truncated_git_stderr(&stderr);
-            return Err(ApiError::service_unavailable(format!(
-                "{action} timed out after {}ms{}{}",
-                timeout.as_millis(),
-                if message.is_empty() { "" } else { ": " },
-                message
-            )));
-        }
-        let remaining = timeout.saturating_sub(started_at.elapsed());
-        thread::sleep(remaining.min(Duration::from_millis(1)));
-    };
-
-    if let Some(stdin_writer) = stdin_writer {
-        join_writer(stdin_writer)?;
-    }
-    let stdout = join_reader(stdout_reader)?;
-    let stderr = join_reader(stderr_reader)?;
-    Ok(Output {
-        status,
-        stdout,
-        stderr,
     })
 }
 
-fn join_reader(handle: thread::JoinHandle<std::io::Result<Vec<u8>>>) -> Result<Vec<u8>, ApiError> {
-    handle
-        .join()
-        .map_err(|_| ApiError::internal_message("Git output reader panicked"))?
-        .map_err(ApiError::internal)
-}
-
-fn join_writer(handle: thread::JoinHandle<std::io::Result<()>>) -> Result<(), ApiError> {
-    match handle
-        .join()
-        .map_err(|_| ApiError::internal_message("Git stdin writer panicked"))?
-    {
-        Ok(()) => Ok(()),
-        Err(error) if error.kind() == ErrorKind::BrokenPipe => Ok(()),
-        Err(error) => Err(ApiError::internal(error)),
-    }
-}
-
-fn read_stderr_diagnostic(mut stderr: impl Read) -> std::io::Result<Vec<u8>> {
-    let max_retained = GIT_STDERR_DIAGNOSTIC_BYTES.saturating_add(1);
-    let mut retained = Vec::new();
-    let mut buffer = [0_u8; 8 * 1024];
-    loop {
-        let read = stderr.read(&mut buffer)?;
-        if read == 0 {
-            return Ok(retained);
-        }
-        let remaining = max_retained.saturating_sub(retained.len());
-        if remaining > 0 {
-            retained.extend_from_slice(&buffer[..read.min(remaining)]);
-        }
-    }
-}
-
-#[cfg(unix)]
-fn configure_process_group(command: &mut Command) {
-    use std::os::unix::process::CommandExt;
-    command.process_group(0);
-}
-
-#[cfg(not(unix))]
-fn configure_process_group(_command: &mut Command) {}
-
-#[cfg(unix)]
-fn kill_process_group(child: &mut Child) {
-    let group = format!("-{}", child.id());
-    let _ = Command::new("kill")
-        .arg("-KILL")
-        .arg("--")
-        .arg(group)
-        .status();
-    let _ = child.kill();
-}
-
-#[cfg(not(unix))]
-fn kill_process_group(child: &mut Child) {
-    // Scope's API runs on Unix. Non-Unix builds only kill the direct child here;
-    // descendants can hold output pipes open until they exit.
-    let _ = child.kill();
+fn git_process_output(
+    command: &mut Command,
+    stdin: Option<Vec<u8>>,
+    limits: ProcessLimits,
+) -> Result<Output, ApiError> {
+    run_process(command, stdin, limits, "Git command")
+        .map_err(|error| ApiError::service_unavailable(error.to_string()))
 }
 
 fn truncated_git_stderr(stderr: &[u8]) -> String {
-    let mut message = String::from_utf8_lossy(stderr).trim().to_string();
-    if message.len() > GIT_STDERR_DIAGNOSTIC_BYTES {
-        let mut end = 0;
-        for (index, character) in message.char_indices() {
-            let next = index + character.len_utf8();
-            if next > GIT_STDERR_DIAGNOSTIC_BYTES {
-                break;
-            }
-            end = next;
-        }
-        message.truncate(end);
-        message.push_str("...");
-    }
-    message
+    truncated_stderr(stderr, STDERR_DIAGNOSTIC_BYTES)
 }
 
 pub(crate) async fn git_upload_pack_response(
@@ -857,15 +723,29 @@ pub(crate) fn pkt_line(payload: &[u8]) -> Vec<u8> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::time::Instant;
 
     #[test]
     fn stderr_truncation_preserves_utf8_boundaries() {
-        let stderr = "é".repeat(GIT_STDERR_DIAGNOSTIC_BYTES);
+        let stderr = "é".repeat(STDERR_DIAGNOSTIC_BYTES);
 
         let truncated = truncated_git_stderr(stderr.as_bytes());
 
         assert!(truncated.ends_with("..."));
         assert!(truncated.is_char_boundary(truncated.len() - 3));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn bounded_git_output_maps_size_limit_to_payload_too_large() {
+        let mut command = Command::new("sh");
+        command.arg("-c").arg("printf 12345");
+
+        let error = git_process_output_with_limits(&mut command, None, Duration::from_secs(1), 4)
+            .unwrap_err();
+
+        assert_eq!(error.status(), StatusCode::PAYLOAD_TOO_LARGE);
+        assert!(error.message().contains("stdout exceeded 4 bytes"));
     }
 
     #[cfg(unix)]
