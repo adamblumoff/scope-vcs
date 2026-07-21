@@ -35,6 +35,11 @@ impl MemoryObjectStore {
             .values()
             .any(|stored| stored == bytes)
     }
+
+    #[cfg(any(test, feature = "test-support"))]
+    pub fn object_count(&self) -> usize {
+        self.objects.lock().expect("object store lock").len()
+    }
 }
 
 impl Default for MemoryObjectStore {

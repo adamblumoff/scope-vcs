@@ -39,7 +39,18 @@ pub fn put_repo_object(
 }
 
 pub fn source_blob_bytes(store: &dyn ObjectStore, blob: &SourceBlob) -> Result<Vec<u8>, ApiError> {
-    let bytes = store.get(&blob.object_key)?;
+    verified_source_blob_bytes(blob, store.get(&blob.object_key)?)
+}
+
+pub fn source_blob_bytes_bounded(
+    store: &dyn ObjectStore,
+    blob: &SourceBlob,
+    max_bytes: usize,
+) -> Result<Vec<u8>, ApiError> {
+    verified_source_blob_bytes(blob, store.get_bounded(&blob.object_key, max_bytes)?)
+}
+
+fn verified_source_blob_bytes(blob: &SourceBlob, bytes: Vec<u8>) -> Result<Vec<u8>, ApiError> {
     let sha256 = hex::encode(Sha256::digest(&bytes));
     if sha256 != blob.sha256 {
         return Err(ApiError::internal_message(format!(

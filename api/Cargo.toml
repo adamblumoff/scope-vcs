@@ -40,6 +40,7 @@ sha1 = "0.10.6"
 sha2 = "0.10.9"
 scope_core = { package = "scope-core", path = "../crates/scope-core", features = ["ts"] }
 scope_api_contract = { package = "scope-api-contract", path = "../crates/scope-api-contract", features = ["ts"] }
+scope_git_process = { package = "scope-git-process", path = "../crates/scope-git-process" }
 time = { version = "0.3.44", features = ["formatting"] }
 tokio = { version = "1.48.0", features = ["io-util", "macros", "process", "rt-multi-thread", "signal", "sync", "time"] }
 tokio-stream = { version = "0.1.17", features = ["sync"] }

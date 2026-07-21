@@ -6,7 +6,7 @@ use crate::{
         MAX_PENDING_IMPORT_TOTAL_BYTES,
     },
     error::ApiError,
-    git::upload::git_process_output_with_timeout,
+    git::upload::{git_process_output_with_limits, git_process_output_with_timeout},
     object_store::put_repo_object,
     runtime_budgets::RuntimeBudgets,
     state::AppState,
@@ -300,6 +300,12 @@ pub(crate) async fn git_segment_manifest_from_repo(
     repo: &FsPath,
     previous: Option<&GitHead>,
 ) -> Result<CreatedGitSegment, ApiError> {
+    let storage_limits = state.runtime_budgets.git_storage_limits();
+    let sequence = storage_limits
+        .next_segment_sequence(previous.map(|head| head.segment_sequence))
+        .map_err(|error| {
+            ApiError::service_unavailable(format!("{error}; retry after compaction"))
+        })?;
     let refname = format!("refs/heads/{DEFAULT_GIT_BRANCH}");
     let head_oid = git_stdout_text(repo, &["rev-parse", &refname], "reading pushed Git head")?
         .trim()
@@ -310,12 +316,13 @@ pub(crate) async fn git_segment_manifest_from_repo(
         revisions.push_str(&previous.head_oid);
         revisions.push('\n');
     }
-    let output = git_process_output_with_timeout(
+    let output = git_process_output_with_limits(
         Command::new("git")
             .current_dir(repo)
             .args(["pack-objects", "--revs", "--stdout"]),
         Some(revisions.into_bytes()),
         state.runtime_budgets.git_command_timeout(),
+        storage_limits.max_object_bytes(),
     )?;
     if !output.status.success() {
         return Err(ApiError::service_unavailable(format!(
@@ -350,7 +357,6 @@ pub(crate) async fn git_segment_manifest_from_repo(
         }
     };
     snapshot.git_oid = head_oid.clone();
-    let sequence = previous.map_or(1, |head| head.segment_sequence.saturating_add(1));
     Ok(CreatedGitSegment {
         head: GitHead {
             head_oid: head_oid.clone(),

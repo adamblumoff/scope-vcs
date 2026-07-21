@@ -3,6 +3,8 @@ use std::{
     process::Command,
 };
 
+use crate::git_segments::GitStorageLimits;
+
 pub const SCOPE_APP_ORIGIN_ENV: &str = "SCOPE_APP_ORIGIN";
 pub const SCOPE_API_PUBLIC_URL_ENV: &str = "SCOPE_API_PUBLIC_URL";
 pub const DATABASE_URL_ENV: &str = "DATABASE_URL";
@@ -17,6 +19,8 @@ pub const SCOPE_BUCKET_FORCE_PATH_STYLE_ENV: &str = "SCOPE_BUCKET_FORCE_PATH_STY
 pub const SCOPE_OBJECT_ENCRYPTION_KEY_ENV: &str = "SCOPE_OBJECT_ENCRYPTION_KEY";
 pub const SCOPE_OBJECT_STORE_ENV: &str = "SCOPE_OBJECT_STORE";
 pub const SCOPE_OBJECT_STORE_DIR_ENV: &str = "SCOPE_OBJECT_STORE_DIR";
+pub const SCOPE_OBJECT_STORE_MAX_BYTES_ENV: &str = "SCOPE_OBJECT_STORE_MAX_BYTES";
+pub const SCOPE_GIT_SEGMENT_MAX_DEPTH_ENV: &str = "SCOPE_GIT_SEGMENT_MAX_DEPTH";
 pub const SCOPE_OPERATOR_TOKEN_ENV: &str = "SCOPE_OPERATOR_TOKEN";
 pub const CLERK_ISSUER_ENV: &str = "CLERK_ISSUER";
 pub const CLERK_JWKS_URL_ENV: &str = "CLERK_JWKS_URL";
@@ -48,7 +52,8 @@ pub const GIT_UPLOAD_PACK: &str = "git-upload-pack";
 pub const GIT_RECEIVE_PACK: &str = "git-receive-pack";
 pub const DEFAULT_GIT_BRANCH: &str = "main";
 pub const DEFAULT_GIT_COMPACTION_SEGMENTS: usize = 32;
-pub const MAX_GIT_SEGMENT_CHAIN_DEPTH: usize = 2 * DEFAULT_GIT_COMPACTION_SEGMENTS;
+pub const DEFAULT_OBJECT_STORE_MAX_BYTES: usize = 128 * 1024 * 1024;
+pub const DEFAULT_GIT_SEGMENT_MAX_DEPTH: usize = 2 * DEFAULT_GIT_COMPACTION_SEGMENTS;
 pub const UNPUBLISHED_GIT_ERROR: &str = "repo is not published yet";
 pub const MAX_RECEIVE_PACK_BYTES: usize = 512 * 1024 * 1024;
 pub const MAX_UPLOAD_PACK_BYTES: usize = 64 * 1024 * 1024;
@@ -58,6 +63,35 @@ pub const MAX_PENDING_IMPORT_TOTAL_BYTES: usize = 100 * 1024 * 1024;
 
 pub fn non_empty_env(name: &str) -> Option<String> {
     std::env::var(name).ok().filter(|value| !value.is_empty())
+}
+
+pub fn default_git_storage_limits() -> GitStorageLimits {
+    GitStorageLimits::new(
+        DEFAULT_OBJECT_STORE_MAX_BYTES,
+        DEFAULT_GIT_SEGMENT_MAX_DEPTH,
+    )
+    .expect("default Git storage limits are valid")
+}
+
+pub fn git_storage_limits_from_env() -> anyhow::Result<GitStorageLimits> {
+    let max_object_bytes = parse_usize_env(
+        SCOPE_OBJECT_STORE_MAX_BYTES_ENV,
+        DEFAULT_OBJECT_STORE_MAX_BYTES,
+    )?;
+    let max_chain_depth = parse_usize_env(
+        SCOPE_GIT_SEGMENT_MAX_DEPTH_ENV,
+        DEFAULT_GIT_SEGMENT_MAX_DEPTH,
+    )?;
+    GitStorageLimits::new(max_object_bytes, max_chain_depth).map_err(anyhow::Error::from)
+}
+
+fn parse_usize_env(name: &str, default: usize) -> anyhow::Result<usize> {
+    match std::env::var(name) {
+        Ok(value) if !value.trim().is_empty() => value
+            .parse::<usize>()
+            .map_err(|error| anyhow::anyhow!("{name} must be an integer: {error}")),
+        _ => Ok(default),
+    }
 }
 
 pub fn data_dir(repo_root: &FsPath) -> PathBuf {

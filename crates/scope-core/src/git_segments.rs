@@ -1,9 +1,105 @@
-use crate::{domain::store::SourceBlob, error::ApiError};
+use crate::{
+    domain::store::{GitHead, GitSegment, SourceBlob},
+    error::ApiError,
+};
 use serde::{Deserialize, Serialize};
+use thiserror::Error;
 
 pub const GIT_SEGMENT_MANIFEST_VERSION: u8 = 1;
 pub const GIT_BLOB_REFERENCE_PREFIX: &str = "git-blobs/";
 pub const GIT_MANIFEST_OBJECT_PREFIX: &str = "objects/git-manifests/";
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct GitStorageLimits {
+    max_object_bytes: usize,
+    max_chain_depth: usize,
+}
+
+impl GitStorageLimits {
+    pub fn new(
+        max_object_bytes: usize,
+        max_chain_depth: usize,
+    ) -> Result<Self, GitStorageLimitError> {
+        if max_object_bytes == 0 {
+            return Err(GitStorageLimitError::ZeroObjectBytes);
+        }
+        if max_chain_depth == 0 {
+            return Err(GitStorageLimitError::ZeroChainDepth);
+        }
+        Ok(Self {
+            max_object_bytes,
+            max_chain_depth,
+        })
+    }
+
+    pub fn max_object_bytes(self) -> usize {
+        self.max_object_bytes
+    }
+
+    pub fn max_chain_depth(self) -> usize {
+        self.max_chain_depth
+    }
+
+    pub fn next_segment_sequence(
+        self,
+        previous_sequence: Option<u64>,
+    ) -> Result<u64, GitStorageLimitError> {
+        let previous_sequence = previous_sequence.unwrap_or(0);
+        let previous_depth = usize::try_from(previous_sequence)
+            .map_err(|_| GitStorageLimitError::SequenceOverflow)?;
+        if previous_depth >= self.max_chain_depth {
+            return Err(GitStorageLimitError::ChainDepthReached {
+                max_chain_depth: self.max_chain_depth,
+            });
+        }
+        previous_sequence
+            .checked_add(1)
+            .ok_or(GitStorageLimitError::SequenceOverflow)
+    }
+}
+
+#[derive(Clone, Debug, Error, PartialEq, Eq)]
+pub enum GitStorageLimitError {
+    #[error("Git object size limit must be greater than zero")]
+    ZeroObjectBytes,
+    #[error("Git segment chain depth limit must be greater than zero")]
+    ZeroChainDepth,
+    #[error("Git segment chain has reached maximum depth of {max_chain_depth}")]
+    ChainDepthReached { max_chain_depth: usize },
+    #[error("Git segment sequence overflow")]
+    SequenceOverflow,
+}
+
+#[derive(Clone, Debug, Error, PartialEq, Eq)]
+pub enum GitCompactionContractError {
+    #[error("Git compaction replacement must contain exactly one segment")]
+    InvalidSequence,
+    #[error("Git compaction replacement segment must not have a base")]
+    UnexpectedBase,
+    #[error("Git compaction replacement must preserve the visible head")]
+    HeadMismatch,
+    #[error("Git compaction replacement head and segment must share a manifest")]
+    ManifestMismatch,
+}
+
+pub fn validate_compacted_replacement(
+    head: &GitHead,
+    segment: &GitSegment,
+) -> Result<(), GitCompactionContractError> {
+    if head.segment_sequence != 1 || segment.sequence != 1 {
+        return Err(GitCompactionContractError::InvalidSequence);
+    }
+    if segment.base_oid.is_some() {
+        return Err(GitCompactionContractError::UnexpectedBase);
+    }
+    if head.head_oid != segment.head_oid {
+        return Err(GitCompactionContractError::HeadMismatch);
+    }
+    if head.manifest != segment.manifest {
+        return Err(GitCompactionContractError::ManifestMismatch);
+    }
+    Ok(())
+}
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct GitSegmentManifest {
@@ -111,5 +207,55 @@ mod tests {
         assert_eq!(content.object_key, "git-blobs/new/new-sha");
         assert_eq!(content.git_oid, "blob-oid");
         assert_eq!(content.size_bytes, 42);
+    }
+
+    #[test]
+    fn storage_limits_accept_exact_chain_boundary_and_reject_the_next_segment() {
+        let limits = GitStorageLimits::new(4, 2).unwrap();
+
+        assert_eq!(limits.next_segment_sequence(None).unwrap(), 1);
+        assert_eq!(limits.next_segment_sequence(Some(1)).unwrap(), 2);
+        assert_eq!(
+            limits.next_segment_sequence(Some(2)).unwrap_err(),
+            GitStorageLimitError::ChainDepthReached { max_chain_depth: 2 }
+        );
+    }
+
+    #[test]
+    fn storage_limits_reject_zero_values() {
+        assert_eq!(
+            GitStorageLimits::new(0, 1).unwrap_err(),
+            GitStorageLimitError::ZeroObjectBytes
+        );
+        assert_eq!(
+            GitStorageLimits::new(1, 0).unwrap_err(),
+            GitStorageLimitError::ZeroChainDepth
+        );
+    }
+    #[test]
+    fn compacted_replacement_contract_requires_one_root_segment_for_the_same_head() {
+        let new_manifest = manifest("new", "new-sha");
+        let head = GitHead {
+            head_oid: "head".to_string(),
+            segment_sequence: 1,
+            change_version: 2,
+            manifest: new_manifest.clone(),
+        };
+        let segment = GitSegment {
+            sequence: 1,
+            base_oid: None,
+            head_oid: "head".to_string(),
+            object: manifest("segment", "segment-sha"),
+            manifest: new_manifest,
+        };
+
+        validate_compacted_replacement(&head, &segment).unwrap();
+
+        let mut invalid = segment.clone();
+        invalid.base_oid = Some("base".to_string());
+        assert_eq!(
+            validate_compacted_replacement(&head, &invalid).unwrap_err(),
+            GitCompactionContractError::UnexpectedBase
+        );
     }
 }

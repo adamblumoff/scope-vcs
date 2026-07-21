@@ -1,5 +1,6 @@
 use super::*;
 use crate::object_store::ObjectStore;
+use scope_core::git_segments::GitStorageLimits;
 use std::{
     process::Command,
     time::{Duration, Instant},
@@ -113,9 +114,11 @@ async fn object_store_readiness_bypasses_operation_capacity() {
 fn object_store_size_limits_cover_writes_and_reads() {
     let key = "tests/budget/read-too-large";
     let (raw, store) = budgeted_store(RuntimeBudgetConfig {
-        object_store_max_bytes: 4,
+        git_storage_limits: GitStorageLimits::new(4, 64).unwrap(),
         ..Default::default()
     });
+    store.put("tests/budget/write-at-limit", b"1234").unwrap();
+    assert_eq!(store.get("tests/budget/write-at-limit").unwrap(), b"1234");
     raw.put(key, b"12345").unwrap();
     for error in [
         store
