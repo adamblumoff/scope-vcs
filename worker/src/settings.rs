@@ -51,7 +51,8 @@ impl WorkerSettings {
         let git_storage_limits = git_storage_limits_from_env()?;
         if git_compaction_segments >= git_storage_limits.max_chain_depth() {
             anyhow::bail!(
-                "SCOPE_GIT_COMPACTION_SEGMENTS must be lower than SCOPE_GIT_SEGMENT_MAX_DEPTH"
+                "SCOPE_GIT_COMPACTION_SEGMENTS ({git_compaction_segments}) must be lower than SCOPE_GIT_SEGMENT_MAX_DEPTH ({})",
+                git_storage_limits.max_chain_depth()
             );
         }
         let data_dir = non_empty_env(SCOPE_DATA_DIR_ENV)

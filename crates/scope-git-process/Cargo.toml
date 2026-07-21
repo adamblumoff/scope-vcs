@@ -8,4 +8,3 @@ repository = "https://github.com/adamblumoff/scope-vcs"
 [dependencies]
 libc = "0.2"
 thiserror = "2.0.18"
-

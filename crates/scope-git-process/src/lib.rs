@@ -140,8 +140,8 @@ fn wait_for_output(
         if stdout_limit_receiver.try_recv().is_ok() {
             terminate_and_reap(&mut child);
             let _ = join_writer(stdin_writer, action);
-            let _ = join_reader(stdout_reader, action)?;
-            let stderr = join_reader(stderr_reader, action)?;
+            let _ = join_reader(stdout_reader, action);
+            let stderr = join_reader(stderr_reader, action).unwrap_or_default();
             return Err(ProcessError::StdoutLimitExceeded {
                 action: action.to_string(),
                 max_stdout_bytes: limits
@@ -169,8 +169,8 @@ fn wait_for_output(
         if started_at.elapsed() >= limits.timeout {
             terminate_and_reap(&mut child);
             let _ = join_writer(stdin_writer, action);
-            let _ = join_reader(stdout_reader, action)?;
-            let stderr = join_reader(stderr_reader, action)?;
+            let _ = join_reader(stdout_reader, action);
+            let stderr = join_reader(stderr_reader, action).unwrap_or_default();
             return Err(ProcessError::TimedOut {
                 action: action.to_string(),
                 timeout_ms: limits.timeout.as_millis(),
@@ -392,7 +392,7 @@ mod tests {
         let error = run(
             &mut command,
             None,
-            ProcessLimits::new(Duration::from_secs(2)).with_max_stdout_bytes(4),
+            ProcessLimits::new(Duration::from_millis(250)).with_max_stdout_bytes(4),
             "descendant output limit",
         )
         .unwrap_err();

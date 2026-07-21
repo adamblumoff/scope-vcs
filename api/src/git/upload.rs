@@ -606,11 +606,19 @@ pub(crate) fn git_process_output_with_limits(
     timeout: Duration,
     max_stdout_bytes: usize,
 ) -> Result<Output, ApiError> {
-    git_process_output(
+    run_process(
         command,
         stdin,
         ProcessLimits::new(timeout).with_max_stdout_bytes(max_stdout_bytes),
+        "Git command",
     )
+    .map_err(|error| {
+        if error.is_stdout_limit() {
+            ApiError::payload_too_large(error.to_string())
+        } else {
+            ApiError::service_unavailable(error.to_string())
+        }
+    })
 }
 
 fn git_process_output(
@@ -725,6 +733,19 @@ mod tests {
 
         assert!(truncated.ends_with("..."));
         assert!(truncated.is_char_boundary(truncated.len() - 3));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn bounded_git_output_maps_size_limit_to_payload_too_large() {
+        let mut command = Command::new("sh");
+        command.arg("-c").arg("printf 12345");
+
+        let error = git_process_output_with_limits(&mut command, None, Duration::from_secs(1), 4)
+            .unwrap_err();
+
+        assert_eq!(error.status(), StatusCode::PAYLOAD_TOO_LARGE);
+        assert!(error.message().contains("stdout exceeded 4 bytes"));
     }
 
     #[cfg(unix)]
