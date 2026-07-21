@@ -219,6 +219,15 @@ export function mergeDiscussionReplies(
   )
 }
 
+export function directDiscussionReplies(
+  replies: RequestDiscussionReplyView[],
+  parentReplyId: string | null,
+) {
+  return replies.filter(
+    (reply) => reply.reply_to_reply_id === parentReplyId,
+  )
+}
+
 function unique(values: string[]) {
   return [...new Set(values)]
 }

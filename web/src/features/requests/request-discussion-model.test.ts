@@ -5,6 +5,7 @@ import {
   applyDiscussionChangesWithoutReordering,
   collectionFromPage,
   compactDiscussionSummary,
+  directDiscussionReplies,
   insertOptimisticDiscussion,
   markDiscussionRead,
   mergeDiscussionReplies,
@@ -245,6 +246,26 @@ test('expanded replies merge new realtime previews in order', () => {
   )
 })
 
+test('reply trees expose only the requested direct children', () => {
+  const root = reply('root', 1)
+  const child = { ...reply('child', 2), reply_to_reply_id: root.id }
+  const grandchild = { ...reply('grandchild', 3), reply_to_reply_id: child.id }
+  const replies = [root, child, grandchild]
+
+  assert.deepEqual(
+    directDiscussionReplies(replies, null).map(({ id }) => id),
+    ['root'],
+  )
+  assert.deepEqual(
+    directDiscussionReplies(replies, root.id).map(({ id }) => id),
+    ['child'],
+  )
+  assert.deepEqual(
+    directDiscussionReplies(replies, child.id).map(({ id }) => id),
+    ['grandchild'],
+  )
+})
+
 function discussion(id: string, lastActivity: number): RequestDiscussion {
   return {
     author: { handle: 'maya', id: 'user-maya' },
@@ -267,6 +288,8 @@ function reply(id: string, position: number) {
   return {
     author: { handle: 'maya', id: 'user-maya' },
     body_markdown: `Reply ${id}`,
+    child_reply_count: 0,
+    can_reply: true,
     created_at_unix: position,
     discussion_id: 'one',
     id,

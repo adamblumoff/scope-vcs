@@ -40,6 +40,7 @@ pub(crate) struct DiscussionChangesQuery {
 pub(crate) struct DiscussionRepliesQuery {
     before: Option<u64>,
     limit: Option<u64>,
+    parent_reply_id: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -166,18 +167,23 @@ pub(crate) async fn list_replies(
         .clamp(1, MAX_REPLY_LIMIT);
     let (mut replies, users) = state
         .metadata
-        .request_discussion_replies(&discussion_id, query.before, limit + 1)
+        .request_discussion_replies(
+            &discussion_id,
+            query.parent_reply_id.as_deref(),
+            query.before,
+            limit + 1,
+        )
         .await?;
     let has_more = replies.len() as u64 > limit;
     if has_more {
         replies.remove(0);
     }
     let next_before_position = has_more
-        .then(|| replies.first().map(|reply| reply.position))
+        .then(|| replies.first().map(|model| model.reply.position))
         .flatten();
     let replies = replies
         .into_iter()
-        .map(|reply| reply_response(reply, &users))
+        .map(|reply| reply_read_response(reply, &users))
         .collect::<Result<Vec<_>, _>>()?;
     Ok(Json(RequestDiscussionRepliesPageResponse {
         replies,
@@ -466,7 +472,11 @@ async fn reply_mutation_response(
         .metadata
         .users_by_ids([reply.author_user_id.clone()])
         .await?;
-    let response = reply_response(reply.clone(), &users)?;
+    let child_reply_count = state
+        .metadata
+        .request_discussion_reply_child_count(&reply.id)
+        .await?;
+    let response = reply_response(reply.clone(), child_reply_count, &users)?;
     state
         .publish_request_timeline_change(
             &repo.record.id,
@@ -530,7 +540,7 @@ fn discussion_summary(
         latest_replies: model
             .latest_replies
             .into_iter()
-            .map(|reply| reply_response(reply, users))
+            .map(|reply| reply_read_response(reply, users))
             .collect::<Result<Vec<_>, _>>()?,
         created_at_unix: model.discussion.created_at_unix,
         resolved_at_unix: model.discussion.resolved_at_unix,
@@ -545,6 +555,7 @@ fn discussion_summary(
 
 fn reply_response(
     reply: crate::domain::requests::RequestDiscussionReply,
+    child_reply_count: u64,
     users: &BTreeMap<String, crate::domain::store::UserAccount>,
 ) -> Result<RequestDiscussionReplyResponse, ApiError> {
     Ok(RequestDiscussionReplyResponse {
@@ -554,8 +565,17 @@ fn reply_response(
         author: actor_response(&reply.author_user_id, users)?,
         body_markdown: reply.body_markdown,
         reply_to_reply_id: reply.reply_to_reply_id,
+        child_reply_count,
+        can_reply: reply.depth < crate::domain::requests::REQUEST_DISCUSSION_REPLY_MAX_DEPTH,
         created_at_unix: reply.created_at_unix,
     })
+}
+
+fn reply_read_response(
+    model: scope_core::db::RequestDiscussionReplyReadModel,
+    users: &BTreeMap<String, crate::domain::store::UserAccount>,
+) -> Result<RequestDiscussionReplyResponse, ApiError> {
+    reply_response(model.reply, model.child_reply_count, users)
 }
 
 fn actor_response(

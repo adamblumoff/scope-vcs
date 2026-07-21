@@ -15,6 +15,7 @@ pub(super) const MAINTAINER_ID: &str = "scope_usr_dev_maintainer";
 pub(super) const REQUEST_ID: &str = "req_demo_submitted";
 pub(super) const RETRY_CAP_ID: &str = "discussion_demo_retry_cap";
 pub(super) const RETRY_CAP_MAINTAINER_REPLY_ID: &str = "discussion_reply_demo_retry_cap_maintainer";
+const RETRY_CAP_CONTRIBUTOR_REPLY_ID: &str = "discussion_reply_demo_retry_cap_quote";
 pub(super) const RESOLVED_DOCS_ID: &str = "discussion_demo_resolved_docs";
 const JITTER_ID: &str = "discussion_demo_jitter";
 const SUBMISSION_BLOCK_THREAD_ID: &str = "thread_event_req_demo_submitted_submitted";
@@ -205,7 +206,7 @@ async fn create_retry_cap_conversation(metadata: &MetadataStore) -> Result<(), A
         .create_request_discussion_reply(CreateRequestDiscussionReplyInput {
             request_id: REQUEST_ID.to_string(),
             discussion_id: RETRY_CAP_ID.to_string(),
-            id: "discussion_reply_demo_retry_cap_quote".to_string(),
+            id: RETRY_CAP_CONTRIBUTOR_REPLY_ID.to_string(),
             actor_user_id: CONTRIBUTOR_ID.to_string(),
             actor_can_participate: false,
             client_reply_id: "seed_retry_cap_quote".to_string(),
@@ -216,6 +217,23 @@ async fn create_retry_cap_conversation(metadata: &MetadataStore) -> Result<(), A
             .to_string(),
             reply_to_reply_id: Some(RETRY_CAP_MAINTAINER_REPLY_ID.to_string()),
             now_unix: 1_800_000_122,
+        })
+        .await?;
+    metadata
+        .create_request_discussion_reply(CreateRequestDiscussionReplyInput {
+            request_id: REQUEST_ID.to_string(),
+            discussion_id: RETRY_CAP_ID.to_string(),
+            id: "discussion_reply_demo_retry_cap_nested".to_string(),
+            actor_user_id: MAINTAINER_ID.to_string(),
+            actor_can_participate: false,
+            client_reply_id: "seed_retry_cap_nested".to_string(),
+            body_markdown: concat!(
+                "Exactly. Keeping that decision nested here makes the implementation history ",
+                "easy to follow without expanding the whole conversation."
+            )
+            .to_string(),
+            reply_to_reply_id: Some(RETRY_CAP_CONTRIBUTOR_REPLY_ID.to_string()),
+            now_unix: 1_800_000_123,
         })
         .await?;
     Ok(())
@@ -391,33 +409,55 @@ mod tests {
                 .status,
             RequestDiscussionStatus::Resolved
         );
+        let retry_cap = discussions
+            .discussions
+            .iter()
+            .find(|model| model.discussion.id == RETRY_CAP_ID)
+            .unwrap();
+        assert_eq!(retry_cap.reply_count, 3);
+        assert_eq!(retry_cap.latest_replies.len(), 3);
+        assert_eq!(retry_cap.latest_replies[0].child_reply_count, 1);
 
         let (replies, users) = metadata
-            .request_discussion_replies(RETRY_CAP_ID, None, 10)
+            .request_discussion_replies(RETRY_CAP_ID, None, None, 10)
             .await
             .unwrap();
-        assert_eq!(replies.len(), 2);
+        assert_eq!(replies.len(), 1);
+        assert_eq!(replies[0].child_reply_count, 1);
+        assert_eq!(replies[0].reply.id, RETRY_CAP_MAINTAINER_REPLY_ID);
+        let (child_replies, child_users) = metadata
+            .request_discussion_replies(RETRY_CAP_ID, Some(RETRY_CAP_MAINTAINER_REPLY_ID), None, 10)
+            .await
+            .unwrap();
+        assert_eq!(child_replies.len(), 1);
+        assert_eq!(child_replies[0].child_reply_count, 1);
         assert_eq!(
-            replies
-                .iter()
-                .find(|reply| reply.reply_to_reply_id.is_some())
-                .unwrap()
-                .reply_to_reply_id
-                .as_deref(),
+            child_replies[0].reply.reply_to_reply_id.as_deref(),
             Some(RETRY_CAP_MAINTAINER_REPLY_ID)
         );
+        let (grandchild_replies, _) = metadata
+            .request_discussion_replies(
+                RETRY_CAP_ID,
+                Some(RETRY_CAP_CONTRIBUTOR_REPLY_ID),
+                None,
+                10,
+            )
+            .await
+            .unwrap();
+        assert_eq!(grandchild_replies.len(), 1);
+        assert_eq!(grandchild_replies[0].child_reply_count, 0);
         assert_eq!(
-            users.get(CONTRIBUTOR_ID).unwrap().handle,
+            child_users.get(CONTRIBUTOR_ID).unwrap().handle,
             "river-contributor"
         );
         assert_eq!(users.get(MAINTAINER_ID).unwrap().handle, "maya-maintainer");
 
         let (block_replies, _) = metadata
-            .request_discussion_replies(SUBMISSION_BLOCK_THREAD_ID, None, 10)
+            .request_discussion_replies(SUBMISSION_BLOCK_THREAD_ID, None, None, 10)
             .await
             .unwrap();
-        assert_eq!(block_replies.len(), 2);
-        assert!(block_replies[1].reply_to_reply_id.is_some());
+        assert_eq!(block_replies.len(), 1);
+        assert_eq!(block_replies[0].child_reply_count, 1);
 
         let activity = metadata
             .request_events_by_request_id(REQUEST_ID)

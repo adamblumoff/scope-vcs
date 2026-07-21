@@ -11,9 +11,15 @@ use crate::{
 };
 use sea_orm::{
     ActiveModelTrait, ColumnTrait, ConnectionTrait, DatabaseBackend, EntityTrait, IntoActiveModel,
-    QueryFilter, QueryOrder, QuerySelect, Statement, sea_query::Expr,
+    PaginatorTrait, QueryFilter, QueryOrder, QueryResult, QuerySelect, Statement, sea_query::Expr,
 };
 use std::collections::{BTreeMap, BTreeSet};
+
+#[derive(Clone, Debug)]
+pub struct RequestDiscussionReplyReadModel {
+    pub reply: RequestDiscussionReply,
+    pub child_reply_count: u64,
+}
 
 pub async fn discussion_by_id<C>(conn: &C, id: &str) -> Result<Option<RequestDiscussion>, ApiError>
 where
@@ -223,38 +229,72 @@ where
 pub async fn replies_for_discussion<C>(
     conn: &C,
     discussion_id: &str,
+    parent_reply_id: Option<&str>,
     before_position: Option<u64>,
     limit: u64,
-) -> Result<Vec<RequestDiscussionReply>, ApiError>
+) -> Result<Vec<RequestDiscussionReplyReadModel>, ApiError>
 where
     C: ConnectionTrait,
 {
-    let mut query = entities::request_discussion_reply::Entity::find()
-        .filter(entities::request_discussion_reply::Column::DiscussionId.eq(discussion_id));
-    if let Some(before) = before_position {
-        query = query.filter(
-            entities::request_discussion_reply::Column::Position
-                .lt(i64::try_from(before).map_err(ApiError::internal)?),
-        );
-    }
-    let mut replies = query
-        .order_by_desc(entities::request_discussion_reply::Column::Position)
-        .order_by_desc(entities::request_discussion_reply::Column::Id)
-        .limit(limit)
-        .all(conn)
+    let rows = conn
+        .query_all(Statement::from_sql_and_values(
+            DatabaseBackend::Postgres,
+            r#"
+            SELECT replies.id, replies.discussion_id, replies.position, replies.depth,
+                   replies.author_user_id, replies.body_markdown,
+                   replies.reply_to_reply_id, replies.client_reply_id,
+                   replies.created_at_unix,
+                   (
+                       SELECT COUNT(*)
+                       FROM scope_request_discussion_replies children
+                       WHERE children.reply_to_reply_id = replies.id
+                   ) AS child_reply_count
+            FROM scope_request_discussion_replies replies
+            WHERE replies.discussion_id = $1
+              AND (
+                  ($2::varchar IS NULL AND replies.reply_to_reply_id IS NULL)
+                  OR replies.reply_to_reply_id = $2
+              )
+              AND ($3::bigint IS NULL OR replies.position < $3)
+            ORDER BY replies.position DESC, replies.id DESC
+            LIMIT $4
+            "#,
+            vec![
+                discussion_id.to_string().into(),
+                parent_reply_id.map(str::to_string).into(),
+                before_position
+                    .map(i64::try_from)
+                    .transpose()
+                    .map_err(ApiError::internal)?
+                    .into(),
+                i64::try_from(limit).map_err(ApiError::internal)?.into(),
+            ],
+        ))
         .await
         .map_err(ApiError::internal)?
-        .into_iter()
-        .map(entities::request_discussion_reply::Model::try_into_domain)
+        .iter()
+        .map(reply_read_model)
         .collect::<Result<Vec<_>, _>>()?;
+    let mut replies = rows;
     replies.reverse();
     Ok(replies)
+}
+
+pub async fn reply_child_count<C>(conn: &C, reply_id: &str) -> Result<u64, ApiError>
+where
+    C: ConnectionTrait,
+{
+    entities::request_discussion_reply::Entity::find()
+        .filter(entities::request_discussion_reply::Column::ReplyToReplyId.eq(reply_id))
+        .count(conn)
+        .await
+        .map_err(ApiError::internal)
 }
 
 pub async fn reply_previews_for_discussions<C>(
     conn: &C,
     discussion_ids: &[String],
-) -> Result<BTreeMap<String, (u64, Vec<RequestDiscussionReply>)>, ApiError>
+) -> Result<BTreeMap<String, (u64, Vec<RequestDiscussionReplyReadModel>)>, ApiError>
 where
     C: ConnectionTrait,
 {
@@ -266,16 +306,30 @@ where
         .collect::<Vec<_>>()
         .join(", ");
     let sql = format!(
-        "SELECT id, discussion_id, position, author_user_id, body_markdown, \
-         reply_to_reply_id, client_reply_id, created_at_unix, reply_count \
-         FROM ( \
+        "WITH RECURSIVE ranked AS ( \
            SELECT replies.*, \
-             COUNT(*) OVER (PARTITION BY discussion_id) AS reply_count, \
              ROW_NUMBER() OVER (PARTITION BY discussion_id ORDER BY position DESC, id DESC) AS row_number \
            FROM scope_request_discussion_replies replies \
            WHERE discussion_id IN ({placeholders}) \
-         ) ranked \
-         WHERE row_number <= 3 \
+         ), preview_replies AS ( \
+           SELECT id, discussion_id, position, depth, author_user_id, body_markdown, \
+             reply_to_reply_id, client_reply_id, created_at_unix \
+           FROM ranked \
+           WHERE row_number <= 3 \
+           UNION \
+           SELECT parent.id, parent.discussion_id, parent.position, parent.depth, parent.author_user_id, \
+             parent.body_markdown, parent.reply_to_reply_id, parent.client_reply_id, \
+             parent.created_at_unix \
+           FROM scope_request_discussion_replies parent \
+           INNER JOIN preview_replies child ON child.reply_to_reply_id = parent.id \
+             AND parent.depth = child.depth - 1 \
+         ) \
+         SELECT replies.*, \
+           (SELECT COUNT(*) FROM scope_request_discussion_replies counted \
+              WHERE counted.discussion_id = replies.discussion_id) AS reply_count, \
+           (SELECT COUNT(*) FROM scope_request_discussion_replies children \
+              WHERE children.reply_to_reply_id = replies.id) AS child_reply_count \
+         FROM preview_replies replies \
          ORDER BY discussion_id ASC, position ASC, id ASC"
     );
     let rows = conn
@@ -286,31 +340,11 @@ where
         ))
         .await
         .map_err(ApiError::internal)?;
-    let mut result = BTreeMap::<String, (u64, Vec<RequestDiscussionReply>)>::new();
+    let mut result = BTreeMap::<String, (u64, Vec<RequestDiscussionReplyReadModel>)>::new();
     for row in rows {
         let discussion_id = row
             .try_get::<String>("", "discussion_id")
             .map_err(ApiError::internal)?;
-        let model = entities::request_discussion_reply::Model {
-            id: row.try_get("", "id").map_err(ApiError::internal)?,
-            discussion_id: discussion_id.clone(),
-            position: row.try_get("", "position").map_err(ApiError::internal)?,
-            author_user_id: row
-                .try_get("", "author_user_id")
-                .map_err(ApiError::internal)?,
-            body_markdown: row
-                .try_get("", "body_markdown")
-                .map_err(ApiError::internal)?,
-            reply_to_reply_id: row
-                .try_get("", "reply_to_reply_id")
-                .map_err(ApiError::internal)?,
-            client_reply_id: row
-                .try_get("", "client_reply_id")
-                .map_err(ApiError::internal)?,
-            created_at_unix: row
-                .try_get("", "created_at_unix")
-                .map_err(ApiError::internal)?,
-        };
         let count = row
             .try_get::<i64>("", "reply_count")
             .map_err(ApiError::internal)?
@@ -319,9 +353,45 @@ where
         let entry = result
             .entry(discussion_id)
             .or_insert_with(|| (count, Vec::new()));
-        entry.1.push(model.try_into_domain()?);
+        entry.1.push(reply_read_model(&row)?);
     }
     Ok(result)
+}
+
+fn reply_read_model(row: &QueryResult) -> Result<RequestDiscussionReplyReadModel, ApiError> {
+    let reply = entities::request_discussion_reply::Model {
+        id: row.try_get("", "id").map_err(ApiError::internal)?,
+        discussion_id: row
+            .try_get("", "discussion_id")
+            .map_err(ApiError::internal)?,
+        position: row.try_get("", "position").map_err(ApiError::internal)?,
+        depth: row.try_get("", "depth").map_err(ApiError::internal)?,
+        author_user_id: row
+            .try_get("", "author_user_id")
+            .map_err(ApiError::internal)?,
+        body_markdown: row
+            .try_get("", "body_markdown")
+            .map_err(ApiError::internal)?,
+        reply_to_reply_id: row
+            .try_get("", "reply_to_reply_id")
+            .map_err(ApiError::internal)?,
+        client_reply_id: row
+            .try_get("", "client_reply_id")
+            .map_err(ApiError::internal)?,
+        created_at_unix: row
+            .try_get("", "created_at_unix")
+            .map_err(ApiError::internal)?,
+    }
+    .try_into_domain()?;
+    let child_reply_count = row
+        .try_get::<i64>("", "child_reply_count")
+        .map_err(ApiError::internal)?
+        .try_into()
+        .map_err(ApiError::internal)?;
+    Ok(RequestDiscussionReplyReadModel {
+        reply,
+        child_reply_count,
+    })
 }
 
 pub async fn unread_content_counts<C>(

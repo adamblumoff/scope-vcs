@@ -266,6 +266,115 @@ async fn discussion_transactions_are_idempotent_atomic_and_self_read() {
 }
 
 #[tokio::test]
+async fn discussion_replies_are_read_as_paginated_tree_levels() {
+    let store = postgres_store();
+    grant_public_credits(&store).await;
+    submit_public_request(&store).await;
+    let discussion = store
+        .create_request_discussion(CreateRequestDiscussionInput {
+            request_id: "req_1".to_string(),
+            id: "discussion_tree".to_string(),
+            actor_user_id: "user_public".to_string(),
+            actor_can_participate: false,
+            client_discussion_id: "client_tree".to_string(),
+            body_markdown: "Tree shape".to_string(),
+            now_unix: 10,
+        })
+        .await
+        .unwrap();
+    create_test_reply(&store, &discussion.discussion.id, "root_a", None, 11).await;
+    create_test_reply(&store, &discussion.discussion.id, "root_b", None, 12).await;
+    create_test_reply(
+        &store,
+        &discussion.discussion.id,
+        "child_a",
+        Some("root_a"),
+        13,
+    )
+    .await;
+    create_test_reply(
+        &store,
+        &discussion.discussion.id,
+        "child_b",
+        Some("root_a"),
+        14,
+    )
+    .await;
+    create_test_reply(
+        &store,
+        &discussion.discussion.id,
+        "grandchild",
+        Some("child_a"),
+        15,
+    )
+    .await;
+
+    let summary = store
+        .request_discussion("req_1", &discussion.discussion.id, Some("user_public"))
+        .await
+        .unwrap()
+        .unwrap()
+        .0;
+    assert_eq!(summary.reply_count, 5);
+    assert_eq!(summary.latest_replies.len(), 4);
+    assert_eq!(
+        summary
+            .latest_replies
+            .iter()
+            .map(|model| model.reply.id.as_str())
+            .collect::<Vec<_>>(),
+        ["root_a", "child_a", "child_b", "grandchild"]
+    );
+    assert_eq!(
+        summary
+            .latest_replies
+            .iter()
+            .find(|model| model.reply.id == "root_a")
+            .unwrap()
+            .child_reply_count,
+        2
+    );
+
+    let (roots, _) = store
+        .request_discussion_replies(&discussion.discussion.id, None, None, 10)
+        .await
+        .unwrap();
+    assert_eq!(
+        roots
+            .iter()
+            .map(|model| model.reply.id.as_str())
+            .collect::<Vec<_>>(),
+        ["root_a", "root_b"]
+    );
+    let (children, _) = store
+        .request_discussion_replies(&discussion.discussion.id, Some("root_a"), None, 10)
+        .await
+        .unwrap();
+    assert_eq!(
+        children
+            .iter()
+            .map(|model| model.reply.id.as_str())
+            .collect::<Vec<_>>(),
+        ["child_a", "child_b"]
+    );
+    assert_eq!(children[0].child_reply_count, 1);
+    assert_eq!(children[1].child_reply_count, 0);
+    assert_eq!(
+        store
+            .request_discussion_reply_child_count("root_a")
+            .await
+            .unwrap(),
+        2
+    );
+    let (grandchildren, _) = store
+        .request_discussion_replies(&discussion.discussion.id, Some("child_a"), None, 10)
+        .await
+        .unwrap();
+    assert_eq!(grandchildren.len(), 1);
+    assert_eq!(grandchildren[0].reply.id, "grandchild");
+}
+
+#[tokio::test]
 async fn owner_submission_preserves_explicit_public_audience_without_credits() {
     let store = postgres_store();
     let mut input = public_start_input();
@@ -537,6 +646,29 @@ async fn submit_public_request(store: &MetadataStore) {
         .await
         .unwrap();
     store.submit_request(public_submit_input()).await.unwrap();
+}
+
+async fn create_test_reply(
+    store: &MetadataStore,
+    discussion_id: &str,
+    id: &str,
+    parent_id: Option<&str>,
+    now_unix: u64,
+) {
+    store
+        .create_request_discussion_reply(CreateRequestDiscussionReplyInput {
+            request_id: "req_1".to_string(),
+            discussion_id: discussion_id.to_string(),
+            id: id.to_string(),
+            actor_user_id: "user_public".to_string(),
+            actor_can_participate: false,
+            client_reply_id: format!("client_{id}"),
+            body_markdown: format!("Reply {id}"),
+            reply_to_reply_id: parent_id.map(str::to_string),
+            now_unix,
+        })
+        .await
+        .unwrap();
 }
 
 fn public_start_input() -> StartRequestInput {

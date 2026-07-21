@@ -433,6 +433,8 @@ pub struct RequestDiscussionReplyResponse {
     pub author: RequestActorSummaryResponse,
     pub body_markdown: String,
     pub reply_to_reply_id: Option<String>,
+    pub child_reply_count: u64,
+    pub can_reply: bool,
     pub created_at_unix: u64,
 }
 

@@ -1,7 +1,8 @@
 use super::{
-    REQUEST_DISCUSSION_BODY_MAX_BYTES, REQUEST_DISCUSSION_CLIENT_ID_MAX_BYTES, Request,
-    RequestEvent, RequestEventKind, RequestEventPayload, RequestState, validate_body_size,
-    validate_required_body, validate_required_id,
+    REQUEST_DISCUSSION_BODY_MAX_BYTES, REQUEST_DISCUSSION_CLIENT_ID_MAX_BYTES,
+    REQUEST_DISCUSSION_REPLY_MAX_DEPTH, Request, RequestEvent, RequestEventKind,
+    RequestEventPayload, RequestState, validate_body_size, validate_required_body,
+    validate_required_id,
 };
 use crate::error::ApiError;
 use serde::{Deserialize, Serialize};
@@ -42,6 +43,7 @@ pub struct RequestDiscussionReply {
     pub id: String,
     pub discussion_id: String,
     pub position: u64,
+    pub depth: u16,
     pub author_user_id: String,
     pub body_markdown: String,
     pub reply_to_reply_id: Option<String>,
@@ -222,7 +224,7 @@ pub fn create_request_discussion_reply(
             "request discussion reply already exists",
         ));
     }
-    validate_reply_target(
+    let depth = validate_reply_target(
         discussions,
         replies,
         &input.discussion_id,
@@ -242,6 +244,7 @@ pub fn create_request_discussion_reply(
         id: input.id,
         discussion_id: discussion.id.clone(),
         position,
+        depth,
         author_user_id: input.actor_user_id.clone(),
         body_markdown: input.body_markdown,
         reply_to_reply_id: input.reply_to_reply_id,
@@ -317,7 +320,7 @@ pub fn reopen_and_reply_to_request_discussion(
         &input.body_markdown,
     )?;
     validate_required_id("event id", &input.event_id)?;
-    validate_reply_target(
+    let depth = validate_reply_target(
         discussions,
         replies,
         &input.discussion_id,
@@ -348,6 +351,7 @@ pub fn reopen_and_reply_to_request_discussion(
         id: input.reply_id,
         discussion_id: discussion.id.clone(),
         position,
+        depth,
         author_user_id: input.actor_user_id.clone(),
         body_markdown: input.body_markdown,
         reply_to_reply_id: input.reply_to_reply_id,
@@ -541,7 +545,7 @@ fn validate_reply_target(
     replies: &BTreeMap<String, RequestDiscussionReply>,
     discussion_id: &str,
     reply_to: Option<&str>,
-) -> Result<(), ApiError> {
+) -> Result<u16, ApiError> {
     if !discussions.contains_key(discussion_id) {
         return Err(ApiError::not_found("request discussion not found"));
     }
@@ -554,8 +558,16 @@ fn validate_reply_target(
                 "quoted reply belongs to another discussion",
             ));
         }
+        let depth = reply
+            .depth
+            .checked_add(1)
+            .ok_or_else(|| ApiError::bad_request("reply nesting is too deep"))?;
+        if depth > REQUEST_DISCUSSION_REPLY_MAX_DEPTH {
+            return Err(ApiError::bad_request("reply nesting is too deep"));
+        }
+        return Ok(depth);
     }
-    Ok(())
+    Ok(0)
 }
 
 fn discussion_mut<'a>(
@@ -604,5 +616,52 @@ fn read_state(
         user_id: user_id.to_string(),
         read_through_position: position,
         updated_at_unix: now_unix,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn reply_nesting_is_bounded() {
+        let discussion = RequestDiscussion {
+            id: "discussion".to_string(),
+            request_id: "request".to_string(),
+            opened_position: 1,
+            last_activity_position: 1,
+            author_user_id: "author".to_string(),
+            subject: RequestDiscussionSubject::Comment,
+            body_markdown: Some("Thread".to_string()),
+            status: RequestDiscussionStatus::Open,
+            client_discussion_id: "client".to_string(),
+            created_at_unix: 1,
+            resolved_at_unix: None,
+            resolved_by_user_id: None,
+        };
+        let parent = RequestDiscussionReply {
+            id: "parent".to_string(),
+            discussion_id: discussion.id.clone(),
+            position: 2,
+            depth: REQUEST_DISCUSSION_REPLY_MAX_DEPTH,
+            author_user_id: "author".to_string(),
+            body_markdown: "Parent".to_string(),
+            reply_to_reply_id: None,
+            client_reply_id: "client-parent".to_string(),
+            created_at_unix: 2,
+        };
+        let discussions = BTreeMap::from([(discussion.id.clone(), discussion)]);
+        let replies = BTreeMap::from([(parent.id.clone(), parent)]);
+
+        assert_eq!(
+            validate_reply_target(&discussions, &replies, "discussion", None).unwrap(),
+            0
+        );
+        assert_eq!(
+            validate_reply_target(&discussions, &replies, "discussion", Some("parent"))
+                .unwrap_err()
+                .kind,
+            crate::error::ErrorKind::BadRequest
+        );
     }
 }

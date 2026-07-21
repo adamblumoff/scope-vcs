@@ -35,6 +35,7 @@ pub use submission::{
 pub const REQUEST_REF_PREFIX: &str = "refs/heads/";
 pub const REQUEST_DISCUSSION_BODY_MAX_BYTES: usize = 64 * 1024;
 pub const REQUEST_DISCUSSION_CLIENT_ID_MAX_BYTES: usize = 128;
+pub const REQUEST_DISCUSSION_REPLY_MAX_DEPTH: u16 = 16;
 pub const REQUEST_DESCRIPTION_MAX_BYTES: usize = 256 * 1024;
 const REPO_DELETE_REFUND_LEDGER_ENTRY_PREFIX: &str = "repo_delete_refund:";
 

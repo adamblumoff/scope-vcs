@@ -3,11 +3,11 @@ use super::{
     request_access::{ensure_request_collaborator, ensure_user_exists, repo_by_id},
     request_change_block_rows::{change_block_by_id, change_blocks_by_ids},
     request_discussion_rows::{
-        changed_discussions_for_request, discussion_by_client_id, discussion_by_id,
-        discussions_page_for_request, insert_discussion, insert_reply, read_state,
-        read_states_for_user, replies_for_discussion, reply_by_client_id, reply_by_id,
-        reply_previews_for_discussions, save_discussion, save_read_state, unread_content_counts,
-        users_by_ids as load_users_by_ids,
+        RequestDiscussionReplyReadModel, changed_discussions_for_request, discussion_by_client_id,
+        discussion_by_id, discussions_page_for_request, insert_discussion, insert_reply,
+        read_state, read_states_for_user, replies_for_discussion, reply_by_client_id, reply_by_id,
+        reply_child_count, reply_previews_for_discussions, save_discussion, save_read_state,
+        unread_content_counts, users_by_ids as load_users_by_ids,
     },
     request_rows::insert_request_event_row,
     request_rows::{request_by_id, save_request_row},
@@ -18,11 +18,10 @@ use crate::{
         CreateRequestDiscussionReplyInput, CreateRequestDiscussionReplyMutation,
         MarkRequestDiscussionReadInput, ReopenAndReplyToRequestDiscussionInput,
         ReopenRequestDiscussionInput, RequestChangeBlock, RequestDiscussion,
-        RequestDiscussionReadState, RequestDiscussionReply, RequestDiscussionStatus,
-        RequestDiscussionSubject, ResolveRequestDiscussionInput, create_request_discussion,
-        create_request_discussion_reply, mark_request_discussion_read,
-        reopen_and_reply_to_request_discussion, reopen_request_discussion,
-        resolve_request_discussion,
+        RequestDiscussionReadState, RequestDiscussionStatus, RequestDiscussionSubject,
+        ResolveRequestDiscussionInput, create_request_discussion, create_request_discussion_reply,
+        mark_request_discussion_read, reopen_and_reply_to_request_discussion,
+        reopen_request_discussion, resolve_request_discussion,
     },
     domain::store::UserAccount,
     error::ApiError,
@@ -35,7 +34,7 @@ pub struct RequestDiscussionReadModel {
     pub discussion: RequestDiscussion,
     pub change_block: Option<RequestChangeBlock>,
     pub reply_count: u64,
-    pub latest_replies: Vec<RequestDiscussionReply>,
+    pub latest_replies: Vec<RequestDiscussionReplyReadModel>,
     pub unread_count: u64,
     pub sort_position: u64,
 }
@@ -169,7 +168,7 @@ impl MetadataStore {
             user_ids.extend(
                 latest_replies
                     .iter()
-                    .map(|reply| reply.author_user_id.clone()),
+                    .map(|model| model.reply.author_user_id.clone()),
             );
             let unread_count = unread_counts.get(&discussion.id).copied().unwrap_or(0);
             models.push(RequestDiscussionReadModel {
@@ -198,14 +197,29 @@ impl MetadataStore {
     pub async fn request_discussion_replies(
         &self,
         discussion_id: &str,
+        parent_reply_id: Option<&str>,
         before_position: Option<u64>,
         limit: u64,
-    ) -> Result<(Vec<RequestDiscussionReply>, BTreeMap<String, UserAccount>), ApiError> {
-        let replies =
-            replies_for_discussion(self.db.as_ref(), discussion_id, before_position, limit).await?;
+    ) -> Result<
+        (
+            Vec<RequestDiscussionReplyReadModel>,
+            BTreeMap<String, UserAccount>,
+        ),
+        ApiError,
+    > {
+        let replies = replies_for_discussion(
+            self.db.as_ref(),
+            discussion_id,
+            parent_reply_id,
+            before_position,
+            limit,
+        )
+        .await?;
         let users = load_users_by_ids(
             self.db.as_ref(),
-            replies.iter().map(|reply| reply.author_user_id.clone()),
+            replies
+                .iter()
+                .map(|model| model.reply.author_user_id.clone()),
         )
         .await?;
         Ok((replies, users))
@@ -216,6 +230,13 @@ impl MetadataStore {
         user_ids: impl IntoIterator<Item = String>,
     ) -> Result<BTreeMap<String, UserAccount>, ApiError> {
         load_users_by_ids(self.db.as_ref(), user_ids).await
+    }
+
+    pub async fn request_discussion_reply_child_count(
+        &self,
+        reply_id: &str,
+    ) -> Result<u64, ApiError> {
+        reply_child_count(self.db.as_ref(), reply_id).await
     }
 
     pub async fn request_change_block(
