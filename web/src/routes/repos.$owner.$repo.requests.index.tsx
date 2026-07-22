@@ -1,5 +1,6 @@
 import { loadRequestsForRequest } from '@/api/repos'
 import { parseLoadRequestsInput } from '@/api/requests'
+import { requestListSnapshotKey } from '@/features/requests/request-list-model'
 import { RequestsPage } from '@/features/requests/requests-page'
 import { useRepoLayout } from '@/features/repo-detail/repo-layout-context'
 import { createFileRoute } from '@tanstack/react-router'
@@ -28,7 +29,7 @@ function RequestsRoute() {
   return (
     <RequestsPage
       initialPage={initialPage}
-      key={`${params.owner}/${params.repo}`}
+      key={`${owner}/${repo}:${requestListSnapshotKey(initialPage)}`}
       live={live}
       loadNextPage={loadNextPage}
       params={params}
