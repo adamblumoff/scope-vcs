@@ -33,8 +33,20 @@ test('public repository history renders its seeded commit', async () => {
     await page.getByRole('heading', { level: 1, name: 'History' }).waitFor()
     await assertCurrentRepoSection(page, 'History')
     await page.getByRole('heading', { level: 2, name: 'Commits' }).waitFor()
-    await page.getByText('dev-public-1', { exact: true }).first().waitFor()
-    await page.getByText('Projected public update', { exact: true }).first().waitFor()
+    const commit = page.getByRole('button', {
+      name: 'Projected public update, commit dev-public-1, 2 files',
+    })
+    await commit.waitFor()
+    assert.equal(await commit.getAttribute('title'), 'dev-public-1')
+    await commit.getByText('dev-public-1', { exact: true }).waitFor()
+    await commit.click()
+    await page.waitForURL((url) =>
+      url.searchParams.get('commit') === 'pv_public_dev-public-1_1'
+    )
+    assert.equal(
+      new URL(page.url()).searchParams.get('commit'),
+      'pv_public_dev-public-1_1',
+    )
   })
 })
 
