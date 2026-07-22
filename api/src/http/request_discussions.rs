@@ -333,15 +333,18 @@ pub(crate) async fn changed_discussions(
     let (repo, access, viewer_user_id) =
         repo_and_access(&state, &headers, &owner, &repo_name).await?;
     let request = visible_request(&state, &repo, access, &request_id).await?;
-    let batch = state
+    let limit = query.limit.unwrap_or(100).clamp(1, 100);
+    let mut batch = state
         .metadata
         .changed_request_discussions(
             &request.id,
             viewer_user_id.as_deref(),
             query.after.unwrap_or(0),
-            query.limit.unwrap_or(100).clamp(1, 100),
+            limit + 1,
         )
         .await?;
+    let has_more = batch.discussions.len() > limit as usize;
+    batch.discussions.truncate(limit as usize);
     let through_position = batch
         .discussions
         .last()
@@ -355,6 +358,7 @@ pub(crate) async fn changed_discussions(
     Ok(Json(RequestDiscussionChangesResponse {
         discussions,
         through_position,
+        has_more,
     }))
 }
 

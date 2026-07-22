@@ -214,7 +214,7 @@ export type RequestDiscussionMutationResponse = { discussion: RequestDiscussionS
 
 export type RequestDiscussionReplyMutationResponse = { discussion: RequestDiscussionSummaryResponse, reply: RequestDiscussionReplyResponse, };
 
-export type RequestDiscussionChangesResponse = { discussions: Array<RequestDiscussionSummaryResponse>, through_position: number, };
+export type RequestDiscussionChangesResponse = { discussions: Array<RequestDiscussionSummaryResponse>, through_position: number, has_more: boolean, };
 
 export type RequestDiscussionReadResponse = { read_through_position: number, };
 

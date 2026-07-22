@@ -501,6 +501,7 @@ pub struct RequestDiscussionReplyMutationResponse {
 pub struct RequestDiscussionChangesResponse {
     pub discussions: Vec<RequestDiscussionSummaryResponse>,
     pub through_position: u64,
+    pub has_more: bool,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]

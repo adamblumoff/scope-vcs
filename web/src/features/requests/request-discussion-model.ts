@@ -35,31 +35,57 @@ export function appendDiscussionPage(
   collection: DiscussionCollection,
   page: RequestDiscussionPage,
 ): DiscussionCollection {
-  const byId = new Map(collection.byId)
-  const seen = new Set(collection.order)
+  let next = collection
   const older = [...page.discussions].reverse()
-  const added: string[] = []
   for (const discussion of older) {
-    const previous = byId.get(discussion.id)
-    byId.set(discussion.id, {
-      ...discussion,
-      initiallyResolved:
-        previous?.initiallyResolved ?? discussion.status === 'Resolved',
-    })
-    if (!seen.has(discussion.id)) {
-      seen.add(discussion.id)
-      added.push(discussion.id)
-    }
+    next = mergeDiscussion(next, discussion)
   }
   return {
-    byId,
+    ...next,
     nextCursor: page.next_cursor,
-    order: [...added, ...collection.order],
-    snapshotVersion: Math.max(
-      collection.snapshotVersion,
-      page.snapshot_version,
-    ),
+    snapshotVersion: Math.max(next.snapshotVersion, page.snapshot_version),
   }
+}
+
+export function mergeRefreshedDiscussionPage(
+  collection: DiscussionCollection,
+  page: RequestDiscussionPage,
+  authoritative: boolean,
+): DiscussionCollection {
+  if (!authoritative) {
+    let next = collection
+    for (const discussion of [...page.discussions].reverse()) {
+      next = mergeDiscussion(next, discussion)
+    }
+    return next
+  }
+
+  let next: DiscussionCollection = {
+    ...collectionFromPage(page),
+    snapshotVersion: Math.max(collection.snapshotVersion, page.snapshot_version),
+  }
+  const refreshedIds = new Set(page.discussions.map(({ id }) => id))
+  for (const discussion of page.discussions) {
+    const current = collection.byId.get(discussion.id)
+    if (!current) continue
+    next = mergeDiscussion(
+      next,
+      discussion.last_activity_position < current.last_activity_position
+        ? current
+        : preserveDiscussionUi(current, discussion),
+    )
+  }
+  for (const discussionId of collection.order) {
+    const current = collection.byId.get(discussionId)
+    if (
+      current &&
+      !refreshedIds.has(discussionId) &&
+      current.pending !== undefined
+    ) {
+      next = mergeDiscussion(next, current)
+    }
+  }
+  return next
 }
 
 export function insertOptimisticDiscussion(
@@ -75,38 +101,62 @@ export function insertOptimisticDiscussion(
   }
 }
 
-export function replaceDiscussion(
+export function mergeDiscussion(
   collection: DiscussionCollection,
   discussion: RequestDiscussionView,
-  previousId = discussion.id,
 ): DiscussionCollection {
-  const byId = new Map(collection.byId)
-  const previous = byId.get(previousId)
-  byId.delete(previousId)
-  byId.set(discussion.id, {
-    ...discussion,
-    initiallyResolved:
-      previous?.initiallyResolved ?? discussion.status === 'Resolved',
-  })
-  const found = collection.order.includes(previousId)
-  let order: string[]
-  if (found && previousId === discussion.id) {
-    order = collection.order
-  } else if (found) {
-    const withoutOptimistic = {
-      ...collection,
-      byId,
-      order: collection.order.filter((id) => id !== previousId),
-    }
-    order = insertByOpenedPosition(withoutOptimistic, discussion)
-  } else {
-    order = insertByOpenedPosition(collection, discussion)
+  const previous = collection.byId.get(discussion.id)
+  const acknowledgesOptimistic =
+    previous?.pending !== undefined && discussion.pending === undefined
+  if (
+    previous &&
+    !acknowledgesOptimistic &&
+    discussion.last_activity_position < previous.last_activity_position
+  ) {
+    return collection
   }
+  const byId = new Map(collection.byId)
+  const merged = preserveDiscussionUi(previous, discussion)
+  if (acknowledgesOptimistic) delete merged.pending
+  byId.set(discussion.id, merged)
+  const order = previous
+    ? collection.order
+    : insertByOpenedPosition(collection, discussion)
   return {
     ...collection,
     byId,
     order: unique(order),
   }
+}
+
+export function reconcileDiscussionMutation(
+  collection: DiscussionCollection,
+  discussion: RequestDiscussion,
+  optimisticId = discussion.id,
+): DiscussionCollection {
+  if (optimisticId === discussion.id) {
+    return mergeDiscussion(collection, discussion)
+  }
+  const optimistic = collection.byId.get(optimisticId)
+  const current = collection.byId.get(discussion.id)
+  const acceptIncoming =
+    !current ||
+    discussion.last_activity_position >= current.last_activity_position
+  const byId = new Map(collection.byId)
+  byId.delete(optimisticId)
+  let order = collection.order.filter((id) => id !== optimisticId)
+  if (acceptIncoming) {
+    const merged = preserveDiscussionUi(current ?? optimistic, discussion)
+    delete merged.pending
+    byId.set(discussion.id, merged)
+  }
+  if (!order.includes(discussion.id)) {
+    order = insertByOpenedPosition(
+      { ...collection, byId, order },
+      byId.get(discussion.id) ?? discussion,
+    )
+  }
+  return { ...collection, byId, order: unique(order) }
 }
 
 function insertByOpenedPosition(
@@ -125,28 +175,14 @@ function insertByOpenedPosition(
   ]
 }
 
-export function patchDiscussionWithoutReordering(
-  collection: DiscussionCollection,
-  discussion: RequestDiscussion,
-): DiscussionCollection {
-  return replaceDiscussion(collection, discussion)
-}
-
-export function patchDiscussionForFilter(
-  collection: DiscussionCollection,
-  discussion: RequestDiscussion,
-): DiscussionCollection {
-  return patchDiscussionWithoutReordering(collection, discussion)
-}
-
-export function applyDiscussionChangesWithoutReordering(
+export function applyDiscussionChanges(
   collection: DiscussionCollection,
   discussions: RequestDiscussion[],
   throughPosition: number,
 ): DiscussionCollection {
   let next = collection
   for (const discussion of discussions) {
-    next = patchDiscussionForFilter(next, discussion)
+    next = mergeDiscussion(next, discussion)
   }
   return {
     ...next,
@@ -160,7 +196,7 @@ export function markDiscussionFailed(
 ): DiscussionCollection {
   const existing = collection.byId.get(discussionId)
   if (!existing) return collection
-  return replaceDiscussion(collection, { ...existing, pending: 'failed' })
+  return mergeDiscussion(collection, { ...existing, pending: 'failed' })
 }
 
 export function markDiscussionRead(
@@ -169,7 +205,7 @@ export function markDiscussionRead(
 ): DiscussionCollection {
   const existing = collection.byId.get(discussionId)
   if (!existing || existing.unread_count === 0) return collection
-  return replaceDiscussion(collection, { ...existing, unread_count: 0 })
+  return mergeDiscussion(collection, { ...existing, unread_count: 0 })
 }
 
 export function orderedDiscussions(collection: DiscussionCollection) {
@@ -230,4 +266,22 @@ export function directDiscussionReplies(
 
 function unique(values: string[]) {
   return [...new Set(values)]
+}
+
+function preserveDiscussionUi(
+  current: RequestDiscussionView | undefined,
+  incoming: RequestDiscussionView,
+): RequestDiscussionView {
+  const merged: RequestDiscussionView = {
+    ...incoming,
+    initiallyResolved:
+      current?.initiallyResolved ?? incoming.status === 'Resolved',
+  }
+  if (current?.expanded !== undefined && merged.expanded === undefined) {
+    merged.expanded = current.expanded
+  }
+  if (current?.pending !== undefined && merged.pending === undefined) {
+    merged.pending = current.pending
+  }
+  return merged
 }
