@@ -35,6 +35,7 @@ const PUSH_INTENT_KIND: &str = "scope.push-intent";
 const PUSH_INTENT_VERSION: u8 = 1;
 const PUSH_INTENT_SIGNING_KEY_ENV: &str = "SCOPE_PUSH_INTENT_SIGNING_KEY";
 const PUSH_INTENT_SIGNING_KEY_FILE: &str = "push-intent-signing-key";
+const REQUEST_SUMMARY_REFRESH_VERSION: u64 = 0;
 type HmacSha256 = Hmac<Sha256>;
 
 #[derive(Clone)]
@@ -325,6 +326,15 @@ impl AppState {
                 "failed to publish repo change notification"
             );
         }
+    }
+
+    pub(crate) async fn publish_request_summary_refresh(
+        &self,
+        repo_id: &str,
+        reason: &'static str,
+    ) {
+        self.publish_repo_change(repo_id, REQUEST_SUMMARY_REFRESH_VERSION, reason)
+            .await;
     }
 
     pub(crate) async fn publish_request_timeline_change(

@@ -32,8 +32,6 @@ use axum::{
 };
 use serde::Deserialize;
 
-const REQUEST_SUMMARY_REFRESH_VERSION: u64 = 0;
-
 #[derive(Debug, Deserialize)]
 pub(crate) struct RequestListQuery {
     cursor: Option<String>,
@@ -141,7 +139,9 @@ pub(crate) async fn delete_request(
     match mutation {
         DeleteRequestMutation::DeletedWorking { .. } => {
             delete_request_ref_from_store(&state, &owner, &repo_name, &request_ref)?;
-            publish_request_summary_refresh(&state, &repo, "request-deleted").await;
+            state
+                .publish_request_summary_refresh(&repo.record.id, "request-deleted")
+                .await;
             Ok(Json(RequestDeleteResponse {
                 deleted: true,
                 request: None,
@@ -150,7 +150,9 @@ pub(crate) async fn delete_request(
         DeleteRequestMutation::Withdrawn { request, .. } => {
             let current_main_oid = current_main_oid_for_access(&state, &repo, access)?;
             let request = request_response(*request, access, current_main_oid, Some(&user.id))?;
-            publish_request_summary_refresh(&state, &repo, "request-withdrawn").await;
+            state
+                .publish_request_summary_refresh(&repo.record.id, "request-withdrawn")
+                .await;
             Ok(Json(RequestDeleteResponse {
                 deleted: false,
                 request: Some(request),
@@ -196,7 +198,9 @@ pub(crate) async fn start_request(
         .await?;
     let current_main_oid = current_main_oid_for_access(&state, &repo, access)?;
     let request = request_response(mutation.request, access, current_main_oid, Some(&user.id))?;
-    publish_request_summary_refresh(&state, &repo, "request-started").await;
+    state
+        .publish_request_summary_refresh(&repo.record.id, "request-started")
+        .await;
     Ok(Json(RequestMutationResponse { request }))
 }
 
@@ -255,7 +259,9 @@ pub(crate) async fn submit_request(
     );
     let current_main_oid = current_main_oid_for_access(&state, &repo, access)?;
     let request = request_response(mutation.request, access, current_main_oid, Some(&user.id))?;
-    publish_request_summary_refresh(&state, &repo, "request-submitted").await;
+    state
+        .publish_request_summary_refresh(&repo.record.id, "request-submitted")
+        .await;
     state
         .publish_request_timeline_change(
             &repo.record.id,
@@ -290,7 +296,9 @@ pub(crate) async fn update_request_description(
         .await?;
     let current_main_oid = current_main_oid_for_access(&state, &repo, access)?;
     let request = request_response(mutation.request, access, current_main_oid, Some(&user.id))?;
-    publish_request_summary_refresh(&state, &repo, "request-description-edited").await;
+    state
+        .publish_request_summary_refresh(&repo.record.id, "request-description-edited")
+        .await;
     Ok(Json(RequestMutationResponse { request }))
 }
 
@@ -316,7 +324,9 @@ pub(crate) async fn mark_needs_response(
         .await?;
     let current_main_oid = current_main_oid_for_access(&state, &repo, access)?;
     let request = request_response(mutation.request, access, current_main_oid, Some(&user.id))?;
-    publish_request_summary_refresh(&state, &repo, "request-needs-response").await;
+    state
+        .publish_request_summary_refresh(&repo.record.id, "request-needs-response")
+        .await;
     Ok(Json(RequestMutationResponse { request }))
 }
 
@@ -341,7 +351,9 @@ pub(crate) async fn respond_to_request(
         .await?;
     let current_main_oid = current_main_oid_for_access(&state, &repo, access)?;
     let request = request_response(mutation.request, access, current_main_oid, Some(&user.id))?;
-    publish_request_summary_refresh(&state, &repo, "request-contributor-responded").await;
+    state
+        .publish_request_summary_refresh(&repo.record.id, "request-contributor-responded")
+        .await;
     Ok(Json(RequestMutationResponse { request }))
 }
 
@@ -382,7 +394,9 @@ pub(crate) async fn resolve_request(
         .await?;
     let current_main_oid = current_main_oid_for_access(&state, &repo, access)?;
     let request = request_response(mutation.request, access, current_main_oid, Some(&user.id))?;
-    publish_request_summary_refresh(&state, &repo, "request-resolved").await;
+    state
+        .publish_request_summary_refresh(&repo.record.id, "request-resolved")
+        .await;
     Ok(Json(RequestMutationResponse { request }))
 }
 
@@ -515,16 +529,6 @@ pub(crate) async fn visible_request(
         return Err(ApiError::not_found("request not found"));
     }
     Ok(request)
-}
-
-async fn publish_request_summary_refresh(
-    state: &AppState,
-    repo: &StoredRepository,
-    reason: &'static str,
-) {
-    state
-        .publish_repo_change(&repo.record.id, REQUEST_SUMMARY_REFRESH_VERSION, reason)
-        .await;
 }
 
 fn request_response(
