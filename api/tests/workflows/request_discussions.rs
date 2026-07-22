@@ -320,7 +320,7 @@ async fn request_activity_clamps_latest_and_after_pages_to_fifty_events() {
 }
 
 #[tokio::test]
-async fn timeline_cursor_is_stable_during_concurrent_thread_changes() {
+async fn timeline_cursor_is_stable_during_concurrent_thread_creation_and_changes() {
     let state = test_state_with_readme().await;
     cache_test_jwks(&state);
     let app = router(state);
@@ -370,6 +370,31 @@ async fn timeline_cursor_is_stable_during_concurrent_thread_changes() {
     let first_page = response_json(first_page).await;
     let cursor = first_page["next_cursor"].as_str().unwrap();
     assert_eq!(first_page["discussions"].as_array().unwrap().len(), 2);
+    let first_page_ids = first_page["discussions"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|discussion| discussion["id"].as_str().unwrap())
+        .collect::<Vec<_>>();
+    assert_eq!(
+        first_page_ids,
+        vec![discussion_ids[3].as_str(), discussion_ids[2].as_str()]
+    );
+
+    let concurrent_root = api_request(
+        app.clone(),
+        "POST",
+        &format!("{base}/timeline"),
+        Some(&bearer),
+        Some(r#"{"body_markdown":"Concurrent root","client_discussion_id":"root-concurrent"}"#),
+    )
+    .await;
+    assert_eq!(concurrent_root.status(), StatusCode::OK);
+    let concurrent_root = response_json(concurrent_root).await;
+    let concurrent_root_id = concurrent_root["discussion"]["id"]
+        .as_str()
+        .unwrap()
+        .to_string();
 
     let oldest_id = &discussion_ids[0];
     let reply = api_request(
@@ -412,6 +437,24 @@ async fn timeline_cursor_is_stable_during_concurrent_thread_changes() {
         .map(|discussion| discussion["id"].as_str().unwrap())
         .collect::<Vec<_>>();
     assert_eq!(ids, vec![resolved_id.as_str(), oldest_id.as_str()]);
+    let paged_ids = first_page_ids.into_iter().chain(ids).collect::<Vec<_>>();
+    assert_eq!(
+        paged_ids,
+        discussion_ids
+            .iter()
+            .rev()
+            .map(String::as_str)
+            .collect::<Vec<_>>()
+    );
+    assert_eq!(
+        paged_ids
+            .iter()
+            .copied()
+            .collect::<std::collections::BTreeSet<_>>()
+            .len(),
+        paged_ids.len()
+    );
+    assert!(!paged_ids.contains(&concurrent_root_id.as_str()));
 }
 
 async fn api_request(

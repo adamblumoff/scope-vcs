@@ -18,10 +18,10 @@ import { RequestDescription } from './request-description'
 import {
   RequestDiscussionComposer,
 } from './request-discussion-composer'
+import { RequestDiscussionThread } from './request-discussion-thread'
 import type {
   RequestDiscussionThreadActions,
-} from './request-discussion-thread'
-import { RequestDiscussionThread } from './request-discussion-thread'
+} from './use-request-discussion-replies'
 import type { RequestDiscussionActions } from './request-discussion-store'
 import { useRequestDiscussionStore } from './request-discussion-store'
 import type {

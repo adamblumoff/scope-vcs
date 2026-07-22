@@ -1,17 +1,15 @@
 use super::entities;
 use crate::{
     domain::{
-        requests::{
-            RequestDiscussion, RequestDiscussionReadState, RequestDiscussionReply,
-            RequestDiscussionStatus,
-        },
+        requests::{RequestDiscussion, RequestDiscussionReadState, RequestDiscussionReply},
         store::UserAccount,
     },
     error::ApiError,
 };
 use sea_orm::{
-    ActiveModelTrait, ColumnTrait, ConnectionTrait, DatabaseBackend, EntityTrait, IntoActiveModel,
-    PaginatorTrait, QueryFilter, QueryOrder, QueryResult, QuerySelect, Statement, sea_query::Expr,
+    ActiveModelTrait, ColumnTrait, Condition, ConnectionTrait, DatabaseBackend, EntityTrait,
+    IntoActiveModel, PaginatorTrait, QueryFilter, QueryOrder, QueryResult, QuerySelect, Statement,
+    sea_query::Expr,
 };
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -56,149 +54,40 @@ where
 pub async fn discussions_page_for_request<C>(
     conn: &C,
     request_id: &str,
-    status: Option<RequestDiscussionStatus>,
-    recent: bool,
     snapshot_version: u64,
     cursor: Option<(u64, String)>,
     limit: u64,
-) -> Result<Vec<(RequestDiscussion, u64)>, ApiError>
+) -> Result<Vec<RequestDiscussion>, ApiError>
 where
     C: ConnectionTrait,
 {
     let snapshot = i64::try_from(snapshot_version).map_err(ApiError::internal)?;
-    let status = status.map(enum_string).transpose()?;
-    let (cursor_position, cursor_id) = match cursor {
-        Some((position, id)) => (
-            Some(i64::try_from(position).map_err(ApiError::internal)?),
-            Some(id),
-        ),
-        None => (None, None),
-    };
-    let limit = i64::try_from(limit).map_err(ApiError::internal)?;
-    let rows = conn
-        .query_all(Statement::from_sql_and_values(
-            DatabaseBackend::Postgres,
-            r#"
-            WITH reply_positions AS (
-                SELECT replies.discussion_id, MAX(replies.position) AS position
-                FROM scope_request_discussion_replies replies
-                JOIN scope_request_discussions discussions
-                  ON discussions.id = replies.discussion_id
-                WHERE discussions.request_id = $1
-                  AND replies.position <= $3
-                GROUP BY replies.discussion_id
-            ),
-            transition_history AS (
-                SELECT
-                    COALESCE(
-                        events.payload -> 'DiscussionResolved' ->> 'discussion_id',
-                        events.payload -> 'DiscussionReopened' ->> 'discussion_id'
-                    ) AS discussion_id,
-                    events.position,
-                    events.kind
-                FROM scope_request_events events
-                WHERE events.request_id = $1
-                  AND events.position <= $3
-                  AND events.kind IN ('DiscussionResolved', 'DiscussionReopened')
-            ),
-            latest_transitions AS (
-                SELECT DISTINCT ON (discussion_id)
-                    discussion_id,
-                    position,
-                    kind
-                FROM transition_history
-                WHERE discussion_id IS NOT NULL
-                ORDER BY discussion_id, position DESC
-            ),
-            snapshot_discussions AS (
-                SELECT
-                    discussions.id,
-                    CASE WHEN $2::boolean THEN
-                        GREATEST(
-                            discussions.opened_position,
-                            COALESCE(reply_positions.position, discussions.opened_position),
-                            COALESCE(latest_transitions.position, discussions.opened_position)
-                        )
-                    ELSE discussions.opened_position END AS sort_position,
-                    discussions.status AS current_status,
-                    COALESCE(
-                        CASE latest_transitions.kind
-                            WHEN 'DiscussionResolved' THEN 'Resolved'
-                            WHEN 'DiscussionReopened' THEN 'Open'
-                        END,
-                        'Open'
-                    ) AS snapshot_status
-                FROM scope_request_discussions discussions
-                LEFT JOIN reply_positions
-                  ON reply_positions.discussion_id = discussions.id
-                LEFT JOIN latest_transitions
-                  ON latest_transitions.discussion_id = discussions.id
-                WHERE discussions.request_id = $1
-                  AND discussions.opened_position <= $3
-            )
-            SELECT id, sort_position
-            FROM snapshot_discussions
-            WHERE (
-                $4::text IS NULL
-                OR (snapshot_status = $4 AND current_status = $4)
-            )
-              AND (
-                  $5::bigint IS NULL
-                  OR sort_position < $5
-                  OR (sort_position = $5 AND id > $6)
-              )
-            ORDER BY sort_position DESC, id ASC
-            LIMIT $7
-            "#,
-            vec![
-                request_id.into(),
-                recent.into(),
-                snapshot.into(),
-                status.into(),
-                cursor_position.into(),
-                cursor_id.into(),
-                limit.into(),
-            ],
-        ))
-        .await
-        .map_err(ApiError::internal)?;
-    let ordered = rows
-        .into_iter()
-        .map(|row| {
-            let id = row
-                .try_get::<String>("", "id")
-                .map_err(ApiError::internal)?;
-            let position = row
-                .try_get::<i64>("", "sort_position")
-                .map_err(ApiError::internal)?
-                .try_into()
-                .map_err(ApiError::internal)?;
-            Ok((id, position))
-        })
-        .collect::<Result<Vec<(String, u64)>, ApiError>>()?;
-    if ordered.is_empty() {
-        return Ok(Vec::new());
+    let cursor = cursor
+        .map(|(position, id)| Ok((i64::try_from(position).map_err(ApiError::internal)?, id)))
+        .transpose()?;
+    let mut query = entities::request_discussion::Entity::find()
+        .filter(entities::request_discussion::Column::RequestId.eq(request_id))
+        .filter(entities::request_discussion::Column::OpenedPosition.lte(snapshot))
+        .order_by_desc(entities::request_discussion::Column::OpenedPosition)
+        .order_by_asc(entities::request_discussion::Column::Id)
+        .limit(limit);
+    if let Some((position, id)) = cursor {
+        query = query.filter(
+            Condition::any()
+                .add(entities::request_discussion::Column::OpenedPosition.lt(position))
+                .add(
+                    Condition::all()
+                        .add(entities::request_discussion::Column::OpenedPosition.eq(position))
+                        .add(entities::request_discussion::Column::Id.gt(id)),
+                ),
+        );
     }
-    let discussions = entities::request_discussion::Entity::find()
-        .filter(
-            entities::request_discussion::Column::Id
-                .is_in(ordered.iter().map(|(id, _)| id.clone())),
-        )
+    query
         .all(conn)
         .await
         .map_err(ApiError::internal)?
         .into_iter()
-        .map(|model| Ok((model.id.clone(), model.try_into_domain()?)))
-        .collect::<Result<BTreeMap<_, _>, ApiError>>()?;
-    ordered
-        .into_iter()
-        .map(|(id, position)| {
-            discussions
-                .get(&id)
-                .cloned()
-                .map(|discussion| (discussion, position))
-                .ok_or_else(|| ApiError::internal_message("paged discussion disappeared"))
-        })
+        .map(entities::request_discussion::Model::try_into_domain)
         .collect()
 }
 
@@ -654,13 +543,4 @@ where
         .await
         .map_err(ApiError::internal)?;
     Ok(())
-}
-
-fn enum_string<T: serde::Serialize>(value: T) -> Result<String, ApiError> {
-    match serde_json::to_value(value).map_err(ApiError::internal)? {
-        serde_json::Value::String(value) => Ok(value),
-        _ => Err(ApiError::internal_message(
-            "enum did not serialize to string",
-        )),
-    }
 }

@@ -88,6 +88,44 @@ test('public repository requests route is anonymously readable', async () => {
   })
 })
 
+test('seeded request timeline keeps its order and exposes nested reply branches', async () => {
+  await withPage(`/repos/${owner}/update-demo/requests/req_demo_submitted`, async (page) => {
+    await page.getByRole('heading', { level: 1, name: 'Add bounded retry timing' }).waitFor()
+    const threads = page.locator('.request-discussion-thread')
+    await threads.first().waitFor()
+    assert.deepEqual(
+      await threads.evaluateAll((elements) => elements.map(({ id }) => id)),
+      [
+        'discussion-thread_event_req_demo_submitted_submitted',
+        'discussion-thread_event_req_demo_submitted_revision_1',
+        'discussion-thread_event_req_demo_submitted_revision_2',
+        'discussion-thread_event_req_demo_submitted_revision_3',
+        'discussion-thread_event_req_demo_submitted_revision_4',
+        'discussion-discussion_demo_retry_cap',
+        'discussion-discussion_demo_jitter',
+        'discussion-discussion_demo_resolved_docs',
+      ],
+    )
+
+    const retryThread = page.locator('#discussion-discussion_demo_retry_cap')
+    await retryThread.getByRole('button', { name: '3 replies' }).click()
+    const maintainerReply = page.locator(
+      '#reply-discussion_reply_demo_retry_cap_maintainer',
+    )
+    await maintainerReply.getByText('Two seconds is intentional', { exact: false }).waitFor()
+    await maintainerReply.getByRole('button', { name: 'Show 1 reply' }).click()
+    const contributorReply = page.locator(
+      '#reply-discussion_reply_demo_retry_cap_quote',
+    )
+    await contributorReply.getByText('Agreed. Quoting the maintainer', { exact: false }).waitFor()
+    await contributorReply.getByRole('button', { name: 'Show 1 reply' }).click()
+    await page
+      .locator('#reply-discussion_reply_demo_retry_cap_nested')
+      .getByText('Exactly. Keeping that decision nested', { exact: false })
+      .waitFor()
+  })
+})
+
 async function withPage(path, assertion) {
   const browser = await chromium.launch({ headless: true })
   const page = await browser.newPage()

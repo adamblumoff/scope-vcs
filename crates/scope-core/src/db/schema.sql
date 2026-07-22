@@ -808,7 +808,6 @@ CREATE INDEX idx_scope_repository_members_user ON scope_repository_members USING
 
 CREATE UNIQUE INDEX idx_scope_request_events_request_position ON scope_request_events USING btree (request_id, position);
 CREATE INDEX idx_scope_request_change_blocks_request_position ON scope_request_change_blocks USING btree (request_id, position DESC, id);
-CREATE INDEX idx_scope_request_discussions_recent ON scope_request_discussions USING btree (request_id, status, last_activity_position DESC, id);
 CREATE INDEX idx_scope_request_discussions_newest ON scope_request_discussions USING btree (request_id, opened_position DESC, id);
 CREATE INDEX idx_scope_request_discussion_replies_position ON scope_request_discussion_replies USING btree (discussion_id, position DESC, id);
 CREATE INDEX idx_scope_request_discussion_replies_tree ON scope_request_discussion_replies USING btree (discussion_id, reply_to_reply_id, position DESC, id);

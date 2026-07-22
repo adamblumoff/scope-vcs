@@ -367,8 +367,6 @@ mod tests {
             .request_discussions_page(scope_core::db::RequestDiscussionsPageQuery {
                 request_id: REQUEST_ID,
                 viewer_user_id: Some(super::super::DEV_SEED_USER_ID),
-                status: None,
-                recent: true,
                 snapshot_version: request.activity_version,
                 cursor: None,
                 limit: 10,
@@ -376,6 +374,23 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(discussions.discussions.len(), 8);
+        assert_eq!(
+            discussions
+                .discussions
+                .iter()
+                .map(|model| model.discussion.id.as_str())
+                .collect::<Vec<_>>(),
+            vec![
+                RESOLVED_DOCS_ID,
+                JITTER_ID,
+                RETRY_CAP_ID,
+                FINAL_BLOCK_THREAD_ID,
+                TEST_BLOCK_THREAD_ID,
+                JITTER_BLOCK_THREAD_ID,
+                "thread_event_req_demo_submitted_revision_1",
+                SUBMISSION_BLOCK_THREAD_ID,
+            ]
+        );
         assert_eq!(
             discussions
                 .discussions

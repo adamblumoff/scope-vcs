@@ -5,14 +5,11 @@ import {
   applyDiscussionChanges,
   collectionFromPage,
   compactDiscussionSummary,
-  directDiscussionReplies,
   insertOptimisticDiscussion,
   markDiscussionRead,
   mergeDiscussion,
-  mergeDiscussionReplies,
   mergeRefreshedDiscussionPage,
   reconcileDiscussionMutation,
-  upsertDiscussionReply,
 } from './request-discussion-model'
 import type {
   RequestDiscussion,
@@ -459,64 +456,6 @@ test('compact summary uses the first nonempty Markdown line', () => {
   assert.equal(compactDiscussionSummary('\n## Cache invalidation\nMore'), 'Cache invalidation')
   assert.equal(compactDiscussionSummary(' \n'), 'Untitled discussion')
   assert.equal(compactDiscussionSummary(null), 'Update')
-})
-
-test('posting from a collapsed reply preview preserves existing replies', () => {
-  const preview = reply('preview', 1)
-  const optimistic = {
-    ...reply('optimistic', 2),
-    pending: 'sending' as const,
-  }
-  const replies = upsertDiscussionReply([], [preview], optimistic)
-  assert.deepEqual(
-    replies.map(({ id }) => id),
-    ['preview', 'optimistic'],
-  )
-})
-
-test('posting after loading older replies preserves chronological order', () => {
-  const current = [reply('one', 1), reply('two', 2), reply('three', 3)]
-  const latest = [reply('two', 2), reply('three', 3)]
-  const replies = upsertDiscussionReply(
-    current,
-    latest,
-    reply('four', 4),
-  )
-  assert.deepEqual(
-    replies.map(({ id }) => id),
-    ['one', 'two', 'three', 'four'],
-  )
-})
-
-test('expanded replies merge new realtime previews in order', () => {
-  const replies = mergeDiscussionReplies(
-    [reply('one', 1), reply('two', 2)],
-    [reply('two', 2), reply('three', 3)],
-  )
-  assert.deepEqual(
-    replies.map(({ id }) => id),
-    ['one', 'two', 'three'],
-  )
-})
-
-test('reply trees expose only the requested direct children', () => {
-  const root = reply('root', 1)
-  const child = { ...reply('child', 2), reply_to_reply_id: root.id }
-  const grandchild = { ...reply('grandchild', 3), reply_to_reply_id: child.id }
-  const replies = [root, child, grandchild]
-
-  assert.deepEqual(
-    directDiscussionReplies(replies, null).map(({ id }) => id),
-    ['root'],
-  )
-  assert.deepEqual(
-    directDiscussionReplies(replies, root.id).map(({ id }) => id),
-    ['child'],
-  )
-  assert.deepEqual(
-    directDiscussionReplies(replies, child.id).map(({ id }) => id),
-    ['grandchild'],
-  )
 })
 
 function discussion(id: string, lastActivity: number): RequestDiscussion {
