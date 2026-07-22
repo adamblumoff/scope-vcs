@@ -130,6 +130,36 @@ test('authoritative refresh restores page order and preserves active UI rows', (
   assert.equal(refreshed.snapshotVersion, 6)
 })
 
+test('authoritative refresh replaces an accepted optimistic discussion', () => {
+  const initial = collectionFromPage({
+    discussions: [],
+    next_cursor: null,
+    snapshot_version: 5,
+  })
+  const pending = insertOptimisticDiscussion(initial, {
+    ...discussion('client-1', Number.MAX_SAFE_INTEGER),
+    pending: 'failed',
+  })
+  const accepted = {
+    ...discussion('server-1', 6),
+    client_discussion_id: 'client-1',
+  }
+
+  const refreshed = mergeRefreshedDiscussionPage(
+    pending,
+    {
+      discussions: [accepted],
+      next_cursor: null,
+      snapshot_version: 6,
+    },
+    true,
+  )
+
+  assert.equal(refreshed.byId.has('client-1'), false)
+  assert.equal(refreshed.byId.get('server-1')?.pending, undefined)
+  assert.deepEqual(refreshed.order, ['server-1'])
+})
+
 test('authoritative refresh drops expanded rows outside the refreshed page', () => {
   const initial = collectionFromPage({
     discussions: [discussion('visible', 6), discussion('older', 5)],
@@ -359,6 +389,50 @@ test('catch-up can acknowledge a same-id optimistic discussion', () => {
   assert.equal(acknowledged.snapshotVersion, 6)
 })
 
+test('catch-up replaces an optimistic discussion by its client id', () => {
+  const collection = collectionFromPage({
+    discussions: [],
+    next_cursor: null,
+    snapshot_version: 5,
+  })
+  const pending = insertOptimisticDiscussion(collection, {
+    ...discussion('client-1', Number.MAX_SAFE_INTEGER),
+    pending: 'sending',
+  })
+  const accepted = applyDiscussionChanges(
+    pending,
+    [{ ...discussion('server-1', 6), client_discussion_id: 'client-1' }],
+    6,
+  )
+
+  assert.equal(accepted.byId.has('client-1'), false)
+  assert.equal(accepted.byId.get('server-1')?.pending, undefined)
+  assert.deepEqual(accepted.order, ['server-1'])
+  assert.equal(accepted.snapshotVersion, 6)
+})
+
+test('client id collisions from another author preserve the optimistic row', () => {
+  const collection = collectionFromPage({
+    discussions: [],
+    next_cursor: null,
+    snapshot_version: 5,
+  })
+  const pending = insertOptimisticDiscussion(collection, {
+    ...discussion('client-1', Number.MAX_SAFE_INTEGER),
+    pending: 'sending',
+  })
+  const otherAuthor = {
+    ...discussion('server-1', 6),
+    author: { handle: 'river', id: 'user-river' },
+    client_discussion_id: 'client-1',
+  }
+  const changed = applyDiscussionChanges(pending, [otherAuthor], 6)
+
+  assert.equal(changed.byId.get('client-1')?.pending, 'sending')
+  assert.equal(changed.byId.get('server-1')?.author.id, 'user-river')
+  assert.deepEqual(changed.order, ['server-1', 'client-1'])
+})
+
 test('mutation responses do not advance the authoritative catch-up cursor', () => {
   const collection = collectionFromPage({
     discussions: [discussion('one', 5)],
@@ -449,6 +523,7 @@ function discussion(id: string, lastActivity: number): RequestDiscussion {
   return {
     author: { handle: 'maya', id: 'user-maya' },
     body_markdown: `Discussion ${id}`,
+    client_discussion_id: id,
     created_at_unix: lastActivity,
     id,
     last_activity_position: lastActivity,

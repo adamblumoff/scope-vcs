@@ -10,6 +10,7 @@ import { createRequestDiscussionSync } from './request-discussion-sync'
 import type {
   RequestDiscussion,
   RequestDiscussionChanges,
+  RequestDiscussionPage,
 } from './request-discussion-types'
 
 test('late refresh cannot overwrite a newer catch-up', async () => {
@@ -18,6 +19,7 @@ test('late refresh cannot overwrite a newer catch-up', async () => {
   const changes = deferred<RequestDiscussionChanges>()
   const sync = createRequestDiscussionSync({
     getCollection: () => collection,
+    getDataGeneration: () => collection.snapshotVersion,
     loadChanges: () => changes.promise,
     setCollection: (next) => {
       collection = next
@@ -38,9 +40,11 @@ test('late refresh cannot overwrite a newer catch-up', async () => {
 
 test('late refresh cannot discard a concurrent mutation response', async () => {
   let collection = pageCollection('request-a', 10)
+  let dataGeneration = 0
   const refreshPage = deferred<ReturnType<typeof page>>()
   const sync = createRequestDiscussionSync({
     getCollection: () => collection,
+    getDataGeneration: () => dataGeneration,
     loadChanges: async () => changeBatch([], collection.snapshotVersion),
     setCollection: (next) => {
       collection = next
@@ -53,6 +57,7 @@ test('late refresh cannot discard a concurrent mutation response', async () => {
     collection,
     discussion('created', 11, 'request-a'),
   )
+  dataGeneration += 1
   refreshPage.resolve(page('request-a', 10))
 
   assert.equal(await refreshing, false)
@@ -62,10 +67,12 @@ test('late refresh cannot discard a concurrent mutation response', async () => {
 
 test('non-authoritative refresh drains changes from the prior snapshot', async () => {
   let collection = pageCollection('request-a', 10)
+  let dataGeneration = 0
   const refreshPage = deferred<ReturnType<typeof page>>()
   const afters: number[] = []
   const sync = createRequestDiscussionSync({
     getCollection: () => collection,
+    getDataGeneration: () => dataGeneration,
     loadChanges: async (after) => {
       afters.push(after)
       return changeBatch([discussion('one', 11, 'request-a')], 12)
@@ -81,6 +88,7 @@ test('non-authoritative refresh drains changes from the prior snapshot', async (
     ...collection,
     byId: new Map(collection.byId),
   }
+  dataGeneration += 1
   refreshPage.resolve({
     discussions: [discussion('new-root', 12, 'request-a')],
     next_cursor: null,
@@ -94,12 +102,48 @@ test('non-authoritative refresh drains changes from the prior snapshot', async (
   assert.equal(collection.byId.get('new-root')?.last_activity_position, 12)
 })
 
+test('UI-only changes do not make a refresh non-authoritative', async () => {
+  let collection = pageCollection('request-a', 10)
+  let dataGeneration = 0
+  const refreshPage = deferred<ReturnType<typeof page>>()
+  const sync = createRequestDiscussionSync({
+    getCollection: () => collection,
+    getDataGeneration: () => dataGeneration,
+    loadChanges: async () => changeBatch([], collection.snapshotVersion),
+    setCollection: (next) => {
+      collection = next
+      dataGeneration += 1
+    },
+  })
+  sync.reset('repo-1/request-a')
+
+  const refreshing = sync.refresh(() => refreshPage.promise)
+  collection = {
+    ...collection,
+    byId: new Map(collection.byId),
+  }
+  refreshPage.resolve({
+    discussions: [
+      discussion('newer', 11, 'request-a'),
+      discussion('one', 10, 'request-a'),
+    ],
+    next_cursor: 'older',
+    snapshot_version: 11,
+  })
+
+  assert.equal(await refreshing, true)
+  assert.equal(collection.snapshotVersion, 11)
+  assert.equal(collection.nextCursor, 'older')
+  assert.deepEqual(collection.order, ['one', 'newer'])
+})
+
 test('catch-up coalesces a newer target while a request is in flight', async () => {
   let collection = pageCollection('request-a', 5)
   const first = deferred<RequestDiscussionChanges>()
   const afters: number[] = []
   const sync = createRequestDiscussionSync({
     getCollection: () => collection,
+    getDataGeneration: () => collection.snapshotVersion,
     loadChanges: (after) => {
       afters.push(after)
       return after === 5
@@ -137,6 +181,7 @@ test('catch-up drains every server page when continuation is explicit', async ()
   const afters: number[] = []
   const sync = createRequestDiscussionSync({
     getCollection: () => collection,
+    getDataGeneration: () => collection.snapshotVersion,
     loadChanges: async (after) => {
       afters.push(after)
       const response = responses.shift()
@@ -156,11 +201,41 @@ test('catch-up drains every server page when continuation is explicit', async ()
   assert.equal(collection.order.length, 102)
 })
 
+test('lagged catch-up polls until an empty response confirms the head', async () => {
+  let collection = pageCollection('request-a', 5)
+  const responses = [
+    changeBatch([discussion('two', 6, 'request-a')], 6),
+    changeBatch([], 7),
+  ]
+  const afters: number[] = []
+  const sync = createRequestDiscussionSync({
+    getCollection: () => collection,
+    getDataGeneration: () => collection.snapshotVersion,
+    loadChanges: async (after) => {
+      afters.push(after)
+      const response = responses.shift()
+      assert.ok(response)
+      return response
+    },
+    setCollection: (next) => {
+      collection = next
+    },
+  })
+  sync.reset('repo-1/request-a')
+
+  await sync.catchUp({ lagged: true })
+
+  assert.deepEqual(afters, [5, 6])
+  assert.equal(collection.snapshotVersion, 7)
+  assert.deepEqual(collection.order, ['one', 'two'])
+})
+
 test('a completion from the previous request generation is discarded', async () => {
   let collection = pageCollection('request-a', 5)
   const changes = deferred<RequestDiscussionChanges>()
   const sync = createRequestDiscussionSync({
     getCollection: () => collection,
+    getDataGeneration: () => collection.snapshotVersion,
     loadChanges: () => changes.promise,
     setCollection: (next) => {
       collection = next
@@ -189,6 +264,7 @@ test('pagination keeps an entity advanced by live catch-up', async () => {
   const olderPage = deferred<ReturnType<typeof page>>()
   const sync = createRequestDiscussionSync({
     getCollection: () => collection,
+    getDataGeneration: () => collection.snapshotVersion,
     loadChanges: async () => changeBatch([], collection.snapshotVersion),
     setCollection: (next) => {
       collection = next
@@ -225,6 +301,7 @@ test('only a current refresh reports authoritative ordering', async () => {
   }
   const sync = createRequestDiscussionSync({
     getCollection: () => collection,
+    getDataGeneration: () => collection.snapshotVersion,
     loadChanges: async () => changeBatch([], collection.snapshotVersion),
     setCollection: (next) => {
       collection = next
@@ -250,7 +327,7 @@ function pageCollection(requestId: string, position: number) {
   return collectionFromPage(page(requestId, position))
 }
 
-function page(requestId: string, position: number) {
+function page(requestId: string, position: number): RequestDiscussionPage {
   return {
     discussions: [discussion('one', position, requestId)],
     next_cursor: null,
@@ -278,6 +355,7 @@ function discussion(
   return {
     author: { handle: 'maya', id: 'user-maya' },
     body_markdown: `Discussion ${id}`,
+    client_discussion_id: id,
     created_at_unix: lastActivity,
     id,
     last_activity_position: lastActivity,

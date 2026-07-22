@@ -72,6 +72,7 @@ function discussion(id: string): RequestDiscussion {
   return {
     author: { handle: 'maya', id: 'user-maya' },
     body_markdown: id,
+    client_discussion_id: id,
     created_at_unix: 1,
     id,
     last_activity_position: 1,

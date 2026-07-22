@@ -11,6 +11,7 @@ import type {
 
 export type RequestDiscussionSyncOptions = {
   getCollection: () => DiscussionCollection
+  getDataGeneration: () => number
   loadChanges: (after: number) => Promise<RequestDiscussionChanges>
   onActivity?: () => void
   onCatchUpError?: (error: unknown) => void
@@ -56,7 +57,7 @@ export function createRequestDiscussionSync(
 
   async function refresh(load: () => Promise<RequestDiscussionPage>) {
     const issuedGeneration = generation
-    const base = options.getCollection()
+    const baseDataGeneration = options.getDataGeneration()
     let page: RequestDiscussionPage
     try {
       page = await load()
@@ -68,7 +69,7 @@ export function createRequestDiscussionSync(
 
     const current = options.getCollection()
     const authoritative =
-      current === base &&
+      options.getDataGeneration() === baseDataGeneration &&
       page.snapshot_version >= current.snapshotVersion
     options.setCollection(
       mergeRefreshedDiscussionPage(current, page, authoritative),
@@ -137,6 +138,7 @@ export function createRequestDiscussionSync(
 
         const progressed = changes.through_position > after
         if (changes.has_more && progressed) continue
+        if (lagged && changes.discussions.length > 0 && progressed) continue
         if (lagged) lagged = false
         if (next.snapshotVersion < target && progressed) continue
         return

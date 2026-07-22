@@ -444,6 +444,7 @@ pub struct RequestDiscussionReplyResponse {
 pub struct RequestDiscussionSummaryResponse {
     pub id: String,
     pub request_id: String,
+    pub client_discussion_id: String,
     pub opened_position: u64,
     pub last_activity_position: u64,
     pub author: RequestActorSummaryResponse,

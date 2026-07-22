@@ -65,6 +65,15 @@ export function mergeRefreshedDiscussionPage(
     snapshotVersion: Math.max(collection.snapshotVersion, page.snapshot_version),
   }
   const refreshedIds = new Set(page.discussions.map(({ id }) => id))
+  const acceptedClientIds = new Set(
+    page.discussions.flatMap((discussion) => {
+      const optimistic = collection.byId.get(discussion.client_discussion_id)
+      return optimistic?.pending !== undefined &&
+        optimistic.author.id === discussion.author.id
+        ? [discussion.client_discussion_id]
+        : []
+    }),
+  )
   for (const discussion of page.discussions) {
     const current = collection.byId.get(discussion.id)
     if (!current) continue
@@ -80,6 +89,7 @@ export function mergeRefreshedDiscussionPage(
     if (
       current &&
       !refreshedIds.has(discussionId) &&
+      !acceptedClientIds.has(discussionId) &&
       current.pending !== undefined
     ) {
       next = mergeDiscussion(next, current)
@@ -105,6 +115,15 @@ export function mergeDiscussion(
   collection: DiscussionCollection,
   discussion: RequestDiscussionView,
 ): DiscussionCollection {
+  const optimisticId = discussion.client_discussion_id
+  const optimistic = collection.byId.get(optimisticId)
+  if (
+    optimisticId !== discussion.id &&
+    optimistic?.pending !== undefined &&
+    optimistic.author.id === discussion.author.id
+  ) {
+    return reconcileDiscussionMutation(collection, discussion, optimisticId)
+  }
   const previous = collection.byId.get(discussion.id)
   const acknowledgesOptimistic =
     previous?.pending !== undefined && discussion.pending === undefined

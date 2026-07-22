@@ -527,6 +527,7 @@ fn discussion_summary(
     Ok(RequestDiscussionSummaryResponse {
         id: model.discussion.id,
         request_id: model.discussion.request_id,
+        client_discussion_id: model.discussion.client_discussion_id,
         opened_position: model.discussion.opened_position,
         last_activity_position: model.discussion.last_activity_position,
         author: actor_response(&model.discussion.author_user_id, users)?,

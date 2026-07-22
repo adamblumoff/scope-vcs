@@ -79,19 +79,30 @@ export function useRequestDiscussionStore({
   const [refreshing, setRefreshing] = useState(false)
   const [newActivity, setNewActivity] = useState(false)
   const collectionRef = useRef(collection)
+  const dataGenerationRef = useRef(0)
   const activeKeyRef = useRef(key)
+  const syncContextRef = useRef({ actions, params })
+  syncContextRef.current = { actions, params }
 
   const updateCollection = useCallback(
-    (update: (current: DiscussionCollection) => DiscussionCollection) => {
-      const next = update(collectionRef.current)
+    (
+      update: (current: DiscussionCollection) => DiscussionCollection,
+      dataChanged = true,
+    ) => {
+      const current = collectionRef.current
+      const next = update(current)
+      if (next === current) return
       collectionRef.current = next
+      if (dataChanged) dataGenerationRef.current += 1
       setCollection(next)
     },
     [],
   )
 
   const setCurrentCollection = useCallback((next: DiscussionCollection) => {
+    if (next === collectionRef.current) return
     collectionRef.current = next
+    dataGenerationRef.current += 1
     setCollection(next)
   }, [])
 
@@ -99,7 +110,11 @@ export function useRequestDiscussionStore({
     () =>
       createRequestDiscussionSync({
         getCollection: () => collectionRef.current,
-        loadChanges: (after) => actions.loadChanges({ ...params, after }),
+        getDataGeneration: () => dataGenerationRef.current,
+        loadChanges: (after) => {
+          const context = syncContextRef.current
+          return context.actions.loadChanges({ ...context.params, after })
+        },
         onActivity: () => setNewActivity(true),
         onCatchUpError: (requestError) => {
           setError(
@@ -111,14 +126,10 @@ export function useRequestDiscussionStore({
         },
         setCollection: setCurrentCollection,
       }),
-    [actions, params, setCurrentCollection],
+    [setCurrentCollection],
   )
-  const currentSyncRef = useRef(sync)
-  currentSyncRef.current = sync
   const isCurrent = useCallback(
-    (operationKey: string, operationSync: typeof sync) =>
-      activeKeyRef.current === operationKey &&
-      currentSyncRef.current === operationSync,
+    (operationKey: string) => activeKeyRef.current === operationKey,
     [],
   )
 
@@ -148,7 +159,7 @@ export function useRequestDiscussionStore({
         if (
           !cancelled &&
           authoritative &&
-          isCurrent(key, sync)
+          isCurrent(key)
         ) {
           setNewActivity(false)
         }
@@ -173,15 +184,15 @@ export function useRequestDiscussionStore({
     setError(null)
     try {
       const authoritative = await sync.refresh(() => actions.load(params))
-      if (authoritative && isCurrent(operationKey, sync)) {
+      if (authoritative && isCurrent(operationKey)) {
         setNewActivity(false)
       }
     } catch (requestError) {
-      if (isCurrent(operationKey, sync)) {
+      if (isCurrent(operationKey)) {
         setError(messageFor(requestError, 'Discussions could not be refreshed.'))
       }
     } finally {
-      if (isCurrent(operationKey, sync)) {
+      if (isCurrent(operationKey)) {
         setRefreshing(false)
       }
     }
@@ -218,11 +229,11 @@ export function useRequestDiscussionStore({
     try {
       await sync.paginate(cursor, () => actions.load({ ...params, cursor }))
     } catch (requestError) {
-      if (isCurrent(operationKey, sync)) {
+      if (isCurrent(operationKey)) {
         setError(messageFor(requestError, 'Older discussions could not be loaded.'))
       }
     } finally {
-      if (isCurrent(operationKey, sync)) {
+      if (isCurrent(operationKey)) {
         setLoadingMore(false)
       }
     }
@@ -258,7 +269,7 @@ export function useRequestDiscussionStore({
           body_markdown: body,
           client_discussion_id: clientDiscussionId,
         })
-        if (!isCurrent(operationKey, sync)) {
+        if (!isCurrent(operationKey)) {
           return false
         }
         updateCollection((current) =>
@@ -273,7 +284,7 @@ export function useRequestDiscussionStore({
         })
         return true
       } catch (requestError) {
-        if (isCurrent(operationKey, sync)) {
+        if (isCurrent(operationKey)) {
           updateCollection((current) =>
             markDiscussionFailed(current, clientDiscussionId),
           )
@@ -296,7 +307,7 @@ export function useRequestDiscussionStore({
   const patch = useCallback(
     (discussion: RequestDiscussion) => {
       if (
-        !isCurrent(key, sync) ||
+        !isCurrent(key) ||
         discussion.request_id !== params.request_id
       ) {
         return
@@ -321,7 +332,7 @@ export function useRequestDiscussionStore({
           through_position: discussion.last_activity_position,
         })
       } catch {
-        if (!isCurrent(operationKey, sync)) {
+        if (!isCurrent(operationKey)) {
           return
         }
         updateCollection((current) => {
@@ -340,7 +351,7 @@ export function useRequestDiscussionStore({
         })
       }
     },
-    [actions, isCurrent, key, params, sync, updateCollection],
+    [actions, isCurrent, key, params, updateCollection],
   )
 
   const setResolved = useCallback(
@@ -352,11 +363,11 @@ export function useRequestDiscussionStore({
           ...params,
           discussion_id: discussion.id,
         })
-        if (isCurrent(operationKey, sync)) {
+        if (isCurrent(operationKey)) {
           patch(result.discussion)
         }
       } catch (requestError) {
-        if (isCurrent(operationKey, sync)) {
+        if (isCurrent(operationKey)) {
           setError(
             messageFor(
               requestError,
@@ -368,7 +379,7 @@ export function useRequestDiscussionStore({
         }
       }
     },
-    [actions, isCurrent, key, params, patch, sync],
+    [actions, isCurrent, key, params, patch],
   )
 
   const setExpanded = useCallback(
@@ -378,7 +389,7 @@ export function useRequestDiscussionStore({
         return discussion
           ? mergeDiscussion(current, { ...discussion, expanded })
           : current
-      })
+      }, false)
     },
     [updateCollection],
   )
@@ -434,6 +445,7 @@ function optimisticDiscussion({
     author: actor,
     body_markdown: body,
     change_block: null,
+    client_discussion_id: clientDiscussionId,
     created_at_unix: Math.floor(Date.now() / 1000),
     id: clientDiscussionId,
     last_activity_position: position,

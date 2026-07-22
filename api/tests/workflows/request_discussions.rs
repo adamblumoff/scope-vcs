@@ -73,6 +73,7 @@ async fn threaded_discussion_http_workflow_preserves_activity_and_read_contracts
     assert_eq!(created.status(), StatusCode::OK);
     let created = response_json(created).await;
     let discussion_id = created["discussion"]["id"].as_str().unwrap().to_string();
+    assert_eq!(created["discussion"]["client_discussion_id"], "root-1");
     assert_eq!(created["discussion"]["unread_count"], 0);
     let targeted = tokio::time::timeout(std::time::Duration::from_secs(5), event_stream.next())
         .await
@@ -173,6 +174,10 @@ async fn threaded_discussion_http_workflow_preserves_activity_and_read_contracts
     let discussions = response_json(discussions).await;
     assert_eq!(discussions["discussions"].as_array().unwrap().len(), 1);
     assert_eq!(
+        discussions["discussions"][0]["client_discussion_id"],
+        "root-1"
+    );
+    assert_eq!(
         discussions["discussions"][0]["latest_replies"]
             .as_array()
             .unwrap()
@@ -208,6 +213,7 @@ async fn threaded_discussion_http_workflow_preserves_activity_and_read_contracts
     assert_eq!(changes.status(), StatusCode::OK);
     let changes = response_json(changes).await;
     assert_eq!(changes["discussions"].as_array().unwrap().len(), 1);
+    assert_eq!(changes["discussions"][0]["client_discussion_id"], "root-1");
     assert_eq!(changes["has_more"], false);
 
     let activity = api_request(
