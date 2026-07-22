@@ -166,7 +166,7 @@ export type ProjectionPreviewCommitVisibilityResponse = "FullyPublic" | "Mixed" 
 
 export type ProjectionPreviewSummaryResponse = { visible_files: number, hidden_files: number, visible_commits: number, hidden_commits: number, };
 
-export type RequestListResponse = { requests: Array<RequestListItemResponse>, };
+export type RequestListResponse = { requests: Array<RequestListItemResponse>, next_cursor: string | null, };
 
 export type RequestDetailResponse = { request: RequestSummaryResponse, };
 
@@ -190,7 +190,9 @@ export type RequestResolutionOptionResponse = { disposition: ResolutionDispositi
 
 export type RequestEventResponse = { id: string, position: number, actor: RequestActorSummaryResponse, kind: RequestEventKind, payload: RequestEventPayload, created_at_unix: number, };
 
-export type RequestEventPayload = { "Started": { title: string, description_markdown: string, } } | { "Submitted": { head_oid: string, } } | { "RevisionPushed": { old_head_oid: string, new_head_oid: string, note: string | null, } } | { "NeedsResponse": { body: string, head_oid: string, } } | { "ContributorResponded": { body: string | null, head_oid: string, } } | { "Merged": { body: string | null, head_oid: string, } } | { "Resolved": { body: string | null, head_oid: string, disposition: RequestDisposition, } } | { "Settled": { settlement: RequestSettlement, } } | { "Withdrawn": { head_oid: string, } } | { "DescriptionEdited": { previous_markdown: string, new_markdown: string, } } | { "DiscussionResolved": { discussion_id: string, } } | { "DiscussionReopened": { discussion_id: string, } };
+export type RequestEventPayload = { "Started": { title: string, description_markdown: string, } } | { "Submitted": { head_oid: string, } } | { "RevisionPushed": { old_head_oid: string, new_head_oid: string, note: string | null, } } | { "NeedsResponse": { body: string, head_oid: string, } } | { "ContributorResponded": { body: string | null, head_oid: string, } } | { "Merged": { body: string | null, head_oid: string, } } | { "Resolved": { body: string | null, head_oid: string, disposition: RequestDisposition, } } | { "Settled": { settlement: RequestSettlement, } } | { "Withdrawn": { head_oid: string, } } | { "DescriptionEdited": { before: RequestDescriptionAuditFact, after: RequestDescriptionAuditFact, } } | { "DiscussionResolved": { discussion_id: string, } } | { "DiscussionReopened": { discussion_id: string, } };
+
+export type RequestDescriptionAuditFact = { sha256: string, byte_count: number, };
 
 export type RequestSettlement = { disposition: RequestDisposition, stake_credits: number, refunded_credits: number, reward_credits: number, burned_credits: number, settled_at_unix: number, };
 

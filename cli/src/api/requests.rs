@@ -48,12 +48,16 @@ pub fn list_requests(
     session_token: &str,
     owner: &str,
     repo: &str,
+    cursor: Option<&str>,
 ) -> anyhow::Result<RequestListResponse> {
-    let response = client
-        .get(format!(
-            "{api_url}{}",
-            scope_api_contract::routes::repo_requests(owner, repo)
-        ))
+    let mut request = client.get(format!(
+        "{api_url}{}",
+        scope_api_contract::routes::repo_requests(owner, repo)
+    ));
+    if let Some(cursor) = cursor {
+        request = request.query(&[("cursor", cursor)]);
+    }
+    let response = request
         .bearer_auth(session_token)
         .send()
         .with_context(|| format!("list requests for {owner}/{repo}"))?;
@@ -395,5 +399,58 @@ fn handle_request_status(
         }
         StatusCode::CONFLICT => anyhow::bail!("{action} conflicted for request {request_id}"),
         _ => Ok(()),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::list_requests;
+    use reqwest::blocking::Client;
+    use std::{
+        io::{Read, Write},
+        net::TcpListener,
+        thread,
+    };
+
+    #[test]
+    fn list_requests_sends_the_opaque_cursor_as_a_query_parameter() {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let address = listener.local_addr().unwrap();
+        let server = thread::spawn(move || {
+            let (mut stream, _) = listener.accept().unwrap();
+            let mut request = [0; 2048];
+            let read = stream.read(&mut request).unwrap();
+            let request = String::from_utf8_lossy(&request[..read]);
+            assert!(
+                request
+                    .lines()
+                    .next()
+                    .unwrap()
+                    .ends_with("?cursor=next+page%2F%2B HTTP/1.1"),
+                "{request}"
+            );
+
+            let body = r#"{"requests":[],"next_cursor":null}"#;
+            write!(
+                stream,
+                "HTTP/1.1 200 OK\r\ncontent-type: application/json\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{body}",
+                body.len()
+            )
+            .unwrap();
+        });
+
+        let response = list_requests(
+            &Client::new(),
+            &format!("http://{address}"),
+            "token",
+            "owner",
+            "repo",
+            Some("next page/+"),
+        )
+        .unwrap();
+
+        assert!(response.requests.is_empty());
+        assert!(response.next_cursor.is_none());
+        server.join().unwrap();
     }
 }

@@ -11,8 +11,8 @@ use super::{
         credit_account_by_user_id, credit_ledger_entry_by_id, delete_request_rows,
         insert_credit_ledger_entry_row, insert_request_event_row, insert_request_row,
         latest_request_events, request_by_id, request_by_name, request_event_by_id,
-        request_events_after_position, request_events_by_request_id, requests_by_repo_author,
-        requests_by_repo_id, save_credit_account_row, save_request_row,
+        request_events_after_position, request_events_by_request_id, request_list_page,
+        requests_by_repo_author, requests_by_repo_id, save_credit_account_row, save_request_row,
     },
 };
 use crate::{
@@ -21,11 +21,11 @@ use crate::{
             CreditAccountMutation, DeleteRequestInput, DeleteRequestMutation,
             GrantUserCreditsInput, MarkRequestNeedsResponseInput, MergeRequestInput,
             MergeRequestMutation, RecordRequestRevisionInput, RecordWorkingRequestUploadInput,
-            Request, RequestEvent, RequestRevisionMutation, RequestTimelineMutation,
-            ResolveRequestInput, ResolveRequestMutation, RespondToRequestInput, StartRequestInput,
-            StartRequestMutation, SubmitRequestInput, SubmitRequestMutation,
-            UpdateRequestDescriptionInput, WorkingRequestUploadMutation, delete_request,
-            grant_user_credits, mark_request_needs_response, merge_request,
+            Request, RequestAudience, RequestEvent, RequestRevisionMutation,
+            RequestTimelineMutation, ResolveRequestInput, ResolveRequestMutation,
+            RespondToRequestInput, StartRequestInput, StartRequestMutation, SubmitRequestInput,
+            SubmitRequestMutation, UpdateRequestDescriptionInput, WorkingRequestUploadMutation,
+            delete_request, grant_user_credits, mark_request_needs_response, merge_request,
             record_request_revision, record_working_request_upload, resolve_request,
             respond_to_request, start_request, submit_request, update_request_description,
         },
@@ -58,6 +58,16 @@ impl MetadataStore {
         let repo_id = repo_id.to_string();
         let db = Arc::clone(&self.db);
         requests_by_repo_id(db.as_ref(), &repo_id).await
+    }
+
+    pub async fn request_list_page(
+        &self,
+        repo_id: &str,
+        audiences: &[RequestAudience],
+        after_id: Option<&str>,
+        limit: u64,
+    ) -> Result<Vec<super::RequestListRow>, ApiError> {
+        request_list_page(self.db.as_ref(), repo_id, audiences, after_id, limit).await
     }
 
     pub async fn requests_by_repo_author(

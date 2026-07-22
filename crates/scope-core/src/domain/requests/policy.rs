@@ -40,11 +40,17 @@ pub fn request_actor_role(access: RepositoryAccess) -> RequestActorRole {
     }
 }
 
-pub fn request_visible_to_access(request: &Request, access: RepositoryAccess) -> bool {
+pub fn request_visible_audiences(access: RepositoryAccess) -> &'static [RequestAudience] {
     match access.actor {
-        RepositoryActor::Owner | RepositoryActor::Member => true,
-        RepositoryActor::Public => request.audience == RequestAudience::Public,
+        RepositoryActor::Owner | RepositoryActor::Member => {
+            &[RequestAudience::Public, RequestAudience::Private]
+        }
+        RepositoryActor::Public => &[RequestAudience::Public],
     }
+}
+
+pub fn request_visible_to_access(request: &Request, access: RepositoryAccess) -> bool {
+    request_visible_audiences(access).contains(&request.audience)
 }
 
 pub fn request_permissions(
@@ -86,11 +92,12 @@ pub fn request_permissions(
     }
 }
 
-pub fn request_mergeability(request: &Request, access: RepositoryAccess) -> RequestMergeability {
-    let (status, reason) = if matches!(
-        request.state,
-        RequestState::Resolved | RequestState::Withdrawn
-    ) {
+pub fn request_list_mergeability(
+    state: RequestState,
+    has_git_snapshot: bool,
+    access: RepositoryAccess,
+) -> RequestMergeability {
+    let (status, reason) = if matches!(state, RequestState::Resolved | RequestState::Withdrawn) {
         (RequestMergeabilityStatus::Closed, Some("request is closed"))
     } else if !matches!(
         access.actor,
@@ -100,17 +107,17 @@ pub fn request_mergeability(request: &Request, access: RepositoryAccess) -> Requ
             RequestMergeabilityStatus::NotMaintainer,
             Some("repo maintainer required"),
         )
-    } else if request.state == RequestState::Working {
+    } else if state == RequestState::Working {
         (
             RequestMergeabilityStatus::NotReady,
             Some("request has not been submitted"),
         )
-    } else if request.state == RequestState::NeedsResponse {
+    } else if state == RequestState::NeedsResponse {
         (
             RequestMergeabilityStatus::NotReady,
             Some("request is waiting on contributor response"),
         )
-    } else if request.git_snapshot.is_none() {
+    } else if !has_git_snapshot {
         (
             RequestMergeabilityStatus::MissingRequestBranch,
             Some("request branch has not been pushed"),
@@ -119,4 +126,8 @@ pub fn request_mergeability(request: &Request, access: RepositoryAccess) -> Requ
         (RequestMergeabilityStatus::Ready, None)
     };
     RequestMergeability { status, reason }
+}
+
+pub fn request_mergeability(request: &Request, access: RepositoryAccess) -> RequestMergeability {
+    request_list_mergeability(request.state, request.git_snapshot.is_some(), access)
 }

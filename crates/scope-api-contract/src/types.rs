@@ -291,6 +291,7 @@ pub struct CreatePushIntentResponse {
 #[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 pub struct RequestListResponse {
     pub requests: Vec<RequestListItemResponse>,
+    pub next_cursor: Option<String>,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]

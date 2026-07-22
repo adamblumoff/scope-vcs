@@ -821,6 +821,10 @@ CREATE INDEX idx_scope_request_discussion_replies_parent ON scope_request_discus
 
 CREATE INDEX idx_scope_requests_author ON scope_requests USING btree (author_user_id);
 
+CREATE INDEX idx_scope_requests_repo_id ON scope_requests USING btree (repo_id, id);
+
+CREATE INDEX idx_scope_requests_repo_audience_id ON scope_requests USING btree (repo_id, audience, id);
+
 
 --
 -- Name: idx_scope_requests_repo_state; Type: INDEX; Schema: scope_test_2249234_1783653779131957768; Owner: -

@@ -2,12 +2,23 @@ use crate::{domain::store::SourceBlob, error::ApiError};
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
 
+mod limits;
+pub use limits::{
+    REQUEST_ACTIVITY_PAGE_MAX_EVENTS, REQUEST_DESCRIPTION_MAX_BYTES,
+    REQUEST_DISCUSSION_BODY_MAX_BYTES, REQUEST_DISCUSSION_CLIENT_ID_MAX_BYTES,
+    REQUEST_DISCUSSION_REPLY_MAX_DEPTH, REQUEST_LIST_DEFAULT_PAGE_SIZE, REQUEST_LIST_MAX_PAGE_SIZE,
+    REQUEST_TIMELINE_BODY_MAX_BYTES, REQUEST_TITLE_MAX_BYTES,
+};
+pub(super) use limits::{validate_body_size, validate_required_body};
+use limits::{validate_optional_timeline_body, validate_required_timeline_body};
+
 mod settlement;
 pub use settlement::{ResolutionDisposition, allowed_resolution_dispositions, settlement_for};
 mod policy;
 pub use policy::{
     RequestMergeability, RequestMergeabilityStatus, RequestPermissions, request_actor_role,
-    request_mergeability, request_permissions, request_visible_to_access,
+    request_list_mergeability, request_mergeability, request_permissions,
+    request_visible_audiences, request_visible_to_access,
 };
 mod change_blocks;
 mod discussions;
@@ -33,10 +44,6 @@ pub use submission::{
 };
 
 pub const REQUEST_REF_PREFIX: &str = "refs/heads/";
-pub const REQUEST_DISCUSSION_BODY_MAX_BYTES: usize = 64 * 1024;
-pub const REQUEST_DISCUSSION_CLIENT_ID_MAX_BYTES: usize = 128;
-pub const REQUEST_DISCUSSION_REPLY_MAX_DEPTH: u16 = 16;
-pub const REQUEST_DESCRIPTION_MAX_BYTES: usize = 256 * 1024;
 const REPO_DELETE_REFUND_LEDGER_ENTRY_PREFIX: &str = "repo_delete_refund:";
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -129,6 +136,13 @@ pub enum RequestEventKind {
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(any(test, feature = "ts"), derive(ts_rs::TS))]
+pub struct RequestDescriptionAuditFact {
+    pub sha256: String,
+    pub byte_count: u64,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(any(test, feature = "ts"), derive(ts_rs::TS))]
 pub enum RequestEventPayload {
     Started {
         title: String,
@@ -166,8 +180,8 @@ pub enum RequestEventPayload {
         head_oid: String,
     },
     DescriptionEdited {
-        previous_markdown: String,
-        new_markdown: String,
+        before: RequestDescriptionAuditFact,
+        after: RequestDescriptionAuditFact,
     },
     DiscussionResolved {
         discussion_id: String,
@@ -397,6 +411,7 @@ pub fn record_request_revision(
     validate_required_id("actor user id", &input.actor_user_id)?;
     validate_required_id("head oid", &input.new_head_oid)?;
     validate_required_id("event id", &input.event_id)?;
+    validate_optional_timeline_body("request revision note", input.body.as_deref())?;
     ensure_event_id_available(events, &input.event_id)?;
 
     let request = requests
@@ -587,7 +602,7 @@ pub fn mark_request_needs_response(
     validate_required_id("request id", &input.request_id)?;
     validate_required_id("actor user id", &input.actor_user_id)?;
     validate_required_id("event id", &input.event_id)?;
-    validate_required_body("needs-response body", &input.body)?;
+    validate_required_timeline_body("needs-response body", &input.body)?;
     ensure_event_id_available(events, &input.event_id)?;
     let request = open_request_mut(requests, &input.request_id)?;
     if request.state != RequestState::Submitted {
@@ -623,6 +638,7 @@ pub fn respond_to_request(
     validate_required_id("request id", &input.request_id)?;
     validate_required_id("actor user id", &input.actor_user_id)?;
     validate_required_id("event id", &input.event_id)?;
+    validate_optional_timeline_body("contributor response body", input.body.as_deref())?;
     ensure_event_id_available(events, &input.event_id)?;
     let request = open_request_mut(requests, &input.request_id)?;
     if request.author_user_id != input.actor_user_id {
@@ -664,6 +680,7 @@ pub fn resolve_request(
     validate_required_id("actor user id", &input.actor_user_id)?;
     validate_required_id("event id", &input.event_id)?;
     validate_required_id("settlement event id", &input.settlement_event_id)?;
+    validate_optional_timeline_body("request resolution body", input.body.as_deref())?;
     ensure_event_id_available(events, &input.event_id)?;
     ensure_event_id_available(events, &input.settlement_event_id)?;
     if input.event_id == input.settlement_event_id {
@@ -778,6 +795,7 @@ pub fn merge_request(
     validate_required_id("expected head oid", &input.expected_head_oid)?;
     validate_required_id("event id", &input.event_id)?;
     validate_required_id("settlement event id", &input.settlement_event_id)?;
+    validate_optional_timeline_body("request merge body", input.body.as_deref())?;
     ensure_event_id_available(events, &input.event_id)?;
     ensure_event_id_available(events, &input.settlement_event_id)?;
     if input.event_id == input.settlement_event_id {
@@ -881,26 +899,6 @@ pub fn canonical_request_ref(request_name: &str) -> String {
 fn validate_required_id(label: &str, value: &str) -> Result<(), ApiError> {
     if value.trim().is_empty() {
         return Err(ApiError::bad_request(format!("{label} is required")));
-    }
-    Ok(())
-}
-
-fn validate_required_body(label: &str, value: &str) -> Result<(), ApiError> {
-    if value.trim().is_empty() {
-        return Err(ApiError::bad_request(format!("{label} is required")));
-    }
-    Ok(())
-}
-
-pub(super) fn validate_body_size(
-    label: &str,
-    value: &str,
-    max_bytes: usize,
-) -> Result<(), ApiError> {
-    if value.len() > max_bytes {
-        return Err(ApiError::bad_request(format!(
-            "{label} exceeds {max_bytes} bytes"
-        )));
     }
     Ok(())
 }

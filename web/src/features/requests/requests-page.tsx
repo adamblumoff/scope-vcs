@@ -1,4 +1,9 @@
-import type { RepoLiveState, RepoParams, RequestListItem } from '@/api/types'
+import type {
+  RepoLiveState,
+  RepoParams,
+  RequestList,
+  RequestListItem,
+} from '@/api/types'
 import { RepoShell } from '@/components/repo-shell'
 import { SectionRows } from '@/components/section-rows'
 import { Badge } from '@/components/ui/badge'
@@ -6,6 +11,8 @@ import { Button } from '@/components/ui/button'
 import { WorkbenchHeader } from '@/components/workbench-header'
 import { Link } from '@tanstack/react-router'
 import { ArrowRight, Coins, GitBranch, GitPullRequest } from 'lucide-react'
+import { useState } from 'react'
+import { appendRequestPage, requestCountLabel } from './request-list-model'
 import {
   formatUnixDate,
   requestAuthorRoleLabel,
@@ -17,21 +24,53 @@ import {
 } from './request-labels'
 
 export function RequestsPage({
+  initialPage,
+  loadNextPage,
   params,
-  requests,
 }: {
+  initialPage: RequestList
   live: RepoLiveState
+  loadNextPage: (cursor: string) => Promise<RequestList>
   params: RepoParams
-  requests: RequestListItem[]
 }) {
+  const [loadedPages, setLoadedPages] = useState<RequestList[]>([])
+  const requests = loadedPages.reduce(
+    (current, page) => appendRequestPage(current, page.requests),
+    initialPage.requests,
+  )
+  const nextCursor =
+    loadedPages.length > 0
+      ? loadedPages[loadedPages.length - 1].next_cursor
+      : initialPage.next_cursor
+  const [loadingMore, setLoadingMore] = useState(false)
+  const [loadError, setLoadError] = useState<string | null>(null)
+
+  async function loadMore() {
+    if (!nextCursor || loadingMore) {
+      return
+    }
+    setLoadingMore(true)
+    setLoadError(null)
+    try {
+      const page = await loadNextPage(nextCursor)
+      setLoadedPages((current) => [...current, page])
+    } catch (error) {
+      setLoadError(
+        error instanceof Error ? error.message : 'Could not load more requests.',
+      )
+    } finally {
+      setLoadingMore(false)
+    }
+  }
+
   return (
     <RepoShell params={params}>
-        <WorkbenchHeader
-          count={`${requests.length} ${requests.length === 1 ? 'request' : 'requests'}`}
-          description="Review and settle proposed branch updates."
-          eyebrow="Review"
-          title="Requests"
-        />
+      <WorkbenchHeader
+        count={requestCountLabel(requests.length, Boolean(nextCursor))}
+        description="Review and settle proposed branch updates."
+        eyebrow="Review"
+        title="Requests"
+      />
       <div className="px-4 pb-10 sm:px-6 lg:px-8">
         {requests.length > 0 ? (
           <SectionRows className="mt-4">
@@ -42,6 +81,24 @@ export function RequestsPage({
                 request={request}
               />
             ))}
+            {nextCursor ? (
+              <div className="px-3 py-5 text-center">
+                <Button
+                  disabled={loadingMore}
+                  onClick={() => void loadMore()}
+                  size="sm"
+                  type="button"
+                  variant="secondary"
+                >
+                  {loadingMore ? 'Loading…' : 'Load more requests'}
+                </Button>
+                {loadError ? (
+                  <p className="mt-2 text-sm text-destructive" role="alert">
+                    {loadError}
+                  </p>
+                ) : null}
+              </div>
+            ) : null}
           </SectionRows>
         ) : (
           <EmptyRequests params={params} />

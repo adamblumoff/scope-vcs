@@ -12,7 +12,7 @@ use crate::error::ApiError;
 use sea_orm::entity::prelude::*;
 use serde::{Deserialize, Serialize};
 
-fn encode_enum<T: serde::Serialize>(value: T) -> Result<String, ApiError> {
+pub(super) fn encode_enum<T: serde::Serialize>(value: T) -> Result<String, ApiError> {
     match serde_json::to_value(value).map_err(ApiError::internal)? {
         serde_json::Value::String(value) => Ok(value),
         _ => Err(ApiError::internal_message(
@@ -21,7 +21,7 @@ fn encode_enum<T: serde::Serialize>(value: T) -> Result<String, ApiError> {
     }
 }
 
-fn decode_enum<T: serde::de::DeserializeOwned>(value: String) -> Result<T, ApiError> {
+pub(super) fn decode_enum<T: serde::de::DeserializeOwned>(value: String) -> Result<T, ApiError> {
     serde_json::from_value(serde_json::Value::String(value)).map_err(ApiError::internal)
 }
 
@@ -30,7 +30,7 @@ fn u64_to_i64(value: u64, field: &str) -> Result<i64, ApiError> {
         .map_err(|_| ApiError::internal_message(format!("{field} exceeds PostgreSQL bigint range")))
 }
 
-fn i64_to_u64(value: i64, field: &str) -> Result<u64, ApiError> {
+pub(super) fn i64_to_u64(value: i64, field: &str) -> Result<u64, ApiError> {
     u64::try_from(value)
         .map_err(|_| ApiError::internal_message(format!("{field} cannot be negative")))
 }
@@ -41,7 +41,7 @@ fn u32_to_i32(value: u32, field: &str) -> Result<i32, ApiError> {
     })
 }
 
-fn i32_to_u32(value: i32, field: &str) -> Result<u32, ApiError> {
+pub(super) fn i32_to_u32(value: i32, field: &str) -> Result<u32, ApiError> {
     u32::try_from(value)
         .map_err(|_| ApiError::internal_message(format!("{field} cannot be negative")))
 }

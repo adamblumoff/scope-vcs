@@ -39,6 +39,7 @@ pub use request_discussions::{
 };
 mod request_merges;
 mod request_rows;
+pub use request_rows::RequestListRow;
 mod requests;
 mod schema;
 #[cfg(any(test, feature = "local-dev", feature = "test-support"))]

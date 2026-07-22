@@ -173,6 +173,7 @@ async fn public_readers_do_not_see_private_request_branches() {
     assert_eq!(public_response.status(), StatusCode::OK);
     let public_body = response_json(public_response).await;
     assert_eq!(public_body["requests"].as_array().unwrap().len(), 0);
+    assert!(public_body["next_cursor"].is_null());
 
     let owner_response = api_request(
         app,
@@ -192,6 +193,80 @@ async fn public_readers_do_not_see_private_request_branches() {
             .get("description_markdown")
             .is_none()
     );
+}
+
+#[tokio::test]
+async fn request_list_rejects_malformed_cursors() {
+    let state = test_state_with_repo();
+    cache_test_jwks(&state);
+    let response = api_request(
+        router(state),
+        "GET",
+        "/v1/repos/owner/repo/requests?cursor=not-versioned",
+        Some(&bearer_header()),
+        None,
+    )
+    .await;
+
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+}
+
+#[tokio::test]
+async fn request_list_pages_one_hundred_and_one_visible_rows_without_overlap() {
+    let state = test_state_with_repo();
+    cache_test_jwks(&state);
+    for index in 0..=100 {
+        create_owner_request(
+            &state,
+            &format!("req_page_{index:03}"),
+            "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        )
+        .await;
+    }
+    let app = router(state);
+
+    let anonymous = api_request(
+        app.clone(),
+        "GET",
+        "/v1/repos/owner/repo/requests?limit=1000",
+        None,
+        None,
+    )
+    .await;
+    assert_eq!(anonymous.status(), StatusCode::OK);
+    let anonymous = response_json(anonymous).await;
+    assert_eq!(anonymous["requests"].as_array().unwrap().len(), 0);
+    assert!(anonymous["next_cursor"].is_null());
+
+    let first = api_request(
+        app.clone(),
+        "GET",
+        "/v1/repos/owner/repo/requests?limit=1000",
+        Some(&bearer_header()),
+        None,
+    )
+    .await;
+    assert_eq!(first.status(), StatusCode::OK);
+    let first = response_json(first).await;
+    let first_requests = first["requests"].as_array().unwrap();
+    assert_eq!(first_requests.len(), 100);
+    assert_eq!(first_requests.first().unwrap()["id"], "req_page_000");
+    assert_eq!(first_requests.last().unwrap()["id"], "req_page_099");
+    let cursor = first["next_cursor"].as_str().unwrap();
+
+    let second = api_request(
+        app,
+        "GET",
+        &format!("/v1/repos/owner/repo/requests?limit=1000&cursor={cursor}"),
+        Some(&bearer_header()),
+        None,
+    )
+    .await;
+    assert_eq!(second.status(), StatusCode::OK);
+    let second = response_json(second).await;
+    assert_eq!(second["requests"].as_array().unwrap().len(), 1);
+    assert_eq!(second["requests"][0]["id"], "req_page_100");
+    assert!(second["next_cursor"].is_null());
 }
 
 #[tokio::test]
