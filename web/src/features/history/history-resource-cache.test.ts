@@ -5,6 +5,8 @@ import {
   historyCommitCacheKey,
   historyDiffCacheKey,
   historyResourceCacheStats,
+  peekHistoryCommitCache,
+  peekHistoryDiffCache,
   readHistoryCommitCache,
   readHistoryDiffCache,
   readHistoryDiffScroll,
@@ -93,6 +95,7 @@ test('keeps diff scroll state with its bounded cache entry', () => {
   resetHistoryResourceCache()
   writeHistoryDiffCache('readme', diff('/README.md'))
   writeHistoryDiffScroll('readme', 420)
+  writeHistoryDiffCache('readme', diff('/README.md', 'updated'))
   assert.equal(readHistoryDiffScroll('readme'), 420)
 
   for (let index = 0; index < 20; index += 1) {
@@ -111,4 +114,21 @@ test('evicts large text diffs at the byte budget', () => {
   const stats = historyResourceCacheStats()
   assert.ok(stats.diffs < 6)
   assert.ok(stats.diffBytes <= 32 * 1024 * 1024)
+})
+
+test('peek does not extend history resource lifetimes', () => {
+  resetHistoryResourceCache()
+  for (let index = 0; index < 48; index += 1) {
+    writeHistoryCommitCache(`commit-${index}`, commit(`commit-${index}`))
+  }
+  assert.equal(peekHistoryCommitCache('commit-0')?.projected_id, 'commit-0')
+  writeHistoryCommitCache('commit-48', commit('commit-48'))
+  assert.equal(readHistoryCommitCache('commit-0'), null)
+
+  for (let index = 0; index < 20; index += 1) {
+    writeHistoryDiffCache(`diff-${index}`, diff(`/${index}.txt`))
+  }
+  assert.equal(peekHistoryDiffCache('diff-0')?.path, '/0.txt')
+  writeHistoryDiffCache('diff-20', diff('/20.txt'))
+  assert.equal(readHistoryDiffCache('diff-0'), null)
 })

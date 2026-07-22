@@ -5,7 +5,6 @@ import {
   readRequestDiscussionCache,
   readRequestDiscussionScroll,
   requestDiscussionCacheKey,
-  requestDiscussionCacheStats,
   resetRequestDiscussionCache,
   writeRequestDiscussionCache,
   writeRequestDiscussionScroll,
@@ -41,7 +40,6 @@ test('bounds cached views and preserves scroll with the entry', () => {
     )
     writeRequestDiscussionScroll(key, index * 10)
   }
-  assert.equal(requestDiscussionCacheStats().entries, 8)
   assert.equal(readRequestDiscussionCache('request-0'), null)
   assert.equal(readRequestDiscussionScroll('request-9'), 90)
 })

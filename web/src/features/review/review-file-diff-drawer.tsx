@@ -19,6 +19,7 @@ import {
   reviewContentSides,
   type TextContentSide,
 } from './review-file-content'
+import { parsedDiffForReviewFile } from './review-file-diff-cache'
 
 const PIERRE_DIFF_OPTIONS = {
   diffStyle: 'unified',
@@ -29,18 +30,6 @@ const PIERRE_DIFF_OPTIONS = {
 } as const
 
 const PIERRE_WORKER_HIGHLIGHTER_OPTIONS = {} satisfies WorkerInitializationRenderOptions
-const MAX_PARSED_DIFF_ENTRIES = 12
-const MAX_PARSED_DIFF_BYTES = 16 * 1024 * 1024
-
-type ParsedDiffEntry = {
-  approximateBytes: number
-  lastAccessed: number
-  value: FileDiffMetadata
-}
-
-const parsedDiffEntries = new Map<string, ParsedDiffEntry>()
-let parsedDiffAccessClock = 0
-let parsedDiffBytes = 0
 
 export function ReviewFileDiffDrawer({
   cacheKey,
@@ -69,7 +58,10 @@ export function ReviewFileDiffDrawer({
 }) {
   const themeType = useThemeType()
   const fileDiff = useMemo(
-    () => (diff ? parsedDiffForReviewFile(diff, cacheKey) : null),
+    () =>
+      diff
+        ? parsedDiffForReviewFile(diff, cacheKey, diffMetadataForReviewFile)
+        : null,
     [cacheKey, diff],
   )
   const contentSides = useMemo(
@@ -227,59 +219,10 @@ function pierreWorkerPoolSize() {
   return Math.min(4, Math.max(1, navigator.hardwareConcurrency))
 }
 
-function parsedDiffForReviewFile(
-  diff: ReviewFileDiff,
-  cacheKey?: string | null,
-): FileDiffMetadata | null {
-  if (!cacheKey) return diffMetadataForReviewFile(diff)
-  const cached = parsedDiffEntries.get(cacheKey)
-  if (cached) {
-    cached.lastAccessed = nextParsedDiffAccess()
-    return cached.value
-  }
-
-  const value = diffMetadataForReviewFile(diff)
-  if (!value) return null
-  const entry = {
-    approximateBytes: JSON.stringify(diff).length * 2,
-    lastAccessed: nextParsedDiffAccess(),
-    value,
-  }
-  parsedDiffEntries.set(cacheKey, entry)
-  parsedDiffBytes += entry.approximateBytes
-  evictParsedDiffEntries(cacheKey)
-  return value
-}
-
-function evictParsedDiffEntries(protectedKey: string) {
-  while (
-    parsedDiffEntries.size > MAX_PARSED_DIFF_ENTRIES ||
-    parsedDiffBytes > MAX_PARSED_DIFF_BYTES
-  ) {
-    let oldest: [string, ParsedDiffEntry] | null = null
-    for (const entry of parsedDiffEntries) {
-      if (entry[0] === protectedKey && parsedDiffEntries.size > 1) continue
-      if (!oldest || entry[1].lastAccessed < oldest[1].lastAccessed) {
-        oldest = entry
-      }
-    }
-    if (!oldest) return
-    parsedDiffEntries.delete(oldest[0])
-    parsedDiffBytes -= oldest[1].approximateBytes
-  }
-}
-
-function nextParsedDiffAccess() {
-  parsedDiffAccessClock += 1
-  return parsedDiffAccessClock
-}
-
 function diffMetadataForReviewFile(diff: ReviewFileDiff): FileDiffMetadata | null {
   const oldText = textContents(diff.old_content)
   const newText = textContents(diff.new_content)
-  if (oldText === null || newText === null) {
-    return null
-  }
+  if (oldText === null || newText === null) return null
 
   return parseDiffFromFile(
     {
@@ -294,9 +237,7 @@ function diffMetadataForReviewFile(diff: ReviewFileDiff): FileDiffMetadata | nul
 }
 
 function textContents(content: ReviewFileContent | null) {
-  if (!content) {
-    return ''
-  }
+  if (!content) return ''
   return content.kind === 'text' ? content.text : null
 }
 

@@ -7,8 +7,13 @@ import {
 import type { RepoFileContent, RepoParams } from '@/api/types'
 import { RepoDetailPage } from '@/features/repo-detail/repo-detail-page'
 import { useRepoLayout } from '@/features/repo-detail/repo-layout-context'
-import { repoFileCacheKey } from '@/features/repo-detail/repo-file-cache'
-import { useRepoFileResource } from '@/features/repo-detail/use-repo-file-resource'
+import {
+  peekRepoFileCache,
+  readRepoFileCache,
+  repoFileCacheKey,
+  writeRepoFileCache,
+} from '@/features/repo-detail/repo-file-cache'
+import { useCachedResource } from '@/lib/use-cached-resource'
 import {
   defaultReadmePath,
   displayRouteFilePath,
@@ -82,9 +87,13 @@ function RepoIndexRoute() {
     }),
     [params.owner, params.repo, selectedPath],
   )
-  const selectedResource = useRepoFileResource({
+  const selectedResource = useCachedResource({
+    fallbackError: 'File content is unavailable.',
     identity,
     load: loadSelectedFile,
+    peek: peekRepoFileCache,
+    read: readRepoFileCache,
+    write: writeRepoFileCache,
   })
 
   return (
@@ -99,7 +108,7 @@ function RepoIndexRoute() {
         })
       }}
       params={params}
-      selectedFile={selectedResource.file}
+      selectedFile={selectedResource.value}
       selectedFileError={selectedResource.error}
       selectedFileIdentity={identity}
       selectedFileLoading={selectedResource.status === 'loading'}

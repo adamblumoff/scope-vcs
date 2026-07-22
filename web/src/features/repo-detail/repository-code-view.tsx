@@ -11,9 +11,10 @@ import {
 } from '@/components/workspace-tab-model'
 import { FileQuestion, LoaderCircle, TriangleAlert } from 'lucide-react'
 import { useLayoutEffect, useMemo, useRef } from 'react'
-
-const MAX_SOURCE_SCROLL_POSITIONS = 64
-const sourceScrollPositions = new Map<string, number>()
+import {
+  readRepositorySourceScroll,
+  writeRepositorySourceScroll,
+} from './repository-source-scroll-cache'
 
 const CODE_TAB_SET_ID = 'repository-code-files'
 
@@ -138,9 +139,7 @@ function SourcePane({
 
   useLayoutEffect(() => {
     if (contentRef.current) {
-      contentRef.current.scrollTop = scrollKey
-        ? (sourceScrollPositions.get(scrollKey) ?? 0)
-        : 0
+      contentRef.current.scrollTop = readRepositorySourceScroll(scrollKey)
     }
   }, [scrollKey])
 
@@ -160,11 +159,9 @@ function SourcePane({
         aria-labelledby={activeTabDomIds?.tabId}
         className="max-h-[calc(100dvh-300px)] overflow-auto outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring"
         id={workspaceTabPanelId(CODE_TAB_SET_ID)}
-        onScroll={(event) => {
-          if (scrollKey) {
-            saveSourceScrollPosition(scrollKey, event.currentTarget.scrollTop)
-          }
-        }}
+        onScroll={(event) =>
+          writeRepositorySourceScroll(scrollKey, event.currentTarget.scrollTop)
+        }
         ref={contentRef}
         role={tabs.length > 0 ? 'tabpanel' : undefined}
         tabIndex={tabs.length > 0 ? 0 : undefined}
@@ -302,17 +299,6 @@ function EmptySource({ description, title }: { description: string; title: strin
       </div>
     </div>
   )
-}
-
-function saveSourceScrollPosition(key: string, scrollTop: number) {
-  sourceScrollPositions.delete(key)
-  sourceScrollPositions.set(key, scrollTop)
-
-  while (sourceScrollPositions.size > MAX_SOURCE_SCROLL_POSITIONS) {
-    const oldestKey = sourceScrollPositions.keys().next().value
-    if (oldestKey === undefined) return
-    sourceScrollPositions.delete(oldestKey)
-  }
 }
 
 function fileStatus(file: RepoFile) {

@@ -1,3 +1,4 @@
+import { createBoundedCache } from '../../lib/bounded-cache'
 import type { DiscussionCollection } from './request-discussion-model'
 
 const MAX_ENTRIES = 8
@@ -5,12 +6,12 @@ const MAX_DISCUSSIONS = 500
 
 type CacheEntry = {
   collection: DiscussionCollection
-  lastAccessed: number
   scrollTop: number
 }
 
-const entries = new Map<string, CacheEntry>()
-let accessClock = 0
+const entries = createBoundedCache<string, CacheEntry>({
+  maxEntries: MAX_ENTRIES,
+})
 
 export function requestDiscussionCacheKey({
   repoId,
@@ -23,47 +24,31 @@ export function requestDiscussionCacheKey({
 }
 
 export function readRequestDiscussionCache(key: string) {
-  const entry = entries.get(key)
-  if (!entry) return null
-  entry.lastAccessed = nextAccess()
-  return entry.collection
+  return entries.get(key)?.collection ?? null
 }
 
 export function writeRequestDiscussionCache(
   key: string,
   collection: DiscussionCollection,
 ) {
-  const limited = limitCollection(collection)
+  const scrollTop = entries.peek(key)?.scrollTop ?? 0
   entries.set(key, {
-    collection: limited,
-    lastAccessed: nextAccess(),
-    scrollTop: entries.get(key)?.scrollTop ?? 0,
+    collection: limitCollection(collection),
+    scrollTop,
   })
-  evictOldEntries(key)
 }
 
 export function readRequestDiscussionScroll(key: string) {
-  return entries.get(key)?.scrollTop ?? 0
+  return entries.peek(key)?.scrollTop ?? 0
 }
 
 export function writeRequestDiscussionScroll(key: string, scrollTop: number) {
-  const entry = entries.get(key)
+  const entry = entries.peek(key)
   if (entry) entry.scrollTop = scrollTop
 }
 
 export function resetRequestDiscussionCache() {
   entries.clear()
-  accessClock = 0
-}
-
-export function requestDiscussionCacheStats() {
-  return {
-    discussions: [...entries.values()].reduce(
-      (total, entry) => total + entry.collection.order.length,
-      0,
-    ),
-    entries: entries.size,
-  }
 }
 
 function limitCollection(collection: DiscussionCollection): DiscussionCollection {
@@ -77,23 +62,4 @@ function limitCollection(collection: DiscussionCollection): DiscussionCollection
     ),
     order,
   }
-}
-
-function evictOldEntries(protectedKey: string) {
-  while (entries.size > MAX_ENTRIES) {
-    let oldest: [string, CacheEntry] | null = null
-    for (const entry of entries) {
-      if (entry[0] === protectedKey) continue
-      if (!oldest || entry[1].lastAccessed < oldest[1].lastAccessed) {
-        oldest = entry
-      }
-    }
-    if (!oldest) return
-    entries.delete(oldest[0])
-  }
-}
-
-function nextAccess() {
-  accessClock += 1
-  return accessClock
 }
