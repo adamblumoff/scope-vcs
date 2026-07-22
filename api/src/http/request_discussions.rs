@@ -77,8 +77,6 @@ pub(crate) async fn list_discussions(
         .request_discussions_page(scope_core::db::RequestDiscussionsPageQuery {
             request_id: &request.id,
             viewer_user_id: viewer_user_id.as_deref(),
-            status: None,
-            recent: false,
             snapshot_version,
             cursor: cursor
                 .as_ref()
@@ -94,7 +92,7 @@ pub(crate) async fn list_discussions(
             discussions.last().map(|model| {
                 encode_discussion_cursor(
                     snapshot_version,
-                    model.sort_position,
+                    model.discussion.opened_position,
                     &model.discussion.id,
                 )
             })

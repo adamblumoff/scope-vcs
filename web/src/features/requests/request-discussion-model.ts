@@ -1,7 +1,6 @@
 import type {
   RequestDiscussion,
   RequestDiscussionPage,
-  RequestDiscussionReplyView,
   RequestDiscussionView,
 } from './request-discussion-types'
 
@@ -240,47 +239,6 @@ export function compactDiscussionSummary(body: string | null) {
     .split('\n')
     .map((line) => line.trim().replace(/^#{1,6}\s+/, ''))
     .find(Boolean) ?? 'Untitled discussion'
-}
-
-export function upsertDiscussionReply(
-  current: RequestDiscussionReplyView[],
-  latest: RequestDiscussionReplyView[],
-  reply: RequestDiscussionReplyView,
-) {
-  const byId = new Map(
-    mergeDiscussionReplies(current, latest).map((existing) => [
-      existing.id,
-      existing,
-    ]),
-  )
-  byId.set(reply.id, reply)
-  return [...byId.values()].sort(
-    (left, right) => left.position - right.position,
-  )
-}
-
-export function mergeDiscussionReplies(
-  current: RequestDiscussionReplyView[],
-  latest: RequestDiscussionReplyView[],
-) {
-  const byId = new Map(
-    current.map((existing) => [existing.id, existing]),
-  )
-  for (const existing of latest) {
-    byId.set(existing.id, existing)
-  }
-  return [...byId.values()].sort(
-    (left, right) => left.position - right.position,
-  )
-}
-
-export function directDiscussionReplies(
-  replies: RequestDiscussionReplyView[],
-  parentReplyId: string | null,
-) {
-  return replies.filter(
-    (reply) => reply.reply_to_reply_id === parentReplyId,
-  )
 }
 
 function unique(values: string[]) {

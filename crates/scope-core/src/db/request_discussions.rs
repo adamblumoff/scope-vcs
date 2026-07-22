@@ -18,10 +18,10 @@ use crate::{
         CreateRequestDiscussionReplyInput, CreateRequestDiscussionReplyMutation,
         MarkRequestDiscussionReadInput, ReopenAndReplyToRequestDiscussionInput,
         ReopenRequestDiscussionInput, RequestChangeBlock, RequestDiscussion,
-        RequestDiscussionReadState, RequestDiscussionStatus, RequestDiscussionSubject,
-        ResolveRequestDiscussionInput, create_request_discussion, create_request_discussion_reply,
-        mark_request_discussion_read, reopen_and_reply_to_request_discussion,
-        reopen_request_discussion, resolve_request_discussion,
+        RequestDiscussionReadState, RequestDiscussionSubject, ResolveRequestDiscussionInput,
+        create_request_discussion, create_request_discussion_reply, mark_request_discussion_read,
+        reopen_and_reply_to_request_discussion, reopen_request_discussion,
+        resolve_request_discussion,
     },
     domain::store::UserAccount,
     error::ApiError,
@@ -36,7 +36,6 @@ pub struct RequestDiscussionReadModel {
     pub reply_count: u64,
     pub latest_replies: Vec<RequestDiscussionReplyReadModel>,
     pub unread_count: u64,
-    pub sort_position: u64,
 }
 
 #[derive(Clone, Debug)]
@@ -49,8 +48,6 @@ pub struct RequestDiscussionReadBatch {
 pub struct RequestDiscussionsPageQuery<'a> {
     pub request_id: &'a str,
     pub viewer_user_id: Option<&'a str>,
-    pub status: Option<RequestDiscussionStatus>,
-    pub recent: bool,
     pub snapshot_version: u64,
     pub cursor: Option<(u64, String)>,
     pub limit: u64,
@@ -61,34 +58,16 @@ impl MetadataStore {
         &self,
         query: RequestDiscussionsPageQuery<'_>,
     ) -> Result<RequestDiscussionReadBatch, ApiError> {
-        let page_rows = discussions_page_for_request(
+        let discussions = discussions_page_for_request(
             self.db.as_ref(),
             query.request_id,
-            query.status,
-            query.recent,
             query.snapshot_version,
             query.cursor,
             query.limit,
         )
         .await?;
-        let sort_positions = page_rows
-            .iter()
-            .map(|(discussion, position)| (discussion.id.clone(), *position))
-            .collect::<BTreeMap<_, _>>();
-        let discussions = page_rows
-            .into_iter()
-            .map(|(discussion, _)| discussion)
-            .collect();
-        let mut batch = self
-            .hydrate_discussions(discussions, query.viewer_user_id)
-            .await?;
-        for model in &mut batch.discussions {
-            model.sort_position = sort_positions
-                .get(&model.discussion.id)
-                .copied()
-                .ok_or_else(|| ApiError::internal_message("discussion sort position missing"))?;
-        }
-        Ok(batch)
+        self.hydrate_discussions(discussions, query.viewer_user_id)
+            .await
     }
 
     pub async fn request_discussion(
@@ -180,7 +159,6 @@ impl MetadataStore {
                         })?)
                     }
                 },
-                sort_position: discussion.last_activity_position,
                 discussion,
                 reply_count,
                 latest_replies,
