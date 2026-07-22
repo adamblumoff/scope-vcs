@@ -260,6 +260,64 @@ async fn threaded_discussion_http_workflow_preserves_activity_and_read_contracts
 }
 
 #[tokio::test]
+async fn request_activity_clamps_latest_and_after_pages_to_fifty_events() {
+    let state = test_state_with_repo();
+    cache_test_jwks(&state);
+    let request_id = "req_bounded_activity";
+    super::requests::create_owner_request(
+        &state,
+        request_id,
+        "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    )
+    .await;
+    let body = "x".repeat(crate::domain::requests::REQUEST_TIMELINE_BODY_MAX_BYTES);
+    for index in 0..26 {
+        state
+            .metadata
+            .mark_request_needs_response(crate::domain::requests::MarkRequestNeedsResponseInput {
+                request_id: request_id.to_string(),
+                actor_user_id: test_owner_id(),
+                event_id: format!("event_needs_{index}"),
+                body: body.clone(),
+                now_unix: 10 + index * 2,
+            })
+            .await
+            .unwrap();
+        state
+            .metadata
+            .respond_to_request(crate::domain::requests::RespondToRequestInput {
+                request_id: request_id.to_string(),
+                actor_user_id: test_owner_id(),
+                event_id: format!("event_response_{index}"),
+                body: Some(body.clone()),
+                now_unix: 11 + index * 2,
+            })
+            .await
+            .unwrap();
+    }
+    let app = router(state);
+    let base = format!("/v1/repos/owner/repo/requests/{request_id}");
+
+    for query in ["after=0&limit=1000", "latest=true&limit=1000"] {
+        let response = api_request(
+            app.clone(),
+            "GET",
+            &format!("{base}/activity?{query}"),
+            Some(&bearer_header()),
+            None,
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::OK);
+        let bytes = to_bytes(response.into_body(), 2 * 1024 * 1024)
+            .await
+            .unwrap();
+        assert!(bytes.len() < 900 * 1024, "{} bytes", bytes.len());
+        let response: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+        assert_eq!(response["events"].as_array().unwrap().len(), 50);
+    }
+}
+
+#[tokio::test]
 async fn timeline_cursor_is_stable_during_concurrent_thread_changes() {
     let state = test_state_with_readme().await;
     cache_test_jwks(&state);

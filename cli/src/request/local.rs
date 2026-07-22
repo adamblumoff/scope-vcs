@@ -162,18 +162,28 @@ pub(super) fn maybe_request_id_for_context(
         return Ok(Some(request_id));
     }
     let request_name = explicit.as_deref().unwrap_or(&branch);
-    let requests = list_requests(
-        client,
-        api_url,
-        session_token,
-        &context.target.owner,
-        &context.target.repo,
-    )?;
-    Ok(requests
-        .requests
-        .into_iter()
-        .find(|request| request.name == request_name)
-        .map(|request| request.id))
+    let mut cursor = None;
+    loop {
+        let page = list_requests(
+            client,
+            api_url,
+            session_token,
+            &context.target.owner,
+            &context.target.repo,
+            cursor.as_deref(),
+        )?;
+        if let Some(request) = page
+            .requests
+            .into_iter()
+            .find(|request| request.name == request_name)
+        {
+            return Ok(Some(request.id));
+        }
+        let Some(next_cursor) = page.next_cursor else {
+            return Ok(None);
+        };
+        cursor = Some(next_cursor);
+    }
 }
 
 pub(super) fn maybe_request_branch_audience(

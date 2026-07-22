@@ -15,6 +15,7 @@ import type {
   RespondRequestInput,
 } from './types'
 import { ApiRouteTemplates, buildApiPath } from './types.generated'
+import { parseRepoParams } from './repo-params'
 
 export {
   parseMergeRequestInput,
@@ -25,11 +26,26 @@ export {
 } from './request-inputs'
 
 export async function loadRequestsForRequest(
-  data: RepoParams,
+  data: LoadRequestsInput,
 ): Promise<RequestList> {
   return createApiClient().get<RequestList>(requestCollectionPath(data), {
     auth: 'optional',
   })
+}
+
+export type LoadRequestsInput = RepoParams & {
+  cursor?: string | null
+}
+
+export function parseLoadRequestsInput(input: unknown): LoadRequestsInput {
+  const data = input as Partial<LoadRequestsInput> | null
+  const params = parseRepoParams(data)
+  const cursor = typeof data?.cursor === 'string' ? data.cursor.trim() : ''
+
+  return {
+    ...params,
+    cursor: cursor || null,
+  }
 }
 
 export async function loadRequestForRequest(
@@ -122,11 +138,17 @@ export async function deleteRequestForRequest(
   })
 }
 
-function requestCollectionPath(data: RepoParams) {
-  return buildApiPath(ApiRouteTemplates.repoRequests, {
+function requestCollectionPath(data: LoadRequestsInput) {
+  const path = buildApiPath(ApiRouteTemplates.repoRequests, {
     owner: data.owner,
     repo: data.repo,
   })
+  const search = new URLSearchParams()
+  if (data.cursor) {
+    search.set('cursor', data.cursor)
+  }
+  const query = search.toString()
+  return query ? `${path}?${query}` : path
 }
 
 function requestPath(data: RequestParams) {

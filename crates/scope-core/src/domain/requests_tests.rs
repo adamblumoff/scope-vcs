@@ -3,6 +3,8 @@ use crate::domain::store::{DEFAULT_GIT_FILE_MODE, RepositoryAccess, RepositoryAc
 use crate::error::ApiError;
 use std::collections::BTreeMap;
 
+mod limits;
+
 #[test]
 fn request_policy_keeps_public_visibility_and_maintainer_decisions_in_domain() {
     let mut request = submitted_request();
@@ -770,13 +772,17 @@ fn description_edits_are_authorized_bounded_and_typed() {
         },
     )
     .unwrap();
-    assert!(matches!(
-        mutation.event.payload,
-        RequestEventPayload::DescriptionEdited {
-            ref new_markdown,
-            ..
-        } if new_markdown == "## Intent\nFix parsing."
-    ));
+    let RequestEventPayload::DescriptionEdited { before, after } = &mutation.event.payload else {
+        panic!("expected compact description audit payload");
+    };
+    assert_eq!(before.byte_count, 0);
+    assert_eq!(after.byte_count, 22);
+    assert_eq!(before.sha256.len(), 64);
+    assert_eq!(after.sha256.len(), 64);
+    let serialized = serde_json::to_string(&mutation.event.payload).unwrap();
+    assert!(!serialized.contains("Fix parsing"));
+    assert!(!serialized.contains("previous_markdown"));
+    assert!(!serialized.contains("new_markdown"));
 
     let oversized = update_request_description(
         &mut requests,

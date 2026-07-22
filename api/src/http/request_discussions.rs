@@ -2,8 +2,8 @@ use crate::{
     auth::scope::require_scope_user,
     domain::requests::{
         CreateRequestDiscussionInput, CreateRequestDiscussionReplyInput,
-        MarkRequestDiscussionReadInput, ReopenAndReplyToRequestDiscussionInput,
-        request_permissions,
+        MarkRequestDiscussionReadInput, REQUEST_ACTIVITY_PAGE_MAX_EVENTS,
+        ReopenAndReplyToRequestDiscussionInput, request_permissions,
     },
     error::ApiError,
     http::{requests::*, responses::*},
@@ -369,8 +369,8 @@ pub(crate) async fn activity(
     let latest = query.latest.unwrap_or(false);
     let limit = query
         .limit
-        .unwrap_or(if latest { 1_000 } else { 100 })
-        .clamp(1, if latest { 1_000 } else { 100 });
+        .unwrap_or(REQUEST_ACTIVITY_PAGE_MAX_EVENTS)
+        .clamp(1, REQUEST_ACTIVITY_PAGE_MAX_EVENTS);
     let events = if latest {
         state
             .metadata

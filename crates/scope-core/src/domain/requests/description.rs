@@ -1,9 +1,10 @@
 use super::{
-    REQUEST_DESCRIPTION_MAX_BYTES, Request, RequestEvent, RequestEventKind, RequestEventPayload,
-    RequestTimelineMutation, advance_request_activity, ensure_event_id_available, open_request_mut,
-    validate_body_size, validate_required_id,
+    REQUEST_DESCRIPTION_MAX_BYTES, Request, RequestDescriptionAuditFact, RequestEvent,
+    RequestEventKind, RequestEventPayload, RequestTimelineMutation, advance_request_activity,
+    ensure_event_id_available, open_request_mut, validate_body_size, validate_required_id,
 };
 use crate::error::ApiError;
+use sha2::{Digest, Sha256};
 use std::collections::BTreeMap;
 
 #[derive(Clone, Debug)]
@@ -39,10 +40,9 @@ pub fn update_request_description(
         &input.description_markdown,
         REQUEST_DESCRIPTION_MAX_BYTES,
     )?;
-    let previous_markdown = std::mem::replace(
-        &mut request.description_markdown,
-        input.description_markdown.clone(),
-    );
+    let before = description_audit_fact(&request.description_markdown)?;
+    let after = description_audit_fact(&input.description_markdown)?;
+    request.description_markdown = input.description_markdown;
     request.updated_at_unix = input.now_unix;
     let position = advance_request_activity(request)?;
     let request = request.clone();
@@ -52,12 +52,16 @@ pub fn update_request_description(
         actor_user_id: input.actor_user_id,
         kind: RequestEventKind::DescriptionEdited,
         position,
-        payload: RequestEventPayload::DescriptionEdited {
-            previous_markdown,
-            new_markdown: input.description_markdown,
-        },
+        payload: RequestEventPayload::DescriptionEdited { before, after },
         created_at_unix: input.now_unix,
     };
     events.insert(event.id.clone(), event.clone());
     Ok(RequestTimelineMutation { request, event })
+}
+
+fn description_audit_fact(value: &str) -> Result<RequestDescriptionAuditFact, ApiError> {
+    Ok(RequestDescriptionAuditFact {
+        sha256: hex::encode(Sha256::digest(value.as_bytes())),
+        byte_count: u64::try_from(value.len()).map_err(ApiError::internal)?,
+    })
 }

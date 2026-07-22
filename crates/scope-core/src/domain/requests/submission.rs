@@ -1,10 +1,10 @@
 use super::settlement::{maximum_request_reward, u32_to_i32};
 use super::{
-    CreditLedgerEntry, CreditLedgerEntryKind, Request, RequestActorRole, RequestAudience,
-    RequestChangeBlock, RequestDiscussion, RequestDiscussionReadState, RequestEvent,
-    RequestEventKind, RequestEventPayload, RequestState, UserCreditAccount,
+    CreditLedgerEntry, CreditLedgerEntryKind, REQUEST_TITLE_MAX_BYTES, Request, RequestActorRole,
+    RequestAudience, RequestChangeBlock, RequestDiscussion, RequestDiscussionReadState,
+    RequestEvent, RequestEventKind, RequestEventPayload, RequestState, UserCreditAccount,
     advance_request_activity, ensure_event_id_available, ensure_ledger_entry_id_available,
-    ensure_request_name_available, validate_required_id,
+    ensure_request_name_available, validate_body_size, validate_required_id,
 };
 use crate::{domain::store::SourceBlob, error::ApiError};
 use std::collections::BTreeMap;
@@ -274,6 +274,7 @@ fn validate_start_request_input(input: &StartRequestInput) -> Result<(), ApiErro
     validate_request_name(&input.name)?;
     if let Some(title) = &input.title {
         validate_required_id("title", title)?;
+        validate_body_size("request title", title, REQUEST_TITLE_MAX_BYTES)?;
     }
     validate_required_id("base main oid", &input.base_main_oid)?;
     validate_required_id("event id", &input.event_id)?;

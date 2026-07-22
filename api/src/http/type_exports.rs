@@ -5,8 +5,8 @@ use crate::domain::{
         RepoConfigHistory, RepoConfigVisibility, RepoConfigVisibilityRule,
     },
     requests::{
-        RequestActorRole, RequestAudience, RequestDisposition, RequestEventKind, RequestState,
-        ResolutionDisposition,
+        RequestActorRole, RequestAudience, RequestDescriptionAuditFact, RequestDisposition,
+        RequestEventKind, RequestState, ResolutionDisposition,
     },
     store::{
         FileChangeKind, FirstPushTokenStatus, RepoPublicationState, RepositoryActor,
@@ -117,6 +117,7 @@ pub(crate) fn export_api_types(output_path: &Path) {
         declaration::<RequestResolutionOptionResponse>(&ts_config),
         declaration::<RequestEventResponse>(&ts_config),
         declaration::<RequestEventPayload>(&ts_config),
+        declaration::<RequestDescriptionAuditFact>(&ts_config),
         declaration::<RequestSettlement>(&ts_config),
         declaration::<RequestActorSummaryResponse>(&ts_config),
         declaration::<RequestDiscussionStatus>(&ts_config),

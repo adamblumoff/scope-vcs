@@ -422,20 +422,31 @@ fn show_request_status(
         return Ok(());
     }
 
-    let response = list_requests(
-        client,
-        api_url,
-        session_token,
-        &context.target.owner,
-        &context.target.repo,
-    )?;
-    if response.requests.is_empty() {
-        println!("No visible requests.");
-        return Ok(());
+    let mut cursor = None;
+    let mut printed_heading = false;
+    loop {
+        let response = list_requests(
+            client,
+            api_url,
+            session_token,
+            &context.target.owner,
+            &context.target.repo,
+            cursor.as_deref(),
+        )?;
+        if !printed_heading && !response.requests.is_empty() {
+            println!("Visible requests:");
+            printed_heading = true;
+        }
+        for request in response.requests {
+            println!("  {}", request_list_line(&request));
+        }
+        let Some(next_cursor) = response.next_cursor else {
+            break;
+        };
+        cursor = Some(next_cursor);
     }
-    println!("Visible requests:");
-    for request in response.requests {
-        println!("  {}", request_list_line(&request));
+    if !printed_heading {
+        println!("No visible requests.");
     }
     Ok(())
 }

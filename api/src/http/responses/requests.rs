@@ -1,8 +1,10 @@
 use crate::domain::requests::{
     Request, RequestDisposition, RequestEvent, RequestSettlement, allowed_resolution_dispositions,
-    settlement_for,
+    request_list_mergeability, settlement_for,
 };
+use crate::domain::store::RepositoryAccess;
 use scope_api_contract::*;
+use scope_core::db::RequestListRow;
 
 fn settlement_preview(
     stake_credits: u32,
@@ -58,22 +60,31 @@ pub(crate) fn request_summary_response(
 }
 
 pub(crate) fn request_list_item_response(
-    request: RequestSummaryResponse,
-) -> RequestListItemResponse {
-    RequestListItemResponse {
+    request: RequestListRow,
+    access: RepositoryAccess,
+    current_main_oid: Option<String>,
+) -> Result<RequestListItemResponse, crate::error::ApiError> {
+    let decision = request_list_mergeability(request.state, request.has_git_snapshot, access);
+    let request_head_oid = super::git_oid_response(request.head_oid)?;
+    Ok(RequestListItemResponse {
         id: request.id,
         name: request.name,
         title: request.title,
         author_role: request.author_role,
         audience: request.audience,
-        head_oid: request.head_oid,
+        head_oid: request_head_oid.clone(),
         state: request.state,
         stake_credits: request.stake_credits,
         disposition: request.disposition,
-        settlement: request.settlement,
+        settlement: request.settlement.map(request_settlement_response),
         updated_at_unix: request.updated_at_unix,
-        mergeability: request.mergeability,
-    }
+        mergeability: RequestMergeabilityResponse {
+            status: decision.status,
+            current_main_oid: current_main_oid.map(super::git_oid_response).transpose()?,
+            request_head_oid,
+            reason: decision.reason.map(str::to_string),
+        },
+    })
 }
 
 pub(crate) fn request_event_response(

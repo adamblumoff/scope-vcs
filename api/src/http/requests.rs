@@ -5,10 +5,11 @@ use crate::{
         projection::{ProjectionViewKey, project_graph},
         requests::{
             DeleteRequestInput, DeleteRequestMutation, MarkRequestNeedsResponseInput,
-            MergeRequestInput, Request, RequestActorRole, RequestAudience, RequestDisposition,
-            RequestState, ResolveRequestInput, RespondToRequestInput, StartRequestInput,
-            SubmitRequestInput, UpdateRequestDescriptionInput, canonical_request_ref,
-            request_actor_role, request_mergeability, request_permissions,
+            MergeRequestInput, REQUEST_LIST_DEFAULT_PAGE_SIZE, REQUEST_LIST_MAX_PAGE_SIZE, Request,
+            RequestActorRole, RequestAudience, RequestDisposition, RequestState,
+            ResolveRequestInput, RespondToRequestInput, StartRequestInput, SubmitRequestInput,
+            UpdateRequestDescriptionInput, canonical_request_ref, request_actor_role,
+            request_mergeability, request_permissions, request_visible_audiences,
             request_visible_to_access, settlement_for,
         },
         store::{RepositoryAccess, RepositoryActor, StoredRepository},
@@ -26,38 +27,75 @@ use crate::{
 };
 use axum::{
     Json,
-    extract::{Path, State},
+    extract::{Path, Query, State},
     http::HeaderMap,
 };
+use serde::Deserialize;
 
 const REQUEST_SUMMARY_REFRESH_VERSION: u64 = 0;
+
+#[derive(Debug, Deserialize)]
+pub(crate) struct RequestListQuery {
+    cursor: Option<String>,
+    limit: Option<usize>,
+}
 
 pub(crate) async fn list_requests(
     State(state): State<AppState>,
     headers: HeaderMap,
     Path((owner, repo_name)): Path<(String, String)>,
+    Query(query): Query<RequestListQuery>,
 ) -> Result<Json<RequestListResponse>, ApiError> {
-    let (repo, access, viewer_user_id) =
-        repo_and_access(&state, &headers, &owner, &repo_name).await?;
+    let (repo, access, _) = repo_and_access(&state, &headers, &owner, &repo_name).await?;
+    let after_id = query
+        .cursor
+        .as_deref()
+        .map(parse_request_list_cursor)
+        .transpose()?;
+    let limit = query
+        .limit
+        .unwrap_or(REQUEST_LIST_DEFAULT_PAGE_SIZE)
+        .clamp(1, REQUEST_LIST_MAX_PAGE_SIZE);
     let current_main_oid = current_main_oid_for_access(&state, &repo, access)?;
-    let requests = state
+    let mut requests = state
         .metadata
-        .requests_by_repo_id(&repo.record.id)
-        .await?
+        .request_list_page(
+            &repo.record.id,
+            request_visible_audiences(access),
+            after_id.as_deref(),
+            (limit + 1) as u64,
+        )
+        .await?;
+    let has_more = requests.len() > limit;
+    requests.truncate(limit);
+    let next_cursor = if has_more {
+        requests
+            .last()
+            .map(|request| encode_request_list_cursor(&request.id))
+    } else {
+        None
+    };
+    let requests = requests
         .into_iter()
-        .filter(|request| request_visible_to_access(request, access))
-        .map(|request| {
-            request_response(
-                request,
-                access,
-                current_main_oid.clone(),
-                viewer_user_id.as_deref(),
-            )
-            .map(request_list_item_response)
-        })
+        .map(|request| request_list_item_response(request, access, current_main_oid.clone()))
         .collect::<Result<Vec<_>, ApiError>>()?;
 
-    Ok(Json(RequestListResponse { requests }))
+    Ok(Json(RequestListResponse {
+        requests,
+        next_cursor,
+    }))
+}
+
+fn parse_request_list_cursor(value: &str) -> Result<String, ApiError> {
+    value
+        .strip_prefix("v1:")
+        .filter(|id| !id.is_empty() && !id.contains(':'))
+        .map(str::to_string)
+        .ok_or_else(|| ApiError::bad_request("invalid request list cursor"))
+}
+
+fn encode_request_list_cursor(last_id: &str) -> String {
+    format!("v1:{last_id}")
 }
 
 pub(crate) async fn get_request(
