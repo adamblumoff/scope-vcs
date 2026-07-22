@@ -73,6 +73,7 @@ async fn threaded_discussion_http_workflow_preserves_activity_and_read_contracts
     assert_eq!(created.status(), StatusCode::OK);
     let created = response_json(created).await;
     let discussion_id = created["discussion"]["id"].as_str().unwrap().to_string();
+    assert_eq!(created["discussion"]["client_discussion_id"], "root-1");
     assert_eq!(created["discussion"]["unread_count"], 0);
     let targeted = tokio::time::timeout(std::time::Duration::from_secs(5), event_stream.next())
         .await
@@ -173,6 +174,10 @@ async fn threaded_discussion_http_workflow_preserves_activity_and_read_contracts
     let discussions = response_json(discussions).await;
     assert_eq!(discussions["discussions"].as_array().unwrap().len(), 1);
     assert_eq!(
+        discussions["discussions"][0]["client_discussion_id"],
+        "root-1"
+    );
+    assert_eq!(
         discussions["discussions"][0]["latest_replies"]
             .as_array()
             .unwrap()
@@ -206,13 +211,10 @@ async fn threaded_discussion_http_workflow_preserves_activity_and_read_contracts
     )
     .await;
     assert_eq!(changes.status(), StatusCode::OK);
-    assert_eq!(
-        response_json(changes).await["discussions"]
-            .as_array()
-            .unwrap()
-            .len(),
-        1
-    );
+    let changes = response_json(changes).await;
+    assert_eq!(changes["discussions"].as_array().unwrap().len(), 1);
+    assert_eq!(changes["discussions"][0]["client_discussion_id"], "root-1");
+    assert_eq!(changes["has_more"], false);
 
     let activity = api_request(
         app.clone(),
@@ -431,4 +433,75 @@ async fn api_request(
         None => Body::empty(),
     };
     app.oneshot(request.body(body).unwrap()).await.unwrap()
+}
+
+#[tokio::test]
+async fn discussion_changes_report_complete_pages_without_skipping_the_extra_row() {
+    let state = test_state_with_readme().await;
+    cache_test_jwks(&state);
+    let app = router(state);
+    let bearer = bearer_header();
+    let started = api_request(
+        app.clone(),
+        "POST",
+        "/v1/repos/owner/repo/requests",
+        Some(&bearer),
+        Some(r#"{"name":"complete-discussion-changes","audience":"Public"}"#),
+    )
+    .await;
+    assert_eq!(started.status(), StatusCode::OK);
+    let started = response_json(started).await;
+    let request_id = started["request"]["id"].as_str().unwrap();
+    let base = format!("/v1/repos/owner/repo/requests/{request_id}");
+
+    let mut positions = Vec::new();
+    for index in 1..=3 {
+        let created = api_request(
+            app.clone(),
+            "POST",
+            &format!("{base}/timeline"),
+            Some(&bearer),
+            Some(&format!(
+                r#"{{"body_markdown":"Root {index}","client_discussion_id":"root-{index}"}}"#
+            )),
+        )
+        .await;
+        assert_eq!(created.status(), StatusCode::OK);
+        positions.push(
+            response_json(created).await["discussion"]["last_activity_position"]
+                .as_u64()
+                .unwrap(),
+        );
+    }
+
+    let first_page = api_request(
+        app.clone(),
+        "GET",
+        &format!("{base}/timeline/changes?after=0&limit=2"),
+        Some(&bearer),
+        None,
+    )
+    .await;
+    assert_eq!(first_page.status(), StatusCode::OK);
+    let first_page = response_json(first_page).await;
+    assert_eq!(first_page["discussions"].as_array().unwrap().len(), 2);
+    assert_eq!(first_page["through_position"], positions[1]);
+    assert_eq!(first_page["has_more"], true);
+
+    let second_page = api_request(
+        app,
+        "GET",
+        &format!(
+            "{base}/timeline/changes?after={}&limit=2",
+            first_page["through_position"].as_u64().unwrap()
+        ),
+        Some(&bearer),
+        None,
+    )
+    .await;
+    assert_eq!(second_page.status(), StatusCode::OK);
+    let second_page = response_json(second_page).await;
+    assert_eq!(second_page["discussions"].as_array().unwrap().len(), 1);
+    assert_eq!(second_page["through_position"], positions[2]);
+    assert_eq!(second_page["has_more"], false);
 }
