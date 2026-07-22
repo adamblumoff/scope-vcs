@@ -26,6 +26,8 @@ import { ToggleGroup, ToggleGroupItem } from '@/components/ui/toggle-group'
 import {
   historyCommitCacheKey,
   historyDiffCacheKey,
+  peekHistoryCommitCache,
+  peekHistoryDiffCache,
   readHistoryCommitCache,
   readHistoryDiffCache,
   readHistoryDiffScroll,
@@ -38,9 +40,9 @@ import {
   historyRowLabels,
 } from '@/features/history/history-row-labels'
 import {
-  useHistoryResource,
-  type HistoryResource,
-} from '@/features/history/use-history-resource'
+  useCachedResource,
+  type CachedResource,
+} from '@/lib/use-cached-resource'
 import { cn } from '@/lib/utils'
 import {
   loadCommitDetail,
@@ -233,9 +235,11 @@ function useHistoryPageModel({ histories, params, search }: HistoryPageProps) {
     },
     [audience, params, repoId, requestRevision, selectedCommitId],
   )
-  const commitResource = useHistoryResource({
+  const commitResource = useCachedResource({
+    fallbackError: 'Resource is unavailable.',
     identity: commitIdentity,
     load: loadSelectedCommit,
+    peek: peekHistoryCommitCache,
     read: readHistoryCommitCache,
     write: writeHistoryCommitCache,
   })
@@ -284,9 +288,11 @@ function useHistoryPageModel({ histories, params, search }: HistoryPageProps) {
         }),
     [audience, params, requestRevision, selectedCommitId, selectedFilePath],
   )
-  const diffResource = useHistoryResource({
+  const diffResource = useCachedResource({
+    fallbackError: 'Resource is unavailable.',
     identity: diffIdentity,
     load: loadSelectedDiff,
+    peek: peekHistoryDiffCache,
     read: readHistoryDiffCache,
     write: writeHistoryDiffCache,
   })
@@ -676,7 +682,7 @@ type CommitFileDiffState =
   | { diff: null; error: string; status: 'failed' }
 
 function resourceToCommitState(
-  resource: HistoryResource<CommitDetail>,
+  resource: CachedResource<CommitDetail>,
 ): CommitDetailState {
   switch (resource.status) {
     case 'idle':
@@ -691,7 +697,7 @@ function resourceToCommitState(
 }
 
 function resourceToDiffState(
-  resource: HistoryResource<ReviewFileDiff>,
+  resource: CachedResource<ReviewFileDiff>,
 ): CommitFileDiffState {
   switch (resource.status) {
     case 'idle':
