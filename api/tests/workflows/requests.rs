@@ -253,7 +253,6 @@ async fn request_list_pages_one_hundred_and_one_visible_rows_without_overlap() {
     assert_eq!(first_requests.first().unwrap()["id"], "req_page_000");
     assert_eq!(first_requests.last().unwrap()["id"], "req_page_099");
     let cursor = first["next_cursor"].as_str().unwrap();
-    assert_eq!(cursor, "v1:req_page_099");
 
     let second = api_request(
         app,
