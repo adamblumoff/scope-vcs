@@ -34,6 +34,10 @@ import {
   writeHistoryDiffScroll,
 } from '@/features/history/history-resource-cache'
 import {
+  historyCommitTitle,
+  historyRowLabels,
+} from '@/features/history/history-row-labels'
+import {
   useHistoryResource,
   type HistoryResource,
 } from '@/features/history/use-history-resource'
@@ -397,9 +401,11 @@ function CommitList({
       </div>
       <div className="divide-y divide-border">
         {commits.map((commit) => {
+          const labels = historyRowLabels(commit)
           const selected = selectedCommitId === commit.projected_id
           return (
             <button
+              aria-label={labels.ariaLabel}
               className={cn(
                 'grid w-full grid-cols-[minmax(0,1fr)_80px] gap-x-3 px-2 py-3 text-left text-sm transition-colors hover:bg-muted/70',
                 selected &&
@@ -407,12 +413,18 @@ function CommitList({
               )}
               key={commit.projected_id}
               onClick={() => onSelectCommit(commit)}
+              title={commit.logical_commit_id}
               type="button"
             >
               <div className="flex min-w-0 items-center gap-2">
                 <GitCommit className="size-4 shrink-0 text-muted-foreground" />
-                <span className="truncate font-mono text-xs font-medium">
-                  {commitTitle(commit)}
+                <span className="min-w-0 font-mono">
+                  <span className="block truncate text-xs font-medium">
+                    {labels.title}
+                  </span>
+                  <span className="mt-0.5 block truncate text-[11px] leading-4 text-muted-foreground">
+                    {labels.compactId}
+                  </span>
                 </span>
               </div>
               <div className="self-center text-right font-mono text-xs text-muted-foreground">
@@ -501,7 +513,7 @@ function CommitDetailPanel({
           {commit.author && <Badge variant="neutral">{commit.author}</Badge>}
         </div>
         <h3 className="mt-2 truncate font-mono text-sm font-semibold leading-5">
-          {commitTitle(commit)}
+          {historyCommitTitle(commit)}
         </h3>
       </div>
 
@@ -705,10 +717,6 @@ function selectedAudience(
 
 function latestCommitId(history: CommitHistory | null) {
   return history?.commits.at(-1)?.projected_id ?? null
-}
-
-function commitTitle(commit: Pick<CommitSummary, 'message'>) {
-  return commit.message.split(/\r?\n/, 1)[0]?.trim() || '(no message)'
 }
 
 function fileName(path: string) {
