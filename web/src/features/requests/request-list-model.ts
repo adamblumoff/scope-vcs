@@ -1,8 +1,4 @@
-import type { RequestList, RequestListItem } from '@/api/types'
-
-export function requestListSnapshotKey(page: RequestList) {
-  return JSON.stringify(page)
-}
+import type { RequestListItem } from '@/api/types'
 
 export function appendRequestPage(
   current: RequestListItem[],
