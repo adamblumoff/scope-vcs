@@ -313,6 +313,9 @@ pub(crate) async fn persist_request_ref_revision(
             .await;
         if let Ok(mutation) = &mutation {
             state
+                .publish_request_summary_refresh(&request_repo_id, "request-revised")
+                .await;
+            state
                 .publish_request_timeline_change(
                     &request_repo_id,
                     request_id,

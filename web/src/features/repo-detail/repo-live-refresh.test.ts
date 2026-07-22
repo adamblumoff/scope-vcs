@@ -62,6 +62,18 @@ test('coordinator ignores stale, connected, and wrong-repo events', async () => 
   assert.equal(refreshes, 0)
 })
 
+test('request revisions refresh summaries while discussion activity stays targeted', async () => {
+  let refreshes = 0
+  const coordinator = coordinatorFor(async () => { refreshes += 1 }, 2)
+  coordinator.onEvent(discussionEvent(3))
+  await tick()
+  assert.equal(refreshes, 0)
+
+  coordinator.onEvent(event(0, 'request-revised'))
+  await tick()
+  assert.equal(refreshes, 1)
+})
+
 test('coordinator coalesces versions received during refresh', async () => {
   const releases: Array<() => void> = []
   let refreshes = 0
