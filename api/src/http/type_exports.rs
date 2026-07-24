@@ -110,6 +110,7 @@ pub(crate) fn export_api_types(output_path: &Path) {
         declaration::<RequestMutationResponse>(&ts_config),
         declaration::<RequestListItemResponse>(&ts_config),
         declaration::<RequestSummaryResponse>(&ts_config),
+        declaration::<RequestSettlementPreviewResponse>(&ts_config),
         declaration::<RequestInviteeResponse>(&ts_config),
         declaration::<AddRequestInviteeRequest>(&ts_config),
         declaration::<RemoveRequestInviteeRequest>(&ts_config),

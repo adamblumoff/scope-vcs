@@ -381,7 +381,11 @@ fn request_policy_permissions_keep_roles_and_hold_behavior_distinct() {
     assert!(author.can_edit_identity && author.can_pull_branch && author.can_push_branch);
     assert!(author.can_mark_ready && author.can_manage_invitees && author.can_close);
     assert!(
-        !author.can_leave_request && !author.can_hold && !author.can_assess && !author.can_merge
+        !author.can_leave_request
+            && !author.can_hold
+            && !author.can_request_changes
+            && !author.can_assess
+            && !author.can_merge
     );
 
     let invitee = policy_for(&working, ViewerKind::Invitee).permissions;
@@ -404,6 +408,7 @@ fn request_policy_permissions_keep_roles_and_hold_behavior_distinct() {
     assert!(
         maintainer.can_push_branch
             && maintainer.can_hold
+            && maintainer.can_request_changes
             && maintainer.can_assess
             && maintainer.can_merge
     );
@@ -418,10 +423,7 @@ fn request_policy_permissions_keep_roles_and_hold_behavior_distinct() {
         );
         assert!(!permissions.can_push_branch && !permissions.can_edit_identity);
         assert!(!permissions.can_return_to_working && !permissions.can_manage_invitees);
-        assert_eq!(
-            permissions.can_leave_request,
-            matches!(viewer, ViewerKind::Invitee)
-        );
+        assert!(!permissions.can_leave_request);
     }
     let maintainer = policy_for(&held, ViewerKind::Maintainer).permissions;
     assert!(
@@ -802,6 +804,7 @@ fn no_permissions() -> RequestPermissions {
         can_manage_invitees: false,
         can_leave_request: false,
         can_hold: false,
+        can_request_changes: false,
         can_assess: false,
         can_close: false,
         can_merge: false,
