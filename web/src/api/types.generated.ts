@@ -174,9 +174,19 @@ export type RequestMutationResponse = { request: RequestSummaryResponse, };
 
 export type RequestListItemResponse = { id: string, name: string, title: string, author_role: RequestActorRole, audience: RequestAudience, head_oid: GitOid, state: RequestState, current_stake_credits: number, assessment_outcome: RequestAssessmentOutcome | null, updated_at_unix: number, mergeability: RequestMergeabilityResponse, };
 
-export type RequestSummaryResponse = { id: string, name: string, title: string, description_markdown: string, author_user_id: string, author_role: RequestActorRole, audience: RequestAudience, base_main_oid: GitOid, head_oid: GitOid, state: RequestState, activity_version: number, current_stake_credits: number, first_ready_at_unix: number | null, ready_at_unix: number | null, held_at_unix: number | null, held_by_user_id: string | null, assessment_outcome: RequestAssessmentOutcome | null, assessment_body_markdown: string | null, assessed_at_unix: number | null, assessed_by_user_id: string | null, completed_at_unix: number | null, completed_by_user_id: string | null, merged_at_unix: number | null, merged_by_user_id: string | null, merged_head_oid: GitOid | null, merged_main_oid: GitOid | null, created_at_unix: number, updated_at_unix: number, permissions: RequestPermissionsResponse, mergeability: RequestMergeabilityResponse, };
+export type RequestSummaryResponse = { id: string, name: string, title: string, description_markdown: string, author_user_id: string, author_role: RequestActorRole, audience: RequestAudience, base_main_oid: GitOid, head_oid: GitOid, state: RequestState, activity_version: number, current_stake_credits: number, first_ready_at_unix: number | null, ready_at_unix: number | null, held_at_unix: number | null, held_by_user_id: string | null, assessment_outcome: RequestAssessmentOutcome | null, assessment_body_markdown: string | null, assessed_at_unix: number | null, assessed_by_user_id: string | null, completed_at_unix: number | null, completed_by_user_id: string | null, merged_at_unix: number | null, merged_by_user_id: string | null, merged_head_oid: GitOid | null, merged_main_oid: GitOid | null, created_at_unix: number, updated_at_unix: number, invitees: Array<RequestInviteeResponse>, permissions: RequestPermissionsResponse, mergeability: RequestMergeabilityResponse, };
 
-export type RequestPermissionsResponse = { can_open_discussion: boolean, can_reply_to_discussion: boolean, can_edit_description: boolean, can_pull_branch: boolean, can_push_branch: boolean, can_mark_ready: boolean, can_return_to_working: boolean, can_manage_invitees: boolean, can_hold: boolean, can_assess: boolean, can_close: boolean, can_merge: boolean, };
+export type RequestInviteeResponse = { user: RequestActorSummaryResponse, invited_by_user_id: string, created_at_unix: number, };
+
+export type AddRequestInviteeRequest = { handle: string, };
+
+export type RemoveRequestInviteeRequest = { handle: string, };
+
+export type RequestInviteeMutationResponse = { request: RequestSummaryResponse, invitee: RequestInviteeResponse, };
+
+export type LeaveRequestResponse = { invitee: RequestInviteeResponse, };
+
+export type RequestPermissionsResponse = { can_open_discussion: boolean, can_reply_to_discussion: boolean, can_edit_description: boolean, can_pull_branch: boolean, can_push_branch: boolean, can_mark_ready: boolean, can_return_to_working: boolean, can_manage_invitees: boolean, can_leave_request: boolean, can_hold: boolean, can_assess: boolean, can_close: boolean, can_merge: boolean, };
 
 export type RequestMergeabilityStatus = "Ready" | "Completed" | "Working" | "Held" | "NotMaintainer" | "MissingRequestBranch";
 
@@ -253,6 +263,8 @@ export const ApiRouteTemplates = {
   repoRequestRequestChanges: "/v1/repos/{owner}/{repo}/requests/{request_id}/request-changes",
   repoRequestAssessment: "/v1/repos/{owner}/{repo}/requests/{request_id}/assessment",
   repoRequestMerge: "/v1/repos/{owner}/{repo}/requests/{request_id}/merge",
+  repoRequestInvitees: "/v1/repos/{owner}/{repo}/requests/{request_id}/invitees",
+  repoRequestInviteesMe: "/v1/repos/{owner}/{repo}/requests/{request_id}/invitees/me",
   repoSession: "/v1/repos/{owner}/{repo}/session",
   repoFiles: "/v1/repos/{owner}/{repo}/files",
   repoFileContent: "/v1/repos/{owner}/{repo}/files/content",

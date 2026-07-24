@@ -1,8 +1,8 @@
 use super::{
-    REQUEST_TITLE_MAX_BYTES, Request, RequestActorRole, RequestAudience, RequestChangeBlock,
-    RequestDiscussion, RequestDiscussionReadState, RequestEvent, RequestEventKind,
-    RequestEventPayload, RequestState, advance_request_activity, ensure_event_id_available,
-    validate_body_size, validate_required_id,
+    PUBLIC_WORKING_REQUEST_LIMIT, REQUEST_TITLE_MAX_BYTES, Request, RequestActorRole,
+    RequestAudience, RequestChangeBlock, RequestDiscussion, RequestDiscussionReadState,
+    RequestEvent, RequestEventKind, RequestEventPayload, RequestState, advance_request_activity,
+    ensure_event_id_available, validate_body_size, validate_required_id,
 };
 use crate::{domain::store::SourceBlob, error::ApiError};
 use std::collections::BTreeMap;
@@ -99,6 +99,22 @@ pub fn start_request(
         return Err(ApiError::conflict("request already exists"));
     }
     ensure_request_name_available(requests, &input.repo_id, &input.name)?;
+    if input.author_role == RequestActorRole::Public
+        && requests
+            .values()
+            .filter(|request| {
+                request.repo_id == input.repo_id
+                    && request.author_user_id == input.author_user_id
+                    && request.author_role == RequestActorRole::Public
+                    && request.state == RequestState::Working
+            })
+            .count()
+            >= PUBLIC_WORKING_REQUEST_LIMIT
+    {
+        return Err(ApiError::conflict(format!(
+            "public contributors cannot have more than {PUBLIC_WORKING_REQUEST_LIMIT} Working requests per repository"
+        )));
+    }
     let title = input.title.unwrap_or_else(|| input.name.clone());
     let request = Request {
         id: input.id,

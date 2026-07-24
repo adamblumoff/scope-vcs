@@ -1,6 +1,6 @@
 use crate::{
     auth::scope::{optional_scope_user, principal_for_scope_user},
-    domain::requests::RequestAudience,
+    domain::requests::{RequestAudience, RequestViewer, request_policy},
     domain::store::{RepositoryActor, UserAccount, repo_id},
     error::ApiError,
     repo_events::{RepoChangeEvent, RepoChangeKind},
@@ -113,6 +113,33 @@ async fn stream_event_for_user(
     let repo = find_repo(state, owner, repo_name).await?;
     let principal = principal_for_scope_user(&repo, user);
     ensure_repo_events_allowed(state, &repo, &principal)?;
+    if let RepoChangeKind::RequestTimelineChanged { request_id, .. } = &event.kind {
+        let Some(request) = state.metadata.request_by_id(request_id).await? else {
+            return Ok(None);
+        };
+        let user_id = user.map(|user| user.id.as_str());
+        let is_invitee = match user_id {
+            Some(user_id) => {
+                state
+                    .metadata
+                    .request_is_invitee(request_id, user_id)
+                    .await?
+            }
+            None => false,
+        };
+        if !request_policy(
+            &request,
+            RequestViewer::new(
+                repo.access_for_user_id(user_id.unwrap_or("")),
+                user_id,
+                is_invitee,
+            ),
+        )
+        .activity_stream_visible
+        {
+            return Ok(None);
+        }
+    }
     Ok(event_for_principal(&repo, &principal, event))
 }
 

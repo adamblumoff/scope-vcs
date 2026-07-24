@@ -1,8 +1,10 @@
 use super::*;
 use crate::domain::requests::{
     MarkRequestReadyInput, Request, RequestActorRole, RequestAudience, RequestEventKind,
-    RequestState, StartRequestInput,
+    RequestReviewExitReason, RequestState, ReturnRequestToWorkingInput, SetRequestHoldInput,
+    StartRequestInput,
 };
+use scope_core::db::{AddRequestInviteeCommand, RemoveRequestInviteeCommand};
 
 const PUBLIC_SUBJECT: &str = "user_public";
 const PUBLIC_EMAIL: &str = "public@example.com";
@@ -10,21 +12,40 @@ const CONTRIBUTOR_SUBJECT: &str = "user_contributor";
 const CONTRIBUTOR_EMAIL: &str = "contributor@example.com";
 const MEMBER_SUBJECT: &str = "user_member";
 const MEMBER_EMAIL: &str = "member@example.com";
+const UNRELATED_SUBJECT: &str = "user_unrelated";
+const UNRELATED_EMAIL: &str = "unrelated@example.com";
 const REQUEST_ID: &str = "req_1";
 const REQUEST_NAME: &str = "request-branch";
 const REQUEST_REF: &str = "refs/heads/request-branch";
 const PRIVATE_REQUEST_ID: &str = "req_private";
 const PRIVATE_REQUEST_REF: &str = "refs/heads/private-request";
 
+mod policy;
 mod privacy;
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn permissioned_clone_fetches_named_public_requests_without_joining() {
     let state = test_state_with_request().await;
+    let (_author_checkout, permissioned_remote, _server, _request_head) =
+        request_checkout(&state, "published-request-clone-source").await;
+    state
+        .metadata
+        .mark_request_ready(MarkRequestReadyInput {
+            request_id: REQUEST_ID.to_string(),
+            actor_user_id: public_user_id(),
+            actor_is_author: false,
+            actor_can_mutate: false,
+            stake_credits: Some(1),
+            public_ready_count: 0,
+            ready_queue_version: 0,
+            event_id: "event_published_clone_ready".to_string(),
+            stake_ledger_entry_id: Some("ledger_published_clone_ready".to_string()),
+            now_unix: 4,
+        })
+        .await
+        .unwrap();
     insert_public_contributor(&state).await;
-    let (origin, _server) = spawn_test_server(&state).await;
     let checkout = checkout_dir("named-request-clone");
-    let permissioned_remote = format!("{origin}/git/permissioned/{TEST_REPO_ID}");
     clone_with_bearer(
         &permissioned_remote,
         &checkout,
@@ -68,6 +89,11 @@ async fn closed_public_request_remains_fetchable_as_read_only_history() {
         &checkout,
         &bearer_header_for(CONTRIBUTOR_SUBJECT, CONTRIBUTOR_EMAIL),
         "clone closed public request ref",
+    );
+    configure_bearer_header(
+        &checkout,
+        &permissioned_remote,
+        &bearer_header_for(CONTRIBUTOR_SUBJECT, CONTRIBUTOR_EMAIL),
     );
 
     assert!(
@@ -250,8 +276,22 @@ async fn merge_route_persists_git_content_and_settles_public_stake_once() {
 async fn fully_masked_maintainer_public_merge_completes_without_tree_changes() {
     let state = test_state_with_mergeable_owner_public_request().await;
     insert_member_user(&state).await;
-    let (_source, _remote, _server, _request_head) =
-        request_checkout(&state, "maintainer-public-policy-merge").await;
+    let (source, remote, _server) = request_push_checkout(
+        &state,
+        "maintainer-public-policy-merge",
+        TEST_CLERK_USER_ID,
+        TEST_OWNER_EMAIL,
+    )
+    .await;
+    push_change(
+        &source,
+        &remote,
+        REQUEST_REF,
+        "request.txt",
+        "request branch content\n",
+        "request change",
+    )
+    .unwrap();
     let app = router(state.clone());
 
     let ready = app
@@ -432,8 +472,8 @@ async fn assert_restored_request_head(state: &AppState, expected: &str) -> PathB
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn any_public_contributor_and_maintainer_can_push_request_refs() {
-    for (label, subject, email, path, prepare) in [
+async fn active_invitee_and_maintainer_can_push_request_refs() {
+    for (label, subject, email, path, is_invitee) in [
         (
             "request-ref-contributor-push",
             CONTRIBUTOR_SUBJECT,
@@ -450,12 +490,25 @@ async fn any_public_contributor_and_maintainer_can_push_request_refs() {
         ),
     ] {
         let state = test_state_with_request().await;
-        if prepare {
+        if is_invitee {
             insert_public_contributor(&state).await;
+            state
+                .metadata
+                .add_request_invitee(AddRequestInviteeCommand {
+                    request_id: REQUEST_ID.to_string(),
+                    actor_user_id: public_user_id(),
+                    target_handle: "contributor".to_string(),
+                    now_unix: 3,
+                })
+                .await
+                .unwrap();
         } else {
             insert_member_user(&state).await;
         }
         let (source, remote, _server) = request_push_checkout(&state, label, subject, email).await;
+        if !is_invitee {
+            configure_push_intent_header(&state, &source, &remote, &member_user_id()).await;
+        }
         let before_event_count = request_event_count(&state).await;
         push_change(
             &source,

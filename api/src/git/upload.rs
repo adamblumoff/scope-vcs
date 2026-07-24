@@ -1,5 +1,6 @@
 use crate::domain::policy::Principal;
 use crate::domain::projection::{Projection, ProjectionViewKey, project_graph};
+use crate::domain::requests::{Request, RequestViewer, canonical_request_ref, request_policy};
 use crate::domain::store::{RepoPublicationState, RepositoryActor, is_supported_git_file_mode};
 use crate::{
     auth::scope::principal_for_user_id,
@@ -7,7 +8,7 @@ use crate::{
     error::ApiError,
     git::{
         GitRemoteMode, cache::GitRepoHandle, content::source_content_bytes, git_read_scope_user,
-        request_refs::attach_visible_request_refs, storage::cached_raw_git_repo,
+        import::run_git, request_refs::attach_visible_request_refs, storage::cached_raw_git_repo,
     },
     runtime_budgets::{RuntimeBudgets, RuntimePermit},
     state::AppState,
@@ -34,7 +35,7 @@ use std::{
     time::Duration,
 };
 const PROJECTION_CACHE_SEMANTICS_VERSION: &str = "shared-projection-view-v1";
-const GIT_READ_VIEW_CACHE_SEMANTICS_VERSION: &str = "named-request-read-view-v1";
+const GIT_READ_VIEW_CACHE_SEMANTICS_VERSION: &str = "named-request-read-view-v2";
 static GIT_CACHE_ATTEMPT: AtomicU64 = AtomicU64::new(1);
 
 #[cfg(test)]
@@ -45,7 +46,7 @@ pub(crate) async fn git_projection_for_request(
     repo_name: &str,
     mode: GitRemoteMode,
 ) -> Result<Projection, ApiError> {
-    let (repo, principal) =
+    let (repo, principal, _) =
         git_read_principal_for_request(state, headers, owner, repo_name, mode).await?;
     if repo.record.publication_state != RepoPublicationState::Published {
         return Err(unpublished_git_read_error(
@@ -71,7 +72,7 @@ pub(crate) async fn git_upload_pack_repo_for_request(
     repo_name: &str,
     mode: GitRemoteMode,
 ) -> Result<GitRepoHandle, ApiError> {
-    let (repo, principal) =
+    let (repo, principal, viewer_user_id) =
         match git_read_principal_for_request(state, headers, owner, repo_name, mode).await {
             Ok(value) => value,
             Err(error)
@@ -111,13 +112,29 @@ pub(crate) async fn git_upload_pack_repo_for_request(
         );
         GitRepoHandle::from_path(projection_bare_repo_for_state(state, &projection)?)
     };
-    let mut requests = state
-        .metadata
-        .requests_by_repo_id(&repo.record.id)
-        .await?
-        .into_iter()
-        .filter(|request| crate::domain::requests::request_visible_to_access(request, access))
-        .collect::<Vec<_>>();
+    let mut requests = Vec::new();
+    let mut hidden_request_refs = Vec::new();
+    for request in state.metadata.requests_by_repo_id(&repo.record.id).await? {
+        let is_invitee = match viewer_user_id.as_deref() {
+            Some(user_id) => {
+                state
+                    .metadata
+                    .request_is_invitee(&request.id, user_id)
+                    .await?
+            }
+            None => false,
+        };
+        let decision = request_policy(
+            &request,
+            RequestViewer::new(access, viewer_user_id.as_deref(), is_invitee),
+        );
+        if decision.request_ref_readable {
+            if !decision.git_advertised {
+                hidden_request_refs.push(request.name.clone());
+            }
+            requests.push(request);
+        }
+    }
     requests.sort_by(|left, right| left.name.cmp(&right.name));
     let public_base_repo = if private_view
         && requests.iter().any(|request| {
@@ -134,14 +151,23 @@ pub(crate) async fn git_upload_pack_repo_for_request(
     } else {
         None
     };
-    git_read_view_repo(state, base_repo, public_base_repo.as_deref(), &requests)
+    git_read_view_repo(
+        state,
+        base_repo,
+        public_base_repo.as_deref(),
+        viewer_user_id.as_deref(),
+        &requests,
+        &hidden_request_refs,
+    )
 }
 
 fn git_read_view_repo(
     state: &AppState,
     base_repo: GitRepoHandle,
     public_base_repo: Option<&FsPath>,
-    requests: &[crate::domain::requests::Request],
+    viewer_user_id: Option<&str>,
+    requests: &[Request],
+    hidden_request_refs: &[String],
 ) -> Result<GitRepoHandle, ApiError> {
     if requests.is_empty() {
         return Ok(base_repo);
@@ -161,6 +187,13 @@ fn git_read_view_repo(
         GIT_READ_VIEW_CACHE_SEMANTICS_VERSION.as_bytes(),
     );
     hash_field(&mut hasher, b"main", &main_oid);
+    match viewer_user_id {
+        Some(user_id) => {
+            hash_field(&mut hasher, b"authorization", b"user");
+            hash_field(&mut hasher, b"viewer", user_id.as_bytes());
+        }
+        None => hash_field(&mut hasher, b"authorization", b"public"),
+    }
     for request in requests {
         hash_field(&mut hasher, b"name", request.name.as_bytes());
         hash_field(&mut hasher, b"head", request.head_oid.as_bytes());
@@ -177,6 +210,9 @@ fn git_read_view_repo(
         if let Some(snapshot) = request.git_snapshot.as_ref() {
             hash_field(&mut hasher, b"snapshot", snapshot.sha256.as_bytes());
         }
+    }
+    for request_name in hidden_request_refs {
+        hash_field(&mut hasher, b"hidden", request_name.as_bytes());
     }
     let cache_key = hex::encode(hasher.finalize());
     let cache_root = state.git_cache_root()?;
@@ -208,6 +244,25 @@ fn git_read_view_repo(
         let _ = fs::remove_dir_all(&temp_path);
         return Err(error);
     }
+    if !hidden_request_refs.is_empty() {
+        run_git(
+            Some(&temp_path),
+            &["config", "uploadpack.allowTipSHA1InWant", "true"],
+            "allowing exact request tip fetches",
+        )?;
+        for request_name in hidden_request_refs {
+            run_git(
+                Some(&temp_path),
+                &[
+                    "config",
+                    "--add",
+                    "transfer.hideRefs",
+                    &canonical_request_ref(request_name),
+                ],
+                "hiding exact-only request ref from advertisement",
+            )?;
+        }
+    }
     match fs::rename(&temp_path, &repo_path) {
         Ok(()) => Ok(GitRepoHandle::from_path(repo_path)),
         Err(error) if repo_path.exists() => {
@@ -229,17 +284,24 @@ async fn git_read_principal_for_request(
     owner: &str,
     repo_name: &str,
     mode: GitRemoteMode,
-) -> Result<(crate::domain::store::StoredRepository, Principal), ApiError> {
+) -> Result<
+    (
+        crate::domain::store::StoredRepository,
+        Principal,
+        Option<String>,
+    ),
+    ApiError,
+> {
     match mode {
         GitRemoteMode::Public => {
             let repo = find_repo(state, owner, repo_name).await?;
-            Ok((repo, Principal::public()))
+            Ok((repo, Principal::public(), None))
         }
         GitRemoteMode::Permissioned => {
             let user = git_read_scope_user(state, headers).await?;
             let repo = find_repo(state, owner, repo_name).await?;
             let principal = principal_for_user_id(&repo, &user.id);
-            Ok((repo, principal))
+            Ok((repo, principal, Some(user.id)))
         }
     }
 }

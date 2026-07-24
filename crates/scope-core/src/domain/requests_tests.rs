@@ -9,7 +9,7 @@ fn new_request_starts_as_an_unpublished_unstaked_working_request() {
     assert_eq!(mutation.request.state, RequestState::Working);
     assert_eq!(mutation.request.current_stake_credits, 0);
     assert!(!mutation.request.is_published());
-    assert!(!request_counts_as_open(&mutation.request));
+    assert!(!policy_for(&mutation.request, ViewerKind::Anonymous).counts_as_ready);
     assert_eq!(mutation.request.ready_at_unix, None);
     assert_eq!(mutation.request.completed_at_unix, None);
     mutation.request.validate_facts().unwrap();
@@ -48,20 +48,20 @@ fn request_name_rules_and_repository_uniqueness_remain_domain_owned() {
 fn publication_marker_survives_return_to_working_and_is_required_for_completion() {
     let mut request = ready_request();
     let first_ready_at = request.first_ready_at_unix;
-    assert!(request_counts_as_open(&request));
+    assert!(policy_for(&request, ViewerKind::Anonymous).counts_as_ready);
     request.state = RequestState::Working;
     request.current_stake_credits = 0;
     request.ready_at_unix = None;
     request.validate_facts().unwrap();
     assert_eq!(request.first_ready_at_unix, first_ready_at);
-    assert!(request_counts_as_open(&request));
+    assert!(!policy_for(&request, ViewerKind::Anonymous).counts_as_ready);
 
     request.state = RequestState::Completed;
     request.completed_at_unix = Some(30);
     request.completed_by_user_id = Some("author".to_string());
     request.updated_at_unix = 30;
     request.validate_facts().unwrap();
-    assert!(!request_counts_as_open(&request));
+    assert!(!policy_for(&request, ViewerKind::Anonymous).counts_as_ready);
 
     request.first_ready_at_unix = None;
     request.ready_queue_version = None;
@@ -142,7 +142,11 @@ fn assessment_is_atomic_immutable_completion_data() {
 #[test]
 fn merge_facts_are_complete_accepted_and_never_precede_completion() {
     let mut request = completed_request(RequestAssessmentOutcome::Accepted);
-    assert!(request_permissions(&request, maintainer_access(), Some("maintainer")).can_merge);
+    assert!(
+        policy_for(&request, ViewerKind::Maintainer)
+            .permissions
+            .can_merge
+    );
     assert_eq!(
         request_mergeability(&request, maintainer_access()).status,
         RequestMergeabilityStatus::Ready
@@ -153,7 +157,11 @@ fn merge_facts_are_complete_accepted_and_never_precede_completion() {
     request.merged_main_oid = Some("main-after".to_string());
     request.updated_at_unix = 31;
     request.validate_facts().unwrap();
-    assert!(!request_permissions(&request, maintainer_access(), Some("maintainer")).can_merge);
+    assert!(
+        !policy_for(&request, ViewerKind::Maintainer)
+            .permissions
+            .can_merge
+    );
     assert_eq!(
         request_mergeability(&request, maintainer_access()).status,
         RequestMergeabilityStatus::Completed
@@ -242,57 +250,236 @@ fn credit_grant_is_single_entry_and_overflow_safe() {
 }
 
 #[test]
-fn public_working_request_remains_visible_and_author_can_work() {
-    let request = working_request();
-    assert!(request_visible_to_access(
-        &request,
-        RepositoryAccess::public()
-    ));
-    let anonymous = request_permissions(&request, RepositoryAccess::public(), None);
-    assert!(anonymous.can_pull_branch);
-    let author = request_permissions(
-        &request,
-        RepositoryAccess::public(),
-        Some(request.author_user_id.as_str()),
-    );
-    assert!(author.can_pull_branch);
-    assert!(author.can_push_branch);
-    assert!(author.can_mark_ready);
-}
+fn request_policy_surface_truth_table_is_viewer_and_lifecycle_aware() {
+    let never_published_working = working_request();
+    let published_working = published_working_request();
+    let ready = ready_request();
+    let held_ready = held_request();
+    let completed = completed_request(RequestAssessmentOutcome::Neutral);
+    let private_working = private_request(working_request());
+    let private_published_working = private_request(published_working_request());
+    let private_ready = private_request(ready_request());
+    let private_completed = private_request(completed_request(RequestAssessmentOutcome::Neutral));
 
-#[test]
-fn published_working_request_stays_visible_but_not_mergeable() {
-    let mut request = ready_request();
-    request.state = RequestState::Working;
-    request.ready_at_unix = None;
-    request.current_stake_credits = 0;
-    request.validate_facts().unwrap();
-    assert!(request_visible_to_access(
-        &request,
-        RepositoryAccess::public()
-    ));
+    let cases = [
+        (
+            "never-published public Working",
+            &never_published_working,
+            [
+                hidden(),
+                hidden(),
+                collaborator_working(),
+                collaborator_working(),
+                exact_only_working(),
+            ],
+        ),
+        (
+            "previously-published public Working",
+            &published_working,
+            [
+                published_working_reader(false),
+                published_working_reader(false),
+                collaborator_working(),
+                collaborator_working(),
+                published_working_reader(true),
+            ],
+        ),
+        (
+            "public Ready",
+            &ready,
+            [
+                published_ready_reader(false),
+                published_ready_reader(false),
+                published_ready_reader(true),
+                published_ready_reader(true),
+                published_ready_reader(true),
+            ],
+        ),
+        (
+            "held public Ready",
+            &held_ready,
+            [
+                published_ready_reader(false),
+                published_ready_reader(false),
+                published_ready_reader(false),
+                published_ready_reader(false),
+                published_ready_reader(true),
+            ],
+        ),
+        ("public completed", &completed, [published_history(); 5]),
+        (
+            "private Working",
+            &private_working,
+            [
+                hidden(),
+                hidden(),
+                private_visible(false, true),
+                hidden(),
+                private_visible(false, true),
+            ],
+        ),
+        (
+            "previously-published private Working",
+            &private_published_working,
+            [
+                hidden(),
+                hidden(),
+                private_visible(false, true),
+                hidden(),
+                private_visible(false, true),
+            ],
+        ),
+        (
+            "private Ready",
+            &private_ready,
+            [
+                hidden(),
+                hidden(),
+                private_visible(true, true),
+                hidden(),
+                private_visible(true, true),
+            ],
+        ),
+        (
+            "private completed",
+            &private_completed,
+            [
+                hidden(),
+                hidden(),
+                private_visible(false, false),
+                hidden(),
+                private_visible(false, false),
+            ],
+        ),
+    ];
+
+    for (request_label, request, expected_by_viewer) in cases {
+        for (viewer, expected) in ViewerKind::ALL.into_iter().zip(expected_by_viewer) {
+            let actual = policy_for(request, viewer);
+            assert_surface_decision(request_label, viewer, actual, expected);
+            if !actual.exact_visible {
+                assert_eq!(
+                    actual.permissions,
+                    no_permissions(),
+                    "{request_label} / {viewer:?} must expose no capabilities"
+                );
+            }
+        }
+    }
+
     assert_eq!(
-        request_mergeability(&request, maintainer_access()).status,
+        request_mergeability(&published_working, maintainer_access()).status,
         RequestMergeabilityStatus::Working
     );
 }
 
 #[test]
-fn hold_blocks_contributors_but_not_maintainers_and_completion_blocks_all() {
-    let mut request = ready_request();
+fn request_policy_permissions_keep_roles_and_hold_behavior_distinct() {
+    let working = working_request();
+    let author = policy_for(&working, ViewerKind::Author).permissions;
+    assert!(author.can_open_discussion && author.can_reply_to_discussion);
+    assert!(author.can_edit_description && author.can_pull_branch && author.can_push_branch);
+    assert!(author.can_mark_ready && author.can_manage_invitees && author.can_close);
     assert!(
-        request_permissions(&request, RepositoryAccess::public(), Some("author"))
+        !author.can_leave_request && !author.can_hold && !author.can_assess && !author.can_merge
+    );
+
+    let invitee = policy_for(&working, ViewerKind::Invitee).permissions;
+    assert!(invitee.can_open_discussion && invitee.can_reply_to_discussion);
+    assert!(invitee.can_pull_branch && invitee.can_push_branch && invitee.can_leave_request);
+    assert!(!invitee.can_edit_description && !invitee.can_mark_ready);
+    assert!(!invitee.can_manage_invitees && !invitee.can_close && !invitee.can_merge);
+
+    let ready = ready_request();
+    let unrelated = policy_for(&ready, ViewerKind::Unrelated).permissions;
+    assert!(
+        unrelated.can_open_discussion
+            && unrelated.can_reply_to_discussion
+            && unrelated.can_pull_branch
+    );
+    assert!(!unrelated.can_push_branch && !unrelated.can_edit_description);
+    let author = policy_for(&ready, ViewerKind::Author).permissions;
+    assert!(author.can_push_branch && author.can_return_to_working && author.can_manage_invitees);
+    let maintainer = policy_for(&ready, ViewerKind::Maintainer).permissions;
+    assert!(
+        maintainer.can_push_branch
+            && maintainer.can_hold
+            && maintainer.can_assess
+            && maintainer.can_merge
+    );
+
+    let held = held_request();
+    for viewer in [ViewerKind::Author, ViewerKind::Invitee] {
+        let permissions = policy_for(&held, viewer).permissions;
+        assert!(
+            permissions.can_open_discussion
+                && permissions.can_reply_to_discussion
+                && permissions.can_pull_branch
+        );
+        assert!(!permissions.can_push_branch && !permissions.can_edit_description);
+        assert!(!permissions.can_return_to_working && !permissions.can_manage_invitees);
+        assert_eq!(
+            permissions.can_leave_request,
+            matches!(viewer, ViewerKind::Invitee)
+        );
+    }
+    let maintainer = policy_for(&held, ViewerKind::Maintainer).permissions;
+    assert!(
+        maintainer.can_push_branch
+            && maintainer.can_edit_description
+            && maintainer.can_manage_invitees
+    );
+
+    let private_working = private_request(working_request());
+    let author = policy_for(&private_working, ViewerKind::Author).permissions;
+    assert!(author.can_mark_ready && author.can_close && !author.can_manage_invitees);
+    let private_held = private_request(held_request());
+    assert!(
+        policy_for(&private_held, ViewerKind::Author)
+            .permissions
+            .can_push_branch
+    );
+    assert!(
+        policy_for(&private_held, ViewerKind::Maintainer)
+            .permissions
+            .can_push_branch
+    );
+
+    let completed = completed_request(RequestAssessmentOutcome::Neutral);
+    for viewer in ViewerKind::ALL {
+        let decision = policy_for(&completed, viewer);
+        assert_eq!(
+            decision.permissions.can_pull_branch,
+            decision.request_ref_readable
+        );
+        assert!(!decision.permissions.can_push_branch);
+        assert_eq!(
+            decision.permissions.can_open_discussion,
+            !matches!(viewer, ViewerKind::Anonymous)
+        );
+        assert_eq!(
+            decision.permissions.can_reply_to_discussion,
+            !matches!(viewer, ViewerKind::Anonymous)
+        );
+        assert!(!decision.permissions.can_manage_invitees);
+    }
+}
+
+#[test]
+fn hold_blocks_contributors_but_not_maintainers_and_completion_blocks_all() {
+    let request = ready_request();
+    assert!(
+        policy_for(&request, ViewerKind::Author)
+            .permissions
             .can_edit_description
     );
-    request.held_at_unix = Some(21);
-    request.held_by_user_id = Some("maintainer".to_string());
-    request.updated_at_unix = 21;
-    let author = request_permissions(&request, RepositoryAccess::public(), Some("author"));
+    let request = held_request();
+    let author = policy_for(&request, ViewerKind::Author).permissions;
     assert!(!author.can_push_branch);
     assert!(!author.can_edit_description);
     assert!(!author.can_return_to_working);
     assert!(!author.can_manage_invitees);
-    let maintainer = request_permissions(&request, maintainer_access(), Some("maintainer"));
+    let maintainer = policy_for(&request, ViewerKind::Maintainer).permissions;
     assert!(maintainer.can_hold);
     assert!(maintainer.can_push_branch);
     assert!(maintainer.can_edit_description);
@@ -304,16 +491,15 @@ fn hold_blocks_contributors_but_not_maintainers_and_completion_blocks_all() {
         RequestMergeabilityStatus::Ready
     );
 
-    let mut private_request = request.clone();
-    private_request.audience = RequestAudience::Private;
-    let maintainer = request_permissions(&private_request, maintainer_access(), Some("maintainer"));
+    let private_request = private_request(request);
+    let maintainer = policy_for(&private_request, ViewerKind::Maintainer).permissions;
     assert!(!maintainer.can_manage_invitees);
 
     let request = completed_request(RequestAssessmentOutcome::Neutral);
-    let maintainer = request_permissions(&request, maintainer_access(), Some("maintainer"));
+    let maintainer = policy_for(&request, ViewerKind::Maintainer).permissions;
     assert!(maintainer.can_pull_branch);
     assert!(!maintainer.can_push_branch);
-    assert!(!maintainer.can_open_discussion);
+    assert!(maintainer.can_open_discussion);
 }
 
 #[test]
@@ -388,8 +574,16 @@ fn ready_request_rejects_description_edits_until_review_invalidation_exists() {
 #[test]
 fn close_is_author_only() {
     let request = working_request();
-    assert!(request_permissions(&request, RepositoryAccess::public(), Some("author"),).can_close);
-    assert!(!request_permissions(&request, maintainer_access(), Some("maintainer")).can_close);
+    assert!(
+        policy_for(&request, ViewerKind::Author)
+            .permissions
+            .can_close
+    );
+    assert!(
+        !policy_for(&request, ViewerKind::Maintainer)
+            .permissions
+            .can_close
+    );
 }
 
 #[test]
@@ -480,6 +674,207 @@ fn discussion_resolution_is_moderation_not_request_lifecycle() {
     .unwrap();
     assert_eq!(reopened.event.kind, RequestEventKind::DiscussionReopened);
     assert_eq!(requests["request_1"].state, RequestState::ReadyForReview);
+}
+
+#[derive(Clone, Copy, Debug)]
+enum ViewerKind {
+    Anonymous,
+    Unrelated,
+    Author,
+    Invitee,
+    Maintainer,
+}
+
+impl ViewerKind {
+    const ALL: [Self; 5] = [
+        Self::Anonymous,
+        Self::Unrelated,
+        Self::Author,
+        Self::Invitee,
+        Self::Maintainer,
+    ];
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct ExpectedSurfaceDecision {
+    listable: bool,
+    exact_visible: bool,
+    discussion_visible: bool,
+    activity_stream_visible: bool,
+    git_advertised: bool,
+    request_ref_readable: bool,
+    branch_mutable: bool,
+    counts_as_ready: bool,
+}
+
+fn policy_for(request: &Request, viewer: ViewerKind) -> RequestPolicyDecision {
+    let access = match viewer {
+        ViewerKind::Maintainer => maintainer_access(),
+        ViewerKind::Author if request.audience == RequestAudience::Private => maintainer_access(),
+        _ => RepositoryAccess::public(),
+    };
+    let (user_id, is_invitee) = match viewer {
+        ViewerKind::Anonymous => (None, false),
+        ViewerKind::Unrelated => (Some("unrelated"), false),
+        ViewerKind::Author => (Some(request.author_user_id.as_str()), false),
+        ViewerKind::Invitee => (Some("invitee"), true),
+        ViewerKind::Maintainer => (Some("maintainer"), false),
+    };
+    request_policy(request, RequestViewer::new(access, user_id, is_invitee))
+}
+
+fn assert_surface_decision(
+    request_label: &str,
+    viewer: ViewerKind,
+    actual: RequestPolicyDecision,
+    expected: ExpectedSurfaceDecision,
+) {
+    let actual = ExpectedSurfaceDecision {
+        listable: actual.listable,
+        exact_visible: actual.exact_visible,
+        discussion_visible: actual.discussion_visible,
+        activity_stream_visible: actual.activity_stream_visible,
+        git_advertised: actual.git_advertised,
+        request_ref_readable: actual.request_ref_readable,
+        branch_mutable: actual.branch_mutable,
+        counts_as_ready: actual.counts_as_ready,
+    };
+    assert_eq!(actual, expected, "{request_label} / {viewer:?}");
+}
+
+fn hidden() -> ExpectedSurfaceDecision {
+    ExpectedSurfaceDecision {
+        listable: false,
+        exact_visible: false,
+        discussion_visible: false,
+        activity_stream_visible: false,
+        git_advertised: false,
+        request_ref_readable: false,
+        branch_mutable: false,
+        counts_as_ready: false,
+    }
+}
+
+fn collaborator_working() -> ExpectedSurfaceDecision {
+    ExpectedSurfaceDecision {
+        listable: true,
+        exact_visible: true,
+        discussion_visible: true,
+        activity_stream_visible: true,
+        git_advertised: true,
+        request_ref_readable: true,
+        branch_mutable: true,
+        counts_as_ready: false,
+    }
+}
+
+fn exact_only_working() -> ExpectedSurfaceDecision {
+    ExpectedSurfaceDecision {
+        listable: false,
+        exact_visible: true,
+        discussion_visible: true,
+        activity_stream_visible: false,
+        git_advertised: false,
+        request_ref_readable: true,
+        branch_mutable: true,
+        counts_as_ready: false,
+    }
+}
+
+fn published_working_reader(branch_mutable: bool) -> ExpectedSurfaceDecision {
+    ExpectedSurfaceDecision {
+        listable: false,
+        exact_visible: true,
+        discussion_visible: true,
+        activity_stream_visible: true,
+        git_advertised: false,
+        request_ref_readable: true,
+        branch_mutable,
+        counts_as_ready: false,
+    }
+}
+
+fn published_ready_reader(branch_mutable: bool) -> ExpectedSurfaceDecision {
+    ExpectedSurfaceDecision {
+        listable: true,
+        exact_visible: true,
+        discussion_visible: true,
+        activity_stream_visible: true,
+        git_advertised: true,
+        request_ref_readable: true,
+        branch_mutable,
+        counts_as_ready: true,
+    }
+}
+
+fn published_history() -> ExpectedSurfaceDecision {
+    ExpectedSurfaceDecision {
+        listable: true,
+        exact_visible: true,
+        discussion_visible: true,
+        activity_stream_visible: true,
+        git_advertised: true,
+        request_ref_readable: true,
+        branch_mutable: false,
+        counts_as_ready: false,
+    }
+}
+
+fn private_visible(counts_as_ready: bool, branch_mutable: bool) -> ExpectedSurfaceDecision {
+    ExpectedSurfaceDecision {
+        listable: true,
+        exact_visible: true,
+        discussion_visible: true,
+        activity_stream_visible: true,
+        git_advertised: true,
+        request_ref_readable: true,
+        branch_mutable,
+        counts_as_ready,
+    }
+}
+
+fn no_permissions() -> RequestPermissions {
+    RequestPermissions {
+        can_open_discussion: false,
+        can_reply_to_discussion: false,
+        can_edit_description: false,
+        can_pull_branch: false,
+        can_push_branch: false,
+        can_mark_ready: false,
+        can_return_to_working: false,
+        can_manage_invitees: false,
+        can_leave_request: false,
+        can_hold: false,
+        can_assess: false,
+        can_close: false,
+        can_merge: false,
+    }
+}
+
+fn published_working_request() -> Request {
+    let mut request = ready_request();
+    request.state = RequestState::Working;
+    request.ready_at_unix = None;
+    request.current_stake_credits = 0;
+    request.validate_facts().unwrap();
+    request
+}
+
+fn held_request() -> Request {
+    let mut request = ready_request();
+    request.held_at_unix = Some(21);
+    request.held_by_user_id = Some("maintainer".to_string());
+    request.updated_at_unix = 21;
+    request.validate_facts().unwrap();
+    request
+}
+
+fn private_request(mut request: Request) -> Request {
+    request.audience = RequestAudience::Private;
+    request.author_role = RequestActorRole::Member;
+    request.current_stake_credits = 0;
+    request.validate_facts().unwrap();
+    request
 }
 
 fn public_start_input() -> StartRequestInput {

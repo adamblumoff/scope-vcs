@@ -392,6 +392,7 @@ async fn configure_push_intent_header(
         Some(repo),
         &[
             "config",
+            "--add",
             key.as_str(),
             &format!("X-Scope-Push-Intent: {token}"),
         ],

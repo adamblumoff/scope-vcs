@@ -2,14 +2,14 @@ use super::entities;
 use super::object_references::{delete_object_reference, replace_object_reference};
 use crate::{
     domain::requests::{
-        CreditLedgerEntry, REQUEST_LIST_MAX_PAGE_SIZE, Request, RequestActorRole,
-        RequestAssessmentOutcome, RequestAudience, RequestEvent, RequestState, UserCreditAccount,
+        CreditLedgerEntry, Request, RequestActorRole, RequestAssessmentOutcome, RequestAudience,
+        RequestEvent, RequestState, UserCreditAccount,
     },
     error::ApiError,
 };
 use sea_orm::{
-    ActiveModelTrait, ColumnTrait, ConnectionTrait, EntityTrait, FromQueryResult, IntoActiveModel,
-    QueryFilter, QueryOrder, QuerySelect, sea_query::Expr,
+    ActiveModelTrait, ColumnTrait, ConnectionTrait, EntityTrait, IntoActiveModel, QueryFilter,
+    QueryOrder, QuerySelect, sea_query::Expr,
 };
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -29,48 +29,26 @@ pub struct RequestListRow {
     pub has_git_snapshot: bool,
 }
 
-#[derive(FromQueryResult)]
-struct RequestListDbRow {
-    id: String,
-    name: String,
-    title: String,
-    author_role: String,
-    audience: String,
-    head_oid: String,
-    state: String,
-    current_stake_credits: i32,
-    assessment_outcome: Option<String>,
-    is_held: bool,
-    is_merged: bool,
-    updated_at_unix: i64,
-    has_git_snapshot: bool,
-}
-
-impl RequestListDbRow {
-    fn try_into_read_model(self) -> Result<RequestListRow, ApiError> {
-        Ok(RequestListRow {
-            id: self.id,
-            name: self.name,
-            title: self.title,
-            author_role: entities::decode_enum(self.author_role)?,
-            audience: entities::decode_enum(self.audience)?,
-            head_oid: self.head_oid,
-            state: entities::decode_enum(self.state)?,
-            current_stake_credits: entities::i32_to_u32(
-                self.current_stake_credits,
-                "request current stake credits",
-            )?,
-            assessment_outcome: self
-                .assessment_outcome
-                .map(entities::decode_enum)
-                .transpose()?,
-            is_held: self.is_held,
-            is_merged: self.is_merged,
-            updated_at_unix: entities::i64_to_u64(self.updated_at_unix, "request update time")?,
-            has_git_snapshot: self.has_git_snapshot,
-        })
+impl From<Request> for RequestListRow {
+    fn from(request: Request) -> Self {
+        Self {
+            id: request.id,
+            name: request.name,
+            title: request.title,
+            author_role: request.author_role,
+            audience: request.audience,
+            head_oid: request.head_oid,
+            state: request.state,
+            current_stake_credits: request.current_stake_credits,
+            assessment_outcome: request.assessment_outcome,
+            is_held: request.held_at_unix.is_some(),
+            is_merged: request.merged_at_unix.is_some(),
+            updated_at_unix: request.updated_at_unix,
+            has_git_snapshot: request.git_snapshot.is_some(),
+        }
     }
 }
+
 pub async fn request_by_id<C>(conn: &C, request_id: &str) -> Result<Option<Request>, ApiError>
 where
     C: ConnectionTrait,
@@ -113,65 +91,6 @@ where
         .map_err(ApiError::internal)?
         .into_iter()
         .map(entities::request::Model::try_into_domain)
-        .collect()
-}
-
-pub async fn request_list_page<C>(
-    conn: &C,
-    repo_id: &str,
-    audiences: &[RequestAudience],
-    after_id: Option<&str>,
-    limit: u64,
-) -> Result<Vec<RequestListRow>, ApiError>
-where
-    C: ConnectionTrait,
-{
-    if audiences.is_empty() {
-        return Ok(Vec::new());
-    }
-    let audiences = audiences
-        .iter()
-        .copied()
-        .map(entities::encode_enum)
-        .collect::<Result<Vec<_>, _>>()?;
-    let mut query = entities::request::Entity::find()
-        .select_only()
-        .column(entities::request::Column::Id)
-        .column(entities::request::Column::Name)
-        .column(entities::request::Column::Title)
-        .column(entities::request::Column::AuthorRole)
-        .column(entities::request::Column::Audience)
-        .column(entities::request::Column::HeadOid)
-        .column(entities::request::Column::State)
-        .column(entities::request::Column::CurrentStakeCredits)
-        .column(entities::request::Column::AssessmentOutcome)
-        .expr_as(
-            Expr::col(entities::request::Column::HeldAtUnix).is_not_null(),
-            "is_held",
-        )
-        .expr_as(
-            Expr::col(entities::request::Column::MergedAtUnix).is_not_null(),
-            "is_merged",
-        )
-        .column(entities::request::Column::UpdatedAtUnix)
-        .expr_as(
-            Expr::col(entities::request::Column::GitSnapshot).is_not_null(),
-            "has_git_snapshot",
-        )
-        .filter(entities::request::Column::RepoId.eq(repo_id))
-        .filter(entities::request::Column::Audience.is_in(audiences));
-    if let Some(after_id) = after_id {
-        query = query.filter(entities::request::Column::Id.gt(after_id));
-    }
-    query
-        .order_by_asc(entities::request::Column::Id)
-        .limit(limit.min((REQUEST_LIST_MAX_PAGE_SIZE + 1) as u64))
-        .into_model::<RequestListDbRow>()
-        .all(conn)
-        .await
-        .map_err(ApiError::internal)?
-        .into_iter()
-        .map(RequestListDbRow::try_into_read_model)
         .collect()
 }
 

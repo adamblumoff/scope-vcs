@@ -70,6 +70,7 @@ export function useRequestDiscussionStore({
   const key = requestDiscussionCacheKey({
     repoId,
     requestId: params.request_id,
+    viewerId: actor.id,
   })
   const [collection, setCollection] = useState(() =>
     collectionWithCachedUi(initialPage, readRequestDiscussionCache(key)),

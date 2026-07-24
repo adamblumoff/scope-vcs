@@ -16,11 +16,13 @@ const entries = createBoundedCache<string, CacheEntry>({
 export function requestDiscussionCacheKey({
   repoId,
   requestId,
+  viewerId,
 }: {
   repoId: string
   requestId: string
+  viewerId: string
 }) {
-  return [repoId, requestId].join('\0')
+  return [viewerId, repoId, requestId].join('\0')
 }
 
 export function readRequestDiscussionCache(key: string) {

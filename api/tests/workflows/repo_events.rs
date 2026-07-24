@@ -182,6 +182,17 @@ async fn public_repo_stream_drops_private_discussion_identifiers() {
         })
         .await
         .unwrap();
+    state
+        .metadata
+        .mutate_request_for_tests("req_public_stream", |request| {
+            request.state = crate::domain::requests::RequestState::ReadyForReview;
+            request.first_ready_at_unix = Some(2);
+            request.ready_at_unix = Some(2);
+            request.ready_queue_version = Some(1);
+            request.updated_at_unix = 2;
+        })
+        .await
+        .unwrap();
 
     let response = events(state.clone(), None).await;
     assert_eq!(response.status(), StatusCode::OK);
@@ -211,13 +222,34 @@ async fn public_repo_stream_drops_private_discussion_identifiers() {
         .publish_request_timeline_change(
             TEST_REPO_ID,
             "req_public_stream".to_string(),
-            "discussion_public".to_string(),
+            "discussion_ready".to_string(),
             2,
+            RequestAudience::Public,
+        )
+        .await;
+    let ready = next_event(&mut stream).await;
+    assert!(ready.contains("discussion_ready"));
+
+    state
+        .metadata
+        .mutate_request_for_tests("req_public_stream", |request| {
+            request.state = crate::domain::requests::RequestState::Working;
+            request.ready_at_unix = None;
+            request.updated_at_unix = 3;
+        })
+        .await
+        .unwrap();
+    state
+        .publish_request_timeline_change(
+            TEST_REPO_ID,
+            "req_public_stream".to_string(),
+            "discussion_published_working".to_string(),
+            3,
             RequestAudience::Public,
         )
         .await;
     let visible = next_event(&mut stream).await;
     assert!(visible.contains("req_public_stream"));
-    assert!(visible.contains("discussion_public"));
+    assert!(visible.contains("discussion_published_working"));
     assert!(!visible.contains("req_private_stream"));
 }

@@ -5,7 +5,7 @@ use crate::{
         projection::{ProjectionViewKey, project_graph},
         requests::{
             RecordRequestRevisionInput, Request, RequestAudience, RequestChangeBlock,
-            canonical_request_ref,
+            RequestViewer, canonical_request_ref, request_policy,
         },
         store::{RepoPublicationState, RepositoryActor, SourceBlob},
     },
@@ -138,12 +138,16 @@ pub(crate) async fn actor_has_open_editable_request(
     actor_user_id: &str,
     access: crate::domain::store::RepositoryAccess,
 ) -> Result<bool, ApiError> {
-    Ok(state
-        .metadata
-        .requests_by_repo_id(repo_id)
-        .await?
-        .into_iter()
-        .any(|request| request_actor_can_edit_ref(&request, actor_user_id, access)))
+    for request in state.metadata.requests_by_repo_id(repo_id).await? {
+        let is_invitee = state
+            .metadata
+            .request_is_invitee(&request.id, actor_user_id)
+            .await?;
+        if request_actor_can_edit_ref(&request, actor_user_id, access, is_invitee) {
+            return Ok(true);
+        }
+    }
+    Ok(false)
 }
 
 pub(crate) async fn ensure_request_receive_pack_staging_repo(
@@ -234,13 +238,20 @@ pub(crate) async fn seed_editable_request_refs(
 ) -> Result<(), ApiError> {
     let repo = find_repo(state, owner, repo_name).await?;
     let access = repo.access_for_user_id(actor_user_id);
-    let requests = state
-        .metadata
-        .requests_by_repo_id(&repo.record.id)
-        .await?
-        .into_iter()
-        .filter(|request| request_actor_can_edit_ref(request, actor_user_id, access))
-        .collect::<Vec<_>>();
+    let mut requests = Vec::new();
+    for request in state.metadata.requests_by_repo_id(&repo.record.id).await? {
+        let is_invitee = state
+            .metadata
+            .request_is_invitee(&request.id, actor_user_id)
+            .await?;
+        let decision = request_policy(
+            &request,
+            RequestViewer::new(access, Some(actor_user_id), is_invitee),
+        );
+        if decision.branch_mutable && decision.git_advertised {
+            requests.push(request);
+        }
+    }
     let public_base_repo = if access.actor != RepositoryActor::Public
         && requests.iter().any(|request| {
             request.audience == RequestAudience::Public && request.git_snapshot.is_none()
@@ -279,6 +290,10 @@ pub(crate) async fn persist_request_ref_revision(
     let request_repo_id = request.repo_id.clone();
     let request_audience = request.audience;
     let now_unix = unix_now()?;
+    let expected_old_head_oid = update
+        .old_head_oid
+        .clone()
+        .or_else(|| Some(request.head_oid.clone()));
     let persisted =
         persist_request_ref_to_store(state, owner, repo_name, staging_repo, &request, &update)
             .await?;
@@ -288,7 +303,7 @@ pub(crate) async fn persist_request_ref_revision(
             request_id: request.id,
             actor_user_id: actor_user_id.to_string(),
             actor_can_edit: false,
-            expected_old_head_oid: update.old_head_oid.clone(),
+            expected_old_head_oid,
             new_head_oid: update.new_head_oid.clone(),
             git_snapshot: persisted.git_snapshot.clone(),
             event_id: request_revision_event_id()?,
@@ -510,7 +525,7 @@ fn refs_by_name(refs: &[(String, String)]) -> BTreeMap<String, String> {
 fn install_request_pre_receive_hook(repo_root: &FsPath) -> Result<(), ApiError> {
     let hook = repo_root.join("hooks").join("pre-receive");
     let script = format!(
-        "#!/bin/sh\ncount=0\nwhile read old new ref; do\n  count=$((count + 1))\n  case \"$ref\" in\n    refs/heads/{DEFAULT_GIT_BRANCH})\n      echo \"Scope contributors cannot update main\" >&2\n      exit 1\n      ;;\n    refs/heads/*) ;;\n    *)\n      echo \"Scope request pushes only accept named request branches\" >&2\n      exit 1\n      ;;\n  esac\n  if [ \"$new\" = \"{EMPTY_GIT_OID}\" ]; then\n    echo \"Scope does not accept request branch deletes\" >&2\n    exit 1\n  fi\n  if [ \"$old\" = \"{EMPTY_GIT_OID}\" ]; then\n    echo \"request not found; fetch before pushing\" >&2\n    exit 1\n  fi\n  if [ \"$(git cat-file -t \"$new\" 2>/dev/null)\" != \"commit\" ]; then\n    echo \"Scope request refs must point at commits\" >&2\n    exit 1\n  fi\n  if ! git merge-base --is-ancestor \"$old\" \"$new\"; then\n    echo \"Scope rejects non-fast-forward request pushes\" >&2\n    exit 1\n  fi\ndone\nif [ \"$count\" -ne 1 ]; then\n  echo \"Scope accepts exactly one request ref update\" >&2\n  exit 1\nfi\n"
+        "#!/bin/sh\ncount=0\nwhile read old new ref; do\n  count=$((count + 1))\n  case \"$ref\" in\n    refs/heads/{DEFAULT_GIT_BRANCH})\n      echo \"Scope contributors cannot update main\" >&2\n      exit 1\n      ;;\n    refs/heads/*) ;;\n    *)\n      echo \"Scope request pushes only accept named request branches\" >&2\n      exit 1\n      ;;\n  esac\n  if [ \"$new\" = \"{EMPTY_GIT_OID}\" ]; then\n    echo \"Scope does not accept request branch deletes\" >&2\n    exit 1\n  fi\n  if [ \"$(git cat-file -t \"$new\" 2>/dev/null)\" != \"commit\" ]; then\n    echo \"Scope request refs must point at commits\" >&2\n    exit 1\n  fi\n  if [ \"$old\" != \"{EMPTY_GIT_OID}\" ] && ! git merge-base --is-ancestor \"$old\" \"$new\"; then\n    echo \"Scope rejects non-fast-forward request pushes\" >&2\n    exit 1\n  fi\ndone\nif [ \"$count\" -ne 1 ]; then\n  echo \"Scope accepts exactly one request ref update\" >&2\n  exit 1\nfi\n"
     );
     write_receive_pack_hook(&hook, &script)
 }
@@ -549,15 +564,12 @@ async fn persist_request_ref_to_store(
             .is_none()
             .then_some(request.head_oid.as_str())
     });
-    ensure_request_ref_store_head_matches_push(
-        expected_stored_head,
-        update.old_head_oid.as_deref(),
-    )?;
-    ensure_request_ref_is_fast_forward(
-        staging_repo,
-        update.old_head_oid.as_deref(),
-        &update.new_head_oid,
-    )?;
+    let logical_old_head = update
+        .old_head_oid
+        .as_deref()
+        .or(Some(request.head_oid.as_str()));
+    ensure_request_ref_store_head_matches_push(expected_stored_head, logical_old_head)?;
+    ensure_request_ref_is_fast_forward(staging_repo, logical_old_head, &update.new_head_oid)?;
     let refspec = format!("+{}:{}", update.request_ref, update.request_ref);
     run_git(
         Some(&store_repo),

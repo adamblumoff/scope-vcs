@@ -124,6 +124,15 @@ pub fn router(state: AppState) -> Router {
             post(http::requests::merge_request),
         )
         .route(
+            routes::REPO_REQUEST_INVITEES,
+            axum::routing::put(http::requests::add_request_invitee)
+                .delete(http::requests::remove_request_invitee),
+        )
+        .route(
+            routes::REPO_REQUEST_INVITEES_ME,
+            delete(http::requests::leave_request),
+        )
+        .route(
             routes::REPO_REQUEST_CHANGE_BLOCK_FILES,
             get(http::request_review::get_request_change_block_files),
         )

@@ -17,10 +17,107 @@ use std::sync::Arc;
 use tokio::{sync::Barrier, task::JoinSet};
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn public_working_cap_is_serialized_but_ready_return_is_exempt() {
+    let store = postgres_store();
+    grant_credits(&store, "user_public", 100).await;
+    start_uploaded_request(
+        &store,
+        "req_ready",
+        "ready-request",
+        "user_public",
+        RequestActorRole::Public,
+    )
+    .await;
+    store
+        .mark_request_ready(ready_input("req_ready", "user_public", Some(1), 100))
+        .await
+        .unwrap();
+
+    for index in 0..2 {
+        store
+            .start_request(start_input(
+                &format!("req_working_{index}"),
+                &format!("working-{index}"),
+                "user_public",
+                RequestActorRole::Public,
+                RequestAudience::Public,
+            ))
+            .await
+            .unwrap();
+    }
+
+    let barrier = Arc::new(Barrier::new(2));
+    let mut tasks = JoinSet::new();
+    for index in 2..4 {
+        let store = store.clone();
+        let barrier = Arc::clone(&barrier);
+        tasks.spawn(async move {
+            barrier.wait().await;
+            store
+                .start_request(start_input(
+                    &format!("req_working_{index}"),
+                    &format!("working-{index}"),
+                    "user_public",
+                    RequestActorRole::Public,
+                    RequestAudience::Public,
+                ))
+                .await
+        });
+    }
+    let mut successes = 0;
+    let mut failures = 0;
+    while let Some(result) = tasks.join_next().await {
+        match result.unwrap() {
+            Ok(_) => successes += 1,
+            Err(error) if error.message.contains("3 Working requests") => failures += 1,
+            Err(error) => panic!("unexpected Working admission result: {}", error.message),
+        }
+    }
+    assert_eq!((successes, failures), (1, 1));
+
+    let returned = store
+        .return_request_to_working(ReturnRequestToWorkingInput {
+            request_id: "req_ready".to_string(),
+            actor_user_id: "user_public".to_string(),
+            actor_is_author: false,
+            actor_is_maintainer: false,
+            actor_can_mutate: false,
+            reason: RequestReviewExitReason::AuthorReturned,
+            event_id: "event_ready_return_exempt".to_string(),
+            now_unix: 200,
+        })
+        .await
+        .unwrap();
+    assert_eq!(returned.request.state, RequestState::Working);
+    assert_eq!(
+        store
+            .requests_by_repo_author("owner/repo", "user_public")
+            .await
+            .unwrap()
+            .into_iter()
+            .filter(|request| request.state == RequestState::Working)
+            .count(),
+        4
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn ready_cap_is_serialized_and_failed_admission_charges_nothing() {
     let store = postgres_store();
     grant_credits(&store, "user_public", 100).await;
-    for index in 0..4 {
+    start_uploaded_request(
+        &store,
+        "req_0",
+        "request-0",
+        "user_public",
+        RequestActorRole::Public,
+    )
+    .await;
+    store
+        .mark_request_ready(ready_input("req_0", "user_public", Some(1), 0))
+        .await
+        .unwrap();
+    for index in 1..4 {
         start_uploaded_request(
             &store,
             &format!("req_{index}"),
@@ -31,9 +128,9 @@ async fn ready_cap_is_serialized_and_failed_admission_charges_nothing() {
         .await;
     }
 
-    let barrier = Arc::new(Barrier::new(4));
+    let barrier = Arc::new(Barrier::new(3));
     let mut tasks = JoinSet::new();
-    for index in 0..4 {
+    for index in 1..4 {
         let store = store.clone();
         let barrier = Arc::clone(&barrier);
         tasks.spawn(async move {
@@ -58,7 +155,7 @@ async fn ready_cap_is_serialized_and_failed_admission_charges_nothing() {
         }
     }
 
-    assert_eq!((successes, failures), (3, 1));
+    assert_eq!((successes, failures), (2, 1));
     assert_eq!(
         store
             .requests_by_repo_author("owner/repo", "user_public")
@@ -131,7 +228,10 @@ async fn repeat_cycles_hold_invalidation_and_assessment_are_atomic_and_auditable
         })
         .await
         .unwrap_err();
-    assert!(blocked.message.contains("held"));
+    assert!(matches!(
+        blocked.kind,
+        crate::error::ErrorKind::Forbidden | crate::error::ErrorKind::Conflict
+    ));
 
     let working = store
         .return_request_to_working(ReturnRequestToWorkingInput {
@@ -658,18 +758,13 @@ async fn start_uploaded_request_with_audience(
     audience: RequestAudience,
 ) {
     store
-        .start_request(StartRequestInput {
-            id: request_id.to_string(),
-            repo_id: "owner/repo".to_string(),
-            name: name.to_string(),
-            author_user_id: author_user_id.to_string(),
-            title: None,
+        .start_request(start_input(
+            request_id,
+            name,
+            author_user_id,
             author_role,
             audience,
-            base_main_oid: "base".to_string(),
-            event_id: format!("event_started_{request_id}"),
-            now_unix: 2,
-        })
+        ))
         .await
         .unwrap();
     store
@@ -690,6 +785,27 @@ async fn start_uploaded_request_with_audience(
         })
         .await
         .unwrap();
+}
+
+fn start_input(
+    request_id: &str,
+    name: &str,
+    author_user_id: &str,
+    author_role: RequestActorRole,
+    audience: RequestAudience,
+) -> StartRequestInput {
+    StartRequestInput {
+        id: request_id.to_string(),
+        repo_id: "owner/repo".to_string(),
+        name: name.to_string(),
+        author_user_id: author_user_id.to_string(),
+        title: None,
+        author_role,
+        audience,
+        base_main_oid: "base".to_string(),
+        event_id: format!("event_started_{request_id}"),
+        now_unix: 2,
+    }
 }
 
 fn ready_input(

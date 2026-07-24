@@ -356,8 +356,42 @@ pub struct RequestSummaryResponse {
     pub merged_main_oid: Option<GitOid>,
     pub created_at_unix: u64,
     pub updated_at_unix: u64,
+    pub invitees: Vec<RequestInviteeResponse>,
     pub permissions: RequestPermissionsResponse,
     pub mergeability: RequestMergeabilityResponse,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
+pub struct RequestInviteeResponse {
+    pub user: RequestActorSummaryResponse,
+    pub invited_by_user_id: String,
+    pub created_at_unix: u64,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
+pub struct AddRequestInviteeRequest {
+    pub handle: String,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
+pub struct RemoveRequestInviteeRequest {
+    pub handle: String,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
+pub struct RequestInviteeMutationResponse {
+    pub request: RequestSummaryResponse,
+    pub invitee: RequestInviteeResponse,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
+pub struct LeaveRequestResponse {
+    pub invitee: RequestInviteeResponse,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -387,6 +421,7 @@ pub struct RequestPermissionsResponse {
     pub can_mark_ready: bool,
     pub can_return_to_working: bool,
     pub can_manage_invitees: bool,
+    pub can_leave_request: bool,
     pub can_hold: bool,
     pub can_assess: bool,
     pub can_close: bool,

@@ -1,6 +1,6 @@
 use super::{
-    MetadataStore, acquire_aggregate_lock,
-    request_access::{ensure_request_collaborator, ensure_user_exists, repo_by_id},
+    MetadataStore,
+    request_access::{ensure_user_exists, lock_request_repository, request_policy_for_user},
     request_change_block_rows::{change_block_by_id, change_blocks_by_ids},
     request_discussion_rows::{
         RequestDiscussionReplyReadModel, changed_discussions_for_request, discussion_by_client_id,
@@ -10,7 +10,7 @@ use super::{
         unread_content_counts, users_by_ids as load_users_by_ids,
     },
     request_rows::insert_request_event_row,
-    request_rows::{request_by_id, save_request_row},
+    request_rows::save_request_row,
 };
 use crate::{
     domain::requests::{
@@ -233,14 +233,13 @@ impl MetadataStore {
     ) -> Result<CreateRequestDiscussionMutation, ApiError> {
         let db = Arc::clone(&self.db);
         let tx = db.as_ref().begin().await.map_err(ApiError::internal)?;
-        acquire_aggregate_lock(&tx, "request", &input.request_id).await?;
+        let (repo, request) = lock_request_repository(&tx, &input.request_id).await?;
         ensure_user_exists(&tx, &input.actor_user_id).await?;
-        let request = request_by_id(&tx, &input.request_id)
-            .await?
-            .ok_or_else(|| ApiError::not_found("request not found"))?;
-        let repo = repo_by_id(&tx, &request.repo_id).await?;
-        ensure_request_collaborator(&repo, &request, &input.actor_user_id)?;
-        input.actor_can_participate = true;
+        input.actor_can_participate =
+            request_policy_for_user(&tx, &repo, &request, &input.actor_user_id)
+                .await?
+                .permissions
+                .can_open_discussion;
 
         if let Some(discussion) = discussion_by_client_id(
             &tx,
@@ -290,14 +289,13 @@ impl MetadataStore {
     ) -> Result<CreateRequestDiscussionReplyMutation, ApiError> {
         let db = Arc::clone(&self.db);
         let tx = db.as_ref().begin().await.map_err(ApiError::internal)?;
-        acquire_aggregate_lock(&tx, "request", &input.request_id).await?;
+        let (repo, request) = lock_request_repository(&tx, &input.request_id).await?;
         ensure_user_exists(&tx, &input.actor_user_id).await?;
-        let request = request_by_id(&tx, &input.request_id)
-            .await?
-            .ok_or_else(|| ApiError::not_found("request not found"))?;
-        let repo = repo_by_id(&tx, &request.repo_id).await?;
-        ensure_request_collaborator(&repo, &request, &input.actor_user_id)?;
-        input.actor_can_participate = true;
+        input.actor_can_participate =
+            request_policy_for_user(&tx, &repo, &request, &input.actor_user_id)
+                .await?
+                .permissions
+                .can_reply_to_discussion;
         let discussion = discussion_by_id(&tx, &input.discussion_id)
             .await?
             .filter(|discussion| discussion.request_id == input.request_id)
@@ -399,12 +397,14 @@ impl MetadataStore {
     ) -> Result<RequestDiscussion, ApiError> {
         let db = Arc::clone(&self.db);
         let tx = db.as_ref().begin().await.map_err(ApiError::internal)?;
-        acquire_aggregate_lock(&tx, "request", &request_id).await?;
+        let (repo, request) = lock_request_repository(&tx, &request_id).await?;
         ensure_user_exists(&tx, &actor_user_id).await?;
-        let request = request_by_id(&tx, &request_id)
+        if !request_policy_for_user(&tx, &repo, &request, &actor_user_id)
             .await?
-            .ok_or_else(|| ApiError::not_found("request not found"))?;
-        let repo = repo_by_id(&tx, &request.repo_id).await?;
+            .discussion_visible
+        {
+            return Err(ApiError::not_found("request not found"));
+        }
         let discussion = discussion_by_id(&tx, &discussion_id)
             .await?
             .filter(|discussion| discussion.request_id == request_id)
@@ -460,14 +460,13 @@ impl MetadataStore {
     ) -> Result<CreateRequestDiscussionReplyMutation, ApiError> {
         let db = Arc::clone(&self.db);
         let tx = db.as_ref().begin().await.map_err(ApiError::internal)?;
-        acquire_aggregate_lock(&tx, "request", &input.request_id).await?;
+        let (repo, request) = lock_request_repository(&tx, &input.request_id).await?;
         ensure_user_exists(&tx, &input.actor_user_id).await?;
-        let request = request_by_id(&tx, &input.request_id)
-            .await?
-            .ok_or_else(|| ApiError::not_found("request not found"))?;
-        let repo = repo_by_id(&tx, &request.repo_id).await?;
-        ensure_request_collaborator(&repo, &request, &input.actor_user_id)?;
-        input.actor_can_participate = true;
+        input.actor_can_participate =
+            request_policy_for_user(&tx, &repo, &request, &input.actor_user_id)
+                .await?
+                .permissions
+                .can_reply_to_discussion;
         input.actor_is_maintainer = repo.is_maintainer_user_id(&input.actor_user_id);
         let discussion = discussion_by_id(&tx, &input.discussion_id)
             .await?
@@ -533,7 +532,13 @@ impl MetadataStore {
         let discussion = discussion_by_id(&tx, &input.discussion_id)
             .await?
             .ok_or_else(|| ApiError::not_found("request discussion not found"))?;
-        acquire_aggregate_lock(&tx, "request", &discussion.request_id).await?;
+        let (repo, request) = lock_request_repository(&tx, &discussion.request_id).await?;
+        if !request_policy_for_user(&tx, &repo, &request, &input.user_id)
+            .await?
+            .discussion_visible
+        {
+            return Err(ApiError::not_found("request not found"));
+        }
         let discussions = BTreeMap::from([(discussion.id.clone(), discussion)]);
         let mut read_states = BTreeMap::new();
         if let Some(state) = read_state(&tx, &input.discussion_id, &input.user_id).await? {

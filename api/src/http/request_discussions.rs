@@ -3,7 +3,7 @@ use crate::{
     domain::requests::{
         CreateRequestDiscussionInput, CreateRequestDiscussionReplyInput,
         MarkRequestDiscussionReadInput, REQUEST_ACTIVITY_PAGE_MAX_EVENTS,
-        ReopenAndReplyToRequestDiscussionInput, request_permissions,
+        ReopenAndReplyToRequestDiscussionInput,
     },
     error::ApiError,
     http::{requests::*, responses::*},
@@ -58,7 +58,14 @@ pub(crate) async fn list_discussions(
 ) -> Result<Json<RequestDiscussionPageResponse>, ApiError> {
     let (repo, access, viewer_user_id) =
         repo_and_access(&state, &headers, &owner, &repo_name).await?;
-    let request = visible_request(&state, &repo, access, &request_id).await?;
+    let request = visible_request(
+        &state,
+        &repo,
+        access,
+        viewer_user_id.as_deref(),
+        &request_id,
+    )
+    .await?;
     let limit = query
         .limit
         .unwrap_or(DEFAULT_DISCUSSION_LIMIT)
@@ -118,10 +125,7 @@ pub(crate) async fn create_discussion(
     let user = require_scope_user(&state, &headers).await?;
     let actor_user_id = user.id.clone();
     let (repo, access, _) = repo_and_access(&state, &headers, &owner, &repo_name).await?;
-    let request = visible_request(&state, &repo, access, &request_id).await?;
-    if !request_permissions(&request, access, Some(&user.id)).can_open_discussion {
-        return Err(ApiError::forbidden("request discussion access required"));
-    }
+    let request = visible_request(&state, &repo, access, Some(&user.id), &request_id).await?;
     let mutation = state
         .metadata
         .create_request_discussion(CreateRequestDiscussionInput {
@@ -156,8 +160,16 @@ pub(crate) async fn list_replies(
     Path((owner, repo_name, request_id, discussion_id)): Path<(String, String, String, String)>,
     Query(query): Query<DiscussionRepliesQuery>,
 ) -> Result<Json<RequestDiscussionRepliesPageResponse>, ApiError> {
-    let (repo, access, _) = repo_and_access(&state, &headers, &owner, &repo_name).await?;
-    visible_request(&state, &repo, access, &request_id).await?;
+    let (repo, access, viewer_user_id) =
+        repo_and_access(&state, &headers, &owner, &repo_name).await?;
+    visible_request(
+        &state,
+        &repo,
+        access,
+        viewer_user_id.as_deref(),
+        &request_id,
+    )
+    .await?;
     ensure_discussion_in_request(&state, &request_id, &discussion_id).await?;
     let limit = query
         .limit
@@ -198,10 +210,7 @@ pub(crate) async fn create_reply(
     let user = require_scope_user(&state, &headers).await?;
     let actor_user_id = user.id.clone();
     let (repo, access, _) = repo_and_access(&state, &headers, &owner, &repo_name).await?;
-    let request = visible_request(&state, &repo, access, &request_id).await?;
-    if !request_permissions(&request, access, Some(&user.id)).can_reply_to_discussion {
-        return Err(ApiError::forbidden("request discussion access required"));
-    }
+    let request = visible_request(&state, &repo, access, Some(&user.id), &request_id).await?;
     let mutation = state
         .metadata
         .create_request_discussion_reply(CreateRequestDiscussionReplyInput {
@@ -270,7 +279,7 @@ pub(crate) async fn reopen_and_reply(
     let user = require_scope_user(&state, &headers).await?;
     let actor_user_id = user.id.clone();
     let (repo, access, _) = repo_and_access(&state, &headers, &owner, &repo_name).await?;
-    let request = visible_request(&state, &repo, access, &request_id).await?;
+    let request = visible_request(&state, &repo, access, Some(&user.id), &request_id).await?;
     let mutation = state
         .metadata
         .reopen_and_reply_to_request_discussion(ReopenAndReplyToRequestDiscussionInput {
@@ -306,7 +315,7 @@ pub(crate) async fn mark_read(
 ) -> Result<Json<RequestDiscussionReadResponse>, ApiError> {
     let user = require_scope_user(&state, &headers).await?;
     let (repo, access, _) = repo_and_access(&state, &headers, &owner, &repo_name).await?;
-    visible_request(&state, &repo, access, &request_id).await?;
+    visible_request(&state, &repo, access, Some(&user.id), &request_id).await?;
     ensure_discussion_in_request(&state, &request_id, &discussion_id).await?;
     let state = state
         .metadata
@@ -330,7 +339,14 @@ pub(crate) async fn changed_discussions(
 ) -> Result<Json<RequestDiscussionChangesResponse>, ApiError> {
     let (repo, access, viewer_user_id) =
         repo_and_access(&state, &headers, &owner, &repo_name).await?;
-    let request = visible_request(&state, &repo, access, &request_id).await?;
+    let request = visible_request(
+        &state,
+        &repo,
+        access,
+        viewer_user_id.as_deref(),
+        &request_id,
+    )
+    .await?;
     let limit = query.limit.unwrap_or(100).clamp(1, 100);
     let mut batch = state
         .metadata
@@ -366,8 +382,16 @@ pub(crate) async fn activity(
     Path((owner, repo_name, request_id)): Path<(String, String, String)>,
     Query(query): Query<ActivityQuery>,
 ) -> Result<Json<RequestActivityPageResponse>, ApiError> {
-    let (repo, access, _) = repo_and_access(&state, &headers, &owner, &repo_name).await?;
-    let request = visible_request(&state, &repo, access, &request_id).await?;
+    let (repo, access, viewer_user_id) =
+        repo_and_access(&state, &headers, &owner, &repo_name).await?;
+    let request = visible_request(
+        &state,
+        &repo,
+        access,
+        viewer_user_id.as_deref(),
+        &request_id,
+    )
+    .await?;
     let latest = query.latest.unwrap_or(false);
     let limit = query
         .limit
@@ -421,7 +445,7 @@ async fn transition_discussion(
     let user = require_scope_user(&state, &headers).await?;
     let actor_user_id = user.id.clone();
     let (repo, access, _) = repo_and_access(&state, &headers, &owner, &repo_name).await?;
-    let request = visible_request(&state, &repo, access, &request_id).await?;
+    let request = visible_request(&state, &repo, access, Some(&user.id), &request_id).await?;
     let discussion = if resolve {
         state
             .metadata
