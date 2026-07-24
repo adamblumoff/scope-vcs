@@ -146,20 +146,15 @@ pub(super) fn request_line(request: &RequestSummaryResponse) -> String {
     })
 }
 
-pub(super) fn request_list_line(
-    request: &RequestListItemResponse,
-    ready_at_unix: Option<u64>,
-    held: bool,
-    now_unix: u64,
-) -> String {
+pub(super) fn request_list_line(request: &RequestListItemResponse, now_unix: u64) -> String {
     format!(
         "{:>5}  {}",
-        wait_label(ready_at_unix, now_unix),
+        wait_label(request.ready_at_unix, now_unix),
         format_request_line(RequestLine {
             name: &request.name,
             id: &request.id,
             state: request.state,
-            held,
+            held: request.held_at_unix.is_some(),
             title: &request.title,
             stake_credits: request.current_stake_credits,
             head_oid: &request.head_oid,
@@ -474,12 +469,13 @@ mod tests {
     use serde_json::json;
 
     #[test]
-    fn list_uses_authoritative_detail_hold_state() {
+    fn list_uses_authoritative_response_hold_state() {
         let request: RequestListItemResponse = serde_json::from_value(json!({
             "id": "req_one", "name": "fix-refs", "title": "Fix refs",
             "author_role": "Public", "audience": "Public", "head_oid": oid('b'),
             "state": "ReadyForReview", "current_stake_credits": 12,
-            "assessment_outcome": null, "updated_at_unix": 20,
+            "assessment_outcome": null, "ready_at_unix": 10,
+            "held_at_unix": 11, "updated_at_unix": 20,
             "mergeability": {
                 "status": "NotMaintainer",
                 "current_main_oid": oid('a'),
@@ -489,7 +485,7 @@ mod tests {
         }))
         .unwrap();
 
-        let rendered = request_list_line(&request, Some(10), true, 70);
+        let rendered = request_list_line(&request, 70);
         assert!(rendered.contains("on-hold"), "{rendered}");
         assert!(rendered.contains("1m"), "{rendered}");
     }

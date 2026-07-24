@@ -460,26 +460,6 @@ pub(super) fn print_request_list(
         let Some(next) = page.next_cursor else { break };
         cursor = Some(next);
     }
-    let mut ready_details = std::collections::HashMap::new();
-    for request in &requests {
-        if request.state == scope_core::domain::requests::RequestState::ReadyForReview {
-            let detail = get_request(
-                client,
-                api_url,
-                session_token,
-                &context.target.owner,
-                &context.target.repo,
-                &request.id,
-            )?;
-            ready_details.insert(
-                request.id.clone(),
-                (
-                    detail.request.ready_at_unix,
-                    detail.request.held_at_unix.is_some(),
-                ),
-            );
-        }
-    }
     requests.sort_by(|left, right| {
         let rank = |state| match state {
             scope_core::domain::requests::RequestState::ReadyForReview => 0,
@@ -495,14 +475,7 @@ pub(super) fn print_request_list(
                 .current_stake_credits
                 .cmp(&left.current_stake_credits)
                 .then_with(|| {
-                    ready_details
-                        .get(&left.id)
-                        .and_then(|(ready_at, _)| *ready_at)
-                        .cmp(
-                            &ready_details
-                                .get(&right.id)
-                                .and_then(|(ready_at, _)| *ready_at),
-                        )
+                    left.ready_at_unix.cmp(&right.ready_at_unix)
                 })
                 .then_with(|| left.id.cmp(&right.id));
         }
@@ -519,14 +492,7 @@ pub(super) fn print_request_list(
             .context("system clock is before Unix epoch")?
             .as_secs();
         for request in requests {
-            let (request_ready_at, held) = ready_details
-                .get(&request.id)
-                .copied()
-                .unwrap_or((None, false));
-            println!(
-                "{}",
-                request_list_line(&request, request_ready_at, held, now_unix)
-            );
+            println!("{}", request_list_line(&request, now_unix));
         }
     }
     Ok(())

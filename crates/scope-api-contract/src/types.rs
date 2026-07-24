@@ -412,6 +412,8 @@ pub struct RequestListItemResponse {
     pub state: RequestState,
     pub current_stake_credits: u32,
     pub assessment_outcome: Option<RequestAssessmentOutcome>,
+    pub ready_at_unix: Option<u64>,
+    pub held_at_unix: Option<u64>,
     pub updated_at_unix: u64,
     pub mergeability: RequestMergeabilityResponse,
 }
