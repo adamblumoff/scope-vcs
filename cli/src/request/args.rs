@@ -86,7 +86,11 @@ pub(super) struct RequestPushArgs {
 pub(super) struct RequestReadyArgs {
     #[command(flatten)]
     pub(super) target: RequestTargetArgs,
-    #[arg(long, value_name = "CREDITS", help = "Credits to stake; ignored for maintainer/member-authored requests")]
+    #[arg(
+        long,
+        value_name = "CREDITS",
+        help = "Credits to stake; ignored for maintainer/member-authored requests"
+    )]
     pub(super) stake: u32,
     #[arg(long, help = "Confirm publication and the credit stake")]
     pub(super) yes: bool,
