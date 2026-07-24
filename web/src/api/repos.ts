@@ -24,5 +24,5 @@ export {
 } from './repo-inputs'
 export {
   loadRequestForRequest,
-  loadRequestsForRequest,
+  loadRequestQueueForRequest,
 } from './requests'

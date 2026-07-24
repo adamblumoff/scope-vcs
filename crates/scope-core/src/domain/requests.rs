@@ -55,6 +55,8 @@ pub use model::{
     RequestEventPayload, RequestIdentityAuditFact, RequestInvitee, RequestState,
     RequestTimelineMutation, validate_request_facts,
 };
+mod queue;
+pub use queue::RequestQueueSection;
 mod review;
 pub use review::{
     REQUEST_MAX_STAKE_CREDITS, RequestAssessmentOutcome, RequestReviewExitReason,

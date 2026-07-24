@@ -8,7 +8,7 @@ use super::{
     MetadataStore, acquire_aggregate_lock,
     request_access::{ensure_user_exists, lock_request_repository, request_policy_for_user},
     request_invitees::delete_request_invitees,
-    request_ready_queue::next_ready_queue_version,
+    request_queue::next_ready_queue_version,
     request_rows::{
         credit_account_by_user_id, insert_credit_ledger_entry_row, insert_request_event_row,
         request_event_by_id, requests_by_repo_author, save_credit_account_row, save_request_row,

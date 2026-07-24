@@ -26,6 +26,7 @@ required-features = ["test-support"]
 anyhow = "1.0.100"
 axum = "0.8.7"
 base64 = "0.22.1"
+chacha20poly1305 = "0.10.1"
 flate2 = "1.1"
 futures-util = { version = "0.3.32", default-features = false, features = ["std"] }
 hex = "0.4.3"

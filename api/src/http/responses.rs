@@ -229,7 +229,7 @@ pub(crate) struct CommitFileResponse {
 pub(crate) fn repo_summary_for_user(
     repo: &StoredRepository,
     user_id: &str,
-    open_request_count: usize,
+    ready_for_review_count: usize,
 ) -> Option<RepoSummaryResponse> {
     let access = repo.access_for_user_id(user_id);
     if access.actor == RepositoryActor::Public {
@@ -253,7 +253,7 @@ pub(crate) fn repo_summary_for_user(
         default_visibility: repo.record.default_visibility,
         change_version: repo_change_version_for_access(repo, access),
         access: repository_access_response(access),
-        open_request_count,
+        ready_for_review_count,
         request_permissions: repo_request_permissions_response(access),
     })
 }

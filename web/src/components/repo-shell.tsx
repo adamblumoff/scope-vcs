@@ -70,8 +70,8 @@ export function RepoShell({
             ...(repo.access.actor === 'Public'
               ? []
               : [{ id: 'actor', label: repo.access.actor }]),
-            ...(repo.open_request_count > 0
-              ? [{ id: 'requests', label: `${repo.open_request_count} open request${repo.open_request_count === 1 ? '' : 's'}` }]
+            ...(repo.ready_for_review_count > 0
+              ? [{ id: 'requests', label: `${repo.ready_for_review_count} ready for review` }]
               : []),
           ]}
         />
