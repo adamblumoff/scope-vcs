@@ -24,12 +24,13 @@ export function RequestLifecycleActions({
   const [dialog, setDialog] = useState<Dialog>(null)
   const busy = actions.pending !== null
   const permissions = request.permissions
+  const canMerge = permissions.can_merge && request.mergeability.status === 'Ready'
   const hasActions = permissions.can_mark_ready ||
     permissions.can_return_to_working ||
     permissions.can_hold ||
     permissions.can_request_changes ||
     permissions.can_assess ||
-    permissions.can_merge ||
+    canMerge ||
     permissions.can_close
 
   if (!hasActions) return null
@@ -75,7 +76,7 @@ export function RequestLifecycleActions({
             Assess…
           </Button>
         ) : null}
-        {permissions.can_merge ? (
+        {canMerge ? (
           <Button disabled={busy} onClick={() => setDialog('merge')} size="sm" type="button" variant="success">
             Merge
           </Button>
