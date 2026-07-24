@@ -38,6 +38,10 @@ mod request_discussions;
 pub use request_discussions::{
     RequestDiscussionReadBatch, RequestDiscussionReadModel, RequestDiscussionsPageQuery,
 };
+mod request_invitees;
+pub use request_invitees::{
+    AddRequestInviteeCommand, LeaveRequestCommand, RemoveRequestInviteeCommand, RequestInviteeRead,
+};
 mod request_ready_queue;
 pub use request_ready_queue::{ReadyRequestQueueCursor, ReadyRequestQueueRow};
 mod request_rows;

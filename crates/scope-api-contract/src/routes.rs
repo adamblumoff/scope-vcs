@@ -29,6 +29,9 @@ pub const REPO_REQUEST_REQUEST_CHANGES: &str =
 pub const REPO_REQUEST_ASSESSMENT: &str =
     "/v1/repos/{owner}/{repo}/requests/{request_id}/assessment";
 pub const REPO_REQUEST_MERGE: &str = "/v1/repos/{owner}/{repo}/requests/{request_id}/merge";
+pub const REPO_REQUEST_INVITEES: &str = "/v1/repos/{owner}/{repo}/requests/{request_id}/invitees";
+pub const REPO_REQUEST_INVITEES_ME: &str =
+    "/v1/repos/{owner}/{repo}/requests/{request_id}/invitees/me";
 pub const REPO_SESSION: &str = "/v1/repos/{owner}/{repo}/session";
 pub const REPO_FILES: &str = "/v1/repos/{owner}/{repo}/files";
 pub const REPO_FILE_CONTENT: &str = "/v1/repos/{owner}/{repo}/files/content";
@@ -127,6 +130,14 @@ pub fn repo_request_assessment(owner: &str, repo: &str, request_id: &str) -> Str
 
 pub fn repo_request_merge(owner: &str, repo: &str, request_id: &str) -> String {
     format!("{}/merge", repo_request(owner, repo, request_id))
+}
+
+pub fn repo_request_invitees(owner: &str, repo: &str, request_id: &str) -> String {
+    format!("{}/invitees", repo_request(owner, repo, request_id))
+}
+
+pub fn repo_request_invitees_me(owner: &str, repo: &str, request_id: &str) -> String {
+    format!("{}/invitees/me", repo_request(owner, repo, request_id))
 }
 
 pub fn repo_request_action(owner: &str, repo: &str, request_id: &str, action: &str) -> String {

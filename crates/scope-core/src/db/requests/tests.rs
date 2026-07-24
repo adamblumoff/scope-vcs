@@ -3,106 +3,14 @@ use crate::domain::{
     policy::Visibility,
     requests::{
         CreateRequestDiscussionInput, CreateRequestDiscussionReplyInput,
-        REQUEST_LIST_MAX_PAGE_SIZE, ReopenAndReplyToRequestDiscussionInput, RequestActorRole,
-        RequestAudience, RequestDiscussionStatus, RequestState,
+        ReopenAndReplyToRequestDiscussionInput, RequestActorRole, RequestAudience,
+        RequestDiscussionStatus, RequestState,
     },
     store::{
         AppCatalog, DEFAULT_GIT_FILE_MODE, RepoPublicationState, SourceBlob, StoredRepository,
         UserAccount, app_catalog,
     },
 };
-
-#[tokio::test]
-async fn request_list_page_projects_visible_rows_in_stable_id_pages() {
-    let store = postgres_store();
-
-    let mut private = public_start_input();
-    private.id = "req_a".to_string();
-    private.name = "private-request".to_string();
-    private.author_user_id = "user_owner".to_string();
-    private.author_role = RequestActorRole::Owner;
-    private.audience = RequestAudience::Private;
-    private.event_id = "event_a".to_string();
-    store.start_request(private).await.unwrap();
-
-    let mut public_b = public_start_input();
-    public_b.id = "req_b".to_string();
-    public_b.name = "public-b".to_string();
-    public_b.event_id = "event_b".to_string();
-    store.start_request(public_b).await.unwrap();
-    let mut upload_b = public_upload_input();
-    upload_b.request_id = "req_b".to_string();
-    upload_b.new_head_oid = "head_b".to_string();
-    upload_b.git_snapshot = source_blob("head_b");
-    store.record_working_request_upload(upload_b).await.unwrap();
-
-    let mut public_c = public_start_input();
-    public_c.id = "req_c".to_string();
-    public_c.name = "public-c".to_string();
-    public_c.event_id = "event_c".to_string();
-    store.start_request(public_c).await.unwrap();
-
-    let audiences = [RequestAudience::Public, RequestAudience::Private];
-    let first_page = store
-        .request_list_page("owner/repo", &audiences, None, 2)
-        .await
-        .unwrap();
-    assert_eq!(
-        first_page
-            .iter()
-            .map(|request| request.id.as_str())
-            .collect::<Vec<_>>(),
-        vec!["req_a", "req_b"]
-    );
-    assert!(!first_page[0].has_git_snapshot);
-    assert!(first_page[1].has_git_snapshot);
-    assert_eq!(first_page[1].head_oid, "head_b");
-    assert_eq!(first_page[1].state, RequestState::Working);
-
-    let second_page = store
-        .request_list_page("owner/repo", &audiences, Some("req_b"), 2)
-        .await
-        .unwrap();
-    assert_eq!(
-        second_page
-            .iter()
-            .map(|request| request.id.as_str())
-            .collect::<Vec<_>>(),
-        vec!["req_c"]
-    );
-
-    let public_only = store
-        .request_list_page("owner/repo", &[RequestAudience::Public], None, 10)
-        .await
-        .unwrap();
-    assert_eq!(
-        public_only
-            .iter()
-            .map(|request| request.id.as_str())
-            .collect::<Vec<_>>(),
-        vec!["req_b", "req_c"]
-    );
-    assert!(
-        store
-            .request_list_page("owner/repo", &[], None, 10)
-            .await
-            .unwrap()
-            .is_empty()
-    );
-
-    for index in 0..(REQUEST_LIST_MAX_PAGE_SIZE + 5) {
-        let mut input = public_start_input();
-        input.id = format!("zz_req_{index:03}");
-        input.name = format!("bounded-{index}");
-        input.event_id = format!("event_bounded_{index}");
-        store.start_request(input).await.unwrap();
-    }
-    let bounded = store
-        .request_list_page("owner/repo", &audiences, None, u64::MAX)
-        .await
-        .unwrap();
-    assert_eq!(bounded.len(), REQUEST_LIST_MAX_PAGE_SIZE + 1);
-}
 
 #[tokio::test]
 async fn discussion_transactions_are_idempotent_atomic_and_self_read() {

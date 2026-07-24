@@ -11,10 +11,11 @@ import {
 } from './request-discussion-cache'
 import type { RequestDiscussion } from './request-discussion-types'
 
-test('keys timeline views by repository and request', () => {
+test('keys timeline views by viewer, repository, and request', () => {
   const base = {
     repoId: 'scope/demo',
     requestId: 'request-1',
+    viewerId: 'user-maya',
   }
   assert.equal(
     requestDiscussionCacheKey(base),
@@ -23,6 +24,10 @@ test('keys timeline views by repository and request', () => {
   assert.notEqual(
     requestDiscussionCacheKey(base),
     requestDiscussionCacheKey({ ...base, requestId: 'request-2' }),
+  )
+  assert.notEqual(
+    requestDiscussionCacheKey(base),
+    requestDiscussionCacheKey({ ...base, viewerId: 'user-ravi' }),
   )
 })
 

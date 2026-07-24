@@ -1,5 +1,5 @@
 use crate::domain::{
-    requests::{Request, request_counts_as_open, request_visible_to_access},
+    requests::{Request, RequestViewer, request_policy},
     store::{
         RepositoryAccess, RepositoryInvite, RepositoryInviteState, RepositoryMember,
         StoredRepository, UserAccount,
@@ -297,7 +297,7 @@ async fn open_request_count_for_access(
 }
 
 fn request_counts_for_access(request: &Request, access: RepositoryAccess) -> bool {
-    request_counts_as_open(request) && request_visible_to_access(request, access)
+    request_policy(request, RequestViewer::new(access, None, false)).counts_as_ready
 }
 
 async fn member_response_for_user(

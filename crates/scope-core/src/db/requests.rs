@@ -3,29 +3,28 @@ use super::{
     cleanup_queue::queue_pending_source_blob_deletion_rows,
     object_references::delete_object_reference,
     request_access::{
-        authorize_start_request, ensure_user_exists, repo_by_id, request_actor_can_edit,
+        authorize_start_request, ensure_user_exists, lock_request_repository, repo_by_id,
+        request_policy_for_user,
     },
     request_change_block_rows::{change_blocks_for_request_ids, insert_change_block},
     request_discussion_rows::{insert_discussion, save_read_state},
+    request_invitees::delete_request_invitees,
     request_rows::{
         credit_account_by_user_id, credit_ledger_entry_by_id, delete_request_rows,
         insert_credit_ledger_entry_row, insert_request_event_row, insert_request_row,
         latest_request_events, request_by_id, request_by_name, request_event_by_id,
-        request_events_after_position, request_events_by_request_id, request_list_page,
-        requests_by_repo_author, requests_by_repo_id, save_credit_account_row, save_request_row,
+        request_events_after_position, request_events_by_request_id, requests_by_repo_author,
+        requests_by_repo_id, save_credit_account_row, save_request_row,
     },
 };
 use crate::{
-    domain::{
-        requests::{
-            CloseRequestInput, CloseRequestMutation, CreditAccountMutation, GrantUserCreditsInput,
-            RecordRequestRevisionInput, RecordWorkingRequestUploadInput, Request, RequestAudience,
-            RequestEvent, RequestRevisionMutation, RequestTimelineMutation, StartRequestInput,
-            StartRequestMutation, UpdateRequestDescriptionInput, WorkingRequestUploadMutation,
-            close_request, grant_user_credits, record_request_revision,
-            record_working_request_upload, start_request, update_request_description,
-        },
-        store::StoredRepository,
+    domain::requests::{
+        CloseRequestInput, CloseRequestMutation, CreditAccountMutation, GrantUserCreditsInput,
+        RecordRequestRevisionInput, RecordWorkingRequestUploadInput, Request, RequestEvent,
+        RequestRevisionMutation, RequestTimelineMutation, StartRequestInput, StartRequestMutation,
+        UpdateRequestDescriptionInput, WorkingRequestUploadMutation, close_request,
+        grant_user_credits, record_request_revision, record_working_request_upload, start_request,
+        update_request_description,
     },
     error::ApiError,
 };
@@ -54,16 +53,6 @@ impl MetadataStore {
         let repo_id = repo_id.to_string();
         let db = Arc::clone(&self.db);
         requests_by_repo_id(db.as_ref(), &repo_id).await
-    }
-
-    pub async fn request_list_page(
-        &self,
-        repo_id: &str,
-        audiences: &[RequestAudience],
-        after_id: Option<&str>,
-        limit: u64,
-    ) -> Result<Vec<super::RequestListRow>, ApiError> {
-        request_list_page(self.db.as_ref(), repo_id, audiences, after_id, limit).await
     }
 
     pub async fn requests_by_repo_author(
@@ -139,7 +128,11 @@ impl MetadataStore {
         ensure_user_exists(&tx, &input.author_user_id).await?;
         let input = authorize_start_request(&repo_by_id(&tx, &input.repo_id).await?, input)?;
 
-        let mut requests = BTreeMap::new();
+        let mut requests = requests_by_repo_author(&tx, &input.repo_id, &input.author_user_id)
+            .await?
+            .into_iter()
+            .map(|request| (request.id.clone(), request))
+            .collect::<BTreeMap<_, _>>();
         if let Some(request) = request_by_id(&tx, &input.id).await? {
             requests.insert(request.id.clone(), request);
         }
@@ -160,26 +153,20 @@ impl MetadataStore {
     ) -> Result<WorkingRequestUploadMutation, ApiError> {
         let db = Arc::clone(&self.db);
         let tx = db.as_ref().begin().await.map_err(ApiError::internal)?;
-        acquire_aggregate_lock(&tx, "request", &input.request_id).await?;
+        let (repo, request) = lock_request_repository(&tx, &input.request_id).await?;
         ensure_user_exists(&tx, &input.actor_user_id).await?;
-
-        let mut requests = BTreeMap::new();
-        if let Some(request) = request_by_id(&tx, &input.request_id).await? {
-            let repo = repo_by_id(&tx, &request.repo_id).await?;
-            let mut input = input;
-            input.actor_can_edit = request_actor_can_edit(&repo, &request, &input.actor_user_id);
-            requests.insert(request.id.clone(), request);
-
-            let mutation = record_working_request_upload(&mut requests, input)?;
-            save_request_row(&tx, &mutation.request).await?;
-            if !mutation.orphan_objects.is_empty() {
-                queue_pending_source_blob_deletion_rows(&tx, mutation.orphan_objects.clone())
-                    .await?;
-            }
-            tx.commit().await.map_err(ApiError::internal)?;
-            return Ok(mutation);
+        let mut input = input;
+        input.actor_can_edit = request_policy_for_user(&tx, &repo, &request, &input.actor_user_id)
+            .await?
+            .branch_mutable;
+        let mut requests = BTreeMap::from([(request.id.clone(), request)]);
+        let mutation = record_working_request_upload(&mut requests, input)?;
+        save_request_row(&tx, &mutation.request).await?;
+        if !mutation.orphan_objects.is_empty() {
+            queue_pending_source_blob_deletion_rows(&tx, mutation.orphan_objects.clone()).await?;
         }
-        Err(ApiError::not_found("request not found"))
+        tx.commit().await.map_err(ApiError::internal)?;
+        Ok(mutation)
     }
 
     pub async fn record_request_revision(
@@ -188,34 +175,28 @@ impl MetadataStore {
     ) -> Result<RequestRevisionMutation, ApiError> {
         let db = Arc::clone(&self.db);
         let tx = db.as_ref().begin().await.map_err(ApiError::internal)?;
-        acquire_aggregate_lock(&tx, "request", &input.request_id).await?;
+        let (repo, request) = lock_request_repository(&tx, &input.request_id).await?;
         ensure_user_exists(&tx, &input.actor_user_id).await?;
-
-        let mut requests = BTreeMap::new();
-        if let Some(request) = request_by_id(&tx, &input.request_id).await? {
-            let repo = repo_by_id(&tx, &request.repo_id).await?;
-            let mut input = input;
-            input.actor_can_edit = request_actor_can_edit(&repo, &request, &input.actor_user_id);
-            requests.insert(request.id.clone(), request);
-            let mut events = BTreeMap::new();
-            if let Some(event) = request_event_by_id(&tx, &input.event_id).await? {
-                events.insert(event.id.clone(), event);
-            }
-
-            let mutation = record_request_revision(&mut requests, &mut events, input)?;
-            save_request_row(&tx, &mutation.request).await?;
-            insert_request_event_row(&tx, &mutation.event).await?;
-            insert_change_block(&tx, &mutation.change_block).await?;
-            insert_discussion(&tx, &mutation.discussion).await?;
-            save_read_state(&tx, &mutation.read_state).await?;
-            if !mutation.orphan_objects.is_empty() {
-                queue_pending_source_blob_deletion_rows(&tx, mutation.orphan_objects.clone())
-                    .await?;
-            }
-            tx.commit().await.map_err(ApiError::internal)?;
-            return Ok(mutation);
+        let mut input = input;
+        input.actor_can_edit = request_policy_for_user(&tx, &repo, &request, &input.actor_user_id)
+            .await?
+            .branch_mutable;
+        let mut requests = BTreeMap::from([(request.id.clone(), request)]);
+        let mut events = BTreeMap::new();
+        if let Some(event) = request_event_by_id(&tx, &input.event_id).await? {
+            events.insert(event.id.clone(), event);
         }
-        Err(ApiError::not_found("request not found"))
+        let mutation = record_request_revision(&mut requests, &mut events, input)?;
+        save_request_row(&tx, &mutation.request).await?;
+        insert_request_event_row(&tx, &mutation.event).await?;
+        insert_change_block(&tx, &mutation.change_block).await?;
+        insert_discussion(&tx, &mutation.discussion).await?;
+        save_read_state(&tx, &mutation.read_state).await?;
+        if !mutation.orphan_objects.is_empty() {
+            queue_pending_source_blob_deletion_rows(&tx, mutation.orphan_objects.clone()).await?;
+        }
+        tx.commit().await.map_err(ApiError::internal)?;
+        Ok(mutation)
     }
 
     pub async fn update_request_description(
@@ -224,14 +205,13 @@ impl MetadataStore {
     ) -> Result<RequestTimelineMutation, ApiError> {
         let db = Arc::clone(&self.db);
         let tx = db.as_ref().begin().await.map_err(ApiError::internal)?;
-        acquire_aggregate_lock(&tx, "request", &input.request_id).await?;
+        let (repo, request) = lock_request_repository(&tx, &input.request_id).await?;
         ensure_user_exists(&tx, &input.actor_user_id).await?;
-        let request = request_by_id(&tx, &input.request_id)
-            .await?
-            .ok_or_else(|| ApiError::not_found("request not found"))?;
-        let repo = repo_by_id(&tx, &request.repo_id).await?;
-        input.actor_can_edit_description = request.author_user_id == input.actor_user_id
-            || repo.is_maintainer_user_id(&input.actor_user_id);
+        input.actor_can_edit_description =
+            request_policy_for_user(&tx, &repo, &request, &input.actor_user_id)
+                .await?
+                .permissions
+                .can_edit_description;
         let mut requests = BTreeMap::from([(request.id.clone(), request)]);
         let mut events = BTreeMap::new();
         if let Some(event) = request_event_by_id(&tx, &input.event_id).await? {
@@ -284,32 +264,13 @@ impl MetadataStore {
             }
             CloseRequestMutation::Completed { request, event } => {
                 save_request_row(&tx, request).await?;
+                delete_request_invitees(&tx, &request.id).await?;
                 insert_request_event_row(&tx, event).await?;
             }
         }
         tx.commit().await.map_err(ApiError::internal)?;
         Ok(mutation)
     }
-}
-
-async fn lock_request_repository<C>(
-    conn: &C,
-    request_id: &str,
-) -> Result<(StoredRepository, Request), ApiError>
-where
-    C: sea_orm::ConnectionTrait,
-{
-    let observed = request_by_id(conn, request_id)
-        .await?
-        .ok_or_else(|| ApiError::not_found("request not found"))?;
-    acquire_aggregate_lock(conn, "repository", &observed.repo_id).await?;
-    acquire_aggregate_lock(conn, "request", request_id).await?;
-    let request = request_by_id(conn, request_id)
-        .await?
-        .filter(|request| request.repo_id == observed.repo_id)
-        .ok_or_else(|| ApiError::not_found("request not found"))?;
-    let repo = repo_by_id(conn, &request.repo_id).await?;
-    Ok((repo, request))
 }
 
 #[cfg(test)]

@@ -6,12 +6,12 @@
 
 use super::{
     MetadataStore, acquire_aggregate_lock,
-    request_access::{ensure_user_exists, repo_by_id, request_actor_can_edit},
+    request_access::{ensure_user_exists, lock_request_repository, request_policy_for_user},
+    request_invitees::delete_request_invitees,
     request_ready_queue::next_ready_queue_version,
     request_rows::{
         credit_account_by_user_id, insert_credit_ledger_entry_row, insert_request_event_row,
-        request_by_id, request_event_by_id, requests_by_repo_author, save_credit_account_row,
-        save_request_row,
+        request_event_by_id, requests_by_repo_author, save_credit_account_row, save_request_row,
     },
 };
 use crate::{
@@ -36,7 +36,11 @@ impl MetadataStore {
         let (repo, request) =
             lock_review_context(&tx, &input.actor_user_id, &input.request_id, true).await?;
         input.actor_is_author = input.actor_user_id == request.author_user_id;
-        input.actor_can_mutate = request_actor_can_edit(&repo, &request, &input.actor_user_id);
+        input.actor_can_mutate =
+            request_policy_for_user(&tx, &repo, &request, &input.actor_user_id)
+                .await?
+                .permissions
+                .can_mark_ready;
         input.public_ready_count = if request.author_role == RequestActorRole::Public {
             requests_by_repo_author(&tx, &request.repo_id, &request.author_user_id)
                 .await?
@@ -66,7 +70,10 @@ impl MetadataStore {
             lock_review_context(&tx, &input.actor_user_id, &input.request_id, true).await?;
         input.actor_is_author = input.actor_user_id == request.author_user_id;
         input.actor_is_maintainer = is_maintainer(&repo, &input.actor_user_id);
-        input.actor_can_mutate = request_actor_can_edit(&repo, &request, &input.actor_user_id);
+        input.actor_can_mutate =
+            request_policy_for_user(&tx, &repo, &request, &input.actor_user_id)
+                .await?
+                .branch_mutable;
         let account = load_credit_account(&tx, &request).await?;
         let mutation = return_request_to_working(&request, account.as_ref(), input)?;
         persist_review_mutation(&tx, &mutation).await?;
@@ -110,20 +117,11 @@ async fn lock_review_context(
     request_id: &str,
     lock_user_credit: bool,
 ) -> Result<(StoredRepository, Request), ApiError> {
-    let observed = request_by_id(tx, request_id)
-        .await?
-        .ok_or_else(|| ApiError::not_found("request not found"))?;
-    acquire_aggregate_lock(tx, "repository", &observed.repo_id).await?;
-    acquire_aggregate_lock(tx, "request", request_id).await?;
-    let request = request_by_id(tx, request_id)
-        .await?
-        .filter(|request| request.repo_id == observed.repo_id)
-        .ok_or_else(|| ApiError::not_found("request not found"))?;
+    let (repo, request) = lock_request_repository(tx, request_id).await?;
     if lock_user_credit && request.author_role == RequestActorRole::Public {
         acquire_aggregate_lock(tx, "user-credit", &request.author_user_id).await?;
     }
     ensure_user_exists(tx, actor_user_id).await?;
-    let repo = repo_by_id(tx, &request.repo_id).await?;
     Ok((repo, request))
 }
 
@@ -147,6 +145,9 @@ pub(super) async fn persist_review_mutation(
         }
     }
     save_request_row(tx, &mutation.request).await?;
+    if mutation.request.state == crate::domain::requests::RequestState::Completed {
+        delete_request_invitees(tx, &mutation.request.id).await?;
+    }
     if let Some(account) = &mutation.credit_account {
         save_credit_account_row(tx, account).await?;
     }

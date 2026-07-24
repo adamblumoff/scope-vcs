@@ -1,7 +1,10 @@
 use super::*;
 
 mod helpers;
-pub(super) use helpers::create_owner_request;
+pub(super) use helpers::{create_owner_request, create_public_request};
+
+use crate::domain::requests::RequestState;
+use scope_core::db::AddRequestInviteeCommand;
 
 const REQUEST_HEAD: &str = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
 
@@ -225,6 +228,313 @@ async fn maintainer_request_lifecycle_routes_delegate_to_atomic_commands() {
     let assessed = response_json(assessed).await;
     assert_eq!(assessed["request"]["state"], "Completed");
     assert_eq!(assessed["request"]["assessment_outcome"], "Neutral");
+}
+
+#[tokio::test]
+async fn request_reads_apply_one_viewer_aware_policy_across_lists_and_exact_surfaces() {
+    let state = test_state_with_readme().await;
+    cache_test_jwks(&state);
+    let author_id = crate::db::scope_user_id_for_auth_identity("clerk", "request_author");
+    let invitee_id = crate::db::scope_user_id_for_auth_identity("clerk", "request_invitee");
+    let unrelated_id = crate::db::scope_user_id_for_auth_identity("clerk", "request_unrelated");
+    for user in [
+        test_user(&author_id, "request-author", "request-author@example.com"),
+        test_user(
+            &invitee_id,
+            "request-invitee",
+            "request-invitee@example.com",
+        ),
+        test_user(
+            &unrelated_id,
+            "request-unrelated",
+            "request-unrelated@example.com",
+        ),
+    ] {
+        state.metadata.insert_user_for_tests(user).await.unwrap();
+    }
+
+    create_public_request(&state, "req_never", author_id.clone(), REQUEST_HEAD).await;
+    create_public_request(&state, "req_previous", author_id.clone(), REQUEST_HEAD).await;
+    create_public_request(&state, "req_ready_public", author_id.clone(), REQUEST_HEAD).await;
+    state
+        .metadata
+        .mutate_request_for_tests("req_previous", |request| {
+            request.first_ready_at_unix = Some(4);
+            request.ready_queue_version = Some(1);
+            request.updated_at_unix = 4;
+        })
+        .await
+        .unwrap();
+    state
+        .metadata
+        .mutate_request_for_tests("req_ready_public", |request| {
+            request.state = RequestState::ReadyForReview;
+            request.current_stake_credits = 1;
+            request.first_ready_at_unix = Some(4);
+            request.ready_at_unix = Some(4);
+            request.ready_queue_version = Some(1);
+            request.updated_at_unix = 4;
+        })
+        .await
+        .unwrap();
+    create_owner_request(&state, "req_private_matrix", REQUEST_HEAD).await;
+    state
+        .metadata
+        .add_request_invitee(AddRequestInviteeCommand {
+            request_id: "req_never".to_string(),
+            actor_user_id: author_id.clone(),
+            target_handle: "request-invitee".to_string(),
+            now_unix: 5,
+        })
+        .await
+        .unwrap();
+
+    let app = router(state);
+    let anonymous_list = response_json(
+        api_request(
+            app.clone(),
+            "GET",
+            "/v1/repos/owner/repo/requests",
+            None,
+            None,
+        )
+        .await,
+    )
+    .await;
+    assert_eq!(request_ids(&anonymous_list), vec!["req_ready_public"]);
+
+    let unrelated = bearer_header_for("request_unrelated", "request-unrelated@example.com");
+    for suffix in ["req_never", "req_never/timeline", "req_never/activity"] {
+        assert_eq!(
+            api_request(
+                app.clone(),
+                "GET",
+                &format!("/v1/repos/owner/repo/requests/{suffix}"),
+                Some(&unrelated),
+                None,
+            )
+            .await
+            .status(),
+            StatusCode::NOT_FOUND
+        );
+    }
+    for request_id in ["req_previous", "req_ready_public"] {
+        assert_eq!(
+            api_request(
+                app.clone(),
+                "GET",
+                &format!("/v1/repos/owner/repo/requests/{request_id}"),
+                None,
+                None,
+            )
+            .await
+            .status(),
+            StatusCode::OK
+        );
+    }
+    assert_eq!(
+        api_request(
+            app.clone(),
+            "GET",
+            "/v1/repos/owner/repo/requests/req_private_matrix",
+            None,
+            None,
+        )
+        .await
+        .status(),
+        StatusCode::NOT_FOUND
+    );
+
+    let invitee = bearer_header_for("request_invitee", "request-invitee@example.com");
+    let invitee_list = response_json(
+        api_request(
+            app.clone(),
+            "GET",
+            "/v1/repos/owner/repo/requests",
+            Some(&invitee),
+            None,
+        )
+        .await,
+    )
+    .await;
+    assert_eq!(
+        request_ids(&invitee_list),
+        vec!["req_never", "req_ready_public"]
+    );
+    let invitee_detail = api_request(
+        app.clone(),
+        "GET",
+        "/v1/repos/owner/repo/requests/req_never",
+        Some(&invitee),
+        None,
+    )
+    .await;
+    assert_eq!(invitee_detail.status(), StatusCode::OK);
+    let invitee_detail = response_json(invitee_detail).await;
+    assert_eq!(
+        invitee_detail["request"]["invitees"][0]["user"]["handle"],
+        "request-invitee"
+    );
+    assert_eq!(
+        invitee_detail["request"]["permissions"]["can_push_branch"],
+        true
+    );
+    assert_eq!(
+        invitee_detail["request"]["permissions"]["can_open_discussion"],
+        true
+    );
+    assert_eq!(
+        invitee_detail["request"]["permissions"]["can_edit_description"],
+        false
+    );
+    assert_eq!(
+        invitee_detail["request"]["permissions"]["can_manage_invitees"],
+        false
+    );
+
+    let maintainer_list = response_json(
+        api_request(
+            app.clone(),
+            "GET",
+            "/v1/repos/owner/repo/requests",
+            Some(&bearer_header()),
+            None,
+        )
+        .await,
+    )
+    .await;
+    assert_eq!(
+        request_ids(&maintainer_list),
+        vec!["req_private_matrix", "req_ready_public"]
+    );
+    for request_id in ["req_never", "req_previous", "req_private_matrix"] {
+        assert_eq!(
+            api_request(
+                app.clone(),
+                "GET",
+                &format!("/v1/repos/owner/repo/requests/{request_id}"),
+                Some(&bearer_header()),
+                None,
+            )
+            .await
+            .status(),
+            StatusCode::OK
+        );
+    }
+}
+
+#[tokio::test]
+async fn invitee_routes_enforce_exact_handles_roles_leave_and_private_exclusion() {
+    let state = test_state_with_readme().await;
+    cache_test_jwks(&state);
+    let author_id = crate::db::scope_user_id_for_auth_identity("clerk", "invite_author");
+    let invitee_id = crate::db::scope_user_id_for_auth_identity("clerk", "invite_target");
+    let other_id = crate::db::scope_user_id_for_auth_identity("clerk", "invite_other");
+    for user in [
+        test_user(&author_id, "invite-author", "invite-author@example.com"),
+        test_user(&invitee_id, "invite-target", "invite-target@example.com"),
+        test_user(&other_id, "invite-other", "invite-other@example.com"),
+    ] {
+        state.metadata.insert_user_for_tests(user).await.unwrap();
+    }
+    create_public_request(&state, "req_invites", author_id, REQUEST_HEAD).await;
+    create_owner_request(&state, "req_private_invites", REQUEST_HEAD).await;
+    let app = router(state);
+    let author = bearer_header_for("invite_author", "invite-author@example.com");
+    let invitee = bearer_header_for("invite_target", "invite-target@example.com");
+
+    let wrong_case = api_request(
+        app.clone(),
+        "PUT",
+        "/v1/repos/owner/repo/requests/req_invites/invitees",
+        Some(&author),
+        Some(r#"{"handle":"Invite-Target"}"#),
+    )
+    .await;
+    assert_eq!(wrong_case.status(), StatusCode::NOT_FOUND);
+
+    let added = api_request(
+        app.clone(),
+        "PUT",
+        "/v1/repos/owner/repo/requests/req_invites/invitees",
+        Some(&author),
+        Some(r#"{"handle":"invite-target"}"#),
+    )
+    .await;
+    assert_eq!(added.status(), StatusCode::OK);
+    let added = response_json(added).await;
+    assert_eq!(added["invitee"]["user"]["handle"], "invite-target");
+    assert_eq!(added["request"]["invitees"].as_array().unwrap().len(), 1);
+
+    let invitee_manage = api_request(
+        app.clone(),
+        "PUT",
+        "/v1/repos/owner/repo/requests/req_invites/invitees",
+        Some(&invitee),
+        Some(r#"{"handle":"invite-other"}"#),
+    )
+    .await;
+    assert_eq!(invitee_manage.status(), StatusCode::FORBIDDEN);
+
+    let left = api_request(
+        app.clone(),
+        "DELETE",
+        "/v1/repos/owner/repo/requests/req_invites/invitees/me",
+        Some(&invitee),
+        None,
+    )
+    .await;
+    assert_eq!(left.status(), StatusCode::OK);
+    assert_eq!(
+        api_request(
+            app.clone(),
+            "GET",
+            "/v1/repos/owner/repo/requests/req_invites",
+            Some(&invitee),
+            None,
+        )
+        .await
+        .status(),
+        StatusCode::NOT_FOUND
+    );
+
+    let maintainer_add = api_request(
+        app.clone(),
+        "PUT",
+        "/v1/repos/owner/repo/requests/req_invites/invitees",
+        Some(&bearer_header()),
+        Some(r#"{"handle":"invite-target"}"#),
+    )
+    .await;
+    assert_eq!(maintainer_add.status(), StatusCode::OK);
+    let maintainer_remove = api_request(
+        app.clone(),
+        "DELETE",
+        "/v1/repos/owner/repo/requests/req_invites/invitees",
+        Some(&bearer_header()),
+        Some(r#"{"handle":"invite-target"}"#),
+    )
+    .await;
+    assert_eq!(maintainer_remove.status(), StatusCode::OK);
+
+    let private_add = api_request(
+        app,
+        "PUT",
+        "/v1/repos/owner/repo/requests/req_private_invites/invitees",
+        Some(&bearer_header()),
+        Some(r#"{"handle":"invite-target"}"#),
+    )
+    .await;
+    assert_eq!(private_add.status(), StatusCode::CONFLICT);
+}
+
+fn request_ids(body: &serde_json::Value) -> Vec<&str> {
+    body["requests"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|request| request["id"].as_str().unwrap())
+        .collect()
 }
 
 async fn api_request(

@@ -182,6 +182,17 @@ async fn public_repo_stream_drops_private_discussion_identifiers() {
         })
         .await
         .unwrap();
+    state
+        .metadata
+        .mutate_request_for_tests("req_public_stream", |request| {
+            request.state = crate::domain::requests::RequestState::ReadyForReview;
+            request.first_ready_at_unix = Some(2);
+            request.ready_at_unix = Some(2);
+            request.ready_queue_version = Some(1);
+            request.updated_at_unix = 2;
+        })
+        .await
+        .unwrap();
 
     let response = events(state.clone(), None).await;
     assert_eq!(response.status(), StatusCode::OK);

@@ -1,4 +1,5 @@
 use super::{MetadataStore, TestDatabaseTarget};
+use crate::db::{AddRequestInviteeCommand, RemoveRequestInviteeCommand};
 use crate::domain::{
     policy::Visibility,
     requests::{
@@ -11,6 +12,8 @@ use crate::domain::{
         app_catalog,
     },
 };
+use std::sync::Arc;
+use tokio::sync::Barrier;
 
 #[tokio::test]
 async fn held_maintainer_content_and_branch_mutations_invalidate_and_refund_atomically() {
@@ -38,7 +41,10 @@ async fn held_maintainer_content_and_branch_mutations_invalidate_and_refund_atom
         })
         .await
         .unwrap_err();
-    assert!(author_error.message.contains("held"));
+    assert!(matches!(
+        author_error.kind,
+        crate::error::ErrorKind::Forbidden | crate::error::ErrorKind::Conflict
+    ));
 
     let edited = store
         .update_request_description_with_review_invalidation(UpdateRequestDescriptionInput {
@@ -149,7 +155,7 @@ async fn unrelated_public_user_cannot_edit_description_or_invalidate_ready() {
 }
 
 #[tokio::test]
-async fn public_collaborator_revision_invalidates_ready_and_refunds_atomically() {
+async fn public_invitee_revision_invalidates_ready_and_refunds_atomically() {
     let store = postgres_store();
     store
         .grant_user_credits(GrantUserCreditsInput {
@@ -161,6 +167,15 @@ async fn public_collaborator_revision_invalidates_ready_and_refunds_atomically()
         .await
         .unwrap();
     start_uploaded(&store).await;
+    store
+        .add_request_invitee(AddRequestInviteeCommand {
+            request_id: "req_invalidate".to_string(),
+            actor_user_id: "user_public".to_string(),
+            target_handle: "collaborator".to_string(),
+            now_unix: 2,
+        })
+        .await
+        .unwrap();
     store
         .mark_request_ready(MarkRequestReadyInput {
             request_id: "req_invalidate".to_string(),
@@ -203,6 +218,83 @@ async fn public_collaborator_revision_invalidates_ready_and_refunds_atomically()
         event.kind == RequestEventKind::ReturnedToWorking
             && event.actor_user_id == "user_collaborator"
     }));
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn invitee_revocation_serializes_with_final_revision_authorization() {
+    let store = postgres_store();
+    start_uploaded(&store).await;
+    store
+        .add_request_invitee(AddRequestInviteeCommand {
+            request_id: "req_invalidate".to_string(),
+            actor_user_id: "user_public".to_string(),
+            target_handle: "collaborator".to_string(),
+            now_unix: 2,
+        })
+        .await
+        .unwrap();
+
+    let barrier = Arc::new(Barrier::new(2));
+    let remove_store = store.clone();
+    let remove_barrier = Arc::clone(&barrier);
+    let remove = tokio::spawn(async move {
+        remove_barrier.wait().await;
+        remove_store
+            .remove_request_invitee(RemoveRequestInviteeCommand {
+                request_id: "req_invalidate".to_string(),
+                actor_user_id: "user_public".to_string(),
+                target_handle: "collaborator".to_string(),
+            })
+            .await
+    });
+    let revision_store = store.clone();
+    let revision_barrier = Arc::clone(&barrier);
+    let revision = tokio::spawn(async move {
+        revision_barrier.wait().await;
+        revision_store
+            .record_request_revision_with_review_invalidation(RecordRequestRevisionInput {
+                request_id: "req_invalidate".to_string(),
+                actor_user_id: "user_collaborator".to_string(),
+                actor_can_edit: true,
+                expected_old_head_oid: Some("head-one".to_string()),
+                new_head_oid: "head-racing-invitee".to_string(),
+                git_snapshot: source_blob("head-racing-invitee"),
+                event_id: "event_revision_racing_invitee".to_string(),
+                body: None,
+                now_unix: 20,
+            })
+            .await
+    });
+
+    remove.await.unwrap().unwrap();
+    let revision = revision.await.unwrap();
+    assert!(
+        revision.is_ok()
+            || revision
+                .as_ref()
+                .unwrap_err()
+                .message
+                .contains("mutation access")
+    );
+    assert!(
+        !store
+            .request_is_invitee("req_invalidate", "user_collaborator")
+            .await
+            .unwrap()
+    );
+    let request = store
+        .request_for_tests("req_invalidate")
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        request.head_oid,
+        if revision.is_ok() {
+            "head-racing-invitee"
+        } else {
+            "head-one"
+        }
+    );
 }
 
 fn postgres_store() -> MetadataStore {

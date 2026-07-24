@@ -5,6 +5,7 @@ use scope_core::db::RequestListRow;
 
 pub(crate) fn request_summary_response(
     request: Request,
+    invitees: Vec<RequestInviteeResponse>,
     permissions: RequestPermissionsResponse,
     mergeability: RequestMergeabilityResponse,
 ) -> Result<RequestSummaryResponse, crate::error::ApiError> {
@@ -43,6 +44,7 @@ pub(crate) fn request_summary_response(
             .transpose()?,
         created_at_unix: request.created_at_unix,
         updated_at_unix: request.updated_at_unix,
+        invitees,
         permissions,
         mergeability,
     })
