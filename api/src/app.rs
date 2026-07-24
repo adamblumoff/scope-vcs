@@ -96,7 +96,9 @@ pub fn router(state: AppState) -> Router {
         )
         .route(
             routes::REPO_REQUEST,
-            get(http::requests::get_request).delete(http::requests::close_request),
+            get(http::requests::get_request)
+                .patch(http::requests::edit_request_identity)
+                .delete(http::requests::close_request),
         )
         .route(
             routes::REPO_REQUEST_READY,
@@ -139,10 +141,6 @@ pub fn router(state: AppState) -> Router {
         .route(
             routes::REPO_REQUEST_CHANGE_BLOCK_FILE_DIFF,
             get(http::request_review::get_request_change_block_file_diff),
-        )
-        .route(
-            routes::REPO_REQUEST_DESCRIPTION,
-            axum::routing::patch(http::requests::update_request_description),
         )
         .route(
             routes::REPO_REQUEST_DISCUSSIONS,

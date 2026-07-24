@@ -111,11 +111,17 @@ mod tests {
         let ready: ReadyRequestRequest =
             serde_json::from_str("{}").expect("ready request without a stake");
         assert_eq!(ready.stake_credits, None);
+        assert_eq!(serde_json::to_string(&ready).unwrap(), "{}");
 
         let assessment: AssessRequestRequest = serde_json::from_str(r#"{"outcome":"Rejected"}"#)
             .expect("assessment request without a body");
         assert_eq!(assessment.outcome, RequestAssessmentOutcome::Rejected);
         assert_eq!(assessment.body_markdown, None);
+
+        let edit: EditRequestIdentityRequest = serde_json::from_str(r#"{"title":"New title"}"#)
+            .expect("identity edit with only a title");
+        assert_eq!(edit.title.as_deref(), Some("New title"));
+        assert_eq!(edit.description_markdown, None);
     }
 }
 
@@ -406,6 +412,8 @@ pub struct RequestListItemResponse {
     pub state: RequestState,
     pub current_stake_credits: u32,
     pub assessment_outcome: Option<RequestAssessmentOutcome>,
+    pub ready_at_unix: Option<u64>,
+    pub held_at_unix: Option<u64>,
     pub updated_at_unix: u64,
     pub mergeability: RequestMergeabilityResponse,
 }
@@ -415,7 +423,7 @@ pub struct RequestListItemResponse {
 pub struct RequestPermissionsResponse {
     pub can_open_discussion: bool,
     pub can_reply_to_discussion: bool,
-    pub can_edit_description: bool,
+    pub can_edit_identity: bool,
     pub can_pull_branch: bool,
     pub can_push_branch: bool,
     pub can_mark_ready: bool,
@@ -559,6 +567,7 @@ pub struct StartRequestRequest {
 #[derive(Debug, Deserialize, Serialize)]
 #[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 pub struct ReadyRequestRequest {
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub stake_credits: Option<u32>,
 }
 
@@ -571,8 +580,9 @@ pub struct AssessRequestRequest {
 
 #[derive(Debug, Deserialize, Serialize)]
 #[cfg_attr(feature = "ts", derive(ts_rs::TS))]
-pub struct UpdateRequestDescriptionRequest {
-    pub description_markdown: String,
+pub struct EditRequestIdentityRequest {
+    pub title: Option<String>,
+    pub description_markdown: Option<String>,
 }
 
 #[derive(Debug, Deserialize, Serialize)]

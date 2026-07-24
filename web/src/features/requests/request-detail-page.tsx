@@ -285,7 +285,7 @@ export function RequestDetailPage(props: RequestDetailPageProps) {
           params={discussionParams}
           permissions={{
             canEditDescription:
-              request.permissions.can_edit_description,
+              request.permissions.can_edit_identity,
             canOpenDiscussion: request.permissions.can_open_discussion,
             canReply: request.permissions.can_reply_to_discussion,
           }}

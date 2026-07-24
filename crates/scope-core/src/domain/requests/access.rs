@@ -23,7 +23,7 @@ impl<'a> RequestViewer<'a> {
 pub struct RequestPermissions {
     pub can_open_discussion: bool,
     pub can_reply_to_discussion: bool,
-    pub can_edit_description: bool,
+    pub can_edit_identity: bool,
     pub can_pull_branch: bool,
     pub can_push_branch: bool,
     pub can_mark_ready: bool,
@@ -55,7 +55,6 @@ pub enum RequestMergeabilityStatus {
     Ready,
     Completed,
     Working,
-    Held,
     NotMaintainer,
     MissingRequestBranch,
 }
@@ -126,7 +125,7 @@ pub fn request_policy(request: &Request, viewer: RequestViewer<'_>) -> RequestPo
     let permissions = RequestPermissions {
         can_open_discussion: can_discuss,
         can_reply_to_discussion: can_discuss,
-        can_edit_description: exact_visible
+        can_edit_identity: exact_visible
             && !completed
             && (author || maintainer)
             && (!held || maintainer),
@@ -169,7 +168,6 @@ pub fn request_list_mergeability(
     state: RequestState,
     assessment_outcome: Option<super::RequestAssessmentOutcome>,
     has_git_snapshot: bool,
-    _is_held: bool,
     is_merged: bool,
     access: RepositoryAccess,
 ) -> RequestMergeability {
@@ -210,7 +208,6 @@ pub fn request_mergeability(request: &Request, access: RepositoryAccess) -> Requ
         request.state,
         request.assessment_outcome,
         request.git_snapshot.is_some(),
-        request.held_at_unix.is_some(),
         request.merged_at_unix.is_some(),
         access,
     )

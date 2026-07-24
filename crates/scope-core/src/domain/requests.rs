@@ -15,8 +15,8 @@ pub use credits::{
     PUBLIC_ACCOUNT_STARTER_CREDITS, RequestSettlement, UserCreditAccount, grant_user_credits,
     settlement_for,
 };
-mod description;
-pub use description::{UpdateRequestDescriptionInput, update_request_description};
+mod identity;
+pub use identity::{EditRequestIdentityInput, edit_request_identity};
 mod discussions;
 pub use discussions::{
     CreateRequestDiscussionInput, CreateRequestDiscussionMutation,
@@ -51,9 +51,9 @@ pub use limits::{
 pub(super) use limits::{validate_body_size, validate_required_body};
 mod model;
 pub use model::{
-    Request, RequestActorRole, RequestAudience, RequestDescriptionAuditFact, RequestEvent,
-    RequestEventKind, RequestEventPayload, RequestInvitee, RequestState, RequestTimelineMutation,
-    validate_request_facts,
+    Request, RequestActorRole, RequestAudience, RequestEvent, RequestEventKind,
+    RequestEventPayload, RequestIdentityAuditFact, RequestInvitee, RequestState,
+    RequestTimelineMutation, validate_request_facts,
 };
 mod review;
 pub use review::{

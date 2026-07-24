@@ -302,6 +302,8 @@ async fn request_reads_apply_one_viewer_aware_policy_across_lists_and_exact_surf
     )
     .await;
     assert_eq!(request_ids(&anonymous_list), vec!["req_ready_public"]);
+    assert_eq!(anonymous_list["requests"][0]["ready_at_unix"], 4);
+    assert!(anonymous_list["requests"][0]["held_at_unix"].is_null());
 
     let unrelated = bearer_header_for("request_unrelated", "request-unrelated@example.com");
     for suffix in ["req_never", "req_never/timeline", "req_never/activity"] {
@@ -384,7 +386,7 @@ async fn request_reads_apply_one_viewer_aware_policy_across_lists_and_exact_surf
         true
     );
     assert_eq!(
-        invitee_detail["request"]["permissions"]["can_edit_description"],
+        invitee_detail["request"]["permissions"]["can_edit_identity"],
         false
     );
     assert_eq!(

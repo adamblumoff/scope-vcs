@@ -5,8 +5,8 @@ use crate::domain::{
         RepoConfigHistory, RepoConfigVisibility, RepoConfigVisibilityRule,
     },
     requests::{
-        RequestActorRole, RequestAssessmentOutcome, RequestAudience, RequestDescriptionAuditFact,
-        RequestEventKind, RequestReviewExitReason, RequestState,
+        RequestActorRole, RequestAssessmentOutcome, RequestAudience, RequestEventKind,
+        RequestIdentityAuditFact, RequestReviewExitReason, RequestState,
     },
     store::{
         FileChangeKind, FirstPushTokenStatus, RepoPublicationState, RepositoryActor,
@@ -119,7 +119,7 @@ pub(crate) fn export_api_types(output_path: &Path) {
         declaration::<RequestMergeabilityResponse>(&ts_config),
         declaration::<RequestEventResponse>(&ts_config),
         declaration::<RequestEventPayload>(&ts_config),
-        declaration::<RequestDescriptionAuditFact>(&ts_config),
+        declaration::<RequestIdentityAuditFact>(&ts_config),
         declaration::<RequestSettlement>(&ts_config),
         declaration::<RequestActorSummaryResponse>(&ts_config),
         declaration::<RequestDiscussionStatus>(&ts_config),
@@ -137,7 +137,7 @@ pub(crate) fn export_api_types(output_path: &Path) {
         declaration::<StartRequestRequest>(&ts_config),
         declaration::<ReadyRequestRequest>(&ts_config),
         declaration::<AssessRequestRequest>(&ts_config),
-        declaration::<UpdateRequestDescriptionRequest>(&ts_config),
+        declaration::<EditRequestIdentityRequest>(&ts_config),
         declaration::<CreateRequestDiscussionRequest>(&ts_config),
         declaration::<CreateRequestDiscussionReplyRequest>(&ts_config),
         declaration::<ReopenAndReplyRequest>(&ts_config),
@@ -190,7 +190,6 @@ fn api_route_template_declarations() -> String {
             "repoRequestChangeBlockFileDiff",
             routes::REPO_REQUEST_CHANGE_BLOCK_FILE_DIFF,
         ),
-        ("repoRequestDescription", routes::REPO_REQUEST_DESCRIPTION),
         ("repoRequestDiscussions", routes::REPO_REQUEST_DISCUSSIONS),
         (
             "repoRequestDiscussionChanges",

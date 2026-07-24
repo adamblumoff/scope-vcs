@@ -39,8 +39,6 @@ pub const REPO_REQUEST_CHANGE_BLOCK_FILES: &str =
     "/v1/repos/{owner}/{repo}/requests/{request_id}/changes/{block_id}";
 pub const REPO_REQUEST_CHANGE_BLOCK_FILE_DIFF: &str =
     "/v1/repos/{owner}/{repo}/requests/{request_id}/changes/{block_id}/file-diff";
-pub const REPO_REQUEST_DESCRIPTION: &str =
-    "/v1/repos/{owner}/{repo}/requests/{request_id}/description";
 pub const REPO_REQUEST_DISCUSSIONS: &str =
     "/v1/repos/{owner}/{repo}/requests/{request_id}/timeline";
 pub const REPO_REQUEST_DISCUSSION_CHANGES: &str =

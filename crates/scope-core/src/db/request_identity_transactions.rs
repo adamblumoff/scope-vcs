@@ -1,4 +1,4 @@
-//! Atomic Ready-review invalidation for request content edits.
+//! Atomic Ready-review invalidation for request identity edits.
 
 use super::{
     MetadataStore, acquire_aggregate_lock,
@@ -10,9 +10,9 @@ use super::{
 };
 use crate::{
     domain::requests::{
-        Request, RequestActorRole, RequestEvent, RequestReviewExitReason, RequestState,
-        RequestTimelineMutation, ReturnRequestToWorkingInput, UpdateRequestDescriptionInput,
-        return_request_to_working, update_request_description,
+        EditRequestIdentityInput, Request, RequestActorRole, RequestEvent, RequestReviewExitReason,
+        RequestState, RequestTimelineMutation, ReturnRequestToWorkingInput, edit_request_identity,
+        return_request_to_working,
     },
     error::ApiError,
 };
@@ -20,9 +20,9 @@ use sea_orm::TransactionTrait;
 use std::collections::BTreeMap;
 
 impl MetadataStore {
-    pub async fn update_request_description_with_review_invalidation(
+    pub async fn edit_request_identity_with_review_invalidation(
         &self,
-        mut input: UpdateRequestDescriptionInput,
+        mut input: EditRequestIdentityInput,
     ) -> Result<RequestTimelineMutation, ApiError> {
         let tx = self.db.begin().await.map_err(ApiError::internal)?;
         let (repo, mut request) = lock_request_repository(&tx, &input.request_id).await?;
@@ -34,11 +34,11 @@ impl MetadataStore {
         ensure_user_exists(&tx, &input.actor_user_id).await?;
         let actor_is_author = input.actor_user_id == request.author_user_id;
         let actor_is_maintainer = repo.is_maintainer_user_id(&input.actor_user_id);
-        input.actor_can_edit_description =
+        input.actor_can_edit_identity =
             request_policy_for_user(&tx, &repo, &request, &input.actor_user_id)
                 .await?
                 .permissions
-                .can_edit_description;
+                .can_edit_identity;
 
         if request.state == RequestState::ReadyForReview {
             let account = load_account(&tx, &request).await?;
@@ -50,7 +50,7 @@ impl MetadataStore {
                     actor_user_id: input.actor_user_id.clone(),
                     actor_is_author,
                     actor_is_maintainer,
-                    actor_can_mutate: input.actor_can_edit_description,
+                    actor_can_mutate: input.actor_can_edit_identity,
                     reason: RequestReviewExitReason::ContentEdited,
                     event_id: format!("{}:review-invalidated", input.event_id),
                     now_unix: input.now_unix,
@@ -74,7 +74,7 @@ impl MetadataStore {
         if let Some(event) = request_event_by_id(&tx, &input.event_id).await? {
             events.insert(event.id.clone(), event);
         }
-        let mutation = update_request_description(&mut requests, &mut events, input)?;
+        let mutation = edit_request_identity(&mut requests, &mut events, input)?;
         save_request_row(&tx, &mutation.request).await?;
         insert_request_event_row(&tx, &mutation.event).await?;
         tx.commit().await.map_err(ApiError::internal)?;

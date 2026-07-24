@@ -59,7 +59,6 @@ pub(crate) fn request_list_item_response(
         request.state,
         request.assessment_outcome,
         request.has_git_snapshot,
-        request.is_held,
         request.is_merged,
         access,
     );
@@ -74,6 +73,8 @@ pub(crate) fn request_list_item_response(
         state: request.state,
         current_stake_credits: request.current_stake_credits,
         assessment_outcome: request.assessment_outcome,
+        ready_at_unix: request.ready_at_unix,
+        held_at_unix: request.held_at_unix,
         updated_at_unix: request.updated_at_unix,
         mergeability: RequestMergeabilityResponse {
             status: decision.status,
