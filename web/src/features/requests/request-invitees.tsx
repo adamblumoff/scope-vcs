@@ -15,6 +15,7 @@ export function RequestInvitees({
 }) {
   const inputId = useId()
   const [handle, setHandle] = useState('')
+  const [removingHandle, setRemovingHandle] = useState<string | null>(null)
   const normalizedHandle = handle.trim().replace(/^@/, '')
   const atCapacity = request.invitees.length >= 30
   const adding = actions.pending === 'add_invitee'
@@ -25,6 +26,12 @@ export function RequestInvitees({
     if (await actions.run({ action: 'add_invitee', handle: normalizedHandle })) {
       setHandle('')
     }
+  }
+
+  async function removeInvitee(handle: string) {
+    setRemovingHandle(handle)
+    await actions.run({ action: 'remove_invitee', handle })
+    setRemovingHandle(null)
   }
 
   return (
@@ -51,16 +58,13 @@ export function RequestInvitees({
                 <Button
                   aria-label={`Remove @${invitee.user.handle}`}
                   disabled={actions.pending !== null}
-                  onClick={() => void actions.run({
-                    action: 'remove_invitee',
-                    handle: invitee.user.handle,
-                  })}
+                  onClick={() => void removeInvitee(invitee.user.handle)}
                   size="icon-sm"
                   title={`Remove @${invitee.user.handle}`}
                   type="button"
                   variant="ghost"
                 >
-                  {actions.pending === 'remove_invitee' ? (
+                  {removingHandle === invitee.user.handle ? (
                     <LoaderCircle className="animate-spin" />
                   ) : (
                     <UserMinus />

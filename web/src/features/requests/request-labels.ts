@@ -193,7 +193,6 @@ function oidText(value: unknown) {
   return typeof value === 'string' ? shortOid(value) : null
 }
 
-
 function reviewExitReason(value: unknown) {
   switch (value) {
     case 'AuthorReturned':

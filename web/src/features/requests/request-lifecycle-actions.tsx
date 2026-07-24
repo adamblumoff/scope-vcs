@@ -124,7 +124,7 @@ export function RequestLifecycleActions({
         onOpenChange={(open) => setDialog(open ? 'request_changes' : null)}
         open={dialog === 'request_changes'}
         pending={actions.pending === 'request_changes'}
-        title="Return this request to Working?"
+        title="Request changes from the author?"
       >
         <p>No written explanation is required.</p>
         <p>{request.current_stake_credits} credits will be refunded and any hold will be cleared in the same transaction.</p>
