@@ -147,12 +147,12 @@ function RequestListRow({
             <span className="tabular-nums">
               Updated {formatUnixDate(request.updated_at_unix)}
             </span>
-            {request.stake_credits > 0 ? (
+            {request.current_stake_credits > 0 ? (
               <>
                 <MetadataSeparator />
                 <span className="inline-flex items-center gap-1 tabular-nums">
                   <Coins className="size-3" />
-                  {request.stake_credits} staked
+                  {request.current_stake_credits} staked
                 </span>
               </>
             ) : null}

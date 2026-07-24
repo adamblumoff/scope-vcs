@@ -1,12 +1,9 @@
 use super::text::{short_oid, terminal_text};
 use crate::api::{
     RepoSummaryResponse, RepositoryActor, RequestDetailResponse, RequestDiscussionMutationResponse,
-    RequestListItemResponse, RequestMergeabilityStatus, RequestMutationResponse,
-    RequestSummaryResponse,
+    RequestListItemResponse, RequestMergeabilityStatus, RequestSummaryResponse,
 };
-use anyhow::{Context, bail};
 use scope_core::domain::requests::{RequestAudience, RequestDiscussionStatus, RequestState};
-use std::io::{self, Write};
 
 pub(super) fn print_repo_access(repo: &RepoSummaryResponse) {
     println!(
@@ -15,18 +12,14 @@ pub(super) fn print_repo_access(repo: &RepoSummaryResponse) {
         repo.name.as_str()
     );
     println!("Permission: {}", access_label(repo.access.actor));
-    if repo.request_permissions.uses_credit_stake {
-        println!("Credit stake: required on first submit");
-    } else {
-        println!("Credit stake: not used for owner/member requests");
-    }
-}
-
-pub(super) fn print_submit_stake(stake_credits: Option<u32>) {
-    match stake_credits {
-        Some(stake) => println!("Stake: {stake} credits on first submit"),
-        None => println!("Stake: not used for this request"),
-    }
+    println!(
+        "Credit stake: {}",
+        if repo.request_permissions.uses_credit_stake {
+            "used when entering review"
+        } else {
+            "not used for owner/member requests"
+        }
+    );
 }
 
 pub(super) fn print_request_detail(detail: &RequestDetailResponse) {
@@ -42,21 +35,11 @@ pub(super) fn print_request_detail(detail: &RequestDetailResponse) {
         detail.request.name
     );
     println!("  mergeability: {}", mergeability_label(&detail.request));
-    if let Some(settlement) = &detail.request.settlement {
-        println!(
-            "  settlement: refunded={} reward={} burned={}",
-            settlement.refunded_credits, settlement.reward_credits, settlement.burned_credits
-        );
+    if let Some(outcome) = detail.request.assessment_outcome {
+        println!("  assessment: {outcome:?}");
     }
-}
-
-pub(super) fn print_mutation_receipt(action: &str, response: &RequestMutationResponse) {
-    println!("{action}: {}", request_line(&response.request));
-    if let Some(settlement) = &response.request.settlement {
-        println!(
-            "Settlement: refunded={} reward={} burned={}",
-            settlement.refunded_credits, settlement.reward_credits, settlement.burned_credits
-        );
+    if let Some(merged_at) = detail.request.merged_at_unix {
+        println!("  merged at: {merged_at}");
     }
 }
 
@@ -83,53 +66,15 @@ fn discussion_status_label(status: RequestDiscussionStatus) -> &'static str {
     }
 }
 
-pub(super) fn ensure_mergeable(request: &RequestSummaryResponse) -> anyhow::Result<()> {
-    if !request.permissions.can_merge {
-        bail!("you do not have permission to merge request {}", request.id);
-    }
-    if request.mergeability.status == RequestMergeabilityStatus::Ready {
-        return Ok(());
-    }
-    let reason = request
-        .mergeability
-        .reason
-        .as_deref()
-        .unwrap_or("request is not cleanly mergeable");
-    bail!("request {} cannot be merged: {reason}", request.id)
-}
-
-pub(super) fn confirm_merge(request: &RequestSummaryResponse) -> anyhow::Result<()> {
-    let current_main_oid = request
-        .mergeability
-        .current_main_oid
-        .as_deref()
-        .context("request has no current main oid to merge into")?;
-    println!(
-        "Are you sure you want to merge request {} into main at {}?",
-        request.id,
-        short_oid(current_main_oid)
-    );
-    print!("Type 'merge' to continue: ");
-    io::stdout().flush().context("flush merge confirmation")?;
-    let mut input = String::new();
-    io::stdin()
-        .read_line(&mut input)
-        .context("read merge confirmation")?;
-    if input.trim() != "merge" {
-        bail!("merge cancelled");
-    }
-    Ok(())
-}
-
 pub(super) fn request_line(request: &RequestSummaryResponse) -> String {
     format_request_line(
         &request.name,
         &request.id,
         request.state,
         &request.title,
-        request.stake_credits,
+        request.current_stake_credits,
         &request.head_oid,
-        request.settlement.as_ref(),
+        request.assessment_outcome,
     )
 }
 
@@ -139,9 +84,9 @@ pub(super) fn request_list_line(request: &RequestListItemResponse) -> String {
         &request.id,
         request.state,
         &request.title,
-        request.stake_credits,
+        request.current_stake_credits,
         &request.head_oid,
-        request.settlement.as_ref(),
+        request.assessment_outcome,
     )
 }
 
@@ -152,15 +97,10 @@ fn format_request_line(
     title: &str,
     stake_credits: u32,
     head_oid: &str,
-    settlement: Option<&crate::api::RequestSettlementResponse>,
+    assessment_outcome: Option<crate::api::RequestAssessmentOutcome>,
 ) -> String {
-    let settlement = settlement
-        .map(|settlement| {
-            format!(
-                " settlement(refund={} reward={} burn={})",
-                settlement.refunded_credits, settlement.reward_credits, settlement.burned_credits
-            )
-        })
+    let assessment = assessment_outcome
+        .map(|outcome| format!(" assessment={outcome:?}"))
         .unwrap_or_default();
     format!(
         "{} ({}) [{}] {} stake={} head={}{}",
@@ -170,23 +110,16 @@ fn format_request_line(
         terminal_text(title),
         stake_credits,
         short_oid(head_oid),
-        settlement
+        assessment
     )
 }
 
 fn mergeability_label(request: &RequestSummaryResponse) -> String {
     match request.mergeability.status {
         RequestMergeabilityStatus::Ready => "ready".to_string(),
-        RequestMergeabilityStatus::Closed => request
-            .mergeability
-            .reason
-            .clone()
-            .unwrap_or_else(|| "closed".to_string()),
-        RequestMergeabilityStatus::NotReady => request
-            .mergeability
-            .reason
-            .clone()
-            .unwrap_or_else(|| "request is not ready to merge".to_string()),
+        RequestMergeabilityStatus::Completed => "completed".to_string(),
+        RequestMergeabilityStatus::Working => "working".to_string(),
+        RequestMergeabilityStatus::Held => "on hold".to_string(),
         RequestMergeabilityStatus::NotMaintainer => request
             .mergeability
             .reason
@@ -218,9 +151,7 @@ fn audience_label(audience: RequestAudience) -> &'static str {
 fn state_label(state: RequestState) -> &'static str {
     match state {
         RequestState::Working => "working",
-        RequestState::Submitted => "submitted",
-        RequestState::NeedsResponse => "needs-response",
-        RequestState::Resolved => "resolved",
-        RequestState::Withdrawn => "withdrawn",
+        RequestState::ReadyForReview => "ready-for-review",
+        RequestState::Completed => "completed",
     }
 }

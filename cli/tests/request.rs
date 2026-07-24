@@ -19,7 +19,7 @@ fn obsolete_request_transport_commands_are_removed() {
     let dir = TempDir::new("removed-request-transport");
     create_repo_with_head(dir.path());
 
-    for command in ["join", "pull", "share", "sync-main"] {
+    for command in ["delete", "join", "pull", "share", "sync-main"] {
         scope_failure(
             dir.path(),
             ["request", command],

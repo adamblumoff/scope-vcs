@@ -4,7 +4,7 @@ use super::request_discussions::{
 };
 use super::*;
 use crate::AppState;
-use crate::domain::requests::{RequestDisposition, RequestState};
+use crate::domain::requests::{RequestAssessmentOutcome, RequestState};
 use crate::git::import::git_stdout_text;
 use crate::git::storage::restore_git_segments;
 use crate::object_store::{EncryptedObjectStore, MemoryObjectStore, source_blob_bytes};
@@ -58,30 +58,48 @@ async fn seed_catalog_contains_owned_repos_with_readable_blobs() {
         RequestAudience::Public
     );
     assert_eq!(
-        request_state(&catalog, "req_demo_submitted"),
-        RequestState::Submitted
+        request_state(&catalog, "req_demo_ready"),
+        RequestState::ReadyForReview
     );
-    let submitted_blocks = catalog
+    let ready_blocks = catalog
         .request_change_blocks
         .values()
-        .filter(|block| block.request_id == "req_demo_submitted")
+        .filter(|block| block.request_id == "req_demo_ready")
         .collect::<Vec<_>>();
-    assert_eq!(submitted_blocks.len(), 5);
+    assert_eq!(ready_blocks.len(), 4);
+    let ready = catalog.requests.get("req_demo_ready").unwrap();
+    let last_ready_event_at = catalog
+        .request_events
+        .values()
+        .filter(|event| event.request_id == ready.id)
+        .map(|event| event.created_at_unix)
+        .max()
+        .unwrap();
+    assert!(ready.ready_at_unix.unwrap() > last_ready_event_at);
+    assert_eq!(ready.updated_at_unix, ready.ready_at_unix.unwrap());
     assert!(
-        submitted_blocks
+        ready_blocks
             .iter()
             .all(|block| block.git_snapshot.git_oid == block.new_head_oid)
     );
     assert_eq!(
-        request_state(&catalog, "req_demo_needs_response"),
-        RequestState::NeedsResponse
+        request_state(&catalog, "req_demo_held"),
+        RequestState::ReadyForReview
     );
     let accepted = catalog.requests.get("req_demo_accepted").unwrap();
-    assert_eq!(accepted.state, RequestState::Resolved);
-    assert_eq!(accepted.disposition, Some(RequestDisposition::Accepted));
+    assert_eq!(accepted.state, RequestState::Completed);
     assert_eq!(
-        request_state(&catalog, "req_demo_withdrawn"),
-        RequestState::Withdrawn
+        accepted.assessment_outcome,
+        Some(RequestAssessmentOutcome::Accepted)
+    );
+    assert_eq!(accepted.merged_main_oid, accepted.merged_head_oid);
+    assert_ne!(
+        accepted.merged_main_oid,
+        Some(accepted.base_main_oid.clone())
+    );
+    assert_eq!(
+        request_state(&catalog, "req_demo_rejected"),
+        RequestState::Completed
     );
 }
 

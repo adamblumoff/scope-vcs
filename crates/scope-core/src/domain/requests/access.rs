@@ -9,10 +9,12 @@ pub struct RequestPermissions {
     pub can_edit_description: bool,
     pub can_pull_branch: bool,
     pub can_push_branch: bool,
-    pub can_delete: bool,
-    pub can_mark_needs_response: bool,
-    pub can_respond: bool,
-    pub can_resolve: bool,
+    pub can_mark_ready: bool,
+    pub can_return_to_working: bool,
+    pub can_manage_invitees: bool,
+    pub can_hold: bool,
+    pub can_assess: bool,
+    pub can_close: bool,
     pub can_merge: bool,
 }
 
@@ -20,8 +22,9 @@ pub struct RequestPermissions {
 #[cfg_attr(any(test, feature = "ts"), derive(ts_rs::TS))]
 pub enum RequestMergeabilityStatus {
     Ready,
-    Closed,
-    NotReady,
+    Completed,
+    Working,
+    Held,
     NotMaintainer,
     MissingRequestBranch,
 }
@@ -49,6 +52,14 @@ pub fn request_visible_audiences(access: RepositoryAccess) -> &'static [RequestA
     }
 }
 
+pub fn request_is_published(request: &Request) -> bool {
+    request.is_published()
+}
+
+pub fn request_counts_as_open(request: &Request) -> bool {
+    request.state != RequestState::Completed && request.is_published()
+}
+
 pub fn request_visible_to_access(request: &Request, access: RepositoryAccess) -> bool {
     request_visible_audiences(access).contains(&request.audience)
 }
@@ -65,40 +76,55 @@ pub fn request_permissions(
     let authenticated = viewer_user_id.is_some();
     let author = viewer_user_id == Some(request.author_user_id.as_str());
     let visible = request_visible_to_access(request, access);
-    let open = !matches!(
-        request.state,
-        RequestState::Resolved | RequestState::Withdrawn
-    );
-    let submitted = request.state == RequestState::Submitted;
-    let submitted_or_waiting = matches!(
-        request.state,
-        RequestState::Submitted | RequestState::NeedsResponse
-    );
     let can_collaborate = match request.audience {
         RequestAudience::Public => authenticated,
         RequestAudience::Private => maintainer,
     };
+    let completed = request.state == RequestState::Completed;
+    let held = request.held_at_unix.is_some();
+    let working = request.state == RequestState::Working;
+    let ready = request.state == RequestState::ReadyForReview;
     RequestPermissions {
-        can_open_discussion: visible && open && can_collaborate,
-        can_reply_to_discussion: visible && open && can_collaborate,
-        can_edit_description: visible && open && (author || maintainer),
+        can_open_discussion: visible && !completed && can_collaborate,
+        can_reply_to_discussion: visible && !completed && can_collaborate,
+        can_edit_description: visible && working && !held && (author || maintainer),
         can_pull_branch: visible,
-        can_push_branch: visible && open && can_collaborate,
-        can_delete: visible && open && (author || maintainer),
-        can_mark_needs_response: visible && submitted && maintainer,
-        can_respond: visible && open && author && request.state == RequestState::NeedsResponse,
-        can_resolve: visible && submitted_or_waiting && maintainer,
-        can_merge: visible && submitted && maintainer,
+        can_push_branch: visible && !completed && !held && can_collaborate,
+        can_mark_ready: visible && working && author,
+        can_return_to_working: visible && ready && !held && author,
+        can_manage_invitees: visible
+            && request.audience == RequestAudience::Public
+            && !completed
+            && (maintainer || (author && !held)),
+        can_hold: visible && ready && maintainer,
+        can_assess: visible && ready && maintainer,
+        can_close: visible && working && author,
+        can_merge: visible
+            && maintainer
+            && request.merged_at_unix.is_none()
+            && ((ready && !held)
+                || (completed
+                    && request.assessment_outcome
+                        == Some(super::RequestAssessmentOutcome::Accepted))),
     }
 }
 
 pub fn request_list_mergeability(
     state: RequestState,
+    assessment_outcome: Option<super::RequestAssessmentOutcome>,
     has_git_snapshot: bool,
+    is_held: bool,
+    is_merged: bool,
     access: RepositoryAccess,
 ) -> RequestMergeability {
-    let (status, reason) = if matches!(state, RequestState::Resolved | RequestState::Withdrawn) {
-        (RequestMergeabilityStatus::Closed, Some("request is closed"))
+    let completed_and_mergeable = state == RequestState::Completed
+        && assessment_outcome == Some(super::RequestAssessmentOutcome::Accepted)
+        && !is_merged;
+    let (status, reason) = if state == RequestState::Completed && !completed_and_mergeable {
+        (
+            RequestMergeabilityStatus::Completed,
+            Some("request is completed"),
+        )
     } else if !matches!(
         access.actor,
         RepositoryActor::Owner | RepositoryActor::Member
@@ -109,14 +135,11 @@ pub fn request_list_mergeability(
         )
     } else if state == RequestState::Working {
         (
-            RequestMergeabilityStatus::NotReady,
-            Some("request has not been submitted"),
+            RequestMergeabilityStatus::Working,
+            Some("request is not ready for review"),
         )
-    } else if state == RequestState::NeedsResponse {
-        (
-            RequestMergeabilityStatus::NotReady,
-            Some("request is waiting on contributor response"),
-        )
+    } else if is_held {
+        (RequestMergeabilityStatus::Held, Some("request is on hold"))
     } else if !has_git_snapshot {
         (
             RequestMergeabilityStatus::MissingRequestBranch,
@@ -129,5 +152,12 @@ pub fn request_list_mergeability(
 }
 
 pub fn request_mergeability(request: &Request, access: RepositoryAccess) -> RequestMergeability {
-    request_list_mergeability(request.state, request.git_snapshot.is_some(), access)
+    request_list_mergeability(
+        request.state,
+        request.assessment_outcome,
+        request.git_snapshot.is_some(),
+        request.held_at_unix.is_some(),
+        request.merged_at_unix.is_some(),
+        access,
+    )
 }

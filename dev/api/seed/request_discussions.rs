@@ -3,7 +3,7 @@ use crate::{
     domain::{
         requests::{
             CreateRequestDiscussionInput, CreateRequestDiscussionReplyInput,
-            RequestDiscussionStatus, UpdateRequestDescriptionInput,
+            RequestDiscussionStatus,
         },
         store::{RepositoryMember, RepositoryMemberPermissions, StoredRepository, UserAccount},
     },
@@ -12,16 +12,21 @@ use crate::{
 
 pub(super) const CONTRIBUTOR_ID: &str = "scope_usr_dev_contributor";
 pub(super) const MAINTAINER_ID: &str = "scope_usr_dev_maintainer";
-pub(super) const REQUEST_ID: &str = "req_demo_submitted";
+pub(super) const REQUEST_ID: &str = "req_demo_ready";
+pub(super) const READY_REQUEST_DESCRIPTION: &str = concat!(
+    "This request adds bounded retry timing to the remote client.\n\n",
+    "The implementation caps exponential backoff at two seconds and keeps the ",
+    "helper small enough to reuse from fetch and push paths. Please focus review ",
+    "on the cap, jitter behavior, and whether the exported API communicates units."
+);
 pub(super) const RETRY_CAP_ID: &str = "discussion_demo_retry_cap";
 pub(super) const RETRY_CAP_MAINTAINER_REPLY_ID: &str = "discussion_reply_demo_retry_cap_maintainer";
 const RETRY_CAP_CONTRIBUTOR_REPLY_ID: &str = "discussion_reply_demo_retry_cap_quote";
 pub(super) const RESOLVED_DOCS_ID: &str = "discussion_demo_resolved_docs";
 const JITTER_ID: &str = "discussion_demo_jitter";
-const SUBMISSION_BLOCK_THREAD_ID: &str = "thread_event_req_demo_submitted_submitted";
-const JITTER_BLOCK_THREAD_ID: &str = "thread_event_req_demo_submitted_revision_2";
-const TEST_BLOCK_THREAD_ID: &str = "thread_event_req_demo_submitted_revision_3";
-const FINAL_BLOCK_THREAD_ID: &str = "thread_event_req_demo_submitted_revision_4";
+const JITTER_BLOCK_THREAD_ID: &str = "thread_event_req_demo_ready_revision_2";
+const TEST_BLOCK_THREAD_ID: &str = "thread_event_req_demo_ready_revision_3";
+const FINAL_BLOCK_THREAD_ID: &str = "thread_event_req_demo_ready_revision_4";
 
 struct SeedChangeBlockReply {
     discussion_id: &'static str,
@@ -64,23 +69,6 @@ pub(super) fn add_maintainer(repo: &mut StoredRepository) {
 pub(crate) async fn seed_request_discussion_gallery(
     metadata: &MetadataStore,
 ) -> Result<(), ApiError> {
-    metadata
-        .update_request_description(UpdateRequestDescriptionInput {
-            request_id: REQUEST_ID.to_string(),
-            actor_user_id: MAINTAINER_ID.to_string(),
-            actor_can_edit_description: false,
-            event_id: "event_demo_description_edited".to_string(),
-            description_markdown: concat!(
-                "This request adds bounded retry timing to the remote client.\n\n",
-                "The implementation caps exponential backoff at two seconds and keeps the ",
-                "helper small enough to reuse from fetch and push paths. Please focus review ",
-                "on the cap, jitter behavior, and whether the exported API communicates units."
-            )
-            .to_string(),
-            now_unix: 1_800_000_110,
-        })
-        .await?;
-
     create_retry_cap_conversation(metadata).await?;
     create_jitter_conversation(metadata).await?;
     create_resolved_docs_conversation(metadata).await?;
@@ -100,25 +88,6 @@ pub(crate) async fn seed_request_discussion_gallery(
 
 async fn create_change_block_conversations(metadata: &MetadataStore) -> Result<(), ApiError> {
     let replies = [
-        SeedChangeBlockReply {
-            discussion_id: SUBMISSION_BLOCK_THREAD_ID,
-            id: "discussion_reply_demo_submission_review",
-            actor_user_id: MAINTAINER_ID,
-            client_reply_id: "seed_submission_review",
-            body: concat!(
-                "This is a good minimal starting point. Please name the two-second cap and ",
-                "make the milliseconds contract explicit before we build on it."
-            ),
-            reply_to_reply_id: None,
-        },
-        SeedChangeBlockReply {
-            discussion_id: SUBMISSION_BLOCK_THREAD_ID,
-            id: "discussion_reply_demo_submission_followup",
-            actor_user_id: CONTRIBUTOR_ID,
-            client_reply_id: "seed_submission_followup",
-            body: "Done in the next revision; the cap and unit are both named now.",
-            reply_to_reply_id: Some("discussion_reply_demo_submission_review"),
-        },
         SeedChangeBlockReply {
             discussion_id: JITTER_BLOCK_THREAD_ID,
             id: "discussion_reply_demo_jitter_block",
@@ -373,7 +342,7 @@ mod tests {
             })
             .await
             .unwrap();
-        assert_eq!(discussions.discussions.len(), 8);
+        assert_eq!(discussions.discussions.len(), 7);
         assert_eq!(
             discussions
                 .discussions
@@ -387,8 +356,7 @@ mod tests {
                 FINAL_BLOCK_THREAD_ID,
                 TEST_BLOCK_THREAD_ID,
                 JITTER_BLOCK_THREAD_ID,
-                "thread_event_req_demo_submitted_revision_1",
-                SUBMISSION_BLOCK_THREAD_ID,
+                "thread_event_req_demo_ready_revision_1",
             ]
         );
         assert_eq!(
@@ -397,7 +365,7 @@ mod tests {
                 .iter()
                 .filter(|model| model.discussion.status == RequestDiscussionStatus::Open)
                 .count(),
-            6
+            5
         );
         let change_block = discussions
             .discussions
@@ -412,7 +380,7 @@ mod tests {
                 .iter()
                 .filter(|model| model.change_block.is_some())
                 .count(),
-            5
+            4
         );
         assert_eq!(
             discussions
@@ -466,13 +434,6 @@ mod tests {
             "river-contributor"
         );
         assert_eq!(users.get(MAINTAINER_ID).unwrap().handle, "maya-maintainer");
-
-        let (block_replies, _) = metadata
-            .request_discussion_replies(SUBMISSION_BLOCK_THREAD_ID, None, None, 10)
-            .await
-            .unwrap();
-        assert_eq!(block_replies.len(), 1);
-        assert_eq!(block_replies[0].child_reply_count, 1);
 
         let activity = metadata
             .request_events_by_request_id(REQUEST_ID)

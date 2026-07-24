@@ -2,8 +2,7 @@ import type {
   RequestEvent,
   RequestListItem,
   RequestSummary,
-  RequestWorkflowDisposition,
-  RequestWorkflowResolutionDisposition,
+  RequestWorkflowAssessmentOutcome,
   RequestWorkflowEventKind,
   RequestWorkflowState,
 } from '@/api/types'
@@ -11,75 +10,35 @@ import type { BadgeVariant } from '@/components/ui/badge'
 
 export type BadgeTone = BadgeVariant
 
-export type ResolutionOption = {
-  description: string
-  disposition: RequestWorkflowResolutionDisposition
-  label: string
-}
-
-export type SettlementPreview = {
-  burnedCredits: number
-  refundedCredits: number
-  rewardCredits: number
-  stakeCredits: number
-}
-
-const RESOLUTION_OPTIONS = [
-  {
-    description: 'Good work that helped, but the repo chose another path.',
-    disposition: 'UsefulNotMerged',
-    label: 'Useful, not merged',
-  },
-  {
-    description: 'The contributor could not reasonably know it was blocked.',
-    disposition: 'HiddenContext',
-    label: 'Blocked by hidden context',
-  },
-  {
-    description: 'Reasonable work, but not aligned with current project direction.',
-    disposition: 'NotAligned',
-    label: 'Reasonable, not aligned',
-  },
-  {
-    description: 'Missed context that was visible before submitting.',
-    disposition: 'Duplicate',
-    label: 'Duplicate or obvious miss',
-  },
-  {
-    description: 'The contributor disappeared after maintainer follow-up.',
-    disposition: 'Abandoned',
-    label: 'Abandoned',
-  },
-  {
-    description: 'Low-signal, misleading, spammy, or not good-faith.',
-    disposition: 'LowQuality',
-    label: 'Low quality',
-  },
-] as const satisfies ResolutionOption[]
-
 const REQUEST_STATES = {
   Working: { label: 'Working', tone: 'neutral' },
-  Submitted: { label: 'Submitted', tone: 'info' },
-  NeedsResponse: { label: 'Needs response', tone: 'warning' },
-  Resolved: { label: 'Resolved', tone: 'success' },
-  Withdrawn: { label: 'Withdrawn', tone: 'neutral' },
-} as const satisfies Record<RequestWorkflowState, { label: string; tone: BadgeTone }>
+  ReadyForReview: { label: 'Ready for review', tone: 'info' },
+  Completed: { label: 'Completed', tone: 'success' },
+} as const satisfies Record<
+  RequestWorkflowState,
+  { label: string; tone: BadgeTone }
+>
 
-const DISPOSITIONS = {
+const ASSESSMENTS = {
   Accepted: { label: 'Accepted', tone: 'success' },
-  UsefulNotMerged: { label: 'Useful, not merged', tone: 'success' },
-  HiddenContext: { label: 'Blocked by hidden context', tone: 'success' },
-  NotAligned: { label: 'Reasonable, not aligned', tone: 'neutral' },
-  Duplicate: { label: 'Duplicate or obvious miss', tone: 'warning' },
-  Abandoned: { label: 'Abandoned', tone: 'danger' },
-  LowQuality: { label: 'Low quality', tone: 'danger' },
-} as const satisfies Record<RequestWorkflowDisposition, { label: string; tone: BadgeTone }>
+  Neutral: { label: 'Neutral', tone: 'neutral' },
+  Rejected: { label: 'Rejected', tone: 'danger' },
+} as const satisfies Record<
+  RequestWorkflowAssessmentOutcome,
+  { label: string; tone: BadgeTone }
+>
 
 const EVENT_LABELS = {
-  Started: 'Started', Submitted: 'Submitted', RevisionPushed: 'Revision pushed',
-  NeedsResponse: 'Needs response',
-  ContributorResponded: 'Contributor responded', Merged: 'Merged',
-  Resolved: 'Resolved', Settled: 'Settled', Withdrawn: 'Withdrawn',
+  Started: 'Started',
+  ReadyForReview: 'Ready for review',
+  ReturnedToWorking: 'Returned to working',
+  RevisionPushed: 'Revision pushed',
+  Held: 'Held',
+  HoldReleased: 'Hold released',
+  Assessed: 'Assessed',
+  Merged: 'Merged',
+  Closed: 'Closed',
+  Settled: 'Settled',
   DescriptionEdited: 'Description edited',
   DiscussionResolved: 'Discussion resolved',
   DiscussionReopened: 'Discussion reopened',
@@ -87,34 +46,28 @@ const EVENT_LABELS = {
 
 const MERGEABILITY = {
   Ready: { label: 'Clean merge available', tone: 'success' },
-  Closed: { label: 'Closed', tone: 'neutral' },
-  NotReady: { label: 'Not ready', tone: 'warning' },
+  Completed: { label: 'Completed', tone: 'neutral' },
+  Working: { label: 'Working', tone: 'neutral' },
+  Held: { label: 'On hold', tone: 'warning' },
   NotMaintainer: { label: 'Maintainer required', tone: 'neutral' },
   MissingRequestBranch: { label: 'Branch missing', tone: 'warning' },
-} as const satisfies Record<RequestSummary['mergeability']['status'], { label: string; tone: BadgeTone }>
+} as const satisfies Record<
+  RequestSummary['mergeability']['status'],
+  { label: string; tone: BadgeTone }
+>
 
 type RequestLabelSource = RequestSummary | RequestListItem
 
 export function requestStatusLabel(request: RequestLabelSource) {
-  return request.state === 'Resolved' && request.disposition
-    ? dispositionLabel(request.disposition)
+  return request.state === 'Completed' && request.assessment_outcome
+    ? ASSESSMENTS[request.assessment_outcome].label
     : REQUEST_STATES[request.state].label
 }
 
 export function requestStatusTone(request: RequestLabelSource): BadgeTone {
-  return request.state === 'Resolved'
-    ? dispositionTone(request.disposition)
+  return request.state === 'Completed' && request.assessment_outcome
+    ? ASSESSMENTS[request.assessment_outcome].tone
     : REQUEST_STATES[request.state].tone
-}
-
-function dispositionLabel(disposition: RequestWorkflowDisposition) {
-  return DISPOSITIONS[disposition].label
-}
-
-function dispositionTone(
-  disposition: RequestWorkflowDisposition | null,
-): BadgeTone {
-  return disposition ? DISPOSITIONS[disposition].tone : 'outline'
 }
 
 export function requestAudienceLabel(request: RequestLabelSource) {
@@ -144,37 +97,6 @@ export function requestMergeabilityTone(request: RequestLabelSource): BadgeTone 
   return MERGEABILITY[request.mergeability.status].tone
 }
 
-export function resolutionOptionsFor(
-  request: RequestSummary,
-): ResolutionOption[] {
-  const allowed = new Set(request.resolution_options.map(({ disposition }) => disposition))
-  return RESOLUTION_OPTIONS.filter(({ disposition }) => allowed.has(disposition))
-}
-
-export function settlementPreviewFor(
-  request: RequestSummary,
-  disposition: RequestWorkflowDisposition,
-): SettlementPreview {
-  const preview = disposition === 'Accepted'
-    ? request.merge_settlement_preview
-    : request.resolution_options.find((option) => option.disposition === disposition)?.settlement
-  if (!preview) throw new Error(`resolution ${disposition} is not allowed`)
-  return {
-    burnedCredits: preview.burned_credits,
-    refundedCredits: preview.refunded_credits,
-    rewardCredits: preview.reward_credits,
-    stakeCredits: preview.stake_credits,
-  }
-}
-
-export function settlementPreviewText(preview: SettlementPreview) {
-  return [
-    `${preview.refundedCredits} refunded`,
-    `${preview.rewardCredits} reward`,
-    `${preview.burnedCredits} burned`,
-  ].join(' / ')
-}
-
 export function requestEventBody(event: RequestEvent) {
   const payload = event.payload as unknown as Record<
     string,
@@ -185,23 +107,40 @@ export function requestEventBody(event: RequestEvent) {
   switch (event.kind) {
     case 'Started':
       return stringValue(value.title)
-    case 'Submitted':
-      return oidText(value.head_oid)
+    case 'ReadyForReview':
+      return [
+        oidText(value.head_oid),
+        creditText(value.stake_credits, 'staked'),
+      ]
+        .filter(Boolean)
+        .join(' · ')
+    case 'ReturnedToWorking':
+      return [
+        stringValue(value.reason),
+        creditText(value.stake_credits, 'refunded'),
+      ]
+        .filter(Boolean)
+        .join(' · ')
     case 'RevisionPushed':
       return [
         `${oidText(value.old_head_oid)} → ${oidText(value.new_head_oid)}`,
         stringValue(value.note),
-      ].filter(Boolean).join('\n')
-    case 'NeedsResponse':
-      return stringValue(value.body)
-    case 'ContributorResponded':
-    case 'Merged':
-      return stringValue(value.body) ?? oidText(value.head_oid)
-    case 'Resolved':
+      ]
+        .filter(Boolean)
+        .join('\n')
+    case 'Held':
+    case 'HoldReleased':
+    case 'Closed':
+      return oidText(value.head_oid)
+    case 'Assessed':
       return [
-        stringValue(value.disposition),
-        stringValue(value.body),
-      ].filter(Boolean).join(' · ')
+        stringValue(value.outcome),
+        stringValue(value.body_markdown),
+      ]
+        .filter(Boolean)
+        .join(' · ')
+    case 'Merged':
+      return `${oidText(value.head_oid)} → ${oidText(value.main_oid)}`
     case 'Settled': {
       const settlement = value.settlement as Record<string, unknown> | undefined
       return settlement
@@ -212,8 +151,6 @@ export function requestEventBody(event: RequestEvent) {
           ].join(' / ')
         : null
     }
-    case 'Withdrawn':
-      return oidText(value.head_oid)
     case 'DescriptionEdited':
       return 'The request description was updated.'
     case 'DiscussionResolved':
@@ -231,10 +168,6 @@ export function shortOid(oid: string | null | undefined) {
   return oid.length > 12 ? oid.slice(0, 12) : oid
 }
 
-export function fullOid(oid: string | null | undefined) {
-  return oid ?? 'none'
-}
-
 export function formatUnixDate(unixSeconds: number | null) {
   if (unixSeconds === null) {
     return 'Not set'
@@ -248,11 +181,6 @@ export function formatUnixDate(unixSeconds: number | null) {
   }).format(new Date(unixSeconds * 1000))
 }
 
-export function normalizedBody(body: string) {
-  const trimmed = body.trim()
-  return trimmed ? trimmed : null
-}
-
 function oidText(value: unknown) {
   return typeof value === 'string' ? shortOid(value) : null
 }
@@ -263,4 +191,8 @@ function stringValue(value: unknown) {
 
 function numberValue(value: unknown) {
   return typeof value === 'number' ? value : 0
+}
+
+function creditText(value: unknown, suffix: string) {
+  return typeof value === 'number' ? `${value} ${suffix}` : null
 }

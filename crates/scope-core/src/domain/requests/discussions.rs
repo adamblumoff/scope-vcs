@@ -588,11 +588,8 @@ fn open_request_mut<'a>(
     let request = requests
         .get_mut(request_id)
         .ok_or_else(|| ApiError::not_found("request not found"))?;
-    if matches!(
-        request.state,
-        RequestState::Resolved | RequestState::Withdrawn
-    ) {
-        return Err(ApiError::conflict("request is closed"));
+    if request.state == RequestState::Completed {
+        return Err(ApiError::conflict("request is completed"));
     }
     Ok(request)
 }

@@ -37,7 +37,6 @@ mod request_discussions;
 pub use request_discussions::{
     RequestDiscussionReadBatch, RequestDiscussionReadModel, RequestDiscussionsPageQuery,
 };
-mod request_merges;
 mod request_rows;
 pub use request_rows::RequestListRow;
 mod requests;

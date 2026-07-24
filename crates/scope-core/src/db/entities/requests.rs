@@ -1,9 +1,9 @@
 use super::*;
 use crate::domain::requests::{
-    CreditLedgerEntry, CreditLedgerEntryKind, Request, RequestActorRole, RequestAudience,
-    RequestChangeBlock, RequestDiscussion, RequestDiscussionReadState, RequestDiscussionReply,
-    RequestDiscussionStatus, RequestDiscussionSubject, RequestDisposition, RequestEvent,
-    RequestEventKind, RequestEventPayload, RequestSettlement, RequestState, UserCreditAccount,
+    CreditLedgerEntry, CreditLedgerEntryKind, Request, RequestActorRole, RequestAssessmentOutcome,
+    RequestAudience, RequestChangeBlock, RequestDiscussion, RequestDiscussionReadState,
+    RequestDiscussionReply, RequestDiscussionStatus, RequestDiscussionSubject, RequestEvent,
+    RequestEventKind, RequestEventPayload, RequestState, UserCreditAccount,
 };
 use crate::domain::store::SourceBlob;
 
@@ -27,12 +27,23 @@ pub mod request {
         pub description_markdown: String,
         pub state: String,
         pub activity_version: i64,
-        pub stake_credits: i32,
-        pub disposition: Option<String>,
-        pub settlement: Option<Json>,
+        pub current_stake_credits: i32,
+        pub first_ready_at_unix: Option<i64>,
+        pub ready_at_unix: Option<i64>,
+        pub held_at_unix: Option<i64>,
+        pub held_by_user_id: Option<String>,
+        pub assessment_outcome: Option<String>,
+        pub assessment_body_markdown: Option<String>,
+        pub assessed_at_unix: Option<i64>,
+        pub assessed_by_user_id: Option<String>,
+        pub completed_at_unix: Option<i64>,
+        pub completed_by_user_id: Option<String>,
+        pub merged_at_unix: Option<i64>,
+        pub merged_by_user_id: Option<String>,
+        pub merged_head_oid: Option<String>,
+        pub merged_main_oid: Option<String>,
         pub created_at_unix: i64,
         pub updated_at_unix: i64,
-        pub resolved_at_unix: Option<i64>,
     }
 
     #[derive(Copy, Clone, Debug, EnumIter, DeriveRelation)]
@@ -42,6 +53,7 @@ pub mod request {
 
     impl Model {
         pub fn from_domain(request: &Request) -> Result<Self, ApiError> {
+            request.validate_facts()?;
             Ok(Self {
                 id: request.id.clone(),
                 repo_id: request.repo_id.clone(),
@@ -56,20 +68,40 @@ pub mod request {
                 description_markdown: request.description_markdown.clone(),
                 state: encode_enum(request.state)?,
                 activity_version: u64_to_i64(request.activity_version, "request activity version")?,
-                stake_credits: u32_to_i32(request.stake_credits, "request stake credits")?,
-                disposition: request.disposition.map(encode_enum).transpose()?,
-                settlement: request.settlement.as_ref().map(encode_json).transpose()?,
+                current_stake_credits: u32_to_i32(
+                    request.current_stake_credits,
+                    "request current stake credits",
+                )?,
+                first_ready_at_unix: encode_optional_time(
+                    request.first_ready_at_unix,
+                    "request first ready time",
+                )?,
+                ready_at_unix: encode_optional_time(request.ready_at_unix, "request ready time")?,
+                held_at_unix: encode_optional_time(request.held_at_unix, "request hold time")?,
+                held_by_user_id: request.held_by_user_id.clone(),
+                assessment_outcome: request.assessment_outcome.map(encode_enum).transpose()?,
+                assessment_body_markdown: request.assessment_body_markdown.clone(),
+                assessed_at_unix: encode_optional_time(
+                    request.assessed_at_unix,
+                    "request assessment time",
+                )?,
+                assessed_by_user_id: request.assessed_by_user_id.clone(),
+                completed_at_unix: encode_optional_time(
+                    request.completed_at_unix,
+                    "request completion time",
+                )?,
+                completed_by_user_id: request.completed_by_user_id.clone(),
+                merged_at_unix: encode_optional_time(request.merged_at_unix, "request merge time")?,
+                merged_by_user_id: request.merged_by_user_id.clone(),
+                merged_head_oid: request.merged_head_oid.clone(),
+                merged_main_oid: request.merged_main_oid.clone(),
                 created_at_unix: u64_to_i64(request.created_at_unix, "request creation time")?,
                 updated_at_unix: u64_to_i64(request.updated_at_unix, "request update time")?,
-                resolved_at_unix: request
-                    .resolved_at_unix
-                    .map(|value| u64_to_i64(value, "request resolution time"))
-                    .transpose()?,
             })
         }
 
         pub fn try_into_domain(self) -> Result<Request, ApiError> {
-            Ok(Request {
+            let request = Request {
                 id: self.id,
                 repo_id: self.repo_id,
                 name: self.name,
@@ -86,24 +118,71 @@ pub mod request {
                 description_markdown: self.description_markdown,
                 state: decode_enum::<RequestState>(self.state)?,
                 activity_version: i64_to_u64(self.activity_version, "request activity version")?,
-                stake_credits: i32_to_u32(self.stake_credits, "request stake credits")?,
-                disposition: self
-                    .disposition
-                    .map(decode_enum::<RequestDisposition>)
+                current_stake_credits: i32_to_u32(
+                    self.current_stake_credits,
+                    "request current stake credits",
+                )?,
+                first_ready_at_unix: decode_optional_time(
+                    self.first_ready_at_unix,
+                    "request first ready time",
+                )?,
+                ready_at_unix: decode_optional_time(self.ready_at_unix, "request ready time")?,
+                held_at_unix: decode_optional_time(self.held_at_unix, "request hold time")?,
+                held_by_user_id: self.held_by_user_id,
+                assessment_outcome: self
+                    .assessment_outcome
+                    .map(decode_enum::<RequestAssessmentOutcome>)
                     .transpose()?,
-                settlement: self
-                    .settlement
-                    .map(decode_json::<RequestSettlement>)
-                    .transpose()?,
+                assessment_body_markdown: self.assessment_body_markdown,
+                assessed_at_unix: decode_optional_time(
+                    self.assessed_at_unix,
+                    "request assessment time",
+                )?,
+                assessed_by_user_id: self.assessed_by_user_id,
+                completed_at_unix: decode_optional_time(
+                    self.completed_at_unix,
+                    "request completion time",
+                )?,
+                completed_by_user_id: self.completed_by_user_id,
+                merged_at_unix: decode_optional_time(self.merged_at_unix, "request merge time")?,
+                merged_by_user_id: self.merged_by_user_id,
+                merged_head_oid: self.merged_head_oid,
+                merged_main_oid: self.merged_main_oid,
                 created_at_unix: i64_to_u64(self.created_at_unix, "request creation time")?,
                 updated_at_unix: i64_to_u64(self.updated_at_unix, "request update time")?,
-                resolved_at_unix: self
-                    .resolved_at_unix
-                    .map(|value| i64_to_u64(value, "request resolution time"))
-                    .transpose()?,
-            })
+            };
+            request.validate_facts()?;
+            Ok(request)
         }
     }
+
+    fn encode_optional_time(value: Option<u64>, field: &str) -> Result<Option<i64>, ApiError> {
+        value.map(|value| u64_to_i64(value, field)).transpose()
+    }
+
+    fn decode_optional_time(value: Option<i64>, field: &str) -> Result<Option<u64>, ApiError> {
+        value.map(|value| i64_to_u64(value, field)).transpose()
+    }
+}
+
+pub mod request_invitee {
+    use super::*;
+
+    #[derive(Clone, Debug, PartialEq, DeriveEntityModel)]
+    #[sea_orm(table_name = "scope_request_invitees")]
+    pub struct Model {
+        #[sea_orm(primary_key, auto_increment = false)]
+        pub request_id: String,
+        #[sea_orm(primary_key, auto_increment = false)]
+        pub user_id: String,
+        pub invited_by_user_id: String,
+        pub created_at_unix: i64,
+    }
+
+    #[derive(Copy, Clone, Debug, EnumIter, DeriveRelation)]
+    pub enum Relation {}
+
+    impl ActiveModelBehavior for ActiveModel {}
 }
 
 pub mod request_change_block {

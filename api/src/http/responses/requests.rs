@@ -1,39 +1,13 @@
-use crate::domain::requests::{
-    Request, RequestDisposition, RequestEvent, RequestSettlement, allowed_resolution_dispositions,
-    request_list_mergeability, settlement_for,
-};
+use crate::domain::requests::{Request, RequestEvent, request_list_mergeability};
 use crate::domain::store::RepositoryAccess;
 use scope_api_contract::*;
 use scope_core::db::RequestListRow;
-
-fn settlement_preview(
-    stake_credits: u32,
-    disposition: RequestDisposition,
-) -> RequestSettlementPreviewResponse {
-    let settlement = settlement_for(stake_credits, disposition, 0);
-    RequestSettlementPreviewResponse {
-        stake_credits,
-        refunded_credits: settlement.refunded_credits,
-        reward_credits: settlement.reward_credits,
-        burned_credits: settlement.burned_credits,
-    }
-}
 
 pub(crate) fn request_summary_response(
     request: Request,
     permissions: RequestPermissionsResponse,
     mergeability: RequestMergeabilityResponse,
 ) -> Result<RequestSummaryResponse, crate::error::ApiError> {
-    let resolution_options = allowed_resolution_dispositions(request.state)
-        .iter()
-        .copied()
-        .map(|disposition| RequestResolutionOptionResponse {
-            disposition,
-            settlement: settlement_preview(request.stake_credits, disposition.into()),
-        })
-        .collect();
-    let merge_settlement_preview =
-        settlement_preview(request.stake_credits, RequestDisposition::Accepted);
     Ok(RequestSummaryResponse {
         id: request.id,
         name: request.name,
@@ -46,16 +20,31 @@ pub(crate) fn request_summary_response(
         head_oid: super::git_oid_response(request.head_oid)?,
         state: request.state,
         activity_version: request.activity_version,
-        stake_credits: request.stake_credits,
-        disposition: request.disposition,
-        settlement: request.settlement.map(request_settlement_response),
+        current_stake_credits: request.current_stake_credits,
+        first_ready_at_unix: request.first_ready_at_unix,
+        ready_at_unix: request.ready_at_unix,
+        held_at_unix: request.held_at_unix,
+        held_by_user_id: request.held_by_user_id,
+        assessment_outcome: request.assessment_outcome,
+        assessment_body_markdown: request.assessment_body_markdown,
+        assessed_at_unix: request.assessed_at_unix,
+        assessed_by_user_id: request.assessed_by_user_id,
+        completed_at_unix: request.completed_at_unix,
+        completed_by_user_id: request.completed_by_user_id,
+        merged_at_unix: request.merged_at_unix,
+        merged_by_user_id: request.merged_by_user_id,
+        merged_head_oid: request
+            .merged_head_oid
+            .map(super::git_oid_response)
+            .transpose()?,
+        merged_main_oid: request
+            .merged_main_oid
+            .map(super::git_oid_response)
+            .transpose()?,
         created_at_unix: request.created_at_unix,
         updated_at_unix: request.updated_at_unix,
-        resolved_at_unix: request.resolved_at_unix,
         permissions,
         mergeability,
-        resolution_options,
-        merge_settlement_preview,
     })
 }
 
@@ -64,7 +53,14 @@ pub(crate) fn request_list_item_response(
     access: RepositoryAccess,
     current_main_oid: Option<String>,
 ) -> Result<RequestListItemResponse, crate::error::ApiError> {
-    let decision = request_list_mergeability(request.state, request.has_git_snapshot, access);
+    let decision = request_list_mergeability(
+        request.state,
+        request.assessment_outcome,
+        request.has_git_snapshot,
+        request.is_held,
+        request.is_merged,
+        access,
+    );
     let request_head_oid = super::git_oid_response(request.head_oid)?;
     Ok(RequestListItemResponse {
         id: request.id,
@@ -74,9 +70,8 @@ pub(crate) fn request_list_item_response(
         audience: request.audience,
         head_oid: request_head_oid.clone(),
         state: request.state,
-        stake_credits: request.stake_credits,
-        disposition: request.disposition,
-        settlement: request.settlement.map(request_settlement_response),
+        current_stake_credits: request.current_stake_credits,
+        assessment_outcome: request.assessment_outcome,
         updated_at_unix: request.updated_at_unix,
         mergeability: RequestMergeabilityResponse {
             status: decision.status,
@@ -98,16 +93,5 @@ pub(crate) fn request_event_response(
         kind: event.kind,
         payload: event.payload,
         created_at_unix: event.created_at_unix,
-    }
-}
-
-fn request_settlement_response(settlement: RequestSettlement) -> RequestSettlementResponse {
-    RequestSettlementResponse {
-        disposition: settlement.disposition,
-        stake_credits: settlement.stake_credits,
-        refunded_credits: settlement.refunded_credits,
-        reward_credits: settlement.reward_credits,
-        burned_credits: settlement.burned_credits,
-        settled_at_unix: settlement.settled_at_unix,
     }
 }

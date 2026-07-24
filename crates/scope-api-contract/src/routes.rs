@@ -28,7 +28,6 @@ pub const REPO_REQUEST_CHANGE_BLOCK_FILES: &str =
     "/v1/repos/{owner}/{repo}/requests/{request_id}/changes/{block_id}";
 pub const REPO_REQUEST_CHANGE_BLOCK_FILE_DIFF: &str =
     "/v1/repos/{owner}/{repo}/requests/{request_id}/changes/{block_id}/file-diff";
-pub const REPO_REQUEST_SUBMIT: &str = "/v1/repos/{owner}/{repo}/requests/{request_id}/submit";
 pub const REPO_REQUEST_DESCRIPTION: &str =
     "/v1/repos/{owner}/{repo}/requests/{request_id}/description";
 pub const REPO_REQUEST_DISCUSSIONS: &str =
@@ -46,11 +45,6 @@ pub const REPO_REQUEST_DISCUSSION_REOPEN_AND_REPLY: &str =
 pub const REPO_REQUEST_DISCUSSION_READ: &str =
     "/v1/repos/{owner}/{repo}/requests/{request_id}/threads/{discussion_id}/read";
 pub const REPO_REQUEST_ACTIVITY: &str = "/v1/repos/{owner}/{repo}/requests/{request_id}/activity";
-pub const REPO_REQUEST_NEEDS_RESPONSE: &str =
-    "/v1/repos/{owner}/{repo}/requests/{request_id}/needs-response";
-pub const REPO_REQUEST_RESPOND: &str = "/v1/repos/{owner}/{repo}/requests/{request_id}/respond";
-pub const REPO_REQUEST_RESOLVE: &str = "/v1/repos/{owner}/{repo}/requests/{request_id}/resolve";
-pub const REPO_REQUEST_MERGE: &str = "/v1/repos/{owner}/{repo}/requests/{request_id}/merge";
 pub const REPO_EVENTS: &str = "/v1/repos/{owner}/{repo}/events";
 pub const REPO_COMMITS: &str = "/v1/repos/{owner}/{repo}/commits";
 pub const REPO_COMMIT: &str = "/v1/repos/{owner}/{repo}/commits/{commit_id}";

@@ -17,21 +17,6 @@ pub(crate) fn validate_required_body(label: &str, value: &str) -> Result<(), Api
     Ok(())
 }
 
-pub(super) fn validate_required_timeline_body(label: &str, value: &str) -> Result<(), ApiError> {
-    validate_required_body(label, value)?;
-    validate_body_size(label, value, REQUEST_TIMELINE_BODY_MAX_BYTES)
-}
-
-pub(super) fn validate_optional_timeline_body(
-    label: &str,
-    value: Option<&str>,
-) -> Result<(), ApiError> {
-    match value {
-        Some(value) => validate_body_size(label, value, REQUEST_TIMELINE_BODY_MAX_BYTES),
-        None => Ok(()),
-    }
-}
-
 pub(crate) fn validate_body_size(
     label: &str,
     value: &str,

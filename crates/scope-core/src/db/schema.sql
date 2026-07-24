@@ -396,6 +396,13 @@ CREATE TABLE scope_request_discussion_read_states (
     updated_at_unix bigint NOT NULL
 );
 
+CREATE TABLE scope_request_invitees (
+    request_id character varying NOT NULL,
+    user_id character varying NOT NULL,
+    invited_by_user_id character varying NOT NULL,
+    created_at_unix bigint NOT NULL
+);
+
 
 --
 -- Name: scope_requests; Type: TABLE; Schema: scope_test_2249234_1783653779131957768; Owner: -
@@ -415,12 +422,23 @@ CREATE TABLE scope_requests (
     description_markdown text NOT NULL,
     state character varying NOT NULL,
     activity_version bigint NOT NULL,
-    stake_credits integer NOT NULL,
-    disposition character varying,
-    settlement jsonb,
+    current_stake_credits integer NOT NULL,
+    first_ready_at_unix bigint,
+    ready_at_unix bigint,
+    held_at_unix bigint,
+    held_by_user_id character varying,
+    assessment_outcome character varying,
+    assessment_body_markdown text,
+    assessed_at_unix bigint,
+    assessed_by_user_id character varying,
+    completed_at_unix bigint,
+    completed_by_user_id character varying,
+    merged_at_unix bigint,
+    merged_by_user_id character varying,
+    merged_head_oid character varying,
+    merged_main_oid character varying,
     created_at_unix bigint NOT NULL,
-    updated_at_unix bigint NOT NULL,
-    resolved_at_unix bigint
+    updated_at_unix bigint NOT NULL
 );
 
 
@@ -661,6 +679,8 @@ ALTER TABLE ONLY scope_request_discussion_replies
     ADD CONSTRAINT scope_request_discussion_replies_client_key UNIQUE (discussion_id, author_user_id, client_reply_id);
 ALTER TABLE ONLY scope_request_discussion_read_states
     ADD CONSTRAINT scope_request_discussion_read_states_pkey PRIMARY KEY (discussion_id, user_id);
+ALTER TABLE ONLY scope_request_invitees
+    ADD CONSTRAINT scope_request_invitees_pkey PRIMARY KEY (request_id, user_id);
 
 
 --
@@ -812,6 +832,7 @@ CREATE INDEX idx_scope_request_discussions_newest ON scope_request_discussions U
 CREATE INDEX idx_scope_request_discussion_replies_position ON scope_request_discussion_replies USING btree (discussion_id, position DESC, id);
 CREATE INDEX idx_scope_request_discussion_replies_tree ON scope_request_discussion_replies USING btree (discussion_id, reply_to_reply_id, position DESC, id);
 CREATE INDEX idx_scope_request_discussion_replies_parent ON scope_request_discussion_replies USING btree (reply_to_reply_id, position DESC, id) WHERE reply_to_reply_id IS NOT NULL;
+CREATE INDEX idx_scope_request_invitees_user ON scope_request_invitees USING btree (user_id, request_id);
 
 
 --
@@ -830,6 +851,17 @@ CREATE INDEX idx_scope_requests_repo_audience_id ON scope_requests USING btree (
 --
 
 CREATE INDEX idx_scope_requests_repo_state ON scope_requests USING btree (repo_id, state);
+CREATE INDEX idx_scope_requests_ready_queue ON scope_requests USING btree (
+    repo_id,
+    current_stake_credits DESC,
+    ready_at_unix,
+    id
+) WHERE state = 'ReadyForReview';
+CREATE INDEX idx_scope_requests_completed ON scope_requests USING btree (
+    repo_id,
+    completed_at_unix DESC,
+    id
+) WHERE state = 'Completed';
 
 
 --
@@ -1052,6 +1084,12 @@ ALTER TABLE ONLY scope_request_discussion_read_states
     ADD CONSTRAINT fk_scope_request_discussion_read_states_discussion FOREIGN KEY (discussion_id) REFERENCES scope_request_discussions(id) ON DELETE CASCADE;
 ALTER TABLE ONLY scope_request_discussion_read_states
     ADD CONSTRAINT fk_scope_request_discussion_read_states_user FOREIGN KEY (user_id) REFERENCES scope_users(id) ON DELETE CASCADE;
+ALTER TABLE ONLY scope_request_invitees
+    ADD CONSTRAINT fk_scope_request_invitees_request FOREIGN KEY (request_id) REFERENCES scope_requests(id) ON DELETE CASCADE;
+ALTER TABLE ONLY scope_request_invitees
+    ADD CONSTRAINT fk_scope_request_invitees_user FOREIGN KEY (user_id) REFERENCES scope_users(id) ON DELETE CASCADE;
+ALTER TABLE ONLY scope_request_invitees
+    ADD CONSTRAINT fk_scope_request_invitees_inviter FOREIGN KEY (invited_by_user_id) REFERENCES scope_users(id) ON DELETE RESTRICT;
 
 
 --
@@ -1068,6 +1106,14 @@ ALTER TABLE ONLY scope_requests
 
 ALTER TABLE ONLY scope_requests
     ADD CONSTRAINT fk_scope_requests_repo FOREIGN KEY (repo_id) REFERENCES scope_repositories(id) ON DELETE CASCADE;
+ALTER TABLE ONLY scope_requests
+    ADD CONSTRAINT fk_scope_requests_holder FOREIGN KEY (held_by_user_id) REFERENCES scope_users(id) ON DELETE RESTRICT;
+ALTER TABLE ONLY scope_requests
+    ADD CONSTRAINT fk_scope_requests_assessor FOREIGN KEY (assessed_by_user_id) REFERENCES scope_users(id) ON DELETE RESTRICT;
+ALTER TABLE ONLY scope_requests
+    ADD CONSTRAINT fk_scope_requests_completer FOREIGN KEY (completed_by_user_id) REFERENCES scope_users(id) ON DELETE RESTRICT;
+ALTER TABLE ONLY scope_requests
+    ADD CONSTRAINT fk_scope_requests_merger FOREIGN KEY (merged_by_user_id) REFERENCES scope_users(id) ON DELETE RESTRICT;
 
 
 --
@@ -1111,13 +1157,78 @@ ALTER TABLE scope_repository_invites
     );
 ALTER TABLE scope_requests
     ADD CONSTRAINT scope_request_nonnegative_values CHECK (
-        stake_credits >= 0 AND activity_version >= 0 AND created_at_unix >= 0 AND updated_at_unix >= 0 AND
-        (resolved_at_unix IS NULL OR resolved_at_unix >= 0)
+        current_stake_credits >= 0 AND current_stake_credits <= 25 AND
+        activity_version >= 0 AND created_at_unix >= 0 AND updated_at_unix >= created_at_unix AND
+        (first_ready_at_unix IS NULL OR first_ready_at_unix BETWEEN created_at_unix AND updated_at_unix) AND
+        (ready_at_unix IS NULL OR ready_at_unix BETWEEN created_at_unix AND updated_at_unix) AND
+        (held_at_unix IS NULL OR held_at_unix BETWEEN created_at_unix AND updated_at_unix) AND
+        (assessed_at_unix IS NULL OR assessed_at_unix BETWEEN created_at_unix AND updated_at_unix) AND
+        (completed_at_unix IS NULL OR completed_at_unix BETWEEN created_at_unix AND updated_at_unix) AND
+        (merged_at_unix IS NULL OR merged_at_unix BETWEEN created_at_unix AND updated_at_unix)
     ),
     ADD CONSTRAINT scope_request_identity_values CHECK (
         name ~ '^[a-z0-9][a-z0-9-]{0,47}$' AND
         name NOT IN ('main', 'head', 'scope') AND
-        audience IN ('Public', 'Private')
+        audience IN ('Public', 'Private') AND
+        author_role IN ('Public', 'Member', 'Owner')
+    ),
+    ADD CONSTRAINT scope_request_lifecycle_values CHECK (
+        state IN ('Working', 'ReadyForReview', 'Completed') AND
+        (
+            (state = 'Working' AND ready_at_unix IS NULL AND current_stake_credits = 0 AND
+             held_at_unix IS NULL AND held_by_user_id IS NULL) OR
+            (state = 'ReadyForReview' AND first_ready_at_unix IS NOT NULL AND
+             ready_at_unix IS NOT NULL AND ready_at_unix >= first_ready_at_unix AND
+             (
+                 (audience = 'Public' AND author_role = 'Public' AND current_stake_credits > 0) OR
+                 ((audience <> 'Public' OR author_role <> 'Public') AND current_stake_credits = 0)
+             )) OR
+            (state = 'Completed' AND first_ready_at_unix IS NOT NULL AND
+             ready_at_unix IS NULL AND current_stake_credits = 0 AND
+             held_at_unix IS NULL AND held_by_user_id IS NULL AND
+             completed_at_unix >= first_ready_at_unix)
+        ) AND
+        (
+            (held_at_unix IS NULL AND held_by_user_id IS NULL) OR
+            (held_at_unix IS NOT NULL AND held_by_user_id IS NOT NULL AND
+             state = 'ReadyForReview' AND held_at_unix >= ready_at_unix)
+        )
+    ),
+    ADD CONSTRAINT scope_request_completion_coherence CHECK (
+        (
+            state <> 'Completed' AND completed_at_unix IS NULL AND completed_by_user_id IS NULL
+        ) OR (
+            state = 'Completed' AND completed_at_unix IS NOT NULL AND completed_by_user_id IS NOT NULL
+        )
+    ),
+    ADD CONSTRAINT scope_request_assessment_values CHECK (
+        assessment_outcome IS NULL OR assessment_outcome IN ('Accepted', 'Neutral', 'Rejected')
+    ),
+    ADD CONSTRAINT scope_request_assessment_coherence CHECK (
+        (
+            assessment_outcome IS NULL AND assessment_body_markdown IS NULL AND
+            assessed_at_unix IS NULL AND assessed_by_user_id IS NULL
+        ) OR (
+            assessment_outcome IS NOT NULL AND assessed_at_unix IS NOT NULL AND
+            assessed_by_user_id IS NOT NULL AND state = 'Completed' AND
+            assessed_at_unix = completed_at_unix AND
+            (
+                assessment_outcome <> 'Rejected' OR
+                (assessment_body_markdown IS NOT NULL AND length(btrim(assessment_body_markdown)) > 0)
+            )
+        )
+    ),
+    ADD CONSTRAINT scope_request_merge_coherence CHECK (
+        (
+            merged_at_unix IS NULL AND merged_by_user_id IS NULL AND
+            merged_head_oid IS NULL AND merged_main_oid IS NULL
+        ) OR (
+            merged_at_unix IS NOT NULL AND merged_by_user_id IS NOT NULL AND
+            merged_head_oid IS NOT NULL AND length(merged_head_oid) > 0 AND
+            merged_main_oid IS NOT NULL AND length(merged_main_oid) > 0 AND
+            state = 'Completed' AND assessment_outcome = 'Accepted' AND
+            merged_at_unix >= completed_at_unix
+        )
     );
 ALTER TABLE scope_request_events
     ADD CONSTRAINT scope_request_event_values CHECK (position > 0 AND created_at_unix >= 0);
@@ -1143,6 +1254,8 @@ ALTER TABLE scope_request_discussion_read_states
     ADD CONSTRAINT scope_request_discussion_read_values CHECK (
         read_through_position >= 0 AND updated_at_unix >= 0
     );
+ALTER TABLE scope_request_invitees
+    ADD CONSTRAINT scope_request_invitee_values CHECK (created_at_unix >= 0);
 ALTER TABLE scope_user_credit_accounts
     ADD CONSTRAINT scope_user_credit_balance CHECK (balance_credits >= 0);
 ALTER TABLE scope_credit_ledger_entries

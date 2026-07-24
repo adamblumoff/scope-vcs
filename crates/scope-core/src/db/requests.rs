@@ -1,11 +1,11 @@
 use super::{
     MetadataStore, acquire_aggregate_lock,
     cleanup_queue::queue_pending_source_blob_deletion_rows,
+    object_references::delete_object_reference,
     request_access::{
-        authorize_start_request, ensure_request_maintainer, ensure_user_exists, repo_by_id,
-        request_actor_can_edit,
+        authorize_start_request, ensure_user_exists, repo_by_id, request_actor_can_edit,
     },
-    request_change_block_rows::insert_change_block,
+    request_change_block_rows::{change_blocks_for_request_ids, insert_change_block},
     request_discussion_rows::{insert_discussion, save_read_state},
     request_rows::{
         credit_account_by_user_id, credit_ledger_entry_by_id, delete_request_rows,
@@ -18,18 +18,14 @@ use super::{
 use crate::{
     domain::{
         requests::{
-            CreditAccountMutation, DeleteRequestInput, DeleteRequestMutation,
-            GrantUserCreditsInput, MarkRequestNeedsResponseInput, MergeRequestInput,
-            MergeRequestMutation, RecordRequestRevisionInput, RecordWorkingRequestUploadInput,
-            Request, RequestAudience, RequestEvent, RequestRevisionMutation,
-            RequestTimelineMutation, ResolveRequestInput, ResolveRequestMutation,
-            RespondToRequestInput, StartRequestInput, StartRequestMutation, SubmitRequestInput,
-            SubmitRequestMutation, UpdateRequestDescriptionInput, WorkingRequestUploadMutation,
-            delete_request, grant_user_credits, mark_request_needs_response, merge_request,
-            record_request_revision, record_working_request_upload, resolve_request,
-            respond_to_request, start_request, submit_request, update_request_description,
+            CloseRequestInput, CloseRequestMutation, CreditAccountMutation, GrantUserCreditsInput,
+            RecordRequestRevisionInput, RecordWorkingRequestUploadInput, Request, RequestAudience,
+            RequestEvent, RequestRevisionMutation, RequestTimelineMutation, StartRequestInput,
+            StartRequestMutation, UpdateRequestDescriptionInput, WorkingRequestUploadMutation,
+            close_request, grant_user_credits, record_request_revision,
+            record_working_request_upload, start_request, update_request_description,
         },
-        store::{RepositoryActor, StoredRepository},
+        store::StoredRepository,
     },
     error::ApiError,
 };
@@ -186,54 +182,6 @@ impl MetadataStore {
         Err(ApiError::not_found("request not found"))
     }
 
-    pub async fn submit_request(
-        &self,
-        input: SubmitRequestInput,
-    ) -> Result<SubmitRequestMutation, ApiError> {
-        let db = Arc::clone(&self.db);
-        let tx = db.as_ref().begin().await.map_err(ApiError::internal)?;
-        let (_, request) = lock_request_repository(&tx, &input.request_id).await?;
-        ensure_user_exists(&tx, &input.actor_user_id).await?;
-
-        let mut requests = BTreeMap::from([(request.id.clone(), request)]);
-        let mut events = BTreeMap::new();
-        if let Some(event) = request_event_by_id(&tx, &input.event_id).await? {
-            events.insert(event.id.clone(), event);
-        }
-        acquire_aggregate_lock(&tx, "user-credit", &input.actor_user_id).await?;
-        let mut accounts = BTreeMap::new();
-        if let Some(account) = credit_account_by_user_id(&tx, &input.actor_user_id).await? {
-            accounts.insert(account.user_id.clone(), account);
-        }
-        let mut ledger_entries = BTreeMap::new();
-        if let Some(entry_id) = input.stake_ledger_entry_id.as_deref()
-            && let Some(entry) = credit_ledger_entry_by_id(&tx, entry_id).await?
-        {
-            ledger_entries.insert(entry.id.clone(), entry);
-        }
-
-        let mutation = submit_request(
-            &mut requests,
-            &mut events,
-            &mut accounts,
-            &mut ledger_entries,
-            input,
-        )?;
-        save_request_row(&tx, &mutation.request).await?;
-        insert_request_event_row(&tx, &mutation.event).await?;
-        insert_change_block(&tx, &mutation.change_block).await?;
-        insert_discussion(&tx, &mutation.discussion).await?;
-        save_read_state(&tx, &mutation.read_state).await?;
-        if let Some(account) = &mutation.account {
-            save_credit_account_row(&tx, account).await?;
-        }
-        if let Some(entry) = &mutation.ledger_entry {
-            insert_credit_ledger_entry_row(&tx, entry).await?;
-        }
-        tx.commit().await.map_err(ApiError::internal)?;
-        Ok(mutation)
-    }
-
     pub async fn record_request_revision(
         &self,
         input: RecordRequestRevisionInput,
@@ -260,38 +208,14 @@ impl MetadataStore {
             insert_change_block(&tx, &mutation.change_block).await?;
             insert_discussion(&tx, &mutation.discussion).await?;
             save_read_state(&tx, &mutation.read_state).await?;
+            if !mutation.orphan_objects.is_empty() {
+                queue_pending_source_blob_deletion_rows(&tx, mutation.orphan_objects.clone())
+                    .await?;
+            }
             tx.commit().await.map_err(ApiError::internal)?;
             return Ok(mutation);
         }
         Err(ApiError::not_found("request not found"))
-    }
-
-    pub async fn mark_request_needs_response(
-        &self,
-        input: MarkRequestNeedsResponseInput,
-    ) -> Result<RequestTimelineMutation, ApiError> {
-        let db = Arc::clone(&self.db);
-        let tx = db.as_ref().begin().await.map_err(ApiError::internal)?;
-        acquire_aggregate_lock(&tx, "request", &input.request_id).await?;
-        ensure_user_exists(&tx, &input.actor_user_id).await?;
-
-        let mut requests = BTreeMap::new();
-        let request = request_by_id(&tx, &input.request_id)
-            .await?
-            .ok_or_else(|| ApiError::not_found("request not found"))?;
-        let repo = repo_by_id(&tx, &request.repo_id).await?;
-        ensure_request_maintainer(&repo, &input.actor_user_id)?;
-        requests.insert(request.id.clone(), request);
-        let mut events = BTreeMap::new();
-        if let Some(event) = request_event_by_id(&tx, &input.event_id).await? {
-            events.insert(event.id.clone(), event);
-        }
-
-        let mutation = mark_request_needs_response(&mut requests, &mut events, input)?;
-        save_request_row(&tx, &mutation.request).await?;
-        insert_request_event_row(&tx, &mutation.event).await?;
-        tx.commit().await.map_err(ApiError::internal)?;
-        Ok(mutation)
     }
 
     pub async fn update_request_description(
@@ -320,203 +244,47 @@ impl MetadataStore {
         Ok(mutation)
     }
 
-    pub async fn respond_to_request(
+    pub async fn close_request(
         &self,
-        input: RespondToRequestInput,
-    ) -> Result<RequestTimelineMutation, ApiError> {
+        mut input: CloseRequestInput,
+    ) -> Result<CloseRequestMutation, ApiError> {
         let db = Arc::clone(&self.db);
         let tx = db.as_ref().begin().await.map_err(ApiError::internal)?;
-        acquire_aggregate_lock(&tx, "request", &input.request_id).await?;
+        let (_repo, request) = lock_request_repository(&tx, &input.request_id).await?;
         ensure_user_exists(&tx, &input.actor_user_id).await?;
-
-        let mut requests = BTreeMap::new();
-        let request = request_by_id(&tx, &input.request_id)
-            .await?
-            .ok_or_else(|| ApiError::not_found("request not found"))?;
-        requests.insert(request.id.clone(), request);
-        let mut events = BTreeMap::new();
-        if let Some(event) = request_event_by_id(&tx, &input.event_id).await? {
-            events.insert(event.id.clone(), event);
-        }
-
-        let mutation = respond_to_request(&mut requests, &mut events, input)?;
-        save_request_row(&tx, &mutation.request).await?;
-        insert_request_event_row(&tx, &mutation.event).await?;
-        tx.commit().await.map_err(ApiError::internal)?;
-        Ok(mutation)
-    }
-
-    pub async fn resolve_request(
-        &self,
-        input: ResolveRequestInput,
-    ) -> Result<ResolveRequestMutation, ApiError> {
-        let db = Arc::clone(&self.db);
-        let tx = db.as_ref().begin().await.map_err(ApiError::internal)?;
-        let (repo, request) = lock_request_repository(&tx, &input.request_id).await?;
-        acquire_aggregate_lock(&tx, "user-credit", &request.author_user_id).await?;
-        ensure_user_exists(&tx, &input.actor_user_id).await?;
-        ensure_request_maintainer(&repo, &input.actor_user_id)?;
-        let mut requests = BTreeMap::from([(request.id.clone(), request.clone())]);
-        let mut events = BTreeMap::new();
-        for event_id in [&input.event_id, &input.settlement_event_id] {
-            if let Some(event) = request_event_by_id(&tx, event_id).await? {
-                events.insert(event.id.clone(), event);
-            }
-        }
-        let mut accounts = BTreeMap::new();
-        if let Some(account) = credit_account_by_user_id(&tx, &request.author_user_id).await? {
-            accounts.insert(account.user_id.clone(), account);
-        }
-        let mut ledger_entries = BTreeMap::new();
-        for entry_id in [
-            input.refund_ledger_entry_id.as_deref(),
-            input.reward_ledger_entry_id.as_deref(),
-        ]
-        .into_iter()
-        .flatten()
-        {
-            if let Some(entry) = credit_ledger_entry_by_id(&tx, entry_id).await? {
-                ledger_entries.insert(entry.id.clone(), entry);
-            }
-        }
-
-        let mutation = resolve_request(
-            &mut requests,
-            &mut events,
-            &mut accounts,
-            &mut ledger_entries,
-            input,
-        )?;
-        save_request_row(&tx, &mutation.request).await?;
-        insert_request_event_row(&tx, &mutation.resolved_event).await?;
-        insert_request_event_row(&tx, &mutation.settled_event).await?;
-        if let Some(account) = &mutation.account {
-            save_credit_account_row(&tx, account).await?;
-        }
-        for entry in &mutation.ledger_entries {
-            insert_credit_ledger_entry_row(&tx, entry).await?;
-        }
-        tx.commit().await.map_err(ApiError::internal)?;
-        Ok(mutation)
-    }
-
-    pub async fn merge_request(
-        &self,
-        input: MergeRequestInput,
-    ) -> Result<MergeRequestMutation, ApiError> {
-        let db = Arc::clone(&self.db);
-        let tx = db.as_ref().begin().await.map_err(ApiError::internal)?;
-        let (repo, request) = lock_request_repository(&tx, &input.request_id).await?;
-        acquire_aggregate_lock(&tx, "user-credit", &request.author_user_id).await?;
-        ensure_user_exists(&tx, &input.actor_user_id).await?;
-        ensure_request_maintainer(&repo, &input.actor_user_id)?;
-        let mut requests = BTreeMap::from([(request.id.clone(), request.clone())]);
-        let mut events = BTreeMap::new();
-        for event_id in [&input.event_id, &input.settlement_event_id] {
-            if let Some(event) = request_event_by_id(&tx, event_id).await? {
-                events.insert(event.id.clone(), event);
-            }
-        }
-        let mut accounts = BTreeMap::new();
-        if let Some(account) = credit_account_by_user_id(&tx, &request.author_user_id).await? {
-            accounts.insert(account.user_id.clone(), account);
-        }
-        let mut ledger_entries = BTreeMap::new();
-        for entry_id in [
-            input.refund_ledger_entry_id.as_deref(),
-            input.reward_ledger_entry_id.as_deref(),
-        ]
-        .into_iter()
-        .flatten()
-        {
-            if let Some(entry) = credit_ledger_entry_by_id(&tx, entry_id).await? {
-                ledger_entries.insert(entry.id.clone(), entry);
-            }
-        }
-
-        let mutation = merge_request(
-            &mut requests,
-            &mut events,
-            &mut accounts,
-            &mut ledger_entries,
-            input,
-        )?;
-        save_request_row(&tx, &mutation.request).await?;
-        insert_request_event_row(&tx, &mutation.merged_event).await?;
-        insert_request_event_row(&tx, &mutation.settled_event).await?;
-        if let Some(account) = &mutation.account {
-            save_credit_account_row(&tx, account).await?;
-        }
-        for entry in &mutation.ledger_entries {
-            insert_credit_ledger_entry_row(&tx, entry).await?;
-        }
-        tx.commit().await.map_err(ApiError::internal)?;
-        Ok(mutation)
-    }
-
-    pub async fn delete_request(
-        &self,
-        input: DeleteRequestInput,
-    ) -> Result<DeleteRequestMutation, ApiError> {
-        let db = Arc::clone(&self.db);
-        let tx = db.as_ref().begin().await.map_err(ApiError::internal)?;
-        let (repo, request) = lock_request_repository(&tx, &input.request_id).await?;
-        ensure_user_exists(&tx, &input.actor_user_id).await?;
-        acquire_aggregate_lock(&tx, "user-credit", &request.author_user_id).await?;
-        let mut input = input;
-        input.actor_can_delete = request.author_user_id == input.actor_user_id
-            || matches!(
-                repo.access_for_user_id(&input.actor_user_id).actor,
-                RepositoryActor::Owner | RepositoryActor::Member
-            );
+        input.actor_can_close = request.author_user_id == input.actor_user_id;
         let mut requests = BTreeMap::from([(request.id.clone(), request.clone())]);
         let mut events = request_events_by_request_id(&tx, &request.id)
             .await?
             .into_iter()
             .map(|event| (event.id.clone(), event))
             .collect::<BTreeMap<_, _>>();
-        let mut accounts = BTreeMap::new();
-        if let Some(account) = credit_account_by_user_id(&tx, &request.author_user_id).await? {
-            accounts.insert(account.user_id.clone(), account);
-        }
-        let mut ledger_entries = BTreeMap::new();
-        if let Some(entry_id) = input.refund_ledger_entry_id.as_deref()
-            && let Some(entry) = credit_ledger_entry_by_id(&tx, entry_id).await?
-        {
-            ledger_entries.insert(entry.id.clone(), entry);
-        }
-        let mutation = delete_request(
-            &mut requests,
-            &mut events,
-            &mut accounts,
-            &mut ledger_entries,
-            input,
-        )?;
+        let mut change_blocks =
+            change_blocks_for_request_ids(&tx, std::slice::from_ref(&request.id))
+                .await?
+                .into_iter()
+                .map(|change_block| (change_block.id.clone(), change_block))
+                .collect::<BTreeMap<_, _>>();
+        let mutation = close_request(&mut requests, &mut events, &mut change_blocks, input)?;
         match &mutation {
-            DeleteRequestMutation::DeletedWorking {
+            CloseRequestMutation::DeletedDraft {
                 request,
+                change_blocks,
                 orphan_objects,
                 ..
             } => {
+                for change_block in change_blocks {
+                    delete_object_reference(&tx, "request_change_block_snapshot", &change_block.id)
+                        .await?;
+                }
                 delete_request_rows(&tx, &request.id).await?;
                 if !orphan_objects.is_empty() {
                     queue_pending_source_blob_deletion_rows(&tx, orphan_objects.clone()).await?;
                 }
             }
-            DeleteRequestMutation::Withdrawn {
-                request,
-                event,
-                account,
-                ledger_entry,
-            } => {
+            CloseRequestMutation::Completed { request, event } => {
                 save_request_row(&tx, request).await?;
                 insert_request_event_row(&tx, event).await?;
-                if let Some(account) = account {
-                    save_credit_account_row(&tx, account).await?;
-                }
-                if let Some(entry) = ledger_entry {
-                    insert_credit_ledger_entry_row(&tx, entry).await?;
-                }
             }
         }
         tx.commit().await.map_err(ApiError::internal)?;

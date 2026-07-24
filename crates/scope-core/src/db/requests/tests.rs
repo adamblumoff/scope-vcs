@@ -2,17 +2,15 @@ use super::*;
 use crate::domain::{
     policy::Visibility,
     requests::{
-        CreateRequestDiscussionInput, CreateRequestDiscussionReplyInput, CreditLedgerEntryKind,
+        CreateRequestDiscussionInput, CreateRequestDiscussionReplyInput,
         REQUEST_LIST_MAX_PAGE_SIZE, ReopenAndReplyToRequestDiscussionInput, RequestActorRole,
-        RequestAudience, RequestDiscussionStatus, RequestDisposition, RequestEventKind,
-        RequestState,
+        RequestAudience, RequestDiscussionStatus, RequestState,
     },
     store::{
         AppCatalog, DEFAULT_GIT_FILE_MODE, RepoPublicationState, SourceBlob, StoredRepository,
         UserAccount, app_catalog,
     },
 };
-use sea_orm::{ConnectionTrait, DatabaseBackend, Statement};
 
 #[tokio::test]
 async fn request_list_page_projects_visible_rows_in_stable_id_pages() {
@@ -107,150 +105,9 @@ async fn request_list_page_projects_visible_rows_in_stable_id_pages() {
 }
 
 #[tokio::test]
-async fn request_submission_and_resolution_update_credit_facts() {
-    let store = postgres_store();
-
-    grant_public_credits(&store).await;
-    submit_public_request(&store).await;
-    let unauthorized = store
-        .resolve_request(ResolveRequestInput {
-            request_id: "req_1".to_string(),
-            actor_user_id: "user_public".to_string(),
-            disposition: RequestDisposition::Accepted,
-            event_id: "rejected".to_string(),
-            settlement_event_id: "rejected-settlement".to_string(),
-            refund_ledger_entry_id: None,
-            reward_ledger_entry_id: None,
-            body: None,
-            now_unix: 2,
-        })
-        .await
-        .unwrap_err();
-    assert!(unauthorized.message.contains("repo maintainer required"));
-    store
-        .record_request_revision(RecordRequestRevisionInput {
-            request_id: "req_1".to_string(),
-            actor_user_id: "user_public".to_string(),
-            actor_can_edit: true,
-            expected_old_head_oid: Some("head".to_string()),
-            new_head_oid: "head_2".to_string(),
-            git_snapshot: source_blob("head_2"),
-            event_id: "event_revision".to_string(),
-            body: None,
-            now_unix: 2,
-        })
-        .await
-        .unwrap();
-    let revision_thread = store
-        .request_discussion("req_1", "thread_event_revision", Some("user_public"))
-        .await
-        .unwrap()
-        .unwrap();
-    assert_eq!(revision_thread.0.unread_count, 0);
-    let mutation = store
-        .resolve_request(ResolveRequestInput {
-            request_id: "req_1".to_string(),
-            actor_user_id: "user_owner".to_string(),
-            disposition: RequestDisposition::UsefulNotMerged,
-            event_id: "event_resolved".to_string(),
-            settlement_event_id: "event_settled".to_string(),
-            refund_ledger_entry_id: Some("ledger_refund".to_string()),
-            reward_ledger_entry_id: Some("ledger_reward".to_string()),
-            body: None,
-            now_unix: 3,
-        })
-        .await
-        .unwrap();
-
-    assert_eq!(mutation.request.settlement.unwrap().reward_credits, 2);
-    assert_eq!(
-        store
-            .credit_account_for_tests("user_public")
-            .await
-            .unwrap()
-            .unwrap()
-            .balance_credits,
-        22
-    );
-    let request = store.request_for_tests("req_1").await.unwrap().unwrap();
-    assert_eq!(request.resolved_at_unix, Some(3));
-    assert_eq!(request.head_oid, "head_2");
-    let mut events = store.request_events_for_tests().await.unwrap();
-    events.sort_by_key(|event| event.position);
-    assert_eq!(
-        events
-            .into_iter()
-            .map(|event| event.kind)
-            .collect::<Vec<_>>(),
-        vec![
-            RequestEventKind::Started,
-            RequestEventKind::Submitted,
-            RequestEventKind::RevisionPushed,
-            RequestEventKind::Resolved,
-            RequestEventKind::Settled,
-        ]
-    );
-    assert_eq!(
-        store.credit_ledger_entries_for_tests().await.unwrap().len(),
-        4
-    );
-}
-
-#[tokio::test]
-async fn public_user_cannot_choose_owner_role_to_skip_stake() {
-    let store = postgres_store();
-    let mut start_input = public_start_input();
-    start_input.audience = RequestAudience::Private;
-    let started = store.start_request(start_input).await.unwrap();
-    assert_eq!(started.request.author_role, RequestActorRole::Public);
-    assert_eq!(started.request.audience, RequestAudience::Public);
-    store
-        .record_working_request_upload(public_upload_input())
-        .await
-        .unwrap();
-    let mut input = public_submit_input();
-    input.stake_credits = 0;
-    input.stake_ledger_entry_id = None;
-
-    let error = store.submit_request(input).await.unwrap_err();
-
-    assert!(
-        error
-            .message
-            .contains("public requests require credit stake")
-    );
-    assert_eq!(
-        store
-            .request_for_tests("req_1")
-            .await
-            .unwrap()
-            .unwrap()
-            .state,
-        RequestState::Working
-    );
-    let events = store.request_events_for_tests().await.unwrap();
-    assert_eq!(events.len(), 1);
-    assert_eq!(events[0].kind, RequestEventKind::Started);
-    assert!(
-        store
-            .credit_ledger_entries_for_tests()
-            .await
-            .unwrap()
-            .is_empty()
-    );
-}
-
-#[tokio::test]
 async fn discussion_transactions_are_idempotent_atomic_and_self_read() {
     let store = postgres_store();
-    grant_public_credits(&store).await;
-    submit_public_request(&store).await;
-    let submitted_thread = store
-        .request_discussion("req_1", "thread_event_created", Some("user_public"))
-        .await
-        .unwrap()
-        .unwrap();
-    assert_eq!(submitted_thread.0.unread_count, 0);
+    start_public_request(&store).await;
 
     let first = store
         .create_request_discussion(CreateRequestDiscussionInput {
@@ -361,8 +218,7 @@ async fn discussion_transactions_are_idempotent_atomic_and_self_read() {
 #[tokio::test]
 async fn discussion_replies_are_read_as_paginated_tree_levels() {
     let store = postgres_store();
-    grant_public_credits(&store).await;
-    submit_public_request(&store).await;
+    start_public_request(&store).await;
     let discussion = store
         .create_request_discussion(CreateRequestDiscussionInput {
             request_id: "req_1".to_string(),
@@ -468,174 +324,105 @@ async fn discussion_replies_are_read_as_paginated_tree_levels() {
 }
 
 #[tokio::test]
-async fn owner_submission_preserves_explicit_public_audience_without_credits() {
+async fn close_unpublished_working_request_deletes_request_and_events() {
     let store = postgres_store();
-    let mut input = public_start_input();
-    input.id = "req_owner".to_string();
-    input.name = "owner-request".to_string();
-    input.author_user_id = "user_owner".to_string();
-    input.author_role = RequestActorRole::Public;
-    input.audience = RequestAudience::Public;
-    let start = store.start_request(input).await.unwrap();
+    start_public_request(&store).await;
     store
-        .record_working_request_upload(RecordWorkingRequestUploadInput {
-            request_id: start.request.id.clone(),
-            actor_user_id: "user_owner".to_string(),
-            actor_can_edit: true,
-            expected_old_head_oid: None,
-            new_head_oid: "head".to_string(),
-            git_snapshot: source_blob("head"),
-            now_unix: 2,
+        .record_request_revision(RecordRequestRevisionInput {
+            request_id: "req_1".to_string(),
+            actor_user_id: "user_public".to_string(),
+            actor_can_edit: false,
+            expected_old_head_oid: Some("head".to_string()),
+            new_head_oid: "head-2".to_string(),
+            git_snapshot: source_blob("head-2"),
+            event_id: "event_revision".to_string(),
+            body: None,
+            now_unix: 4,
         })
         .await
         .unwrap();
+
     let mutation = store
-        .submit_request(SubmitRequestInput {
-            request_id: start.request.id,
-            actor_user_id: "user_owner".to_string(),
-            expected_head_oid: "head".to_string(),
-            stake_credits: 0,
-            stake_ledger_entry_id: None,
-            event_id: "event_owner".to_string(),
-            now_unix: 3,
+        .close_request(CloseRequestInput {
+            request_id: "req_1".to_string(),
+            actor_user_id: "user_public".to_string(),
+            actor_can_close: false,
+            event_id: "event_closed".to_string(),
+            now_unix: 5,
         })
         .await
         .unwrap();
 
-    assert_eq!(mutation.request.author_role, RequestActorRole::Owner);
-    assert_eq!(mutation.request.audience, RequestAudience::Public);
-    assert!(mutation.account.is_none());
-    assert!(mutation.ledger_entry.is_none());
+    assert!(matches!(
+        mutation,
+        CloseRequestMutation::DeletedDraft { .. }
+    ));
+    assert!(store.request_for_tests("req_1").await.unwrap().is_none());
+    assert!(store.request_events_for_tests().await.unwrap().is_empty());
+    let (_, pending_blobs) = store.pending_cleanup_queues().await.unwrap();
+    let pending_keys = pending_blobs
+        .iter()
+        .map(|blob| blob.object_key.as_str())
+        .collect::<std::collections::BTreeSet<_>>();
     assert_eq!(
-        store
-            .request_by_name("owner/repo", "owner-request")
-            .await
-            .unwrap()
-            .unwrap()
-            .id,
-        "req_owner"
+        pending_keys,
+        ["objects/head", "objects/head-2"].into_iter().collect()
     );
+    let referenced = super::super::object_references::referenced_object_keys(store.db.as_ref())
+        .await
+        .unwrap();
+    assert!(!referenced.contains("objects/head"));
+    assert!(!referenced.contains("objects/head-2"));
 }
 
 #[tokio::test]
-async fn repo_delete_waits_for_resolution_and_does_not_refund_settled_stake_twice() {
-    assert_delete_serializes_with_credit_mutation(CreditMutation::Resolve, 22).await;
-}
-
-#[tokio::test]
-async fn repo_delete_waits_for_submission_and_refunds_the_committed_stake() {
-    assert_delete_serializes_with_credit_mutation(CreditMutation::Submit, 20).await;
-}
-
-enum CreditMutation {
-    Submit,
-    Resolve,
-}
-
-async fn assert_delete_serializes_with_credit_mutation(
-    mutation: CreditMutation,
-    expected_balance: u32,
-) {
+async fn maintainer_cannot_close_another_authors_working_request() {
     let store = postgres_store();
-    grant_public_credits(&store).await;
-    match mutation {
-        CreditMutation::Submit => {
-            store.start_request(public_start_input()).await.unwrap();
-            store
-                .record_working_request_upload(public_upload_input())
-                .await
-                .unwrap();
-        }
-        CreditMutation::Resolve => submit_public_request(&store).await,
-    }
+    start_public_request(&store).await;
 
-    let credit_guard = store.db.begin().await.unwrap();
-    acquire_aggregate_lock(&credit_guard, "user-credit", "user_public")
+    let error = store
+        .close_request(CloseRequestInput {
+            request_id: "req_1".to_string(),
+            actor_user_id: "user_owner".to_string(),
+            actor_can_close: true,
+            event_id: "event_closed_by_maintainer".to_string(),
+            now_unix: 4,
+        })
         .await
-        .unwrap();
+        .unwrap_err();
 
-    let mutation_store = store.clone();
-    let mutation = tokio::spawn(async move {
-        match mutation {
-            CreditMutation::Submit => mutation_store
-                .submit_request(public_submit_input())
-                .await
-                .map(|_| ()),
-            CreditMutation::Resolve => mutation_store
-                .resolve_request(ResolveRequestInput {
-                    request_id: "req_1".to_string(),
-                    actor_user_id: "user_owner".to_string(),
-                    disposition: RequestDisposition::UsefulNotMerged,
-                    event_id: "event_resolved".to_string(),
-                    settlement_event_id: "event_settled".to_string(),
-                    refund_ledger_entry_id: Some("ledger_refund".to_string()),
-                    reward_ledger_entry_id: Some("ledger_reward".to_string()),
-                    body: None,
-                    now_unix: 5,
-                })
-                .await
-                .map(|_| ()),
-        }
-    });
-    wait_until_aggregate_lock_is_held(&store, "repository", "owner/repo").await;
-    let delete_store = store.clone();
-    let delete = tokio::spawn(async move {
-        delete_store
-            .delete_repo("owner", "repo", "user_owner")
-            .await
-    });
-    wait_until_aggregate_lock_is_waited_on(&store, "repository").await;
-
-    assert!(
-        !mutation.is_finished(),
-        "credit mutation should wait for credit lock"
-    );
-    assert!(
-        !delete.is_finished(),
-        "deletion should wait behind the repository lock"
-    );
-    credit_guard.commit().await.unwrap();
-
-    mutation.await.unwrap().unwrap();
-    delete.await.unwrap().unwrap();
-    assert!(
-        store
-            .repository_for_tests("owner/repo")
-            .await
-            .unwrap()
-            .is_none()
-    );
-    assert_eq!(
-        store
-            .credit_account_for_tests("user_public")
-            .await
-            .unwrap()
-            .unwrap()
-            .balance_credits,
-        expected_balance
-    );
-    assert_eq!(
-        store
-            .credit_ledger_entries_for_tests()
-            .await
-            .unwrap()
-            .into_iter()
-            .filter(|entry| entry.kind == CreditLedgerEntryKind::StakeRefund)
-            .count(),
-        1
-    );
+    assert!(error.message.contains("close access required"));
+    assert!(store.request_for_tests("req_1").await.unwrap().is_some());
 }
 
-async fn grant_public_credits(store: &MetadataStore) {
-    store
-        .grant_user_credits(GrantUserCreditsInput {
-            ledger_entry_id: "ledger_grant".to_string(),
-            user_id: "user_public".to_string(),
-            amount_credits: 20,
-            now_unix: 1,
+#[tokio::test]
+async fn close_published_working_request_persists_completion() {
+    let store = postgres_store();
+    let mut request = store
+        .start_request(public_start_input())
+        .await
+        .unwrap()
+        .request;
+    request.first_ready_at_unix = Some(3);
+    request.updated_at_unix = 3;
+    save_request_row(store.db.as_ref(), &request).await.unwrap();
+
+    let mutation = store
+        .close_request(CloseRequestInput {
+            request_id: request.id.clone(),
+            actor_user_id: request.author_user_id.clone(),
+            actor_can_close: false,
+            event_id: "event_closed".to_string(),
+            now_unix: 4,
         })
         .await
         .unwrap();
+
+    assert!(matches!(mutation, CloseRequestMutation::Completed { .. }));
+    let stored = store.request_for_tests("req_1").await.unwrap().unwrap();
+    assert_eq!(stored.state, RequestState::Completed);
+    assert_eq!(stored.completed_at_unix, Some(4));
+    assert_eq!(stored.completed_by_user_id.as_deref(), Some("user_public"));
 }
 
 fn postgres_store() -> MetadataStore {
@@ -643,70 +430,6 @@ fn postgres_store() -> MetadataStore {
     let store = MetadataStore::connect_fresh_for_tests(&target).unwrap();
     store.seed_catalog_for_tests(catalog_with_repo()).unwrap();
     store
-}
-
-async fn wait_until_aggregate_lock_is_held(store: &MetadataStore, namespace: &str, id: &str) {
-    let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(2);
-    loop {
-        let probe = store.db.begin().await.unwrap();
-        probe
-            .execute(Statement::from_string(
-                DatabaseBackend::Postgres,
-                "SET LOCAL lock_timeout = '10ms'",
-            ))
-            .await
-            .unwrap();
-        match acquire_aggregate_lock(&probe, namespace, id).await {
-            Ok(()) => {
-                probe.rollback().await.unwrap();
-                assert!(
-                    tokio::time::Instant::now() < deadline,
-                    "timed out waiting for {namespace}:{id} to be locked"
-                );
-                tokio::task::yield_now().await;
-            }
-            Err(error) if error.message.contains("lock timeout") => {
-                probe.rollback().await.unwrap();
-                return;
-            }
-            Err(error) => {
-                let _ = probe.rollback().await;
-                panic!("failed to probe {namespace}:{id} lock: {}", error.message);
-            }
-        }
-    }
-}
-
-async fn wait_until_aggregate_lock_is_waited_on(store: &MetadataStore, namespace: &str) {
-    let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(2);
-    loop {
-        let waiting = store
-            .db
-            .query_one(Statement::from_sql_and_values(
-                DatabaseBackend::Postgres,
-                "SELECT EXISTS (\
-                    SELECT 1 FROM pg_stat_activity AS activity \
-                    JOIN pg_locks AS relation_lock ON relation_lock.pid = activity.pid \
-                    WHERE activity.application_name = $1 \
-                      AND activity.wait_event_type = 'Lock' \
-                      AND relation_lock.relation = to_regclass('scope_metadata_locks')::oid\
-                ) AS waiting",
-                [format!("scope-test-lock:{namespace}").into()],
-            ))
-            .await
-            .unwrap()
-            .unwrap()
-            .try_get::<bool>("", "waiting")
-            .unwrap();
-        if waiting {
-            return;
-        }
-        assert!(
-            tokio::time::Instant::now() < deadline,
-            "timed out waiting for a blocked {namespace} aggregate lock"
-        );
-        tokio::task::yield_now().await;
-    }
 }
 
 fn catalog_with_repo() -> AppCatalog {
@@ -732,13 +455,12 @@ fn catalog_with_repo() -> AppCatalog {
     catalog
 }
 
-async fn submit_public_request(store: &MetadataStore) {
+async fn start_public_request(store: &MetadataStore) {
     store.start_request(public_start_input()).await.unwrap();
     store
         .record_working_request_upload(public_upload_input())
         .await
         .unwrap();
-    store.submit_request(public_submit_input()).await.unwrap();
 }
 
 async fn create_test_reply(
@@ -788,18 +510,6 @@ fn public_upload_input() -> RecordWorkingRequestUploadInput {
         new_head_oid: "head".to_string(),
         git_snapshot: source_blob("head"),
         now_unix: 3,
-    }
-}
-
-fn public_submit_input() -> SubmitRequestInput {
-    SubmitRequestInput {
-        request_id: "req_1".to_string(),
-        actor_user_id: "user_public".to_string(),
-        expected_head_oid: "head".to_string(),
-        stake_credits: 10,
-        stake_ledger_entry_id: Some("ledger_stake".to_string()),
-        event_id: "event_created".to_string(),
-        now_unix: 4,
     }
 }
 

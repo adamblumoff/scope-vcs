@@ -1,7 +1,8 @@
 use super::{
     REQUEST_DESCRIPTION_MAX_BYTES, Request, RequestDescriptionAuditFact, RequestEvent,
-    RequestEventKind, RequestEventPayload, RequestTimelineMutation, advance_request_activity,
-    ensure_event_id_available, open_request_mut, validate_body_size, validate_required_id,
+    RequestEventKind, RequestEventPayload, RequestState, RequestTimelineMutation,
+    advance_request_activity, ensure_event_id_available, open_request_mut, validate_body_size,
+    validate_required_id,
 };
 use crate::error::ApiError;
 use sha2::{Digest, Sha256};
@@ -32,6 +33,16 @@ pub fn update_request_description(
         ));
     }
     let request = open_request_mut(requests, &input.request_id)?;
+    if request.held_at_unix.is_some() {
+        return Err(ApiError::conflict(
+            "request description cannot be edited while held",
+        ));
+    }
+    if request.state == RequestState::ReadyForReview {
+        return Err(ApiError::conflict(
+            "request description cannot be edited while ready for review",
+        ));
+    }
     if request.description_markdown == input.description_markdown {
         return Err(ApiError::conflict("request description is unchanged"));
     }
