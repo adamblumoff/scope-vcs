@@ -1,4 +1,6 @@
-use crate::domain::requests::{Request, RequestEvent, request_list_mergeability};
+use crate::domain::requests::{
+    Request, RequestAssessmentOutcome, RequestEvent, request_list_mergeability, settlement_for,
+};
 use crate::domain::store::RepositoryAccess;
 use scope_api_contract::*;
 use scope_core::db::RequestListRow;
@@ -9,6 +11,23 @@ pub(crate) fn request_summary_response(
     permissions: RequestPermissionsResponse,
     mergeability: RequestMergeabilityResponse,
 ) -> Result<RequestSummaryResponse, crate::error::ApiError> {
+    let assessment_previews = [
+        RequestAssessmentOutcome::Accepted,
+        RequestAssessmentOutcome::Neutral,
+        RequestAssessmentOutcome::Rejected,
+    ]
+    .into_iter()
+    .map(|outcome| {
+        let settlement = settlement_for(request.current_stake_credits, outcome, 0);
+        RequestSettlementPreviewResponse {
+            outcome: settlement.outcome,
+            stake_credits: settlement.stake_credits,
+            refunded_credits: settlement.refunded_credits,
+            reward_credits: settlement.reward_credits,
+            burned_credits: settlement.burned_credits,
+        }
+    })
+    .collect();
     Ok(RequestSummaryResponse {
         id: request.id,
         name: request.name,
@@ -46,6 +65,7 @@ pub(crate) fn request_summary_response(
         updated_at_unix: request.updated_at_unix,
         invitees,
         permissions,
+        assessment_previews,
         mergeability,
     })
 }

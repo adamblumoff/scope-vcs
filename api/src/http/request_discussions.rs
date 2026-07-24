@@ -3,7 +3,7 @@ use crate::{
     domain::requests::{
         CreateRequestDiscussionInput, CreateRequestDiscussionReplyInput,
         MarkRequestDiscussionReadInput, REQUEST_ACTIVITY_PAGE_MAX_EVENTS,
-        ReopenAndReplyToRequestDiscussionInput,
+        ReopenAndReplyToRequestDiscussionInput, RequestViewer, request_policy,
     },
     error::ApiError,
     http::{requests::*, responses::*},
@@ -392,6 +392,23 @@ pub(crate) async fn activity(
         &request_id,
     )
     .await?;
+    let is_invitee = match viewer_user_id.as_deref() {
+        Some(user_id) => {
+            state
+                .metadata
+                .request_is_invitee(&request.id, user_id)
+                .await?
+        }
+        None => false,
+    };
+    if !request_policy(
+        &request,
+        RequestViewer::new(access, viewer_user_id.as_deref(), is_invitee),
+    )
+    .activity_stream_visible
+    {
+        return Err(ApiError::not_found("request not found"));
+    }
     let latest = query.latest.unwrap_or(false);
     let limit = query
         .limit

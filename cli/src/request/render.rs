@@ -635,11 +635,12 @@ mod tests {
                 "completed_by_user_id":null,"merged_at_unix":null,"merged_by_user_id":null,
                 "merged_head_oid":null,"merged_main_oid":null,"created_at_unix":1,
                 "updated_at_unix":2,"invitees":[],
+                "assessment_previews":[],
                 "permissions":{"can_open_discussion":false,"can_reply_to_discussion":false,
                     "can_edit_identity":false,"can_pull_branch":false,"can_push_branch":false,
                     "can_mark_ready":false,"can_return_to_working":false,
                     "can_manage_invitees":false,"can_leave_request":false,"can_hold":false,
-                    "can_assess":false,"can_close":false,"can_merge":false},
+                    "can_request_changes":false,"can_assess":false,"can_close":false,"can_merge":false},
                 "mergeability":{"status":"Working",
                     "current_main_oid":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
                     "request_head_oid":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb","reason":null}

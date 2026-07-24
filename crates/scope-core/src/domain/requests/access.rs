@@ -31,6 +31,7 @@ pub struct RequestPermissions {
     pub can_manage_invitees: bool,
     pub can_leave_request: bool,
     pub can_hold: bool,
+    pub can_request_changes: bool,
     pub can_assess: bool,
     pub can_close: bool,
     pub can_merge: bool,
@@ -138,8 +139,9 @@ pub fn request_policy(request: &Request, viewer: RequestViewer<'_>) -> RequestPo
             && !completed
             && (author || maintainer)
             && (!held || maintainer),
-        can_leave_request: exact_visible && public && invitee && !completed,
+        can_leave_request: exact_visible && public && invitee && !completed && !held,
         can_hold: exact_visible && ready && maintainer,
+        can_request_changes: exact_visible && ready && maintainer,
         can_assess: exact_visible && ready && maintainer,
         can_close: exact_visible && working && author,
         can_merge: exact_visible

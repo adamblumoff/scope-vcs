@@ -176,7 +176,9 @@ export type RequestMutationResponse = { request: RequestSummaryResponse, };
 
 export type RequestListItemResponse = { id: string, name: string, title: string, author_role: RequestActorRole, audience: RequestAudience, head_oid: GitOid, state: RequestState, current_stake_credits: number, assessment_outcome: RequestAssessmentOutcome | null, ready_at_unix: number | null, held_at_unix: number | null, updated_at_unix: number, mergeability: RequestMergeabilityResponse, };
 
-export type RequestSummaryResponse = { id: string, name: string, title: string, description_markdown: string, author_user_id: string, author_role: RequestActorRole, audience: RequestAudience, base_main_oid: GitOid, head_oid: GitOid, state: RequestState, activity_version: number, current_stake_credits: number, first_ready_at_unix: number | null, ready_at_unix: number | null, held_at_unix: number | null, held_by_user_id: string | null, assessment_outcome: RequestAssessmentOutcome | null, assessment_body_markdown: string | null, assessed_at_unix: number | null, assessed_by_user_id: string | null, completed_at_unix: number | null, completed_by_user_id: string | null, merged_at_unix: number | null, merged_by_user_id: string | null, merged_head_oid: GitOid | null, merged_main_oid: GitOid | null, created_at_unix: number, updated_at_unix: number, invitees: Array<RequestInviteeResponse>, permissions: RequestPermissionsResponse, mergeability: RequestMergeabilityResponse, };
+export type RequestSummaryResponse = { id: string, name: string, title: string, description_markdown: string, author_user_id: string, author_role: RequestActorRole, audience: RequestAudience, base_main_oid: GitOid, head_oid: GitOid, state: RequestState, activity_version: number, current_stake_credits: number, first_ready_at_unix: number | null, ready_at_unix: number | null, held_at_unix: number | null, held_by_user_id: string | null, assessment_outcome: RequestAssessmentOutcome | null, assessment_body_markdown: string | null, assessed_at_unix: number | null, assessed_by_user_id: string | null, completed_at_unix: number | null, completed_by_user_id: string | null, merged_at_unix: number | null, merged_by_user_id: string | null, merged_head_oid: GitOid | null, merged_main_oid: GitOid | null, created_at_unix: number, updated_at_unix: number, invitees: Array<RequestInviteeResponse>, assessment_previews: Array<RequestSettlementPreviewResponse>, permissions: RequestPermissionsResponse, mergeability: RequestMergeabilityResponse, };
+
+export type RequestSettlementPreviewResponse = { outcome: RequestAssessmentOutcome, stake_credits: number, refunded_credits: number, reward_credits: number, burned_credits: number, };
 
 export type RequestInviteeResponse = { user: RequestActorSummaryResponse, invited_by_user_id: string, created_at_unix: number, };
 
@@ -188,7 +190,7 @@ export type RequestInviteeMutationResponse = { request: RequestSummaryResponse, 
 
 export type LeaveRequestResponse = { invitee: RequestInviteeResponse, };
 
-export type RequestPermissionsResponse = { can_open_discussion: boolean, can_reply_to_discussion: boolean, can_edit_identity: boolean, can_pull_branch: boolean, can_push_branch: boolean, can_mark_ready: boolean, can_return_to_working: boolean, can_manage_invitees: boolean, can_leave_request: boolean, can_hold: boolean, can_assess: boolean, can_close: boolean, can_merge: boolean, };
+export type RequestPermissionsResponse = { can_open_discussion: boolean, can_reply_to_discussion: boolean, can_edit_identity: boolean, can_pull_branch: boolean, can_push_branch: boolean, can_mark_ready: boolean, can_return_to_working: boolean, can_manage_invitees: boolean, can_leave_request: boolean, can_hold: boolean, can_request_changes: boolean, can_assess: boolean, can_close: boolean, can_merge: boolean, };
 
 export type RequestMergeabilityStatus = "Ready" | "Completed" | "Working" | "NotMaintainer" | "MissingRequestBranch";
 

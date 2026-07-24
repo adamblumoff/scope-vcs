@@ -828,6 +828,7 @@ async fn request_response_for_viewer(
         can_manage_invitees: decision.can_manage_invitees,
         can_leave_request: decision.can_leave_request,
         can_hold: decision.can_hold,
+        can_request_changes: decision.can_request_changes,
         can_assess: decision.can_assess,
         can_close: decision.can_close,
         can_merge: decision.can_merge,
