@@ -114,6 +114,7 @@ pub fn start_request(
         description_markdown: String::new(),
         state: RequestState::Working,
         activity_version: 1,
+        ready_queue_version: None,
         current_stake_credits: 0,
         first_ready_at_unix: None,
         ready_at_unix: None,

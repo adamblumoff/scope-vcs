@@ -8,6 +8,13 @@ use crate::domain::store::RepoPublicationState;
 use crate::{error::ApiError, git::content::git_blob_reference, state::AppState};
 use std::{path::Path as FsPath, time::Instant};
 
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum ReviewedUpdateMode {
+    FirstPush,
+    PublishedPush,
+    RequestMerge,
+}
+
 pub(crate) async fn receive_pack_update_from_staging_repo(
     state: &AppState,
     owner: &str,
@@ -16,16 +23,36 @@ pub(crate) async fn receive_pack_update_from_staging_repo(
     author_id: &str,
     config: RepoConfig,
 ) -> Result<ReceivePackUpdate, ApiError> {
-    let repo = state
-        .metadata
-        .git_push_context(owner, repo_name, author_id)
-        .await?
-        .ok_or_else(|| ApiError::not_found(format!("repo {owner}/{repo_name} not found")))?;
-    if repo.publication_state != RepoPublicationState::Published {
-        return Err(ApiError::conflict("repo must be published before push"));
-    }
-    reviewed_update_from_staging_repo(state, owner, repo_name, staging_repo, author_id, config)
-        .await
+    reviewed_update_from_staging_repo_mode(
+        state,
+        owner,
+        repo_name,
+        staging_repo,
+        author_id,
+        config,
+        ReviewedUpdateMode::PublishedPush,
+    )
+    .await
+}
+
+pub(crate) async fn request_merge_update_from_staging_repo(
+    state: &AppState,
+    owner: &str,
+    repo_name: &str,
+    staging_repo: &FsPath,
+    author_id: &str,
+    config: RepoConfig,
+) -> Result<ReceivePackUpdate, ApiError> {
+    reviewed_update_from_staging_repo_mode(
+        state,
+        owner,
+        repo_name,
+        staging_repo,
+        author_id,
+        config,
+        ReviewedUpdateMode::RequestMerge,
+    )
+    .await
 }
 
 pub(crate) async fn reviewed_update_from_staging_repo(
@@ -35,6 +62,27 @@ pub(crate) async fn reviewed_update_from_staging_repo(
     staging_repo: &FsPath,
     author_id: &str,
     config: RepoConfig,
+) -> Result<ReceivePackUpdate, ApiError> {
+    reviewed_update_from_staging_repo_mode(
+        state,
+        owner,
+        repo_name,
+        staging_repo,
+        author_id,
+        config,
+        ReviewedUpdateMode::FirstPush,
+    )
+    .await
+}
+
+async fn reviewed_update_from_staging_repo_mode(
+    state: &AppState,
+    owner: &str,
+    repo_name: &str,
+    staging_repo: &FsPath,
+    author_id: &str,
+    config: RepoConfig,
+    mode: ReviewedUpdateMode,
 ) -> Result<ReceivePackUpdate, ApiError> {
     let refs = git_refs(staging_repo)?;
     if refs.len() != 1 {
@@ -50,6 +98,11 @@ pub(crate) async fn reviewed_update_from_staging_repo(
         .git_push_context(owner, repo_name, author_id)
         .await?
         .ok_or_else(|| ApiError::not_found(format!("repo {owner}/{repo_name} not found")))?;
+    if mode != ReviewedUpdateMode::FirstPush
+        && repo.publication_state != RepoPublicationState::Published
+    {
+        return Err(ApiError::conflict("repo must be published before push"));
+    }
     let repo_id = crate::domain::store::repo_id(owner, repo_name);
     let message = pushed_commit_message(staging_repo, &head_oid)?;
     let base_head_oid = repo.git_head.as_ref().map(|head| head.head_oid.as_str());
@@ -57,7 +110,7 @@ pub(crate) async fn reviewed_update_from_staging_repo(
     let pushed_entries = git_changed_tree_entries(staging_repo, base_head_oid, &head_oid)?;
     let diff_ms = diff_started.elapsed().as_millis();
     let mut changes = Vec::new();
-    if pushed_entries.is_empty() {
+    if pushed_entries.is_empty() && mode != ReviewedUpdateMode::RequestMerge {
         return Err(ApiError::bad_request(
             "receive-pack update did not change the live tree",
         ));

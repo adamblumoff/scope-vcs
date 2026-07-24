@@ -4,8 +4,8 @@ use crate::{
     domain::{
         projection::{ProjectionViewKey, project_graph},
         requests::{
-            RecordRequestRevisionInput, RecordWorkingRequestUploadInput, Request, RequestAudience,
-            RequestChangeBlock, RequestState, canonical_request_ref,
+            RecordRequestRevisionInput, Request, RequestAudience, RequestChangeBlock,
+            canonical_request_ref,
         },
         store::{RepoPublicationState, RepositoryActor, SourceBlob},
     },
@@ -282,52 +282,35 @@ pub(crate) async fn persist_request_ref_revision(
     let persisted =
         persist_request_ref_to_store(state, owner, repo_name, staging_repo, &request, &update)
             .await?;
-    let mutation_result = if request.state == RequestState::Working {
+    let mutation = state
+        .metadata
+        .record_request_revision_with_review_invalidation(RecordRequestRevisionInput {
+            request_id: request.id,
+            actor_user_id: actor_user_id.to_string(),
+            actor_can_edit: false,
+            expected_old_head_oid: update.old_head_oid.clone(),
+            new_head_oid: update.new_head_oid.clone(),
+            git_snapshot: persisted.git_snapshot.clone(),
+            event_id: request_revision_event_id()?,
+            body: None,
+            now_unix,
+        })
+        .await;
+    if let Ok(mutation) = &mutation {
         state
-            .metadata
-            .record_working_request_upload(RecordWorkingRequestUploadInput {
-                request_id: request.id,
-                actor_user_id: actor_user_id.to_string(),
-                actor_can_edit: false,
-                expected_old_head_oid: update.old_head_oid.clone(),
-                new_head_oid: update.new_head_oid.clone(),
-                git_snapshot: persisted.git_snapshot.clone(),
-                now_unix,
-            })
-            .await
-            .map(|mutation| mutation.orphan_objects)
-    } else {
-        let mutation = state
-            .metadata
-            .record_request_revision(RecordRequestRevisionInput {
-                request_id: request.id,
-                actor_user_id: actor_user_id.to_string(),
-                actor_can_edit: false,
-                expected_old_head_oid: update.old_head_oid.clone(),
-                new_head_oid: update.new_head_oid.clone(),
-                git_snapshot: persisted.git_snapshot.clone(),
-                event_id: request_revision_event_id()?,
-                body: None,
-                now_unix,
-            })
+            .publish_request_summary_refresh(&request_repo_id, "request-revised")
             .await;
-        if let Ok(mutation) = &mutation {
-            state
-                .publish_request_summary_refresh(&request_repo_id, "request-revised")
-                .await;
-            state
-                .publish_request_timeline_change(
-                    &request_repo_id,
-                    request_id,
-                    mutation.discussion.id.clone(),
-                    mutation.discussion.last_activity_position,
-                    request_audience,
-                )
-                .await;
-        }
-        mutation.map(|_| Vec::new())
-    };
-    if let Err(error) = mutation_result {
+        state
+            .publish_request_timeline_change(
+                &request_repo_id,
+                request_id,
+                mutation.discussion.id.clone(),
+                mutation.discussion.last_activity_position,
+                request_audience,
+            )
+            .await;
+    }
+    if let Err(error) = mutation {
         rollback_request_ref(
             state,
             owner,

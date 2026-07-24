@@ -64,6 +64,7 @@ fn publication_marker_survives_return_to_working_and_is_required_for_completion(
     assert!(!request_counts_as_open(&request));
 
     request.first_ready_at_unix = None;
+    request.ready_queue_version = None;
     assert!(
         request
             .validate_facts()
@@ -277,19 +278,31 @@ fn published_working_request_stays_visible_but_not_mergeable() {
 }
 
 #[test]
-fn hold_and_completion_remove_mutation_permissions() {
+fn hold_blocks_contributors_but_not_maintainers_and_completion_blocks_all() {
     let mut request = ready_request();
+    assert!(
+        request_permissions(&request, RepositoryAccess::public(), Some("author"))
+            .can_edit_description
+    );
     request.held_at_unix = Some(21);
     request.held_by_user_id = Some("maintainer".to_string());
     request.updated_at_unix = 21;
     let author = request_permissions(&request, RepositoryAccess::public(), Some("author"));
     assert!(!author.can_push_branch);
+    assert!(!author.can_edit_description);
     assert!(!author.can_return_to_working);
     assert!(!author.can_manage_invitees);
     let maintainer = request_permissions(&request, maintainer_access(), Some("maintainer"));
     assert!(maintainer.can_hold);
+    assert!(maintainer.can_push_branch);
+    assert!(maintainer.can_edit_description);
+    assert!(maintainer.can_merge);
     assert!(maintainer.can_assess);
     assert!(maintainer.can_manage_invitees);
+    assert_eq!(
+        request_mergeability(&request, maintainer_access()).status,
+        RequestMergeabilityStatus::Ready
+    );
 
     let mut private_request = request.clone();
     private_request.audience = RequestAudience::Private;
@@ -495,6 +508,7 @@ fn ready_request() -> Request {
     request.head_oid = "head".to_string();
     request.git_snapshot = Some(source_blob("head"));
     request.state = RequestState::ReadyForReview;
+    request.ready_queue_version = Some(1);
     request.current_stake_credits = 10;
     request.first_ready_at_unix = Some(20);
     request.ready_at_unix = Some(20);

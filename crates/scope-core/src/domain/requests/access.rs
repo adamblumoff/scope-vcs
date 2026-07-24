@@ -87,9 +87,12 @@ pub fn request_permissions(
     RequestPermissions {
         can_open_discussion: visible && !completed && can_collaborate,
         can_reply_to_discussion: visible && !completed && can_collaborate,
-        can_edit_description: visible && working && !held && (author || maintainer),
+        can_edit_description: visible
+            && !completed
+            && (author || maintainer)
+            && (!held || maintainer),
         can_pull_branch: visible,
-        can_push_branch: visible && !completed && !held && can_collaborate,
+        can_push_branch: visible && !completed && can_collaborate && (!held || maintainer),
         can_mark_ready: visible && working && author,
         can_return_to_working: visible && ready && !held && author,
         can_manage_invitees: visible
@@ -102,7 +105,7 @@ pub fn request_permissions(
         can_merge: visible
             && maintainer
             && request.merged_at_unix.is_none()
-            && ((ready && !held)
+            && (ready
                 || (completed
                     && request.assessment_outcome
                         == Some(super::RequestAssessmentOutcome::Accepted))),
@@ -113,7 +116,7 @@ pub fn request_list_mergeability(
     state: RequestState,
     assessment_outcome: Option<super::RequestAssessmentOutcome>,
     has_git_snapshot: bool,
-    is_held: bool,
+    _is_held: bool,
     is_merged: bool,
     access: RepositoryAccess,
 ) -> RequestMergeability {
@@ -138,8 +141,6 @@ pub fn request_list_mergeability(
             RequestMergeabilityStatus::Working,
             Some("request is not ready for review"),
         )
-    } else if is_held {
-        (RequestMergeabilityStatus::Held, Some("request is on hold"))
     } else if !has_git_snapshot {
         (
             RequestMergeabilityStatus::MissingRequestBranch,

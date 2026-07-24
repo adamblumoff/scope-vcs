@@ -40,7 +40,7 @@ export type RequestState = "Working" | "ReadyForReview" | "Completed";
 
 export type RequestAssessmentOutcome = "Accepted" | "Neutral" | "Rejected";
 
-export type RequestReviewExitReason = "AuthorReturned" | "ChangesRequested" | "RevisionPushed";
+export type RequestReviewExitReason = "AuthorReturned" | "ChangesRequested" | "RevisionPushed" | "ContentEdited";
 
 export type GitOid = string;
 
@@ -50,7 +50,7 @@ export type ProjectionPreviewAudience = "private" | "public";
 
 export type ProjectionPreviewSource = "live";
 
-export type AccountSessionResponse = { identity: SessionIdentity | null, user: UserResponse | null, };
+export type AccountSessionResponse = { identity: SessionIdentity | null, user: UserResponse | null, credit_balance_credits: number | null, };
 
 export type UserResponse = { id: string, handle: string, email: string, email_verified: boolean, };
 
@@ -218,6 +218,10 @@ export type RequestCloseResponse = { deleted: boolean, request: RequestSummaryRe
 
 export type StartRequestRequest = { name: string, title: string | null, audience: RequestAudience, };
 
+export type ReadyRequestRequest = { stake_credits: number | null, };
+
+export type AssessRequestRequest = { outcome: RequestAssessmentOutcome, body_markdown: string | null, };
+
 export type UpdateRequestDescriptionRequest = { description_markdown: string, };
 
 export type CreateRequestDiscussionRequest = { body_markdown: string, client_discussion_id: string, };
@@ -243,6 +247,12 @@ export const ApiRouteTemplates = {
   repoPushIntents: "/v1/repos/{owner}/{repo}/push-intents",
   repoRequests: "/v1/repos/{owner}/{repo}/requests",
   repoRequest: "/v1/repos/{owner}/{repo}/requests/{request_id}",
+  repoRequestReady: "/v1/repos/{owner}/{repo}/requests/{request_id}/ready",
+  repoRequestWorking: "/v1/repos/{owner}/{repo}/requests/{request_id}/working",
+  repoRequestHold: "/v1/repos/{owner}/{repo}/requests/{request_id}/hold",
+  repoRequestRequestChanges: "/v1/repos/{owner}/{repo}/requests/{request_id}/request-changes",
+  repoRequestAssessment: "/v1/repos/{owner}/{repo}/requests/{request_id}/assessment",
+  repoRequestMerge: "/v1/repos/{owner}/{repo}/requests/{request_id}/merge",
   repoSession: "/v1/repos/{owner}/{repo}/session",
   repoFiles: "/v1/repos/{owner}/{repo}/files",
   repoFileContent: "/v1/repos/{owner}/{repo}/files/content",

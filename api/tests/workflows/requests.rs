@@ -120,6 +120,113 @@ async fn request_list_pages_one_hundred_and_one_visible_rows_without_overlap() {
     assert!(second["next_cursor"].is_null());
 }
 
+#[tokio::test]
+async fn maintainer_request_lifecycle_routes_delegate_to_atomic_commands() {
+    let state = test_state_with_repo();
+    cache_test_jwks(&state);
+    create_owner_request(&state, "req_lifecycle", REQUEST_HEAD).await;
+    let app = router(state);
+    let bearer = bearer_header();
+
+    let ready = api_request(
+        app.clone(),
+        "POST",
+        "/v1/repos/owner/repo/requests/req_lifecycle/ready",
+        Some(&bearer),
+        Some("{}"),
+    )
+    .await;
+    assert_eq!(ready.status(), StatusCode::OK);
+    let ready = response_json(ready).await;
+    assert_eq!(ready["request"]["state"], "ReadyForReview");
+    assert_eq!(ready["request"]["current_stake_credits"], 0);
+
+    let held = api_request(
+        app.clone(),
+        "PUT",
+        "/v1/repos/owner/repo/requests/req_lifecycle/hold",
+        Some(&bearer),
+        None,
+    )
+    .await;
+    assert_eq!(held.status(), StatusCode::OK);
+    assert!(response_json(held).await["request"]["held_at_unix"].is_number());
+
+    let held_author_exit = api_request(
+        app.clone(),
+        "POST",
+        "/v1/repos/owner/repo/requests/req_lifecycle/working",
+        Some(&bearer),
+        None,
+    )
+    .await;
+    assert_eq!(held_author_exit.status(), StatusCode::CONFLICT);
+
+    let released = api_request(
+        app.clone(),
+        "DELETE",
+        "/v1/repos/owner/repo/requests/req_lifecycle/hold",
+        Some(&bearer),
+        None,
+    )
+    .await;
+    assert_eq!(released.status(), StatusCode::OK);
+    assert!(response_json(released).await["request"]["held_at_unix"].is_null());
+
+    let working = api_request(
+        app.clone(),
+        "POST",
+        "/v1/repos/owner/repo/requests/req_lifecycle/working",
+        Some(&bearer),
+        None,
+    )
+    .await;
+    assert_eq!(working.status(), StatusCode::OK);
+    assert_eq!(response_json(working).await["request"]["state"], "Working");
+
+    let ready_again = api_request(
+        app.clone(),
+        "POST",
+        "/v1/repos/owner/repo/requests/req_lifecycle/ready",
+        Some(&bearer),
+        Some("{}"),
+    )
+    .await;
+    assert_eq!(ready_again.status(), StatusCode::OK);
+    let changes = api_request(
+        app.clone(),
+        "POST",
+        "/v1/repos/owner/repo/requests/req_lifecycle/request-changes",
+        Some(&bearer),
+        None,
+    )
+    .await;
+    assert_eq!(changes.status(), StatusCode::OK);
+    assert_eq!(response_json(changes).await["request"]["state"], "Working");
+
+    let ready_for_assessment = api_request(
+        app.clone(),
+        "POST",
+        "/v1/repos/owner/repo/requests/req_lifecycle/ready",
+        Some(&bearer),
+        Some("{}"),
+    )
+    .await;
+    assert_eq!(ready_for_assessment.status(), StatusCode::OK);
+    let assessed = api_request(
+        app.clone(),
+        "POST",
+        "/v1/repos/owner/repo/requests/req_lifecycle/assessment",
+        Some(&bearer),
+        Some(r#"{"outcome":"Neutral"}"#),
+    )
+    .await;
+    assert_eq!(assessed.status(), StatusCode::OK);
+    let assessed = response_json(assessed).await;
+    assert_eq!(assessed["request"]["state"], "Completed");
+    assert_eq!(assessed["request"]["assessment_outcome"], "Neutral");
+}
+
 async fn api_request(
     app: axum::Router,
     method: &str,

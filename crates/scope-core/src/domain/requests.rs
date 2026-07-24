@@ -12,7 +12,8 @@ pub use change_blocks::RequestChangeBlock;
 mod credits;
 pub use credits::{
     CreditAccountMutation, CreditLedgerEntry, CreditLedgerEntryKind, GrantUserCreditsInput,
-    RequestSettlement, UserCreditAccount, grant_user_credits, settlement_for,
+    PUBLIC_ACCOUNT_STARTER_CREDITS, RequestSettlement, UserCreditAccount, grant_user_credits,
+    settlement_for,
 };
 mod description;
 pub use description::{UpdateRequestDescriptionInput, update_request_description};
@@ -36,10 +37,11 @@ pub use lifecycle::{
 };
 mod limits;
 pub use limits::{
-    REQUEST_ACTIVITY_PAGE_MAX_EVENTS, REQUEST_DESCRIPTION_MAX_BYTES,
-    REQUEST_DISCUSSION_BODY_MAX_BYTES, REQUEST_DISCUSSION_CLIENT_ID_MAX_BYTES,
-    REQUEST_DISCUSSION_REPLY_MAX_DEPTH, REQUEST_LIST_DEFAULT_PAGE_SIZE, REQUEST_LIST_MAX_PAGE_SIZE,
-    REQUEST_TIMELINE_BODY_MAX_BYTES, REQUEST_TITLE_MAX_BYTES,
+    REQUEST_ACTIVITY_PAGE_MAX_EVENTS, REQUEST_ASSESSMENT_BODY_MAX_BYTES,
+    REQUEST_DESCRIPTION_MAX_BYTES, REQUEST_DISCUSSION_BODY_MAX_BYTES,
+    REQUEST_DISCUSSION_CLIENT_ID_MAX_BYTES, REQUEST_DISCUSSION_REPLY_MAX_DEPTH,
+    REQUEST_LIST_DEFAULT_PAGE_SIZE, REQUEST_LIST_MAX_PAGE_SIZE, REQUEST_TIMELINE_BODY_MAX_BYTES,
+    REQUEST_TITLE_MAX_BYTES,
 };
 pub(super) use limits::{validate_body_size, validate_required_body};
 mod model;
@@ -52,6 +54,12 @@ mod review;
 pub use review::{
     REQUEST_MAX_STAKE_CREDITS, RequestAssessmentOutcome, RequestReviewExitReason,
     validate_assessment_body,
+};
+mod review_lifecycle;
+pub use review_lifecycle::{
+    AssessRequestInput, MarkRequestReadyInput, MergeRequestInput, PUBLIC_READY_REQUEST_LIMIT,
+    RequestReviewMutation, ReturnRequestToWorkingInput, SetRequestHoldInput, assess_request,
+    mark_request_ready, merge_request, return_request_to_working, set_request_hold,
 };
 
 pub const REQUEST_REF_PREFIX: &str = "refs/heads/";
