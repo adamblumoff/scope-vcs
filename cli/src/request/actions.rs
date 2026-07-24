@@ -474,9 +474,7 @@ pub(super) fn print_request_list(
             return right
                 .current_stake_credits
                 .cmp(&left.current_stake_credits)
-                .then_with(|| {
-                    left.ready_at_unix.cmp(&right.ready_at_unix)
-                })
+                .then_with(|| left.ready_at_unix.cmp(&right.ready_at_unix))
                 .then_with(|| left.id.cmp(&right.id));
         }
         left.updated_at_unix
