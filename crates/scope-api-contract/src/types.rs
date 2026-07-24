@@ -105,6 +105,18 @@ mod tests {
         assert!(GitOid::try_from("abcdef0123456789abcdef0123456789abcdef0g").is_err());
         assert!(serde_json::from_str::<GitOid>("\"head-1\"").is_err());
     }
+
+    #[test]
+    fn lifecycle_request_payloads_preserve_optional_fields() {
+        let ready: ReadyRequestRequest =
+            serde_json::from_str("{}").expect("ready request without a stake");
+        assert_eq!(ready.stake_credits, None);
+
+        let assessment: AssessRequestRequest = serde_json::from_str(r#"{"outcome":"Rejected"}"#)
+            .expect("assessment request without a body");
+        assert_eq!(assessment.outcome, RequestAssessmentOutcome::Rejected);
+        assert_eq!(assessment.body_markdown, None);
+    }
 }
 
 #[derive(Debug, Deserialize, Serialize)]
@@ -112,6 +124,7 @@ mod tests {
 pub struct AccountSessionResponse {
     pub identity: Option<SessionIdentity>,
     pub user: Option<UserResponse>,
+    pub credit_balance_credits: Option<u32>,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -506,6 +519,19 @@ pub struct StartRequestRequest {
     pub name: String,
     pub title: Option<String>,
     pub audience: RequestAudience,
+}
+
+#[derive(Debug, Deserialize, Serialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
+pub struct ReadyRequestRequest {
+    pub stake_credits: Option<u32>,
+}
+
+#[derive(Debug, Deserialize, Serialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
+pub struct AssessRequestRequest {
+    pub outcome: RequestAssessmentOutcome,
+    pub body_markdown: Option<String>,
 }
 
 #[derive(Debug, Deserialize, Serialize)]

@@ -27,6 +27,7 @@ pub mod request {
         pub description_markdown: String,
         pub state: String,
         pub activity_version: i64,
+        pub ready_queue_version: Option<i64>,
         pub current_stake_credits: i32,
         pub first_ready_at_unix: Option<i64>,
         pub ready_at_unix: Option<i64>,
@@ -68,6 +69,10 @@ pub mod request {
                 description_markdown: request.description_markdown.clone(),
                 state: encode_enum(request.state)?,
                 activity_version: u64_to_i64(request.activity_version, "request activity version")?,
+                ready_queue_version: request
+                    .ready_queue_version
+                    .map(|version| u64_to_i64(version, "request ready queue version"))
+                    .transpose()?,
                 current_stake_credits: u32_to_i32(
                     request.current_stake_credits,
                     "request current stake credits",
@@ -118,6 +123,10 @@ pub mod request {
                 description_markdown: self.description_markdown,
                 state: decode_enum::<RequestState>(self.state)?,
                 activity_version: i64_to_u64(self.activity_version, "request activity version")?,
+                ready_queue_version: self
+                    .ready_queue_version
+                    .map(|version| i64_to_u64(version, "request ready queue version"))
+                    .transpose()?,
                 current_stake_credits: i32_to_u32(
                     self.current_stake_credits,
                     "request current stake credits",

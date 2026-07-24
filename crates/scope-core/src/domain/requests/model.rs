@@ -43,6 +43,7 @@ pub struct Request {
     pub description_markdown: String,
     pub state: RequestState,
     pub activity_version: u64,
+    pub ready_queue_version: Option<u64>,
     pub current_stake_credits: u32,
     pub first_ready_at_unix: Option<u64>,
     pub ready_at_unix: Option<u64>,
@@ -203,6 +204,11 @@ pub fn validate_request_facts(request: &Request) -> Result<(), ApiError> {
         return Err(ApiError::conflict(format!(
             "request current stake cannot exceed {REQUEST_MAX_STAKE_CREDITS} credits"
         )));
+    }
+    if request.is_published() != request.ready_queue_version.is_some() {
+        return Err(ApiError::conflict(
+            "published request and ready queue version must be set together",
+        ));
     }
     match request.state {
         RequestState::Working => {

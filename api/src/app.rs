@@ -99,6 +99,31 @@ pub fn router(state: AppState) -> Router {
             get(http::requests::get_request).delete(http::requests::close_request),
         )
         .route(
+            routes::REPO_REQUEST_READY,
+            post(http::requests::mark_request_ready),
+        )
+        .route(
+            routes::REPO_REQUEST_WORKING,
+            post(http::requests::return_request_to_working),
+        )
+        .route(
+            routes::REPO_REQUEST_HOLD,
+            axum::routing::put(http::requests::hold_request)
+                .delete(http::requests::release_request_hold),
+        )
+        .route(
+            routes::REPO_REQUEST_REQUEST_CHANGES,
+            post(http::requests::request_changes),
+        )
+        .route(
+            routes::REPO_REQUEST_ASSESSMENT,
+            post(http::requests::assess_request),
+        )
+        .route(
+            routes::REPO_REQUEST_MERGE,
+            post(http::requests::merge_request),
+        )
+        .route(
             routes::REPO_REQUEST_CHANGE_BLOCK_FILES,
             get(http::request_review::get_request_change_block_files),
         )

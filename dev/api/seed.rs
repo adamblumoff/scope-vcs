@@ -324,6 +324,7 @@ fn seed_owner_request(
 
     let request = catalog.requests.get_mut(id).expect("seed request exists");
     request.first_ready_at_unix = Some(lifecycle_at_unix);
+    request.ready_queue_version = Some(lifecycle_at_unix);
     match outcome {
         SeedRequestOutcome::ReadyForReview => {
             request.state = crate::domain::requests::RequestState::ReadyForReview;

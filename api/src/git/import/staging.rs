@@ -53,7 +53,7 @@ pub(super) fn apply_receive_pack_update(
 }
 
 impl ReceivePackUpdate {
-    pub(super) fn into_reviewed_update(self) -> ReviewedUpdateInput {
+    pub(crate) fn into_reviewed_update(self) -> ReviewedUpdateInput {
         ReviewedUpdateInput {
             branch: self.branch,
             author_id: self.author_id,

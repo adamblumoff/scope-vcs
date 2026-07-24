@@ -373,6 +373,10 @@ where
             Expr::value(row.activity_version),
         )
         .col_expr(
+            entities::request::Column::ReadyQueueVersion,
+            Expr::value(row.ready_queue_version),
+        )
+        .col_expr(
             entities::request::Column::CurrentStakeCredits,
             Expr::value(row.current_stake_credits),
         )

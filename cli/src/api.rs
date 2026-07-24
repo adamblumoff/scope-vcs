@@ -73,7 +73,7 @@ pub fn validate_session_token(
         .context("validate saved Scope login")?
         .json()
         .context("parse saved Scope login response")?;
-    let AccountSessionResponse { identity, user } = session;
+    let AccountSessionResponse { identity, user, .. } = session;
     drop(identity);
     Ok(user)
 }

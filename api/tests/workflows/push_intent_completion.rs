@@ -84,7 +84,7 @@ fn readme_private_config() -> RepoConfig {
     config
 }
 
-async fn published_git_fixture(label: &str) -> (AppState, TempGitRepo, String) {
+pub(super) async fn published_git_fixture(label: &str) -> (AppState, TempGitRepo, String) {
     let state = test_state_with_repo();
     cache_test_jwks(&state);
     let source = temp_git_repo(label);

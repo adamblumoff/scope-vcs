@@ -262,9 +262,24 @@ fn apply_content_only_update(
 
 pub fn accept_content_push(
     state: ContentPushState,
-    mut update: ReviewedUpdateInput,
+    update: ReviewedUpdateInput,
 ) -> ReviewedUpdateResult<AcceptedContentPush> {
-    if update.changes.is_empty() {
+    accept_content_update(state, update, false)
+}
+
+pub fn accept_request_merge(
+    state: ContentPushState,
+    update: ReviewedUpdateInput,
+) -> ReviewedUpdateResult<AcceptedContentPush> {
+    accept_content_update(state, update, true)
+}
+
+fn accept_content_update(
+    state: ContentPushState,
+    mut update: ReviewedUpdateInput,
+    allow_unchanged_tree: bool,
+) -> ReviewedUpdateResult<AcceptedContentPush> {
+    if update.changes.is_empty() && !allow_unchanged_tree {
         return Err(ReviewedUpdateError::BadRequest(
             "update must include file changes",
         ));
@@ -293,7 +308,7 @@ pub fn accept_content_push(
             new_content: change.content,
         });
     }
-    if file_changes.is_empty() {
+    if file_changes.is_empty() && !allow_unchanged_tree {
         return Err(ReviewedUpdateError::BadRequest(
             "update did not change the live tree",
         ));
@@ -316,7 +331,12 @@ pub fn accept_content_push(
     }
     let change_version = state.change_version.saturating_add(1);
     update.git_head.change_version = change_version;
-    let logical_id = format!("rv_push_{}", update.git_head.head_oid);
+    let logical_prefix = if allow_unchanged_tree {
+        "rv_merge"
+    } else {
+        "rv_push"
+    };
+    let logical_id = format!("{logical_prefix}_{}", update.git_head.head_oid);
     let logical_commit = LogicalCommit {
         id: logical_id,
         parent_ids: state.previous_commit_id.into_iter().collect(),

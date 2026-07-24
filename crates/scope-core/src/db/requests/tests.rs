@@ -404,6 +404,7 @@ async fn close_published_working_request_persists_completion() {
         .unwrap()
         .request;
     request.first_ready_at_unix = Some(3);
+    request.ready_queue_version = Some(1);
     request.updated_at_unix = 3;
     save_request_row(store.db.as_ref(), &request).await.unwrap();
 
