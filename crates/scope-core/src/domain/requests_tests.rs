@@ -327,6 +327,32 @@ fn held_request_rejects_description_edits_at_domain_boundary() {
 }
 
 #[test]
+fn ready_request_rejects_revisions_with_a_user_facing_constraint() {
+    let request = ready_request();
+    let mut requests = BTreeMap::from([(request.id.clone(), request)]);
+    let error = record_request_revision(
+        &mut requests,
+        &mut BTreeMap::new(),
+        RecordRequestRevisionInput {
+            request_id: "request_1".to_string(),
+            actor_user_id: "author".to_string(),
+            actor_can_edit: true,
+            expected_old_head_oid: Some("head".to_string()),
+            new_head_oid: "head-2".to_string(),
+            git_snapshot: source_blob("head-2"),
+            event_id: "event_revision".to_string(),
+            body: None,
+            now_unix: 22,
+        },
+    )
+    .unwrap_err();
+    assert_eq!(
+        error.message,
+        "only working requests can receive new revisions"
+    );
+}
+
+#[test]
 fn ready_request_rejects_description_edits_until_review_invalidation_exists() {
     let request = ready_request();
     let mut requests = BTreeMap::from([(request.id.clone(), request)]);

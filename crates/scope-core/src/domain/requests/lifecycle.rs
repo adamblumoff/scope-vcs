@@ -195,7 +195,7 @@ pub fn record_request_revision(
     }
     if request.state != RequestState::Working {
         return Err(ApiError::conflict(
-            "ready review invalidation is implemented by the review transaction",
+            "only working requests can receive new revisions",
         ));
     }
     validate_expected_head(request, input.expected_old_head_oid.as_deref())?;
