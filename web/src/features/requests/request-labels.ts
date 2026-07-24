@@ -69,6 +69,14 @@ export function requestStatusTone(request: RequestLabelSource): BadgeTone {
     : REQUEST_STATES[request.state].tone
 }
 
+export function requestCompletionMergeLabel(request: RequestLabelSource) {
+  return request.state === 'Completed' &&
+    request.assessment_outcome === 'Accepted' &&
+    request.mergeability.status === 'Completed'
+    ? 'Merged'
+    : 'Not merged'
+}
+
 export function requestAudienceLabel(request: RequestLabelSource) {
   return request.audience === 'Private' ? 'Private request' : 'Public request'
 }

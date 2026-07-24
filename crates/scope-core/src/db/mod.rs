@@ -42,8 +42,8 @@ mod request_invitees;
 pub use request_invitees::{
     AddRequestInviteeCommand, LeaveRequestCommand, RemoveRequestInviteeCommand, RequestInviteeRead,
 };
-mod request_ready_queue;
-pub use request_ready_queue::{ReadyRequestQueueCursor, ReadyRequestQueueRow};
+mod request_queue;
+pub use request_queue::{RequestQueueCursor, RequestQueuePageQuery, RequestQueueRow};
 mod request_rows;
 pub use request_rows::RequestListRow;
 mod request_identity_transactions;

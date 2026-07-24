@@ -88,7 +88,7 @@ export type CliSessionsResponse = { sessions: Array<CliSessionResponse>, };
 
 export type CliSessionResponse = { id: string, label: string, created_at_unix: number, last_used_at_unix: number | null, expires_at_unix: number, };
 
-export type RepoSummaryResponse = { id: string, owner_handle: string, name: string, lifecycle_state: RepoPublicationState, default_visibility: Visibility, change_version: number, access: RepositoryAccessResponse, open_request_count: number, request_permissions: RepoRequestPermissionsResponse, };
+export type RepoSummaryResponse = { id: string, owner_handle: string, name: string, lifecycle_state: RepoPublicationState, default_visibility: Visibility, change_version: number, access: RepositoryAccessResponse, ready_for_review_count: number, request_permissions: RepoRequestPermissionsResponse, };
 
 export type RepoRequestPermissionsResponse = { can_start_request: boolean, uses_credit_stake: boolean, };
 
@@ -165,6 +165,8 @@ export type ProjectionPreviewCommitResponse = { projected_id: string, logical_co
 export type ProjectionPreviewCommitVisibilityResponse = "FullyPublic" | "Mixed" | "FullyPrivate";
 
 export type ProjectionPreviewSummaryResponse = { visible_files: number, hidden_files: number, visible_commits: number, hidden_commits: number, };
+
+export type RequestQueueSection = "your_work" | "ready" | "completed";
 
 export type RequestListResponse = { requests: Array<RequestListItemResponse>, next_cursor: string | null, };
 
@@ -256,6 +258,7 @@ export const ApiRouteTemplates = {
   repoConfig: "/v1/repos/{owner}/{repo}/config",
   repoPushIntents: "/v1/repos/{owner}/{repo}/push-intents",
   repoRequests: "/v1/repos/{owner}/{repo}/requests",
+  repoRequestQueue: "/v1/repos/{owner}/{repo}/requests/queue",
   repoRequest: "/v1/repos/{owner}/{repo}/requests/{request_id}",
   repoRequestReady: "/v1/repos/{owner}/{repo}/requests/{request_id}/ready",
   repoRequestWorking: "/v1/repos/{owner}/{repo}/requests/{request_id}/working",

@@ -1,6 +1,5 @@
 import { createApiClient } from '@/api/client'
 import type {
-  RepoParams,
   RequestDetail,
   RequestChangeBlockFiles,
   RequestList,
@@ -8,30 +7,17 @@ import type {
   RequestParams,
 } from './types'
 import { ApiRouteTemplates, buildApiPath } from './types.generated'
-import { parseRepoParams } from './repo-params'
+import type { LoadRequestQueueInput } from './request-queue-input'
 
-export async function loadRequestsForRequest(
-  data: LoadRequestsInput,
+
+export async function loadRequestQueueForRequest(
+  data: LoadRequestQueueInput,
 ): Promise<RequestList> {
-  return createApiClient().get<RequestList>(requestCollectionPath(data), {
+  return createApiClient().get<RequestList>(requestQueuePath(data), {
     auth: 'optional',
   })
 }
 
-export type LoadRequestsInput = RepoParams & {
-  cursor?: string | null
-}
-
-export function parseLoadRequestsInput(input: unknown): LoadRequestsInput {
-  const data = input as Partial<LoadRequestsInput> | null
-  const params = parseRepoParams(data)
-  const cursor = typeof data?.cursor === 'string' ? data.cursor.trim() : ''
-
-  return {
-    ...params,
-    cursor: cursor || null,
-  }
-}
 
 export async function loadRequestForRequest(
   data: RequestParams,
@@ -63,17 +49,20 @@ export async function loadRequestChangeBlockFileDiffForRequest(
   )
 }
 
-function requestCollectionPath(data: LoadRequestsInput) {
-  const path = buildApiPath(ApiRouteTemplates.repoRequests, {
+
+function requestQueuePath(data: LoadRequestQueueInput) {
+  const path = buildApiPath(ApiRouteTemplates.repoRequestQueue, {
     owner: data.owner,
     repo: data.repo,
   })
-  const search = new URLSearchParams()
+  const search = new URLSearchParams({ section: data.section })
   if (data.cursor) {
     search.set('cursor', data.cursor)
   }
-  const query = search.toString()
-  return query ? `${path}?${query}` : path
+  if (data.search) {
+    search.set('search', data.search)
+  }
+  return `${path}?${search}`
 }
 
 function requestPath(data: RequestParams) {

@@ -842,7 +842,7 @@ async fn request_response_for_viewer(
     request_summary_response(request, invitees, permissions, mergeability)
 }
 
-fn current_main_oid_for_access(
+pub(crate) fn current_main_oid_for_access(
     state: &AppState,
     repo: &StoredRepository,
     access: RepositoryAccess,

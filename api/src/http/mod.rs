@@ -10,6 +10,7 @@ pub(crate) mod repo_collaboration;
 pub(crate) mod repo_events;
 pub(crate) mod repos;
 pub(crate) mod request_discussions;
+pub(crate) mod request_queue;
 pub(crate) mod request_review;
 pub(crate) mod requests;
 pub(crate) mod responses;
