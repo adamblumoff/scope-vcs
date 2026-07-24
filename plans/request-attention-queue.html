@@ -1,0 +1,761 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Scope VCS — Request attention queue implementation plan</title>
+  <script>
+    (function () {
+      var saved = localStorage.getItem('scope-plan-theme');
+      var dark = saved === 'dark' ||
+        (saved !== 'light' && window.matchMedia('(prefers-color-scheme: dark)').matches);
+      if (dark) document.documentElement.classList.add('dark');
+    })();
+  </script>
+  <style>
+    :root {
+      --bg: #f4f3ef;
+      --fg: #17191d;
+      --surface: #fffefa;
+      --surface-2: #f8f7f3;
+      --muted: #686f7a;
+      --line: #d5d8dd;
+      --line-strong: #aeb4bf;
+      --accent: #667a96;
+      --accent-soft: #e4e9ef;
+      --success: #4f8561;
+      --success-soft: #e2eee5;
+      --warning: #8b7044;
+      --warning-soft: #eee8dc;
+      --danger: #bc5965;
+      --danger-soft: #f4e1e4;
+      --code: #17191d;
+      --code-fg: #f1f0ec;
+      --shadow: 0 18px 48px -30px rgba(20, 22, 27, .32);
+      --sans: "Geist", ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+      --mono: "Geist Mono", "SFMono-Regular", Consolas, ui-monospace, monospace;
+    }
+    html.dark {
+      --bg: #0d0f12;
+      --fg: #f1f0ec;
+      --surface: #12151a;
+      --surface-2: #171a20;
+      --muted: #9ea3ae;
+      --line: #292d36;
+      --line-strong: #3a3f4a;
+      --accent: #8293aa;
+      --accent-soft: #171d25;
+      --success: #6fa27c;
+      --success-soft: #16221a;
+      --warning: #b49a6b;
+      --warning-soft: #241f16;
+      --danger: #d96c75;
+      --danger-soft: #29171a;
+      --code: #080a0d;
+      --code-fg: #f1f0ec;
+      --shadow: 0 20px 56px -28px rgba(0, 0, 0, .9);
+    }
+    * { box-sizing: border-box; }
+    html { scroll-behavior: smooth; color-scheme: light; }
+    html.dark { color-scheme: dark; }
+    body {
+      margin: 0;
+      min-width: 320px;
+      background: var(--bg);
+      color: var(--fg);
+      font-family: var(--sans);
+      font-size: 15px;
+      line-height: 1.58;
+      -webkit-font-smoothing: antialiased;
+    }
+    button, a { font: inherit; }
+    a { color: inherit; }
+    code, pre, .mono { font-family: var(--mono); }
+    .page { max-width: 1240px; margin: 0 auto; padding: 0 32px 120px; }
+    .mast {
+      position: relative;
+      padding: 76px 0 44px;
+      border-bottom: 1px solid var(--line);
+    }
+    .theme {
+      position: absolute;
+      top: 24px;
+      right: 0;
+      width: 31px;
+      height: 31px;
+      border: 1px solid var(--line);
+      border-radius: 6px;
+      background: var(--surface);
+      color: var(--muted);
+      cursor: pointer;
+    }
+    .theme:hover { color: var(--fg); border-color: var(--line-strong); }
+    .eyebrow {
+      font-family: var(--mono);
+      font-size: 11px;
+      letter-spacing: .1em;
+      text-transform: uppercase;
+      color: var(--muted);
+      margin-bottom: 13px;
+    }
+    h1 {
+      max-width: 840px;
+      margin: 0;
+      font-size: clamp(36px, 6vw, 66px);
+      line-height: 1.02;
+      letter-spacing: -.045em;
+      font-weight: 650;
+    }
+    .lede { max-width: 760px; margin: 22px 0 0; color: var(--muted); font-size: 17px; }
+    .decision {
+      max-width: 980px;
+      margin-top: 28px;
+      padding: 15px 18px;
+      border-left: 3px solid var(--accent);
+      background: var(--accent-soft);
+    }
+    .stats {
+      display: grid;
+      grid-template-columns: repeat(4, 1fr);
+      border-bottom: 1px solid var(--line);
+    }
+    .stat { padding: 22px 20px; border-right: 1px solid var(--line); }
+    .stat:first-child { padding-left: 0; }
+    .stat:last-child { border-right: 0; }
+    .stat b { display: block; font-size: 20px; }
+    .stat span { color: var(--muted); font-size: 12px; font-family: var(--mono); }
+    .shell {
+      display: grid;
+      grid-template-columns: 220px minmax(0, 1fr);
+      gap: 48px;
+      padding-top: 44px;
+    }
+    nav { position: sticky; top: 24px; align-self: start; }
+    nav .nav-label { margin: 0 0 10px; font: 10px var(--mono); color: var(--muted); letter-spacing: .1em; text-transform: uppercase; }
+    nav a {
+      display: block;
+      padding: 6px 0 6px 12px;
+      border-left: 2px solid var(--line);
+      color: var(--muted);
+      text-decoration: none;
+      font-size: 13px;
+    }
+    nav a:hover { color: var(--fg); border-color: var(--accent); }
+    main { min-width: 0; }
+    section { padding: 62px 0 0; scroll-margin-top: 16px; }
+    .section-head { display: flex; align-items: baseline; gap: 14px; margin-bottom: 8px; }
+    .section-head .n { font: 11px var(--mono); color: var(--accent); }
+    h2 { margin: 0; font-size: 27px; line-height: 1.2; letter-spacing: -.025em; }
+    h3 { margin: 0 0 8px; font-size: 17px; letter-spacing: -.012em; }
+    .intro { max-width: 760px; margin: 0 0 26px; color: var(--muted); }
+    .rule {
+      display: grid;
+      grid-template-columns: 190px minmax(0, 1fr);
+      gap: 20px;
+      padding: 15px 0;
+      border-top: 1px solid var(--line);
+    }
+    .rule:last-child { border-bottom: 1px solid var(--line); }
+    .rule b { font-size: 13px; }
+    .rule p { margin: 0; color: var(--muted); }
+    .diagram {
+      overflow-x: auto;
+      border: 1px solid var(--line);
+      background: var(--surface);
+      border-radius: 9px;
+      padding: 22px;
+      box-shadow: var(--shadow);
+    }
+    .diagram svg { display: block; min-width: 740px; width: 100%; height: auto; }
+    .diagram text { font-family: var(--mono); fill: var(--fg); }
+    .diagram .sub { fill: var(--muted); font-size: 11px; }
+    .diagram .node { fill: var(--surface); stroke: var(--line-strong); stroke-width: 1.5; }
+    .diagram .work { fill: var(--surface-2); }
+    .diagram .ready { fill: var(--accent-soft); stroke: var(--accent); }
+    .diagram .done { fill: var(--success-soft); stroke: var(--success); }
+    .diagram .hold { fill: var(--warning-soft); stroke: var(--warning); }
+    .diagram .edge { fill: none; stroke: var(--line-strong); stroke-width: 1.5; marker-end: url(#arrow); }
+    .diagram .return { stroke: var(--warning); stroke-dasharray: 5 4; marker-end: url(#arrow-warning); }
+    .diagram .complete { stroke: var(--success); marker-end: url(#arrow-success); }
+    .caption { margin: 10px 0 0; color: var(--muted); font-size: 12px; }
+    .matrix { width: 100%; border-collapse: collapse; font-size: 13px; }
+    .matrix th, .matrix td { padding: 11px 12px; text-align: left; vertical-align: top; border-bottom: 1px solid var(--line); }
+    .matrix th { font: 10px var(--mono); letter-spacing: .07em; text-transform: uppercase; color: var(--muted); }
+    .yes { color: var(--success); font-weight: 650; }
+    .no { color: var(--muted); }
+    .conditional { color: var(--warning); font-weight: 600; }
+    .ui-window {
+      overflow: hidden;
+      border: 1px solid var(--line-strong);
+      border-radius: 10px;
+      background: var(--surface);
+      box-shadow: var(--shadow);
+    }
+    .ui-chrome {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      height: 34px;
+      padding: 0 12px;
+      border-bottom: 1px solid var(--line);
+      background: var(--surface-2);
+    }
+    .ui-chrome i { width: 7px; height: 7px; border: 1px solid var(--line-strong); border-radius: 50%; }
+    .ui-body { padding: 25px; }
+    .ui-title { display: flex; justify-content: space-between; align-items: end; gap: 16px; padding-bottom: 20px; border-bottom: 1px solid var(--line); }
+    .ui-title h3 { font-size: 26px; margin: 0; }
+    .ui-title p { margin: 3px 0 0; color: var(--muted); font-size: 13px; }
+    .pill { display: inline-flex; align-items: center; gap: 5px; padding: 3px 8px; border: 1px solid var(--line); border-radius: 999px; font: 10px var(--mono); white-space: nowrap; }
+    .pill.stake { border-color: var(--accent); color: var(--accent); }
+    .pill.hold { border-color: var(--warning); color: var(--warning); background: var(--warning-soft); }
+    .pill.good { border-color: var(--success); color: var(--success); }
+    .ui-group { margin-top: 26px; }
+    .ui-group-head { display: flex; justify-content: space-between; align-items: baseline; margin-bottom: 7px; }
+    .ui-group-head h4 { margin: 0; font-size: 14px; }
+    .ui-group-head span { color: var(--muted); font: 10px var(--mono); }
+    .request-row {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) auto;
+      gap: 16px;
+      padding: 13px 2px;
+      border-top: 1px solid var(--line);
+    }
+    .request-row:last-child { border-bottom: 1px solid var(--line); }
+    .request-row strong { display: block; font-size: 14px; }
+    .request-row small { display: block; margin-top: 2px; color: var(--muted); font-size: 11px; }
+    .request-meta { display: flex; align-items: center; gap: 8px; }
+    .empty-row { padding: 14px 2px; border-top: 1px solid var(--line); color: var(--muted); font-size: 13px; }
+    .mock-grid { display: grid; grid-template-columns: 1.4fr .8fr; gap: 22px; }
+    .detail-head { padding-bottom: 18px; border-bottom: 1px solid var(--line); }
+    .detail-head h3 { font-size: 24px; }
+    .detail-head p { margin: 4px 0 0; color: var(--muted); font-size: 12px; }
+    .detail-actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 14px; }
+    .button { padding: 7px 10px; border: 1px solid var(--line-strong); border-radius: 6px; background: var(--surface-2); font-size: 11px; }
+    .button.primary { background: var(--fg); color: var(--bg); border-color: var(--fg); }
+    .button.warn { color: var(--warning); border-color: var(--warning); }
+    .timeline { margin-top: 19px; }
+    .timeline-row { display: grid; grid-template-columns: 8px minmax(0, 1fr) auto; gap: 11px; padding: 10px 0; border-top: 1px solid var(--line); font-size: 12px; }
+    .timeline-row i { width: 7px; height: 7px; margin-top: 6px; border-radius: 50%; background: var(--line-strong); }
+    .timeline-row time { color: var(--muted); font: 10px var(--mono); }
+    .rail { border-left: 1px solid var(--line); }
+    .rail-section { padding: 17px; border-bottom: 1px solid var(--line); }
+    .rail-section h4 { margin: 0 0 10px; font: 10px var(--mono); color: var(--muted); letter-spacing: .08em; text-transform: uppercase; }
+    .rail-section p { margin: 4px 0; font-size: 12px; }
+    .handle { display: flex; justify-content: space-between; gap: 10px; padding: 7px 0; border-top: 1px solid var(--line); font: 11px var(--mono); }
+    .cli { background: var(--code); color: var(--code-fg); border-radius: 9px; overflow: hidden; }
+    .cli-head { padding: 10px 15px; border-bottom: 1px solid #343943; color: #9ea3ae; font: 10px var(--mono); }
+    .cli pre { margin: 0; padding: 17px; overflow-x: auto; font-size: 12px; line-height: 1.68; }
+    .prompt { color: #8293aa; }
+    .out { color: #9ea3ae; }
+    .ok { color: #83b28e; }
+    .warn { color: #c6ae7f; }
+    .cli-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 18px; }
+    .contract {
+      display: grid;
+      grid-template-columns: 210px minmax(0, 1fr);
+      border-top: 1px solid var(--line);
+    }
+    .contract > div { padding: 13px; border-bottom: 1px solid var(--line); }
+    .contract .verb { font: 11px var(--mono); color: var(--accent); }
+    .contract p { margin: 2px 0 0; color: var(--muted); font-size: 12px; }
+    .prs { position: relative; }
+    .pr {
+      display: grid;
+      grid-template-columns: 72px minmax(0, 1fr);
+      gap: 20px;
+      padding: 0 0 34px;
+    }
+    .pr-mark { position: relative; font: 11px var(--mono); color: var(--accent); }
+    .pr-mark::after { content: ""; position: absolute; top: 5px; right: 0; width: 10px; height: 10px; border: 2px solid var(--accent); border-radius: 50%; background: var(--bg); }
+    .pr:not(:last-child) .pr-mark::before { content: ""; position: absolute; top: 16px; bottom: -34px; right: 5px; width: 1px; background: var(--line); }
+    .pr h3 { margin-bottom: 5px; }
+    .pr p { max-width: 760px; margin: 0 0 10px; color: var(--muted); }
+    .tags { display: flex; flex-wrap: wrap; gap: 6px; }
+    .tag { padding: 3px 7px; border: 1px solid var(--line); border-radius: 5px; color: var(--muted); font: 10px var(--mono); }
+    details { border-top: 1px solid var(--line); }
+    details:last-child { border-bottom: 1px solid var(--line); }
+    summary { display: flex; align-items: baseline; gap: 12px; padding: 13px 2px; cursor: pointer; list-style: none; }
+    summary::-webkit-details-marker { display: none; }
+    summary::before { content: "＋"; color: var(--accent); font: 12px var(--mono); }
+    details[open] summary::before { content: "−"; }
+    summary code { font-size: 11px; color: var(--muted); }
+    details .detail { padding: 0 2px 16px 24px; color: var(--muted); font-size: 13px; }
+    .delete { color: var(--danger); }
+    .risks { border-top: 1px solid var(--line); }
+    .risk { display: grid; grid-template-columns: 140px 1fr 1fr; border-bottom: 1px solid var(--line); }
+    .risk > div { padding: 13px; }
+    .risk > div + div { border-left: 1px solid var(--line); }
+    .risk .level { font: 10px var(--mono); text-transform: uppercase; }
+    .level.high { color: var(--danger); }
+    .level.med { color: var(--warning); }
+    .checks { display: grid; grid-template-columns: repeat(2, 1fr); gap: 10px 28px; }
+    .check { position: relative; padding: 9px 0 9px 22px; border-bottom: 1px solid var(--line); font-size: 13px; }
+    .check::before { content: "✓"; position: absolute; left: 0; color: var(--success); font-weight: 700; }
+    .non-goals { display: grid; grid-template-columns: repeat(2, 1fr); gap: 0 28px; }
+    .non-goal { padding: 10px 0; border-top: 1px solid var(--line); color: var(--muted); font-size: 13px; }
+    @media (max-width: 940px) {
+      .shell { grid-template-columns: 1fr; }
+      nav { display: none; }
+      .mock-grid, .cli-grid { grid-template-columns: 1fr; }
+    }
+    @media (max-width: 700px) {
+      .page { padding-left: 18px; padding-right: 18px; }
+      .mast { padding-top: 58px; }
+      .stats { grid-template-columns: 1fr 1fr; }
+      .stat:nth-child(2) { border-right: 0; }
+      .stat:nth-child(-n+2) { border-bottom: 1px solid var(--line); }
+      .rule, .contract { grid-template-columns: 1fr; gap: 3px; }
+      .contract > div:first-child { padding-bottom: 0; border-bottom: 0; }
+      .risk { grid-template-columns: 1fr; }
+      .risk > div + div { border-left: 0; border-top: 1px dashed var(--line); }
+      .checks, .non-goals { grid-template-columns: 1fr; }
+      .ui-body { padding: 17px; }
+      .request-row { grid-template-columns: 1fr; gap: 8px; }
+      .request-meta { justify-content: flex-start; }
+      .pr { grid-template-columns: 56px 1fr; }
+    }
+    @media (prefers-reduced-motion: reduce) { html { scroll-behavior: auto; } }
+  </style>
+</head>
+<body>
+  <div class="page">
+    <header class="mast">
+      <button class="theme" id="theme" aria-label="Toggle color theme" title="Toggle color theme">◐</button>
+      <div class="eyebrow">Scope VCS · implementation plan · request attention queue</div>
+      <h1>Requests become a quality signal, not an inbox firehose.</h1>
+      <p class="lede">
+        Replace the current submitted / needs-response / disposition system with one durable workflow shared
+        by the web app, API, Git transport, and CLI. Working requests stay quiet. Ready requests become public,
+        staked, ranked work. Completed requests carry one final assessment.
+      </p>
+      <div class="decision">
+        <strong>Recommended delivery:</strong> six stacked, green PRs. Reset the vocabulary and database
+        destructively first; then land credit transactions, access control, CLI, queue UI, and detail controls.
+        This is pre-alpha: there is no legacy migration path and no compatibility layer.
+      </div>
+    </header>
+
+    <div class="stats">
+      <div class="stat"><b>3 states</b><span>Working · Ready · Completed</span></div>
+      <div class="stat"><b>3 outcomes</b><span>Accepted · Neutral · Rejected</span></div>
+      <div class="stat"><b>1–25 credits</b><span>author-chosen public stake</span></div>
+      <div class="stat"><b>6 PRs</b><span>stacked and independently reviewable</span></div>
+    </div>
+
+    <div class="shell">
+      <nav aria-label="Plan sections">
+        <div class="nav-label">On this page</div>
+        <a href="#decisions">Locked decisions</a>
+        <a href="#lifecycle">Lifecycle</a>
+        <a href="#access">Visibility &amp; access</a>
+        <a href="#credits">Credits &amp; triage</a>
+        <a href="#ui">Requests page UI</a>
+        <a href="#detail">Request detail UI</a>
+        <a href="#cli">CLI surface</a>
+        <a href="#architecture">Architecture &amp; API</a>
+        <a href="#stages">Staged PRs</a>
+        <a href="#files">File map &amp; deletion</a>
+        <a href="#verification">Verification</a>
+        <a href="#not-building">Not in this pass</a>
+      </nav>
+
+      <main>
+        <section id="decisions">
+          <div class="section-head"><span class="n">01</span><h2>Locked product decisions</h2></div>
+          <p class="intro">These are implementation constraints, not questions to reopen while coding.</p>
+          <div class="rule"><b>Vocabulary</b><p>Only <strong>Working</strong>, <strong>Ready for review</strong>, and <strong>Completed</strong> are request states. “On hold” is a Ready flag. Accepted / Neutral / Rejected is the immutable maintainer assessment.</p></div>
+          <div class="rule"><b>Publication</b><p>The first Ready transition permanently publishes a public request. Returning to Working hides nothing that was already published; it only removes the request from triage.</p></div>
+          <div class="rule"><b>Draft privacy</b><p>A never-published Working request is absent from public and maintainer queues. Author and invitees work normally; maintainers retain exact-link moderation access but drafts are not surfaced or counted.</p></div>
+          <div class="rule"><b>Invitations</b><p>Public requests only, immediate by exact Scope handle, at most 30. They grant branch-push permission—not identity delegation, title editing, assessment, or maintainer powers. No notifications.</p></div>
+          <div class="rule"><b>Limits</b><p>Non-maintainers may have at most three Working and three Ready public requests per repository. Maintainers are unlimited and never use credits.</p></div>
+          <div class="rule"><b>Review invalidation</b><p>Any branch update returns Ready to Working, clears hold, and refunds the current stake atomically. The author must inspect the new package and explicitly mark it Ready again.</p></div>
+          <div class="rule"><b>Completion</b><p>Only maintainers assess. Assessment atomically completes and settles once. Merge implies Accepted. Accepted work may complete without merging and may be merged later without another credit effect.</p></div>
+        </section>
+
+        <section id="lifecycle">
+          <div class="section-head"><span class="n">02</span><h2>One state machine, everywhere</h2></div>
+          <p class="intro">The domain owns every transition and side effect. API handlers, the web app, CLI, and Git receive-pack only ask the domain to perform behavior.</p>
+          <div class="diagram">
+            <svg viewBox="0 0 920 430" role="img" aria-label="Request lifecycle state machine">
+              <defs>
+                <marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0 0L10 5L0 10z" fill="#aeb4bf"/></marker>
+                <marker id="arrow-warning" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0 0L10 5L0 10z" fill="#8b7044"/></marker>
+                <marker id="arrow-success" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0 0L10 5L0 10z" fill="#4f8561"/></marker>
+              </defs>
+              <rect class="node work" x="42" y="137" width="220" height="112" rx="10"/>
+              <text x="152" y="178" text-anchor="middle" font-size="18" font-weight="700">WORKING</text>
+              <text class="sub" x="152" y="202" text-anchor="middle">private until first Ready</text>
+              <text class="sub" x="152" y="221" text-anchor="middle">no stake · not in triage</text>
+
+              <rect class="node ready" x="350" y="137" width="220" height="112" rx="10"/>
+              <text x="460" y="178" text-anchor="middle" font-size="18" font-weight="700">READY</text>
+              <text class="sub" x="460" y="202" text-anchor="middle">public · stake held</text>
+              <text class="sub" x="460" y="221" text-anchor="middle">ranked in maintainer queue</text>
+
+              <rect class="node done" x="660" y="137" width="220" height="112" rx="10"/>
+              <text x="770" y="178" text-anchor="middle" font-size="18" font-weight="700">COMPLETED</text>
+              <text class="sub" x="770" y="202" text-anchor="middle">immutable assessment</text>
+              <text class="sub" x="770" y="221" text-anchor="middle">public history if published</text>
+
+              <rect class="node hold" x="390" y="30" width="140" height="52" rx="26"/>
+              <text x="460" y="61" text-anchor="middle" font-size="13">ON HOLD flag</text>
+
+              <path class="edge" d="M262 166 C304 166 307 166 350 166"/>
+              <text class="sub" x="306" y="148" text-anchor="middle">author: Ready + stake</text>
+              <path class="edge return" d="M350 220 C307 220 304 220 262 220"/>
+              <text class="sub" x="306" y="252" text-anchor="middle">withdraw / push / changes</text>
+              <path class="edge complete" d="M570 193 L660 193"/>
+              <text class="sub" x="615" y="176" text-anchor="middle">assess or merge</text>
+              <path class="edge" d="M460 137 L460 83"/>
+              <path class="edge" d="M490 83 L490 137"/>
+
+              <path class="edge" d="M152 249 L152 328"/>
+              <rect class="node" x="68" y="328" width="168" height="52" rx="9"/>
+              <text x="152" y="358" text-anchor="middle" font-size="12">Close / delete quietly</text>
+              <text class="sub" x="152" y="401" text-anchor="middle">Never published → never enters public history</text>
+
+              <path class="edge complete" d="M770 249 L770 328"/>
+              <rect class="node done" x="685" y="328" width="170" height="52" rx="9"/>
+              <text x="770" y="351" text-anchor="middle" font-size="12">Accepted, maybe merged</text>
+              <text class="sub" x="770" y="368" text-anchor="middle">later merge = no settlement</text>
+            </svg>
+          </div>
+          <p class="caption">Hold never creates a fourth state. A maintainer push while held still follows the same invalidation path: Working + refund + hold cleared.</p>
+        </section>
+
+        <section id="access">
+          <div class="section-head"><span class="n">03</span><h2>Visibility and authority are separate</h2></div>
+          <p class="intro">Reading, discussing, pushing, governing, and assessing are distinct permissions. The current “authenticated public user can push” shortcut is removed.</p>
+          <div class="diagram">
+            <table class="matrix">
+              <thead><tr><th>Actor</th><th>Read never-published Working</th><th>Read published</th><th>Discuss public</th><th>Push branch</th><th>Manage invitees</th><th>Hold / assess</th></tr></thead>
+              <tbody>
+                <tr><td><strong>Author</strong></td><td class="yes">Yes</td><td class="yes">Yes</td><td class="yes">Yes</td><td class="yes">Yes, unless held/completed</td><td class="yes">Yes</td><td class="no">No</td></tr>
+                <tr><td><strong>Explicit invitee</strong></td><td class="yes">Yes</td><td class="yes">Yes</td><td class="yes">Yes</td><td class="yes">Yes, unless held/completed</td><td class="conditional">Leave self only</td><td class="no">No</td></tr>
+                <tr><td><strong>Signed-in public user</strong></td><td class="no">No</td><td class="yes">Yes</td><td class="yes">Yes</td><td class="no">No</td><td class="no">No</td><td class="no">No</td></tr>
+                <tr><td><strong>Maintainer</strong></td><td class="conditional">Exact link only</td><td class="yes">Yes</td><td class="yes">Yes</td><td class="yes">Yes</td><td class="yes">Add / remove</td><td class="yes">Yes</td></tr>
+                <tr><td><strong>Anonymous</strong></td><td class="no">No</td><td class="yes">Public only</td><td class="no">No</td><td class="no">No</td><td class="no">No</td><td class="no">No</td></tr>
+              </tbody>
+            </table>
+          </div>
+          <p class="caption">Private requests remain maintainer-scoped and do not support public invitees. Every mutation re-checks authority server-side; UI visibility is never authorization.</p>
+        </section>
+
+        <section id="credits">
+          <div class="section-head"><span class="n">04</span><h2>Credits create the queue order</h2></div>
+          <p class="intro">The author chooses confidence. The maintainer sees the signal. Ledger entries make every debit, refund, reward, and burn auditable.</p>
+          <div class="diagram">
+            <svg viewBox="0 0 920 290" role="img" aria-label="Credit settlement outcomes">
+              <defs>
+                <marker id="credit-arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0 0L10 5L0 10z" fill="#aeb4bf"/></marker>
+              </defs>
+              <rect class="node ready" x="30" y="91" width="190" height="92" rx="10"/>
+              <text x="125" y="123" text-anchor="middle" font-size="15" font-weight="700">READY</text>
+              <text class="sub" x="125" y="147" text-anchor="middle">debit author 1–25</text>
+              <text class="sub" x="125" y="166" text-anchor="middle">100 starter credits</text>
+              <path d="M220 137L310 137" stroke="#aeb4bf" fill="none" stroke-width="1.5" marker-end="url(#credit-arrow)"/>
+
+              <rect class="node done" x="310" y="20" width="180" height="70" rx="9"/>
+              <text x="400" y="49" text-anchor="middle" font-size="13" font-weight="700">ACCEPTED</text>
+              <text class="sub" x="400" y="70" text-anchor="middle">refund stake + equal reward</text>
+              <rect class="node" x="310" y="110" width="180" height="70" rx="9"/>
+              <text x="400" y="139" text-anchor="middle" font-size="13" font-weight="700">NEUTRAL</text>
+              <text class="sub" x="400" y="160" text-anchor="middle">full refund · optional note</text>
+              <rect x="310" y="200" width="180" height="70" rx="9" fill="var(--danger-soft)" stroke="var(--danger)" stroke-width="1.5"/>
+              <text x="400" y="229" text-anchor="middle" font-size="13" font-weight="700">REJECTED</text>
+              <text class="sub" x="400" y="250" text-anchor="middle">burn stake · reason required</text>
+
+              <path d="M490 55L585 55" stroke="#aeb4bf" fill="none" stroke-width="1.5" marker-end="url(#credit-arrow)"/>
+              <path d="M490 145L585 145" stroke="#aeb4bf" fill="none" stroke-width="1.5" marker-end="url(#credit-arrow)"/>
+              <path d="M490 235L585 235" stroke="#aeb4bf" fill="none" stroke-width="1.5" marker-end="url(#credit-arrow)"/>
+              <rect class="node" x="585" y="19" width="300" height="252" rx="10"/>
+              <text x="610" y="51" font-size="13" font-weight="700">Public signal</text>
+              <text class="sub" x="610" y="74">current stake + prior stake/refund cycles</text>
+              <text x="610" y="112" font-size="13" font-weight="700">Private account data</text>
+              <text class="sub" x="610" y="135">remaining total credit balance</text>
+              <text x="610" y="173" font-size="13" font-weight="700">Triage sort</text>
+              <text class="sub" x="610" y="196">1. stake DESC</text>
+              <text class="sub" x="610" y="216">2. ready_at ASC (longest waiting)</text>
+              <text class="sub" x="610" y="236">3. request id ASC (stable)</text>
+            </svg>
+          </div>
+          <p class="caption">Leaving review voluntarily, a branch push, or “Request changes” refunds in the same transaction that returns the request to Working. Settlement can run only once.</p>
+        </section>
+
+        <section id="ui">
+          <div class="section-head"><span class="n">05</span><h2>Requests page: three quiet sections</h2></div>
+          <p class="intro">No dashboard cards and no global inbox. Use the repository’s existing row language, with stronger information order and minimal chrome.</p>
+          <div class="ui-window">
+            <div class="ui-chrome"><i></i><i></i><i></i></div>
+            <div class="ui-body">
+              <div class="ui-title">
+                <div><h3>Requests</h3><p>3 ready for review in scope/scope-vcs</p></div>
+                <span class="pill">CLI-created</span>
+              </div>
+
+              <div class="ui-group">
+                <div class="ui-group-head"><h4>Your work</h4><span>2 working · 1 ready</span></div>
+                <div class="request-row">
+                  <div><strong>Make request refs atomic</strong><small>working · private draft · updated 8m ago</small></div>
+                  <div class="request-meta"><span class="pill">you</span><span>→</span></div>
+                </div>
+                <div class="request-row">
+                  <div><strong>Reduce projection memory</strong><small>ready · public · waiting 2h</small></div>
+                  <div class="request-meta"><span class="pill stake">◆ 18</span><span>→</span></div>
+                </div>
+              </div>
+
+              <div class="ui-group">
+                <div class="ui-group-head"><h4>Ready for review</h4><span>highest stake first</span></div>
+                <div class="request-row">
+                  <div><strong>Harden request ref authorization</strong><small>@mira · ready 19h ago · 4 discussions</small></div>
+                  <div class="request-meta"><span class="pill hold">On hold</span><span class="pill stake">◆ 25</span><span>→</span></div>
+                </div>
+                <div class="request-row">
+                  <div><strong>Make request refs atomic</strong><small>@devon · ready 2d ago · 1 discussion</small></div>
+                  <div class="request-meta"><span class="pill stake">◆ 18</span><span>→</span></div>
+                </div>
+                <div class="request-row">
+                  <div><strong>Document clone recovery</strong><small>@noa · ready 3d ago · no discussion</small></div>
+                  <div class="request-meta"><span class="pill stake">◆ 7</span><span>→</span></div>
+                </div>
+              </div>
+
+              <div class="ui-group">
+                <div class="ui-group-head"><h4>Completed</h4><span>newest completion first</span></div>
+                <div class="request-row">
+                  <div><strong>Remove redundant auth probe</strong><small>@sloane · completed yesterday · merged</small></div>
+                  <div class="request-meta"><span class="pill good">Accepted</span><span>→</span></div>
+                </div>
+              </div>
+            </div>
+          </div>
+          <div class="rule"><b>Your work</b><p>Only requests involving the signed-in user as author or invitee. Never-published Working drafts appear here and nowhere else. Maintainers do not get every draft in this section.</p></div>
+          <div class="rule"><b>Ready for review</b><p>All public Ready requests, ordered by stake, ready age, then ID. Hold is a visible treatment on the row, not a separate list.</p></div>
+          <div class="rule"><b>Completed</b><p>Public completed history with Accepted / Neutral / Rejected and merged status; maintainers also see private completed requests. Never-published closed drafts never appear.</p></div>
+          <div class="rule"><b>Search &amp; pagination</b><p>Search public Ready and Completed title/description server-side. Each section has its own cursor; do not page one mixed feed and re-sort in the browser. V1 creates no duplicate links or subtype.</p></div>
+          <div class="rule"><b>Repository count</b><p>Replace “open requests” with “ready for review.” Hidden Working requests must never leak through repository counts.</p></div>
+        </section>
+
+        <section id="detail">
+          <div class="section-head"><span class="n">06</span><h2>Request detail: work in the center, governance at the edge</h2></div>
+          <p class="intro">The existing diff/discussion workbench stays central. Lifecycle, credits, invitees, and maintainer actions sit in the header and context rail.</p>
+          <div class="mock-grid">
+            <div class="ui-window">
+              <div class="ui-chrome"><i></i><i></i><i></i></div>
+              <div class="ui-body">
+                <div class="detail-head">
+                  <div><span class="pill hold">Ready · On hold</span></div>
+                  <h3 style="margin-top:10px">Harden request ref authorization</h3>
+                  <p>req_7f2a · @mira · public · 94ab7c1</p>
+                  <div class="detail-actions">
+                    <span class="button warn">Release hold</span>
+                    <span class="button">Request changes</span>
+                    <span class="button">Assess…</span>
+                    <span class="button primary">Merge</span>
+                  </div>
+                </div>
+                <div class="timeline">
+                  <h3>Review package</h3>
+                  <div class="timeline-row"><i></i><span><strong>Branch update</strong><br><span style="color:var(--muted)">12 files · +184 −73</span></span><time>19h</time></div>
+                  <div class="timeline-row"><i></i><span><strong>Ready for review</strong><br><span style="color:var(--muted)">25 credits staked by @mira</span></span><time>19h</time></div>
+                  <div class="timeline-row"><i></i><span><strong>Maintainer review began</strong><br><span style="color:var(--muted)">Held by maintainer group</span></span><time>14m</time></div>
+                  <div class="timeline-row"><i></i><span><strong>Discussion</strong><br><span style="color:var(--muted)">Any signed-in user can add useful context</span></span><time>now</time></div>
+                </div>
+              </div>
+            </div>
+            <aside class="ui-window rail">
+              <div class="rail-section"><h4>Credits</h4><p><span class="pill stake">◆ 25 staked</span></p><p style="color:var(--muted)">Accepted: return 25 + reward 25</p></div>
+              <div class="rail-section"><h4>Invitees · 2 / 30</h4><div class="handle"><span>@devon</span><span>push · remove</span></div><div class="handle"><span>@noa</span><span>push · remove</span></div><p><span class="button">Add exact handle</span></p></div>
+              <div class="rail-section"><h4>Git</h4><p class="mono">origin/harden-request-refs</p><p class="mono" style="color:var(--muted)">base 1282f1a<br>head 94ab7c1</p></div>
+              <div class="rail-section"><h4>Assessment</h4><p>Accepted · Neutral · Rejected</p><p style="color:var(--muted)">Rejection requires a written reason. Final assessment is immutable.</p></div>
+            </aside>
+          </div>
+          <div class="rule"><b>Working header</b><p>Author sees “Ready for review” with a 1–25 stake control, current private balance, and publication warning. Invitees see push access and “Leave request.”</p></div>
+          <div class="rule"><b>Ready header</b><p>Author sees “Return to Working” unless held. Maintainers see Hold, Request changes, Assess, and Merge. During hold, author/invitee mutation controls are disabled with one plain explanation.</p></div>
+          <div class="rule"><b>Assessment dialog</b><p>Three large outcome choices with exact settlement preview. Accepted/Neutral note optional; Rejected note required. Merge confirmation states “This completes as Accepted.”</p></div>
+          <div class="rule"><b>Mobile</b><p>Actions collapse into one sticky bottom action bar; context rail becomes an inline “Request details” section below the header. Rows wrap metadata under the title without horizontal scrolling.</p></div>
+        </section>
+
+        <section id="cli">
+          <div class="section-head"><span class="n">07</span><h2>CLI: one vocabulary, explicit effects</h2></div>
+          <p class="intro">The CLI should say exactly what the server will do before a consequential action, then print the new state and credit result. Existing request branch discovery remains.</p>
+          <div class="cli-grid">
+            <div class="cli">
+              <div class="cli-head">Contributor flow</div>
+              <pre><span class="prompt">$</span> scope request start harden-request-refs
+<span class="ok">Working request created</span>
+Visible to you. Invite collaborators by exact handle.
+
+<span class="prompt">$</span> scope request invite @devon
+<span class="ok">@devon can now push this request branch</span>
+
+<span class="prompt">$</span> scope request push
+<span class="out">Pushed 94ab7c1 · state remains Working</span>
+
+<span class="prompt">$</span> scope request ready --stake 25
+<span class="warn">This publishes the request and holds 25 credits.</span>
+Continue? [y/N] y
+<span class="ok">Ready for review · 25 credits staked</span>
+
+<span class="prompt">$</span> scope request working
+<span class="ok">Returned to Working · 25 credits refunded</span></pre>
+            </div>
+            <div class="cli">
+              <div class="cli-head">Maintainer flow</div>
+              <pre><span class="prompt">$</span> scope request status
+<span class="out">STAKE  WAIT   STATE        REQUEST
+25     19h    on-hold      harden-request-refs
+18     2d     ready        make-refs-atomic
+7      3d     ready        clone-recovery</span>
+
+<span class="prompt">$</span> scope request hold --request harden-request-refs
+<span class="ok">Review hold started</span>
+
+<span class="prompt">$</span> scope request request-changes
+<span class="ok">Returned to Working · hold cleared · 25 refunded</span>
+
+<span class="prompt">$</span> scope request assess rejected
+error: --message is required for rejected assessment
+
+<span class="prompt">$</span> scope request merge --yes
+<span class="ok">Merged · Completed · Accepted</span></pre>
+            </div>
+          </div>
+          <div class="contract">
+            <div class="verb">start / push / status / discuss</div><div><strong>Keep, adapt wording.</strong><p>Start creates Working; push uses invitee-aware Git authorization and may invalidate Ready.</p></div>
+            <div class="verb">ready --stake N</div><div><strong>Replace submit.</strong><p>Author only. Public non-maintainer stake 1–25; maintainer request omits stake. Warns on irreversible first publication.</p></div>
+            <div class="verb">working</div><div><strong>Author exits review.</strong><p>Rejected while held. Refund and state change are atomic.</p></div>
+            <div class="verb">invite / uninvite / leave</div><div><strong>Manage branch collaborators.</strong><p>Exact handle, public requests only, hard cap 30. Author/maintainer remove; invitee leaves self.</p></div>
+            <div class="verb">scope request edit --title / --description-file</div><div><strong>Edit request identity.</strong><p>Author or maintainer can change title/description. Editing Ready invalidates review: Working + refund + hold cleared.</p></div>
+            <div class="verb">hold / unhold</div><div><strong>Maintainer flag.</strong><p>No owner, expiry, or notification. Locks author/invitee mutations while present.</p></div>
+            <div class="verb">request-changes</div><div><strong>Maintainer returns to Working.</strong><p>No required message; optional discussion remains separate.</p></div>
+            <div class="verb">assess &lt;outcome&gt;</div><div><strong>Replace resolve.</strong><p>Maintainer only; Rejected requires <code>--message</code>. Prints exact settlement.</p></div>
+            <div class="verb">merge</div><div><strong>Keep, redefine completion.</strong><p>Ready merge assesses Accepted atomically. Later merge of Accepted completed work has no credit effect.</p></div>
+            <div class="verb">close</div><div><strong>Replace delete/withdraw wording.</strong><p>Author closes only from Working. Never-published work is hard-deleted; previously published work becomes Completed without assessment and stays in public history.</p></div>
+          </div>
+        </section>
+
+        <section id="architecture">
+          <div class="section-head"><span class="n">08</span><h2>Architecture: behavior in the center</h2></div>
+          <p class="intro">The plan keeps one source of truth for rules, one atomic persistence boundary for side effects, and thin delivery layers.</p>
+          <div class="diagram">
+            <svg viewBox="0 0 920 390" role="img" aria-label="Request architecture layers">
+              <defs><marker id="arch-arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0 0L10 5L0 10z" fill="#aeb4bf"/></marker></defs>
+              <rect class="node" x="28" y="35" width="185" height="72" rx="9"/><text x="120" y="66" text-anchor="middle" font-size="13" font-weight="700">Web + CLI</text><text class="sub" x="120" y="86" text-anchor="middle">intent · rendering · prompts</text>
+              <rect class="node" x="28" y="158" width="185" height="72" rx="9"/><text x="120" y="189" text-anchor="middle" font-size="13" font-weight="700">HTTP + Git transport</text><text class="sub" x="120" y="209" text-anchor="middle">parse · authenticate · map</text>
+              <rect class="node ready" x="315" y="94" width="290" height="170" rx="12"/><text x="460" y="131" text-anchor="middle" font-size="15" font-weight="700">Request domain</text><text class="sub" x="460" y="157" text-anchor="middle">lifecycle · access · review · credits</text><text class="sub" x="460" y="182" text-anchor="middle">caps · publication · settlement</text><text class="sub" x="460" y="207" text-anchor="middle">returns mutation + required side effects</text><text class="sub" x="460" y="232" text-anchor="middle">no database or transport knowledge</text>
+              <rect class="node" x="705" y="34" width="185" height="72" rx="9"/><text x="798" y="65" text-anchor="middle" font-size="13" font-weight="700">Request aggregate</text><text class="sub" x="798" y="85" text-anchor="middle">current queryable state</text>
+              <rect class="node" x="705" y="139" width="185" height="72" rx="9"/><text x="798" y="170" text-anchor="middle" font-size="13" font-weight="700">Append-only facts</text><text class="sub" x="798" y="190" text-anchor="middle">events + credit ledger</text>
+              <rect class="node" x="705" y="244" width="185" height="72" rx="9"/><text x="798" y="275" text-anchor="middle" font-size="13" font-weight="700">Git objects / refs</text><text class="sub" x="798" y="295" text-anchor="middle">branch snapshot + CAS</text>
+              <path d="M213 71C260 71 270 125 315 142" fill="none" stroke="#aeb4bf" stroke-width="1.5" marker-end="url(#arch-arrow)"/>
+              <path d="M213 194L315 194" fill="none" stroke="#aeb4bf" stroke-width="1.5" marker-end="url(#arch-arrow)"/>
+              <path d="M605 142C650 125 660 70 705 70" fill="none" stroke="#aeb4bf" stroke-width="1.5" marker-end="url(#arch-arrow)"/>
+              <path d="M605 179L705 175" fill="none" stroke="#aeb4bf" stroke-width="1.5" marker-end="url(#arch-arrow)"/>
+              <path d="M605 216C650 227 660 280 705 280" fill="none" stroke="#aeb4bf" stroke-width="1.5" marker-end="url(#arch-arrow)"/>
+              <rect class="node done" x="314" y="319" width="292" height="48" rx="24"/><text x="460" y="348" text-anchor="middle" font-size="12">one DB transaction + aggregate locks</text>
+            </svg>
+          </div>
+
+          <h3 style="margin-top:28px">Proposed HTTP contract</h3>
+          <div class="contract">
+            <div class="verb">POST …/ready</div><div><strong>Enter review.</strong><p><code>{ stake_credits }</code>; enforces cap, balance, author, no hold, publication, debit.</p></div>
+            <div class="verb">POST …/working</div><div><strong>Author leaves review.</strong><p>Refunds current stake and clears ready timestamp; forbidden while held.</p></div>
+            <div class="verb">POST …/request-changes</div><div><strong>Maintainer leaves review.</strong><p>Same domain transition, allowed while held, message optional.</p></div>
+            <div class="verb">PUT/DELETE …/invitees</div><div><strong>Add/remove exact user.</strong><p>Body uses handle for add; response returns canonical user summary and permissions.</p></div>
+            <div class="verb">DELETE …/invitees/me</div><div><strong>Invitee leaves.</strong><p>Never lets author remove self or silently transfer authorship.</p></div>
+            <div class="verb">PUT/DELETE …/hold</div><div><strong>Toggle group hold.</strong><p>Maintainer only; idempotent response, no notification side effect.</p></div>
+            <div class="verb">POST …/assessment</div><div><strong>Complete.</strong><p><code>{ outcome, body? }</code>; validates rejection body and settles in one transaction.</p></div>
+            <div class="verb">POST …/merge</div><div><strong>Merge.</strong><p>Ready → Accepted + Completed + merge, or already-Accepted Completed → merge only.</p></div>
+          </div>
+        </section>
+
+        <section id="stages">
+          <div class="section-head"><span class="n">09</span><h2>Six stacked PRs</h2></div>
+          <p class="intro">Each PR targets the previous one, stays green, deletes the concepts it replaces, and has a focused review question.</p>
+          <div class="prs">
+            <div class="pr"><div class="pr-mark">PR 1</div><div><h3>Destructive lifecycle reset</h3><p>Replace old states, outcomes, event payloads, schema columns, entities, and generated contracts. Add <code>first_ready_at</code> as the irreversible publication marker, <code>ready_at</code>, hold fields, completion/merge facts, and the three-outcome assessment. Mechanically update outer consumers so the stack compiles, but keep the web surface read-only.</p><div class="tags"><span class="tag">scope-core domain</span><span class="tag">schema reset</span><span class="tag">API contract</span><span class="tag">delete old enums</span></div></div></div>
+            <div class="pr"><div class="pr-mark">PR 2</div><div><h3>Review transactions and credit ledger</h3><p>Implement Ready/Working/invalidation/hold/assessment/merge behaviors, 100-credit verified-account grant, 1–25 stake validation, 3 Ready cap, append-only ledger entries, public stake history, and stable queue ordering. Lock request + author credit account in one transaction.</p><div class="tags"><span class="tag">atomic settlement</span><span class="tag">ready projection</span><span class="tag">concurrency tests</span></div></div></div>
+            <div class="pr"><div class="pr-mark">PR 3</div><div><h3>Invitees, privacy, and Git authorization</h3><p>Add request invitee persistence and endpoints, exact-handle resolution, 30-invitee cap, three-Working cap, author/maintainer management, invitee self-removal, draft visibility projection, and receive-pack authorization. Replace the current any-authenticated-public-user push rule.</p><div class="tags"><span class="tag">request invitees</span><span class="tag">visibility</span><span class="tag">Git request refs</span><span class="tag">security tests</span></div></div></div>
+            <div class="pr"><div class="pr-mark">PR 4</div><div><h3>CLI lifecycle</h3><p>Ship the exact command vocabulary above, confirmation and settlement output, maintainer list ordering, invitee management, and actionable errors. Delete Submit, NeedsResponse, Respond, Resolve, and the old disposition flags/tests.</p><div class="tags"><span class="tag">clap args</span><span class="tag">remote client</span><span class="tag">rendering</span><span class="tag">CLI integration</span></div></div></div>
+            <div class="pr"><div class="pr-mark">PR 5</div><div><h3>Web attention queue</h3><p>Replace the flat request list with Your work / Ready for review / Completed projections, stake-first order, hold treatment, public title/description search, mobile rows, new empty states, and pagination per section. Keep row-based layout; add no dashboard cards.</p><div class="tags"><span class="tag">requests page</span><span class="tag">list API</span><span class="tag">responsive</span><span class="tag">accessibility</span></div></div></div>
+            <div class="pr"><div class="pr-mark">PR 6</div><div><h3>Detail controls, activity, and closeout</h3><p>Build Ready/stake, invitee management, hold, Request changes, assessment, merge, close controls, public stake-cycle history, held lock explanations, and mobile action bar. Reap obsolete rail actions and fixtures; finish Rust, API, CLI, web, Git, and browser workflow coverage.</p><div class="tags"><span class="tag">request detail</span><span class="tag">activity</span><span class="tag">E2E</span><span class="tag">dead-code audit</span></div></div></div>
+          </div>
+        </section>
+
+        <section id="files">
+          <div class="section-head"><span class="n">10</span><h2>File map and deletion ledger</h2></div>
+          <p class="intro">Representative ownership map from the current repository. Exact files may split as behavior ownership becomes clearer; broad catch-all files should shrink.</p>
+          <details open><summary><strong>Domain model and behavior</strong><code>crates/scope-core/src/domain/requests*</code></summary><div class="detail">Replace <code>RequestState::{Submitted, NeedsResponse, Resolved, Withdrawn}</code> with Ready/Completed; replace seven dispositions and <code>ResolutionDisposition</code> with Accepted/Neutral/Rejected; redesign submission/settlement/policy around lifecycle, review, access, and credits. <span class="delete">Delete needs-response/respond transitions, subtype settlement mapping, and compatibility names.</span></div></details>
+          <details><summary><strong>Persistence</strong><code>crates/scope-core/src/db/{schema.sql,schema.rs,requests.rs,request_rows.rs,entities/requests.rs}</code></summary><div class="detail">Destructively rewrite request columns and indexes; add invitee rows and reset ordering; keep current-state fields queryable and event/credit facts append-only. Enforce admission caps under the repository lock; safety invalidation may temporarily exceed the Working cap so stale code never stays Ready. Split transaction helpers when lifecycle, access, and settlement ownership becomes clearer. No migration adapter, data backfill, dual-read, or old enum decoder.</div></details>
+          <details><summary><strong>Contracts and HTTP</strong><code>crates/scope-api-contract · api/src/http/requests.rs · responses/requests.rs</code></summary><div class="detail">Replace old route constants, payloads, permission booleans, resolution options, and generated TypeScript exports with capability fields for Ready/Working/invite/hold/assess/close. Keep handlers thin and move validation into domain commands.</div></details>
+          <details><summary><strong>Git request refs and fetch privacy</strong><code>api/src/git/request_refs/access.rs · api/src/git/upload.rs · api/tests/workflows/git_request_refs*</code></summary><div class="detail">Gate receive-pack by author, explicit invitee, or maintainer and held/completed state; re-check at the final ref mutation boundary. Hide never-published Working branches from upload-pack. A successful revision that invalidates Ready must refund and clear hold in the same authoritative mutation; update the public-safety tests that currently permit any public contributor push.</div></details>
+          <details><summary><strong>CLI</strong><code>cli/src/request/{args.rs,local.rs,remote.rs,render.rs} · cli/src/request.rs</code></summary><div class="detail">Add the new verbs and outputs. <span class="delete">Delete <code>Submit</code>, <code>NeedsResponse</code>, <code>Respond</code>, <code>Resolve</code>, <code>RequestResolveDisposition</code>, stake-on-first-submit wording, and their tests.</span> Preserve branch/context discovery and discussion commands.</div></details>
+          <details><summary><strong>Web list</strong><code>web/src/features/requests/{requests-page.tsx,request-list-model.ts,request-labels.ts}</code></summary><div class="detail">Build three server-backed sections and row renderers. Replace flat page accumulation, old state labels, mergeability-first row emphasis, and a single undifferentiated count. Search only public title/description in v1.</div></details>
+          <details><summary><strong>Web detail</strong><code>request-detail-page.tsx · request-context-rail.tsx · use-request-actions.ts · request-overflow-menu.tsx</code></summary><div class="detail">Add lifecycle header/actions, invitee manager, assessment dialog, hold treatment, and stake history. <span class="delete">Delete needs-response and respond forms, resolve-subtype selector, old withdraw copy, and settlement preview branches tied to removed subtypes.</span> Retain discussions, description editing, diff workbench, and history drawer.</div></details>
+          <details><summary><strong>Account grant</strong><code>crates/scope-core/src/db/clerk_users.rs</code></summary><div class="detail">Create the deterministic 100-credit starter ledger entry in the same transaction that resolves a newly verified public account. Never expose total balance through public request read models.</div></details>
+          <details><summary><strong>Other visibility consumers</strong><code>request_review.rs · request_discussions.rs · db/request_discussions.rs · http/repos.rs · repo_collaboration.rs</code></summary><div class="detail">Route every list, count, review-file, discussion, exact-link, and repository response through one viewer-aware policy. Unauthorized hidden-draft exact access returns 404. Working pushes create no review package; Ready freezes the package the maintainer evaluates.</div></details>
+          <details><summary><strong>Dead backend helpers</strong><code>request_stake_debit_entry_for_request_id · MetadataStore::merge_request</code></summary><div class="detail"><span class="delete">Delete the single-stake lookup that cannot represent repeat Ready cycles and the unused merge wrapper in db/requests.rs.</span> Keep repository-atomic merge and append-only facts.</div></details>
+          <details><summary><strong>Fixtures and generated types</strong><code>dev/api/seed/request_* · api/src/http/type_exports.rs · web/src/api/types.generated.ts</code></summary><div class="detail">Regenerate once per contract change and replace seed scenarios with Working/private, Ready/staked, Ready/held, Completed/Accepted, Completed/Neutral, and Completed/Rejected. Delete all obsolete subtype snapshots and generated declarations in the same PR that changes the source type.</div></details>
+        </section>
+
+        <section id="verification">
+          <div class="section-head"><span class="n">11</span><h2>Verification and invariants</h2></div>
+          <p class="intro">Tests protect money, privacy, and Git authorization first; UI snapshots alone are insufficient.</p>
+          <div class="checks">
+            <div class="check">All domain transitions table-tested for actor × state × hold × publication</div>
+            <div class="check">Stake debit/refund/reward/burn and state change commit or roll back together</div>
+            <div class="check">Two concurrent Ready/assessment/invite operations cannot exceed caps or settle twice</div>
+            <div class="check">Never-published drafts cannot leak through list, count, search, activity, or Git fetch</div>
+            <div class="check">Any branch update from Ready returns Working, refunds once, and clears hold</div>
+            <div class="check">Only author/invitee/maintainer can push; hold blocks author and invitee</div>
+            <div class="check">Rejected assessment rejects empty/whitespace justification</div>
+            <div class="check">Merge from Ready completes Accepted once; later accepted merge pays nothing</div>
+            <div class="check">Ready sort is stake DESC, ready_at ASC, ID ASC across pagination</div>
+            <div class="check">Maintainer requests are unlimited and never create credit ledger effects</div>
+            <div class="check">CLI output matches API state and shows exact credit consequence</div>
+            <div class="check">Browser tests cover desktop/mobile layout, keyboard focus, dialogs, and held locks</div>
+          </div>
+          <h3 style="margin-top:30px">Merge gate for every PR</h3>
+          <div class="rule"><b>Rust</b><p><code>cargo fmt --check</code>, workspace clippy, unit tests, DB/API workflow tests, and targeted Git receive-pack tests.</p></div>
+          <div class="rule"><b>CLI</b><p>Command parsing, confirmation, request-context discovery, server error rendering, and end-to-end request workflows.</p></div>
+          <div class="rule"><b>Web</b><p>Type generation clean, lint/typecheck/unit tests, then browser verification in the running app at desktop and mobile widths.</p></div>
+          <div class="rule"><b>Closeout</b><p>Run a dead-code/search audit for every removed state, route, permission, command, and disposition before declaring the stack complete.</p></div>
+        </section>
+
+        <section id="risks">
+          <div class="section-head"><span class="n">12</span><h2>Risks that change implementation</h2></div>
+          <div class="risks">
+            <div class="risk"><div><span class="level high">High</span></div><div><strong>Credit/state split-brain</strong><br>Process crashes after a refund but before state update.</div><div>One transaction, aggregate locks, deterministic ledger IDs, uniqueness constraints, and retry tests.</div></div>
+            <div class="risk"><div><span class="level high">High</span></div><div><strong>Draft privacy leak</strong><br>Counts, search, or Git upload-pack expose hidden Working requests.</div><div>Central visibility predicate reused by projections and Git reads; negative integration tests for every surface.</div></div>
+            <div class="risk"><div><span class="level high">High</span></div><div><strong>Authorization race</strong><br>Invitee removal or hold races an in-flight Git push.</div><div>Re-check authority inside the ref mutation transaction/CAS boundary, not only at advertisement time.</div></div>
+            <div class="risk"><div><span class="level med">Medium</span></div><div><strong>Section pagination drift</strong><br>Stake/order changes duplicate or skip rows.</div><div>Cursor contains sort tuple and snapshot/version semantics; stable ID tie-breaker; projection tests.</div></div>
+            <div class="risk"><div><span class="level med">Medium</span></div><div><strong>Large PR 1</strong><br>Destructive vocabulary touches all packages.</div><div>Keep its review question narrow, use generated-type checks, and stack later UX work instead of mixing polish into the reset.</div></div>
+          </div>
+        </section>
+
+        <section id="not-building">
+          <div class="section-head"><span class="n">13</span><h2>Deliberately not in this pass</h2></div>
+          <p class="intro">These are deferred product ideas, not half-built extension points.</p>
+          <div class="non-goals">
+            <div class="non-goal">No notifications, bell, email, reply alerts, or invitation acceptance flow</div>
+            <div class="non-goal">No credit transfer, recovery, purchase, anti-sybil, or abuse system</div>
+            <div class="non-goal">No drag ordering, personal queue order, assignment, reviewer ownership, or hold expiry</div>
+            <div class="non-goal">No duplicate disposition, structured duplicate links, or outcome subtypes</div>
+            <div class="non-goal">No per-user global attention page; queue stays repository-specific</div>
+            <div class="non-goal">No title/description heuristics for stake; author selects within 1–25</div>
+            <div class="non-goal">No assessment appeals or mutable final assessment</div>
+            <div class="non-goal">No backwards compatibility, old-state decoder, migration shim, or feature flag</div>
+          </div>
+        </section>
+      </main>
+    </div>
+  </div>
+  <script>
+    document.getElementById('theme').addEventListener('click', function () {
+      var dark = document.documentElement.classList.toggle('dark');
+      localStorage.setItem('scope-plan-theme', dark ? 'dark' : 'light');
+    });
+  </script>
+</body>
+</html>

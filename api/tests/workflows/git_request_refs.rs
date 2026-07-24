@@ -1,9 +1,7 @@
 use super::*;
 use crate::domain::requests::{
-    GrantUserCreditsInput, MarkRequestNeedsResponseInput, Request, RequestActorRole,
-    RequestAudience, RequestState, StartRequestInput, SubmitRequestInput,
+    Request, RequestActorRole, RequestAudience, RequestState, StartRequestInput,
 };
-use crate::repo_events::{RepoChangeEvent, RepoChangeKind};
 use tokio::sync::broadcast::error::TryRecvError;
 
 const PUBLIC_SUBJECT: &str = "user_public";
@@ -53,8 +51,11 @@ async fn closed_public_request_remains_fetchable_as_read_only_history() {
     state
         .metadata
         .mutate_request_for_tests(REQUEST_ID, |request| {
-            request.state = RequestState::Resolved;
-            request.resolved_at_unix = Some(3);
+            request.state = RequestState::Completed;
+            request.first_ready_at_unix = Some(3);
+            request.completed_at_unix = Some(3);
+            request.completed_by_user_id = Some(test_owner_id());
+            request.updated_at_unix = 3;
         })
         .await
         .unwrap();
@@ -109,11 +110,10 @@ async fn public_request_receive_pack_requires_current_repo_read() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn real_git_request_ref_push_records_revision_without_touching_main() {
+async fn working_request_ref_push_replaces_snapshot_without_touching_main() {
     let state = test_state_with_request().await;
     let (source, permissioned_remote, _server, first_request_head) =
-        submitted_request_checkout(&state, "request-ref-push").await;
-    let mut events = state.repo_events.subscribe(TEST_REPO_ID);
+        request_checkout(&state, "request-ref-push").await;
     push_change(
         &source,
         &permissioned_remote,
@@ -132,13 +132,12 @@ async fn real_git_request_ref_push_records_revision_without_touching_main() {
     assert_eq!(live_file_content(&state, "/request.txt").await, None);
     let request = stored_request(&state, REQUEST_ID).await;
     assert_eq!(request.head_oid, request_head);
-    assert_revision_refresh_events(&mut events, request.activity_version);
     source_blob_bytes(
         state.object_store.as_ref(),
         request.git_snapshot.as_ref().unwrap(),
     )
     .unwrap();
-    assert_eq!(request_event_count(&state).await, 3);
+    assert_eq!(request_event_count(&state).await, 1);
     let store_repo =
         crate::git::storage::request_ref_store_repo_path(&state, TEST_REPO_OWNER, TEST_REPO_NAME);
     let stored_head = git_stdout_text(&store_repo, &["rev-parse", REQUEST_REF], "read request ref")
@@ -160,23 +159,12 @@ async fn real_git_request_ref_push_records_revision_without_touching_main() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn revision_push_reopens_needs_response_and_refreshes_summary() {
+async fn working_push_does_not_create_review_activity() {
     let state = test_state_with_request().await;
     let (source, permissioned_remote, _server, _) =
-        submitted_request_checkout(&state, "request-ref-needs-response").await;
-    let needs_response = state
-        .metadata
-        .mark_request_needs_response(MarkRequestNeedsResponseInput {
-            request_id: REQUEST_ID.to_string(),
-            actor_user_id: test_owner_id(),
-            event_id: "event_needs_response".to_string(),
-            body: "Please revise this request.".to_string(),
-            now_unix: 5,
-        })
-        .await
-        .unwrap();
-    assert_eq!(needs_response.request.state, RequestState::NeedsResponse);
-
+        request_checkout(&state, "request-ref-revision").await;
+    let before = stored_request(&state, REQUEST_ID).await;
+    let before_event_count = request_event_count(&state).await;
     let mut events = state.repo_events.subscribe(TEST_REPO_ID);
     push_change(
         &source,
@@ -189,24 +177,26 @@ async fn revision_push_reopens_needs_response_and_refreshes_summary() {
     .unwrap();
 
     let request = stored_request(&state, REQUEST_ID).await;
-    assert_eq!(request.state, RequestState::Submitted);
+    assert_eq!(request.state, RequestState::Working);
     assert_eq!(request.head_oid, git_head_oid(&source));
-    assert_eq!(
-        request.activity_version,
-        needs_response.request.activity_version + 1
-    );
-    assert_revision_refresh_events(&mut events, request.activity_version);
+    assert_eq!(request.activity_version, before.activity_version);
+    assert_eq!(request_event_count(&state).await, before_event_count);
+    assert!(matches!(events.try_recv(), Err(TryRecvError::Empty)));
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn failed_revision_rolls_back_request_ref_without_publishing_refreshes() {
+async fn ready_revision_rejection_rolls_back_without_publishing_refreshes() {
     let state = test_state_with_request().await;
     let (source, permissioned_remote, _server, first_request_head) =
-        submitted_request_checkout(&state, "request-ref-revision-rollback").await;
+        request_checkout(&state, "request-ref-revision-rollback").await;
     state
         .metadata
         .mutate_request_for_tests(REQUEST_ID, |request| {
-            request.activity_version = i64::MAX as u64;
+            request.state = RequestState::ReadyForReview;
+            request.current_stake_credits = 10;
+            request.first_ready_at_unix = Some(4);
+            request.ready_at_unix = Some(4);
+            request.updated_at_unix = 4;
         })
         .await
         .unwrap();
@@ -237,38 +227,6 @@ async fn failed_revision_rolls_back_request_ref_without_publishing_refreshes() {
     )
     .unwrap();
     assert_eq!(stored_head.trim(), first_request_head);
-    assert!(matches!(events.try_recv(), Err(TryRecvError::Empty)));
-}
-
-fn assert_revision_refresh_events(
-    events: &mut tokio::sync::broadcast::Receiver<RepoChangeEvent>,
-    expected_position: u64,
-) {
-    let summary = events.try_recv().expect("summary refresh event");
-    assert_eq!(summary.repo_id, TEST_REPO_ID);
-    assert_eq!(summary.version, 0);
-    assert!(matches!(
-        summary.kind,
-        RepoChangeKind::RepositoryChanged { ref reason } if reason == "request-revised"
-    ));
-
-    let timeline = events.try_recv().expect("timeline refresh event");
-    assert_eq!(timeline.repo_id, TEST_REPO_ID);
-    assert_eq!(timeline.version, 0);
-    match timeline.kind {
-        RepoChangeKind::RequestTimelineChanged {
-            request_id,
-            discussion_id,
-            through_position,
-            audience,
-        } => {
-            assert_eq!(request_id, REQUEST_ID);
-            assert!(!discussion_id.is_empty());
-            assert_eq!(through_position, expected_position);
-            assert_eq!(audience, RequestAudience::Public);
-        }
-        kind => panic!("expected request timeline event, got {kind:?}"),
-    }
     assert!(matches!(events.try_recv(), Err(TryRecvError::Empty)));
 }
 
@@ -504,16 +462,7 @@ async fn test_state_with_request() -> AppState {
     .unwrap()
     .trim()
     .to_string();
-    state
-        .metadata
-        .grant_user_credits(GrantUserCreditsInput {
-            ledger_entry_id: "ledger_grant".to_string(),
-            user_id: public_user_id(),
-            amount_credits: 20,
-            now_unix: 1,
-        })
-        .await
-        .unwrap();
+
     state
         .metadata
         .start_request(StartRequestInput {
@@ -548,14 +497,25 @@ async fn insert_private_request_for_public_user(state: &AppState) {
             git_snapshot: None,
             title: "Former member request".to_string(),
             description_markdown: String::new(),
-            state: RequestState::Submitted,
+            state: RequestState::Working,
             activity_version: 0,
-            stake_credits: 0,
-            disposition: None,
-            settlement: None,
+            current_stake_credits: 0,
+            first_ready_at_unix: None,
+            ready_at_unix: None,
+            held_at_unix: None,
+            held_by_user_id: None,
+            assessment_outcome: None,
+            assessment_body_markdown: None,
+            assessed_at_unix: None,
+            assessed_by_user_id: None,
+            completed_at_unix: None,
+            completed_by_user_id: None,
+            merged_at_unix: None,
+            merged_by_user_id: None,
+            merged_head_oid: None,
+            merged_main_oid: None,
             created_at_unix: 2,
             updated_at_unix: 2,
-            resolved_at_unix: None,
         })
         .await
         .unwrap();
@@ -613,7 +573,7 @@ async fn request_event_count(state: &AppState) -> usize {
         .len()
 }
 
-async fn submitted_request_checkout(
+async fn request_checkout(
     state: &AppState,
     label: &str,
 ) -> (TempGitRepo, String, TestServer, String) {
@@ -629,19 +589,6 @@ async fn submitted_request_checkout(
     )
     .unwrap();
     let first_request_head = git_head_oid(&source);
-    state
-        .metadata
-        .submit_request(SubmitRequestInput {
-            request_id: REQUEST_ID.to_string(),
-            actor_user_id: public_user_id(),
-            expected_head_oid: first_request_head.clone(),
-            stake_credits: 10,
-            stake_ledger_entry_id: Some("ledger_stake".to_string()),
-            event_id: "event_created".to_string(),
-            now_unix: 4,
-        })
-        .await
-        .unwrap();
     (source, permissioned_remote, server, first_request_head)
 }
 

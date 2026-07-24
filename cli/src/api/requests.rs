@@ -9,31 +9,6 @@ pub struct StartRequestParams<'a> {
     pub audience: RequestAudience,
 }
 
-pub struct SubmitRequestParams<'a> {
-    pub owner: &'a str,
-    pub repo: &'a str,
-    pub request_id: &'a str,
-    pub head_oid: String,
-    pub stake_credits: Option<u32>,
-}
-
-pub struct ResolveRequestParams<'a> {
-    pub owner: &'a str,
-    pub repo: &'a str,
-    pub request_id: &'a str,
-    pub disposition: ResolutionDisposition,
-    pub body: Option<String>,
-}
-
-pub struct MergeRequestParams<'a> {
-    pub owner: &'a str,
-    pub repo: &'a str,
-    pub request_id: &'a str,
-    pub expected_main_oid: String,
-    pub expected_head_oid: String,
-    pub body: Option<String>,
-}
-
 pub struct CreateRequestDiscussionParams<'a> {
     pub owner: &'a str,
     pub repo: &'a str,
@@ -93,14 +68,14 @@ pub fn get_request(
         .context("parse request detail response")
 }
 
-pub fn delete_request(
+pub fn close_request(
     client: &Client,
     api_url: &str,
     session_token: &str,
     owner: &str,
     repo: &str,
     request_id: &str,
-) -> anyhow::Result<RequestDeleteResponse> {
+) -> anyhow::Result<RequestCloseResponse> {
     let response = client
         .delete(format!(
             "{api_url}{}",
@@ -108,13 +83,13 @@ pub fn delete_request(
         ))
         .bearer_auth(session_token)
         .send()
-        .with_context(|| format!("delete request {request_id} for {owner}/{repo}"))?;
-    handle_request_status(response.status(), owner, repo, request_id, "delete request")?;
+        .with_context(|| format!("close request {request_id} for {owner}/{repo}"))?;
+    handle_request_status(response.status(), owner, repo, request_id, "close request")?;
     response
         .error_for_status()
-        .with_context(|| format!("delete request {request_id} for {owner}/{repo}"))?
+        .with_context(|| format!("close request {request_id} for {owner}/{repo}"))?
         .json()
-        .context("parse delete request response")
+        .context("parse close request response")
 }
 
 pub fn start_request(
@@ -149,52 +124,6 @@ pub fn start_request(
         .context("parse start request response")
 }
 
-pub fn submit_request(
-    client: &Client,
-    api_url: &str,
-    session_token: &str,
-    params: SubmitRequestParams<'_>,
-) -> anyhow::Result<RequestMutationResponse> {
-    let response = client
-        .post(format!(
-            "{api_url}{}",
-            scope_api_contract::routes::repo_request_action(
-                params.owner,
-                params.repo,
-                params.request_id,
-                "submit"
-            )
-        ))
-        .bearer_auth(session_token)
-        .json(&SubmitRequestRequest {
-            head_oid: params.head_oid,
-            stake_credits: params.stake_credits,
-        })
-        .send()
-        .with_context(|| {
-            format!(
-                "submit request {} for {}/{}",
-                params.request_id, params.owner, params.repo
-            )
-        })?;
-    handle_repo_request_status(
-        response.status(),
-        params.owner,
-        params.repo,
-        "submit request",
-    )?;
-    response
-        .error_for_status()
-        .with_context(|| {
-            format!(
-                "submit request {} for {}/{}",
-                params.request_id, params.owner, params.repo
-            )
-        })?
-        .json()
-        .context("parse submit request response")
-}
-
 pub fn create_request_discussion(
     client: &Client,
     api_url: &str,
@@ -215,103 +144,6 @@ pub fn create_request_discussion(
         &CreateRequestDiscussionRequest {
             body_markdown: params.body_markdown,
             client_discussion_id: params.client_discussion_id,
-        },
-    )
-}
-
-pub fn mark_request_needs_response(
-    client: &Client,
-    api_url: &str,
-    session_token: &str,
-    owner: &str,
-    repo: &str,
-    request_id: &str,
-    body: String,
-) -> anyhow::Result<RequestMutationResponse> {
-    request_mutation(
-        client,
-        api_url,
-        session_token,
-        RequestMutationEndpoint {
-            owner,
-            repo,
-            request_id,
-            action_path: "needs-response",
-            context: "mark request needs response",
-        },
-        &NeedsResponseRequest { body },
-    )
-}
-
-pub fn respond_to_request(
-    client: &Client,
-    api_url: &str,
-    session_token: &str,
-    owner: &str,
-    repo: &str,
-    request_id: &str,
-    body: Option<String>,
-) -> anyhow::Result<RequestMutationResponse> {
-    request_mutation(
-        client,
-        api_url,
-        session_token,
-        RequestMutationEndpoint {
-            owner,
-            repo,
-            request_id,
-            action_path: "respond",
-            context: "respond to request",
-        },
-        &RespondRequestRequest { body },
-    )
-}
-
-pub fn resolve_request(
-    client: &Client,
-    api_url: &str,
-    session_token: &str,
-    params: ResolveRequestParams<'_>,
-) -> anyhow::Result<RequestMutationResponse> {
-    request_mutation(
-        client,
-        api_url,
-        session_token,
-        RequestMutationEndpoint {
-            owner: params.owner,
-            repo: params.repo,
-            request_id: params.request_id,
-            action_path: "resolve",
-            context: "resolve request",
-        },
-        &ResolveRequestRequest {
-            disposition: params.disposition,
-            body: params.body,
-        },
-    )
-}
-
-pub fn merge_request(
-    client: &Client,
-    api_url: &str,
-    session_token: &str,
-    params: MergeRequestParams<'_>,
-) -> anyhow::Result<RequestMutationResponse> {
-    request_mutation(
-        client,
-        api_url,
-        session_token,
-        RequestMutationEndpoint {
-            owner: params.owner,
-            repo: params.repo,
-            request_id: params.request_id,
-            action_path: "merge",
-            context: "merge request",
-        },
-        &MergeRequestRequest {
-            expected_main_oid: params.expected_main_oid,
-            expected_head_oid: params.expected_head_oid,
-            body: params.body,
         },
     )
 }

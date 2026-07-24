@@ -1,29 +1,14 @@
 import { createApiClient } from '@/api/client'
 import type {
-  DeleteRequestInput,
-  MergeRequestInput,
-  NeedsResponseInput,
   RepoParams,
   RequestDetail,
-  RequestDelete,
   RequestChangeBlockFiles,
   RequestList,
-  RequestMutation,
   ReviewFileDiff,
   RequestParams,
-  ResolveRequestInput,
-  RespondRequestInput,
 } from './types'
 import { ApiRouteTemplates, buildApiPath } from './types.generated'
 import { parseRepoParams } from './repo-params'
-
-export {
-  parseMergeRequestInput,
-  parseNeedsResponseInput,
-  parseRequestParams,
-  parseResolveRequestInput,
-  parseRespondRequestInput,
-} from './request-inputs'
 
 export async function loadRequestsForRequest(
   data: LoadRequestsInput,
@@ -76,66 +61,6 @@ export async function loadRequestChangeBlockFileDiffForRequest(
     `${requestChangeBlockRoute(ApiRouteTemplates.repoRequestChangeBlockFileDiff, data)}?path=${encodeURIComponent(data.path)}`,
     { auth: 'optional' },
   )
-}
-
-export async function markRequestNeedsResponseForRequest(
-  data: NeedsResponseInput,
-): Promise<RequestMutation> {
-  return createApiClient().post<RequestMutation>(
-    requestRoute(ApiRouteTemplates.repoRequestNeedsResponse, data),
-    {
-      auth: 'required',
-      body: { body: data.body },
-    },
-  )
-}
-
-export async function respondToRequestForRequest(
-  data: RespondRequestInput,
-): Promise<RequestMutation> {
-  return createApiClient().post<RequestMutation>(
-    requestRoute(ApiRouteTemplates.repoRequestRespond, data),
-    { auth: 'required', body: { body: data.body } },
-  )
-}
-
-export async function resolveRequestForRequest(
-  data: ResolveRequestInput,
-): Promise<RequestMutation> {
-  return createApiClient().post<RequestMutation>(
-    requestRoute(ApiRouteTemplates.repoRequestResolve, data),
-    {
-      auth: 'required',
-      body: {
-        body: data.body,
-        disposition: data.disposition,
-      },
-    },
-  )
-}
-
-export async function mergeRequestForRequest(
-  data: MergeRequestInput,
-): Promise<RequestMutation> {
-  return createApiClient().post<RequestMutation>(
-    requestRoute(ApiRouteTemplates.repoRequestMerge, data),
-    {
-      auth: 'required',
-      body: {
-        body: data.body,
-        expected_head_oid: data.expected_head_oid,
-        expected_main_oid: data.expected_main_oid,
-      },
-    },
-  )
-}
-
-export async function deleteRequestForRequest(
-  data: DeleteRequestInput,
-): Promise<RequestDelete> {
-  return createApiClient().delete<RequestDelete>(requestPath(data), {
-    auth: 'required',
-  })
 }
 
 function requestCollectionPath(data: LoadRequestsInput) {

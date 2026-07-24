@@ -96,7 +96,7 @@ pub fn router(state: AppState) -> Router {
         )
         .route(
             routes::REPO_REQUEST,
-            get(http::requests::get_request).delete(http::requests::delete_request),
+            get(http::requests::get_request).delete(http::requests::close_request),
         )
         .route(
             routes::REPO_REQUEST_CHANGE_BLOCK_FILES,
@@ -105,10 +105,6 @@ pub fn router(state: AppState) -> Router {
         .route(
             routes::REPO_REQUEST_CHANGE_BLOCK_FILE_DIFF,
             get(http::request_review::get_request_change_block_file_diff),
-        )
-        .route(
-            routes::REPO_REQUEST_SUBMIT,
-            post(http::requests::submit_request),
         )
         .route(
             routes::REPO_REQUEST_DESCRIPTION,
@@ -147,22 +143,6 @@ pub fn router(state: AppState) -> Router {
         .route(
             routes::REPO_REQUEST_ACTIVITY,
             get(http::request_discussions::activity),
-        )
-        .route(
-            routes::REPO_REQUEST_NEEDS_RESPONSE,
-            post(http::requests::mark_needs_response),
-        )
-        .route(
-            routes::REPO_REQUEST_RESPOND,
-            post(http::requests::respond_to_request),
-        )
-        .route(
-            routes::REPO_REQUEST_RESOLVE,
-            post(http::requests::resolve_request),
-        )
-        .route(
-            routes::REPO_REQUEST_MERGE,
-            post(http::requests::merge_request),
         )
         .route(routes::REPO_EVENTS, get(http::repo_events::repo_events))
         .route(routes::REPO_COMMITS, get(http::history::get_commit_history))

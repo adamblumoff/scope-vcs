@@ -262,7 +262,7 @@ pub(crate) fn repo_request_permissions_response(
     access: RepositoryAccess,
 ) -> RepoRequestPermissionsResponse {
     RepoRequestPermissionsResponse {
-        can_submit_request: true,
+        can_start_request: true,
         uses_credit_stake: access.actor == RepositoryActor::Public,
     }
 }

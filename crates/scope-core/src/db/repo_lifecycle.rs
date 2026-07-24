@@ -13,7 +13,7 @@ use super::{
     request_change_block_rows::change_blocks_for_request_ids,
     request_rows::{
         credit_account_by_user_id, credit_ledger_entry_by_id, insert_credit_ledger_entry_row,
-        request_stake_debit_entry_for_request_id, requests_by_repo_id, save_credit_account_row,
+        requests_by_repo_id, save_credit_account_row,
     },
 };
 use crate::domain::{
@@ -180,12 +180,7 @@ where
         .iter()
         .filter(|request| should_refund_on_repo_delete(request))
     {
-        let stake_entry = request_stake_debit_entry_for_request_id(conn, &request.id)
-            .await?
-            .ok_or_else(|| {
-                ApiError::internal_message("request stake debit ledger entry is missing")
-            })?;
-        let ledger_entry_id = repo_delete_refund_ledger_entry_id(&stake_entry.id);
+        let ledger_entry_id = repo_delete_refund_ledger_entry_id(request)?;
         ensure_repo_delete_refund_ledger_entry_available_postgres(conn, &ledger_entry_id).await?;
         let account = credit_account_by_user_id(conn, &request.author_user_id)
             .await?
@@ -261,7 +256,7 @@ fn request_git_snapshots_for_repo(
 }
 
 fn should_refund_on_repo_delete(request: &Request) -> bool {
-    request.stake_credits > 0 && request.settlement.is_none()
+    request.current_stake_credits > 0
 }
 
 fn refund_open_request_stake(
@@ -272,9 +267,9 @@ fn refund_open_request_stake(
 ) -> Result<(UserCreditAccount, CreditLedgerEntry), ApiError> {
     let balance_credits = account
         .balance_credits
-        .checked_add(request.stake_credits)
+        .checked_add(request.current_stake_credits)
         .ok_or_else(|| ApiError::bad_request("credit balance overflow"))?;
-    let amount_credits = credit_u32_to_i32(request.stake_credits)?;
+    let amount_credits = credit_u32_to_i32(request.current_stake_credits)?;
     credit_u32_to_i32(balance_credits)?;
     Ok((
         UserCreditAccount {
@@ -285,7 +280,7 @@ fn refund_open_request_stake(
             id: ledger_entry_id,
             user_id: request.author_user_id.clone(),
             request_id: Some(request.id.clone()),
-            kind: CreditLedgerEntryKind::StakeRefund,
+            kind: CreditLedgerEntryKind::ReviewStakeRefund,
             amount_credits,
             created_at_unix: now_unix,
         },
@@ -309,8 +304,11 @@ where
     }
 }
 
-fn repo_delete_refund_ledger_entry_id(stake_ledger_entry_id: &str) -> String {
-    format!("repo_delete_refund:{stake_ledger_entry_id}")
+fn repo_delete_refund_ledger_entry_id(request: &Request) -> Result<String, ApiError> {
+    let ready_at_unix = request.ready_at_unix.ok_or_else(|| {
+        ApiError::internal_message("staked request is missing its current ready time")
+    })?;
+    Ok(format!("repo_delete_refund:{}:{ready_at_unix}", request.id))
 }
 
 fn credit_u32_to_i32(value: u32) -> Result<i32, ApiError> {

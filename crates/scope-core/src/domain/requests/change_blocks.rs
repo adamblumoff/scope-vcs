@@ -17,25 +17,6 @@ pub struct RequestChangeBlock {
     pub created_at_unix: u64,
 }
 
-pub(super) fn submitted_change_block(
-    request: &Request,
-    event: &RequestEvent,
-) -> Result<
-    (
-        RequestChangeBlock,
-        RequestDiscussion,
-        RequestDiscussionReadState,
-    ),
-    ApiError,
-> {
-    change_block(
-        request,
-        event,
-        request.base_main_oid.clone(),
-        request.head_oid.clone(),
-    )
-}
-
 pub(super) fn revision_change_block(
     request: &Request,
     event: &RequestEvent,

@@ -2,9 +2,8 @@ use super::entities;
 use super::object_references::{delete_object_reference, replace_object_reference};
 use crate::{
     domain::requests::{
-        CreditLedgerEntry, CreditLedgerEntryKind, REQUEST_LIST_MAX_PAGE_SIZE, Request,
-        RequestActorRole, RequestAudience, RequestDisposition, RequestEvent, RequestSettlement,
-        RequestState, UserCreditAccount,
+        CreditLedgerEntry, REQUEST_LIST_MAX_PAGE_SIZE, Request, RequestActorRole,
+        RequestAssessmentOutcome, RequestAudience, RequestEvent, RequestState, UserCreditAccount,
     },
     error::ApiError,
 };
@@ -22,9 +21,10 @@ pub struct RequestListRow {
     pub audience: RequestAudience,
     pub head_oid: String,
     pub state: RequestState,
-    pub stake_credits: u32,
-    pub disposition: Option<RequestDisposition>,
-    pub settlement: Option<RequestSettlement>,
+    pub current_stake_credits: u32,
+    pub assessment_outcome: Option<RequestAssessmentOutcome>,
+    pub is_held: bool,
+    pub is_merged: bool,
     pub updated_at_unix: u64,
     pub has_git_snapshot: bool,
 }
@@ -38,9 +38,10 @@ struct RequestListDbRow {
     audience: String,
     head_oid: String,
     state: String,
-    stake_credits: i32,
-    disposition: Option<String>,
-    settlement: Option<serde_json::Value>,
+    current_stake_credits: i32,
+    assessment_outcome: Option<String>,
+    is_held: bool,
+    is_merged: bool,
     updated_at_unix: i64,
     has_git_snapshot: bool,
 }
@@ -55,12 +56,16 @@ impl RequestListDbRow {
             audience: entities::decode_enum(self.audience)?,
             head_oid: self.head_oid,
             state: entities::decode_enum(self.state)?,
-            stake_credits: entities::i32_to_u32(self.stake_credits, "request stake credits")?,
-            disposition: self.disposition.map(entities::decode_enum).transpose()?,
-            settlement: self
-                .settlement
-                .map(super::decode_json::<RequestSettlement>)
+            current_stake_credits: entities::i32_to_u32(
+                self.current_stake_credits,
+                "request current stake credits",
+            )?,
+            assessment_outcome: self
+                .assessment_outcome
+                .map(entities::decode_enum)
                 .transpose()?,
+            is_held: self.is_held,
+            is_merged: self.is_merged,
             updated_at_unix: entities::i64_to_u64(self.updated_at_unix, "request update time")?,
             has_git_snapshot: self.has_git_snapshot,
         })
@@ -138,9 +143,16 @@ where
         .column(entities::request::Column::Audience)
         .column(entities::request::Column::HeadOid)
         .column(entities::request::Column::State)
-        .column(entities::request::Column::StakeCredits)
-        .column(entities::request::Column::Disposition)
-        .column(entities::request::Column::Settlement)
+        .column(entities::request::Column::CurrentStakeCredits)
+        .column(entities::request::Column::AssessmentOutcome)
+        .expr_as(
+            Expr::col(entities::request::Column::HeldAtUnix).is_not_null(),
+            "is_held",
+        )
+        .expr_as(
+            Expr::col(entities::request::Column::MergedAtUnix).is_not_null(),
+            "is_merged",
+        )
         .column(entities::request::Column::UpdatedAtUnix)
         .expr_as(
             Expr::col(entities::request::Column::GitSnapshot).is_not_null(),
@@ -294,28 +306,6 @@ where
         .transpose()
 }
 
-pub async fn request_stake_debit_entry_for_request_id<C>(
-    conn: &C,
-    request_id: &str,
-) -> Result<Option<CreditLedgerEntry>, ApiError>
-where
-    C: ConnectionTrait,
-{
-    entities::credit_ledger_entry::Entity::find()
-        .filter(entities::credit_ledger_entry::Column::RequestId.eq(Some(request_id.to_string())))
-        .filter(
-            entities::credit_ledger_entry::Column::Kind.eq(encode_credit_ledger_entry_kind(
-                CreditLedgerEntryKind::RequestStakeDebit,
-            )?),
-        )
-        .order_by_asc(entities::credit_ledger_entry::Column::Id)
-        .one(conn)
-        .await
-        .map_err(ApiError::internal)?
-        .map(entities::credit_ledger_entry::Model::try_into_domain)
-        .transpose()
-}
-
 pub async fn insert_request_row<C>(conn: &C, request: &Request) -> Result<(), ApiError>
 where
     C: ConnectionTrait,
@@ -339,6 +329,11 @@ pub async fn delete_request_rows<C>(conn: &C, request_id: &str) -> Result<(), Ap
 where
     C: ConnectionTrait,
 {
+    entities::request_invitee::Entity::delete_many()
+        .filter(entities::request_invitee::Column::RequestId.eq(request_id.to_string()))
+        .exec(conn)
+        .await
+        .map_err(ApiError::internal)?;
     entities::request_event::Entity::delete_many()
         .filter(entities::request_event::Column::RequestId.eq(request_id.to_string()))
         .exec(conn)
@@ -350,15 +345,6 @@ where
         .map_err(ApiError::internal)?;
     delete_object_reference(conn, "request_snapshot", request_id).await?;
     Ok(())
-}
-
-fn encode_credit_ledger_entry_kind(kind: CreditLedgerEntryKind) -> Result<String, ApiError> {
-    match serde_json::to_value(kind).map_err(ApiError::internal)? {
-        serde_json::Value::String(value) => Ok(value),
-        _ => Err(ApiError::internal_message(
-            "credit ledger entry kind did not serialize to string",
-        )),
-    }
 }
 
 pub async fn save_request_row<C>(conn: &C, request: &Request) -> Result<(), ApiError>
@@ -387,24 +373,68 @@ where
             Expr::value(row.activity_version),
         )
         .col_expr(
-            entities::request::Column::StakeCredits,
-            Expr::value(row.stake_credits),
+            entities::request::Column::CurrentStakeCredits,
+            Expr::value(row.current_stake_credits),
         )
         .col_expr(
-            entities::request::Column::Disposition,
-            Expr::value(row.disposition),
+            entities::request::Column::FirstReadyAtUnix,
+            Expr::value(row.first_ready_at_unix),
         )
         .col_expr(
-            entities::request::Column::Settlement,
-            Expr::value(row.settlement),
+            entities::request::Column::ReadyAtUnix,
+            Expr::value(row.ready_at_unix),
+        )
+        .col_expr(
+            entities::request::Column::HeldAtUnix,
+            Expr::value(row.held_at_unix),
+        )
+        .col_expr(
+            entities::request::Column::HeldByUserId,
+            Expr::value(row.held_by_user_id),
+        )
+        .col_expr(
+            entities::request::Column::AssessmentOutcome,
+            Expr::value(row.assessment_outcome),
+        )
+        .col_expr(
+            entities::request::Column::AssessmentBodyMarkdown,
+            Expr::value(row.assessment_body_markdown),
+        )
+        .col_expr(
+            entities::request::Column::AssessedAtUnix,
+            Expr::value(row.assessed_at_unix),
+        )
+        .col_expr(
+            entities::request::Column::AssessedByUserId,
+            Expr::value(row.assessed_by_user_id),
+        )
+        .col_expr(
+            entities::request::Column::CompletedAtUnix,
+            Expr::value(row.completed_at_unix),
+        )
+        .col_expr(
+            entities::request::Column::CompletedByUserId,
+            Expr::value(row.completed_by_user_id),
+        )
+        .col_expr(
+            entities::request::Column::MergedAtUnix,
+            Expr::value(row.merged_at_unix),
+        )
+        .col_expr(
+            entities::request::Column::MergedByUserId,
+            Expr::value(row.merged_by_user_id),
+        )
+        .col_expr(
+            entities::request::Column::MergedHeadOid,
+            Expr::value(row.merged_head_oid),
+        )
+        .col_expr(
+            entities::request::Column::MergedMainOid,
+            Expr::value(row.merged_main_oid),
         )
         .col_expr(
             entities::request::Column::UpdatedAtUnix,
             Expr::value(row.updated_at_unix),
-        )
-        .col_expr(
-            entities::request::Column::ResolvedAtUnix,
-            Expr::value(row.resolved_at_unix),
         )
         .exec(conn)
         .await

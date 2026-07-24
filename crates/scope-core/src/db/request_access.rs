@@ -27,16 +27,6 @@ pub(super) fn authorize_start_request(
     Ok(input)
 }
 
-pub(super) fn ensure_request_maintainer(
-    repo: &StoredRepository,
-    user_id: &str,
-) -> Result<(), ApiError> {
-    match repo.access_for_user_id(user_id).actor {
-        RepositoryActor::Owner | RepositoryActor::Member => Ok(()),
-        RepositoryActor::Public => Err(ApiError::forbidden("repo maintainer required")),
-    }
-}
-
 pub(super) fn request_actor_can_edit(
     repo: &StoredRepository,
     request: &Request,

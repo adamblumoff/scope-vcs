@@ -10,8 +10,7 @@ use crate::{
 fn request_is_closed(request: &Request) -> bool {
     matches!(
         request.state,
-        crate::domain::requests::RequestState::Resolved
-            | crate::domain::requests::RequestState::Withdrawn
+        crate::domain::requests::RequestState::Completed
     )
 }
 

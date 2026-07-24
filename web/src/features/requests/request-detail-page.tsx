@@ -1,12 +1,12 @@
 import type {
   RequestChangeBlockFiles,
+  RequestDetail,
   User,
   RepoLiveState,
   RepoParams,
   RequestMutation,
 } from '@/api/types'
 import type { LoadRequestChangeBlockFilesInput } from '@/api/requests'
-import { DestructiveActionDialog } from '@/components/destructive-action-dialog'
 import { LifecycleBadge } from '@/components/lifecycle-badge'
 import { PageContent, PageHeader } from '@/components/page-header'
 import { RepoShell } from '@/components/repo-shell'
@@ -14,7 +14,7 @@ import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { WorkbenchHeader } from '@/components/workbench-header'
 import { Link } from '@tanstack/react-router'
-import { Coins, ShieldQuestion, Trash2 } from 'lucide-react'
+import { Coins, ShieldQuestion } from 'lucide-react'
 import type { ReactNode } from 'react'
 import { useCallback, useMemo, useState } from 'react'
 import { RequestActivityDrawer } from './request-activity-drawer'
@@ -41,7 +41,6 @@ import type {
   RequestDiscussionPage,
   RequestDiscussionReplyMutation,
 } from './request-discussion-types'
-import { RequestMergeDialog } from './request-merge-dialog'
 import { RequestOverflowMenu } from './request-overflow-menu'
 import {
   requestMergeabilityLabel,
@@ -49,10 +48,6 @@ import {
   requestStatusLabel,
   requestStatusTone,
 } from './request-labels'
-import {
-  type RequestActionsProps,
-  useRequestActions,
-} from './use-request-actions'
 import { useRequestActivityHistory } from './use-request-activity-history'
 
 export function RequestUnavailablePage({ params }: { params: RepoParams }) {
@@ -86,7 +81,9 @@ export function RequestUnavailablePage({ params }: { params: RepoParams }) {
   )
 }
 
-type RequestDetailPageProps = RequestActionsProps & {
+type RequestDetailPageProps = {
+  detail: RequestDetail
+  params: RepoParams
   actor: User | null
   createDiscussion: (
     input: CreateDiscussionInput,
@@ -147,8 +144,7 @@ export function RequestDetailPage(props: RequestDetailPageProps) {
     resolveDiscussion,
     updateDescription,
   } = props
-  const controller = useRequestActions(props)
-  const { request } = controller
+  const { request } = detail
   const serverDescription = request.description_markdown
   const history = useRequestActivityHistory(loadActivity)
   const [descriptionOverride, setDescriptionOverride] = useState<{
@@ -199,8 +195,7 @@ export function RequestDetailPage(props: RequestDetailPageProps) {
   const isMaintainer = live.repo.access.actor !== 'Public'
   const canResolveDiscussion = useCallback(
     (discussion: RequestDiscussion) =>
-      request.state !== 'Resolved' &&
-      request.state !== 'Withdrawn' &&
+      request.state !== 'Completed' &&
       (
         isMaintainer ||
         actor.id === discussion.author.id ||
@@ -231,18 +226,6 @@ export function RequestDetailPage(props: RequestDetailPageProps) {
         actions={(
           <div className="flex flex-wrap items-center justify-end gap-2">
             {discussionControls}
-            {request.permissions.can_delete ? (
-              <Button
-                className="h-9"
-                disabled={controller.uiState.pendingAction === 'delete'}
-                onClick={() => controller.setDeleteOpen(true)}
-                size="sm"
-                variant="destructive"
-              >
-                <Trash2 className="size-4" />
-                Delete
-              </Button>
-            ) : null}
             <Button
               asChild
               className="h-9"
@@ -275,7 +258,7 @@ export function RequestDetailPage(props: RequestDetailPageProps) {
             </Badge>
             <Badge variant="neutral">
               <Coins className="size-3" />
-              {request.stake_credits}
+              {request.current_stake_credits}
             </Badge>
           </div>
         )}
@@ -292,24 +275,7 @@ export function RequestDetailPage(props: RequestDetailPageProps) {
           actor={actor}
           canResolve={canResolveDiscussion}
           contextRail={(
-            <RequestContextRail
-              activeResolveDisposition={controller.activeResolveDisposition}
-              actionError={controller.uiState.actionError}
-              needsResponseBody={controller.uiState.needsResponseBody}
-              onMergeOpen={() => controller.setMergeOpen(true)}
-              onNeedsResponseBodyChange={controller.setNeedsResponseBody}
-              onResolveBodyChange={controller.setResolveBody}
-              onResolveDispositionChange={controller.setResolveDisposition}
-              onResponseBodyChange={controller.setResponseBody}
-              onSubmitNeedsResponse={controller.submitNeedsResponse}
-              onSubmitResolution={controller.submitResolution}
-              onSubmitResponse={controller.submitResponse}
-              pendingAction={controller.uiState.pendingAction}
-              request={request}
-              resolutionOptions={controller.resolutionOptions}
-              resolveBody={controller.uiState.resolveBody}
-              responseBody={controller.uiState.responseBody}
-            />
+            <RequestContextRail request={request} />
           )}
           description={description}
           header={requestHeader}
@@ -335,43 +301,6 @@ export function RequestDetailPage(props: RequestDetailPageProps) {
         loading={history.loading}
         onOpenChange={history.onOpenChange}
         open={history.open}
-      />
-
-      <RequestMergeDialog
-        error={
-          controller.uiState.actionError?.key === 'merge'
-            ? controller.uiState.actionError.message
-            : null
-        }
-        onConfirm={controller.submitMerge}
-        onOpenChange={controller.setMergeOpen}
-        open={controller.uiState.mergeOpen}
-        pending={controller.uiState.pendingAction === 'merge'}
-        request={request}
-      />
-      <DestructiveActionDialog
-        confirmLabel={
-          request.state === 'Working' ? 'Delete request' : 'Withdraw request'
-        }
-        description={
-          request.state === 'Working'
-            ? 'This removes the request branch from Scope. Local Git branches are not deleted.'
-            : 'This closes the request and removes it from maintainer review. Its activity remains visible.'
-        }
-        onConfirm={() => void controller.submitDelete()}
-        onOpenChange={(open) => {
-          if (controller.uiState.pendingAction !== 'delete') {
-            controller.setDeleteOpen(open)
-          }
-        }}
-        open={controller.deleteOpen}
-        pending={controller.uiState.pendingAction === 'delete'}
-        subject={request.title}
-        title={
-          request.state === 'Working'
-            ? 'Delete working request?'
-            : 'Withdraw request?'
-        }
       />
     </RepoShell>
   )

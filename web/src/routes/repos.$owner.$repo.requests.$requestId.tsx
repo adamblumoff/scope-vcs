@@ -2,17 +2,7 @@ import { createApiClient, HttpError } from '@/api/client'
 import type { AccountSession } from '@/api/types'
 import { ApiRouteTemplates, buildApiPath } from '@/api/types.generated'
 import {
-  deleteRequestForRequest,
   loadRequestForRequest,
-  markRequestNeedsResponseForRequest,
-  mergeRequestForRequest,
-  parseMergeRequestInput,
-  parseNeedsResponseInput,
-  parseRequestParams,
-  parseResolveRequestInput,
-  parseRespondRequestInput,
-  resolveRequestForRequest,
-  respondToRequestForRequest,
 } from '@/api/repos'
 import {
   type LoadRequestChangeBlockFilesInput,
@@ -108,26 +98,6 @@ const updateDescription = createServerFn({ method: 'POST' })
   .validator((data: UpdateDescriptionInput) => data)
   .handler(({ data }) => updateRequestDescriptionForRequest(data))
 
-const markNeedsResponse = createServerFn({ method: 'POST' })
-  .validator(parseNeedsResponseInput)
-  .handler(({ data }) => markRequestNeedsResponseForRequest(data))
-
-const respondToRequest = createServerFn({ method: 'POST' })
-  .validator(parseRespondRequestInput)
-  .handler(({ data }) => respondToRequestForRequest(data))
-
-const resolveRequest = createServerFn({ method: 'POST' })
-  .validator(parseResolveRequestInput)
-  .handler(({ data }) => resolveRequestForRequest(data))
-
-const mergeRequest = createServerFn({ method: 'POST' })
-  .validator(parseMergeRequestInput)
-  .handler(({ data }) => mergeRequestForRequest(data))
-
-const deleteRequest = createServerFn({ method: 'POST' })
-  .validator(parseRequestParams)
-  .handler(({ data }) => deleteRequestForRequest(data))
-
 export const Route = createFileRoute('/repos/$owner/$repo/requests/$requestId')({
   loader: ({ params }) => loadRequestPage({ data: requestParamsForRoute(params) }),
   component: RequestRoute,
@@ -148,7 +118,6 @@ function RequestRoute() {
       actor={page.account?.user ?? null}
       createDiscussion={(data) => createDiscussion({ data })}
       createReply={(data) => createReply({ data })}
-      deleteRequest={(data) => deleteRequest({ data })}
       detail={page.detail}
       discussionPage={page.discussionPage}
       live={live}
@@ -158,14 +127,10 @@ function RequestRoute() {
       loadDiscussionChanges={(data) => loadDiscussionChanges({ data })}
       loadReplies={(data) => loadReplies({ data })}
       markDiscussionRead={(data) => markDiscussionRead({ data })}
-      markNeedsResponse={(data) => markNeedsResponse({ data })}
-      mergeRequest={(data) => mergeRequest({ data })}
       params={repoParams}
       reopenAndReply={(data) => reopenAndReply({ data })}
       reopenDiscussion={(data) => reopenDiscussion({ data })}
       resolveDiscussion={(data) => resolveDiscussion({ data })}
-      resolveRequest={(data) => resolveRequest({ data })}
-      respondToRequest={(data) => respondToRequest({ data })}
       updateDescription={(data) => updateDescription({ data })}
     />
   )

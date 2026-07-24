@@ -1,16 +1,15 @@
 use crate::{
-    api::{RepoSummaryResponse, RepositoryActor, RequestSummaryResponse, get_repo, list_requests},
+    api::{RepoSummaryResponse, RequestSummaryResponse, get_repo, list_requests},
     git_repo::{
-        GitRepo, branch_config_value, changed_paths_since_scope_base_at_commit, current_branch,
-        fetch_scope_remote_with_bearer, push_head_to_ref_with_bearer, run_git_in_repo,
-        set_branch_config_value,
+        GitRepo, branch_config_value, current_branch, fetch_scope_remote_with_bearer,
+        push_head_to_ref_with_bearer, run_git_in_repo, set_branch_config_value,
     },
     push::DEFAULT_SCOPE_BRANCH,
     request::remote::{
         REQUEST_REMOTE_KEY, RequestRemoteTarget, load_request_remote, request_remote_name,
     },
 };
-use anyhow::{Context, bail};
+use anyhow::Context;
 use reqwest::blocking::Client;
 use scope_core::domain::requests::RequestAudience;
 
@@ -75,33 +74,6 @@ pub(super) fn fetch_main_projection(
         DEFAULT_SCOPE_BRANCH,
         session_token,
     )
-}
-
-pub(super) fn normalized_submit_stake(
-    repo: &RepoSummaryResponse,
-    stake_credits: Option<u32>,
-) -> anyhow::Result<Option<u32>> {
-    if !repo.request_permissions.can_submit_request {
-        bail!(
-            "this user cannot submit requests to {}/{}",
-            repo.owner_handle,
-            repo.name
-        );
-    }
-    match repo.access.actor {
-        RepositoryActor::Public => match stake_credits {
-            Some(stake) if stake > 0 => Ok(Some(stake)),
-            _ => bail!("public request submission requires --stake-credits greater than 0"),
-        },
-        RepositoryActor::Member | RepositoryActor::Owner => {
-            if stake_credits.unwrap_or(0) != 0 {
-                bail!(
-                    "owner/member request submission does not use credit stake; omit --stake-credits"
-                );
-            }
-            Ok(None)
-        }
-    }
 }
 
 pub(super) fn push_request_head(
@@ -186,15 +158,6 @@ pub(super) fn maybe_request_id_for_context(
     }
 }
 
-pub(super) fn maybe_request_branch_audience(
-    git_repo: &GitRepo,
-) -> anyhow::Result<Option<RequestAudience>> {
-    let branch = current_branch(git_repo)?;
-    branch_config_value(git_repo, &branch, REQUEST_AUDIENCE_KEY)?
-        .map(|value| parse_audience_config(&value))
-        .transpose()
-}
-
 pub(super) fn store_branch_context(
     git_repo: &GitRepo,
     branch: &str,
@@ -250,32 +213,6 @@ pub(super) fn track_request_branch_ref(
     )
 }
 
-pub(super) fn print_change_summary(
-    git_repo: &GitRepo,
-    target: &RequestRemoteTarget,
-    request_head_oid: &str,
-) -> anyhow::Result<()> {
-    let remote_main = remote_main_ref(&target.remote);
-    let changes =
-        changed_paths_since_scope_base_at_commit(git_repo, Some(&remote_main), request_head_oid)?;
-    if changes.is_empty() {
-        println!("Committed diff: no file changes from {remote_main}");
-        return Ok(());
-    }
-
-    println!(
-        "Committed diff: {} changed file(s) from {remote_main}",
-        changes.len()
-    );
-    for change in changes.iter().take(12) {
-        println!("  {} {}", change.status, change.path);
-    }
-    if changes.len() > 12 {
-        println!("  ... {} more", changes.len() - 12);
-    }
-    Ok(())
-}
-
 pub(super) fn projection_label_for_audience(audience: RequestAudience) -> &'static str {
     match audience {
         RequestAudience::Public => "public main",
@@ -295,14 +232,6 @@ fn audience_config_value(audience: RequestAudience) -> &'static str {
     match audience {
         RequestAudience::Public => "public",
         RequestAudience::Private => "private",
-    }
-}
-
-pub(super) fn parse_audience_config(value: &str) -> anyhow::Result<RequestAudience> {
-    match value {
-        "public" => Ok(RequestAudience::Public),
-        "private" => Ok(RequestAudience::Private),
-        _ => bail!("invalid Scope request base audience '{value}'"),
     }
 }
 

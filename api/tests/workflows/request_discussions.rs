@@ -272,27 +272,16 @@ async fn request_activity_clamps_latest_and_after_pages_to_fifty_events() {
         "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
     )
     .await;
-    let body = "x".repeat(crate::domain::requests::REQUEST_TIMELINE_BODY_MAX_BYTES);
-    for index in 0..26 {
+    for index in 0..52 {
         state
             .metadata
-            .mark_request_needs_response(crate::domain::requests::MarkRequestNeedsResponseInput {
+            .update_request_description(crate::domain::requests::UpdateRequestDescriptionInput {
                 request_id: request_id.to_string(),
                 actor_user_id: test_owner_id(),
-                event_id: format!("event_needs_{index}"),
-                body: body.clone(),
-                now_unix: 10 + index * 2,
-            })
-            .await
-            .unwrap();
-        state
-            .metadata
-            .respond_to_request(crate::domain::requests::RespondToRequestInput {
-                request_id: request_id.to_string(),
-                actor_user_id: test_owner_id(),
-                event_id: format!("event_response_{index}"),
-                body: Some(body.clone()),
-                now_unix: 11 + index * 2,
+                actor_can_edit_description: false,
+                event_id: format!("event_description_{index}"),
+                description_markdown: format!("description {index}"),
+                now_unix: 10 + index,
             })
             .await
             .unwrap();

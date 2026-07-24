@@ -1,44 +1,529 @@
 use super::requests::*;
 use crate::domain::store::{DEFAULT_GIT_FILE_MODE, RepositoryAccess, RepositoryActor, SourceBlob};
-use crate::error::ApiError;
 use std::collections::BTreeMap;
 
-mod limits;
+#[test]
+fn new_request_starts_as_an_unpublished_unstaked_working_request() {
+    let mutation = start_request(&mut BTreeMap::new(), public_start_input()).unwrap();
+
+    assert_eq!(mutation.request.state, RequestState::Working);
+    assert_eq!(mutation.request.current_stake_credits, 0);
+    assert!(!mutation.request.is_published());
+    assert!(!request_counts_as_open(&mutation.request));
+    assert_eq!(mutation.request.ready_at_unix, None);
+    assert_eq!(mutation.request.completed_at_unix, None);
+    mutation.request.validate_facts().unwrap();
+}
 
 #[test]
-fn request_policy_keeps_public_visibility_and_maintainer_decisions_in_domain() {
-    let mut request = submitted_request();
-    request.git_snapshot = None;
+fn request_name_rules_and_repository_uniqueness_remain_domain_owned() {
+    for invalid in [
+        "main",
+        "HEAD",
+        "two words",
+        "nested/name",
+        "-leading",
+        "UPPER",
+        "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    ] {
+        let mut input = public_start_input();
+        input.name = invalid.to_string();
+        assert!(start_request(&mut BTreeMap::new(), input).is_err());
+    }
+
+    let mut requests = BTreeMap::new();
+    start_request(&mut requests, public_start_input()).unwrap();
+    let mut duplicate = public_start_input();
+    duplicate.id = "request_2".to_string();
+    assert!(
+        start_request(&mut requests, duplicate)
+            .unwrap_err()
+            .message
+            .contains("already exists")
+    );
+    assert_eq!(canonical_request_ref("fix-parser"), "refs/heads/fix-parser");
+}
+
+#[test]
+fn publication_marker_survives_return_to_working_and_is_required_for_completion() {
+    let mut request = ready_request();
+    let first_ready_at = request.first_ready_at_unix;
+    assert!(request_counts_as_open(&request));
+    request.state = RequestState::Working;
+    request.current_stake_credits = 0;
+    request.ready_at_unix = None;
+    request.validate_facts().unwrap();
+    assert_eq!(request.first_ready_at_unix, first_ready_at);
+    assert!(request_counts_as_open(&request));
+
+    request.state = RequestState::Completed;
+    request.completed_at_unix = Some(30);
+    request.completed_by_user_id = Some("author".to_string());
+    request.updated_at_unix = 30;
+    request.validate_facts().unwrap();
+    assert!(!request_counts_as_open(&request));
+
+    request.first_ready_at_unix = None;
+    assert!(
+        request
+            .validate_facts()
+            .unwrap_err()
+            .message
+            .contains("publication time")
+    );
+}
+
+#[test]
+fn ready_state_owns_current_stake_ready_time_and_complete_hold_pair() {
+    let mut request = ready_request();
+    request.validate_facts().unwrap();
+
+    request.current_stake_credits = 0;
+    assert!(
+        request
+            .validate_facts()
+            .unwrap_err()
+            .message
+            .contains("current stake")
+    );
+    request.current_stake_credits = 25;
+    request.held_at_unix = Some(21);
+    request.updated_at_unix = 21;
+    assert!(
+        request
+            .validate_facts()
+            .unwrap_err()
+            .message
+            .contains("set together")
+    );
+    request.held_by_user_id = Some("maintainer".to_string());
+    request.held_at_unix = Some(19);
+    assert!(
+        request
+            .validate_facts()
+            .unwrap_err()
+            .message
+            .contains("cannot precede ready time")
+    );
+    request.held_at_unix = Some(21);
+    request.validate_facts().unwrap();
+
+    request.current_stake_credits = 26;
+    assert!(request.validate_facts().unwrap_err().message.contains("25"));
+}
+
+#[test]
+fn assessment_is_atomic_immutable_completion_data() {
+    let mut request = completed_request(RequestAssessmentOutcome::Rejected);
+    request.assessment_body_markdown =
+        Some("The change violates the parser invariant.".to_string());
+    request.validate_facts().unwrap();
+
+    request.assessment_body_markdown = Some("   ".to_string());
+    assert!(
+        request
+            .validate_facts()
+            .unwrap_err()
+            .message
+            .contains("written reason")
+    );
+    request.assessment_body_markdown = Some("Reason".to_string());
+    request.assessed_at_unix = Some(29);
+    assert!(
+        request
+            .validate_facts()
+            .unwrap_err()
+            .message
+            .contains("atomically")
+    );
+}
+
+#[test]
+fn merge_facts_are_complete_accepted_and_never_precede_completion() {
+    let mut request = completed_request(RequestAssessmentOutcome::Accepted);
+    assert!(request_permissions(&request, maintainer_access(), Some("maintainer")).can_merge);
+    assert_eq!(
+        request_mergeability(&request, maintainer_access()).status,
+        RequestMergeabilityStatus::Ready
+    );
+    request.merged_at_unix = Some(31);
+    request.merged_by_user_id = Some("maintainer".to_string());
+    request.merged_head_oid = Some("head".to_string());
+    request.merged_main_oid = Some("main-after".to_string());
+    request.updated_at_unix = 31;
+    request.validate_facts().unwrap();
+    assert!(!request_permissions(&request, maintainer_access(), Some("maintainer")).can_merge);
+    assert_eq!(
+        request_mergeability(&request, maintainer_access()).status,
+        RequestMergeabilityStatus::Completed
+    );
+
+    request.assessment_outcome = Some(RequestAssessmentOutcome::Neutral);
+    assert!(
+        request
+            .validate_facts()
+            .unwrap_err()
+            .message
+            .contains("accepted")
+    );
+    request.assessment_outcome = Some(RequestAssessmentOutcome::Accepted);
+    request.merged_at_unix = Some(29);
+    assert!(
+        request
+            .validate_facts()
+            .unwrap_err()
+            .message
+            .contains("precede completion")
+    );
+}
+
+#[test]
+fn repeat_review_cycles_are_append_only_facts_with_stake_and_reason() {
+    let events = [
+        RequestEventPayload::ReadyForReview {
+            head_oid: "head-1".to_string(),
+            stake_credits: 10,
+        },
+        RequestEventPayload::ReturnedToWorking {
+            head_oid: "head-1".to_string(),
+            stake_credits: 10,
+            reason: RequestReviewExitReason::RevisionPushed,
+        },
+        RequestEventPayload::ReadyForReview {
+            head_oid: "head-2".to_string(),
+            stake_credits: 20,
+        },
+    ];
+
+    let encoded = serde_json::to_value(events).unwrap();
+    assert_eq!(encoded[0]["ReadyForReview"]["stake_credits"], 10);
+    assert_eq!(encoded[1]["ReturnedToWorking"]["reason"], "RevisionPushed");
+    assert_eq!(encoded[2]["ReadyForReview"]["head_oid"], "head-2");
+}
+
+#[test]
+fn assessment_settlement_has_only_three_outcomes() {
+    let accepted = settlement_for(10, RequestAssessmentOutcome::Accepted, 30);
+    assert_eq!(
+        (accepted.refunded_credits, accepted.reward_credits),
+        (10, 10)
+    );
+    let neutral = settlement_for(10, RequestAssessmentOutcome::Neutral, 30);
+    assert_eq!((neutral.refunded_credits, neutral.reward_credits), (10, 0));
+    let rejected = settlement_for(10, RequestAssessmentOutcome::Rejected, 30);
+    assert_eq!(
+        (rejected.refunded_credits, rejected.burned_credits),
+        (0, 10)
+    );
+}
+
+#[test]
+fn credit_grant_is_single_entry_and_overflow_safe() {
+    let mut accounts = BTreeMap::new();
+    let mut ledger = BTreeMap::new();
+    let mutation = grant_user_credits(
+        &mut accounts,
+        &mut ledger,
+        GrantUserCreditsInput {
+            ledger_entry_id: "starter:user".to_string(),
+            user_id: "user".to_string(),
+            amount_credits: 100,
+            now_unix: 10,
+        },
+    )
+    .unwrap();
+    assert_eq!(mutation.account.balance_credits, 100);
+    assert_eq!(
+        mutation.ledger_entry.kind,
+        CreditLedgerEntryKind::StarterGrant
+    );
+    assert_eq!(ledger.len(), 1);
+}
+
+#[test]
+fn public_working_request_remains_visible_and_author_can_work() {
+    let request = working_request();
     assert!(request_visible_to_access(
         &request,
         RepositoryAccess::public()
     ));
     let anonymous = request_permissions(&request, RepositoryAccess::public(), None);
     assert!(anonymous.can_pull_branch);
-    assert!(!anonymous.can_push_branch);
-    assert!(!anonymous.can_open_discussion);
-    assert!(!anonymous.can_merge);
-
-    let contributor = request_permissions(
+    let author = request_permissions(
         &request,
         RepositoryAccess::public(),
-        Some("another-contributor"),
+        Some(request.author_user_id.as_str()),
     );
-    assert!(contributor.can_pull_branch);
-    assert!(contributor.can_push_branch);
-    assert!(contributor.can_open_discussion);
-    assert!(!contributor.can_merge);
+    assert!(author.can_pull_branch);
+    assert!(author.can_push_branch);
+    assert!(author.can_mark_ready);
+}
 
-    let maintainer = maintainer_access();
-    assert!(request_permissions(&request, maintainer, Some("maintainer")).can_merge);
+#[test]
+fn published_working_request_stays_visible_but_not_mergeable() {
+    let mut request = ready_request();
+    request.state = RequestState::Working;
+    request.ready_at_unix = None;
+    request.current_stake_credits = 0;
+    request.validate_facts().unwrap();
+    assert!(request_visible_to_access(
+        &request,
+        RepositoryAccess::public()
+    ));
     assert_eq!(
-        request_mergeability(&request, maintainer).status,
-        RequestMergeabilityStatus::MissingRequestBranch
+        request_mergeability(&request, maintainer_access()).status,
+        RequestMergeabilityStatus::Working
     );
+}
+
+#[test]
+fn hold_and_completion_remove_mutation_permissions() {
+    let mut request = ready_request();
+    request.held_at_unix = Some(21);
+    request.held_by_user_id = Some("maintainer".to_string());
+    request.updated_at_unix = 21;
+    let author = request_permissions(&request, RepositoryAccess::public(), Some("author"));
+    assert!(!author.can_push_branch);
+    assert!(!author.can_return_to_working);
+    assert!(!author.can_manage_invitees);
+    let maintainer = request_permissions(&request, maintainer_access(), Some("maintainer"));
+    assert!(maintainer.can_hold);
+    assert!(maintainer.can_assess);
+    assert!(maintainer.can_manage_invitees);
+
+    let mut private_request = request.clone();
+    private_request.audience = RequestAudience::Private;
+    let maintainer = request_permissions(&private_request, maintainer_access(), Some("maintainer"));
+    assert!(!maintainer.can_manage_invitees);
+
+    let request = completed_request(RequestAssessmentOutcome::Neutral);
+    let maintainer = request_permissions(&request, maintainer_access(), Some("maintainer"));
+    assert!(maintainer.can_pull_branch);
+    assert!(!maintainer.can_push_branch);
+    assert!(!maintainer.can_open_discussion);
+}
+
+#[test]
+fn held_request_rejects_description_edits_at_domain_boundary() {
+    let mut request = ready_request();
+    request.held_at_unix = Some(21);
+    request.held_by_user_id = Some("maintainer".to_string());
+    request.updated_at_unix = 21;
+    let mut requests = BTreeMap::from([(request.id.clone(), request)]);
+    let error = update_request_description(
+        &mut requests,
+        &mut BTreeMap::new(),
+        UpdateRequestDescriptionInput {
+            request_id: "request_1".to_string(),
+            actor_user_id: "author".to_string(),
+            actor_can_edit_description: true,
+            event_id: "event_description".to_string(),
+            description_markdown: "Changed while held".to_string(),
+            now_unix: 22,
+        },
+    )
+    .unwrap_err();
+    assert!(error.message.contains("while held"));
+}
+
+#[test]
+fn ready_request_rejects_revisions_with_a_user_facing_constraint() {
+    let request = ready_request();
+    let mut requests = BTreeMap::from([(request.id.clone(), request)]);
+    let error = record_request_revision(
+        &mut requests,
+        &mut BTreeMap::new(),
+        RecordRequestRevisionInput {
+            request_id: "request_1".to_string(),
+            actor_user_id: "author".to_string(),
+            actor_can_edit: true,
+            expected_old_head_oid: Some("head".to_string()),
+            new_head_oid: "head-2".to_string(),
+            git_snapshot: source_blob("head-2"),
+            event_id: "event_revision".to_string(),
+            body: None,
+            now_unix: 22,
+        },
+    )
+    .unwrap_err();
     assert_eq!(
-        request_actor_role(maintainer_access()),
-        RequestActorRole::Member
+        error.message,
+        "only working requests can receive new revisions"
     );
+}
+
+#[test]
+fn ready_request_rejects_description_edits_until_review_invalidation_exists() {
+    let request = ready_request();
+    let mut requests = BTreeMap::from([(request.id.clone(), request)]);
+    let error = update_request_description(
+        &mut requests,
+        &mut BTreeMap::new(),
+        UpdateRequestDescriptionInput {
+            request_id: "request_1".to_string(),
+            actor_user_id: "author".to_string(),
+            actor_can_edit_description: true,
+            event_id: "event_description".to_string(),
+            description_markdown: "Changed while ready".to_string(),
+            now_unix: 22,
+        },
+    )
+    .unwrap_err();
+    assert!(error.message.contains("while ready for review"));
+}
+
+#[test]
+fn close_is_author_only() {
+    let request = working_request();
+    assert!(request_permissions(&request, RepositoryAccess::public(), Some("author"),).can_close);
+    assert!(!request_permissions(&request, maintainer_access(), Some("maintainer")).can_close);
+}
+
+#[test]
+fn close_hard_deletes_draft_and_completes_published_work() {
+    let draft = working_request();
+    let mut requests = BTreeMap::from([(draft.id.clone(), draft)]);
+    let mut events = BTreeMap::new();
+    let mut change_blocks = BTreeMap::new();
+    assert!(matches!(
+        close_request(
+            &mut requests,
+            &mut events,
+            &mut change_blocks,
+            close_input(),
+        )
+        .unwrap(),
+        CloseRequestMutation::DeletedDraft { .. }
+    ));
+    assert!(requests.is_empty());
+
+    let mut published = ready_request();
+    published.state = RequestState::Working;
+    published.ready_at_unix = None;
+    published.current_stake_credits = 0;
+    let mut requests = BTreeMap::from([(published.id.clone(), published)]);
+    let mutation = close_request(
+        &mut requests,
+        &mut events,
+        &mut change_blocks,
+        close_input(),
+    )
+    .unwrap();
+    let CloseRequestMutation::Completed { request, event } = mutation else {
+        panic!("published request must remain as completed history");
+    };
+    assert_eq!(request.state, RequestState::Completed);
+    assert_eq!(request.assessment_outcome, None);
+    assert_eq!(event.kind, RequestEventKind::Closed);
+}
+
+#[test]
+fn discussion_resolution_is_moderation_not_request_lifecycle() {
+    let request = ready_request();
+    let mut requests = BTreeMap::from([(request.id.clone(), request)]);
+    let mut discussions = BTreeMap::new();
+    let opened = create_request_discussion(
+        &mut requests,
+        &mut discussions,
+        CreateRequestDiscussionInput {
+            request_id: "request_1".to_string(),
+            id: "discussion_1".to_string(),
+            actor_user_id: "author".to_string(),
+            actor_can_participate: true,
+            client_discussion_id: "client_1".to_string(),
+            body_markdown: "Review this invariant".to_string(),
+            now_unix: 21,
+        },
+    )
+    .unwrap();
+    let resolved = resolve_request_discussion(
+        &mut requests,
+        &mut discussions,
+        ResolveRequestDiscussionInput {
+            request_id: "request_1".to_string(),
+            discussion_id: opened.discussion.id.clone(),
+            actor_user_id: "maintainer".to_string(),
+            actor_is_maintainer: true,
+            event_id: "event_discussion_resolved".to_string(),
+            now_unix: 22,
+        },
+    )
+    .unwrap();
+    assert_eq!(resolved.event.kind, RequestEventKind::DiscussionResolved);
+    assert_eq!(requests["request_1"].state, RequestState::ReadyForReview);
+
+    let reopened = reopen_request_discussion(
+        &mut requests,
+        &mut discussions,
+        ReopenRequestDiscussionInput {
+            request_id: "request_1".to_string(),
+            discussion_id: opened.discussion.id,
+            actor_user_id: "author".to_string(),
+            actor_is_maintainer: false,
+            event_id: "event_discussion_reopened".to_string(),
+            now_unix: 23,
+        },
+    )
+    .unwrap();
+    assert_eq!(reopened.event.kind, RequestEventKind::DiscussionReopened);
+    assert_eq!(requests["request_1"].state, RequestState::ReadyForReview);
+}
+
+fn public_start_input() -> StartRequestInput {
+    StartRequestInput {
+        id: "request_1".to_string(),
+        repo_id: "owner/repo".to_string(),
+        name: "fix-parser".to_string(),
+        author_user_id: "author".to_string(),
+        title: Some("Fix parser".to_string()),
+        author_role: RequestActorRole::Public,
+        audience: RequestAudience::Public,
+        base_main_oid: "base".to_string(),
+        event_id: "event_started".to_string(),
+        now_unix: 10,
+    }
+}
+
+fn working_request() -> Request {
+    start_request(&mut BTreeMap::new(), public_start_input())
+        .unwrap()
+        .request
+}
+
+fn ready_request() -> Request {
+    let mut request = working_request();
+    request.head_oid = "head".to_string();
+    request.git_snapshot = Some(source_blob("head"));
+    request.state = RequestState::ReadyForReview;
+    request.current_stake_credits = 10;
+    request.first_ready_at_unix = Some(20);
+    request.ready_at_unix = Some(20);
+    request.updated_at_unix = 20;
+    request
+}
+
+fn completed_request(outcome: RequestAssessmentOutcome) -> Request {
+    let mut request = ready_request();
+    request.state = RequestState::Completed;
+    request.current_stake_credits = 0;
+    request.ready_at_unix = None;
+    request.assessment_outcome = Some(outcome);
+    request.assessed_at_unix = Some(30);
+    request.assessed_by_user_id = Some("maintainer".to_string());
+    request.completed_at_unix = Some(30);
+    request.completed_by_user_id = Some("maintainer".to_string());
+    request.updated_at_unix = 30;
+    request
+}
+
+fn close_input() -> CloseRequestInput {
+    CloseRequestInput {
+        request_id: "request_1".to_string(),
+        actor_user_id: "author".to_string(),
+        actor_can_close: true,
+        event_id: "event_closed".to_string(),
+        now_unix: 30,
+    }
 }
 
 fn maintainer_access() -> RepositoryAccess {
@@ -53,867 +538,6 @@ fn maintainer_access() -> RepositoryAccess {
     }
 }
 
-#[test]
-fn invalid_credit_grants_do_not_mutate_accounts() {
-    for (id, amount, message) in [
-        ("ledger_grant", i32::MAX as u32 + 1, "exceeds i32 range"),
-        ("repo_delete_refund:grant", 10, "working internal prefix"),
-    ] {
-        let mut accounts = BTreeMap::from([(
-            "user_public".to_string(),
-            UserCreditAccount {
-                user_id: "user_public".to_string(),
-                balance_credits: 20,
-            },
-        )]);
-        let mut ledger_entries = BTreeMap::new();
-        let error = grant_user_credits(
-            &mut accounts,
-            &mut ledger_entries,
-            GrantUserCreditsInput {
-                ledger_entry_id: id.to_string(),
-                user_id: "user_public".to_string(),
-                amount_credits: amount,
-                now_unix: 10,
-            },
-        )
-        .unwrap_err();
-        assert!(error.message.contains(message));
-        assert_eq!(accounts["user_public"].balance_credits, 20);
-        assert!(ledger_entries.is_empty());
-    }
-}
-
-#[test]
-fn duplicate_request_name_in_same_repo_is_rejected_before_start() {
-    let mut existing = submitted_request();
-    existing.name = "fix-parser".to_string();
-    let mut requests = BTreeMap::from([("req_1".to_string(), existing)]);
-    let mut input = public_start_input();
-    input.id = "req_2".to_string();
-    input.name = "fix-parser".to_string();
-
-    let error = start_request(&mut requests, input).unwrap_err();
-
-    assert!(error.message.contains("request name already exists"));
-    assert!(!requests.contains_key("req_2"));
-}
-
-#[test]
-fn request_name_is_unique_per_repository_and_derives_branch_ref() {
-    let mut existing = submitted_request();
-    existing.name = "fix-parser".to_string();
-    let mut requests = BTreeMap::from([("req_1".to_string(), existing)]);
-    let mut input = public_start_input();
-    input.id = "req_2".to_string();
-    input.repo_id = "another/repo".to_string();
-    input.name = "fix-parser".to_string();
-
-    let mutation = start_request(&mut requests, input).unwrap();
-
-    assert_eq!(mutation.request.name, "fix-parser");
-    assert_eq!(
-        canonical_request_ref(&mutation.request.name),
-        "refs/heads/fix-parser"
-    );
-}
-
-#[test]
-fn omitted_title_defaults_to_request_name() {
-    let mut input = public_start_input();
-    input.title = None;
-
-    let request = start_request(&mut BTreeMap::new(), input).unwrap().request;
-
-    assert_eq!(request.title, "fix-parser");
-}
-
-#[test]
-fn request_names_reject_reserved_and_git_unsafe_values() {
-    for invalid in [
-        "main",
-        "HEAD",
-        "two words",
-        "nested/name",
-        "-leading",
-        "UPPER",
-        "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
-    ] {
-        let mut input = public_start_input();
-        input.name = invalid.to_string();
-        let error = start_request(&mut BTreeMap::new(), input).unwrap_err();
-        assert!(
-            error.message.contains("request name"),
-            "unexpected error for {invalid}: {}",
-            error.message
-        );
-    }
-}
-
-#[test]
-fn closed_requests_remain_readable_but_are_never_writable() {
-    let mut request = submitted_request();
-    request.state = RequestState::Resolved;
-    for (access, viewer) in [
-        (RepositoryAccess::public(), None),
-        (RepositoryAccess::public(), Some("contributor")),
-        (maintainer_access(), Some("maintainer")),
-    ] {
-        let permissions = request_permissions(&request, access, viewer);
-        assert!(permissions.can_pull_branch);
-        assert!(!permissions.can_push_branch);
-        assert!(!permissions.can_open_discussion);
-    }
-}
-
-#[test]
-fn private_requests_are_invisible_to_public_access_and_writable_by_maintainers() {
-    let mut request = submitted_request();
-    request.audience = RequestAudience::Private;
-
-    assert!(!request_visible_to_access(
-        &request,
-        RepositoryAccess::public()
-    ));
-    let public = request_permissions(&request, RepositoryAccess::public(), Some("contributor"));
-    assert!(!public.can_pull_branch);
-    assert!(!public.can_push_branch);
-
-    let maintainer = request_permissions(&request, maintainer_access(), Some("maintainer"));
-    assert!(maintainer.can_pull_branch);
-    assert!(maintainer.can_push_branch);
-}
-
-#[test]
-fn invalid_stakes_do_not_debit_accounts() {
-    for (balance, stake) in [(u32::MAX, i32::MAX as u32 + 1), (i32::MAX as u32, 10)] {
-        let mut fixture = RequestFixture::working(balance);
-        let mut input = public_submit_input();
-        input.stake_credits = stake;
-        let error = fixture.submit(input).unwrap_err();
-        assert!(error.message.contains("exceeds i32 range"));
-        fixture.assert_unchanged(RequestState::Working, balance);
-    }
-}
-
-#[test]
-fn owner_submission_rejects_credit_stake() {
-    let mut requests = BTreeMap::new();
-    let mut events = BTreeMap::new();
-    let mut input = public_start_input();
-    input.author_role = RequestActorRole::Owner;
-    input.audience = RequestAudience::Private;
-    start_request(&mut requests, input).unwrap();
-    record_working_request_upload(&mut requests, public_upload_input()).unwrap();
-    let mut submit_input = public_submit_input();
-    submit_input.stake_credits = 10;
-
-    let error = submit_request(
-        &mut requests,
-        &mut events,
-        &mut BTreeMap::new(),
-        &mut BTreeMap::new(),
-        submit_input,
-    )
-    .unwrap_err();
-
-    assert!(error.message.contains("do not use credit stake"));
-}
-
-#[test]
-fn revision_reopens_needs_response_request() {
-    let mut requests = BTreeMap::from([("req_1".to_string(), submitted_request())]);
-    requests.get_mut("req_1").unwrap().state = RequestState::NeedsResponse;
-    let mut events = BTreeMap::new();
-
-    let mut input = revision_input("head");
-    input.git_snapshot = source_blob("new_head");
-    let mutation = record_request_revision(&mut requests, &mut events, input).unwrap();
-
-    assert_eq!(mutation.request.state, RequestState::Submitted);
-    assert!(matches!(
-        mutation.event.payload,
-        RequestEventPayload::RevisionPushed {
-            ref old_head_oid,
-            ref new_head_oid,
-            ..
-        } if old_head_oid == "head" && new_head_oid == "new_head"
-    ));
-    assert_eq!(mutation.change_block.old_head_oid, "head");
-    assert_eq!(mutation.change_block.new_head_oid, "new_head");
-    assert_eq!(mutation.change_block.git_snapshot, source_blob("new_head"));
-    assert!(matches!(
-        mutation.discussion.subject,
-        RequestDiscussionSubject::ChangeBlock { ref change_block_id }
-            if change_block_id == &mutation.change_block.id
-    ));
-    assert_eq!(mutation.discussion.status, RequestDiscussionStatus::Dormant);
-    assert_eq!(mutation.discussion.body_markdown, None);
-}
-
-#[test]
-fn revision_rejects_stale_expected_head() {
-    let mut requests = BTreeMap::from([("req_1".to_string(), submitted_request())]);
-    let mut events = BTreeMap::new();
-
-    let error = record_request_revision(&mut requests, &mut events, revision_input("stale_head"))
-        .unwrap_err();
-
-    assert!(error.message.contains("fetch and retry"));
-    assert_eq!(requests.get("req_1").unwrap().head_oid, "head");
-    assert!(events.is_empty());
-}
-
-#[test]
-fn revision_rejects_a_snapshot_for_a_different_head() {
-    let mut requests = BTreeMap::from([("req_1".to_string(), submitted_request())]);
-    let mut events = BTreeMap::new();
-    let mut input = revision_input("head");
-    input.git_snapshot = source_blob("different_head");
-
-    let error = record_request_revision(&mut requests, &mut events, input).unwrap_err();
-
-    assert!(error.message.contains("snapshot does not match"));
-    assert_eq!(requests.get("req_1").unwrap().head_oid, "head");
-    assert!(events.is_empty());
-}
-
-#[test]
-fn accepted_resolution_requires_merge_flow() {
-    let mut fixture = RequestFixture::submitted(0);
-
-    let error = fixture
-        .resolve(resolve_input(RequestDisposition::Accepted))
-        .unwrap_err();
-
-    assert!(error.message.contains("merge flow"));
-    fixture.assert_unchanged(RequestState::Submitted, 0);
-}
-
-#[test]
-fn working_request_cannot_enter_maintainer_decision_flow() {
-    let working_request = {
-        let mut request = submitted_request();
-        request.state = RequestState::Working;
-        request.stake_credits = 0;
-        request
-    };
-
-    let mut needs_fixture = RequestFixture::default();
-    needs_fixture
-        .requests
-        .insert("req_1".to_string(), working_request.clone());
-    let needs_response_error = mark_request_needs_response(
-        &mut needs_fixture.requests,
-        &mut needs_fixture.events,
-        MarkRequestNeedsResponseInput {
-            request_id: "req_1".to_string(),
-            actor_user_id: "maintainer".to_string(),
-            event_id: "event_needs_response".to_string(),
-            body: "Please add tests.".to_string(),
-            now_unix: 20,
-        },
-    )
-    .unwrap_err();
-    assert!(needs_response_error.message.contains("submitted"));
-
-    let mut decision_fixture = RequestFixture::default();
-    decision_fixture
-        .requests
-        .insert("req_1".to_string(), working_request);
-    let resolve_error = decision_fixture
-        .resolve(resolve_input(RequestDisposition::UsefulNotMerged))
-        .unwrap_err();
-    assert!(resolve_error.message.contains("submitted"));
-
-    let merge_error = decision_fixture.merge(clean_merge_input()).unwrap_err();
-    assert!(merge_error.message.contains("submitted"));
-    assert_eq!(
-        decision_fixture.requests["req_1"].state,
-        RequestState::Working
-    );
-    assert!(decision_fixture.events.is_empty());
-    assert!(decision_fixture.ledger_entries.is_empty());
-}
-
-#[test]
-fn clean_merge_accepts_and_settles_public_request() {
-    let mut fixture = RequestFixture::submitted(0);
-
-    let mutation = fixture.merge(clean_merge_input()).unwrap();
-
-    assert_eq!(mutation.request.state, RequestState::Resolved);
-    assert_eq!(
-        mutation.request.disposition,
-        Some(RequestDisposition::Accepted)
-    );
-    assert_eq!(mutation.request.settlement.unwrap().reward_credits, 5);
-    assert_eq!(mutation.merged_event.kind, RequestEventKind::Merged);
-    assert_eq!(mutation.settled_event.kind, RequestEventKind::Settled);
-    assert_eq!(fixture.accounts["user_public"].balance_credits, 15);
-    assert_eq!(mutation.ledger_entries.len(), 2);
-}
-
-#[test]
-fn clean_merge_rejects_stale_inputs_without_settling() {
-    for (input, message) in [
-        (
-            {
-                let mut input = clean_merge_input();
-                input.current_main_oid = "new-main".to_string();
-                input
-            },
-            "main changed",
-        ),
-        (
-            {
-                let mut input = clean_merge_input();
-                input.expected_head_oid = "old-head".to_string();
-                input
-            },
-            "request changed",
-        ),
-    ] {
-        let mut fixture = RequestFixture::submitted(0);
-        let error = fixture.merge(input).unwrap_err();
-        assert!(error.message.contains(message));
-        fixture.assert_unchanged(RequestState::Submitted, 0);
-    }
-}
-
-#[test]
-fn owner_clean_merge_does_not_touch_credit_accounts() {
-    let mut request = submitted_request();
-    request.author_user_id = "user_owner".to_string();
-    request.author_role = RequestActorRole::Owner;
-    request.audience = RequestAudience::Private;
-    request.stake_credits = 0;
-    let mut fixture = RequestFixture::default();
-    fixture.requests.insert("req_1".to_string(), request);
-
-    let mutation = fixture.merge(clean_merge_input()).unwrap();
-
-    assert_eq!(
-        mutation.request.disposition,
-        Some(RequestDisposition::Accepted)
-    );
-    assert!(mutation.account.is_none());
-    assert!(mutation.ledger_entries.is_empty());
-    assert!(fixture.accounts.is_empty());
-    assert!(fixture.ledger_entries.is_empty());
-}
-
-#[test]
-fn duplicate_settlement_ledger_ids_do_not_mutate_request_or_account() {
-    let mut fixture = RequestFixture::submitted(0);
-
-    let mut input = resolve_input(RequestDisposition::UsefulNotMerged);
-    input.refund_ledger_entry_id = Some("ledger_settle".to_string());
-    input.reward_ledger_entry_id = Some("ledger_settle".to_string());
-    let error = fixture.resolve(input).unwrap_err();
-
-    assert!(error.message.contains("must be unique"));
-    fixture.assert_unchanged(RequestState::Submitted, 0);
-}
-
-#[test]
-fn abandonment_requires_contributor_turn() {
-    let mut fixture = RequestFixture::submitted(0);
-
-    let error = fixture
-        .resolve(resolve_input(RequestDisposition::Abandoned))
-        .unwrap_err();
-
-    assert!(error.message.contains("waiting on the contributor"));
-}
-
-#[test]
-fn settlement_cannot_run_twice() {
-    let mut request = submitted_request();
-    request.state = RequestState::Resolved;
-    request.settlement = Some(settlement_for(10, RequestDisposition::LowQuality, 20));
-    let mut fixture = RequestFixture::default();
-    fixture.requests.insert("req_1".to_string(), request);
-
-    let error = fixture
-        .resolve(resolve_input(RequestDisposition::Accepted))
-        .unwrap_err();
-
-    assert!(error.message.contains("already closed"));
-}
-
-#[test]
-fn discussions_are_append_only_positioned_and_read_by_their_author() {
-    let request = submitted_request();
-    let starting_version = request.activity_version;
-    let starting_updated_at = request.updated_at_unix;
-    let mut requests = BTreeMap::from([(request.id.clone(), request)]);
-    let mut discussions = BTreeMap::new();
-    let mutation = create_request_discussion(
-        &mut requests,
-        &mut discussions,
-        CreateRequestDiscussionInput {
-            request_id: "req_1".to_string(),
-            id: "discussion_1".to_string(),
-            actor_user_id: "user_public".to_string(),
-            actor_can_participate: true,
-            client_discussion_id: "client_1".to_string(),
-            body_markdown: "Parser ownership".to_string(),
-            now_unix: 30,
-        },
-    )
-    .unwrap();
-
-    assert_eq!(mutation.discussion.opened_position, starting_version + 1);
-    assert_eq!(
-        mutation.read_state.read_through_position,
-        mutation.discussion.opened_position
-    );
-    assert_eq!(mutation.request.activity_version, starting_version + 1);
-    assert_eq!(mutation.request.updated_at_unix, starting_updated_at);
-}
-
-#[test]
-fn resolved_discussion_requires_atomic_reopen_and_reply() {
-    let request = submitted_request();
-    let mut requests = BTreeMap::from([(request.id.clone(), request)]);
-    let mut discussions = BTreeMap::new();
-    let root = create_request_discussion(
-        &mut requests,
-        &mut discussions,
-        CreateRequestDiscussionInput {
-            request_id: "req_1".to_string(),
-            id: "discussion_1".to_string(),
-            actor_user_id: "user_public".to_string(),
-            actor_can_participate: true,
-            client_discussion_id: "client_1".to_string(),
-            body_markdown: "Parser ownership".to_string(),
-            now_unix: 30,
-        },
-    )
-    .unwrap();
-    let resolved = resolve_request_discussion(
-        &mut requests,
-        &mut discussions,
-        ResolveRequestDiscussionInput {
-            request_id: "req_1".to_string(),
-            discussion_id: root.discussion.id.clone(),
-            actor_user_id: "maintainer".to_string(),
-            actor_is_maintainer: true,
-            event_id: "event_resolved_discussion".to_string(),
-            now_unix: 31,
-        },
-    )
-    .unwrap();
-    assert_eq!(
-        resolved.event.position,
-        resolved.discussion.last_activity_position
-    );
-
-    let mut replies = BTreeMap::new();
-    let ordinary = create_request_discussion_reply(
-        &mut requests,
-        &mut discussions,
-        &mut replies,
-        CreateRequestDiscussionReplyInput {
-            request_id: "req_1".to_string(),
-            discussion_id: root.discussion.id.clone(),
-            id: "reply_rejected".to_string(),
-            actor_user_id: "user_public".to_string(),
-            actor_can_participate: true,
-            client_reply_id: "client_rejected".to_string(),
-            body_markdown: "One more point".to_string(),
-            reply_to_reply_id: None,
-            now_unix: 32,
-        },
-    )
-    .unwrap_err();
-    assert_eq!(ordinary.kind, crate::error::ErrorKind::Conflict);
-
-    let reopened = reopen_and_reply_to_request_discussion(
-        &mut requests,
-        &mut discussions,
-        &mut replies,
-        ReopenAndReplyToRequestDiscussionInput {
-            request_id: "req_1".to_string(),
-            discussion_id: root.discussion.id,
-            reply_id: "reply_1".to_string(),
-            actor_user_id: "user_public".to_string(),
-            actor_is_maintainer: false,
-            actor_can_participate: true,
-            event_id: "event_reopened_discussion".to_string(),
-            client_reply_id: "client_reply_1".to_string(),
-            body_markdown: "One more point".to_string(),
-            reply_to_reply_id: None,
-            now_unix: 33,
-        },
-    )
-    .unwrap();
-    assert_eq!(reopened.discussion.status, RequestDiscussionStatus::Open);
-    assert_eq!(
-        reopened.reply.position,
-        reopened.discussion.last_activity_position
-    );
-    assert_eq!(
-        reopened.activity_event.as_ref().unwrap().position,
-        reopened.reply.position
-    );
-}
-
-#[test]
-fn discussion_read_markers_are_monotonic_and_bodies_are_bounded() {
-    let request = submitted_request();
-    let mut requests = BTreeMap::from([(request.id.clone(), request)]);
-    let mut discussions = BTreeMap::new();
-    let root = create_request_discussion(
-        &mut requests,
-        &mut discussions,
-        CreateRequestDiscussionInput {
-            request_id: "req_1".to_string(),
-            id: "discussion_1".to_string(),
-            actor_user_id: "user_public".to_string(),
-            actor_can_participate: true,
-            client_discussion_id: "client_1".to_string(),
-            body_markdown: "Parser ownership".to_string(),
-            now_unix: 30,
-        },
-    )
-    .unwrap();
-    let mut reads = BTreeMap::new();
-    let latest = mark_request_discussion_read(
-        &discussions,
-        &mut reads,
-        MarkRequestDiscussionReadInput {
-            discussion_id: root.discussion.id.clone(),
-            user_id: "maintainer".to_string(),
-            through_position: root.discussion.last_activity_position,
-            now_unix: 31,
-        },
-    )
-    .unwrap();
-    let stale = mark_request_discussion_read(
-        &discussions,
-        &mut reads,
-        MarkRequestDiscussionReadInput {
-            discussion_id: root.discussion.id,
-            user_id: "maintainer".to_string(),
-            through_position: 0,
-            now_unix: 32,
-        },
-    )
-    .unwrap();
-    assert_eq!(stale, latest);
-
-    let oversized = create_request_discussion(
-        &mut requests,
-        &mut discussions,
-        CreateRequestDiscussionInput {
-            request_id: "req_1".to_string(),
-            id: "discussion_oversized".to_string(),
-            actor_user_id: "user_public".to_string(),
-            actor_can_participate: true,
-            client_discussion_id: "client_oversized".to_string(),
-            body_markdown: "x".repeat(REQUEST_DISCUSSION_BODY_MAX_BYTES + 1),
-            now_unix: 33,
-        },
-    )
-    .unwrap_err();
-    assert_eq!(oversized.kind, crate::error::ErrorKind::BadRequest);
-
-    let oversized_client_id = create_request_discussion(
-        &mut requests,
-        &mut discussions,
-        CreateRequestDiscussionInput {
-            request_id: "req_1".to_string(),
-            id: "discussion_oversized_client_id".to_string(),
-            actor_user_id: "user_public".to_string(),
-            actor_can_participate: true,
-            client_discussion_id: "x".repeat(REQUEST_DISCUSSION_CLIENT_ID_MAX_BYTES + 1),
-            body_markdown: "Bound the idempotency key".to_string(),
-            now_unix: 34,
-        },
-    )
-    .unwrap_err();
-    assert_eq!(
-        oversized_client_id.kind,
-        crate::error::ErrorKind::BadRequest
-    );
-
-    let oversized_reply_client_id = create_request_discussion_reply(
-        &mut requests,
-        &mut discussions,
-        &mut BTreeMap::new(),
-        CreateRequestDiscussionReplyInput {
-            request_id: "req_1".to_string(),
-            discussion_id: "discussion_1".to_string(),
-            id: "reply_oversized_client_id".to_string(),
-            actor_user_id: "user_public".to_string(),
-            actor_can_participate: true,
-            client_reply_id: "x".repeat(REQUEST_DISCUSSION_CLIENT_ID_MAX_BYTES + 1),
-            body_markdown: "Bound the reply idempotency key".to_string(),
-            reply_to_reply_id: None,
-            now_unix: 35,
-        },
-    )
-    .unwrap_err();
-    assert_eq!(
-        oversized_reply_client_id.kind,
-        crate::error::ErrorKind::BadRequest
-    );
-}
-
-#[test]
-fn discussion_authority_and_activity_are_independent_from_request_lifecycle() {
-    let mut request = submitted_request();
-    request.state = RequestState::NeedsResponse;
-    let mut requests = BTreeMap::from([(request.id.clone(), request)]);
-    let mut discussions = BTreeMap::new();
-    let root = create_request_discussion(
-        &mut requests,
-        &mut discussions,
-        CreateRequestDiscussionInput {
-            request_id: "req_1".to_string(),
-            id: "discussion_1".to_string(),
-            actor_user_id: "topic_opener".to_string(),
-            actor_can_participate: true,
-            client_discussion_id: "client_1".to_string(),
-            body_markdown: "Parser ownership".to_string(),
-            now_unix: 30,
-        },
-    )
-    .unwrap();
-    assert_eq!(requests["req_1"].state, RequestState::NeedsResponse);
-
-    let unrelated = resolve_request_discussion(
-        &mut requests,
-        &mut discussions,
-        ResolveRequestDiscussionInput {
-            request_id: "req_1".to_string(),
-            discussion_id: root.discussion.id.clone(),
-            actor_user_id: "unrelated".to_string(),
-            actor_is_maintainer: false,
-            event_id: "event_forbidden".to_string(),
-            now_unix: 31,
-        },
-    )
-    .unwrap_err();
-    assert_eq!(unrelated.kind, crate::error::ErrorKind::Forbidden);
-
-    let author_resolved = resolve_request_discussion(
-        &mut requests,
-        &mut discussions,
-        ResolveRequestDiscussionInput {
-            request_id: "req_1".to_string(),
-            discussion_id: root.discussion.id.clone(),
-            actor_user_id: "user_public".to_string(),
-            actor_is_maintainer: false,
-            event_id: "event_author_resolved".to_string(),
-            now_unix: 32,
-        },
-    )
-    .unwrap();
-    assert_eq!(
-        author_resolved.event.kind,
-        RequestEventKind::DiscussionResolved
-    );
-    assert_eq!(requests["req_1"].state, RequestState::NeedsResponse);
-
-    let opener_reopened = reopen_request_discussion(
-        &mut requests,
-        &mut discussions,
-        ReopenRequestDiscussionInput {
-            request_id: "req_1".to_string(),
-            discussion_id: root.discussion.id,
-            actor_user_id: "topic_opener".to_string(),
-            actor_is_maintainer: false,
-            event_id: "event_opener_reopened".to_string(),
-            now_unix: 33,
-        },
-    )
-    .unwrap();
-    assert_eq!(
-        opener_reopened.event.kind,
-        RequestEventKind::DiscussionReopened
-    );
-    assert_eq!(requests["req_1"].state, RequestState::NeedsResponse);
-}
-
-#[test]
-fn description_edits_are_authorized_bounded_and_typed() {
-    let request = submitted_request();
-    let mut requests = BTreeMap::from([(request.id.clone(), request)]);
-    let mut events = BTreeMap::new();
-    let forbidden = update_request_description(
-        &mut requests,
-        &mut events,
-        UpdateRequestDescriptionInput {
-            request_id: "req_1".to_string(),
-            actor_user_id: "unrelated".to_string(),
-            actor_can_edit_description: false,
-            event_id: "event_forbidden".to_string(),
-            description_markdown: "No".to_string(),
-            now_unix: 30,
-        },
-    )
-    .unwrap_err();
-    assert_eq!(forbidden.kind, crate::error::ErrorKind::Forbidden);
-    assert!(events.is_empty());
-
-    let mutation = update_request_description(
-        &mut requests,
-        &mut events,
-        UpdateRequestDescriptionInput {
-            request_id: "req_1".to_string(),
-            actor_user_id: "user_public".to_string(),
-            actor_can_edit_description: true,
-            event_id: "event_description".to_string(),
-            description_markdown: "## Intent\nFix parsing.".to_string(),
-            now_unix: 31,
-        },
-    )
-    .unwrap();
-    let RequestEventPayload::DescriptionEdited { before, after } = &mutation.event.payload else {
-        panic!("expected compact description audit payload");
-    };
-    assert_eq!(before.byte_count, 0);
-    assert_eq!(after.byte_count, 22);
-    assert_eq!(before.sha256.len(), 64);
-    assert_eq!(after.sha256.len(), 64);
-    let serialized = serde_json::to_string(&mutation.event.payload).unwrap();
-    assert!(!serialized.contains("Fix parsing"));
-    assert!(!serialized.contains("previous_markdown"));
-    assert!(!serialized.contains("new_markdown"));
-
-    let oversized = update_request_description(
-        &mut requests,
-        &mut events,
-        UpdateRequestDescriptionInput {
-            request_id: "req_1".to_string(),
-            actor_user_id: "user_public".to_string(),
-            actor_can_edit_description: true,
-            event_id: "event_oversized".to_string(),
-            description_markdown: "x".repeat(REQUEST_DESCRIPTION_MAX_BYTES + 1),
-            now_unix: 32,
-        },
-    )
-    .unwrap_err();
-    assert_eq!(oversized.kind, crate::error::ErrorKind::BadRequest);
-}
-
-#[derive(Default)]
-struct RequestFixture {
-    requests: BTreeMap<String, Request>,
-    events: BTreeMap<String, RequestEvent>,
-    accounts: BTreeMap<String, UserCreditAccount>,
-    ledger_entries: BTreeMap<String, CreditLedgerEntry>,
-}
-
-impl RequestFixture {
-    fn with_balance(balance_credits: u32) -> Self {
-        Self {
-            accounts: BTreeMap::from([(
-                "user_public".to_string(),
-                UserCreditAccount {
-                    user_id: "user_public".to_string(),
-                    balance_credits,
-                },
-            )]),
-            ..Self::default()
-        }
-    }
-
-    fn working(balance_credits: u32) -> Self {
-        let mut fixture = Self::with_balance(balance_credits);
-        start_request(&mut fixture.requests, public_start_input()).unwrap();
-        record_working_request_upload(&mut fixture.requests, public_upload_input()).unwrap();
-        fixture
-    }
-
-    fn submitted(balance_credits: u32) -> Self {
-        let mut fixture = Self::with_balance(balance_credits);
-        fixture
-            .requests
-            .insert("req_1".to_string(), submitted_request());
-        fixture
-    }
-
-    fn submit(&mut self, input: SubmitRequestInput) -> Result<SubmitRequestMutation, ApiError> {
-        submit_request(
-            &mut self.requests,
-            &mut self.events,
-            &mut self.accounts,
-            &mut self.ledger_entries,
-            input,
-        )
-    }
-
-    fn resolve(&mut self, input: ResolveRequestInput) -> Result<ResolveRequestMutation, ApiError> {
-        resolve_request(
-            &mut self.requests,
-            &mut self.events,
-            &mut self.accounts,
-            &mut self.ledger_entries,
-            input,
-        )
-    }
-
-    fn merge(&mut self, input: MergeRequestInput) -> Result<MergeRequestMutation, ApiError> {
-        merge_request(
-            &mut self.requests,
-            &mut self.events,
-            &mut self.accounts,
-            &mut self.ledger_entries,
-            input,
-        )
-    }
-
-    fn assert_unchanged(&self, state: RequestState, balance: u32) {
-        assert_eq!(self.requests["req_1"].state, state);
-        assert_eq!(self.accounts["user_public"].balance_credits, balance);
-        assert!(self.events.is_empty());
-        assert!(self.ledger_entries.is_empty());
-    }
-}
-
-fn public_start_input() -> StartRequestInput {
-    StartRequestInput {
-        id: "req_1".to_string(),
-        repo_id: "owner/repo".to_string(),
-        name: "fix-parser".to_string(),
-        author_user_id: "user_public".to_string(),
-        title: Some("Fix parser crash".to_string()),
-        author_role: RequestActorRole::Public,
-        audience: RequestAudience::Public,
-        base_main_oid: "base".to_string(),
-        event_id: "event_started".to_string(),
-        now_unix: 10,
-    }
-}
-
-fn public_upload_input() -> RecordWorkingRequestUploadInput {
-    RecordWorkingRequestUploadInput {
-        request_id: "req_1".to_string(),
-        actor_user_id: "user_public".to_string(),
-        actor_can_edit: true,
-        expected_old_head_oid: None,
-        new_head_oid: "head".to_string(),
-        git_snapshot: source_blob("head"),
-        now_unix: 11,
-    }
-}
-
-fn public_submit_input() -> SubmitRequestInput {
-    SubmitRequestInput {
-        request_id: "req_1".to_string(),
-        actor_user_id: "user_public".to_string(),
-        expected_head_oid: "head".to_string(),
-        stake_credits: 10,
-        stake_ledger_entry_id: Some("ledger_stake".to_string()),
-        event_id: "event_created".to_string(),
-        now_unix: 12,
-    }
-}
-
 fn source_blob(git_oid: &str) -> SourceBlob {
     SourceBlob {
         object_key: format!("objects/{git_oid}"),
@@ -922,54 +546,4 @@ fn source_blob(git_oid: &str) -> SourceBlob {
         git_file_mode: DEFAULT_GIT_FILE_MODE.to_string(),
         size_bytes: 1,
     }
-}
-
-fn clean_merge_input() -> MergeRequestInput {
-    MergeRequestInput {
-        request_id: "req_1".to_string(),
-        actor_user_id: "maintainer".to_string(),
-        expected_main_oid: "base".to_string(),
-        current_main_oid: "base".to_string(),
-        expected_head_oid: "head".to_string(),
-        event_id: "event_merged".to_string(),
-        settlement_event_id: "event_settled".to_string(),
-        refund_ledger_entry_id: Some("ledger_refund".to_string()),
-        reward_ledger_entry_id: Some("ledger_reward".to_string()),
-        body: None,
-        now_unix: 30,
-    }
-}
-
-fn resolve_input(disposition: RequestDisposition) -> ResolveRequestInput {
-    ResolveRequestInput {
-        request_id: "req_1".to_string(),
-        actor_user_id: "maintainer".to_string(),
-        disposition,
-        event_id: "event_resolved".to_string(),
-        settlement_event_id: "event_settled".to_string(),
-        refund_ledger_entry_id: Some("ledger_refund".to_string()),
-        reward_ledger_entry_id: Some("ledger_reward".to_string()),
-        body: None,
-        now_unix: 30,
-    }
-}
-
-fn revision_input(expected_head: &str) -> RecordRequestRevisionInput {
-    RecordRequestRevisionInput {
-        request_id: "req_1".to_string(),
-        actor_user_id: "user_public".to_string(),
-        actor_can_edit: true,
-        expected_old_head_oid: Some(expected_head.to_string()),
-        new_head_oid: "new_head".to_string(),
-        git_snapshot: source_blob("new_head"),
-        event_id: "event_revision".to_string(),
-        body: None,
-        now_unix: 20,
-    }
-}
-
-fn submitted_request() -> Request {
-    let mut fixture = RequestFixture::working(20);
-    fixture.submit(public_submit_input()).unwrap();
-    fixture.requests.remove("req_1").unwrap()
 }
