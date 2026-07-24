@@ -400,7 +400,6 @@ fn mergeability_label(request: &RequestSummaryResponse) -> String {
         RequestMergeabilityStatus::Ready => "ready".to_string(),
         RequestMergeabilityStatus::Completed => "completed".to_string(),
         RequestMergeabilityStatus::Working => "working".to_string(),
-        RequestMergeabilityStatus::Held => "on hold".to_string(),
         RequestMergeabilityStatus::NotMaintainer => request
             .mergeability
             .reason

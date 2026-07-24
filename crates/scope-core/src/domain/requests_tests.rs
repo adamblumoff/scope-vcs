@@ -488,7 +488,7 @@ fn hold_blocks_contributors_but_not_maintainers_and_completion_blocks_all() {
     assert!(maintainer.can_manage_invitees);
     assert_eq!(
         request_mergeability(&request, maintainer_access()).status,
-        RequestMergeabilityStatus::Held
+        RequestMergeabilityStatus::Ready
     );
 
     let private_request = private_request(request);

@@ -59,7 +59,6 @@ pub(crate) fn request_list_item_response(
         request.state,
         request.assessment_outcome,
         request.has_git_snapshot,
-        request.held_at_unix.is_some(),
         request.is_merged,
         access,
     );

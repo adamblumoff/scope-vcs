@@ -48,7 +48,6 @@ const MERGEABILITY = {
   Ready: { label: 'Clean merge available', tone: 'success' },
   Completed: { label: 'Completed', tone: 'neutral' },
   Working: { label: 'Working', tone: 'neutral' },
-  Held: { label: 'On hold', tone: 'warning' },
   NotMaintainer: { label: 'Maintainer required', tone: 'neutral' },
   MissingRequestBranch: { label: 'Branch missing', tone: 'warning' },
 } as const satisfies Record<

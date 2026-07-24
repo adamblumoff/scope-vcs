@@ -55,7 +55,6 @@ pub enum RequestMergeabilityStatus {
     Ready,
     Completed,
     Working,
-    Held,
     NotMaintainer,
     MissingRequestBranch,
 }
@@ -169,7 +168,6 @@ pub fn request_list_mergeability(
     state: RequestState,
     assessment_outcome: Option<super::RequestAssessmentOutcome>,
     has_git_snapshot: bool,
-    is_held: bool,
     is_merged: bool,
     access: RepositoryAccess,
 ) -> RequestMergeability {
@@ -194,11 +192,6 @@ pub fn request_list_mergeability(
             RequestMergeabilityStatus::Working,
             Some("request is not ready for review"),
         )
-    } else if is_held {
-        (
-            RequestMergeabilityStatus::Held,
-            Some("request review is on hold"),
-        )
     } else if !has_git_snapshot {
         (
             RequestMergeabilityStatus::MissingRequestBranch,
@@ -215,7 +208,6 @@ pub fn request_mergeability(request: &Request, access: RepositoryAccess) -> Requ
         request.state,
         request.assessment_outcome,
         request.git_snapshot.is_some(),
-        request.held_at_unix.is_some(),
         request.merged_at_unix.is_some(),
         access,
     )

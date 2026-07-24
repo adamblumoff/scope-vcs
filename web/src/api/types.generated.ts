@@ -188,7 +188,7 @@ export type LeaveRequestResponse = { invitee: RequestInviteeResponse, };
 
 export type RequestPermissionsResponse = { can_open_discussion: boolean, can_reply_to_discussion: boolean, can_edit_identity: boolean, can_pull_branch: boolean, can_push_branch: boolean, can_mark_ready: boolean, can_return_to_working: boolean, can_manage_invitees: boolean, can_leave_request: boolean, can_hold: boolean, can_assess: boolean, can_close: boolean, can_merge: boolean, };
 
-export type RequestMergeabilityStatus = "Ready" | "Completed" | "Working" | "Held" | "NotMaintainer" | "MissingRequestBranch";
+export type RequestMergeabilityStatus = "Ready" | "Completed" | "Working" | "NotMaintainer" | "MissingRequestBranch";
 
 export type RequestMergeabilityResponse = { status: RequestMergeabilityStatus, current_main_oid: GitOid | null, request_head_oid: GitOid, reason: string | null, };
 
