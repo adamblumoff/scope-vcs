@@ -118,6 +118,7 @@ pub fn request_policy(request: &Request, viewer: RequestViewer<'_>) -> RequestPo
     };
     let branch_mutable = exact_visible && branch_actor && !completed && (!held || maintainer);
     let discussion_visible = exact_visible;
+    // Public discussion stays open after completion; completed private requests are read-only.
     let can_discuss = discussion_visible && authenticated && (public || (maintainer && !completed));
 
     let permissions = RequestPermissions {
