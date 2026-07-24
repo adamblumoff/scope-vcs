@@ -41,6 +41,7 @@ pub struct RequestPolicyDecision {
     pub listable: bool,
     pub exact_visible: bool,
     pub discussion_visible: bool,
+    pub activity_stream_visible: bool,
     pub git_advertised: bool,
     pub request_ref_readable: bool,
     pub branch_mutable: bool,
@@ -118,6 +119,7 @@ pub fn request_policy(request: &Request, viewer: RequestViewer<'_>) -> RequestPo
     };
     let branch_mutable = exact_visible && branch_actor && !completed && (!held || maintainer);
     let discussion_visible = exact_visible;
+    let activity_stream_visible = discussion_visible && (listable || published);
     // Public discussion stays open after completion; completed private requests are read-only.
     let can_discuss = discussion_visible && authenticated && (public || (maintainer && !completed));
 
@@ -154,6 +156,7 @@ pub fn request_policy(request: &Request, viewer: RequestViewer<'_>) -> RequestPo
         listable,
         exact_visible,
         discussion_visible,
+        activity_stream_visible,
         git_advertised,
         request_ref_readable,
         branch_mutable,

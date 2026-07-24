@@ -277,11 +277,11 @@ fn request_policy_surface_truth_table_is_viewer_and_lifecycle_aware() {
             "previously-published public Working",
             &published_working,
             [
-                published_working_reader(),
-                published_working_reader(),
+                published_working_reader(false),
+                published_working_reader(false),
                 collaborator_working(),
                 collaborator_working(),
-                exact_only_working(),
+                published_working_reader(true),
             ],
         ),
         (
@@ -700,6 +700,7 @@ struct ExpectedSurfaceDecision {
     listable: bool,
     exact_visible: bool,
     discussion_visible: bool,
+    activity_stream_visible: bool,
     git_advertised: bool,
     request_ref_readable: bool,
     branch_mutable: bool,
@@ -732,6 +733,7 @@ fn assert_surface_decision(
         listable: actual.listable,
         exact_visible: actual.exact_visible,
         discussion_visible: actual.discussion_visible,
+        activity_stream_visible: actual.activity_stream_visible,
         git_advertised: actual.git_advertised,
         request_ref_readable: actual.request_ref_readable,
         branch_mutable: actual.branch_mutable,
@@ -745,6 +747,7 @@ fn hidden() -> ExpectedSurfaceDecision {
         listable: false,
         exact_visible: false,
         discussion_visible: false,
+        activity_stream_visible: false,
         git_advertised: false,
         request_ref_readable: false,
         branch_mutable: false,
@@ -757,6 +760,7 @@ fn collaborator_working() -> ExpectedSurfaceDecision {
         listable: true,
         exact_visible: true,
         discussion_visible: true,
+        activity_stream_visible: true,
         git_advertised: true,
         request_ref_readable: true,
         branch_mutable: true,
@@ -769,6 +773,7 @@ fn exact_only_working() -> ExpectedSurfaceDecision {
         listable: false,
         exact_visible: true,
         discussion_visible: true,
+        activity_stream_visible: false,
         git_advertised: false,
         request_ref_readable: true,
         branch_mutable: true,
@@ -776,14 +781,15 @@ fn exact_only_working() -> ExpectedSurfaceDecision {
     }
 }
 
-fn published_working_reader() -> ExpectedSurfaceDecision {
+fn published_working_reader(branch_mutable: bool) -> ExpectedSurfaceDecision {
     ExpectedSurfaceDecision {
         listable: false,
         exact_visible: true,
         discussion_visible: true,
+        activity_stream_visible: true,
         git_advertised: false,
         request_ref_readable: true,
-        branch_mutable: false,
+        branch_mutable,
         counts_as_ready: false,
     }
 }
@@ -793,6 +799,7 @@ fn published_ready_reader(branch_mutable: bool) -> ExpectedSurfaceDecision {
         listable: true,
         exact_visible: true,
         discussion_visible: true,
+        activity_stream_visible: true,
         git_advertised: true,
         request_ref_readable: true,
         branch_mutable,
@@ -805,6 +812,7 @@ fn published_history() -> ExpectedSurfaceDecision {
         listable: true,
         exact_visible: true,
         discussion_visible: true,
+        activity_stream_visible: true,
         git_advertised: true,
         request_ref_readable: true,
         branch_mutable: false,
@@ -817,6 +825,7 @@ fn private_visible(counts_as_ready: bool, branch_mutable: bool) -> ExpectedSurfa
         listable: true,
         exact_visible: true,
         discussion_visible: true,
+        activity_stream_visible: true,
         git_advertised: true,
         request_ref_readable: true,
         branch_mutable,

@@ -90,6 +90,11 @@ async fn closed_public_request_remains_fetchable_as_read_only_history() {
         &bearer_header_for(CONTRIBUTOR_SUBJECT, CONTRIBUTOR_EMAIL),
         "clone closed public request ref",
     );
+    configure_bearer_header(
+        &checkout,
+        &permissioned_remote,
+        &bearer_header_for(CONTRIBUTOR_SUBJECT, CONTRIBUTOR_EMAIL),
+    );
 
     assert!(
         git_stdout_text(
@@ -468,7 +473,7 @@ async fn assert_restored_request_head(state: &AppState, expected: &str) -> PathB
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn active_invitee_and_maintainer_can_push_request_refs() {
-    for (label, subject, email, path, prepare) in [
+    for (label, subject, email, path, is_invitee) in [
         (
             "request-ref-contributor-push",
             CONTRIBUTOR_SUBJECT,
@@ -485,7 +490,7 @@ async fn active_invitee_and_maintainer_can_push_request_refs() {
         ),
     ] {
         let state = test_state_with_request().await;
-        if prepare {
+        if is_invitee {
             insert_public_contributor(&state).await;
             state
                 .metadata
@@ -501,6 +506,9 @@ async fn active_invitee_and_maintainer_can_push_request_refs() {
             insert_member_user(&state).await;
         }
         let (source, remote, _server) = request_push_checkout(&state, label, subject, email).await;
+        if !is_invitee {
+            configure_push_intent_header(&state, &source, &remote, &member_user_id()).await;
+        }
         let before_event_count = request_event_count(&state).await;
         push_change(
             &source,

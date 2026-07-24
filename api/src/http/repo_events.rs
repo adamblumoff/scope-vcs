@@ -135,7 +135,7 @@ async fn stream_event_for_user(
                 is_invitee,
             ),
         )
-        .listable
+        .activity_stream_visible
         {
             return Ok(None);
         }
