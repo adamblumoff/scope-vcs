@@ -129,12 +129,19 @@ function RequestRoute() {
   )
   const performAction = useCallback(async (command: RequestActionCommand) => {
     const result = await runRequestAction({ data: { ...requestParams, ...command } })
-    if (result.deleted) {
-      await navigate({ params: repoParams, to: '/repos/$owner/$repo/requests' })
-    } else {
-      await router.invalidate()
+    try {
+      if (result.deleted) {
+        await navigate({ params: repoParams, to: '/repos/$owner/$repo/requests' })
+      } else {
+        await router.invalidate()
+      }
+      return result
+    } catch {
+      return {
+        ...result,
+        synchronizationError: 'The update completed, but the latest request state could not be reloaded. Refresh this page.',
+      }
     }
-    return result
   }, [navigate, repoParams, requestParams, router])
 
   if (!page.detail || !page.discussionPage) {

@@ -20,7 +20,8 @@ export function useRequestActions(
     setPending(command.action)
     setError(null)
     try {
-      await perform(command)
+      const result = await perform(command)
+      if (result.synchronizationError) setError(result.synchronizationError)
       return true
     } catch (cause) {
       setError(

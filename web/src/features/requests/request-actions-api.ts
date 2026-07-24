@@ -26,6 +26,7 @@ export type RequestActionInput = RequestParams & RequestActionCommand
 
 export type RequestActionResult = {
   deleted: boolean
+  synchronizationError?: string
 }
 
 export async function performRequestActionForRequest(
