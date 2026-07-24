@@ -95,7 +95,7 @@ pub fn request_policy(request: &Request, viewer: RequestViewer<'_>) -> RequestPo
     } else if published {
         true
     } else {
-        author || invitee || maintainer
+        author || invitee
     };
     let listable = if private {
         maintainer

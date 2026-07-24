@@ -39,7 +39,7 @@ async fn advertisement_and_exact_fetch_follow_viewer_and_publication_policy() {
         Some(&unrelated)
     ));
     assert!(!advertises_request_ref(&public_remote, None));
-    assert!(fetch_exact_request_tip(
+    assert!(!fetch_exact_request_tip(
         &permissioned_remote,
         Some(&maintainer),
         &request_head,

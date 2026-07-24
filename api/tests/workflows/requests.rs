@@ -422,7 +422,7 @@ async fn request_reads_apply_one_viewer_aware_policy_across_lists_and_exact_surf
         request_ids(&maintainer_list),
         vec!["req_private_matrix", "req_ready_public"]
     );
-    for request_id in ["req_never", "req_previous", "req_private_matrix"] {
+    for request_id in ["req_previous", "req_private_matrix"] {
         assert_eq!(
             api_request(
                 app.clone(),
@@ -436,28 +436,41 @@ async fn request_reads_apply_one_viewer_aware_policy_across_lists_and_exact_surf
             StatusCode::OK
         );
     }
-    let maintainer_draft = response_json(
+    for suffix in ["req_never", "req_never/timeline", "req_never/activity"] {
+        assert_eq!(
+            api_request(
+                app.clone(),
+                "GET",
+                &format!("/v1/repos/owner/repo/requests/{suffix}"),
+                Some(&bearer_header()),
+                None,
+            )
+            .await
+            .status(),
+            StatusCode::NOT_FOUND
+        );
+    }
+    assert_eq!(
         api_request(
             app.clone(),
-            "GET",
+            "PATCH",
             "/v1/repos/owner/repo/requests/req_never",
             Some(&bearer_header()),
-            None,
+            Some(r#"{"title":"Maintainer must not see this"}"#),
         )
-        .await,
-    )
-    .await;
-    assert_eq!(
-        maintainer_draft["request"]["permissions"]["can_view_activity"],
-        false
+        .await
+        .status(),
+        StatusCode::NOT_FOUND
     );
     assert_eq!(
         api_request(
             app,
-            "GET",
-            "/v1/repos/owner/repo/requests/req_never/activity",
+            "POST",
+            "/v1/repos/owner/repo/requests/req_never/timeline",
             Some(&bearer_header()),
-            None,
+            Some(
+                r#"{"body_markdown":"Maintainer must not see this","client_discussion_id":"hidden"}"#,
+            ),
         )
         .await
         .status(),
@@ -613,6 +626,16 @@ async fn invitee_routes_enforce_exact_handles_roles_leave_and_private_exclusion(
         .status(),
         StatusCode::NOT_FOUND
     );
+
+    state
+        .metadata
+        .mutate_request_for_tests("req_invites", |request| {
+            request.first_ready_at_unix = Some(5);
+            request.ready_queue_version = Some(1);
+            request.updated_at_unix = 5;
+        })
+        .await
+        .unwrap();
 
     let maintainer_add = api_request(
         app.clone(),

@@ -56,15 +56,18 @@ fn request_discuss_requires_a_body_before_login() {
 }
 
 #[test]
-fn request_ready_requires_a_stake_before_login() {
+fn request_ready_accepts_an_omitted_stake_before_role_resolution() {
     let dir = TempDir::new("ready-stake");
     create_repo_with_head(dir.path());
 
-    scope_failure(
-        dir.path(),
-        ["request", "ready"],
-        "the following required arguments were not provided",
-    );
+    let output = scope_command(dir.path())
+        .args(["request", "ready"])
+        .output()
+        .unwrap();
+    assert_failure(&output, "scope request ready");
+    let stderr = String::from_utf8(output.stderr).unwrap();
+    assert!(!stderr.contains("required arguments"), "{stderr}");
+    assert!(stderr.contains("start browser login"), "{stderr}");
 }
 
 #[test]

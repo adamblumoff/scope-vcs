@@ -270,7 +270,7 @@ fn request_policy_surface_truth_table_is_viewer_and_lifecycle_aware() {
                 hidden(),
                 collaborator_working(),
                 collaborator_working(),
-                exact_only_working(),
+                hidden(),
             ],
         ),
         (
@@ -721,19 +721,6 @@ fn collaborator_working() -> ExpectedSurfaceDecision {
         discussion_visible: true,
         activity_stream_visible: true,
         git_advertised: true,
-        request_ref_readable: true,
-        branch_mutable: true,
-        counts_as_ready: false,
-    }
-}
-
-fn exact_only_working() -> ExpectedSurfaceDecision {
-    ExpectedSurfaceDecision {
-        listable: false,
-        exact_visible: true,
-        discussion_visible: true,
-        activity_stream_visible: false,
-        git_advertised: false,
         request_ref_readable: true,
         branch_mutable: true,
         counts_as_ready: false,
