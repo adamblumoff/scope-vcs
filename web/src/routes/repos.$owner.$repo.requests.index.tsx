@@ -13,6 +13,13 @@ const loadRequestQueuePage = createServerFn({ method: 'GET' })
   .validator(parseLoadRequestQueueInput)
   .handler(async ({ data }) => loadRequestQueueForRequest(data))
 
+function createRefreshKey() {
+  return Array.from(
+    globalThis.crypto.getRandomValues(new Uint32Array(4)),
+    (value) => value.toString(36),
+  ).join('-')
+}
+
 export const Route = createFileRoute('/repos/$owner/$repo/requests/')({
   loader: async ({ params }) => {
     const [yourWork, ready, completed] = await Promise.all([
@@ -22,7 +29,7 @@ export const Route = createFileRoute('/repos/$owner/$repo/requests/')({
     ])
     return {
       initialPages: { completed, ready, your_work: yourWork },
-      refreshKey: Date.now(),
+      refreshKey: createRefreshKey(),
     }
   },
   component: RequestsRoute,

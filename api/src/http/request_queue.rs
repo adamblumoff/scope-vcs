@@ -26,7 +26,7 @@ use sha2::{Digest, Sha256};
 const REQUEST_QUEUE_CURSOR_PREFIX: &str = "scope_rq_";
 const REQUEST_QUEUE_CURSOR_NONCE_BYTES: usize = 12;
 const REQUEST_QUEUE_CURSOR_MAX_ENCODED_BYTES: usize = 2_048;
-const REQUEST_QUEUE_CURSOR_KEY_DOMAIN: &[u8] = b"scope.request-queue-cursor.key.v1\\0";
+const REQUEST_QUEUE_CURSOR_KEY_DOMAIN: &[u8] = b"scope.request-queue-cursor.key.v1\0";
 const REQUEST_QUEUE_CURSOR_AAD_DOMAIN: &str = "scope.request-queue-cursor.aad.v1";
 const REQUEST_QUEUE_SEARCH_MAX_CHARS: usize = 200;
 
