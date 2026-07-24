@@ -268,14 +268,9 @@ async fn invitee_revocation_serializes_with_final_revision_authorization() {
 
     remove.await.unwrap().unwrap();
     let revision = revision.await.unwrap();
-    assert!(
-        revision.is_ok()
-            || revision
-                .as_ref()
-                .unwrap_err()
-                .message
-                .contains("mutation access")
-    );
+    if let Err(error) = &revision {
+        assert_eq!(error.kind, crate::error::ErrorKind::Forbidden);
+    }
     assert!(
         !store
             .request_is_invitee("req_invalidate", "user_collaborator")
