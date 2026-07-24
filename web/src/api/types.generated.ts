@@ -44,7 +44,7 @@ export type RequestReviewExitReason = "AuthorReturned" | "ChangesRequested" | "R
 
 export type GitOid = string;
 
-export type RequestEventKind = "Started" | "ReadyForReview" | "ReturnedToWorking" | "RevisionPushed" | "Held" | "HoldReleased" | "Assessed" | "Merged" | "Closed" | "Settled" | "DescriptionEdited" | "DiscussionResolved" | "DiscussionReopened";
+export type RequestEventKind = "Started" | "ReadyForReview" | "ReturnedToWorking" | "RevisionPushed" | "Held" | "HoldReleased" | "Assessed" | "Merged" | "Closed" | "Settled" | "IdentityEdited" | "DiscussionResolved" | "DiscussionReopened";
 
 export type ProjectionPreviewAudience = "private" | "public";
 
@@ -186,7 +186,7 @@ export type RequestInviteeMutationResponse = { request: RequestSummaryResponse, 
 
 export type LeaveRequestResponse = { invitee: RequestInviteeResponse, };
 
-export type RequestPermissionsResponse = { can_open_discussion: boolean, can_reply_to_discussion: boolean, can_edit_description: boolean, can_pull_branch: boolean, can_push_branch: boolean, can_mark_ready: boolean, can_return_to_working: boolean, can_manage_invitees: boolean, can_leave_request: boolean, can_hold: boolean, can_assess: boolean, can_close: boolean, can_merge: boolean, };
+export type RequestPermissionsResponse = { can_open_discussion: boolean, can_reply_to_discussion: boolean, can_edit_identity: boolean, can_pull_branch: boolean, can_push_branch: boolean, can_mark_ready: boolean, can_return_to_working: boolean, can_manage_invitees: boolean, can_leave_request: boolean, can_hold: boolean, can_assess: boolean, can_close: boolean, can_merge: boolean, };
 
 export type RequestMergeabilityStatus = "Ready" | "Completed" | "Working" | "Held" | "NotMaintainer" | "MissingRequestBranch";
 
@@ -194,9 +194,9 @@ export type RequestMergeabilityResponse = { status: RequestMergeabilityStatus, c
 
 export type RequestEventResponse = { id: string, position: number, actor: RequestActorSummaryResponse, kind: RequestEventKind, payload: RequestEventPayload, created_at_unix: number, };
 
-export type RequestEventPayload = { "Started": { title: string, description_markdown: string, } } | { "ReadyForReview": { head_oid: string, stake_credits: number, } } | { "ReturnedToWorking": { head_oid: string, stake_credits: number, reason: RequestReviewExitReason, } } | { "RevisionPushed": { old_head_oid: string, new_head_oid: string, note: string | null, } } | { "Held": { head_oid: string, } } | { "HoldReleased": { head_oid: string, } } | { "Assessed": { head_oid: string, outcome: RequestAssessmentOutcome, body_markdown: string | null, stake_credits: number, } } | { "Merged": { head_oid: string, main_oid: string, } } | { "Closed": { head_oid: string, } } | { "Settled": { settlement: RequestSettlement, } } | { "DescriptionEdited": { before: RequestDescriptionAuditFact, after: RequestDescriptionAuditFact, } } | { "DiscussionResolved": { discussion_id: string, } } | { "DiscussionReopened": { discussion_id: string, } };
+export type RequestEventPayload = { "Started": { title: string, description_markdown: string, } } | { "ReadyForReview": { head_oid: string, stake_credits: number, } } | { "ReturnedToWorking": { head_oid: string, stake_credits: number, reason: RequestReviewExitReason, } } | { "RevisionPushed": { old_head_oid: string, new_head_oid: string, note: string | null, } } | { "Held": { head_oid: string, } } | { "HoldReleased": { head_oid: string, } } | { "Assessed": { head_oid: string, outcome: RequestAssessmentOutcome, body_markdown: string | null, stake_credits: number, } } | { "Merged": { head_oid: string, main_oid: string, } } | { "Closed": { head_oid: string, } } | { "Settled": { settlement: RequestSettlement, } } | { "IdentityEdited": { before: RequestIdentityAuditFact, after: RequestIdentityAuditFact, } } | { "DiscussionResolved": { discussion_id: string, } } | { "DiscussionReopened": { discussion_id: string, } };
 
-export type RequestDescriptionAuditFact = { sha256: string, byte_count: number, };
+export type RequestIdentityAuditFact = { title_sha256: string, title_byte_count: number, description_sha256: string, description_byte_count: number, };
 
 export type RequestSettlement = { outcome: RequestAssessmentOutcome, stake_credits: number, refunded_credits: number, reward_credits: number, burned_credits: number, settled_at_unix: number, };
 
@@ -232,7 +232,7 @@ export type ReadyRequestRequest = { stake_credits: number | null, };
 
 export type AssessRequestRequest = { outcome: RequestAssessmentOutcome, body_markdown: string | null, };
 
-export type UpdateRequestDescriptionRequest = { description_markdown: string, };
+export type EditRequestIdentityRequest = { title: string | null, description_markdown: string | null, };
 
 export type CreateRequestDiscussionRequest = { body_markdown: string, client_discussion_id: string, };
 
@@ -270,7 +270,6 @@ export const ApiRouteTemplates = {
   repoFileContent: "/v1/repos/{owner}/{repo}/files/content",
   repoRequestChangeBlockFiles: "/v1/repos/{owner}/{repo}/requests/{request_id}/changes/{block_id}",
   repoRequestChangeBlockFileDiff: "/v1/repos/{owner}/{repo}/requests/{request_id}/changes/{block_id}/file-diff",
-  repoRequestDescription: "/v1/repos/{owner}/{repo}/requests/{request_id}/description",
   repoRequestDiscussions: "/v1/repos/{owner}/{repo}/requests/{request_id}/timeline",
   repoRequestDiscussionChanges: "/v1/repos/{owner}/{repo}/requests/{request_id}/timeline/changes",
   repoRequestDiscussionReplies: "/v1/repos/{owner}/{repo}/requests/{request_id}/threads/{discussion_id}/replies",

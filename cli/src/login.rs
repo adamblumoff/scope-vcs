@@ -4,8 +4,9 @@ use crate::{
         BrowserLoginStartResponse, CLI_BROWSER_LOGIN_PATH, CLI_DEVICE_LOGIN_PATH,
         CLI_EXCHANGE_GRANTS_EXCHANGE_PATH, CliExchangeGrantExchangeRequest,
         CliSessionTokenResponse, DeviceLoginPollResponse, DeviceLoginStartResponse,
-        DeviceLoginStatus, api_url, cli_browser_login_exchange_path, cli_device_login_poll_path,
-        display_user, http_client, revoke_cli_session, validate_session_token,
+        DeviceLoginStatus, account_session, api_url, cli_browser_login_exchange_path,
+        cli_device_login_poll_path, display_user, http_client, revoke_cli_session,
+        validate_session_token,
     },
     auth::{
         cached_cli_session, delete_stored_session_token, read_stored_session_token,
@@ -69,6 +70,11 @@ pub fn whoami() -> anyhow::Result<()> {
         bail!("not signed in; run scope login");
     };
     println!("{}", display_user(&session.user));
+    if let Some(balance) =
+        account_session(&client, &api_url, &session.token)?.credit_balance_credits
+    {
+        println!("Credits: {balance}");
+    }
     Ok(())
 }
 

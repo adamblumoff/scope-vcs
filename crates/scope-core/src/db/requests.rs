@@ -19,12 +19,11 @@ use super::{
 };
 use crate::{
     domain::requests::{
-        CloseRequestInput, CloseRequestMutation, CreditAccountMutation, GrantUserCreditsInput,
-        RecordRequestRevisionInput, RecordWorkingRequestUploadInput, Request, RequestEvent,
-        RequestRevisionMutation, RequestTimelineMutation, StartRequestInput, StartRequestMutation,
-        UpdateRequestDescriptionInput, WorkingRequestUploadMutation, close_request,
+        CloseRequestInput, CloseRequestMutation, CreditAccountMutation, EditRequestIdentityInput,
+        GrantUserCreditsInput, RecordRequestRevisionInput, RecordWorkingRequestUploadInput,
+        Request, RequestEvent, RequestRevisionMutation, RequestTimelineMutation, StartRequestInput,
+        StartRequestMutation, WorkingRequestUploadMutation, close_request, edit_request_identity,
         grant_user_credits, record_request_revision, record_working_request_upload, start_request,
-        update_request_description,
     },
     error::ApiError,
 };
@@ -199,25 +198,25 @@ impl MetadataStore {
         Ok(mutation)
     }
 
-    pub async fn update_request_description(
+    pub async fn edit_request_identity(
         &self,
-        mut input: UpdateRequestDescriptionInput,
+        mut input: EditRequestIdentityInput,
     ) -> Result<RequestTimelineMutation, ApiError> {
         let db = Arc::clone(&self.db);
         let tx = db.as_ref().begin().await.map_err(ApiError::internal)?;
         let (repo, request) = lock_request_repository(&tx, &input.request_id).await?;
         ensure_user_exists(&tx, &input.actor_user_id).await?;
-        input.actor_can_edit_description =
+        input.actor_can_edit_identity =
             request_policy_for_user(&tx, &repo, &request, &input.actor_user_id)
                 .await?
                 .permissions
-                .can_edit_description;
+                .can_edit_identity;
         let mut requests = BTreeMap::from([(request.id.clone(), request)]);
         let mut events = BTreeMap::new();
         if let Some(event) = request_event_by_id(&tx, &input.event_id).await? {
             events.insert(event.id.clone(), event);
         }
-        let mutation = update_request_description(&mut requests, &mut events, input)?;
+        let mutation = edit_request_identity(&mut requests, &mut events, input)?;
         save_request_row(&tx, &mutation.request).await?;
         insert_request_event_row(&tx, &mutation.event).await?;
         tx.commit().await.map_err(ApiError::internal)?;

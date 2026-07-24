@@ -1,7 +1,10 @@
 use crate::{
-    git_repo::{GitRepo, branch_config_value, current_branch, git_remote_fetch_url},
-    git_transport::{ScopeRemote, select_scope_fetch_remote},
+    git_repo::{
+        GitRepo, branch_config_value, current_branch, git_remote_fetch_url, git_remote_names,
+    },
+    git_transport::{DEFAULT_SCOPE_REMOTE, ScopeRemote},
 };
+use anyhow::bail;
 
 pub(super) const REQUEST_REMOTE_KEY: &str = "scopeRequestRemote";
 
@@ -16,13 +19,44 @@ pub(super) fn request_remote_name(
         return Ok(remote);
     }
     let branch = current_branch(git_repo)?;
-    if let Some(remote) = selected_remote_name(
-        None,
-        branch_config_value(git_repo, &branch, REQUEST_REMOTE_KEY)?,
+    if let Some(remote) = normalized_remote_arg(
+        branch_config_value(git_repo, &branch, REQUEST_REMOTE_KEY)?.as_deref(),
     ) {
         return Ok(remote);
     }
-    select_scope_fetch_remote(git_repo, api_url, None)
+    if let Some(remote) =
+        normalized_remote_arg(branch_config_value(git_repo, &branch, "remote")?.as_deref())
+        && load_request_remote(git_repo, api_url, &remote).is_ok()
+    {
+        return Ok(remote);
+    }
+    unambiguous_scope_remote(git_repo, api_url)
+}
+
+fn unambiguous_scope_remote(git_repo: &GitRepo, api_url: &str) -> anyhow::Result<String> {
+    let mut targets = git_remote_names(git_repo)?
+        .into_iter()
+        .filter_map(|remote| {
+            let url = git_remote_fetch_url(git_repo, &remote).ok()?;
+            ScopeRemote::parse(api_url, &remote, &url).ok()
+        })
+        .collect::<Vec<_>>();
+    if targets.is_empty() {
+        bail!("no Scope Git remote found; pass --remote <name> or run scope init");
+    }
+    let first_target = (&targets[0].owner, &targets[0].repo);
+    if targets
+        .iter()
+        .any(|target| (&target.owner, &target.repo) != first_target)
+    {
+        bail!("multiple Scope repositories are configured; pass --remote <name> to choose one");
+    }
+    targets.sort_by_key(|target| match target.remote.as_str() {
+        DEFAULT_SCOPE_REMOTE => 0,
+        "origin" => 1,
+        _ => 2,
+    });
+    Ok(targets.remove(0).remote)
 }
 
 pub(super) fn load_request_remote(
@@ -40,35 +74,11 @@ fn normalized_remote_arg(remote: Option<&str>) -> Option<String> {
         .filter(|remote| !remote.is_empty())
 }
 
-fn selected_remote_name(
-    explicit_remote: Option<&str>,
-    branch_remote: Option<String>,
-) -> Option<String> {
-    normalized_remote_arg(explicit_remote)
-        .or_else(|| normalized_remote_arg(branch_remote.as_deref()))
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::test_support::TestDir as TempDir;
     use std::{fs, path::PathBuf};
-
-    #[test]
-    fn selected_remote_prefers_explicit_then_branch_remote() {
-        for (explicit, branch, expected) in [
-            (
-                Some("upstream"),
-                Some("scope".to_string()),
-                Some("upstream"),
-            ),
-            (None, Some("upstream".to_string()), Some("upstream")),
-            (None, None, None),
-            (Some(" "), Some(" ".to_string()), None),
-        ] {
-            assert_eq!(selected_remote_name(explicit, branch).as_deref(), expected);
-        }
-    }
 
     #[test]
     fn explicit_remote_does_not_require_git_branch_context() {
@@ -83,7 +93,7 @@ mod tests {
     }
 
     #[test]
-    fn default_remote_discovers_scope_remotes_in_priority_order() {
+    fn default_remote_discovers_one_repository_in_priority_order() {
         for (label, remotes, expected) in [
             (
                 "origin",
@@ -113,6 +123,56 @@ mod tests {
                 expected
             );
         }
+    }
+
+    #[test]
+    fn non_scope_tracking_remote_falls_back_to_scope_remote() {
+        let (dir, repo) = repo_with_remotes(
+            "github-tracking",
+            &[
+                ("origin", "https://github.com/adam/repo"),
+                ("scope", "https://scope.example/git/public/adam/repo"),
+            ],
+        );
+        dir.run_git(["config", "branch.main.remote", "origin"]);
+
+        assert_eq!(
+            request_remote_name(&repo, "https://scope.example", None).unwrap(),
+            "scope"
+        );
+    }
+
+    #[test]
+    fn distinct_scope_repository_targets_require_an_explicit_remote() {
+        let (_dir, repo) = repo_with_remotes(
+            "ambiguous",
+            &[
+                ("origin", "https://scope.example/git/public/adam/one"),
+                ("scope", "https://scope.example/git/public/adam/two"),
+            ],
+        );
+
+        let error = request_remote_name(&repo, "https://scope.example", None)
+            .unwrap_err()
+            .to_string();
+        assert!(error.contains("pass --remote"), "{error}");
+    }
+
+    #[test]
+    fn tracking_remote_wins_over_ambiguous_repository_targets() {
+        let (dir, repo) = repo_with_remotes(
+            "tracking",
+            &[
+                ("origin", "https://scope.example/git/public/adam/one"),
+                ("scope", "https://scope.example/git/public/adam/two"),
+            ],
+        );
+        dir.run_git(["config", "branch.main.remote", "origin"]);
+
+        assert_eq!(
+            request_remote_name(&repo, "https://scope.example", None).unwrap(),
+            "origin"
+        );
     }
 
     fn repo_with_remotes(label: &str, remotes: &[(&str, &str)]) -> (TempDir, GitRepo) {

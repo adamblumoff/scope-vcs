@@ -378,7 +378,7 @@ fn request_policy_permissions_keep_roles_and_hold_behavior_distinct() {
     let working = working_request();
     let author = policy_for(&working, ViewerKind::Author).permissions;
     assert!(author.can_open_discussion && author.can_reply_to_discussion);
-    assert!(author.can_edit_description && author.can_pull_branch && author.can_push_branch);
+    assert!(author.can_edit_identity && author.can_pull_branch && author.can_push_branch);
     assert!(author.can_mark_ready && author.can_manage_invitees && author.can_close);
     assert!(
         !author.can_leave_request && !author.can_hold && !author.can_assess && !author.can_merge
@@ -387,7 +387,7 @@ fn request_policy_permissions_keep_roles_and_hold_behavior_distinct() {
     let invitee = policy_for(&working, ViewerKind::Invitee).permissions;
     assert!(invitee.can_open_discussion && invitee.can_reply_to_discussion);
     assert!(invitee.can_pull_branch && invitee.can_push_branch && invitee.can_leave_request);
-    assert!(!invitee.can_edit_description && !invitee.can_mark_ready);
+    assert!(!invitee.can_edit_identity && !invitee.can_mark_ready);
     assert!(!invitee.can_manage_invitees && !invitee.can_close && !invitee.can_merge);
 
     let ready = ready_request();
@@ -397,7 +397,7 @@ fn request_policy_permissions_keep_roles_and_hold_behavior_distinct() {
             && unrelated.can_reply_to_discussion
             && unrelated.can_pull_branch
     );
-    assert!(!unrelated.can_push_branch && !unrelated.can_edit_description);
+    assert!(!unrelated.can_push_branch && !unrelated.can_edit_identity);
     let author = policy_for(&ready, ViewerKind::Author).permissions;
     assert!(author.can_push_branch && author.can_return_to_working && author.can_manage_invitees);
     let maintainer = policy_for(&ready, ViewerKind::Maintainer).permissions;
@@ -416,7 +416,7 @@ fn request_policy_permissions_keep_roles_and_hold_behavior_distinct() {
                 && permissions.can_reply_to_discussion
                 && permissions.can_pull_branch
         );
-        assert!(!permissions.can_push_branch && !permissions.can_edit_description);
+        assert!(!permissions.can_push_branch && !permissions.can_edit_identity);
         assert!(!permissions.can_return_to_working && !permissions.can_manage_invitees);
         assert_eq!(
             permissions.can_leave_request,
@@ -426,7 +426,7 @@ fn request_policy_permissions_keep_roles_and_hold_behavior_distinct() {
     let maintainer = policy_for(&held, ViewerKind::Maintainer).permissions;
     assert!(
         maintainer.can_push_branch
-            && maintainer.can_edit_description
+            && maintainer.can_edit_identity
             && maintainer.can_manage_invitees
     );
 
@@ -471,24 +471,24 @@ fn hold_blocks_contributors_but_not_maintainers_and_completion_blocks_all() {
     assert!(
         policy_for(&request, ViewerKind::Author)
             .permissions
-            .can_edit_description
+            .can_edit_identity
     );
     let request = held_request();
     let author = policy_for(&request, ViewerKind::Author).permissions;
     assert!(!author.can_push_branch);
-    assert!(!author.can_edit_description);
+    assert!(!author.can_edit_identity);
     assert!(!author.can_return_to_working);
     assert!(!author.can_manage_invitees);
     let maintainer = policy_for(&request, ViewerKind::Maintainer).permissions;
     assert!(maintainer.can_hold);
     assert!(maintainer.can_push_branch);
-    assert!(maintainer.can_edit_description);
+    assert!(maintainer.can_edit_identity);
     assert!(maintainer.can_merge);
     assert!(maintainer.can_assess);
     assert!(maintainer.can_manage_invitees);
     assert_eq!(
         request_mergeability(&request, maintainer_access()).status,
-        RequestMergeabilityStatus::Ready
+        RequestMergeabilityStatus::Held
     );
 
     let private_request = private_request(request);
@@ -503,21 +503,103 @@ fn hold_blocks_contributors_but_not_maintainers_and_completion_blocks_all() {
 }
 
 #[test]
-fn held_request_rejects_description_edits_at_domain_boundary() {
+fn identity_edit_supports_each_field_combination_and_rejects_empty_or_unchanged_inputs() {
+    let request = working_request();
+    let original_description = request.description_markdown.clone();
+    let mut requests = BTreeMap::from([(request.id.clone(), request)]);
+    let mut events = BTreeMap::new();
+
+    let title_only = edit_request_identity(
+        &mut requests,
+        &mut events,
+        EditRequestIdentityInput {
+            request_id: "request_1".to_string(),
+            actor_user_id: "author".to_string(),
+            actor_can_edit_identity: true,
+            event_id: "event_title".to_string(),
+            title: Some("Focused title".to_string()),
+            description_markdown: None,
+            now_unix: 20,
+        },
+    )
+    .unwrap();
+    assert_eq!(title_only.request.title, "Focused title");
+    assert_eq!(
+        title_only.request.description_markdown,
+        original_description
+    );
+    assert_eq!(title_only.event.kind, RequestEventKind::IdentityEdited);
+
+    let description_only = edit_request_identity(
+        &mut requests,
+        &mut events,
+        EditRequestIdentityInput {
+            request_id: "request_1".to_string(),
+            actor_user_id: "author".to_string(),
+            actor_can_edit_identity: true,
+            event_id: "event_description".to_string(),
+            title: None,
+            description_markdown: Some("Focused description".to_string()),
+            now_unix: 21,
+        },
+    )
+    .unwrap();
+    assert_eq!(description_only.request.title, "Focused title");
+    assert_eq!(
+        description_only.request.description_markdown,
+        "Focused description"
+    );
+
+    let empty = edit_request_identity(
+        &mut requests,
+        &mut events,
+        EditRequestIdentityInput {
+            request_id: "request_1".to_string(),
+            actor_user_id: "author".to_string(),
+            actor_can_edit_identity: true,
+            event_id: "event_empty".to_string(),
+            title: None,
+            description_markdown: None,
+            now_unix: 22,
+        },
+    )
+    .unwrap_err();
+    assert_eq!(empty.kind, crate::error::ErrorKind::BadRequest);
+
+    let unchanged = edit_request_identity(
+        &mut requests,
+        &mut events,
+        EditRequestIdentityInput {
+            request_id: "request_1".to_string(),
+            actor_user_id: "author".to_string(),
+            actor_can_edit_identity: true,
+            event_id: "event_unchanged".to_string(),
+            title: Some("Focused title".to_string()),
+            description_markdown: Some("Focused description".to_string()),
+            now_unix: 22,
+        },
+    )
+    .unwrap_err();
+    assert_eq!(unchanged.kind, crate::error::ErrorKind::Conflict);
+}
+
+#[test]
+fn held_request_rejects_identity_edits_at_domain_boundary() {
     let mut request = ready_request();
     request.held_at_unix = Some(21);
     request.held_by_user_id = Some("maintainer".to_string());
     request.updated_at_unix = 21;
     let mut requests = BTreeMap::from([(request.id.clone(), request)]);
-    let error = update_request_description(
+    let error = edit_request_identity(
         &mut requests,
         &mut BTreeMap::new(),
-        UpdateRequestDescriptionInput {
+        EditRequestIdentityInput {
             request_id: "request_1".to_string(),
             actor_user_id: "author".to_string(),
-            actor_can_edit_description: true,
-            event_id: "event_description".to_string(),
-            description_markdown: "Changed while held".to_string(),
+            actor_can_edit_identity: true,
+            event_id: "event_identity".to_string(),
+            title: None,
+            description_markdown: Some("Changed while held".to_string()),
             now_unix: 22,
         },
     )
@@ -552,18 +634,19 @@ fn ready_request_rejects_revisions_with_a_user_facing_constraint() {
 }
 
 #[test]
-fn ready_request_rejects_description_edits_until_review_invalidation_exists() {
+fn ready_request_rejects_identity_edits_until_review_invalidation_exists() {
     let request = ready_request();
     let mut requests = BTreeMap::from([(request.id.clone(), request)]);
-    let error = update_request_description(
+    let error = edit_request_identity(
         &mut requests,
         &mut BTreeMap::new(),
-        UpdateRequestDescriptionInput {
+        EditRequestIdentityInput {
             request_id: "request_1".to_string(),
             actor_user_id: "author".to_string(),
-            actor_can_edit_description: true,
-            event_id: "event_description".to_string(),
-            description_markdown: "Changed while ready".to_string(),
+            actor_can_edit_identity: true,
+            event_id: "event_identity".to_string(),
+            title: None,
+            description_markdown: Some("Changed while ready".to_string()),
             now_unix: 22,
         },
     )
@@ -837,7 +920,7 @@ fn no_permissions() -> RequestPermissions {
     RequestPermissions {
         can_open_discussion: false,
         can_reply_to_discussion: false,
-        can_edit_description: false,
+        can_edit_identity: false,
         can_pull_branch: false,
         can_push_branch: false,
         can_mark_ready: false,

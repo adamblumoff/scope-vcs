@@ -39,7 +39,7 @@ const EVENT_LABELS = {
   Merged: 'Merged',
   Closed: 'Closed',
   Settled: 'Settled',
-  DescriptionEdited: 'Description edited',
+  IdentityEdited: 'Request edited',
   DiscussionResolved: 'Discussion resolved',
   DiscussionReopened: 'Discussion reopened',
 } as const satisfies Record<RequestWorkflowEventKind, string>
@@ -151,8 +151,8 @@ export function requestEventBody(event: RequestEvent) {
           ].join(' / ')
         : null
     }
-    case 'DescriptionEdited':
-      return 'The request description was updated.'
+    case 'IdentityEdited':
+      return 'The request title or description was updated.'
     case 'DiscussionResolved':
     case 'DiscussionReopened':
       return value.discussion_id

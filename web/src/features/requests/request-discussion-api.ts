@@ -192,7 +192,7 @@ export async function updateRequestDescriptionForRequest(
   data: UpdateDescriptionInput,
 ) {
   return createApiClient().patch<RequestMutation>(
-    requestRoute(ApiRouteTemplates.repoRequestDescription, data),
+    requestRoute(ApiRouteTemplates.repoRequest, data),
     {
       auth: 'required',
       body: { description_markdown: data.description_markdown },

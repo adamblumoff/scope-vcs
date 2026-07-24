@@ -9,7 +9,7 @@ use crate::{
         REQUEST_REMOTE_KEY, RequestRemoteTarget, load_request_remote, request_remote_name,
     },
 };
-use anyhow::Context;
+use anyhow::{Context, bail};
 use reqwest::blocking::Client;
 use scope_core::domain::requests::RequestAudience;
 
@@ -131,9 +131,22 @@ pub(super) fn maybe_request_id_for_context(
     if explicit.is_none()
         && let Some(request_id) = branch_config_value(git_repo, &branch, REQUEST_ID_KEY)?
     {
+        validate_stored_request_target(git_repo, &branch, context)?;
         return Ok(Some(request_id));
     }
-    let request_name = explicit.as_deref().unwrap_or(&branch);
+    let request_name = match explicit {
+        Some(request_name) => request_name,
+        None => {
+            let tracking_remote = branch_config_value(git_repo, &branch, "remote")?;
+            let merge_ref = branch_config_value(git_repo, &branch, "merge")?;
+            inferred_request_name(
+                branch,
+                &context.target.remote,
+                tracking_remote.as_deref(),
+                merge_ref.as_deref(),
+            )
+        }
+    };
     let mut cursor = None;
     loop {
         let page = list_requests(
@@ -155,6 +168,46 @@ pub(super) fn maybe_request_id_for_context(
             return Ok(None);
         };
         cursor = Some(next_cursor);
+    }
+}
+
+fn inferred_request_name(
+    branch: String,
+    selected_remote: &str,
+    tracking_remote: Option<&str>,
+    merge_ref: Option<&str>,
+) -> String {
+    if tracking_remote == Some(selected_remote)
+        && let Some(request_name) =
+            merge_ref.and_then(|request_ref| request_ref.strip_prefix("refs/heads/"))
+    {
+        return request_name.to_string();
+    }
+    branch
+}
+
+fn validate_stored_request_target(
+    git_repo: &GitRepo,
+    branch: &str,
+    context: &RequestContext,
+) -> anyhow::Result<()> {
+    let stored_owner = branch_config_value(git_repo, branch, REQUEST_OWNER_KEY)?;
+    let stored_repo = branch_config_value(git_repo, branch, REQUEST_REPO_KEY)?;
+    match (stored_owner.as_deref(), stored_repo.as_deref()) {
+        (Some(owner), Some(repo))
+            if owner == context.target.owner && repo == context.target.repo =>
+        {
+            Ok(())
+        }
+        (Some(owner), Some(repo)) => bail!(
+            "current branch belongs to Scope repository {owner}/{repo}, but remote {} targets {}/{}; pass the correct --remote",
+            context.target.remote,
+            context.target.owner,
+            context.target.repo
+        ),
+        _ => bail!(
+            "current branch request metadata is incomplete; pass --request <name-or-id> explicitly"
+        ),
     }
 }
 
@@ -239,4 +292,30 @@ fn normalized_optional_arg(value: Option<String>) -> Option<String> {
     value
         .map(|value| value.trim().to_string())
         .filter(|value| !value.is_empty())
+}
+#[cfg(test)]
+mod tests {
+    use super::inferred_request_name;
+
+    #[test]
+    fn merge_ref_only_names_a_request_for_the_selected_scope_remote() {
+        assert_eq!(
+            inferred_request_name(
+                "scope-fix".to_string(),
+                "scope",
+                Some("scope"),
+                Some("refs/heads/request-fix"),
+            ),
+            "request-fix"
+        );
+        assert_eq!(
+            inferred_request_name(
+                "scope-fix".to_string(),
+                "scope",
+                Some("origin"),
+                Some("refs/heads/other-fix"),
+            ),
+            "scope-fix"
+        );
+    }
 }

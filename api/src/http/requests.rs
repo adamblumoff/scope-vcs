@@ -4,11 +4,11 @@ use crate::{
     domain::{
         projection::{ProjectionViewKey, project_graph},
         requests::{
-            AssessRequestInput, CloseRequestInput, CloseRequestMutation, MarkRequestReadyInput,
-            MergeRequestInput, REQUEST_LIST_DEFAULT_PAGE_SIZE, REQUEST_LIST_MAX_PAGE_SIZE, Request,
-            RequestActorRole, RequestAssessmentOutcome, RequestAudience, RequestReviewExitReason,
-            RequestViewer, ReturnRequestToWorkingInput, SetRequestHoldInput, StartRequestInput,
-            UpdateRequestDescriptionInput, canonical_request_ref, request_actor_role,
+            AssessRequestInput, CloseRequestInput, CloseRequestMutation, EditRequestIdentityInput,
+            MarkRequestReadyInput, MergeRequestInput, REQUEST_LIST_DEFAULT_PAGE_SIZE,
+            REQUEST_LIST_MAX_PAGE_SIZE, Request, RequestActorRole, RequestAssessmentOutcome,
+            RequestAudience, RequestReviewExitReason, RequestViewer, ReturnRequestToWorkingInput,
+            SetRequestHoldInput, StartRequestInput, canonical_request_ref, request_actor_role,
             request_mergeability, request_policy,
         },
         store::{RepositoryAccess, RepositoryActor, StoredRepository},
@@ -567,22 +567,23 @@ pub(crate) async fn start_request(
     Ok(Json(RequestMutationResponse { request }))
 }
 
-pub(crate) async fn update_request_description(
+pub(crate) async fn edit_request_identity(
     State(state): State<AppState>,
     headers: HeaderMap,
     Path((owner, repo_name, request_id)): Path<(String, String, String)>,
-    Json(input): Json<UpdateRequestDescriptionRequest>,
+    Json(input): Json<EditRequestIdentityRequest>,
 ) -> Result<Json<RequestMutationResponse>, ApiError> {
     let user = require_scope_user(&state, &headers).await?;
     let (repo, access, _) = repo_and_access(&state, &headers, &owner, &repo_name).await?;
     let request = visible_request(&state, &repo, access, Some(&user.id), &request_id).await?;
     let mutation = state
         .metadata
-        .update_request_description_with_review_invalidation(UpdateRequestDescriptionInput {
+        .edit_request_identity_with_review_invalidation(EditRequestIdentityInput {
             request_id: request.id,
             actor_user_id: user.id.clone(),
-            actor_can_edit_description: false,
-            event_id: random_id("event_request_description_edited")?,
+            actor_can_edit_identity: false,
+            event_id: random_id("event_request_identity_edited")?,
+            title: input.title,
             description_markdown: input.description_markdown,
             now_unix: unix_now()?,
         })
@@ -597,7 +598,7 @@ pub(crate) async fn update_request_description(
     )
     .await?;
     state
-        .publish_request_summary_refresh(&repo.record.id, "request-description-edited")
+        .publish_request_summary_refresh(&repo.record.id, "request-identity-edited")
         .await;
     Ok(Json(RequestMutationResponse { request }))
 }
@@ -819,7 +820,7 @@ async fn request_response_for_viewer(
     let permissions = RequestPermissionsResponse {
         can_open_discussion: decision.can_open_discussion,
         can_reply_to_discussion: decision.can_reply_to_discussion,
-        can_edit_description: decision.can_edit_description,
+        can_edit_identity: decision.can_edit_identity,
         can_pull_branch: decision.can_pull_branch,
         can_push_branch: decision.can_push_branch,
         can_mark_ready: decision.can_mark_ready,

@@ -12,11 +12,11 @@ use crate::{
         policy::{ScopePath, Visibility, VisibilityRule},
         projection::{AuthorVisibility, FileChange, LogicalCommit},
         requests::{
-            RecordRequestRevisionInput, RecordWorkingRequestUploadInput, RequestActorRole,
-            RequestAssessmentOutcome, RequestAudience, RequestChangeBlock, RequestDiscussion,
-            RequestDiscussionReadState, StartRequestInput, UpdateRequestDescriptionInput,
-            canonical_request_ref, record_request_revision, record_working_request_upload,
-            start_request, update_request_description,
+            EditRequestIdentityInput, RecordRequestRevisionInput, RecordWorkingRequestUploadInput,
+            RequestActorRole, RequestAssessmentOutcome, RequestAudience, RequestChangeBlock,
+            RequestDiscussion, RequestDiscussionReadState, StartRequestInput,
+            canonical_request_ref, edit_request_identity, record_request_revision,
+            record_working_request_upload, start_request,
         },
         store::{
             AppCatalog, GitHead, GitSegment, RepoPublicationState, SourceBlob, StoredRepository,
@@ -278,15 +278,16 @@ fn seed_owner_request(
         },
     )?;
     if let Some(description_markdown) = description_markdown {
-        let mutation = update_request_description(
+        let mutation = edit_request_identity(
             &mut catalog.requests,
             &mut catalog.request_events,
-            UpdateRequestDescriptionInput {
+            EditRequestIdentityInput {
                 request_id: id.to_string(),
                 actor_user_id: owner.id.clone(),
-                actor_can_edit_description: true,
-                event_id: format!("event_{id}_description_edited"),
-                description_markdown: description_markdown.to_string(),
+                actor_can_edit_identity: true,
+                event_id: format!("event_{id}_identity_edited"),
+                title: None,
+                description_markdown: Some(description_markdown.to_string()),
                 now_unix: now_unix + 2,
             },
         )?;

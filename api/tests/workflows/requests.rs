@@ -384,7 +384,7 @@ async fn request_reads_apply_one_viewer_aware_policy_across_lists_and_exact_surf
         true
     );
     assert_eq!(
-        invitee_detail["request"]["permissions"]["can_edit_description"],
+        invitee_detail["request"]["permissions"]["can_edit_identity"],
         false
     );
     assert_eq!(
