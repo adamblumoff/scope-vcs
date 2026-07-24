@@ -432,6 +432,7 @@ pub struct RequestListItemResponse {
 #[derive(Clone, Debug, Deserialize, Serialize)]
 #[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 pub struct RequestPermissionsResponse {
+    pub can_view_activity: bool,
     pub can_open_discussion: bool,
     pub can_reply_to_discussion: bool,
     pub can_edit_identity: bool,

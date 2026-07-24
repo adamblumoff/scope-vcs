@@ -391,6 +391,10 @@ async fn request_reads_apply_one_viewer_aware_policy_across_lists_and_exact_surf
         true
     );
     assert_eq!(
+        invitee_detail["request"]["permissions"]["can_view_activity"],
+        true
+    );
+    assert_eq!(
         invitee_detail["request"]["permissions"]["can_open_discussion"],
         true
     );
@@ -432,6 +436,21 @@ async fn request_reads_apply_one_viewer_aware_policy_across_lists_and_exact_surf
             StatusCode::OK
         );
     }
+    let maintainer_draft = response_json(
+        api_request(
+            app.clone(),
+            "GET",
+            "/v1/repos/owner/repo/requests/req_never",
+            Some(&bearer_header()),
+            None,
+        )
+        .await,
+    )
+    .await;
+    assert_eq!(
+        maintainer_draft["request"]["permissions"]["can_view_activity"],
+        false
+    );
     assert_eq!(
         api_request(
             app,

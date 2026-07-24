@@ -215,16 +215,18 @@ export function RequestDetailPage(props: RequestDetailPageProps) {
             <Button asChild className="h-9" size="sm" variant="secondary">
               <Link params={params} to="/repos/$owner/$repo/requests">Requests</Link>
             </Button>
-            <Button
-              aria-label="View request activity"
-              onClick={history.openHistory}
-              size="icon-sm"
-              title="View request activity"
-              type="button"
-              variant="secondary"
-            >
-              <History />
-            </Button>
+            {request.permissions.can_view_activity ? (
+              <Button
+                aria-label="View request activity"
+                onClick={history.openHistory}
+                size="icon-sm"
+                title="View request activity"
+                type="button"
+                variant="secondary"
+              >
+                <History />
+              </Button>
+            ) : null}
           </div>
         )}
         className="sm:flex-col sm:items-stretch xl:flex-row xl:items-end"
@@ -257,7 +259,7 @@ export function RequestDetailPage(props: RequestDetailPageProps) {
   }
 
   return (
-    <RepoShell params={params}>
+    <RepoShell contentClassName={hasLifecycleActions ? 'pb-20 xl:pb-0' : undefined} params={params}>
       <RequestDiscussionWorkbench
         actions={discussionActions}
         actor={actor}
@@ -280,7 +282,7 @@ export function RequestDetailPage(props: RequestDetailPageProps) {
       />
 
       {hasLifecycleActions ? (
-        <div className="sticky bottom-0 z-30 border-t border-[var(--border-strong)] bg-background/95 px-3 py-3 pb-[max(0.75rem,env(safe-area-inset-bottom))] backdrop-blur xl:hidden">
+        <div className="fixed inset-x-0 bottom-0 z-30 border-t border-[var(--border-strong)] bg-background/95 px-3 py-3 pb-[max(0.75rem,env(safe-area-inset-bottom))] backdrop-blur xl:hidden">
           <RequestLifecycleActions
             actions={requestActions}
             balance={account?.credit_balance_credits ?? null}
