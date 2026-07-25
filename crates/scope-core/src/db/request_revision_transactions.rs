@@ -3,12 +3,12 @@
 use super::{
     MetadataStore, acquire_aggregate_lock,
     cleanup_queue::queue_pending_source_blob_deletion_rows,
-    request_access::{ensure_user_exists, repo_by_id, request_actor_can_edit},
+    request_access::{ensure_user_exists, lock_request_repository, request_policy_for_user},
     request_change_block_rows::insert_change_block,
     request_discussion_rows::{insert_discussion, save_read_state},
     request_rows::{
         credit_account_by_user_id, insert_credit_ledger_entry_row, insert_request_event_row,
-        request_by_id, request_event_by_id, save_credit_account_row, save_request_row,
+        request_event_by_id, save_credit_account_row, save_request_row,
     },
 };
 use crate::{
@@ -28,23 +28,16 @@ impl MetadataStore {
         mut input: RecordRequestRevisionInput,
     ) -> Result<crate::domain::requests::RequestRevisionMutation, ApiError> {
         let tx = self.db.begin().await.map_err(ApiError::internal)?;
-        let observed = request_by_id(&tx, &input.request_id)
-            .await?
-            .ok_or_else(|| ApiError::not_found("request not found"))?;
-        acquire_aggregate_lock(&tx, "repository", &observed.repo_id).await?;
-        acquire_aggregate_lock(&tx, "request", &input.request_id).await?;
-        let mut request = request_by_id(&tx, &input.request_id)
-            .await?
-            .filter(|request| request.repo_id == observed.repo_id)
-            .ok_or_else(|| ApiError::not_found("request not found"))?;
+        let (repo, mut request) = lock_request_repository(&tx, &input.request_id).await?;
         if request.author_role == RequestActorRole::Public
             && request.state == RequestState::ReadyForReview
         {
             acquire_aggregate_lock(&tx, "user-credit", &request.author_user_id).await?;
         }
         ensure_user_exists(&tx, &input.actor_user_id).await?;
-        let repo = repo_by_id(&tx, &request.repo_id).await?;
-        input.actor_can_edit = request_actor_can_edit(&repo, &request, &input.actor_user_id);
+        input.actor_can_edit = request_policy_for_user(&tx, &repo, &request, &input.actor_user_id)
+            .await?
+            .branch_mutable;
 
         if request.state == RequestState::ReadyForReview {
             let account = if request.author_role == RequestActorRole::Public {

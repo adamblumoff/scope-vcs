@@ -442,7 +442,7 @@ mod tests {
         assert!(
             activity
                 .iter()
-                .any(|event| event.kind == RequestEventKind::DescriptionEdited)
+                .any(|event| event.kind == RequestEventKind::IdentityEdited)
         );
         assert!(
             activity

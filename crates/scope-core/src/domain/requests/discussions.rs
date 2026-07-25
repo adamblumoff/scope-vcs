@@ -1,8 +1,7 @@
 use super::{
     REQUEST_DISCUSSION_BODY_MAX_BYTES, REQUEST_DISCUSSION_CLIENT_ID_MAX_BYTES,
     REQUEST_DISCUSSION_REPLY_MAX_DEPTH, Request, RequestEvent, RequestEventKind,
-    RequestEventPayload, RequestState, validate_body_size, validate_required_body,
-    validate_required_id,
+    RequestEventPayload, validate_body_size, validate_required_body, validate_required_id,
 };
 use crate::error::ApiError;
 use serde::{Deserialize, Serialize};
@@ -177,7 +176,7 @@ pub fn create_request_discussion(
     if discussions.contains_key(&input.id) {
         return Err(ApiError::conflict("request discussion already exists"));
     }
-    let request = open_request_mut(requests, &input.request_id)?;
+    let request = request_mut(requests, &input.request_id)?;
     let position = advance_activity(request)?;
     let discussion = RequestDiscussion {
         id: input.id,
@@ -230,7 +229,7 @@ pub fn create_request_discussion_reply(
         &input.discussion_id,
         input.reply_to_reply_id.as_deref(),
     )?;
-    let request = open_request_mut(requests, &input.request_id)?;
+    let request = request_mut(requests, &input.request_id)?;
     let discussion = discussion_mut(discussions, &input.request_id, &input.discussion_id)?;
     if discussion.status == RequestDiscussionStatus::Resolved {
         return Err(ApiError::conflict("request discussion is resolved"));
@@ -326,7 +325,7 @@ pub fn reopen_and_reply_to_request_discussion(
         &input.discussion_id,
         input.reply_to_reply_id.as_deref(),
     )?;
-    let request_author_user_id = open_request_mut(requests, &input.request_id)?
+    let request_author_user_id = request_mut(requests, &input.request_id)?
         .author_user_id
         .clone();
     let discussion = discussion_mut(discussions, &input.request_id, &input.discussion_id)?;
@@ -415,7 +414,7 @@ fn transition_discussion(
     input: DiscussionTransitionInput,
 ) -> Result<RequestDiscussionMutation, ApiError> {
     validate_required_id("event id", &input.event_id)?;
-    let request_author_user_id = open_request_mut(requests, &input.request_id)?
+    let request_author_user_id = request_mut(requests, &input.request_id)?
         .author_user_id
         .clone();
     let discussion = discussion_mut(discussions, &input.request_id, &input.discussion_id)?;
@@ -581,17 +580,13 @@ fn discussion_mut<'a>(
         .ok_or_else(|| ApiError::not_found("request discussion not found"))
 }
 
-fn open_request_mut<'a>(
+fn request_mut<'a>(
     requests: &'a mut BTreeMap<String, Request>,
     request_id: &str,
 ) -> Result<&'a mut Request, ApiError> {
-    let request = requests
+    requests
         .get_mut(request_id)
-        .ok_or_else(|| ApiError::not_found("request not found"))?;
-    if request.state == RequestState::Completed {
-        return Err(ApiError::conflict("request is completed"));
-    }
-    Ok(request)
+        .ok_or_else(|| ApiError::not_found("request not found"))
 }
 
 fn advance_activity(request: &mut Request) -> Result<u64, ApiError> {

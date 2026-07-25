@@ -10,6 +10,7 @@ pub const REQUEST_LIST_DEFAULT_PAGE_SIZE: usize = 50;
 pub const REQUEST_LIST_MAX_PAGE_SIZE: usize = 100;
 pub const REQUEST_TIMELINE_BODY_MAX_BYTES: usize = 16 * 1024;
 pub const REQUEST_TITLE_MAX_BYTES: usize = 256;
+pub const PUBLIC_WORKING_REQUEST_LIMIT: usize = 3;
 
 pub(crate) fn validate_required_body(label: &str, value: &str) -> Result<(), ApiError> {
     if value.trim().is_empty() {

@@ -95,8 +95,14 @@ pub fn router(state: AppState) -> Router {
             get(http::requests::list_requests).post(http::requests::start_request),
         )
         .route(
+            routes::REPO_REQUEST_QUEUE,
+            get(http::request_queue::request_queue),
+        )
+        .route(
             routes::REPO_REQUEST,
-            get(http::requests::get_request).delete(http::requests::close_request),
+            get(http::requests::get_request)
+                .patch(http::requests::edit_request_identity)
+                .delete(http::requests::close_request),
         )
         .route(
             routes::REPO_REQUEST_READY,
@@ -124,16 +130,21 @@ pub fn router(state: AppState) -> Router {
             post(http::requests::merge_request),
         )
         .route(
+            routes::REPO_REQUEST_INVITEES,
+            axum::routing::put(http::requests::add_request_invitee)
+                .delete(http::requests::remove_request_invitee),
+        )
+        .route(
+            routes::REPO_REQUEST_INVITEES_ME,
+            delete(http::requests::leave_request),
+        )
+        .route(
             routes::REPO_REQUEST_CHANGE_BLOCK_FILES,
             get(http::request_review::get_request_change_block_files),
         )
         .route(
             routes::REPO_REQUEST_CHANGE_BLOCK_FILE_DIFF,
             get(http::request_review::get_request_change_block_file_diff),
-        )
-        .route(
-            routes::REPO_REQUEST_DESCRIPTION,
-            axum::routing::patch(http::requests::update_request_description),
         )
         .route(
             routes::REPO_REQUEST_DISCUSSIONS,

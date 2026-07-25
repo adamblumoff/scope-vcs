@@ -1,25 +1,23 @@
 use crate::{
     domain::{
-        requests::{Request, request_permissions, request_visible_to_access},
+        requests::{Request, RequestViewer, request_policy},
         store::RepositoryAccess,
     },
     error::ApiError,
     state::{AppState, find_repo},
 };
 
-fn request_is_closed(request: &Request) -> bool {
-    matches!(
-        request.state,
-        crate::domain::requests::RequestState::Completed
-    )
-}
-
 pub(super) fn request_actor_can_edit_ref(
     request: &Request,
     actor_user_id: &str,
     access: RepositoryAccess,
+    is_invitee: bool,
 ) -> bool {
-    request_permissions(request, access, Some(actor_user_id)).can_push_branch
+    request_policy(
+        request,
+        RequestViewer::new(access, Some(actor_user_id), is_invitee),
+    )
+    .branch_mutable
 }
 
 pub(super) async fn ensure_request_ref_update_allowed(
@@ -36,13 +34,11 @@ pub(super) async fn ensure_request_ref_update_allowed(
         .request_by_name(&repo.record.id, request_name)
         .await?
         .ok_or_else(|| ApiError::not_found("request not found"))?;
-    if !request_visible_to_access(&request, access) {
-        return Err(ApiError::not_found("request not found"));
-    }
-    if request_is_closed(&request) {
-        return Err(ApiError::conflict("request is closed"));
-    }
-    if !request_actor_can_edit_ref(&request, actor_user_id, access) {
+    let is_invitee = state
+        .metadata
+        .request_is_invitee(&request.id, actor_user_id)
+        .await?;
+    if !request_actor_can_edit_ref(&request, actor_user_id, access, is_invitee) {
         return Err(ApiError::not_found("request not found"));
     }
     Ok(request)

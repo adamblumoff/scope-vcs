@@ -29,8 +29,16 @@ pub(crate) async fn get_request_change_block_files(
     headers: HeaderMap,
     Path((owner, repo_name, request_id, block_id)): Path<(String, String, String, String)>,
 ) -> Result<Json<RequestChangeBlockFilesResponse>, ApiError> {
-    let (repo, access, _) = repo_and_access(&state, &headers, &owner, &repo_name).await?;
-    let request = visible_request(&state, &repo, access, &request_id).await?;
+    let (repo, access, viewer_user_id) =
+        repo_and_access(&state, &headers, &owner, &repo_name).await?;
+    let request = visible_request(
+        &state,
+        &repo,
+        access,
+        viewer_user_id.as_deref(),
+        &request_id,
+    )
+    .await?;
     let block = state
         .metadata
         .request_change_block(&request.id, &block_id)
@@ -71,8 +79,16 @@ pub(crate) async fn get_request_change_block_file_diff(
     Path((owner, repo_name, request_id, block_id)): Path<(String, String, String, String)>,
     Query(input): Query<RequestFileDiffRequest>,
 ) -> Result<Json<ReviewFileDiffResponse>, ApiError> {
-    let (repo, access, _) = repo_and_access(&state, &headers, &owner, &repo_name).await?;
-    let request = visible_request(&state, &repo, access, &request_id).await?;
+    let (repo, access, viewer_user_id) =
+        repo_and_access(&state, &headers, &owner, &repo_name).await?;
+    let request = visible_request(
+        &state,
+        &repo,
+        access,
+        viewer_user_id.as_deref(),
+        &request_id,
+    )
+    .await?;
     let block = state
         .metadata
         .request_change_block(&request.id, &block_id)

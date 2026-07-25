@@ -18,6 +18,26 @@ pub(crate) async fn create_owner_request(state: &AppState, request_id: &str, hea
     .await;
 }
 
+pub(crate) async fn create_public_request(
+    state: &AppState,
+    request_id: &str,
+    author_user_id: String,
+    head_oid: &str,
+) {
+    create_request(RequestFixture {
+        state,
+        request_id,
+        author_user_id,
+        title: "Public request",
+        role: RequestActorRole::Public,
+        audience: RequestAudience::Public,
+        base_main_oid: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        head_oid,
+        snapshot: "public request git snapshot",
+    })
+    .await;
+}
+
 struct RequestFixture<'a> {
     state: &'a AppState,
     request_id: &'a str,

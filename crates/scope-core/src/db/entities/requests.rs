@@ -3,7 +3,7 @@ use crate::domain::requests::{
     CreditLedgerEntry, CreditLedgerEntryKind, Request, RequestActorRole, RequestAssessmentOutcome,
     RequestAudience, RequestChangeBlock, RequestDiscussion, RequestDiscussionReadState,
     RequestDiscussionReply, RequestDiscussionStatus, RequestDiscussionSubject, RequestEvent,
-    RequestEventKind, RequestEventPayload, RequestState, UserCreditAccount,
+    RequestEventKind, RequestEventPayload, RequestInvitee, RequestState, UserCreditAccount,
 };
 use crate::domain::store::SourceBlob;
 
@@ -192,6 +192,29 @@ pub mod request_invitee {
     pub enum Relation {}
 
     impl ActiveModelBehavior for ActiveModel {}
+
+    impl Model {
+        pub fn from_domain(invitee: &RequestInvitee) -> Result<Self, ApiError> {
+            Ok(Self {
+                request_id: invitee.request_id.clone(),
+                user_id: invitee.user_id.clone(),
+                invited_by_user_id: invitee.invited_by_user_id.clone(),
+                created_at_unix: u64_to_i64(
+                    invitee.created_at_unix,
+                    "request invitee creation time",
+                )?,
+            })
+        }
+
+        pub fn try_into_domain(self) -> Result<RequestInvitee, ApiError> {
+            Ok(RequestInvitee {
+                request_id: self.request_id,
+                user_id: self.user_id,
+                invited_by_user_id: self.invited_by_user_id,
+                created_at_unix: i64_to_u64(self.created_at_unix, "request invitee creation time")?,
+            })
+        }
+    }
 }
 
 pub mod request_change_block {
