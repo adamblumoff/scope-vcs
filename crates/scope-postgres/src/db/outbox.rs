@@ -55,36 +55,48 @@ struct ClaimedOutboxJob {
     attempts: i64,
 }
 
+fn outbox_time(
+    current_time: &dyn Fn() -> Result<u64, String>,
+) -> Result<(u64, i64), PostgresError> {
+    let now_unix = current_time().map_err(|error| {
+        PostgresError::internal_message(format!("outbox clock failed: {error}"))
+    })?;
+    Ok((now_unix, unix_timestamp_i64(now_unix)?))
+}
+
 impl JobStore {
     pub async fn run_ready_outbox_jobs(
         &self,
         worker_id: &str,
         limit: usize,
-        now_unix: u64,
+        current_time: &dyn Fn() -> Result<u64, String>,
     ) -> Result<OutboxRunSummary, PostgresError> {
         if limit == 0 {
             return Ok(OutboxRunSummary::default());
         }
 
-        let now = unix_timestamp_i64(now_unix)?;
         let db = Arc::clone(&self.db);
         let worker_id = worker_id.to_string();
         let mut summary = OutboxRunSummary::default();
         for _ in 0..limit {
+            let (claim_now_unix, claim_now) = outbox_time(current_time)?;
             let Some(job) =
-                claim_next_ready_job(db.as_ref(), &worker_id, DEFAULT_JOB_LEASE_SECS, now).await?
+                claim_next_ready_job(db.as_ref(), &worker_id, DEFAULT_JOB_LEASE_SECS, claim_now)
+                    .await?
             else {
                 break;
             };
             summary.claimed += 1;
 
-            match execute_outbox_job(db.as_ref(), &job, now_unix).await {
+            match execute_outbox_job(db.as_ref(), &job, claim_now_unix).await {
                 Ok(()) => {
-                    complete_outbox_job(db.as_ref(), &job, &worker_id, now).await?;
+                    let (_, completion_now) = outbox_time(current_time)?;
+                    complete_outbox_job(db.as_ref(), &job, &worker_id, completion_now).await?;
                     summary.completed += 1;
                 }
                 Err(error) => {
                     let message = error.message;
+                    let (_, completion_now) = outbox_time(current_time)?;
                     let attempts = next_retry_attempt(job.attempts)?;
                     if is_terminal_retry_attempt(attempts) {
                         tracing::error!(
@@ -106,7 +118,7 @@ impl JobStore {
                             "outbox job failed; scheduling retry"
                         );
                     }
-                    fail_outbox_job(db.as_ref(), &job, &worker_id, message, now).await?;
+                    fail_outbox_job(db.as_ref(), &job, &worker_id, message, completion_now).await?;
                     summary.failed += 1;
                 }
             }
@@ -496,6 +508,7 @@ fn unix_timestamp_i64(now_unix: u64) -> Result<i64, PostgresError> {
 mod tests {
     use super::*;
     use scope_domain::{policy::Visibility, store::UserAccount};
+    use std::sync::atomic::{AtomicU64, Ordering};
 
     #[test]
     fn retry_backoff_is_bounded() {
@@ -511,6 +524,54 @@ mod tests {
         assert!(!is_terminal_retry_attempt(MAX_JOB_ATTEMPTS - 1));
         assert!(is_terminal_retry_attempt(MAX_JOB_ATTEMPTS));
         assert!(is_terminal_retry_attempt(MAX_JOB_ATTEMPTS + 10));
+    }
+
+    #[tokio::test]
+    async fn batch_refreshes_time_before_each_claim_and_completion() {
+        const START: u64 = 1_700_000_000;
+        const STEP: u64 = 100;
+
+        let target = super::super::TestDatabaseTarget::required().unwrap();
+        let store = MetadataStore::connect_fresh_for_tests(&target).unwrap();
+        let (repo_id, repo_version) = seed_outbox_repo(&store).await;
+        enqueue_projection_read_model_rebuild(
+            store.db.as_ref(),
+            &repo_id,
+            repo_version.saturating_add(1),
+            START,
+            &super::super::generated_ids::test_generated_id,
+        )
+        .await
+        .unwrap();
+
+        let elapsed = AtomicU64::new(0);
+        let clock = || Ok(START + elapsed.fetch_add(STEP, Ordering::SeqCst));
+        let summary = store
+            .jobs()
+            .run_ready_outbox_jobs("worker", 2, &clock)
+            .await
+            .unwrap();
+
+        assert_eq!(summary.claimed, 2);
+        assert_eq!(summary.completed, 2);
+        assert_eq!(summary.failed, 0);
+        assert_eq!(elapsed.load(Ordering::SeqCst), 4 * STEP);
+
+        let completed_at = entities::outbox_job::Entity::find()
+            .order_by_asc(entities::outbox_job::Column::CompletedAtUnix)
+            .all(store.db.as_ref())
+            .await
+            .unwrap()
+            .into_iter()
+            .map(|row| row.completed_at_unix.unwrap())
+            .collect::<Vec<_>>();
+        assert_eq!(
+            completed_at,
+            vec![
+                i64::try_from(START + STEP).unwrap(),
+                i64::try_from(START + 3 * STEP).unwrap(),
+            ]
+        );
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -712,7 +773,7 @@ mod tests {
         assert!(row.completed_at_unix.is_some());
     }
 
-    async fn seed_outbox_repo(store: &MetadataStore) {
+    async fn seed_outbox_repo(store: &MetadataStore) -> (String, u64) {
         let owner = UserAccount {
             id: "user_owner".to_string(),
             handle: "owner".to_string(),
@@ -735,5 +796,6 @@ mod tests {
         )
         .await
         .unwrap();
+        (repo.record.id, repo.record.change_version)
     }
 }

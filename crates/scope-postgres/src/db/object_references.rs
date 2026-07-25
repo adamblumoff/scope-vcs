@@ -66,25 +66,50 @@ where
     replace_object_reference(conn, ref_kind, ref_id, None).await
 }
 
-pub async fn delete_object_references_for_objects<C>(
+pub async fn delete_repository_object_references<C>(
     conn: &C,
-    objects: impl IntoIterator<Item = &SourceBlob>,
+    repo_id: &str,
+    request_ids: &[String],
+    change_block_ids: &[String],
 ) -> Result<(), PostgresError>
 where
     C: ConnectionTrait,
 {
-    let content_refs = objects
-        .into_iter()
-        .map(|object| encode_content_ref(&object.content_ref))
-        .collect::<Result<Vec<_>, _>>()?;
-    if content_refs.is_empty() {
-        return Ok(());
-    }
     entities::object_reference::Entity::delete_many()
-        .filter(entities::object_reference::Column::ObjectKey.is_in(content_refs))
+        .filter(entities::object_reference::Column::RefKind.eq("git_manifest"))
+        .filter(entities::object_reference::Column::RefId.eq(repo_id.to_string()))
         .exec(conn)
         .await
         .map_err(PostgresError::internal)?;
+
+    entities::object_reference::Entity::delete_many()
+        .filter(entities::object_reference::Column::RefKind.is_in([
+            "git_segment",
+            "git_segment_manifest",
+            "file_change",
+            "visibility_event",
+        ]))
+        .filter(entities::object_reference::Column::RefId.starts_with(format!("{repo_id}:")))
+        .exec(conn)
+        .await
+        .map_err(PostgresError::internal)?;
+
+    if !request_ids.is_empty() {
+        entities::object_reference::Entity::delete_many()
+            .filter(entities::object_reference::Column::RefKind.eq("request_snapshot"))
+            .filter(entities::object_reference::Column::RefId.is_in(request_ids.to_vec()))
+            .exec(conn)
+            .await
+            .map_err(PostgresError::internal)?;
+    }
+    if !change_block_ids.is_empty() {
+        entities::object_reference::Entity::delete_many()
+            .filter(entities::object_reference::Column::RefKind.eq("request_change_block_snapshot"))
+            .filter(entities::object_reference::Column::RefId.is_in(change_block_ids.to_vec()))
+            .exec(conn)
+            .await
+            .map_err(PostgresError::internal)?;
+    }
     Ok(())
 }
 
@@ -101,4 +126,46 @@ where
         .into_iter()
         .map(|row| decode_content_ref(&row.object_key))
         .collect::<Result<_, _>>()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::db::{MetadataStore, TestDatabaseTarget};
+    use scope_domain::store::DEFAULT_GIT_FILE_MODE;
+
+    #[tokio::test]
+    async fn repository_deletion_preserves_shared_content_references_owned_by_another_repo() {
+        let target = TestDatabaseTarget::required().unwrap();
+        let store = MetadataStore::connect_fresh_for_tests(&target).unwrap();
+        let shared = SourceBlob {
+            content_ref: ContentRef::git_manifest_sha256("shared-manifest"),
+            sha256: "shared-manifest".to_string(),
+            git_oid: "1111111111111111111111111111111111111111".to_string(),
+            git_file_mode: DEFAULT_GIT_FILE_MODE.to_string(),
+            size_bytes: 42,
+        };
+        insert_object_reference(store.db.as_ref(), "git_manifest", "owner-a/repo", &shared)
+            .await
+            .unwrap();
+        insert_object_reference(store.db.as_ref(), "git_manifest", "owner-b/repo", &shared)
+            .await
+            .unwrap();
+
+        delete_repository_object_references(store.db.as_ref(), "owner-a/repo", &[], &[])
+            .await
+            .unwrap();
+
+        let rows = entities::object_reference::Entity::find()
+            .all(store.db.as_ref())
+            .await
+            .unwrap();
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].ref_kind, "git_manifest");
+        assert_eq!(rows[0].ref_id, "owner-b/repo");
+        assert_eq!(
+            decode_content_ref(&rows[0].object_key).unwrap(),
+            shared.content_ref
+        );
+    }
 }

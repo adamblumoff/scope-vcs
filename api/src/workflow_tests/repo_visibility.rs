@@ -116,11 +116,9 @@ async fn public_files_use_the_projected_blob() {
     let rebuilt = state
         .metadata
         .jobs()
-        .run_ready_outbox_jobs(
-            "repo-visibility-test",
-            10,
-            crate::persistence::unix_now().unwrap(),
-        )
+        .run_ready_outbox_jobs("repo-visibility-test", 10, &|| {
+            crate::persistence::unix_now().map_err(crate::error::ApiError::into_message)
+        })
         .await
         .unwrap();
     assert_eq!(rebuilt.failed, 0);

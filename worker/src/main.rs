@@ -76,7 +76,9 @@ async fn run() -> anyhow::Result<()> {
     loop {
         let summary = metadata
             .jobs()
-            .run_ready_outbox_jobs(&settings.worker_id, settings.batch_size, unix_now()?)
+            .run_ready_outbox_jobs(&settings.worker_id, settings.batch_size, &|| {
+                unix_now().map_err(|error| error.to_string())
+            })
             .await
             .map_err(|error| anyhow::anyhow!("running outbox jobs: {}", error.message))?;
         if summary.claimed > 0 {
