@@ -3,7 +3,8 @@ mod repo_io;
 mod staging;
 
 pub(crate) use self::artifacts::{
-    receive_pack_update_from_staging_repo, reviewed_update_from_staging_repo,
+    receive_pack_update_from_staging_repo, request_merge_update_from_staging_repo,
+    reviewed_update_from_staging_repo,
 };
 pub(crate) use self::repo_io::{
     git_refs, git_snapshot_from_ref, run_git, run_git_output, safe_repo_key, validate_pushed_tree,
@@ -100,32 +101,6 @@ pub(crate) async fn persist_receive_pack_update_and_promote(
         "committed reviewed push transaction"
     );
     Ok(persisted)
-}
-
-pub(crate) fn apply_request_merge_update(
-    repo: &mut StoredRepository,
-    update: ReceivePackUpdate,
-    maintainer_id: &str,
-) -> Result<RepositoryMutation<PersistedReceivePackUpdate>, ApiError> {
-    let mut update = update;
-    if !repo.is_maintainer_user_id(maintainer_id) {
-        return Err(ApiError::forbidden("repo maintainer required"));
-    }
-    let access = repo.access_for_user_id(maintainer_id);
-    ensure_receive_pack_config_base_matches(repo, &update)?;
-    let previous_config = Some(repo.repo_config.clone());
-    if !access.can_change_file_visibility
-        && receive_pack_update_changes_visibility(repo, previous_config.as_ref(), &update)
-    {
-        return Err(ApiError::forbidden("file visibility permission required"));
-    }
-    update.previous_config = previous_config;
-    ensure_receive_pack_base_matches(repo, &update)?;
-    let git_head = update.git_head.clone();
-    apply_receive_pack_update(repo, update)?;
-    Ok(RepositoryMutation::new(PersistedReceivePackUpdate {
-        git_head,
-    }))
 }
 
 fn ensure_receive_pack_config_base_matches(

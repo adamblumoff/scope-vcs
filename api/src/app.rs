@@ -95,8 +95,48 @@ pub fn router(state: AppState) -> Router {
             get(http::requests::list_requests).post(http::requests::start_request),
         )
         .route(
+            routes::REPO_REQUEST_QUEUE,
+            get(http::request_queue::request_queue),
+        )
+        .route(
             routes::REPO_REQUEST,
-            get(http::requests::get_request).delete(http::requests::delete_request),
+            get(http::requests::get_request)
+                .patch(http::requests::edit_request_identity)
+                .delete(http::requests::close_request),
+        )
+        .route(
+            routes::REPO_REQUEST_READY,
+            post(http::requests::mark_request_ready),
+        )
+        .route(
+            routes::REPO_REQUEST_WORKING,
+            post(http::requests::return_request_to_working),
+        )
+        .route(
+            routes::REPO_REQUEST_HOLD,
+            axum::routing::put(http::requests::hold_request)
+                .delete(http::requests::release_request_hold),
+        )
+        .route(
+            routes::REPO_REQUEST_REQUEST_CHANGES,
+            post(http::requests::request_changes),
+        )
+        .route(
+            routes::REPO_REQUEST_ASSESSMENT,
+            post(http::requests::assess_request),
+        )
+        .route(
+            routes::REPO_REQUEST_MERGE,
+            post(http::requests::merge_request),
+        )
+        .route(
+            routes::REPO_REQUEST_INVITEES,
+            axum::routing::put(http::requests::add_request_invitee)
+                .delete(http::requests::remove_request_invitee),
+        )
+        .route(
+            routes::REPO_REQUEST_INVITEES_ME,
+            delete(http::requests::leave_request),
         )
         .route(
             routes::REPO_REQUEST_CHANGE_BLOCK_FILES,
@@ -105,14 +145,6 @@ pub fn router(state: AppState) -> Router {
         .route(
             routes::REPO_REQUEST_CHANGE_BLOCK_FILE_DIFF,
             get(http::request_review::get_request_change_block_file_diff),
-        )
-        .route(
-            routes::REPO_REQUEST_SUBMIT,
-            post(http::requests::submit_request),
-        )
-        .route(
-            routes::REPO_REQUEST_DESCRIPTION,
-            axum::routing::patch(http::requests::update_request_description),
         )
         .route(
             routes::REPO_REQUEST_DISCUSSIONS,
@@ -147,22 +179,6 @@ pub fn router(state: AppState) -> Router {
         .route(
             routes::REPO_REQUEST_ACTIVITY,
             get(http::request_discussions::activity),
-        )
-        .route(
-            routes::REPO_REQUEST_NEEDS_RESPONSE,
-            post(http::requests::mark_needs_response),
-        )
-        .route(
-            routes::REPO_REQUEST_RESPOND,
-            post(http::requests::respond_to_request),
-        )
-        .route(
-            routes::REPO_REQUEST_RESOLVE,
-            post(http::requests::resolve_request),
-        )
-        .route(
-            routes::REPO_REQUEST_MERGE,
-            post(http::requests::merge_request),
         )
         .route(routes::REPO_EVENTS, get(http::repo_events::repo_events))
         .route(routes::REPO_COMMITS, get(http::history::get_commit_history))

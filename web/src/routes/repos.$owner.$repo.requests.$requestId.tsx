@@ -1,23 +1,16 @@
 import { createApiClient, HttpError } from '@/api/client'
 import type { AccountSession } from '@/api/types'
 import { ApiRouteTemplates, buildApiPath } from '@/api/types.generated'
-import {
-  deleteRequestForRequest,
-  loadRequestForRequest,
-  markRequestNeedsResponseForRequest,
-  mergeRequestForRequest,
-  parseMergeRequestInput,
-  parseNeedsResponseInput,
-  parseRequestParams,
-  parseResolveRequestInput,
-  parseRespondRequestInput,
-  resolveRequestForRequest,
-  respondToRequestForRequest,
-} from '@/api/repos'
+import { loadRequestForRequest } from '@/api/repos'
 import {
   type LoadRequestChangeBlockFilesInput,
   loadRequestChangeBlockFilesForRequest,
 } from '@/api/requests'
+import {
+  type RequestActionCommand,
+  type RequestActionInput,
+  performRequestActionForRequest,
+} from '@/features/requests/request-actions-api'
 import {
   createRequestDiscussionForRequest,
   createRequestDiscussionReplyForRequest,
@@ -44,8 +37,9 @@ import {
   RequestUnavailablePage,
 } from '@/features/requests/request-detail-page'
 import { useRepoLayout } from '@/features/repo-detail/repo-layout-context'
-import { createFileRoute } from '@tanstack/react-router'
+import { createFileRoute, useRouter } from '@tanstack/react-router'
 import { createServerFn } from '@tanstack/react-start'
+import { useCallback, useMemo } from 'react'
 
 const loadRequestPage = createServerFn({ method: 'GET' })
   .validator((data: ReturnType<typeof requestParamsForRoute>) => data)
@@ -53,9 +47,7 @@ const loadRequestPage = createServerFn({ method: 'GET' })
     const [detail, account, discussionPage] = await Promise.all([
       loadOptionalRequestForRequest(data),
       loadOptionalAccountSession(),
-      loadOptionalSelectedRequestResource(() =>
-        loadRequestDiscussionsForRequest(data),
-      ),
+      loadOptionalSelectedRequestResource(() => loadRequestDiscussionsForRequest(data)),
     ])
     return { account, detail, discussionPage }
   })
@@ -108,25 +100,9 @@ const updateDescription = createServerFn({ method: 'POST' })
   .validator((data: UpdateDescriptionInput) => data)
   .handler(({ data }) => updateRequestDescriptionForRequest(data))
 
-const markNeedsResponse = createServerFn({ method: 'POST' })
-  .validator(parseNeedsResponseInput)
-  .handler(({ data }) => markRequestNeedsResponseForRequest(data))
-
-const respondToRequest = createServerFn({ method: 'POST' })
-  .validator(parseRespondRequestInput)
-  .handler(({ data }) => respondToRequestForRequest(data))
-
-const resolveRequest = createServerFn({ method: 'POST' })
-  .validator(parseResolveRequestInput)
-  .handler(({ data }) => resolveRequestForRequest(data))
-
-const mergeRequest = createServerFn({ method: 'POST' })
-  .validator(parseMergeRequestInput)
-  .handler(({ data }) => mergeRequestForRequest(data))
-
-const deleteRequest = createServerFn({ method: 'POST' })
-  .validator(parseRequestParams)
-  .handler(({ data }) => deleteRequestForRequest(data))
+const runRequestAction = createServerFn({ method: 'POST' })
+  .validator((data: RequestActionInput) => data)
+  .handler(({ data }) => performRequestActionForRequest(data))
 
 export const Route = createFileRoute('/repos/$owner/$repo/requests/$requestId')({
   loader: ({ params }) => loadRequestPage({ data: requestParamsForRoute(params) }),
@@ -137,7 +113,36 @@ function RequestRoute() {
   const params = Route.useParams()
   const page = Route.useLoaderData()
   const live = useRepoLayout()
-  const repoParams = { owner: params.owner, repo: params.repo }
+  const router = useRouter()
+  const navigate = Route.useNavigate()
+  const repoParams = useMemo(
+    () => ({ owner: params.owner, repo: params.repo }),
+    [params.owner, params.repo],
+  )
+  const requestParams = useMemo(
+    () => requestParamsForRoute({
+      owner: params.owner,
+      repo: params.repo,
+      requestId: params.requestId,
+    }),
+    [params.owner, params.repo, params.requestId],
+  )
+  const performAction = useCallback(async (command: RequestActionCommand) => {
+    const result = await runRequestAction({ data: { ...requestParams, ...command } })
+    try {
+      if (result.deleted) {
+        await navigate({ params: repoParams, to: '/repos/$owner/$repo/requests' })
+      } else {
+        await router.invalidate()
+      }
+      return result
+    } catch {
+      return {
+        ...result,
+        synchronizationError: 'The update completed, but the latest request state could not be reloaded. Refresh this page.',
+      }
+    }
+  }, [navigate, repoParams, requestParams, router])
 
   if (!page.detail || !page.discussionPage) {
     return <RequestUnavailablePage params={repoParams} />
@@ -145,27 +150,23 @@ function RequestRoute() {
 
   return (
     <RequestDetailPage
-      actor={page.account?.user ?? null}
+      account={page.account}
       createDiscussion={(data) => createDiscussion({ data })}
       createReply={(data) => createReply({ data })}
-      deleteRequest={(data) => deleteRequest({ data })}
       detail={page.detail}
       discussionPage={page.discussionPage}
       live={live}
-      loadActivity={() => loadActivity({ data: requestParamsForRoute(params) })}
+      loadActivity={() => loadActivity({ data: requestParams })}
       loadChangeBlockFiles={(data) => loadChangeBlockFiles({ data })}
       loadDiscussions={(data) => loadDiscussions({ data })}
       loadDiscussionChanges={(data) => loadDiscussionChanges({ data })}
       loadReplies={(data) => loadReplies({ data })}
       markDiscussionRead={(data) => markDiscussionRead({ data })}
-      markNeedsResponse={(data) => markNeedsResponse({ data })}
-      mergeRequest={(data) => mergeRequest({ data })}
       params={repoParams}
+      performAction={performAction}
       reopenAndReply={(data) => reopenAndReply({ data })}
       reopenDiscussion={(data) => reopenDiscussion({ data })}
       resolveDiscussion={(data) => resolveDiscussion({ data })}
-      resolveRequest={(data) => resolveRequest({ data })}
-      respondToRequest={(data) => respondToRequest({ data })}
       updateDescription={(data) => updateDescription({ data })}
     />
   )

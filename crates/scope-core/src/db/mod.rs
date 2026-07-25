@@ -11,6 +11,7 @@ mod cleanup_queue_tests;
 mod clerk_users;
 mod cli_auth;
 mod cli_sessions;
+mod content_push_transactions;
 mod entities;
 mod fast_push;
 mod git_compaction;
@@ -37,11 +38,27 @@ mod request_discussions;
 pub use request_discussions::{
     RequestDiscussionReadBatch, RequestDiscussionReadModel, RequestDiscussionsPageQuery,
 };
-mod request_merges;
+mod request_invitees;
+pub use request_invitees::{
+    AddRequestInviteeCommand, LeaveRequestCommand, RemoveRequestInviteeCommand, RequestInviteeRead,
+};
+mod request_queue;
+pub use request_queue::{RequestQueueCursor, RequestQueuePageQuery, RequestQueueRow};
 mod request_rows;
 pub use request_rows::RequestListRow;
+mod request_identity_transactions;
+#[cfg(test)]
+mod request_invalidation_transactions_tests;
+mod request_merge;
+mod request_review_transactions;
+#[cfg(test)]
+mod request_review_transactions_tests;
+mod request_revision_transactions;
 mod requests;
 mod schema;
+mod starter_credits;
+#[cfg(test)]
+mod starter_credits_tests;
 #[cfg(any(test, feature = "local-dev", feature = "test-support"))]
 mod test_support;
 mod visibility_changes;

@@ -2,6 +2,7 @@ pub(crate) mod cache;
 pub(crate) mod content;
 mod credentials;
 pub(crate) mod import;
+pub(crate) mod request_merge;
 mod request_ref_public_safety;
 pub(crate) mod request_refs;
 pub(crate) mod storage;

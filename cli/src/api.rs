@@ -73,9 +73,25 @@ pub fn validate_session_token(
         .context("validate saved Scope login")?
         .json()
         .context("parse saved Scope login response")?;
-    let AccountSessionResponse { identity, user } = session;
+    let AccountSessionResponse { identity, user, .. } = session;
     drop(identity);
     Ok(user)
+}
+
+pub fn account_session(
+    client: &Client,
+    api_url: &str,
+    session_token: &str,
+) -> anyhow::Result<AccountSessionResponse> {
+    client
+        .get(format!("{api_url}{ACCOUNT_SESSION_PATH}"))
+        .bearer_auth(session_token)
+        .send()
+        .context("load Scope account")?
+        .error_for_status()
+        .context("load Scope account")?
+        .json()
+        .context("parse Scope account response")
 }
 
 pub fn revoke_cli_session(

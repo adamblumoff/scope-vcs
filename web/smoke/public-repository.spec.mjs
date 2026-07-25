@@ -84,23 +84,26 @@ test('public repository requests route is anonymously readable', async () => {
   await withPage(`${repoPath}/requests`, async (page) => {
     await page.getByRole('heading', { level: 1, name: 'Requests' }).waitFor()
     await assertCurrentRepoSection(page, 'Requests')
-    await page.getByText('No requests yet', { exact: true }).waitFor()
+    await page.getByRole('heading', { level: 2, name: 'Your work' }).waitFor()
+    await page.getByRole('heading', { level: 2, name: 'Ready for review' }).waitFor()
+    await page.getByRole('heading', { level: 2, name: 'Completed' }).waitFor()
+    await page.getByText('No requests are ready for review.', { exact: true }).waitFor()
+    await page.getByText('No completed requests are visible.', { exact: true }).waitFor()
   })
 })
 
 test('seeded request timeline keeps its order and exposes nested reply branches', async () => {
-  await withPage(`/repos/${owner}/update-demo/requests/req_demo_submitted`, async (page) => {
+  await withPage(`/repos/${owner}/update-demo/requests/req_demo_ready`, async (page) => {
     await page.getByRole('heading', { level: 1, name: 'Add bounded retry timing' }).waitFor()
     const threads = page.locator('.request-discussion-thread')
     await threads.first().waitFor()
     assert.deepEqual(
       await threads.evaluateAll((elements) => elements.map(({ id }) => id)),
       [
-        'discussion-thread_event_req_demo_submitted_submitted',
-        'discussion-thread_event_req_demo_submitted_revision_1',
-        'discussion-thread_event_req_demo_submitted_revision_2',
-        'discussion-thread_event_req_demo_submitted_revision_3',
-        'discussion-thread_event_req_demo_submitted_revision_4',
+        'discussion-thread_event_req_demo_ready_revision_1',
+        'discussion-thread_event_req_demo_ready_revision_2',
+        'discussion-thread_event_req_demo_ready_revision_3',
+        'discussion-thread_event_req_demo_ready_revision_4',
         'discussion-discussion_demo_retry_cap',
         'discussion-discussion_demo_jitter',
         'discussion-discussion_demo_resolved_docs',
@@ -132,9 +135,66 @@ test('seeded request timeline keeps its order and exposes nested reply branches'
   })
 })
 
-async function withPage(path, assertion) {
+test('request queue search is keyboard accessible and mobile rows do not overflow', async () => {
+  await withPage(
+    `/repos/${owner}/update-demo/requests`,
+    async (page) => {
+      const readyRow = page.getByRole('link', {
+        name: /Add bounded retry timing/,
+      })
+      await readyRow.waitFor()
+      await readyRow.focus()
+      assert.equal(
+        await readyRow.evaluate(
+          (element) => element === document.activeElement,
+        ),
+        true,
+      )
+      const search = page.getByRole('searchbox', {
+        name: 'Search ready and completed requests',
+      })
+      const queueRequests = []
+      page.on('request', (request) => {
+        if (request.url().includes('/_serverFn/')) {
+          queueRequests.push(request.url())
+        }
+      })
+      await page.waitForFunction(
+        (element) =>
+          Object.keys(element).some((key) => key.startsWith('__reactProps$')),
+        await search.elementHandle(),
+      )
+      await search.fill('missing request title')
+      await search.press('Enter')
+      await page
+        .getByText(
+          'No ready for review requests match “missing request title”.',
+          { exact: true },
+        )
+        .waitFor()
+      assert.equal(queueRequests.length, 2)
+      const clear = page.getByRole('button', { name: 'Clear' })
+      await clear.focus()
+      assert.equal(
+        await clear.evaluate((element) => element === document.activeElement),
+        true,
+      )
+      assert.equal(
+        await page.evaluate(
+          () =>
+            document.documentElement.scrollWidth <=
+            document.documentElement.clientWidth,
+        ),
+        true,
+      )
+    },
+    { viewport: { height: 844, width: 390 } },
+  )
+})
+
+async function withPage(path, assertion, pageOptions = {}) {
   const browser = await chromium.launch({ headless: true })
-  const page = await browser.newPage()
+  const page = await browser.newPage(pageOptions)
   const pageErrors = []
   page.on('pageerror', (error) => pageErrors.push(error.message))
 

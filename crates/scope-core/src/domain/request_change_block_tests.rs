@@ -5,58 +5,12 @@ use super::{
 use std::collections::BTreeMap;
 
 #[test]
-fn submission_creates_a_dormant_thread_that_opens_on_first_reply() {
-    let (mut requests, mutation) = submitted_fixture();
-
-    assert_eq!(mutation.change_block.old_head_oid, "base");
-    assert_eq!(mutation.change_block.new_head_oid, "head");
-    assert_eq!(mutation.change_block.git_snapshot, source_blob("head"));
-    assert_eq!(mutation.discussion.opened_position, mutation.event.position);
-    assert_eq!(mutation.discussion.status, RequestDiscussionStatus::Dormant);
-    assert_eq!(mutation.read_state.user_id, "author");
-    assert_eq!(
-        mutation.read_state.read_through_position,
-        mutation.discussion.opened_position
-    );
-    assert!(matches!(
-        mutation.discussion.subject,
-        RequestDiscussionSubject::ChangeBlock { ref change_block_id }
-            if change_block_id == &mutation.change_block.id
-    ));
-
-    let discussion_id = mutation.discussion.id.clone();
-    let mut discussions = BTreeMap::from([(discussion_id.clone(), mutation.discussion)]);
-    let reply = create_request_discussion_reply(
-        &mut requests,
-        &mut discussions,
-        &mut BTreeMap::new(),
-        CreateRequestDiscussionReplyInput {
-            request_id: "req_change".to_string(),
-            discussion_id,
-            id: "reply_change_block".to_string(),
-            actor_user_id: "maintainer".to_string(),
-            actor_can_participate: true,
-            client_reply_id: "client_change_block".to_string(),
-            body_markdown: "Can we cover the retry path?".to_string(),
-            reply_to_reply_id: None,
-            now_unix: 13,
-        },
-    )
-    .unwrap();
-
-    assert_eq!(reply.discussion.status, RequestDiscussionStatus::Open);
-    assert_eq!(
-        reply.discussion.last_activity_position,
-        reply.reply.position
-    );
-}
-
-fn submitted_fixture() -> (BTreeMap<String, Request>, SubmitRequestMutation) {
+fn revision_creates_a_dormant_change_block_thread_that_opens_on_first_reply() {
     let mut requests = BTreeMap::new();
     start_request(
         &mut requests,
         StartRequestInput {
-            id: "req_change".to_string(),
+            id: "request_change".to_string(),
             repo_id: "owner/repo".to_string(),
             name: "change".to_string(),
             author_user_id: "author".to_string(),
@@ -72,33 +26,58 @@ fn submitted_fixture() -> (BTreeMap<String, Request>, SubmitRequestMutation) {
     record_working_request_upload(
         &mut requests,
         RecordWorkingRequestUploadInput {
-            request_id: "req_change".to_string(),
+            request_id: "request_change".to_string(),
             actor_user_id: "author".to_string(),
             actor_can_edit: true,
             expected_old_head_oid: None,
-            new_head_oid: "head".to_string(),
-            git_snapshot: source_blob("head"),
+            new_head_oid: "head-1".to_string(),
+            git_snapshot: source_blob("head-1"),
             now_unix: 11,
         },
     )
     .unwrap();
-    let mutation = submit_request(
+    let mutation = record_request_revision(
         &mut requests,
         &mut BTreeMap::new(),
-        &mut BTreeMap::new(),
-        &mut BTreeMap::new(),
-        SubmitRequestInput {
-            request_id: "req_change".to_string(),
+        RecordRequestRevisionInput {
+            request_id: "request_change".to_string(),
             actor_user_id: "author".to_string(),
-            expected_head_oid: "head".to_string(),
-            stake_credits: 0,
-            stake_ledger_entry_id: None,
-            event_id: "event_submitted".to_string(),
+            actor_can_edit: true,
+            expected_old_head_oid: Some("head-1".to_string()),
+            new_head_oid: "head-2".to_string(),
+            git_snapshot: source_blob("head-2"),
+            event_id: "event_revision".to_string(),
+            body: None,
             now_unix: 12,
         },
     )
     .unwrap();
-    (requests, mutation)
+
+    assert_eq!(mutation.orphan_objects, vec![source_blob("head-1")]);
+    assert_eq!(mutation.change_block.old_head_oid, "head-1");
+    assert_eq!(mutation.change_block.new_head_oid, "head-2");
+    assert_eq!(mutation.discussion.status, RequestDiscussionStatus::Dormant);
+    assert_eq!(mutation.read_state.user_id, "author");
+    let discussion_id = mutation.discussion.id.clone();
+    let mut discussions = BTreeMap::from([(discussion_id.clone(), mutation.discussion)]);
+    let reply = create_request_discussion_reply(
+        &mut requests,
+        &mut discussions,
+        &mut BTreeMap::new(),
+        CreateRequestDiscussionReplyInput {
+            request_id: "request_change".to_string(),
+            discussion_id,
+            id: "reply_change_block".to_string(),
+            actor_user_id: "maintainer".to_string(),
+            actor_can_participate: true,
+            client_reply_id: "client_change_block".to_string(),
+            body_markdown: "Can we cover the retry path?".to_string(),
+            reply_to_reply_id: None,
+            now_unix: 13,
+        },
+    )
+    .unwrap();
+    assert_eq!(reply.discussion.status, RequestDiscussionStatus::Open);
 }
 
 fn source_blob(git_oid: &str) -> SourceBlob {

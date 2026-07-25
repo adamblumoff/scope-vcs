@@ -15,6 +15,7 @@ const RESET_TABLES: &str = "
     scope_request_discussion_read_states,
     scope_request_discussion_replies,
     scope_request_discussions,
+    scope_request_invitees,
     scope_request_change_blocks,
     scope_request_events,
     scope_requests,

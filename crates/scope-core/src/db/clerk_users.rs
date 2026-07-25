@@ -1,4 +1,7 @@
-use super::{MetadataStore, acquire_aggregate_lock, auth::load_user_by_id, entities};
+use super::{
+    MetadataStore, acquire_aggregate_lock, auth::load_user_by_id, entities,
+    starter_credits::ensure_verified_account_starter_credits,
+};
 use crate::{auth::clerk::ClerkIdentity, domain::store::UserAccount, error::ApiError};
 use sea_orm::{
     ActiveModelTrait, ActiveValue::Set, ColumnTrait, EntityTrait, IntoActiveModel, QueryFilter,
@@ -31,6 +34,7 @@ impl MetadataStore {
         acquire_aggregate_lock(&tx, "auth-identity", &identity_key).await?;
         acquire_aggregate_lock(&tx, "auth-email", &verified_email).await?;
         let user = resolve_clerk_user_in_tx(&tx, &identity, &verified_email).await?;
+        ensure_verified_account_starter_credits(&tx, &user.id, unix_now()).await?;
         tx.commit().await.map_err(ApiError::internal)?;
         Ok(user)
     }
@@ -287,6 +291,13 @@ fn normalize_handle(value: &str) -> Option<String> {
 
 fn normalize_email(email: &str) -> String {
     email.trim().to_ascii_lowercase()
+}
+
+fn unix_now() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|duration| duration.as_secs())
+        .unwrap_or(0)
 }
 
 #[cfg(test)]

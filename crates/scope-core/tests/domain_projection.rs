@@ -10,7 +10,8 @@ use scope_core::domain::{
     },
     reviewed_updates::{
         ContentPushState, ReviewedConfigUpdateInput, ReviewedContentChange, ReviewedUpdateInput,
-        accept_content_push, apply_reviewed_config_to_repo, apply_reviewed_update_to_repo,
+        accept_content_push, accept_request_merge, apply_reviewed_config_to_repo,
+        apply_reviewed_update_to_repo,
     },
     store::{RepoPublicationState, SourceBlob, StoredRepository, UserAccount},
 };
@@ -301,6 +302,36 @@ fn content_push_command_returns_normalized_effects_without_previous_config() {
     );
     assert_eq!(repo.record.change_version, 1);
     assert_eq!(repo.graph.commits.len(), 1);
+}
+
+#[test]
+fn request_merge_accepts_unchanged_tree_without_weakening_push_rules() {
+    let repo = published_repo_with_public_file("initial", "/README.md", "hello");
+    let config = repo.repo_config.clone();
+    let state = ContentPushState {
+        change_version: repo.record.change_version,
+        policy: repo.policy.clone(),
+        repo_config: config.clone(),
+        previous_commit_id: repo.graph.commits.last().map(|commit| commit.id.clone()),
+        live_files: BTreeMap::new(),
+    };
+    let update = reviewed_update(
+        "3333333333333333333333333333333333333333",
+        "merge request",
+        Vec::new(),
+        Some(config.clone()),
+        config,
+    );
+
+    assert!(accept_content_push(state.clone(), update.clone()).is_err());
+    let accepted = accept_request_merge(state, update).unwrap();
+    assert_eq!(accepted.change_version, 2);
+    assert_eq!(accepted.git_head.change_version, 2);
+    assert_eq!(
+        accepted.logical_commit.id,
+        "rv_merge_3333333333333333333333333333333333333333"
+    );
+    assert!(accepted.logical_commit.changes.is_empty());
 }
 
 #[test]

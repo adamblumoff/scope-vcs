@@ -1,9 +1,8 @@
 use crate::{
-    api::{RepoSummaryResponse, RepositoryActor, RequestSummaryResponse, get_repo, list_requests},
+    api::{RepoSummaryResponse, RequestSummaryResponse, get_repo, list_requests},
     git_repo::{
-        GitRepo, branch_config_value, changed_paths_since_scope_base_at_commit, current_branch,
-        fetch_scope_remote_with_bearer, push_head_to_ref_with_bearer, run_git_in_repo,
-        set_branch_config_value,
+        GitRepo, branch_config_value, current_branch, fetch_scope_remote_with_bearer,
+        push_head_to_ref_with_bearer, run_git_in_repo, set_branch_config_value,
     },
     push::DEFAULT_SCOPE_BRANCH,
     request::remote::{
@@ -77,33 +76,6 @@ pub(super) fn fetch_main_projection(
     )
 }
 
-pub(super) fn normalized_submit_stake(
-    repo: &RepoSummaryResponse,
-    stake_credits: Option<u32>,
-) -> anyhow::Result<Option<u32>> {
-    if !repo.request_permissions.can_submit_request {
-        bail!(
-            "this user cannot submit requests to {}/{}",
-            repo.owner_handle,
-            repo.name
-        );
-    }
-    match repo.access.actor {
-        RepositoryActor::Public => match stake_credits {
-            Some(stake) if stake > 0 => Ok(Some(stake)),
-            _ => bail!("public request submission requires --stake-credits greater than 0"),
-        },
-        RepositoryActor::Member | RepositoryActor::Owner => {
-            if stake_credits.unwrap_or(0) != 0 {
-                bail!(
-                    "owner/member request submission does not use credit stake; omit --stake-credits"
-                );
-            }
-            Ok(None)
-        }
-    }
-}
-
 pub(super) fn push_request_head(
     target: &RequestRemoteTarget,
     session_token: &str,
@@ -159,9 +131,22 @@ pub(super) fn maybe_request_id_for_context(
     if explicit.is_none()
         && let Some(request_id) = branch_config_value(git_repo, &branch, REQUEST_ID_KEY)?
     {
+        validate_stored_request_target(git_repo, &branch, context)?;
         return Ok(Some(request_id));
     }
-    let request_name = explicit.as_deref().unwrap_or(&branch);
+    let request_name = match explicit {
+        Some(request_name) => request_name,
+        None => {
+            let tracking_remote = branch_config_value(git_repo, &branch, "remote")?;
+            let merge_ref = branch_config_value(git_repo, &branch, "merge")?;
+            inferred_request_name(
+                branch,
+                &context.target.remote,
+                tracking_remote.as_deref(),
+                merge_ref.as_deref(),
+            )
+        }
+    };
     let mut cursor = None;
     loop {
         let page = list_requests(
@@ -186,13 +171,44 @@ pub(super) fn maybe_request_id_for_context(
     }
 }
 
-pub(super) fn maybe_request_branch_audience(
+fn inferred_request_name(
+    branch: String,
+    selected_remote: &str,
+    tracking_remote: Option<&str>,
+    merge_ref: Option<&str>,
+) -> String {
+    if tracking_remote == Some(selected_remote)
+        && let Some(request_name) =
+            merge_ref.and_then(|request_ref| request_ref.strip_prefix("refs/heads/"))
+    {
+        return request_name.to_string();
+    }
+    branch
+}
+
+fn validate_stored_request_target(
     git_repo: &GitRepo,
-) -> anyhow::Result<Option<RequestAudience>> {
-    let branch = current_branch(git_repo)?;
-    branch_config_value(git_repo, &branch, REQUEST_AUDIENCE_KEY)?
-        .map(|value| parse_audience_config(&value))
-        .transpose()
+    branch: &str,
+    context: &RequestContext,
+) -> anyhow::Result<()> {
+    let stored_owner = branch_config_value(git_repo, branch, REQUEST_OWNER_KEY)?;
+    let stored_repo = branch_config_value(git_repo, branch, REQUEST_REPO_KEY)?;
+    match (stored_owner.as_deref(), stored_repo.as_deref()) {
+        (Some(owner), Some(repo))
+            if owner == context.target.owner && repo == context.target.repo =>
+        {
+            Ok(())
+        }
+        (Some(owner), Some(repo)) => bail!(
+            "current branch belongs to Scope repository {owner}/{repo}, but remote {} targets {}/{}; pass the correct --remote",
+            context.target.remote,
+            context.target.owner,
+            context.target.repo
+        ),
+        _ => bail!(
+            "current branch request metadata is incomplete; pass --request <name-or-id> explicitly"
+        ),
+    }
 }
 
 pub(super) fn store_branch_context(
@@ -250,32 +266,6 @@ pub(super) fn track_request_branch_ref(
     )
 }
 
-pub(super) fn print_change_summary(
-    git_repo: &GitRepo,
-    target: &RequestRemoteTarget,
-    request_head_oid: &str,
-) -> anyhow::Result<()> {
-    let remote_main = remote_main_ref(&target.remote);
-    let changes =
-        changed_paths_since_scope_base_at_commit(git_repo, Some(&remote_main), request_head_oid)?;
-    if changes.is_empty() {
-        println!("Committed diff: no file changes from {remote_main}");
-        return Ok(());
-    }
-
-    println!(
-        "Committed diff: {} changed file(s) from {remote_main}",
-        changes.len()
-    );
-    for change in changes.iter().take(12) {
-        println!("  {} {}", change.status, change.path);
-    }
-    if changes.len() > 12 {
-        println!("  ... {} more", changes.len() - 12);
-    }
-    Ok(())
-}
-
 pub(super) fn projection_label_for_audience(audience: RequestAudience) -> &'static str {
     match audience {
         RequestAudience::Public => "public main",
@@ -298,16 +288,34 @@ fn audience_config_value(audience: RequestAudience) -> &'static str {
     }
 }
 
-pub(super) fn parse_audience_config(value: &str) -> anyhow::Result<RequestAudience> {
-    match value {
-        "public" => Ok(RequestAudience::Public),
-        "private" => Ok(RequestAudience::Private),
-        _ => bail!("invalid Scope request base audience '{value}'"),
-    }
-}
-
 fn normalized_optional_arg(value: Option<String>) -> Option<String> {
     value
         .map(|value| value.trim().to_string())
         .filter(|value| !value.is_empty())
+}
+#[cfg(test)]
+mod tests {
+    use super::inferred_request_name;
+
+    #[test]
+    fn merge_ref_only_names_a_request_for_the_selected_scope_remote() {
+        assert_eq!(
+            inferred_request_name(
+                "scope-fix".to_string(),
+                "scope",
+                Some("scope"),
+                Some("refs/heads/request-fix"),
+            ),
+            "request-fix"
+        );
+        assert_eq!(
+            inferred_request_name(
+                "scope-fix".to_string(),
+                "scope",
+                Some("origin"),
+                Some("refs/heads/other-fix"),
+            ),
+            "scope-fix"
+        );
+    }
 }

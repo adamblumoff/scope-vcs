@@ -4,9 +4,8 @@ use scope_core::{
         policy::Visibility,
         repo_config::RepoConfig,
         requests::{
-            RequestActorRole, RequestAudience, RequestDiscussionStatus, RequestDisposition,
+            RequestActorRole, RequestAssessmentOutcome, RequestAudience, RequestDiscussionStatus,
             RequestEventKind, RequestEventPayload, RequestMergeabilityStatus, RequestState,
-            ResolutionDisposition,
         },
         store::{FirstPushTokenStatus, RepoPublicationState, RepositoryActor},
     },
@@ -106,6 +105,24 @@ mod tests {
         assert!(GitOid::try_from("abcdef0123456789abcdef0123456789abcdef0g").is_err());
         assert!(serde_json::from_str::<GitOid>("\"head-1\"").is_err());
     }
+
+    #[test]
+    fn lifecycle_request_payloads_preserve_optional_fields() {
+        let ready: ReadyRequestRequest =
+            serde_json::from_str("{}").expect("ready request without a stake");
+        assert_eq!(ready.stake_credits, None);
+        assert_eq!(serde_json::to_string(&ready).unwrap(), "{}");
+
+        let assessment: AssessRequestRequest = serde_json::from_str(r#"{"outcome":"Rejected"}"#)
+            .expect("assessment request without a body");
+        assert_eq!(assessment.outcome, RequestAssessmentOutcome::Rejected);
+        assert_eq!(assessment.body_markdown, None);
+
+        let edit: EditRequestIdentityRequest = serde_json::from_str(r#"{"title":"New title"}"#)
+            .expect("identity edit with only a title");
+        assert_eq!(edit.title.as_deref(), Some("New title"));
+        assert_eq!(edit.description_markdown, None);
+    }
 }
 
 #[derive(Debug, Deserialize, Serialize)]
@@ -113,6 +130,7 @@ mod tests {
 pub struct AccountSessionResponse {
     pub identity: Option<SessionIdentity>,
     pub user: Option<UserResponse>,
+    pub credit_balance_credits: Option<u32>,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -210,7 +228,7 @@ pub struct RepoSummaryResponse {
     pub default_visibility: Visibility,
     pub change_version: u64,
     pub access: RepositoryAccessResponse,
-    pub open_request_count: usize,
+    pub ready_for_review_count: usize,
     pub request_permissions: RepoRequestPermissionsResponse,
 }
 
@@ -229,7 +247,7 @@ pub struct RepositoryAccessResponse {
 #[derive(Clone, Debug, Deserialize, Serialize)]
 #[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 pub struct RepoRequestPermissionsResponse {
-    pub can_submit_request: bool,
+    pub can_start_request: bool,
     pub uses_credit_stake: bool,
 }
 
@@ -308,7 +326,7 @@ pub struct RequestMutationResponse {
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
 #[cfg_attr(feature = "ts", derive(ts_rs::TS))]
-pub struct RequestDeleteResponse {
+pub struct RequestCloseResponse {
     pub deleted: bool,
     pub request: Option<RequestSummaryResponse>,
 }
@@ -327,16 +345,70 @@ pub struct RequestSummaryResponse {
     pub head_oid: GitOid,
     pub state: RequestState,
     pub activity_version: u64,
-    pub stake_credits: u32,
-    pub disposition: Option<RequestDisposition>,
-    pub settlement: Option<RequestSettlementResponse>,
+    pub current_stake_credits: u32,
+    pub first_ready_at_unix: Option<u64>,
+    pub ready_at_unix: Option<u64>,
+    pub held_at_unix: Option<u64>,
+    pub held_by_user_id: Option<String>,
+    pub assessment_outcome: Option<RequestAssessmentOutcome>,
+    pub assessment_body_markdown: Option<String>,
+    pub assessed_at_unix: Option<u64>,
+    pub assessed_by_user_id: Option<String>,
+    pub completed_at_unix: Option<u64>,
+    pub completed_by_user_id: Option<String>,
+    pub merged_at_unix: Option<u64>,
+    pub merged_by_user_id: Option<String>,
+    pub merged_head_oid: Option<GitOid>,
+    pub merged_main_oid: Option<GitOid>,
     pub created_at_unix: u64,
     pub updated_at_unix: u64,
-    pub resolved_at_unix: Option<u64>,
+    pub invitees: Vec<RequestInviteeResponse>,
+    pub assessment_previews: Vec<RequestSettlementPreviewResponse>,
     pub permissions: RequestPermissionsResponse,
     pub mergeability: RequestMergeabilityResponse,
-    pub resolution_options: Vec<RequestResolutionOptionResponse>,
-    pub merge_settlement_preview: RequestSettlementPreviewResponse,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
+pub struct RequestSettlementPreviewResponse {
+    pub outcome: RequestAssessmentOutcome,
+    pub stake_credits: u32,
+    pub refunded_credits: u32,
+    pub reward_credits: u32,
+    pub burned_credits: u32,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
+pub struct RequestInviteeResponse {
+    pub user: RequestActorSummaryResponse,
+    pub invited_by_user_id: String,
+    pub created_at_unix: u64,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
+pub struct AddRequestInviteeRequest {
+    pub handle: String,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
+pub struct RemoveRequestInviteeRequest {
+    pub handle: String,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
+pub struct RequestInviteeMutationResponse {
+    pub request: RequestSummaryResponse,
+    pub invitee: RequestInviteeResponse,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
+pub struct LeaveRequestResponse {
+    pub invitee: RequestInviteeResponse,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -349,9 +421,10 @@ pub struct RequestListItemResponse {
     pub audience: RequestAudience,
     pub head_oid: GitOid,
     pub state: RequestState,
-    pub stake_credits: u32,
-    pub disposition: Option<RequestDisposition>,
-    pub settlement: Option<RequestSettlementResponse>,
+    pub current_stake_credits: u32,
+    pub assessment_outcome: Option<RequestAssessmentOutcome>,
+    pub ready_at_unix: Option<u64>,
+    pub held_at_unix: Option<u64>,
     pub updated_at_unix: u64,
     pub mergeability: RequestMergeabilityResponse,
 }
@@ -359,15 +432,20 @@ pub struct RequestListItemResponse {
 #[derive(Clone, Debug, Deserialize, Serialize)]
 #[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 pub struct RequestPermissionsResponse {
+    pub can_view_activity: bool,
     pub can_open_discussion: bool,
     pub can_reply_to_discussion: bool,
-    pub can_edit_description: bool,
+    pub can_edit_identity: bool,
     pub can_pull_branch: bool,
     pub can_push_branch: bool,
-    pub can_delete: bool,
-    pub can_mark_needs_response: bool,
-    pub can_respond: bool,
-    pub can_resolve: bool,
+    pub can_mark_ready: bool,
+    pub can_return_to_working: bool,
+    pub can_manage_invitees: bool,
+    pub can_leave_request: bool,
+    pub can_hold: bool,
+    pub can_request_changes: bool,
+    pub can_assess: bool,
+    pub can_close: bool,
     pub can_merge: bool,
 }
 
@@ -378,33 +456,6 @@ pub struct RequestMergeabilityResponse {
     pub current_main_oid: Option<GitOid>,
     pub request_head_oid: GitOid,
     pub reason: Option<String>,
-}
-
-#[derive(Clone, Debug, Deserialize, Serialize)]
-#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
-pub struct RequestSettlementResponse {
-    pub disposition: RequestDisposition,
-    pub stake_credits: u32,
-    pub refunded_credits: u32,
-    pub reward_credits: u32,
-    pub burned_credits: u32,
-    pub settled_at_unix: u64,
-}
-
-#[derive(Clone, Debug, Deserialize, Serialize)]
-#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
-pub struct RequestSettlementPreviewResponse {
-    pub stake_credits: u32,
-    pub refunded_credits: u32,
-    pub reward_credits: u32,
-    pub burned_credits: u32,
-}
-
-#[derive(Clone, Debug, Deserialize, Serialize)]
-#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
-pub struct RequestResolutionOptionResponse {
-    pub disposition: ResolutionDisposition,
-    pub settlement: RequestSettlementPreviewResponse,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -520,13 +571,6 @@ pub struct RequestActivityPageResponse {
 
 #[derive(Debug, Deserialize, Serialize)]
 #[cfg_attr(feature = "ts", derive(ts_rs::TS))]
-pub struct SubmitRequestRequest {
-    pub head_oid: String,
-    pub stake_credits: Option<u32>,
-}
-
-#[derive(Debug, Deserialize, Serialize)]
-#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 pub struct StartRequestRequest {
     pub name: String,
     pub title: Option<String>,
@@ -535,8 +579,23 @@ pub struct StartRequestRequest {
 
 #[derive(Debug, Deserialize, Serialize)]
 #[cfg_attr(feature = "ts", derive(ts_rs::TS))]
-pub struct UpdateRequestDescriptionRequest {
-    pub description_markdown: String,
+pub struct ReadyRequestRequest {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub stake_credits: Option<u32>,
+}
+
+#[derive(Debug, Deserialize, Serialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
+pub struct AssessRequestRequest {
+    pub outcome: RequestAssessmentOutcome,
+    pub body_markdown: Option<String>,
+}
+
+#[derive(Debug, Deserialize, Serialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
+pub struct EditRequestIdentityRequest {
+    pub title: Option<String>,
+    pub description_markdown: Option<String>,
 }
 
 #[derive(Debug, Deserialize, Serialize)]
@@ -566,31 +625,4 @@ pub struct ReopenAndReplyRequest {
 #[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 pub struct MarkRequestDiscussionReadRequest {
     pub through_position: u64,
-}
-
-#[derive(Debug, Deserialize, Serialize)]
-#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
-pub struct NeedsResponseRequest {
-    pub body: String,
-}
-
-#[derive(Debug, Deserialize, Serialize)]
-#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
-pub struct RespondRequestRequest {
-    pub body: Option<String>,
-}
-
-#[derive(Debug, Deserialize, Serialize)]
-#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
-pub struct ResolveRequestRequest {
-    pub disposition: ResolutionDisposition,
-    pub body: Option<String>,
-}
-
-#[derive(Debug, Deserialize, Serialize)]
-#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
-pub struct MergeRequestRequest {
-    pub expected_main_oid: String,
-    pub expected_head_oid: String,
-    pub body: Option<String>,
 }

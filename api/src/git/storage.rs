@@ -395,7 +395,47 @@ pub(crate) fn install_first_push_pre_receive_hook(repo_root: &FsPath) -> Result<
 pub(crate) fn install_published_pre_receive_hook(repo_root: &FsPath) -> Result<(), ApiError> {
     let hook = repo_root.join("hooks").join("pre-receive");
     let script = format!(
-        "#!/bin/sh\ncount=0\nwhile read old new ref; do\n  count=$((count + 1))\n  if [ \"$new\" = \"{EMPTY_GIT_OID}\" ]; then\n    echo \"Scope does not accept branch deletes\" >&2\n    exit 1\n  fi\n  if [ \"$ref\" = \"refs/heads/{DEFAULT_GIT_BRANCH}\" ]; then\n    if [ \"$old\" = \"{EMPTY_GIT_OID}\" ]; then\n      echo \"Scope accepts only updates to refs/heads/{DEFAULT_GIT_BRANCH}\" >&2\n      exit 1\n    fi\n    if ! git merge-base --is-ancestor \"$old\" \"$new\"; then\n      echo \"Scope rejects non-fast-forward pushes\" >&2\n      exit 1\n    fi\n    continue\n  fi\n  case \"$ref\" in\n    refs/heads/*)\n      if [ \"$old\" = \"{EMPTY_GIT_OID}\" ]; then\n        echo \"request not found; fetch before pushing\" >&2\n        exit 1\n      fi\n      if ! git cat-file -e \"$new^{{commit}}\"; then\n        echo \"Scope request refs must point at commits\" >&2\n        exit 1\n      fi\n      if ! git merge-base --is-ancestor \"$old\" \"$new\"; then\n        echo \"Scope rejects non-fast-forward request pushes\" >&2\n        exit 1\n      fi\n      ;;\n    *)\n      echo \"Scope accepts pushes only to main or a named request branch\" >&2\n      exit 1\n      ;;\n  esac\ndone\nif [ \"$count\" -ne 1 ]; then\n  echo \"Scope accepts exactly one pushed ref\" >&2\n  exit 1\nfi\n"
+        r#"#!/bin/sh
+count=0
+while read old new ref; do
+  count=$((count + 1))
+  if [ "$new" = "{EMPTY_GIT_OID}" ]; then
+    echo "Scope does not accept branch deletes" >&2
+    exit 1
+  fi
+  if [ "$ref" = "refs/heads/{DEFAULT_GIT_BRANCH}" ]; then
+    if [ "$old" = "{EMPTY_GIT_OID}" ]; then
+      echo "Scope accepts only updates to refs/heads/{DEFAULT_GIT_BRANCH}" >&2
+      exit 1
+    fi
+    if ! git merge-base --is-ancestor "$old" "$new"; then
+      echo "Scope rejects non-fast-forward pushes" >&2
+      exit 1
+    fi
+    continue
+  fi
+  case "$ref" in
+    refs/heads/*)
+      if ! git cat-file -e "$new^{{commit}}"; then
+        echo "Scope request refs must point at commits" >&2
+        exit 1
+      fi
+      if [ "$old" != "{EMPTY_GIT_OID}" ] && ! git merge-base --is-ancestor "$old" "$new"; then
+        echo "Scope rejects non-fast-forward request pushes" >&2
+        exit 1
+      fi
+      ;;
+    *)
+      echo "Scope accepts pushes only to main or a named request branch" >&2
+      exit 1
+      ;;
+  esac
+done
+if [ "$count" -ne 1 ]; then
+  echo "Scope accepts exactly one pushed ref" >&2
+  exit 1
+fi
+"#
     );
     write_receive_pack_hook(&hook, &script)
 }

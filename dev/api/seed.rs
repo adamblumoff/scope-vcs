@@ -12,12 +12,11 @@ use crate::{
         policy::{ScopePath, Visibility, VisibilityRule},
         projection::{AuthorVisibility, FileChange, LogicalCommit},
         requests::{
-            DeleteRequestInput, MarkRequestNeedsResponseInput, MergeRequestInput,
-            RecordRequestRevisionInput, RecordWorkingRequestUploadInput, RequestActorRole,
-            RequestAudience, RequestChangeBlock, RequestDiscussion, RequestDiscussionReadState,
-            StartRequestInput, SubmitRequestInput, canonical_request_ref, delete_request,
-            mark_request_needs_response, merge_request, record_request_revision,
-            record_working_request_upload, start_request, submit_request,
+            EditRequestIdentityInput, RecordRequestRevisionInput, RecordWorkingRequestUploadInput,
+            RequestActorRole, RequestAssessmentOutcome, RequestAudience, RequestChangeBlock,
+            RequestDiscussion, RequestDiscussionReadState, StartRequestInput,
+            canonical_request_ref, edit_request_identity, record_request_revision,
+            record_working_request_upload, start_request,
         },
         store::{
             AppCatalog, GitHead, GitSegment, RepoPublicationState, SourceBlob, StoredRepository,
@@ -51,6 +50,10 @@ const UPDATE_DEMO_TROUBLESHOOTING: &str =
     "# Troubleshooting\n\nExplain how to recover when the remote is unavailable.\n";
 const UPDATE_DEMO_CLI_EXPERIMENT: &str =
     "experimental output: checking repository state before push\n";
+const UPDATE_DEMO_QUEUE_DRAFT: &str =
+    "# Request queue copy\n\nTighten the language before asking for review.\n";
+const UPDATE_DEMO_CACHE_NOTE: &str =
+    "# Cache note\n\nRecord the tradeoff without changing repository behavior.\n";
 
 pub(super) fn catalog(
     object_store: &dyn ObjectStore,
@@ -198,6 +201,7 @@ struct SeedRequest {
     base_oid: String,
     head_oid: String,
     snapshot: SourceBlob,
+    description_markdown: Option<&'static str>,
     revisions: Vec<SeedRequestRevision>,
     outcome: SeedRequestOutcome,
     audience: RequestAudience,
@@ -205,10 +209,12 @@ struct SeedRequest {
 }
 
 enum SeedRequestOutcome {
-    Submitted,
-    NeedsResponse,
+    Working,
+    ReadyForReview,
+    Held,
     Accepted,
-    Withdrawn,
+    Neutral,
+    Rejected,
 }
 
 fn seed_request_gallery(
@@ -241,6 +247,7 @@ fn seed_owner_request(
         base_oid,
         head_oid,
         snapshot,
+        description_markdown,
         revisions,
         outcome,
         audience,
@@ -276,29 +283,26 @@ fn seed_owner_request(
             now_unix: now_unix + 1,
         },
     )?;
-    let submitted = submit_request(
-        &mut catalog.requests,
-        &mut catalog.request_events,
-        &mut catalog.user_credit_accounts,
-        &mut catalog.credit_ledger_entries,
-        SubmitRequestInput {
-            request_id: id.to_string(),
-            actor_user_id: owner.id.clone(),
-            expected_head_oid: head_oid.clone(),
-            stake_credits: 0,
-            stake_ledger_entry_id: None,
-            event_id: format!("event_{id}_submitted"),
-            now_unix: now_unix + 2,
-        },
-    )?;
-    register_seed_change_block(
-        catalog,
-        submitted.change_block,
-        submitted.discussion,
-        submitted.read_state,
-    );
-
+    if let Some(description_markdown) = description_markdown {
+        let mutation = edit_request_identity(
+            &mut catalog.requests,
+            &mut catalog.request_events,
+            EditRequestIdentityInput {
+                request_id: id.to_string(),
+                actor_user_id: owner.id.clone(),
+                actor_can_edit_identity: true,
+                event_id: format!("event_{id}_identity_edited"),
+                title: None,
+                description_markdown: Some(description_markdown.to_string()),
+                now_unix: now_unix + 2,
+            },
+        )?;
+        catalog
+            .request_events
+            .insert(mutation.event.id.clone(), mutation.event);
+    }
     let mut current_head_oid = head_oid.clone();
+    let mut lifecycle_at_unix = now_unix + 2;
     for (index, revision) in revisions.into_iter().enumerate() {
         let mutation = record_request_revision(
             &mut catalog.requests,
@@ -316,6 +320,7 @@ fn seed_owner_request(
             },
         )?;
         current_head_oid = revision.head_oid;
+        lifecycle_at_unix = now_unix + 4 + index as u64;
         register_seed_change_block(
             catalog,
             mutation.change_block,
@@ -324,60 +329,65 @@ fn seed_owner_request(
         );
     }
 
+    let request = catalog.requests.get_mut(id).expect("seed request exists");
+    if !matches!(outcome, SeedRequestOutcome::Working) {
+        request.first_ready_at_unix = Some(lifecycle_at_unix);
+        request.ready_queue_version = Some(lifecycle_at_unix);
+    }
     match outcome {
-        SeedRequestOutcome::Submitted => {}
-        SeedRequestOutcome::NeedsResponse => {
-            mark_request_needs_response(
-                &mut catalog.requests,
-                &mut catalog.request_events,
-                MarkRequestNeedsResponseInput {
-                    request_id: id.to_string(),
-                    actor_user_id: owner.id.clone(),
-                    event_id: format!("event_{id}_needs_response"),
-                    body: "Please add a concrete recovery command before this is merged."
-                        .to_string(),
-                    now_unix: now_unix + 3,
-                },
-            )?;
+        SeedRequestOutcome::Working => {}
+        SeedRequestOutcome::ReadyForReview => {
+            request.state = crate::domain::requests::RequestState::ReadyForReview;
+            request.ready_at_unix = Some(lifecycle_at_unix);
+        }
+        SeedRequestOutcome::Held => {
+            request.state = crate::domain::requests::RequestState::ReadyForReview;
+            request.ready_at_unix = Some(lifecycle_at_unix);
+            request.held_at_unix = Some(lifecycle_at_unix + 1);
+            request.held_by_user_id = Some(owner.id.clone());
         }
         SeedRequestOutcome::Accepted => {
-            merge_request(
-                &mut catalog.requests,
-                &mut catalog.request_events,
-                &mut catalog.user_credit_accounts,
-                &mut catalog.credit_ledger_entries,
-                MergeRequestInput {
-                    request_id: id.to_string(),
-                    actor_user_id: owner.id.clone(),
-                    expected_main_oid: base_oid.clone(),
-                    current_main_oid: base_oid,
-                    expected_head_oid: head_oid,
-                    event_id: format!("event_{id}_merged"),
-                    settlement_event_id: format!("event_{id}_settled"),
-                    refund_ledger_entry_id: None,
-                    reward_ledger_entry_id: None,
-                    body: Some("Merged after review.".to_string()),
-                    now_unix: now_unix + 3,
-                },
-            )?;
+            request.state = crate::domain::requests::RequestState::Completed;
+            request.assessment_outcome = Some(RequestAssessmentOutcome::Accepted);
+            request.assessment_body_markdown = Some("Merged after review.".to_string());
+            request.assessed_at_unix = Some(lifecycle_at_unix + 1);
+            request.assessed_by_user_id = Some(owner.id.clone());
+            request.completed_at_unix = Some(lifecycle_at_unix + 1);
+            request.completed_by_user_id = Some(owner.id.clone());
+            request.merged_at_unix = Some(lifecycle_at_unix + 1);
+            request.merged_by_user_id = Some(owner.id.clone());
+            request.merged_head_oid = Some(current_head_oid.clone());
+            request.merged_main_oid = Some(current_head_oid);
         }
-        SeedRequestOutcome::Withdrawn => {
-            delete_request(
-                &mut catalog.requests,
-                &mut catalog.request_events,
-                &mut catalog.user_credit_accounts,
-                &mut catalog.credit_ledger_entries,
-                DeleteRequestInput {
-                    request_id: id.to_string(),
-                    actor_user_id: owner.id.clone(),
-                    actor_can_delete: true,
-                    event_id: format!("event_{id}_withdrawn"),
-                    refund_ledger_entry_id: None,
-                    now_unix: now_unix + 3,
-                },
-            )?;
+        SeedRequestOutcome::Neutral => {
+            request.state = crate::domain::requests::RequestState::Completed;
+            request.assessment_outcome = Some(RequestAssessmentOutcome::Neutral);
+            request.assessment_body_markdown =
+                Some("Useful context, with no action needed.".to_string());
+            request.assessed_at_unix = Some(lifecycle_at_unix + 1);
+            request.assessed_by_user_id = Some(owner.id.clone());
+            request.completed_at_unix = Some(lifecycle_at_unix + 1);
+            request.completed_by_user_id = Some(owner.id.clone());
+        }
+        SeedRequestOutcome::Rejected => {
+            request.state = crate::domain::requests::RequestState::Completed;
+            request.assessment_outcome = Some(RequestAssessmentOutcome::Rejected);
+            request.assessment_body_markdown =
+                Some("The proposal does not fit the repository direction.".to_string());
+            request.assessed_at_unix = Some(lifecycle_at_unix + 1);
+            request.assessed_by_user_id = Some(owner.id.clone());
+            request.completed_at_unix = Some(lifecycle_at_unix + 1);
+            request.completed_by_user_id = Some(owner.id.clone());
         }
     }
+    request.updated_at_unix = match outcome {
+        SeedRequestOutcome::Working | SeedRequestOutcome::ReadyForReview => lifecycle_at_unix,
+        SeedRequestOutcome::Held
+        | SeedRequestOutcome::Accepted
+        | SeedRequestOutcome::Neutral
+        | SeedRequestOutcome::Rejected => lifecycle_at_unix + 1,
+    };
+    request.validate_facts()?;
     Ok(())
 }
 
@@ -486,7 +496,7 @@ fn update_demo_git_snapshot(
             "creating seeded request ref",
         )?;
 
-        let submitted_oid = seed_request_branch(
+        let ready_oid = seed_request_branch(
             repo_path,
             "bounded-retry-timing",
             SeedGitCommit {
@@ -495,22 +505,22 @@ fn update_demo_git_snapshot(
             },
             &main_oid,
         )?;
-        let submitted_snapshot = store_seed_bundle(
+        let ready_snapshot = store_seed_bundle(
             object_store,
             repo,
             repo_path,
-            "req_demo_submitted_0",
+            "req_demo_ready_0",
             &[&canonical_request_ref("bounded-retry-timing")],
-            &submitted_oid,
+            &ready_oid,
         )?;
-        let submitted_revisions = request_revisions::seed_bounded_retry_revisions(
+        let ready_revisions = request_revisions::seed_bounded_retry_revisions(
             object_store,
             repo,
             repo_path,
-            &submitted_oid,
+            &ready_oid,
             &main_oid,
         )?;
-        let needs_response_oid = seed_request_branch(
+        let held_oid = seed_request_branch(
             repo_path,
             "remote-troubleshooting",
             SeedGitCommit {
@@ -519,7 +529,7 @@ fn update_demo_git_snapshot(
             },
             &main_oid,
         )?;
-        let withdrawn_oid = seed_request_branch(
+        let rejected_oid = seed_request_branch(
             repo_path,
             "verbose-cli-output",
             SeedGitCommit {
@@ -528,14 +538,40 @@ fn update_demo_git_snapshot(
             },
             &main_oid,
         )?;
+        let working_oid = seed_request_branch(
+            repo_path,
+            "request-queue-copy",
+            SeedGitCommit {
+                files: &[("docs/request-queue.md", UPDATE_DEMO_QUEUE_DRAFT)],
+                message: "Draft request queue copy",
+            },
+            &main_oid,
+        )?;
+        let neutral_oid = seed_request_branch(
+            repo_path,
+            "cache-observability-note",
+            SeedGitCommit {
+                files: &[("docs/cache-note.md", UPDATE_DEMO_CACHE_NOTE)],
+                message: "Document cache tradeoff",
+            },
+            &main_oid,
+        )?;
         let (main_head, main_segment) = store_seed_git_segment(object_store, repo, repo_path)?;
-        let needs_response_snapshot = store_seed_bundle(
+        let working_snapshot = store_seed_bundle(
             object_store,
             repo,
             repo_path,
-            "req_demo_needs_response",
+            "req_demo_working",
+            &[&canonical_request_ref("request-queue-copy")],
+            &working_oid,
+        )?;
+        let held_snapshot = store_seed_bundle(
+            object_store,
+            repo,
+            repo_path,
+            "req_demo_held",
             &[&canonical_request_ref("remote-troubleshooting")],
-            &needs_response_oid,
+            &held_oid,
         )?;
         let accepted_snapshot = store_seed_bundle(
             object_store,
@@ -545,36 +581,59 @@ fn update_demo_git_snapshot(
             &[&accepted_ref],
             &main_oid,
         )?;
-        let withdrawn_snapshot = store_seed_bundle(
+        let rejected_snapshot = store_seed_bundle(
             object_store,
             repo,
             repo_path,
-            "req_demo_withdrawn",
+            "req_demo_rejected",
             &[&canonical_request_ref("verbose-cli-output")],
-            &withdrawn_oid,
+            &rejected_oid,
+        )?;
+        let neutral_snapshot = store_seed_bundle(
+            object_store,
+            repo,
+            repo_path,
+            "req_demo_neutral",
+            &[&canonical_request_ref("cache-observability-note")],
+            &neutral_oid,
         )?;
         let gallery = vec![
             SeedRequest {
-                id: "req_demo_submitted",
+                id: "req_demo_working",
+                name: "request-queue-copy",
+                title: "Tighten request queue copy",
+                base_oid: main_oid.clone(),
+                head_oid: working_oid,
+                snapshot: working_snapshot,
+                description_markdown: Some("A private working draft for the request author."),
+                revisions: Vec::new(),
+                outcome: SeedRequestOutcome::Working,
+                audience: RequestAudience::Public,
+                now_unix: 1_800_000_050,
+            },
+            SeedRequest {
+                id: "req_demo_ready",
                 name: "bounded-retry-timing",
                 title: "Add bounded retry timing",
                 base_oid: main_oid.clone(),
-                head_oid: submitted_oid,
-                snapshot: submitted_snapshot,
-                revisions: submitted_revisions,
-                outcome: SeedRequestOutcome::Submitted,
+                head_oid: ready_oid,
+                snapshot: ready_snapshot,
+                description_markdown: Some(request_discussions::READY_REQUEST_DESCRIPTION),
+                revisions: ready_revisions,
+                outcome: SeedRequestOutcome::ReadyForReview,
                 audience: RequestAudience::Public,
                 now_unix: 1_800_000_100,
             },
             SeedRequest {
-                id: "req_demo_needs_response",
+                id: "req_demo_held",
                 name: "remote-troubleshooting",
                 title: "Add remote troubleshooting",
                 base_oid: main_oid.clone(),
-                head_oid: needs_response_oid,
-                snapshot: needs_response_snapshot,
+                head_oid: held_oid,
+                snapshot: held_snapshot,
+                description_markdown: None,
                 revisions: Vec::new(),
-                outcome: SeedRequestOutcome::NeedsResponse,
+                outcome: SeedRequestOutcome::Held,
                 audience: RequestAudience::Private,
                 now_unix: 1_800_000_200,
             },
@@ -585,22 +644,37 @@ fn update_demo_git_snapshot(
                 base_oid: initial_oid,
                 head_oid: main_oid.clone(),
                 snapshot: accepted_snapshot,
+                description_markdown: None,
                 revisions: Vec::new(),
                 outcome: SeedRequestOutcome::Accepted,
                 audience: RequestAudience::Private,
                 now_unix: 1_800_000_300,
             },
             SeedRequest {
-                id: "req_demo_withdrawn",
+                id: "req_demo_rejected",
                 name: "verbose-cli-output",
                 title: "Try verbose CLI output",
-                base_oid: main_oid,
-                head_oid: withdrawn_oid,
-                snapshot: withdrawn_snapshot,
+                base_oid: main_oid.clone(),
+                head_oid: rejected_oid,
+                snapshot: rejected_snapshot,
+                description_markdown: None,
                 revisions: Vec::new(),
-                outcome: SeedRequestOutcome::Withdrawn,
+                outcome: SeedRequestOutcome::Rejected,
                 audience: RequestAudience::Private,
                 now_unix: 1_800_000_400,
+            },
+            SeedRequest {
+                id: "req_demo_neutral",
+                name: "cache-observability-note",
+                title: "Document the cache tradeoff",
+                base_oid: main_oid,
+                head_oid: neutral_oid,
+                snapshot: neutral_snapshot,
+                description_markdown: Some("A public completed request with a neutral assessment."),
+                revisions: Vec::new(),
+                outcome: SeedRequestOutcome::Neutral,
+                audience: RequestAudience::Public,
+                now_unix: 1_800_000_500,
             },
         ];
         Ok((main_head, main_segment, gallery))

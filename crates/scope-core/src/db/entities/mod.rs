@@ -81,7 +81,8 @@ pub use repositories::{
 };
 pub use requests::{
     credit_ledger_entry, request, request_change_block, request_discussion,
-    request_discussion_read_state, request_discussion_reply, request_event, user_credit_account,
+    request_discussion_read_state, request_discussion_reply, request_event, request_invitee,
+    user_credit_account,
 };
 
 #[cfg(test)]

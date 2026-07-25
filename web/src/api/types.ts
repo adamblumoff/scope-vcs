@@ -14,16 +14,12 @@ import type {
   FirstPushTokenResponse,
   FirstPushTokenStatus,
   ProjectionPreviewAudience as GeneratedProjectionPreviewAudience,
-  MergeRequestRequest,
-  NeedsResponseRequest,
   AcceptRepositoryInviteResponse,
   CreateRepositoryInviteResponse,
   RequestActorRole,
   RequestAudience,
-  RequestDeleteResponse,
   RequestDetailResponse,
-  RequestDisposition,
-  ResolutionDisposition,
+  RequestAssessmentOutcome,
   RequestEventKind,
   RequestEventResponse,
   RequestListResponse,
@@ -33,12 +29,8 @@ import type {
   RequestMutationResponse,
   RequestChangeBlockFilesResponse,
   RequestPermissionsResponse,
-  RequestSettlementResponse,
-  RequestSettlementPreviewResponse,
   RequestState,
   RequestSummaryResponse,
-  ResolveRequestRequest,
-  RespondRequestRequest,
   ReviewFileDiffResponse,
   RepoFileResponse,
   RepoFileContentResponse,
@@ -96,17 +88,13 @@ export type RequestListItem = RequestListItemResponse
 export type RequestDetail = RequestDetailResponse
 export type RequestMutation = RequestMutationResponse
 export type RequestChangeBlockFiles = RequestChangeBlockFilesResponse
-export type RequestDelete = RequestDeleteResponse
 export type RequestSummary = RequestSummaryResponse
 export type RequestPermissions = RequestPermissionsResponse
 export type RequestMergeability = RequestMergeabilityResponse
 export type RequestMergeabilityState = RequestMergeabilityStatus
-export type RequestSettlement = RequestSettlementResponse
 export type RequestEvent = RequestEventResponse
 export type RequestWorkflowState = RequestState
-export type RequestWorkflowDisposition = RequestDisposition
-export type RequestWorkflowResolutionDisposition = ResolutionDisposition
-export type RequestSettlementPreview = RequestSettlementPreviewResponse
+export type RequestWorkflowAssessmentOutcome = RequestAssessmentOutcome
 export type RequestWorkflowEventKind = RequestEventKind
 export type RequestWorkflowActorRole = RequestActorRole
 export type RequestWorkflowAudience = RequestAudience
@@ -181,9 +169,3 @@ export type CommitFileDiffInput = RepoParams & CommitFileDiffRequest & {
 export type RequestParams = RepoParams & {
   request_id: string
 }
-
-export type NeedsResponseInput = RequestParams & NeedsResponseRequest
-export type RespondRequestInput = RequestParams & RespondRequestRequest
-export type ResolveRequestInput = RequestParams & ResolveRequestRequest
-export type MergeRequestInput = RequestParams & MergeRequestRequest
-export type DeleteRequestInput = RequestParams

@@ -10,7 +10,7 @@ use crate::{
 use std::path::Path;
 
 const REQUEST_NAME: &str = "bounded-retry-timing";
-const BUNDLE_LABEL: &str = "req_demo_submitted";
+const BUNDLE_LABEL: &str = "req_demo_ready";
 const RETRY_NAMED_CAP: &str = concat!(
     "const MAX_RETRY_DELAY_MS = 2_000\n\n",
     "/** Returns the retry delay in milliseconds. */\n",

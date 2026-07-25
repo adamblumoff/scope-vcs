@@ -1,158 +1,13 @@
 use super::*;
-use crate::domain::requests::{GrantUserCreditsInput, RecordWorkingRequestUploadInput};
-use tokio_stream::StreamExt;
 
 mod helpers;
-pub(super) use helpers::create_owner_request;
-use helpers::{
-    mark_working_request_uploaded, public_merge_fixture, start_request_via_http,
-    submit_request_via_http,
-};
+mod queue;
+pub(super) use helpers::{create_owner_request, create_public_request};
 
-const PUBLIC_SUBJECT: &str = "public_requester";
-const PUBLIC_EMAIL: &str = "public@example.com";
+use crate::domain::requests::{GrantUserCreditsInput, RequestState};
+use scope_core::db::AddRequestInviteeCommand;
+
 const REQUEST_HEAD: &str = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
-
-#[tokio::test]
-async fn public_submit_stakes_credits_and_uses_public_base() {
-    let state = state_with_public_user().await;
-    grant_public_credits(&state, "ledger_grant").await;
-
-    let app = router(state.clone());
-    let start = start_request_via_http(
-        app.clone(),
-        &bearer_header_for(PUBLIC_SUBJECT, PUBLIC_EMAIL),
-    )
-    .await;
-    assert_eq!(start["request"]["name"], "fix-parser-crash");
-    mark_working_request_uploaded(
-        &state,
-        start["request"]["id"].as_str().unwrap(),
-        REQUEST_HEAD,
-    )
-    .await;
-
-    let response = submit_request_via_http(
-        app,
-        &bearer_header_for(PUBLIC_SUBJECT, PUBLIC_EMAIL),
-        start["request"]["id"].as_str().unwrap(),
-        r#"{"head_oid":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","stake_credits":10}"#,
-    )
-    .await;
-
-    assert_eq!(response.status(), StatusCode::OK);
-    let body = response_json(response).await;
-    assert_eq!(body["request"]["author_role"], "Public");
-    assert_eq!(body["request"]["audience"], "Public");
-    assert_eq!(body["request"]["stake_credits"], 10);
-}
-
-#[tokio::test]
-async fn request_submit_publishes_summary_refresh_event() {
-    let state = test_state_with_repo_with_readme().await;
-    let app = router(state.clone());
-    let owner_bearer = bearer_header();
-    let events = api_request(
-        app.clone(),
-        "GET",
-        "/v1/repos/owner/repo/events",
-        Some(&owner_bearer),
-        None,
-    )
-    .await;
-    assert_eq!(events.status(), StatusCode::OK);
-    let mut stream = events.into_body().into_data_stream();
-    let initial = stream.next().await.unwrap().unwrap();
-    assert!(
-        String::from_utf8(initial.to_vec())
-            .unwrap()
-            .contains(r#""kind":"Connected""#)
-    );
-
-    let start = start_request_via_http(app.clone(), &bearer_header()).await;
-    let started_event = tokio::time::timeout(std::time::Duration::from_secs(5), stream.next())
-        .await
-        .unwrap()
-        .unwrap()
-        .unwrap();
-    let started_event = String::from_utf8(started_event.to_vec()).unwrap();
-    assert!(started_event.contains(r#""reason":"request-started""#));
-
-    mark_working_request_uploaded(
-        &state,
-        start["request"]["id"].as_str().unwrap(),
-        REQUEST_HEAD,
-    )
-    .await;
-    let request_id = start["request"]["id"].as_str().unwrap();
-    let submit = submit_request_via_http(
-        app.clone(),
-        &bearer_header(),
-        request_id,
-        r#"{"head_oid":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}"#,
-    )
-    .await;
-    assert_eq!(submit.status(), StatusCode::OK);
-
-    let event = tokio::time::timeout(std::time::Duration::from_secs(5), stream.next())
-        .await
-        .unwrap()
-        .unwrap()
-        .unwrap();
-    let event = String::from_utf8(event.to_vec()).unwrap();
-    assert!(event.contains(r#""reason":"request-submitted""#));
-    assert!(event.contains(r#""version":0"#));
-    let timeline_event = tokio::time::timeout(std::time::Duration::from_secs(5), stream.next())
-        .await
-        .unwrap()
-        .unwrap()
-        .unwrap();
-    assert!(
-        String::from_utf8(timeline_event.to_vec())
-            .unwrap()
-            .contains("RequestTimelineChanged")
-    );
-
-    let needs_response = api_request(
-        app.clone(),
-        "POST",
-        &format!("/v1/repos/owner/repo/requests/{request_id}/needs-response"),
-        Some(&owner_bearer),
-        Some(r#"{"body":"Please clarify ownership."}"#),
-    )
-    .await;
-    assert_eq!(needs_response.status(), StatusCode::OK);
-    let event = tokio::time::timeout(std::time::Duration::from_secs(5), stream.next())
-        .await
-        .unwrap()
-        .unwrap()
-        .unwrap();
-    assert!(
-        String::from_utf8(event.to_vec())
-            .unwrap()
-            .contains(r#""reason":"request-needs-response""#)
-    );
-
-    let response = api_request(
-        app,
-        "POST",
-        &format!("/v1/repos/owner/repo/requests/{request_id}/respond"),
-        Some(&owner_bearer),
-        Some(r#"{"body":"The parser module owns it."}"#),
-    )
-    .await;
-    assert_eq!(response.status(), StatusCode::OK);
-    let event = tokio::time::timeout(std::time::Duration::from_secs(5), stream.next())
-        .await
-        .unwrap()
-        .unwrap()
-        .unwrap();
-    assert!(
-        String::from_utf8(event.to_vec())
-            .unwrap()
-            .contains(r#""reason":"request-contributor-responded""#)
-    );
-}
 
 #[tokio::test]
 async fn public_readers_do_not_see_private_request_branches() {
@@ -270,155 +125,555 @@ async fn request_list_pages_one_hundred_and_one_visible_rows_without_overlap() {
 }
 
 #[tokio::test]
-async fn public_request_merge_replays_public_delta_without_deleting_private_files() {
-    let fixture = public_merge_fixture(
-        "req_public_merge",
-        &[
-            ("README.md", "hello from public request\n"),
-            ("ignored.txt", "tracked despite ignore\n"),
-        ],
-        true,
-    )
-    .await;
+async fn maintainer_request_lifecycle_routes_delegate_to_atomic_commands() {
+    let state = test_state_with_repo();
+    cache_test_jwks(&state);
+    create_owner_request(&state, "req_lifecycle", REQUEST_HEAD).await;
+    let app = router(state);
+    let bearer = bearer_header();
 
-    let merge_body = format!(
-        r#"{{"expected_main_oid":"{}","expected_head_oid":"{}"}}"#,
-        fixture.raw_main_oid, fixture.request_head
-    );
-    let response = api_request(
-        router(fixture.state.clone()),
+    let ready = api_request(
+        app.clone(),
         "POST",
-        "/v1/repos/owner/repo/requests/req_public_merge/merge",
-        Some(&bearer_header()),
-        Some(&merge_body),
+        "/v1/repos/owner/repo/requests/req_lifecycle/ready",
+        Some(&bearer),
+        Some("{}"),
     )
     .await;
+    assert_eq!(ready.status(), StatusCode::OK);
+    let ready = response_json(ready).await;
+    assert_eq!(ready["request"]["state"], "ReadyForReview");
+    assert_eq!(ready["request"]["current_stake_credits"], 0);
+    assert_eq!(ready["request"]["permissions"]["can_request_changes"], true);
+    assert_eq!(
+        ready["request"]["assessment_previews"]
+            .as_array()
+            .unwrap()
+            .len(),
+        3
+    );
 
-    assert_eq!(response.status(), StatusCode::OK);
-    let body = response_json(response).await;
-    assert_eq!(body["request"]["state"], "Resolved");
-    assert_eq!(body["request"]["disposition"], "Accepted");
+    let held = api_request(
+        app.clone(),
+        "PUT",
+        "/v1/repos/owner/repo/requests/req_lifecycle/hold",
+        Some(&bearer),
+        None,
+    )
+    .await;
+    assert_eq!(held.status(), StatusCode::OK);
+    assert!(response_json(held).await["request"]["held_at_unix"].is_number());
 
-    let repo = find_repo(&fixture.state, TEST_REPO_OWNER, TEST_REPO_NAME)
-        .await
-        .unwrap();
-    let live_tree = repo.live_tree();
-    for (path, expected) in [
-        ("/README.md", "hello from public request\n"),
-        ("/ignored.txt", "tracked despite ignore\n"),
-        ("/SECRET.md", "private\n"),
-    ] {
-        assert_eq!(
-            blob_content(
-                &fixture.state,
-                live_tree.get(&ScopePath::parse(path).unwrap()).unwrap(),
-            ),
-            expected
-        );
-    }
+    let held_author_exit = api_request(
+        app.clone(),
+        "POST",
+        "/v1/repos/owner/repo/requests/req_lifecycle/working",
+        Some(&bearer),
+        None,
+    )
+    .await;
+    assert_eq!(held_author_exit.status(), StatusCode::CONFLICT);
+
+    let released = api_request(
+        app.clone(),
+        "DELETE",
+        "/v1/repos/owner/repo/requests/req_lifecycle/hold",
+        Some(&bearer),
+        None,
+    )
+    .await;
+    assert_eq!(released.status(), StatusCode::OK);
+    assert!(response_json(released).await["request"]["held_at_unix"].is_null());
+
+    let working = api_request(
+        app.clone(),
+        "POST",
+        "/v1/repos/owner/repo/requests/req_lifecycle/working",
+        Some(&bearer),
+        None,
+    )
+    .await;
+    assert_eq!(working.status(), StatusCode::OK);
+    assert_eq!(response_json(working).await["request"]["state"], "Working");
+
+    let ready_again = api_request(
+        app.clone(),
+        "POST",
+        "/v1/repos/owner/repo/requests/req_lifecycle/ready",
+        Some(&bearer),
+        Some("{}"),
+    )
+    .await;
+    assert_eq!(ready_again.status(), StatusCode::OK);
+    let changes = api_request(
+        app.clone(),
+        "POST",
+        "/v1/repos/owner/repo/requests/req_lifecycle/request-changes",
+        Some(&bearer),
+        None,
+    )
+    .await;
+    assert_eq!(changes.status(), StatusCode::OK);
+    assert_eq!(response_json(changes).await["request"]["state"], "Working");
+
+    let ready_for_assessment = api_request(
+        app.clone(),
+        "POST",
+        "/v1/repos/owner/repo/requests/req_lifecycle/ready",
+        Some(&bearer),
+        Some("{}"),
+    )
+    .await;
+    assert_eq!(ready_for_assessment.status(), StatusCode::OK);
+    let assessed = api_request(
+        app.clone(),
+        "POST",
+        "/v1/repos/owner/repo/requests/req_lifecycle/assessment",
+        Some(&bearer),
+        Some(r#"{"outcome":"Neutral"}"#),
+    )
+    .await;
+    assert_eq!(assessed.status(), StatusCode::OK);
+    let assessed = response_json(assessed).await;
+    assert_eq!(assessed["request"]["state"], "Completed");
+    assert_eq!(assessed["request"]["assessment_outcome"], "Neutral");
 }
 
 #[tokio::test]
-async fn public_request_merge_rejects_private_path_collision() {
-    let fixture = public_merge_fixture(
-        "req_private_collision",
-        &[("SECRET.md", "public overwrite attempt\n")],
-        false,
-    )
-    .await;
-
-    let merge_body = format!(
-        r#"{{"expected_main_oid":"{}","expected_head_oid":"{}"}}"#,
-        fixture.raw_main_oid, fixture.request_head
-    );
-    let response = api_request(
-        router(fixture.state.clone()),
-        "POST",
-        "/v1/repos/owner/repo/requests/req_private_collision/merge",
-        Some(&bearer_header()),
-        Some(&merge_body),
-    )
-    .await;
-
-    assert_eq!(response.status(), StatusCode::CONFLICT);
-    let repo = find_repo(&fixture.state, TEST_REPO_OWNER, TEST_REPO_NAME)
-        .await
-        .unwrap();
-    let live_tree = repo.live_tree();
-    let secret = live_tree
-        .get(&ScopePath::parse("/SECRET.md").unwrap())
-        .unwrap();
-    assert_eq!(blob_content(&fixture.state, secret), "private\n");
-}
-
-async fn state_with_public_user() -> AppState {
-    let state = test_state_with_repo_with_readme().await;
-    let public_user = UserAccount {
-        id: public_user_id(),
-        handle: "public".to_string(),
-        email: PUBLIC_EMAIL.to_string(),
-        email_verified: true,
-    };
-    state
-        .metadata
-        .insert_user_for_tests(public_user)
-        .await
-        .unwrap();
-    state
-}
-
-async fn test_state_with_repo_with_readme() -> AppState {
-    let state = test_state_with_repo();
+async fn request_reads_apply_one_viewer_aware_policy_across_lists_and_exact_surfaces() {
+    let state = test_state_with_readme().await;
     cache_test_jwks(&state);
+    let author_id = crate::db::scope_user_id_for_auth_identity("clerk", "request_author");
+    let invitee_id = crate::db::scope_user_id_for_auth_identity("clerk", "request_invitee");
+    let unrelated_id = crate::db::scope_user_id_for_auth_identity("clerk", "request_unrelated");
+    for user in [
+        test_user(&author_id, "request-author", "request-author@example.com"),
+        test_user(
+            &invitee_id,
+            "request-invitee",
+            "request-invitee@example.com",
+        ),
+        test_user(
+            &unrelated_id,
+            "request-unrelated",
+            "request-unrelated@example.com",
+        ),
+    ] {
+        state.metadata.insert_user_for_tests(user).await.unwrap();
+    }
+
+    create_public_request(&state, "req_never", author_id.clone(), REQUEST_HEAD).await;
+    create_public_request(&state, "req_previous", author_id.clone(), REQUEST_HEAD).await;
+    create_public_request(&state, "req_ready_public", author_id.clone(), REQUEST_HEAD).await;
     state
         .metadata
-        .replace_repository_for_tests(repo_with_readme(&state))
+        .mutate_request_for_tests("req_previous", |request| {
+            request.first_ready_at_unix = Some(4);
+            request.ready_queue_version = Some(1);
+            request.updated_at_unix = 4;
+        })
         .await
         .unwrap();
     state
-}
-
-fn repo_with_public_readme_and_private_secret(state: &AppState) -> StoredRepository {
-    let mut repo = test_repo(&test_owner_id());
-    repo.graph.commits.push(LogicalCommit {
-        id: "rv1".to_string(),
-        parent_ids: Vec::new(),
-        author_id: repo.record.owner_user_id.clone(),
-        author_visibility: AuthorVisibility::Visible,
-        message: "initial".to_string(),
-        changes: [
-            (Visibility::Public, "/README.md", "hello\n"),
-            (Visibility::Public, "/.gitignore", "ignored.txt\n"),
-            (Visibility::Private, "/SECRET.md", "private\n"),
-        ]
-        .into_iter()
-        .map(|(visibility, path, content)| FileChange {
-            visibility,
-            path: ScopePath::parse(path).unwrap(),
-            old_content: None,
-            new_content: Some(source_blob(state, content)),
+        .metadata
+        .mutate_request_for_tests("req_ready_public", |request| {
+            request.state = RequestState::ReadyForReview;
+            request.current_stake_credits = 1;
+            request.first_ready_at_unix = Some(4);
+            request.ready_at_unix = Some(4);
+            request.ready_queue_version = Some(1);
+            request.updated_at_unix = 4;
         })
-        .collect(),
-    });
-    populate_test_live_files(&mut repo);
-    repo
-}
+        .await
+        .unwrap();
+    create_owner_request(&state, "req_private_matrix", REQUEST_HEAD).await;
+    state
+        .metadata
+        .add_request_invitee(AddRequestInviteeCommand {
+            request_id: "req_never".to_string(),
+            actor_user_id: author_id.clone(),
+            target_handle: "request-invitee".to_string(),
+            now_unix: 5,
+        })
+        .await
+        .unwrap();
 
-fn public_user_id() -> String {
-    crate::db::scope_user_id_for_auth_identity("clerk", PUBLIC_SUBJECT)
-}
+    let app = router(state);
+    let anonymous_list = response_json(
+        api_request(
+            app.clone(),
+            "GET",
+            "/v1/repos/owner/repo/requests",
+            None,
+            None,
+        )
+        .await,
+    )
+    .await;
+    assert_eq!(request_ids(&anonymous_list), vec!["req_ready_public"]);
+    assert_eq!(anonymous_list["requests"][0]["ready_at_unix"], 4);
+    assert!(anonymous_list["requests"][0]["held_at_unix"].is_null());
 
-async fn grant_public_credits(state: &AppState, ledger_entry_id: &str) {
+    let unrelated = bearer_header_for("request_unrelated", "request-unrelated@example.com");
+    for suffix in ["req_never", "req_never/timeline", "req_never/activity"] {
+        assert_eq!(
+            api_request(
+                app.clone(),
+                "GET",
+                &format!("/v1/repos/owner/repo/requests/{suffix}"),
+                Some(&unrelated),
+                None,
+            )
+            .await
+            .status(),
+            StatusCode::NOT_FOUND
+        );
+    }
+    for request_id in ["req_previous", "req_ready_public"] {
+        assert_eq!(
+            api_request(
+                app.clone(),
+                "GET",
+                &format!("/v1/repos/owner/repo/requests/{request_id}"),
+                None,
+                None,
+            )
+            .await
+            .status(),
+            StatusCode::OK
+        );
+    }
+    assert_eq!(
+        api_request(
+            app.clone(),
+            "GET",
+            "/v1/repos/owner/repo/requests/req_private_matrix",
+            None,
+            None,
+        )
+        .await
+        .status(),
+        StatusCode::NOT_FOUND
+    );
+
+    let invitee = bearer_header_for("request_invitee", "request-invitee@example.com");
+    let invitee_list = response_json(
+        api_request(
+            app.clone(),
+            "GET",
+            "/v1/repos/owner/repo/requests",
+            Some(&invitee),
+            None,
+        )
+        .await,
+    )
+    .await;
+    assert_eq!(
+        request_ids(&invitee_list),
+        vec!["req_never", "req_ready_public"]
+    );
+    let invitee_detail = api_request(
+        app.clone(),
+        "GET",
+        "/v1/repos/owner/repo/requests/req_never",
+        Some(&invitee),
+        None,
+    )
+    .await;
+    assert_eq!(invitee_detail.status(), StatusCode::OK);
+    let invitee_detail = response_json(invitee_detail).await;
+    assert_eq!(
+        invitee_detail["request"]["invitees"][0]["user"]["handle"],
+        "request-invitee"
+    );
+    assert_eq!(
+        invitee_detail["request"]["permissions"]["can_push_branch"],
+        true
+    );
+    assert_eq!(
+        invitee_detail["request"]["permissions"]["can_view_activity"],
+        true
+    );
+    assert_eq!(
+        invitee_detail["request"]["permissions"]["can_open_discussion"],
+        true
+    );
+    assert_eq!(
+        invitee_detail["request"]["permissions"]["can_edit_identity"],
+        false
+    );
+    assert_eq!(
+        invitee_detail["request"]["permissions"]["can_manage_invitees"],
+        false
+    );
+
+    let maintainer_list = response_json(
+        api_request(
+            app.clone(),
+            "GET",
+            "/v1/repos/owner/repo/requests",
+            Some(&bearer_header()),
+            None,
+        )
+        .await,
+    )
+    .await;
+    assert_eq!(
+        request_ids(&maintainer_list),
+        vec!["req_private_matrix", "req_ready_public"]
+    );
+    for request_id in ["req_previous", "req_private_matrix"] {
+        assert_eq!(
+            api_request(
+                app.clone(),
+                "GET",
+                &format!("/v1/repos/owner/repo/requests/{request_id}"),
+                Some(&bearer_header()),
+                None,
+            )
+            .await
+            .status(),
+            StatusCode::OK
+        );
+    }
+    for suffix in ["req_never", "req_never/timeline", "req_never/activity"] {
+        assert_eq!(
+            api_request(
+                app.clone(),
+                "GET",
+                &format!("/v1/repos/owner/repo/requests/{suffix}"),
+                Some(&bearer_header()),
+                None,
+            )
+            .await
+            .status(),
+            StatusCode::NOT_FOUND
+        );
+    }
+    assert_eq!(
+        api_request(
+            app.clone(),
+            "PATCH",
+            "/v1/repos/owner/repo/requests/req_never",
+            Some(&bearer_header()),
+            Some(r#"{"title":"Maintainer must not see this"}"#),
+        )
+        .await
+        .status(),
+        StatusCode::NOT_FOUND
+    );
+    assert_eq!(
+        api_request(
+            app,
+            "POST",
+            "/v1/repos/owner/repo/requests/req_never/timeline",
+            Some(&bearer_header()),
+            Some(
+                r#"{"body_markdown":"Maintainer must not see this","client_discussion_id":"hidden"}"#,
+            ),
+        )
+        .await
+        .status(),
+        StatusCode::NOT_FOUND
+    );
+}
+#[tokio::test]
+async fn invitee_routes_enforce_exact_handles_roles_leave_and_private_exclusion() {
+    let state = test_state_with_readme().await;
+    cache_test_jwks(&state);
+    let author_id = crate::db::scope_user_id_for_auth_identity("clerk", "invite_author");
+    let invitee_id = crate::db::scope_user_id_for_auth_identity("clerk", "invite_target");
+    let other_id = crate::db::scope_user_id_for_auth_identity("clerk", "invite_other");
+    for user in [
+        test_user(&author_id, "invite-author", "invite-author@example.com"),
+        test_user(&invitee_id, "invite-target", "invite-target@example.com"),
+        test_user(&other_id, "invite-other", "invite-other@example.com"),
+    ] {
+        state.metadata.insert_user_for_tests(user).await.unwrap();
+    }
+    create_public_request(&state, "req_invites", author_id.clone(), REQUEST_HEAD).await;
+    create_public_request(&state, "req_held_invites", author_id.clone(), REQUEST_HEAD).await;
+    create_owner_request(&state, "req_private_invites", REQUEST_HEAD).await;
+    let app = router(state.clone());
+    let author = bearer_header_for("invite_author", "invite-author@example.com");
+    let invitee = bearer_header_for("invite_target", "invite-target@example.com");
+
+    let wrong_case = api_request(
+        app.clone(),
+        "PUT",
+        "/v1/repos/owner/repo/requests/req_invites/invitees",
+        Some(&author),
+        Some(r#"{"handle":"Invite-Target"}"#),
+    )
+    .await;
+    assert_eq!(wrong_case.status(), StatusCode::NOT_FOUND);
+
+    let added = api_request(
+        app.clone(),
+        "PUT",
+        "/v1/repos/owner/repo/requests/req_invites/invitees",
+        Some(&author),
+        Some(r#"{"handle":"invite-target"}"#),
+    )
+    .await;
+    assert_eq!(added.status(), StatusCode::OK);
+    let added = response_json(added).await;
+    assert_eq!(added["invitee"]["user"]["handle"], "invite-target");
+    assert_eq!(added["request"]["invitees"].as_array().unwrap().len(), 1);
+    let held_added = api_request(
+        app.clone(),
+        "PUT",
+        "/v1/repos/owner/repo/requests/req_held_invites/invitees",
+        Some(&author),
+        Some(r#"{"handle":"invite-target"}"#),
+    )
+    .await;
+    assert_eq!(held_added.status(), StatusCode::OK);
+
     state
         .metadata
         .grant_user_credits(GrantUserCreditsInput {
-            ledger_entry_id: ledger_entry_id.to_string(),
-            user_id: public_user_id(),
-            amount_credits: 20,
-            now_unix: 1,
+            ledger_entry_id: "ledger_invite_author_starter".to_string(),
+            user_id: author_id.clone(),
+            amount_credits: 100,
+            now_unix: 4,
         })
         .await
         .unwrap();
+    let ready = api_request(
+        app.clone(),
+        "POST",
+        "/v1/repos/owner/repo/requests/req_held_invites/ready",
+        Some(&author),
+        Some(r#"{"stake_credits":1}"#),
+    )
+    .await;
+    assert_eq!(ready.status(), StatusCode::OK);
+    let ready = response_json(ready).await;
+    assert_eq!(
+        ready["request"]["assessment_previews"][0]["outcome"],
+        "Accepted"
+    );
+    assert_eq!(
+        ready["request"]["assessment_previews"][0]["refunded_credits"],
+        1
+    );
+    assert_eq!(
+        ready["request"]["assessment_previews"][0]["reward_credits"],
+        1
+    );
+
+    let held = api_request(
+        app.clone(),
+        "PUT",
+        "/v1/repos/owner/repo/requests/req_held_invites/hold",
+        Some(&bearer_header()),
+        None,
+    )
+    .await;
+    assert_eq!(held.status(), StatusCode::OK);
+    let held = response_json(held).await;
+    assert_eq!(held["request"]["permissions"]["can_leave_request"], false);
+
+    let held_leave = api_request(
+        app.clone(),
+        "DELETE",
+        "/v1/repos/owner/repo/requests/req_held_invites/invitees/me",
+        Some(&invitee),
+        None,
+    )
+    .await;
+    assert_eq!(held_leave.status(), StatusCode::FORBIDDEN);
+
+    let released = api_request(
+        app.clone(),
+        "DELETE",
+        "/v1/repos/owner/repo/requests/req_held_invites/hold",
+        Some(&bearer_header()),
+        None,
+    )
+    .await;
+    assert_eq!(released.status(), StatusCode::OK);
+
+    let invitee_manage = api_request(
+        app.clone(),
+        "PUT",
+        "/v1/repos/owner/repo/requests/req_invites/invitees",
+        Some(&invitee),
+        Some(r#"{"handle":"invite-other"}"#),
+    )
+    .await;
+    assert_eq!(invitee_manage.status(), StatusCode::FORBIDDEN);
+
+    let left = api_request(
+        app.clone(),
+        "DELETE",
+        "/v1/repos/owner/repo/requests/req_invites/invitees/me",
+        Some(&invitee),
+        None,
+    )
+    .await;
+    assert_eq!(left.status(), StatusCode::OK);
+    assert_eq!(
+        api_request(
+            app.clone(),
+            "GET",
+            "/v1/repos/owner/repo/requests/req_invites",
+            Some(&invitee),
+            None,
+        )
+        .await
+        .status(),
+        StatusCode::NOT_FOUND
+    );
+
+    state
+        .metadata
+        .mutate_request_for_tests("req_invites", |request| {
+            request.first_ready_at_unix = Some(5);
+            request.ready_queue_version = Some(1);
+            request.updated_at_unix = 5;
+        })
+        .await
+        .unwrap();
+
+    let maintainer_add = api_request(
+        app.clone(),
+        "PUT",
+        "/v1/repos/owner/repo/requests/req_invites/invitees",
+        Some(&bearer_header()),
+        Some(r#"{"handle":"invite-target"}"#),
+    )
+    .await;
+    assert_eq!(maintainer_add.status(), StatusCode::OK);
+    let maintainer_remove = api_request(
+        app.clone(),
+        "DELETE",
+        "/v1/repos/owner/repo/requests/req_invites/invitees",
+        Some(&bearer_header()),
+        Some(r#"{"handle":"invite-target"}"#),
+    )
+    .await;
+    assert_eq!(maintainer_remove.status(), StatusCode::OK);
+
+    let private_add = api_request(
+        app,
+        "PUT",
+        "/v1/repos/owner/repo/requests/req_private_invites/invitees",
+        Some(&bearer_header()),
+        Some(r#"{"handle":"invite-target"}"#),
+    )
+    .await;
+    assert_eq!(private_add.status(), StatusCode::CONFLICT);
+}
+
+fn request_ids(body: &serde_json::Value) -> Vec<&str> {
+    body["requests"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|request| request["id"].as_str().unwrap())
+        .collect()
 }
 
 async fn api_request(
@@ -440,8 +695,4 @@ async fn api_request(
         None => Body::empty(),
     };
     app.oneshot(request.body(body).unwrap()).await.unwrap()
-}
-
-fn write_file(repo: &FsPath, path: &str, content: &str) {
-    fs::write(repo.join(path), content).unwrap();
 }

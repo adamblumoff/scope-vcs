@@ -20,7 +20,19 @@ pub const REPO: &str = "/v1/repos/{owner}/{repo}";
 pub const REPO_CONFIG: &str = "/v1/repos/{owner}/{repo}/config";
 pub const REPO_PUSH_INTENTS: &str = "/v1/repos/{owner}/{repo}/push-intents";
 pub const REPO_REQUESTS: &str = "/v1/repos/{owner}/{repo}/requests";
+pub const REPO_REQUEST_QUEUE: &str = "/v1/repos/{owner}/{repo}/requests/queue";
 pub const REPO_REQUEST: &str = "/v1/repos/{owner}/{repo}/requests/{request_id}";
+pub const REPO_REQUEST_READY: &str = "/v1/repos/{owner}/{repo}/requests/{request_id}/ready";
+pub const REPO_REQUEST_WORKING: &str = "/v1/repos/{owner}/{repo}/requests/{request_id}/working";
+pub const REPO_REQUEST_HOLD: &str = "/v1/repos/{owner}/{repo}/requests/{request_id}/hold";
+pub const REPO_REQUEST_REQUEST_CHANGES: &str =
+    "/v1/repos/{owner}/{repo}/requests/{request_id}/request-changes";
+pub const REPO_REQUEST_ASSESSMENT: &str =
+    "/v1/repos/{owner}/{repo}/requests/{request_id}/assessment";
+pub const REPO_REQUEST_MERGE: &str = "/v1/repos/{owner}/{repo}/requests/{request_id}/merge";
+pub const REPO_REQUEST_INVITEES: &str = "/v1/repos/{owner}/{repo}/requests/{request_id}/invitees";
+pub const REPO_REQUEST_INVITEES_ME: &str =
+    "/v1/repos/{owner}/{repo}/requests/{request_id}/invitees/me";
 pub const REPO_SESSION: &str = "/v1/repos/{owner}/{repo}/session";
 pub const REPO_FILES: &str = "/v1/repos/{owner}/{repo}/files";
 pub const REPO_FILE_CONTENT: &str = "/v1/repos/{owner}/{repo}/files/content";
@@ -28,9 +40,6 @@ pub const REPO_REQUEST_CHANGE_BLOCK_FILES: &str =
     "/v1/repos/{owner}/{repo}/requests/{request_id}/changes/{block_id}";
 pub const REPO_REQUEST_CHANGE_BLOCK_FILE_DIFF: &str =
     "/v1/repos/{owner}/{repo}/requests/{request_id}/changes/{block_id}/file-diff";
-pub const REPO_REQUEST_SUBMIT: &str = "/v1/repos/{owner}/{repo}/requests/{request_id}/submit";
-pub const REPO_REQUEST_DESCRIPTION: &str =
-    "/v1/repos/{owner}/{repo}/requests/{request_id}/description";
 pub const REPO_REQUEST_DISCUSSIONS: &str =
     "/v1/repos/{owner}/{repo}/requests/{request_id}/timeline";
 pub const REPO_REQUEST_DISCUSSION_CHANGES: &str =
@@ -46,11 +55,6 @@ pub const REPO_REQUEST_DISCUSSION_REOPEN_AND_REPLY: &str =
 pub const REPO_REQUEST_DISCUSSION_READ: &str =
     "/v1/repos/{owner}/{repo}/requests/{request_id}/threads/{discussion_id}/read";
 pub const REPO_REQUEST_ACTIVITY: &str = "/v1/repos/{owner}/{repo}/requests/{request_id}/activity";
-pub const REPO_REQUEST_NEEDS_RESPONSE: &str =
-    "/v1/repos/{owner}/{repo}/requests/{request_id}/needs-response";
-pub const REPO_REQUEST_RESPOND: &str = "/v1/repos/{owner}/{repo}/requests/{request_id}/respond";
-pub const REPO_REQUEST_RESOLVE: &str = "/v1/repos/{owner}/{repo}/requests/{request_id}/resolve";
-pub const REPO_REQUEST_MERGE: &str = "/v1/repos/{owner}/{repo}/requests/{request_id}/merge";
 pub const REPO_EVENTS: &str = "/v1/repos/{owner}/{repo}/events";
 pub const REPO_COMMITS: &str = "/v1/repos/{owner}/{repo}/commits";
 pub const REPO_COMMIT: &str = "/v1/repos/{owner}/{repo}/commits/{commit_id}";
@@ -103,6 +107,38 @@ pub fn repo_request(owner: &str, repo: &str, request_id: &str) -> String {
     )
 }
 
+pub fn repo_request_ready(owner: &str, repo: &str, request_id: &str) -> String {
+    format!("{}/ready", repo_request(owner, repo, request_id))
+}
+
+pub fn repo_request_working(owner: &str, repo: &str, request_id: &str) -> String {
+    format!("{}/working", repo_request(owner, repo, request_id))
+}
+
+pub fn repo_request_hold(owner: &str, repo: &str, request_id: &str) -> String {
+    format!("{}/hold", repo_request(owner, repo, request_id))
+}
+
+pub fn repo_request_request_changes(owner: &str, repo: &str, request_id: &str) -> String {
+    format!("{}/request-changes", repo_request(owner, repo, request_id))
+}
+
+pub fn repo_request_assessment(owner: &str, repo: &str, request_id: &str) -> String {
+    format!("{}/assessment", repo_request(owner, repo, request_id))
+}
+
+pub fn repo_request_merge(owner: &str, repo: &str, request_id: &str) -> String {
+    format!("{}/merge", repo_request(owner, repo, request_id))
+}
+
+pub fn repo_request_invitees(owner: &str, repo: &str, request_id: &str) -> String {
+    format!("{}/invitees", repo_request(owner, repo, request_id))
+}
+
+pub fn repo_request_invitees_me(owner: &str, repo: &str, request_id: &str) -> String {
+    format!("{}/invitees/me", repo_request(owner, repo, request_id))
+}
+
 pub fn repo_request_action(owner: &str, repo: &str, request_id: &str, action: &str) -> String {
     format!(
         "{}/{}",
@@ -148,6 +184,30 @@ mod tests {
             (
                 repo_request("an owner", "r/name", "request?#1"),
                 "/v1/repos/an%20owner/r%2Fname/requests/request%3F%231",
+            ),
+            (
+                repo_request_ready("an owner", "r/name", "request?#1"),
+                "/v1/repos/an%20owner/r%2Fname/requests/request%3F%231/ready",
+            ),
+            (
+                repo_request_working("an owner", "r/name", "request?#1"),
+                "/v1/repos/an%20owner/r%2Fname/requests/request%3F%231/working",
+            ),
+            (
+                repo_request_hold("an owner", "r/name", "request?#1"),
+                "/v1/repos/an%20owner/r%2Fname/requests/request%3F%231/hold",
+            ),
+            (
+                repo_request_request_changes("an owner", "r/name", "request?#1"),
+                "/v1/repos/an%20owner/r%2Fname/requests/request%3F%231/request-changes",
+            ),
+            (
+                repo_request_assessment("an owner", "r/name", "request?#1"),
+                "/v1/repos/an%20owner/r%2Fname/requests/request%3F%231/assessment",
+            ),
+            (
+                repo_request_merge("an owner", "r/name", "request?#1"),
+                "/v1/repos/an%20owner/r%2Fname/requests/request%3F%231/merge",
             ),
             (
                 cli_device_login_poll("code/with space"),

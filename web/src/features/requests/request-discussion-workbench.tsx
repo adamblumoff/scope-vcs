@@ -111,7 +111,7 @@ export function RequestDiscussionWorkbench({
         </div>,
       )}
       <div className="grid min-h-0 xl:grid-cols-[minmax(0,1fr)_320px]">
-        <div className="min-w-0">
+        <div className="order-2 min-w-0 xl:order-1">
           <RequestDescription
             canEdit={permissions.canEditDescription}
             description={description}
@@ -181,7 +181,7 @@ export function RequestDiscussionWorkbench({
               </div>
             ) : null}
 
-            {permissions.canOpenDiscussion && request.state !== 'Resolved' && request.state !== 'Withdrawn' ? (
+            {permissions.canOpenDiscussion && request.state !== 'Completed' ? (
               <div className="border-t border-border px-5 py-5 lg:px-7">
                 <RequestDiscussionComposer onSubmit={store.create} />
               </div>

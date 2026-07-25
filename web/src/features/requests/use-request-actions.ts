@@ -1,204 +1,39 @@
+import { useCallback, useState } from 'react'
 import type {
-  DeleteRequestInput,
-  MergeRequestInput,
-  NeedsResponseInput,
-  RepoParams,
-  RequestDelete,
-  RequestDetail,
-  RequestMutation,
-  RequestWorkflowResolutionDisposition,
-  ResolveRequestInput,
-  RespondRequestInput,
-} from '@/api/types'
-import { useRouter } from '@tanstack/react-router'
-import { type FormEvent, useState } from 'react'
-import { normalizedBody, resolutionOptionsFor } from './request-labels'
+  RequestActionCommand,
+  RequestActionResult,
+} from './request-actions-api'
 
-type RequestMutationAction<TInput> = (input: TInput) => Promise<RequestMutation>
-type RequestDeleteAction = (input: DeleteRequestInput) => Promise<RequestDelete>
-
-export type RequestActionKey =
-  | 'delete'
-  | 'merge'
-  | 'needs-response'
-  | 'resolve'
-  | 'respond'
-
-export type RequestActionError = {
-  key: RequestActionKey
-  message: string
+export type RequestActionController = {
+  error: string | null
+  pending: RequestActionCommand['action'] | null
+  run: (command: RequestActionCommand) => Promise<boolean>
 }
 
-export type RequestActionsProps = {
-  deleteRequest: RequestDeleteAction
-  detail: RequestDetail
-  markNeedsResponse: RequestMutationAction<NeedsResponseInput>
-  mergeRequest: RequestMutationAction<MergeRequestInput>
-  params: RepoParams
-  resolveRequest: RequestMutationAction<ResolveRequestInput>
-  respondToRequest: RequestMutationAction<RespondRequestInput>
-}
+export function useRequestActions(
+  perform: (command: RequestActionCommand) => Promise<RequestActionResult>,
+): RequestActionController {
+  const [pending, setPending] = useState<RequestActionCommand['action'] | null>(null)
+  const [error, setError] = useState<string | null>(null)
 
-export function useRequestActions({
-  deleteRequest,
-  detail,
-  markNeedsResponse,
-  mergeRequest,
-  params,
-  resolveRequest,
-  respondToRequest,
-}: RequestActionsProps) {
-  const router = useRouter()
-  const { request } = detail
-  const [actionError, setActionError] = useState<RequestActionError | null>(null)
-  const [deleteOpen, setDeleteOpen] = useState(false)
-  const [mergeOpen, setMergeOpen] = useState(false)
-  const [needsResponseBody, setNeedsResponseBody] = useState('')
-  const [pendingAction, setPendingAction] = useState<RequestActionKey | null>(null)
-  const [resolveBody, setResolveBody] = useState('')
-  const [resolveDisposition, setResolveDisposition] =
-    useState<RequestWorkflowResolutionDisposition>('UsefulNotMerged')
-  const [responseBody, setResponseBody] = useState('')
-  const resolutionOptions = resolutionOptionsFor(request)
-  const activeResolveDisposition = resolutionOptions.some(
-    (option) => option.disposition === resolveDisposition,
-  )
-    ? resolveDisposition
-    : resolutionOptions[0]?.disposition ?? 'UsefulNotMerged'
-  const requestParams = { ...params, request_id: request.id }
-
-  async function runAction(
-    key: RequestActionKey,
-    action: () => Promise<unknown>,
-    onSuccess?: () => void,
-  ) {
-    setActionError(null)
-    setPendingAction(key)
+  const run = useCallback(async (command: RequestActionCommand) => {
+    setPending(command.action)
+    setError(null)
     try {
-      await action()
-      await router.invalidate()
-      onSuccess?.()
-    } catch (error) {
-      setActionError({
-        key,
-        message: error instanceof Error ? error.message : 'request action failed',
-      })
+      const result = await perform(command)
+      if (result.synchronizationError) setError(result.synchronizationError)
+      return true
+    } catch (cause) {
+      setError(
+        cause instanceof Error
+          ? cause.message
+          : 'The request could not be updated.',
+      )
+      return false
     } finally {
-      setPendingAction(null)
+      setPending(null)
     }
-  }
+  }, [perform])
 
-  async function submitNeedsResponse(event: FormEvent<HTMLFormElement>) {
-    event.preventDefault()
-    await runAction(
-      'needs-response',
-      () =>
-        markNeedsResponse({
-          ...requestParams,
-          body: needsResponseBody,
-        }),
-      () => setNeedsResponseBody(''),
-    )
-  }
-
-  async function submitResponse(event: FormEvent<HTMLFormElement>) {
-    event.preventDefault()
-    await runAction(
-      'respond',
-      () =>
-        respondToRequest({
-          ...requestParams,
-          body: normalizedBody(responseBody),
-        }),
-      () => setResponseBody(''),
-    )
-  }
-
-  async function submitResolution(event: FormEvent<HTMLFormElement>) {
-    event.preventDefault()
-    await runAction(
-      'resolve',
-      () =>
-        resolveRequest({
-          ...requestParams,
-          body: normalizedBody(resolveBody),
-          disposition: activeResolveDisposition,
-        }),
-      () => setResolveBody(''),
-    )
-  }
-
-  async function submitMerge(body: string | null) {
-    const currentMainOid = request.mergeability.current_main_oid
-    if (!currentMainOid) {
-      setActionError({
-        key: 'merge',
-        message: 'Request has no current main OID to merge into.',
-      })
-      return
-    }
-
-    await runAction(
-      'merge',
-      () =>
-        mergeRequest({
-          ...requestParams,
-          body,
-          expected_head_oid: request.mergeability.request_head_oid,
-          expected_main_oid: currentMainOid,
-        }),
-      () => setMergeOpen(false),
-    )
-  }
-
-  async function submitDelete() {
-    setActionError(null)
-    setPendingAction('delete')
-    try {
-      const result = await deleteRequest(requestParams)
-      if (result.deleted) {
-        await router.navigate({
-          params,
-          to: '/repos/$owner/$repo/requests',
-        })
-        return
-      }
-      await router.invalidate()
-      setDeleteOpen(false)
-    } catch (error) {
-      setActionError({
-        key: 'delete',
-        message:
-          error instanceof Error ? error.message : 'request delete failed',
-      })
-    } finally {
-      setPendingAction(null)
-    }
-  }
-
-  return {
-    activeResolveDisposition,
-    deleteOpen,
-    request,
-    resolutionOptions,
-    setDeleteOpen,
-    setMergeOpen,
-    setNeedsResponseBody,
-    setResolveBody,
-    setResolveDisposition,
-    setResponseBody,
-    submitDelete,
-    submitMerge,
-    submitNeedsResponse,
-    submitResolution,
-    submitResponse,
-    uiState: {
-      actionError,
-      mergeOpen,
-      needsResponseBody,
-      pendingAction,
-      resolveBody,
-      responseBody,
-    },
-  }
+  return { error, pending, run }
 }
