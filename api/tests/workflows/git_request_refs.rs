@@ -1,8 +1,10 @@
 use super::*;
 use crate::domain::requests::{
-    Request, RequestActorRole, RequestAudience, RequestState, StartRequestInput,
+    MarkRequestReadyInput, Request, RequestActorRole, RequestAudience, RequestEventKind,
+    RequestReviewExitReason, RequestState, ReturnRequestToWorkingInput, SetRequestHoldInput,
+    StartRequestInput,
 };
-use tokio::sync::broadcast::error::TryRecvError;
+use scope_core::db::{AddRequestInviteeCommand, RemoveRequestInviteeCommand};
 
 const PUBLIC_SUBJECT: &str = "user_public";
 const PUBLIC_EMAIL: &str = "public@example.com";
@@ -10,21 +12,40 @@ const CONTRIBUTOR_SUBJECT: &str = "user_contributor";
 const CONTRIBUTOR_EMAIL: &str = "contributor@example.com";
 const MEMBER_SUBJECT: &str = "user_member";
 const MEMBER_EMAIL: &str = "member@example.com";
+const UNRELATED_SUBJECT: &str = "user_unrelated";
+const UNRELATED_EMAIL: &str = "unrelated@example.com";
 const REQUEST_ID: &str = "req_1";
 const REQUEST_NAME: &str = "request-branch";
 const REQUEST_REF: &str = "refs/heads/request-branch";
 const PRIVATE_REQUEST_ID: &str = "req_private";
 const PRIVATE_REQUEST_REF: &str = "refs/heads/private-request";
 
+mod policy;
 mod privacy;
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn permissioned_clone_fetches_named_public_requests_without_joining() {
     let state = test_state_with_request().await;
+    let (_author_checkout, permissioned_remote, _server, _request_head) =
+        request_checkout(&state, "published-request-clone-source").await;
+    state
+        .metadata
+        .mark_request_ready(MarkRequestReadyInput {
+            request_id: REQUEST_ID.to_string(),
+            actor_user_id: public_user_id(),
+            actor_is_author: false,
+            actor_can_mutate: false,
+            stake_credits: Some(1),
+            public_ready_count: 0,
+            ready_queue_version: 0,
+            event_id: "event_published_clone_ready".to_string(),
+            stake_ledger_entry_id: Some("ledger_published_clone_ready".to_string()),
+            now_unix: 4,
+        })
+        .await
+        .unwrap();
     insert_public_contributor(&state).await;
-    let (origin, _server) = spawn_test_server(&state).await;
     let checkout = checkout_dir("named-request-clone");
-    let permissioned_remote = format!("{origin}/git/permissioned/{TEST_REPO_ID}");
     clone_with_bearer(
         &permissioned_remote,
         &checkout,
@@ -53,6 +74,7 @@ async fn closed_public_request_remains_fetchable_as_read_only_history() {
         .mutate_request_for_tests(REQUEST_ID, |request| {
             request.state = RequestState::Completed;
             request.first_ready_at_unix = Some(3);
+            request.ready_queue_version = Some(1);
             request.completed_at_unix = Some(3);
             request.completed_by_user_id = Some(test_owner_id());
             request.updated_at_unix = 3;
@@ -67,6 +89,11 @@ async fn closed_public_request_remains_fetchable_as_read_only_history() {
         &checkout,
         &bearer_header_for(CONTRIBUTOR_SUBJECT, CONTRIBUTOR_EMAIL),
         "clone closed public request ref",
+    );
+    configure_bearer_header(
+        &checkout,
+        &permissioned_remote,
+        &bearer_header_for(CONTRIBUTOR_SUBJECT, CONTRIBUTOR_EMAIL),
     );
 
     assert!(
@@ -114,6 +141,7 @@ async fn working_request_ref_push_replaces_snapshot_without_touching_main() {
     let state = test_state_with_request().await;
     let (source, permissioned_remote, _server, first_request_head) =
         request_checkout(&state, "request-ref-push").await;
+    let before_event_count = request_event_count(&state).await;
     push_change(
         &source,
         &permissioned_remote,
@@ -137,7 +165,7 @@ async fn working_request_ref_push_replaces_snapshot_without_touching_main() {
         request.git_snapshot.as_ref().unwrap(),
     )
     .unwrap();
-    assert_eq!(request_event_count(&state).await, 1);
+    assert_eq!(request_event_count(&state).await, before_event_count + 1);
     let store_repo =
         crate::git::storage::request_ref_store_repo_path(&state, TEST_REPO_OWNER, TEST_REPO_NAME);
     let stored_head = git_stdout_text(&store_repo, &["rev-parse", REQUEST_REF], "read request ref")
@@ -159,7 +187,180 @@ async fn working_request_ref_push_replaces_snapshot_without_touching_main() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn working_push_does_not_create_review_activity() {
+async fn merge_route_persists_git_content_and_settles_public_stake_once() {
+    let state = test_state_with_mergeable_request().await;
+    insert_member_user(&state).await;
+    let (_source, _remote, _server, request_head) =
+        request_checkout(&state, "request-http-merge").await;
+    let app = router(state.clone());
+
+    let ready = app
+        .clone()
+        .oneshot(
+            axum::http::Request::builder()
+                .method("POST")
+                .uri(format!(
+                    "/v1/repos/{TEST_REPO_ID}/requests/{REQUEST_ID}/ready"
+                ))
+                .header(
+                    AUTHORIZATION,
+                    bearer_header_for(PUBLIC_SUBJECT, PUBLIC_EMAIL),
+                )
+                .header(CONTENT_TYPE, "application/json")
+                .body(Body::from(r#"{"stake_credits":5}"#))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(ready.status(), StatusCode::OK);
+
+    let merge_request = || {
+        axum::http::Request::builder()
+            .method("POST")
+            .uri(format!(
+                "/v1/repos/{TEST_REPO_ID}/requests/{REQUEST_ID}/merge"
+            ))
+            .header(
+                AUTHORIZATION,
+                bearer_header_for(MEMBER_SUBJECT, MEMBER_EMAIL),
+            )
+            .body(Body::empty())
+            .unwrap()
+    };
+    let merged = app.clone().oneshot(merge_request()).await.unwrap();
+    let merged_status = merged.status();
+    let merged = response_json(merged).await;
+    assert_eq!(merged_status, StatusCode::OK, "{merged}");
+    assert_eq!(merged["request"]["state"], "Completed");
+    assert_eq!(merged["request"]["assessment_outcome"], "Accepted");
+    assert_eq!(merged["request"]["merged_head_oid"], request_head);
+    assert_ne!(merged["request"]["merged_main_oid"], request_head);
+    assert_eq!(
+        merged["request"]["mergeability"]["current_main_oid"],
+        merged["request"]["merged_main_oid"]
+    );
+    assert_eq!(
+        live_file_content(&state, "/README.md").await.as_deref(),
+        Some("hello\n")
+    );
+    assert_eq!(
+        live_file_content(&state, "/request.txt").await.as_deref(),
+        Some("request branch content\n")
+    );
+    assert_eq!(
+        state
+            .metadata
+            .credit_account_for_tests(&public_user_id())
+            .await
+            .unwrap()
+            .unwrap()
+            .balance_credits,
+        105
+    );
+
+    let replay = app.oneshot(merge_request()).await.unwrap();
+    assert_eq!(replay.status(), StatusCode::CONFLICT);
+    assert_eq!(
+        state
+            .metadata
+            .credit_account_for_tests(&public_user_id())
+            .await
+            .unwrap()
+            .unwrap()
+            .balance_credits,
+        105
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn fully_masked_maintainer_public_merge_completes_without_tree_changes() {
+    let state = test_state_with_mergeable_owner_public_request().await;
+    insert_member_user(&state).await;
+    let (source, remote, _server) = request_push_checkout(
+        &state,
+        "maintainer-public-policy-merge",
+        TEST_CLERK_USER_ID,
+        TEST_OWNER_EMAIL,
+    )
+    .await;
+    push_change(
+        &source,
+        &remote,
+        REQUEST_REF,
+        "request.txt",
+        "request branch content\n",
+        "request change",
+    )
+    .unwrap();
+    let app = router(state.clone());
+
+    let ready = app
+        .clone()
+        .oneshot(
+            axum::http::Request::builder()
+                .method("POST")
+                .uri(format!(
+                    "/v1/repos/{TEST_REPO_ID}/requests/{REQUEST_ID}/ready"
+                ))
+                .header(AUTHORIZATION, bearer_header())
+                .header(CONTENT_TYPE, "application/json")
+                .body(Body::from("{}"))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let ready_status = ready.status();
+    let ready = response_json(ready).await;
+    assert_eq!(ready_status, StatusCode::OK, "{ready}");
+
+    let private_path = ScopePath::parse("/request.txt").unwrap();
+    state
+        .metadata
+        .mutate_repository_for_tests(TEST_REPO_ID, |repo| {
+            repo.repo_config.visibility.rules.push(
+                crate::domain::repo_config::RepoConfigVisibilityRule {
+                    path: private_path.as_str().to_string(),
+                    visibility: ConfigVisibility::Private,
+                },
+            );
+            repo.bump_change_version();
+        })
+        .await
+        .unwrap();
+
+    let merged = app
+        .oneshot(
+            axum::http::Request::builder()
+                .method("POST")
+                .uri(format!(
+                    "/v1/repos/{TEST_REPO_ID}/requests/{REQUEST_ID}/merge"
+                ))
+                .header(
+                    AUTHORIZATION,
+                    bearer_header_for(MEMBER_SUBJECT, MEMBER_EMAIL),
+                )
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let merged_status = merged.status();
+    let merged = response_json(merged).await;
+    assert_eq!(merged_status, StatusCode::OK, "{merged}");
+    assert_eq!(merged["request"]["assessment_outcome"], "Accepted");
+    assert_eq!(live_file_content(&state, "/request.txt").await, None);
+    let repo = find_repo(&state, TEST_REPO_OWNER, TEST_REPO_NAME)
+        .await
+        .unwrap();
+    assert_eq!(
+        repo.git_head.as_ref().unwrap().head_oid,
+        merged["request"]["merged_main_oid"].as_str().unwrap()
+    );
+    assert!(repo.graph.commits.last().unwrap().changes.is_empty());
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn working_push_records_revision_activity_without_touching_main() {
     let state = test_state_with_request().await;
     let (source, permissioned_remote, _server, _) =
         request_checkout(&state, "request-ref-revision").await;
@@ -179,55 +380,78 @@ async fn working_push_does_not_create_review_activity() {
     let request = stored_request(&state, REQUEST_ID).await;
     assert_eq!(request.state, RequestState::Working);
     assert_eq!(request.head_oid, git_head_oid(&source));
-    assert_eq!(request.activity_version, before.activity_version);
-    assert_eq!(request_event_count(&state).await, before_event_count);
-    assert!(matches!(events.try_recv(), Err(TryRecvError::Empty)));
+    assert_eq!(request.activity_version, before.activity_version + 1);
+    assert_eq!(request_event_count(&state).await, before_event_count + 1);
+    assert!(events.try_recv().is_ok());
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn ready_revision_rejection_rolls_back_without_publishing_refreshes() {
+async fn ready_revision_invalidates_review_refunds_stake_and_publishes_refresh() {
     let state = test_state_with_request().await;
-    let (source, permissioned_remote, _server, first_request_head) =
+    let (source, permissioned_remote, _server, _first_request_head) =
         request_checkout(&state, "request-ref-revision-rollback").await;
     state
         .metadata
-        .mutate_request_for_tests(REQUEST_ID, |request| {
-            request.state = RequestState::ReadyForReview;
-            request.current_stake_credits = 10;
-            request.first_ready_at_unix = Some(4);
-            request.ready_at_unix = Some(4);
-            request.updated_at_unix = 4;
+        .mark_request_ready(MarkRequestReadyInput {
+            request_id: REQUEST_ID.to_string(),
+            actor_user_id: public_user_id(),
+            actor_is_author: false,
+            actor_can_mutate: false,
+            stake_credits: Some(10),
+            public_ready_count: 0,
+            ready_queue_version: 0,
+            event_id: "event_ready_for_revision".to_string(),
+            stake_ledger_entry_id: Some("ledger_ready_for_revision".to_string()),
+            now_unix: 4,
         })
         .await
         .unwrap();
-    let before = stored_request(&state, REQUEST_ID).await;
     let before_event_count = request_event_count(&state).await;
     let mut events = state.repo_events.subscribe(TEST_REPO_ID);
 
-    let output = push_change(
+    push_change(
         &source,
         &permissioned_remote,
         REQUEST_REF,
         "request.txt",
-        "request branch content that must roll back\n",
-        "revision that overflows persistence",
+        "request branch content after review invalidation\n",
+        "revision invalidates review",
     )
-    .unwrap_err();
+    .unwrap();
 
-    assert!(!output.status.success());
     let after = stored_request(&state, REQUEST_ID).await;
-    assert_eq!(after, before);
-    assert_eq!(request_event_count(&state).await, before_event_count);
+    assert_eq!(after.state, RequestState::Working);
+    assert_eq!(after.head_oid, git_head_oid(&source));
+    assert_eq!(after.current_stake_credits, 0);
+    assert_eq!(after.held_at_unix, None);
+    assert_eq!(request_event_count(&state).await, before_event_count + 2);
+    let request_events = state.metadata.request_events_for_tests().await.unwrap();
+    assert!(request_events.iter().any(|event| {
+        event.request_id == REQUEST_ID && event.kind == RequestEventKind::ReturnedToWorking
+    }));
+    assert!(request_events.iter().any(|event| {
+        event.request_id == REQUEST_ID && event.kind == RequestEventKind::RevisionPushed
+    }));
+    assert_eq!(
+        state
+            .metadata
+            .credit_account_for_tests(&public_user_id())
+            .await
+            .unwrap()
+            .unwrap()
+            .balance_credits,
+        100
+    );
     let store_repo =
         crate::git::storage::request_ref_store_repo_path(&state, TEST_REPO_OWNER, TEST_REPO_NAME);
     let stored_head = git_stdout_text(
         &store_repo,
         &["rev-parse", REQUEST_REF],
-        "read rolled back request ref",
+        "read invalidating request ref",
     )
     .unwrap();
-    assert_eq!(stored_head.trim(), first_request_head);
-    assert!(matches!(events.try_recv(), Err(TryRecvError::Empty)));
+    assert_eq!(stored_head.trim(), after.head_oid);
+    assert!(events.try_recv().is_ok());
 }
 
 async fn assert_restored_request_head(state: &AppState, expected: &str) -> PathBuf {
@@ -248,13 +472,14 @@ async fn assert_restored_request_head(state: &AppState, expected: &str) -> PathB
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn any_public_contributor_and_maintainer_can_push_request_refs() {
-    for (label, subject, email, path, prepare) in [
+async fn active_invitee_can_push_request_ref_but_uninvited_maintainer_cannot() {
+    for (label, subject, email, path, is_invitee, push_allowed) in [
         (
             "request-ref-contributor-push",
             CONTRIBUTOR_SUBJECT,
             CONTRIBUTOR_EMAIL,
             "contributor.txt",
+            true,
             true,
         ),
         (
@@ -263,29 +488,48 @@ async fn any_public_contributor_and_maintainer_can_push_request_refs() {
             MEMBER_EMAIL,
             "maintainer.txt",
             false,
+            false,
         ),
     ] {
         let state = test_state_with_request().await;
-        if prepare {
+        if is_invitee {
             insert_public_contributor(&state).await;
+            state
+                .metadata
+                .add_request_invitee(AddRequestInviteeCommand {
+                    request_id: REQUEST_ID.to_string(),
+                    actor_user_id: public_user_id(),
+                    target_handle: "contributor".to_string(),
+                    now_unix: 3,
+                })
+                .await
+                .unwrap();
         } else {
             insert_member_user(&state).await;
         }
         let (source, remote, _server) = request_push_checkout(&state, label, subject, email).await;
-        push_change(
+        if !is_invitee {
+            configure_push_intent_header(&state, &source, &remote, &member_user_id()).await;
+        }
+        let before_event_count = request_event_count(&state).await;
+        let pushed = push_change(
             &source,
             &remote,
             REQUEST_REF,
             path,
             "request branch content\n",
             "request change",
-        )
-        .unwrap();
-
-        let request = stored_request(&state, REQUEST_ID).await;
-        assert_eq!(request.head_oid, git_head_oid(&source));
-        assert!(request.git_snapshot.is_some());
-        assert_eq!(request_event_count(&state).await, 1);
+        );
+        if push_allowed {
+            pushed.unwrap();
+            let request = stored_request(&state, REQUEST_ID).await;
+            assert_eq!(request.head_oid, git_head_oid(&source));
+            assert!(request.git_snapshot.is_some());
+            assert_eq!(request_event_count(&state).await, before_event_count + 1);
+        } else {
+            pushed.unwrap_err();
+            assert_request_branch_unchanged(&state).await;
+        }
     }
 }
 
@@ -444,7 +688,40 @@ async fn test_state_with_request() -> AppState {
         .replace_repository_for_tests(repo_with_readme(&state))
         .await
         .unwrap();
-    let repo = find_repo(&state, TEST_REPO_OWNER, TEST_REPO_NAME)
+    start_public_request(&state).await;
+    state
+}
+
+async fn test_state_with_mergeable_request() -> AppState {
+    let (state, _source, _head) =
+        super::push_intent_completion::published_git_fixture("request-merge-state").await;
+    state
+        .metadata
+        .insert_user_for_tests(test_user(public_user_id(), "public", PUBLIC_EMAIL))
+        .await
+        .unwrap();
+    start_public_request(&state).await;
+    state
+}
+
+async fn test_state_with_mergeable_owner_public_request() -> AppState {
+    let (state, _source, _head) =
+        super::push_intent_completion::published_git_fixture("owner-public-request-merge-state")
+            .await;
+    start_request_for_author(&state, test_owner_id(), RequestActorRole::Owner).await;
+    state
+}
+
+async fn start_public_request(state: &AppState) {
+    start_request_for_author(state, public_user_id(), RequestActorRole::Public).await;
+}
+
+async fn start_request_for_author(
+    state: &AppState,
+    author_user_id: String,
+    author_role: RequestActorRole,
+) {
+    let repo = find_repo(state, TEST_REPO_OWNER, TEST_REPO_NAME)
         .await
         .unwrap();
     let projection = project_graph(
@@ -453,7 +730,7 @@ async fn test_state_with_request() -> AppState {
         &repo.visibility_events,
         ProjectionViewKey::Public,
     );
-    let projection_repo = projection_bare_repo_for_state(&state, &projection).unwrap();
+    let projection_repo = projection_bare_repo_for_state(state, &projection).unwrap();
     let base_main_oid = git_stdout_text(
         &projection_repo,
         &["rev-parse", &format!("refs/heads/{DEFAULT_GIT_BRANCH}")],
@@ -469,9 +746,9 @@ async fn test_state_with_request() -> AppState {
             id: REQUEST_ID.to_string(),
             repo_id: TEST_REPO_ID.to_string(),
             name: REQUEST_NAME.to_string(),
-            author_user_id: public_user_id(),
+            author_user_id,
             title: Some("Request branch".to_string()),
-            author_role: RequestActorRole::Public,
+            author_role,
             audience: RequestAudience::Public,
             base_main_oid,
             event_id: "event_request_branch_started".to_string(),
@@ -479,7 +756,6 @@ async fn test_state_with_request() -> AppState {
         })
         .await
         .unwrap();
-    state
 }
 
 async fn insert_private_request_for_public_user(state: &AppState) {
@@ -499,6 +775,7 @@ async fn insert_private_request_for_public_user(state: &AppState) {
             description_markdown: String::new(),
             state: RequestState::Working,
             activity_version: 0,
+            ready_queue_version: None,
             current_stake_credits: 0,
             first_ready_at_unix: None,
             ready_at_unix: None,

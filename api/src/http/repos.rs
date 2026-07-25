@@ -1,7 +1,7 @@
 use crate::domain::policy::{ScopePath, Visibility};
 use crate::domain::repo_actions::reviewed_update_api_error;
 use crate::domain::repo_config::is_repo_config_fingerprint;
-use crate::domain::requests::{Request, request_counts_as_open, request_visible_to_access};
+use crate::domain::requests::{Request, RequestViewer, request_policy};
 use crate::domain::reviewed_updates::{ReviewedConfigUpdateInput, apply_reviewed_config_to_repo};
 use crate::domain::store::{RepositoryAccess, RepositoryActor};
 use crate::{
@@ -372,7 +372,7 @@ async fn repo_summary_response(
     state: &AppState,
     summary: RepoSummaryRead,
 ) -> Result<RepoSummaryResponse, ApiError> {
-    let open_request_count = state
+    let ready_for_review_count = state
         .metadata
         .requests_by_repo_id(&summary.id)
         .await?
@@ -388,11 +388,11 @@ async fn repo_summary_response(
         default_visibility: summary.default_visibility,
         change_version: summary.change_version,
         access: repository_access_response(summary.access),
-        open_request_count,
+        ready_for_review_count,
         request_permissions,
     })
 }
 
 fn request_visible_in_summary(request: &Request, access: RepositoryAccess) -> bool {
-    request_counts_as_open(request) && request_visible_to_access(request, access)
+    request_policy(request, RequestViewer::new(access, None, false)).counts_as_ready
 }

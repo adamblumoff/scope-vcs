@@ -3,6 +3,8 @@ use crate::error::ApiError;
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 
+pub const PUBLIC_ACCOUNT_STARTER_CREDITS: u32 = 100;
+
 const REPO_DELETE_REFUND_LEDGER_ENTRY_PREFIX: &str = "repo_delete_refund:";
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]

@@ -422,6 +422,7 @@ CREATE TABLE scope_requests (
     description_markdown text NOT NULL,
     state character varying NOT NULL,
     activity_version bigint NOT NULL,
+    ready_queue_version bigint,
     current_stake_credits integer NOT NULL,
     first_ready_at_unix bigint,
     ready_at_unix bigint,
@@ -853,6 +854,7 @@ CREATE INDEX idx_scope_requests_repo_audience_id ON scope_requests USING btree (
 CREATE INDEX idx_scope_requests_repo_state ON scope_requests USING btree (repo_id, state);
 CREATE INDEX idx_scope_requests_ready_queue ON scope_requests USING btree (
     repo_id,
+    ready_queue_version,
     current_stake_credits DESC,
     ready_at_unix,
     id
@@ -1158,7 +1160,10 @@ ALTER TABLE scope_repository_invites
 ALTER TABLE scope_requests
     ADD CONSTRAINT scope_request_nonnegative_values CHECK (
         current_stake_credits >= 0 AND current_stake_credits <= 25 AND
-        activity_version >= 0 AND created_at_unix >= 0 AND updated_at_unix >= created_at_unix AND
+        activity_version >= 0 AND
+        (ready_queue_version IS NULL OR ready_queue_version > 0) AND
+        (first_ready_at_unix IS NULL) = (ready_queue_version IS NULL) AND
+        created_at_unix >= 0 AND updated_at_unix >= created_at_unix AND
         (first_ready_at_unix IS NULL OR first_ready_at_unix BETWEEN created_at_unix AND updated_at_unix) AND
         (ready_at_unix IS NULL OR ready_at_unix BETWEEN created_at_unix AND updated_at_unix) AND
         (held_at_unix IS NULL OR held_at_unix BETWEEN created_at_unix AND updated_at_unix) AND
@@ -1260,6 +1265,16 @@ ALTER TABLE scope_user_credit_accounts
     ADD CONSTRAINT scope_user_credit_balance CHECK (balance_credits >= 0);
 ALTER TABLE scope_credit_ledger_entries
     ADD CONSTRAINT scope_credit_ledger_entry_time CHECK (created_at_unix >= 0);
+ALTER TABLE scope_credit_ledger_entries
+    ADD CONSTRAINT scope_credit_ledger_entry_values CHECK (
+        amount_credits <> 0 AND
+        (
+            (kind = 'StarterGrant' AND amount_credits > 0 AND request_id IS NULL) OR
+            (kind = 'ReviewStakeDebit' AND amount_credits < 0) OR
+            (kind IN ('ReviewStakeRefund', 'AssessmentReward') AND amount_credits > 0) OR
+            kind = 'AdminAdjustment'
+        )
+    );
 ALTER TABLE scope_projection_read_models
     ADD CONSTRAINT scope_projection_read_model_values CHECK (
         repo_version >= 0 AND rebuilt_at_unix >= 0 AND file_count >= 0 AND

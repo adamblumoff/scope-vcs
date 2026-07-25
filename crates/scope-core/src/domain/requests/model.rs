@@ -43,6 +43,7 @@ pub struct Request {
     pub description_markdown: String,
     pub state: RequestState,
     pub activity_version: u64,
+    pub ready_queue_version: Option<u64>,
     pub current_stake_credits: u32,
     pub first_ready_at_unix: Option<u64>,
     pub ready_at_unix: Option<u64>,
@@ -93,16 +94,18 @@ pub enum RequestEventKind {
     Merged,
     Closed,
     Settled,
-    DescriptionEdited,
+    IdentityEdited,
     DiscussionResolved,
     DiscussionReopened,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(any(test, feature = "ts"), derive(ts_rs::TS))]
-pub struct RequestDescriptionAuditFact {
-    pub sha256: String,
-    pub byte_count: u64,
+pub struct RequestIdentityAuditFact {
+    pub title_sha256: String,
+    pub title_byte_count: u64,
+    pub description_sha256: String,
+    pub description_byte_count: u64,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -148,9 +151,9 @@ pub enum RequestEventPayload {
     Settled {
         settlement: super::RequestSettlement,
     },
-    DescriptionEdited {
-        before: RequestDescriptionAuditFact,
-        after: RequestDescriptionAuditFact,
+    IdentityEdited {
+        before: RequestIdentityAuditFact,
+        after: RequestIdentityAuditFact,
     },
     DiscussionResolved {
         discussion_id: String,
@@ -203,6 +206,11 @@ pub fn validate_request_facts(request: &Request) -> Result<(), ApiError> {
         return Err(ApiError::conflict(format!(
             "request current stake cannot exceed {REQUEST_MAX_STAKE_CREDITS} credits"
         )));
+    }
+    if request.is_published() != request.ready_queue_version.is_some() {
+        return Err(ApiError::conflict(
+            "published request and ready queue version must be set together",
+        ));
     }
     match request.state {
         RequestState::Working => {

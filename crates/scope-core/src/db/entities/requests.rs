@@ -3,7 +3,7 @@ use crate::domain::requests::{
     CreditLedgerEntry, CreditLedgerEntryKind, Request, RequestActorRole, RequestAssessmentOutcome,
     RequestAudience, RequestChangeBlock, RequestDiscussion, RequestDiscussionReadState,
     RequestDiscussionReply, RequestDiscussionStatus, RequestDiscussionSubject, RequestEvent,
-    RequestEventKind, RequestEventPayload, RequestState, UserCreditAccount,
+    RequestEventKind, RequestEventPayload, RequestInvitee, RequestState, UserCreditAccount,
 };
 use crate::domain::store::SourceBlob;
 
@@ -27,6 +27,7 @@ pub mod request {
         pub description_markdown: String,
         pub state: String,
         pub activity_version: i64,
+        pub ready_queue_version: Option<i64>,
         pub current_stake_credits: i32,
         pub first_ready_at_unix: Option<i64>,
         pub ready_at_unix: Option<i64>,
@@ -68,6 +69,10 @@ pub mod request {
                 description_markdown: request.description_markdown.clone(),
                 state: encode_enum(request.state)?,
                 activity_version: u64_to_i64(request.activity_version, "request activity version")?,
+                ready_queue_version: request
+                    .ready_queue_version
+                    .map(|version| u64_to_i64(version, "request ready queue version"))
+                    .transpose()?,
                 current_stake_credits: u32_to_i32(
                     request.current_stake_credits,
                     "request current stake credits",
@@ -118,6 +123,10 @@ pub mod request {
                 description_markdown: self.description_markdown,
                 state: decode_enum::<RequestState>(self.state)?,
                 activity_version: i64_to_u64(self.activity_version, "request activity version")?,
+                ready_queue_version: self
+                    .ready_queue_version
+                    .map(|version| i64_to_u64(version, "request ready queue version"))
+                    .transpose()?,
                 current_stake_credits: i32_to_u32(
                     self.current_stake_credits,
                     "request current stake credits",
@@ -183,6 +192,29 @@ pub mod request_invitee {
     pub enum Relation {}
 
     impl ActiveModelBehavior for ActiveModel {}
+
+    impl Model {
+        pub fn from_domain(invitee: &RequestInvitee) -> Result<Self, ApiError> {
+            Ok(Self {
+                request_id: invitee.request_id.clone(),
+                user_id: invitee.user_id.clone(),
+                invited_by_user_id: invitee.invited_by_user_id.clone(),
+                created_at_unix: u64_to_i64(
+                    invitee.created_at_unix,
+                    "request invitee creation time",
+                )?,
+            })
+        }
+
+        pub fn try_into_domain(self) -> Result<RequestInvitee, ApiError> {
+            Ok(RequestInvitee {
+                request_id: self.request_id,
+                user_id: self.user_id,
+                invited_by_user_id: self.invited_by_user_id,
+                created_at_unix: i64_to_u64(self.created_at_unix, "request invitee creation time")?,
+            })
+        }
+    }
 }
 
 pub mod request_change_block {

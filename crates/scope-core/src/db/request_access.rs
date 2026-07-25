@@ -1,7 +1,10 @@
-use super::{entities, repository_from_model};
+use super::{acquire_aggregate_lock, entities, repository_from_model, request_rows::request_by_id};
 use crate::{
     domain::{
-        requests::{Request, RequestActorRole, RequestAudience, StartRequestInput},
+        requests::{
+            Request, RequestActorRole, RequestAudience, RequestPolicyDecision, RequestViewer,
+            StartRequestInput, request_policy,
+        },
         store::{RepoPublicationState, RepositoryActor, StoredRepository},
     },
     error::ApiError,
@@ -27,31 +30,21 @@ pub(super) fn authorize_start_request(
     Ok(input)
 }
 
-pub(super) fn request_actor_can_edit(
+pub(super) async fn request_policy_for_user<C>(
+    conn: &C,
     repo: &StoredRepository,
     request: &Request,
     user_id: &str,
-) -> bool {
-    let maintainer = matches!(
-        repo.access_for_user_id(user_id).actor,
-        RepositoryActor::Owner | RepositoryActor::Member
-    );
-    match request.audience {
-        RequestAudience::Public => !user_id.is_empty(),
-        RequestAudience::Private => maintainer,
-    }
-}
-
-pub(super) fn ensure_request_collaborator(
-    repo: &StoredRepository,
-    request: &Request,
-    user_id: &str,
-) -> Result<(), ApiError> {
-    if request_actor_can_edit(repo, request, user_id) {
-        Ok(())
-    } else {
-        Err(ApiError::forbidden("request collaboration access required"))
-    }
+) -> Result<RequestPolicyDecision, ApiError>
+where
+    C: sea_orm::ConnectionTrait,
+{
+    let is_invitee =
+        super::request_invitees::request_is_invitee(conn, &request.id, user_id).await?;
+    Ok(request_policy(
+        request,
+        RequestViewer::new(repo.access_for_user_id(user_id), Some(user_id), is_invitee),
+    ))
 }
 
 pub(super) async fn ensure_user_exists<C>(conn: &C, user_id: &str) -> Result<(), ApiError>
@@ -80,4 +73,24 @@ where
         .map_err(ApiError::internal)?
         .ok_or_else(|| ApiError::not_found("repo not found"))?;
     repository_from_model(conn, repo).await
+}
+
+pub(super) async fn lock_request_repository<C>(
+    conn: &C,
+    request_id: &str,
+) -> Result<(StoredRepository, Request), ApiError>
+where
+    C: sea_orm::ConnectionTrait,
+{
+    let observed = request_by_id(conn, request_id)
+        .await?
+        .ok_or_else(|| ApiError::not_found("request not found"))?;
+    acquire_aggregate_lock(conn, "repository", &observed.repo_id).await?;
+    acquire_aggregate_lock(conn, "request", request_id).await?;
+    let request = request_by_id(conn, request_id)
+        .await?
+        .filter(|request| request.repo_id == observed.repo_id)
+        .ok_or_else(|| ApiError::not_found("request not found"))?;
+    let repo = repo_by_id(conn, &request.repo_id).await?;
+    Ok((repo, request))
 }

@@ -3,7 +3,8 @@ mod repo_io;
 mod staging;
 
 pub(crate) use self::artifacts::{
-    receive_pack_update_from_staging_repo, reviewed_update_from_staging_repo,
+    receive_pack_update_from_staging_repo, request_merge_update_from_staging_repo,
+    reviewed_update_from_staging_repo,
 };
 pub(crate) use self::repo_io::{
     git_refs, git_snapshot_from_ref, run_git, run_git_output, safe_repo_key, validate_pushed_tree,

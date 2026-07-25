@@ -1,13 +1,33 @@
-use crate::domain::requests::{Request, RequestEvent, request_list_mergeability};
+use crate::domain::requests::{
+    Request, RequestAssessmentOutcome, RequestEvent, request_list_mergeability, settlement_for,
+};
 use crate::domain::store::RepositoryAccess;
 use scope_api_contract::*;
 use scope_core::db::RequestListRow;
 
 pub(crate) fn request_summary_response(
     request: Request,
+    invitees: Vec<RequestInviteeResponse>,
     permissions: RequestPermissionsResponse,
     mergeability: RequestMergeabilityResponse,
 ) -> Result<RequestSummaryResponse, crate::error::ApiError> {
+    let assessment_previews = [
+        RequestAssessmentOutcome::Accepted,
+        RequestAssessmentOutcome::Neutral,
+        RequestAssessmentOutcome::Rejected,
+    ]
+    .into_iter()
+    .map(|outcome| {
+        let settlement = settlement_for(request.current_stake_credits, outcome, 0);
+        RequestSettlementPreviewResponse {
+            outcome: settlement.outcome,
+            stake_credits: settlement.stake_credits,
+            refunded_credits: settlement.refunded_credits,
+            reward_credits: settlement.reward_credits,
+            burned_credits: settlement.burned_credits,
+        }
+    })
+    .collect();
     Ok(RequestSummaryResponse {
         id: request.id,
         name: request.name,
@@ -43,7 +63,9 @@ pub(crate) fn request_summary_response(
             .transpose()?,
         created_at_unix: request.created_at_unix,
         updated_at_unix: request.updated_at_unix,
+        invitees,
         permissions,
+        assessment_previews,
         mergeability,
     })
 }
@@ -57,7 +79,6 @@ pub(crate) fn request_list_item_response(
         request.state,
         request.assessment_outcome,
         request.has_git_snapshot,
-        request.is_held,
         request.is_merged,
         access,
     );
@@ -72,6 +93,8 @@ pub(crate) fn request_list_item_response(
         state: request.state,
         current_stake_credits: request.current_stake_credits,
         assessment_outcome: request.assessment_outcome,
+        ready_at_unix: request.ready_at_unix,
+        held_at_unix: request.held_at_unix,
         updated_at_unix: request.updated_at_unix,
         mergeability: RequestMergeabilityResponse {
             status: decision.status,

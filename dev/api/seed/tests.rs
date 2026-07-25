@@ -48,7 +48,7 @@ async fn seed_catalog_contains_owned_repos_with_readable_blobs() {
             .contains("Public Demo")
     );
 
-    assert_eq!(catalog.requests.len(), 4);
+    assert_eq!(catalog.requests.len(), 6);
     assert_eq!(
         catalog
             .requests
@@ -56,6 +56,15 @@ async fn seed_catalog_contains_owned_repos_with_readable_blobs() {
             .unwrap()
             .audience,
         RequestAudience::Public
+    );
+    assert_eq!(
+        request_state(&catalog, "req_demo_working"),
+        RequestState::Working
+    );
+    assert!(
+        catalog.requests["req_demo_working"]
+            .first_ready_at_unix
+            .is_none()
     );
     assert_eq!(
         request_state(&catalog, "req_demo_ready"),
@@ -101,6 +110,13 @@ async fn seed_catalog_contains_owned_repos_with_readable_blobs() {
         request_state(&catalog, "req_demo_rejected"),
         RequestState::Completed
     );
+    let neutral = catalog.requests.get("req_demo_neutral").unwrap();
+    assert_eq!(neutral.state, RequestState::Completed);
+    assert_eq!(
+        neutral.assessment_outcome,
+        Some(RequestAssessmentOutcome::Neutral)
+    );
+    assert_eq!(neutral.audience, RequestAudience::Public);
 }
 
 #[tokio::test]
