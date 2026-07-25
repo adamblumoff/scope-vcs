@@ -1,12 +1,12 @@
 use crate::{
-    domain::{
-        policy::Principal,
-        projection_views::repo_for_projection_preview,
-        store::{RepositoryActor, StoredRepository},
-    },
     error::ApiError,
     http::responses::{ProjectionPreviewAudience, ProjectionPreviewSource},
-    state::{AppState, ensure_repo_read},
+    repo_access::ensure_repo_read,
+    state::AppState,
+};
+use scope_domain::{
+    policy::Principal,
+    store::{RepositoryActor, StoredRepository},
 };
 
 pub(crate) fn ensure_projection_preview_access(
@@ -37,7 +37,7 @@ pub(crate) fn ensure_projection_preview_access(
 
 pub(crate) fn projection_preview_repo(
     repo: &StoredRepository,
-    source: ProjectionPreviewSource,
+    _source: ProjectionPreviewSource,
 ) -> Result<StoredRepository, ApiError> {
-    Ok(repo_for_projection_preview(repo, source.into())?)
+    Ok(repo.clone())
 }

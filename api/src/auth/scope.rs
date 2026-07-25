@@ -1,14 +1,18 @@
 use crate::{
-    auth::clerk::{ClerkIdentity, bearer_token},
-    config::CLI_SESSION_TOKEN_PREFIX,
-    domain::{
-        policy::{Principal, PrincipalKind},
-        store::{StoredRepository, UserAccount},
+    auth::{
+        clerk::{ClerkIdentity, bearer_token},
+        cli::CliAuthService,
     },
+    config::CLI_SESSION_TOKEN_PREFIX,
     error::ApiError,
+    persistence::unix_now,
     state::AppState,
 };
 use axum::http::HeaderMap;
+use scope_domain::{
+    policy::{Principal, PrincipalKind},
+    store::{StoredRepository, UserAccount},
+};
 
 pub(crate) async fn optional_scope_user(
     state: &AppState,
@@ -19,11 +23,10 @@ pub(crate) async fn optional_scope_user(
     };
 
     if token.starts_with(CLI_SESSION_TOKEN_PREFIX) {
-        return Ok(state
-            .metadata
-            .verify_cli_session_token(token)
+        return CliAuthService::new(state.metadata.auth())
+            .verify_session_token(token, unix_now()?)
             .await
-            .map(Some)?);
+            .map(Some);
     }
 
     let identity = state.clerk.verify(token).await?;
@@ -52,7 +55,11 @@ pub(crate) async fn require_reconciled_clerk_scope_user(
     headers: &HeaderMap,
 ) -> Result<UserAccount, ApiError> {
     let identity = require_clerk_identity(state, headers).await?;
-    Ok(state.metadata.resolve_clerk_user(&identity).await?)
+    Ok(state
+        .metadata
+        .auth()
+        .resolve_clerk_user(&identity, unix_now()?)
+        .await?)
 }
 
 pub(crate) async fn require_clerk_identity(
@@ -63,16 +70,25 @@ pub(crate) async fn require_clerk_identity(
     if token.starts_with(CLI_SESSION_TOKEN_PREFIX) {
         return Err(ApiError::unauthorized("Clerk auth required"));
     }
-    Ok(state.clerk.verify(token).await?)
+    state.clerk.verify(token).await
 }
 
 async fn resolve_clerk_scope_user(
     state: &AppState,
     identity: &ClerkIdentity,
 ) -> Result<UserAccount, ApiError> {
-    match state.metadata.resolve_existing_clerk_user(identity).await? {
+    match state
+        .metadata
+        .auth()
+        .resolve_existing_clerk_user(identity)
+        .await?
+    {
         Some(user) => Ok(user),
-        None => Ok(state.metadata.resolve_clerk_user(identity).await?),
+        None => Ok(state
+            .metadata
+            .auth()
+            .resolve_clerk_user(identity, unix_now()?)
+            .await?),
     }
 }
 

@@ -1,16 +1,17 @@
 use crate::{
     auth::clerk::bearer_token,
     config::SCOPE_OPERATOR_TOKEN_ENV,
-    db::MetadataResetEvent,
-    domain::store::{RepoStorageCleanup, SourceBlob},
     error::ApiError,
-    state::{AppState, CleanupDrainReport, drain_pending_cleanup},
+    repo_cleanup::{CleanupDrainReport, drain_pending_cleanup},
+    state::AppState,
 };
 use axum::{
     Json,
     extract::State,
     http::{HeaderMap, StatusCode},
 };
+use scope_domain::store::{RepoStorageCleanup, SourceBlob};
+use scope_postgres::db::MetadataResetEvent;
 use serde::{Deserialize, Serialize};
 
 const METADATA_RESET_CONFIRMATION: &str = "reset-pre-alpha-metadata";
@@ -123,14 +124,19 @@ pub(crate) async fn reset_metadata(
         .map(str::trim)
         .filter(|value| !value.is_empty())
         .unwrap_or("operator requested pre-alpha metadata reset");
-    let event = state.metadata.reset_catalog(reason).await?;
+    let event = state
+        .metadata
+        .admin()
+        .reset_catalog(reason, crate::persistence::unix_now()?)
+        .await?;
     Ok(Json(MetadataResetResponse { event }))
 }
 
 async fn cleanup_status(state: &AppState) -> Result<AdminCleanupStatusResponse, ApiError> {
-    let (repo_storage, source_blob_deletes) = state.metadata.pending_cleanup_queues().await?;
+    let (repo_storage, source_blob_deletes) =
+        state.metadata.cleanup().pending_cleanup_queues().await?;
     let source_blob_deletes = SourceBlobCleanupQueueResponse::from_blobs(&source_blob_deletes);
-    let reset_events = state.metadata.metadata_reset_events().await?;
+    let reset_events = state.metadata.admin().metadata_reset_events().await?;
     Ok(AdminCleanupStatusResponse {
         pending_cleanup: PendingCleanupResponse {
             repo_storage: RepoStorageCleanupQueueResponse::from_cleanups(&repo_storage),
@@ -166,7 +172,7 @@ impl SourceBlobCleanupQueueResponse {
             objects: blobs
                 .iter()
                 .map(|blob| SourceBlobCleanupResponse {
-                    object_key: blob.object_key.clone(),
+                    object_key: scope_object_store::object_key(blob),
                     sha256: blob.sha256.clone(),
                     git_oid: blob.git_oid.clone(),
                     size_bytes: blob.size_bytes,

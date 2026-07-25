@@ -5,15 +5,20 @@ mod requests;
 pub(crate) use projections::*;
 pub(crate) use repo_collaboration::*;
 pub(crate) use requests::*;
-pub(crate) use scope_api_contract::*;
-
-use crate::domain::commit_history::{CommitHistoryCommit, CommitHistoryView};
-use crate::domain::policy::{ScopePath, Visibility};
-use crate::domain::store::{
-    FileChangeKind, FirstPushToken, GitPushToken, RepoPublicationState, RepositoryAccess,
-    RepositoryActor, StoredRepository, UserAccount,
+use scope_api_contract::{
+    DeviceLoginStatus, FileChangeKind, FirstPushTokenResponse, GitOid, GitPushTokenResponse,
+    RepoInitResponse, RepoPublicationState, RepoRequestPermissionsResponse, RepoSummaryResponse,
+    RepositoryAccessResponse, RequestChangeBlockResponse, SessionIdentity, UserResponse,
+    Visibility,
 };
+
 use crate::{config::DEFAULT_GIT_BRANCH, error::ApiError};
+use scope_domain::commit_history::{CommitHistoryCommit, CommitHistoryView};
+use scope_domain::policy::ScopePath;
+use scope_domain::store::{
+    FirstPushToken, GitPushToken, RepoPublicationState as DomainRepoPublicationState,
+    RepositoryAccess, RepositoryActor, StoredRepository, UserAccount,
+};
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Serialize)]
@@ -235,7 +240,8 @@ pub(crate) fn repo_summary_for_user(
     if access.actor == RepositoryActor::Public {
         return None;
     }
-    let lifecycle_allows_read = repo.record.publication_state == RepoPublicationState::Published
+    let lifecycle_allows_read = repo.record.publication_state
+        == DomainRepoPublicationState::Published
         || access.actor == RepositoryActor::Owner;
     if !lifecycle_allows_read
         || !repo
@@ -249,8 +255,8 @@ pub(crate) fn repo_summary_for_user(
         id: repo.record.id.clone(),
         owner_handle: repo.record.owner_handle.clone(),
         name: repo.record.name.clone(),
-        lifecycle_state: repo.record.publication_state,
-        default_visibility: repo.record.default_visibility,
+        lifecycle_state: repo.record.publication_state.into(),
+        default_visibility: repo.record.default_visibility.into(),
         change_version: repo_change_version_for_access(repo, access),
         access: repository_access_response(access),
         ready_for_review_count,
@@ -280,7 +286,7 @@ pub(crate) fn repo_change_version_for_access(
 
 pub(crate) fn repository_access_response(access: RepositoryAccess) -> RepositoryAccessResponse {
     RepositoryAccessResponse {
-        actor: access.actor,
+        actor: access.actor.into(),
         can_read_private_files: access.can_read_private_files,
         can_push: access.can_push,
         can_change_file_visibility: access.can_change_file_visibility,
@@ -361,14 +367,14 @@ pub(crate) fn first_push_token_response(
     secret: Option<String>,
 ) -> FirstPushTokenResponse {
     let status = token.status_at(now_unix);
-    let secret = if status == FirstPushTokenStatus::Active {
+    let secret = if status == scope_domain::store::FirstPushTokenStatus::Active {
         secret
     } else {
         None
     };
 
     FirstPushTokenResponse {
-        status,
+        status: status.into(),
         created_at_unix: token.created_at_unix,
         expires_at_unix: token.expires_at_unix,
         used_at_unix: token.used_at_unix,
@@ -430,11 +436,11 @@ fn commit_summary_response(commit: &CommitHistoryCommit) -> CommitSummaryRespons
 }
 
 fn commit_file_response(
-    file: &crate::domain::commit_history::CommitHistoryFile,
+    file: &scope_domain::commit_history::CommitHistoryFile,
 ) -> CommitFileResponse {
     CommitFileResponse {
         path: file.path.as_str().to_string(),
-        kind: file.kind,
+        kind: file.kind.into(),
         old_mode: file
             .old_content
             .as_ref()
@@ -445,6 +451,6 @@ fn commit_file_response(
             .map(|blob| blob.git_file_mode.clone()),
         old_oid: file.old_content.as_ref().map(|blob| blob.git_oid.clone()),
         new_oid: file.new_content.as_ref().map(|blob| blob.git_oid.clone()),
-        visibility: file.visibility,
+        visibility: file.visibility.into(),
     }
 }

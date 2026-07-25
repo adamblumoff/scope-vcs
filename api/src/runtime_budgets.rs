@@ -1,12 +1,9 @@
 use crate::{
-    error::ApiError,
-    object_store::{ObjectStore, ensure_object_size},
-};
-use scope_core::{
     config::{default_git_storage_limits, git_storage_limits_from_env},
-    error::ApiError as CoreError,
-    git_segments::GitStorageLimits,
+    error::ApiError,
 };
+use scope_git::GitStorageLimits;
+use scope_object_store::{ObjectStore, ObjectStoreError, ensure_object_size};
 use std::{
     sync::{Arc, OnceLock},
     time::Duration,
@@ -152,13 +149,18 @@ impl RuntimeBudgets {
             })
     }
 
-    fn check_object_size(&self, operation: &str, key: &str, bytes: usize) -> Result<(), ApiError> {
-        Ok(ensure_object_size(
+    fn check_object_size(
+        &self,
+        operation: &str,
+        key: &str,
+        bytes: usize,
+    ) -> Result<(), ObjectStoreError> {
+        ensure_object_size(
             operation,
             key,
             bytes,
             self.git_storage_limits.max_object_bytes(),
-        )?)
+        )
     }
 }
 
@@ -178,26 +180,35 @@ impl BudgetedObjectStore {
 }
 
 impl ObjectStore for BudgetedObjectStore {
-    fn put(&self, key: &str, bytes: &[u8]) -> Result<(), CoreError> {
+    fn put(&self, key: &str, bytes: &[u8]) -> Result<(), ObjectStoreError> {
         self.budgets.check_object_size("write", key, bytes.len())?;
-        let _permit = self.budgets.try_object_store("object store write")?;
+        let _permit = self
+            .budgets
+            .try_object_store("object store write")
+            .map_err(|error| ObjectStoreError::capacity_exhausted(error.into_message()))?;
         self.inner.put(key, bytes)
     }
 
-    fn get(&self, key: &str) -> Result<Vec<u8>, CoreError> {
-        let _permit = self.budgets.try_object_store("object store read")?;
+    fn get(&self, key: &str) -> Result<Vec<u8>, ObjectStoreError> {
+        let _permit = self
+            .budgets
+            .try_object_store("object store read")
+            .map_err(|error| ObjectStoreError::capacity_exhausted(error.into_message()))?;
         let bytes = self
             .inner
             .get_bounded(key, self.budgets.git_storage_limits.max_object_bytes())?;
         Ok(bytes)
     }
 
-    fn delete(&self, key: &str) -> Result<(), CoreError> {
-        let _permit = self.budgets.try_object_store("object store delete")?;
+    fn delete(&self, key: &str) -> Result<(), ObjectStoreError> {
+        let _permit = self
+            .budgets
+            .try_object_store("object store delete")
+            .map_err(|error| ObjectStoreError::capacity_exhausted(error.into_message()))?;
         self.inner.delete(key)
     }
 
-    fn readiness_check(&self) -> Result<(), CoreError> {
+    fn readiness_check(&self) -> Result<(), ObjectStoreError> {
         self.inner.readiness_check()
     }
 }

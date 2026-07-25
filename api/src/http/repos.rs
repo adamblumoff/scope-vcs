@@ -1,15 +1,8 @@
-use crate::domain::policy::{ScopePath, Visibility};
-use crate::domain::repo_actions::reviewed_update_api_error;
-use crate::domain::repo_config::is_repo_config_fingerprint;
-use crate::domain::requests::{Request, RequestViewer, request_policy};
-use crate::domain::reviewed_updates::{ReviewedConfigUpdateInput, apply_reviewed_config_to_repo};
-use crate::domain::store::{RepositoryAccess, RepositoryActor};
 use crate::{
     auth::{
         scope::{optional_scope_user, principal_for_scope_user, require_scope_user},
         tokens::{generate_first_push_token, generate_git_push_token},
     },
-    db::{RepoSummaryRead, RepositoryMutation},
     error::ApiError,
     http::responses::*,
     http::{
@@ -17,14 +10,32 @@ use crate::{
         projection_preview::{ensure_projection_preview_access, projection_preview_repo},
     },
     persistence::unix_now,
+    push_intents::repo_config_fingerprint,
+    repo_access::find_repo,
+    repo_events::RepoChangeReason,
     state::AppState,
-    state::{find_repo, repo_config_fingerprint},
 };
 use axum::{
     Json,
     extract::{Path, Query, State},
     http::HeaderMap,
 };
+use scope_api_contract::{
+    CreatePushIntentRequest, CreatePushIntentResponse, CreateRepoRequest, CreateRepoResponse,
+    RepoConfigResponse, RepoSummaryResponse,
+};
+use scope_domain::repo_actions::reviewed_update_domain_error;
+use scope_domain::repo_config::{
+    is_repo_config_fingerprint, repo_config_fingerprint as domain_repo_config_fingerprint,
+};
+use scope_domain::requests::{Request, RequestViewer, request_policy};
+use scope_domain::reviewed_updates::{ReviewedConfigUpdateInput, apply_reviewed_config_to_repo};
+use scope_domain::store::{RepositoryAccess, RepositoryActor};
+use scope_domain::{
+    error::DomainError,
+    policy::{ScopePath, Visibility},
+};
+use scope_postgres::db::{RepoSummaryRead, RepositoryMutation};
 
 const MAX_PUSH_INTENT_CONFIG_BYTES: usize = 4096;
 
@@ -35,7 +46,12 @@ pub(crate) async fn list_repos(
     let user = require_scope_user(&state, &headers).await?;
     let user_id = user.id.clone();
     let mut repositories = Vec::new();
-    for summary in state.metadata.repo_summaries_for_user(&user_id).await? {
+    for summary in state
+        .metadata
+        .repositories()
+        .repo_summaries_for_user(&user_id)
+        .await?
+    {
         repositories.push(repo_summary_response(&state, summary).await?);
     }
     repositories.sort_by(|left, right| left.id.cmp(&right.id));
@@ -49,7 +65,10 @@ pub(crate) async fn create_repo(
     Json(input): Json<CreateRepoRequest>,
 ) -> Result<Json<CreateRepoResponse>, ApiError> {
     let user = require_scope_user(&state, &headers).await?;
-    let default_visibility = input.visibility.unwrap_or(Visibility::Private);
+    let default_visibility = input
+        .visibility
+        .map(Into::into)
+        .unwrap_or(Visibility::Private);
     let api_origin = public_api_origin()?;
     let cleanup_state = state.clone();
     let (secret, token) = generate_first_push_token(&user.id)?;
@@ -58,15 +77,18 @@ pub(crate) async fn create_repo(
 
     let repo = state
         .metadata
+        .repositories()
         .create_repo_with_init_tokens(
-            &user.id,
-            &input.name,
-            default_visibility,
-            token,
-            push_token,
+            scope_postgres::db::CreateRepositoryCommand {
+                owner_user_id: user.id.clone(),
+                name: input.name.clone(),
+                default_visibility,
+                init_tokens: (token, push_token),
+                now_unix: now,
+            },
+            &crate::persistence_ids::generate_persistence_id,
             move |owner_handle, repo_name| {
                 crate::git::storage::delete_repo_storage(&cleanup_state, owner_handle, repo_name)
-                    .map_err(Into::into)
             },
         )
         .await?;
@@ -99,6 +121,7 @@ pub(crate) async fn get_repo(
     let user = optional_scope_user(&state, &headers).await?;
     let summary = state
         .metadata
+        .repositories()
         .repo_summary(
             &owner,
             &repo_name,
@@ -120,13 +143,20 @@ pub(crate) async fn delete_repo(
     let delete_version = repo.record.change_version.saturating_add(1);
     let repo_id = state
         .metadata
-        .delete_repo(&owner, &repo_name, &user.id)
+        .repositories()
+        .delete_repo(
+            &owner,
+            &repo_name,
+            &user.id,
+            unix_now()?,
+            &crate::persistence_ids::generate_persistence_id,
+        )
         .await?;
     state
-        .publish_repo_change(&repo_id, delete_version, "repo-deleted")
+        .publish_repo_change(&repo_id, delete_version, RepoChangeReason::RepoDeleted)
         .await;
 
-    crate::state::best_effort_drain_pending_repo_storage_deletions(&state).await;
+    crate::repo_cleanup::best_effort_drain_pending_repo_storage_deletions(&state).await;
     Ok(Json(DeleteRepoResponse {
         id: repo_id,
         deleted: true,
@@ -141,22 +171,23 @@ pub(crate) async fn get_repo_config(
     let user = require_scope_user(&state, &headers).await?;
     let repo = state
         .metadata
+        .repositories()
         .git_push_context(&owner, &repo_name, &user.id)
         .await?
         .ok_or_else(|| ApiError::not_found(format!("repo {owner}/{repo_name} not found")))?;
     if repo.access.actor == RepositoryActor::Public {
         let full_repo = find_repo(&state, &owner, &repo_name).await?;
         let principal = principal_for_scope_user(&full_repo, Some(&user));
-        crate::state::ensure_repo_read(&state, &full_repo, &principal)?;
+        crate::repo_access::ensure_repo_read(&state, &full_repo, &principal)?;
         return Err(ApiError::forbidden("repo membership required"));
     }
 
     Ok(Json(RepoConfigResponse {
         config_hash: repo_config_fingerprint(&repo.repo_config)?,
-        lifecycle_state: repo.publication_state,
+        lifecycle_state: repo.publication_state.into(),
         access: repository_access_response(repo.access),
         head_oid: repo.git_head.as_ref().map(|head| head.head_oid.clone()),
-        config: repo.repo_config,
+        config: repo.repo_config.into(),
     }))
 }
 
@@ -166,15 +197,17 @@ pub(crate) async fn create_push_intent(
     Path((owner, repo_name)): Path<(String, String)>,
     Json(input): Json<CreatePushIntentRequest>,
 ) -> Result<Json<CreatePushIntentResponse>, ApiError> {
+    let input_config: scope_domain::repo_config::RepoConfig = input.config.into();
     let user = require_scope_user(&state, &headers).await?;
     let repo = state
         .metadata
+        .repositories()
         .git_push_context(&owner, &repo_name, &user.id)
         .await?
         .ok_or_else(|| ApiError::not_found(format!("repo {owner}/{repo_name} not found")))?;
     let access = repo.access;
 
-    if repo.publication_state == crate::domain::store::RepoPublicationState::Unpublished {
+    if repo.publication_state == scope_domain::store::RepoPublicationState::Unpublished {
         if access.actor != RepositoryActor::Owner {
             return Err(ApiError::not_found(format!(
                 "repo {owner}/{repo_name} not found"
@@ -187,80 +220,95 @@ pub(crate) async fn create_push_intent(
     }
 
     let head_oid = git_oid_request("head_oid", &input.head_oid)?;
-    validate_push_intent_config_transport(&input.config)?;
+    validate_push_intent_config_transport(&input_config)?;
     let base_config_hash = repo_config_fingerprint(&repo.repo_config)?;
     if !is_repo_config_fingerprint(&input.base_config_hash) {
         return Err(ApiError::bad_request(
             "base_config_hash must be a SHA-256 hex digest",
         ));
     }
-    if base_config_hash != input.base_config_hash && repo.repo_config != input.config {
+    if base_config_hash != input.base_config_hash && repo.repo_config != input_config {
         return Err(ApiError::conflict(
             "repo config changed since review; rerun scope review",
         ));
     }
     let base_head_oid = repo.git_head.as_ref().map(|head| head.head_oid.clone());
-    let base_git_manifest_key = repo
+    let base_git_manifest_ref = repo
         .git_head
         .as_ref()
-        .map(|head| head.manifest.object_key.clone());
-    let config_changed = repo.repo_config != input.config;
+        .map(|head| head.manifest.content_ref.clone());
+    let config_changed = repo.repo_config != input_config;
     if base_head_oid.as_deref() == Some(head_oid.as_str()) && config_changed {
         let author_id = user.id.clone();
-        let config = input.config.clone();
+        let config = input_config.clone();
         let expected_config_hash = base_config_hash.clone();
-        let expected_manifest_key = base_git_manifest_key.clone();
+        let expected_manifest_ref = base_git_manifest_ref.clone();
         let changed = state
             .metadata
-            .mutate_repository(&owner, &repo_name, move |repo| {
-                let access = repo.access_for_user_id(&author_id);
-                if !access.can_push {
-                    return Err(ApiError::forbidden("push permission required").into());
-                }
-                if !access.can_change_file_visibility && repo.repo_config != config {
-                    return Err(ApiError::forbidden("file visibility permission required").into());
-                }
-                if repo
-                    .git_head
-                    .as_ref()
-                    .map(|head| head.manifest.object_key.clone())
-                    != expected_manifest_key
-                {
-                    return Err(ApiError::conflict(
-                        "repo content changed since review; rerun scope push",
+            .repositories()
+            .mutate_repository(
+                &owner,
+                &repo_name,
+                unix_now()?,
+                &crate::persistence_ids::generate_persistence_id,
+                move |repo| {
+                    let access = repo.access_for_user_id(&author_id);
+                    if !access.can_push {
+                        return Err(DomainError::forbidden("push permission required"));
+                    }
+                    if !access.can_change_file_visibility && repo.repo_config != config {
+                        return Err(DomainError::forbidden(
+                            "file visibility permission required",
+                        ));
+                    }
+                    if repo
+                        .git_head
+                        .as_ref()
+                        .map(|head| &head.manifest.content_ref)
+                        != expected_manifest_ref.as_ref()
+                    {
+                        return Err(DomainError::conflict(
+                            "repo content changed since review; rerun scope push",
+                        ));
+                    }
+                    if domain_repo_config_fingerprint(&repo.repo_config)
+                        .map_err(DomainError::invariant_violation)?
+                        != expected_config_hash
+                    {
+                        return Err(DomainError::conflict(
+                            "repo config changed since review; rerun scope push",
+                        ));
+                    }
+                    let changed = apply_reviewed_config_to_repo(
+                        repo,
+                        ReviewedConfigUpdateInput { author_id, config },
                     )
-                    .into());
-                }
-                if repo_config_fingerprint(&repo.repo_config)? != expected_config_hash {
-                    return Err(ApiError::conflict(
-                        "repo config changed since review; rerun scope push",
-                    )
-                    .into());
-                }
-                let changed = apply_reviewed_config_to_repo(
-                    repo,
-                    ReviewedConfigUpdateInput { author_id, config },
-                )
-                .map_err(reviewed_update_api_error)?;
-                Ok(RepositoryMutation::new(changed))
-            })
+                    .map_err(reviewed_update_domain_error)?;
+                    Ok(RepositoryMutation::new(changed))
+                },
+            )
             .await?;
         if changed {
             let repo = state
                 .metadata
+                .repositories()
                 .git_push_context(&owner, &repo_name, &user.id)
                 .await?
                 .ok_or_else(|| {
                     ApiError::not_found(format!("repo {owner}/{repo_name} not found"))
                 })?;
             state
-                .publish_repo_change(&repo.repo_id, repo.change_version, "config-applied")
+                .publish_repo_change(
+                    &repo.repo_id,
+                    repo.change_version,
+                    RepoChangeReason::ConfigApplied,
+                )
                 .await;
         }
     }
     let intent_base_config_hash =
         if config_changed && base_head_oid.as_deref() == Some(head_oid.as_str()) {
-            repo_config_fingerprint(&input.config)?
+            repo_config_fingerprint(&input_config)?
         } else {
             base_config_hash
         };
@@ -268,9 +316,9 @@ pub(crate) async fn create_push_intent(
         &repo.repo_id,
         &user.id,
         &head_oid,
-        input.config,
+        input_config,
         intent_base_config_hash,
-        base_git_manifest_key,
+        base_git_manifest_ref,
     )?;
 
     Ok(Json(CreatePushIntentResponse {
@@ -281,7 +329,7 @@ pub(crate) async fn create_push_intent(
 }
 
 fn validate_push_intent_config_transport(
-    config: &crate::domain::repo_config::RepoConfig,
+    config: &scope_domain::repo_config::RepoConfig,
 ) -> Result<(), ApiError> {
     config.validate().map_err(ApiError::bad_request)?;
     let bytes = serde_json::to_vec(config).map_err(ApiError::internal)?;
@@ -324,6 +372,7 @@ pub(crate) async fn get_files(
     let user = optional_scope_user(&state, &headers).await?;
     let files = state
         .metadata
+        .repositories()
         .repo_live_files(
             &owner,
             &repo_name,
@@ -348,6 +397,7 @@ pub(crate) async fn get_file_content(
     let user = optional_scope_user(&state, &headers).await?;
     let projected = state
         .metadata
+        .repositories()
         .repo_live_file_content(
             &owner,
             &repo_name,
@@ -356,13 +406,17 @@ pub(crate) async fn get_file_content(
         )
         .await?
         .ok_or_else(|| ApiError::not_found("file not found"))?;
-    let content =
-        crate::http::file_diffs::review_content_response_for_blob(&state, &projected.blob)?;
+    let repo = find_repo(&state, &owner, &repo_name).await?;
+    let content = crate::http::file_diffs::review_content_response_for_blob(
+        &state,
+        &projected.blob,
+        repo.git_head.as_ref().map(|head| &head.manifest),
+    )?;
 
     Ok(Json(RepoFileContentResponse {
         path: projected.file.path.as_str().to_string(),
         oid: projected.file.oid,
-        visibility: projected.file.visibility,
+        visibility: projected.file.visibility.into(),
         size_bytes: projected.blob.size_bytes,
         content,
     }))
@@ -374,6 +428,7 @@ async fn repo_summary_response(
 ) -> Result<RepoSummaryResponse, ApiError> {
     let ready_for_review_count = state
         .metadata
+        .requests()
         .requests_by_repo_id(&summary.id)
         .await?
         .into_iter()
@@ -384,8 +439,8 @@ async fn repo_summary_response(
         id: summary.id,
         owner_handle: summary.owner_handle,
         name: summary.name,
-        lifecycle_state: summary.lifecycle_state,
-        default_visibility: summary.default_visibility,
+        lifecycle_state: summary.lifecycle_state.into(),
+        default_visibility: summary.default_visibility.into(),
         change_version: summary.change_version,
         access: repository_access_response(summary.access),
         ready_for_review_count,

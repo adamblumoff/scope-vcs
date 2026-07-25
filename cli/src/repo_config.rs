@@ -1,5 +1,5 @@
 use anyhow::{Context, bail};
-use scope_core::domain::repo_config::{
+use scope_domain::repo_config::{
     ConfigVisibility, REPO_CONFIG_PATH, RepoConfig, is_repo_config_fingerprint,
     repo_config_fingerprint,
 };

@@ -1,6 +1,6 @@
 use super::*;
 use crate::repo_config::default_scope_repo_config;
-use scope_core::domain::repo_config::{HistoryRewriteAction, HistoryRewriteRequest};
+use scope_domain::repo_config::{HistoryRewriteAction, HistoryRewriteRequest};
 
 fn state_with_mode(mode: ReviewMode) -> ReviewState {
     let tree = ReviewTree::from_paths(&["src/lib.rs".to_string(), "README.md".to_string()], &[]);

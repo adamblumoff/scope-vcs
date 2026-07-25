@@ -1,10 +1,3 @@
-use crate::domain::{
-    requests::{Request, RequestViewer, request_policy},
-    store::{
-        RepositoryAccess, RepositoryInvite, RepositoryInviteState, RepositoryMember,
-        StoredRepository, UserAccount,
-    },
-};
 use crate::{
     auth::{
         scope::{principal_for_user_id, require_scope_user},
@@ -13,13 +6,21 @@ use crate::{
     error::ApiError,
     http::{origins::public_app_origin, responses::*},
     persistence::unix_now,
+    repo_access::{ensure_repo_read, find_repo},
+    repo_events::RepoChangeReason,
     state::AppState,
-    state::{ensure_repo_read, find_repo},
 };
 use axum::{
     Json,
     extract::{Path, State},
     http::HeaderMap,
+};
+use scope_domain::{
+    requests::{Request, RequestViewer, request_policy},
+    store::{
+        RepositoryAccess, RepositoryInvite, RepositoryInviteState, RepositoryMember,
+        StoredRepository, UserAccount,
+    },
 };
 
 pub(crate) async fn list_repository_collaboration(
@@ -32,6 +33,7 @@ pub(crate) async fn list_repository_collaboration(
     ensure_collaboration_owner_access(&state, &repo, &user.id)?;
     let (repo, users) = state
         .metadata
+        .repositories()
         .repository_collaboration(&owner, &repo_name)
         .await?
         .ok_or_else(|| ApiError::not_found(format!("repo {owner}/{repo_name} not found")))?;
@@ -53,23 +55,27 @@ pub(crate) async fn create_repository_invite(
         &headers,
         &owner,
         &repo_name,
-        "invite-updated",
+        RepoChangeReason::InviteUpdated,
         |user| async move {
             let app_origin = public_app_origin("building repository invite URL")?;
             let (secret, token_hash) = generate_repository_invite_token()?;
             let now = unix_now()?;
             let invite_id = format!("repo_invite_{}", token_hash.replace([':', '/'], "_"));
             let invite = metadata
-                .create_repository_invite(crate::db::CreateRepositoryInviteMutation {
-                    owner: mutation_owner,
-                    name: mutation_repo_name,
-                    owner_user: user.clone(),
-                    invited_email: input.email,
-                    permissions: input.permissions,
-                    invite_id,
-                    token_hash,
-                    now_unix: now,
-                })
+                .repositories()
+                .create_repository_invite(
+                    scope_postgres::db::CreateRepositoryInviteMutation {
+                        owner: mutation_owner,
+                        name: mutation_repo_name,
+                        owner_user: user.clone(),
+                        invited_email: input.email,
+                        permissions: input.permissions.into(),
+                        invite_id,
+                        token_hash,
+                        now_unix: now,
+                    },
+                    &crate::persistence_ids::generate_persistence_id,
+                )
                 .await?;
             Ok(CreateRepositoryInviteResponse {
                 invite: repository_invite_response(&invite),
@@ -91,21 +97,26 @@ pub(crate) async fn update_repository_member(
     let metadata = state.metadata.clone();
     let mutation_owner = owner.clone();
     let mutation_repo_name = repo_name.clone();
+    let now_unix = unix_now()?;
     let member = mutate_owned_collaboration(
         &state,
         &headers,
         &owner,
         &repo_name,
-        "member-permissions-changed",
+        RepoChangeReason::MemberPermissionsChanged,
         |user| async move {
             metadata
+                .repositories()
                 .update_repository_member_permissions(
-                    &mutation_owner,
-                    &mutation_repo_name,
-                    &user.id,
-                    &member_user_id,
-                    input.permissions,
-                    unix_now()?,
+                    scope_postgres::db::UpdateRepositoryMemberPermissionsCommand {
+                        owner: mutation_owner,
+                        name: mutation_repo_name,
+                        owner_user_id: user.id,
+                        member_user_id,
+                        permissions: input.permissions.into(),
+                        now_unix,
+                    },
+                    &crate::persistence_ids::generate_persistence_id,
                 )
                 .await
                 .map_err(Into::into)
@@ -129,15 +140,17 @@ pub(crate) async fn delete_repository_invite(
         &headers,
         &owner,
         &repo_name,
-        "invite-revoked",
+        RepoChangeReason::InviteRevoked,
         |user| async move {
             metadata
+                .repositories()
                 .revoke_repository_invite(
                     &mutation_owner,
                     &mutation_repo_name,
                     &user.id,
                     &invite_id,
                     unix_now()?,
+                    &crate::persistence_ids::generate_persistence_id,
                 )
                 .await
                 .map_err(Into::into)
@@ -156,19 +169,23 @@ pub(crate) async fn delete_repository_member(
     let metadata = state.metadata.clone();
     let mutation_owner = owner.clone();
     let mutation_repo_name = repo_name.clone();
+    let now_unix = unix_now()?;
     let member = mutate_owned_collaboration(
         &state,
         &headers,
         &owner,
         &repo_name,
-        "member-removed",
+        RepoChangeReason::MemberRemoved,
         |user| async move {
             metadata
+                .repositories()
                 .remove_repository_member(
                     &mutation_owner,
                     &mutation_repo_name,
                     &user.id,
                     &member_user_id,
+                    now_unix,
+                    &crate::persistence_ids::generate_persistence_id,
                 )
                 .await
                 .map_err(Into::into)
@@ -187,6 +204,7 @@ pub(crate) async fn get_repository_invite(
     let token_hash = repository_invite_token_hash(&token);
     let (repo, invite) = state
         .metadata
+        .repositories()
         .repository_invite_by_token_hash(&token_hash)
         .await?;
     ensure_invite_can_be_used(&invite, now)?;
@@ -195,7 +213,7 @@ pub(crate) async fn get_repository_invite(
         owner_handle: repo.record.owner_handle,
         repo_name: repo.record.name,
         invited_email: invite.invited_email,
-        permissions: invite.permissions,
+        permissions: invite.permissions.into(),
         expires_at_unix: invite.expires_at_unix,
     }))
 }
@@ -210,10 +228,20 @@ pub(crate) async fn accept_repository_invite(
     let token_hash = repository_invite_token_hash(&token);
     let (repo, member) = state
         .metadata
-        .accept_repository_invite(&token_hash, user.clone(), now)
+        .repositories()
+        .accept_repository_invite(
+            &token_hash,
+            user.clone(),
+            now,
+            &crate::persistence_ids::generate_persistence_id,
+        )
         .await?;
     state
-        .publish_repo_change(&repo.record.id, repo.record.change_version, "member-added")
+        .publish_repo_change(
+            &repo.record.id,
+            repo.record.change_version,
+            RepoChangeReason::MemberAdded,
+        )
         .await;
     let ready_for_review_count =
         ready_for_review_count_for_access(&state, &repo, repo.access_for_user_id(&user.id)).await?;
@@ -230,7 +258,7 @@ async fn mutate_owned_collaboration<T, F, Fut>(
     headers: &HeaderMap,
     owner: &str,
     repo_name: &str,
-    event: &'static str,
+    event: RepoChangeReason,
     mutate: F,
 ) -> Result<T, ApiError>
 where
@@ -249,7 +277,7 @@ async fn publish_collaboration_change(
     state: &AppState,
     owner: &str,
     repo_name: &str,
-    event: &'static str,
+    event: RepoChangeReason,
 ) -> Result<(), ApiError> {
     let repo = find_repo(state, owner, repo_name).await?;
     state
@@ -289,6 +317,7 @@ async fn ready_for_review_count_for_access(
 ) -> Result<usize, ApiError> {
     Ok(state
         .metadata
+        .requests()
         .requests_by_repo_id(&repo.record.id)
         .await?
         .into_iter()
@@ -304,6 +333,6 @@ async fn member_response_for_user(
     state: &AppState,
     member: &RepositoryMember,
 ) -> Result<RepositoryMemberResponse, ApiError> {
-    let user = state.metadata.user(&member.user_id).await?;
+    let user = state.metadata.repositories().user(&member.user_id).await?;
     Ok(repository_member_response(member, &user))
 }

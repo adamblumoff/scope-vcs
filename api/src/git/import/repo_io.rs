@@ -1,5 +1,3 @@
-use crate::domain::store::{GitHead, GitSegment, SourceBlob, is_supported_git_file_mode};
-use crate::domain::{policy::ScopePath, repo_config::is_reserved_config_path};
 use crate::{
     config::{
         DEFAULT_GIT_BRANCH, MAX_PENDING_IMPORT_BLOB_BYTES, MAX_PENDING_IMPORT_FILES,
@@ -7,11 +5,13 @@ use crate::{
     },
     error::ApiError,
     git::upload::{git_process_output_with_limits, git_process_output_with_timeout},
-    object_store::put_repo_object,
     runtime_budgets::RuntimeBudgets,
     state::AppState,
 };
-use scope_core::git_segments::GitSegmentManifest;
+use scope_domain::store::{GitHead, SourceBlob, is_supported_git_file_mode};
+use scope_domain::{policy::ScopePath, repo_config::is_reserved_config_path};
+use scope_git::{StoredGitSegment, materialize_incremental_git_segment};
+use scope_object_store::{ContentObjectKind, object_key, put_content_object};
 use sha2::{Digest, Sha256};
 use std::{path::Path as FsPath, process::Command};
 
@@ -289,23 +289,16 @@ pub(crate) fn validate_pushed_tree(staging_repo: &FsPath, head_oid: &str) -> Res
     git_tree_entries(staging_repo, head_oid).map(|_| ())
 }
 
-pub(crate) struct CreatedGitSegment {
-    pub(crate) head: GitHead,
-    pub(crate) segment: GitSegment,
-}
-
 pub(crate) async fn git_segment_manifest_from_repo(
     state: &AppState,
-    repo_id: &str,
     repo: &FsPath,
     previous: Option<&GitHead>,
-) -> Result<CreatedGitSegment, ApiError> {
+) -> Result<StoredGitSegment, ApiError> {
     let storage_limits = state.runtime_budgets.git_storage_limits();
-    let sequence = storage_limits
+    storage_limits
         .next_segment_sequence(previous.map(|head| head.segment_sequence))
-        .map_err(|error| {
-            ApiError::service_unavailable(format!("{error}; retry after compaction"))
-        })?;
+        .map_err(scope_git::GitStorageError::from)
+        .map_err(ApiError::from)?;
     let refname = format!("refs/heads/{DEFAULT_GIT_BRANCH}");
     let head_oid = git_stdout_text(repo, &["rev-parse", &refname], "reading pushed Git head")?
         .trim()
@@ -330,79 +323,64 @@ pub(crate) async fn git_segment_manifest_from_repo(
             String::from_utf8_lossy(&output.stderr).trim()
         )));
     }
-    let bytes = output.stdout;
-    let segment = put_repo_object(state.object_store.as_ref(), repo_id, "git-segments", &bytes)?;
-    let manifest = GitSegmentManifest::new(
-        head_oid.clone(),
-        previous.map(|head| head.manifest.clone()),
-        segment.clone(),
-    );
-    let manifest_bytes = match manifest.encode() {
-        Ok(bytes) => bytes,
-        Err(error) => {
-            queue_failed_segment(state, segment.clone()).await?;
-            return Err(error.into());
-        }
-    };
-    let mut snapshot = match put_repo_object(
+    match materialize_incremental_git_segment(
         state.object_store.as_ref(),
-        repo_id,
-        "git-manifests",
-        &manifest_bytes,
+        &output.stdout,
+        head_oid,
+        previous,
+        storage_limits,
     ) {
-        Ok(snapshot) => snapshot,
-        Err(error) => {
-            queue_failed_segment(state, segment.clone()).await?;
-            return Err(error.into());
+        Ok(stored) => Ok(stored),
+        Err(failure) => {
+            let (error, orphan_objects) = failure.into_parts();
+            queue_failed_segments(state, orphan_objects).await?;
+            Err(error.into())
         }
-    };
-    snapshot.git_oid = head_oid.clone();
-    Ok(CreatedGitSegment {
-        head: GitHead {
-            head_oid: head_oid.clone(),
-            segment_sequence: sequence,
-            change_version: previous.map_or(1, |head| head.change_version.saturating_add(1)),
-            manifest: snapshot.clone(),
-        },
-        segment: GitSegment {
-            sequence,
-            base_oid: previous.map(|head| head.head_oid.clone()),
-            head_oid,
-            object: segment.clone(),
-            manifest: snapshot,
-        },
-    })
+    }
 }
 
-async fn queue_failed_segment(state: &AppState, segment: SourceBlob) -> Result<(), ApiError> {
+async fn queue_failed_segments(
+    state: &AppState,
+    segments: Vec<SourceBlob>,
+) -> Result<(), ApiError> {
+    if segments.is_empty() {
+        return Ok(());
+    }
     match state
         .metadata
-        .queue_pending_source_blob_deletions(vec![segment.clone()])
+        .cleanup()
+        .queue_pending_source_blob_deletions(
+            segments.clone(),
+            crate::persistence::unix_now()?,
+            &crate::persistence_ids::generate_persistence_id,
+        )
         .await
     {
         Ok(()) => Ok(()),
-        Err(queue_error) => match state.object_store.delete(&segment.object_key) {
-            Ok(()) => Ok(()),
-            Err(delete_error) => Err(ApiError::service_unavailable(format!(
-                "failed to queue or delete incomplete Git segment: {}; {}",
-                queue_error.message, delete_error.message
-            ))),
-        },
+        Err(queue_error) => {
+            for segment in segments {
+                if let Err(delete_error) = state.object_store.delete(&object_key(&segment)) {
+                    return Err(ApiError::service_unavailable(format!(
+                        "failed to queue or delete incomplete Git segment: {}; {}",
+                        queue_error.message, delete_error.message
+                    )));
+                }
+            }
+            Ok(())
+        }
     }
 }
 
 pub(crate) fn git_snapshot_from_ref(
     state: &AppState,
-    repo_id: &str,
     repo: &FsPath,
     refname: &str,
 ) -> Result<SourceBlob, ApiError> {
-    git_snapshot_from_refs(state, repo_id, repo, &[refname.to_string()])
+    git_snapshot_from_refs(state, repo, &[refname.to_string()])
 }
 
 fn git_snapshot_from_refs(
     state: &AppState,
-    repo_id: &str,
     repo: &FsPath,
     refs: &[String],
 ) -> Result<SourceBlob, ApiError> {
@@ -419,8 +397,11 @@ fn git_snapshot_from_refs(
     run_git(Some(repo), &args, "creating Git snapshot bundle")?;
     let bytes = std::fs::read(&bundle_path).map_err(ApiError::internal)?;
     let _ = std::fs::remove_file(&bundle_path);
-    let mut snapshot =
-        put_repo_object(state.object_store.as_ref(), repo_id, "git-bundles", &bytes)?;
+    let mut snapshot = put_content_object(
+        state.object_store.as_ref(),
+        ContentObjectKind::GitBundle,
+        &bytes,
+    )?;
     snapshot.git_oid = head_oid.trim().to_string();
     Ok(snapshot)
 }
@@ -514,7 +495,7 @@ pub(crate) fn run_git_output(
 }
 
 pub(crate) fn safe_repo_key(owner: &str, repo_name: &str) -> String {
-    let repo_id = crate::domain::store::repo_id(owner, repo_name);
+    let repo_id = scope_domain::store::repo_id(owner, repo_name);
     let digest = Sha256::digest(repo_id.as_bytes());
     format!("repo-{digest:x}")
 }

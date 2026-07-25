@@ -1,13 +1,14 @@
-use crate::domain::{
-    policy::{ScopePath, Visibility},
+use crate::error::ApiError;
+use scope_api_contract::Visibility;
+use scope_domain::{
+    policy::ScopePath,
     projection_views::{
         ProjectionAudience, ProjectionPreviewCommit, ProjectionPreviewCommitVisibility,
-        ProjectionPreviewFile, ProjectionPreviewSummary, ProjectionSource, ProjectionViewFile,
-        projection_preview, repo_scope_path as domain_repo_scope_path,
+        ProjectionPreviewFile, ProjectionPreviewSummary, ProjectionViewFile, projection_preview,
+        repo_scope_path as domain_repo_scope_path,
     },
     store::StoredRepository,
 };
-use crate::error::ApiError;
 use serde::{Deserialize, Serialize};
 
 #[derive(Clone, Copy, Debug, Deserialize, PartialEq, Eq, Serialize)]
@@ -34,14 +35,6 @@ impl From<ProjectionPreviewAudience> for ProjectionAudience {
 #[cfg_attr(feature = "type-export", ts(rename_all = "lowercase"))]
 pub(crate) enum ProjectionPreviewSource {
     Live,
-}
-
-impl From<ProjectionPreviewSource> for ProjectionSource {
-    fn from(source: ProjectionPreviewSource) -> Self {
-        match source {
-            ProjectionPreviewSource::Live => Self::Live,
-        }
-    }
 }
 
 #[derive(Debug, Deserialize)]
@@ -160,7 +153,7 @@ fn projection_preview_file_response(file: ProjectionPreviewFile) -> ProjectionPr
     ProjectionPreviewFileResponse {
         path: file.path.as_str().to_string(),
         oid: file.oid,
-        visibility: file.visibility,
+        visibility: file.visibility.into(),
     }
 }
 
@@ -210,6 +203,6 @@ fn repo_file_response(file: ProjectionViewFile) -> RepoFileResponse {
         path: file.path.as_str().to_string(),
         oid: file.oid,
         tracked: file.tracked,
-        visibility: file.visibility,
+        visibility: file.visibility.into(),
     }
 }

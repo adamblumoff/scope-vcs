@@ -1,14 +1,7 @@
-use scope_core::{
-    auth::device::SessionIdentity,
-    domain::{
-        policy::Visibility,
-        repo_config::RepoConfig,
-        requests::{
-            RequestActorRole, RequestAssessmentOutcome, RequestAudience, RequestDiscussionStatus,
-            RequestEventKind, RequestEventPayload, RequestMergeabilityStatus, RequestState,
-        },
-        store::{FirstPushTokenStatus, RepoPublicationState, RepositoryActor},
-    },
+use crate::{
+    FirstPushTokenStatus, RepoConfig, RepoPublicationState, RepositoryActor, RequestActorRole,
+    RequestAssessmentOutcome, RequestAudience, RequestDiscussionStatus, RequestEventKind,
+    RequestEventPayload, RequestMergeabilityStatus, RequestState, SessionIdentity, Visibility,
 };
 use serde::{Deserialize, Deserializer, Serialize, de};
 use std::{fmt, ops::Deref};

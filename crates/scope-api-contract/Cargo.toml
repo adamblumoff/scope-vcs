@@ -7,10 +7,10 @@ repository = "https://github.com/adamblumoff/scope-vcs"
 
 [features]
 default = []
-ts = ["dep:ts-rs", "scope_core/ts"]
+ts = ["dep:ts-rs"]
 
 [dependencies]
-scope_core = { package = "scope-core", path = "../scope-core" }
+scope_domain = { package = "scope-domain", path = "../scope-domain" }
 serde = { version = "1.0.228", features = ["derive"] }
 ts-rs = { version = "12.0.1", optional = true }
 

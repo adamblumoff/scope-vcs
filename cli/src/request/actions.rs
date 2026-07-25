@@ -55,8 +55,7 @@ pub(super) fn ready_request(
 ) -> anyhow::Result<()> {
     let (context, request_id, before) =
         load_exact_request(git_repo, client, api_url, session_token, target)?;
-    let uses_credits =
-        before.request.author_role == scope_core::domain::requests::RequestActorRole::Public;
+    let uses_credits = before.request.author_role == crate::api::RequestActorRole::Public;
     let stake = ready_stake(uses_credits, stake)?;
     let stake_credits = stake.unwrap_or_default();
     let prompt = match (before.request.first_ready_at_unix.is_none(), uses_credits) {
@@ -86,7 +85,7 @@ pub(super) fn ready_request(
 pub(super) fn ready_stake(uses_credits: bool, stake: Option<u32>) -> anyhow::Result<Option<u32>> {
     if uses_credits {
         stake.map(Some).ok_or_else(|| {
-            let max = scope_core::domain::requests::REQUEST_MAX_STAKE_CREDITS;
+            let max = scope_domain::requests::REQUEST_MAX_STAKE_CREDITS;
             anyhow::anyhow!(
                 "--stake <CREDITS> is required for public-authored requests (1–{max} credits)"
             )
@@ -343,11 +342,8 @@ fn assessment_confirmation(
     format!("Complete request {request_name} as {outcome:?}{settlement}")
 }
 
-fn merge_confirmation(
-    request_name: &str,
-    state: scope_core::domain::requests::RequestState,
-) -> String {
-    if state == scope_core::domain::requests::RequestState::ReadyForReview {
+fn merge_confirmation(request_name: &str, state: crate::api::RequestState) -> String {
+    if state == crate::api::RequestState::ReadyForReview {
         format!("Merge request {request_name} into main and complete it as Accepted")
     } else {
         format!("Merge accepted request {request_name} into main")
@@ -483,15 +479,15 @@ pub(super) fn print_request_list(
     }
     requests.sort_by(|left, right| {
         let rank = |state| match state {
-            scope_core::domain::requests::RequestState::ReadyForReview => 0,
-            scope_core::domain::requests::RequestState::Working => 1,
-            scope_core::domain::requests::RequestState::Completed => 2,
+            crate::api::RequestState::ReadyForReview => 0,
+            crate::api::RequestState::Working => 1,
+            crate::api::RequestState::Completed => 2,
         };
         let state_order = rank(left.state).cmp(&rank(right.state));
         if state_order != std::cmp::Ordering::Equal {
             return state_order;
         }
-        if left.state == scope_core::domain::requests::RequestState::ReadyForReview {
+        if left.state == crate::api::RequestState::ReadyForReview {
             return right
                 .current_stake_credits
                 .cmp(&left.current_stake_credits)
@@ -568,7 +564,7 @@ mod tests {
 
     #[test]
     fn ready_merge_confirmation_discloses_accepted_completion() {
-        use scope_core::domain::requests::RequestState;
+        use crate::api::RequestState;
         assert_eq!(
             merge_confirmation("change", RequestState::ReadyForReview),
             "Merge request change into main and complete it as Accepted"

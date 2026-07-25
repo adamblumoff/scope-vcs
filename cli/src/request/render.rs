@@ -1,13 +1,11 @@
 use super::text::{short_oid, terminal_text};
 use crate::api::{
     LeaveRequestResponse, RepoSummaryResponse, RepositoryActor, RequestActivityPageResponse,
-    RequestAssessmentOutcome, RequestCloseResponse, RequestDetailResponse,
-    RequestDiscussionMutationResponse, RequestEventPayload, RequestInviteeMutationResponse,
-    RequestListItemResponse, RequestMergeabilityStatus, RequestMutationResponse,
-    RequestPermissionsResponse, RequestSummaryResponse,
-};
-use scope_core::domain::requests::{
-    RequestAudience, RequestDiscussionStatus, RequestReviewExitReason, RequestState,
+    RequestAssessmentOutcome, RequestAudience, RequestCloseResponse, RequestDetailResponse,
+    RequestDiscussionMutationResponse, RequestDiscussionStatus, RequestEventPayload,
+    RequestInviteeMutationResponse, RequestListItemResponse, RequestMergeabilityStatus,
+    RequestMutationResponse, RequestPermissionsResponse, RequestReviewExitReason, RequestState,
+    RequestSummaryResponse,
 };
 
 pub(super) fn print_repo_access(repo: &RepoSummaryResponse) {

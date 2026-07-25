@@ -18,7 +18,7 @@ use crate::{
     review::{ensure_review_terminal_available, run_push_review},
 };
 use anyhow::bail;
-use scope_core::domain::repo_config::repo_config_fingerprint;
+use scope_domain::repo_config::repo_config_fingerprint;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 pub const DEFAULT_SCOPE_BRANCH: &str = "main";

@@ -1,10 +1,7 @@
-use crate::{
-    domain::{
-        requests::{Request, RequestViewer, request_policy},
-        store::RepositoryAccess,
-    },
-    error::ApiError,
-    state::{AppState, find_repo},
+use crate::{error::ApiError, repo_access::find_repo, state::AppState};
+use scope_domain::{
+    requests::{Request, RequestViewer, request_policy},
+    store::RepositoryAccess,
 };
 
 pub(super) fn request_actor_can_edit_ref(
@@ -31,11 +28,13 @@ pub(super) async fn ensure_request_ref_update_allowed(
     let access = repo.access_for_user_id(actor_user_id);
     let request = state
         .metadata
+        .requests()
         .request_by_name(&repo.record.id, request_name)
         .await?
         .ok_or_else(|| ApiError::not_found("request not found"))?;
     let is_invitee = state
         .metadata
+        .requests()
         .request_is_invitee(&request.id, actor_user_id)
         .await?;
     if !request_actor_can_edit_ref(&request, actor_user_id, access, is_invitee) {

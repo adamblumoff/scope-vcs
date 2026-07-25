@@ -12,7 +12,7 @@ use crate::{
     },
 };
 use anyhow::bail;
-use scope_core::domain::repo_config::RepoConfig;
+use scope_domain::repo_config::RepoConfig;
 use std::io::{self, IsTerminal};
 
 use self::{

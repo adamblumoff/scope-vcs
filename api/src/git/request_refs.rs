@@ -1,14 +1,6 @@
 use crate::{
     auth::scope::principal_for_user_id,
     config::{DEFAULT_GIT_BRANCH, EMPTY_GIT_OID},
-    domain::{
-        projection::{ProjectionViewKey, project_graph},
-        requests::{
-            RecordRequestRevisionInput, Request, RequestAudience, RequestChangeBlock,
-            RequestViewer, canonical_request_ref, request_policy,
-        },
-        store::{RepoPublicationState, RepositoryActor, SourceBlob},
-    },
     error::ApiError,
     git::{
         cache::GitRepoHandle,
@@ -20,11 +12,21 @@ use crate::{
         },
         upload::projection_bare_repo_for_state,
     },
-    object_store::source_blob_bytes,
     persistence::unix_now,
-    state::{AppState, find_repo},
+    repo_access::find_repo,
+    repo_events::RepoChangeReason,
+    state::AppState,
 };
 use access::{ensure_request_ref_update_allowed, request_actor_can_edit_ref};
+use scope_domain::{
+    projection::{ProjectionViewKey, project_graph},
+    requests::{
+        RecordRequestRevisionInput, Request, RequestAudience, RequestChangeBlock, RequestViewer,
+        canonical_request_ref, request_policy,
+    },
+    store::{RepoPublicationState, RepositoryActor, SourceBlob},
+};
+use scope_object_store::source_blob_bytes;
 use sha2::{Digest, Sha256};
 use std::{
     collections::{BTreeMap, BTreeSet},
@@ -48,7 +50,7 @@ pub(crate) struct RequestRefUpdate {
 
 pub(crate) fn is_request_ref(refname: &str) -> bool {
     request_name_from_ref(refname)
-        .is_some_and(|name| crate::domain::requests::validate_request_name(name).is_ok())
+        .is_some_and(|name| scope_domain::requests::validate_request_name(name).is_ok())
 }
 
 fn request_name_from_ref(refname: &str) -> Option<&str> {
@@ -93,7 +95,7 @@ pub(crate) fn request_ref_update_from_refs(
         let request_name =
             request_name_from_ref(refname).expect("request ref was classified above");
         if !is_request_ref(refname) {
-            crate::domain::requests::validate_request_name(request_name).map_err(|error| {
+            scope_domain::requests::validate_request_name(request_name).map_err(|error| {
                 ApiError::bad_request(format!(
                     "invalid request branch '{request_name}': {}",
                     error.message
@@ -136,11 +138,17 @@ pub(crate) async fn actor_has_open_editable_request(
     state: &AppState,
     repo_id: &str,
     actor_user_id: &str,
-    access: crate::domain::store::RepositoryAccess,
+    access: scope_domain::store::RepositoryAccess,
 ) -> Result<bool, ApiError> {
-    for request in state.metadata.requests_by_repo_id(repo_id).await? {
+    for request in state
+        .metadata
+        .requests()
+        .requests_by_repo_id(repo_id)
+        .await?
+    {
         let is_invitee = state
             .metadata
+            .requests()
             .request_is_invitee(&request.id, actor_user_id)
             .await?;
         if request_actor_can_edit_ref(&request, actor_user_id, access, is_invitee) {
@@ -179,7 +187,11 @@ pub(crate) async fn ensure_request_receive_pack_staging_repo(
                 &repo.visibility_events,
                 ProjectionViewKey::Public,
             );
-            GitRepoHandle::from_path(projection_bare_repo_for_state(state, &projection)?)
+            GitRepoHandle::from_path(projection_bare_repo_for_state(
+                state,
+                &projection,
+                repo.git_head.as_ref().map(|head| &head.manifest),
+            )?)
         }
         RepositoryActor::Owner | RepositoryActor::Member => {
             if let Some(head) = repo.git_head.as_ref() {
@@ -192,7 +204,11 @@ pub(crate) async fn ensure_request_receive_pack_staging_repo(
                     &repo.visibility_events,
                     ProjectionViewKey::from_access(repo.access_for_principal(&principal)),
                 );
-                GitRepoHandle::from_path(projection_bare_repo_for_state(state, &projection)?)
+                GitRepoHandle::from_path(projection_bare_repo_for_state(
+                    state,
+                    &projection,
+                    repo.git_head.as_ref().map(|head| &head.manifest),
+                )?)
             }
         }
     };
@@ -239,9 +255,15 @@ pub(crate) async fn seed_editable_request_refs(
     let repo = find_repo(state, owner, repo_name).await?;
     let access = repo.access_for_user_id(actor_user_id);
     let mut requests = Vec::new();
-    for request in state.metadata.requests_by_repo_id(&repo.record.id).await? {
+    for request in state
+        .metadata
+        .requests()
+        .requests_by_repo_id(&repo.record.id)
+        .await?
+    {
         let is_invitee = state
             .metadata
+            .requests()
             .request_is_invitee(&request.id, actor_user_id)
             .await?;
         let decision = request_policy(
@@ -262,7 +284,11 @@ pub(crate) async fn seed_editable_request_refs(
             &repo.visibility_events,
             ProjectionViewKey::Public,
         );
-        Some(projection_bare_repo_for_state(state, &projection)?)
+        Some(projection_bare_repo_for_state(
+            state,
+            &projection,
+            repo.git_head.as_ref().map(|head| &head.manifest),
+        )?)
     } else {
         None
     };
@@ -299,21 +325,25 @@ pub(crate) async fn persist_request_ref_revision(
             .await?;
     let mutation = state
         .metadata
-        .record_request_revision_with_review_invalidation(RecordRequestRevisionInput {
-            request_id: request.id,
-            actor_user_id: actor_user_id.to_string(),
-            actor_can_edit: false,
-            expected_old_head_oid,
-            new_head_oid: update.new_head_oid.clone(),
-            git_snapshot: persisted.git_snapshot.clone(),
-            event_id: request_revision_event_id()?,
-            body: None,
-            now_unix,
-        })
+        .requests()
+        .record_request_revision_with_review_invalidation(
+            RecordRequestRevisionInput {
+                request_id: request.id,
+                actor_user_id: actor_user_id.to_string(),
+                actor_can_edit: false,
+                expected_old_head_oid,
+                new_head_oid: update.new_head_oid.clone(),
+                git_snapshot: persisted.git_snapshot.clone(),
+                event_id: request_revision_event_id()?,
+                body: None,
+                now_unix,
+            },
+            &crate::persistence_ids::generate_persistence_id,
+        )
         .await;
     if let Ok(mutation) = &mutation {
         state
-            .publish_request_summary_refresh(&request_repo_id, "request-revised")
+            .publish_request_summary_refresh(&request_repo_id, RepoChangeReason::RequestRevised)
             .await;
         state
             .publish_request_timeline_change(
@@ -333,7 +363,7 @@ pub(crate) async fn persist_request_ref_revision(
             &update.request_ref,
             persisted.previous_head,
         );
-        crate::state::best_effort_cleanup_rollback_source_blobs(
+        crate::repo_cleanup::best_effort_cleanup_rollback_source_blobs(
             state,
             std::slice::from_ref(&persisted.git_snapshot),
         )
@@ -576,14 +606,13 @@ async fn persist_request_ref_to_store(
         &["fetch", staging_repo.to_string_lossy().as_ref(), &refspec],
         "persisting request ref",
     )?;
-    let git_snapshot =
-        match git_snapshot_from_ref(state, &request.repo_id, &store_repo, &update.request_ref) {
-            Ok(snapshot) => snapshot,
-            Err(error) => {
-                rollback_request_ref(state, owner, repo_name, &update.request_ref, previous_head);
-                return Err(error);
-            }
-        };
+    let git_snapshot = match git_snapshot_from_ref(state, &store_repo, &update.request_ref) {
+        Ok(snapshot) => snapshot,
+        Err(error) => {
+            rollback_request_ref(state, owner, repo_name, &update.request_ref, previous_head);
+            return Err(error);
+        }
+    };
     Ok(PersistedRequestRef {
         previous_head,
         git_snapshot,

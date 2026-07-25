@@ -1,10 +1,5 @@
 use crate::{
     auth::scope::{optional_scope_user, principal_for_scope_user},
-    domain::{
-        commit_history::{CommitHistoryCommit, CommitHistoryFile, commit_history_view},
-        projection::ProjectionViewKey,
-        store::StoredRepository,
-    },
     error::ApiError,
     http::{
         file_diffs::review_file_diff_response_for_blobs,
@@ -15,12 +10,18 @@ use crate::{
             commit_history_response, repo_scope_path,
         },
     },
-    state::{AppState, find_repo},
+    repo_access::find_repo,
+    state::AppState,
 };
 use axum::{
     Json,
     extract::{Path, Query, State},
     http::HeaderMap,
+};
+use scope_domain::{
+    commit_history::{CommitHistoryCommit, CommitHistoryFile, commit_history_view},
+    projection::ProjectionViewKey,
+    store::StoredRepository,
 };
 
 pub(crate) async fn get_commit_history(
@@ -82,7 +83,7 @@ pub(crate) async fn get_commit_file_diff(
         .find(|file| file.path.as_str() == path.as_str())
         .ok_or_else(|| ApiError::not_found(format!("file {} not found", path.as_str())))?;
 
-    Ok(Json(commit_file_diff_response(&state, file)?))
+    Ok(Json(commit_file_diff_response(&state, &repo, file)?))
 }
 
 async fn repo_and_audience(
@@ -126,10 +127,12 @@ fn commit_for_id<'a>(
 
 fn commit_file_diff_response(
     state: &AppState,
+    repo: &StoredRepository,
     file: &CommitHistoryFile,
 ) -> Result<ReviewFileDiffResponse, ApiError> {
     review_file_diff_response_for_blobs(
         state,
+        repo.git_head.as_ref().map(|head| &head.manifest),
         file.path.as_str().to_string(),
         file.kind,
         file.old_content.as_ref(),

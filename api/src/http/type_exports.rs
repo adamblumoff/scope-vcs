@@ -1,20 +1,31 @@
-use crate::domain::{
-    policy::Visibility,
-    repo_config::{
-        ConfigVisibility, HistoryRewriteAction, HistoryRewriteRequest, RepoConfig,
-        RepoConfigHistory, RepoConfigVisibility, RepoConfigVisibilityRule,
-    },
-    requests::{
-        RequestActorRole, RequestAssessmentOutcome, RequestAudience, RequestEventKind,
-        RequestIdentityAuditFact, RequestReviewExitReason, RequestState,
-    },
-    store::{
-        FileChangeKind, FirstPushTokenStatus, RepoPublicationState, RepositoryActor,
-        RepositoryInviteState, RepositoryMemberPermissions,
-    },
-};
 use crate::http::{responses::*, routes};
-use crate::repo_events::{RepoChangeEvent, RepoChangeKind};
+use scope_api_contract::{
+    AccountSessionResponse, AddRequestInviteeRequest, AssessRequestRequest,
+    BrowserLoginExchangeRequest, BrowserLoginStartRequest, BrowserLoginStartResponse,
+    CliExchangeGrantExchangeRequest, CliSessionTokenResponse, ConfigVisibility,
+    CreatePushIntentRequest, CreatePushIntentResponse, CreateRepoRequest, CreateRepoResponse,
+    CreateRequestDiscussionReplyRequest, CreateRequestDiscussionRequest, DeviceLoginPollResponse,
+    DeviceLoginStartResponse, DeviceLoginStatus, EditRequestIdentityRequest, FileChangeKind,
+    FirstPushTokenResponse, FirstPushTokenStatus, GitOid, GitPushTokenResponse,
+    HistoryRewriteAction, HistoryRewriteRequest, LeaveRequestResponse,
+    MarkRequestDiscussionReadRequest, ReadyRequestRequest, RemoveRequestInviteeRequest,
+    ReopenAndReplyRequest, RepoChangeEvent, RepoChangeKind, RepoConfig, RepoConfigHistory,
+    RepoConfigResponse, RepoConfigVisibility, RepoConfigVisibilityRule, RepoInitResponse,
+    RepoPublicationState, RepoRequestPermissionsResponse, RepoSummaryResponse,
+    RepositoryAccessResponse, RepositoryActor, RepositoryInviteState, RepositoryMemberPermissions,
+    RequestActivityPageResponse, RequestActorRole, RequestActorSummaryResponse,
+    RequestAssessmentOutcome, RequestAudience, RequestChangeBlockResponse, RequestCloseResponse,
+    RequestDetailResponse, RequestDiscussionChangesResponse, RequestDiscussionMutationResponse,
+    RequestDiscussionPageResponse, RequestDiscussionReadResponse,
+    RequestDiscussionRepliesPageResponse, RequestDiscussionReplyMutationResponse,
+    RequestDiscussionReplyResponse, RequestDiscussionStatus, RequestDiscussionSummaryResponse,
+    RequestEventKind, RequestEventPayload, RequestEventResponse, RequestIdentityAuditFact,
+    RequestInviteeMutationResponse, RequestInviteeResponse, RequestListItemResponse,
+    RequestListResponse, RequestMergeabilityResponse, RequestMergeabilityStatus,
+    RequestMutationResponse, RequestPermissionsResponse, RequestQueueSection,
+    RequestReviewExitReason, RequestSettlement, RequestSettlementPreviewResponse, RequestState,
+    RequestSummaryResponse, SessionIdentity, StartRequestRequest, UserResponse, Visibility,
+};
 use std::{fs, path::Path};
 use ts_rs::TS;
 

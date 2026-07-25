@@ -226,7 +226,7 @@ fn start_request_branch(
     )?;
     fetch_main_projection(git_repo, &context, audience, session_token)?;
     let branch = args.name.trim().to_string();
-    scope_core::domain::requests::validate_request_name(&branch)
+    scope_domain::requests::validate_request_name(&branch)
         .map_err(|error| anyhow::anyhow!(error.message))?;
     let local_ref = format!("refs/heads/{branch}");
     if try_run_git_in_repo(git_repo, &["show-ref", "--verify", "--quiet", &local_ref])? {
@@ -471,9 +471,9 @@ fn start_audience(
     actor: crate::api::RepositoryActor,
     default_visibility: crate::api::Visibility,
     requested: Option<RequestAudienceArg>,
-) -> anyhow::Result<scope_core::domain::requests::RequestAudience> {
+) -> anyhow::Result<crate::api::RequestAudience> {
+    use crate::api::RequestAudience;
     use crate::api::{RepositoryActor, Visibility};
-    use scope_core::domain::requests::RequestAudience;
 
     match actor {
         RepositoryActor::Public => match requested.map(Into::into) {
@@ -494,8 +494,8 @@ fn start_audience(
 #[cfg(test)]
 mod audience_tests {
     use super::*;
+    use crate::api::RequestAudience;
     use crate::api::{RepositoryActor, Visibility};
-    use scope_core::domain::requests::RequestAudience;
 
     #[test]
     fn maintainers_default_request_audience_from_repo_visibility() {

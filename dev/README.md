@@ -1,9 +1,8 @@
 # Local Dev
 
 `dev/scope-dev` is the supported local development entrypoint.
-`dev/api` contains Rust code that is compiled only for `--features local-dev`;
-it is intentionally outside `api/src` so it is not part of the production API
-runtime.
+`api/src/dev` contains Rust code that is compiled only for
+`--features local-dev`, so it is excluded from production API builds.
 
 ```bash
 ./dev/scope-dev doctor

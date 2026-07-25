@@ -1,8 +1,4 @@
 use crate::{
-    domain::{
-        policy::ScopePath,
-        store::{FileChangeKind, RepositoryAccess, StoredRepository},
-    },
     error::ApiError,
     git::{import::run_git_output, request_refs::with_request_change_block_store_repo},
     http::{
@@ -11,8 +7,8 @@ use crate::{
         },
         requests::{repo_and_access, visible_request},
         responses::{
-            CommitFileResponse, RequestChangeBlockFilesResponse, RequestChangeBlockResponse,
-            RequestFileDiffRequest, ReviewFileContentResponse, ReviewFileDiffResponse,
+            CommitFileResponse, RequestChangeBlockFilesResponse, RequestFileDiffRequest,
+            ReviewFileContentResponse, ReviewFileDiffResponse,
         },
     },
     state::AppState,
@@ -21,6 +17,11 @@ use axum::{
     Json,
     extract::{Path, Query, State},
     http::HeaderMap,
+};
+use scope_api_contract::RequestChangeBlockResponse;
+use scope_domain::{
+    policy::ScopePath,
+    store::{FileChangeKind, RepositoryAccess, StoredRepository},
 };
 use std::path::Path as FsPath;
 
@@ -41,6 +42,7 @@ pub(crate) async fn get_request_change_block_files(
     .await?;
     let block = state
         .metadata
+        .requests()
         .request_change_block(&request.id, &block_id)
         .await?
         .ok_or_else(|| ApiError::not_found("request change block not found"))?;
@@ -91,6 +93,7 @@ pub(crate) async fn get_request_change_block_file_diff(
     .await?;
     let block = state
         .metadata
+        .requests()
         .request_change_block(&request.id, &block_id)
         .await?
         .ok_or_else(|| ApiError::not_found("request change block not found"))?;
@@ -206,12 +209,12 @@ fn request_changes_from_repo(
         let new_oid = (kind != FileChangeKind::Deleted).then(|| columns[3].to_string());
         files.push(CommitFileResponse {
             path,
-            kind,
+            kind: kind.into(),
             old_mode: git_mode(columns[0].trim_start_matches(':')),
             new_mode: git_mode(columns[1]),
             old_oid,
             new_oid,
-            visibility: repo.policy.effective_visibility(&scope_path),
+            visibility: repo.policy.effective_visibility(&scope_path).into(),
         });
     }
     files.sort_by(|left, right| left.path.cmp(&right.path));

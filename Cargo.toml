@@ -2,7 +2,10 @@
 members = [
     "api",
     "crates/scope-api-contract",
-    "crates/scope-core",
+    "crates/scope-domain",
+    "crates/scope-postgres",
+    "crates/scope-git",
+    "crates/scope-object-store",
     "crates/scope-git-process",
     "worker",
 ]

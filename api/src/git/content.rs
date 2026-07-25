@@ -1,15 +1,11 @@
-use crate::domain::store::{DEFAULT_GIT_FILE_MODE, SourceBlob};
 use crate::{
     error::ApiError,
     git::{import::run_git_output, storage::cached_raw_git_repo},
-    object_store::source_blob_bytes,
     state::AppState,
 };
-
-use scope_core::git_segments::{
-    GIT_BLOB_REFERENCE_PREFIX, GIT_MANIFEST_OBJECT_PREFIX,
-    git_blob_reference as segment_git_blob_reference,
-};
+use scope_domain::{content_ref::ContentRef, store::SourceBlob};
+use scope_git::git_blob_reference as segment_git_blob_reference;
+use scope_object_store::source_blob_bytes;
 
 pub(crate) fn git_blob_reference(
     snapshot: &SourceBlob,
@@ -28,21 +24,28 @@ pub(crate) fn git_blob_reference(
 pub(crate) fn source_content_bytes(
     state: &AppState,
     blob: &SourceBlob,
+    git_manifest: Option<&SourceBlob>,
 ) -> Result<Vec<u8>, ApiError> {
-    let Some(reference) = blob.object_key.strip_prefix(GIT_BLOB_REFERENCE_PREFIX) else {
+    let ContentRef::GitBlob {
+        git_oid: content_oid,
+    } = &blob.content_ref
+    else {
         return Ok(source_blob_bytes(state.object_store.as_ref(), blob)?);
     };
-    let (manifest_id, manifest_sha256) = reference
-        .split_once('/')
-        .ok_or_else(|| ApiError::internal_message("invalid Git blob reference"))?;
-    let snapshot = SourceBlob {
-        object_key: format!("{GIT_MANIFEST_OBJECT_PREFIX}{manifest_id}"),
-        sha256: manifest_sha256.to_string(),
-        git_oid: String::new(),
-        git_file_mode: DEFAULT_GIT_FILE_MODE.to_string(),
-        size_bytes: 0,
-    };
-    let repo = cached_raw_git_repo(state, &snapshot)?;
+    if content_oid != &blob.git_oid {
+        return Err(ApiError::internal_message(
+            "Git blob identity does not match persisted OID",
+        ));
+    }
+    let manifest = git_manifest.ok_or_else(|| {
+        ApiError::internal_message("Git blob content requires a current manifest locator")
+    })?;
+    if !matches!(manifest.content_ref, ContentRef::GitManifestSha256(_)) {
+        return Err(ApiError::internal_message(
+            "Git blob content locator must be a Git manifest",
+        ));
+    }
+    let repo = cached_raw_git_repo(state, manifest)?;
     let output = run_git_output(
         Some(&repo),
         &["cat-file", "blob", &blob.git_oid],

@@ -10,7 +10,6 @@ pub(crate) mod upload;
 
 pub(crate) use credentials::*;
 
-use crate::domain::store::{MainPushMode, RepoPublicationState};
 use crate::{
     auth::scope::principal_for_user_id,
     config::*,
@@ -29,7 +28,10 @@ use crate::{
         storage::*,
         upload::*,
     },
-    state::{AppState, ValidatedPushIntent, ensure_repo_read, find_repo},
+    push_intents::ValidatedPushIntent,
+    repo_access::{ensure_repo_read, find_repo},
+    repo_events::RepoChangeReason,
+    state::AppState,
 };
 use axum::{
     Json,
@@ -42,6 +44,7 @@ use axum::{
     response::{IntoResponse, Response},
 };
 use flate2::read::GzDecoder;
+use scope_domain::store::{MainPushMode, RepoPublicationState};
 use serde::Deserialize;
 use std::{
     fs,
@@ -139,7 +142,7 @@ const PUSH_INTENT_HEADER: &str = "x-scope-push-intent";
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct PersistedReceivePackUpdate {
-    pub(crate) git_head: crate::domain::store::GitHead,
+    pub(crate) git_head: scope_domain::store::GitHead,
 }
 
 pub(crate) fn git_error_response(error: ApiError) -> Response {
@@ -443,6 +446,7 @@ pub(crate) async fn receive_pack_access(
                 && let Ok(push_intent) = state.validate_push_intent_secret(secret)
                 && let Some(context) = state
                     .metadata
+                    .repositories()
                     .git_push_context(owner, repo_name, &user.id)
                     .await?
                 && context.publication_state == RepoPublicationState::Published
@@ -542,10 +546,10 @@ fn required_push_intent(
 
 async fn actor_can_receive_request_push(
     state: &AppState,
-    repo: &crate::domain::store::StoredRepository,
-    principal: &crate::domain::policy::Principal,
+    repo: &scope_domain::store::StoredRepository,
+    principal: &scope_domain::policy::Principal,
     author_id: &str,
-    access: crate::domain::store::RepositoryAccess,
+    access: scope_domain::store::RepositoryAccess,
 ) -> Result<bool, ApiError> {
     ensure_repo_read(state, repo, principal)?;
     actor_has_open_editable_request(state, &repo.record.id, author_id, access).await
@@ -766,11 +770,11 @@ async fn handle_git_receive_pack_body(
                     }
                 };
                 let durable_objects = update.durable_objects.clone();
-                update.base_git_manifest_key =
+                update.base_git_manifest_ref =
                     Some(match push_intent.base_for_head(&update.head_oid) {
                         Ok(base) => base,
                         Err(error) => {
-                            crate::state::best_effort_cleanup_rollback_source_blobs(
+                            crate::repo_cleanup::best_effort_cleanup_rollback_source_blobs(
                                 state,
                                 &durable_objects,
                             )
@@ -787,7 +791,7 @@ async fn handle_git_receive_pack_body(
                 {
                     Ok(persisted) => persisted.git_head,
                     Err(error) => {
-                        crate::state::best_effort_cleanup_rollback_source_blobs(
+                        crate::repo_cleanup::best_effort_cleanup_rollback_source_blobs(
                             state,
                             &durable_objects,
                         )
@@ -795,7 +799,7 @@ async fn handle_git_receive_pack_body(
                         return Err(error);
                     }
                 };
-                main_push_event = "first-push-applied";
+                main_push_event = RepoChangeReason::FirstPushApplied;
                 tracing::info!(
                     owner,
                     repo = repo_name,
@@ -826,11 +830,11 @@ async fn handle_git_receive_pack_body(
                     }
                 };
                 let durable_objects = update.durable_objects.clone();
-                update.base_git_manifest_key =
+                update.base_git_manifest_ref =
                     Some(match push_intent.base_for_head(&update.head_oid) {
                         Ok(base) => base,
                         Err(error) => {
-                            crate::state::best_effort_cleanup_rollback_source_blobs(
+                            crate::repo_cleanup::best_effort_cleanup_rollback_source_blobs(
                                 state,
                                 &durable_objects,
                             )
@@ -847,7 +851,7 @@ async fn handle_git_receive_pack_body(
                 {
                     Ok(persisted) => persisted.git_head,
                     Err(error) => {
-                        crate::state::best_effort_cleanup_rollback_source_blobs(
+                        crate::repo_cleanup::best_effort_cleanup_rollback_source_blobs(
                             state,
                             &durable_objects,
                         )
@@ -855,7 +859,7 @@ async fn handle_git_receive_pack_body(
                         return Err(error);
                     }
                 };
-                main_push_event = "push-received";
+                main_push_event = RepoChangeReason::PushReceived;
                 tracing::info!(
                     owner,
                     repo = repo_name,
@@ -868,19 +872,20 @@ async fn handle_git_receive_pack_body(
         }
         state
             .publish_repo_change(
-                &crate::domain::store::repo_id(owner, repo_name),
+                &scope_domain::store::repo_id(owner, repo_name),
                 committed_git_head.change_version,
                 main_push_event,
             )
             .await;
         match state
             .metadata
+            .repositories()
             .git_push_context(owner, repo_name, &main_push_author_id)
             .await
         {
             Ok(Some(repo)) => {
                 let is_still_current = repo.git_head.as_ref().is_some_and(|head| {
-                    head.manifest.object_key == committed_git_head.manifest.object_key
+                    head.manifest.content_ref == committed_git_head.manifest.content_ref
                 });
                 if is_still_current {
                     match raw_git_cache_path(state, &committed_git_head.manifest).and_then(

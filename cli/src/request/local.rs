@@ -11,7 +11,7 @@ use crate::{
 };
 use anyhow::{Context, bail};
 use reqwest::blocking::Client;
-use scope_core::domain::requests::RequestAudience;
+use scope_api_contract::RequestAudience;
 
 const REQUEST_ID_KEY: &str = "scopeRequestId";
 const REQUEST_OWNER_KEY: &str = "scopeRequestOwner";

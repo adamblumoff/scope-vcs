@@ -10,8 +10,7 @@ on:
       - "api/src/http/routes.rs"
       - "api/src/http/type_exports.rs"
       - "cli/**"
-      - "crates/scope-api-contract/**"
-      - "crates/scope-core/**"
+      - "crates/**"
       - "rust-toolchain.toml"
       - "web/src/api/types.generated.ts"
   push:
@@ -25,8 +24,7 @@ on:
       - "api/src/http/routes.rs"
       - "api/src/http/type_exports.rs"
       - "cli/**"
-      - "crates/scope-api-contract/**"
-      - "crates/scope-core/**"
+      - "crates/**"
       - "rust-toolchain.toml"
       - "web/src/api/types.generated.ts"
   workflow_dispatch:
@@ -216,14 +214,14 @@ jobs:
           cp -a cli/. .railway-upload/cli/
           cp rust-toolchain.toml .railway-upload/cli/rust-toolchain.toml
           cp -a crates/scope-api-contract .railway-upload/cli/crates/scope-api-contract
-          cp -a crates/scope-core .railway-upload/cli/crates/scope-core
+          cp -a crates/scope-domain .railway-upload/cli/crates/scope-domain
           perl -0pi -e 's#path = "\.\./crates/scope-api-contract"#path = "crates/scope-api-contract"#' .railway-upload/cli/Cargo.toml
-          perl -0pi -e 's#path = "\.\./crates/scope-core"#path = "crates/scope-core"#' .railway-upload/cli/Cargo.toml
+          perl -0pi -e 's#path = "\.\./crates/scope-domain"#path = "crates/scope-domain"#' .railway-upload/cli/Cargo.toml
           grep -F 'path = "crates/scope-api-contract"' .railway-upload/cli/Cargo.toml
-          grep -F 'path = "crates/scope-core"' .railway-upload/cli/Cargo.toml
+          grep -F 'path = "crates/scope-domain"' .railway-upload/cli/Cargo.toml
           test -s .railway-upload/cli/railpack.json
           test -s .railway-upload/cli/crates/scope-api-contract/Cargo.toml
-          test -s .railway-upload/cli/crates/scope-core/Cargo.toml
+          test -s .railway-upload/cli/crates/scope-domain/Cargo.toml
           test ! -e .railway-upload/Cargo.toml
 
       - name: Install Railway CLI
