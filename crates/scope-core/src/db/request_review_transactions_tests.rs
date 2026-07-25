@@ -2,11 +2,11 @@ use super::MetadataStore;
 use crate::domain::{
     policy::Visibility,
     requests::{
-        AssessRequestInput, CreditLedgerEntryKind, GrantUserCreditsInput, MarkRequestReadyInput,
-        RecordRequestRevisionInput, RecordWorkingRequestUploadInput, RequestActorRole,
-        RequestAssessmentOutcome, RequestAudience, RequestEventKind, RequestReviewExitReason,
-        RequestState, ReturnRequestToWorkingInput, SetRequestHoldInput, StartRequestInput,
-        UpdateRequestDescriptionInput,
+        AssessRequestInput, CreditLedgerEntryKind, EditRequestIdentityInput, GrantUserCreditsInput,
+        MarkRequestReadyInput, RecordRequestRevisionInput, RecordWorkingRequestUploadInput,
+        RequestActorRole, RequestAssessmentOutcome, RequestAudience, RequestEventKind,
+        RequestReviewExitReason, RequestState, ReturnRequestToWorkingInput, SetRequestHoldInput,
+        StartRequestInput,
     },
     store::{
         AppCatalog, DEFAULT_GIT_FILE_MODE, RepoPublicationState, RepositoryMember,
@@ -556,12 +556,13 @@ async fn membership_revocation_blocks_private_author_lifecycle_commands() {
         .unwrap_err();
     assert!(working_error.message.contains("mutation access"));
     let edit_error = store
-        .update_request_description_with_review_invalidation(UpdateRequestDescriptionInput {
+        .edit_request_identity_with_review_invalidation(EditRequestIdentityInput {
             request_id: "req_private_edit".to_string(),
             actor_user_id: "user_public".to_string(),
-            actor_can_edit_description: true,
+            actor_can_edit_identity: true,
             event_id: "event_private_edit_after_removal".to_string(),
-            description_markdown: "revoked edit".to_string(),
+            title: None,
+            description_markdown: Some("revoked edit".to_string()),
             now_unix: 71,
         })
         .await

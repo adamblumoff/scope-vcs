@@ -94,16 +94,18 @@ pub enum RequestEventKind {
     Merged,
     Closed,
     Settled,
-    DescriptionEdited,
+    IdentityEdited,
     DiscussionResolved,
     DiscussionReopened,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(any(test, feature = "ts"), derive(ts_rs::TS))]
-pub struct RequestDescriptionAuditFact {
-    pub sha256: String,
-    pub byte_count: u64,
+pub struct RequestIdentityAuditFact {
+    pub title_sha256: String,
+    pub title_byte_count: u64,
+    pub description_sha256: String,
+    pub description_byte_count: u64,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -149,9 +151,9 @@ pub enum RequestEventPayload {
     Settled {
         settlement: super::RequestSettlement,
     },
-    DescriptionEdited {
-        before: RequestDescriptionAuditFact,
-        after: RequestDescriptionAuditFact,
+    IdentityEdited {
+        before: RequestIdentityAuditFact,
+        after: RequestIdentityAuditFact,
     },
     DiscussionResolved {
         discussion_id: String,

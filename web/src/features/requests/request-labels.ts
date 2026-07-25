@@ -39,7 +39,7 @@ const EVENT_LABELS = {
   Merged: 'Merged',
   Closed: 'Closed',
   Settled: 'Settled',
-  DescriptionEdited: 'Description edited',
+  IdentityEdited: 'Request edited',
   DiscussionResolved: 'Discussion resolved',
   DiscussionReopened: 'Discussion reopened',
 } as const satisfies Record<RequestWorkflowEventKind, string>
@@ -48,7 +48,6 @@ const MERGEABILITY = {
   Ready: { label: 'Clean merge available', tone: 'success' },
   Completed: { label: 'Completed', tone: 'neutral' },
   Working: { label: 'Working', tone: 'neutral' },
-  Held: { label: 'On hold', tone: 'warning' },
   NotMaintainer: { label: 'Maintainer required', tone: 'neutral' },
   MissingRequestBranch: { label: 'Branch missing', tone: 'warning' },
 } as const satisfies Record<
@@ -68,6 +67,14 @@ export function requestStatusTone(request: RequestLabelSource): BadgeTone {
   return request.state === 'Completed' && request.assessment_outcome
     ? ASSESSMENTS[request.assessment_outcome].tone
     : REQUEST_STATES[request.state].tone
+}
+
+export function requestCompletionMergeLabel(request: RequestLabelSource) {
+  return request.state === 'Completed' &&
+    request.assessment_outcome === 'Accepted' &&
+    request.mergeability.status === 'Completed'
+    ? 'Merged'
+    : 'Not merged'
 }
 
 export function requestAudienceLabel(request: RequestLabelSource) {
@@ -116,7 +123,7 @@ export function requestEventBody(event: RequestEvent) {
         .join(' · ')
     case 'ReturnedToWorking':
       return [
-        stringValue(value.reason),
+        reviewExitReason(value.reason),
         creditText(value.stake_credits, 'refunded'),
       ]
         .filter(Boolean)
@@ -136,6 +143,7 @@ export function requestEventBody(event: RequestEvent) {
       return [
         stringValue(value.outcome),
         stringValue(value.body_markdown),
+        creditText(value.stake_credits, 'at settlement'),
       ]
         .filter(Boolean)
         .join(' · ')
@@ -151,8 +159,8 @@ export function requestEventBody(event: RequestEvent) {
           ].join(' / ')
         : null
     }
-    case 'DescriptionEdited':
-      return 'The request description was updated.'
+    case 'IdentityEdited':
+      return 'The request title or description was updated.'
     case 'DiscussionResolved':
     case 'DiscussionReopened':
       return value.discussion_id
@@ -185,6 +193,20 @@ function oidText(value: unknown) {
   return typeof value === 'string' ? shortOid(value) : null
 }
 
+function reviewExitReason(value: unknown) {
+  switch (value) {
+    case 'AuthorReturned':
+      return 'Author returned to Working'
+    case 'ChangesRequested':
+      return 'Maintainer requested changes'
+    case 'RevisionPushed':
+      return 'Branch update invalidated review'
+    case 'ContentEdited':
+      return 'Request edit invalidated review'
+    default:
+      return null
+  }
+}
 function stringValue(value: unknown) {
   return typeof value === 'string' && value.trim() ? value : null
 }

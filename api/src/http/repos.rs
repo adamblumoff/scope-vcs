@@ -372,7 +372,7 @@ async fn repo_summary_response(
     state: &AppState,
     summary: RepoSummaryRead,
 ) -> Result<RepoSummaryResponse, ApiError> {
-    let open_request_count = state
+    let ready_for_review_count = state
         .metadata
         .requests_by_repo_id(&summary.id)
         .await?
@@ -388,7 +388,7 @@ async fn repo_summary_response(
         default_visibility: summary.default_visibility,
         change_version: summary.change_version,
         access: repository_access_response(summary.access),
-        open_request_count,
+        ready_for_review_count,
         request_permissions,
     })
 }

@@ -3,9 +3,9 @@ use crate::db::{AddRequestInviteeCommand, RemoveRequestInviteeCommand};
 use crate::domain::{
     policy::Visibility,
     requests::{
-        GrantUserCreditsInput, MarkRequestReadyInput, RecordRequestRevisionInput,
-        RecordWorkingRequestUploadInput, RequestActorRole, RequestAudience, RequestEventKind,
-        RequestState, SetRequestHoldInput, StartRequestInput, UpdateRequestDescriptionInput,
+        EditRequestIdentityInput, GrantUserCreditsInput, MarkRequestReadyInput,
+        RecordRequestRevisionInput, RecordWorkingRequestUploadInput, RequestActorRole,
+        RequestAudience, RequestEventKind, RequestState, SetRequestHoldInput, StartRequestInput,
     },
     store::{
         DEFAULT_GIT_FILE_MODE, RepoPublicationState, SourceBlob, StoredRepository, UserAccount,
@@ -16,7 +16,7 @@ use std::sync::Arc;
 use tokio::sync::Barrier;
 
 #[tokio::test]
-async fn held_maintainer_content_and_branch_mutations_invalidate_and_refund_atomically() {
+async fn held_maintainer_identity_and_branch_mutations_invalidate_and_refund_atomically() {
     let store = postgres_store();
     store
         .grant_user_credits(GrantUserCreditsInput {
@@ -31,12 +31,13 @@ async fn held_maintainer_content_and_branch_mutations_invalidate_and_refund_atom
     ready_and_hold(&store, "one", 10, 10).await;
 
     let author_error = store
-        .update_request_description_with_review_invalidation(UpdateRequestDescriptionInput {
+        .edit_request_identity_with_review_invalidation(EditRequestIdentityInput {
             request_id: "req_invalidate".to_string(),
             actor_user_id: "user_public".to_string(),
-            actor_can_edit_description: false,
+            actor_can_edit_identity: false,
             event_id: "event_author_edit".to_string(),
-            description_markdown: "Author edit".to_string(),
+            title: None,
+            description_markdown: Some("Author edit".to_string()),
             now_unix: 20,
         })
         .await
@@ -47,18 +48,20 @@ async fn held_maintainer_content_and_branch_mutations_invalidate_and_refund_atom
     ));
 
     let edited = store
-        .update_request_description_with_review_invalidation(UpdateRequestDescriptionInput {
+        .edit_request_identity_with_review_invalidation(EditRequestIdentityInput {
             request_id: "req_invalidate".to_string(),
             actor_user_id: "user_owner".to_string(),
-            actor_can_edit_description: false,
+            actor_can_edit_identity: false,
             event_id: "event_maintainer_edit".to_string(),
-            description_markdown: "Maintainer edit".to_string(),
+            title: Some("Maintainer title".to_string()),
+            description_markdown: Some("Maintainer edit".to_string()),
             now_unix: 21,
         })
         .await
         .unwrap();
     assert_eq!(edited.request.state, RequestState::Working);
     assert_eq!(edited.request.held_at_unix, None);
+    assert_eq!(edited.request.title, "Maintainer title");
     assert_eq!(edited.request.description_markdown, "Maintainer edit");
     assert_balance(&store, 100).await;
 
@@ -103,7 +106,7 @@ async fn held_maintainer_content_and_branch_mutations_invalidate_and_refund_atom
 }
 
 #[tokio::test]
-async fn unrelated_public_user_cannot_edit_description_or_invalidate_ready() {
+async fn unrelated_public_user_cannot_edit_identity_or_invalidate_ready() {
     let store = postgres_store();
     store
         .grant_user_credits(GrantUserCreditsInput {
@@ -132,12 +135,13 @@ async fn unrelated_public_user_cannot_edit_description_or_invalidate_ready() {
         .unwrap();
 
     let error = store
-        .update_request_description_with_review_invalidation(UpdateRequestDescriptionInput {
+        .edit_request_identity_with_review_invalidation(EditRequestIdentityInput {
             request_id: "req_invalidate".to_string(),
             actor_user_id: "user_collaborator".to_string(),
-            actor_can_edit_description: true,
+            actor_can_edit_identity: true,
             event_id: "event_unrelated_edit".to_string(),
-            description_markdown: "unrelated edit".to_string(),
+            title: None,
+            description_markdown: Some("unrelated edit".to_string()),
             now_unix: 20,
         })
         .await

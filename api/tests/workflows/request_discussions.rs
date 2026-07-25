@@ -30,20 +30,34 @@ async fn threaded_discussion_http_workflow_preserves_activity_and_read_contracts
     .await;
     assert_eq!(anonymous_create.status(), StatusCode::UNAUTHORIZED);
 
-    let description = api_request(
+    let identity = api_request(
         app.clone(),
         "PATCH",
-        &format!("{base}/description"),
+        &base,
         Some(&bearer),
-        Some(r###"{"description_markdown":"## Intent\nFix parser ownership."}"###),
+        Some(r###"{"title":"Fix parser ownership","description_markdown":"## Intent\nFix parser ownership."}"###),
     )
     .await;
-    assert_eq!(description.status(), StatusCode::OK);
-    let description = response_json(description).await;
+    assert_eq!(identity.status(), StatusCode::OK);
+    let identity = response_json(identity).await;
+    assert_eq!(identity["request"]["title"], "Fix parser ownership");
     assert_eq!(
-        description["request"]["description_markdown"],
+        identity["request"]["description_markdown"],
         "## Intent\nFix parser ownership."
     );
+
+    let empty_edit = api_request(app.clone(), "PATCH", &base, Some(&bearer), Some("{}")).await;
+    assert_eq!(empty_edit.status(), StatusCode::BAD_REQUEST);
+
+    let unchanged_edit = api_request(
+        app.clone(),
+        "PATCH",
+        &base,
+        Some(&bearer),
+        Some(r###"{"title":"Fix parser ownership"}"###),
+    )
+    .await;
+    assert_eq!(unchanged_edit.status(), StatusCode::CONFLICT);
 
     let events = api_request(
         app.clone(),
@@ -236,7 +250,7 @@ async fn threaded_discussion_http_workflow_preserves_activity_and_read_contracts
         kinds,
         vec![
             "Started",
-            "DescriptionEdited",
+            "IdentityEdited",
             "DiscussionResolved",
             "DiscussionReopened",
         ]
@@ -275,12 +289,13 @@ async fn request_activity_clamps_latest_and_after_pages_to_fifty_events() {
     for index in 0..52 {
         state
             .metadata
-            .update_request_description(crate::domain::requests::UpdateRequestDescriptionInput {
+            .edit_request_identity(crate::domain::requests::EditRequestIdentityInput {
                 request_id: request_id.to_string(),
                 actor_user_id: test_owner_id(),
-                actor_can_edit_description: false,
+                actor_can_edit_identity: false,
                 event_id: format!("event_description_{index}"),
-                description_markdown: format!("description {index}"),
+                title: None,
+                description_markdown: Some(format!("description {index}")),
                 now_unix: 10 + index,
             })
             .await

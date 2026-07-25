@@ -9,6 +9,8 @@ pub mod repo_visibility;
 #[cfg(test)]
 mod request_change_block_tests;
 #[cfg(test)]
+mod request_identity_tests;
+#[cfg(test)]
 mod request_review_lifecycle_tests;
 pub mod requests;
 #[cfg(test)]
