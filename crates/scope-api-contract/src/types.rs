@@ -363,8 +363,19 @@ pub struct RequestSummaryResponse {
     pub created_at_unix: u64,
     pub updated_at_unix: u64,
     pub invitees: Vec<RequestInviteeResponse>,
+    pub assessment_previews: Vec<RequestSettlementPreviewResponse>,
     pub permissions: RequestPermissionsResponse,
     pub mergeability: RequestMergeabilityResponse,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
+pub struct RequestSettlementPreviewResponse {
+    pub outcome: RequestAssessmentOutcome,
+    pub stake_credits: u32,
+    pub refunded_credits: u32,
+    pub reward_credits: u32,
+    pub burned_credits: u32,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -421,6 +432,7 @@ pub struct RequestListItemResponse {
 #[derive(Clone, Debug, Deserialize, Serialize)]
 #[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 pub struct RequestPermissionsResponse {
+    pub can_view_activity: bool,
     pub can_open_discussion: bool,
     pub can_reply_to_discussion: bool,
     pub can_edit_identity: bool,
@@ -431,6 +443,7 @@ pub struct RequestPermissionsResponse {
     pub can_manage_invitees: bool,
     pub can_leave_request: bool,
     pub can_hold: bool,
+    pub can_request_changes: bool,
     pub can_assess: bool,
     pub can_close: bool,
     pub can_merge: bool,

@@ -816,8 +816,10 @@ async fn request_response_for_viewer(
     } else {
         Vec::new()
     };
+    let can_view_activity = policy.activity_stream_visible;
     let decision = policy.permissions;
     let permissions = RequestPermissionsResponse {
+        can_view_activity,
         can_open_discussion: decision.can_open_discussion,
         can_reply_to_discussion: decision.can_reply_to_discussion,
         can_edit_identity: decision.can_edit_identity,
@@ -828,6 +830,7 @@ async fn request_response_for_viewer(
         can_manage_invitees: decision.can_manage_invitees,
         can_leave_request: decision.can_leave_request,
         can_hold: decision.can_hold,
+        can_request_changes: decision.can_request_changes,
         can_assess: decision.can_assess,
         can_close: decision.can_close,
         can_merge: decision.can_merge,
