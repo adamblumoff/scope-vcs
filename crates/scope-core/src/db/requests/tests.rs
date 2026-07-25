@@ -29,6 +29,11 @@ async fn discussion_transactions_are_idempotent_atomic_and_self_read() {
         })
         .await
         .unwrap();
+    let mut request = store.request_for_tests("req_1").await.unwrap().unwrap();
+    request.first_ready_at_unix = Some(11);
+    request.ready_queue_version = Some(1);
+    request.updated_at_unix = 11;
+    save_request_row(store.db.as_ref(), &request).await.unwrap();
     store
         .create_request_discussion_reply(CreateRequestDiscussionReplyInput {
             request_id: "req_1".to_string(),

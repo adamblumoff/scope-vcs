@@ -89,9 +89,9 @@ pub(super) struct RequestReadyArgs {
     #[arg(
         long,
         value_name = "CREDITS",
-        help = "Credits to stake; ignored for maintainer/member-authored requests"
+        help = "Credits to stake (required for public authors; ignored for owner/member authors)"
     )]
-    pub(super) stake: u32,
+    pub(super) stake: Option<u32>,
     #[arg(long, help = "Confirm publication and the credit stake")]
     pub(super) yes: bool,
 }
