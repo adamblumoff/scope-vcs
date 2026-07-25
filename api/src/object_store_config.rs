@@ -1,5 +1,3 @@
-#[cfg(feature = "local-dev")]
-use crate::config::SCOPE_OBJECT_STORE_DIR_ENV;
 use crate::config::{
     SCOPE_BUCKET_ACCESS_KEY_ID_ENV, SCOPE_BUCKET_ENDPOINT_ENV, SCOPE_BUCKET_FORCE_PATH_STYLE_ENV,
     SCOPE_BUCKET_NAME_ENV, SCOPE_BUCKET_REGION_ENV, SCOPE_BUCKET_SECRET_ACCESS_KEY_ENV,
@@ -11,6 +9,9 @@ use scope_object_store::{FileObjectStore, FileObjectStoreSettings};
 use scope_object_store::{S3ObjectStore, S3ObjectStoreSettings};
 #[cfg(feature = "local-dev")]
 use std::path::{Path, PathBuf};
+
+#[cfg(feature = "local-dev")]
+const SCOPE_OBJECT_STORE_DIR_ENV: &str = "SCOPE_OBJECT_STORE_DIR";
 
 pub(crate) fn encryption_key_from_env() -> anyhow::Result<[u8; 32]> {
     let encoded = required_env(SCOPE_OBJECT_ENCRYPTION_KEY_ENV)?;
