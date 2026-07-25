@@ -50,6 +50,10 @@ const UPDATE_DEMO_TROUBLESHOOTING: &str =
     "# Troubleshooting\n\nExplain how to recover when the remote is unavailable.\n";
 const UPDATE_DEMO_CLI_EXPERIMENT: &str =
     "experimental output: checking repository state before push\n";
+const UPDATE_DEMO_QUEUE_DRAFT: &str =
+    "# Request queue copy\n\nTighten the language before asking for review.\n";
+const UPDATE_DEMO_CACHE_NOTE: &str =
+    "# Cache note\n\nRecord the tradeoff without changing repository behavior.\n";
 
 pub(super) fn catalog(
     object_store: &dyn ObjectStore,
@@ -205,9 +209,11 @@ struct SeedRequest {
 }
 
 enum SeedRequestOutcome {
+    Working,
     ReadyForReview,
     Held,
     Accepted,
+    Neutral,
     Rejected,
 }
 
@@ -324,9 +330,12 @@ fn seed_owner_request(
     }
 
     let request = catalog.requests.get_mut(id).expect("seed request exists");
-    request.first_ready_at_unix = Some(lifecycle_at_unix);
-    request.ready_queue_version = Some(lifecycle_at_unix);
+    if !matches!(outcome, SeedRequestOutcome::Working) {
+        request.first_ready_at_unix = Some(lifecycle_at_unix);
+        request.ready_queue_version = Some(lifecycle_at_unix);
+    }
     match outcome {
+        SeedRequestOutcome::Working => {}
         SeedRequestOutcome::ReadyForReview => {
             request.state = crate::domain::requests::RequestState::ReadyForReview;
             request.ready_at_unix = Some(lifecycle_at_unix);
@@ -350,6 +359,16 @@ fn seed_owner_request(
             request.merged_head_oid = Some(current_head_oid.clone());
             request.merged_main_oid = Some(current_head_oid);
         }
+        SeedRequestOutcome::Neutral => {
+            request.state = crate::domain::requests::RequestState::Completed;
+            request.assessment_outcome = Some(RequestAssessmentOutcome::Neutral);
+            request.assessment_body_markdown =
+                Some("Useful context, with no action needed.".to_string());
+            request.assessed_at_unix = Some(lifecycle_at_unix + 1);
+            request.assessed_by_user_id = Some(owner.id.clone());
+            request.completed_at_unix = Some(lifecycle_at_unix + 1);
+            request.completed_by_user_id = Some(owner.id.clone());
+        }
         SeedRequestOutcome::Rejected => {
             request.state = crate::domain::requests::RequestState::Completed;
             request.assessment_outcome = Some(RequestAssessmentOutcome::Rejected);
@@ -362,10 +381,11 @@ fn seed_owner_request(
         }
     }
     request.updated_at_unix = match outcome {
-        SeedRequestOutcome::ReadyForReview => lifecycle_at_unix,
-        SeedRequestOutcome::Held | SeedRequestOutcome::Accepted | SeedRequestOutcome::Rejected => {
-            lifecycle_at_unix + 1
-        }
+        SeedRequestOutcome::Working | SeedRequestOutcome::ReadyForReview => lifecycle_at_unix,
+        SeedRequestOutcome::Held
+        | SeedRequestOutcome::Accepted
+        | SeedRequestOutcome::Neutral
+        | SeedRequestOutcome::Rejected => lifecycle_at_unix + 1,
     };
     request.validate_facts()?;
     Ok(())
@@ -518,7 +538,33 @@ fn update_demo_git_snapshot(
             },
             &main_oid,
         )?;
+        let working_oid = seed_request_branch(
+            repo_path,
+            "request-queue-copy",
+            SeedGitCommit {
+                files: &[("docs/request-queue.md", UPDATE_DEMO_QUEUE_DRAFT)],
+                message: "Draft request queue copy",
+            },
+            &main_oid,
+        )?;
+        let neutral_oid = seed_request_branch(
+            repo_path,
+            "cache-observability-note",
+            SeedGitCommit {
+                files: &[("docs/cache-note.md", UPDATE_DEMO_CACHE_NOTE)],
+                message: "Document cache tradeoff",
+            },
+            &main_oid,
+        )?;
         let (main_head, main_segment) = store_seed_git_segment(object_store, repo, repo_path)?;
+        let working_snapshot = store_seed_bundle(
+            object_store,
+            repo,
+            repo_path,
+            "req_demo_working",
+            &[&canonical_request_ref("request-queue-copy")],
+            &working_oid,
+        )?;
         let held_snapshot = store_seed_bundle(
             object_store,
             repo,
@@ -543,7 +589,28 @@ fn update_demo_git_snapshot(
             &[&canonical_request_ref("verbose-cli-output")],
             &rejected_oid,
         )?;
+        let neutral_snapshot = store_seed_bundle(
+            object_store,
+            repo,
+            repo_path,
+            "req_demo_neutral",
+            &[&canonical_request_ref("cache-observability-note")],
+            &neutral_oid,
+        )?;
         let gallery = vec![
+            SeedRequest {
+                id: "req_demo_working",
+                name: "request-queue-copy",
+                title: "Tighten request queue copy",
+                base_oid: main_oid.clone(),
+                head_oid: working_oid,
+                snapshot: working_snapshot,
+                description_markdown: Some("A private working draft for the request author."),
+                revisions: Vec::new(),
+                outcome: SeedRequestOutcome::Working,
+                audience: RequestAudience::Public,
+                now_unix: 1_800_000_050,
+            },
             SeedRequest {
                 id: "req_demo_ready",
                 name: "bounded-retry-timing",
@@ -587,7 +654,7 @@ fn update_demo_git_snapshot(
                 id: "req_demo_rejected",
                 name: "verbose-cli-output",
                 title: "Try verbose CLI output",
-                base_oid: main_oid,
+                base_oid: main_oid.clone(),
                 head_oid: rejected_oid,
                 snapshot: rejected_snapshot,
                 description_markdown: None,
@@ -595,6 +662,19 @@ fn update_demo_git_snapshot(
                 outcome: SeedRequestOutcome::Rejected,
                 audience: RequestAudience::Private,
                 now_unix: 1_800_000_400,
+            },
+            SeedRequest {
+                id: "req_demo_neutral",
+                name: "cache-observability-note",
+                title: "Document the cache tradeoff",
+                base_oid: main_oid,
+                head_oid: neutral_oid,
+                snapshot: neutral_snapshot,
+                description_markdown: Some("A public completed request with a neutral assessment."),
+                revisions: Vec::new(),
+                outcome: SeedRequestOutcome::Neutral,
+                audience: RequestAudience::Public,
+                now_unix: 1_800_000_500,
             },
         ];
         Ok((main_head, main_segment, gallery))

@@ -69,6 +69,14 @@ export function requestStatusTone(request: RequestLabelSource): BadgeTone {
     : REQUEST_STATES[request.state].tone
 }
 
+export function requestCompletionMergeLabel(request: RequestLabelSource) {
+  return request.state === 'Completed' &&
+    request.assessment_outcome === 'Accepted' &&
+    request.mergeability.status === 'Completed'
+    ? 'Merged'
+    : 'Not merged'
+}
+
 export function requestAudienceLabel(request: RequestLabelSource) {
   return request.audience === 'Private' ? 'Private request' : 'Public request'
 }
@@ -115,7 +123,7 @@ export function requestEventBody(event: RequestEvent) {
         .join(' · ')
     case 'ReturnedToWorking':
       return [
-        stringValue(value.reason),
+        reviewExitReason(value.reason),
         creditText(value.stake_credits, 'refunded'),
       ]
         .filter(Boolean)
@@ -135,6 +143,7 @@ export function requestEventBody(event: RequestEvent) {
       return [
         stringValue(value.outcome),
         stringValue(value.body_markdown),
+        creditText(value.stake_credits, 'at settlement'),
       ]
         .filter(Boolean)
         .join(' · ')
@@ -184,6 +193,20 @@ function oidText(value: unknown) {
   return typeof value === 'string' ? shortOid(value) : null
 }
 
+function reviewExitReason(value: unknown) {
+  switch (value) {
+    case 'AuthorReturned':
+      return 'Author returned to Working'
+    case 'ChangesRequested':
+      return 'Maintainer requested changes'
+    case 'RevisionPushed':
+      return 'Branch update invalidated review'
+    case 'ContentEdited':
+      return 'Request edit invalidated review'
+    default:
+      return null
+  }
+}
 function stringValue(value: unknown) {
   return typeof value === 'string' && value.trim() ? value : null
 }

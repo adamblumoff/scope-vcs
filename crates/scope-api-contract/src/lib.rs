@@ -12,8 +12,8 @@ pub use scope_core::{
         policy::Visibility,
         requests::{
             RequestActorRole, RequestAssessmentOutcome, RequestAudience, RequestDiscussionStatus,
-            RequestEventKind, RequestEventPayload, RequestMergeabilityStatus, RequestSettlement,
-            RequestState,
+            RequestEventKind, RequestEventPayload, RequestMergeabilityStatus, RequestQueueSection,
+            RequestSettlement, RequestState,
         },
         store::{FirstPushTokenStatus, RepoPublicationState, RepositoryActor},
     },

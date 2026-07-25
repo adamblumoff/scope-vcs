@@ -1,9 +1,10 @@
 use super::*;
 
 mod helpers;
+mod queue;
 pub(super) use helpers::{create_owner_request, create_public_request};
 
-use crate::domain::requests::RequestState;
+use crate::domain::requests::{GrantUserCreditsInput, RequestState};
 use scope_core::db::AddRequestInviteeCommand;
 
 const REQUEST_HEAD: &str = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
@@ -143,6 +144,14 @@ async fn maintainer_request_lifecycle_routes_delegate_to_atomic_commands() {
     let ready = response_json(ready).await;
     assert_eq!(ready["request"]["state"], "ReadyForReview");
     assert_eq!(ready["request"]["current_stake_credits"], 0);
+    assert_eq!(ready["request"]["permissions"]["can_request_changes"], true);
+    assert_eq!(
+        ready["request"]["assessment_previews"]
+            .as_array()
+            .unwrap()
+            .len(),
+        3
+    );
 
     let held = api_request(
         app.clone(),
@@ -382,6 +391,10 @@ async fn request_reads_apply_one_viewer_aware_policy_across_lists_and_exact_surf
         true
     );
     assert_eq!(
+        invitee_detail["request"]["permissions"]["can_view_activity"],
+        true
+    );
+    assert_eq!(
         invitee_detail["request"]["permissions"]["can_open_discussion"],
         true
     );
@@ -409,7 +422,7 @@ async fn request_reads_apply_one_viewer_aware_policy_across_lists_and_exact_surf
         request_ids(&maintainer_list),
         vec!["req_private_matrix", "req_ready_public"]
     );
-    for request_id in ["req_never", "req_previous", "req_private_matrix"] {
+    for request_id in ["req_previous", "req_private_matrix"] {
         assert_eq!(
             api_request(
                 app.clone(),
@@ -423,8 +436,47 @@ async fn request_reads_apply_one_viewer_aware_policy_across_lists_and_exact_surf
             StatusCode::OK
         );
     }
+    for suffix in ["req_never", "req_never/timeline", "req_never/activity"] {
+        assert_eq!(
+            api_request(
+                app.clone(),
+                "GET",
+                &format!("/v1/repos/owner/repo/requests/{suffix}"),
+                Some(&bearer_header()),
+                None,
+            )
+            .await
+            .status(),
+            StatusCode::NOT_FOUND
+        );
+    }
+    assert_eq!(
+        api_request(
+            app.clone(),
+            "PATCH",
+            "/v1/repos/owner/repo/requests/req_never",
+            Some(&bearer_header()),
+            Some(r#"{"title":"Maintainer must not see this"}"#),
+        )
+        .await
+        .status(),
+        StatusCode::NOT_FOUND
+    );
+    assert_eq!(
+        api_request(
+            app,
+            "POST",
+            "/v1/repos/owner/repo/requests/req_never/timeline",
+            Some(&bearer_header()),
+            Some(
+                r#"{"body_markdown":"Maintainer must not see this","client_discussion_id":"hidden"}"#,
+            ),
+        )
+        .await
+        .status(),
+        StatusCode::NOT_FOUND
+    );
 }
-
 #[tokio::test]
 async fn invitee_routes_enforce_exact_handles_roles_leave_and_private_exclusion() {
     let state = test_state_with_readme().await;
@@ -439,9 +491,10 @@ async fn invitee_routes_enforce_exact_handles_roles_leave_and_private_exclusion(
     ] {
         state.metadata.insert_user_for_tests(user).await.unwrap();
     }
-    create_public_request(&state, "req_invites", author_id, REQUEST_HEAD).await;
+    create_public_request(&state, "req_invites", author_id.clone(), REQUEST_HEAD).await;
+    create_public_request(&state, "req_held_invites", author_id.clone(), REQUEST_HEAD).await;
     create_owner_request(&state, "req_private_invites", REQUEST_HEAD).await;
-    let app = router(state);
+    let app = router(state.clone());
     let author = bearer_header_for("invite_author", "invite-author@example.com");
     let invitee = bearer_header_for("invite_target", "invite-target@example.com");
 
@@ -467,6 +520,80 @@ async fn invitee_routes_enforce_exact_handles_roles_leave_and_private_exclusion(
     let added = response_json(added).await;
     assert_eq!(added["invitee"]["user"]["handle"], "invite-target");
     assert_eq!(added["request"]["invitees"].as_array().unwrap().len(), 1);
+    let held_added = api_request(
+        app.clone(),
+        "PUT",
+        "/v1/repos/owner/repo/requests/req_held_invites/invitees",
+        Some(&author),
+        Some(r#"{"handle":"invite-target"}"#),
+    )
+    .await;
+    assert_eq!(held_added.status(), StatusCode::OK);
+
+    state
+        .metadata
+        .grant_user_credits(GrantUserCreditsInput {
+            ledger_entry_id: "ledger_invite_author_starter".to_string(),
+            user_id: author_id.clone(),
+            amount_credits: 100,
+            now_unix: 4,
+        })
+        .await
+        .unwrap();
+    let ready = api_request(
+        app.clone(),
+        "POST",
+        "/v1/repos/owner/repo/requests/req_held_invites/ready",
+        Some(&author),
+        Some(r#"{"stake_credits":1}"#),
+    )
+    .await;
+    assert_eq!(ready.status(), StatusCode::OK);
+    let ready = response_json(ready).await;
+    assert_eq!(
+        ready["request"]["assessment_previews"][0]["outcome"],
+        "Accepted"
+    );
+    assert_eq!(
+        ready["request"]["assessment_previews"][0]["refunded_credits"],
+        1
+    );
+    assert_eq!(
+        ready["request"]["assessment_previews"][0]["reward_credits"],
+        1
+    );
+
+    let held = api_request(
+        app.clone(),
+        "PUT",
+        "/v1/repos/owner/repo/requests/req_held_invites/hold",
+        Some(&bearer_header()),
+        None,
+    )
+    .await;
+    assert_eq!(held.status(), StatusCode::OK);
+    let held = response_json(held).await;
+    assert_eq!(held["request"]["permissions"]["can_leave_request"], false);
+
+    let held_leave = api_request(
+        app.clone(),
+        "DELETE",
+        "/v1/repos/owner/repo/requests/req_held_invites/invitees/me",
+        Some(&invitee),
+        None,
+    )
+    .await;
+    assert_eq!(held_leave.status(), StatusCode::FORBIDDEN);
+
+    let released = api_request(
+        app.clone(),
+        "DELETE",
+        "/v1/repos/owner/repo/requests/req_held_invites/hold",
+        Some(&bearer_header()),
+        None,
+    )
+    .await;
+    assert_eq!(released.status(), StatusCode::OK);
 
     let invitee_manage = api_request(
         app.clone(),
@@ -499,6 +626,16 @@ async fn invitee_routes_enforce_exact_handles_roles_leave_and_private_exclusion(
         .status(),
         StatusCode::NOT_FOUND
     );
+
+    state
+        .metadata
+        .mutate_request_for_tests("req_invites", |request| {
+            request.first_ready_at_unix = Some(5);
+            request.ready_queue_version = Some(1);
+            request.updated_at_unix = 5;
+        })
+        .await
+        .unwrap();
 
     let maintainer_add = api_request(
         app.clone(),

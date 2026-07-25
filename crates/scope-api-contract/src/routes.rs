@@ -20,6 +20,7 @@ pub const REPO: &str = "/v1/repos/{owner}/{repo}";
 pub const REPO_CONFIG: &str = "/v1/repos/{owner}/{repo}/config";
 pub const REPO_PUSH_INTENTS: &str = "/v1/repos/{owner}/{repo}/push-intents";
 pub const REPO_REQUESTS: &str = "/v1/repos/{owner}/{repo}/requests";
+pub const REPO_REQUEST_QUEUE: &str = "/v1/repos/{owner}/{repo}/requests/queue";
 pub const REPO_REQUEST: &str = "/v1/repos/{owner}/{repo}/requests/{request_id}";
 pub const REPO_REQUEST_READY: &str = "/v1/repos/{owner}/{repo}/requests/{request_id}/ready";
 pub const REPO_REQUEST_WORKING: &str = "/v1/repos/{owner}/{repo}/requests/{request_id}/working";

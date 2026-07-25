@@ -50,16 +50,24 @@ pub(super) fn ready_request(
     api_url: &str,
     session_token: &str,
     target: RequestTargetArgs,
-    stake: u32,
+    stake: Option<u32>,
     yes: bool,
 ) -> anyhow::Result<()> {
     let (context, request_id, before) =
         load_exact_request(git_repo, client, api_url, session_token, target)?;
     let uses_credits =
         before.request.author_role == scope_core::domain::requests::RequestActorRole::Public;
+    let stake = ready_stake(uses_credits, stake)?;
+    let stake_credits = stake.unwrap_or_default();
     let prompt = match (before.request.first_ready_at_unix.is_none(), uses_credits) {
-        (true, true) => format!("This publishes the request and holds {stake} credits"),
-        (false, true) => format!("This holds {stake} credits and returns the request to review"),
+        (true, true) => format!(
+            "This publishes the request and holds {} credits",
+            stake_credits
+        ),
+        (false, true) => format!(
+            "This holds {} credits and returns the request to review",
+            stake_credits
+        ),
         (true, false) => "This publishes the request for review".to_string(),
         (false, false) => "This returns the request to review".to_string(),
     };
@@ -69,10 +77,23 @@ pub(super) fn ready_request(
         api_url,
         session_token,
         api_target(&context, &request_id),
-        uses_credits.then_some(stake),
+        stake,
     )?;
     print_request_mutation_receipt("Ready for review", Some(&before.request), &response);
     Ok(())
+}
+
+pub(super) fn ready_stake(uses_credits: bool, stake: Option<u32>) -> anyhow::Result<Option<u32>> {
+    if uses_credits {
+        stake.map(Some).ok_or_else(|| {
+            let max = scope_core::domain::requests::REQUEST_MAX_STAKE_CREDITS;
+            anyhow::anyhow!(
+                "--stake <CREDITS> is required for public-authored requests (1–{max} credits)"
+            )
+        })
+    } else {
+        Ok(None)
+    }
 }
 
 pub(super) fn working_request(

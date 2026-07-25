@@ -461,16 +461,27 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn maintainer_can_remove_but_cannot_be_added_as_an_invitee() {
+    async fn maintainer_can_manage_invitees_after_work_was_published() {
         let store = postgres_store(2);
         start_public_request(&store, "request_override").await;
         store
             .add_request_invitee(AddRequestInviteeCommand {
                 request_id: "request_override".to_string(),
-                actor_user_id: "user_owner".to_string(),
+                actor_user_id: "user_author".to_string(),
                 target_handle: "target-0".to_string(),
                 now_unix: 3,
             })
+            .await
+            .unwrap();
+        let mut request = store
+            .request_for_tests("request_override")
+            .await
+            .unwrap()
+            .unwrap();
+        request.first_ready_at_unix = Some(4);
+        request.ready_queue_version = Some(1);
+        request.updated_at_unix = 4;
+        super::super::request_rows::save_request_row(store.db.as_ref(), &request)
             .await
             .unwrap();
         let removed = store

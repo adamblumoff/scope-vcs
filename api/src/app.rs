@@ -95,6 +95,10 @@ pub fn router(state: AppState) -> Router {
             get(http::requests::list_requests).post(http::requests::start_request),
         )
         .route(
+            routes::REPO_REQUEST_QUEUE,
+            get(http::request_queue::request_queue),
+        )
+        .route(
             routes::REPO_REQUEST,
             get(http::requests::get_request)
                 .patch(http::requests::edit_request_identity)
