@@ -1,9 +1,11 @@
 mod compaction;
 mod git_repo;
+mod health;
 mod settings;
 
 use crate::{
     compaction::{CompactionOutcome, compact_one_git_repository},
+    health::WorkerHealth,
     settings::WorkerSettings,
 };
 use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64};
@@ -31,6 +33,7 @@ const SCOPE_OBJECT_STORE_DIR_ENV: &str = "SCOPE_OBJECT_STORE_DIR";
 
 const SCHEMA_WAIT_RETRY_SECS: u64 = 2;
 const COMPACTION_RETRY_SECS: u64 = 30;
+const CLEANUP_RETRY_SECS: u64 = 30;
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
@@ -49,6 +52,7 @@ async fn run() -> anyhow::Result<()> {
     let settings = WorkerSettings::from_env()?;
     tracing::info!(
         worker_id = %settings.worker_id,
+        health_port = settings.health_port,
         batch_size = settings.batch_size,
         poll_interval_ms = settings.poll_interval.as_millis(),
         schema_wait_secs = settings.schema_wait_timeout.as_secs(),
@@ -59,28 +63,60 @@ async fn run() -> anyhow::Result<()> {
         "starting worker"
     );
 
+    let health = WorkerHealth::new(settings.poll_interval);
+    let health_server = health.clone().serve(settings.health_port);
+    let worker = run_worker(settings, health);
+    tokio::try_join!(health_server, worker)?;
+    Ok(())
+}
+
+async fn run_worker(settings: WorkerSettings, health: WorkerHealth) -> anyhow::Result<()> {
     let metadata = MetadataStore::connect_worker_with_schema_wait(
         settings.database_url.clone(),
+        deploy_revision(),
         settings.schema_wait_timeout,
         Duration::from_secs(SCHEMA_WAIT_RETRY_SECS),
     )
     .await?;
-    metadata
-        .admin()
-        .readiness_check()
-        .await
-        .map_err(|error| anyhow::anyhow!("metadata readiness check failed: {}", error.message))?;
     let object_store = object_store_from_env(&settings.data_dir)?;
 
     let mut next_compaction_attempt = Instant::now();
+    let mut next_cleanup_attempt = Instant::now();
     loop {
-        let summary = metadata
+        if let Err(error) = metadata.admin().readiness_check().await {
+            health.mark_schema_waiting();
+            tracing::warn!(
+                error = %error.message,
+                retry_in_secs = SCHEMA_WAIT_RETRY_SECS,
+                "metadata schema revision changed; pausing worker"
+            );
+            if wait_or_shutdown(Duration::from_secs(SCHEMA_WAIT_RETRY_SECS)).await {
+                return Ok(());
+            }
+            continue;
+        }
+
+        let summary = match metadata
             .jobs()
             .run_ready_outbox_jobs(&settings.worker_id, settings.batch_size, &|| {
                 unix_now().map_err(|error| error.to_string())
             })
             .await
-            .map_err(|error| anyhow::anyhow!("running outbox jobs: {}", error.message))?;
+        {
+            Ok(summary) => summary,
+            Err(error) => {
+                health.mark_schema_waiting();
+                tracing::error!(
+                    error = %error.message,
+                    retry_in_secs = SCHEMA_WAIT_RETRY_SECS,
+                    "outbox polling failed; pausing worker"
+                );
+                if wait_or_shutdown(Duration::from_secs(SCHEMA_WAIT_RETRY_SECS)).await {
+                    return Ok(());
+                }
+                continue;
+            }
+        };
         if summary.claimed > 0 {
             tracing::info!(
                 claimed = summary.claimed,
@@ -126,15 +162,29 @@ async fn run() -> anyhow::Result<()> {
                 }
             }
         }
-        let orphan_summary = drain_orphan_objects(&metadata, object_store.as_ref()).await?;
-        if orphan_summary.attempted > 0 {
-            tracing::info!(
-                attempted = orphan_summary.attempted,
-                deleted = orphan_summary.deleted,
-                retained = orphan_summary.retained,
-                "processed orphan object jobs"
-            );
+        if Instant::now() >= next_cleanup_attempt {
+            match drain_orphan_objects(&metadata, object_store.as_ref()).await {
+                Ok(orphan_summary) => {
+                    if orphan_summary.attempted > 0 {
+                        tracing::info!(
+                            attempted = orphan_summary.attempted,
+                            deleted = orphan_summary.deleted,
+                            retained = orphan_summary.retained,
+                            "processed orphan object jobs"
+                        );
+                    }
+                }
+                Err(error) => {
+                    next_cleanup_attempt = Instant::now() + Duration::from_secs(CLEANUP_RETRY_SECS);
+                    tracing::error!(
+                        error = %error,
+                        retry_seconds = CLEANUP_RETRY_SECS,
+                        "orphan object cleanup failed; continuing projection processing"
+                    );
+                }
+            }
         }
+        health.mark_poll_succeeded(unix_now()?);
 
         if summary.claimed >= settings.batch_size {
             continue;
@@ -148,6 +198,17 @@ async fn run() -> anyhow::Result<()> {
             () = tokio::time::sleep(settings.poll_interval) => {}
         }
     }
+}
+
+async fn wait_or_shutdown(duration: Duration) -> bool {
+    tokio::select! {
+        () = shutdown_signal() => true,
+        () = tokio::time::sleep(duration) => false,
+    }
+}
+
+fn deploy_revision() -> &'static str {
+    include_str!("../railway-deploy-ref.txt").trim()
 }
 
 fn unix_now() -> anyhow::Result<u64> {

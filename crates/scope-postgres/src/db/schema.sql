@@ -89,6 +89,15 @@ CREATE TABLE scope_metadata_locks (
 );
 
 
+CREATE TABLE scope_metadata_schema (
+    key character varying NOT NULL,
+    version bigint NOT NULL,
+    deploy_revision character varying NOT NULL,
+    ready boolean NOT NULL,
+    PRIMARY KEY (key)
+);
+
+
 --
 -- Name: scope_metadata_reset_events; Type: TABLE; Schema: scope_test_2249234_1783653779131957768; Owner: -
 --

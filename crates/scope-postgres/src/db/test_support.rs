@@ -1,7 +1,7 @@
 use super::{
     AdminStore, CatalogFixture, acquire_aggregate_lock,
     cleanup_queue::{save_pending_repo_storage_deletions, save_pending_source_blob_deletions},
-    ensure_metadata_lock_row, entities,
+    entities,
     repository_rows::insert_repository,
     request_change_block_rows::insert_change_block,
     request_discussion_rows::{insert_discussion, insert_reply, save_read_state},
@@ -116,9 +116,7 @@ pub fn connect_postgres_test_store(target: &TestDatabaseTarget) -> anyhow::Resul
             .min_connections(1)
             .set_schema_search_path(schema_name);
         let db = Database::connect(options).await?;
-        schema::reset_metadata_schema(&db).await?;
-        schema::migrate_metadata_schema(&db).await?;
-        ensure_metadata_lock_row(&db).await?;
+        schema::initialize_metadata_schema(&db, "local").await?;
         Ok::<_, sea_orm::DbErr>(db)
     })?;
 
@@ -131,6 +129,7 @@ pub fn connect_postgres_test_store(target: &TestDatabaseTarget) -> anyhow::Resul
     Ok(MetadataStore {
         db,
         postgres_database_url: Some(Arc::from(target.database_url.clone())),
+        deploy_revision: Arc::from("local"),
         _test_schema: Some(Arc::new(test_schema)),
     })
 }
@@ -141,7 +140,7 @@ impl AdminStore {
         &self,
         catalog: CatalogFixture,
     ) -> Result<(), PostgresError> {
-        replace_catalog(self.db.as_ref(), catalog).await
+        replace_catalog(self.db.as_ref(), self.deploy_revision.as_ref(), catalog).await
     }
 
     #[cfg(any(test, feature = "test-support"))]
@@ -415,19 +414,14 @@ where
 #[cfg(feature = "local-dev")]
 async fn replace_catalog(
     db: &sea_orm::DatabaseConnection,
+    deploy_revision: &str,
     catalog: CatalogFixture,
 ) -> Result<(), PostgresError> {
     let reset_events = entities::metadata_reset_event::Entity::find()
         .all(db)
         .await
         .map_err(PostgresError::internal)?;
-    schema::reset_metadata_schema(db)
-        .await
-        .map_err(PostgresError::internal)?;
-    schema::migrate_metadata_schema(db)
-        .await
-        .map_err(PostgresError::internal)?;
-    ensure_metadata_lock_row(db)
+    schema::recreate_metadata_schema(db, deploy_revision)
         .await
         .map_err(PostgresError::internal)?;
     for event in reset_events {

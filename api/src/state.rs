@@ -1,7 +1,8 @@
 use crate::{
     auth::clerk::ClerkVerifier,
     config::{
-        SCOPE_OPERATOR_TOKEN_ENV, data_dir, database_url_from_env, git_repo_root, non_empty_env,
+        SCOPE_OPERATOR_TOKEN_ENV, data_dir, database_url_from_env, deploy_revision, git_repo_root,
+        non_empty_env,
     },
     git::cache::RawGitCacheRegistry,
     object_store_config::{encryption_key_from_env, s3_from_env},
@@ -37,7 +38,7 @@ impl AppState {
         ensure_private_dir(&data_dir).map_err(|error| anyhow::anyhow!(error.into_message()))?;
         let push_intent_signing_key = push_intent_signing_key(&data_dir)
             .map_err(|error| anyhow::anyhow!(error.into_message()))?;
-        let metadata = MetadataStore::connect(database_url_from_env()?).await?;
+        let metadata = MetadataStore::connect(database_url_from_env()?, deploy_revision()).await?;
         let repo_events = RepoChangeBus::default();
         let runtime_budgets = Arc::new(RuntimeBudgets::from_env()?);
         let object_store = Arc::new(BudgetedObjectStore::new(

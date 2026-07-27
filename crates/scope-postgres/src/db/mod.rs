@@ -81,7 +81,7 @@ pub use fast_push::ApplyContentOnlyPushCommand;
 pub use git_compaction::GitCompactionCandidate;
 pub use git_push_reads::GitPushContext;
 use history_rows::load_repository_histories;
-use locks::{acquire_aggregate_lock, ensure_metadata_lock_row};
+use locks::acquire_aggregate_lock;
 pub use metadata_reset::MetadataResetEvent;
 use metadata_reset::{
     insert_metadata_reset_event, metadata_reset_event_from_model, new_operator_metadata_reset_event,
@@ -97,7 +97,7 @@ use repository_rows::load_repository_facts;
 use scope_domain::store::{RepositoryInvite, RepositoryMember, StoredRepository, repo_id};
 use sea_orm::{
     AccessMode, ColumnTrait, ConnectionTrait, Database, DatabaseConnection, DatabaseTransaction,
-    EntityTrait, IsolationLevel, QueryFilter, QueryOrder, Statement, TransactionTrait,
+    EntityTrait, IsolationLevel, QueryFilter, QueryOrder, TransactionTrait,
 };
 use serde::{Serialize, de::DeserializeOwned};
 use std::{sync::Arc, time::Duration};
@@ -105,12 +105,11 @@ use std::{sync::Arc, time::Duration};
 pub use test_support::TestDatabaseTarget;
 pub use visibility_changes::UpdateRepoFileVisibilityCommand;
 
-const METADATA_LOCK_KEY: &str = "catalog";
-
 #[derive(Clone)]
 pub struct MetadataStore {
     db: Arc<DatabaseConnection>,
     postgres_database_url: Option<Arc<str>>,
+    deploy_revision: Arc<str>,
     #[cfg(any(test, feature = "test-support"))]
     _test_schema: Option<Arc<test_support::TestSchemaLease>>,
 }
@@ -123,6 +122,7 @@ pub struct JobStore {
 #[derive(Clone)]
 pub struct AdminStore {
     db: Arc<DatabaseConnection>,
+    deploy_revision: Arc<str>,
 }
 
 #[derive(Clone)]
@@ -150,6 +150,7 @@ impl MetadataStore {
     pub fn admin(&self) -> AdminStore {
         AdminStore {
             db: Arc::clone(&self.db),
+            deploy_revision: Arc::clone(&self.deploy_revision),
         }
     }
 
@@ -184,17 +185,26 @@ impl MetadataStore {
         }
     }
 
-    pub async fn connect(database_url: String) -> anyhow::Result<Self> {
-        connect_postgres_store(database_url).await
+    pub async fn connect(
+        database_url: String,
+        deploy_revision: impl Into<String>,
+    ) -> anyhow::Result<Self> {
+        connect_postgres_store(database_url, deploy_revision.into()).await
     }
 
     pub async fn connect_worker_with_schema_wait(
         database_url: String,
+        deploy_revision: impl Into<String>,
         wait_timeout: Duration,
         retry_interval: Duration,
     ) -> anyhow::Result<Self> {
-        connect_postgres_worker_store_with_schema_wait(database_url, wait_timeout, retry_interval)
-            .await
+        connect_postgres_worker_store_with_schema_wait(
+            database_url,
+            deploy_revision.into(),
+            wait_timeout,
+            retry_interval,
+        )
+        .await
     }
 
     #[cfg(any(test, feature = "test-support"))]
@@ -226,14 +236,9 @@ impl RepositoryStore {
 
 impl AdminStore {
     pub async fn readiness_check(&self) -> Result<(), PostgresError> {
-        self.db
-            .query_one(Statement::from_string(
-                self.db.get_database_backend(),
-                "SELECT 1".to_string(),
-            ))
+        schema::assert_metadata_schema_ready(self.db.as_ref(), self.deploy_revision.as_ref())
             .await
-            .map_err(PostgresError::internal)?;
-        Ok(())
+            .map_err(PostgresError::internal)
     }
 
     pub async fn metadata_reset_events(&self) -> Result<Vec<MetadataResetEvent>, PostgresError> {
@@ -255,13 +260,7 @@ impl AdminStore {
         reset_at_unix: u64,
     ) -> Result<MetadataResetEvent, PostgresError> {
         let event = new_operator_metadata_reset_event(reason, reset_at_unix);
-        schema::reset_metadata_schema(self.db.as_ref())
-            .await
-            .map_err(PostgresError::internal)?;
-        schema::migrate_metadata_schema(self.db.as_ref())
-            .await
-            .map_err(PostgresError::internal)?;
-        ensure_metadata_lock_row(self.db.as_ref())
+        schema::recreate_metadata_schema(self.db.as_ref(), self.deploy_revision.as_ref())
             .await
             .map_err(PostgresError::internal)?;
         insert_metadata_reset_event(self.db.as_ref(), &event)
@@ -271,15 +270,19 @@ impl AdminStore {
     }
 }
 
-async fn connect_postgres_store(database_url: String) -> anyhow::Result<MetadataStore> {
+async fn connect_postgres_store(
+    database_url: String,
+    deploy_revision: String,
+) -> anyhow::Result<MetadataStore> {
     let database_url = Arc::<str>::from(database_url);
+    let deploy_revision = Arc::<str>::from(deploy_revision);
     let connect_database_url = database_url.to_string();
     let db = Database::connect(&connect_database_url).await?;
-    schema::migrate_metadata_schema(&db).await?;
-    ensure_metadata_lock_row(&db).await?;
+    schema::initialize_metadata_schema(&db, deploy_revision.as_ref()).await?;
     Ok(MetadataStore {
         db: Arc::new(db),
         postgres_database_url: Some(database_url),
+        deploy_revision,
         #[cfg(any(test, feature = "test-support"))]
         _test_schema: None,
     })
@@ -287,14 +290,16 @@ async fn connect_postgres_store(database_url: String) -> anyhow::Result<Metadata
 
 async fn connect_postgres_worker_store_with_schema_wait(
     database_url: String,
+    deploy_revision: String,
     wait_timeout: Duration,
     retry_interval: Duration,
 ) -> anyhow::Result<MetadataStore> {
     let database_url = Arc::<str>::from(database_url);
+    let deploy_revision = Arc::<str>::from(deploy_revision);
     let connect_database_url = database_url.to_string();
     let started = tokio::time::Instant::now();
     let db = loop {
-        match connect_worker_database_once(&connect_database_url).await {
+        match connect_worker_database_once(&connect_database_url, deploy_revision.as_ref()).await {
             Ok(db) => break db,
             Err(error) if started.elapsed() < wait_timeout => {
                 tracing::warn!(
@@ -311,6 +316,7 @@ async fn connect_postgres_worker_store_with_schema_wait(
     Ok(MetadataStore {
         db: Arc::new(db),
         postgres_database_url: Some(database_url),
+        deploy_revision,
         #[cfg(any(test, feature = "test-support"))]
         _test_schema: None,
     })
@@ -318,9 +324,10 @@ async fn connect_postgres_worker_store_with_schema_wait(
 
 async fn connect_worker_database_once(
     database_url: &str,
+    deploy_revision: &str,
 ) -> Result<DatabaseConnection, sea_orm::DbErr> {
     let db = Database::connect(database_url).await?;
-    schema::assert_metadata_schema_ready(&db).await?;
+    schema::assert_metadata_schema_ready(&db, deploy_revision).await?;
     Ok(db)
 }
 

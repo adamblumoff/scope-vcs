@@ -9,6 +9,7 @@ const DEFAULT_GIT_COMPACTION_SEGMENTS: usize = 32;
 const DEFAULT_OBJECT_STORE_MAX_BYTES: usize = 128 * 1024 * 1024;
 const DEFAULT_GIT_SEGMENT_MAX_DEPTH: usize = 2 * DEFAULT_GIT_COMPACTION_SEGMENTS;
 
+const DEFAULT_HEALTH_PORT: u16 = 8081;
 const DEFAULT_BATCH_SIZE: usize = 10;
 const DEFAULT_POLL_INTERVAL_MS: u64 = 1_000;
 const DEFAULT_SCHEMA_WAIT_SECS: u64 = 300;
@@ -16,6 +17,7 @@ const DEFAULT_GIT_COMPACTION_TIMEOUT_SECS: u64 = 120;
 
 pub(crate) struct WorkerSettings {
     pub(crate) database_url: String,
+    pub(crate) health_port: u16,
     pub(crate) worker_id: String,
     pub(crate) batch_size: usize,
     pub(crate) poll_interval: Duration,
@@ -29,6 +31,12 @@ pub(crate) struct WorkerSettings {
 impl WorkerSettings {
     pub(crate) fn from_env() -> anyhow::Result<Self> {
         let database_url = required_env(DATABASE_URL_ENV)?;
+        let health_port = match non_empty_env("PORT") {
+            Some(value) => value
+                .parse::<u16>()
+                .map_err(|error| anyhow::anyhow!("PORT must be a TCP port: {error}"))?,
+            None => DEFAULT_HEALTH_PORT,
+        };
         let worker_id = std::env::var("SCOPE_WORKER_ID")
             .ok()
             .filter(|value| !value.trim().is_empty())
@@ -64,6 +72,7 @@ impl WorkerSettings {
             .unwrap_or_else(|| PathBuf::from(".scope"));
         Ok(Self {
             database_url,
+            health_port,
             worker_id,
             batch_size: batch_size.max(1),
             poll_interval: Duration::from_millis(poll_interval_ms.max(100)),

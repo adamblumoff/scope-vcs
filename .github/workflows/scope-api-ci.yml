@@ -1,4 +1,4 @@
-name: Scope API CI
+name: Scope Backend CI
 
 on:
   pull_request:
@@ -24,6 +24,7 @@ on:
       - "Cargo.toml"
       - "api/**"
       - "crates/**"
+      - "worker/**"
       - "web/scripts/check-api-contract.mjs"
       - "web/src/api/types.generated.ts"
   workflow_dispatch:
@@ -41,7 +42,7 @@ jobs:
     with:
       include_api: true
 
-  deploy:
+  deploy-api:
     name: Deploy scope-api
     needs: checks
     runs-on: ubuntu-latest
@@ -64,6 +65,7 @@ jobs:
           mkdir -p .railway-upload
           cp Cargo.toml Cargo.lock rust-toolchain.toml .railway-upload/
           cp api/railpack.json .railway-upload/railpack.json
+          cp api/railway.json .railway-upload/railway.json
           cp -a api .railway-upload/api
           printf '%s\n' "${GITHUB_SHA:-manual}-${GITHUB_RUN_ID:-local}-${GITHUB_RUN_ATTEMPT:-0}" > .railway-upload/api/railway-deploy-ref.txt
           cp -a worker .railway-upload/worker
@@ -79,3 +81,43 @@ jobs:
           RAILWAY_PROJECT_ID: ${{ secrets.RAILWAY_PROJECT_ID }}
           RAILWAY_TOKEN: ${{ secrets.RAILWAY_TOKEN }}
         run: bash .github/scripts/deploy-railway.sh scope-api .railway-upload
+
+  deploy-worker:
+    name: Deploy scope-worker
+    needs: deploy-api
+    runs-on: ubuntu-latest
+    if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main'
+    env:
+      FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Install Node
+        uses: actions/setup-node@v6
+        with:
+          node-version: 24
+
+      - name: Stage Railway upload root
+        shell: bash
+        run: |
+          rm -rf .railway-upload
+          mkdir -p .railway-upload
+          cp Cargo.toml Cargo.lock rust-toolchain.toml .railway-upload/
+          cp worker/railpack.json .railway-upload/railpack.json
+          cp worker/railway.json .railway-upload/railway.json
+          cp -a api .railway-upload/api
+          cp -a worker .railway-upload/worker
+          printf '%s\n' "${GITHUB_SHA:-manual}-${GITHUB_RUN_ID:-local}-${GITHUB_RUN_ATTEMPT:-0}" > .railway-upload/worker/railway-deploy-ref.txt
+          cp -a crates .railway-upload/crates
+
+      - name: Install Railway CLI
+        run: npm install -g @railway/cli@5.23.1
+
+      - name: Deploy to Railway
+        shell: bash
+        env:
+          RAILWAY_DEPLOY_MESSAGE: ${{ github.event.head_commit.message || github.workflow }}
+          RAILWAY_PROJECT_ID: ${{ secrets.RAILWAY_PROJECT_ID }}
+          RAILWAY_TOKEN: ${{ secrets.RAILWAY_TOKEN }}
+        run: bash .github/scripts/deploy-railway.sh scope-worker .railway-upload
