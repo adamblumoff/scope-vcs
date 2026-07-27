@@ -1,9 +1,13 @@
-use crate::domain::requests::{
+use scope_api_contract::{
+    RequestActorSummaryResponse, RequestEventResponse, RequestInviteeResponse,
+    RequestListItemResponse, RequestMergeabilityResponse, RequestPermissionsResponse,
+    RequestSettlementPreviewResponse, RequestSummaryResponse,
+};
+use scope_domain::requests::{
     Request, RequestAssessmentOutcome, RequestEvent, request_list_mergeability, settlement_for,
 };
-use crate::domain::store::RepositoryAccess;
-use scope_api_contract::*;
-use scope_core::db::RequestListRow;
+use scope_domain::store::RepositoryAccess;
+use scope_postgres::db::RequestListRow;
 
 pub(crate) fn request_summary_response(
     request: Request,
@@ -20,7 +24,7 @@ pub(crate) fn request_summary_response(
     .map(|outcome| {
         let settlement = settlement_for(request.current_stake_credits, outcome, 0);
         RequestSettlementPreviewResponse {
-            outcome: settlement.outcome,
+            outcome: settlement.outcome.into(),
             stake_credits: settlement.stake_credits,
             refunded_credits: settlement.refunded_credits,
             reward_credits: settlement.reward_credits,
@@ -34,18 +38,18 @@ pub(crate) fn request_summary_response(
         title: request.title,
         description_markdown: request.description_markdown,
         author_user_id: request.author_user_id,
-        author_role: request.author_role,
-        audience: request.audience,
+        author_role: request.author_role.into(),
+        audience: request.audience.into(),
         base_main_oid: super::git_oid_response(request.base_main_oid)?,
         head_oid: super::git_oid_response(request.head_oid)?,
-        state: request.state,
+        state: request.state.into(),
         activity_version: request.activity_version,
         current_stake_credits: request.current_stake_credits,
         first_ready_at_unix: request.first_ready_at_unix,
         ready_at_unix: request.ready_at_unix,
         held_at_unix: request.held_at_unix,
         held_by_user_id: request.held_by_user_id,
-        assessment_outcome: request.assessment_outcome,
+        assessment_outcome: request.assessment_outcome.map(Into::into),
         assessment_body_markdown: request.assessment_body_markdown,
         assessed_at_unix: request.assessed_at_unix,
         assessed_by_user_id: request.assessed_by_user_id,
@@ -87,17 +91,17 @@ pub(crate) fn request_list_item_response(
         id: request.id,
         name: request.name,
         title: request.title,
-        author_role: request.author_role,
-        audience: request.audience,
+        author_role: request.author_role.into(),
+        audience: request.audience.into(),
         head_oid: request_head_oid.clone(),
-        state: request.state,
+        state: request.state.into(),
         current_stake_credits: request.current_stake_credits,
-        assessment_outcome: request.assessment_outcome,
+        assessment_outcome: request.assessment_outcome.map(Into::into),
         ready_at_unix: request.ready_at_unix,
         held_at_unix: request.held_at_unix,
         updated_at_unix: request.updated_at_unix,
         mergeability: RequestMergeabilityResponse {
-            status: decision.status,
+            status: decision.status.into(),
             current_main_oid: current_main_oid.map(super::git_oid_response).transpose()?,
             request_head_oid,
             reason: decision.reason.map(str::to_string),
@@ -113,8 +117,8 @@ pub(crate) fn request_event_response(
         id: event.id,
         position: event.position,
         actor,
-        kind: event.kind,
-        payload: event.payload,
+        kind: event.kind.into(),
+        payload: event.payload.into(),
         created_at_unix: event.created_at_unix,
     }
 }

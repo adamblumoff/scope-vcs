@@ -3,8 +3,9 @@ use crate::{
     error::ApiError,
     git::import::{run_git, run_git_output},
     persistence::ensure_private_dir,
+    state::AppState,
 };
-use scope_core::domain::store::SourceBlob;
+use scope_domain::store::SourceBlob;
 use std::{
     collections::BTreeMap,
     fs,
@@ -103,6 +104,25 @@ impl RawGitCacheRegistry {
             }
         }
         Ok(())
+    }
+}
+
+impl AppState {
+    pub(crate) fn git_cache_root(&self) -> Result<PathBuf, ApiError> {
+        Ok(self.raw_git_cache.root().to_path_buf())
+    }
+
+    pub(crate) fn start_raw_git_cache_reaper(&self) {
+        let raw_git_cache = self.raw_git_cache.clone();
+        tokio::spawn(async move {
+            let mut interval = tokio::time::interval(Duration::from_secs(5 * 60));
+            loop {
+                interval.tick().await;
+                if let Err(error) = raw_git_cache.prune() {
+                    tracing::warn!(error = %error.message(), "failed to prune local raw Git caches");
+                }
+            }
+        });
     }
 }
 
@@ -268,11 +288,11 @@ fn remove_dir_if_exists(path: &Path) -> Result<(), ApiError> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use scope_core::domain::store::DEFAULT_GIT_FILE_MODE;
+    use scope_domain::store::DEFAULT_GIT_FILE_MODE;
 
     fn manifest(sha256: &str) -> SourceBlob {
         SourceBlob {
-            object_key: "objects/git-manifests/test".to_string(),
+            content_ref: scope_domain::content_ref::ContentRef::git_manifest_sha256(sha256),
             sha256: sha256.to_string(),
             git_oid: String::new(),
             git_file_mode: DEFAULT_GIT_FILE_MODE.to_string(),

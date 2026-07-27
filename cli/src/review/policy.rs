@@ -1,10 +1,10 @@
 use super::tree::{ReviewNode, ReviewNodeKind, ReviewTree};
-use scope_core::domain::{
+use scope_domain::{
     repo_config::RepoConfig,
     repo_visibility::{self, ToggleResult, VisibilityNodeKind, VisibilityTarget},
 };
 
-pub use scope_core::domain::repo_visibility::{ReviewVisibility, visibility_label};
+use scope_domain::repo_visibility::ReviewVisibility;
 
 pub fn toggle_node_visibility(
     config: &mut RepoConfig,

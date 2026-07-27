@@ -6,7 +6,7 @@ use crossterm::{
     terminal::{EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode, enable_raw_mode},
 };
 use ratatui::{prelude::*, widgets::Paragraph};
-use scope_core::domain::repo_config::RepoConfig;
+use scope_domain::repo_config::RepoConfig;
 use std::io;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -186,7 +186,7 @@ fn row_line(row: &ReviewRow, selected: bool) -> Line<'static> {
     let text = format!(
         "{indent}{symbol} {:<34} {:<10} {}{}{}",
         terminal_safe(&row.name),
-        super::policy::visibility_label(row.visibility),
+        scope_domain::repo_visibility::visibility_label(row.visibility),
         terminal_safe(&row.rule),
         reserved,
         terminal_safe(&change)

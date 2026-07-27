@@ -1,10 +1,7 @@
-use scope_core::{
-    config::DEFAULT_GIT_BRANCH,
-    db::GitCompactionCandidate,
-    git_segments::GitStorageLimits,
-    object_store::{ObjectStore, source_blob_bytes_bounded},
-};
+use scope_git::{DEFAULT_GIT_BRANCH, GitStorageLimits};
 use scope_git_process::{ProcessLimits, run as run_process};
+use scope_object_store::{ObjectStore, source_blob_bytes_bounded};
+use scope_postgres::db::GitCompactionCandidate;
 use std::{
     fs,
     path::{Path, PathBuf},

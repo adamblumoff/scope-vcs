@@ -1,18 +1,6 @@
 use crate::{
     auth::scope::{optional_scope_user, principal_for_scope_user, require_scope_user},
     config::DEFAULT_GIT_BRANCH,
-    domain::{
-        projection::{ProjectionViewKey, project_graph},
-        requests::{
-            AssessRequestInput, CloseRequestInput, CloseRequestMutation, EditRequestIdentityInput,
-            MarkRequestReadyInput, MergeRequestInput, REQUEST_LIST_DEFAULT_PAGE_SIZE,
-            REQUEST_LIST_MAX_PAGE_SIZE, Request, RequestActorRole, RequestAssessmentOutcome,
-            RequestAudience, RequestReviewExitReason, RequestViewer, ReturnRequestToWorkingInput,
-            SetRequestHoldInput, StartRequestInput, canonical_request_ref, request_actor_role,
-            request_mergeability, request_policy,
-        },
-        store::{RepositoryAccess, RepositoryActor, StoredRepository},
-    },
     error::ApiError,
     git::{
         import::git_refs, request_merge::prepare_request_merge,
@@ -21,12 +9,34 @@ use crate::{
     },
     http::responses::*,
     persistence::unix_now,
-    state::{AppState, ensure_repo_read, find_repo},
+    repo_access::{ensure_repo_read, find_repo},
+    repo_events::RepoChangeReason,
+    state::AppState,
 };
 use axum::{
     Json,
     extract::{Path, Query, State},
     http::HeaderMap,
+};
+use scope_api_contract::{
+    AddRequestInviteeRequest, AssessRequestRequest, EditRequestIdentityRequest,
+    LeaveRequestResponse, ReadyRequestRequest, RemoveRequestInviteeRequest,
+    RequestActorSummaryResponse, RequestCloseResponse, RequestDetailResponse,
+    RequestInviteeMutationResponse, RequestInviteeResponse, RequestListResponse,
+    RequestMergeabilityResponse, RequestMutationResponse, RequestPermissionsResponse,
+    RequestSummaryResponse, StartRequestRequest,
+};
+use scope_domain::{
+    projection::{ProjectionViewKey, project_graph},
+    requests::{
+        AssessRequestInput, CloseRequestInput, CloseRequestMutation, EditRequestIdentityInput,
+        MarkRequestReadyInput, MergeRequestInput, REQUEST_LIST_DEFAULT_PAGE_SIZE,
+        REQUEST_LIST_MAX_PAGE_SIZE, Request, RequestActorRole, RequestAssessmentOutcome,
+        RequestAudience, RequestReviewExitReason, RequestViewer, ReturnRequestToWorkingInput,
+        SetRequestHoldInput, StartRequestInput, canonical_request_ref, request_actor_role,
+        request_mergeability, request_policy,
+    },
+    store::{RepositoryAccess, RepositoryActor, StoredRepository},
 };
 use serde::Deserialize;
 
@@ -55,7 +65,12 @@ pub(crate) async fn list_requests(
         .clamp(1, REQUEST_LIST_MAX_PAGE_SIZE);
     let current_main_oid = current_main_oid_for_access(&state, &repo, access)?;
     let mut requests = Vec::with_capacity(limit + 1);
-    for request in state.metadata.requests_by_repo_id(&repo.record.id).await? {
+    for request in state
+        .metadata
+        .requests()
+        .requests_by_repo_id(&repo.record.id)
+        .await?
+    {
         if after_id
             .as_ref()
             .is_some_and(|after_id| request.id <= *after_id)
@@ -66,6 +81,7 @@ pub(crate) async fn list_requests(
             Some(user_id) => {
                 state
                     .metadata
+                    .requests()
                     .request_is_invitee(&request.id, user_id)
                     .await?
             }
@@ -77,7 +93,7 @@ pub(crate) async fn list_requests(
         )
         .listable
         {
-            requests.push(scope_core::db::RequestListRow::from(request));
+            requests.push(scope_postgres::db::RequestListRow::from(request));
             if requests.len() > limit {
                 break;
             }
@@ -155,6 +171,7 @@ pub(crate) async fn mark_request_ready(
     let uses_credits = request.author_role == RequestActorRole::Public;
     let mutation = state
         .metadata
+        .requests()
         .mark_request_ready(MarkRequestReadyInput {
             request_id: request.id,
             actor_user_id: user.id.clone(),
@@ -176,7 +193,7 @@ pub(crate) async fn mark_request_ready(
         access,
         &user.id,
         mutation.request,
-        "request-ready",
+        RepoChangeReason::RequestReady,
     )
     .await
 }
@@ -191,6 +208,7 @@ pub(crate) async fn return_request_to_working(
     let request = visible_request(&state, &repo, access, Some(&user.id), &request_id).await?;
     let mutation = state
         .metadata
+        .requests()
         .return_request_to_working(ReturnRequestToWorkingInput {
             request_id: request.id,
             actor_user_id: user.id.clone(),
@@ -208,7 +226,7 @@ pub(crate) async fn return_request_to_working(
         access,
         &user.id,
         mutation.request,
-        "request-working",
+        RepoChangeReason::RequestWorking,
     )
     .await
 }
@@ -242,6 +260,7 @@ async fn set_hold(
     let request = visible_request(&state, &repo, access, Some(&user.id), &request_id).await?;
     let mutation = state
         .metadata
+        .requests()
         .set_request_hold(SetRequestHoldInput {
             request_id: request.id,
             actor_user_id: user.id.clone(),
@@ -262,9 +281,9 @@ async fn set_hold(
         &user.id,
         mutation.request,
         if held {
-            "request-held"
+            RepoChangeReason::RequestHeld
         } else {
-            "request-unheld"
+            RepoChangeReason::RequestUnheld
         },
     )
     .await
@@ -280,6 +299,7 @@ pub(crate) async fn request_changes(
     let request = visible_request(&state, &repo, access, Some(&user.id), &request_id).await?;
     let mutation = state
         .metadata
+        .requests()
         .return_request_to_working(ReturnRequestToWorkingInput {
             request_id: request.id,
             actor_user_id: user.id.clone(),
@@ -297,7 +317,7 @@ pub(crate) async fn request_changes(
         access,
         &user.id,
         mutation.request,
-        "request-changes-requested",
+        RepoChangeReason::RequestChangesRequested,
     )
     .await
 }
@@ -311,14 +331,15 @@ pub(crate) async fn assess_request(
     let user = require_scope_user(&state, &headers).await?;
     let (repo, access, _) = repo_and_access(&state, &headers, &owner, &repo_name).await?;
     let request = visible_request(&state, &repo, access, Some(&user.id), &request_id).await?;
-    let ids = settlement_ids(&request, input.outcome)?;
+    let ids = settlement_ids(&request, input.outcome.into())?;
     let mutation = state
         .metadata
+        .requests()
         .assess_request(AssessRequestInput {
             request_id: request.id,
             actor_user_id: user.id.clone(),
             actor_is_maintainer: false,
-            outcome: input.outcome,
+            outcome: input.outcome.into(),
             body_markdown: input.body_markdown,
             assessed_event_id: random_id("event_request_assessed")?,
             settled_event_id: ids.settled_event_id,
@@ -333,7 +354,7 @@ pub(crate) async fn assess_request(
         access,
         &user.id,
         mutation.request,
-        "request-assessed",
+        RepoChangeReason::RequestAssessed,
     )
     .await
 }
@@ -361,10 +382,11 @@ pub(crate) async fn merge_request(
     let durable_objects = prepared.durable_objects().to_vec();
     let mutation = match state
         .metadata
+        .requests()
         .merge_request_content(
             &owner,
             &repo_name,
-            &prepared.expected_manifest_key,
+            &prepared.expected_manifest_ref,
             prepared.expected_repo_change_version,
             &prepared.prepared_request_head_oid,
             prepared.update.into_reviewed_update(),
@@ -381,12 +403,17 @@ pub(crate) async fn merge_request(
                 reward_ledger_entry_id: ids.reward_ledger_entry_id,
                 now_unix: unix_now()?,
             },
+            &crate::persistence_ids::generate_persistence_id,
         )
         .await
     {
         Ok(mutation) => mutation,
         Err(error) => {
-            crate::state::best_effort_cleanup_rollback_source_blobs(&state, &durable_objects).await;
+            crate::repo_cleanup::best_effort_cleanup_rollback_source_blobs(
+                &state,
+                &durable_objects,
+            )
+            .await;
             return Err(error.into());
         }
     };
@@ -394,7 +421,7 @@ pub(crate) async fn merge_request(
         .publish_repo_change(
             &repo.record.id,
             mutation.git_head.change_version,
-            "request-merged",
+            RepoChangeReason::RequestMerged,
         )
         .await;
     let committed_repo = find_repo(&state, &owner, &repo_name).await?;
@@ -404,7 +431,7 @@ pub(crate) async fn merge_request(
         access,
         &user.id,
         mutation.request.request,
-        "request-merged",
+        RepoChangeReason::RequestMerged,
     )
     .await
 }
@@ -443,7 +470,7 @@ async fn lifecycle_response(
     access: RepositoryAccess,
     viewer_user_id: &str,
     request: Request,
-    refresh_reason: &'static str,
+    refresh_reason: RepoChangeReason,
 ) -> Result<Json<RequestMutationResponse>, ApiError> {
     let current_main_oid = current_main_oid_for_access(state, repo, access)?;
     let request = request_response_for_viewer(
@@ -477,19 +504,23 @@ pub(crate) async fn close_request(
     let request_ref = canonical_request_ref(&request.name);
     let mutation = state
         .metadata
-        .close_request(CloseRequestInput {
-            request_id: request.id,
-            actor_user_id: user.id.clone(),
-            actor_can_close: false,
-            event_id: random_id("event_request_closed")?,
-            now_unix: unix_now()?,
-        })
+        .requests()
+        .close_request(
+            CloseRequestInput {
+                request_id: request.id,
+                actor_user_id: user.id.clone(),
+                actor_can_close: false,
+                event_id: random_id("event_request_closed")?,
+                now_unix: unix_now()?,
+            },
+            &crate::persistence_ids::generate_persistence_id,
+        )
         .await?;
     match mutation {
         CloseRequestMutation::DeletedDraft { .. } => {
             delete_request_ref_from_store(&state, &owner, &repo_name, &request_ref)?;
             state
-                .publish_request_summary_refresh(&repo.record.id, "request-deleted")
+                .publish_request_summary_refresh(&repo.record.id, RepoChangeReason::RequestDeleted)
                 .await;
             Ok(Json(RequestCloseResponse {
                 deleted: true,
@@ -507,7 +538,7 @@ pub(crate) async fn close_request(
             )
             .await?;
             state
-                .publish_request_summary_refresh(&repo.record.id, "request-closed")
+                .publish_request_summary_refresh(&repo.record.id, RepoChangeReason::RequestClosed)
                 .await;
             Ok(Json(RequestCloseResponse {
                 deleted: false,
@@ -528,17 +559,19 @@ pub(crate) async fn start_request(
     let principal = principal_for_scope_user(&repo, Some(&user));
     ensure_repo_read(&state, &repo, &principal)?;
     let access = repo.access_for_principal(&principal);
-    if access.actor == RepositoryActor::Public && input.audience != RequestAudience::Public {
+    let audience: RequestAudience = input.audience.into();
+    if access.actor == RepositoryActor::Public && audience != RequestAudience::Public {
         return Err(ApiError::forbidden(
             "public contributors can only create public requests",
         ));
     }
-    let base_main_oid = current_main_oid_for_audience(&state, &repo, input.audience)?
+    let base_main_oid = current_main_oid_for_audience(&state, &repo, audience)?
         .ok_or_else(|| ApiError::conflict("repo has no main branch to base a request on"))?;
     let request_id = random_id("req")?;
     let now_unix = unix_now()?;
     let mutation = state
         .metadata
+        .requests()
         .start_request(StartRequestInput {
             id: request_id.clone(),
             repo_id: repo.record.id.clone(),
@@ -546,7 +579,7 @@ pub(crate) async fn start_request(
             author_user_id: user.id.clone(),
             title: input.title,
             author_role: request_actor_role(access),
-            audience: input.audience,
+            audience,
             base_main_oid,
             event_id: random_id("event_request_started")?,
             now_unix,
@@ -562,7 +595,7 @@ pub(crate) async fn start_request(
     )
     .await?;
     state
-        .publish_request_summary_refresh(&repo.record.id, "request-started")
+        .publish_request_summary_refresh(&repo.record.id, RepoChangeReason::RequestStarted)
         .await;
     Ok(Json(RequestMutationResponse { request }))
 }
@@ -578,6 +611,7 @@ pub(crate) async fn edit_request_identity(
     let request = visible_request(&state, &repo, access, Some(&user.id), &request_id).await?;
     let mutation = state
         .metadata
+        .requests()
         .edit_request_identity_with_review_invalidation(EditRequestIdentityInput {
             request_id: request.id,
             actor_user_id: user.id.clone(),
@@ -598,7 +632,7 @@ pub(crate) async fn edit_request_identity(
     )
     .await?;
     state
-        .publish_request_summary_refresh(&repo.record.id, "request-identity-edited")
+        .publish_request_summary_refresh(&repo.record.id, RepoChangeReason::RequestIdentityEdited)
         .await;
     Ok(Json(RequestMutationResponse { request }))
 }
@@ -614,7 +648,8 @@ pub(crate) async fn add_request_invitee(
     visible_request(&state, &repo, access, Some(&user.id), &request_id).await?;
     let invitee = state
         .metadata
-        .add_request_invitee(scope_core::db::AddRequestInviteeCommand {
+        .requests()
+        .add_request_invitee(scope_postgres::db::AddRequestInviteeCommand {
             request_id: request_id.clone(),
             actor_user_id: user.id.clone(),
             target_handle: input.handle,
@@ -628,7 +663,7 @@ pub(crate) async fn add_request_invitee(
         &user.id,
         request_id,
         invitee,
-        "request-invitee-added",
+        RepoChangeReason::RequestInviteeAdded,
     )
     .await
 }
@@ -644,7 +679,8 @@ pub(crate) async fn remove_request_invitee(
     visible_request(&state, &repo, access, Some(&user.id), &request_id).await?;
     let invitee = state
         .metadata
-        .remove_request_invitee(scope_core::db::RemoveRequestInviteeCommand {
+        .requests()
+        .remove_request_invitee(scope_postgres::db::RemoveRequestInviteeCommand {
             request_id: request_id.clone(),
             actor_user_id: user.id.clone(),
             target_handle: input.handle,
@@ -657,7 +693,7 @@ pub(crate) async fn remove_request_invitee(
         &user.id,
         request_id,
         invitee,
-        "request-invitee-removed",
+        RepoChangeReason::RequestInviteeRemoved,
     )
     .await
 }
@@ -672,7 +708,8 @@ pub(crate) async fn leave_request(
     visible_request(&state, &repo, access, Some(&user.id), &request_id).await?;
     let invitee = state
         .metadata
-        .leave_request(scope_core::db::LeaveRequestCommand {
+        .requests()
+        .leave_request(scope_postgres::db::LeaveRequestCommand {
             request_id: request_id.clone(),
             actor_user_id: user.id.clone(),
         })
@@ -686,7 +723,7 @@ pub(crate) async fn leave_request(
         created_at_unix: invitee.invitee.created_at_unix,
     };
     state
-        .publish_request_summary_refresh(&repo.record.id, "request-invitee-left")
+        .publish_request_summary_refresh(&repo.record.id, RepoChangeReason::RequestInviteeLeft)
         .await;
     Ok(Json(LeaveRequestResponse { invitee }))
 }
@@ -697,11 +734,12 @@ async fn invitee_mutation_response(
     access: RepositoryAccess,
     viewer_user_id: &str,
     request_id: String,
-    invitee: scope_core::db::RequestInviteeRead,
-    refresh_reason: &'static str,
+    invitee: scope_postgres::db::RequestInviteeRead,
+    refresh_reason: RepoChangeReason,
 ) -> Result<Json<RequestInviteeMutationResponse>, ApiError> {
     let request = state
         .metadata
+        .requests()
         .request_by_id(&request_id)
         .await?
         .ok_or_else(|| ApiError::not_found("request not found"))?;
@@ -739,7 +777,7 @@ pub(crate) async fn repo_and_access(
     let principal = user
         .as_ref()
         .map(|user| principal_for_scope_user(&repo, Some(user)))
-        .unwrap_or_else(crate::domain::policy::Principal::public);
+        .unwrap_or_else(scope_domain::policy::Principal::public);
     ensure_repo_read(state, &repo, &principal)?;
     let access = repo.access_for_principal(&principal);
     Ok((repo, access, user.map(|user| user.id)))
@@ -754,6 +792,7 @@ pub(crate) async fn visible_request(
 ) -> Result<Request, ApiError> {
     let request = state
         .metadata
+        .requests()
         .request_by_id(request_id)
         .await?
         .ok_or_else(|| ApiError::not_found("request not found"))?;
@@ -761,6 +800,7 @@ pub(crate) async fn visible_request(
         Some(user_id) => {
             state
                 .metadata
+                .requests()
                 .request_is_invitee(&request.id, user_id)
                 .await?
         }
@@ -789,6 +829,7 @@ async fn request_response_for_viewer(
         Some(user_id) => {
             state
                 .metadata
+                .requests()
                 .request_is_invitee(&request.id, user_id)
                 .await?
         }
@@ -801,6 +842,7 @@ async fn request_response_for_viewer(
     let invitees = if request.audience == RequestAudience::Public && policy.exact_visible {
         state
             .metadata
+            .requests()
             .request_invitees(&request.id)
             .await?
             .into_iter()
@@ -837,7 +879,7 @@ async fn request_response_for_viewer(
     };
     let decision = request_mergeability(&request, access);
     let mergeability = RequestMergeabilityResponse {
-        status: decision.status,
+        status: decision.status.into(),
         current_main_oid: current_main_oid.map(git_oid_response).transpose()?,
         request_head_oid: git_oid_response(request.head_oid.clone())?,
         reason: decision.reason.map(str::to_string),
@@ -888,7 +930,11 @@ fn projection_main_oid(
     if projection.commits.is_empty() {
         return Ok(None);
     }
-    let repo_path = projection_bare_repo_for_state(state, &projection)?;
+    let repo_path = projection_bare_repo_for_state(
+        state,
+        &projection,
+        repo.git_head.as_ref().map(|head| &head.manifest),
+    )?;
     main_oid_from_git_repo(&repo_path)
 }
 

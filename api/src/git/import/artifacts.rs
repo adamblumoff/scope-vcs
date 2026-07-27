@@ -3,9 +3,9 @@ use super::repo_io::{
     pushed_commit_message,
 };
 use super::staging::{ReceivePackFileChange, ReceivePackUpdate, ensure_default_branch};
-use crate::domain::repo_config::RepoConfig;
-use crate::domain::store::RepoPublicationState;
 use crate::{error::ApiError, git::content::git_blob_reference, state::AppState};
+use scope_domain::repo_config::RepoConfig;
+use scope_domain::store::RepoPublicationState;
 use std::{path::Path as FsPath, time::Instant};
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -95,6 +95,7 @@ async fn reviewed_update_from_staging_repo_mode(
     ensure_default_branch(&branch)?;
     let repo = state
         .metadata
+        .repositories()
         .git_push_context(owner, repo_name, author_id)
         .await?
         .ok_or_else(|| ApiError::not_found(format!("repo {owner}/{repo_name} not found")))?;
@@ -103,7 +104,6 @@ async fn reviewed_update_from_staging_repo_mode(
     {
         return Err(ApiError::conflict("repo must be published before push"));
     }
-    let repo_id = crate::domain::store::repo_id(owner, repo_name);
     let message = pushed_commit_message(staging_repo, &head_oid)?;
     let base_head_oid = repo.git_head.as_ref().map(|head| head.head_oid.as_str());
     let diff_started = Instant::now();
@@ -117,9 +117,7 @@ async fn reviewed_update_from_staging_repo_mode(
     }
     let segment_started = Instant::now();
     let mut created_segment =
-        match git_segment_manifest_from_repo(state, &repo_id, staging_repo, repo.git_head.as_ref())
-            .await
-        {
+        match git_segment_manifest_from_repo(state, staging_repo, repo.git_head.as_ref()).await {
             Ok(snapshot) => snapshot,
             Err(error) => {
                 return Err(error);
@@ -161,7 +159,7 @@ async fn reviewed_update_from_staging_repo_mode(
     Ok(ReceivePackUpdate {
         branch,
         head_oid,
-        base_git_manifest_key: None,
+        base_git_manifest_ref: None,
         author_id: author_id.to_string(),
         message,
         git_head: created_segment.head,
@@ -169,7 +167,7 @@ async fn reviewed_update_from_staging_repo_mode(
         durable_objects,
         changes,
         previous_config: Some(repo.repo_config.clone()),
-        base_config_hash: crate::state::repo_config_fingerprint(&repo.repo_config)?,
+        base_config_hash: crate::push_intents::repo_config_fingerprint(&repo.repo_config)?,
         config,
     })
 }

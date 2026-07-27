@@ -1,16 +1,16 @@
 use crate::{
     config::DEFAULT_GIT_BRANCH,
-    domain::{
-        policy::{ScopePath, Visibility},
-        projection::{ProjectionViewKey, project_graph},
-        store::StoredRepository,
-    },
     error::ApiError,
     git::{
         import::{run_git, run_git_output},
         upload::projection_bare_repo_for_state,
     },
     state::AppState,
+};
+use scope_domain::{
+    policy::{ScopePath, Visibility},
+    projection::{ProjectionViewKey, project_graph},
+    store::StoredRepository,
 };
 use std::{collections::BTreeSet, path::Path as FsPath};
 
@@ -37,7 +37,11 @@ pub(super) fn ensure_public_request_ref_is_public_safe(
         .visible_paths()
         .into_iter()
         .collect::<BTreeSet<_>>();
-    let public_repo = projection_bare_repo_for_state(state, &public_projection)?;
+    let public_repo = projection_bare_repo_for_state(
+        state,
+        &public_projection,
+        repo.git_head.as_ref().map(|head| &head.manifest),
+    )?;
     let refspec = format!("+refs/heads/{DEFAULT_GIT_BRANCH}:{PUBLIC_REQUEST_BASE_REF}");
     run_git(
         Some(staging_repo),

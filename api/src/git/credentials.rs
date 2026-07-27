@@ -1,16 +1,18 @@
-use crate::domain::store::{FirstPushTokenStatus, StoredRepository, UserAccount};
 use crate::{
     auth::{
+        cli::CliAuthService,
         scope::require_scope_user,
         tokens::{first_push_token_hash, git_push_token_hash},
     },
     config::{CLI_SESSION_TOKEN_PREFIX, FIRST_PUSH_TOKEN_PREFIX, GIT_PUSH_TOKEN_PREFIX},
     error::ApiError,
     persistence::unix_now,
-    state::{AppState, find_repo},
+    repo_access::find_repo,
+    state::AppState,
 };
 use axum::http::{HeaderMap, StatusCode, header::AUTHORIZATION};
 use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64};
+use scope_domain::store::{FirstPushTokenStatus, StoredRepository, UserAccount};
 
 #[derive(Clone, Debug)]
 pub(crate) enum InitialPushCredential {
@@ -41,11 +43,10 @@ pub(crate) async fn git_read_scope_user(
         if username.trim() != "scope" || !token.starts_with(CLI_SESSION_TOKEN_PREFIX) {
             return Err(invalid_git_credentials());
         }
-        return state
-            .metadata
-            .verify_cli_session_token(token)
+        return CliAuthService::new(state.metadata.auth())
+            .verify_session_token(token, unix_now()?)
             .await
-            .map_err(|error| git_credential_error(error.into()));
+            .map_err(git_credential_error);
     }
 
     require_scope_user(state, headers)

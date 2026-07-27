@@ -1,10 +1,9 @@
 use crate::{
     auth::scope::{optional_scope_user, principal_for_scope_user},
-    domain::requests::{RequestAudience, RequestViewer, request_policy},
-    domain::store::{RepositoryActor, UserAccount, repo_id},
     error::ApiError,
-    repo_events::{RepoChangeEvent, RepoChangeKind},
-    state::{AppState, ensure_repo_read, find_repo},
+    repo_access::{ensure_repo_read, find_repo},
+    repo_events::{RepoChangeEvent, RepoChangeKind, RepoChangeReason, repository_change_event},
+    state::AppState,
 };
 use axum::{
     extract::{Path, State},
@@ -12,6 +11,10 @@ use axum::{
     response::sse::{Event, KeepAlive, Sse},
 };
 use futures_util::stream;
+use scope_domain::{
+    requests::{RequestViewer, request_policy},
+    store::{RepositoryActor, UserAccount, repo_id},
+};
 use std::{convert::Infallible, time::Duration};
 use tokio_stream::{Stream, StreamExt, once, wrappers::BroadcastStream};
 
@@ -44,7 +47,11 @@ pub(crate) async fn repo_events(
     let initial = event_for_principal(
         &repo,
         &principal,
-        RepoChangeEvent::new(&repo_id, repo.record.change_version, "connected"),
+        repository_change_event(
+            &repo_id,
+            repo.record.change_version,
+            RepoChangeReason::Connected,
+        ),
     )
     .expect("connected event is always visible");
     let updates = stream::unfold(
@@ -61,11 +68,11 @@ pub(crate) async fn repo_events(
                 let event = stream_state.receiver.next().await?;
                 let event = match event {
                     Ok(event) => event,
-                    Err(_) => RepoChangeEvent {
-                        repo_id: stream_state.lagged_repo_id.clone(),
-                        version: CLIENT_RESYNC_VERSION,
-                        kind: RepoChangeKind::Lagged,
-                    },
+                    Err(_) => repository_change_event(
+                        &stream_state.lagged_repo_id,
+                        CLIENT_RESYNC_VERSION,
+                        RepoChangeReason::Lagged,
+                    ),
                 };
 
                 match stream_event_for_user(
@@ -114,7 +121,7 @@ async fn stream_event_for_user(
     let principal = principal_for_scope_user(&repo, user);
     ensure_repo_events_allowed(state, &repo, &principal)?;
     if let RepoChangeKind::RequestTimelineChanged { request_id, .. } = &event.kind {
-        let Some(request) = state.metadata.request_by_id(request_id).await? else {
+        let Some(request) = state.metadata.requests().request_by_id(request_id).await? else {
             return Ok(None);
         };
         let user_id = user.map(|user| user.id.as_str());
@@ -122,6 +129,7 @@ async fn stream_event_for_user(
             Some(user_id) => {
                 state
                     .metadata
+                    .requests()
                     .request_is_invitee(request_id, user_id)
                     .await?
             }
@@ -145,15 +153,15 @@ async fn stream_event_for_user(
 
 fn ensure_repo_events_allowed(
     state: &AppState,
-    repo: &crate::domain::store::StoredRepository,
-    principal: &crate::domain::policy::Principal,
+    repo: &scope_domain::store::StoredRepository,
+    principal: &scope_domain::policy::Principal,
 ) -> Result<(), ApiError> {
     ensure_repo_read(state, repo, principal)
 }
 
 fn event_for_principal(
-    repo: &crate::domain::store::StoredRepository,
-    principal: &crate::domain::policy::Principal,
+    repo: &scope_domain::store::StoredRepository,
+    principal: &scope_domain::policy::Principal,
     event: RepoChangeEvent,
 ) -> Option<RepoChangeEvent> {
     if repo.access_for_principal(principal).actor != RepositoryActor::Public {
@@ -161,7 +169,7 @@ fn event_for_principal(
     }
 
     if let RepoChangeKind::RequestTimelineChanged { audience, .. } = &event.kind {
-        if matches!(audience, RequestAudience::Public) {
+        if matches!(audience, scope_api_contract::RequestAudience::Public) {
             return Some(RepoChangeEvent {
                 version: 0,
                 ..event

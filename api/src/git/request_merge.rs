@@ -1,11 +1,5 @@
 use crate::{
     config::DEFAULT_GIT_BRANCH,
-    domain::{
-        policy::{ScopePath, Visibility},
-        repo_config::RepoConfig,
-        requests::{Request, RequestAudience, canonical_request_ref},
-        store::{SourceBlob, StoredRepository},
-    },
     error::ApiError,
     git::{
         import::{
@@ -18,10 +12,16 @@ use crate::{
     persistence::ensure_private_dir,
     state::AppState,
 };
+use scope_domain::{
+    policy::{ScopePath, Visibility},
+    repo_config::RepoConfig,
+    requests::{Request, RequestAudience, canonical_request_ref},
+    store::{SourceBlob, StoredRepository},
+};
 use std::{fs, process::Command};
 
 pub(crate) struct PreparedRequestMerge {
-    pub(crate) expected_manifest_key: String,
+    pub(crate) expected_manifest_ref: scope_domain::content_ref::ContentRef,
     pub(crate) expected_repo_change_version: u64,
     pub(crate) prepared_request_head_oid: String,
     pub(crate) update: ReceivePackUpdate,
@@ -93,7 +93,7 @@ pub(crate) async fn prepare_request_merge(
         )
         .await?;
         Ok(PreparedRequestMerge {
-            expected_manifest_key: current.manifest.object_key.clone(),
+            expected_manifest_ref: current.manifest.content_ref.clone(),
             expected_repo_change_version: repo.record.change_version,
             prepared_request_head_oid: request.head_oid.clone(),
             update,
@@ -444,14 +444,15 @@ mod tests {
         let request_head = oid(&repo, "HEAD");
 
         let mut current_config = RepoConfig::with_default_visibility(
-            crate::domain::repo_config::ConfigVisibility::Public,
+            scope_domain::repo_config::ConfigVisibility::Public,
         );
-        current_config.visibility.rules.push(
-            crate::domain::repo_config::RepoConfigVisibilityRule {
+        current_config
+            .visibility
+            .rules
+            .push(scope_domain::repo_config::RepoConfigVisibilityRule {
                 path: "/private-later.txt".to_string(),
-                visibility: crate::domain::repo_config::ConfigVisibility::Private,
-            },
-        );
+                visibility: scope_domain::repo_config::ConfigVisibility::Private,
+            });
         let merged = merge_main_oid(
             &repo,
             &request_base,

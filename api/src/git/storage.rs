@@ -1,19 +1,20 @@
-use crate::domain::policy::Principal;
-use crate::domain::projection::{ProjectionViewKey, project_graph};
-use crate::domain::store::{RepoPublicationState, SourceBlob};
 use crate::{
     config::{DEFAULT_GIT_BRANCH, EMPTY_GIT_OID, RECEIVE_PACK_STAGING_BYTES},
     error::ApiError,
     git::import::{run_git, safe_repo_key},
     git::upload::{git_command_output_with_timeout, projection_bare_repo_for_state},
-    object_store::source_blob_bytes,
     persistence::ensure_private_dir,
+    repo_access::find_repo,
     runtime_budgets::RuntimeBudgets,
-    state::{AppState, find_repo},
+    state::AppState,
 };
 use axum::{body::Body, http::StatusCode, response::Response};
 use futures_util::StreamExt;
-use scope_core::git_segments::{GitSegmentManifest, is_git_segment_manifest};
+use scope_domain::policy::Principal;
+use scope_domain::projection::{ProjectionViewKey, project_graph};
+use scope_domain::store::{RepoPublicationState, SourceBlob};
+use scope_git::{GitSegmentManifest, is_git_segment_manifest};
+use scope_object_store::source_blob_bytes;
 use sha2::{Digest, Sha256};
 use std::time::Instant;
 use std::{
@@ -38,7 +39,7 @@ pub(crate) fn receive_pack_staging_repo_path(
         ))
     })?;
     let base_dir = state.data_dir.as_ref().clone();
-    let repo_id = crate::domain::store::repo_id(owner, repo_name);
+    let repo_id = scope_domain::store::repo_id(owner, repo_name);
     let digest = Sha256::digest(repo_id.as_bytes());
     let digest = hex::encode(digest);
     ensure_private_dir(&base_dir)?;
@@ -48,7 +49,7 @@ pub(crate) fn receive_pack_staging_repo_path(
 }
 
 pub(crate) fn receive_pack_staging_repo_prefix(owner: &str, repo_name: &str) -> String {
-    let repo_id = crate::domain::store::repo_id(owner, repo_name);
+    let repo_id = scope_domain::store::repo_id(owner, repo_name);
     let digest = Sha256::digest(repo_id.as_bytes());
     let digest = hex::encode(digest);
     digest[..16].to_string()
@@ -243,6 +244,7 @@ pub(crate) async fn ensure_published_receive_pack_staging_repo(
 ) -> Result<PathBuf, ApiError> {
     let repo = state
         .metadata
+        .repositories()
         .git_push_context(owner, repo_name, author_id)
         .await?
         .ok_or_else(|| ApiError::not_found(format!("repo {owner}/{repo_name} not found")))?;
@@ -266,12 +268,16 @@ pub(crate) async fn ensure_published_receive_pack_staging_repo(
         let repo = find_repo(state, owner, repo_name).await?;
         let principal = Principal {
             id: author_id.to_string(),
-            kind: crate::domain::policy::PrincipalKind::User,
+            kind: scope_domain::policy::PrincipalKind::User,
         };
         let view_key = ProjectionViewKey::from_access(repo.access_for_principal(&principal));
         let projection =
             project_graph(&repo.policy, &repo.graph, &repo.visibility_events, view_key);
-        let seed_repo = projection_bare_repo_for_state(state, &projection)?;
+        let seed_repo = projection_bare_repo_for_state(
+            state,
+            &projection,
+            repo.git_head.as_ref().map(|head| &head.manifest),
+        )?;
         let seed = seed_repo.to_string_lossy().to_string();
         let target = repo_root.to_string_lossy().to_string();
         run_git(
@@ -291,7 +297,7 @@ pub(crate) async fn ensure_published_receive_pack_staging_repo(
 
 pub(crate) fn restore_git_segments(
     state: &AppState,
-    snapshot: &crate::domain::store::SourceBlob,
+    snapshot: &scope_domain::store::SourceBlob,
     repo_root: &FsPath,
 ) -> Result<(), ApiError> {
     if repo_root.exists() {

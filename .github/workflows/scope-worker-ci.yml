@@ -10,7 +10,7 @@ on:
       - ".github/workflows/rust-workspace-checks.yml"
       - "Cargo.lock"
       - "Cargo.toml"
-      - "crates/scope-core/**"
+      - "crates/**"
       - "worker/**"
   workflow_dispatch:
 

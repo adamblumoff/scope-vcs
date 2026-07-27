@@ -1,10 +1,14 @@
-use crate::domain::policy::{ScopePath, Visibility};
-use crate::domain::repo_config::{RepoConfig, is_reserved_config_path};
-use crate::domain::reviewed_updates::{
-    ReviewedContentChange, ReviewedUpdateError, ReviewedUpdateInput, apply_reviewed_update_to_repo,
+use crate::config::DEFAULT_GIT_BRANCH;
+use scope_domain::repo_config::{RepoConfig, is_reserved_config_path};
+use scope_domain::reviewed_updates::{
+    ReviewedContentChange, ReviewedUpdateInput, apply_reviewed_update_to_repo,
 };
-use crate::domain::store::{GitHead, GitSegment, SourceBlob, StoredRepository};
-use crate::{config::DEFAULT_GIT_BRANCH, error::ApiError};
+use scope_domain::store::{GitHead, GitSegment, SourceBlob, StoredRepository};
+use scope_domain::{
+    error::DomainError,
+    policy::{ScopePath, Visibility},
+    repo_actions::reviewed_update_domain_error,
+};
 use std::collections::BTreeSet;
 
 #[derive(Clone, Debug)]
@@ -13,15 +17,15 @@ pub(crate) struct ReceivePackFileChange {
     pub(crate) content: Option<SourceBlob>,
 }
 
-pub(crate) fn ensure_default_branch(branch: &str) -> Result<(), ApiError> {
+pub(crate) fn ensure_default_branch(branch: &str) -> Result<(), DomainError> {
     let branch = branch.trim();
     match branch {
         DEFAULT_GIT_BRANCH => Ok(()),
         value if value == format!("refs/heads/{DEFAULT_GIT_BRANCH}") => Ok(()),
-        value if value.starts_with("refs/tags/") => Err(ApiError::bad_request(
+        value if value.starts_with("refs/tags/") => Err(DomainError::invalid_input(
             "tags are not supported by Scope pushes",
         )),
-        _ => Err(ApiError::bad_request(
+        _ => Err(DomainError::invalid_input(
             "Scope accepts pushes only to the default branch refs/heads/main",
         )),
     }
@@ -31,7 +35,7 @@ pub(crate) fn ensure_default_branch(branch: &str) -> Result<(), ApiError> {
 pub(crate) struct ReceivePackUpdate {
     pub(crate) branch: String,
     pub(crate) head_oid: String,
-    pub(crate) base_git_manifest_key: Option<Option<String>>,
+    pub(crate) base_git_manifest_ref: Option<Option<scope_domain::content_ref::ContentRef>>,
     pub(crate) author_id: String,
     pub(crate) message: String,
     pub(crate) git_head: GitHead,
@@ -46,10 +50,10 @@ pub(crate) struct ReceivePackUpdate {
 pub(super) fn apply_receive_pack_update(
     repo: &mut StoredRepository,
     update: ReceivePackUpdate,
-) -> Result<(), ApiError> {
+) -> Result<(), DomainError> {
     ensure_default_branch(&update.branch)?;
     apply_reviewed_update_to_repo(repo, update.into_reviewed_update())
-        .map_err(reviewed_update_error_to_api_error)
+        .map_err(reviewed_update_domain_error)
 }
 
 impl ReceivePackUpdate {
@@ -103,12 +107,4 @@ pub(super) fn receive_pack_update_changes_visibility(
         !is_reserved_config_path(&path)
             && repo.policy.effective_visibility(&path) != update.config.visibility_for_path(&path)
     })
-}
-
-fn reviewed_update_error_to_api_error(error: ReviewedUpdateError) -> ApiError {
-    match error {
-        ReviewedUpdateError::BadRequest(message) => ApiError::bad_request(message),
-        ReviewedUpdateError::Conflict(message) => ApiError::conflict(message),
-        ReviewedUpdateError::InvalidPolicy(error) => ApiError::bad_request(error),
-    }
 }

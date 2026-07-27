@@ -1,5 +1,5 @@
 use super::{actions::ready_stake, new_client_discussion_id, text::terminal_text};
-use scope_core::domain::requests::REQUEST_MAX_STAKE_CREDITS;
+use scope_domain::requests::REQUEST_MAX_STAKE_CREDITS;
 
 #[test]
 fn terminal_text_replaces_control_characters() {

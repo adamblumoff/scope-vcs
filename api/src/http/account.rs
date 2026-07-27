@@ -1,20 +1,20 @@
 use crate::{
     auth::scope::{optional_scope_user, principal_for_scope_user},
-    domain::policy::ScopePath,
     error::ApiError,
     http::responses::{
-        AccountSessionResponse, HealthResponse, ReadinessCheckResponse, ReadinessResponse,
-        SessionIdentity, SessionRepo, SessionResponse, repository_access_response,
-        session_capabilities_response, user_response,
+        HealthResponse, ReadinessCheckResponse, ReadinessResponse, SessionRepo, SessionResponse,
+        repository_access_response, session_capabilities_response, user_response,
     },
+    repo_access::{access_for_principal, can_read_path, ensure_repo_read, find_repo},
     state::AppState,
-    state::{access_for_principal, can_read_path, ensure_repo_read, find_repo},
 };
 use axum::{
     Json,
     extract::{Path, State},
     http::{HeaderMap, StatusCode},
 };
+use scope_api_contract::{AccountSessionResponse, SessionIdentity};
+use scope_domain::policy::ScopePath;
 
 pub(crate) async fn healthz() -> Json<HealthResponse> {
     Json(HealthResponse {
@@ -24,7 +24,7 @@ pub(crate) async fn healthz() -> Json<HealthResponse> {
 }
 
 pub(crate) async fn readyz(State(state): State<AppState>) -> (StatusCode, Json<ReadinessResponse>) {
-    let database_ready = state.metadata.readiness_check().await.is_ok();
+    let database_ready = state.metadata.admin().readiness_check().await.is_ok();
     let object_store_ready = state.object_store.readiness_check().is_ok();
     let ready = database_ready && object_store_ready;
 
@@ -63,6 +63,7 @@ pub(crate) async fn get_account_session(
     let credit_balance_credits = match user.as_ref() {
         Some(user) => state
             .metadata
+            .auth()
             .credit_account_by_user_id(&user.id)
             .await?
             .map(|account| account.balance_credits),
@@ -93,7 +94,7 @@ pub(crate) async fn get_session(
         identity: user.as_ref().map(SessionIdentity::from),
         repo: SessionRepo {
             id: repo.record.id.clone(),
-            publication_state: repo.record.publication_state,
+            publication_state: repo.record.publication_state.into(),
             access: repository_access_response(access),
         },
         capabilities: session_capabilities_response(can_read, access),

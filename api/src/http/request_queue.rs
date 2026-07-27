@@ -2,13 +2,7 @@ use super::{
     requests::{current_main_oid_for_access, repo_and_access},
     responses::request_list_item_response,
 };
-use crate::{
-    domain::requests::{
-        REQUEST_LIST_DEFAULT_PAGE_SIZE, REQUEST_LIST_MAX_PAGE_SIZE, RequestQueueSection,
-    },
-    error::ApiError,
-    state::AppState,
-};
+use crate::{error::ApiError, state::AppState};
 use axum::{
     Json,
     extract::{Path, Query, State},
@@ -20,6 +14,9 @@ use chacha20poly1305::{
     aead::{Aead, KeyInit, Payload},
 };
 use scope_api_contract::RequestListResponse;
+use scope_domain::requests::{
+    REQUEST_LIST_DEFAULT_PAGE_SIZE, REQUEST_LIST_MAX_PAGE_SIZE, RequestQueueSection,
+};
 use serde::Deserialize;
 use sha2::{Digest, Sha256};
 
@@ -84,7 +81,8 @@ pub(crate) async fn request_queue(
 
     let mut rows = state
         .metadata
-        .request_queue_page(scope_core::db::RequestQueuePageQuery {
+        .requests()
+        .request_queue_page(scope_postgres::db::RequestQueuePageQuery {
             repo_id: &repo.record.id,
             section: query.section,
             viewer_user_id: viewer_user_id.as_deref(),
@@ -126,7 +124,7 @@ fn encode_request_queue_cursor(
     signing_key: &[u8],
     repo_id: &str,
     section: RequestQueueSection,
-    cursor: &scope_core::db::RequestQueueCursor,
+    cursor: &scope_postgres::db::RequestQueueCursor,
 ) -> Result<String, ApiError> {
     let plaintext = encode_request_queue_cursor_plain(cursor);
     let mut nonce = [0_u8; REQUEST_QUEUE_CURSOR_NONCE_BYTES];
@@ -158,7 +156,7 @@ fn parse_request_queue_cursor(
     repo_id: &str,
     section: RequestQueueSection,
     value: &str,
-) -> Result<scope_core::db::RequestQueueCursor, ApiError> {
+) -> Result<scope_postgres::db::RequestQueueCursor, ApiError> {
     let invalid = || ApiError::bad_request("invalid request queue cursor");
     let encoded = value
         .strip_prefix(REQUEST_QUEUE_CURSOR_PREFIX)
@@ -208,8 +206,8 @@ fn request_queue_section_name(section: RequestQueueSection) -> &'static str {
 fn parse_request_queue_cursor_plain(
     section: RequestQueueSection,
     value: &str,
-) -> Result<scope_core::db::RequestQueueCursor, ApiError> {
-    use scope_core::db::RequestQueueCursor;
+) -> Result<scope_postgres::db::RequestQueueCursor, ApiError> {
+    use scope_postgres::db::RequestQueueCursor;
 
     let parts = value.split(':').collect::<Vec<_>>();
     let invalid = || ApiError::bad_request("invalid request queue cursor");
@@ -253,8 +251,8 @@ fn parse_request_queue_cursor_plain(
     }
 }
 
-fn encode_request_queue_cursor_plain(cursor: &scope_core::db::RequestQueueCursor) -> String {
-    use scope_core::db::RequestQueueCursor;
+fn encode_request_queue_cursor_plain(cursor: &scope_postgres::db::RequestQueueCursor) -> String {
+    use scope_postgres::db::RequestQueueCursor;
 
     match cursor {
         RequestQueueCursor::YourWork {
@@ -277,7 +275,7 @@ fn encode_request_queue_cursor_plain(cursor: &scope_core::db::RequestQueueCursor
 #[cfg(test)]
 mod tests {
     use super::*;
-    use scope_core::db::RequestQueueCursor;
+    use scope_postgres::db::RequestQueueCursor;
 
     #[test]
     fn queue_cursors_are_confidential_bound_and_range_checked() {

@@ -5,7 +5,7 @@ use crate::{
     repo_config::write_worktree_scope_repo_config_with_base,
 };
 use anyhow::{Context, bail};
-use scope_core::domain::repo_config::RepoConfig;
+use scope_domain::repo_config::RepoConfig;
 use std::path::{Path, PathBuf};
 
 #[derive(Debug, PartialEq, Eq)]

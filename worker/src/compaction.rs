@@ -1,11 +1,9 @@
 use crate::git_repo::build_compacted_pack;
-use scope_core::{
-    db::MetadataStore,
-    domain::store::{GitHead, GitSegment, SourceBlob},
-    git_segments::{GitSegmentManifest, GitStorageLimits},
-    object_store::{ObjectStore, ensure_object_size, put_repo_object},
-};
+use scope_domain::store::{GitHead, GitSegment, SourceBlob};
+use scope_git::{GitStorageLimits, materialize_compacted_git_segment};
 use scope_git_process::ProcessError;
+use scope_object_store::ObjectStore;
+use scope_postgres::db::MetadataStore;
 use std::time::Duration;
 
 #[derive(Debug, PartialEq, Eq)]
@@ -23,7 +21,9 @@ pub(crate) async fn compact_one_git_repository(
     storage_limits: GitStorageLimits,
     timeout: Duration,
 ) -> anyhow::Result<CompactionOutcome> {
+    let now_unix = super::unix_now()?;
     let Some(candidate) = metadata
+        .jobs()
         .git_compaction_candidate(minimum_segments as u64)
         .await
         .map_err(|error| anyhow::anyhow!(error.message))?
@@ -39,6 +39,7 @@ pub(crate) async fn compact_one_git_repository(
                         metadata,
                         object_store,
                         &failure.orphan_objects,
+                        now_unix,
                     )
                     .await?;
                 }
@@ -50,11 +51,14 @@ pub(crate) async fn compact_one_git_repository(
         };
     let stored_objects = [new_segment.object.clone(), new_segment.manifest.clone()];
     match metadata
+        .jobs()
         .replace_git_segments_with_compaction(
             &candidate.repo_id,
-            &candidate.head.manifest.object_key,
+            &candidate.head.manifest.content_ref,
             new_head,
             new_segment,
+            now_unix,
+            &crate::generate_persistence_id,
         )
         .await
     {
@@ -62,7 +66,12 @@ pub(crate) async fn compact_one_git_repository(
         Ok(false) => Ok(CompactionOutcome::Stale),
         Err(error) => {
             if let Err(queue_error) = metadata
-                .queue_pending_source_blob_deletions(stored_objects.to_vec())
+                .cleanup()
+                .queue_pending_source_blob_deletions(
+                    stored_objects.to_vec(),
+                    now_unix,
+                    &crate::generate_persistence_id,
+                )
                 .await
             {
                 return Err(anyhow::anyhow!(
@@ -83,15 +92,25 @@ async fn queue_or_delete_failed_compaction_objects(
     metadata: &MetadataStore,
     object_store: &dyn ObjectStore,
     objects: &[SourceBlob],
+    now_unix: u64,
 ) -> anyhow::Result<()> {
     if let Err(queue_error) = metadata
-        .queue_pending_source_blob_deletions(objects.to_vec())
+        .cleanup()
+        .queue_pending_source_blob_deletions(
+            objects.to_vec(),
+            now_unix,
+            &crate::generate_persistence_id,
+        )
         .await
     {
         let mut delete_errors = Vec::new();
         for object in objects {
-            if let Err(error) = object_store.delete(&object.object_key) {
-                delete_errors.push(format!("{}: {}", object.object_key, error.message));
+            if let Err(error) = object_store.delete(&scope_object_store::object_key(object)) {
+                delete_errors.push(format!(
+                    "{}: {}",
+                    scope_object_store::object_key(object),
+                    error.message
+                ));
             }
         }
         if !delete_errors.is_empty() {
@@ -121,67 +140,21 @@ impl From<anyhow::Error> for CompactedSegmentBuildFailure {
 
 fn build_compacted_segment(
     object_store: &dyn ObjectStore,
-    candidate: &scope_core::db::GitCompactionCandidate,
+    candidate: &scope_postgres::db::GitCompactionCandidate,
     storage_limits: GitStorageLimits,
     timeout: Duration,
 ) -> Result<(GitHead, GitSegment), CompactedSegmentBuildFailure> {
     let pack = build_compacted_pack(object_store, candidate, storage_limits, timeout)?;
-    ensure_object_size(
-        "write",
-        "Git compacted segment",
-        pack.len(),
-        storage_limits.max_object_bytes(),
-    )
-    .map_err(|error| anyhow::anyhow!(error.message))?;
-    let segment = put_repo_object(object_store, &candidate.repo_id, "git-segments", &pack)
-        .map_err(|error| CompactedSegmentBuildFailure::from(anyhow::anyhow!(error.message)))?;
-    let manifest = GitSegmentManifest::new(candidate.head.head_oid.clone(), None, segment.clone());
-    let manifest_bytes = manifest
-        .encode()
-        .map_err(|error| CompactedSegmentBuildFailure {
-            error: anyhow::anyhow!(error.message),
-            orphan_objects: vec![segment.clone()],
-        })?;
-    ensure_object_size(
-        "write",
-        "Git compacted manifest",
-        manifest_bytes.len(),
-        storage_limits.max_object_bytes(),
-    )
-    .map_err(|error| CompactedSegmentBuildFailure {
-        error: anyhow::anyhow!(error.message),
-        orphan_objects: vec![segment.clone()],
-    })?;
-    let mut manifest_object = match put_repo_object(
-        object_store,
-        &candidate.repo_id,
-        "git-manifests",
-        &manifest_bytes,
-    ) {
-        Ok(object) => object,
-        Err(error) => {
-            return Err(CompactedSegmentBuildFailure {
-                error: anyhow::anyhow!(error.message),
-                orphan_objects: vec![segment],
-            });
+    match materialize_compacted_git_segment(object_store, &pack, &candidate.head, storage_limits) {
+        Ok(stored) => Ok((stored.head, stored.segment)),
+        Err(failure) => {
+            let (error, orphan_objects) = failure.into_parts();
+            Err(CompactedSegmentBuildFailure {
+                error: anyhow::Error::new(error),
+                orphan_objects,
+            })
         }
-    };
-    manifest_object.git_oid = candidate.head.head_oid.clone();
-    Ok((
-        GitHead {
-            head_oid: candidate.head.head_oid.clone(),
-            segment_sequence: 1,
-            change_version: candidate.head.change_version,
-            manifest: manifest_object.clone(),
-        },
-        GitSegment {
-            sequence: 1,
-            base_oid: None,
-            head_oid: candidate.head.head_oid.clone(),
-            object: segment,
-            manifest: manifest_object,
-        },
-    ))
+    }
 }
 
 fn is_bounded_refusal(error: &anyhow::Error) -> bool {

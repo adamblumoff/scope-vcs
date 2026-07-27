@@ -1,8 +1,6 @@
 use super::RepoSummaryResponse;
-use crate::domain::store::{
-    RepositoryInvite, RepositoryInviteState, RepositoryMember, RepositoryMemberPermissions,
-    StoredRepository, UserAccount,
-};
+use scope_api_contract::{RepositoryInviteState, RepositoryMemberPermissions};
+use scope_domain::store::{RepositoryInvite, RepositoryMember, StoredRepository, UserAccount};
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Serialize)]
@@ -112,7 +110,7 @@ pub(crate) fn repository_member_response(
         user_id: member.user_id.clone(),
         handle: user.handle.clone(),
         email: user.email.clone(),
-        permissions: member.permissions,
+        permissions: member.permissions.into(),
         created_at_unix: member.created_at_unix,
         updated_at_unix: member.updated_at_unix,
     }
@@ -122,8 +120,8 @@ pub(crate) fn repository_invite_response(invite: &RepositoryInvite) -> Repositor
     RepositoryInviteResponse {
         id: invite.id.clone(),
         invited_email: invite.invited_email.clone(),
-        permissions: invite.permissions,
-        state: invite.state,
+        permissions: invite.permissions.into(),
+        state: invite.state.into(),
         expires_at_unix: invite.expires_at_unix,
     }
 }

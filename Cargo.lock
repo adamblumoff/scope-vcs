@@ -71,8 +71,11 @@ dependencies = [
  "jsonwebtoken",
  "reqwest",
  "scope-api-contract",
- "scope-core",
+ "scope-domain",
+ "scope-git",
  "scope-git-process",
+ "scope-object-store",
+ "scope-postgres",
  "serde",
  "serde_json",
  "sha1",
@@ -85,6 +88,7 @@ dependencies = [
  "tracing",
  "tracing-subscriber",
  "ts-rs",
+ "url",
 ]
 
 [[package]]
@@ -2007,36 +2011,33 @@ checksum = "9774ba4a74de5f7b1c1451ed6cd5285a32eddb5cccb8cc655a4e50009e06477f"
 name = "scope-api-contract"
 version = "0.1.0"
 dependencies = [
- "scope-core",
+ "scope-domain",
  "serde",
  "serde_json",
  "ts-rs",
 ]
 
 [[package]]
-name = "scope-core"
+name = "scope-domain"
 version = "0.1.0"
 dependencies = [
- "anyhow",
- "base64",
- "chacha20poly1305",
- "getrandom 0.3.4",
  "hex",
- "hmac",
- "http",
- "jsonwebtoken",
- "reqwest",
- "sea-orm",
  "serde",
  "serde_json",
  "sha1",
  "sha2",
- "sqlx",
  "thiserror",
- "time",
- "tokio",
- "tracing",
- "ts-rs",
+]
+
+[[package]]
+name = "scope-git"
+version = "0.1.0"
+dependencies = [
+ "scope-domain",
+ "scope-object-store",
+ "serde",
+ "serde_json",
+ "thiserror",
 ]
 
 [[package]]
@@ -2045,6 +2046,41 @@ version = "0.1.0"
 dependencies = [
  "libc",
  "thiserror",
+]
+
+[[package]]
+name = "scope-object-store"
+version = "0.1.0"
+dependencies = [
+ "chacha20poly1305",
+ "getrandom 0.3.4",
+ "hex",
+ "hmac",
+ "reqwest",
+ "scope-domain",
+ "sha1",
+ "sha2",
+ "time",
+ "tokio",
+]
+
+[[package]]
+name = "scope-postgres"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "hex",
+ "scope-domain",
+ "scope-git",
+ "sea-orm",
+ "serde",
+ "serde_json",
+ "sha2",
+ "sqlx",
+ "thiserror",
+ "time",
+ "tokio",
+ "tracing",
 ]
 
 [[package]]
@@ -3449,10 +3485,14 @@ name = "worker"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "base64",
  "getrandom 0.3.4",
  "hex",
- "scope-core",
+ "scope-domain",
+ "scope-git",
  "scope-git-process",
+ "scope-object-store",
+ "scope-postgres",
  "tokio",
  "tracing",
  "tracing-subscriber",

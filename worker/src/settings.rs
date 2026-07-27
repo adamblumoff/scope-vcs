@@ -1,11 +1,13 @@
-use scope_core::{
-    config::{
-        DEFAULT_GIT_COMPACTION_SEGMENTS, SCOPE_DATA_DIR_ENV, git_storage_limits_from_env,
-        non_empty_env,
-    },
-    git_segments::GitStorageLimits,
-};
+use scope_git::GitStorageLimits;
 use std::{path::PathBuf, time::Duration};
+
+const DATABASE_URL_ENV: &str = "DATABASE_URL";
+const SCOPE_DATA_DIR_ENV: &str = "SCOPE_DATA_DIR";
+const SCOPE_GIT_SEGMENT_MAX_DEPTH_ENV: &str = "SCOPE_GIT_SEGMENT_MAX_DEPTH";
+const SCOPE_OBJECT_STORE_MAX_BYTES_ENV: &str = "SCOPE_OBJECT_STORE_MAX_BYTES";
+const DEFAULT_GIT_COMPACTION_SEGMENTS: usize = 32;
+const DEFAULT_OBJECT_STORE_MAX_BYTES: usize = 128 * 1024 * 1024;
+const DEFAULT_GIT_SEGMENT_MAX_DEPTH: usize = 2 * DEFAULT_GIT_COMPACTION_SEGMENTS;
 
 const DEFAULT_BATCH_SIZE: usize = 10;
 const DEFAULT_POLL_INTERVAL_MS: u64 = 1_000;
@@ -13,6 +15,7 @@ const DEFAULT_SCHEMA_WAIT_SECS: u64 = 300;
 const DEFAULT_GIT_COMPACTION_TIMEOUT_SECS: u64 = 120;
 
 pub(crate) struct WorkerSettings {
+    pub(crate) database_url: String,
     pub(crate) worker_id: String,
     pub(crate) batch_size: usize,
     pub(crate) poll_interval: Duration,
@@ -25,6 +28,7 @@ pub(crate) struct WorkerSettings {
 
 impl WorkerSettings {
     pub(crate) fn from_env() -> anyhow::Result<Self> {
+        let database_url = required_env(DATABASE_URL_ENV)?;
         let worker_id = std::env::var("SCOPE_WORKER_ID")
             .ok()
             .filter(|value| !value.trim().is_empty())
@@ -59,6 +63,7 @@ impl WorkerSettings {
             .map(PathBuf::from)
             .unwrap_or_else(|| PathBuf::from(".scope"));
         Ok(Self {
+            database_url,
             worker_id,
             batch_size: batch_size.max(1),
             poll_interval: Duration::from_millis(poll_interval_ms.max(100)),
@@ -69,6 +74,28 @@ impl WorkerSettings {
             data_dir,
         })
     }
+}
+
+fn required_env(name: &str) -> anyhow::Result<String> {
+    non_empty_env(name).ok_or_else(|| anyhow::anyhow!("{name} is required"))
+}
+
+fn non_empty_env(name: &str) -> Option<String> {
+    std::env::var(name).ok().filter(|value| !value.is_empty())
+}
+
+fn git_storage_limits_from_env() -> anyhow::Result<GitStorageLimits> {
+    GitStorageLimits::new(
+        parse_usize_env(
+            SCOPE_OBJECT_STORE_MAX_BYTES_ENV,
+            DEFAULT_OBJECT_STORE_MAX_BYTES,
+        )?,
+        parse_usize_env(
+            SCOPE_GIT_SEGMENT_MAX_DEPTH_ENV,
+            DEFAULT_GIT_SEGMENT_MAX_DEPTH,
+        )?,
+    )
+    .map_err(anyhow::Error::from)
 }
 
 fn parse_usize_env(name: &str, default: usize) -> anyhow::Result<usize> {

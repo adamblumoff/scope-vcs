@@ -5,7 +5,7 @@ pub use scope_api_contract::routes::{
     cli_device_login_poll as cli_device_login_poll_path,
 };
 pub use scope_api_contract::*;
-use scope_core::domain::repo_config::RepoConfig;
+use scope_domain::repo_config::RepoConfig as DomainRepoConfig;
 use std::{env, time::Duration};
 
 mod requests;
@@ -33,7 +33,15 @@ pub struct CreatePushIntentParams<'a> {
     pub repo: &'a str,
     pub head_oid: &'a str,
     pub base_config_hash: &'a str,
-    pub config: &'a RepoConfig,
+    pub config: &'a DomainRepoConfig,
+}
+
+pub struct RepoConfigContext {
+    pub config: DomainRepoConfig,
+    pub config_hash: String,
+    pub lifecycle_state: RepoPublicationState,
+    pub access: RepositoryAccessResponse,
+    pub head_oid: Option<String>,
 }
 
 pub fn api_url() -> String {
@@ -185,7 +193,7 @@ pub fn get_repo_config(
     session_token: &str,
     owner: &str,
     repo: &str,
-) -> anyhow::Result<RepoConfigResponse> {
+) -> anyhow::Result<RepoConfigContext> {
     let response = client
         .get(format!(
             "{api_url}{}",
@@ -207,11 +215,18 @@ pub fn get_repo_config(
         _ => {}
     }
 
-    response
+    let response: RepoConfigResponse = response
         .error_for_status()
         .with_context(|| format!("get repo config for {owner}/{repo}"))?
         .json()
-        .context("parse repo config response")
+        .context("parse repo config response")?;
+    Ok(RepoConfigContext {
+        config: response.config.into(),
+        config_hash: response.config_hash,
+        lifecycle_state: response.lifecycle_state,
+        access: response.access,
+        head_oid: response.head_oid,
+    })
 }
 
 pub fn create_push_intent(
@@ -229,7 +244,7 @@ pub fn create_push_intent(
         .json(&CreatePushIntentRequest {
             head_oid: params.head_oid.to_string(),
             base_config_hash: params.base_config_hash.to_string(),
-            config: params.config.clone(),
+            config: params.config.clone().into(),
         })
         .send()
         .with_context(|| format!("create push intent for {}/{}", params.owner, params.repo))?;

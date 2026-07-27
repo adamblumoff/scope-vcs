@@ -1,10 +1,5 @@
 use crate::{
     auth::scope::require_scope_user,
-    domain::requests::{
-        CreateRequestDiscussionInput, CreateRequestDiscussionReplyInput,
-        MarkRequestDiscussionReadInput, REQUEST_ACTIVITY_PAGE_MAX_EVENTS,
-        ReopenAndReplyToRequestDiscussionInput, RequestViewer, request_policy,
-    },
     error::ApiError,
     http::{requests::*, responses::*},
     persistence::unix_now,
@@ -15,7 +10,20 @@ use axum::{
     extract::{Path, Query, State},
     http::HeaderMap,
 };
-use scope_api_contract::*;
+use scope_api_contract::{
+    CreateRequestDiscussionReplyRequest, CreateRequestDiscussionRequest,
+    MarkRequestDiscussionReadRequest, ReopenAndReplyRequest, RequestActivityPageResponse,
+    RequestActorSummaryResponse, RequestChangeBlockResponse, RequestDiscussionChangesResponse,
+    RequestDiscussionMutationResponse, RequestDiscussionPageResponse,
+    RequestDiscussionReadResponse, RequestDiscussionRepliesPageResponse,
+    RequestDiscussionReplyMutationResponse, RequestDiscussionReplyResponse,
+    RequestDiscussionSummaryResponse,
+};
+use scope_domain::requests::{
+    CreateRequestDiscussionInput, CreateRequestDiscussionReplyInput,
+    MarkRequestDiscussionReadInput, REQUEST_ACTIVITY_PAGE_MAX_EVENTS,
+    ReopenAndReplyToRequestDiscussionInput, RequestViewer, request_policy,
+};
 use serde::Deserialize;
 use std::collections::BTreeMap;
 
@@ -81,7 +89,8 @@ pub(crate) async fn list_discussions(
         .unwrap_or(request.activity_version);
     let batch = state
         .metadata
-        .request_discussions_page(scope_core::db::RequestDiscussionsPageQuery {
+        .requests()
+        .request_discussions_page(scope_postgres::db::RequestDiscussionsPageQuery {
             request_id: &request.id,
             viewer_user_id: viewer_user_id.as_deref(),
             snapshot_version,
@@ -128,6 +137,7 @@ pub(crate) async fn create_discussion(
     let request = visible_request(&state, &repo, access, Some(&user.id), &request_id).await?;
     let mutation = state
         .metadata
+        .requests()
         .create_request_discussion(CreateRequestDiscussionInput {
             request_id: request.id.clone(),
             id: random_id("discussion")?,
@@ -177,6 +187,7 @@ pub(crate) async fn list_replies(
         .clamp(1, MAX_REPLY_LIMIT);
     let (mut replies, users) = state
         .metadata
+        .requests()
         .request_discussion_replies(
             &discussion_id,
             query.parent_reply_id.as_deref(),
@@ -213,6 +224,7 @@ pub(crate) async fn create_reply(
     let request = visible_request(&state, &repo, access, Some(&user.id), &request_id).await?;
     let mutation = state
         .metadata
+        .requests()
         .create_request_discussion_reply(CreateRequestDiscussionReplyInput {
             request_id: request.id.clone(),
             discussion_id: discussion_id.clone(),
@@ -282,6 +294,7 @@ pub(crate) async fn reopen_and_reply(
     let request = visible_request(&state, &repo, access, Some(&user.id), &request_id).await?;
     let mutation = state
         .metadata
+        .requests()
         .reopen_and_reply_to_request_discussion(ReopenAndReplyToRequestDiscussionInput {
             request_id: request.id.clone(),
             discussion_id: discussion_id.clone(),
@@ -319,6 +332,7 @@ pub(crate) async fn mark_read(
     ensure_discussion_in_request(&state, &request_id, &discussion_id).await?;
     let state = state
         .metadata
+        .requests()
         .mark_request_discussion_read(MarkRequestDiscussionReadInput {
             discussion_id,
             user_id: user.id,
@@ -350,6 +364,7 @@ pub(crate) async fn changed_discussions(
     let limit = query.limit.unwrap_or(100).clamp(1, 100);
     let mut batch = state
         .metadata
+        .requests()
         .changed_request_discussions(
             &request.id,
             viewer_user_id.as_deref(),
@@ -396,6 +411,7 @@ pub(crate) async fn activity(
         Some(user_id) => {
             state
                 .metadata
+                .requests()
                 .request_is_invitee(&request.id, user_id)
                 .await?
         }
@@ -417,16 +433,19 @@ pub(crate) async fn activity(
     let events = if latest {
         state
             .metadata
+            .requests()
             .latest_request_events(&request.id, limit as u64)
             .await?
     } else {
         state
             .metadata
+            .requests()
             .request_events_after_position(&request.id, query.after.unwrap_or(0), limit as u64)
             .await?
     };
     let users = state
         .metadata
+        .requests()
         .users_by_ids(events.iter().map(|event| event.actor_user_id.clone()))
         .await?;
     let through_position = if latest {
@@ -466,6 +485,7 @@ async fn transition_discussion(
     let discussion = if resolve {
         state
             .metadata
+            .requests()
             .resolve_request_discussion(
                 request.id.clone(),
                 discussion_id.clone(),
@@ -477,6 +497,7 @@ async fn transition_discussion(
     } else {
         state
             .metadata
+            .requests()
             .reopen_request_discussion(
                 request.id.clone(),
                 discussion_id.clone(),
@@ -503,20 +524,22 @@ async fn transition_discussion(
 
 async fn reply_mutation_response(
     state: &AppState,
-    repo: &crate::domain::store::StoredRepository,
-    request: &crate::domain::requests::Request,
+    repo: &scope_domain::store::StoredRepository,
+    request: &scope_domain::requests::Request,
     discussion_id: String,
-    reply: crate::domain::requests::RequestDiscussionReply,
+    reply: scope_domain::requests::RequestDiscussionReply,
     actor_user_id: &str,
 ) -> Result<Json<RequestDiscussionReplyMutationResponse>, ApiError> {
     let discussion =
         load_one_summary(state, &request.id, &discussion_id, Some(actor_user_id)).await?;
     let users = state
         .metadata
+        .requests()
         .users_by_ids([reply.author_user_id.clone()])
         .await?;
     let child_reply_count = state
         .metadata
+        .requests()
         .request_discussion_reply_child_count(&reply.id)
         .await?;
     let response = reply_response(reply.clone(), child_reply_count, &users)?;
@@ -543,6 +566,7 @@ async fn load_one_summary(
 ) -> Result<RequestDiscussionSummaryResponse, ApiError> {
     let (model, users) = state
         .metadata
+        .requests()
         .request_discussion(request_id, discussion_id, viewer_user_id)
         .await?
         .ok_or_else(|| ApiError::not_found("request discussion not found"))?;
@@ -560,8 +584,8 @@ async fn ensure_discussion_in_request(
 }
 
 fn discussion_summary(
-    model: crate::db::RequestDiscussionReadModel,
-    users: &BTreeMap<String, crate::domain::store::UserAccount>,
+    model: scope_postgres::db::RequestDiscussionReadModel,
+    users: &BTreeMap<String, scope_domain::store::UserAccount>,
 ) -> Result<RequestDiscussionSummaryResponse, ApiError> {
     Ok(RequestDiscussionSummaryResponse {
         id: model.discussion.id,
@@ -578,7 +602,7 @@ fn discussion_summary(
             new_head_oid: block.new_head_oid,
             created_at_unix: block.created_at_unix,
         }),
-        status: model.discussion.status,
+        status: model.discussion.status.into(),
         reply_count: model.reply_count,
         unread_count: model.unread_count,
         latest_replies: model
@@ -598,9 +622,9 @@ fn discussion_summary(
 }
 
 fn reply_response(
-    reply: crate::domain::requests::RequestDiscussionReply,
+    reply: scope_domain::requests::RequestDiscussionReply,
     child_reply_count: u64,
-    users: &BTreeMap<String, crate::domain::store::UserAccount>,
+    users: &BTreeMap<String, scope_domain::store::UserAccount>,
 ) -> Result<RequestDiscussionReplyResponse, ApiError> {
     Ok(RequestDiscussionReplyResponse {
         id: reply.id,
@@ -610,21 +634,21 @@ fn reply_response(
         body_markdown: reply.body_markdown,
         reply_to_reply_id: reply.reply_to_reply_id,
         child_reply_count,
-        can_reply: reply.depth < crate::domain::requests::REQUEST_DISCUSSION_REPLY_MAX_DEPTH,
+        can_reply: reply.depth < scope_domain::requests::REQUEST_DISCUSSION_REPLY_MAX_DEPTH,
         created_at_unix: reply.created_at_unix,
     })
 }
 
 fn reply_read_response(
-    model: scope_core::db::RequestDiscussionReplyReadModel,
-    users: &BTreeMap<String, crate::domain::store::UserAccount>,
+    model: scope_postgres::db::RequestDiscussionReplyReadModel,
+    users: &BTreeMap<String, scope_domain::store::UserAccount>,
 ) -> Result<RequestDiscussionReplyResponse, ApiError> {
     reply_response(model.reply, model.child_reply_count, users)
 }
 
 fn actor_response(
     user_id: &str,
-    users: &BTreeMap<String, crate::domain::store::UserAccount>,
+    users: &BTreeMap<String, scope_domain::store::UserAccount>,
 ) -> Result<RequestActorSummaryResponse, ApiError> {
     let user = users
         .get(user_id)

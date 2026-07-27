@@ -1,7 +1,3 @@
-use crate::domain::policy::Principal;
-use crate::domain::projection::{Projection, ProjectionViewKey, project_graph};
-use crate::domain::requests::{Request, RequestViewer, canonical_request_ref, request_policy};
-use crate::domain::store::{RepoPublicationState, RepositoryActor, is_supported_git_file_mode};
 use crate::{
     auth::scope::principal_for_user_id,
     config::{DEFAULT_GIT_BRANCH, GIT_UPLOAD_PACK, UNPUBLISHED_GIT_ERROR},
@@ -10,9 +6,9 @@ use crate::{
         GitRemoteMode, cache::GitRepoHandle, content::source_content_bytes, git_read_scope_user,
         import::run_git, request_refs::attach_visible_request_refs, storage::cached_raw_git_repo,
     },
+    repo_access::{ensure_repo_read, find_repo},
     runtime_budgets::{RuntimeBudgets, RuntimePermit},
     state::AppState,
-    state::{ensure_repo_read, find_repo},
 };
 use axum::{
     body::Body,
@@ -22,6 +18,10 @@ use axum::{
     },
     response::{IntoResponse, Response},
 };
+use scope_domain::policy::Principal;
+use scope_domain::projection::{Projection, ProjectionViewKey, project_graph};
+use scope_domain::requests::{Request, RequestViewer, canonical_request_ref, request_policy};
+use scope_domain::store::{RepoPublicationState, RepositoryActor, is_supported_git_file_mode};
 use scope_git_process::{
     ProcessLimits, STDERR_DIAGNOSTIC_BYTES, run as run_process, truncated_stderr,
 };
@@ -100,7 +100,11 @@ pub(crate) async fn git_upload_pack_repo_for_request(
                     &repo.visibility_events,
                     ProjectionViewKey::Private,
                 );
-                GitRepoHandle::from_path(projection_bare_repo_for_state(state, &projection)?)
+                GitRepoHandle::from_path(projection_bare_repo_for_state(
+                    state,
+                    &projection,
+                    repo.git_head.as_ref().map(|head| &head.manifest),
+                )?)
             }
         }
     } else {
@@ -110,15 +114,25 @@ pub(crate) async fn git_upload_pack_repo_for_request(
             &repo.visibility_events,
             ProjectionViewKey::Public,
         );
-        GitRepoHandle::from_path(projection_bare_repo_for_state(state, &projection)?)
+        GitRepoHandle::from_path(projection_bare_repo_for_state(
+            state,
+            &projection,
+            repo.git_head.as_ref().map(|head| &head.manifest),
+        )?)
     };
     let mut requests = Vec::new();
     let mut hidden_request_refs = Vec::new();
-    for request in state.metadata.requests_by_repo_id(&repo.record.id).await? {
+    for request in state
+        .metadata
+        .requests()
+        .requests_by_repo_id(&repo.record.id)
+        .await?
+    {
         let is_invitee = match viewer_user_id.as_deref() {
             Some(user_id) => {
                 state
                     .metadata
+                    .requests()
                     .request_is_invitee(&request.id, user_id)
                     .await?
             }
@@ -138,7 +152,7 @@ pub(crate) async fn git_upload_pack_repo_for_request(
     requests.sort_by(|left, right| left.name.cmp(&right.name));
     let public_base_repo = if private_view
         && requests.iter().any(|request| {
-            request.audience == crate::domain::requests::RequestAudience::Public
+            request.audience == scope_domain::requests::RequestAudience::Public
                 && request.git_snapshot.is_none()
         }) {
         let projection = project_graph(
@@ -147,7 +161,11 @@ pub(crate) async fn git_upload_pack_repo_for_request(
             &repo.visibility_events,
             ProjectionViewKey::Public,
         );
-        Some(projection_bare_repo_for_state(state, &projection)?)
+        Some(projection_bare_repo_for_state(
+            state,
+            &projection,
+            repo.git_head.as_ref().map(|head| &head.manifest),
+        )?)
     } else {
         None
     };
@@ -286,7 +304,7 @@ async fn git_read_principal_for_request(
     mode: GitRemoteMode,
 ) -> Result<
     (
-        crate::domain::store::StoredRepository,
+        scope_domain::store::StoredRepository,
         Principal,
         Option<String>,
     ),
@@ -307,7 +325,7 @@ async fn git_read_principal_for_request(
 }
 
 fn unpublished_git_read_error(
-    repo: &crate::domain::store::StoredRepository,
+    repo: &scope_domain::store::StoredRepository,
     owner: &str,
     repo_name: &str,
     principal: &Principal,
@@ -322,7 +340,7 @@ fn unpublished_git_read_error(
 fn projection_bare_repo_with_loader(
     cache_root: &FsPath,
     projection: &Projection,
-    load_content: impl Fn(&crate::domain::store::SourceBlob) -> Result<Vec<u8>, ApiError>,
+    load_content: impl Fn(&scope_domain::store::SourceBlob) -> Result<Vec<u8>, ApiError>,
 ) -> Result<PathBuf, ApiError> {
     let cache_key = projection_cache_key(projection);
     let repo_path = cache_root.join(format!("{cache_key}.git"));
@@ -437,6 +455,7 @@ fn projection_bare_repo_with_loader(
 pub(crate) fn projection_bare_repo_for_state(
     state: &AppState,
     projection: &Projection,
+    git_manifest: Option<&scope_domain::store::SourceBlob>,
 ) -> Result<PathBuf, ApiError> {
     let cache_root = state.git_cache_root()?;
     let cache_key = projection_cache_key(projection);
@@ -452,7 +471,7 @@ pub(crate) fn projection_bare_repo_for_state(
 
     let _permit = state.runtime_budgets.try_projection_build()?;
     projection_bare_repo_with_loader(&cache_root, projection, |blob| {
-        source_content_bytes(state, blob)
+        source_content_bytes(state, blob, git_manifest)
     })
 }
 

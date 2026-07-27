@@ -1,8 +1,11 @@
 use super::{
-    policy::{ReviewVisibility, node_visibility, rule_label, toggle_node_visibility},
+    policy::{node_visibility, rule_label, toggle_node_visibility},
     tree::{ReviewNodeKind, ReviewTree},
 };
-use scope_core::domain::repo_config::{HistoryRewriteAction, RepoConfig};
+use scope_domain::{
+    repo_config::{HistoryRewriteAction, RepoConfig},
+    repo_visibility::ReviewVisibility,
+};
 use std::collections::BTreeSet;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]

@@ -1,14 +1,13 @@
 use crate::{
-    auth::{clerk::bearer_token, scope::require_reconciled_clerk_scope_user},
+    auth::{
+        clerk::bearer_token,
+        cli::{CliAuthService, DeviceLoginPoll},
+        scope::require_reconciled_clerk_scope_user,
+    },
     config::CLI_SESSION_TOKEN_PREFIX,
     error::ApiError,
-    http::{
-        origins::public_app_origin,
-        responses::{
-            DeviceLoginCompleteResponse, DeviceLoginPollResponse, DeviceLoginStartResponse,
-            DeviceLoginStatus,
-        },
-    },
+    http::{origins::public_app_origin, responses::DeviceLoginCompleteResponse},
+    persistence::unix_now,
     state::AppState,
 };
 use axum::{
@@ -16,12 +15,15 @@ use axum::{
     extract::{Path, State},
     http::{HeaderMap, StatusCode},
 };
+use scope_api_contract::{DeviceLoginPollResponse, DeviceLoginStartResponse, DeviceLoginStatus};
 
 pub(crate) async fn start_cli_device_login(
     State(state): State<AppState>,
 ) -> Result<Json<DeviceLoginStartResponse>, ApiError> {
     let app_origin = public_app_origin("build CLI login URL")?;
-    let login = state.metadata.start_cli_device_login(&app_origin).await?;
+    let login = CliAuthService::new(state.metadata.auth())
+        .start_device_login(&app_origin, unix_now()?)
+        .await?;
 
     Ok(Json(DeviceLoginStartResponse {
         device_code: login.device_code,
@@ -38,9 +40,8 @@ pub(crate) async fn complete_cli_device_login(
     Path(user_code): Path<String>,
 ) -> Result<Json<DeviceLoginCompleteResponse>, ApiError> {
     let user = require_reconciled_clerk_scope_user(&state, &headers).await?;
-    state
-        .metadata
-        .complete_cli_device_login(&user_code, &user)
+    CliAuthService::new(state.metadata.auth())
+        .complete_device_login(&user_code, &user, unix_now()?)
         .await?;
 
     Ok(Json(DeviceLoginCompleteResponse {
@@ -52,16 +53,17 @@ pub(crate) async fn poll_cli_device_login(
     State(state): State<AppState>,
     Path(device_code): Path<String>,
 ) -> Result<Json<DeviceLoginPollResponse>, ApiError> {
-    match state.metadata.poll_cli_device_login(&device_code).await? {
-        crate::auth::device::DeviceLoginPoll::Pending { expires_at_unix } => {
-            Ok(Json(DeviceLoginPollResponse {
-                status: DeviceLoginStatus::Pending,
-                session_token: None,
-                expires_at_unix,
-                identity: None,
-            }))
-        }
-        crate::auth::device::DeviceLoginPoll::Complete {
+    match CliAuthService::new(state.metadata.auth())
+        .poll_device_login(&device_code, unix_now()?)
+        .await?
+    {
+        DeviceLoginPoll::Pending { expires_at_unix } => Ok(Json(DeviceLoginPollResponse {
+            status: DeviceLoginStatus::Pending,
+            session_token: None,
+            expires_at_unix,
+            identity: None,
+        })),
+        DeviceLoginPoll::Complete {
             session_token,
             expires_at_unix,
             identity,
@@ -69,7 +71,7 @@ pub(crate) async fn poll_cli_device_login(
             status: DeviceLoginStatus::Complete,
             session_token: Some(session_token),
             expires_at_unix,
-            identity: Some(identity),
+            identity: Some(identity.into()),
         })),
     }
 }
@@ -84,6 +86,8 @@ pub(crate) async fn revoke_current_cli_session(
         return Err(ApiError::unauthorized("CLI session required"));
     }
 
-    state.metadata.revoke_cli_session_token(token).await?;
+    CliAuthService::new(state.metadata.auth())
+        .revoke_session_token(token, unix_now()?)
+        .await?;
     Ok(StatusCode::NO_CONTENT)
 }

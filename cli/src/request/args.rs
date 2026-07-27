@@ -1,5 +1,5 @@
 use clap::{ArgGroup, Args, Parser, Subcommand, ValueEnum};
-use scope_core::domain::requests::{RequestAssessmentOutcome, RequestAudience};
+use scope_api_contract::{RequestAssessmentOutcome, RequestAudience};
 use std::path::PathBuf;
 
 #[derive(Parser)]

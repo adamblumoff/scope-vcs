@@ -59,19 +59,19 @@ jobs:
       - name: Check Rust workspace
         shell: bash
         run: |
-          packages=(-p scope-core -p worker)
           if [[ "${{ inputs.include_api }}" == "true" ]]; then
-            packages+=(-p api)
             features=(--features api/test-support)
+            packages=()
           else
             features=()
+            packages=(--exclude api)
           fi
           cargo fmt --all --check
-          cargo test "${packages[@]}" "${features[@]}" --locked
+          cargo test --workspace "${packages[@]}" "${features[@]}" --locked
           if [[ "${{ inputs.include_api }}" == "true" ]]; then
             cargo test -p api --features local-dev --locked dev::
           fi
-          cargo clippy "${packages[@]}" "${features[@]}" --all-targets --locked -- -D warnings
+          cargo clippy --workspace "${packages[@]}" "${features[@]}" --all-targets --locked -- -D warnings
 
       - name: Install Node
         if: inputs.include_api
