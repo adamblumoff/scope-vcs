@@ -19,8 +19,11 @@ use axum::{
     http::HeaderMap,
 };
 use scope_domain::{
-    commit_history::{CommitHistoryCommit, CommitHistoryFile, commit_history_view},
-    projection::ProjectionViewKey,
+    commit_history::{
+        CommitHistoryCommit, CommitHistoryFile, CommitHistoryView,
+        commit_history_view_from_projection,
+    },
+    projection::{ProjectionViewKey, project_graph},
     store::StoredRepository,
 };
 
@@ -31,12 +34,7 @@ pub(crate) async fn get_commit_history(
     Query(input): Query<CommitHistoryRequest>,
 ) -> Result<Json<crate::http::responses::CommitHistoryResponse>, ApiError> {
     let (repo, audience) = repo_and_audience(&state, &headers, &owner, &repo_name, input).await?;
-    let view = commit_history_view(
-        &repo.policy,
-        &repo.graph,
-        &repo.visibility_events,
-        history_view_key(audience),
-    );
+    let view = commit_history_view_for_repo(&repo, audience)?;
 
     Ok(Json(commit_history_response(audience, view)))
 }
@@ -48,12 +46,7 @@ pub(crate) async fn get_commit_detail(
     Query(input): Query<CommitHistoryRequest>,
 ) -> Result<Json<crate::http::responses::CommitDetailResponse>, ApiError> {
     let (repo, audience) = repo_and_audience(&state, &headers, &owner, &repo_name, input).await?;
-    let view = commit_history_view(
-        &repo.policy,
-        &repo.graph,
-        &repo.visibility_events,
-        history_view_key(audience),
-    );
+    let view = commit_history_view_for_repo(&repo, audience)?;
     let commit = commit_for_id(&view.commits, &commit_id)?;
 
     Ok(Json(commit_detail_response(audience, &view, commit)))
@@ -69,12 +62,7 @@ pub(crate) async fn get_commit_file_diff(
         audience: input.audience,
     };
     let (repo, audience) = repo_and_audience(&state, &headers, &owner, &repo_name, request).await?;
-    let view = commit_history_view(
-        &repo.policy,
-        &repo.graph,
-        &repo.visibility_events,
-        history_view_key(audience),
-    );
+    let view = commit_history_view_for_repo(&repo, audience)?;
     let commit = commit_for_id(&view.commits, &commit_id)?;
     let path = repo_scope_path(&input.path)?;
     let file = commit
@@ -113,6 +101,23 @@ fn history_view_key(audience: ProjectionPreviewAudience) -> ProjectionViewKey {
         ProjectionPreviewAudience::Private => ProjectionViewKey::Private,
         ProjectionPreviewAudience::Public => ProjectionViewKey::Public,
     }
+}
+
+fn commit_history_view_for_repo(
+    repo: &StoredRepository,
+    audience: ProjectionPreviewAudience,
+) -> Result<CommitHistoryView, ApiError> {
+    let projection = project_graph(
+        &repo.graph,
+        &repo.visibility_events,
+        history_view_key(audience),
+    );
+    if projection.preserves_git_commits() {
+        return Err(ApiError::not_implemented(
+            "commit history is unavailable for preserved public request commits until native per-commit diffs are represented accurately",
+        ));
+    }
+    Ok(commit_history_view_from_projection(projection))
 }
 
 fn commit_for_id<'a>(

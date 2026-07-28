@@ -173,10 +173,8 @@ where
         if let Some(history) = histories.get_mut(&row.repo_id) {
             history.graph.commits.push(LogicalCommit {
                 id: row.id.clone(),
-                parent_ids: serde_json::from_value(row.parent_ids)
-                    .map_err(PostgresError::internal)?,
+                origin: serde_json::from_value(row.origin).map_err(PostgresError::internal)?,
                 author_id: row.author_id,
-                author_visibility: decode_enum(row.author_visibility)?,
                 message: row.message,
                 changes: changes_by_commit
                     .remove(&(row.repo_id.clone(), row.id.clone()))
@@ -323,10 +321,8 @@ where
             id: commit.id.clone(),
             repo_id: repo_id.to_string(),
             ordinal: usize_to_i64(ordinal_offset + offset)?,
-            parent_ids: serde_json::to_value(&commit.parent_ids)
-                .map_err(PostgresError::internal)?,
+            origin: serde_json::to_value(&commit.origin).map_err(PostgresError::internal)?,
             author_id: commit.author_id.clone(),
-            author_visibility: encode_enum(&commit.author_visibility)?,
             message: commit.message.clone(),
         }
         .into_active_model()

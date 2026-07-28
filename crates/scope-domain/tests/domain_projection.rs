@@ -1,7 +1,7 @@
 use scope_domain::{
     policy::{Policy, ScopePath, Visibility, VisibilityRule},
     projection::{
-        AuthorVisibility, FileChange, LogicalCommit, ProjectionViewKey, SourceGraph,
+        FileChange, LogicalCommit, ProjectionMaterialization, ProjectionViewKey, SourceGraph,
         VisibilityEvent, project_graph,
     },
     repo_config::{
@@ -9,11 +9,14 @@ use scope_domain::{
         RepoConfigVisibilityRule,
     },
     reviewed_updates::{
-        ContentPushState, ReviewedConfigUpdateInput, ReviewedContentChange, ReviewedUpdateInput,
-        accept_content_push, accept_request_merge, apply_reviewed_config_to_repo,
-        apply_reviewed_update_to_repo,
+        ContentPushState, ReviewedConfigUpdateInput, ReviewedContentChange, ReviewedUpdateError,
+        ReviewedUpdateInput, accept_content_push, accept_request_merge,
+        apply_reviewed_config_to_repo, apply_reviewed_update_to_repo,
     },
-    store::{RepoPublicationState, SourceBlob, StoredRepository, UserAccount},
+    store::{
+        LogicalCommitOrigin, NativePublicCommit, RepoPublicationState, RequestMergeOrigin,
+        SourceBlob, StoredRepository, UserAccount,
+    },
 };
 use std::collections::BTreeMap;
 
@@ -49,12 +52,13 @@ fn added(path_value: &str, visibility: Visibility, content: &str) -> FileChange 
     change(path_value, visibility, None, Some(blob(content)))
 }
 
-fn commit(id: &str, parent_id: Option<&str>, message: &str, change: FileChange) -> LogicalCommit {
+fn commit(id: &str, _parent_id: Option<&str>, message: &str, change: FileChange) -> LogicalCommit {
     LogicalCommit {
         id: id.to_string(),
-        parent_ids: parent_id.into_iter().map(str::to_string).collect(),
+        origin: LogicalCommitOrigin::CanonicalPush {
+            source_head_oid: id.to_string(),
+        },
         author_id: "owner".to_string(),
-        author_visibility: AuthorVisibility::Visible,
         message: message.to_string(),
         changes: vec![change],
     }
@@ -91,11 +95,11 @@ fn visibility_event(
 }
 
 fn project_public(
-    policy: &Policy,
+    _policy: &Policy,
     graph: &SourceGraph,
     events: &[VisibilityEvent],
 ) -> scope_domain::projection::Projection {
-    project_graph(policy, graph, events, ProjectionViewKey::Public)
+    project_graph(graph, events, ProjectionViewKey::Public)
 }
 
 type EventSpec<'a> = (
@@ -199,7 +203,7 @@ fn project_repo(
     repo: &StoredRepository,
     view_key: ProjectionViewKey,
 ) -> scope_domain::projection::Projection {
-    project_graph(&repo.policy, &repo.graph, &repo.visibility_events, view_key)
+    project_graph(&repo.graph, &repo.visibility_events, view_key)
 }
 
 fn reviewed_change(path_value: &str, content: Option<&str>) -> ReviewedContentChange {
@@ -284,7 +288,6 @@ fn content_push_command_returns_normalized_effects_without_previous_config() {
             change_version: repo.record.change_version,
             policy: repo.policy.clone(),
             repo_config: config.clone(),
-            previous_commit_id: repo.graph.commits.last().map(|commit| commit.id.clone()),
             live_files: BTreeMap::new(),
         },
         reviewed_update(
@@ -299,7 +302,12 @@ fn content_push_command_returns_normalized_effects_without_previous_config() {
 
     assert_eq!(accepted.change_version, 2);
     assert_eq!(accepted.git_head.change_version, 2);
-    assert_eq!(accepted.logical_commit.parent_ids, ["rv1"]);
+    assert_eq!(
+        accepted.logical_commit.origin,
+        LogicalCommitOrigin::CanonicalPush {
+            source_head_oid: "3333333333333333333333333333333333333333".to_string(),
+        }
+    );
     assert_eq!(accepted.logical_commit.changes.len(), 1);
     assert_eq!(
         accepted.policy.effective_visibility(&path("/secret.txt")),
@@ -317,7 +325,6 @@ fn request_merge_accepts_unchanged_tree_without_weakening_push_rules() {
         change_version: repo.record.change_version,
         policy: repo.policy.clone(),
         repo_config: config.clone(),
-        previous_commit_id: repo.graph.commits.last().map(|commit| commit.id.clone()),
         live_files: BTreeMap::new(),
     };
     let update = reviewed_update(
@@ -329,14 +336,212 @@ fn request_merge_accepts_unchanged_tree_without_weakening_push_rules() {
     );
 
     assert!(accept_content_push(state.clone(), update.clone()).is_err());
-    let accepted = accept_request_merge(state, update).unwrap();
+    let accepted = accept_request_merge(
+        state,
+        update,
+        RequestMergeOrigin::Private {
+            request_id: "request-1".to_string(),
+            request_head_oid: "2222222222222222222222222222222222222222".to_string(),
+        },
+    )
+    .unwrap();
     assert_eq!(accepted.change_version, 2);
     assert_eq!(accepted.git_head.change_version, 2);
     assert_eq!(
         accepted.logical_commit.id,
         "rv_merge_3333333333333333333333333333333333333333"
     );
+    assert_eq!(
+        accepted.logical_commit.origin,
+        LogicalCommitOrigin::PrivateRequestMerge {
+            request_id: "request-1".to_string(),
+            request_head_oid: "2222222222222222222222222222222222222222".to_string(),
+        }
+    );
     assert!(accepted.logical_commit.changes.is_empty());
+}
+
+#[test]
+fn public_request_merge_requires_an_ordered_public_native_range() {
+    let repo = published_repo_with_public_file("initial", "/README.md", "hello");
+    let config = repo.repo_config.clone();
+    let state = ContentPushState {
+        change_version: repo.record.change_version,
+        policy: repo.policy.clone(),
+        repo_config: config.clone(),
+        live_files: repo.live_tree(),
+    };
+    let update = reviewed_update(
+        "3333333333333333333333333333333333333333",
+        "merge public request",
+        vec![reviewed_change("/README.md", Some("contributor edit"))],
+        Some(config.clone()),
+        config,
+    );
+    let commits = vec![
+        NativePublicCommit {
+            oid: "1111111111111111111111111111111111111111".to_string(),
+            parent_oids: vec!["9999999999999999999999999999999999999999".to_string()],
+            tree_oid: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa".to_string(),
+            changed_paths: vec![ScopePath::parse("/README.md").unwrap()],
+        },
+        NativePublicCommit {
+            oid: "2222222222222222222222222222222222222222".to_string(),
+            parent_oids: vec![
+                "1111111111111111111111111111111111111111".to_string(),
+                "0000000000000000000000000000000000000000".to_string(),
+            ],
+            tree_oid: "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb".to_string(),
+            changed_paths: vec![ScopePath::parse("/README.md").unwrap()],
+        },
+    ];
+    let origin = RequestMergeOrigin::Public {
+        request_id: "request-1".to_string(),
+        public_base_oid: "0000000000000000000000000000000000000000".to_string(),
+        public_parent_oids: vec![
+            "0000000000000000000000000000000000000000".to_string(),
+            "9999999999999999999999999999999999999999".to_string(),
+        ],
+        request_head_oid: "2222222222222222222222222222222222222222".to_string(),
+        commits: commits.clone(),
+    };
+
+    let accepted = accept_request_merge(state.clone(), update.clone(), origin).unwrap();
+    assert_eq!(
+        accepted.logical_commit.origin,
+        LogicalCommitOrigin::PublicRequestMerge {
+            request_id: "request-1".to_string(),
+            public_base_oid: "0000000000000000000000000000000000000000".to_string(),
+            public_parent_oids: vec![
+                "0000000000000000000000000000000000000000".to_string(),
+                "9999999999999999999999999999999999999999".to_string(),
+            ],
+            request_head_oid: "2222222222222222222222222222222222222222".to_string(),
+            commits: commits.clone(),
+            preserve_public_commits: true,
+        }
+    );
+
+    let mut broken_commits = commits.clone();
+    broken_commits[0].parent_oids = vec!["2222222222222222222222222222222222222222".to_string()];
+    assert!(
+        accept_request_merge(
+            state.clone(),
+            update.clone(),
+            RequestMergeOrigin::Public {
+                request_id: "request-1".to_string(),
+                public_base_oid: "0000000000000000000000000000000000000000".to_string(),
+                public_parent_oids: vec![
+                    "0000000000000000000000000000000000000000".to_string(),
+                    "9999999999999999999999999999999999999999".to_string(),
+                ],
+                request_head_oid: "2222222222222222222222222222222222222222".to_string(),
+                commits: broken_commits,
+            },
+        )
+        .is_err()
+    );
+
+    let mut external_parent_commits = commits;
+    external_parent_commits[0].parent_oids =
+        vec!["8888888888888888888888888888888888888888".to_string()];
+    assert!(matches!(
+        accept_request_merge(
+            state,
+            update,
+            RequestMergeOrigin::Public {
+                request_id: "request-1".to_string(),
+                public_base_oid: "0000000000000000000000000000000000000000".to_string(),
+                public_parent_oids: vec![
+                    "0000000000000000000000000000000000000000".to_string(),
+                    "9999999999999999999999999999999999999999".to_string(),
+                ],
+                request_head_oid: "2222222222222222222222222222222222222222".to_string(),
+                commits: external_parent_commits,
+            },
+        ),
+        Err(ReviewedUpdateError::Conflict(
+            "public request merge contains a parent outside public history"
+        ))
+    ));
+}
+
+#[test]
+fn public_request_merge_rejects_private_changes() {
+    let repo = published_repo_with_public_file("initial", "/README.md", "hello");
+    let config = config(
+        Visibility::Public,
+        Some(("/secret.txt", Visibility::Private)),
+        None,
+    );
+    let result = accept_request_merge(
+        ContentPushState {
+            change_version: repo.record.change_version,
+            policy: repo.policy.clone(),
+            repo_config: config.clone(),
+            live_files: repo.live_tree(),
+        },
+        reviewed_update(
+            "3333333333333333333333333333333333333333",
+            "mixed request",
+            vec![reviewed_change("/secret.txt", Some("secret"))],
+            Some(config.clone()),
+            config,
+        ),
+        RequestMergeOrigin::Public {
+            request_id: "request-1".to_string(),
+            public_base_oid: "0000000000000000000000000000000000000000".to_string(),
+            public_parent_oids: vec!["0000000000000000000000000000000000000000".to_string()],
+            request_head_oid: "1111111111111111111111111111111111111111".to_string(),
+            commits: vec![NativePublicCommit {
+                oid: "1111111111111111111111111111111111111111".to_string(),
+                parent_oids: vec!["0000000000000000000000000000000000000000".to_string()],
+                tree_oid: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa".to_string(),
+                changed_paths: vec![ScopePath::parse("/secret.txt").unwrap()],
+            }],
+        },
+    );
+
+    assert!(result.is_err());
+}
+
+#[test]
+fn public_request_merge_rejects_private_intermediate_native_paths() {
+    let repo = published_repo_with_public_file("initial", "/README.md", "hello");
+    let config = config(
+        Visibility::Public,
+        Some(("/secret/**", Visibility::Private)),
+        None,
+    );
+    let result = accept_request_merge(
+        ContentPushState {
+            change_version: repo.record.change_version,
+            policy: repo.policy.clone(),
+            repo_config: config.clone(),
+            live_files: repo.live_tree(),
+        },
+        reviewed_update(
+            "3333333333333333333333333333333333333333",
+            "request with transient private path",
+            Vec::new(),
+            Some(config.clone()),
+            config,
+        ),
+        RequestMergeOrigin::Public {
+            request_id: "request-1".to_string(),
+            public_base_oid: "0000000000000000000000000000000000000000".to_string(),
+            public_parent_oids: vec!["0000000000000000000000000000000000000000".to_string()],
+            request_head_oid: "1111111111111111111111111111111111111111".to_string(),
+            commits: vec![NativePublicCommit {
+                oid: "1111111111111111111111111111111111111111".to_string(),
+                parent_oids: vec!["0000000000000000000000000000000000000000".to_string()],
+                tree_oid: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa".to_string(),
+                changed_paths: vec![ScopePath::parse("/secret/transient.txt").unwrap()],
+            }],
+        },
+    );
+
+    assert!(result.is_err());
 }
 
 #[test]
@@ -453,7 +658,6 @@ fn public_projection_contains_only_visible_paths_from_mixed_commit() {
         "mixed",
         added("/README.md", Visibility::Public, "hello"),
     );
-    mixed.author_visibility = AuthorVisibility::Hidden;
     mixed
         .changes
         .push(added("/internal/model.rs", Visibility::Private, "secret"));
@@ -463,12 +667,70 @@ fn public_projection_contains_only_visible_paths_from_mixed_commit() {
     policy
         .add_rule(VisibilityRule::private(path("/internal")))
         .unwrap();
-    let projection = project_graph(&policy, &graph, &[], ProjectionViewKey::Public);
+    let projection = project_graph(&graph, &[], ProjectionViewKey::Public);
 
     assert_eq!(projection.commits.len(), 1);
     assert_eq!(projection.visible_paths(), vec!["/README.md"]);
     assert_eq!(projection.commits[0].message, "Projected public update");
     assert!(projection.commits[0].author.is_none());
+}
+
+#[test]
+fn public_request_origin_expands_to_exact_native_commits_only_in_public_view() {
+    let mut request_merge = commit(
+        "rv_merge_canonical",
+        None,
+        "merge public request",
+        added("/README.md", Visibility::Public, "contributor version"),
+    );
+    request_merge.origin = LogicalCommitOrigin::PublicRequestMerge {
+        request_id: "request-1".to_string(),
+        public_base_oid: "base".to_string(),
+        public_parent_oids: vec!["base".to_string()],
+        request_head_oid: "r2".to_string(),
+        preserve_public_commits: true,
+        commits: vec![
+            NativePublicCommit {
+                oid: "r1".to_string(),
+                parent_oids: vec!["base".to_string()],
+                tree_oid: "tree-1".to_string(),
+                changed_paths: vec![ScopePath::parse("/README.md").unwrap()],
+            },
+            NativePublicCommit {
+                oid: "r2".to_string(),
+                parent_oids: vec!["r1".to_string()],
+                tree_oid: "tree-2".to_string(),
+                changed_paths: vec![ScopePath::parse("/README.md").unwrap()],
+            },
+        ],
+    };
+    let graph = graph(vec![request_merge]);
+    let public = project_graph(&graph, &[], ProjectionViewKey::Public);
+    assert_eq!(
+        public
+            .commits
+            .iter()
+            .map(|commit| commit.projected_id.as_str())
+            .collect::<Vec<_>>(),
+        ["r1", "r2"]
+    );
+    assert!(public.commits[0].changes.is_empty());
+    assert_eq!(public.commits[1].changes.len(), 1);
+    assert!(matches!(
+        &public.commits[0].materialization,
+        ProjectionMaterialization::PreserveGitCommit { oid, .. } if oid == "r1"
+    ));
+    assert!(matches!(
+        &public.commits[1].materialization,
+        ProjectionMaterialization::PreserveGitCommit { oid, .. } if oid == "r2"
+    ));
+
+    let private = project_graph(&graph, &[], ProjectionViewKey::Private);
+    assert_eq!(private.commits.len(), 1);
+    assert_eq!(
+        private.commits[0].materialization,
+        ProjectionMaterialization::Generate
+    );
 }
 
 #[test]
@@ -544,6 +806,90 @@ fn destructive_rewrite_rebuilds_each_public_boundary_safely() {
                 .all(|commit| commit.logical_commit_id != "rv1")
         );
     }
+}
+
+#[test]
+fn redacting_intermediate_native_path_invalidates_descendant_commit_preservation() {
+    let mut repo = published_repo_with_public_file("initial", "/README.md", "hello");
+    let mut request_merge = commit(
+        "rv_request_merge",
+        Some("rv1"),
+        "merge public request",
+        added("/kept.txt", Visibility::Public, "kept"),
+    );
+    request_merge.origin = LogicalCommitOrigin::PublicRequestMerge {
+        request_id: "request-1".to_string(),
+        public_base_oid: "base".to_string(),
+        public_parent_oids: vec!["base".to_string()],
+        request_head_oid: "request-head".to_string(),
+        commits: vec![NativePublicCommit {
+            oid: "request-head".to_string(),
+            parent_oids: vec!["base".to_string()],
+            tree_oid: "request-tree".to_string(),
+            changed_paths: vec![
+                ScopePath::parse("/transient-leak.txt").unwrap(),
+                ScopePath::parse("/kept.txt").unwrap(),
+            ],
+        }],
+        preserve_public_commits: true,
+    };
+    repo.graph.commits.push(request_merge);
+    repo.live_files.insert(path("/kept.txt"), blob("kept"));
+    let mut later_request_merge = commit(
+        "rv_later_request_merge",
+        Some("rv_request_merge"),
+        "merge later public request",
+        added("/later.txt", Visibility::Public, "later"),
+    );
+    later_request_merge.origin = LogicalCommitOrigin::PublicRequestMerge {
+        request_id: "request-2".to_string(),
+        public_base_oid: "request-head".to_string(),
+        public_parent_oids: vec!["request-head".to_string()],
+        request_head_oid: "later-request-head".to_string(),
+        commits: vec![NativePublicCommit {
+            oid: "later-request-head".to_string(),
+            parent_oids: vec!["request-head".to_string()],
+            tree_oid: "later-request-tree".to_string(),
+            changed_paths: vec![ScopePath::parse("/later.txt").unwrap()],
+        }],
+        preserve_public_commits: true,
+    };
+    repo.graph.commits.push(later_request_merge);
+    repo.live_files.insert(path("/later.txt"), blob("later"));
+
+    apply_update(
+        &mut repo,
+        "redact transient path",
+        vec![reviewed_change("/.scope/repo.json", Some("config v2"))],
+        None,
+        config(Visibility::Public, None, Some("/transient-leak.txt")),
+    );
+
+    let projection = project_repo(&repo, ProjectionViewKey::Public);
+    assert!(
+        projection
+            .commits
+            .iter()
+            .all(|commit| commit.materialization == ProjectionMaterialization::Generate)
+    );
+    assert_eq!(
+        projection.visible_paths(),
+        vec!["/README.md", "/kept.txt", "/later.txt"]
+    );
+    assert!(matches!(
+        &repo.graph.commits[1].origin,
+        LogicalCommitOrigin::PublicRequestMerge {
+            preserve_public_commits: false,
+            ..
+        }
+    ));
+    assert!(matches!(
+        &repo.graph.commits[2].origin,
+        LogicalCommitOrigin::PublicRequestMerge {
+            preserve_public_commits: false,
+            ..
+        }
+    ));
 }
 
 #[test]

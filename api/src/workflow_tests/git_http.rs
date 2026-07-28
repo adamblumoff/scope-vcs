@@ -285,9 +285,10 @@ async fn private_upload_pack_without_credentials_challenges_for_auth() {
         repo.policy = Policy::new(Visibility::Private);
         repo.graph.commits.push(LogicalCommit {
             id: "rv1".to_string(),
-            parent_ids: Vec::new(),
+            origin: LogicalCommitOrigin::CanonicalPush {
+                source_head_oid: "rv1".to_string(),
+            },
             author_id: repo.record.owner_user_id.clone(),
-            author_visibility: AuthorVisibility::Visible,
             message: "initial".to_string(),
             changes: vec![FileChange {
                 visibility: Visibility::Private,

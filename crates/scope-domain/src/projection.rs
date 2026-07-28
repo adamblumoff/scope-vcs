@@ -1,16 +1,10 @@
 use super::{
-    policy::{Policy, ScopePath, Visibility},
+    policy::{ScopePath, Visibility},
     repo_config::is_reserved_config_path,
-    store::{RepositoryAccess, RepositoryActor, SourceBlob},
+    store::{LogicalCommitOrigin, RepositoryAccess, RepositoryActor, SourceBlob},
 };
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
-
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub enum AuthorVisibility {
-    Visible,
-    Hidden,
-}
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct FileChange {
@@ -35,9 +29,8 @@ pub struct VisibilityEvent {
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct LogicalCommit {
     pub id: String,
-    pub parent_ids: Vec<String>,
+    pub origin: LogicalCommitOrigin,
     pub author_id: String,
-    pub author_visibility: AuthorVisibility,
     pub message: String,
     pub changes: Vec<FileChange>,
 }
@@ -63,6 +56,17 @@ pub struct ProjectedCommit {
     pub author: Option<String>,
     pub message: String,
     pub changes: Vec<ProjectedChange>,
+    pub materialization: ProjectionMaterialization,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub enum ProjectionMaterialization {
+    Generate,
+    PreserveGitCommit {
+        oid: String,
+        parent_oids: Vec<String>,
+        tree_oid: String,
+    },
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -100,6 +104,15 @@ pub struct Projection {
 }
 
 impl Projection {
+    pub fn preserves_git_commits(&self) -> bool {
+        self.commits.iter().any(|commit| {
+            matches!(
+                &commit.materialization,
+                ProjectionMaterialization::PreserveGitCommit { .. }
+            )
+        })
+    }
+
     pub fn visible_paths(&self) -> Vec<String> {
         let mut live = BTreeMap::new();
         for change in self.commits.iter().flat_map(|commit| commit.changes.iter()) {
@@ -114,7 +127,6 @@ impl Projection {
 }
 
 pub fn project_graph(
-    _policy: &Policy,
     graph: &SourceGraph,
     visibility_events: &[VisibilityEvent],
     view_key: ProjectionViewKey,
@@ -136,7 +148,7 @@ pub fn project_graph(
     );
 
     for logical in &graph.commits {
-        let visible_changes = logical
+        let mut visible_changes = logical
             .changes
             .iter()
             .filter(|change| {
@@ -149,6 +161,50 @@ pub fn project_graph(
             })
             .collect::<Vec<_>>();
         let visible_content_count = visible_changes.len();
+
+        if let LogicalCommitOrigin::PublicRequestMerge {
+            commits: native,
+            preserve_public_commits: true,
+            ..
+        } = &logical.origin
+            && !native.is_empty()
+            && visible_content_count == logical.changes.len()
+        {
+            let native_len = native.len();
+            for (index, native) in native.iter().enumerate() {
+                let is_head = index + 1 == native_len;
+                commits.push(ProjectedCommit {
+                    projected_id: native.oid.clone(),
+                    logical_commit_id: logical.id.clone(),
+                    parent_projected_id: native.parent_oids.first().cloned(),
+                    author: None,
+                    message: if is_head {
+                        logical.message.clone()
+                    } else {
+                        "Preserved public request commit".to_string()
+                    },
+                    changes: if is_head {
+                        std::mem::take(&mut visible_changes)
+                    } else {
+                        Vec::new()
+                    },
+                    materialization: ProjectionMaterialization::PreserveGitCommit {
+                        oid: native.oid.clone(),
+                        parent_oids: native.parent_oids.clone(),
+                        tree_oid: native.tree_oid.clone(),
+                    },
+                });
+            }
+            last_visible = native.last().map(|commit| commit.oid.clone());
+            process_projection_boundary_events_after(
+                &mut commits,
+                &mut last_visible,
+                &boundary_events,
+                Some(logical.id.as_str()),
+                view_key,
+            );
+            continue;
+        }
 
         if visible_changes.is_empty() {
             process_projection_boundary_events_after(
@@ -168,20 +224,14 @@ pub fn project_graph(
             projected_id: projected_id.clone(),
             logical_commit_id: logical.id.clone(),
             parent_projected_id: last_visible,
-            author: if partial {
-                None
-            } else {
-                match logical.author_visibility {
-                    AuthorVisibility::Visible => Some(logical.author_id.clone()),
-                    AuthorVisibility::Hidden => None,
-                }
-            },
+            author: (!partial).then(|| logical.author_id.clone()),
             message: if partial {
                 "Projected public update".to_string()
             } else {
                 logical.message.clone()
             },
             changes: visible_changes,
+            materialization: ProjectionMaterialization::Generate,
         });
 
         last_visible = Some(projected_id);
@@ -224,12 +274,10 @@ fn project_private_graph(graph: &SourceGraph, view_key: ProjectionViewKey) -> Pr
             projected_id: projected_id.clone(),
             logical_commit_id: logical.id.clone(),
             parent_projected_id: last_visible,
-            author: match logical.author_visibility {
-                AuthorVisibility::Visible => Some(logical.author_id.clone()),
-                AuthorVisibility::Hidden => None,
-            },
+            author: Some(logical.author_id.clone()),
             message: logical.message.clone(),
             changes,
+            materialization: ProjectionMaterialization::Generate,
         });
         last_visible = Some(projected_id);
     }
@@ -333,6 +381,7 @@ fn process_projection_boundary_events_after(
                     event.old_visibility
                 },
             }],
+            materialization: ProjectionMaterialization::Generate,
         });
         *last_visible = Some(projected_id);
     }

@@ -2,6 +2,7 @@ use crate::error::ApiError;
 use scope_api_contract::Visibility;
 use scope_domain::{
     policy::ScopePath,
+    projection::project_graph,
     projection_views::{
         ProjectionAudience, ProjectionPreviewCommit, ProjectionPreviewCommitVisibility,
         ProjectionPreviewFile, ProjectionPreviewSummary, ProjectionViewFile, projection_preview,
@@ -119,7 +120,18 @@ pub(crate) fn projection_preview_response(
     source: ProjectionPreviewSource,
     include_private_counts: bool,
 ) -> Result<ProjectionPreviewResponse, ApiError> {
-    let preview = projection_preview(repo, audience.into(), include_private_counts);
+    let projection_audience = ProjectionAudience::from(audience);
+    let projection = project_graph(
+        &repo.graph,
+        &repo.visibility_events,
+        projection_audience.into(),
+    );
+    if projection.preserves_git_commits() {
+        return Err(ApiError::not_implemented(
+            "projection preview is unavailable for preserved public request commits until native per-commit metadata is represented accurately",
+        ));
+    }
+    let preview = projection_preview(repo, projection_audience, include_private_counts);
 
     Ok(ProjectionPreviewResponse {
         audience,

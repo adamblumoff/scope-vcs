@@ -2,7 +2,8 @@ use crate::{
     config::{DEFAULT_GIT_BRANCH, EMPTY_GIT_OID, RECEIVE_PACK_STAGING_BYTES},
     error::ApiError,
     git::import::{run_git, safe_repo_key},
-    git::upload::{git_command_output_with_timeout, projection_bare_repo_for_state},
+    git::projection_repo::projection_bare_repo_for_state,
+    git::upload::git_command_output_with_timeout,
     persistence::ensure_private_dir,
     repo_access::find_repo,
     runtime_budgets::RuntimeBudgets,
@@ -271,8 +272,7 @@ pub(crate) async fn ensure_published_receive_pack_staging_repo(
             kind: scope_domain::policy::PrincipalKind::User,
         };
         let view_key = ProjectionViewKey::from_access(repo.access_for_principal(&principal));
-        let projection =
-            project_graph(&repo.policy, &repo.graph, &repo.visibility_events, view_key);
+        let projection = project_graph(&repo.graph, &repo.visibility_events, view_key);
         let seed_repo = projection_bare_repo_for_state(
             state,
             &projection,

@@ -14,7 +14,7 @@ use {
     scope_domain::{
         requests::{MergeRequestInput, RequestActorRole, RequestReviewMutation, merge_request},
         reviewed_updates::ReviewedUpdateInput,
-        store::{GitHead, RepoPublicationState},
+        store::{GitHead, RepoPublicationState, RequestMergeOrigin},
     },
 };
 
@@ -34,6 +34,7 @@ impl RequestStore {
         expected_repo_change_version: u64,
         expected_request_head_oid: &str,
         update: ReviewedUpdateInput,
+        origin: RequestMergeOrigin,
         mut input: MergeRequestInput,
         generated_ids: &dyn GeneratedIdSource,
     ) -> Result<MergeRequestContentMutation, PostgresError> {
@@ -109,6 +110,7 @@ impl RequestStore {
             &repo_id,
             repo_row,
             update,
+            origin,
             now_unix,
             generated_ids,
         )

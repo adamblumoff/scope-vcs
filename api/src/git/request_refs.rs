@@ -5,12 +5,12 @@ use crate::{
     git::{
         cache::GitRepoHandle,
         import::{git_snapshot_from_ref, run_git, run_git_output, validate_pushed_tree},
+        projection_repo::projection_bare_repo_for_state,
         request_ref_public_safety::ensure_public_request_ref_is_public_safe,
         storage::{
             cached_raw_git_repo, receive_pack_staging_repo_path, remove_dir_if_exists,
             request_ref_store_repo_path, write_receive_pack_hook,
         },
-        upload::projection_bare_repo_for_state,
     },
     persistence::unix_now,
     repo_access::find_repo,
@@ -182,7 +182,6 @@ pub(crate) async fn ensure_request_receive_pack_staging_repo(
     let seed_repo = match access.actor {
         RepositoryActor::Public => {
             let projection = project_graph(
-                &repo.policy,
                 &repo.graph,
                 &repo.visibility_events,
                 ProjectionViewKey::Public,
@@ -199,7 +198,6 @@ pub(crate) async fn ensure_request_receive_pack_staging_repo(
             } else {
                 let principal = principal_for_user_id(&repo, actor_user_id);
                 let projection = project_graph(
-                    &repo.policy,
                     &repo.graph,
                     &repo.visibility_events,
                     ProjectionViewKey::from_access(repo.access_for_principal(&principal)),
@@ -279,7 +277,6 @@ pub(crate) async fn seed_editable_request_refs(
             request.audience == RequestAudience::Public && request.git_snapshot.is_none()
         }) {
         let projection = project_graph(
-            &repo.policy,
             &repo.graph,
             &repo.visibility_events,
             ProjectionViewKey::Public,

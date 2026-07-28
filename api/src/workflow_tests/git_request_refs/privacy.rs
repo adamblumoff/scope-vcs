@@ -28,6 +28,119 @@ async fn private_history_shapes_cannot_enter_public_request_refs() {
     }
 }
 
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn forbidden_intermediate_tree_cannot_enter_public_request_history() {
+    let state = test_state_with_request().await;
+    let (source, permissioned_remote, _server, _) =
+        request_checkout(&state, "request-intermediate-forbidden-tree").await;
+    let request_before = stored_request(&state, REQUEST_ID).await;
+    let event_count_before = request_event_count(&state).await;
+
+    let forbidden_dir = source.join(".scope");
+    fs::create_dir_all(&forbidden_dir).unwrap();
+    fs::write(
+        forbidden_dir.join("transient.txt"),
+        "must never become public\n",
+    )
+    .unwrap();
+    run_git(
+        Some(&source),
+        &["add", "-A"],
+        "stage forbidden intermediate tree",
+    )
+    .unwrap();
+    commit_all(&source, "add forbidden intermediate tree");
+    fs::remove_dir_all(&forbidden_dir).unwrap();
+    run_git(
+        Some(&source),
+        &["add", "-A"],
+        "remove forbidden intermediate tree",
+    )
+    .unwrap();
+    commit_all(&source, "remove forbidden intermediate tree");
+    configure_bearer_header(
+        &source,
+        &permissioned_remote,
+        &bearer_header_for(PUBLIC_SUBJECT, PUBLIC_EMAIL),
+    );
+
+    let output = run_git_output(
+        Some(&source),
+        &["push", &permissioned_remote, &format!("HEAD:{REQUEST_REF}")],
+        "reject forbidden intermediate request tree",
+    )
+    .unwrap();
+
+    assert!(
+        !output.status.success(),
+        "forbidden intermediate request tree unexpectedly succeeded: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(stored_request(&state, REQUEST_ID).await, request_before);
+    assert_eq!(request_event_count(&state).await, event_count_before);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn configured_private_intermediate_path_cannot_enter_public_request_history() {
+    let state = test_state_with_request().await;
+    state
+        .metadata
+        .repositories()
+        .mutate_repository_for_tests(TEST_REPO_ID, |repo| {
+            repo.repo_config.visibility.rules.push(
+                scope_domain::repo_config::RepoConfigVisibilityRule {
+                    path: "/secret/**".to_string(),
+                    visibility: ConfigVisibility::Private,
+                },
+            );
+            repo.repo_config.validate().unwrap();
+        })
+        .await
+        .unwrap();
+    let (source, permissioned_remote, _server, _) =
+        request_checkout(&state, "request-intermediate-config-private-tree").await;
+    let request_before = stored_request(&state, REQUEST_ID).await;
+    let event_count_before = request_event_count(&state).await;
+
+    let private_dir = source.join("secret");
+    fs::create_dir_all(&private_dir).unwrap();
+    fs::write(
+        private_dir.join("transient.txt"),
+        "configured private content\n",
+    )
+    .unwrap();
+    run_git(
+        Some(&source),
+        &["add", "-A"],
+        "stage configured private intermediate tree",
+    )
+    .unwrap();
+    commit_all(&source, "add configured private intermediate tree");
+    fs::remove_dir_all(&private_dir).unwrap();
+    run_git(
+        Some(&source),
+        &["add", "-A"],
+        "remove configured private intermediate tree",
+    )
+    .unwrap();
+    commit_all(&source, "remove configured private intermediate tree");
+
+    let output = run_git_output(
+        Some(&source),
+        &["push", &permissioned_remote, &format!("HEAD:{REQUEST_REF}")],
+        "reject configured private intermediate request tree",
+    )
+    .unwrap();
+
+    assert!(
+        !output.status.success(),
+        "configured private intermediate request tree unexpectedly succeeded: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(stored_request(&state, REQUEST_ID).await, request_before);
+    assert_eq!(request_event_count(&state).await, event_count_before);
+}
+
 async fn assert_private_history_push_rejected(history: PrivacyHistory, source_label: &str) {
     let state = test_state_with_request().await;
     state
@@ -199,12 +312,13 @@ fn privacy_repo(state: &AppState, history: PrivacyHistory) -> StoredRepository {
     repo
 }
 
-fn history_commit(id: &str, parent: Option<&str>, changes: Vec<FileChange>) -> LogicalCommit {
+fn history_commit(id: &str, _parent: Option<&str>, changes: Vec<FileChange>) -> LogicalCommit {
     LogicalCommit {
         id: id.into(),
-        parent_ids: parent.into_iter().map(str::to_string).collect(),
+        origin: LogicalCommitOrigin::CanonicalPush {
+            source_head_oid: id.to_string(),
+        },
         author_id: test_owner_id(),
-        author_visibility: AuthorVisibility::Visible,
         message: id.into(),
         changes,
     }

@@ -11,6 +11,7 @@ pub(crate) enum ErrorKind {
     Forbidden,
     Internal,
     NotFound,
+    NotImplemented,
     PayloadTooLarge,
     ServiceUnavailable,
     TooManyRequests,
@@ -47,6 +48,7 @@ impl ApiError {
         too_many_requests => TooManyRequests,
         unauthorized => Unauthorized,
         not_found => NotFound,
+        not_implemented => NotImplemented,
         internal_message => Internal,
         service_unavailable => ServiceUnavailable,
     }
@@ -65,6 +67,7 @@ impl ApiError {
             ErrorKind::Forbidden => StatusCode::FORBIDDEN,
             ErrorKind::Internal => StatusCode::INTERNAL_SERVER_ERROR,
             ErrorKind::NotFound => StatusCode::NOT_FOUND,
+            ErrorKind::NotImplemented => StatusCode::NOT_IMPLEMENTED,
             ErrorKind::PayloadTooLarge => StatusCode::PAYLOAD_TOO_LARGE,
             ErrorKind::ServiceUnavailable => StatusCode::SERVICE_UNAVAILABLE,
             ErrorKind::TooManyRequests => StatusCode::TOO_MANY_REQUESTS,

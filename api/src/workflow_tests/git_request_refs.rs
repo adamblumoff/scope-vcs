@@ -20,6 +20,7 @@ const REQUEST_REF: &str = "refs/heads/request-branch";
 const PRIVATE_REQUEST_ID: &str = "req_private";
 const PRIVATE_REQUEST_REF: &str = "refs/heads/private-request";
 
+mod merge;
 mod policy;
 mod privacy;
 
@@ -187,182 +188,6 @@ async fn working_request_ref_push_replaces_snapshot_without_touching_main() {
     fs::remove_dir_all(&store_repo).unwrap();
     let staging_repo = assert_restored_request_head(&state, &request_head).await;
     let _ = fs::remove_dir_all(staging_repo);
-}
-
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn merge_route_persists_git_content_and_settles_public_stake_once() {
-    let state = test_state_with_mergeable_request().await;
-    insert_member_user(&state).await;
-    let (_source, _remote, _server, request_head) =
-        request_checkout(&state, "request-http-merge").await;
-    let app = router(state.clone());
-
-    let ready = app
-        .clone()
-        .oneshot(
-            axum::http::Request::builder()
-                .method("POST")
-                .uri(format!(
-                    "/v1/repos/{TEST_REPO_ID}/requests/{REQUEST_ID}/ready"
-                ))
-                .header(
-                    AUTHORIZATION,
-                    bearer_header_for(PUBLIC_SUBJECT, PUBLIC_EMAIL),
-                )
-                .header(CONTENT_TYPE, "application/json")
-                .body(Body::from(r#"{"stake_credits":5}"#))
-                .unwrap(),
-        )
-        .await
-        .unwrap();
-    assert_eq!(ready.status(), StatusCode::OK);
-
-    let merge_request = || {
-        axum::http::Request::builder()
-            .method("POST")
-            .uri(format!(
-                "/v1/repos/{TEST_REPO_ID}/requests/{REQUEST_ID}/merge"
-            ))
-            .header(
-                AUTHORIZATION,
-                bearer_header_for(MEMBER_SUBJECT, MEMBER_EMAIL),
-            )
-            .body(Body::empty())
-            .unwrap()
-    };
-    let merged = app.clone().oneshot(merge_request()).await.unwrap();
-    let merged_status = merged.status();
-    let merged = response_json(merged).await;
-    assert_eq!(merged_status, StatusCode::OK, "{merged}");
-    assert_eq!(merged["request"]["state"], "Completed");
-    assert_eq!(merged["request"]["assessment_outcome"], "Accepted");
-    assert_eq!(merged["request"]["merged_head_oid"], request_head);
-    assert_ne!(merged["request"]["merged_main_oid"], request_head);
-    assert_eq!(
-        merged["request"]["mergeability"]["current_main_oid"],
-        merged["request"]["merged_main_oid"]
-    );
-    assert_eq!(
-        live_file_content(&state, "/README.md").await.as_deref(),
-        Some("hello\n")
-    );
-    assert_eq!(
-        live_file_content(&state, "/request.txt").await.as_deref(),
-        Some("request branch content\n")
-    );
-    assert_eq!(
-        state
-            .metadata
-            .auth()
-            .credit_account_for_tests(&public_user_id())
-            .await
-            .unwrap()
-            .unwrap()
-            .balance_credits,
-        105
-    );
-
-    let replay = app.oneshot(merge_request()).await.unwrap();
-    assert_eq!(replay.status(), StatusCode::CONFLICT);
-    assert_eq!(
-        state
-            .metadata
-            .auth()
-            .credit_account_for_tests(&public_user_id())
-            .await
-            .unwrap()
-            .unwrap()
-            .balance_credits,
-        105
-    );
-}
-
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn fully_masked_maintainer_public_merge_completes_without_tree_changes() {
-    let state = test_state_with_mergeable_owner_public_request().await;
-    insert_member_user(&state).await;
-    let (source, remote, _server) = request_push_checkout(
-        &state,
-        "maintainer-public-policy-merge",
-        TEST_CLERK_USER_ID,
-        TEST_OWNER_EMAIL,
-    )
-    .await;
-    push_change(
-        &source,
-        &remote,
-        REQUEST_REF,
-        "request.txt",
-        "request branch content\n",
-        "request change",
-    )
-    .unwrap();
-    let app = router(state.clone());
-
-    let ready = app
-        .clone()
-        .oneshot(
-            axum::http::Request::builder()
-                .method("POST")
-                .uri(format!(
-                    "/v1/repos/{TEST_REPO_ID}/requests/{REQUEST_ID}/ready"
-                ))
-                .header(AUTHORIZATION, bearer_header())
-                .header(CONTENT_TYPE, "application/json")
-                .body(Body::from("{}"))
-                .unwrap(),
-        )
-        .await
-        .unwrap();
-    let ready_status = ready.status();
-    let ready = response_json(ready).await;
-    assert_eq!(ready_status, StatusCode::OK, "{ready}");
-
-    let private_path = ScopePath::parse("/request.txt").unwrap();
-    state
-        .metadata
-        .repositories()
-        .mutate_repository_for_tests(TEST_REPO_ID, |repo| {
-            repo.repo_config.visibility.rules.push(
-                scope_domain::repo_config::RepoConfigVisibilityRule {
-                    path: private_path.as_str().to_string(),
-                    visibility: ConfigVisibility::Private,
-                },
-            );
-            repo.bump_change_version();
-        })
-        .await
-        .unwrap();
-
-    let merged = app
-        .oneshot(
-            axum::http::Request::builder()
-                .method("POST")
-                .uri(format!(
-                    "/v1/repos/{TEST_REPO_ID}/requests/{REQUEST_ID}/merge"
-                ))
-                .header(
-                    AUTHORIZATION,
-                    bearer_header_for(MEMBER_SUBJECT, MEMBER_EMAIL),
-                )
-                .body(Body::empty())
-                .unwrap(),
-        )
-        .await
-        .unwrap();
-    let merged_status = merged.status();
-    let merged = response_json(merged).await;
-    assert_eq!(merged_status, StatusCode::OK, "{merged}");
-    assert_eq!(merged["request"]["assessment_outcome"], "Accepted");
-    assert_eq!(live_file_content(&state, "/request.txt").await, None);
-    let repo = find_repo(&state, TEST_REPO_OWNER, TEST_REPO_NAME)
-        .await
-        .unwrap();
-    assert_eq!(
-        repo.git_head.as_ref().unwrap().head_oid,
-        merged["request"]["merged_main_oid"].as_str().unwrap()
-    );
-    assert!(repo.graph.commits.last().unwrap().changes.is_empty());
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -709,8 +534,8 @@ async fn test_state_with_request() -> AppState {
     state
 }
 
-async fn test_state_with_mergeable_request() -> AppState {
-    let (state, _source, _head) =
+async fn test_state_with_mergeable_request() -> (AppState, TempGitRepo) {
+    let (state, source, _head) =
         super::push_intent_completion::published_git_fixture("request-merge-state").await;
     state
         .metadata
@@ -719,7 +544,7 @@ async fn test_state_with_mergeable_request() -> AppState {
         .await
         .unwrap();
     start_public_request(&state).await;
-    state
+    (state, source)
 }
 
 async fn test_state_with_mergeable_owner_public_request() -> AppState {
@@ -743,7 +568,6 @@ async fn start_request_for_author(
         .await
         .unwrap();
     let projection = project_graph(
-        &repo.policy,
         &repo.graph,
         &repo.visibility_events,
         ProjectionViewKey::Public,

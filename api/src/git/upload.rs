@@ -3,8 +3,13 @@ use crate::{
     config::{DEFAULT_GIT_BRANCH, GIT_UPLOAD_PACK, UNPUBLISHED_GIT_ERROR},
     error::ApiError,
     git::{
-        GitRemoteMode, cache::GitRepoHandle, content::source_content_bytes, git_read_scope_user,
-        import::run_git, request_refs::attach_visible_request_refs, storage::cached_raw_git_repo,
+        GitRemoteMode,
+        cache::GitRepoHandle,
+        git_read_scope_user,
+        import::run_git,
+        projection_repo::{hash_field, projection_bare_repo_for_state},
+        request_refs::attach_visible_request_refs,
+        storage::cached_raw_git_repo,
     },
     repo_access::{ensure_repo_read, find_repo},
     runtime_budgets::{RuntimeBudgets, RuntimePermit},
@@ -19,24 +24,24 @@ use axum::{
     response::{IntoResponse, Response},
 };
 use scope_domain::policy::Principal;
-use scope_domain::projection::{Projection, ProjectionViewKey, project_graph};
+#[cfg(test)]
+use scope_domain::projection::Projection;
+use scope_domain::projection::{ProjectionViewKey, project_graph};
 use scope_domain::requests::{Request, RequestViewer, canonical_request_ref, request_policy};
-use scope_domain::store::{RepoPublicationState, RepositoryActor, is_supported_git_file_mode};
+use scope_domain::store::{RepoPublicationState, RepositoryActor};
 use scope_git_process::{
     ProcessLimits, STDERR_DIAGNOSTIC_BYTES, run as run_process, truncated_stderr,
 };
 use sha1::{Digest, Sha1};
 use std::{
-    collections::BTreeMap,
     fs,
-    path::{Path as FsPath, PathBuf},
+    path::Path as FsPath,
     process::{Command, Output},
     sync::atomic::{AtomicU64, Ordering},
     time::Duration,
 };
-const PROJECTION_CACHE_SEMANTICS_VERSION: &str = "shared-projection-view-v1";
 const GIT_READ_VIEW_CACHE_SEMANTICS_VERSION: &str = "named-request-read-view-v2";
-static GIT_CACHE_ATTEMPT: AtomicU64 = AtomicU64::new(1);
+static GIT_READ_VIEW_CACHE_ATTEMPT: AtomicU64 = AtomicU64::new(1);
 
 #[cfg(test)]
 pub(crate) async fn git_projection_for_request(
@@ -58,7 +63,6 @@ pub(crate) async fn git_projection_for_request(
     let access = repo.access_for_principal(&principal);
     let view_key = ProjectionViewKey::from_access(access);
     Ok(project_graph(
-        &repo.policy,
         &repo.graph,
         &repo.visibility_events,
         view_key,
@@ -95,7 +99,6 @@ pub(crate) async fn git_upload_pack_repo_for_request(
             Some(head) => cached_raw_git_repo(state, &head.manifest)?,
             None => {
                 let projection = project_graph(
-                    &repo.policy,
                     &repo.graph,
                     &repo.visibility_events,
                     ProjectionViewKey::Private,
@@ -109,7 +112,6 @@ pub(crate) async fn git_upload_pack_repo_for_request(
         }
     } else {
         let projection = project_graph(
-            &repo.policy,
             &repo.graph,
             &repo.visibility_events,
             ProjectionViewKey::Public,
@@ -156,7 +158,6 @@ pub(crate) async fn git_upload_pack_repo_for_request(
                 && request.git_snapshot.is_none()
         }) {
         let projection = project_graph(
-            &repo.policy,
             &repo.graph,
             &repo.visibility_events,
             ProjectionViewKey::Public,
@@ -240,7 +241,7 @@ fn git_read_view_repo(
     }
 
     let _permit = state.runtime_budgets.try_projection_build()?;
-    let attempt = GIT_CACHE_ATTEMPT.fetch_add(1, Ordering::Relaxed);
+    let attempt = GIT_READ_VIEW_CACHE_ATTEMPT.fetch_add(1, Ordering::Relaxed);
     let temp_path = cache_root.join(format!(
         "read-view-{cache_key}.{}.{}.tmp",
         std::process::id(),
@@ -337,317 +338,6 @@ fn unpublished_git_read_error(
     }
 }
 
-fn projection_bare_repo_with_loader(
-    cache_root: &FsPath,
-    projection: &Projection,
-    load_content: impl Fn(&scope_domain::store::SourceBlob) -> Result<Vec<u8>, ApiError>,
-) -> Result<PathBuf, ApiError> {
-    let cache_key = projection_cache_key(projection);
-    let repo_path = cache_root.join(format!("{cache_key}.git"));
-    if repo_path
-        .join("refs")
-        .join("heads")
-        .join(DEFAULT_GIT_BRANCH)
-        .is_file()
-    {
-        return Ok(repo_path);
-    }
-
-    let attempt = GIT_CACHE_ATTEMPT.fetch_add(1, Ordering::Relaxed);
-    let temp_path = cache_root.join(format!(
-        "{cache_key}.{}.{}.tmp",
-        std::process::id(),
-        attempt
-    ));
-    if temp_path.exists() {
-        fs::remove_dir_all(&temp_path).map_err(ApiError::internal)?;
-    }
-
-    git_command_output(
-        Command::new("git")
-            .arg("init")
-            .arg("--bare")
-            .arg(&temp_path),
-        None,
-    )?;
-    git_command_output(
-        Command::new("git")
-            .arg("--git-dir")
-            .arg(&temp_path)
-            .arg("symbolic-ref")
-            .arg("HEAD")
-            .arg(format!("refs/heads/{DEFAULT_GIT_BRANCH}")),
-        None,
-    )?;
-
-    let index_path = cache_root.join(format!(
-        "{cache_key}.{}.{}.index",
-        std::process::id(),
-        attempt
-    ));
-    if index_path.exists() {
-        fs::remove_file(&index_path).map_err(ApiError::internal)?;
-    }
-
-    let mut visible_tree = BTreeMap::new();
-    let mut parent_commit: Option<String> = None;
-    if projection.commits.is_empty() {
-        let tree = write_projection_tree(&temp_path, &index_path, &visible_tree)?;
-        parent_commit = Some(git_commit_tree(
-            &temp_path,
-            &tree,
-            None,
-            "Empty Scope projection\n",
-        )?);
-    }
-
-    for projected in &projection.commits {
-        for change in &projected.changes {
-            let path = change.path.as_str().to_string();
-            match &change.new_content {
-                Some(blob) => {
-                    visible_tree.insert(
-                        path,
-                        ProjectionTreeFile {
-                            bytes: load_content(blob)?,
-                            git_file_mode: blob.git_file_mode.clone(),
-                        },
-                    );
-                }
-                None => {
-                    visible_tree.remove(&path);
-                }
-            }
-        }
-        let tree = write_projection_tree(&temp_path, &index_path, &visible_tree)?;
-        let message = format!("{}\n", projected.message);
-        parent_commit = Some(git_commit_tree(
-            &temp_path,
-            &tree,
-            parent_commit.as_deref(),
-            &message,
-        )?);
-    }
-
-    let commit = parent_commit.ok_or_else(|| ApiError::internal_message("missing Git commit"))?;
-    git_command_output(
-        Command::new("git")
-            .arg("--git-dir")
-            .arg(&temp_path)
-            .arg("update-ref")
-            .arg(format!("refs/heads/{DEFAULT_GIT_BRANCH}"))
-            .arg(commit.trim()),
-        None,
-    )?;
-
-    let _ = fs::remove_file(&index_path);
-    match fs::rename(&temp_path, &repo_path) {
-        Ok(()) => Ok(repo_path),
-        Err(error) if repo_path.exists() => {
-            let _ = fs::remove_dir_all(&temp_path);
-            tracing::debug!(%error, path = %repo_path.display(), "using concurrently-created Git projection cache");
-            Ok(repo_path)
-        }
-        Err(error) => Err(ApiError::internal(error)),
-    }
-}
-
-pub(crate) fn projection_bare_repo_for_state(
-    state: &AppState,
-    projection: &Projection,
-    git_manifest: Option<&scope_domain::store::SourceBlob>,
-) -> Result<PathBuf, ApiError> {
-    let cache_root = state.git_cache_root()?;
-    let cache_key = projection_cache_key(projection);
-    let repo_path = cache_root.join(format!("{cache_key}.git"));
-    if repo_path
-        .join("refs")
-        .join("heads")
-        .join(DEFAULT_GIT_BRANCH)
-        .is_file()
-    {
-        return Ok(repo_path);
-    }
-
-    let _permit = state.runtime_budgets.try_projection_build()?;
-    projection_bare_repo_with_loader(&cache_root, projection, |blob| {
-        source_content_bytes(state, blob, git_manifest)
-    })
-}
-
-pub(crate) fn projection_cache_key(projection: &Projection) -> String {
-    let mut hasher = Sha1::new();
-    hash_field(
-        &mut hasher,
-        b"semantics",
-        PROJECTION_CACHE_SEMANTICS_VERSION.as_bytes(),
-    );
-    hash_field(&mut hasher, b"repo", projection.repo_id.as_bytes());
-    hash_field(
-        &mut hasher,
-        b"view",
-        projection.view_key.as_str().as_bytes(),
-    );
-    for commit in &projection.commits {
-        hash_field(&mut hasher, b"commit", commit.projected_id.as_bytes());
-        hash_field(&mut hasher, b"logical", commit.logical_commit_id.as_bytes());
-        if let Some(parent) = &commit.parent_projected_id {
-            hash_field(&mut hasher, b"parent", parent.as_bytes());
-        }
-        hash_field(&mut hasher, b"message", commit.message.as_bytes());
-        for change in &commit.changes {
-            hash_field(&mut hasher, b"path", change.path.as_str().as_bytes());
-            match &change.new_content {
-                Some(blob) => {
-                    hash_field(&mut hasher, b"sha256", blob.sha256.as_bytes());
-                    hash_field(&mut hasher, b"git_oid", blob.git_oid.as_bytes());
-                    hash_field(&mut hasher, b"mode", blob.git_file_mode.as_bytes());
-                    hash_field(&mut hasher, b"size", blob.size_bytes.to_string().as_bytes());
-                }
-                None => hash_field(&mut hasher, b"delete", b""),
-            }
-        }
-    }
-    hex::encode(hasher.finalize())
-}
-
-pub(crate) fn hash_field(hasher: &mut Sha1, label: &[u8], value: &[u8]) {
-    hasher.update((label.len() as u64).to_be_bytes());
-    hasher.update(label);
-    hasher.update((value.len() as u64).to_be_bytes());
-    hasher.update(value);
-}
-
-pub(crate) fn write_projection_tree(
-    repo_path: &FsPath,
-    index_path: &FsPath,
-    visible_tree: &BTreeMap<String, ProjectionTreeFile>,
-) -> Result<String, ApiError> {
-    if index_path.exists() {
-        fs::remove_file(index_path).map_err(ApiError::internal)?;
-    }
-    git_index_command(
-        Command::new("git")
-            .arg("--git-dir")
-            .arg(repo_path)
-            .arg("read-tree")
-            .arg("--empty"),
-        index_path,
-        None,
-    )?;
-
-    let mut index_info = Vec::new();
-    for (path, file) in visible_tree {
-        if !is_supported_git_file_mode(&file.git_file_mode) {
-            return Err(ApiError::internal_message(format!(
-                "projected Git path {path} has unsupported mode {}",
-                file.git_file_mode
-            )));
-        }
-        let oid = git_command_output(
-            Command::new("git")
-                .arg("--git-dir")
-                .arg(repo_path)
-                .arg("hash-object")
-                .arg("-w")
-                .arg("--stdin"),
-            Some(&file.bytes),
-        )?;
-        let oid = String::from_utf8(oid).map_err(ApiError::bad_request)?;
-        let relative_path = git_relative_path(path)?;
-        index_info.extend_from_slice(
-            format!(
-                "{} blob {}\t{relative_path}\n",
-                file.git_file_mode,
-                oid.trim()
-            )
-            .as_bytes(),
-        );
-    }
-
-    if !index_info.is_empty() {
-        git_index_command(
-            Command::new("git")
-                .arg("--git-dir")
-                .arg(repo_path)
-                .arg("update-index")
-                .arg("--index-info"),
-            index_path,
-            Some(&index_info),
-        )?;
-    }
-    let tree = git_index_command(
-        Command::new("git")
-            .arg("--git-dir")
-            .arg(repo_path)
-            .arg("write-tree"),
-        index_path,
-        None,
-    )?;
-    let tree = String::from_utf8(tree).map_err(ApiError::bad_request)?;
-    Ok(tree.trim().to_string())
-}
-
-pub(crate) struct ProjectionTreeFile {
-    pub(crate) bytes: Vec<u8>,
-    pub(crate) git_file_mode: String,
-}
-
-pub(crate) fn git_relative_path(path: &str) -> Result<String, ApiError> {
-    let Some(relative) = path.strip_prefix('/') else {
-        return Err(ApiError::internal_message(format!(
-            "projected Git path {path} is not absolute"
-        )));
-    };
-    if relative.is_empty()
-        || relative == "."
-        || relative == ".."
-        || relative.starts_with("../")
-        || relative.contains("/../")
-        || relative.contains('\\')
-        || relative.as_bytes().contains(&0)
-    {
-        return Err(ApiError::internal_message(format!(
-            "projected Git path {path} cannot be served"
-        )));
-    }
-    Ok(relative.to_string())
-}
-
-pub(crate) fn git_commit_tree(
-    repo_path: &FsPath,
-    tree: &str,
-    parent: Option<&str>,
-    message: &str,
-) -> Result<String, ApiError> {
-    let mut command = Command::new("git");
-    command
-        .arg("--git-dir")
-        .arg(repo_path)
-        .arg("commit-tree")
-        .arg(tree)
-        .env("GIT_AUTHOR_NAME", "Scope")
-        .env("GIT_AUTHOR_EMAIL", "scope@example.invalid")
-        .env("GIT_AUTHOR_DATE", "2000-01-01T00:00:00Z")
-        .env("GIT_COMMITTER_NAME", "Scope")
-        .env("GIT_COMMITTER_EMAIL", "scope@example.invalid")
-        .env("GIT_COMMITTER_DATE", "2000-01-01T00:00:00Z");
-    if let Some(parent) = parent {
-        command.arg("-p").arg(parent.trim());
-    }
-    let output = git_command_output(&mut command, Some(message.as_bytes()))?;
-    String::from_utf8(output).map_err(ApiError::bad_request)
-}
-
-pub(crate) fn git_index_command(
-    command: &mut Command,
-    index_path: &FsPath,
-    stdin: Option<&[u8]>,
-) -> Result<Vec<u8>, ApiError> {
-    command.env("GIT_INDEX_FILE", index_path);
-    git_command_output(command, stdin)
-}
-
 pub(crate) fn git_command_output(
     command: &mut Command,
     stdin: Option<&[u8]>,
@@ -711,7 +401,7 @@ fn git_process_output(
         .map_err(|error| ApiError::service_unavailable(error.to_string()))
 }
 
-fn truncated_git_stderr(stderr: &[u8]) -> String {
+pub(crate) fn truncated_git_stderr(stderr: &[u8]) -> String {
     truncated_stderr(stderr, STDERR_DIAGNOSTIC_BYTES)
 }
 
