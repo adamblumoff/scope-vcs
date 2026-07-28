@@ -11,9 +11,8 @@ pub mod logical_commit {
         #[sea_orm(primary_key, auto_increment = false)]
         pub repo_id: String,
         pub ordinal: i64,
-        pub parent_ids: Json,
+        pub origin: Json,
         pub author_id: String,
-        pub author_visibility: String,
         pub message: String,
     }
 

@@ -1,5 +1,5 @@
 use super::{
-    policy::{Policy, ScopePath, Visibility},
+    policy::{ScopePath, Visibility},
     projection::{ProjectedCommit, Projection, ProjectionViewKey, VisibilityEvent, project_graph},
     store::{FileChangeKind, SourceBlob},
 };
@@ -36,12 +36,15 @@ pub struct CommitHistoryFile {
 }
 
 pub fn commit_history_view(
-    policy: &Policy,
     graph: &super::projection::SourceGraph,
     visibility_events: &[VisibilityEvent],
     view_key: ProjectionViewKey,
 ) -> CommitHistoryView {
-    let projection = project_graph(policy, graph, visibility_events, view_key);
+    let projection = project_graph(graph, visibility_events, view_key);
+    commit_history_view_from_projection(projection)
+}
+
+pub fn commit_history_view_from_projection(projection: Projection) -> CommitHistoryView {
     let generation = commit_history_generation(&projection);
     let mut tree = BTreeMap::new();
     let commits = projection
@@ -51,7 +54,7 @@ pub fn commit_history_view(
         .collect();
 
     CommitHistoryView {
-        repo_id: graph.repo_id.clone(),
+        repo_id: projection.repo_id.clone(),
         view_key: projection.view_key.as_str().to_string(),
         generation,
         commits,

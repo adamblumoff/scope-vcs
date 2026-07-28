@@ -2,7 +2,7 @@ use crate::{
     app::router,
     auth::{clerk::*, tokens::*},
     config::*,
-    git::{import::*, storage::*, upload::*, *},
+    git::{import::*, projection_repo::*, storage::*, upload::*, *},
     http::responses::*,
     push_intents::*,
     repo_access::*,
@@ -22,13 +22,13 @@ use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64};
 use jsonwebtoken::{Algorithm, EncodingKey, Header, encode, jwk::JwkSet};
 use scope_domain::policy::{Policy, ScopePath, Visibility, VisibilityRule};
 use scope_domain::projection::{
-    AuthorVisibility, FileChange, LogicalCommit, ProjectionViewKey, SourceGraph, project_graph,
+    FileChange, LogicalCommit, ProjectionViewKey, SourceGraph, project_graph,
 };
 use scope_domain::repo_config::{ConfigVisibility, RepoConfig};
 use scope_domain::store::{
-    GitPushToken, RepoPublicationState, RepoRecord, RepoStorageCleanup, RepositoryInvite,
-    RepositoryInviteState, RepositoryMember, RepositoryMemberPermissions, StoredRepository,
-    UserAccount,
+    GitPushToken, LogicalCommitOrigin, RepoPublicationState, RepoRecord, RepoStorageCleanup,
+    RepositoryInvite, RepositoryInviteState, RepositoryMember, RepositoryMemberPermissions,
+    StoredRepository, UserAccount,
 };
 use scope_object_store::{MemoryObjectStore, put_source_blob, source_blob_bytes};
 use std::{
@@ -603,9 +603,10 @@ fn repo_with_readme(state: &AppState) -> StoredRepository {
     let content = source_blob(state, "hello");
     repo.graph.commits.push(LogicalCommit {
         id: "rv1".to_string(),
-        parent_ids: Vec::new(),
+        origin: LogicalCommitOrigin::CanonicalPush {
+            source_head_oid: "rv1".to_string(),
+        },
         author_id: repo.record.owner_user_id.clone(),
-        author_visibility: AuthorVisibility::Visible,
         message: "initial".to_string(),
         changes: vec![FileChange {
             visibility: Visibility::Public,

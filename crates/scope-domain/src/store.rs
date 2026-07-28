@@ -191,6 +191,72 @@ pub struct GitSegment {
     pub manifest: SourceBlob,
 }
 
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct NativePublicCommit {
+    pub oid: String,
+    pub parent_oids: Vec<String>,
+    pub tree_oid: String,
+    pub changed_paths: Vec<ScopePath>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub enum RequestMergeOrigin {
+    Private {
+        request_id: String,
+        request_head_oid: String,
+    },
+    Public {
+        request_id: String,
+        public_base_oid: String,
+        request_head_oid: String,
+        commits: Vec<NativePublicCommit>,
+    },
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub enum LogicalCommitOrigin {
+    CanonicalPush {
+        source_head_oid: String,
+    },
+    PrivateRequestMerge {
+        request_id: String,
+        request_head_oid: String,
+    },
+    PublicRequestMerge {
+        request_id: String,
+        public_base_oid: String,
+        request_head_oid: String,
+        commits: Vec<NativePublicCommit>,
+        preserve_public_commits: bool,
+    },
+}
+
+impl RequestMergeOrigin {
+    pub fn into_logical_origin(self) -> LogicalCommitOrigin {
+        match self {
+            Self::Private {
+                request_id,
+                request_head_oid,
+            } => LogicalCommitOrigin::PrivateRequestMerge {
+                request_id,
+                request_head_oid,
+            },
+            Self::Public {
+                request_id,
+                public_base_oid,
+                request_head_oid,
+                commits,
+            } => LogicalCommitOrigin::PublicRequestMerge {
+                request_id,
+                public_base_oid,
+                request_head_oid,
+                commits,
+                preserve_public_commits: true,
+            },
+        }
+    }
+}
+
 pub const DEFAULT_GIT_FILE_MODE: &str = "100644";
 pub const EXECUTABLE_GIT_FILE_MODE: &str = "100755";
 

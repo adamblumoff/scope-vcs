@@ -11,15 +11,16 @@ async fn mutate_repo(state: &AppState, configure: impl FnOnce(&mut StoredReposit
 
 fn commit(
     id: &str,
-    parent: Option<&str>,
+    _parent: Option<&str>,
     message: &str,
     changes: Vec<FileChange>,
 ) -> LogicalCommit {
     LogicalCommit {
         id: id.into(),
-        parent_ids: parent.into_iter().map(str::to_string).collect(),
+        origin: LogicalCommitOrigin::CanonicalPush {
+            source_head_oid: id.to_string(),
+        },
         author_id: test_owner_id(),
-        author_visibility: AuthorVisibility::Visible,
         message: message.into(),
         changes,
     }

@@ -21,7 +21,7 @@ use {
             AcceptedContentPush, ContentPushState, ReviewedUpdateInput, accept_content_push,
             accept_request_merge,
         },
-        store::GitHead,
+        store::{GitHead, RequestMergeOrigin},
     },
 };
 
@@ -33,16 +33,8 @@ pub(super) async fn accept_and_persist_content_push(
     now_unix: u64,
     generated_ids: &dyn GeneratedIdSource,
 ) -> Result<GitHead, PostgresError> {
-    accept_and_persist_content_update(
-        tx,
-        repo_id,
-        repo_row,
-        update,
-        false,
-        now_unix,
-        generated_ids,
-    )
-    .await
+    accept_and_persist_content_update(tx, repo_id, repo_row, update, None, now_unix, generated_ids)
+        .await
 }
 
 pub(super) async fn accept_and_persist_request_merge(
@@ -50,11 +42,20 @@ pub(super) async fn accept_and_persist_request_merge(
     repo_id: &str,
     repo_row: entities::repository::Model,
     update: ReviewedUpdateInput,
+    origin: RequestMergeOrigin,
     now_unix: u64,
     generated_ids: &dyn GeneratedIdSource,
 ) -> Result<GitHead, PostgresError> {
-    accept_and_persist_content_update(tx, repo_id, repo_row, update, true, now_unix, generated_ids)
-        .await
+    accept_and_persist_content_update(
+        tx,
+        repo_id,
+        repo_row,
+        update,
+        Some(origin),
+        now_unix,
+        generated_ids,
+    )
+    .await
 }
 
 async fn accept_and_persist_content_update(
@@ -62,7 +63,7 @@ async fn accept_and_persist_content_update(
     repo_id: &str,
     repo_row: entities::repository::Model,
     mut update: ReviewedUpdateInput,
-    request_merge: bool,
+    request_merge_origin: Option<RequestMergeOrigin>,
     now_unix: u64,
     generated_ids: &dyn GeneratedIdSource,
 ) -> Result<GitHead, PostgresError> {
@@ -113,11 +114,10 @@ async fn accept_and_persist_content_update(
             change_version,
             policy,
             repo_config,
-            previous_commit_id: previous_commit.map(|commit| commit.id),
             live_files,
         };
-        if request_merge {
-            accept_request_merge(state, update)
+        if let Some(origin) = request_merge_origin {
+            accept_request_merge(state, update, origin)
         } else {
             accept_content_push(state, update)
         }

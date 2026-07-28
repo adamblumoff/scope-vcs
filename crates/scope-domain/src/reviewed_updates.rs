@@ -1,8 +1,13 @@
 use super::{
     policy::{Policy, PolicyError, ScopePath, Visibility, VisibilityRule},
-    projection::{AuthorVisibility, FileChange, LogicalCommit, VisibilityEvent},
-    repo_config::{HistoryRewriteAction, HistoryRewriteRequest, RepoConfig},
-    store::{GitHead, GitSegment, RepoPublicationState, SourceBlob, StoredRepository},
+    projection::{FileChange, LogicalCommit, VisibilityEvent},
+    repo_config::{
+        HistoryRewriteAction, HistoryRewriteRequest, RepoConfig, is_reserved_config_path,
+    },
+    store::{
+        GitHead, GitSegment, LogicalCommitOrigin, RepoPublicationState, RequestMergeOrigin,
+        SourceBlob, StoredRepository,
+    },
 };
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -38,7 +43,6 @@ pub struct ContentPushState {
     pub change_version: u64,
     pub policy: Policy,
     pub repo_config: RepoConfig,
-    pub previous_commit_id: Option<String>,
     pub live_files: BTreeMap<ScopePath, SourceBlob>,
 }
 
@@ -194,12 +198,12 @@ pub fn apply_reviewed_update_to_repo(
     let next_default_visibility = update.config.visibility.default_visibility().into();
     let next_config = update.config.clone();
 
-    let parent_ids = after_commit_id.into_iter().collect::<Vec<_>>();
     repo.graph.commits.push(LogicalCommit {
         id: logical_id,
-        parent_ids,
+        origin: LogicalCommitOrigin::CanonicalPush {
+            source_head_oid: update.git_head.head_oid.clone(),
+        },
         author_id: update.author_id,
-        author_visibility: AuthorVisibility::Visible,
         message: update.message,
         changes: file_changes,
     });
@@ -235,11 +239,34 @@ fn apply_content_only_update(
             change_version: repo.record.change_version,
             policy: repo.policy.clone(),
             repo_config: repo.repo_config.clone(),
-            previous_commit_id: repo.graph.commits.last().map(|commit| commit.id.clone()),
             live_files,
         },
         update,
     )?;
+    apply_accepted_content_push(repo, accepted);
+    Ok(())
+}
+
+pub fn apply_request_merge_to_repo(
+    repo: &mut StoredRepository,
+    update: ReviewedUpdateInput,
+    origin: RequestMergeOrigin,
+) -> ReviewedUpdateResult<()> {
+    let accepted = accept_request_merge(
+        ContentPushState {
+            change_version: repo.record.change_version,
+            policy: repo.policy.clone(),
+            repo_config: repo.repo_config.clone(),
+            live_files: repo.live_tree(),
+        },
+        update,
+        origin,
+    )?;
+    apply_accepted_content_push(repo, accepted);
+    Ok(())
+}
+
+fn apply_accepted_content_push(repo: &mut StoredRepository, accepted: AcceptedContentPush) {
     for change in &accepted.logical_commit.changes {
         match &change.new_content {
             Some(content) => {
@@ -257,27 +284,34 @@ fn apply_content_only_update(
     repo.git_head = Some(accepted.git_head);
     repo.first_push_token = None;
     repo.record.publication_state = RepoPublicationState::Published;
-    Ok(())
 }
 
 pub fn accept_content_push(
     state: ContentPushState,
     update: ReviewedUpdateInput,
 ) -> ReviewedUpdateResult<AcceptedContentPush> {
-    accept_content_update(state, update, false)
+    let source_head_oid = update.git_head.head_oid.clone();
+    accept_content_update(
+        state,
+        update,
+        false,
+        LogicalCommitOrigin::CanonicalPush { source_head_oid },
+    )
 }
 
 pub fn accept_request_merge(
     state: ContentPushState,
     update: ReviewedUpdateInput,
+    origin: RequestMergeOrigin,
 ) -> ReviewedUpdateResult<AcceptedContentPush> {
-    accept_content_update(state, update, true)
+    accept_content_update(state, update, true, origin.into_logical_origin())
 }
 
 fn accept_content_update(
     state: ContentPushState,
     mut update: ReviewedUpdateInput,
     allow_unchanged_tree: bool,
+    origin: LogicalCommitOrigin,
 ) -> ReviewedUpdateResult<AcceptedContentPush> {
     if update.changes.is_empty() && !allow_unchanged_tree {
         return Err(ReviewedUpdateError::BadRequest(
@@ -313,6 +347,7 @@ fn accept_content_update(
             "update did not change the live tree",
         ));
     }
+    validate_commit_origin(&origin, &file_changes, &update.config)?;
     let mut policy = state.policy;
     for change in &file_changes {
         match (&change.old_content, &change.new_content) {
@@ -339,9 +374,8 @@ fn accept_content_update(
     let logical_id = format!("{logical_prefix}_{}", update.git_head.head_oid);
     let logical_commit = LogicalCommit {
         id: logical_id,
-        parent_ids: state.previous_commit_id.into_iter().collect(),
+        origin,
         author_id: update.author_id,
-        author_visibility: AuthorVisibility::Visible,
         message: update.message,
         changes: file_changes,
     };
@@ -352,6 +386,89 @@ fn accept_content_update(
         git_segment: update.git_segment,
         logical_commit,
     })
+}
+
+fn validate_commit_origin(
+    origin: &LogicalCommitOrigin,
+    changes: &[FileChange],
+    repo_config: &RepoConfig,
+) -> ReviewedUpdateResult<()> {
+    let LogicalCommitOrigin::PublicRequestMerge {
+        public_base_oid,
+        request_head_oid,
+        commits,
+        ..
+    } = origin
+    else {
+        return Ok(());
+    };
+
+    if changes.iter().any(|change| {
+        change.visibility != Visibility::Public || is_reserved_config_path(&change.path)
+    }) {
+        return Err(ReviewedUpdateError::Conflict(
+            "public request merge contains non-public changes",
+        ));
+    }
+    let Some(last) = commits.last() else {
+        return Err(ReviewedUpdateError::Conflict(
+            "public request merge has no native commits",
+        ));
+    };
+    if &last.oid != request_head_oid {
+        return Err(ReviewedUpdateError::Conflict(
+            "public request merge native commits do not end at request head",
+        ));
+    }
+    let range_oids = commits
+        .iter()
+        .map(|commit| commit.oid.as_str())
+        .collect::<BTreeSet<_>>();
+    if range_oids.len() != commits.len()
+        || commits.iter().any(|commit| {
+            commit.oid.is_empty()
+                || commit.tree_oid.is_empty()
+                || commit.parent_oids.is_empty()
+                || commit.parent_oids.iter().any(String::is_empty)
+        })
+    {
+        return Err(ReviewedUpdateError::Conflict(
+            "public request merge contains malformed native commit facts",
+        ));
+    }
+    let touched_paths = commits
+        .iter()
+        .flat_map(|commit| commit.changed_paths.iter())
+        .collect::<BTreeSet<_>>();
+    if touched_paths.iter().any(|path| {
+        is_reserved_config_path(path) || repo_config.visibility_for_path(path) != Visibility::Public
+    }) || changes
+        .iter()
+        .any(|change| !touched_paths.contains(&change.path))
+    {
+        return Err(ReviewedUpdateError::Conflict(
+            "public request merge native paths do not cover the logical changes",
+        ));
+    }
+    let mut seen = BTreeSet::new();
+    let mut descends_from_public_base = false;
+    for commit in commits {
+        for parent_oid in &commit.parent_oids {
+            descends_from_public_base |= parent_oid == public_base_oid;
+            if range_oids.contains(parent_oid.as_str()) && !seen.contains(parent_oid.as_str()) {
+                return Err(ReviewedUpdateError::Conflict(
+                    "public request merge native commits are not ordered ancestor-first",
+                ));
+            }
+        }
+        seen.insert(commit.oid.as_str());
+    }
+    if !descends_from_public_base {
+        return Err(ReviewedUpdateError::Conflict(
+            "public request merge does not include the current public base as a parent",
+        ));
+    }
+    Ok(())
 }
 
 pub fn apply_reviewed_config_to_repo(
@@ -458,8 +575,64 @@ fn apply_history_rewrites(
         })
     };
 
+    let commit_indexes = repo
+        .graph
+        .commits
+        .iter()
+        .enumerate()
+        .map(|(index, commit)| (commit.id.as_str(), index))
+        .collect::<BTreeMap<_, _>>();
+    let mut invalidate_preservation_from = None;
+    for (index, commit) in repo.graph.commits.iter().enumerate() {
+        let native_history_matches = match &commit.origin {
+            LogicalCommitOrigin::PublicRequestMerge { commits, .. } => commits
+                .iter()
+                .flat_map(|native| native.changed_paths.iter())
+                .any(&should_redact),
+            _ => false,
+        };
+        let logical_history_matches = commit
+            .changes
+            .iter()
+            .any(|change| change.visibility == Visibility::Public && should_redact(&change.path));
+        if native_history_matches || logical_history_matches {
+            invalidate_preservation_from = Some(
+                invalidate_preservation_from.map_or(index, |current: usize| current.min(index)),
+            );
+        }
+    }
+    for event in &repo.visibility_events {
+        if !should_redact(&event.path) {
+            continue;
+        }
+        let index = event
+            .after_commit_id
+            .as_deref()
+            .and_then(|commit_id| commit_indexes.get(commit_id).copied())
+            .map_or(0, |commit_index| commit_index + 1);
+        invalidate_preservation_from =
+            Some(invalidate_preservation_from.map_or(index, |current: usize| current.min(index)));
+    }
+
     let mut redacted_paths = BTreeSet::new();
-    for commit in &mut repo.graph.commits {
+    for (index, commit) in repo.graph.commits.iter_mut().enumerate() {
+        if let LogicalCommitOrigin::PublicRequestMerge {
+            commits,
+            preserve_public_commits,
+            ..
+        } = &mut commit.origin
+        {
+            if invalidate_preservation_from.is_some_and(|first| index >= first) {
+                *preserve_public_commits = false;
+            }
+            for path in commits
+                .iter()
+                .flat_map(|native| native.changed_paths.iter())
+                .filter(|path| should_redact(path))
+            {
+                redacted_paths.insert(path.clone());
+            }
+        }
         for change in &mut commit.changes {
             if change.visibility == Visibility::Public && should_redact(&change.path) {
                 change.visibility = Visibility::Private;

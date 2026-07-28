@@ -205,9 +205,8 @@ CREATE TABLE scope_logical_commits (
     id character varying NOT NULL,
     repo_id character varying NOT NULL,
     ordinal bigint NOT NULL,
-    parent_ids jsonb NOT NULL,
+    origin jsonb NOT NULL,
     author_id character varying NOT NULL,
-    author_visibility character varying NOT NULL,
     message text NOT NULL,
     PRIMARY KEY (repo_id, id),
     UNIQUE (repo_id, ordinal)

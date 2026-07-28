@@ -85,7 +85,7 @@ pub fn projection_preview(
     include_private_counts: bool,
 ) -> ProjectionPreviewView {
     let view_key = ProjectionViewKey::from(audience);
-    let projection = project_graph(&repo.policy, &repo.graph, &repo.visibility_events, view_key);
+    let projection = project_graph(&repo.graph, &repo.visibility_events, view_key);
     let files = projection_preview_files(repo, &projection);
     let head_oid = projection_preview_head_oid(&projection, &files);
     let logical_commit_visibility = repo
@@ -120,7 +120,6 @@ pub fn projection_preview(
     let (hidden_files, hidden_commits) =
         if audience == ProjectionAudience::Public && include_private_counts {
             let private_projection = project_graph(
-                &repo.policy,
                 &repo.graph,
                 &repo.visibility_events,
                 ProjectionViewKey::Private,
@@ -178,7 +177,6 @@ pub fn projected_file_contents(
 ) -> Vec<ProjectionViewFileContent> {
     let access = repo.access_for_principal(principal);
     let projection = project_graph(
-        &repo.policy,
         &repo.graph,
         &repo.visibility_events,
         ProjectionViewKey::from_access(access),
@@ -222,7 +220,6 @@ pub fn projected_file_content(
     path: &ScopePath,
 ) -> Option<ProjectionViewFileContent> {
     let projection = project_graph(
-        &repo.policy,
         &repo.graph,
         &repo.visibility_events,
         ProjectionViewKey::from_access(repo.access_for_principal(principal)),
@@ -260,7 +257,6 @@ pub fn repo_scope_path(path: &str) -> Result<ScopePath, DomainError> {
 
 pub fn has_visible_projected_files(repo: &StoredRepository, principal: &Principal) -> bool {
     let projection = project_graph(
-        &repo.policy,
         &repo.graph,
         &repo.visibility_events,
         ProjectionViewKey::from_access(repo.access_for_principal(principal)),
@@ -270,7 +266,6 @@ pub fn has_visible_projected_files(repo: &StoredRepository, principal: &Principa
 
 pub fn has_visible_projected_history(repo: &StoredRepository, principal: &Principal) -> bool {
     let projection = project_graph(
-        &repo.policy,
         &repo.graph,
         &repo.visibility_events,
         ProjectionViewKey::from_access(repo.access_for_principal(principal)),

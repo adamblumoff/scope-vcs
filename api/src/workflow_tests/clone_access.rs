@@ -122,7 +122,6 @@ async fn permissioned_public_git_read_view_physically_excludes_private_objects()
         .git_oid
         .clone();
     let projection = project_graph(
-        &repo.policy,
         &repo.graph,
         &repo.visibility_events,
         ProjectionViewKey::Public,

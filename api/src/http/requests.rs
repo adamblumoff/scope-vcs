@@ -3,9 +3,9 @@ use crate::{
     config::DEFAULT_GIT_BRANCH,
     error::ApiError,
     git::{
-        import::git_refs, request_merge::prepare_request_merge,
-        request_refs::delete_request_ref_from_store, storage::cached_raw_git_repo,
-        upload::projection_bare_repo_for_state,
+        import::git_refs, projection_repo::projection_bare_repo_for_state,
+        request_merge::prepare_request_merge, request_refs::delete_request_ref_from_store,
+        storage::cached_raw_git_repo,
     },
     http::responses::*,
     persistence::unix_now,
@@ -390,6 +390,7 @@ pub(crate) async fn merge_request(
             prepared.expected_repo_change_version,
             &prepared.prepared_request_head_oid,
             prepared.update.into_reviewed_update(),
+            prepared.origin,
             MergeRequestInput {
                 request_id: request.id,
                 actor_user_id: user.id.clone(),
@@ -926,7 +927,7 @@ fn projection_main_oid(
     repo: &StoredRepository,
     view_key: ProjectionViewKey,
 ) -> Result<Option<String>, ApiError> {
-    let projection = project_graph(&repo.policy, &repo.graph, &repo.visibility_events, view_key);
+    let projection = project_graph(&repo.graph, &repo.visibility_events, view_key);
     if projection.commits.is_empty() {
         return Ok(None);
     }

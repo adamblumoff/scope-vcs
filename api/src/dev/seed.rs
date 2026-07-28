@@ -9,7 +9,7 @@ use request_revisions::SeedRequestRevision;
 use crate::{config::DEFAULT_GIT_BRANCH, error::ApiError};
 use scope_domain::{
     policy::{ScopePath, Visibility, VisibilityRule},
-    projection::{AuthorVisibility, FileChange, LogicalCommit},
+    projection::{FileChange, LogicalCommit},
     requests::{
         EditRequestIdentityInput, RecordRequestRevisionInput, RecordWorkingRequestUploadInput,
         RequestActorRole, RequestAssessmentOutcome, RequestAudience, RequestChangeBlock,
@@ -17,7 +17,10 @@ use scope_domain::{
         edit_request_identity, record_request_revision, record_working_request_upload,
         start_request,
     },
-    store::{GitHead, GitSegment, RepoPublicationState, SourceBlob, StoredRepository, UserAccount},
+    store::{
+        GitHead, GitSegment, LogicalCommitOrigin, RepoPublicationState, SourceBlob,
+        StoredRepository, UserAccount,
+    },
 };
 use scope_object_store::{ContentObjectKind, ObjectStore, put_content_object, put_source_blob};
 use std::{
@@ -98,7 +101,6 @@ fn published_demo(
     repo.graph.commits.push(commit(
         &repo,
         "dev-public-1",
-        [],
         "Seed public demo",
         vec![
             add_change("/README.md", readme, Visibility::Public)?,
@@ -135,7 +137,6 @@ fn update_demo(
     repo.graph.commits.push(commit(
         &repo,
         "dev-update-1",
-        [],
         "Seed update demo",
         vec![add_change(
             "/README.md",
@@ -146,7 +147,6 @@ fn update_demo(
     repo.graph.commits.push(commit(
         &repo,
         "dev-update-2",
-        ["dev-update-1"],
         "Document release flow",
         vec![add_change(
             "/docs/release.md",
@@ -413,15 +413,15 @@ fn repo(
 fn commit(
     repo: &StoredRepository,
     id: &str,
-    parent_ids: impl IntoIterator<Item = &'static str>,
     message: &str,
     changes: Vec<FileChange>,
 ) -> LogicalCommit {
     LogicalCommit {
         id: id.to_string(),
-        parent_ids: parent_ids.into_iter().map(ToString::to_string).collect(),
+        origin: LogicalCommitOrigin::CanonicalPush {
+            source_head_oid: id.to_string(),
+        },
         author_id: repo.record.owner_user_id.clone(),
-        author_visibility: AuthorVisibility::Visible,
         message: message.to_string(),
         changes,
     }
