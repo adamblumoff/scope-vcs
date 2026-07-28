@@ -395,6 +395,7 @@ fn validate_commit_origin(
 ) -> ReviewedUpdateResult<()> {
     let LogicalCommitOrigin::PublicRequestMerge {
         public_base_oid,
+        public_parent_oids,
         request_head_oid,
         commits,
         ..
@@ -424,7 +425,14 @@ fn validate_commit_origin(
         .iter()
         .map(|commit| commit.oid.as_str())
         .collect::<BTreeSet<_>>();
+    let public_parent_oid_set = public_parent_oids
+        .iter()
+        .map(String::as_str)
+        .collect::<BTreeSet<_>>();
     if range_oids.len() != commits.len()
+        || public_parent_oid_set.is_empty()
+        || public_parent_oid_set.len() != public_parent_oids.len()
+        || public_parent_oids.iter().any(String::is_empty)
         || commits.iter().any(|commit| {
             commit.oid.is_empty()
                 || commit.tree_oid.is_empty()
@@ -455,15 +463,23 @@ fn validate_commit_origin(
     for commit in commits {
         for parent_oid in &commit.parent_oids {
             descends_from_public_base |= parent_oid == public_base_oid;
-            if range_oids.contains(parent_oid.as_str()) && !seen.contains(parent_oid.as_str()) {
+            if range_oids.contains(parent_oid.as_str()) {
+                if seen.contains(parent_oid.as_str()) {
+                    continue;
+                }
                 return Err(ReviewedUpdateError::Conflict(
                     "public request merge native commits are not ordered ancestor-first",
+                ));
+            }
+            if !public_parent_oid_set.contains(parent_oid.as_str()) {
+                return Err(ReviewedUpdateError::Conflict(
+                    "public request merge contains a parent outside public history",
                 ));
             }
         }
         seen.insert(commit.oid.as_str());
     }
-    if !descends_from_public_base {
+    if !descends_from_public_base || !public_parent_oid_set.contains(public_base_oid.as_str()) {
         return Err(ReviewedUpdateError::Conflict(
             "public request merge does not include the current public base as a parent",
         ));

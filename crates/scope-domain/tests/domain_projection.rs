@@ -9,9 +9,9 @@ use scope_domain::{
         RepoConfigVisibilityRule,
     },
     reviewed_updates::{
-        ContentPushState, ReviewedConfigUpdateInput, ReviewedContentChange, ReviewedUpdateInput,
-        accept_content_push, accept_request_merge, apply_reviewed_config_to_repo,
-        apply_reviewed_update_to_repo,
+        ContentPushState, ReviewedConfigUpdateInput, ReviewedContentChange, ReviewedUpdateError,
+        ReviewedUpdateInput, accept_content_push, accept_request_merge,
+        apply_reviewed_config_to_repo, apply_reviewed_update_to_repo,
     },
     store::{
         LogicalCommitOrigin, NativePublicCommit, RepoPublicationState, RequestMergeOrigin,
@@ -398,6 +398,10 @@ fn public_request_merge_requires_an_ordered_public_native_range() {
     let origin = RequestMergeOrigin::Public {
         request_id: "request-1".to_string(),
         public_base_oid: "0000000000000000000000000000000000000000".to_string(),
+        public_parent_oids: vec![
+            "0000000000000000000000000000000000000000".to_string(),
+            "9999999999999999999999999999999999999999".to_string(),
+        ],
         request_head_oid: "2222222222222222222222222222222222222222".to_string(),
         commits: commits.clone(),
     };
@@ -408,27 +412,58 @@ fn public_request_merge_requires_an_ordered_public_native_range() {
         LogicalCommitOrigin::PublicRequestMerge {
             request_id: "request-1".to_string(),
             public_base_oid: "0000000000000000000000000000000000000000".to_string(),
+            public_parent_oids: vec![
+                "0000000000000000000000000000000000000000".to_string(),
+                "9999999999999999999999999999999999999999".to_string(),
+            ],
             request_head_oid: "2222222222222222222222222222222222222222".to_string(),
             commits: commits.clone(),
             preserve_public_commits: true,
         }
     );
 
-    let mut broken_commits = commits;
+    let mut broken_commits = commits.clone();
     broken_commits[0].parent_oids = vec!["2222222222222222222222222222222222222222".to_string()];
     assert!(
         accept_request_merge(
-            state,
-            update,
+            state.clone(),
+            update.clone(),
             RequestMergeOrigin::Public {
                 request_id: "request-1".to_string(),
                 public_base_oid: "0000000000000000000000000000000000000000".to_string(),
+                public_parent_oids: vec![
+                    "0000000000000000000000000000000000000000".to_string(),
+                    "9999999999999999999999999999999999999999".to_string(),
+                ],
                 request_head_oid: "2222222222222222222222222222222222222222".to_string(),
                 commits: broken_commits,
             },
         )
         .is_err()
     );
+
+    let mut external_parent_commits = commits;
+    external_parent_commits[0].parent_oids =
+        vec!["8888888888888888888888888888888888888888".to_string()];
+    assert!(matches!(
+        accept_request_merge(
+            state,
+            update,
+            RequestMergeOrigin::Public {
+                request_id: "request-1".to_string(),
+                public_base_oid: "0000000000000000000000000000000000000000".to_string(),
+                public_parent_oids: vec![
+                    "0000000000000000000000000000000000000000".to_string(),
+                    "9999999999999999999999999999999999999999".to_string(),
+                ],
+                request_head_oid: "2222222222222222222222222222222222222222".to_string(),
+                commits: external_parent_commits,
+            },
+        ),
+        Err(ReviewedUpdateError::Conflict(
+            "public request merge contains a parent outside public history"
+        ))
+    ));
 }
 
 #[test]
@@ -456,6 +491,7 @@ fn public_request_merge_rejects_private_changes() {
         RequestMergeOrigin::Public {
             request_id: "request-1".to_string(),
             public_base_oid: "0000000000000000000000000000000000000000".to_string(),
+            public_parent_oids: vec!["0000000000000000000000000000000000000000".to_string()],
             request_head_oid: "1111111111111111111111111111111111111111".to_string(),
             commits: vec![NativePublicCommit {
                 oid: "1111111111111111111111111111111111111111".to_string(),
@@ -494,6 +530,7 @@ fn public_request_merge_rejects_private_intermediate_native_paths() {
         RequestMergeOrigin::Public {
             request_id: "request-1".to_string(),
             public_base_oid: "0000000000000000000000000000000000000000".to_string(),
+            public_parent_oids: vec!["0000000000000000000000000000000000000000".to_string()],
             request_head_oid: "1111111111111111111111111111111111111111".to_string(),
             commits: vec![NativePublicCommit {
                 oid: "1111111111111111111111111111111111111111".to_string(),
@@ -649,6 +686,7 @@ fn public_request_origin_expands_to_exact_native_commits_only_in_public_view() {
     request_merge.origin = LogicalCommitOrigin::PublicRequestMerge {
         request_id: "request-1".to_string(),
         public_base_oid: "base".to_string(),
+        public_parent_oids: vec!["base".to_string()],
         request_head_oid: "r2".to_string(),
         preserve_public_commits: true,
         commits: vec![
@@ -782,6 +820,7 @@ fn redacting_intermediate_native_path_invalidates_descendant_commit_preservation
     request_merge.origin = LogicalCommitOrigin::PublicRequestMerge {
         request_id: "request-1".to_string(),
         public_base_oid: "base".to_string(),
+        public_parent_oids: vec!["base".to_string()],
         request_head_oid: "request-head".to_string(),
         commits: vec![NativePublicCommit {
             oid: "request-head".to_string(),
@@ -805,6 +844,7 @@ fn redacting_intermediate_native_path_invalidates_descendant_commit_preservation
     later_request_merge.origin = LogicalCommitOrigin::PublicRequestMerge {
         request_id: "request-2".to_string(),
         public_base_oid: "request-head".to_string(),
+        public_parent_oids: vec!["request-head".to_string()],
         request_head_oid: "later-request-head".to_string(),
         commits: vec![NativePublicCommit {
             oid: "later-request-head".to_string(),

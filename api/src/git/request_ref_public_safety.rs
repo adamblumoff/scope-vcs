@@ -19,6 +19,7 @@ const PUBLIC_REQUEST_BASE_REF: &str = "refs/scope/internal/public-request-base";
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct ValidatedPublicRequestRange {
     pub(crate) public_base_oid: String,
+    pub(crate) public_parent_oids: Vec<String>,
     pub(crate) commits: Vec<NativePublicCommit>,
 }
 
@@ -30,7 +31,9 @@ pub(super) fn ensure_public_request_ref_is_public_safe(
 ) -> Result<(), ApiError> {
     let (_, public_visible_paths) = fetch_current_public_projection(repo, state, staging_repo)?;
     public_request_branch_base_oid(staging_repo, new_head_oid)?;
-    for commit_oid in commits_after(staging_repo, PUBLIC_REQUEST_BASE_REF, new_head_oid)? {
+    let commit_oids = commits_after(staging_repo, PUBLIC_REQUEST_BASE_REF, new_head_oid)?;
+    validated_public_parent_oids(staging_repo, &commit_oids)?;
+    for commit_oid in commit_oids {
         validate_pushed_tree(staging_repo, &commit_oid)?;
         ensure_public_request_commit_paths(repo, &public_visible_paths, staging_repo, &commit_oid)?;
     }
@@ -52,6 +55,12 @@ pub(crate) fn validate_public_request_merge_range(
             "public request contains no commits after current public main",
         ));
     }
+    let public_parent_oids = validated_public_parent_oids(staging_repo, &commit_oids)?;
+    if !public_parent_oids.contains(&public_base_oid) {
+        return Err(ApiError::conflict(
+            "public main advanced; merge current public main into the request branch and push again",
+        ));
+    }
 
     let mut commits = Vec::with_capacity(commit_oids.len());
     for commit_oid in commit_oids {
@@ -71,8 +80,81 @@ pub(crate) fn validate_public_request_merge_range(
 
     Ok(ValidatedPublicRequestRange {
         public_base_oid,
+        public_parent_oids,
         commits,
     })
+}
+
+fn validated_public_parent_oids(
+    staging_repo: &FsPath,
+    commit_oids: &[String],
+) -> Result<Vec<String>, ApiError> {
+    let range_oids = commit_oids
+        .iter()
+        .map(String::as_str)
+        .collect::<BTreeSet<_>>();
+    let mut seen = BTreeSet::new();
+    let mut public_parent_oids = BTreeSet::new();
+    for commit_oid in commit_oids {
+        let parent_oids = git_text(
+            staging_repo,
+            &["show", "-s", "--format=%P", commit_oid],
+            "reading public request commit parents",
+        )?
+        .split_ascii_whitespace()
+        .map(ToString::to_string)
+        .collect::<Vec<_>>();
+        if parent_oids.is_empty() {
+            return Err(ApiError::conflict(
+                "public request history must be based on public main",
+            ));
+        }
+        for parent_oid in parent_oids {
+            if range_oids.contains(parent_oid.as_str()) {
+                if !seen.contains(parent_oid.as_str()) {
+                    return Err(ApiError::conflict(
+                        "public request commits are not ordered ancestor-first",
+                    ));
+                }
+            } else if git_revision_is_ancestor(staging_repo, &parent_oid, PUBLIC_REQUEST_BASE_REF)?
+            {
+                public_parent_oids.insert(parent_oid);
+            } else {
+                return Err(ApiError::conflict(
+                    "public request contains a parent outside public history; rewrite the branch onto public main and push again",
+                ));
+            }
+        }
+        seen.insert(commit_oid.as_str());
+    }
+    if public_parent_oids.is_empty() {
+        return Err(ApiError::conflict(
+            "public request history must be based on public main",
+        ));
+    }
+    Ok(public_parent_oids.into_iter().collect())
+}
+
+fn git_revision_is_ancestor(
+    staging_repo: &FsPath,
+    ancestor: &str,
+    descendant: &str,
+) -> Result<bool, ApiError> {
+    let output = run_git_output(
+        Some(staging_repo),
+        &["merge-base", "--is-ancestor", ancestor, descendant],
+        "checking public request parent ancestry",
+    )?;
+    if output.status.success() {
+        return Ok(true);
+    }
+    if output.status.code() == Some(1) {
+        return Ok(false);
+    }
+    Err(ApiError::service_unavailable(format!(
+        "checking public request parent ancestry: {}",
+        String::from_utf8_lossy(&output.stderr).trim()
+    )))
 }
 
 fn fetch_current_public_projection(
@@ -374,6 +456,58 @@ mod tests {
             second_fact.tree_oid,
             oid(&repo, &format!("{}^{{tree}}", second_fact.oid))
         );
+
+        let _ = fs::remove_dir_all(repo);
+    }
+
+    #[test]
+    fn public_request_range_rejects_parent_outside_public_history_or_range() {
+        let repo = initialized_repo("external-parent");
+        fs::write(repo.join("public.txt"), "base\n").unwrap();
+        commit_all(&repo, "public base");
+        let public_base = oid(&repo, "HEAD");
+        run_git(
+            Some(&repo),
+            &["update-ref", PUBLIC_REQUEST_BASE_REF, &public_base],
+            "recording public request base",
+        )
+        .unwrap();
+
+        run_git(
+            Some(&repo),
+            &["switch", "--create", "external"],
+            "creating external branch",
+        )
+        .unwrap();
+        fs::write(repo.join("external.txt"), "external\n").unwrap();
+        commit_all(&repo, "external commit");
+
+        run_git(
+            Some(&repo),
+            &["switch", "--create", "request", &public_base],
+            "creating request branch",
+        )
+        .unwrap();
+        fs::write(repo.join("request.txt"), "request\n").unwrap();
+        commit_all(&repo, "request commit");
+        let request_commit = oid(&repo, "HEAD");
+        run_git(
+            Some(&repo),
+            &[
+                "merge",
+                "--no-ff",
+                "external",
+                "-m",
+                "merge external parent",
+            ],
+            "creating request merge with external parent",
+        )
+        .unwrap();
+        let request_head = oid(&repo, "HEAD");
+
+        let error =
+            validated_public_parent_oids(&repo, &[request_commit, request_head]).unwrap_err();
+        assert!(error.message().contains("parent outside public history"));
 
         let _ = fs::remove_dir_all(repo);
     }

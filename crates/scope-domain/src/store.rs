@@ -208,6 +208,7 @@ pub enum RequestMergeOrigin {
     Public {
         request_id: String,
         public_base_oid: String,
+        public_parent_oids: Vec<String>,
         request_head_oid: String,
         commits: Vec<NativePublicCommit>,
     },
@@ -225,6 +226,7 @@ pub enum LogicalCommitOrigin {
     PublicRequestMerge {
         request_id: String,
         public_base_oid: String,
+        public_parent_oids: Vec<String>,
         request_head_oid: String,
         commits: Vec<NativePublicCommit>,
         preserve_public_commits: bool,
@@ -244,11 +246,13 @@ impl RequestMergeOrigin {
             Self::Public {
                 request_id,
                 public_base_oid,
+                public_parent_oids,
                 request_head_oid,
                 commits,
             } => LogicalCommitOrigin::PublicRequestMerge {
                 request_id,
                 public_base_oid,
+                public_parent_oids,
                 request_head_oid,
                 commits,
                 preserve_public_commits: true,

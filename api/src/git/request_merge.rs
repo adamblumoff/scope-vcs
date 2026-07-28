@@ -80,6 +80,7 @@ pub(crate) async fn prepare_request_merge(
                     RequestMergeOrigin::Public {
                         request_id: request.id.clone(),
                         public_base_oid: validated.public_base_oid,
+                        public_parent_oids: validated.public_parent_oids,
                         request_head_oid: request.head_oid.clone(),
                         commits: validated.commits,
                     },
