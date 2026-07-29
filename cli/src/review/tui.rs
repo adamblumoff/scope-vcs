@@ -99,7 +99,7 @@ fn render(frame: &mut Frame<'_>, state: &mut ReviewState) {
     };
     frame.render_widget(
         Paragraph::new(vec![
-            Line::from(format!("{mode}  .scope/repo.json  {dirty}{rewrite_note}")),
+            Line::from(format!("{mode}  Scope repo config  {dirty}{rewrite_note}")),
             Line::from(format!(
                 "Path                                      Visibility  Rule  {filter}{filter_mode}"
             )),

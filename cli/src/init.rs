@@ -57,7 +57,7 @@ pub fn run(name: Option<String>) -> anyhow::Result<()> {
         } else {
             "Using existing"
         },
-        repo_config_path()
+        repo_config_path(&git_repo.root)?.display()
     );
     println!("Run: scope push");
     Ok(())

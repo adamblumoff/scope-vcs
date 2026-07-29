@@ -1,9 +1,8 @@
 use super::{
     policy::{Policy, PolicyError, ScopePath, Visibility, VisibilityRule},
     projection::{FileChange, LogicalCommit, VisibilityEvent},
-    repo_config::{
-        HistoryRewriteAction, HistoryRewriteRequest, RepoConfig, is_reserved_config_path,
-    },
+    repo_config::{HistoryRewriteAction, HistoryRewriteRequest, RepoConfig},
+    repo_control::is_private_control_path,
     store::{
         GitHead, GitSegment, LogicalCommitOrigin, RepoPublicationState, RequestMergeOrigin,
         SourceBlob, StoredRepository,
@@ -405,7 +404,7 @@ fn validate_commit_origin(
     };
 
     if changes.iter().any(|change| {
-        change.visibility != Visibility::Public || is_reserved_config_path(&change.path)
+        change.visibility != Visibility::Public || is_private_control_path(&change.path)
     }) {
         return Err(ReviewedUpdateError::Conflict(
             "public request merge contains non-public changes",
@@ -449,7 +448,7 @@ fn validate_commit_origin(
         .flat_map(|commit| commit.changed_paths.iter())
         .collect::<BTreeSet<_>>();
     if touched_paths.iter().any(|path| {
-        is_reserved_config_path(path) || repo_config.visibility_for_path(path) != Visibility::Public
+        is_private_control_path(path) || repo_config.visibility_for_path(path) != Visibility::Public
     }) || changes
         .iter()
         .any(|change| !touched_paths.contains(&change.path))

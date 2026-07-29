@@ -1,0 +1,12 @@
+[package]
+name = "scope-run-config"
+version = "0.1.0"
+edition = "2024"
+license = "UNLICENSED"
+repository = "https://github.com/adamblumoff/scope-vcs"
+
+[dependencies]
+scope_domain = { package = "scope-domain", path = "../scope-domain" }
+serde = { version = "1.0.228", features = ["derive"] }
+thiserror = "2.0.18"
+yaml_serde = "0.10.4"

@@ -141,3 +141,10 @@ fn install_scope_fetch_auth_rejects_config_injection() {
         .is_err()
     );
 }
+
+#[test]
+fn dirty_detection_includes_untracked_workflow_definitions() {
+    assert!(has_dirty_paths(b"?? .scope/runs/test.yml\n"));
+    assert!(has_dirty_paths(b" M README.md\n"));
+    assert!(!has_dirty_paths(b""));
+}

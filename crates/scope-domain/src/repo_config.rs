@@ -1,9 +1,11 @@
-use super::policy::{Policy, ScopePath, Visibility};
+use super::{
+    policy::{Policy, ScopePath, Visibility},
+    repo_control::{is_private_control_path, is_private_control_pattern},
+};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use thiserror::Error;
 
-pub const REPO_CONFIG_PATH: &str = "/.scope/repo.json";
 pub const REPO_CONFIG_KIND: &str = "scope.repo-config";
 pub const REPO_CONFIG_VERSION: u64 = 1;
 
@@ -90,11 +92,9 @@ impl RepoConfig {
         if self.version != REPO_CONFIG_VERSION {
             return Err(RepoConfigError::InvalidVersion);
         }
-        validate_config_path(REPO_CONFIG_PATH)?;
         for rule in &self.visibility.rules {
             validate_config_pattern(&rule.path)?;
-            if rule.visibility == ConfigVisibility::Public
-                && pattern_matches_path(&rule.path, REPO_CONFIG_PATH)
+            if rule.visibility == ConfigVisibility::Public && is_private_control_pattern(&rule.path)
             {
                 return Err(RepoConfigError::ReservedPathPublic(rule.path.clone()));
             }
@@ -111,7 +111,7 @@ impl RepoConfig {
     }
 
     pub fn visibility_for_path(&self, path: &ScopePath) -> Visibility {
-        if is_reserved_config_path(path) {
+        if is_private_control_path(path) {
             return Visibility::Private;
         }
 
@@ -195,12 +195,6 @@ impl HistoryRewriteAction {
             Self::RedactPublicHistory => "redact-public-history",
         }
     }
-}
-
-pub fn is_reserved_config_path(path: &ScopePath) -> bool {
-    path.as_str() == "/.scope"
-        || path.as_str() == REPO_CONFIG_PATH
-        || path.as_str().starts_with("/.scope/")
 }
 
 pub fn validate_config_path(path: &str) -> Result<ScopePath, RepoConfigError> {
@@ -307,7 +301,7 @@ mod tests {
     }
 
     #[test]
-    fn scope_config_path_is_always_private() {
+    fn scope_control_paths_are_always_private() {
         let config = RepoConfig::parse_json(
             br#"{
                 "kind": "scope.repo-config",
@@ -320,7 +314,7 @@ mod tests {
         )
         .unwrap();
 
-        for path in ["/.scope/repo.json", "/.scope"] {
+        for path in ["/.scope/repo.json", "/.scope/runs/test.yml", "/.scope"] {
             assert_eq!(
                 config.visibility_for_path(&ScopePath::parse(path).unwrap()),
                 Visibility::Private
@@ -329,22 +323,21 @@ mod tests {
     }
 
     #[test]
-    fn public_scope_config_rule_is_rejected() {
-        let error = RepoConfig::parse_json(
-            br#"{
-                "kind": "scope.repo-config",
-                "version": 1,
-                "visibility": {
-                    "default": "private",
-                    "rules": [
-                        { "path": "/.scope/**", "visibility": "public" }
-                    ]
-                }
-            }"#,
-        )
-        .unwrap_err();
-
-        assert!(matches!(error, RepoConfigError::ReservedPathPublic(_)));
+    fn public_scope_control_rules_are_rejected() {
+        for path in ["/.scope/**", "/.scope/runs/test.yml"] {
+            let json = format!(
+                r#"{{
+                    "kind": "scope.repo-config",
+                    "version": 1,
+                    "visibility": {{
+                        "default": "private",
+                        "rules": [{{ "path": "{path}", "visibility": "public" }}]
+                    }}
+                }}"#
+            );
+            let error = RepoConfig::parse_json(json.as_bytes()).unwrap_err();
+            assert!(matches!(error, RepoConfigError::ReservedPathPublic(_)));
+        }
     }
 
     #[test]

@@ -7,6 +7,7 @@ members = [
     "crates/scope-git",
     "crates/scope-object-store",
     "crates/scope-git-process",
+    "crates/scope-run-config",
     "worker",
 ]
 exclude = ["cli"]

@@ -55,6 +55,8 @@ fn oversized_binary_push_names_path_and_limit() {
 #[test]
 fn pushed_tree_rejects_paths_scope_would_normalize_or_git_cannot_serve() {
     validate_pushed_file_path("docs/read me.md").unwrap();
+    validate_pushed_file_path(".scope/runs/test.yml").unwrap();
+    validate_pushed_file_path(".scope/runs/test-api.yaml").unwrap();
     for path in [
         "README.md ",
         "dir\\file.txt",
@@ -64,6 +66,9 @@ fn pushed_tree_rejects_paths_scope_would_normalize_or_git_cannot_serve() {
         ".scope",
         ".scope/repo.json",
         ".scope/anything.json",
+        ".scope/runs/Test.yml",
+        ".scope/runs/test.json",
+        ".scope/runs/nested/test.yml",
     ] {
         let error = validate_pushed_file_path(path).unwrap_err();
         assert_eq!(error.status(), StatusCode::BAD_REQUEST);
