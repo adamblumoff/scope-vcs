@@ -26,15 +26,18 @@ use scope_domain::{
 use scope_postgres::db::RepositoryMutation;
 use std::time::Instant;
 
-pub(crate) async fn persist_receive_pack_update_and_promote(
+pub(crate) async fn persist_main_push_update_and_promote(
     state: &AppState,
     owner: &str,
     repo_name: &str,
-    update: ReceivePackUpdate,
+    mut update: ReceivePackUpdate,
     author_id: &str,
 ) -> Result<PersistedReceivePackUpdate, ApiError> {
     let now_unix = crate::persistence::unix_now()?;
     let author_id = author_id.to_string();
+    let push_trigger_input = update.push_trigger_input.take().ok_or_else(|| {
+        ApiError::internal_message("main push is missing its pinned trigger input")
+    })?;
 
     let content_only_candidate = update
         .previous_config
@@ -55,6 +58,7 @@ pub(crate) async fn persist_receive_pack_update_and_promote(
                     author_id: author_id.clone(),
                     expected_manifest_ref: expected_manifest_ref.clone(),
                     update: update.clone().into_reviewed_update(),
+                    push_trigger_input: push_trigger_input.clone(),
                     now_unix,
                 },
                 &crate::persistence_ids::generate_persistence_id,
@@ -111,7 +115,10 @@ pub(crate) async fn persist_receive_pack_update_and_promote(
                 let persisted = PersistedReceivePackUpdate {
                     git_head: committed_git_head,
                 };
-                Ok(RepositoryMutation::new(persisted))
+                Ok(RepositoryMutation::with_push_trigger_input(
+                    persisted,
+                    push_trigger_input,
+                ))
             },
         )
         .await?;

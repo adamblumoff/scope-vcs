@@ -1,7 +1,8 @@
 use crate::{
     api::{
-        CreatePushIntentParams, RepoPublicationState, RepositoryAccessResponse, RepositoryActor,
-        api_url, create_push_intent, get_repo_config, http_client,
+        CreatePushIntentParams, PushTriggerEvaluationResponse, RepoPublicationState,
+        RepositoryAccessResponse, RepositoryActor, api_url, create_push_intent,
+        get_push_trigger_evaluation, get_repo_config, http_client,
     },
     git_repo::{
         GitRepo, changed_paths_since_scope_base_at_commit, ensure_git_repo_ready,
@@ -19,9 +20,14 @@ use crate::{
 };
 use anyhow::bail;
 use scope_domain::repo_config::repo_config_fingerprint;
-use std::time::{SystemTime, UNIX_EPOCH};
+use scope_domain::runs::trigger::PushTriggerEvaluationState;
+use std::{
+    thread,
+    time::{Duration, SystemTime, UNIX_EPOCH},
+};
 
 pub const DEFAULT_SCOPE_BRANCH: &str = "main";
+const PUSH_EVALUATION_MAX_POLLS: usize = 300;
 
 #[derive(Debug, Eq, PartialEq)]
 pub struct ScopePushOutcome {
@@ -29,7 +35,7 @@ pub struct ScopePushOutcome {
     pub repo: String,
 }
 
-pub fn run(explicit_remote: Option<&str>, no_review: bool) -> anyhow::Result<()> {
+pub fn run(explicit_remote: Option<&str>, no_review: bool, wait: bool) -> anyhow::Result<()> {
     let git_repo = ensure_git_repo_ready("scope push")?;
     let reviewed_head_oid = head_oid(&git_repo)?;
     let config_created = ensure_scope_repo_config_exists(&git_repo.root)?;
@@ -166,6 +172,86 @@ pub fn run(explicit_remote: Option<&str>, no_review: bool) -> anyhow::Result<()>
         "Pushed to Scope: {}/{}\nPush applied by Scope.",
         outcome.owner, outcome.repo
     );
+    if !wait {
+        return Ok(());
+    }
+    let evaluation = get_push_trigger_evaluation(
+        &client,
+        &api_url,
+        &session.token,
+        &target.owner,
+        &target.repo,
+        &reviewed_head_oid,
+    )?;
+    wait_for_push_runs(
+        &client,
+        &api_url,
+        &session.token,
+        &target,
+        &remote,
+        evaluation,
+    )
+}
+
+fn wait_for_push_runs(
+    client: &reqwest::blocking::Client,
+    api_url: &str,
+    session_token: &str,
+    target: &ScopeRemote,
+    remote: &str,
+    mut evaluation: PushTriggerEvaluationResponse,
+) -> anyhow::Result<()> {
+    let mut polls = 0;
+    while evaluation.state == PushTriggerEvaluationState::Pending {
+        ensure_evaluation_poll_remaining(polls)?;
+        thread::sleep(Duration::from_secs(1));
+        evaluation = get_push_trigger_evaluation(
+            client,
+            api_url,
+            session_token,
+            &target.owner,
+            &target.repo,
+            &evaluation.head_oid,
+        )?;
+        polls += 1;
+    }
+    match evaluation.state {
+        PushTriggerEvaluationState::ConfigurationError | PushTriggerEvaluationState::Failed => {
+            bail!(
+                "push workflow evaluation failed: {}",
+                evaluation
+                    .message
+                    .as_deref()
+                    .unwrap_or("unknown configuration error")
+            )
+        }
+        PushTriggerEvaluationState::Pending => unreachable!("pending state was polled above"),
+        PushTriggerEvaluationState::Succeeded => {}
+    }
+    if evaluation.checks.is_empty() {
+        println!("No main-push workflows matched.");
+        return Ok(());
+    }
+    let mut failures = Vec::new();
+    for check in evaluation.checks {
+        println!("Queued {} · {}", check.workflow_name, check.run.id);
+        if let Err(error) = crate::run::watch(&check.run.id, Some(remote)) {
+            failures.push(error.to_string());
+        }
+    }
+    if failures.is_empty() {
+        Ok(())
+    } else {
+        bail!("push workflows failed: {}", failures.join("; "))
+    }
+}
+
+fn ensure_evaluation_poll_remaining(polls: usize) -> anyhow::Result<()> {
+    if polls >= PUSH_EVALUATION_MAX_POLLS {
+        bail!(
+            "timed out waiting for Scope to evaluate push workflows; the push was already applied"
+        );
+    }
     Ok(())
 }
 
@@ -322,6 +408,13 @@ mod tests {
                 .contains("Scope push review expired; rerun scope push")
         );
         ensure_push_intent_not_expired(unix_now().saturating_add(60)).unwrap();
+    }
+
+    #[test]
+    fn push_evaluation_wait_is_bounded() {
+        ensure_evaluation_poll_remaining(PUSH_EVALUATION_MAX_POLLS - 1).unwrap();
+        let error = ensure_evaluation_poll_remaining(PUSH_EVALUATION_MAX_POLLS).unwrap_err();
+        assert!(error.to_string().contains("the push was already applied"));
     }
 
     #[test]

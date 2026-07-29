@@ -5,6 +5,7 @@ use super::{
     history_rows::{insert_commits, save_live_file},
     object_references::{insert_object_reference, replace_object_reference},
     outbox::enqueue_projection_read_model_rebuild,
+    push_triggers::enqueue_push_main_trigger_evaluation,
 };
 use sea_orm::{
     ActiveModelTrait, ActiveValue::Set, ColumnTrait, DatabaseTransaction, EntityTrait,
@@ -21,6 +22,7 @@ use {
             AcceptedContentPush, ContentPushState, ReviewedUpdateInput, accept_content_push,
             accept_request_merge,
         },
+        runs::trigger::PushTriggerInput,
         store::{GitHead, RequestMergeOrigin},
     },
 };
@@ -30,11 +32,20 @@ pub(super) async fn accept_and_persist_content_push(
     repo_id: &str,
     repo_row: entities::repository::Model,
     update: ReviewedUpdateInput,
+    push_trigger_input: PushTriggerInput,
     now_unix: u64,
     generated_ids: &dyn GeneratedIdSource,
 ) -> Result<GitHead, PostgresError> {
-    accept_and_persist_content_update(tx, repo_id, repo_row, update, None, now_unix, generated_ids)
-        .await
+    accept_and_persist_content_update(
+        tx,
+        repo_id,
+        repo_row,
+        update,
+        ContentUpdateKind::MainPush(push_trigger_input),
+        now_unix,
+        generated_ids,
+    )
+    .await
 }
 
 pub(super) async fn accept_and_persist_request_merge(
@@ -51,11 +62,16 @@ pub(super) async fn accept_and_persist_request_merge(
         repo_id,
         repo_row,
         update,
-        Some(origin),
+        ContentUpdateKind::RequestMerge(origin),
         now_unix,
         generated_ids,
     )
     .await
+}
+
+enum ContentUpdateKind {
+    MainPush(PushTriggerInput),
+    RequestMerge(RequestMergeOrigin),
 }
 
 async fn accept_and_persist_content_update(
@@ -63,7 +79,7 @@ async fn accept_and_persist_content_update(
     repo_id: &str,
     repo_row: entities::repository::Model,
     mut update: ReviewedUpdateInput,
-    request_merge_origin: Option<RequestMergeOrigin>,
+    kind: ContentUpdateKind,
     now_unix: u64,
     generated_ids: &dyn GeneratedIdSource,
 ) -> Result<GitHead, PostgresError> {
@@ -103,26 +119,27 @@ async fn accept_and_persist_content_update(
         PostgresError::internal_message("repository change version cannot be negative")
     })?;
     update.previous_config = Some(repo_config.clone());
-    let AcceptedContentPush {
-        change_version,
-        policy,
-        git_head,
-        git_segment,
-        logical_commit,
-    } = {
+    let (accepted, push_trigger_input) = {
         let state = ContentPushState {
             change_version,
             policy,
             repo_config,
             live_files,
         };
-        if let Some(origin) = request_merge_origin {
-            accept_request_merge(state, update, origin)
-        } else {
-            accept_content_push(state, update)
+        match kind {
+            ContentUpdateKind::MainPush(input) => (accept_content_push(state, update), Some(input)),
+            ContentUpdateKind::RequestMerge(origin) => {
+                (accept_request_merge(state, update, origin), None)
+            }
         }
-        .map_err(reviewed_update_domain_error)?
     };
+    let AcceptedContentPush {
+        change_version,
+        policy,
+        git_head,
+        git_segment,
+        logical_commit,
+    } = accepted.map_err(reviewed_update_domain_error)?;
 
     let persisted_change_version = i64::try_from(change_version).map_err(|_| {
         PostgresError::internal_message("repository change version exceeds PostgreSQL bigint range")
@@ -166,5 +183,16 @@ async fn accept_and_persist_content_update(
     }
     enqueue_projection_read_model_rebuild(tx, repo_id, change_version, now_unix, generated_ids)
         .await?;
+    if let Some(input) = push_trigger_input {
+        enqueue_push_main_trigger_evaluation(
+            tx,
+            repo_id,
+            &git_head,
+            &input,
+            now_unix,
+            generated_ids,
+        )
+        .await?;
+    }
     Ok(git_head)
 }

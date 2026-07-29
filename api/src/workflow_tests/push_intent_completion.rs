@@ -238,7 +238,7 @@ async fn incremental_git_segment_restores_after_cache_loss() {
     .await
     .unwrap();
     let snapshot = update.git_head.manifest.clone();
-    persist_receive_pack_update_and_promote(
+    persist_main_push_update_and_promote(
         &state,
         TEST_REPO_OWNER,
         TEST_REPO_NAME,
@@ -388,7 +388,7 @@ async fn content_push_rejects_stale_reviewed_config() {
         .await
         .unwrap();
 
-    let error = persist_receive_pack_update_and_promote(
+    let error = persist_main_push_update_and_promote(
         &state,
         TEST_REPO_OWNER,
         TEST_REPO_NAME,

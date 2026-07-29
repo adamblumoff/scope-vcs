@@ -263,41 +263,8 @@ impl RunStore {
         run: Run,
         revision: WorkflowRevision,
     ) -> Result<Run, PostgresError> {
-        run.validate_workflow_revision(&revision)
-            .map_err(PostgresError::from)?;
         let tx = self.db.begin().await.map_err(PostgresError::internal)?;
-        save_workflow_revision(&tx, &revision, run.created_at_unix).await?;
-        let model = entities::run::Model::from_domain(&run)?;
-        let result = entities::run::Entity::insert(model.into_active_model())
-            .on_conflict(OnConflict::new().do_nothing().to_owned())
-            .do_nothing()
-            .exec(&tx)
-            .await
-            .map_err(PostgresError::internal)?;
-        let inserted = matches!(result, TryInsertResult::Inserted(_));
-        let stored = if !inserted {
-            let stored = entities::run::Entity::find()
-                .filter(entities::run::Column::RepoId.eq(run.workflow.repository_id().to_string()))
-                .filter(entities::run::Column::IdempotencyKey.eq(run.idempotency_key.clone()))
-                .one(&tx)
-                .await
-                .map_err(PostgresError::internal)?
-                .ok_or_else(|| {
-                    PostgresError::conflict("run id is already used by another idempotency key")
-                })?
-                .try_into_domain()?;
-            if !stored.has_same_enqueue_request(&run) {
-                return Err(PostgresError::conflict(
-                    "run idempotency key is already used by a different enqueue request",
-                ));
-            }
-            stored
-        } else {
-            for object in run.source.retained_objects() {
-                insert_object_reference(&tx, "run_source", &run.id, object).await?;
-            }
-            run
-        };
+        let stored = enqueue_run_in_transaction(&tx, run, revision).await?;
         tx.commit().await.map_err(PostgresError::internal)?;
         Ok(stored)
     }
@@ -736,6 +703,46 @@ impl RunStore {
             workflow_revision,
         })
     }
+}
+
+pub(super) async fn enqueue_run_in_transaction(
+    tx: &DatabaseTransaction,
+    run: Run,
+    revision: WorkflowRevision,
+) -> Result<Run, PostgresError> {
+    run.validate_workflow_revision(&revision)
+        .map_err(PostgresError::from)?;
+    save_workflow_revision(tx, &revision, run.created_at_unix).await?;
+    let model = entities::run::Model::from_domain(&run)?;
+    let result = entities::run::Entity::insert(model.into_active_model())
+        .on_conflict(OnConflict::new().do_nothing().to_owned())
+        .do_nothing()
+        .exec(tx)
+        .await
+        .map_err(PostgresError::internal)?;
+    let inserted = matches!(result, TryInsertResult::Inserted(_));
+    if !inserted {
+        let stored = entities::run::Entity::find()
+            .filter(entities::run::Column::RepoId.eq(run.workflow.repository_id().to_string()))
+            .filter(entities::run::Column::IdempotencyKey.eq(run.idempotency_key.clone()))
+            .one(tx)
+            .await
+            .map_err(PostgresError::internal)?
+            .ok_or_else(|| {
+                PostgresError::conflict("run id is already used by another idempotency key")
+            })?
+            .try_into_domain()?;
+        if !stored.has_same_enqueue_request(&run) {
+            return Err(PostgresError::conflict(
+                "run idempotency key is already used by a different enqueue request",
+            ));
+        }
+        return Ok(stored);
+    }
+    for object in run.source.retained_objects() {
+        insert_object_reference(tx, "run_source", &run.id, object).await?;
+    }
+    Ok(run)
 }
 
 async fn save_workflow_revision(

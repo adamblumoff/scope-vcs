@@ -21,6 +21,70 @@ steps:
 "#;
 
 #[tokio::test]
+async fn push_trigger_evaluation_is_queryable_by_the_accepted_head() {
+    let state = test_state_with_repo();
+    cache_test_jwks(&state);
+    let mut update = receive_pack_update(&state, vec![("/README.md", Some("triggered"))]);
+    update.push_trigger_input.as_mut().unwrap().workflows.push(
+        scope_domain::runs::trigger::PushWorkflowFile::new(
+            "/.scope/runs/test.yml",
+            br#"
+name: Push Test
+on: { push: true }
+runs-on: any
+container: { image: alpine:3.20 }
+timeout: 1m
+steps:
+  - { name: Test, run: "true" }
+"#
+            .to_vec(),
+        )
+        .unwrap(),
+    );
+    let head_oid = update.head_oid.clone();
+    let persisted = persist_test_update(&state, update).await.unwrap();
+    assert_eq!(persisted.git_head.head_oid, head_oid);
+    state
+        .metadata
+        .jobs()
+        .run_ready_outbox_jobs("push-trigger-api-test", 10, &|| {
+            crate::persistence::unix_now().map_err(crate::error::ApiError::into_message)
+        })
+        .await
+        .unwrap();
+
+    let response = router(state)
+        .oneshot(
+            Request::builder()
+                .uri(scope_api_contract::routes::repo_push_trigger_evaluation(
+                    TEST_REPO_OWNER,
+                    TEST_REPO_NAME,
+                    &head_oid,
+                ))
+                .header(AUTHORIZATION, bearer_header())
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let evaluation: scope_api_contract::PushTriggerEvaluationResponse =
+        serde_json::from_slice(&to_bytes(response.into_body(), 1024 * 1024).await.unwrap())
+            .unwrap();
+    assert_eq!(
+        evaluation.state,
+        scope_domain::runs::trigger::PushTriggerEvaluationState::Succeeded
+    );
+    assert_eq!(evaluation.head_oid, head_oid);
+    assert_eq!(evaluation.checks.len(), 1);
+    assert_eq!(evaluation.checks[0].run.git_oid, evaluation.head_oid);
+    assert_eq!(
+        evaluation.checks[0].run.state,
+        scope_domain::runs::run::RunState::Queued
+    );
+}
+
+#[tokio::test]
 async fn manual_run_protocol_crosses_human_runner_and_attempt_credentials() {
     let state = test_state_with_repo();
     cache_test_jwks(&state);

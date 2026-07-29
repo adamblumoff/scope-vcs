@@ -18,7 +18,7 @@ use crate::{
     git::{
         cache::sanitize_raw_git_cache_repo,
         import::{
-            persist_receive_pack_update_and_promote, receive_pack_update_from_staging_repo,
+            persist_main_push_update_and_promote, receive_pack_update_from_staging_repo,
             reviewed_update_from_staging_repo,
         },
         request_refs::{
@@ -785,7 +785,7 @@ async fn handle_git_receive_pack_body(
                     });
                 update.base_config_hash = push_intent.base_config_hash;
                 let file_count = update.changes.len();
-                committed_git_head = match persist_receive_pack_update_and_promote(
+                committed_git_head = match persist_main_push_update_and_promote(
                     state, owner, repo_name, update, &author_id,
                 )
                 .await
@@ -845,7 +845,7 @@ async fn handle_git_receive_pack_body(
                     });
                 update.base_config_hash = push_intent.base_config_hash;
                 let change_count = update.changes.len();
-                committed_git_head = match persist_receive_pack_update_and_promote(
+                committed_git_head = match persist_main_push_update_and_promote(
                     state, owner, repo_name, update, &author_id,
                 )
                 .await

@@ -2,6 +2,7 @@ use crate::config::DEFAULT_GIT_BRANCH;
 use scope_domain::reviewed_updates::{
     ReviewedContentChange, ReviewedUpdateInput, apply_reviewed_update_to_repo,
 };
+use scope_domain::runs::trigger::PushTriggerInput;
 use scope_domain::store::{GitHead, GitSegment, SourceBlob, StoredRepository};
 use scope_domain::{
     error::DomainError,
@@ -41,6 +42,7 @@ pub(crate) struct ReceivePackUpdate {
     pub(crate) git_head: GitHead,
     pub(crate) git_segment: GitSegment,
     pub(crate) durable_objects: Vec<SourceBlob>,
+    pub(crate) push_trigger_input: Option<PushTriggerInput>,
     pub(crate) changes: Vec<ReceivePackFileChange>,
     pub(crate) previous_config: Option<RepoConfig>,
     pub(crate) base_config_hash: String,

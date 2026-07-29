@@ -19,6 +19,7 @@ serde_json = "1.0.147"
 sha2 = "0.10.9"
 scope_domain = { package = "scope-domain", path = "../scope-domain" }
 scope_git = { package = "scope-git", path = "../scope-git", default-features = false }
+scope_run_config = { package = "scope-run-config", path = "../scope-run-config" }
 sqlx = { version = "0.8.6", default-features = false, features = ["postgres", "runtime-tokio-rustls"] }
 thiserror = "2.0.18"
 time = { version = "0.3.44", features = ["formatting"] }

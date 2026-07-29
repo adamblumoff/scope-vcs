@@ -63,6 +63,37 @@ pub mod outbox_job {
                 completed_at_unix: None,
             })
         }
+
+        pub fn push_main_trigger_evaluation(
+            id: String,
+            repo_id: &str,
+            repo_version: u64,
+            manifest: &SourceBlob,
+            input: &scope_domain::runs::trigger::PushTriggerInput,
+            now: u64,
+        ) -> Result<Self, PostgresError> {
+            let persisted_repo_version = u64_to_i64(repo_version, "repository change version")?;
+            Ok(Self {
+                id,
+                idempotency_key: format!("push_main_trigger_evaluation:{repo_id}:{repo_version}"),
+                kind: "push_main_trigger_evaluation".to_string(),
+                repo_id: repo_id.to_string(),
+                repo_version: persisted_repo_version,
+                payload: encode_json(&serde_json::json!({
+                    "manifest": manifest,
+                    "input": input,
+                }))?,
+                state: "ready".to_string(),
+                attempts: 0,
+                next_run_at_unix: u64_to_i64(now, "outbox next run time")?,
+                lease_owner: None,
+                lease_expires_at_unix: None,
+                last_error: None,
+                created_at_unix: u64_to_i64(now, "outbox creation time")?,
+                updated_at_unix: u64_to_i64(now, "outbox update time")?,
+                completed_at_unix: None,
+            })
+        }
     }
 
     pub fn projection_read_model_rebuild_idempotency_key(

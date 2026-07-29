@@ -9,6 +9,7 @@ use scope_domain::runs::{
         RunTrigger,
     },
     runner::{Runner, RunnerCapabilities, RunnerGrant, RunnerName},
+    trigger::PushTriggerEvaluation,
     workflow::{
         CompiledWorkflow, RunnerSelector, WorkflowIdentity, WorkflowPath, WorkflowRevision,
     },
@@ -99,7 +100,9 @@ pub use requests::{
     request_discussion_read_state, request_discussion_reply, request_event, request_invitee,
     user_credit_account,
 };
-pub use runs::{run, run_attempt, run_log, runner, runner_grant, workflow_revision};
+pub use runs::{
+    push_trigger_evaluation, run, run_attempt, run_log, runner, runner_grant, workflow_revision,
+};
 
 #[cfg(test)]
 mod tests {

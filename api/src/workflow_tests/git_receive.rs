@@ -140,6 +140,9 @@ async fn consecutive_content_only_pushes_advance_the_live_projection() {
             },
             manifest,
         };
+        let trigger = update.push_trigger_input.as_mut().unwrap();
+        trigger.head_oid = head_oid.clone();
+        trigger.snapshot.git_oid = head_oid.clone();
 
         let persisted = persist_test_update(&state, update).await.unwrap();
         assert_eq!(persisted.git_head.change_version, sequence);
@@ -158,7 +161,7 @@ async fn consecutive_content_only_pushes_advance_the_live_projection() {
             .await
             .unwrap();
         assert_eq!(rebuilt.failed, 0);
-        assert_eq!(rebuilt.completed, 1);
+        assert_eq!(rebuilt.completed, 2);
         let projected = state
             .metadata
             .repositories()
@@ -193,8 +196,8 @@ async fn consecutive_content_only_pushes_advance_the_live_projection() {
         .outbox_job_counts_for_tests()
         .await
         .unwrap();
-    assert_eq!(jobs.succeeded, 3);
-    assert_eq!(jobs.total, 3);
+    assert_eq!(jobs.succeeded, 5);
+    assert_eq!(jobs.total, 5);
 }
 
 #[tokio::test]
