@@ -132,6 +132,73 @@ CREATE TABLE scope_outbox_jobs (
     completed_at_unix bigint
 );
 
+CREATE TABLE scope_runners (
+    id character varying PRIMARY KEY,
+    owner_user_id character varying NOT NULL,
+    secret_hash character varying NOT NULL UNIQUE,
+    version character varying NOT NULL,
+    protocol_version integer NOT NULL,
+    capabilities jsonb NOT NULL,
+    enabled boolean NOT NULL,
+    created_at_unix bigint NOT NULL,
+    last_seen_at_unix bigint
+);
+
+CREATE TABLE scope_runner_grants (
+    repo_id character varying NOT NULL,
+    runner_id character varying NOT NULL,
+    name character varying NOT NULL,
+    granted_by_user_id character varying NOT NULL,
+    created_at_unix bigint NOT NULL,
+    revoked_at_unix bigint,
+    PRIMARY KEY (repo_id, runner_id)
+);
+
+CREATE TABLE scope_workflow_revisions (
+    digest character varying PRIMARY KEY,
+    definition jsonb NOT NULL,
+    created_at_unix bigint NOT NULL
+);
+
+CREATE TABLE scope_runs (
+    id character varying PRIMARY KEY,
+    idempotency_key character varying NOT NULL,
+    repo_id character varying NOT NULL,
+    workflow_path text NOT NULL,
+    workflow_revision_digest character varying NOT NULL,
+    trigger character varying NOT NULL,
+    requested_by_user_id character varying,
+    source_snapshot_id character varying NOT NULL,
+    source_digest character varying NOT NULL,
+    source_git_oid character varying NOT NULL,
+    desired_runner_name character varying,
+    state character varying NOT NULL,
+    cancellation_requested boolean NOT NULL,
+    last_attempt_number integer NOT NULL,
+    current_attempt_id character varying,
+    created_at_unix bigint NOT NULL,
+    updated_at_unix bigint NOT NULL,
+    completed_at_unix bigint,
+    UNIQUE (repo_id, idempotency_key)
+);
+
+CREATE TABLE scope_run_attempts (
+    id character varying PRIMARY KEY,
+    run_id character varying NOT NULL,
+    number integer NOT NULL,
+    runner_id character varying NOT NULL,
+    token_hash character varying NOT NULL UNIQUE,
+    token_expires_at_unix bigint NOT NULL,
+    state character varying NOT NULL,
+    lease_expires_at_unix bigint NOT NULL,
+    last_heartbeat_at_unix bigint NOT NULL,
+    created_at_unix bigint NOT NULL,
+    started_at_unix bigint,
+    completed_at_unix bigint,
+    exit_code integer,
+    UNIQUE (run_id, number)
+);
+
 
 --
 -- Name: scope_projection_files; Type: TABLE; Schema: scope_test_2249234_1783653779131957768; Owner: -
@@ -788,6 +855,17 @@ CREATE INDEX idx_scope_outbox_jobs_ready ON scope_outbox_jobs USING btree (state
 
 CREATE INDEX idx_scope_outbox_jobs_repo ON scope_outbox_jobs USING btree (repo_id, repo_version);
 
+CREATE INDEX idx_scope_runner_grants_runner ON scope_runner_grants USING btree (runner_id, revoked_at_unix);
+CREATE UNIQUE INDEX idx_scope_runner_grants_active_name ON scope_runner_grants USING btree (repo_id, name)
+    WHERE revoked_at_unix IS NULL;
+CREATE INDEX idx_scope_runs_queue ON scope_runs USING btree (created_at_unix, id) WHERE state = 'queued';
+CREATE INDEX idx_scope_runs_repo ON scope_runs USING btree (repo_id, created_at_unix DESC, id);
+CREATE UNIQUE INDEX idx_scope_run_attempts_active ON scope_run_attempts USING btree (run_id)
+    WHERE state IN ('leased', 'running');
+CREATE INDEX idx_scope_run_attempts_runner ON scope_run_attempts USING btree (runner_id, state);
+CREATE INDEX idx_scope_run_attempts_expiring ON scope_run_attempts USING btree (lease_expires_at_unix, id)
+    WHERE state IN ('leased', 'running');
+
 
 --
 -- Name: idx_scope_projection_files_lookup; Type: INDEX; Schema: scope_test_2249234_1783653779131957768; Owner: -
@@ -950,6 +1028,27 @@ ALTER TABLE ONLY scope_credit_ledger_entries
 
 ALTER TABLE ONLY scope_outbox_jobs
     ADD CONSTRAINT fk_scope_outbox_jobs_repo FOREIGN KEY (repo_id) REFERENCES scope_repositories(id) ON DELETE CASCADE;
+
+ALTER TABLE ONLY scope_runners
+    ADD CONSTRAINT fk_scope_runners_owner FOREIGN KEY (owner_user_id) REFERENCES scope_users(id) ON DELETE RESTRICT;
+ALTER TABLE ONLY scope_runner_grants
+    ADD CONSTRAINT fk_scope_runner_grants_repo FOREIGN KEY (repo_id) REFERENCES scope_repositories(id) ON DELETE CASCADE;
+ALTER TABLE ONLY scope_runner_grants
+    ADD CONSTRAINT fk_scope_runner_grants_runner FOREIGN KEY (runner_id) REFERENCES scope_runners(id) ON DELETE RESTRICT;
+ALTER TABLE ONLY scope_runner_grants
+    ADD CONSTRAINT fk_scope_runner_grants_actor FOREIGN KEY (granted_by_user_id) REFERENCES scope_users(id) ON DELETE RESTRICT;
+ALTER TABLE ONLY scope_runs
+    ADD CONSTRAINT fk_scope_runs_repo FOREIGN KEY (repo_id) REFERENCES scope_repositories(id) ON DELETE CASCADE;
+ALTER TABLE ONLY scope_runs
+    ADD CONSTRAINT fk_scope_runs_revision FOREIGN KEY (workflow_revision_digest) REFERENCES scope_workflow_revisions(digest) ON DELETE RESTRICT;
+ALTER TABLE ONLY scope_runs
+    ADD CONSTRAINT fk_scope_runs_requester FOREIGN KEY (requested_by_user_id) REFERENCES scope_users(id) ON DELETE RESTRICT;
+ALTER TABLE ONLY scope_run_attempts
+    ADD CONSTRAINT fk_scope_run_attempts_run FOREIGN KEY (run_id) REFERENCES scope_runs(id) ON DELETE CASCADE;
+ALTER TABLE ONLY scope_run_attempts
+    ADD CONSTRAINT fk_scope_run_attempts_runner FOREIGN KEY (runner_id) REFERENCES scope_runners(id) ON DELETE RESTRICT;
+ALTER TABLE ONLY scope_runs
+    ADD CONSTRAINT fk_scope_runs_current_attempt FOREIGN KEY (current_attempt_id) REFERENCES scope_run_attempts(id) ON DELETE SET NULL;
 
 
 --
@@ -1154,6 +1253,55 @@ ALTER TABLE scope_git_heads
 ALTER TABLE scope_git_segments
     ADD CONSTRAINT scope_git_segment_values CHECK (
         sequence > 0 AND size_bytes >= 0 AND manifest_size_bytes >= 0
+    );
+ALTER TABLE scope_runners
+    ADD CONSTRAINT scope_runners_values CHECK (
+        char_length(secret_hash) = 64 AND secret_hash ~ '^[0-9A-Fa-f]+$' AND
+        char_length(version) BETWEEN 1 AND 100 AND protocol_version >= 0 AND
+        created_at_unix >= 0 AND
+        (last_seen_at_unix IS NULL OR last_seen_at_unix >= created_at_unix)
+    );
+ALTER TABLE scope_runner_grants
+    ADD CONSTRAINT scope_runner_grants_values CHECK (
+        char_length(name) BETWEEN 1 AND 64 AND name <> 'any' AND
+        name ~ '^[A-Za-z0-9][A-Za-z0-9._-]*$' AND
+        created_at_unix >= 0 AND (revoked_at_unix IS NULL OR revoked_at_unix >= created_at_unix)
+    );
+ALTER TABLE scope_workflow_revisions
+    ADD CONSTRAINT scope_workflow_revisions_values CHECK (
+        char_length(digest) = 64 AND digest ~ '^[0-9A-Fa-f]+$' AND created_at_unix >= 0
+    );
+ALTER TABLE scope_runs
+    ADD CONSTRAINT scope_runs_values CHECK (
+        char_length(workflow_revision_digest) = 64 AND workflow_revision_digest ~ '^[0-9A-Fa-f]+$' AND
+        char_length(source_digest) = 64 AND source_digest ~ '^[0-9A-Fa-f]+$' AND
+        char_length(source_git_oid) = 40 AND source_git_oid ~ '^[0-9A-Fa-f]+$' AND
+        trigger IN ('manual', 'push-main') AND
+        state IN ('queued', 'leased', 'running', 'succeeded', 'failed', 'canceled', 'lost') AND
+        last_attempt_number >= 0 AND created_at_unix >= 0 AND updated_at_unix >= created_at_unix AND
+        (state NOT IN ('leased', 'running') OR current_attempt_id IS NOT NULL) AND
+        (state <> 'queued' OR (NOT cancellation_requested AND current_attempt_id IS NULL)) AND
+        ((state IN ('succeeded', 'failed', 'canceled', 'lost')) = (completed_at_unix IS NOT NULL)) AND
+        (completed_at_unix IS NULL OR completed_at_unix = updated_at_unix) AND
+        (state <> 'canceled' OR cancellation_requested) AND
+        (trigger <> 'manual' OR requested_by_user_id IS NOT NULL)
+    );
+ALTER TABLE scope_run_attempts
+    ADD CONSTRAINT scope_run_attempts_values CHECK (
+        number > 0 AND char_length(token_hash) = 64 AND token_hash ~ '^[0-9A-Fa-f]+$' AND
+        state IN ('leased', 'running', 'succeeded', 'failed', 'canceled', 'lost') AND
+        token_expires_at_unix = lease_expires_at_unix AND
+        created_at_unix >= 0 AND
+        last_heartbeat_at_unix >= created_at_unix AND
+        last_heartbeat_at_unix < lease_expires_at_unix AND
+        (started_at_unix IS NULL OR
+            (started_at_unix >= created_at_unix AND started_at_unix < lease_expires_at_unix)) AND
+        (completed_at_unix IS NULL OR completed_at_unix >= last_heartbeat_at_unix) AND
+        (started_at_unix IS NULL OR completed_at_unix IS NULL OR completed_at_unix >= started_at_unix) AND
+        ((state IN ('succeeded', 'failed', 'canceled', 'lost')) = (completed_at_unix IS NOT NULL)) AND
+        (state <> 'succeeded' OR (started_at_unix IS NOT NULL AND exit_code = 0)) AND
+        (state <> 'failed' OR (exit_code IS NOT NULL AND exit_code <> 0)) AND
+        (state IN ('failed', 'succeeded') OR exit_code IS NULL)
     );
 ALTER TABLE scope_repository_members
     ADD CONSTRAINT scope_repository_member_times CHECK (
