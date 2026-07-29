@@ -4,12 +4,17 @@ use anyhow::{Context, bail};
 use std::{fs, io::Write, path::Path, process::Command};
 
 const RECOVERY_CLAIM_FILE: &str = "claim.json";
+const RECOVERY_CLAIM_TEMP_FILE: &str = ".claim.json.tmp";
 
 pub(super) fn persist_recovery_claim(
     work_dir: &Path,
     claim: &ClaimRunResponse,
 ) -> anyhow::Result<()> {
     let path = work_dir.join(RECOVERY_CLAIM_FILE);
+    let temp_path = work_dir.join(RECOVERY_CLAIM_TEMP_FILE);
+    if path.exists() {
+        bail!("runner recovery claim already exists");
+    }
     #[cfg(unix)]
     let mut file = {
         use std::os::unix::fs::OpenOptionsExt;
@@ -17,18 +22,33 @@ pub(super) fn persist_recovery_claim(
             .create_new(true)
             .write(true)
             .mode(0o600)
-            .open(&path)
-            .context("create runner recovery claim")?
+            .open(&temp_path)
+            .context("create temporary runner recovery claim")?
     };
     #[cfg(not(unix))]
     let mut file = fs::OpenOptions::new()
         .create_new(true)
         .write(true)
-        .open(&path)
-        .context("create runner recovery claim")?;
-    serde_json::to_writer(&mut file, claim).context("serialize runner recovery claim")?;
-    file.write_all(b"\n")?;
-    file.sync_all().context("persist runner recovery claim")
+        .open(&temp_path)
+        .context("create temporary runner recovery claim")?;
+    let write_result = (|| {
+        serde_json::to_writer(&mut file, claim).context("serialize runner recovery claim")?;
+        file.write_all(b"\n")?;
+        file.sync_all().context("persist runner recovery claim")
+    })();
+    if let Err(error) = write_result {
+        drop(file);
+        let _ = fs::remove_file(&temp_path);
+        return Err(error);
+    }
+    drop(file);
+    fs::rename(&temp_path, &path).context("publish runner recovery claim")?;
+    #[cfg(unix)]
+    fs::File::open(work_dir)
+        .context("open runner work directory for recovery claim sync")?
+        .sync_all()
+        .context("persist runner recovery claim directory")?;
+    Ok(())
 }
 
 pub(super) fn reconcile_runner_state(config: &RunnerConfig) -> anyhow::Result<()> {

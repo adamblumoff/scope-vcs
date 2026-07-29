@@ -134,6 +134,8 @@ fn interrupted_attempt_credentials_are_persisted_privately_for_reconciliation() 
         fs::metadata(&path).unwrap().permissions().mode() & 0o777,
         0o600
     );
+    assert!(!root.join(".claim.json.tmp").exists());
+    assert!(persist_recovery_claim(&root, &claim).is_err());
     let stored: ClaimRunResponse = serde_json::from_slice(&fs::read(path).unwrap()).unwrap();
     assert_eq!(stored.attempt_id, claim.attempt_id);
     assert_eq!(stored.attempt_token, claim.attempt_token);
