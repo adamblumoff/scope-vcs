@@ -1,7 +1,5 @@
 import type { RepoContent, RepoFileContent, RepoParams } from '@/api/types'
 import { RepoPrimaryActionButton } from '@/components/repo-primary-action'
-import { RepoShell } from '@/components/repo-shell'
-import { RouteErrorPage } from '@/components/route-error-page'
 import { WorkbenchHeader } from '@/components/workbench-header'
 import { RepoCloneDropdown } from './repo-clone-dropdown'
 import { useRepoLayout } from './repo-layout-context'
@@ -31,7 +29,7 @@ export function RepoDetailPage({
   const { repo } = useRepoLayout()
   const files = content.files
   return (
-    <RepoShell params={params}>
+    <>
       <WorkbenchHeader
         actions={(
           <>
@@ -65,16 +63,6 @@ export function RepoDetailPage({
         selectedFileRetry={selectedFileRetry}
         selectedPath={selectedPath}
       />
-    </RepoShell>
-  )
-}
-
-export function RepoDetailError({ error }: { error: unknown }) {
-  return (
-    <RouteErrorPage
-      error={error}
-      fallbackMessage="Unexpected repository error"
-      title="Repository unavailable"
-    />
+    </>
   )
 }

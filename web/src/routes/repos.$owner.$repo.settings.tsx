@@ -13,6 +13,7 @@ import {
 } from '@/api/repos'
 import { HttpError } from '@/api/client'
 import { RepoSettingsPage } from '@/features/repo-detail/repo-settings-page'
+import { RepoContentError } from '@/components/repo-content-error'
 import { createFileRoute } from '@tanstack/react-router'
 import { createServerFn } from '@tanstack/react-start'
 
@@ -51,6 +52,7 @@ const deleteRepoInvite = createServerFn({ method: 'POST' })
 
 export const Route = createFileRoute('/repos/$owner/$repo/settings')({
   loader: ({ params }) => loadRepoSettings({ data: params }),
+  errorComponent: RepoContentError,
   component: RepoSettingsRoute,
 })
 

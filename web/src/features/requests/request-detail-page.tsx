@@ -9,7 +9,6 @@ import type {
 import type { LoadRequestChangeBlockFilesInput } from '@/api/requests'
 import { LifecycleBadge } from '@/components/lifecycle-badge'
 import { PageContent, PageHeader } from '@/components/page-header'
-import { RepoShell } from '@/components/repo-shell'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { WorkbenchHeader } from '@/components/workbench-header'
@@ -55,28 +54,26 @@ import { useRequestActivityHistory } from './use-request-activity-history'
 
 export function RequestUnavailablePage({ params }: { params: RepoParams }) {
   return (
-    <RepoShell params={params}>
-      <PageContent>
-        <PageHeader
-          actions={(
-            <Button asChild size="sm" variant="secondary">
-              <Link params={params} to="/repos/$owner/$repo/requests">
-                Requests
-              </Link>
-            </Button>
-          )}
-          badges={<Badge variant="warning">Unavailable</Badge>}
-          description="This request does not exist or is unavailable to this account."
-          title="Request not found"
-        />
-        <section className="mt-8 border-t border-border py-8">
-          <div className="flex max-w-2xl items-start gap-3 text-sm leading-6 text-muted-foreground">
-            <ShieldQuestion className="mt-0.5 size-4 shrink-0" />
-            <p>Sign in with an account that has access, or return to the request list.</p>
-          </div>
-        </section>
-      </PageContent>
-    </RepoShell>
+    <PageContent>
+      <PageHeader
+        actions={(
+          <Button asChild size="sm" variant="secondary">
+            <Link params={params} to="/repos/$owner/$repo/requests">
+              Requests
+            </Link>
+          </Button>
+        )}
+        badges={<Badge variant="warning">Unavailable</Badge>}
+        description="This request does not exist or is unavailable to this account."
+        title="Request not found"
+      />
+      <section className="mt-8 border-t border-border py-8">
+        <div className="flex max-w-2xl items-start gap-3 text-sm leading-6 text-muted-foreground">
+          <ShieldQuestion className="mt-0.5 size-4 shrink-0" />
+          <p>Sign in with an account that has access, or return to the request list.</p>
+        </div>
+      </section>
+    </PageContent>
   )
 }
 
@@ -259,7 +256,7 @@ export function RequestDetailPage(props: RequestDetailPageProps) {
   }
 
   return (
-    <RepoShell contentClassName={hasLifecycleActions ? 'pb-20 xl:pb-0' : undefined} params={params}>
+    <div className={hasLifecycleActions ? 'pb-20 xl:pb-0' : undefined}>
       <RequestDiscussionWorkbench
         actions={discussionActions}
         actor={actor}
@@ -300,6 +297,6 @@ export function RequestDetailPage(props: RequestDetailPageProps) {
         onOpenChange={history.onOpenChange}
         open={history.open}
       />
-    </RepoShell>
+    </div>
   )
 }

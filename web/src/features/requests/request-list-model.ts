@@ -14,7 +14,9 @@ export type RequestQueueSectionErrors = Partial<
 >
 
 export type RequestQueueViewState = {
+  generation: number
   pages: RequestQueuePages
+  snapshot: RequestQueuePages
   loadingSection: RequestQueueSection | null
   sectionErrors: RequestQueueSectionErrors
   searchDraft: string
@@ -24,18 +26,34 @@ export type RequestQueueViewState = {
 }
 
 export type RequestQueueViewAction =
-  | { type: 'load_started'; section: RequestQueueSection }
-  | { type: 'load_succeeded'; section: RequestQueueSection; page: RequestList }
-  | { type: 'load_failed'; section: RequestQueueSection; error: string }
+  | { type: 'loader_snapshot_received'; pages: RequestQueuePages }
+  | {
+      type: 'load_started'
+      generation: number
+      section: RequestQueueSection
+    }
+  | {
+      type: 'load_succeeded'
+      generation: number
+      section: RequestQueueSection
+      page: RequestList
+    }
+  | {
+      type: 'load_failed'
+      generation: number
+      section: RequestQueueSection
+      error: string
+    }
   | { type: 'search_draft_changed'; value: string }
-  | { type: 'search_started' }
+  | { type: 'search_started'; generation: number }
   | {
       type: 'search_succeeded'
+      generation: number
       query: string
       ready: RequestList
       completed: RequestList
     }
-  | { type: 'search_failed'; error: string }
+  | { type: 'search_failed'; generation: number; error: string }
 
 export function appendRequestPage(
   current: RequestListItem[],
@@ -71,7 +89,9 @@ export function createRequestQueueViewState(
   pages: RequestQueuePages,
 ): RequestQueueViewState {
   return {
+    generation: 0,
     pages,
+    snapshot: pages,
     loadingSection: null,
     sectionErrors: {},
     searchDraft: '',
@@ -86,13 +106,20 @@ export function requestQueueViewReducer(
   action: RequestQueueViewAction,
 ): RequestQueueViewState {
   switch (action.type) {
+    case 'loader_snapshot_received':
+      return {
+        ...createRequestQueueViewState(action.pages),
+        generation: state.generation + 1,
+      }
     case 'load_started':
+      if (action.generation !== state.generation) return state
       return {
         ...state,
         loadingSection: action.section,
         sectionErrors: { ...state.sectionErrors, [action.section]: undefined },
       }
     case 'load_succeeded':
+      if (action.generation !== state.generation) return state
       return {
         ...state,
         loadingSection: null,
@@ -105,6 +132,7 @@ export function requestQueueViewReducer(
         },
       }
     case 'load_failed':
+      if (action.generation !== state.generation) return state
       return {
         ...state,
         loadingSection: null,
@@ -116,8 +144,10 @@ export function requestQueueViewReducer(
     case 'search_draft_changed':
       return { ...state, searchDraft: action.value }
     case 'search_started':
+      if (action.generation !== state.generation) return state
       return { ...state, searching: true, searchError: null }
     case 'search_succeeded':
+      if (action.generation !== state.generation) return state
       return {
         ...state,
         pages: {
@@ -135,6 +165,7 @@ export function requestQueueViewReducer(
         },
       }
     case 'search_failed':
+      if (action.generation !== state.generation) return state
       return { ...state, searching: false, searchError: action.error }
   }
 }

@@ -8,6 +8,7 @@ import {
   requestQueueViewReducer,
   requestCountLabel,
   type RequestQueuePages,
+  type RequestQueueViewAction,
 } from './request-list-model'
 
 test('appendRequestPage preserves order and ignores repeated request ids', () => {
@@ -50,12 +51,14 @@ test('request queue reducer exposes loading success and error states', () => {
   const initial = createRequestQueueViewState(queuePages())
   const loading = requestQueueViewReducer(initial, {
     type: 'load_started',
+    generation: initial.generation,
     section: 'ready',
   })
   assert.equal(loading.loadingSection, 'ready')
 
   const loaded = requestQueueViewReducer(loading, {
     type: 'load_succeeded',
+    generation: loading.generation,
     section: 'ready',
     page: page(['ready-1', 'ready-2'], null),
   })
@@ -68,10 +71,12 @@ test('request queue reducer exposes loading success and error states', () => {
   const failed = requestQueueViewReducer(
     requestQueueViewReducer(loaded, {
       type: 'load_started',
+      generation: loaded.generation,
       section: 'completed',
     }),
     {
       type: 'load_failed',
+      generation: loaded.generation,
       section: 'completed',
       error: 'Could not load completed requests.',
     },
@@ -92,12 +97,16 @@ test('request queue reducer replaces searched sections and preserves Your work',
       completed: 'Completed failure',
     },
   }
-  const searching = requestQueueViewReducer(initial, { type: 'search_started' })
+  const searching = requestQueueViewReducer(initial, {
+    type: 'search_started',
+    generation: initial.generation,
+  })
   assert.equal(searching.searching, true)
   assert.equal(searching.searchError, null)
 
   const searched = requestQueueViewReducer(searching, {
     type: 'search_succeeded',
+    generation: searching.generation,
     query: 'needle',
     ready: page(['ready-search'], null),
     completed: page(['completed-search'], null),
@@ -120,11 +129,100 @@ test('request queue reducer replaces searched sections and preserves Your work',
   assert.equal(searched.sectionErrors.completed, undefined)
 
   const failed = requestQueueViewReducer(
-    requestQueueViewReducer(searched, { type: 'search_started' }),
-    { type: 'search_failed', error: 'Search unavailable.' },
+    requestQueueViewReducer(searched, {
+      type: 'search_started',
+      generation: searched.generation,
+    }),
+    {
+      type: 'search_failed',
+      generation: searched.generation,
+      error: 'Search unavailable.',
+    },
   )
   assert.equal(failed.searching, false)
   assert.equal(failed.searchError, 'Search unavailable.')
+})
+
+test('request queue reducer replaces stale state from an authoritative snapshot', () => {
+  const initial = {
+    ...createRequestQueueViewState(queuePages()),
+    loadingSection: 'ready' as const,
+    searchDraft: 'old query',
+    searchQuery: 'old query',
+    searching: true,
+  }
+  const replacement = queuePages({
+    ready: page(['ready-new'], null),
+  })
+
+  const refreshed = requestQueueViewReducer(initial, {
+    type: 'loader_snapshot_received',
+    pages: replacement,
+  })
+
+  assert.equal(refreshed.generation, initial.generation + 1)
+  assert.equal(refreshed.loadingSection, null)
+  assert.equal(refreshed.searchDraft, '')
+  assert.equal(refreshed.searchQuery, '')
+  assert.equal(refreshed.searching, false)
+  assert.deepEqual(refreshed.pages, replacement)
+
+  const staleActions: RequestQueueViewAction[] = [
+    {
+      type: 'load_succeeded',
+      generation: initial.generation,
+      section: 'ready',
+      page: page(['ready-stale'], null),
+    },
+    {
+      type: 'load_failed',
+      generation: initial.generation,
+      section: 'ready',
+      error: 'Stale load failure',
+    },
+    {
+      type: 'search_succeeded',
+      generation: initial.generation,
+      query: 'stale',
+      ready: page(['ready-stale'], null),
+      completed: page(['completed-stale'], null),
+    },
+    {
+      type: 'search_failed',
+      generation: initial.generation,
+      error: 'Stale search failure',
+    },
+  ]
+  for (const action of staleActions) {
+    assert.equal(requestQueueViewReducer(refreshed, action), refreshed)
+  }
+})
+
+test('a newly delivered identical snapshot discards pagination state', () => {
+  const initial = createRequestQueueViewState(queuePages())
+  const paginated = requestQueueViewReducer(initial, {
+    type: 'load_succeeded',
+    generation: initial.generation,
+    section: 'ready',
+    page: page(['ready-2'], null),
+  })
+  assert.deepEqual(
+    paginated.pages.ready.requests.map(({ id }) => id),
+    ['ready-1', 'ready-2'],
+  )
+
+  const identicalSnapshot = queuePages()
+  const refreshed = requestQueueViewReducer(paginated, {
+    type: 'loader_snapshot_received',
+    pages: identicalSnapshot,
+  })
+
+  assert.equal(refreshed.generation, paginated.generation + 1)
+  assert.equal(refreshed.snapshot, identicalSnapshot)
+  assert.deepEqual(
+    refreshed.pages.ready.requests.map(({ id }) => id),
+    ['ready-1'],
+  )
 })
 
 function request(id: string) {
@@ -138,10 +236,13 @@ function page(ids: string[], nextCursor: string | null): RequestList {
   }
 }
 
-function queuePages(): RequestQueuePages {
+function queuePages(
+  overrides: Partial<RequestQueuePages> = {},
+): RequestQueuePages {
   return {
     your_work: page(['work-1'], null),
     ready: page(['ready-1'], 'ready:page-2'),
     completed: page(['completed-1'], null),
+    ...overrides,
   }
 }

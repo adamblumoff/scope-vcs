@@ -27,6 +27,7 @@ export function AppShell({
           'min-h-0 flex-1 overflow-y-auto overscroll-contain outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring',
           className,
         )}
+        data-scroll-restoration-id="main-content"
         id="main-content"
         tabIndex={-1}
       >
