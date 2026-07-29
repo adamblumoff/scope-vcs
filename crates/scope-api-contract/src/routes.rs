@@ -32,8 +32,10 @@ pub const ATTEMPT_LOGS: &str = "/v1/runner-protocol/attempts/{attempt_id}/logs";
 pub const ATTEMPT_COMPLETE: &str = "/v1/runner-protocol/attempts/{attempt_id}/complete";
 pub const ATTEMPT_ABANDON: &str = "/v1/runner-protocol/attempts/{attempt_id}/abandon";
 pub const REPO: &str = "/v1/repos/{owner}/{repo}";
+pub const REPO_OPERATIONS: &str = "/v1/repos/{owner}/{repo}/operations";
 pub const REPO_RUNS: &str = "/v1/repos/{owner}/{repo}/runs";
 pub const REPO_RUN: &str = "/v1/repos/{owner}/{repo}/runs/{run_id}";
+pub const REPO_RUN_DETAIL: &str = "/v1/repos/{owner}/{repo}/runs/{run_id}/detail";
 pub const REPO_RUN_CANCEL: &str = "/v1/repos/{owner}/{repo}/runs/{run_id}/cancel";
 pub const REPO_RUN_RETRY: &str = "/v1/repos/{owner}/{repo}/runs/{run_id}/retry";
 pub const REPO_RUN_EVENTS: &str = "/v1/repos/{owner}/{repo}/runs/{run_id}/events";
@@ -170,8 +172,16 @@ pub fn repo_runs(owner: &str, repo: &str) -> String {
     format!("{}/runs", self::repo(owner, repo))
 }
 
+pub fn repo_operations(owner: &str, repo: &str) -> String {
+    format!("{}/operations", self::repo(owner, repo))
+}
+
 pub fn repo_run(owner: &str, repo: &str, run_id: &str) -> String {
     format!("{}/{}", repo_runs(owner, repo), path_segment(run_id))
+}
+
+pub fn repo_run_detail(owner: &str, repo: &str, run_id: &str) -> String {
+    format!("{}/detail", repo_run(owner, repo, run_id))
 }
 
 pub fn repo_run_cancel(owner: &str, repo: &str, run_id: &str) -> String {

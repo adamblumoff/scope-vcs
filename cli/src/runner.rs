@@ -15,47 +15,53 @@ use scope_api_contract::{
 use scope_domain::runs::runner::{RUNNER_PROTOCOL_VERSION, RunnerCapabilities};
 use sha2::{Digest, Sha256};
 use std::{
-    env, fs,
+    fs,
     io::{BufReader, Read, Write},
-    path::{Path, PathBuf},
+    path::Path,
     process::{Child, Command, Stdio},
-    sync::mpsc,
+    sync::{
+        Arc,
+        atomic::{AtomicBool, Ordering},
+        mpsc,
+    },
     thread,
     time::Duration,
 };
 
+mod checkout;
+mod config;
 mod container;
 mod image;
 mod supervisor;
 mod systemd;
+mod workspace;
+use checkout::checkout_exact_commit;
+use config::{
+    RunnerConfig, load_runner_config, load_runner_config_from, runner_config_path,
+    scope_config_home, store_runner_config,
+};
+#[cfg(test)]
+use container::apply_container_limits;
 use container::{
-    ContainerGuard, apply_container_limits, container_finished_at_unix, container_is_running,
-    container_started_at_unix, doctor_local, recovered_container_exit_code,
+    ContainerGuard, configure_job_container_creation, container_finished_at_unix,
+    container_is_running, container_started_at_unix, doctor_local, recovered_container_exit_code,
 };
 use image::resolve_container_image;
 mod recovery;
 #[cfg(test)]
 use recovery::RecoveryProgress;
 use recovery::{
-    RecoveryAttempt, mark_recovery_execution_started, persist_recovery_claim, recover_runner_state,
-    update_recovery_log_sequence,
+    RecoveryAttempt, mark_recovery_conclusion_pending, mark_recovery_execution_started,
+    persist_recovery_claim, recover_runner_state, update_recovery_log_sequence,
 };
 use supervisor::{AttemptStopReason, AttemptSupervisor};
 #[cfg(test)]
 use systemd::systemd_quote_path;
 use systemd::{install_systemd_service, print_linger_status};
+use workspace::{RunnerWorkDir, command_stdout, command_success, runner_work_root, unix_now};
 
 const LOG_CHUNK_BYTES: usize = 16 * 1024;
 const MAX_SOURCE_BUNDLE_BYTES: u64 = 128 * 1024 * 1024;
-
-#[derive(Clone, Debug, serde::Deserialize, serde::Serialize)]
-struct RunnerConfig {
-    api_url: String,
-    runner_id: String,
-    name: String,
-    secret: String,
-    storage_quota_supported: bool,
-}
 
 pub fn install(name: &str, repository: &str) -> anyhow::Result<()> {
     let (owner, repo) = parse_repository(repository)?;
@@ -203,6 +209,9 @@ pub fn daemon(config_path: Option<&Path>) -> anyhow::Result<()> {
         let attempt_token = recovery.recovery.claim.attempt_token.clone();
         if let Err(error) = resume_claim(&config, recovery) {
             eprintln!("Could not resume interrupted attempt {attempt_id}: {error:#}");
+            if error.downcast_ref::<ConclusionReportPending>().is_some() {
+                continue;
+            }
             if let Ok(client) = runner_client() {
                 let _ = abandon_attempt(&client, &config.api_url, &attempt_token, &attempt_id);
             }
@@ -235,6 +244,9 @@ fn run_claim(config: &RunnerConfig, claim: ClaimRunResponse) {
             "Run {} failed before completion: {error:#}",
             claim.job.run_id
         );
+        if error.downcast_ref::<ConclusionReportPending>().is_some() {
+            return;
+        }
         let client = match runner_client() {
             Ok(client) => client,
             Err(client_error) => {
@@ -269,7 +281,7 @@ fn run_claim(config: &RunnerConfig, claim: ClaimRunResponse) {
 fn execute_claim(config: &RunnerConfig, claim: &ClaimRunResponse) -> anyhow::Result<()> {
     let client = runner_client()?;
     let mut supervisor = AttemptSupervisor::start(config.clone(), claim.clone())?;
-    let work = RunnerWorkDir::new(&claim.attempt_id)?;
+    let mut work = RunnerWorkDir::new(&claim.attempt_id)?;
     persist_recovery_claim(&work.path, claim)?;
     let bundle_path = work.path.join("source.bundle");
     let source_client = source_download_client()?;
@@ -285,33 +297,38 @@ fn execute_claim(config: &RunnerConfig, claim: &ClaimRunResponse) -> anyhow::Res
         return Ok(());
     }
     let workspace = work.path.join("workspace");
-    command_success(
-        Command::new("git")
-            .args(["clone", "--no-local"])
-            .arg(&bundle_path)
-            .arg(&workspace),
-        "clone run source bundle",
-    )?;
-    command_success(
-        Command::new("git").current_dir(&workspace).args([
-            "checkout",
-            "--detach",
-            &claim.job.git_oid,
-        ]),
-        "check out exact run commit",
-    )?;
-    let actual_oid = command_stdout(
-        Command::new("git")
-            .current_dir(&workspace)
-            .args(["rev-parse", "HEAD"]),
-        "verify checked-out run commit",
-    )?;
-    if actual_oid.trim() != claim.job.git_oid {
-        bail!("checked-out commit does not match the claimed job");
-    }
+    checkout_exact_commit(&bundle_path, &workspace, &claim.job.git_oid)?;
     let container_image = resolve_container_image(&client, config, claim)?;
     let script_path = work.path.join("job.sh");
     fs::write(&script_path, job_script(&claim.job.workflow)).context("write run script")?;
+    if finish_before_execution(&mut supervisor, &client, config, claim)? {
+        return Ok(());
+    }
+    let container_name = format!("scope-{}", claim.attempt_id);
+    let mut create = Command::new("docker");
+    configure_job_container_creation(
+        &mut create,
+        config,
+        claim,
+        &container_name,
+        &container_image,
+    );
+    command_success(&mut create, "create Docker job container")?;
+    let container = ContainerGuard::new(container_name);
+    command_success(
+        Command::new("docker")
+            .args(["cp"])
+            .arg(format!("{}/.", workspace.display()))
+            .arg(format!("{}:/scope-source", container.name)),
+        "copy run source into Docker job container",
+    )?;
+    command_success(
+        Command::new("docker")
+            .args(["cp"])
+            .arg(&script_path)
+            .arg(format!("{}:/scope-job.sh", container.name)),
+        "copy run script into Docker job container",
+    )?;
     if finish_before_execution(&mut supervisor, &client, config, claim)? {
         return Ok(());
     }
@@ -327,34 +344,12 @@ fn execute_claim(config: &RunnerConfig, claim: &ClaimRunResponse) -> anyhow::Res
         }
         return Err(error);
     }
-    let container_name = format!("scope-{}", claim.attempt_id);
-    let workspace_mount = format!("{}:/scope/source:ro", workspace.display());
-    let script_mount = format!("{}:/scope/job.sh:ro", script_path.display());
-    let mut docker = Command::new("docker");
-    docker.args(["run", "--name", &container_name]);
-    apply_container_limits(&mut docker, config.storage_quota_supported);
-    docker
-        .args(["--label", &format!("scope.runner-id={}", config.runner_id)])
-        .args([
-            "--label",
-            &format!("scope.attempt-id={}", claim.attempt_id),
-        ])
-        .arg("-v")
-        .arg(workspace_mount)
-        .arg("-v")
-        .arg(script_mount)
-        .args([
-            &container_image,
-            "sh",
-            "-c",
-            "mkdir -p /workspace && cp -a /scope/source/. /workspace/ && cd /workspace && exec sh /scope/job.sh 2>&1",
-        ]);
-    let mut child = docker
+    let mut child = Command::new("docker")
+        .args(["start", "--attach", &container.name])
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .spawn()
         .context("start Docker job container")?;
-    let container = ContainerGuard::new(container_name);
     let execution_started_at_unix = match container_started_at_unix(&container.name) {
         Ok(started_at) => started_at,
         Err(error) => {
@@ -369,7 +364,7 @@ fn execute_claim(config: &RunnerConfig, claim: &ClaimRunResponse) -> anyhow::Res
     finish_container_attempt(
         config,
         claim,
-        &work.path,
+        &mut work,
         1,
         0,
         execution_deadline_unix,
@@ -383,8 +378,14 @@ fn execute_claim(config: &RunnerConfig, claim: &ClaimRunResponse) -> anyhow::Res
 
 fn resume_claim(config: &RunnerConfig, recovery: RecoveryAttempt) -> anyhow::Result<()> {
     let RecoveryAttempt { work_dir, recovery } = recovery;
-    let work = RunnerWorkDir { path: work_dir };
+    let mut work = RunnerWorkDir {
+        path: work_dir,
+        cleanup_on_drop: true,
+    };
     let claim = recovery.claim;
+    if let Some(conclusion) = recovery.progress.pending_conclusion {
+        return report_pending_conclusion(config, &claim, &mut work, conclusion);
+    }
     let container_name = format!("scope-{}", claim.attempt_id);
     let container = ContainerGuard::new(container_name.clone());
     let control_client = attempt_control_client()?;
@@ -435,7 +436,7 @@ fn resume_claim(config: &RunnerConfig, recovery: RecoveryAttempt) -> anyhow::Res
     finish_container_attempt(
         config,
         &claim,
-        &work.path,
+        &mut work,
         next_log_sequence,
         recovery_status.log_bytes,
         execution_deadline_unix,
@@ -451,7 +452,7 @@ fn resume_claim(config: &RunnerConfig, recovery: RecoveryAttempt) -> anyhow::Res
 fn finish_container_attempt(
     config: &RunnerConfig,
     claim: &ClaimRunResponse,
-    work_dir: &Path,
+    work: &mut RunnerWorkDir,
     next_log_sequence: u64,
     skip_log_bytes: u64,
     execution_deadline_unix: u64,
@@ -474,16 +475,17 @@ fn finish_container_attempt(
     let status = stream_logs(
         config,
         claim,
-        work_dir,
+        &work.path,
         next_log_sequence,
         skip_log_bytes,
         &mut child,
+        supervisor,
     );
     if status.is_err() {
         let _ = child.wait();
     }
     let status = status?;
-    let stop_reason = supervisor.finish();
+    let stop_reason = supervisor.reason();
     let exit_code = if recovered_deadline_elapsed {
         None
     } else if stop_reason == AttemptStopReason::None && recovering {
@@ -505,15 +507,58 @@ fn finish_container_attempt(
             exit_code: exit_code.unwrap_or(1).max(1),
         },
     };
-    let client = runner_client()?;
-    complete_attempt(
-        &client,
-        &config.api_url,
-        &claim.attempt_token,
-        &claim.attempt_id,
-        &CompleteAttemptRequest { conclusion },
-    )?;
-    Ok(())
+    mark_recovery_conclusion_pending(&work.path, claim, conclusion.clone())?;
+    report_pending_conclusion(config, claim, work, conclusion)
+}
+
+#[derive(Debug)]
+struct ConclusionReportPending;
+
+impl std::fmt::Display for ConclusionReportPending {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str("attempt conclusion is persisted locally for retry")
+    }
+}
+
+impl std::error::Error for ConclusionReportPending {}
+
+fn report_pending_conclusion(
+    config: &RunnerConfig,
+    claim: &ClaimRunResponse,
+    work: &mut RunnerWorkDir,
+    conclusion: AttemptConclusionRequest,
+) -> anyhow::Result<()> {
+    let client = match runner_client() {
+        Ok(client) => client,
+        Err(error) => {
+            work.preserve();
+            eprintln!(
+                "Could not create the client for reporting the persisted conclusion: {error:#}"
+            );
+            return Err(ConclusionReportPending.into());
+        }
+    };
+    let request = CompleteAttemptRequest { conclusion };
+    let mut last_error = None;
+    for _ in 0..3 {
+        match complete_attempt(
+            &client,
+            &config.api_url,
+            &claim.attempt_token,
+            &claim.attempt_id,
+            &request,
+        ) {
+            Ok(_) => return Ok(()),
+            Err(error) => {
+                last_error = Some(error);
+                thread::sleep(Duration::from_secs(1));
+            }
+        }
+    }
+    work.preserve();
+    let error = last_error.expect("conclusion retry records an error");
+    eprintln!("Could not report the persisted attempt conclusion: {error:#}");
+    Err(ConclusionReportPending.into())
 }
 
 fn download_attempt_source(
@@ -604,11 +649,12 @@ fn stream_logs(
     mut next_sequence: u64,
     mut skip_bytes: u64,
     child: &mut Child,
+    supervisor: &AttemptSupervisor,
 ) -> anyhow::Result<std::process::ExitStatus> {
     let stdout = child.stdout.take().context("Docker stdout was not piped")?;
     let stderr = child.stderr.take().context("Docker stderr was not piped")?;
     let (sender, receiver) = mpsc::channel();
-    let stdout_thread = spawn_log_reader(stdout, sender);
+    let stdout_thread = spawn_log_reader(stdout, sender, supervisor.execution_finished_signal());
     let stderr_thread = spawn_diagnostic_reader(stderr);
     let client = attempt_control_client()?;
     let mut upload_logs = true;
@@ -649,6 +695,7 @@ fn stream_logs(
         }
     }
     let _ = stdout_thread.join();
+    supervisor.mark_execution_finished();
     let _ = stderr_thread.join();
     if skip_bytes != 0 {
         bail!("recovered Docker logs are shorter than the server log cursor");
@@ -659,36 +706,94 @@ fn stream_logs(
 fn spawn_log_reader(
     stream: impl Read + Send + 'static,
     sender: mpsc::Sender<String>,
+    execution_finished: Arc<AtomicBool>,
 ) -> thread::JoinHandle<()> {
     thread::spawn(move || {
         let mut reader = BufReader::new(stream);
         let mut bytes = vec![0_u8; LOG_CHUNK_BYTES];
+        let mut decoder = StableLogDecoder::default();
         loop {
             match reader.read(&mut bytes) {
-                Ok(0) => break,
+                Ok(0) => {
+                    execution_finished.store(true, Ordering::Relaxed);
+                    let tail = decoder.finish();
+                    if !tail.is_empty() {
+                        let _ = sender.send(tail);
+                    }
+                    break;
+                }
                 Ok(read) => {
-                    if sender.send(stable_log_text(&bytes[..read])).is_err() {
+                    let text = decoder.push(&bytes[..read]);
+                    if !text.is_empty() && sender.send(text).is_err() {
                         break;
                     }
                 }
-                Err(_) => break,
+                Err(_) => {
+                    execution_finished.store(true, Ordering::Relaxed);
+                    break;
+                }
             }
         }
     })
 }
 
-fn stable_log_text(bytes: &[u8]) -> String {
-    let mut text = String::with_capacity(bytes.len());
-    for &byte in bytes {
-        match byte {
-            b'\n' | b'\r' | b'\t' | 0x20..=0x7e => text.push(char::from(byte)),
-            _ => {
-                use std::fmt::Write as _;
-                write!(text, "\\x{byte:02x}").expect("writing to a String cannot fail");
+#[derive(Default)]
+struct StableLogDecoder {
+    pending: Vec<u8>,
+}
+
+impl StableLogDecoder {
+    fn push(&mut self, bytes: &[u8]) -> String {
+        self.pending.extend_from_slice(bytes);
+        let mut text = String::new();
+        loop {
+            match std::str::from_utf8(&self.pending) {
+                Ok(valid) => {
+                    text.push_str(valid);
+                    self.pending.clear();
+                    break;
+                }
+                Err(error) => {
+                    let valid_bytes = error.valid_up_to();
+                    if valid_bytes != 0 {
+                        text.push_str(
+                            std::str::from_utf8(&self.pending[..valid_bytes])
+                                .expect("UTF-8 validator marked the prefix valid"),
+                        );
+                        self.pending.drain(..valid_bytes);
+                    }
+                    let Some(invalid_bytes) = error.error_len() else {
+                        break;
+                    };
+                    for byte in self.pending.drain(..invalid_bytes) {
+                        append_escaped_byte(&mut text, byte);
+                    }
+                }
             }
         }
+        text
     }
+
+    fn finish(&mut self) -> String {
+        let mut text = String::new();
+        for byte in self.pending.drain(..) {
+            append_escaped_byte(&mut text, byte);
+        }
+        text
+    }
+}
+
+#[cfg(test)]
+fn stable_log_text(bytes: &[u8]) -> String {
+    let mut decoder = StableLogDecoder::default();
+    let mut text = decoder.push(bytes);
+    text.push_str(&decoder.finish());
     text
+}
+
+fn append_escaped_byte(text: &mut String, byte: u8) {
+    use std::fmt::Write as _;
+    write!(text, "\\x{byte:02x}").expect("writing to a String cannot fail");
 }
 
 fn spawn_diagnostic_reader(stream: impl Read + Send + 'static) -> thread::JoinHandle<()> {
@@ -823,154 +928,6 @@ fn attempt_control_client() -> anyhow::Result<Client> {
         .timeout(Duration::from_secs(10))
         .build()
         .context("build attempt control HTTP client")
-}
-
-fn runner_config_path() -> anyhow::Result<PathBuf> {
-    if let Some(path) = env::var_os("SCOPE_RUNNER_CONFIG").filter(|path| !path.is_empty()) {
-        return Ok(PathBuf::from(path));
-    }
-    Ok(scope_config_home()?.join("scope/runner.json"))
-}
-
-fn scope_config_home() -> anyhow::Result<PathBuf> {
-    env::var_os("XDG_CONFIG_HOME")
-        .filter(|path| !path.is_empty())
-        .map(PathBuf::from)
-        .or_else(|| {
-            env::var_os("HOME")
-                .filter(|path| !path.is_empty())
-                .map(|home| PathBuf::from(home).join(".config"))
-        })
-        .context("XDG_CONFIG_HOME or HOME is required")
-}
-
-fn store_runner_config(path: &Path, config: &RunnerConfig) -> anyhow::Result<()> {
-    let parent = path
-        .parent()
-        .context("runner config path has no parent directory")?;
-    fs::create_dir_all(parent).context("create runner config directory")?;
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
-        let mut permissions = fs::metadata(parent)?.permissions();
-        permissions.set_mode(0o700);
-        fs::set_permissions(parent, permissions)?;
-        let temp = path.with_extension(format!("tmp.{}", std::process::id()));
-        let mut file = fs::OpenOptions::new()
-            .create(true)
-            .truncate(true)
-            .write(true)
-            .mode(0o600)
-            .open(&temp)
-            .context("create runner config")?;
-        serde_json::to_writer(&mut file, config).context("serialize runner config")?;
-        file.write_all(b"\n")?;
-        file.sync_all()?;
-        fs::rename(temp, path).context("install runner config")?;
-    }
-    #[cfg(not(unix))]
-    {
-        fs::write(path, serde_json::to_vec(config)?).context("write runner config")?;
-    }
-    Ok(())
-}
-
-fn load_runner_config() -> anyhow::Result<RunnerConfig> {
-    let path = runner_config_path()?;
-    load_runner_config_from(&path)
-}
-
-fn load_runner_config_from(path: &Path) -> anyhow::Result<RunnerConfig> {
-    let bytes = fs::read(path).with_context(|| {
-        format!(
-            "read runner config {}; run scope runner install",
-            path.display()
-        )
-    })?;
-    serde_json::from_slice(&bytes).context("parse runner config")
-}
-
-fn command_success(command: &mut Command, context: &str) -> anyhow::Result<()> {
-    let output = command.output().with_context(|| context.to_string())?;
-    if !output.status.success() {
-        let stderr = String::from_utf8_lossy(&output.stderr);
-        bail!("{context}: {}", stderr.trim());
-    }
-    Ok(())
-}
-
-fn command_stdout(command: &mut Command, context: &str) -> anyhow::Result<String> {
-    let output = command.output().with_context(|| context.to_string())?;
-    if !output.status.success() {
-        bail!(
-            "{context}: {}",
-            String::from_utf8_lossy(&output.stderr).trim()
-        );
-    }
-    Ok(String::from_utf8_lossy(&output.stdout).into_owned())
-}
-
-fn unix_now() -> u64 {
-    std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map_or(0, |duration| duration.as_secs())
-}
-
-struct RunnerWorkDir {
-    path: PathBuf,
-}
-
-impl RunnerWorkDir {
-    fn new(attempt_id: &str) -> anyhow::Result<Self> {
-        let base = runner_work_root()?;
-        fs::create_dir_all(&base).context("create runner work directory")?;
-        let metadata = fs::symlink_metadata(&base)?;
-        if !metadata.file_type().is_dir() {
-            bail!("runner work path is not a directory");
-        }
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::PermissionsExt;
-            let mut permissions = metadata.permissions();
-            permissions.set_mode(0o700);
-            fs::set_permissions(&base, permissions)?;
-        }
-        let safe_id = attempt_id
-            .chars()
-            .map(|character| {
-                if character.is_ascii_alphanumeric() || character == '_' || character == '-' {
-                    character
-                } else {
-                    '_'
-                }
-            })
-            .collect::<String>();
-        let path = base.join(safe_id);
-        fs::create_dir(&path).context("create attempt work directory")?;
-        Ok(Self { path })
-    }
-}
-
-fn runner_work_root() -> anyhow::Result<PathBuf> {
-    Ok(runner_state_home()?.join("scope/runner-work"))
-}
-
-fn runner_state_home() -> anyhow::Result<PathBuf> {
-    env::var_os("XDG_STATE_HOME")
-        .filter(|path| !path.is_empty())
-        .map(PathBuf::from)
-        .or_else(|| {
-            env::var_os("HOME")
-                .filter(|path| !path.is_empty())
-                .map(|home| PathBuf::from(home).join(".local/state"))
-        })
-        .context("XDG_STATE_HOME or HOME is required")
-}
-
-impl Drop for RunnerWorkDir {
-    fn drop(&mut self) {
-        let _ = fs::remove_dir_all(&self.path);
-    }
 }
 
 #[cfg(test)]

@@ -1,6 +1,6 @@
 use super::{
     GeneratedIdSource, RepositoryStore, acquire_aggregate_lock, auth::load_user_by_id, entities,
-    repo_effects::save_repo_mutation, repository_from_model,
+    repo_effects::save_repo_mutation, repository_from_model, runs::revoke_runner_grants_owned_by,
 };
 use crate::error::PostgresError;
 use scope_domain::{
@@ -178,13 +178,33 @@ impl RepositoryStore {
         now_unix: u64,
         generated_ids: &dyn GeneratedIdSource,
     ) -> Result<RepositoryMember, PostgresError> {
-        let owner_user_id = owner_user_id.to_string();
-        let member_user_id = member_user_id.to_string();
-        mutate_repository_collaboration(self, owner, name, now_unix, generated_ids, move |repo| {
-            remove_repository_member(repo, &owner_user_id, &member_user_id)
-                .map_err(PostgresError::from)
-        })
-        .await
+        let repo_id = repo_id(owner, name);
+        let owner = owner.to_string();
+        let name = name.to_string();
+        let db = Arc::clone(&self.db);
+        let tx = db.as_ref().begin().await.map_err(PostgresError::internal)?;
+        acquire_aggregate_lock(&tx, "repository", &repo_id).await?;
+        let row = entities::repository::Entity::find_by_id(repo_id.clone())
+            .one(&tx)
+            .await
+            .map_err(PostgresError::internal)?
+            .ok_or_else(|| PostgresError::not_found(format!("repo {owner}/{name} not found")))?;
+        let mut repo = repository_from_model(&tx, row).await?;
+        let before = repo.clone();
+        let removed = remove_repository_member(&mut repo, owner_user_id, member_user_id)
+            .map_err(PostgresError::from)?;
+        save_repo_mutation(
+            &tx,
+            &before,
+            &repo,
+            &mutation_effects_none(),
+            now_unix,
+            generated_ids,
+        )
+        .await?;
+        revoke_runner_grants_owned_by(&tx, &repo_id, member_user_id, now_unix).await?;
+        tx.commit().await.map_err(PostgresError::internal)?;
+        Ok(removed)
     }
 
     pub async fn repository_invite_by_token_hash(

@@ -1,7 +1,15 @@
 use crate::{
-    auth::scope::require_scope_user, error::ApiError, http::responses::git_oid_request,
-    persistence::unix_now, repo_access::find_repo,
-    repo_cleanup::best_effort_cleanup_rollback_source_blobs, state::AppState,
+    auth::scope::require_scope_user,
+    error::ApiError,
+    http::responses::{
+        RepositoryOperationsResponse, RepositoryRunDetailResponse, RepositoryRunLogResponse,
+        RepositoryRunSummaryResponse, RepositoryRunnerResponse, RepositoryRunnerState,
+        git_oid_request,
+    },
+    persistence::unix_now,
+    repo_access::find_repo,
+    repo_cleanup::best_effort_cleanup_rollback_source_blobs,
+    state::AppState,
 };
 use axum::{
     Json,
@@ -43,6 +51,9 @@ const RUN_LOG_STREAM_PAGE_SIZE: usize = 64;
 const RUN_LOG_STREAM_BUFFER: usize = 32;
 const RUN_LOG_STREAM_AUTH_RECHECK: Duration = Duration::from_secs(30);
 const GIT_INSPECTION_TIMEOUT: Duration = Duration::from_secs(30);
+const REPOSITORY_RUN_LIMIT: u64 = 20;
+const REPOSITORY_RUN_LOG_LIMIT: u64 = 128;
+const RUNNER_ONLINE_WINDOW_SECONDS: u64 = 90;
 
 pub(crate) async fn create_manual_run(
     State(state): State<AppState>,
@@ -108,7 +119,7 @@ pub(crate) async fn create_manual_run(
             return Err(error.into());
         }
     };
-    Ok(Json(run_response(&run)))
+    Ok(Json(run_response(&run, false)))
 }
 
 pub(crate) async fn get_run(
@@ -117,7 +128,82 @@ pub(crate) async fn get_run(
     Path((owner, repo_name, run_id)): Path<(String, String, String)>,
 ) -> Result<Json<RunResponse>, ApiError> {
     let (run, _) = require_run_access(&state, &headers, &owner, &repo_name, &run_id).await?;
-    Ok(Json(run_response(&run)))
+    let logs_truncated = state
+        .metadata
+        .runs()
+        .run_has_truncated_logs(&run_id)
+        .await?;
+    Ok(Json(run_response(&run, logs_truncated)))
+}
+
+pub(crate) async fn get_repository_operations(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path((owner, repo_name)): Path<(String, String)>,
+) -> Result<Json<RepositoryOperationsResponse>, ApiError> {
+    let user = require_scope_user(&state, &headers).await?;
+    let repo = require_repo_member(&state, &user.id, &owner, &repo_name).await?;
+    let runs_store = state.metadata.runs();
+    let (runs, runners) = tokio::try_join!(
+        runs_store.repository_operations_runs(&repo.record.id, REPOSITORY_RUN_LIMIT),
+        runs_store.repository_runners(&repo.record.id),
+    )?;
+    let now_unix = unix_now()?;
+
+    Ok(Json(RepositoryOperationsResponse {
+        runs: runs.iter().map(repository_run_summary).collect(),
+        runners: runners
+            .into_iter()
+            .map(|entry| {
+                let state = if !entry.runner.supports_dispatch() {
+                    RepositoryRunnerState::Disabled
+                } else if entry.runner.last_seen_at_unix.is_some_and(|last_seen| {
+                    last_seen >= now_unix.saturating_sub(RUNNER_ONLINE_WINDOW_SECONDS)
+                }) {
+                    RepositoryRunnerState::Online
+                } else {
+                    RepositoryRunnerState::Offline
+                };
+                RepositoryRunnerResponse {
+                    id: entry.runner.id,
+                    name: entry.grant.name.as_str().to_string(),
+                    version: entry.runner.version,
+                    state,
+                    last_seen_at_unix: entry.runner.last_seen_at_unix,
+                }
+            })
+            .collect(),
+    }))
+}
+
+pub(crate) async fn get_repository_run_detail(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path((owner, repo_name, run_id)): Path<(String, String, String)>,
+) -> Result<Json<RepositoryRunDetailResponse>, ApiError> {
+    let (run, _) = require_run_access(&state, &headers, &owner, &repo_name, &run_id).await?;
+    let runs_store = state.metadata.runs();
+    let (recent_logs, stored_logs_truncated) = tokio::try_join!(
+        runs_store.recent_run_logs(&run_id, REPOSITORY_RUN_LOG_LIMIT),
+        runs_store.run_has_truncated_logs(&run_id),
+    )?;
+    let logs_truncated = recent_logs.truncated_in_view || stored_logs_truncated;
+
+    Ok(Json(RepositoryRunDetailResponse {
+        run: repository_run_summary(&run),
+        logs: recent_logs
+            .logs
+            .into_iter()
+            .map(|stored| RepositoryRunLogResponse {
+                position: stored.position,
+                attempt_id: stored.chunk.attempt_id,
+                sequence: stored.chunk.sequence,
+                text: stored.chunk.text,
+                created_at_unix: stored.chunk.created_at_unix,
+            })
+            .collect(),
+        logs_truncated,
+    }))
 }
 
 pub(crate) async fn get_push_trigger_evaluation(
@@ -139,14 +225,20 @@ pub(crate) async fn get_push_trigger_evaluation(
         .iter()
         .map(|check| check.run_id.clone())
         .collect::<Vec<_>>();
-    let mut runs = state
-        .metadata
-        .runs()
-        .runs_by_ids(&run_ids)
-        .await?
+    let runs_store = state.metadata.runs();
+    let (runs, truncated_run_ids) = tokio::try_join!(
+        runs_store.runs_by_ids(&run_ids),
+        runs_store.run_ids_with_truncated_logs(&run_ids),
+    )?;
+    let mut runs = runs
         .into_iter()
         .map(|run| (run.id.clone(), run))
         .collect::<BTreeMap<_, _>>();
+    if run_ids.iter().any(|run_id| !runs.contains_key(run_id)) {
+        return Err(ApiError::not_found(
+            "push trigger evaluation history has expired",
+        ));
+    }
     let checks = evaluation
         .checks
         .into_iter()
@@ -157,7 +249,7 @@ pub(crate) async fn get_push_trigger_evaluation(
             Ok(PushTriggerCheckResponse {
                 workflow_path: check.workflow_path,
                 workflow_name: check.workflow_name,
-                run: run_response(&run),
+                run: run_response(&run, truncated_run_ids.contains(&run.id)),
             })
         })
         .collect::<Result<Vec<_>, ApiError>>()?;
@@ -181,7 +273,12 @@ pub(crate) async fn cancel_run(
         .runs()
         .request_run_cancellation(&run_id, unix_now()?)
         .await?;
-    Ok(Json(run_response(&run)))
+    let logs_truncated = state
+        .metadata
+        .runs()
+        .run_has_truncated_logs(&run_id)
+        .await?;
+    Ok(Json(run_response(&run, logs_truncated)))
 }
 
 pub(crate) async fn retry_run(
@@ -195,7 +292,12 @@ pub(crate) async fn retry_run(
         .runs()
         .retry_run(&run_id, unix_now()?)
         .await?;
-    Ok(Json(run_response(&run)))
+    let logs_truncated = state
+        .metadata
+        .runs()
+        .run_has_truncated_logs(&run_id)
+        .await?;
+    Ok(Json(run_response(&run, logs_truncated)))
 }
 
 pub(crate) async fn run_events(
@@ -340,9 +442,22 @@ async fn stream_run_events(
         }
         if last_state != Some(run.state) && (!terminal || !has_full_page) {
             last_state = Some(run.state);
+            let logs_truncated = match context
+                .state
+                .metadata
+                .runs()
+                .run_has_truncated_logs(&context.run_id)
+                .await
+            {
+                Ok(logs_truncated) => logs_truncated,
+                Err(error) => {
+                    send_stream_error(&sender, error.message).await;
+                    return;
+                }
+            };
             let event = match Event::default()
                 .event("status")
-                .json_data(run_response(&run))
+                .json_data(run_response(&run, logs_truncated))
             {
                 Ok(event) => event,
                 Err(error) => {
@@ -411,7 +526,7 @@ async fn require_repo_member(
     Ok(repo)
 }
 
-pub(crate) fn run_response(run: &Run) -> RunResponse {
+pub(crate) fn run_response(run: &Run, logs_truncated: bool) -> RunResponse {
     RunResponse {
         id: run.id.clone(),
         repository_id: run.workflow.repository_id().to_string(),
@@ -423,10 +538,31 @@ pub(crate) fn run_response(run: &Run) -> RunResponse {
         },
         state: run.state,
         cancellation_requested: run.cancellation_requested,
+        logs_truncated,
         attempt_number: run.last_attempt_number,
         created_at_unix: run.created_at_unix,
         updated_at_unix: run.updated_at_unix,
         completed_at_unix: run.completed_at_unix,
+    }
+}
+
+fn repository_run_summary(run: &Run) -> RepositoryRunSummaryResponse {
+    RepositoryRunSummaryResponse {
+        id: run.id.clone(),
+        workflow_name: run.workflow.path().name().to_string(),
+        git_oid: run.source.git_oid().to_string(),
+        desired_runner: match &run.desired_runner {
+            RunnerSelector::Any => None,
+            RunnerSelector::Named(name) => Some(name.clone()),
+        },
+        state: run.state.into(),
+        cancellation_requested: run.cancellation_requested,
+        attempt_number: run.last_attempt_number,
+        created_at_unix: run.created_at_unix,
+        updated_at_unix: run.updated_at_unix,
+        completed_at_unix: run.completed_at_unix,
+        can_cancel: run.can_request_cancellation(),
+        can_retry: run.can_retry(),
     }
 }
 

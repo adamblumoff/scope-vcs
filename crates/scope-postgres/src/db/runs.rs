@@ -6,9 +6,11 @@ use scope_domain::runs::{
     workflow::WorkflowRevision,
 };
 use sea_orm::{
-    ActiveModelTrait, ActiveValue::NotSet, ColumnTrait, Condition, DatabaseTransaction, DbErr,
-    EntityTrait, IntoActiveModel, QueryFilter, QueryOrder, QuerySelect, TransactionTrait,
-    TryInsertResult, sea_query::OnConflict,
+    ActiveModelTrait,
+    ActiveValue::{NotSet, Set},
+    ColumnTrait, Condition, ConnectionTrait, DatabaseTransaction, DbErr, EntityTrait,
+    IntoActiveModel, QueryFilter, QueryOrder, QuerySelect, TransactionTrait, TryInsertResult,
+    sea_query::OnConflict,
 };
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -818,6 +820,43 @@ async fn locked_attempt_context(
         .ok_or_else(|| PostgresError::not_found("run attempt not found"))?
         .try_into_domain()?;
     Ok((run, attempt))
+}
+
+pub(super) async fn revoke_runner_grants_owned_by<C>(
+    conn: &C,
+    repository_id: &str,
+    owner_user_id: &str,
+    now_unix: u64,
+) -> Result<(), PostgresError>
+where
+    C: ConnectionTrait,
+{
+    let runner_ids = entities::runner::Entity::find()
+        .select_only()
+        .column(entities::runner::Column::Id)
+        .filter(entities::runner::Column::OwnerUserId.eq(owner_user_id))
+        .into_tuple::<String>()
+        .all(conn)
+        .await
+        .map_err(PostgresError::internal)?;
+    if runner_ids.is_empty() {
+        return Ok(());
+    }
+    entities::runner_grant::Entity::update_many()
+        .set(entities::runner_grant::ActiveModel {
+            revoked_at_unix: Set(Some(entities::u64_to_i64(
+                now_unix,
+                "runner grant revocation time",
+            )?)),
+            ..Default::default()
+        })
+        .filter(entities::runner_grant::Column::RepoId.eq(repository_id))
+        .filter(entities::runner_grant::Column::RunnerId.is_in(runner_ids))
+        .filter(entities::runner_grant::Column::RevokedAtUnix.is_null())
+        .exec(conn)
+        .await
+        .map_err(PostgresError::internal)?;
+    Ok(())
 }
 
 async fn runner_by_id(tx: &DatabaseTransaction, runner_id: &str) -> Result<Runner, PostgresError> {

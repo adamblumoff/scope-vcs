@@ -4,7 +4,18 @@ import {
   loadRepoFileForRequest,
   parseRepoParams,
 } from '@/api/repos'
-import type { RepoFileContent, RepoParams } from '@/api/types'
+import {
+  cancelRepoRunForRequest,
+  loadRepoOperationsForRequest,
+  loadRepoRunDetailForRequest,
+  parseRunActionInput,
+  retryRepoRunForRequest,
+} from '@/api/runs'
+import type {
+  RepoFileContent,
+  RepoParams,
+  RunActionInput,
+} from '@/api/types'
 import { RepoDetailPage } from '@/features/repo-detail/repo-detail-page'
 import { useRepoLayout } from '@/features/repo-detail/repo-layout-context'
 import {
@@ -48,16 +59,47 @@ const loadRepoFile = createServerFn({ method: 'GET' })
     }
   })
 
+const loadRepoOperations = createServerFn({ method: 'GET' })
+  .validator(parseRepoParams)
+  .handler(async ({ data }) => {
+    try {
+      return await loadRepoOperationsForRequest(data)
+    } catch (error) {
+      if (error instanceof HttpError && [401, 403, 404].includes(error.status)) {
+        return null
+      }
+      throw error
+    }
+  })
+
+const loadRepoRunDetail = createServerFn({ method: 'GET' })
+  .validator(parseRunActionInput)
+  .handler(({ data }) => loadRepoRunDetailForRequest(data))
+
+const cancelRepoRun = createServerFn({ method: 'POST' })
+  .validator(parseRunActionInput)
+  .handler(({ data }) => cancelRepoRunForRequest(data))
+
+const retryRepoRun = createServerFn({ method: 'POST' })
+  .validator(parseRunActionInput)
+  .handler(({ data }) => retryRepoRunForRequest(data))
+
 export const Route = createFileRoute('/repos/$owner/$repo/')({
   validateSearch: parseRepoCodeSearch,
   staleTime: Infinity,
-  loader: ({ params }) => loadRepoContent({ data: params }),
+  loader: async ({ params }) => {
+    const [content, operations] = await Promise.all([
+      loadRepoContent({ data: params }),
+      loadRepoOperations({ data: params }),
+    ])
+    return { content, operations }
+  },
   errorComponent: RepoContentError,
   component: RepoIndexRoute,
 })
 
 function RepoIndexRoute() {
-  const content = Route.useLoaderData()
+  const { content, operations } = Route.useLoaderData()
   const params = Route.useParams()
   const search = Route.useSearch()
   const { repo } = useRepoLayout()
@@ -97,10 +139,34 @@ function RepoIndexRoute() {
     read: readRepoFileCache,
     write: writeRepoFileCache,
   })
+  const refreshOperations = useCallback(
+    (input: RepoParams) => loadRepoOperations({ data: input }),
+    [],
+  )
+  const refreshRunDetail = useCallback(
+    (input: RunActionInput) => loadRepoRunDetail({ data: input }),
+    [],
+  )
+  const cancelRun = useCallback(
+    async (input: RunActionInput) => {
+      await cancelRepoRun({ data: input })
+    },
+    [],
+  )
+  const retryRun = useCallback(
+    async (input: RunActionInput) => {
+      await retryRepoRun({ data: input })
+    },
+    [],
+  )
 
   return (
     <RepoDetailPage
+      cancelRun={cancelRun}
       content={content}
+      initialOperations={operations}
+      loadRunDetail={refreshRunDetail}
+      loadRunOperations={refreshOperations}
       onSelectFilePath={(path) => {
         void navigate({
           resetScroll: false,
@@ -116,6 +182,7 @@ function RepoIndexRoute() {
       selectedFileLoading={selectedResource.status === 'loading'}
       selectedFileRetry={selectedResource.retry}
       selectedPath={selectedPath}
+      retryRun={retryRun}
     />
   )
 }

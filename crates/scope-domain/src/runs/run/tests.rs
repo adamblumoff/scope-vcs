@@ -177,16 +177,29 @@ fn claim_start_heartbeat_and_completion_preserve_attempt_identity() {
         .unwrap();
     assert_eq!(run.state, RunState::Succeeded);
     assert_eq!(attempt.state, AttemptState::Succeeded);
-    let retry = attempt
+    attempt
         .complete(
             &mut run,
             "runner-1",
             &"e".repeat(64),
             AttemptConclusion::Succeeded,
-            60,
+            101,
+        )
+        .unwrap();
+    let conflicting = attempt
+        .complete(
+            &mut run,
+            "runner-1",
+            &"e".repeat(64),
+            AttemptConclusion::Failed { exit_code: 1 },
+            101,
         )
         .unwrap_err();
-    assert_eq!(retry.kind, crate::error::DomainErrorKind::Conflict);
+    assert_eq!(conflicting.kind, crate::error::DomainErrorKind::Conflict);
+
+    let late_log = RunLogChunk::new("attempt-1", 1, "late", 60).unwrap();
+    let late_log = attempt.accept_log_chunk(&late_log).unwrap_err();
+    assert_eq!(late_log.kind, crate::error::DomainErrorKind::Conflict);
 }
 
 #[test]
@@ -218,7 +231,10 @@ fn cancellation_waits_for_active_runner_acknowledgement() {
         .claim(&runner(), &grant(), "attempt-1", "e".repeat(64), 20, 80)
         .unwrap();
 
+    assert!(run.can_request_cancellation());
+    assert!(!run.can_retry());
     assert!(run.request_cancellation(30).unwrap());
+    assert!(!run.can_request_cancellation());
     assert_eq!(run.state, RunState::Leased);
     assert!(!run.request_cancellation(40).unwrap());
     assert_eq!(run.updated_at_unix, 30);
@@ -243,6 +259,11 @@ fn cancellation_waits_for_active_runner_acknowledgement() {
         )
         .unwrap();
     assert_eq!(run.state, RunState::Canceled);
+    assert!(!run.can_request_cancellation());
+    assert!(run.can_retry());
+    run.retry(60).unwrap();
+    assert!(run.can_request_cancellation());
+    assert!(!run.can_retry());
 }
 
 #[test]

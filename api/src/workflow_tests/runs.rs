@@ -47,9 +47,12 @@ steps:
     state
         .metadata
         .jobs()
-        .run_ready_outbox_jobs("push-trigger-api-test", 10, &|| {
-            crate::persistence::unix_now().map_err(crate::error::ApiError::into_message)
-        })
+        .run_ready_outbox_jobs(
+            "push-trigger-api-test",
+            10,
+            &|| crate::persistence::unix_now().map_err(crate::error::ApiError::into_message),
+            &crate::persistence_ids::generate_persistence_id,
+        )
         .await
         .unwrap();
 
@@ -273,7 +276,7 @@ async fn manual_run_protocol_crosses_human_runner_and_attempt_credentials() {
     assert!(events.contains("\"text\":\"hello from runner\\n\""));
     assert!(events.contains("\"state\":\"running\""));
 
-    for sequence in 2..=66 {
+    for sequence in 2..=130 {
         let logged = app
             .clone()
             .oneshot(json_request(
@@ -304,6 +307,95 @@ async fn manual_run_protocol_crosses_human_runner_and_attempt_credentials() {
         .unwrap();
     assert_eq!(completed.status(), StatusCode::OK);
 
+    let operations = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri(scope_api_contract::routes::repo_operations(
+                    TEST_REPO_OWNER,
+                    TEST_REPO_NAME,
+                ))
+                .header(AUTHORIZATION, bearer_header())
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(operations.status(), StatusCode::OK);
+    let operations = response_json(operations).await;
+    assert_eq!(operations["runs"][0]["id"], run_id);
+    assert_eq!(operations["runs"][0]["state"], "succeeded");
+    assert_eq!(operations["runs"][0]["can_retry"], true);
+    assert_eq!(operations["runners"][0]["name"], "linux-box");
+    assert_eq!(operations["runners"][0]["state"], "online");
+    let operations_json = serde_json::to_string(&operations).unwrap();
+    assert!(!operations_json.contains(&runner_secret));
+    for forbidden_field in [
+        "secret",
+        "owner_user_id",
+        "capabilities",
+        "object_key",
+        "token",
+    ] {
+        assert!(!operations_json.contains(forbidden_field));
+    }
+
+    let detail = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri(scope_api_contract::routes::repo_run_detail(
+                    TEST_REPO_OWNER,
+                    TEST_REPO_NAME,
+                    &run_id,
+                ))
+                .header(AUTHORIZATION, bearer_header())
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(detail.status(), StatusCode::OK);
+    let detail = response_json(detail).await;
+    assert_eq!(detail["logs"].as_array().unwrap().len(), 128);
+    assert_eq!(detail["logs"][0]["text"], "chunk-3\n");
+    assert_eq!(detail["logs"][127]["text"], "chunk-130\n");
+    assert_eq!(detail["logs_truncated"], true);
+
+    let anonymous_operations = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri(scope_api_contract::routes::repo_operations(
+                    TEST_REPO_OWNER,
+                    TEST_REPO_NAME,
+                ))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(anonymous_operations.status(), StatusCode::UNAUTHORIZED);
+
+    let unrelated_operations = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri(scope_api_contract::routes::repo_operations(
+                    TEST_REPO_OWNER,
+                    TEST_REPO_NAME,
+                ))
+                .header(
+                    AUTHORIZATION,
+                    bearer_header_for("runs_unrelated", "runs-unrelated@example.com"),
+                )
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(unrelated_operations.status(), StatusCode::FORBIDDEN);
+
     let terminal_events = app
         .clone()
         .oneshot(
@@ -326,8 +418,9 @@ async fn manual_run_protocol_crosses_human_runner_and_attempt_credentials() {
         .await
         .unwrap();
     let terminal_events = String::from_utf8(terminal_events.to_vec()).unwrap();
-    assert!(terminal_events.contains("\"text\":\"chunk-66\\n\""));
+    assert!(terminal_events.contains("\"text\":\"chunk-130\\n\""));
     assert!(terminal_events.contains("\"state\":\"succeeded\""));
+    assert!(terminal_events.contains("\"logs_truncated\":false"));
 
     let human_cannot_use_attempt_token = app
         .clone()

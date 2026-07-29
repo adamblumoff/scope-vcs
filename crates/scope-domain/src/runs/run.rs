@@ -9,53 +9,13 @@ use serde::{Deserialize, Serialize};
 
 pub const MAX_RUN_LOG_CHUNK_BYTES: usize = 64 * 1024;
 pub const MAX_RUN_LOG_BYTES_PER_ATTEMPT: u64 = 10 * 1024 * 1024;
+pub use super::state::{AttemptState, RunState};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum RunTrigger {
     Manual,
     PushMain,
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "kebab-case")]
-pub enum RunState {
-    Queued,
-    Leased,
-    Running,
-    Succeeded,
-    Failed,
-    Canceled,
-    Lost,
-}
-
-impl RunState {
-    pub fn is_terminal(self) -> bool {
-        matches!(
-            self,
-            Self::Succeeded | Self::Failed | Self::Canceled | Self::Lost
-        )
-    }
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "kebab-case")]
-pub enum AttemptState {
-    Leased,
-    Running,
-    Succeeded,
-    Failed,
-    Canceled,
-    Lost,
-}
-
-impl AttemptState {
-    pub fn is_terminal(self) -> bool {
-        matches!(
-            self,
-            Self::Succeeded | Self::Failed | Self::Canceled | Self::Lost
-        )
-    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -447,8 +407,12 @@ impl Run {
         Ok(attempt)
     }
 
+    pub fn can_request_cancellation(&self) -> bool {
+        !self.state.is_terminal() && !self.cancellation_requested
+    }
+
     pub fn request_cancellation(&mut self, now_unix: u64) -> Result<bool, DomainError> {
-        if self.state.is_terminal() {
+        if !self.can_request_cancellation() {
             return Ok(false);
         }
         self.ensure_time_not_before_update(now_unix)?;
@@ -458,9 +422,6 @@ impl Run {
             self.updated_at_unix = now_unix;
             self.completed_at_unix = Some(now_unix);
             return Ok(true);
-        }
-        if self.cancellation_requested {
-            return Ok(false);
         }
         self.cancellation_requested = true;
         self.updated_at_unix = now_unix;
@@ -529,8 +490,12 @@ impl Run {
         Ok(())
     }
 
+    pub fn can_retry(&self) -> bool {
+        self.state.is_terminal()
+    }
+
     pub fn retry(&mut self, now_unix: u64) -> Result<(), DomainError> {
-        if !self.state.is_terminal() {
+        if !self.can_retry() {
             return Err(DomainError::conflict("only a terminal run can be retried"));
         }
         self.ensure_time_not_before_update(now_unix)?;
@@ -738,6 +703,11 @@ impl RunAttempt {
                 "run log attempt id does not match the attempt",
             ));
         }
+        if self.state.is_terminal() {
+            return Err(DomainError::conflict(
+                "terminal attempts cannot append logs",
+            ));
+        }
         if self.logs_truncated {
             return Ok(false);
         }
@@ -770,10 +740,17 @@ impl RunAttempt {
         conclusion: AttemptConclusion,
         now_unix: u64,
     ) -> Result<(), DomainError> {
-        self.authenticate(run, runner_id, token_hash, now_unix)?;
         if self.state.is_terminal() || run.state.is_terminal() {
-            return Err(DomainError::conflict("attempt is terminal"));
+            self.authenticate_identity(run, runner_id, token_hash)?;
+            return if self.matches_conclusion(conclusion) {
+                Ok(())
+            } else {
+                Err(DomainError::conflict(
+                    "attempt already completed with a different conclusion",
+                ))
+            };
         }
+        self.authenticate(run, runner_id, token_hash, now_unix)?;
         self.ensure_time_not_before_heartbeat(now_unix)?;
         run.ensure_time_not_before_update(now_unix)?;
         let (attempt_state, run_state, exit_code) = match conclusion {
@@ -805,6 +782,20 @@ impl RunAttempt {
         run.updated_at_unix = now_unix;
         run.completed_at_unix = Some(now_unix);
         Ok(())
+    }
+
+    fn matches_conclusion(&self, conclusion: AttemptConclusion) -> bool {
+        match conclusion {
+            AttemptConclusion::Succeeded => {
+                self.state == AttemptState::Succeeded && self.exit_code == Some(0)
+            }
+            AttemptConclusion::Failed { exit_code } => {
+                self.state == AttemptState::Failed && self.exit_code == Some(exit_code)
+            }
+            AttemptConclusion::Canceled => {
+                self.state == AttemptState::Canceled && self.exit_code.is_none()
+            }
+        }
     }
 
     pub fn expire(&mut self, run: &mut Run, now_unix: u64) -> Result<(), DomainError> {
@@ -859,6 +850,21 @@ impl RunAttempt {
         token_hash: &str,
         now_unix: u64,
     ) -> Result<(), DomainError> {
+        self.authenticate_identity(run, runner_id, token_hash)?;
+        if now_unix >= self.token_expires_at_unix {
+            return Err(DomainError::authentication_failed(
+                "attempt credentials are invalid or expired",
+            ));
+        }
+        Ok(())
+    }
+
+    fn authenticate_identity(
+        &self,
+        run: &Run,
+        runner_id: &str,
+        token_hash: &str,
+    ) -> Result<(), DomainError> {
         run.ensure_current_attempt(self)?;
         let states_align = matches!(
             (run.state, self.state),
@@ -873,12 +879,9 @@ impl RunAttempt {
                 "run and attempt states disagree",
             ));
         }
-        if self.runner_id != runner_id
-            || self.token_hash != token_hash
-            || now_unix >= self.token_expires_at_unix
-        {
+        if self.runner_id != runner_id || self.token_hash != token_hash {
             return Err(DomainError::authentication_failed(
-                "attempt credentials are invalid or expired",
+                "attempt credentials are invalid",
             ));
         }
         Ok(())

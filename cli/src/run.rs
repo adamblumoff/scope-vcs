@@ -153,6 +153,9 @@ fn print_terminal(run: &RunResponse) {
         short_oid(&run.git_oid),
         run.desired_runner.as_deref().unwrap_or("any runner")
     );
+    if run.logs_truncated {
+        eprintln!("Warning: this run exceeded the stored log limit; earlier output was truncated.");
+    }
 }
 
 fn scope_target(
