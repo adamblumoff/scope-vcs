@@ -756,6 +756,21 @@ fn public_projection_keeps_public_history_when_policy_later_marks_path_private()
 }
 
 #[test]
+fn public_projection_never_contains_tracked_workflow_definitions() {
+    let policy = Policy::new(Visibility::Public);
+    let graph = graph(vec![commit(
+        "rv1",
+        None,
+        "add workflow",
+        added("/.scope/runs/test.yml", Visibility::Public, "name: Test"),
+    )]);
+
+    let projection = project_public(&policy, &graph, &[]);
+
+    assert!(projection.visible_paths().is_empty());
+}
+
+#[test]
 fn destructive_rewrite_rebuilds_each_public_boundary_safely() {
     for (name, next_content, stays_public, expected_commit) in [
         (
@@ -770,7 +785,7 @@ fn destructive_rewrite_rebuilds_each_public_boundary_safely() {
     ] {
         let path = "/leaked.txt";
         let mut repo = published_repo_with_public_file("leaked", path, "secret");
-        let mut changes = vec![reviewed_change("/.scope/repo.json", Some("config v2"))];
+        let mut changes = vec![reviewed_change("/.scope/runs/test.yml", Some("name: Test"))];
         if let Some(content) = next_content {
             changes.insert(0, reviewed_change(path, content));
         }
@@ -860,7 +875,7 @@ fn redacting_intermediate_native_path_invalidates_descendant_commit_preservation
     apply_update(
         &mut repo,
         "redact transient path",
-        vec![reviewed_change("/.scope/repo.json", Some("config v2"))],
+        vec![reviewed_change("/.scope/runs/test.yml", Some("name: Test"))],
         None,
         config(Visibility::Public, None, Some("/transient-leak.txt")),
     );
@@ -904,7 +919,7 @@ fn unchanged_history_rewrite_is_not_reapplied_on_later_push() {
     apply_update(
         &mut repo,
         "later config-only push",
-        vec![reviewed_change("/.scope/repo.json", Some("same config"))],
+        vec![reviewed_change("/.scope/runs/test.yml", Some("name: Test"))],
         Some(config.clone()),
         config,
     );

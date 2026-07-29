@@ -1,4 +1,6 @@
-/.scope/
+/.scope/*
+!/.scope/runs/
+!/.scope/runs/**
 target/
 node_modules/
 .turbo/

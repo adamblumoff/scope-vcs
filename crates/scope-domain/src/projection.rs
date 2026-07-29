@@ -1,6 +1,6 @@
 use super::{
     policy::{ScopePath, Visibility},
-    repo_config::is_reserved_config_path,
+    repo_control::is_private_control_path,
     store::{LogicalCommitOrigin, RepositoryAccess, RepositoryActor, SourceBlob},
 };
 use serde::{Deserialize, Serialize};
@@ -152,7 +152,7 @@ pub fn project_graph(
             .changes
             .iter()
             .filter(|change| {
-                change.visibility == Visibility::Public && !is_reserved_config_path(&change.path)
+                change.visibility == Visibility::Public && !is_private_control_path(&change.path)
             })
             .map(|change| ProjectedChange {
                 path: change.path.clone(),
@@ -313,7 +313,7 @@ fn projection_boundary_events_by_anchor<'a>(
     };
     for event in events
         .iter()
-        .filter(|event| !is_reserved_config_path(&event.path))
+        .filter(|event| !is_private_control_path(&event.path))
     {
         let boundary = match (event.old_visibility, event.new_visibility) {
             (Visibility::Private, Visibility::Public) if event.source_commit_id.is_none() => {

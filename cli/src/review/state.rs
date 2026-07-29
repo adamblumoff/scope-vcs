@@ -115,7 +115,7 @@ impl ReviewState {
 
     pub fn mark_saved(&mut self) {
         self.original_config = self.config.clone();
-        self.message = "Saved .scope/repo.json".to_string();
+        self.message = "Saved Scope repo config".to_string();
     }
 
     pub fn message(&self) -> &str {

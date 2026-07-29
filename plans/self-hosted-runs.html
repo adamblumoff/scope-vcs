@@ -1,0 +1,908 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="description" content="Implementation plan for Scope Runs: repository-defined workflows dispatched to persistent self-hosted runner machines.">
+  <title>Scope VCS — Self-hosted Runs implementation plan</title>
+  <script>
+    (function () {
+      var saved = localStorage.getItem("scope-plan-theme");
+      var dark = saved === "dark" ||
+        (saved !== "light" && window.matchMedia("(prefers-color-scheme: dark)").matches);
+      if (dark) document.documentElement.classList.add("dark");
+    })();
+  </script>
+  <style>
+    :root {
+      color-scheme: light;
+      --bg: #f3f1ec;
+      --fg: #191c20;
+      --surface: #fbfaf7;
+      --surface-2: #f6f4ef;
+      --muted: #68707a;
+      --line: #d1d4d8;
+      --line-strong: #a9afb8;
+      --accent: #526f8d;
+      --accent-soft: #dfe7ee;
+      --success: #4f7f61;
+      --success-soft: #e0ebe3;
+      --warning: #8a7047;
+      --warning-soft: #eee7d9;
+      --danger: #aa5360;
+      --danger-soft: #f1dfe2;
+      --code: #15181d;
+      --code-fg: #ecebe7;
+      --shadow: 0 18px 48px -32px rgba(18, 22, 28, .38);
+      --sans: "Geist", ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+      --mono: "Geist Mono", "SFMono-Regular", Consolas, ui-monospace, monospace;
+    }
+    html.dark {
+      color-scheme: dark;
+      --bg: #0d0f12;
+      --fg: #f0efeb;
+      --surface: #12151a;
+      --surface-2: #171a20;
+      --muted: #9ca3ad;
+      --line: #292e36;
+      --line-strong: #3c434e;
+      --accent: #87a1bb;
+      --accent-soft: #18232d;
+      --success: #79a78a;
+      --success-soft: #16241b;
+      --warning: #bea374;
+      --warning-soft: #272116;
+      --danger: #da7480;
+      --danger-soft: #2c181c;
+      --code: #080a0d;
+      --code-fg: #f0efeb;
+      --shadow: 0 20px 58px -30px rgba(0, 0, 0, .9);
+    }
+    * { box-sizing: border-box; }
+    html { scroll-behavior: smooth; }
+    body {
+      margin: 0;
+      min-width: 320px;
+      background: var(--bg);
+      color: var(--fg);
+      font-family: var(--sans);
+      font-size: 15px;
+      line-height: 1.58;
+      -webkit-font-smoothing: antialiased;
+    }
+    a { color: inherit; }
+    button, input { font: inherit; }
+    code, pre, .mono { font-family: var(--mono); }
+    .page { max-width: 1260px; margin: 0 auto; padding: 0 32px 120px; }
+    .mast {
+      position: relative;
+      padding: 78px 0 48px;
+      border-bottom: 1px solid var(--line);
+    }
+    .theme {
+      position: absolute;
+      top: 24px;
+      right: 0;
+      width: 44px;
+      height: 44px;
+      border: 1px solid var(--line);
+      border-radius: 6px;
+      background: var(--surface);
+      color: var(--muted);
+      cursor: pointer;
+    }
+    .theme:hover { color: var(--fg); border-color: var(--line-strong); }
+    .eyebrow, .nav-label, .n, .tag, .label {
+      font-family: var(--mono);
+      font-size: 10px;
+      letter-spacing: .1em;
+      text-transform: uppercase;
+    }
+    .eyebrow { margin-bottom: 14px; color: var(--accent); }
+    h1 {
+      max-width: 900px;
+      margin: 0;
+      font-size: clamp(42px, 7vw, 76px);
+      line-height: 1;
+      letter-spacing: -.05em;
+      font-weight: 650;
+    }
+    .lede {
+      max-width: 790px;
+      margin: 24px 0 0;
+      color: var(--muted);
+      font-size: 18px;
+    }
+    .decision {
+      max-width: 1040px;
+      margin-top: 30px;
+      padding: 16px 19px;
+      border-left: 3px solid var(--accent);
+      background: var(--accent-soft);
+    }
+    .stats {
+      display: grid;
+      grid-template-columns: repeat(4, 1fr);
+      border-bottom: 1px solid var(--line);
+    }
+    .stat { padding: 22px 20px; border-right: 1px solid var(--line); }
+    .stat:first-child { padding-left: 0; }
+    .stat:last-child { border-right: 0; }
+    .stat strong { display: block; font-size: 21px; }
+    .stat span { display: block; color: var(--muted); font: 11px var(--mono); }
+    .shell {
+      display: grid;
+      grid-template-columns: 218px minmax(0, 1fr);
+      gap: 50px;
+      padding-top: 44px;
+    }
+    nav { position: sticky; top: 24px; align-self: start; }
+    nav .nav-label { margin-bottom: 10px; color: var(--muted); }
+    nav a {
+      display: block;
+      padding: 6px 0 6px 12px;
+      border-left: 2px solid var(--line);
+      color: var(--muted);
+      text-decoration: none;
+      font-size: 13px;
+    }
+    nav a:hover { color: var(--fg); border-color: var(--accent); }
+    main { min-width: 0; }
+    section { padding: 64px 0 0; scroll-margin-top: 18px; }
+    .section-head { display: flex; align-items: baseline; gap: 14px; margin-bottom: 8px; }
+    .n { color: var(--accent); }
+    h2 { margin: 0; font-size: 29px; line-height: 1.2; letter-spacing: -.03em; }
+    h3 { margin: 0 0 8px; font-size: 17px; letter-spacing: -.015em; }
+    .intro { max-width: 780px; margin: 0 0 28px; color: var(--muted); }
+    .rule {
+      display: grid;
+      grid-template-columns: 205px minmax(0, 1fr);
+      gap: 22px;
+      padding: 15px 0;
+      border-top: 1px solid var(--line);
+    }
+    .rule:last-child { border-bottom: 1px solid var(--line); }
+    .rule b { font-size: 13px; }
+    .rule p { margin: 0; color: var(--muted); }
+    .diagram {
+      overflow-x: auto;
+      padding: 22px;
+      border: 1px solid var(--line);
+      border-radius: 9px;
+      background: var(--surface);
+      box-shadow: var(--shadow);
+      scrollbar-color: var(--line-strong) var(--surface-2);
+    }
+    .diagram:focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; }
+    .diagram svg { display: block; min-width: 760px; width: 100%; height: auto; }
+    .diagram text { font-family: var(--mono); fill: var(--fg); }
+    .diagram .sub { fill: var(--muted); font-size: 11px; }
+    .diagram .node { fill: var(--surface); stroke: var(--line-strong); stroke-width: 1.5; }
+    .diagram .soft { fill: var(--surface-2); }
+    .diagram .active { fill: var(--accent-soft); stroke: var(--accent); }
+    .diagram .good { fill: var(--success-soft); stroke: var(--success); }
+    .diagram .warn { fill: var(--warning-soft); stroke: var(--warning); }
+    .diagram .bad { fill: var(--danger-soft); stroke: var(--danger); }
+    .diagram .lane { fill: none; stroke: var(--line); stroke-width: 1; }
+    .diagram .edge {
+      fill: none;
+      stroke: var(--line-strong);
+      stroke-width: 1.5;
+      marker-end: url(#plan-arrow);
+    }
+    .diagram .edge-accent { stroke: var(--accent); marker-end: url(#plan-arrow-accent); }
+    .diagram .edge-good { stroke: var(--success); marker-end: url(#plan-arrow-good); }
+    .diagram .dash { stroke-dasharray: 5 4; }
+    .caption { margin: 10px 0 0; color: var(--muted); font-size: 12px; }
+    .cli {
+      overflow: hidden;
+      border-radius: 9px;
+      background: var(--code);
+      color: var(--code-fg);
+    }
+    .cli-head {
+      padding: 10px 15px;
+      border-bottom: 1px solid #343943;
+      color: #a4a9b1;
+      font: 10px var(--mono);
+    }
+    .cli pre { margin: 0; padding: 17px; overflow-x: auto; font-size: 12px; line-height: 1.68; }
+    .prompt { color: #92a8bd; }
+    .out { color: #a4a9b1; }
+    .ok { color: #83b28e; }
+    .warn-text { color: #c7ae7d; }
+    .cli-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 18px; }
+    .yaml-grid { display: grid; grid-template-columns: minmax(0, 1.1fr) minmax(250px, .9fr); gap: 22px; }
+    .contract {
+      display: grid;
+      grid-template-columns: 220px minmax(0, 1fr);
+      border-top: 1px solid var(--line);
+    }
+    .contract > div { padding: 13px; border-bottom: 1px solid var(--line); }
+    .contract .verb { color: var(--accent); font: 11px var(--mono); }
+    .contract p { margin: 2px 0 0; color: var(--muted); font-size: 12px; }
+    .matrix { width: 100%; border-collapse: collapse; font-size: 13px; }
+    .matrix th, .matrix td {
+      padding: 11px 12px;
+      text-align: left;
+      vertical-align: top;
+      border-bottom: 1px solid var(--line);
+    }
+    .matrix th {
+      color: var(--muted);
+      font: 10px var(--mono);
+      letter-spacing: .07em;
+      text-transform: uppercase;
+    }
+    .yes { color: var(--success); font-weight: 650; }
+    .no { color: var(--muted); }
+    .conditional { color: var(--warning); font-weight: 600; }
+    .prs { position: relative; }
+    .pr {
+      display: grid;
+      grid-template-columns: 72px minmax(0, 1fr);
+      gap: 20px;
+      padding: 0 0 34px;
+    }
+    .pr-mark { position: relative; color: var(--accent); font: 11px var(--mono); }
+    .pr-mark::after {
+      content: "";
+      position: absolute;
+      top: 5px;
+      right: 0;
+      width: 10px;
+      height: 10px;
+      border: 2px solid var(--accent);
+      border-radius: 50%;
+      background: var(--bg);
+    }
+    .pr:not(:last-child) .pr-mark::before {
+      content: "";
+      position: absolute;
+      top: 16px;
+      right: 5px;
+      bottom: -34px;
+      width: 1px;
+      background: var(--line);
+    }
+    .pr p { max-width: 780px; margin: 0 0 10px; color: var(--muted); }
+    .tags { display: flex; flex-wrap: wrap; gap: 6px; }
+    .tag { padding: 3px 7px; border: 1px solid var(--line); border-radius: 5px; color: var(--muted); }
+    details { border-top: 1px solid var(--line); }
+    details:last-child { border-bottom: 1px solid var(--line); }
+    summary {
+      display: flex;
+      align-items: baseline;
+      gap: 12px;
+      padding: 13px 2px;
+      cursor: pointer;
+      list-style: none;
+    }
+    summary::-webkit-details-marker { display: none; }
+    summary::before { content: "+"; color: var(--accent); font: 12px var(--mono); }
+    details[open] summary::before { content: "−"; }
+    summary code { color: var(--muted); font-size: 11px; }
+    details .detail { padding: 0 2px 16px 24px; color: var(--muted); font-size: 13px; }
+    .delete { color: var(--danger); }
+    .risks { border-top: 1px solid var(--line); }
+    .risk { display: grid; grid-template-columns: 130px 1fr 1fr; border-bottom: 1px solid var(--line); }
+    .risk > div { padding: 13px; }
+    .risk > div + div { border-left: 1px solid var(--line); }
+    .level { font: 10px var(--mono); text-transform: uppercase; }
+    .level.high { color: var(--danger); }
+    .level.med { color: var(--warning); }
+    .checks { display: grid; grid-template-columns: repeat(2, 1fr); gap: 10px 28px; }
+    .check { position: relative; padding: 9px 0 9px 22px; border-bottom: 1px solid var(--line); font-size: 13px; }
+    .check::before { content: "✓"; position: absolute; left: 0; color: var(--success); font-weight: 700; }
+    .non-goals { display: grid; grid-template-columns: repeat(2, 1fr); gap: 0 28px; }
+    .non-goal { padding: 10px 0; border-top: 1px solid var(--line); color: var(--muted); font-size: 13px; }
+    @media (max-width: 950px) {
+      .shell { grid-template-columns: 1fr; }
+      nav { display: none; }
+      .cli-grid, .yaml-grid { grid-template-columns: 1fr; }
+    }
+    @media (max-width: 700px) {
+      .page { padding-left: 18px; padding-right: 18px; }
+      .mast { padding-top: 92px; }
+      .stats { grid-template-columns: 1fr 1fr; }
+      .stat:nth-child(2) { border-right: 0; }
+      .stat:nth-child(-n+2) { border-bottom: 1px solid var(--line); }
+      .rule, .contract { grid-template-columns: 1fr; gap: 3px; }
+      .contract > div:first-child { padding-bottom: 0; border-bottom: 0; }
+      .risk { grid-template-columns: 1fr; }
+      .risk > div + div { border-left: 0; border-top: 1px dashed var(--line); }
+      .checks, .non-goals { grid-template-columns: 1fr; }
+      .pr { grid-template-columns: 56px 1fr; }
+      .diagram::before {
+        content: "Swipe to explore →";
+        display: block;
+        margin-bottom: 10px;
+        color: var(--muted);
+        font: 10px var(--mono);
+        letter-spacing: .06em;
+        text-transform: uppercase;
+      }
+      .diagram svg { min-width: 680px; }
+    }
+    @media (prefers-reduced-motion: reduce) { html { scroll-behavior: auto; } }
+  </style>
+</head>
+<body>
+  <svg aria-hidden="true" width="0" height="0" style="position:absolute">
+    <defs>
+      <marker id="plan-arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0 0L10 5L0 10z" fill="#707781"/></marker>
+      <marker id="plan-arrow-accent" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0 0L10 5L0 10z" fill="#718ba4"/></marker>
+      <marker id="plan-arrow-good" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0 0L10 5L0 10z" fill="#679075"/></marker>
+    </defs>
+  </svg>
+  <div class="page">
+    <header class="mast">
+      <button class="theme" id="theme" aria-label="Toggle color theme" title="Toggle color theme">◐</button>
+      <div class="eyebrow">Scope VCS · implementation plan · self-hosted runs</div>
+      <h1>Commit here. Execute on the machine that fits.</h1>
+      <p class="lede">
+        Add repository-defined workflows and a durable remote-runner protocol to Scope. The same binary
+        remains a normal CLI on a developer machine and becomes a persistent execution daemon on any Linux
+        box. Scope coordinates source, dispatch, logs, and status; users supply the compute.
+      </p>
+      <div class="decision">
+        <strong>Recommended V1:</strong> Linux/amd64 + Docker, one persistent Scope daemon per runner machine,
+        repository allowlists, outbound HTTPS only, manual and push triggers, one disposable container per
+        job, and small sequential workflows stored in <code>.scope/runs/*.yml</code>. No hosted compute,
+        secrets, shared caches, marketplace actions, or automatic execution of untrusted public contributions.
+      </div>
+    </header>
+
+    <div class="stats">
+      <div class="stat"><strong>1 binary</strong><span>CLI and runner daemon</span></div>
+      <div class="stat"><strong>2 triggers</strong><span>manual and push</span></div>
+      <div class="stat"><strong>443 outbound</strong><span>no inbound runner ports</span></div>
+      <div class="stat"><strong>0 hosted jobs</strong><span>users supply compute</span></div>
+    </div>
+
+    <div class="shell">
+      <nav aria-label="Plan sections">
+        <div class="nav-label">On this page</div>
+        <a href="#decisions">V1 decisions</a>
+        <a href="#topology">System topology</a>
+        <a href="#repository">Repository contract</a>
+        <a href="#registration">Runner registration</a>
+        <a href="#manual">Manual execution</a>
+        <a href="#push">Push triggers</a>
+        <a href="#source">Source and privacy</a>
+        <a href="#domain">Domain model</a>
+        <a href="#protocol">Protocol and credentials</a>
+        <a href="#stages">Staged delivery</a>
+        <a href="#files">File ownership</a>
+        <a href="#verification">Verification</a>
+        <a href="#risks">Risks</a>
+        <a href="#not-building">Not in V1</a>
+      </nav>
+
+      <main>
+        <section id="decisions">
+          <div class="section-head"><span class="n">01</span><h2>V1 product decisions</h2></div>
+          <p class="intro">These choices keep setup small without weakening the boundaries that protect Scope infrastructure and repository privacy.</p>
+          <div class="diagram" tabindex="0" aria-label="Scrollable V1 product flow">
+            <svg viewBox="0 0 980 205" role="img" aria-labelledby="overview-title overview-desc">
+              <title id="overview-title">Scope Runs V1 at a glance</title>
+              <desc id="overview-desc">Install the Scope binary once on a Linux box, commit a workflow, trigger it manually or by pushing main, execute it in a fresh container, and return logs and status through Scope.</desc>
+              <rect class="node good" x="20" y="48" width="166" height="88" rx="10"/>
+              <text x="103" y="79" text-anchor="middle" font-size="12" font-weight="700">INSTALL ONCE</text>
+              <text class="sub" x="103" y="104" text-anchor="middle">Linux + Docker</text>
+              <text class="sub" x="103" y="122" text-anchor="middle">daemon survives reboot</text>
+              <rect class="node" x="214" y="48" width="166" height="88" rx="10"/>
+              <text x="297" y="79" text-anchor="middle" font-size="12" font-weight="700">COMMIT YAML</text>
+              <text class="sub" x="297" y="104" text-anchor="middle">.scope/runs/*.yml</text>
+              <rect class="node active" x="408" y="48" width="166" height="88" rx="10"/>
+              <text x="491" y="79" text-anchor="middle" font-size="12" font-weight="700">TRIGGER</text>
+              <text class="sub" x="491" y="104" text-anchor="middle">scope run or push main</text>
+              <rect class="node warn" x="602" y="48" width="166" height="88" rx="10"/>
+              <text x="685" y="79" text-anchor="middle" font-size="12" font-weight="700">EXECUTE REMOTELY</text>
+              <text class="sub" x="685" y="104" text-anchor="middle">fresh Docker container</text>
+              <rect class="node good" x="796" y="48" width="166" height="88" rx="10"/>
+              <text x="879" y="79" text-anchor="middle" font-size="12" font-weight="700">REPORT</text>
+              <text class="sub" x="879" y="104" text-anchor="middle">logs + commit status</text>
+              <path class="edge" d="M186 92L214 92"/><path class="edge" d="M380 92L408 92"/>
+              <path class="edge edge-accent" d="M574 92L602 92"/><path class="edge edge-good" d="M768 92L796 92"/>
+              <text class="sub" x="491" y="178" text-anchor="middle">One binary · outbound HTTPS only · Scope supplies coordination, not compute</text>
+            </svg>
+          </div>
+          <div class="rule"><b>Execution target</b><p>A runner is a named remote machine registered with Scope. Manual runs can select one with <code>--runner linux-box</code>; automatic runs use <code>runs-on</code> from repository YAML.</p></div>
+          <div class="rule"><b>Installation</b><p>The existing <code>scope</code> binary installs a user-level systemd service. Registration happens once; the daemon reconnects after reboots and accepts jobs indefinitely.</p></div>
+          <div class="rule"><b>Supported host</b><p>Linux/amd64 with Docker. The daemon persists, but every job receives a fresh container and workspace that are destroyed on completion.</p></div>
+          <div class="rule"><b>Runner scope</b><p>A machine identity may be attached to several repositories through an explicit allowlist. Each attachment is independently revocable.</p></div>
+          <div class="rule"><b>Workflow language</b><p>One YAML file defines one container job with sequential named steps, timeout, trigger, image, and runner selection. No general expression engine or action marketplace.</p></div>
+          <div class="rule"><b>Source behavior</b><p>Every run executes an exact committed revision. A manual run may upload an unpublished, immutable snapshot without moving <code>main</code>; dirty working-tree changes never run implicitly.</p></div>
+          <div class="rule"><b>Trust boundary</b><p>V1 is maintainer-triggered and secretless. Public-contribution automation waits for explicit approval and a stronger untrusted execution profile in a later phase.</p></div>
+          <div class="rule"><b>Network</b><p>Jobs receive normal outbound internet access for dependency installation, but no Docker socket, privileged mode, host filesystem, database credential, object-store key, or reusable repository token.</p></div>
+          <div class="rule"><b>Image pinning</b><p>V1 accepts public image tags for easy setup. The first claimant resolves and compare-and-set pins the registry digest before execution; every later attempt reuses that digest.</p></div>
+          <div class="rule"><b>Retry</b><p>A lease lost before execution may requeue automatically. Once a container starts, runner loss produces a terminal Lost attempt and requires an explicit rerun.</p></div>
+        </section>
+
+        <section id="topology">
+          <div class="section-head"><span class="n">02</span><h2>Scope is the rendezvous point</h2></div>
+          <p class="intro">Developer machines and runner machines never need a direct route. Both independently connect to Scope over HTTPS.</p>
+          <div class="diagram" tabindex="0" aria-label="Scrollable remote execution topology">
+            <svg viewBox="0 0 980 410" role="img" aria-labelledby="topology-title topology-desc">
+              <title id="topology-title">Remote execution topology</title>
+              <desc id="topology-desc">The developer CLI and Linux runner independently connect to the Scope control plane over HTTPS. Scope stores control state and source objects but never executes repository scripts.</desc>
+              <rect class="node soft" x="28" y="44" width="220" height="132" rx="10"/>
+              <text x="138" y="79" text-anchor="middle" font-size="14" font-weight="700">DEVELOPER / AGENT</text>
+              <text class="sub" x="138" y="105" text-anchor="middle">scope run test</text>
+              <text class="sub" x="138" y="124" text-anchor="middle">scope push</text>
+              <text class="sub" x="138" y="143" text-anchor="middle">watch logs and status</text>
+
+              <rect class="node active" x="351" y="25" width="278" height="170" rx="12"/>
+              <text x="490" y="62" text-anchor="middle" font-size="15" font-weight="700">SCOPE CONTROL PLANE</text>
+              <text class="sub" x="490" y="91" text-anchor="middle">authorize · resolve · dispatch</text>
+              <text class="sub" x="490" y="112" text-anchor="middle">runs · attempts · leases</text>
+              <text class="sub" x="490" y="133" text-anchor="middle">logs · status · cancellation</text>
+              <text class="sub" x="490" y="154" text-anchor="middle">never executes repository scripts</text>
+
+              <rect class="node" x="732" y="44" width="220" height="132" rx="10"/>
+              <text x="842" y="79" text-anchor="middle" font-size="14" font-weight="700">LINUX BOX</text>
+              <text class="sub" x="842" y="105" text-anchor="middle">scope runner daemon</text>
+              <text class="sub" x="842" y="124" text-anchor="middle">Docker job container</text>
+              <text class="sub" x="842" y="143" text-anchor="middle">fresh workspace per attempt</text>
+
+              <path class="edge edge-accent" d="M248 94L351 94"/>
+              <path class="edge edge-accent" d="M351 134L248 134"/>
+              <path class="edge edge-good" d="M732 94L629 94"/>
+              <path class="edge edge-good" d="M629 134L732 134"/>
+              <text class="sub" x="299" y="78" text-anchor="middle">create run</text>
+              <text class="sub" x="299" y="157" text-anchor="middle">live logs</text>
+              <text class="sub" x="681" y="78" text-anchor="middle">long poll</text>
+              <text class="sub" x="681" y="157" text-anchor="middle">job + token</text>
+
+              <rect class="node" x="287" y="270" width="186" height="84" rx="9"/>
+              <text x="380" y="303" text-anchor="middle" font-size="13" font-weight="700">POSTGRES</text>
+              <text class="sub" x="380" y="327" text-anchor="middle">control-plane state</text>
+              <rect class="node" x="507" y="270" width="186" height="84" rx="9"/>
+              <text x="600" y="303" text-anchor="middle" font-size="13" font-weight="700">OBJECT STORE</text>
+              <text class="sub" x="600" y="327" text-anchor="middle">snapshots and logs</text>
+              <path class="edge" d="M447 195L395 270"/>
+              <path class="edge" d="M533 195L585 270"/>
+
+              <text class="sub" x="490" y="391" text-anchor="middle">No SSH · no shared filesystem · no inbound runner port · no direct developer-to-runner connection</text>
+            </svg>
+          </div>
+        </section>
+
+        <section id="repository">
+          <div class="section-head"><span class="n">03</span><h2>The repository owns the workflow</h2></div>
+          <p class="intro">Workflow definitions are committed control files. Local CLI metadata moves out of <code>.scope</code> so the directory can become a tracked repository surface.</p>
+          <div class="yaml-grid">
+            <div class="cli">
+              <div class="cli-head">.scope/runs/test.yml</div>
+              <pre><code>name: Test
+
+on:
+  manual: true
+  push:
+    branches:
+      - main
+
+runs-on: any
+
+container:
+  image: rust:1.90
+
+timeout: 20m
+
+steps:
+  - name: Format
+    run: cargo fmt --check
+
+  - name: Test
+    run: cargo test --workspace</code></pre>
+            </div>
+            <div>
+              <div class="rule"><b>Identity</b><p>The path stem is stable: <code>test.yml</code> is invoked as <code>scope run test</code>.</p></div>
+              <div class="rule"><b>Routing</b><p><code>runs-on: any</code> selects an idle attached runner. A concrete name such as <code>linux-box</code> pins automatic runs.</p></div>
+              <div class="rule"><b>Push scope</b><p>V1 accepts only <code>main</code> push triggers because Scope does not yet expose generic branch semantics. Any other branch selector is a validation error.</p></div>
+              <div class="rule"><b>Manual override</b><p><code>scope run test --runner build-vps</code> overrides routing for one invocation without changing Git.</p></div>
+              <div class="rule"><b>Authority</b><p>Scope parses and snapshots YAML. The runner receives a compiled job specification and never decides triggers or authorization.</p></div>
+            </div>
+          </div>
+
+          <h3 style="margin-top:30px">Destructive repository-state reset</h3>
+          <div class="diagram" tabindex="0" aria-label="Scrollable repository state reorganization">
+            <svg viewBox="0 0 920 260" role="img" aria-labelledby="state-title state-desc">
+              <title id="state-title">Repository state reorganization</title>
+              <desc id="state-desc">Local repository configuration moves under the resolved per-worktree Git path while tracked workflow YAML becomes the only allowed public control path under dot-scope.</desc>
+              <rect class="node warn" x="30" y="42" width="300" height="152" rx="10"/>
+              <text x="180" y="76" text-anchor="middle" font-size="14" font-weight="700">BEFORE</text>
+              <text class="sub" x="180" y="105" text-anchor="middle">.scope/repo.json</text>
+              <text class="sub" x="180" y="126" text-anchor="middle">.scope/repo-state.json</text>
+              <text class="sub" x="180" y="155" text-anchor="middle">entire /.scope/ ignored by Git</text>
+
+              <path class="edge edge-accent" d="M330 118L482 118"/>
+              <text class="sub" x="406" y="99" text-anchor="middle">pre-alpha reset</text>
+
+              <rect class="node good" x="482" y="25" width="408" height="186" rx="10"/>
+              <text x="686" y="59" text-anchor="middle" font-size="14" font-weight="700">AFTER</text>
+              <text x="525" y="94" font-size="12" font-weight="700">git rev-parse --git-path scope/</text>
+              <text class="sub" x="525" y="115">per-worktree config mirror + sync base · never committed</text>
+              <text x="525" y="151" font-size="12" font-weight="700">.scope/runs/*.yml</text>
+              <text class="sub" x="525" y="172">tracked · versioned · parsed by Scope</text>
+            </svg>
+          </div>
+          <div class="rule"><b>Precise control policy</b><p>Allow only tracked <code>.scope/runs/{valid-name}.yml|yaml</code>. Keep repository config and workflow control paths private/unpublishable, reject unknown <code>.scope/*</code>, and update import validation, projection, visibility, review-tree, dirty-tree, clone, init, and push tests together.</p></div>
+        </section>
+
+        <section id="registration">
+          <div class="section-head"><span class="n">04</span><h2>One command turns a Linux box into a runner</h2></div>
+          <p class="intro">Registration uses the existing CLI authentication experience, creates a durable machine identity, verifies Docker, and installs the daemon.</p>
+          <div class="cli-grid">
+            <div class="cli">
+              <div class="cli-head">Linux box · first registration</div>
+              <pre><span class="prompt">$</span> scope runner install \
+    --name linux-box \
+    --repo adam/my-repo
+
+<span class="out">Open https://scope.dev/cli-login
+Enter code 8K4M-P2DX</span>
+
+<span class="ok">✓ Account authorized
+✓ Runner secret stored with mode 0600
+✓ Docker available
+✓ Test container completed
+✓ systemd service installed
+✓ linux-box is online</span></pre>
+            </div>
+            <div class="cli">
+              <div class="cli-head">Ongoing machine management</div>
+              <pre><span class="prompt">$</span> scope runner status
+<span class="ok">linux-box · online · idle</span>
+
+<span class="prompt">$</span> scope runner add-repo adam/other-repo
+<span class="ok">✓ Repository attached</span>
+
+<span class="prompt">$</span> scope runner doctor
+<span class="ok">✓ API · Docker · disk · cgroups</span>
+
+<span class="prompt">$</span> scope runner remove-repo adam/my-repo
+<span class="ok">✓ Repository access revoked</span></pre>
+            </div>
+          </div>
+          <div class="diagram" tabindex="0" aria-label="Scrollable runner registration sequence" style="margin-top:22px">
+            <svg viewBox="0 0 1000 340" role="img" aria-labelledby="registration-title registration-desc">
+              <title id="registration-title">One-time runner installation and durable reconnection</title>
+              <desc id="registration-desc">A maintainer completes device login, receives a runner secret, validates Docker and service prerequisites, installs and starts systemd, and the daemon reconnects after reboot.</desc>
+              <rect class="node soft" x="20" y="82" width="160" height="82" rx="9"/>
+              <text x="100" y="113" text-anchor="middle" font-size="12" font-weight="700">DEVICE LOGIN</text>
+              <text class="sub" x="100" y="137" text-anchor="middle">maintainer authorizes once</text>
+              <rect class="node" x="210" y="82" width="160" height="82" rx="9"/>
+              <text x="290" y="113" text-anchor="middle" font-size="12" font-weight="700">RUNNER SECRET</text>
+              <text class="sub" x="290" y="137" text-anchor="middle">random · local mode 0600</text>
+              <rect class="node" x="400" y="82" width="160" height="82" rx="9"/>
+              <text x="480" y="113" text-anchor="middle" font-size="12" font-weight="700">DOCTOR</text>
+              <text class="sub" x="480" y="137" text-anchor="middle">Docker · disk · cgroups</text>
+              <rect class="node" x="590" y="82" width="160" height="82" rx="9"/>
+              <text x="670" y="113" text-anchor="middle" font-size="12" font-weight="700">INSTALL + START</text>
+              <text class="sub" x="670" y="137" text-anchor="middle">systemd user service</text>
+              <rect class="node good" x="780" y="82" width="190" height="82" rx="9"/>
+              <text x="875" y="113" text-anchor="middle" font-size="12" font-weight="700">DAEMON ONLINE</text>
+              <text class="sub" x="875" y="137" text-anchor="middle">outbound long poll</text>
+              <path class="edge" d="M180 123L210 123"/><path class="edge" d="M370 123L400 123"/>
+              <path class="edge" d="M560 123L590 123"/><path class="edge edge-good" d="M750 123L780 123"/>
+              <path class="edge edge-good dash" d="M875 164C875 220 670 220 670 164"/>
+              <text class="sub" x="772" y="235" text-anchor="middle">reboot / network loss → automatic reconnect</text>
+              <path class="edge edge-accent" d="M875 164C875 292 290 292 290 164"/>
+              <text class="sub" x="580" y="307" text-anchor="middle">scope runner add-repo attaches another repository without reinstalling</text>
+              <text class="sub" x="500" y="332" text-anchor="middle">Installer verifies lingering; otherwise it prints the exact loginctl remedy before claiming reboot persistence.</text>
+            </svg>
+          </div>
+        </section>
+
+        <section id="manual">
+          <div class="section-head"><span class="n">05</span><h2>Manual run: local intent, remote execution</h2></div>
+          <p class="intro">An agent can execute a committed work-in-progress revision remotely without pushing it onto <code>main</code>.</p>
+          <div class="cli">
+            <div class="cli-head">Developer or agent machine</div>
+            <pre><span class="prompt">$</span> scope run test --runner linux-box
+
+<span class="out">Uploading unpublished snapshot for 4f837e1
+Queued Test on linux-box</span>
+
+<span class="ok">✓ Checkout</span>       <span class="out">1.2s</span>
+<span class="ok">✓ Format</span>         <span class="out">2.1s</span>
+<span class="ok">✓ Test</span>          <span class="out">14.3s</span>
+
+<span class="ok">Run succeeded · 4f837e1 · linux-box</span></pre>
+          </div>
+          <div class="diagram" tabindex="0" aria-label="Scrollable manual remote run sequence" style="margin-top:22px">
+            <svg viewBox="0 0 1000 690" role="img" aria-labelledby="manual-title manual-desc">
+              <title id="manual-title">Manual remote run sequence</title>
+              <desc id="manual-desc">The CLI requests a run, conditionally uploads an unknown commit, Scope dispatches a compiled job, the runner downloads and checks out the pinned source, executes a disposable container, streams logs, and cleans up.</desc>
+              <text x="115" y="29" text-anchor="middle" font-size="12" font-weight="700">CLI</text>
+              <text x="365" y="29" text-anchor="middle" font-size="12" font-weight="700">SCOPE</text>
+              <text x="625" y="29" text-anchor="middle" font-size="12" font-weight="700">LINUX BOX</text>
+              <text x="880" y="29" text-anchor="middle" font-size="12" font-weight="700">CONTAINER</text>
+              <path class="lane" d="M115 44L115 670"/><path class="lane" d="M365 44L365 670"/>
+              <path class="lane" d="M625 44L625 670"/><path class="lane" d="M880 44L880 670"/>
+
+              <path class="edge edge-accent" d="M115 72L365 72"/><text class="sub" x="240" y="61" text-anchor="middle">create run: test + commit + linux-box</text>
+              <path class="edge dash" d="M365 112L115 112"/><text class="sub" x="240" y="101" text-anchor="middle">only if commit is unknown: request snapshot</text>
+              <path class="edge edge-accent dash" d="M115 152L365 152"/><text class="sub" x="240" y="141" text-anchor="middle">private immutable Git bundle</text>
+              <rect class="node active" x="275" y="176" width="180" height="54" rx="8"/>
+              <text x="365" y="198" text-anchor="middle" font-size="11" font-weight="700">COMPILE JOB</text>
+              <text class="sub" x="365" y="217" text-anchor="middle">pin source + workflow</text>
+
+              <path class="edge edge-good" d="M625 260L365 260"/><text class="sub" x="495" y="249" text-anchor="middle">long poll</text>
+              <path class="edge edge-good" d="M365 300L625 300"/><text class="sub" x="495" y="289" text-anchor="middle">lease + attempt token + job spec</text>
+              <path class="edge" d="M625 340L365 340"/><text class="sub" x="495" y="329" text-anchor="middle">GET exact pinned source</text>
+              <path class="edge edge-accent" d="M365 380L625 380"/><text class="sub" x="495" y="369" text-anchor="middle">bounded bundle + verified digest</text>
+              <rect class="node" x="535" y="398" width="180" height="52" rx="8"/>
+              <text x="625" y="420" text-anchor="middle" font-size="11" font-weight="700">CHECKOUT WORKSPACE</text>
+              <text class="sub" x="625" y="438" text-anchor="middle">detached exact OID</text>
+              <path class="edge" d="M625 472L880 472"/><text class="sub" x="752" y="461" text-anchor="middle">create bounded container</text>
+              <path class="edge edge-good" d="M880 512L625 512"/><text class="sub" x="752" y="501" text-anchor="middle">step logs + exit status</text>
+              <path class="edge edge-accent" d="M625 552L365 552"/><text class="sub" x="495" y="541" text-anchor="middle">append logs + complete attempt</text>
+              <path class="edge edge-accent" d="M365 592L115 592"/><text class="sub" x="240" y="581" text-anchor="middle">live log cursor + status</text>
+              <path class="edge" d="M625 632L880 632"/><text class="sub" x="752" y="621" text-anchor="middle">destroy container + workspace</text>
+              <path class="edge edge-good" d="M365 668L115 668"/><text class="sub" x="240" y="657" text-anchor="middle">terminal result</text>
+            </svg>
+          </div>
+          <p class="caption">Ctrl-C detaches from the log stream; it does not silently kill remote work. Cancellation is explicit with <code>scope run cancel &lt;run-id&gt;</code>.</p>
+        </section>
+
+        <section id="push">
+          <div class="section-head"><span class="n">06</span><h2>Push trigger: server-authoritative dispatch</h2></div>
+          <p class="intro">The server evaluates committed workflow definitions after the repository head is accepted. The pushing client does not decide which automatic jobs exist.</p>
+          <div class="diagram" tabindex="0" aria-label="Scrollable push-triggered run sequence">
+            <svg viewBox="0 0 1000 430" role="img" aria-labelledby="push-title push-desc">
+              <title id="push-title">Push-triggered run sequence</title>
+              <desc id="push-desc">After a main update is accepted, Scope evaluates the workflow from that exact accepted head and queues an idempotent run for an eligible runner.</desc>
+              <rect class="node soft" x="24" y="57" width="170" height="82" rx="9"/>
+              <text x="109" y="88" text-anchor="middle" font-size="12" font-weight="700">SCOPE PUSH</text>
+              <text class="sub" x="109" y="112" text-anchor="middle">commit + ref update</text>
+              <rect class="node active" x="252" y="57" width="210" height="82" rx="9"/>
+              <text x="357" y="88" text-anchor="middle" font-size="12" font-weight="700">ACCEPT NEW HEAD</text>
+              <text class="sub" x="357" y="112" text-anchor="middle">pin change_version + manifest + OID</text>
+              <rect class="node" x="520" y="57" width="210" height="82" rx="9"/>
+              <text x="625" y="88" text-anchor="middle" font-size="12" font-weight="700">EVALUATE YAML</text>
+              <text class="sub" x="625" y="112" text-anchor="middle">read exact accepted head · main only</text>
+              <rect class="node good" x="788" y="57" width="188" height="82" rx="9"/>
+              <text x="882" y="88" text-anchor="middle" font-size="12" font-weight="700">QUEUE RUN</text>
+              <text class="sub" x="882" y="112" text-anchor="middle">idempotent per commit</text>
+              <path class="edge" d="M194 98L252 98"/><path class="edge" d="M462 98L520 98"/><path class="edge edge-good" d="M730 98L788 98"/>
+
+              <path class="edge edge-good" d="M882 139L882 226"/>
+              <rect class="node good" x="760" y="226" width="244" height="76" rx="9"/>
+              <text x="882" y="255" text-anchor="middle" font-size="12" font-weight="700">RUNNER CLAIMS</text>
+              <text class="sub" x="882" y="279" text-anchor="middle">runs-on name or any · wait offline</text>
+              <path class="edge edge-accent" d="M760 264L598 264"/>
+              <rect class="node active" x="394" y="226" width="204" height="76" rx="9"/>
+              <text x="496" y="255" text-anchor="middle" font-size="12" font-weight="700">EXECUTE + STREAM</text>
+              <text class="sub" x="496" y="279" text-anchor="middle">same path as manual run</text>
+              <path class="edge edge-accent" d="M394 264L232 264"/>
+              <rect class="node" x="28" y="226" width="204" height="76" rx="9"/>
+              <text x="130" y="255" text-anchor="middle" font-size="12" font-weight="700">COMMIT STATUS</text>
+              <text class="sub" x="130" y="279" text-anchor="middle">queued → running → final</text>
+
+              <rect class="node warn" x="394" y="348" width="336" height="54" rx="9"/>
+              <text x="562" y="371" text-anchor="middle" font-size="11" font-weight="700">INVALID YAML DOES NOT REJECT THE PUSH</text>
+              <text class="sub" x="562" y="389" text-anchor="middle">publish a configuration-error status instead</text>
+              <path class="edge dash" d="M625 139L625 348"/>
+            </svg>
+          </div>
+          <p class="caption"><code>scope push</code> returns after Git acceptance with the pinned change version. <code>scope push --wait</code> then queries trigger evaluation by that identity and follows the resulting runs; receive-pack does not pretend async run IDs already exist.</p>
+        </section>
+
+        <section id="source">
+          <div class="section-head"><span class="n">07</span><h2>A run pins content, audience, and workflow</h2></div>
+          <p class="intro">A lone SHA is insufficient in Scope because the public and private repository views can materialize different Git histories.</p>
+          <div class="diagram" tabindex="0" aria-label="Scrollable privacy-aware source resolution">
+            <svg viewBox="0 0 960 470" role="img" aria-labelledby="source-title source-desc">
+              <title id="source-title">Privacy-aware source snapshot resolution</title>
+              <desc id="source-desc">An accepted Scope revision is resolved as of a pinned manifest and audience into an immutable snapshot. An unpublished manual commit follows a separate private-only ephemeral snapshot path.</desc>
+              <rect class="node active" x="35" y="65" width="230" height="112" rx="10"/>
+              <text x="150" y="96" text-anchor="middle" font-size="13" font-weight="700">ACCEPTED SCOPE REVISION</text>
+              <text class="sub" x="150" y="120" text-anchor="middle">repo + audience + logical/projected id</text>
+              <text class="sub" x="150" y="140" text-anchor="middle">pinned manifest ref + target Git OID</text>
+              <text class="sub" x="150" y="160" text-anchor="middle">as-of selected revision, never current HEAD</text>
+
+              <rect class="node warn" x="35" y="266" width="230" height="112" rx="10"/>
+              <text x="150" y="297" text-anchor="middle" font-size="13" font-weight="700">EPHEMERAL GIT SNAPSHOT</text>
+              <text class="sub" x="150" y="321" text-anchor="middle">uploader + repo + local head OID</text>
+              <text class="sub" x="150" y="341" text-anchor="middle">private-only bundle ref + digest</text>
+              <text class="sub" x="150" y="361" text-anchor="middle">no Scope logical revision yet</text>
+
+              <rect class="node" x="338" y="59" width="230" height="92" rx="10"/>
+              <text x="453" y="92" text-anchor="middle" font-size="13" font-weight="700">PRIVATE VIEW</text>
+              <text class="sub" x="453" y="116" text-anchor="middle">pin raw Git manifest</text>
+              <text class="sub" x="453" y="135" text-anchor="middle">full authorized source</text>
+              <rect class="node" x="338" y="215" width="230" height="92" rx="10"/>
+              <text x="453" y="248" text-anchor="middle" font-size="13" font-weight="700">PUBLIC VIEW</text>
+              <text class="sub" x="453" y="272" text-anchor="middle">truncate projection at selected point</text>
+              <text class="sub" x="453" y="291" text-anchor="middle">no later or private files/history</text>
+              <path class="edge" d="M265 121L338 105"/>
+              <path class="edge" d="M265 137C304 181 304 261 338 261"/>
+
+              <rect class="node good" x="695" y="108" width="230" height="146" rx="11"/>
+              <text x="810" y="142" text-anchor="middle" font-size="13" font-weight="700">IMMUTABLE SNAPSHOT</text>
+              <text class="sub" x="810" y="171" text-anchor="middle">materialized Git OID</text>
+              <text class="sub" x="810" y="192" text-anchor="middle">content-addressed object ref</text>
+              <text class="sub" x="810" y="213" text-anchor="middle">source digest</text>
+              <text class="sub" x="810" y="234" text-anchor="middle">compiled workflow digest</text>
+              <path class="edge edge-good" d="M568 105L695 146"/>
+              <path class="edge edge-good" d="M568 261L695 216"/>
+              <path class="edge edge-accent dash" d="M265 322C470 410 630 330 695 235"/>
+
+              <text class="sub" x="480" y="442" text-anchor="middle">Later pushes, visibility rewrites, image-tag movement, or workflow edits cannot mutate an existing run.</text>
+            </svg>
+          </div>
+          <div class="rule"><b>Manual default</b><p>If Scope already knows the commit, resolve the selected accepted revision. Otherwise upload an <code>EphemeralGitSnapshot</code> that is private-only in V1. Resolve workflow YAML from the same exact source.</p></div>
+          <div class="rule"><b>Push default</b><p>The acceptance transaction/outbox carries <code>change_version</code>, manifest ref, and head OID. Trigger evaluation reads YAML and source from that pinned head—not whatever <code>main</code> points to when the async worker wakes up.</p></div>
+          <div class="rule"><b>Historical cutoff</b><p>Materialize the currently authorized audience projection only through the selected logical/projected point and target OID. A private-only logical revision may have no public selector and must fail closed.</p></div>
+          <div class="rule"><b>Public contributions</b><p>Do not auto-run in V1. The future model uses a trusted base workflow, a public target snapshot, explicit maintainer approval, no secrets, and a separate untrusted runner policy.</p></div>
+        </section>
+
+        <section id="domain">
+          <div class="section-head"><span class="n">08</span><h2>Durable domain model</h2></div>
+          <p class="intro">Domain behavior owns allowed transitions and required side effects. HTTP handlers, the CLI, scheduler, and runner protocol remain delivery mechanisms.</p>
+          <div class="diagram" tabindex="0" aria-label="Scrollable domain model table">
+            <table class="matrix">
+              <thead><tr><th>Aggregate or entity</th><th>Owns</th><th>Key invariants</th></tr></thead>
+              <tbody>
+                <tr><td><strong>Workflow</strong></td><td>Identity only: repository + stable tracked path</td><td>Git is the source of truth; there is no mutable “current revision” column</td></tr>
+                <tr><td><strong>Workflow revision</strong></td><td>Deduplicated normalized YAML, trigger, routing, steps, limits</td><td>Compiled from one pinned source and immutable; run always points to one revision</td></tr>
+                <tr><td><strong>Run</strong></td><td>Trigger, requester, source snapshot, workflow revision, desired runner, result</td><td>One idempotent push run per repo + commit + workflow + trigger</td></tr>
+                <tr><td><strong>Attempt</strong></td><td>Claim, lease, runner, heartbeat, timestamps, exit, log reference</td><td>One active attempt per run; stale completion cannot overwrite current attempt</td></tr>
+                <tr><td><strong>Runner</strong></td><td>Stable machine identity, hashed bearer secret, capabilities, version, enabled state</td><td>Raw secret stays on machine with mode 0600 and supports rotation/revocation</td></tr>
+                <tr><td><strong>Runner grant</strong></td><td>Explicit repository attachment and display name</td><td>Name unique inside a repository; only maintainers may attach or revoke</td></tr>
+              </tbody>
+            </table>
+          </div>
+
+          <h3 style="margin-top:30px">Run and attempt lifecycle</h3>
+          <div class="diagram" tabindex="0" aria-label="Scrollable run and attempt lifecycle">
+            <svg viewBox="0 0 960 430" role="img" aria-labelledby="lifecycle-title lifecycle-desc">
+              <title id="lifecycle-title">Run and attempt lifecycle</title>
+              <desc id="lifecycle-desc">Queued work can be canceled immediately, leased work may safely requeue before starting, running work ends in success, failure, cancellation acknowledgement, or loss, and terminal work may be explicitly rerun as a new attempt.</desc>
+              <rect class="node active" x="34" y="125" width="150" height="82" rx="10"/>
+              <text x="109" y="158" text-anchor="middle" font-size="13" font-weight="700">QUEUED</text>
+              <text class="sub" x="109" y="182" text-anchor="middle">runner may be offline</text>
+              <rect class="node" x="248" y="125" width="150" height="82" rx="10"/>
+              <text x="323" y="158" text-anchor="middle" font-size="13" font-weight="700">LEASED</text>
+              <text class="sub" x="323" y="182" text-anchor="middle">attempt token issued</text>
+              <rect class="node warn" x="462" y="125" width="150" height="82" rx="10"/>
+              <text x="537" y="158" text-anchor="middle" font-size="13" font-weight="700">RUNNING</text>
+              <text class="sub" x="537" y="182" text-anchor="middle">container started</text>
+              <rect class="node good" x="720" y="31" width="188" height="64" rx="9"/>
+              <text x="814" y="69" text-anchor="middle" font-size="12" font-weight="700">SUCCEEDED</text>
+              <rect class="node bad" x="720" y="111" width="188" height="64" rx="9"/>
+              <text x="814" y="149" text-anchor="middle" font-size="12" font-weight="700">FAILED / TIMED OUT</text>
+              <rect class="node" x="720" y="191" width="188" height="64" rx="9"/>
+              <text x="814" y="229" text-anchor="middle" font-size="12" font-weight="700">CANCELED</text>
+              <rect class="node bad" x="720" y="271" width="188" height="64" rx="9"/>
+              <text x="814" y="309" text-anchor="middle" font-size="12" font-weight="700">LOST</text>
+              <path class="edge" d="M184 166L248 166"/><path class="edge" d="M398 166L462 166"/>
+              <path class="edge edge-good" d="M612 151C660 132 674 63 720 63"/>
+              <path class="edge" d="M612 163C663 163 674 143 720 143"/>
+              <path class="edge" d="M612 178C663 189 674 223 720 223"/>
+              <path class="edge" d="M612 191C663 226 674 303 720 303"/>
+              <path class="edge dash" d="M109 207C109 246 610 246 720 223"/>
+              <text class="sub" x="432" y="239" text-anchor="middle">queued cancel → immediate; leased/running → runner acknowledgement</text>
+              <path class="edge dash" d="M323 207C323 286 109 286 109 207"/>
+              <text class="sub" x="217" y="307" text-anchor="middle">lease lost before start → requeue safely</text>
+              <path class="edge edge-accent dash" d="M814 335L814 394L109 394L109 207"/>
+              <text class="sub" x="520" y="417" text-anchor="middle">explicit rerun creates a new attempt; cancel-requested runner loss remains LOST</text>
+            </svg>
+          </div>
+        </section>
+
+        <section id="protocol">
+          <div class="section-head"><span class="n">09</span><h2>Thin protocol, narrow credentials</h2></div>
+          <p class="intro">The runner never receives database credentials, object-store keys, a human CLI session, or a reusable repository token.</p>
+          <div class="contract">
+            <div class="verb">POST /runners/register</div><div><strong>Exchange one-use device authorization.</strong><p>Creates machine identity, returns a random bearer secret once, stores only its hash, and discards the human session.</p></div>
+            <div class="verb">POST /runners/{id}/poll</div><div><strong>Long-poll for matching work.</strong><p>Authenticated by machine identity; response is empty or contains a lease offer.</p></div>
+            <div class="verb">POST /runs/{id}/claim</div><div><strong>Atomically claim an attempt.</strong><p>Checks runner grant, desired runner, version, active attempt, and lease state; returns compiled job and short-lived attempt token.</p></div>
+            <div class="verb">POST /attempts/{id}/heartbeat</div><div><strong>Extend active lease.</strong><p>Rejects stale attempt number, revoked runner, expired token, or terminal run.</p></div>
+            <div class="verb">GET /attempts/{id}/source</div><div><strong>Download the pinned snapshot.</strong><p>Attempt token can read only the content-addressed source object selected for this run.</p></div>
+            <div class="verb">POST /attempts/{id}/logs</div><div><strong>Append bounded log chunks.</strong><p>Monotonic sequence numbers make retries idempotent; server strips unsafe terminal control sequences.</p></div>
+            <div class="verb">GET /runs/{id}/events</div><div><strong>Watch with a resumable cursor.</strong><p>SSE emits bounded log/status events, supports reconnect from the last sequence, and applies server-side backpressure.</p></div>
+            <div class="verb">POST /attempts/{id}/complete</div><div><strong>CAS terminal result.</strong><p>Only the current active attempt may complete; stale or duplicated completion is harmless.</p></div>
+            <div class="verb">POST /runs/{id}/cancel</div><div><strong>Request cancellation.</strong><p>Queued work cancels immediately. Leased/running work becomes Canceled only after runner acknowledgement; disappearance remains Lost with cancellation requested.</p></div>
+          </div>
+          <div class="rule"><b>Machine credential</b><p>Long-lived, hashed server-side, rotatable, and revocable. May poll, claim eligible jobs, report version, and heartbeat. Cannot fetch repository content on its own.</p></div>
+          <div class="rule"><b>Attempt token</b><p>Short-lived and bound to one runner, run, attempt number, source snapshot, and log/status endpoints.</p></div>
+          <div class="rule"><b>Job specification</b><p>Contains resolved source, ordered steps, timeout, supported resource limits, environment metadata, and no server-side secret material. The first claimant CAS-pins the public image digest before start.</p></div>
+          <div class="rule"><b>Recovery and retention</b><p>Containers use deterministic attempt names. On daemon restart, reattach if still running; otherwise kill any orphan and report Lost. Source/log object references are retained with the run, then garbage-collected by explicit policy.</p></div>
+        </section>
+
+        <section id="stages">
+          <div class="section-head"><span class="n">10</span><h2>Six stacked implementation PRs</h2></div>
+          <p class="intro">Each stage lands a durable boundary, stays green, and avoids half-enabling remote execution before its security and lifecycle pieces exist.</p>
+          <div class="prs">
+            <div class="pr"><div class="pr-mark">PR 1</div><div><h3>Tracked run definitions and destructive .scope reset</h3><p>Move the repository-config mirror and sync base under the resolved per-worktree Git path, replace the broad ignore/reservation with an exact control-path policy, define the V1 YAML schema, parse and normalize <code>.scope/runs/*.yml</code>, and add workflow identity plus immutable compiled revisions. Reject unsupported keys rather than silently guessing.</p><div class="tags"><span class="tag">CLI repo state</span><span class="tag">workflow parser</span><span class="tag">domain contract</span><span class="tag">no compatibility</span></div></div></div>
+            <div class="pr"><div class="pr-mark">PR 2</div><div><h3>Hidden control-plane foundation</h3><p>Add runner/grant/run/attempt persistence, immutable state transitions, repository-scoped naming, atomic claim, heartbeat, cancellation intent, attempt tokens, and dispatch APIs. Nothing user-facing is installed or enabled yet; concurrency tests prove the domain boundary.</p><div class="tags"><span class="tag">runner domain</span><span class="tag">run lifecycle</span><span class="tag">Postgres leases</span><span class="tag">hidden APIs</span></div></div></div>
+            <div class="pr"><div class="pr-mark">PR 3</div><div><h3>Usable manual vertical slice</h3><p>Land one-use registration, bearer-secret storage, grants, doctor, systemd install/reconnect, runner polling, exact checkout, Docker execution, sequential steps, cleanup, and <code>scope run|watch|cancel|retry</code> together. Acceptance gate: a developer machine runs a commit on a distinct Linux box and receives live logs.</p><div class="tags"><span class="tag">one command setup</span><span class="tag">runner daemon</span><span class="tag">manual run</span><span class="tag">E2E gate</span></div></div></div>
+            <div class="pr"><div class="pr-mark">PR 4</div><div><h3>Snapshot, privacy, and failure hardening</h3><p>Split accepted revision identity from private-only ephemeral bundles, enforce historical as-of cutoffs, verify digests, CAS-pin public image tags, add bounded SSE logs, timeout/CPU/memory/PID/log controls, cancellation acknowledgement, daemon restart recovery, retention/GC, and cleanup reconciliation.</p><div class="tags"><span class="tag">Git snapshot</span><span class="tag">privacy tests</span><span class="tag">resource controls</span><span class="tag">recovery</span></div></div></div>
+            <div class="pr"><div class="pr-mark">PR 5</div><div><h3>Pinned main-push triggers and commit checks</h3><p>Carry accepted <code>change_version</code>, manifest ref, and head OID through the outbox; evaluate YAML from that exact head; create idempotent runs; surface invalid-YAML checks without rejecting pushes; and make <code>scope push --wait</code> query trigger evaluation by accepted identity.</p><div class="tags"><span class="tag">pinned push outbox</span><span class="tag">main only</span><span class="tag">commit status</span><span class="tag">race tests</span></div></div></div>
+            <div class="pr"><div class="pr-mark">PR 6</div><div><h3>Operational UI, security review, and deletion closeout</h3><p>Add minimal repository rows for runs and runners, finish offline/lost/cancel UX, test grant rotation/revocation and restart behavior, run the isolation review, remove temporary scaffolding and broad <code>.scope</code> assumptions, and prove the complete two-machine flow.</p><div class="tags"><span class="tag">web UI</span><span class="tag">security</span><span class="tag">delete slop</span><span class="tag">full E2E</span></div></div></div>
+          </div>
+        </section>
+
+        <section id="files">
+          <div class="section-head"><span class="n">11</span><h2>Expected ownership map</h2></div>
+          <p class="intro">Exact paths may change during implementation, but domain ownership and the separation between trusted infrastructure work and untrusted job execution should not.</p>
+          <details open><summary><strong>Run domain</strong><code>crates/scope-domain/src/runs/</code></summary><div class="detail">Own workflow revisions, source snapshot identity, triggers, runner selection, run/attempt states, allowed transitions, cancellation, retry policy, and required side effects. Keep transport, SQL, Docker, and YAML parsing outside the core behavior modules.</div></details>
+          <details><summary><strong>Persistence</strong><code>crates/scope-postgres/src/db/runs/ · runners/ · schema.sql</code></summary><div class="detail">Store workflows, revisions, runners, repository grants, runs, attempts, leases, log object references, and idempotency keys. Claim with row locking and compare-and-set completion. Keep internal projection outbox jobs separate.</div></details>
+          <details><summary><strong>Wire contract</strong><code>crates/scope-api-contract/src/runs.rs · runners.rs · routes.rs</code></summary><div class="detail">Define CLI/user APIs separately from the machine protocol. Export public run/status types to the web client; never expose runner credential or object-store representation.</div></details>
+          <details><summary><strong>API adapters</strong><code>api/src/http/runs.rs · runners.rs · runner_protocol.rs</code></summary><div class="detail">Authenticate, translate, call domain behavior, persist, and stream. Add push-completion outbox creation after authoritative Git state commits. Keep dispatch rules out of handlers.</div></details>
+          <details><summary><strong>Source snapshots</strong><code>crates/scope-git · api/src/git/run_snapshots.rs</code></summary><div class="detail">Materialize immutable private/public Git inputs and generate bounded bundles. Reuse content-addressed object storage without giving runner machines direct bucket credentials.</div></details>
+          <details><summary><strong>CLI and daemon</strong><code>cli/src/runner/ · cli/src/run/ · cli/src/bin/scope.rs</code></summary><div class="detail">Keep one shipped binary with distinct command and daemon modules. Runner code owns Docker orchestration and local service state; CLI code owns prompts, local commit discovery, snapshot upload, and log rendering.</div></details>
+          <details><summary><strong>Control-path reset</strong><code>cli/src/repo_config.rs · scope-domain repo_config/repo_visibility · Git import/review</code></summary><div class="detail">Move the repository-config worktree mirror and sync base under <code>git rev-parse --git-path scope</code>. <span class="delete">Delete the broad <code>/.scope/</code> ignore/reservation and any assumption that all <code>.scope/*</code> paths are interchangeable.</span> Allow only validated tracked run YAML; keep config/control data private; reject unknown paths. Cover projection, import, review tree, dirty filtering, clone, init, push, and run.</div></details>
+          <details><summary><strong>Trusted worker boundary</strong><code>worker/ · crates/scope-git-process</code></summary><div class="detail">Do not add repository job execution to the existing worker, which holds database and object-store authority. The process helper may invoke Git or Docker tooling, but timeout handling alone is not a sandbox.</div></details>
+          <details><summary><strong>Web surfaces</strong><code>web/src/features/runs/ · runners/</code></summary><div class="detail">Add minimal repository rows for current/recent runs, log detail, cancel/rerun, runner name/status/version, and last heartbeat. Avoid dashboard cards; use the existing repository section and row language.</div></details>
+        </section>
+
+        <section id="verification">
+          <div class="section-head"><span class="n">12</span><h2>Verification gates</h2></div>
+          <p class="intro">The feature is complete only when remote execution, privacy, restart recovery, and destructive cleanup are proven end to end.</p>
+          <div class="checks">
+            <div class="check">Runner installation, device auth, systemd start, reboot reconnect, and uninstall are exercised on Linux</div>
+            <div class="check">A developer machine triggers a job on a distinct runner machine with no direct network route</div>
+            <div class="check">Unknown local commits upload immutable snapshots without moving repository main</div>
+            <div class="check">Dirty working-tree changes never enter a run without first becoming part of a commit</div>
+            <div class="check">Public execution snapshots contain no private path, blob, commit, or workflow-only control data</div>
+            <div class="check">Workflow tag resolution records and executes one immutable container image digest</div>
+            <div class="check">Two runners racing to claim the same run produce exactly one active attempt</div>
+            <div class="check">Stale heartbeat, log, and completion calls cannot mutate a newer attempt</div>
+            <div class="check">Runner loss before container start requeues; loss after start becomes terminal Lost</div>
+            <div class="check">Cancellation kills the whole container and leaves no workspace or process behind</div>
+            <div class="check">CPU, memory, PID, timeout, source-size, log-size, and monitored free-space limits fail predictably; hard disk quotas are claimed only when doctor proves driver support</div>
+            <div class="check">Invalid push workflow reports a check error without rolling back the accepted push</div>
+            <div class="check">Revoking a repository grant stops new claims immediately and preserves historical results</div>
+            <div class="check">Runner jobs receive no database URL, object-store key, human session, Docker socket, or host mount</div>
+            <div class="check">Desktop/mobile run views and live logs are visually verified in the running app</div>
+            <div class="check">Every PR passes fmt, clippy, Rust tests, generated-contract checks, web tests, and targeted E2E</div>
+          </div>
+        </section>
+
+        <section id="risks">
+          <div class="section-head"><span class="n">13</span><h2>Risks that change implementation</h2></div>
+          <div class="risks">
+            <div class="risk"><div><span class="level high">High</span></div><div><strong>Infrastructure compromise</strong><br>Repository code escapes and reaches Scope credentials.</div><div>Separate runner process and credential plane; job container receives no infrastructure secret or Docker socket; never execute in the trusted worker.</div></div>
+            <div class="risk"><div><span class="level high">High</span></div><div><strong>Private-source leak</strong><br>Public run receives a raw private commit or reusable clone token.</div><div>First-class audience-bound snapshot identity, content-addressed bundles, attempt-only source token, and negative object/history tests.</div></div>
+            <div class="risk"><div><span class="level high">High</span></div><div><strong>Duplicate side effects</strong><br>Lease recovery reruns a script that already deployed or published.</div><div>Separate Run and Attempt; only pre-start lease loss auto-requeues; started failure becomes Lost and requires explicit user retry.</div></div>
+            <div class="risk"><div><span class="level high">High</span></div><div><strong>Host compromise from public code</strong><br>A contribution exploits the shared container kernel or probes the LAN.</div><div>No automatic public-contribution jobs in V1. Later add approval, untrusted runner profile, network restrictions, and VM/microVM isolation.</div></div>
+            <div class="risk"><div><span class="level med">Medium</span></div><div><strong>Runner version skew</strong><br>Old daemon misinterprets a new job protocol.</div><div>Compiled versioned job schema, minimum-compatible version in poll response, atomic one-command updates, and server refusal before claim.</div></div>
+            <div class="risk"><div><span class="level med">Medium</span></div><div><strong>Disk and log exhaustion</strong><br>A job fills the runner or control plane before timeout.</div><div>Bound source, writable layer, temp space, log chunk, total log, artifact, and retained-run sizes; cleanup reconciliation after restart.</div></div>
+            <div class="risk"><div><span class="level med">Medium</span></div><div><strong>Tracked .scope confusion</strong><br>Existing config-mirror assumptions conflict with versioned run files.</div><div>Destructive move under the resolved per-worktree Git path, exact allow/private/reject policy, and CLI tests for init/clone/push/run.</div></div>
+          </div>
+        </section>
+
+        <section id="not-building">
+          <div class="section-head"><span class="n">14</span><h2>Deliberately not in V1</h2></div>
+          <p class="intro">These are deferred products, not extension points to half-build in the initial implementation.</p>
+          <div class="non-goals">
+            <div class="non-goal">No Scope-hosted runners or paid compute</div>
+            <div class="non-goal">No Windows, macOS, Linux/arm64, Kubernetes, GPU scheduling, or multi-architecture matrices</div>
+            <div class="non-goal">No GitHub Actions compatibility, marketplace actions, reusable workflows, or expression language</div>
+            <div class="non-goal">No workflow DAGs, parallel jobs, service containers, cron, or deployment environments</div>
+            <div class="non-goal">No repository, organization, or environment secrets</div>
+            <div class="non-goal">No shared dependency caches or general build artifacts</div>
+            <div class="non-goal">No automatic public-contribution execution</div>
+            <div class="non-goal">No claim that Docker is a hostile multi-tenant VM boundary</div>
+            <div class="non-goal">No automatic retry after user code has started</div>
+            <div class="non-goal">No runner-to-runner or developer-to-runner networking</div>
+            <div class="non-goal">No backwards-compatible <code>.scope</code> layout or migration shim</div>
+            <div class="non-goal">No speculative runner groups or label scheduler before exact-name and <code>any</code> routing prove insufficient</div>
+          </div>
+        </section>
+      </main>
+    </div>
+  </div>
+  <script>
+    document.getElementById("theme").addEventListener("click", function () {
+      var dark = document.documentElement.classList.toggle("dark");
+      localStorage.setItem("scope-plan-theme", dark ? "dark" : "light");
+    });
+  </script>
+</body>
+</html>

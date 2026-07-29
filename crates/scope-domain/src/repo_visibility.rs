@@ -1,6 +1,7 @@
 use super::{
     policy::{ScopePath, Visibility},
     repo_config::{ConfigVisibility, RepoConfig, RepoConfigVisibilityRule},
+    repo_control::is_private_control_pattern,
 };
 use std::collections::BTreeMap;
 
@@ -167,7 +168,7 @@ pub fn canonicalize_visibility_rules(config: &mut RepoConfig) {
     let base_visibilities = effective_visibilities_by_rule_base(config);
     let mut rules_by_path = BTreeMap::new();
     for rule in &config.visibility.rules {
-        if rule.visibility == ConfigVisibility::Public && is_reserved_scope_pattern(&rule.path) {
+        if rule.visibility == ConfigVisibility::Public && is_private_control_pattern(&rule.path) {
             continue;
         }
         rules_by_path.insert(rule.path.clone(), rule.visibility);
@@ -384,11 +385,6 @@ fn pattern_weight(pattern: &str) -> usize {
 
 fn rule_base_path(pattern: &str) -> &str {
     pattern.strip_suffix("/**").unwrap_or(pattern)
-}
-
-fn is_reserved_scope_pattern(pattern: &str) -> bool {
-    let base = rule_base_path(pattern);
-    base == "/.scope" || base.starts_with("/.scope/")
 }
 
 fn pattern_is_inside_subtree(pattern: &str, folder_path: &str) -> bool {

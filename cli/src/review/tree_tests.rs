@@ -1,11 +1,11 @@
 use super::*;
 
 #[test]
-fn tree_sorts_folders_before_files_and_marks_reserved_scope_paths() {
+fn tree_sorts_folders_before_files_and_marks_workflows_as_private_control_paths() {
     let tree = ReviewTree::from_paths(
         &[
             "README.md".to_string(),
-            ".scope/repo.json".to_string(),
+            ".scope/runs/test.yml".to_string(),
             "src/lib.rs".to_string(),
         ],
         &[],
@@ -19,7 +19,7 @@ fn tree_sorts_folders_before_files_and_marks_reserved_scope_paths() {
         .collect::<Vec<_>>();
     assert_eq!(root_children, vec!["/.scope", "/src", "/README.md"]);
     assert!(tree.nodes().iter().any(|node| {
-        node.path == "/.scope/repo.json" && node.reserved && node.kind == ReviewNodeKind::File
+        node.path == "/.scope/runs/test.yml" && node.reserved && node.kind == ReviewNodeKind::File
     }));
 }
 

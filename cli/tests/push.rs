@@ -1,5 +1,6 @@
 mod support;
 
+use scope_cli::repo_config::repo_config_path;
 use std::fs;
 use support::*;
 
@@ -30,7 +31,8 @@ fn push_creates_missing_config_before_remote_lookup() {
         ["push", "--no-review"],
         "no Scope Git remote found; pass --remote <name> or run scope init",
     );
-    assert!(dir.path().join(".scope/repo.json").is_file());
+    assert!(repo_config_path(dir.path()).unwrap().is_file());
+    assert!(!dir.path().join(".scope").exists());
     assert!(!stderr.contains("Working tree has uncommitted changes."));
 }
 
@@ -38,18 +40,16 @@ fn push_creates_missing_config_before_remote_lookup() {
 fn push_validates_config_before_remote_lookup() {
     let dir = TempDir::new("invalid-config");
     create_repo_with_head(dir.path());
-    fs::create_dir_all(dir.path().join(".scope")).unwrap();
+    let config_path = repo_config_path(dir.path()).unwrap();
+    fs::create_dir_all(config_path.parent().unwrap()).unwrap();
     fs::write(
-        dir.path().join(".scope/repo.json"),
+        config_path,
         r#"{
       "kind": "wrong", "version": 1,
       "visibility": { "default": "private", "rules": [] }
     }"#,
     )
     .unwrap();
-    run_git(dir.path(), ["add", ".scope/repo.json"]);
-    commit_all(dir.path(), "add invalid config");
-
     let stderr = scope_failure(
         dir.path(),
         ["push", "--no-review"],
@@ -85,9 +85,10 @@ fn push_requires_review_tty_before_remote_lookup() {
 fn configured_repo(label: &str) -> TempDir {
     let dir = TempDir::new(label);
     create_repo_with_head(dir.path());
-    fs::create_dir_all(dir.path().join(".scope")).unwrap();
+    let config_path = repo_config_path(dir.path()).unwrap();
+    fs::create_dir_all(config_path.parent().unwrap()).unwrap();
     fs::write(
-        dir.path().join(".scope/repo.json"),
+        config_path,
         r#"{
       "kind": "scope.repo-config", "version": 1,
       "visibility": { "default": "private", "rules": [] },

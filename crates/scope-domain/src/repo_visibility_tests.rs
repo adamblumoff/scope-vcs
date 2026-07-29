@@ -157,11 +157,11 @@ fn canonicalization_preserves_same_base_exact_and_subtree_semantics() {
 fn reserved_scope_paths_cannot_be_toggled_public() {
     let mut config = config(ConfigVisibility::Public, vec![]);
     let target = VisibilityTarget {
-        name: "repo.json",
-        path: "/.scope/repo.json",
+        name: "test.yml",
+        path: "/.scope/runs/test.yml",
         kind: VisibilityNodeKind::File,
         reserved: true,
-        file_paths_under: vec!["/.scope/repo.json"],
+        file_paths_under: vec!["/.scope/runs/test.yml"],
     };
 
     let result = toggle_visibility_target(&mut config, target.clone());

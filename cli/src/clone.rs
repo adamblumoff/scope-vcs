@@ -96,7 +96,9 @@ pub fn default_clone_dir(repo: &str) -> PathBuf {
 mod tests {
     use super::*;
     use crate::{
-        repo_config::{default_scope_repo_config, load_worktree_scope_repo_config},
+        repo_config::{
+            default_scope_repo_config, load_worktree_scope_repo_config, repo_config_path,
+        },
         test_support::TestDir,
     };
     use std::{fs, process::Command};
@@ -123,6 +125,8 @@ mod tests {
         clone_and_configure(&remote_url, "secret", &checkout, &config).unwrap();
 
         assert_eq!(load_worktree_scope_repo_config(&checkout).unwrap(), config);
+        assert!(repo_config_path(&checkout).unwrap().is_file());
+        assert!(!checkout.join(".scope").exists());
         let helper = Command::new("git")
             .current_dir(&checkout)
             .args([

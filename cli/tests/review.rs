@@ -1,5 +1,6 @@
 mod support;
 
+use scope_cli::repo_config::repo_config_path;
 use support::*;
 
 #[test]
@@ -15,7 +16,7 @@ fn review_requires_interactive_terminal_before_creating_config() {
         stderr.contains("scope review requires an interactive terminal"),
         "{stderr}"
     );
-    assert!(!dir.path().join(".scope/repo.json").exists());
+    assert!(!repo_config_path(dir.path()).unwrap().exists());
 }
 
 #[test]

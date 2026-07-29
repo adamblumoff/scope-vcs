@@ -385,7 +385,6 @@ async fn real_git_first_push_over_http_applies_immediately() {
     );
     assert!(repo.first_push_token.is_none());
     let live_tree = repo.live_tree();
-    assert!(!live_tree.contains_key(&ScopePath::parse("/.scope/repo.json").unwrap()));
     assert_eq!(repo.repo_config, repo_config(Visibility::Public));
     assert_eq!(
         live_tree

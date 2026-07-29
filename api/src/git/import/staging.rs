@@ -1,5 +1,4 @@
 use crate::config::DEFAULT_GIT_BRANCH;
-use scope_domain::repo_config::{RepoConfig, is_reserved_config_path};
 use scope_domain::reviewed_updates::{
     ReviewedContentChange, ReviewedUpdateInput, apply_reviewed_update_to_repo,
 };
@@ -9,6 +8,7 @@ use scope_domain::{
     policy::{ScopePath, Visibility},
     repo_actions::reviewed_update_domain_error,
 };
+use scope_domain::{repo_config::RepoConfig, repo_control::is_private_control_path};
 use std::collections::BTreeSet;
 
 #[derive(Clone, Debug)]
@@ -104,7 +104,7 @@ pub(super) fn receive_pack_update_changes_visibility(
     }
 
     paths.into_iter().any(|path| {
-        !is_reserved_config_path(&path)
+        !is_private_control_path(&path)
             && repo.policy.effective_visibility(&path) != update.config.visibility_for_path(&path)
     })
 }

@@ -29,18 +29,18 @@ async fn private_history_shapes_cannot_enter_public_request_refs() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn forbidden_intermediate_tree_cannot_enter_public_request_history() {
+async fn workflow_intermediate_tree_cannot_enter_public_request_history() {
     let state = test_state_with_request().await;
     let (source, permissioned_remote, _server, _) =
         request_checkout(&state, "request-intermediate-forbidden-tree").await;
     let request_before = stored_request(&state, REQUEST_ID).await;
     let event_count_before = request_event_count(&state).await;
 
-    let forbidden_dir = source.join(".scope");
+    let forbidden_dir = source.join(".scope/runs");
     fs::create_dir_all(&forbidden_dir).unwrap();
     fs::write(
-        forbidden_dir.join("transient.txt"),
-        "must never become public\n",
+        forbidden_dir.join("test.yml"),
+        "name: Test\non: { manual: true }\nruns-on: any\ncontainer: { image: rust:1.90 }\ntimeout: 20m\nsteps: [{ name: Test, run: cargo test }]\n",
     )
     .unwrap();
     run_git(

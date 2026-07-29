@@ -33,6 +33,7 @@ pub fn run(explicit_remote: Option<&str>, no_review: bool) -> anyhow::Result<()>
     let git_repo = ensure_git_repo_ready("scope push")?;
     let reviewed_head_oid = head_oid(&git_repo)?;
     let config_created = ensure_scope_repo_config_exists(&git_repo.root)?;
+    let config_path = repo_config_path(&git_repo.root)?;
     let mut config = load_worktree_scope_repo_config(&git_repo.root)?;
     warn_if_dirty_working_tree(&git_repo)?;
     if !no_review {
@@ -59,7 +60,7 @@ pub fn run(explicit_remote: Option<&str>, no_review: bool) -> anyhow::Result<()>
     if config_created {
         write_worktree_scope_repo_config_with_base(&git_repo.root, &push_context.config)?;
         config = push_context.config.clone();
-        eprintln!("Created {}", repo_config_path());
+        eprintln!("Created {}", config_path.display());
     } else {
         let local_config_hash = repo_config_fingerprint(&config)?;
         match load_worktree_scope_repo_config_base_hash(&git_repo.root) {
@@ -72,19 +73,19 @@ pub fn run(explicit_remote: Option<&str>, no_review: bool) -> anyhow::Result<()>
                 config = push_context.config.clone();
                 eprintln!(
                     "Scope repo config changed; refreshed {}",
-                    repo_config_path()
+                    config_path.display()
                 );
             }
             Ok(_) => bail!(
                 "Scope repo config changed, and local {} has unsynced edits. Run scope review, resolve the config, then retry scope push.",
-                repo_config_path()
+                config_path.display()
             ),
             Err(_) if local_config_hash == push_context.config_hash => {
                 mark_worktree_scope_repo_config_synced(&git_repo.root, &config)?;
             }
             Err(error) => bail!(
                 "{error}. Local {} has unsynced edits, so Scope will not overwrite it.",
-                repo_config_path()
+                config_path.display()
             ),
         }
     }

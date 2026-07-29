@@ -9,7 +9,10 @@ use crate::{
     state::AppState,
 };
 use scope_domain::store::{GitHead, SourceBlob, is_supported_git_file_mode};
-use scope_domain::{policy::ScopePath, repo_config::is_reserved_config_path};
+use scope_domain::{
+    policy::ScopePath,
+    repo_control::{RepoControlPath, classify_repo_control_path},
+};
 use scope_git::{StoredGitSegment, materialize_incremental_git_segment};
 use scope_object_store::{ContentObjectKind, object_key, put_content_object};
 use sha2::{Digest, Sha256};
@@ -440,9 +443,12 @@ pub(crate) fn validate_pushed_file_path(path: &str) -> Result<(), ApiError> {
             "unsupported Git file path {path:?}"
         )));
     }
-    if is_reserved_config_path(&scope_path) {
+    if matches!(
+        classify_repo_control_path(&scope_path),
+        Some(RepoControlPath::Forbidden)
+    ) {
         return Err(ApiError::bad_request(format!(
-            "Scope config path {path:?} is a local sidecar file and cannot be pushed"
+            "Scope control path {path:?} is not a tracked workflow definition"
         )));
     }
 
