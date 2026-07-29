@@ -4,10 +4,12 @@
 //! and route construction.
 
 mod repo_config;
+mod runs;
 mod types;
 mod wire;
 
 pub mod routes;
 pub use repo_config::*;
+pub use runs::*;
 pub use types::*;
 pub use wire::*;

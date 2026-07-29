@@ -43,6 +43,7 @@ scope_postgres = { package = "scope-postgres", path = "../crates/scope-postgres"
 scope_domain = { package = "scope-domain", path = "../crates/scope-domain" }
 scope_api_contract = { package = "scope-api-contract", path = "../crates/scope-api-contract" }
 scope_git = { package = "scope-git", path = "../crates/scope-git" }
+scope_run_config = { package = "scope-run-config", path = "../crates/scope-run-config" }
 scope_object_store = { package = "scope-object-store", path = "../crates/scope-object-store" }
 url = "2.5.7"
 scope_git_process = { package = "scope-git-process", path = "../crates/scope-git-process" }

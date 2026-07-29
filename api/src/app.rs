@@ -71,6 +71,32 @@ pub fn router(state: AppState) -> Router {
             routes::ACCOUNT_SESSION,
             get(http::account::get_account_session),
         )
+        .route(routes::RUNNERS, post(http::runners::register_runner))
+        .route(
+            routes::RUNNER,
+            get(http::runners::get_runner).delete(http::runners::delete_runner),
+        )
+        .route(
+            routes::RUNNER_REPOSITORY,
+            axum::routing::put(http::runners::attach_runner_repository)
+                .delete(http::runners::detach_runner_repository),
+        )
+        .route(routes::RUNNER_POLL, post(http::runner_protocol::poll))
+        .route(routes::RUNNER_CLAIM, post(http::runner_protocol::claim))
+        .route(routes::ATTEMPT_START, post(http::runner_protocol::start))
+        .route(
+            routes::ATTEMPT_HEARTBEAT,
+            post(http::runner_protocol::heartbeat),
+        )
+        .route(routes::ATTEMPT_SOURCE, get(http::runner_protocol::source))
+        .route(
+            routes::ATTEMPT_LOGS,
+            post(http::runner_protocol::append_log),
+        )
+        .route(
+            routes::ATTEMPT_COMPLETE,
+            post(http::runner_protocol::complete),
+        )
         .route(
             routes::REPOS,
             get(http::repos::list_repos).post(http::repos::create_repo),
@@ -80,6 +106,11 @@ pub fn router(state: AppState) -> Router {
             get(http::repos::get_repo).delete(http::repos::delete_repo),
         )
         .route(routes::REPO_CONFIG, get(http::repos::get_repo_config))
+        .route(routes::REPO_RUNS, post(http::runs::create_manual_run))
+        .route(routes::REPO_RUN, get(http::runs::get_run))
+        .route(routes::REPO_RUN_CANCEL, post(http::runs::cancel_run))
+        .route(routes::REPO_RUN_RETRY, post(http::runs::retry_run))
+        .route(routes::REPO_RUN_EVENTS, get(http::runs::run_events))
         .route(
             routes::REPO_PUSH_INTENTS,
             post(http::repos::create_push_intent),

@@ -285,6 +285,8 @@ pub mod run_attempt {
         pub started_at_unix: Option<i64>,
         pub completed_at_unix: Option<i64>,
         pub exit_code: Option<i32>,
+        pub log_bytes: i64,
+        pub logs_truncated: bool,
     }
 
     #[derive(Copy, Clone, Debug, EnumIter, DeriveRelation)]
@@ -323,6 +325,8 @@ pub mod run_attempt {
                     .map(|value| u64_to_i64(value, "attempt completion time"))
                     .transpose()?,
                 exit_code: attempt.exit_code,
+                log_bytes: u64_to_i64(attempt.log_bytes, "attempt log byte count")?,
+                logs_truncated: attempt.logs_truncated,
             })
         }
 
@@ -345,6 +349,52 @@ pub mod run_attempt {
                     .map(|value| i64_to_u64(value, "attempt completion time"))
                     .transpose()?,
                 self.exit_code,
+                i64_to_u64(self.log_bytes, "attempt log byte count")?,
+                self.logs_truncated,
+            )
+            .map_err(PostgresError::invalid_input)
+        }
+    }
+}
+
+pub mod run_log {
+    use super::*;
+
+    #[derive(Clone, Debug, PartialEq, DeriveEntityModel)]
+    #[sea_orm(table_name = "scope_run_logs")]
+    pub struct Model {
+        #[sea_orm(primary_key)]
+        pub position: i64,
+        pub run_id: String,
+        pub attempt_id: String,
+        pub sequence: i64,
+        pub text: String,
+        pub created_at_unix: i64,
+    }
+
+    #[derive(Copy, Clone, Debug, EnumIter, DeriveRelation)]
+    pub enum Relation {}
+
+    impl ActiveModelBehavior for ActiveModel {}
+
+    impl Model {
+        pub fn from_domain(run_id: &str, chunk: &RunLogChunk) -> Result<Self, PostgresError> {
+            Ok(Self {
+                position: 0,
+                run_id: run_id.to_string(),
+                attempt_id: chunk.attempt_id.clone(),
+                sequence: u64_to_i64(chunk.sequence, "run log sequence")?,
+                text: chunk.text.clone(),
+                created_at_unix: u64_to_i64(chunk.created_at_unix, "run log creation time")?,
+            })
+        }
+
+        pub fn try_into_domain(self) -> Result<RunLogChunk, PostgresError> {
+            RunLogChunk::new(
+                self.attempt_id,
+                i64_to_u64(self.sequence, "run log sequence")?,
+                self.text,
+                i64_to_u64(self.created_at_unix, "run log creation time")?,
             )
             .map_err(PostgresError::invalid_input)
         }

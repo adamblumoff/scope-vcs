@@ -5,6 +5,9 @@ use super::{
 use crate::error::DomainError;
 use serde::{Deserialize, Serialize};
 
+pub const MAX_RUN_LOG_CHUNK_BYTES: usize = 64 * 1024;
+pub const MAX_RUN_LOG_BYTES_PER_ATTEMPT: u64 = 10 * 1024 * 1024;
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum RunTrigger {
@@ -58,6 +61,45 @@ pub enum AttemptConclusion {
     Succeeded,
     Failed { exit_code: i32 },
     Canceled,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct RunLogChunk {
+    pub attempt_id: String,
+    pub sequence: u64,
+    pub text: String,
+    pub created_at_unix: u64,
+}
+
+impl RunLogChunk {
+    pub fn new(
+        attempt_id: impl Into<String>,
+        sequence: u64,
+        text: impl Into<String>,
+        created_at_unix: u64,
+    ) -> Result<Self, DomainError> {
+        let attempt_id = required("run log attempt id", attempt_id.into())?;
+        if sequence == 0 {
+            return Err(DomainError::invalid_input(
+                "run log sequence must be positive",
+            ));
+        }
+        let text = text.into();
+        if text.is_empty() {
+            return Err(DomainError::invalid_input("run log text is required"));
+        }
+        if text.len() > MAX_RUN_LOG_CHUNK_BYTES {
+            return Err(DomainError::invalid_input(format!(
+                "run log chunk cannot exceed {MAX_RUN_LOG_CHUNK_BYTES} bytes"
+            )));
+        }
+        Ok(Self {
+            attempt_id,
+            sequence,
+            text,
+            created_at_unix,
+        })
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -271,6 +313,8 @@ impl Run {
             started_at_unix: None,
             completed_at_unix: None,
             exit_code: None,
+            log_bytes: 0,
+            logs_truncated: false,
         };
         self.state = RunState::Leased;
         self.last_attempt_number = number;
@@ -430,6 +474,8 @@ pub struct RunAttempt {
     pub started_at_unix: Option<u64>,
     pub completed_at_unix: Option<u64>,
     pub exit_code: Option<i32>,
+    pub log_bytes: u64,
+    pub logs_truncated: bool,
 }
 
 impl RunAttempt {
@@ -448,6 +494,8 @@ impl RunAttempt {
         started_at_unix: Option<u64>,
         completed_at_unix: Option<u64>,
         exit_code: Option<i32>,
+        log_bytes: u64,
+        logs_truncated: bool,
     ) -> Result<Self, DomainError> {
         let token_hash = token_hash.into();
         validate_sha256_hash("attempt token hash", &token_hash)?;
@@ -465,6 +513,8 @@ impl RunAttempt {
             started_at_unix,
             completed_at_unix,
             exit_code,
+            log_bytes,
+            logs_truncated,
         };
         attempt.validate_facts()?;
         Ok(attempt)
@@ -520,6 +570,36 @@ impl RunAttempt {
         self.lease_expires_at_unix = lease_expires_at_unix;
         self.token_expires_at_unix = lease_expires_at_unix;
         Ok(run.cancellation_requested)
+    }
+
+    pub fn accept_log_chunk(&mut self, chunk: &RunLogChunk) -> Result<bool, DomainError> {
+        if chunk.attempt_id != self.id {
+            return Err(DomainError::invalid_input(
+                "run log attempt id does not match the attempt",
+            ));
+        }
+        if self.logs_truncated {
+            return Ok(false);
+        }
+        let next_bytes = self
+            .log_bytes
+            .checked_add(chunk.text.len() as u64)
+            .ok_or_else(|| DomainError::conflict("run log byte count overflow"))?;
+        if next_bytes > MAX_RUN_LOG_BYTES_PER_ATTEMPT {
+            self.logs_truncated = true;
+            return Ok(false);
+        }
+        self.log_bytes = next_bytes;
+        Ok(true)
+    }
+
+    pub fn authenticate_access(
+        &self,
+        run: &Run,
+        token_hash: &str,
+        now_unix: u64,
+    ) -> Result<(), DomainError> {
+        self.authenticate(run, &self.runner_id, token_hash, now_unix)
     }
 
     pub fn complete(
@@ -638,6 +718,11 @@ impl RunAttempt {
         if self.number == 0 {
             return Err(DomainError::invariant_violation(
                 "run attempt number must be positive",
+            ));
+        }
+        if self.log_bytes > MAX_RUN_LOG_BYTES_PER_ATTEMPT {
+            return Err(DomainError::invariant_violation(
+                "run attempt log byte count exceeds its limit",
             ));
         }
         if (self.state == AttemptState::Running || self.state.is_terminal())
@@ -787,6 +872,30 @@ mod tests {
             )
             .unwrap_err();
         assert_eq!(retry.kind, crate::error::DomainErrorKind::Conflict);
+    }
+
+    #[test]
+    fn attempt_log_budget_is_cumulative_and_fail_closed() {
+        let mut run = run();
+        let mut attempt = run
+            .claim(&runner(), &grant(), "attempt-1", "e".repeat(64), 20, 80)
+            .unwrap();
+        let chunk_text = "x".repeat(MAX_RUN_LOG_CHUNK_BYTES);
+        for sequence in 1..=(MAX_RUN_LOG_BYTES_PER_ATTEMPT / MAX_RUN_LOG_CHUNK_BYTES as u64) {
+            let chunk = RunLogChunk::new("attempt-1", sequence, chunk_text.clone(), 21).unwrap();
+            assert!(attempt.accept_log_chunk(&chunk).unwrap());
+        }
+        assert_eq!(attempt.log_bytes, MAX_RUN_LOG_BYTES_PER_ATTEMPT);
+
+        let extra = RunLogChunk::new("attempt-1", 161, "extra", 21).unwrap();
+        assert!(!attempt.accept_log_chunk(&extra).unwrap());
+        assert!(attempt.logs_truncated);
+        assert!(!attempt.accept_log_chunk(&extra).unwrap());
+        assert_eq!(attempt.log_bytes, MAX_RUN_LOG_BYTES_PER_ATTEMPT);
+
+        assert!(
+            RunLogChunk::new("attempt-1", 1, "x".repeat(MAX_RUN_LOG_CHUNK_BYTES + 1), 21).is_err()
+        );
     }
 
     #[test]

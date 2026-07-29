@@ -1,14 +1,14 @@
 use super::{RunStore, entities};
 use crate::error::PostgresError;
 use scope_domain::runs::{
-    run::{AttemptConclusion, Run, RunAttempt},
+    run::{AttemptConclusion, Run, RunAttempt, RunLogChunk},
     runner::{Runner, RunnerGrant},
     workflow::WorkflowRevision,
 };
 use sea_orm::{
-    ActiveModelTrait, ColumnTrait, Condition, DatabaseTransaction, DbErr, EntityTrait,
-    IntoActiveModel, QueryFilter, QueryOrder, QuerySelect, TransactionTrait, TryInsertResult,
-    sea_query::OnConflict,
+    ActiveModelTrait, ActiveValue::NotSet, ColumnTrait, Condition, DatabaseTransaction, DbErr,
+    EntityTrait, IntoActiveModel, QueryFilter, QueryOrder, QuerySelect, TransactionTrait,
+    TryInsertResult, sea_query::OnConflict,
 };
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -18,7 +18,55 @@ pub struct DispatchClaim {
     pub workflow_revision: WorkflowRevision,
 }
 
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct StoredRunLog {
+    pub position: u64,
+    pub run_id: String,
+    pub chunk: RunLogChunk,
+}
+
 impl RunStore {
+    pub async fn register_runner_with_grant(
+        &self,
+        runner: Runner,
+        grant: RunnerGrant,
+    ) -> Result<(Runner, RunnerGrant), PostgresError> {
+        if runner.id != grant.runner_id || runner.owner_user_id != grant.granted_by_user_id {
+            return Err(PostgresError::invalid_input(
+                "runner registration and repository grant identities do not match",
+            ));
+        }
+        let tx = self.db.begin().await.map_err(PostgresError::internal)?;
+        let runner_result = entities::runner::Entity::insert(
+            entities::runner::Model::from_domain(&runner)?.into_active_model(),
+        )
+        .on_conflict(OnConflict::new().do_nothing().to_owned())
+        .do_nothing()
+        .exec(&tx)
+        .await
+        .map_err(PostgresError::internal)?;
+        if !matches!(runner_result, TryInsertResult::Inserted(_)) {
+            return Err(PostgresError::conflict(
+                "runner id or secret hash is already registered",
+            ));
+        }
+        let grant_result = entities::runner_grant::Entity::insert(
+            entities::runner_grant::Model::from_domain(&grant)?.into_active_model(),
+        )
+        .on_conflict(OnConflict::new().do_nothing().to_owned())
+        .do_nothing()
+        .exec(&tx)
+        .await
+        .map_err(PostgresError::internal)?;
+        if !matches!(grant_result, TryInsertResult::Inserted(_)) {
+            return Err(PostgresError::conflict(
+                "runner is already attached or the repository runner name is taken",
+            ));
+        }
+        tx.commit().await.map_err(PostgresError::internal)?;
+        Ok((runner, grant))
+    }
+
     pub async fn register_runner(&self, runner: Runner) -> Result<Runner, PostgresError> {
         let model = entities::runner::Model::from_domain(&runner)?;
         let result = entities::runner::Entity::insert(model.into_active_model())
@@ -53,6 +101,79 @@ impl RunStore {
         .map_err(PostgresError::internal)?;
         tx.commit().await.map_err(PostgresError::internal)?;
         Ok(runner)
+    }
+
+    pub async fn runner(&self, runner_id: &str) -> Result<Option<Runner>, PostgresError> {
+        entities::runner::Entity::find_by_id(runner_id.to_string())
+            .one(self.db.as_ref())
+            .await
+            .map_err(PostgresError::internal)?
+            .map(entities::runner::Model::try_into_domain)
+            .transpose()
+    }
+
+    pub async fn delete_unused_runner(&self, runner_id: &str) -> Result<(), PostgresError> {
+        let tx = self.db.begin().await.map_err(PostgresError::internal)?;
+        runner_by_id(&tx, runner_id).await?;
+        if entities::run_attempt::Entity::find()
+            .filter(entities::run_attempt::Column::RunnerId.eq(runner_id))
+            .one(&tx)
+            .await
+            .map_err(PostgresError::internal)?
+            .is_some()
+        {
+            return Err(PostgresError::conflict(
+                "runner with attempts cannot be deleted",
+            ));
+        }
+        entities::runner_grant::Entity::delete_many()
+            .filter(entities::runner_grant::Column::RunnerId.eq(runner_id))
+            .exec(&tx)
+            .await
+            .map_err(PostgresError::internal)?;
+        entities::runner::Entity::delete_by_id(runner_id.to_string())
+            .exec(&tx)
+            .await
+            .map_err(PostgresError::internal)?;
+        tx.commit().await.map_err(PostgresError::internal)?;
+        Ok(())
+    }
+
+    pub async fn authenticate_runner(
+        &self,
+        secret_hash: &str,
+        now_unix: u64,
+    ) -> Result<Runner, PostgresError> {
+        let tx = self.db.begin().await.map_err(PostgresError::internal)?;
+        let model = entities::runner::Entity::find()
+            .filter(entities::runner::Column::SecretHash.eq(secret_hash))
+            .lock_exclusive()
+            .one(&tx)
+            .await
+            .map_err(PostgresError::internal)?
+            .ok_or_else(|| PostgresError::unauthenticated("runner credentials are invalid"))?;
+        let mut runner = model.try_into_domain()?;
+        if !runner.supports_v1_dispatch() {
+            return Err(PostgresError::permission_denied(
+                "runner is disabled or incompatible with the V1 protocol",
+            ));
+        }
+        runner.record_seen(now_unix).map_err(PostgresError::from)?;
+        save_runner(&tx, &runner).await?;
+        tx.commit().await.map_err(PostgresError::internal)?;
+        Ok(runner)
+    }
+
+    pub async fn runner_grants(&self, runner_id: &str) -> Result<Vec<RunnerGrant>, PostgresError> {
+        entities::runner_grant::Entity::find()
+            .filter(entities::runner_grant::Column::RunnerId.eq(runner_id))
+            .order_by_asc(entities::runner_grant::Column::RepoId)
+            .all(self.db.as_ref())
+            .await
+            .map_err(PostgresError::internal)?
+            .into_iter()
+            .map(entities::runner_grant::Model::try_into_domain)
+            .collect()
     }
 
     pub async fn grant_runner(&self, grant: RunnerGrant) -> Result<RunnerGrant, PostgresError> {
@@ -371,6 +492,143 @@ impl RunStore {
             .map_err(PostgresError::internal)?
             .map(entities::run::Model::try_into_domain)
             .transpose()
+    }
+
+    pub async fn authenticate_attempt(
+        &self,
+        attempt_id: &str,
+        token_hash: &str,
+        now_unix: u64,
+    ) -> Result<DispatchClaim, PostgresError> {
+        let tx = self.db.begin().await.map_err(PostgresError::internal)?;
+        let (run, attempt) = locked_attempt_context(&tx, attempt_id).await?;
+        ensure_runner_authorized(&tx, &run, &attempt).await?;
+        attempt
+            .authenticate_access(&run, token_hash, now_unix)
+            .map_err(PostgresError::from)?;
+        let workflow_revision = workflow_revision_for_run(&tx, &run).await?;
+        tx.commit().await.map_err(PostgresError::internal)?;
+        Ok(DispatchClaim {
+            run,
+            attempt,
+            workflow_revision,
+        })
+    }
+
+    pub async fn append_attempt_log(
+        &self,
+        chunk: RunLogChunk,
+        token_hash: &str,
+        now_unix: u64,
+    ) -> Result<StoredRunLog, PostgresError> {
+        let tx = self.db.begin().await.map_err(PostgresError::internal)?;
+        let (run, mut attempt) = locked_attempt_context(&tx, &chunk.attempt_id).await?;
+        ensure_runner_authorized(&tx, &run, &attempt).await?;
+        attempt
+            .authenticate_access(&run, token_hash, now_unix)
+            .map_err(PostgresError::from)?;
+        if attempt.logs_truncated {
+            return Err(PostgresError::resource_exhausted(
+                "run attempt log limit reached",
+            ));
+        }
+
+        if let Some(existing) = entities::run_log::Entity::find()
+            .filter(entities::run_log::Column::AttemptId.eq(&chunk.attempt_id))
+            .filter(
+                entities::run_log::Column::Sequence.eq(i64::try_from(chunk.sequence)
+                    .map_err(|_| PostgresError::invalid_input("run log sequence is too large"))?),
+            )
+            .one(&tx)
+            .await
+            .map_err(PostgresError::internal)?
+        {
+            let position = entities::i64_to_u64(existing.position, "run log position")?;
+            let existing_run_id = existing.run_id.clone();
+            let existing_chunk = existing.try_into_domain()?;
+            if existing_run_id != run.id
+                || existing_chunk.attempt_id != chunk.attempt_id
+                || existing_chunk.sequence != chunk.sequence
+                || existing_chunk.text != chunk.text
+            {
+                return Err(PostgresError::conflict(
+                    "run log sequence is already used by different content",
+                ));
+            }
+            tx.commit().await.map_err(PostgresError::internal)?;
+            return Ok(StoredRunLog {
+                position,
+                run_id: existing_run_id,
+                chunk: existing_chunk,
+            });
+        }
+
+        let expected_sequence = entities::run_log::Entity::find()
+            .filter(entities::run_log::Column::AttemptId.eq(&chunk.attempt_id))
+            .order_by_desc(entities::run_log::Column::Sequence)
+            .one(&tx)
+            .await
+            .map_err(PostgresError::internal)?
+            .map_or(1, |last| last.sequence.saturating_add(1));
+        if i64::try_from(chunk.sequence).ok() != Some(expected_sequence) {
+            return Err(PostgresError::conflict(
+                "run log sequence must append without gaps",
+            ));
+        }
+        if !attempt
+            .accept_log_chunk(&chunk)
+            .map_err(PostgresError::from)?
+        {
+            save_attempt(&tx, &attempt).await?;
+            tx.commit().await.map_err(PostgresError::internal)?;
+            return Err(PostgresError::resource_exhausted(
+                "run attempt log limit reached",
+            ));
+        }
+
+        let mut model = entities::run_log::Model::from_domain(&run.id, &chunk)?.into_active_model();
+        model.position = NotSet;
+        let inserted = entities::run_log::Entity::insert(model)
+            .exec(&tx)
+            .await
+            .map_err(|error| unique_conflict(error, "run log sequence is already in use"))?;
+        let position = entities::i64_to_u64(inserted.last_insert_id, "run log position")?;
+        save_attempt(&tx, &attempt).await?;
+        tx.commit().await.map_err(PostgresError::internal)?;
+        Ok(StoredRunLog {
+            position,
+            run_id: run.id,
+            chunk,
+        })
+    }
+
+    pub async fn run_logs_after(
+        &self,
+        run_id: &str,
+        after: u64,
+        limit: u64,
+    ) -> Result<Vec<StoredRunLog>, PostgresError> {
+        let after = i64::try_from(after)
+            .map_err(|_| PostgresError::invalid_input("run log cursor is too large"))?;
+        entities::run_log::Entity::find()
+            .filter(entities::run_log::Column::RunId.eq(run_id))
+            .filter(entities::run_log::Column::Position.gt(after))
+            .order_by_asc(entities::run_log::Column::Position)
+            .limit(limit)
+            .all(self.db.as_ref())
+            .await
+            .map_err(PostgresError::internal)?
+            .into_iter()
+            .map(|model| {
+                let position = entities::i64_to_u64(model.position, "run log position")?;
+                let run_id = model.run_id.clone();
+                Ok(StoredRunLog {
+                    position,
+                    run_id,
+                    chunk: model.try_into_domain()?,
+                })
+            })
+            .collect()
     }
 
     async fn mutate_attempt(

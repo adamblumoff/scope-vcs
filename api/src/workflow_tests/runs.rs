@@ -1,0 +1,362 @@
+use super::*;
+use scope_api_contract::{
+    AppendAttemptLogRequest, AttemptConclusionRequest, CompleteAttemptRequest,
+    RegisterRunnerRequest,
+};
+use scope_domain::runs::runner::{MIN_RUNNER_PROTOCOL_VERSION, RunnerCapabilities};
+
+const WORKFLOW: &str = r#"
+name: Test
+on:
+  manual: true
+runs-on: any
+container:
+  image: alpine:3.20
+timeout: 5m
+steps:
+  - name: Test
+    run: printf 'hello from runner\n'
+"#;
+
+#[tokio::test]
+async fn manual_run_protocol_crosses_human_runner_and_attempt_credentials() {
+    let state = test_state_with_repo();
+    cache_test_jwks(&state);
+    let app = router(state);
+
+    let registered = app
+        .clone()
+        .oneshot(json_request(
+            "POST",
+            scope_api_contract::routes::RUNNERS,
+            Some(bearer_header()),
+            &RegisterRunnerRequest {
+                owner: TEST_REPO_OWNER.to_string(),
+                repo: TEST_REPO_NAME.to_string(),
+                name: "linux-box".to_string(),
+                version: "0.1.0".to_string(),
+                protocol_version: MIN_RUNNER_PROTOCOL_VERSION,
+                capabilities: RunnerCapabilities::v1(),
+            },
+        ))
+        .await
+        .unwrap();
+    assert_eq!(registered.status(), StatusCode::OK);
+    let registered = response_json(registered).await;
+    let runner_secret = registered["secret"].as_str().unwrap().to_string();
+
+    let source = temp_git_repo("manual-run-protocol");
+    fs::create_dir_all(source.join(".scope/runs")).unwrap();
+    fs::write(source.join(".scope/runs/test.yml"), WORKFLOW).unwrap();
+    fs::write(source.join("hello.txt"), "hello").unwrap();
+    run_git(Some(&source), &["add", "."], "stage run source").unwrap();
+    commit_all(&source, "run source");
+    let git_oid = git_head_oid(&source);
+    let bundle_path = source.join("source.bundle");
+    run_git(
+        Some(&source),
+        &["bundle", "create", bundle_path.to_str().unwrap(), "HEAD"],
+        "create run bundle",
+    )
+    .unwrap();
+    let bundle = fs::read(bundle_path).unwrap();
+    let create_uri = format!(
+        "{}?workflow=test&git_oid={git_oid}&request_id=11111111111111111111111111111111&runner=linux-box",
+        scope_api_contract::routes::repo_runs(TEST_REPO_OWNER, TEST_REPO_NAME)
+    );
+    let created = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri(create_uri)
+                .header(AUTHORIZATION, bearer_header())
+                .header(CONTENT_TYPE, "application/octet-stream")
+                .body(Body::from(bundle.clone()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        created.status(),
+        StatusCode::OK,
+        "{:?}",
+        response_json(created).await
+    );
+
+    let polled = app
+        .clone()
+        .oneshot(machine_request(
+            "POST",
+            scope_api_contract::routes::RUNNER_POLL,
+            &runner_secret,
+            Body::empty(),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(polled.status(), StatusCode::OK);
+    let polled = response_json(polled).await;
+    let run_id = polled["run"]["run_id"].as_str().unwrap().to_string();
+
+    let claimed = app
+        .clone()
+        .oneshot(machine_request(
+            "POST",
+            &scope_api_contract::routes::runner_claim(&run_id),
+            &runner_secret,
+            Body::empty(),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(claimed.status(), StatusCode::OK);
+    let claimed = response_json(claimed).await;
+    let attempt_id = claimed["attempt_id"].as_str().unwrap().to_string();
+    let attempt_token = claimed["attempt_token"].as_str().unwrap().to_string();
+    assert_eq!(claimed["job"]["git_oid"], git_oid);
+    assert_eq!(claimed["job"]["workflow"]["name"], "Test");
+
+    let source_response = app
+        .clone()
+        .oneshot(machine_request(
+            "GET",
+            &scope_api_contract::routes::attempt_source(&attempt_id),
+            &attempt_token,
+            Body::empty(),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(source_response.status(), StatusCode::OK);
+    assert_eq!(
+        to_bytes(source_response.into_body(), 2 * 1024 * 1024)
+            .await
+            .unwrap(),
+        bundle
+    );
+
+    let started = app
+        .clone()
+        .oneshot(machine_request(
+            "POST",
+            &scope_api_contract::routes::attempt_start(&attempt_id),
+            &attempt_token,
+            Body::empty(),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(started.status(), StatusCode::OK);
+
+    let logged = app
+        .clone()
+        .oneshot(json_request(
+            "POST",
+            &scope_api_contract::routes::attempt_logs(&attempt_id),
+            Some(format!("Bearer {attempt_token}")),
+            &AppendAttemptLogRequest {
+                sequence: 1,
+                text: "hello from runner\n".to_string(),
+            },
+        ))
+        .await
+        .unwrap();
+    assert_eq!(logged.status(), StatusCode::OK);
+
+    let events_uri = format!(
+        "{}?after=0",
+        scope_api_contract::routes::repo_run_events(TEST_REPO_OWNER, TEST_REPO_NAME, &run_id)
+    );
+    let events = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri(events_uri)
+                .header(AUTHORIZATION, bearer_header())
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(events.status(), StatusCode::OK);
+    let events = response_json(events).await;
+    assert_eq!(events["logs"][0]["text"], "hello from runner\n");
+    assert_eq!(events["run"]["state"], "running");
+
+    let completed = app
+        .clone()
+        .oneshot(json_request(
+            "POST",
+            &scope_api_contract::routes::attempt_complete(&attempt_id),
+            Some(format!("Bearer {attempt_token}")),
+            &CompleteAttemptRequest {
+                conclusion: AttemptConclusionRequest::Succeeded,
+            },
+        ))
+        .await
+        .unwrap();
+    assert_eq!(completed.status(), StatusCode::OK);
+
+    let human_cannot_use_attempt_token = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri(scope_api_contract::routes::repo_run(
+                    TEST_REPO_OWNER,
+                    TEST_REPO_NAME,
+                    &run_id,
+                ))
+                .header(AUTHORIZATION, format!("Bearer {attempt_token}"))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        human_cannot_use_attempt_token.status(),
+        StatusCode::UNAUTHORIZED
+    );
+
+    let runner_cannot_read_without_attempt_token = app
+        .clone()
+        .oneshot(machine_request(
+            "GET",
+            &scope_api_contract::routes::attempt_source(&attempt_id),
+            &runner_secret,
+            Body::empty(),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(
+        runner_cannot_read_without_attempt_token.status(),
+        StatusCode::UNAUTHORIZED
+    );
+}
+
+#[tokio::test]
+async fn unused_runner_registration_can_be_rolled_back() {
+    let state = test_state_with_repo();
+    cache_test_jwks(&state);
+    let app = router(state);
+
+    let registered = app
+        .clone()
+        .oneshot(json_request(
+            "POST",
+            scope_api_contract::routes::RUNNERS,
+            Some(bearer_header()),
+            &RegisterRunnerRequest {
+                owner: TEST_REPO_OWNER.to_string(),
+                repo: TEST_REPO_NAME.to_string(),
+                name: "rollback-box".to_string(),
+                version: "0.1.0".to_string(),
+                protocol_version: MIN_RUNNER_PROTOCOL_VERSION,
+                capabilities: RunnerCapabilities::v1(),
+            },
+        ))
+        .await
+        .unwrap();
+    assert_eq!(registered.status(), StatusCode::OK);
+    let runner_id = response_json(registered).await["runner"]["id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+
+    let deleted = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("DELETE")
+                .uri(scope_api_contract::routes::runner(&runner_id))
+                .header(AUTHORIZATION, bearer_header())
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(deleted.status(), StatusCode::NO_CONTENT);
+
+    let missing = app
+        .oneshot(
+            Request::builder()
+                .uri(scope_api_contract::routes::runner(&runner_id))
+                .header(AUTHORIZATION, bearer_header())
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(missing.status(), StatusCode::NOT_FOUND);
+}
+
+#[tokio::test]
+async fn manual_run_rejects_oversized_workflow_before_parsing() {
+    let state = test_state_with_repo();
+    cache_test_jwks(&state);
+    let app = router(state);
+    let source = temp_git_repo("oversized-run-workflow");
+    fs::create_dir_all(source.join(".scope/runs")).unwrap();
+    fs::write(
+        source.join(".scope/runs/oversized.yml"),
+        vec![b'x'; scope_run_config::MAX_WORKFLOW_DEFINITION_BYTES + 1],
+    )
+    .unwrap();
+    run_git(Some(&source), &["add", "."], "stage oversized workflow").unwrap();
+    commit_all(&source, "oversized workflow");
+    let git_oid = git_head_oid(&source);
+    let bundle_path = source.join("source.bundle");
+    run_git(
+        Some(&source),
+        &["bundle", "create", bundle_path.to_str().unwrap(), "HEAD"],
+        "create oversized workflow bundle",
+    )
+    .unwrap();
+    let create_uri = format!(
+        "{}?workflow=oversized&git_oid={git_oid}&request_id=22222222222222222222222222222222",
+        scope_api_contract::routes::repo_runs(TEST_REPO_OWNER, TEST_REPO_NAME)
+    );
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri(create_uri)
+                .header(AUTHORIZATION, bearer_header())
+                .header(CONTENT_TYPE, "application/octet-stream")
+                .body(Body::from(fs::read(bundle_path).unwrap()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    assert!(
+        response_json(response).await["error"]
+            .as_str()
+            .unwrap()
+            .contains("workflow definition exceeds")
+    );
+}
+
+fn json_request<T: serde::Serialize>(
+    method: &str,
+    uri: &str,
+    authorization: Option<String>,
+    body: &T,
+) -> Request<Body> {
+    let mut request = Request::builder()
+        .method(method)
+        .uri(uri)
+        .header(CONTENT_TYPE, "application/json");
+    if let Some(authorization) = authorization {
+        request = request.header(AUTHORIZATION, authorization);
+    }
+    request
+        .body(Body::from(serde_json::to_vec(body).unwrap()))
+        .unwrap()
+}
+
+fn machine_request(method: &str, uri: &str, token: &str, body: Body) -> Request<Body> {
+    Request::builder()
+        .method(method)
+        .uri(uri)
+        .header(AUTHORIZATION, format!("Bearer {token}"))
+        .body(body)
+        .unwrap()
+}

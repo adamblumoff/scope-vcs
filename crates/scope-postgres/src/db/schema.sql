@@ -196,7 +196,19 @@ CREATE TABLE scope_run_attempts (
     started_at_unix bigint,
     completed_at_unix bigint,
     exit_code integer,
+    log_bytes bigint NOT NULL,
+    logs_truncated boolean NOT NULL,
     UNIQUE (run_id, number)
+);
+
+CREATE TABLE scope_run_logs (
+    position bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+    run_id character varying NOT NULL,
+    attempt_id character varying NOT NULL,
+    sequence bigint NOT NULL,
+    text text NOT NULL,
+    created_at_unix bigint NOT NULL,
+    UNIQUE (attempt_id, sequence)
 );
 
 
@@ -865,6 +877,7 @@ CREATE UNIQUE INDEX idx_scope_run_attempts_active ON scope_run_attempts USING bt
 CREATE INDEX idx_scope_run_attempts_runner ON scope_run_attempts USING btree (runner_id, state);
 CREATE INDEX idx_scope_run_attempts_expiring ON scope_run_attempts USING btree (lease_expires_at_unix, id)
     WHERE state IN ('leased', 'running');
+CREATE INDEX idx_scope_run_logs_run_position ON scope_run_logs USING btree (run_id, position);
 
 
 --
@@ -1047,6 +1060,10 @@ ALTER TABLE ONLY scope_run_attempts
     ADD CONSTRAINT fk_scope_run_attempts_run FOREIGN KEY (run_id) REFERENCES scope_runs(id) ON DELETE CASCADE;
 ALTER TABLE ONLY scope_run_attempts
     ADD CONSTRAINT fk_scope_run_attempts_runner FOREIGN KEY (runner_id) REFERENCES scope_runners(id) ON DELETE RESTRICT;
+ALTER TABLE ONLY scope_run_logs
+    ADD CONSTRAINT fk_scope_run_logs_run FOREIGN KEY (run_id) REFERENCES scope_runs(id) ON DELETE CASCADE;
+ALTER TABLE ONLY scope_run_logs
+    ADD CONSTRAINT fk_scope_run_logs_attempt FOREIGN KEY (attempt_id) REFERENCES scope_run_attempts(id) ON DELETE CASCADE;
 ALTER TABLE ONLY scope_runs
     ADD CONSTRAINT fk_scope_runs_current_attempt FOREIGN KEY (current_attempt_id) REFERENCES scope_run_attempts(id) ON DELETE SET NULL;
 
@@ -1298,10 +1315,15 @@ ALTER TABLE scope_run_attempts
             (started_at_unix >= created_at_unix AND started_at_unix < lease_expires_at_unix)) AND
         (completed_at_unix IS NULL OR completed_at_unix >= last_heartbeat_at_unix) AND
         (started_at_unix IS NULL OR completed_at_unix IS NULL OR completed_at_unix >= started_at_unix) AND
+        log_bytes >= 0 AND log_bytes <= 10485760 AND
         ((state IN ('succeeded', 'failed', 'canceled', 'lost')) = (completed_at_unix IS NOT NULL)) AND
         (state <> 'succeeded' OR (started_at_unix IS NOT NULL AND exit_code = 0)) AND
         (state <> 'failed' OR (exit_code IS NOT NULL AND exit_code <> 0)) AND
         (state IN ('failed', 'succeeded') OR exit_code IS NULL)
+    );
+ALTER TABLE scope_run_logs
+    ADD CONSTRAINT scope_run_logs_values CHECK (
+        position > 0 AND sequence > 0 AND octet_length(text) BETWEEN 1 AND 65536 AND created_at_unix >= 0
     );
 ALTER TABLE scope_repository_members
     ADD CONSTRAINT scope_repository_member_times CHECK (

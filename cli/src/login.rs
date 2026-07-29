@@ -85,6 +85,15 @@ pub fn session_from_cache_or_browser(
     session_from_cache_or_login(client, api_url, local_browser_login)
 }
 
+pub fn session_from_cache_or_device(
+    client: &Client,
+    api_url: &str,
+) -> anyhow::Result<AuthenticatedSession> {
+    session_from_cache_or_login(client, api_url, |client, api_url| {
+        device_login(client, api_url, false)
+    })
+}
+
 fn session_from_cache_or_login(
     client: &Client,
     api_url: &str,

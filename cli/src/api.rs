@@ -9,7 +9,9 @@ use scope_domain::repo_config::RepoConfig as DomainRepoConfig;
 use std::{env, time::Duration};
 
 mod requests;
+mod runs;
 pub use requests::*;
+pub use runs::*;
 
 const DEFAULT_API_URL: &str = "https://scope-api-production-0251.up.railway.app";
 pub const ACCOUNT_SESSION_PATH: &str = scope_api_contract::routes::ACCOUNT_SESSION;
