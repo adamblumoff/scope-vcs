@@ -17,7 +17,7 @@ use scope_domain::{
 };
 use sea_orm::EntityTrait;
 use sha2::{Digest, Sha256};
-use std::sync::Arc;
+use std::{collections::BTreeSet, sync::Arc};
 use tokio::{sync::Barrier, task::JoinSet};
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
@@ -618,6 +618,43 @@ async fn dispatch_candidates_respect_runner_names_and_enabled_state() {
             .await
             .unwrap()
             .is_none()
+    );
+}
+
+#[tokio::test]
+async fn repository_operations_keep_all_active_runs_beyond_the_recent_limit() {
+    let store = postgres_store();
+    enqueue(&store, run("run-terminal", "manual:terminal"), revision()).await;
+    store
+        .runs()
+        .request_run_cancellation("run-terminal", 11)
+        .await
+        .unwrap();
+    for index in 0..21 {
+        enqueue(
+            &store,
+            run(
+                &format!("run-active-{index:02}"),
+                &format!("manual:active:{index:02}"),
+            ),
+            revision(),
+        )
+        .await;
+    }
+
+    let runs = store
+        .runs()
+        .repository_operations_runs("owner/repo", 20)
+        .await
+        .unwrap();
+    assert_eq!(runs.len(), 21);
+    assert!(runs.iter().all(|run| !run.state.is_terminal()));
+    assert_eq!(
+        runs.iter()
+            .map(|run| &run.id)
+            .collect::<BTreeSet<_>>()
+            .len(),
+        runs.len()
     );
 }
 

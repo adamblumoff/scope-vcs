@@ -140,7 +140,7 @@ pub(crate) async fn get_repository_operations(
     let repo = require_repo_member(&state, &user.id, &owner, &repo_name).await?;
     let runs_store = state.metadata.runs();
     let (runs, runners) = tokio::try_join!(
-        runs_store.recent_repository_runs(&repo.record.id, REPOSITORY_RUN_LIMIT),
+        runs_store.repository_operations_runs(&repo.record.id, REPOSITORY_RUN_LIMIT),
         runs_store.repository_runners(&repo.record.id),
     )?;
     let now_unix = unix_now()?;
@@ -526,8 +526,8 @@ fn repository_run_summary(run: &Run) -> RepositoryRunSummaryResponse {
         created_at_unix: run.created_at_unix,
         updated_at_unix: run.updated_at_unix,
         completed_at_unix: run.completed_at_unix,
-        can_cancel: !run.state.is_terminal() && !run.cancellation_requested,
-        can_retry: run.state.is_terminal(),
+        can_cancel: run.can_request_cancellation(),
+        can_retry: run.can_retry(),
     }
 }
 

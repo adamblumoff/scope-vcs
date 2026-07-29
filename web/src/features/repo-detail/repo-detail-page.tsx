@@ -86,7 +86,7 @@ export function RepoDetailPage({
       <RepositoryOperations
         cancelRun={cancelRun}
         initialOperations={initialOperations}
-        key={`${params.owner}/${params.repo}`}
+        key={`${params.owner}/${params.repo}/${initialOperations ? 'member' : 'hidden'}`}
         loadDetail={loadRunDetail}
         loadOperations={loadRunOperations}
         params={params}

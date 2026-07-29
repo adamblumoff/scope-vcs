@@ -20,6 +20,7 @@ import { useEffect, useRef, useState } from 'react'
 
 const DATE_FORMATTER = new Intl.DateTimeFormat('en-US', {
   dateStyle: 'medium',
+  timeZone: 'UTC',
   timeStyle: 'short',
 })
 const ACTIVE_RUN_STATES = new Set(['queued', 'leased', 'running'])
@@ -48,25 +49,39 @@ export function RepositoryOperations({
   }))
   const detailGeneration = useRef(0)
   const operationsGeneration = useRef(0)
+  const selectedActiveRunIdRef = useRef<string | null>(null)
   const selectedRunIdRef = useRef<string | null>(null)
   const { detail, error, operations, pendingRunId, selectedRunId } = view
   const canPoll = operations !== null
   const hasActiveRun = operations?.runs.some((run) =>
     ACTIVE_RUN_STATES.has(run.state),
   ) ?? false
+  const selectedRunIsActive = operations?.runs.some(
+    (run) => run.id === selectedRunId && ACTIVE_RUN_STATES.has(run.state),
+  ) ?? false
 
   useEffect(() => {
+    const needsFinalDetail =
+      selectedRunId !== null &&
+      selectedActiveRunIdRef.current === selectedRunId &&
+      !selectedRunIsActive
+    selectedActiveRunIdRef.current = selectedRunIsActive
+      ? selectedRunId
+      : null
     if (!canPoll) return
     let disposed = false
 
-    const refresh = async () => {
+    const refresh = async (includeTerminalDetail = false) => {
+      const refreshesDetail =
+        selectedRunId !== null &&
+        (selectedRunIsActive || includeTerminalDetail)
       const operationsRequestGeneration = ++operationsGeneration.current
-      const detailRequestGeneration = selectedRunId
+      const detailRequestGeneration = refreshesDetail
         ? ++detailGeneration.current
         : null
       const [operationsResult, detailResult] = await Promise.allSettled([
         loadOperations(params),
-        selectedRunId
+        refreshesDetail
           ? loadDetail({ ...params, run_id: selectedRunId })
           : Promise.resolve(null),
       ])
@@ -106,11 +121,15 @@ export function RepositoryOperations({
         }
       })
     }
-    const refreshInterval = hasActiveRun || selectedRunId ? 5_000 : 15_000
+    const refreshInterval = hasActiveRun ? 5_000 : 15_000
     const timer = window.setInterval(() => void refresh(), refreshInterval)
+    const finalDetailTimer = needsFinalDetail
+      ? window.setTimeout(() => void refresh(true), 0)
+      : null
     return () => {
       disposed = true
       window.clearInterval(timer)
+      if (finalDetailTimer !== null) window.clearTimeout(finalDetailTimer)
     }
   }, [
     canPoll,
@@ -118,6 +137,7 @@ export function RepositoryOperations({
     loadDetail,
     loadOperations,
     params,
+    selectedRunIsActive,
     selectedRunId,
   ])
 
@@ -234,20 +254,7 @@ export function RepositoryOperations({
   return (
     <section aria-labelledby="repository-operations-heading" className="border-t border-border">
       <div className="px-5 py-6 sm:px-8">
-        <p className="text-xs font-semibold uppercase tracking-[0.18em] text-muted-foreground">
-          Execute
-        </p>
-        <div className="mt-1 flex flex-wrap items-end justify-between gap-3">
-          <div>
-            <h2 className="text-lg font-semibold" id="repository-operations-heading">
-              Runs
-            </h2>
-            <p className="mt-1 text-sm text-muted-foreground">
-              Jobs from <code>.scope/runs</code> on your attached machines.
-            </p>
-          </div>
-          <code className="text-xs text-muted-foreground">scope run &lt;workflow&gt; --runner &lt;name&gt;</code>
-        </div>
+        <OperationsHeader />
         {error && (
           <p className="mt-4 text-sm text-destructive" role="alert">{error}</p>
         )}
@@ -312,6 +319,25 @@ export function RepositoryOperations({
   )
 }
 
+function OperationsHeader() {
+  return (
+    <>
+      <p className="text-xs font-semibold uppercase tracking-[0.18em] text-muted-foreground">
+        Execute
+      </p>
+      <div className="mt-1 flex flex-wrap items-end justify-between gap-3">
+        <div>
+          <h2 className="text-lg font-semibold" id="repository-operations-heading">Runs</h2>
+          <p className="mt-1 text-sm text-muted-foreground">
+            Jobs from <code>.scope/runs</code> on your attached machines.
+          </p>
+        </div>
+        <code className="text-xs text-muted-foreground">scope run &lt;workflow&gt; --runner &lt;name&gt;</code>
+      </div>
+    </>
+  )
+}
+
 function RunRow({
   detail,
   expanded,
@@ -330,6 +356,16 @@ function RunRow({
   run: RepoRun
 }) {
   const stateLabel = run.cancellation_requested ? 'canceling' : run.state
+  const attemptLabel = run.attempt_number === 0
+    ? null
+    : run.state === 'queued'
+      ? `last attempt ${run.attempt_number}`
+      : `attempt ${run.attempt_number}`
+  const metadata = [
+    run.git_oid.slice(0, 12),
+    run.desired_runner ?? 'any runner',
+    attemptLabel,
+  ].filter(Boolean).join(' · ')
   return (
     <div>
       <div className="flex min-w-0 flex-col gap-3 px-2 py-4 sm:flex-row sm:items-center">
@@ -348,7 +384,7 @@ function RunRow({
           <span className="min-w-0">
             <span className="block truncate text-sm font-medium">{run.workflow_name}</span>
             <span className="mt-1 block truncate font-mono text-[11px] text-muted-foreground">
-              {run.git_oid.slice(0, 12)} · {run.desired_runner ?? 'any runner'} · attempt {run.attempt_number}
+              {metadata}
             </span>
           </span>
         </button>

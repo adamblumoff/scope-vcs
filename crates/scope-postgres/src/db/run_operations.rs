@@ -22,19 +22,40 @@ pub struct RecentRunLogs {
 }
 
 impl RunStore {
-    pub async fn recent_repository_runs(
+    pub async fn repository_operations_runs(
         &self,
         repository_id: &str,
-        limit: u64,
+        recent_limit: u64,
     ) -> Result<Vec<Run>, PostgresError> {
-        entities::run::Entity::find()
+        let mut models = entities::run::Entity::find()
             .filter(entities::run::Column::RepoId.eq(repository_id))
+            .filter(entities::run::Column::CompletedAtUnix.is_null())
             .order_by_desc(entities::run::Column::UpdatedAtUnix)
             .order_by_desc(entities::run::Column::Id)
-            .limit(limit)
             .all(self.db.as_ref())
             .await
-            .map_err(PostgresError::internal)?
+            .map_err(PostgresError::internal)?;
+        let terminal_limit = recent_limit.saturating_sub(models.len() as u64);
+        if terminal_limit > 0 {
+            let active_run_ids = models.iter().map(|run| run.id.clone()).collect::<Vec<_>>();
+            let mut terminal_query = entities::run::Entity::find()
+                .filter(entities::run::Column::RepoId.eq(repository_id))
+                .filter(entities::run::Column::CompletedAtUnix.is_not_null())
+                .order_by_desc(entities::run::Column::UpdatedAtUnix)
+                .order_by_desc(entities::run::Column::Id)
+                .limit(terminal_limit);
+            if !active_run_ids.is_empty() {
+                terminal_query =
+                    terminal_query.filter(entities::run::Column::Id.is_not_in(active_run_ids));
+            }
+            models.extend(
+                terminal_query
+                    .all(self.db.as_ref())
+                    .await
+                    .map_err(PostgresError::internal)?,
+            );
+        }
+        models
             .into_iter()
             .map(entities::run::Model::try_into_domain)
             .collect()

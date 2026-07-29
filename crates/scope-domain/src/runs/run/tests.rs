@@ -218,7 +218,10 @@ fn cancellation_waits_for_active_runner_acknowledgement() {
         .claim(&runner(), &grant(), "attempt-1", "e".repeat(64), 20, 80)
         .unwrap();
 
+    assert!(run.can_request_cancellation());
+    assert!(!run.can_retry());
     assert!(run.request_cancellation(30).unwrap());
+    assert!(!run.can_request_cancellation());
     assert_eq!(run.state, RunState::Leased);
     assert!(!run.request_cancellation(40).unwrap());
     assert_eq!(run.updated_at_unix, 30);
@@ -243,6 +246,11 @@ fn cancellation_waits_for_active_runner_acknowledgement() {
         )
         .unwrap();
     assert_eq!(run.state, RunState::Canceled);
+    assert!(!run.can_request_cancellation());
+    assert!(run.can_retry());
+    run.retry(60).unwrap();
+    assert!(run.can_request_cancellation());
+    assert!(!run.can_retry());
 }
 
 #[test]

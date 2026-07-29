@@ -447,8 +447,12 @@ impl Run {
         Ok(attempt)
     }
 
+    pub fn can_request_cancellation(&self) -> bool {
+        !self.state.is_terminal() && !self.cancellation_requested
+    }
+
     pub fn request_cancellation(&mut self, now_unix: u64) -> Result<bool, DomainError> {
-        if self.state.is_terminal() {
+        if !self.can_request_cancellation() {
             return Ok(false);
         }
         self.ensure_time_not_before_update(now_unix)?;
@@ -458,9 +462,6 @@ impl Run {
             self.updated_at_unix = now_unix;
             self.completed_at_unix = Some(now_unix);
             return Ok(true);
-        }
-        if self.cancellation_requested {
-            return Ok(false);
         }
         self.cancellation_requested = true;
         self.updated_at_unix = now_unix;
@@ -529,8 +530,12 @@ impl Run {
         Ok(())
     }
 
+    pub fn can_retry(&self) -> bool {
+        self.state.is_terminal()
+    }
+
     pub fn retry(&mut self, now_unix: u64) -> Result<(), DomainError> {
-        if !self.state.is_terminal() {
+        if !self.can_retry() {
             return Err(DomainError::conflict("only a terminal run can be retried"));
         }
         self.ensure_time_not_before_update(now_unix)?;
