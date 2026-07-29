@@ -10,14 +10,14 @@ container:
 timeout: 30m
 steps:
   - name: Check formatting
-    run: cargo fmt --manifest-path cli/Cargo.toml -- --check
+    run: RUSTUP_TOOLCHAIN=1.94.0-x86_64-unknown-linux-gnu cargo fmt --manifest-path cli/Cargo.toml -- --check
   - name: Test
-    run: cargo test --manifest-path cli/Cargo.toml --locked
+    run: RUSTUP_TOOLCHAIN=1.94.0-x86_64-unknown-linux-gnu cargo test --manifest-path cli/Cargo.toml --locked
   - name: Lint
-    run: cargo clippy --manifest-path cli/Cargo.toml --all-targets --locked -- -D warnings
+    run: RUSTUP_TOOLCHAIN=1.94.0-x86_64-unknown-linux-gnu cargo clippy --manifest-path cli/Cargo.toml --all-targets --locked -- -D warnings
   - name: Build release binaries
     run: |
-      cargo build \
+      RUSTUP_TOOLCHAIN=1.94.0-x86_64-unknown-linux-gnu cargo build \
         --manifest-path cli/Cargo.toml \
         --release \
         --locked \
