@@ -1,10 +1,14 @@
-use super::{RunStore, entities};
+use super::{
+    GeneratedIdSource, RunStore, cleanup_queue::queue_pending_source_blob_deletion_rows, entities,
+    object_references::insert_object_reference,
+};
 use crate::error::PostgresError;
 use scope_domain::runs::{
-    run::{AttemptConclusion, Run, RunAttempt, RunLogChunk},
+    run::{AttemptConclusion, PinnedContainerImage, Run, RunAttempt, RunLogChunk},
     runner::{Runner, RunnerGrant},
     workflow::WorkflowRevision,
 };
+use scope_domain::store::SourceBlob;
 use sea_orm::{
     ActiveModelTrait, ActiveValue::NotSet, ColumnTrait, Condition, DatabaseTransaction, DbErr,
     EntityTrait, IntoActiveModel, QueryFilter, QueryOrder, QuerySelect, TransactionTrait,
@@ -153,7 +157,7 @@ impl RunStore {
             .map_err(PostgresError::internal)?
             .ok_or_else(|| PostgresError::unauthenticated("runner credentials are invalid"))?;
         let mut runner = model.try_into_domain()?;
-        if !runner.supports_v1_dispatch() {
+        if !runner.supports_dispatch() {
             return Err(PostgresError::permission_denied(
                 "runner is disabled or incompatible with the V1 protocol",
             ));
@@ -274,7 +278,8 @@ impl RunStore {
             .exec(&tx)
             .await
             .map_err(PostgresError::internal)?;
-        let stored = if !matches!(result, TryInsertResult::Inserted(_)) {
+        let inserted = matches!(result, TryInsertResult::Inserted(_));
+        let stored = if !inserted {
             let stored = entities::run::Entity::find()
                 .filter(entities::run::Column::RepoId.eq(run.workflow.repository_id().to_string()))
                 .filter(entities::run::Column::IdempotencyKey.eq(run.idempotency_key.clone()))
@@ -292,6 +297,9 @@ impl RunStore {
             }
             stored
         } else {
+            for object in run.source.retained_objects() {
+                insert_object_reference(&tx, "run_source", &run.id, object).await?;
+            }
             run
         };
         tx.commit().await.map_err(PostgresError::internal)?;
@@ -308,7 +316,7 @@ impl RunStore {
             .map_err(PostgresError::internal)?
             .ok_or_else(|| PostgresError::not_found("runner not found"))?
             .try_into_domain()?;
-        if !runner.supports_v1_dispatch() {
+        if !runner.supports_dispatch() {
             return Ok(None);
         }
 
@@ -406,6 +414,37 @@ impl RunStore {
         .await
     }
 
+    pub async fn pin_attempt_container_image(
+        &self,
+        attempt_id: &str,
+        runner_id: &str,
+        token_hash: &str,
+        image: PinnedContainerImage,
+        now_unix: u64,
+    ) -> Result<DispatchClaim, PostgresError> {
+        let tx = self.db.begin().await.map_err(PostgresError::internal)?;
+        let (mut run, attempt) = locked_attempt_context(&tx, attempt_id).await?;
+        ensure_runner_authorized(&tx, &run, &attempt).await?;
+        attempt
+            .authenticate_access(&run, token_hash, now_unix)
+            .map_err(PostgresError::from)?;
+        if attempt.runner_id != runner_id {
+            return Err(PostgresError::permission_denied(
+                "attempt runner identity does not match",
+            ));
+        }
+        run.pin_container_image(image, now_unix)
+            .map_err(PostgresError::from)?;
+        save_run(&tx, &run).await?;
+        let workflow_revision = workflow_revision_for_run(&tx, &run).await?;
+        tx.commit().await.map_err(PostgresError::internal)?;
+        Ok(DispatchClaim {
+            run,
+            attempt,
+            workflow_revision,
+        })
+    }
+
     pub async fn heartbeat_attempt(
         &self,
         attempt_id: &str,
@@ -441,6 +480,19 @@ impl RunStore {
         .await
     }
 
+    pub async fn abandon_attempt(
+        &self,
+        attempt_id: &str,
+        runner_id: &str,
+        token_hash: &str,
+        now_unix: u64,
+    ) -> Result<DispatchClaim, PostgresError> {
+        self.mutate_attempt(attempt_id, |run, attempt| {
+            attempt.abandon(run, runner_id, token_hash, now_unix)
+        })
+        .await
+    }
+
     pub async fn expire_attempt(
         &self,
         attempt_id: &str,
@@ -460,6 +512,29 @@ impl RunStore {
             attempt,
             workflow_revision,
         })
+    }
+
+    pub async fn expired_attempt_ids(
+        &self,
+        now_unix: u64,
+        limit: u64,
+    ) -> Result<Vec<String>, PostgresError> {
+        let now_unix = entities::u64_to_i64(now_unix, "attempt recovery time")?;
+        Ok(entities::run_attempt::Entity::find()
+            .filter(
+                entities::run_attempt::Column::State
+                    .is_in(["leased".to_string(), "running".to_string()]),
+            )
+            .filter(entities::run_attempt::Column::LeaseExpiresAtUnix.lte(now_unix))
+            .order_by_asc(entities::run_attempt::Column::LeaseExpiresAtUnix)
+            .order_by_asc(entities::run_attempt::Column::Id)
+            .limit(limit)
+            .all(self.db.as_ref())
+            .await
+            .map_err(PostgresError::internal)?
+            .into_iter()
+            .map(|attempt| attempt.id)
+            .collect())
     }
 
     pub async fn request_run_cancellation(
@@ -629,6 +704,73 @@ impl RunStore {
                 })
             })
             .collect()
+    }
+
+    pub async fn prune_terminal_runs(
+        &self,
+        completed_before_unix: u64,
+        now_unix: u64,
+        limit: u64,
+        generated_ids: &dyn GeneratedIdSource,
+    ) -> Result<usize, PostgresError> {
+        let cutoff = entities::u64_to_i64(completed_before_unix, "run retention cutoff")?;
+        let tx = self.db.begin().await.map_err(PostgresError::internal)?;
+        let models = entities::run::Entity::find()
+            .filter(entities::run::Column::State.is_in([
+                "succeeded".to_string(),
+                "failed".to_string(),
+                "canceled".to_string(),
+                "lost".to_string(),
+            ]))
+            .filter(entities::run::Column::CompletedAtUnix.lte(cutoff))
+            .order_by_asc(entities::run::Column::CompletedAtUnix)
+            .order_by_asc(entities::run::Column::Id)
+            .limit(limit)
+            .lock_exclusive()
+            .all(&tx)
+            .await
+            .map_err(PostgresError::internal)?;
+        let runs = models
+            .into_iter()
+            .map(entities::run::Model::try_into_domain)
+            .collect::<Result<Vec<_>, _>>()?;
+        let run_ids = runs.iter().map(|run| run.id.clone()).collect::<Vec<_>>();
+        if run_ids.is_empty() {
+            tx.commit().await.map_err(PostgresError::internal)?;
+            return Ok(0);
+        }
+        let sources = runs
+            .iter()
+            .flat_map(|run| run.source.retained_objects())
+            .cloned()
+            .collect::<Vec<SourceBlob>>();
+
+        entities::run_log::Entity::delete_many()
+            .filter(entities::run_log::Column::RunId.is_in(run_ids.clone()))
+            .exec(&tx)
+            .await
+            .map_err(PostgresError::internal)?;
+        entities::run_attempt::Entity::delete_many()
+            .filter(entities::run_attempt::Column::RunId.is_in(run_ids.clone()))
+            .exec(&tx)
+            .await
+            .map_err(PostgresError::internal)?;
+        entities::object_reference::Entity::delete_many()
+            .filter(entities::object_reference::Column::RefKind.eq("run_source"))
+            .filter(entities::object_reference::Column::RefId.is_in(run_ids.clone()))
+            .exec(&tx)
+            .await
+            .map_err(PostgresError::internal)?;
+        entities::run::Entity::delete_many()
+            .filter(entities::run::Column::Id.is_in(run_ids))
+            .exec(&tx)
+            .await
+            .map_err(PostgresError::internal)?;
+        queue_pending_source_blob_deletion_rows(&tx, sources.clone(), now_unix, generated_ids)
+            .await?;
+        tx.commit().await.map_err(PostgresError::internal)?;
+
+        Ok(sources.len())
     }
 
     async fn mutate_attempt(

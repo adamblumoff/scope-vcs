@@ -1,9 +1,11 @@
 use super::*;
+use futures_util::StreamExt;
 use scope_api_contract::{
     AppendAttemptLogRequest, AttemptConclusionRequest, CompleteAttemptRequest,
-    RegisterRunnerRequest,
+    PinAttemptContainerImageRequest, RegisterRunnerRequest,
 };
-use scope_domain::runs::runner::{MIN_RUNNER_PROTOCOL_VERSION, RunnerCapabilities};
+use scope_domain::runs::runner::{RUNNER_PROTOCOL_VERSION, RunnerCapabilities};
+use std::time::Duration;
 
 const WORKFLOW: &str = r#"
 name: Test
@@ -35,7 +37,7 @@ async fn manual_run_protocol_crosses_human_runner_and_attempt_credentials() {
                 repo: TEST_REPO_NAME.to_string(),
                 name: "linux-box".to_string(),
                 version: "0.1.0".to_string(),
-                protocol_version: MIN_RUNNER_PROTOCOL_VERSION,
+                protocol_version: RUNNER_PROTOCOL_VERSION,
                 capabilities: RunnerCapabilities::v1(),
             },
         ))
@@ -133,6 +135,22 @@ async fn manual_run_protocol_crosses_human_runner_and_attempt_credentials() {
         bundle
     );
 
+    let pinned_image = format!("docker.io/library/alpine@sha256:{}", "a".repeat(64));
+    let pinned = app
+        .clone()
+        .oneshot(json_request(
+            "POST",
+            &scope_api_contract::routes::attempt_container_image(&attempt_id),
+            Some(format!("Bearer {attempt_token}")),
+            &PinAttemptContainerImageRequest {
+                image: pinned_image.clone(),
+            },
+        ))
+        .await
+        .unwrap();
+    assert_eq!(pinned.status(), StatusCode::OK);
+    assert_eq!(response_json(pinned).await["image"], pinned_image);
+
     let started = app
         .clone()
         .oneshot(machine_request(
@@ -176,9 +194,37 @@ async fn manual_run_protocol_crosses_human_runner_and_attempt_credentials() {
         .await
         .unwrap();
     assert_eq!(events.status(), StatusCode::OK);
-    let events = response_json(events).await;
-    assert_eq!(events["logs"][0]["text"], "hello from runner\n");
-    assert_eq!(events["run"]["state"], "running");
+    assert_eq!(events.headers()[CONTENT_TYPE], "text/event-stream");
+    let mut event_stream = events.into_body().into_data_stream();
+    let mut event_bytes = Vec::new();
+    while !String::from_utf8_lossy(&event_bytes).contains("\"state\":\"running\"") {
+        let chunk = tokio::time::timeout(Duration::from_secs(2), event_stream.next())
+            .await
+            .unwrap()
+            .unwrap()
+            .unwrap();
+        event_bytes.extend_from_slice(&chunk);
+    }
+    let events = String::from_utf8(event_bytes).unwrap();
+    assert!(events.contains("\"text\":\"hello from runner\\n\""));
+    assert!(events.contains("\"state\":\"running\""));
+
+    for sequence in 2..=66 {
+        let logged = app
+            .clone()
+            .oneshot(json_request(
+                "POST",
+                &scope_api_contract::routes::attempt_logs(&attempt_id),
+                Some(format!("Bearer {attempt_token}")),
+                &AppendAttemptLogRequest {
+                    sequence,
+                    text: format!("chunk-{sequence}\n"),
+                },
+            ))
+            .await
+            .unwrap();
+        assert_eq!(logged.status(), StatusCode::OK);
+    }
 
     let completed = app
         .clone()
@@ -193,6 +239,31 @@ async fn manual_run_protocol_crosses_human_runner_and_attempt_credentials() {
         .await
         .unwrap();
     assert_eq!(completed.status(), StatusCode::OK);
+
+    let terminal_events = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri(format!(
+                    "{}?after=0",
+                    scope_api_contract::routes::repo_run_events(
+                        TEST_REPO_OWNER,
+                        TEST_REPO_NAME,
+                        &run_id
+                    )
+                ))
+                .header(AUTHORIZATION, bearer_header())
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let terminal_events = to_bytes(terminal_events.into_body(), 1024 * 1024)
+        .await
+        .unwrap();
+    let terminal_events = String::from_utf8(terminal_events.to_vec()).unwrap();
+    assert!(terminal_events.contains("\"text\":\"chunk-66\\n\""));
+    assert!(terminal_events.contains("\"state\":\"succeeded\""));
 
     let human_cannot_use_attempt_token = app
         .clone()
@@ -247,7 +318,7 @@ async fn unused_runner_registration_can_be_rolled_back() {
                 repo: TEST_REPO_NAME.to_string(),
                 name: "rollback-box".to_string(),
                 version: "0.1.0".to_string(),
-                protocol_version: MIN_RUNNER_PROTOCOL_VERSION,
+                protocol_version: RUNNER_PROTOCOL_VERSION,
                 capabilities: RunnerCapabilities::v1(),
             },
         ))

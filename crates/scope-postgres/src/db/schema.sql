@@ -168,9 +168,8 @@ CREATE TABLE scope_runs (
     workflow_revision_digest character varying NOT NULL,
     trigger character varying NOT NULL,
     requested_by_user_id character varying,
-    source_snapshot_id character varying NOT NULL,
-    source_digest character varying NOT NULL,
-    source_git_oid character varying NOT NULL,
+    source jsonb NOT NULL,
+    pinned_container_image text,
     desired_runner_name character varying,
     state character varying NOT NULL,
     cancellation_requested boolean NOT NULL,
@@ -1291,8 +1290,30 @@ ALTER TABLE scope_workflow_revisions
 ALTER TABLE scope_runs
     ADD CONSTRAINT scope_runs_values CHECK (
         char_length(workflow_revision_digest) = 64 AND workflow_revision_digest ~ '^[0-9A-Fa-f]+$' AND
-        char_length(source_digest) = 64 AND source_digest ~ '^[0-9A-Fa-f]+$' AND
-        char_length(source_git_oid) = 40 AND source_git_oid ~ '^[0-9A-Fa-f]+$' AND
+        (
+            (
+                source->>'kind' = 'ephemeral-git-bundle' AND
+                char_length(source#>>'{object,sha256}') = 64 AND
+                (source#>>'{object,sha256}') ~ '^[0-9A-Fa-f]+$' AND
+                char_length(source#>>'{object,git_oid}') = 40 AND
+                (source#>>'{object,git_oid}') ~ '^[0-9A-Fa-f]+$'
+            ) OR (
+                source->>'kind' = 'accepted-revision' AND
+                (source->>'change_version')::numeric > 0 AND
+                source->>'audience' IN ('Private', 'Public') AND
+                char_length(source#>>'{manifest,sha256}') = 64 AND
+                (source#>>'{manifest,sha256}') ~ '^[0-9A-Fa-f]+$' AND
+                char_length(source#>>'{snapshot,sha256}') = 64 AND
+                (source#>>'{snapshot,sha256}') ~ '^[0-9A-Fa-f]+$' AND
+                char_length(source#>>'{snapshot,git_oid}') = 40 AND
+                (source#>>'{snapshot,git_oid}') ~ '^[0-9A-Fa-f]+$' AND
+                (source#>>'{manifest,git_oid}') = (source#>>'{snapshot,git_oid}')
+            )
+        ) AND
+        (
+            pinned_container_image IS NULL OR
+            pinned_container_image ~ '@sha256:[0-9A-Fa-f]{64}$'
+        ) AND
         trigger IN ('manual', 'push-main') AND
         state IN ('queued', 'leased', 'running', 'succeeded', 'failed', 'canceled', 'lost') AND
         last_attempt_number >= 0 AND created_at_unix >= 0 AND updated_at_unix >= created_at_unix AND

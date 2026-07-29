@@ -12,7 +12,7 @@ use scope_api_contract::{
     AppendAttemptLogRequest, AttemptConclusionRequest, ClaimRunResponse, CompleteAttemptRequest,
     RegisterRunnerRequest, RunnerResponse,
 };
-use scope_domain::runs::runner::{MIN_RUNNER_PROTOCOL_VERSION, RunnerCapabilities};
+use scope_domain::runs::runner::{RUNNER_PROTOCOL_VERSION, RunnerCapabilities};
 use sha2::{Digest, Sha256};
 use std::{
     env, fs,
@@ -24,8 +24,14 @@ use std::{
     time::Duration,
 };
 
+mod image;
 mod supervisor;
-use supervisor::{AttemptStopReason, AttemptSupervisor, terminate_container};
+use image::resolve_container_image;
+mod recovery;
+#[cfg(test)]
+use recovery::cleanup_work_root;
+use recovery::{persist_recovery_claim, reconcile_runner_state};
+use supervisor::{AttemptStopReason, AttemptSupervisor};
 
 const RUNNER_SERVICE_NAME: &str = "scope-runner.service";
 const CONTAINER_MEMORY: &str = "4g";
@@ -97,7 +103,7 @@ pub fn install(name: &str, repository: &str) -> anyhow::Result<()> {
             repo: repo.to_string(),
             name: name.to_string(),
             version: env!("CARGO_PKG_VERSION").to_string(),
-            protocol_version: MIN_RUNNER_PROTOCOL_VERSION,
+            protocol_version: RUNNER_PROTOCOL_VERSION,
             capabilities: RunnerCapabilities::v1(),
         },
     )?;
@@ -253,6 +259,7 @@ fn execute_claim(config: &RunnerConfig, claim: &ClaimRunResponse) -> anyhow::Res
     let client = runner_client()?;
     let mut supervisor = AttemptSupervisor::start(config.clone(), claim.clone())?;
     let work = RunnerWorkDir::new(&claim.attempt_id)?;
+    persist_recovery_claim(&work.path, claim)?;
     let bundle_path = work.path.join("source.bundle");
     let source_client = source_download_client()?;
     download_attempt_source(
@@ -291,6 +298,7 @@ fn execute_claim(config: &RunnerConfig, claim: &ClaimRunResponse) -> anyhow::Res
     if actual_oid.trim() != claim.job.git_oid {
         bail!("checked-out commit does not match the claimed job");
     }
+    let container_image = resolve_container_image(&client, config, claim)?;
     let script_path = work.path.join("job.sh");
     fs::write(&script_path, job_script(&claim.job.workflow)).context("write run script")?;
     if finish_before_execution(&mut supervisor, &client, config, claim)? {
@@ -326,7 +334,7 @@ fn execute_claim(config: &RunnerConfig, claim: &ClaimRunResponse) -> anyhow::Res
         .arg("-v")
         .arg(script_mount)
         .args([
-            claim.job.workflow.container().image(),
+            &container_image,
             "sh",
             "-c",
             "mkdir -p /workspace && cp -a /scope/source/. /workspace/ && cd /workspace && exec sh /scope/job.sh",
@@ -540,70 +548,6 @@ fn append_log_with_retry(
         }
     }
     Err(last_error.expect("log retry records an error"))
-}
-
-fn reconcile_runner_containers(runner_id: &str) -> anyhow::Result<()> {
-    let output = Command::new("docker")
-        .args([
-            "ps",
-            "-aq",
-            "--filter",
-            &format!("label=scope.runner-id={runner_id}"),
-        ])
-        .output()
-        .context("list stale Scope runner containers")?;
-    if !output.status.success() {
-        bail!(
-            "list stale Scope runner containers: {}",
-            String::from_utf8_lossy(&output.stderr).trim()
-        );
-    }
-    for container_id in String::from_utf8_lossy(&output.stdout)
-        .lines()
-        .map(str::trim)
-        .filter(|id| !id.is_empty())
-    {
-        if !terminate_container(container_id) {
-            bail!("could not confirm stale Scope container {container_id} was removed");
-        }
-    }
-    Ok(())
-}
-
-fn reconcile_runner_state(config: &RunnerConfig) -> anyhow::Result<()> {
-    reconcile_runner_containers(&config.runner_id)?;
-    cleanup_runner_workdirs()
-}
-
-fn cleanup_runner_workdirs() -> anyhow::Result<()> {
-    let root = runner_work_root()?;
-    if !root.exists() {
-        return Ok(());
-    }
-    cleanup_work_root(&root)
-}
-
-fn cleanup_work_root(root: &Path) -> anyhow::Result<()> {
-    let metadata = fs::symlink_metadata(root).context("inspect runner work root")?;
-    if !metadata.file_type().is_dir() || metadata.file_type().is_symlink() {
-        bail!(
-            "runner work root is not a real directory: {}",
-            root.display()
-        );
-    }
-    for entry in fs::read_dir(root).context("read runner work root")? {
-        let entry = entry.context("read runner work entry")?;
-        let file_type = entry.file_type().context("inspect runner work entry")?;
-        let path = entry.path();
-        if file_type.is_dir() && !file_type.is_symlink() {
-            fs::remove_dir_all(&path)
-                .with_context(|| format!("remove stale runner work {}", path.display()))?;
-        } else {
-            fs::remove_file(&path)
-                .with_context(|| format!("remove stale runner work {}", path.display()))?;
-        }
-    }
-    Ok(())
 }
 
 fn complete_canceled(

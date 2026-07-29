@@ -3,7 +3,7 @@ use serde::{Deserialize, Serialize};
 
 pub const MAX_RUNNER_NAME_BYTES: usize = 64;
 pub const MAX_RUNNER_VERSION_BYTES: usize = 100;
-pub const MIN_RUNNER_PROTOCOL_VERSION: u32 = 1;
+pub const RUNNER_PROTOCOL_VERSION: u32 = 2;
 
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 #[serde(transparent)]
@@ -117,9 +117,9 @@ impl Runner {
         })
     }
 
-    pub fn supports_v1_dispatch(&self) -> bool {
+    pub fn supports_dispatch(&self) -> bool {
         self.enabled
-            && self.protocol_version >= MIN_RUNNER_PROTOCOL_VERSION
+            && self.protocol_version >= RUNNER_PROTOCOL_VERSION
             && self.capabilities == RunnerCapabilities::v1()
     }
 
@@ -272,12 +272,23 @@ mod tests {
             "user-1",
             "a".repeat(64),
             "1.0.0",
-            MIN_RUNNER_PROTOCOL_VERSION,
+            RUNNER_PROTOCOL_VERSION,
             RunnerCapabilities::v1(),
             10,
         )
         .unwrap();
-        assert!(runner.supports_v1_dispatch());
+        assert!(runner.supports_dispatch());
+        let previous_protocol = Runner::new(
+            "runner-old",
+            "user-1",
+            "b".repeat(64),
+            "0.1.0",
+            RUNNER_PROTOCOL_VERSION - 1,
+            RunnerCapabilities::v1(),
+            10,
+        )
+        .unwrap();
+        assert!(!previous_protocol.supports_dispatch());
 
         let mut reordered = runner;
         reordered.record_seen(20).unwrap();

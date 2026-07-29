@@ -71,6 +71,8 @@ impl AppState {
             test_object_store: Arc::new(scope_object_store::MemoryObjectStore::new()),
         };
         state.start_raw_git_cache_reaper();
+        state.start_run_attempt_recovery();
+        state.start_run_retention();
         best_effort_drain_pending_repo_storage_deletions(&state).await;
         Ok(state)
     }

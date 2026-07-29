@@ -3,10 +3,11 @@ use crate::error::PostgresErrorKind;
 use scope_domain::{
     policy::Visibility,
     runs::{
-        run::{AttemptConclusion, AttemptState, Run, RunLogChunk, RunSource, RunState, RunTrigger},
-        runner::{
-            MIN_RUNNER_PROTOCOL_VERSION, Runner, RunnerCapabilities, RunnerGrant, RunnerName,
+        run::{
+            AttemptConclusion, AttemptState, PinnedContainerImage, Run, RunLogChunk, RunSource,
+            RunState, RunTrigger,
         },
+        runner::{RUNNER_PROTOCOL_VERSION, Runner, RunnerCapabilities, RunnerGrant, RunnerName},
         workflow::{
             CompiledWorkflow, ContainerSpec, RunnerSelector, WorkflowIdentity, WorkflowPath,
             WorkflowRevision, WorkflowStep, WorkflowTriggers,
@@ -14,6 +15,7 @@ use scope_domain::{
     },
     store::{RepoPublicationState, StoredRepository, UserAccount},
 };
+use sha2::{Digest, Sha256};
 use std::sync::Arc;
 use tokio::{sync::Barrier, task::JoinSet};
 
@@ -133,6 +135,14 @@ async fn lease_recovery_requeues_only_before_execution_and_rejects_stale_attempt
         .claim_run("run-1", "runner-1", "attempt-1", &"a".repeat(64), 20, 80)
         .await
         .unwrap();
+    assert_eq!(
+        store.runs().expired_attempt_ids(79, 10).await.unwrap(),
+        Vec::<String>::new()
+    );
+    assert_eq!(
+        store.runs().expired_attempt_ids(80, 10).await.unwrap(),
+        vec!["attempt-1"]
+    );
     let recovered = store.runs().expire_attempt("attempt-1", 80).await.unwrap();
     assert_eq!(recovered.run.state, RunState::Queued);
 
@@ -155,14 +165,72 @@ async fn lease_recovery_requeues_only_before_execution_and_rejects_stale_attempt
         .unwrap_err();
     assert_eq!(stale.kind, PostgresErrorKind::Conflict);
 
+    pin_attempt(&store, "attempt-2", "runner-1", &"b".repeat(64), 89).await;
     store
         .runs()
         .start_attempt("attempt-2", "runner-1", &"b".repeat(64), 90)
         .await
         .unwrap();
+    assert_eq!(
+        store.runs().expired_attempt_ids(140, 10).await.unwrap(),
+        vec!["attempt-2"]
+    );
     let lost = store.runs().expire_attempt("attempt-2", 140).await.unwrap();
     assert_eq!(lost.run.state, RunState::Lost);
     assert_eq!(lost.attempt.state, AttemptState::Lost);
+}
+
+#[tokio::test]
+async fn terminal_run_retention_deletes_metadata_and_queues_its_source_atomically() {
+    let store = postgres_store();
+    register_runner(&store, "runner-1", "linux-box").await;
+    enqueue(&store, run("run-1", "manual:retention"), revision()).await;
+    store
+        .runs()
+        .claim_run("run-1", "runner-1", "attempt-1", &"a".repeat(64), 20, 80)
+        .await
+        .unwrap();
+    pin_attempt(&store, "attempt-1", "runner-1", &"a".repeat(64), 21).await;
+    store
+        .runs()
+        .start_attempt("attempt-1", "runner-1", &"a".repeat(64), 22)
+        .await
+        .unwrap();
+    store
+        .runs()
+        .complete_attempt(
+            "attempt-1",
+            "runner-1",
+            &"a".repeat(64),
+            AttemptConclusion::Succeeded,
+            30,
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(
+        store
+            .runs()
+            .prune_terminal_runs(29, 40, 10, &super::generated_ids::test_generated_id)
+            .await
+            .unwrap(),
+        0
+    );
+    assert_eq!(
+        store
+            .runs()
+            .prune_terminal_runs(30, 40, 10, &super::generated_ids::test_generated_id)
+            .await
+            .unwrap(),
+        1
+    );
+    assert!(store.runs().run("run-1").await.unwrap().is_none());
+    let cleanup = store
+        .cleanup()
+        .source_blob_cleanup_batch(400, &super::generated_ids::test_generated_id)
+        .await
+        .unwrap();
+    assert_eq!(cleanup.pending.len(), 1);
 }
 
 #[tokio::test]
@@ -347,6 +415,7 @@ async fn machine_authentication_and_attempt_logs_are_narrow_and_idempotent() {
         .claim_run("run-1", "runner-1", "attempt-1", &"a".repeat(64), 20, 80)
         .await
         .unwrap();
+    pin_attempt(&store, "attempt-1", "runner-1", &"a".repeat(64), 20).await;
     store
         .runs()
         .start_attempt("attempt-1", "runner-1", &"a".repeat(64), 21)
@@ -595,7 +664,7 @@ fn runner(id: &str) -> Runner {
         "user_owner",
         hash_byte.to_string().repeat(64),
         "1.0.0",
-        MIN_RUNNER_PROTOCOL_VERSION,
+        RUNNER_PROTOCOL_VERSION,
         RunnerCapabilities::v1(),
         10,
     )
@@ -692,6 +761,7 @@ fn run_for_revision(
     trigger: RunTrigger,
     requested_by_user_id: Option<String>,
 ) -> Run {
+    let source_digest = hex::encode(Sha256::digest(id.as_bytes()));
     Run::new(
         id,
         idempotency_key,
@@ -699,7 +769,16 @@ fn run_for_revision(
         revision.digest(),
         trigger,
         requested_by_user_id,
-        RunSource::new(format!("snapshot-{id}"), "d".repeat(64), "e".repeat(40)).unwrap(),
+        RunSource::ephemeral_git_bundle(scope_domain::store::SourceBlob {
+            content_ref: scope_domain::content_ref::ContentRef::git_bundle_sha256(
+                source_digest.clone(),
+            ),
+            sha256: source_digest.clone(),
+            git_oid: source_digest[..40].to_string(),
+            git_file_mode: scope_domain::store::DEFAULT_GIT_FILE_MODE.to_string(),
+            size_bytes: 42,
+        })
+        .unwrap(),
         desired_runner,
         10,
     )
@@ -708,4 +787,25 @@ fn run_for_revision(
 
 async fn enqueue(store: &MetadataStore, run: Run, revision: WorkflowRevision) {
     store.runs().enqueue_run(run, revision).await.unwrap();
+}
+
+async fn pin_attempt(
+    store: &MetadataStore,
+    attempt_id: &str,
+    runner_id: &str,
+    token_hash: &str,
+    now_unix: u64,
+) {
+    store
+        .runs()
+        .pin_attempt_container_image(
+            attempt_id,
+            runner_id,
+            token_hash,
+            PinnedContainerImage::parse(format!("registry.example/job@sha256:{}", "1".repeat(64)))
+                .unwrap(),
+            now_unix,
+        )
+        .await
+        .unwrap();
 }

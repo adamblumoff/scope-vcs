@@ -1,16 +1,19 @@
 use crate::{
     auth::scope::require_scope_user, error::ApiError, http::responses::git_oid_request,
-    persistence::unix_now, repo_access::find_repo, state::AppState,
+    persistence::unix_now, repo_access::find_repo,
+    repo_cleanup::best_effort_cleanup_rollback_source_blobs, state::AppState,
 };
 use axum::{
     Json,
     body::{Body, to_bytes},
     extract::{Path, Query, State},
     http::HeaderMap,
+    response::{
+        IntoResponse,
+        sse::{Event, KeepAlive, Sse},
+    },
 };
-use scope_api_contract::{
-    CreateManualRunQuery, RunEventsQuery, RunEventsResponse, RunLogResponse, RunResponse,
-};
+use scope_api_contract::{CreateManualRunQuery, RunEventsQuery, RunLogResponse, RunResponse};
 use scope_domain::{
     runs::{
         run::{Run, RunSource, RunTrigger},
@@ -20,6 +23,7 @@ use scope_domain::{
 };
 use scope_object_store::{ContentObjectKind, put_content_object};
 use std::{
+    convert::Infallible,
     fs::{self, File, OpenOptions},
     io::Read,
     os::unix::{fs::DirBuilderExt, fs::OpenOptionsExt, process::CommandExt},
@@ -28,9 +32,11 @@ use std::{
     thread,
     time::{Duration, Instant},
 };
+use tokio_stream::wrappers::ReceiverStream;
 
 const MAX_MANUAL_BUNDLE_BYTES: usize = 128 * 1024 * 1024;
-const RUN_LOG_PAGE_SIZE: usize = 256;
+const RUN_LOG_STREAM_PAGE_SIZE: usize = 64;
+const RUN_LOG_STREAM_BUFFER: usize = 32;
 const GIT_INSPECTION_TIMEOUT: Duration = Duration::from_secs(30);
 
 pub(crate) async fn create_manual_run(
@@ -71,12 +77,14 @@ pub(crate) async fn create_manual_run(
         Some(name) => RunnerSelector::named(name).map_err(ApiError::bad_request)?,
         None => revision.definition().runner().clone(),
     };
-    let stored = put_content_object(
+    let mut stored = put_content_object(
         state.object_store.as_ref(),
         ContentObjectKind::GitBundle,
         &bytes,
     )?;
+    stored.git_oid = git_oid;
     let now = unix_now()?;
+    let source_cleanup = stored.clone();
     let run = Run::new(
         format!("run_{}", query.request_id),
         format!("manual:{}", query.request_id),
@@ -84,11 +92,17 @@ pub(crate) async fn create_manual_run(
         revision.digest(),
         RunTrigger::Manual,
         Some(user.id),
-        RunSource::new(format!("bundle:{}", stored.sha256), stored.sha256, git_oid)?,
+        RunSource::ephemeral_git_bundle(stored)?,
         desired_runner,
         now,
     )?;
-    let run = state.metadata.runs().enqueue_run(run, revision).await?;
+    let run = match state.metadata.runs().enqueue_run(run, revision).await {
+        Ok(run) => run,
+        Err(error) => {
+            best_effort_cleanup_rollback_source_blobs(&state, &[source_cleanup]).await;
+            return Err(error.into());
+        }
+    };
     Ok(Json(run_response(&run)))
 }
 
@@ -97,7 +111,7 @@ pub(crate) async fn get_run(
     headers: HeaderMap,
     Path((owner, repo_name, run_id)): Path<(String, String, String)>,
 ) -> Result<Json<RunResponse>, ApiError> {
-    let run = require_run_access(&state, &headers, &owner, &repo_name, &run_id).await?;
+    let (run, _) = require_run_access(&state, &headers, &owner, &repo_name, &run_id).await?;
     Ok(Json(run_response(&run)))
 }
 
@@ -134,31 +148,133 @@ pub(crate) async fn run_events(
     headers: HeaderMap,
     Path((owner, repo_name, run_id)): Path<(String, String, String)>,
     Query(query): Query<RunEventsQuery>,
-) -> Result<Json<RunEventsResponse>, ApiError> {
-    let run = require_run_access(&state, &headers, &owner, &repo_name, &run_id).await?;
-    let mut logs = state
-        .metadata
-        .runs()
-        .run_logs_after(&run_id, query.after, (RUN_LOG_PAGE_SIZE + 1) as u64)
-        .await?;
-    let has_more = logs.len() > RUN_LOG_PAGE_SIZE;
-    logs.truncate(RUN_LOG_PAGE_SIZE);
-    let next_cursor = logs.last().map_or(query.after, |log| log.position);
-    Ok(Json(RunEventsResponse {
-        run: run_response(&run),
-        logs: logs
-            .into_iter()
-            .map(|log| RunLogResponse {
+) -> Result<impl IntoResponse, ApiError> {
+    let (_, user_id) = require_run_access(&state, &headers, &owner, &repo_name, &run_id).await?;
+    let after = match headers.get("last-event-id") {
+        Some(value) => value
+            .to_str()
+            .map_err(|_| ApiError::bad_request("last-event-id must be an integer"))?
+            .parse::<u64>()
+            .map_err(|_| ApiError::bad_request("last-event-id must be an integer"))?
+            .max(query.after),
+        None => query.after,
+    };
+    let (sender, receiver) = tokio::sync::mpsc::channel(RUN_LOG_STREAM_BUFFER);
+    tokio::spawn(stream_run_events(
+        state, owner, repo_name, user_id, run_id, after, sender,
+    ));
+    Ok(Sse::new(ReceiverStream::new(receiver)).keep_alive(
+        KeepAlive::new()
+            .interval(Duration::from_secs(10))
+            .text("keep-alive"),
+    ))
+}
+
+async fn stream_run_events(
+    state: AppState,
+    owner: String,
+    repo_name: String,
+    user_id: String,
+    run_id: String,
+    mut cursor: u64,
+    sender: tokio::sync::mpsc::Sender<Result<Event, Infallible>>,
+) {
+    let mut last_state = None;
+    loop {
+        if sender.is_closed() {
+            return;
+        }
+        if let Err(error) = require_repo_member(&state, &user_id, &owner, &repo_name).await {
+            send_stream_error(&sender, error.into_message()).await;
+            return;
+        }
+        let logs = match state
+            .metadata
+            .runs()
+            .run_logs_after(&run_id, cursor, RUN_LOG_STREAM_PAGE_SIZE as u64)
+            .await
+        {
+            Ok(logs) => logs,
+            Err(error) => {
+                send_stream_error(&sender, error.message).await;
+                return;
+            }
+        };
+        let has_full_page = logs.len() == RUN_LOG_STREAM_PAGE_SIZE;
+        for log in logs {
+            cursor = log.position;
+            let response = RunLogResponse {
                 attempt_id: log.chunk.attempt_id,
                 position: log.position,
                 sequence: log.chunk.sequence,
                 text: log.chunk.text,
                 created_at_unix: log.chunk.created_at_unix,
-            })
-            .collect(),
-        next_cursor,
-        has_more,
-    }))
+            };
+            let event = match Event::default()
+                .event("log")
+                .id(cursor.to_string())
+                .json_data(response)
+            {
+                Ok(event) => event,
+                Err(error) => {
+                    send_stream_error(&sender, error.to_string()).await;
+                    return;
+                }
+            };
+            if sender.send(Ok(event)).await.is_err() {
+                return;
+            }
+        }
+
+        let run = match state.metadata.runs().run(&run_id).await {
+            Ok(Some(run)) => run,
+            Ok(None) => {
+                send_stream_error(&sender, "run no longer exists".to_string()).await;
+                return;
+            }
+            Err(error) => {
+                send_stream_error(&sender, error.message).await;
+                return;
+            }
+        };
+        let terminal = run.state.is_terminal();
+        if last_state != Some(run.state) && (!terminal || !has_full_page) {
+            last_state = Some(run.state);
+            let event = match Event::default()
+                .event("status")
+                .json_data(run_response(&run))
+            {
+                Ok(event) => event,
+                Err(error) => {
+                    send_stream_error(&sender, error.to_string()).await;
+                    return;
+                }
+            };
+            if sender.send(Ok(event)).await.is_err() {
+                return;
+            }
+        }
+        if terminal && !has_full_page {
+            return;
+        }
+        if has_full_page {
+            continue;
+        }
+        tokio::select! {
+            () = sender.closed() => return,
+            () = tokio::time::sleep(Duration::from_secs(1)) => {}
+        }
+    }
+}
+
+async fn send_stream_error(
+    sender: &tokio::sync::mpsc::Sender<Result<Event, Infallible>>,
+    message: String,
+) {
+    let data = serde_json::json!({ "message": message });
+    if let Ok(event) = Event::default().event("error").json_data(data) {
+        let _ = sender.send(Ok(event)).await;
+    }
 }
 
 async fn require_run_access(
@@ -167,7 +283,7 @@ async fn require_run_access(
     owner: &str,
     repo_name: &str,
     run_id: &str,
-) -> Result<Run, ApiError> {
+) -> Result<(Run, String), ApiError> {
     let user = require_scope_user(state, headers).await?;
     let repo = require_repo_member(state, &user.id, owner, repo_name).await?;
     let run = state
@@ -179,7 +295,7 @@ async fn require_run_access(
     if run.workflow.repository_id() != repo.record.id {
         return Err(ApiError::not_found("run not found"));
     }
-    Ok(run)
+    Ok((run, user.id))
 }
 
 async fn require_repo_member(
@@ -200,7 +316,7 @@ pub(crate) fn run_response(run: &Run) -> RunResponse {
         id: run.id.clone(),
         repository_id: run.workflow.repository_id().to_string(),
         workflow_name: run.workflow.path().name().to_string(),
-        git_oid: run.source.git_oid.clone(),
+        git_oid: run.source.git_oid().to_string(),
         desired_runner: match &run.desired_runner {
             RunnerSelector::Any => None,
             RunnerSelector::Named(name) => Some(name.clone()),

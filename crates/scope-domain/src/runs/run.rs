@@ -2,7 +2,9 @@ use super::{
     runner::{Runner, RunnerGrant, required, validate_sha256_hash},
     workflow::{RunnerSelector, WorkflowIdentity, WorkflowRevision},
 };
-use crate::error::DomainError;
+use crate::{
+    content_ref::ContentRef, error::DomainError, projection::ProjectionViewKey, store::SourceBlob,
+};
 use serde::{Deserialize, Serialize};
 
 pub const MAX_RUN_LOG_CHUNK_BYTES: usize = 64 * 1024;
@@ -102,33 +104,151 @@ impl RunLogChunk {
     }
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct RunSource {
-    pub snapshot_id: String,
-    pub digest: String,
-    pub git_oid: String,
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "kebab-case")]
+pub enum RunSource {
+    EphemeralGitBundle {
+        object: SourceBlob,
+    },
+    AcceptedRevision {
+        change_version: u64,
+        manifest: SourceBlob,
+        snapshot: SourceBlob,
+        audience: ProjectionViewKey,
+    },
 }
 
 impl RunSource {
-    pub fn new(
-        snapshot_id: impl Into<String>,
-        digest: impl Into<String>,
-        git_oid: impl Into<String>,
-    ) -> Result<Self, DomainError> {
-        let snapshot_id = required("run source snapshot id", snapshot_id.into())?;
-        let digest = digest.into();
-        validate_sha256_hash("run source digest", &digest)?;
-        let git_oid = git_oid.into();
-        if git_oid.len() != 40 || !git_oid.bytes().all(|byte| byte.is_ascii_hexdigit()) {
+    pub fn ephemeral_git_bundle(object: SourceBlob) -> Result<Self, DomainError> {
+        validate_source_blob(&object, "run source bundle")?;
+        if !matches!(object.content_ref, ContentRef::GitBundleSha256(_)) {
             return Err(DomainError::invalid_input(
-                "run source Git OID must be a SHA-1 hex digest",
+                "ephemeral run source must be a Git bundle",
             ));
         }
-        Ok(Self {
-            snapshot_id,
-            digest,
-            git_oid,
+        Ok(Self::EphemeralGitBundle { object })
+    }
+
+    pub fn accepted_revision(
+        change_version: u64,
+        manifest: SourceBlob,
+        snapshot: SourceBlob,
+        audience: ProjectionViewKey,
+    ) -> Result<Self, DomainError> {
+        if change_version == 0 {
+            return Err(DomainError::invalid_input(
+                "accepted run source change version must be positive",
+            ));
+        }
+        validate_source_blob(&manifest, "run source manifest")?;
+        if !matches!(manifest.content_ref, ContentRef::GitManifestSha256(_)) {
+            return Err(DomainError::invalid_input(
+                "accepted run source must use a Git manifest",
+            ));
+        }
+        validate_source_blob(&snapshot, "accepted run source snapshot")?;
+        if !matches!(snapshot.content_ref, ContentRef::GitBundleSha256(_)) {
+            return Err(DomainError::invalid_input(
+                "accepted run source snapshot must be a Git bundle",
+            ));
+        }
+        if snapshot.git_oid != manifest.git_oid {
+            return Err(DomainError::invalid_input(
+                "accepted run source snapshot and manifest heads do not match",
+            ));
+        }
+        Ok(Self::AcceptedRevision {
+            change_version,
+            manifest,
+            snapshot,
+            audience,
         })
+    }
+
+    pub fn snapshot(&self) -> &SourceBlob {
+        match self {
+            Self::EphemeralGitBundle { object } => object,
+            Self::AcceptedRevision { snapshot, .. } => snapshot,
+        }
+    }
+
+    pub fn retained_objects(&self) -> Vec<&SourceBlob> {
+        match self {
+            Self::EphemeralGitBundle { object } => vec![object],
+            Self::AcceptedRevision {
+                manifest, snapshot, ..
+            } => vec![manifest, snapshot],
+        }
+    }
+
+    pub fn digest(&self) -> &str {
+        &self.snapshot().sha256
+    }
+
+    pub fn git_oid(&self) -> &str {
+        &self.snapshot().git_oid
+    }
+
+    pub fn is_private_only(&self) -> bool {
+        matches!(
+            self,
+            Self::EphemeralGitBundle { .. }
+                | Self::AcceptedRevision {
+                    audience: ProjectionViewKey::Private,
+                    ..
+                }
+        )
+    }
+}
+
+fn validate_source_blob(blob: &SourceBlob, label: &str) -> Result<(), DomainError> {
+    validate_sha256_hash(&format!("{label} digest"), &blob.sha256)?;
+    if blob.content_ref.sha256() != Some(blob.sha256.as_str()) {
+        return Err(DomainError::invalid_input(format!(
+            "{label} content reference does not match its digest"
+        )));
+    }
+    validate_git_oid(&format!("{label} Git OID"), &blob.git_oid)
+}
+
+fn validate_git_oid(label: &str, git_oid: &str) -> Result<(), DomainError> {
+    if git_oid.len() != 40 || !git_oid.bytes().all(|byte| byte.is_ascii_hexdigit()) {
+        return Err(DomainError::invalid_input(format!(
+            "{label} must be a SHA-1 hex digest"
+        )));
+    }
+    Ok(())
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct PinnedContainerImage(String);
+
+impl PinnedContainerImage {
+    pub fn parse(image: impl Into<String>) -> Result<Self, DomainError> {
+        let image = image.into();
+        let Some((repository, digest)) = image.rsplit_once("@sha256:") else {
+            return Err(DomainError::invalid_input(
+                "pinned container image must end in an immutable sha256 digest",
+            ));
+        };
+        if repository.is_empty()
+            || repository.contains('@')
+            || image.chars().any(char::is_whitespace)
+            || digest.len() != 64
+            || !digest.bytes().all(|byte| byte.is_ascii_hexdigit())
+        {
+            return Err(DomainError::invalid_input(
+                "pinned container image is invalid",
+            ));
+        }
+        Ok(Self(format!(
+            "{repository}@sha256:{}",
+            digest.to_ascii_lowercase()
+        )))
+    }
+
+    pub fn as_str(&self) -> &str {
+        &self.0
     }
 }
 
@@ -141,6 +261,7 @@ pub struct Run {
     pub trigger: RunTrigger,
     pub requested_by_user_id: Option<String>,
     pub source: RunSource,
+    pub pinned_container_image: Option<PinnedContainerImage>,
     pub desired_runner: RunnerSelector,
     pub state: RunState,
     pub cancellation_requested: bool,
@@ -196,6 +317,7 @@ impl Run {
             trigger,
             requested_by_user_id,
             source,
+            pinned_container_image: None,
             desired_runner,
             state: RunState::Queued,
             cancellation_requested: false,
@@ -216,6 +338,7 @@ impl Run {
         trigger: RunTrigger,
         requested_by_user_id: Option<String>,
         source: RunSource,
+        pinned_container_image: Option<PinnedContainerImage>,
         desired_runner: RunnerSelector,
         state: RunState,
         cancellation_requested: bool,
@@ -236,6 +359,7 @@ impl Run {
             desired_runner,
             created_at_unix,
         )?;
+        run.pinned_container_image = pinned_container_image;
         run.state = state;
         run.cancellation_requested = cancellation_requested;
         run.last_attempt_number = last_attempt_number;
@@ -272,7 +396,7 @@ impl Run {
         if self.cancellation_requested {
             return Err(DomainError::conflict("run cancellation is requested"));
         }
-        if !runner.supports_v1_dispatch() {
+        if !runner.supports_dispatch() {
             return Err(DomainError::conflict(
                 "runner does not support the V1 dispatch protocol",
             ));
@@ -339,6 +463,30 @@ impl Run {
             return Ok(false);
         }
         self.cancellation_requested = true;
+        self.updated_at_unix = now_unix;
+        Ok(true)
+    }
+
+    pub fn pin_container_image(
+        &mut self,
+        image: PinnedContainerImage,
+        now_unix: u64,
+    ) -> Result<bool, DomainError> {
+        if self.state != RunState::Leased {
+            return Err(DomainError::conflict(
+                "container image can only be pinned for a leased run",
+            ));
+        }
+        self.ensure_time_not_before_update(now_unix)?;
+        if let Some(existing) = &self.pinned_container_image {
+            if existing != &image {
+                return Err(DomainError::conflict(
+                    "run container image is already pinned to a different digest",
+                ));
+            }
+            return Ok(false);
+        }
+        self.pinned_container_image = Some(image);
         self.updated_at_unix = now_unix;
         Ok(true)
     }
@@ -455,6 +603,13 @@ impl Run {
                 "canceled run must record cancellation intent",
             ));
         }
+        if matches!(self.state, RunState::Running | RunState::Succeeded)
+            && self.pinned_container_image.is_none()
+        {
+            return Err(DomainError::invariant_violation(
+                "an executed run must have an immutable container image",
+            ));
+        }
         Ok(())
     }
 }
@@ -530,6 +685,11 @@ impl RunAttempt {
         self.authenticate(run, runner_id, token_hash, now_unix)?;
         if self.state != AttemptState::Leased || run.state != RunState::Leased {
             return Err(DomainError::conflict("attempt is not leased"));
+        }
+        if run.pinned_container_image.is_none() {
+            return Err(DomainError::conflict(
+                "run container image must be pinned before execution starts",
+            ));
         }
         if run.cancellation_requested {
             return Err(DomainError::conflict("run cancellation is requested"));
@@ -655,6 +815,25 @@ impl RunAttempt {
         if now_unix < self.lease_expires_at_unix {
             return Err(DomainError::conflict("attempt lease has not expired"));
         }
+        self.finish_lost_or_requeue(run, now_unix)
+    }
+
+    pub fn abandon(
+        &mut self,
+        run: &mut Run,
+        runner_id: &str,
+        token_hash: &str,
+        now_unix: u64,
+    ) -> Result<(), DomainError> {
+        self.authenticate(run, runner_id, token_hash, now_unix)?;
+        if self.state.is_terminal() {
+            return Ok(());
+        }
+        self.finish_lost_or_requeue(run, now_unix)
+    }
+
+    fn finish_lost_or_requeue(&mut self, run: &mut Run, now_unix: u64) -> Result<(), DomainError> {
+        run.ensure_current_attempt(self)?;
         run.ensure_time_not_before_update(now_unix)?;
         let was_running = self.state == AttemptState::Running;
         self.state = AttemptState::Lost;
@@ -784,194 +963,4 @@ impl RunAttempt {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::runs::{
-        runner::{MIN_RUNNER_PROTOCOL_VERSION, RunnerCapabilities, RunnerName},
-        workflow::WorkflowPath,
-    };
-
-    fn runner() -> Runner {
-        Runner::new(
-            "runner-1",
-            "user-1",
-            "a".repeat(64),
-            "1.0.0",
-            MIN_RUNNER_PROTOCOL_VERSION,
-            RunnerCapabilities::v1(),
-            1,
-        )
-        .unwrap()
-    }
-
-    fn run() -> Run {
-        Run::new(
-            "run-1",
-            "manual:repo-1:test:oid",
-            WorkflowIdentity::new(
-                "repo-1",
-                WorkflowPath::parse("/.scope/runs/test.yml").unwrap(),
-            )
-            .unwrap(),
-            "b".repeat(64),
-            RunTrigger::Manual,
-            Some("user-1".to_string()),
-            RunSource::new("snapshot-1", "c".repeat(64), "d".repeat(40)).unwrap(),
-            RunnerSelector::Any,
-            10,
-        )
-        .unwrap()
-    }
-
-    fn grant() -> RunnerGrant {
-        RunnerGrant::new(
-            "repo-1",
-            "runner-1",
-            RunnerName::parse("linux-box").unwrap(),
-            "user-1",
-            1,
-        )
-        .unwrap()
-    }
-
-    #[test]
-    fn claim_start_heartbeat_and_completion_preserve_attempt_identity() {
-        let mut run = run();
-        let mut attempt = run
-            .claim(&runner(), &grant(), "attempt-1", "e".repeat(64), 20, 80)
-            .unwrap();
-        assert_eq!(run.state, RunState::Leased);
-
-        attempt
-            .start(&mut run, "runner-1", &"e".repeat(64), 30)
-            .unwrap();
-        assert_eq!(run.state, RunState::Running);
-        assert!(
-            !attempt
-                .heartbeat(&run, "runner-1", &"e".repeat(64), 40, 100)
-                .unwrap()
-        );
-        attempt
-            .complete(
-                &mut run,
-                "runner-1",
-                &"e".repeat(64),
-                AttemptConclusion::Succeeded,
-                50,
-            )
-            .unwrap();
-        assert_eq!(run.state, RunState::Succeeded);
-        assert_eq!(attempt.state, AttemptState::Succeeded);
-        let retry = attempt
-            .complete(
-                &mut run,
-                "runner-1",
-                &"e".repeat(64),
-                AttemptConclusion::Succeeded,
-                60,
-            )
-            .unwrap_err();
-        assert_eq!(retry.kind, crate::error::DomainErrorKind::Conflict);
-    }
-
-    #[test]
-    fn attempt_log_budget_is_cumulative_and_fail_closed() {
-        let mut run = run();
-        let mut attempt = run
-            .claim(&runner(), &grant(), "attempt-1", "e".repeat(64), 20, 80)
-            .unwrap();
-        let chunk_text = "x".repeat(MAX_RUN_LOG_CHUNK_BYTES);
-        for sequence in 1..=(MAX_RUN_LOG_BYTES_PER_ATTEMPT / MAX_RUN_LOG_CHUNK_BYTES as u64) {
-            let chunk = RunLogChunk::new("attempt-1", sequence, chunk_text.clone(), 21).unwrap();
-            assert!(attempt.accept_log_chunk(&chunk).unwrap());
-        }
-        assert_eq!(attempt.log_bytes, MAX_RUN_LOG_BYTES_PER_ATTEMPT);
-
-        let extra = RunLogChunk::new("attempt-1", 161, "extra", 21).unwrap();
-        assert!(!attempt.accept_log_chunk(&extra).unwrap());
-        assert!(attempt.logs_truncated);
-        assert!(!attempt.accept_log_chunk(&extra).unwrap());
-        assert_eq!(attempt.log_bytes, MAX_RUN_LOG_BYTES_PER_ATTEMPT);
-
-        assert!(
-            RunLogChunk::new("attempt-1", 1, "x".repeat(MAX_RUN_LOG_CHUNK_BYTES + 1), 21).is_err()
-        );
-    }
-
-    #[test]
-    fn cancellation_waits_for_active_runner_acknowledgement() {
-        let mut run = run();
-        let mut attempt = run
-            .claim(&runner(), &grant(), "attempt-1", "e".repeat(64), 20, 80)
-            .unwrap();
-
-        assert!(run.request_cancellation(30).unwrap());
-        assert_eq!(run.state, RunState::Leased);
-        assert!(!run.request_cancellation(40).unwrap());
-        assert_eq!(run.updated_at_unix, 30);
-        assert!(
-            attempt
-                .start(&mut run, "runner-1", &"e".repeat(64), 40)
-                .is_err()
-        );
-        assert_eq!(run.state, RunState::Leased);
-        assert!(
-            attempt
-                .heartbeat(&run, "runner-1", &"e".repeat(64), 40, 100)
-                .unwrap()
-        );
-        attempt
-            .complete(
-                &mut run,
-                "runner-1",
-                &"e".repeat(64),
-                AttemptConclusion::Canceled,
-                50,
-            )
-            .unwrap();
-        assert_eq!(run.state, RunState::Canceled);
-    }
-
-    #[test]
-    fn lease_loss_requeues_only_before_user_code_starts() {
-        let mut queued = run();
-        let mut leased = queued
-            .claim(&runner(), &grant(), "attempt-1", "e".repeat(64), 20, 80)
-            .unwrap();
-        leased.expire(&mut queued, 80).unwrap();
-        assert_eq!(queued.state, RunState::Queued);
-
-        let mut running = run();
-        let mut started = running
-            .claim(&runner(), &grant(), "attempt-2", "f".repeat(64), 20, 80)
-            .unwrap();
-        started
-            .start(&mut running, "runner-1", &"f".repeat(64), 30)
-            .unwrap();
-        started.expire(&mut running, 80).unwrap();
-        assert_eq!(running.state, RunState::Lost);
-    }
-
-    #[test]
-    fn stale_or_expired_attempt_credentials_cannot_mutate_a_run() {
-        let mut run = run();
-        let mut attempt = run
-            .claim(&runner(), &grant(), "attempt-1", "e".repeat(64), 20, 80)
-            .unwrap();
-        assert!(
-            attempt
-                .start(&mut run, "other-runner", &"e".repeat(64), 30)
-                .is_err()
-        );
-        assert!(
-            attempt
-                .start(&mut run, "runner-1", &"0".repeat(64), 30)
-                .is_err()
-        );
-        assert!(
-            attempt
-                .start(&mut run, "runner-1", &"e".repeat(64), 80)
-                .is_err()
-        );
-    }
-}
+mod tests;

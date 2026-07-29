@@ -7,9 +7,11 @@ use reqwest::{
 use scope_api_contract::{
     AppendAttemptLogRequest, AttachRunnerRepositoryRequest, AttemptHeartbeatRequest,
     AttemptStatusResponse, ClaimRunResponse, CompleteAttemptRequest, CreateManualRunQuery,
-    RegisterRunnerRequest, RegisterRunnerResponse, RunEventsQuery, RunEventsResponse,
-    RunLogResponse, RunResponse, RunnerPollResponse, RunnerResponse,
+    PinAttemptContainerImageRequest, PinAttemptContainerImageResponse, RegisterRunnerRequest,
+    RegisterRunnerResponse, RunEventsQuery, RunLogResponse, RunResponse, RunnerPollResponse,
+    RunnerResponse,
 };
+use std::io::BufRead;
 
 pub fn register_runner(
     client: &Client,
@@ -130,7 +132,13 @@ pub fn create_manual_run(
     )
 }
 
-pub fn get_run_events(
+pub enum RunStreamEvent {
+    Log(RunLogResponse),
+    Status(RunResponse),
+}
+
+#[allow(clippy::too_many_arguments)]
+pub fn stream_run_events(
     client: &Client,
     api_url: &str,
     session_token: &str,
@@ -138,8 +146,9 @@ pub fn get_run_events(
     repo: &str,
     run_id: &str,
     after: u64,
-) -> anyhow::Result<RunEventsResponse> {
-    parse_json(
+    on_event: impl FnMut(RunStreamEvent) -> anyhow::Result<bool>,
+) -> anyhow::Result<()> {
+    let response = successful(
         client
             .get(format!(
                 "{api_url}{}",
@@ -150,7 +159,63 @@ pub fn get_run_events(
             .send()
             .context("watch Scope run")?,
         "watch Scope run",
-    )
+    )?;
+    parse_run_event_stream(std::io::BufReader::new(response), on_event)
+}
+
+fn parse_run_event_stream(
+    reader: impl BufRead,
+    mut on_event: impl FnMut(RunStreamEvent) -> anyhow::Result<bool>,
+) -> anyhow::Result<()> {
+    let mut event_name = String::new();
+    let mut data = Vec::new();
+    for line in reader.lines() {
+        let line = match line {
+            Ok(line) => line,
+            Err(_) => return Ok(()),
+        };
+        if line.is_empty() {
+            if !data.is_empty() {
+                let payload = data.join("\n");
+                let event = match event_name.as_str() {
+                    "log" => Some(RunStreamEvent::Log(
+                        serde_json::from_str(&payload).context("parse Scope run log event")?,
+                    )),
+                    "status" => Some(RunStreamEvent::Status(
+                        serde_json::from_str(&payload).context("parse Scope run status event")?,
+                    )),
+                    "error" => {
+                        let error: serde_json::Value = serde_json::from_str(&payload)
+                            .context("parse Scope run stream error")?;
+                        anyhow::bail!(
+                            "{}",
+                            error["message"]
+                                .as_str()
+                                .unwrap_or("Scope run event stream failed")
+                        );
+                    }
+                    _ => None,
+                };
+                if let Some(event) = event
+                    && !on_event(event)?
+                {
+                    return Ok(());
+                }
+            }
+            event_name.clear();
+            data.clear();
+            continue;
+        }
+        if line.starts_with(':') {
+            continue;
+        }
+        if let Some(value) = line.strip_prefix("event:") {
+            event_name = value.trim_start().to_string();
+        } else if let Some(value) = line.strip_prefix("data:") {
+            data.push(value.trim_start().to_string());
+        }
+    }
+    Ok(())
 }
 
 pub fn cancel_run(
@@ -267,6 +332,27 @@ pub fn attempt_start(
     )
 }
 
+pub fn pin_attempt_container_image(
+    client: &Client,
+    api_url: &str,
+    attempt_token: &str,
+    attempt_id: &str,
+    image: String,
+) -> anyhow::Result<PinAttemptContainerImageResponse> {
+    parse_json(
+        client
+            .post(format!(
+                "{api_url}{}",
+                routes::attempt_container_image(attempt_id)
+            ))
+            .bearer_auth(attempt_token)
+            .json(&PinAttemptContainerImageRequest { image })
+            .send()
+            .context("pin Scope run container image")?,
+        "pin Scope run container image",
+    )
+}
+
 pub fn attempt_heartbeat(
     client: &Client,
     api_url: &str,
@@ -320,6 +406,27 @@ pub fn complete_attempt(
     )
 }
 
+pub fn abandon_attempt(
+    client: &Client,
+    api_url: &str,
+    attempt_token: &str,
+    attempt_id: &str,
+) -> anyhow::Result<()> {
+    let response = client
+        .post(format!("{api_url}{}", routes::attempt_abandon(attempt_id)))
+        .bearer_auth(attempt_token)
+        .send()
+        .context("reconcile interrupted Scope run attempt")?;
+    if matches!(
+        response.status(),
+        StatusCode::UNAUTHORIZED | StatusCode::NOT_FOUND | StatusCode::CONFLICT
+    ) {
+        return Ok(());
+    }
+    let _: AttemptStatusResponse = parse_json(response, "reconcile interrupted Scope run attempt")?;
+    Ok(())
+}
+
 fn attempt_json<T: serde::Serialize>(
     client: &Client,
     api_url: &str,
@@ -368,4 +475,34 @@ fn successful(response: Response, context: &str) -> anyhow::Result<Response> {
         anyhow::bail!("{context}: authentication failed: {message}");
     }
     anyhow::bail!("{context}: {message} ({status})")
+}
+
+#[cfg(test)]
+mod run_event_stream_tests {
+    use super::*;
+    use std::io::Cursor;
+
+    #[test]
+    fn sse_parser_delivers_log_events_and_honors_callback_stop() {
+        let stream = concat!(
+            ": keep-alive\n\n",
+            "id: 7\n",
+            "event: log\n",
+            "data: {\"attempt_id\":\"attempt-1\",\"position\":7,\"sequence\":2,",
+            "\"text\":\"hello\\n\",\"created_at_unix\":9}\n\n",
+            "event: error\n",
+            "data: {\"message\":\"must not be reached\"}\n\n"
+        );
+        let mut logs = Vec::new();
+        parse_run_event_stream(Cursor::new(stream), |event| {
+            if let RunStreamEvent::Log(log) = event {
+                logs.push(log);
+            }
+            Ok(false)
+        })
+        .unwrap();
+        assert_eq!(logs.len(), 1);
+        assert_eq!(logs[0].position, 7);
+        assert_eq!(logs[0].text, "hello\n");
+    }
 }

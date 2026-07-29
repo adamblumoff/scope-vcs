@@ -15,6 +15,8 @@ pub(crate) mod push_intents;
 pub(crate) mod repo_access;
 pub(crate) mod repo_cleanup;
 pub(crate) mod repo_events;
+pub(crate) mod run_recovery;
+pub(crate) mod run_retention;
 pub(crate) mod runtime_budgets;
 
 #[cfg(any(test, feature = "test-support"))]

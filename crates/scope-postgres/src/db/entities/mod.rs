@@ -4,7 +4,10 @@ use crate::error::PostgresError;
 use scope_domain::policy::{Policy, ScopePath, Visibility};
 use scope_domain::projection_views::{ProjectionViewFile, ProjectionViewFileContent};
 use scope_domain::runs::{
-    run::{AttemptState, Run, RunAttempt, RunLogChunk, RunSource, RunState, RunTrigger},
+    run::{
+        AttemptState, PinnedContainerImage, Run, RunAttempt, RunLogChunk, RunSource, RunState,
+        RunTrigger,
+    },
     runner::{Runner, RunnerCapabilities, RunnerGrant, RunnerName},
     workflow::{
         CompiledWorkflow, RunnerSelector, WorkflowIdentity, WorkflowPath, WorkflowRevision,
@@ -34,7 +37,7 @@ pub(super) fn decode_enum<T: serde::de::DeserializeOwned>(
     serde_json::from_value(serde_json::Value::String(value)).map_err(PostgresError::internal)
 }
 
-fn u64_to_i64(value: u64, field: &str) -> Result<i64, PostgresError> {
+pub(super) fn u64_to_i64(value: u64, field: &str) -> Result<i64, PostgresError> {
     i64::try_from(value).map_err(|_| {
         PostgresError::internal_message(format!("{field} exceeds PostgreSQL bigint range"))
     })

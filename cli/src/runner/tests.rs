@@ -95,3 +95,47 @@ fn startup_cleanup_removes_abandoned_work_without_removing_root() {
     assert_eq!(fs::read_dir(&root).unwrap().count(), 0);
     fs::remove_dir(root).unwrap();
 }
+
+#[cfg(unix)]
+#[test]
+fn interrupted_attempt_credentials_are_persisted_privately_for_reconciliation() {
+    use scope_api_contract::RunJobResponse;
+    use std::os::unix::fs::PermissionsExt;
+
+    let root = env::temp_dir().join(format!("scope-runner-recovery-test-{}", std::process::id()));
+    let _ = fs::remove_dir_all(&root);
+    fs::create_dir(&root).unwrap();
+    let claim = ClaimRunResponse {
+        attempt_id: "attempt-1".to_string(),
+        attempt_token: "secret-token".to_string(),
+        lease_expires_at_unix: 100,
+        job: RunJobResponse {
+            run_id: "run-1".to_string(),
+            repository_id: "owner/repo".to_string(),
+            git_oid: "a".repeat(40),
+            source_digest: "b".repeat(64),
+            pinned_container_image: None,
+            workflow: CompiledWorkflow::new(
+                "Test",
+                WorkflowTriggers::new(true, false).unwrap(),
+                RunnerSelector::Any,
+                ContainerSpec::new("alpine:3.20").unwrap(),
+                60,
+                vec![WorkflowStep::new("Test", "true").unwrap()],
+            )
+            .unwrap(),
+        },
+    };
+
+    persist_recovery_claim(&root, &claim).unwrap();
+
+    let path = root.join("claim.json");
+    assert_eq!(
+        fs::metadata(&path).unwrap().permissions().mode() & 0o777,
+        0o600
+    );
+    let stored: ClaimRunResponse = serde_json::from_slice(&fs::read(path).unwrap()).unwrap();
+    assert_eq!(stored.attempt_id, claim.attempt_id);
+    assert_eq!(stored.attempt_token, claim.attempt_token);
+    fs::remove_dir_all(root).unwrap();
+}
