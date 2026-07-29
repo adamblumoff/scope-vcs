@@ -204,6 +204,16 @@ impl Run {
         Ok(run)
     }
 
+    pub fn has_same_enqueue_request(&self, other: &Self) -> bool {
+        self.idempotency_key == other.idempotency_key
+            && self.workflow == other.workflow
+            && self.workflow_revision_digest == other.workflow_revision_digest
+            && self.trigger == other.trigger
+            && self.requested_by_user_id == other.requested_by_user_id
+            && self.source == other.source
+            && self.desired_runner == other.desired_runner
+    }
+
     #[allow(clippy::too_many_arguments)]
     pub fn claim(
         &mut self,

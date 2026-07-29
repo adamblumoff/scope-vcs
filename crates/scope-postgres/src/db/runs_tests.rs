@@ -194,12 +194,16 @@ async fn names_are_repository_scoped_revisions_are_idempotent_and_revocation_sto
         .enqueue_run(run("run-1", "manual:idempotent"), revision())
         .await
         .unwrap();
-    let duplicate = store
-        .runs()
-        .enqueue_run(run("run-2", "manual:idempotent"), revision())
-        .await
-        .unwrap();
+    let mut retry = run("run-2", "manual:idempotent");
+    retry.source = first.source.clone();
+    let duplicate = store.runs().enqueue_run(retry, revision()).await.unwrap();
     assert_eq!(duplicate.id, first.id);
+    let conflicting_retry = store
+        .runs()
+        .enqueue_run(run("run-conflict", "manual:idempotent"), revision())
+        .await
+        .unwrap_err();
+    assert_eq!(conflicting_retry.kind, PostgresErrorKind::Conflict);
     let other_repo = store
         .runs()
         .enqueue_run(

@@ -154,7 +154,7 @@ impl RunStore {
             .await
             .map_err(PostgresError::internal)?;
         let stored = if !matches!(result, TryInsertResult::Inserted(_)) {
-            entities::run::Entity::find()
+            let stored = entities::run::Entity::find()
                 .filter(entities::run::Column::RepoId.eq(run.workflow.repository_id().to_string()))
                 .filter(entities::run::Column::IdempotencyKey.eq(run.idempotency_key.clone()))
                 .one(&tx)
@@ -163,7 +163,13 @@ impl RunStore {
                 .ok_or_else(|| {
                     PostgresError::conflict("run id is already used by another idempotency key")
                 })?
-                .try_into_domain()?
+                .try_into_domain()?;
+            if !stored.has_same_enqueue_request(&run) {
+                return Err(PostgresError::conflict(
+                    "run idempotency key is already used by a different enqueue request",
+                ));
+            }
+            stored
         } else {
             run
         };
@@ -411,7 +417,12 @@ async fn save_workflow_revision(
         .await
         .map_err(PostgresError::internal)?
         .ok_or_else(|| PostgresError::internal_message("workflow revision was not stored"))?;
-    persisted.try_into_domain(revision.workflow().clone())?;
+    let persisted = persisted.try_into_domain(revision.workflow().clone())?;
+    if &persisted != revision {
+        return Err(PostgresError::conflict(
+            "workflow revision digest is already used by a different definition",
+        ));
+    }
     Ok(())
 }
 
