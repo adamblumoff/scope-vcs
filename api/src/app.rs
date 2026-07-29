@@ -89,6 +89,10 @@ pub fn router(state: AppState) -> Router {
             post(http::runner_protocol::heartbeat),
         )
         .route(
+            routes::ATTEMPT_RECOVERY_STATUS,
+            get(http::runner_protocol::recovery_status),
+        )
+        .route(
             routes::ATTEMPT_CONTAINER_IMAGE,
             post(http::runner_protocol::pin_container_image),
         )

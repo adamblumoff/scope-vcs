@@ -37,6 +37,7 @@ use tokio_stream::wrappers::ReceiverStream;
 const MAX_MANUAL_BUNDLE_BYTES: usize = 128 * 1024 * 1024;
 const RUN_LOG_STREAM_PAGE_SIZE: usize = 64;
 const RUN_LOG_STREAM_BUFFER: usize = 32;
+const RUN_LOG_STREAM_AUTH_RECHECK: Duration = Duration::from_secs(30);
 const GIT_INSPECTION_TIMEOUT: Duration = Duration::from_secs(30);
 
 pub(crate) async fn create_manual_run(
@@ -161,7 +162,16 @@ pub(crate) async fn run_events(
     };
     let (sender, receiver) = tokio::sync::mpsc::channel(RUN_LOG_STREAM_BUFFER);
     tokio::spawn(stream_run_events(
-        state, owner, repo_name, user_id, run_id, after, sender,
+        RunEventStreamContext {
+            state,
+            headers,
+            owner,
+            repo_name,
+            user_id,
+            run_id,
+        },
+        after,
+        sender,
     ));
     Ok(Sse::new(ReceiverStream::new(receiver)).keep_alive(
         KeepAlive::new()
@@ -170,29 +180,56 @@ pub(crate) async fn run_events(
     ))
 }
 
-async fn stream_run_events(
+struct RunEventStreamContext {
     state: AppState,
+    headers: HeaderMap,
     owner: String,
     repo_name: String,
     user_id: String,
     run_id: String,
+}
+
+async fn stream_run_events(
+    context: RunEventStreamContext,
     mut cursor: u64,
     sender: tokio::sync::mpsc::Sender<Result<Event, Infallible>>,
 ) {
     let mut last_state = None;
     let mut terminal_observed = false;
+    let mut authenticated_at = Instant::now();
     loop {
         if sender.is_closed() {
             return;
         }
-        if let Err(error) = require_repo_member(&state, &user_id, &owner, &repo_name).await {
+        if authenticated_at.elapsed() >= RUN_LOG_STREAM_AUTH_RECHECK {
+            match require_scope_user(&context.state, &context.headers).await {
+                Ok(user) if user.id == context.user_id => authenticated_at = Instant::now(),
+                Ok(_) => {
+                    send_stream_error(&sender, "run access changed".to_string()).await;
+                    return;
+                }
+                Err(error) => {
+                    send_stream_error(&sender, error.into_message()).await;
+                    return;
+                }
+            }
+        }
+        if let Err(error) = require_repo_member(
+            &context.state,
+            &context.user_id,
+            &context.owner,
+            &context.repo_name,
+        )
+        .await
+        {
             send_stream_error(&sender, error.into_message()).await;
             return;
         }
-        let logs = match state
+        let logs = match context
+            .state
             .metadata
             .runs()
-            .run_logs_after(&run_id, cursor, RUN_LOG_STREAM_PAGE_SIZE as u64)
+            .run_logs_after(&context.run_id, cursor, RUN_LOG_STREAM_PAGE_SIZE as u64)
             .await
         {
             Ok(logs) => logs,
@@ -227,7 +264,7 @@ async fn stream_run_events(
             }
         }
 
-        let run = match state.metadata.runs().run(&run_id).await {
+        let run = match context.state.metadata.runs().run(&context.run_id).await {
             Ok(Some(run)) => run,
             Ok(None) => {
                 send_stream_error(&sender, "run no longer exists".to_string()).await;

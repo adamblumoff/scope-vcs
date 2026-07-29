@@ -1,8 +1,8 @@
 use crate::{
     api::{
-        api_url, append_attempt_log, attach_runner_repository, attempt_source, attempt_start,
-        complete_attempt, detach_runner_repository, get_repo, get_runner, register_runner,
-        runner_claim, runner_poll,
+        abandon_attempt, api_url, append_attempt_log, attach_runner_repository, attempt_heartbeat,
+        attempt_recovery_status, attempt_source, attempt_start, complete_attempt,
+        detach_runner_repository, get_repo, get_runner, register_runner, runner_claim, runner_poll,
     },
     login::session_from_cache_or_device,
 };
@@ -24,20 +24,27 @@ use std::{
     time::Duration,
 };
 
+mod container;
 mod image;
 mod supervisor;
+mod systemd;
+use container::{
+    ContainerGuard, apply_container_limits, container_finished_at_unix, container_is_running,
+    container_started_at_unix, doctor_local, recovered_container_exit_code,
+};
 use image::resolve_container_image;
 mod recovery;
 #[cfg(test)]
-use recovery::cleanup_work_root;
-use recovery::{persist_recovery_claim, reconcile_runner_state};
+use recovery::RecoveryProgress;
+use recovery::{
+    RecoveryAttempt, mark_recovery_execution_started, persist_recovery_claim, recover_runner_state,
+    update_recovery_log_sequence,
+};
 use supervisor::{AttemptStopReason, AttemptSupervisor};
+#[cfg(test)]
+use systemd::systemd_quote_path;
+use systemd::{install_systemd_service, print_linger_status};
 
-const RUNNER_SERVICE_NAME: &str = "scope-runner.service";
-const CONTAINER_MEMORY: &str = "4g";
-const CONTAINER_CPUS: &str = "2";
-const CONTAINER_PIDS: &str = "512";
-const CONTAINER_STORAGE: &str = "20G";
 const LOG_CHUNK_BYTES: usize = 16 * 1024;
 const MAX_SOURCE_BUNDLE_BYTES: u64 = 128 * 1024 * 1024;
 
@@ -191,7 +198,16 @@ pub fn daemon(config_path: Option<&Path>) -> anyhow::Result<()> {
         Some(path) => load_runner_config_from(path)?,
         None => load_runner_config()?,
     };
-    reconcile_runner_state(&config)?;
+    for recovery in recover_runner_state(&config)? {
+        let attempt_id = recovery.recovery.claim.attempt_id.clone();
+        let attempt_token = recovery.recovery.claim.attempt_token.clone();
+        if let Err(error) = resume_claim(&config, recovery) {
+            eprintln!("Could not resume interrupted attempt {attempt_id}: {error:#}");
+            if let Ok(client) = runner_client() {
+                let _ = abandon_attempt(&client, &config.api_url, &attempt_token, &attempt_id);
+            }
+        }
+    }
     let client = runner_client()?;
     eprintln!("Scope runner {} is polling {}", config.name, config.api_url);
     loop {
@@ -211,11 +227,6 @@ pub fn daemon(config_path: Option<&Path>) -> anyhow::Result<()> {
             }
         }
     }
-}
-
-pub fn cleanup(config_path: &Path) -> anyhow::Result<()> {
-    let config = load_runner_config_from(config_path)?;
-    reconcile_runner_state(&config)
 }
 
 fn run_claim(config: &RunnerConfig, claim: ClaimRunResponse) {
@@ -316,12 +327,11 @@ fn execute_claim(config: &RunnerConfig, claim: &ClaimRunResponse) -> anyhow::Res
         }
         return Err(error);
     }
-
     let container_name = format!("scope-{}", claim.attempt_id);
     let workspace_mount = format!("{}:/scope/source:ro", workspace.display());
     let script_mount = format!("{}:/scope/job.sh:ro", script_path.display());
     let mut docker = Command::new("docker");
-    docker.args(["run", "--rm", "--name", &container_name]);
+    docker.args(["run", "--name", &container_name]);
     apply_container_limits(&mut docker, config.storage_quota_supported);
     docker
         .args(["--label", &format!("scope.runner-id={}", config.runner_id)])
@@ -337,37 +347,165 @@ fn execute_claim(config: &RunnerConfig, claim: &ClaimRunResponse) -> anyhow::Res
             &container_image,
             "sh",
             "-c",
-            "mkdir -p /workspace && cp -a /scope/source/. /workspace/ && cd /workspace && exec sh /scope/job.sh",
+            "mkdir -p /workspace && cp -a /scope/source/. /workspace/ && cd /workspace && exec sh /scope/job.sh 2>&1",
         ]);
     let mut child = docker
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .spawn()
         .context("start Docker job container")?;
+    let container = ContainerGuard::new(container_name);
+    let execution_started_at_unix = match container_started_at_unix(&container.name) {
+        Ok(started_at) => started_at,
+        Err(error) => {
+            drop(container);
+            let _ = child.wait();
+            return Err(error);
+        }
+    };
+    let execution_deadline_unix =
+        execution_started_at_unix.saturating_add(claim.job.workflow.timeout_seconds());
+    mark_recovery_execution_started(&work.path, claim, execution_deadline_unix)?;
+    finish_container_attempt(
+        config,
+        claim,
+        &work.path,
+        1,
+        0,
+        execution_deadline_unix,
+        false,
+        false,
+        &mut supervisor,
+        child,
+        container,
+    )
+}
+
+fn resume_claim(config: &RunnerConfig, recovery: RecoveryAttempt) -> anyhow::Result<()> {
+    let RecoveryAttempt { work_dir, recovery } = recovery;
+    let work = RunnerWorkDir { path: work_dir };
+    let claim = recovery.claim;
+    let container_name = format!("scope-{}", claim.attempt_id);
     let container = ContainerGuard::new(container_name.clone());
-    if let Err(error) = supervisor.set_container(container_name) {
+    let control_client = attempt_control_client()?;
+    attempt_heartbeat(
+        &control_client,
+        &config.api_url,
+        &claim.attempt_token,
+        &claim.attempt_id,
+    )?;
+    let recovery_status = attempt_recovery_status(
+        &control_client,
+        &config.api_url,
+        &claim.attempt_token,
+        &claim.attempt_id,
+    )?;
+    let next_log_sequence = recovery_status.next_log_sequence;
+    update_recovery_log_sequence(&work.path, &claim, next_log_sequence)?;
+    let execution_deadline_unix = match recovery.progress.execution_deadline_unix {
+        Some(deadline) => deadline,
+        None => {
+            let deadline = container_started_at_unix(&container_name)?
+                .saturating_add(claim.job.workflow.timeout_seconds());
+            mark_recovery_execution_started(&work.path, &claim, deadline)?;
+            deadline
+        }
+    };
+    let mut follow_logs = container_is_running(&container_name)?;
+    let deadline_was_elapsed = if follow_logs {
+        execution_deadline_unix <= unix_now()
+    } else {
+        container_finished_at_unix(&container_name)? > execution_deadline_unix
+    };
+    if deadline_was_elapsed {
+        follow_logs = false;
+    }
+    let mut logs = Command::new("docker");
+    logs.arg("logs");
+    if follow_logs {
+        logs.arg("--follow");
+    }
+    let child = logs
+        .arg(&container_name)
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .context("replay interrupted Docker job logs")?;
+    let mut supervisor = AttemptSupervisor::start(config.clone(), claim.clone())?;
+    finish_container_attempt(
+        config,
+        &claim,
+        &work.path,
+        next_log_sequence,
+        recovery_status.log_bytes,
+        execution_deadline_unix,
+        true,
+        deadline_was_elapsed,
+        &mut supervisor,
+        child,
+        container,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+fn finish_container_attempt(
+    config: &RunnerConfig,
+    claim: &ClaimRunResponse,
+    work_dir: &Path,
+    next_log_sequence: u64,
+    skip_log_bytes: u64,
+    execution_deadline_unix: u64,
+    recovering: bool,
+    recovered_deadline_elapsed: bool,
+    supervisor: &mut AttemptSupervisor,
+    mut child: Child,
+    container: ContainerGuard,
+) -> anyhow::Result<()> {
+    if let Err(error) = supervisor.set_container(container.name.clone()) {
         drop(container);
         let _ = child.wait();
         return Err(error);
     }
-    supervisor.begin_execution(claim.job.workflow.timeout_seconds());
-    let status = stream_logs(config, claim, &mut child);
-    drop(container);
+    supervisor.set_execution_deadline(if recovered_deadline_elapsed {
+        u64::MAX
+    } else {
+        execution_deadline_unix
+    });
+    let status = stream_logs(
+        config,
+        claim,
+        work_dir,
+        next_log_sequence,
+        skip_log_bytes,
+        &mut child,
+    );
     if status.is_err() {
         let _ = child.wait();
     }
     let status = status?;
     let stop_reason = supervisor.finish();
+    let exit_code = if recovered_deadline_elapsed {
+        None
+    } else if stop_reason == AttemptStopReason::None && recovering {
+        recovered_container_exit_code(&container.name)?
+    } else {
+        status.code()
+    };
+    drop(container);
 
-    let conclusion = match stop_reason {
-        AttemptStopReason::Cancellation => AttemptConclusionRequest::Canceled,
-        AttemptStopReason::TimedOut => AttemptConclusionRequest::Failed { exit_code: 124 },
-        AttemptStopReason::LeaseLost => AttemptConclusionRequest::Failed { exit_code: 70 },
-        AttemptStopReason::None if status.success() => AttemptConclusionRequest::Succeeded,
-        AttemptStopReason::None => AttemptConclusionRequest::Failed {
-            exit_code: status.code().unwrap_or(1).max(1),
+    let conclusion = match (recovered_deadline_elapsed, stop_reason) {
+        (true, _) => AttemptConclusionRequest::Failed { exit_code: 124 },
+        (false, AttemptStopReason::Cancellation) => AttemptConclusionRequest::Canceled,
+        (false, AttemptStopReason::TimedOut) => AttemptConclusionRequest::Failed { exit_code: 124 },
+        (false, AttemptStopReason::LeaseLost) => AttemptConclusionRequest::Failed { exit_code: 70 },
+        (false, AttemptStopReason::None) if exit_code == Some(0) => {
+            AttemptConclusionRequest::Succeeded
+        }
+        (false, AttemptStopReason::None) => AttemptConclusionRequest::Failed {
+            exit_code: exit_code.unwrap_or(1).max(1),
         },
     };
+    let client = runner_client()?;
     complete_attempt(
         &client,
         &config.api_url,
@@ -462,23 +600,39 @@ fn finish_before_execution(
 fn stream_logs(
     config: &RunnerConfig,
     claim: &ClaimRunResponse,
+    work_dir: &Path,
+    mut next_sequence: u64,
+    mut skip_bytes: u64,
     child: &mut Child,
 ) -> anyhow::Result<std::process::ExitStatus> {
     let stdout = child.stdout.take().context("Docker stdout was not piped")?;
     let stderr = child.stderr.take().context("Docker stderr was not piped")?;
     let (sender, receiver) = mpsc::channel();
-    let stdout_thread = spawn_log_reader(stdout, sender.clone());
-    let stderr_thread = spawn_log_reader(stderr, sender);
+    let stdout_thread = spawn_log_reader(stdout, sender);
+    let stderr_thread = spawn_diagnostic_reader(stderr);
     let client = attempt_control_client()?;
-    let mut sequence = 0_u64;
     let mut upload_logs = true;
-    for text in receiver {
-        sequence += 1;
+    for mut text in receiver {
+        if skip_bytes != 0 {
+            let text_bytes = text.as_bytes();
+            if skip_bytes >= text_bytes.len() as u64 {
+                skip_bytes -= text_bytes.len() as u64;
+                continue;
+            }
+            let start = usize::try_from(skip_bytes).context("recovery log cursor is too large")?;
+            text = String::from_utf8_lossy(&text_bytes[start..]).into_owned();
+            skip_bytes = 0;
+        }
         print!("{text}");
         let _ = std::io::stdout().flush();
         if upload_logs {
-            match append_log_with_retry(&client, config, claim, sequence, text) {
-                Ok(true) => {}
+            match append_log_with_retry(&client, config, claim, next_sequence, text) {
+                Ok(true) => {
+                    next_sequence = next_sequence
+                        .checked_add(1)
+                        .context("run log sequence overflow")?;
+                    update_recovery_log_sequence(work_dir, claim, next_sequence)?;
+                }
                 Ok(false) => {
                     upload_logs = false;
                     eprintln!(
@@ -496,6 +650,9 @@ fn stream_logs(
     }
     let _ = stdout_thread.join();
     let _ = stderr_thread.join();
+    if skip_bytes != 0 {
+        bail!("recovered Docker logs are shorter than the server log cursor");
+    }
     child.wait().context("wait for Docker job container")
 }
 
@@ -510,12 +667,40 @@ fn spawn_log_reader(
             match reader.read(&mut bytes) {
                 Ok(0) => break,
                 Ok(read) => {
-                    if sender
-                        .send(String::from_utf8_lossy(&bytes[..read]).into_owned())
-                        .is_err()
-                    {
+                    if sender.send(stable_log_text(&bytes[..read])).is_err() {
                         break;
                     }
+                }
+                Err(_) => break,
+            }
+        }
+    })
+}
+
+fn stable_log_text(bytes: &[u8]) -> String {
+    let mut text = String::with_capacity(bytes.len());
+    for &byte in bytes {
+        match byte {
+            b'\n' | b'\r' | b'\t' | 0x20..=0x7e => text.push(char::from(byte)),
+            _ => {
+                use std::fmt::Write as _;
+                write!(text, "\\x{byte:02x}").expect("writing to a String cannot fail");
+            }
+        }
+    }
+    text
+}
+
+fn spawn_diagnostic_reader(stream: impl Read + Send + 'static) -> thread::JoinHandle<()> {
+    thread::spawn(move || {
+        let mut reader = BufReader::new(stream);
+        let mut bytes = vec![0_u8; LOG_CHUNK_BYTES];
+        loop {
+            match reader.read(&mut bytes) {
+                Ok(0) => break,
+                Ok(read) => {
+                    eprint!("{}", String::from_utf8_lossy(&bytes[..read]));
+                    let _ = std::io::stderr().flush();
                 }
                 Err(_) => break,
             }
@@ -586,122 +771,6 @@ fn job_script(workflow: &scope_domain::runs::workflow::CompiledWorkflow) -> Stri
 
 fn shell_quote(value: &str) -> String {
     format!("'{}'", value.replace('\'', "'\"'\"'"))
-}
-
-#[derive(Clone, Copy, Debug)]
-struct DockerCapabilities {
-    storage_quota_supported: bool,
-}
-
-fn doctor_local(run_container: bool) -> anyhow::Result<DockerCapabilities> {
-    if env::consts::OS != "linux" || env::consts::ARCH != "x86_64" {
-        bail!("V1 runners require Linux on amd64");
-    }
-    command_success(Command::new("docker").args(["info"]), "connect to Docker")?;
-    let mut storage_quota_supported = false;
-    if run_container {
-        let mut command = Command::new("docker");
-        command.args(["run", "--rm"]);
-        apply_container_limits(&mut command, false);
-        command.args(["alpine:3.20", "true"]);
-        command_success(&mut command, "run bounded Docker test container")?;
-
-        let mut quota_test = Command::new("docker");
-        quota_test.args(["run", "--rm"]);
-        apply_container_limits(&mut quota_test, true);
-        quota_test.args(["alpine:3.20", "true"]);
-        storage_quota_supported = quota_test
-            .output()
-            .context("probe Docker writable-layer quota support")?
-            .status
-            .success();
-        if !storage_quota_supported {
-            eprintln!(
-                "Docker writable-layer quotas are unavailable; Scope will retain CPU, memory, and PID limits and clean workspaces after each attempt."
-            );
-        }
-    }
-    if !Path::new("/sys/fs/cgroup/cgroup.controllers").exists() {
-        bail!("cgroups v2 is required");
-    }
-    command_success(
-        Command::new("systemctl").args(["--user", "--version"]),
-        "find systemd user service support",
-    )?;
-    Ok(DockerCapabilities {
-        storage_quota_supported,
-    })
-}
-
-fn apply_container_limits(command: &mut Command, storage_quota_supported: bool) {
-    command.args([
-        "--memory",
-        CONTAINER_MEMORY,
-        "--memory-swap",
-        CONTAINER_MEMORY,
-        "--cpus",
-        CONTAINER_CPUS,
-        "--pids-limit",
-        CONTAINER_PIDS,
-    ]);
-    if storage_quota_supported {
-        command.args(["--storage-opt", &format!("size={CONTAINER_STORAGE}")]);
-    }
-}
-
-fn install_systemd_service(config_path: &Path) -> anyhow::Result<()> {
-    let executable = env::current_exe().context("locate Scope binary")?;
-    let unit_dir = scope_config_home()?.join("systemd/user");
-    fs::create_dir_all(&unit_dir).context("create systemd user unit directory")?;
-    let unit = format!(
-        "[Unit]\nDescription=Scope self-hosted runner\nAfter=network-online.target\n\n[Service]\nExecStart={} runner daemon --config {}\nExecStopPost={} runner cleanup --config {}\nRestart=always\nRestartSec=3\n\n[Install]\nWantedBy=default.target\n",
-        systemd_quote_path(&executable)?,
-        systemd_quote_path(config_path)?,
-        systemd_quote_path(&executable)?,
-        systemd_quote_path(config_path)?
-    );
-    fs::write(unit_dir.join(RUNNER_SERVICE_NAME), unit).context("write systemd user unit")?;
-    command_success(
-        Command::new("systemctl").args(["--user", "daemon-reload"]),
-        "reload systemd user units",
-    )?;
-    command_success(
-        Command::new("systemctl").args(["--user", "enable", "--now", RUNNER_SERVICE_NAME]),
-        "enable Scope runner service",
-    )
-}
-
-fn systemd_quote_path(path: &Path) -> anyhow::Result<String> {
-    let path = path
-        .to_str()
-        .context("Scope binary path must be valid UTF-8 for systemd")?;
-    if path.contains(['\n', '\r']) {
-        bail!("Scope binary path cannot contain a newline");
-    }
-    Ok(format!(
-        "\"{}\"",
-        path.replace('\\', "\\\\")
-            .replace('"', "\\\"")
-            .replace('%', "%%")
-    ))
-}
-
-fn print_linger_status() {
-    let Some(user) = env::var("USER").ok().filter(|value| !value.is_empty()) else {
-        return;
-    };
-    let output = Command::new("loginctl")
-        .args(["show-user", &user, "--property=Linger", "--value"])
-        .output();
-    if output
-        .ok()
-        .filter(|output| output.status.success())
-        .is_some_and(|output| String::from_utf8_lossy(&output.stdout).trim() != "yes")
-    {
-        eprintln!(
-            "Runner starts now, but reboot persistence needs lingering. Run: sudo loginctl enable-linger {user}"
-        );
-    }
 }
 
 fn print_runner_status(name: &str, runner: &RunnerResponse) {
@@ -901,24 +970,6 @@ fn runner_state_home() -> anyhow::Result<PathBuf> {
 impl Drop for RunnerWorkDir {
     fn drop(&mut self) {
         let _ = fs::remove_dir_all(&self.path);
-    }
-}
-
-struct ContainerGuard {
-    name: String,
-}
-
-impl ContainerGuard {
-    fn new(name: String) -> Self {
-        Self { name }
-    }
-}
-
-impl Drop for ContainerGuard {
-    fn drop(&mut self) {
-        let _ = Command::new("docker")
-            .args(["rm", "-f", &self.name])
-            .output();
     }
 }
 

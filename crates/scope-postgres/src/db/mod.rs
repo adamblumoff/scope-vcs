@@ -66,6 +66,7 @@ mod request_review_transactions;
 mod request_review_transactions_tests;
 mod request_revision_transactions;
 mod requests;
+mod run_retention;
 mod runs;
 pub use runs::{DispatchClaim, StoredRunLog};
 #[cfg(test)]

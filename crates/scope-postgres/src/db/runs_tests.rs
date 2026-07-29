@@ -1,4 +1,4 @@
-use super::{CatalogFixture, MetadataStore, TestDatabaseTarget};
+use super::{CatalogFixture, MetadataStore, TestDatabaseTarget, entities};
 use crate::error::PostgresErrorKind;
 use scope_domain::{
     policy::Visibility,
@@ -15,6 +15,7 @@ use scope_domain::{
     },
     store::{RepoPublicationState, StoredRepository, UserAccount},
 };
+use sea_orm::EntityTrait;
 use sha2::{Digest, Sha256};
 use std::sync::Arc;
 use tokio::{sync::Barrier, task::JoinSet};
@@ -184,7 +185,9 @@ async fn lease_recovery_requeues_only_before_execution_and_rejects_stale_attempt
 async fn terminal_run_retention_deletes_metadata_and_queues_its_source_atomically() {
     let store = postgres_store();
     register_runner(&store, "runner-1", "linux-box").await;
-    enqueue(&store, run("run-1", "manual:retention"), revision()).await;
+    let revision = revision();
+    let revision_digest = revision.digest().to_string();
+    enqueue(&store, run("run-1", "manual:retention"), revision).await;
     store
         .runs()
         .claim_run("run-1", "runner-1", "attempt-1", &"a".repeat(64), 20, 80)
@@ -225,6 +228,13 @@ async fn terminal_run_retention_deletes_metadata_and_queues_its_source_atomicall
         1
     );
     assert!(store.runs().run("run-1").await.unwrap().is_none());
+    assert!(
+        entities::workflow_revision::Entity::find_by_id(revision_digest)
+            .one(store.db.as_ref())
+            .await
+            .unwrap()
+            .is_none()
+    );
     let cleanup = store
         .cleanup()
         .source_blob_cleanup_batch(400, &super::generated_ids::test_generated_id)
@@ -473,6 +483,14 @@ async fn machine_authentication_and_attempt_logs_are_narrow_and_idempotent() {
         .await
         .unwrap();
     assert!(second.position > stored.position);
+    assert_eq!(
+        store
+            .runs()
+            .next_attempt_log_sequence("attempt-1")
+            .await
+            .unwrap(),
+        3
+    );
     let attempt = store
         .runs()
         .authenticate_attempt("attempt-1", &"a".repeat(64), 23)

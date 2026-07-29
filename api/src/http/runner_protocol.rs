@@ -19,7 +19,7 @@ use axum::{
 };
 use scope_api_contract::{
     AppendAttemptLogRequest, AttemptConclusionRequest, AttemptHeartbeatRequest,
-    AttemptStatusResponse, ClaimRunResponse, CompleteAttemptRequest,
+    AttemptRecoveryStatusResponse, AttemptStatusResponse, ClaimRunResponse, CompleteAttemptRequest,
     PinAttemptContainerImageRequest, PinAttemptContainerImageResponse, RunJobResponse,
     RunnerPollResponse, RunnerRunOffer,
 };
@@ -173,6 +173,22 @@ pub(crate) async fn heartbeat(
         .authenticate_attempt(&attempt_id, &token_hash, now)
         .await?;
     Ok(Json(attempt_status(&claim)))
+}
+
+pub(crate) async fn recovery_status(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path(attempt_id): Path<String>,
+) -> Result<Json<AttemptRecoveryStatusResponse>, ApiError> {
+    let claim = require_attempt(&state, &headers, &attempt_id).await?;
+    Ok(Json(AttemptRecoveryStatusResponse {
+        next_log_sequence: state
+            .metadata
+            .runs()
+            .next_attempt_log_sequence(&attempt_id)
+            .await?,
+        log_bytes: claim.attempt.log_bytes,
+    }))
 }
 
 pub(crate) async fn source(

@@ -6,10 +6,10 @@ use reqwest::{
 };
 use scope_api_contract::{
     AppendAttemptLogRequest, AttachRunnerRepositoryRequest, AttemptHeartbeatRequest,
-    AttemptStatusResponse, ClaimRunResponse, CompleteAttemptRequest, CreateManualRunQuery,
-    PinAttemptContainerImageRequest, PinAttemptContainerImageResponse, RegisterRunnerRequest,
-    RegisterRunnerResponse, RunEventsQuery, RunLogResponse, RunResponse, RunnerPollResponse,
-    RunnerResponse,
+    AttemptRecoveryStatusResponse, AttemptStatusResponse, ClaimRunResponse, CompleteAttemptRequest,
+    CreateManualRunQuery, PinAttemptContainerImageRequest, PinAttemptContainerImageResponse,
+    RegisterRunnerRequest, RegisterRunnerResponse, RunEventsQuery, RunLogResponse, RunResponse,
+    RunnerPollResponse, RunnerResponse,
 };
 use std::io::BufRead;
 
@@ -366,6 +366,25 @@ pub fn attempt_heartbeat(
         routes::attempt_heartbeat(attempt_id),
         &AttemptHeartbeatRequest {},
         "heartbeat Scope run attempt",
+    )
+}
+
+pub fn attempt_recovery_status(
+    client: &Client,
+    api_url: &str,
+    attempt_token: &str,
+    attempt_id: &str,
+) -> anyhow::Result<AttemptRecoveryStatusResponse> {
+    parse_json(
+        client
+            .get(format!(
+                "{api_url}{}",
+                routes::attempt_recovery_status(attempt_id)
+            ))
+            .bearer_auth(attempt_token)
+            .send()
+            .context("load Scope run attempt recovery status")?,
+        "load Scope run attempt recovery status",
     )
 }
 

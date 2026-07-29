@@ -119,7 +119,7 @@ impl Runner {
 
     pub fn supports_dispatch(&self) -> bool {
         self.enabled
-            && self.protocol_version >= RUNNER_PROTOCOL_VERSION
+            && self.protocol_version == RUNNER_PROTOCOL_VERSION
             && self.capabilities == RunnerCapabilities::v1()
     }
 
@@ -289,6 +289,17 @@ mod tests {
         )
         .unwrap();
         assert!(!previous_protocol.supports_dispatch());
+        let future_protocol = Runner::new(
+            "runner-future",
+            "user-1",
+            "c".repeat(64),
+            "2.0.0",
+            RUNNER_PROTOCOL_VERSION + 1,
+            RunnerCapabilities::v1(),
+            10,
+        )
+        .unwrap();
+        assert!(!future_protocol.supports_dispatch());
 
         let mut reordered = runner;
         reordered.record_seen(20).unwrap();

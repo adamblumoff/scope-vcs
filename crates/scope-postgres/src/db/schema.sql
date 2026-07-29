@@ -1312,7 +1312,7 @@ ALTER TABLE scope_runs
         ) AND
         (
             pinned_container_image IS NULL OR
-            pinned_container_image ~ '@sha256:[0-9A-Fa-f]{64}$'
+            pinned_container_image ~ '^[^@[:space:]]+@sha256:[0-9A-Fa-f]{64}$'
         ) AND
         trigger IN ('manual', 'push-main') AND
         state IN ('queued', 'leased', 'running', 'succeeded', 'failed', 'canceled', 'lost') AND

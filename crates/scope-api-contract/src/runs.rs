@@ -106,6 +106,12 @@ pub struct AttemptStatusResponse {
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
+pub struct AttemptRecoveryStatusResponse {
+    pub next_log_sequence: u64,
+    pub log_bytes: u64,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct AttemptHeartbeatRequest {}
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
