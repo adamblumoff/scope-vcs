@@ -79,6 +79,16 @@ fn requested_repository(image: &str) -> String {
 }
 
 fn normalize_docker_repository(repository: &str) -> String {
+    if let Some(path) = repository
+        .strip_prefix("docker.io/")
+        .or_else(|| repository.strip_prefix("index.docker.io/"))
+    {
+        return if path.contains('/') {
+            format!("docker.io/{path}")
+        } else {
+            format!("docker.io/library/{path}")
+        };
+    }
     let first = repository.split('/').next().unwrap_or_default();
     if first.contains('.') || first.contains(':') || first == "localhost" {
         repository.to_string()
@@ -116,6 +126,28 @@ mod tests {
             )
             .unwrap(),
             format!("docker.io/library/alpine@sha256:{}", "c".repeat(64))
+        );
+        assert_eq!(
+            select_repo_digest(
+                "docker.io/alpine:3.20",
+                &[format!(
+                    "docker.io/library/alpine@sha256:{}",
+                    "d".repeat(64)
+                )]
+            )
+            .unwrap(),
+            format!("docker.io/library/alpine@sha256:{}", "d".repeat(64))
+        );
+        assert_eq!(
+            select_repo_digest(
+                "index.docker.io/alpine:3.20",
+                &[format!(
+                    "docker.io/library/alpine@sha256:{}",
+                    "e".repeat(64)
+                )]
+            )
+            .unwrap(),
+            format!("docker.io/library/alpine@sha256:{}", "e".repeat(64))
         );
     }
 }
