@@ -28,23 +28,23 @@ use std::{
     time::Duration,
 };
 
-mod container;
 mod checkout;
 mod config;
+mod container;
 mod image;
 mod supervisor;
 mod systemd;
 mod workspace;
+use checkout::checkout_exact_commit;
+use config::{
+    RunnerConfig, load_runner_config, load_runner_config_from, runner_config_path,
+    scope_config_home, store_runner_config,
+};
 #[cfg(test)]
 use container::apply_container_limits;
 use container::{
     ContainerGuard, configure_job_container_creation, container_finished_at_unix,
     container_is_running, container_started_at_unix, doctor_local, recovered_container_exit_code,
-};
-use checkout::checkout_exact_commit;
-use config::{
-    RunnerConfig, load_runner_config, load_runner_config_from, runner_config_path,
-    scope_config_home, store_runner_config,
 };
 use image::resolve_container_image;
 mod recovery;
@@ -532,7 +532,9 @@ fn report_pending_conclusion(
         Ok(client) => client,
         Err(error) => {
             work.preserve();
-            eprintln!("Could not create the client for reporting the persisted conclusion: {error:#}");
+            eprintln!(
+                "Could not create the client for reporting the persisted conclusion: {error:#}"
+            );
             return Err(ConclusionReportPending.into());
         }
     };

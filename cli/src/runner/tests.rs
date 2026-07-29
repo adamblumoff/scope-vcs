@@ -140,7 +140,11 @@ fn job_container_receives_only_copied_source_and_script() {
     assert!(!joined.contains(&claim.attempt_token));
     assert!(joined.contains("scope.runner-id=runner-1"));
     assert!(joined.contains("scope.attempt-id=attempt-1"));
-    assert!(arguments.windows(2).any(|pair| pair == ["--entrypoint", "sh"]));
+    assert!(
+        arguments
+            .windows(2)
+            .any(|pair| pair == ["--entrypoint", "sh"])
+    );
 }
 
 #[test]
@@ -216,12 +220,7 @@ fn interrupted_attempt_credentials_are_persisted_privately_for_reconciliation() 
     assert!(persist_recovery_claim(&root, &claim).is_err());
     update_recovery_log_sequence(&root, &claim, 2).unwrap();
     mark_recovery_execution_started(&root, &claim, 90).unwrap();
-    mark_recovery_conclusion_pending(
-        &root,
-        &claim,
-        AttemptConclusionRequest::Succeeded,
-    )
-    .unwrap();
+    mark_recovery_conclusion_pending(&root, &claim, AttemptConclusionRequest::Succeeded).unwrap();
     let stored: ClaimRunResponse = serde_json::from_slice(&fs::read(path).unwrap()).unwrap();
     assert_eq!(stored.attempt_id, claim.attempt_id);
     assert_eq!(stored.attempt_token, claim.attempt_token);

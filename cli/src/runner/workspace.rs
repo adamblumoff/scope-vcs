@@ -1,14 +1,7 @@
 use anyhow::{Context, bail};
-use std::{
-    env, fs,
-    path::PathBuf,
-    process::Command,
-};
+use std::{env, fs, path::PathBuf, process::Command};
 
-pub(super) fn command_success(
-    command: &mut Command,
-    context: &str,
-) -> anyhow::Result<()> {
+pub(super) fn command_success(command: &mut Command, context: &str) -> anyhow::Result<()> {
     let output = command.output().with_context(|| context.to_string())?;
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);
@@ -17,10 +10,7 @@ pub(super) fn command_success(
     Ok(())
 }
 
-pub(super) fn command_stdout(
-    command: &mut Command,
-    context: &str,
-) -> anyhow::Result<String> {
+pub(super) fn command_stdout(command: &mut Command, context: &str) -> anyhow::Result<String> {
     let output = command.output().with_context(|| context.to_string())?;
     if !output.status.success() {
         bail!(

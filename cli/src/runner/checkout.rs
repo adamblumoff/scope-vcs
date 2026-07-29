@@ -54,7 +54,10 @@ pub(super) fn checkout_exact_commit(
 fn validate_checkout_tree(tree: &[u8]) -> anyhow::Result<()> {
     let mut files = 0_u64;
     let mut bytes = 0_u64;
-    for record in tree.split(|byte| *byte == 0).filter(|record| !record.is_empty()) {
+    for record in tree
+        .split(|byte| *byte == 0)
+        .filter(|record| !record.is_empty())
+    {
         let separator = record
             .iter()
             .position(|byte| *byte == b'\t')
@@ -62,17 +65,27 @@ fn validate_checkout_tree(tree: &[u8]) -> anyhow::Result<()> {
         let metadata =
             std::str::from_utf8(&record[..separator]).context("Git tree metadata is not UTF-8")?;
         let mut fields = metadata.split_ascii_whitespace();
-        let _mode = fields.next().context("Git tree entry is missing its mode")?;
-        let kind = fields.next().context("Git tree entry is missing its type")?;
-        let _oid = fields.next().context("Git tree entry is missing its object id")?;
-        let size = fields.next().context("Git tree entry is missing its size")?;
+        let _mode = fields
+            .next()
+            .context("Git tree entry is missing its mode")?;
+        let kind = fields
+            .next()
+            .context("Git tree entry is missing its type")?;
+        let _oid = fields
+            .next()
+            .context("Git tree entry is missing its object id")?;
+        let size = fields
+            .next()
+            .context("Git tree entry is missing its size")?;
         if fields.next().is_some() || kind != "blob" {
             bail!("run checkout contains an unsupported Git tree entry");
         }
         let size = size
             .parse::<u64>()
             .context("Git tree entry has an invalid blob size")?;
-        files = files.checked_add(1).context("run checkout file count overflow")?;
+        files = files
+            .checked_add(1)
+            .context("run checkout file count overflow")?;
         bytes = bytes
             .checked_add(size)
             .context("run checkout byte count overflow")?;
@@ -113,10 +126,7 @@ mod tests {
 
     #[test]
     fn checkout_tree_budget_rejects_gitlinks() {
-        let tree = format!(
-            "160000 commit {} -\tthird-party\0",
-            "a".repeat(40)
-        );
+        let tree = format!("160000 commit {} -\tthird-party\0", "a".repeat(40));
         assert!(
             validate_checkout_tree(tree.as_bytes())
                 .unwrap_err()
