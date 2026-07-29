@@ -1,7 +1,7 @@
-use super::{RunStore, entities};
+use super::{RunStore, entities, object_references::insert_object_reference};
 use crate::error::PostgresError;
 use scope_domain::runs::{
-    run::{AttemptConclusion, Run, RunAttempt, RunLogChunk},
+    run::{AttemptConclusion, PinnedContainerImage, Run, RunAttempt, RunLogChunk},
     runner::{Runner, RunnerGrant},
     workflow::WorkflowRevision,
 };
@@ -153,7 +153,7 @@ impl RunStore {
             .map_err(PostgresError::internal)?
             .ok_or_else(|| PostgresError::unauthenticated("runner credentials are invalid"))?;
         let mut runner = model.try_into_domain()?;
-        if !runner.supports_v1_dispatch() {
+        if !runner.supports_dispatch() {
             return Err(PostgresError::permission_denied(
                 "runner is disabled or incompatible with the V1 protocol",
             ));
@@ -274,7 +274,8 @@ impl RunStore {
             .exec(&tx)
             .await
             .map_err(PostgresError::internal)?;
-        let stored = if !matches!(result, TryInsertResult::Inserted(_)) {
+        let inserted = matches!(result, TryInsertResult::Inserted(_));
+        let stored = if !inserted {
             let stored = entities::run::Entity::find()
                 .filter(entities::run::Column::RepoId.eq(run.workflow.repository_id().to_string()))
                 .filter(entities::run::Column::IdempotencyKey.eq(run.idempotency_key.clone()))
@@ -292,6 +293,9 @@ impl RunStore {
             }
             stored
         } else {
+            for object in run.source.retained_objects() {
+                insert_object_reference(&tx, "run_source", &run.id, object).await?;
+            }
             run
         };
         tx.commit().await.map_err(PostgresError::internal)?;
@@ -308,7 +312,7 @@ impl RunStore {
             .map_err(PostgresError::internal)?
             .ok_or_else(|| PostgresError::not_found("runner not found"))?
             .try_into_domain()?;
-        if !runner.supports_v1_dispatch() {
+        if !runner.supports_dispatch() {
             return Ok(None);
         }
 
@@ -406,6 +410,37 @@ impl RunStore {
         .await
     }
 
+    pub async fn pin_attempt_container_image(
+        &self,
+        attempt_id: &str,
+        runner_id: &str,
+        token_hash: &str,
+        image: PinnedContainerImage,
+        now_unix: u64,
+    ) -> Result<DispatchClaim, PostgresError> {
+        let tx = self.db.begin().await.map_err(PostgresError::internal)?;
+        let (mut run, attempt) = locked_attempt_context(&tx, attempt_id).await?;
+        ensure_runner_authorized(&tx, &run, &attempt).await?;
+        attempt
+            .authenticate_access(&run, token_hash, now_unix)
+            .map_err(PostgresError::from)?;
+        if attempt.runner_id != runner_id {
+            return Err(PostgresError::permission_denied(
+                "attempt runner identity does not match",
+            ));
+        }
+        run.pin_container_image(image, now_unix)
+            .map_err(PostgresError::from)?;
+        save_run(&tx, &run).await?;
+        let workflow_revision = workflow_revision_for_run(&tx, &run).await?;
+        tx.commit().await.map_err(PostgresError::internal)?;
+        Ok(DispatchClaim {
+            run,
+            attempt,
+            workflow_revision,
+        })
+    }
+
     pub async fn heartbeat_attempt(
         &self,
         attempt_id: &str,
@@ -441,6 +476,19 @@ impl RunStore {
         .await
     }
 
+    pub async fn abandon_attempt(
+        &self,
+        attempt_id: &str,
+        runner_id: &str,
+        token_hash: &str,
+        now_unix: u64,
+    ) -> Result<DispatchClaim, PostgresError> {
+        self.mutate_attempt(attempt_id, |run, attempt| {
+            attempt.abandon(run, runner_id, token_hash, now_unix)
+        })
+        .await
+    }
+
     pub async fn expire_attempt(
         &self,
         attempt_id: &str,
@@ -460,6 +508,29 @@ impl RunStore {
             attempt,
             workflow_revision,
         })
+    }
+
+    pub async fn expired_attempt_ids(
+        &self,
+        now_unix: u64,
+        limit: u64,
+    ) -> Result<Vec<String>, PostgresError> {
+        let now_unix = entities::u64_to_i64(now_unix, "attempt recovery time")?;
+        Ok(entities::run_attempt::Entity::find()
+            .filter(
+                entities::run_attempt::Column::State
+                    .is_in(["leased".to_string(), "running".to_string()]),
+            )
+            .filter(entities::run_attempt::Column::LeaseExpiresAtUnix.lte(now_unix))
+            .order_by_asc(entities::run_attempt::Column::LeaseExpiresAtUnix)
+            .order_by_asc(entities::run_attempt::Column::Id)
+            .limit(limit)
+            .all(self.db.as_ref())
+            .await
+            .map_err(PostgresError::internal)?
+            .into_iter()
+            .map(|attempt| attempt.id)
+            .collect())
     }
 
     pub async fn request_run_cancellation(
@@ -629,6 +700,21 @@ impl RunStore {
                 })
             })
             .collect()
+    }
+
+    pub async fn next_attempt_log_sequence(&self, attempt_id: &str) -> Result<u64, PostgresError> {
+        let last = entities::run_log::Entity::find()
+            .filter(entities::run_log::Column::AttemptId.eq(attempt_id))
+            .order_by_desc(entities::run_log::Column::Sequence)
+            .one(self.db.as_ref())
+            .await
+            .map_err(PostgresError::internal)?;
+        match last {
+            Some(log) => entities::i64_to_u64(log.sequence, "run log sequence")?
+                .checked_add(1)
+                .ok_or_else(|| PostgresError::conflict("run log sequence overflow")),
+            None => Ok(1),
+        }
     }
 
     async fn mutate_attempt(

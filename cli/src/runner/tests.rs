@@ -82,16 +82,68 @@ fn log_reader_bounds_chunks_even_without_newlines() {
 }
 
 #[test]
-fn startup_cleanup_removes_abandoned_work_without_removing_root() {
-    let root = env::temp_dir().join(format!("scope-runner-cleanup-test-{}", std::process::id()));
+fn log_encoding_is_chunk_independent_and_replay_safe() {
+    let bytes = b"hello \xe2\x98\x83\nbad \xff\n";
+    let whole = stable_log_text(bytes);
+    let split = [
+        stable_log_text(&bytes[..7]),
+        stable_log_text(&bytes[7..10]),
+        stable_log_text(&bytes[10..]),
+    ]
+    .concat();
+    assert_eq!(split, whole);
+    assert_eq!(whole, "hello \\xe2\\x98\\x83\nbad \\xff\n");
+}
+
+#[cfg(unix)]
+#[test]
+fn interrupted_attempt_credentials_are_persisted_privately_for_reconciliation() {
+    use scope_api_contract::RunJobResponse;
+    use std::os::unix::fs::PermissionsExt;
+
+    let root = env::temp_dir().join(format!("scope-runner-recovery-test-{}", std::process::id()));
     let _ = fs::remove_dir_all(&root);
-    fs::create_dir_all(root.join("attempt/workspace")).unwrap();
-    fs::write(root.join("attempt/workspace/source.txt"), "private").unwrap();
-    fs::write(root.join("orphan.bundle"), "bundle").unwrap();
+    fs::create_dir(&root).unwrap();
+    let claim = ClaimRunResponse {
+        attempt_id: "attempt-1".to_string(),
+        attempt_token: "secret-token".to_string(),
+        lease_expires_at_unix: 100,
+        job: RunJobResponse {
+            run_id: "run-1".to_string(),
+            repository_id: "owner/repo".to_string(),
+            git_oid: "a".repeat(40),
+            source_digest: "b".repeat(64),
+            pinned_container_image: None,
+            workflow: CompiledWorkflow::new(
+                "Test",
+                WorkflowTriggers::new(true, false).unwrap(),
+                RunnerSelector::Any,
+                ContainerSpec::new("alpine:3.20").unwrap(),
+                60,
+                vec![WorkflowStep::new("Test", "true").unwrap()],
+            )
+            .unwrap(),
+        },
+    };
 
-    cleanup_work_root(&root).unwrap();
+    persist_recovery_claim(&root, &claim).unwrap();
 
-    assert!(root.is_dir());
-    assert_eq!(fs::read_dir(&root).unwrap().count(), 0);
-    fs::remove_dir(root).unwrap();
+    let path = root.join("claim.json");
+    assert_eq!(
+        fs::metadata(&path).unwrap().permissions().mode() & 0o777,
+        0o600
+    );
+    assert!(!root.join(".claim.json.tmp").exists());
+    assert!(persist_recovery_claim(&root, &claim).is_err());
+    update_recovery_log_sequence(&root, &claim, 2).unwrap();
+    mark_recovery_execution_started(&root, &claim, 90).unwrap();
+    let stored: ClaimRunResponse = serde_json::from_slice(&fs::read(path).unwrap()).unwrap();
+    assert_eq!(stored.attempt_id, claim.attempt_id);
+    assert_eq!(stored.attempt_token, claim.attempt_token);
+    let progress: RecoveryProgress =
+        serde_json::from_slice(&fs::read(root.join("progress.json")).unwrap()).unwrap();
+    assert_eq!(progress.next_log_sequence, 2);
+    assert_eq!(progress.execution_deadline_unix, Some(90));
+    assert!(!root.join(".progress.json.tmp").exists());
+    fs::remove_dir_all(root).unwrap();
 }

@@ -88,6 +88,14 @@ pub fn router(state: AppState) -> Router {
             routes::ATTEMPT_HEARTBEAT,
             post(http::runner_protocol::heartbeat),
         )
+        .route(
+            routes::ATTEMPT_RECOVERY_STATUS,
+            get(http::runner_protocol::recovery_status),
+        )
+        .route(
+            routes::ATTEMPT_CONTAINER_IMAGE,
+            post(http::runner_protocol::pin_container_image),
+        )
         .route(routes::ATTEMPT_SOURCE, get(http::runner_protocol::source))
         .route(
             routes::ATTEMPT_LOGS,
@@ -96,6 +104,10 @@ pub fn router(state: AppState) -> Router {
         .route(
             routes::ATTEMPT_COMPLETE,
             post(http::runner_protocol::complete),
+        )
+        .route(
+            routes::ATTEMPT_ABANDON,
+            post(http::runner_protocol::abandon),
         )
         .route(
             routes::REPOS,

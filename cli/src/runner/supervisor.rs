@@ -123,11 +123,9 @@ impl AttemptSupervisor {
         Ok(())
     }
 
-    pub(super) fn begin_execution(&self, timeout_seconds: u64) {
-        self.execution_deadline.store(
-            unix_now().saturating_add(timeout_seconds),
-            Ordering::Relaxed,
-        );
+    pub(super) fn set_execution_deadline(&self, deadline_unix: u64) {
+        self.execution_deadline
+            .store(deadline_unix, Ordering::Relaxed);
     }
 
     pub(super) fn reason(&self) -> AttemptStopReason {

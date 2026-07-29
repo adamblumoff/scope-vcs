@@ -1,5 +1,5 @@
 use crate::{
-    api::{api_url, cancel_run, create_manual_run, get_run_events, retry_run},
+    api::{RunStreamEvent, api_url, cancel_run, create_manual_run, retry_run, stream_run_events},
     git_repo::{GitRepo, ensure_git_repo_ready, head_oid, warn_if_dirty_working_tree},
     git_transport::{ScopeRemote, select_scope_fetch_remote},
     login::session_from_cache_or_browser,
@@ -113,7 +113,8 @@ fn watch_run(
 ) -> anyhow::Result<()> {
     let mut cursor = 0;
     loop {
-        let events = get_run_events(
+        let mut terminal = None;
+        stream_run_events(
             client,
             api_url,
             session_token,
@@ -121,20 +122,24 @@ fn watch_run(
             &target.repo,
             run_id,
             cursor,
+            |event| {
+                match event {
+                    RunStreamEvent::Log(log) => {
+                        cursor = log.position;
+                        print!("{}", log.text);
+                    }
+                    RunStreamEvent::Status(run) if run.state.is_terminal() => terminal = Some(run),
+                    RunStreamEvent::Status(_) => {}
+                }
+                Ok(terminal.is_none())
+            },
         )?;
-        for log in events.logs {
-            print!("{}", log.text);
-        }
-        cursor = events.next_cursor;
-        if events.has_more {
-            continue;
-        }
-        if events.run.state.is_terminal() {
-            print_terminal(&events.run);
-            return if events.run.state == RunState::Succeeded {
+        if let Some(run) = terminal {
+            print_terminal(&run);
+            return if run.state == RunState::Succeeded {
                 Ok(())
             } else {
-                bail!("run {} {}", events.run.id, state_label(events.run.state))
+                bail!("run {} {}", run.id, state_label(run.state))
             };
         }
         thread::sleep(Duration::from_secs(1));

@@ -94,6 +94,7 @@ pub struct RunJobResponse {
     pub repository_id: String,
     pub git_oid: String,
     pub source_digest: String,
+    pub pinned_container_image: Option<String>,
     pub workflow: CompiledWorkflow,
 }
 
@@ -105,7 +106,23 @@ pub struct AttemptStatusResponse {
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
+pub struct AttemptRecoveryStatusResponse {
+    pub next_log_sequence: u64,
+    pub log_bytes: u64,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct AttemptHeartbeatRequest {}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+pub struct PinAttemptContainerImageRequest {
+    pub image: String,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+pub struct PinAttemptContainerImageResponse {
+    pub image: String,
+}
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct AppendAttemptLogRequest {
@@ -133,14 +150,6 @@ pub struct RunLogResponse {
     pub sequence: u64,
     pub text: String,
     pub created_at_unix: u64,
-}
-
-#[derive(Clone, Debug, Deserialize, Serialize)]
-pub struct RunEventsResponse {
-    pub run: RunResponse,
-    pub logs: Vec<RunLogResponse>,
-    pub next_cursor: u64,
-    pub has_more: bool,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]

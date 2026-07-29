@@ -122,11 +122,6 @@ enum RunnerCommand {
         #[arg(long, hide = true)]
         config: Option<PathBuf>,
     },
-    #[command(hide = true)]
-    Cleanup {
-        #[arg(long, hide = true)]
-        config: PathBuf,
-    },
 }
 
 fn main() -> anyhow::Result<()> {
@@ -203,6 +198,5 @@ fn run_runner(command: RunnerCommand) -> anyhow::Result<()> {
             scope_cli::runner::remove_repository(&repository)
         }
         RunnerCommand::Daemon { config } => scope_cli::runner::daemon(config.as_deref()),
-        RunnerCommand::Cleanup { config } => scope_cli::runner::cleanup(&config),
     }
 }

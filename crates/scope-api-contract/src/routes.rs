@@ -23,9 +23,14 @@ pub const RUNNER_POLL: &str = "/v1/runner-protocol/poll";
 pub const RUNNER_CLAIM: &str = "/v1/runner-protocol/runs/{run_id}/claim";
 pub const ATTEMPT_START: &str = "/v1/runner-protocol/attempts/{attempt_id}/start";
 pub const ATTEMPT_HEARTBEAT: &str = "/v1/runner-protocol/attempts/{attempt_id}/heartbeat";
+pub const ATTEMPT_RECOVERY_STATUS: &str =
+    "/v1/runner-protocol/attempts/{attempt_id}/recovery-status";
+pub const ATTEMPT_CONTAINER_IMAGE: &str =
+    "/v1/runner-protocol/attempts/{attempt_id}/container-image";
 pub const ATTEMPT_SOURCE: &str = "/v1/runner-protocol/attempts/{attempt_id}/source";
 pub const ATTEMPT_LOGS: &str = "/v1/runner-protocol/attempts/{attempt_id}/logs";
 pub const ATTEMPT_COMPLETE: &str = "/v1/runner-protocol/attempts/{attempt_id}/complete";
+pub const ATTEMPT_ABANDON: &str = "/v1/runner-protocol/attempts/{attempt_id}/abandon";
 pub const REPO: &str = "/v1/repos/{owner}/{repo}";
 pub const REPO_RUNS: &str = "/v1/repos/{owner}/{repo}/runs";
 pub const REPO_RUN: &str = "/v1/repos/{owner}/{repo}/runs/{run_id}";
@@ -127,6 +132,14 @@ pub fn attempt_heartbeat(attempt_id: &str) -> String {
     attempt_action(attempt_id, "heartbeat")
 }
 
+pub fn attempt_recovery_status(attempt_id: &str) -> String {
+    attempt_action(attempt_id, "recovery-status")
+}
+
+pub fn attempt_container_image(attempt_id: &str) -> String {
+    attempt_action(attempt_id, "container-image")
+}
+
 pub fn attempt_source(attempt_id: &str) -> String {
     attempt_action(attempt_id, "source")
 }
@@ -137,6 +150,10 @@ pub fn attempt_logs(attempt_id: &str) -> String {
 
 pub fn attempt_complete(attempt_id: &str) -> String {
     attempt_action(attempt_id, "complete")
+}
+
+pub fn attempt_abandon(attempt_id: &str) -> String {
+    attempt_action(attempt_id, "abandon")
 }
 
 fn attempt_action(attempt_id: &str, action: &str) -> String {

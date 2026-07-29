@@ -78,6 +78,8 @@ pub async fn app_state_from_env() -> anyhow::Result<AppState> {
         test_object_store: Arc::new(scope_object_store::MemoryObjectStore::new()),
     };
     state.start_raw_git_cache_reaper();
+    state.start_run_attempt_recovery();
+    state.start_run_retention();
     Ok(state)
 }
 

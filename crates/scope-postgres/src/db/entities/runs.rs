@@ -174,9 +174,8 @@ pub mod run {
         pub workflow_revision_digest: String,
         pub trigger: String,
         pub requested_by_user_id: Option<String>,
-        pub source_snapshot_id: String,
-        pub source_digest: String,
-        pub source_git_oid: String,
+        pub source: Json,
+        pub pinned_container_image: Option<String>,
         pub desired_runner_name: Option<String>,
         pub state: String,
         pub cancellation_requested: bool,
@@ -202,9 +201,11 @@ pub mod run {
                 workflow_revision_digest: run.workflow_revision_digest.clone(),
                 trigger: encode_enum(run.trigger)?,
                 requested_by_user_id: run.requested_by_user_id.clone(),
-                source_snapshot_id: run.source.snapshot_id.clone(),
-                source_digest: run.source.digest.clone(),
-                source_git_oid: run.source.git_oid.clone(),
+                source: encode_json(&run.source)?,
+                pinned_container_image: run
+                    .pinned_container_image
+                    .as_ref()
+                    .map(|image| image.as_str().to_string()),
                 desired_runner_name: match &run.desired_runner {
                     RunnerSelector::Any => None,
                     RunnerSelector::Named(name) => Some(name.clone()),
@@ -242,12 +243,11 @@ pub mod run {
                 self.workflow_revision_digest,
                 decode_enum::<RunTrigger>(self.trigger)?,
                 self.requested_by_user_id,
-                RunSource::new(
-                    self.source_snapshot_id,
-                    self.source_digest,
-                    self.source_git_oid,
-                )
-                .map_err(PostgresError::invalid_input)?,
+                decode_json::<RunSource>(self.source)?,
+                self.pinned_container_image
+                    .map(PinnedContainerImage::parse)
+                    .transpose()
+                    .map_err(PostgresError::invalid_input)?,
                 desired_runner,
                 decode_enum::<RunState>(self.state)?,
                 self.cancellation_requested,

@@ -19,14 +19,11 @@ use axum::{
 };
 use scope_api_contract::{
     AppendAttemptLogRequest, AttemptConclusionRequest, AttemptHeartbeatRequest,
-    AttemptStatusResponse, ClaimRunResponse, CompleteAttemptRequest, RunJobResponse,
+    AttemptRecoveryStatusResponse, AttemptStatusResponse, ClaimRunResponse, CompleteAttemptRequest,
+    PinAttemptContainerImageRequest, PinAttemptContainerImageResponse, RunJobResponse,
     RunnerPollResponse, RunnerRunOffer,
 };
-use scope_domain::{
-    content_ref::ContentRef,
-    runs::run::{AttemptConclusion, RunLogChunk},
-    store::{DEFAULT_GIT_FILE_MODE, SourceBlob},
-};
+use scope_domain::runs::run::{AttemptConclusion, PinnedContainerImage, RunLogChunk};
 use scope_object_store::source_blob_bytes_bounded;
 use std::time::Duration;
 
@@ -51,7 +48,7 @@ pub(crate) async fn poll(
                     run_id: run.id,
                     repository_id: run.workflow.repository_id().to_string(),
                     workflow_name: run.workflow.path().name().to_string(),
-                    git_oid: run.source.git_oid,
+                    git_oid: run.source.git_oid().to_string(),
                 }),
             }));
         }
@@ -90,10 +87,43 @@ pub(crate) async fn claim(
         job: RunJobResponse {
             run_id: claim.run.id,
             repository_id: claim.run.workflow.repository_id().to_string(),
-            git_oid: claim.run.source.git_oid,
-            source_digest: claim.run.source.digest,
+            git_oid: claim.run.source.git_oid().to_string(),
+            source_digest: claim.run.source.digest().to_string(),
+            pinned_container_image: claim
+                .run
+                .pinned_container_image
+                .as_ref()
+                .map(|image| image.as_str().to_string()),
             workflow: claim.workflow_revision.definition().clone(),
         },
+    }))
+}
+
+pub(crate) async fn pin_container_image(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path(attempt_id): Path<String>,
+    Json(input): Json<PinAttemptContainerImageRequest>,
+) -> Result<Json<PinAttemptContainerImageResponse>, ApiError> {
+    let token_hash = attempt_token_hash(&headers)?;
+    let authenticated = require_attempt(&state, &headers, &attempt_id).await?;
+    let claim = state
+        .metadata
+        .runs()
+        .pin_attempt_container_image(
+            &attempt_id,
+            &authenticated.attempt.runner_id,
+            &token_hash,
+            PinnedContainerImage::parse(input.image)?,
+            unix_now()?,
+        )
+        .await?;
+    let image = claim
+        .run
+        .pinned_container_image
+        .expect("successful image pin must persist an immutable image");
+    Ok(Json(PinAttemptContainerImageResponse {
+        image: image.as_str().to_string(),
     }))
 }
 
@@ -145,24 +175,31 @@ pub(crate) async fn heartbeat(
     Ok(Json(attempt_status(&claim)))
 }
 
+pub(crate) async fn recovery_status(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path(attempt_id): Path<String>,
+) -> Result<Json<AttemptRecoveryStatusResponse>, ApiError> {
+    let claim = require_attempt(&state, &headers, &attempt_id).await?;
+    Ok(Json(AttemptRecoveryStatusResponse {
+        next_log_sequence: state
+            .metadata
+            .runs()
+            .next_attempt_log_sequence(&attempt_id)
+            .await?,
+        log_bytes: claim.attempt.log_bytes,
+    }))
+}
+
 pub(crate) async fn source(
     State(state): State<AppState>,
     headers: HeaderMap,
     Path(attempt_id): Path<String>,
 ) -> Result<impl IntoResponse, ApiError> {
     let claim = require_attempt(&state, &headers, &attempt_id).await?;
-    let source = SourceBlob {
-        content_ref: ContentRef::git_bundle_sha256(claim.run.source.digest.clone()),
-        sha256: claim.run.source.digest.clone(),
-        git_oid: claim.run.source.git_oid,
-        git_file_mode: DEFAULT_GIT_FILE_MODE.to_string(),
-        size_bytes: 0,
-    };
-    let bytes = source_blob_bytes_bounded(
-        state.object_store.as_ref(),
-        &source,
-        MAX_SOURCE_BUNDLE_BYTES,
-    )?;
+    let source = claim.run.source.snapshot();
+    let bytes =
+        source_blob_bytes_bounded(state.object_store.as_ref(), source, MAX_SOURCE_BUNDLE_BYTES)?;
     let mut response_headers = HeaderMap::new();
     response_headers.insert(
         CONTENT_TYPE,
@@ -222,6 +259,26 @@ pub(crate) async fn complete(
             &authenticated.attempt.runner_id,
             &token_hash,
             conclusion,
+            unix_now()?,
+        )
+        .await?;
+    Ok(Json(attempt_status(&claim)))
+}
+
+pub(crate) async fn abandon(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path(attempt_id): Path<String>,
+) -> Result<Json<AttemptStatusResponse>, ApiError> {
+    let token_hash = attempt_token_hash(&headers)?;
+    let authenticated = require_attempt(&state, &headers, &attempt_id).await?;
+    let claim = state
+        .metadata
+        .runs()
+        .abandon_attempt(
+            &attempt_id,
+            &authenticated.attempt.runner_id,
+            &token_hash,
             unix_now()?,
         )
         .await?;
