@@ -180,6 +180,7 @@ async fn stream_run_events(
     sender: tokio::sync::mpsc::Sender<Result<Event, Infallible>>,
 ) {
     let mut last_state = None;
+    let mut terminal_observed = false;
     loop {
         if sender.is_closed() {
             return;
@@ -238,6 +239,14 @@ async fn stream_run_events(
             }
         };
         let terminal = run.state.is_terminal();
+        if terminal && !terminal_observed {
+            // Log append and attempt completion are separate transactions. Seeing the terminal
+            // state makes completion a stable watermark because terminal attempts reject later
+            // logs; read once more before closing so a log committed between the two queries
+            // above cannot be omitted.
+            terminal_observed = true;
+            continue;
+        }
         if last_state != Some(run.state) && (!terminal || !has_full_page) {
             last_state = Some(run.state);
             let event = match Event::default()
