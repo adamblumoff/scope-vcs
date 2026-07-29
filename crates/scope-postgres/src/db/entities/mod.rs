@@ -3,6 +3,13 @@ use crate::db::{decode_json, encode_json};
 use crate::error::PostgresError;
 use scope_domain::policy::{Policy, ScopePath, Visibility};
 use scope_domain::projection_views::{ProjectionViewFile, ProjectionViewFileContent};
+use scope_domain::runs::{
+    run::{AttemptState, Run, RunAttempt, RunSource, RunState, RunTrigger},
+    runner::{Runner, RunnerCapabilities, RunnerGrant, RunnerName},
+    workflow::{
+        CompiledWorkflow, RunnerSelector, WorkflowIdentity, WorkflowPath, WorkflowRevision,
+    },
+};
 use scope_domain::store::{
     DEFAULT_GIT_FILE_MODE, FirstPushToken, GitHead, GitPushToken, GitSegment, RepoPublicationState,
     RepoRecord, RepoStorageCleanup, RepositoryInvite, RepositoryInviteState, RepositoryMember,
@@ -69,6 +76,7 @@ mod jobs;
 mod read_models;
 mod repositories;
 mod requests;
+mod runs;
 
 pub use auth::{
     auth_identity, cli_browser_login, cli_device_login, cli_exchange_grant, cli_session, user,
@@ -88,6 +96,7 @@ pub use requests::{
     request_discussion_read_state, request_discussion_reply, request_event, request_invitee,
     user_credit_account,
 };
+pub use runs::{run, run_attempt, runner, runner_grant, workflow_revision};
 
 #[cfg(test)]
 mod tests {

@@ -66,6 +66,10 @@ mod request_review_transactions;
 mod request_review_transactions_tests;
 mod request_revision_transactions;
 mod requests;
+mod runs;
+pub use runs::DispatchClaim;
+#[cfg(test)]
+mod runs_tests;
 mod schema;
 mod starter_credits;
 #[cfg(test)]
@@ -146,6 +150,11 @@ pub struct RequestStore {
     db: Arc<DatabaseConnection>,
 }
 
+#[derive(Clone)]
+pub struct RunStore {
+    db: Arc<DatabaseConnection>,
+}
+
 impl MetadataStore {
     pub fn admin(&self) -> AdminStore {
         AdminStore {
@@ -181,6 +190,12 @@ impl MetadataStore {
 
     pub fn jobs(&self) -> JobStore {
         JobStore {
+            db: Arc::clone(&self.db),
+        }
+    }
+
+    pub fn runs(&self) -> RunStore {
+        RunStore {
             db: Arc::clone(&self.db),
         }
     }

@@ -1,11 +1,11 @@
-use serde::Serialize;
+use super::runner::RunnerName;
+use serde::{Deserialize, Deserializer, Serialize, de::Error as _};
 use sha2::{Digest, Sha256};
 use std::collections::BTreeSet;
 use thiserror::Error;
 
 pub const MAX_WORKFLOW_NAME_BYTES: usize = 100;
 pub const MAX_WORKFLOW_PATH_NAME_BYTES: usize = 64;
-pub const MAX_RUNNER_NAME_BYTES: usize = 64;
 pub const MAX_CONTAINER_IMAGE_BYTES: usize = 512;
 pub const MAX_WORKFLOW_STEPS: usize = 64;
 pub const MAX_STEP_NAME_BYTES: usize = 100;
@@ -25,7 +25,7 @@ pub enum WorkflowError {
     InvalidName,
     #[error("workflow must enable at least one trigger")]
     MissingTrigger,
-    #[error("runner name must contain between 1 and {MAX_RUNNER_NAME_BYTES} valid bytes")]
+    #[error("runner name is invalid")]
     InvalidRunnerName,
     #[error("container image must contain between 1 and {MAX_CONTAINER_IMAGE_BYTES} bytes")]
     InvalidContainerImage,
@@ -146,20 +146,24 @@ pub enum RunnerSelector {
 
 impl RunnerSelector {
     pub fn named(name: impl Into<String>) -> Result<Self, WorkflowError> {
-        let selector = Self::Named(name.into());
-        selector.validate()?;
-        Ok(selector)
+        RunnerName::parse(name.into())
+            .map(|name| Self::Named(name.as_str().to_string()))
+            .map_err(|_| WorkflowError::InvalidRunnerName)
     }
 
-    fn validate(&self) -> Result<(), WorkflowError> {
+    pub fn matches_name(&self, name: &str) -> bool {
+        match self {
+            Self::Any => true,
+            Self::Named(expected) => expected == name,
+        }
+    }
+
+    pub(crate) fn validate(&self) -> Result<(), WorkflowError> {
         match self {
             Self::Any => Ok(()),
-            Self::Named(name) => {
-                if name == "any" || name.len() > MAX_RUNNER_NAME_BYTES || !is_runner_name(name) {
-                    return Err(WorkflowError::InvalidRunnerName);
-                }
-                Ok(())
-            }
+            Self::Named(name) => RunnerName::parse(name.clone())
+                .map(|_| ())
+                .map_err(|_| WorkflowError::InvalidRunnerName),
         }
     }
 }
@@ -225,6 +229,78 @@ pub struct CompiledWorkflow {
     container: ContainerSpec,
     timeout_seconds: u64,
     steps: Vec<WorkflowStep>,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct PersistedCompiledWorkflow {
+    name: String,
+    triggers: PersistedWorkflowTriggers,
+    runner: PersistedRunnerSelector,
+    container: PersistedContainerSpec,
+    timeout_seconds: u64,
+    steps: Vec<PersistedWorkflowStep>,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct PersistedWorkflowTriggers {
+    manual: bool,
+    push_main: bool,
+}
+
+#[derive(Deserialize)]
+#[serde(tag = "kind", content = "name", rename_all = "kebab-case")]
+enum PersistedRunnerSelector {
+    Any,
+    Named(String),
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct PersistedContainerSpec {
+    image: String,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct PersistedWorkflowStep {
+    name: String,
+    run: String,
+}
+
+impl<'de> Deserialize<'de> for CompiledWorkflow {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let persisted = PersistedCompiledWorkflow::deserialize(deserializer)?;
+        let triggers =
+            WorkflowTriggers::new(persisted.triggers.manual, persisted.triggers.push_main)
+                .map_err(D::Error::custom)?;
+        let runner = match persisted.runner {
+            PersistedRunnerSelector::Any => RunnerSelector::Any,
+            PersistedRunnerSelector::Named(name) => {
+                RunnerSelector::named(name).map_err(D::Error::custom)?
+            }
+        };
+        let container = ContainerSpec::new(persisted.container.image).map_err(D::Error::custom)?;
+        let steps = persisted
+            .steps
+            .into_iter()
+            .map(|step| WorkflowStep::new(step.name, step.run))
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(D::Error::custom)?;
+        Self::new(
+            persisted.name,
+            triggers,
+            runner,
+            container,
+            persisted.timeout_seconds,
+            steps,
+        )
+        .map_err(D::Error::custom)
+    }
 }
 
 impl CompiledWorkflow {
@@ -347,17 +423,6 @@ fn is_kebab_name(name: &str) -> bool {
             .all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit() || byte == b'-')
 }
 
-fn is_runner_name(name: &str) -> bool {
-    !name.is_empty()
-        && name
-            .bytes()
-            .next()
-            .is_some_and(|byte| byte.is_ascii_alphanumeric())
-        && name
-            .bytes()
-            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_' | b'.'))
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -425,6 +490,20 @@ mod tests {
         assert_eq!(left.digest(), right.digest());
         assert_ne!(left.workflow(), right.workflow());
         assert_eq!(left.digest().len(), 64);
+    }
+
+    #[test]
+    fn persisted_definitions_revalidate_invariants() {
+        let definition = compiled_workflow();
+        let json = serde_json::to_value(&definition).unwrap();
+        assert_eq!(
+            serde_json::from_value::<CompiledWorkflow>(json).unwrap(),
+            definition
+        );
+
+        let mut invalid = serde_json::to_value(&definition).unwrap();
+        invalid["timeout_seconds"] = serde_json::json!(0);
+        assert!(serde_json::from_value::<CompiledWorkflow>(invalid).is_err());
     }
 
     #[test]
