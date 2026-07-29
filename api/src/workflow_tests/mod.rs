@@ -30,7 +30,9 @@ use scope_domain::store::{
     RepositoryInvite, RepositoryInviteState, RepositoryMember, RepositoryMemberPermissions,
     StoredRepository, UserAccount,
 };
-use scope_object_store::{MemoryObjectStore, put_source_blob, source_blob_bytes};
+use scope_object_store::{
+    ContentObjectKind, MemoryObjectStore, put_content_object, put_source_blob, source_blob_bytes,
+};
 use std::{
     collections::BTreeMap,
     fs,
@@ -481,14 +483,8 @@ async fn persist_and_promote_test_update(
     update: ReceivePackUpdate,
     actor_id: &str,
 ) -> Result<PersistedReceivePackUpdate, crate::error::ApiError> {
-    persist_receive_pack_update_and_promote(
-        state,
-        TEST_REPO_OWNER,
-        TEST_REPO_NAME,
-        update,
-        actor_id,
-    )
-    .await
+    persist_main_push_update_and_promote(state, TEST_REPO_OWNER, TEST_REPO_NAME, update, actor_id)
+        .await
 }
 
 async fn published_staging_repo(state: &AppState) -> PathBuf {
@@ -636,11 +632,25 @@ fn populate_test_live_files(repo: &mut StoredRepository) {
 
 fn receive_pack_update(state: &AppState, changes: Vec<(&str, Option<&str>)>) -> ReceivePackUpdate {
     let config = repo_config(Visibility::Public);
-    let manifest = source_blob(state, "test staged Git manifest");
+    let mut manifest = put_content_object(
+        state.object_store.as_ref(),
+        ContentObjectKind::GitManifest,
+        b"test staged Git manifest",
+    )
+    .unwrap();
     let segment_object = source_blob(state, "test staged Git segment");
+    let head_oid = "1111111111111111111111111111111111111111";
+    manifest.git_oid = head_oid.to_string();
+    let mut trigger_snapshot = put_content_object(
+        state.object_store.as_ref(),
+        ContentObjectKind::GitBundle,
+        b"test push trigger snapshot",
+    )
+    .unwrap();
+    trigger_snapshot.git_oid = head_oid.to_string();
     ReceivePackUpdate {
         branch: format!("refs/heads/{DEFAULT_GIT_BRANCH}"),
-        head_oid: "1111111111111111111111111111111111111111".to_string(),
+        head_oid: head_oid.to_string(),
         base_git_manifest_ref: None,
         author_id: test_owner_id(),
         message: "owner push".to_string(),
@@ -658,6 +668,15 @@ fn receive_pack_update(state: &AppState, changes: Vec<(&str, Option<&str>)>) -> 
             manifest: source_blob(state, "test staged Git segment manifest"),
         },
         durable_objects: Vec::new(),
+        push_trigger_input: Some(
+            scope_domain::runs::trigger::PushTriggerInput::new(
+                head_oid,
+                trigger_snapshot,
+                Vec::new(),
+                None,
+            )
+            .unwrap(),
+        ),
         previous_config: None,
         base_config_hash: repo_config_fingerprint(&config).unwrap(),
         config,

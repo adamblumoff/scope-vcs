@@ -88,6 +88,7 @@ where
             "git_segment_manifest",
             "file_change",
             "visibility_event",
+            "push_trigger_source",
         ]))
         .filter(entities::object_reference::Column::RefId.starts_with(format!("{repo_id}:")))
         .exec(conn)

@@ -342,7 +342,7 @@ pub(crate) async fn git_segment_manifest_from_repo(
     }
 }
 
-async fn queue_failed_segments(
+pub(super) async fn queue_failed_segments(
     state: &AppState,
     segments: Vec<SourceBlob>,
 ) -> Result<(), ApiError> {

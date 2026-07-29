@@ -160,6 +160,70 @@ pub mod workflow_revision {
     }
 }
 
+pub mod push_trigger_evaluation {
+    use super::*;
+
+    #[derive(Clone, Debug, PartialEq, DeriveEntityModel)]
+    #[sea_orm(table_name = "scope_push_trigger_evaluations")]
+    pub struct Model {
+        #[sea_orm(primary_key, auto_increment = false)]
+        pub repo_id: String,
+        #[sea_orm(primary_key, auto_increment = false)]
+        pub change_version: i64,
+        pub head_oid: String,
+        pub state: String,
+        pub message: Option<String>,
+        pub checks: Json,
+        pub created_at_unix: i64,
+        pub completed_at_unix: Option<i64>,
+    }
+
+    #[derive(Copy, Clone, Debug, EnumIter, DeriveRelation)]
+    pub enum Relation {}
+
+    impl ActiveModelBehavior for ActiveModel {}
+
+    impl Model {
+        pub fn from_domain(evaluation: &PushTriggerEvaluation) -> Result<Self, PostgresError> {
+            Ok(Self {
+                repo_id: evaluation.repository_id.clone(),
+                change_version: u64_to_i64(
+                    evaluation.change_version,
+                    "push trigger change version",
+                )?,
+                head_oid: evaluation.head_oid.clone(),
+                state: encode_enum(evaluation.state)?,
+                message: evaluation.message.clone(),
+                checks: encode_json(&evaluation.checks)?,
+                created_at_unix: u64_to_i64(
+                    evaluation.created_at_unix,
+                    "push trigger creation time",
+                )?,
+                completed_at_unix: evaluation
+                    .completed_at_unix
+                    .map(|value| u64_to_i64(value, "push trigger completion time"))
+                    .transpose()?,
+            })
+        }
+
+        pub fn try_into_domain(self) -> Result<PushTriggerEvaluation, PostgresError> {
+            Ok(PushTriggerEvaluation {
+                repository_id: self.repo_id,
+                change_version: i64_to_u64(self.change_version, "push trigger change version")?,
+                head_oid: self.head_oid,
+                state: decode_enum(self.state)?,
+                message: self.message,
+                checks: decode_json(self.checks)?,
+                created_at_unix: i64_to_u64(self.created_at_unix, "push trigger creation time")?,
+                completed_at_unix: self
+                    .completed_at_unix
+                    .map(|value| i64_to_u64(value, "push trigger completion time"))
+                    .transpose()?,
+            })
+        }
+    }
+}
+
 pub mod run {
     use super::*;
 

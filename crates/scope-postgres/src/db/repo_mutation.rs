@@ -1,6 +1,7 @@
 use super::{
     GeneratedIdSource, RepositoryStore, acquire_aggregate_lock,
-    cleanup_queue::queue_pending_source_blob_deletion_rows, entities, repository_from_model,
+    cleanup_queue::queue_pending_source_blob_deletion_rows, entities,
+    push_triggers::enqueue_push_main_trigger_evaluation, repository_from_model,
     repository_rows::save_repository_delta,
 };
 use sea_orm::{EntityTrait, TransactionTrait};
@@ -43,6 +44,7 @@ impl From<PostgresError> for RepositoryMutationError {
 pub struct RepositoryMutation<R> {
     pub result: R,
     pub orphan_objects: Vec<SourceBlob>,
+    pub push_trigger_input: Option<scope_domain::runs::trigger::PushTriggerInput>,
 }
 
 impl<R> RepositoryMutation<R> {
@@ -50,6 +52,7 @@ impl<R> RepositoryMutation<R> {
         Self {
             result,
             orphan_objects: Vec::new(),
+            push_trigger_input: None,
         }
     }
 
@@ -57,6 +60,18 @@ impl<R> RepositoryMutation<R> {
         Self {
             result,
             orphan_objects,
+            push_trigger_input: None,
+        }
+    }
+
+    pub fn with_push_trigger_input(
+        result: R,
+        push_trigger_input: scope_domain::runs::trigger::PushTriggerInput,
+    ) -> Self {
+        Self {
+            result,
+            orphan_objects: Vec::new(),
+            push_trigger_input: Some(push_trigger_input),
         }
     }
 }
@@ -91,6 +106,22 @@ impl RepositoryStore {
         let before = repo.clone();
         let mutation = op(&mut repo)?;
         save_repository_delta(&tx, &before, &repo, now_unix, generated_ids).await?;
+        if let Some(input) = mutation.push_trigger_input {
+            let head = repo.git_head.as_ref().ok_or_else(|| {
+                PostgresError::internal_message(
+                    "push trigger evaluation requires an accepted Git head",
+                )
+            })?;
+            enqueue_push_main_trigger_evaluation(
+                &tx,
+                &repo.record.id,
+                head,
+                &input,
+                now_unix,
+                generated_ids,
+            )
+            .await?;
+        }
         if !mutation.orphan_objects.is_empty() {
             queue_pending_source_blob_deletion_rows(
                 &tx,

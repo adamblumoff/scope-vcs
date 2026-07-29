@@ -160,6 +160,18 @@ CREATE TABLE scope_workflow_revisions (
     created_at_unix bigint NOT NULL
 );
 
+CREATE TABLE scope_push_trigger_evaluations (
+    repo_id character varying NOT NULL,
+    change_version bigint NOT NULL,
+    head_oid character varying NOT NULL,
+    state character varying NOT NULL,
+    message text,
+    checks jsonb NOT NULL,
+    created_at_unix bigint NOT NULL,
+    completed_at_unix bigint,
+    PRIMARY KEY (repo_id, change_version)
+);
+
 CREATE TABLE scope_runs (
     id character varying PRIMARY KEY,
     idempotency_key character varying NOT NULL,
@@ -1051,6 +1063,8 @@ ALTER TABLE ONLY scope_runner_grants
     ADD CONSTRAINT fk_scope_runner_grants_actor FOREIGN KEY (granted_by_user_id) REFERENCES scope_users(id) ON DELETE RESTRICT;
 ALTER TABLE ONLY scope_runs
     ADD CONSTRAINT fk_scope_runs_repo FOREIGN KEY (repo_id) REFERENCES scope_repositories(id) ON DELETE CASCADE;
+ALTER TABLE ONLY scope_push_trigger_evaluations
+    ADD CONSTRAINT fk_scope_push_trigger_evaluations_repo FOREIGN KEY (repo_id) REFERENCES scope_repositories(id) ON DELETE CASCADE;
 ALTER TABLE ONLY scope_runs
     ADD CONSTRAINT fk_scope_runs_revision FOREIGN KEY (workflow_revision_digest) REFERENCES scope_workflow_revisions(digest) ON DELETE RESTRICT;
 ALTER TABLE ONLY scope_runs
@@ -1286,6 +1300,17 @@ ALTER TABLE scope_runner_grants
 ALTER TABLE scope_workflow_revisions
     ADD CONSTRAINT scope_workflow_revisions_values CHECK (
         char_length(digest) = 64 AND digest ~ '^[0-9A-Fa-f]+$' AND created_at_unix >= 0
+    );
+ALTER TABLE scope_push_trigger_evaluations
+    ADD CONSTRAINT scope_push_trigger_evaluation_values CHECK (
+        change_version > 0 AND length(head_oid) = 40 AND created_at_unix >= 0 AND
+        state IN ('pending', 'succeeded', 'configuration-error', 'failed') AND
+        (
+            (state = 'pending' AND message IS NULL AND completed_at_unix IS NULL) OR
+            (state = 'succeeded' AND message IS NULL AND completed_at_unix IS NOT NULL) OR
+            (state IN ('configuration-error', 'failed') AND
+             length(btrim(message)) > 0 AND completed_at_unix IS NOT NULL)
+        )
     );
 ALTER TABLE scope_runs
     ADD CONSTRAINT scope_runs_values CHECK (

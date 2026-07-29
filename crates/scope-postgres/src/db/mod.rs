@@ -34,6 +34,7 @@ mod object_references;
 mod outbox;
 mod projection_encoding;
 mod projection_read_models;
+mod push_triggers;
 mod repo_change_notifications;
 mod repo_collaboration;
 mod repo_effects;

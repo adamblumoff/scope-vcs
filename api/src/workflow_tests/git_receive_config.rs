@@ -36,7 +36,7 @@ async fn push_as_push_only_member(
             .repo_config,
     )?;
     update.config = config;
-    persist_receive_pack_update_and_promote(
+    persist_main_push_update_and_promote(
         state,
         TEST_REPO_OWNER,
         TEST_REPO_NAME,

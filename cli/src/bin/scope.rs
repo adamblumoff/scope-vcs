@@ -54,6 +54,8 @@ struct PushArgs {
         help = "Skip local visibility review and push using committed config"
     )]
     no_review: bool,
+    #[arg(long, help = "Wait for push-triggered workflows to finish")]
+    wait: bool,
 }
 
 #[derive(Parser)]
@@ -127,7 +129,9 @@ enum RunnerCommand {
 fn main() -> anyhow::Result<()> {
     match Cli::parse().command {
         CommandKind::Init(args) => scope_cli::init::run(args.name),
-        CommandKind::Push(args) => scope_cli::push::run(args.remote.as_deref(), args.no_review),
+        CommandKind::Push(args) => {
+            scope_cli::push::run(args.remote.as_deref(), args.no_review, args.wait)
+        }
         CommandKind::Pull(args) => scope_cli::pull::run(args.remote.as_deref()),
         CommandKind::Review => {
             let repo = discover_git_repo("scope review")?;

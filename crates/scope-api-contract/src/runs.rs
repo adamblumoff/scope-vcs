@@ -1,6 +1,7 @@
 use scope_domain::runs::{
     run::{AttemptState, RunState},
     runner::RunnerCapabilities,
+    trigger::PushTriggerEvaluationState,
     workflow::CompiledWorkflow,
 };
 use serde::{Deserialize, Serialize};
@@ -65,6 +66,22 @@ pub struct RunResponse {
     pub created_at_unix: u64,
     pub updated_at_unix: u64,
     pub completed_at_unix: Option<u64>,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+pub struct PushTriggerCheckResponse {
+    pub workflow_path: String,
+    pub workflow_name: String,
+    pub run: RunResponse,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+pub struct PushTriggerEvaluationResponse {
+    pub change_version: u64,
+    pub head_oid: String,
+    pub state: PushTriggerEvaluationState,
+    pub message: Option<String>,
+    pub checks: Vec<PushTriggerCheckResponse>,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]

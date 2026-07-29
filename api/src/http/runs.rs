@@ -13,7 +13,10 @@ use axum::{
         sse::{Event, KeepAlive, Sse},
     },
 };
-use scope_api_contract::{CreateManualRunQuery, RunEventsQuery, RunLogResponse, RunResponse};
+use scope_api_contract::{
+    CreateManualRunQuery, PushTriggerCheckResponse, PushTriggerEvaluationResponse, RunEventsQuery,
+    RunLogResponse, RunResponse,
+};
 use scope_domain::{
     runs::{
         run::{Run, RunSource, RunTrigger},
@@ -23,6 +26,7 @@ use scope_domain::{
 };
 use scope_object_store::{ContentObjectKind, put_content_object};
 use std::{
+    collections::BTreeMap,
     convert::Infallible,
     fs::{self, File, OpenOptions},
     io::Read,
@@ -114,6 +118,56 @@ pub(crate) async fn get_run(
 ) -> Result<Json<RunResponse>, ApiError> {
     let (run, _) = require_run_access(&state, &headers, &owner, &repo_name, &run_id).await?;
     Ok(Json(run_response(&run)))
+}
+
+pub(crate) async fn get_push_trigger_evaluation(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path((owner, repo_name, head_oid)): Path<(String, String, String)>,
+) -> Result<Json<PushTriggerEvaluationResponse>, ApiError> {
+    let user = require_scope_user(&state, &headers).await?;
+    let repo = require_repo_member(&state, &user.id, &owner, &repo_name).await?;
+    let head_oid = git_oid_request("head_oid", &head_oid)?;
+    let evaluation = state
+        .metadata
+        .runs()
+        .push_trigger_evaluation(&repo.record.id, &head_oid)
+        .await?
+        .ok_or_else(|| ApiError::not_found("push trigger evaluation not found"))?;
+    let run_ids = evaluation
+        .checks
+        .iter()
+        .map(|check| check.run_id.clone())
+        .collect::<Vec<_>>();
+    let mut runs = state
+        .metadata
+        .runs()
+        .runs_by_ids(&run_ids)
+        .await?
+        .into_iter()
+        .map(|run| (run.id.clone(), run))
+        .collect::<BTreeMap<_, _>>();
+    let checks = evaluation
+        .checks
+        .into_iter()
+        .map(|check| {
+            let run = runs
+                .remove(&check.run_id)
+                .ok_or_else(|| ApiError::internal_message("push trigger check run is missing"))?;
+            Ok(PushTriggerCheckResponse {
+                workflow_path: check.workflow_path,
+                workflow_name: check.workflow_name,
+                run: run_response(&run),
+            })
+        })
+        .collect::<Result<Vec<_>, ApiError>>()?;
+    Ok(Json(PushTriggerEvaluationResponse {
+        change_version: evaluation.change_version,
+        head_oid: evaluation.head_oid,
+        state: evaluation.state,
+        message: evaluation.message,
+        checks,
+    }))
 }
 
 pub(crate) async fn cancel_run(

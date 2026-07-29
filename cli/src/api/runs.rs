@@ -8,8 +8,8 @@ use scope_api_contract::{
     AppendAttemptLogRequest, AttachRunnerRepositoryRequest, AttemptHeartbeatRequest,
     AttemptRecoveryStatusResponse, AttemptStatusResponse, ClaimRunResponse, CompleteAttemptRequest,
     CreateManualRunQuery, PinAttemptContainerImageRequest, PinAttemptContainerImageResponse,
-    RegisterRunnerRequest, RegisterRunnerResponse, RunEventsQuery, RunLogResponse, RunResponse,
-    RunnerPollResponse, RunnerResponse,
+    PushTriggerEvaluationResponse, RegisterRunnerRequest, RegisterRunnerResponse, RunEventsQuery,
+    RunLogResponse, RunResponse, RunnerPollResponse, RunnerResponse,
 };
 use std::io::BufRead;
 
@@ -27,6 +27,27 @@ pub fn register_runner(
             .send()
             .context("register Scope runner")?,
         "register Scope runner",
+    )
+}
+
+pub fn get_push_trigger_evaluation(
+    client: &Client,
+    api_url: &str,
+    session_token: &str,
+    owner: &str,
+    repo: &str,
+    head_oid: &str,
+) -> anyhow::Result<PushTriggerEvaluationResponse> {
+    parse_json(
+        client
+            .get(format!(
+                "{api_url}{}",
+                routes::repo_push_trigger_evaluation(owner, repo, head_oid)
+            ))
+            .bearer_auth(session_token)
+            .send()
+            .context("load Scope push trigger evaluation")?,
+        "load Scope push trigger evaluation",
     )
 }
 

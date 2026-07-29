@@ -19,6 +19,7 @@ pub struct ApplyContentOnlyPushCommand {
     pub author_id: String,
     pub expected_manifest_ref: scope_domain::content_ref::ContentRef,
     pub update: ReviewedUpdateInput,
+    pub push_trigger_input: scope_domain::runs::trigger::PushTriggerInput,
     pub now_unix: u64,
 }
 
@@ -34,6 +35,7 @@ impl RepositoryStore {
             author_id,
             expected_manifest_ref,
             update,
+            push_trigger_input,
             now_unix,
         } = command;
         let repo_id = scope_domain::store::repo_id(&owner, &name);
@@ -90,6 +92,7 @@ impl RepositoryStore {
             &repo_id,
             repo_row,
             update,
+            push_trigger_input,
             now_unix,
             generated_ids,
         )

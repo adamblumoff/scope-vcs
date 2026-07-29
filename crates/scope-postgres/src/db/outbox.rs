@@ -47,12 +47,12 @@ pub struct OutboxJobCounts {
 }
 
 #[derive(Clone, Debug)]
-struct ClaimedOutboxJob {
-    id: String,
-    kind: String,
-    repo_id: String,
-    repo_version: i64,
-    attempts: i64,
+pub(super) struct ClaimedOutboxJob {
+    pub(super) id: String,
+    pub(super) kind: String,
+    pub(super) repo_id: String,
+    pub(super) repo_version: i64,
+    pub(super) attempts: i64,
 }
 
 fn outbox_time(
@@ -278,6 +278,7 @@ where
         PROJECTION_READ_MODEL_REBUILD => {
             rebuild_live_projection_read_models_for_job(conn, job, now_unix).await
         }
+        super::push_triggers::JOB_KIND => super::push_triggers::evaluate(conn, job, now_unix).await,
         kind => Err(PostgresError::internal_message(format!(
             "unknown outbox job kind {kind}"
         ))),
@@ -381,7 +382,7 @@ async fn fail_outbox_job<C>(
     now: i64,
 ) -> Result<(), PostgresError>
 where
-    C: ConnectionTrait,
+    C: ConnectionTrait + TransactionTrait,
 {
     let attempts = next_retry_attempt(job.attempts)?;
     let terminal = is_terminal_retry_attempt(attempts);
@@ -393,6 +394,8 @@ where
     };
     let completed_at_unix = terminal.then_some(now);
     let state = if terminal { JOB_FAILED } else { JOB_READY };
+    let tx = conn.begin().await.map_err(PostgresError::internal)?;
+    let persisted_error = truncate_error(error);
     let failed = entities::outbox_job::Entity::update_many()
         .filter(entities::outbox_job::Column::Id.eq(job.id.clone()))
         .filter(entities::outbox_job::Column::LeaseOwner.eq(worker_id.to_string()))
@@ -416,7 +419,7 @@ where
         )
         .col_expr(
             entities::outbox_job::Column::LastError,
-            Expr::value(Some(truncate_error(error))),
+            Expr::value(Some(persisted_error.clone())),
         )
         .col_expr(
             entities::outbox_job::Column::UpdatedAtUnix,
@@ -426,7 +429,7 @@ where
             entities::outbox_job::Column::CompletedAtUnix,
             Expr::value(completed_at_unix),
         )
-        .exec(conn)
+        .exec(&tx)
         .await
         .map_err(PostgresError::internal)?;
     if failed.rows_affected != 1 {
@@ -434,7 +437,17 @@ where
             "outbox job lease was lost before failure handling",
         ));
     }
-    Ok(())
+    if terminal && job.kind == super::push_triggers::JOB_KIND {
+        super::push_triggers::mark_terminal_failure(
+            &tx,
+            job,
+            persisted_error,
+            u64::try_from(now)
+                .map_err(|_| PostgresError::internal_message("outbox failure time is negative"))?,
+        )
+        .await?;
+    }
+    tx.commit().await.map_err(PostgresError::internal)
 }
 
 async fn prune_succeeded_outbox_jobs<C>(conn: &C, now: i64) -> Result<(), PostgresError>

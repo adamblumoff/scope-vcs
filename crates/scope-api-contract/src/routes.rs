@@ -37,6 +37,8 @@ pub const REPO_RUN: &str = "/v1/repos/{owner}/{repo}/runs/{run_id}";
 pub const REPO_RUN_CANCEL: &str = "/v1/repos/{owner}/{repo}/runs/{run_id}/cancel";
 pub const REPO_RUN_RETRY: &str = "/v1/repos/{owner}/{repo}/runs/{run_id}/retry";
 pub const REPO_RUN_EVENTS: &str = "/v1/repos/{owner}/{repo}/runs/{run_id}/events";
+pub const REPO_PUSH_TRIGGER_EVALUATION: &str =
+    "/v1/repos/{owner}/{repo}/push-trigger-evaluations/{head_oid}";
 pub const REPO_CONFIG: &str = "/v1/repos/{owner}/{repo}/config";
 pub const REPO_PUSH_INTENTS: &str = "/v1/repos/{owner}/{repo}/push-intents";
 pub const REPO_REQUESTS: &str = "/v1/repos/{owner}/{repo}/requests";
@@ -182,6 +184,14 @@ pub fn repo_run_retry(owner: &str, repo: &str, run_id: &str) -> String {
 
 pub fn repo_run_events(owner: &str, repo: &str, run_id: &str) -> String {
     format!("{}/events", repo_run(owner, repo, run_id))
+}
+
+pub fn repo_push_trigger_evaluation(owner: &str, repo: &str, head_oid: &str) -> String {
+    format!(
+        "{}/push-trigger-evaluations/{}",
+        self::repo(owner, repo),
+        path_segment(head_oid)
+    )
 }
 
 pub fn repo_config(owner: &str, repo: &str) -> String {
