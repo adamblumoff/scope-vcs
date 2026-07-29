@@ -2,7 +2,7 @@ use super::*;
 use scope_domain::runs::workflow::{
     CompiledWorkflow, ContainerSpec, RunnerSelector, WorkflowStep, WorkflowTriggers,
 };
-use std::io::Cursor;
+use std::{env, io::Cursor};
 
 #[test]
 fn repository_and_systemd_inputs_are_strict() {

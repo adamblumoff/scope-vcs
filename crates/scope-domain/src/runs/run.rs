@@ -9,53 +9,13 @@ use serde::{Deserialize, Serialize};
 
 pub const MAX_RUN_LOG_CHUNK_BYTES: usize = 64 * 1024;
 pub const MAX_RUN_LOG_BYTES_PER_ATTEMPT: u64 = 10 * 1024 * 1024;
+pub use super::state::{AttemptState, RunState};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum RunTrigger {
     Manual,
     PushMain,
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "kebab-case")]
-pub enum RunState {
-    Queued,
-    Leased,
-    Running,
-    Succeeded,
-    Failed,
-    Canceled,
-    Lost,
-}
-
-impl RunState {
-    pub fn is_terminal(self) -> bool {
-        matches!(
-            self,
-            Self::Succeeded | Self::Failed | Self::Canceled | Self::Lost
-        )
-    }
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "kebab-case")]
-pub enum AttemptState {
-    Leased,
-    Running,
-    Succeeded,
-    Failed,
-    Canceled,
-    Lost,
-}
-
-impl AttemptState {
-    pub fn is_terminal(self) -> bool {
-        matches!(
-            self,
-            Self::Succeeded | Self::Failed | Self::Canceled | Self::Lost
-        )
-    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

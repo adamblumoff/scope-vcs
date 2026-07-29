@@ -15,9 +15,9 @@ use scope_api_contract::{
 use scope_domain::runs::runner::{RUNNER_PROTOCOL_VERSION, RunnerCapabilities};
 use sha2::{Digest, Sha256};
 use std::{
-    env, fs,
+    fs,
     io::{BufReader, Read, Write},
-    path::{Path, PathBuf},
+    path::Path,
     process::{Child, Command, Stdio},
     sync::{
         Arc,
@@ -30,9 +30,11 @@ use std::{
 
 mod container;
 mod checkout;
+mod config;
 mod image;
 mod supervisor;
 mod systemd;
+mod workspace;
 #[cfg(test)]
 use container::apply_container_limits;
 use container::{
@@ -40,6 +42,10 @@ use container::{
     container_is_running, container_started_at_unix, doctor_local, recovered_container_exit_code,
 };
 use checkout::checkout_exact_commit;
+use config::{
+    RunnerConfig, load_runner_config, load_runner_config_from, runner_config_path,
+    scope_config_home, store_runner_config,
+};
 use image::resolve_container_image;
 mod recovery;
 #[cfg(test)]
@@ -52,18 +58,10 @@ use supervisor::{AttemptStopReason, AttemptSupervisor};
 #[cfg(test)]
 use systemd::systemd_quote_path;
 use systemd::{install_systemd_service, print_linger_status};
+use workspace::{RunnerWorkDir, command_stdout, command_success, runner_work_root, unix_now};
 
 const LOG_CHUNK_BYTES: usize = 16 * 1024;
 const MAX_SOURCE_BUNDLE_BYTES: u64 = 128 * 1024 * 1024;
-
-#[derive(Clone, Debug, serde::Deserialize, serde::Serialize)]
-struct RunnerConfig {
-    api_url: String,
-    runner_id: String,
-    name: String,
-    secret: String,
-    storage_quota_supported: bool,
-}
 
 pub fn install(name: &str, repository: &str) -> anyhow::Result<()> {
     let (owner, repo) = parse_repository(repository)?;
@@ -928,164 +926,6 @@ fn attempt_control_client() -> anyhow::Result<Client> {
         .timeout(Duration::from_secs(10))
         .build()
         .context("build attempt control HTTP client")
-}
-
-fn runner_config_path() -> anyhow::Result<PathBuf> {
-    if let Some(path) = env::var_os("SCOPE_RUNNER_CONFIG").filter(|path| !path.is_empty()) {
-        return Ok(PathBuf::from(path));
-    }
-    Ok(scope_config_home()?.join("scope/runner.json"))
-}
-
-fn scope_config_home() -> anyhow::Result<PathBuf> {
-    env::var_os("XDG_CONFIG_HOME")
-        .filter(|path| !path.is_empty())
-        .map(PathBuf::from)
-        .or_else(|| {
-            env::var_os("HOME")
-                .filter(|path| !path.is_empty())
-                .map(|home| PathBuf::from(home).join(".config"))
-        })
-        .context("XDG_CONFIG_HOME or HOME is required")
-}
-
-fn store_runner_config(path: &Path, config: &RunnerConfig) -> anyhow::Result<()> {
-    let parent = path
-        .parent()
-        .context("runner config path has no parent directory")?;
-    fs::create_dir_all(parent).context("create runner config directory")?;
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
-        let mut permissions = fs::metadata(parent)?.permissions();
-        permissions.set_mode(0o700);
-        fs::set_permissions(parent, permissions)?;
-        let temp = path.with_extension(format!("tmp.{}", std::process::id()));
-        let mut file = fs::OpenOptions::new()
-            .create(true)
-            .truncate(true)
-            .write(true)
-            .mode(0o600)
-            .open(&temp)
-            .context("create runner config")?;
-        serde_json::to_writer(&mut file, config).context("serialize runner config")?;
-        file.write_all(b"\n")?;
-        file.sync_all()?;
-        fs::rename(temp, path).context("install runner config")?;
-    }
-    #[cfg(not(unix))]
-    {
-        fs::write(path, serde_json::to_vec(config)?).context("write runner config")?;
-    }
-    Ok(())
-}
-
-fn load_runner_config() -> anyhow::Result<RunnerConfig> {
-    let path = runner_config_path()?;
-    load_runner_config_from(&path)
-}
-
-fn load_runner_config_from(path: &Path) -> anyhow::Result<RunnerConfig> {
-    let bytes = fs::read(path).with_context(|| {
-        format!(
-            "read runner config {}; run scope runner install",
-            path.display()
-        )
-    })?;
-    serde_json::from_slice(&bytes).context("parse runner config")
-}
-
-fn command_success(command: &mut Command, context: &str) -> anyhow::Result<()> {
-    let output = command.output().with_context(|| context.to_string())?;
-    if !output.status.success() {
-        let stderr = String::from_utf8_lossy(&output.stderr);
-        bail!("{context}: {}", stderr.trim());
-    }
-    Ok(())
-}
-
-fn command_stdout(command: &mut Command, context: &str) -> anyhow::Result<String> {
-    let output = command.output().with_context(|| context.to_string())?;
-    if !output.status.success() {
-        bail!(
-            "{context}: {}",
-            String::from_utf8_lossy(&output.stderr).trim()
-        );
-    }
-    Ok(String::from_utf8_lossy(&output.stdout).into_owned())
-}
-
-fn unix_now() -> u64 {
-    std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map_or(0, |duration| duration.as_secs())
-}
-
-struct RunnerWorkDir {
-    path: PathBuf,
-    cleanup_on_drop: bool,
-}
-
-impl RunnerWorkDir {
-    fn new(attempt_id: &str) -> anyhow::Result<Self> {
-        let base = runner_work_root()?;
-        fs::create_dir_all(&base).context("create runner work directory")?;
-        let metadata = fs::symlink_metadata(&base)?;
-        if !metadata.file_type().is_dir() {
-            bail!("runner work path is not a directory");
-        }
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::PermissionsExt;
-            let mut permissions = metadata.permissions();
-            permissions.set_mode(0o700);
-            fs::set_permissions(&base, permissions)?;
-        }
-        let safe_id = attempt_id
-            .chars()
-            .map(|character| {
-                if character.is_ascii_alphanumeric() || character == '_' || character == '-' {
-                    character
-                } else {
-                    '_'
-                }
-            })
-            .collect::<String>();
-        let path = base.join(safe_id);
-        fs::create_dir(&path).context("create attempt work directory")?;
-        Ok(Self {
-            path,
-            cleanup_on_drop: true,
-        })
-    }
-
-    fn preserve(&mut self) {
-        self.cleanup_on_drop = false;
-    }
-}
-
-fn runner_work_root() -> anyhow::Result<PathBuf> {
-    Ok(runner_state_home()?.join("scope/runner-work"))
-}
-
-fn runner_state_home() -> anyhow::Result<PathBuf> {
-    env::var_os("XDG_STATE_HOME")
-        .filter(|path| !path.is_empty())
-        .map(PathBuf::from)
-        .or_else(|| {
-            env::var_os("HOME")
-                .filter(|path| !path.is_empty())
-                .map(|home| PathBuf::from(home).join(".local/state"))
-        })
-        .context("XDG_STATE_HOME or HOME is required")
-}
-
-impl Drop for RunnerWorkDir {
-    fn drop(&mut self) {
-        if self.cleanup_on_drop {
-            let _ = fs::remove_dir_all(&self.path);
-        }
-    }
 }
 
 #[cfg(test)]
