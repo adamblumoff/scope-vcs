@@ -6,7 +6,6 @@ import {
 import { AppShell } from '@/components/app-shell'
 import { RepositoryContextStrip } from '@/components/repository-context-strip'
 import { useRepoLayout } from '@/features/repo-detail/repo-layout-context'
-import { cn } from '@/lib/utils'
 import { UserButton } from '@clerk/tanstack-react-start'
 import { Link, useMatchRoute } from '@tanstack/react-router'
 import type { ReactNode } from 'react'
@@ -21,16 +20,10 @@ const repoSections = [
 ] as const
 
 export function RepoShell({
-  actions,
   children,
-  className,
-  contentClassName,
   params,
 }: {
-  actions?: ReactNode
   children: ReactNode
-  className?: string
-  contentClassName?: string
   params: RepoParams
 }) {
   const { repo } = useRepoLayout()
@@ -42,6 +35,7 @@ export function RepoShell({
       label: section.label,
       node: (
         <Link
+          activeOptions={{ exact: section.key === 'code' }}
           aria-current={active === section.key ? 'page' : undefined}
           className="flex h-full items-center px-0 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring sm:px-3"
           params={params}
@@ -55,10 +49,8 @@ export function RepoShell({
 
   return (
     <AppShell
-      className={className}
       header={() => (
         <ApplicationTopbar items={items} repository={params}>
-          {actions}
           <UserButton />
         </ApplicationTopbar>
       )}
@@ -77,7 +69,7 @@ export function RepoShell({
         />
       )}
     >
-      <div className={cn('mx-auto w-full max-w-[1440px]', contentClassName)}>
+      <div className="mx-auto w-full max-w-[1440px]">
         {children}
       </div>
     </AppShell>

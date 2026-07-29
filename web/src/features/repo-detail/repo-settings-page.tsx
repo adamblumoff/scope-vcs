@@ -13,7 +13,6 @@ import type {
 } from '@/api/types'
 import { PageContent } from '@/components/page-header'
 import { PageErrorAlert } from '@/components/page-error-alert'
-import { RepoShell } from '@/components/repo-shell'
 import { WorkbenchHeader } from '@/components/workbench-header'
 import { storeHomeFlash } from '@/lib/home-flash'
 import { useNavigate, useRouter } from '@tanstack/react-router'
@@ -104,7 +103,7 @@ export function RepoSettingsPage({
   }
 
   return (
-    <RepoShell params={params}>
+    <>
       <WorkbenchHeader
         description={repo.id}
         eyebrow="Manage"
@@ -158,6 +157,6 @@ export function RepoSettingsPage({
           repo={deleteTarget}
         />
       )}
-    </RepoShell>
+    </>
   )
 }

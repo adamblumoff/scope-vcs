@@ -13,13 +13,6 @@ const loadRequestQueuePage = createServerFn({ method: 'GET' })
   .validator(parseLoadRequestQueueInput)
   .handler(async ({ data }) => loadRequestQueueForRequest(data))
 
-function createRefreshKey() {
-  return Array.from(
-    globalThis.crypto.getRandomValues(new Uint32Array(4)),
-    (value) => value.toString(36),
-  ).join('-')
-}
-
 export const Route = createFileRoute('/repos/$owner/$repo/requests/')({
   loader: async ({ params }) => {
     const [yourWork, ready, completed] = await Promise.all([
@@ -27,10 +20,7 @@ export const Route = createFileRoute('/repos/$owner/$repo/requests/')({
       loadRequestQueuePage({ data: { ...params, section: 'ready' } }),
       loadRequestQueuePage({ data: { ...params, section: 'completed' } }),
     ])
-    return {
-      initialPages: { completed, ready, your_work: yourWork },
-      refreshKey: createRefreshKey(),
-    }
+    return { completed, ready, your_work: yourWork }
   },
   component: RequestsRoute,
 })
@@ -39,7 +29,7 @@ function RequestsRoute() {
   const params = Route.useParams()
   const { owner, repo } = params
   const live = useRepoLayout()
-  const { initialPages, refreshKey } = Route.useLoaderData()
+  const initialPages = Route.useLoaderData()
   const loadPage = useCallback(
     (
       section: RequestQueueSection,
@@ -55,7 +45,6 @@ function RequestsRoute() {
   return (
     <RequestsPage
       initialPages={initialPages}
-      key={`${owner}/${repo}:${refreshKey}`}
       live={live}
       loadPage={loadPage}
       params={params}

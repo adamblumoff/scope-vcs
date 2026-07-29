@@ -80,6 +80,85 @@ test('public repository navigates to history after client hydration', async () =
   })
 })
 
+test('repository chrome persists across navigation and request revalidation', async () => {
+  await withPage(`/repos/${owner}/update-demo`, async (page) => {
+    await page.getByRole('heading', { level: 1, name: 'Repository' }).waitFor()
+    await page.waitForFunction(() => {
+      const link = document.querySelector('a[href$="/requests"]')
+      return link && Object.keys(link).some((key) => key.startsWith('__reactProps$'))
+    })
+    const header = await page.locator('header.sticky').elementHandle()
+    const navigation = await page
+      .getByRole('navigation', { name: 'Primary' })
+      .elementHandle()
+    assert(header)
+    assert(navigation)
+
+    const primaryNavigation = page.getByRole('navigation', { name: 'Primary' })
+    await primaryNavigation
+      .getByRole('link', { name: 'Requests', exact: true })
+      .click()
+    await page.getByRole('heading', { level: 1, name: 'Requests' }).waitFor()
+    await assertRepositoryChromePreserved(page, { header, navigation })
+    await assertCurrentRepoSection(page, 'Requests')
+
+    await page
+      .getByRole('link', { name: /Add bounded retry timing/ })
+      .click()
+    await page
+      .getByRole('heading', { level: 1, name: 'Add bounded retry timing' })
+      .waitFor()
+    await assertRepositoryChromePreserved(page, { header, navigation })
+    await assertCurrentRepoSection(page, 'Requests')
+
+    await page.evaluate(() => globalThis.__TSR_ROUTER__.invalidate())
+    await assertRepositoryChromePreserved(page, { header, navigation })
+    await assertCurrentRepoSection(page, 'Requests')
+
+    await page.locator('#main-content').evaluate(async (element) => {
+      await new Promise((resolve) => {
+        element.addEventListener('scroll', resolve, { once: true })
+        element.scrollTop = 500
+      })
+    })
+    await primaryNavigation
+      .getByRole('link', { name: 'Requests', exact: true })
+      .click()
+    await page.getByRole('heading', { level: 1, name: 'Requests' }).waitFor()
+    await page.waitForFunction(
+      () => document.querySelector('#main-content')?.scrollTop === 0,
+    )
+    await assertRepositoryChromePreserved(page, { header, navigation })
+
+    await page.goBack()
+    await page
+      .getByRole('heading', { level: 1, name: 'Add bounded retry timing' })
+      .waitFor()
+    await assertRepositoryChromePreserved(page, { header, navigation })
+    await assertCurrentRepoSection(page, 'Requests')
+
+    await primaryNavigation
+      .getByRole('link', { name: 'Requests', exact: true })
+      .click()
+    await page.getByRole('heading', { level: 1, name: 'Requests' }).waitFor()
+
+    await armNextRouterLoad(page)
+    await primaryNavigation
+      .getByRole('link', { name: 'Requests', exact: true })
+      .click()
+    await page.waitForFunction(() => globalThis.__scopeRouterLoaded === true)
+    await assertRepositoryChromePreserved(page, { header, navigation })
+    await assertCurrentRepoSection(page, 'Requests')
+
+    await primaryNavigation
+      .getByRole('link', { name: 'History', exact: true })
+      .click()
+    await page.getByRole('heading', { level: 1, name: 'History' }).waitFor()
+    await assertRepositoryChromePreserved(page, { header, navigation })
+    await assertCurrentRepoSection(page, 'History')
+  })
+})
+
 test('public repository requests route is anonymously readable', async () => {
   await withPage(`${repoPath}/requests`, async (page) => {
     await page.getByRole('heading', { level: 1, name: 'Requests' }).waitFor()
@@ -218,4 +297,40 @@ async function assertCurrentRepoSection(page, section) {
     .getByRole('link', { name: section, exact: true })
   await link.waitFor()
   assert.equal(await link.getAttribute('aria-current'), 'page')
+  await page.waitForFunction(
+    (expected) => {
+      const current = [
+        ...document.querySelectorAll(
+          'nav[aria-label="Primary"] a[aria-current="page"]',
+        ),
+      ].map((link) => link.textContent?.trim())
+      return current.length === 1 && current[0] === expected
+    },
+    section,
+  )
+}
+
+async function assertRepositoryChromePreserved(page, chrome) {
+  assert.equal(
+    await page.evaluate(
+      ({ header, navigation }) =>
+        header === document.querySelector('header.sticky') &&
+        navigation === document.querySelector('nav[aria-label="Primary"]'),
+      chrome,
+    ),
+    true,
+  )
+}
+
+async function armNextRouterLoad(page) {
+  await page.evaluate(() => {
+    globalThis.__scopeRouterLoaded = false
+    const unsubscribe = globalThis.__TSR_ROUTER__.subscribe(
+      'onLoad',
+      () => {
+        unsubscribe()
+        globalThis.__scopeRouterLoaded = true
+      },
+    )
+  })
 }

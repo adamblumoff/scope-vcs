@@ -6,6 +6,7 @@ export function getRouter() {
     routeTree,
     defaultPreload: 'intent',
     scrollRestoration: true,
+    scrollToTopSelectors: ['#main-content'],
   })
 }
 
@@ -14,4 +15,3 @@ declare module '@tanstack/react-router' {
     router: ReturnType<typeof getRouter>
   }
 }
-

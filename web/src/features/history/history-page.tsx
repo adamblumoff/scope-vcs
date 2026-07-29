@@ -9,8 +9,7 @@ import type {
   ReviewFileDiff,
 } from '@/api/types'
 import { FileSystemTree } from '@/components/file-system-tree'
-import { RepoShell } from '@/components/repo-shell'
-import { RouteErrorPage } from '@/components/route-error-page'
+import { RouteErrorContent } from '@/components/route-error-page'
 import { useWorkspaceTabs } from '@/components/use-workspace-tabs'
 import {
   workspaceTabDomIds,
@@ -107,7 +106,7 @@ export function HistoryPage(props: HistoryPageProps) {
   } = useHistoryPageModel(props)
 
   return (
-    <RepoShell params={params}>
+    <>
       <WorkbenchHeader
         actions={!requestRevision && availableAudiences.length > 1 ? (
           <AudienceToggle
@@ -171,7 +170,7 @@ export function HistoryPage(props: HistoryPageProps) {
           </div>
         )}
       </section>
-    </RepoShell>
+    </>
   )
 }
 
@@ -760,7 +759,7 @@ function revisionCommitDetail(
 
 export function HistoryError({ error }: { error: unknown }) {
   return (
-    <RouteErrorPage
+    <RouteErrorContent
       error={error}
       fallbackMessage="Unexpected history error"
       title="History unavailable"
