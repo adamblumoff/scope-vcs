@@ -1,5 +1,6 @@
-use super::command_success;
+use super::{RunnerConfig, command_success};
 use anyhow::{Context, bail};
+use scope_api_contract::ClaimRunResponse;
 use std::{env, path::Path, process::Command, thread, time::Duration};
 use time::{OffsetDateTime, format_description::well_known::Rfc3339};
 
@@ -67,6 +68,29 @@ pub(super) fn apply_container_limits(command: &mut Command, storage_quota_suppor
     if storage_quota_supported {
         command.args(["--storage-opt", &format!("size={CONTAINER_STORAGE}")]);
     }
+}
+
+pub(super) fn configure_job_container_creation(
+    command: &mut Command,
+    config: &RunnerConfig,
+    claim: &ClaimRunResponse,
+    container_name: &str,
+    container_image: &str,
+) {
+    command.args(["create", "--name", container_name]);
+    apply_container_limits(command, config.storage_quota_supported);
+    command
+        .args(["--label", &format!("scope.runner-id={}", config.runner_id)])
+        .args([
+            "--label",
+            &format!("scope.attempt-id={}", claim.attempt_id),
+        ])
+        .args([
+            container_image,
+            "sh",
+            "-c",
+            "mkdir -p /workspace && cp -a /scope-source/. /workspace/ && cd /workspace && exec sh /scope-job.sh 2>&1",
+        ]);
 }
 
 pub(super) fn recovered_container_exit_code(container_name: &str) -> anyhow::Result<Option<i32>> {

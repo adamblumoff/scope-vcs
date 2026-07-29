@@ -67,8 +67,10 @@ mod request_review_transactions;
 mod request_review_transactions_tests;
 mod request_revision_transactions;
 mod requests;
+mod run_operations;
 mod run_retention;
 mod runs;
+pub use run_operations::{RecentRunLogs, RepositoryRunner};
 pub use runs::{DispatchClaim, StoredRunLog};
 #[cfg(test)]
 mod runs_tests;

@@ -29,9 +29,11 @@ mod image;
 mod supervisor;
 mod systemd;
 use container::{
-    ContainerGuard, apply_container_limits, container_finished_at_unix, container_is_running,
-    container_started_at_unix, doctor_local, recovered_container_exit_code,
+    ContainerGuard, configure_job_container_creation, container_finished_at_unix,
+    container_is_running, container_started_at_unix, doctor_local, recovered_container_exit_code,
 };
+#[cfg(test)]
+use container::apply_container_limits;
 use image::resolve_container_image;
 mod recovery;
 #[cfg(test)]
@@ -315,6 +317,34 @@ fn execute_claim(config: &RunnerConfig, claim: &ClaimRunResponse) -> anyhow::Res
     if finish_before_execution(&mut supervisor, &client, config, claim)? {
         return Ok(());
     }
+    let container_name = format!("scope-{}", claim.attempt_id);
+    let mut create = Command::new("docker");
+    configure_job_container_creation(
+        &mut create,
+        config,
+        claim,
+        &container_name,
+        &container_image,
+    );
+    command_success(&mut create, "create Docker job container")?;
+    let container = ContainerGuard::new(container_name);
+    command_success(
+        Command::new("docker")
+            .args(["cp"])
+            .arg(format!("{}/.", workspace.display()))
+            .arg(format!("{}:/scope-source", container.name)),
+        "copy run source into Docker job container",
+    )?;
+    command_success(
+        Command::new("docker")
+            .args(["cp"])
+            .arg(&script_path)
+            .arg(format!("{}:/scope-job.sh", container.name)),
+        "copy run script into Docker job container",
+    )?;
+    if finish_before_execution(&mut supervisor, &client, config, claim)? {
+        return Ok(());
+    }
     if let Err(error) = attempt_start(
         &client,
         &config.api_url,
@@ -327,34 +357,12 @@ fn execute_claim(config: &RunnerConfig, claim: &ClaimRunResponse) -> anyhow::Res
         }
         return Err(error);
     }
-    let container_name = format!("scope-{}", claim.attempt_id);
-    let workspace_mount = format!("{}:/scope/source:ro", workspace.display());
-    let script_mount = format!("{}:/scope/job.sh:ro", script_path.display());
-    let mut docker = Command::new("docker");
-    docker.args(["run", "--name", &container_name]);
-    apply_container_limits(&mut docker, config.storage_quota_supported);
-    docker
-        .args(["--label", &format!("scope.runner-id={}", config.runner_id)])
-        .args([
-            "--label",
-            &format!("scope.attempt-id={}", claim.attempt_id),
-        ])
-        .arg("-v")
-        .arg(workspace_mount)
-        .arg("-v")
-        .arg(script_mount)
-        .args([
-            &container_image,
-            "sh",
-            "-c",
-            "mkdir -p /workspace && cp -a /scope/source/. /workspace/ && cd /workspace && exec sh /scope/job.sh 2>&1",
-        ]);
-    let mut child = docker
+    let mut child = Command::new("docker")
+        .args(["start", "--attach", &container.name])
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .spawn()
         .context("start Docker job container")?;
-    let container = ContainerGuard::new(container_name);
     let execution_started_at_unix = match container_started_at_unix(&container.name) {
         Ok(started_at) => started_at,
         Err(error) => {

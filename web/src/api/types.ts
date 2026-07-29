@@ -43,6 +43,13 @@ import type {
   RepositoryInviteResponse,
   RepositoryMemberPermissions,
   RepositoryMemberResponse,
+  RepositoryOperationsResponse,
+  RepositoryRunDetailResponse,
+  RepositoryRunLogResponse,
+  RepositoryRunState,
+  RepositoryRunSummaryResponse,
+  RepositoryRunnerResponse,
+  RepositoryRunnerState,
   SessionIdentity as GeneratedSessionIdentity,
   FileChangeKind as GeneratedFileChangeKind,
   UserResponse,
@@ -76,6 +83,13 @@ export type RepoInviteLookup = RepositoryInviteLookupResponse
 export type AcceptRepoInviteResponse = AcceptRepositoryInviteResponse
 export type RepoFile = RepoFileResponse
 export type RepoFileContent = RepoFileContentResponse
+export type RepoOperations = RepositoryOperationsResponse
+export type RepoRun = RepositoryRunSummaryResponse
+export type RepoRunState = RepositoryRunState
+export type RepoRunDetail = RepositoryRunDetailResponse
+export type RepoRunLog = RepositoryRunLogResponse
+export type RepoRunner = RepositoryRunnerResponse
+export type RepoRunnerState = RepositoryRunnerState
 export type FirstPushToken = FirstPushTokenResponse
 export type DeleteRepoResponse = GeneratedDeleteRepoResponse
 export type CommitHistory = CommitHistoryResponse
@@ -113,6 +127,10 @@ export type RepoLiveState = {
 export type RepoParams = {
   owner: string
   repo: string
+}
+
+export type RunActionInput = RepoParams & {
+  run_id: string
 }
 
 export type HomeState = {

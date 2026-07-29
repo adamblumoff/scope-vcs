@@ -32,9 +32,10 @@ pub(super) struct RecoveryAttempt {
     pub(super) recovery: RecoveryClaim,
 }
 
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum ContainerState {
     Missing,
+    Created,
     Running,
     Exited,
 }
@@ -199,6 +200,16 @@ pub(super) fn recover_runner_state(config: &RunnerConfig) -> anyhow::Result<Vec<
                     recovery,
                 });
             }
+            ContainerState::Created => {
+                if !super::supervisor::terminate_container(&container_name) {
+                    bail!(
+                        "could not confirm unstarted Scope container {container_name} was removed"
+                    );
+                }
+                abandon_recovery_claim(&client, config, &recovery)?;
+                fs::remove_dir_all(entry.path())
+                    .context("remove unstarted runner recovery state")?;
+            }
             ContainerState::Missing => {
                 abandon_recovery_claim(&client, config, &recovery)?;
                 fs::remove_dir_all(entry.path()).context("remove interrupted runner work")?;
@@ -261,19 +272,13 @@ fn container_state(container_name: &str) -> anyhow::Result<ContainerState> {
         .args([
             "container",
             "inspect",
-            "--format={{.State.Running}}",
+            "--format={{.State.Running}} {{.State.StartedAt}}",
             container_name,
         ])
         .output()
         .context("inspect interrupted Scope runner container")?;
     if output.status.success() {
-        return Ok(
-            if String::from_utf8_lossy(&output.stdout).trim() == "true" {
-                ContainerState::Running
-            } else {
-                ContainerState::Exited
-            },
-        );
+        return parse_container_state(&String::from_utf8_lossy(&output.stdout));
     }
     let stderr = String::from_utf8_lossy(&output.stderr).to_ascii_lowercase();
     if stderr.contains("no such") {
@@ -283,6 +288,21 @@ fn container_state(container_name: &str) -> anyhow::Result<ContainerState> {
         "inspect interrupted Scope runner container: {}",
         String::from_utf8_lossy(&output.stderr).trim()
     )
+}
+
+fn parse_container_state(value: &str) -> anyhow::Result<ContainerState> {
+    let (running, started_at) = value
+        .trim()
+        .split_once(' ')
+        .context("Docker container state is incomplete")?;
+    if started_at.starts_with("0001-01-01") {
+        return Ok(ContainerState::Created);
+    }
+    match running {
+        "true" => Ok(ContainerState::Running),
+        "false" => Ok(ContainerState::Exited),
+        _ => bail!("Docker container running state is invalid"),
+    }
 }
 
 fn reconcile_runner_containers(
@@ -352,4 +372,26 @@ fn validate_work_root(root: &Path) -> anyhow::Result<()> {
         );
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn container_state_distinguishes_created_from_started_containers() {
+        assert_eq!(
+            parse_container_state("false 0001-01-01T00:00:00Z").unwrap(),
+            ContainerState::Created
+        );
+        assert_eq!(
+            parse_container_state("true 2026-07-29T10:00:00Z").unwrap(),
+            ContainerState::Running
+        );
+        assert_eq!(
+            parse_container_state("false 2026-07-29T10:00:00Z").unwrap(),
+            ContainerState::Exited
+        );
+        assert!(parse_container_state("unknown 2026-07-29T10:00:00Z").is_err());
+    }
 }

@@ -1,14 +1,26 @@
-import type { RepoContent, RepoFileContent, RepoParams } from '@/api/types'
+import type {
+  RepoContent,
+  RepoFileContent,
+  RepoOperations,
+  RepoParams,
+  RepoRunDetail,
+  RunActionInput,
+} from '@/api/types'
 import { RepoPrimaryActionButton } from '@/components/repo-primary-action'
 import { RepoShell } from '@/components/repo-shell'
 import { RouteErrorPage } from '@/components/route-error-page'
 import { WorkbenchHeader } from '@/components/workbench-header'
+import { RepositoryOperations } from '@/features/runs/repository-operations'
 import { RepoCloneDropdown } from './repo-clone-dropdown'
 import { useRepoLayout } from './repo-layout-context'
 import { RepositoryCodeView } from './repository-code-view'
 
 export function RepoDetailPage({
+  cancelRun,
   content,
+  initialOperations,
+  loadRunDetail,
+  loadRunOperations,
   onSelectFilePath,
   params,
   selectedFile,
@@ -17,8 +29,13 @@ export function RepoDetailPage({
   selectedFileLoading,
   selectedFileRetry,
   selectedPath,
+  retryRun,
 }: {
+  cancelRun: (input: RunActionInput) => Promise<void>
   content: RepoContent
+  initialOperations: RepoOperations | null
+  loadRunDetail: (input: RunActionInput) => Promise<RepoRunDetail>
+  loadRunOperations: (input: RepoParams) => Promise<RepoOperations | null>
   onSelectFilePath: (path: string | null) => void
   params: RepoParams
   selectedFile: RepoFileContent | null
@@ -27,6 +44,7 @@ export function RepoDetailPage({
   selectedFileLoading: boolean
   selectedFileRetry: () => void
   selectedPath: string | null
+  retryRun: (input: RunActionInput) => Promise<void>
 }) {
   const { repo } = useRepoLayout()
   const files = content.files
@@ -64,6 +82,15 @@ export function RepoDetailPage({
         selectedFileLoading={selectedFileLoading}
         selectedFileRetry={selectedFileRetry}
         selectedPath={selectedPath}
+      />
+      <RepositoryOperations
+        cancelRun={cancelRun}
+        initialOperations={initialOperations}
+        key={`${params.owner}/${params.repo}`}
+        loadDetail={loadRunDetail}
+        loadOperations={loadRunOperations}
+        params={params}
+        retryRun={retryRun}
       />
     </RepoShell>
   )

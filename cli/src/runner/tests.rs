@@ -70,6 +70,72 @@ fn docker_limits_are_always_applied() {
 }
 
 #[test]
+fn job_container_receives_only_copied_source_and_script() {
+    use scope_api_contract::RunJobResponse;
+
+    let config = RunnerConfig {
+        api_url: "https://api.example.test".to_string(),
+        runner_id: "runner-1".to_string(),
+        name: "linux-box".to_string(),
+        secret: "runner-secret".to_string(),
+        storage_quota_supported: false,
+    };
+    let claim = ClaimRunResponse {
+        attempt_id: "attempt-1".to_string(),
+        attempt_token: "attempt-secret".to_string(),
+        lease_expires_at_unix: 100,
+        job: RunJobResponse {
+            run_id: "run-1".to_string(),
+            repository_id: "owner/repo".to_string(),
+            git_oid: "a".repeat(40),
+            source_digest: "b".repeat(64),
+            pinned_container_image: None,
+            workflow: CompiledWorkflow::new(
+                "Test",
+                WorkflowTriggers::new(true, false).unwrap(),
+                RunnerSelector::Any,
+                ContainerSpec::new("alpine:3.20").unwrap(),
+                60,
+                vec![WorkflowStep::new("Test", "true").unwrap()],
+            )
+            .unwrap(),
+        },
+    };
+    let mut command = Command::new("docker");
+    configure_job_container_creation(
+        &mut command,
+        &config,
+        &claim,
+        "scope-attempt-1",
+        "docker.io/library/alpine@sha256:abc",
+    );
+    let arguments = command
+        .get_args()
+        .map(|argument| argument.to_string_lossy().into_owned())
+        .collect::<Vec<_>>();
+    let joined = arguments.join(" ");
+
+    assert_eq!(arguments[0], "create");
+    for forbidden in [
+        "--env",
+        "-e",
+        "--mount",
+        "-v",
+        "/var/run/docker.sock",
+        "DATABASE_URL",
+        "SCOPE_",
+        "--network=host",
+    ] {
+        assert!(!arguments.iter().any(|argument| argument == forbidden));
+        assert!(!joined.contains(forbidden));
+    }
+    assert!(!joined.contains(&config.secret));
+    assert!(!joined.contains(&claim.attempt_token));
+    assert!(joined.contains("scope.runner-id=runner-1"));
+    assert!(joined.contains("scope.attempt-id=attempt-1"));
+}
+
+#[test]
 fn log_reader_bounds_chunks_even_without_newlines() {
     let input = vec![b'x'; LOG_CHUNK_BYTES * 2 + 7];
     let (sender, receiver) = mpsc::channel();

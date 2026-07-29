@@ -21,6 +21,97 @@ use scope_domain::store::{
 };
 use serde::{Deserialize, Serialize};
 
+#[derive(Clone, Copy, Debug, Serialize)]
+#[serde(rename_all = "kebab-case")]
+#[cfg_attr(feature = "type-export", derive(ts_rs::TS))]
+#[cfg_attr(feature = "type-export", ts(rename_all = "kebab-case"))]
+pub(crate) enum RepositoryRunState {
+    Queued,
+    Leased,
+    Running,
+    Succeeded,
+    Failed,
+    Canceled,
+    Lost,
+}
+
+impl From<scope_domain::runs::run::RunState> for RepositoryRunState {
+    fn from(state: scope_domain::runs::run::RunState) -> Self {
+        use scope_domain::runs::run::RunState;
+        match state {
+            RunState::Queued => Self::Queued,
+            RunState::Leased => Self::Leased,
+            RunState::Running => Self::Running,
+            RunState::Succeeded => Self::Succeeded,
+            RunState::Failed => Self::Failed,
+            RunState::Canceled => Self::Canceled,
+            RunState::Lost => Self::Lost,
+        }
+    }
+}
+
+#[derive(Debug, Serialize)]
+#[cfg_attr(feature = "type-export", derive(ts_rs::TS))]
+pub(crate) struct RepositoryRunSummaryResponse {
+    pub(crate) id: String,
+    pub(crate) workflow_name: String,
+    pub(crate) git_oid: String,
+    pub(crate) desired_runner: Option<String>,
+    pub(crate) state: RepositoryRunState,
+    pub(crate) cancellation_requested: bool,
+    pub(crate) attempt_number: u32,
+    pub(crate) created_at_unix: u64,
+    pub(crate) updated_at_unix: u64,
+    pub(crate) completed_at_unix: Option<u64>,
+    pub(crate) can_cancel: bool,
+    pub(crate) can_retry: bool,
+}
+
+#[derive(Clone, Copy, Debug, Serialize)]
+#[serde(rename_all = "lowercase")]
+#[cfg_attr(feature = "type-export", derive(ts_rs::TS))]
+#[cfg_attr(feature = "type-export", ts(rename_all = "lowercase"))]
+pub(crate) enum RepositoryRunnerState {
+    Online,
+    Offline,
+    Disabled,
+}
+
+#[derive(Debug, Serialize)]
+#[cfg_attr(feature = "type-export", derive(ts_rs::TS))]
+pub(crate) struct RepositoryRunnerResponse {
+    pub(crate) id: String,
+    pub(crate) name: String,
+    pub(crate) version: String,
+    pub(crate) state: RepositoryRunnerState,
+    pub(crate) last_seen_at_unix: Option<u64>,
+}
+
+#[derive(Debug, Serialize)]
+#[cfg_attr(feature = "type-export", derive(ts_rs::TS))]
+pub(crate) struct RepositoryOperationsResponse {
+    pub(crate) runs: Vec<RepositoryRunSummaryResponse>,
+    pub(crate) runners: Vec<RepositoryRunnerResponse>,
+}
+
+#[derive(Debug, Serialize)]
+#[cfg_attr(feature = "type-export", derive(ts_rs::TS))]
+pub(crate) struct RepositoryRunLogResponse {
+    pub(crate) position: u64,
+    pub(crate) attempt_id: String,
+    pub(crate) sequence: u64,
+    pub(crate) text: String,
+    pub(crate) created_at_unix: u64,
+}
+
+#[derive(Debug, Serialize)]
+#[cfg_attr(feature = "type-export", derive(ts_rs::TS))]
+pub(crate) struct RepositoryRunDetailResponse {
+    pub(crate) run: RepositoryRunSummaryResponse,
+    pub(crate) logs: Vec<RepositoryRunLogResponse>,
+    pub(crate) logs_truncated: bool,
+}
+
 #[derive(Debug, Serialize)]
 pub(crate) struct HealthResponse {
     pub(crate) status: &'static str,

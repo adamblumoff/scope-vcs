@@ -118,8 +118,16 @@ pub fn router(state: AppState) -> Router {
             get(http::repos::get_repo).delete(http::repos::delete_repo),
         )
         .route(routes::REPO_CONFIG, get(http::repos::get_repo_config))
+        .route(
+            routes::REPO_OPERATIONS,
+            get(http::runs::get_repository_operations),
+        )
         .route(routes::REPO_RUNS, post(http::runs::create_manual_run))
         .route(routes::REPO_RUN, get(http::runs::get_run))
+        .route(
+            routes::REPO_RUN_DETAIL,
+            get(http::runs::get_repository_run_detail),
+        )
         .route(routes::REPO_RUN_CANCEL, post(http::runs::cancel_run))
         .route(routes::REPO_RUN_RETRY, post(http::runs::retry_run))
         .route(routes::REPO_RUN_EVENTS, get(http::runs::run_events))

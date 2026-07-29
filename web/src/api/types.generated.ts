@@ -248,6 +248,20 @@ export type MarkRequestDiscussionReadRequest = { through_position: number, };
 
 export type RepoChangeKind = "Connected" | "Lagged" | { "RepositoryChanged": { reason: string, } } | { "RequestTimelineChanged": { request_id: string, discussion_id: string, through_position: number, audience: RequestAudience, } };
 
+export type RepositoryRunState = "queued" | "leased" | "running" | "succeeded" | "failed" | "canceled" | "lost";
+
+export type RepositoryRunSummaryResponse = { id: string, workflow_name: string, git_oid: string, desired_runner: string | null, state: RepositoryRunState, cancellation_requested: boolean, attempt_number: number, created_at_unix: number, updated_at_unix: number, completed_at_unix: number | null, can_cancel: boolean, can_retry: boolean, };
+
+export type RepositoryRunnerState = "online" | "offline" | "disabled";
+
+export type RepositoryRunnerResponse = { id: string, name: string, version: string, state: RepositoryRunnerState, last_seen_at_unix: number | null, };
+
+export type RepositoryOperationsResponse = { runs: Array<RepositoryRunSummaryResponse>, runners: Array<RepositoryRunnerResponse>, };
+
+export type RepositoryRunLogResponse = { position: number, attempt_id: string, sequence: number, text: string, created_at_unix: number, };
+
+export type RepositoryRunDetailResponse = { run: RepositoryRunSummaryResponse, logs: Array<RepositoryRunLogResponse>, logs_truncated: boolean, };
+
 export const ApiRouteTemplates = {
   accountSession: "/v1/session",
   cliDeviceLoginComplete: "/v1/cli/device-login/{user_code}/complete",
@@ -258,6 +272,10 @@ export const ApiRouteTemplates = {
   repos: "/v1/repos",
   repo: "/v1/repos/{owner}/{repo}",
   repoConfig: "/v1/repos/{owner}/{repo}/config",
+  repoOperations: "/v1/repos/{owner}/{repo}/operations",
+  repoRunDetail: "/v1/repos/{owner}/{repo}/runs/{run_id}/detail",
+  repoRunCancel: "/v1/repos/{owner}/{repo}/runs/{run_id}/cancel",
+  repoRunRetry: "/v1/repos/{owner}/{repo}/runs/{run_id}/retry",
   repoPushIntents: "/v1/repos/{owner}/{repo}/push-intents",
   repoRequests: "/v1/repos/{owner}/{repo}/requests",
   repoRequestQueue: "/v1/repos/{owner}/{repo}/requests/queue",
