@@ -5,7 +5,6 @@ import type {
   RequestList,
   RequestListItem,
 } from '@/api/types'
-import { RepoShell } from '@/components/repo-shell'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { WorkbenchHeader } from '@/components/workbench-header'
@@ -77,7 +76,11 @@ export function RequestsPage({
     initialPages,
     createRequestQueueViewState,
   )
+  if (state.snapshot !== initialPages) {
+    dispatch({ type: 'loader_snapshot_received', pages: initialPages })
+  }
   const {
+    generation,
     loadingSection,
     pages,
     searchDraft,
@@ -91,17 +94,28 @@ export function RequestsPage({
     const cursor = pages[section].next_cursor
     if (!cursor || loadingSection || searching) return
 
-    dispatch({ type: 'load_started', section })
+    const operationGeneration = generation
+    dispatch({
+      type: 'load_started',
+      generation: operationGeneration,
+      section,
+    })
     try {
       const page = await loadPage(
         section,
         cursor,
         section === 'your_work' ? null : searchQuery || null,
       )
-      dispatch({ type: 'load_succeeded', section, page })
+      dispatch({
+        type: 'load_succeeded',
+        generation: operationGeneration,
+        section,
+        page,
+      })
     } catch (error) {
       dispatch({
         type: 'load_failed',
+        generation: operationGeneration,
         section,
         error: errorMessage(
           error,
@@ -116,7 +130,8 @@ export function RequestsPage({
     const normalizedQuery = query.trim()
     if (normalizedQuery === searchQuery) return
 
-    dispatch({ type: 'search_started' })
+    const operationGeneration = generation
+    dispatch({ type: 'search_started', generation: operationGeneration })
     try {
       const [ready, completed] = await Promise.all([
         loadPage('ready', null, normalizedQuery || null),
@@ -124,6 +139,7 @@ export function RequestsPage({
       ])
       dispatch({
         type: 'search_succeeded',
+        generation: operationGeneration,
         query: normalizedQuery,
         ready,
         completed,
@@ -131,6 +147,7 @@ export function RequestsPage({
     } catch (error) {
       dispatch({
         type: 'search_failed',
+        generation: operationGeneration,
         error: errorMessage(error, 'Could not search requests.'),
       })
     }
@@ -147,7 +164,7 @@ export function RequestsPage({
   }
 
   return (
-    <RepoShell params={params}>
+    <>
       <WorkbenchHeader
         count={`${live.repo.ready_for_review_count} ready for review`}
         description="Review repository work by attention, then keep completed decisions easy to find."
@@ -181,7 +198,7 @@ export function RequestsPage({
           ))}
         </div>
       </div>
-    </RepoShell>
+    </>
   )
 }
 

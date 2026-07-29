@@ -31,6 +31,7 @@ import {
   parseRouteFileSearch,
   selectedRouteFilePath,
 } from '@/lib/route-file'
+import { RepoContentError } from '@/components/repo-content-error'
 import { createFileRoute, useNavigate } from '@tanstack/react-router'
 import { createServerFn } from '@tanstack/react-start'
 import { useCallback } from 'react'
@@ -93,6 +94,7 @@ export const Route = createFileRoute('/repos/$owner/$repo/')({
     ])
     return { content, operations }
   },
+  errorComponent: RepoContentError,
   component: RepoIndexRoute,
 })
 
