@@ -1,0 +1,25 @@
+name: Scope CLI checks
+on:
+  manual: true
+  push:
+    branches:
+      - main
+runs-on: remote-linux
+container:
+  image: rust:1.94.0-bookworm
+timeout: 30m
+steps:
+  - name: Check formatting
+    run: cargo fmt --manifest-path cli/Cargo.toml -- --check
+  - name: Test
+    run: cargo test --manifest-path cli/Cargo.toml --locked
+  - name: Lint
+    run: cargo clippy --manifest-path cli/Cargo.toml --all-targets --locked -- -D warnings
+  - name: Build release binaries
+    run: |
+      cargo build \
+        --manifest-path cli/Cargo.toml \
+        --release \
+        --locked \
+        --bin scope \
+        --bin scope-cli-service

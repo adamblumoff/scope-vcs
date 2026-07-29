@@ -1,0 +1,48 @@
+name: Scope web checks
+on:
+  manual: true
+  push:
+    branches:
+      - main
+runs-on: remote-linux
+container:
+  image: rust:1.94.0-bookworm
+timeout: 20m
+steps:
+  - name: Install Node
+    run: |
+      curl --fail --silent --show-error \
+        --retry 3 \
+        --retry-all-errors \
+        --retry-delay 2 \
+        https://nodejs.org/dist/v24.18.0/node-v24.18.0-linux-x64.tar.xz \
+        --output /tmp/node.tar.xz
+      tar -xJf /tmp/node.tar.xz -C /usr/local --strip-components=1
+      node --version
+  - name: Enable pnpm
+    run: |
+      corepack enable
+      for attempt in 1 2 3; do
+        if corepack prepare pnpm@11.1.0 --activate; then
+          break
+        fi
+        if [ "$attempt" -eq 3 ]; then
+          exit 1
+        fi
+        sleep 5
+      done
+  - name: Install dependencies
+    run: (cd web && pnpm install --frozen-lockfile)
+  - name: Test
+    run: (cd web && pnpm test)
+  - name: Check
+    run: |
+      (
+        cd web
+        pnpm typecheck
+        RUSTUP_TOOLCHAIN=1.94.0-x86_64-unknown-linux-gnu pnpm check:api-contract
+        pnpm check:line-limit
+        pnpm check:konsistent
+      )
+  - name: Build
+    run: (cd web && pnpm build)
