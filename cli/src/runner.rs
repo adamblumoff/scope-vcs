@@ -28,12 +28,12 @@ mod container;
 mod image;
 mod supervisor;
 mod systemd;
+#[cfg(test)]
+use container::apply_container_limits;
 use container::{
     ContainerGuard, configure_job_container_creation, container_finished_at_unix,
     container_is_running, container_started_at_unix, doctor_local, recovered_container_exit_code,
 };
-#[cfg(test)]
-use container::apply_container_limits;
 use image::resolve_container_image;
 mod recovery;
 #[cfg(test)]
