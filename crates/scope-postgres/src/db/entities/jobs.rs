@@ -66,6 +66,7 @@ pub mod outbox_job {
 
         pub fn push_main_trigger_evaluation(
             id: String,
+            job_kind: &str,
             repo_id: &str,
             repo_version: u64,
             manifest: &SourceBlob,
@@ -75,8 +76,8 @@ pub mod outbox_job {
             let persisted_repo_version = u64_to_i64(repo_version, "repository change version")?;
             Ok(Self {
                 id,
-                idempotency_key: format!("push_main_trigger_evaluation:{repo_id}:{repo_version}"),
-                kind: "push_main_trigger_evaluation".to_string(),
+                idempotency_key: format!("{job_kind}:{repo_id}:{repo_version}"),
+                kind: job_kind.to_string(),
                 repo_id: repo_id.to_string(),
                 repo_version: persisted_repo_version,
                 payload: encode_json(&serde_json::json!({

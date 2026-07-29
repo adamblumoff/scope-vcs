@@ -13,7 +13,10 @@ use scope_domain::{
             WorkflowRevision, WorkflowStep, WorkflowTriggers,
         },
     },
-    store::{RepoPublicationState, StoredRepository, UserAccount},
+    store::{
+        RepoPublicationState, RepositoryMember, RepositoryMemberPermissions, StoredRepository,
+        UserAccount,
+    },
 };
 use sea_orm::EntityTrait;
 use sha2::{Digest, Sha256};
@@ -244,6 +247,50 @@ async fn terminal_run_retention_deletes_metadata_and_queues_its_source_atomicall
 }
 
 #[tokio::test]
+async fn repository_deletion_queues_run_sources_and_removes_orphaned_workflows() {
+    let store = postgres_store();
+    let revision = revision();
+    let revision_digest = revision.digest().to_string();
+    enqueue(&store, run("run-delete", "manual:repo-delete"), revision).await;
+
+    store
+        .repositories()
+        .delete_repo(
+            "owner",
+            "repo",
+            "user_owner",
+            40,
+            &super::generated_ids::test_generated_id,
+        )
+        .await
+        .unwrap();
+
+    assert!(store.runs().run("run-delete").await.unwrap().is_none());
+    assert!(
+        entities::workflow_revision::Entity::find_by_id(revision_digest)
+            .one(store.db.as_ref())
+            .await
+            .unwrap()
+            .is_none()
+    );
+    let references = entities::object_reference::Entity::find()
+        .all(store.db.as_ref())
+        .await
+        .unwrap();
+    assert!(
+        references
+            .iter()
+            .all(|reference| reference.ref_kind != "run_source")
+    );
+    let cleanup = store
+        .cleanup()
+        .pending_source_blob_cleanups_for_tests()
+        .await
+        .unwrap();
+    assert_eq!(cleanup.len(), 1);
+}
+
+#[tokio::test]
 async fn names_are_repository_scoped_revisions_are_idempotent_and_revocation_stops_heartbeats() {
     let store = postgres_store();
     register_runner(&store, "runner-1", "linux-box").await;
@@ -377,6 +424,65 @@ async fn names_are_repository_scoped_revisions_are_idempotent_and_revocation_sto
             .unwrap()
             .id,
         "run-1"
+    );
+}
+
+#[tokio::test]
+async fn removing_repository_member_revokes_that_members_runner_grants_atomically() {
+    let store = postgres_store();
+    let member_runner = Runner::new(
+        "member-runner",
+        "user_member",
+        "3".repeat(64),
+        "1.0.0",
+        RUNNER_PROTOCOL_VERSION,
+        RunnerCapabilities::v1(),
+        10,
+    )
+    .unwrap();
+    store
+        .runs()
+        .register_runner(member_runner.clone())
+        .await
+        .unwrap();
+    store
+        .runs()
+        .grant_runner(
+            RunnerGrant::new(
+                "owner/repo",
+                &member_runner.id,
+                RunnerName::parse("member-linux").unwrap(),
+                "user_member",
+                10,
+            )
+            .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    store
+        .repositories()
+        .remove_repository_member(
+            "owner",
+            "repo",
+            "user_owner",
+            "user_member",
+            20,
+            &super::generated_ids::test_generated_id,
+        )
+        .await
+        .unwrap();
+
+    let grants = store.runs().runner_grants(&member_runner.id).await.unwrap();
+    assert_eq!(grants.len(), 1);
+    assert_eq!(grants[0].revoked_at_unix, Some(20));
+    assert!(
+        store
+            .runs()
+            .next_dispatchable_run(&member_runner.id)
+            .await
+            .unwrap()
+            .is_none()
     );
 }
 
@@ -679,11 +785,25 @@ fn catalog_with_repo() -> CatalogFixture {
     };
     let mut repository = StoredRepository::new(&owner, "repo", Visibility::Private).unwrap();
     repository.record.publication_state = RepoPublicationState::Published;
+    let member = UserAccount {
+        id: "user_member".to_string(),
+        handle: "member".to_string(),
+        email: "member@example.com".to_string(),
+        email_verified: true,
+    };
+    repository.members.push(RepositoryMember {
+        repo_id: repository.record.id.clone(),
+        user_id: member.id.clone(),
+        permissions: RepositoryMemberPermissions::default(),
+        created_at_unix: 1,
+        updated_at_unix: 1,
+    });
     let mut other_repository =
         StoredRepository::new(&owner, "repo-two", Visibility::Private).unwrap();
     other_repository.record.publication_state = RepoPublicationState::Published;
     let mut catalog = CatalogFixture::default();
     catalog.users.insert(owner.id.clone(), owner);
+    catalog.users.insert(member.id.clone(), member);
     catalog
         .repositories
         .insert(repository.record.id.clone(), repository);

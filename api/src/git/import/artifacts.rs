@@ -1,6 +1,6 @@
 use super::repo_io::{
     describe_refs, git_changed_tree_entries, git_refs, git_segment_manifest_from_repo,
-    git_snapshot_from_ref, git_tree_entries, pushed_commit_message, queue_failed_segments,
+    git_snapshot_from_ref, git_tree_entries_under, pushed_commit_message, queue_failed_segments,
     run_git_output,
 };
 use super::staging::{ReceivePackFileChange, ReceivePackUpdate, ensure_default_branch};
@@ -213,11 +213,7 @@ fn prepare_push_trigger_input(
     if skip {
         return Ok(None);
     }
-    let entries = git_tree_entries(staging_repo, head_oid)?;
-    let workflow_entries = entries
-        .into_iter()
-        .filter(|entry| entry.path.starts_with(".scope/runs/"))
-        .collect::<Vec<_>>();
+    let workflow_entries = git_tree_entries_under(staging_repo, head_oid, ".scope/runs")?;
     let mut configuration_error = None;
     let mut workflows = Vec::new();
     if workflow_entries.len() > MAX_PUSH_WORKFLOW_FILES {

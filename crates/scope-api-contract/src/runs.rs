@@ -62,6 +62,7 @@ pub struct RunResponse {
     pub desired_runner: Option<String>,
     pub state: RunState,
     pub cancellation_requested: bool,
+    pub logs_truncated: bool,
     pub attempt_number: u32,
     pub created_at_unix: u64,
     pub updated_at_unix: u64,
@@ -152,7 +153,7 @@ pub struct CompleteAttemptRequest {
     pub conclusion: AttemptConclusionRequest,
 }
 
-#[derive(Clone, Debug, Deserialize, Serialize)]
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(tag = "kind", rename_all = "kebab-case")]
 pub enum AttemptConclusionRequest {
     Succeeded,

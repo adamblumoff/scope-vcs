@@ -5,7 +5,7 @@ use scope_domain::runs::{
     runner::{Runner, RunnerGrant},
 };
 use sea_orm::{ColumnTrait, EntityTrait, QueryFilter, QueryOrder, QuerySelect};
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 use super::StoredRunLog;
 
@@ -152,5 +152,24 @@ impl RunStore {
             .await
             .map_err(PostgresError::internal)?
             .is_some())
+    }
+
+    pub async fn run_ids_with_truncated_logs(
+        &self,
+        run_ids: &[String],
+    ) -> Result<BTreeSet<String>, PostgresError> {
+        if run_ids.is_empty() {
+            return Ok(BTreeSet::new());
+        }
+        entities::run_attempt::Entity::find()
+            .select_only()
+            .column(entities::run_attempt::Column::RunId)
+            .filter(entities::run_attempt::Column::RunId.is_in(run_ids.to_vec()))
+            .filter(entities::run_attempt::Column::LogsTruncated.eq(true))
+            .into_tuple::<String>()
+            .all(self.db.as_ref())
+            .await
+            .map_err(PostgresError::internal)
+            .map(|ids| ids.into_iter().collect())
     }
 }

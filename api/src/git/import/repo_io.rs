@@ -79,18 +79,35 @@ pub(super) fn git_tree_entries(
     staging_repo: &FsPath,
     head_oid: &str,
 ) -> Result<Vec<GitTreeFile>, ApiError> {
-    let output = run_git_output(
-        Some(staging_repo),
-        &["ls-tree", "-rz", "-r", "-l", head_oid],
-        "reading pushed tree",
-    )?;
+    git_tree_entries_for_path(staging_repo, head_oid, None, true)
+}
+
+pub(super) fn git_tree_entries_under(
+    staging_repo: &FsPath,
+    head_oid: &str,
+    path: &str,
+) -> Result<Vec<GitTreeFile>, ApiError> {
+    git_tree_entries_for_path(staging_repo, head_oid, Some(path), false)
+}
+
+fn git_tree_entries_for_path(
+    staging_repo: &FsPath,
+    head_oid: &str,
+    path: Option<&str>,
+    enforce_import_limits: bool,
+) -> Result<Vec<GitTreeFile>, ApiError> {
+    let mut args = vec!["ls-tree", "-rz", "-r", "-l", head_oid];
+    if let Some(path) = path {
+        args.extend(["--", path]);
+    }
+    let output = run_git_output(Some(staging_repo), &args, "reading pushed tree")?;
     let mut pending_files = Vec::new();
     let mut total_bytes = 0usize;
     for raw in output.stdout.split(|byte| *byte == 0) {
         if raw.is_empty() {
             continue;
         }
-        if pending_files.len() >= MAX_PENDING_IMPORT_FILES {
+        if enforce_import_limits && pending_files.len() >= MAX_PENDING_IMPORT_FILES {
             return Err(ApiError::bad_request(format!(
                 "pending import exceeds {MAX_PENDING_IMPORT_FILES} files"
             )));
@@ -126,18 +143,20 @@ pub(super) fn git_tree_entries(
         let blob_size = size
             .parse::<usize>()
             .map_err(|_| ApiError::internal_message("invalid Git blob size"))?;
-        if blob_size > MAX_PENDING_IMPORT_BLOB_BYTES {
+        if enforce_import_limits && blob_size > MAX_PENDING_IMPORT_BLOB_BYTES {
             return Err(ApiError::bad_request(format!(
                 "blob {path} is larger than {MAX_PENDING_IMPORT_BLOB_BYTES} bytes"
             )));
         }
-        total_bytes = total_bytes
-            .checked_add(blob_size)
-            .ok_or_else(|| ApiError::bad_request("pending import is too large"))?;
-        if total_bytes > MAX_PENDING_IMPORT_TOTAL_BYTES {
-            return Err(ApiError::bad_request(format!(
-                "pending import exceeds {MAX_PENDING_IMPORT_TOTAL_BYTES} bytes"
-            )));
+        if enforce_import_limits {
+            total_bytes = total_bytes
+                .checked_add(blob_size)
+                .ok_or_else(|| ApiError::bad_request("pending import is too large"))?;
+            if total_bytes > MAX_PENDING_IMPORT_TOTAL_BYTES {
+                return Err(ApiError::bad_request(format!(
+                    "pending import exceeds {MAX_PENDING_IMPORT_TOTAL_BYTES} bytes"
+                )));
+            }
         }
         pending_files.push(GitTreeFile {
             path: path.to_string(),
@@ -504,4 +523,54 @@ pub(crate) fn safe_repo_key(owner: &str, repo_name: &str) -> String {
     let repo_id = scope_domain::store::repo_id(owner, repo_name);
     let digest = Sha256::digest(repo_id.as_bytes());
     format!("repo-{digest:x}")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::{
+        fs,
+        time::{SystemTime, UNIX_EPOCH},
+    };
+
+    #[test]
+    fn workflow_tree_listing_is_scoped_to_the_runs_directory() {
+        let root = std::env::temp_dir().join(format!(
+            "scope-workflow-tree-{}-{}",
+            std::process::id(),
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        fs::create_dir_all(root.join(".scope/runs")).unwrap();
+        run_git(Some(&root), &["init", "-q"], "initializing test repository").unwrap();
+        fs::write(root.join("README.md"), "unrelated\n").unwrap();
+        fs::write(root.join(".scope/runs/test.yml"), "name: Test\n").unwrap();
+        run_git(Some(&root), &["add", "."], "staging test repository").unwrap();
+        run_git(
+            Some(&root),
+            &[
+                "-c",
+                "user.name=Scope Tests",
+                "-c",
+                "user.email=scope@example.com",
+                "commit",
+                "-qm",
+                "test",
+            ],
+            "committing test repository",
+        )
+        .unwrap();
+        let head = git_stdout_text(&root, &["rev-parse", "HEAD"], "reading test head")
+            .unwrap()
+            .trim()
+            .to_string();
+
+        let entries = git_tree_entries_under(&root, &head, ".scope/runs").unwrap();
+
+        assert_eq!(entries.len(), 1);
+        assert_eq!(entries[0].path, ".scope/runs/test.yml");
+        fs::remove_dir_all(root).unwrap();
+    }
 }

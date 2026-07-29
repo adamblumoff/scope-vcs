@@ -98,9 +98,12 @@ async fn run_worker(settings: WorkerSettings, health: WorkerHealth) -> anyhow::R
 
         let summary = match metadata
             .jobs()
-            .run_ready_outbox_jobs(&settings.worker_id, settings.batch_size, &|| {
-                unix_now().map_err(|error| error.to_string())
-            })
+            .run_ready_outbox_jobs(
+                &settings.worker_id,
+                settings.batch_size,
+                &|| unix_now().map_err(|error| error.to_string()),
+                &generate_persistence_id,
+            )
             .await
         {
             Ok(summary) => summary,

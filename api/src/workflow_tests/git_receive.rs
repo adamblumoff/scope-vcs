@@ -99,9 +99,12 @@ async fn consecutive_content_only_pushes_advance_the_live_projection() {
     let initial_rebuild = state
         .metadata
         .jobs()
-        .run_ready_outbox_jobs("content-push-test", 10, &|| {
-            crate::persistence::unix_now().map_err(crate::error::ApiError::into_message)
-        })
+        .run_ready_outbox_jobs(
+            "content-push-test",
+            10,
+            &|| crate::persistence::unix_now().map_err(crate::error::ApiError::into_message),
+            &crate::persistence_ids::generate_persistence_id,
+        )
         .await
         .unwrap();
     assert_eq!(initial_rebuild.failed, 0);
@@ -155,9 +158,12 @@ async fn consecutive_content_only_pushes_advance_the_live_projection() {
         let rebuilt = state
             .metadata
             .jobs()
-            .run_ready_outbox_jobs("content-push-test", 10, &|| {
-                crate::persistence::unix_now().map_err(crate::error::ApiError::into_message)
-            })
+            .run_ready_outbox_jobs(
+                "content-push-test",
+                10,
+                &|| crate::persistence::unix_now().map_err(crate::error::ApiError::into_message),
+                &crate::persistence_ids::generate_persistence_id,
+            )
             .await
             .unwrap();
         assert_eq!(rebuilt.failed, 0);

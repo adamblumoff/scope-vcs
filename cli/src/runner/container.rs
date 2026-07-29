@@ -85,9 +85,9 @@ pub(super) fn configure_job_container_creation(
             "--label",
             &format!("scope.attempt-id={}", claim.attempt_id),
         ])
+        .args(["--entrypoint", "sh"])
         .args([
             container_image,
-            "sh",
             "-c",
             "mkdir -p /workspace && cp -a /scope-source/. /workspace/ && cd /workspace && exec sh /scope-job.sh 2>&1",
         ]);

@@ -119,7 +119,7 @@ pub(crate) async fn create_manual_run(
             return Err(error.into());
         }
     };
-    Ok(Json(run_response(&run)))
+    Ok(Json(run_response(&run, false)))
 }
 
 pub(crate) async fn get_run(
@@ -128,7 +128,12 @@ pub(crate) async fn get_run(
     Path((owner, repo_name, run_id)): Path<(String, String, String)>,
 ) -> Result<Json<RunResponse>, ApiError> {
     let (run, _) = require_run_access(&state, &headers, &owner, &repo_name, &run_id).await?;
-    Ok(Json(run_response(&run)))
+    let logs_truncated = state
+        .metadata
+        .runs()
+        .run_has_truncated_logs(&run_id)
+        .await?;
+    Ok(Json(run_response(&run, logs_truncated)))
 }
 
 pub(crate) async fn get_repository_operations(
@@ -220,14 +225,20 @@ pub(crate) async fn get_push_trigger_evaluation(
         .iter()
         .map(|check| check.run_id.clone())
         .collect::<Vec<_>>();
-    let mut runs = state
-        .metadata
-        .runs()
-        .runs_by_ids(&run_ids)
-        .await?
+    let runs_store = state.metadata.runs();
+    let (runs, truncated_run_ids) = tokio::try_join!(
+        runs_store.runs_by_ids(&run_ids),
+        runs_store.run_ids_with_truncated_logs(&run_ids),
+    )?;
+    let mut runs = runs
         .into_iter()
         .map(|run| (run.id.clone(), run))
         .collect::<BTreeMap<_, _>>();
+    if run_ids.iter().any(|run_id| !runs.contains_key(run_id)) {
+        return Err(ApiError::not_found(
+            "push trigger evaluation history has expired",
+        ));
+    }
     let checks = evaluation
         .checks
         .into_iter()
@@ -238,7 +249,7 @@ pub(crate) async fn get_push_trigger_evaluation(
             Ok(PushTriggerCheckResponse {
                 workflow_path: check.workflow_path,
                 workflow_name: check.workflow_name,
-                run: run_response(&run),
+                run: run_response(&run, truncated_run_ids.contains(&run.id)),
             })
         })
         .collect::<Result<Vec<_>, ApiError>>()?;
@@ -262,7 +273,12 @@ pub(crate) async fn cancel_run(
         .runs()
         .request_run_cancellation(&run_id, unix_now()?)
         .await?;
-    Ok(Json(run_response(&run)))
+    let logs_truncated = state
+        .metadata
+        .runs()
+        .run_has_truncated_logs(&run_id)
+        .await?;
+    Ok(Json(run_response(&run, logs_truncated)))
 }
 
 pub(crate) async fn retry_run(
@@ -276,7 +292,12 @@ pub(crate) async fn retry_run(
         .runs()
         .retry_run(&run_id, unix_now()?)
         .await?;
-    Ok(Json(run_response(&run)))
+    let logs_truncated = state
+        .metadata
+        .runs()
+        .run_has_truncated_logs(&run_id)
+        .await?;
+    Ok(Json(run_response(&run, logs_truncated)))
 }
 
 pub(crate) async fn run_events(
@@ -421,9 +442,22 @@ async fn stream_run_events(
         }
         if last_state != Some(run.state) && (!terminal || !has_full_page) {
             last_state = Some(run.state);
+            let logs_truncated = match context
+                .state
+                .metadata
+                .runs()
+                .run_has_truncated_logs(&context.run_id)
+                .await
+            {
+                Ok(logs_truncated) => logs_truncated,
+                Err(error) => {
+                    send_stream_error(&sender, error.message).await;
+                    return;
+                }
+            };
             let event = match Event::default()
                 .event("status")
-                .json_data(run_response(&run))
+                .json_data(run_response(&run, logs_truncated))
             {
                 Ok(event) => event,
                 Err(error) => {
@@ -492,7 +526,7 @@ async fn require_repo_member(
     Ok(repo)
 }
 
-pub(crate) fn run_response(run: &Run) -> RunResponse {
+pub(crate) fn run_response(run: &Run, logs_truncated: bool) -> RunResponse {
     RunResponse {
         id: run.id.clone(),
         repository_id: run.workflow.repository_id().to_string(),
@@ -504,6 +538,7 @@ pub(crate) fn run_response(run: &Run) -> RunResponse {
         },
         state: run.state,
         cancellation_requested: run.cancellation_requested,
+        logs_truncated,
         attempt_number: run.last_attempt_number,
         created_at_unix: run.created_at_unix,
         updated_at_unix: run.updated_at_unix,

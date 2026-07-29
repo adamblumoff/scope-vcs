@@ -36,6 +36,7 @@ pub(super) struct AttemptSupervisor {
     stop: Arc<AtomicBool>,
     reason: Arc<AtomicU8>,
     execution_deadline: Arc<AtomicU64>,
+    execution_finished: Arc<AtomicBool>,
     container_name: Arc<Mutex<Option<String>>>,
     handle: Option<thread::JoinHandle<()>>,
 }
@@ -46,10 +47,12 @@ impl AttemptSupervisor {
         let stop = Arc::new(AtomicBool::new(false));
         let reason = Arc::new(AtomicU8::new(AttemptStopReason::None as u8));
         let execution_deadline = Arc::new(AtomicU64::new(0));
+        let execution_finished = Arc::new(AtomicBool::new(false));
         let container_name = Arc::new(Mutex::new(None::<String>));
         let thread_stop = Arc::clone(&stop);
         let thread_reason = Arc::clone(&reason);
         let thread_deadline = Arc::clone(&execution_deadline);
+        let thread_execution_finished = Arc::clone(&execution_finished);
         let thread_container = Arc::clone(&container_name);
         let handle = thread::spawn(move || {
             let mut confirmed_lease_deadline = claim.lease_expires_at_unix;
@@ -59,6 +62,7 @@ impl AttemptSupervisor {
                 let now = unix_now();
                 let execution_deadline = thread_deadline.load(Ordering::Relaxed);
                 if pending_stop == AttemptStopReason::None
+                    && !thread_execution_finished.load(Ordering::Relaxed)
                     && execution_deadline != 0
                     && now >= execution_deadline
                 {
@@ -105,6 +109,7 @@ impl AttemptSupervisor {
             stop,
             reason,
             execution_deadline,
+            execution_finished,
             container_name,
             handle: Some(handle),
         })
@@ -126,6 +131,14 @@ impl AttemptSupervisor {
     pub(super) fn set_execution_deadline(&self, deadline_unix: u64) {
         self.execution_deadline
             .store(deadline_unix, Ordering::Relaxed);
+    }
+
+    pub(super) fn execution_finished_signal(&self) -> Arc<AtomicBool> {
+        Arc::clone(&self.execution_finished)
+    }
+
+    pub(super) fn mark_execution_finished(&self) {
+        self.execution_finished.store(true, Ordering::Relaxed);
     }
 
     pub(super) fn reason(&self) -> AttemptStopReason {

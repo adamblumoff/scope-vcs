@@ -47,9 +47,12 @@ steps:
     state
         .metadata
         .jobs()
-        .run_ready_outbox_jobs("push-trigger-api-test", 10, &|| {
-            crate::persistence::unix_now().map_err(crate::error::ApiError::into_message)
-        })
+        .run_ready_outbox_jobs(
+            "push-trigger-api-test",
+            10,
+            &|| crate::persistence::unix_now().map_err(crate::error::ApiError::into_message),
+            &crate::persistence_ids::generate_persistence_id,
+        )
         .await
         .unwrap();
 
@@ -417,6 +420,7 @@ async fn manual_run_protocol_crosses_human_runner_and_attempt_credentials() {
     let terminal_events = String::from_utf8(terminal_events.to_vec()).unwrap();
     assert!(terminal_events.contains("\"text\":\"chunk-130\\n\""));
     assert!(terminal_events.contains("\"state\":\"succeeded\""));
+    assert!(terminal_events.contains("\"logs_truncated\":false"));
 
     let human_cannot_use_attempt_token = app
         .clone()

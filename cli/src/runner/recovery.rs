@@ -1,4 +1,6 @@
-use super::{ClaimRunResponse, RunnerConfig, runner_client, runner_work_root};
+use super::{
+    AttemptConclusionRequest, ClaimRunResponse, RunnerConfig, runner_client, runner_work_root,
+};
 use crate::api::abandon_attempt;
 use anyhow::{Context, bail};
 use serde::{Deserialize, Serialize};
@@ -25,6 +27,7 @@ pub(super) struct RecoveryClaim {
 pub(super) struct RecoveryProgress {
     pub(super) next_log_sequence: u64,
     pub(super) execution_deadline_unix: Option<u64>,
+    pub(super) pending_conclusion: Option<AttemptConclusionRequest>,
 }
 
 pub(super) struct RecoveryAttempt {
@@ -52,6 +55,7 @@ pub(super) fn persist_recovery_claim(
         &RecoveryProgress {
             next_log_sequence: 1,
             execution_deadline_unix: None,
+            pending_conclusion: None,
         },
     )?;
     write_private_atomic_json(
@@ -91,6 +95,28 @@ pub(super) fn mark_recovery_execution_started(
     }
     let mut progress = stored.progress;
     progress.execution_deadline_unix = Some(execution_deadline_unix);
+    write_recovery_progress(work_dir, &progress)
+}
+
+pub(super) fn mark_recovery_conclusion_pending(
+    work_dir: &Path,
+    claim: &ClaimRunResponse,
+    conclusion: AttemptConclusionRequest,
+) -> anyhow::Result<()> {
+    let stored = load_recovery_claim(&work_dir.join(RECOVERY_CLAIM_FILE))?;
+    if stored.claim.attempt_id != claim.attempt_id
+        || stored.claim.attempt_token != claim.attempt_token
+    {
+        bail!("runner recovery claim identity changed");
+    }
+    let mut progress = stored.progress;
+    match &progress.pending_conclusion {
+        Some(pending) if pending != &conclusion => {
+            bail!("runner recovery conclusion changed after execution")
+        }
+        Some(_) => return Ok(()),
+        None => progress.pending_conclusion = Some(conclusion),
+    }
     write_recovery_progress(work_dir, &progress)
 }
 
@@ -211,8 +237,15 @@ pub(super) fn recover_runner_state(config: &RunnerConfig) -> anyhow::Result<Vec<
                     .context("remove unstarted runner recovery state")?;
             }
             ContainerState::Missing => {
-                abandon_recovery_claim(&client, config, &recovery)?;
-                fs::remove_dir_all(entry.path()).context("remove interrupted runner work")?;
+                if recovery.progress.pending_conclusion.is_some() {
+                    active.push(RecoveryAttempt {
+                        work_dir: entry.path(),
+                        recovery,
+                    });
+                } else {
+                    abandon_recovery_claim(&client, config, &recovery)?;
+                    fs::remove_dir_all(entry.path()).context("remove interrupted runner work")?;
+                }
             }
         }
     }

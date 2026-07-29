@@ -23,8 +23,9 @@ use scope_domain::{
     requests::{CreditLedgerEntry, CreditLedgerEntryKind, Request, UserCreditAccount},
     store::{FirstPushToken, GitPushToken, SourceBlob, StoredRepository, repo_id},
 };
+use sea_orm::sea_query::Query;
 use sea_orm::{ColumnTrait, EntityTrait, QueryFilter, TransactionTrait};
-use std::sync::Arc;
+use std::{collections::BTreeSet, sync::Arc};
 
 #[cfg(test)]
 use super::MetadataStore;
@@ -157,12 +158,38 @@ impl RepositoryStore {
             .map(|request| request.id.clone())
             .collect::<Vec<_>>();
         let change_blocks = change_blocks_for_request_ids(&tx, &request_ids).await?;
-        let request_git_snapshots = request_git_snapshots_for_repo(&requests, &change_blocks);
+        let mut retained_sources = request_git_snapshots_for_repo(&requests, &change_blocks);
         let change_block_ids = change_blocks
             .iter()
             .map(|change_block| change_block.id.clone())
             .collect::<Vec<_>>();
         delete_repository_object_references(&tx, &repo_id, &request_ids, &change_block_ids).await?;
+        let runs = entities::run::Entity::find()
+            .filter(entities::run::Column::RepoId.eq(repo_id.clone()))
+            .all(&tx)
+            .await
+            .map_err(PostgresError::internal)?
+            .into_iter()
+            .map(entities::run::Model::try_into_domain)
+            .collect::<Result<Vec<_>, _>>()?;
+        let run_ids = runs.iter().map(|run| run.id.clone()).collect::<Vec<_>>();
+        let workflow_digests = runs
+            .iter()
+            .map(|run| run.workflow_revision_digest.clone())
+            .collect::<BTreeSet<_>>();
+        retained_sources.extend(
+            runs.iter()
+                .flat_map(|run| run.source.retained_objects())
+                .cloned(),
+        );
+        if !run_ids.is_empty() {
+            entities::object_reference::Entity::delete_many()
+                .filter(entities::object_reference::Column::RefKind.eq("run_source"))
+                .filter(entities::object_reference::Column::RefId.is_in(run_ids))
+                .exec(&tx)
+                .await
+                .map_err(PostgresError::internal)?;
+        }
 
         entities::repository_invite::Entity::delete_many()
             .filter(entities::repository_invite::Column::RepoId.eq(repo_id.clone()))
@@ -178,15 +205,25 @@ impl RepositoryStore {
             .exec(&tx)
             .await
             .map_err(PostgresError::internal)?;
+        if !workflow_digests.is_empty() {
+            entities::workflow_revision::Entity::delete_many()
+                .filter(entities::workflow_revision::Column::Digest.is_in(workflow_digests))
+                .filter(
+                    entities::workflow_revision::Column::Digest.not_in_subquery(
+                        Query::select()
+                            .column(entities::run::Column::WorkflowRevisionDigest)
+                            .from(entities::run::Entity)
+                            .to_owned(),
+                    ),
+                )
+                .exec(&tx)
+                .await
+                .map_err(PostgresError::internal)?;
+        }
 
         save_repo_effects(&tx, &mutation.effects, now_unix, generated_ids).await?;
-        queue_pending_source_blob_deletion_rows(
-            &tx,
-            request_git_snapshots,
-            now_unix,
-            generated_ids,
-        )
-        .await?;
+        queue_pending_source_blob_deletion_rows(&tx, retained_sources, now_unix, generated_ids)
+            .await?;
         tx.commit().await.map_err(PostgresError::internal)?;
         Ok(mutation.result)
     }

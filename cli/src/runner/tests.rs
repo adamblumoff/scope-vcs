@@ -127,38 +127,51 @@ fn job_container_receives_only_copied_source_and_script() {
         "--network=host",
     ] {
         assert!(!arguments.iter().any(|argument| argument == forbidden));
+    }
+    for forbidden in [
+        "/var/run/docker.sock",
+        "DATABASE_URL",
+        "SCOPE_",
+        "--network=host",
+    ] {
         assert!(!joined.contains(forbidden));
     }
     assert!(!joined.contains(&config.secret));
     assert!(!joined.contains(&claim.attempt_token));
     assert!(joined.contains("scope.runner-id=runner-1"));
     assert!(joined.contains("scope.attempt-id=attempt-1"));
+    assert!(arguments.windows(2).any(|pair| pair == ["--entrypoint", "sh"]));
 }
 
 #[test]
 fn log_reader_bounds_chunks_even_without_newlines() {
     let input = vec![b'x'; LOG_CHUNK_BYTES * 2 + 7];
     let (sender, receiver) = mpsc::channel();
-    let handle = spawn_log_reader(Cursor::new(input.clone()), sender);
+    let execution_finished = Arc::new(AtomicBool::new(false));
+    let handle = spawn_log_reader(
+        Cursor::new(input.clone()),
+        sender,
+        Arc::clone(&execution_finished),
+    );
     let chunks = receiver.into_iter().collect::<Vec<_>>();
     handle.join().unwrap();
 
     assert!(chunks.iter().all(|chunk| chunk.len() <= LOG_CHUNK_BYTES));
     assert_eq!(chunks.concat().into_bytes(), input);
+    assert!(execution_finished.load(Ordering::Relaxed));
 }
 
 #[test]
 fn log_encoding_is_chunk_independent_and_replay_safe() {
     let bytes = b"hello \xe2\x98\x83\nbad \xff\n";
     let whole = stable_log_text(bytes);
-    let split = [
-        stable_log_text(&bytes[..7]),
-        stable_log_text(&bytes[7..10]),
-        stable_log_text(&bytes[10..]),
-    ]
-    .concat();
+    let mut decoder = StableLogDecoder::default();
+    let mut split = decoder.push(&bytes[..7]);
+    split.push_str(&decoder.push(&bytes[7..10]));
+    split.push_str(&decoder.push(&bytes[10..]));
+    split.push_str(&decoder.finish());
     assert_eq!(split, whole);
-    assert_eq!(whole, "hello \\xe2\\x98\\x83\nbad \\xff\n");
+    assert_eq!(whole, "hello ☃\nbad \\xff\n");
 }
 
 #[cfg(unix)]
@@ -203,6 +216,12 @@ fn interrupted_attempt_credentials_are_persisted_privately_for_reconciliation() 
     assert!(persist_recovery_claim(&root, &claim).is_err());
     update_recovery_log_sequence(&root, &claim, 2).unwrap();
     mark_recovery_execution_started(&root, &claim, 90).unwrap();
+    mark_recovery_conclusion_pending(
+        &root,
+        &claim,
+        AttemptConclusionRequest::Succeeded,
+    )
+    .unwrap();
     let stored: ClaimRunResponse = serde_json::from_slice(&fs::read(path).unwrap()).unwrap();
     assert_eq!(stored.attempt_id, claim.attempt_id);
     assert_eq!(stored.attempt_token, claim.attempt_token);
@@ -210,6 +229,10 @@ fn interrupted_attempt_credentials_are_persisted_privately_for_reconciliation() 
         serde_json::from_slice(&fs::read(root.join("progress.json")).unwrap()).unwrap();
     assert_eq!(progress.next_log_sequence, 2);
     assert_eq!(progress.execution_deadline_unix, Some(90));
+    assert_eq!(
+        progress.pending_conclusion,
+        Some(AttemptConclusionRequest::Succeeded)
+    );
     assert!(!root.join(".progress.json.tmp").exists());
     fs::remove_dir_all(root).unwrap();
 }

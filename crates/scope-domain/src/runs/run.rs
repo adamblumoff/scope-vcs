@@ -743,6 +743,11 @@ impl RunAttempt {
                 "run log attempt id does not match the attempt",
             ));
         }
+        if self.state.is_terminal() {
+            return Err(DomainError::conflict(
+                "terminal attempts cannot append logs",
+            ));
+        }
         if self.logs_truncated {
             return Ok(false);
         }
@@ -775,10 +780,17 @@ impl RunAttempt {
         conclusion: AttemptConclusion,
         now_unix: u64,
     ) -> Result<(), DomainError> {
-        self.authenticate(run, runner_id, token_hash, now_unix)?;
         if self.state.is_terminal() || run.state.is_terminal() {
-            return Err(DomainError::conflict("attempt is terminal"));
+            self.authenticate_identity(run, runner_id, token_hash)?;
+            return if self.matches_conclusion(conclusion) {
+                Ok(())
+            } else {
+                Err(DomainError::conflict(
+                    "attempt already completed with a different conclusion",
+                ))
+            };
         }
+        self.authenticate(run, runner_id, token_hash, now_unix)?;
         self.ensure_time_not_before_heartbeat(now_unix)?;
         run.ensure_time_not_before_update(now_unix)?;
         let (attempt_state, run_state, exit_code) = match conclusion {
@@ -810,6 +822,20 @@ impl RunAttempt {
         run.updated_at_unix = now_unix;
         run.completed_at_unix = Some(now_unix);
         Ok(())
+    }
+
+    fn matches_conclusion(&self, conclusion: AttemptConclusion) -> bool {
+        match conclusion {
+            AttemptConclusion::Succeeded => {
+                self.state == AttemptState::Succeeded && self.exit_code == Some(0)
+            }
+            AttemptConclusion::Failed { exit_code } => {
+                self.state == AttemptState::Failed && self.exit_code == Some(exit_code)
+            }
+            AttemptConclusion::Canceled => {
+                self.state == AttemptState::Canceled && self.exit_code.is_none()
+            }
+        }
     }
 
     pub fn expire(&mut self, run: &mut Run, now_unix: u64) -> Result<(), DomainError> {
@@ -864,6 +890,21 @@ impl RunAttempt {
         token_hash: &str,
         now_unix: u64,
     ) -> Result<(), DomainError> {
+        self.authenticate_identity(run, runner_id, token_hash)?;
+        if now_unix >= self.token_expires_at_unix {
+            return Err(DomainError::authentication_failed(
+                "attempt credentials are invalid or expired",
+            ));
+        }
+        Ok(())
+    }
+
+    fn authenticate_identity(
+        &self,
+        run: &Run,
+        runner_id: &str,
+        token_hash: &str,
+    ) -> Result<(), DomainError> {
         run.ensure_current_attempt(self)?;
         let states_align = matches!(
             (run.state, self.state),
@@ -878,12 +919,9 @@ impl RunAttempt {
                 "run and attempt states disagree",
             ));
         }
-        if self.runner_id != runner_id
-            || self.token_hash != token_hash
-            || now_unix >= self.token_expires_at_unix
-        {
+        if self.runner_id != runner_id || self.token_hash != token_hash {
             return Err(DomainError::authentication_failed(
-                "attempt credentials are invalid or expired",
+                "attempt credentials are invalid",
             ));
         }
         Ok(())

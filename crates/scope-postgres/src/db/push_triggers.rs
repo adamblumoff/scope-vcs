@@ -1,5 +1,7 @@
 use super::{
-    GeneratedIdKind, GeneratedIdSource, RunStore, entities,
+    GeneratedIdKind, GeneratedIdSource, RunStore,
+    cleanup_queue::queue_pending_source_blob_deletion_rows,
+    entities,
     generated_ids::generate_id,
     object_references::{delete_object_reference, insert_object_reference},
     outbox::ClaimedOutboxJob,
@@ -57,6 +59,7 @@ where
         .map_err(PostgresError::internal)?;
     let job = entities::outbox_job::Model::push_main_trigger_evaluation(
         generate_id(generated_ids, GeneratedIdKind::OutboxJob)?,
+        JOB_KIND,
         repo_id,
         head.change_version,
         &head.manifest,
@@ -76,17 +79,12 @@ pub(super) async fn evaluate<C>(
     conn: &C,
     job: &ClaimedOutboxJob,
     now_unix: u64,
+    generated_ids: &dyn GeneratedIdSource,
 ) -> Result<(), PostgresError>
 where
     C: ConnectionTrait + TransactionTrait,
 {
-    let payload = entities::outbox_job::Entity::find_by_id(job.id.clone())
-        .one(conn)
-        .await
-        .map_err(PostgresError::internal)?
-        .ok_or_else(|| PostgresError::not_found("push trigger outbox job not found"))?;
-    let payload: PushMainTriggerJobPayload =
-        serde_json::from_value(payload.payload).map_err(PostgresError::internal)?;
+    let payload = load_job_payload(conn, &job.id).await?;
     let change_version = u64::try_from(job.repo_version)
         .map_err(|_| PostgresError::internal_message("push trigger change version is negative"))?;
     let tx = conn.begin().await.map_err(PostgresError::internal)?;
@@ -99,13 +97,29 @@ where
     .await
     .map_err(PostgresError::internal)?
     else {
-        delete_push_trigger_source_reference(&tx, &job.repo_id, change_version).await?;
+        release_push_trigger_sources(
+            &tx,
+            &job.repo_id,
+            change_version,
+            &payload,
+            now_unix,
+            generated_ids,
+        )
+        .await?;
         tx.commit().await.map_err(PostgresError::internal)?;
         return Ok(());
     };
     let mut evaluation = model.try_into_domain()?;
     if evaluation.state != PushTriggerEvaluationState::Pending {
-        delete_push_trigger_source_reference(&tx, &job.repo_id, change_version).await?;
+        release_push_trigger_sources(
+            &tx,
+            &job.repo_id,
+            change_version,
+            &payload,
+            now_unix,
+            generated_ids,
+        )
+        .await?;
         tx.commit().await.map_err(PostgresError::internal)?;
         return Ok(());
     }
@@ -175,8 +189,31 @@ where
             .map_err(PostgresError::from)?;
     }
     save_evaluation(&tx, &evaluation).await?;
-    delete_push_trigger_source_reference(&tx, &job.repo_id, change_version).await?;
+    release_push_trigger_sources(
+        &tx,
+        &job.repo_id,
+        change_version,
+        &payload,
+        now_unix,
+        generated_ids,
+    )
+    .await?;
     tx.commit().await.map_err(PostgresError::internal)
+}
+
+async fn load_job_payload<C>(
+    conn: &C,
+    job_id: &str,
+) -> Result<PushMainTriggerJobPayload, PostgresError>
+where
+    C: ConnectionTrait,
+{
+    let payload = entities::outbox_job::Entity::find_by_id(job_id.to_string())
+        .one(conn)
+        .await
+        .map_err(PostgresError::internal)?
+        .ok_or_else(|| PostgresError::not_found("push trigger outbox job not found"))?;
+    serde_json::from_value(payload.payload).map_err(PostgresError::internal)
 }
 
 pub(super) async fn mark_terminal_failure(
@@ -184,7 +221,9 @@ pub(super) async fn mark_terminal_failure(
     job: &ClaimedOutboxJob,
     error: String,
     now_unix: u64,
+    generated_ids: &dyn GeneratedIdSource,
 ) -> Result<(), PostgresError> {
+    let payload = load_job_payload(tx, &job.id).await?;
     let change_version = u64::try_from(job.repo_version)
         .map_err(|_| PostgresError::internal_message("push trigger change version is negative"))?;
     let Some(model) = entities::push_trigger_evaluation::Entity::find_by_id((
@@ -196,7 +235,15 @@ pub(super) async fn mark_terminal_failure(
     .await
     .map_err(PostgresError::internal)?
     else {
-        delete_push_trigger_source_reference(tx, &job.repo_id, change_version).await?;
+        release_push_trigger_sources(
+            tx,
+            &job.repo_id,
+            change_version,
+            &payload,
+            now_unix,
+            generated_ids,
+        )
+        .await?;
         return Ok(());
     };
     let mut evaluation = model.try_into_domain()?;
@@ -206,14 +253,25 @@ pub(super) async fn mark_terminal_failure(
             .map_err(PostgresError::from)?;
         save_evaluation(tx, &evaluation).await?;
     }
-    delete_push_trigger_source_reference(tx, &job.repo_id, change_version).await?;
+    release_push_trigger_sources(
+        tx,
+        &job.repo_id,
+        change_version,
+        &payload,
+        now_unix,
+        generated_ids,
+    )
+    .await?;
     Ok(())
 }
 
-async fn delete_push_trigger_source_reference<C>(
+async fn release_push_trigger_sources<C>(
     conn: &C,
     repo_id: &str,
     change_version: u64,
+    payload: &PushMainTriggerJobPayload,
+    now_unix: u64,
+    generated_ids: &dyn GeneratedIdSource,
 ) -> Result<(), PostgresError>
 where
     C: ConnectionTrait,
@@ -222,6 +280,13 @@ where
         conn,
         "push_trigger_source",
         &format!("{repo_id}:{change_version}"),
+    )
+    .await?;
+    queue_pending_source_blob_deletion_rows(
+        conn,
+        [payload.manifest.clone(), payload.input.snapshot.clone()],
+        now_unix,
+        generated_ids,
     )
     .await
 }
@@ -346,7 +411,12 @@ steps:
 
         let summary = store
             .jobs()
-            .run_ready_outbox_jobs("push-worker", 10, &|| Ok(now()))
+            .run_ready_outbox_jobs(
+                "push-worker",
+                10,
+                &|| Ok(now()),
+                &crate::db::generated_ids::test_generated_id,
+            )
             .await
             .unwrap();
         assert_eq!(summary.failed, 0);
@@ -389,7 +459,12 @@ steps:
 
         store
             .jobs()
-            .run_ready_outbox_jobs("push-worker", 10, &|| Ok(now()))
+            .run_ready_outbox_jobs(
+                "push-worker",
+                10,
+                &|| Ok(now()),
+                &crate::db::generated_ids::test_generated_id,
+            )
             .await
             .unwrap();
         assert_eq!(store.runs().runs_by_ids(&[run.id]).await.unwrap().len(), 1);
@@ -425,7 +500,12 @@ steps:
         .unwrap();
         store
             .jobs()
-            .run_ready_outbox_jobs("push-worker", 10, &|| Ok(now()))
+            .run_ready_outbox_jobs(
+                "push-worker",
+                10,
+                &|| Ok(now()),
+                &crate::db::generated_ids::test_generated_id,
+            )
             .await
             .unwrap();
 
@@ -450,6 +530,12 @@ steps:
             object_reference_count(&store, "push_trigger_source", &format!("{repo_id}:2")).await,
             0
         );
+        let cleanup = store
+            .cleanup()
+            .source_blob_cleanup_batch(now() + 301, &crate::db::generated_ids::test_generated_id)
+            .await
+            .unwrap();
+        assert_eq!(cleanup.pending.len(), 2);
     }
 
     #[tokio::test]
@@ -469,11 +555,18 @@ steps:
         )
         .await
         .unwrap();
+        let persisted_job = entities::outbox_job::Entity::find()
+            .filter(entities::outbox_job::Column::RepoId.eq(repo_id.clone()))
+            .filter(entities::outbox_job::Column::Kind.eq(JOB_KIND))
+            .one(store.db.as_ref())
+            .await
+            .unwrap()
+            .unwrap();
         let tx = store.db.begin().await.unwrap();
         mark_terminal_failure(
             &tx,
             &ClaimedOutboxJob {
-                id: "job_failure".to_string(),
+                id: persisted_job.id,
                 kind: JOB_KIND.to_string(),
                 repo_id: repo_id.clone(),
                 repo_version: 5,
@@ -481,6 +574,7 @@ steps:
             },
             "terminal failure".to_string(),
             now(),
+            &crate::db::generated_ids::test_generated_id,
         )
         .await
         .unwrap();
@@ -497,6 +591,12 @@ steps:
             object_reference_count(&store, "push_trigger_source", &format!("{repo_id}:5")).await,
             0
         );
+        let cleanup = store
+            .cleanup()
+            .source_blob_cleanup_batch(now() + 301, &crate::db::generated_ids::test_generated_id)
+            .await
+            .unwrap();
+        assert_eq!(cleanup.pending.len(), 2);
     }
 
     #[tokio::test]
@@ -545,7 +645,12 @@ steps:
 
         let summary = store
             .jobs()
-            .run_ready_outbox_jobs("push-worker", 10, &|| Ok(now()))
+            .run_ready_outbox_jobs(
+                "push-worker",
+                10,
+                &|| Ok(now()),
+                &crate::db::generated_ids::test_generated_id,
+            )
             .await
             .unwrap();
         assert_eq!(summary.failed, 0);
