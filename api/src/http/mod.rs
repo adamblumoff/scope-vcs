@@ -15,5 +15,8 @@ pub(crate) mod request_review;
 pub(crate) mod requests;
 pub(crate) mod responses;
 pub(crate) mod routes;
+pub(crate) mod runner_protocol;
+pub(crate) mod runners;
+pub(crate) mod runs;
 #[cfg(feature = "type-export")]
 pub(crate) mod type_exports;

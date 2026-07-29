@@ -62,6 +62,7 @@ mod repo_lifecycle;
 mod repo_visibility;
 mod request_discussions;
 mod requests;
+mod runs;
 mod runtime_budgets;
 
 const TEST_CLERK_ISSUER: &str = "https://clerk.test";

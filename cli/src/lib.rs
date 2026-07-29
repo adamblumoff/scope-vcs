@@ -13,6 +13,8 @@ pub mod push;
 pub mod repo_config;
 pub mod request;
 pub mod review;
+pub mod run;
+pub mod runner;
 
 #[cfg(test)]
 mod test_support;

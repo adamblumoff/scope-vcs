@@ -76,6 +76,7 @@ dependencies = [
  "scope-git-process",
  "scope-object-store",
  "scope-postgres",
+ "scope-run-config",
  "serde",
  "serde_json",
  "sha1",

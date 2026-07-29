@@ -9,3 +9,11 @@ pub(crate) fn generate_persistence_id(kind: GeneratedIdKind) -> Result<String, S
         GeneratedIdKind::OutboxJob => format!("outbox_{random}"),
     })
 }
+
+pub(crate) fn generate_prefixed_id(prefix: &str) -> Result<String, crate::error::ApiError> {
+    let mut bytes = [0_u8; 16];
+    getrandom::fill(&mut bytes).map_err(|error| {
+        crate::error::ApiError::internal_message(format!("failed to generate identifier: {error}"))
+    })?;
+    Ok(format!("{prefix}{}", hex::encode(bytes)))
+}

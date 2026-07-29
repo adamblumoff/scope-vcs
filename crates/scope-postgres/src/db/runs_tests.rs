@@ -3,7 +3,7 @@ use crate::error::PostgresErrorKind;
 use scope_domain::{
     policy::Visibility,
     runs::{
-        run::{AttemptConclusion, AttemptState, Run, RunSource, RunState, RunTrigger},
+        run::{AttemptConclusion, AttemptState, Run, RunLogChunk, RunSource, RunState, RunTrigger},
         runner::{
             MIN_RUNNER_PROTOCOL_VERSION, Runner, RunnerCapabilities, RunnerGrant, RunnerName,
         },
@@ -300,6 +300,125 @@ async fn names_are_repository_scoped_revisions_are_idempotent_and_revocation_sto
             .id,
         "run-1"
     );
+}
+
+#[tokio::test]
+async fn machine_authentication_and_attempt_logs_are_narrow_and_idempotent() {
+    let store = postgres_store();
+    let runner = runner("runner-1");
+    let runner_hash = runner.secret_hash.clone();
+    store.runs().register_runner(runner).await.unwrap();
+    store
+        .runs()
+        .grant_runner(
+            RunnerGrant::new(
+                "owner/repo",
+                "runner-1",
+                RunnerName::parse("linux-box").unwrap(),
+                "user_owner",
+                10,
+            )
+            .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        store
+            .runs()
+            .authenticate_runner(&runner_hash, 11)
+            .await
+            .unwrap()
+            .last_seen_at_unix,
+        Some(11)
+    );
+    assert_eq!(
+        store
+            .runs()
+            .authenticate_runner(&"f".repeat(64), 11)
+            .await
+            .unwrap_err()
+            .kind,
+        PostgresErrorKind::Unauthenticated
+    );
+
+    enqueue(&store, run("run-1", "manual:logs"), revision()).await;
+    store
+        .runs()
+        .claim_run("run-1", "runner-1", "attempt-1", &"a".repeat(64), 20, 80)
+        .await
+        .unwrap();
+    store
+        .runs()
+        .start_attempt("attempt-1", "runner-1", &"a".repeat(64), 21)
+        .await
+        .unwrap();
+    let first = RunLogChunk::new("attempt-1", 1, "first\n", 22).unwrap();
+    let stored = store
+        .runs()
+        .append_attempt_log(first.clone(), &"a".repeat(64), 22)
+        .await
+        .unwrap();
+    let retry = store
+        .runs()
+        .append_attempt_log(
+            RunLogChunk::new("attempt-1", 1, first.text, 23).unwrap(),
+            &"a".repeat(64),
+            23,
+        )
+        .await
+        .unwrap();
+    assert_eq!(retry.position, stored.position);
+    assert_eq!(
+        store
+            .runs()
+            .append_attempt_log(
+                RunLogChunk::new("attempt-1", 1, "different\n", 22).unwrap(),
+                &"a".repeat(64),
+                23,
+            )
+            .await
+            .unwrap_err()
+            .kind,
+        PostgresErrorKind::Conflict
+    );
+    assert_eq!(
+        store
+            .runs()
+            .append_attempt_log(
+                RunLogChunk::new("attempt-1", 3, "gap\n", 23).unwrap(),
+                &"a".repeat(64),
+                23,
+            )
+            .await
+            .unwrap_err()
+            .kind,
+        PostgresErrorKind::Conflict
+    );
+    let second = store
+        .runs()
+        .append_attempt_log(
+            RunLogChunk::new("attempt-1", 2, "second\n", 23).unwrap(),
+            &"a".repeat(64),
+            23,
+        )
+        .await
+        .unwrap();
+    assert!(second.position > stored.position);
+    let attempt = store
+        .runs()
+        .authenticate_attempt("attempt-1", &"a".repeat(64), 23)
+        .await
+        .unwrap()
+        .attempt;
+    assert_eq!(attempt.log_bytes, 13);
+    assert!(!attempt.logs_truncated);
+    let logs = store
+        .runs()
+        .run_logs_after("run-1", stored.position, 100)
+        .await
+        .unwrap();
+    assert_eq!(logs.len(), 1);
+    assert_eq!(logs[0].chunk.text, "second\n");
 }
 
 #[tokio::test]
