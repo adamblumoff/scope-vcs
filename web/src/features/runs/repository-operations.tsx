@@ -16,7 +16,7 @@ import {
   Square,
   TerminalSquare,
 } from 'lucide-react'
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 
 const DATE_FORMATTER = new Intl.DateTimeFormat('en-US', {
   dateStyle: 'medium',
@@ -46,39 +46,65 @@ export function RepositoryOperations({
     pendingRunId: null as string | null,
     selectedRunId: null as string | null,
   }))
+  const detailGeneration = useRef(0)
+  const operationsGeneration = useRef(0)
+  const selectedRunIdRef = useRef<string | null>(null)
   const { detail, error, operations, pendingRunId, selectedRunId } = view
+  const canPoll = operations !== null
   const hasActiveRun = operations?.runs.some((run) =>
     ACTIVE_RUN_STATES.has(run.state),
   ) ?? false
 
   useEffect(() => {
-    if (!operations) return
+    if (!canPoll) return
     let disposed = false
 
     const refresh = async () => {
-      try {
-        const [nextOperations, nextDetail] = await Promise.all([
-          loadOperations(params),
-          selectedRunId
-            ? loadDetail({ ...params, run_id: selectedRunId })
-            : Promise.resolve(null),
-        ])
-        if (!disposed) {
-          setView((current) => ({
-            ...current,
-            detail: nextDetail,
-            error: null,
-            operations: nextOperations,
-          }))
+      const operationsRequestGeneration = ++operationsGeneration.current
+      const detailRequestGeneration = selectedRunId
+        ? ++detailGeneration.current
+        : null
+      const [operationsResult, detailResult] = await Promise.allSettled([
+        loadOperations(params),
+        selectedRunId
+          ? loadDetail({ ...params, run_id: selectedRunId })
+          : Promise.resolve(null),
+      ])
+      if (disposed) return
+
+      setView((current) => {
+        const detailApplies =
+          detailRequestGeneration !== null &&
+          detailRequestGeneration === detailGeneration.current &&
+          current.selectedRunId === selectedRunId
+        const operationsApply =
+          operationsRequestGeneration === operationsGeneration.current
+        if (!detailApplies && !operationsApply) return current
+
+        const refreshError =
+          operationsApply && operationsResult.status === 'rejected'
+            ? errorMessage(operationsResult.reason)
+            : detailApplies && detailResult.status === 'rejected'
+              ? errorMessage(detailResult.reason)
+              : detailApplies || current.selectedRunId === null
+                ? null
+                : current.error
+
+        return {
+          ...current,
+          detail:
+            detailApplies && detailResult.status === 'fulfilled'
+              ? detailResult.value
+              : current.detail,
+          error: refreshError,
+          operations:
+            operationsApply &&
+            operationsResult.status === 'fulfilled' &&
+            operationsResult.value
+              ? operationsResult.value
+              : current.operations,
         }
-      } catch (refreshError) {
-        if (!disposed) {
-          setView((current) => ({
-            ...current,
-            error: errorMessage(refreshError),
-          }))
-        }
-      }
+      })
     }
     const refreshInterval = hasActiveRun || selectedRunId ? 5_000 : 15_000
     const timer = window.setInterval(() => void refresh(), refreshInterval)
@@ -87,18 +113,20 @@ export function RepositoryOperations({
       window.clearInterval(timer)
     }
   }, [
+    canPoll,
     hasActiveRun,
     loadDetail,
     loadOperations,
     params,
     selectedRunId,
-    operations,
   ])
 
   if (!operations) return null
 
   async function selectRun(runId: string) {
+    const generation = ++detailGeneration.current
     if (selectedRunId === runId) {
+      selectedRunIdRef.current = null
       setView((current) => ({
         ...current,
         detail: null,
@@ -106,6 +134,7 @@ export function RepositoryOperations({
       }))
       return
     }
+    selectedRunIdRef.current = runId
     setView((current) => ({
       ...current,
       detail: null,
@@ -115,12 +144,14 @@ export function RepositoryOperations({
     try {
       const nextDetail = await loadDetail({ ...params, run_id: runId })
       setView((current) =>
+        generation === detailGeneration.current &&
         current.selectedRunId === runId
           ? { ...current, detail: nextDetail }
           : current,
       )
     } catch (loadError) {
       setView((current) =>
+        generation === detailGeneration.current &&
         current.selectedRunId === runId
           ? { ...current, error: errorMessage(loadError) }
           : current,
@@ -132,6 +163,10 @@ export function RepositoryOperations({
     runId: string,
     action: (input: RunActionInput) => Promise<void>,
   ) {
+    ++operationsGeneration.current
+    if (selectedRunIdRef.current === runId) {
+      ++detailGeneration.current
+    }
     setView((current) => ({
       ...current,
       error: null,
@@ -139,22 +174,54 @@ export function RepositoryOperations({
     }))
     try {
       await action({ ...params, run_id: runId })
-      const refreshesSelectedRun = selectedRunId === runId
-      const [nextOperations, nextDetail] = await Promise.all([
+      const refreshesSelectedRun = selectedRunIdRef.current === runId
+      const operationsRequestGeneration = ++operationsGeneration.current
+      const detailRequestGeneration = refreshesSelectedRun
+        ? ++detailGeneration.current
+        : null
+      const [operationsResult, detailResult] = await Promise.allSettled([
         loadOperations(params),
         refreshesSelectedRun
           ? loadDetail({ ...params, run_id: runId })
           : Promise.resolve(null),
       ])
-      setView((current) => ({
-        ...current,
-        detail:
-          refreshesSelectedRun && current.selectedRunId === runId
-            ? nextDetail
-            : current.detail,
-        operations: nextOperations,
-        pendingRunId: null,
-      }))
+      setView((current) => {
+        const detailApplies =
+          detailRequestGeneration !== null &&
+          detailRequestGeneration === detailGeneration.current &&
+          current.selectedRunId === runId
+        const operationsApply =
+          operationsRequestGeneration === operationsGeneration.current
+        if (!detailApplies && !operationsApply) {
+          return current.pendingRunId === runId
+            ? { ...current, pendingRunId: null }
+            : current
+        }
+        const refreshError =
+          operationsApply && operationsResult.status === 'rejected'
+            ? errorMessage(operationsResult.reason)
+            : detailApplies && detailResult.status === 'rejected'
+              ? errorMessage(detailResult.reason)
+              : detailApplies || current.selectedRunId === null
+                ? null
+                : current.error
+
+        return {
+          ...current,
+          detail:
+            detailApplies && detailResult.status === 'fulfilled'
+              ? detailResult.value
+              : current.detail,
+          error: refreshError,
+          operations:
+            operationsApply &&
+            operationsResult.status === 'fulfilled' &&
+            operationsResult.value
+              ? operationsResult.value
+              : current.operations,
+          pendingRunId: null,
+        }
+      })
     } catch (actionError) {
       setView((current) => ({
         ...current,
