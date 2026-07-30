@@ -1,4 +1,6 @@
-This product is still in pre-alpha and we have zero users and zero valuable data. Every change should be destructive, no legacy or backwards compatible bullshit, this application has no users or releases, treat it as such. If you add backwards compatibility, I will go apeshit on your dumbass.
+This product is still in pre-alpha. No legacy or backwards compatible bullshit, this application has no users or releases, treat it as such. If you add backwards compatibility, I will go apeshit on your dumbass.
+
+ Migrations do not equal backwards compatibility, we will be doing migrations but not keeping stuff backwards compatible. 
 
 Maintainer = owner or members
 
