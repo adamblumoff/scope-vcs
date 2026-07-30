@@ -233,21 +233,3 @@ pub mod source_blob_cleanup_job {
         }
     }
 }
-pub mod metadata_reset_event {
-    use super::*;
-
-    #[derive(Clone, Debug, PartialEq, DeriveEntityModel)]
-    #[sea_orm(table_name = "scope_metadata_reset_events")]
-    pub struct Model {
-        #[sea_orm(primary_key, auto_increment = false)]
-        pub id: String,
-        pub reset_at_unix: i64,
-        pub trigger: String,
-        pub reason: String,
-    }
-
-    #[derive(Copy, Clone, Debug, EnumIter, DeriveRelation)]
-    pub enum Relation {}
-
-    impl ActiveModelBehavior for ActiveModel {}
-}
