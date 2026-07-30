@@ -7,9 +7,10 @@ use reqwest::{
 use scope_api_contract::{
     AppendAttemptLogRequest, AttachRunnerRepositoryRequest, AttemptHeartbeatRequest,
     AttemptRecoveryStatusResponse, AttemptStatusResponse, ClaimRunResponse, CompleteAttemptRequest,
-    CreateManualRunQuery, PinAttemptContainerImageRequest, PinAttemptContainerImageResponse,
-    PushTriggerEvaluationResponse, RegisterRunnerRequest, RegisterRunnerResponse, RunEventsQuery,
-    RunLogResponse, RunResponse, RunnerPollResponse, RunnerResponse,
+    CompleteAttemptStepRequest, CreateManualRunQuery, PinAttemptContainerImageRequest,
+    PinAttemptContainerImageResponse, PushTriggerEvaluationResponse, RegisterRunnerRequest,
+    RegisterRunnerResponse, RunEventsQuery, RunLogResponse, RunResponse, RunnerPollResponse,
+    RunnerResponse,
 };
 use std::io::BufRead;
 
@@ -337,19 +338,20 @@ pub fn attempt_source(
     )
 }
 
-pub fn attempt_start(
+pub fn start_attempt_step(
     client: &Client,
     api_url: &str,
     attempt_token: &str,
     attempt_id: &str,
+    step_index: u32,
 ) -> anyhow::Result<AttemptStatusResponse> {
     attempt_json(
         client,
         api_url,
         attempt_token,
-        routes::attempt_start(attempt_id),
+        routes::attempt_step_start(attempt_id, step_index),
         &serde_json::json!({}),
-        "start Scope run attempt",
+        "start Scope workflow step",
     )
 }
 
@@ -409,6 +411,35 @@ pub fn attempt_recovery_status(
     )
 }
 
+pub enum AttemptRecoveryLookup {
+    Active(AttemptRecoveryStatusResponse),
+    Unavailable,
+}
+
+pub fn attempt_recovery_status_if_active(
+    client: &Client,
+    api_url: &str,
+    attempt_token: &str,
+    attempt_id: &str,
+) -> anyhow::Result<AttemptRecoveryLookup> {
+    let response = client
+        .get(format!(
+            "{api_url}{}",
+            routes::attempt_recovery_status(attempt_id)
+        ))
+        .bearer_auth(attempt_token)
+        .send()
+        .context("load Scope run attempt recovery status")?;
+    if matches!(
+        response.status(),
+        StatusCode::UNAUTHORIZED | StatusCode::NOT_FOUND | StatusCode::CONFLICT
+    ) {
+        return Ok(AttemptRecoveryLookup::Unavailable);
+    }
+    parse_json(response, "load Scope run attempt recovery status")
+        .map(AttemptRecoveryLookup::Active)
+}
+
 pub fn append_attempt_log(
     client: &Client,
     api_url: &str,
@@ -443,6 +474,24 @@ pub fn complete_attempt(
         routes::attempt_complete(attempt_id),
         request,
         "complete Scope run attempt",
+    )
+}
+
+pub fn complete_attempt_step(
+    client: &Client,
+    api_url: &str,
+    attempt_token: &str,
+    attempt_id: &str,
+    step_index: u32,
+    request: &CompleteAttemptStepRequest,
+) -> anyhow::Result<AttemptStatusResponse> {
+    attempt_json(
+        client,
+        api_url,
+        attempt_token,
+        routes::attempt_step_complete(attempt_id, step_index),
+        request,
+        "complete Scope workflow step",
     )
 }
 
@@ -528,7 +577,7 @@ mod run_event_stream_tests {
             ": keep-alive\n\n",
             "id: 7\n",
             "event: log\n",
-            "data: {\"attempt_id\":\"attempt-1\",\"position\":7,\"sequence\":2,",
+            "data: {\"attempt_id\":\"attempt-1\",\"step_index\":0,\"position\":7,\"sequence\":2,",
             "\"text\":\"hello\\n\",\"created_at_unix\":9}\n\n",
             "event: error\n",
             "data: {\"message\":\"must not be reached\"}\n\n"

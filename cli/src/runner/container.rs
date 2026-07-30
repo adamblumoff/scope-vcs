@@ -76,44 +76,45 @@ pub(super) fn configure_job_container_creation(
     claim: &ClaimRunResponse,
     container_name: &str,
     container_image: &str,
+    step_programs: &Path,
 ) {
     command.args(["create", "--name", container_name]);
     apply_container_limits(command, config.storage_quota_supported);
     command
         .args(["--label", &format!("scope.runner-id={}", config.runner_id)])
+        .args(["--label", &format!("scope.attempt-id={}", claim.attempt_id)])
         .args([
-            "--label",
-            &format!("scope.attempt-id={}", claim.attempt_id),
+            "--mount",
+            &format!(
+                "type=bind,source={},target=/scope-steps,readonly",
+                step_programs.display()
+            ),
         ])
         .args(["--entrypoint", "sh"])
         .args([
             container_image,
             "-c",
-            "mkdir -p /workspace && cp -a /scope-source/. /workspace/ && cd /workspace && exec sh /scope-job.sh 2>&1",
+            "set -eu\n\
+             if [ -d /scope-source ]; then\n\
+               mkdir -p /workspace\n\
+               cp -a /scope-source/. /workspace/\n\
+               rm -rf /scope-source\n\
+             fi\n\
+             read -r phase step nonce < /scope-steps/current\n\
+             [ \"$phase\" = prepare ]\n\
+             : > /scope-step.log\n\
+             cd /workspace\n\
+             printf '%s\\n' \"$nonce\" > /scope-active-step.tmp\n\
+             mv /scope-active-step.tmp /scope-active-step\n\
+             while :; do\n\
+               read -r next_phase next_step next_nonce < /scope-steps/current\n\
+               if [ \"$next_phase\" = run ] && [ \"$next_step\" = \"$step\" ] && [ \"$next_nonce\" = \"$nonce\" ]; then\n\
+                 break\n\
+               fi\n\
+               sleep 0.05\n\
+             done\n\
+             exec sh -e \"/scope-steps/step-$step.sh\" > /scope-step.log 2>&1",
         ]);
-}
-
-pub(super) fn recovered_container_exit_code(container_name: &str) -> anyhow::Result<Option<i32>> {
-    let output = Command::new("docker")
-        .args([
-            "container",
-            "inspect",
-            "--format={{.State.ExitCode}}",
-            container_name,
-        ])
-        .output()
-        .context("inspect recovered Docker job exit code")?;
-    if !output.status.success() {
-        bail!(
-            "inspect recovered Docker job exit code: {}",
-            String::from_utf8_lossy(&output.stderr).trim()
-        );
-    }
-    let code = String::from_utf8_lossy(&output.stdout)
-        .trim()
-        .parse::<i32>()
-        .context("parse recovered Docker job exit code")?;
-    Ok(Some(code))
 }
 
 pub(super) fn container_started_at_unix(container_name: &str) -> anyhow::Result<u64> {
@@ -135,16 +136,24 @@ pub(super) fn container_started_at_unix(container_name: &str) -> anyhow::Result<
     Err(last_error.expect("container start inspection records an error"))
 }
 
-pub(super) fn container_finished_at_unix(container_name: &str) -> anyhow::Result<u64> {
-    container_timestamp_unix(
-        container_name,
-        "--format={{.State.FinishedAt}}",
-        "Docker job finish time",
-        false,
+pub(super) fn stop_container(container_name: &str) -> anyhow::Result<()> {
+    let output = Command::new("docker")
+        .args(["stop", "--time", "1", container_name])
+        .output()
+        .context("stop workflow step container")?;
+    if container_is_stopped_or_missing(container_name)? {
+        return Ok(());
+    }
+    if output.status.success() {
+        bail!("workflow step container remained running after Docker stop");
+    }
+    bail!(
+        "stop workflow step container: {}",
+        String::from_utf8_lossy(&output.stderr).trim()
     )
 }
 
-pub(super) fn container_is_running(container_name: &str) -> anyhow::Result<bool> {
+fn container_is_stopped_or_missing(container_name: &str) -> anyhow::Result<bool> {
     let output = Command::new("docker")
         .args([
             "container",
@@ -153,14 +162,15 @@ pub(super) fn container_is_running(container_name: &str) -> anyhow::Result<bool>
             container_name,
         ])
         .output()
-        .context("inspect Docker job state")?;
-    if !output.status.success() {
-        bail!(
-            "inspect Docker job state: {}",
-            String::from_utf8_lossy(&output.stderr).trim()
-        );
+        .context("confirm workflow step container stopped")?;
+    if output.status.success() {
+        return Ok(String::from_utf8_lossy(&output.stdout).trim() == "false");
     }
-    Ok(String::from_utf8_lossy(&output.stdout).trim() == "true")
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    if stderr.to_ascii_lowercase().contains("no such") {
+        return Ok(true);
+    }
+    bail!("confirm workflow step container stopped: {}", stderr.trim())
 }
 
 fn container_timestamp_unix(
@@ -193,16 +203,27 @@ fn container_timestamp_unix(
 
 pub(super) struct ContainerGuard {
     pub(super) name: String,
+    cleanup_on_drop: bool,
 }
 
 impl ContainerGuard {
     pub(super) fn new(name: String) -> Self {
-        Self { name }
+        Self {
+            name,
+            cleanup_on_drop: true,
+        }
+    }
+
+    pub(super) fn preserve(&mut self) {
+        self.cleanup_on_drop = false;
     }
 }
 
 impl Drop for ContainerGuard {
     fn drop(&mut self) {
+        if !self.cleanup_on_drop {
+            return;
+        }
         let _ = Command::new("docker")
             .args(["rm", "-f", &self.name])
             .output();

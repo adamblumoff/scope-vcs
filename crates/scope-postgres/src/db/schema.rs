@@ -5,10 +5,11 @@ use sea_orm::{
 const METADATA_SCHEMA: &str = include_str!("schema.sql");
 const METADATA_SCHEMA_KEY: &str = "current";
 // Increment whenever schema.sql changes incompatibly; pre-alpha upgrades intentionally reset data.
-pub const METADATA_SCHEMA_VERSION: i64 = 6;
+pub const METADATA_SCHEMA_VERSION: i64 = 7;
 const RESET_TABLES: &str = "
     scope_metadata_schema,
     scope_run_logs,
+    scope_run_attempt_steps,
     scope_run_attempts,
     scope_runs,
     scope_push_trigger_evaluations,

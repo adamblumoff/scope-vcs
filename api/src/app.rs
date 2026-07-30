@@ -83,7 +83,6 @@ pub fn router(state: AppState) -> Router {
         )
         .route(routes::RUNNER_POLL, post(http::runner_protocol::poll))
         .route(routes::RUNNER_CLAIM, post(http::runner_protocol::claim))
-        .route(routes::ATTEMPT_START, post(http::runner_protocol::start))
         .route(
             routes::ATTEMPT_HEARTBEAT,
             post(http::runner_protocol::heartbeat),
@@ -110,6 +109,14 @@ pub fn router(state: AppState) -> Router {
             post(http::runner_protocol::abandon),
         )
         .route(
+            routes::ATTEMPT_STEP_START,
+            post(http::runner_protocol::start_step),
+        )
+        .route(
+            routes::ATTEMPT_STEP_COMPLETE,
+            post(http::runner_protocol::complete_step),
+        )
+        .route(
             routes::REPOS,
             get(http::repos::list_repos).post(http::repos::create_repo),
         )
@@ -127,6 +134,10 @@ pub fn router(state: AppState) -> Router {
         .route(
             routes::REPO_RUN_DETAIL,
             get(http::runs::get_repository_run_detail),
+        )
+        .route(
+            routes::REPO_RUN_STEP_LOGS,
+            get(http::runs::get_repository_run_step_logs),
         )
         .route(routes::REPO_RUN_CANCEL, post(http::runs::cancel_run))
         .route(routes::REPO_RUN_RETRY, post(http::runs::retry_run))

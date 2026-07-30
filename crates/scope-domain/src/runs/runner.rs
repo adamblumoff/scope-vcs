@@ -3,7 +3,7 @@ use serde::{Deserialize, Serialize};
 
 pub const MAX_RUNNER_NAME_BYTES: usize = 64;
 pub const MAX_RUNNER_VERSION_BYTES: usize = 100;
-pub const RUNNER_PROTOCOL_VERSION: u32 = 2;
+pub const RUNNER_PROTOCOL_VERSION: u32 = 3;
 
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 #[serde(transparent)]
@@ -258,7 +258,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn runner_names_and_capabilities_are_v1_exact() {
+    fn runner_names_and_protocol_compatibility_are_exact() {
         assert_eq!(
             RunnerName::parse("linux-box").unwrap().as_str(),
             "linux-box"

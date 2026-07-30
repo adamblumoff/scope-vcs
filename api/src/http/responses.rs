@@ -59,12 +59,126 @@ pub(crate) struct RepositoryRunSummaryResponse {
     pub(crate) desired_runner: Option<String>,
     pub(crate) state: RepositoryRunState,
     pub(crate) cancellation_requested: bool,
-    pub(crate) attempt_number: u32,
     pub(crate) created_at_unix: u64,
     pub(crate) updated_at_unix: u64,
     pub(crate) completed_at_unix: Option<u64>,
     pub(crate) can_cancel: bool,
     pub(crate) can_retry: bool,
+}
+
+#[derive(Clone, Copy, Debug, Serialize)]
+#[serde(rename_all = "kebab-case")]
+#[cfg_attr(feature = "type-export", derive(ts_rs::TS))]
+#[cfg_attr(feature = "type-export", ts(rename_all = "kebab-case"))]
+pub(crate) enum RepositoryRunAttemptState {
+    Leased,
+    Running,
+    Succeeded,
+    Failed,
+    Canceled,
+    Lost,
+}
+
+impl From<scope_domain::runs::run::AttemptState> for RepositoryRunAttemptState {
+    fn from(state: scope_domain::runs::run::AttemptState) -> Self {
+        use scope_domain::runs::run::AttemptState;
+        match state {
+            AttemptState::Leased => Self::Leased,
+            AttemptState::Running => Self::Running,
+            AttemptState::Succeeded => Self::Succeeded,
+            AttemptState::Failed => Self::Failed,
+            AttemptState::Canceled => Self::Canceled,
+            AttemptState::Lost => Self::Lost,
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Serialize)]
+#[serde(rename_all = "kebab-case")]
+#[cfg_attr(feature = "type-export", derive(ts_rs::TS))]
+#[cfg_attr(feature = "type-export", ts(rename_all = "kebab-case"))]
+pub(crate) enum RepositoryRunStepState {
+    Pending,
+    Running,
+    Succeeded,
+    Failed,
+    Canceled,
+    Lost,
+    Skipped,
+}
+
+impl From<scope_domain::runs::run::StepState> for RepositoryRunStepState {
+    fn from(state: scope_domain::runs::run::StepState) -> Self {
+        use scope_domain::runs::run::StepState;
+        match state {
+            StepState::Pending => Self::Pending,
+            StepState::Running => Self::Running,
+            StepState::Succeeded => Self::Succeeded,
+            StepState::Failed => Self::Failed,
+            StepState::Canceled => Self::Canceled,
+            StepState::Lost => Self::Lost,
+            StepState::Skipped => Self::Skipped,
+        }
+    }
+}
+
+#[derive(Clone, Debug, Serialize)]
+#[serde(tag = "kind", rename_all = "kebab-case")]
+#[cfg_attr(feature = "type-export", derive(ts_rs::TS))]
+#[cfg_attr(feature = "type-export", ts(tag = "kind", rename_all = "kebab-case"))]
+pub(crate) enum RepositoryRunTerminalReason {
+    StepFailed { step_index: u32, exit_code: i32 },
+    TimedOut { step_index: Option<u32> },
+    Canceled { step_index: Option<u32> },
+    RunnerLost { step_index: Option<u32> },
+    RunnerSetupFailed { exit_code: i32, message: String },
+}
+
+impl From<scope_domain::runs::run::AttemptTerminalReason> for RepositoryRunTerminalReason {
+    fn from(reason: scope_domain::runs::run::AttemptTerminalReason) -> Self {
+        use scope_domain::runs::run::AttemptTerminalReason;
+        match reason {
+            AttemptTerminalReason::StepFailed {
+                step_index,
+                exit_code,
+            } => Self::StepFailed {
+                step_index,
+                exit_code,
+            },
+            AttemptTerminalReason::TimedOut { step_index } => Self::TimedOut { step_index },
+            AttemptTerminalReason::Canceled { step_index } => Self::Canceled { step_index },
+            AttemptTerminalReason::RunnerLost { step_index } => Self::RunnerLost { step_index },
+            AttemptTerminalReason::RunnerSetupFailed { exit_code, message } => {
+                Self::RunnerSetupFailed { exit_code, message }
+            }
+        }
+    }
+}
+
+#[derive(Debug, Serialize)]
+#[cfg_attr(feature = "type-export", derive(ts_rs::TS))]
+pub(crate) struct RepositoryRunStepResponse {
+    pub(crate) index: u32,
+    pub(crate) name: String,
+    pub(crate) command: String,
+    pub(crate) state: RepositoryRunStepState,
+    pub(crate) started_at_unix: Option<u64>,
+    pub(crate) completed_at_unix: Option<u64>,
+    pub(crate) exit_code: Option<i32>,
+}
+
+#[derive(Debug, Serialize)]
+#[cfg_attr(feature = "type-export", derive(ts_rs::TS))]
+pub(crate) struct RepositoryRunAttemptResponse {
+    pub(crate) id: String,
+    pub(crate) runner_id: String,
+    pub(crate) runner_name: String,
+    pub(crate) state: RepositoryRunAttemptState,
+    pub(crate) created_at_unix: u64,
+    pub(crate) started_at_unix: Option<u64>,
+    pub(crate) completed_at_unix: Option<u64>,
+    pub(crate) terminal_reason: Option<RepositoryRunTerminalReason>,
+    pub(crate) steps: Vec<RepositoryRunStepResponse>,
 }
 
 #[derive(Clone, Copy, Debug, Serialize)]
@@ -98,7 +212,6 @@ pub(crate) struct RepositoryOperationsResponse {
 #[cfg_attr(feature = "type-export", derive(ts_rs::TS))]
 pub(crate) struct RepositoryRunLogResponse {
     pub(crate) position: u64,
-    pub(crate) attempt_id: String,
     pub(crate) sequence: u64,
     pub(crate) text: String,
     pub(crate) created_at_unix: u64,
@@ -108,7 +221,14 @@ pub(crate) struct RepositoryRunLogResponse {
 #[cfg_attr(feature = "type-export", derive(ts_rs::TS))]
 pub(crate) struct RepositoryRunDetailResponse {
     pub(crate) run: RepositoryRunSummaryResponse,
+    pub(crate) attempts: Vec<RepositoryRunAttemptResponse>,
+}
+
+#[derive(Debug, Serialize)]
+#[cfg_attr(feature = "type-export", derive(ts_rs::TS))]
+pub(crate) struct RepositoryRunStepLogPageResponse {
     pub(crate) logs: Vec<RepositoryRunLogResponse>,
+    pub(crate) next_after: u64,
     pub(crate) logs_truncated: bool,
 }
 

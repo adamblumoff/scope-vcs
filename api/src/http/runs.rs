@@ -2,7 +2,8 @@ use crate::{
     auth::scope::require_scope_user,
     error::ApiError,
     http::responses::{
-        RepositoryOperationsResponse, RepositoryRunDetailResponse, RepositoryRunLogResponse,
+        RepositoryOperationsResponse, RepositoryRunAttemptResponse, RepositoryRunDetailResponse,
+        RepositoryRunLogResponse, RepositoryRunStepLogPageResponse, RepositoryRunStepResponse,
         RepositoryRunSummaryResponse, RepositoryRunnerResponse, RepositoryRunnerState,
         git_oid_request,
     },
@@ -33,6 +34,7 @@ use scope_domain::{
     store::RepositoryActor,
 };
 use scope_object_store::{ContentObjectKind, put_content_object};
+use serde::Deserialize;
 use std::{
     collections::BTreeMap,
     convert::Infallible,
@@ -52,7 +54,7 @@ const RUN_LOG_STREAM_BUFFER: usize = 32;
 const RUN_LOG_STREAM_AUTH_RECHECK: Duration = Duration::from_secs(30);
 const GIT_INSPECTION_TIMEOUT: Duration = Duration::from_secs(30);
 const REPOSITORY_RUN_LIMIT: u64 = 20;
-const REPOSITORY_RUN_LOG_LIMIT: u64 = 128;
+const REPOSITORY_STEP_LOG_LIMIT: u64 = 128;
 const RUNNER_ONLINE_WINDOW_SECONDS: u64 = 90;
 
 pub(crate) async fn create_manual_run(
@@ -181,28 +183,109 @@ pub(crate) async fn get_repository_run_detail(
     headers: HeaderMap,
     Path((owner, repo_name, run_id)): Path<(String, String, String)>,
 ) -> Result<Json<RepositoryRunDetailResponse>, ApiError> {
-    let (run, _) = require_run_access(&state, &headers, &owner, &repo_name, &run_id).await?;
+    require_run_access(&state, &headers, &owner, &repo_name, &run_id).await?;
     let runs_store = state.metadata.runs();
-    let (recent_logs, stored_logs_truncated) = tokio::try_join!(
-        runs_store.recent_run_logs(&run_id, REPOSITORY_RUN_LOG_LIMIT),
-        runs_store.run_has_truncated_logs(&run_id),
-    )?;
-    let logs_truncated = recent_logs.truncated_in_view || stored_logs_truncated;
+    let detail = runs_store
+        .run_detail(&run_id)
+        .await?
+        .ok_or_else(|| ApiError::not_found("run not found"))?;
+    let workflow_steps = detail.workflow_revision.definition().steps();
+    let attempts = detail
+        .attempts
+        .into_iter()
+        .map(|detail| {
+            let attempt = detail.attempt;
+            let steps = detail
+                .steps
+                .into_iter()
+                .map(|step| {
+                    let definition =
+                        workflow_steps
+                            .get(step.step_index as usize)
+                            .ok_or_else(|| {
+                                ApiError::internal_message(
+                                    "persisted run step is missing from its workflow revision",
+                                )
+                            })?;
+                    Ok(RepositoryRunStepResponse {
+                        index: step.step_index,
+                        name: definition.name().to_string(),
+                        command: definition.run().to_string(),
+                        state: step.state.into(),
+                        started_at_unix: step.started_at_unix,
+                        completed_at_unix: step.completed_at_unix,
+                        exit_code: step.exit_code,
+                    })
+                })
+                .collect::<Result<Vec<_>, ApiError>>()?;
+            Ok(RepositoryRunAttemptResponse {
+                id: attempt.id,
+                runner_id: attempt.runner_id,
+                runner_name: attempt.runner_name,
+                state: attempt.state.into(),
+                created_at_unix: attempt.created_at_unix,
+                started_at_unix: attempt.started_at_unix,
+                completed_at_unix: attempt.completed_at_unix,
+                terminal_reason: attempt.terminal_reason.map(Into::into),
+                steps,
+            })
+        })
+        .collect::<Result<Vec<_>, ApiError>>()?;
 
     Ok(Json(RepositoryRunDetailResponse {
-        run: repository_run_summary(&run),
-        logs: recent_logs
+        run: repository_run_summary(&detail.run),
+        attempts,
+    }))
+}
+
+#[derive(Debug, Deserialize)]
+pub(crate) struct RepositoryStepLogsQuery {
+    #[serde(default)]
+    after: u64,
+}
+
+pub(crate) async fn get_repository_run_step_logs(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path((owner, repo_name, run_id, attempt_id, step_index)): Path<(
+        String,
+        String,
+        String,
+        String,
+        u32,
+    )>,
+    Query(query): Query<RepositoryStepLogsQuery>,
+) -> Result<Json<RepositoryRunStepLogPageResponse>, ApiError> {
+    require_run_access(&state, &headers, &owner, &repo_name, &run_id).await?;
+    let page = state
+        .metadata
+        .runs()
+        .attempt_step_logs_after(
+            &run_id,
+            &attempt_id,
+            step_index,
+            query.after,
+            REPOSITORY_STEP_LOG_LIMIT,
+        )
+        .await?;
+    let next_after = page
+        .logs
+        .last()
+        .map_or(query.after, |stored| stored.position);
+
+    Ok(Json(RepositoryRunStepLogPageResponse {
+        logs: page
             .logs
             .into_iter()
             .map(|stored| RepositoryRunLogResponse {
                 position: stored.position,
-                attempt_id: stored.chunk.attempt_id,
                 sequence: stored.chunk.sequence,
                 text: stored.chunk.text,
                 created_at_unix: stored.chunk.created_at_unix,
             })
             .collect(),
-        logs_truncated,
+        next_after,
+        logs_truncated: page.logs_truncated,
     }))
 }
 
@@ -399,6 +482,7 @@ async fn stream_run_events(
             cursor = log.position;
             let response = RunLogResponse {
                 attempt_id: log.chunk.attempt_id,
+                step_index: log.chunk.step_index,
                 position: log.position,
                 sequence: log.chunk.sequence,
                 text: log.chunk.text,
@@ -557,7 +641,6 @@ fn repository_run_summary(run: &Run) -> RepositoryRunSummaryResponse {
         },
         state: run.state.into(),
         cancellation_requested: run.cancellation_requested,
-        attempt_number: run.last_attempt_number,
         created_at_unix: run.created_at_unix,
         updated_at_unix: run.updated_at_unix,
         completed_at_unix: run.completed_at_unix,

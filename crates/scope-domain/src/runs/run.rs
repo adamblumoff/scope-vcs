@@ -1,184 +1,16 @@
 use super::{
     runner::{Runner, RunnerGrant, required, validate_sha256_hash},
+    step::{interrupt_steps, skip_pending_steps},
     workflow::{RunnerSelector, WorkflowIdentity, WorkflowRevision},
 };
-use crate::{
-    content_ref::ContentRef, error::DomainError, projection::ProjectionViewKey, store::SourceBlob,
-};
-use serde::{Deserialize, Serialize};
+use crate::error::DomainError;
 
-pub const MAX_RUN_LOG_CHUNK_BYTES: usize = 64 * 1024;
-pub const MAX_RUN_LOG_BYTES_PER_ATTEMPT: u64 = 10 * 1024 * 1024;
-pub use super::state::{AttemptState, RunState};
+pub use super::log::{MAX_RUN_LOG_BYTES_PER_ATTEMPT, MAX_RUN_LOG_CHUNK_BYTES, RunLogChunk};
+pub use super::source::{RunSource, RunTrigger};
+pub use super::state::{AttemptState, RunState, StepState};
+pub use super::step::{AttemptConclusion, AttemptTerminalReason, RunAttemptStep, StepConclusion};
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "kebab-case")]
-pub enum RunTrigger {
-    Manual,
-    PushMain,
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum AttemptConclusion {
-    Succeeded,
-    Failed { exit_code: i32 },
-    Canceled,
-}
-
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct RunLogChunk {
-    pub attempt_id: String,
-    pub sequence: u64,
-    pub text: String,
-    pub created_at_unix: u64,
-}
-
-impl RunLogChunk {
-    pub fn new(
-        attempt_id: impl Into<String>,
-        sequence: u64,
-        text: impl Into<String>,
-        created_at_unix: u64,
-    ) -> Result<Self, DomainError> {
-        let attempt_id = required("run log attempt id", attempt_id.into())?;
-        if sequence == 0 {
-            return Err(DomainError::invalid_input(
-                "run log sequence must be positive",
-            ));
-        }
-        let text = text.into();
-        if text.is_empty() {
-            return Err(DomainError::invalid_input("run log text is required"));
-        }
-        if text.len() > MAX_RUN_LOG_CHUNK_BYTES {
-            return Err(DomainError::invalid_input(format!(
-                "run log chunk cannot exceed {MAX_RUN_LOG_CHUNK_BYTES} bytes"
-            )));
-        }
-        Ok(Self {
-            attempt_id,
-            sequence,
-            text,
-            created_at_unix,
-        })
-    }
-}
-
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(tag = "kind", rename_all = "kebab-case")]
-pub enum RunSource {
-    EphemeralGitBundle {
-        object: SourceBlob,
-    },
-    AcceptedRevision {
-        change_version: u64,
-        manifest: SourceBlob,
-        snapshot: SourceBlob,
-        audience: ProjectionViewKey,
-    },
-}
-
-impl RunSource {
-    pub fn ephemeral_git_bundle(object: SourceBlob) -> Result<Self, DomainError> {
-        validate_source_blob(&object, "run source bundle")?;
-        if !matches!(object.content_ref, ContentRef::GitBundleSha256(_)) {
-            return Err(DomainError::invalid_input(
-                "ephemeral run source must be a Git bundle",
-            ));
-        }
-        Ok(Self::EphemeralGitBundle { object })
-    }
-
-    pub fn accepted_revision(
-        change_version: u64,
-        manifest: SourceBlob,
-        snapshot: SourceBlob,
-        audience: ProjectionViewKey,
-    ) -> Result<Self, DomainError> {
-        if change_version == 0 {
-            return Err(DomainError::invalid_input(
-                "accepted run source change version must be positive",
-            ));
-        }
-        validate_source_blob(&manifest, "run source manifest")?;
-        if !matches!(manifest.content_ref, ContentRef::GitManifestSha256(_)) {
-            return Err(DomainError::invalid_input(
-                "accepted run source must use a Git manifest",
-            ));
-        }
-        validate_source_blob(&snapshot, "accepted run source snapshot")?;
-        if !matches!(snapshot.content_ref, ContentRef::GitBundleSha256(_)) {
-            return Err(DomainError::invalid_input(
-                "accepted run source snapshot must be a Git bundle",
-            ));
-        }
-        if snapshot.git_oid != manifest.git_oid {
-            return Err(DomainError::invalid_input(
-                "accepted run source snapshot and manifest heads do not match",
-            ));
-        }
-        Ok(Self::AcceptedRevision {
-            change_version,
-            manifest,
-            snapshot,
-            audience,
-        })
-    }
-
-    pub fn snapshot(&self) -> &SourceBlob {
-        match self {
-            Self::EphemeralGitBundle { object } => object,
-            Self::AcceptedRevision { snapshot, .. } => snapshot,
-        }
-    }
-
-    pub fn retained_objects(&self) -> Vec<&SourceBlob> {
-        match self {
-            Self::EphemeralGitBundle { object } => vec![object],
-            Self::AcceptedRevision {
-                manifest, snapshot, ..
-            } => vec![manifest, snapshot],
-        }
-    }
-
-    pub fn digest(&self) -> &str {
-        &self.snapshot().sha256
-    }
-
-    pub fn git_oid(&self) -> &str {
-        &self.snapshot().git_oid
-    }
-
-    pub fn is_private_only(&self) -> bool {
-        matches!(
-            self,
-            Self::EphemeralGitBundle { .. }
-                | Self::AcceptedRevision {
-                    audience: ProjectionViewKey::Private,
-                    ..
-                }
-        )
-    }
-}
-
-fn validate_source_blob(blob: &SourceBlob, label: &str) -> Result<(), DomainError> {
-    validate_sha256_hash(&format!("{label} digest"), &blob.sha256)?;
-    if blob.content_ref.sha256() != Some(blob.sha256.as_str()) {
-        return Err(DomainError::invalid_input(format!(
-            "{label} content reference does not match its digest"
-        )));
-    }
-    validate_git_oid(&format!("{label} Git OID"), &blob.git_oid)
-}
-
-fn validate_git_oid(label: &str, git_oid: &str) -> Result<(), DomainError> {
-    if git_oid.len() != 40 || !git_oid.bytes().all(|byte| byte.is_ascii_hexdigit()) {
-        return Err(DomainError::invalid_input(format!(
-            "{label} must be a SHA-1 hex digest"
-        )));
-    }
-    Ok(())
-}
+pub const MAX_RUN_ATTEMPTS: u32 = 100;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct PinnedContainerImage(String);
@@ -345,11 +177,12 @@ impl Run {
         &mut self,
         runner: &Runner,
         grant: &RunnerGrant,
+        revision: &WorkflowRevision,
         attempt_id: impl Into<String>,
         token_hash: impl Into<String>,
         now_unix: u64,
         lease_expires_at_unix: u64,
-    ) -> Result<RunAttempt, DomainError> {
+    ) -> Result<(RunAttempt, Vec<RunAttemptStep>), DomainError> {
         if self.state != RunState::Queued || self.current_attempt_id.is_some() {
             return Err(DomainError::conflict("run is not queued"));
         }
@@ -358,7 +191,7 @@ impl Run {
         }
         if !runner.supports_dispatch() {
             return Err(DomainError::conflict(
-                "runner does not support the V1 dispatch protocol",
+                "runner does not support the V3 dispatch protocol",
             ));
         }
         if !grant.is_active()
@@ -375,6 +208,7 @@ impl Run {
                 "attempt lease expiry must be in the future",
             ));
         }
+        self.validate_workflow_revision(revision)?;
         self.ensure_time_not_before_update(now_unix)?;
         let attempt_id = required("run attempt id", attempt_id.into())?;
         let token_hash = token_hash.into();
@@ -383,11 +217,15 @@ impl Run {
             .last_attempt_number
             .checked_add(1)
             .ok_or_else(|| DomainError::conflict("run attempt number overflow"))?;
+        if number > MAX_RUN_ATTEMPTS {
+            return Err(DomainError::conflict("run attempt limit reached"));
+        }
         let attempt = RunAttempt {
             id: attempt_id.clone(),
             run_id: self.id.clone(),
             number,
             runner_id: runner.id.clone(),
+            runner_name: grant.name.as_str().to_string(),
             token_hash,
             token_expires_at_unix: lease_expires_at_unix,
             state: AttemptState::Leased,
@@ -396,15 +234,26 @@ impl Run {
             created_at_unix: now_unix,
             started_at_unix: None,
             completed_at_unix: None,
-            exit_code: None,
+            terminal_reason: None,
             log_bytes: 0,
             logs_truncated: false,
         };
+        let steps = revision
+            .definition()
+            .steps()
+            .iter()
+            .enumerate()
+            .map(|(index, _)| {
+                let index = u32::try_from(index)
+                    .map_err(|_| DomainError::conflict("workflow step index overflow"))?;
+                RunAttemptStep::pending(attempt_id.clone(), index)
+            })
+            .collect::<Result<Vec<_>, _>>()?;
         self.state = RunState::Leased;
         self.last_attempt_number = number;
         self.current_attempt_id = Some(attempt_id);
         self.updated_at_unix = now_unix;
-        Ok(attempt)
+        Ok((attempt, steps))
     }
 
     pub fn can_request_cancellation(&self) -> bool {
@@ -491,7 +340,7 @@ impl Run {
     }
 
     pub fn can_retry(&self) -> bool {
-        self.state.is_terminal()
+        self.state.is_terminal() && self.last_attempt_number < MAX_RUN_ATTEMPTS
     }
 
     pub fn retry(&mut self, now_unix: u64) -> Result<(), DomainError> {
@@ -519,7 +368,7 @@ impl Run {
         Ok(())
     }
 
-    fn ensure_time_not_before_update(&self, now_unix: u64) -> Result<(), DomainError> {
+    pub(crate) fn ensure_time_not_before_update(&self, now_unix: u64) -> Result<(), DomainError> {
         if now_unix < self.updated_at_unix {
             return Err(DomainError::invalid_input(
                 "run transition time cannot move backward",
@@ -554,6 +403,11 @@ impl Run {
                 "run cannot reference attempt zero",
             ));
         }
+        if self.last_attempt_number > MAX_RUN_ATTEMPTS {
+            return Err(DomainError::invariant_violation(
+                "run attempt history exceeds its bounded limit",
+            ));
+        }
         if self.updated_at_unix < self.created_at_unix
             || self
                 .completed_at_unix
@@ -585,6 +439,7 @@ pub struct RunAttempt {
     pub run_id: String,
     pub number: u32,
     pub runner_id: String,
+    pub runner_name: String,
     pub token_hash: String,
     pub token_expires_at_unix: u64,
     pub state: AttemptState,
@@ -593,7 +448,7 @@ pub struct RunAttempt {
     pub created_at_unix: u64,
     pub started_at_unix: Option<u64>,
     pub completed_at_unix: Option<u64>,
-    pub exit_code: Option<i32>,
+    pub terminal_reason: Option<AttemptTerminalReason>,
     pub log_bytes: u64,
     pub logs_truncated: bool,
 }
@@ -605,6 +460,7 @@ impl RunAttempt {
         run_id: impl Into<String>,
         number: u32,
         runner_id: impl Into<String>,
+        runner_name: impl Into<String>,
         token_hash: impl Into<String>,
         token_expires_at_unix: u64,
         state: AttemptState,
@@ -613,7 +469,7 @@ impl RunAttempt {
         created_at_unix: u64,
         started_at_unix: Option<u64>,
         completed_at_unix: Option<u64>,
-        exit_code: Option<i32>,
+        terminal_reason: Option<AttemptTerminalReason>,
         log_bytes: u64,
         logs_truncated: bool,
     ) -> Result<Self, DomainError> {
@@ -624,6 +480,7 @@ impl RunAttempt {
             run_id: required("run attempt run id", run_id.into())?,
             number,
             runner_id: required("run attempt runner id", runner_id.into())?,
+            runner_name: required("run attempt runner name", runner_name.into())?,
             token_hash,
             token_expires_at_unix,
             state,
@@ -632,7 +489,7 @@ impl RunAttempt {
             created_at_unix,
             started_at_unix,
             completed_at_unix,
-            exit_code,
+            terminal_reason,
             log_bytes,
             logs_truncated,
         };
@@ -697,7 +554,11 @@ impl RunAttempt {
         Ok(run.cancellation_requested)
     }
 
-    pub fn accept_log_chunk(&mut self, chunk: &RunLogChunk) -> Result<bool, DomainError> {
+    pub fn accept_log_chunk(
+        &mut self,
+        steps: &[RunAttemptStep],
+        chunk: &RunLogChunk,
+    ) -> Result<bool, DomainError> {
         if chunk.attempt_id != self.id {
             return Err(DomainError::invalid_input(
                 "run log attempt id does not match the attempt",
@@ -706,6 +567,15 @@ impl RunAttempt {
         if self.state.is_terminal() {
             return Err(DomainError::conflict(
                 "terminal attempts cannot append logs",
+            ));
+        }
+        self.validate_steps(steps)?;
+        if steps
+            .get(chunk.step_index as usize)
+            .is_none_or(|step| step.state != StepState::Running)
+        {
+            return Err(DomainError::conflict(
+                "logs can only be appended to the running step",
             ));
         }
         if self.logs_truncated {
@@ -735,6 +605,7 @@ impl RunAttempt {
     pub fn complete(
         &mut self,
         run: &mut Run,
+        steps: &mut [RunAttemptStep],
         runner_id: &str,
         token_hash: &str,
         conclusion: AttemptConclusion,
@@ -742,7 +613,7 @@ impl RunAttempt {
     ) -> Result<(), DomainError> {
         if self.state.is_terminal() || run.state.is_terminal() {
             self.authenticate_identity(run, runner_id, token_hash)?;
-            return if self.matches_conclusion(conclusion) {
+            return if self.matches_conclusion(&conclusion) {
                 Ok(())
             } else {
                 Err(DomainError::conflict(
@@ -751,32 +622,55 @@ impl RunAttempt {
             };
         }
         self.authenticate(run, runner_id, token_hash, now_unix)?;
+        self.validate_steps(steps)?;
         self.ensure_time_not_before_heartbeat(now_unix)?;
         run.ensure_time_not_before_update(now_unix)?;
-        let (attempt_state, run_state, exit_code) = match conclusion {
-            AttemptConclusion::Succeeded => {
-                if self.state != AttemptState::Running {
-                    return Err(DomainError::conflict("only a running attempt can succeed"));
-                }
-                (AttemptState::Succeeded, RunState::Succeeded, Some(0))
-            }
-            AttemptConclusion::Failed { exit_code } => {
-                if exit_code == 0 {
-                    return Err(DomainError::invalid_input(
-                        "failed attempt exit code cannot be zero",
+        let (attempt_state, run_state, terminal_reason) = match conclusion {
+            AttemptConclusion::SetupFailed { exit_code, message } => {
+                if self.state != AttemptState::Leased {
+                    return Err(DomainError::conflict(
+                        "runner setup can only fail before execution starts",
                     ));
                 }
-                (AttemptState::Failed, RunState::Failed, Some(exit_code))
+                if exit_code == 0 {
+                    return Err(DomainError::invalid_input(
+                        "runner setup failure exit code cannot be zero",
+                    ));
+                }
+                if !super::step::valid_setup_failure_message(&message) {
+                    return Err(DomainError::invalid_input(
+                        "runner setup failure message is required and must not exceed 2048 bytes",
+                    ));
+                }
+                skip_pending_steps(steps, now_unix);
+                (
+                    AttemptState::Failed,
+                    RunState::Failed,
+                    AttemptTerminalReason::RunnerSetupFailed { exit_code, message },
+                )
+            }
+            AttemptConclusion::TimedOut => {
+                let step_index = interrupt_steps(steps, StepState::Canceled, now_unix);
+                (
+                    AttemptState::Failed,
+                    RunState::Failed,
+                    AttemptTerminalReason::TimedOut { step_index },
+                )
             }
             AttemptConclusion::Canceled => {
                 if !run.cancellation_requested {
                     return Err(DomainError::conflict("run cancellation was not requested"));
                 }
-                (AttemptState::Canceled, RunState::Canceled, None)
+                let step_index = interrupt_steps(steps, StepState::Canceled, now_unix);
+                (
+                    AttemptState::Canceled,
+                    RunState::Canceled,
+                    AttemptTerminalReason::Canceled { step_index },
+                )
             }
         };
         self.state = attempt_state;
-        self.exit_code = exit_code;
+        self.terminal_reason = Some(terminal_reason);
         self.completed_at_unix = Some(now_unix);
         run.state = run_state;
         run.updated_at_unix = now_unix;
@@ -784,21 +678,35 @@ impl RunAttempt {
         Ok(())
     }
 
-    fn matches_conclusion(&self, conclusion: AttemptConclusion) -> bool {
-        match conclusion {
-            AttemptConclusion::Succeeded => {
-                self.state == AttemptState::Succeeded && self.exit_code == Some(0)
+    fn matches_conclusion(&self, conclusion: &AttemptConclusion) -> bool {
+        match (conclusion, &self.terminal_reason) {
+            (
+                AttemptConclusion::SetupFailed { exit_code, message },
+                Some(AttemptTerminalReason::RunnerSetupFailed {
+                    exit_code: existing,
+                    message: existing_message,
+                }),
+            ) => {
+                self.state == AttemptState::Failed
+                    && exit_code == existing
+                    && message == existing_message
             }
-            AttemptConclusion::Failed { exit_code } => {
-                self.state == AttemptState::Failed && self.exit_code == Some(exit_code)
+            (AttemptConclusion::TimedOut, Some(AttemptTerminalReason::TimedOut { .. })) => {
+                self.state == AttemptState::Failed
             }
-            AttemptConclusion::Canceled => {
-                self.state == AttemptState::Canceled && self.exit_code.is_none()
+            (AttemptConclusion::Canceled, Some(AttemptTerminalReason::Canceled { .. })) => {
+                self.state == AttemptState::Canceled
             }
+            _ => false,
         }
     }
 
-    pub fn expire(&mut self, run: &mut Run, now_unix: u64) -> Result<(), DomainError> {
+    pub fn expire(
+        &mut self,
+        run: &mut Run,
+        steps: &mut [RunAttemptStep],
+        now_unix: u64,
+    ) -> Result<(), DomainError> {
         run.ensure_current_attempt(self)?;
         if self.state.is_terminal() {
             return Err(DomainError::conflict("attempt is terminal"));
@@ -806,12 +714,13 @@ impl RunAttempt {
         if now_unix < self.lease_expires_at_unix {
             return Err(DomainError::conflict("attempt lease has not expired"));
         }
-        self.finish_lost_or_requeue(run, now_unix)
+        self.finish_lost_or_requeue(run, steps, now_unix)
     }
 
     pub fn abandon(
         &mut self,
         run: &mut Run,
+        steps: &mut [RunAttemptStep],
         runner_id: &str,
         token_hash: &str,
         now_unix: u64,
@@ -820,14 +729,22 @@ impl RunAttempt {
         if self.state.is_terminal() {
             return Ok(());
         }
-        self.finish_lost_or_requeue(run, now_unix)
+        self.finish_lost_or_requeue(run, steps, now_unix)
     }
 
-    fn finish_lost_or_requeue(&mut self, run: &mut Run, now_unix: u64) -> Result<(), DomainError> {
+    fn finish_lost_or_requeue(
+        &mut self,
+        run: &mut Run,
+        steps: &mut [RunAttemptStep],
+        now_unix: u64,
+    ) -> Result<(), DomainError> {
         run.ensure_current_attempt(self)?;
+        self.validate_steps(steps)?;
         run.ensure_time_not_before_update(now_unix)?;
         let was_running = self.state == AttemptState::Running;
+        let step_index = interrupt_steps(steps, StepState::Lost, now_unix);
         self.state = AttemptState::Lost;
+        self.terminal_reason = Some(AttemptTerminalReason::RunnerLost { step_index });
         self.completed_at_unix = Some(now_unix);
         run.current_attempt_id = None;
         run.updated_at_unix = now_unix;
@@ -843,7 +760,7 @@ impl RunAttempt {
         Ok(())
     }
 
-    fn authenticate(
+    pub(crate) fn authenticate(
         &self,
         run: &Run,
         runner_id: &str,
@@ -859,7 +776,7 @@ impl RunAttempt {
         Ok(())
     }
 
-    fn authenticate_identity(
+    pub(crate) fn authenticate_identity(
         &self,
         run: &Run,
         runner_id: &str,
@@ -887,7 +804,10 @@ impl RunAttempt {
         Ok(())
     }
 
-    fn ensure_time_not_before_heartbeat(&self, now_unix: u64) -> Result<(), DomainError> {
+    pub(crate) fn ensure_time_not_before_heartbeat(
+        &self,
+        now_unix: u64,
+    ) -> Result<(), DomainError> {
         if now_unix < self.last_heartbeat_at_unix {
             return Err(DomainError::invalid_input(
                 "attempt transition time cannot move backward",
@@ -939,24 +859,21 @@ impl RunAttempt {
             ));
         }
         match self.state {
-            AttemptState::Succeeded if self.exit_code != Some(0) => {
+            AttemptState::Succeeded if self.terminal_reason.is_some() => {
                 return Err(DomainError::invariant_violation(
-                    "successful attempt must have exit code zero",
+                    "successful attempt cannot have a terminal failure reason",
                 ));
             }
-            AttemptState::Failed if self.exit_code.is_none_or(|code| code == 0) => {
-                return Err(DomainError::invariant_violation(
-                    "failed attempt must have a nonzero exit code",
-                ));
-            }
-            AttemptState::Leased
-            | AttemptState::Running
-            | AttemptState::Canceled
-            | AttemptState::Lost
-                if self.exit_code.is_some() =>
+            AttemptState::Failed | AttemptState::Canceled | AttemptState::Lost
+                if self.terminal_reason.is_none() =>
             {
                 return Err(DomainError::invariant_violation(
-                    "non-failed attempt cannot have an exit code",
+                    "unsuccessful terminal attempt must have a terminal reason",
+                ));
+            }
+            AttemptState::Leased | AttemptState::Running if self.terminal_reason.is_some() => {
+                return Err(DomainError::invariant_violation(
+                    "active attempt cannot have a terminal reason",
                 ));
             }
             _ => {}
@@ -964,6 +881,5 @@ impl RunAttempt {
         Ok(())
     }
 }
-
 #[cfg(test)]
 mod tests;

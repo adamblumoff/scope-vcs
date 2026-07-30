@@ -1,7 +1,8 @@
 use crate::{
     api::{
-        abandon_attempt, api_url, append_attempt_log, attach_runner_repository, attempt_heartbeat,
-        attempt_recovery_status, attempt_source, attempt_start, complete_attempt,
+        AttemptRecoveryLookup, abandon_attempt, api_url, append_attempt_log,
+        attach_runner_repository, attempt_heartbeat, attempt_recovery_status,
+        attempt_recovery_status_if_active, attempt_source, complete_attempt,
         detach_runner_repository, get_repo, get_runner, register_runner, runner_claim, runner_poll,
     },
     login::session_from_cache_or_device,
@@ -12,18 +13,17 @@ use scope_api_contract::{
     AppendAttemptLogRequest, AttemptConclusionRequest, ClaimRunResponse, CompleteAttemptRequest,
     RegisterRunnerRequest, RunnerResponse,
 };
-use scope_domain::runs::runner::{RUNNER_PROTOCOL_VERSION, RunnerCapabilities};
+use scope_domain::runs::{
+    run::StepState,
+    runner::{RUNNER_PROTOCOL_VERSION, RunnerCapabilities},
+    step::MAX_RUN_SETUP_FAILURE_MESSAGE_BYTES,
+};
 use sha2::{Digest, Sha256};
 use std::{
     fs,
-    io::{BufReader, Read, Write},
+    io::{Read, Write},
     path::Path,
-    process::{Child, Command, Stdio},
-    sync::{
-        Arc,
-        atomic::{AtomicBool, Ordering},
-        mpsc,
-    },
+    process::Command,
     thread,
     time::Duration,
 };
@@ -32,6 +32,8 @@ mod checkout;
 mod config;
 mod container;
 mod image;
+mod step_logs;
+mod steps;
 mod supervisor;
 mod systemd;
 mod workspace;
@@ -43,16 +45,19 @@ use config::{
 #[cfg(test)]
 use container::apply_container_limits;
 use container::{
-    ContainerGuard, configure_job_container_creation, container_finished_at_unix,
-    container_is_running, container_started_at_unix, doctor_local, recovered_container_exit_code,
+    ContainerGuard, configure_job_container_creation, container_started_at_unix, doctor_local,
+    stop_container,
 };
 use image::resolve_container_image;
 mod recovery;
-#[cfg(test)]
-use recovery::RecoveryProgress;
 use recovery::{
-    RecoveryAttempt, mark_recovery_conclusion_pending, mark_recovery_execution_started,
-    persist_recovery_claim, recover_runner_state, update_recovery_log_sequence,
+    RecoveryAttempt, RecoveryProgress, mark_recovery_abandon_pending,
+    mark_recovery_conclusion_pending, mark_recovery_execution_started,
+    mark_recovery_step_completed, persist_recovery_claim, recover_runner_state,
+};
+use step_logs::drain_recovered_step_logs;
+use steps::{
+    report_step_conclusion, report_step_conclusion_until_reconciled, run_steps, write_step_programs,
 };
 use supervisor::{AttemptStopReason, AttemptSupervisor};
 #[cfg(test)]
@@ -204,22 +209,10 @@ pub fn daemon(config_path: Option<&Path>) -> anyhow::Result<()> {
         Some(path) => load_runner_config_from(path)?,
         None => load_runner_config()?,
     };
-    for recovery in recover_runner_state(&config)? {
-        let attempt_id = recovery.recovery.claim.attempt_id.clone();
-        let attempt_token = recovery.recovery.claim.attempt_token.clone();
-        if let Err(error) = resume_claim(&config, recovery) {
-            eprintln!("Could not resume interrupted attempt {attempt_id}: {error:#}");
-            if error.downcast_ref::<ConclusionReportPending>().is_some() {
-                continue;
-            }
-            if let Ok(client) = runner_client() {
-                let _ = abandon_attempt(&client, &config.api_url, &attempt_token, &attempt_id);
-            }
-        }
-    }
     let client = runner_client()?;
     eprintln!("Scope runner {} is polling {}", config.name, config.api_url);
     loop {
+        resume_interrupted_attempts(&config)?;
         match runner_poll(&client, &config.api_url, &config.secret) {
             Ok(response) => {
                 let Some(offer) = response.run else {
@@ -238,13 +231,30 @@ pub fn daemon(config_path: Option<&Path>) -> anyhow::Result<()> {
     }
 }
 
+fn resume_interrupted_attempts(config: &RunnerConfig) -> anyhow::Result<()> {
+    for recovery in recover_runner_state(config)? {
+        let attempt_id = recovery.recovery.claim.attempt_id.clone();
+        let attempt_token = recovery.recovery.claim.attempt_token.clone();
+        if let Err(error) = resume_claim(config, recovery) {
+            eprintln!("Could not resume interrupted attempt {attempt_id}: {error:#}");
+            if is_conclusion_report_pending(&error) {
+                continue;
+            }
+            if let Ok(client) = runner_client() {
+                let _ = abandon_attempt(&client, &config.api_url, &attempt_token, &attempt_id);
+            }
+        }
+    }
+    Ok(())
+}
+
 fn run_claim(config: &RunnerConfig, claim: ClaimRunResponse) {
     if let Err(error) = execute_claim(config, &claim) {
         eprintln!(
             "Run {} failed before completion: {error:#}",
             claim.job.run_id
         );
-        if error.downcast_ref::<ConclusionReportPending>().is_some() {
+        if is_conclusion_report_pending(&error) {
             return;
         }
         let client = match runner_client() {
@@ -254,27 +264,51 @@ fn run_claim(config: &RunnerConfig, claim: ClaimRunResponse) {
                 return;
             }
         };
-        let _ = append_attempt_log(
-            &client,
-            &config.api_url,
-            &claim.attempt_token,
-            &claim.attempt_id,
-            &AppendAttemptLogRequest {
-                sequence: 1,
-                text: format!("runner error: {error:#}\n"),
-            },
-        );
         if let Err(report_error) = complete_attempt(
             &client,
             &config.api_url,
             &claim.attempt_token,
             &claim.attempt_id,
             &CompleteAttemptRequest {
-                conclusion: AttemptConclusionRequest::Failed { exit_code: 1 },
+                conclusion: AttemptConclusionRequest::SetupFailed {
+                    exit_code: 1,
+                    message: bounded_setup_failure_message(&error),
+                },
             },
         ) {
             eprintln!("Could not report failed attempt: {report_error}");
+            let _ = abandon_attempt(
+                &client,
+                &config.api_url,
+                &claim.attempt_token,
+                &claim.attempt_id,
+            );
         }
+    }
+}
+
+fn bounded_setup_failure_message(error: &anyhow::Error) -> String {
+    let mut message = format!("{error:#}")
+        .chars()
+        .map(|character| {
+            if character.is_control() && !matches!(character, '\n' | '\t') {
+                '�'
+            } else {
+                character
+            }
+        })
+        .collect::<String>();
+    if message.len() > MAX_RUN_SETUP_FAILURE_MESSAGE_BYTES {
+        let mut end = MAX_RUN_SETUP_FAILURE_MESSAGE_BYTES;
+        while !message.is_char_boundary(end) {
+            end -= 1;
+        }
+        message.truncate(end);
+    }
+    if message.trim().is_empty() {
+        "runner setup failed".to_string()
+    } else {
+        message
     }
 }
 
@@ -299,8 +333,7 @@ fn execute_claim(config: &RunnerConfig, claim: &ClaimRunResponse) -> anyhow::Res
     let workspace = work.path.join("workspace");
     checkout_exact_commit(&bundle_path, &workspace, &claim.job.git_oid)?;
     let container_image = resolve_container_image(&client, config, claim)?;
-    let script_path = work.path.join("job.sh");
-    fs::write(&script_path, job_script(&claim.job.workflow)).context("write run script")?;
+    let step_programs = write_step_programs(&work.path, &claim.job.workflow)?;
     if finish_before_execution(&mut supervisor, &client, config, claim)? {
         return Ok(());
     }
@@ -312,6 +345,7 @@ fn execute_claim(config: &RunnerConfig, claim: &ClaimRunResponse) -> anyhow::Res
         claim,
         &container_name,
         &container_image,
+        &step_programs,
     );
     command_success(&mut create, "create Docker job container")?;
     let container = ContainerGuard::new(container_name);
@@ -322,56 +356,24 @@ fn execute_claim(config: &RunnerConfig, claim: &ClaimRunResponse) -> anyhow::Res
             .arg(format!("{}:/scope-source", container.name)),
         "copy run source into Docker job container",
     )?;
-    command_success(
-        Command::new("docker")
-            .args(["cp"])
-            .arg(&script_path)
-            .arg(format!("{}:/scope-job.sh", container.name)),
-        "copy run script into Docker job container",
-    )?;
     if finish_before_execution(&mut supervisor, &client, config, claim)? {
         return Ok(());
     }
-    if let Err(error) = attempt_start(
-        &client,
-        &config.api_url,
-        &claim.attempt_token,
-        &claim.attempt_id,
-    ) {
-        thread::sleep(Duration::from_secs(1));
-        if finish_before_execution(&mut supervisor, &client, config, claim)? {
-            return Ok(());
-        }
-        return Err(error);
-    }
-    let mut child = Command::new("docker")
-        .args(["start", "--attach", &container.name])
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
-        .context("start Docker job container")?;
-    let execution_started_at_unix = match container_started_at_unix(&container.name) {
-        Ok(started_at) => started_at,
-        Err(error) => {
-            drop(container);
-            let _ = child.wait();
-            return Err(error);
-        }
-    };
-    let execution_deadline_unix =
-        execution_started_at_unix.saturating_add(claim.job.workflow.timeout_seconds());
+    let execution_deadline_unix = unix_now().saturating_add(claim.job.workflow.timeout_seconds());
     mark_recovery_execution_started(&work.path, claim, execution_deadline_unix)?;
-    finish_container_attempt(
+    run_steps(
         config,
         claim,
         &mut work,
+        &client,
+        0,
         1,
         0,
+        false,
+        None,
+        None,
         execution_deadline_unix,
-        false,
-        false,
         &mut supervisor,
-        child,
         container,
     )
 }
@@ -383,11 +385,48 @@ fn resume_claim(config: &RunnerConfig, recovery: RecoveryAttempt) -> anyhow::Res
         cleanup_on_drop: true,
     };
     let claim = recovery.claim;
-    if let Some(conclusion) = recovery.progress.pending_conclusion {
+    let mut progress = recovery.progress;
+    let container_name = format!("scope-{}", claim.attempt_id);
+    let mut container = ContainerGuard::new(container_name.clone());
+    let has_pending_stop =
+        progress.pending_attempt_abandon || progress.pending_attempt_conclusion.is_some();
+    if has_pending_stop
+        && drain_pending_stop_logs(config, &claim, &mut work, &mut container, &progress)?
+            == PendingStopLogOutcome::AttemptUnavailable
+    {
+        return Ok(());
+    }
+    if has_pending_stop && let Some(pending) = progress.pending_step_conclusion.take() {
+        let control_client = attempt_control_client().map_err(|error| {
+            work.preserve();
+            eprintln!("Could not resume the completed workflow step: {error:#}");
+            ConclusionReportPending
+        })?;
+        report_step_conclusion(
+            &control_client,
+            config,
+            &claim,
+            pending.step_index,
+            pending.conclusion.clone(),
+        )
+        .map_err(|error| {
+            work.preserve();
+            eprintln!("Could not reconcile the completed workflow step: {error:#}");
+            ConclusionReportPending
+        })?;
+        mark_recovery_step_completed(&work.path, &claim, pending.step_index).map_err(|error| {
+            work.preserve();
+            eprintln!("Could not commit the reconciled workflow step: {error:#}");
+            ConclusionReportPending
+        })?;
+        advance_recovery_past_replayed_step(&mut progress);
+    }
+    if progress.pending_attempt_abandon {
+        return report_pending_abandon(config, &claim, &mut work);
+    }
+    if let Some(conclusion) = progress.pending_attempt_conclusion.take() {
         return report_pending_conclusion(config, &claim, &mut work, conclusion);
     }
-    let container_name = format!("scope-{}", claim.attempt_id);
-    let container = ContainerGuard::new(container_name.clone());
     let control_client = attempt_control_client()?;
     attempt_heartbeat(
         &control_client,
@@ -401,9 +440,7 @@ fn resume_claim(config: &RunnerConfig, recovery: RecoveryAttempt) -> anyhow::Res
         &claim.attempt_token,
         &claim.attempt_id,
     )?;
-    let next_log_sequence = recovery_status.next_log_sequence;
-    update_recovery_log_sequence(&work.path, &claim, next_log_sequence)?;
-    let execution_deadline_unix = match recovery.progress.execution_deadline_unix {
+    let execution_deadline_unix = match progress.execution_deadline_unix {
         Some(deadline) => deadline,
         None => {
             let deadline = container_started_at_unix(&container_name)?
@@ -412,103 +449,216 @@ fn resume_claim(config: &RunnerConfig, recovery: RecoveryAttempt) -> anyhow::Res
             deadline
         }
     };
-    let mut follow_logs = container_is_running(&container_name)?;
-    let deadline_was_elapsed = if follow_logs {
-        execution_deadline_unix <= unix_now()
-    } else {
-        container_finished_at_unix(&container_name)? > execution_deadline_unix
-    };
-    if deadline_was_elapsed {
-        follow_logs = false;
+    let local_next_sequence = progress.next_log_sequence;
+    if !matches!(
+        recovery_status.next_log_sequence,
+        sequence if sequence == local_next_sequence
+            || sequence == local_next_sequence.saturating_add(1)
+    ) {
+        bail!("server and runner log cursors cannot be reconciled");
     }
-    let mut logs = Command::new("docker");
-    logs.arg("logs");
-    if follow_logs {
-        logs.arg("--follow");
-    }
-    let child = logs
-        .arg(&container_name)
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
-        .context("replay interrupted Docker job logs")?;
     let mut supervisor = AttemptSupervisor::start(config.clone(), claim.clone())?;
-    finish_container_attempt(
+    supervisor.set_execution_deadline(execution_deadline_unix);
+
+    if let Some(pending) = progress.pending_step_conclusion.take() {
+        if let Err(error) = report_step_conclusion_until_reconciled(
+            &control_client,
+            config,
+            &claim,
+            &mut work,
+            pending.step_index,
+            pending.conclusion.clone(),
+            &supervisor,
+        ) {
+            container.preserve();
+            return Err(error);
+        }
+        if let Err(error) = mark_recovery_step_completed(&work.path, &claim, pending.step_index) {
+            work.preserve();
+            container.preserve();
+            eprintln!("Could not commit reconciled step recovery progress: {error:#}");
+            return Err(ConclusionReportPending.into());
+        }
+        advance_recovery_past_replayed_step(&mut progress);
+    }
+
+    let recovery_status = attempt_recovery_status(
+        &control_client,
+        &config.api_url,
+        &claim.attempt_token,
+        &claim.attempt_id,
+    )?;
+    let active_step_index = progress
+        .active_step_index
+        .or_else(|| {
+            recovery_status
+                .steps
+                .iter()
+                .find(|step| step.state == StepState::Running)
+                .map(|step| step.step_index)
+        })
+        .or_else(|| {
+            recovery_status
+                .steps
+                .iter()
+                .find(|step| step.state == StepState::Pending)
+                .map(|step| step.step_index)
+        });
+    let Some(active_step_index) = active_step_index else {
+        return Ok(());
+    };
+    let continuing_active_step = recovery_status
+        .steps
+        .iter()
+        .any(|step| step.step_index == active_step_index && step.state == StepState::Running);
+    run_steps(
         config,
         &claim,
         &mut work,
-        next_log_sequence,
-        recovery_status.log_bytes,
+        &control_client,
+        active_step_index,
+        local_next_sequence,
+        if continuing_active_step {
+            progress.active_step_log_bytes
+        } else {
+            0
+        },
+        progress.logs_exhausted,
+        progress.pending_log_chunk,
+        progress.active_step_nonce,
         execution_deadline_unix,
-        true,
-        deadline_was_elapsed,
         &mut supervisor,
-        child,
         container,
     )
 }
 
-#[allow(clippy::too_many_arguments)]
-fn finish_container_attempt(
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum PendingStopLogOutcome {
+    Drained,
+    AttemptUnavailable,
+}
+
+fn drain_pending_stop_logs(
     config: &RunnerConfig,
     claim: &ClaimRunResponse,
     work: &mut RunnerWorkDir,
-    next_log_sequence: u64,
-    skip_log_bytes: u64,
-    execution_deadline_unix: u64,
-    recovering: bool,
-    recovered_deadline_elapsed: bool,
-    supervisor: &mut AttemptSupervisor,
-    mut child: Child,
-    container: ContainerGuard,
-) -> anyhow::Result<()> {
-    if let Err(error) = supervisor.set_container(container.name.clone()) {
-        drop(container);
-        let _ = child.wait();
-        return Err(error);
+    container: &mut ContainerGuard,
+    progress: &RecoveryProgress,
+) -> anyhow::Result<PendingStopLogOutcome> {
+    let client = attempt_control_client().map_err(|error| {
+        work.preserve();
+        container.preserve();
+        eprintln!("Could not resume final stopped-step log upload: {error:#}");
+        ConclusionReportPending
+    })?;
+    match attempt_recovery_status_if_active(
+        &client,
+        &config.api_url,
+        &claim.attempt_token,
+        &claim.attempt_id,
+    )
+    .map_err(|error| {
+        work.preserve();
+        container.preserve();
+        eprintln!("Could not inspect pending stopped-attempt recovery: {error:#}");
+        ConclusionReportPending
+    })? {
+        AttemptRecoveryLookup::Active(_) => {}
+        AttemptRecoveryLookup::Unavailable => {
+            return Ok(PendingStopLogOutcome::AttemptUnavailable);
+        }
     }
-    supervisor.set_execution_deadline(if recovered_deadline_elapsed {
-        u64::MAX
-    } else {
-        execution_deadline_unix
-    });
-    let status = stream_logs(
+    let Some(step_index) = progress.active_step_index else {
+        return Ok(PendingStopLogOutcome::Drained);
+    };
+    stop_container(&container.name).map_err(|error| {
+        work.preserve();
+        container.preserve();
+        eprintln!("Could not confirm stopped attempt execution ended: {error:#}");
+        ConclusionReportPending
+    })?;
+    drain_recovered_step_logs(
+        &client,
         config,
         claim,
         &work.path,
-        next_log_sequence,
-        skip_log_bytes,
-        &mut child,
-        supervisor,
-    );
-    if status.is_err() {
-        let _ = child.wait();
-    }
-    let status = status?;
-    let stop_reason = supervisor.reason();
-    let exit_code = if recovered_deadline_elapsed {
-        None
-    } else if stop_reason == AttemptStopReason::None && recovering {
-        recovered_container_exit_code(&container.name)?
-    } else {
-        status.code()
-    };
-    drop(container);
+        &container.name,
+        step_index,
+        progress.next_log_sequence,
+        progress.active_step_log_bytes,
+        progress.logs_exhausted,
+        progress.pending_log_chunk.clone(),
+    )
+    .map(|()| PendingStopLogOutcome::Drained)
+    .map_err(|error| {
+        work.preserve();
+        container.preserve();
+        eprintln!("Could not finish stopped-step log upload: {error:#}");
+        ConclusionReportPending.into()
+    })
+}
 
-    let conclusion = match (recovered_deadline_elapsed, stop_reason) {
-        (true, _) => AttemptConclusionRequest::Failed { exit_code: 124 },
-        (false, AttemptStopReason::Cancellation) => AttemptConclusionRequest::Canceled,
-        (false, AttemptStopReason::TimedOut) => AttemptConclusionRequest::Failed { exit_code: 124 },
-        (false, AttemptStopReason::LeaseLost) => AttemptConclusionRequest::Failed { exit_code: 70 },
-        (false, AttemptStopReason::None) if exit_code == Some(0) => {
-            AttemptConclusionRequest::Succeeded
+fn advance_recovery_past_replayed_step(progress: &mut RecoveryProgress) {
+    progress.active_step_index = None;
+    progress.active_step_nonce = None;
+    progress.active_step_log_bytes = 0;
+    progress.pending_log_chunk = None;
+    progress.pending_step_conclusion = None;
+}
+
+fn conclude_stopped_attempt(
+    config: &RunnerConfig,
+    claim: &ClaimRunResponse,
+    work: &mut RunnerWorkDir,
+    reason: AttemptStopReason,
+) -> anyhow::Result<()> {
+    let conclusion = match reason {
+        AttemptStopReason::Cancellation => AttemptConclusionRequest::Canceled,
+        AttemptStopReason::TimedOut => AttemptConclusionRequest::TimedOut,
+        AttemptStopReason::LeaseLost => {
+            mark_recovery_abandon_pending(&work.path, claim)?;
+            return report_pending_abandon(config, claim, work);
         }
-        (false, AttemptStopReason::None) => AttemptConclusionRequest::Failed {
-            exit_code: exit_code.unwrap_or(1).max(1),
-        },
+        AttemptStopReason::None => bail!("attempt stop conclusion requires a stop reason"),
     };
     mark_recovery_conclusion_pending(&work.path, claim, conclusion.clone())?;
     report_pending_conclusion(config, claim, work, conclusion)
+}
+
+fn report_pending_abandon(
+    config: &RunnerConfig,
+    claim: &ClaimRunResponse,
+    work: &mut RunnerWorkDir,
+) -> anyhow::Result<()> {
+    let client = match runner_client() {
+        Ok(client) => client,
+        Err(error) => {
+            work.preserve();
+            eprintln!(
+                "Could not create the client for abandoning the interrupted attempt: {error:#}"
+            );
+            return Err(ConclusionReportPending.into());
+        }
+    };
+    let mut last_error = None;
+    for _ in 0..3 {
+        match abandon_attempt(
+            &client,
+            &config.api_url,
+            &claim.attempt_token,
+            &claim.attempt_id,
+        ) {
+            Ok(()) => return Ok(()),
+            Err(error) => {
+                last_error = Some(error);
+                thread::sleep(Duration::from_secs(1));
+            }
+        }
+    }
+    work.preserve();
+    let error = last_error.expect("attempt abandonment retry records an error");
+    eprintln!("Could not abandon the interrupted attempt: {error:#}");
+    Err(ConclusionReportPending.into())
 }
 
 #[derive(Debug)]
@@ -521,6 +671,12 @@ impl std::fmt::Display for ConclusionReportPending {
 }
 
 impl std::error::Error for ConclusionReportPending {}
+
+fn is_conclusion_report_pending(error: &anyhow::Error) -> bool {
+    error
+        .chain()
+        .any(|cause| cause.is::<ConclusionReportPending>())
+}
 
 fn report_pending_conclusion(
     config: &RunnerConfig,
@@ -624,14 +780,11 @@ fn finish_before_execution(
         }
         AttemptStopReason::LeaseLost => {
             let _ = supervisor.finish();
-            complete_attempt(
+            abandon_attempt(
                 client,
                 &config.api_url,
                 &claim.attempt_token,
                 &claim.attempt_id,
-                &CompleteAttemptRequest {
-                    conclusion: AttemptConclusionRequest::Failed { exit_code: 70 },
-                },
             )?;
             Ok(true)
         }
@@ -640,101 +793,6 @@ fn finish_before_execution(
             bail!("attempt timed out before execution started")
         }
     }
-}
-
-fn stream_logs(
-    config: &RunnerConfig,
-    claim: &ClaimRunResponse,
-    work_dir: &Path,
-    mut next_sequence: u64,
-    mut skip_bytes: u64,
-    child: &mut Child,
-    supervisor: &AttemptSupervisor,
-) -> anyhow::Result<std::process::ExitStatus> {
-    let stdout = child.stdout.take().context("Docker stdout was not piped")?;
-    let stderr = child.stderr.take().context("Docker stderr was not piped")?;
-    let (sender, receiver) = mpsc::channel();
-    let stdout_thread = spawn_log_reader(stdout, sender, supervisor.execution_finished_signal());
-    let stderr_thread = spawn_diagnostic_reader(stderr);
-    let client = attempt_control_client()?;
-    let mut upload_logs = true;
-    for mut text in receiver {
-        if skip_bytes != 0 {
-            let text_bytes = text.as_bytes();
-            if skip_bytes >= text_bytes.len() as u64 {
-                skip_bytes -= text_bytes.len() as u64;
-                continue;
-            }
-            let start = usize::try_from(skip_bytes).context("recovery log cursor is too large")?;
-            text = String::from_utf8_lossy(&text_bytes[start..]).into_owned();
-            skip_bytes = 0;
-        }
-        print!("{text}");
-        let _ = std::io::stdout().flush();
-        if upload_logs {
-            match append_log_with_retry(&client, config, claim, next_sequence, text) {
-                Ok(true) => {
-                    next_sequence = next_sequence
-                        .checked_add(1)
-                        .context("run log sequence overflow")?;
-                    update_recovery_log_sequence(work_dir, claim, next_sequence)?;
-                }
-                Ok(false) => {
-                    upload_logs = false;
-                    eprintln!(
-                        "\nScope stopped uploading logs after the per-attempt log limit was reached."
-                    );
-                }
-                Err(error) => {
-                    upload_logs = false;
-                    eprintln!(
-                        "\nScope log upload failed; the job will continue with local-only output: {error:#}"
-                    );
-                }
-            }
-        }
-    }
-    let _ = stdout_thread.join();
-    supervisor.mark_execution_finished();
-    let _ = stderr_thread.join();
-    if skip_bytes != 0 {
-        bail!("recovered Docker logs are shorter than the server log cursor");
-    }
-    child.wait().context("wait for Docker job container")
-}
-
-fn spawn_log_reader(
-    stream: impl Read + Send + 'static,
-    sender: mpsc::Sender<String>,
-    execution_finished: Arc<AtomicBool>,
-) -> thread::JoinHandle<()> {
-    thread::spawn(move || {
-        let mut reader = BufReader::new(stream);
-        let mut bytes = vec![0_u8; LOG_CHUNK_BYTES];
-        let mut decoder = StableLogDecoder::default();
-        loop {
-            match reader.read(&mut bytes) {
-                Ok(0) => {
-                    execution_finished.store(true, Ordering::Relaxed);
-                    let tail = decoder.finish();
-                    if !tail.is_empty() {
-                        let _ = sender.send(tail);
-                    }
-                    break;
-                }
-                Ok(read) => {
-                    let text = decoder.push(&bytes[..read]);
-                    if !text.is_empty() && sender.send(text).is_err() {
-                        break;
-                    }
-                }
-                Err(_) => {
-                    execution_finished.store(true, Ordering::Relaxed);
-                    break;
-                }
-            }
-        }
-    })
 }
 
 #[derive(Default)]
@@ -796,31 +854,19 @@ fn append_escaped_byte(text: &mut String, byte: u8) {
     write!(text, "\\x{byte:02x}").expect("writing to a String cannot fail");
 }
 
-fn spawn_diagnostic_reader(stream: impl Read + Send + 'static) -> thread::JoinHandle<()> {
-    thread::spawn(move || {
-        let mut reader = BufReader::new(stream);
-        let mut bytes = vec![0_u8; LOG_CHUNK_BYTES];
-        loop {
-            match reader.read(&mut bytes) {
-                Ok(0) => break,
-                Ok(read) => {
-                    eprint!("{}", String::from_utf8_lossy(&bytes[..read]));
-                    let _ = std::io::stderr().flush();
-                }
-                Err(_) => break,
-            }
-        }
-    })
-}
-
 fn append_log_with_retry(
     client: &Client,
     config: &RunnerConfig,
     claim: &ClaimRunResponse,
+    step_index: u32,
     sequence: u64,
     text: String,
 ) -> anyhow::Result<bool> {
-    let request = AppendAttemptLogRequest { sequence, text };
+    let request = AppendAttemptLogRequest {
+        step_index,
+        sequence,
+        text,
+    };
     let mut last_error = None;
     for _ in 0..3 {
         match append_attempt_log(
@@ -855,27 +901,6 @@ fn complete_canceled(
         },
     )?;
     Ok(())
-}
-
-fn job_script(workflow: &scope_domain::runs::workflow::CompiledWorkflow) -> String {
-    let mut script = String::from("#!/bin/sh\nset -e\n");
-    for step in workflow.steps() {
-        script.push_str("printf '\\n==> %s\\n' ");
-        script.push_str(&shell_quote(step.name()));
-        script.push('\n');
-        script.push_str(step.run());
-        if !step.run().ends_with('\n') {
-            script.push('\n');
-        }
-        script.push_str("printf '<== %s\\n' ");
-        script.push_str(&shell_quote(step.name()));
-        script.push('\n');
-    }
-    script
-}
-
-fn shell_quote(value: &str) -> String {
-    format!("'{}'", value.replace('\'', "'\"'\"'"))
 }
 
 fn print_runner_status(name: &str, runner: &RunnerResponse) {

@@ -3,6 +3,7 @@ use super::{
 };
 use crate::api::abandon_attempt;
 use anyhow::{Context, bail};
+use scope_api_contract::StepConclusionRequest;
 use serde::{Deserialize, Serialize};
 use std::{
     collections::BTreeSet,
@@ -27,7 +28,29 @@ pub(super) struct RecoveryClaim {
 pub(super) struct RecoveryProgress {
     pub(super) next_log_sequence: u64,
     pub(super) execution_deadline_unix: Option<u64>,
-    pub(super) pending_conclusion: Option<AttemptConclusionRequest>,
+    pub(super) active_step_index: Option<u32>,
+    pub(super) active_step_nonce: Option<String>,
+    pub(super) active_step_log_bytes: u64,
+    pub(super) logs_exhausted: bool,
+    pub(super) pending_log_chunk: Option<PendingLogChunk>,
+    pub(super) pending_step_conclusion: Option<PendingStepConclusion>,
+    pub(super) pending_attempt_conclusion: Option<AttemptConclusionRequest>,
+    pub(super) pending_attempt_abandon: bool,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub(super) struct PendingStepConclusion {
+    pub(super) step_index: u32,
+    pub(super) conclusion: StepConclusionRequest,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub(super) struct PendingLogChunk {
+    pub(super) step_index: u32,
+    pub(super) sequence: u64,
+    pub(super) start_byte: u64,
+    pub(super) end_byte: u64,
+    pub(super) text: String,
 }
 
 pub(super) struct RecoveryAttempt {
@@ -55,7 +78,14 @@ pub(super) fn persist_recovery_claim(
         &RecoveryProgress {
             next_log_sequence: 1,
             execution_deadline_unix: None,
-            pending_conclusion: None,
+            active_step_index: None,
+            active_step_nonce: None,
+            active_step_log_bytes: 0,
+            logs_exhausted: false,
+            pending_log_chunk: None,
+            pending_step_conclusion: None,
+            pending_attempt_conclusion: None,
+            pending_attempt_abandon: false,
         },
     )?;
     write_private_atomic_json(
@@ -66,19 +96,130 @@ pub(super) fn persist_recovery_claim(
     )
 }
 
-pub(super) fn update_recovery_log_sequence(
+pub(super) fn update_recovery_log_progress(
     work_dir: &Path,
     claim: &ClaimRunResponse,
+    step_index: u32,
     next_log_sequence: u64,
+    step_log_bytes: u64,
+    logs_exhausted: bool,
 ) -> anyhow::Result<()> {
-    let stored = load_recovery_claim(&work_dir.join(RECOVERY_CLAIM_FILE))?;
-    if stored.claim.attempt_id != claim.attempt_id
-        || stored.claim.attempt_token != claim.attempt_token
-    {
-        bail!("runner recovery claim identity changed");
-    }
+    let stored = matching_recovery_claim(work_dir, claim)?;
     let mut progress = stored.progress;
+    if progress.active_step_index != Some(step_index) {
+        bail!("runner recovery log progress does not match the active step");
+    }
+    if let Some(pending) = &progress.pending_log_chunk
+        && (pending.step_index != step_index
+            || pending.start_byte != progress.active_step_log_bytes
+            || pending.end_byte != step_log_bytes
+            || (next_log_sequence != pending.sequence
+                && next_log_sequence != pending.sequence.saturating_add(1)))
+    {
+        bail!("runner recovery log commit does not match the pending chunk");
+    }
     progress.next_log_sequence = next_log_sequence;
+    progress.active_step_log_bytes = step_log_bytes;
+    progress.logs_exhausted = logs_exhausted;
+    progress.pending_log_chunk = None;
+    write_recovery_progress(work_dir, &progress)
+}
+
+pub(super) fn stage_recovery_log_chunk(
+    work_dir: &Path,
+    claim: &ClaimRunResponse,
+    pending: PendingLogChunk,
+) -> anyhow::Result<()> {
+    let stored = matching_recovery_claim(work_dir, claim)?;
+    let mut progress = stored.progress;
+    if progress.active_step_index != Some(pending.step_index)
+        || progress.next_log_sequence != pending.sequence
+        || progress.active_step_log_bytes != pending.start_byte
+        || pending.end_byte <= pending.start_byte
+        || pending.text.is_empty()
+    {
+        bail!("runner recovery pending log chunk does not match current progress");
+    }
+    match &progress.pending_log_chunk {
+        Some(existing) if existing != &pending => {
+            bail!("runner recovery pending log chunk changed before upload")
+        }
+        Some(_) => return Ok(()),
+        None => progress.pending_log_chunk = Some(pending),
+    }
+    write_recovery_progress(work_dir, &progress)
+}
+
+pub(super) fn mark_recovery_step_started(
+    work_dir: &Path,
+    claim: &ClaimRunResponse,
+    step_index: u32,
+    step_nonce: &str,
+) -> anyhow::Result<()> {
+    if step_nonce.is_empty() {
+        bail!("runner recovery step nonce is required");
+    }
+    let stored = matching_recovery_claim(work_dir, claim)?;
+    let mut progress = stored.progress;
+    match progress.active_step_index {
+        Some(active) if active != step_index => {
+            bail!("another workflow step is already active in runner recovery state")
+        }
+        Some(_) if progress.active_step_nonce.as_deref() == Some(step_nonce) => return Ok(()),
+        Some(_) => bail!("active workflow step nonce changed during execution"),
+        None => {}
+    }
+    progress.active_step_index = Some(step_index);
+    progress.active_step_nonce = Some(step_nonce.to_string());
+    progress.active_step_log_bytes = 0;
+    progress.pending_log_chunk = None;
+    progress.pending_step_conclusion = None;
+    write_recovery_progress(work_dir, &progress)
+}
+
+pub(super) fn mark_recovery_step_conclusion_pending(
+    work_dir: &Path,
+    claim: &ClaimRunResponse,
+    step_index: u32,
+    conclusion: StepConclusionRequest,
+) -> anyhow::Result<()> {
+    let stored = matching_recovery_claim(work_dir, claim)?;
+    let mut progress = stored.progress;
+    if progress.active_step_index != Some(step_index) {
+        bail!("runner recovery conclusion does not match the active step");
+    }
+    if progress.pending_log_chunk.is_some() {
+        bail!("workflow step cannot conclude while a log chunk is pending upload");
+    }
+    let pending = PendingStepConclusion {
+        step_index,
+        conclusion,
+    };
+    match &progress.pending_step_conclusion {
+        Some(existing) if existing != &pending => {
+            bail!("runner recovery step conclusion changed after execution")
+        }
+        Some(_) => return Ok(()),
+        None => progress.pending_step_conclusion = Some(pending),
+    }
+    write_recovery_progress(work_dir, &progress)
+}
+
+pub(super) fn mark_recovery_step_completed(
+    work_dir: &Path,
+    claim: &ClaimRunResponse,
+    step_index: u32,
+) -> anyhow::Result<()> {
+    let stored = matching_recovery_claim(work_dir, claim)?;
+    let mut progress = stored.progress;
+    if progress.active_step_index != Some(step_index) {
+        bail!("runner recovery completion does not match the active step");
+    }
+    progress.active_step_index = None;
+    progress.active_step_nonce = None;
+    progress.active_step_log_bytes = 0;
+    progress.pending_log_chunk = None;
+    progress.pending_step_conclusion = None;
     write_recovery_progress(work_dir, &progress)
 }
 
@@ -87,12 +228,7 @@ pub(super) fn mark_recovery_execution_started(
     claim: &ClaimRunResponse,
     execution_deadline_unix: u64,
 ) -> anyhow::Result<()> {
-    let stored = load_recovery_claim(&work_dir.join(RECOVERY_CLAIM_FILE))?;
-    if stored.claim.attempt_id != claim.attempt_id
-        || stored.claim.attempt_token != claim.attempt_token
-    {
-        bail!("runner recovery claim identity changed");
-    }
+    let stored = matching_recovery_claim(work_dir, claim)?;
     let mut progress = stored.progress;
     progress.execution_deadline_unix = Some(execution_deadline_unix);
     write_recovery_progress(work_dir, &progress)
@@ -103,21 +239,45 @@ pub(super) fn mark_recovery_conclusion_pending(
     claim: &ClaimRunResponse,
     conclusion: AttemptConclusionRequest,
 ) -> anyhow::Result<()> {
+    let stored = matching_recovery_claim(work_dir, claim)?;
+    let mut progress = stored.progress;
+    if progress.pending_attempt_abandon {
+        bail!("runner recovery cannot conclude and abandon the same attempt");
+    }
+    match &progress.pending_attempt_conclusion {
+        Some(pending) if pending != &conclusion => {
+            bail!("runner recovery conclusion changed after execution")
+        }
+        Some(_) => return Ok(()),
+        None => progress.pending_attempt_conclusion = Some(conclusion),
+    }
+    write_recovery_progress(work_dir, &progress)
+}
+
+pub(super) fn mark_recovery_abandon_pending(
+    work_dir: &Path,
+    claim: &ClaimRunResponse,
+) -> anyhow::Result<()> {
+    let stored = matching_recovery_claim(work_dir, claim)?;
+    let mut progress = stored.progress;
+    if progress.pending_attempt_conclusion.is_some() {
+        bail!("runner recovery cannot abandon and conclude the same attempt");
+    }
+    progress.pending_attempt_abandon = true;
+    write_recovery_progress(work_dir, &progress)
+}
+
+fn matching_recovery_claim(
+    work_dir: &Path,
+    claim: &ClaimRunResponse,
+) -> anyhow::Result<RecoveryClaim> {
     let stored = load_recovery_claim(&work_dir.join(RECOVERY_CLAIM_FILE))?;
     if stored.claim.attempt_id != claim.attempt_id
         || stored.claim.attempt_token != claim.attempt_token
     {
         bail!("runner recovery claim identity changed");
     }
-    let mut progress = stored.progress;
-    match &progress.pending_conclusion {
-        Some(pending) if pending != &conclusion => {
-            bail!("runner recovery conclusion changed after execution")
-        }
-        Some(_) => return Ok(()),
-        None => progress.pending_conclusion = Some(conclusion),
-    }
-    write_recovery_progress(work_dir, &progress)
+    Ok(stored)
 }
 
 fn write_recovery_progress(work_dir: &Path, progress: &RecoveryProgress) -> anyhow::Result<()> {
@@ -227,6 +387,17 @@ pub(super) fn recover_runner_state(config: &RunnerConfig) -> anyhow::Result<Vec<
                 });
             }
             ContainerState::Created => {
+                if recovery.progress.pending_attempt_conclusion.is_some()
+                    || recovery.progress.pending_step_conclusion.is_some()
+                    || recovery.progress.pending_attempt_abandon
+                {
+                    active_containers.insert(container_name);
+                    active.push(RecoveryAttempt {
+                        work_dir: entry.path(),
+                        recovery,
+                    });
+                    continue;
+                }
                 if !super::supervisor::terminate_container(&container_name) {
                     bail!(
                         "could not confirm unstarted Scope container {container_name} was removed"
@@ -237,7 +408,10 @@ pub(super) fn recover_runner_state(config: &RunnerConfig) -> anyhow::Result<Vec<
                     .context("remove unstarted runner recovery state")?;
             }
             ContainerState::Missing => {
-                if recovery.progress.pending_conclusion.is_some() {
+                if recovery.progress.pending_attempt_conclusion.is_some()
+                    || recovery.progress.pending_step_conclusion.is_some()
+                    || recovery.progress.pending_attempt_abandon
+                {
                     active.push(RecoveryAttempt {
                         work_dir: entry.path(),
                         recovery,
@@ -264,6 +438,12 @@ fn load_recovery_claim(path: &Path) -> anyhow::Result<RecoveryClaim> {
     .with_context(|| format!("parse recovery progress {}", progress_path.display()))?;
     if progress.next_log_sequence == 0 {
         bail!("runner recovery log sequence must be positive");
+    }
+    if progress.active_step_index.is_some() != progress.active_step_nonce.is_some() {
+        bail!("runner recovery active step identity is incomplete");
+    }
+    if progress.pending_attempt_abandon && progress.pending_attempt_conclusion.is_some() {
+        bail!("runner recovery attempt outcome is ambiguous");
     }
     Ok(RecoveryClaim { claim, progress })
 }

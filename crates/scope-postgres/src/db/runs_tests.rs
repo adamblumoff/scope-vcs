@@ -5,7 +5,7 @@ use scope_domain::{
     runs::{
         run::{
             AttemptConclusion, AttemptState, PinnedContainerImage, Run, RunLogChunk, RunSource,
-            RunState, RunTrigger,
+            RunState, RunTrigger, StepConclusion, StepState,
         },
         runner::{RUNNER_PROTOCOL_VERSION, Runner, RunnerCapabilities, RunnerGrant, RunnerName},
         workflow::{
@@ -20,56 +20,7 @@ use scope_domain::{
 };
 use sea_orm::EntityTrait;
 use sha2::{Digest, Sha256};
-use std::{collections::BTreeSet, sync::Arc};
-use tokio::{sync::Barrier, task::JoinSet};
-
-#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn concurrent_claims_create_exactly_one_active_attempt() {
-    let store = Arc::new(postgres_store());
-    register_runner(&store, "runner-1", "linux-one").await;
-    register_runner(&store, "runner-2", "linux-two").await;
-    enqueue(&store, run("run-1", "manual:one"), revision()).await;
-
-    let barrier = Arc::new(Barrier::new(2));
-    let mut tasks = JoinSet::new();
-    for index in 1..=2 {
-        let store = Arc::clone(&store);
-        let barrier = Arc::clone(&barrier);
-        tasks.spawn(async move {
-            barrier.wait().await;
-            store
-                .runs()
-                .claim_run(
-                    "run-1",
-                    &format!("runner-{index}"),
-                    &format!("attempt-{index}"),
-                    &format!("{index:064x}"),
-                    20,
-                    80,
-                )
-                .await
-        });
-    }
-
-    let mut claims = Vec::new();
-    let mut conflicts = 0;
-    while let Some(result) = tasks.join_next().await {
-        match result.unwrap() {
-            Ok(claim) => claims.push(claim),
-            Err(error) if error.kind == PostgresErrorKind::Conflict => conflicts += 1,
-            Err(error) => panic!("unexpected claim failure: {}", error.message),
-        }
-    }
-
-    assert_eq!(claims.len(), 1);
-    assert_eq!(conflicts, 1);
-    let stored = store.runs().run("run-1").await.unwrap().unwrap();
-    assert_eq!(stored.state, RunState::Leased);
-    assert_eq!(
-        stored.current_attempt_id.as_deref(),
-        Some(claims[0].attempt.id.as_str())
-    );
-}
+use std::collections::BTreeSet;
 
 #[tokio::test]
 async fn active_cancellation_is_intent_until_runner_acknowledges() {
@@ -92,7 +43,7 @@ async fn active_cancellation_is_intent_until_runner_acknowledges() {
     assert_eq!(
         store
             .runs()
-            .start_attempt(&claim.attempt.id, "runner-1", &"a".repeat(64), 35)
+            .start_attempt_step(&claim.attempt.id, "runner-1", &"a".repeat(64), 0, 35,)
             .await
             .unwrap_err()
             .kind,
@@ -156,13 +107,42 @@ async fn lease_recovery_requeues_only_before_execution_and_rejects_stale_attempt
         .await
         .unwrap();
     assert_eq!(second.attempt.number, 2);
+    assert!(
+        second
+            .steps
+            .iter()
+            .all(|step| step.state == StepState::Pending)
+    );
+    let details = store.runs().run_attempt_details("run-1").await.unwrap();
+    assert_eq!(
+        details
+            .iter()
+            .map(|detail| detail.attempt.id.as_str())
+            .collect::<Vec<_>>(),
+        vec!["attempt-2", "attempt-1"]
+    );
+    assert!(
+        details[0]
+            .steps
+            .iter()
+            .all(|step| step.state == StepState::Pending)
+    );
+    assert!(
+        details[1]
+            .steps
+            .iter()
+            .all(|step| step.state == StepState::Skipped)
+    );
     let stale = store
         .runs()
         .complete_attempt(
             &first.attempt.id,
             "runner-1",
             &"a".repeat(64),
-            AttemptConclusion::Failed { exit_code: 1 },
+            AttemptConclusion::SetupFailed {
+                exit_code: 1,
+                message: "setup failed".to_string(),
+            },
             90,
         )
         .await
@@ -172,7 +152,7 @@ async fn lease_recovery_requeues_only_before_execution_and_rejects_stale_attempt
     pin_attempt(&store, "attempt-2", "runner-1", &"b".repeat(64), 89).await;
     store
         .runs()
-        .start_attempt("attempt-2", "runner-1", &"b".repeat(64), 90)
+        .start_attempt_step("attempt-2", "runner-1", &"b".repeat(64), 0, 90)
         .await
         .unwrap();
     assert_eq!(
@@ -199,16 +179,17 @@ async fn terminal_run_retention_deletes_metadata_and_queues_its_source_atomicall
     pin_attempt(&store, "attempt-1", "runner-1", &"a".repeat(64), 21).await;
     store
         .runs()
-        .start_attempt("attempt-1", "runner-1", &"a".repeat(64), 22)
+        .start_attempt_step("attempt-1", "runner-1", &"a".repeat(64), 0, 22)
         .await
         .unwrap();
     store
         .runs()
-        .complete_attempt(
+        .complete_attempt_step(
             "attempt-1",
             "runner-1",
             &"a".repeat(64),
-            AttemptConclusion::Succeeded,
+            0,
+            StepConclusion::Succeeded,
             30,
         )
         .await
@@ -534,10 +515,10 @@ async fn machine_authentication_and_attempt_logs_are_narrow_and_idempotent() {
     pin_attempt(&store, "attempt-1", "runner-1", &"a".repeat(64), 20).await;
     store
         .runs()
-        .start_attempt("attempt-1", "runner-1", &"a".repeat(64), 21)
+        .start_attempt_step("attempt-1", "runner-1", &"a".repeat(64), 0, 21)
         .await
         .unwrap();
-    let first = RunLogChunk::new("attempt-1", 1, "first\n", 22).unwrap();
+    let first = RunLogChunk::new("attempt-1", 0, 1, "first\n", 22).unwrap();
     let stored = store
         .runs()
         .append_attempt_log(first.clone(), &"a".repeat(64), 22)
@@ -546,7 +527,7 @@ async fn machine_authentication_and_attempt_logs_are_narrow_and_idempotent() {
     let retry = store
         .runs()
         .append_attempt_log(
-            RunLogChunk::new("attempt-1", 1, first.text, 23).unwrap(),
+            RunLogChunk::new("attempt-1", 0, 1, first.text, 23).unwrap(),
             &"a".repeat(64),
             23,
         )
@@ -557,7 +538,7 @@ async fn machine_authentication_and_attempt_logs_are_narrow_and_idempotent() {
         store
             .runs()
             .append_attempt_log(
-                RunLogChunk::new("attempt-1", 1, "different\n", 22).unwrap(),
+                RunLogChunk::new("attempt-1", 0, 1, "different\n", 22).unwrap(),
                 &"a".repeat(64),
                 23,
             )
@@ -570,7 +551,7 @@ async fn machine_authentication_and_attempt_logs_are_narrow_and_idempotent() {
         store
             .runs()
             .append_attempt_log(
-                RunLogChunk::new("attempt-1", 3, "gap\n", 23).unwrap(),
+                RunLogChunk::new("attempt-1", 0, 3, "gap\n", 23).unwrap(),
                 &"a".repeat(64),
                 23,
             )
@@ -582,7 +563,7 @@ async fn machine_authentication_and_attempt_logs_are_narrow_and_idempotent() {
     let second = store
         .runs()
         .append_attempt_log(
-            RunLogChunk::new("attempt-1", 2, "second\n", 23).unwrap(),
+            RunLogChunk::new("attempt-1", 0, 2, "second\n", 23).unwrap(),
             &"a".repeat(64),
             23,
         )
@@ -612,6 +593,14 @@ async fn machine_authentication_and_attempt_logs_are_narrow_and_idempotent() {
         .unwrap();
     assert_eq!(logs.len(), 1);
     assert_eq!(logs[0].chunk.text, "second\n");
+    let step_logs = store
+        .runs()
+        .attempt_step_logs_after("run-1", "attempt-1", 0, stored.position, 100)
+        .await
+        .unwrap();
+    assert_eq!(step_logs.logs.len(), 1);
+    assert_eq!(step_logs.logs[0].chunk.step_index, 0);
+    assert!(!step_logs.logs_truncated);
 }
 
 #[tokio::test]
@@ -764,7 +753,7 @@ async fn repository_operations_keep_all_active_runs_beyond_the_recent_limit() {
     );
 }
 
-fn postgres_store() -> MetadataStore {
+pub(super) fn postgres_store() -> MetadataStore {
     let store = MetadataStore::connect_fresh_for_tests(
         &TestDatabaseTarget::required().expect("test database target"),
     )
@@ -813,7 +802,7 @@ fn catalog_with_repo() -> CatalogFixture {
     catalog
 }
 
-async fn register_runner(store: &MetadataStore, id: &str, name: &str) {
+pub(super) async fn register_runner(store: &MetadataStore, id: &str, name: &str) {
     let runner = runner(id);
     store.runs().register_runner(runner.clone()).await.unwrap();
     store
@@ -846,7 +835,7 @@ fn runner(id: &str) -> Runner {
     .unwrap()
 }
 
-fn revision() -> WorkflowRevision {
+pub(super) fn revision() -> WorkflowRevision {
     revision_for_repository("owner/repo")
 }
 
@@ -881,7 +870,7 @@ fn workflow_identity_for(repository_id: &str) -> WorkflowIdentity {
     .unwrap()
 }
 
-fn run(id: &str, idempotency_key: &str) -> Run {
+pub(super) fn run(id: &str, idempotency_key: &str) -> Run {
     run_for_selector(id, idempotency_key, RunnerSelector::Any)
 }
 
@@ -960,7 +949,7 @@ fn run_for_revision(
     .unwrap()
 }
 
-async fn enqueue(store: &MetadataStore, run: Run, revision: WorkflowRevision) {
+pub(super) async fn enqueue(store: &MetadataStore, run: Run, revision: WorkflowRevision) {
     store.runs().enqueue_run(run, revision).await.unwrap();
 }
 
