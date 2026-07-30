@@ -19,11 +19,14 @@ use axum::{
 };
 use scope_api_contract::{
     AppendAttemptLogRequest, AttemptConclusionRequest, AttemptHeartbeatRequest,
-    AttemptRecoveryStatusResponse, AttemptStatusResponse, ClaimRunResponse, CompleteAttemptRequest,
+    AttemptRecoveryStatusResponse, AttemptStatusResponse, AttemptStepStatusResponse,
+    ClaimRunResponse, CompleteAttemptRequest, CompleteAttemptStepRequest,
     PinAttemptContainerImageRequest, PinAttemptContainerImageResponse, RunJobResponse,
-    RunnerPollResponse, RunnerRunOffer,
+    RunnerPollResponse, RunnerRunOffer, StepConclusionRequest,
 };
-use scope_domain::runs::run::{AttemptConclusion, PinnedContainerImage, RunLogChunk};
+use scope_domain::runs::run::{
+    AttemptConclusion, PinnedContainerImage, RunAttemptStep, RunLogChunk, StepConclusion,
+};
 use scope_object_store::source_blob_bytes_bounded;
 use std::time::Duration;
 
@@ -127,20 +130,21 @@ pub(crate) async fn pin_container_image(
     }))
 }
 
-pub(crate) async fn start(
+pub(crate) async fn start_step(
     State(state): State<AppState>,
     headers: HeaderMap,
-    Path(attempt_id): Path<String>,
+    Path((attempt_id, step_index)): Path<(String, u32)>,
 ) -> Result<Json<AttemptStatusResponse>, ApiError> {
     let token_hash = attempt_token_hash(&headers)?;
     let authenticated = require_attempt(&state, &headers, &attempt_id).await?;
     let claim = state
         .metadata
         .runs()
-        .start_attempt(
+        .start_attempt_step(
             &attempt_id,
             &authenticated.attempt.runner_id,
             &token_hash,
+            step_index,
             unix_now()?,
         )
         .await?;
@@ -187,7 +191,7 @@ pub(crate) async fn recovery_status(
             .runs()
             .next_attempt_log_sequence(&attempt_id)
             .await?,
-        log_bytes: claim.attempt.log_bytes,
+        steps: claim.steps.iter().map(attempt_step_status).collect(),
     }))
 }
 
@@ -224,18 +228,52 @@ pub(crate) async fn append_log(
         .metadata
         .runs()
         .append_attempt_log(
-            RunLogChunk::new(attempt_id, input.sequence, input.text, unix_now()?)?,
+            RunLogChunk::new(
+                attempt_id,
+                input.step_index,
+                input.sequence,
+                input.text,
+                unix_now()?,
+            )?,
             &token_hash,
             unix_now()?,
         )
         .await?;
     Ok(Json(scope_api_contract::RunLogResponse {
         attempt_id: log.chunk.attempt_id,
+        step_index: log.chunk.step_index,
         position: log.position,
         sequence: log.chunk.sequence,
         text: log.chunk.text,
         created_at_unix: log.chunk.created_at_unix,
     }))
+}
+
+pub(crate) async fn complete_step(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path((attempt_id, step_index)): Path<(String, u32)>,
+    Json(input): Json<CompleteAttemptStepRequest>,
+) -> Result<Json<AttemptStatusResponse>, ApiError> {
+    let token_hash = attempt_token_hash(&headers)?;
+    let authenticated = require_attempt(&state, &headers, &attempt_id).await?;
+    let conclusion = match input.conclusion {
+        StepConclusionRequest::Succeeded => StepConclusion::Succeeded,
+        StepConclusionRequest::Failed { exit_code } => StepConclusion::Failed { exit_code },
+    };
+    let claim = state
+        .metadata
+        .runs()
+        .complete_attempt_step(
+            &attempt_id,
+            &authenticated.attempt.runner_id,
+            &token_hash,
+            step_index,
+            conclusion,
+            unix_now()?,
+        )
+        .await?;
+    Ok(Json(attempt_status(&claim)))
 }
 
 pub(crate) async fn complete(
@@ -247,8 +285,10 @@ pub(crate) async fn complete(
     let token_hash = attempt_token_hash(&headers)?;
     let authenticated = require_attempt(&state, &headers, &attempt_id).await?;
     let conclusion = match input.conclusion {
-        AttemptConclusionRequest::Succeeded => AttemptConclusion::Succeeded,
-        AttemptConclusionRequest::Failed { exit_code } => AttemptConclusion::Failed { exit_code },
+        AttemptConclusionRequest::SetupFailed { exit_code, message } => {
+            AttemptConclusion::SetupFailed { exit_code, message }
+        }
+        AttemptConclusionRequest::TimedOut => AttemptConclusion::TimedOut,
         AttemptConclusionRequest::Canceled => AttemptConclusion::Canceled,
     };
     let claim = state
@@ -290,5 +330,15 @@ fn attempt_status(claim: &scope_postgres::db::DispatchClaim) -> AttemptStatusRes
         state: claim.attempt.state,
         cancellation_requested: claim.run.cancellation_requested,
         lease_expires_at_unix: claim.attempt.lease_expires_at_unix,
+    }
+}
+
+fn attempt_step_status(step: &RunAttemptStep) -> AttemptStepStatusResponse {
+    AttemptStepStatusResponse {
+        step_index: step.step_index,
+        state: step.state,
+        started_at_unix: step.started_at_unix,
+        completed_at_unix: step.completed_at_unix,
+        exit_code: step.exit_code,
     }
 }

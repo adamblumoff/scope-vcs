@@ -1,5 +1,6 @@
 mod m0001_adopt_v6;
 mod m0002_retire_reset_schema;
+mod m0003_structured_run_attempts;
 
 use sea_orm::{
     ConnectionTrait, DatabaseBackend, DatabaseConnection, DbErr, Statement, TransactionTrait,
@@ -17,6 +18,7 @@ impl MigratorTrait for Migrator {
         vec![
             Box::new(m0001_adopt_v6::Migration),
             Box::new(m0002_retire_reset_schema::Migration),
+            Box::new(m0003_structured_run_attempts::Migration),
         ]
     }
 }

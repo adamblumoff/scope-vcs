@@ -5,8 +5,8 @@ use scope_domain::policy::{Policy, ScopePath, Visibility};
 use scope_domain::projection_views::{ProjectionViewFile, ProjectionViewFileContent};
 use scope_domain::runs::{
     run::{
-        AttemptState, PinnedContainerImage, Run, RunAttempt, RunLogChunk, RunSource, RunState,
-        RunTrigger,
+        AttemptState, AttemptTerminalReason, PinnedContainerImage, Run, RunAttempt, RunAttemptStep,
+        RunLogChunk, RunSource, RunState, RunTrigger, StepState,
     },
     runner::{Runner, RunnerCapabilities, RunnerGrant, RunnerName},
     trigger::PushTriggerEvaluation,
@@ -98,7 +98,8 @@ pub use requests::{
     user_credit_account,
 };
 pub use runs::{
-    push_trigger_evaluation, run, run_attempt, run_log, runner, runner_grant, workflow_revision,
+    push_trigger_evaluation, run, run_attempt, run_attempt_step, run_log, runner, runner_grant,
+    workflow_revision,
 };
 
 #[cfg(test)]

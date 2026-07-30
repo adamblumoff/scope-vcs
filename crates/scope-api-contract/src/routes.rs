@@ -20,7 +20,6 @@ pub const RUNNER: &str = "/v1/runners/{runner_id}";
 pub const RUNNER_REPOSITORY: &str = "/v1/runners/{runner_id}/repos/{owner}/{repo}";
 pub const RUNNER_POLL: &str = "/v1/runner-protocol/poll";
 pub const RUNNER_CLAIM: &str = "/v1/runner-protocol/runs/{run_id}/claim";
-pub const ATTEMPT_START: &str = "/v1/runner-protocol/attempts/{attempt_id}/start";
 pub const ATTEMPT_HEARTBEAT: &str = "/v1/runner-protocol/attempts/{attempt_id}/heartbeat";
 pub const ATTEMPT_RECOVERY_STATUS: &str =
     "/v1/runner-protocol/attempts/{attempt_id}/recovery-status";
@@ -30,11 +29,17 @@ pub const ATTEMPT_SOURCE: &str = "/v1/runner-protocol/attempts/{attempt_id}/sour
 pub const ATTEMPT_LOGS: &str = "/v1/runner-protocol/attempts/{attempt_id}/logs";
 pub const ATTEMPT_COMPLETE: &str = "/v1/runner-protocol/attempts/{attempt_id}/complete";
 pub const ATTEMPT_ABANDON: &str = "/v1/runner-protocol/attempts/{attempt_id}/abandon";
+pub const ATTEMPT_STEP_START: &str =
+    "/v1/runner-protocol/attempts/{attempt_id}/steps/{step_index}/start";
+pub const ATTEMPT_STEP_COMPLETE: &str =
+    "/v1/runner-protocol/attempts/{attempt_id}/steps/{step_index}/complete";
 pub const REPO: &str = "/v1/repos/{owner}/{repo}";
 pub const REPO_OPERATIONS: &str = "/v1/repos/{owner}/{repo}/operations";
 pub const REPO_RUNS: &str = "/v1/repos/{owner}/{repo}/runs";
 pub const REPO_RUN: &str = "/v1/repos/{owner}/{repo}/runs/{run_id}";
 pub const REPO_RUN_DETAIL: &str = "/v1/repos/{owner}/{repo}/runs/{run_id}/detail";
+pub const REPO_RUN_STEP_LOGS: &str =
+    "/v1/repos/{owner}/{repo}/runs/{run_id}/attempts/{attempt_id}/steps/{step_index}/logs";
 pub const REPO_RUN_CANCEL: &str = "/v1/repos/{owner}/{repo}/runs/{run_id}/cancel";
 pub const REPO_RUN_RETRY: &str = "/v1/repos/{owner}/{repo}/runs/{run_id}/retry";
 pub const REPO_RUN_EVENTS: &str = "/v1/repos/{owner}/{repo}/runs/{run_id}/events";
@@ -127,10 +132,6 @@ pub fn runner_claim(run_id: &str) -> String {
     format!("/v1/runner-protocol/runs/{}/claim", path_segment(run_id))
 }
 
-pub fn attempt_start(attempt_id: &str) -> String {
-    attempt_action(attempt_id, "start")
-}
-
 pub fn attempt_heartbeat(attempt_id: &str) -> String {
     attempt_action(attempt_id, "heartbeat")
 }
@@ -159,11 +160,26 @@ pub fn attempt_abandon(attempt_id: &str) -> String {
     attempt_action(attempt_id, "abandon")
 }
 
+pub fn attempt_step_start(attempt_id: &str, step_index: u32) -> String {
+    attempt_step_action(attempt_id, step_index, "start")
+}
+
+pub fn attempt_step_complete(attempt_id: &str, step_index: u32) -> String {
+    attempt_step_action(attempt_id, step_index, "complete")
+}
+
 fn attempt_action(attempt_id: &str, action: &str) -> String {
     format!(
         "/v1/runner-protocol/attempts/{}/{}",
         path_segment(attempt_id),
         action
+    )
+}
+
+fn attempt_step_action(attempt_id: &str, step_index: u32, action: &str) -> String {
+    format!(
+        "/v1/runner-protocol/attempts/{}/steps/{step_index}/{action}",
+        path_segment(attempt_id),
     )
 }
 
@@ -181,6 +197,20 @@ pub fn repo_run(owner: &str, repo: &str, run_id: &str) -> String {
 
 pub fn repo_run_detail(owner: &str, repo: &str, run_id: &str) -> String {
     format!("{}/detail", repo_run(owner, repo, run_id))
+}
+
+pub fn repo_run_step_logs(
+    owner: &str,
+    repo: &str,
+    run_id: &str,
+    attempt_id: &str,
+    step_index: u32,
+) -> String {
+    format!(
+        "{}/attempts/{}/steps/{step_index}/logs",
+        repo_run(owner, repo, run_id),
+        path_segment(attempt_id),
+    )
 }
 
 pub fn repo_run_cancel(owner: &str, repo: &str, run_id: &str) -> String {
@@ -328,6 +358,10 @@ mod tests {
             (
                 cli_device_login_poll("code/with space"),
                 "/v1/cli/device-login/code%2Fwith%20space/poll",
+            ),
+            (
+                repo_run_step_logs("an owner", "r/name", "run?#1", "attempt/#1", 3),
+                "/v1/repos/an%20owner/r%2Fname/runs/run%3F%231/attempts/attempt%2F%231/steps/3/logs",
             ),
             (
                 git_repo("permissioned", "an owner", "r/name"),

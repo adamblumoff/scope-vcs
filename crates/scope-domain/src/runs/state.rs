@@ -40,3 +40,24 @@ impl AttemptState {
         )
     }
 }
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum StepState {
+    Pending,
+    Running,
+    Succeeded,
+    Failed,
+    Canceled,
+    Lost,
+    Skipped,
+}
+
+impl StepState {
+    pub fn is_terminal(self) -> bool {
+        matches!(
+            self,
+            Self::Succeeded | Self::Failed | Self::Canceled | Self::Lost | Self::Skipped
+        )
+    }
+}

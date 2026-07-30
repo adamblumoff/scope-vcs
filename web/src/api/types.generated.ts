@@ -250,7 +250,17 @@ export type RepoChangeKind = "Connected" | "Lagged" | { "RepositoryChanged": { r
 
 export type RepositoryRunState = "queued" | "leased" | "running" | "succeeded" | "failed" | "canceled" | "lost";
 
-export type RepositoryRunSummaryResponse = { id: string, workflow_name: string, git_oid: string, desired_runner: string | null, state: RepositoryRunState, cancellation_requested: boolean, attempt_number: number, created_at_unix: number, updated_at_unix: number, completed_at_unix: number | null, can_cancel: boolean, can_retry: boolean, };
+export type RepositoryRunSummaryResponse = { id: string, workflow_name: string, git_oid: string, desired_runner: string | null, state: RepositoryRunState, cancellation_requested: boolean, created_at_unix: number, updated_at_unix: number, completed_at_unix: number | null, can_cancel: boolean, can_retry: boolean, };
+
+export type RepositoryRunAttemptState = "leased" | "running" | "succeeded" | "failed" | "canceled" | "lost";
+
+export type RepositoryRunStepState = "pending" | "running" | "succeeded" | "failed" | "canceled" | "lost" | "skipped";
+
+export type RepositoryRunTerminalReason = { "kind": "step-failed", step_index: number, exit_code: number, } | { "kind": "timed-out", step_index: number | null, } | { "kind": "canceled", step_index: number | null, } | { "kind": "runner-lost", step_index: number | null, } | { "kind": "runner-setup-failed", exit_code: number, message: string, };
+
+export type RepositoryRunStepResponse = { index: number, name: string, command: string, state: RepositoryRunStepState, started_at_unix: number | null, completed_at_unix: number | null, exit_code: number | null, };
+
+export type RepositoryRunAttemptResponse = { id: string, runner_id: string, runner_name: string, state: RepositoryRunAttemptState, created_at_unix: number, started_at_unix: number | null, completed_at_unix: number | null, terminal_reason: RepositoryRunTerminalReason | null, steps: Array<RepositoryRunStepResponse>, };
 
 export type RepositoryRunnerState = "online" | "offline" | "disabled";
 
@@ -258,9 +268,11 @@ export type RepositoryRunnerResponse = { id: string, name: string, version: stri
 
 export type RepositoryOperationsResponse = { runs: Array<RepositoryRunSummaryResponse>, runners: Array<RepositoryRunnerResponse>, };
 
-export type RepositoryRunLogResponse = { position: number, attempt_id: string, sequence: number, text: string, created_at_unix: number, };
+export type RepositoryRunLogResponse = { position: number, sequence: number, text: string, created_at_unix: number, };
 
-export type RepositoryRunDetailResponse = { run: RepositoryRunSummaryResponse, logs: Array<RepositoryRunLogResponse>, logs_truncated: boolean, };
+export type RepositoryRunDetailResponse = { run: RepositoryRunSummaryResponse, attempts: Array<RepositoryRunAttemptResponse>, };
+
+export type RepositoryRunStepLogPageResponse = { logs: Array<RepositoryRunLogResponse>, next_after: number, logs_truncated: boolean, };
 
 export const ApiRouteTemplates = {
   accountSession: "/v1/session",
@@ -274,6 +286,7 @@ export const ApiRouteTemplates = {
   repoConfig: "/v1/repos/{owner}/{repo}/config",
   repoOperations: "/v1/repos/{owner}/{repo}/operations",
   repoRunDetail: "/v1/repos/{owner}/{repo}/runs/{run_id}/detail",
+  repoRunStepLogs: "/v1/repos/{owner}/{repo}/runs/{run_id}/attempts/{attempt_id}/steps/{step_index}/logs",
   repoRunCancel: "/v1/repos/{owner}/{repo}/runs/{run_id}/cancel",
   repoRunRetry: "/v1/repos/{owner}/{repo}/runs/{run_id}/retry",
   repoPushIntents: "/v1/repos/{owner}/{repo}/push-intents",

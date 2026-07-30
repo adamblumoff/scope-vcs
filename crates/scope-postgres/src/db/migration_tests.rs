@@ -120,7 +120,11 @@ async fn fresh_database_reaches_exact_latest_schema() {
     migrations::assert_exact_state(db.as_ref()).await.unwrap();
     assert_eq!(
         applied_versions(db.as_ref()).await,
-        ["m0001_adopt_v6", "m0002_retire_reset_schema"]
+        [
+            "m0001_adopt_v6",
+            "m0002_retire_reset_schema",
+            "m0003_structured_run_attempts",
+        ]
     );
     assert!(!relation_exists(db.as_ref(), "scope_metadata_schema").await);
     assert!(!relation_exists(db.as_ref(), "scope_metadata_reset_events").await);
@@ -140,7 +144,7 @@ async fn fresh_database_reaches_exact_latest_schema() {
         .unwrap()
         .try_get::<i64>("", "count")
         .unwrap();
-    assert_eq!(scope_table_count, 40);
+    assert_eq!(scope_table_count, 41);
 }
 
 #[tokio::test]
@@ -248,6 +252,172 @@ async fn populated_v6_is_adopted_without_changing_business_rows() {
 }
 
 #[tokio::test]
+async fn structured_attempt_migration_preserves_runs_and_replaces_execution_state() {
+    let (_target, db, _lease) = isolated_database().await;
+    initialize_ready_v6(db.as_ref()).await;
+    db.execute_unprepared(
+        "
+            INSERT INTO scope_users (id, handle, email, email_verified)
+            VALUES ('user_run', 'run-owner', 'run-owner@scope.test', TRUE);
+            INSERT INTO scope_repositories (
+                id, owner_handle, name, owner_user_id, publication_state,
+                default_visibility, change_version, repo_config, policy
+            )
+            VALUES (
+                'repo_run', 'run-owner', 'repo', 'user_run', 'Published',
+                'Private', 1, '{}'::jsonb, '{}'::jsonb
+            );
+            INSERT INTO scope_runners (
+                id, owner_user_id, secret_hash, version, protocol_version,
+                capabilities, enabled, created_at_unix, last_seen_at_unix
+            )
+            VALUES (
+                'runner_run', 'user_run', repeat('f', 64), '0.1.0', 2,
+                '{}'::jsonb, TRUE, 1, 2
+            );
+            INSERT INTO scope_runner_grants (
+                repo_id, runner_id, name, granted_by_user_id,
+                created_at_unix, revoked_at_unix
+            )
+            VALUES ('repo_run', 'runner_run', 'linux', 'user_run', 1, NULL);
+            INSERT INTO scope_workflow_revisions (digest, definition, created_at_unix)
+            VALUES (repeat('a', 64), '{}'::jsonb, 1);
+            INSERT INTO scope_runs (
+                id, idempotency_key, repo_id, workflow_path,
+                workflow_revision_digest, trigger, requested_by_user_id, source,
+                pinned_container_image, desired_runner_name, state,
+                cancellation_requested, last_attempt_number, current_attempt_id,
+                created_at_unix, updated_at_unix, completed_at_unix
+            )
+            VALUES (
+                'run_active', 'manual:active', 'repo_run', '.scope/workflow.yml',
+                repeat('a', 64), 'manual', 'user_run',
+                jsonb_build_object(
+                    'kind', 'ephemeral-git-bundle',
+                    'object', jsonb_build_object(
+                        'sha256', repeat('b', 64),
+                        'git_oid', repeat('c', 40)
+                    )
+                ),
+                NULL, 'linux', 'queued', FALSE, 0, NULL, 1, 1, NULL
+            );
+            INSERT INTO scope_run_attempts (
+                id, run_id, number, runner_id, token_hash,
+                token_expires_at_unix, state, lease_expires_at_unix,
+                last_heartbeat_at_unix, created_at_unix, started_at_unix,
+                completed_at_unix, exit_code, log_bytes, logs_truncated
+            )
+            VALUES (
+                'attempt_active', 'run_active', 1, 'runner_run', repeat('d', 64),
+                100, 'running', 100, 2, 1, 2, NULL, NULL, 4, FALSE
+            );
+            UPDATE scope_runs
+            SET state = 'running',
+                last_attempt_number = 1,
+                current_attempt_id = 'attempt_active',
+                updated_at_unix = 2
+            WHERE id = 'run_active';
+            INSERT INTO scope_run_logs (
+                run_id, attempt_id, sequence, text, created_at_unix
+            )
+            VALUES ('run_active', 'attempt_active', 1, 'test', 2);
+        ",
+    )
+    .await
+    .unwrap();
+
+    migrations::apply(db.as_ref()).await.unwrap();
+
+    let run = db
+        .query_one(Statement::from_string(
+            DatabaseBackend::Postgres,
+            "
+                SELECT state, cancellation_requested, last_attempt_number,
+                       current_attempt_id, completed_at_unix
+                FROM scope_runs
+                WHERE id = 'run_active'
+            "
+            .to_string(),
+        ))
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(run.try_get::<String>("", "state").unwrap(), "queued");
+    assert!(!run.try_get::<bool>("", "cancellation_requested").unwrap());
+    assert_eq!(run.try_get::<i32>("", "last_attempt_number").unwrap(), 0);
+    assert!(
+        run.try_get::<Option<String>>("", "current_attempt_id")
+            .unwrap()
+            .is_none()
+    );
+    assert!(
+        run.try_get::<Option<i64>>("", "completed_at_unix")
+            .unwrap()
+            .is_none()
+    );
+    for table in [
+        "scope_run_attempts",
+        "scope_run_attempt_steps",
+        "scope_run_logs",
+    ] {
+        let count = db
+            .query_one(Statement::from_string(
+                DatabaseBackend::Postgres,
+                format!("SELECT count(*) AS count FROM {table}"),
+            ))
+            .await
+            .unwrap()
+            .unwrap()
+            .try_get::<i64>("", "count")
+            .unwrap();
+        assert_eq!(count, 0, "{table} should start empty after the reset");
+    }
+    for index in [
+        "idx_scope_run_attempts_active",
+        "idx_scope_run_attempts_runner",
+        "idx_scope_run_attempts_expiring",
+        "idx_scope_run_logs_run_position",
+        "idx_scope_run_logs_step_position",
+    ] {
+        assert!(relation_exists(db.as_ref(), index).await, "missing {index}");
+    }
+    let constraints = db
+        .query_one(Statement::from_string(
+            DatabaseBackend::Postgres,
+            "
+                SELECT
+                    count(*) FILTER (
+                        WHERE conname IN (
+                            'fk_scope_run_attempts_run',
+                            'fk_scope_run_attempts_runner',
+                            'fk_scope_run_attempt_steps_attempt',
+                            'fk_scope_run_logs_run',
+                            'fk_scope_run_logs_step',
+                            'fk_scope_runs_current_attempt'
+                        )
+                    ) AS foreign_keys,
+                    bool_or(
+                        conname = 'scope_run_attempts_values' AND
+                        pg_get_constraintdef(oid) LIKE '%last_heartbeat_at_unix < lease_expires_at_unix%'
+                    ) AS lease_check,
+                    bool_or(
+                        conname = 'scope_run_logs_values' AND
+                        pg_get_constraintdef(oid) LIKE '%octet_length(text)%'
+                    ) AS byte_check
+                FROM pg_constraint
+                WHERE connamespace = current_schema()::regnamespace
+            "
+            .to_string(),
+        ))
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(constraints.try_get::<i64>("", "foreign_keys").unwrap(), 6);
+    assert!(constraints.try_get::<bool>("", "lease_check").unwrap());
+    assert!(constraints.try_get::<bool>("", "byte_check").unwrap());
+}
+
+#[tokio::test]
 async fn structurally_drifted_v6_is_refused_without_stamping_migration_state() {
     let (_target, db, _lease) = isolated_database().await;
     initialize_ready_v6(db.as_ref()).await;
@@ -346,7 +516,11 @@ async fn reapplying_latest_migrations_is_a_data_preserving_noop() {
     assert_eq!(representative_business_snapshot(db.as_ref()).await, before);
     assert_eq!(
         applied_versions(db.as_ref()).await,
-        ["m0001_adopt_v6", "m0002_retire_reset_schema"]
+        [
+            "m0001_adopt_v6",
+            "m0002_retire_reset_schema",
+            "m0003_structured_run_attempts",
+        ]
     );
 }
 
@@ -363,7 +537,11 @@ async fn concurrent_api_migration_attempts_serialize() {
     second.unwrap();
     assert_eq!(
         applied_versions(db.as_ref()).await,
-        ["m0001_adopt_v6", "m0002_retire_reset_schema"]
+        [
+            "m0001_adopt_v6",
+            "m0002_retire_reset_schema",
+            "m0003_structured_run_attempts",
+        ]
     );
 }
 

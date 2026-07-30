@@ -45,7 +45,10 @@ import type {
   RepositoryMemberResponse,
   RepositoryOperationsResponse,
   RepositoryRunDetailResponse,
+  RepositoryRunAttemptResponse,
   RepositoryRunLogResponse,
+  RepositoryRunStepLogPageResponse,
+  RepositoryRunStepResponse,
   RepositoryRunState,
   RepositoryRunSummaryResponse,
   RepositoryRunnerResponse,
@@ -87,7 +90,10 @@ export type RepoOperations = RepositoryOperationsResponse
 export type RepoRun = RepositoryRunSummaryResponse
 export type RepoRunState = RepositoryRunState
 export type RepoRunDetail = RepositoryRunDetailResponse
+export type RepoRunAttempt = RepositoryRunAttemptResponse
 export type RepoRunLog = RepositoryRunLogResponse
+export type RepoRunStep = RepositoryRunStepResponse
+export type RepoRunStepLogPage = RepositoryRunStepLogPageResponse
 export type RepoRunner = RepositoryRunnerResponse
 export type RepoRunnerState = RepositoryRunnerState
 export type FirstPushToken = FirstPushTokenResponse
@@ -131,6 +137,12 @@ export type RepoParams = {
 
 export type RunActionInput = RepoParams & {
   run_id: string
+}
+
+export type RunStepLogsInput = RunActionInput & {
+  after: number
+  attempt_id: string
+  step_index: number
 }
 
 export type HomeState = {

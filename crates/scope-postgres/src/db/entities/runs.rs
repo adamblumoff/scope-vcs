@@ -339,6 +339,7 @@ pub mod run_attempt {
         pub run_id: String,
         pub number: i32,
         pub runner_id: String,
+        pub runner_name: String,
         #[sea_orm(unique)]
         pub token_hash: String,
         pub token_expires_at_unix: i64,
@@ -348,7 +349,7 @@ pub mod run_attempt {
         pub created_at_unix: i64,
         pub started_at_unix: Option<i64>,
         pub completed_at_unix: Option<i64>,
-        pub exit_code: Option<i32>,
+        pub terminal_reason: Option<Json>,
         pub log_bytes: i64,
         pub logs_truncated: bool,
     }
@@ -365,6 +366,7 @@ pub mod run_attempt {
                 run_id: attempt.run_id.clone(),
                 number: u32_to_i32(attempt.number, "run attempt number")?,
                 runner_id: attempt.runner_id.clone(),
+                runner_name: attempt.runner_name.clone(),
                 token_hash: attempt.token_hash.clone(),
                 token_expires_at_unix: u64_to_i64(
                     attempt.token_expires_at_unix,
@@ -388,7 +390,11 @@ pub mod run_attempt {
                     .completed_at_unix
                     .map(|value| u64_to_i64(value, "attempt completion time"))
                     .transpose()?,
-                exit_code: attempt.exit_code,
+                terminal_reason: attempt
+                    .terminal_reason
+                    .as_ref()
+                    .map(encode_json)
+                    .transpose()?,
                 log_bytes: u64_to_i64(attempt.log_bytes, "attempt log byte count")?,
                 logs_truncated: attempt.logs_truncated,
             })
@@ -400,6 +406,7 @@ pub mod run_attempt {
                 self.run_id,
                 i32_to_u32(self.number, "run attempt number")?,
                 self.runner_id,
+                self.runner_name,
                 self.token_hash,
                 i64_to_u64(self.token_expires_at_unix, "attempt token expiry time")?,
                 decode_enum::<AttemptState>(self.state)?,
@@ -412,9 +419,68 @@ pub mod run_attempt {
                 self.completed_at_unix
                     .map(|value| i64_to_u64(value, "attempt completion time"))
                     .transpose()?,
-                self.exit_code,
+                self.terminal_reason
+                    .map(decode_json::<AttemptTerminalReason>)
+                    .transpose()?,
                 i64_to_u64(self.log_bytes, "attempt log byte count")?,
                 self.logs_truncated,
+            )
+            .map_err(PostgresError::invalid_input)
+        }
+    }
+}
+
+pub mod run_attempt_step {
+    use super::*;
+
+    #[derive(Clone, Debug, PartialEq, DeriveEntityModel)]
+    #[sea_orm(table_name = "scope_run_attempt_steps")]
+    pub struct Model {
+        #[sea_orm(primary_key, auto_increment = false)]
+        pub attempt_id: String,
+        #[sea_orm(primary_key, auto_increment = false)]
+        pub step_index: i32,
+        pub state: String,
+        pub started_at_unix: Option<i64>,
+        pub completed_at_unix: Option<i64>,
+        pub exit_code: Option<i32>,
+    }
+
+    #[derive(Copy, Clone, Debug, EnumIter, DeriveRelation)]
+    pub enum Relation {}
+
+    impl ActiveModelBehavior for ActiveModel {}
+
+    impl Model {
+        pub fn from_domain(step: &RunAttemptStep) -> Result<Self, PostgresError> {
+            Ok(Self {
+                attempt_id: step.attempt_id.clone(),
+                step_index: u32_to_i32(step.step_index, "run attempt step index")?,
+                state: encode_enum(step.state)?,
+                started_at_unix: step
+                    .started_at_unix
+                    .map(|value| u64_to_i64(value, "run attempt step start time"))
+                    .transpose()?,
+                completed_at_unix: step
+                    .completed_at_unix
+                    .map(|value| u64_to_i64(value, "run attempt step completion time"))
+                    .transpose()?,
+                exit_code: step.exit_code,
+            })
+        }
+
+        pub fn try_into_domain(self) -> Result<RunAttemptStep, PostgresError> {
+            RunAttemptStep::restore(
+                self.attempt_id,
+                i32_to_u32(self.step_index, "run attempt step index")?,
+                decode_enum::<StepState>(self.state)?,
+                self.started_at_unix
+                    .map(|value| i64_to_u64(value, "run attempt step start time"))
+                    .transpose()?,
+                self.completed_at_unix
+                    .map(|value| i64_to_u64(value, "run attempt step completion time"))
+                    .transpose()?,
+                self.exit_code,
             )
             .map_err(PostgresError::invalid_input)
         }
@@ -431,6 +497,7 @@ pub mod run_log {
         pub position: i64,
         pub run_id: String,
         pub attempt_id: String,
+        pub step_index: i32,
         pub sequence: i64,
         pub text: String,
         pub created_at_unix: i64,
@@ -447,6 +514,7 @@ pub mod run_log {
                 position: 0,
                 run_id: run_id.to_string(),
                 attempt_id: chunk.attempt_id.clone(),
+                step_index: u32_to_i32(chunk.step_index, "run log step index")?,
                 sequence: u64_to_i64(chunk.sequence, "run log sequence")?,
                 text: chunk.text.clone(),
                 created_at_unix: u64_to_i64(chunk.created_at_unix, "run log creation time")?,
@@ -456,6 +524,7 @@ pub mod run_log {
         pub fn try_into_domain(self) -> Result<RunLogChunk, PostgresError> {
             RunLogChunk::new(
                 self.attempt_id,
+                i32_to_u32(self.step_index, "run log step index")?,
                 i64_to_u64(self.sequence, "run log sequence")?,
                 self.text,
                 i64_to_u64(self.created_at_unix, "run log creation time")?,

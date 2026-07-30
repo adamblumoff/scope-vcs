@@ -1,11 +1,10 @@
 use super::{RunnerConfig, attempt_control_client, unix_now};
 use crate::api::attempt_heartbeat;
-use anyhow::bail;
 use scope_api_contract::ClaimRunResponse;
 use std::{
     process::Command,
     sync::{
-        Arc, Mutex,
+        Arc,
         atomic::{AtomicBool, AtomicU8, AtomicU64, Ordering},
     },
     thread,
@@ -37,7 +36,6 @@ pub(super) struct AttemptSupervisor {
     reason: Arc<AtomicU8>,
     execution_deadline: Arc<AtomicU64>,
     execution_finished: Arc<AtomicBool>,
-    container_name: Arc<Mutex<Option<String>>>,
     handle: Option<thread::JoinHandle<()>>,
 }
 
@@ -48,12 +46,10 @@ impl AttemptSupervisor {
         let reason = Arc::new(AtomicU8::new(AttemptStopReason::None as u8));
         let execution_deadline = Arc::new(AtomicU64::new(0));
         let execution_finished = Arc::new(AtomicBool::new(false));
-        let container_name = Arc::new(Mutex::new(None::<String>));
         let thread_stop = Arc::clone(&stop);
         let thread_reason = Arc::clone(&reason);
         let thread_deadline = Arc::clone(&execution_deadline);
         let thread_execution_finished = Arc::clone(&execution_finished);
-        let thread_container = Arc::clone(&container_name);
         let handle = thread::spawn(move || {
             let mut confirmed_lease_deadline = claim.lease_expires_at_unix;
             let mut next_heartbeat_at = unix_now();
@@ -96,9 +92,14 @@ impl AttemptSupervisor {
                 {
                     pending_stop = AttemptStopReason::LeaseLost;
                 }
-                if pending_stop != AttemptStopReason::None
-                    && confirm_execution_stopped(&thread_container)
+                if matches!(
+                    pending_stop,
+                    AttemptStopReason::TimedOut | AttemptStopReason::Cancellation
+                ) && thread_execution_finished.load(Ordering::Relaxed)
                 {
+                    pending_stop = AttemptStopReason::None;
+                }
+                if pending_stop != AttemptStopReason::None {
                     thread_reason.store(pending_stop as u8, Ordering::Relaxed);
                     return;
                 }
@@ -110,22 +111,8 @@ impl AttemptSupervisor {
             reason,
             execution_deadline,
             execution_finished,
-            container_name,
             handle: Some(handle),
         })
-    }
-
-    pub(super) fn set_container(&self, name: String) -> anyhow::Result<()> {
-        *self
-            .container_name
-            .lock()
-            .expect("attempt container lock must not be poisoned") = Some(name);
-        if self.reason() != AttemptStopReason::None
-            && !confirm_execution_stopped(&self.container_name)
-        {
-            bail!("could not confirm stopped container after attempt supervision ended");
-        }
-        Ok(())
     }
 
     pub(super) fn set_execution_deadline(&self, deadline_unix: u64) {
@@ -133,16 +120,33 @@ impl AttemptSupervisor {
             .store(deadline_unix, Ordering::Relaxed);
     }
 
-    pub(super) fn execution_finished_signal(&self) -> Arc<AtomicBool> {
-        Arc::clone(&self.execution_finished)
-    }
-
     pub(super) fn mark_execution_finished(&self) {
         self.execution_finished.store(true, Ordering::Relaxed);
+        self.reason
+            .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |reason| {
+                match AttemptStopReason::from_u8(reason) {
+                    AttemptStopReason::TimedOut | AttemptStopReason::Cancellation => {
+                        Some(AttemptStopReason::None as u8)
+                    }
+                    _ => None,
+                }
+            })
+            .ok();
     }
 
     pub(super) fn reason(&self) -> AttemptStopReason {
-        AttemptStopReason::from_u8(self.reason.load(Ordering::Relaxed))
+        let reason = AttemptStopReason::from_u8(self.reason.load(Ordering::Relaxed));
+        if reason != AttemptStopReason::None || self.execution_finished.load(Ordering::Relaxed) {
+            return reason;
+        }
+        let deadline = self.execution_deadline.load(Ordering::Relaxed);
+        if deadline != 0 && unix_now() >= deadline {
+            self.reason
+                .store(AttemptStopReason::TimedOut as u8, Ordering::Relaxed);
+            AttemptStopReason::TimedOut
+        } else {
+            AttemptStopReason::None
+        }
     }
 
     pub(super) fn finish(&mut self) -> AttemptStopReason {
@@ -158,17 +162,6 @@ impl Drop for AttemptSupervisor {
     fn drop(&mut self) {
         let _ = self.finish();
     }
-}
-
-fn confirm_execution_stopped(container_name: &Mutex<Option<String>>) -> bool {
-    let Some(container_name) = container_name
-        .lock()
-        .expect("attempt container lock must not be poisoned")
-        .clone()
-    else {
-        return true;
-    };
-    terminate_container(&container_name)
 }
 
 pub(super) fn terminate_container(container_name: &str) -> bool {

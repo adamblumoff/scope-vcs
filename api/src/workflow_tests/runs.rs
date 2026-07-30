@@ -1,8 +1,8 @@
 use super::*;
 use futures_util::StreamExt;
 use scope_api_contract::{
-    AppendAttemptLogRequest, AttemptConclusionRequest, CompleteAttemptRequest,
-    PinAttemptContainerImageRequest, RegisterRunnerRequest,
+    AppendAttemptLogRequest, CompleteAttemptStepRequest, PinAttemptContainerImageRequest,
+    RegisterRunnerRequest, StepConclusionRequest,
 };
 use scope_domain::runs::runner::{RUNNER_PROTOCOL_VERSION, RunnerCapabilities};
 use std::time::Duration;
@@ -222,13 +222,18 @@ async fn manual_run_protocol_crosses_human_runner_and_attempt_credentials() {
         .clone()
         .oneshot(machine_request(
             "POST",
-            &scope_api_contract::routes::attempt_start(&attempt_id),
+            &scope_api_contract::routes::attempt_step_start(&attempt_id, 0),
             &attempt_token,
             Body::empty(),
         ))
         .await
         .unwrap();
-    assert_eq!(started.status(), StatusCode::OK);
+    assert_eq!(
+        started.status(),
+        StatusCode::OK,
+        "{:?}",
+        response_json(started).await
+    );
 
     let logged = app
         .clone()
@@ -237,6 +242,7 @@ async fn manual_run_protocol_crosses_human_runner_and_attempt_credentials() {
             &scope_api_contract::routes::attempt_logs(&attempt_id),
             Some(format!("Bearer {attempt_token}")),
             &AppendAttemptLogRequest {
+                step_index: 0,
                 sequence: 1,
                 text: "hello from runner\n".to_string(),
             },
@@ -284,6 +290,7 @@ async fn manual_run_protocol_crosses_human_runner_and_attempt_credentials() {
                 &scope_api_contract::routes::attempt_logs(&attempt_id),
                 Some(format!("Bearer {attempt_token}")),
                 &AppendAttemptLogRequest {
+                    step_index: 0,
                     sequence,
                     text: format!("chunk-{sequence}\n"),
                 },
@@ -297,10 +304,10 @@ async fn manual_run_protocol_crosses_human_runner_and_attempt_credentials() {
         .clone()
         .oneshot(json_request(
             "POST",
-            &scope_api_contract::routes::attempt_complete(&attempt_id),
+            &scope_api_contract::routes::attempt_step_complete(&attempt_id, 0),
             Some(format!("Bearer {attempt_token}")),
-            &CompleteAttemptRequest {
-                conclusion: AttemptConclusionRequest::Succeeded,
+            &CompleteAttemptStepRequest {
+                conclusion: StepConclusionRequest::Succeeded,
             },
         ))
         .await
@@ -357,10 +364,88 @@ async fn manual_run_protocol_crosses_human_runner_and_attempt_credentials() {
         .unwrap();
     assert_eq!(detail.status(), StatusCode::OK);
     let detail = response_json(detail).await;
-    assert_eq!(detail["logs"].as_array().unwrap().len(), 128);
-    assert_eq!(detail["logs"][0]["text"], "chunk-3\n");
-    assert_eq!(detail["logs"][127]["text"], "chunk-130\n");
-    assert_eq!(detail["logs_truncated"], true);
+    assert_eq!(detail["run"]["id"], run_id);
+    assert!(detail["run"].get("attempt_number").is_none());
+    assert_eq!(detail["attempts"].as_array().unwrap().len(), 1);
+    assert_eq!(detail["attempts"][0]["id"], attempt_id);
+    assert_eq!(detail["attempts"][0]["runner_name"], "linux-box");
+    assert_eq!(detail["attempts"][0]["state"], "succeeded");
+    assert_eq!(detail["attempts"][0]["steps"][0]["name"], "Test");
+    assert_eq!(detail["attempts"][0]["steps"][0]["state"], "succeeded");
+    assert_eq!(detail["attempts"][0]["steps"][0]["exit_code"], 0);
+
+    let step_logs = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri(format!(
+                    "{}?after=0",
+                    scope_api_contract::routes::repo_run_step_logs(
+                        TEST_REPO_OWNER,
+                        TEST_REPO_NAME,
+                        &run_id,
+                        &attempt_id,
+                        0,
+                    )
+                ))
+                .header(AUTHORIZATION, bearer_header())
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(step_logs.status(), StatusCode::OK);
+    let step_logs = response_json(step_logs).await;
+    assert_eq!(step_logs["logs"].as_array().unwrap().len(), 128);
+    assert_eq!(step_logs["logs"][0]["text"], "hello from runner\n");
+    assert_eq!(step_logs["logs"][127]["text"], "chunk-128\n");
+    assert_eq!(step_logs["next_after"], 128);
+    assert_eq!(step_logs["logs_truncated"], false);
+
+    let remaining_logs = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri(format!(
+                    "{}?after=128",
+                    scope_api_contract::routes::repo_run_step_logs(
+                        TEST_REPO_OWNER,
+                        TEST_REPO_NAME,
+                        &run_id,
+                        &attempt_id,
+                        0,
+                    )
+                ))
+                .header(AUTHORIZATION, bearer_header())
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let remaining_logs = response_json(remaining_logs).await;
+    assert_eq!(remaining_logs["logs"].as_array().unwrap().len(), 2);
+    assert_eq!(remaining_logs["logs"][0]["text"], "chunk-129\n");
+    assert_eq!(remaining_logs["logs"][1]["text"], "chunk-130\n");
+    assert_eq!(remaining_logs["next_after"], 130);
+
+    let wrong_step = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri(scope_api_contract::routes::repo_run_step_logs(
+                    TEST_REPO_OWNER,
+                    TEST_REPO_NAME,
+                    &run_id,
+                    &attempt_id,
+                    1,
+                ))
+                .header(AUTHORIZATION, bearer_header())
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(wrong_step.status(), StatusCode::NOT_FOUND);
 
     let anonymous_operations = app
         .clone()
@@ -421,6 +506,72 @@ async fn manual_run_protocol_crosses_human_runner_and_attempt_credentials() {
     assert!(terminal_events.contains("\"text\":\"chunk-130\\n\""));
     assert!(terminal_events.contains("\"state\":\"succeeded\""));
     assert!(terminal_events.contains("\"logs_truncated\":false"));
+
+    let retried = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri(scope_api_contract::routes::repo_run_retry(
+                    TEST_REPO_OWNER,
+                    TEST_REPO_NAME,
+                    &run_id,
+                ))
+                .header(AUTHORIZATION, bearer_header())
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(retried.status(), StatusCode::OK);
+    let offered_again = app
+        .clone()
+        .oneshot(machine_request(
+            "POST",
+            scope_api_contract::routes::RUNNER_POLL,
+            &runner_secret,
+            Body::empty(),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(offered_again.status(), StatusCode::OK);
+    let claimed_again = app
+        .clone()
+        .oneshot(machine_request(
+            "POST",
+            &scope_api_contract::routes::runner_claim(&run_id),
+            &runner_secret,
+            Body::empty(),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(claimed_again.status(), StatusCode::OK);
+    let newer_attempt_id = response_json(claimed_again).await["attempt_id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+
+    let retried_detail = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri(scope_api_contract::routes::repo_run_detail(
+                    TEST_REPO_OWNER,
+                    TEST_REPO_NAME,
+                    &run_id,
+                ))
+                .header(AUTHORIZATION, bearer_header())
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let retried_detail = response_json(retried_detail).await;
+    assert_eq!(retried_detail["attempts"][0]["id"], newer_attempt_id);
+    assert_eq!(retried_detail["attempts"][1]["id"], attempt_id);
+    let retried_detail_json = serde_json::to_string(&retried_detail).unwrap();
+    assert!(!retried_detail_json.contains("\"number\""));
+    assert!(!retried_detail_json.contains("attempt_number"));
 
     let human_cannot_use_attempt_token = app
         .clone()

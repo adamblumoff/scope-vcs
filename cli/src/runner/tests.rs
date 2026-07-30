@@ -1,8 +1,13 @@
+use super::recovery::{
+    mark_recovery_step_conclusion_pending, mark_recovery_step_started, stage_recovery_log_chunk,
+    update_recovery_log_progress,
+};
 use super::*;
+use scope_api_contract::StepConclusionRequest;
 use scope_domain::runs::workflow::{
     CompiledWorkflow, ContainerSpec, RunnerSelector, WorkflowStep, WorkflowTriggers,
 };
-use std::{env, io::Cursor};
+use std::env;
 
 #[test]
 fn repository_and_systemd_inputs_are_strict() {
@@ -13,26 +18,6 @@ fn repository_and_systemd_inputs_are_strict() {
         systemd_quote_path(Path::new("/opt/Scope Runner/%bin")).unwrap(),
         "\"/opt/Scope Runner/%%bin\""
     );
-}
-
-#[test]
-fn job_script_preserves_order_and_quotes_step_labels() {
-    let workflow = CompiledWorkflow::new(
-        "Test",
-        WorkflowTriggers::new(true, false).unwrap(),
-        RunnerSelector::Any,
-        ContainerSpec::new("alpine:3.20").unwrap(),
-        60,
-        vec![
-            WorkflowStep::new("It's first", "printf one").unwrap(),
-            WorkflowStep::new("Second", "printf two\n").unwrap(),
-        ],
-    )
-    .unwrap();
-    let script = job_script(&workflow);
-    assert!(script.find("printf one").unwrap() < script.find("printf two").unwrap());
-    assert!(script.contains("'It'\"'\"'s first'"));
-    assert!(script.starts_with("#!/bin/sh\nset -e\n"));
 }
 
 #[test]
@@ -70,7 +55,7 @@ fn docker_limits_are_always_applied() {
 }
 
 #[test]
-fn job_container_receives_only_copied_source_and_script() {
+fn job_container_receives_only_copied_source_and_step_programs() {
     use scope_api_contract::RunJobResponse;
 
     let config = RunnerConfig {
@@ -108,6 +93,7 @@ fn job_container_receives_only_copied_source_and_script() {
         &claim,
         "scope-attempt-1",
         "docker.io/library/alpine@sha256:abc",
+        Path::new("/runner/private/steps"),
     );
     let arguments = command
         .get_args()
@@ -119,7 +105,6 @@ fn job_container_receives_only_copied_source_and_script() {
     for forbidden in [
         "--env",
         "-e",
-        "--mount",
         "-v",
         "/var/run/docker.sock",
         "DATABASE_URL",
@@ -140,29 +125,17 @@ fn job_container_receives_only_copied_source_and_script() {
     assert!(!joined.contains(&claim.attempt_token));
     assert!(joined.contains("scope.runner-id=runner-1"));
     assert!(joined.contains("scope.attempt-id=attempt-1"));
+    assert!(joined.contains("type=bind,source=/runner/private/steps,target=/scope-steps,readonly"));
     assert!(
         arguments
             .windows(2)
             .any(|pair| pair == ["--entrypoint", "sh"])
     );
-}
-
-#[test]
-fn log_reader_bounds_chunks_even_without_newlines() {
-    let input = vec![b'x'; LOG_CHUNK_BYTES * 2 + 7];
-    let (sender, receiver) = mpsc::channel();
-    let execution_finished = Arc::new(AtomicBool::new(false));
-    let handle = spawn_log_reader(
-        Cursor::new(input.clone()),
-        sender,
-        Arc::clone(&execution_finished),
-    );
-    let chunks = receiver.into_iter().collect::<Vec<_>>();
-    handle.join().unwrap();
-
-    assert!(chunks.iter().all(|chunk| chunk.len() <= LOG_CHUNK_BYTES));
-    assert_eq!(chunks.concat().into_bytes(), input);
-    assert!(execution_finished.load(Ordering::Relaxed));
+    assert!(joined.contains("/scope-steps/current"));
+    assert!(joined.contains("set -eu"));
+    assert!(joined.contains("next_phase"));
+    assert!(joined.contains("\"$next_phase\" = run"));
+    assert!(joined.contains("sh -e"));
 }
 
 #[test]
@@ -176,6 +149,33 @@ fn log_encoding_is_chunk_independent_and_replay_safe() {
     split.push_str(&decoder.finish());
     assert_eq!(split, whole);
     assert_eq!(whole, "hello ☃\nbad \\xff\n");
+}
+
+#[test]
+fn replayed_step_conclusion_advances_local_recovery_to_the_next_step() {
+    let mut progress = RecoveryProgress {
+        next_log_sequence: 2,
+        execution_deadline_unix: Some(90),
+        active_step_index: Some(0),
+        active_step_nonce: Some("nonce".to_string()),
+        active_step_log_bytes: 4,
+        logs_exhausted: false,
+        pending_log_chunk: None,
+        pending_step_conclusion: Some(recovery::PendingStepConclusion {
+            step_index: 0,
+            conclusion: StepConclusionRequest::Succeeded,
+        }),
+        pending_attempt_conclusion: None,
+        pending_attempt_abandon: false,
+    };
+
+    advance_recovery_past_replayed_step(&mut progress);
+
+    assert_eq!(progress.active_step_index, None);
+    assert_eq!(progress.active_step_nonce, None);
+    assert_eq!(progress.active_step_log_bytes, 0);
+    assert_eq!(progress.pending_log_chunk, None);
+    assert_eq!(progress.pending_step_conclusion, None);
 }
 
 #[cfg(unix)]
@@ -218,9 +218,35 @@ fn interrupted_attempt_credentials_are_persisted_privately_for_reconciliation() 
     );
     assert!(!root.join(".claim.json.tmp").exists());
     assert!(persist_recovery_claim(&root, &claim).is_err());
-    update_recovery_log_sequence(&root, &claim, 2).unwrap();
+    mark_recovery_step_started(&root, &claim, 0, "step-nonce").unwrap();
+    stage_recovery_log_chunk(
+        &root,
+        &claim,
+        recovery::PendingLogChunk {
+            step_index: 0,
+            sequence: 1,
+            start_byte: 0,
+            end_byte: 4,
+            text: "test".to_string(),
+        },
+    )
+    .unwrap();
+    let staged: RecoveryProgress =
+        serde_json::from_slice(&fs::read(root.join("progress.json")).unwrap()).unwrap();
+    assert_eq!(
+        staged.pending_log_chunk,
+        Some(recovery::PendingLogChunk {
+            step_index: 0,
+            sequence: 1,
+            start_byte: 0,
+            end_byte: 4,
+            text: "test".to_string(),
+        })
+    );
+    update_recovery_log_progress(&root, &claim, 0, 2, 4, false).unwrap();
+    mark_recovery_step_conclusion_pending(&root, &claim, 0, StepConclusionRequest::Succeeded)
+        .unwrap();
     mark_recovery_execution_started(&root, &claim, 90).unwrap();
-    mark_recovery_conclusion_pending(&root, &claim, AttemptConclusionRequest::Succeeded).unwrap();
     let stored: ClaimRunResponse = serde_json::from_slice(&fs::read(path).unwrap()).unwrap();
     assert_eq!(stored.attempt_id, claim.attempt_id);
     assert_eq!(stored.attempt_token, claim.attempt_token);
@@ -228,9 +254,16 @@ fn interrupted_attempt_credentials_are_persisted_privately_for_reconciliation() 
         serde_json::from_slice(&fs::read(root.join("progress.json")).unwrap()).unwrap();
     assert_eq!(progress.next_log_sequence, 2);
     assert_eq!(progress.execution_deadline_unix, Some(90));
+    assert_eq!(progress.active_step_index, Some(0));
+    assert_eq!(progress.active_step_nonce.as_deref(), Some("step-nonce"));
+    assert_eq!(progress.active_step_log_bytes, 4);
+    assert_eq!(progress.pending_log_chunk, None);
     assert_eq!(
-        progress.pending_conclusion,
-        Some(AttemptConclusionRequest::Succeeded)
+        progress.pending_step_conclusion,
+        Some(recovery::PendingStepConclusion {
+            step_index: 0,
+            conclusion: StepConclusionRequest::Succeeded,
+        })
     );
     assert!(!root.join(".progress.json.tmp").exists());
     fs::remove_dir_all(root).unwrap();

@@ -58,6 +58,19 @@ impl RunStore {
             .exec(&tx)
             .await
             .map_err(PostgresError::internal)?;
+        let attempt_ids = entities::run_attempt::Entity::find()
+            .select_only()
+            .column(entities::run_attempt::Column::Id)
+            .filter(entities::run_attempt::Column::RunId.is_in(run_ids.clone()))
+            .into_tuple::<String>()
+            .all(&tx)
+            .await
+            .map_err(PostgresError::internal)?;
+        entities::run_attempt_step::Entity::delete_many()
+            .filter(entities::run_attempt_step::Column::AttemptId.is_in(attempt_ids))
+            .exec(&tx)
+            .await
+            .map_err(PostgresError::internal)?;
         entities::run_attempt::Entity::delete_many()
             .filter(entities::run_attempt::Column::RunId.is_in(run_ids.clone()))
             .exec(&tx)

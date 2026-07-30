@@ -1,0 +1,477 @@
+import type {
+  RepoRunAttempt,
+  RepoRunDetail,
+  RepoRunStep,
+  RepoRunStepLogPage,
+  RunActionInput,
+  RunStepLogsInput,
+} from '@/api/types'
+import { PageErrorAlert } from '@/components/page-error-alert'
+import { RouteErrorContent } from '@/components/route-error-page'
+import { Button } from '@/components/ui/button'
+import { WorkbenchHeader } from '@/components/workbench-header'
+import { cn } from '@/lib/utils'
+import { Link } from '@tanstack/react-router'
+import {
+  Check,
+  ChevronDown,
+  ChevronRight,
+  Circle,
+  LoaderCircle,
+  RotateCcw,
+  Square,
+  TerminalSquare,
+  X,
+} from 'lucide-react'
+import { useMemo } from 'react'
+import {
+  type StepLogState,
+  useRepositoryRunDetailController,
+} from './repository-run-detail-controller'
+import { RunStatusDot } from './repository-runs-page'
+import { formatRunUnixTime } from './run-formatting'
+
+export function RepositoryRunDetailPage({
+  cancelRun,
+  initialDetail,
+  loadDetail,
+  loadLogs,
+  params,
+  retryRun,
+}: {
+  cancelRun: () => Promise<void>
+  initialDetail: RepoRunDetail
+  loadDetail: () => Promise<RepoRunDetail>
+  loadLogs: (input: RunStepLogsInput) => Promise<RepoRunStepLogPage>
+  params: RunActionInput
+  retryRun: () => Promise<void>
+}) {
+  const {
+    actionError,
+    detail,
+    expandedAttempts,
+    metadataError,
+    pendingAction,
+    performAction,
+    refreshDetail,
+    refreshLogs,
+    selectedLogState,
+    selection,
+    toggleAttempt,
+    toggleStep,
+  } = useRepositoryRunDetailController({
+    initialDetail,
+    loadDetail,
+    loadLogs,
+    params,
+  })
+
+  return (
+    <>
+      <RunHeader
+        actionError={actionError}
+        detail={detail}
+        onCancel={() => void performAction('cancel', cancelRun)}
+        onRetry={() => void performAction('retry', retryRun)}
+        params={params}
+        pendingAction={pendingAction}
+      />
+      <main className="px-4 pb-14 sm:px-6 lg:px-8">
+        {metadataError ? (
+          <div className="pt-5">
+            <PageErrorAlert title="Run details could not refresh">
+              <div className="flex flex-wrap items-center gap-3">
+                <span>{metadataError}</span>
+                <Button
+                  onClick={() => void refreshDetail()}
+                  size="sm"
+                  variant="secondary"
+                >
+                  Retry now
+                </Button>
+              </div>
+            </PageErrorAlert>
+          </div>
+        ) : null}
+        <section aria-labelledby="attempts-heading" className="pt-7">
+          <h2 className="text-sm font-semibold" id="attempts-heading">
+            Attempts
+          </h2>
+          <div className="mt-3 divide-y divide-border border-y border-border">
+            {detail.attempts.map((attempt) => (
+              <AttemptRow
+                attempt={attempt}
+                expanded={expandedAttempts.has(attempt.id)}
+                key={attempt.id}
+                logState={selectedLogState}
+                onLogRetry={() => {
+                  if (selection) void refreshLogs(selection)
+                }}
+                onSelectStep={(stepIndex) => toggleStep(attempt.id, stepIndex)}
+                onToggle={() => toggleAttempt(attempt)}
+                selectedStepIndex={
+                  selection?.attemptId === attempt.id
+                    ? selection.stepIndex
+                    : null
+                }
+              />
+            ))}
+          </div>
+          {detail.attempts.length === 0 ? (
+            <p className="border-b border-border px-2 py-6 text-sm text-muted-foreground">
+              Waiting for a runner to claim this run.
+            </p>
+          ) : null}
+        </section>
+      </main>
+    </>
+  )
+}
+
+function RunHeader({
+  actionError,
+  detail,
+  onCancel,
+  onRetry,
+  params,
+  pendingAction,
+}: {
+  actionError: string | null
+  detail: RepoRunDetail
+  onCancel: () => void
+  onRetry: () => void
+  params: RunActionInput
+  pendingAction: 'cancel' | 'retry' | null
+}) {
+  const run = detail.run
+  const state = run.cancellation_requested ? 'canceling' : run.state
+  const eyebrow = useMemo(() => (
+    <Link
+      className="hover:text-foreground"
+      params={{ owner: params.owner, repo: params.repo }}
+      to="/repos/$owner/$repo/runs"
+    >
+      Runs /
+    </Link>
+  ), [params.owner, params.repo])
+  return (
+    <>
+      <WorkbenchHeader
+        actions={(
+          <>
+            {run.can_cancel ? (
+              <Button
+                disabled={pendingAction !== null}
+                onClick={onCancel}
+                variant="secondary"
+              >
+                {pendingAction === 'cancel'
+                  ? <LoaderCircle className="animate-spin" />
+                  : <Square />}
+                Cancel
+              </Button>
+            ) : null}
+            {run.can_retry ? (
+              <Button
+                disabled={pendingAction !== null}
+                onClick={onRetry}
+                variant="secondary"
+              >
+                {pendingAction === 'retry'
+                  ? <LoaderCircle className="animate-spin" />
+                  : <RotateCcw />}
+                Run again
+              </Button>
+            ) : null}
+          </>
+        )}
+        description={(
+          <span className="flex flex-wrap items-center gap-x-2 gap-y-1">
+            <code>{run.git_oid.slice(0, 12)}</code>
+            <span aria-hidden="true">·</span>
+            <span>{run.desired_runner ?? 'any runner'}</span>
+            <span aria-hidden="true">·</span>
+            <span>Updated {formatRunUnixTime(run.updated_at_unix)}</span>
+          </span>
+        )}
+        eyebrow={eyebrow}
+        title={(
+          <span className="flex flex-wrap items-center gap-3">
+            <span>{run.workflow_name}</span>
+            <span className="flex items-center gap-2 text-sm font-medium capitalize text-muted-foreground">
+              <RunStatusDot state={run.state} />
+              {state}
+            </span>
+          </span>
+        )}
+      />
+      {actionError ? (
+        <div className="px-4 pt-5 sm:px-6 lg:px-8">
+          <PageErrorAlert title="Run action failed">{actionError}</PageErrorAlert>
+        </div>
+      ) : null}
+    </>
+  )
+}
+
+function AttemptRow({
+  attempt,
+  expanded,
+  logState,
+  onLogRetry,
+  onSelectStep,
+  onToggle,
+  selectedStepIndex,
+}: {
+  attempt: RepoRunAttempt
+  expanded: boolean
+  logState: StepLogState
+  onLogRetry: () => void
+  onSelectStep: (stepIndex: number) => void
+  onToggle: () => void
+  selectedStepIndex: number | null
+}) {
+  const panelId = `run-attempt-${attempt.id}`
+  const stateLabel = attemptStateLabel(attempt)
+  const metadata = [
+    attempt.runner_name,
+    durationLabel('queued', attempt.created_at_unix, attempt.started_at_unix),
+    durationLabel('ran', attempt.started_at_unix, attempt.completed_at_unix),
+  ].filter(Boolean).join(' · ')
+  return (
+    <article>
+      <button
+        aria-controls={panelId}
+        aria-expanded={expanded}
+        className="grid min-h-16 w-full grid-cols-[auto_minmax(0,1fr)] items-center gap-x-3 gap-y-1 px-2 py-4 text-left outline-none hover:bg-muted/35 focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring sm:grid-cols-[auto_minmax(0,1fr)_auto]"
+        onClick={onToggle}
+        type="button"
+      >
+        {expanded
+          ? <ChevronDown className="size-4 text-muted-foreground" />
+          : <ChevronRight className="size-4 text-muted-foreground" />}
+        <span className="flex min-w-0 items-center gap-2">
+          <RunStatusDot state={attempt.state} />
+          <span className="font-medium capitalize">{stateLabel}</span>
+          <span className="truncate text-xs text-muted-foreground">
+            {formatRunUnixTime(attempt.created_at_unix)}
+          </span>
+        </span>
+        <span className="col-start-2 truncate text-xs text-muted-foreground sm:col-start-3 sm:text-right">
+          {metadata}
+        </span>
+      </button>
+      {expanded ? (
+        <div className="border-t border-border/70 pl-5 sm:pl-9" id={panelId}>
+          {attempt.terminal_reason?.kind === 'runner-setup-failed' ? (
+            <p className="border-b border-border px-3 py-4 text-sm text-muted-foreground">
+              {attempt.terminal_reason.message}
+            </p>
+          ) : null}
+          <div className="divide-y divide-border">
+            {attempt.steps.map((step) => (
+              <StepRow
+                attemptId={attempt.id}
+                key={step.index}
+                logState={logState}
+                onLogRetry={onLogRetry}
+                onSelect={() => onSelectStep(step.index)}
+                selected={selectedStepIndex === step.index}
+                step={step}
+              />
+            ))}
+          </div>
+          {attempt.steps.length === 0 ? (
+            <p className="border-t border-border px-3 py-5 text-sm text-muted-foreground">
+              Steps are created when a runner claims this run.
+            </p>
+          ) : null}
+        </div>
+      ) : null}
+    </article>
+  )
+}
+
+function StepRow({
+  attemptId,
+  logState,
+  onLogRetry,
+  onSelect,
+  selected,
+  step,
+}: {
+  attemptId: string
+  logState: StepLogState
+  onLogRetry: () => void
+  onSelect: () => void
+  selected: boolean
+  step: RepoRunStep
+}) {
+  const panelId = `run-step-${attemptId}-${step.index}`
+  return (
+    <div>
+      <button
+        aria-controls={panelId}
+        aria-expanded={selected}
+        className="grid min-h-14 w-full grid-cols-[auto_minmax(0,1fr)_auto] items-center gap-3 px-3 py-3 text-left outline-none hover:bg-muted/30 focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring"
+        onClick={onSelect}
+        type="button"
+      >
+        <StepIcon state={step.state} />
+        <span className="min-w-0">
+          <span className="block truncate text-sm font-medium">{step.name}</span>
+          <code className="mt-0.5 block truncate text-[11px] text-muted-foreground">
+            {step.command}
+          </code>
+        </span>
+        <span className="text-xs capitalize text-muted-foreground">
+          {stepDuration(step)}
+        </span>
+      </button>
+      {selected ? (
+        <StepLogs
+          id={panelId}
+          logState={logState}
+          onRetry={onLogRetry}
+          step={step}
+        />
+      ) : null}
+    </div>
+  )
+}
+
+function StepLogs({
+  id,
+  logState,
+  onRetry,
+  step,
+}: {
+  id: string
+  logState: StepLogState
+  onRetry: () => void
+  step: RepoRunStep
+}) {
+  return (
+    <section
+      aria-label={`${step.name} output`}
+      className="border-t border-border bg-[#090b0e] text-[#eceae5]"
+      id={id}
+    >
+      <div className="flex min-h-10 flex-wrap items-center justify-between gap-2 border-b border-white/10 px-4 py-2 text-xs text-white/60">
+        <span className="flex items-center gap-2">
+          <TerminalSquare className="size-3.5" />
+          {step.name}
+          {step.exit_code !== null ? ` · exit ${step.exit_code}` : ''}
+        </span>
+        <span>
+          {logState.loading ? 'Updating output…' : 'Output current'}
+          {logState.logsTruncated ? ' · Some output omitted' : ''}
+        </span>
+      </div>
+      {logState.error ? (
+        <div
+          className="flex flex-wrap items-center gap-3 border-b border-white/10 px-4 py-3 text-sm text-red-300"
+          role="alert"
+        >
+          <span>{logState.error}</span>
+          <Button onClick={onRetry} size="sm" variant="secondary">
+            Retry logs
+          </Button>
+        </div>
+      ) : null}
+      <pre className="max-h-[34rem] overflow-auto whitespace-pre-wrap break-words px-4 py-4 font-mono text-xs leading-5">
+        {logState.logs.length === 0
+          ? <span className="text-white/50">No output yet.</span>
+          : logState.logs.map((log) => log.text).join('')}
+      </pre>
+    </section>
+  )
+}
+
+function StepIcon({ state }: { state: string }) {
+  const iconClass = 'size-4 shrink-0'
+  if (state === 'succeeded') {
+    return <Check aria-label="Succeeded" className={cn(iconClass, 'text-emerald-600')} />
+  }
+  if (state === 'failed') {
+    return <X aria-label="Failed" className={cn(iconClass, 'text-destructive')} />
+  }
+  if (state === 'running') {
+    return <LoaderCircle aria-label="Running" className={cn(iconClass, 'animate-spin text-amber-600')} />
+  }
+  if (state === 'canceled' || state === 'lost') {
+    return <Square aria-label={capitalize(state)} className={cn(iconClass, 'text-muted-foreground')} />
+  }
+  return <Circle aria-label={capitalize(state)} className={cn(iconClass, 'text-muted-foreground')} />
+}
+
+function attemptStateLabel(attempt: RepoRunAttempt) {
+  if (!attempt.terminal_reason) return attempt.state
+  switch (attempt.terminal_reason.kind) {
+    case 'timed-out':
+      return 'timed out'
+    case 'runner-setup-failed':
+      return 'setup failed'
+    case 'runner-lost':
+      return 'runner lost'
+    default:
+      return attempt.state
+  }
+}
+
+function durationLabel(
+  label: string,
+  start: number | null,
+  end: number | null,
+) {
+  if (start === null || end === null) return null
+  return `${label} ${formatDuration(end - start)}`
+}
+
+function stepDuration(step: RepoRunStep) {
+  if (step.state === 'skipped') return 'skipped'
+  if (step.started_at_unix === null || step.completed_at_unix === null) {
+    return step.state
+  }
+  return formatDuration(step.completed_at_unix - step.started_at_unix)
+}
+
+function formatDuration(seconds: number) {
+  const safe = Math.max(0, seconds)
+  if (safe < 60) return `${safe}s`
+  const minutes = Math.floor(safe / 60)
+  const remaining = safe % 60
+  return remaining === 0 ? `${minutes}m` : `${minutes}m ${remaining}s`
+}
+
+function capitalize(value: string) {
+  return value.charAt(0).toUpperCase() + value.slice(1)
+}
+
+export function RunDetailPagePending() {
+  return (
+    <>
+      <WorkbenchHeader eyebrow="Runs /" title="Loading run" />
+      <output
+        aria-busy="true"
+        className="flex items-center gap-2 px-4 py-10 text-sm text-muted-foreground sm:px-6 lg:px-8"
+      >
+        <LoaderCircle className="size-4 animate-spin" />
+        Loading run details
+      </output>
+    </>
+  )
+}
+
+export function RunDetailPageError({ error }: { error: unknown }) {
+  return (
+    <>
+      <WorkbenchHeader eyebrow="Runs /" title="Run unavailable" />
+      <RouteErrorContent
+        error={error}
+        fallbackMessage="Unexpected run detail error"
+        title="Run unavailable"
+      />
+    </>
+  )
+}

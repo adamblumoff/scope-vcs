@@ -1,5 +1,5 @@
 use scope_domain::runs::{
-    run::{AttemptState, RunState},
+    run::{AttemptState, RunState, StepState},
     runner::RunnerCapabilities,
     trigger::PushTriggerEvaluationState,
     workflow::CompiledWorkflow,
@@ -126,7 +126,16 @@ pub struct AttemptStatusResponse {
 #[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct AttemptRecoveryStatusResponse {
     pub next_log_sequence: u64,
-    pub log_bytes: u64,
+    pub steps: Vec<AttemptStepStatusResponse>,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+pub struct AttemptStepStatusResponse {
+    pub step_index: u32,
+    pub state: StepState,
+    pub started_at_unix: Option<u64>,
+    pub completed_at_unix: Option<u64>,
+    pub exit_code: Option<i32>,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -144,8 +153,21 @@ pub struct PinAttemptContainerImageResponse {
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct AppendAttemptLogRequest {
+    pub step_index: u32,
     pub sequence: u64,
     pub text: String,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+pub struct CompleteAttemptStepRequest {
+    pub conclusion: StepConclusionRequest,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(tag = "kind", rename_all = "kebab-case")]
+pub enum StepConclusionRequest {
+    Succeeded,
+    Failed { exit_code: i32 },
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -156,14 +178,15 @@ pub struct CompleteAttemptRequest {
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(tag = "kind", rename_all = "kebab-case")]
 pub enum AttemptConclusionRequest {
-    Succeeded,
-    Failed { exit_code: i32 },
+    SetupFailed { exit_code: i32, message: String },
+    TimedOut,
     Canceled,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct RunLogResponse {
     pub attempt_id: String,
+    pub step_index: u32,
     pub position: u64,
     pub sequence: u64,
     pub text: String,
