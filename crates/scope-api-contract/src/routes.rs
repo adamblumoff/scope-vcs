@@ -3,7 +3,6 @@ pub const HEALTH: &str = "/healthz";
 pub const READINESS: &str = "/readyz";
 pub const ADMIN_CLEANUP: &str = "/v1/admin/cleanup";
 pub const ADMIN_CLEANUP_DRAIN: &str = "/v1/admin/cleanup/drain";
-pub const ADMIN_METADATA_RESET: &str = "/v1/admin/metadata/reset";
 pub const CLI_BROWSER_LOGIN: &str = "/v1/cli/browser-login";
 pub const CLI_BROWSER_LOGIN_COMPLETE: &str = "/v1/cli/browser-login/{request_id}/complete";
 pub const CLI_BROWSER_LOGIN_EXCHANGE: &str = "/v1/cli/browser-login/{request_id}/exchange";

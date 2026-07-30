@@ -9,7 +9,6 @@ use super::{
         insert_credit_ledger_entry_row, insert_request_event_row, insert_request_row,
         save_credit_account_row,
     },
-    schema,
 };
 #[cfg(any(test, feature = "test-support"))]
 use super::{
@@ -27,9 +26,9 @@ use scope_domain::{
     requests::{CreditLedgerEntry, Request, RequestEvent, UserCreditAccount},
     store::{RepoStorageCleanup, SourceBlob, StoredRepository},
 };
-use sea_orm::{ActiveModelTrait, EntityTrait, IntoActiveModel, TransactionTrait};
+use sea_orm::{ActiveModelTrait, ConnectionTrait, IntoActiveModel, TransactionTrait};
 #[cfg(any(test, feature = "test-support"))]
-use sea_orm::{ConnectOptions, ConnectionTrait, Database, Statement};
+use sea_orm::{ConnectOptions, Database, DatabaseConnection, EntityTrait, Statement};
 #[cfg(any(test, feature = "test-support"))]
 use std::{
     future::Future,
@@ -92,46 +91,65 @@ impl TestDatabaseTarget {
             schema_name: unique_test_schema_name(),
         })
     }
+
+    #[cfg(test)]
+    pub(super) fn schema_database_url(&self) -> String {
+        let separator = if self.database_url.contains('?') {
+            '&'
+        } else {
+            '?'
+        };
+        format!(
+            "{}{separator}options[search_path]={}",
+            self.database_url, self.schema_name
+        )
+    }
 }
 
 #[cfg(any(test, feature = "test-support"))]
 pub fn connect_postgres_test_store(target: &TestDatabaseTarget) -> anyhow::Result<MetadataStore> {
-    let database_url = target.database_url.clone();
-    let schema_name = target.schema_name.clone();
-    let db = run_test_future(async move {
-        let admin = Database::connect(&database_url).await?;
-        admin
-            .execute(Statement::from_string(
-                admin.get_database_backend(),
-                format!(
-                    "CREATE SCHEMA IF NOT EXISTS {}",
-                    quote_pg_ident(&schema_name)
-                ),
-            ))
-            .await?;
-
-        let mut options = ConnectOptions::new(database_url);
-        options
-            .max_connections(8)
-            .min_connections(1)
-            .set_schema_search_path(schema_name);
-        let db = Database::connect(options).await?;
-        schema::initialize_metadata_schema(&db, "local").await?;
-        Ok::<_, sea_orm::DbErr>(db)
+    let postgres_database_url = Arc::from(target.database_url.clone());
+    let target = target.clone();
+    let (db, test_schema) = run_test_future(async move {
+        let (db, test_schema) = connect_isolated_test_database(&target).await?;
+        crate::migrations::apply(db.as_ref()).await?;
+        Ok::<_, anyhow::Error>((db, test_schema))
     })?;
 
-    let db = Arc::new(db);
-    let test_schema = TestSchemaLease {
+    Ok(MetadataStore {
+        db,
+        postgres_database_url: Some(postgres_database_url),
+        _test_schema: Some(test_schema),
+    })
+}
+
+#[cfg(any(test, feature = "test-support"))]
+pub(super) async fn connect_isolated_test_database(
+    target: &TestDatabaseTarget,
+) -> anyhow::Result<(Arc<DatabaseConnection>, Arc<TestSchemaLease>)> {
+    let admin = Database::connect(&target.database_url).await?;
+    admin
+        .execute(Statement::from_string(
+            admin.get_database_backend(),
+            format!(
+                "CREATE SCHEMA IF NOT EXISTS {}",
+                quote_pg_ident(&target.schema_name)
+            ),
+        ))
+        .await?;
+
+    let mut options = ConnectOptions::new(target.database_url.clone());
+    options
+        .max_connections(8)
+        .min_connections(1)
+        .set_schema_search_path(target.schema_name.clone());
+    let db = Arc::new(Database::connect(options).await?);
+    let test_schema = Arc::new(TestSchemaLease {
         database: Arc::clone(&db),
         database_url: target.database_url.clone(),
         schema_name: target.schema_name.clone(),
-    };
-    Ok(MetadataStore {
-        db,
-        postgres_database_url: Some(Arc::from(target.database_url.clone())),
-        deploy_revision: Arc::from("local"),
-        _test_schema: Some(Arc::new(test_schema)),
-    })
+    });
+    Ok((db, test_schema))
 }
 
 impl AdminStore {
@@ -140,7 +158,7 @@ impl AdminStore {
         &self,
         catalog: CatalogFixture,
     ) -> Result<(), PostgresError> {
-        replace_catalog(self.db.as_ref(), self.deploy_revision.as_ref(), catalog).await
+        replace_catalog(self.db.as_ref(), catalog).await
     }
 
     #[cfg(any(test, feature = "test-support"))]
@@ -414,24 +432,33 @@ where
 #[cfg(feature = "local-dev")]
 async fn replace_catalog(
     db: &sea_orm::DatabaseConnection,
-    deploy_revision: &str,
     catalog: CatalogFixture,
 ) -> Result<(), PostgresError> {
-    let reset_events = entities::metadata_reset_event::Entity::find()
-        .all(db)
+    let tx = db.begin().await.map_err(PostgresError::internal)?;
+    let tables = tx
+        .query_one(sea_orm::Statement::from_string(
+            sea_orm::DatabaseBackend::Postgres,
+            "
+                SELECT string_agg(
+                    format('%I.%I', schemaname, tablename),
+                    ', ' ORDER BY tablename
+                ) AS tables
+                FROM pg_tables
+                WHERE schemaname = current_schema()
+                  AND left(tablename, 6) = 'scope_'
+            "
+            .to_string(),
+        ))
+        .await
+        .map_err(PostgresError::internal)?
+        .ok_or_else(|| PostgresError::internal_message("PostgreSQL did not list catalog tables"))?
+        .try_get::<String>("", "tables")
+        .map_err(PostgresError::internal)?;
+    tx.execute_unprepared(&format!("TRUNCATE TABLE {tables} RESTART IDENTITY CASCADE"))
         .await
         .map_err(PostgresError::internal)?;
-    schema::recreate_metadata_schema(db, deploy_revision)
-        .await
-        .map_err(PostgresError::internal)?;
-    for event in reset_events {
-        event
-            .into_active_model()
-            .insert(db)
-            .await
-            .map_err(PostgresError::internal)?;
-    }
-    seed_catalog(db, catalog).await
+    seed_catalog_rows(&tx, catalog).await?;
+    tx.commit().await.map_err(PostgresError::internal)
 }
 
 #[cfg(any(test, feature = "test-support"))]
@@ -460,23 +487,32 @@ fn test_runtime() -> &'static tokio::runtime::Handle {
     })
 }
 
+#[cfg(any(test, feature = "test-support"))]
 async fn seed_catalog(
     conn: &sea_orm::DatabaseConnection,
+    catalog: CatalogFixture,
+) -> Result<(), PostgresError> {
+    let tx = conn.begin().await.map_err(PostgresError::internal)?;
+    seed_catalog_rows(&tx, catalog).await?;
+    tx.commit().await.map_err(PostgresError::internal)
+}
+
+async fn seed_catalog_rows(
+    tx: &sea_orm::DatabaseTransaction,
     mut catalog: CatalogFixture,
 ) -> Result<(), PostgresError> {
     complete_test_users(&mut catalog);
-    let tx = conn.begin().await.map_err(PostgresError::internal)?;
-    acquire_aggregate_lock(&tx, "test", "catalog").await?;
+    acquire_aggregate_lock(tx, "test", "catalog").await?;
     for user in catalog.users.values() {
         entities::user::Model::from_domain(user)
             .into_active_model()
-            .insert(&tx)
+            .insert(tx)
             .await
             .map_err(PostgresError::internal)?;
     }
     for repo in catalog.repositories.values() {
         insert_repository(
-            &tx,
+            tx,
             repo,
             CATALOG_SEED_NOW_UNIX,
             &super::generated_ids::test_generated_id,
@@ -484,42 +520,42 @@ async fn seed_catalog(
         .await?;
     }
     for request in catalog.requests.values() {
-        insert_request_row(&tx, request).await?;
+        insert_request_row(tx, request).await?;
     }
     for change_block in catalog.request_change_blocks.values() {
-        insert_change_block(&tx, change_block).await?;
+        insert_change_block(tx, change_block).await?;
     }
     for discussion in catalog.request_discussions.values() {
-        insert_discussion(&tx, discussion).await?;
+        insert_discussion(tx, discussion).await?;
     }
     for reply in catalog.request_discussion_replies.values() {
-        insert_reply(&tx, reply).await?;
+        insert_reply(tx, reply).await?;
     }
     for read_state in catalog.request_discussion_read_states.values() {
-        save_read_state(&tx, read_state).await?;
+        save_read_state(tx, read_state).await?;
     }
     for event in catalog.request_events.values() {
-        insert_request_event_row(&tx, event).await?;
+        insert_request_event_row(tx, event).await?;
     }
     for account in catalog.user_credit_accounts.values() {
-        save_credit_account_row(&tx, account).await?;
+        save_credit_account_row(tx, account).await?;
     }
     for entry in catalog.credit_ledger_entries.values() {
-        insert_credit_ledger_entry_row(&tx, entry).await?;
+        insert_credit_ledger_entry_row(tx, entry).await?;
     }
     save_pending_repo_storage_deletions(
-        &tx,
+        tx,
         &catalog.pending_repo_storage_deletions,
         CATALOG_SEED_NOW_UNIX,
     )
     .await?;
     save_pending_source_blob_deletions(
-        &tx,
+        tx,
         &catalog.pending_source_blob_deletions,
         CATALOG_SEED_NOW_UNIX,
     )
     .await?;
-    tx.commit().await.map_err(PostgresError::internal)
+    Ok(())
 }
 
 fn complete_test_users(catalog: &mut CatalogFixture) {
@@ -615,6 +651,8 @@ fn quote_pg_ident(identifier: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[cfg(feature = "local-dev")]
+    use sea_orm::DatabaseBackend;
 
     #[test]
     fn test_database_url_accepts_only_explicit_postgres_test_targets() {
@@ -636,5 +674,74 @@ mod tests {
                 "{url} must be rejected"
             );
         }
+    }
+
+    #[cfg(feature = "local-dev")]
+    #[test]
+    fn local_catalog_replacement_preserves_migration_history() {
+        let store =
+            MetadataStore::connect_fresh_for_tests(&TestDatabaseTarget::required().unwrap())
+                .unwrap();
+        let db = Arc::clone(&store.db);
+        run_test_future(async move {
+            db.execute_unprepared(
+                "
+                    INSERT INTO scope_users (id, handle, email, email_verified)
+                    VALUES ('user_old', 'old', 'old@scope.test', TRUE);
+                    CREATE TABLE scopex_private (sentinel text NOT NULL);
+                    INSERT INTO scopex_private (sentinel) VALUES ('keep')
+                ",
+            )
+            .await
+            .unwrap();
+            let before = db
+                .query_all(Statement::from_string(
+                    DatabaseBackend::Postgres,
+                    "SELECT version FROM seaql_migrations ORDER BY version".to_string(),
+                ))
+                .await
+                .unwrap()
+                .into_iter()
+                .map(|row| row.try_get::<String>("", "version").unwrap())
+                .collect::<Vec<_>>();
+
+            replace_catalog(db.as_ref(), CatalogFixture::default())
+                .await
+                .unwrap();
+
+            let after = db
+                .query_all(Statement::from_string(
+                    DatabaseBackend::Postgres,
+                    "SELECT version FROM seaql_migrations ORDER BY version".to_string(),
+                ))
+                .await
+                .unwrap()
+                .into_iter()
+                .map(|row| row.try_get::<String>("", "version").unwrap())
+                .collect::<Vec<_>>();
+            assert_eq!(after, before);
+            let user_count = db
+                .query_one(Statement::from_string(
+                    DatabaseBackend::Postgres,
+                    "SELECT count(*) AS count FROM scope_users".to_string(),
+                ))
+                .await
+                .unwrap()
+                .unwrap()
+                .try_get::<i64>("", "count")
+                .unwrap();
+            assert_eq!(user_count, 0);
+            let unrelated_sentinel = db
+                .query_one(Statement::from_string(
+                    DatabaseBackend::Postgres,
+                    "SELECT sentinel FROM scopex_private".to_string(),
+                ))
+                .await
+                .unwrap()
+                .unwrap()
+                .try_get::<String>("", "sentinel")
+                .unwrap();
+            assert_eq!(unrelated_sentinel, "keep");
+        });
     }
 }

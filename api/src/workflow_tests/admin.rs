@@ -52,19 +52,6 @@ async fn cleanup_status(state: AppState, auth: Option<String>) -> Response {
     admin_request(state, "GET", "/v1/admin/cleanup", auth, Body::empty()).await
 }
 
-async fn reset(state: AppState, confirm: &str) -> Response {
-    admin_request(
-        state,
-        "POST",
-        "/v1/admin/metadata/reset",
-        Some(OPERATOR_AUTH.into()),
-        Body::from(format!(
-            r#"{{"confirm":"{confirm}","reason":"reset from test"}}"#
-        )),
-    )
-    .await
-}
-
 #[tokio::test]
 async fn admin_cleanup_requires_configured_operator_token() {
     for (state, auth, status) in [
@@ -85,14 +72,8 @@ async fn admin_cleanup_requires_configured_operator_token() {
 }
 
 #[tokio::test]
-async fn admin_cleanup_status_shows_pending_cleanup_and_reset_events() {
+async fn admin_cleanup_status_shows_pending_cleanup_queues() {
     let state = operator_state();
-    let reset_event = state
-        .metadata
-        .admin()
-        .reset_catalog("test reset", crate::persistence::unix_now().unwrap())
-        .await
-        .unwrap();
     queued_blob(&state, b"pending").await;
     state
         .metadata
@@ -111,8 +92,7 @@ async fn admin_cleanup_status_shows_pending_cleanup_and_reset_events() {
     let body = response_json(response).await;
     assert_eq!(body["pending_cleanup"]["repo_storage"]["count"], 1);
     assert_eq!(body["pending_cleanup"]["source_blob_deletes"]["count"], 1);
-    assert_eq!(body["metadata_resets"]["count"], 1);
-    assert_eq!(body["metadata_resets"]["events"][0]["id"], reset_event.id);
+    assert!(body.get("metadata_resets").is_none());
 }
 
 #[tokio::test]
@@ -176,44 +156,16 @@ async fn admin_cleanup_drain_reports_deleted_and_failed_source_blobs() {
 }
 
 #[tokio::test]
-async fn admin_metadata_reset_requires_confirmation_and_clears_catalog() {
-    let state = operator_state();
-
-    let rejected = reset(state.clone(), "wrong").await;
-    assert_eq!(rejected.status(), StatusCode::BAD_REQUEST);
-    assert!(
-        state
-            .metadata
-            .repositories()
-            .repository_for_tests(TEST_REPO_ID)
-            .await
-            .unwrap()
-            .is_some()
-    );
-
-    let response = reset(state.clone(), "reset-pre-alpha-metadata").await;
-    assert_eq!(response.status(), StatusCode::OK);
-    let body = response_json(response).await;
-    assert_eq!(body["event"]["trigger"], "operator");
-    assert_eq!(body["event"]["reason"], "reset from test");
-    assert_eq!(
-        state
-            .metadata
-            .repositories()
-            .repository_count_for_tests()
-            .await
-            .unwrap(),
-        0
-    );
-    assert!(
-        state
-            .metadata
-            .cleanup()
-            .pending_source_blob_cleanups_for_tests()
-            .await
-            .unwrap()
-            .is_empty()
-    );
+async fn admin_metadata_reset_route_is_absent() {
+    let response = admin_request(
+        operator_state(),
+        "POST",
+        "/v1/admin/metadata/reset",
+        Some(OPERATOR_AUTH.into()),
+        Body::from(r#"{"confirm":"reset-pre-alpha-metadata"}"#),
+    )
+    .await;
+    assert_eq!(response.status(), StatusCode::NOT_FOUND);
 }
 
 fn operator_state() -> AppState {
