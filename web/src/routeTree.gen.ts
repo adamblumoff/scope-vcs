@@ -18,6 +18,7 @@ import { Route as InvitesTokenRouteImport } from './routes/invites.$token'
 import { Route as ReposOwnerRepoRouteImport } from './routes/repos.$owner.$repo'
 import { Route as ReposOwnerRepoIndexRouteImport } from './routes/repos.$owner.$repo.index'
 import { Route as ReposOwnerRepoSettingsRouteImport } from './routes/repos.$owner.$repo.settings'
+import { Route as ReposOwnerRepoRunsRouteImport } from './routes/repos.$owner.$repo.runs'
 import { Route as ReposOwnerRepoRequestsRouteImport } from './routes/repos.$owner.$repo.requests'
 import { Route as ReposOwnerRepoHistoryRouteImport } from './routes/repos.$owner.$repo.history'
 import { Route as ReposOwnerRepoRequestsIndexRouteImport } from './routes/repos.$owner.$repo.requests.index'
@@ -68,6 +69,11 @@ const ReposOwnerRepoSettingsRoute = ReposOwnerRepoSettingsRouteImport.update({
   path: '/settings',
   getParentRoute: () => ReposOwnerRepoRoute,
 } as any)
+const ReposOwnerRepoRunsRoute = ReposOwnerRepoRunsRouteImport.update({
+  id: '/runs',
+  path: '/runs',
+  getParentRoute: () => ReposOwnerRepoRoute,
+} as any)
 const ReposOwnerRepoRequestsRoute = ReposOwnerRepoRequestsRouteImport.update({
   id: '/requests',
   path: '/requests',
@@ -101,6 +107,7 @@ export interface FileRoutesByFullPath {
   '/repos/$owner/$repo': typeof ReposOwnerRepoRouteWithChildren
   '/repos/$owner/$repo/history': typeof ReposOwnerRepoHistoryRoute
   '/repos/$owner/$repo/requests': typeof ReposOwnerRepoRequestsRouteWithChildren
+  '/repos/$owner/$repo/runs': typeof ReposOwnerRepoRunsRoute
   '/repos/$owner/$repo/settings': typeof ReposOwnerRepoSettingsRoute
   '/repos/$owner/$repo/': typeof ReposOwnerRepoIndexRoute
   '/repos/$owner/$repo/requests/$requestId': typeof ReposOwnerRepoRequestsRequestIdRoute
@@ -114,6 +121,7 @@ export interface FileRoutesByTo {
   '/sign-in/$': typeof SignInSplatRoute
   '/sign-up/$': typeof SignUpSplatRoute
   '/repos/$owner/$repo/history': typeof ReposOwnerRepoHistoryRoute
+  '/repos/$owner/$repo/runs': typeof ReposOwnerRepoRunsRoute
   '/repos/$owner/$repo/settings': typeof ReposOwnerRepoSettingsRoute
   '/repos/$owner/$repo': typeof ReposOwnerRepoIndexRoute
   '/repos/$owner/$repo/requests/$requestId': typeof ReposOwnerRepoRequestsRequestIdRoute
@@ -130,6 +138,7 @@ export interface FileRoutesById {
   '/repos/$owner/$repo': typeof ReposOwnerRepoRouteWithChildren
   '/repos/$owner/$repo/history': typeof ReposOwnerRepoHistoryRoute
   '/repos/$owner/$repo/requests': typeof ReposOwnerRepoRequestsRouteWithChildren
+  '/repos/$owner/$repo/runs': typeof ReposOwnerRepoRunsRoute
   '/repos/$owner/$repo/settings': typeof ReposOwnerRepoSettingsRoute
   '/repos/$owner/$repo/': typeof ReposOwnerRepoIndexRoute
   '/repos/$owner/$repo/requests/$requestId': typeof ReposOwnerRepoRequestsRequestIdRoute
@@ -147,6 +156,7 @@ export interface FileRouteTypes {
     | '/repos/$owner/$repo'
     | '/repos/$owner/$repo/history'
     | '/repos/$owner/$repo/requests'
+    | '/repos/$owner/$repo/runs'
     | '/repos/$owner/$repo/settings'
     | '/repos/$owner/$repo/'
     | '/repos/$owner/$repo/requests/$requestId'
@@ -160,6 +170,7 @@ export interface FileRouteTypes {
     | '/sign-in/$'
     | '/sign-up/$'
     | '/repos/$owner/$repo/history'
+    | '/repos/$owner/$repo/runs'
     | '/repos/$owner/$repo/settings'
     | '/repos/$owner/$repo'
     | '/repos/$owner/$repo/requests/$requestId'
@@ -175,6 +186,7 @@ export interface FileRouteTypes {
     | '/repos/$owner/$repo'
     | '/repos/$owner/$repo/history'
     | '/repos/$owner/$repo/requests'
+    | '/repos/$owner/$repo/runs'
     | '/repos/$owner/$repo/settings'
     | '/repos/$owner/$repo/'
     | '/repos/$owner/$repo/requests/$requestId'
@@ -256,6 +268,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof ReposOwnerRepoSettingsRouteImport
       parentRoute: typeof ReposOwnerRepoRoute
     }
+    '/repos/$owner/$repo/runs': {
+      id: '/repos/$owner/$repo/runs'
+      path: '/runs'
+      fullPath: '/repos/$owner/$repo/runs'
+      preLoaderRoute: typeof ReposOwnerRepoRunsRouteImport
+      parentRoute: typeof ReposOwnerRepoRoute
+    }
     '/repos/$owner/$repo/requests': {
       id: '/repos/$owner/$repo/requests'
       path: '/requests'
@@ -306,6 +325,7 @@ const ReposOwnerRepoRequestsRouteWithChildren =
 interface ReposOwnerRepoRouteChildren {
   ReposOwnerRepoHistoryRoute: typeof ReposOwnerRepoHistoryRoute
   ReposOwnerRepoRequestsRoute: typeof ReposOwnerRepoRequestsRouteWithChildren
+  ReposOwnerRepoRunsRoute: typeof ReposOwnerRepoRunsRoute
   ReposOwnerRepoSettingsRoute: typeof ReposOwnerRepoSettingsRoute
   ReposOwnerRepoIndexRoute: typeof ReposOwnerRepoIndexRoute
 }
@@ -313,6 +333,7 @@ interface ReposOwnerRepoRouteChildren {
 const ReposOwnerRepoRouteChildren: ReposOwnerRepoRouteChildren = {
   ReposOwnerRepoHistoryRoute: ReposOwnerRepoHistoryRoute,
   ReposOwnerRepoRequestsRoute: ReposOwnerRepoRequestsRouteWithChildren,
+  ReposOwnerRepoRunsRoute: ReposOwnerRepoRunsRoute,
   ReposOwnerRepoSettingsRoute: ReposOwnerRepoSettingsRoute,
   ReposOwnerRepoIndexRoute: ReposOwnerRepoIndexRoute,
 }

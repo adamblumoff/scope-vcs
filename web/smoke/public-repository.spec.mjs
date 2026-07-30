@@ -25,6 +25,40 @@ test('public repository exposes only its projected source', async () => {
     await page.getByRole('button', { name: 'README.md', exact: true }).waitFor()
     assert.equal(await page.getByText('internal', { exact: true }).count(), 0)
     assert.equal(await page.getByText('plan.md', { exact: true }).count(), 0)
+    assert.equal(
+      await page
+        .getByRole('navigation', { name: 'Primary' })
+        .getByRole('link', { name: 'Runs', exact: true })
+        .count(),
+      0,
+    )
+    assert.equal(
+      await page.getByRole('heading', { name: 'Recent runs' }).count(),
+      0,
+    )
+    assert.equal(await page.getByRole('heading', { name: 'Runners' }).count(), 0)
+  })
+})
+
+test('public direct Runs access is explicit and exposes no operations', async () => {
+  await withPage(`${repoPath}/runs`, async (page) => {
+    await page.getByRole('heading', { level: 1, name: 'Runs' }).waitFor()
+    await page.getByText(
+      'Sign in as the owner or a repository member to view runs and attached runners.',
+      { exact: true },
+    ).waitFor()
+    assert.equal(
+      await page
+        .getByRole('navigation', { name: 'Primary' })
+        .getByRole('link', { name: 'Runs', exact: true })
+        .count(),
+      0,
+    )
+    assert.equal(
+      await page.getByRole('heading', { name: 'Recent runs' }).count(),
+      0,
+    )
+    assert.equal(await page.getByRole('heading', { name: 'Runners' }).count(), 0)
   })
 })
 
