@@ -1,5 +1,14 @@
 {
   "$schema": "https://railway.com/railway.schema.json",
+  "build": {
+    "watchPatterns": [
+      "/api/**",
+      "/crates/**",
+      "/Cargo.toml",
+      "/Cargo.lock",
+      "/rust-toolchain.toml"
+    ]
+  },
   "deploy": {
     "healthcheckPath": "/healthz",
     "healthcheckTimeout": 300
