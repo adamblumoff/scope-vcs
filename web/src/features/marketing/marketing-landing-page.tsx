@@ -1,7 +1,7 @@
 import type { CliInstallCommands, CliPlatform } from '@/api/types'
+import { ScopeLogo } from '@/components/scope-logo'
 import { Button } from '@/components/ui/button'
 import { Link } from '@tanstack/react-router'
-import { GitBranch } from 'lucide-react'
 import type { ReactElement } from 'react'
 import { MarketingCliOnboarding } from './marketing-cli-onboarding'
 import { RepositoryProjection } from './repository-projection'
@@ -71,13 +71,10 @@ function MarketingHeader(): ReactElement {
     >
       <Link
         aria-label="Scope home"
-        className="group flex items-center gap-3 rounded-md focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring"
+        className="group flex items-center rounded-md focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring"
         to="/"
       >
-        <span className="grid size-[34px] place-items-center rounded-full border border-border bg-[linear-gradient(180deg,#181b20,#111318)]">
-          <GitBranch className="size-[18px] text-[var(--platinum-bright)]" strokeWidth={1.8} />
-        </span>
-        <span className="text-[17px] font-semibold tracking-[-0.025em]">Scope</span>
+        <ScopeLogo className="w-[118px] transition-transform duration-150 group-hover:-translate-y-px sm:w-[126px] motion-reduce:transform-none" />
       </Link>
 
       <nav aria-label="Account">

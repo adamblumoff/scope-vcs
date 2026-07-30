@@ -1,7 +1,7 @@
 import { cn } from '@/lib/utils'
 import { Link } from '@tanstack/react-router'
-import { GitBranch } from 'lucide-react'
 import type { ReactNode } from 'react'
+import { ScopeLogo } from '@/components/scope-logo'
 import { SearchControl } from '@/components/ui/search-control'
 
 export type TopbarItem = {
@@ -31,15 +31,18 @@ export function ApplicationTopbar({
         <div className="col-start-1 flex min-w-0 items-center gap-3 sm:gap-5">
           <Link
             aria-label="Scope home"
-            className="group flex shrink-0 items-center gap-2.5 rounded-md text-foreground focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring"
+            className="group flex shrink-0 items-center rounded-md text-foreground focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring"
             to="/"
           >
-            <span className="flex size-7 items-center justify-center rounded-full border border-border bg-[var(--topbar-rail)] shadow-[inset_0_1px_rgba(255,255,255,0.06)] transition-transform duration-150 group-hover:-translate-y-px motion-reduce:transform-none">
-              <GitBranch className="size-[15px] text-[var(--platinum-bright)]" strokeWidth={1.9} />
-            </span>
-            <span className="hidden text-[18px] font-semibold tracking-[-0.035em] sm:inline">
-              Scope
-            </span>
+            <img
+              alt=""
+              aria-hidden
+              className="size-7 rounded-[7px] transition-transform duration-150 group-hover:-translate-y-px sm:hidden motion-reduce:transform-none"
+              height={28}
+              src="/favicon.png"
+              width={28}
+            />
+            <ScopeLogo className="hidden w-[98px] transition-transform duration-150 group-hover:-translate-y-px sm:block motion-reduce:transform-none" />
           </Link>
           {repository ? (
             <div className="min-w-0">
