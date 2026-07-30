@@ -36,7 +36,7 @@ export function MarketingLandingPage({
           tabIndex={-1}
         >
           <section className="marketing-copy relative z-10 max-w-[610px]">
-            <h1 className="max-w-[680px] text-[clamp(2.6rem,13vw,3.2rem)] font-semibold leading-[0.95] tracking-[-0.067em] sm:text-[clamp(3.2rem,5.4vw,4rem)] min-[1200px]:text-[clamp(3.2rem,6.1vw,5.75rem)]">
+            <h1 className="max-w-[680px] text-[clamp(2.6rem,13vw,3.2rem)] font-semibold leading-none tracking-[-0.067em] sm:text-[clamp(3.2rem,5.4vw,4rem)] min-[1200px]:text-[clamp(3.2rem,6.1vw,5.75rem)]">
               <span className="block whitespace-nowrap">One repository.</span>
               <span className="block whitespace-nowrap text-muted-foreground">
                 Public and private.
