@@ -37,16 +37,18 @@ export function MarketingLandingPage({
         >
           <section className="marketing-copy relative z-10 max-w-[610px]">
             <h1 className="max-w-[680px] text-[clamp(2.6rem,13vw,3.2rem)] font-semibold leading-[0.95] tracking-[-0.067em] sm:text-[clamp(3.2rem,5.4vw,4rem)] min-[1200px]:text-[clamp(3.2rem,6.1vw,5.75rem)]">
-              <span className="block whitespace-nowrap">Open source</span>
-              <span className="block whitespace-nowrap text-muted-foreground">needs a reset.</span>
+              <span className="block whitespace-nowrap">One repository.</span>
+              <span className="block whitespace-nowrap text-muted-foreground">
+                Public and private.
+              </span>
             </h1>
 
             <ul className="mt-8 max-w-[540px] list-none space-y-2 text-[clamp(0.9375rem,1.4vw,1.1875rem)] leading-[1.62] tracking-[-0.015em] text-muted-foreground">
               <li>
-                Build in public. Keep control. Choose exactly what the public sees, and safely
-                commit secret files without third-party tooling.
+                Scope lets you keep public and private code in one Git repository. The public
+                clones only what you choose to share.
               </li>
-              <li>Your repository is not a public inbox. AI-slop PR deterrents are coming.</li>
+              <li>One codebase. No split repositories. No synchronization scripts.</li>
             </ul>
 
             <MarketingCliOnboarding
