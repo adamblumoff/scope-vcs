@@ -10,6 +10,12 @@ use sea_orm_migration::{
 use std::{sync::Arc, time::Duration};
 
 const V6_SCHEMA: &str = include_str!("../migrations/v6.sql");
+const RETIRED_V6_TABLES: &[&str] = &[
+    "scope_repository_git_clone_tokens",
+    "scope_repository_git_snapshots",
+    "scope_repository_settings",
+    "scope_source_blob_cleanup_jobs",
+];
 
 async fn isolated_database() -> (
     TestDatabaseTarget,
@@ -27,6 +33,20 @@ async fn initialize_ready_v6(db: &DatabaseConnection) {
         "
             INSERT INTO scope_metadata_schema (key, version, deploy_revision, ready)
             VALUES ('current', 6, 'legacy-v6', TRUE)
+        ",
+    )
+    .await
+    .unwrap();
+}
+
+async fn add_retired_v6_tables(db: &DatabaseConnection) {
+    db.execute_unprepared(
+        "
+            CREATE TABLE scope_repository_git_clone_tokens (id text PRIMARY KEY);
+            CREATE TABLE scope_repository_git_snapshots (id text PRIMARY KEY);
+            CREATE TABLE scope_repository_settings (id text PRIMARY KEY);
+            CREATE TABLE scope_source_blob_cleanup_jobs (id text PRIMARY KEY);
+            INSERT INTO scope_source_blob_cleanup_jobs (id) VALUES ('obsolete');
         ",
     )
     .await
@@ -430,6 +450,82 @@ async fn structurally_drifted_v6_is_refused_without_stamping_migration_state() {
     assert!(error.to_string().contains("column fingerprint"));
     assert!(!relation_exists(db.as_ref(), "seaql_migrations").await);
     assert!(relation_exists(db.as_ref(), "scope_metadata_schema").await);
+}
+
+#[tokio::test]
+async fn production_v6_with_retired_tables_is_adopted_and_cleaned_up() {
+    let (_target, db, _lease) = isolated_database().await;
+    initialize_ready_v6(db.as_ref()).await;
+    add_retired_v6_tables(db.as_ref()).await;
+
+    migrations::apply(db.as_ref()).await.unwrap();
+
+    for table in RETIRED_V6_TABLES {
+        assert!(
+            !relation_exists(db.as_ref(), table).await,
+            "{table} should be retired during v6 adoption"
+        );
+    }
+    migrations::assert_exact_state(db.as_ref()).await.unwrap();
+}
+
+#[tokio::test]
+async fn rejected_v6_fingerprint_rolls_back_retired_table_cleanup() {
+    let (_target, db, _lease) = isolated_database().await;
+    initialize_ready_v6(db.as_ref()).await;
+    add_retired_v6_tables(db.as_ref()).await;
+    db.execute_unprepared("ALTER TABLE scope_users DROP COLUMN email_verified")
+        .await
+        .unwrap();
+
+    let error = migrations::apply(db.as_ref()).await.unwrap_err();
+
+    assert!(error.to_string().contains("column fingerprint"));
+    assert!(!relation_exists(db.as_ref(), "seaql_migrations").await);
+    for table in RETIRED_V6_TABLES {
+        assert!(
+            relation_exists(db.as_ref(), table).await,
+            "{table} should be restored when v6 adoption rolls back"
+        );
+    }
+    let obsolete_rows = db
+        .query_one(Statement::from_string(
+            DatabaseBackend::Postgres,
+            "
+                SELECT count(*) AS count
+                FROM scope_source_blob_cleanup_jobs
+                WHERE id = 'obsolete'
+            "
+            .to_string(),
+        ))
+        .await
+        .unwrap()
+        .unwrap()
+        .try_get::<i64>("", "count")
+        .unwrap();
+    assert_eq!(obsolete_rows, 1);
+}
+
+#[tokio::test]
+async fn unknown_v6_table_is_refused_without_deleting_it() {
+    let (_target, db, _lease) = isolated_database().await;
+    initialize_ready_v6(db.as_ref()).await;
+    db.execute_unprepared(
+        "
+            CREATE TABLE scope_unexpected_production_table (
+                id text PRIMARY KEY
+            );
+            INSERT INTO scope_unexpected_production_table (id) VALUES ('keep');
+        ",
+    )
+    .await
+    .unwrap();
+
+    let error = migrations::apply(db.as_ref()).await.unwrap_err();
+
+    assert!(error.to_string().contains("expected v6 table set"));
+    assert!(!relation_exists(db.as_ref(), "seaql_migrations").await);
+    assert!(relation_exists(db.as_ref(), "scope_unexpected_production_table").await);
 }
 
 #[tokio::test]

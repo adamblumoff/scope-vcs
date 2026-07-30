@@ -6,6 +6,12 @@ const V6_SCHEMA_VERSION: i64 = 6;
 const V6_COLUMN_FINGERPRINT: &str = "b8a8f1ef8a999a99deac8b9ad7477ce3";
 const V6_CONSTRAINT_FINGERPRINT: &str = "2863e371d467aaa7ade9518b3579e097";
 const V6_INDEX_FINGERPRINT: &str = "f68d7fcf133d87c6c62e0cabae5a7fb6";
+const RETIRED_V6_TABLES: &[&str] = &[
+    "scope_repository_git_clone_tokens",
+    "scope_repository_git_snapshots",
+    "scope_repository_settings",
+    "scope_source_blob_cleanup_jobs",
+];
 const V6_TABLES: &[&str] = &[
     "scope_auth_identities",
     "scope_cli_browser_logins",
@@ -71,11 +77,23 @@ impl MigrationTrait for Migration {
 
         let expected_tables = V6_TABLES.join("\n");
         let actual_tables = tables.join("\n");
-        if actual_tables != expected_tables {
+        let has_retired_tables = tables == v6_tables_with_retired();
+        if actual_tables != expected_tables && !has_retired_tables {
             return Err(adoption_error("table set", expected_tables, actual_tables));
         }
 
         assert_v6_marker(db).await?;
+        if has_retired_tables {
+            db.execute_unprepared(
+                "
+                    DROP TABLE scope_repository_git_clone_tokens;
+                    DROP TABLE scope_repository_git_snapshots;
+                    DROP TABLE scope_repository_settings;
+                    DROP TABLE scope_source_blob_cleanup_jobs;
+                ",
+            )
+            .await?;
+        }
         assert_fingerprint(
             db,
             "column",
@@ -154,6 +172,16 @@ impl MigrationTrait for Migration {
         )
         .await
     }
+}
+
+fn v6_tables_with_retired() -> Vec<String> {
+    let mut tables = V6_TABLES
+        .iter()
+        .chain(RETIRED_V6_TABLES)
+        .map(|table| (*table).to_string())
+        .collect::<Vec<_>>();
+    tables.sort();
+    tables
 }
 
 async fn scope_tables<C>(db: &C) -> Result<Vec<String>, DbErr>
