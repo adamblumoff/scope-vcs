@@ -4,20 +4,15 @@ import {
   type TopbarItem,
 } from '@/components/application-topbar'
 import { AppShell } from '@/components/app-shell'
+import {
+  activeRepoSection,
+  repoSectionsForActor,
+} from '@/components/repo-section-model'
 import { RepositoryContextStrip } from '@/components/repository-context-strip'
 import { useRepoLayout } from '@/features/repo-detail/repo-layout-context'
 import { UserButton } from '@clerk/tanstack-react-start'
 import { Link, useMatchRoute } from '@tanstack/react-router'
 import type { ReactNode } from 'react'
-
-export type RepoSection = 'code' | 'history' | 'requests' | 'settings'
-
-const repoSections = [
-  { key: 'code', label: 'Code', to: '/repos/$owner/$repo' },
-  { key: 'requests', label: 'Requests', to: '/repos/$owner/$repo/requests' },
-  { key: 'history', label: 'History', to: '/repos/$owner/$repo/history' },
-  { key: 'settings', label: 'Settings', to: '/repos/$owner/$repo/settings' },
-] as const
 
 export function RepoShell({
   children,
@@ -27,10 +22,13 @@ export function RepoShell({
   params: RepoParams
 }) {
   const { repo } = useRepoLayout()
-  const active = activeRepoSection(useMatchRoute())
-  const items = repoSections.flatMap<TopbarItem>((section) => {
-    if (section.key === 'settings' && repo.access.actor === 'Public') return []
-    return [{
+  const matchRoute = useMatchRoute()
+  const active = activeRepoSection((to) => Boolean(matchRoute({
+    fuzzy: true,
+    to,
+  })))
+  const items = repoSectionsForActor(repo.access.actor).map<TopbarItem>(
+    (section) => ({
       active: active === section.key,
       label: section.label,
       node: (
@@ -44,8 +42,8 @@ export function RepoShell({
           {section.label}
         </Link>
       ),
-    }]
-  })
+    }),
+  )
 
   return (
     <AppShell
@@ -74,13 +72,4 @@ export function RepoShell({
       </div>
     </AppShell>
   )
-}
-
-function activeRepoSection(
-  matchRoute: ReturnType<typeof useMatchRoute>,
-): RepoSection {
-  if (matchRoute({ fuzzy: true, to: '/repos/$owner/$repo/settings' })) return 'settings'
-  if (matchRoute({ fuzzy: true, to: '/repos/$owner/$repo/history' })) return 'history'
-  if (matchRoute({ fuzzy: true, to: '/repos/$owner/$repo/requests' })) return 'requests'
-  return 'code'
 }
