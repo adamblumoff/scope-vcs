@@ -427,6 +427,21 @@ pub(super) fn run_steps(
             }
             thread::sleep(Duration::from_millis(500));
         };
+        let conclusion = if exit_code == 0 {
+            StepConclusionRequest::Succeeded
+        } else {
+            StepConclusionRequest::Failed { exit_code }
+        };
+        if let Err(error) =
+            mark_recovery_step_conclusion_pending(&work.path, claim, step_index, conclusion.clone())
+        {
+            work.preserve();
+            container.preserve();
+            eprintln!(
+                "Could not persist the completed workflow step; recovery will retry: {error:#}"
+            );
+            return Err(ConclusionReportPending.into());
+        }
         let final_drain_result = drain_step_logs(
             client,
             config,
@@ -442,31 +457,12 @@ pub(super) fn run_steps(
             true,
         );
         if let Err(error) = final_drain_result {
-            return preserve_after_runner_failure(
-                work,
-                claim,
-                &mut container,
-                &snapshot,
-                "final log upload",
-                error,
+            work.preserve();
+            container.preserve();
+            eprintln!(
+                "Could not finish the completed workflow step log upload; recovery will retry: {error:#}"
             );
-        }
-        let conclusion = if exit_code == 0 {
-            StepConclusionRequest::Succeeded
-        } else {
-            StepConclusionRequest::Failed { exit_code }
-        };
-        if let Err(error) =
-            mark_recovery_step_conclusion_pending(&work.path, claim, step_index, conclusion.clone())
-        {
-            return preserve_after_runner_failure(
-                work,
-                claim,
-                &mut container,
-                &snapshot,
-                "step conclusion persistence",
-                error,
-            );
+            return Err(ConclusionReportPending.into());
         }
         if let Err(error) = report_step_conclusion_until_reconciled(
             client, config, claim, work, step_index, conclusion, supervisor,

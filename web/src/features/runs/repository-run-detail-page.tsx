@@ -365,7 +365,7 @@ function StepLogs({
         </span>
         <span>
           {logState.loading ? 'Updating output…' : 'Output current'}
-          {logState.logsTruncated ? ' · Earlier output omitted' : ''}
+          {logState.logsTruncated ? ' · Some output omitted' : ''}
         </span>
       </div>
       {logState.error ? (
