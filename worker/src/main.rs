@@ -73,7 +73,6 @@ async fn run() -> anyhow::Result<()> {
 async fn run_worker(settings: WorkerSettings, health: WorkerHealth) -> anyhow::Result<()> {
     let metadata = MetadataStore::connect_worker_with_schema_wait(
         settings.database_url.clone(),
-        deploy_revision(),
         settings.schema_wait_timeout,
         Duration::from_secs(SCHEMA_WAIT_RETRY_SECS),
     )
@@ -88,7 +87,7 @@ async fn run_worker(settings: WorkerSettings, health: WorkerHealth) -> anyhow::R
             tracing::warn!(
                 error = %error.message,
                 retry_in_secs = SCHEMA_WAIT_RETRY_SECS,
-                "metadata schema revision changed; pausing worker"
+                "metadata migration state changed; pausing worker"
             );
             if wait_or_shutdown(Duration::from_secs(SCHEMA_WAIT_RETRY_SECS)).await {
                 return Ok(());
@@ -208,10 +207,6 @@ async fn wait_or_shutdown(duration: Duration) -> bool {
         () = shutdown_signal() => true,
         () = tokio::time::sleep(duration) => false,
     }
-}
-
-fn deploy_revision() -> &'static str {
-    include_str!("../railway-deploy-ref.txt").trim()
 }
 
 fn unix_now() -> anyhow::Result<u64> {

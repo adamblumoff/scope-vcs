@@ -11,16 +11,12 @@ use axum::{
     http::{HeaderMap, StatusCode},
 };
 use scope_domain::store::{RepoStorageCleanup, SourceBlob};
-use scope_postgres::db::MetadataResetEvent;
-use serde::{Deserialize, Serialize};
-
-const METADATA_RESET_CONFIRMATION: &str = "reset-pre-alpha-metadata";
+use serde::Serialize;
 
 #[derive(Debug, Serialize)]
 pub(crate) struct AdminCleanupStatusResponse {
     pending_cleanup: PendingCleanupResponse,
     failed_object_deletes: SourceBlobCleanupQueueResponse,
-    metadata_resets: MetadataResetEventsResponse,
 }
 
 #[derive(Debug, Serialize)]
@@ -56,26 +52,9 @@ struct SourceBlobCleanupResponse {
 }
 
 #[derive(Debug, Serialize)]
-struct MetadataResetEventsResponse {
-    count: usize,
-    events: Vec<MetadataResetEvent>,
-}
-
-#[derive(Debug, Serialize)]
 pub(crate) struct CleanupDrainResponse {
     status: &'static str,
     report: CleanupDrainReport,
-}
-
-#[derive(Debug, Deserialize)]
-pub(crate) struct MetadataResetRequest {
-    confirm: String,
-    reason: Option<String>,
-}
-
-#[derive(Debug, Serialize)]
-pub(crate) struct MetadataResetResponse {
-    event: MetadataResetEvent,
 }
 
 pub(crate) async fn get_cleanup_status(
@@ -106,47 +85,16 @@ pub(crate) async fn drain_cleanup(
     ))
 }
 
-pub(crate) async fn reset_metadata(
-    State(state): State<AppState>,
-    headers: HeaderMap,
-    Json(request): Json<MetadataResetRequest>,
-) -> Result<Json<MetadataResetResponse>, ApiError> {
-    ensure_operator(&state, &headers)?;
-    if request.confirm != METADATA_RESET_CONFIRMATION {
-        return Err(ApiError::bad_request(format!(
-            "confirm must be {METADATA_RESET_CONFIRMATION}"
-        )));
-    }
-
-    let reason = request
-        .reason
-        .as_deref()
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-        .unwrap_or("operator requested pre-alpha metadata reset");
-    let event = state
-        .metadata
-        .admin()
-        .reset_catalog(reason, crate::persistence::unix_now()?)
-        .await?;
-    Ok(Json(MetadataResetResponse { event }))
-}
-
 async fn cleanup_status(state: &AppState) -> Result<AdminCleanupStatusResponse, ApiError> {
     let (repo_storage, source_blob_deletes) =
         state.metadata.cleanup().pending_cleanup_queues().await?;
     let source_blob_deletes = SourceBlobCleanupQueueResponse::from_blobs(&source_blob_deletes);
-    let reset_events = state.metadata.admin().metadata_reset_events().await?;
     Ok(AdminCleanupStatusResponse {
         pending_cleanup: PendingCleanupResponse {
             repo_storage: RepoStorageCleanupQueueResponse::from_cleanups(&repo_storage),
             source_blob_deletes: source_blob_deletes.clone(),
         },
         failed_object_deletes: source_blob_deletes,
-        metadata_resets: MetadataResetEventsResponse {
-            count: reset_events.len(),
-            events: reset_events,
-        },
     })
 }
 

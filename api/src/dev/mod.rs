@@ -4,7 +4,7 @@ mod seed;
 use crate::{
     AppState,
     auth::{clerk::ClerkVerifier, cli::CliAuthService},
-    config::{SCOPE_OPERATOR_TOKEN_ENV, data_dir, deploy_revision, git_repo_root, non_empty_env},
+    config::{SCOPE_OPERATOR_TOKEN_ENV, data_dir, git_repo_root, non_empty_env},
     error::ApiError,
     git::cache::RawGitCacheRegistry,
     object_store_config::{encryption_key_from_env, file_from_env},
@@ -35,7 +35,7 @@ pub async fn app_state_from_env() -> anyhow::Result<AppState> {
     ));
     let catalog = seed::catalog(raw_object_store.as_ref(), settings.seed_user)
         .map_err(|error| anyhow::anyhow!("building local dev catalog: {}", error.into_message()))?;
-    let metadata = MetadataStore::connect(settings.database_url.clone(), deploy_revision()).await?;
+    let metadata = MetadataStore::connect(settings.database_url.clone()).await?;
     metadata
         .admin()
         .replace_catalog_for_local_dev(catalog)

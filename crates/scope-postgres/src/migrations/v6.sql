@@ -1,3 +1,4 @@
+-- Frozen metadata schema v6 baseline for fresh installs and existing-schema adoption.
 CREATE TABLE scope_auth_identities (
     provider character varying NOT NULL,
     subject character varying NOT NULL,

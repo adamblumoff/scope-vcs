@@ -23,10 +23,6 @@ pub fn router(state: AppState) -> Router {
             post(http::admin::drain_cleanup),
         )
         .route(
-            routes::ADMIN_METADATA_RESET,
-            post(http::admin::reset_metadata),
-        )
-        .route(
             routes::CLI_DEVICE_LOGIN,
             post(http::device_login::start_cli_device_login),
         )
