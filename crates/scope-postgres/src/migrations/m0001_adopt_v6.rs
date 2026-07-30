@@ -145,6 +145,9 @@ impl MigrationTrait for Migration {
                 JOIN pg_namespace namespace ON namespace.oid = relation.relnamespace
                 WHERE namespace.nspname = current_schema()
                   AND left(relation.relname, 6) = 'scope_'
+                  -- PostgreSQL 18 also exposes NOT NULL constraints here.
+                  -- The column fingerprint already validates attnotnull.
+                  AND constraint_row.contype <> 'n'
             ",
         )
         .await?;
