@@ -42,6 +42,13 @@ impl PinnedContainerImage {
     pub fn as_str(&self) -> &str {
         &self.0
     }
+
+    pub fn digest(&self) -> &str {
+        self.0
+            .rsplit_once("@sha256:")
+            .map(|(_, digest)| digest)
+            .expect("validated pinned images always contain a digest")
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -191,7 +198,7 @@ impl Run {
         }
         if !runner.supports_dispatch() {
             return Err(DomainError::conflict(
-                "runner does not support the V3 dispatch protocol",
+                "runner does not support the V4 dispatch protocol",
             ));
         }
         if !grant.is_active()

@@ -34,8 +34,28 @@ fn runner_help_exposes_one_time_install_and_ongoing_management() {
         .unwrap();
     assert!(output.status.success(), "{output:?}");
     let stdout = String::from_utf8(output.stdout).unwrap();
-    for command in ["install", "status", "doctor", "add-repo", "remove-repo"] {
+    for command in [
+        "install",
+        "status",
+        "doctor",
+        "cache",
+        "add-repo",
+        "remove-repo",
+    ] {
         assert!(stdout.contains(command), "{stdout}");
     }
     assert!(!stdout.contains("daemon"), "{stdout}");
+}
+
+#[test]
+fn runner_cache_help_exposes_safe_operator_actions() {
+    let dir = TempDir::new("runner-cache-help");
+    let output = scope_command(dir.path())
+        .args(["runner", "cache", "--help"])
+        .output()
+        .unwrap();
+    assert!(output.status.success(), "{output:?}");
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    assert!(stdout.contains("list"), "{stdout}");
+    assert!(stdout.contains("prune"), "{stdout}");
 }

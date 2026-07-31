@@ -376,6 +376,7 @@ on: { push: true }
 runs-on: any
 container: { image: alpine:3.20 }
 timeout: 1m
+caches: []
 steps:
   - { name: Test, run: "true" }
 "#
@@ -614,6 +615,7 @@ on: { push: true }
 runs-on: any
 container: { image: alpine:3.20 }
 timeout: 1m
+caches: []
 steps:
   - { name: Test, run: "true" }
 "#

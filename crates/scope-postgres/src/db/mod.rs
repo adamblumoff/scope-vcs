@@ -27,6 +27,8 @@ mod generated_ids;
 mod git_compaction;
 #[cfg(test)]
 mod migration_tests;
+#[cfg(test)]
+mod runner_protocol_cutover_migration_tests;
 pub use generated_ids::{GeneratedIdKind, GeneratedIdSource};
 mod git_push_reads;
 mod history_rows;
@@ -68,13 +70,18 @@ mod request_review_transactions;
 mod request_review_transactions_tests;
 mod request_revision_transactions;
 mod requests;
+mod run_attempt_persistence;
 mod run_details;
 mod run_operations;
 mod run_retention;
 mod run_step_operations;
+mod runner_protocol_cutover;
+#[cfg(test)]
+mod runner_protocol_cutover_tests;
 mod runs;
 pub use run_details::{RunAttemptDetail, RunDetail, StoredAttemptStepLogs};
 pub use run_operations::{RecentRunLogs, RepositoryRunner};
+pub use runner_protocol_cutover::RunnerProtocolCutoverSnapshot;
 pub use runs::{DispatchClaim, StoredRunLog};
 #[cfg(test)]
 mod run_concurrency_tests;

@@ -1,45 +1,33 @@
-use super::{RunnerConfig, command_success};
+use super::{RunnerConfig, cache::CacheMount, command_success, resources::ResourceLimits};
 use anyhow::{Context, bail};
 use scope_api_contract::ClaimRunResponse;
 use std::{env, path::Path, process::Command, thread, time::Duration};
 use time::{OffsetDateTime, format_description::well_known::Rfc3339};
 
-const CONTAINER_MEMORY: &str = "4g";
-const CONTAINER_CPUS: &str = "2";
-const CONTAINER_PIDS: &str = "512";
-const CONTAINER_STORAGE: &str = "20G";
-
-#[derive(Clone, Copy, Debug)]
-pub(super) struct DockerCapabilities {
-    pub(super) storage_quota_supported: bool,
-}
-
-pub(super) fn doctor_local(run_container: bool) -> anyhow::Result<DockerCapabilities> {
+pub(super) fn doctor_local(run_container: bool) -> anyhow::Result<()> {
     if env::consts::OS != "linux" || env::consts::ARCH != "x86_64" {
-        bail!("V1 runners require Linux on amd64");
+        bail!("V4 runners require Linux on amd64");
     }
     command_success(Command::new("docker").args(["info"]), "connect to Docker")?;
-    let mut storage_quota_supported = false;
+    let limits = ResourceLimits::detect()?;
     if run_container {
         let mut command = Command::new("docker");
         command.args(["run", "--rm"]);
-        apply_container_limits(&mut command, false);
+        apply_container_limits(&mut command, &limits, false);
         command.args(["alpine:3.20", "true"]);
         command_success(&mut command, "run bounded Docker test container")?;
 
         let mut quota_test = Command::new("docker");
         quota_test.args(["run", "--rm"]);
-        apply_container_limits(&mut quota_test, true);
+        apply_container_limits(&mut quota_test, &limits, true);
         quota_test.args(["alpine:3.20", "true"]);
-        storage_quota_supported = quota_test
+        let storage_quota_supported = quota_test
             .output()
             .context("probe Docker writable-layer quota support")?
             .status
             .success();
         if !storage_quota_supported {
-            eprintln!(
-                "Docker writable-layer quotas are unavailable; Scope will retain CPU, memory, and PID limits and clean workspaces after each attempt."
-            );
+            bail!("Docker writable-layer quotas are required for safe transient disk admission");
         }
     }
     if !Path::new("/sys/fs/cgroup/cgroup.controllers").exists() {
@@ -49,57 +37,64 @@ pub(super) fn doctor_local(run_container: bool) -> anyhow::Result<DockerCapabili
         Command::new("systemctl").args(["--user", "--version"]),
         "find systemd user service support",
     )?;
-    Ok(DockerCapabilities {
-        storage_quota_supported,
-    })
+    Ok(())
 }
 
-pub(super) fn apply_container_limits(command: &mut Command, storage_quota_supported: bool) {
-    command.args([
-        "--memory",
-        CONTAINER_MEMORY,
-        "--memory-swap",
-        CONTAINER_MEMORY,
-        "--cpus",
-        CONTAINER_CPUS,
-        "--pids-limit",
-        CONTAINER_PIDS,
-    ]);
+pub(super) fn apply_container_limits(
+    command: &mut Command,
+    limits: &ResourceLimits,
+    storage_quota_supported: bool,
+) {
+    limits.apply(command);
     if storage_quota_supported {
-        command.args(["--storage-opt", &format!("size={CONTAINER_STORAGE}")]);
+        command.args(["--storage-opt", &format!("size={}", limits.storage_bytes)]);
     }
 }
 
-pub(super) fn configure_job_container_creation(
-    command: &mut Command,
-    config: &RunnerConfig,
-    claim: &ClaimRunResponse,
-    container_name: &str,
-    container_image: &str,
-    step_programs: &Path,
-) {
-    command.args(["create", "--name", container_name]);
-    apply_container_limits(command, config.storage_quota_supported);
+pub(super) struct JobContainerSpec<'a> {
+    pub(super) config: &'a RunnerConfig,
+    pub(super) claim: &'a ClaimRunResponse,
+    pub(super) name: &'a str,
+    pub(super) image: &'a str,
+    pub(super) step_programs: &'a Path,
+    pub(super) limits: &'a ResourceLimits,
+    pub(super) caches: &'a [CacheMount],
+}
+
+pub(super) fn configure_job_container_creation(command: &mut Command, spec: JobContainerSpec<'_>) {
+    command.args(["create", "--name", spec.name]);
+    apply_container_limits(command, spec.limits, true);
     command
-        .args(["--label", &format!("scope.runner-id={}", config.runner_id)])
-        .args(["--label", &format!("scope.attempt-id={}", claim.attempt_id)])
+        .args([
+            "--label",
+            &format!("scope.runner-id={}", spec.config.runner_id),
+        ])
+        .args([
+            "--label",
+            &format!("scope.attempt-id={}", spec.claim.attempt_id),
+        ])
         .args([
             "--mount",
             &format!(
                 "type=bind,source={},target=/scope-steps,readonly",
-                step_programs.display()
+                spec.step_programs.display()
             ),
         ])
-        .args(["--entrypoint", "sh"])
+        .args(["--entrypoint", "sh"]);
+    for cache in spec.caches {
+        command.args([
+            "--mount",
+            &format!(
+                "type=volume,source={},target={}",
+                cache.volume_name, cache.target
+            ),
+        ]);
+    }
+    command
         .args([
-            container_image,
+            spec.image,
             "-c",
             "set -eu\n\
-             if [ -d /scope-source ]; then\n\
-               mkdir -p /workspace\n\
-               cp -a /scope-source/. /workspace/\n\
-               rm -rf /scope-source\n\
-             fi\n\
              read -r phase step nonce < /scope-steps/current\n\
              [ \"$phase\" = prepare ]\n\
              : > /scope-step.log\n\
@@ -115,6 +110,44 @@ pub(super) fn configure_job_container_creation(
              done\n\
              exec sh -e \"/scope-steps/step-$step.sh\" > /scope-step.log 2>&1",
         ]);
+}
+
+pub(super) fn configure_source_copy(command: &mut Command, workspace: &Path, container: &str) {
+    command
+        .args(["cp"])
+        .arg(format!("{}/.", workspace.display()))
+        .arg(format!("{container}:/workspace"));
+}
+
+pub(super) fn require_root_image(image: &str) -> anyhow::Result<()> {
+    let output = Command::new("docker")
+        .args(["image", "inspect", "--format={{.Config.User}}", image])
+        .output()
+        .context("inspect Docker image user")?;
+    if !output.status.success() {
+        bail!(
+            "inspect Docker image user: {}",
+            String::from_utf8_lossy(&output.stderr).trim()
+        );
+    }
+    let user = String::from_utf8_lossy(&output.stdout);
+    let user = user.trim();
+    if image_user_is_root(user) {
+        Ok(())
+    } else {
+        bail!(
+            "workflow image runs as {user:?}; Scope V4 images must run as root because the runner populates /workspace and manages step state inside the container"
+        )
+    }
+}
+
+fn image_user_is_root(user: &str) -> bool {
+    let account = user.split_once(':').map_or(user, |(account, _)| account);
+    account.is_empty()
+        || account == "root"
+        || account
+            .parse::<u32>()
+            .is_ok_and(|numeric_user| numeric_user == 0)
 }
 
 pub(super) fn container_started_at_unix(container_name: &str) -> anyhow::Result<u64> {
@@ -227,5 +260,38 @@ impl Drop for ContainerGuard {
         let _ = Command::new("docker")
             .args(["rm", "-f", &self.name])
             .output();
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn root_image_users_accept_names_and_numeric_uid_zero_with_groups() {
+        for root in ["", "root", "root:root", "root:123", "0", "0:root", "00:123"] {
+            assert!(image_user_is_root(root), "{root:?}");
+        }
+        for non_root in ["runner", "runner:root", "1000", "1000:0", "rootless"] {
+            assert!(!image_user_is_root(non_root), "{non_root:?}");
+        }
+    }
+
+    #[test]
+    fn source_copy_targets_workspace_contents_even_when_destination_exists() {
+        let mut command = Command::new("docker");
+        configure_source_copy(
+            &mut command,
+            Path::new("/runner/attempt/workspace"),
+            "scope-a1",
+        );
+        let args = command
+            .get_args()
+            .map(|argument| argument.to_string_lossy().into_owned())
+            .collect::<Vec<_>>();
+        assert_eq!(
+            args,
+            ["cp", "/runner/attempt/workspace/.", "scope-a1:/workspace"]
+        );
     }
 }

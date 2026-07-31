@@ -1,6 +1,6 @@
 use super::{DispatchClaim, RunStore};
 use crate::error::PostgresError;
-use scope_domain::runs::run::StepConclusion;
+use scope_domain::runs::{cutover::RunnerProtocolAttemptOperation, run::StepConclusion};
 
 impl RunStore {
     pub async fn start_attempt_step(
@@ -11,9 +11,13 @@ impl RunStore {
         step_index: u32,
         now_unix: u64,
     ) -> Result<DispatchClaim, PostgresError> {
-        self.mutate_attempt(attempt_id, |run, attempt, steps| {
-            attempt.start_step(run, steps, runner_id, token_hash, step_index, now_unix)
-        })
+        self.mutate_attempt(
+            attempt_id,
+            RunnerProtocolAttemptOperation::Execution,
+            |run, attempt, steps| {
+                attempt.start_step(run, steps, runner_id, token_hash, step_index, now_unix)
+            },
+        )
         .await
     }
 
@@ -27,11 +31,15 @@ impl RunStore {
         conclusion: StepConclusion,
         now_unix: u64,
     ) -> Result<DispatchClaim, PostgresError> {
-        self.mutate_attempt(attempt_id, |run, attempt, steps| {
-            attempt.complete_step(
-                run, steps, runner_id, token_hash, step_index, conclusion, now_unix,
-            )
-        })
+        self.mutate_attempt(
+            attempt_id,
+            RunnerProtocolAttemptOperation::Execution,
+            |run, attempt, steps| {
+                attempt.complete_step(
+                    run, steps, runner_id, token_hash, step_index, conclusion, now_unix,
+                )
+            },
+        )
         .await
     }
 }

@@ -113,6 +113,11 @@ enum RunnerCommand {
     },
     Status,
     Doctor,
+    #[command(about = "Inspect or prune this runner's persistent caches")]
+    Cache {
+        #[command(subcommand)]
+        command: RunnerCacheCommand,
+    },
     AddRepo {
         repository: String,
     },
@@ -123,6 +128,18 @@ enum RunnerCommand {
     Daemon {
         #[arg(long, hide = true)]
         config: Option<PathBuf>,
+    },
+}
+
+#[derive(Subcommand)]
+enum RunnerCacheCommand {
+    List,
+    Prune {
+        #[arg(
+            long,
+            help = "Remove every inactive Scope cache, not only enough to restore reserves"
+        )]
+        all: bool,
     },
 }
 
@@ -197,6 +214,10 @@ fn run_runner(command: RunnerCommand) -> anyhow::Result<()> {
         RunnerCommand::Install { name, repo } => scope_cli::runner::install(&name, &repo),
         RunnerCommand::Status => scope_cli::runner::status(),
         RunnerCommand::Doctor => scope_cli::runner::doctor(),
+        RunnerCommand::Cache { command } => match command {
+            RunnerCacheCommand::List => scope_cli::runner::list_caches(),
+            RunnerCacheCommand::Prune { all } => scope_cli::runner::prune_caches(all),
+        },
         RunnerCommand::AddRepo { repository } => scope_cli::runner::add_repository(&repository),
         RunnerCommand::RemoveRepo { repository } => {
             scope_cli::runner::remove_repository(&repository)

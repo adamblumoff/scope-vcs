@@ -3,6 +3,9 @@ pub const HEALTH: &str = "/healthz";
 pub const READINESS: &str = "/readyz";
 pub const ADMIN_CLEANUP: &str = "/v1/admin/cleanup";
 pub const ADMIN_CLEANUP_DRAIN: &str = "/v1/admin/cleanup/drain";
+pub const ADMIN_RUNNER_CUTOVER: &str = "/v1/admin/runner-cutover";
+pub const ADMIN_RUNNER_CUTOVER_ADVANCE: &str = "/v1/admin/runner-cutover/advance";
+pub const ADMIN_RUNNER_CUTOVER_CANARY: &str = "/v1/admin/runner-cutover/canary";
 pub const CLI_BROWSER_LOGIN: &str = "/v1/cli/browser-login";
 pub const CLI_BROWSER_LOGIN_COMPLETE: &str = "/v1/cli/browser-login/{request_id}/complete";
 pub const CLI_BROWSER_LOGIN_EXCHANGE: &str = "/v1/cli/browser-login/{request_id}/exchange";
@@ -17,10 +20,13 @@ pub const CLI_SESSION_BY_ID: &str = "/v1/cli/sessions/{session_id}";
 pub const REPOS: &str = "/v1/repos";
 pub const RUNNERS: &str = "/v1/runners";
 pub const RUNNER: &str = "/v1/runners/{runner_id}";
+pub const RUNNER_UPGRADE: &str = "/v1/runners/{runner_id}/upgrade";
 pub const RUNNER_REPOSITORY: &str = "/v1/runners/{runner_id}/repos/{owner}/{repo}";
 pub const RUNNER_POLL: &str = "/v1/runner-protocol/poll";
 pub const RUNNER_CLAIM: &str = "/v1/runner-protocol/runs/{run_id}/claim";
 pub const ATTEMPT_HEARTBEAT: &str = "/v1/runner-protocol/attempts/{attempt_id}/heartbeat";
+pub const ATTEMPT_CACHE_FINALIZATION: &str =
+    "/v1/runner-protocol/attempts/{attempt_id}/cache-finalization";
 pub const ATTEMPT_RECOVERY_STATUS: &str =
     "/v1/runner-protocol/attempts/{attempt_id}/recovery-status";
 pub const ATTEMPT_CONTAINER_IMAGE: &str =
@@ -119,6 +125,10 @@ pub fn runner(runner_id: &str) -> String {
     format!("/v1/runners/{}", path_segment(runner_id))
 }
 
+pub fn runner_upgrade(runner_id: &str) -> String {
+    format!("{}/upgrade", runner(runner_id))
+}
+
 pub fn runner_repository(runner_id: &str, owner: &str, repo: &str) -> String {
     format!(
         "{}/repos/{}/{}",
@@ -134,6 +144,10 @@ pub fn runner_claim(run_id: &str) -> String {
 
 pub fn attempt_heartbeat(attempt_id: &str) -> String {
     attempt_action(attempt_id, "heartbeat")
+}
+
+pub fn attempt_cache_finalization(attempt_id: &str) -> String {
+    attempt_action(attempt_id, "cache-finalization")
 }
 
 pub fn attempt_recovery_status(attempt_id: &str) -> String {
@@ -327,6 +341,14 @@ mod tests {
     #[test]
     fn dynamic_routes_encode_each_path_segment() {
         let routes = [
+            (
+                runner_upgrade("runner/with space"),
+                "/v1/runners/runner%2Fwith%20space/upgrade",
+            ),
+            (
+                attempt_cache_finalization("attempt/with space"),
+                "/v1/runner-protocol/attempts/attempt%2Fwith%20space/cache-finalization",
+            ),
             (
                 repo_request("an owner", "r/name", "request?#1"),
                 "/v1/repos/an%20owner/r%2Fname/requests/request%3F%231",

@@ -36,6 +36,7 @@ pub(super) struct RecoveryProgress {
     pub(super) pending_step_conclusion: Option<PendingStepConclusion>,
     pub(super) pending_attempt_conclusion: Option<AttemptConclusionRequest>,
     pub(super) pending_attempt_abandon: bool,
+    pub(super) cache_volumes: Vec<String>,
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -86,6 +87,7 @@ pub(super) fn persist_recovery_claim(
             pending_step_conclusion: None,
             pending_attempt_conclusion: None,
             pending_attempt_abandon: false,
+            cache_volumes: Vec::new(),
         },
     )?;
     write_private_atomic_json(
@@ -94,6 +96,23 @@ pub(super) fn persist_recovery_claim(
         RECOVERY_CLAIM_TEMP_FILE,
         claim,
     )
+}
+
+pub(super) fn mark_recovery_caches_attached(
+    work_dir: &Path,
+    claim: &ClaimRunResponse,
+    volumes: &[String],
+) -> anyhow::Result<()> {
+    let stored = matching_recovery_claim(work_dir, claim)?;
+    let mut progress = stored.progress;
+    if progress.cache_volumes == volumes {
+        return Ok(());
+    }
+    if !progress.cache_volumes.is_empty() {
+        bail!("runner recovery cache identity changed before execution");
+    }
+    progress.cache_volumes = volumes.to_vec();
+    write_recovery_progress(work_dir, &progress)
 }
 
 pub(super) fn update_recovery_log_progress(
@@ -349,6 +368,7 @@ pub(super) fn recover_runner_state(config: &RunnerConfig) -> anyhow::Result<Vec<
     let root = runner_work_root()?;
     if !root.exists() {
         reconcile_runner_containers(&config.runner_id, &BTreeSet::new())?;
+        super::cache::evict_orphaned_tainted(config, &BTreeSet::new())?;
         return Ok(Vec::new());
     }
     validate_work_root(&root)?;
@@ -403,6 +423,11 @@ pub(super) fn recover_runner_state(config: &RunnerConfig) -> anyhow::Result<Vec<
                         "could not confirm unstarted Scope container {container_name} was removed"
                     );
                 }
+                super::cache::finalize_volume_names(
+                    config,
+                    &recovery.progress.cache_volumes,
+                    false,
+                )?;
                 abandon_recovery_claim(&client, config, &recovery)?;
                 fs::remove_dir_all(entry.path())
                     .context("remove unstarted runner recovery state")?;
@@ -411,12 +436,18 @@ pub(super) fn recover_runner_state(config: &RunnerConfig) -> anyhow::Result<Vec<
                 if recovery.progress.pending_attempt_conclusion.is_some()
                     || recovery.progress.pending_step_conclusion.is_some()
                     || recovery.progress.pending_attempt_abandon
+                    || recovery.claim.canary_phase.is_some()
                 {
                     active.push(RecoveryAttempt {
                         work_dir: entry.path(),
                         recovery,
                     });
                 } else {
+                    super::cache::finalize_volume_names(
+                        config,
+                        &recovery.progress.cache_volumes,
+                        false,
+                    )?;
                     abandon_recovery_claim(&client, config, &recovery)?;
                     fs::remove_dir_all(entry.path()).context("remove interrupted runner work")?;
                 }
@@ -425,6 +456,11 @@ pub(super) fn recover_runner_state(config: &RunnerConfig) -> anyhow::Result<Vec<
     }
     reconcile_runner_containers(&config.runner_id, &active_containers)?;
     remove_unclaimed_work(&root, &active)?;
+    let recoverable_attempts = active
+        .iter()
+        .map(|attempt| attempt.recovery.claim.attempt_id.clone())
+        .collect::<BTreeSet<_>>();
+    super::cache::evict_orphaned_tainted(config, &recoverable_attempts)?;
     Ok(active)
 }
 

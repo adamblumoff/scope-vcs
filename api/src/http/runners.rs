@@ -13,7 +13,8 @@ use axum::{
 };
 use scope_api_contract::{
     AttachRunnerRepositoryRequest, RegisterRunnerRequest, RegisterRunnerResponse,
-    RunnerGrantResponse, RunnerResponse,
+    RunnerGrantResponse, RunnerResponse, UpgradeRunnerRegistrationRequest,
+    UpgradeRunnerRegistrationResponse,
 };
 use scope_domain::{
     runs::runner::{Runner, RunnerGrant, RunnerName},
@@ -65,6 +66,33 @@ pub(crate) async fn get_runner(
     let runner = require_owned_runner(&state, &runner_id, &user.id).await?;
     let grants = state.metadata.runs().runner_grants(&runner.id).await?;
     Ok(Json(runner_response(runner, grants)))
+}
+
+pub(crate) async fn upgrade_runner_registration(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path(runner_id): Path<String>,
+    Json(input): Json<UpgradeRunnerRegistrationRequest>,
+) -> Result<Json<UpgradeRunnerRegistrationResponse>, ApiError> {
+    let user = require_scope_user(&state, &headers).await?;
+    let (secret, secret_hash) = generate_runner_token()?;
+    let runner = state
+        .metadata
+        .runs()
+        .upgrade_runner_registration(
+            &runner_id,
+            &user.id,
+            secret_hash,
+            input.version,
+            input.protocol_version,
+            input.capabilities,
+        )
+        .await?;
+    let grants = state.metadata.runs().runner_grants(&runner.id).await?;
+    Ok(Json(UpgradeRunnerRegistrationResponse {
+        runner: runner_response(runner, grants),
+        secret,
+    }))
 }
 
 pub(crate) async fn delete_runner(

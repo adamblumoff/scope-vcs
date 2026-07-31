@@ -1,6 +1,19 @@
-use super::{RunStore, entities, object_references::insert_object_reference};
+use super::{
+    RunStore, entities,
+    object_references::insert_object_reference,
+    run_attempt_persistence::{
+        attempt_target, ensure_runner_authorized, grant_by_ids, locked_attempt_context, locked_run,
+        runner_by_id, save_attempt, save_attempt_steps, save_run, save_runner,
+    },
+    runner_protocol_cutover::{
+        DispatchCutover, dispatch_cutover, guard_attempt_operation, guard_canary_pinned_image,
+        guard_claim, guard_enqueue, guard_general_run_write, guard_runner_authentication,
+        guard_runner_registration, mark_canary_claimed, record_canary_attempt_terminal,
+    },
+};
 use crate::error::PostgresError;
 use scope_domain::runs::{
+    cutover::RunnerProtocolAttemptOperation,
     run::{AttemptConclusion, PinnedContainerImage, Run, RunAttempt, RunAttemptStep, RunLogChunk},
     runner::{Runner, RunnerGrant},
     workflow::WorkflowRevision,
@@ -19,6 +32,7 @@ pub struct DispatchClaim {
     pub attempt: RunAttempt,
     pub steps: Vec<RunAttemptStep>,
     pub workflow_revision: WorkflowRevision,
+    pub canary_phase: Option<scope_domain::runs::cutover::RunnerProtocolCanaryPhase>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -40,6 +54,7 @@ impl RunStore {
             ));
         }
         let tx = self.db.begin().await.map_err(PostgresError::internal)?;
+        guard_runner_registration(&tx, &runner).await?;
         let runner_result = entities::runner::Entity::insert(
             entities::runner::Model::from_domain(&runner)?.into_active_model(),
         )
@@ -71,11 +86,13 @@ impl RunStore {
     }
 
     pub async fn register_runner(&self, runner: Runner) -> Result<Runner, PostgresError> {
+        let tx = self.db.begin().await.map_err(PostgresError::internal)?;
+        guard_runner_registration(&tx, &runner).await?;
         let model = entities::runner::Model::from_domain(&runner)?;
         let result = entities::runner::Entity::insert(model.into_active_model())
             .on_conflict(OnConflict::new().do_nothing().to_owned())
             .do_nothing()
-            .exec(self.db.as_ref())
+            .exec(&tx)
             .await
             .map_err(PostgresError::internal)?;
         if !matches!(result, TryInsertResult::Inserted(_)) {
@@ -83,7 +100,40 @@ impl RunStore {
                 "runner id or secret hash is already registered",
             ));
         }
+        tx.commit().await.map_err(PostgresError::internal)?;
         Ok(runner)
+    }
+
+    pub async fn upgrade_runner_registration(
+        &self,
+        runner_id: &str,
+        owner_user_id: &str,
+        secret_hash: String,
+        version: String,
+        protocol_version: u32,
+        capabilities: scope_domain::runs::runner::RunnerCapabilities,
+    ) -> Result<Runner, PostgresError> {
+        let tx = self.db.begin().await.map_err(PostgresError::internal)?;
+        let current = runner_by_id(&tx, runner_id).await?;
+        if current.owner_user_id != owner_user_id {
+            return Err(PostgresError::not_found("runner not found"));
+        }
+        let upgraded = Runner::restore(
+            current.id,
+            current.owner_user_id,
+            secret_hash,
+            version,
+            protocol_version,
+            capabilities,
+            true,
+            current.created_at_unix,
+            current.last_seen_at_unix,
+        )
+        .map_err(PostgresError::from)?;
+        guard_runner_registration(&tx, &upgraded).await?;
+        save_runner(&tx, &upgraded).await?;
+        tx.commit().await.map_err(PostgresError::internal)?;
+        Ok(upgraded)
     }
 
     pub async fn set_runner_enabled(
@@ -156,11 +206,7 @@ impl RunStore {
             .map_err(PostgresError::internal)?
             .ok_or_else(|| PostgresError::unauthenticated("runner credentials are invalid"))?;
         let mut runner = model.try_into_domain()?;
-        if !runner.supports_dispatch() {
-            return Err(PostgresError::permission_denied(
-                "runner is disabled or incompatible with the V3 protocol",
-            ));
-        }
+        guard_runner_authentication(&tx, &runner).await?;
         runner.record_seen(now_unix).map_err(PostgresError::from)?;
         save_runner(&tx, &runner).await?;
         tx.commit().await.map_err(PostgresError::internal)?;
@@ -276,8 +322,9 @@ impl RunStore {
         &self,
         runner_id: &str,
     ) -> Result<Option<Run>, PostgresError> {
+        let tx = self.db.begin().await.map_err(PostgresError::internal)?;
         let runner = entities::runner::Entity::find_by_id(runner_id.to_string())
-            .one(self.db.as_ref())
+            .one(&tx)
             .await
             .map_err(PostgresError::internal)?
             .ok_or_else(|| PostgresError::not_found("runner not found"))?
@@ -285,11 +332,16 @@ impl RunStore {
         if !runner.supports_dispatch() {
             return Ok(None);
         }
+        let dispatch = dispatch_cutover(&tx, runner_id, runner.protocol_version).await?;
+        if matches!(dispatch, DispatchCutover::None) {
+            tx.commit().await.map_err(PostgresError::internal)?;
+            return Ok(None);
+        }
 
         let grants = entities::runner_grant::Entity::find()
             .filter(entities::runner_grant::Column::RunnerId.eq(runner_id))
             .filter(entities::runner_grant::Column::RevokedAtUnix.is_null())
-            .all(self.db.as_ref())
+            .all(&tx)
             .await
             .map_err(PostgresError::internal)?;
         if grants.is_empty() {
@@ -309,17 +361,23 @@ impl RunStore {
                 )
             });
 
-        entities::run::Entity::find()
+        let mut query = entities::run::Entity::find()
             .filter(entities::run::Column::State.eq("queued"))
             .filter(entities::run::Column::CancellationRequested.eq(false))
-            .filter(eligible)
+            .filter(eligible);
+        if let DispatchCutover::Canary(run_id) = dispatch {
+            query = query.filter(entities::run::Column::Id.eq(run_id));
+        }
+        let run = query
             .order_by_asc(entities::run::Column::CreatedAtUnix)
             .order_by_asc(entities::run::Column::Id)
-            .one(self.db.as_ref())
+            .one(&tx)
             .await
             .map_err(PostgresError::internal)?
             .map(entities::run::Model::try_into_domain)
-            .transpose()
+            .transpose()?;
+        tx.commit().await.map_err(PostgresError::internal)?;
+        Ok(run)
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -333,6 +391,7 @@ impl RunStore {
         lease_expires_at_unix: u64,
     ) -> Result<DispatchClaim, PostgresError> {
         let tx = self.db.begin().await.map_err(PostgresError::internal)?;
+        guard_claim(&tx, runner_id, run_id).await?;
         let mut run = locked_run(&tx, run_id).await?;
         let mut runner = runner_by_id(&tx, runner_id).await?;
         let grant = grant_by_ids(&tx, run.workflow.repository_id(), runner_id).await?;
@@ -373,12 +432,14 @@ impl RunStore {
         }
         save_run(&tx, &run).await?;
         save_runner(&tx, &runner).await?;
+        let canary_phase = mark_canary_claimed(&tx, runner_id, run_id, now_unix).await?;
         tx.commit().await.map_err(PostgresError::internal)?;
         Ok(DispatchClaim {
             run,
             attempt,
             steps,
             workflow_revision,
+            canary_phase,
         })
     }
 
@@ -391,6 +452,14 @@ impl RunStore {
         now_unix: u64,
     ) -> Result<DispatchClaim, PostgresError> {
         let tx = self.db.begin().await.map_err(PostgresError::internal)?;
+        let (guard_run_id, guard_runner_id) = attempt_target(&tx, attempt_id).await?;
+        guard_attempt_operation(
+            &tx,
+            &guard_runner_id,
+            &guard_run_id,
+            RunnerProtocolAttemptOperation::Execution,
+        )
+        .await?;
         let (mut run, attempt, steps) = locked_attempt_context(&tx, attempt_id).await?;
         ensure_runner_authorized(&tx, &run, &attempt).await?;
         attempt
@@ -401,16 +470,18 @@ impl RunStore {
                 "attempt runner identity does not match",
             ));
         }
+        let workflow_revision = workflow_revision_for_run(&tx, &run).await?;
+        guard_canary_pinned_image(&tx, runner_id, &run.id, &workflow_revision, &image).await?;
         run.pin_container_image(image, now_unix)
             .map_err(PostgresError::from)?;
         save_run(&tx, &run).await?;
-        let workflow_revision = workflow_revision_for_run(&tx, &run).await?;
         tx.commit().await.map_err(PostgresError::internal)?;
         Ok(DispatchClaim {
             run,
             attempt,
             steps,
             workflow_revision,
+            canary_phase: None,
         })
     }
 
@@ -423,6 +494,14 @@ impl RunStore {
         lease_expires_at_unix: u64,
     ) -> Result<bool, PostgresError> {
         let tx = self.db.begin().await.map_err(PostgresError::internal)?;
+        let (guard_run_id, guard_runner_id) = attempt_target(&tx, attempt_id).await?;
+        guard_attempt_operation(
+            &tx,
+            &guard_runner_id,
+            &guard_run_id,
+            RunnerProtocolAttemptOperation::Heartbeat,
+        )
+        .await?;
         let (run, mut attempt, _) = locked_attempt_context(&tx, attempt_id).await?;
         let mut runner = ensure_runner_authorized(&tx, &run, &attempt).await?;
         let cancellation_requested = attempt
@@ -443,9 +522,13 @@ impl RunStore {
         conclusion: AttemptConclusion,
         now_unix: u64,
     ) -> Result<DispatchClaim, PostgresError> {
-        self.mutate_attempt(attempt_id, |run, attempt, steps| {
-            attempt.complete(run, steps, runner_id, token_hash, conclusion, now_unix)
-        })
+        self.mutate_attempt(
+            attempt_id,
+            RunnerProtocolAttemptOperation::Conclusion,
+            |run, attempt, steps| {
+                attempt.complete(run, steps, runner_id, token_hash, conclusion, now_unix)
+            },
+        )
         .await
     }
 
@@ -456,9 +539,11 @@ impl RunStore {
         token_hash: &str,
         now_unix: u64,
     ) -> Result<DispatchClaim, PostgresError> {
-        self.mutate_attempt(attempt_id, |run, attempt, steps| {
-            attempt.abandon(run, steps, runner_id, token_hash, now_unix)
-        })
+        self.mutate_attempt(
+            attempt_id,
+            RunnerProtocolAttemptOperation::Conclusion,
+            |run, attempt, steps| attempt.abandon(run, steps, runner_id, token_hash, now_unix),
+        )
         .await
     }
 
@@ -468,6 +553,14 @@ impl RunStore {
         now_unix: u64,
     ) -> Result<DispatchClaim, PostgresError> {
         let tx = self.db.begin().await.map_err(PostgresError::internal)?;
+        let (guard_run_id, guard_runner_id) = attempt_target(&tx, attempt_id).await?;
+        guard_attempt_operation(
+            &tx,
+            &guard_runner_id,
+            &guard_run_id,
+            RunnerProtocolAttemptOperation::Recovery,
+        )
+        .await?;
         let (mut run, mut attempt, mut steps) = locked_attempt_context(&tx, attempt_id).await?;
         attempt
             .expire(&mut run, &mut steps, now_unix)
@@ -475,6 +568,8 @@ impl RunStore {
         save_attempt(&tx, &attempt).await?;
         save_attempt_steps(&tx, &steps).await?;
         save_run(&tx, &run).await?;
+        record_canary_attempt_terminal(&tx, &attempt.runner_id, &run.id, attempt.state, now_unix)
+            .await?;
         let workflow_revision = workflow_revision_for_run(&tx, &run).await?;
         tx.commit().await.map_err(PostgresError::internal)?;
         Ok(DispatchClaim {
@@ -482,6 +577,7 @@ impl RunStore {
             attempt,
             steps,
             workflow_revision,
+            canary_phase: None,
         })
     }
 
@@ -514,6 +610,7 @@ impl RunStore {
         now_unix: u64,
     ) -> Result<Run, PostgresError> {
         let tx = self.db.begin().await.map_err(PostgresError::internal)?;
+        guard_general_run_write(&tx).await?;
         let mut run = locked_run(&tx, run_id).await?;
         run.request_cancellation(now_unix)
             .map_err(PostgresError::from)?;
@@ -524,6 +621,7 @@ impl RunStore {
 
     pub async fn retry_run(&self, run_id: &str, now_unix: u64) -> Result<Run, PostgresError> {
         let tx = self.db.begin().await.map_err(PostgresError::internal)?;
+        guard_general_run_write(&tx).await?;
         let mut run = locked_run(&tx, run_id).await?;
         run.retry(now_unix).map_err(PostgresError::from)?;
         save_run(&tx, &run).await?;
@@ -547,6 +645,14 @@ impl RunStore {
         now_unix: u64,
     ) -> Result<DispatchClaim, PostgresError> {
         let tx = self.db.begin().await.map_err(PostgresError::internal)?;
+        let (guard_run_id, guard_runner_id) = attempt_target(&tx, attempt_id).await?;
+        guard_attempt_operation(
+            &tx,
+            &guard_runner_id,
+            &guard_run_id,
+            RunnerProtocolAttemptOperation::Execution,
+        )
+        .await?;
         let (run, attempt, steps) = locked_attempt_context(&tx, attempt_id).await?;
         ensure_runner_authorized(&tx, &run, &attempt).await?;
         attempt
@@ -559,6 +665,7 @@ impl RunStore {
             attempt,
             steps,
             workflow_revision,
+            canary_phase: None,
         })
     }
 
@@ -569,6 +676,14 @@ impl RunStore {
         now_unix: u64,
     ) -> Result<StoredRunLog, PostgresError> {
         let tx = self.db.begin().await.map_err(PostgresError::internal)?;
+        let (guard_run_id, guard_runner_id) = attempt_target(&tx, &chunk.attempt_id).await?;
+        guard_attempt_operation(
+            &tx,
+            &guard_runner_id,
+            &guard_run_id,
+            RunnerProtocolAttemptOperation::Execution,
+        )
+        .await?;
         let (run, mut attempt, steps) = locked_attempt_context(&tx, &chunk.attempt_id).await?;
         ensure_runner_authorized(&tx, &run, &attempt).await?;
         attempt
@@ -653,6 +768,7 @@ impl RunStore {
     pub(super) async fn mutate_attempt(
         &self,
         attempt_id: &str,
+        cutover_operation: RunnerProtocolAttemptOperation,
         mutate: impl FnOnce(
             &mut Run,
             &mut RunAttempt,
@@ -660,12 +776,22 @@ impl RunStore {
         ) -> Result<(), scope_domain::error::DomainError>,
     ) -> Result<DispatchClaim, PostgresError> {
         let tx = self.db.begin().await.map_err(PostgresError::internal)?;
+        let (guard_run_id, guard_runner_id) = attempt_target(&tx, attempt_id).await?;
+        guard_attempt_operation(&tx, &guard_runner_id, &guard_run_id, cutover_operation).await?;
         let (mut run, mut attempt, mut steps) = locked_attempt_context(&tx, attempt_id).await?;
         ensure_runner_authorized(&tx, &run, &attempt).await?;
         mutate(&mut run, &mut attempt, &mut steps).map_err(PostgresError::from)?;
         save_attempt(&tx, &attempt).await?;
         save_attempt_steps(&tx, &steps).await?;
         save_run(&tx, &run).await?;
+        record_canary_attempt_terminal(
+            &tx,
+            &attempt.runner_id,
+            &run.id,
+            attempt.state,
+            attempt.completed_at_unix.unwrap_or(run.updated_at_unix),
+        )
+        .await?;
         let workflow_revision = workflow_revision_for_run(&tx, &run).await?;
         tx.commit().await.map_err(PostgresError::internal)?;
         Ok(DispatchClaim {
@@ -673,6 +799,7 @@ impl RunStore {
             attempt,
             steps,
             workflow_revision,
+            canary_phase: None,
         })
     }
 }
@@ -682,6 +809,7 @@ pub(super) async fn enqueue_run_in_transaction(
     run: Run,
     revision: WorkflowRevision,
 ) -> Result<Run, PostgresError> {
+    guard_enqueue(tx, &run, &revision).await?;
     run.validate_workflow_revision(&revision)
         .map_err(PostgresError::from)?;
     save_workflow_revision(tx, &revision, run.created_at_unix).await?;
@@ -761,54 +889,6 @@ pub(super) async fn workflow_revision_for_run(
         .try_into_domain(run.workflow.clone())
 }
 
-async fn locked_run(tx: &DatabaseTransaction, run_id: &str) -> Result<Run, PostgresError> {
-    entities::run::Entity::find_by_id(run_id.to_string())
-        .lock_exclusive()
-        .one(tx)
-        .await
-        .map_err(PostgresError::internal)?
-        .ok_or_else(|| PostgresError::not_found("run not found"))?
-        .try_into_domain()
-}
-
-async fn locked_attempt_context(
-    tx: &DatabaseTransaction,
-    attempt_id: &str,
-) -> Result<(Run, RunAttempt, Vec<RunAttemptStep>), PostgresError> {
-    let run_id = entities::run_attempt::Entity::find_by_id(attempt_id.to_string())
-        .one(tx)
-        .await
-        .map_err(PostgresError::internal)?
-        .ok_or_else(|| PostgresError::not_found("run attempt not found"))?
-        .run_id;
-    let run = locked_run(tx, &run_id).await?;
-    let attempt = entities::run_attempt::Entity::find_by_id(attempt_id.to_string())
-        .lock_exclusive()
-        .one(tx)
-        .await
-        .map_err(PostgresError::internal)?
-        .ok_or_else(|| PostgresError::not_found("run attempt not found"))?
-        .try_into_domain()?;
-    let steps = locked_attempt_steps(tx, attempt_id).await?;
-    Ok((run, attempt, steps))
-}
-
-async fn locked_attempt_steps(
-    tx: &DatabaseTransaction,
-    attempt_id: &str,
-) -> Result<Vec<RunAttemptStep>, PostgresError> {
-    entities::run_attempt_step::Entity::find()
-        .filter(entities::run_attempt_step::Column::AttemptId.eq(attempt_id))
-        .order_by_asc(entities::run_attempt_step::Column::StepIndex)
-        .lock_exclusive()
-        .all(tx)
-        .await
-        .map_err(PostgresError::internal)?
-        .into_iter()
-        .map(entities::run_attempt_step::Model::try_into_domain)
-        .collect()
-}
-
 pub(super) async fn revoke_runner_grants_owned_by<C>(
     conn: &C,
     repository_id: &str,
@@ -846,32 +926,6 @@ where
     Ok(())
 }
 
-async fn runner_by_id(tx: &DatabaseTransaction, runner_id: &str) -> Result<Runner, PostgresError> {
-    entities::runner::Entity::find_by_id(runner_id.to_string())
-        .lock_exclusive()
-        .one(tx)
-        .await
-        .map_err(PostgresError::internal)?
-        .ok_or_else(|| PostgresError::not_found("runner not found"))?
-        .try_into_domain()
-}
-
-async fn grant_by_ids(
-    tx: &DatabaseTransaction,
-    repository_id: &str,
-    runner_id: &str,
-) -> Result<RunnerGrant, PostgresError> {
-    entities::runner_grant::Entity::find_by_id((repository_id.to_string(), runner_id.to_string()))
-        .lock_exclusive()
-        .one(tx)
-        .await
-        .map_err(PostgresError::internal)?
-        .ok_or_else(|| {
-            PostgresError::permission_denied("runner is not attached to the repository")
-        })?
-        .try_into_domain()
-}
-
 async fn has_active_attempts_for_grant(
     tx: &DatabaseTransaction,
     repository_id: &str,
@@ -900,74 +954,6 @@ async fn has_active_attempts_for_grant(
         .await
         .map(|attempt| attempt.is_some())
         .map_err(PostgresError::internal)
-}
-
-async fn ensure_runner_authorized(
-    tx: &DatabaseTransaction,
-    run: &Run,
-    attempt: &RunAttempt,
-) -> Result<Runner, PostgresError> {
-    let runner = runner_by_id(tx, &attempt.runner_id).await?;
-    let grant = grant_by_ids(tx, run.workflow.repository_id(), &attempt.runner_id).await?;
-    if !runner.enabled || !grant.is_active() {
-        return Err(PostgresError::permission_denied(
-            "runner or repository grant is revoked",
-        ));
-    }
-    Ok(runner)
-}
-
-async fn save_run(tx: &DatabaseTransaction, run: &Run) -> Result<(), PostgresError> {
-    entities::run::Entity::update(
-        entities::run::Model::from_domain(run)?
-            .into_active_model()
-            .reset_all(),
-    )
-    .exec(tx)
-    .await
-    .map_err(PostgresError::internal)?;
-    Ok(())
-}
-
-async fn save_attempt(tx: &DatabaseTransaction, attempt: &RunAttempt) -> Result<(), PostgresError> {
-    entities::run_attempt::Entity::update(
-        entities::run_attempt::Model::from_domain(attempt)?
-            .into_active_model()
-            .reset_all(),
-    )
-    .exec(tx)
-    .await
-    .map_err(PostgresError::internal)?;
-    Ok(())
-}
-
-async fn save_attempt_steps(
-    tx: &DatabaseTransaction,
-    steps: &[RunAttemptStep],
-) -> Result<(), PostgresError> {
-    for step in steps {
-        entities::run_attempt_step::Entity::update(
-            entities::run_attempt_step::Model::from_domain(step)?
-                .into_active_model()
-                .reset_all(),
-        )
-        .exec(tx)
-        .await
-        .map_err(PostgresError::internal)?;
-    }
-    Ok(())
-}
-
-async fn save_runner(tx: &DatabaseTransaction, runner: &Runner) -> Result<(), PostgresError> {
-    entities::runner::Entity::update(
-        entities::runner::Model::from_domain(runner)?
-            .into_active_model()
-            .reset_all(),
-    )
-    .exec(tx)
-    .await
-    .map_err(PostgresError::internal)?;
-    Ok(())
 }
 
 fn unique_conflict(error: DbErr, message: &str) -> PostgresError {
