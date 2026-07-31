@@ -26,6 +26,8 @@ mod fast_push;
 mod generated_ids;
 mod git_compaction;
 #[cfg(test)]
+mod migration_harness_tests;
+#[cfg(test)]
 mod migration_tests;
 #[cfg(test)]
 mod runner_protocol_cutover_migration_tests;
