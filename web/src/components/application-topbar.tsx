@@ -1,7 +1,7 @@
 import { cn } from '@/lib/utils'
 import { Link } from '@tanstack/react-router'
 import type { ReactNode } from 'react'
-import { ScopeLogo } from '@/components/scope-logo'
+import { ScopeLogo, ScopeMark } from '@/components/scope-logo'
 import { SearchControl } from '@/components/ui/search-control'
 
 export type TopbarItem = {
@@ -34,14 +34,7 @@ export function ApplicationTopbar({
             className="group flex shrink-0 items-center rounded-md text-foreground focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring"
             to="/"
           >
-            <img
-              alt=""
-              aria-hidden
-              className="size-7 rounded-[7px] transition-transform duration-150 group-hover:-translate-y-px sm:hidden motion-reduce:transform-none"
-              height={28}
-              src="/favicon.png"
-              width={28}
-            />
+            <ScopeMark className="size-7 transition-transform duration-150 group-hover:-translate-y-px sm:hidden motion-reduce:transform-none" />
             <ScopeLogo className="hidden w-[98px] transition-transform duration-150 group-hover:-translate-y-px sm:block motion-reduce:transform-none" />
           </Link>
           {repository ? (
