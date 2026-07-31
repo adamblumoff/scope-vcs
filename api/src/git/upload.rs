@@ -4,7 +4,7 @@ use crate::{
     error::ApiError,
     git::{
         GitRemoteMode,
-        cache::GitRepoHandle,
+        cache::{GitDerivedCacheNamespace, GitRepoHandle},
         git_read_scope_user,
         import::run_git,
         projection_repo::{hash_field, projection_bare_repo_for_state},
@@ -236,61 +236,66 @@ fn git_read_view_repo(
     let cache_key = hex::encode(hasher.finalize());
     let cache_root = state.git_cache_root()?;
     let repo_path = cache_root.join(format!("read-view-{cache_key}.git"));
-    if repo_path.join("objects").is_dir() {
-        return Ok(GitRepoHandle::from_path(repo_path));
-    }
-
-    let _permit = state.runtime_budgets.try_projection_build()?;
-    let attempt = GIT_READ_VIEW_CACHE_ATTEMPT.fetch_add(1, Ordering::Relaxed);
-    let temp_path = cache_root.join(format!(
-        "read-view-{cache_key}.{}.{}.tmp",
-        std::process::id(),
-        attempt
-    ));
-    if temp_path.exists() {
-        fs::remove_dir_all(&temp_path).map_err(ApiError::internal)?;
-    }
-    git_command_output(
-        Command::new("git")
-            .arg("clone")
-            .arg("--bare")
-            .arg("--no-hardlinks")
-            .arg(base_repo.as_ref())
-            .arg(&temp_path),
-        None,
-    )?;
-    if let Err(error) = attach_visible_request_refs(state, requests, &temp_path, public_base_repo) {
-        let _ = fs::remove_dir_all(&temp_path);
-        return Err(error);
-    }
-    if !hidden_request_refs.is_empty() {
-        run_git(
-            Some(&temp_path),
-            &["config", "uploadpack.allowTipSHA1InWant", "true"],
-            "allowing exact request tip fetches",
-        )?;
-        for request_name in hidden_request_refs {
-            run_git(
-                Some(&temp_path),
-                &[
-                    "config",
-                    "--add",
-                    "transfer.hideRefs",
-                    &canonical_request_ref(request_name),
-                ],
-                "hiding exact-only request ref from advertisement",
-            )?;
-        }
-    }
-    match fs::rename(&temp_path, &repo_path) {
-        Ok(()) => Ok(GitRepoHandle::from_path(repo_path)),
-        Err(error) if repo_path.exists() => {
+    let is_ready = || repo_path.join("objects").is_dir();
+    state.git_cache_builds.materialize(
+        GitDerivedCacheNamespace::RequestReadView,
+        cache_key.clone(),
+        is_ready,
+        || {
+            let _permit = state.runtime_budgets.try_projection_build()?;
+            let attempt = GIT_READ_VIEW_CACHE_ATTEMPT.fetch_add(1, Ordering::Relaxed);
+            let temp_path = cache_root.join(format!(
+                "read-view-{cache_key}.{}.{}.tmp",
+                std::process::id(),
+                attempt
+            ));
+            if temp_path.exists() {
+                fs::remove_dir_all(&temp_path).map_err(ApiError::internal)?;
+            }
+            let result = (|| {
+                git_command_output(
+                    Command::new("git")
+                        .arg("clone")
+                        .arg("--bare")
+                        .arg("--no-hardlinks")
+                        .arg(base_repo.as_ref())
+                        .arg(&temp_path),
+                    None,
+                )?;
+                attach_visible_request_refs(state, requests, &temp_path, public_base_repo)?;
+                if !hidden_request_refs.is_empty() {
+                    run_git(
+                        Some(&temp_path),
+                        &["config", "uploadpack.allowTipSHA1InWant", "true"],
+                        "allowing exact request tip fetches",
+                    )?;
+                    for request_name in hidden_request_refs {
+                        run_git(
+                            Some(&temp_path),
+                            &[
+                                "config",
+                                "--add",
+                                "transfer.hideRefs",
+                                &canonical_request_ref(request_name),
+                            ],
+                            "hiding exact-only request ref from advertisement",
+                        )?;
+                    }
+                }
+                match fs::rename(&temp_path, &repo_path) {
+                    Ok(()) => Ok(()),
+                    Err(error) if is_ready() => {
+                        tracing::debug!(%error, path = %repo_path.display(), "using externally-created Git read view cache");
+                        Ok(())
+                    }
+                    Err(error) => Err(ApiError::internal(error)),
+                }
+            })();
             let _ = fs::remove_dir_all(&temp_path);
-            tracing::debug!(%error, path = %repo_path.display(), "using concurrently-created Git read view cache");
-            Ok(GitRepoHandle::from_path(repo_path))
-        }
-        Err(error) => Err(ApiError::internal(error)),
-    }
+            result
+        },
+    )?;
+    Ok(GitRepoHandle::from_path(repo_path))
 }
 
 pub(crate) fn git_upload_pack_auth_required() -> ApiError {
