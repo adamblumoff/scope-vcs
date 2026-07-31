@@ -1,0 +1,13 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 96 96" role="img" aria-labelledby="title">
+  <title id="title">Scope</title>
+  <rect width="96" height="96" rx="22" fill="#0a101a"/>
+  <g transform="translate(12 12) scale(.75)">
+    <g fill="none" stroke="#f6f7f8" stroke-linecap="round" stroke-linejoin="round" stroke-width="9">
+      <path d="M33 48C49 48 48 27 62 27H66"/>
+      <path d="M33 48C49 48 48 69 62 69H66"/>
+      <circle cx="76" cy="27" r="8"/>
+      <circle cx="76" cy="69" r="8"/>
+    </g>
+    <circle cx="24" cy="48" r="9" fill="#f6f7f8"/>
+  </g>
+</svg>
