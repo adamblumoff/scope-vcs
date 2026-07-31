@@ -1,4 +1,5 @@
 use scope_domain::runs::{
+    cutover::{RunnerProtocolCanaryPhase, RunnerProtocolCanaryStatus, RunnerProtocolCutoverState},
     run::{AttemptState, RunState, StepState},
     runner::RunnerCapabilities,
     trigger::PushTriggerEvaluationState,
@@ -20,6 +21,47 @@ pub struct RegisterRunnerRequest {
 pub struct RegisterRunnerResponse {
     pub runner: RunnerResponse,
     pub secret: String,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+pub struct UpgradeRunnerRegistrationRequest {
+    pub version: String,
+    pub protocol_version: u32,
+    pub capabilities: RunnerCapabilities,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+pub struct UpgradeRunnerRegistrationResponse {
+    pub runner: RunnerResponse,
+    pub secret: String,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct AdvanceRunnerProtocolCutoverRequest {
+    pub state: RunnerProtocolCutoverState,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct CreateRunnerProtocolCanaryRequest {
+    pub runner_id: String,
+    pub run_id: String,
+    pub phase: RunnerProtocolCanaryPhase,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct RunnerProtocolCutoverResponse {
+    pub state: RunnerProtocolCutoverState,
+    pub generation: u64,
+    pub canaries: Vec<RunnerProtocolCanaryResponse>,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct RunnerProtocolCanaryResponse {
+    pub generation: u64,
+    pub phase: RunnerProtocolCanaryPhase,
+    pub runner_id: String,
+    pub run_id: String,
+    pub status: RunnerProtocolCanaryStatus,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -103,6 +145,7 @@ pub struct ClaimRunResponse {
     pub attempt_id: String,
     pub attempt_token: String,
     pub lease_expires_at_unix: u64,
+    pub canary_phase: Option<RunnerProtocolCanaryPhase>,
     pub job: RunJobResponse,
 }
 
@@ -140,6 +183,18 @@ pub struct AttemptStepStatusResponse {
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct AttemptHeartbeatRequest {}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct AttemptCacheFinalizationRequest {
+    pub outcome: AttemptCacheFinalizationOutcome,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(tag = "kind", rename_all = "kebab-case")]
+pub enum AttemptCacheFinalizationOutcome {
+    Succeeded,
+    Failed,
+}
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct PinAttemptContainerImageRequest {
@@ -197,4 +252,90 @@ pub struct RunLogResponse {
 pub struct RunEventsQuery {
     #[serde(default)]
     pub after: u64,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn cutover_contract_uses_stable_kebab_case_domain_values() {
+        let response = RunnerProtocolCutoverResponse {
+            state: RunnerProtocolCutoverState::V4Fenced,
+            generation: 2,
+            canaries: vec![RunnerProtocolCanaryResponse {
+                generation: 2,
+                phase: RunnerProtocolCanaryPhase::WarmRead,
+                runner_id: "runner-1".to_string(),
+                run_id: "run-1".to_string(),
+                status: RunnerProtocolCanaryStatus::Running,
+            }],
+        };
+        let json = serde_json::to_value(&response).unwrap();
+        assert_eq!(json["state"], "v4-fenced");
+        assert_eq!(json["canaries"][0]["phase"], "warm-read");
+        assert_eq!(json["canaries"][0]["status"], "running");
+        assert_eq!(
+            serde_json::from_value::<RunnerProtocolCutoverResponse>(json).unwrap(),
+            response
+        );
+    }
+
+    #[test]
+    fn cache_finalization_and_claim_canary_phase_are_typed() {
+        let succeeded = AttemptCacheFinalizationRequest {
+            outcome: AttemptCacheFinalizationOutcome::Succeeded,
+        };
+        let failed = AttemptCacheFinalizationRequest {
+            outcome: AttemptCacheFinalizationOutcome::Failed,
+        };
+        assert_eq!(
+            serde_json::to_value(&succeeded).unwrap()["outcome"]["kind"],
+            "succeeded"
+        );
+        let json = serde_json::to_value(&failed).unwrap();
+        assert_eq!(json["outcome"]["kind"], "failed");
+        assert_eq!(
+            serde_json::from_value::<AttemptCacheFinalizationRequest>(json).unwrap(),
+            failed
+        );
+
+        let claim_without_canary = serde_json::json!({
+            "attempt_id": "attempt-1",
+            "attempt_token": "secret",
+            "lease_expires_at_unix": 10,
+            "job": {
+                "run_id": "run-1",
+                "repository_id": "repo-1",
+                "git_oid": "a",
+                "source_digest": "b",
+                "pinned_container_image": null,
+                "workflow": {
+                    "name": "Test",
+                    "triggers": { "manual": true, "push_main": false },
+                    "runner": { "kind": "any" },
+                    "container": { "image": "image" },
+                    "timeout_seconds": 60,
+                    "caches": [],
+                    "steps": [{ "name": "Test", "run": "true" }]
+                }
+            }
+        });
+        assert!(
+            serde_json::from_value::<ClaimRunResponse>(claim_without_canary)
+                .unwrap()
+                .canary_phase
+                .is_none()
+        );
+
+        let upgrade = UpgradeRunnerRegistrationRequest {
+            version: "2.0.0".to_string(),
+            protocol_version: 4,
+            capabilities: RunnerCapabilities::v1(),
+        };
+        let json = serde_json::to_value(upgrade).unwrap();
+        assert_eq!(json["version"], "2.0.0");
+        assert_eq!(json["protocol_version"], 4);
+        assert_eq!(json["capabilities"]["operating_system"], "linux");
+    }
 }

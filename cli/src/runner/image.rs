@@ -10,10 +10,18 @@ pub(super) fn resolve_container_image(
     claim: &ClaimRunResponse,
 ) -> anyhow::Result<String> {
     if let Some(image) = &claim.job.pinned_container_image {
-        command_success(
-            Command::new("docker").args(["pull", image]),
-            "pull pinned Docker image",
-        )?;
+        let present = Command::new("docker")
+            .args(["image", "inspect", image])
+            .output()
+            .context("inspect pinned Docker image")?
+            .status
+            .success();
+        if !present {
+            command_success(
+                Command::new("docker").args(["pull", image]),
+                "pull pinned Docker image",
+            )?;
+        }
         return Ok(image.clone());
     }
 

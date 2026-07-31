@@ -1,4 +1,7 @@
-use super::runner::RunnerName;
+use super::{
+    cache::{CacheError, WorkflowCache},
+    runner::RunnerName,
+};
 use serde::{Deserialize, Deserializer, Serialize, de::Error as _};
 use sha2::{Digest, Sha256};
 use std::collections::BTreeSet;
@@ -8,12 +11,13 @@ pub const MAX_WORKFLOW_NAME_BYTES: usize = 100;
 pub const MAX_WORKFLOW_PATH_NAME_BYTES: usize = 64;
 pub const MAX_CONTAINER_IMAGE_BYTES: usize = 512;
 pub const MAX_WORKFLOW_STEPS: usize = 64;
+pub const MAX_WORKFLOW_CACHES: usize = 16;
 pub const MAX_STEP_NAME_BYTES: usize = 100;
 pub const MAX_STEP_COMMAND_BYTES: usize = 64 * 1024;
 pub const MAX_WORKFLOW_TIMEOUT_SECONDS: u64 = 24 * 60 * 60;
 
 const WORKFLOW_PATH_PREFIX: &str = "/.scope/runs/";
-const WORKFLOW_DIGEST_VERSION: u8 = 1;
+const WORKFLOW_DIGEST_VERSION: u8 = 2;
 
 #[derive(Debug, Error)]
 pub enum WorkflowError {
@@ -35,6 +39,10 @@ pub enum WorkflowError {
     MissingSteps,
     #[error("workflow cannot contain more than {MAX_WORKFLOW_STEPS} steps")]
     TooManySteps,
+    #[error("workflow cannot contain more than {MAX_WORKFLOW_CACHES} caches")]
+    TooManyCaches,
+    #[error("workflow cache name {0:?} is duplicated")]
+    DuplicateCacheName(String),
     #[error("workflow step name must contain between 1 and {MAX_STEP_NAME_BYTES} bytes")]
     InvalidStepName,
     #[error("workflow step name {0:?} is duplicated")]
@@ -43,6 +51,8 @@ pub enum WorkflowError {
     InvalidStepCommand,
     #[error("workflow revision digest could not be serialized: {0}")]
     Digest(serde_json::Error),
+    #[error(transparent)]
+    InvalidCache(#[from] CacheError),
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
@@ -228,6 +238,7 @@ pub struct CompiledWorkflow {
     runner: RunnerSelector,
     container: ContainerSpec,
     timeout_seconds: u64,
+    caches: Vec<WorkflowCache>,
     steps: Vec<WorkflowStep>,
 }
 
@@ -239,6 +250,7 @@ struct PersistedCompiledWorkflow {
     runner: PersistedRunnerSelector,
     container: PersistedContainerSpec,
     timeout_seconds: u64,
+    caches: Vec<String>,
     steps: Vec<PersistedWorkflowStep>,
 }
 
@@ -291,12 +303,19 @@ impl<'de> Deserialize<'de> for CompiledWorkflow {
             .map(|step| WorkflowStep::new(step.name, step.run))
             .collect::<Result<Vec<_>, _>>()
             .map_err(D::Error::custom)?;
+        let caches = persisted
+            .caches
+            .into_iter()
+            .map(WorkflowCache::parse)
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(D::Error::custom)?;
         Self::new(
             persisted.name,
             triggers,
             runner,
             container,
             persisted.timeout_seconds,
+            caches,
             steps,
         )
         .map_err(D::Error::custom)
@@ -310,6 +329,7 @@ impl CompiledWorkflow {
         runner: RunnerSelector,
         container: ContainerSpec,
         timeout_seconds: u64,
+        mut caches: Vec<WorkflowCache>,
         steps: Vec<WorkflowStep>,
     ) -> Result<Self, WorkflowError> {
         let name = name.into();
@@ -321,6 +341,17 @@ impl CompiledWorkflow {
             return Err(WorkflowError::InvalidTimeout);
         }
         runner.validate()?;
+        if caches.len() > MAX_WORKFLOW_CACHES {
+            return Err(WorkflowError::TooManyCaches);
+        }
+        caches.sort();
+        if let Some(duplicate) = caches
+            .windows(2)
+            .find(|pair| pair[0] == pair[1])
+            .map(|pair| pair[0].as_str().to_string())
+        {
+            return Err(WorkflowError::DuplicateCacheName(duplicate));
+        }
         if steps.is_empty() {
             return Err(WorkflowError::MissingSteps);
         }
@@ -339,6 +370,7 @@ impl CompiledWorkflow {
             runner,
             container,
             timeout_seconds,
+            caches,
             steps,
         })
     }
@@ -361,6 +393,10 @@ impl CompiledWorkflow {
 
     pub fn timeout_seconds(&self) -> u64 {
         self.timeout_seconds
+    }
+
+    pub fn caches(&self) -> &[WorkflowCache] {
+        &self.caches
     }
 
     pub fn steps(&self) -> &[WorkflowStep] {
@@ -435,6 +471,10 @@ mod tests {
             ContainerSpec::new("rust:1.90").unwrap(),
             20 * 60,
             vec![
+                WorkflowCache::parse("cargo-target").unwrap(),
+                WorkflowCache::parse("cargo").unwrap(),
+            ],
+            vec![
                 WorkflowStep::new("Format", "cargo fmt --check").unwrap(),
                 WorkflowStep::new("Test", "cargo test --workspace").unwrap(),
             ],
@@ -490,6 +530,14 @@ mod tests {
         assert_eq!(left.digest(), right.digest());
         assert_ne!(left.workflow(), right.workflow());
         assert_eq!(left.digest().len(), 64);
+        assert_eq!(
+            left.definition()
+                .caches()
+                .iter()
+                .map(WorkflowCache::as_str)
+                .collect::<Vec<_>>(),
+            ["cargo", "cargo-target"]
+        );
     }
 
     #[test]
@@ -514,6 +562,7 @@ mod tests {
             RunnerSelector::named("linux-box").unwrap(),
             ContainerSpec::new("rust:1.90").unwrap(),
             60,
+            vec![],
             vec![
                 WorkflowStep::new("Test", "cargo test").unwrap(),
                 WorkflowStep::new("Test", "cargo test --all").unwrap(),
@@ -539,9 +588,79 @@ mod tests {
                 RunnerSelector::Named("any".to_string()),
                 ContainerSpec::new("rust:1.90").unwrap(),
                 60,
+                vec![],
                 vec![WorkflowStep::new("Test", "cargo test").unwrap()],
             ),
             Err(WorkflowError::InvalidRunnerName)
         ));
+    }
+
+    #[test]
+    fn cache_order_is_canonical_and_part_of_the_v2_digest() {
+        let identity = || {
+            WorkflowIdentity::new(
+                "repo-1",
+                WorkflowPath::parse("/.scope/runs/test.yml").unwrap(),
+            )
+            .unwrap()
+        };
+        let definition = |caches| {
+            CompiledWorkflow::new(
+                "Test",
+                WorkflowTriggers::new(true, false).unwrap(),
+                RunnerSelector::Any,
+                ContainerSpec::new("rust:1.90").unwrap(),
+                60,
+                caches,
+                vec![WorkflowStep::new("Test", "cargo test").unwrap()],
+            )
+            .unwrap()
+        };
+        let cargo = WorkflowCache::parse("cargo").unwrap();
+        let target = WorkflowCache::parse("cargo-target").unwrap();
+        let left =
+            WorkflowRevision::new(identity(), definition(vec![target.clone(), cargo.clone()]))
+                .unwrap();
+        let right =
+            WorkflowRevision::new(identity(), definition(vec![cargo.clone(), target])).unwrap();
+        let without_cache = WorkflowRevision::new(identity(), definition(vec![])).unwrap();
+
+        assert_eq!(left.digest(), right.digest());
+        assert_ne!(left.digest(), without_cache.digest());
+        assert!(matches!(
+            CompiledWorkflow::new(
+                "Test",
+                WorkflowTriggers::new(true, false).unwrap(),
+                RunnerSelector::Any,
+                ContainerSpec::new("rust:1.90").unwrap(),
+                60,
+                vec![cargo.clone(), cargo],
+                vec![WorkflowStep::new("Test", "cargo test").unwrap()],
+            ),
+            Err(WorkflowError::DuplicateCacheName(name)) if name == "cargo"
+        ));
+        let excessive = (0..=MAX_WORKFLOW_CACHES)
+            .map(|index| WorkflowCache::parse(format!("cache-{index}")))
+            .collect::<Result<Vec<_>, _>>()
+            .unwrap();
+        assert!(matches!(
+            CompiledWorkflow::new(
+                "Test",
+                WorkflowTriggers::new(true, false).unwrap(),
+                RunnerSelector::Any,
+                ContainerSpec::new("rust:1.90").unwrap(),
+                60,
+                excessive,
+                vec![WorkflowStep::new("Test", "cargo test").unwrap()],
+            ),
+            Err(WorkflowError::TooManyCaches)
+        ));
+    }
+
+    #[test]
+    fn persisted_v3_definitions_are_not_accepted() {
+        let mut json = serde_json::to_value(compiled_workflow()).unwrap();
+        json.as_object_mut().unwrap().remove("caches");
+        assert!(serde_json::from_value::<CompiledWorkflow>(json).is_err());
     }
 }

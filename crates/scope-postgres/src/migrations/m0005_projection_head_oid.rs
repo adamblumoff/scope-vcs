@@ -5,7 +5,7 @@ pub struct Migration;
 
 impl MigrationName for Migration {
     fn name(&self) -> &str {
-        "m0004_projection_head_oid"
+        "m0005_projection_head_oid"
     }
 }
 

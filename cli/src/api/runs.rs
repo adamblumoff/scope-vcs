@@ -5,12 +5,13 @@ use reqwest::{
     blocking::{Client, Response},
 };
 use scope_api_contract::{
-    AppendAttemptLogRequest, AttachRunnerRepositoryRequest, AttemptHeartbeatRequest,
-    AttemptRecoveryStatusResponse, AttemptStatusResponse, ClaimRunResponse, CompleteAttemptRequest,
-    CompleteAttemptStepRequest, CreateManualRunQuery, PinAttemptContainerImageRequest,
-    PinAttemptContainerImageResponse, PushTriggerEvaluationResponse, RegisterRunnerRequest,
-    RegisterRunnerResponse, RunEventsQuery, RunLogResponse, RunResponse, RunnerPollResponse,
-    RunnerResponse,
+    AppendAttemptLogRequest, AttachRunnerRepositoryRequest, AttemptCacheFinalizationRequest,
+    AttemptHeartbeatRequest, AttemptRecoveryStatusResponse, AttemptStatusResponse,
+    ClaimRunResponse, CompleteAttemptRequest, CompleteAttemptStepRequest, CreateManualRunQuery,
+    PinAttemptContainerImageRequest, PinAttemptContainerImageResponse,
+    PushTriggerEvaluationResponse, RegisterRunnerRequest, RegisterRunnerResponse, RunEventsQuery,
+    RunLogResponse, RunResponse, RunnerPollResponse, RunnerResponse,
+    UpgradeRunnerRegistrationRequest, UpgradeRunnerRegistrationResponse,
 };
 use std::io::BufRead;
 
@@ -66,6 +67,46 @@ pub fn get_runner(
             .context("load Scope runner")?,
         "load Scope runner",
     )
+}
+
+pub fn upgrade_runner_registration(
+    client: &Client,
+    api_url: &str,
+    session_token: &str,
+    runner_id: &str,
+    request: &UpgradeRunnerRegistrationRequest,
+) -> anyhow::Result<UpgradeRunnerRegistrationResponse> {
+    parse_json(
+        client
+            .post(format!("{api_url}{}", routes::runner_upgrade(runner_id)))
+            .bearer_auth(session_token)
+            .json(request)
+            .send()
+            .context("upgrade Scope runner registration")?,
+        "upgrade Scope runner registration",
+    )
+}
+
+pub fn finalize_attempt_cache(
+    client: &Client,
+    api_url: &str,
+    attempt_token: &str,
+    attempt_id: &str,
+    request: &AttemptCacheFinalizationRequest,
+) -> anyhow::Result<()> {
+    successful(
+        client
+            .post(format!(
+                "{api_url}{}",
+                routes::attempt_cache_finalization(attempt_id)
+            ))
+            .bearer_auth(attempt_token)
+            .json(request)
+            .send()
+            .context("finalize Scope attempt cache")?,
+        "finalize Scope attempt cache",
+    )?;
+    Ok(())
 }
 
 pub fn delete_runner(

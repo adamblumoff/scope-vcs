@@ -23,6 +23,18 @@ pub fn router(state: AppState) -> Router {
             post(http::admin::drain_cleanup),
         )
         .route(
+            routes::ADMIN_RUNNER_CUTOVER,
+            get(http::admin::get_runner_protocol_cutover),
+        )
+        .route(
+            routes::ADMIN_RUNNER_CUTOVER_ADVANCE,
+            post(http::admin::advance_runner_protocol_cutover),
+        )
+        .route(
+            routes::ADMIN_RUNNER_CUTOVER_CANARY,
+            post(http::admin::create_runner_protocol_canary),
+        )
+        .route(
             routes::CLI_DEVICE_LOGIN,
             post(http::device_login::start_cli_device_login),
         )
@@ -73,6 +85,10 @@ pub fn router(state: AppState) -> Router {
             get(http::runners::get_runner).delete(http::runners::delete_runner),
         )
         .route(
+            routes::RUNNER_UPGRADE,
+            post(http::runners::upgrade_runner_registration),
+        )
+        .route(
             routes::RUNNER_REPOSITORY,
             axum::routing::put(http::runners::attach_runner_repository)
                 .delete(http::runners::detach_runner_repository),
@@ -82,6 +98,10 @@ pub fn router(state: AppState) -> Router {
         .route(
             routes::ATTEMPT_HEARTBEAT,
             post(http::runner_protocol::heartbeat),
+        )
+        .route(
+            routes::ATTEMPT_CACHE_FINALIZATION,
+            post(http::runner_protocol::finalize_cache),
         )
         .route(
             routes::ATTEMPT_RECOVERY_STATUS,

@@ -62,6 +62,7 @@ fn workflow_revision() -> WorkflowRevision {
             RunnerSelector::Any,
             ContainerSpec::new("rust:latest").unwrap(),
             600,
+            vec![],
             vec![
                 WorkflowStep::new("Format", "cargo fmt --check").unwrap(),
                 WorkflowStep::new("Test", "cargo test").unwrap(),

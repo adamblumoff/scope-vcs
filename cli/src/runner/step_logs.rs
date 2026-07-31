@@ -1,5 +1,5 @@
 use super::{
-    LOG_CHUNK_BYTES, RunnerConfig, StableLogDecoder, append_log_with_retry,
+    LOG_CHUNK_BYTES, RunnerConfig, append_log_with_retry,
     recovery::{PendingLogChunk, stage_recovery_log_chunk, update_recovery_log_progress},
 };
 use anyhow::{Context, bail};
@@ -14,6 +14,65 @@ use std::{
 
 const CONTAINER_STEP_LOG: &str = "/scope-step.log";
 const RAW_LOG_CHUNK_BYTES: usize = LOG_CHUNK_BYTES / 4;
+
+#[derive(Default)]
+pub(super) struct StableLogDecoder {
+    pending: Vec<u8>,
+}
+
+impl StableLogDecoder {
+    pub(super) fn push(&mut self, bytes: &[u8]) -> String {
+        self.pending.extend_from_slice(bytes);
+        let mut text = String::new();
+        loop {
+            match std::str::from_utf8(&self.pending) {
+                Ok(valid) => {
+                    text.push_str(valid);
+                    self.pending.clear();
+                    break;
+                }
+                Err(error) => {
+                    let valid_bytes = error.valid_up_to();
+                    if valid_bytes != 0 {
+                        text.push_str(
+                            std::str::from_utf8(&self.pending[..valid_bytes])
+                                .expect("UTF-8 validator marked the prefix valid"),
+                        );
+                        self.pending.drain(..valid_bytes);
+                    }
+                    let Some(invalid_bytes) = error.error_len() else {
+                        break;
+                    };
+                    for byte in self.pending.drain(..invalid_bytes) {
+                        append_escaped_byte(&mut text, byte);
+                    }
+                }
+            }
+        }
+        text
+    }
+
+    pub(super) fn finish(&mut self) -> String {
+        let mut text = String::new();
+        for byte in self.pending.drain(..) {
+            append_escaped_byte(&mut text, byte);
+        }
+        text
+    }
+}
+
+#[cfg(test)]
+pub(super) fn stable_log_text(bytes: &[u8]) -> String {
+    let mut decoder = StableLogDecoder::default();
+    let mut text = decoder.push(bytes);
+    text.push_str(&decoder.finish());
+    text
+}
+
+fn append_escaped_byte(text: &mut String, byte: u8) {
+    use std::fmt::Write as _;
+    write!(text, "\\x{byte:02x}").expect("writing to a String cannot fail");
+}
 
 pub(super) fn copy_step_log(
     container_name: &str,

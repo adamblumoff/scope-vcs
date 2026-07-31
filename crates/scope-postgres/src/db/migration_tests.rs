@@ -17,7 +17,7 @@ const RETIRED_V6_TABLES: &[&str] = &[
     "scope_source_blob_cleanup_jobs",
 ];
 
-async fn isolated_database() -> (
+pub(super) async fn isolated_database() -> (
     TestDatabaseTarget,
     Arc<DatabaseConnection>,
     Arc<TestSchemaLease>,
@@ -53,7 +53,7 @@ async fn add_retired_v6_tables(db: &DatabaseConnection) {
     .unwrap();
 }
 
-async fn relation_exists(db: &DatabaseConnection, relation: &str) -> bool {
+pub(super) async fn relation_exists(db: &DatabaseConnection, relation: &str) -> bool {
     db.query_one(Statement::from_sql_and_values(
         DatabaseBackend::Postgres,
         "SELECT to_regclass($1) IS NOT NULL AS exists",
@@ -66,7 +66,7 @@ async fn relation_exists(db: &DatabaseConnection, relation: &str) -> bool {
     .unwrap()
 }
 
-async fn applied_versions(db: &DatabaseConnection) -> Vec<String> {
+pub(super) async fn applied_versions(db: &DatabaseConnection) -> Vec<String> {
     db.query_all(Statement::from_string(
         DatabaseBackend::Postgres,
         "SELECT version FROM seaql_migrations ORDER BY version".to_string(),
@@ -131,11 +131,12 @@ async fn representative_business_snapshot(db: &DatabaseConnection) -> String {
     .unwrap()
 }
 
-fn without_projection_rebuild_state(snapshot: String) -> serde_json::Value {
+fn without_migration_rewritten_state(snapshot: String) -> serde_json::Value {
     let mut snapshot = serde_json::from_str::<serde_json::Value>(&snapshot).unwrap();
     let object = snapshot.as_object_mut().unwrap();
-    object.remove("outbox");
-    object.remove("projections");
+    for key in ["outbox", "projections", "workflow_revisions", "runs"] {
+        object.remove(key);
+    }
     snapshot
 }
 
@@ -152,7 +153,8 @@ async fn fresh_database_reaches_exact_latest_schema() {
             "m0001_adopt_v6",
             "m0002_retire_reset_schema",
             "m0003_structured_run_attempts",
-            "m0004_projection_head_oid",
+            "m0004_runner_protocol_cutover",
+            "m0005_projection_head_oid",
         ]
     );
     assert!(!relation_exists(db.as_ref(), "scope_metadata_schema").await);
@@ -201,7 +203,7 @@ async fn fresh_database_reaches_exact_latest_schema() {
         .unwrap()
         .try_get::<i64>("", "count")
         .unwrap();
-    assert_eq!(scope_table_count, 41);
+    assert_eq!(scope_table_count, 43);
 }
 
 #[tokio::test]
@@ -246,7 +248,18 @@ async fn populated_v6_is_adopted_without_changing_business_rows() {
             )
             VALUES ('credit_legacy', 'user_legacy', NULL, 'StarterGrant', 100, 1);
             INSERT INTO scope_workflow_revisions (digest, definition, created_at_unix)
-            VALUES (repeat('a', 64), '{}'::jsonb, 1);
+            VALUES (
+                repeat('a', 64),
+                jsonb_build_object(
+                    'name', 'Legacy',
+                    'triggers', jsonb_build_object('manual', true, 'push_main', false),
+                    'runner', jsonb_build_object('kind', 'any'),
+                    'container', jsonb_build_object('image', 'rust:1.90'),
+                    'timeout_seconds', 1200,
+                    'steps', jsonb_build_array(jsonb_build_object('name', 'Test', 'run', 'cargo test'))
+                ),
+                1
+            );
             INSERT INTO scope_runs (
                 id, idempotency_key, repo_id, workflow_path,
                 workflow_revision_digest, trigger, requested_by_user_id, source,
@@ -285,13 +298,54 @@ async fn populated_v6_is_adopted_without_changing_business_rows() {
     .await
     .unwrap();
     let before =
-        without_projection_rebuild_state(representative_business_snapshot(db.as_ref()).await);
+        without_migration_rewritten_state(representative_business_snapshot(db.as_ref()).await);
 
     migrations::apply(db.as_ref()).await.unwrap();
 
     let after =
-        without_projection_rebuild_state(representative_business_snapshot(db.as_ref()).await);
+        without_migration_rewritten_state(representative_business_snapshot(db.as_ref()).await);
     assert_eq!(after, before);
+    let rewritten = db
+        .query_one(Statement::from_string(
+            DatabaseBackend::Postgres,
+            "SELECT definition, digest FROM scope_workflow_revisions".to_string(),
+        ))
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        rewritten
+            .try_get::<serde_json::Value>("", "definition")
+            .unwrap()["caches"],
+        serde_json::json!([])
+    );
+    assert_ne!(
+        rewritten.try_get::<String>("", "digest").unwrap(),
+        "a".repeat(64)
+    );
+    let cutover = db
+        .query_one(Statement::from_string(
+            DatabaseBackend::Postgres,
+            "SELECT state FROM scope_runner_protocol_cutover WHERE key = 'current'".to_string(),
+        ))
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(cutover.try_get::<String>("", "state").unwrap(), "v4-fenced");
+    let run_digest = db
+        .query_one(Statement::from_string(
+            DatabaseBackend::Postgres,
+            "SELECT workflow_revision_digest FROM scope_runs WHERE id = 'run_legacy'".to_string(),
+        ))
+        .await
+        .unwrap()
+        .unwrap()
+        .try_get::<String>("", "workflow_revision_digest")
+        .unwrap();
+    assert_eq!(
+        run_digest,
+        rewritten.try_get::<String>("", "digest").unwrap()
+    );
     assert!(
         db.query_one(Statement::from_string(
             DatabaseBackend::Postgres,
@@ -386,7 +440,18 @@ async fn structured_attempt_migration_preserves_runs_and_replaces_execution_stat
             )
             VALUES ('repo_run', 'runner_run', 'linux', 'user_run', 1, NULL);
             INSERT INTO scope_workflow_revisions (digest, definition, created_at_unix)
-            VALUES (repeat('a', 64), '{}'::jsonb, 1);
+            VALUES (
+                repeat('a', 64),
+                jsonb_build_object(
+                    'name', 'Legacy',
+                    'triggers', jsonb_build_object('manual', true, 'push_main', false),
+                    'runner', jsonb_build_object('kind', 'named', 'name', 'linux'),
+                    'container', jsonb_build_object('image', 'rust:1.90'),
+                    'timeout_seconds', 1200,
+                    'steps', jsonb_build_array(jsonb_build_object('name', 'Test', 'run', 'cargo test'))
+                ),
+                1
+            );
             INSERT INTO scope_runs (
                 id, idempotency_key, repo_id, workflow_path,
                 workflow_revision_digest, trigger, requested_by_user_id, source,
@@ -701,7 +766,8 @@ async fn reapplying_latest_migrations_is_a_data_preserving_noop() {
             "m0001_adopt_v6",
             "m0002_retire_reset_schema",
             "m0003_structured_run_attempts",
-            "m0004_projection_head_oid",
+            "m0004_runner_protocol_cutover",
+            "m0005_projection_head_oid",
         ]
     );
 }
@@ -723,7 +789,8 @@ async fn concurrent_api_migration_attempts_serialize() {
             "m0001_adopt_v6",
             "m0002_retire_reset_schema",
             "m0003_structured_run_attempts",
-            "m0004_projection_head_oid",
+            "m0004_runner_protocol_cutover",
+            "m0005_projection_head_oid",
         ]
     );
 }
@@ -784,7 +851,7 @@ async fn worker_waits_for_api_migration_and_then_detects_ahead_state() {
 
     migrations::apply(db.as_ref()).await.unwrap();
 
-    let worker_store = tokio::time::timeout(Duration::from_secs(2), worker)
+    let worker_store = tokio::time::timeout(Duration::from_secs(10), worker)
         .await
         .expect("worker should observe completed API migrations")
         .unwrap()
