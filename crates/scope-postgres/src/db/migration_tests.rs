@@ -131,6 +131,14 @@ async fn representative_business_snapshot(db: &DatabaseConnection) -> String {
     .unwrap()
 }
 
+fn without_projection_rebuild_state(snapshot: String) -> serde_json::Value {
+    let mut snapshot = serde_json::from_str::<serde_json::Value>(&snapshot).unwrap();
+    let object = snapshot.as_object_mut().unwrap();
+    object.remove("outbox");
+    object.remove("projections");
+    snapshot
+}
+
 #[tokio::test]
 async fn fresh_database_reaches_exact_latest_schema() {
     let (_target, db, _lease) = isolated_database().await;
@@ -144,10 +152,39 @@ async fn fresh_database_reaches_exact_latest_schema() {
             "m0001_adopt_v6",
             "m0002_retire_reset_schema",
             "m0003_structured_run_attempts",
+            "m0004_projection_head_oid",
         ]
     );
     assert!(!relation_exists(db.as_ref(), "scope_metadata_schema").await);
     assert!(!relation_exists(db.as_ref(), "scope_metadata_reset_events").await);
+
+    let projection_columns = db
+        .query_one(Statement::from_string(
+            DatabaseBackend::Postgres,
+            "
+                SELECT
+                    bool_and(is_nullable = 'YES') FILTER (WHERE column_name = 'head_oid') AS nullable_head,
+                    bool_and(is_nullable = 'NO') FILTER (WHERE column_name = 'identity_version') AS required_identity
+                FROM information_schema.columns
+                WHERE table_schema = current_schema()
+                  AND table_name = 'scope_projection_read_models'
+                  AND column_name IN ('head_oid', 'identity_version')
+            "
+            .to_string(),
+        ))
+        .await
+        .unwrap()
+        .unwrap();
+    assert!(
+        projection_columns
+            .try_get::<bool>("", "nullable_head")
+            .unwrap()
+    );
+    assert!(
+        projection_columns
+            .try_get::<bool>("", "required_identity")
+            .unwrap()
+    );
     let scope_table_count = db
         .query_one(Statement::from_string(
             DatabaseBackend::Postgres,
@@ -247,11 +284,13 @@ async fn populated_v6_is_adopted_without_changing_business_rows() {
     )
     .await
     .unwrap();
-    let before = representative_business_snapshot(db.as_ref()).await;
+    let before =
+        without_projection_rebuild_state(representative_business_snapshot(db.as_ref()).await);
 
     migrations::apply(db.as_ref()).await.unwrap();
 
-    let after = representative_business_snapshot(db.as_ref()).await;
+    let after =
+        without_projection_rebuild_state(representative_business_snapshot(db.as_ref()).await);
     assert_eq!(after, before);
     assert!(
         db.query_one(Statement::from_string(
@@ -269,6 +308,52 @@ async fn populated_v6_is_adopted_without_changing_business_rows() {
     );
     assert!(!relation_exists(db.as_ref(), "scope_metadata_schema").await);
     assert!(!relation_exists(db.as_ref(), "scope_metadata_reset_events").await);
+
+    let projection_count = db
+        .query_one(Statement::from_string(
+            DatabaseBackend::Postgres,
+            "SELECT count(*) AS count FROM scope_projection_read_models".to_string(),
+        ))
+        .await
+        .unwrap()
+        .unwrap()
+        .try_get::<i64>("", "count")
+        .unwrap();
+    assert_eq!(projection_count, 0);
+    let rebuild = db
+        .query_one(Statement::from_string(
+            DatabaseBackend::Postgres,
+            "
+                SELECT state, attempts, completed_at_unix
+                FROM scope_outbox_jobs
+                WHERE idempotency_key = 'projection_read_model_rebuild:repo_legacy:1'
+            "
+            .to_string(),
+        ))
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(rebuild.try_get::<String>("", "state").unwrap(), "ready");
+    assert_eq!(rebuild.try_get::<i64>("", "attempts").unwrap(), 0);
+    assert!(
+        rebuild
+            .try_get::<Option<i64>>("", "completed_at_unix")
+            .unwrap()
+            .is_none()
+    );
+    assert!(
+        db.execute_unprepared(
+            "
+                INSERT INTO scope_projection_read_models (
+                    repo_id, repo_version, source, audience, rebuilt_at_unix, file_count
+                )
+                VALUES ('repo_legacy', 1, 'live', 'private', 1, 0)
+            ",
+        )
+        .await
+        .is_err(),
+        "legacy writers must not recreate a falsely ready projection row"
+    );
 }
 
 #[tokio::test]
@@ -616,6 +701,7 @@ async fn reapplying_latest_migrations_is_a_data_preserving_noop() {
             "m0001_adopt_v6",
             "m0002_retire_reset_schema",
             "m0003_structured_run_attempts",
+            "m0004_projection_head_oid",
         ]
     );
 }
@@ -637,6 +723,7 @@ async fn concurrent_api_migration_attempts_serialize() {
             "m0001_adopt_v6",
             "m0002_retire_reset_schema",
             "m0003_structured_run_attempts",
+            "m0004_projection_head_oid",
         ]
     );
 }
@@ -687,7 +774,7 @@ async fn worker_waits_for_api_migration_and_then_detects_ahead_state() {
     let worker = tokio::spawn(async move {
         connect_postgres_worker_store_with_schema_wait(
             worker_url,
-            Duration::from_secs(3),
+            Duration::from_secs(10),
             Duration::from_millis(20),
         )
         .await

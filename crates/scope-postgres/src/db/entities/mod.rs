@@ -167,6 +167,28 @@ mod tests {
     }
 
     #[test]
+    fn projection_read_model_persists_canonical_identity_contract() {
+        let model = projection_read_model::Model::live(
+            "owner/repo",
+            7,
+            ProjectionAudience::Public,
+            Some("1111111111111111111111111111111111111111".to_string()),
+            10,
+            2,
+        )
+        .unwrap();
+
+        assert_eq!(
+            model.head_oid.as_deref(),
+            Some("1111111111111111111111111111111111111111")
+        );
+        assert_eq!(
+            model.identity_version,
+            scope_git::PROJECTION_IDENTITY_VERSION
+        );
+    }
+
+    #[test]
     fn projection_file_rejects_inconsistent_domain_content() {
         let content = ProjectionViewFileContent {
             file: ProjectionViewFile {

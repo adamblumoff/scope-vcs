@@ -11,12 +11,13 @@ use {
     crate::error::PostgresError,
     scope_domain::{
         policy::{Principal, PrincipalKind, ScopePath},
+        projection::{ProjectionViewKey, project_graph},
         projection_views::{
             ProjectionViewFile, ProjectionViewFileContent,
             projected_file_contents as domain_projected_file_contents,
             projected_files as domain_projected_files,
         },
-        store::{RepositoryActor, StoredRepository},
+        store::{RepositoryAccess, RepositoryActor, StoredRepository},
     },
 };
 
@@ -47,6 +48,13 @@ where
     delete_live_projection_read_models(conn, &repo.record.id).await?;
 
     for audience in [ProjectionAudience::Private, ProjectionAudience::Public] {
+        let projection = project_graph(
+            &repo.graph,
+            &repo.visibility_events,
+            projection_view_key(audience),
+        );
+        let head_oid =
+            scope_git::projection_head_oid(&projection).map_err(PostgresError::internal)?;
         let files = projected_files_for_audience(repo, audience);
         let file_count = files.len();
         let file_rows = files
@@ -72,6 +80,7 @@ where
             &repo.record.id,
             repo.record.change_version,
             audience,
+            head_oid,
             rebuilt_at_unix,
             file_count,
         )?
@@ -122,6 +131,10 @@ where
             entities::projection_read_model::Column::Source.eq(LIVE_PROJECTION_SOURCE.to_string()),
         )
         .filter(entities::projection_read_model::Column::Audience.eq(audience.as_str().to_string()))
+        .filter(
+            entities::projection_read_model::Column::IdentityVersion
+                .eq(scope_git::PROJECTION_IDENTITY_VERSION),
+        )
         .one(conn)
         .await
         .map_err(PostgresError::internal)?
@@ -152,6 +165,10 @@ where
             entities::projection_read_model::Column::Source.eq(LIVE_PROJECTION_SOURCE.to_string()),
         )
         .filter(entities::projection_read_model::Column::Audience.eq(audience.as_str().to_string()))
+        .filter(
+            entities::projection_read_model::Column::IdentityVersion
+                .eq(scope_git::PROJECTION_IDENTITY_VERSION),
+        )
         .one(conn)
         .await
         .map_err(PostgresError::internal)?
@@ -195,6 +212,10 @@ where
             entities::projection_read_model::Column::Source.eq(LIVE_PROJECTION_SOURCE.to_string()),
         )
         .filter(entities::projection_read_model::Column::Audience.eq(audience.as_str().to_string()))
+        .filter(
+            entities::projection_read_model::Column::IdentityVersion
+                .eq(scope_git::PROJECTION_IDENTITY_VERSION),
+        )
         .one(conn)
         .await
         .map_err(PostgresError::internal)?
@@ -272,8 +293,18 @@ fn projected_files_for_audience(
     domain_projected_file_contents(repo, &principal)
 }
 
+fn projection_view_key(audience: ProjectionAudience) -> ProjectionViewKey {
+    match audience {
+        ProjectionAudience::Private => ProjectionViewKey::Private,
+        ProjectionAudience::Public => ProjectionViewKey::Public,
+    }
+}
+
 fn live_projection_audience(repo: &StoredRepository, principal: &Principal) -> ProjectionAudience {
-    let access = repo.access_for_principal(principal);
+    live_projection_audience_for_access(repo.access_for_principal(principal))
+}
+
+fn live_projection_audience_for_access(access: RepositoryAccess) -> ProjectionAudience {
     if access.actor != RepositoryActor::Public && access.can_read_private_files {
         ProjectionAudience::Private
     } else {
@@ -282,6 +313,39 @@ fn live_projection_audience(repo: &StoredRepository, principal: &Principal) -> P
 }
 
 impl RepositoryStore {
+    pub async fn live_projection_head_oid(
+        &self,
+        repo: &StoredRepository,
+        view_key: ProjectionViewKey,
+    ) -> Result<Option<String>, PostgresError> {
+        let audience = match view_key {
+            ProjectionViewKey::Private => ProjectionAudience::Private,
+            ProjectionViewKey::Public => ProjectionAudience::Public,
+        };
+        let expected_version = projection_repo_version(repo.record.change_version)?;
+        let row = entities::projection_read_model::Entity::find()
+            .filter(entities::projection_read_model::Column::RepoId.eq(repo.record.id.clone()))
+            .filter(entities::projection_read_model::Column::RepoVersion.eq(expected_version))
+            .filter(
+                entities::projection_read_model::Column::Source
+                    .eq(LIVE_PROJECTION_SOURCE.to_string()),
+            )
+            .filter(
+                entities::projection_read_model::Column::Audience.eq(audience.as_str().to_string()),
+            )
+            .filter(
+                entities::projection_read_model::Column::IdentityVersion
+                    .eq(scope_git::PROJECTION_IDENTITY_VERSION),
+            )
+            .one(self.db.as_ref())
+            .await
+            .map_err(PostgresError::internal)?
+            .ok_or_else(|| {
+                PostgresError::unavailable("repository projection is rebuilding; retry shortly")
+            })?;
+        Ok(row.head_oid)
+    }
+
     pub async fn live_projection_files(
         &self,
         repo: &StoredRepository,
