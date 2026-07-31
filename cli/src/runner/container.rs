@@ -4,22 +4,33 @@ use scope_api_contract::ClaimRunResponse;
 use std::{env, path::Path, process::Command, thread, time::Duration};
 use time::{OffsetDateTime, format_description::well_known::Rfc3339};
 
-pub(super) fn doctor_local(run_container: bool) -> anyhow::Result<()> {
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub(super) struct DockerCapabilities {
+    pub(super) storage_quota_supported: bool,
+}
+
+pub(super) fn doctor_local(run_container: bool) -> anyhow::Result<DockerCapabilities> {
     if env::consts::OS != "linux" || env::consts::ARCH != "x86_64" {
         bail!("V4 runners require Linux on amd64");
     }
     command_success(Command::new("docker").args(["info"]), "connect to Docker")?;
     let limits = ResourceLimits::detect()?;
-    if run_container {
+    let capabilities = if run_container {
         let mut command = Command::new("docker");
         command.args(["run", "--rm"]);
-        apply_container_limits(&mut command, &limits, false);
+        apply_container_limits(&mut command, &limits, DockerCapabilities::default());
         command.args(["alpine:3.20", "true"]);
         command_success(&mut command, "run bounded Docker test container")?;
 
         let mut quota_test = Command::new("docker");
         quota_test.args(["run", "--rm"]);
-        apply_container_limits(&mut quota_test, &limits, true);
+        apply_container_limits(
+            &mut quota_test,
+            &limits,
+            DockerCapabilities {
+                storage_quota_supported: true,
+            },
+        );
         quota_test.args(["alpine:3.20", "true"]);
         let storage_quota_supported = quota_test
             .output()
@@ -27,9 +38,16 @@ pub(super) fn doctor_local(run_container: bool) -> anyhow::Result<()> {
             .status
             .success();
         if !storage_quota_supported {
-            bail!("Docker writable-layer quotas are required for safe transient disk admission");
+            eprintln!(
+                "Docker writable-layer quotas are unavailable; Scope will use best-effort free-space admission and active monitoring instead."
+            );
         }
-    }
+        DockerCapabilities {
+            storage_quota_supported,
+        }
+    } else {
+        DockerCapabilities::default()
+    };
     if !Path::new("/sys/fs/cgroup/cgroup.controllers").exists() {
         bail!("cgroups v2 is required");
     }
@@ -37,16 +55,16 @@ pub(super) fn doctor_local(run_container: bool) -> anyhow::Result<()> {
         Command::new("systemctl").args(["--user", "--version"]),
         "find systemd user service support",
     )?;
-    Ok(())
+    Ok(capabilities)
 }
 
 pub(super) fn apply_container_limits(
     command: &mut Command,
     limits: &ResourceLimits,
-    storage_quota_supported: bool,
+    capabilities: DockerCapabilities,
 ) {
     limits.apply(command);
-    if storage_quota_supported {
+    if capabilities.storage_quota_supported {
         command.args(["--storage-opt", &format!("size={}", limits.storage_bytes)]);
     }
 }
@@ -58,12 +76,13 @@ pub(super) struct JobContainerSpec<'a> {
     pub(super) image: &'a str,
     pub(super) step_programs: &'a Path,
     pub(super) limits: &'a ResourceLimits,
+    pub(super) capabilities: DockerCapabilities,
     pub(super) caches: &'a [CacheMount],
 }
 
 pub(super) fn configure_job_container_creation(command: &mut Command, spec: JobContainerSpec<'_>) {
     command.args(["create", "--name", spec.name]);
-    apply_container_limits(command, spec.limits, true);
+    apply_container_limits(command, spec.limits, spec.capabilities);
     command
         .args([
             "--label",

@@ -280,12 +280,9 @@ pub(super) fn finish_canary_ack(
 }
 
 pub(super) fn list(config: &RunnerConfig) -> anyhow::Result<()> {
-    let Some(root) = config.cache_root.as_deref() else {
-        println!("Cache storage is not configured (set SCOPE_RUNNER_CACHE_ROOT during install)");
-        return Ok(());
-    };
-    validate_store(root, false)?;
-    let mut records = load_records(root)?;
+    let root = configured_root(config)?;
+    validate_store(&root, false)?;
+    let mut records = load_records(&root)?;
     records.sort_by(|left, right| {
         left.repository_id
             .cmp(&right.repository_id)
@@ -343,6 +340,11 @@ pub(super) fn doctor(config: &RunnerConfig) -> anyhow::Result<()> {
     Ok(())
 }
 
+pub(super) fn has_emergency_capacity(config: &RunnerConfig) -> anyhow::Result<bool> {
+    let root = configured_root(config)?;
+    has_capacity(&root)
+}
+
 pub(super) fn admit(config: &RunnerConfig) -> anyhow::Result<()> {
     let root = configured_root(config)?;
     validate_store(&root, false)?;
@@ -380,9 +382,7 @@ pub(super) fn evict_orphaned_tainted(
 }
 
 fn configured_root(config: &RunnerConfig) -> anyhow::Result<PathBuf> {
-    config.cache_root.clone().context(
-        "runner cache storage is not configured; set SCOPE_RUNNER_CACHE_ROOT and reinstall",
-    )
+    super::config::runner_cache_root(config.cache_root.as_deref())
 }
 
 fn lifecycle_lock(root: &Path) -> anyhow::Result<File> {

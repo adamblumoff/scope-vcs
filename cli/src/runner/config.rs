@@ -14,10 +14,39 @@ pub(super) struct RunnerConfig {
     pub(super) cache_root: Option<PathBuf>,
 }
 
-pub(super) fn configured_cache_root() -> Option<PathBuf> {
-    env::var_os("SCOPE_RUNNER_CACHE_ROOT")
+pub(super) fn runner_cache_root(existing: Option<&Path>) -> anyhow::Result<PathBuf> {
+    cache_root_from(
+        env::var_os("SCOPE_RUNNER_CACHE_ROOT"),
+        existing.map(Path::to_path_buf),
+        env::var_os("XDG_CACHE_HOME"),
+        env::var_os("HOME"),
+    )
+}
+
+fn cache_root_from(
+    configured: Option<std::ffi::OsString>,
+    existing: Option<PathBuf>,
+    cache_home: Option<std::ffi::OsString>,
+    home: Option<std::ffi::OsString>,
+) -> anyhow::Result<PathBuf> {
+    if let Some(path) = configured
         .filter(|path| !path.is_empty())
         .map(PathBuf::from)
+    {
+        return Ok(path);
+    }
+    if let Some(path) = existing {
+        return Ok(path);
+    }
+    cache_home
+        .filter(|path| !path.is_empty())
+        .map(PathBuf::from)
+        .or_else(|| {
+            home.filter(|path| !path.is_empty())
+                .map(|home| PathBuf::from(home).join(".cache"))
+        })
+        .map(|root| root.join("scope/runner"))
+        .context("XDG_CACHE_HOME or HOME is required")
 }
 
 pub(super) fn runner_config_path() -> anyhow::Result<PathBuf> {
@@ -82,4 +111,56 @@ pub(super) fn scope_config_home() -> anyhow::Result<PathBuf> {
                 .map(|home| PathBuf::from(home).join(".config"))
         })
         .context("XDG_CONFIG_HOME or HOME is required")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::ffi::OsString;
+
+    #[test]
+    fn cache_root_prefers_the_explicit_runner_override() {
+        assert_eq!(
+            cache_root_from(
+                Some(OsString::from("/mnt/scope-cache")),
+                Some(PathBuf::from("/srv/existing-cache")),
+                Some(OsString::from("/var/cache/user")),
+                Some(OsString::from("/home/runner")),
+            )
+            .unwrap(),
+            PathBuf::from("/mnt/scope-cache")
+        );
+    }
+
+    #[test]
+    fn cache_root_uses_xdg_then_the_home_cache_directory() {
+        assert_eq!(
+            cache_root_from(
+                None,
+                None,
+                Some(OsString::from("/var/cache/user")),
+                Some(OsString::from("/home/runner")),
+            )
+            .unwrap(),
+            PathBuf::from("/var/cache/user/scope/runner")
+        );
+        assert_eq!(
+            cache_root_from(None, None, None, Some(OsString::from("/home/runner")),).unwrap(),
+            PathBuf::from("/home/runner/.cache/scope/runner")
+        );
+    }
+
+    #[test]
+    fn cache_root_preserves_an_installed_path_without_an_override() {
+        assert_eq!(
+            cache_root_from(
+                None,
+                Some(PathBuf::from("/srv/scope-cache")),
+                Some(OsString::from("/var/cache/user")),
+                Some(OsString::from("/home/runner")),
+            )
+            .unwrap(),
+            PathBuf::from("/srv/scope-cache")
+        );
+    }
 }

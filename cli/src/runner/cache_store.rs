@@ -1,11 +1,10 @@
 use super::{CACHE_FORMAT, load_records, remove_cache, volume_is_referenced};
-use crate::runner::{command_stdout, runner_work_root};
+use crate::runner::command_stdout;
 use anyhow::{Context, bail};
 use serde::{Deserialize, Serialize};
 use std::{
     fs::{self, File},
     io::Write,
-    os::unix::fs::MetadataExt,
     path::Path,
     process::Command,
 };
@@ -16,10 +15,6 @@ const MIN_FREE_INODES: u64 = 10_000;
 #[derive(Debug, Deserialize, Serialize)]
 struct StoreIdentity {
     format: u8,
-    device: u64,
-    source: String,
-    filesystem: String,
-    filesystem_uuid: String,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -29,6 +24,10 @@ pub(super) struct Capacity {
 }
 
 pub(super) fn validate_store(root: &Path, initialize: bool) -> anyhow::Result<Capacity> {
+    if initialize {
+        fs::create_dir_all(root)
+            .with_context(|| format!("create cache root {}", root.display()))?;
+    }
     let metadata = fs::symlink_metadata(root)
         .with_context(|| format!("inspect configured cache root {}", root.display()))?;
     if !metadata.file_type().is_dir() || metadata.file_type().is_symlink() {
@@ -40,64 +39,14 @@ pub(super) fn validate_store(root: &Path, initialize: bool) -> anyhow::Result<Ca
             root.display()
         );
     }
-    let parent = root.parent().context("cache root has no parent")?;
-    if metadata.dev() == fs::metadata(parent)?.dev() {
-        bail!("cache root must be the mount point of a dedicated filesystem");
-    }
-    for critical in [Path::new("/"), runner_work_root()?.as_path()] {
-        if let Ok(critical) = fs::metadata(critical)
-            && critical.dev() == metadata.dev()
-        {
-            bail!("cache storage shares a filesystem with critical runner state");
-        }
-    }
-    let docker_root = command_stdout(
-        Command::new("docker").args(["info", "--format={{.DockerRootDir}}"]),
-        "inspect Docker data root",
-    )?;
-    if fs::metadata(docker_root.trim())?.dev() == metadata.dev() {
-        bail!("cache storage must not share Docker's transient filesystem");
-    }
-    let mount = command_stdout(
-        Command::new("findmnt")
-            .args(["-n", "-o", "SOURCE,FSTYPE,UUID", "-T"])
-            .arg(root),
-        "inspect cache filesystem",
-    )?;
-    let mut fields = mount.split_whitespace();
-    let source = fields.next().context("cache mount source is missing")?;
-    let filesystem = fields.next().context("cache filesystem type is missing")?;
-    let filesystem_uuid = fields.next().context("cache filesystem UUID is missing")?;
-    if filesystem_uuid == "-" {
-        bail!("cache filesystem must expose a stable UUID");
-    }
-    if !source.starts_with("/dev/")
-        || matches!(
-            filesystem,
-            "tmpfs" | "overlay" | "btrfs" | "zfs" | "nfs" | "nfs4" | "cifs" | "fuse"
-        )
-        || source.contains("loop")
-        || source.contains("zram")
-    {
-        bail!("cache root must use a dedicated finite local block filesystem");
-    }
     let identity = StoreIdentity {
         format: CACHE_FORMAT,
-        device: metadata.dev(),
-        source: source.to_string(),
-        filesystem: filesystem.to_string(),
-        filesystem_uuid: filesystem_uuid.to_string(),
     };
     let identity_path = root.join("store.json");
     if identity_path.exists() {
         let stored: StoreIdentity = serde_json::from_slice(&fs::read(&identity_path)?)?;
-        if stored.format != identity.format
-            || stored.device != identity.device
-            || stored.source != identity.source
-            || stored.filesystem != identity.filesystem
-            || stored.filesystem_uuid != identity.filesystem_uuid
-        {
-            bail!("configured cache mount identity changed; refusing cached work");
+        if stored.format != identity.format {
+            bail!("runner cache format is unsupported; reinstall the runner to reset its cache");
         }
     } else if initialize {
         let mut entries = fs::read_dir(root)?
@@ -106,7 +55,7 @@ pub(super) fn validate_store(root: &Path, initialize: bool) -> anyhow::Result<Ca
             .collect::<Vec<_>>();
         entries.retain(|entry| entry.file_name() != ".lifecycle.lock");
         if !entries.is_empty() {
-            bail!("new cache filesystem must be empty");
+            bail!("new cache directory must be empty");
         }
         let mut file = File::create(&identity_path)?;
         serde_json::to_writer(&mut file, &identity)?;
@@ -114,7 +63,7 @@ pub(super) fn validate_store(root: &Path, initialize: bool) -> anyhow::Result<Ca
         file.sync_all()?;
         File::open(root)?.sync_all()?;
     } else {
-        bail!("cache filesystem has not been initialized by runner install");
+        bail!("cache directory has not been initialized by runner install");
     }
     filesystem_capacity(root)
 }

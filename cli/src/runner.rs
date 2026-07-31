@@ -41,14 +41,15 @@ mod systemd;
 mod workspace;
 use checkout::checkout_exact_commit;
 use config::{
-    RunnerConfig, configured_cache_root, load_runner_config, load_runner_config_from,
+    RunnerConfig, load_runner_config, load_runner_config_from, runner_cache_root,
     runner_config_path, scope_config_home, store_runner_config,
 };
 #[cfg(test)]
 use container::apply_container_limits;
 use container::{
-    ContainerGuard, JobContainerSpec, configure_job_container_creation, configure_source_copy,
-    container_started_at_unix, doctor_local, require_root_image, stop_container,
+    ContainerGuard, DockerCapabilities, JobContainerSpec, configure_job_container_creation,
+    configure_source_copy, container_started_at_unix, doctor_local, require_root_image,
+    stop_container,
 };
 use image::resolve_container_image;
 use management::{parse_repository, print_runner_status};
@@ -78,7 +79,6 @@ const LOG_CHUNK_BYTES: usize = 16 * 1024;
 pub fn install(name: &str, repository: &str) -> anyhow::Result<()> {
     let (owner, repo) = parse_repository(repository)?;
     doctor_local(true)?;
-    let requested_cache_root = configured_cache_root();
     let api_url = api_url();
     let client = runner_client()?;
     let session = session_from_cache_or_device(&client, &api_url)?;
@@ -93,11 +93,7 @@ pub fn install(name: &str, repository: &str) -> anyhow::Result<()> {
                 config_path.display()
             );
         }
-        let cache_root = requested_cache_root
-            .or_else(|| config.cache_root.clone())
-            .context(
-                "SCOPE_RUNNER_CACHE_ROOT must name the dedicated cache filesystem before restoring this runner",
-        )?;
+        let cache_root = runner_cache_root(config.cache_root.as_deref())?;
         cache::initialize(&cache_root)?;
         let upgraded = upgrade_runner_registration(
             &client,
@@ -136,9 +132,7 @@ pub fn install(name: &str, repository: &str) -> anyhow::Result<()> {
         print_linger_status();
         return Ok(());
     }
-    let requested_cache_root = requested_cache_root.context(
-        "SCOPE_RUNNER_CACHE_ROOT must name the dedicated cache filesystem during runner install",
-    )?;
+    let requested_cache_root = runner_cache_root(None)?;
     cache::initialize(&requested_cache_root)?;
     let registered = register_runner(
         &client,
@@ -219,7 +213,7 @@ pub fn remove_repository(repository: &str) -> anyhow::Result<()> {
 }
 
 pub fn doctor() -> anyhow::Result<()> {
-    doctor_local(true)?;
+    let capabilities = doctor_local(true)?;
     if let Ok(config) = load_runner_config() {
         cache::doctor(&config)?;
         let limits = ResourceLimits::detect()?;
@@ -233,7 +227,14 @@ pub fn doctor() -> anyhow::Result<()> {
         runner_poll(&client, &config.api_url, &config.secret)?;
         println!("✓ Scope API");
     }
-    println!("✓ Docker");
+    println!(
+        "✓ Docker (writable-layer quotas {})",
+        if capabilities.storage_quota_supported {
+            "enabled"
+        } else {
+            "unavailable; best-effort storage guard enabled"
+        }
+    );
     println!("✓ transient disk");
     println!("✓ cgroups");
     println!("✓ systemd user service");
@@ -253,6 +254,7 @@ pub fn daemon(config_path: Option<&Path>) -> anyhow::Result<()> {
         Some(path) => load_runner_config_from(path)?,
         None => load_runner_config()?,
     };
+    let capabilities = doctor_local(true)?;
     let client = runner_client()?;
     eprintln!("Scope runner {} is polling {}", config.name, config.api_url);
     loop {
@@ -273,7 +275,7 @@ pub fn daemon(config_path: Option<&Path>) -> anyhow::Result<()> {
                     continue;
                 };
                 match runner_claim(&client, &config.api_url, &config.secret, &offer.run_id) {
-                    Ok(claim) => run_claim(&config, claim),
+                    Ok(claim) => run_claim(&config, capabilities, claim),
                     Err(error) => eprintln!("Could not claim {}: {error}", offer.run_id),
                 }
             }
@@ -302,8 +304,8 @@ fn resume_interrupted_attempts(config: &RunnerConfig) -> anyhow::Result<()> {
     Ok(())
 }
 
-fn run_claim(config: &RunnerConfig, claim: ClaimRunResponse) {
-    if let Err(error) = execute_claim(config, &claim) {
+fn run_claim(config: &RunnerConfig, capabilities: DockerCapabilities, claim: ClaimRunResponse) {
+    if let Err(error) = execute_claim(config, capabilities, &claim) {
         eprintln!(
             "Run {} failed before completion: {error:#}",
             claim.job.run_id
@@ -366,7 +368,11 @@ fn bounded_setup_failure_message(error: &anyhow::Error) -> String {
     }
 }
 
-fn execute_claim(config: &RunnerConfig, claim: &ClaimRunResponse) -> anyhow::Result<()> {
+fn execute_claim(
+    config: &RunnerConfig,
+    capabilities: DockerCapabilities,
+    claim: &ClaimRunResponse,
+) -> anyhow::Result<()> {
     let client = runner_client()?;
     let mut supervisor = AttemptSupervisor::start(config.clone(), claim.clone())?;
     let mut work = RunnerWorkDir::new(&claim.attempt_id)?;
@@ -415,6 +421,7 @@ fn execute_claim(config: &RunnerConfig, claim: &ClaimRunResponse) -> anyhow::Res
             image: &container_image,
             step_programs: &step_programs,
             limits: &limits,
+            capabilities,
             caches: caches.mounts(),
         },
     );

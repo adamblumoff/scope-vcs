@@ -1,4 +1,6 @@
 use super::*;
+use crate::test_support::TestDir;
+use std::os::unix::fs::MetadataExt;
 
 fn record(state: CacheState) -> CacheRecord {
     let identity_digest = "a".repeat(64);
@@ -121,4 +123,47 @@ fn physical_volume_must_match_backing_and_all_identity_labels() {
         .labels
         .insert("scope.runner-id".to_string(), "runner-2".to_string());
     assert!(!volume_is_owned(&foreign, &record, "runner-1"));
+}
+
+#[test]
+fn ordinary_same_filesystem_directory_is_a_valid_cache_store() {
+    let parent = TestDir::new("runner-cache-store");
+    let root = parent.path().join("scope/runner");
+
+    initialize(&root).unwrap();
+    let capacity = validate_store(&root, false).unwrap();
+
+    assert_eq!(
+        fs::metadata(&root).unwrap().dev(),
+        fs::metadata(parent.path()).unwrap().dev()
+    );
+    assert!(root.join("store.json").is_file());
+    assert!(root.join("metadata").is_dir());
+    assert!(root.join("data").is_dir());
+    assert!(capacity.available_bytes > 0);
+}
+
+#[test]
+fn cache_store_rejects_symlinks_and_noncanonical_paths() {
+    let parent = TestDir::new("runner-cache-path-safety");
+    let real = parent.path().join("real");
+    fs::create_dir(&real).unwrap();
+    let link = parent.path().join("link");
+    std::os::unix::fs::symlink(&real, &link).unwrap();
+    assert!(validate_store(&link, true).is_err());
+
+    let noncanonical = real.join("..").join("real");
+    assert!(validate_store(&noncanonical, true).is_err());
+}
+
+#[test]
+fn moving_an_initialized_cache_directory_does_not_brick_it() {
+    let parent = TestDir::new("runner-cache-move");
+    let original = parent.path().join("original");
+    let moved = parent.path().join("moved");
+    initialize(&original).unwrap();
+
+    fs::rename(&original, &moved).unwrap();
+
+    validate_store(&moved, false).unwrap();
 }

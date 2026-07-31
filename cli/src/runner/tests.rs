@@ -31,7 +31,7 @@ fn docker_limits_are_always_applied() {
     };
     let mut command = Command::new("docker");
     command.arg("run");
-    apply_container_limits(&mut command, &limits, false);
+    apply_container_limits(&mut command, &limits, DockerCapabilities::default());
     let arguments = command
         .get_args()
         .map(|argument| argument.to_string_lossy().into_owned())
@@ -53,7 +53,13 @@ fn docker_limits_are_always_applied() {
 
     let mut quota_command = Command::new("docker");
     quota_command.arg("run");
-    apply_container_limits(&mut quota_command, &limits, true);
+    apply_container_limits(
+        &mut quota_command,
+        &limits,
+        DockerCapabilities {
+            storage_quota_supported: true,
+        },
+    );
     let quota_arguments = quota_command
         .get_args()
         .map(|argument| argument.to_string_lossy().into_owned())
@@ -117,6 +123,9 @@ fn job_container_receives_only_copied_source_and_step_programs() {
             image: "docker.io/library/alpine@sha256:abc",
             step_programs: Path::new("/runner/private/steps"),
             limits: &limits,
+            capabilities: DockerCapabilities {
+                storage_quota_supported: true,
+            },
             caches: &caches,
         },
     );

@@ -1,4 +1,9 @@
-use super::{RunnerConfig, attempt_control_client, unix_now};
+use super::{
+    RunnerConfig, attempt_control_client, cache,
+    container::stop_container,
+    resources::{transient_storage_has_emergency_capacity_at, transient_storage_root},
+    unix_now,
+};
 use crate::api::attempt_heartbeat;
 use scope_api_contract::ClaimRunResponse;
 use std::{
@@ -36,23 +41,28 @@ pub(super) struct AttemptSupervisor {
     reason: Arc<AtomicU8>,
     execution_deadline: Arc<AtomicU64>,
     execution_finished: Arc<AtomicBool>,
+    storage_pressure: Arc<AtomicBool>,
     handle: Option<thread::JoinHandle<()>>,
 }
 
 impl AttemptSupervisor {
     pub(super) fn start(config: RunnerConfig, claim: ClaimRunResponse) -> anyhow::Result<Self> {
         let client = attempt_control_client()?;
+        let transient_storage_root = transient_storage_root()?;
         let stop = Arc::new(AtomicBool::new(false));
         let reason = Arc::new(AtomicU8::new(AttemptStopReason::None as u8));
         let execution_deadline = Arc::new(AtomicU64::new(0));
         let execution_finished = Arc::new(AtomicBool::new(false));
+        let storage_pressure = Arc::new(AtomicBool::new(false));
         let thread_stop = Arc::clone(&stop);
         let thread_reason = Arc::clone(&reason);
         let thread_deadline = Arc::clone(&execution_deadline);
         let thread_execution_finished = Arc::clone(&execution_finished);
+        let thread_storage_pressure = Arc::clone(&storage_pressure);
         let handle = thread::spawn(move || {
             let mut confirmed_lease_deadline = claim.lease_expires_at_unix;
             let mut next_heartbeat_at = unix_now();
+            let mut next_storage_check_at = unix_now();
             let mut pending_stop = AttemptStopReason::None;
             while !thread_stop.load(Ordering::Relaxed) {
                 let now = unix_now();
@@ -86,6 +96,52 @@ impl AttemptSupervisor {
                     }
                 }
 
+                if pending_stop == AttemptStopReason::None
+                    && !thread_execution_finished.load(Ordering::Relaxed)
+                    && execution_deadline != 0
+                    && now >= next_storage_check_at
+                {
+                    let capacity = cache::has_emergency_capacity(&config).and_then(|cache_safe| {
+                        transient_storage_has_emergency_capacity_at(&transient_storage_root)
+                            .map(|transient_safe| cache_safe && transient_safe)
+                    });
+                    let storage_is_unsafe = match capacity {
+                        Ok(true) => false,
+                        Ok(false) => {
+                            eprintln!(
+                                "Runner storage crossed its emergency floor; stopping attempt {}",
+                                claim.attempt_id
+                            );
+                            true
+                        }
+                        Err(error) => {
+                            eprintln!(
+                                "Could not inspect runner storage; stopping attempt {} to protect the host: {error:#}",
+                                claim.attempt_id
+                            );
+                            true
+                        }
+                    };
+                    if storage_is_unsafe {
+                        thread_storage_pressure.store(true, Ordering::Relaxed);
+                        let container_name = format!("scope-{}", claim.attempt_id);
+                        match stop_container(&container_name) {
+                            Ok(()) => {
+                                next_storage_check_at = u64::MAX;
+                            }
+                            Err(error) => {
+                                eprintln!(
+                                    "Could not stop attempt {} after storage pressure: {error:#}",
+                                    claim.attempt_id
+                                );
+                                next_storage_check_at = now.saturating_add(1);
+                            }
+                        }
+                    } else {
+                        next_storage_check_at = now.saturating_add(1);
+                    }
+                }
+
                 let now = unix_now();
                 if pending_stop == AttemptStopReason::None
                     && now.saturating_add(20) >= confirmed_lease_deadline
@@ -111,6 +167,7 @@ impl AttemptSupervisor {
             reason,
             execution_deadline,
             execution_finished,
+            storage_pressure,
             handle: Some(handle),
         })
     }
@@ -147,6 +204,10 @@ impl AttemptSupervisor {
         } else {
             AttemptStopReason::None
         }
+    }
+
+    pub(super) fn storage_pressure_triggered(&self) -> bool {
+        self.storage_pressure.load(Ordering::Relaxed)
     }
 
     pub(super) fn finish(&mut self) -> AttemptStopReason {
