@@ -5,9 +5,9 @@ use super::{
 use crate::error::{PostgresError, PostgresErrorKind};
 use scope_domain::runs::{
     cutover::{
-        CanaryGeneration, RunnerProtocolAttemptOperation, RunnerProtocolCanary,
-        RunnerProtocolCanaryPhase, RunnerProtocolCanaryStatus, RunnerProtocolCutover,
-        RunnerProtocolCutoverState, validate_runner_protocol_canary_workflow,
+        CanaryGeneration, RunnerProtocolCanary, RunnerProtocolCanaryPhase,
+        RunnerProtocolCanaryStatus, RunnerProtocolCutover, RunnerProtocolCutoverState,
+        validate_runner_protocol_canary_workflow,
     },
     run::{AttemptState, PinnedContainerImage, Run, RunTrigger},
     runner::Runner,
@@ -109,6 +109,21 @@ impl AdminStore {
             }
             ensure_canary_target(&tx, pending.phase(), runner_id, run_id, &snapshot.canaries)
                 .await?;
+            if pending.run_id() != run_id {
+                tx.execute(Statement::from_sql_and_values(
+                    DatabaseBackend::Postgres,
+                    "UPDATE scope_runs
+                     SET state = 'canceled', cancellation_requested = TRUE,
+                         updated_at_unix = $1, completed_at_unix = $1
+                     WHERE id = $2 AND state = 'queued' AND current_attempt_id IS NULL",
+                    [
+                        u64_to_i64(now_unix, "canary reassignment time")?.into(),
+                        pending.run_id().into(),
+                    ],
+                ))
+                .await
+                .map_err(PostgresError::internal)?;
+            }
             let replacement =
                 RunnerProtocolCanary::new(pending.generation(), pending.phase(), runner_id, run_id)
                     .map_err(PostgresError::from)?;
@@ -208,11 +223,6 @@ impl RunStore {
             .map_err(PostgresError::internal)?
             .ok_or_else(|| PostgresError::not_found("run attempt not found"))?;
         let (cutover, generation) = load_cutover(&tx, true).await?;
-        if cutover.state() != RunnerProtocolCutoverState::V4Fenced {
-            return Err(PostgresError::unavailable(
-                "cache finalization is only accepted for the active fenced canary",
-            ));
-        }
         let mut canary =
             current_canary_for_run(&tx, generation, &target.runner_id, &target.run_id, true)
                 .await?;
@@ -228,6 +238,18 @@ impl RunStore {
         if attempt.state != AttemptState::Succeeded {
             return Err(PostgresError::conflict(
                 "cache finalization requires a successful canary attempt",
+            ));
+        }
+        if cutover.state() == RunnerProtocolCutoverState::V4Open
+            && succeeded
+            && canary.status() == RunnerProtocolCanaryStatus::Succeeded
+        {
+            tx.commit().await.map_err(PostgresError::internal)?;
+            return Ok(canary);
+        }
+        if cutover.state() != RunnerProtocolCutoverState::V4Fenced {
+            return Err(PostgresError::unavailable(
+                "cache finalization is only accepted for the active fenced canary",
             ));
         }
         if succeeded {
@@ -412,7 +434,6 @@ pub(super) async fn guard_attempt_operation(
     tx: &DatabaseTransaction,
     runner_id: &str,
     run_id: &str,
-    operation: RunnerProtocolAttemptOperation,
 ) -> Result<(), PostgresError> {
     let (cutover, generation) = load_cutover(tx, false).await?;
     let runner = entities::runner::Entity::find_by_id(runner_id.to_string())
@@ -431,7 +452,7 @@ pub(super) async fn guard_attempt_operation(
     };
     let allowed = cutover
         .state()
-        .allows_attempt_operation(operation, runner.protocol_version)
+        .allows_attempt_operation(runner.protocol_version)
         && match cutover.state() {
             RunnerProtocolCutoverState::V4Fenced => {
                 match current_canary_for_run(tx, generation, runner_id, run_id, true).await {
@@ -841,9 +862,6 @@ fn canary_from_row(row: &sea_orm::QueryResult) -> Result<RunnerProtocolCanary, P
 
 fn parse_cutover_state(value: &str) -> Result<RunnerProtocolCutoverState, PostgresError> {
     match value {
-        "v3-open" => Ok(RunnerProtocolCutoverState::V3Open),
-        "v3-draining" => Ok(RunnerProtocolCutoverState::V3Draining),
-        "rewrite-v4" => Ok(RunnerProtocolCutoverState::RewriteV4),
         "v4-fenced" => Ok(RunnerProtocolCutoverState::V4Fenced),
         "v4-open" => Ok(RunnerProtocolCutoverState::V4Open),
         _ => Err(PostgresError::internal_message(
@@ -854,9 +872,6 @@ fn parse_cutover_state(value: &str) -> Result<RunnerProtocolCutoverState, Postgr
 
 fn cutover_state_name(state: RunnerProtocolCutoverState) -> &'static str {
     match state {
-        RunnerProtocolCutoverState::V3Open => "v3-open",
-        RunnerProtocolCutoverState::V3Draining => "v3-draining",
-        RunnerProtocolCutoverState::RewriteV4 => "rewrite-v4",
         RunnerProtocolCutoverState::V4Fenced => "v4-fenced",
         RunnerProtocolCutoverState::V4Open => "v4-open",
     }

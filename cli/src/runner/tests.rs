@@ -195,6 +195,7 @@ fn replayed_step_conclusion_advances_local_recovery_to_the_next_step() {
         }),
         pending_attempt_conclusion: None,
         pending_attempt_abandon: false,
+        pending_cache_finalization: None,
         cache_volumes: Vec::new(),
     };
 

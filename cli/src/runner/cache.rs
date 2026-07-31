@@ -1,4 +1,5 @@
-use super::{RunnerConfig, command_stdout, runner_work_root, unix_now};
+use super::recovery::mark_recovery_cache_finalization_pending;
+use super::{ConclusionReportPending, RunnerConfig, RunnerWorkDir, command_stdout, unix_now};
 use crate::api::finalize_attempt_cache;
 use anyhow::{Context, bail};
 use reqwest::blocking::Client;
@@ -13,15 +14,16 @@ use serde::{Deserialize, Serialize};
 use std::{
     fs::{self, File},
     io::Write,
-    os::unix::fs::MetadataExt,
     path::{Path, PathBuf},
     process::Command,
 };
 
 const CACHE_FORMAT: u8 = 1;
 const CACHE_LABEL: &str = "scope.cache-format=1";
-const MIN_FREE_BYTES: u64 = 2 * 1024 * 1024 * 1024;
-const MIN_FREE_INODES: u64 = 10_000;
+
+#[path = "cache_store.rs"]
+mod store;
+use store::{ensure_capacity, has_capacity, validate_store};
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(super) struct CacheMount {
@@ -60,15 +62,6 @@ enum CacheState {
     Tainted { attempt_id: String },
 }
 
-#[derive(Debug, Deserialize, Serialize)]
-struct StoreIdentity {
-    format: u8,
-    device: u64,
-    source: String,
-    filesystem: String,
-    filesystem_uuid: String,
-}
-
 pub(super) struct PreparedCaches {
     config: RunnerConfig,
     mounts: Vec<CacheMount>,
@@ -94,7 +87,7 @@ impl PreparedCaches {
         validate_store(&root, false)?;
         let lock = lifecycle_lock(&root)?;
         validate_store(&root, false)?;
-        ensure_capacity(&root, &lock)?;
+        ensure_capacity(&root, &lock, &config.runner_id)?;
         let pinned_image = PinnedContainerImage::parse(pinned_image.to_string())?;
         let mut prepared = Self {
             config: config.clone(),
@@ -236,7 +229,7 @@ pub(super) fn finalize_volume_names(
             record.last_used_at_unix = unix_now();
             write_record(&root, &record)?;
         } else {
-            remove_cache(&root, volume)?;
+            remove_cache(&root, volume, &config.runner_id)?;
         }
     }
     Ok(())
@@ -253,21 +246,37 @@ pub(super) fn acknowledge_finalization(
     client: &Client,
     config: &RunnerConfig,
     claim: &ClaimRunResponse,
-    succeeded: bool,
+    outcome: AttemptCacheFinalizationOutcome,
 ) -> anyhow::Result<()> {
     finalize_attempt_cache(
         client,
         &config.api_url,
         &claim.attempt_token,
         &claim.attempt_id,
-        &AttemptCacheFinalizationRequest {
-            outcome: if succeeded {
-                AttemptCacheFinalizationOutcome::Succeeded
-            } else {
-                AttemptCacheFinalizationOutcome::Failed
-            },
-        },
+        &AttemptCacheFinalizationRequest { outcome },
     )
+}
+
+pub(super) fn finish_canary_ack(
+    client: &Client,
+    config: &RunnerConfig,
+    claim: &ClaimRunResponse,
+    work: &mut RunnerWorkDir,
+    outcome: AttemptCacheFinalizationOutcome,
+) -> anyhow::Result<()> {
+    mark_recovery_cache_finalization_pending(&work.path, claim, outcome.clone()).map_err(
+        |error| {
+            work.preserve();
+            eprintln!("Could not persist pending canary cache acknowledgment: {error:#}");
+            ConclusionReportPending
+        },
+    )?;
+    acknowledge_finalization(client, config, claim, outcome).map_err(|error| {
+        work.preserve();
+        eprintln!("Could not acknowledge finalized canary cache: {error:#}");
+        ConclusionReportPending
+    })?;
+    Ok(())
 }
 
 pub(super) fn list(config: &RunnerConfig) -> anyhow::Result<()> {
@@ -311,7 +320,7 @@ pub(super) fn prune(config: &RunnerConfig, all: bool) -> anyhow::Result<()> {
             continue;
         }
         if all || !has_capacity(&root)? {
-            remove_cache(&root, &record.volume_name)?;
+            remove_cache(&root, &record.volume_name, &config.runner_id)?;
             removed += 1;
         }
         if !all && has_capacity(&root)? {
@@ -339,7 +348,7 @@ pub(super) fn admit(config: &RunnerConfig) -> anyhow::Result<()> {
     validate_store(&root, false)?;
     let lock = lifecycle_lock(&root)?;
     validate_store(&root, false)?;
-    ensure_capacity(&root, &lock)
+    ensure_capacity(&root, &lock, &config.runner_id)
 }
 
 pub(super) fn initialize(root: &Path) -> anyhow::Result<()> {
@@ -365,7 +374,7 @@ pub(super) fn evict_orphaned_tainted(
         if recoverable_attempts.contains(attempt_id) || volume_is_referenced(&record.volume_name)? {
             continue;
         }
-        remove_cache(&root, &record.volume_name)?;
+        remove_cache(&root, &record.volume_name, &config.runner_id)?;
     }
     Ok(())
 }
@@ -763,7 +772,7 @@ fn volume_is_referenced(volume: &str) -> anyhow::Result<bool> {
     Ok(!containers.trim().is_empty())
 }
 
-fn remove_cache(root: &Path, volume: &str) -> anyhow::Result<()> {
+fn remove_cache(root: &Path, volume: &str, runner_id: &str) -> anyhow::Result<()> {
     if volume_is_referenced(volume)? {
         bail!("cache volume {volume} is attached to a container");
     }
@@ -776,23 +785,14 @@ fn remove_cache(root: &Path, volume: &str) -> anyhow::Result<()> {
         }
         bail!("cache metadata for existing volume {volume} is missing");
     };
-    let inspect = Command::new("docker")
-        .args(["volume", "inspect", volume])
-        .output()
-        .context("inspect cache volume before removal")?;
-    if inspect.status.success() {
+    if let Some(inspect) = inspect_volume(volume)? {
+        if !volume_is_owned(&inspect, &record, runner_id) {
+            bail!("cache volume {volume} is not owned by this runner identity");
+        }
         super::command_success(
             Command::new("docker").args(["volume", "rm", volume]),
             "remove Scope cache volume",
         )?;
-    } else if !String::from_utf8_lossy(&inspect.stderr)
-        .to_ascii_lowercase()
-        .contains("no such")
-    {
-        bail!(
-            "inspect cache volume before removal: {}",
-            String::from_utf8_lossy(&inspect.stderr).trim()
-        );
     }
     let backing = root.join("data").join(&record.identity_digest);
     remove_backing_if_present(&backing, &record.container_image)?;
@@ -804,159 +804,6 @@ fn sync_cache_directories(root: &Path) -> anyhow::Result<()> {
     File::open(root.join("data"))?.sync_all()?;
     File::open(root.join("metadata"))?.sync_all()?;
     File::open(root)?.sync_all()?;
-    Ok(())
-}
-
-#[derive(Clone, Copy, Debug)]
-struct Capacity {
-    available_bytes: u64,
-    available_inodes: u64,
-}
-
-fn validate_store(root: &Path, initialize: bool) -> anyhow::Result<Capacity> {
-    let metadata = fs::symlink_metadata(root)
-        .with_context(|| format!("inspect configured cache root {}", root.display()))?;
-    if !metadata.file_type().is_dir() || metadata.file_type().is_symlink() {
-        bail!("cache root must be a real directory: {}", root.display());
-    }
-    if fs::canonicalize(root)? != root {
-        bail!(
-            "cache root must be an absolute canonical path: {}",
-            root.display()
-        );
-    }
-    let parent = root.parent().context("cache root has no parent")?;
-    if metadata.dev() == fs::metadata(parent)?.dev() {
-        bail!("cache root must be the mount point of a dedicated filesystem");
-    }
-    for critical in [Path::new("/"), runner_work_root()?.as_path()] {
-        if let Ok(critical) = fs::metadata(critical)
-            && critical.dev() == metadata.dev()
-        {
-            bail!("cache storage shares a filesystem with critical runner state");
-        }
-    }
-    let docker_root = command_stdout(
-        Command::new("docker").args(["info", "--format={{.DockerRootDir}}"]),
-        "inspect Docker data root",
-    )?;
-    if fs::metadata(docker_root.trim())?.dev() == metadata.dev() {
-        bail!("cache storage must not share Docker's transient filesystem");
-    }
-    let mount = command_stdout(
-        Command::new("findmnt")
-            .args(["-n", "-o", "SOURCE,FSTYPE,UUID", "-T"])
-            .arg(root),
-        "inspect cache filesystem",
-    )?;
-    let mut fields = mount.split_whitespace();
-    let source = fields.next().context("cache mount source is missing")?;
-    let filesystem = fields.next().context("cache filesystem type is missing")?;
-    let filesystem_uuid = fields.next().context("cache filesystem UUID is missing")?;
-    if filesystem_uuid == "-" {
-        bail!("cache filesystem must expose a stable UUID");
-    }
-    if !source.starts_with("/dev/")
-        || matches!(
-            filesystem,
-            "tmpfs" | "overlay" | "btrfs" | "zfs" | "nfs" | "nfs4" | "cifs" | "fuse"
-        )
-        || source.contains("loop")
-        || source.contains("zram")
-    {
-        bail!("cache root must use a dedicated finite local block filesystem");
-    }
-    let identity = StoreIdentity {
-        format: CACHE_FORMAT,
-        device: metadata.dev(),
-        source: source.to_string(),
-        filesystem: filesystem.to_string(),
-        filesystem_uuid: filesystem_uuid.to_string(),
-    };
-    let identity_path = root.join("store.json");
-    if identity_path.exists() {
-        let stored: StoreIdentity = serde_json::from_slice(&fs::read(&identity_path)?)?;
-        if stored.format != identity.format
-            || stored.device != identity.device
-            || stored.source != identity.source
-            || stored.filesystem != identity.filesystem
-            || stored.filesystem_uuid != identity.filesystem_uuid
-        {
-            bail!("configured cache mount identity changed; refusing cached work");
-        }
-    } else if initialize {
-        let mut entries = fs::read_dir(root)?
-            .filter_map(Result::ok)
-            .filter(|entry| entry.file_name() != "lost+found")
-            .collect::<Vec<_>>();
-        entries.retain(|entry| entry.file_name() != ".lifecycle.lock");
-        if !entries.is_empty() {
-            bail!("new cache filesystem must be empty");
-        }
-        let mut file = File::create(&identity_path)?;
-        serde_json::to_writer(&mut file, &identity)?;
-        file.write_all(b"\n")?;
-        file.sync_all()?;
-        File::open(root)?.sync_all()?;
-    } else {
-        bail!("cache filesystem has not been initialized by runner install");
-    }
-    filesystem_capacity(root)
-}
-
-fn filesystem_capacity(root: &Path) -> anyhow::Result<Capacity> {
-    let output = command_stdout(
-        Command::new("df")
-            .args(["-B1", "--output=avail,iavail"])
-            .arg(root),
-        "inspect cache filesystem capacity",
-    )?;
-    let values = output
-        .lines()
-        .last()
-        .context("cache capacity output is empty")?;
-    let mut fields = values.split_whitespace();
-    Ok(Capacity {
-        available_bytes: fields
-            .next()
-            .context("cache byte capacity is missing")?
-            .parse()?,
-        available_inodes: fields
-            .next()
-            .context("cache inode capacity is missing")?
-            .parse()?,
-    })
-}
-
-fn has_capacity(root: &Path) -> anyhow::Result<bool> {
-    let capacity = filesystem_capacity(root)?;
-    Ok(capacity.available_bytes >= MIN_FREE_BYTES && capacity.available_inodes >= MIN_FREE_INODES)
-}
-
-fn ensure_capacity(root: &Path, _lifecycle_lock: &File) -> anyhow::Result<()> {
-    if has_capacity(root)? {
-        return Ok(());
-    }
-    prune_root(root)?;
-    if has_capacity(root)? {
-        Ok(())
-    } else {
-        bail!("cache storage remains below its byte or inode reserve after pruning")
-    }
-}
-
-fn prune_root(root: &Path) -> anyhow::Result<()> {
-    let mut records = load_records(root)?;
-    records.sort_by_key(|record| record.last_used_at_unix);
-    for record in records {
-        if volume_is_referenced(&record.volume_name)? {
-            continue;
-        }
-        remove_cache(root, &record.volume_name)?;
-        if has_capacity(root)? {
-            break;
-        }
-    }
     Ok(())
 }
 

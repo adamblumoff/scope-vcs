@@ -120,6 +120,8 @@ pub(super) fn configure_source_copy(command: &mut Command, workspace: &Path, con
 }
 
 pub(super) fn require_root_image(image: &str) -> anyhow::Result<()> {
+    // Image user metadata is only available after resolution. Root is a runner
+    // contract because recovery must be able to clear every persistent cache entry.
     let output = Command::new("docker")
         .args(["image", "inspect", "--format={{.Config.User}}", image])
         .output()

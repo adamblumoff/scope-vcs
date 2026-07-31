@@ -39,6 +39,7 @@ async fn fenced_v4_dispatches_only_the_canary_suite_then_opens() {
             .await
             .is_err()
     );
+    let mut final_ack = None;
     for (phase, run_id) in [
         (RunnerProtocolCanaryPhase::ColdWrite, "run-cold-old"),
         (RunnerProtocolCanaryPhase::ColdWrite, "run-cold"),
@@ -86,6 +87,16 @@ async fn fenced_v4_dispatches_only_the_canary_suite_then_opens() {
         .unwrap();
     assert_eq!(reassigned.canaries.len(), 1);
     assert_eq!(reassigned.canaries[0].run_id(), "run-cold");
+    assert_eq!(
+        store
+            .runs()
+            .run("run-cold-old")
+            .await
+            .unwrap()
+            .unwrap()
+            .state,
+        scope_domain::runs::run::RunState::Canceled
+    );
 
     for (phase, run_id) in [
         (RunnerProtocolCanaryPhase::ColdWrite, "run-cold"),
@@ -134,6 +145,7 @@ async fn fenced_v4_dispatches_only_the_canary_suite_then_opens() {
             .finalize_runner_protocol_canary_cache(&attempt_id, &token_hash, true, 25)
             .await
             .unwrap();
+        final_ack = Some((attempt_id, token_hash));
     }
 
     let fenced = store.admin().runner_protocol_cutover().await.unwrap();
@@ -151,6 +163,16 @@ async fn fenced_v4_dispatches_only_the_canary_suite_then_opens() {
         .await
         .unwrap();
     assert_eq!(opened.cutover.state(), RunnerProtocolCutoverState::V4Open);
+    let (attempt_id, token_hash) = final_ack.unwrap();
+    assert_eq!(
+        store
+            .runs()
+            .finalize_runner_protocol_canary_cache(&attempt_id, &token_hash, true, 51)
+            .await
+            .unwrap()
+            .status(),
+        RunnerProtocolCanaryStatus::Succeeded
+    );
     assert_eq!(
         store
             .runs()
@@ -159,7 +181,7 @@ async fn fenced_v4_dispatches_only_the_canary_suite_then_opens() {
             .unwrap()
             .unwrap()
             .id,
-        "run-cold-old"
+        "run-general"
     );
 }
 

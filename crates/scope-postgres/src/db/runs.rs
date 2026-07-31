@@ -13,7 +13,6 @@ use super::{
 };
 use crate::error::PostgresError;
 use scope_domain::runs::{
-    cutover::RunnerProtocolAttemptOperation,
     run::{AttemptConclusion, PinnedContainerImage, Run, RunAttempt, RunAttemptStep, RunLogChunk},
     runner::{Runner, RunnerGrant},
     workflow::WorkflowRevision,
@@ -453,13 +452,7 @@ impl RunStore {
     ) -> Result<DispatchClaim, PostgresError> {
         let tx = self.db.begin().await.map_err(PostgresError::internal)?;
         let (guard_run_id, guard_runner_id) = attempt_target(&tx, attempt_id).await?;
-        guard_attempt_operation(
-            &tx,
-            &guard_runner_id,
-            &guard_run_id,
-            RunnerProtocolAttemptOperation::Execution,
-        )
-        .await?;
+        guard_attempt_operation(&tx, &guard_runner_id, &guard_run_id).await?;
         let (mut run, attempt, steps) = locked_attempt_context(&tx, attempt_id).await?;
         ensure_runner_authorized(&tx, &run, &attempt).await?;
         attempt
@@ -495,13 +488,7 @@ impl RunStore {
     ) -> Result<bool, PostgresError> {
         let tx = self.db.begin().await.map_err(PostgresError::internal)?;
         let (guard_run_id, guard_runner_id) = attempt_target(&tx, attempt_id).await?;
-        guard_attempt_operation(
-            &tx,
-            &guard_runner_id,
-            &guard_run_id,
-            RunnerProtocolAttemptOperation::Heartbeat,
-        )
-        .await?;
+        guard_attempt_operation(&tx, &guard_runner_id, &guard_run_id).await?;
         let (run, mut attempt, _) = locked_attempt_context(&tx, attempt_id).await?;
         let mut runner = ensure_runner_authorized(&tx, &run, &attempt).await?;
         let cancellation_requested = attempt
@@ -522,13 +509,9 @@ impl RunStore {
         conclusion: AttemptConclusion,
         now_unix: u64,
     ) -> Result<DispatchClaim, PostgresError> {
-        self.mutate_attempt(
-            attempt_id,
-            RunnerProtocolAttemptOperation::Conclusion,
-            |run, attempt, steps| {
-                attempt.complete(run, steps, runner_id, token_hash, conclusion, now_unix)
-            },
-        )
+        self.mutate_attempt(attempt_id, |run, attempt, steps| {
+            attempt.complete(run, steps, runner_id, token_hash, conclusion, now_unix)
+        })
         .await
     }
 
@@ -539,11 +522,9 @@ impl RunStore {
         token_hash: &str,
         now_unix: u64,
     ) -> Result<DispatchClaim, PostgresError> {
-        self.mutate_attempt(
-            attempt_id,
-            RunnerProtocolAttemptOperation::Conclusion,
-            |run, attempt, steps| attempt.abandon(run, steps, runner_id, token_hash, now_unix),
-        )
+        self.mutate_attempt(attempt_id, |run, attempt, steps| {
+            attempt.abandon(run, steps, runner_id, token_hash, now_unix)
+        })
         .await
     }
 
@@ -554,13 +535,7 @@ impl RunStore {
     ) -> Result<DispatchClaim, PostgresError> {
         let tx = self.db.begin().await.map_err(PostgresError::internal)?;
         let (guard_run_id, guard_runner_id) = attempt_target(&tx, attempt_id).await?;
-        guard_attempt_operation(
-            &tx,
-            &guard_runner_id,
-            &guard_run_id,
-            RunnerProtocolAttemptOperation::Recovery,
-        )
-        .await?;
+        guard_attempt_operation(&tx, &guard_runner_id, &guard_run_id).await?;
         let (mut run, mut attempt, mut steps) = locked_attempt_context(&tx, attempt_id).await?;
         attempt
             .expire(&mut run, &mut steps, now_unix)
@@ -646,13 +621,7 @@ impl RunStore {
     ) -> Result<DispatchClaim, PostgresError> {
         let tx = self.db.begin().await.map_err(PostgresError::internal)?;
         let (guard_run_id, guard_runner_id) = attempt_target(&tx, attempt_id).await?;
-        guard_attempt_operation(
-            &tx,
-            &guard_runner_id,
-            &guard_run_id,
-            RunnerProtocolAttemptOperation::Execution,
-        )
-        .await?;
+        guard_attempt_operation(&tx, &guard_runner_id, &guard_run_id).await?;
         let (run, attempt, steps) = locked_attempt_context(&tx, attempt_id).await?;
         ensure_runner_authorized(&tx, &run, &attempt).await?;
         attempt
@@ -677,13 +646,7 @@ impl RunStore {
     ) -> Result<StoredRunLog, PostgresError> {
         let tx = self.db.begin().await.map_err(PostgresError::internal)?;
         let (guard_run_id, guard_runner_id) = attempt_target(&tx, &chunk.attempt_id).await?;
-        guard_attempt_operation(
-            &tx,
-            &guard_runner_id,
-            &guard_run_id,
-            RunnerProtocolAttemptOperation::Execution,
-        )
-        .await?;
+        guard_attempt_operation(&tx, &guard_runner_id, &guard_run_id).await?;
         let (run, mut attempt, steps) = locked_attempt_context(&tx, &chunk.attempt_id).await?;
         ensure_runner_authorized(&tx, &run, &attempt).await?;
         attempt
@@ -768,7 +731,6 @@ impl RunStore {
     pub(super) async fn mutate_attempt(
         &self,
         attempt_id: &str,
-        cutover_operation: RunnerProtocolAttemptOperation,
         mutate: impl FnOnce(
             &mut Run,
             &mut RunAttempt,
@@ -777,7 +739,7 @@ impl RunStore {
     ) -> Result<DispatchClaim, PostgresError> {
         let tx = self.db.begin().await.map_err(PostgresError::internal)?;
         let (guard_run_id, guard_runner_id) = attempt_target(&tx, attempt_id).await?;
-        guard_attempt_operation(&tx, &guard_runner_id, &guard_run_id, cutover_operation).await?;
+        guard_attempt_operation(&tx, &guard_runner_id, &guard_run_id).await?;
         let (mut run, mut attempt, mut steps) = locked_attempt_context(&tx, attempt_id).await?;
         ensure_runner_authorized(&tx, &run, &attempt).await?;
         mutate(&mut run, &mut attempt, &mut steps).map_err(PostgresError::from)?;

@@ -7,8 +7,6 @@ use super::{
     workflow::{CompiledWorkflow, RunnerSelector},
 };
 
-const RUNNER_PROTOCOL_V3: u32 = 3;
-
 pub const RUNNER_PROTOCOL_CANARY_CACHE_NAME: &str = "runner-protocol";
 pub const RUNNER_PROTOCOL_CANARY_SENTINEL_PATH: &str =
     "/scope/cache/runner-protocol/v4-canary-sentinel";
@@ -22,22 +20,13 @@ pub const RUNNER_PROTOCOL_CANARY_READ_COMMAND: &str =
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum RunnerProtocolCutoverState {
-    V3Open,
-    V3Draining,
-    RewriteV4,
     V4Fenced,
     V4Open,
 }
 
 impl RunnerProtocolCutoverState {
     pub fn can_transition_to(self, next: Self) -> bool {
-        matches!(
-            (self, next),
-            (Self::V3Open, Self::V3Draining)
-                | (Self::V3Draining, Self::RewriteV4)
-                | (Self::RewriteV4, Self::V4Fenced)
-                | (Self::V4Fenced, Self::V4Open)
-        )
+        matches!((self, next), (Self::V4Fenced, Self::V4Open))
     }
 
     pub fn allows_runner_registration(self, protocol_version: u32) -> bool {
@@ -45,15 +34,11 @@ impl RunnerProtocolCutoverState {
     }
 
     pub fn allows_runner_authentication(self, protocol_version: u32) -> bool {
-        matches!(
-            (self, protocol_version),
-            (Self::V3Open | Self::V3Draining, RUNNER_PROTOCOL_V3)
-                | (Self::V4Fenced | Self::V4Open, RUNNER_PROTOCOL_VERSION)
-        )
+        protocol_version == RUNNER_PROTOCOL_VERSION
     }
 
     pub fn allows_workflow_writes(self) -> bool {
-        matches!(self, Self::V3Open | Self::V4Open)
+        self == Self::V4Open
     }
 
     pub fn allows_enqueue(self) -> bool {
@@ -61,41 +46,17 @@ impl RunnerProtocolCutoverState {
     }
 
     pub fn allows_claim(self, protocol_version: u32) -> bool {
-        matches!(
-            (self, protocol_version),
-            (Self::V3Open, RUNNER_PROTOCOL_V3) | (Self::V4Open, RUNNER_PROTOCOL_VERSION)
-        )
+        self == Self::V4Open && protocol_version == RUNNER_PROTOCOL_VERSION
     }
 
-    pub fn allows_attempt_operation(
-        self,
-        operation: RunnerProtocolAttemptOperation,
-        protocol_version: u32,
-    ) -> bool {
-        match (self, protocol_version) {
-            (Self::V3Open, RUNNER_PROTOCOL_V3)
-            | (Self::V4Fenced | Self::V4Open, RUNNER_PROTOCOL_VERSION) => true,
-            (Self::V3Draining, RUNNER_PROTOCOL_V3) => matches!(
-                operation,
-                RunnerProtocolAttemptOperation::Heartbeat
-                    | RunnerProtocolAttemptOperation::Conclusion
-                    | RunnerProtocolAttemptOperation::Recovery
-            ),
-            _ => false,
-        }
+    pub fn allows_attempt_operation(self, protocol_version: u32) -> bool {
+        let _ = self;
+        protocol_version == RUNNER_PROTOCOL_VERSION
     }
 
     pub fn allows_canary(self) -> bool {
         self == Self::V4Fenced
     }
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum RunnerProtocolAttemptOperation {
-    Heartbeat,
-    Conclusion,
-    Recovery,
-    Execution,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -106,7 +67,7 @@ pub struct RunnerProtocolCutover {
 impl RunnerProtocolCutover {
     pub fn new() -> Self {
         Self {
-            state: RunnerProtocolCutoverState::V3Open,
+            state: RunnerProtocolCutoverState::V4Fenced,
         }
     }
 
@@ -410,10 +371,10 @@ mod tests {
     #[test]
     fn cutover_only_moves_forward_one_state_at_a_time() {
         let mut cutover = RunnerProtocolCutover::new();
-        assert_eq!(cutover.state(), RunnerProtocolCutoverState::V3Open);
+        assert_eq!(cutover.state(), RunnerProtocolCutoverState::V4Fenced);
         assert!(
             cutover
-                .transition(RunnerProtocolCutoverState::V3Draining)
+                .transition(RunnerProtocolCutoverState::V4Open)
                 .unwrap()
         );
         assert!(
@@ -422,46 +383,28 @@ mod tests {
                 .is_err()
         );
         assert!(
-            cutover
-                .transition(RunnerProtocolCutoverState::V3Open)
-                .is_err()
-        );
-        assert!(
             !cutover
-                .transition(RunnerProtocolCutoverState::V3Draining)
+                .transition(RunnerProtocolCutoverState::V4Open)
                 .unwrap()
         );
     }
 
     #[test]
     fn state_gates_protocol_operations_without_outer_policy() {
-        use RunnerProtocolAttemptOperation::{Conclusion, Execution, Heartbeat, Recovery};
-
-        let draining = RunnerProtocolCutoverState::V3Draining;
-        assert!(draining.allows_runner_authentication(RUNNER_PROTOCOL_V3));
-        assert!(!draining.allows_enqueue());
-        assert!(!draining.allows_claim(RUNNER_PROTOCOL_V3));
-        assert!(draining.allows_attempt_operation(Heartbeat, RUNNER_PROTOCOL_V3));
-        assert!(draining.allows_attempt_operation(Conclusion, RUNNER_PROTOCOL_V3));
-        assert!(draining.allows_attempt_operation(Recovery, RUNNER_PROTOCOL_V3));
-        assert!(!draining.allows_attempt_operation(Execution, RUNNER_PROTOCOL_V3));
-
         let fenced = RunnerProtocolCutoverState::V4Fenced;
         assert!(fenced.allows_runner_registration(RUNNER_PROTOCOL_VERSION));
         assert!(!fenced.allows_enqueue());
         assert!(!fenced.allows_claim(RUNNER_PROTOCOL_VERSION));
+        assert!(fenced.allows_attempt_operation(RUNNER_PROTOCOL_VERSION));
         assert!(fenced.allows_canary());
 
         let open = RunnerProtocolCutoverState::V4Open;
         assert!(open.allows_workflow_writes());
         assert!(open.allows_enqueue());
         assert!(open.allows_claim(RUNNER_PROTOCOL_VERSION));
-        assert!(!open.allows_claim(RUNNER_PROTOCOL_V3));
+        assert!(!open.allows_claim(RUNNER_PROTOCOL_VERSION - 1));
+        assert!(open.allows_attempt_operation(RUNNER_PROTOCOL_VERSION));
         assert!(!open.allows_canary());
-
-        let rewrite = RunnerProtocolCutoverState::RewriteV4;
-        assert!(!rewrite.allows_runner_authentication(RUNNER_PROTOCOL_VERSION));
-        assert!(!rewrite.allows_attempt_operation(Conclusion, RUNNER_PROTOCOL_V3));
     }
 
     #[test]

@@ -40,7 +40,7 @@ impl MigrationTrait for Migration {
         rewrite_workflow_revisions_to_v4(db).await?;
 
         db.execute_unprepared(
-                "
+            "
                     UPDATE scope_runners
                     SET enabled = FALSE
                     WHERE protocol_version < 4;
@@ -63,7 +63,7 @@ impl MigrationTrait for Migration {
                         updated_at_unix bigint NOT NULL,
                         CONSTRAINT scope_runner_protocol_cutover_singleton CHECK (key = 'current'),
                         CONSTRAINT scope_runner_protocol_cutover_values CHECK (
-                            state IN ('v3-open', 'v3-draining', 'rewrite-v4', 'v4-fenced', 'v4-open') AND
+                            state IN ('v4-fenced', 'v4-open') AND
                             canary_generation >= 0 AND
                             updated_at_unix >= 0
                         )
@@ -108,8 +108,8 @@ impl MigrationTrait for Migration {
                         0,
                         extract(epoch FROM clock_timestamp())::bigint;
                 ",
-            )
-            .await?;
+        )
+        .await?;
         Ok(())
     }
 }

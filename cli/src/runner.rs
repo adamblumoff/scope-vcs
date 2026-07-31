@@ -10,8 +10,9 @@ use crate::{
 use anyhow::{Context, bail};
 use reqwest::blocking::Client;
 use scope_api_contract::{
-    AppendAttemptLogRequest, AttemptConclusionRequest, ClaimRunResponse, CompleteAttemptRequest,
-    RegisterRunnerRequest, UpgradeRunnerRegistrationRequest,
+    AppendAttemptLogRequest, AttemptCacheFinalizationOutcome, AttemptConclusionRequest,
+    ClaimRunResponse, CompleteAttemptRequest, RegisterRunnerRequest,
+    UpgradeRunnerRegistrationRequest,
 };
 use scope_domain::runs::{
     run::StepState,
@@ -457,21 +458,23 @@ fn execute_claim(config: &RunnerConfig, claim: &ClaimRunResponse) -> anyhow::Res
                 eprintln!(
                     "Could not finalize attempt caches; tainted caches were not reused: {error:#}"
                 );
-                if claim.canary_phase.is_some()
-                    && let Err(ack_error) =
-                        cache::acknowledge_finalization(&client, config, claim, false)
-                {
-                    work.preserve();
-                    eprintln!("Could not report failed canary cache finalization: {ack_error:#}");
-                    return Err(ConclusionReportPending.into());
+                if success && claim.canary_phase.is_some() {
+                    cache::finish_canary_ack(
+                        &client,
+                        config,
+                        claim,
+                        &mut work,
+                        AttemptCacheFinalizationOutcome::Failed,
+                    )?;
                 }
-            } else if success
-                && claim.canary_phase.is_some()
-                && let Err(error) = cache::acknowledge_finalization(&client, config, claim, true)
-            {
-                work.preserve();
-                eprintln!("Could not acknowledge finalized canary cache: {error:#}");
-                return Err(ConclusionReportPending.into());
+            } else if success && claim.canary_phase.is_some() {
+                cache::finish_canary_ack(
+                    &client,
+                    config,
+                    claim,
+                    &mut work,
+                    AttemptCacheFinalizationOutcome::Succeeded,
+                )?;
             }
             log_phase(&claim.attempt_id, "cleanup", cleanup);
             Ok(())
@@ -489,33 +492,46 @@ fn resume_claim(config: &RunnerConfig, recovery: RecoveryAttempt) -> anyhow::Res
     let claim = recovery.recovery.claim.clone();
     let work_dir = recovery.work_dir.clone();
     let volumes = recovery.recovery.progress.cache_volumes.clone();
+    if let Some(outcome) = recovery
+        .recovery
+        .progress
+        .pending_cache_finalization
+        .clone()
+    {
+        cache::acknowledge_finalization(&attempt_control_client()?, config, &claim, outcome)?;
+        std::fs::remove_dir_all(work_dir).context("remove acknowledged canary recovery state")?;
+        return Ok(());
+    }
     match resume_claim_execution(config, recovery) {
         Ok(success) => {
             let reusable = cache::is_reusable_after_execution(&claim, success);
             if let Err(error) = cache::finalize_volume_names(config, &volumes, reusable) {
                 eprintln!("Could not finalize recovered attempt caches: {error:#}");
-                if claim.canary_phase.is_some()
-                    && let Err(ack_error) = cache::acknowledge_finalization(
+                if success && claim.canary_phase.is_some() {
+                    let mut work = RunnerWorkDir {
+                        path: work_dir.clone(),
+                        cleanup_on_drop: false,
+                    };
+                    cache::finish_canary_ack(
                         &attempt_control_client()?,
                         config,
                         &claim,
-                        false,
-                    )
-                {
-                    eprintln!("Could not report failed recovered canary cache: {ack_error:#}");
-                    return Err(ConclusionReportPending.into());
+                        &mut work,
+                        AttemptCacheFinalizationOutcome::Failed,
+                    )?;
                 }
-            } else if success
-                && claim.canary_phase.is_some()
-                && let Err(error) = cache::acknowledge_finalization(
+            } else if success && claim.canary_phase.is_some() {
+                let mut work = RunnerWorkDir {
+                    path: work_dir.clone(),
+                    cleanup_on_drop: false,
+                };
+                cache::finish_canary_ack(
                     &attempt_control_client()?,
                     config,
                     &claim,
-                    true,
-                )
-            {
-                eprintln!("Could not acknowledge recovered canary cache: {error:#}");
-                return Err(ConclusionReportPending.into());
+                    &mut work,
+                    AttemptCacheFinalizationOutcome::Succeeded,
+                )?;
             }
             if claim.canary_phase.is_some() {
                 std::fs::remove_dir_all(work_dir)
