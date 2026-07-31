@@ -2109,7 +2109,6 @@ dependencies = [
  "hex",
  "serde",
  "serde_json",
- "sha1",
  "sha2",
  "thiserror",
 ]
@@ -2118,10 +2117,12 @@ dependencies = [
 name = "scope-git"
 version = "0.1.0"
 dependencies = [
+ "hex",
  "scope-domain",
  "scope-object-store",
  "serde",
  "serde_json",
+ "sha1",
  "thiserror",
 ]
 

@@ -132,13 +132,14 @@ pub(crate) fn projection_preview_response(
         ));
     }
     let preview = projection_preview(repo, projection_audience, include_private_counts);
+    let head_oid = scope_git::projection_head_oid(&projection).map_err(ApiError::internal)?;
 
     Ok(ProjectionPreviewResponse {
         audience,
         source,
         repo_id: preview.repo_id,
         view_key: preview.view_key,
-        head_oid: preview.head_oid,
+        head_oid,
         files: preview
             .files
             .into_iter()

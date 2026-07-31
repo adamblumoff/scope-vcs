@@ -1,6 +1,10 @@
+mod projection_identity;
 #[cfg(feature = "storage")]
 mod snapshot;
 
+pub use projection_identity::{
+    PROJECTION_IDENTITY_VERSION, ProjectionIdentityError, projection_head_oid,
+};
 #[cfg(feature = "storage")]
 pub use snapshot::{
     GitSnapshotMaterializationError, StoredGitSegment, materialize_compacted_git_segment,
