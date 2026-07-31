@@ -14,6 +14,10 @@ pub mod repo_config;
 pub mod request;
 pub mod review;
 pub mod run;
+#[cfg(target_os = "linux")]
+pub mod runner;
+#[cfg(not(target_os = "linux"))]
+#[path = "runner_unsupported.rs"]
 pub mod runner;
 
 #[cfg(test)]
