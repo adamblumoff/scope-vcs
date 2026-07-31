@@ -1,9 +1,12 @@
 use crate::{
     config::{DEFAULT_GIT_BRANCH, EMPTY_GIT_OID, RECEIVE_PACK_STAGING_BYTES},
     error::ApiError,
-    git::import::{run_git, safe_repo_key},
     git::projection_repo::projection_bare_repo_for_state,
     git::upload::git_command_output_with_timeout,
+    git::{
+        cache::GitDerivedCacheNamespace,
+        import::{run_git, safe_repo_key},
+    },
     persistence::ensure_private_dir,
     repo_access::find_repo,
     runtime_budgets::RuntimeBudgets,
@@ -103,44 +106,49 @@ pub(crate) fn cached_raw_git_repo(
 ) -> Result<crate::git::cache::GitRepoHandle, ApiError> {
     let repo = state.raw_git_cache.lease(snapshot)?;
     let repo_path = repo.as_ref().to_path_buf();
-    if repo_path
+    let cache_root = state.git_cache_root()?;
+    let cache_key = raw_git_cache_key(snapshot);
+    let is_ready = || raw_git_cache_is_ready(&repo_path);
+    state.git_cache_builds.materialize(
+        GitDerivedCacheNamespace::RawSnapshot,
+        cache_key.clone(),
+        is_ready,
+        || {
+            let _permit = state.runtime_budgets.try_projection_build()?;
+            let attempt = RAW_GIT_CACHE_ATTEMPT.fetch_add(1, Ordering::Relaxed);
+            let temp_path = cache_root.join(format!(
+                "raw-{cache_key}.{}.{}.tmp",
+                std::process::id(),
+                attempt
+            ));
+            if let Err(error) = restore_git_segments(state, snapshot, &temp_path) {
+                let _ = fs::remove_dir_all(&temp_path);
+                return Err(error);
+            }
+            match fs::rename(&temp_path, &repo_path) {
+                Ok(()) => Ok(()),
+                Err(error) if is_ready() => {
+                    let _ = fs::remove_dir_all(&temp_path);
+                    tracing::debug!(%error, path = %repo_path.display(), "using externally-created raw Git snapshot cache");
+                    Ok(())
+                }
+                Err(error) => {
+                    let _ = fs::remove_dir_all(&temp_path);
+                    Err(ApiError::internal(error))
+                }
+            }
+        },
+    )?;
+    state.raw_git_cache.note_materialized(&repo_path)?;
+    Ok(repo)
+}
+
+fn raw_git_cache_is_ready(repo_path: &FsPath) -> bool {
+    repo_path
         .join("refs")
         .join("heads")
         .join(DEFAULT_GIT_BRANCH)
         .is_file()
-    {
-        return Ok(repo);
-    }
-
-    let cache_root = state.git_cache_root()?;
-    let cache_key = raw_git_cache_key(snapshot);
-    let attempt = RAW_GIT_CACHE_ATTEMPT.fetch_add(1, Ordering::Relaxed);
-    let temp_path = cache_root.join(format!(
-        "raw-{cache_key}.{}.{}.tmp",
-        std::process::id(),
-        attempt
-    ));
-    let _permit = state.runtime_budgets.try_projection_build()?;
-    if let Err(error) = restore_git_segments(state, snapshot, &temp_path) {
-        let _ = fs::remove_dir_all(&temp_path);
-        return Err(error);
-    }
-    match fs::rename(&temp_path, &repo_path) {
-        Ok(()) => {
-            state.raw_git_cache.note_materialized(&repo_path)?;
-            Ok(repo)
-        }
-        Err(error) if repo_path.exists() => {
-            let _ = fs::remove_dir_all(&temp_path);
-            tracing::debug!(%error, path = %repo_path.display(), "using concurrently-created raw Git snapshot cache");
-            state.raw_git_cache.note_materialized(&repo_path)?;
-            Ok(repo)
-        }
-        Err(error) => {
-            let _ = fs::remove_dir_all(&temp_path);
-            Err(ApiError::internal(error))
-        }
-    }
 }
 
 pub(crate) fn delete_repo_storage(

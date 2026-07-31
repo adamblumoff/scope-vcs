@@ -74,6 +74,7 @@ pub async fn app_state_from_env() -> anyhow::Result<AppState> {
         repo_events,
         push_intent_signing_key,
         raw_git_cache,
+        git_cache_builds: Arc::new(crate::git::cache::GitDerivedCacheCoordinator::default()),
         #[cfg(test)]
         test_object_store: Arc::new(scope_object_store::MemoryObjectStore::new()),
     };

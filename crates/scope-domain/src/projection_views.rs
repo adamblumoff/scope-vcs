@@ -4,7 +4,6 @@ use super::{
     store::{SourceBlob, StoredRepository, repo_relative_scope_path},
 };
 use crate::error::DomainError;
-use sha1::{Digest, Sha1};
 use std::collections::{BTreeMap, HashSet};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -26,7 +25,6 @@ impl From<ProjectionAudience> for ProjectionViewKey {
 pub struct ProjectionPreviewView {
     pub repo_id: String,
     pub view_key: String,
-    pub head_oid: Option<String>,
     pub files: Vec<ProjectionPreviewFile>,
     pub commits: Vec<ProjectionPreviewCommit>,
     pub summary: ProjectionPreviewSummary,
@@ -87,7 +85,6 @@ pub fn projection_preview(
     let view_key = ProjectionViewKey::from(audience);
     let projection = project_graph(&repo.graph, &repo.visibility_events, view_key);
     let files = projection_preview_files(repo, &projection);
-    let head_oid = projection_preview_head_oid(&projection, &files);
     let logical_commit_visibility = repo
         .graph
         .commits
@@ -136,7 +133,6 @@ pub fn projection_preview(
     ProjectionPreviewView {
         repo_id: repo.record.id.clone(),
         view_key: projection.view_key.as_str().to_string(),
-        head_oid,
         files,
         commits,
         summary: ProjectionPreviewSummary {
@@ -318,27 +314,4 @@ fn projection_tree(projection: &Projection) -> BTreeMap<ScopePath, String> {
         }
     }
     tree
-}
-
-fn projection_preview_head_oid(
-    projection: &Projection,
-    files: &[ProjectionPreviewFile],
-) -> Option<String> {
-    projection.commits.last().map(|commit| {
-        let mut hasher = Sha1::new();
-        let tree_payload = files
-            .iter()
-            .map(|file| format!("100644 blob {}\t{}", file.oid, file.path.as_str()))
-            .collect::<Vec<_>>()
-            .join("\n");
-        let payload = format!(
-            "projection:{}\nhead:{}\ntree:\n{}\n",
-            projection.view_key.as_str(),
-            commit.projected_id,
-            tree_payload
-        );
-        hasher.update(format!("commit {}\0", payload.len()).as_bytes());
-        hasher.update(payload.as_bytes());
-        hex::encode(hasher.finalize())
-    })
 }

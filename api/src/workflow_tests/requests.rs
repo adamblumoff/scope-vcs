@@ -2,12 +2,157 @@ use super::*;
 
 mod helpers;
 mod queue;
-pub(super) use helpers::{create_owner_request, create_public_request};
+pub(super) use helpers::{create_owner_request, create_public_request, rebuild_request_projection};
 
 use scope_domain::requests::{GrantUserCreditsInput, RequestState};
 use scope_postgres::db::AddRequestInviteeCommand;
 
 const REQUEST_HEAD: &str = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+
+#[tokio::test]
+async fn request_reads_do_not_consume_git_projection_capacity() {
+    let mut state = test_state_with_readme().await;
+    cache_test_jwks(&state);
+    state.runtime_budgets = Arc::new(RuntimeBudgets::from_config(RuntimeBudgetConfig {
+        projection_build_concurrency: 0,
+        ..Default::default()
+    }));
+    let app = router(state.clone());
+
+    for uri in [
+        "/v1/repos/owner/repo/requests",
+        "/v1/repos/owner/repo/requests/queue?section=ready",
+    ] {
+        let response = api_request(app.clone(), "GET", uri, None, None).await;
+        assert_eq!(response.status(), StatusCode::OK);
+        assert!(request_ids(&response_json(response).await).is_empty());
+    }
+
+    rebuild_request_projection(&state).await;
+    create_owner_request(&state, "req_metadata_head", REQUEST_HEAD).await;
+    let ready = api_request(
+        app.clone(),
+        "POST",
+        "/v1/repos/owner/repo/requests/req_metadata_head/ready",
+        Some(&bearer_header()),
+        Some("{}"),
+    )
+    .await;
+    assert_eq!(ready.status(), StatusCode::OK);
+
+    let queue = api_request(
+        app,
+        "GET",
+        "/v1/repos/owner/repo/requests/queue?section=ready",
+        Some(&bearer_header()),
+        None,
+    )
+    .await;
+    assert_eq!(queue.status(), StatusCode::OK);
+    let queue = response_json(queue).await;
+    assert_eq!(request_ids(&queue), ["req_metadata_head"]);
+    let current_main_oid = queue["requests"][0]["mergeability"]["current_main_oid"]
+        .as_str()
+        .unwrap();
+    assert_eq!(current_main_oid.len(), 40);
+    assert!(
+        current_main_oid
+            .bytes()
+            .all(|byte| byte.is_ascii_hexdigit())
+    );
+}
+
+#[tokio::test]
+async fn native_private_request_reads_use_the_persisted_git_head() {
+    let (mut state, _source, head_oid) =
+        super::push_intent_completion::published_git_fixture("request-metadata-native").await;
+    create_owner_request(&state, "req_native_head", REQUEST_HEAD).await;
+    let repo = find_repo(&state, TEST_REPO_OWNER, TEST_REPO_NAME)
+        .await
+        .unwrap();
+    let raw_cache = raw_git_cache_path(&state, &repo.git_head.as_ref().unwrap().manifest).unwrap();
+    if raw_cache.exists() {
+        fs::remove_dir_all(raw_cache).unwrap();
+    }
+    state.runtime_budgets = Arc::new(RuntimeBudgets::from_config(RuntimeBudgetConfig {
+        projection_build_concurrency: 0,
+        ..Default::default()
+    }));
+
+    let response = api_request(
+        router(state),
+        "GET",
+        "/v1/repos/owner/repo/requests/req_native_head",
+        Some(&bearer_header()),
+        None,
+    )
+    .await;
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = response_json(response).await;
+    assert_eq!(
+        body["request"]["mergeability"]["current_main_oid"],
+        head_oid
+    );
+}
+
+#[tokio::test]
+async fn private_request_bases_select_the_native_private_head() {
+    let (state, _source, head_oid) =
+        super::push_intent_completion::published_git_fixture("request-private-base").await;
+    let repo = find_repo(&state, TEST_REPO_OWNER, TEST_REPO_NAME)
+        .await
+        .unwrap();
+
+    assert_eq!(
+        crate::http::requests::current_main_oid_for_audience(
+            &state,
+            &repo,
+            scope_domain::requests::RequestAudience::Private,
+        )
+        .await
+        .unwrap(),
+        Some(head_oid)
+    );
+}
+
+#[tokio::test]
+async fn stale_request_projection_identity_returns_the_rebuilding_response() {
+    let state = test_state_with_readme().await;
+    cache_test_jwks(&state);
+    create_owner_request(&state, "req_stale_projection", REQUEST_HEAD).await;
+    state
+        .metadata
+        .repositories()
+        .mutate_repository_for_tests(TEST_REPO_ID, |repo| {
+            repo.record.change_version += 1;
+        })
+        .await
+        .unwrap();
+    let app = router(state);
+
+    let stale = api_request(
+        app.clone(),
+        "GET",
+        "/v1/repos/owner/repo/requests/req_stale_projection",
+        Some(&bearer_header()),
+        None,
+    )
+    .await;
+    assert_eq!(stale.status(), StatusCode::SERVICE_UNAVAILABLE);
+    assert_eq!(
+        response_json(stale).await["error"],
+        "repository projection is rebuilding; retry shortly"
+    );
+
+    for uri in [
+        "/v1/repos/owner/repo/requests?cursor=v1:zzzz",
+        "/v1/repos/owner/repo/requests/queue?section=ready",
+    ] {
+        let empty = api_request(app.clone(), "GET", uri, Some(&bearer_header()), None).await;
+        assert_eq!(empty.status(), StatusCode::OK);
+        assert!(request_ids(&response_json(empty).await).is_empty());
+    }
+}
 
 #[tokio::test]
 async fn public_readers_do_not_see_private_request_branches() {

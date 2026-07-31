@@ -13,6 +13,8 @@ pub mod projection_read_model {
         pub source: String,
         #[sea_orm(primary_key, auto_increment = false)]
         pub audience: String,
+        pub head_oid: Option<String>,
+        pub identity_version: i16,
         pub rebuilt_at_unix: i64,
         pub file_count: i64,
     }
@@ -27,6 +29,7 @@ pub mod projection_read_model {
             repo_id: &str,
             repo_version: u64,
             audience: ProjectionAudience,
+            head_oid: Option<String>,
             rebuilt_at_unix: u64,
             file_count: usize,
         ) -> Result<Self, PostgresError> {
@@ -35,6 +38,8 @@ pub mod projection_read_model {
                 repo_version: u64_to_i64(repo_version, "projection repository version")?,
                 source: LIVE_PROJECTION_SOURCE.to_string(),
                 audience: audience.as_str().to_string(),
+                head_oid,
+                identity_version: scope_git::PROJECTION_IDENTITY_VERSION,
                 rebuilt_at_unix: u64_to_i64(rebuilt_at_unix, "projection rebuild time")?,
                 file_count: usize_to_i64(file_count, "projection file count")?,
             })

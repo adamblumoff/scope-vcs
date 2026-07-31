@@ -10,13 +10,42 @@ use std::{
     collections::BTreeMap,
     fs,
     ops::Deref,
+    panic::{AssertUnwindSafe, catch_unwind, resume_unwind},
     path::{Path, PathBuf},
-    sync::{Arc, Mutex},
+    sync::{Arc, Condvar, Mutex},
     time::{Duration, SystemTime},
 };
 
 const MAX_RAW_GIT_CACHES: usize = 8;
 const RAW_GIT_CACHE_MAX_IDLE: Duration = Duration::from_secs(30 * 60);
+
+#[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
+pub(crate) enum GitDerivedCacheNamespace {
+    Projection,
+    RawSnapshot,
+    RequestReadView,
+}
+
+#[derive(Clone, Debug, Eq, Ord, PartialEq, PartialOrd)]
+struct GitDerivedCacheKey {
+    namespace: GitDerivedCacheNamespace,
+    value: String,
+}
+
+type CacheBuildOutcome = Result<(), ApiError>;
+
+#[derive(Default)]
+struct CacheBuildState {
+    outcome: Mutex<Option<CacheBuildOutcome>>,
+    completed: Condvar,
+    #[cfg(test)]
+    followers: std::sync::atomic::AtomicUsize,
+}
+
+#[derive(Default)]
+pub(crate) struct GitDerivedCacheCoordinator {
+    builds: Mutex<BTreeMap<GitDerivedCacheKey, Arc<CacheBuildState>>>,
+}
 
 pub(crate) struct RawGitCacheRegistry {
     root: PathBuf,
@@ -26,6 +55,107 @@ pub(crate) struct RawGitCacheRegistry {
 pub(crate) struct GitRepoHandle {
     path: PathBuf,
     _lease: Option<RawGitCacheLease>,
+}
+
+impl GitDerivedCacheCoordinator {
+    pub(crate) fn materialize(
+        &self,
+        namespace: GitDerivedCacheNamespace,
+        value: String,
+        is_ready: impl Fn() -> bool,
+        build: impl FnOnce() -> Result<(), ApiError>,
+    ) -> Result<(), ApiError> {
+        if is_ready() {
+            return Ok(());
+        }
+
+        let key = GitDerivedCacheKey { namespace, value };
+        let (state, is_leader) = {
+            let mut builds = self.builds.lock().map_err(|_| {
+                ApiError::internal_message("Git cache build coordinator is poisoned")
+            })?;
+            match builds.get(&key) {
+                Some(state) => (state.clone(), false),
+                None => {
+                    let state = Arc::new(CacheBuildState::default());
+                    builds.insert(key.clone(), state.clone());
+                    (state, true)
+                }
+            }
+        };
+
+        if !is_leader {
+            #[cfg(test)]
+            state
+                .followers
+                .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            return wait_for_cache_build(&state);
+        }
+
+        // The first lookup and leader election are intentionally separate. Another
+        // process or a just-finished local builder may have promoted the cache in between.
+        let built = catch_unwind(AssertUnwindSafe(
+            || {
+                if is_ready() { Ok(()) } else { build() }
+            },
+        ));
+        let outcome = match &built {
+            Ok(result) => result.clone(),
+            Err(_) => Err(ApiError::internal_message("Git cache build panicked")),
+        };
+
+        {
+            let mut completed = state
+                .outcome
+                .lock()
+                .unwrap_or_else(|error| error.into_inner());
+            *completed = Some(outcome.clone());
+            state.completed.notify_all();
+        }
+        if let Ok(mut builds) = self.builds.lock()
+            && builds
+                .get(&key)
+                .is_some_and(|current| Arc::ptr_eq(current, &state))
+        {
+            builds.remove(&key);
+        }
+
+        match built {
+            Ok(result) => result,
+            Err(payload) => resume_unwind(payload),
+        }
+    }
+
+    #[cfg(test)]
+    fn follower_count(&self, namespace: GitDerivedCacheNamespace, value: &str) -> usize {
+        let key = GitDerivedCacheKey {
+            namespace,
+            value: value.to_string(),
+        };
+        self.builds
+            .lock()
+            .unwrap()
+            .get(&key)
+            .map(|state| state.followers.load(std::sync::atomic::Ordering::SeqCst))
+            .unwrap_or_default()
+    }
+}
+
+fn wait_for_cache_build(state: &CacheBuildState) -> Result<(), ApiError> {
+    let mut outcome = state
+        .outcome
+        .lock()
+        .map_err(|_| ApiError::internal_message("Git cache build state is poisoned"))?;
+    while outcome.is_none() {
+        outcome = state
+            .completed
+            .wait(outcome)
+            .map_err(|_| ApiError::internal_message("Git cache build state is poisoned"))?;
+    }
+    outcome
+        .as_ref()
+        .expect("cache build outcome checked")
+        .clone()
 }
 
 struct RawGitCacheLease {
@@ -289,6 +419,14 @@ fn remove_dir_if_exists(path: &Path) -> Result<(), ApiError> {
 mod tests {
     use super::*;
     use scope_domain::store::DEFAULT_GIT_FILE_MODE;
+    use std::{
+        sync::{
+            atomic::{AtomicBool, AtomicUsize, Ordering},
+            mpsc,
+        },
+        thread,
+        time::Instant,
+    };
 
     fn manifest(sha256: &str) -> SourceBlob {
         SourceBlob {
@@ -396,5 +534,190 @@ mod tests {
             format!("refs/heads/{DEFAULT_GIT_BRANCH}\0{head}\n")
         );
         let _ = fs::remove_dir_all(repo);
+    }
+
+    #[test]
+    fn concurrent_builds_coalesce_in_every_cache_namespace() {
+        for namespace in [
+            GitDerivedCacheNamespace::Projection,
+            GitDerivedCacheNamespace::RawSnapshot,
+            GitDerivedCacheNamespace::RequestReadView,
+        ] {
+            let coordinator = Arc::new(GitDerivedCacheCoordinator::default());
+            let ready = Arc::new(AtomicBool::new(false));
+            let builds = Arc::new(AtomicUsize::new(0));
+            let (leader_started_tx, leader_started_rx) = mpsc::channel();
+            let (release_leader_tx, release_leader_rx) = mpsc::channel();
+            let leader = {
+                let coordinator = coordinator.clone();
+                let ready = ready.clone();
+                let builds = builds.clone();
+                thread::spawn(move || {
+                    coordinator.materialize(
+                        namespace,
+                        "same-key".to_string(),
+                        || ready.load(Ordering::SeqCst),
+                        || {
+                            builds.fetch_add(1, Ordering::SeqCst);
+                            leader_started_tx.send(()).unwrap();
+                            release_leader_rx.recv().unwrap();
+                            ready.store(true, Ordering::SeqCst);
+                            Ok(())
+                        },
+                    )
+                })
+            };
+            leader_started_rx.recv().unwrap();
+            let follower = {
+                let coordinator = coordinator.clone();
+                let ready = ready.clone();
+                thread::spawn(move || {
+                    coordinator.materialize(
+                        namespace,
+                        "same-key".to_string(),
+                        || ready.load(Ordering::SeqCst),
+                        || panic!("follower must not build"),
+                    )
+                })
+            };
+            wait_for_follower(&coordinator, namespace, "same-key");
+            release_leader_tx.send(()).unwrap();
+            leader.join().unwrap().unwrap();
+            follower.join().unwrap().unwrap();
+            assert_eq!(builds.load(Ordering::SeqCst), 1, "{namespace:?}");
+        }
+    }
+
+    #[test]
+    fn failed_build_is_shared_with_followers_and_then_can_retry() {
+        let coordinator = Arc::new(GitDerivedCacheCoordinator::default());
+        let builds = Arc::new(AtomicUsize::new(0));
+        let (leader_started_tx, leader_started_rx) = mpsc::channel();
+        let (release_leader_tx, release_leader_rx) = mpsc::channel();
+        let leader = {
+            let coordinator = coordinator.clone();
+            let builds = builds.clone();
+            thread::spawn(move || {
+                coordinator.materialize(
+                    GitDerivedCacheNamespace::Projection,
+                    "failed-key".to_string(),
+                    || false,
+                    || {
+                        builds.fetch_add(1, Ordering::SeqCst);
+                        leader_started_tx.send(()).unwrap();
+                        release_leader_rx.recv().unwrap();
+                        Err(ApiError::service_unavailable("shared build failure"))
+                    },
+                )
+            })
+        };
+        leader_started_rx.recv().unwrap();
+        let follower = {
+            let coordinator = coordinator.clone();
+            thread::spawn(move || {
+                coordinator.materialize(
+                    GitDerivedCacheNamespace::Projection,
+                    "failed-key".to_string(),
+                    || false,
+                    || panic!("follower must not build"),
+                )
+            })
+        };
+        wait_for_follower(
+            &coordinator,
+            GitDerivedCacheNamespace::Projection,
+            "failed-key",
+        );
+        release_leader_tx.send(()).unwrap();
+        for worker in [leader, follower] {
+            let error = worker.join().unwrap().unwrap_err();
+            assert_eq!(error.kind, crate::error::ErrorKind::ServiceUnavailable);
+            assert_eq!(error.message(), "shared build failure");
+        }
+        assert_eq!(builds.load(Ordering::SeqCst), 1);
+
+        let ready = AtomicBool::new(false);
+        coordinator
+            .materialize(
+                GitDerivedCacheNamespace::Projection,
+                "failed-key".to_string(),
+                || ready.load(Ordering::SeqCst),
+                || {
+                    builds.fetch_add(1, Ordering::SeqCst);
+                    ready.store(true, Ordering::SeqCst);
+                    Ok(())
+                },
+            )
+            .unwrap();
+        assert_eq!(builds.load(Ordering::SeqCst), 2);
+    }
+
+    #[test]
+    fn cache_namespaces_do_not_hide_global_capacity_pressure() {
+        let coordinator = Arc::new(GitDerivedCacheCoordinator::default());
+        let budgets = Arc::new(crate::runtime_budgets::RuntimeBudgets::from_config(
+            crate::runtime_budgets::RuntimeBudgetConfig {
+                projection_build_concurrency: 1,
+                ..Default::default()
+            },
+        ));
+        let projection_ready = Arc::new(AtomicBool::new(false));
+        let (leader_started_tx, leader_started_rx) = mpsc::channel();
+        let (release_leader_tx, release_leader_rx) = mpsc::channel();
+        let leader = {
+            let coordinator = coordinator.clone();
+            let budgets = budgets.clone();
+            let projection_ready = projection_ready.clone();
+            thread::spawn(move || {
+                coordinator.materialize(
+                    GitDerivedCacheNamespace::Projection,
+                    "shared-value".to_string(),
+                    || projection_ready.load(Ordering::SeqCst),
+                    || {
+                        let _permit = budgets.try_projection_build()?;
+                        leader_started_tx.send(()).unwrap();
+                        release_leader_rx.recv().unwrap();
+                        projection_ready.store(true, Ordering::SeqCst);
+                        Ok(())
+                    },
+                )
+            })
+        };
+        leader_started_rx.recv().unwrap();
+
+        let error = coordinator
+            .materialize(
+                GitDerivedCacheNamespace::RawSnapshot,
+                "shared-value".to_string(),
+                || false,
+                || {
+                    let _permit = budgets.try_projection_build()?;
+                    Ok(())
+                },
+            )
+            .unwrap_err();
+
+        assert_eq!(error.kind, crate::error::ErrorKind::TooManyRequests);
+        assert_eq!(
+            error.message(),
+            "Git projection build capacity is exhausted; retry later"
+        );
+        release_leader_tx.send(()).unwrap();
+        leader.join().unwrap().unwrap();
+    }
+
+    fn wait_for_follower(
+        coordinator: &GitDerivedCacheCoordinator,
+        namespace: GitDerivedCacheNamespace,
+        key: &str,
+    ) {
+        let deadline = Instant::now() + Duration::from_secs(1);
+        while coordinator.follower_count(namespace, key) == 0 {
+            assert!(
+                Instant::now() < deadline,
+                "follower did not join the in-flight cache build"
+            );
+            thread::yield_now();
+        }
     }
 }

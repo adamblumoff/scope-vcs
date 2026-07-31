@@ -86,6 +86,52 @@ async fn upload_pack_capacity_exhaustion_happens_before_projection_build() {
 }
 
 #[tokio::test]
+async fn cold_git_backed_projection_succeeds_with_one_build_permit() {
+    let (mut state, _source, _head_oid) =
+        super::push_intent_completion::published_git_fixture("single-projection-permit").await;
+    let stored = find_repo(&state, TEST_REPO_OWNER, TEST_REPO_NAME)
+        .await
+        .unwrap();
+    let manifest = stored.git_head.as_ref().unwrap().manifest.clone();
+    let projection = project_graph(
+        &stored.graph,
+        &stored.visibility_events,
+        ProjectionViewKey::Public,
+    );
+    assert!(projection.commits.iter().any(|commit| {
+        commit.changes.iter().any(|change| {
+            change.new_content.as_ref().is_some_and(|blob| {
+                matches!(
+                    blob.content_ref,
+                    scope_domain::content_ref::ContentRef::GitBlob { .. }
+                )
+            })
+        })
+    }));
+
+    let cache_root = state.git_cache_root().unwrap();
+    fs::remove_dir_all(&cache_root).unwrap();
+    fs::create_dir_all(&cache_root).unwrap();
+    state.runtime_budgets = Arc::new(RuntimeBudgets::from_config(RuntimeBudgetConfig {
+        projection_build_concurrency: 1,
+        ..Default::default()
+    }));
+
+    let projection_repo = projection_bare_repo_for_state(&state, &projection, Some(&manifest))
+        .expect("raw restore must release capacity before projection materialization");
+
+    assert_eq!(
+        git_stdout_text(
+            &projection_repo,
+            &["show", "refs/heads/main:README.md"],
+            "read projected Git-backed file",
+        )
+        .unwrap(),
+        "hello\n"
+    );
+}
+
+#[tokio::test]
 async fn object_store_capacity_exhaustion_returns_backpressure() {
     let (_, store) = budgeted_store(RuntimeBudgetConfig {
         object_store_concurrency: 0,

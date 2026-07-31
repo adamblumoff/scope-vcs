@@ -3,7 +3,7 @@ use crate::{
     config::{
         SCOPE_OPERATOR_TOKEN_ENV, data_dir, database_url_from_env, git_repo_root, non_empty_env,
     },
-    git::cache::RawGitCacheRegistry,
+    git::cache::{GitDerivedCacheCoordinator, RawGitCacheRegistry},
     object_store_config::{encryption_key_from_env, s3_from_env},
     persistence::ensure_private_dir,
     push_intents::push_intent_signing_key,
@@ -26,6 +26,7 @@ pub struct AppState {
     pub(crate) repo_events: RepoChangeBus,
     pub(crate) push_intent_signing_key: Arc<[u8]>,
     pub(crate) raw_git_cache: Arc<RawGitCacheRegistry>,
+    pub(crate) git_cache_builds: Arc<GitDerivedCacheCoordinator>,
     #[cfg(test)]
     pub(crate) test_object_store: Arc<scope_object_store::MemoryObjectStore>,
 }
@@ -66,6 +67,7 @@ impl AppState {
             repo_events,
             push_intent_signing_key,
             raw_git_cache: raw_git_cache.clone(),
+            git_cache_builds: Arc::new(GitDerivedCacheCoordinator::default()),
             #[cfg(test)]
             test_object_store: Arc::new(scope_object_store::MemoryObjectStore::new()),
         };
@@ -105,6 +107,7 @@ impl AppState {
             repo_events: RepoChangeBus::default(),
             push_intent_signing_key: Arc::from(b"scope-test-push-intent-signing-key".as_slice()),
             raw_git_cache: RawGitCacheRegistry::new(data_dir.join("git-cache")).unwrap(),
+            git_cache_builds: Arc::new(GitDerivedCacheCoordinator::default()),
             #[cfg(test)]
             test_object_store,
         }

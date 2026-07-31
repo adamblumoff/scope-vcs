@@ -1,12 +1,7 @@
 use crate::{
     auth::scope::{optional_scope_user, principal_for_scope_user, require_scope_user},
-    config::DEFAULT_GIT_BRANCH,
     error::ApiError,
-    git::{
-        import::git_refs, projection_repo::projection_bare_repo_for_state,
-        request_merge::prepare_request_merge, request_refs::delete_request_ref_from_store,
-        storage::cached_raw_git_repo,
-    },
+    git::{request_merge::prepare_request_merge, request_refs::delete_request_ref_from_store},
     http::responses::*,
     persistence::unix_now,
     repo_access::{ensure_repo_read, find_repo},
@@ -63,7 +58,6 @@ pub(crate) async fn list_requests(
         .limit
         .unwrap_or(REQUEST_LIST_DEFAULT_PAGE_SIZE)
         .clamp(1, REQUEST_LIST_MAX_PAGE_SIZE);
-    let current_main_oid = current_main_oid_for_access(&state, &repo, access)?;
     let mut requests = Vec::with_capacity(limit + 1);
     for request in state
         .metadata
@@ -108,6 +102,11 @@ pub(crate) async fn list_requests(
     } else {
         None
     };
+    let current_main_oid = if requests.is_empty() {
+        None
+    } else {
+        current_main_oid_for_access(&state, &repo, access).await?
+    };
     let requests = requests
         .into_iter()
         .map(|request| request_list_item_response(request, access, current_main_oid.clone()))
@@ -146,7 +145,7 @@ pub(crate) async fn get_request(
         &request_id,
     )
     .await?;
-    let current_main_oid = current_main_oid_for_access(&state, &repo, access)?;
+    let current_main_oid = current_main_oid_for_access(&state, &repo, access).await?;
     let request = request_response_for_viewer(
         &state,
         request,
@@ -473,7 +472,7 @@ async fn lifecycle_response(
     request: Request,
     refresh_reason: RepoChangeReason,
 ) -> Result<Json<RequestMutationResponse>, ApiError> {
-    let current_main_oid = current_main_oid_for_access(state, repo, access)?;
+    let current_main_oid = committed_main_oid_for_access(repo, access)?;
     let request = request_response_for_viewer(
         state,
         request,
@@ -486,6 +485,24 @@ async fn lifecycle_response(
         .publish_request_summary_refresh(&repo.record.id, refresh_reason)
         .await;
     Ok(Json(RequestMutationResponse { request }))
+}
+
+fn committed_main_oid_for_access(
+    repo: &StoredRepository,
+    access: RepositoryAccess,
+) -> Result<Option<String>, ApiError> {
+    if access.actor != RepositoryActor::Public
+        && access.can_read_private_files
+        && let Some(head) = repo.git_head.as_ref()
+    {
+        return Ok(Some(head.head_oid.clone()));
+    }
+    let projection = project_graph(
+        &repo.graph,
+        &repo.visibility_events,
+        ProjectionViewKey::from_access(access),
+    );
+    scope_git::projection_head_oid(&projection).map_err(ApiError::internal)
 }
 
 pub(crate) async fn close_request(
@@ -529,7 +546,7 @@ pub(crate) async fn close_request(
             }))
         }
         CloseRequestMutation::Completed { request, .. } => {
-            let current_main_oid = current_main_oid_for_access(&state, &repo, access)?;
+            let current_main_oid = committed_main_oid_for_access(&repo, access)?;
             let request = request_response_for_viewer(
                 &state,
                 request,
@@ -566,7 +583,8 @@ pub(crate) async fn start_request(
             "public contributors can only create public requests",
         ));
     }
-    let base_main_oid = current_main_oid_for_audience(&state, &repo, audience)?
+    let base_main_oid = current_main_oid_for_audience(&state, &repo, audience)
+        .await?
         .ok_or_else(|| ApiError::conflict("repo has no main branch to base a request on"))?;
     let request_id = random_id("req")?;
     let now_unix = unix_now()?;
@@ -586,7 +604,7 @@ pub(crate) async fn start_request(
             now_unix,
         })
         .await?;
-    let current_main_oid = current_main_oid_for_access(&state, &repo, access)?;
+    let current_main_oid = committed_main_oid_for_access(&repo, access)?;
     let request = request_response_for_viewer(
         &state,
         mutation.request,
@@ -623,7 +641,7 @@ pub(crate) async fn edit_request_identity(
             now_unix: unix_now()?,
         })
         .await?;
-    let current_main_oid = current_main_oid_for_access(&state, &repo, access)?;
+    let current_main_oid = committed_main_oid_for_access(&repo, access)?;
     let request = request_response_for_viewer(
         &state,
         mutation.request,
@@ -744,7 +762,7 @@ async fn invitee_mutation_response(
         .request_by_id(&request_id)
         .await?
         .ok_or_else(|| ApiError::not_found("request not found"))?;
-    let current_main_oid = current_main_oid_for_access(state, repo, access)?;
+    let current_main_oid = committed_main_oid_for_access(repo, access)?;
     let request = request_response_for_viewer(
         state,
         request,
@@ -888,62 +906,45 @@ async fn request_response_for_viewer(
     request_summary_response(request, invitees, permissions, mergeability)
 }
 
-pub(crate) fn current_main_oid_for_access(
+pub(crate) async fn current_main_oid_for_access(
     state: &AppState,
     repo: &StoredRepository,
     access: RepositoryAccess,
 ) -> Result<Option<String>, ApiError> {
-    match access.actor {
-        RepositoryActor::Owner | RepositoryActor::Member => {
-            if let Some(head) = repo.git_head.as_ref() {
-                let repo_path = cached_raw_git_repo(state, &head.manifest)?;
-                return main_oid_from_git_repo(&repo_path);
-            }
-            projection_main_oid(state, repo, ProjectionViewKey::Private)
-        }
-        RepositoryActor::Public => projection_main_oid(state, repo, ProjectionViewKey::Public),
+    if access.actor != RepositoryActor::Public
+        && access.can_read_private_files
+        && let Some(head) = repo.git_head.as_ref()
+    {
+        return Ok(Some(head.head_oid.clone()));
     }
+    let head_oid = state
+        .metadata
+        .repositories()
+        .live_projection_head_oid(repo, ProjectionViewKey::from_access(access))
+        .await?;
+    Ok(head_oid)
 }
 
-fn current_main_oid_for_audience(
+pub(crate) async fn current_main_oid_for_audience(
     state: &AppState,
     repo: &StoredRepository,
     audience: RequestAudience,
 ) -> Result<Option<String>, ApiError> {
-    match audience {
-        RequestAudience::Public => projection_main_oid(state, repo, ProjectionViewKey::Public),
-        RequestAudience::Private => {
-            if let Some(head) = repo.git_head.as_ref() {
-                let repo_path = cached_raw_git_repo(state, &head.manifest)?;
-                return main_oid_from_git_repo(&repo_path);
-            }
-            projection_main_oid(state, repo, ProjectionViewKey::Private)
-        }
+    if audience == RequestAudience::Private
+        && let Some(head) = repo.git_head.as_ref()
+    {
+        return Ok(Some(head.head_oid.clone()));
     }
-}
-
-fn projection_main_oid(
-    state: &AppState,
-    repo: &StoredRepository,
-    view_key: ProjectionViewKey,
-) -> Result<Option<String>, ApiError> {
-    let projection = project_graph(&repo.graph, &repo.visibility_events, view_key);
-    if projection.commits.is_empty() {
-        return Ok(None);
-    }
-    let repo_path = projection_bare_repo_for_state(
-        state,
-        &projection,
-        repo.git_head.as_ref().map(|head| &head.manifest),
-    )?;
-    main_oid_from_git_repo(&repo_path)
-}
-
-fn main_oid_from_git_repo(repo_path: &std::path::Path) -> Result<Option<String>, ApiError> {
-    let main_ref = format!("refs/heads/{DEFAULT_GIT_BRANCH}");
-    Ok(git_refs(repo_path)?
-        .into_iter()
-        .find_map(|(refname, oid)| (refname == main_ref).then_some(oid)))
+    let view_key = match audience {
+        RequestAudience::Private => ProjectionViewKey::Private,
+        RequestAudience::Public => ProjectionViewKey::Public,
+    };
+    state
+        .metadata
+        .repositories()
+        .live_projection_head_oid(repo, view_key)
+        .await
+        .map_err(Into::into)
 }
 
 pub(crate) fn random_id(prefix: &str) -> Result<String, ApiError> {

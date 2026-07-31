@@ -18,7 +18,7 @@ pub(crate) enum ErrorKind {
     Unauthorized,
 }
 
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 pub(crate) struct ApiError {
     pub(crate) kind: ErrorKind,
     message: String,

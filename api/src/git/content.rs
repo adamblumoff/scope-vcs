@@ -6,6 +6,7 @@ use crate::{
 use scope_domain::{content_ref::ContentRef, store::SourceBlob};
 use scope_git::git_blob_reference as segment_git_blob_reference;
 use scope_object_store::source_blob_bytes;
+use std::path::Path;
 
 pub(crate) fn git_blob_reference(
     snapshot: &SourceBlob,
@@ -26,6 +27,26 @@ pub(crate) fn source_content_bytes(
     blob: &SourceBlob,
     git_manifest: Option<&SourceBlob>,
 ) -> Result<Vec<u8>, ApiError> {
+    if !matches!(blob.content_ref, ContentRef::GitBlob { .. }) {
+        return Ok(source_blob_bytes(state.object_store.as_ref(), blob)?);
+    }
+    let manifest = git_manifest.ok_or_else(|| {
+        ApiError::internal_message("Git blob content requires a current manifest locator")
+    })?;
+    if !matches!(manifest.content_ref, ContentRef::GitManifestSha256(_)) {
+        return Err(ApiError::internal_message(
+            "Git blob content locator must be a Git manifest",
+        ));
+    }
+    let repo = cached_raw_git_repo(state, manifest)?;
+    source_content_bytes_from_repo(state, blob, Some(&repo))
+}
+
+pub(crate) fn source_content_bytes_from_repo(
+    state: &AppState,
+    blob: &SourceBlob,
+    git_repo: Option<&Path>,
+) -> Result<Vec<u8>, ApiError> {
     let ContentRef::GitBlob {
         git_oid: content_oid,
     } = &blob.content_ref
@@ -37,17 +58,11 @@ pub(crate) fn source_content_bytes(
             "Git blob identity does not match persisted OID",
         ));
     }
-    let manifest = git_manifest.ok_or_else(|| {
-        ApiError::internal_message("Git blob content requires a current manifest locator")
+    let repo = git_repo.ok_or_else(|| {
+        ApiError::internal_message("Git blob content requires a materialized source repository")
     })?;
-    if !matches!(manifest.content_ref, ContentRef::GitManifestSha256(_)) {
-        return Err(ApiError::internal_message(
-            "Git blob content locator must be a Git manifest",
-        ));
-    }
-    let repo = cached_raw_git_repo(state, manifest)?;
     let output = run_git_output(
-        Some(&repo),
+        Some(repo),
         &["cat-file", "blob", &blob.git_oid],
         "reading Git blob content",
     )?;
