@@ -3,6 +3,21 @@ use scope_domain::requests::{
     RecordWorkingRequestUploadInput, RequestActorRole, RequestAudience, StartRequestInput,
 };
 
+pub(crate) async fn rebuild_request_projection(state: &AppState) {
+    let rebuilt = state
+        .metadata
+        .jobs()
+        .run_ready_outbox_jobs(
+            "request-read-test",
+            10,
+            &|| crate::persistence::unix_now().map_err(crate::error::ApiError::into_message),
+            &crate::persistence_ids::generate_persistence_id,
+        )
+        .await
+        .unwrap();
+    assert_eq!(rebuilt.failed, 0);
+}
+
 pub(crate) async fn create_owner_request(state: &AppState, request_id: &str, head_oid: &str) {
     create_request(RequestFixture {
         state,
@@ -51,6 +66,7 @@ struct RequestFixture<'a> {
 }
 
 async fn create_request(fixture: RequestFixture<'_>) {
+    rebuild_request_projection(fixture.state).await;
     fixture
         .state
         .metadata

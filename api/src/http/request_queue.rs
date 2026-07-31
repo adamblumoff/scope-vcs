@@ -108,7 +108,11 @@ pub(crate) async fn request_queue(
     } else {
         None
     };
-    let current_main_oid = current_main_oid_for_access(&state, &repo, access)?;
+    let current_main_oid = if rows.is_empty() {
+        None
+    } else {
+        current_main_oid_for_access(&state, &repo, access).await?
+    };
     let requests = rows
         .into_iter()
         .map(|row| request_list_item_response(row.request, access, current_main_oid.clone()))
