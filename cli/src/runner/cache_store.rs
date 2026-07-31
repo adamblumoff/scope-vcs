@@ -17,10 +17,10 @@ struct StoreIdentity {
     format: u8,
 }
 
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(super) struct Capacity {
     pub(super) available_bytes: u64,
-    pub(super) available_inodes: u64,
+    pub(super) available_inodes: Option<u64>,
 }
 
 pub(super) fn validate_store(root: &Path, initialize: bool) -> anyhow::Result<Capacity> {
@@ -75,6 +75,10 @@ fn filesystem_capacity(root: &Path) -> anyhow::Result<Capacity> {
             .arg(root),
         "inspect cache filesystem capacity",
     )?;
+    parse_capacity(&output)
+}
+
+fn parse_capacity(output: &str) -> anyhow::Result<Capacity> {
     let values = output
         .lines()
         .last()
@@ -85,16 +89,19 @@ fn filesystem_capacity(root: &Path) -> anyhow::Result<Capacity> {
             .next()
             .context("cache byte capacity is missing")?
             .parse()?,
-        available_inodes: fields
-            .next()
-            .context("cache inode capacity is missing")?
-            .parse()?,
+        available_inodes: match fields.next().context("cache inode capacity is missing")? {
+            "-" | "0" => None,
+            available => Some(available.parse()?),
+        },
     })
 }
 
 pub(super) fn has_capacity(root: &Path) -> anyhow::Result<bool> {
     let capacity = filesystem_capacity(root)?;
-    Ok(capacity.available_bytes >= MIN_FREE_BYTES && capacity.available_inodes >= MIN_FREE_INODES)
+    Ok(capacity.available_bytes >= MIN_FREE_BYTES
+        && capacity
+            .available_inodes
+            .is_none_or(|available| available >= MIN_FREE_INODES))
 }
 
 pub(super) fn ensure_capacity(
@@ -126,4 +133,27 @@ fn prune_root(root: &Path, runner_id: &str) -> anyhow::Result<()> {
         }
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{Capacity, parse_capacity};
+
+    #[test]
+    fn dynamic_inode_counts_are_an_unavailable_metric() {
+        assert_eq!(
+            parse_capacity("Avail IFree\n123 -\n").unwrap(),
+            Capacity {
+                available_bytes: 123,
+                available_inodes: None,
+            }
+        );
+        assert_eq!(
+            parse_capacity("Avail IFree\n123 0\n").unwrap(),
+            Capacity {
+                available_bytes: 123,
+                available_inodes: None,
+            }
+        );
+    }
 }

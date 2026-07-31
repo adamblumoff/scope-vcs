@@ -335,7 +335,9 @@ pub(super) fn doctor(config: &RunnerConfig) -> anyhow::Result<()> {
         "✓ cache storage {} ({} GiB free, {} inodes free)",
         root.display(),
         capacity.available_bytes / (1024 * 1024 * 1024),
-        capacity.available_inodes
+        capacity
+            .available_inodes
+            .map_or_else(|| "dynamic".to_string(), |available| available.to_string())
     );
     Ok(())
 }
