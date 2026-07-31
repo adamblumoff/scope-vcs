@@ -2,7 +2,8 @@ use crate::{
     config::DEFAULT_GIT_BRANCH,
     error::ApiError,
     git::{
-        content::source_content_bytes,
+        cache::GitDerivedCacheNamespace,
+        content::source_content_bytes_from_repo,
         storage::cached_raw_git_repo,
         upload::{git_command_output, git_process_output_with_timeout, truncated_git_stderr},
     },
@@ -10,6 +11,7 @@ use crate::{
     state::AppState,
 };
 use scope_domain::{
+    content_ref::ContentRef,
     projection::{Projection, ProjectionMaterialization},
     store::is_supported_git_file_mode,
 };
@@ -24,6 +26,18 @@ use std::{
 
 const PROJECTION_CACHE_SEMANTICS_VERSION: &str = "shared-projection-view-v2-native-commits";
 static PROJECTION_CACHE_ATTEMPT: AtomicU64 = AtomicU64::new(1);
+
+struct ProjectionBuildArtifacts {
+    repo: PathBuf,
+    index: PathBuf,
+}
+
+impl Drop for ProjectionBuildArtifacts {
+    fn drop(&mut self) {
+        let _ = fs::remove_dir_all(&self.repo);
+        let _ = fs::remove_file(&self.index);
+    }
+}
 
 fn projection_bare_repo_with_loader(
     cache_root: &FsPath,
@@ -48,9 +62,21 @@ fn projection_bare_repo_with_loader(
         std::process::id(),
         attempt
     ));
+    let index_path = cache_root.join(format!(
+        "{cache_key}.{}.{}.index",
+        std::process::id(),
+        attempt
+    ));
     if temp_path.exists() {
         fs::remove_dir_all(&temp_path).map_err(ApiError::internal)?;
     }
+    if index_path.exists() {
+        fs::remove_file(&index_path).map_err(ApiError::internal)?;
+    }
+    let _artifacts = ProjectionBuildArtifacts {
+        repo: temp_path.clone(),
+        index: index_path.clone(),
+    };
 
     git_command_output(
         Command::new("git")
@@ -68,15 +94,6 @@ fn projection_bare_repo_with_loader(
             .arg(format!("refs/heads/{DEFAULT_GIT_BRANCH}")),
         None,
     )?;
-    let index_path = cache_root.join(format!(
-        "{cache_key}.{}.{}.index",
-        std::process::id(),
-        attempt
-    ));
-    if index_path.exists() {
-        fs::remove_file(&index_path).map_err(ApiError::internal)?;
-    }
-
     let mut visible_tree = BTreeMap::new();
     let mut parent_commit: Option<String> = None;
     let mut native_range: Option<NativeRangeState> = None;
@@ -189,6 +206,15 @@ fn projection_bare_repo_with_loader(
     }
 
     let commit = parent_commit.ok_or_else(|| ApiError::internal_message("missing Git commit"))?;
+    if let Some(expected_head) =
+        scope_git::projection_head_oid(projection).map_err(ApiError::internal)?
+        && commit.trim() != expected_head
+    {
+        return Err(ApiError::internal_message(format!(
+            "materialized projection head {} does not match canonical identity {expected_head}",
+            commit.trim()
+        )));
+    }
     git_command_output(
         Command::new("git")
             .arg("--git-dir")
@@ -199,7 +225,6 @@ fn projection_bare_repo_with_loader(
         None,
     )?;
 
-    let _ = fs::remove_file(&index_path);
     match fs::rename(&temp_path, &repo_path) {
         Ok(()) => Ok(repo_path),
         Err(error) if repo_path.exists() => {
@@ -375,45 +400,40 @@ pub(crate) fn projection_bare_repo_for_state(
     let cache_root = state.git_cache_root()?;
     let cache_key = projection_cache_key(projection);
     let repo_path = cache_root.join(format!("{cache_key}.git"));
-    if repo_path
-        .join("refs")
-        .join("heads")
-        .join(DEFAULT_GIT_BRANCH)
-        .is_file()
-    {
-        return Ok(repo_path);
-    }
-
-    let _permit = state.runtime_budgets.try_projection_build()?;
-    let preserves_native_commits = projection.commits.iter().any(|commit| {
-        matches!(
-            &commit.materialization,
-            ProjectionMaterialization::PreserveGitCommit { .. }
-        )
-    });
-    let native_source_repo = if preserves_native_commits {
-        let manifest = git_manifest.ok_or_else(|| {
-            ApiError::internal_message(
-                "native public projection commit requires a canonical Git manifest",
+    let is_ready = || projection_cache_is_ready(&repo_path);
+    state.git_cache_builds.materialize(
+        GitDerivedCacheNamespace::Projection,
+        cache_key,
+        is_ready,
+        || {
+            let raw_source_repo = if projection_requires_raw_source(projection) {
+                let manifest = git_manifest.ok_or_else(|| {
+                    ApiError::internal_message(
+                        "Git-backed projection requires a canonical Git manifest",
+                    )
+                })?;
+                Some(cached_raw_git_repo(state, manifest)?)
+            } else {
+                None
+            };
+            let _permit = state.runtime_budgets.try_projection_build()?;
+            projection_bare_repo_with_loader(
+                &cache_root,
+                projection,
+                raw_source_repo.as_deref(),
+                |blob| source_content_bytes_from_repo(state, blob, raw_source_repo.as_deref()),
             )
-        })?;
-        Some(cached_raw_git_repo(state, manifest)?)
-    } else {
-        None
-    };
-    projection_bare_repo_with_loader(
-        &cache_root,
-        projection,
-        native_source_repo.as_deref(),
-        |blob| source_content_bytes(state, blob, git_manifest),
-    )
+            .map(|_| ())
+        },
+    )?;
+    Ok(repo_path)
 }
 
 pub(crate) fn verify_projection_materialization(
     state: &AppState,
     projection: &Projection,
     native_source_repo: &FsPath,
-    git_manifest: &scope_domain::store::SourceBlob,
+    _git_manifest: &scope_domain::store::SourceBlob,
 ) -> Result<(), ApiError> {
     let cache_root = state.git_cache_root()?;
     let attempt = PROJECTION_CACHE_ATTEMPT.fetch_add(1, Ordering::Relaxed);
@@ -427,7 +447,7 @@ pub(crate) fn verify_projection_materialization(
         &verification_root,
         projection,
         Some(native_source_repo),
-        |blob| source_content_bytes(state, blob, Some(git_manifest)),
+        |blob| source_content_bytes_from_repo(state, blob, Some(native_source_repo)),
     )
     .map(|_| ());
     let cleanup = fs::remove_dir_all(&verification_root).map_err(ApiError::internal);
@@ -436,6 +456,28 @@ pub(crate) fn verify_projection_materialization(
         (Err(error), _) => Err(error),
         (Ok(()), Err(error)) => Err(error),
     }
+}
+
+fn projection_requires_raw_source(projection: &Projection) -> bool {
+    projection.commits.iter().any(|commit| {
+        matches!(
+            commit.materialization,
+            ProjectionMaterialization::PreserveGitCommit { .. }
+        ) || commit.changes.iter().any(|change| {
+            change
+                .new_content
+                .as_ref()
+                .is_some_and(|blob| matches!(blob.content_ref, ContentRef::GitBlob { .. }))
+        })
+    })
+}
+
+fn projection_cache_is_ready(repo_path: &FsPath) -> bool {
+    repo_path
+        .join("refs")
+        .join("heads")
+        .join(DEFAULT_GIT_BRANCH)
+        .is_file()
 }
 
 fn projection_cache_key(projection: &Projection) -> String {

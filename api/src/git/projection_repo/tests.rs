@@ -8,6 +8,45 @@ use scope_domain::{
 use std::time::{SystemTime, UNIX_EPOCH};
 
 #[test]
+fn generated_projection_matches_canonical_head_identity() {
+    let root = std::env::temp_dir().join(format!(
+        "scope-generated-projection-{}-{}",
+        std::process::id(),
+        SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos()
+    ));
+    fs::create_dir_all(&root).unwrap();
+    let projection = Projection {
+        repo_id: "repo".to_string(),
+        view_key: ProjectionViewKey::Public,
+        commits: vec![ProjectedCommit {
+            projected_id: "generated-base".to_string(),
+            logical_commit_id: "logical-base".to_string(),
+            parent_projected_id: None,
+            author: Some("owner".to_string()),
+            message: "base".to_string(),
+            changes: vec![projected_change("/README.md", "base\n")],
+            materialization: ProjectionMaterialization::Generate,
+        }],
+    };
+
+    let repo = projection_bare_repo_with_loader(&root, &projection, None, |blob| {
+        Ok(blob.sha256.as_bytes().to_vec())
+    })
+    .unwrap();
+
+    assert_eq!(
+        git_object_field(&repo, "refs/heads/main", "%H").unwrap(),
+        scope_git::projection_head_oid(&projection)
+            .unwrap()
+            .expect("non-empty projection has a head")
+    );
+    let _ = fs::remove_dir_all(root);
+}
+
+#[test]
 fn native_commit_is_reused_exactly_and_tree_corruption_fails_closed() {
     let root = std::env::temp_dir().join(format!(
         "scope-native-projection-{}-{}",
@@ -184,12 +223,15 @@ fn native_commit_is_reused_exactly_and_tree_corruption_fails_closed() {
 }
 
 fn projected_change(path: &str, content: &str) -> ProjectedChange {
+    let mut git_blob = Sha1::new();
+    git_blob.update(format!("blob {}\0", content.len()).as_bytes());
+    git_blob.update(content.as_bytes());
     ProjectedChange {
         path: ScopePath::parse(path).unwrap(),
         new_content: Some(SourceBlob {
             content_ref: ContentRef::blob_sha256(content),
             sha256: content.to_string(),
-            git_oid: String::new(),
+            git_oid: hex::encode(git_blob.finalize()),
             git_file_mode: "100644".to_string(),
             size_bytes: content.len() as u64,
         }),
