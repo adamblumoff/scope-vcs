@@ -855,6 +855,7 @@ fn revision_for_repository_with_runner(
             runner,
             ContainerSpec::new("rust:1.90").unwrap(),
             20 * 60,
+            vec![],
             vec![WorkflowStep::new("Test", "cargo test").unwrap()],
         )
         .unwrap(),
@@ -917,7 +918,7 @@ fn run_with_options(
     )
 }
 
-fn run_for_revision(
+pub(super) fn run_for_revision(
     id: &str,
     idempotency_key: &str,
     revision: &WorkflowRevision,

@@ -2,36 +2,38 @@ use crate::{
     api::{
         AttemptRecoveryLookup, abandon_attempt, api_url, append_attempt_log,
         attach_runner_repository, attempt_heartbeat, attempt_recovery_status,
-        attempt_recovery_status_if_active, attempt_source, complete_attempt,
-        detach_runner_repository, get_repo, get_runner, register_runner, runner_claim, runner_poll,
+        attempt_recovery_status_if_active, complete_attempt, detach_runner_repository, get_repo,
+        get_runner, register_runner, runner_claim, runner_poll, upgrade_runner_registration,
     },
     login::session_from_cache_or_device,
 };
 use anyhow::{Context, bail};
 use reqwest::blocking::Client;
 use scope_api_contract::{
-    AppendAttemptLogRequest, AttemptConclusionRequest, ClaimRunResponse, CompleteAttemptRequest,
-    RegisterRunnerRequest, RunnerResponse,
+    AppendAttemptLogRequest, AttemptCacheFinalizationOutcome, AttemptConclusionRequest,
+    ClaimRunResponse, CompleteAttemptRequest, RegisterRunnerRequest,
+    UpgradeRunnerRegistrationRequest,
 };
 use scope_domain::runs::{
     run::StepState,
     runner::{RUNNER_PROTOCOL_VERSION, RunnerCapabilities},
     step::MAX_RUN_SETUP_FAILURE_MESSAGE_BYTES,
 };
-use sha2::{Digest, Sha256};
 use std::{
-    fs,
-    io::{Read, Write},
     path::Path,
     process::Command,
     thread,
-    time::Duration,
+    time::{Duration, Instant},
 };
 
+mod cache;
 mod checkout;
 mod config;
 mod container;
 mod image;
+mod management;
+mod resources;
+mod source;
 mod step_logs;
 mod steps;
 mod supervisor;
@@ -39,23 +41,29 @@ mod systemd;
 mod workspace;
 use checkout::checkout_exact_commit;
 use config::{
-    RunnerConfig, load_runner_config, load_runner_config_from, runner_config_path,
-    scope_config_home, store_runner_config,
+    RunnerConfig, configured_cache_root, load_runner_config, load_runner_config_from,
+    runner_config_path, scope_config_home, store_runner_config,
 };
 #[cfg(test)]
 use container::apply_container_limits;
 use container::{
-    ContainerGuard, configure_job_container_creation, container_started_at_unix, doctor_local,
-    stop_container,
+    ContainerGuard, JobContainerSpec, configure_job_container_creation, configure_source_copy,
+    container_started_at_unix, doctor_local, require_root_image, stop_container,
 };
 use image::resolve_container_image;
+use management::{parse_repository, print_runner_status};
 mod recovery;
 use recovery::{
     RecoveryAttempt, RecoveryProgress, mark_recovery_abandon_pending,
-    mark_recovery_conclusion_pending, mark_recovery_execution_started,
-    mark_recovery_step_completed, persist_recovery_claim, recover_runner_state,
+    mark_recovery_caches_attached, mark_recovery_conclusion_pending,
+    mark_recovery_execution_started, mark_recovery_step_completed, persist_recovery_claim,
+    recover_runner_state,
 };
+use resources::ResourceLimits;
+use source::{download_attempt_source, source_download_client};
 use step_logs::drain_recovered_step_logs;
+#[cfg(test)]
+use step_logs::{StableLogDecoder, stable_log_text};
 use steps::{
     report_step_conclusion, report_step_conclusion_until_reconciled, run_steps, write_step_programs,
 };
@@ -66,11 +74,11 @@ use systemd::{install_systemd_service, print_linger_status};
 use workspace::{RunnerWorkDir, command_stdout, command_success, runner_work_root, unix_now};
 
 const LOG_CHUNK_BYTES: usize = 16 * 1024;
-const MAX_SOURCE_BUNDLE_BYTES: u64 = 128 * 1024 * 1024;
 
 pub fn install(name: &str, repository: &str) -> anyhow::Result<()> {
     let (owner, repo) = parse_repository(repository)?;
-    let capabilities = doctor_local(true)?;
+    doctor_local(true)?;
+    let requested_cache_root = configured_cache_root();
     let api_url = api_url();
     let client = runner_client()?;
     let session = session_from_cache_or_device(&client, &api_url)?;
@@ -85,7 +93,27 @@ pub fn install(name: &str, repository: &str) -> anyhow::Result<()> {
                 config_path.display()
             );
         }
-        let runner = get_runner(&client, &api_url, &session.token, &config.runner_id)?;
+        let cache_root = requested_cache_root
+            .or_else(|| config.cache_root.clone())
+            .context(
+                "SCOPE_RUNNER_CACHE_ROOT must name the dedicated cache filesystem before restoring this runner",
+        )?;
+        cache::initialize(&cache_root)?;
+        let upgraded = upgrade_runner_registration(
+            &client,
+            &api_url,
+            &session.token,
+            &config.runner_id,
+            &UpgradeRunnerRegistrationRequest {
+                version: env!("CARGO_PKG_VERSION").to_string(),
+                protocol_version: RUNNER_PROTOCOL_VERSION,
+                capabilities: RunnerCapabilities::v1(),
+            },
+        )?;
+        config.secret = upgraded.secret;
+        config.cache_root = Some(cache_root);
+        store_runner_config(&config_path, &config)?;
+        let runner = upgraded.runner;
         let repository_id = get_repo(&client, &api_url, &session.token, owner, repo)?.id;
         if !runner
             .grants
@@ -102,16 +130,16 @@ pub fn install(name: &str, repository: &str) -> anyhow::Result<()> {
                 name,
             )?;
         }
-        if config.storage_quota_supported != capabilities.storage_quota_supported {
-            config.storage_quota_supported = capabilities.storage_quota_supported;
-            store_runner_config(&config_path, &config)?;
-        }
         install_systemd_service(&config_path)?;
         println!("✓ Existing runner configuration restored");
         println!("✓ systemd user service installed");
         print_linger_status();
         return Ok(());
     }
+    let requested_cache_root = requested_cache_root.context(
+        "SCOPE_RUNNER_CACHE_ROOT must name the dedicated cache filesystem during runner install",
+    )?;
+    cache::initialize(&requested_cache_root)?;
     let registered = register_runner(
         &client,
         &api_url,
@@ -130,7 +158,7 @@ pub fn install(name: &str, repository: &str) -> anyhow::Result<()> {
         runner_id: registered.runner.id,
         name: name.to_string(),
         secret: registered.secret,
-        storage_quota_supported: capabilities.storage_quota_supported,
+        cache_root: Some(requested_cache_root),
     };
     if let Err(error) = store_runner_config(&config_path, &config) {
         let _ =
@@ -193,15 +221,31 @@ pub fn remove_repository(repository: &str) -> anyhow::Result<()> {
 pub fn doctor() -> anyhow::Result<()> {
     doctor_local(true)?;
     if let Ok(config) = load_runner_config() {
+        cache::doctor(&config)?;
+        let limits = ResourceLimits::detect()?;
+        println!(
+            "✓ live resources ({} MiB memory, {:.3} CPU, {} PIDs)",
+            limits.memory_bytes / (1024 * 1024),
+            limits.cpu_millis as f64 / 1000.0,
+            limits.pids
+        );
         let client = runner_client()?;
         runner_poll(&client, &config.api_url, &config.secret)?;
         println!("✓ Scope API");
     }
     println!("✓ Docker");
-    println!("✓ disk");
+    println!("✓ transient disk");
     println!("✓ cgroups");
     println!("✓ systemd user service");
     Ok(())
+}
+
+pub fn list_caches() -> anyhow::Result<()> {
+    cache::list(&load_runner_config()?)
+}
+
+pub fn prune_caches(all: bool) -> anyhow::Result<()> {
+    cache::prune(&load_runner_config()?, all)
 }
 
 pub fn daemon(config_path: Option<&Path>) -> anyhow::Result<()> {
@@ -213,6 +257,16 @@ pub fn daemon(config_path: Option<&Path>) -> anyhow::Result<()> {
     eprintln!("Scope runner {} is polling {}", config.name, config.api_url);
     loop {
         resume_interrupted_attempts(&config)?;
+        if let Err(error) = cache::admit(&config) {
+            eprintln!("Runner admission paused: {error:#}");
+            thread::sleep(Duration::from_secs(5));
+            continue;
+        }
+        if let Err(error) = ResourceLimits::detect() {
+            eprintln!("Runner admission paused: {error:#}");
+            thread::sleep(Duration::from_secs(5));
+            continue;
+        }
         match runner_poll(&client, &config.api_url, &config.secret) {
             Ok(response) => {
                 let Some(offer) = response.run else {
@@ -319,6 +373,7 @@ fn execute_claim(config: &RunnerConfig, claim: &ClaimRunResponse) -> anyhow::Res
     persist_recovery_claim(&work.path, claim)?;
     let bundle_path = work.path.join("source.bundle");
     let source_client = source_download_client()?;
+    let phase = Instant::now();
     download_attempt_source(
         &source_client,
         &config.api_url,
@@ -327,33 +382,50 @@ fn execute_claim(config: &RunnerConfig, claim: &ClaimRunResponse) -> anyhow::Res
         &claim.job.source_digest,
         &bundle_path,
     )?;
+    log_phase(&claim.attempt_id, "source_download", phase);
     if finish_before_execution(&mut supervisor, &client, config, claim)? {
         return Ok(());
     }
     let workspace = work.path.join("workspace");
+    let phase = Instant::now();
     checkout_exact_commit(&bundle_path, &workspace, &claim.job.git_oid)?;
+    log_phase(&claim.attempt_id, "checkout", phase);
+    let phase = Instant::now();
     let container_image = resolve_container_image(&client, config, claim)?;
+    require_root_image(&container_image)?;
+    log_phase(&claim.attempt_id, "image_resolution", phase);
     let step_programs = write_step_programs(&work.path, &claim.job.workflow)?;
     if finish_before_execution(&mut supervisor, &client, config, claim)? {
         return Ok(());
     }
+    let phase = Instant::now();
+    let limits = ResourceLimits::detect()?;
+    let mut caches = cache::PreparedCaches::prepare(config, claim, &container_image)?;
+    mark_recovery_caches_attached(&work.path, claim, &caches.volume_names())?;
+    log_phase(&claim.attempt_id, "cache_prepare", phase);
     let container_name = format!("scope-{}", claim.attempt_id);
     let mut create = Command::new("docker");
+    let phase = Instant::now();
     configure_job_container_creation(
         &mut create,
-        config,
-        claim,
-        &container_name,
-        &container_image,
-        &step_programs,
+        JobContainerSpec {
+            config,
+            claim,
+            name: &container_name,
+            image: &container_image,
+            step_programs: &step_programs,
+            limits: &limits,
+            caches: caches.mounts(),
+        },
     );
     command_success(&mut create, "create Docker job container")?;
     let container = ContainerGuard::new(container_name);
+    caches.confirm_container(&container.name)?;
+    log_phase(&claim.attempt_id, "container_create", phase);
+    let mut copy_source = Command::new("docker");
+    configure_source_copy(&mut copy_source, &workspace, &container.name);
     command_success(
-        Command::new("docker")
-            .args(["cp"])
-            .arg(format!("{}/.", workspace.display()))
-            .arg(format!("{}:/scope-source", container.name)),
+        &mut copy_source,
         "copy run source into Docker job container",
     )?;
     if finish_before_execution(&mut supervisor, &client, config, claim)? {
@@ -361,7 +433,8 @@ fn execute_claim(config: &RunnerConfig, claim: &ClaimRunResponse) -> anyhow::Res
     }
     let execution_deadline_unix = unix_now().saturating_add(claim.job.workflow.timeout_seconds());
     mark_recovery_execution_started(&work.path, claim, execution_deadline_unix)?;
-    run_steps(
+    let phase = Instant::now();
+    let result = run_steps(
         config,
         claim,
         &mut work,
@@ -375,16 +448,114 @@ fn execute_claim(config: &RunnerConfig, claim: &ClaimRunResponse) -> anyhow::Res
         execution_deadline_unix,
         &mut supervisor,
         container,
-    )
+    );
+    match result {
+        Ok(success) => {
+            log_phase(&claim.attempt_id, "steps", phase);
+            let cleanup = Instant::now();
+            let reusable = cache::is_reusable_after_execution(claim, success);
+            if let Err(error) = caches.finish(reusable) {
+                eprintln!(
+                    "Could not finalize attempt caches; tainted caches were not reused: {error:#}"
+                );
+                if success && claim.canary_phase.is_some() {
+                    cache::finish_canary_ack(
+                        &client,
+                        config,
+                        claim,
+                        &mut work,
+                        AttemptCacheFinalizationOutcome::Failed,
+                    )?;
+                }
+            } else if success && claim.canary_phase.is_some() {
+                cache::finish_canary_ack(
+                    &client,
+                    config,
+                    claim,
+                    &mut work,
+                    AttemptCacheFinalizationOutcome::Succeeded,
+                )?;
+            }
+            log_phase(&claim.attempt_id, "cleanup", cleanup);
+            Ok(())
+        }
+        Err(error) => {
+            if !work.cleanup_on_drop {
+                caches.preserve();
+            }
+            Err(error)
+        }
+    }
 }
 
 fn resume_claim(config: &RunnerConfig, recovery: RecoveryAttempt) -> anyhow::Result<()> {
+    let claim = recovery.recovery.claim.clone();
+    let work_dir = recovery.work_dir.clone();
+    let volumes = recovery.recovery.progress.cache_volumes.clone();
+    if let Some(outcome) = recovery
+        .recovery
+        .progress
+        .pending_cache_finalization
+        .clone()
+    {
+        cache::acknowledge_finalization(&attempt_control_client()?, config, &claim, outcome)?;
+        std::fs::remove_dir_all(work_dir).context("remove acknowledged canary recovery state")?;
+        return Ok(());
+    }
+    match resume_claim_execution(config, recovery) {
+        Ok(success) => {
+            let reusable = cache::is_reusable_after_execution(&claim, success);
+            if let Err(error) = cache::finalize_volume_names(config, &volumes, reusable) {
+                eprintln!("Could not finalize recovered attempt caches: {error:#}");
+                if success && claim.canary_phase.is_some() {
+                    let mut work = RunnerWorkDir {
+                        path: work_dir.clone(),
+                        cleanup_on_drop: false,
+                    };
+                    cache::finish_canary_ack(
+                        &attempt_control_client()?,
+                        config,
+                        &claim,
+                        &mut work,
+                        AttemptCacheFinalizationOutcome::Failed,
+                    )?;
+                }
+            } else if success && claim.canary_phase.is_some() {
+                let mut work = RunnerWorkDir {
+                    path: work_dir.clone(),
+                    cleanup_on_drop: false,
+                };
+                cache::finish_canary_ack(
+                    &attempt_control_client()?,
+                    config,
+                    &claim,
+                    &mut work,
+                    AttemptCacheFinalizationOutcome::Succeeded,
+                )?;
+            }
+            if claim.canary_phase.is_some() {
+                std::fs::remove_dir_all(work_dir)
+                    .context("remove finalized canary recovery state")?;
+            }
+            Ok(())
+        }
+        Err(error) => Err(error),
+    }
+}
+
+fn resume_claim_execution(
+    config: &RunnerConfig,
+    recovery: RecoveryAttempt,
+) -> anyhow::Result<bool> {
     let RecoveryAttempt { work_dir, recovery } = recovery;
     let mut work = RunnerWorkDir {
         path: work_dir,
         cleanup_on_drop: true,
     };
     let claim = recovery.claim;
+    if claim.canary_phase.is_some() {
+        work.preserve();
+    }
     let mut progress = recovery.progress;
     let container_name = format!("scope-{}", claim.attempt_id);
     let mut container = ContainerGuard::new(container_name.clone());
@@ -394,7 +565,7 @@ fn resume_claim(config: &RunnerConfig, recovery: RecoveryAttempt) -> anyhow::Res
         && drain_pending_stop_logs(config, &claim, &mut work, &mut container, &progress)?
             == PendingStopLogOutcome::AttemptUnavailable
     {
-        return Ok(());
+        return Ok(false);
     }
     if has_pending_stop && let Some(pending) = progress.pending_step_conclusion.take() {
         let control_client = attempt_control_client().map_err(|error| {
@@ -422,10 +593,10 @@ fn resume_claim(config: &RunnerConfig, recovery: RecoveryAttempt) -> anyhow::Res
         advance_recovery_past_replayed_step(&mut progress);
     }
     if progress.pending_attempt_abandon {
-        return report_pending_abandon(config, &claim, &mut work);
+        return report_pending_abandon(config, &claim, &mut work).map(|()| false);
     }
     if let Some(conclusion) = progress.pending_attempt_conclusion.take() {
-        return report_pending_conclusion(config, &claim, &mut work, conclusion);
+        return report_pending_conclusion(config, &claim, &mut work, conclusion).map(|()| false);
     }
     let control_client = attempt_control_client()?;
     attempt_heartbeat(
@@ -505,7 +676,12 @@ fn resume_claim(config: &RunnerConfig, recovery: RecoveryAttempt) -> anyhow::Res
                 .map(|step| step.step_index)
         });
     let Some(active_step_index) = active_step_index else {
-        return Ok(());
+        let succeeded = recovery_status.steps.len() == claim.job.workflow.steps().len()
+            && recovery_status
+                .steps
+                .iter()
+                .all(|step| step.state == StepState::Succeeded);
+        return Ok(succeeded);
     };
     let continuing_active_step = recovery_status
         .steps
@@ -530,6 +706,15 @@ fn resume_claim(config: &RunnerConfig, recovery: RecoveryAttempt) -> anyhow::Res
         &mut supervisor,
         container,
     )
+}
+
+fn log_phase(attempt_id: &str, phase: &str, started: Instant) {
+    eprintln!(
+        "scope_runner_phase attempt_id={} phase={} elapsed_ms={}",
+        attempt_id,
+        phase,
+        started.elapsed().as_millis()
+    );
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -717,54 +902,6 @@ fn report_pending_conclusion(
     Err(ConclusionReportPending.into())
 }
 
-fn download_attempt_source(
-    client: &Client,
-    api_url: &str,
-    attempt_token: &str,
-    attempt_id: &str,
-    expected_digest: &str,
-    destination: &Path,
-) -> anyhow::Result<()> {
-    let mut response = attempt_source(client, api_url, attempt_token, attempt_id)?;
-    if response
-        .content_length()
-        .is_some_and(|length| length > MAX_SOURCE_BUNDLE_BYTES)
-    {
-        bail!("run source bundle exceeds {MAX_SOURCE_BUNDLE_BYTES} bytes");
-    }
-    let mut file = fs::OpenOptions::new()
-        .create_new(true)
-        .write(true)
-        .open(destination)
-        .context("create run source bundle")?;
-    let mut hasher = Sha256::new();
-    let mut total = 0_u64;
-    let mut buffer = [0_u8; 64 * 1024];
-    loop {
-        let read = response
-            .read(&mut buffer)
-            .context("stream run source bundle")?;
-        if read == 0 {
-            break;
-        }
-        total = total
-            .checked_add(read as u64)
-            .context("run source bundle byte count overflow")?;
-        if total > MAX_SOURCE_BUNDLE_BYTES {
-            bail!("run source bundle exceeds {MAX_SOURCE_BUNDLE_BYTES} bytes");
-        }
-        file.write_all(&buffer[..read])
-            .context("write run source bundle")?;
-        hasher.update(&buffer[..read]);
-    }
-    file.sync_all().context("sync run source bundle")?;
-    let actual_digest = format!("{:x}", hasher.finalize());
-    if actual_digest != expected_digest {
-        bail!("downloaded source digest does not match claimed job");
-    }
-    Ok(())
-}
-
 fn finish_before_execution(
     supervisor: &mut AttemptSupervisor,
     client: &Client,
@@ -793,65 +930,6 @@ fn finish_before_execution(
             bail!("attempt timed out before execution started")
         }
     }
-}
-
-#[derive(Default)]
-struct StableLogDecoder {
-    pending: Vec<u8>,
-}
-
-impl StableLogDecoder {
-    fn push(&mut self, bytes: &[u8]) -> String {
-        self.pending.extend_from_slice(bytes);
-        let mut text = String::new();
-        loop {
-            match std::str::from_utf8(&self.pending) {
-                Ok(valid) => {
-                    text.push_str(valid);
-                    self.pending.clear();
-                    break;
-                }
-                Err(error) => {
-                    let valid_bytes = error.valid_up_to();
-                    if valid_bytes != 0 {
-                        text.push_str(
-                            std::str::from_utf8(&self.pending[..valid_bytes])
-                                .expect("UTF-8 validator marked the prefix valid"),
-                        );
-                        self.pending.drain(..valid_bytes);
-                    }
-                    let Some(invalid_bytes) = error.error_len() else {
-                        break;
-                    };
-                    for byte in self.pending.drain(..invalid_bytes) {
-                        append_escaped_byte(&mut text, byte);
-                    }
-                }
-            }
-        }
-        text
-    }
-
-    fn finish(&mut self) -> String {
-        let mut text = String::new();
-        for byte in self.pending.drain(..) {
-            append_escaped_byte(&mut text, byte);
-        }
-        text
-    }
-}
-
-#[cfg(test)]
-fn stable_log_text(bytes: &[u8]) -> String {
-    let mut decoder = StableLogDecoder::default();
-    let mut text = decoder.push(bytes);
-    text.push_str(&decoder.finish());
-    text
-}
-
-fn append_escaped_byte(text: &mut String, byte: u8) {
-    use std::fmt::Write as _;
-    write!(text, "\\x{byte:02x}").expect("writing to a String cannot fail");
 }
 
 fn append_log_with_retry(
@@ -903,49 +981,11 @@ fn complete_canceled(
     Ok(())
 }
 
-fn print_runner_status(name: &str, runner: &RunnerResponse) {
-    let online = runner
-        .last_seen_at_unix
-        .and_then(|last_seen| unix_now().checked_sub(last_seen))
-        .is_some_and(|age| age <= 90);
-    println!(
-        "{} · {} · {}",
-        name,
-        if online { "online" } else { "offline" },
-        if runner.enabled {
-            "enabled"
-        } else {
-            "disabled"
-        }
-    );
-    for grant in runner.grants.iter().filter(|grant| grant.active) {
-        println!("  {} as {}", grant.repository_id, grant.name);
-    }
-}
-
-fn parse_repository(repository: &str) -> anyhow::Result<(&str, &str)> {
-    let mut parts = repository.split('/');
-    let owner = parts.next().unwrap_or_default();
-    let repo = parts.next().unwrap_or_default();
-    if owner.is_empty() || repo.is_empty() || parts.next().is_some() {
-        bail!("expected repository as owner/repo");
-    }
-    Ok((owner, repo))
-}
-
 fn runner_client() -> anyhow::Result<Client> {
     Client::builder()
         .timeout(Duration::from_secs(35))
         .build()
         .context("build runner HTTP client")
-}
-
-fn source_download_client() -> anyhow::Result<Client> {
-    Client::builder()
-        .connect_timeout(Duration::from_secs(20))
-        .timeout(Duration::from_secs(15 * 60))
-        .build()
-        .context("build run source download client")
 }
 
 fn attempt_control_client() -> anyhow::Result<Client> {

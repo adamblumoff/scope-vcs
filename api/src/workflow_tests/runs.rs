@@ -1,8 +1,9 @@
 use super::*;
 use futures_util::StreamExt;
 use scope_api_contract::{
-    AppendAttemptLogRequest, CompleteAttemptStepRequest, PinAttemptContainerImageRequest,
-    RegisterRunnerRequest, StepConclusionRequest,
+    AppendAttemptLogRequest, AttemptCacheFinalizationOutcome, AttemptCacheFinalizationRequest,
+    CompleteAttemptStepRequest, PinAttemptContainerImageRequest, RegisterRunnerRequest,
+    StepConclusionRequest, UpgradeRunnerRegistrationRequest,
 };
 use scope_domain::runs::runner::{RUNNER_PROTOCOL_VERSION, RunnerCapabilities};
 use std::time::Duration;
@@ -12,6 +13,7 @@ name: Test
 on:
   manual: true
 runs-on: any
+caches: []
 container:
   image: alpine:3.20
 timeout: 5m
@@ -19,6 +21,100 @@ steps:
   - name: Test
     run: printf 'hello from runner\n'
 "#;
+
+#[tokio::test]
+async fn owned_runner_upgrade_rotates_machine_credentials_over_http() {
+    let state = test_state_with_repo();
+    cache_test_jwks(&state);
+    let app = router(state.clone());
+    let registered = app
+        .clone()
+        .oneshot(json_request(
+            "POST",
+            scope_api_contract::routes::RUNNERS,
+            Some(bearer_header()),
+            &RegisterRunnerRequest {
+                owner: TEST_REPO_OWNER.to_string(),
+                repo: TEST_REPO_NAME.to_string(),
+                name: "upgrade-box".to_string(),
+                version: "1.0.0".to_string(),
+                protocol_version: RUNNER_PROTOCOL_VERSION,
+                capabilities: RunnerCapabilities::v1(),
+            },
+        ))
+        .await
+        .unwrap();
+    let registered = response_json(registered).await;
+    let runner_id = registered["runner"]["id"].as_str().unwrap();
+    let old_secret = registered["secret"].as_str().unwrap();
+
+    let unauthorized = app
+        .clone()
+        .oneshot(json_request(
+            "POST",
+            &scope_api_contract::routes::runner_upgrade(runner_id),
+            None,
+            &UpgradeRunnerRegistrationRequest {
+                version: "2.0.0".to_string(),
+                protocol_version: RUNNER_PROTOCOL_VERSION,
+                capabilities: RunnerCapabilities::v1(),
+            },
+        ))
+        .await
+        .unwrap();
+    assert_eq!(unauthorized.status(), StatusCode::UNAUTHORIZED);
+
+    let cache_ack = app
+        .clone()
+        .oneshot(json_request(
+            "POST",
+            &scope_api_contract::routes::attempt_cache_finalization("attempt-missing"),
+            None,
+            &AttemptCacheFinalizationRequest {
+                outcome: AttemptCacheFinalizationOutcome::Succeeded,
+            },
+        ))
+        .await
+        .unwrap();
+    assert_eq!(cache_ack.status(), StatusCode::UNAUTHORIZED);
+
+    let upgraded = app
+        .oneshot(json_request(
+            "POST",
+            &scope_api_contract::routes::runner_upgrade(runner_id),
+            Some(bearer_header()),
+            &UpgradeRunnerRegistrationRequest {
+                version: "2.0.0".to_string(),
+                protocol_version: RUNNER_PROTOCOL_VERSION,
+                capabilities: RunnerCapabilities::v1(),
+            },
+        ))
+        .await
+        .unwrap();
+    assert_eq!(upgraded.status(), StatusCode::OK);
+    let upgraded = response_json(upgraded).await;
+    let new_secret = upgraded["secret"].as_str().unwrap();
+    assert_ne!(new_secret, old_secret);
+    assert_eq!(upgraded["runner"]["version"], "2.0.0");
+    assert!(
+        state
+            .metadata
+            .runs()
+            .authenticate_runner(&machine_token_hash(old_secret), unix_now())
+            .await
+            .is_err()
+    );
+    assert_eq!(
+        state
+            .metadata
+            .runs()
+            .authenticate_runner(&machine_token_hash(new_secret), unix_now())
+            .await
+            .unwrap()
+            .id,
+        runner_id
+    );
+}
 
 #[tokio::test]
 async fn push_trigger_evaluation_is_queryable_by_the_accepted_head() {
@@ -32,6 +128,7 @@ async fn push_trigger_evaluation_is_queryable_by_the_accepted_head() {
 name: Push Test
 on: { push: true }
 runs-on: any
+caches: []
 container: { image: alpine:3.20 }
 timeout: 1m
 steps:

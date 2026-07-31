@@ -1,6 +1,9 @@
-use scope_domain::runs::workflow::{
-    CompiledWorkflow, ContainerSpec, RunnerSelector, WorkflowError, WorkflowIdentity, WorkflowPath,
-    WorkflowRevision, WorkflowStep, WorkflowTriggers,
+use scope_domain::runs::{
+    cache::WorkflowCache,
+    workflow::{
+        CompiledWorkflow, ContainerSpec, RunnerSelector, WorkflowError, WorkflowIdentity,
+        WorkflowPath, WorkflowRevision, WorkflowStep, WorkflowTriggers,
+    },
 };
 use serde::Deserialize;
 use std::collections::BTreeSet;
@@ -73,6 +76,11 @@ pub fn parse_workflow(path: &str, bytes: &[u8]) -> Result<ParsedWorkflow, RunCon
     };
     let container = ContainerSpec::new(raw.container.image)?;
     let timeout_seconds = parse_timeout_seconds(&raw.timeout)?;
+    let caches = raw
+        .caches
+        .into_iter()
+        .map(|name| WorkflowCache::parse(name).map_err(WorkflowError::from))
+        .collect::<Result<Vec<_>, _>>()?;
     let steps = raw
         .steps
         .into_iter()
@@ -84,6 +92,7 @@ pub fn parse_workflow(path: &str, bytes: &[u8]) -> Result<ParsedWorkflow, RunCon
         runner,
         container,
         timeout_seconds,
+        caches,
         steps,
     )?;
     Ok(ParsedWorkflow { path, definition })
@@ -137,6 +146,7 @@ struct RawWorkflow {
     runs_on: String,
     container: RawContainer,
     timeout: String,
+    caches: Vec<String>,
     steps: Vec<RawStep>,
 }
 
@@ -190,6 +200,9 @@ runs-on: any
 container:
   image: rust:1.90
 timeout: 20m
+caches:
+  - cargo-target
+  - cargo
 steps:
   - name: Format
     run: cargo fmt --check
@@ -198,7 +211,7 @@ steps:
 "#;
 
     #[test]
-    fn parses_and_normalizes_v1_workflow() {
+    fn parses_and_normalizes_v4_workflow() {
         let parsed = parse_workflow("/.scope/runs/test.yml", WORKFLOW.as_bytes()).unwrap();
         let definition = parsed.definition();
 
@@ -208,6 +221,14 @@ steps:
         assert!(definition.triggers().push_main());
         assert_eq!(definition.timeout_seconds(), 20 * 60);
         assert_eq!(definition.container().image(), "rust:1.90");
+        assert_eq!(
+            definition
+                .caches()
+                .iter()
+                .map(WorkflowCache::as_str)
+                .collect::<Vec<_>>(),
+            ["cargo", "cargo-target"]
+        );
         assert_eq!(definition.steps()[1].run(), "cargo test --workspace");
     }
 
@@ -219,6 +240,7 @@ on: { push: true, manual: true }
 runs-on: any
 container: { image: "rust:1.90" }
 timeout: 1200s
+caches: [cargo, cargo-target]
 steps:
   - { name: Format, run: "cargo fmt --check" }
   - { name: Test, run: "cargo test --workspace" }
@@ -232,6 +254,21 @@ steps:
             .into_revision("repo-1")
             .unwrap();
 
+        assert_eq!(first.digest(), second.digest());
+    }
+
+    #[test]
+    fn cache_yaml_order_does_not_change_the_revision_digest() {
+        let reversed =
+            WORKFLOW.replace("  - cargo-target\n  - cargo", "  - cargo\n  - cargo-target");
+        let first = parse_workflow("/.scope/runs/test.yml", WORKFLOW.as_bytes())
+            .unwrap()
+            .into_revision("repo-1")
+            .unwrap();
+        let second = parse_workflow("/.scope/runs/test.yml", reversed.as_bytes())
+            .unwrap()
+            .into_revision("repo-1")
+            .unwrap();
         assert_eq!(first.digest(), second.digest());
     }
 
@@ -272,6 +309,90 @@ steps:
         assert!(matches!(
             parse_workflow("/.scope/runs/test.yml", &oversized),
             Err(RunConfigError::DefinitionTooLarge)
+        ));
+    }
+
+    #[test]
+    fn scope_workflows_use_the_current_contract() {
+        for (path, bytes) in [
+            (
+                "/.scope/runs/cli-checks.yml",
+                include_bytes!("../../../.scope/runs/cli-checks.yml").as_slice(),
+            ),
+            (
+                "/.scope/runs/web-checks.yml",
+                include_bytes!("../../../.scope/runs/web-checks.yml").as_slice(),
+            ),
+            (
+                "/.scope/runs/v4-canary-cold-write.yml",
+                include_bytes!("../../../.scope/runs/v4-canary-cold-write.yml").as_slice(),
+            ),
+            (
+                "/.scope/runs/v4-canary-warm-read.yml",
+                include_bytes!("../../../.scope/runs/v4-canary-warm-read.yml").as_slice(),
+            ),
+            (
+                "/.scope/runs/v4-canary-evict.yml",
+                include_bytes!("../../../.scope/runs/v4-canary-evict.yml").as_slice(),
+            ),
+        ] {
+            parse_workflow(path, bytes).unwrap_or_else(|error| {
+                panic!("{path} must follow the current workflow contract: {error}")
+            });
+        }
+    }
+
+    #[test]
+    fn checked_in_cutover_workflows_are_canonical_canaries() {
+        use scope_domain::runs::cutover::{
+            RunnerProtocolCanaryPhase, validate_runner_protocol_canary_workflow,
+        };
+
+        for (phase, path, bytes) in [
+            (
+                RunnerProtocolCanaryPhase::ColdWrite,
+                "/.scope/runs/v4-canary-cold-write.yml",
+                include_bytes!("../../../.scope/runs/v4-canary-cold-write.yml").as_slice(),
+            ),
+            (
+                RunnerProtocolCanaryPhase::WarmRead,
+                "/.scope/runs/v4-canary-warm-read.yml",
+                include_bytes!("../../../.scope/runs/v4-canary-warm-read.yml").as_slice(),
+            ),
+            (
+                RunnerProtocolCanaryPhase::Evict,
+                "/.scope/runs/v4-canary-evict.yml",
+                include_bytes!("../../../.scope/runs/v4-canary-evict.yml").as_slice(),
+            ),
+        ] {
+            let parsed = parse_workflow(path, bytes).unwrap();
+            validate_runner_protocol_canary_workflow(parsed.definition(), phase)
+                .unwrap_or_else(|error| panic!("{path} must be a canonical canary: {error}"));
+        }
+    }
+
+    #[test]
+    fn rejects_v3_missing_caches_and_invalid_or_duplicate_cache_names() {
+        let missing = WORKFLOW.replace("caches:\n  - cargo-target\n  - cargo\n", "");
+        assert!(matches!(
+            parse_workflow("/.scope/runs/test.yml", missing.as_bytes()),
+            Err(RunConfigError::InvalidYaml(_))
+        ));
+
+        let invalid = WORKFLOW.replace("cargo-target", "Cargo_Target");
+        assert!(matches!(
+            parse_workflow("/.scope/runs/test.yml", invalid.as_bytes()),
+            Err(RunConfigError::InvalidWorkflow(
+                WorkflowError::InvalidCache(_)
+            ))
+        ));
+
+        let duplicate = WORKFLOW.replace("  - cargo\n", "  - cargo-target\n");
+        assert!(matches!(
+            parse_workflow("/.scope/runs/test.yml", duplicate.as_bytes()),
+            Err(RunConfigError::InvalidWorkflow(
+                WorkflowError::DuplicateCacheName(name)
+            )) if name == "cargo-target"
         ));
     }
 

@@ -458,6 +458,15 @@ async fn replace_catalog(
         .await
         .map_err(PostgresError::internal)?;
     seed_catalog_rows(&tx, catalog).await?;
+    tx.execute_unprepared(
+        "
+            INSERT INTO scope_runner_protocol_cutover (
+                key, state, canary_generation, updated_at_unix
+            ) VALUES ('current', 'v4-open', 0, 0)
+        ",
+    )
+    .await
+    .map_err(PostgresError::internal)?;
     tx.commit().await.map_err(PostgresError::internal)
 }
 
@@ -731,6 +740,17 @@ mod tests {
                 .try_get::<i64>("", "count")
                 .unwrap();
             assert_eq!(user_count, 0);
+            let cutover = db
+                .query_one(Statement::from_string(
+                    DatabaseBackend::Postgres,
+                    "SELECT state, canary_generation FROM scope_runner_protocol_cutover"
+                        .to_string(),
+                ))
+                .await
+                .unwrap()
+                .unwrap();
+            assert_eq!(cutover.try_get::<String>("", "state").unwrap(), "v4-open");
+            assert_eq!(cutover.try_get::<i64>("", "canary_generation").unwrap(), 0);
             let unrelated_sentinel = db
                 .query_one(Statement::from_string(
                     DatabaseBackend::Postgres,

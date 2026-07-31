@@ -11,7 +11,13 @@ pub(super) struct RunnerConfig {
     pub(super) runner_id: String,
     pub(super) name: String,
     pub(super) secret: String,
-    pub(super) storage_quota_supported: bool,
+    pub(super) cache_root: Option<PathBuf>,
+}
+
+pub(super) fn configured_cache_root() -> Option<PathBuf> {
+    env::var_os("SCOPE_RUNNER_CACHE_ROOT")
+        .filter(|path| !path.is_empty())
+        .map(PathBuf::from)
 }
 
 pub(super) fn runner_config_path() -> anyhow::Result<PathBuf> {

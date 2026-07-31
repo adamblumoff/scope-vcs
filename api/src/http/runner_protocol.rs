@@ -18,11 +18,11 @@ use axum::{
     response::IntoResponse,
 };
 use scope_api_contract::{
-    AppendAttemptLogRequest, AttemptConclusionRequest, AttemptHeartbeatRequest,
-    AttemptRecoveryStatusResponse, AttemptStatusResponse, AttemptStepStatusResponse,
-    ClaimRunResponse, CompleteAttemptRequest, CompleteAttemptStepRequest,
-    PinAttemptContainerImageRequest, PinAttemptContainerImageResponse, RunJobResponse,
-    RunnerPollResponse, RunnerRunOffer, StepConclusionRequest,
+    AppendAttemptLogRequest, AttemptCacheFinalizationOutcome, AttemptCacheFinalizationRequest,
+    AttemptConclusionRequest, AttemptHeartbeatRequest, AttemptRecoveryStatusResponse,
+    AttemptStatusResponse, AttemptStepStatusResponse, ClaimRunResponse, CompleteAttemptRequest,
+    CompleteAttemptStepRequest, PinAttemptContainerImageRequest, PinAttemptContainerImageResponse,
+    RunJobResponse, RunnerPollResponse, RunnerRunOffer, StepConclusionRequest,
 };
 use scope_domain::runs::run::{
     AttemptConclusion, PinnedContainerImage, RunAttemptStep, RunLogChunk, StepConclusion,
@@ -87,6 +87,7 @@ pub(crate) async fn claim(
         attempt_id: claim.attempt.id,
         attempt_token,
         lease_expires_at_unix,
+        canary_phase: claim.canary_phase,
         job: RunJobResponse {
             run_id: claim.run.id,
             repository_id: claim.run.workflow.repository_id().to_string(),
@@ -177,6 +178,22 @@ pub(crate) async fn heartbeat(
         .authenticate_attempt(&attempt_id, &token_hash, now)
         .await?;
     Ok(Json(attempt_status(&claim)))
+}
+
+pub(crate) async fn finalize_cache(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path(attempt_id): Path<String>,
+    Json(input): Json<AttemptCacheFinalizationRequest>,
+) -> Result<axum::http::StatusCode, ApiError> {
+    let token_hash = attempt_token_hash(&headers)?;
+    let succeeded = matches!(input.outcome, AttemptCacheFinalizationOutcome::Succeeded);
+    state
+        .metadata
+        .runs()
+        .finalize_runner_protocol_canary_cache(&attempt_id, &token_hash, succeeded, unix_now()?)
+        .await?;
+    Ok(axum::http::StatusCode::NO_CONTENT)
 }
 
 pub(crate) async fn recovery_status(

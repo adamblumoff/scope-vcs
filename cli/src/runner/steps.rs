@@ -20,7 +20,7 @@ use std::{
     path::{Path, PathBuf},
     process::Command,
     thread,
-    time::Duration,
+    time::{Duration, Instant},
 };
 
 const CONTAINER_ACTIVE_STEP: &str = "/scope-active-step";
@@ -137,7 +137,7 @@ pub(super) fn run_steps(
     execution_deadline_unix: u64,
     supervisor: &mut AttemptSupervisor,
     mut container: ContainerGuard,
-) -> anyhow::Result<()> {
+) -> anyhow::Result<bool> {
     supervisor.set_execution_deadline(execution_deadline_unix);
     let step_count = u32::try_from(claim.job.workflow.steps().len())
         .context("workflow step count exceeds runner protocol")?;
@@ -148,7 +148,7 @@ pub(super) fn run_steps(
         if reason != AttemptStopReason::None && !recovering_step {
             stage_stop_reason_or_preserve(work, claim, reason, &mut container)?;
             stop_attempt_container(work, &mut container)?;
-            return conclude_stopped_attempt(config, claim, work, reason);
+            return conclude_stopped_attempt(config, claim, work, reason).map(|()| false);
         }
         let nonce = match active_step_nonce.take() {
             Some(nonce) => nonce,
@@ -210,9 +210,16 @@ pub(super) fn run_steps(
                     &snapshot,
                     "recovered step preparation",
                 )?;
+                let started = Instant::now();
                 let start_result = command_success(
                     Command::new("docker").args(["start", &container.name]),
                     "start workflow step",
+                );
+                eprintln!(
+                    "scope_runner_phase attempt_id={} phase=container_start step={} elapsed_ms={}",
+                    claim.attempt_id,
+                    step_index,
+                    started.elapsed().as_millis()
                 );
                 preserve_operation_if_needed(
                     start_result,
@@ -276,7 +283,7 @@ pub(super) fn run_steps(
                 reason => {
                     stage_stop_reason_or_preserve(work, claim, reason, &mut container)?;
                     stop_attempt_container(work, &mut container)?;
-                    return conclude_stopped_attempt(config, claim, work, reason);
+                    return conclude_stopped_attempt(config, claim, work, reason).map(|()| false);
                 }
             }
         }
@@ -298,7 +305,7 @@ pub(super) fn run_steps(
                 true,
             );
             preserve_stopped_log_recovery(work, &mut container, drain_result)?;
-            return conclude_stopped_attempt(config, claim, work, reason);
+            return conclude_stopped_attempt(config, claim, work, reason).map(|()| false);
         }
         if let Err(error) = select_container_step(&programs, "run", step_index, &nonce) {
             return preserve_after_runner_failure(
@@ -351,7 +358,7 @@ pub(super) fn run_steps(
                         true,
                     );
                     preserve_stopped_log_recovery(work, &mut container, drain_result)?;
-                    return conclude_stopped_attempt(config, claim, work, reason);
+                    return conclude_stopped_attempt(config, claim, work, reason).map(|()| false);
                 }
             }
             let drain_result = drain_step_logs(
@@ -388,7 +395,7 @@ pub(super) fn run_steps(
                         true,
                     );
                     preserve_stopped_log_recovery(work, &mut container, final_drain_result)?;
-                    return conclude_stopped_attempt(config, claim, work, reason);
+                    return conclude_stopped_attempt(config, claim, work, reason).map(|()| false);
                 }
                 return preserve_after_runner_failure(
                     work,
@@ -478,12 +485,12 @@ pub(super) fn run_steps(
         }
         if exit_code != 0 {
             supervisor.mark_execution_finished();
-            return Ok(());
+            return Ok(false);
         }
         step_log_bytes = 0;
     }
     supervisor.mark_execution_finished();
-    Ok(())
+    Ok(true)
 }
 
 pub(super) fn report_step_conclusion(
@@ -777,6 +784,7 @@ mod tests {
             RunnerSelector::Any,
             ContainerSpec::new("alpine:3.20").unwrap(),
             60,
+            Vec::new(),
             vec![
                 WorkflowStep::new("first", "printf one").unwrap(),
                 WorkflowStep::new("second", "printf two").unwrap(),

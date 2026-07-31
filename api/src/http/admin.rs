@@ -10,6 +10,10 @@ use axum::{
     extract::State,
     http::{HeaderMap, StatusCode},
 };
+use scope_api_contract::{
+    AdvanceRunnerProtocolCutoverRequest, CreateRunnerProtocolCanaryRequest,
+    RunnerProtocolCanaryResponse, RunnerProtocolCutoverResponse,
+};
 use scope_domain::store::{RepoStorageCleanup, SourceBlob};
 use serde::Serialize;
 
@@ -83,6 +87,71 @@ pub(crate) async fn drain_cleanup(
             report,
         }),
     ))
+}
+
+pub(crate) async fn get_runner_protocol_cutover(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> Result<Json<RunnerProtocolCutoverResponse>, ApiError> {
+    ensure_operator(&state, &headers)?;
+    Ok(Json(runner_protocol_cutover_response(
+        state.metadata.admin().runner_protocol_cutover().await?,
+    )))
+}
+
+pub(crate) async fn advance_runner_protocol_cutover(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(input): Json<AdvanceRunnerProtocolCutoverRequest>,
+) -> Result<Json<RunnerProtocolCutoverResponse>, ApiError> {
+    ensure_operator(&state, &headers)?;
+    Ok(Json(runner_protocol_cutover_response(
+        state
+            .metadata
+            .admin()
+            .advance_runner_protocol_cutover(input.state, crate::persistence::unix_now()?)
+            .await?,
+    )))
+}
+
+pub(crate) async fn create_runner_protocol_canary(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(input): Json<CreateRunnerProtocolCanaryRequest>,
+) -> Result<Json<RunnerProtocolCutoverResponse>, ApiError> {
+    ensure_operator(&state, &headers)?;
+    Ok(Json(runner_protocol_cutover_response(
+        state
+            .metadata
+            .admin()
+            .create_runner_protocol_canary(
+                input.phase,
+                &input.runner_id,
+                &input.run_id,
+                crate::persistence::unix_now()?,
+            )
+            .await?,
+    )))
+}
+
+fn runner_protocol_cutover_response(
+    snapshot: scope_postgres::db::RunnerProtocolCutoverSnapshot,
+) -> RunnerProtocolCutoverResponse {
+    RunnerProtocolCutoverResponse {
+        state: snapshot.cutover.state(),
+        generation: snapshot.canary_generation,
+        canaries: snapshot
+            .canaries
+            .into_iter()
+            .map(|canary| RunnerProtocolCanaryResponse {
+                generation: canary.generation().get(),
+                phase: canary.phase(),
+                runner_id: canary.runner_id().to_string(),
+                run_id: canary.run_id().to_string(),
+                status: canary.status(),
+            })
+            .collect(),
+    }
 }
 
 async fn cleanup_status(state: &AppState) -> Result<AdminCleanupStatusResponse, ApiError> {

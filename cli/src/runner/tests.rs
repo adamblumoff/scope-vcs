@@ -4,10 +4,11 @@ use super::recovery::{
 };
 use super::*;
 use scope_api_contract::StepConclusionRequest;
+use scope_domain::runs::cache::WorkflowCache;
 use scope_domain::runs::workflow::{
     CompiledWorkflow, ContainerSpec, RunnerSelector, WorkflowStep, WorkflowTriggers,
 };
-use std::env;
+use std::{env, fs};
 
 #[test]
 fn repository_and_systemd_inputs_are_strict() {
@@ -22,9 +23,15 @@ fn repository_and_systemd_inputs_are_strict() {
 
 #[test]
 fn docker_limits_are_always_applied() {
+    let limits = ResourceLimits {
+        memory_bytes: 4 * 1024 * 1024 * 1024,
+        cpu_millis: 2000,
+        pids: 512,
+        storage_bytes: 20 * 1024 * 1024 * 1024,
+    };
     let mut command = Command::new("docker");
     command.arg("run");
-    apply_container_limits(&mut command, false);
+    apply_container_limits(&mut command, &limits, false);
     let arguments = command
         .get_args()
         .map(|argument| argument.to_string_lossy().into_owned())
@@ -34,11 +41,11 @@ fn docker_limits_are_always_applied() {
         [
             "run",
             "--memory",
-            "4g",
+            "4294967296",
             "--memory-swap",
-            "4g",
+            "4294967296",
             "--cpus",
-            "2",
+            "2.000",
             "--pids-limit",
             "512",
         ]
@@ -46,12 +53,14 @@ fn docker_limits_are_always_applied() {
 
     let mut quota_command = Command::new("docker");
     quota_command.arg("run");
-    apply_container_limits(&mut quota_command, true);
+    apply_container_limits(&mut quota_command, &limits, true);
     let quota_arguments = quota_command
         .get_args()
         .map(|argument| argument.to_string_lossy().into_owned())
         .collect::<Vec<_>>();
-    assert!(quota_arguments.ends_with(&["--storage-opt".to_string(), "size=20G".to_string()]));
+    assert!(
+        quota_arguments.ends_with(&["--storage-opt".to_string(), "size=21474836480".to_string()])
+    );
 }
 
 #[test]
@@ -63,12 +72,13 @@ fn job_container_receives_only_copied_source_and_step_programs() {
         runner_id: "runner-1".to_string(),
         name: "linux-box".to_string(),
         secret: "runner-secret".to_string(),
-        storage_quota_supported: false,
+        cache_root: None,
     };
     let claim = ClaimRunResponse {
         attempt_id: "attempt-1".to_string(),
         attempt_token: "attempt-secret".to_string(),
         lease_expires_at_unix: 100,
+        canary_phase: None,
         job: RunJobResponse {
             run_id: "run-1".to_string(),
             repository_id: "owner/repo".to_string(),
@@ -81,19 +91,34 @@ fn job_container_receives_only_copied_source_and_step_programs() {
                 RunnerSelector::Any,
                 ContainerSpec::new("alpine:3.20").unwrap(),
                 60,
+                vec![WorkflowCache::parse("cargo").unwrap()],
                 vec![WorkflowStep::new("Test", "true").unwrap()],
             )
             .unwrap(),
         },
     };
     let mut command = Command::new("docker");
+    let limits = ResourceLimits {
+        memory_bytes: 1024,
+        cpu_millis: 1000,
+        pids: 128,
+        storage_bytes: 2048,
+    };
+    let caches = [cache::CacheMount {
+        volume_name: "scope-cache-v1-abc".to_string(),
+        target: "/scope/cache/cargo".to_string(),
+    }];
     configure_job_container_creation(
         &mut command,
-        &config,
-        &claim,
-        "scope-attempt-1",
-        "docker.io/library/alpine@sha256:abc",
-        Path::new("/runner/private/steps"),
+        JobContainerSpec {
+            config: &config,
+            claim: &claim,
+            name: "scope-attempt-1",
+            image: "docker.io/library/alpine@sha256:abc",
+            step_programs: Path::new("/runner/private/steps"),
+            limits: &limits,
+            caches: &caches,
+        },
     );
     let arguments = command
         .get_args()
@@ -126,6 +151,9 @@ fn job_container_receives_only_copied_source_and_step_programs() {
     assert!(joined.contains("scope.runner-id=runner-1"));
     assert!(joined.contains("scope.attempt-id=attempt-1"));
     assert!(joined.contains("type=bind,source=/runner/private/steps,target=/scope-steps,readonly"));
+    assert!(joined.contains("type=volume,source=scope-cache-v1-abc,target=/scope/cache/cargo"));
+    assert!(!joined.contains("--cgroup-parent"));
+    assert!(!joined.contains("/scope-source"));
     assert!(
         arguments
             .windows(2)
@@ -167,6 +195,8 @@ fn replayed_step_conclusion_advances_local_recovery_to_the_next_step() {
         }),
         pending_attempt_conclusion: None,
         pending_attempt_abandon: false,
+        pending_cache_finalization: None,
+        cache_volumes: Vec::new(),
     };
 
     advance_recovery_past_replayed_step(&mut progress);
@@ -191,6 +221,7 @@ fn interrupted_attempt_credentials_are_persisted_privately_for_reconciliation() 
         attempt_id: "attempt-1".to_string(),
         attempt_token: "secret-token".to_string(),
         lease_expires_at_unix: 100,
+        canary_phase: None,
         job: RunJobResponse {
             run_id: "run-1".to_string(),
             repository_id: "owner/repo".to_string(),
@@ -203,6 +234,7 @@ fn interrupted_attempt_credentials_are_persisted_privately_for_reconciliation() 
                 RunnerSelector::Any,
                 ContainerSpec::new("alpine:3.20").unwrap(),
                 60,
+                Vec::new(),
                 vec![WorkflowStep::new("Test", "true").unwrap()],
             )
             .unwrap(),

@@ -8,6 +8,9 @@ runs-on: remote-linux
 container:
   image: rust:1.94.0-bookworm
 timeout: 30m
+caches:
+  - cargo
+  - cargo-target
 steps:
   - name: Install Rust tooling
     run: |
@@ -25,14 +28,29 @@ steps:
         sleep 5
       done
   - name: Check formatting
-    run: RUSTUP_TOOLCHAIN=1.94.0-x86_64-unknown-linux-gnu cargo fmt --manifest-path cli/Cargo.toml -- --check
+    run: |
+      CARGO_HOME=/scope/cache/cargo \
+        CARGO_TARGET_DIR=/scope/cache/cargo-target \
+        RUSTUP_TOOLCHAIN=1.94.0-x86_64-unknown-linux-gnu \
+        cargo fmt --manifest-path cli/Cargo.toml -- --check
   - name: Test
-    run: RUSTUP_TOOLCHAIN=1.94.0-x86_64-unknown-linux-gnu cargo test --manifest-path cli/Cargo.toml --locked
+    run: |
+      CARGO_HOME=/scope/cache/cargo \
+        CARGO_TARGET_DIR=/scope/cache/cargo-target \
+        RUSTUP_TOOLCHAIN=1.94.0-x86_64-unknown-linux-gnu \
+        cargo test --manifest-path cli/Cargo.toml --locked
   - name: Lint
-    run: RUSTUP_TOOLCHAIN=1.94.0-x86_64-unknown-linux-gnu cargo clippy --manifest-path cli/Cargo.toml --all-targets --locked -- -D warnings
+    run: |
+      CARGO_HOME=/scope/cache/cargo \
+        CARGO_TARGET_DIR=/scope/cache/cargo-target \
+        RUSTUP_TOOLCHAIN=1.94.0-x86_64-unknown-linux-gnu \
+        cargo clippy --manifest-path cli/Cargo.toml --all-targets --locked -- -D warnings
   - name: Build release binaries
     run: |
-      RUSTUP_TOOLCHAIN=1.94.0-x86_64-unknown-linux-gnu cargo build \
+      CARGO_HOME=/scope/cache/cargo \
+        CARGO_TARGET_DIR=/scope/cache/cargo-target \
+        RUSTUP_TOOLCHAIN=1.94.0-x86_64-unknown-linux-gnu \
+        cargo build \
         --manifest-path cli/Cargo.toml \
         --release \
         --locked \

@@ -72,6 +72,55 @@ async fn admin_cleanup_requires_configured_operator_token() {
 }
 
 #[tokio::test]
+async fn runner_cutover_routes_require_operator_auth_and_serialize_state() {
+    for (method, uri, body) in [
+        ("GET", "/v1/admin/runner-cutover", Body::empty()),
+        (
+            "POST",
+            "/v1/admin/runner-cutover/advance",
+            Body::from(r#"{"state":"v4-open"}"#),
+        ),
+        (
+            "POST",
+            "/v1/admin/runner-cutover/canary",
+            Body::from(r#"{"runner_id":"runner-1","run_id":"run-1","phase":"cold-write"}"#),
+        ),
+    ] {
+        let response = admin_request(operator_state(), method, uri, None, body).await;
+        assert_eq!(
+            response.status(),
+            StatusCode::UNAUTHORIZED,
+            "{method} {uri}"
+        );
+    }
+
+    let response = admin_request(
+        operator_state(),
+        "GET",
+        "/v1/admin/runner-cutover",
+        Some(OPERATOR_AUTH.into()),
+        Body::empty(),
+    )
+    .await;
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = response_json(response).await;
+    assert_eq!(body["state"], "v4-open");
+    assert_eq!(body["generation"], 0);
+    assert_eq!(body["canaries"], serde_json::json!([]));
+
+    let response = admin_request(
+        operator_state(),
+        "POST",
+        "/v1/admin/runner-cutover/advance",
+        Some(OPERATOR_AUTH.into()),
+        Body::from(r#"{"state":"v4-open"}"#),
+    )
+    .await;
+    assert_eq!(response.status(), StatusCode::OK);
+    assert_eq!(response_json(response).await["state"], "v4-open");
+}
+
+#[tokio::test]
 async fn admin_cleanup_status_shows_pending_cleanup_queues() {
     let state = operator_state();
     queued_blob(&state, b"pending").await;

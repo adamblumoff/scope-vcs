@@ -8,6 +8,10 @@ runs-on: remote-linux
 container:
   image: rust:1.94.0-bookworm
 timeout: 20m
+caches:
+  - cargo
+  - cargo-target
+  - pnpm-store
 steps:
   - name: Install Node
     run: |
@@ -32,13 +36,15 @@ steps:
         sleep 5
       done
   - name: Install dependencies
-    run: (cd web && pnpm install --frozen-lockfile)
+    run: (cd web && pnpm install --frozen-lockfile --store-dir /scope/cache/pnpm-store)
   - name: Test
     run: (cd web && pnpm test)
   - name: Check
     run: |
       (
         cd web
+        export CARGO_HOME=/scope/cache/cargo
+        export CARGO_TARGET_DIR=/scope/cache/cargo-target
         pnpm typecheck
         RUSTUP_TOOLCHAIN=1.94.0-x86_64-unknown-linux-gnu pnpm check:api-contract
         pnpm check:line-limit
