@@ -51,6 +51,11 @@ export function MarketingLandingPage({
               <li>One codebase. No split repositories. No synchronization scripts.</li>
             </ul>
 
+            <p className="mt-7 max-w-[560px] text-[clamp(1.05rem,1.6vw,1.35rem)] font-medium leading-[1.45] tracking-[-0.025em] text-foreground">
+              Maintainers define what earns access to their attention.{' '}
+              <span className="text-muted-foreground">Everything else remains invisible.</span>
+            </p>
+
             <MarketingCliOnboarding
               commands={cliInstallCommands}
               initialPlatform={initialCliPlatform}
