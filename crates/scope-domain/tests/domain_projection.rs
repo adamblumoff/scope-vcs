@@ -18,7 +18,6 @@ use scope_domain::{
         SourceBlob, StoredRepository, UserAccount,
     },
 };
-use std::collections::BTreeMap;
 
 fn blob(content: &str) -> SourceBlob {
     SourceBlob {
@@ -159,6 +158,11 @@ fn published_test_repo(default_visibility: Visibility) -> StoredRepository {
     };
     let mut repo = StoredRepository::new(&owner, "repo", default_visibility).unwrap();
     repo.record.publication_state = RepoPublicationState::Published;
+    let rules_path = path("/.scope/RULES.md");
+    repo.live_files.insert(rules_path.clone(), blob(""));
+    repo.policy
+        .add_rule(VisibilityRule::public(rules_path))
+        .unwrap();
     repo
 }
 
@@ -288,7 +292,7 @@ fn content_push_command_returns_normalized_effects_without_previous_config() {
             change_version: repo.record.change_version,
             policy: repo.policy.clone(),
             repo_config: config.clone(),
-            live_files: BTreeMap::new(),
+            live_files: repo.live_tree(),
         },
         reviewed_update(
             "3333333333333333333333333333333333333333",
@@ -318,6 +322,66 @@ fn content_push_command_returns_normalized_effects_without_previous_config() {
 }
 
 #[test]
+fn content_push_requires_rules_in_the_resulting_tree() {
+    let repo = published_repo_with_public_file("initial", "/README.md", "hello");
+    let config = repo.repo_config.clone();
+    let state = ContentPushState {
+        change_version: repo.record.change_version,
+        policy: repo.policy.clone(),
+        repo_config: config.clone(),
+        live_files: repo.live_tree(),
+    };
+
+    let deletion = accept_content_push(
+        state,
+        reviewed_update(
+            "3333333333333333333333333333333333333333",
+            "delete rules",
+            vec![reviewed_change("/.scope/RULES.md", None)],
+            Some(config.clone()),
+            config.clone(),
+        ),
+    )
+    .unwrap_err();
+    assert!(
+        matches!(deletion, ReviewedUpdateError::BadRequest(message) if message.contains("RULES.md"))
+    );
+
+    let missing_state = ContentPushState {
+        change_version: 1,
+        policy: Policy::new(Visibility::Public),
+        repo_config: config.clone(),
+        live_files: Default::default(),
+    };
+    let missing = accept_content_push(
+        missing_state.clone(),
+        reviewed_update(
+            "4444444444444444444444444444444444444444",
+            "missing rules",
+            vec![reviewed_change("/README.md", Some("hello"))],
+            Some(config.clone()),
+            config.clone(),
+        ),
+    )
+    .unwrap_err();
+    assert!(
+        matches!(missing, ReviewedUpdateError::BadRequest(message) if message.contains("RULES.md"))
+    );
+
+    accept_content_push(
+        missing_state,
+        reviewed_update(
+            "5555555555555555555555555555555555555555",
+            "add rules",
+            vec![reviewed_change("/.scope/RULES.md", Some(""))],
+            Some(config.clone()),
+            config,
+        ),
+    )
+    .unwrap();
+}
+
+#[test]
 fn request_merge_accepts_unchanged_tree_without_weakening_push_rules() {
     let repo = published_repo_with_public_file("initial", "/README.md", "hello");
     let config = repo.repo_config.clone();
@@ -325,7 +389,7 @@ fn request_merge_accepts_unchanged_tree_without_weakening_push_rules() {
         change_version: repo.record.change_version,
         policy: repo.policy.clone(),
         repo_config: config.clone(),
-        live_files: BTreeMap::new(),
+        live_files: repo.live_tree(),
     };
     let update = reviewed_update(
         "3333333333333333333333333333333333333333",
@@ -768,6 +832,20 @@ fn public_projection_never_contains_tracked_workflow_definitions() {
     let projection = project_public(&policy, &graph, &[]);
 
     assert!(projection.visible_paths().is_empty());
+}
+
+#[test]
+fn public_projection_always_includes_canonical_rules_changes() {
+    let graph = graph(vec![commit(
+        "rv1",
+        None,
+        "add rules",
+        added("/.scope/RULES.md", Visibility::Public, ""),
+    )]);
+
+    let projection = project_graph(&graph, &[], ProjectionViewKey::Public);
+
+    assert_eq!(projection.visible_paths(), vec!["/.scope/RULES.md"]);
 }
 
 #[test]

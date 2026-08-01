@@ -2,7 +2,7 @@ use super::{
     policy::{Policy, PolicyError, ScopePath, Visibility, VisibilityRule},
     projection::{FileChange, LogicalCommit, VisibilityEvent},
     repo_config::{HistoryRewriteAction, HistoryRewriteRequest, RepoConfig},
-    repo_control::is_private_control_path,
+    repo_control::{REPO_RULES_PATH, is_public_request_protected_path},
     store::{
         GitHead, GitSegment, LogicalCommitOrigin, RepoPublicationState, RequestMergeOrigin,
         SourceBlob, StoredRepository,
@@ -91,6 +91,7 @@ pub fn apply_reviewed_update_to_repo(
         return apply_content_only_update(repo, update);
     }
     let old_tree = repo.live_tree();
+    ensure_rules_remain_present(old_tree.contains_key(&repo_rules_path()), &update.changes)?;
     let mut new_tree = old_tree.clone();
     let mut file_changes = Vec::with_capacity(update.changes.len());
     for change in update.changes {
@@ -223,22 +224,12 @@ fn apply_content_only_update(
     repo: &mut StoredRepository,
     update: ReviewedUpdateInput,
 ) -> ReviewedUpdateResult<()> {
-    let live_files = update
-        .changes
-        .iter()
-        .filter_map(|change| {
-            repo.live_files
-                .get(&change.path)
-                .cloned()
-                .map(|content| (change.path.clone(), content))
-        })
-        .collect();
     let accepted = accept_content_push(
         ContentPushState {
             change_version: repo.record.change_version,
             policy: repo.policy.clone(),
             repo_config: repo.repo_config.clone(),
-            live_files,
+            live_files: repo.live_tree(),
         },
         update,
     )?;
@@ -322,6 +313,10 @@ fn accept_content_update(
             "repo config changed since review; rerun scope push",
         ));
     }
+    ensure_rules_remain_present(
+        state.live_files.contains_key(&repo_rules_path()),
+        &update.changes,
+    )?;
 
     let mut file_changes = Vec::with_capacity(update.changes.len());
     for change in update.changes {
@@ -387,6 +382,28 @@ fn accept_content_update(
     })
 }
 
+fn repo_rules_path() -> ScopePath {
+    ScopePath::parse(REPO_RULES_PATH).expect("canonical repo rules path is valid")
+}
+
+fn ensure_rules_remain_present(
+    currently_present: bool,
+    changes: &[ReviewedContentChange],
+) -> ReviewedUpdateResult<()> {
+    let resulting_presence = changes
+        .iter()
+        .rev()
+        .find(|change| change.path.as_str() == REPO_RULES_PATH)
+        .map_or(currently_present, |change| change.content.is_some());
+    if resulting_presence {
+        Ok(())
+    } else {
+        Err(ReviewedUpdateError::BadRequest(
+            "repository must contain .scope/RULES.md",
+        ))
+    }
+}
+
 fn validate_commit_origin(
     origin: &LogicalCommitOrigin,
     changes: &[FileChange],
@@ -404,7 +421,7 @@ fn validate_commit_origin(
     };
 
     if changes.iter().any(|change| {
-        change.visibility != Visibility::Public || is_private_control_path(&change.path)
+        change.visibility != Visibility::Public || is_public_request_protected_path(&change.path)
     }) {
         return Err(ReviewedUpdateError::Conflict(
             "public request merge contains non-public changes",
@@ -448,7 +465,8 @@ fn validate_commit_origin(
         .flat_map(|commit| commit.changed_paths.iter())
         .collect::<BTreeSet<_>>();
     if touched_paths.iter().any(|path| {
-        is_private_control_path(path) || repo_config.visibility_for_path(path) != Visibility::Public
+        is_public_request_protected_path(path)
+            || repo_config.visibility_for_path(path) != Visibility::Public
     }) || changes
         .iter()
         .any(|change| !touched_paths.contains(&change.path))

@@ -118,7 +118,7 @@ async fn owned_runner_upgrade_rotates_machine_credentials_over_http() {
 
 #[tokio::test]
 async fn push_trigger_evaluation_is_queryable_by_the_accepted_head() {
-    let state = test_state_with_repo();
+    let state = test_state_with_readme().await;
     cache_test_jwks(&state);
     let mut update = receive_pack_update(&state, vec![("/README.md", Some("triggered"))]);
     update.push_trigger_input.as_mut().unwrap().workflows.push(

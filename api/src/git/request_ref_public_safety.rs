@@ -10,6 +10,7 @@ use crate::{
 use scope_domain::{
     policy::{ScopePath, Visibility},
     projection::{ProjectionViewKey, project_graph},
+    repo_control::is_public_request_protected_path,
     store::{NativePublicCommit, StoredRepository},
 };
 use std::{collections::BTreeSet, path::Path as FsPath};
@@ -363,6 +364,11 @@ fn ensure_public_request_path(
     path: &str,
 ) -> Result<ScopePath, ApiError> {
     let scope_path = ScopePath::parse(format!("/{path}")).map_err(ApiError::bad_request)?;
+    if is_public_request_protected_path(&scope_path) {
+        return Err(ApiError::conflict(
+            "public request cannot change a maintainer-controlled path",
+        ));
+    }
     if public_visible_paths
         .iter()
         .any(|path| path == scope_path.as_str())
@@ -569,6 +575,8 @@ mod tests {
             "configuring test email",
         )
         .unwrap();
+        fs::create_dir_all(repo.join(".scope")).unwrap();
+        fs::write(repo.join(".scope/RULES.md"), []).unwrap();
         repo
     }
 

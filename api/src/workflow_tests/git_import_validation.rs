@@ -55,6 +55,7 @@ fn oversized_binary_push_names_path_and_limit() {
 #[test]
 fn pushed_tree_rejects_paths_scope_would_normalize_or_git_cannot_serve() {
     validate_pushed_file_path("docs/read me.md").unwrap();
+    validate_pushed_file_path(".scope/RULES.md").unwrap();
     validate_pushed_file_path(".scope/runs/test.yml").unwrap();
     validate_pushed_file_path(".scope/runs/test-api.yaml").unwrap();
     for path in [
@@ -73,4 +74,37 @@ fn pushed_tree_rejects_paths_scope_would_normalize_or_git_cannot_serve() {
         let error = validate_pushed_file_path(path).unwrap_err();
         assert_eq!(error.status(), StatusCode::BAD_REQUEST);
     }
+}
+
+#[test]
+fn pushed_tree_requires_canonical_repo_rules() {
+    let repo = temp_git_repo("missing-rules-test");
+    fs::remove_file(repo.join(".scope/RULES.md")).unwrap();
+    run_git(
+        Some(&repo),
+        &["rm", "--cached", ".scope/RULES.md"],
+        "unstage rules",
+    )
+    .unwrap();
+    fs::write(repo.join("README.md"), "hello").unwrap();
+    run_git(Some(&repo), &["add", "README.md"], "add readme").unwrap();
+    run_git(
+        Some(&repo),
+        &[
+            "-c",
+            "user.name=Scope Test",
+            "-c",
+            "user.email=scope-test@example.test",
+            "commit",
+            "-m",
+            "missing rules",
+        ],
+        "commit without rules",
+    )
+    .unwrap();
+
+    let error = validate_pushed_tree(&repo, "HEAD").unwrap_err();
+
+    assert_eq!(error.status(), StatusCode::BAD_REQUEST);
+    assert!(error.message().contains("must contain .scope/RULES.md"));
 }

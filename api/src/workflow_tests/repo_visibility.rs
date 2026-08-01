@@ -279,29 +279,46 @@ async fn published_repo_projection_preview_serves_public_file_subset() {
 }
 
 #[tokio::test]
-async fn published_default_private_repo_without_public_files_stays_hidden() {
+async fn published_default_private_repo_exposes_only_canonical_rules() {
     let state = test_state_with_repo();
     mutate_repo(&state, |repo| {
-        set_private(repo, None);
+        set_private(repo, Some("/.scope/RULES.md"));
         repo.graph.commits.push(commit(
             "rv1",
             None,
             "initial",
-            vec![change(
-                Visibility::Private,
-                "/secret.txt",
-                None,
-                Some(source_blob(&state, "secret")),
-            )],
+            vec![
+                change(
+                    Visibility::Public,
+                    "/.scope/RULES.md",
+                    None,
+                    Some(source_blob(&state, "")),
+                ),
+                change(
+                    Visibility::Private,
+                    "/secret.txt",
+                    None,
+                    Some(source_blob(&state, "secret")),
+                ),
+            ],
         ));
     })
     .await;
-    assert_eq!(
-        get(state.clone(), "/v1/repos/owner/repo/files", None)
-            .await
-            .status(),
-        StatusCode::NOT_FOUND
-    );
+    state
+        .metadata
+        .jobs()
+        .run_ready_outbox_jobs(
+            "rules-only-visibility-test",
+            10,
+            &|| crate::persistence::unix_now().map_err(crate::error::ApiError::into_message),
+            &crate::persistence_ids::generate_persistence_id,
+        )
+        .await
+        .unwrap();
+    let files = get(state.clone(), "/v1/repos/owner/repo/files", None).await;
+    assert_eq!(files.status(), StatusCode::OK);
+    let files = response_json(files).await;
+    assert_eq!(files[0]["path"], "/.scope/RULES.md");
     assert_eq!(
         get(
             state,

@@ -1,6 +1,6 @@
 use super::{
     policy::{Policy, ScopePath, Visibility},
-    repo_control::{is_private_control_path, is_private_control_pattern},
+    repo_control::{is_private_control_path, is_repo_control_pattern, is_repo_rules_path},
 };
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
@@ -23,8 +23,8 @@ pub enum RepoConfigError {
     RelativePath,
     #[error("repo config path cannot contain empty segments, . or ..")]
     InvalidSegment,
-    #[error("repo config path {0} cannot be made public")]
-    ReservedPathPublic(String),
+    #[error("repo config cannot configure reserved Scope control path {0}")]
+    ReservedControlPath(String),
     #[error("repo config rewrite action {0} is unsupported")]
     UnsupportedRewriteAction(String),
 }
@@ -94,13 +94,15 @@ impl RepoConfig {
         }
         for rule in &self.visibility.rules {
             validate_config_pattern(&rule.path)?;
-            if rule.visibility == ConfigVisibility::Public && is_private_control_pattern(&rule.path)
-            {
-                return Err(RepoConfigError::ReservedPathPublic(rule.path.clone()));
+            if is_repo_control_pattern(&rule.path) {
+                return Err(RepoConfigError::ReservedControlPath(rule.path.clone()));
             }
         }
         for rewrite in &self.history.rewrites {
             validate_config_pattern(&rewrite.path)?;
+            if is_repo_control_pattern(&rewrite.path) {
+                return Err(RepoConfigError::ReservedControlPath(rewrite.path.clone()));
+            }
             if rewrite.action != HistoryRewriteAction::RedactPublicHistory {
                 return Err(RepoConfigError::UnsupportedRewriteAction(
                     rewrite.action.as_str().to_string(),
@@ -111,6 +113,9 @@ impl RepoConfig {
     }
 
     pub fn visibility_for_path(&self, path: &ScopePath) -> Visibility {
+        if is_repo_rules_path(path) {
+            return Visibility::Public;
+        }
         if is_private_control_path(path) {
             return Visibility::Private;
         }
@@ -301,7 +306,7 @@ mod tests {
     }
 
     #[test]
-    fn scope_control_paths_are_always_private() {
+    fn scope_controls_are_private_except_for_canonical_rules() {
         let config = RepoConfig::parse_json(
             br#"{
                 "kind": "scope.repo-config",
@@ -320,24 +325,54 @@ mod tests {
                 Visibility::Private
             );
         }
+        assert_eq!(
+            config.visibility_for_path(&ScopePath::parse("/.scope/RULES.md").unwrap()),
+            Visibility::Public
+        );
+
+        let mut private_config = RepoConfig::with_default_visibility(ConfigVisibility::Private);
+        private_config
+            .visibility
+            .rules
+            .push(RepoConfigVisibilityRule {
+                path: "/.scope/RULES.md".to_string(),
+                visibility: ConfigVisibility::Private,
+            });
+        assert_eq!(
+            private_config.visibility_for_path(&ScopePath::parse("/.scope/RULES.md").unwrap()),
+            Visibility::Public
+        );
     }
 
     #[test]
-    fn public_scope_control_rules_are_rejected() {
-        for path in ["/.scope/**", "/.scope/runs/test.yml"] {
+    fn scope_control_rules_and_rewrites_are_rejected() {
+        for (path, visibility) in [
+            ("/.scope/**", "public"),
+            ("/.scope/runs/test.yml", "private"),
+            ("/.scope/RULES.md", "private"),
+        ] {
             let json = format!(
                 r#"{{
                     "kind": "scope.repo-config",
                     "version": 1,
                     "visibility": {{
                         "default": "private",
-                        "rules": [{{ "path": "{path}", "visibility": "public" }}]
+                        "rules": [{{ "path": "{path}", "visibility": "{visibility}" }}]
                     }}
                 }}"#
             );
             let error = RepoConfig::parse_json(json.as_bytes()).unwrap_err();
-            assert!(matches!(error, RepoConfigError::ReservedPathPublic(_)));
+            assert!(matches!(error, RepoConfigError::ReservedControlPath(_)));
         }
+        let error = RepoConfig::parse_json(
+            br#"{
+                "kind":"scope.repo-config","version":1,
+                "visibility":{"default":"private","rules":[]},
+                "history":{"rewrites":[{"path":"/.scope/RULES.md","action":"redact-public-history"}]}
+            }"#,
+        )
+        .unwrap_err();
+        assert!(matches!(error, RepoConfigError::ReservedControlPath(_)));
     }
 
     #[test]

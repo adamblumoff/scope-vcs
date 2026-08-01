@@ -52,7 +52,9 @@ pub fn scope_failure<const N: usize>(cwd: &Path, args: [&str; N], expected: &str
 pub fn create_repo_with_head(cwd: &Path) {
     run_git(cwd, ["-c", "init.defaultBranch=main", "init"]);
     fs::write(cwd.join("README.md"), "initial\n").unwrap();
-    run_git(cwd, ["add", "README.md"]);
+    fs::create_dir_all(cwd.join(".scope")).unwrap();
+    fs::write(cwd.join(".scope/RULES.md"), []).unwrap();
+    run_git(cwd, ["add", "README.md", ".scope/RULES.md"]);
     commit_all(cwd, "initial");
 }
 
