@@ -224,6 +224,7 @@ pub fn repo_config_from_policy(
     config.visibility.rules = policy
         .rules()
         .iter()
+        .filter(|rule| !is_repo_control_pattern(rule.path.as_str()))
         .map(|rule| RepoConfigVisibilityRule {
             path: rule.path.as_str().to_string(),
             visibility: ConfigVisibility::from(rule.visibility),

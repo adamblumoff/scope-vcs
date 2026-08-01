@@ -322,17 +322,44 @@ fn ensure_public_request_commit_paths(
     staging_repo: &FsPath,
     commit_oid: &str,
 ) -> Result<Vec<ScopePath>, ApiError> {
+    let mut changed_paths = BTreeSet::new();
+    for path in public_request_changed_paths(staging_repo, commit_oid)? {
+        changed_paths.insert(ensure_public_request_path(
+            repo,
+            public_visible_paths,
+            &path,
+        )?);
+    }
+    Ok(changed_paths.into_iter().collect())
+}
+
+fn public_request_changed_paths(
+    staging_repo: &FsPath,
+    commit_oid: &str,
+) -> Result<Vec<String>, ApiError> {
+    let public_base_oid = git_commit_oid(staging_repo, PUBLIC_REQUEST_BASE_REF)?;
+    let parents = git_text(
+        staging_repo,
+        &["show", "-s", "--format=%P", commit_oid],
+        "reading public request commit parents",
+    )?
+    .split_ascii_whitespace()
+    .map(ToString::to_string)
+    .collect::<Vec<_>>();
+    let diff_base = parents
+        .iter()
+        .find(|parent| parent.as_str() == public_base_oid)
+        .or_else(|| parents.first())
+        .ok_or_else(|| ApiError::conflict("public request commit must have a parent"))?;
     let output = run_git_output(
         Some(staging_repo),
         &[
-            "diff-tree",
-            "--root",
+            "diff",
             "-r",
-            "-m",
-            "--no-commit-id",
             "--name-only",
             "-z",
             "--no-renames",
+            diff_base,
             commit_oid,
         ],
         "reading public request commit paths",
@@ -343,19 +370,15 @@ fn ensure_public_request_commit_paths(
             String::from_utf8_lossy(&output.stderr).trim()
         )));
     }
-    let mut changed_paths = BTreeSet::new();
+    let mut changed_paths = Vec::new();
     for path in output.stdout.split(|byte| *byte == 0) {
         if path.is_empty() {
             continue;
         }
         let path = String::from_utf8(path.to_vec()).map_err(ApiError::bad_request)?;
-        changed_paths.insert(ensure_public_request_path(
-            repo,
-            public_visible_paths,
-            &path,
-        )?);
+        changed_paths.push(path);
     }
-    Ok(changed_paths.into_iter().collect())
+    Ok(changed_paths)
 }
 
 fn ensure_public_request_path(
@@ -547,6 +570,80 @@ mod tests {
         .unwrap();
 
         assert!(ensure_public_head_is_request_ancestor(&repo, &request_head).is_err());
+
+        let _ = fs::remove_dir_all(repo);
+    }
+
+    #[test]
+    fn merge_path_validation_ignores_rules_inherited_from_current_public_main() {
+        let repo = initialized_repo("inherited-public-rules");
+        fs::write(repo.join("public.txt"), "base\n").unwrap();
+        commit_all(&repo, "public base");
+        let original_base = oid(&repo, "HEAD");
+
+        run_git(
+            Some(&repo),
+            &["switch", "--create", "request", &original_base],
+            "creating request branch",
+        )
+        .unwrap();
+        fs::write(repo.join("request.txt"), "request\n").unwrap();
+        commit_all(&repo, "request change");
+
+        run_git(Some(&repo), &["switch", "main"], "returning to public main").unwrap();
+        fs::write(repo.join(".scope/RULES.md"), "maintainer rules\n").unwrap();
+        commit_all(&repo, "update maintainer rules");
+        let current_public_head = oid(&repo, "HEAD");
+        run_git(
+            Some(&repo),
+            &["update-ref", PUBLIC_REQUEST_BASE_REF, &current_public_head],
+            "recording advanced public request base",
+        )
+        .unwrap();
+
+        run_git(
+            Some(&repo),
+            &["switch", "request"],
+            "returning to request branch",
+        )
+        .unwrap();
+        run_git(
+            Some(&repo),
+            &[
+                "merge",
+                "--no-ff",
+                "main",
+                "-m",
+                "merge current public main",
+            ],
+            "merging current public main",
+        )
+        .unwrap();
+        let merge_oid = oid(&repo, "HEAD");
+
+        let paths = public_request_changed_paths(&repo, &merge_oid).unwrap();
+
+        assert_eq!(paths, ["request.txt"]);
+
+        fs::write(repo.join(".scope/RULES.md"), "request override\n").unwrap();
+        run_git(
+            Some(&repo),
+            &["add", ".scope/RULES.md"],
+            "staging request rules override",
+        )
+        .unwrap();
+        run_git(
+            Some(&repo),
+            &["commit", "--amend", "--no-edit"],
+            "amending merge with request rules override",
+        )
+        .unwrap();
+        let amended_merge_oid = oid(&repo, "HEAD");
+
+        assert_eq!(
+            public_request_changed_paths(&repo, &amended_merge_oid).unwrap(),
+            [".scope/RULES.md", "request.txt"]
+        );
 
         let _ = fs::remove_dir_all(repo);
     }
