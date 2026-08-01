@@ -1,24 +1,15 @@
-use crate::{
-    api::{
-        AttemptRecoveryLookup, abandon_attempt, api_url, append_attempt_log,
-        attach_runner_repository, attempt_heartbeat, attempt_recovery_status,
-        attempt_recovery_status_if_active, complete_attempt, detach_runner_repository, get_repo,
-        get_runner, register_runner, runner_claim, runner_poll, upgrade_runner_registration,
-    },
-    login::session_from_cache_or_device,
+use crate::api::{
+    AttemptRecoveryLookup, abandon_attempt, append_attempt_log, attempt_heartbeat,
+    attempt_recovery_status, attempt_recovery_status_if_active, complete_attempt, runner_claim,
+    runner_poll,
 };
 use anyhow::{Context, bail};
 use reqwest::blocking::Client;
 use scope_api_contract::{
     AppendAttemptLogRequest, AttemptCacheFinalizationOutcome, AttemptConclusionRequest,
-    ClaimRunResponse, CompleteAttemptRequest, RegisterRunnerRequest,
-    UpgradeRunnerRegistrationRequest,
+    ClaimRunResponse, CompleteAttemptRequest,
 };
-use scope_domain::runs::{
-    run::StepState,
-    runner::{RUNNER_PROTOCOL_VERSION, RunnerCapabilities},
-    step::MAX_RUN_SETUP_FAILURE_MESSAGE_BYTES,
-};
+use scope_domain::runs::{run::StepState, step::MAX_RUN_SETUP_FAILURE_MESSAGE_BYTES};
 use std::{
     path::Path,
     process::Command,
@@ -40,10 +31,7 @@ mod supervisor;
 mod systemd;
 mod workspace;
 use checkout::checkout_exact_commit;
-use config::{
-    RunnerConfig, load_runner_config, load_runner_config_from, runner_cache_root,
-    runner_config_path, scope_config_home, store_runner_config,
-};
+use config::{RunnerConfig, load_runner_config, load_runner_config_from, scope_config_home};
 #[cfg(test)]
 use container::apply_container_limits;
 use container::{
@@ -52,7 +40,11 @@ use container::{
     require_root_image, stop_container,
 };
 use image::resolve_container_image;
-use management::{parse_repository, print_runner_status};
+#[cfg(test)]
+use management::parse_repository;
+pub use management::{
+    add_repository, doctor, install, list_caches, prune_caches, remove_repository, status,
+};
 mod recovery;
 use recovery::{
     RecoveryAttempt, RecoveryProgress, mark_recovery_abandon_pending,
@@ -71,186 +63,12 @@ use steps::{
 use supervisor::{AttemptStopReason, AttemptSupervisor};
 #[cfg(test)]
 use systemd::systemd_quote_path;
-use systemd::{install_systemd_service, print_linger_status};
 use workspace::{
     RunnerWorkDir, command_stdout, command_success, command_success_while, runner_work_root,
     unix_now,
 };
 
 const LOG_CHUNK_BYTES: usize = 16 * 1024;
-
-pub fn install(name: &str, repository: &str) -> anyhow::Result<()> {
-    let (owner, repo) = parse_repository(repository)?;
-    doctor_local(true)?;
-    let api_url = api_url();
-    let client = runner_client()?;
-    let session = session_from_cache_or_device(&client, &api_url)?;
-    let config_path = runner_config_path()?;
-    if config_path.exists() {
-        let mut config = load_runner_config_from(&config_path)?;
-        if config.api_url != api_url || config.name != name {
-            bail!(
-                "this machine is already configured as runner {} for {}; remove {} before replacing it",
-                config.name,
-                config.api_url,
-                config_path.display()
-            );
-        }
-        let cache_root = runner_cache_root(config.cache_root.as_deref())?;
-        cache::initialize(&cache_root)?;
-        let upgraded = upgrade_runner_registration(
-            &client,
-            &api_url,
-            &session.token,
-            &config.runner_id,
-            &UpgradeRunnerRegistrationRequest {
-                version: env!("CARGO_PKG_VERSION").to_string(),
-                protocol_version: RUNNER_PROTOCOL_VERSION,
-                capabilities: RunnerCapabilities::v1(),
-            },
-        )?;
-        config.secret = upgraded.secret;
-        config.cache_root = Some(cache_root);
-        store_runner_config(&config_path, &config)?;
-        let runner = upgraded.runner;
-        let repository_id = get_repo(&client, &api_url, &session.token, owner, repo)?.id;
-        if !runner
-            .grants
-            .iter()
-            .any(|grant| grant.active && grant.repository_id == repository_id)
-        {
-            attach_runner_repository(
-                &client,
-                &api_url,
-                &session.token,
-                &config.runner_id,
-                owner,
-                repo,
-                name,
-            )?;
-        }
-        install_systemd_service(&config_path)?;
-        println!("✓ Existing runner configuration restored");
-        println!("✓ systemd user service installed");
-        print_linger_status();
-        return Ok(());
-    }
-    let requested_cache_root = runner_cache_root(None)?;
-    cache::initialize(&requested_cache_root)?;
-    let registered = register_runner(
-        &client,
-        &api_url,
-        &session.token,
-        &RegisterRunnerRequest {
-            owner: owner.to_string(),
-            repo: repo.to_string(),
-            name: name.to_string(),
-            version: env!("CARGO_PKG_VERSION").to_string(),
-            protocol_version: RUNNER_PROTOCOL_VERSION,
-            capabilities: RunnerCapabilities::v1(),
-        },
-    )?;
-    let config = RunnerConfig {
-        api_url,
-        runner_id: registered.runner.id,
-        name: name.to_string(),
-        secret: registered.secret,
-        cache_root: Some(requested_cache_root),
-    };
-    if let Err(error) = store_runner_config(&config_path, &config) {
-        let _ =
-            crate::api::delete_runner(&client, &config.api_url, &session.token, &config.runner_id);
-        return Err(error);
-    }
-    install_systemd_service(&config_path)?;
-    println!("✓ Runner secret stored with mode 0600");
-    println!("✓ Docker available and test container completed");
-    println!("✓ systemd user service installed");
-    print_linger_status();
-    println!("✓ {name} is registered; the service is starting");
-    Ok(())
-}
-
-pub fn status() -> anyhow::Result<()> {
-    let config = load_runner_config()?;
-    let client = runner_client()?;
-    let session = session_from_cache_or_device(&client, &config.api_url)?;
-    let runner = get_runner(&client, &config.api_url, &session.token, &config.runner_id)?;
-    print_runner_status(&config.name, &runner);
-    Ok(())
-}
-
-pub fn add_repository(repository: &str) -> anyhow::Result<()> {
-    let config = load_runner_config()?;
-    let (owner, repo) = parse_repository(repository)?;
-    let client = runner_client()?;
-    let session = session_from_cache_or_device(&client, &config.api_url)?;
-    attach_runner_repository(
-        &client,
-        &config.api_url,
-        &session.token,
-        &config.runner_id,
-        owner,
-        repo,
-        &config.name,
-    )?;
-    println!("✓ Repository attached");
-    Ok(())
-}
-
-pub fn remove_repository(repository: &str) -> anyhow::Result<()> {
-    let config = load_runner_config()?;
-    let (owner, repo) = parse_repository(repository)?;
-    let client = runner_client()?;
-    let session = session_from_cache_or_device(&client, &config.api_url)?;
-    detach_runner_repository(
-        &client,
-        &config.api_url,
-        &session.token,
-        &config.runner_id,
-        owner,
-        repo,
-    )?;
-    println!("✓ Repository access revoked");
-    Ok(())
-}
-
-pub fn doctor() -> anyhow::Result<()> {
-    let capabilities = doctor_local(true)?;
-    if let Ok(config) = load_runner_config() {
-        cache::doctor(&config)?;
-        let limits = ResourceLimits::detect()?;
-        println!(
-            "✓ live resources ({} MiB memory, {:.3} CPU, {} PIDs)",
-            limits.memory_bytes / (1024 * 1024),
-            limits.cpu_millis as f64 / 1000.0,
-            limits.pids
-        );
-        let client = runner_client()?;
-        runner_poll(&client, &config.api_url, &config.secret)?;
-        println!("✓ Scope API");
-    }
-    println!(
-        "✓ Docker (writable-layer quotas {})",
-        if capabilities.storage_quota_supported {
-            "enabled"
-        } else {
-            "unavailable; best-effort storage guard enabled"
-        }
-    );
-    println!("✓ transient disk");
-    println!("✓ cgroups");
-    println!("✓ systemd user service");
-    Ok(())
-}
-
-pub fn list_caches() -> anyhow::Result<()> {
-    cache::list(&load_runner_config()?)
-}
-
-pub fn prune_caches(all: bool) -> anyhow::Result<()> {
-    cache::prune(&load_runner_config()?, all)
-}
 
 pub fn daemon(config_path: Option<&Path>) -> anyhow::Result<()> {
     let config = match config_path {
