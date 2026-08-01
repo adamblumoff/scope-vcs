@@ -1,3 +1,5 @@
+import type { RepoRunState } from '@/api/types'
+
 type StepLike = {
   index: number
   state: string
@@ -14,6 +16,20 @@ type AttemptLike = {
 }
 
 const MAX_CACHED_STEP_LOG_CHARACTERS = 512 * 1_024
+
+export function runNeedsPolling(state: RepoRunState): boolean {
+  switch (state) {
+    case 'queued':
+    case 'leased':
+    case 'running':
+      return true
+    case 'succeeded':
+    case 'failed':
+    case 'canceled':
+    case 'lost':
+      return false
+  }
+}
 
 export function reconcileExpandedAttempts(
   expanded: ReadonlySet<string>,

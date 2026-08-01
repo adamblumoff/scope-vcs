@@ -17,6 +17,7 @@ import {
   mergeStepLogs,
   reconcileAutomaticStepSelection,
   reconcileExpandedAttempts,
+  runNeedsPolling,
 } from './repository-run-detail-model'
 
 const REFRESH_INTERVAL_MS = 2_000
@@ -356,26 +357,39 @@ export function useRepositoryRunDetailController({
 
   useEffect(() => {
     mountedRef.current = true
+    return () => {
+      mountedRef.current = false
+    }
+  }, [])
+
+  useEffect(() => {
+    if (!runNeedsPolling(view.detail.run.state)) return
     const timer = window.setInterval(
       () => void refreshDetail(),
       REFRESH_INTERVAL_MS,
     )
-    return () => {
-      mountedRef.current = false
-      window.clearInterval(timer)
-    }
-  }, [refreshDetail])
+    return () => window.clearInterval(timer)
+  }, [refreshDetail, view.detail.run.state])
 
   useEffect(() => {
     const selection = view.selection
     if (!selection) return
+    if (!runNeedsPolling(view.detail.run.state)) {
+      void refreshLogsAfterInFlight(selection)
+      return
+    }
     void refreshLogs(selection)
     const timer = window.setInterval(
       () => void refreshLogs(selection),
       REFRESH_INTERVAL_MS,
     )
     return () => window.clearInterval(timer)
-  }, [refreshLogs, view.selection])
+  }, [
+    refreshLogs,
+    refreshLogsAfterInFlight,
+    view.detail.run.state,
+    view.selection,
+  ])
 
   useEffect(() => {
     const currentSelection = view.selection

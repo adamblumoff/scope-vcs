@@ -5,9 +5,19 @@ import {
   mergeStepLogs,
   reconcileAutomaticStepSelection,
   reconcileExpandedAttempts,
+  runNeedsPolling,
 } from './repository-run-detail-model'
 
 describe('repository run detail model', () => {
+  it('polls only while a run can still change', () => {
+    for (const state of ['queued', 'leased', 'running'] as const) {
+      assert.equal(runNeedsPolling(state), true)
+    }
+    for (const state of ['succeeded', 'failed', 'canceled', 'lost'] as const) {
+      assert.equal(runNeedsPolling(state), false)
+    }
+  })
+
   it('opens the newest attempt initially without exposing an ordinal', () => {
     assert.deepEqual(
       [...reconcileExpandedAttempts(new Set(), [], ['new', 'old'])],
