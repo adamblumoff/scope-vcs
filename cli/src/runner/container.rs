@@ -4,22 +4,33 @@ use scope_api_contract::ClaimRunResponse;
 use std::{env, path::Path, process::Command, thread, time::Duration};
 use time::{OffsetDateTime, format_description::well_known::Rfc3339};
 
-pub(super) fn doctor_local(run_container: bool) -> anyhow::Result<()> {
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub(super) struct DockerCapabilities {
+    pub(super) storage_quota_supported: bool,
+}
+
+pub(super) fn doctor_local(run_container: bool) -> anyhow::Result<DockerCapabilities> {
     if env::consts::OS != "linux" || env::consts::ARCH != "x86_64" {
         bail!("V4 runners require Linux on amd64");
     }
     command_success(Command::new("docker").args(["info"]), "connect to Docker")?;
     let limits = ResourceLimits::detect()?;
-    if run_container {
+    let capabilities = if run_container {
         let mut command = Command::new("docker");
         command.args(["run", "--rm"]);
-        apply_container_limits(&mut command, &limits, false);
+        apply_container_limits(&mut command, &limits, DockerCapabilities::default());
         command.args(["alpine:3.20", "true"]);
         command_success(&mut command, "run bounded Docker test container")?;
 
         let mut quota_test = Command::new("docker");
         quota_test.args(["run", "--rm"]);
-        apply_container_limits(&mut quota_test, &limits, true);
+        apply_container_limits(
+            &mut quota_test,
+            &limits,
+            DockerCapabilities {
+                storage_quota_supported: true,
+            },
+        );
         quota_test.args(["alpine:3.20", "true"]);
         let storage_quota_supported = quota_test
             .output()
@@ -27,9 +38,16 @@ pub(super) fn doctor_local(run_container: bool) -> anyhow::Result<()> {
             .status
             .success();
         if !storage_quota_supported {
-            bail!("Docker writable-layer quotas are required for safe transient disk admission");
+            eprintln!(
+                "Docker writable-layer quotas are unavailable; Scope will use best-effort free-space admission and active monitoring instead."
+            );
         }
-    }
+        DockerCapabilities {
+            storage_quota_supported,
+        }
+    } else {
+        DockerCapabilities::default()
+    };
     if !Path::new("/sys/fs/cgroup/cgroup.controllers").exists() {
         bail!("cgroups v2 is required");
     }
@@ -37,17 +55,118 @@ pub(super) fn doctor_local(run_container: bool) -> anyhow::Result<()> {
         Command::new("systemctl").args(["--user", "--version"]),
         "find systemd user service support",
     )?;
-    Ok(())
+    Ok(capabilities)
+}
+
+pub(super) fn probe_storage_quota_support(
+    image: &str,
+    limits: &ResourceLimits,
+) -> anyhow::Result<DockerCapabilities> {
+    let mut probe = Command::new("docker");
+    configure_storage_quota_probe(&mut probe, image, limits);
+    let output = probe
+        .output()
+        .context("probe Docker writable-layer quota support with workflow image")?;
+    if !output.status.success() {
+        eprintln!(
+            "Docker writable-layer quotas are unavailable; Scope will use best-effort free-space admission and active monitoring instead."
+        );
+        return Ok(DockerCapabilities::default());
+    }
+    let container_id = std::str::from_utf8(&output.stdout)
+        .context("quota probe returned a non-UTF-8 container ID")?
+        .trim();
+    if container_id.is_empty() || !container_id.bytes().all(|byte| byte.is_ascii_hexdigit()) {
+        bail!("quota probe returned an invalid Docker container ID");
+    }
+    let mut container = ContainerGuard::new(container_id.to_string());
+    let mut cleanup = Command::new("docker");
+    configure_storage_quota_cleanup(&mut cleanup, container_id);
+    command_success(&mut cleanup, "remove Docker writable-layer quota probe")?;
+    container.preserve();
+    Ok(DockerCapabilities {
+        storage_quota_supported: true,
+    })
+}
+
+fn configure_storage_quota_probe(command: &mut Command, image: &str, limits: &ResourceLimits) {
+    command.arg("create");
+    apply_container_limits(
+        command,
+        limits,
+        DockerCapabilities {
+            storage_quota_supported: true,
+        },
+    );
+    command.args(["--entrypoint", "sh", image, "-c", "true"]);
+}
+
+fn configure_storage_quota_cleanup(command: &mut Command, container_id: &str) {
+    command.args(["container", "rm", "--force", "--volumes", container_id]);
 }
 
 pub(super) fn apply_container_limits(
     command: &mut Command,
     limits: &ResourceLimits,
-    storage_quota_supported: bool,
+    capabilities: DockerCapabilities,
 ) {
     limits.apply(command);
-    if storage_quota_supported {
+    if capabilities.storage_quota_supported {
         command.args(["--storage-opt", &format!("size={}", limits.storage_bytes)]);
+    }
+}
+
+#[cfg(test)]
+mod quota_tests {
+    use super::*;
+
+    #[test]
+    fn quota_probe_uses_the_resolved_workflow_image_without_pulling() {
+        let limits = ResourceLimits {
+            memory_bytes: 1024,
+            cpu_millis: 1000,
+            pids: 128,
+            storage_bytes: 2048,
+        };
+        let mut command = Command::new("docker");
+        configure_storage_quota_probe(
+            &mut command,
+            "registry.example/workflow@sha256:abc",
+            &limits,
+        );
+        let arguments = command
+            .get_args()
+            .map(|argument| argument.to_string_lossy().into_owned())
+            .collect::<Vec<_>>();
+
+        assert_eq!(arguments.first().map(String::as_str), Some("create"));
+        assert!(
+            arguments
+                .windows(2)
+                .any(|pair| pair == ["--storage-opt", "size=2048"])
+        );
+        assert!(arguments.windows(5).any(|arguments| {
+            arguments
+                == [
+                    "--entrypoint",
+                    "sh",
+                    "registry.example/workflow@sha256:abc",
+                    "-c",
+                    "true",
+                ]
+        }));
+        assert!(!arguments.iter().any(|argument| argument == "pull"));
+        assert!(!arguments.iter().any(|argument| argument.contains("alpine")));
+
+        let mut cleanup = Command::new("docker");
+        configure_storage_quota_cleanup(&mut cleanup, "abc123");
+        assert_eq!(
+            cleanup
+                .get_args()
+                .map(|argument| argument.to_string_lossy().into_owned())
+                .collect::<Vec<_>>(),
+            ["container", "rm", "--force", "--volumes", "abc123"]
+        );
     }
 }
 
@@ -58,12 +177,13 @@ pub(super) struct JobContainerSpec<'a> {
     pub(super) image: &'a str,
     pub(super) step_programs: &'a Path,
     pub(super) limits: &'a ResourceLimits,
+    pub(super) capabilities: DockerCapabilities,
     pub(super) caches: &'a [CacheMount],
 }
 
 pub(super) fn configure_job_container_creation(command: &mut Command, spec: JobContainerSpec<'_>) {
     command.args(["create", "--name", spec.name]);
-    apply_container_limits(command, spec.limits, true);
+    apply_container_limits(command, spec.limits, spec.capabilities);
     command
         .args([
             "--label",
@@ -260,7 +380,7 @@ impl Drop for ContainerGuard {
             return;
         }
         let _ = Command::new("docker")
-            .args(["rm", "-f", &self.name])
+            .args(["container", "rm", "--force", "--volumes", &self.name])
             .output();
     }
 }

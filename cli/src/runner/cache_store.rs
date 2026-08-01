@@ -1,11 +1,10 @@
 use super::{CACHE_FORMAT, load_records, remove_cache, volume_is_referenced};
-use crate::runner::{command_stdout, runner_work_root};
+use crate::runner::command_stdout;
 use anyhow::{Context, bail};
 use serde::{Deserialize, Serialize};
 use std::{
     fs::{self, File},
     io::Write,
-    os::unix::fs::MetadataExt,
     path::Path,
     process::Command,
 };
@@ -14,21 +13,22 @@ const MIN_FREE_BYTES: u64 = 2 * 1024 * 1024 * 1024;
 const MIN_FREE_INODES: u64 = 10_000;
 
 #[derive(Debug, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
 struct StoreIdentity {
     format: u8,
-    device: u64,
-    source: String,
-    filesystem: String,
-    filesystem_uuid: String,
 }
 
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(super) struct Capacity {
     pub(super) available_bytes: u64,
-    pub(super) available_inodes: u64,
+    pub(super) available_inodes: Option<u64>,
 }
 
 pub(super) fn validate_store(root: &Path, initialize: bool) -> anyhow::Result<Capacity> {
+    if initialize {
+        fs::create_dir_all(root)
+            .with_context(|| format!("create cache root {}", root.display()))?;
+    }
     let metadata = fs::symlink_metadata(root)
         .with_context(|| format!("inspect configured cache root {}", root.display()))?;
     if !metadata.file_type().is_dir() || metadata.file_type().is_symlink() {
@@ -40,64 +40,18 @@ pub(super) fn validate_store(root: &Path, initialize: bool) -> anyhow::Result<Ca
             root.display()
         );
     }
-    let parent = root.parent().context("cache root has no parent")?;
-    if metadata.dev() == fs::metadata(parent)?.dev() {
-        bail!("cache root must be the mount point of a dedicated filesystem");
-    }
-    for critical in [Path::new("/"), runner_work_root()?.as_path()] {
-        if let Ok(critical) = fs::metadata(critical)
-            && critical.dev() == metadata.dev()
-        {
-            bail!("cache storage shares a filesystem with critical runner state");
-        }
-    }
-    let docker_root = command_stdout(
-        Command::new("docker").args(["info", "--format={{.DockerRootDir}}"]),
-        "inspect Docker data root",
-    )?;
-    if fs::metadata(docker_root.trim())?.dev() == metadata.dev() {
-        bail!("cache storage must not share Docker's transient filesystem");
-    }
-    let mount = command_stdout(
-        Command::new("findmnt")
-            .args(["-n", "-o", "SOURCE,FSTYPE,UUID", "-T"])
-            .arg(root),
-        "inspect cache filesystem",
-    )?;
-    let mut fields = mount.split_whitespace();
-    let source = fields.next().context("cache mount source is missing")?;
-    let filesystem = fields.next().context("cache filesystem type is missing")?;
-    let filesystem_uuid = fields.next().context("cache filesystem UUID is missing")?;
-    if filesystem_uuid == "-" {
-        bail!("cache filesystem must expose a stable UUID");
-    }
-    if !source.starts_with("/dev/")
-        || matches!(
-            filesystem,
-            "tmpfs" | "overlay" | "btrfs" | "zfs" | "nfs" | "nfs4" | "cifs" | "fuse"
-        )
-        || source.contains("loop")
-        || source.contains("zram")
-    {
-        bail!("cache root must use a dedicated finite local block filesystem");
-    }
     let identity = StoreIdentity {
         format: CACHE_FORMAT,
-        device: metadata.dev(),
-        source: source.to_string(),
-        filesystem: filesystem.to_string(),
-        filesystem_uuid: filesystem_uuid.to_string(),
     };
     let identity_path = root.join("store.json");
     if identity_path.exists() {
-        let stored: StoreIdentity = serde_json::from_slice(&fs::read(&identity_path)?)?;
-        if stored.format != identity.format
-            || stored.device != identity.device
-            || stored.source != identity.source
-            || stored.filesystem != identity.filesystem
-            || stored.filesystem_uuid != identity.filesystem_uuid
-        {
-            bail!("configured cache mount identity changed; refusing cached work");
+        let stored: StoreIdentity = serde_json::from_slice(&fs::read(&identity_path)?).context(
+            "runner cache store schema is unsupported; clear the cache and reinstall the runner",
+        )?;
+        if stored.format != identity.format {
+            bail!(
+                "runner cache store schema is unsupported; clear the cache and reinstall the runner"
+            );
         }
     } else if initialize {
         let mut entries = fs::read_dir(root)?
@@ -106,7 +60,7 @@ pub(super) fn validate_store(root: &Path, initialize: bool) -> anyhow::Result<Ca
             .collect::<Vec<_>>();
         entries.retain(|entry| entry.file_name() != ".lifecycle.lock");
         if !entries.is_empty() {
-            bail!("new cache filesystem must be empty");
+            bail!("new cache directory must be empty");
         }
         let mut file = File::create(&identity_path)?;
         serde_json::to_writer(&mut file, &identity)?;
@@ -114,7 +68,7 @@ pub(super) fn validate_store(root: &Path, initialize: bool) -> anyhow::Result<Ca
         file.sync_all()?;
         File::open(root)?.sync_all()?;
     } else {
-        bail!("cache filesystem has not been initialized by runner install");
+        bail!("cache directory has not been initialized by runner install");
     }
     filesystem_capacity(root)
 }
@@ -126,6 +80,10 @@ fn filesystem_capacity(root: &Path) -> anyhow::Result<Capacity> {
             .arg(root),
         "inspect cache filesystem capacity",
     )?;
+    parse_capacity(&output)
+}
+
+fn parse_capacity(output: &str) -> anyhow::Result<Capacity> {
     let values = output
         .lines()
         .last()
@@ -136,16 +94,19 @@ fn filesystem_capacity(root: &Path) -> anyhow::Result<Capacity> {
             .next()
             .context("cache byte capacity is missing")?
             .parse()?,
-        available_inodes: fields
-            .next()
-            .context("cache inode capacity is missing")?
-            .parse()?,
+        available_inodes: match fields.next().context("cache inode capacity is missing")? {
+            "-" | "0" => None,
+            available => Some(available.parse()?),
+        },
     })
 }
 
 pub(super) fn has_capacity(root: &Path) -> anyhow::Result<bool> {
     let capacity = filesystem_capacity(root)?;
-    Ok(capacity.available_bytes >= MIN_FREE_BYTES && capacity.available_inodes >= MIN_FREE_INODES)
+    Ok(capacity.available_bytes >= MIN_FREE_BYTES
+        && capacity
+            .available_inodes
+            .is_none_or(|available| available >= MIN_FREE_INODES))
 }
 
 pub(super) fn ensure_capacity(
@@ -177,4 +138,27 @@ fn prune_root(root: &Path, runner_id: &str) -> anyhow::Result<()> {
         }
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{Capacity, parse_capacity};
+
+    #[test]
+    fn dynamic_inode_counts_are_an_unavailable_metric() {
+        assert_eq!(
+            parse_capacity("Avail IFree\n123 -\n").unwrap(),
+            Capacity {
+                available_bytes: 123,
+                available_inodes: None,
+            }
+        );
+        assert_eq!(
+            parse_capacity("Avail IFree\n123 0\n").unwrap(),
+            Capacity {
+                available_bytes: 123,
+                available_inodes: None,
+            }
+        );
+    }
 }

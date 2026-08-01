@@ -1,4 +1,4 @@
-use super::{command_stdout, command_success};
+use super::{command_stdout, command_success_while};
 use anyhow::{Context, bail};
 use std::{
     path::Path,
@@ -12,14 +12,19 @@ pub(super) fn checkout_exact_commit(
     bundle_path: &Path,
     workspace: &Path,
     git_oid: &str,
+    should_continue: impl Fn() -> bool,
 ) -> anyhow::Result<()> {
-    command_success(
+    command_success_while(
         Command::new("git")
             .args(["clone", "--no-local", "--no-checkout"])
             .arg(bundle_path)
             .arg(workspace),
         "clone run source bundle without checking out files",
+        &should_continue,
     )?;
+    if !should_continue() {
+        bail!("inspect exact run commit tree: runner storage crossed its emergency floor");
+    }
     let output = Command::new("git")
         .current_dir(workspace)
         .args(["ls-tree", "-r", "-z", "--long", git_oid])
@@ -33,12 +38,16 @@ pub(super) fn checkout_exact_commit(
         );
     }
     validate_checkout_tree(&output.stdout)?;
-    command_success(
+    command_success_while(
         Command::new("git")
             .current_dir(workspace)
             .args(["checkout", "--detach", git_oid]),
         "check out exact run commit",
+        &should_continue,
     )?;
+    if !should_continue() {
+        bail!("verify checked-out run commit: runner storage crossed its emergency floor");
+    }
     let actual_oid = command_stdout(
         Command::new("git")
             .current_dir(workspace)

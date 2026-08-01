@@ -18,7 +18,11 @@ pub(super) fn download_attempt_source(
     attempt_id: &str,
     expected_digest: &str,
     destination: &Path,
+    should_continue: impl Fn() -> bool,
 ) -> anyhow::Result<()> {
+    if !should_continue() {
+        bail!("download run source bundle: runner storage crossed its emergency floor");
+    }
     let mut response = attempt_source(client, api_url, attempt_token, attempt_id)?;
     if response
         .content_length()
@@ -35,6 +39,9 @@ pub(super) fn download_attempt_source(
     let mut total = 0_u64;
     let mut buffer = [0_u8; 64 * 1024];
     loop {
+        if !should_continue() {
+            bail!("download run source bundle: runner storage crossed its emergency floor");
+        }
         let read = response
             .read(&mut buffer)
             .context("stream run source bundle")?;

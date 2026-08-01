@@ -1,5 +1,5 @@
 use anyhow::{Context, bail};
-use std::{env, fs, path::PathBuf, process::Command};
+use std::{env, fs, path::PathBuf, process::Command, thread, time::Duration};
 
 pub(super) fn command_success(command: &mut Command, context: &str) -> anyhow::Result<()> {
     let output = command.output().with_context(|| context.to_string())?;
@@ -8,6 +8,28 @@ pub(super) fn command_success(command: &mut Command, context: &str) -> anyhow::R
         bail!("{context}: {}", stderr.trim());
     }
     Ok(())
+}
+
+pub(super) fn command_success_while(
+    command: &mut Command,
+    context: &str,
+    should_continue: impl Fn() -> bool,
+) -> anyhow::Result<()> {
+    let mut child = command.spawn().with_context(|| context.to_string())?;
+    loop {
+        if !should_continue() {
+            let _ = child.kill();
+            let _ = child.wait();
+            bail!("{context}: runner storage crossed its emergency floor");
+        }
+        if let Some(status) = child.try_wait().with_context(|| context.to_string())? {
+            if status.success() {
+                return Ok(());
+            }
+            bail!("{context}: process exited with {status}");
+        }
+        thread::sleep(Duration::from_millis(100));
+    }
 }
 
 pub(super) fn command_stdout(command: &mut Command, context: &str) -> anyhow::Result<String> {

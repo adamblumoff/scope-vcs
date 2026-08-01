@@ -434,6 +434,40 @@ pub(super) fn run_steps(
             }
             thread::sleep(Duration::from_millis(500));
         };
+        let final_drain_result = if supervisor.storage_pressure_triggered() {
+            Ok(())
+        } else {
+            drain_step_logs(
+                client,
+                config,
+                claim,
+                &work.path,
+                &container.name,
+                step_index,
+                &snapshot,
+                &mut next_log_sequence,
+                &mut step_log_bytes,
+                &mut logs_exhausted,
+                &mut pending_log_chunk,
+                true,
+            )
+        };
+        if let Err(error) = final_drain_result {
+            work.preserve();
+            container.preserve();
+            eprintln!(
+                "Could not finish the completed workflow step log upload; recovery will retry: {error:#}"
+            );
+            return Err(ConclusionReportPending.into());
+        }
+        let storage_pressure = supervisor.storage_pressure_triggered();
+        if storage_pressure {
+            eprintln!(
+                "Attempt {} step {} was stopped after runner storage crossed its emergency floor",
+                claim.attempt_id, step_index
+            );
+        }
+        let exit_code = exit_code_after_storage_guard(exit_code, storage_pressure);
         let conclusion = if exit_code == 0 {
             StepConclusionRequest::Succeeded
         } else {
@@ -446,28 +480,6 @@ pub(super) fn run_steps(
             container.preserve();
             eprintln!(
                 "Could not persist the completed workflow step; recovery will retry: {error:#}"
-            );
-            return Err(ConclusionReportPending.into());
-        }
-        let final_drain_result = drain_step_logs(
-            client,
-            config,
-            claim,
-            &work.path,
-            &container.name,
-            step_index,
-            &snapshot,
-            &mut next_log_sequence,
-            &mut step_log_bytes,
-            &mut logs_exhausted,
-            &mut pending_log_chunk,
-            true,
-        );
-        if let Err(error) = final_drain_result {
-            work.preserve();
-            container.preserve();
-            eprintln!(
-                "Could not finish the completed workflow step log upload; recovery will retry: {error:#}"
             );
             return Err(ConclusionReportPending.into());
         }
@@ -491,6 +503,10 @@ pub(super) fn run_steps(
     }
     supervisor.mark_execution_finished();
     Ok(true)
+}
+
+fn exit_code_after_storage_guard(observed: i32, storage_pressure: bool) -> i32 {
+    if storage_pressure { 1 } else { observed }
 }
 
 pub(super) fn report_step_conclusion(
@@ -813,5 +829,11 @@ mod tests {
         );
 
         fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn storage_pressure_overrides_a_racing_successful_exit() {
+        assert_eq!(exit_code_after_storage_guard(0, true), 1);
+        assert_eq!(exit_code_after_storage_guard(7, false), 7);
     }
 }

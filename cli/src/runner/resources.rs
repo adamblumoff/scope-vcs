@@ -2,7 +2,6 @@ use anyhow::{Context, bail};
 use std::{
     fs,
     num::NonZeroUsize,
-    os::unix::fs::MetadataExt,
     path::{Component, Path, PathBuf},
     process::Command,
 };
@@ -17,6 +16,14 @@ const DAEMON_CPU_RESERVE_MILLIS: u64 = 500;
 const MIN_JOB_CPU_MILLIS: u64 = 500;
 const TRANSIENT_DISK_RESERVE: u64 = 5 * 1024 * MIB;
 const MIN_JOB_STORAGE: u64 = 2 * 1024 * MIB;
+const EMERGENCY_DISK_FLOOR: u64 = 2 * 1024 * MIB;
+const EMERGENCY_INODE_FLOOR: u64 = 10_000;
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct TransientCapacity {
+    available_bytes: u64,
+    available_inodes: Option<u64>,
+}
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(super) struct ResourceLimits {
@@ -231,6 +238,21 @@ fn job_cpu_millis(capacity: u64) -> anyhow::Result<u64> {
 }
 
 fn transient_storage_bytes() -> anyhow::Result<u64> {
+    safe_transient_storage_bytes(transient_storage_capacity()?)
+}
+
+fn has_emergency_capacity(capacity: TransientCapacity) -> bool {
+    capacity.available_bytes >= EMERGENCY_DISK_FLOOR
+        && capacity
+            .available_inodes
+            .is_none_or(|available| available >= EMERGENCY_INODE_FLOOR)
+}
+
+fn transient_storage_capacity() -> anyhow::Result<TransientCapacity> {
+    transient_storage_capacity_at(&transient_storage_root()?)
+}
+
+pub(super) fn transient_storage_root() -> anyhow::Result<PathBuf> {
     let output = Command::new("docker")
         .args(["info", "--format={{.DockerRootDir}}"])
         .output()
@@ -241,16 +263,18 @@ fn transient_storage_bytes() -> anyhow::Result<u64> {
             String::from_utf8_lossy(&output.stderr).trim()
         );
     }
-    let root = String::from_utf8_lossy(&output.stdout).trim().to_string();
-    let root = Path::new(&root);
-    let root_device = fs::metadata(root)
-        .with_context(|| format!("inspect Docker data root {}", root.display()))?
-        .dev();
-    if root_device == fs::metadata("/")?.dev() {
-        bail!("Docker data root must use a dedicated transient filesystem");
-    }
+    Ok(PathBuf::from(
+        String::from_utf8_lossy(&output.stdout).trim(),
+    ))
+}
+
+pub(super) fn storage_has_emergency_capacity_at(root: &Path) -> anyhow::Result<bool> {
+    Ok(has_emergency_capacity(transient_storage_capacity_at(root)?))
+}
+
+fn transient_storage_capacity_at(root: &Path) -> anyhow::Result<TransientCapacity> {
     let output = Command::new("df")
-        .args(["-B1", "--output=avail"])
+        .args(["-B1", "--output=avail,itotal,iavail"])
         .arg(root)
         .output()
         .context("inspect transient filesystem capacity")?;
@@ -260,14 +284,43 @@ fn transient_storage_bytes() -> anyhow::Result<u64> {
             String::from_utf8_lossy(&output.stderr).trim()
         );
     }
-    let available = String::from_utf8_lossy(&output.stdout)
+    parse_transient_capacity(&String::from_utf8_lossy(&output.stdout))
+}
+
+fn parse_transient_capacity(output: &str) -> anyhow::Result<TransientCapacity> {
+    let values = output
         .lines()
         .last()
         .context("transient capacity output is empty")?
-        .trim()
-        .parse::<u64>()
-        .context("parse transient filesystem capacity")?;
-    let job = available.saturating_sub(TRANSIENT_DISK_RESERVE);
+        .to_string();
+    let mut fields = values.split_whitespace();
+    let available_bytes = fields
+        .next()
+        .context("transient byte capacity is missing")?
+        .parse()?;
+    let total_inodes = fields.next().and_then(|value| value.parse::<u64>().ok());
+    let available_inodes = fields.next().and_then(|value| value.parse::<u64>().ok());
+    Ok(TransientCapacity {
+        available_bytes,
+        available_inodes: total_inodes
+            .filter(|total| *total != 0)
+            .and(available_inodes),
+    })
+}
+
+fn safe_transient_storage_bytes(capacity: TransientCapacity) -> anyhow::Result<u64> {
+    if let Some(available_inodes) = capacity.available_inodes
+        && available_inodes < EMERGENCY_INODE_FLOOR
+    {
+        bail!(
+            "Docker data root has {} free inodes; at least {} are required",
+            available_inodes,
+            EMERGENCY_INODE_FLOOR
+        );
+    }
+    let job = capacity
+        .available_bytes
+        .saturating_sub(TRANSIENT_DISK_RESERVE);
     if job < MIN_JOB_STORAGE {
         bail!(
             "Docker data root has {} MiB safe headroom; at least {} MiB is required",
@@ -452,5 +505,70 @@ mod tests {
             ]
         );
         assert!(!args.iter().any(|argument| argument == "--cgroup-parent"));
+    }
+
+    #[test]
+    fn transient_storage_preserves_the_host_reserve_on_any_filesystem() {
+        let available = TRANSIENT_DISK_RESERVE + MIN_JOB_STORAGE + 123;
+        assert_eq!(
+            safe_transient_storage_bytes(TransientCapacity {
+                available_bytes: available,
+                available_inodes: Some(EMERGENCY_INODE_FLOOR),
+            })
+            .unwrap(),
+            MIN_JOB_STORAGE + 123
+        );
+        assert!(
+            safe_transient_storage_bytes(TransientCapacity {
+                available_bytes: TRANSIENT_DISK_RESERVE + MIN_JOB_STORAGE - 1,
+                available_inodes: Some(EMERGENCY_INODE_FLOOR),
+            })
+            .is_err()
+        );
+        assert!(
+            safe_transient_storage_bytes(TransientCapacity {
+                available_bytes: TRANSIENT_DISK_RESERVE + MIN_JOB_STORAGE,
+                available_inodes: Some(EMERGENCY_INODE_FLOOR - 1),
+            })
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn emergency_capacity_uses_the_runtime_floor() {
+        assert!(!has_emergency_capacity(TransientCapacity {
+            available_bytes: EMERGENCY_DISK_FLOOR - 1,
+            available_inodes: Some(EMERGENCY_INODE_FLOOR),
+        }));
+        assert!(!has_emergency_capacity(TransientCapacity {
+            available_bytes: EMERGENCY_DISK_FLOOR,
+            available_inodes: Some(EMERGENCY_INODE_FLOOR - 1),
+        }));
+        assert!(has_emergency_capacity(TransientCapacity {
+            available_bytes: EMERGENCY_DISK_FLOOR,
+            available_inodes: Some(EMERGENCY_INODE_FLOOR),
+        }));
+        assert!(has_emergency_capacity(TransientCapacity {
+            available_bytes: EMERGENCY_DISK_FLOOR,
+            available_inodes: None,
+        }));
+    }
+
+    #[test]
+    fn transient_capacity_treats_dynamic_inode_counts_as_unavailable() {
+        assert_eq!(
+            parse_transient_capacity("Avail Inodes IFree\n123 - -\n").unwrap(),
+            TransientCapacity {
+                available_bytes: 123,
+                available_inodes: None,
+            }
+        );
+        assert_eq!(
+            parse_transient_capacity("Avail Inodes IFree\n123 0 0\n").unwrap(),
+            TransientCapacity {
+                available_bytes: 123,
+                available_inodes: None,
+            }
+        );
     }
 }
