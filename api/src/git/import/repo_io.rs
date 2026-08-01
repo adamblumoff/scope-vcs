@@ -309,6 +309,8 @@ pub(super) fn git_changed_tree_entries(
 
 pub(crate) fn validate_pushed_tree(staging_repo: &FsPath, head_oid: &str) -> Result<(), ApiError> {
     let entries = git_tree_entries(staging_repo, head_oid)?;
+    // The server owns the canonical rules invariant. Agent-specific adapters depend on
+    // repo-local tool signals and remain a `scope push` preflight concern.
     if !entries.iter().any(|entry| entry.path == ".scope/RULES.md") {
         return Err(ApiError::bad_request(
             "pushed main tree must contain .scope/RULES.md",

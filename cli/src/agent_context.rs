@@ -37,12 +37,15 @@ pub fn sync_repo_rules(git_root: &Path) -> anyhow::Result<SyncResult> {
     } else {
         true
     };
-    if create_rules {
-        ensure_new_rules_are_trackable(git_root)?;
+    ensure_required_path_is_trackable(git_root, RULES_RELATIVE_PATH)?;
+
+    let (adapters, required_adapters) = detected_sync_adapters(git_root)?;
+    for adapter in &required_adapters {
+        ensure_required_path_is_trackable(git_root, adapter.path)?;
     }
 
     let mut adapter_updates = Vec::new();
-    for adapter in detected_adapters(git_root) {
+    for adapter in adapters {
         let path = git_root.join(adapter.path);
         reject_symlink(&path)?;
         let current = match fs::read_to_string(&path) {
@@ -129,25 +132,30 @@ fn reject_symlink(path: &Path) -> anyhow::Result<()> {
     }
 }
 
-fn ensure_new_rules_are_trackable(git_root: &Path) -> anyhow::Result<()> {
+fn ensure_required_path_is_trackable(git_root: &Path, relative_path: &str) -> anyhow::Result<()> {
+    let tracked = Command::new("git")
+        .current_dir(git_root)
+        .args(["ls-files", "--error-unmatch", "--", relative_path])
+        .output()
+        .with_context(|| format!("check whether {relative_path} is tracked"))?;
+    if tracked.status.success() {
+        return Ok(());
+    }
     let output = Command::new("git")
         .current_dir(git_root)
-        .args([
-            "check-ignore",
-            "--quiet",
-            "--no-index",
-            "--",
-            RULES_RELATIVE_PATH,
-        ])
+        .args(["check-ignore", "--quiet", "--no-index", "--", relative_path])
         .output()
-        .context("check whether .scope/RULES.md is ignored")?;
+        .with_context(|| format!("check whether {relative_path} is ignored"))?;
     match output.status.code() {
         Some(1) => Ok(()),
-        Some(0) => bail!(
+        Some(0) if relative_path == RULES_RELATIVE_PATH => bail!(
             ".scope/RULES.md is ignored; add `!/.scope/` and `!/.scope/RULES.md` after the matching ignore rule, then rerun `scope rules sync`"
         ),
+        Some(0) => bail!(
+            "{relative_path} is ignored but required in the pushed tree; add `!/{relative_path}` after the matching ignore rule, then rerun `scope rules sync`"
+        ),
         _ => bail!(
-            "could not check whether .scope/RULES.md is ignored: {}",
+            "could not check whether {relative_path} is ignored: {}",
             String::from_utf8_lossy(&output.stderr).trim()
         ),
     }
@@ -203,6 +211,45 @@ fn detected_adapters(git_root: &Path) -> Vec<Adapter> {
         }
     }
     adapters_for_paths(&paths)
+}
+
+fn detected_sync_adapters(git_root: &Path) -> anyhow::Result<(Vec<Adapter>, Vec<Adapter>)> {
+    let mut required = adapters_for_paths(&git_cached_paths(git_root));
+    let head = Command::new("git")
+        .current_dir(git_root)
+        .args(["rev-parse", "--verify", "--quiet", "HEAD^{commit}"])
+        .output()
+        .context("inspect current commit for agent context")?;
+    if head.status.success() {
+        let head_oid = String::from_utf8(head.stdout)
+            .context("current commit id is not UTF-8")?
+            .trim()
+            .to_string();
+        for adapter in detected_head_adapters(git_root, &head_oid)? {
+            if !required
+                .iter()
+                .any(|required| required.path == adapter.path)
+            {
+                required.push(adapter);
+            }
+        }
+    } else if !head.stderr.is_empty() {
+        bail!(
+            "could not inspect current commit for agent context: {}",
+            String::from_utf8_lossy(&head.stderr).trim()
+        );
+    }
+
+    let mut adapters = detected_adapters(git_root);
+    for adapter in &required {
+        if !adapters
+            .iter()
+            .any(|detected| detected.path == adapter.path)
+        {
+            adapters.push(*adapter);
+        }
+    }
+    Ok((adapters, required))
 }
 
 fn adapters_for_paths(paths: &[String]) -> Vec<Adapter> {
@@ -272,15 +319,26 @@ fn git_tree_paths(git_root: &Path, head_oid: &str) -> anyhow::Result<Vec<String>
 }
 
 fn git_visible_paths(git_root: &Path) -> Vec<String> {
-    let Ok(output) = Command::new("git")
-        .current_dir(git_root)
-        .args([
+    git_list_paths(
+        git_root,
+        &[
             "ls-files",
             "-z",
             "--cached",
             "--others",
             "--exclude-standard",
-        ])
+        ],
+    )
+}
+
+fn git_cached_paths(git_root: &Path) -> Vec<String> {
+    git_list_paths(git_root, &["ls-files", "-z", "--cached"])
+}
+
+fn git_list_paths(git_root: &Path, args: &[&str]) -> Vec<String> {
+    let Ok(output) = Command::new("git")
+        .current_dir(git_root)
+        .args(args)
         .output()
     else {
         return Vec::new();
@@ -464,18 +522,88 @@ mod tests {
     }
 
     #[test]
-    fn ignored_new_rules_fail_before_any_files_are_written() {
-        let repo = TestDir::git_repo("rules-ignored", "main");
-        fs::write(repo.path().join(".gitignore"), "/.scope/*\n").unwrap();
+    fn ignored_rules_fail_before_any_files_are_written() {
+        for existing_rules in [false, true] {
+            let repo = TestDir::git_repo(
+                if existing_rules {
+                    "rules-existing-ignored"
+                } else {
+                    "rules-new-ignored"
+                },
+                "main",
+            );
+            fs::write(repo.path().join(".gitignore"), "/.scope/*\n").unwrap();
+            fs::create_dir(repo.path().join(".codex")).unwrap();
+            if existing_rules {
+                fs::create_dir(repo.path().join(".scope")).unwrap();
+                fs::write(repo.path().join(RULES_RELATIVE_PATH), "existing\n").unwrap();
+            }
+
+            let error = sync_repo_rules(repo.path()).unwrap_err();
+
+            let message = format!("{error:#}");
+            assert!(message.contains(".scope/RULES.md is ignored"));
+            assert!(message.contains("!/.scope/RULES.md"));
+            assert_eq!(
+                repo.path().join(RULES_RELATIVE_PATH).exists(),
+                existing_rules
+            );
+            assert!(!repo.path().join(CODEX_FILE).exists());
+        }
+    }
+
+    #[test]
+    fn ignored_required_adapter_fails_before_rules_are_created() {
+        let repo = TestDir::git_repo("rules-adapter-ignored", "main");
+        fs::write(repo.path().join(".gitignore"), "/AGENTS.md\n").unwrap();
         fs::create_dir(repo.path().join(".codex")).unwrap();
+        fs::write(repo.path().join(".codex/config.toml"), "model = 'scope'\n").unwrap();
+        repo.run_git(["add", ".codex/config.toml"]);
 
         let error = sync_repo_rules(repo.path()).unwrap_err();
 
-        let message = format!("{error:#}");
-        assert!(message.contains(".scope/RULES.md is ignored"));
-        assert!(message.contains("!/.scope/RULES.md"));
+        assert!(format!("{error:#}").contains("AGENTS.md is ignored"));
         assert!(!repo.path().join(RULES_RELATIVE_PATH).exists());
         assert!(!repo.path().join(CODEX_FILE).exists());
+    }
+
+    #[test]
+    fn worktree_override_does_not_hide_adapter_required_by_head() {
+        let repo = TestDir::git_repo("rules-local-override", "main");
+        fs::create_dir_all(repo.path().join(".scope")).unwrap();
+        fs::write(repo.path().join(RULES_RELATIVE_PATH), []).unwrap();
+        fs::create_dir(repo.path().join(".codex")).unwrap();
+        fs::write(repo.path().join(".codex/config.toml"), "model = 'scope'\n").unwrap();
+        fs::write(repo.path().join(CODEX_FILE), "committed guidance\n").unwrap();
+        repo.run_git(["add", RULES_RELATIVE_PATH, ".codex/config.toml", CODEX_FILE]);
+        repo.run_git([
+            "-c",
+            "user.email=scope@example.test",
+            "-c",
+            "user.name=Scope Test",
+            "commit",
+            "-m",
+            "commit unsynced codex context",
+        ]);
+        fs::write(
+            repo.path().join(".git/info/exclude"),
+            "AGENTS.override.md\n",
+        )
+        .unwrap();
+        fs::write(repo.path().join(CODEX_OVERRIDE_FILE), "local override\n").unwrap();
+
+        sync_repo_rules(repo.path()).unwrap();
+
+        assert!(
+            fs::read_to_string(repo.path().join(CODEX_FILE))
+                .unwrap()
+                .contains(CODEX_BLOCK)
+        );
+        assert!(
+            fs::read_to_string(repo.path().join(CODEX_OVERRIDE_FILE))
+                .unwrap()
+                .contains(CODEX_BLOCK)
+        );
     }
 
     #[test]
