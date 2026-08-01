@@ -66,7 +66,7 @@ pub fn ensure_repo_rules_ready_for_push(git_root: &Path, head_oid: &str) -> anyh
     let result = (|| {
         ensure_worktree_is_synced(git_root)?;
         ensure_head_file(git_root, head_oid, RULES_RELATIVE_PATH, None)?;
-        for adapter in detected_adapters(git_root) {
+        for adapter in detected_head_adapters(git_root, head_oid)? {
             ensure_head_file(git_root, head_oid, adapter.path, Some(adapter.block))?;
         }
         Ok(())
@@ -80,6 +80,11 @@ pub fn ensure_repo_rules_ready_for_push(git_root: &Path, head_oid: &str) -> anyh
 
 fn ensure_worktree_is_synced(git_root: &Path) -> anyhow::Result<()> {
     let rules_path = git_root.join(RULES_RELATIVE_PATH);
+    reject_symlink(
+        rules_path
+            .parent()
+            .expect("canonical rules path has a parent"),
+    )?;
     reject_symlink(&rules_path)?;
     if !rules_path.is_file() {
         bail!("{} is required", rules_path.display());
@@ -142,22 +147,50 @@ struct Adapter {
 }
 
 fn detected_adapters(git_root: &Path) -> Vec<Adapter> {
-    let mut adapters = Vec::new();
-    let git_visible_paths = git_visible_paths(git_root);
-    let has_codex_context = git_visible_paths
+    let mut paths = git_visible_paths(git_root);
+    for path in [
+        CODEX_OVERRIDE_FILE,
+        CODEX_FILE,
+        CLAUDE_FILE,
+        CLAUDE_LOCAL_FILE,
+        ".mcp.json",
+    ] {
+        if git_root.join(path).is_file() && !paths.iter().any(|visible| visible == path) {
+            paths.push(path.to_owned());
+        }
+    }
+    for path in [".codex", ".agents", ".claude"] {
+        if git_root.join(path).is_dir() {
+            paths.push(path.to_owned());
+        }
+    }
+    adapters_for_paths(&paths)
+}
+
+fn adapters_for_paths(paths: &[String]) -> Vec<Adapter> {
+    let has_path = |expected: &str| paths.iter().any(|path| path == expected);
+    let has_directory = |directory: &str| {
+        let prefix = format!("{directory}/");
+        paths
+            .iter()
+            .any(|path| path == directory || path.starts_with(&prefix))
+    };
+    let has_codex_context = paths
         .iter()
         .any(|path| matches!(path_basename(path), "AGENTS.md" | "AGENTS.override.md"));
-    let has_claude_context = git_visible_paths
+    let has_claude_context = paths
         .iter()
         .any(|path| matches!(path_basename(path), "CLAUDE.md" | "CLAUDE.local.md"));
-    if git_root.join(CODEX_OVERRIDE_FILE).is_file() {
+
+    let mut adapters = Vec::new();
+    if has_path(CODEX_OVERRIDE_FILE) {
         adapters.push(Adapter {
             path: CODEX_OVERRIDE_FILE,
             block: CODEX_BLOCK,
         });
-    } else if git_root.join(".codex").is_dir()
-        || git_root.join(".agents").is_dir()
-        || git_root.join(CODEX_FILE).is_file()
+    } else if has_directory(".codex")
+        || has_directory(".agents")
+        || has_path(CODEX_FILE)
         || has_codex_context
     {
         adapters.push(Adapter {
@@ -165,10 +198,10 @@ fn detected_adapters(git_root: &Path) -> Vec<Adapter> {
             block: CODEX_BLOCK,
         });
     }
-    if git_root.join(".claude").is_dir()
-        || git_root.join(CLAUDE_FILE).is_file()
-        || git_root.join(CLAUDE_LOCAL_FILE).is_file()
-        || git_root.join(".mcp.json").is_file()
+    if has_directory(".claude")
+        || has_path(CLAUDE_FILE)
+        || has_path(CLAUDE_LOCAL_FILE)
+        || has_path(".mcp.json")
         || has_claude_context
     {
         adapters.push(Adapter {
@@ -177,6 +210,27 @@ fn detected_adapters(git_root: &Path) -> Vec<Adapter> {
         });
     }
     adapters
+}
+
+fn detected_head_adapters(git_root: &Path, head_oid: &str) -> anyhow::Result<Vec<Adapter>> {
+    Ok(adapters_for_paths(&git_tree_paths(git_root, head_oid)?))
+}
+
+fn git_tree_paths(git_root: &Path, head_oid: &str) -> anyhow::Result<Vec<String>> {
+    let output = Command::new("git")
+        .current_dir(git_root)
+        .args(["ls-tree", "-r", "-z", "--name-only", head_oid])
+        .output()
+        .context("inspect pushed tree for agent context")?;
+    if !output.status.success() {
+        bail!("could not inspect pushed tree for agent context");
+    }
+    Ok(output
+        .stdout
+        .split(|byte| *byte == 0)
+        .filter(|path| !path.is_empty())
+        .map(|path| String::from_utf8_lossy(path).into_owned())
+        .collect())
 }
 
 fn git_visible_paths(git_root: &Path) -> Vec<String> {
@@ -383,5 +437,68 @@ mod tests {
             .to_string();
 
         ensure_repo_rules_ready_for_push(repo.path(), &head).unwrap();
+    }
+
+    #[test]
+    fn push_preflight_uses_committed_agent_signals() {
+        let repo = TestDir::git_repo("rules-committed-signal", "main");
+        fs::create_dir_all(repo.path().join(".scope")).unwrap();
+        fs::write(repo.path().join(RULES_RELATIVE_PATH), []).unwrap();
+        fs::create_dir(repo.path().join(".codex")).unwrap();
+        fs::write(repo.path().join(".codex/config.toml"), "model = 'scope'\n").unwrap();
+        repo.run_git(["add", RULES_RELATIVE_PATH, ".codex/config.toml"]);
+        repo.run_git([
+            "-c",
+            "user.email=scope@example.test",
+            "-c",
+            "user.name=Scope Test",
+            "commit",
+            "-m",
+            "commit unsynced signal",
+        ]);
+        repo.run_git(["rm", ".codex/config.toml"]);
+
+        let error = ensure_repo_rules_ready_for_push(repo.path(), "HEAD").unwrap_err();
+
+        assert!(format!("{error:#}").contains("AGENTS.md is not committed"));
+    }
+
+    #[test]
+    fn push_preflight_uses_committed_codex_override() {
+        let repo = TestDir::git_repo("rules-committed-override", "main");
+        fs::create_dir_all(repo.path().join(".scope")).unwrap();
+        fs::write(repo.path().join(RULES_RELATIVE_PATH), []).unwrap();
+        fs::write(repo.path().join(CODEX_FILE), format!("{CODEX_BLOCK}\n")).unwrap();
+        fs::write(repo.path().join(CODEX_OVERRIDE_FILE), "active override\n").unwrap();
+        repo.run_git(["add", RULES_RELATIVE_PATH, CODEX_FILE, CODEX_OVERRIDE_FILE]);
+        repo.run_git([
+            "-c",
+            "user.email=scope@example.test",
+            "-c",
+            "user.name=Scope Test",
+            "commit",
+            "-m",
+            "commit unsynced override",
+        ]);
+        repo.run_git(["rm", CODEX_OVERRIDE_FILE]);
+
+        let error = ensure_repo_rules_ready_for_push(repo.path(), "HEAD").unwrap_err();
+
+        assert!(format!("{error:#}").contains("AGENTS.override.md does not contain"));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn push_preflight_rejects_symlinked_scope_directory() {
+        use std::os::unix::fs::symlink;
+
+        let repo = TestDir::git_repo("rules-symlinked-parent", "main");
+        fs::create_dir(repo.path().join("rules-target")).unwrap();
+        fs::write(repo.path().join("rules-target/RULES.md"), []).unwrap();
+        symlink("rules-target", repo.path().join(".scope")).unwrap();
+
+        let error = ensure_repo_rules_ready_for_push(repo.path(), "HEAD").unwrap_err();
+
+        assert!(format!("{error:#}").contains("must not be a symlink"));
     }
 }
