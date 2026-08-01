@@ -434,6 +434,32 @@ pub(super) fn run_steps(
             }
             thread::sleep(Duration::from_millis(500));
         };
+        let final_drain_result = if supervisor.storage_pressure_triggered() {
+            Ok(())
+        } else {
+            drain_step_logs(
+                client,
+                config,
+                claim,
+                &work.path,
+                &container.name,
+                step_index,
+                &snapshot,
+                &mut next_log_sequence,
+                &mut step_log_bytes,
+                &mut logs_exhausted,
+                &mut pending_log_chunk,
+                true,
+            )
+        };
+        if let Err(error) = final_drain_result {
+            work.preserve();
+            container.preserve();
+            eprintln!(
+                "Could not finish the completed workflow step log upload; recovery will retry: {error:#}"
+            );
+            return Err(ConclusionReportPending.into());
+        }
         let storage_pressure = supervisor.storage_pressure_triggered();
         if storage_pressure {
             eprintln!(
@@ -454,28 +480,6 @@ pub(super) fn run_steps(
             container.preserve();
             eprintln!(
                 "Could not persist the completed workflow step; recovery will retry: {error:#}"
-            );
-            return Err(ConclusionReportPending.into());
-        }
-        let final_drain_result = drain_step_logs(
-            client,
-            config,
-            claim,
-            &work.path,
-            &container.name,
-            step_index,
-            &snapshot,
-            &mut next_log_sequence,
-            &mut step_log_bytes,
-            &mut logs_exhausted,
-            &mut pending_log_chunk,
-            true,
-        );
-        if let Err(error) = final_drain_result {
-            work.preserve();
-            container.preserve();
-            eprintln!(
-                "Could not finish the completed workflow step log upload; recovery will retry: {error:#}"
             );
             return Err(ConclusionReportPending.into());
         }

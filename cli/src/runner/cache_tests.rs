@@ -26,7 +26,7 @@ fn volume(record: &CacheRecord, backing: &Path) -> VolumeInspection {
         volume_type: Some("none".to_string()),
         options: Some("bind".to_string()),
         labels: [
-            ("scope.cache-format", "1"),
+            ("scope.cache-format", "2"),
             ("scope.cache-key", record.identity_digest.as_str()),
             ("scope.repository-id", record.repository_id.as_str()),
             ("scope.cache-name", record.cache_name.as_str()),
@@ -44,7 +44,7 @@ fn volume(record: &CacheRecord, backing: &Path) -> VolumeInspection {
 fn physical_names_are_bounded_and_versioned() {
     let digest = "a".repeat(64);
     let name = volume_name(&digest);
-    assert_eq!(name, format!("scope-cache-v1-{}", "a".repeat(40)));
+    assert_eq!(name, format!("scope-cache-v2-{}", "a".repeat(40)));
     assert!(name.len() < 64);
 }
 
@@ -166,4 +166,46 @@ fn moving_an_initialized_cache_directory_does_not_brick_it() {
     fs::rename(&original, &moved).unwrap();
 
     validate_store(&moved, false).unwrap();
+}
+
+#[test]
+fn obsolete_cache_store_format_is_rejected() {
+    let parent = TestDir::new("runner-cache-old-format");
+    let root = parent.path().join("scope/runner");
+    fs::create_dir_all(&root).unwrap();
+    fs::write(
+        root.join("store.json"),
+        br#"{"format":1,"device":1,"source":"/old","filesystem":"xfs"}"#,
+    )
+    .unwrap();
+
+    let error = validate_store(&root, false).unwrap_err();
+    assert!(error.to_string().contains("schema is unsupported"));
+}
+
+#[test]
+fn cleared_disposable_default_cache_is_reinitialized() {
+    let parent = TestDir::new("runner-cache-disposable-default");
+    let root = parent.path().join("scope/runner");
+    initialize(&root).unwrap();
+    fs::remove_file(root.join("store.json")).unwrap();
+    fs::remove_dir(root.join("metadata")).unwrap();
+    fs::remove_dir(root.join("data")).unwrap();
+    assert!(root.join(".lifecycle.lock").is_file());
+    ensure_usable_root(&root, true).unwrap();
+
+    assert!(root.join("store.json").is_file());
+    assert!(root.join("metadata").is_dir());
+    assert!(root.join("data").is_dir());
+}
+
+#[test]
+fn cleared_custom_cache_is_not_reinitialized() {
+    let parent = TestDir::new("runner-cache-custom");
+    let root = parent.path().join("custom");
+    initialize(&root).unwrap();
+    fs::remove_dir_all(&root).unwrap();
+
+    assert!(ensure_usable_root(&root, false).is_err());
+    assert!(!root.exists());
 }

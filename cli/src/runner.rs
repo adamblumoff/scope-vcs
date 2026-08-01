@@ -48,8 +48,8 @@ use config::{
 use container::apply_container_limits;
 use container::{
     ContainerGuard, DockerCapabilities, JobContainerSpec, configure_job_container_creation,
-    configure_source_copy, container_started_at_unix, doctor_local, require_root_image,
-    stop_container,
+    configure_source_copy, container_started_at_unix, doctor_local, probe_storage_quota_support,
+    require_root_image, stop_container,
 };
 use image::resolve_container_image;
 use management::{parse_repository, print_runner_status};
@@ -72,7 +72,10 @@ use supervisor::{AttemptStopReason, AttemptSupervisor};
 #[cfg(test)]
 use systemd::systemd_quote_path;
 use systemd::{install_systemd_service, print_linger_status};
-use workspace::{RunnerWorkDir, command_stdout, command_success, runner_work_root, unix_now};
+use workspace::{
+    RunnerWorkDir, command_stdout, command_success, command_success_while, runner_work_root,
+    unix_now,
+};
 
 const LOG_CHUNK_BYTES: usize = 16 * 1024;
 
@@ -254,7 +257,7 @@ pub fn daemon(config_path: Option<&Path>) -> anyhow::Result<()> {
         Some(path) => load_runner_config_from(path)?,
         None => load_runner_config()?,
     };
-    let capabilities = doctor_local(true)?;
+    let capabilities = doctor_local(false)?;
     let client = runner_client()?;
     eprintln!("Scope runner {} is polling {}", config.name, config.api_url);
     loop {
@@ -374,9 +377,11 @@ fn execute_claim(
     claim: &ClaimRunResponse,
 ) -> anyhow::Result<()> {
     let client = runner_client()?;
-    let mut supervisor = AttemptSupervisor::start(config.clone(), claim.clone())?;
     let mut work = RunnerWorkDir::new(&claim.attempt_id)?;
     persist_recovery_claim(&work.path, claim)?;
+    let mut supervisor = AttemptSupervisor::start(config.clone(), claim.clone())?;
+    cache::admit(config)?;
+    supervisor.start_storage_monitor(config.clone(), &claim.attempt_id, &work.path)?;
     let bundle_path = work.path.join("source.bundle");
     let source_client = source_download_client()?;
     let phase = Instant::now();
@@ -387,6 +392,7 @@ fn execute_claim(
         &claim.attempt_id,
         &claim.job.source_digest,
         &bundle_path,
+        || !supervisor.storage_pressure_triggered(),
     )?;
     log_phase(&claim.attempt_id, "source_download", phase);
     if finish_before_execution(&mut supervisor, &client, config, claim)? {
@@ -394,10 +400,17 @@ fn execute_claim(
     }
     let workspace = work.path.join("workspace");
     let phase = Instant::now();
-    checkout_exact_commit(&bundle_path, &workspace, &claim.job.git_oid)?;
+    checkout_exact_commit(&bundle_path, &workspace, &claim.job.git_oid, || {
+        !supervisor.storage_pressure_triggered()
+    })?;
     log_phase(&claim.attempt_id, "checkout", phase);
+    if finish_before_execution(&mut supervisor, &client, config, claim)? {
+        return Ok(());
+    }
     let phase = Instant::now();
-    let container_image = resolve_container_image(&client, config, claim)?;
+    let container_image = resolve_container_image(&client, config, claim, || {
+        !supervisor.storage_pressure_triggered()
+    })?;
     require_root_image(&container_image)?;
     log_phase(&claim.attempt_id, "image_resolution", phase);
     let step_programs = write_step_programs(&work.path, &claim.job.workflow)?;
@@ -406,6 +419,11 @@ fn execute_claim(
     }
     let phase = Instant::now();
     let limits = ResourceLimits::detect()?;
+    let capabilities = if capabilities.storage_quota_supported {
+        capabilities
+    } else {
+        probe_storage_quota_support(&container_image, &limits)?
+    };
     let mut caches = cache::PreparedCaches::prepare(config, claim, &container_image)?;
     mark_recovery_caches_attached(&work.path, claim, &caches.volume_names())?;
     log_phase(&claim.attempt_id, "cache_prepare", phase);
@@ -429,11 +447,15 @@ fn execute_claim(
     let container = ContainerGuard::new(container_name);
     caches.confirm_container(&container.name)?;
     log_phase(&claim.attempt_id, "container_create", phase);
+    if finish_before_execution(&mut supervisor, &client, config, claim)? {
+        return Ok(());
+    }
     let mut copy_source = Command::new("docker");
     configure_source_copy(&mut copy_source, &workspace, &container.name);
-    command_success(
+    command_success_while(
         &mut copy_source,
         "copy run source into Docker job container",
+        || !supervisor.storage_pressure_triggered(),
     )?;
     if finish_before_execution(&mut supervisor, &client, config, claim)? {
         return Ok(());
@@ -636,6 +658,7 @@ fn resume_claim_execution(
         bail!("server and runner log cursors cannot be reconciled");
     }
     let mut supervisor = AttemptSupervisor::start(config.clone(), claim.clone())?;
+    supervisor.start_storage_monitor(config.clone(), &claim.attempt_id, &work.path)?;
     supervisor.set_execution_deadline(execution_deadline_unix);
 
     if let Some(pending) = progress.pending_step_conclusion.take() {
@@ -916,11 +939,11 @@ fn finish_before_execution(
     claim: &ClaimRunResponse,
 ) -> anyhow::Result<bool> {
     match supervisor.reason() {
-        AttemptStopReason::None => Ok(false),
+        AttemptStopReason::None => {}
         AttemptStopReason::Cancellation => {
             let _ = supervisor.finish();
             complete_canceled(client, config, claim)?;
-            Ok(true)
+            return Ok(true);
         }
         AttemptStopReason::LeaseLost => {
             let _ = supervisor.finish();
@@ -930,13 +953,18 @@ fn finish_before_execution(
                 &claim.attempt_token,
                 &claim.attempt_id,
             )?;
-            Ok(true)
+            return Ok(true);
         }
         AttemptStopReason::TimedOut => {
             let _ = supervisor.finish();
             bail!("attempt timed out before execution started")
         }
     }
+    if supervisor.storage_pressure_triggered() {
+        let _ = supervisor.finish();
+        bail!("runner storage crossed its emergency floor before execution started");
+    }
+    Ok(false)
 }
 
 fn append_log_with_retry(

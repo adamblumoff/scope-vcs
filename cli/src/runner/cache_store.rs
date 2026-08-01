@@ -13,6 +13,7 @@ const MIN_FREE_BYTES: u64 = 2 * 1024 * 1024 * 1024;
 const MIN_FREE_INODES: u64 = 10_000;
 
 #[derive(Debug, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
 struct StoreIdentity {
     format: u8,
 }
@@ -44,9 +45,13 @@ pub(super) fn validate_store(root: &Path, initialize: bool) -> anyhow::Result<Ca
     };
     let identity_path = root.join("store.json");
     if identity_path.exists() {
-        let stored: StoreIdentity = serde_json::from_slice(&fs::read(&identity_path)?)?;
+        let stored: StoreIdentity = serde_json::from_slice(&fs::read(&identity_path)?).context(
+            "runner cache store schema is unsupported; clear the cache and reinstall the runner",
+        )?;
         if stored.format != identity.format {
-            bail!("runner cache format is unsupported; reinstall the runner to reset its cache");
+            bail!(
+                "runner cache store schema is unsupported; clear the cache and reinstall the runner"
+            );
         }
     } else if initialize {
         let mut entries = fs::read_dir(root)?

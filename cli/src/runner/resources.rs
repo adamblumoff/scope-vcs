@@ -268,7 +268,7 @@ pub(super) fn transient_storage_root() -> anyhow::Result<PathBuf> {
     ))
 }
 
-pub(super) fn transient_storage_has_emergency_capacity_at(root: &Path) -> anyhow::Result<bool> {
+pub(super) fn storage_has_emergency_capacity_at(root: &Path) -> anyhow::Result<bool> {
     Ok(has_emergency_capacity(transient_storage_capacity_at(root)?))
 }
 

@@ -18,8 +18,7 @@ use std::{
     process::Command,
 };
 
-const CACHE_FORMAT: u8 = 1;
-const CACHE_LABEL: &str = "scope.cache-format=1";
+const CACHE_FORMAT: u8 = 2;
 
 #[path = "cache_store.rs"]
 mod store;
@@ -83,8 +82,7 @@ impl PreparedCaches {
                 finished: false,
             });
         }
-        let root = configured_root(config)?;
-        validate_store(&root, false)?;
+        let root = usable_root(config)?;
         let lock = lifecycle_lock(&root)?;
         validate_store(&root, false)?;
         ensure_capacity(&root, &lock, &config.runner_id)?;
@@ -211,8 +209,7 @@ pub(super) fn finalize_volume_names(
     if volumes.is_empty() {
         return Ok(());
     }
-    let root = configured_root(config)?;
-    validate_store(&root, false)?;
+    let root = usable_root(config)?;
     let _lock = lifecycle_lock(&root)?;
     for volume in volumes {
         if volume_is_referenced(volume)? {
@@ -280,8 +277,7 @@ pub(super) fn finish_canary_ack(
 }
 
 pub(super) fn list(config: &RunnerConfig) -> anyhow::Result<()> {
-    let root = configured_root(config)?;
-    validate_store(&root, false)?;
+    let root = usable_root(config)?;
     let mut records = load_records(&root)?;
     records.sort_by(|left, right| {
         left.repository_id
@@ -306,8 +302,7 @@ pub(super) fn list(config: &RunnerConfig) -> anyhow::Result<()> {
 }
 
 pub(super) fn prune(config: &RunnerConfig, all: bool) -> anyhow::Result<()> {
-    let root = configured_root(config)?;
-    validate_store(&root, false)?;
+    let root = usable_root(config)?;
     let _lock = lifecycle_lock(&root)?;
     let mut records = load_records(&root)?;
     records.sort_by_key(|record| record.last_used_at_unix);
@@ -329,7 +324,7 @@ pub(super) fn prune(config: &RunnerConfig, all: bool) -> anyhow::Result<()> {
 }
 
 pub(super) fn doctor(config: &RunnerConfig) -> anyhow::Result<()> {
-    let root = configured_root(config)?;
+    let root = usable_root(config)?;
     let capacity = validate_store(&root, false)?;
     println!(
         "✓ cache storage {} ({} GiB free, {} inodes free)",
@@ -344,12 +339,12 @@ pub(super) fn doctor(config: &RunnerConfig) -> anyhow::Result<()> {
 
 pub(super) fn has_emergency_capacity(config: &RunnerConfig) -> anyhow::Result<bool> {
     let root = configured_root(config)?;
+    validate_store(&root, false)?;
     has_capacity(&root)
 }
 
 pub(super) fn admit(config: &RunnerConfig) -> anyhow::Result<()> {
-    let root = configured_root(config)?;
-    validate_store(&root, false)?;
+    let root = usable_root(config)?;
     let lock = lifecycle_lock(&root)?;
     validate_store(&root, false)?;
     ensure_capacity(&root, &lock, &config.runner_id)
@@ -368,8 +363,7 @@ pub(super) fn evict_orphaned_tainted(
     config: &RunnerConfig,
     recoverable_attempts: &std::collections::BTreeSet<String>,
 ) -> anyhow::Result<()> {
-    let root = configured_root(config)?;
-    validate_store(&root, false)?;
+    let root = usable_root(config)?;
     let _lock = lifecycle_lock(&root)?;
     for record in load_records(&root)? {
         let CacheState::Tainted { attempt_id } = &record.state else {
@@ -385,6 +379,42 @@ pub(super) fn evict_orphaned_tainted(
 
 fn configured_root(config: &RunnerConfig) -> anyhow::Result<PathBuf> {
     super::config::runner_cache_root(config.cache_root.as_deref())
+}
+
+fn usable_root(config: &RunnerConfig) -> anyhow::Result<PathBuf> {
+    let root = configured_root(config)?;
+    ensure_usable_root(
+        &root,
+        super::config::runner_cache_root_is_disposable_default(config.cache_root.as_deref()),
+    )?;
+    Ok(root)
+}
+
+fn ensure_usable_root(root: &Path, disposable: bool) -> anyhow::Result<()> {
+    match validate_store(root, false) {
+        Ok(_) => Ok(()),
+        Err(_) if disposable && store_is_absent_or_empty(root)? => {
+            initialize(root)?;
+            Ok(())
+        }
+        Err(error) => Err(error),
+    }
+}
+
+fn store_is_absent_or_empty(root: &Path) -> anyhow::Result<bool> {
+    match fs::read_dir(root) {
+        Ok(entries) => {
+            for entry in entries {
+                let entry = entry?;
+                if entry.file_name() != ".lifecycle.lock" || !entry.file_type()?.is_file() {
+                    return Ok(false);
+                }
+            }
+            Ok(true)
+        }
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(true),
+        Err(error) => Err(error).context("inspect disposable cache root"),
+    }
 }
 
 fn lifecycle_lock(root: &Path) -> anyhow::Result<File> {
@@ -462,7 +492,7 @@ fn create_volume(record: &CacheRecord, backing: &Path, runner_id: &str) -> anyho
         "--opt",
         &format!("device={backing}"),
         "--label",
-        CACHE_LABEL,
+        &format!("scope.cache-format={CACHE_FORMAT}"),
         "--label",
         &format!("scope.cache-key={}", record.identity_digest),
         "--label",
@@ -537,7 +567,11 @@ fn volume_option(value: &serde_json::Value, name: &str) -> Option<String> {
 
 fn volume_is_owned(volume: &VolumeInspection, record: &CacheRecord, runner_id: &str) -> bool {
     volume.name == record.volume_name
-        && volume.labels.get("scope.cache-format").map(String::as_str) == Some("1")
+        && volume
+            .labels
+            .get("scope.cache-format")
+            .and_then(|format| format.parse::<u8>().ok())
+            == Some(CACHE_FORMAT)
         && volume.labels.get("scope.cache-key").map(String::as_str)
             == Some(record.identity_digest.as_str())
         && volume.labels.get("scope.runner-id").map(String::as_str) == Some(runner_id)
@@ -676,7 +710,10 @@ fn verify_container_mounts(container: &str, expected: &[CacheMount]) -> anyhow::
 }
 
 fn volume_name(digest: &str) -> String {
-    format!("scope-cache-v1-{}", &digest[..digest.len().min(40)])
+    format!(
+        "scope-cache-v{CACHE_FORMAT}-{}",
+        &digest[..digest.len().min(40)]
+    )
 }
 
 fn record_path(root: &Path, digest: &str) -> PathBuf {

@@ -23,6 +23,15 @@ pub(super) fn runner_cache_root(existing: Option<&Path>) -> anyhow::Result<PathB
     )
 }
 
+pub(super) fn runner_cache_root_is_disposable_default(existing: Option<&Path>) -> bool {
+    cache_root_is_disposable_default(
+        env::var_os("SCOPE_RUNNER_CACHE_ROOT"),
+        existing,
+        env::var_os("XDG_CACHE_HOME"),
+        env::var_os("HOME"),
+    )
+}
+
 fn cache_root_from(
     configured: Option<std::ffi::OsString>,
     existing: Option<PathBuf>,
@@ -38,6 +47,13 @@ fn cache_root_from(
     if let Some(path) = existing {
         return Ok(path);
     }
+    default_cache_root(cache_home, home).context("XDG_CACHE_HOME or HOME is required")
+}
+
+fn default_cache_root(
+    cache_home: Option<std::ffi::OsString>,
+    home: Option<std::ffi::OsString>,
+) -> Option<PathBuf> {
     cache_home
         .filter(|path| !path.is_empty())
         .map(PathBuf::from)
@@ -46,7 +62,21 @@ fn cache_root_from(
                 .map(|home| PathBuf::from(home).join(".cache"))
         })
         .map(|root| root.join("scope/runner"))
-        .context("XDG_CACHE_HOME or HOME is required")
+}
+
+fn cache_root_is_disposable_default(
+    configured: Option<std::ffi::OsString>,
+    existing: Option<&Path>,
+    cache_home: Option<std::ffi::OsString>,
+    home: Option<std::ffi::OsString>,
+) -> bool {
+    if configured.is_some_and(|path| !path.is_empty()) {
+        return false;
+    }
+    let Some(default) = default_cache_root(cache_home, home) else {
+        return false;
+    };
+    existing.is_none_or(|path| path == default)
 }
 
 pub(super) fn runner_config_path() -> anyhow::Result<PathBuf> {
@@ -162,5 +192,35 @@ mod tests {
             .unwrap(),
             PathBuf::from("/srv/scope-cache")
         );
+    }
+
+    #[test]
+    fn only_the_implicit_default_cache_is_disposable() {
+        let cache_home = Some(OsString::from("/var/cache/user"));
+        let home = Some(OsString::from("/home/runner"));
+        assert!(cache_root_is_disposable_default(
+            None,
+            Some(Path::new("/var/cache/user/scope/runner")),
+            cache_home.clone(),
+            home.clone(),
+        ));
+        assert!(cache_root_is_disposable_default(
+            None,
+            None,
+            cache_home.clone(),
+            home.clone(),
+        ));
+        assert!(!cache_root_is_disposable_default(
+            None,
+            Some(Path::new("/srv/scope-cache")),
+            cache_home.clone(),
+            home.clone(),
+        ));
+        assert!(!cache_root_is_disposable_default(
+            Some(OsString::from("/var/cache/user/scope/runner")),
+            Some(Path::new("/var/cache/user/scope/runner")),
+            cache_home,
+            home,
+        ));
     }
 }

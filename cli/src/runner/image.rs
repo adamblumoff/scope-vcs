@@ -1,4 +1,4 @@
-use super::{ClaimRunResponse, RunnerConfig, command_stdout, command_success};
+use super::{ClaimRunResponse, RunnerConfig, command_stdout, command_success_while};
 use crate::api::pin_attempt_container_image;
 use anyhow::Context;
 use reqwest::blocking::Client;
@@ -8,6 +8,7 @@ pub(super) fn resolve_container_image(
     client: &Client,
     config: &RunnerConfig,
     claim: &ClaimRunResponse,
+    should_continue: impl Fn() -> bool,
 ) -> anyhow::Result<String> {
     if let Some(image) = &claim.job.pinned_container_image {
         let present = Command::new("docker")
@@ -17,18 +18,20 @@ pub(super) fn resolve_container_image(
             .status
             .success();
         if !present {
-            command_success(
+            command_success_while(
                 Command::new("docker").args(["pull", image]),
                 "pull pinned Docker image",
+                &should_continue,
             )?;
         }
         return Ok(image.clone());
     }
 
     let requested = claim.job.workflow.container().image();
-    command_success(
+    command_success_while(
         Command::new("docker").args(["pull", requested]),
         "pull workflow Docker image",
+        &should_continue,
     )?;
     let repo_digests = command_stdout(
         Command::new("docker").args([
