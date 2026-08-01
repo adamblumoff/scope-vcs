@@ -22,7 +22,6 @@ pub struct SyncResult {
 }
 
 pub fn sync_repo_rules(git_root: &Path) -> anyhow::Result<SyncResult> {
-    let mut changed_paths = Vec::new();
     let rules_path = git_root.join(RULES_RELATIVE_PATH);
     reject_symlink(
         rules_path
@@ -30,19 +29,16 @@ pub fn sync_repo_rules(git_root: &Path) -> anyhow::Result<SyncResult> {
             .expect("canonical rules path has a parent"),
     )?;
     reject_symlink(&rules_path)?;
-    if !rules_path.exists() {
-        fs::create_dir_all(
-            rules_path
-                .parent()
-                .expect("canonical rules path has a parent"),
-        )
-        .with_context(|| format!("create {}", rules_path.display()))?;
-        fs::write(&rules_path, []).with_context(|| format!("create {}", rules_path.display()))?;
-        changed_paths.push(PathBuf::from(RULES_RELATIVE_PATH));
-    } else if !rules_path.is_file() {
-        bail!("{} must be a file", rules_path.display());
-    }
+    let create_rules = if rules_path.exists() {
+        if !rules_path.is_file() {
+            bail!("{} must be a file", rules_path.display());
+        }
+        false
+    } else {
+        true
+    };
 
+    let mut adapter_updates = Vec::new();
     for adapter in detected_adapters(git_root) {
         let path = git_root.join(adapter.path);
         reject_symlink(&path)?;
@@ -54,9 +50,24 @@ pub fn sync_repo_rules(git_root: &Path) -> anyhow::Result<SyncResult> {
         let desired = managed_content(&current, adapter.block)
             .with_context(|| format!("update {}", path.display()))?;
         if desired != current {
-            fs::write(&path, desired).with_context(|| format!("write {}", path.display()))?;
-            changed_paths.push(PathBuf::from(adapter.path));
+            adapter_updates.push((adapter.path, path, desired));
         }
+    }
+
+    let mut changed_paths = Vec::new();
+    if create_rules {
+        fs::create_dir_all(
+            rules_path
+                .parent()
+                .expect("canonical rules path has a parent"),
+        )
+        .with_context(|| format!("create {}", rules_path.display()))?;
+        fs::write(&rules_path, []).with_context(|| format!("create {}", rules_path.display()))?;
+        changed_paths.push(PathBuf::from(RULES_RELATIVE_PATH));
+    }
+    for (relative_path, path, desired) in adapter_updates {
+        fs::write(&path, desired).with_context(|| format!("write {}", path.display()))?;
+        changed_paths.push(PathBuf::from(relative_path));
     }
 
     Ok(SyncResult { changed_paths })
@@ -406,6 +417,23 @@ mod tests {
         let error = sync_repo_rules(repo.path()).unwrap_err();
 
         assert!(error.to_string().contains("update"));
+    }
+
+    #[test]
+    fn adapter_validation_happens_before_any_files_are_written() {
+        let repo = TestDir::new("rules-prevalidate-adapters");
+        fs::create_dir(repo.path().join(".codex")).unwrap();
+        fs::write(repo.path().join(CLAUDE_FILE), START_MARKER).unwrap();
+
+        let error = sync_repo_rules(repo.path()).unwrap_err();
+
+        assert!(error.to_string().contains("update"));
+        assert!(!repo.path().join(RULES_RELATIVE_PATH).exists());
+        assert!(!repo.path().join(CODEX_FILE).exists());
+        assert_eq!(
+            fs::read_to_string(repo.path().join(CLAUDE_FILE)).unwrap(),
+            START_MARKER
+        );
     }
 
     #[test]
