@@ -32,23 +32,33 @@ pub fn is_repo_rules_path(path: &ScopePath) -> bool {
 }
 
 pub fn is_public_request_protected_path(path: &ScopePath) -> bool {
-    is_repo_control_path(path) || is_agent_context_path(path)
+    is_case_folded_repo_control_path(path) || is_agent_context_path(path)
+}
+
+fn is_case_folded_repo_control_path(path: &ScopePath) -> bool {
+    path.as_str()
+        .trim_start_matches('/')
+        .split('/')
+        .next()
+        .is_some_and(|root| root.eq_ignore_ascii_case(".scope"))
 }
 
 fn is_agent_context_path(path: &ScopePath) -> bool {
     let relative = path.as_str().trim_start_matches('/');
-    relative == ".codex"
-        || relative.starts_with(".codex/")
-        || relative == ".claude"
-        || relative.starts_with(".claude/")
-        || relative == ".agents"
-        || relative.starts_with(".agents/")
-        || relative == ".mcp.json"
+    let root = relative.split('/').next().unwrap_or(relative);
+    [".codex", ".claude", ".agents"]
+        .iter()
+        .any(|directory| root.eq_ignore_ascii_case(directory))
+        || relative.eq_ignore_ascii_case(".mcp.json")
         || relative.rsplit('/').next().is_some_and(|name| {
-            matches!(
-                name,
-                "AGENTS.md" | "AGENTS.override.md" | "CLAUDE.md" | "CLAUDE.local.md"
-            )
+            [
+                "AGENTS.md",
+                "AGENTS.override.md",
+                "CLAUDE.md",
+                "CLAUDE.local.md",
+            ]
+            .iter()
+            .any(|protected| name.eq_ignore_ascii_case(protected))
         })
 }
 
@@ -117,13 +127,21 @@ mod tests {
             "/.claude/settings.json",
             "/.agents/skills/review/SKILL.md",
             "/.mcp.json",
+            "/.SCOPE/RULES.md",
+            "/agents.md",
+            "/src/Agents.Override.Md",
+            "/claude.MD",
+            "/.CoDeX/config.toml",
+            "/.CLAUDE/settings.json",
+            "/.AGENTS/skills/review/SKILL.md",
+            "/.MCP.JSON",
         ] {
             assert!(
                 is_public_request_protected_path(&path(protected)),
                 "{protected}"
             );
         }
-        for ordinary in ["/README.md", "/src/agents.md", "/notes/CLAUDE.txt"] {
+        for ordinary in ["/README.md", "/src/agent-notes.md", "/notes/CLAUDE.txt"] {
             assert!(
                 !is_public_request_protected_path(&path(ordinary)),
                 "{ordinary}"

@@ -37,6 +37,9 @@ pub fn sync_repo_rules(git_root: &Path) -> anyhow::Result<SyncResult> {
     } else {
         true
     };
+    if create_rules {
+        ensure_new_rules_are_trackable(git_root)?;
+    }
 
     let mut adapter_updates = Vec::new();
     for adapter in detected_adapters(git_root) {
@@ -123,6 +126,30 @@ fn reject_symlink(path: &Path) -> anyhow::Result<()> {
         Ok(_) => Ok(()),
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
         Err(error) => Err(error).with_context(|| format!("inspect {}", path.display())),
+    }
+}
+
+fn ensure_new_rules_are_trackable(git_root: &Path) -> anyhow::Result<()> {
+    let output = Command::new("git")
+        .current_dir(git_root)
+        .args([
+            "check-ignore",
+            "--quiet",
+            "--no-index",
+            "--",
+            RULES_RELATIVE_PATH,
+        ])
+        .output()
+        .context("check whether .scope/RULES.md is ignored")?;
+    match output.status.code() {
+        Some(1) => Ok(()),
+        Some(0) => bail!(
+            ".scope/RULES.md is ignored; add `!/.scope/` and `!/.scope/RULES.md` after the matching ignore rule, then rerun `scope rules sync`"
+        ),
+        _ => bail!(
+            "could not check whether .scope/RULES.md is ignored: {}",
+            String::from_utf8_lossy(&output.stderr).trim()
+        ),
     }
 }
 
@@ -313,7 +340,7 @@ mod tests {
 
     #[test]
     fn no_agent_signal_creates_only_empty_rules() {
-        let repo = TestDir::new("rules-no-agent");
+        let repo = TestDir::git_repo("rules-no-agent", "main");
 
         let result = sync_repo_rules(repo.path()).unwrap();
 
@@ -328,7 +355,7 @@ mod tests {
 
     #[test]
     fn dot_directories_signal_repo_level_adapters_and_sync_is_idempotent() {
-        let repo = TestDir::new("rules-agent-signals");
+        let repo = TestDir::git_repo("rules-agent-signals", "main");
         fs::create_dir(repo.path().join(".codex")).unwrap();
         fs::create_dir(repo.path().join(".claude")).unwrap();
 
@@ -353,7 +380,7 @@ mod tests {
 
     #[test]
     fn existing_adapter_content_is_preserved_around_managed_block() {
-        let repo = TestDir::new("rules-existing-adapter");
+        let repo = TestDir::git_repo("rules-existing-adapter", "main");
         fs::write(repo.path().join(CODEX_FILE), "project guidance\n").unwrap();
 
         sync_repo_rules(repo.path()).unwrap();
@@ -365,7 +392,7 @@ mod tests {
 
     #[test]
     fn codex_override_receives_the_link_instead_of_inactive_agents_file() {
-        let repo = TestDir::new("rules-codex-override");
+        let repo = TestDir::git_repo("rules-codex-override", "main");
         fs::write(repo.path().join(CODEX_FILE), "ordinary guidance\n").unwrap();
         fs::write(repo.path().join(CODEX_OVERRIDE_FILE), "active override\n").unwrap();
 
@@ -411,7 +438,7 @@ mod tests {
 
     #[test]
     fn malformed_managed_markers_are_not_overwritten() {
-        let repo = TestDir::new("rules-malformed-adapter");
+        let repo = TestDir::git_repo("rules-malformed-adapter", "main");
         fs::write(repo.path().join(CODEX_FILE), START_MARKER).unwrap();
 
         let error = sync_repo_rules(repo.path()).unwrap_err();
@@ -421,7 +448,7 @@ mod tests {
 
     #[test]
     fn adapter_validation_happens_before_any_files_are_written() {
-        let repo = TestDir::new("rules-prevalidate-adapters");
+        let repo = TestDir::git_repo("rules-prevalidate-adapters", "main");
         fs::create_dir(repo.path().join(".codex")).unwrap();
         fs::write(repo.path().join(CLAUDE_FILE), START_MARKER).unwrap();
 
@@ -434,6 +461,21 @@ mod tests {
             fs::read_to_string(repo.path().join(CLAUDE_FILE)).unwrap(),
             START_MARKER
         );
+    }
+
+    #[test]
+    fn ignored_new_rules_fail_before_any_files_are_written() {
+        let repo = TestDir::git_repo("rules-ignored", "main");
+        fs::write(repo.path().join(".gitignore"), "/.scope/*\n").unwrap();
+        fs::create_dir(repo.path().join(".codex")).unwrap();
+
+        let error = sync_repo_rules(repo.path()).unwrap_err();
+
+        let message = format!("{error:#}");
+        assert!(message.contains(".scope/RULES.md is ignored"));
+        assert!(message.contains("!/.scope/RULES.md"));
+        assert!(!repo.path().join(RULES_RELATIVE_PATH).exists());
+        assert!(!repo.path().join(CODEX_FILE).exists());
     }
 
     #[test]
