@@ -1,4 +1,5 @@
 use crate::{
+    agent_context::sync_repo_rules,
     api::{
         RepoInitResponse, api_url, create_repo, display_user, http_client, rollback_created_repo,
     },
@@ -25,6 +26,7 @@ pub fn run(name: Option<String>) -> anyhow::Result<()> {
         Some(name) => normalize_repo_name(name)?,
         None => prompt_repo_name(&git_repo.root)?,
     };
+    let rules_sync = sync_repo_rules(&git_repo.root)?;
     warn_if_dirty_working_tree(&git_repo)?;
 
     let client = http_client()?;
@@ -59,7 +61,14 @@ pub fn run(name: Option<String>) -> anyhow::Result<()> {
         },
         repo_config_path(&git_repo.root)?.display()
     );
-    println!("Run: scope push");
+    for path in &rules_sync.changed_paths {
+        println!("Updated {}", path.display());
+    }
+    if rules_sync.changed_paths.is_empty() {
+        println!("Run: scope push");
+    } else {
+        println!("Commit the generated rules files, then run: scope push");
+    }
     Ok(())
 }
 

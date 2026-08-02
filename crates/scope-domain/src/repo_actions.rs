@@ -279,6 +279,37 @@ mod tests {
         );
     }
 
+    #[test]
+    fn direct_visibility_update_omits_scope_managed_policy_rules_from_config() {
+        let owner = test_owner();
+        let mut repo = StoredRepository::new(&owner, "repo", Visibility::Public).unwrap();
+        let rules_path = ScopePath::parse("/.scope/RULES.md").unwrap();
+        repo.policy
+            .add_rule(VisibilityRule::public(rules_path))
+            .unwrap();
+        let readme_path = ScopePath::parse("/README.md").unwrap();
+
+        set_visibility(
+            &mut repo,
+            &owner.id,
+            std::slice::from_ref(&readme_path),
+            Visibility::Private,
+        )
+        .unwrap();
+
+        assert_eq!(
+            repo.repo_config.visibility_for_path(&readme_path),
+            Visibility::Private
+        );
+        assert!(
+            repo.repo_config
+                .visibility
+                .rules
+                .iter()
+                .all(|rule| !rule.path.starts_with("/.scope"))
+        );
+    }
+
     fn test_owner() -> UserAccount {
         UserAccount {
             id: "owner-id".to_string(),

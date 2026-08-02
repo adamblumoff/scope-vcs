@@ -32,7 +32,7 @@ fn push_creates_missing_config_before_remote_lookup() {
         "no Scope Git remote found; pass --remote <name> or run scope init",
     );
     assert!(repo_config_path(dir.path()).unwrap().is_file());
-    assert!(!dir.path().join(".scope").exists());
+    assert!(dir.path().join(".scope/RULES.md").is_file());
     assert!(!stderr.contains("Working tree has uncommitted changes."));
 }
 

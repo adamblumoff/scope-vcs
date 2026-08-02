@@ -18,7 +18,9 @@ use scope_domain::{
         SourceBlob, StoredRepository, UserAccount,
     },
 };
-use std::collections::BTreeMap;
+
+#[path = "domain_projection/rules.rs"]
+mod rules;
 
 fn blob(content: &str) -> SourceBlob {
     SourceBlob {
@@ -159,6 +161,11 @@ fn published_test_repo(default_visibility: Visibility) -> StoredRepository {
     };
     let mut repo = StoredRepository::new(&owner, "repo", default_visibility).unwrap();
     repo.record.publication_state = RepoPublicationState::Published;
+    let rules_path = path("/.scope/RULES.md");
+    repo.live_files.insert(rules_path.clone(), blob(""));
+    repo.policy
+        .add_rule(VisibilityRule::public(rules_path))
+        .unwrap();
     repo
 }
 
@@ -288,7 +295,7 @@ fn content_push_command_returns_normalized_effects_without_previous_config() {
             change_version: repo.record.change_version,
             policy: repo.policy.clone(),
             repo_config: config.clone(),
-            live_files: BTreeMap::new(),
+            live_files: repo.live_tree(),
         },
         reviewed_update(
             "3333333333333333333333333333333333333333",
@@ -315,50 +322,6 @@ fn content_push_command_returns_normalized_effects_without_previous_config() {
     );
     assert_eq!(repo.record.change_version, 1);
     assert_eq!(repo.graph.commits.len(), 1);
-}
-
-#[test]
-fn request_merge_accepts_unchanged_tree_without_weakening_push_rules() {
-    let repo = published_repo_with_public_file("initial", "/README.md", "hello");
-    let config = repo.repo_config.clone();
-    let state = ContentPushState {
-        change_version: repo.record.change_version,
-        policy: repo.policy.clone(),
-        repo_config: config.clone(),
-        live_files: BTreeMap::new(),
-    };
-    let update = reviewed_update(
-        "3333333333333333333333333333333333333333",
-        "merge request",
-        Vec::new(),
-        Some(config.clone()),
-        config,
-    );
-
-    assert!(accept_content_push(state.clone(), update.clone()).is_err());
-    let accepted = accept_request_merge(
-        state,
-        update,
-        RequestMergeOrigin::Private {
-            request_id: "request-1".to_string(),
-            request_head_oid: "2222222222222222222222222222222222222222".to_string(),
-        },
-    )
-    .unwrap();
-    assert_eq!(accepted.change_version, 2);
-    assert_eq!(accepted.git_head.change_version, 2);
-    assert_eq!(
-        accepted.logical_commit.id,
-        "rv_merge_3333333333333333333333333333333333333333"
-    );
-    assert_eq!(
-        accepted.logical_commit.origin,
-        LogicalCommitOrigin::PrivateRequestMerge {
-            request_id: "request-1".to_string(),
-            request_head_oid: "2222222222222222222222222222222222222222".to_string(),
-        }
-    );
-    assert!(accepted.logical_commit.changes.is_empty());
 }
 
 #[test]

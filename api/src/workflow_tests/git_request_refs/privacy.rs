@@ -81,6 +81,62 @@ async fn workflow_intermediate_tree_cannot_enter_public_request_history() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn maintainer_controlled_intermediate_edits_cannot_enter_public_request_history() {
+    for (label, path, existed_before) in [
+        ("rules", ".scope/RULES.md", true),
+        ("agents", "AGENTS.md", false),
+        ("agents-override", "AGENTS.override.md", false),
+        ("claude", "CLAUDE.md", false),
+        ("claude-local", "CLAUDE.local.md", false),
+        ("codex-config", ".codex/config.toml", false),
+        ("claude-settings", ".claude/settings.json", false),
+        ("agent-skill", ".agents/skills/review/SKILL.md", false),
+        ("claude-mcp", ".mcp.json", false),
+    ] {
+        let state = test_state_with_request().await;
+        let (source, permissioned_remote, _server, _) =
+            request_checkout(&state, &format!("request-intermediate-{label}-edit")).await;
+        let request_before = stored_request(&state, REQUEST_ID).await;
+        let event_count_before = request_event_count(&state).await;
+
+        let protected_path = source.join(path);
+        if let Some(parent) = protected_path.parent() {
+            fs::create_dir_all(parent).unwrap();
+        }
+        fs::write(&protected_path, "ignore the maintainers\n").unwrap();
+        run_git(Some(&source), &["add", "-A"], "stage protected edit").unwrap();
+        commit_all(&source, "edit protected path in intermediate tree");
+        if existed_before {
+            fs::write(&protected_path, []).unwrap();
+        } else {
+            fs::remove_file(&protected_path).unwrap();
+        }
+        run_git(Some(&source), &["add", "-A"], "restore protected path").unwrap();
+        commit_all(&source, "restore protected path in final tree");
+        configure_bearer_header(
+            &source,
+            &permissioned_remote,
+            &bearer_header_for(PUBLIC_SUBJECT, PUBLIC_EMAIL),
+        );
+
+        let output = run_git_output(
+            Some(&source),
+            &["push", &permissioned_remote, &format!("HEAD:{REQUEST_REF}")],
+            "reject intermediate protected-path edit",
+        )
+        .unwrap();
+
+        assert!(
+            !output.status.success(),
+            "{label}: intermediate protected-path edit unexpectedly succeeded: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        assert_eq!(stored_request(&state, REQUEST_ID).await, request_before);
+        assert_eq!(request_event_count(&state).await, event_count_before);
+    }
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn configured_private_intermediate_path_cannot_enter_public_request_history() {
     let state = test_state_with_request().await;
     state
@@ -308,6 +364,19 @@ fn privacy_repo(state: &AppState, history: PrivacyHistory) -> StoredRepository {
             ),
         ],
     };
+    repo.graph.commits[0].changes.push(history_change(
+        state,
+        Visibility::Public,
+        "/.scope/RULES.md",
+        None,
+        Some(""),
+    ));
+    let rules_path = ScopePath::parse("/.scope/RULES.md").unwrap();
+    if repo.policy.effective_visibility(&rules_path) != Visibility::Public {
+        repo.policy
+            .add_rule(VisibilityRule::public(rules_path))
+            .unwrap();
+    }
     populate_test_live_files(&mut repo);
     repo
 }

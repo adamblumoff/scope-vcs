@@ -27,35 +27,26 @@ async fn next_event(stream: &mut axum::body::BodyDataStream) -> String {
 }
 
 #[tokio::test]
-async fn repo_events_map_public_visibility_to_not_found_or_connected() {
-    for public in [false, true] {
-        let state = if public {
-            test_state_with_readme().await
-        } else {
-            let state = test_state_with_repo();
-            let mut repo = repo_with_readme(&state);
-            repo.record.default_visibility = Visibility::Private;
-            repo.policy = Policy::new(Visibility::Private);
-            repo.graph.commits[0].changes[0].visibility = Visibility::Private;
-            replace_test_repo(&state, repo).await;
-            state
-        };
-        let response = events(state, None).await;
-        assert_eq!(
-            response.status(),
-            if public {
-                StatusCode::OK
-            } else {
-                StatusCode::NOT_FOUND
-            }
-        );
-        if public {
-            let mut stream = response.into_body().into_data_stream();
-            let initial = next_event(&mut stream).await;
-            assert!(initial.contains(r#""kind":"Connected""#));
-            assert!(initial.contains(r#""version":0"#));
-        }
-    }
+async fn repo_events_stay_public_when_only_canonical_rules_are_public() {
+    let state = test_state_with_repo();
+    let mut repo = repo_with_readme(&state);
+    repo.record.default_visibility = Visibility::Private;
+    repo.policy = Policy::new(Visibility::Private);
+    repo.policy
+        .add_rule(VisibilityRule::public(
+            ScopePath::parse("/.scope/RULES.md").unwrap(),
+        ))
+        .unwrap();
+    repo.graph.commits[0].changes[0].visibility = Visibility::Private;
+    replace_test_repo(&state, repo).await;
+
+    let response = events(state, None).await;
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let mut stream = response.into_body().into_data_stream();
+    let initial = next_event(&mut stream).await;
+    assert!(initial.contains(r#""kind":"Connected""#));
+    assert!(initial.contains(r#""version":0"#));
 }
 
 #[tokio::test]

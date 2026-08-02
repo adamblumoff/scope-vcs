@@ -1,7 +1,7 @@
 use super::{
     policy::{ScopePath, Visibility},
     repo_config::{ConfigVisibility, RepoConfig, RepoConfigVisibilityRule},
-    repo_control::is_private_control_pattern,
+    repo_control::is_repo_control_pattern,
 };
 use std::collections::BTreeMap;
 
@@ -41,7 +41,7 @@ pub fn toggle_visibility_target(
     if target.reserved {
         return ToggleResult {
             changed: false,
-            message: ".scope files are always private".to_string(),
+            message: ".scope visibility is managed by Scope".to_string(),
         };
     }
 
@@ -88,9 +88,6 @@ pub fn toggle_visibility_target(
 }
 
 pub fn target_visibility(config: &RepoConfig, target: &VisibilityTarget<'_>) -> ReviewVisibility {
-    if target.reserved {
-        return ReviewVisibility::Private;
-    }
     if target.kind == VisibilityNodeKind::Root {
         return aggregate_visibility(
             target
@@ -124,7 +121,15 @@ pub fn target_visibility(config: &RepoConfig, target: &VisibilityTarget<'_>) -> 
 
 pub fn rule_label(config: &RepoConfig, target: &VisibilityTarget<'_>) -> String {
     if target.reserved {
-        return "forced private".to_string();
+        return if target.kind == VisibilityNodeKind::File
+            && target_visibility(config, target) == ReviewVisibility::Public
+        {
+            "forced public".to_string()
+        } else if target.kind == VisibilityNodeKind::File {
+            "forced private".to_string()
+        } else {
+            "managed by Scope".to_string()
+        };
     }
     if target.kind == VisibilityNodeKind::Root {
         return format!(
@@ -168,7 +173,7 @@ pub fn canonicalize_visibility_rules(config: &mut RepoConfig) {
     let base_visibilities = effective_visibilities_by_rule_base(config);
     let mut rules_by_path = BTreeMap::new();
     for rule in &config.visibility.rules {
-        if rule.visibility == ConfigVisibility::Public && is_private_control_pattern(&rule.path) {
+        if is_repo_control_pattern(&rule.path) {
             continue;
         }
         rules_by_path.insert(rule.path.clone(), rule.visibility);

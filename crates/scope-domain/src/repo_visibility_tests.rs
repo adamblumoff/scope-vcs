@@ -173,3 +173,24 @@ fn reserved_scope_paths_cannot_be_toggled_public() {
         ReviewVisibility::Private
     );
 }
+
+#[test]
+fn canonical_rules_are_reserved_and_forced_public() {
+    let mut config = config(ConfigVisibility::Private, vec![]);
+    let target = VisibilityTarget {
+        name: "RULES.md",
+        path: "/.scope/RULES.md",
+        kind: VisibilityNodeKind::File,
+        reserved: true,
+        file_paths_under: vec!["/.scope/RULES.md"],
+    };
+
+    let result = toggle_visibility_target(&mut config, target.clone());
+
+    assert!(!result.changed);
+    assert_eq!(
+        target_visibility(&config, &target),
+        ReviewVisibility::Public
+    );
+    assert_eq!(rule_label(&config, &target), "forced public");
+}

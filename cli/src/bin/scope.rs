@@ -25,6 +25,8 @@ enum CommandKind {
     Pull(PullArgs),
     #[command(about = "Review repo visibility config locally")]
     Review,
+    #[command(about = "Manage repository contribution rules for coding agents")]
+    Rules(RulesArgs),
     #[command(about = "Work with named Scope requests")]
     Request(RequestArgs),
     Clone(CloneArgs),
@@ -68,6 +70,18 @@ struct PullArgs {
 struct CloneArgs {
     repository: String,
     destination: Option<PathBuf>,
+}
+
+#[derive(Parser)]
+struct RulesArgs {
+    #[command(subcommand)]
+    command: RulesCommand,
+}
+
+#[derive(Subcommand)]
+enum RulesCommand {
+    #[command(about = "Create .scope/RULES.md and sync detected repo-level agent files")]
+    Sync,
 }
 
 #[derive(Parser)]
@@ -154,6 +168,7 @@ fn main() -> anyhow::Result<()> {
             let repo = discover_git_repo("scope review")?;
             run_standalone_review(&repo)
         }
+        CommandKind::Rules(args) => run_rules(args.command),
         CommandKind::Request(args) => run_request(args),
         CommandKind::Clone(args) => {
             scope_cli::clone::clone_repo(&args.repository, args.destination.as_deref())
@@ -164,6 +179,23 @@ fn main() -> anyhow::Result<()> {
         CommandKind::Run(args) => run_workflow(args),
         CommandKind::Runner(args) => run_runner(args.command),
         CommandKind::GitCredential(args) => run_git_credential(&args.operation),
+    }
+}
+
+fn run_rules(command: RulesCommand) -> anyhow::Result<()> {
+    let repo = discover_git_repo("scope rules")?;
+    match command {
+        RulesCommand::Sync => {
+            let result = scope_cli::agent_context::sync_repo_rules(&repo.root)?;
+            if result.changed_paths.is_empty() {
+                println!("Scope rules context is already in sync.");
+            } else {
+                for path in result.changed_paths {
+                    println!("Updated {}", path.display());
+                }
+            }
+            Ok(())
+        }
     }
 }
 

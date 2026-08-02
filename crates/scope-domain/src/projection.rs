@@ -1,6 +1,6 @@
 use super::{
     policy::{ScopePath, Visibility},
-    repo_control::is_private_control_path,
+    repo_control::{is_private_control_path, is_repo_control_path},
     store::{LogicalCommitOrigin, RepositoryAccess, RepositoryActor, SourceBlob},
 };
 use serde::{Deserialize, Serialize};
@@ -313,7 +313,7 @@ fn projection_boundary_events_by_anchor<'a>(
     };
     for event in events
         .iter()
-        .filter(|event| !is_private_control_path(&event.path))
+        .filter(|event| !is_repo_control_path(&event.path))
     {
         let boundary = match (event.old_visibility, event.new_visibility) {
             (Visibility::Private, Visibility::Public) if event.source_commit_id.is_none() => {

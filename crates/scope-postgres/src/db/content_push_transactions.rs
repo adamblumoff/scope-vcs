@@ -18,6 +18,7 @@ use {
         policy::{Policy, ScopePath},
         repo_actions::reviewed_update_domain_error,
         repo_config::RepoConfig,
+        repo_control::REPO_RULES_PATH,
         reviewed_updates::{
             AcceptedContentPush, ContentPushState, ReviewedUpdateInput, accept_content_push,
             accept_request_merge,
@@ -83,11 +84,14 @@ async fn accept_and_persist_content_update(
     now_unix: u64,
     generated_ids: &dyn GeneratedIdSource,
 ) -> Result<GitHead, PostgresError> {
-    let changed_paths = update
+    let mut changed_paths = update
         .changes
         .iter()
         .map(|change| change.path.as_str().to_string())
         .collect::<Vec<_>>();
+    if !changed_paths.iter().any(|path| path == REPO_RULES_PATH) {
+        changed_paths.push(REPO_RULES_PATH.to_string());
+    }
     let live_files = entities::live_file::Entity::find()
         .filter(entities::live_file::Column::RepoId.eq(repo_id))
         .filter(entities::live_file::Column::Path.is_in(changed_paths))

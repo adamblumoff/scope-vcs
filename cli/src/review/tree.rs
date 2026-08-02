@@ -1,5 +1,5 @@
 use crate::git_repo::GitChangedPath;
-use scope_domain::{policy::ScopePath, repo_control::is_private_control_path};
+use scope_domain::{policy::ScopePath, repo_control::is_repo_control_path};
 use std::collections::{BTreeMap, BTreeSet};
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -164,7 +164,7 @@ fn changed_statuses_by_path(changed_paths: &[GitChangedPath]) -> BTreeMap<String
 }
 
 fn is_reserved_scope_path(path: &str) -> bool {
-    ScopePath::parse(path).is_ok_and(|path| is_private_control_path(&path))
+    ScopePath::parse(path).is_ok_and(|path| is_repo_control_path(&path))
 }
 
 #[cfg(test)]
