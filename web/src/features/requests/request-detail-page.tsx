@@ -232,7 +232,11 @@ export function RequestDetailPage(props: RequestDetailPageProps) {
             <div className="flex flex-wrap items-center gap-2">
               <LifecycleBadge state={live.repo.lifecycle_state} />
               <Badge variant={requestStatusTone(request)}>{requestStatusLabel(request)}</Badge>
-              <Badge variant={requestMergeabilityTone(request)}>{requestMergeabilityLabel(request)}</Badge>
+              {request.state === 'Open' ? (
+                <Badge variant={requestMergeabilityTone(request)}>
+                  {requestMergeabilityLabel(request)}
+                </Badge>
+              ) : null}
             </div>
             {requestActions.error ? (
               <p className="text-sm text-destructive" role="alert">{requestActions.error}</p>
