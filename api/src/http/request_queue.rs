@@ -65,7 +65,7 @@ pub(crate) async fn request_queue(
     }
     if query.section == RequestQueueSection::YourWork && search.is_some() {
         return Err(ApiError::bad_request(
-            "search is only supported for ready and completed requests",
+            "search is only supported for open and closed requests",
         ));
     }
     let limit = query
@@ -203,8 +203,8 @@ fn request_queue_cursor_aad(repo_id: &str, section: RequestQueueSection) -> Stri
 fn request_queue_section_name(section: RequestQueueSection) -> &'static str {
     match section {
         RequestQueueSection::YourWork => "your_work",
-        RequestQueueSection::Ready => "ready",
-        RequestQueueSection::Completed => "completed",
+        RequestQueueSection::Open => "open",
+        RequestQueueSection::Closed => "closed",
     }
 }
 fn parse_request_queue_cursor_plain(
@@ -232,15 +232,15 @@ fn parse_request_queue_cursor_plain(
                 request_id: request_id(id)?,
             })
         }
-        (RequestQueueSection::Ready, ["v1", "ready", first_ready, id]) => {
-            Ok(RequestQueueCursor::Ready {
-                first_ready_at_unix: pg_u64(first_ready)?,
+        (RequestQueueSection::Open, ["v1", "open", submitted, id]) => {
+            Ok(RequestQueueCursor::Open {
+                submitted_at_unix: pg_u64(submitted)?,
                 request_id: request_id(id)?,
             })
         }
-        (RequestQueueSection::Completed, ["v1", "completed", completed, id]) => {
-            Ok(RequestQueueCursor::Completed {
-                completed_at_unix: pg_u64(completed)?,
+        (RequestQueueSection::Closed, ["v1", "closed", closed, id]) => {
+            Ok(RequestQueueCursor::Closed {
+                closed_at_unix: pg_u64(closed)?,
                 request_id: request_id(id)?,
             })
         }
@@ -256,14 +256,14 @@ fn encode_request_queue_cursor_plain(cursor: &scope_postgres::db::RequestQueueCu
             updated_at_unix,
             request_id,
         } => format!("v1:work:{updated_at_unix}:{request_id}"),
-        RequestQueueCursor::Ready {
-            first_ready_at_unix,
+        RequestQueueCursor::Open {
+            submitted_at_unix,
             request_id,
-        } => format!("v1:ready:{first_ready_at_unix}:{request_id}"),
-        RequestQueueCursor::Completed {
-            completed_at_unix,
+        } => format!("v1:open:{submitted_at_unix}:{request_id}"),
+        RequestQueueCursor::Closed {
+            closed_at_unix,
             request_id,
-        } => format!("v1:completed:{completed_at_unix}:{request_id}"),
+        } => format!("v1:closed:{closed_at_unix}:{request_id}"),
     }
 }
 
@@ -285,17 +285,17 @@ mod tests {
                 },
             ),
             (
-                RequestQueueSection::Ready,
-                RequestQueueCursor::Ready {
-                    first_ready_at_unix: 11,
-                    request_id: "req_ready".to_string(),
+                RequestQueueSection::Open,
+                RequestQueueCursor::Open {
+                    submitted_at_unix: 11,
+                    request_id: "req_open".to_string(),
                 },
             ),
             (
-                RequestQueueSection::Completed,
-                RequestQueueCursor::Completed {
-                    completed_at_unix: 12,
-                    request_id: "req_completed".to_string(),
+                RequestQueueSection::Closed,
+                RequestQueueCursor::Closed {
+                    closed_at_unix: 12,
+                    request_id: "req_closed".to_string(),
                 },
             ),
         ] {
@@ -315,26 +315,21 @@ mod tests {
             );
         }
 
-        let ready = RequestQueueCursor::Ready {
-            first_ready_at_unix: 11,
-            request_id: "req_ready".to_string(),
+        let open = RequestQueueCursor::Open {
+            submitted_at_unix: 11,
+            request_id: "req_open".to_string(),
         };
-        let ready =
-            encode_request_queue_cursor(SIGNING_KEY, REPO_ID, RequestQueueSection::Ready, &ready)
+        let open =
+            encode_request_queue_cursor(SIGNING_KEY, REPO_ID, RequestQueueSection::Open, &open)
                 .unwrap();
         assert!(
-            parse_request_queue_cursor(
-                SIGNING_KEY,
-                REPO_ID,
-                RequestQueueSection::Completed,
-                &ready,
-            )
-            .is_err()
+            parse_request_queue_cursor(SIGNING_KEY, REPO_ID, RequestQueueSection::Closed, &open,)
+                .is_err()
         );
         assert!(
             parse_request_queue_cursor_plain(
-                RequestQueueSection::Completed,
-                "v1:ready:2:25:11:req_ready"
+                RequestQueueSection::Closed,
+                "v1:open:2:25:11:req_open"
             )
             .is_err()
         );
@@ -344,17 +339,17 @@ mod tests {
                 "v1:work:9223372036854775808:req",
             ),
             (
-                RequestQueueSection::Ready,
-                "v1:ready:9223372036854775808:1:1:req",
+                RequestQueueSection::Open,
+                "v1:open:9223372036854775808:1:1:req",
             ),
-            (RequestQueueSection::Ready, "v1:ready:1:2147483648:1:req"),
+            (RequestQueueSection::Open, "v1:open:1:2147483648:1:req"),
             (
-                RequestQueueSection::Ready,
-                "v1:ready:1:1:9223372036854775808:req",
+                RequestQueueSection::Open,
+                "v1:open:1:1:9223372036854775808:req",
             ),
             (
-                RequestQueueSection::Completed,
-                "v1:completed:9223372036854775808:req",
+                RequestQueueSection::Closed,
+                "v1:closed:9223372036854775808:req",
             ),
         ] {
             assert!(parse_request_queue_cursor_plain(section, cursor).is_err());

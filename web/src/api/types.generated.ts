@@ -84,7 +84,7 @@ export type CliSessionsResponse = { sessions: Array<CliSessionResponse>, };
 
 export type CliSessionResponse = { id: string, label: string, created_at_unix: number, last_used_at_unix: number | null, expires_at_unix: number, };
 
-export type RepoSummaryResponse = { id: string, owner_handle: string, name: string, lifecycle_state: RepoPublicationState, default_visibility: Visibility, change_version: number, access: RepositoryAccessResponse, ready_for_review_count: number, request_permissions: RepoRequestPermissionsResponse, };
+export type RepoSummaryResponse = { id: string, owner_handle: string, name: string, lifecycle_state: RepoPublicationState, default_visibility: Visibility, change_version: number, access: RepositoryAccessResponse, open_request_count: number, request_permissions: RepoRequestPermissionsResponse, };
 
 export type RepoRequestPermissionsResponse = { can_start_request: boolean, };
 
@@ -162,7 +162,7 @@ export type ProjectionPreviewCommitVisibilityResponse = "FullyPublic" | "Mixed" 
 
 export type ProjectionPreviewSummaryResponse = { visible_files: number, hidden_files: number, visible_commits: number, hidden_commits: number, };
 
-export type RequestQueueSection = "your_work" | "ready" | "completed";
+export type RequestQueueSection = "your_work" | "open" | "closed";
 
 export type RequestListResponse = { requests: Array<RequestListItemResponse>, next_cursor: string | null, };
 

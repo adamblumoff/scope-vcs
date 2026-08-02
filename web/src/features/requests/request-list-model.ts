@@ -5,8 +5,8 @@ export type RequestQueuePages = Record<RequestQueueSection, RequestList>
 
 export const REQUEST_QUEUE_SECTION_ORDER = [
   'your_work',
-  'ready',
-  'completed',
+  'open',
+  'closed',
 ] as const satisfies readonly RequestQueueSection[]
 
 export type RequestQueueSectionErrors = Partial<
@@ -50,8 +50,8 @@ export type RequestQueueViewAction =
       type: 'search_succeeded'
       generation: number
       query: string
-      ready: RequestList
-      completed: RequestList
+      open: RequestList
+      closed: RequestList
     }
   | { type: 'search_failed'; generation: number; error: string }
 
@@ -152,16 +152,16 @@ export function requestQueueViewReducer(
         ...state,
         pages: {
           ...state.pages,
-          completed: action.completed,
-          ready: action.ready,
+          closed: action.closed,
+          open: action.open,
         },
         searchQuery: action.query,
         searching: false,
         searchError: null,
         sectionErrors: {
           ...state.sectionErrors,
-          completed: undefined,
-          ready: undefined,
+          closed: undefined,
+          open: undefined,
         },
       }
     case 'search_failed':

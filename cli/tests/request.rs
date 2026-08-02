@@ -78,6 +78,20 @@ fn request_submit_reaches_auth_without_extra_arguments() {
 }
 
 #[test]
+fn request_show_and_list_accept_json_output() {
+    let dir = TempDir::new("request-json");
+    create_repo_with_head(dir.path());
+
+    for args in [["request", "show", "--json"], ["request", "list", "--json"]] {
+        let output = scope_command(dir.path()).args(args).output().unwrap();
+        assert_failure(&output, "request JSON output");
+        let stderr = String::from_utf8(output.stderr).unwrap();
+        assert!(!stderr.contains("unexpected argument"), "{stderr}");
+        assert!(stderr.contains("start browser login"), "{stderr}");
+    }
+}
+
+#[test]
 fn request_edit_requires_a_title_or_description_file_before_login() {
     let dir = TempDir::new("edit-content");
     create_repo_with_head(dir.path());

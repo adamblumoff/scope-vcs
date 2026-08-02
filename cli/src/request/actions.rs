@@ -239,18 +239,31 @@ pub(super) fn show_one_request(
     api_url: &str,
     session_token: &str,
     target: RequestTargetArgs,
+    json: bool,
 ) -> anyhow::Result<()> {
     let (context, request_id, detail) =
         load_exact_request(git_repo, client, api_url, session_token, target)?;
-    print_request_detail(&detail);
-    print_request_activity(&full_request_activity(
+    let activity = full_request_activity(
         client,
         api_url,
         session_token,
         api_target(&context, &request_id),
         0,
         detail.request.activity_version,
-    )?);
+    )?;
+    if json {
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&serde_json::json!({
+                "request": detail.request,
+                "activity": activity,
+            }))
+            .context("serialize request detail")?
+        );
+    } else {
+        print_request_detail(&detail);
+        print_request_activity(&activity);
+    }
     Ok(())
 }
 
@@ -260,10 +273,13 @@ pub(super) fn list_request_status(
     api_url: &str,
     session_token: &str,
     remote: Option<String>,
+    json: bool,
 ) -> anyhow::Result<()> {
     let context = load_context(git_repo, client, api_url, session_token, remote.as_deref())?;
-    print_repo_access(&context.repo);
-    print_request_list(client, api_url, session_token, &context)
+    if !json {
+        print_repo_access(&context.repo);
+    }
+    print_request_list(client, api_url, session_token, &context, json)
 }
 
 pub(super) fn print_request_list(
@@ -271,6 +287,7 @@ pub(super) fn print_request_list(
     api_url: &str,
     session_token: &str,
     context: &local::RequestContext,
+    json: bool,
 ) -> anyhow::Result<()> {
     let mut requests = Vec::new();
     let mut cursor = None;
@@ -308,7 +325,12 @@ pub(super) fn print_request_list(
             .cmp(&right.updated_at_unix)
             .then_with(|| left.id.cmp(&right.id))
     });
-    if requests.is_empty() {
+    if json {
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&requests).context("serialize request list")?
+        );
+    } else if requests.is_empty() {
         println!("No visible requests.");
     } else {
         println!(" WAIT  STATE      REQUEST");

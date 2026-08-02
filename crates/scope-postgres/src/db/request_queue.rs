@@ -17,12 +17,12 @@ pub enum RequestQueueCursor {
         updated_at_unix: u64,
         request_id: String,
     },
-    Ready {
-        first_ready_at_unix: u64,
+    Open {
+        submitted_at_unix: u64,
         request_id: String,
     },
-    Completed {
-        completed_at_unix: u64,
+    Closed {
+        closed_at_unix: u64,
         request_id: String,
     },
 }
@@ -50,7 +50,7 @@ impl RequestStore {
     ) -> Result<Vec<RequestQueueRow>, PostgresError> {
         if input.section == RequestQueueSection::YourWork && input.search.is_some() {
             return Err(PostgresError::invalid_input(
-                "search is only supported for ready and completed requests",
+                "search is only supported for open and closed requests",
             ));
         }
         ensure_cursor_section(&input)?;
@@ -84,11 +84,11 @@ impl RequestStore {
                     .filter(entities::request::Column::ClosedAtUnix.is_null())
                     .filter(entities::request::Column::MergedAtUnix.is_null())
             }
-            RequestQueueSection::Ready => query
+            RequestQueueSection::Open => query
                 .filter(entities::request::Column::SubmittedAtUnix.is_not_null())
                 .filter(entities::request::Column::ClosedAtUnix.is_null())
                 .filter(entities::request::Column::MergedAtUnix.is_null()),
-            RequestQueueSection::Completed => query.filter(
+            RequestQueueSection::Closed => query.filter(
                 Condition::any()
                     .add(entities::request::Column::ClosedAtUnix.is_not_null())
                     .add(entities::request::Column::MergedAtUnix.is_not_null()),
@@ -115,10 +115,10 @@ impl RequestStore {
             RequestQueueSection::YourWork => query
                 .order_by_desc(entities::request::Column::UpdatedAtUnix)
                 .order_by_asc(entities::request::Column::Id),
-            RequestQueueSection::Ready => query
+            RequestQueueSection::Open => query
                 .order_by_asc(entities::request::Column::SubmittedAtUnix)
                 .order_by_asc(entities::request::Column::Id),
-            RequestQueueSection::Completed => query
+            RequestQueueSection::Closed => query
                 .order_by_desc(Expr::cust("COALESCE(closed_at_unix, merged_at_unix)"))
                 .order_by_asc(entities::request::Column::Id),
         };
@@ -145,8 +145,8 @@ fn ensure_cursor_section(input: &RequestQueuePageQuery<'_>) -> Result<(), Postgr
     match (input.section, input.after) {
         (_, None) => Ok(()),
         (RequestQueueSection::YourWork, Some(RequestQueueCursor::YourWork { .. }))
-        | (RequestQueueSection::Ready, Some(RequestQueueCursor::Ready { .. }))
-        | (RequestQueueSection::Completed, Some(RequestQueueCursor::Completed { .. })) => Ok(()),
+        | (RequestQueueSection::Open, Some(RequestQueueCursor::Open { .. }))
+        | (RequestQueueSection::Closed, Some(RequestQueueCursor::Closed { .. })) => Ok(()),
         _ => Err(PostgresError::invalid_input(
             "request queue cursor section mismatch",
         )),
@@ -184,26 +184,26 @@ fn apply_cursor(
             *updated_at_unix,
             request_id,
         )?,
-        RequestQueueCursor::Ready {
-            first_ready_at_unix,
+        RequestQueueCursor::Open {
+            submitted_at_unix,
             request_id,
         } => ascending_time_cursor(
             entities::request::Column::SubmittedAtUnix,
-            *first_ready_at_unix,
+            *submitted_at_unix,
             request_id,
         )?,
-        RequestQueueCursor::Completed {
-            completed_at_unix,
+        RequestQueueCursor::Closed {
+            closed_at_unix,
             request_id,
         } => Condition::any()
             .add(descending_time_cursor(
                 entities::request::Column::ClosedAtUnix,
-                *completed_at_unix,
+                *closed_at_unix,
                 request_id,
             )?)
             .add(descending_time_cursor(
                 entities::request::Column::MergedAtUnix,
-                *completed_at_unix,
+                *closed_at_unix,
                 request_id,
             )?),
     };
@@ -246,14 +246,14 @@ fn cursor_for_request(
             updated_at_unix: request.updated_at_unix,
             request_id: request.id.clone(),
         }),
-        RequestQueueSection::Ready => Ok(RequestQueueCursor::Ready {
-            first_ready_at_unix: request.submitted_at_unix.ok_or_else(|| {
+        RequestQueueSection::Open => Ok(RequestQueueCursor::Open {
+            submitted_at_unix: request.submitted_at_unix.ok_or_else(|| {
                 PostgresError::internal_message("open request is missing its submission time")
             })?,
             request_id: request.id.clone(),
         }),
-        RequestQueueSection::Completed => Ok(RequestQueueCursor::Completed {
-            completed_at_unix: request
+        RequestQueueSection::Closed => Ok(RequestQueueCursor::Closed {
+            closed_at_unix: request
                 .closed_at_unix
                 .or(request.merged_at_unix)
                 .ok_or_else(|| {

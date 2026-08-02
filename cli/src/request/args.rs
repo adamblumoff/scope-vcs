@@ -150,12 +150,16 @@ pub(super) struct RequestDiscussArgs {
 pub(super) struct RequestShowArgs {
     #[command(flatten)]
     pub(super) target: RequestTargetArgs,
+    #[arg(long, help = "Print the request and activity as JSON")]
+    pub(super) json: bool,
 }
 
 #[derive(Parser)]
 pub(super) struct RequestListArgs {
     #[arg(long, help = "Scope Git remote for the target repository")]
     pub(super) remote: Option<String>,
+    #[arg(long, help = "Print visible requests as JSON")]
+    pub(super) json: bool,
 }
 
 #[derive(Parser)]

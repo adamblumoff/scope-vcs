@@ -213,7 +213,7 @@ pub struct RepoSummaryResponse {
     pub default_visibility: Visibility,
     pub change_version: u64,
     pub access: RepositoryAccessResponse,
-    pub ready_for_review_count: usize,
+    pub open_request_count: usize,
     pub request_permissions: RepoRequestPermissionsResponse,
 }
 

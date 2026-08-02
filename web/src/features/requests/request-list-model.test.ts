@@ -33,18 +33,18 @@ test('appendQueuePage advances a page without duplicating rows', () => {
   const second = request('req_2')
   const current: RequestList = {
     requests: [first],
-    next_cursor: 'ready:page-2',
+    next_cursor: 'open:page-2',
   }
   const incoming: RequestList = {
     requests: [first, second],
-    next_cursor: 'ready:page-3',
+    next_cursor: 'open:page-3',
   }
 
   assert.deepEqual(appendQueuePage(current, incoming), {
     requests: [first, second],
-    next_cursor: 'ready:page-3',
+    next_cursor: 'open:page-3',
   })
-  assert.equal(current.next_cursor, 'ready:page-2')
+  assert.equal(current.next_cursor, 'open:page-2')
 })
 
 test('request queue reducer exposes loading success and error states', () => {
@@ -52,39 +52,39 @@ test('request queue reducer exposes loading success and error states', () => {
   const loading = requestQueueViewReducer(initial, {
     type: 'load_started',
     generation: initial.generation,
-    section: 'ready',
+    section: 'open',
   })
-  assert.equal(loading.loadingSection, 'ready')
+  assert.equal(loading.loadingSection, 'open')
 
   const loaded = requestQueueViewReducer(loading, {
     type: 'load_succeeded',
     generation: loading.generation,
-    section: 'ready',
-    page: page(['ready-1', 'ready-2'], null),
+    section: 'open',
+    page: page(['open-1', 'open-2'], null),
   })
   assert.equal(loaded.loadingSection, null)
   assert.deepEqual(
-    loaded.pages.ready.requests.map(({ id }) => id),
-    ['ready-1', 'ready-2'],
+    loaded.pages.open.requests.map(({ id }) => id),
+    ['open-1', 'open-2'],
   )
 
   const failed = requestQueueViewReducer(
     requestQueueViewReducer(loaded, {
       type: 'load_started',
       generation: loaded.generation,
-      section: 'completed',
+      section: 'closed',
     }),
     {
       type: 'load_failed',
       generation: loaded.generation,
-      section: 'completed',
-      error: 'Could not load completed requests.',
+      section: 'closed',
+      error: 'Could not load closed requests.',
     },
   )
   assert.equal(failed.loadingSection, null)
   assert.equal(
-    failed.sectionErrors.completed,
-    'Could not load completed requests.',
+    failed.sectionErrors.closed,
+    'Could not load closed requests.',
   )
 })
 
@@ -93,8 +93,8 @@ test('request queue reducer replaces searched sections and preserves Your work',
     ...createRequestQueueViewState(queuePages()),
     searchError: 'Previous failure',
     sectionErrors: {
-      ready: 'Ready failure',
-      completed: 'Completed failure',
+      open: 'Open failure',
+      closed: 'Closed failure',
     },
   }
   const searching = requestQueueViewReducer(initial, {
@@ -108,8 +108,8 @@ test('request queue reducer replaces searched sections and preserves Your work',
     type: 'search_succeeded',
     generation: searching.generation,
     query: 'needle',
-    ready: page(['ready-search'], null),
-    completed: page(['completed-search'], null),
+    open: page(['open-search'], null),
+    closed: page(['closed-search'], null),
   })
   assert.equal(searched.searching, false)
   assert.equal(searched.searchQuery, 'needle')
@@ -118,15 +118,15 @@ test('request queue reducer replaces searched sections and preserves Your work',
     ['work-1'],
   )
   assert.deepEqual(
-    searched.pages.ready.requests.map(({ id }) => id),
-    ['ready-search'],
+    searched.pages.open.requests.map(({ id }) => id),
+    ['open-search'],
   )
   assert.deepEqual(
-    searched.pages.completed.requests.map(({ id }) => id),
-    ['completed-search'],
+    searched.pages.closed.requests.map(({ id }) => id),
+    ['closed-search'],
   )
-  assert.equal(searched.sectionErrors.ready, undefined)
-  assert.equal(searched.sectionErrors.completed, undefined)
+  assert.equal(searched.sectionErrors.open, undefined)
+  assert.equal(searched.sectionErrors.closed, undefined)
 
   const failed = requestQueueViewReducer(
     requestQueueViewReducer(searched, {
@@ -146,13 +146,13 @@ test('request queue reducer replaces searched sections and preserves Your work',
 test('request queue reducer replaces stale state from an authoritative snapshot', () => {
   const initial = {
     ...createRequestQueueViewState(queuePages()),
-    loadingSection: 'ready' as const,
+    loadingSection: 'open' as const,
     searchDraft: 'old query',
     searchQuery: 'old query',
     searching: true,
   }
   const replacement = queuePages({
-    ready: page(['ready-new'], null),
+    open: page(['open-new'], null),
   })
 
   const refreshed = requestQueueViewReducer(initial, {
@@ -171,21 +171,21 @@ test('request queue reducer replaces stale state from an authoritative snapshot'
     {
       type: 'load_succeeded',
       generation: initial.generation,
-      section: 'ready',
-      page: page(['ready-stale'], null),
+      section: 'open',
+      page: page(['open-stale'], null),
     },
     {
       type: 'load_failed',
       generation: initial.generation,
-      section: 'ready',
+      section: 'open',
       error: 'Stale load failure',
     },
     {
       type: 'search_succeeded',
       generation: initial.generation,
       query: 'stale',
-      ready: page(['ready-stale'], null),
-      completed: page(['completed-stale'], null),
+      open: page(['open-stale'], null),
+      closed: page(['closed-stale'], null),
     },
     {
       type: 'search_failed',
@@ -203,12 +203,12 @@ test('a newly delivered identical snapshot discards pagination state', () => {
   const paginated = requestQueueViewReducer(initial, {
     type: 'load_succeeded',
     generation: initial.generation,
-    section: 'ready',
-    page: page(['ready-2'], null),
+    section: 'open',
+    page: page(['open-2'], null),
   })
   assert.deepEqual(
-    paginated.pages.ready.requests.map(({ id }) => id),
-    ['ready-1', 'ready-2'],
+    paginated.pages.open.requests.map(({ id }) => id),
+    ['open-1', 'open-2'],
   )
 
   const identicalSnapshot = queuePages()
@@ -220,8 +220,8 @@ test('a newly delivered identical snapshot discards pagination state', () => {
   assert.equal(refreshed.generation, paginated.generation + 1)
   assert.equal(refreshed.snapshot, identicalSnapshot)
   assert.deepEqual(
-    refreshed.pages.ready.requests.map(({ id }) => id),
-    ['ready-1'],
+    refreshed.pages.open.requests.map(({ id }) => id),
+    ['open-1'],
   )
 })
 
@@ -241,8 +241,8 @@ function queuePages(
 ): RequestQueuePages {
   return {
     your_work: page(['work-1'], null),
-    ready: page(['ready-1'], 'ready:page-2'),
-    completed: page(['completed-1'], null),
+    open: page(['open-1'], 'open:page-2'),
+    closed: page(['closed-1'], null),
     ...overrides,
   }
 }

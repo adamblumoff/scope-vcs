@@ -149,7 +149,7 @@ wire_enum!(RequestMergeabilityStatus => DomainRequestMergeabilityStatus {
 wire_enum!(
     #[serde(rename_all = "snake_case")]
     #[cfg_attr(feature = "ts", ts(rename_all = "snake_case"))]
-    RequestQueueSection => DomainRequestQueueSection { YourWork, Ready, Completed }
+    RequestQueueSection => DomainRequestQueueSection { YourWork, Open, Closed }
 );
 wire_enum!(RequestDiscussionStatus => DomainRequestDiscussionStatus { Dormant, Open, Resolved });
 

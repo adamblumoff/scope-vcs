@@ -157,12 +157,22 @@ pub fn run_request_command(
             args.target.request,
             args.body,
         ),
-        RequestCommand::Show(args) => {
-            show_one_request(&git_repo, client, api_url, session_token, args.target)
-        }
-        RequestCommand::List(args) => {
-            list_request_status(&git_repo, client, api_url, session_token, args.remote)
-        }
+        RequestCommand::Show(args) => show_one_request(
+            &git_repo,
+            client,
+            api_url,
+            session_token,
+            args.target,
+            args.json,
+        ),
+        RequestCommand::List(args) => list_request_status(
+            &git_repo,
+            client,
+            api_url,
+            session_token,
+            args.remote,
+            args.json,
+        ),
         RequestCommand::Status(args) => show_request_status(
             &git_repo,
             client,
@@ -363,7 +373,7 @@ fn show_request_status(
         return Ok(());
     }
 
-    print_request_list(client, api_url, session_token, &context)
+    print_request_list(client, api_url, session_token, &context, false)
 }
 
 fn start_request_discussion(

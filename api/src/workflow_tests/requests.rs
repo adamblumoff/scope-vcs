@@ -20,7 +20,7 @@ async fn request_reads_do_not_consume_git_projection_capacity() {
 
     for uri in [
         "/v1/repos/owner/repo/requests",
-        "/v1/repos/owner/repo/requests/queue?section=ready",
+        "/v1/repos/owner/repo/requests/queue?section=open",
     ] {
         let response = api_request(app.clone(), "GET", uri, None, None).await;
         assert_eq!(response.status(), StatusCode::OK);
@@ -42,7 +42,7 @@ async fn request_reads_do_not_consume_git_projection_capacity() {
     let queue = api_request(
         app,
         "GET",
-        "/v1/repos/owner/repo/requests/queue?section=ready",
+        "/v1/repos/owner/repo/requests/queue?section=open",
         Some(&bearer_header()),
         None,
     )
@@ -145,7 +145,7 @@ async fn stale_request_projection_identity_returns_the_rebuilding_response() {
 
     for uri in [
         "/v1/repos/owner/repo/requests?cursor=v1:zzzz",
-        "/v1/repos/owner/repo/requests/queue?section=ready",
+        "/v1/repos/owner/repo/requests/queue?section=open",
     ] {
         let empty = api_request(app.clone(), "GET", uri, Some(&bearer_header()), None).await;
         assert_eq!(empty.status(), StatusCode::OK);

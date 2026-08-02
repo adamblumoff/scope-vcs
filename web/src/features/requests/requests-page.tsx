@@ -40,17 +40,17 @@ const SECTION_DETAILS = {
     icon: UserRound,
     title: 'Your work',
   },
-  ready: {
+  open: {
     description: 'Oldest submissions first.',
-    empty: 'No requests are ready for review.',
+    empty: 'No open requests are visible.',
     icon: GitPullRequest,
-    title: 'Ready for review',
+    title: 'Open',
   },
-  completed: {
-    description: 'Public history and private results visible to maintainers.',
-    empty: 'No completed requests are visible.',
+  closed: {
+    description: 'Closed and merged requests, newest decision first.',
+    empty: 'No closed requests are visible.',
     icon: CheckCircle2,
-    title: 'Completed',
+    title: 'Closed',
   },
 } as const
 
@@ -131,16 +131,16 @@ export function RequestsPage({
     const operationGeneration = generation
     dispatch({ type: 'search_started', generation: operationGeneration })
     try {
-      const [ready, completed] = await Promise.all([
-        loadPage('ready', null, normalizedQuery || null),
-        loadPage('completed', null, normalizedQuery || null),
+      const [open, closed] = await Promise.all([
+        loadPage('open', null, normalizedQuery || null),
+        loadPage('closed', null, normalizedQuery || null),
       ])
       dispatch({
         type: 'search_succeeded',
         generation: operationGeneration,
         query: normalizedQuery,
-        ready,
-        completed,
+        open,
+        closed,
       })
     } catch (error) {
       dispatch({
@@ -164,9 +164,9 @@ export function RequestsPage({
   return (
     <>
       <WorkbenchHeader
-        count={`${live.repo.ready_for_review_count} ready for review`}
-        description="Review repository work by attention, then keep completed decisions easy to find."
-        eyebrow="Review"
+        count={`${live.repo.open_request_count} open`}
+        description="Keep drafts close, review submitted work, and find terminal requests."
+        eyebrow="Contributions"
         title="Requests"
       />
       <div className="px-4 pb-12 sm:px-6 lg:px-8">
@@ -226,7 +226,7 @@ function QueueSearch({
       role="search"
     >
       <label className="relative block min-w-0 flex-1 sm:max-w-lg">
-        <span className="sr-only">Search ready and completed requests</span>
+        <span className="sr-only">Search open and closed requests</span>
         <Search
           aria-hidden="true"
           className="pointer-events-none absolute left-3 top-1/2 size-4 -translate-y-1/2 text-muted-foreground"
@@ -235,7 +235,7 @@ function QueueSearch({
           className="h-10 w-full rounded-md border border-input bg-background pl-9 pr-3 text-sm text-foreground placeholder:text-muted-foreground focus-visible:border-ring focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring"
           disabled={busy}
           onChange={(event) => onChange(event.target.value)}
-          placeholder="Search ready and completed requests"
+          placeholder="Search open and closed requests"
           type="search"
           value={query}
         />
@@ -397,13 +397,13 @@ function RequestQueueRow({
         </div>
       </div>
       <div className="flex min-w-0 flex-wrap items-center gap-2 sm:justify-end">
-        {section === 'completed' ? (
+        {section === 'closed' ? (
           <>
             <Badge variant={requestStatusTone(request)}>
               {requestStatusLabel(request)}
             </Badge>
           </>
-        ) : section === 'ready' ? (
+        ) : section === 'open' ? (
           <span className="text-xs text-muted-foreground">
             {requestMergeabilityLabel(request)}
           </span>
@@ -421,7 +421,7 @@ function QueueDate({
   request: RequestListItem
   section: RequestQueueSection
 }) {
-  if (section === 'ready' && request.submitted_at_unix !== null) {
+  if (section === 'open' && request.submitted_at_unix !== null) {
     return <span className="tabular-nums">Submitted {formatUnixDate(request.submitted_at_unix)}</span>
   }
   return <span className="tabular-nums">Updated {formatUnixDate(request.updated_at_unix)}</span>
