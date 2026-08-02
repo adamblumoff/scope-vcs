@@ -26,10 +26,9 @@ use scope_domain::{
     requests::{
         AssessRequestInput, CloseRequestInput, CloseRequestMutation, EditRequestIdentityInput,
         MarkRequestReadyInput, MergeRequestInput, REQUEST_LIST_DEFAULT_PAGE_SIZE,
-        REQUEST_LIST_MAX_PAGE_SIZE, Request, RequestActorRole, RequestAssessmentOutcome,
-        RequestAudience, RequestReviewExitReason, RequestViewer, ReturnRequestToWorkingInput,
-        SetRequestHoldInput, StartRequestInput, canonical_request_ref, request_actor_role,
-        request_mergeability, request_policy,
+        REQUEST_LIST_MAX_PAGE_SIZE, Request, RequestAudience, RequestReviewExitReason,
+        RequestViewer, ReturnRequestToWorkingInput, SetRequestHoldInput, StartRequestInput,
+        canonical_request_ref, request_actor_role, request_mergeability, request_policy,
     },
     store::{RepositoryAccess, RepositoryActor, StoredRepository},
 };
@@ -162,12 +161,11 @@ pub(crate) async fn mark_request_ready(
     State(state): State<AppState>,
     headers: HeaderMap,
     Path((owner, repo_name, request_id)): Path<(String, String, String)>,
-    Json(input): Json<ReadyRequestRequest>,
+    Json(_input): Json<ReadyRequestRequest>,
 ) -> Result<Json<RequestMutationResponse>, ApiError> {
     let user = require_scope_user(&state, &headers).await?;
     let (repo, access, _) = repo_and_access(&state, &headers, &owner, &repo_name).await?;
     let request = visible_request(&state, &repo, access, Some(&user.id), &request_id).await?;
-    let uses_credits = request.author_role == RequestActorRole::Public;
     let mutation = state
         .metadata
         .requests()
@@ -176,13 +174,8 @@ pub(crate) async fn mark_request_ready(
             actor_user_id: user.id.clone(),
             actor_is_author: false,
             actor_can_mutate: false,
-            stake_credits: input.stake_credits,
             public_ready_count: 0,
-            ready_queue_version: 0,
             event_id: random_id("event_request_ready")?,
-            stake_ledger_entry_id: uses_credits
-                .then(|| random_id("ledger_review_stake"))
-                .transpose()?,
             now_unix: unix_now()?,
         })
         .await?;
@@ -330,7 +323,6 @@ pub(crate) async fn assess_request(
     let user = require_scope_user(&state, &headers).await?;
     let (repo, access, _) = repo_and_access(&state, &headers, &owner, &repo_name).await?;
     let request = visible_request(&state, &repo, access, Some(&user.id), &request_id).await?;
-    let ids = settlement_ids(&request, input.outcome.into())?;
     let mutation = state
         .metadata
         .requests()
@@ -341,9 +333,6 @@ pub(crate) async fn assess_request(
             outcome: input.outcome.into(),
             body_markdown: input.body_markdown,
             assessed_event_id: random_id("event_request_assessed")?,
-            settled_event_id: ids.settled_event_id,
-            refund_ledger_entry_id: ids.refund_ledger_entry_id,
-            reward_ledger_entry_id: ids.reward_ledger_entry_id,
             now_unix: unix_now()?,
         })
         .await?;
@@ -375,7 +364,6 @@ pub(crate) async fn merge_request(
         }
         return Err(ApiError::conflict("request cannot be merged"));
     }
-    let ids = settlement_ids(&request, RequestAssessmentOutcome::Accepted)?;
     let prepared =
         prepare_request_merge(&state, &owner, &repo_name, &user.id, &repo, &request).await?;
     let durable_objects = prepared.durable_objects().to_vec();
@@ -398,9 +386,6 @@ pub(crate) async fn merge_request(
                 merged_main_oid: String::new(),
                 merged_event_id: random_id("event_request_merged")?,
                 assessed_event_id: random_id("event_request_merge_assessed")?,
-                settled_event_id: ids.settled_event_id,
-                refund_ledger_entry_id: ids.refund_ledger_entry_id,
-                reward_ledger_entry_id: ids.reward_ledger_entry_id,
                 now_unix: unix_now()?,
             },
             &crate::persistence_ids::generate_persistence_id,
@@ -434,34 +419,6 @@ pub(crate) async fn merge_request(
         RepoChangeReason::RequestMerged,
     )
     .await
-}
-
-#[derive(Default)]
-struct SettlementIds {
-    settled_event_id: Option<String>,
-    refund_ledger_entry_id: Option<String>,
-    reward_ledger_entry_id: Option<String>,
-}
-
-fn settlement_ids(
-    request: &Request,
-    outcome: RequestAssessmentOutcome,
-) -> Result<SettlementIds, ApiError> {
-    if request.current_stake_credits == 0 {
-        return Ok(SettlementIds::default());
-    }
-    Ok(SettlementIds {
-        settled_event_id: Some(random_id("event_request_settled")?),
-        refund_ledger_entry_id: matches!(
-            outcome,
-            RequestAssessmentOutcome::Accepted | RequestAssessmentOutcome::Neutral
-        )
-        .then(|| random_id("ledger_review_stake_refund"))
-        .transpose()?,
-        reward_ledger_entry_id: (outcome == RequestAssessmentOutcome::Accepted)
-            .then(|| random_id("ledger_assessment_reward"))
-            .transpose()?,
-    })
 }
 
 async fn lifecycle_response(

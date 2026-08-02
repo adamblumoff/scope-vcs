@@ -68,11 +68,8 @@ async fn advertisement_and_exact_fetch_follow_viewer_and_publication_policy() {
             actor_user_id: public_user_id(),
             actor_is_author: false,
             actor_can_mutate: false,
-            stake_credits: Some(1),
             public_ready_count: 0,
-            ready_queue_version: 0,
             event_id: "event_advertisement_ready".to_string(),
-            stake_ledger_entry_id: Some("ledger_advertisement_ready".to_string()),
             now_unix: 4,
         })
         .await
@@ -171,11 +168,8 @@ async fn hold_and_revocation_block_invitee_push_while_maintainer_override_invali
             actor_user_id: public_user_id(),
             actor_is_author: false,
             actor_can_mutate: false,
-            stake_credits: Some(10),
             public_ready_count: 0,
-            ready_queue_version: 0,
             event_id: "event_hold_ready".to_string(),
-            stake_ledger_entry_id: Some("ledger_hold_ready".to_string()),
             now_unix: 4,
         })
         .await
@@ -278,17 +272,6 @@ async fn hold_and_revocation_block_invitee_push_while_maintainer_override_invali
     let request = stored_request(&state, REQUEST_ID).await;
     assert_eq!(request.state, RequestState::Working);
     assert_eq!(request.held_at_unix, None);
-    assert_eq!(
-        state
-            .metadata
-            .auth()
-            .credit_account_for_tests(&public_user_id())
-            .await
-            .unwrap()
-            .unwrap()
-            .balance_credits,
-        100
-    );
 }
 
 fn unrelated_user_id() -> String {

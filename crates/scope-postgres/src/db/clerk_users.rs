@@ -1,7 +1,4 @@
-use super::{
-    AuthStore, acquire_aggregate_lock, auth::load_user_by_id, entities,
-    starter_credits::ensure_verified_account_starter_credits,
-};
+use super::{AuthStore, acquire_aggregate_lock, auth::load_user_by_id, entities};
 use crate::error::PostgresError;
 use scope_domain::account::ExternalIdentity;
 use scope_domain::store::UserAccount;
@@ -35,7 +32,7 @@ impl AuthStore {
         acquire_aggregate_lock(&tx, "auth-identity", &identity_key).await?;
         acquire_aggregate_lock(&tx, "auth-email", &verified_email).await?;
         let user = resolve_clerk_user_in_tx(&tx, &identity, &verified_email).await?;
-        ensure_verified_account_starter_credits(&tx, &user.id, now_unix).await?;
+        let _ = now_unix;
         tx.commit().await.map_err(PostgresError::internal)?;
         Ok(user)
     }

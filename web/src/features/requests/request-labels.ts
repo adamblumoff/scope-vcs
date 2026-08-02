@@ -38,7 +38,6 @@ const EVENT_LABELS = {
   Assessed: 'Assessed',
   Merged: 'Merged',
   Closed: 'Closed',
-  Settled: 'Settled',
   IdentityEdited: 'Request edited',
   DiscussionResolved: 'Discussion resolved',
   DiscussionReopened: 'Discussion reopened',
@@ -115,19 +114,9 @@ export function requestEventBody(event: RequestEvent) {
     case 'Started':
       return stringValue(value.title)
     case 'ReadyForReview':
-      return [
-        oidText(value.head_oid),
-        creditText(value.stake_credits, 'staked'),
-      ]
-        .filter(Boolean)
-        .join(' · ')
+      return oidText(value.head_oid)
     case 'ReturnedToWorking':
-      return [
-        reviewExitReason(value.reason),
-        creditText(value.stake_credits, 'refunded'),
-      ]
-        .filter(Boolean)
-        .join(' · ')
+      return reviewExitReason(value.reason)
     case 'RevisionPushed':
       return [
         `${oidText(value.old_head_oid)} → ${oidText(value.new_head_oid)}`,
@@ -140,25 +129,11 @@ export function requestEventBody(event: RequestEvent) {
     case 'Closed':
       return oidText(value.head_oid)
     case 'Assessed':
-      return [
-        stringValue(value.outcome),
-        stringValue(value.body_markdown),
-        creditText(value.stake_credits, 'at settlement'),
-      ]
+      return [stringValue(value.outcome), stringValue(value.body_markdown)]
         .filter(Boolean)
         .join(' · ')
     case 'Merged':
       return `${oidText(value.head_oid)} → ${oidText(value.main_oid)}`
-    case 'Settled': {
-      const settlement = value.settlement as Record<string, unknown> | undefined
-      return settlement
-        ? [
-            `${numberValue(settlement.refunded_credits)} refunded`,
-            `${numberValue(settlement.reward_credits)} reward`,
-            `${numberValue(settlement.burned_credits)} burned`,
-          ].join(' / ')
-        : null
-    }
     case 'IdentityEdited':
       return 'The request title or description was updated.'
     case 'DiscussionResolved':
@@ -209,12 +184,4 @@ function reviewExitReason(value: unknown) {
 }
 function stringValue(value: unknown) {
   return typeof value === 'string' && value.trim() ? value : null
-}
-
-function numberValue(value: unknown) {
-  return typeof value === 'number' ? value : 0
-}
-
-function creditText(value: unknown, suffix: string) {
-  return typeof value === 'number' ? `${value} ${suffix}` : null
 }

@@ -3,6 +3,7 @@ mod m0002_retire_reset_schema;
 mod m0003_structured_run_attempts;
 mod m0004_runner_protocol_cutover;
 mod m0005_projection_head_oid;
+mod m0006_drop_request_credits;
 
 use sea_orm::{
     ConnectionTrait, DatabaseBackend, DatabaseConnection, DbErr, Statement, TransactionTrait,
@@ -23,6 +24,7 @@ impl MigratorTrait for Migrator {
             Box::new(m0003_structured_run_attempts::Migration),
             Box::new(m0004_runner_protocol_cutover::Migration),
             Box::new(m0005_projection_head_oid::Migration),
+            Box::new(m0006_drop_request_credits::Migration),
         ]
     }
 }

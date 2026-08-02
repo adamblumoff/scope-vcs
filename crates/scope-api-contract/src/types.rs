@@ -101,9 +101,7 @@ mod tests {
 
     #[test]
     fn lifecycle_request_payloads_preserve_optional_fields() {
-        let ready: ReadyRequestRequest =
-            serde_json::from_str("{}").expect("ready request without a stake");
-        assert_eq!(ready.stake_credits, None);
+        let ready: ReadyRequestRequest = serde_json::from_str("{}").expect("ready request");
         assert_eq!(serde_json::to_string(&ready).unwrap(), "{}");
 
         let assessment: AssessRequestRequest = serde_json::from_str(r#"{"outcome":"Rejected"}"#)
@@ -123,7 +121,6 @@ mod tests {
 pub struct AccountSessionResponse {
     pub identity: Option<SessionIdentity>,
     pub user: Option<UserResponse>,
-    pub credit_balance_credits: Option<u32>,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -241,7 +238,6 @@ pub struct RepositoryAccessResponse {
 #[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 pub struct RepoRequestPermissionsResponse {
     pub can_start_request: bool,
-    pub uses_credit_stake: bool,
 }
 
 #[derive(Debug, Deserialize, Serialize)]
@@ -338,7 +334,6 @@ pub struct RequestSummaryResponse {
     pub head_oid: GitOid,
     pub state: RequestState,
     pub activity_version: u64,
-    pub current_stake_credits: u32,
     pub first_ready_at_unix: Option<u64>,
     pub ready_at_unix: Option<u64>,
     pub held_at_unix: Option<u64>,
@@ -356,19 +351,8 @@ pub struct RequestSummaryResponse {
     pub created_at_unix: u64,
     pub updated_at_unix: u64,
     pub invitees: Vec<RequestInviteeResponse>,
-    pub assessment_previews: Vec<RequestSettlementPreviewResponse>,
     pub permissions: RequestPermissionsResponse,
     pub mergeability: RequestMergeabilityResponse,
-}
-
-#[derive(Clone, Debug, Deserialize, Serialize)]
-#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
-pub struct RequestSettlementPreviewResponse {
-    pub outcome: RequestAssessmentOutcome,
-    pub stake_credits: u32,
-    pub refunded_credits: u32,
-    pub reward_credits: u32,
-    pub burned_credits: u32,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -414,7 +398,6 @@ pub struct RequestListItemResponse {
     pub audience: RequestAudience,
     pub head_oid: GitOid,
     pub state: RequestState,
-    pub current_stake_credits: u32,
     pub assessment_outcome: Option<RequestAssessmentOutcome>,
     pub ready_at_unix: Option<u64>,
     pub held_at_unix: Option<u64>,
@@ -572,10 +555,7 @@ pub struct StartRequestRequest {
 
 #[derive(Debug, Deserialize, Serialize)]
 #[cfg_attr(feature = "ts", derive(ts_rs::TS))]
-pub struct ReadyRequestRequest {
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub stake_credits: Option<u32>,
-}
+pub struct ReadyRequestRequest {}
 
 #[derive(Debug, Deserialize, Serialize)]
 #[cfg_attr(feature = "ts", derive(ts_rs::TS))]

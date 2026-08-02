@@ -1,7 +1,7 @@
 use super::*;
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn merge_route_persists_git_content_and_settles_public_stake_once() {
+async fn merge_route_persists_git_content_once() {
     let (state, owner_source) = test_state_with_mergeable_request().await;
     insert_member_user(&state).await;
     let (source, remote, _server, first_request_head) =
@@ -91,7 +91,7 @@ async fn merge_route_persists_git_content_and_settles_public_stake_once() {
                     bearer_header_for(PUBLIC_SUBJECT, PUBLIC_EMAIL),
                 )
                 .header(CONTENT_TYPE, "application/json")
-                .body(Body::from(r#"{"stake_credits":5}"#))
+                .body(Body::from("{}"))
                 .unwrap(),
         )
         .await
@@ -224,31 +224,8 @@ async fn merge_route_persists_git_content_and_settles_public_stake_once() {
         }
         origin => panic!("expected public request merge origin, got {origin:?}"),
     }
-    assert_eq!(
-        state
-            .metadata
-            .auth()
-            .credit_account_for_tests(&public_user_id())
-            .await
-            .unwrap()
-            .unwrap()
-            .balance_credits,
-        105
-    );
-
     let replay = app.oneshot(merge_request()).await.unwrap();
     assert_eq!(replay.status(), StatusCode::CONFLICT);
-    assert_eq!(
-        state
-            .metadata
-            .auth()
-            .credit_account_for_tests(&public_user_id())
-            .await
-            .unwrap()
-            .unwrap()
-            .balance_credits,
-        105
-    );
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

@@ -16,7 +16,7 @@ export type RequestActionCommand =
   | { action: 'hold' }
   | { action: 'leave' }
   | { action: 'merge' }
-  | { action: 'ready'; stake_credits: number | null }
+  | { action: 'ready' }
   | { action: 'release_hold' }
   | { action: 'remove_invitee'; handle: string }
   | { action: 'request_changes' }
@@ -39,7 +39,7 @@ export async function performRequestActionForRequest(
     case 'ready':
       return mutationResult(await api.post<RequestMutationResponse>(
         requestRoute(ApiRouteTemplates.repoRequestReady, input),
-        { ...mutationOptions, body: { stake_credits: input.stake_credits } },
+        { ...mutationOptions, body: {} },
       ))
     case 'working':
       return mutationResult(await api.post<RequestMutationResponse>(

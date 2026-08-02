@@ -225,11 +225,6 @@ fn parse_request_queue_cursor_plain(
         i64::try_from(parsed).map_err(|_| invalid())?;
         Ok(parsed)
     };
-    let pg_u32 = |value: &str| -> Result<u32, ApiError> {
-        let parsed = value.parse::<u32>().map_err(|_| invalid())?;
-        i32::try_from(parsed).map_err(|_| invalid())?;
-        Ok(parsed)
-    };
     match (section, parts.as_slice()) {
         (RequestQueueSection::YourWork, ["v1", "work", updated, id]) => {
             Ok(RequestQueueCursor::YourWork {
@@ -237,11 +232,9 @@ fn parse_request_queue_cursor_plain(
                 request_id: request_id(id)?,
             })
         }
-        (RequestQueueSection::Ready, ["v1", "ready", snapshot, stake, ready, id]) => {
+        (RequestQueueSection::Ready, ["v1", "ready", first_ready, id]) => {
             Ok(RequestQueueCursor::Ready {
-                snapshot_version: pg_u64(snapshot)?,
-                stake_credits: pg_u32(stake)?,
-                ready_at_unix: pg_u64(ready)?,
+                first_ready_at_unix: pg_u64(first_ready)?,
                 request_id: request_id(id)?,
             })
         }
@@ -264,11 +257,9 @@ fn encode_request_queue_cursor_plain(cursor: &scope_postgres::db::RequestQueueCu
             request_id,
         } => format!("v1:work:{updated_at_unix}:{request_id}"),
         RequestQueueCursor::Ready {
-            snapshot_version,
-            stake_credits,
-            ready_at_unix,
+            first_ready_at_unix,
             request_id,
-        } => format!("v1:ready:{snapshot_version}:{stake_credits}:{ready_at_unix}:{request_id}"),
+        } => format!("v1:ready:{first_ready_at_unix}:{request_id}"),
         RequestQueueCursor::Completed {
             completed_at_unix,
             request_id,
@@ -296,9 +287,7 @@ mod tests {
             (
                 RequestQueueSection::Ready,
                 RequestQueueCursor::Ready {
-                    snapshot_version: 2,
-                    stake_credits: 25,
-                    ready_at_unix: 11,
+                    first_ready_at_unix: 11,
                     request_id: "req_ready".to_string(),
                 },
             ),
@@ -327,9 +316,7 @@ mod tests {
         }
 
         let ready = RequestQueueCursor::Ready {
-            snapshot_version: 2,
-            stake_credits: 25,
-            ready_at_unix: 11,
+            first_ready_at_unix: 11,
             request_id: "req_ready".to_string(),
         };
         let ready =

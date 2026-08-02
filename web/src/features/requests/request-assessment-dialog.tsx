@@ -39,7 +39,6 @@ export function RequestAssessmentDialog({
   const [outcome, setOutcome] = useState<RequestWorkflowAssessmentOutcome>('Accepted')
   const [body, setBody] = useState('')
   const rejectionNeedsReason = outcome === 'Rejected' && !body.trim()
-  const preview = request.assessment_previews.find((item) => item.outcome === outcome)
 
   async function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault()
@@ -60,7 +59,7 @@ export function RequestAssessmentDialog({
           <AlertDialogHeader>
             <AlertDialogTitle>Assess request</AlertDialogTitle>
             <AlertDialogDescription>
-              The assessment is final and completes the request. Settlement commits with it.
+              The assessment is final and completes the request.
             </AlertDialogDescription>
           </AlertDialogHeader>
 
@@ -85,7 +84,7 @@ export function RequestAssessmentDialog({
                 <span>
                   <span className="block text-sm font-semibold">{value}</span>
                   <span className="mt-0.5 block text-xs leading-5 text-muted-foreground">
-                    {previewText(request, value)}
+                    {outcomeText(value)}
                   </span>
                 </span>
               </label>
@@ -97,16 +96,12 @@ export function RequestAssessmentDialog({
               {outcome === 'Rejected' ? 'Rejection reason' : 'Assessment note · optional'}
             </label>
             <textarea
-              aria-describedby={`${bodyId}-preview`}
               aria-invalid={rejectionNeedsReason}
               className="min-h-28 w-full resize-y rounded-lg border border-input bg-secondary px-3 py-2 text-sm leading-6 outline-none focus-visible:border-ring focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring aria-invalid:border-destructive"
               id={bodyId}
               onChange={(event) => setBody(event.target.value)}
               value={body}
             />
-            <p className="text-xs text-muted-foreground" id={`${bodyId}-preview`}>
-              Exact settlement: {preview ? settlementText(preview) : 'unavailable'}.
-            </p>
             {rejectionNeedsReason ? (
               <p className="text-sm text-destructive" role="alert">
                 Rejected assessments require a written reason.
@@ -129,20 +124,8 @@ export function RequestAssessmentDialog({
   )
 }
 
-function previewText(
-  request: RequestSummary,
-  outcome: RequestWorkflowAssessmentOutcome,
-) {
-  const preview = request.assessment_previews.find((item) => item.outcome === outcome)
-  return preview ? settlementText(preview) : 'Settlement preview unavailable'
-}
-
-function settlementText(preview: RequestSummary['assessment_previews'][number]) {
-  if (preview.outcome === 'Accepted') {
-    return `${preview.refunded_credits} returned + ${preview.reward_credits} reward`
-  }
-  if (preview.outcome === 'Neutral') {
-    return `${preview.refunded_credits} returned · no reward`
-  }
-  return `${preview.burned_credits} burned`
+function outcomeText(outcome: RequestWorkflowAssessmentOutcome) {
+  if (outcome === 'Accepted') return 'Complete the request as accepted.'
+  if (outcome === 'Neutral') return 'Complete without a positive or negative judgment.'
+  return 'Complete as rejected; a written reason is required.'
 }

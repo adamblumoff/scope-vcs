@@ -13,7 +13,7 @@ import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { WorkbenchHeader } from '@/components/workbench-header'
 import { Link } from '@tanstack/react-router'
-import { Coins, History, ShieldQuestion } from 'lucide-react'
+import { History, ShieldQuestion } from 'lucide-react'
 import type { ReactNode } from 'react'
 import { useCallback, useMemo, useState } from 'react'
 import { RequestActivityDrawer } from './request-activity-drawer'
@@ -205,7 +205,6 @@ export function RequestDetailPage(props: RequestDetailPageProps) {
             {discussionControls}
             <RequestLifecycleActions
               actions={requestActions}
-              balance={account?.credit_balance_credits ?? null}
               className="hidden xl:flex"
               request={request}
             />
@@ -235,9 +234,6 @@ export function RequestDetailPage(props: RequestDetailPageProps) {
               <Badge variant={requestStatusTone(request)}>{requestStatusLabel(request)}</Badge>
               {request.held_at_unix !== null ? <Badge variant="warning">On hold</Badge> : null}
               <Badge variant={requestMergeabilityTone(request)}>{requestMergeabilityLabel(request)}</Badge>
-              {request.current_stake_credits > 0 ? (
-                <Badge variant="neutral"><Coins />{request.current_stake_credits}</Badge>
-              ) : null}
             </div>
             {heldContributor ? (
               <p className="text-sm text-warning-foreground">
@@ -282,7 +278,6 @@ export function RequestDetailPage(props: RequestDetailPageProps) {
         <div className="fixed inset-x-0 bottom-0 z-30 border-t border-[var(--border-strong)] bg-background/95 px-3 py-3 pb-[max(0.75rem,env(safe-area-inset-bottom))] backdrop-blur xl:hidden">
           <RequestLifecycleActions
             actions={requestActions}
-            balance={account?.credit_balance_credits ?? null}
             className="grid w-full grid-cols-2 [&>button]:min-h-10"
             request={request}
           />

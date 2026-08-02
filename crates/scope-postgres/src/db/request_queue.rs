@@ -1,7 +1,6 @@
 use super::{RequestListRow, RequestStore, entities};
 use sea_orm::{
-    ColumnTrait, Condition, ConnectionTrait, EntityTrait, FromQueryResult, QueryFilter, QueryOrder,
-    QuerySelect,
+    ColumnTrait, Condition, EntityTrait, QueryFilter, QueryOrder, QuerySelect,
     sea_query::{Expr, Query, extension::postgres::PgExpr},
 };
 use {
@@ -21,9 +20,7 @@ pub enum RequestQueueCursor {
         request_id: String,
     },
     Ready {
-        snapshot_version: u64,
-        stake_credits: u32,
-        ready_at_unix: u64,
+        first_ready_at_unix: u64,
         request_id: String,
     },
     Completed {
@@ -48,54 +45,6 @@ pub struct RequestQueueRow {
     pub request: RequestListRow,
     pub cursor: RequestQueueCursor,
 }
-#[derive(FromQueryResult)]
-struct ReadyQueueVersionDbRow {
-    snapshot_version: i64,
-}
-
-// Ready-cycle versions are retained after exit, so MAX across all request history is
-// the monotonic repository watermark. Domain facts couple publication to a non-null version.
-async fn ready_queue_snapshot_version<C>(conn: &C, repo_id: &str) -> Result<u64, PostgresError>
-where
-    C: ConnectionTrait,
-{
-    entities::request::Entity::find()
-        .select_only()
-        .expr_as(
-            Expr::cust("COALESCE(MAX(ready_queue_version), 0)"),
-            "snapshot_version",
-        )
-        .filter(entities::request::Column::RepoId.eq(repo_id))
-        .into_model::<ReadyQueueVersionDbRow>()
-        .one(conn)
-        .await
-        .map_err(PostgresError::internal)?
-        .ok_or_else(|| {
-            PostgresError::internal_message("ready queue snapshot query returned no row")
-        })
-        .and_then(|row| entities::i64_to_u64(row.snapshot_version, "ready queue snapshot version"))
-}
-
-pub(super) async fn next_ready_queue_version<C>(
-    conn: &C,
-    repo_id: &str,
-) -> Result<u64, PostgresError>
-where
-    C: ConnectionTrait,
-{
-    ready_queue_snapshot_version(conn, repo_id)
-        .await?
-        .checked_add(1)
-        .ok_or_else(|| PostgresError::internal_message("ready queue version overflow"))
-        .and_then(|version| {
-            i64::try_from(version).map(|_| version).map_err(|_| {
-                PostgresError::internal_message(
-                    "ready queue version exceeds PostgreSQL bigint range",
-                )
-            })
-        })
-}
-
 impl RequestStore {
     pub async fn request_queue_page(
         &self,
@@ -106,7 +55,7 @@ impl RequestStore {
                 "search is only supported for ready and completed requests",
             ));
         }
-        let snapshot_version = ready_snapshot(&input, self).await?;
+        ensure_cursor_section(&input)?;
         let mut query = entities::request::Entity::find()
             .filter(entities::request::Column::RepoId.eq(input.repo_id));
 
@@ -142,17 +91,10 @@ impl RequestStore {
                             .add(entities::request::Column::FirstReadyAtUnix.is_not_null()),
                     )
             }
-            RequestQueueSection::Ready => query
-                .filter(
-                    entities::request::Column::State
-                        .eq(entities::encode_enum(RequestState::ReadyForReview)?),
-                )
-                .filter(
-                    entities::request::Column::ReadyQueueVersion.lte(
-                        i64::try_from(snapshot_version.expect("ready snapshot established"))
-                            .map_err(PostgresError::internal)?,
-                    ),
-                ),
+            RequestQueueSection::Ready => query.filter(
+                entities::request::Column::State
+                    .eq(entities::encode_enum(RequestState::ReadyForReview)?),
+            ),
             RequestQueueSection::Completed => query
                 .filter(
                     entities::request::Column::State
@@ -182,8 +124,7 @@ impl RequestStore {
                 .order_by_desc(entities::request::Column::UpdatedAtUnix)
                 .order_by_asc(entities::request::Column::Id),
             RequestQueueSection::Ready => query
-                .order_by_desc(entities::request::Column::CurrentStakeCredits)
-                .order_by_asc(entities::request::Column::ReadyAtUnix)
+                .order_by_asc(entities::request::Column::FirstReadyAtUnix)
                 .order_by_asc(entities::request::Column::Id),
             RequestQueueSection::Completed => query
                 .order_by_desc(entities::request::Column::CompletedAtUnix)
@@ -198,7 +139,7 @@ impl RequestStore {
             .into_iter()
             .map(|row| {
                 let request = row.try_into_domain()?;
-                let cursor = cursor_for_request(input.section, snapshot_version, &request)?;
+                let cursor = cursor_for_request(input.section, &request)?;
                 Ok(RequestQueueRow {
                     request: RequestListRow::from(request),
                     cursor,
@@ -208,23 +149,12 @@ impl RequestStore {
     }
 }
 
-async fn ready_snapshot(
-    input: &RequestQueuePageQuery<'_>,
-    store: &RequestStore,
-) -> Result<Option<u64>, PostgresError> {
+fn ensure_cursor_section(input: &RequestQueuePageQuery<'_>) -> Result<(), PostgresError> {
     match (input.section, input.after) {
-        (
-            RequestQueueSection::Ready,
-            Some(RequestQueueCursor::Ready {
-                snapshot_version, ..
-            }),
-        ) => Ok(Some(*snapshot_version)),
-        (RequestQueueSection::Ready, None) => Ok(Some(
-            ready_queue_snapshot_version(store.db.as_ref(), input.repo_id).await?,
-        )),
-        (RequestQueueSection::YourWork, None) | (RequestQueueSection::Completed, None) => Ok(None),
+        (_, None) => Ok(()),
         (RequestQueueSection::YourWork, Some(RequestQueueCursor::YourWork { .. }))
-        | (RequestQueueSection::Completed, Some(RequestQueueCursor::Completed { .. })) => Ok(None),
+        | (RequestQueueSection::Ready, Some(RequestQueueCursor::Ready { .. }))
+        | (RequestQueueSection::Completed, Some(RequestQueueCursor::Completed { .. })) => Ok(()),
         _ => Err(PostgresError::invalid_input(
             "request queue cursor section mismatch",
         )),
@@ -263,27 +193,13 @@ fn apply_cursor(
             request_id,
         )?,
         RequestQueueCursor::Ready {
-            stake_credits,
-            ready_at_unix,
+            first_ready_at_unix,
             request_id,
-            ..
-        } => {
-            let stake_credits = i32::try_from(*stake_credits).map_err(PostgresError::internal)?;
-            let ready_at_unix = i64::try_from(*ready_at_unix).map_err(PostgresError::internal)?;
-            Condition::any()
-                .add(entities::request::Column::CurrentStakeCredits.lt(stake_credits))
-                .add(
-                    Condition::all()
-                        .add(entities::request::Column::CurrentStakeCredits.eq(stake_credits))
-                        .add(entities::request::Column::ReadyAtUnix.gt(ready_at_unix)),
-                )
-                .add(
-                    Condition::all()
-                        .add(entities::request::Column::CurrentStakeCredits.eq(stake_credits))
-                        .add(entities::request::Column::ReadyAtUnix.eq(ready_at_unix))
-                        .add(entities::request::Column::Id.gt(request_id.as_str())),
-                )
-        }
+        } => ascending_time_cursor(
+            entities::request::Column::FirstReadyAtUnix,
+            *first_ready_at_unix,
+            request_id,
+        )?,
         RequestQueueCursor::Completed {
             completed_at_unix,
             request_id,
@@ -310,9 +226,21 @@ fn descending_time_cursor(
     ))
 }
 
+fn ascending_time_cursor(
+    column: entities::request::Column,
+    value: u64,
+    request_id: &str,
+) -> Result<Condition, PostgresError> {
+    let value = i64::try_from(value).map_err(PostgresError::internal)?;
+    Ok(Condition::any().add(column.gt(value)).add(
+        Condition::all()
+            .add(column.eq(value))
+            .add(entities::request::Column::Id.gt(request_id)),
+    ))
+}
+
 fn cursor_for_request(
     section: RequestQueueSection,
-    snapshot_version: Option<u64>,
     request: &scope_domain::requests::Request,
 ) -> Result<RequestQueueCursor, PostgresError> {
     match section {
@@ -321,10 +249,8 @@ fn cursor_for_request(
             request_id: request.id.clone(),
         }),
         RequestQueueSection::Ready => Ok(RequestQueueCursor::Ready {
-            snapshot_version: snapshot_version.expect("ready snapshot established"),
-            stake_credits: request.current_stake_credits,
-            ready_at_unix: request.ready_at_unix.ok_or_else(|| {
-                PostgresError::internal_message("ready request is missing its ready time")
+            first_ready_at_unix: request.first_ready_at_unix.ok_or_else(|| {
+                PostgresError::internal_message("ready request is missing its first ready time")
             })?,
             request_id: request.id.clone(),
         }),

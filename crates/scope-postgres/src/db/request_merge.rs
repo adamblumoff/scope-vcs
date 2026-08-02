@@ -1,18 +1,16 @@
-//! Atomic repository content merge plus request assessment and settlement.
+//! Atomic repository content merge plus request completion.
 
 use super::{
     GeneratedIdSource, RequestStore, acquire_aggregate_lock,
-    content_push_transactions::accept_and_persist_request_merge,
-    entities,
-    request_access::ensure_user_exists,
-    request_review_transactions::persist_review_mutation,
-    request_rows::{credit_account_by_user_id, request_by_id},
+    content_push_transactions::accept_and_persist_request_merge, entities,
+    request_access::ensure_user_exists, request_review_transactions::persist_review_mutation,
+    request_rows::request_by_id,
 };
 use sea_orm::{ColumnTrait, EntityTrait, QueryFilter, TransactionTrait};
 use {
     crate::error::PostgresError,
     scope_domain::{
-        requests::{MergeRequestInput, RequestActorRole, RequestReviewMutation, merge_request},
+        requests::{MergeRequestInput, RequestReviewMutation, merge_request},
         reviewed_updates::ReviewedUpdateInput,
         store::{GitHead, RepoPublicationState, RequestMergeOrigin},
     },
@@ -52,9 +50,6 @@ impl RequestStore {
             return Err(PostgresError::conflict(
                 "request changed since merge was prepared; retry merge",
             ));
-        }
-        if request.author_role == RequestActorRole::Public {
-            acquire_aggregate_lock(&tx, "user-credit", &request.author_user_id).await?;
         }
         ensure_user_exists(&tx, &input.actor_user_id).await?;
 
@@ -116,14 +111,7 @@ impl RequestStore {
         )
         .await?;
 
-        let account = if request.author_role == RequestActorRole::Public
-            && request.state == scope_domain::requests::RequestState::ReadyForReview
-        {
-            credit_account_by_user_id(&tx, &request.author_user_id).await?
-        } else {
-            None
-        };
-        let request_mutation = merge_request(&request, account.as_ref(), input)?;
+        let request_mutation = merge_request(&request, input)?;
         persist_review_mutation(&tx, &request_mutation).await?;
         tx.commit().await.map_err(PostgresError::internal)?;
         Ok(MergeRequestContentMutation {

@@ -50,25 +50,13 @@ pub(super) fn ready_request(
     api_url: &str,
     session_token: &str,
     target: RequestTargetArgs,
-    stake: Option<u32>,
     yes: bool,
 ) -> anyhow::Result<()> {
     let (context, request_id, before) =
         load_exact_request(git_repo, client, api_url, session_token, target)?;
-    let uses_credits = before.request.author_role == crate::api::RequestActorRole::Public;
-    let stake = ready_stake(uses_credits, stake)?;
-    let stake_credits = stake.unwrap_or_default();
-    let prompt = match (before.request.first_ready_at_unix.is_none(), uses_credits) {
-        (true, true) => format!(
-            "This publishes the request and holds {} credits",
-            stake_credits
-        ),
-        (false, true) => format!(
-            "This holds {} credits and returns the request to review",
-            stake_credits
-        ),
-        (true, false) => "This publishes the request for review".to_string(),
-        (false, false) => "This returns the request to review".to_string(),
+    let prompt = match before.request.first_ready_at_unix.is_none() {
+        true => "This publishes the request for review".to_string(),
+        false => "This returns the request to review".to_string(),
     };
     require_confirmation(&prompt, yes)?;
     let response = mark_request_ready(
@@ -76,23 +64,9 @@ pub(super) fn ready_request(
         api_url,
         session_token,
         api_target(&context, &request_id),
-        stake,
     )?;
     print_request_mutation_receipt("Ready for review", Some(&before.request), &response);
     Ok(())
-}
-
-pub(super) fn ready_stake(uses_credits: bool, stake: Option<u32>) -> anyhow::Result<Option<u32>> {
-    if uses_credits {
-        stake.map(Some).ok_or_else(|| {
-            let max = scope_domain::requests::REQUEST_MAX_STAKE_CREDITS;
-            anyhow::anyhow!(
-                "--stake <CREDITS> is required for public-authored requests (1–{max} credits)"
-            )
-        })
-    } else {
-        Ok(None)
-    }
 }
 
 pub(super) fn working_request(
@@ -267,14 +241,7 @@ pub(super) fn assess_request_command(
     let outcome = outcome.into();
     let (context, request_id, before) =
         load_exact_request(git_repo, client, api_url, session_token, target)?;
-    require_confirmation(
-        &assessment_confirmation(
-            &before.request.name,
-            outcome,
-            before.request.current_stake_credits,
-        ),
-        yes,
-    )?;
+    require_confirmation(&assessment_confirmation(&before.request.name, outcome), yes)?;
     let response = assess_request(
         client,
         api_url,
@@ -284,15 +251,6 @@ pub(super) fn assess_request_command(
         message,
     )?;
     print_request_mutation_receipt("Request assessed", Some(&before.request), &response);
-    print_committed_settlement(
-        client,
-        api_url,
-        session_token,
-        api_target(&context, &request_id),
-        before.request.activity_version,
-        response.request.activity_version,
-        "Assessment committed",
-    );
     Ok(())
 }
 
@@ -317,29 +275,14 @@ pub(super) fn merge_request_command(
         api_target(&context, &request_id),
     )?;
     print_request_mutation_receipt("Merged", Some(&before.request), &response);
-    print_committed_settlement(
-        client,
-        api_url,
-        session_token,
-        api_target(&context, &request_id),
-        before.request.activity_version,
-        response.request.activity_version,
-        "Merge committed",
-    );
     Ok(())
 }
 
 fn assessment_confirmation(
     request_name: &str,
     outcome: crate::api::RequestAssessmentOutcome,
-    stake_credits: u32,
 ) -> String {
-    let settlement = if stake_credits > 0 {
-        " and settle its review stake"
-    } else {
-        ""
-    };
-    format!("Complete request {request_name} as {outcome:?}{settlement}")
+    format!("Complete request {request_name} as {outcome:?}")
 }
 
 fn merge_confirmation(request_name: &str, state: crate::api::RequestState) -> String {
@@ -347,30 +290,6 @@ fn merge_confirmation(request_name: &str, state: crate::api::RequestState) -> St
         format!("Merge request {request_name} into main and complete it as Accepted")
     } else {
         format!("Merge accepted request {request_name} into main")
-    }
-}
-
-fn print_committed_settlement(
-    client: &Client,
-    api_url: &str,
-    session_token: &str,
-    target: RequestTarget<'_>,
-    after_position: u64,
-    version: u64,
-    committed_label: &str,
-) {
-    match full_request_activity(
-        client,
-        api_url,
-        session_token,
-        target,
-        after_position,
-        version,
-    ) {
-        Ok(activity) => print_request_settlement(&activity),
-        Err(error) => {
-            eprintln!("{committed_label}, but its settlement receipt could not be loaded: {error}")
-        }
     }
 }
 
@@ -488,10 +407,9 @@ pub(super) fn print_request_list(
             return state_order;
         }
         if left.state == crate::api::RequestState::ReadyForReview {
-            return right
-                .current_stake_credits
-                .cmp(&left.current_stake_credits)
-                .then_with(|| left.ready_at_unix.cmp(&right.ready_at_unix))
+            return left
+                .ready_at_unix
+                .cmp(&right.ready_at_unix)
                 .then_with(|| left.id.cmp(&right.id));
         }
         left.updated_at_unix
@@ -501,7 +419,7 @@ pub(super) fn print_request_list(
     if requests.is_empty() {
         println!("No visible requests.");
     } else {
-        println!(" WAIT  STAKE  STATE      REQUEST");
+        println!(" WAIT  STATE      REQUEST");
         let now_unix = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .context("system clock is before Unix epoch")?
@@ -526,8 +444,7 @@ mod tests {
                 "actor": {"id": "scope_usr_actor", "handle": "actor"},
                 "kind": "ReadyForReview",
                 "payload": {"ReadyForReview": {
-                    "head_oid": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
-                    "stake_credits": 12
+                    "head_oid": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
                 }},
                 "created_at_unix": 20
             },
@@ -536,8 +453,7 @@ mod tests {
                 "actor": {"id": "scope_usr_actor", "handle": "actor"},
                 "kind": "ReadyForReview",
                 "payload": {"ReadyForReview": {
-                    "head_oid": "cccccccccccccccccccccccccccccccccccccccc",
-                    "stake_credits": 15
+                    "head_oid": "cccccccccccccccccccccccccccccccccccccccc"
                 }},
                 "created_at_unix": 30
             }
@@ -550,15 +466,11 @@ mod tests {
     }
 
     #[test]
-    fn assessment_confirmation_mentions_only_real_settlement() {
+    fn assessment_confirmation_names_outcome() {
         let outcome = crate::api::RequestAssessmentOutcome::Neutral;
         assert_eq!(
-            assessment_confirmation("change", outcome, 0),
+            assessment_confirmation("change", outcome),
             "Complete request change as Neutral"
-        );
-        assert_eq!(
-            assessment_confirmation("change", outcome, 12),
-            "Complete request change as Neutral and settle its review stake"
         );
     }
 

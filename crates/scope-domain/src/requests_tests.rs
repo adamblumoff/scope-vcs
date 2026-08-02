@@ -3,11 +3,10 @@ use crate::store::{DEFAULT_GIT_FILE_MODE, RepositoryAccess, RepositoryActor, Sou
 use std::collections::BTreeMap;
 
 #[test]
-fn new_request_starts_as_an_unpublished_unstaked_working_request() {
+fn new_request_starts_as_an_unpublished_working_request() {
     let mutation = start_request(&mut BTreeMap::new(), public_start_input()).unwrap();
 
     assert_eq!(mutation.request.state, RequestState::Working);
-    assert_eq!(mutation.request.current_stake_credits, 0);
     assert!(!mutation.request.is_published());
     assert!(!policy_for(&mutation.request, ViewerKind::Anonymous).counts_as_ready);
     assert_eq!(mutation.request.ready_at_unix, None);
@@ -50,7 +49,6 @@ fn publication_marker_survives_return_to_working_and_is_required_for_completion(
     let first_ready_at = request.first_ready_at_unix;
     assert!(policy_for(&request, ViewerKind::Anonymous).counts_as_ready);
     request.state = RequestState::Working;
-    request.current_stake_credits = 0;
     request.ready_at_unix = None;
     request.validate_facts().unwrap();
     assert_eq!(request.first_ready_at_unix, first_ready_at);
@@ -64,7 +62,6 @@ fn publication_marker_survives_return_to_working_and_is_required_for_completion(
     assert!(!policy_for(&request, ViewerKind::Anonymous).counts_as_ready);
 
     request.first_ready_at_unix = None;
-    request.ready_queue_version = None;
     assert!(
         request
             .validate_facts()
@@ -75,19 +72,10 @@ fn publication_marker_survives_return_to_working_and_is_required_for_completion(
 }
 
 #[test]
-fn ready_state_owns_current_stake_ready_time_and_complete_hold_pair() {
+fn ready_state_owns_ready_time_and_complete_hold_pair() {
     let mut request = ready_request();
     request.validate_facts().unwrap();
 
-    request.current_stake_credits = 0;
-    assert!(
-        request
-            .validate_facts()
-            .unwrap_err()
-            .message
-            .contains("current stake")
-    );
-    request.current_stake_credits = 25;
     request.held_at_unix = Some(21);
     request.updated_at_unix = 21;
     assert!(
@@ -108,9 +96,6 @@ fn ready_state_owns_current_stake_ready_time_and_complete_hold_pair() {
     );
     request.held_at_unix = Some(21);
     request.validate_facts().unwrap();
-
-    request.current_stake_credits = 26;
-    assert!(request.validate_facts().unwrap_err().message.contains("25"));
 }
 
 #[test]
@@ -187,66 +172,24 @@ fn merge_facts_are_complete_accepted_and_never_precede_completion() {
 }
 
 #[test]
-fn repeat_review_cycles_are_append_only_facts_with_stake_and_reason() {
+fn repeat_review_cycles_are_append_only_facts_with_reason() {
     let events = [
         RequestEventPayload::ReadyForReview {
             head_oid: "head-1".to_string(),
-            stake_credits: 10,
         },
         RequestEventPayload::ReturnedToWorking {
             head_oid: "head-1".to_string(),
-            stake_credits: 10,
             reason: RequestReviewExitReason::RevisionPushed,
         },
         RequestEventPayload::ReadyForReview {
             head_oid: "head-2".to_string(),
-            stake_credits: 20,
         },
     ];
 
     let encoded = serde_json::to_value(events).unwrap();
-    assert_eq!(encoded[0]["ReadyForReview"]["stake_credits"], 10);
+    assert_eq!(encoded[0]["ReadyForReview"]["head_oid"], "head-1");
     assert_eq!(encoded[1]["ReturnedToWorking"]["reason"], "RevisionPushed");
     assert_eq!(encoded[2]["ReadyForReview"]["head_oid"], "head-2");
-}
-
-#[test]
-fn assessment_settlement_has_only_three_outcomes() {
-    let accepted = settlement_for(10, RequestAssessmentOutcome::Accepted, 30);
-    assert_eq!(
-        (accepted.refunded_credits, accepted.reward_credits),
-        (10, 10)
-    );
-    let neutral = settlement_for(10, RequestAssessmentOutcome::Neutral, 30);
-    assert_eq!((neutral.refunded_credits, neutral.reward_credits), (10, 0));
-    let rejected = settlement_for(10, RequestAssessmentOutcome::Rejected, 30);
-    assert_eq!(
-        (rejected.refunded_credits, rejected.burned_credits),
-        (0, 10)
-    );
-}
-
-#[test]
-fn credit_grant_is_single_entry_and_overflow_safe() {
-    let mut accounts = BTreeMap::new();
-    let mut ledger = BTreeMap::new();
-    let mutation = grant_user_credits(
-        &mut accounts,
-        &mut ledger,
-        GrantUserCreditsInput {
-            ledger_entry_id: "starter:user".to_string(),
-            user_id: "user".to_string(),
-            amount_credits: 100,
-            now_unix: 10,
-        },
-    )
-    .unwrap();
-    assert_eq!(mutation.account.balance_credits, 100);
-    assert_eq!(
-        mutation.ledger_entry.kind,
-        CreditLedgerEntryKind::StarterGrant
-    );
-    assert_eq!(ledger.len(), 1);
 }
 
 #[test]
@@ -566,7 +509,6 @@ fn close_hard_deletes_draft_and_completes_published_work() {
     let mut published = ready_request();
     published.state = RequestState::Working;
     published.ready_at_unix = None;
-    published.current_stake_credits = 0;
     let mut requests = BTreeMap::from([(published.id.clone(), published)]);
     let mutation = close_request(
         &mut requests,
@@ -802,7 +744,6 @@ fn published_working_request() -> Request {
     let mut request = ready_request();
     request.state = RequestState::Working;
     request.ready_at_unix = None;
-    request.current_stake_credits = 0;
     request.validate_facts().unwrap();
     request
 }
@@ -819,7 +760,6 @@ fn held_request() -> Request {
 fn private_request(mut request: Request) -> Request {
     request.audience = RequestAudience::Private;
     request.author_role = RequestActorRole::Member;
-    request.current_stake_credits = 0;
     request.validate_facts().unwrap();
     request
 }
@@ -850,8 +790,6 @@ pub(super) fn ready_request() -> Request {
     request.head_oid = "head".to_string();
     request.git_snapshot = Some(source_blob("head"));
     request.state = RequestState::ReadyForReview;
-    request.ready_queue_version = Some(1);
-    request.current_stake_credits = 10;
     request.first_ready_at_unix = Some(20);
     request.ready_at_unix = Some(20);
     request.updated_at_unix = 20;
@@ -861,7 +799,6 @@ pub(super) fn ready_request() -> Request {
 fn completed_request(outcome: RequestAssessmentOutcome) -> Request {
     let mut request = ready_request();
     request.state = RequestState::Completed;
-    request.current_stake_credits = 0;
     request.ready_at_unix = None;
     request.assessment_outcome = Some(outcome);
     request.assessed_at_unix = Some(30);

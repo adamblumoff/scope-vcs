@@ -131,13 +131,12 @@ pub fn mark_request_ready(
     api_url: &str,
     session_token: &str,
     target: RequestTarget<'_>,
-    stake_credits: Option<u32>,
 ) -> anyhow::Result<RequestMutationResponse> {
     execute_request(
         client
             .post(request_action_url(api_url, target, "ready"))
             .bearer_auth(session_token)
-            .json(&ReadyRequestRequest { stake_credits }),
+            .json(&ReadyRequestRequest {}),
         target,
         "mark request ready",
     )
@@ -505,28 +504,27 @@ mod tests {
     fn request_errors_surface_authoritative_safe_messages() {
         let (api_url, server) = serve_once(
             StatusCode::CONFLICT,
-            r#"{"error":"stake must be 1–25\u001b[31m"}"#,
+            r#"{"error":"request cannot be submitted\u001b[31m"}"#,
         );
 
-        let error = mark_request_ready(&Client::new(), &api_url, "token", target(), Some(26))
+        let error = mark_request_ready(&Client::new(), &api_url, "token", target())
             .unwrap_err()
             .to_string();
 
-        assert_eq!(error, "stake must be 1–25 [31m");
+        assert_eq!(error, "request cannot be submitted [31m");
         let request = server.join().unwrap();
         assert!(request.starts_with("POST /v1/repos/owner/repo/requests/req_one/ready "));
-        assert!(request.contains(r#"{"stake_credits":26}"#), "{request}");
+        assert!(request.contains("\r\n\r\n{}"), "{request}");
     }
 
     #[test]
-    fn maintainer_ready_omits_the_stake_field() {
+    fn ready_posts_an_empty_payload() {
         let (api_url, server) = serve_once(StatusCode::CONFLICT, r#"{"error":"fixture stop"}"#);
 
-        mark_request_ready(&Client::new(), &api_url, "token", target(), None).unwrap_err();
+        mark_request_ready(&Client::new(), &api_url, "token", target()).unwrap_err();
 
         let request = server.join().unwrap();
         assert!(request.contains("\r\n\r\n{}"), "{request}");
-        assert!(!request.contains("stake_credits"), "{request}");
     }
 
     #[test]

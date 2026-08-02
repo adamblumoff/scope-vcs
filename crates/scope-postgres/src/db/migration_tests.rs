@@ -93,14 +93,6 @@ async fn representative_business_snapshot(db: &DatabaseConnection) -> String {
                     SELECT jsonb_agg(to_jsonb(item) ORDER BY id)
                     FROM scope_requests item
                 ),
-                'credit_accounts', (
-                    SELECT jsonb_agg(to_jsonb(item) ORDER BY user_id)
-                    FROM scope_user_credit_accounts item
-                ),
-                'credit_entries', (
-                    SELECT jsonb_agg(to_jsonb(item) ORDER BY id)
-                    FROM scope_credit_ledger_entries item
-                ),
                 'workflow_revisions', (
                     SELECT jsonb_agg(to_jsonb(item) ORDER BY digest)
                     FROM scope_workflow_revisions item
@@ -131,7 +123,13 @@ async fn representative_business_snapshot(db: &DatabaseConnection) -> String {
 fn without_migration_rewritten_state(snapshot: String) -> serde_json::Value {
     let mut snapshot = serde_json::from_str::<serde_json::Value>(&snapshot).unwrap();
     let object = snapshot.as_object_mut().unwrap();
-    for key in ["outbox", "projections", "workflow_revisions", "runs"] {
+    for key in [
+        "outbox",
+        "projections",
+        "requests",
+        "workflow_revisions",
+        "runs",
+    ] {
         object.remove(key);
     }
     snapshot
@@ -152,6 +150,7 @@ async fn fresh_database_reaches_exact_latest_schema() {
             "m0003_structured_run_attempts",
             "m0004_runner_protocol_cutover",
             "m0005_projection_head_oid",
+            "m0006_drop_request_credits",
         ]
     );
     assert!(!relation_exists(db.as_ref(), "scope_metadata_schema").await);
@@ -200,7 +199,9 @@ async fn fresh_database_reaches_exact_latest_schema() {
         .unwrap()
         .try_get::<i64>("", "count")
         .unwrap();
-    assert_eq!(scope_table_count, 43);
+    assert_eq!(scope_table_count, 41);
+    assert!(!relation_exists(db.as_ref(), "scope_user_credit_accounts").await);
+    assert!(!relation_exists(db.as_ref(), "scope_credit_ledger_entries").await);
 }
 
 #[tokio::test]
@@ -765,6 +766,7 @@ async fn reapplying_latest_migrations_is_a_data_preserving_noop() {
             "m0003_structured_run_attempts",
             "m0004_runner_protocol_cutover",
             "m0005_projection_head_oid",
+            "m0006_drop_request_credits",
         ]
     );
 }
@@ -788,6 +790,7 @@ async fn concurrent_api_migration_attempts_serialize() {
             "m0003_structured_run_attempts",
             "m0004_runner_protocol_cutover",
             "m0005_projection_head_oid",
+            "m0006_drop_request_credits",
         ]
     );
 }

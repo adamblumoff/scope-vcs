@@ -11,16 +11,13 @@ use super::{
     repository_from_model,
     repository_rows::insert_repository,
     request_change_block_rows::change_blocks_for_request_ids,
-    request_rows::{
-        credit_account_by_user_id, credit_ledger_entry_by_id, insert_credit_ledger_entry_row,
-        requests_by_repo_id, save_credit_account_row,
-    },
+    request_rows::requests_by_repo_id,
 };
 use crate::error::PostgresError;
 use scope_domain::{
     policy::Visibility,
     repo_actions::{create_repo as create_repo_command, delete_repo as delete_repo_command},
-    requests::{CreditLedgerEntry, CreditLedgerEntryKind, Request, UserCreditAccount},
+    requests::Request,
     store::{FirstPushToken, GitPushToken, SourceBlob, StoredRepository, repo_id},
 };
 use sea_orm::sea_query::Query;
@@ -151,8 +148,6 @@ impl RepositoryStore {
         let repo = repository_from_model(&tx, repo).await?;
         let mutation = delete_repo_command(&repo, &user_id, &owner, &name)?;
         let requests = lock_requests_for_repo_postgres(&tx, &repo_id).await?;
-        lock_request_credit_accounts_for_repo_postgres(&tx, &requests).await?;
-        refund_open_request_stakes_for_repo_postgres(&tx, &requests, now_unix).await?;
         let request_ids = requests
             .iter()
             .map(|request| request.id.clone())
@@ -247,53 +242,6 @@ where
     }
 }
 
-async fn refund_open_request_stakes_for_repo_postgres<C>(
-    conn: &C,
-    requests: &[Request],
-    now_unix: u64,
-) -> Result<(), PostgresError>
-where
-    C: sea_orm::ConnectionTrait,
-{
-    for request in requests
-        .iter()
-        .filter(|request| should_refund_on_repo_delete(request))
-    {
-        let ledger_entry_id = repo_delete_refund_ledger_entry_id(request)?;
-        ensure_repo_delete_refund_ledger_entry_available_postgres(conn, &ledger_entry_id).await?;
-        let account = credit_account_by_user_id(conn, &request.author_user_id)
-            .await?
-            .ok_or_else(|| {
-                PostgresError::internal_message("request author credit account is missing")
-            })?;
-        let (account, ledger_entry) =
-            refund_open_request_stake(&account, request, ledger_entry_id, now_unix)?;
-        save_credit_account_row(conn, &account).await?;
-        insert_credit_ledger_entry_row(conn, &ledger_entry).await?;
-    }
-    Ok(())
-}
-
-async fn lock_request_credit_accounts_for_repo_postgres<C>(
-    conn: &C,
-    requests: &[Request],
-) -> Result<(), PostgresError>
-where
-    C: sea_orm::ConnectionTrait,
-{
-    let mut author_ids = requests
-        .iter()
-        .filter(|request| should_refund_on_repo_delete(request))
-        .map(|request| request.author_user_id.as_str())
-        .collect::<Vec<_>>();
-    author_ids.sort_unstable();
-    author_ids.dedup();
-    for author_id in author_ids {
-        acquire_aggregate_lock(conn, "user-credit", author_id).await?;
-    }
-    Ok(())
-}
-
 async fn lock_requests_for_repo_postgres<C>(
     conn: &C,
     repo_id: &str,
@@ -332,69 +280,6 @@ fn request_git_snapshots_for_repo(
     snapshots.sort_by(|left, right| left.content_ref.cmp(&right.content_ref));
     snapshots.dedup_by(|left, right| left.content_ref == right.content_ref);
     snapshots
-}
-
-fn should_refund_on_repo_delete(request: &Request) -> bool {
-    request.current_stake_credits > 0
-}
-
-fn refund_open_request_stake(
-    account: &UserCreditAccount,
-    request: &Request,
-    ledger_entry_id: String,
-    now_unix: u64,
-) -> Result<(UserCreditAccount, CreditLedgerEntry), PostgresError> {
-    let balance_credits = account
-        .balance_credits
-        .checked_add(request.current_stake_credits)
-        .ok_or_else(|| PostgresError::invalid_input("credit balance overflow"))?;
-    let amount_credits = credit_u32_to_i32(request.current_stake_credits)?;
-    credit_u32_to_i32(balance_credits)?;
-    Ok((
-        UserCreditAccount {
-            user_id: account.user_id.clone(),
-            balance_credits,
-        },
-        CreditLedgerEntry {
-            id: ledger_entry_id,
-            user_id: request.author_user_id.clone(),
-            request_id: Some(request.id.clone()),
-            kind: CreditLedgerEntryKind::ReviewStakeRefund,
-            amount_credits,
-            created_at_unix: now_unix,
-        },
-    ))
-}
-
-async fn ensure_repo_delete_refund_ledger_entry_available_postgres<C>(
-    conn: &C,
-    ledger_entry_id: &str,
-) -> Result<(), PostgresError>
-where
-    C: sea_orm::ConnectionTrait,
-{
-    if credit_ledger_entry_by_id(conn, ledger_entry_id)
-        .await?
-        .is_some()
-    {
-        Err(PostgresError::conflict(
-            "credit ledger entry already exists",
-        ))
-    } else {
-        Ok(())
-    }
-}
-
-fn repo_delete_refund_ledger_entry_id(request: &Request) -> Result<String, PostgresError> {
-    let ready_at_unix = request.ready_at_unix.ok_or_else(|| {
-        PostgresError::internal_message("staked request is missing its current ready time")
-    })?;
-    Ok(format!("repo_delete_refund:{}:{ready_at_unix}", request.id))
-}
-
-fn credit_u32_to_i32(value: u32) -> Result<i32, PostgresError> {
-    i32::try_from(value)
-        .map_err(|_| PostgresError::invalid_input("credit amount exceeds i32 range"))
 }
 
 #[cfg(test)]

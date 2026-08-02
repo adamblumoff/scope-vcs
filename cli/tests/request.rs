@@ -56,8 +56,8 @@ fn request_discuss_requires_a_body_before_login() {
 }
 
 #[test]
-fn request_ready_accepts_an_omitted_stake_before_role_resolution() {
-    let dir = TempDir::new("ready-stake");
+fn request_ready_reaches_auth_without_extra_arguments() {
+    let dir = TempDir::new("ready-request");
     create_repo_with_head(dir.path());
 
     let output = scope_command(dir.path())

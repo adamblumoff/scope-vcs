@@ -185,7 +185,6 @@ async fn public_repo_stream_drops_private_discussion_identifiers() {
             request.state = scope_domain::requests::RequestState::ReadyForReview;
             request.first_ready_at_unix = Some(2);
             request.ready_at_unix = Some(2);
-            request.ready_queue_version = Some(1);
             request.updated_at_unix = 2;
         })
         .await

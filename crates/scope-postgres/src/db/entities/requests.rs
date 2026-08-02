@@ -1,9 +1,9 @@
 use super::*;
 use scope_domain::requests::{
-    CreditLedgerEntry, CreditLedgerEntryKind, Request, RequestActorRole, RequestAssessmentOutcome,
-    RequestAudience, RequestChangeBlock, RequestDiscussion, RequestDiscussionReadState,
-    RequestDiscussionReply, RequestDiscussionStatus, RequestDiscussionSubject, RequestEvent,
-    RequestEventKind, RequestEventPayload, RequestInvitee, RequestState, UserCreditAccount,
+    Request, RequestActorRole, RequestAssessmentOutcome, RequestAudience, RequestChangeBlock,
+    RequestDiscussion, RequestDiscussionReadState, RequestDiscussionReply, RequestDiscussionStatus,
+    RequestDiscussionSubject, RequestEvent, RequestEventKind, RequestEventPayload, RequestInvitee,
+    RequestState,
 };
 use scope_domain::store::SourceBlob;
 
@@ -27,8 +27,6 @@ pub mod request {
         pub description_markdown: String,
         pub state: String,
         pub activity_version: i64,
-        pub ready_queue_version: Option<i64>,
-        pub current_stake_credits: i32,
         pub first_ready_at_unix: Option<i64>,
         pub ready_at_unix: Option<i64>,
         pub held_at_unix: Option<i64>,
@@ -69,14 +67,6 @@ pub mod request {
                 description_markdown: request.description_markdown.clone(),
                 state: encode_enum(request.state)?,
                 activity_version: u64_to_i64(request.activity_version, "request activity version")?,
-                ready_queue_version: request
-                    .ready_queue_version
-                    .map(|version| u64_to_i64(version, "request ready queue version"))
-                    .transpose()?,
-                current_stake_credits: u32_to_i32(
-                    request.current_stake_credits,
-                    "request current stake credits",
-                )?,
                 first_ready_at_unix: encode_optional_time(
                     request.first_ready_at_unix,
                     "request first ready time",
@@ -123,14 +113,6 @@ pub mod request {
                 description_markdown: self.description_markdown,
                 state: decode_enum::<RequestState>(self.state)?,
                 activity_version: i64_to_u64(self.activity_version, "request activity version")?,
-                ready_queue_version: self
-                    .ready_queue_version
-                    .map(|version| i64_to_u64(version, "request ready queue version"))
-                    .transpose()?,
-                current_stake_credits: i32_to_u32(
-                    self.current_stake_credits,
-                    "request current stake credits",
-                )?,
                 first_ready_at_unix: decode_optional_time(
                     self.first_ready_at_unix,
                     "request first ready time",
@@ -498,90 +480,6 @@ pub mod request_discussion_read_state {
                     "discussion read position",
                 )?,
                 updated_at_unix: i64_to_u64(self.updated_at_unix, "discussion read time")?,
-            })
-        }
-    }
-}
-
-pub mod user_credit_account {
-    use super::*;
-
-    #[derive(Clone, Debug, PartialEq, DeriveEntityModel)]
-    #[sea_orm(table_name = "scope_user_credit_accounts")]
-    pub struct Model {
-        #[sea_orm(primary_key, auto_increment = false)]
-        pub user_id: String,
-        pub balance_credits: i32,
-    }
-
-    #[derive(Copy, Clone, Debug, EnumIter, DeriveRelation)]
-    pub enum Relation {}
-
-    impl ActiveModelBehavior for ActiveModel {}
-
-    impl Model {
-        pub fn from_domain(account: &UserCreditAccount) -> Result<Self, PostgresError> {
-            Ok(Self {
-                user_id: account.user_id.clone(),
-                balance_credits: u32_to_i32(account.balance_credits, "user credit balance")?,
-            })
-        }
-
-        pub fn try_into_domain(self) -> Result<UserCreditAccount, PostgresError> {
-            Ok(UserCreditAccount {
-                user_id: self.user_id,
-                balance_credits: i32_to_u32(self.balance_credits, "user credit balance")?,
-            })
-        }
-    }
-}
-
-pub mod credit_ledger_entry {
-    use super::*;
-
-    #[derive(Clone, Debug, PartialEq, DeriveEntityModel)]
-    #[sea_orm(table_name = "scope_credit_ledger_entries")]
-    pub struct Model {
-        #[sea_orm(primary_key, auto_increment = false)]
-        pub id: String,
-        pub user_id: String,
-        pub request_id: Option<String>,
-        pub kind: String,
-        pub amount_credits: i32,
-        pub created_at_unix: i64,
-    }
-
-    #[derive(Copy, Clone, Debug, EnumIter, DeriveRelation)]
-    pub enum Relation {}
-
-    impl ActiveModelBehavior for ActiveModel {}
-
-    impl Model {
-        pub fn from_domain(entry: &CreditLedgerEntry) -> Result<Self, PostgresError> {
-            Ok(Self {
-                id: entry.id.clone(),
-                user_id: entry.user_id.clone(),
-                request_id: entry.request_id.clone(),
-                kind: encode_enum(entry.kind)?,
-                amount_credits: entry.amount_credits,
-                created_at_unix: u64_to_i64(
-                    entry.created_at_unix,
-                    "credit ledger entry creation time",
-                )?,
-            })
-        }
-
-        pub fn try_into_domain(self) -> Result<CreditLedgerEntry, PostgresError> {
-            Ok(CreditLedgerEntry {
-                id: self.id,
-                user_id: self.user_id,
-                request_id: self.request_id,
-                kind: decode_enum::<CreditLedgerEntryKind>(self.kind)?,
-                amount_credits: self.amount_credits,
-                created_at_unix: i64_to_u64(
-                    self.created_at_unix,
-                    "credit ledger entry creation time",
-                )?,
             })
         }
     }

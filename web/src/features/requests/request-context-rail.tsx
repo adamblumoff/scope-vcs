@@ -1,6 +1,6 @@
 import type { RequestSummary } from '@/api/types'
 import { Badge } from '@/components/ui/badge'
-import { Coins, GitBranch, GitCommitHorizontal } from 'lucide-react'
+import { GitBranch, GitCommitHorizontal } from 'lucide-react'
 import type { ReactNode } from 'react'
 import { RequestInvitees } from './request-invitees'
 import {
@@ -18,8 +18,6 @@ export function RequestContextRail({
   actions: RequestActionController
   request: RequestSummary
 }) {
-  const accepted = request.assessment_previews.find((item) => item.outcome === 'Accepted')
-
   return (
     <aside className="order-1 min-w-0 border-b border-border bg-muted/15 xl:order-2 xl:border-b-0 xl:border-l">
       <RailSection icon={<GitBranch />} title="Request details">
@@ -32,16 +30,7 @@ export function RequestContextRail({
 
       <RequestInvitees actions={actions} request={request} />
 
-      <RailSection icon={<Coins />} title="Review">
-        <RailValue
-          label="Current stake"
-          value={`${request.current_stake_credits} credits`}
-        />
-        {accepted && request.state === 'ReadyForReview' ? (
-          <p className="text-xs leading-5 text-muted-foreground">
-            Accepted returns {accepted.refunded_credits} and rewards {accepted.reward_credits} credits.
-          </p>
-        ) : null}
+      <RailSection icon={<GitBranch />} title="Review">
         <RailValue
           label="First published"
           value={formatUnixDate(request.first_ready_at_unix)}

@@ -1,24 +1,20 @@
 //! Atomic Ready-review invalidation and request branch revision persistence.
 
 use super::{
-    GeneratedIdSource, RequestStore, acquire_aggregate_lock,
+    GeneratedIdSource, RequestStore,
     cleanup_queue::queue_pending_source_blob_deletion_rows,
     request_access::{ensure_user_exists, lock_request_repository, request_policy_for_user},
     request_change_block_rows::insert_change_block,
     request_discussion_rows::{insert_discussion, save_read_state},
-    request_rows::{
-        credit_account_by_user_id, insert_credit_ledger_entry_row, insert_request_event_row,
-        request_event_by_id, save_credit_account_row, save_request_row,
-    },
+    request_rows::{insert_request_event_row, request_event_by_id, save_request_row},
 };
 use sea_orm::TransactionTrait;
 use std::collections::BTreeMap;
 use {
     crate::error::PostgresError,
     scope_domain::requests::{
-        RecordRequestRevisionInput, RequestActorRole, RequestEvent, RequestReviewExitReason,
-        RequestState, ReturnRequestToWorkingInput, record_request_revision,
-        return_request_to_working,
+        RecordRequestRevisionInput, RequestEvent, RequestReviewExitReason, RequestState,
+        ReturnRequestToWorkingInput, record_request_revision, return_request_to_working,
     },
 };
 
@@ -31,25 +27,14 @@ impl RequestStore {
         let now_unix = input.now_unix;
         let tx = self.db.begin().await.map_err(PostgresError::internal)?;
         let (repo, mut request) = lock_request_repository(&tx, &input.request_id).await?;
-        if request.author_role == RequestActorRole::Public
-            && request.state == RequestState::ReadyForReview
-        {
-            acquire_aggregate_lock(&tx, "user-credit", &request.author_user_id).await?;
-        }
         ensure_user_exists(&tx, &input.actor_user_id).await?;
         input.actor_can_edit = request_policy_for_user(&tx, &repo, &request, &input.actor_user_id)
             .await?
             .branch_mutable;
 
         if request.state == RequestState::ReadyForReview {
-            let account = if request.author_role == RequestActorRole::Public {
-                credit_account_by_user_id(&tx, &request.author_user_id).await?
-            } else {
-                None
-            };
             let exit = return_request_to_working(
                 &request,
-                account.as_ref(),
                 ReturnRequestToWorkingInput {
                     request_id: request.id.clone(),
                     actor_user_id: input.actor_user_id.clone(),
@@ -62,12 +47,6 @@ impl RequestStore {
                 },
             )?;
             save_request_row(&tx, &exit.request).await?;
-            if let Some(account) = &exit.credit_account {
-                save_credit_account_row(&tx, account).await?;
-            }
-            for entry in &exit.ledger_entries {
-                insert_credit_ledger_entry_row(&tx, entry).await?;
-            }
             for event in &exit.events {
                 insert_request_event_row(&tx, event).await?;
             }

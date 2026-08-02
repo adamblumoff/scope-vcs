@@ -12,12 +12,10 @@ type Dialog = 'assess' | 'close' | 'merge' | 'ready' | 'request_changes' | 'work
 
 export function RequestLifecycleActions({
   actions,
-  balance,
   className,
   request,
 }: {
   actions: RequestActionController
-  balance: number | null
   className?: string
   request: RequestSummary
 }) {
@@ -90,8 +88,7 @@ export function RequestLifecycleActions({
       </div>
 
       <RequestReadyDialog
-        balance={balance}
-        onConfirm={(stake_credits) => actions.run({ action: 'ready', stake_credits })}
+        onConfirm={() => actions.run({ action: 'ready' })}
         onOpenChange={(open) => setDialog(open ? 'ready' : null)}
         open={dialog === 'ready'}
         pending={actions.pending === 'ready'}
@@ -116,7 +113,6 @@ export function RequestLifecycleActions({
         pending={actions.pending === 'working'}
         title="Return this request to Working?"
       >
-        <p>{request.current_stake_credits} credits will be refunded atomically.</p>
         <p>The author must mark the current package Ready again before review can continue.</p>
       </RequestConfirmDialog>
       <RequestConfirmDialog
@@ -128,7 +124,7 @@ export function RequestLifecycleActions({
         title="Request changes from the author?"
       >
         <p>No written explanation is required.</p>
-        <p>{request.current_stake_credits} credits will be refunded and any hold will be cleared in the same transaction.</p>
+        <p>Any active hold will be cleared in the same transaction.</p>
       </RequestConfirmDialog>
       <RequestConfirmDialog
         confirmLabel="Merge request"
@@ -139,9 +135,9 @@ export function RequestLifecycleActions({
         title="Merge this request?"
       >
         {request.state === 'ReadyForReview' ? (
-          <p>This completes as Accepted. {acceptedSettlement(request)}</p>
+          <p>This completes the request as Accepted and merges it into main.</p>
         ) : (
-          <p>This request is already Accepted. Merging it has no second credit effect.</p>
+          <p>This request is already Accepted and will be merged into main.</p>
         )}
       </RequestConfirmDialog>
       <RequestConfirmDialog
@@ -161,11 +157,4 @@ export function RequestLifecycleActions({
       </RequestConfirmDialog>
     </>
   )
-}
-
-function acceptedSettlement(request: RequestSummary) {
-  const preview = request.assessment_previews.find((item) => item.outcome === 'Accepted')
-  return preview
-    ? `${preview.refunded_credits} credits return and ${preview.reward_credits} reward credits are added.`
-    : 'Settlement preview is unavailable.'
 }

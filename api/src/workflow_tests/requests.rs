@@ -4,7 +4,7 @@ mod helpers;
 mod queue;
 pub(super) use helpers::{create_owner_request, create_public_request, rebuild_request_projection};
 
-use scope_domain::requests::{GrantUserCreditsInput, RequestState};
+use scope_domain::requests::RequestState;
 use scope_postgres::db::AddRequestInviteeCommand;
 
 const REQUEST_HEAD: &str = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
@@ -288,15 +288,7 @@ async fn maintainer_request_lifecycle_routes_delegate_to_atomic_commands() {
     assert_eq!(ready.status(), StatusCode::OK);
     let ready = response_json(ready).await;
     assert_eq!(ready["request"]["state"], "ReadyForReview");
-    assert_eq!(ready["request"]["current_stake_credits"], 0);
     assert_eq!(ready["request"]["permissions"]["can_request_changes"], true);
-    assert_eq!(
-        ready["request"]["assessment_previews"]
-            .as_array()
-            .unwrap()
-            .len(),
-        3
-    );
 
     let held = api_request(
         app.clone(),
@@ -422,7 +414,6 @@ async fn request_reads_apply_one_viewer_aware_policy_across_lists_and_exact_surf
         .requests()
         .mutate_request_for_tests("req_previous", |request| {
             request.first_ready_at_unix = Some(4);
-            request.ready_queue_version = Some(1);
             request.updated_at_unix = 4;
         })
         .await
@@ -432,10 +423,8 @@ async fn request_reads_apply_one_viewer_aware_policy_across_lists_and_exact_surf
         .requests()
         .mutate_request_for_tests("req_ready_public", |request| {
             request.state = RequestState::ReadyForReview;
-            request.current_stake_credits = 1;
             request.first_ready_at_unix = Some(4);
             request.ready_at_unix = Some(4);
-            request.ready_queue_version = Some(1);
             request.updated_at_unix = 4;
         })
         .await
@@ -690,39 +679,17 @@ async fn invitee_routes_enforce_exact_handles_roles_leave_and_private_exclusion(
     .await;
     assert_eq!(held_added.status(), StatusCode::OK);
 
-    state
-        .metadata
-        .requests()
-        .grant_user_credits(GrantUserCreditsInput {
-            ledger_entry_id: "ledger_invite_author_starter".to_string(),
-            user_id: author_id.clone(),
-            amount_credits: 100,
-            now_unix: 4,
-        })
-        .await
-        .unwrap();
     let ready = api_request(
         app.clone(),
         "POST",
         "/v1/repos/owner/repo/requests/req_held_invites/ready",
         Some(&author),
-        Some(r#"{"stake_credits":1}"#),
+        Some("{}"),
     )
     .await;
     assert_eq!(ready.status(), StatusCode::OK);
     let ready = response_json(ready).await;
-    assert_eq!(
-        ready["request"]["assessment_previews"][0]["outcome"],
-        "Accepted"
-    );
-    assert_eq!(
-        ready["request"]["assessment_previews"][0]["refunded_credits"],
-        1
-    );
-    assert_eq!(
-        ready["request"]["assessment_previews"][0]["reward_credits"],
-        1
-    );
+    assert_eq!(ready["request"]["state"], "ReadyForReview");
 
     let held = api_request(
         app.clone(),
@@ -793,7 +760,6 @@ async fn invitee_routes_enforce_exact_handles_roles_leave_and_private_exclusion(
         .requests()
         .mutate_request_for_tests("req_invites", |request| {
             request.first_ready_at_unix = Some(5);
-            request.ready_queue_version = Some(1);
             request.updated_at_unix = 5;
         })
         .await

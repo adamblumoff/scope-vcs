@@ -44,8 +44,7 @@ use local::{
 use render::{
     print_close_receipt, print_discussion_receipt, print_invitee_added_receipt,
     print_invitee_removed_receipt, print_leave_receipt, print_repo_access, print_request_activity,
-    print_request_detail, print_request_mutation_receipt, print_request_settlement,
-    request_list_line,
+    print_request_detail, print_request_mutation_receipt, request_list_line,
 };
 use text::short_oid;
 
@@ -109,7 +108,6 @@ pub fn run_request_command(
             api_url,
             session_token,
             args.target,
-            args.stake,
             args.yes,
         ),
         RequestCommand::Working(args) => {

@@ -23,8 +23,8 @@ use scope_api_contract::{
     RequestInviteeMutationResponse, RequestInviteeResponse, RequestListItemResponse,
     RequestListResponse, RequestMergeabilityResponse, RequestMergeabilityStatus,
     RequestMutationResponse, RequestPermissionsResponse, RequestQueueSection,
-    RequestReviewExitReason, RequestSettlement, RequestSettlementPreviewResponse, RequestState,
-    RequestSummaryResponse, SessionIdentity, StartRequestRequest, UserResponse, Visibility,
+    RequestReviewExitReason, RequestState, RequestSummaryResponse, SessionIdentity,
+    StartRequestRequest, UserResponse, Visibility,
 };
 use std::{fs, path::Path};
 use ts_rs::TS;
@@ -121,7 +121,6 @@ pub(crate) fn export_api_types(output_path: &Path) {
         declaration::<RequestMutationResponse>(&ts_config),
         declaration::<RequestListItemResponse>(&ts_config),
         declaration::<RequestSummaryResponse>(&ts_config),
-        declaration::<RequestSettlementPreviewResponse>(&ts_config),
         declaration::<RequestInviteeResponse>(&ts_config),
         declaration::<AddRequestInviteeRequest>(&ts_config),
         declaration::<RemoveRequestInviteeRequest>(&ts_config),
@@ -133,7 +132,6 @@ pub(crate) fn export_api_types(output_path: &Path) {
         declaration::<RequestEventResponse>(&ts_config),
         declaration::<RequestEventPayload>(&ts_config),
         declaration::<RequestIdentityAuditFact>(&ts_config),
-        declaration::<RequestSettlement>(&ts_config),
         declaration::<RequestActorSummaryResponse>(&ts_config),
         declaration::<RequestDiscussionStatus>(&ts_config),
         declaration::<RequestDiscussionReplyResponse>(&ts_config),

@@ -11,14 +11,6 @@ use crate::api::{
 pub(super) fn print_repo_access(repo: &RepoSummaryResponse) {
     println!("Scope repo: {}/{}", repo.owner_handle, repo.name);
     println!("Permission: {}", access_label(repo.access.actor));
-    println!(
-        "Review stake: {}",
-        if repo.request_permissions.uses_credit_stake {
-            "required when entering review"
-        } else {
-            "not used for owner/member requests"
-        }
-    );
 }
 
 pub(super) fn print_request_detail(detail: &RequestDetailResponse) {
@@ -36,33 +28,6 @@ pub(super) fn print_request_activity(activity: &RequestActivityPageResponse) {
     for line in lines {
         println!("  {line}");
     }
-}
-
-pub(super) fn print_request_settlement(activity: &RequestActivityPageResponse) {
-    if let Some(line) = settlement_effect_line(activity) {
-        println!("{line}");
-    }
-}
-
-fn settlement_effect_line(activity: &RequestActivityPageResponse) -> Option<String> {
-    let settlement = activity
-        .events
-        .iter()
-        .filter_map(|event| match &event.payload {
-            RequestEventPayload::Settled { settlement } => Some((event.position, settlement)),
-            _ => None,
-        })
-        .max_by_key(|(position, _)| *position)
-        .map(|(_, settlement)| settlement)?;
-    (settlement.stake_credits > 0).then(|| {
-        format!(
-            "Credits: stake {} · refund {} · reward {} · burned {}",
-            settlement.stake_credits,
-            settlement.refunded_credits,
-            settlement.reward_credits,
-            settlement.burned_credits
-        )
-    })
 }
 
 pub(super) fn print_request_mutation_receipt(
@@ -138,7 +103,6 @@ pub(super) fn request_line(request: &RequestSummaryResponse) -> String {
         state: request.state,
         held: request.held_at_unix.is_some(),
         title: &request.title,
-        stake_credits: request.current_stake_credits,
         head_oid: &request.head_oid,
         assessment_outcome: request.assessment_outcome,
     })
@@ -154,7 +118,6 @@ pub(super) fn request_list_line(request: &RequestListItemResponse, now_unix: u64
             state: request.state,
             held: request.held_at_unix.is_some(),
             title: &request.title,
-            stake_credits: request.current_stake_credits,
             head_oid: &request.head_oid,
             assessment_outcome: request.assessment_outcome,
         })
@@ -196,7 +159,6 @@ fn request_detail_lines(request: &RequestSummaryResponse) -> Vec<String> {
             short_oid(&request.base_main_oid),
             short_oid(&request.head_oid)
         ),
-        format!("  stake: {} credits", request.current_stake_credits),
     ];
     if !request.description_markdown.trim().is_empty() {
         lines.push(format!(
@@ -261,49 +223,22 @@ fn request_activity_lines(activity: &RequestActivityPageResponse) -> Vec<String>
     let mut lines = Vec::new();
     for event in events {
         match &event.payload {
-            RequestEventPayload::ReadyForReview {
-                head_oid,
-                stake_credits,
-            } => {
+            RequestEventPayload::ReadyForReview { head_oid } => {
                 cycle += 1;
-                let stake = if *stake_credits == 0 {
-                    String::new()
-                } else {
-                    format!(" · {stake_credits} credits staked")
-                };
                 lines.push(format!(
-                    "cycle {cycle}: Ready{stake} · head {} · at {}",
+                    "cycle {cycle}: Ready · head {} · at {}",
                     short_oid(head_oid),
                     event.created_at_unix
                 ));
             }
-            RequestEventPayload::ReturnedToWorking {
-                stake_credits,
-                reason,
-                ..
-            } => {
-                let refund = if *stake_credits == 0 {
-                    String::new()
-                } else {
-                    format!(" · {stake_credits} credits refunded")
-                };
+            RequestEventPayload::ReturnedToWorking { reason, .. } => {
                 lines.push(format!(
-                    "cycle {}: Working{refund} · {} · at {}",
+                    "cycle {}: Working · {} · at {}",
                     cycle.max(1),
                     exit_reason_label(*reason),
                     event.created_at_unix
                 ));
             }
-            RequestEventPayload::Settled { settlement } => lines.push(format!(
-                "cycle {}: {} settlement · stake {} · refund {} · reward {} · burned {} · at {}",
-                cycle.max(1),
-                outcome_label(settlement.outcome),
-                settlement.stake_credits,
-                settlement.refunded_credits,
-                settlement.reward_credits,
-                settlement.burned_credits,
-                settlement.settled_at_unix
-            )),
             _ => {}
         }
     }
@@ -315,22 +250,6 @@ fn mutation_effect_lines(
     after: &RequestSummaryResponse,
 ) -> Vec<String> {
     let mut lines = Vec::new();
-    match (before.state, after.state) {
-        (RequestState::Working, RequestState::ReadyForReview)
-            if after.current_stake_credits > 0 =>
-        {
-            lines.push(format!("Credits: {} staked", after.current_stake_credits));
-        }
-        (RequestState::ReadyForReview, RequestState::Working)
-            if before.current_stake_credits > 0 =>
-        {
-            lines.push(format!(
-                "Credits: {} refunded",
-                before.current_stake_credits
-            ));
-        }
-        _ => {}
-    }
     if before.held_at_unix.is_some() && after.held_at_unix.is_none() {
         lines.push("Review hold cleared".to_string());
     } else if before.held_at_unix.is_none() && after.held_at_unix.is_some() {
@@ -345,7 +264,6 @@ struct RequestLine<'a> {
     state: RequestState,
     held: bool,
     title: &'a str,
-    stake_credits: u32,
     head_oid: &'a str,
     assessment_outcome: Option<RequestAssessmentOutcome>,
 }
@@ -356,8 +274,7 @@ fn format_request_line(line: RequestLine<'_>) -> String {
         .map(|outcome| format!(" · {}", outcome_label(outcome)))
         .unwrap_or_default();
     format!(
-        "{:>2}  {:<9}  {} ({}) — {} · head {}{}",
-        line.stake_credits,
+        "{:<9}  {} ({}) — {} · head {}{}",
         state_label(line.state, line.held),
         terminal_text(line.name),
         terminal_text(line.id),
@@ -470,7 +387,7 @@ mod tests {
         let request: RequestListItemResponse = serde_json::from_value(json!({
             "id": "req_one", "name": "fix-refs", "title": "Fix refs",
             "author_role": "Public", "audience": "Public", "head_oid": oid('b'),
-            "state": "ReadyForReview", "current_stake_credits": 12,
+            "state": "ReadyForReview",
             "assessment_outcome": null, "ready_at_unix": 10,
             "held_at_unix": 11, "updated_at_unix": 20,
             "mergeability": {
@@ -491,7 +408,6 @@ mod tests {
     fn detail_uses_server_capabilities_and_renders_hold_invitees_and_publication() {
         let mut request = summary();
         request.state = RequestState::ReadyForReview;
-        request.current_stake_credits = 12;
         request.first_ready_at_unix = Some(10);
         request.ready_at_unix = Some(11);
         request.held_at_unix = Some(12);
@@ -509,57 +425,41 @@ mod tests {
 
         assert!(rendered.contains("on-hold"), "{rendered}");
         assert!(rendered.contains("published"), "{rendered}");
-        assert!(rendered.contains("12 credits"), "{rendered}");
         assert!(rendered.contains("@devon"), "{rendered}");
         assert!(rendered.contains("edit, hold"), "{rendered}");
     }
 
     #[test]
-    fn activity_renders_repeated_cycles_refunds_and_exact_settlement() {
+    fn activity_renders_repeated_review_cycles() {
         let activity: RequestActivityPageResponse = serde_json::from_value(json!({
             "events": [
-                event(4, json!({"Settled": {"settlement": {
-                    "outcome": "Accepted", "stake_credits": 20,
-                    "refunded_credits": 20, "reward_credits": 20,
-                    "burned_credits": 0, "settled_at_unix": 40
-                }}})),
-                event(1, json!({"ReadyForReview": {"head_oid": oid('b'), "stake_credits": 10}})),
-                event(3, json!({"ReadyForReview": {"head_oid": oid('c'), "stake_credits": 20}})),
+                event(1, json!({"ReadyForReview": {"head_oid": oid('b')}})),
+                event(3, json!({"ReadyForReview": {"head_oid": oid('c')}})),
                 event(2, json!({"ReturnedToWorking": {
-                    "head_oid": oid('b'), "stake_credits": 10, "reason": "RevisionPushed"
+                    "head_oid": oid('b'), "reason": "RevisionPushed"
                 }}))
             ],
-            "through_position": 4
+            "through_position": 3
         }))
         .unwrap();
 
         let rendered = request_activity_lines(&activity).join("\n");
 
+        assert!(rendered.contains("cycle 1: Ready · head"), "{rendered}");
         assert!(
-            rendered.contains("cycle 1: Ready · 10 credits staked"),
+            rendered.contains("cycle 1: Working · revision pushed"),
             "{rendered}"
         );
-        assert!(
-            rendered.contains("cycle 1: Working · 10 credits refunded"),
-            "{rendered}"
-        );
-        assert!(
-            rendered.contains("cycle 2: Ready · 20 credits staked"),
-            "{rendered}"
-        );
-        assert!(
-            rendered.contains("refund 20 · reward 20 · burned 0"),
-            "{rendered}"
-        );
+        assert!(rendered.contains("cycle 2: Ready · head"), "{rendered}");
     }
 
     #[test]
-    fn zero_credit_cycles_do_not_claim_ledger_effects() {
+    fn review_cycles_render_without_financial_effects() {
         let activity: RequestActivityPageResponse = serde_json::from_value(json!({
             "events": [
-                event(1, json!({"ReadyForReview": {"head_oid": oid('b'), "stake_credits": 0}})),
+                event(1, json!({"ReadyForReview": {"head_oid": oid('b')}})),
                 event(2, json!({"ReturnedToWorking": {
-                    "head_oid": oid('b'), "stake_credits": 0, "reason": "RevisionPushed"
+                    "head_oid": oid('b'), "reason": "RevisionPushed"
                 }}))
             ],
             "through_position": 2
@@ -567,31 +467,10 @@ mod tests {
         .unwrap();
 
         let rendered = request_activity_lines(&activity).join("\n");
-        assert!(!rendered.contains("credits"), "{rendered}");
         assert!(rendered.contains("cycle 1: Ready · head"), "{rendered}");
         assert!(
             rendered.contains("cycle 1: Working · revision pushed"),
             "{rendered}"
-        );
-    }
-
-    #[test]
-    fn settlement_receipt_uses_the_latest_authoritative_event() {
-        let activity: RequestActivityPageResponse = serde_json::from_value(json!({
-            "events": [
-                event(4, json!({"Settled": {"settlement": {
-                    "outcome": "Rejected", "stake_credits": 12,
-                    "refunded_credits": 0, "reward_credits": 0,
-                    "burned_credits": 12, "settled_at_unix": 40
-                }}}))
-            ],
-            "through_position": 4
-        }))
-        .unwrap();
-
-        assert_eq!(
-            settlement_effect_line(&activity).as_deref(),
-            Some("Credits: stake 12 · refund 0 · reward 0 · burned 12")
         );
     }
 
@@ -604,16 +483,15 @@ mod tests {
     }
 
     #[test]
-    fn mutation_effects_report_refunds_and_hold_clear() {
+    fn mutation_effects_report_hold_clear() {
         let mut before = summary();
         before.state = RequestState::ReadyForReview;
-        before.current_stake_credits = 25;
         before.held_at_unix = Some(12);
         let after = summary();
 
         assert_eq!(
             mutation_effect_lines(&before, &after),
-            vec!["Credits: 25 refunded", "Review hold cleared"]
+            vec!["Review hold cleared"]
         );
     }
 
@@ -625,7 +503,7 @@ mod tests {
                 "author_role":"Public","audience":"Public",
                 "base_main_oid":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
                 "head_oid":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb","state":"Working",
-                "activity_version":1,"current_stake_credits":0,
+                "activity_version":1,
                 "first_ready_at_unix":null,"ready_at_unix":null,"held_at_unix":null,
                 "held_by_user_id":null,"assessment_outcome":null,
                 "assessment_body_markdown":null,"assessed_at_unix":null,

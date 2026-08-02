@@ -498,7 +498,6 @@ mod tests {
             .unwrap()
             .unwrap();
         request.first_ready_at_unix = Some(4);
-        request.ready_queue_version = Some(1);
         request.updated_at_unix = 4;
         super::super::request_rows::save_request_row(store.db.as_ref(), &request)
             .await

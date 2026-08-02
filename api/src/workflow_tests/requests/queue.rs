@@ -203,7 +203,7 @@ async fn request_queue_enforces_section_visibility_order_search_and_stable_pagin
         .await,
     )
     .await;
-    assert_eq!(request_ids(&first), ["req_ready_high", "req_ready_early"]);
+    assert_eq!(request_ids(&first), ["req_ready_early", "req_ready_tie_a"]);
     let cursor = first["next_cursor"].as_str().unwrap();
     create_public_request(
         &state,
@@ -243,8 +243,6 @@ async fn request_queue_enforces_section_visibility_order_search_and_stable_pagin
         .metadata
         .requests()
         .mutate_request_for_tests("req_ready_tie_a", |request| {
-            request.ready_queue_version = Some(11);
-            request.current_stake_credits = 25;
             request.ready_at_unix = Some(33);
             request.updated_at_unix = 33;
         })
@@ -261,8 +259,8 @@ async fn request_queue_enforces_section_visibility_order_search_and_stable_pagin
         .await,
     )
     .await;
-    assert_eq!(request_ids(&second), ["req_ready_tie_b"]);
-    assert!(second["next_cursor"].is_null());
+    assert_eq!(request_ids(&second), ["req_ready_tie_b", "req_ready_high"]);
+    assert!(second["next_cursor"].is_string());
 
     let completed = response_json(
         api_request(
@@ -356,9 +354,9 @@ async fn request_queue_enforces_section_visibility_order_search_and_stable_pagin
 async fn ready_fixture(
     state: &AppState,
     request_id: &str,
-    stake: u32,
+    _stake: u32,
     ready_at_unix: u64,
-    ready_queue_version: u64,
+    _ready_queue_version: u64,
     title: &str,
     description: &str,
 ) {
@@ -369,8 +367,6 @@ async fn ready_fixture(
             request.title = title.to_string();
             request.description_markdown = description.to_string();
             request.state = RequestState::ReadyForReview;
-            request.ready_queue_version = Some(ready_queue_version);
-            request.current_stake_credits = stake;
             request.first_ready_at_unix = Some(ready_at_unix);
             request.ready_at_unix = Some(ready_at_unix);
             request.updated_at_unix = ready_at_unix;
@@ -384,7 +380,7 @@ async fn completed_fixture(
     request_id: &str,
     ready_at_unix: u64,
     completed_at_unix: u64,
-    ready_queue_version: u64,
+    _ready_queue_version: u64,
     title: &str,
     description: &str,
 ) {
@@ -395,8 +391,6 @@ async fn completed_fixture(
             request.title = title.to_string();
             request.description_markdown = description.to_string();
             request.state = RequestState::Completed;
-            request.ready_queue_version = Some(ready_queue_version);
-            request.current_stake_credits = 0;
             request.first_ready_at_unix = Some(ready_at_unix);
             request.ready_at_unix = None;
             request.completed_at_unix = Some(completed_at_unix);

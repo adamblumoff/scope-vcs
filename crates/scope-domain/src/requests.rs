@@ -9,12 +9,6 @@ pub use access::{
 };
 mod change_blocks;
 pub use change_blocks::RequestChangeBlock;
-mod credits;
-pub use credits::{
-    CreditAccountMutation, CreditLedgerEntry, CreditLedgerEntryKind, GrantUserCreditsInput,
-    PUBLIC_ACCOUNT_STARTER_CREDITS, RequestSettlement, UserCreditAccount, grant_user_credits,
-    settlement_for,
-};
 mod identity;
 pub use identity::{EditRequestIdentityInput, edit_request_identity};
 mod discussions;
@@ -58,10 +52,7 @@ pub use model::{
 mod queue;
 pub use queue::RequestQueueSection;
 mod review;
-pub use review::{
-    REQUEST_MAX_STAKE_CREDITS, RequestAssessmentOutcome, RequestReviewExitReason,
-    validate_assessment_body,
-};
+pub use review::{RequestAssessmentOutcome, RequestReviewExitReason, validate_assessment_body};
 mod review_lifecycle;
 pub use review_lifecycle::{
     AssessRequestInput, MarkRequestReadyInput, MergeRequestInput, PUBLIC_READY_REQUEST_LIMIT,

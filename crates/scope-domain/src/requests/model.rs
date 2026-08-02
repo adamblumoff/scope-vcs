@@ -1,7 +1,4 @@
-use super::{
-    REQUEST_MAX_STAKE_CREDITS, RequestAssessmentOutcome, RequestReviewExitReason,
-    validate_assessment_body,
-};
+use super::{RequestAssessmentOutcome, RequestReviewExitReason, validate_assessment_body};
 use crate::{error::DomainError, store::SourceBlob};
 use serde::{Deserialize, Serialize};
 
@@ -40,8 +37,6 @@ pub struct Request {
     pub description_markdown: String,
     pub state: RequestState,
     pub activity_version: u64,
-    pub ready_queue_version: Option<u64>,
-    pub current_stake_credits: u32,
     pub first_ready_at_unix: Option<u64>,
     pub ready_at_unix: Option<u64>,
     pub held_at_unix: Option<u64>,
@@ -89,7 +84,6 @@ pub enum RequestEventKind {
     Assessed,
     Merged,
     Closed,
-    Settled,
     IdentityEdited,
     DiscussionResolved,
     DiscussionReopened,
@@ -111,11 +105,9 @@ pub enum RequestEventPayload {
     },
     ReadyForReview {
         head_oid: String,
-        stake_credits: u32,
     },
     ReturnedToWorking {
         head_oid: String,
-        stake_credits: u32,
         reason: RequestReviewExitReason,
     },
     RevisionPushed {
@@ -133,7 +125,6 @@ pub enum RequestEventPayload {
         head_oid: String,
         outcome: RequestAssessmentOutcome,
         body_markdown: Option<String>,
-        stake_credits: u32,
     },
     Merged {
         head_oid: String,
@@ -141,9 +132,6 @@ pub enum RequestEventPayload {
     },
     Closed {
         head_oid: String,
-    },
-    Settled {
-        settlement: super::RequestSettlement,
     },
     IdentityEdited {
         before: RequestIdentityAuditFact,
@@ -196,25 +184,11 @@ pub fn validate_request_facts(request: &Request) -> Result<(), DomainError> {
             )));
         }
     }
-    if request.current_stake_credits > REQUEST_MAX_STAKE_CREDITS {
-        return Err(DomainError::conflict(format!(
-            "request current stake cannot exceed {REQUEST_MAX_STAKE_CREDITS} credits"
-        )));
-    }
-    if request.is_published() != request.ready_queue_version.is_some() {
-        return Err(DomainError::conflict(
-            "published request and ready queue version must be set together",
-        ));
-    }
     match request.state {
         RequestState::Working => {
             require_none("working request ready time", request.ready_at_unix)?;
             require_none("working request hold time", request.held_at_unix)?;
             require_none_ref("working request holder", request.held_by_user_id.as_ref())?;
-            require_zero(
-                "working request current stake",
-                request.current_stake_credits,
-            )?;
             require_none("working request completion time", request.completed_at_unix)?;
         }
         RequestState::ReadyForReview => {
@@ -240,18 +214,6 @@ pub fn validate_request_facts(request: &Request) -> Result<(), DomainError> {
                     "ready request hold time cannot precede ready time",
                 ));
             }
-            if request.author_role == RequestActorRole::Public {
-                if request.current_stake_credits == 0 {
-                    return Err(DomainError::conflict(
-                        "public ready request requires a current stake",
-                    ));
-                }
-            } else {
-                require_zero(
-                    "maintainer ready request current stake",
-                    request.current_stake_credits,
-                )?;
-            }
         }
         RequestState::Completed => {
             require_some(
@@ -261,10 +223,6 @@ pub fn validate_request_facts(request: &Request) -> Result<(), DomainError> {
             require_none("completed request ready time", request.ready_at_unix)?;
             require_none("completed request hold time", request.held_at_unix)?;
             require_none_ref("completed request holder", request.held_by_user_id.as_ref())?;
-            require_zero(
-                "completed request current stake",
-                request.current_stake_credits,
-            )?;
             require_some(
                 "completed request completion time",
                 request.completed_at_unix,
@@ -390,13 +348,5 @@ fn require_none_ref<T>(label: &str, value: Option<&T>) -> Result<(), DomainError
         Err(DomainError::conflict(format!("{label} must be empty")))
     } else {
         Ok(())
-    }
-}
-
-fn require_zero(label: &str, value: u32) -> Result<(), DomainError> {
-    if value == 0 {
-        Ok(())
-    } else {
-        Err(DomainError::conflict(format!("{label} must be zero")))
     }
 }

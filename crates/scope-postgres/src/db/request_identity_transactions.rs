@@ -1,20 +1,17 @@
 //! Atomic Ready-review invalidation for request identity edits.
 
 use super::{
-    RequestStore, acquire_aggregate_lock,
+    RequestStore,
     request_access::{ensure_user_exists, lock_request_repository, request_policy_for_user},
-    request_rows::{
-        credit_account_by_user_id, insert_credit_ledger_entry_row, insert_request_event_row,
-        request_event_by_id, save_credit_account_row, save_request_row,
-    },
+    request_rows::{insert_request_event_row, request_event_by_id, save_request_row},
 };
 use sea_orm::TransactionTrait;
 use std::collections::BTreeMap;
 use {
     crate::error::PostgresError,
     scope_domain::requests::{
-        EditRequestIdentityInput, Request, RequestActorRole, RequestEvent, RequestReviewExitReason,
-        RequestState, RequestTimelineMutation, ReturnRequestToWorkingInput, edit_request_identity,
+        EditRequestIdentityInput, RequestEvent, RequestReviewExitReason, RequestState,
+        RequestTimelineMutation, ReturnRequestToWorkingInput, edit_request_identity,
         return_request_to_working,
     },
 };
@@ -26,11 +23,6 @@ impl RequestStore {
     ) -> Result<RequestTimelineMutation, PostgresError> {
         let tx = self.db.begin().await.map_err(PostgresError::internal)?;
         let (repo, mut request) = lock_request_repository(&tx, &input.request_id).await?;
-        if request.author_role == RequestActorRole::Public
-            && request.state == RequestState::ReadyForReview
-        {
-            acquire_aggregate_lock(&tx, "user-credit", &request.author_user_id).await?;
-        }
         ensure_user_exists(&tx, &input.actor_user_id).await?;
         let actor_is_author = input.actor_user_id == request.author_user_id;
         let actor_is_maintainer = repo.is_maintainer_user_id(&input.actor_user_id);
@@ -41,10 +33,8 @@ impl RequestStore {
                 .can_edit_identity;
 
         if request.state == RequestState::ReadyForReview {
-            let account = load_account(&tx, &request).await?;
             let exit = return_request_to_working(
                 &request,
-                account.as_ref(),
                 ReturnRequestToWorkingInput {
                     request_id: request.id.clone(),
                     actor_user_id: input.actor_user_id.clone(),
@@ -57,12 +47,6 @@ impl RequestStore {
                 },
             )?;
             save_request_row(&tx, &exit.request).await?;
-            if let Some(account) = &exit.credit_account {
-                save_credit_account_row(&tx, account).await?;
-            }
-            for entry in &exit.ledger_entries {
-                insert_credit_ledger_entry_row(&tx, entry).await?;
-            }
             for event in &exit.events {
                 insert_request_event_row(&tx, event).await?;
             }
@@ -79,16 +63,5 @@ impl RequestStore {
         insert_request_event_row(&tx, &mutation.event).await?;
         tx.commit().await.map_err(PostgresError::internal)?;
         Ok(mutation)
-    }
-}
-
-async fn load_account(
-    tx: &sea_orm::DatabaseTransaction,
-    request: &Request,
-) -> Result<Option<scope_domain::requests::UserCreditAccount>, PostgresError> {
-    if request.author_role == RequestActorRole::Public {
-        credit_account_by_user_id(tx, &request.author_user_id).await
-    } else {
-        Ok(None)
     }
 }

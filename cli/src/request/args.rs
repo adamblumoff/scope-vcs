@@ -86,13 +86,7 @@ pub(super) struct RequestPushArgs {
 pub(super) struct RequestReadyArgs {
     #[command(flatten)]
     pub(super) target: RequestTargetArgs,
-    #[arg(
-        long,
-        value_name = "CREDITS",
-        help = "Credits to stake (required for public authors; ignored for owner/member authors)"
-    )]
-    pub(super) stake: Option<u32>,
-    #[arg(long, help = "Confirm publication and the credit stake")]
+    #[arg(long, help = "Confirm publication for review")]
     pub(super) yes: bool,
 }
 
@@ -183,7 +177,7 @@ pub(super) struct RequestAssessArgs {
         help = "Assessment message (required when rejecting)"
     )]
     pub(super) message: Option<String>,
-    #[arg(long, help = "Confirm completion and credit settlement")]
+    #[arg(long, help = "Confirm request completion")]
     pub(super) yes: bool,
 }
 

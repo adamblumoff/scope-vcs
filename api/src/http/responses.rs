@@ -476,11 +476,10 @@ pub(crate) fn repo_summary_for_user(
 }
 
 pub(crate) fn repo_request_permissions_response(
-    access: RepositoryAccess,
+    _access: RepositoryAccess,
 ) -> RepoRequestPermissionsResponse {
     RepoRequestPermissionsResponse {
         can_start_request: true,
-        uses_credit_stake: access.actor == RepositoryActor::Public,
     }
 }
 

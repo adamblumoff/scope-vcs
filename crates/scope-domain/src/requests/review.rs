@@ -2,8 +2,6 @@ use super::{REQUEST_ASSESSMENT_BODY_MAX_BYTES, validate_body_size};
 use crate::error::DomainError;
 use serde::{Deserialize, Serialize};
 
-pub const REQUEST_MAX_STAKE_CREDITS: u32 = 25;
-
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum RequestAssessmentOutcome {
     Accepted,

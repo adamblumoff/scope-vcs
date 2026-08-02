@@ -12,7 +12,6 @@ import { Link } from '@tanstack/react-router'
 import {
   ArrowRight,
   CheckCircle2,
-  Coins,
   GitPullRequest,
   Search,
   UserRound,
@@ -43,7 +42,7 @@ const SECTION_DETAILS = {
     title: 'Your work',
   },
   ready: {
-    description: 'Highest stake first, then longest waiting.',
+    description: 'Oldest submissions first.',
     empty: 'No requests are ready for review.',
     icon: GitPullRequest,
     title: 'Ready for review',
@@ -400,12 +399,6 @@ function RequestQueueRow({
       </div>
       <div className="flex min-w-0 flex-wrap items-center gap-2 sm:justify-end">
         {request.held_at_unix !== null ? <Badge variant="warning">On hold</Badge> : null}
-        {request.current_stake_credits > 0 ? (
-          <span className="inline-flex items-center gap-1 text-xs font-medium tabular-nums text-foreground">
-            <Coins aria-hidden="true" className="size-3.5 text-muted-foreground" />
-            {request.current_stake_credits} staked
-          </span>
-        ) : null}
         {section === 'completed' ? (
           <>
             <span className="text-xs text-muted-foreground">

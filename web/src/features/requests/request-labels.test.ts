@@ -25,37 +25,21 @@ test('non-accepted completed rows are never described as merged', () => {
   )
 })
 
-test('activity describes repeated stake cycles without exposing a balance', () => {
+test('activity describes review transitions without credit data', () => {
   assert.equal(
     requestEventBody(event('ReadyForReview', {
-      ReadyForReview: { head_oid: 'a'.repeat(40), stake_credits: 18 },
+      ReadyForReview: { head_oid: 'a'.repeat(40) },
     })),
-    'aaaaaaaaaaaa · 18 staked',
+    'aaaaaaaaaaaa',
   )
   assert.equal(
     requestEventBody(event('ReturnedToWorking', {
       ReturnedToWorking: {
         head_oid: 'a'.repeat(40),
         reason: 'ChangesRequested',
-        stake_credits: 18,
       },
     })),
-    'Maintainer requested changes · 18 refunded',
-  )
-  assert.equal(
-    requestEventBody(event('Settled', {
-      Settled: {
-        settlement: {
-          burned_credits: 0,
-          outcome: 'Accepted',
-          refunded_credits: 25,
-          reward_credits: 25,
-          settled_at_unix: 1,
-          stake_credits: 25,
-        },
-      },
-    })),
-    '25 refunded / 25 reward / 0 burned',
+    'Maintainer requested changes',
   )
 })
 

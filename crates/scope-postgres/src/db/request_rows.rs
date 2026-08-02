@@ -7,8 +7,8 @@ use sea_orm::{
 use {
     crate::error::PostgresError,
     scope_domain::requests::{
-        CreditLedgerEntry, Request, RequestActorRole, RequestAssessmentOutcome, RequestAudience,
-        RequestEvent, RequestState, UserCreditAccount,
+        Request, RequestActorRole, RequestAssessmentOutcome, RequestAudience, RequestEvent,
+        RequestState,
     },
 };
 
@@ -21,7 +21,6 @@ pub struct RequestListRow {
     pub audience: RequestAudience,
     pub head_oid: String,
     pub state: RequestState,
-    pub current_stake_credits: u32,
     pub assessment_outcome: Option<RequestAssessmentOutcome>,
     pub ready_at_unix: Option<u64>,
     pub held_at_unix: Option<u64>,
@@ -40,7 +39,6 @@ impl From<Request> for RequestListRow {
             audience: request.audience,
             head_oid: request.head_oid,
             state: request.state,
-            current_stake_credits: request.current_stake_credits,
             assessment_outcome: request.assessment_outcome,
             ready_at_unix: request.ready_at_unix,
             held_at_unix: request.held_at_unix,
@@ -197,36 +195,6 @@ where
         .transpose()
 }
 
-pub async fn credit_account_by_user_id<C>(
-    conn: &C,
-    user_id: &str,
-) -> Result<Option<UserCreditAccount>, PostgresError>
-where
-    C: ConnectionTrait,
-{
-    entities::user_credit_account::Entity::find_by_id(user_id.to_string())
-        .one(conn)
-        .await
-        .map_err(PostgresError::internal)?
-        .map(entities::user_credit_account::Model::try_into_domain)
-        .transpose()
-}
-
-pub async fn credit_ledger_entry_by_id<C>(
-    conn: &C,
-    entry_id: &str,
-) -> Result<Option<CreditLedgerEntry>, PostgresError>
-where
-    C: ConnectionTrait,
-{
-    entities::credit_ledger_entry::Entity::find_by_id(entry_id.to_string())
-        .one(conn)
-        .await
-        .map_err(PostgresError::internal)?
-        .map(entities::credit_ledger_entry::Model::try_into_domain)
-        .transpose()
-}
-
 pub async fn insert_request_row<C>(conn: &C, request: &Request) -> Result<(), PostgresError>
 where
     C: ConnectionTrait,
@@ -292,14 +260,6 @@ where
         .col_expr(
             entities::request::Column::ActivityVersion,
             Expr::value(row.activity_version),
-        )
-        .col_expr(
-            entities::request::Column::ReadyQueueVersion,
-            Expr::value(row.ready_queue_version),
-        )
-        .col_expr(
-            entities::request::Column::CurrentStakeCredits,
-            Expr::value(row.current_stake_credits),
         )
         .col_expr(
             entities::request::Column::FirstReadyAtUnix,
@@ -379,38 +339,6 @@ where
     Ok(())
 }
 
-pub async fn save_credit_account_row<C>(
-    conn: &C,
-    account: &UserCreditAccount,
-) -> Result<(), PostgresError>
-where
-    C: ConnectionTrait,
-{
-    let row = entities::user_credit_account::Model::from_domain(account)?;
-    if entities::user_credit_account::Entity::find_by_id(row.user_id.clone())
-        .one(conn)
-        .await
-        .map_err(PostgresError::internal)?
-        .is_some()
-    {
-        entities::user_credit_account::Entity::update_many()
-            .filter(entities::user_credit_account::Column::UserId.eq(row.user_id))
-            .col_expr(
-                entities::user_credit_account::Column::BalanceCredits,
-                Expr::value(row.balance_credits),
-            )
-            .exec(conn)
-            .await
-            .map_err(PostgresError::internal)?;
-    } else {
-        row.into_active_model()
-            .insert(conn)
-            .await
-            .map_err(PostgresError::internal)?;
-    }
-    Ok(())
-}
-
 pub async fn insert_request_event_row<C>(
     conn: &C,
     event: &RequestEvent,
@@ -419,21 +347,6 @@ where
     C: ConnectionTrait,
 {
     entities::request_event::Model::from_domain(event)?
-        .into_active_model()
-        .insert(conn)
-        .await
-        .map_err(PostgresError::internal)?;
-    Ok(())
-}
-
-pub async fn insert_credit_ledger_entry_row<C>(
-    conn: &C,
-    entry: &CreditLedgerEntry,
-) -> Result<(), PostgresError>
-where
-    C: ConnectionTrait,
-{
-    entities::credit_ledger_entry::Model::from_domain(entry)?
         .into_active_model()
         .insert(conn)
         .await

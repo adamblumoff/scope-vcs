@@ -37,11 +37,8 @@ async fn permissioned_clone_fetches_named_public_requests_without_joining() {
             actor_user_id: public_user_id(),
             actor_is_author: false,
             actor_can_mutate: false,
-            stake_credits: Some(1),
             public_ready_count: 0,
-            ready_queue_version: 0,
             event_id: "event_published_clone_ready".to_string(),
-            stake_ledger_entry_id: Some("ledger_published_clone_ready".to_string()),
             now_unix: 4,
         })
         .await
@@ -77,7 +74,6 @@ async fn closed_public_request_remains_fetchable_as_read_only_history() {
         .mutate_request_for_tests(REQUEST_ID, |request| {
             request.state = RequestState::Completed;
             request.first_ready_at_unix = Some(3);
-            request.ready_queue_version = Some(1);
             request.completed_at_unix = Some(3);
             request.completed_by_user_id = Some(test_owner_id());
             request.updated_at_unix = 3;
@@ -217,7 +213,7 @@ async fn working_push_records_revision_activity_without_touching_main() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn ready_revision_invalidates_review_refunds_stake_and_publishes_refresh() {
+async fn ready_revision_invalidates_review_and_publishes_refresh() {
     let state = test_state_with_request().await;
     let (source, permissioned_remote, _server, _first_request_head) =
         request_checkout(&state, "request-ref-revision-rollback").await;
@@ -229,11 +225,8 @@ async fn ready_revision_invalidates_review_refunds_stake_and_publishes_refresh()
             actor_user_id: public_user_id(),
             actor_is_author: false,
             actor_can_mutate: false,
-            stake_credits: Some(10),
             public_ready_count: 0,
-            ready_queue_version: 0,
             event_id: "event_ready_for_revision".to_string(),
-            stake_ledger_entry_id: Some("ledger_ready_for_revision".to_string()),
             now_unix: 4,
         })
         .await
@@ -254,7 +247,6 @@ async fn ready_revision_invalidates_review_refunds_stake_and_publishes_refresh()
     let after = stored_request(&state, REQUEST_ID).await;
     assert_eq!(after.state, RequestState::Working);
     assert_eq!(after.head_oid, git_head_oid(&source));
-    assert_eq!(after.current_stake_credits, 0);
     assert_eq!(after.held_at_unix, None);
     assert_eq!(request_event_count(&state).await, before_event_count + 2);
     let request_events = state
@@ -269,17 +261,6 @@ async fn ready_revision_invalidates_review_refunds_stake_and_publishes_refresh()
     assert!(request_events.iter().any(|event| {
         event.request_id == REQUEST_ID && event.kind == RequestEventKind::RevisionPushed
     }));
-    assert_eq!(
-        state
-            .metadata
-            .auth()
-            .credit_account_for_tests(&public_user_id())
-            .await
-            .unwrap()
-            .unwrap()
-            .balance_credits,
-        100
-    );
     let store_repo =
         crate::git::storage::request_ref_store_repo_path(&state, TEST_REPO_OWNER, TEST_REPO_NAME);
     let stored_head = git_stdout_text(
@@ -624,8 +605,6 @@ async fn insert_private_request_for_public_user(state: &AppState) {
             description_markdown: String::new(),
             state: RequestState::Working,
             activity_version: 0,
-            ready_queue_version: None,
-            current_stake_credits: 0,
             first_ready_at_unix: None,
             ready_at_unix: None,
             held_at_unix: None,
